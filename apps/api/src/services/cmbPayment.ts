@@ -67,6 +67,38 @@ export async function cmbQueryPayment(bizNo: string): Promise<CmbQueryResult> {
   return resp.json()
 }
 
+export interface CmbBalanceResult {
+  success     : boolean
+  resultCode  : string
+  resultMsg   : string
+  account?    : string   // 账号
+  accountName?: string   // 户名
+  balance?    : string   // 账户余额（元，字符串）
+  available?  : string   // 可用余额
+  held?       : string   // 冻结余额
+  currency?   : string   // 货币码 10=RMB
+  status?     : string   // A=正常
+  raw?        : any
+}
+
+/**
+ * 查询账户余额 · NTQACINF（规范 §3.2）
+ * @param account 账号（可选，默认用 CMB_ACCOUNT 结算户）
+ * ⚠️ 限流：同账号 10s 内只能查一次，调用方需自行节流
+ */
+export async function cmbBalance(account?: string): Promise<CmbBalanceResult> {
+  const resp = await fetch(`${CMB_SERVICE}/balance`, {
+    method : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body   : JSON.stringify({ account: account || '' }),
+    signal : AbortSignal.timeout(15_000),
+  })
+  if (!resp.ok) {
+    throw new Error(`招行余额查询响应异常 ${resp.status}`)
+  }
+  return resp.json()
+}
+
 /** 检查招行微服务是否在线 */
 export async function cmbHealthCheck(): Promise<boolean> {
   try {

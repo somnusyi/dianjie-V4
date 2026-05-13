@@ -267,6 +267,67 @@ def query():
         }), 500
 
 
+@app.route("/balance", methods=["POST"])
+def balance():
+    """
+    账户余额查询 · NTQACINF（规范 §3.2）
+
+    请求体：
+    {
+      "account":  "账号（可选，默认用 CMB_ACCOUNT 结算户）"
+    }
+
+    响应体：
+    {
+      "success":    true/false,
+      "resultCode": "SUC0000 / 错误码",
+      "resultMsg":  "...",
+      "account":    "账号",
+      "accountName": "户名",
+      "balance":    "账户余额（元，字符串）",
+      "available":  "可用余额（元）",
+      "held":       "冻结余额",
+      "currency":   "货币码 10=RMB",
+      "status":     "账户状态码 A=正常",
+      "raw":        { ...完整银行响应 }
+    }
+
+    限流: 同账号 10s 内只能查一次（xlsx 注意事项 §3），调用方需自行节流。
+    """
+    data = request.get_json(force=True) or {}
+    account = (data.get("account") or ACCOUNT).strip()
+
+    body = {"ntqacinfx": {"accnbr": account}}
+
+    try:
+        result = _call("NTQACINF", body)
+        head      = (result.get("response") or {}).get("head", {}) or {}
+        resp_body = (result.get("response") or {}).get("body", {}) or {}
+        items     = resp_body.get("ntqacinfz") or []
+        first     = items[0] if items else {}
+
+        return jsonify({
+            "success":     head.get("resultcode") == "SUC0000",
+            "resultCode":  head.get("resultcode", ""),
+            "resultMsg":   head.get("resultmsg", ""),
+            "account":     first.get("accnbr", ""),
+            "accountName": first.get("accnam", ""),
+            "balance":     first.get("accblv", ""),
+            "available":   first.get("avlblv", ""),
+            "held":        first.get("hldblv", ""),
+            "currency":    first.get("ccynbr", ""),
+            "status":      first.get("stscod", ""),
+            "raw":         result,
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success":    False,
+            "resultCode": "CMB_ERROR",
+            "resultMsg":  str(e),
+        }), 500
+
+
 if __name__ == "__main__":
     port = int(os.getenv("CMB_SERVICE_PORT", "5001"))
     env_lbl = "PROD" if USE_PROD else "TEST"

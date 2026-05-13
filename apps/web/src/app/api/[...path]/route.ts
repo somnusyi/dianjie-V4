@@ -8,7 +8,10 @@
  */
 import { NextRequest, NextResponse } from 'next/server'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://116.62.32.162'
+// 本地 dev fallback: localhost:4444 (新 V4 API_PORT)
+// 生产: Nginx 直接 location /api/ → :4004, 本路由不会被命中
+// 自定义环境（staging / 反代到别的 host）: export NEXT_PUBLIC_API_BASE 覆盖
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4444'
 
 async function proxy(req: NextRequest, ctx: { params: { path: string[] } }) {
   const path = ctx.params.path.join('/')

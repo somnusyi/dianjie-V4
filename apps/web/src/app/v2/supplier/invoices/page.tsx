@@ -118,7 +118,7 @@ export default function SupplierInvoicesPage() {
   return (
     <div className="min-h-screen bg-bg pb-24">
       <header className="px-4 pt-4 pb-2 flex items-center gap-3">
-        <button onClick={() => history.back()} className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</button>
+        <button onClick={() => window.history.length > 1 ? window.history.back() : (location.href = '/v2/supplier/billing')} className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</button>
         <div className="flex-1">
           <h1 className="text-h1">发票管理</h1>
           <p className="text-caption text-gray3">财务审核通过后, 关联账期可付款</p>

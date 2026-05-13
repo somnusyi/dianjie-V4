@@ -66,14 +66,14 @@ export default function FinanceStoresPage() {
       <div className="px-4 mt-2">
         <GlanceStrip
           label="集团本月净利"
-          value={`${totalNet < 0 ? '-' : ''}¥${fmtBig(Math.abs(totalNet))}`}
+          value={totalRev === 0 ? '—' : `${totalNet < 0 ? '-' : ''}¥${fmtBig(Math.abs(totalNet))}`}
           delta={totalRev > 0 ? { text: `${margin.toFixed(1)}% 净利率`, trend: totalNet >= 0 ? 'up' as const : 'down' as const } : undefined}
-          meta={`营收 ¥${fmtBig(totalRev)} · 建店累计 ¥${fmtBig(totalOpening)}`}
+          meta={totalRev === 0 ? '本月暂无营收录入 · 提醒店长录入' : `营收 ¥${fmtBig(totalRev)} · 建店累计 ¥${fmtBig(totalOpening)}`}
           rightSlot={monthLabel}
           stats={[
             { label: '运营中',     value: `${operating.length} 家`, tone: 'default' as const },
             { label: '筹建中',     value: `${planning.length} 家`, tone: 'default' as const },
-            { label: '本月异常',   value: `${anomalies.length} 家`, tone: anomalies.length > 0 ? 'red' as const : 'default' as const },
+            { label: '本月异常',   value: `${anomalies.length} 家`, tone: anomalies.length > 0 ? 'red' as const : 'default' as const, delta: '净利亏损' },
           ]}
         />
       </div>

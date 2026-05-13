@@ -5,25 +5,32 @@
  */
 'use client'
 import { useState, useEffect } from 'react'
-import { setSession, routeForRole, pcRouteForRole, getToken, getUser } from '@/lib/v2-auth'
+import { setSession, routeForRole, pcRouteForRole, getToken, getUser, clearSession } from '@/lib/v2-auth'
 
 export default function LoginPage() {
   const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 已登录用户信息: 给"继续 / 换号"选择, 不再自动跳走
+  const [existingUser, setExistingUser] = useState<{ name?: string; role: string } | null>(null)
 
-  // 已登录直接跳 home
   useEffect(() => {
     const t = getToken()
     const u = getUser()
-    if (t && u) {
-      // PC 形态优先（老板/财务且屏幕宽）
-      const isWide = window.innerWidth >= 1024
-      const pc = isWide ? pcRouteForRole(u.role) : null
-      location.replace(pc || routeForRole(u.role))
-    }
+    if (t && u) setExistingUser(u as any)
   }, [])
+
+  function continueAsExisting() {
+    if (!existingUser) return
+    const isWide = window.innerWidth >= 1024
+    const pc = isWide ? pcRouteForRole(existingUser.role) : null
+    location.replace(pc || routeForRole(existingUser.role))
+  }
+  function switchAccount() {
+    clearSession()
+    setExistingUser(null)
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -58,10 +65,23 @@ export default function LoginPage() {
       </header>
 
       <main className="flex-1 px-6 max-w-md w-full mx-auto">
+        {/* 已登录提示 — 给"继续 / 换号"选项 */}
+        {existingUser && (
+          <section className="bg-amber/10 border border-amber/40 rounded-card p-4 mb-4">
+            <p className="text-caption text-amber-fg">检测到已有登录: <b>{existingUser.name}</b> ({existingUser.role})</p>
+            <div className="flex gap-2 mt-3">
+              <button onClick={continueAsExisting}
+                      className="flex-1 py-2 bg-ink text-white rounded-cta text-button">继续使用 →</button>
+              <button onClick={switchAccount}
+                      className="flex-1 py-2 border border-border bg-white rounded-cta text-button text-gray2">换个账号</button>
+            </div>
+          </section>
+        )}
+
         {/* 暖色欢迎卡（替代黑卡，暖白底+琥珀金标） */}
         <section className="bg-bg-warm rounded-card border border-border p-5 mb-6">
           <p className="text-micro text-amber-fg uppercase tracking-wider">welcome back</p>
-          <div className="text-h1 mt-1">登录账号</div>
+          <div className="text-h1 mt-1">{existingUser ? '换号登录' : '登录账号'}</div>
           <p className="text-caption text-gray2 mt-1">老板 / 店长 / 厨师长 / 总厨 / 财务 / 供应商</p>
         </section>
 

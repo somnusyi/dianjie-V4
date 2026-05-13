@@ -20,7 +20,10 @@ const productCreateSchema = z.object({
   name:      z.string().trim().min(1, '品项名称必填').max(80),
   spec:      z.string().trim().max(80).optional().nullable(),
   category:  z.string().trim().max(40).optional(),
-  unit:      z.string().trim().max(10).optional().default('件'),
+  // unit 必须是干净计量单位 (kg/件/瓶...), 不能含数字 ("5kg" / "2包起订" 是数据脏的常见来源)
+  unit:      z.string().trim().max(10)
+                .refine(v => !/^\d/.test(v), { message: '单位不能以数字开头, 数字应记到 spec / 起订量字段' })
+                .optional().default('件'),
   // 价格可选, 缺省 0. 仓库库存初始化场景常常没价格 (供应商内部物品), 先建 SKU 后续单条改价
   price:     z.preprocess(v => (v === null || v === '' || (typeof v === 'number' && !Number.isFinite(v))) ? 0 : v,
                           z.number().nonnegative('金额不能为负').optional().default(0)),
@@ -369,7 +372,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const body = req.body as any
     const data = isSupplierRole(role)
       ? Object.fromEntries(
-          Object.entries(body).filter(([k]) => ['price', 'stock', 'minStock', 'minOrderQty', 'stepQty', 'shelfDays', 'status'].includes(k))
+          Object.entries(body).filter(([k]) => ['price', 'spec', 'stock', 'minStock', 'minOrderQty', 'stepQty', 'shelfDays', 'status'].includes(k))
         )
       : body
 

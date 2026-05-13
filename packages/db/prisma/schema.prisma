@@ -723,7 +723,8 @@ model PurchaseOrderItem {
   id              String  @id @default(cuid())
   purchaseOrderId String
   productId       String
-  quantity        Decimal @db.Decimal(10, 2)  // 下单数量
+  quantity        Decimal @db.Decimal(10, 2)  // 下单数量 (原始, 不变)
+  shippedQty      Decimal? @db.Decimal(10, 2) // 实际发货数量 (供应商确认发货时填; null = 全发)
   unitPrice       Decimal @db.Decimal(10, 2)
   amount          Decimal @db.Decimal(12, 2)
   receivedQty     Decimal? @db.Decimal(10, 2) // 实际收到数量（确认时填写）

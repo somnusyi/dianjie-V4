@@ -97,7 +97,7 @@ export default function ChefPurchasePage() {
           <div className="flex-1">
             <div className="text-h2">发起新采购单</div>
             <p className="text-micro text-gray3">食材 · 调味 · 干货 · 包材</p>
-            <p className="text-micro text-orange-fg mt-0.5">规则：≤¥3K + 集团价 + 签约 → 免审 · &gt;¥3K 走财务+老板</p>
+            <p className="text-micro text-gray3 mt-0.5">提交后直发供应商, 任何金额都无审批门槛</p>
           </div>
           <span className="text-gray3">›</span>
         </a>

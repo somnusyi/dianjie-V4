@@ -65,8 +65,9 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       supplierId: user.supplierId,
     }
 
-    const token = app.jwt.sign(payload, { expiresIn: '8h' })
-    const refreshToken = app.jwt.sign({ userId: user.id, tenantId: tenant.id }, { expiresIn: '7d' })
+    // 餐饮 SaaS 长会话: 365 天, 用户主动"退出登录"才下线 (跟微信/美团掌柜一致)
+    const token = app.jwt.sign(payload, { expiresIn: '365d' })
+    const refreshToken = app.jwt.sign({ userId: user.id, tenantId: tenant.id }, { expiresIn: '365d' })
 
     await prisma.user.update({
       where: { id: user.id },

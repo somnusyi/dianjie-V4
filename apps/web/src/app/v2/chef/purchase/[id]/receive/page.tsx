@@ -24,9 +24,11 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
   useEffect(() => {
     apiFetch(`/api/orders/${params.id}`).then((d: any) => {
       setPo(d)
-      // 默认 实收 = 下单
+      // 默认 实收 = 供应商实际发货量 (shippedQty), 没有就回退下单 quantity
       const init: Record<string, number> = {}
-      ;(d.items || []).forEach((it: any) => { init[it.productId] = Number(it.quantity) })
+      ;(d.items || []).forEach((it: any) => {
+        init[it.productId] = Number(it.shippedQty ?? it.quantity)
+      })
       setReceived(init)
     }).catch(e => setError(String(e?.message || e)))
   }, [params.id])
@@ -35,9 +37,11 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
   if (!po) return <div className="p-6 text-gray3 text-caption">加载中…</div>
 
   const items = po.items || []
-  const hasLoss = items.some((it: any) => Number(received[it.productId] ?? 0) < Number(it.quantity))
+  // 应到量 = shippedQty (供应商实发) ?? quantity (下单). 报损 / 短缺基于"应到", 不是原下单
+  const expected = (it: any) => Number(it.shippedQty ?? it.quantity)
+  const hasLoss = items.some((it: any) => Number(received[it.productId] ?? 0) < expected(it))
   const lossAmount = items.reduce((s: number, it: any) => {
-    const diff = Number(it.quantity) - Number(received[it.productId] ?? 0)
+    const diff = expected(it) - Number(received[it.productId] ?? 0)
     return diff > 0 ? s + diff * Number(it.unitPrice) : s
   }, 0)
   const total = items.reduce((s: number, it: any) =>
@@ -99,15 +103,20 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
           {items.map((it: any) => {
             const rq = received[it.productId] ?? 0
             const ordered = Number(it.quantity)
-            const isLoss = rq < ordered
+            const shipped = it.shippedQty != null ? Number(it.shippedQty) : null
+            const exp = shipped != null ? shipped : ordered
+            const isLoss = rq < exp
+            const supplierShortShipped = shipped != null && shipped < ordered
             return (
               <li key={it.productId} className={`px-3 py-3 ${isLoss ? 'bg-red-bg/30' : ''}`}>
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-h2 flex-1">{it.product?.name || it.productId}</span>
-                  {isLoss && <Chip tone="red">报损 {(ordered - rq).toFixed(2)}</Chip>}
+                  {isLoss && <Chip tone="red">报损 {(exp - rq).toFixed(2)}</Chip>}
                 </div>
                 <div className="text-micro text-gray3 mb-2 font-num">
-                  下单 {ordered} {it.product?.unit || ''} × ¥{Number(it.unitPrice).toFixed(2)}
+                  下单 {ordered} {it.product?.unit || ''}
+                  {supplierShortShipped && <span className="text-amber-fg ml-1">→ 实发 {shipped}</span>}
+                  {' '}× ¥{Number(it.unitPrice).toFixed(2)}
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-caption text-gray2">实收</span>
@@ -132,7 +141,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
                   <span className="text-micro text-gray3 w-12 text-right">{it.product?.unit || ''}</span>
                 </div>
                 {isLoss && (
-                  <p className="text-micro text-red-fg mt-2">短缺 {(ordered - rq).toFixed(2)} {it.product?.unit || ''} · 损失 ¥{((ordered - rq) * Number(it.unitPrice)).toFixed(2)}</p>
+                  <p className="text-micro text-red-fg mt-2">短缺 {(exp - rq).toFixed(2)} {it.product?.unit || ''} · 损失 ¥{((exp - rq) * Number(it.unitPrice)).toFixed(2)}</p>
                 )}
               </li>
             )

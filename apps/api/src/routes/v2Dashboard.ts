@@ -185,18 +185,65 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
     }
 
     if (role === 'FINANCE') {
-      hero.label = '今日集团营业额'
-      const [pendingPay, pendingInvoice] = await Promise.all([
-        (prisma as any).invoice?.count({ where: { tenantId, status: 'PENDING_REVIEW' } }).catch(() => 0) ?? 0,
-        prisma.payment.count({ where: { schedule: { receipt: { store: { tenantId } } }, status: 'PENDING' } }).catch(() => 0),
+      // 财务核心: 应付/今日付款/失败重试 — 不是营业额
+      const today = new Date(); today.setHours(0,0,0,0)
+      const tomorrow = new Date(today.getTime() + 86400_000)
+      const [
+        payableTotal, payableToday, payableOverdue,
+        failedSch, pendingInvoice, pendingDocs,
+        cashAccountsAgg
+      ] = await Promise.all([
+        prisma.paymentSchedule.aggregate({
+          _sum: { amount: true },
+          where: { tenantId, status: { in: ['PENDING', 'NOTIFIED', 'APPROVED'] as any } },
+        }).catch(() => ({ _sum: { amount: 0 } as any })),
+        prisma.paymentSchedule.aggregate({
+          _sum: { amount: true },
+          where: { tenantId, status: { in: ['PENDING', 'NOTIFIED', 'APPROVED'] as any },
+                   dueAt: { gte: today, lt: tomorrow } },
+        }).catch(() => ({ _sum: { amount: 0 } as any })),
+        prisma.paymentSchedule.aggregate({
+          _sum: { amount: true },
+          where: { tenantId, status: { in: ['PENDING', 'NOTIFIED', 'APPROVED', 'OVERDUE'] as any },
+                   dueAt: { lt: today } },
+        }).catch(() => ({ _sum: { amount: 0 } as any })),
+        prisma.paymentSchedule.count({
+          where: { tenantId, status: { in: ['FAILED', 'OVERDUE'] as any } },
+        }).catch(() => 0),
+        (prisma as any).invoice?.count({ where: { tenantId, status: 'PENDING' } }).catch(() => 0) ?? 0,
+        prisma.documentStep.count({
+          where: { document: { tenantId, status: 'PENDING' }, status: 'PENDING',
+                   approverRole: 'FINANCE' },
+        }).catch(() => 0),
+        prisma.cashAccount.aggregate({
+          _sum: { balance: true } as any,
+          where: { tenantId, status: 'ACTIVE' },
+        }).catch(() => ({ _sum: { balance: 0 } as any })),
       ])
+      const payable    = Number((payableTotal as any)._sum.amount || 0)
+      const todayPay   = Number((payableToday as any)._sum.amount || 0)
+      const overdue    = Number((payableOverdue as any)._sum.amount || 0)
+      const cashTotal  = Number((cashAccountsAgg as any)._sum.balance || 0)
       pendingReviewCount = pendingInvoice
-      pendingApprovalCount = pendingPay
-      hero.stats = [
-        { label: '本月累计', value: fmtMoney(monthRevenue), tone: 'default' as const },
-        { label: '待审发票', value: String(pendingInvoice), tone: pendingInvoice > 0 ? 'orange' as const : 'default' as const },
-        { label: '待付款', value: String(pendingPay), tone: pendingPay > 0 ? 'orange' as const : 'default' as const },
-      ]
+      pendingApprovalCount = pendingDocs
+
+      hero = {
+        label: '应付总额',
+        value: fmtMoney(payable),
+        meta: overdue > 0
+          ? `⚠ 逾期 ${fmtMoney(overdue)} · 今日要付 ${fmtMoney(todayPay)}`
+          : todayPay > 0 ? `今日要付 ${fmtMoney(todayPay)}` : '✓ 今日无应付',
+        stats: [
+          { label: '今日待付', value: fmtMoney(todayPay), tone: todayPay > 0 ? 'orange' as const : 'default' as const },
+          { label: '账户余额', value: fmtMoney(cashTotal), tone: cashTotal < payable ? 'red' as const : 'default' as const, delta: cashTotal < payable ? '⚠ 不足以付' : undefined },
+          { label: '失败/逾期', value: String(failedSch), tone: failedSch > 0 ? 'red' as const : 'default' as const },
+        ],
+        // finance 专属扩展
+        financeExt: {
+          payable, todayPay, overdue, cashTotal, failedSch,
+          pendingInvoice, pendingDocs,
+        },
+      }
     }
 
     if (role === 'MANAGER') {
@@ -211,55 +258,178 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
     }
 
     if (role === 'KITCHEN_LEAD') {
-      // 厨师长 = 单店食材采购视角：hero 显示本店待操作订单数
-      const pendingOrders = await prisma.purchaseOrder.count({
-        where: { storeId: storeId!, status: { in: ['CONFIRMED', 'SHIPPED'] } },
-      }).catch(() => 0)
+      // 厨师长 = 单店厨房视角: 看食材消耗 / 待验收 / 库存预警, 不看营收
+      const [pendingReceive, monthReceiptAgg, monthLossAgg, lowStockCount] = await Promise.all([
+        prisma.purchaseOrder.count({
+          where: { storeId: storeId!, status: 'PENDING_CONFIRM' },
+        }).catch(() => 0),
+        prisma.receipt.aggregate({
+          _sum: { totalAmount: true },
+          where: { storeId: storeId!, createdAt: { gte: monthStart, lte: monthEnd } },
+        }).catch(() => ({ _sum: { totalAmount: 0 } as any })),
+        prisma.lossClaim.aggregate({
+          _sum: { totalLossAmount: true },
+          where: { storeId: storeId!, createdAt: { gte: monthStart, lte: monthEnd },
+                   status: { in: ['APPROVED', 'AUTO_APPROVED', 'RESOLVED'] } },
+        }).catch(() => ({ _sum: { totalLossAmount: 0 } as any })),
+        // 低库存粗算: 本店有过收货的 SKU 中, 累计入-出 < minStock 的数量
+        // 精算放 inventory api, 此处 0 占位由前端补
+        Promise.resolve(0),
+      ])
+      const monthFood = Number(monthReceiptAgg._sum.totalAmount || 0)
+      const monthLoss = Number(monthLossAgg._sum.totalLossAmount || 0)
+      const lossRate = monthFood > 0 ? (monthLoss / monthFood) * 100 : 0
       hero = {
-        label: '本店采购单',
-        value: String(pendingOrders),
-        meta: pendingOrders > 0 ? '有订单待你处理' : '今日无待办',
-        stats: [{ label: '今日营收', value: fmtMoney(todayRevenue), tone: 'default' as const }],
-        revenue7d,
+        label: '本月食材消耗',
+        value: fmtMoney(monthFood),
+        meta: pendingReceive > 0 ? `⚠ 有 ${pendingReceive} 单待验收` : '今日无待验收',
+        stats: [
+          { label: '待验收', value: String(pendingReceive), tone: pendingReceive > 0 ? 'orange' as const : 'default' as const },
+          { label: '本月报损', value: fmtMoney(monthLoss), tone: lossRate > 3 ? 'red' as const : 'default' as const },
+          { label: '损耗率', value: `${lossRate.toFixed(1)}%`, tone: lossRate > 3 ? 'red' as const : lossRate > 2 ? 'orange' as const : 'green' as const },
+        ],
       }
     }
 
     if (role === 'CHEF_DIRECTOR') {
-      const pending = await prisma.lossClaim.count({
-        where: { store: { tenantId }, status: 'PENDING' },
-      }).catch(() => 0)
-      pendingApprovalCount = pending
+      // 总厨 = 集团厨房标准化: 看待审批 + 集团损耗 + 食材成本, 不看营收
+      const [
+        pendingLossDispute, pendingManualLoss, pendingDocs,
+        groupReceiptAgg, groupLossAgg
+      ] = await Promise.all([
+        prisma.lossClaim.count({
+          where: { tenantId, status: 'REJECTED', isManual: false },   // 供应商拒, 待总厨仲裁
+        }).catch(() => 0),
+        prisma.lossClaim.count({
+          where: { tenantId, status: 'PENDING', isManual: true },    // 店内报损 ≥¥500 待审
+        }).catch(() => 0),
+        prisma.documentStep.count({
+          where: { document: { tenantId, status: 'PENDING' }, status: 'PENDING',
+                   approverRole: 'CHEF_DIRECTOR' },
+        }).catch(() => 0),
+        prisma.receipt.aggregate({
+          _sum: { totalAmount: true },
+          where: { tenantId, createdAt: { gte: monthStart, lte: monthEnd } },
+        }).catch(() => ({ _sum: { totalAmount: 0 } as any })),
+        prisma.lossClaim.aggregate({
+          _sum: { totalLossAmount: true },
+          where: { tenantId, createdAt: { gte: monthStart, lte: monthEnd },
+                   status: { in: ['APPROVED', 'AUTO_APPROVED', 'RESOLVED'] } },
+        }).catch(() => ({ _sum: { totalLossAmount: 0 } as any })),
+      ])
+      const totalPending = pendingLossDispute + pendingManualLoss + pendingDocs
+      pendingApprovalCount = totalPending
+      const groupFood = Number(groupReceiptAgg._sum.totalAmount || 0)
+      const groupLoss = Number(groupLossAgg._sum.totalLossAmount || 0)
+      const lossRate = groupFood > 0 ? (groupLoss / groupFood) * 100 : 0
       hero = {
-        label: '待审批',
-        value: String(pending),
-        meta: pending > 0 ? '报损 / 采购 等你审' : '暂无待审批',
-        stats: [{ label: '今日集团营收', value: fmtMoney(todayRevenue), tone: 'default' as const }],
-        revenue7d,
+        label: '待你审批',
+        value: String(totalPending),
+        meta: totalPending > 0
+          ? `${pendingDocs ? pendingDocs + ' 调价/新菜 · ' : ''}${pendingLossDispute ? pendingLossDispute + ' 争议 · ' : ''}${pendingManualLoss ? pendingManualLoss + ' 店内报损' : ''}`.replace(/ · $/, '')
+          : '✓ 暂无待审批',
+        stats: [
+          { label: '集团本月食材', value: fmtMoney(groupFood), tone: 'default' as const },
+          { label: '集团本月报损', value: fmtMoney(groupLoss), tone: lossRate > 3 ? 'red' as const : 'default' as const },
+          { label: '集团损耗率', value: `${lossRate.toFixed(1)}%`, tone: lossRate > 3 ? 'red' as const : lossRate > 2 ? 'orange' as const : 'green' as const },
+        ],
       }
     }
 
     if (role === 'SUPPLIER_OWNER' || role === 'SUPPLIER_STAFF' || role === 'SUPPLIER_SUB') {
-      // 供应商不暴露集团/门店数据, hero 用 supplier 自己的指标
-      const activeOrders = supplierId ? await prisma.purchaseOrder.count({
-        where: { supplierId, status: { in: ['SUBMITTED', 'CONFIRMED', 'SHIPPED', 'PENDING_CONFIRM'] } },
-      }).catch(() => 0) : 0
-      const monthDelivered = supplierId ? await prisma.purchaseOrder.aggregate({
-        _sum: { totalAmount: true },
-        where: {
-          supplierId,
-          status: { in: ['RECEIVED', 'COMPLETED'] },
-          updatedAt: { gte: monthStart, lte: monthEnd },
-        },
-      }).catch(() => ({ _sum: { totalAmount: 0 } as any })) : { _sum: { totalAmount: 0 } as any }
-      hero = {
-        label: '在途订单',
-        value: String(activeOrders),
-        meta: activeOrders > 0 ? '请按时发货' : '暂无在途',
-        stats: [{
-          label: '本月已交付',
-          value: fmtMoney(Number(monthDelivered._sum.totalAmount || 0)),
-          tone: 'default' as const,
-        }],
+      // 供应商核心指标: 应收 / 在途 / 临期 / 低库存
+      if (!supplierId) {
+        hero = { label: '账号未绑供应商', value: '—', meta: '请联系运营', stats: [] }
+      } else {
+        const now = new Date()
+        const in7d = new Date(Date.now() + 7 * 86400_000)
+        const [
+          submittedCnt, confirmedCnt, shippedCnt,
+          monthDelivered,
+          arAll, arOverdue, ar7d, ar30d,
+          monthPaid, monthDue,
+          lowStockCnt, expiringCnt
+        ] = await Promise.all([
+          prisma.purchaseOrder.count({ where: { supplierId, status: 'SUBMITTED' } }).catch(() => 0),
+          prisma.purchaseOrder.count({ where: { supplierId, status: 'CONFIRMED' } }).catch(() => 0),
+          prisma.purchaseOrder.count({ where: { supplierId, status: 'PENDING_CONFIRM' } }).catch(() => 0),
+          prisma.purchaseOrder.aggregate({
+            _sum: { totalAmount: true },
+            where: { supplierId, status: { in: ['RECEIVED', 'COMPLETED'] }, updatedAt: { gte: monthStart, lte: monthEnd } },
+          }).catch(() => ({ _sum: { totalAmount: 0 } as any })),
+          // 应收 (PaymentSchedule)
+          prisma.paymentSchedule.aggregate({
+            _sum: { amount: true },
+            where: { supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED', 'OVERDUE', 'ON_HOLD'] as any } },
+          }).catch(() => ({ _sum: { amount: 0 } as any })),
+          prisma.paymentSchedule.aggregate({
+            _sum: { amount: true },
+            where: { supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED'] as any }, dueAt: { lt: now } },
+          }).catch(() => ({ _sum: { amount: 0 } as any })),
+          prisma.paymentSchedule.aggregate({
+            _sum: { amount: true },
+            where: { supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED'] as any }, dueAt: { gte: now, lte: in7d } },
+          }).catch(() => ({ _sum: { amount: 0 } as any })),
+          prisma.paymentSchedule.aggregate({
+            _sum: { amount: true },
+            where: { supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED'] as any }, dueAt: { gt: in7d, lte: new Date(Date.now() + 30 * 86400_000) } },
+          }).catch(() => ({ _sum: { amount: 0 } as any })),
+          // 本月回款率
+          prisma.paymentSchedule.aggregate({
+            _sum: { amount: true },
+            where: { supplierId, status: 'PAID' as any, paidAt: { gte: monthStart, lte: monthEnd } },
+          }).catch(() => ({ _sum: { amount: 0 } as any })),
+          prisma.paymentSchedule.aggregate({
+            _sum: { amount: true },
+            where: { supplierId, dueAt: { gte: monthStart, lte: monthEnd } },
+          }).catch(() => ({ _sum: { amount: 0 } as any })),
+          // 库存预警
+          (async () => {
+            // 用原生 SQL 算 stock < minStock (Prisma 不支持字段比字段)
+            try {
+              const r = await prisma.$queryRawUnsafe<Array<{ c: number }>>(
+                `SELECT COUNT(*)::int AS c FROM products WHERE "supplierId"=$1 AND status='ENABLED' AND stock < "minStock"`,
+                supplierId
+              )
+              return Array.isArray(r) && r[0] ? Number(r[0].c) : 0
+            } catch { return 0 }
+          })(),
+          // 临期预警 — 用 supplier_stock_movements.expiryDate (如果有)
+          prisma.supplierStockMovement.count({
+            where: { supplierId, expiryDate: { gte: now, lte: in7d } },
+          }).catch(() => 0),
+        ])
+        const arTotal = Number(arAll._sum.amount || 0)
+        const arOver  = Number(arOverdue._sum.amount || 0)
+        const ar7     = Number(ar7d._sum.amount || 0)
+        const ar30    = Number(ar30d._sum.amount || 0)
+        const paidM   = Number(monthPaid._sum.amount || 0)
+        const dueM    = Number(monthDue._sum.amount || 0)
+        const recoveryRate = dueM > 0 ? (paidM / dueM) * 100 : 0
+
+        const totalActive = submittedCnt + confirmedCnt + shippedCnt
+        hero = {
+          label: '应收总额',
+          value: fmtMoney(arTotal),
+          meta: arOver > 0
+            ? `⚠ 逾期 ¥${arOver.toLocaleString()} · 7天内到 ¥${ar7.toLocaleString()}`
+            : ar7 > 0 ? `7天内到账 ¥${ar7.toLocaleString()}` : '✓ 暂无应收',
+          stats: [
+            { label: '在途订单', value: String(totalActive), tone: submittedCnt > 0 ? 'orange' as const : 'default' as const, delta: submittedCnt > 0 ? `${submittedCnt} 待接` : undefined },
+            { label: '本月已交付', value: fmtMoney(Number(monthDelivered._sum.totalAmount || 0)), tone: 'default' as const },
+            { label: '回款率', value: `${recoveryRate.toFixed(0)}%`, tone: recoveryRate > 80 ? 'green' as const : recoveryRate > 50 ? 'default' as const : 'red' as const, delta: '本月' },
+          ],
+          // 供应商专属扩展 (前端读): 账期分桶 + 库存预警
+          supplierExt: {
+            arOverdue: arOver,
+            ar7d: ar7,
+            ar30d: ar30,
+            arTotal,
+            submittedCnt, confirmedCnt, shippedCnt,
+            lowStockCnt, expiringCnt,
+            recoveryRate,
+          },
+        }
       }
     }
 

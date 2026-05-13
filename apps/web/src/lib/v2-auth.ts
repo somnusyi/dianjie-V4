@@ -80,8 +80,10 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
   const token = getToken()
   const headers = new Headers(init.headers)
   // 只在有 body 时设 Content-Type. 否则 Fastify 看到 "application/json" 但 body 为空会 400.
-  // (典型场景: PATCH /batches/:id/revoke 这种不需要参数的端点)
-  if (init.body != null && !headers.has('Content-Type')) {
+  // FormData / Blob 不要设 — 浏览器会自动加 multipart boundary
+  if (init.body != null && !headers.has('Content-Type')
+      && !(init.body instanceof FormData)
+      && !(init.body instanceof Blob)) {
     headers.set('Content-Type', 'application/json')
   }
   if (token) headers.set('Authorization', `Bearer ${token}`)

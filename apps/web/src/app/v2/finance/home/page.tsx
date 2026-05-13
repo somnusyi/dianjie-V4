@@ -25,6 +25,11 @@ type Invoice = {
   id: string; invoiceNo: string; amount: string | number; status: string
   supplier: { name: string }
 }
+type DueSchedule = {
+  id: string; amount: string | number; dueAt: string; status: string
+  supplier: { name: string }
+  receipt: { no: string; store?: { name: string } | null }
+}
 
 const TYPE_LABEL: Record<string, string> = {
   PETTY_CASH: '备用金', REIMBURSEMENT: '报销',
@@ -46,6 +51,7 @@ export default function FinanceHomePage() {
   const { data, error } = useDashboard()
   const [inbox, setInbox] = useState<InboxItem[] | null>(null)
   const [pendingInv, setPendingInv] = useState<Invoice[] | null>(null)
+  const [dueToday, setDueToday] = useState<DueSchedule[] | null>(null)
   useEffect(() => {
     apiFetch<InboxItem[]>('/api/documents/inbox')
       .then(d => setInbox(Array.isArray(d) ? d : []))
@@ -53,6 +59,10 @@ export default function FinanceHomePage() {
     apiFetch<Invoice[]>('/api/invoices?status=PENDING')
       .then(d => setPendingInv(Array.isArray(d) ? d : []))
       .catch(() => setPendingInv([]))
+    // 拉今日 + 已逾期的应付
+    apiFetch<DueSchedule[]>('/api/schedules?days=1')
+      .then(d => setDueToday(Array.isArray(d) ? d : []))
+      .catch(() => setDueToday([]))
   }, [])
   if (error) return <ErrorScreen message={error} />
   if (!data) return <LoadingScreen />
@@ -78,8 +88,33 @@ export default function FinanceHomePage() {
         />
       </div>
 
-      {/* 快捷入口 */}
-      <div className="px-4 mt-3 grid grid-cols-5 gap-2">
+      {/* 今日待付清单 — 财务最常用功能, 一键看 / 一键付 */}
+      {dueToday !== null && dueToday.length > 0 && (
+        <Section title="今日 + 逾期应付" right={`${dueToday.length} 笔 · ¥${Math.round(dueToday.reduce((s,d) => s + Number(d.amount), 0)).toLocaleString()}`} rightTone="red">
+          <ul className="space-y-2">
+            {dueToday.slice(0, 5).map(d => {
+              const isOverdue = new Date(d.dueAt) < new Date(new Date().setHours(0,0,0,0))
+              return (
+                <li key={d.id} className={`relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full ${isOverdue ? 'before:bg-red' : 'before:bg-amber'}`}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <Chip tone={isOverdue ? 'red' : 'orange'}>{isOverdue ? '逾期' : '今日到期'}</Chip>
+                    <span className="text-micro text-gray3">{new Date(d.dueAt).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })}</span>
+                    <span className="ml-auto font-num text-h2">¥{Math.round(Number(d.amount)).toLocaleString()}</span>
+                  </div>
+                  <div className="text-h2 truncate">{d.supplier?.name}</div>
+                  <p className="text-caption text-gray2 mt-0.5 truncate">{d.receipt?.store?.name} · #{d.receipt?.no}</p>
+                </li>
+              )
+            })}
+          </ul>
+          {dueToday.length > 5 && (
+            <a href="/v2/finance/payable" className="block text-center mt-2 py-2 text-caption text-amber-fg">查看全部 ›</a>
+          )}
+        </Section>
+      )}
+
+      {/* 快捷入口 — 4 + 1 grid, 移走"建店资金 Excel"低频入口 */}
+      <div className="px-4 mt-4 grid grid-cols-4 gap-2">
         <a href="/v2/finance/review" className="bg-white rounded-card border border-border p-2.5 text-center">
           <div className="text-button">✓</div>
           <div className="text-micro text-gray2 mt-1">初审</div>
@@ -92,25 +127,21 @@ export default function FinanceHomePage() {
           <div className="text-button">¥</div>
           <div className="text-micro text-amber-fg mt-1">应付</div>
         </a>
-        <a href="/v2/finance/capital-review" className="bg-amber/10 rounded-card border border-amber/30 p-2.5 text-center">
-          <div className="text-button">⊞</div>
-          <div className="text-micro text-amber-fg mt-1">代付审批</div>
-        </a>
         <a href="/v2/finance/funds" className="bg-white rounded-card border border-border p-2.5 text-center">
           <div className="text-button">⛁</div>
           <div className="text-micro text-gray2 mt-1">资金</div>
         </a>
       </div>
 
-      {/* 建店预算 + 净利总览 入口 */}
+      {/* 月度对账 + 净利总览 — 月末高频 */}
       <div className="px-4 mt-3 grid grid-cols-2 gap-2">
+        <a href="/v2/finance/reconcile" className="block bg-white rounded-card border border-border p-3">
+          <div className="text-button">📊 月度对账</div>
+          <div className="text-micro text-gray3 mt-0.5">按门店 / 供应商 · 导 Excel</div>
+        </a>
         <a href="/v2/profit" className="block bg-white rounded-card border border-border p-3">
           <div className="text-button">⛁ 净利总览</div>
           <div className="text-micro text-gray3 mt-0.5">月/季/年/累计</div>
-        </a>
-        <a href="/v2/budget" className="block bg-amber/10 border border-amber/30 rounded-card p-3">
-          <div className="text-button text-amber-fg">¥ 建店资金</div>
-          <div className="text-micro text-gray2 mt-0.5">Excel 一键导入</div>
         </a>
       </div>
 

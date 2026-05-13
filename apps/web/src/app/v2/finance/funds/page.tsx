@@ -1,14 +1,24 @@
 /**
- * 财务 App · 资金 Tab  PDF: finance_funds_tab  Tab 3/4
+ * 财务 App · 资金 Tab
+ *
  * 接真数据:
  *   /api/cashbook/summary       总余额 + 月流入流出
- *   /api/cashbook/accounts      账户列表
- *   /api/schedules?status=&days  本周应付到期
+ *   /api/cashbook/accounts      账户列表 (POST 创建)
+ *   /api/schedules?days=7       本周应付到期
+ *   /api/schedules?status=FAILED 失败付款
+ *
+ * 改进:
+ *   - 单位规范 (¥0 / 万 切换, 不再 ¥0.0K)
+ *   - 「+ 新建账户」可在 app 直接加, 不再让用户去"管理后台"
+ *   - 失败付款列表 (CMB 服务挂了 / 余额不足 等场景, 财务可见)
+ *   - 7 天日历点击 → 弹出当日应付明细
  */
 'use client'
 import { useEffect, useMemo, useState } from 'react'
-import { BlackHero, BottomNav, Chip } from '@/components/v2'
+import { GlanceStrip } from '@/components/v2/glance-strip'
+import { BottomNav, Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
+import dayjs from 'dayjs'
 
 type CashbookSummary = {
   totalBalance: number | string
@@ -24,6 +34,8 @@ type Account = {
 }
 type Schedule = {
   id: string; amount: string | number; dueAt: string; status: string
+  failReason?: string | null
+  retryCount?: number
   supplier?: { name: string } | null
   receipt?: {
     no: string; store?: { name: string } | null
@@ -31,12 +43,16 @@ type Schedule = {
   } | null
 }
 
+// 智能金额格式化: <1万 显示 ¥XXX, ≥1万 显示 ¥X.XX万
+function fmtMoney(n: number) {
+  if (!Number.isFinite(n)) return '¥0'
+  const v = Math.round(n)
+  if (Math.abs(v) >= 10000) return `¥${(v / 10000).toFixed(2)}万`
+  return `¥${v.toLocaleString()}`
+}
 function fmtDate(iso: string) {
   const d = new Date(iso)
   return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
-}
-function dayLabel(iso: string) {
-  return ['日', '一', '二', '三', '四', '五', '六'][new Date(iso).getDay()]
 }
 
 export default function FinanceFundsPage() {
@@ -44,44 +60,65 @@ export default function FinanceFundsPage() {
   const [summary, setSummary] = useState<CashbookSummary | null>(null)
   const [accounts, setAccounts] = useState<Account[] | null>(null)
   const [schedules, setSchedules] = useState<Schedule[] | null>(null)
+  const [failedSch, setFailedSch] = useState<Schedule[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // 新建账户 modal
+  const [openNew, setOpenNew] = useState(false)
+  const [draft, setDraft] = useState({ name: '', type: 'BANK', bankName: '', accountNo: '', note: '' })
+  const [saving, setSaving] = useState(false)
+  // 当日明细 弹层
+  const [pickDay, setPickDay] = useState<string | null>(null)
 
-  useEffect(() => {
+  function load() {
     Promise.all([
       apiFetch<CashbookSummary>('/api/cashbook/summary').catch(e => { setError(e.message); return null }),
       apiFetch<Account[]>('/api/cashbook/accounts').catch(() => []),
       apiFetch<Schedule[]>('/api/schedules?days=7').catch(() => []),
-    ]).then(([s, a, sch]) => {
+      apiFetch<Schedule[]>('/api/schedules?status=FAILED').catch(() => []),
+    ]).then(([s, a, sch, f]) => {
       setSummary(s); setAccounts(a || []); setSchedules(sch || [])
+      setFailedSch(f || [])
     })
-  }, [])
+  }
+  useEffect(() => { load() }, [])
+
+  async function createAccount() {
+    if (!draft.name.trim()) { alert('账户名称必填'); return }
+    setSaving(true)
+    try {
+      await apiFetch('/api/cashbook/accounts', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: draft.name.trim(),
+          type: draft.type,
+          bankName: draft.bankName.trim() || undefined,
+          accountNo: draft.accountNo.trim() || undefined,
+          note: draft.note.trim() || undefined,
+        }),
+      })
+      setOpenNew(false)
+      setDraft({ name: '', type: 'BANK', bankName: '', accountNo: '', note: '' })
+      load()
+    } catch (e: any) {
+      alert(e.message || '创建失败')
+    } finally { setSaving(false) }
+  }
 
   const totalBalance = Number(summary?.totalBalance || 0)
   const monthIncome  = Number(summary?.monthIncome  || 0)
   const monthExpense = Number(summary?.monthExpense || 0)
   const monthNet     = Number(summary?.monthNet     || 0)
 
-  const accountsView = useMemo(() => {
-    if (!accounts) return []
-    const total = accounts.reduce((s, a) => s + Number(a.balance), 0) || 1
-    return accounts.map(a => ({
-      ...a,
-      amount: Number(a.balance),
-      pct: Math.round((Number(a.balance) / total) * 100),
-      anomaly: Number(a.balance) <= 0,
-    }))
-  }, [accounts])
-
-  // 7 天日历, 按 schedule.dueAt 聚合
+  // 7 天日历
   const week = useMemo(() => {
-    const days: Array<{ date: Date; iso: string; dayLabel: string; mmdd: string; isToday: boolean; amount: number }> = []
+    const days: Array<{ iso: string; dayLabel: string; mmdd: string; isToday: boolean; amount: number; count: number }> = []
     const today = new Date(); today.setHours(0, 0, 0, 0)
     for (let i = 0; i < 7; i++) {
       const d = new Date(today.getTime() + i * 86400000)
       const iso = d.toISOString().slice(0, 10)
       days.push({
-        date: d, iso, dayLabel: ['日','一','二','三','四','五','六'][d.getDay()],
-        mmdd: fmtDate(iso), isToday: i === 0, amount: 0,
+        iso, dayLabel: ['日','一','二','三','四','五','六'][d.getDay()],
+        mmdd: fmtDate(iso), isToday: i === 0, amount: 0, count: 0,
       })
     }
     if (schedules) {
@@ -89,7 +126,7 @@ export default function FinanceFundsPage() {
         if (s.status === 'PAID' || s.status === 'REJECTED') return
         const iso = new Date(s.dueAt).toISOString().slice(0, 10)
         const day = days.find(d => d.iso === iso)
-        if (day) day.amount += Number(s.amount)
+        if (day) { day.amount += Number(s.amount); day.count++ }
       })
     }
     return days
@@ -98,8 +135,8 @@ export default function FinanceFundsPage() {
   const upcoming = (schedules || [])
     .filter(s => s.status !== 'PAID' && s.status !== 'REJECTED')
     .sort((a, b) => new Date(a.dueAt).getTime() - new Date(b.dueAt).getTime())
-    .slice(0, 8)
   const upcomingTotal = upcoming.reduce((s, x) => s + Number(x.amount), 0)
+  const dayDetail = pickDay ? upcoming.filter(s => new Date(s.dueAt).toISOString().slice(0, 10) === pickDay) : []
 
   return (
     <div className="min-h-screen bg-bg pb-20">
@@ -108,108 +145,218 @@ export default function FinanceFundsPage() {
           <h1 className="text-h1">资金</h1>
           <p className="text-caption text-gray3">集团 · {accounts?.length ?? '—'} 个账户</p>
         </div>
+        <button onClick={() => setOpenNew(true)}
+                className="px-3 py-2 bg-ink text-white rounded-cta text-button">+ 新建账户</button>
       </header>
 
-      <div className="px-4 mt-2">
-        <BlackHero
-          label="总账户余额 ● 实时"
-          value={summary === null ? '加载中…' : `¥${(totalBalance/1000).toFixed(1)}K`}
-          delta={monthNet !== 0
-            ? { text: `${monthNet > 0 ? '↑' : '↓'} ¥${Math.abs(monthNet/1000).toFixed(1)}K 本月净`, trend: monthNet > 0 ? 'up' : 'down' }
-            : undefined}
-          meta={summary ? `本月流入 ¥${(monthIncome/1000).toFixed(1)}K · 流出 ¥${(monthExpense/1000).toFixed(1)}K` : ''}
+      <div className="mt-2">
+        <GlanceStrip
+          label="总账户余额"
+          value={summary === null ? '加载中…' : fmtMoney(totalBalance)}
+          meta={summary ? `本月流入 ${fmtMoney(monthIncome)} · 流出 ${fmtMoney(monthExpense)}` : ''}
           stats={summary ? [
-            { label: '月流入', value: `+¥${(monthIncome/1000).toFixed(1)}K`, tone: 'green' },
-            { label: '月流出', value: `−¥${(monthExpense/1000).toFixed(1)}K`, tone: 'red' as any },
-            { label: '月净',   value: `${monthNet >= 0 ? '+' : '−'}¥${(Math.abs(monthNet)/1000).toFixed(1)}K`, tone: monthNet >= 0 ? 'green' : 'red' as any },
+            { label: '月流入', value: `+${fmtMoney(monthIncome)}`, tone: 'green' as const },
+            { label: '月流出', value: `−${fmtMoney(monthExpense)}`, tone: 'red' as const },
+            { label: '月净',   value: `${monthNet >= 0 ? '+' : '−'}${fmtMoney(Math.abs(monthNet))}`, tone: monthNet >= 0 ? 'green' as const : 'red' as const },
           ] : []}
         />
       </div>
 
       {error && <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">加载失败: {error}</div>}
 
-      <Section title="账户余额" right={accountsView.length ? `${accountsView.length} 个 · ¥${totalBalance.toLocaleString()}` : ''}>
-        {accounts === null && <p className="text-caption text-gray3 text-center py-6">加载中…</p>}
-        {accounts !== null && accountsView.length === 0 && (
-          <div className="bg-white rounded-card border border-border p-6 text-center">
-            <p className="text-caption text-gray3">暂无资金账户</p>
-            <p className="text-micro text-gray4 mt-1">在管理后台添加银行/微信/支付宝商户后会显示</p>
-          </div>
-        )}
-        {accountsView.length > 0 && (
-          <ul className="bg-white rounded-card border border-border divide-y divide-border">
-            {accountsView.map(a => (
-              <li key={a.id} className="px-3 py-3">
-                <div className="flex items-center gap-3 mb-2">
-                  <span className="w-9 h-9 rounded-md bg-bg flex items-center justify-center font-num">{a.name?.[0] || '$'}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-h2 truncate">{a.name}</span>
-                      {a.anomaly && <Chip tone="red">余额 0</Chip>}
-                    </div>
-                    <p className="text-micro text-gray3">
-                      {a.bankName || a.type}
-                      {a.accountNo ? ` · 尾号 ${String(a.accountNo).slice(-4)}` : ''}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <div className="font-num text-h2">¥{a.amount.toLocaleString()}</div>
-                    <div className="text-micro text-gray3 font-num">{a.pct}%</div>
-                  </div>
+      {/* 失败付款 — P0 重要 */}
+      {failedSch !== null && failedSch.length > 0 && (
+        <Section title="付款失败 / 重试" right={`${failedSch.length} 笔`} rightTone="red">
+          <ul className="bg-red-bg/30 rounded-card border border-red/30 divide-y divide-red/20">
+            {failedSch.slice(0, 5).map(s => (
+              <li key={s.id} className="px-3 py-2.5">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <Chip tone="red">{s.status === 'OVERDUE' ? '逾期' : '失败'}</Chip>
+                  {(s.retryCount || 0) > 0 && <span className="text-micro text-red-fg">已重试 {s.retryCount} 次</span>}
+                  <span className="ml-auto font-num text-h2">{fmtMoney(Number(s.amount))}</span>
                 </div>
-                <div className="h-1 bg-bg rounded-full overflow-hidden">
-                  <div className={`h-full ${a.anomaly ? 'bg-red' : 'bg-gray2'}`} style={{ width: `${Math.max(2, a.pct)}%` }} />
-                </div>
+                <div className="text-body truncate">{s.supplier?.name || '—'}</div>
+                <p className="text-micro text-gray2 truncate">{s.receipt?.store?.name} · #{s.receipt?.no}</p>
+                {s.failReason && <p className="text-micro text-red-fg mt-1">原因: {s.failReason}</p>}
               </li>
             ))}
+          </ul>
+          <a href="/v2/finance/payable" className="block text-center mt-2 py-2 text-caption text-amber-fg">去应付页人工处理 ›</a>
+        </Section>
+      )}
+
+      <Section title="账户余额" right={accounts && accounts.length > 0 ? `${accounts.length} 个 · ${fmtMoney(totalBalance)}` : ''}>
+        {accounts === null && <p className="text-caption text-gray3 text-center py-6">加载中…</p>}
+        {accounts !== null && accounts.length === 0 && (
+          <div className="bg-white rounded-card border border-border p-6 text-center">
+            <p className="text-caption text-gray3">暂无资金账户</p>
+            <p className="text-micro text-gray3 mt-1">点击右上角「+ 新建账户」添加银行 / 微信 / 支付宝</p>
+            <button onClick={() => setOpenNew(true)} className="mt-3 px-4 py-2 bg-ink text-white rounded-cta text-button">+ 新建账户</button>
+          </div>
+        )}
+        {accounts && accounts.length > 0 && (
+          <ul className="bg-white rounded-card border border-border divide-y divide-border">
+            {accounts.map(a => {
+              const amt = Number(a.balance)
+              const pct = totalBalance > 0 ? Math.round(amt / totalBalance * 100) : 0
+              const anomaly = amt <= 0
+              return (
+                <li key={a.id} className="px-3 py-3">
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className="w-9 h-9 rounded-md bg-bg flex items-center justify-center font-num">{a.name?.[0] || '$'}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-h2 truncate">{a.name}</span>
+                        {anomaly && <Chip tone="red">余额 0</Chip>}
+                      </div>
+                      <p className="text-micro text-gray3">
+                        {a.bankName || a.type}
+                        {a.accountNo ? ` · 尾号 ${String(a.accountNo).slice(-4)}` : ''}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-num text-h2">{fmtMoney(amt)}</div>
+                      <div className="text-micro text-gray3 font-num">{pct}%</div>
+                    </div>
+                  </div>
+                  <div className="h-1 bg-bg rounded-full overflow-hidden">
+                    <div className={`h-full ${anomaly ? 'bg-red' : 'bg-gray2'}`} style={{ width: `${Math.max(2, pct)}%` }} />
+                  </div>
+                </li>
+              )
+            })}
           </ul>
         )}
       </Section>
 
-      <Section title="本周应付到期" right={upcoming.length ? `${upcoming.length} 笔 · ¥${upcomingTotal.toLocaleString()}` : ''}>
-        <div className="bg-white rounded-card border border-border p-4">
-          <div className="grid grid-cols-7 gap-1 mb-3">
+      <Section title="本周应付到期" right={upcoming.length ? `${upcoming.length} 笔 · ${fmtMoney(upcomingTotal)}` : ''}>
+        <div className="bg-white rounded-card border border-border p-3">
+          <div className="grid grid-cols-7 gap-1 mb-1">
             {week.map((d) => (
-              <div key={d.iso} className={`flex flex-col items-center text-center py-2 rounded-card ${d.isToday ? 'border border-ink' : d.amount > 0 ? 'bg-bg' : ''}`}>
+              <button key={d.iso} onClick={() => d.amount > 0 && setPickDay(d.iso)}
+                      className={`flex flex-col items-center text-center py-2 rounded-card ${d.isToday ? 'border border-ink' : d.amount > 0 ? 'bg-amber/10 hover:bg-amber/20' : 'bg-bg'} ${d.amount > 0 ? 'cursor-pointer' : 'cursor-default'}`}>
                 <span className="text-micro text-gray3">{d.dayLabel}</span>
                 <span className="text-caption">{d.mmdd}</span>
                 {d.isToday && <span className="text-micro text-gray2 mt-0.5">今日</span>}
-                {d.amount > 0 && <span className="font-num text-button text-ink mt-1">¥{(d.amount/1000).toFixed(1)}K</span>}
-              </div>
+                {d.amount > 0 && (
+                  <>
+                    <span className="font-num text-button text-amber-fg mt-1">{fmtMoney(d.amount)}</span>
+                    <span className="text-micro text-gray3">{d.count} 笔</span>
+                  </>
+                )}
+              </button>
             ))}
           </div>
           {schedules === null ? (
             <p className="text-caption text-gray3 text-center py-2">加载中…</p>
           ) : upcoming.length === 0 ? (
-            <p className="text-caption text-gray3 text-center py-2">未来 7 天暂无应付</p>
+            <p className="text-caption text-gray3 text-center py-3">未来 7 天暂无应付</p>
           ) : (
-            <ul className="divide-y divide-border">
-              {upcoming.map(p => {
-                const inv = p.receipt?.invoice
-                const noInvoice = !inv
-                const invPending = inv?.status === 'PENDING'
-                const invVerified = inv?.status === 'VERIFIED'
+            <p className="text-micro text-gray3 text-center mt-1">点日期格查看当日明细 ›</p>
+          )}
+        </div>
+      </Section>
+
+      {/* 新建账户 modal */}
+      {openNew && (
+        <div className="fixed inset-0 z-50 bg-ink/60 flex items-end justify-center"
+             onClick={() => setOpenNew(false)}>
+          <div className="bg-white rounded-t-card w-full max-w-md p-4"
+               onClick={e => e.stopPropagation()}
+               style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom))' }}>
+            <div className="w-10 h-1 bg-border rounded-full mx-auto mb-3" />
+            <h3 className="text-h2">新建资金账户</h3>
+            <p className="text-caption text-gray3 mt-1">添加后在「资金」可见, 系统按此账户记账</p>
+
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="text-micro text-gray3 block mb-1">账户名称 *</label>
+                <input value={draft.name} onChange={e => setDraft({...draft, name: e.target.value})}
+                       placeholder="如 招商银行 主账户"
+                       className="w-full bg-bg rounded-cta px-3 py-2 text-body outline-none" />
+              </div>
+              <div>
+                <label className="text-micro text-gray3 block mb-1">类型</label>
+                <select value={draft.type} onChange={e => setDraft({...draft, type: e.target.value})}
+                        className="w-full bg-bg rounded-cta px-3 py-2 text-body outline-none">
+                  <option value="BANK">银行账户</option>
+                  <option value="WECHAT">微信商户</option>
+                  <option value="ALIPAY">支付宝商户</option>
+                  <option value="CASH">现金</option>
+                  <option value="OTHER">其他</option>
+                </select>
+              </div>
+              {draft.type === 'BANK' && (
+                <>
+                  <div>
+                    <label className="text-micro text-gray3 block mb-1">开户行</label>
+                    <input value={draft.bankName} onChange={e => setDraft({...draft, bankName: e.target.value})}
+                           placeholder="如 招商银行 杭州西湖支行"
+                           className="w-full bg-bg rounded-cta px-3 py-2 text-body outline-none" />
+                  </div>
+                  <div>
+                    <label className="text-micro text-gray3 block mb-1">账号 (后 4 位会显示)</label>
+                    <input value={draft.accountNo} onChange={e => setDraft({...draft, accountNo: e.target.value})}
+                           placeholder="如 6225 8888 8888 8888"
+                           className="w-full bg-bg rounded-cta px-3 py-2 text-body font-num outline-none" />
+                  </div>
+                </>
+              )}
+              <div>
+                <label className="text-micro text-gray3 block mb-1">备注 (可选)</label>
+                <input value={draft.note} onChange={e => setDraft({...draft, note: e.target.value})}
+                       className="w-full bg-bg rounded-cta px-3 py-2 text-body outline-none" />
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-5">
+              <button onClick={() => setOpenNew(false)}
+                      className="px-4 py-2 border border-border rounded-cta text-button text-gray2">取消</button>
+              <button onClick={createAccount} disabled={saving}
+                      className="flex-1 py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40">
+                {saving ? '创建中…' : '创建'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 当日应付明细 弹层 */}
+      {pickDay && (
+        <div className="fixed inset-0 z-50 bg-ink/60 flex items-end justify-center"
+             onClick={() => setPickDay(null)}>
+          <div className="bg-white rounded-t-card w-full max-w-md max-h-[80vh] flex flex-col"
+               onClick={e => e.stopPropagation()}>
+            <div className="w-10 h-1 bg-border rounded-full mx-auto mt-2" />
+            <div className="px-4 pt-3 pb-2 flex items-baseline justify-between">
+              <h3 className="text-h2">{pickDay} 应付</h3>
+              <span className="text-caption text-gray3">{dayDetail.length} 笔 · {fmtMoney(dayDetail.reduce((s,x) => s + Number(x.amount), 0))}</span>
+            </div>
+            <ul className="overflow-auto flex-1 divide-y divide-border">
+              {dayDetail.map(s => {
+                const inv = s.receipt?.invoice
                 return (
-                  <li key={p.id} className="py-2">
-                    <div className="flex items-center gap-2">
-                      <span className={`w-1.5 h-1.5 rounded-full ${noInvoice ? 'bg-orange' : invPending ? 'bg-amber' : 'bg-ink'}`}></span>
-                      <span className="flex-1 text-body truncate">
-                        {p.supplier?.name || '—'}
-                        <span className="text-caption text-gray3 ml-2">{p.receipt?.no || '—'}</span>
-                      </span>
-                      <span className="font-num text-body">¥{Number(p.amount).toLocaleString()}</span>
-                      <span className="text-micro text-gray3">{fmtDate(p.dueAt)}</span>
+                  <li key={s.id} className="px-4 py-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-h2 truncate flex-1">{s.supplier?.name || '—'}</span>
+                      <span className="font-num text-h2">{fmtMoney(Number(s.amount))}</span>
                     </div>
-                    {noInvoice  && <span className="text-micro text-orange-fg ml-3.5">⚠ 待开票, 不能付款</span>}
-                    {invPending && <span className="text-micro text-amber-fg ml-3.5">📃 发票待审 #{inv.invoiceNo}</span>}
-                    {invVerified && <span className="text-micro text-green-fg ml-3.5">✓ 发票已通过 · 可付款</span>}
+                    <p className="text-caption text-gray2">{s.receipt?.store?.name} · #{s.receipt?.no}</p>
+                    {!inv && <p className="text-micro text-orange-fg mt-1">⚠ 未关联发票, 不能付款</p>}
+                    {inv?.status === 'PENDING' && <p className="text-micro text-amber-fg mt-1">📃 发票待审 #{inv.invoiceNo}</p>}
+                    {inv?.status === 'VERIFIED' && <p className="text-micro text-green-fg mt-1">✓ 发票已通过 · 可付款</p>}
                   </li>
                 )
               })}
             </ul>
-          )}
+            <div className="border-t border-border p-3 flex gap-2">
+              <button onClick={() => setPickDay(null)}
+                      className="px-4 py-2 border border-border rounded-cta text-button text-gray2">关闭</button>
+              <a href="/v2/finance/payable" className="flex-1 text-center py-2 bg-ink text-white rounded-cta text-button">去应付页操作 ›</a>
+            </div>
+          </div>
         </div>
-      </Section>
+      )}
 
       <BottomNav
         tabs={[

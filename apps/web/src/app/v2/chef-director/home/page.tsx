@@ -115,6 +115,20 @@ export default function ChefDirectorHomePage() {
         )}
       </Section>
 
+      {/* 报损争议仲裁入口 (供应商拒赔后到这) */}
+      <Section title="报损争议" right={(losses || []).filter(l => l.status === 'REJECTED').length > 0 ? `${(losses || []).filter(l => l.status === 'REJECTED').length} 待裁` : ''} rightTone="red">
+        <a href="/v2/chef-director/disputes" className="block bg-white rounded-card border border-border p-3">
+          <div className="flex items-center gap-3">
+            <span className="w-10 h-10 rounded-md bg-red-bg text-red-fg flex items-center justify-center text-h2">⚖</span>
+            <div className="flex-1">
+              <div className="text-h2">争议报损仲裁</div>
+              <p className="text-caption text-gray2 mt-0.5">供应商拒绝的报损 → 你拍板最终扣减</p>
+            </div>
+            <span className="text-gray3">›</span>
+          </div>
+        </a>
+      </Section>
+
       <Section title="各店报损排行" right={`${storeRank.length} 家店 · ${anomalyCount} 异常`} rightTone={anomalyCount > 0 ? 'orange' : undefined}>
         {losses === null && <p className="text-caption text-gray3 text-center py-4">加载中…</p>}
         {losses !== null && storeRank.length === 0 && (

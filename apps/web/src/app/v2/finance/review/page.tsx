@@ -34,7 +34,11 @@ export default function FinanceReviewPage() {
   const [items, setItems] = useState<Item[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState<string | null>(null)
-  const [filter, setFilter] = useState<string>('全部')
+  const [storeFilter, setStoreFilter] = useState<string>('全部')
+  const [typeFilter, setTypeFilter] = useState<string>('全部')
+  // 批量选中
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [batchMode, setBatchMode] = useState(false)
   const [confirmState, openConfirm] = useConfirmSheet()
 
   async function load() {
@@ -70,36 +74,103 @@ export default function FinanceReviewPage() {
     }
   }
 
-  // 按门店分组
-  const stores = new Set<string>(items?.map(i => i.document.store?.name?.slice(0, 2) || '集团') || [])
-  const visible = items?.filter(i => filter === '全部' || (i.document.store?.name?.startsWith(filter))) || []
+  // 按门店 + 类型 双 filter
+  const stores = Array.from(new Set<string>(items?.map(i => i.document.store?.name || '集团') || []))
+  const types  = Array.from(new Set<string>(items?.map(i => i.document.type) || []))
+  const visible = items?.filter(i =>
+    (storeFilter === '全部' || (i.document.store?.name === storeFilter || (storeFilter === '集团' && !i.document.store))) &&
+    (typeFilter === '全部' || i.document.type === typeFilter)
+  ) || []
   const totalAmount = visible.reduce((s, i) => s + Number(i.document.amount || 0), 0)
+  const selectedTotal = visible.filter(i => selected.has(i.document.id)).reduce((s, i) => s + Number(i.document.amount || 0), 0)
+
+  function toggleSelect(id: string) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  function selectAll() {
+    setSelected(new Set(visible.map(i => i.document.id)))
+  }
+  async function batchApprove() {
+    const ids = Array.from(selected)
+    if (ids.length === 0) return
+    openConfirm({
+      title: `批量批准 ${ids.length} 单?`,
+      body: `合计 ¥${selectedTotal.toLocaleString()} · 任意一单失败会停止后续批准`,
+      confirmLabel: '确认批准',
+      tone: 'primary',
+      onConfirm: async () => {
+        for (const id of ids) {
+          try {
+            await apiFetch(`/api/documents/${id}/decisions`, { method: 'POST', body: JSON.stringify({ decision: 'APPROVE' }) })
+          } catch (e: any) { alert(`${id}: ${e.message || '失败'}`); break }
+        }
+        setSelected(new Set()); setBatchMode(false); load()
+      },
+    })
+  }
 
   return (
     <div className="min-h-screen bg-bg pb-20">
-      <header className="px-4 pt-4 pb-2 flex items-center justify-between">
+      <header className="px-4 pt-4 pb-2 flex items-start justify-between gap-2">
         <div>
           <h1 className="text-h1">初审</h1>
           <p className="text-caption text-gray3">
-            {items === null ? '加载中…' : `${items.length} 单待审 · ¥${(totalAmount / 1000).toFixed(1)}K`}
+            {items === null ? '加载中…' : `${visible.length} 单待审 · ¥${totalAmount.toLocaleString()}`}
           </p>
         </div>
+        {(items?.length ?? 0) > 0 && (
+          <button onClick={() => { setBatchMode(b => !b); setSelected(new Set()) }}
+                  className={`px-3 py-1.5 rounded-cta text-button shrink-0 ${batchMode ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
+            {batchMode ? '取消批量' : '批量勾选'}
+          </button>
+        )}
       </header>
 
       {/* 门店筛选 */}
-      <div className="px-4 mt-2 flex gap-2 overflow-x-auto">
-        <button
-          onClick={() => setFilter('全部')}
-          className={`shrink-0 px-3 py-1.5 rounded-cta text-button ${filter === '全部' ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}
-        >全部 {items?.length ?? 0}</button>
-        {Array.from(stores).map(s => (
-          <button
-            key={s}
-            onClick={() => setFilter(s)}
-            className={`shrink-0 px-3 py-1.5 rounded-cta text-button ${filter === s ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}
-          >{s} {items?.filter(i => i.document.store?.name?.startsWith(s)).length ?? 0}</button>
-        ))}
-      </div>
+      {stores.length > 1 && (
+        <div className="px-4 mt-2 flex gap-2 overflow-x-auto">
+          <button onClick={() => setStoreFilter('全部')}
+            className={`shrink-0 px-3 py-1.5 rounded-cta text-button ${storeFilter === '全部' ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
+            全部 {items?.length ?? 0}
+          </button>
+          {stores.map(s => (
+            <button key={s} onClick={() => setStoreFilter(s)}
+              className={`shrink-0 px-3 py-1.5 rounded-cta text-button ${storeFilter === s ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
+              {s} {items?.filter(i => (i.document.store?.name || '集团') === s).length ?? 0}
+            </button>
+          ))}
+        </div>
+      )}
+      {/* 类型筛选 */}
+      {types.length > 1 && (
+        <div className="px-4 mt-2 flex gap-2 overflow-x-auto">
+          <button onClick={() => setTypeFilter('全部')}
+            className={`shrink-0 px-3 py-1 rounded-chip text-caption ${typeFilter === '全部' ? 'bg-amber/20 text-amber-fg' : 'bg-bg text-gray3'}`}>
+            类型 全部
+          </button>
+          {types.map(t => (
+            <button key={t} onClick={() => setTypeFilter(t)}
+              className={`shrink-0 px-3 py-1 rounded-chip text-caption ${typeFilter === t ? 'bg-amber/20 text-amber-fg' : 'bg-bg text-gray3'}`}>
+              {TYPE_LABEL[t] || t}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 批量操作栏 */}
+      {batchMode && (
+        <div className="mx-4 mt-3 bg-amber/10 border border-amber/30 rounded-card p-3 flex items-center gap-2">
+          <span className="text-caption">已选 <b className="font-num">{selected.size}</b> · 合计 <b className="font-num">¥{selectedTotal.toLocaleString()}</b></span>
+          <button onClick={selectAll}
+                  className="ml-auto px-3 py-1.5 border border-border bg-white rounded-cta text-caption">全选当前</button>
+          <button onClick={batchApprove} disabled={selected.size === 0}
+                  className="px-3 py-1.5 bg-ink text-white rounded-cta text-caption disabled:opacity-40">批量批准</button>
+        </div>
+      )}
 
       {error && (
         <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>
@@ -114,9 +185,14 @@ export default function FinanceReviewPage() {
           const tone: 'red' | 'orange' | 'gray' = d.isOverThreshold ? 'red' : 'orange'
           const route = d.isOverThreshold ? '→ 老板' : '→ 直接生效'
           const routeColor = d.isOverThreshold ? 'text-red-fg' : 'text-green-fg'
+          const isSelected = selected.has(d.id)
           return (
-            <li key={item.stepId} className={`relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full ${tone === 'red' ? 'before:bg-red' : 'before:bg-orange'}`}>
+            <li key={item.stepId} className={`relative bg-white rounded-card p-3 pl-4 border ${isSelected ? 'border-amber border-2' : 'border-border'} before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full ${tone === 'red' ? 'before:bg-red' : 'before:bg-orange'}`}>
               <div className="flex items-center gap-2 mb-1 flex-wrap">
+                {batchMode && (
+                  <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(d.id)}
+                         className="w-4 h-4" />
+                )}
                 <Chip tone={tone}>{TYPE_LABEL[d.type] || d.type}</Chip>
                 {d.isOverThreshold && <Chip tone="red">超阈值</Chip>}
                 <span className="text-micro text-gray3 ml-auto">{timeAgo(d.createdAt)}</span>

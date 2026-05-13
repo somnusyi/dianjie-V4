@@ -201,17 +201,35 @@ export default function BatchUploadPage() {
             const n = Number(v)
             return Number.isFinite(n) ? n : def
           }
-          const items = rows.filter(r => !r.__error).map(r => ({
-            // code 不传, 后端自动生成
-            name: String(r.name).trim(),
-            spec: r.spec ? String(r.spec).trim() : undefined,
-            category: r.category ? String(r.category).trim() : undefined,
-            unit: r.unit ? String(r.unit).trim() : '件',
-            price: numOr(r.price, 0),
-            stock: numOr(r.stock, 0),
-            minStock: numOr(r.minStock, 0),
-            shelfDays: numOr(r.shelfDays, 7),
-          }))
+          // unit 清洗: 把 "5kg" / "2包起订" / "10袋" 之类拆出 数字 + 干净单位
+          // 数字 → 起订量(minOrderQty + stepQty), 单位 → unit
+          const cleanUnit = (raw?: string) => {
+            const s = (raw || '').trim()
+            if (!s) return { unit: '件', moq: 1 }
+            // "2包起订" / "100个起订"
+            let m = s.match(/^(\d+)([^0-9]+)起订$/)
+            if (m) return { unit: m[2].trim(), moq: Number(m[1]) }
+            // "5kg" / "10袋" / "2瓶"
+            m = s.match(/^(\d+(?:\.\d+)?)([^0-9]+)$/)
+            if (m) return { unit: m[2].trim(), moq: Number(m[1]) }
+            return { unit: s, moq: 1 }
+          }
+          const items = rows.filter(r => !r.__error).map(r => {
+            const { unit, moq } = cleanUnit(r.unit ? String(r.unit) : undefined)
+            return {
+              // code 不传, 后端自动生成
+              name: String(r.name).trim(),
+              spec: r.spec ? String(r.spec).trim() : undefined,
+              category: r.category ? String(r.category).trim() : undefined,
+              unit,
+              minOrderQty: moq,
+              stepQty: moq,
+              price: numOr(r.price, 0),
+              stock: numOr(r.stock, 0),
+              minStock: numOr(r.minStock, 0),
+              shelfDays: numOr(r.shelfDays, 7),
+            }
+          })
           const res = await apiFetch<any>('/api/products/batch', {
             method: 'POST',
             body: JSON.stringify({ items, filename }),

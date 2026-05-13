@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    方案 C · 抽象碗 + 云字
+    碗 = 餐饮，碗里抽象云形 = 云南。极简两笔。
+    优点：图形化、独特、不靠汉字、易做反白版本。
+  -->
+  <defs>
+    <linearGradient id="bgC" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2A2218"/>
+      <stop offset="100%" stop-color="#1A1410"/>
+    </linearGradient>
+    <linearGradient id="kakiC" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F39458"/>
+      <stop offset="100%" stop-color="#E07A3C"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="232" ry="232" fill="url(#bgC)"/>
+
+  <!-- 抽象碗 (柿色, 半圆) -->
+  <path d="M 240 540
+           Q 240 800 512 800
+           Q 784 800 784 540
+           Z"
+        fill="url(#kakiC)"/>
+
+  <!-- 碗沿薄线 (凸起感) -->
+  <path d="M 220 540 L 804 540" stroke="#FFD9B5" stroke-width="14" stroke-linecap="round"/>
+
+  <!-- 云形 (米白, 飘在碗上方) -->
+  <g fill="#FAF6EF">
+    <path d="M 380 380
+             Q 380 320 440 320
+             Q 460 280 510 280
+             Q 560 280 580 320
+             Q 640 320 640 380
+             Q 640 420 580 420
+             L 440 420
+             Q 380 420 380 380 Z"/>
+    <!-- 云下方两笔小蒸汽 -->
+    <circle cx="440" cy="470" r="14" opacity="0.6"/>
+    <circle cx="510" cy="490" r="12" opacity="0.5"/>
+    <circle cx="580" cy="470" r="14" opacity="0.6"/>
+  </g>
+
+  <!-- 底部品牌名 -->
+  <text x="512" y="900"
+        text-anchor="middle"
+        font-family="'PingFang SC','Noto Sans SC',sans-serif"
+        font-size="76" font-weight="700"
+        fill="#FAF6EF" letter-spacing="14">滇 界</text>
+</svg>

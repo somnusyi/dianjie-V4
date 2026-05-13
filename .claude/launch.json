@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dianjie-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@dianjie/web", "dev"],
+      "port": 3200
+    }
+  ]
+}

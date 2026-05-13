@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    最终版 · 几何化「店」字
+    - 墨褐底 + 柿色「店」(纯 path 手绘, 非字体)
+    - 「店」=「广」屋顶 +「占」店内 = 餐饮商户的最直接表意
+    - 笔画做粗几何, 圆角端头, 远看像建筑剪影, 近看是字
+  -->
+  <defs>
+    <radialGradient id="bgFinal" cx="50%" cy="40%" r="80%">
+      <stop offset="0%" stop-color="#3A2E22"/>
+      <stop offset="100%" stop-color="#1A1410"/>
+    </radialGradient>
+    <linearGradient id="kakiFinal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F39458"/>
+      <stop offset="100%" stop-color="#D86F32"/>
+    </linearGradient>
+    <filter id="warmGlow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feComposite in="blur" in2="SourceGraphic" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- 背景超椭圆 -->
+  <rect width="1024" height="1024" rx="232" ry="232" fill="url(#bgFinal)"/>
+
+  <!-- 顶部柔光 -->
+  <ellipse cx="512" cy="200" rx="600" ry="180" fill="#F39458" opacity="0.08"/>
+
+  <!-- 「广」屋顶 (一点 + 一横 + 撇)
+       一点: 顶上小圆/方块 -->
+  <g fill="url(#kakiFinal)" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- 一点 (屋脊) -->
+    <rect x="490" y="200" width="44" height="68" rx="8"/>
+
+    <!-- 横 (屋檐) - 加粗水平笔, 圆角 -->
+    <rect x="232" y="296" width="560" height="52" rx="20"/>
+
+    <!-- 撇 (左下斜笔) - 用 path 手画弧 -->
+    <path d="M 282 348
+             Q 282 460 220 600
+             Q 200 640 184 700
+             L 252 720
+             Q 268 660 296 580
+             Q 326 480 332 360 Z"/>
+
+    <!-- 内部「占」 -->
+    <!-- 上半: 卜字头 (短竖 + 短横) -->
+    <rect x="498" y="400" width="36" height="100" rx="10"/>
+    <rect x="540" y="438" width="80" height="34" rx="10"/>
+
+    <!-- 下半: 口字 (方框) -->
+    <rect x="412" y="540" width="288" height="220" rx="22"
+          fill="none" stroke="url(#kakiFinal)" stroke-width="44"/>
+
+    <!-- 口内一点装饰 - 暗示"店里有人/有戏" -->
+    <circle cx="556" cy="650" r="14" fill="#FAF6EF" opacity="0.85"/>
+  </g>
+
+  <!-- 底部品牌副标 (远看几乎看不见, 微妙存在) -->
+  <text x="512" y="930"
+        text-anchor="middle"
+        font-family="-apple-system,'PingFang SC',sans-serif"
+        font-size="48" font-weight="500"
+        fill="#FAF6EF" fill-opacity="0.18"
+        letter-spacing="32">滇 界</text>
+</svg>

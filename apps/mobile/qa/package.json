@@ -1,0 +1,24 @@
+{
+  "name": "@dianjie/mobile-qa",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "forward": "tsx src/forward.ts",
+    "run": "tsx src/run.ts",
+    "all": "tsx src/run.ts --all",
+    "test": "vitest run",
+    "server-check": "bash scripts/server-check.sh"
+  },
+  "dependencies": {
+    "axios": "^1.15.0",
+    "chrome-remote-interface": "^0.33.3",
+    "tsx": "^4.7.0"
+  },
+  "devDependencies": {
+    "@types/chrome-remote-interface": "^0.31.14",
+    "@types/node": "^20.11.5",
+    "typescript": "^5.3.3",
+    "vitest": "^1.6.1"
+  }
+}

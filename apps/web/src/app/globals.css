@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; }
+body {
+  font-family: 'Noto Sans SC', -apple-system, sans-serif;
+  background-color: #F1EFE8;  /* PDF 页面外背景·奶白 */
+  color: #111111;
+}
+
+/* tabular-nums 让数字列宽度一致（HERO 大数字 / KPI / 表格） */
+.font-num { font-variant-numeric: tabular-nums; }

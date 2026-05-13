@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    方案 D · 商家工具 (主推)
+    柿色 + 「商」字 + 顶部店招条纹剪影
+    类目语法 = 美团商家黄 / 美团商家「商」字, 但换柿色做品牌差异
+    一眼就喊「商家工具」, 不会被当成消费者 App
+  -->
+  <defs>
+    <linearGradient id="bgD" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F39458"/>
+      <stop offset="100%" stop-color="#D86F32"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="232" ry="232" fill="url(#bgD)"/>
+
+  <!-- 顶部店招遮阳棚条纹（代表实体门店）-->
+  <g fill="#FFFCF5" opacity="0.18">
+    <rect x="80"  y="120" width="120" height="44" rx="6"/>
+    <rect x="220" y="120" width="120" height="44" rx="6"/>
+    <rect x="360" y="120" width="120" height="44" rx="6"/>
+    <rect x="500" y="120" width="120" height="44" rx="6"/>
+    <rect x="640" y="120" width="120" height="44" rx="6"/>
+    <rect x="780" y="120" width="120" height="44" rx="6"/>
+  </g>
+
+  <!-- 招牌横梁 -->
+  <rect x="80" y="180" width="864" height="6" rx="3" fill="#FFFCF5" opacity="0.30"/>
+
+  <!-- 中央「商」字 -->
+  <text x="512" y="760"
+        text-anchor="middle"
+        font-family="'PingFang SC','Noto Sans SC','Source Han Sans SC',sans-serif"
+        font-size="640" font-weight="900"
+        fill="#FFFCF5"
+        letter-spacing="-10">商</text>
+</svg>

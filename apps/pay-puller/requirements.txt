@@ -1,0 +1,5 @@
+flask>=3.0.0
+requests>=2.32.0
+# TODO 接真:
+# cryptography>=42.0  # 微信支付 V3 RSA 签名 + AEAD-AES-256-GCM
+# pycryptodome>=3.20  # 支付宝 RSA2048 签名

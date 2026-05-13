@@ -1,0 +1,29 @@
+{
+  "name": "dianjie",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --parallel -r dev",
+    "build": "pnpm -r build",
+    "db:push": "pnpm --filter @dianjie/db db:push",
+    "db:migrate": "pnpm --filter @dianjie/db db:migrate",
+    "db:studio": "pnpm --filter @dianjie/db db:studio",
+    "db:seed": "pnpm --filter @dianjie/db db:seed"
+  },
+  "devDependencies": {
+    "playwright": "^1.60.0",
+    "typescript": "^5.3.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "esbuild",
+      "msgpackr-extract",
+      "prisma"
+    ],
+    "overrides": {
+      "sharp": "^0.33.5"
+    }
+  }
+}

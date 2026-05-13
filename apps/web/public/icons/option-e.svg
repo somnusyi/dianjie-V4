@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    方案 E · 备选 (无字版)
+    柿色 + 抽象店招几何 (遮阳棚 + 招牌 + 店面方框)
+    比 D 更图形化, 不靠汉字, 国际化更友好
+    缺点：行业信号比 D 慢半拍, 但视觉更克制
+  -->
+  <defs>
+    <linearGradient id="bgE" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F39458"/>
+      <stop offset="100%" stop-color="#D86F32"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="232" ry="232" fill="url(#bgE)"/>
+
+  <!-- 店招遮阳棚 (上方梯形, 三段条纹) -->
+  <g fill="#FFFCF5">
+    <!-- 遮阳棚主体 -->
+    <path d="M 240 280 L 784 280 L 712 400 L 312 400 Z"/>
+    <!-- 条纹分隔（柿色） -->
+    <path d="M 421 280 L 391 400" stroke="#E07A3C" stroke-width="14"/>
+    <path d="M 512 280 L 512 400" stroke="#E07A3C" stroke-width="14"/>
+    <path d="M 603 280 L 633 400" stroke="#E07A3C" stroke-width="14"/>
+  </g>
+
+  <!-- 招牌横梁 -->
+  <rect x="200" y="280" width="624" height="14" rx="7" fill="#FFFCF5"/>
+
+  <!-- 店面主体（圆角方框 + 内部留空 = "界"边界感）-->
+  <rect x="280" y="440" width="464" height="380" rx="40" ry="40"
+        fill="none" stroke="#FFFCF5" stroke-width="40"/>
+
+  <!-- 店面中心点 (强调"管理就是看这一个店") -->
+  <circle cx="512" cy="630" r="48" fill="#FFFCF5"/>
+</svg>

@@ -1,0 +1,70 @@
+# 依赖
+node_modules/
+
+# 构建产物
+.next/
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# 环境变量（含密码，不入库）
+.env
+.env.*
+!.env.example
+apps/api/.env
+apps/api/.env.*
+apps/web/.env.local
+apps/web/.env.production
+apps/web/.env.*
+packages/db/.env
+
+# 日志
+*.log
+
+# IDE
+.idea/
+.vscode/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 压缩包
+*.zip
+
+# ── HarmonyOS（含签名密钥 / AGC 配置 / 构建产物，全部不入库）──
+apps/harmony/signature/
+apps/harmony/entry/src/main/resources/rawfile/agconnect-services.json
+apps/harmony/entry/build/
+apps/harmony/.hvigor/
+apps/harmony/oh_modules/
+apps/harmony/build-profile.json5.local
+apps/harmony/local.properties
+
+# ── iOS / Capacitor（证书、Profile、构建产物）──
+apps/ios/App/Pods/
+apps/ios/App/build/
+apps/ios/App/DerivedData/
+apps/ios/App/App.xcworkspace/xcuserdata/
+apps/ios/App/App.xcodeproj/xcuserdata/
+*.p12
+*.cer
+*.csr
+*.mobileprovision
+*.keystore
+*.jks
+
+# ── Android ──
+apps/android/.gradle/
+apps/android/local.properties
+apps/android/app/release/
+apps/android/app/debug/
+
+# ── Prisma 本地缓存 ──
+**/.prisma/
+
+# ── 上传/缓存目录 ──
+uploads/
+tmp/
+*.snapshot.json

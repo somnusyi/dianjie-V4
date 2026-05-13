@@ -1,0 +1,82 @@
+{
+  "app": {
+    "signingConfigs": [
+      // 你拿到证书后填这里, 现在留空 DevEco Studio 会引导生成
+      // {
+      //   "name": "default",
+      //   "type": "HarmonyOS",
+      //   "material": {
+      //     "certpath": "./signature/dianjie.cer",
+      //     "storePassword": "",
+      //     "keyAlias": "dianjie",
+      //     "keyPassword": "",
+      //     "profile": "./signature/dianjie.p7b",
+      //     "signAlg": "SHA256withECDSA",
+      //     "storeFile": "./signature/dianjie.p12"
+      //   }
+      // }
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "/Users/somnusyi/.ohos/config/default_harmony_bvWflN5QZyIclNXjJ9rQe4ZBswyJeDc1rUyPlBzkaEA=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001BC213B07151D2F0ADA4C618FEC338EEC598DC2154B1F06EBDFF1B710E99062A3925CDFBABD08E28",
+          "profile": "/Users/somnusyi/.ohos/config/default_harmony_bvWflN5QZyIclNXjJ9rQe4ZBswyJeDc1rUyPlBzkaEA=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "/Users/somnusyi/.ohos/config/default_harmony_bvWflN5QZyIclNXjJ9rQe4ZBswyJeDc1rUyPlBzkaEA=.p12",
+          "storePassword": "0000001BC17F5BF8DE651909E4B52DCF4A85E35ACCC18070C4F9F9B696EF6B8CB86532183DF3328443ACA3"
+        }
+      },
+      {
+        "name": "release",
+        "type": "HarmonyOS",
+        "material": {
+          "storeFile": "/Users/somnusyi/Projects/dianjie-local/apps/harmony/signature/dianjie-release.p12",
+          "storePassword": "00000019B994091C5C967B2568D957577C7E6A1458BEC8857AF5ED658AFC42AA7A48C53E037BFC3FFC",
+          "keyAlias": "dianjie-release",
+          "keyPassword": "00000019B9ED87457F68E99C09C5CA02CD94E912A630365DD6658DDC89D6EB0747D1880311EF9955E3",
+          "signAlg": "SHA256withECDSA",
+          "profile": "/Users/somnusyi/Projects/dianjie-local/apps/harmony/signature/dianjie-release.p7b",
+          "certpath": "/Users/somnusyi/Projects/dianjie-local/apps/harmony/signature/dianjie-release.cer"
+        }
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "release",
+        "compatibleSdkVersion": "6.0.2(22)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug"
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}

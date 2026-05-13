@@ -1,0 +1,33 @@
+{
+  "name": "@dianjie/mobile",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build:web": "pnpm --filter @dianjie/web build",
+    "build:web:dev": "NEXT_PUBLIC_API_URL=http://10.0.2.2:4000 pnpm --filter @dianjie/web build",
+    "build:web:prod": "bash scripts/build-web-prod.sh",
+    "sync": "pnpm build:web && cap sync",
+    "sync:android": "pnpm build:web && cap sync android",
+    "sync:android:dev": "pnpm build:web:dev && cap sync android",
+    "sync:android:prod": "pnpm build:web:prod && cap sync android",
+    "android": "pnpm sync:android && cap run android",
+    "android:dev": "pnpm sync:android:dev && cap run android",
+    "open:android": "cap open android",
+    "build:android:debug": "cd android && ./gradlew assembleDebug",
+    "build:android:release": "pnpm sync:android:prod && cd android && ./gradlew assembleRelease"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/app": "^6.0.2",
+    "@capacitor/camera": "^6.1.3",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/filesystem": "^6.0.4",
+    "@capacitor/network": "^6.0.3",
+    "@capacitor/preferences": "^6.0.3",
+    "@capacitor/splash-screen": "^6.0.3",
+    "@capacitor/status-bar": "^6.0.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.0"
+  }
+}

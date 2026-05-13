@@ -1,0 +1,8 @@
+{
+  "modelVersion": "6.1.0",
+  "name": "dianjie-harmony",
+  "version": "1.0.0",
+  "description": "滇界连锁餐饮 SaaS · 鸿蒙 NEXT 客户端",
+  "license": "Proprietary",
+  "dependencies": {}
+}

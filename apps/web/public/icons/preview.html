@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>滇界 · App 图标预览</title>
+<style>
+  body {
+    margin: 0; padding: 24px;
+    font-family: -apple-system, "PingFang SC", "Noto Sans SC", sans-serif;
+    background: #FAF6EF;
+    color: #2A2218;
+  }
+  h1 { font-size: 24px; margin: 0 0 8px; }
+  p.lead { color: #5F5E5A; margin: 0 0 24px; font-size: 14px; }
+  .grid { display: grid; grid-template-columns: 1fr; gap: 32px; }
+  @media (min-width: 720px) { .grid { grid-template-columns: repeat(3, 1fr); } }
+  .card {
+    background: #FFFDF8;
+    border: 1px solid #E8E2D5;
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .card h2 { font-size: 18px; margin: 0 0 4px; color: #E07A3C; }
+  .card .sub { font-size: 12px; color: #888780; margin: 0 0 16px; }
+  .icon-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  .icon-large { width: 180px; height: 180px; box-shadow: 0 8px 32px rgba(0,0,0,0.12); border-radius: 40px; }
+  .icon-mid { width: 100px; height: 100px; box-shadow: 0 4px 16px rgba(0,0,0,0.10); border-radius: 22px; }
+  .icon-small { width: 60px; height: 60px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); border-radius: 13px; }
+  ul { font-size: 13px; color: #5F5E5A; line-height: 1.6; padding-left: 18px; margin: 0; }
+  ul li::marker { color: #E07A3C; }
+</style>
+</head>
+<body>
+  <h1>滇界 · App 图标 3 个方向</h1>
+  <p class="lead">同一图标显示 180/100/60 三个尺寸 — 真机最小是 60px 启动器图标。手机上看效果：长按图标选"添加到主屏幕"用第一行的尺寸预览。</p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>方案 A · 单字 monogram</h2>
+      <p class="sub">柿色背景 + 米白「滇」字 + 弱化拼音底标</p>
+      <div class="icon-row">
+        <img class="icon-large" src="/icons/option-a.svg" alt="A">
+        <img class="icon-mid" src="/icons/option-a.svg" alt="A">
+        <img class="icon-small" src="/icons/option-a.svg" alt="A">
+      </div>
+      <ul>
+        <li>最简洁、辨识度最高</li>
+        <li>缩到 60px 仍清晰</li>
+        <li>调性最像"专业工具"（非外卖 App）</li>
+        <li>适合：直接上线，不出错</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>方案 B · 连锁山地</h2>
+      <p class="sub">三家递增门店剪影 + 云南山地落日</p>
+      <div class="icon-row">
+        <img class="icon-large" src="/icons/option-b.svg" alt="B">
+        <img class="icon-mid" src="/icons/option-b.svg" alt="B">
+        <img class="icon-small" src="/icons/option-b.svg" alt="B">
+      </div>
+      <ul>
+        <li>表达"连锁餐饮 + 云南"双重定位</li>
+        <li>有故事、产品化</li>
+        <li>缺点：小尺寸细节略多</li>
+        <li>适合：愿意承担一点辨识成本换叙事</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>方案 C · 碗 + 云</h2>
+      <p class="sub">深色底 + 柿色碗 + 米白云朵</p>
+      <div class="icon-row">
+        <img class="icon-large" src="/icons/option-c.svg" alt="C">
+        <img class="icon-mid" src="/icons/option-c.svg" alt="C">
+        <img class="icon-small" src="/icons/option-c.svg" alt="C">
+      </div>
+      <ul>
+        <li>不靠汉字，国际化容易</li>
+        <li>深色调显得高端</li>
+        <li>缺点："餐饮" 表达比 A 弱</li>
+        <li>适合：未来想拓展海外/英文版</li>
+      </ul>
+    </div>
+  </div>
+
+  <p style="margin-top:32px;font-size:13px;color:#888780;">说话告诉我"用 A / B / C"，我把它生成全套尺寸（iOS 1024 + Android 各种 dpi + 启动屏），然后跑 <code>cap-assets generate</code> 一键铺到原生工程。</p>
+</body>
+</html>

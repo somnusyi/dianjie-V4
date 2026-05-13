@@ -1,0 +1,23 @@
+{
+  "name": "滇界",
+  "short_name": "滇界",
+  "description": "连锁餐饮云管 SaaS — 老板/店长/厨师长/财务/供应商一站式工作台",
+  "start_url": "/v2/login",
+  "scope": "/v2/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FAF6EF",
+  "theme_color": "#E07A3C",
+  "lang": "zh-CN",
+  "categories": ["business", "productivity", "food"],
+  "icons": [
+    { "src": "/icons/icon-48.webp",   "sizes": "48x48",   "type": "image/webp", "purpose": "any" },
+    { "src": "/icons/icon-72.webp",   "sizes": "72x72",   "type": "image/webp", "purpose": "any" },
+    { "src": "/icons/icon-96.webp",   "sizes": "96x96",   "type": "image/webp", "purpose": "any" },
+    { "src": "/icons/icon-128.webp",  "sizes": "128x128", "type": "image/webp", "purpose": "any" },
+    { "src": "/icons/icon-192.webp",  "sizes": "192x192", "type": "image/webp", "purpose": "any maskable" },
+    { "src": "/icons/icon-256.webp",  "sizes": "256x256", "type": "image/webp", "purpose": "any" },
+    { "src": "/icons/icon-512.webp",  "sizes": "512x512", "type": "image/webp", "purpose": "any maskable" },
+    { "src": "/icons/icon-1024.png",  "sizes": "1024x1024", "type": "image/png", "purpose": "any" }
+  ]
+}

@@ -1,0 +1,1363 @@
+// ══════════════════════════════════════════════════════
+// 滇界云管 · 数据库 Schema
+// ══════════════════════════════════════════════════════
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── 租户（SaaS 多租户）────────────────────────────────
+model Tenant {
+  id          String   @id @default(cuid())
+  name        String                        // 品牌名称
+  slug        String   @unique              // URL 标识 dianjie
+  logo        String?                       // Logo URL
+  plan        Plan     @default(STARTER)
+  status      TenantStatus @default(ACTIVE)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       User[]
+  stores      Store[]
+  suppliers   Supplier[]
+  products    Product[]
+  receipts    Receipt[]
+  reconciliations Reconciliation[]
+  payments    Payment[]
+  paymentSchedules PaymentSchedule[]
+  opLogs         OpLog[]
+  purchaseOrders PurchaseOrder[]
+  lossClaims     LossClaim[]
+  paymentRules   PaymentRule[]
+  consumptions   StockConsumption[]
+  expenses       StoreExpense[]
+  cashAccounts   CashAccount[]
+  cashTransactions CashTransaction[]
+  notifications  Notification[]
+  invoices       Invoice[]
+  invoicePayments InvoicePayment[]
+  capitalProjects CapitalProject[]
+  documents      Document[]
+  productBatches ProductBatch[]
+  stockMovements SupplierStockMovement[]
+
+  @@map("tenants")
+}
+
+// ── 用户 ──────────────────────────────────────────────
+model User {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String
+  email       String
+  phone       String?
+  password    String                        // bcrypt hash
+  role        Role     @default(MANAGER)
+  status      UserStatus @default(ACTIVE)
+  storeId     String?                       // 店长绑定门店
+  supplierId  String?                       // 供应商人员绑定供应商
+  lastLoginAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  store       Store?   @relation(fields: [storeId], references: [id])
+  supplier    Supplier? @relation("SupplierUsers", fields: [supplierId], references: [id])
+  receipts    Receipt[]
+  opLogs      OpLog[]
+  consumptions  StockConsumption[]
+  createdPOs  PurchaseOrder[] @relation("POCreatedBy")
+  shippedPOs  PurchaseOrder[] @relation("POShippedBy")
+  createdLCs  LossClaim[]     @relation("LCCreatedBy")
+  handledLCs  LossClaim[]     @relation("LCHandledBy")
+  cashTransactions CashTransaction[]
+  notifications    Notification[]
+  uploadedInvoices Invoice[] @relation("InvoiceUploader")
+  initiatedDocuments Document[]
+  approvedSteps    DocumentStep[]
+  documentDecisions DocumentDecision[]
+  stockMovements   SupplierStockMovement[]
+
+  @@unique([tenantId, email])
+  @@unique([tenantId, phone])
+  @@map("users")
+}
+
+// ── 门店 ──────────────────────────────────────────────
+model Store {
+  id          String   @id @default(cuid())
+  tenantId    String
+  no          String                        // DJ001
+  name        String
+  address     String?
+  phone       String?
+  managerName String?
+  status      StoreStatus @default(ENABLED)
+  // 平台券核销
+  meituanShopId       String?               // 美团门店ID (导对账 CSV 用)
+  douyinShopId        String?               // 抖音门店ID (导对账 CSV 用)
+
+  // 主收款通道(线下扫码 / 桌签码) — 一等公民
+  // 推荐用聚合平台, 多店分账 + 接入快
+  paymentChannelType  String?               // 'AGGREGATOR' | 'WECHAT_DIRECT' | 'ALIPAY_DIRECT'
+  aggregatorVendor    String?               // 'qianqian'(收钱吧) | 'qfpay' | 'lakala' | 'hesh'
+  aggregatorMerchantId   String?            // 聚合平台分配的商户号 / 店铺ID
+  aggregatorApiKeyEnc    String?            // 聚合平台 API key (加密)
+  aggregatorSecretEnc    String?            // 聚合平台 API secret (加密, 部分平台需要)
+
+  // 自营生态 (有小程序/App 时才需, 大多数中型连锁不需要)
+  wechatMerchantId    String?               // 微信支付商户号 (mchid)
+  wechatApiV3KeyEnc   String?               // 微信 V3 APIv3 密钥 (加密)
+  alipayAppId         String?               // 支付宝应用ID
+  alipayPrivateKeyEnc String?               // 支付宝商户私钥 (加密)
+
+  // 开票信息 / 出账银行 (聚合/直连 T+1 也打这里)
+  bankAccountNo       String?               // 银行账户号
+  bankAccountName     String?               // 户名 = 公司全称 (开票抬头)
+  bankName            String?               // 开户行
+  invoiceTaxId        String?               // 税号 (统一社会信用代码 / 纳税人识别号)
+
+  autoSyncRevenue     Boolean  @default(false)
+
+  // 门店生命周期: 工程部开店流程
+  lifecyclePhase  StoreLifecyclePhase @default(OPERATING)
+  engineerId      String?              // 工程部负责人 (StoreLifecyclePhase != OPERATING 时使用)
+  expectedOpenAt  DateTime?            // 预计开业日
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  users       User[]
+  receipts    Receipt[]
+  revenueRecords RevenueRecord[]
+  purchaseOrders PurchaseOrder[]
+  lossClaims     LossClaim[]
+  consumptions   StockConsumption[]
+  expenses       StoreExpense[]
+  capitalProjects CapitalProject[]
+  documents      Document[]
+
+  @@unique([tenantId, no])
+  @@map("stores")
+}
+
+// ── 营业额记录（美团收银机同步）──────────────────────
+model RevenueRecord {
+  id          String   @id @default(cuid())
+  storeId     String
+  date        DateTime @db.Date
+  amount      Decimal  @db.Decimal(12, 2)
+  source      String   @default("manual")  // manual / meituan
+  rawData     Json?                         // 原始数据备份
+  createdAt   DateTime @default(now())
+
+  store       Store    @relation(fields: [storeId], references: [id])
+
+  @@unique([storeId, date])
+  @@map("revenue_records")
+}
+
+// ── 供应商 ────────────────────────────────────────────
+model Supplier {
+  id            String   @id @default(cuid())
+  tenantId      String
+  no            String                      // SUP001
+  name          String
+  contactName   String?
+  contactPhone  String?
+  category      String?                     // 菌类 / 蔬菜 / 水产
+  status        SupplierStatus @default(ENABLED)
+
+  // 账期配置
+  creditType    CreditType @default(FIXED_DAYS)
+  creditDays    Int        @default(30)     // 账期天数
+  autoPay       Boolean    @default(false)  // 是否自动打款
+  autoPayLimit  Decimal?   @db.Decimal(12, 2) // 自动付款金额上限
+
+  // 收款信息
+  bankName      String?
+  bankAccount   String?
+  bankAccountName String?
+  bankCode      String?                      // 联行号/SWIFT，用于跨行付款
+
+  // [Plan B 方案预留] 双向开户流程字段 — 落地时再加 enum + 字段
+
+  // AI 评分
+  scoreTotal    Int        @default(80)     // 综合评分
+  onTimeRate    Int        @default(90)     // 准时交货率
+  totalOrders   Int        @default(0)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  users         User[]   @relation("SupplierUsers")
+  products      Product[]
+  receipts      Receipt[]
+  reconciliations Reconciliation[]
+  payments      Payment[]
+  paymentSchedules PaymentSchedule[]
+  purchaseOrders   PurchaseOrder[]
+  lossClaims       LossClaim[]
+  invoices         Invoice[]
+  stockMovements   SupplierStockMovement[]
+
+  @@unique([tenantId, no])
+  @@map("suppliers")
+}
+
+// ── 商品 ──────────────────────────────────────────────
+model Product {
+  id          String   @id @default(cuid())
+  tenantId    String
+  code        String                        // MR001
+  name        String
+  spec        String?                       // 规格型号 (如 "24瓶*330ml/件" / "5kg/袋")
+  category    String   @default("其他")     // 类目可选, 默认"其他"
+  unit        String   @default("kg")
+  price       Decimal  @db.Decimal(10, 2)  // 参考单价
+  stock       Decimal  @default(0) @db.Decimal(10, 2)
+  minStock    Decimal  @default(0) @db.Decimal(10, 2)  // 安全库存
+  minOrderQty Decimal  @default(1) @db.Decimal(10, 2)  // 起订量 (≥1)
+  stepQty     Decimal  @default(1) @db.Decimal(10, 2)  // 整倍数步长 (1=随便; 10=必须 10/20/30...)
+  shelfDays   Int      @default(7)          // 保质期天数
+  status      ProductStatus @default(ENABLED)
+  supplierId  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // 批量上传归属（用于导入历史 + 撤回；单条创建为 null）
+  batchId     String?
+  batch       ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  supplier    Supplier? @relation(fields: [supplierId], references: [id])
+  receiptItems        ReceiptItem[]
+  purchaseOrderItems  PurchaseOrderItem[]
+  lossClaimItems      LossClaimItem[]
+  consumptions        StockConsumption[]
+  stockMovements      SupplierStockMovement[]
+
+  @@unique([tenantId, code])
+  @@index([batchId])
+  @@map("products")
+}
+
+// ── 批量上传历史 (商品报价表导入)──────────────────────────
+model ProductBatch {
+  id            String   @id @default(cuid())
+  tenantId      String
+  supplierId    String?                       // 供应商角色上传时记录
+  uploadedById  String                        // 操作人
+  filename      String?                       // 原始文件名
+  totalRows     Int                           // 上传时声称的行数
+  createdCount  Int                           // 实际成功创建数
+  failedCount   Int
+  failedRows    Json?                         // [{row, code, error}, ...] 用于复盘
+  revokedAt     DateTime?                     // 撤回时间 (null = 仍有效)
+  revokedById   String?
+  createdAt     DateTime @default(now())
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  products      Product[]                     // 反向关联
+
+  @@index([tenantId, supplierId])
+  @@map("product_batches")
+}
+
+// ── 入库单 ────────────────────────────────────────────
+model Receipt {
+  id          String   @id @default(cuid())
+  tenantId    String
+  no          String                        // RK202401001
+  storeId     String
+  supplierId  String
+  deliveryDate DateTime @db.Date
+  totalAmount Decimal  @db.Decimal(12, 2)
+  status      ReceiptStatus @default(DRAFT)
+  note        String?
+  createdById String
+  confirmedAt DateTime?
+
+  // 补录入库单（非采购单流程）
+  isManual         Boolean  @default(false)
+  tempSupplierName String?
+  tempBankAccount  String?
+  tempBankName     String?
+
+  // 拒收信息
+  rejectReason String?
+  rejectedAt   DateTime?
+
+  // 关联采购订单
+  purchaseOrderId String? @unique
+
+  // 发票关联 (供应商上传, 财务审核通过 → 关联订单付款解锁)
+  // 1 张发票可对多个 receipt(月底批量开票场景), 1 个 receipt 当前最多对 1 张发票
+  invoiceId   String?
+  invoice     Invoice? @relation(fields: [invoiceId], references: [id])
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  store       Store    @relation(fields: [storeId], references: [id])
+  supplier    Supplier @relation(fields: [supplierId], references: [id])
+  createdBy   User     @relation(fields: [createdById], references: [id])
+  items       ReceiptItem[]
+  paymentSchedule PaymentSchedule?
+  reconciliationItems ReconciliationItem[]
+  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+
+  @@unique([tenantId, no])
+  @@map("receipts")
+}
+
+model ReceiptItem {
+  id          String   @id @default(cuid())
+  receiptId   String
+  productId   String
+  quantity    Decimal  @db.Decimal(10, 2)
+  unitPrice   Decimal  @db.Decimal(10, 2)
+  amount      Decimal  @db.Decimal(12, 2)  // quantity * unitPrice
+
+  productionDate DateTime? @db.Date @map("production_date")
+  expiryDate  DateTime? @db.Date @map("expiry_date")
+
+  receipt     Receipt  @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  product     Product  @relation(fields: [productId], references: [id])
+
+  @@map("receipt_items")
+}
+
+// ── 账期记录（核心）──────────────────────────────────
+model PaymentSchedule {
+  id            String   @id @default(cuid())
+  tenantId      String
+  receiptId     String   @unique
+  supplierId    String
+  storeId       String?                      // 关联门店（用于银行付款来源账户）
+  amount        Decimal  @db.Decimal(12, 2)
+  creditDays    Int                          // 快照：当时的账期天数
+  confirmedAt   DateTime                     // 入库确认时间
+  dueAt         DateTime                     // 到期时间 = confirmedAt + creditDays
+  status        ScheduleStatus @default(PENDING)
+  notified3Days Boolean  @default(false)     // T-3天已通知
+  notified1Day  Boolean  @default(false)     // T-1天已通知
+  paidAt        DateTime?
+  paymentId     String?
+
+  // 审批流（金额 > 阈值时需要总部审批）
+  needApproval  Boolean  @default(false)
+  approvedById  String?
+  approvedAt    DateTime?
+  approvalNote  String?
+  rejectedAt    DateTime?
+  rejectionNote String?
+
+  // 银行转账结果
+  bankTxNo         String?                   // 银行流水号（招行 refext）
+  bankRawResponse  Json?                     // 招行原始响应
+  retryCount       Int      @default(0)
+  failReason       String?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  receipt       Receipt  @relation(fields: [receiptId], references: [id])
+  supplier      Supplier @relation(fields: [supplierId], references: [id])
+
+  @@index([dueAt, status])                   // 账期引擎查询优化
+  @@map("payment_schedules")
+}
+
+// ── 发票 (供应商上传 → 财务审核 → 财务分次付款) ──
+// 月度场景: 1 张总票对应 N 个订单, 财务可分次部分付款, 累计 ≤ 开票金额
+model Invoice {
+  id             String   @id @default(cuid())
+  tenantId       String
+  supplierId     String
+  // 发票信息
+  invoiceNo      String                              // 发票号码
+  invoiceCode    String?                             // 发票代码 (旧版增值税票有, 电子发票无)
+  amount         Decimal  @db.Decimal(12, 2)         // 价税合计 (开票金额)
+  amountWithoutTax Decimal? @db.Decimal(12, 2)       // 不含税金额
+  taxRate        Decimal? @db.Decimal(5, 4)          // 税率, 例 0.06
+  taxAmount      Decimal? @db.Decimal(12, 2)         // 税额
+  issueDate      DateTime                            // 开票日期
+  // 文件
+  fileUrl        String                              // OSS URL
+  fileType       String   @default("image")          // image | pdf
+  note           String?
+  // 上传 / 审核
+  uploadedById   String                              // 谁上传(供应商账号)
+  uploadedAt     DateTime @default(now())
+  status         InvoiceStatus @default(PENDING)
+  reviewedById   String?
+  reviewedAt     DateTime?
+  reviewNote     String?
+  // 付款累计 (分次部分付款, 关键)
+  paidAmount     Decimal  @default(0) @db.Decimal(12, 2)  // 累计已付金额, paidAmount ≤ amount
+  fullyPaidAt    DateTime?                            // 全部付清的时间(=null 说明还有余额)
+  // 派生字段(计算): remainingAmount = amount - paidAmount
+  // 关联
+  tenant         Tenant   @relation(fields: [tenantId], references: [id])
+  supplier       Supplier @relation(fields: [supplierId], references: [id])
+  uploadedBy     User     @relation("InvoiceUploader", fields: [uploadedById], references: [id])
+  receipts       Receipt[]                            // 一张发票可对多张订单/入库(月底统一开票)
+  payments       InvoicePayment[]                     // 多次部分付款
+
+  @@unique([tenantId, supplierId, invoiceNo])         // 同一供应商同一票号唯一
+  @@index([tenantId, status])
+  @@map("invoices")
+}
+
+enum InvoiceStatus {
+  PENDING       // 待审核 (供应商已上传)
+  VERIFIED      // 财务审核通过, 可发起付款 (paidAmount 可能 0/部分/全部)
+  REJECTED      // 财务驳回, 供应商需重传
+}
+
+// ── 发票付款记录 (一张发票可分多次付款, 累计 ≤ 发票金额) ──
+model InvoicePayment {
+  id             String   @id @default(cuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id])
+  invoiceId      String
+  invoice        Invoice  @relation(fields: [invoiceId], references: [id])
+  // 本次付款
+  amount         Decimal  @db.Decimal(12, 2)         // 本次付款金额
+  paymentMethod  String   @default("cmb")             // cmb / manual / wechat / alipay
+  // 银行流水
+  bankTxNo       String?                              // 招行 refext / 微信支付单号
+  bankRawResponse Json?
+  // 状态
+  status         PaymentStatus @default(PENDING)
+  paidAt         DateTime?                            // 银行确认到账时间
+  failReason     String?
+  // 操作
+  initiatedById  String                               // 财务操作员
+  approvedById   String?                              // 大额需要老板审批
+  approvedAt     DateTime?
+  note           String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([tenantId, status])
+  @@index([invoiceId])
+  @@map("invoice_payments")
+}
+
+enum PaymentStatus {
+  PENDING        // 已发起, 等待银行确认
+  SUCCESS        // 银行确认到账
+  FAILED         // 银行返回失败
+  CANCELED       // 财务主动取消
+}
+
+// ── 总部代付项目 (新店筹建 + 大型升级) ─────────────────
+// 场景: 新店没营业执照/银行卡时, 总部公司代付租金/装修/设备等;
+//      开业后从店铺利润逐步偿还; 全程要合同+凭证可追溯
+model CapitalProject {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+  storeId         String?                              // 已确定门店则关联(可能立项时门店还没建)
+  store           Store?   @relation(fields: [storeId], references: [id])
+  name            String                               // "南京新街口店 · 筹建"
+  type            CapitalProjectType @default(NEW_STORE)
+  status          CapitalProjectStatus @default(PREPARING)
+  // 预算 / 进度
+  budget          Decimal? @db.Decimal(12, 2)          // 预算总额(可选)
+  spent           Decimal  @default(0) @db.Decimal(12, 2)  // 已付出累计
+  // 还款约定
+  repaymentTerms  String?                              // 文本约定: "每月营收 10%" / "固定每月 ¥10K"
+  repaidAmount    Decimal  @default(0) @db.Decimal(12, 2)  // 已偿还总部累计
+  // 时间线
+  startedAt       DateTime @default(now())             // 立项日
+  openedAt        DateTime?                            // 开业日
+  closedAt        DateTime?                            // 项目关闭(还清/废弃)
+  note            String?
+  contracts       CapitalContract[]
+  expenses        CapitalExpense[]
+  repayments      StoreRepayment[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([tenantId, status])
+  @@map("capital_projects")
+}
+
+enum CapitalProjectType {
+  NEW_STORE       // 新店筹建
+  RENOVATION      // 大型翻新升级
+  EQUIPMENT       // 重大设备投入
+  OTHER
+}
+enum CapitalProjectStatus {
+  PREPARING       // 筹建中
+  OPERATING       // 已开业, 还款中
+  REPAID          // 已还清
+  CANCELED        // 项目取消
+}
+
+// ── 代付项目下的合同 (按支出类别分) ────────────────────
+model CapitalContract {
+  id              String   @id @default(cuid())
+  tenantId        String
+  projectId       String
+  project         CapitalProject @relation(fields: [projectId], references: [id])
+  category        CapitalCategory                     // 租金/装修/设备...
+  vendor          String                              // 房东/装修公司/设备商
+  contractNo      String?                             // 合同编号
+  totalAmount     Decimal  @db.Decimal(12, 2)         // 合同总额
+  paidAmount      Decimal  @default(0) @db.Decimal(12, 2)  // 已付(由 expenses 累加)
+  startDate       DateTime?
+  endDate         DateTime?
+  fileUrl         String?                             // 合同扫描件
+  note            String?
+  status          ContractStatus @default(ACTIVE)
+  expenses        CapitalExpense[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([tenantId, projectId])
+  @@map("capital_contracts")
+}
+
+enum CapitalCategory {
+  RENT            // 租金/押金
+  DECORATION      // 装修
+  EQUIPMENT       // 设备
+  PAYROLL         // 人员/培训
+  LEGAL           // 工商/证照/律师
+  MARKETING       // 开业营销
+  OTHER
+}
+enum ContractStatus {
+  ACTIVE
+  COMPLETED       // 全付清
+  TERMINATED      // 终止
+}
+
+// ── 代付支出明细 (店长发起申请 → 老板/财务审批 → 财务付款) ──
+model CapitalExpense {
+  id              String   @id @default(cuid())
+  tenantId        String
+  projectId       String
+  project         CapitalProject @relation(fields: [projectId], references: [id])
+  contractId      String?                             // 可选:不绑合同的零散支出
+  contract        CapitalContract? @relation(fields: [contractId], references: [id])
+  category        CapitalCategory
+  vendor          String                              // 收款方
+  amount          Decimal  @db.Decimal(12, 2)
+  // 申请发起 (店长录入)
+  requestedAt     DateTime @default(now())            // 发起申请时间
+  requestedById   String                              // 谁发起(MANAGER 居多)
+  fileUrl         String?                             // 凭证(发票/合同截图)
+  note            String?
+  // 审批 (老板/财务)
+  status          CapitalExpenseStatus @default(PENDING_APPROVAL)
+  approvedById    String?                             // 谁审批
+  approvedAt      DateTime?
+  approvalNote    String?
+  rejectReason    String?
+  // 实际付款 (财务执行)
+  paidAt          DateTime?                           // 银行确认付款时间
+  paidById        String?                             // 财务操作员
+  paymentMethod   String   @default("cmb")            // cmb / manual / wechat / alipay
+  bankTxNo        String?
+  failReason      String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([tenantId, status])
+  @@index([projectId, contractId])
+  @@map("capital_expenses")
+}
+
+enum CapitalExpenseStatus {
+  PENDING_APPROVAL    // 店长已申请, 待审批
+  APPROVED            // 老板/财务已批, 待财务付款
+  PAID                // 已付款
+  REJECTED            // 驳回
+  CANCELED            // 店长撤回
+  FAILED              // 银行付款失败
+}
+
+// ── 门店还款 (店铺向总部偿还代付款) ───────────────────
+model StoreRepayment {
+  id              String   @id @default(cuid())
+  tenantId        String
+  projectId       String
+  project         CapitalProject @relation(fields: [projectId], references: [id])
+  storeId         String
+  amount          Decimal  @db.Decimal(12, 2)
+  paidAt          DateTime
+  source          String   @default("MANUAL")         // MANUAL / AUTO_FROM_PROFIT / TRANSFER
+  bankTxNo        String?
+  note            String?
+  initiatedById   String
+  createdAt       DateTime @default(now())
+
+  @@index([tenantId, projectId])
+  @@index([storeId])
+  @@map("store_repayments")
+}
+
+// ── 对账单 ────────────────────────────────────────────
+model Reconciliation {
+  id          String   @id @default(cuid())
+  tenantId    String
+  no          String                        // DC202401001
+  supplierId  String
+  storeId     String?                       // 关联门店（自动对账时填入）
+  periodStart DateTime @db.Date
+  periodEnd   DateTime @db.Date
+  totalAmount Decimal  @db.Decimal(12, 2)
+  status      ReconStatus @default(DRAFT)
+  note        String?
+  reviewedAt  DateTime?
+  reviewNote  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  supplier    Supplier @relation(fields: [supplierId], references: [id])
+  items       ReconciliationItem[]
+  payments    Payment[]
+
+  @@unique([tenantId, no])
+  @@map("reconciliations")
+}
+
+model ReconciliationItem {
+  id               String @id @default(cuid())
+  reconciliationId String
+  receiptId        String
+  amount           Decimal @db.Decimal(12, 2)
+
+  reconciliation   Reconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+  receipt          Receipt        @relation(fields: [receiptId], references: [id])
+
+  @@map("reconciliation_items")
+}
+
+// ── 付款单 ────────────────────────────────────────────
+model Payment {
+  id               String   @id @default(cuid())
+  tenantId         String
+  no               String                    // PY202401001
+  supplierId       String
+  reconciliationId String?
+  amount           Decimal  @db.Decimal(12, 2)
+  method           PayMethod @default(BANK_TRANSFER)
+  status           PayStatus @default(UNPAID)
+  bankTxNo         String?                   // 银行流水号
+  bankRawResponse  Json?                     // 银行接口原始响应
+  note             String?
+  paidAt           DateTime?
+  failReason       String?
+  retryCount       Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  tenant           Tenant         @relation(fields: [tenantId], references: [id])
+  supplier         Supplier       @relation(fields: [supplierId], references: [id])
+  reconciliation   Reconciliation? @relation(fields: [reconciliationId], references: [id])
+
+  @@unique([tenantId, no])
+  @@map("payments")
+}
+
+
+// ── 采购订单（店长下单）────────────────────────────────
+model PurchaseOrder {
+  id            String   @id @default(cuid())
+  tenantId      String
+  no            String                        // PO202403001
+  storeId       String
+  supplierId    String
+  expectedDate  DateTime @db.Date             // 期望到货日期
+  totalAmount   Decimal  @db.Decimal(12, 2)
+  status        PurchaseOrderStatus @default(DRAFT)
+  note          String?
+
+  // 发货信息（供应商填写）
+  shippedAt     DateTime?
+  shippedNote   String?
+  shippedById   String?                       // 供应商操作人 userId
+
+  // 收货确认
+  receivedAt    DateTime?                     // 实际确认时间
+  autoConfirmed Boolean  @default(false)      // 是否超时自动确认
+  receiptId     String?                       // 关联生成的入库单（Receipt.purchaseOrderId反向关联）
+
+  createdById   String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  store         Store    @relation(fields: [storeId], references: [id])
+  supplier      Supplier @relation(fields: [supplierId], references: [id])
+  createdBy     User     @relation("POCreatedBy", fields: [createdById], references: [id])
+  shippedBy     User?    @relation("POShippedBy", fields: [shippedById], references: [id])
+  items         PurchaseOrderItem[]
+  lossClaims    LossClaim[]
+  receipt       Receipt?
+
+  @@unique([tenantId, no])
+  @@index([supplierId, status])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id              String  @id @default(cuid())
+  purchaseOrderId String
+  productId       String
+  quantity        Decimal @db.Decimal(10, 2)  // 下单数量
+  unitPrice       Decimal @db.Decimal(10, 2)
+  amount          Decimal @db.Decimal(12, 2)
+  receivedQty     Decimal? @db.Decimal(10, 2) // 实际收到数量（确认时填写）
+
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product         Product       @relation(fields: [productId], references: [id])
+
+  @@map("purchase_order_items")
+}
+
+// ── 报损申请 ──────────────────────────────────────────
+model LossClaim {
+  id              String   @id @default(cuid())
+  tenantId        String
+  no              String                        // LC202403001
+  purchaseOrderId String?                       // 与供应商无关的店内报损可空
+  storeId         String
+  supplierId      String?                       // 同上
+  reason          String?                       // 临期/变质/客退/掉落/破损/其他
+  isManual        Boolean  @default(false)      // true = 店内盘点报损，不扣供应商账期
+
+  // 报损明细
+  totalLossAmount Decimal  @db.Decimal(12, 2)  // 损失金额（从账期扣减）
+  description     String                        // 文字说明
+  evidenceImages  String[]                      // 图片URL数组（OSS）
+
+  status          LossClaimStatus @default(PENDING)
+
+  // 供应商处理
+  handledAt       DateTime?
+  handledById     String?                       // 供应商处理人
+  handlerNote     String?
+  autoApproved    Boolean  @default(false)      // 超时自动同意
+
+  // 协商记录（被拒绝后）
+  negotiationNote String?
+  resolvedAt      DateTime?
+  resolvedNote    String?
+
+  createdById     String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant          Tenant        @relation(fields: [tenantId], references: [id])
+  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  store           Store         @relation(fields: [storeId], references: [id])
+  supplier        Supplier?     @relation(fields: [supplierId], references: [id])
+  createdBy       User          @relation("LCCreatedBy", fields: [createdById], references: [id])
+  handledBy       User?         @relation("LCHandledBy", fields: [handledById], references: [id])
+  items           LossClaimItem[]
+
+  @@unique([tenantId, no])
+  @@index([supplierId, status])
+  @@map("loss_claims")
+}
+
+model LossClaimItem {
+  id           String  @id @default(cuid())
+  lossClaimId  String
+  productId    String
+  orderedQty   Decimal @db.Decimal(10, 2)   // 下单数量
+  receivedQty  Decimal @db.Decimal(10, 2)   // 实际收到
+  lossQty      Decimal @db.Decimal(10, 2)   // 损耗数量
+  unitPrice    Decimal @db.Decimal(10, 2)
+  lossAmount   Decimal @db.Decimal(12, 2)   // 损耗金额
+
+  lossClaim    LossClaim @relation(fields: [lossClaimId], references: [id], onDelete: Cascade)
+  product      Product   @relation(fields: [productId], references: [id])
+
+  @@map("loss_claim_items")
+}
+
+
+// ── 付款规则引擎（可配置）────────────────────────────
+model PaymentRule {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String                        // 规则名称
+  description String?                       // 说明
+  condition   String                        // 触发条件类型
+  // condition 枚举值：
+  // AMOUNT_OVER       单笔金额超过阈值
+  // MONTHLY_OVER      同供应商月累计超过阈值
+  // NEW_SUPPLIER      新供应商首次付款
+  // ALWAYS_AUTO       始终自动付款
+  threshold   Decimal? @db.Decimal(12, 2)  // 金额阈值
+  action      String                        // auto_pay | require_approval | block
+  priority    Int      @default(0)          // 优先级，数字越大越先匹配
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, enabled])
+  @@map("payment_rules")
+}
+
+// ── 操作日志 ──────────────────────────────────────────
+model OpLog {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String?
+  role      String?
+  action    String                           // 操作描述
+  target    String?                          // 关联单号
+  targetId  String?
+  entityType String?                         // Receipt / Payment 等
+  metadata  Json?                            // 额外数据
+  isAi      Boolean  @default(false)
+  ip        String?
+  createdAt DateTime @default(now())
+
+  tenant    Tenant  @relation(fields: [tenantId], references: [id])
+  user      User?   @relation(fields: [userId], references: [id])
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("op_logs")
+}
+
+// ══════════════════════════════════════════════════════
+// ENUMS
+// ══════════════════════════════════════════════════════
+
+enum Plan {
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+}
+
+enum Role {
+  SUPER_ADMIN   // 平台超管
+  ADMIN         // 品牌管理员（v2 = 老板 BOSS）
+  FINANCE       // 财务
+  MANAGER       // 店长
+  PURCHASER     // 采购专员
+  SUPPLIER_STAFF // 供应商人员
+  CHEF           // 总厨/集团厨长（保留兼容）
+  // ── v2 新增：与 apps/api/src/lib/auth-scope.ts 对应 ──
+  KITCHEN_LEAD   // 厨师长（单店级）
+  CHEF_DIRECTOR  // 总厨（集团级）
+  SUPPLIER_OWNER // 供应商负责人
+  ENGINEERING    // 工程部（开店前: 选址 / 装修 / 物料 / 证照）
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+// ── 账号申请: 公共申请 → 老板审批通过后落到 users 表 ──
+model UserApplication {
+  id              String   @id @default(cuid())
+  tenantId        String
+  name            String
+  phone           String
+  passwordHash    String       // bcrypt, 通过审批后直接搬到 users.password
+  requestedRole   Role
+  reason          String?      // 申请理由
+
+  // 供应商专用 (requestedRole 为 SUPPLIER_OWNER / SUPPLIER_STAFF 时)
+  supplierId      String?      // 加入已有供应商 → 审批后 SUPPLIER_STAFF + 绑定到该 Supplier
+  supplierName    String?      // 注册新供应商公司名 → 审批后 SUPPLIER_OWNER + 自动创建 Supplier
+
+  // 门店绑定 (requestedRole 为 MANAGER / KITCHEN_LEAD 时必填; 老板审批时预填可改)
+  requestedStoreId String?
+
+  status          ApplicationStatus @default(PENDING)
+  decidedById     String?
+  decidedAt       DateTime?
+  rejectReason    String?
+  createdAt       DateTime @default(now())
+
+  @@index([tenantId, status])
+  @@map("user_applications")
+}
+
+enum ApplicationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ── 邀请链接: 老板生成 → 员工凭链接 + 手机号 + 自设密码激活 ──
+model InviteToken {
+  id              String   @id @default(cuid())
+  tenantId        String
+  token           String   @unique         // url-safe 32+ chars
+  role            Role
+  storeId         String?                  // MANAGER/KITCHEN_LEAD 必填
+  supplierId      String?                  // SUPPLIER_OWNER/STAFF 必填
+  invitedById     String                   // 谁发的
+  note            String?                  // 备注: "翠湖店店长 张三"
+  expiresAt       DateTime                 // 默认 +24h
+  consumedAt      DateTime?
+  consumedByUserId String?
+  revokedAt       DateTime?
+  createdAt       DateTime @default(now())
+
+  @@index([tenantId, consumedAt, revokedAt])
+  @@map("invite_tokens")
+}
+
+enum StoreStatus {
+  ENABLED
+  DISABLED
+}
+
+// 门店生命周期阶段 (工程部主战场)
+enum StoreLifecyclePhase {
+  PLANNING        // 选址勘察
+  NEGOTIATING     // 合同谈判
+  CONSTRUCTION    // 装修施工
+  EQUIPMENT       // 设备/物料采购
+  LICENSING       // 证照办理
+  TRIAL           // 试营业
+  OPERATING       // 正常运营 (= 现有 ENABLED 默认)
+  CLOSED          // 已关店
+}
+
+// 开店任务清单 (筹建期 30 多项默认任务)
+model OpeningTask {
+  id            String   @id @default(cuid())
+  tenantId      String
+  storeId       String
+  category      OpeningTaskCategory
+  name          String
+  description   String?
+  assigneeId    String?                  // 默认 = store.engineerId
+  dueDate       DateTime?
+  status        OpeningTaskStatus @default(TODO)
+  priority      Int      @default(0)     // 排序权重, 越大越靠前
+  cost          Decimal? @db.Decimal(12, 2)
+  capitalExpenseId String?                // 关联代付申请 (出账时填)
+  completedAt   DateTime?
+  completedById String?
+  blockerNote   String?                  // 卡住原因
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([tenantId, storeId, status])
+  @@map("opening_tasks")
+}
+
+enum OpeningTaskCategory {
+  BUSINESS      // 商务 (选址/合同/物业)
+  CONSTRUCTION  // 装修 (拆改/水电/木工/油漆)
+  EQUIPMENT     // 设备/物料 (厨房/家具/POS)
+  LICENSING     // 证照
+  PREPARATION   // 筹备 (招牌/培训/试营业)
+}
+
+enum OpeningTaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  DONE
+  CANCELED
+}
+
+// 建店资金台账 (一店一份, 财务统一录入, 老板可看可改)
+// 二期 OA 时给每行加 ownerRole 字段, 各部门维护自己的行
+model StoreOpeningBudget {
+  id              String   @id @default(cuid())
+  tenantId        String
+  storeId         String
+  category        BudgetCategory
+  name            String                          // 明细 (租金/装修费/...)
+  budget          Decimal? @db.Decimal(14, 2)     // 预算金额
+  contractAmount  Decimal? @db.Decimal(14, 2)     // 实付/合同确认金额
+  paidAmount      Decimal? @db.Decimal(14, 2)     // 已付金额
+  approvalNo      String?                          // 审批编号 / 付款凭证编号 (Excel 导入时存原文)
+  note            String?                          // 备注
+  voucherUrl      String?                          // 凭证图 OSS URL
+  ownerRole       String?                          // [phase 2 OA] 行的责任部门
+  rowOrder        Int      @default(0)             // 显示顺序 (Excel 导入时按行序)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([tenantId, storeId])
+  @@map("store_opening_budgets")
+}
+
+enum BudgetCategory {
+  CONTRACT      // 合同 (租金/保证金/管理费/推广费 等签合同的钱)
+  CONSTRUCTION  // 装修工程
+  FIRE          // 消防
+  HVAC          // 空调
+  VENTILATION   // 油烟排风
+  EQUIPMENT     // 设备 (厨房/网络/监控)
+  MARKETING     // 市场 (推广/软装/桌椅/绿植) [phase 2]
+  HR            // 人事 [phase 2]
+  OTHER         // 其它
+}
+
+enum SupplierStatus {
+  ENABLED
+  DISABLED
+}
+
+enum SkuApprovalAction {
+  CREATE   // 新建 SKU
+  DISABLE  // 停售 SKU
+  BATCH    // 批量上传 SKU
+}
+
+enum ProductStatus {
+  PENDING_APPROVAL  // 等待总厨审批 (新建 / 批量上传)
+  PENDING_DISABLE   // 等待总厨审批停售
+  ENABLED
+  DISABLED
+}
+
+enum CreditType {
+  FIXED_DAYS    // 固定账期（如到货后30天）
+  MONTHLY       // 月结
+  WEEKLY        // 周结
+  ON_DELIVERY   // 到货即付
+}
+
+enum ReceiptStatus {
+  DRAFT
+  PENDING
+  PENDING_CONFIRM  // 供应商已送达，等待门店操作
+  CONFIRMED        // 正常确认
+  ACCOUNTED        // 已对账
+  VOID             // 作废
+  REJECTED         // 拒收
+}
+
+enum ScheduleStatus {
+  PENDING           // 待支付（无需审批，到期自动付）
+  PENDING_APPROVAL  // 待审批（金额超阈值，需总部审核）
+  APPROVED          // 审批通过，等待到期自动付款
+  REJECTED          // 审批拒绝
+  NOTIFIED          // 已提醒
+  PROCESSING        // 支付中（已调用招行API）
+  PAID              // 已支付
+  OVERDUE           // 已逾期
+  CANCELLED         // 已取消
+  ON_HOLD           // 报损争议中, 暂停付款 (等门店 resolve)
+}
+
+enum ReconStatus {
+  DRAFT
+  APPROVED
+  REJECTED
+  PAYMENT_GENERATED
+  DONE
+}
+
+enum PayStatus {
+  UNPAID
+  PAYING
+  PAID
+  FAILED
+}
+
+enum PayMethod {
+  BANK_TRANSFER   // 网银转账
+  ALIPAY          // 支付宝企业付
+  WECHAT          // 微信商户
+  CASH            // 现金
+}
+
+enum PurchaseOrderStatus {
+  DRAFT          // 草稿
+  SUBMITTED      // 已提交给供应商
+  CONFIRMED      // 供应商已确认
+  DELIVERING     // 配送中
+  PENDING_CONFIRM // 已到货，等门店确认(24h)
+  RECEIVED       // 门店已确认收货
+  COMPLETED      // 完成（含报损处理完毕）
+  CANCELLED      // 已取消
+}
+
+enum LossClaimStatus {
+  PENDING        // 待供应商处理(24h)
+  APPROVED       // 供应商同意，扣减账期
+  REJECTED       // 供应商拒绝，退回协商
+  NEGOTIATING    // 协商中
+  RESOLVED       // 协商完成
+  AUTO_APPROVED  // 超时自动同意
+}
+
+// ── 供应商库存流水（每次入库/出库/盘点都一条审计记录）────
+// 设计原则: append-only, 不修改/不删除. balanceAfter 记录变动后余额, 方便审计核对.
+model SupplierStockMovement {
+  id              String   @id @default(cuid())
+  tenantId        String
+  supplierId      String                          // 哪家供应商的库存
+  productId       String                          // 哪个 SKU
+  delta           Decimal  @db.Decimal(12, 3)     // +入库 / -出库
+  balanceAfter    Decimal  @db.Decimal(12, 3)     // 变动完之后的余额 (审计用)
+  type            StockMovementType               // 变动类型
+  reason          String?                         // 备注 (盘点理由 / 报损原因等)
+  sourceType      String?                         // 'PurchaseOrder' / 'ProductBatch' / 'Manual'
+  sourceId        String?                         // 关联 ID (PO id 等)
+
+  // 批次/保质期 (入库时填, 出库时为空) — 第一期: 仅记录显示, 不做 FIFO 扣减
+  manufactureDate DateTime? @db.Date              // 生产日期
+  expiryDate      DateTime? @db.Date              // 到期日期 (= 生产 + 保质期)
+
+  createdById     String                          // 操作人 userId
+  createdAt       DateTime @default(now())
+
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+  supplier     Supplier @relation(fields: [supplierId], references: [id])
+  product      Product  @relation(fields: [productId], references: [id])
+  createdBy    User     @relation(fields: [createdById], references: [id])
+
+  @@index([supplierId, productId, createdAt])
+  @@index([tenantId, createdAt])
+  @@map("supplier_stock_movements")
+}
+
+enum StockMovementType {
+  INITIAL          // SKU 创建时的初始库存
+  INBOUND_MANUAL   // 单条手动入库
+  INBOUND_EXCEL    // Excel 批量入库
+  OUTBOUND_PO      // 接单发货自动出库
+  ADJUSTMENT       // 盘点调整
+  LOSS             // 报损
+}
+
+// ── 库存消耗记录（总厨每日录入）──────────────────────
+model StockConsumption {
+  id          String   @id @default(cuid())
+  tenantId    String
+  storeId     String
+  productId   String
+  date        DateTime @db.Date
+  quantity    Decimal  @db.Decimal(10, 2)
+  note        String?
+  createdById String
+  createdAt   DateTime @default(now())
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  store       Store    @relation(fields: [storeId], references: [id])
+  product     Product  @relation(fields: [productId], references: [id])
+  createdBy   User     @relation(fields: [createdById], references: [id])
+
+  @@map("stock_consumptions")
+}
+
+// ── 门店费用录入（利润表用）────────────────────────
+model StoreExpense {
+  id        String   @id @default(cuid())
+  tenantId  String
+  storeId   String
+  month     String   // 格式 YYYY-MM
+  category  String   // LABOR / SALES / MGMT / FINANCE
+  item      String   // 具体项目名，如：门店租金、工资成本
+  amount    Decimal  @db.Decimal(12, 2)
+  note      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  store     Store    @relation(fields: [storeId], references: [id])
+  @@unique([storeId, month, item])
+  @@map("store_expenses")
+}
+
+// ── 资金台账 ──────────────────────────────────────────
+model CashAccount {
+  id           String          @id @default(cuid())
+  tenantId     String
+  name         String                          // "工商银行对公账户"
+  type         CashAccountType @default(BANK)
+  bankName     String?                         // "工商银行昆明分行"
+  accountNo    String?                         // 账号（展示时只显示后4位）
+  balance      Decimal         @default(0) @db.Decimal(14, 2)
+  note         String?
+  status       String          @default("ACTIVE")
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  tenant       Tenant          @relation(fields: [tenantId], references: [id])
+  transactions CashTransaction[]
+
+  @@index([tenantId])
+  @@map("cash_accounts")
+}
+
+model CashTransaction {
+  id           String      @id @default(cuid())
+  tenantId     String
+  accountId    String
+  direction    Int                             // +1 收入  -1 支出
+  category     String                          // "供应商付款" / "营业收入" / "人工" / "其他"
+  amount       Decimal     @db.Decimal(12, 2)  // 恒正数
+  balanceAfter Decimal     @db.Decimal(14, 2)  // 交易后余额快照
+  note         String?
+  txDate       DateTime                        // 实际交易日期（可填历史）
+  refType      String?                         // 可选关联 "Payment" / "StoreExpense" / "RevenueRecord"
+  refId        String?
+  createdById  String
+  createdAt    DateTime    @default(now())
+
+  tenant       Tenant      @relation(fields: [tenantId], references: [id])
+  account      CashAccount @relation(fields: [accountId], references: [id])
+  createdBy    User        @relation(fields: [createdById], references: [id])
+
+  @@index([tenantId, txDate(sort: Desc)])
+  @@index([accountId])
+  @@map("cash_transactions")
+}
+
+enum CashAccountType {
+  BANK      // 银行账户
+  ALIPAY    // 支付宝
+  WECHAT    // 微信支付
+  CASH      // 现金/备用金
+}
+
+// ── 系统通知 ──────────────────────────────────────────
+model Notification {
+  id            String   @id @default(cuid())
+  tenantId      String
+  recipientRole String                        // 目标角色: MANAGER / SUPPLIER_STAFF / ADMIN / FINANCE
+  recipientId   String?                       // 指定用户（空=按角色广播）
+  type          String                        // ORDER_SUBMITTED / SHIPPED / RECEIPT_CONFIRMED / LOSS_CLAIM_RESULT / APPROVAL_PENDING / APPROVAL_DONE
+  title         String
+  body          String
+  refType       String?                       // PurchaseOrder / LossClaim / PaymentSchedule
+  refId         String?
+  read          Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  recipient     User?    @relation(fields: [recipientId], references: [id])
+
+  @@index([tenantId, recipientRole, read])
+  @@index([recipientId, read])
+  @@map("notifications")
+}
+
+// ══════════════════════════════════════════════════════
+// 通用审批文档 (v2 documents 模块)
+// 用一套表替代各种独立审批：备用金/报销/采购/调价/新供应商/新菜品/合同/调拨/营销预算/调薪
+// 阈值 + 角色路由由 services/documentRouting.ts 决定
+// ══════════════════════════════════════════════════════
+model Document {
+  id              String   @id @default(cuid())
+  tenantId        String
+  no              String                            // DOC202605000001
+  type            DocumentType
+  title           String                            // 简述: "5月差旅报销 / 王伟"
+  amount          Decimal? @db.Decimal(12, 2)       // 金额（部分类型可空，如新供应商）
+  isOverThreshold Boolean  @default(false)          // 是否超阈值（决定是否升级到老板）
+  thresholdRule   String?                           // 命中的规则文字描述
+  payload         Json?                             // 业务字段：报销明细 / 调价对比 / 新菜品定价 等
+  storeId         String?                           // 关联门店（部分单据可空，如调价集团级）
+  initiatorId     String                            // 发起人
+  status          DocumentStatus @default(PENDING)
+  finalizedAt     DateTime?                         // 终态时间（APPROVED/REJECTED/CANCELED）
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+  store           Store?   @relation(fields: [storeId], references: [id])
+  initiator       User     @relation(fields: [initiatorId], references: [id])
+  steps           DocumentStep[]
+  decisions       DocumentDecision[]
+
+  @@unique([tenantId, no])
+  @@index([tenantId, status, type])
+  @@map("documents")
+}
+
+model DocumentStep {
+  id            String   @id @default(cuid())
+  documentId    String
+  seq           Int                                 // 第几步 (1-based)
+  approverRole  String                              // FINANCE / ADMIN / CHEF_DIRECTOR
+  approverId    String?                             // 完成时记录是谁批的
+  status        StepStatus @default(PENDING)
+  decidedAt     DateTime?
+  comment       String?
+
+  document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  approver      User?    @relation(fields: [approverId], references: [id])
+
+  @@unique([documentId, seq])
+  @@index([approverRole, status])
+  @@map("document_steps")
+}
+
+model DocumentDecision {
+  id          String   @id @default(cuid())
+  documentId  String
+  stepId      String?
+  userId      String
+  decision    String                                // APPROVE / REJECT / FORWARD
+  comment     String?
+  createdAt   DateTime @default(now())
+
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@map("document_decisions")
+}
+
+enum DocumentType {
+  PETTY_CASH              // 备用金申请
+  REIMBURSEMENT           // 报销
+  PURCHASE_FOOD_REGULAR   // 食材采购（小额免审，留位备用）
+  PURCHASE_FOOD_OVER      // 食材采购超阈值
+  PURCHASE_NON_FOOD       // 非食材采购
+  CONTRACT                // 合同
+  PRICE_ADJUSTMENT        // 调价
+  NEW_SUPPLIER            // 新供应商
+  NEW_DISH                // 新菜品
+  STORE_TRANSFER          // 调拨
+  MARKETING_BUDGET        // 营销预算
+  PERSONNEL_PAY           // 调薪
+}
+
+enum DocumentStatus {
+  PENDING        // 进行中（在某步等审）
+  APPROVED       // 全部步骤通过
+  AUTO_APPROVED  // 命中阈值自动通过（未走完整审批链）
+  REJECTED       // 任一步驳回
+  CANCELED       // 发起人撤回
+}
+
+enum StepStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SKIPPED        // 阈值内自动跳过
+}

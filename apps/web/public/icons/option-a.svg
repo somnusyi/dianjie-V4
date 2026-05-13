@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    方案 A · 单字 monogram
+    极简：柿色暖渐变 + 米白「滇」字。
+    优点：辨识度最高、缩到 60×60 仍清晰、和"专业工具"调性匹配。
+    Bundle ID: cc.dianjie.app · App Name: 滇界
+  -->
+  <defs>
+    <radialGradient id="bgA" cx="30%" cy="20%" r="120%">
+      <stop offset="0%" stop-color="#F39458"/>
+      <stop offset="60%" stop-color="#E07A3C"/>
+      <stop offset="100%" stop-color="#B85A22"/>
+    </radialGradient>
+    <linearGradient id="warmGlow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFD9B5" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#FFD9B5" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- iOS-style 超椭圆圆角方框 -->
+  <rect width="1024" height="1024" rx="232" ry="232" fill="url(#bgA)"/>
+  <!-- 顶部柔光 -->
+  <rect width="1024" height="540" rx="232" ry="232" fill="url(#warmGlow)"/>
+  <!-- 滇字 (PingFang/Noto Sans SC 黑体特粗) -->
+  <text x="512" y="704"
+        text-anchor="middle"
+        font-family="'PingFang SC','Noto Sans SC','Source Han Sans SC',sans-serif"
+        font-size="640" font-weight="900"
+        fill="#FFFCF5" letter-spacing="-20">滇</text>
+  <!-- 底部品牌副标 (远看消失，近看才看到) -->
+  <text x="512" y="912"
+        text-anchor="middle"
+        font-family="'Helvetica Neue',sans-serif"
+        font-size="58" font-weight="700"
+        fill="#FFFCF5" fill-opacity="0.55"
+        letter-spacing="14">DIANJIE</text>
+</svg>

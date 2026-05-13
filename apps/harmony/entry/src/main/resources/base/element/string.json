@@ -1,0 +1,10 @@
+{
+  "string": [
+    { "name": "module_desc",       "value": "滇界主模块" },
+    { "name": "ability_desc",      "value": "滇界连锁餐饮管理平台" },
+    { "name": "perm_internet_reason", "value": "用于访问滇界服务器" },
+    { "name": "perm_network_reason",  "value": "判断网络可用性" },
+    { "name": "perm_camera_reason",   "value": "拍照上传报损凭证 / 发票" },
+    { "name": "perm_media_reason",    "value": "从相册选择凭证 / 文件上传" }
+  ]
+}

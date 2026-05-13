@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    方案 B · 连锁门店 + 山地
+    隐喻：三个店铺 + 云南山地剪影，柿色作落日/灯光。
+    优点：表达"连锁餐饮 + 云南"双重定位，更"产品化"。
+    缺点：小尺寸下细节略多。
+  -->
+  <defs>
+    <linearGradient id="bgB" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FAF6EF"/>
+      <stop offset="100%" stop-color="#F2E8D8"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F39458"/>
+      <stop offset="100%" stop-color="#E07A3C"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="232" ry="232" fill="url(#bgB)"/>
+
+  <!-- 远山剪影 (柿色) -->
+  <path d="M 0 720
+           L 180 540
+           L 320 600
+           L 480 460
+           L 640 580
+           L 820 480
+           L 1024 600
+           L 1024 1024
+           L 0 1024 Z"
+        fill="url(#sun)" opacity="0.92"/>
+
+  <!-- 中前景三家"店"剪影 (墨褐) -->
+  <g fill="#2A2218">
+    <!-- 店 1 (左, 矮) -->
+    <path d="M 220 720 L 220 820 L 360 820 L 360 720 Z M 220 720 L 290 670 L 360 720"/>
+    <!-- 店 2 (中, 高 - 主店) -->
+    <path d="M 420 720 L 420 850 L 600 850 L 600 720 Z M 420 720 L 510 640 L 600 720"/>
+    <!-- 店 3 (右, 中) -->
+    <path d="M 660 720 L 660 820 L 800 820 L 800 720 Z M 660 720 L 730 670 L 800 720"/>
+  </g>
+
+  <!-- 中店招牌"滇"字 -->
+  <text x="510" y="800"
+        text-anchor="middle"
+        font-family="'PingFang SC','Noto Sans SC',sans-serif"
+        font-size="100" font-weight="900"
+        fill="#FAF6EF">滇</text>
+
+  <!-- 顶部一笔点缀（落日/品牌色 dot）-->
+  <circle cx="800" cy="280" r="60" fill="url(#sun)"/>
+</svg>

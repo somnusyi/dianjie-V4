@@ -267,6 +267,74 @@ def query():
         }), 500
 
 
+@app.route("/receipt", methods=["POST"])
+def receipt():
+    """
+    单笔电子回单查询 · DCSIGREC（规范 §3.6）
+    付款成功后异步触发，下载 PDF 电子回单存 OSS
+
+    请求体：
+    {
+      "account":    "账号（可选，默认 CMB_ACCOUNT）",
+      "yurRef":     "业务参考号（= scheduleId）",
+      "date":       "交易日期 yyyy-MM-dd（注意是带横杠格式）",
+      "sequence":   "交易流水 idn（来自 /transactions 的 sequence 字段）"
+    }
+
+    ⚠️ 注意：DCSIGREC 接口规定 yurref / eacnbr / quedat / trsseq **全部小写**，
+       跟 BB1PAY 系列驼峰不同（规范 §3.6 已注明）
+
+    响应体：
+    {
+      "success":     true/false,
+      "resultCode":  "...",
+      "resultMsg":   "...",
+      "checkCode":   "回单校验码（防伪）",
+      "pdfBase64":   "PDF 文件 base64 内容（可直接解码存 OSS）",
+      "raw":         { ... }
+    }
+    """
+    data     = request.get_json(force=True) or {}
+    account  = (data.get("account") or ACCOUNT).strip()
+    yur_ref  = (data.get("yurRef") or "").strip()
+    date     = (data.get("date") or "").strip()
+    sequence = (data.get("sequence") or "").strip()
+
+    if not all([yur_ref, date, sequence]):
+        return jsonify({
+            "success": False, "resultCode": "PARAM_ERROR",
+            "resultMsg": "缺少必填参数 yurRef/date/sequence"
+        }), 400
+
+    body = {
+        "eacnbr": account,
+        "yurref": yur_ref,    # 小写！规范 §3.6
+        "quedat": date,       # 小写！yyyy-MM-dd 带横杠
+        "trsseq": sequence,   # 小写！
+    }
+
+    try:
+        result    = _call("DCSIGREC", body)
+        head      = (result.get("response") or {}).get("head", {}) or {}
+        resp_body = (result.get("response") or {}).get("body", {}) or {}
+
+        return jsonify({
+            "success":    head.get("resultcode") == "SUC0000",
+            "resultCode": head.get("resultcode", ""),
+            "resultMsg":  head.get("resultmsg", ""),
+            "checkCode":  resp_body.get("checod", ""),
+            "pdfBase64":  resp_body.get("fildat", ""),
+            "raw":        result,
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success":    False,
+            "resultCode": "CMB_ERROR",
+            "resultMsg":  str(e),
+        }), 500
+
+
 @app.route("/transactions", methods=["POST"])
 def transactions():
     """

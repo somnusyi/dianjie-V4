@@ -151,6 +151,45 @@ export async function cmbTransactions(opts: {
   return resp.json()
 }
 
+export interface CmbReceiptResult {
+  success    : boolean
+  resultCode : string
+  resultMsg  : string
+  checkCode? : string   // 防伪校验码
+  pdfBase64? : string   // PDF 二进制 base64（可直接 Buffer.from(b64,'base64') 存 OSS）
+  raw?       : any
+}
+
+/**
+ * 单笔电子回单查询 · DCSIGREC（规范 §3.6）
+ * 付款成功后调一次，把 PDF 存 OSS，绑到 PaymentSchedule
+ *
+ * @param opts.account  账号（可选，默认 CMB_ACCOUNT）
+ * @param opts.yurRef   业务参考号 = scheduleId
+ * @param opts.date     交易日期 yyyy-MM-dd（带横杠！）
+ * @param opts.sequence 来自 /transactions 返回项的 sequence 字段
+ *
+ * ⚠️ DCSIGREC 接口规定字段名全部小写（yurref/eacnbr/quedat/trsseq），
+ *    跟 BB1PAY 驼峰命名不同，已由 Python 微服务内部转换，TS 这层保持驼峰
+ */
+export async function cmbReceipt(opts: {
+  account?  : string
+  yurRef    : string
+  date      : string
+  sequence  : string
+}): Promise<CmbReceiptResult> {
+  const resp = await fetch(`${CMB_SERVICE}/receipt`, {
+    method : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body   : JSON.stringify(opts),
+    signal : AbortSignal.timeout(30_000),
+  })
+  if (!resp.ok) {
+    throw new Error(`招行电子回单响应异常 ${resp.status}`)
+  }
+  return resp.json()
+}
+
 /** 检查招行微服务是否在线 */
 export async function cmbHealthCheck(): Promise<boolean> {
   try {

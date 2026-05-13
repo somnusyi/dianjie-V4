@@ -190,6 +190,88 @@ export async function cmbReceipt(opts: {
   return resp.json()
 }
 
+/**
+ * 防重发 wrapper · 严格按 xlsx 注意事项 §1 yurRef 协议（WARN-2）
+ *
+ * 协议要求:
+ *   经办类请求（BB1PAYOP）失败重发前, 必须先调相应业务查询接口（BB1PAYQR）
+ *   按 yurRef 查重；确认银行无记录后才能重发；重发时 yurRef 必须与原请求一致。
+ *   否则可能重复扣款。
+ *
+ * 适用场景:
+ *   - 网络超时 / fetch reject  → 不知道银行收没收
+ *   - 银行返非 SUC0000 业务错  → 银行可能拒了, 也可能记了
+ *   - 调用方代码异常          → 同上
+ *
+ * 行为:
+ *   1. 第一次发 cmbTransfer(params)
+ *   2. success=true 直接返
+ *   3. 异常或非成功 → 等 wait_s (默认 11s 避招行限流) → cmbQueryPayment(bizNo)
+ *      - 查到 (found=true) → 银行已收, 视作成功, 不重发
+ *      - 没查到 → 同 yurRef 重发 cmbTransfer, 累计最多 maxRetries 次
+ *   4. 全部失败 → 返最后一次的 result（含错误信息）
+ *
+ * ⚠️ 绝对禁止: 重试时改 yurRef（即使加后缀也不行）
+ */
+export async function cmbTransferWithCheck(
+  params: CmbTransferParams,
+  opts: { maxRetries?: number; waitBeforeQueryMs?: number } = {}
+): Promise<CmbTransferResult> {
+  const maxRetries        = opts.maxRetries ?? 2          // 首发 + 最多 2 次重发 = 3 次尝试
+  const waitBeforeQueryMs = opts.waitBeforeQueryMs ?? 11_000   // 避招行 10s 限流
+
+  let lastResult: CmbTransferResult | null = null
+  let attempt = 0
+
+  while (attempt <= maxRetries) {
+    let result: CmbTransferResult
+    try {
+      result = await cmbTransfer(params)
+    } catch (err: any) {
+      // 网络/超时错 → 落到 query 查重
+      result = {
+        success:    false,
+        resultCode: 'NETWORK_ERROR',
+        resultMsg:  err?.message || String(err),
+      }
+    }
+    lastResult = result
+
+    if (result.success) {
+      return result
+    }
+
+    // 失败 → 查重
+    await new Promise(r => setTimeout(r, waitBeforeQueryMs))
+    let queryResult: CmbQueryResult
+    try {
+      queryResult = await cmbQueryPayment(params.bizNo)
+    } catch {
+      queryResult = { success: false, resultCode: 'QUERY_ERROR', resultMsg: 'query 失败' }
+    }
+
+    // 银行已收 → 视作成功（不再重发）
+    if (queryResult.success && (queryResult as any).found) {
+      return {
+        success:    true,
+        resultCode: 'SUC0000',
+        resultMsg:  '原请求银行已受理, 经查重确认（未重发）',
+        txNo:       (queryResult as any).txNo || '',
+        raw:        queryResult.raw,
+      }
+    }
+
+    // 银行未收 → 重发（同 bizNo）
+    attempt++
+  }
+
+  return lastResult ?? {
+    success:    false,
+    resultCode: 'CMB_RETRY_EXHAUSTED',
+    resultMsg:  `cmbTransferWithCheck 重试 ${maxRetries} 次后仍失败`,
+  }
+}
+
 /** 检查招行微服务是否在线 */
 export async function cmbHealthCheck(): Promise<boolean> {
   try {

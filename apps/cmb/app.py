@@ -69,9 +69,64 @@ CCY_NBR     = os.getenv("CMB_CCY_NBR",     "10")
 _helper = dchelper_module.DcHelper(URL, UID, PRIVATE_KEY, PUBLIC_KEY, BANK_PUBLIC_KEY, SYM_KEY)
 
 
+# ── 限流（WARN-4 · xlsx 注意事项 §3）─────────────────────
+# 同 account+funcode 在 _RATE_LIMIT_SEC 内只能调一次。账务查询 / 交易管家强制 10s。
+# 拒绝时返 RATE_LIMITED 错码（不静默等待，让调用方决定是否重试）。
+import threading
+_RATE_LIMIT_SEC = float(os.getenv("CMB_RATE_LIMIT_SEC", "10"))
+_RATE_LIMITED_FUNCODES = {"NTQACINF", "trsQryByBreakPoint", "DCSIGREC", "BB1PAYQR"}
+_rate_last_call: dict = {}      # key = "funcode:account" → unix ts
+_rate_lock = threading.Lock()
+
+def _check_rate_limit(funcode: str, account: str) -> tuple[bool, float]:
+    """
+    返回 (允许?, 还需等待秒数)。仅对查询类 funcode 生效，付款类 BB1PAYOP 不限流。
+    """
+    if funcode not in _RATE_LIMITED_FUNCODES:
+        return True, 0.0
+    import time
+    key = f"{funcode}:{account}"
+    now = time.monotonic()
+    with _rate_lock:
+        last = _rate_last_call.get(key)
+        if last is not None and (now - last) < _RATE_LIMIT_SEC:
+            return False, _RATE_LIMIT_SEC - (now - last)
+        _rate_last_call[key] = now
+    return True, 0.0
+
+
+class RateLimited(Exception):
+    """限流异常：endpoint 应捕获并返 HTTP 429"""
+    def __init__(self, funcode: str, account: str, wait_s: float):
+        self.funcode = funcode
+        self.account = account
+        self.wait_s  = wait_s
+        super().__init__(f"RATE_LIMITED: {funcode} on {account} 需再等 {wait_s:.1f}s")
+
+
+def _rate_limited_response(e: RateLimited):
+    """统一构造限流响应"""
+    return jsonify({
+        "success":    False,
+        "resultCode": "RATE_LIMITED",
+        "resultMsg":  f"招行同账号 10s/次限流，{e.funcode} 还需等 {e.wait_s:.1f}s",
+        "waitSec":    round(e.wait_s, 1),
+    }), 429
+
+
 # ── 发送封装 ──────────────────────────────────────────────
-def _call(funcode: str, body: dict) -> dict:
-    """统一组装外层 head/body/signature + 调 dchelper 加密发包 + 解析响应。"""
+def _call(funcode: str, body: dict, *, rate_key_account: str | None = None) -> dict:
+    """统一组装外层 head/body/signature + 调 dchelper 加密发包 + 解析响应。
+
+    rate_key_account: 限流维度的账号（默认 ACCOUNT）。BB1PAYQR/NTQACINF/DCSIGREC/
+        trsQryByBreakPoint 都按 (funcode, account) 维度限流 10s；
+        BB1PAYOP 不限流（付款经办无 10s 约束）。
+    """
+    acct = rate_key_account or ACCOUNT
+    ok, wait_s = _check_rate_limit(funcode, acct)
+    if not ok:
+        raise RateLimited(funcode, acct, wait_s)
+
     payload = {
         "request": {
             "head": {"funcode": funcode, "userid": UID, "reqid": _reqid()},
@@ -81,6 +136,42 @@ def _call(funcode: str, body: dict) -> dict:
     }
     resp_str = _helper.send_request(json.dumps(payload, ensure_ascii=False), funcode)
     return json.loads(resp_str)
+
+
+# ── 启动期 self-check · DCLISMOD（WARN-1）────────────────
+def _self_check_busmod() -> None:
+    """
+    启动时调 DCLISMOD 拿当前 UID 可用的业务模式列表，验证 BUSMOD/BUSCOD 命中。
+    失败不阻断启动（容忍网络抖动），仅日志告警。
+    """
+    print(f"🔍 self-check: DCLISMOD busCod={BUSCOD} ...", flush=True)
+    try:
+        # DCLISMOD 不限流（启动期手工调一次，绕过 limiter）
+        body = {"buscod": BUSCOD}
+        payload = {
+            "request": {
+                "head": {"funcode": "DCLISMOD", "userid": UID, "reqid": _reqid()},
+                "body": body,
+            },
+            "signature": {"sigtim": _sigtim(), "sigdat": "__signature_sigdat__"},
+        }
+        resp = json.loads(_helper.send_request(json.dumps(payload, ensure_ascii=False), "DCLISMOD"))
+        head = (resp.get("response") or {}).get("head", {}) or {}
+        body_ = (resp.get("response") or {}).get("body", {}) or {}
+        if head.get("resultcode") != "SUC0000":
+            print(f"⚠️  DCLISMOD self-check 失败 resultcode={head.get('resultcode')} msg={head.get('resultmsg')}")
+            return
+
+        modes = body_.get("ntqmdlstz") or []
+        available = [m.get("busmod") for m in modes]
+        print(f"   可用 busMod: {available}")
+        if BUSMOD in available:
+            print(f"✅ self-check OK · 当前 CMB_BUSMOD={BUSMOD} 命中银行下发列表")
+        else:
+            print(f"❌ self-check WARN · 当前 CMB_BUSMOD={BUSMOD} 不在银行返回列表 {available}")
+            print(f"   付款经办 BB1PAYOP 可能会失败，请联系招行确认或改 .env CMB_BUSMOD")
+    except Exception as e:
+        print(f"⚠️  DCLISMOD self-check 异常（不阻断启动）: {e}")
 
 
 # ── Flask 应用 ────────────────────────────────────────────
@@ -187,6 +278,8 @@ def transfer():
             "raw":        result,
         })
 
+    except RateLimited as e:
+        return _rate_limited_response(e)
     except Exception as e:
         return jsonify({
             "success":    False,
@@ -259,6 +352,8 @@ def query():
             "raw":        result,
         })
 
+    except RateLimited as e:
+        return _rate_limited_response(e)
     except Exception as e:
         return jsonify({
             "success":    False,
@@ -327,6 +422,8 @@ def receipt():
             "raw":        result,
         })
 
+    except RateLimited as e:
+        return _rate_limited_response(e)
     except Exception as e:
         return jsonify({
             "success":    False,
@@ -437,6 +534,8 @@ def transactions():
             "raw": result,
         })
 
+    except RateLimited as e:
+        return _rate_limited_response(e)
     except Exception as e:
         return jsonify({
             "success":    False,
@@ -498,6 +597,8 @@ def balance():
             "raw":         result,
         })
 
+    except RateLimited as e:
+        return _rate_limited_response(e)
     except Exception as e:
         return jsonify({
             "success":    False,
@@ -511,4 +612,11 @@ if __name__ == "__main__":
     env_lbl = "PROD" if USE_PROD else "TEST"
     print(f"🏦 招行微服务启动 port={port} env={env_lbl} url={URL} uid={UID}")
     print(f"   busMod={BUSMOD}  busCod={BUSCOD}  ccyNbr={CCY_NBR}")
+    print(f"   rate-limit={_RATE_LIMIT_SEC}s on funcodes={_RATE_LIMITED_FUNCODES}")
+
+    # 启动 self-check: 验证当前 BUSMOD 在银行下发列表里
+    # 跳过条件: 环境变量 CMB_SKIP_SELFCHECK=true（CI/单测场景用）
+    if os.getenv("CMB_SKIP_SELFCHECK", "false").lower() != "true":
+        _self_check_busmod()
+
     app.run(host="0.0.0.0", port=port, debug=False)

@@ -1,9 +1,40 @@
 // ══════════════════════════════════════════════════════
 // 招行免前置 · TypeScript 客户端
 // 调用 apps/cmb/app.py 提供的 HTTP 微服务
+//
+// 错误码字典: docs/cmb/CMB_ERROR_CODES.md
 // ══════════════════════════════════════════════════════
 
+import * as Sentry from '@sentry/node'
+
 const CMB_SERVICE = process.env.CMB_SERVICE_URL || 'http://localhost:5001'
+
+/** 错误码分级 → Sentry severity（docs/cmb/CMB_ERROR_CODES.md §3） */
+export function cmbSeverityFor(code: string): 'P0' | 'P1' | 'P2' | 'info' {
+  if (code === 'SUC0000') return 'info'
+  if (code.startsWith('DCERR') || code.startsWith('DCSE')) return 'P0'  // 密钥 / 会话
+  if (code === 'DCPG008') return 'P1'                                   // funcode 错
+  return 'P2'                                                            // 其他
+}
+
+/** 报到 Sentry 并归类 — 调用方在拿到失败结果时调用 */
+export function reportCmbError(
+  err: Error | string,
+  ctx: { funcode: string; resultCode: string; bizNo?: string; raw?: any },
+): void {
+  const e = typeof err === 'string' ? new Error(err) : err
+  Sentry.captureException(e, {
+    tags: {
+      'cmb.code':     ctx.resultCode,
+      'cmb.funcode':  ctx.funcode,
+      'cmb.severity': cmbSeverityFor(ctx.resultCode),
+    },
+    extra: {
+      bizNo:           ctx.bizNo,
+      bankRawResponse: ctx.raw,
+    },
+  })
+}
 
 export interface CmbTransferParams {
   toAccount : string   // 收款账号

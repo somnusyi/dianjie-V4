@@ -696,6 +696,11 @@ model PurchaseOrder {
   shippedNote   String?
   shippedById   String?                       // 供应商操作人 userId
 
+  // 送达信息（供应商/司机点"已送达"才启动 24h 自动收货倒计时）
+  deliveredAt   DateTime?
+  deliveredNote String?
+  deliveredById String?
+
   // 收货确认
   receivedAt    DateTime?                     // 实际确认时间
   autoConfirmed Boolean  @default(false)      // 是否超时自动确认

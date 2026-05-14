@@ -29,8 +29,8 @@ type Order = {
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  SUBMITTED: '待接单', CONFIRMED: '已接单', DELIVERING: '配送中',
-  PENDING_CONFIRM: '已发货 (待门店收货)', RECEIVED: '已收货', COMPLETED: '已完成',
+  SUBMITTED: '待接单', CONFIRMED: '已接单 待发货', DELIVERING: '配送中 (在途)',
+  PENDING_CONFIRM: '已送达 (24h 内门店未确认自动收货)', RECEIVED: '已收货', COMPLETED: '已完成',
   CANCELED: '已取消',
 }
 const STATUS_TONE: Record<string, 'red' | 'orange' | 'gray' | 'green'> = {
@@ -396,8 +396,30 @@ export default function SupplierOrderDetailPage() {
             className="py-3 bg-white border border-red text-red-fg rounded-cta text-button disabled:opacity-40">拒单</button>
           <button onClick={ship} disabled={submitting}
             className="py-3 bg-ink text-white rounded-cta text-button disabled:opacity-40">
-            {submitting ? '提交中…' : '确认发货'}
+            {submitting ? '提交中…' : '确认发货 (出发)'}
           </button>
+        </div>
+      )}
+      {/* DELIVERING (在途) — 司机到门店后点「确认送达」启动 24h 倒计时 */}
+      {order.status === 'DELIVERING' && (
+        <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border p-4 grid grid-cols-1 gap-2"
+             style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom))' }}>
+          <button
+            onClick={async () => {
+              const note = window.prompt('送达备注 (选填, 比如 司机姓名 / 签收人):') ?? ''
+              if (!confirm(`确认 ${order.no} 已送达门店?\n点击后系统会通知门店验收, 24h 内未确认将自动收货.`)) return
+              setSubmitting(true)
+              try {
+                await apiFetch(`/api/orders/${order.id}/deliver`, { method: 'PATCH', body: JSON.stringify({ note: note.trim() || undefined }) })
+                load()
+              } catch (e: any) { setError(e.message || '提交失败') }
+              finally { setSubmitting(false) }
+            }}
+            disabled={submitting}
+            className="py-3 bg-amber text-white rounded-cta text-button disabled:opacity-40">
+            {submitting ? '提交中…' : '✓ 确认送达 (司机到店时点)'}
+          </button>
+          <p className="text-micro text-gray3 text-center">在途状态 — 货还没送到门店, 不会自动收货</p>
         </div>
       )}
 

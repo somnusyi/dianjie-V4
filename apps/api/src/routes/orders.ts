@@ -381,15 +381,15 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const oldTotal = Number(order.totalAmount)
     const changedLines = lineShipped.filter(l => Math.abs(l.shipped - Number(l.it.quantity)) > 0.0001)
 
-    // 发货后24小时自动确认，计算deadline
-    const autoConfirmAt = dayjs().add(24, 'hour').toDate()
+    // 注:发货后只是 DELIVERING (在途), 不启动倒计时. 待供应商点「送达」改 PENDING_CONFIRM 才计时
 
     // 事务: 更新 PO 状态 + 行 shippedQty + 总金额 + 自动扣减供应商库存
     await prisma.$transaction(async (tx) => {
       await tx.purchaseOrder.update({
         where: { id },
         data: {
-          status: 'PENDING_CONFIRM', shippedAt: new Date(), shippedNote: note, shippedById: userId,
+          // 发货 → DELIVERING (在途, 不启动收货倒计时). 倒计时从 deliveredAt 开始
+          status: 'DELIVERING' as any, shippedAt: new Date(), shippedNote: note, shippedById: userId,
           totalAmount: newTotal,
         },
       })
@@ -433,7 +433,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         tenantId, userId, isAi: false,
         action: `供应商确认发货${adjustNote ? ' (' + adjustNote + ')' : ''}, 金额 ¥${newTotal.toFixed(2)}${Math.abs(newTotal - oldTotal) > 0.01 ? ` (原 ¥${oldTotal.toFixed(2)})` : ''}`,
         target: order.no, entityType: 'PurchaseOrder', targetId: id,
-        metadata: { autoConfirmAt, oldTotal, newTotal, changedLines: changedLines.map(l => ({ name: l.it.product?.name, ordered: Number(l.it.quantity), shipped: l.shipped })) },
+        metadata: { oldTotal, newTotal, changedLines: changedLines.map(l => ({ name: l.it.product?.name, ordered: Number(l.it.quantity), shipped: l.shipped })) },
       },
     })
 
@@ -443,7 +443,44 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       ? `, 因 ${changedLines.slice(0, 2).map(l => `${l.it.product?.name || ''}${Number(l.it.quantity)}→${l.shipped}`).join(' / ')}${changedLines.length > 2 ? ` 等 ${changedLines.length} 项` : ''} 调整, 现 ¥${newTotal.toFixed(2)} (原 ¥${oldTotal.toFixed(2)})`
       : ''
     void notifyOrderShipped(tenantId, order.no, (supplier?.name || '') + adjustSummary, order.storeId)
-    return { success: true, autoConfirmAt, newTotal, oldTotal, changedLines: changedLines.length }
+    return { success: true, newTotal, oldTotal, changedLines: changedLines.length }
+  })
+
+  // ── 供应商/司机点「已送达」 ─ DELIVERING → PENDING_CONFIRM, 启动 24h 自动收货 ──
+  app.patch('/:id/deliver', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
+    const { tenantId, userId, role } = req.user
+    const { id } = req.params as any
+    const { note } = (req.body || {}) as any
+    if (!isSupplierRole(role) && !['ADMIN', 'SUPER_ADMIN'].includes(role)) {
+      return reply.status(403).send({ error: '仅供应商 / 管理员可标记送达' })
+    }
+    const where: any = { id, tenantId, status: 'DELIVERING' }
+    if (isSupplierRole(role) && req.user.supplierId) where.supplierId = req.user.supplierId
+    const order = await prisma.purchaseOrder.findFirst({ where })
+    if (!order) return reply.status(400).send({ error: '订单不存在 / 状态不可送达' })
+    const upd = await prisma.purchaseOrder.updateMany({
+      where: { id, status: 'DELIVERING' },
+      data: { status: 'PENDING_CONFIRM', deliveredAt: new Date(), deliveredNote: note, deliveredById: userId },
+    })
+    if (upd.count === 0) return reply.status(400).send({ error: '订单状态已变 (并发)' })
+    const autoConfirmAt = dayjs().add(24, 'hour').toDate()
+    await prisma.opLog.create({
+      data: {
+        tenantId, userId,
+        action: `供应商标记送达${note ? ': ' + String(note).slice(0,80) : ''}, 24h 内门店未确认将自动收货`,
+        target: order.no, entityType: 'PurchaseOrder', targetId: id,
+        metadata: { autoConfirmAt },
+      },
+    })
+    const supplier = await prisma.supplier.findUnique({ where: { id: order.supplierId }, select: { name: true } })
+    void sendNotification({
+      tenantId, recipientRole: 'MANAGER' as any,
+      type: 'ORDER_DELIVERED' as any,
+      title: `订单已送达, 请尽快验收 ${order.no}`,
+      body: `${supplier?.name || ''} 已送达, 请 24h 内确认收货, 否则系统将自动确认`,
+      refType: 'PurchaseOrder', refId: id,
+    })
+    return { success: true, autoConfirmAt }
   })
 
   // ── 门店确认收货（完全一致）──────────────────────

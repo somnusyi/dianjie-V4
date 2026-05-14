@@ -104,9 +104,13 @@ export async function runDailyCheck() {
 
   console.log(`✅ 账期扫描完成: 提醒${threeDaySchedules.length + oneDaySchedules.length}笔，付款${dueSchedules.length + pendingDue.length}笔`)
 
-  // ── 6. 24h 自动收货 (供应商发货 24h 后门店未确认 → 自动 RECEIVED) ───
+  // ── 6. 24h 自动收货 (供应商点送达 24h 后门店未确认 → 自动 RECEIVED) ───
+  // 倒计时基准从 shippedAt (发出) 改为 deliveredAt (送达). 还在路上的不会被自动收货
   const overdueShipped = await prisma.purchaseOrder.findMany({
-    where: { status: 'PENDING_CONFIRM', shippedAt: { lt: now.subtract(24, 'hour').toDate() } },
+    where: {
+      status: 'PENDING_CONFIRM',
+      deliveredAt: { lt: now.subtract(24, 'hour').toDate() },   // 必须有 deliveredAt 且超 24h
+    },
     include: { items: true, supplier: true, store: true },
     take: 200,
   })

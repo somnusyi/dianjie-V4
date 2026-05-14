@@ -12,12 +12,18 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // tenant 隔离: 默认 dianjie (真实公司), URL ?tenant=test 进 test tenant (8 个演示账号)
+  const [tenantSlug, setTenantSlug] = useState('dianjie')
 
   // 已登录直接跳 home
   useEffect(() => {
-    const t = getToken()
+    const url = new URL(window.location.href)
+    const t = (url.searchParams.get('tenant') || '').trim()
+    if (t === 'test') setTenantSlug('test')
+
+    const token = getToken()
     const u = getUser()
-    if (t && u) {
+    if (token && u) {
       // PC 形态优先（老板/财务且屏幕宽）
       const isWide = window.innerWidth >= 1024
       const pc = isWide ? pcRouteForRole(u.role) : null
@@ -25,14 +31,20 @@ export default function LoginPage() {
     }
   }, [])
 
+  // 8 个测试账号短名 — 输到这些 auto 切到 test tenant, 免去手动加 ?tenant=test
+  const TEST_SHORTNAMES = new Set(['boss', 'fin', 'mgr', 'cd', 'chef', 'eng', 'sup1', 'sup2'])
+
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setError(null); setSubmitting(true)
+    const idTrim = identifier.trim()
+    // 短账号自动落 test tenant, 不依赖 URL 参数 (手机 app webview 加载远程 URL 没 query)
+    const effectiveTenant = TEST_SHORTNAMES.has(idTrim.toLowerCase()) ? 'test' : tenantSlug
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier: identifier.trim(), password }),
+        body: JSON.stringify({ identifier: idTrim, password, tenantSlug: effectiveTenant }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || data.message || '登录失败')
@@ -106,6 +118,19 @@ export default function LoginPage() {
           <a href="/v2/apply" className="text-amber-fg">申请账号 ›</a>
           <span className="text-gray4">·</span>
           <span className="text-gray3">忘记密码请联系老板</span>
+        </div>
+
+        {/* tenant 当前状态指示 — 让你一眼看到登的是真实公司还是测试环境 */}
+        <div className="mt-3 text-center text-micro">
+          {tenantSlug === 'test' ? (
+            <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-bg text-amber-fg">
+              测试环境 (滇界测试 · 演示账号专用) · <a href="/v2/login" className="underline">切回真实</a>
+            </span>
+          ) : (
+            <span className="text-gray4">
+              正式环境 · <a href="/v2/login?tenant=test" className="underline text-gray3">用测试账号</a>
+            </span>
+          )}
         </div>
       </main>
     </div>

@@ -104,19 +104,33 @@ export async function runDailyCheck() {
 
   console.log(`✅ 账期扫描完成: 提醒${threeDaySchedules.length + oneDaySchedules.length}笔，付款${dueSchedules.length + pendingDue.length}笔`)
 
-  // ── 6. 24h 自动收货 (供应商发货 24h 后门店未确认 → 自动 RECEIVED) ───
+  // ── 6. 24h 自动收货 (供应商点送达 24h 后门店未确认 → 自动 RECEIVED) ───
+  // 倒计时基准从 shippedAt (发出) 改为 deliveredAt (送达). 还在路上的不会被自动收货
   const overdueShipped = await prisma.purchaseOrder.findMany({
-    where: { status: 'PENDING_CONFIRM', shippedAt: { lt: now.subtract(24, 'hour').toDate() } },
+    where: {
+      status: 'PENDING_CONFIRM',
+      deliveredAt: { lt: now.subtract(24, 'hour').toDate() },   // 必须有 deliveredAt 且超 24h
+    },
     include: { items: true, supplier: true, store: true },
     take: 200,
   })
   for (const o of overdueShipped) {
     try {
+      // P0 race condition guard: 用 updateMany 抢占, 防止用户在同时间确认收货导致重复 receipt
+      const claim = await prisma.purchaseOrder.updateMany({
+        where: { id: o.id, status: 'PENDING_CONFIRM' },
+        data: { autoConfirmed: true },   // 先标 autoConfirmed, 后续再补 status
+      })
+      if (claim.count === 0) {
+        console.log(`⏭ 跳过 ${o.no} (并发竞争: 已不是 PENDING_CONFIRM)`)
+        continue
+      }
       // 默认按下单数量全收 (没有报损)
       const ym = dayjs().format('YYYYMM')
       const cnt = await prisma.receipt.count({ where: { tenantId: o.tenantId, no: { startsWith: `RK${ym}` } } })
       const no = `RK${ym}${String(cnt + 1).padStart(6, '0')}`
-      const totalAmt = o.items.reduce((s, i) => s + Number(i.quantity) * Number(i.unitPrice), 0)
+      // 24h 自动收货 — 按 shippedQty (供应商实发量), 没填回退 quantity
+      const totalAmt = o.items.reduce((s, i) => s + Number(i.shippedQty ?? i.quantity) * Number(i.unitPrice), 0)
       const receipt = await prisma.receipt.create({
         data: {
           tenantId: o.tenantId, no,
@@ -124,10 +138,10 @@ export async function runDailyCheck() {
           deliveryDate: new Date(),
           totalAmount: totalAmt, status: 'CONFIRMED',
           confirmedAt: new Date(), createdById: o.createdById,
-          items: { create: o.items.map(i => ({
-            productId: i.productId, quantity: i.quantity, unitPrice: i.unitPrice,
-            amount: Number(i.unitPrice) * Number(i.quantity),
-          })) },
+          items: { create: o.items.map(i => {
+            const q = i.shippedQty ?? i.quantity
+            return { productId: i.productId, quantity: q, unitPrice: i.unitPrice, amount: Number(i.unitPrice) * Number(q) }
+          }) },
         },
       })
       await prisma.purchaseOrder.update({
@@ -153,10 +167,17 @@ export async function runDailyCheck() {
   const { refundSupplierStockOnLossApproved } = await import('../routes/lossClaims')
   for (const c of overdueLossClaims) {
     try {
-      await prisma.lossClaim.update({
-        where: { id: c.id },
+      // P0 race condition fix: 用 updateMany + WHERE status=PENDING guard
+      // 防止供应商在 23:59 拒绝 / 同意时, scheduler 在 23:59 同时跑导致状态冲突
+      const upd = await prisma.lossClaim.updateMany({
+        where: { id: c.id, status: 'PENDING' },   // 只在仍是 PENDING 时改
         data: { status: 'AUTO_APPROVED', autoApproved: true, handledAt: new Date() },
       })
+      if (upd.count === 0) {
+        // 供应商在 schedule fire 之前已抢先操作 — 跳过此条
+        console.log(`⏭ 跳过 ${c.no} (并发竞争: 已不是 PENDING)`)
+        continue
+      }
       await refundSupplierStockOnLossApproved(c, c.createdById, `[自动] 24h 自动同意报损 ${c.no}`)
       await prisma.opLog.create({ data: { tenantId: c.tenantId, userId: c.createdById, action: `[自动] 报损 ${c.no} 24h 自动同意`, target: c.no, entityType: 'LossClaim', targetId: c.id } })
     } catch (e: any) {

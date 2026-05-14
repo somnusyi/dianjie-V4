@@ -64,6 +64,24 @@ struct Index {
             }
           }
         })
+        // PDF / 文件下载: WebView 默认会拦截 .pdf 链接, 这里转给系统浏览器打开
+        // (鸿蒙 ArkWeb 内置 PDF 渲染较弱, 让用户用更稳的 系统浏览器 / 文件管理 处理)
+        .onDownloadStart((event) => {
+          console.log('download start:', event.url)
+          try {
+            const ctx = getContext(this) as common.UIAbilityContext
+            ctx.startAbility({
+              action: 'ohos.want.action.viewData',
+              uri: event.url,
+              type: event.mimetype || 'application/pdf',
+            }).catch((e: Error) => {
+              console.error('startAbility failed:', e)
+              promptAction.showToast({ message: '无法打开下载链接, 请截图保存或复制链接到浏览器', duration: 3000 })
+            })
+          } catch (e) {
+            console.error('download handler err:', e)
+          }
+        })
 
       // 加载中遮罩 (短暂网络抖动场景)
       if (this.loading) {

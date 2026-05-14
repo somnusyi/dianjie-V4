@@ -80,18 +80,35 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
   const token = getToken()
   const headers = new Headers(init.headers)
   // 只在有 body 时设 Content-Type. 否则 Fastify 看到 "application/json" 但 body 为空会 400.
-  // (典型场景: PATCH /batches/:id/revoke 这种不需要参数的端点)
-  if (init.body != null && !headers.has('Content-Type')) {
+  // FormData / Blob 不要设 — 浏览器会自动加 multipart boundary
+  if (init.body != null && !headers.has('Content-Type')
+      && !(init.body instanceof FormData)
+      && !(init.body instanceof Blob)) {
     headers.set('Content-Type', 'application/json')
   }
   if (token) headers.set('Authorization', `Bearer ${token}`)
   const res = await fetch(path, { ...init, headers })
   if (res.status === 401) {
-    clearSession()
-    if (typeof window !== 'undefined' && !location.pathname.startsWith('/v2/login')) {
-      location.href = '/v2/login'
+    // 解析后端原因. 只有"真 token 过期/无效"才清 session, 其他 401 (如某端点权限误判) 不踢人
+    let msg = '未登录或会话已过期'
+    let isAuthExpired = false
+    try {
+      const j = await res.json()
+      msg = j.error || j.message || msg
+      const lc = String(msg).toLowerCase()
+      // 真过期标志: jwt expired / invalid token / unauthorized 等关键词
+      isAuthExpired = !token   // 没 token 才认定真未登录
+        || /expired|invalid token|jwt|未登录|token/i.test(msg) && !/权限|不能|无权/.test(msg)
+    } catch {
+      isAuthExpired = !token
     }
-    throw new Error('未登录或会话已过期')
+    if (isAuthExpired) {
+      clearSession()
+      if (typeof window !== 'undefined' && !location.pathname.startsWith('/v2/login')) {
+        location.href = '/v2/login'
+      }
+    }
+    throw new Error(msg)
   }
   if (!res.ok) {
     let msg = res.statusText

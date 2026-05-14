@@ -1,10 +1,8 @@
 /**
- * 厨师长 · 发起新采购单 (PDF: chef_purchasing_tab "发起新采购单"入口)
+ * 厨师长 · 发起新采购单
  *
- * 接现有 POST /api/orders → 自动 status=SUBMITTED 通知供应商
- * 演示简化：从 /api/suppliers + /api/products 拉列表，用户选供应商 + 多选商品 + 填数量
- *
- * PDF 第 4 条铁律：阈值前置告知 — 顶部明确"≤¥3K + 集团价 + 签约 → 免审"
+ * 接 POST /api/orders → 自动 status=SUBMITTED 通知供应商
+ * 食材采购单不走审批 (任何金额都直接发供应商)
  */
 'use client'
 import { useEffect, useState } from 'react'
@@ -35,6 +33,8 @@ export default function ChefPONewPage() {
   const [note, setNote] = useState('')
   const [items, setItems] = useState<LineItem[]>([])
   const [submitting, setSubmitting] = useState(false)
+  // 防重 idempotencyKey: 进页面时生成, 提交一次 / 失败可重试 (重置 key)
+  const [idempotencyKey, setIdempotencyKey] = useState(() => `po-${Date.now()}-${Math.random().toString(36).slice(2,10)}`)
   const [error, setError] = useState<string | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [searchQ, setSearchQ] = useState('')
@@ -56,7 +56,6 @@ export default function ChefPONewPage() {
     return matchesQuery(p, searchQ)
   })
   const total = items.reduce((s, i) => s + i.quantity * i.unitPrice, 0)
-  const isOver = total >= 3000
 
   // 起订量/步长 helper
   function moq(p: Product) { return Math.max(0.01, Number(p.minOrderQty || 1)) }
@@ -100,7 +99,7 @@ export default function ChefPONewPage() {
       const myStoreId = u?.storeId || u?.store?.id
       const order = await apiFetch<{ id: string; no: string }>('/api/orders', {
         method: 'POST',
-        body: JSON.stringify({ supplierId, expectedDate, note, items, storeId: myStoreId }),
+        body: JSON.stringify({ supplierId, expectedDate, note, items, storeId: myStoreId, idempotencyKey }),
       })
       router.push(`/v2/chef/purchase/po-success/${order.id}`)
     } catch (e: any) {
@@ -121,7 +120,7 @@ export default function ChefPONewPage() {
           <span className="w-10 h-10 rounded-md bg-amber-bg text-amber-fg flex items-center justify-center text-h2">🍲</span>
           <div className="flex-1">
             <div className="text-h2">食材采购单</div>
-            <p className="text-caption text-gray2 mt-0.5">≤¥3K + 集团价 + 签约 → 免审 · &gt;¥3K 走财务+老板</p>
+            <p className="text-caption text-gray2 mt-0.5">提交后直发供应商 · 无金额审批限制</p>
           </div>
         </div>
       </div>
@@ -209,15 +208,10 @@ export default function ChefPONewPage() {
           )}
         </div>
 
-        {/* 阈值反馈 */}
+        {/* 提交后直发供应商, 不再阈值审批 */}
         {total > 0 && (
           <div className="flex items-center gap-2">
-            {isOver ? (
-              <Chip tone="orange">超阈值 · 需 财务+老板 审</Chip>
-            ) : (
-              <Chip tone="green">阈值内 · 直送供应商</Chip>
-            )}
-            <span className="text-micro text-gray3">{isOver ? '≥ ¥3,000' : '< ¥3,000'} 阈值</span>
+            <Chip tone="green">提交后直发供应商</Chip>
           </div>
         )}
 

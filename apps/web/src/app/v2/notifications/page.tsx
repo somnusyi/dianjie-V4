@@ -29,12 +29,32 @@ const TYPE_LABEL: Record<string, string> = {
   PAYMENT_DONE: '付款',
 }
 
-function refLink(n: Notif): string | null {
+// 按角色路由 — 同一 refType 不同角色看不同页, 避免点了 404
+function refLink(n: Notif, role: string): string | null {
   if (!n.refType || !n.refId) return null
-  if (n.refType === 'PurchaseOrder')   return `/v2/chef/purchase/${n.refId}`
-  if (n.refType === 'LossClaim')       return `/v2/supplier/orders` // TODO: 详情页
-  if (n.refType === 'Document')        return `/v2/chef-director/approvals`
+  const isSupplier = role === 'SUPPLIER_OWNER' || role === 'SUPPLIER_STAFF' || role === 'SUPPLIER_SUB'
+  const isStore    = role === 'MANAGER' || role === 'KITCHEN_LEAD' || role === 'PURCHASER'
+  const isChef     = role === 'CHEF_DIRECTOR' || role === 'CHEF'
+  const isFinBoss  = role === 'FINANCE' || role === 'ADMIN' || role === 'SUPER_ADMIN' || role === 'BOSS'
+
+  if (n.refType === 'PurchaseOrder') {
+    if (isSupplier) return `/v2/supplier/orders/${n.refId}`
+    if (isStore)    return `/v2/chef/purchase/po-success/${n.refId}`
+    if (isFinBoss)  return `/v2/supplier/orders/${n.refId}`   // 老板/财务能看任何订单详情
+    return `/v2/supplier/orders/${n.refId}`
+  }
+  if (n.refType === 'LossClaim') {
+    if (isChef)     return `/v2/chef-director/disputes`
+    if (isSupplier) return `/v2/supplier/orders`              // 报损依附于订单, 跳订单列表
+    if (isStore)    return `/v2/chef/check`                   // 店内报损看 check 页
+    return `/v2/chef-director/loss`
+  }
+  if (n.refType === 'Document') return `/v2/chef-director/approvals`
   if (n.refType === 'PaymentSchedule') return `/v2/finance/home`
+  if (n.refType === 'Receipt') {
+    if (isSupplier) return `/v2/supplier/billing`
+    return `/v2/finance/home`
+  }
   return null
 }
 
@@ -68,7 +88,9 @@ export default function NotificationsPage() {
       apiFetch(`/api/notifications/${n.id}/read`, { method: 'PATCH' }).catch(() => {})
       setItems(arr => arr ? arr.map(x => x.id === n.id ? { ...x, read: true } : x) : arr)
     }
-    const link = refLink(n)
+    const u = (typeof window !== 'undefined') ? (await import('@/lib/v2-auth')).getUser() : null
+    const role = (u as any)?.role || ''
+    const link = refLink(n, role)
     if (link) location.href = link
   }
 

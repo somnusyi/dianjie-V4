@@ -50,14 +50,17 @@ api.interceptors.response.use(
           return api(original)
         } catch {
           refreshQueue = []
-          localStorage.clear()
-          window.location.href = '/login'
+          // 只清自己的 key, 不能 clear() 把 v2 的 token / user 也带走
+          localStorage.removeItem('dj_token')
+          localStorage.removeItem('dj_refresh')
+          window.location.href = '/v2/login'
         } finally {
           isRefreshing = false
         }
       } else {
-        localStorage.clear()
-        window.location.href = '/login'
+        localStorage.removeItem('dj_token')
+        localStorage.removeItem('dj_refresh')
+        window.location.href = '/v2/login'
       }
     }
     return Promise.reject(err)

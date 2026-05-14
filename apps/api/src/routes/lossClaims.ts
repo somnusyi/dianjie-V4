@@ -178,6 +178,11 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     const count = await prisma.lossClaim.count({ where: { tenantId, no: { startsWith: `LC${ym}` } } })
     const no = `LC${ym}${String(count + 1).padStart(6, '0')}`
 
+    // 阈值审批: ≥¥500 进 PENDING 等总厨审, ≥¥3000 通知老板. 防止店员私自录大额损耗
+    const NEED_REVIEW_THRESHOLD = 500
+    const needsReview = totalLossAmount >= NEED_REVIEW_THRESHOLD
+    const initialStatus = needsReview ? 'PENDING' : 'AUTO_APPROVED'
+
     const claim = await prisma.lossClaim.create({
       data: {
         tenantId, no,
@@ -189,8 +194,8 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
         totalLossAmount,
         description: description || `${reason} · 店内盘点`,
         evidenceImages: [],
-        status: 'AUTO_APPROVED',         // 自有报损不需供应商响应, 直接计入 P&L
-        autoApproved: true,
+        status: initialStatus as any,
+        autoApproved: !needsReview,
         createdById: userId,
         items: { create: itemsData },
       },
@@ -200,10 +205,28 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     await prisma.opLog.create({
       data: {
         tenantId, userId,
-        action: `店内盘点报损 ${no} 原因:${reason} 损失 ¥${totalLossAmount.toFixed(2)}`,
+        action: `店内报损 ${no} ¥${totalLossAmount.toFixed(2)} ${needsReview ? '(待总厨审)' : '(阈值内自动通过)'}`,
         target: no, entityType: 'LossClaim', targetId: claim.id,
       },
     })
+
+    // 超阈值时通知总厨 (阈值 ¥500) + 老板 (阈值 ¥3000)
+    if (needsReview) {
+      try {
+        const { sendNotification } = await import('../services/notification')
+        const isHigh = totalLossAmount >= 3000
+        const recipients = isHigh ? ['CHEF_DIRECTOR', 'ADMIN'] : ['CHEF_DIRECTOR']
+        for (const r of recipients) {
+          void sendNotification({
+            tenantId, recipientRole: r as any,
+            type: 'LOSS_CLAIM_PENDING' as any,
+            title: `店内报损待审 ¥${totalLossAmount.toFixed(0)}`,
+            body: `${no} 原因:${reason}, ${items.length} 项 · 待你审`,
+            refType: 'LossClaim', refId: claim.id,
+          })
+        }
+      } catch {}
+    }
 
     return reply.status(201).send(claim)
   })
@@ -274,18 +297,68 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     return { success: true, action }
   })
 
+  // ── 总厨审核店内报损 (isManual=true, ≥¥500 阈值进 PENDING) ──
+  app.patch('/:id/manual-review', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
+    const { tenantId, userId, role } = req.user
+    const { id } = req.params as any
+    const { action, note } = (req.body || {}) as any
+    if (!['CHEF_DIRECTOR', 'CHEF', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+      return reply.status(403).send({ error: '仅总厨/老板可审核店内报损' })
+    }
+    if (!['approve', 'reject'].includes(action)) {
+      return reply.status(400).send({ error: 'action 必须 approve/reject' })
+    }
+    if (action === 'reject' && (!note || !String(note).trim())) {
+      return reply.status(400).send({ error: '拒绝时必须填写原因' })
+    }
+    const claim = await prisma.lossClaim.findFirst({
+      where: { id, tenantId, isManual: true, status: 'PENDING' },
+    })
+    if (!claim) return reply.status(400).send({ error: '不存在 / 非待审 / 非店内报损' })
+
+    const newStatus = action === 'approve' ? 'APPROVED' : 'REJECTED'
+    await prisma.lossClaim.update({
+      where: { id },
+      data: { status: newStatus as any, handledAt: new Date(), handledById: userId, handlerNote: note || null },
+    })
+    await prisma.opLog.create({
+      data: {
+        tenantId, userId,
+        action: `[总厨审] 店内报损 ${claim.no} ¥${claim.totalLossAmount} → ${action === 'approve' ? '通过' : '驳回'}${note ? ' (' + String(note).slice(0,80) + ')' : ''}`,
+        target: claim.no, entityType: 'LossClaim', targetId: id,
+      },
+    })
+    // 通知发起人
+    try {
+      const { sendNotification } = await import('../services/notification')
+      void sendNotification({
+        tenantId, recipientRole: 'KITCHEN_LEAD' as any,
+        type: 'LOSS_CLAIM_RESULT' as any,
+        title: action === 'approve' ? '店内报损通过' : '店内报损被驳回',
+        body: `${claim.no} ${action === 'approve' ? '已计入损耗' : '驳回, 请核对实物'}${note ? ' · ' + String(note).slice(0,40) : ''}`,
+        refType: 'LossClaim', refId: id,
+      })
+    } catch {}
+    return { success: true }
+  })
+
   // ── 门店协商解决（被拒绝后）──────────────────────
   app.patch('/:id/resolve', { preHandler: [(app as any).authenticate] }, async (req: any) => {
-    const { tenantId, userId } = req.user
+    const { tenantId, userId, role } = req.user
     const { id } = req.params as any
     const { note } = req.body as any
+
+    // 仅总厨 / 老板 / 超管 可仲裁 — 防止店长私自闭环
+    if (!['CHEF_DIRECTOR', 'CHEF', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+      throw { statusCode: 403, message: '仅总厨可仲裁争议报损' }
+    }
 
     const { finalDeductAmount } = (req.body || {}) as any  // 协商最终扣减金额, 可选
     const claim = await prisma.lossClaim.findFirst({
       where: { id, tenantId, status: 'REJECTED' },
       include: { purchaseOrder: { include: { receipt: true } }, items: true },
     })
-    if (!claim) throw { statusCode: 400, message: '报损申请不存在或状态不对' }
+    if (!claim) throw { statusCode: 400, message: '报损申请不存在或非争议状态' }
 
     await prisma.lossClaim.update({
       where: { id },
@@ -309,7 +382,23 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    // opLog + 通知双方
+    await prisma.opLog.create({
+      data: { tenantId, userId, action: `[仲裁] ${claim.no} 总厨判: 扣 ¥${Number(finalDeductAmount || 0).toFixed(2)} ${note ? '(' + String(note).slice(0,80) + ')' : ''}`,
+              target: claim.no, entityType: 'LossClaim', targetId: id }
+    })
+    try {
+      const { sendNotification } = await import('../services/notification')
+      const body = `总厨仲裁: ${claim.no} 最终扣 ¥${Number(finalDeductAmount || 0).toFixed(2)}${note ? ' · ' + String(note).slice(0,40) : ''}`
+      for (const r of ['MANAGER', 'KITCHEN_LEAD', 'SUPPLIER_OWNER', 'SUPPLIER_STAFF']) {
+        void sendNotification({
+          tenantId, recipientRole: r as any, type: 'LOSS_CLAIM_RESULT' as any,
+          title: '报损争议已仲裁', body, refType: 'LossClaim', refId: id,
+        })
+      }
+    } catch {}
+
     void tryCompleteOrder(claim.purchaseOrderId, tenantId)
-    return { success: true }
+    return { success: true, finalDeductAmount: Number(finalDeductAmount || 0) }
   })
 }

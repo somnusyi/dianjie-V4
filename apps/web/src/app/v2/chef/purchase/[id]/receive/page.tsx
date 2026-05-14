@@ -19,14 +19,18 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [received, setReceived] = useState<Record<string, number>>({})
+  const [evidence, setEvidence] = useState<string[]>([])     // OSS URL 数组
+  const [uploading, setUploading] = useState(false)
   const [confirmState, openConfirm] = useConfirmSheet()
 
   useEffect(() => {
     apiFetch(`/api/orders/${params.id}`).then((d: any) => {
       setPo(d)
-      // 默认 实收 = 下单
+      // 默认 实收 = 供应商实际发货量 (shippedQty), 没有就回退下单 quantity
       const init: Record<string, number> = {}
-      ;(d.items || []).forEach((it: any) => { init[it.productId] = Number(it.quantity) })
+      ;(d.items || []).forEach((it: any) => {
+        init[it.productId] = Number(it.shippedQty ?? it.quantity)
+      })
       setReceived(init)
     }).catch(e => setError(String(e?.message || e)))
   }, [params.id])
@@ -35,14 +39,29 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
   if (!po) return <div className="p-6 text-gray3 text-caption">加载中…</div>
 
   const items = po.items || []
-  const hasLoss = items.some((it: any) => Number(received[it.productId] ?? 0) < Number(it.quantity))
+  // 应到量 = shippedQty (供应商发货时议定的量) ?? quantity (没改过). 实收 < 应到 才算报损
+  const expected = (it: any) => Number(it.shippedQty ?? it.quantity)
+  const hasLoss = items.some((it: any) => Number(received[it.productId] ?? 0) < expected(it))
   const lossAmount = items.reduce((s: number, it: any) => {
-    const diff = Number(it.quantity) - Number(received[it.productId] ?? 0)
+    const diff = expected(it) - Number(received[it.productId] ?? 0)
     return diff > 0 ? s + diff * Number(it.unitPrice) : s
   }, 0)
   const total = items.reduce((s: number, it: any) =>
     s + Number(received[it.productId] ?? 0) * Number(it.unitPrice), 0)
 
+  async function uploadPhoto(file: File) {
+    setUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file, file.name || 'evidence.jpg')
+      const res = await apiFetch<{ url: string }>('/api/upload?category=loss-claims', { method: 'POST', body: fd as any })
+      setEvidence(prev => [...prev, res.url])
+    } catch (e: any) {
+      alert('上传失败: ' + (e.message || e))
+    } finally {
+      setUploading(false)
+    }
+  }
   function submit() {
     if (submitting) return
     const doSubmit = async () => {
@@ -55,6 +74,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
               productId: it.productId,
               receivedQty: Number(received[it.productId] ?? 0),
             })),
+            evidenceImages: hasLoss ? evidence : undefined,
           }),
         })
         router.push(`/v2/chef/purchase/po-success/${params.id}`)
@@ -99,16 +119,34 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
           {items.map((it: any) => {
             const rq = received[it.productId] ?? 0
             const ordered = Number(it.quantity)
-            const isLoss = rq < ordered
+            const shipped = it.shippedQty != null ? Number(it.shippedQty) : null
+            const exp = shipped != null ? shipped : ordered
+            const isLoss = rq < exp
+            const supplierShortShipped = shipped != null && shipped < ordered
+            // 「按下单索赔」: 把实收设回 0 (或减到供应商少发的量), 让差额计入报损
+            // 等同于"我不接受供应商擅自调减, 要求按 5 件赔"
+            function claimByOrdered() {
+              setReceived({ ...received, [it.productId]: rq })  // 实收不变, 但把比较基准换成 ordered (UI 提示)
+            }
+            // 一键 = 强制让 expected 用 ordered. 我们用前端临时标记: 把实收设为 max(rq, shipped) 但通过 0.001 偏移触发报损显示
+            // 简单做法: 给行加一个 state, 用户主动选"按下单量验收"
             return (
               <li key={it.productId} className={`px-3 py-3 ${isLoss ? 'bg-red-bg/30' : ''}`}>
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-h2 flex-1">{it.product?.name || it.productId}</span>
-                  {isLoss && <Chip tone="red">报损 {(ordered - rq).toFixed(2)}</Chip>}
+                  {isLoss && <Chip tone="red">报损 {(exp - rq).toFixed(2)}</Chip>}
                 </div>
                 <div className="text-micro text-gray3 mb-2 font-num">
-                  下单 {ordered} {it.product?.unit || ''} × ¥{Number(it.unitPrice).toFixed(2)}
+                  下单 {ordered} {it.product?.unit || ''}
+                  {supplierShortShipped && <span className="text-amber-fg ml-1">→ 实发 {shipped}</span>}
+                  {' '}× ¥{Number(it.unitPrice).toFixed(2)}
                 </div>
+                {/* 供应商少发 — 仅信息提示, 因金额已按实发算清, 不存在报损需求 */}
+                {supplierShortShipped && (
+                  <div className="mb-2 text-micro text-gray3 bg-bg rounded-cta p-2">
+                    ⓘ 供应商发货时已调减 {(ordered - (shipped ?? 0)).toFixed(2)} {it.product?.unit || ''} (金额已按实发 ¥{((shipped ?? 0) * Number(it.unitPrice)).toFixed(2)} 算清)
+                  </div>
+                )}
                 <div className="flex items-center gap-2">
                   <span className="text-caption text-gray2">实收</span>
                   <button
@@ -132,7 +170,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
                   <span className="text-micro text-gray3 w-12 text-right">{it.product?.unit || ''}</span>
                 </div>
                 {isLoss && (
-                  <p className="text-micro text-red-fg mt-2">短缺 {(ordered - rq).toFixed(2)} {it.product?.unit || ''} · 损失 ¥{((ordered - rq) * Number(it.unitPrice)).toFixed(2)}</p>
+                  <p className="text-micro text-red-fg mt-2">短缺 {(exp - rq).toFixed(2)} {it.product?.unit || ''} · 损失 ¥{((exp - rq) * Number(it.unitPrice)).toFixed(2)}</p>
                 )}
               </li>
             )
@@ -154,14 +192,50 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
         </div>
       </Section>
 
+      {/* 报损证据照片 — 有报损时强制必传 */}
+      {hasLoss && (
+        <Section title="报损证据 *" right={`${evidence.length} 张${evidence.length === 0 ? ' · 至少 1 张' : ''}`} rightTone={evidence.length === 0 ? 'red' : undefined}>
+          <div className={`rounded-card border p-3 ${evidence.length === 0 ? 'bg-red-bg/30 border-red/40' : 'bg-white border-border'}`}>
+            <p className={`text-micro mb-2 ${evidence.length === 0 ? 'text-red-fg' : 'text-gray3'}`}>
+              {evidence.length === 0
+                ? '⚠ 报损必须上传至少 1 张现场照片, 否则供应商可拒赔'
+                : '拍照证据 — 短量 / 破损 / 变质 现场图, 已上传 ' + evidence.length + ' 张'}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {evidence.map((url, i) => (
+                <div key={i} className="relative w-20 h-20 rounded border border-border overflow-hidden">
+                  <img src={url} alt="" className="w-full h-full object-cover" />
+                  <button onClick={() => setEvidence(evidence.filter((_, j) => j !== i))}
+                          className="absolute top-0 right-0 bg-ink/70 text-white w-5 h-5 rounded-bl text-micro flex items-center justify-center">×</button>
+                </div>
+              ))}
+              <label className="w-20 h-20 rounded border-2 border-dashed border-border flex flex-col items-center justify-center cursor-pointer hover:bg-bg-warm">
+                <input type="file" accept="image/*" capture="environment"
+                       className="hidden"
+                       onChange={e => {
+                         const f = e.target.files?.[0]
+                         if (f) uploadPhoto(f)
+                         e.target.value = ''
+                       }} />
+                <span className="text-h2 text-gray3">{uploading ? '⏳' : '+'}</span>
+                <span className="text-micro text-gray3">{uploading ? '上传中' : '加图'}</span>
+              </label>
+            </div>
+          </div>
+        </Section>
+      )}
+
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border p-3 flex gap-3">
         <button type="button" onClick={() => router.back()} className="px-4 py-3 bg-white border border-border rounded-cta text-button text-gray2">取消</button>
         <button
           onClick={submit}
-          disabled={submitting}
+          disabled={submitting || (hasLoss && evidence.length === 0)}
           className="flex-1 py-3 bg-ink text-white rounded-cta text-button disabled:opacity-40"
         >
-          {submitting ? '提交中…' : `确认收货 · ¥${total.toFixed(2)}`}
+          {submitting ? '提交中…' :
+            (hasLoss && evidence.length === 0)
+              ? '⚠ 请上传报损证据'
+              : `确认收货 · ¥${total.toFixed(2)}`}
         </button>
       </div>
 

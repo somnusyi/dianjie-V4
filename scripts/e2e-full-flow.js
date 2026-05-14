@@ -52,7 +52,7 @@ async function api(method, path, body, token) {
 
 async function login(key) {
   const a = ACCOUNTS[key]
-  const r = await api('POST', '/api/auth/login', { identifier: a.phone, password: PASSWORDS })
+  const r = await api('POST', '/api/auth/login', { identifier: a.phone, password: PASSWORDS, tenantSlug: 'test' })
   if (!r.ok) throw new Error(`登录 ${key} 失败 ${r.status} ${JSON.stringify(r.data)}`)
   tokens[key] = r.data.token
   return r.data.user

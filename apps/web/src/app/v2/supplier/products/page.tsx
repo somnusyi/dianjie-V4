@@ -14,6 +14,7 @@ import { apiFetch } from '@/lib/v2-auth'
 
 type Product = {
   id: string; code: string; name: string; category: string; unit: string
+  spec?: string | null
   price: number | string; stock: number | string; minStock: number | string
   minOrderQty?: number | string; stepQty?: number | string
   status: string
@@ -50,7 +51,9 @@ export default function SupplierProductsPage() {
   const [products, setProducts] = useState<Product[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
-  const [draft, setDraft] = useState<{ price: string; stock: string }>({ price: '', stock: '' })
+  // 编辑草稿: 单价 + 规格 + 起订量 + 步长 (库存请到库存页)
+  const [draft, setDraft] = useState<{ price: string; spec: string; moq: string; step: string }>({ price: '', spec: '', moq: '', step: '' })
+  const [searchQ, setSearchQ] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [confirmState, openConfirm] = useConfirmSheet()
   const [createOpen, setCreateOpen] = useState(false)
@@ -86,7 +89,12 @@ export default function SupplierProductsPage() {
 
   function startEdit(p: Product) {
     setEditing(p.id)
-    setDraft({ price: String(p.price), stock: String(p.stock) })
+    setDraft({
+      price: String(p.price),
+      spec: String(p.spec || ''),
+      moq: String(p.minOrderQty ?? 1),
+      step: String(p.stepQty ?? 1),
+    })
   }
   function cancelEdit() {
     setEditing(null)
@@ -94,38 +102,53 @@ export default function SupplierProductsPage() {
   async function save(p: Product) {
     if (submitting) return
     const newPrice = Number(draft.price)
-    if (Math.abs(newPrice - Number(p.price)) < 0.01) {
-      setEditing(null); return
-    }
+    const newSpec  = draft.spec.trim()
+    const newMoq   = Number(draft.moq) || 1
+    // step 取消独立配置, 强制 = moq (用户感知"起订量"就是"递增单位")
+    const newStep  = newMoq
     const oldPrice = Number(p.price)
-    const isUp = newPrice > oldPrice && oldPrice > 0
+    const priceChanged = Math.abs(newPrice - oldPrice) > 0.01
+    const specChanged  = newSpec !== String(p.spec || '').trim()
+    const moqChanged   = Math.abs(newMoq - Number(p.minOrderQty ?? 1)) > 0.001
+    const stepChanged  = Math.abs(newStep - Number(p.stepQty ?? 1)) > 0.001
+    if (!priceChanged && !specChanged && !moqChanged && !stepChanged) { setEditing(null); return }
+    const isUp = priceChanged && newPrice > oldPrice && oldPrice > 0
+
+    // 规格/起订量/步长 → 一并提交, 不走审批; 价格上调单独走审批
+    const nonPriceBody: any = {}
+    if (specChanged) nonPriceBody.spec = newSpec || null
+    if (moqChanged)  nonPriceBody.minOrderQty = newMoq
+    if (stepChanged) nonPriceBody.stepQty = newStep
+
+    const summary: string[] = []
+    if (priceChanged) summary.push(`单价 ¥${oldPrice.toFixed(2)} → ¥${newPrice.toFixed(2)}${isUp ? ' ⚠涨价审批' : ''}`)
+    if (specChanged)  summary.push(`规格 「${p.spec || '空'}」→「${newSpec || '空'}」`)
+    if (moqChanged)   summary.push(`起订量 ${p.minOrderQty ?? 1} → ${newMoq}`)
+
     openConfirm({
-      title: `${isUp ? '涨价' : oldPrice === 0 ? '首次定价' : '降价'}「${p.name}」`,
-      body: `单价 ¥${oldPrice.toFixed(2)} → ¥${newPrice.toFixed(2)}\n\n${
-        isUp ? '⚠ 涨价需总厨审批通过后才生效.' : '✓ 立即生效, 无需审批.'
-      }`,
-      confirmLabel: isUp ? '提交审批' : '立即生效',
-      tone: isUp ? 'primary' : 'primary',
+      title: `修改「${p.name}」`,
+      body: summary.join('\n') + (isUp ? '\n\n⚠ 涨价需总厨审批通过后才生效, 其他改动立即生效.' : '\n\n✓ 立即生效, 无需审批.'),
+      confirmLabel: isUp ? '提交' : '保存',
+      tone: 'primary',
       onConfirm: async () => {
         setSubmitting(true)
         try {
-          const res: any = await apiFetch(`/api/products/${p.id}`, {
-            method: 'PATCH',
-            body: JSON.stringify({ price: newPrice }),
-          })
-          setEditing(null)
-          if (res?.priceChangeStatus === 'PENDING_APPROVAL') {
-            alert(`⏳ 涨价单 ${res.documentNo} 已提交总厨审批 (通过后才生效)`)
-          } else {
-            alert('✓ 价格已更新')
+          // 先存非价字段 (没审批门槛)
+          if (Object.keys(nonPriceBody).length > 0) {
+            await apiFetch(`/api/products/${p.id}`, { method: 'PATCH', body: JSON.stringify(nonPriceBody) })
           }
+          // 再存价 (可能走审批)
+          let approvalMsg = ''
+          if (priceChanged) {
+            const res: any = await apiFetch(`/api/products/${p.id}`, { method: 'PATCH', body: JSON.stringify({ price: newPrice }) })
+            if (res?.priceChangeStatus === 'PENDING_APPROVAL') approvalMsg = `\n⏳ 涨价单 ${res.documentNo} 已提交总厨审批`
+          }
+          setEditing(null)
+          alert('✓ 已保存' + approvalMsg)
           load()
         } catch (e: any) {
-          alert(e.message || '保存失败')
-          throw e
-        } finally {
-          setSubmitting(false)
-        }
+          alert(e.message || '保存失败'); throw e
+        } finally { setSubmitting(false) }
       },
     })
   }
@@ -151,9 +174,15 @@ export default function SupplierProductsPage() {
     })
   }
 
-  // 按 category 分组
+  // 模糊搜索 (名称 / 规格 / 编码) + 按 category 分组
+  function matches(p: Product, q: string) {
+    if (!q.trim()) return true
+    const hay = `${p.name} ${p.spec || ''} ${p.code}`.toLowerCase()
+    return q.toLowerCase().split(/\s+/).filter(Boolean).every(t => hay.includes(t))
+  }
+  const filtered = (products || []).filter(p => matches(p, searchQ))
   const byCat: Record<string, Product[]> = {}
-  ;(products || []).forEach(p => { (byCat[p.category] = byCat[p.category] || []).push(p) })
+  filtered.forEach(p => { (byCat[p.category] = byCat[p.category] || []).push(p) })
 
   function openCreate() {
     setNewSku(EMPTY_SKU)
@@ -243,7 +272,34 @@ export default function SupplierProductsPage() {
         </div>
       </header>
 
-      <p className="px-4 mt-1 text-micro text-gray3">点单价数字可改 (走总厨审批) · 库存请去「库存」页操作</p>
+      <p className="px-4 mt-1 text-micro text-gray3">点商品行可改单价 / 规格 / 起订量 · 涨价走总厨审批 · 库存请去「库存」页</p>
+
+      {/* 搜索框 */}
+      {products && products.length > 0 && (
+        <div className="px-4 mt-2">
+          <div className="relative">
+            <input
+              type="search"
+              value={searchQ}
+              onChange={e => setSearchQ(e.target.value)}
+              placeholder="搜索 名称 / 规格 / 编码 (空格分隔多关键字)"
+              className="w-full bg-bg-card border border-border rounded-cta pl-9 pr-9 py-2 text-body outline-none"
+            />
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray3 text-caption">🔍</span>
+            {searchQ && (
+              <button
+                type="button"
+                onClick={() => setSearchQ('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-gray5 text-gray2 text-caption flex items-center justify-center"
+                aria-label="清除"
+              >×</button>
+            )}
+          </div>
+          {searchQ && (
+            <p className="text-micro text-gray3 mt-1">{filtered.length} / {products.length} 命中</p>
+          )}
+        </div>
+      )}
 
       {/* 上传历史 toggle */}
       {(batches?.length ?? 0) > 0 && (
@@ -312,35 +368,61 @@ export default function SupplierProductsPage() {
                     <span className="text-micro text-gray3 font-num">#{p.code}</span>
                   </div>
                   {isEdit ? (
-                    <div className="flex items-center gap-2 mt-2">
-                      <label className="text-micro text-gray3">单价</label>
-                      <span className="text-gray3">¥</span>
-                      <input
-                        type="number" step="0.01" min="0"
-                        value={draft.price}
-                        onChange={(e) => setDraft({ ...draft, price: e.target.value })}
-                        className="flex-1 bg-bg rounded-chip px-2 py-1 font-num"
-                      />
-                      <span className="text-micro text-gray3">/ {p.unit}</span>
-                      <button onClick={() => save(p)} disabled={submitting}
-                              className="px-3 py-1 bg-accent text-white rounded-cta text-button">保存</button>
-                      <button onClick={cancelEdit} className="text-gray3 px-2">×</button>
+                    <div className="mt-2 space-y-2 bg-bg/40 rounded-cta p-2 border border-border">
+                      <div className="flex items-center gap-2">
+                        <label className="text-micro text-gray3 w-12">单价</label>
+                        <span className="text-gray3 text-caption">¥</span>
+                        <input type="number" step="0.01" min="0" value={draft.price}
+                          onChange={e => setDraft({ ...draft, price: e.target.value })}
+                          className="flex-1 bg-white rounded-chip px-2 py-1 font-num border border-border" />
+                        <span className="text-micro text-gray3">/ {p.unit}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-micro text-gray3 w-12">规格</label>
+                        <input type="text" value={draft.spec} maxLength={80}
+                          onChange={e => setDraft({ ...draft, spec: e.target.value })}
+                          placeholder="如 980ml/瓶 · 5kg/件"
+                          className="flex-1 bg-white rounded-chip px-2 py-1 text-caption border border-border" />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-micro text-gray3 w-12">起订</label>
+                        <input type="number" step="0.01" min="0.01" value={draft.moq}
+                          onChange={e => setDraft({ ...draft, moq: e.target.value })}
+                          className="w-24 bg-white rounded-chip px-2 py-1 font-num border border-border text-right" />
+                        <span className="text-micro text-gray3">{p.unit}</span>
+                      </div>
+                      <div className="flex items-center justify-end gap-2 pt-1">
+                        <button onClick={cancelEdit} className="px-3 py-1 text-gray3 text-button">取消</button>
+                        <button onClick={() => save(p)} disabled={submitting}
+                                className="px-4 py-1 bg-accent text-white rounded-cta text-button">保存</button>
+                      </div>
                     </div>
                   ) : (
-                    <div className="flex items-center gap-3 text-caption mt-1">
-                      <button onClick={() => startEdit(p)} className="text-gray2">
-                        单价 <span className="font-num text-ink">¥{Number(p.price).toFixed(2)}</span> / {p.unit}
-                      </button>
-                      {p.status === 'ENABLED' && (
-                        <button onClick={() => toggleStatus(p)} className="ml-auto text-caption text-accent">停售</button>
-                      )}
-                      {p.status === 'DISABLED' && (
-                        <button onClick={() => toggleStatus(p)} className="ml-auto text-caption text-accent">恢复</button>
-                      )}
-                      {(p.status === 'PENDING_APPROVAL' || p.status === 'PENDING_DISABLE') && (
-                        <span className="ml-auto text-caption text-amber-fg">总厨审批中…</span>
-                      )}
-                    </div>
+                    <button onClick={() => startEdit(p)} className="block w-full text-left mt-1">
+                      <div className="flex items-center gap-3 text-caption">
+                        <span className="text-gray2">
+                          ¥<span className="font-num text-ink">{Number(p.price).toFixed(2)}</span>
+                          <span className="text-gray3">/{p.unit}</span>
+                          {Number(p.minOrderQty || 1) > 1 && (
+                            <span className="ml-2 text-micro text-amber-fg">起订 {Number(p.minOrderQty)}</span>
+                          )}
+                        </span>
+                        {p.spec && <span className="text-micro text-gray3 truncate">· {p.spec}</span>}
+                        <span className="ml-auto flex items-center gap-2">
+                          {p.status === 'ENABLED' && (
+                            <span onClick={(e) => { e.stopPropagation(); toggleStatus(p) }}
+                                  className="text-caption text-accent cursor-pointer">停售</span>
+                          )}
+                          {p.status === 'DISABLED' && (
+                            <span onClick={(e) => { e.stopPropagation(); toggleStatus(p) }}
+                                  className="text-caption text-accent cursor-pointer">恢复</span>
+                          )}
+                          {(p.status === 'PENDING_APPROVAL' || p.status === 'PENDING_DISABLE') && (
+                            <span className="text-caption text-amber-fg">审批中…</span>
+                          )}
+                        </span>
+                      </div>
+                    </button>
                   )}
                 </li>
               )
@@ -387,9 +469,48 @@ export default function SupplierProductsPage() {
                 <input value={newSku.spec} onChange={e => setNewSku({...newSku, spec: e.target.value})}
                        placeholder="例: 24瓶*330ml/件" className={INPUT_CLS} />
               </Field>
-              <Field label="采购单位">
-                <input value={newSku.unit} onChange={e => setNewSku({...newSku, unit: e.target.value})}
-                       placeholder="件 / 箱 / kg" className={INPUT_CLS} />
+              <Field label="采购单位 *">
+                {/* 计量单位下拉 — 防止 "5kg" "2包起订" 等脏数据 */}
+                <select value={['件','箱','袋','包','瓶','罐','盒','支','个','片','双','只','份','串','台','块','kg','g','斤','升','ml','L'].includes(newSku.unit) ? newSku.unit : '__other__'}
+                        onChange={e => {
+                          if (e.target.value === '__other__') setNewSku({...newSku, unit: ''})
+                          else setNewSku({...newSku, unit: e.target.value})
+                        }}
+                        className={INPUT_CLS}>
+                  <optgroup label="按件">
+                    <option value="件">件</option>
+                    <option value="箱">箱</option>
+                    <option value="袋">袋</option>
+                    <option value="包">包</option>
+                    <option value="盒">盒</option>
+                    <option value="瓶">瓶</option>
+                    <option value="罐">罐</option>
+                    <option value="支">支</option>
+                    <option value="片">片</option>
+                    <option value="个">个</option>
+                    <option value="双">双</option>
+                    <option value="只">只</option>
+                    <option value="串">串</option>
+                    <option value="份">份</option>
+                    <option value="台">台</option>
+                    <option value="块">块</option>
+                  </optgroup>
+                  <optgroup label="按重量/体积">
+                    <option value="kg">kg</option>
+                    <option value="g">g</option>
+                    <option value="斤">斤</option>
+                    <option value="L">L</option>
+                    <option value="ml">ml</option>
+                    <option value="升">升</option>
+                  </optgroup>
+                  <option value="__other__">自定义…</option>
+                </select>
+                {/* 自定义入口 — 仅当当前不在白名单时显示输入框 */}
+                {!['件','箱','袋','包','瓶','罐','盒','支','个','片','双','只','份','串','台','块','kg','g','斤','升','ml','L'].includes(newSku.unit) && (
+                  <input value={newSku.unit} onChange={e => setNewSku({...newSku, unit: e.target.value.replace(/^\d+/, '')})}
+                         placeholder="只输干净单位, 不要数字" className={INPUT_CLS + ' mt-1'} />
+                )}
+                <p className="text-micro text-gray3 mt-0.5">⚠ 数量(如 5kg / 24瓶) 请记到「规格型号」, 起订量记到「起订量」字段</p>
               </Field>
               <Field label="金额 (¥) *">
                 <input type="number" step="0.01" min="0" value={newSku.price}
@@ -423,13 +544,8 @@ export default function SupplierProductsPage() {
               </Field>
               <Field label="起订量 (默认1)">
                 <input type="number" step="0.01" min="0.01" value={newSku.minOrderQty}
-                       onChange={e => setNewSku({...newSku, minOrderQty: e.target.value})}
+                       onChange={e => setNewSku({...newSku, minOrderQty: e.target.value, stepQty: e.target.value})}
                        placeholder="1" className={INPUT_CLS} />
-              </Field>
-              <Field label="订量步长 (默认1)">
-                <input type="number" step="0.01" min="0.01" value={newSku.stepQty}
-                       onChange={e => setNewSku({...newSku, stepQty: e.target.value})}
-                       placeholder="如 10 = 必须 10/20/30..." className={INPUT_CLS} />
               </Field>
             </div>
 

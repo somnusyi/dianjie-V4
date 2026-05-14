@@ -119,12 +119,29 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
 
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border p-3 flex gap-3">
         <button onClick={() => router.push('/v2/chef/purchase')} className="px-4 py-3 bg-white border border-border rounded-cta text-button text-gray2">返回采购</button>
+        {/* SUBMITTED 状态可撤回 (供应商接单前) */}
+        {po.status === 'SUBMITTED' && (
+          <button
+            onClick={async () => {
+              const reason = window.prompt('撤回原因 (供应商可见, 选填):') ?? ''
+              if (!confirm(`确认撤回订单 ${po.no}? 撤回后无法恢复, 需要重新下单`)) return
+              try {
+                await apiFetch(`/api/orders/${po.id}/cancel`, {
+                  method: 'PATCH', body: JSON.stringify({ reason: reason.trim() })
+                })
+                location.reload()
+              } catch (e: any) { alert(e.message || '撤回失败') }
+            }}
+            className="px-4 py-3 bg-white border border-red text-red-fg rounded-cta text-button">
+            撤回
+          </button>
+        )}
         {isPendingConfirm && (
           <button onClick={() => router.push(`/v2/chef/purchase/${po.id}/receive`)} className="flex-1 py-3 bg-ink text-white rounded-cta text-button">
             去验收
           </button>
         )}
-        {!isPendingConfirm && po.status !== 'CANCELLED' && (
+        {!isPendingConfirm && po.status !== 'CANCELLED' && po.status !== 'SUBMITTED' && (
           <button onClick={() => router.push('/v2/chef/purchase/new')} className="flex-1 py-3 bg-ink text-white rounded-cta text-button">
             再发一单
           </button>

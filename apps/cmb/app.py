@@ -18,6 +18,15 @@ import random
 from datetime import datetime, timezone, timedelta
 
 from flask import Flask, request, jsonify
+from dotenv import load_dotenv
+
+# 显式 load .env (PM2 env_file 字段非标准, Python 不自动读 .env)
+# 默认读 /app/dianjie-v4/.env (生产), 本地 dev 时读 cwd 上层的 .env
+_dotenv_path = os.getenv("CMB_ENV_FILE") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", ".env"
+)
+if os.path.exists(_dotenv_path):
+    load_dotenv(_dotenv_path, override=False)
 
 import dchelper as dchelper_module
 

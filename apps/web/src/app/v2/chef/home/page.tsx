@@ -10,8 +10,14 @@ import { Sparkline } from '@/components/v2/sparkline'
 import { UserMenu } from '@/components/v2/user-menu'
 import { useDashboard, LoadingScreen, ErrorScreen, greetingFor } from '@/components/v2/use-dashboard'
 import { apiFetch } from '@/lib/v2-auth'
+// currentIndex = 已完成步骤数 (步 < currentIndex 显示 ✓, 步 = currentIndex 高亮当前)
+// 状态=做完了某个动作 → 该动作 ✓, 下一个动作高亮
 const STATUS_TO_STEP: Record<string, number> = {
-  SUBMITTED: 0, CONFIRMED: 1, DELIVERING: 2, PENDING_CONFIRM: 3,
+  SUBMITTED: 1,        // 已发起 ✓, 接单 current
+  CONFIRMED: 2,        // 接单 ✓, 配送 current
+  DELIVERING: 3,       // 配送 ✓ (已上车在路上), 送达 current
+  PENDING_CONFIRM: 4,  // 送达 ✓, 验收 current
+  RECEIVED: 5, COMPLETED: 5,  // 全部 ✓
 }
 const STATUS_LABEL: Record<string, string> = {
   SUBMITTED: '待接单', CONFIRMED: '已接单', DELIVERING: '配送中', PENDING_CONFIRM: '已送达',
@@ -116,7 +122,7 @@ export default function ChefHomePage() {
               </div>
               <div className="text-h2 mb-2">{o.supplier?.name}</div>
               <ProgressDots
-                steps={[{label:'已发起'},{label:'接单'},{label:'配送'},{label:'送达'},{label:'验收'}]}
+                steps={[{label:'已发起'},{label:'接单'},{label:'在途'},{label:'送达'},{label:'验收'}]}
                 currentIndex={STATUS_TO_STEP[o.status] ?? 0}
               />
             </li>

@@ -11,7 +11,7 @@ import dayjs from 'dayjs'
 
 const STATUS_TO_STEP: Record<string, number> = {
   DRAFT: 0, SUBMITTED: 1, CONFIRMED: 2, DELIVERING: 3,
-  PENDING_CONFIRM: 4, RECEIVED: 4, COMPLETED: 5, CANCELLED: -1,
+  PENDING_CONFIRM: 4, RECEIVED: 5, COMPLETED: 5, CANCELLED: -1,
 }
 const STATUS_LABEL: Record<string, string> = {
   DRAFT: '草稿', SUBMITTED: '待接单', CONFIRMED: '已接单',
@@ -123,8 +123,8 @@ export default function ChefPurchasePage() {
                   </p>
                   <ProgressDots
                     steps={[
-                      { label: '已提交' }, { label: '接单' }, { label: '已发' },
-                      { label: '在途' }, { label: '验收' },
+                      { label: '已发起' }, { label: '接单' }, { label: '在途' },
+                      { label: '送达' }, { label: '验收' },
                     ]}
                     currentIndex={stepIdx}
                   />

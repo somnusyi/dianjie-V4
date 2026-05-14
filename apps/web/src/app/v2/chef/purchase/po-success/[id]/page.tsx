@@ -14,7 +14,7 @@ const STATUS_TO_STEP: Record<string, number> = {
   CONFIRMED: 2,
   DELIVERING: 3,
   PENDING_CONFIRM: 4,
-  RECEIVED: 4,
+  RECEIVED: 5,
   COMPLETED: 5,
   CANCELLED: -1,
 }
@@ -59,10 +59,10 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
         <div className="bg-white rounded-card border border-border p-4">
           <ProgressDots
             steps={[
-              { label: '已提交' },
-              { label: '供应商接单' },
-              { label: '已发货' },
+              { label: '已发起' },
+              { label: '接单' },
               { label: '在途' },
+              { label: '送达' },
               { label: '验收' },
             ]}
             currentIndex={stepIdx}

@@ -37,9 +37,14 @@ const STATUS_TONE: Record<string, 'red' | 'orange' | 'gray' | 'green'> = {
   SUBMITTED: 'red', CONFIRMED: 'orange', DELIVERING: 'orange',
   PENDING_CONFIRM: 'orange', RECEIVED: 'green', COMPLETED: 'green', CANCELED: 'gray',
 }
+// currentIndex = 已完成步骤数 (已完成 ✓, 当前 highlighted)
+// 5 步: 已发起=步0, 接单=步1, 在途=步2, 送达=步3, 门店已收=步4
 const STATUS_TO_STEP: Record<string, number> = {
-  SUBMITTED: 0, CONFIRMED: 1, DELIVERING: 2,
-  PENDING_CONFIRM: 3, RECEIVED: 4, COMPLETED: 4,
+  SUBMITTED: 1,        // 已发起 ✓ 接单 current
+  CONFIRMED: 2,        // 接单 ✓ 在途 current
+  DELIVERING: 3,       // 在途 ✓ 送达 current
+  PENDING_CONFIRM: 4,  // 送达 ✓ 已收 current
+  RECEIVED: 5, COMPLETED: 5,
 }
 
 export default function SupplierOrderDetailPage() {
@@ -252,8 +257,8 @@ export default function SupplierOrderDetailPage() {
       {/* 进度条 */}
       <div className="mx-4 mt-3 bg-white rounded-card border border-border p-4">
         <ProgressDots
-          steps={['待接单', '已接单', '配送中', '已发货', '已完成']}
-          current={step}
+          steps={['已发起', '已接单', '在途', '送达', '门店已收'].map(label => ({label}))}
+          currentIndex={step}
         />
       </div>
 

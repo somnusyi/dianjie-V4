@@ -45,11 +45,13 @@ type TxResp = {
 }
 
 type ReceiptResp = {
-  success: boolean
+  success:   boolean
   resultCode: string
   resultMsg: string
+  url?:      string         // 后端落盘后的相对 URL, 前端 window.open 即可
+  filename?: string
   checkCode?: string
-  pdfBase64?: string
+  expiresAt?: number
 }
 
 function todayYmd() {
@@ -110,7 +112,7 @@ export function BankTransactionsDrawer({
 
   async function downloadReceipt(tx: Tx) {
     if (!tx.yurRef) {
-      alert('该笔流水缺 yurRef, 无法下载回单')
+      alert('该笔流水缺 yurRef (银行未返业务参考号), 无法下载回单。入账流水通常没有 yurRef。')
       return
     }
     setDownloadingSeq(tx.sequence)
@@ -124,25 +126,60 @@ export function BankTransactionsDrawer({
           sequence: tx.sequence,
         }),
       })
-      if (!r.success || !r.pdfBase64) {
+      if (!r.success || !r.url) {
         alert(`下载失败: ${r.resultMsg || r.resultCode || '银行无返回'}`)
         return
       }
-      // base64 → Blob → 触发下载
-      const bin = atob(r.pdfBase64)
-      const bytes = new Uint8Array(bin.length)
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-      const blob = new Blob([bytes], { type: 'application/pdf' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `回单_${tx.date}_${tx.sequence}.pdf`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
+      const fullUrl = new URL(r.url, window.location.origin).toString()
+      const cap = (window as any).Capacitor
+      const platform = cap?.getPlatform?.()
+
+      // ─ Android Capacitor ─ Chrome Custom Tabs (Browser plugin)
+      //   Chrome 自带 PDF viewer 渲染 + 顶部 ⋮ 菜单分享, 关闭后回到 app 原位置
+      if (cap?.isNativePlatform?.() && platform === 'android' && cap.Plugins?.Browser) {
+        await cap.Plugins.Browser.open({ url: fullUrl })
+        return
+      }
+
+      // ─ iOS Capacitor ─ 下载到 Cache → UIActivityViewController 系统分享菜单
+      //   菜单里 PDF 缩略图直接可见, 选「存到文件」/「微信」/「邮件」/「AirDrop」一步到位
+      if (cap?.isNativePlatform?.() && platform === 'ios'
+          && cap.Plugins?.Share && cap.Plugins?.Filesystem) {
+        const resp = await fetch(fullUrl, { credentials: 'include' })
+        if (!resp.ok) throw new Error(`PDF 加载失败 HTTP ${resp.status}`)
+        const blob = await resp.blob()
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve((reader.result as string).split(',')[1])
+          reader.onerror = () => reject(reader.error)
+          reader.readAsDataURL(blob)
+        })
+        const fname = `招行回单_${tx.date}_${tx.sequence}.pdf`
+        await cap.Plugins.Filesystem.writeFile({
+          path: fname,
+          data: base64,
+          directory: 'CACHE',
+        })
+        const { uri } = await cap.Plugins.Filesystem.getUri({
+          path: fname,
+          directory: 'CACHE',
+        })
+        await cap.Plugins.Share.share({
+          title: '招行回单',
+          url: uri,
+          dialogTitle: '分享回单',
+        })
+        return
+      }
+
+      // ─ 桌面 / 普通浏览器 ─ window.open 内嵌 PDF preview
+      const win = window.open(fullUrl, '_blank')
+      if (!win) window.location.href = fullUrl
     } catch (e: any) {
-      alert(e?.message || '下载失败')
+      // 用户在系统分享菜单里点取消会抛 error, 静默处理 (不弹错误 alert)
+      const msg = String(e?.message || e || '').toLowerCase()
+      if (msg.includes('cancel') || msg.includes('canceled') || msg.includes('cancelled')) return
+      alert(e?.message || '操作失败')
     } finally {
       setDownloadingSeq(null)
     }

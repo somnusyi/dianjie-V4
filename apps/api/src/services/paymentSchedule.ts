@@ -153,6 +153,23 @@ export async function executeBankPayment(scheduleId: string) {
   const store    = schedule.receipt.store
 
   // ── 前置检查 ──────────────────────────────────────────
+  // test tenant 演示环境保护: 禁止发起真实银行转账 (cmb 共享同一个生产 .env 配置,
+  // 不挡的话 test 老板手滑点付款会真从公司账户扣钱)
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: schedule.tenantId },
+    select: { slug: true },
+  })
+  if (tenant?.slug === 'test') {
+    await prisma.paymentSchedule.update({
+      where: { id: scheduleId },
+      data: {
+        status: 'FAILED',
+        failReason: 'test tenant 演示环境 · 已阻止真实银行转账 (mock 成功不会扣钱)',
+      },
+    })
+    throw new Error('test tenant 演示环境禁止真实银行转账')
+  }
+
   if (!supplier.bankAccount) {
     throw new Error(`供应商「${supplier.name}」未配置收款账户，请先完善供应商信息`)
   }

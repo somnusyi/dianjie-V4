@@ -39,6 +39,7 @@ export default function DisputesPage() {
   const [deduct, setDeduct] = useState('')
   const [note, setNote] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [zoomImg, setZoomImg] = useState<string | null>(null)
 
   function load() {
     // 拉两批: 1) 供应商拒绝的争议(REJECTED) 2) 店内报损待总厨审(PENDING + isManual)
@@ -155,10 +156,11 @@ export default function DisputesPage() {
             </ul>
             {(c.evidenceImages?.length ?? 0) > 0 && (
               <div className="mt-2 flex gap-2 overflow-x-auto">
-                {c.evidenceImages!.slice(0, 4).map((u, i) => (
-                  <img key={i} src={u} alt="" className="h-20 w-20 object-cover rounded border border-border shrink-0" />
+                {c.evidenceImages!.map((u, i) => (
+                  <button key={i} type="button" onClick={() => setZoomImg(u)} className="shrink-0">
+                    <img src={u} alt="" className="h-20 w-20 object-cover rounded border border-border" />
+                  </button>
                 ))}
-                {c.evidenceImages!.length > 4 && <span className="text-micro text-gray3 self-center">+{c.evidenceImages!.length - 4}</span>}
               </div>
             )}
             <button onClick={() => open(c)}
@@ -237,6 +239,16 @@ export default function DisputesPage() {
             )}
             <p className="text-micro text-gray3 mt-2">{picked.isManual ? '⚠ 通过 = 计入店内损耗 P&L · 驳回 = 不记录, 让店员核对实物' : '⚠ 提交后双方收到通知, 应付款 = 实收金额 - 扣减金额'}</p>
           </div>
+        </div>
+      )}
+
+      {/* 图片全屏 lightbox */}
+      {zoomImg && (
+        <div className="fixed inset-0 z-50 bg-ink/90 flex items-center justify-center p-4"
+             onClick={() => setZoomImg(null)}>
+          <img src={zoomImg} alt="" className="max-w-full max-h-full object-contain rounded" />
+          <button onClick={() => setZoomImg(null)}
+                  className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/20 text-white text-h2 flex items-center justify-center">×</button>
         </div>
       )}
     </div>

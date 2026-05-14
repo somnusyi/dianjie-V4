@@ -23,6 +23,8 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
   const router = useRouter()
   const [po, setPo] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
+  // 图片放大: target="_blank" 在 WebView 不工作, 用全屏 lightbox
+  const [zoomImg, setZoomImg] = useState<string | null>(null)
   useEffect(() => {
     apiFetch(`/api/orders/${params.id}`).then(setPo).catch(e => setError(String(e?.message || e)))
   }, [params.id])
@@ -104,13 +106,40 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
         <Section title="报损">
           <ul className="bg-white rounded-card border border-border divide-y divide-border">
             {po.lossClaims.map((lc: any) => (
-              <li key={lc.id} className="px-3 py-2.5">
+              <li key={lc.id} className="px-3 py-3">
                 <div className="flex items-center justify-between mb-1">
-                  <Chip tone={lc.status === 'APPROVED' || lc.status === 'AUTO_APPROVED' ? 'green' : lc.status === 'REJECTED' ? 'red' : 'orange'}>
-                    {lossLabel(lc.status)}
-                  </Chip>
+                  <div className="flex items-center gap-2">
+                    <Chip tone={lc.status === 'APPROVED' || lc.status === 'AUTO_APPROVED' ? 'green' : lc.status === 'REJECTED' ? 'red' : 'orange'}>
+                      {lossLabel(lc.status)}
+                    </Chip>
+                    <span className="text-micro text-gray3 font-num">{lc.no}</span>
+                  </div>
                   <span className="font-num text-body text-red-fg">−¥{Number(lc.totalLossAmount).toFixed(2)}</span>
                 </div>
+                {lc.description && <p className="text-caption text-gray2 mt-1">{lc.description}</p>}
+                {(lc.items?.length ?? 0) > 0 && (
+                  <ul className="mt-2 text-micro text-gray2 space-y-0.5">
+                    {lc.items.map((it: any, i: number) => (
+                      <li key={i}>· {it.product?.name || ''} 损 <b className="font-num text-red-fg">{it.lossQty}</b> = ¥{Number(it.lossAmount).toFixed(2)}</li>
+                    ))}
+                  </ul>
+                )}
+                {/* 证据照片 — 点击全屏放大 */}
+                {(lc.evidenceImages?.length ?? 0) > 0 && (
+                  <>
+                    <div className="text-micro text-gray3 mt-2 mb-1">证据 {lc.evidenceImages.length} 张 · 点击放大</div>
+                    <div className="flex gap-2 overflow-x-auto">
+                      {lc.evidenceImages.map((url: string, i: number) => (
+                        <button key={i} type="button" onClick={() => setZoomImg(url)} className="shrink-0">
+                          <img src={url} alt="" className="w-20 h-20 object-cover rounded border border-border" />
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {lc.handlerNote && (
+                  <p className="text-micro text-amber-fg mt-2">供应商: {lc.handlerNote}</p>
+                )}
               </li>
             ))}
           </ul>
@@ -147,6 +176,16 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
           </button>
         )}
       </div>
+
+      {/* 图片全屏 lightbox */}
+      {zoomImg && (
+        <div className="fixed inset-0 z-50 bg-ink/90 flex items-center justify-center p-4"
+             onClick={() => setZoomImg(null)}>
+          <img src={zoomImg} alt="" className="max-w-full max-h-full object-contain rounded" />
+          <button onClick={() => setZoomImg(null)}
+                  className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/20 text-white text-h2 flex items-center justify-center">×</button>
+        </div>
+      )}
     </div>
   )
 }

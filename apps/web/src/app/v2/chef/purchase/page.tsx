@@ -44,6 +44,9 @@ export default function ChefPurchasePage() {
   const toReceive = allOrders.filter(o => o.status === 'PENDING_CONFIRM')
   const inProgress = allOrders.filter(o => ['SUBMITTED','CONFIRMED','DELIVERING'].includes(o.status))
   const inTransitTotal = inProgress.reduce((s, o) => s + Number(o.totalAmount || 0), 0)
+  const history = allOrders
+    .filter(o => ['COMPLETED', 'RECEIVED', 'CANCELLED'].includes(o.status))
+    .slice(0, 20)   // 最近 20 单
 
   return (
     <div className="min-h-screen bg-bg pb-20">
@@ -133,10 +136,32 @@ export default function ChefPurchasePage() {
             )
           })}
         </ul>
-        {monthOrders.length > inProgress.length + toReceive.length && (
-          <a href="/v2/chef/inventory" className="block text-center w-full mt-2 py-3 bg-white border border-border rounded-cta text-button text-gray2">查看本月全部 {monthOrders.length} 单 ›</a>
-        )}
       </Section>
+
+      {/* 历史 (已完成 / 已取消) */}
+      {history.length > 0 && (
+        <Section title="历史订单" right={`最近 ${history.length} 单`}>
+          <ul className="bg-white rounded-card border border-border divide-y divide-border">
+            {history.map(o => (
+              <li key={o.id}>
+                <a href={`/v2/chef/purchase/po-success/${o.id}`} className="block px-3 py-2.5">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <Chip tone={o.status === 'CANCELLED' ? 'gray' : 'green'}>
+                      {STATUS_LABEL[o.status] || o.status}
+                    </Chip>
+                    <span className="text-micro text-gray3 ml-auto">{dayjs(o.createdAt).format('MM/DD')}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-body truncate">{o.supplier?.name}</span>
+                    <span className="font-num text-body">¥{Number(o.totalAmount).toLocaleString()}</span>
+                  </div>
+                  <p className="text-micro text-gray3 truncate">#{o.no} · {o.items?.length ?? 0} 项</p>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
 
       <BottomNav
         tabs={[

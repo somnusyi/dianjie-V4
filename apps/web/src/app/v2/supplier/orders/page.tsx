@@ -33,7 +33,8 @@ type LossClaim = {
   id: string; no: string; status: string
   totalLossAmount: string; description: string; createdAt: string
   store: { name: string }
-  purchaseOrder: { no: string; totalAmount: string }
+  purchaseOrder: { id: string; no: string; totalAmount?: string }
+  purchaseOrderId?: string
   items: { product: { name: string; unit: string }; orderedQty: string; receivedQty: string; lossQty: string; lossAmount: string }[]
 }
 
@@ -197,20 +198,25 @@ export default function SupplierOrdersPage() {
           )}
           {pendingClaims.map(c => (
             <li key={c.id} className="relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full before:bg-red">
-              <div className="flex items-center gap-2 mb-1">
-                <Chip tone="red">报损待处理</Chip>
-                <span className="text-micro text-gray3 ml-auto">{timeAgo(c.createdAt)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-h2">{c.store.name} <span className="text-micro text-gray3 font-num">#{c.purchaseOrder.no}</span></span>
-                <span className="font-num text-h2 text-red-fg">−¥{Number(c.totalLossAmount).toFixed(2)}</span>
-              </div>
-              <p className="text-caption text-gray2 mt-0.5">{c.description}</p>
-              <ul className="mt-2 text-micro text-gray2 space-y-0.5">
-                {(c.items || []).map((it, idx) => (
-                  <li key={idx}>· {it.product?.name}: 下 {it.orderedQty} 收 {it.receivedQty}{it.product?.unit || ''} · 损 ¥{Number(it.lossAmount).toFixed(2)}</li>
-                ))}
-              </ul>
+              {/* 信息区可点击进订单详情 (含证据图等) */}
+              <a href={`/v2/supplier/orders/${c.purchaseOrder.id || c.purchaseOrderId}`} className="block">
+                <div className="flex items-center gap-2 mb-1">
+                  <Chip tone="red">报损待处理</Chip>
+                  <span className="text-micro text-gray3 ml-auto">{timeAgo(c.createdAt)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-h2">{c.store.name} <span className="text-micro text-gray3 font-num">#{c.purchaseOrder.no}</span></span>
+                  <span className="font-num text-h2 text-red-fg">−¥{Number(c.totalLossAmount).toFixed(2)}</span>
+                </div>
+                <p className="text-caption text-gray2 mt-0.5">{c.description}</p>
+                <ul className="mt-2 text-micro text-gray2 space-y-0.5">
+                  {(c.items || []).map((it, idx) => (
+                    <li key={idx}>· {it.product?.name}: 下 {it.orderedQty} 收 {it.receivedQty}{it.product?.unit || ''} · 损 ¥{Number(it.lossAmount).toFixed(2)}</li>
+                  ))}
+                </ul>
+                <p className="text-micro text-amber-fg mt-2">查看证据图 / 完整明细 ›</p>
+              </a>
+              {/* 操作按钮 — 直接处理, 不需进详情 */}
               <div className="grid grid-cols-2 gap-2 mt-3">
                 <button
                   onClick={() => handleClaim(c, 'reject')}

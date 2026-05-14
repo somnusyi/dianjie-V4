@@ -24,7 +24,14 @@ type Order = {
   createdBy: { id: string; name: string }
   shippedBy: { id: string; name: string } | null
   items: { id: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string; receivedQty: string | null; product?: { name: string; spec: string | null; unit: string; code: string } }[]
-  lossClaims?: { id: string; no: string; status: string; totalLossAmount: string; description: string; items: { product: { name: string }; lossQty: string; lossAmount: string }[] }[]
+  lossClaims?: {
+    id: string; no: string; status: string
+    totalLossAmount: string; description: string
+    evidenceImages?: string[] | null
+    handlerNote?: string | null
+    createdAt?: string
+    items: { product: { name: string; unit?: string }; lossQty: string; lossAmount: string }[]
+  }[]
   receipt?: { id: string; no: string } | null
 }
 
@@ -57,6 +64,13 @@ export default function SupplierOrderDetailPage() {
   const [shipNote, setShipNote] = useState('')
   // 发货时可调整每行的实际发货量 (称重 / 缺货). key=itemId, value=shippedQty
   const [shipQty, setShipQty] = useState<Record<string, number>>({})
+  // 送达备注 — 不用 window.prompt (WebView 禁用)
+  const [deliverNote, setDeliverNote] = useState('')
+  // 报损拒绝弹层 (state-driven, 替代 window.prompt)
+  const [rejectingClaim, setRejectingClaim] = useState<{ id: string; no: string; amount: string } | null>(null)
+  const [rejectNote, setRejectNote] = useState('')
+  // 图片全屏放大 (target="_blank" 在 WebView 不工作)
+  const [zoomImg, setZoomImg] = useState<string | null>(null)
   // 追加物品 picker
   const [addOpen, setAddOpen] = useState(false)
   const [catalog, setCatalog] = useState<{ id: string; name: string; unit: string; price: string; spec?: string | null; category?: string; status: string }[]>([])
@@ -295,24 +309,83 @@ export default function SupplierOrderDetailPage() {
         </ul>
       </div>
 
-      {/* 报损 */}
+      {/* 报损 — 显示完整明细 + 证据图 + 处理按钮(供应商) */}
       {(order.lossClaims?.length ?? 0) > 0 && (
         <div className="mx-4 mt-3 bg-red-bg/40 rounded-card border border-red/30 p-3">
           <div className="text-h2 text-red-fg mb-2">⚠ 报损 {order.lossClaims!.length} 条</div>
-          {order.lossClaims!.map(c => (
-            <div key={c.id} className="text-caption text-gray2 border-t border-red/20 pt-2 mt-2 first:border-0 first:mt-0 first:pt-0">
-              <div className="flex justify-between">
-                <span>#{c.no} <Chip tone={c.status === 'AGREED' ? 'green' : c.status === 'DISPUTED' ? 'orange' : 'red'}>{c.status}</Chip></span>
-                <span className="font-num text-red-fg">¥{Number(c.totalLossAmount).toLocaleString()}</span>
+          {order.lossClaims!.map(c => {
+            const statusLabel = ({
+              PENDING: '待处理', APPROVED: '已同意', AUTO_APPROVED: '24h 自动同意',
+              REJECTED: '已拒绝', RESOLVED: '总厨已仲裁', NEGOTIATING: '协商中',
+            } as Record<string, string>)[c.status] || c.status
+            const statusTone = c.status === 'APPROVED' || c.status === 'AUTO_APPROVED' || c.status === 'RESOLVED' ? 'green'
+                             : c.status === 'REJECTED' ? 'red' : 'orange'
+            return (
+              <div key={c.id} className="bg-white rounded-cta p-3 mt-2 first:mt-0 border border-red/20">
+                <div className="flex items-baseline gap-2 mb-1">
+                  <Chip tone={statusTone as any}>{statusLabel}</Chip>
+                  <span className="text-caption text-gray3 font-num">#{c.no}</span>
+                  <span className="ml-auto font-num text-h2 text-red-fg">−¥{Number(c.totalLossAmount).toLocaleString()}</span>
+                </div>
+                {c.description && <div className="text-caption text-gray2 mt-1">{c.description}</div>}
+                <ul className="mt-2 text-micro text-gray2 space-y-0.5">
+                  {c.items.map((ci, i) => (
+                    <li key={i}>· {ci.product.name} 短缺 <b className="font-num text-red-fg">{ci.lossQty}{ci.product.unit || ''}</b> = ¥{Number(ci.lossAmount).toLocaleString()}</li>
+                  ))}
+                </ul>
+                {/* 证据图 */}
+                {(c.evidenceImages?.length ?? 0) > 0 && (
+                  <>
+                    <div className="text-micro text-gray3 mt-2 mb-1">证据 {c.evidenceImages!.length} 张 · 点击放大</div>
+                    <div className="flex gap-2 overflow-x-auto">
+                      {c.evidenceImages!.map((url, i) => (
+                        <button key={i} type="button" onClick={() => setZoomImg(url)} className="shrink-0">
+                          <img src={url} alt="" className="w-20 h-20 object-cover rounded border border-border" />
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {c.handlerNote && (
+                  <p className="text-micro text-amber-fg mt-2">已处理: {c.handlerNote}</p>
+                )}
+                {/* 处理按钮 — 仅 PENDING 状态可操作 */}
+                {c.status === 'PENDING' && (
+                  <div className="flex gap-2 mt-3 pt-2 border-t border-border">
+                    <button
+                      onClick={() => {
+                        setRejectingClaim({ id: c.id, no: c.no, amount: c.totalLossAmount })
+                        setRejectNote('')
+                      }}
+                      className="flex-1 py-2 border border-red text-red-fg rounded-cta text-button">
+                      拒绝 (送总厨仲裁)
+                    </button>
+                    <button
+                      onClick={() => {
+                        openConfirm({
+                          title: `同意报损 ¥${Number(c.totalLossAmount).toFixed(2)}?`,
+                          body: `通过后系统自动从应付账期里扣减, 你少收 ¥${Number(c.totalLossAmount).toFixed(2)}`,
+                          confirmLabel: '同意',
+                          tone: 'primary',
+                          onConfirm: async () => {
+                            try {
+                              await apiFetch(`/api/loss-claims/${c.id}/handle`, {
+                                method: 'PATCH',
+                                body: JSON.stringify({ action: 'approve' }),
+                              })
+                              load()
+                            } catch (e: any) { alert(e.message || '操作失败'); throw e }
+                          },
+                        })
+                      }}
+                      className="flex-1 py-2 bg-ink text-white rounded-cta text-button">
+                      同意 (扣账期)
+                    </button>
+                  </div>
+                )}
               </div>
-              {c.description && <div className="text-micro text-gray3 mt-1">{c.description}</div>}
-              <ul className="mt-1 text-micro text-gray3">
-                {c.items.map((ci, i) => (
-                  <li key={i}>· {ci.product.name} 损 <b className="font-num text-red-fg">{ci.lossQty}</b> = ¥{Number(ci.lossAmount).toLocaleString()}</li>
-                ))}
-              </ul>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
@@ -405,27 +478,45 @@ export default function SupplierOrderDetailPage() {
           </button>
         </div>
       )}
-      {/* DELIVERING (在途) — 司机到门店后点「确认送达」启动 24h 倒计时 */}
+      {/* DELIVERING (在途) — 司机到门店后填备注 + 点「确认送达」启动 24h 倒计时 */}
       {order.status === 'DELIVERING' && (
-        <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border p-4 grid grid-cols-1 gap-2"
-             style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom))' }}>
-          <button
-            onClick={async () => {
-              const note = window.prompt('送达备注 (选填, 比如 司机姓名 / 签收人):') ?? ''
-              if (!confirm(`确认 ${order.no} 已送达门店?\n点击后系统会通知门店验收, 24h 内未确认将自动收货.`)) return
-              setSubmitting(true)
-              try {
-                await apiFetch(`/api/orders/${order.id}/deliver`, { method: 'PATCH', body: JSON.stringify({ note: note.trim() || undefined }) })
-                load()
-              } catch (e: any) { setError(e.message || '提交失败') }
-              finally { setSubmitting(false) }
-            }}
-            disabled={submitting}
-            className="py-3 bg-amber text-white rounded-cta text-button disabled:opacity-40">
-            {submitting ? '提交中…' : '✓ 确认送达 (司机到店时点)'}
-          </button>
-          <p className="text-micro text-gray3 text-center">在途状态 — 货还没送到门店, 不会自动收货</p>
-        </div>
+        <>
+          {/* 送达备注输入 — 在固定底部 bar 上方 */}
+          <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
+            <label className="text-micro text-gray3 block mb-1">送达备注 (选填, 比如 司机姓名 / 签收人)</label>
+            <input value={deliverNote} onChange={e => setDeliverNote(e.target.value)} maxLength={120}
+              className="w-full bg-bg border border-border rounded p-2 text-body"
+              placeholder="如: 司机张三 18800001234 / 签收人 林城" />
+          </div>
+          <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border p-4 grid grid-cols-1 gap-2"
+               style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom))' }}>
+            <button
+              onClick={() => {
+                openConfirm({
+                  title: `确认 ${order.no} 已送达门店?`,
+                  body: `提交后系统会通知门店验收, 24h 内未确认将自动收货${deliverNote ? `\n\n备注: ${deliverNote}` : ''}`,
+                  confirmLabel: '确认送达',
+                  tone: 'primary',
+                  onConfirm: async () => {
+                    setSubmitting(true)
+                    try {
+                      await apiFetch(`/api/orders/${order.id}/deliver`, {
+                        method: 'PATCH',
+                        body: JSON.stringify({ note: deliverNote.trim() || undefined }),
+                      })
+                      load()
+                    } catch (e: any) { setError(e.message || '提交失败'); throw e }
+                    finally { setSubmitting(false) }
+                  },
+                })
+              }}
+              disabled={submitting}
+              className="py-3 bg-amber text-white rounded-cta text-button disabled:opacity-40">
+              {submitting ? '提交中…' : '✓ 确认送达 (司机到店时点)'}
+            </button>
+            <p className="text-micro text-gray3 text-center">在途状态 — 货还没送到门店, 不会自动收货</p>
+          </div>
+        </>
       )}
 
       {/* 追加物品 抽屉 */}
@@ -502,6 +593,58 @@ export default function SupplierOrderDetailPage() {
           </div>
         )
       })()}
+
+      {/* 报损拒绝弹层 — 替代 window.prompt (WebView 友好) */}
+      {rejectingClaim && (
+        <div className="fixed inset-0 z-50 bg-ink/60 flex items-end justify-center"
+             onClick={() => setRejectingClaim(null)}>
+          <div className="bg-white rounded-t-card w-full max-w-md p-4"
+               onClick={e => e.stopPropagation()}
+               style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom))' }}>
+            <div className="w-10 h-1 bg-border rounded-full mx-auto mb-3" />
+            <h3 className="text-h2">拒绝报损 #{rejectingClaim.no}</h3>
+            <p className="text-caption text-gray2 mt-1">
+              报损金额 ¥{Number(rejectingClaim.amount).toFixed(2)} · 拒绝后送总厨仲裁
+            </p>
+            <label className="block mt-4 text-micro text-gray3 mb-1">拒绝理由 *</label>
+            <textarea value={rejectNote} onChange={e => setRejectNote(e.target.value)}
+                      rows={3} maxLength={200}
+                      placeholder="如: 司机签收时数量没问题, 门店签收人也确认了, 不应算我方报损"
+                      className="w-full bg-bg border border-border rounded-cta p-2 text-body" />
+            <div className="flex gap-2 mt-4">
+              <button onClick={() => setRejectingClaim(null)}
+                      className="px-4 py-2 border border-border rounded-cta text-button text-gray2">取消</button>
+              <button
+                disabled={!rejectNote.trim() || submitting}
+                onClick={async () => {
+                  setSubmitting(true)
+                  try {
+                    await apiFetch(`/api/loss-claims/${rejectingClaim.id}/handle`, {
+                      method: 'PATCH',
+                      body: JSON.stringify({ action: 'reject', note: rejectNote.trim() }),
+                    })
+                    setRejectingClaim(null)
+                    load()
+                  } catch (e: any) { alert(e.message || '操作失败') }
+                  finally { setSubmitting(false) }
+                }}
+                className="flex-1 py-2 bg-red text-white rounded-cta text-button disabled:opacity-40">
+                {submitting ? '提交中…' : '确认拒绝'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 图片全屏 lightbox */}
+      {zoomImg && (
+        <div className="fixed inset-0 z-50 bg-ink/90 flex items-center justify-center p-4"
+             onClick={() => setZoomImg(null)}>
+          <img src={zoomImg} alt="" className="max-w-full max-h-full object-contain rounded" />
+          <button onClick={() => setZoomImg(null)}
+                  className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/20 text-white text-h2 flex items-center justify-center">×</button>
+        </div>
+      )}
 
       <ConfirmSheet {...confirmState} />
     </div>

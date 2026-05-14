@@ -4,7 +4,7 @@
  */
 'use client'
 import { useEffect, useState } from 'react'
-import { BottomNav, ProgressDots } from '@/components/v2'
+import { BottomNav, ProgressDots, Chip } from '@/components/v2'
 import { GlanceStrip } from '@/components/v2/glance-strip'
 import { EmptyState, SkeletonCard, FriendlyError } from '@/components/v2/skeleton'
 import { apiFetch } from '@/lib/v2-auth'
@@ -37,10 +37,11 @@ type OrderRow = {
 }
 
 const STATUS_STEPS = [
-  { label: '已下单' }, { label: '供应商接单' }, { label: '配送中' }, { label: '已送达' }, { label: '验收' },
+  { label: '已发起' }, { label: '接单' }, { label: '在途' }, { label: '送达' }, { label: '验收' },
 ]
+// currentIndex = 已完成步骤数 (步 < currentIndex ✓, 步 = currentIndex highlighted)
 const STATUS_TO_IDX: Record<string, number> = {
-  SUBMITTED: 0, CONFIRMED: 1, SHIPPED: 2, PENDING_CONFIRM: 3, RECEIVED: 4,
+  SUBMITTED: 1, CONFIRMED: 2, DELIVERING: 3, PENDING_CONFIRM: 4, RECEIVED: 5, COMPLETED: 5,
 }
 
 export default function ChefInventoryPage() {
@@ -48,6 +49,7 @@ export default function ChefInventoryPage() {
   const [inv, setInv] = useState<InventoryRow[] | null>(null)
   const [orders, setOrders] = useState<OrderRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [expandedCat, setExpandedCat] = useState<string | null>(null)
 
   useEffect(() => {
     Promise.all([
@@ -147,16 +149,41 @@ export default function ChefInventoryPage() {
       {inv && inv.length > 0 && (
         <Section title="库存分类" right={`${totalSku} 项 · ¥${Math.round(totalValue).toLocaleString()}`}>
           <ul className="bg-white rounded-card border border-border divide-y divide-border">
-            {categories.map(c => (
-              <li key={c.label} className="px-3 py-3 flex items-center gap-3">
-                <span className="w-9 h-9 rounded-md bg-bg flex items-center justify-center font-num text-button">{c.label.slice(0, 1)}</span>
-                <div className="flex-1">
-                  <div className="text-h2">{c.label}</div>
-                  <div className="text-micro text-gray3">{c.count} 项 · ¥{Math.round(c.value).toLocaleString()}</div>
-                </div>
-                <span className="text-gray3">›</span>
-              </li>
-            ))}
+            {categories.map(c => {
+              const open = expandedCat === c.label
+              const items = (inv || []).filter(p => (p.category || '其他') === c.label)
+              return (
+                <li key={c.label}>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedCat(open ? null : c.label)}
+                    className="w-full px-3 py-3 flex items-center gap-3 text-left hover:bg-bg-warm">
+                    <span className="w-9 h-9 rounded-md bg-bg flex items-center justify-center font-num text-button">{c.label.slice(0, 1)}</span>
+                    <div className="flex-1">
+                      <div className="text-h2">{c.label}</div>
+                      <div className="text-micro text-gray3">{c.count} 项 · ¥{Math.round(c.value).toLocaleString()}</div>
+                    </div>
+                    <span className="text-gray3">{open ? '▾' : '›'}</span>
+                  </button>
+                  {open && items.length > 0 && (
+                    <ul className="bg-bg/50 border-t border-border divide-y divide-border">
+                      {items.map(p => (
+                        <li key={p.id} className="px-3 py-2 flex items-center gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="text-body truncate">{p.name}</div>
+                            <div className="text-micro text-gray3 font-num">¥{Number(p.price).toFixed(2)} / {p.unit}</div>
+                          </div>
+                          <div className="text-right">
+                            <div className="font-num text-body">{Number(p.stock)} {p.unit}</div>
+                            {p.isLowStock && <Chip tone="red">低库存</Chip>}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              )
+            })}
           </ul>
         </Section>
       )}

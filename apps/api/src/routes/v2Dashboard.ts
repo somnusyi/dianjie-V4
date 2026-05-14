@@ -258,8 +258,9 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
     }
 
     if (role === 'KITCHEN_LEAD') {
-      // 厨师长 = 单店厨房视角: 看食材消耗 / 待验收 / 库存预警, 不看营收
-      const [pendingReceive, monthReceiptAgg, monthLossAgg, lowStockCount] = await Promise.all([
+      // 厨师长 = 单店厨房视角: 看食材入库 / 消耗 / 待验收 / 报损
+      // 注: "消耗" = StockConsumption (实际厨房用掉的); "入库" = Receipt (从供应商收到的)
+      const [pendingReceive, monthReceiptAgg, monthConsumeAgg, monthLossAgg] = await Promise.all([
         prisma.purchaseOrder.count({
           where: { storeId: storeId!, status: 'PENDING_CONFIRM' },
         }).catch(() => 0),
@@ -267,22 +268,30 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
           _sum: { totalAmount: true },
           where: { storeId: storeId!, createdAt: { gte: monthStart, lte: monthEnd } },
         }).catch(() => ({ _sum: { totalAmount: 0 } as any })),
+        // 实际消耗 = StockConsumption × 每个 product 的当时单价 (粗算用 product.price)
+        prisma.stockConsumption.findMany({
+          where: { tenantId, storeId: storeId!, date: { gte: monthStart, lte: monthEnd } },
+          select: { quantity: true, product: { select: { price: true } } },
+        }).then(arr => arr.reduce((s, c) => s + Number(c.quantity) * Number(c.product?.price || 0), 0))
+          .catch(() => 0),
         prisma.lossClaim.aggregate({
           _sum: { totalLossAmount: true },
           where: { storeId: storeId!, createdAt: { gte: monthStart, lte: monthEnd },
                    status: { in: ['APPROVED', 'AUTO_APPROVED', 'RESOLVED'] } },
         }).catch(() => ({ _sum: { totalLossAmount: 0 } as any })),
-        // 低库存粗算: 本店有过收货的 SKU 中, 累计入-出 < minStock 的数量
-        // 精算放 inventory api, 此处 0 占位由前端补
-        Promise.resolve(0),
       ])
-      const monthFood = Number(monthReceiptAgg._sum.totalAmount || 0)
-      const monthLoss = Number(monthLossAgg._sum.totalLossAmount || 0)
-      const lossRate = monthFood > 0 ? (monthLoss / monthFood) * 100 : 0
+      const monthIn       = Number(monthReceiptAgg._sum.totalAmount || 0)   // 入库
+      const monthConsume  = Number(monthConsumeAgg)                          // 真正消耗
+      const monthLoss     = Number(monthLossAgg._sum.totalLossAmount || 0)
+      const lossRate      = monthIn > 0 ? (monthLoss / monthIn) * 100 : 0
       hero = {
-        label: '本月食材消耗',
-        value: fmtMoney(monthFood),
-        meta: pendingReceive > 0 ? `⚠ 有 ${pendingReceive} 单待验收` : '今日无待验收',
+        label: '本月食材入库',
+        value: fmtMoney(monthIn),
+        meta: pendingReceive > 0
+          ? `⚠ 有 ${pendingReceive} 单待验收`
+          : monthConsume > 0
+            ? `已消耗 ${fmtMoney(monthConsume)}`
+            : '入库后请录用量',
         stats: [
           { label: '待验收', value: String(pendingReceive), tone: pendingReceive > 0 ? 'orange' as const : 'default' as const },
           { label: '本月报损', value: fmtMoney(monthLoss), tone: lossRate > 3 ? 'red' as const : 'default' as const },

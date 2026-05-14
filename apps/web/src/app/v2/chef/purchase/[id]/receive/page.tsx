@@ -194,7 +194,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
 
       {/* 报损证据照片 — 有报损时强制必传 */}
       {hasLoss && (
-        <Section title="报损证据 *" right={`${evidence.length} 张${evidence.length === 0 ? ' · 至少 1 张' : ''}`} rightTone={evidence.length === 0 ? 'red' : undefined}>
+        <Section id="evidence-section" title="报损证据 *" right={`${evidence.length} 张${evidence.length === 0 ? ' · 至少 1 张' : ''}`} rightTone={evidence.length === 0 ? 'red' : undefined}>
           <div className={`rounded-card border p-3 ${evidence.length === 0 ? 'bg-red-bg/30 border-red/40' : 'bg-white border-border'}`}>
             <p className={`text-micro mb-2 ${evidence.length === 0 ? 'text-red-fg' : 'text-gray3'}`}>
               {evidence.length === 0
@@ -228,13 +228,25 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border p-3 flex gap-3">
         <button type="button" onClick={() => router.back()} className="px-4 py-3 bg-white border border-border rounded-cta text-button text-gray2">取消</button>
         <button
-          onClick={submit}
-          disabled={submitting || (hasLoss && evidence.length === 0)}
-          className="flex-1 py-3 bg-ink text-white rounded-cta text-button disabled:opacity-40"
+          onClick={() => {
+            // 没传证据时点按钮 → 自动滚到上传区, 不直接 disabled (用户摸不着头脑)
+            if (hasLoss && evidence.length === 0) {
+              const el = document.getElementById('evidence-section')
+              if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+              return
+            }
+            submit()
+          }}
+          disabled={submitting}
+          className={`flex-1 py-3 rounded-cta text-button transition ${
+            (hasLoss && evidence.length === 0)
+              ? 'bg-amber text-white animate-pulse'
+              : 'bg-ink text-white disabled:opacity-40'
+          }`}
         >
           {submitting ? '提交中…' :
             (hasLoss && evidence.length === 0)
-              ? '⚠ 请上传报损证据'
+              ? '⚠ 点这里去上传报损证据 ↓'
               : `确认收货 · ¥${total.toFixed(2)}`}
         </button>
       </div>
@@ -244,9 +256,9 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
   )
 }
 
-function Section({ title, right, rightTone, children }: { title: string; right?: string; rightTone?: 'red' | 'green'; children: React.ReactNode }) {
+function Section({ id, title, right, rightTone, children }: { id?: string; title: string; right?: string; rightTone?: 'red' | 'green'; children: React.ReactNode }) {
   return (
-    <section className="px-4 mt-5">
+    <section id={id} className="px-4 mt-5 scroll-mt-4">
       <div className="flex items-baseline justify-between mb-2">
         <h2 className="text-h2">{title}</h2>
         {right && <span className={`text-caption ${rightTone === 'red' ? 'text-red-fg' : rightTone === 'green' ? 'text-green-fg' : 'text-gray3'}`}>{right}</span>}

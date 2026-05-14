@@ -72,7 +72,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       include: {
         store: { select: { name: true } },
         supplier: { select: { name: true } },
-        purchaseOrder: { select: { no: true } },
+        purchaseOrder: { select: { id: true, no: true } },
         createdBy: { select: { name: true } },
         handledBy: { select: { name: true, role: true } },
         items: { include: { product: { select: { name: true, unit: true } } } },

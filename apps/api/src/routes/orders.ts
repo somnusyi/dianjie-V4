@@ -450,7 +450,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   app.patch('/:id/receive', { preHandler: [(app as any).authenticate] }, async (req: any) => {
     const { tenantId, userId, role, storeId } = req.user
     const { id } = req.params as any
-    const { items: receivedItems } = req.body as any  // [{ productId, receivedQty }]
+    const { items: receivedItems, evidenceImages } = req.body as any  // [{ productId, receivedQty }] + 可选证据图
 
     // P1-1: 仅店长 / 厨师长 / 老板 / 超管 能确认收货 (供应商不该能调)
     if (!['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
@@ -517,8 +517,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       },
     })
 
-    // 判断是否存在报损：实收数量 < 应到数量 (应到 = 供应商实际发货 shippedQty, 不是原始 quantity)
-    // 这样供应商缺货少发不会被门店当成报损
+    // 判断是否存在报损 — 应到 = shippedQty (ship 时议定的量), 实收 < 应到 才算报损
+    // 供应商在 ship 时调减不算报损 (金额已按实发算清, 没有未付的钱)
     const lossLines = (receivedItems || [])
       .map((ri: any) => {
         const original = order.items.find(i => i.productId === ri.productId)
@@ -542,6 +542,11 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
 
     const hasLoss = lossLines.length > 0
 
+    // 强制: 有报损时必须上传至少 1 张证据图 (双保险, UI 也禁了按钮)
+    if (hasLoss && (!Array.isArray(evidenceImages) || evidenceImages.length === 0)) {
+      throw { statusCode: 400, message: '存在报损时必须上传至少 1 张现场照片作为证据' }
+    }
+
     // 自动建报损单（v2 流程：收货时短量自动发起索赔，24h 内供应商未响应自动同意）
     if (hasLoss) {
       const ym = dayjs().format('YYYYMM')
@@ -556,8 +561,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           supplierId: order.supplierId,
           totalLossAmount: totalLoss,
           description: `验收短量自动报损 (${order.no})`,
-          evidenceImages: [],
-          status: 'PENDING',
+          evidenceImages: Array.isArray(evidenceImages) ? evidenceImages.slice(0, 9) : [],
+          status: 'PENDING' as any,
           createdById: userId,
           items: { create: lossLines },
         },

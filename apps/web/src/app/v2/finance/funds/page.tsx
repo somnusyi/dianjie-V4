@@ -18,6 +18,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { GlanceStrip } from '@/components/v2/glance-strip'
 import { BottomNav, Chip } from '@/components/v2'
 import { BankAccountCard } from '@/components/v2/bank-account-card'
+import { SwipeableRow } from '@/components/v2/swipeable-row'
+import { InternalTransferModal, type TransferAccount } from '@/components/v2/internal-transfer-modal'
 import { apiFetch } from '@/lib/v2-auth'
 import dayjs from 'dayjs'
 
@@ -74,6 +76,8 @@ export default function FinanceFundsPage() {
   const [saving, setSaving] = useState(false)
   // 当日明细 弹层
   const [pickDay, setPickDay] = useState<string | null>(null)
+  // 内部转账 modal
+  const [transferFrom, setTransferFrom] = useState<Account | null>(null)
 
   function load() {
     Promise.all([
@@ -221,61 +225,60 @@ export default function FinanceFundsPage() {
         )}
         {accounts && accounts.length > 0 && (
           <div className="space-y-2">
-            {/* 招行实时账户: 走 cmb 微服务拉实时余额 */}
+            {/* 招行实时账户: 走 cmb 微服务拉实时余额, 左滑出现「停用」按钮 */}
             {accounts.filter(a => a.cmbBindAccount).map(a => (
-              <div key={a.id} className="relative">
-                <BankAccountCard config={{
-                  account:     a.cmbBindAccount!,
-                  label:       '招行实时',
-                  accountName: a.name,
-                  bankName:    a.bankName || '招商银行',
-                  accountType: a.note || undefined,
-                }} />
-                <button
-                  onClick={() => softDeleteAccount(a)}
-                  className="absolute top-3 right-14 text-micro text-gray3 hover:text-red-fg px-2 py-1"
-                  title="停用账户"
-                >停用</button>
-              </div>
+              <SwipeableRow key={a.id} onAction={() => softDeleteAccount(a)}>
+                <BankAccountCard
+                  config={{
+                    account:     a.cmbBindAccount!,
+                    label:       '招行实时',
+                    accountName: a.name,
+                    bankName:    a.bankName || '招商银行',
+                    accountType: a.note || undefined,
+                  }}
+                  onTransfer={() => setTransferFrom(a)}
+                />
+              </SwipeableRow>
             ))}
 
-            {/* 普通账户 (手工录入余额) */}
+            {/* 普通账户 (手工录入余额), 左滑出现「停用」 */}
             {accounts.filter(a => !a.cmbBindAccount).length > 0 && (
-              <ul className="bg-white rounded-card border border-border divide-y divide-border">
+              <ul className="space-y-1">
                 {accounts.filter(a => !a.cmbBindAccount).map(a => {
                   const amt = Number(a.balance)
                   const pct = totalBalance > 0 ? Math.round(amt / totalBalance * 100) : 0
                   const anomaly = amt <= 0
                   return (
-                    <li key={a.id} className="px-3 py-3">
-                      <div className="flex items-center gap-3 mb-2">
-                        <span className="w-9 h-9 rounded-md bg-bg flex items-center justify-center font-num">{a.name?.[0] || '$'}</span>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-h2 truncate">{a.name}</span>
-                            {anomaly && <Chip tone="red">余额 0</Chip>}
+                    <SwipeableRow key={a.id} onAction={() => softDeleteAccount(a)}>
+                      <div className="bg-white border border-border px-3 py-3">
+                        <div className="flex items-center gap-3 mb-2">
+                          <span className="w-9 h-9 rounded-md bg-bg flex items-center justify-center font-num">{a.name?.[0] || '$'}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-h2 truncate">{a.name}</span>
+                              {anomaly && <Chip tone="red">余额 0</Chip>}
+                            </div>
+                            <p className="text-micro text-gray3">
+                              {a.bankName || a.type}
+                              {a.accountNo ? ` · 尾号 ${String(a.accountNo).slice(-4)}` : ''}
+                            </p>
                           </div>
-                          <p className="text-micro text-gray3">
-                            {a.bankName || a.type}
-                            {a.accountNo ? ` · 尾号 ${String(a.accountNo).slice(-4)}` : ''}
-                          </p>
+                          <div className="text-right">
+                            <div className="font-num text-h2">{fmtMoney(amt)}</div>
+                            <div className="text-micro text-gray3 font-num">{pct}%</div>
+                          </div>
                         </div>
-                        <div className="text-right">
-                          <div className="font-num text-h2">{fmtMoney(amt)}</div>
-                          <div className="text-micro text-gray3 font-num">{pct}%</div>
+                        <div className="h-1 bg-bg rounded-full overflow-hidden">
+                          <div className={`h-full ${anomaly ? 'bg-red' : 'bg-gray2'}`} style={{ width: `${Math.max(2, pct)}%` }} />
                         </div>
-                        <button onClick={() => softDeleteAccount(a)}
-                                className="ml-2 text-micro text-gray3 hover:text-red-fg px-2 py-1"
-                                title="停用账户">停用</button>
                       </div>
-                      <div className="h-1 bg-bg rounded-full overflow-hidden">
-                        <div className={`h-full ${anomaly ? 'bg-red' : 'bg-gray2'}`} style={{ width: `${Math.max(2, pct)}%` }} />
-                      </div>
-                    </li>
+                    </SwipeableRow>
                   )
                 })}
               </ul>
             )}
+
+            <p className="text-micro text-gray3 mt-1 text-center">提示: 卡片左滑可停用账户</p>
           </div>
         )}
       </Section>
@@ -432,6 +435,17 @@ export default function FinanceFundsPage() {
           </div>
         </div>
       )}
+
+      {/* 内部账户转账 modal — 招行实时账户卡片点「⇄ 转账」触发 */}
+      <InternalTransferModal
+        open={!!transferFrom}
+        from={transferFrom as TransferAccount | null}
+        candidates={(accounts || [])
+          .filter(a => a.cmbBindAccount && a.id !== transferFrom?.id)
+          .map(a => ({ id: a.id, name: a.name, cmbBindAccount: a.cmbBindAccount, bankName: a.bankName }))}
+        onClose={() => setTransferFrom(null)}
+        onSuccess={() => load()}
+      />
 
       <BottomNav
         tabs={[

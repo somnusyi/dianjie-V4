@@ -227,6 +227,7 @@ def transfer():
     }
     """
     data = request.get_json(force=True)
+    from_account = (data.get("fromAccount") or "").strip()  # 付款账号(可选, 空=用 env CMB_ACCOUNT 默认母公司)
     to_account = (data.get("toAccount") or "").strip()
     to_name    = (data.get("toName") or "").strip()
     amount     = str(data.get("amount") or "").strip()
@@ -246,13 +247,13 @@ def transfer():
     is_cross_bank = bool(bank_code)
 
     pay_item = {
-        "ccyNbr": CCY_NBR,           # 货币码 10
-        "dbtAcc": ACCOUNT,           # 付款账号
-        "crtAcc": to_account,        # 收款账号
-        "crtNam": to_name,           # 收款户名
-        "trsAmt": amount,            # 金额
-        "nusAge": remark,            # 转账附言（用途）
-        "yurRef": biz_no,            # 业务参考号（防重）
+        "ccyNbr": CCY_NBR,                           # 货币码 10
+        "dbtAcc": from_account or ACCOUNT,           # 付款账号 (空则用 env 默认母公司)
+        "crtAcc": to_account,                        # 收款账号
+        "crtNam": to_name,                           # 收款户名
+        "trsAmt": amount,                            # 金额
+        "nusAge": remark,                            # 转账附言（用途）
+        "yurRef": biz_no,                            # 业务参考号（防重）
     }
     if is_cross_bank:
         pay_item["crtBnk"]      = bank_code

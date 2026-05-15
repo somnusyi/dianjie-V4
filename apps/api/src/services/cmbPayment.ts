@@ -37,13 +37,14 @@ export function reportCmbError(
 }
 
 export interface CmbTransferParams {
-  toAccount : string   // 收款账号
-  toName    : string   // 收款户名
-  amount    : number   // 金额（Number，内部转 string）
-  bizNo     : string   // 业务参考号（全局唯一，建议用 scheduleId）
-  remark?   : string   // 附言
-  bankCode? : string   // 收款行行号（他行必填）
-  bankCity? : string   // 收款开户地（他行必填）
+  toAccount   : string   // 收款账号
+  toName      : string   // 收款户名
+  amount      : number   // 金额（Number，内部转 string）
+  bizNo       : string   // 业务参考号（全局唯一，建议用 scheduleId）
+  remark?     : string   // 附言
+  bankCode?   : string   // 收款行行号（他行必填）
+  bankCity?   : string   // 收款开户地（他行必填）
+  fromAccount?: string   // 付款账号 (空则用 env CMB_ACCOUNT 默认母公司; 子公司付款必传)
 }
 
 export interface CmbTransferResult {
@@ -68,13 +69,14 @@ export async function cmbTransfer(params: CmbTransferParams): Promise<CmbTransfe
     method : 'POST',
     headers: { 'Content-Type': 'application/json' },
     body   : JSON.stringify({
-      toAccount: params.toAccount,
-      toName   : params.toName,
-      amount   : params.amount.toFixed(2),
-      bizNo    : params.bizNo,
-      remark   : params.remark || '',
-      bankCode : params.bankCode || '',
-      bankCity : params.bankCity || '',
+      toAccount  : params.toAccount,
+      toName     : params.toName,
+      amount     : params.amount.toFixed(2),
+      bizNo      : params.bizNo,
+      remark     : params.remark || '',
+      bankCode   : params.bankCode || '',
+      bankCity   : params.bankCity || '',
+      fromAccount: params.fromAccount || '',
     }),
     signal: AbortSignal.timeout(30_000),  // 招行接口 30s 超时
   })

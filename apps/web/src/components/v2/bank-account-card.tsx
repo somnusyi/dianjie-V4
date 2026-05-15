@@ -55,7 +55,10 @@ function writeCache(account: string | undefined, data: BalanceResp) {
   } catch {}
 }
 
-export function BankAccountCard({ config }: { config: BankAccountConfig }) {
+export function BankAccountCard({ config, onTransfer }: {
+  config: BankAccountConfig
+  onTransfer?: () => void   // 传了就显示「⇄ 转账」按钮 (放在刷新按钮左边, 财务用)
+}) {
   const [data, setData] = useState<BalanceResp | null>(null)
   const [err, setErr]   = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -115,13 +118,24 @@ export function BankAccountCard({ config }: { config: BankAccountConfig }) {
             {data?.account ? ` · 尾号 ${String(data.account).slice(-4)}` : ''}
           </p>
         </div>
-        <button
-          onClick={() => load({ force: true })}
-          disabled={loading}
-          className="text-micro text-amber-fg px-2 py-1 rounded hover:bg-bg disabled:opacity-50"
-        >
-          {loading ? '刷新中…' : '⟳ 刷新'}
-        </button>
+        <div className="flex items-center gap-1">
+          {onTransfer && (
+            <button
+              onClick={onTransfer}
+              className="text-micro text-amber-fg px-2 py-1 rounded hover:bg-bg"
+              title="向其他招行账户转账"
+            >
+              ⇄ 转账
+            </button>
+          )}
+          <button
+            onClick={() => load({ force: true })}
+            disabled={loading}
+            className="text-micro text-amber-fg px-2 py-1 rounded hover:bg-bg disabled:opacity-50"
+          >
+            {loading ? '刷新中…' : '⟳ 刷新'}
+          </button>
+        </div>
       </div>
 
       {err && (

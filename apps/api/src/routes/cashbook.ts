@@ -1,5 +1,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
+import { cmbTransfer, reportCmbError } from '../services/cmbPayment'
+import crypto from 'crypto'
 import dayjs from 'dayjs'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
@@ -56,6 +58,148 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
       },
     })
     return account
+  })
+
+  // ── 内部账户间转账 (招行实时账户之间) ────────────────
+  //    POST /api/cashbook/internal-transfer
+  //    入参: { fromAccountId, toAccountId, amount, remark }
+  //    校验:
+  //      - 角色 ADMIN/FINANCE/SUPER_ADMIN
+  //      - test tenant 拒绝 (跟 paymentSchedule 防护一致, 不打真银行)
+  //      - fromAccountId / toAccountId 必须属于当前 tenant, status=ACTIVE, cmbBindAccount 非空
+  //      - amount > 0
+  //    成功后:
+  //      - 双向记 CashTransaction (付款方 -amount, 收款方 +amount, category='internal-transfer')
+  //      - 同步更新两个 CashAccount.balance (虽然 cmbBindAccount 非空时 balance 不是单一来源,
+  //        但记账让现金流水页能看到这笔操作)
+  app.post('/internal-transfer', auth(app), async (req: any, reply: any) => {
+    const { tenantId, userId, role } = req.user
+    if (!WRITE_ROLES.includes(role)) {
+      return reply.status(403).send({ error: '无权发起转账' })
+    }
+
+    const { fromAccountId, toAccountId, amount, remark } = (req.body || {}) as {
+      fromAccountId: string; toAccountId: string; amount: number; remark?: string
+    }
+    if (!fromAccountId || !toAccountId) {
+      return reply.status(400).send({ error: '缺少 fromAccountId / toAccountId' })
+    }
+    if (fromAccountId === toAccountId) {
+      return reply.status(400).send({ error: '付款账户与收款账户不能相同' })
+    }
+    const amt = Number(amount)
+    if (!Number.isFinite(amt) || amt <= 0) {
+      return reply.status(400).send({ error: '金额必须 > 0' })
+    }
+
+    // test tenant 防护 (跟 paymentSchedule.executeBankPayment 一致)
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId }, select: { slug: true },
+    })
+    if (tenant?.slug === 'test') {
+      return reply.status(403).send({
+        error: 'test tenant 演示环境 · 已阻止真实银行转账 (不会扣钱)',
+      })
+    }
+
+    // 拉两端账户校验
+    const [fromAcc, toAcc] = await Promise.all([
+      prisma.cashAccount.findFirst({
+        where: { id: fromAccountId, tenantId, status: 'ACTIVE' },
+      }),
+      prisma.cashAccount.findFirst({
+        where: { id: toAccountId, tenantId, status: 'ACTIVE' },
+      }),
+    ])
+    if (!fromAcc) return reply.status(404).send({ error: '付款账户不存在或已停用' })
+    if (!toAcc)   return reply.status(404).send({ error: '收款账户不存在或已停用' })
+    if (!fromAcc.cmbBindAccount) {
+      return reply.status(400).send({ error: '付款账户未绑定招行实时账号, 无法发起转账' })
+    }
+    if (!toAcc.cmbBindAccount) {
+      return reply.status(400).send({ error: '收款账户未绑定招行实时账号, 无法接收转账' })
+    }
+
+    // 生成 bizNo: int-<14位时间戳>-<6 字符随机> (≤ 30 字符, 符合招行 yurRef 规则)
+    const ts = dayjs().format('YYYYMMDDHHmmss')
+    const rand = crypto.randomBytes(3).toString('hex')
+    const bizNo = `int-${ts}-${rand}`
+
+    // 调银行
+    let bankResult
+    try {
+      bankResult = await cmbTransfer({
+        fromAccount: fromAcc.cmbBindAccount,
+        toAccount:   toAcc.cmbBindAccount,
+        toName:      toAcc.name,       // 收款户名 (我们的设计里 CashAccount.name = 户名)
+        amount:      amt,
+        bizNo,
+        remark:      remark?.trim() || '内部转账',
+        // 同行 (都是招行) 不传 bankCode
+      })
+    } catch (e: any) {
+      return reply.status(502).send({
+        error: '招行服务调用失败',
+        detail: e?.message || String(e),
+      })
+    }
+
+    if (!bankResult.success) {
+      reportCmbError(bankResult.resultMsg || '内部转账失败', {
+        funcode: 'BB1PAYOP', resultCode: bankResult.resultCode, bizNo, raw: bankResult.raw,
+      })
+      return reply.status(400).send({
+        success:    false,
+        resultCode: bankResult.resultCode,
+        resultMsg:  bankResult.resultMsg,
+        bizNo,
+      })
+    }
+
+    // 成功: 双向记 CashTransaction (审计 + 让现金流水页能看到)
+    const now = new Date()
+    await prisma.$transaction([
+      prisma.cashTransaction.create({
+        data: {
+          tenantId, accountId: fromAcc.id, direction: -1,
+          category: 'internal-transfer', amount: amt,
+          balanceAfter: Number(fromAcc.balance) - amt,
+          note: `内部转出 → ${toAcc.name}${remark ? ` (${remark})` : ''}`,
+          txDate: now,
+          refType: 'CMB_INTERNAL', refId: bizNo,
+          createdById: userId,
+        },
+      }),
+      prisma.cashTransaction.create({
+        data: {
+          tenantId, accountId: toAcc.id, direction: 1,
+          category: 'internal-transfer', amount: amt,
+          balanceAfter: Number(toAcc.balance) + amt,
+          note: `内部转入 ← ${fromAcc.name}${remark ? ` (${remark})` : ''}`,
+          txDate: now,
+          refType: 'CMB_INTERNAL', refId: bizNo,
+          createdById: userId,
+        },
+      }),
+      prisma.cashAccount.update({
+        where: { id: fromAcc.id },
+        data: { balance: { decrement: amt } },
+      }),
+      prisma.cashAccount.update({
+        where: { id: toAcc.id },
+        data: { balance: { increment: amt } },
+      }),
+    ])
+
+    return {
+      success:    true,
+      resultCode: bankResult.resultCode,
+      txNo:       bankResult.txNo,
+      bizNo,
+      fromAccount: { id: fromAcc.id, name: fromAcc.name },
+      toAccount:   { id: toAcc.id, name: toAcc.name },
+      amount:     amt,
+    }
   })
 
   // ── 软删账户 (status=DISABLED, 不真 DELETE 防误删历史流水关联) ────

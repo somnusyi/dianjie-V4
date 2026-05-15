@@ -94,6 +94,16 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
 
   if (needApproval) {
     void notifyApprovalPending(tenantId, Number(receipt.totalAmount), supplier.name)
+    // M2 触达层: 大额付款通知财务+老板
+    const { fireAndForget: notify } = await import('./notify')
+    notify({
+      tenantId, event: 'PAYMENT_LARGE',
+      eventKey: `SCH:${schedule.id}:PENDING_APPROVAL`,
+      payload: {
+        scheduleId: schedule.id, amount: Number(receipt.totalAmount),
+        supplierName: supplier.name, orderCount: 1,
+      },
+    })
   }
   return { recon, schedule, needApproval }
 }

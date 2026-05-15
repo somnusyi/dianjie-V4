@@ -134,6 +134,25 @@ export default function LoginPage() {
           </button>
         </form>
 
+        {/* 企微登录入口 — 仅在企微 WebView 里有用 */}
+        <button
+          type="button"
+          onClick={async () => {
+            try {
+              const r = await fetch(`/api/wecom/oauth/url?tenant=${tenantSlug}&redirect=/`)
+              const d = await r.json()
+              if (d.url) location.href = d.url
+              else setError(d.error || '企微集成未启用')
+            } catch (e: any) {
+              setError('企微登录暂不可用: ' + (e.message || ''))
+            }
+          }}
+          className="mt-3 w-full py-3 bg-white border border-border rounded-cta text-button text-gray2 flex items-center justify-center gap-2"
+        >
+          <span className="w-5 h-5 rounded bg-[#0078D7] text-white text-micro flex items-center justify-center">企</span>
+          <span>企业微信登录</span>
+        </button>
+
         <div className="mt-6 flex items-center justify-center gap-3 text-caption">
           <a href="/v2/apply" className="text-amber-fg">申请账号 ›</a>
           <span className="text-gray4">·</span>

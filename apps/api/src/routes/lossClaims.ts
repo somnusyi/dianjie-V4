@@ -4,6 +4,7 @@ import dayjs from 'dayjs'
 import { notifyLossClaimResult } from '../services/notification'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 import { resignOssUrls } from './upload'
+import { fireAndForget as notify } from '../services/notify'
 
 /**
  * 报损被批准 (含自动同意): 回补供应商库存
@@ -143,6 +144,22 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
         metadata: { autoApproveAt },
       },
     })
+
+    // 通知供应商 (M2 触达层)
+    if (order.supplierId) {
+      const store = await prisma.store.findUnique({ where: { id: order.storeId }, select: { name: true } })
+      const itemPreview = claim.items.slice(0, 2).map((it) => `${it.product?.name || ''} 损 ${it.lossQty}`).join('/')
+      notify({
+        tenantId, event: 'LOSS_PENDING',
+        eventKey: `LC:${claim.id}:PENDING`,
+        payload: {
+          lossId: claim.id, lossNo: no, orderId: purchaseOrderId,
+          storeName: store?.name || '', amount: totalLossAmount,
+          itemPreview,
+        },
+        toSupplierIds: [order.supplierId],
+      })
+    }
 
     return { ...claim, autoApproveAt }
   })
@@ -289,6 +306,21 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
           tenantId, userId,
           action: `供应商拒绝报损 ${claim.no}, 账期金额加回 ¥${claim.totalLossAmount} + 冻结付款待协商`,
           target: claim.no, entityType: 'LossClaim', targetId: id,
+        },
+      })
+
+      // 通知总厨仲裁 (M2 触达层)
+      const [store, supplier] = await Promise.all([
+        prisma.store.findUnique({ where: { id: claim.storeId }, select: { name: true } }),
+        claim.supplierId ? prisma.supplier.findUnique({ where: { id: claim.supplierId }, select: { name: true } }) : Promise.resolve(null),
+      ])
+      notify({
+        tenantId, event: 'LOSS_REJECTED',
+        eventKey: `LC:${claim.id}:REJECTED`,
+        payload: {
+          lossId: claim.id, lossNo: claim.no,
+          storeName: store?.name || '', supplierName: supplier?.name || '',
+          amount: Number(claim.totalLossAmount),
         },
       })
     }

@@ -6,6 +6,7 @@ import { invalidatePattern } from '../lib/cache'
 import { notifyOrderSubmitted, notifyOrderShipped, notifyOrderConfirmed, notifyOrderRejected, sendNotification } from '../services/notification'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 import { resignOssUrls } from './upload'
+import { fireAndForget as notify } from '../services/notify'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
 const orderItemSchema = z.object({
@@ -63,7 +64,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         include: {
           store: { select: { id: true, name: true } },
           supplier: { select: { id: true, name: true } },
-          createdBy: { select: { id: true, name: true } },
+          createdBy: { select: { id: true, name: true, role: true } },
           items: { include: { product: { select: { name: true, unit: true } } } },
           lossClaims: { select: { id: true, status: true, totalLossAmount: true } },
         },
@@ -112,6 +113,12 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     }
     const { tenantId, userId, storeId: userStoreId, role } = req.user
     const { storeId, supplierId, expectedDate, note, items, idempotencyKey } = parsed.data
+
+    // 角色白名单 — 防止供应商/财务等错误调用
+    const ALLOWED_CREATE_ROLES = ['MANAGER', 'KITCHEN_LEAD', 'PURCHASER', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN']
+    if (!ALLOWED_CREATE_ROLES.includes(role)) {
+      return reply.status(403).send({ error: '无权创建采购订单' })
+    }
 
     // 防重复提交: 客户端给 idempotencyKey 时, 60s 内同 key 的二次请求直接返回首单
     if (idempotencyKey) {
@@ -175,10 +182,21 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       include: { store: true, supplier: true, items: { include: { product: true } } },
     })
 
-    await prisma.opLog.create({ data: { tenantId, userId, action: `创建采购订单 ${no}`, target: no, entityType: 'PurchaseOrder', targetId: order.id } })
+    const actionPrefix = role === 'CHEF_DIRECTOR' ? `总厨代 ${order.store.name} 下单` : `创建采购订单`
+    await prisma.opLog.create({ data: { tenantId, userId, action: `${actionPrefix} ${no}`, target: no, entityType: 'PurchaseOrder', targetId: order.id } })
     void invalidatePattern(`dashboard:stats:${tenantId}:*`)
     void invalidatePattern(`stores:list:${tenantId}:*`)
     void notifyOrderSubmitted(tenantId, no, order.store.name, supplierId)
+    // M2 新通道层: 同步发企微卡片 (旧 notifyOrderSubmitted 写 DB 通知, 保留双轨)
+    notify({
+      tenantId, event: 'PO_SUBMITTED',
+      eventKey: `PO:${order.id}:SUBMITTED`,
+      payload: {
+        orderId: order.id, no, storeName: order.store.name,
+        itemCount: order.items.length, total: Number(order.totalAmount),
+      },
+      toSupplierIds: [supplierId],
+    })
     if (idempotencyKey) setIdempotent(`${tenantId}:${userId}:${idempotencyKey}`, order.id, no)
     return order
   })
@@ -451,6 +469,12 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       ? `, 因 ${changedLines.slice(0, 2).map(l => `${l.it.product?.name || ''}${Number(l.it.quantity)}→${l.shipped}`).join(' / ')}${changedLines.length > 2 ? ` 等 ${changedLines.length} 项` : ''} 调整, 现 ¥${newTotal.toFixed(2)} (原 ¥${oldTotal.toFixed(2)})`
       : ''
     void notifyOrderShipped(tenantId, order.no, (supplier?.name || '') + adjustSummary, order.storeId)
+    notify({
+      tenantId, event: 'PO_DELIVERING',
+      eventKey: `PO:${order.id}:DELIVERING`,
+      payload: { orderId: order.id, no: order.no, supplierName: supplier?.name || '', total: newTotal },
+      toStoreIds: [order.storeId],
+    })
     return { success: true, newTotal, oldTotal, changedLines: changedLines.length }
   })
 
@@ -487,6 +511,15 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       title: `订单已送达, 请尽快验收 ${order.no}`,
       body: `${supplier?.name || ''} 已送达, 请 24h 内确认收货, 否则系统将自动确认`,
       refType: 'PurchaseOrder', refId: id,
+    })
+    notify({
+      tenantId, event: 'PO_PENDING_CONFIRM',
+      eventKey: `PO:${order.id}:PENDING_CONFIRM`,
+      payload: {
+        orderId: order.id, no: order.no, supplierName: supplier?.name || '',
+        total: Number(order.totalAmount),
+      },
+      toStoreIds: [order.storeId],
     })
     return { success: true, autoConfirmAt }
   })

@@ -60,9 +60,13 @@ model User {
   password    String                        // bcrypt hash
   role        Role     @default(MANAGER)
   status      UserStatus @default(ACTIVE)
-  storeId     String?                       // 店长绑定门店
+  storeId     String?                       // 店长绑定门店 (DEPRECATED, 用 storeIds[]; 兼容期保留)
+  storeIds    String[] @default([])         // 多店店长支持; 单店 = [storeId]
   supplierId  String?                       // 供应商人员绑定供应商
   lastLoginAt DateTime?
+  // 企微集成: wecomUserId 是企微通讯录里的 UserID, 用于 SSO 单点登录映射
+  wecomUserId String?  @db.VarChar(64)
+  wecomDeptIds Int[]   @default([])
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -86,7 +90,92 @@ model User {
 
   @@unique([tenantId, email])
   @@unique([tenantId, phone])
+  @@unique([tenantId, wecomUserId])
   @@map("users")
+}
+
+// ── 企微集成配置 ──────────────────────────────────────
+// 一个 Tenant 一份配置, 暂不支持多企微账号
+model WeComConfig {
+  id              String   @id @default(cuid())
+  tenantId        String   @unique
+  corpId          String   @db.VarChar(64)    // 企业 ID
+  agentId         String   @db.VarChar(32)    // 自建应用 AgentId
+  appSecret       String                       // 应用 Secret (加密存储, 应用 access_token 用)
+  contactSecret   String?                      // 通讯录同步 Secret (可选, M2 启用)
+  callbackToken   String?                      // 接收事件回调 Token
+  encodingAESKey  String?                      // 回调消息体 AES key
+  // 当前可用 access_token 缓存 (避免每次重取, 企微限制每天有限调用次数)
+  accessToken     String?
+  accessTokenExp  DateTime?
+  contactToken    String?
+  contactTokenExp DateTime?
+  enabled         Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("wecom_configs")
+}
+
+// ── 门店交接 (店长调岗/离职/临时代管 的审计 + 接管记录) ──
+model StoreHandover {
+  id            String   @id @default(cuid())
+  tenantId      String
+  storeId       String                       // 移出/接收的门店
+  fromUserId    String                       // 移出人 (离职/调走的店长)
+  toUserId      String                       // 接管人 (继任/代管的店长)
+  reason        String?                      // '调岗' / '离职' / '临时代管'
+  handoverItems Json?                        // [{type:'application', id, status}, ...] 接管时的待办快照
+  note          String?
+  createdById   String                       // 操作人 (一般是老板)
+  createdAt     DateTime @default(now())
+
+  @@index([tenantId, storeId, createdAt])
+  @@map("store_handovers")
+}
+
+// ── 通知偏好 (每用户每事件可关) ─────────────────────────
+model NotificationPref {
+  userId      String
+  eventType   String                         // 'PO_SUBMITTED' / 'LOSS_PENDING' / etc.
+  enabled     Boolean @default(true)
+  channels    String[] @default(["wecom"])   // ['wecom', 'sms', 'inapp']
+  updatedAt   DateTime @updatedAt
+
+  @@id([userId, eventType])
+  @@map("notification_prefs")
+}
+
+// ── 通知日志 (频控去重 + 审计) ──────────────────────────
+model NotificationLog {
+  id          String   @id @default(cuid())
+  tenantId    String
+  userId      String
+  eventType   String
+  eventKey    String                         // 去重 key 如 'PO123:DELIVERED'
+  channel     String                         // 'wecom' / 'sms' / 'inapp'
+  status      String                         // 'sent' / 'failed' / 'suppressed' / 'frequency_blocked'
+  errorMsg    String?
+  payload     Json?
+  createdAt   DateTime @default(now())
+
+  @@index([userId, eventType, createdAt])
+  @@index([tenantId, eventKey])
+  @@map("notification_logs")
+}
+
+// ── 企微同步日志 (审计 + 排错用) ───────────────────────
+model WeComSyncLog {
+  id          String   @id @default(cuid())
+  tenantId    String
+  kind        String                       // 'oauth_login' | 'contact_sync' | 'send_msg' | 'webhook'
+  status      String                       // 'ok' | 'error'
+  payload     Json?                        // 输入/输出摘要
+  errorMsg    String?
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, kind, createdAt])
+  @@map("wecom_sync_logs")
 }
 
 // ── 门店 ──────────────────────────────────────────────
@@ -879,11 +968,14 @@ enum Role {
   CHEF_DIRECTOR  // 总厨（集团级）
   SUPPLIER_OWNER // 供应商负责人
   ENGINEERING    // 工程部（开店前: 选址 / 装修 / 物料 / 证照）
+  SUPERVISOR     // 主管(本店有限事务, 比店长低半级)
+  STAFF          // 一线员工(暂不开滇界账号, 留口位)
 }
 
 enum UserStatus {
   ACTIVE
   INACTIVE
+  PENDING_BIND   // 企微员工但滇界还没分角色, 老板待开通
 }
 
 // ── 账号申请: 公共申请 → 老板审批通过后落到 users 表 ──

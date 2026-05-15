@@ -116,9 +116,15 @@ export default function ChefPurchasePage() {
             return (
               <li key={o.id}>
                 <a href={`/v2/chef/purchase/po-success/${o.id}`} className="block bg-white rounded-card border border-border p-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-h2">{o.supplier?.name} <span className="text-micro text-gray3 font-num ml-1">#{o.no}</span></span>
-                    <span className="font-num text-h2">¥{Number(o.totalAmount).toLocaleString()}</span>
+                  <div className="flex items-center justify-between mb-1 gap-2">
+                    <span className="text-h2 flex items-center gap-1 min-w-0 flex-wrap">
+                      <span className="truncate">{o.supplier?.name}</span>
+                      {o.createdBy?.role === 'CHEF_DIRECTOR' && (
+                        <Chip tone="amber">总厨代下</Chip>
+                      )}
+                      <span className="text-micro text-gray3 font-num ml-1">#{o.no}</span>
+                    </span>
+                    <span className="font-num text-h2 shrink-0">¥{Number(o.totalAmount).toLocaleString()}</span>
                   </div>
                   <p className="text-micro text-gray3 mb-2">
                     {STATUS_LABEL[o.status]} · {o.items?.length ?? 0} 项

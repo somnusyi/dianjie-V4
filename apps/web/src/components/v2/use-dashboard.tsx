@@ -90,22 +90,40 @@ export function LoadingScreen() {
 export function ErrorScreen({ message }: { message: string }) {
   // 把 "路由不存在" 之类 raw error 转成用户友好文案
   const isRoute = message?.includes('路由不存在') || message?.includes('Not Found')
-  const isAuth = message?.includes('未登录') || message?.includes('401')
+  const isAuth = message?.includes('未登录') || message?.includes('未授权') || message?.includes('401')
   const friendly = isRoute
     ? '此功能仍在部署中, 请稍后再试'
     : isAuth
       ? '登录已过期, 即将跳转登录'
       : message?.replace(/^Error:\s*/, '') || '出错了'
+  // 鉴权失败 → 清 session + 自动跳登录页 (1.2s 给用户看到提示)
+  if (typeof window !== 'undefined' && isAuth) {
+    setTimeout(() => {
+      try {
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+        localStorage.removeItem('tenant')
+      } catch {}
+      location.replace('/v2/login')
+    }, 1200)
+  }
   return (
     <div className="min-h-screen bg-bg flex items-center justify-center p-6">
       <div className="bg-amber/10 border border-amber/30 rounded-card p-6 text-center max-w-sm">
         <div className="text-[40px] mb-2 opacity-50">⚠</div>
         <p className="text-body text-gray2">{friendly}</p>
-        <p className="text-micro text-gray4 mt-1 break-all">{message}</p>
-        <button onClick={() => location.reload()}
-                className="mt-4 px-4 py-2 bg-white border border-border rounded-cta text-button text-gray2">
-          刷新重试
-        </button>
+        {!isAuth && <p className="text-micro text-gray4 mt-1 break-all">{message}</p>}
+        {isAuth ? (
+          <button onClick={() => { try { localStorage.clear() } catch {}; location.replace('/v2/login') }}
+                  className="mt-4 px-4 py-2 bg-ink text-white rounded-cta text-button">
+            去登录
+          </button>
+        ) : (
+          <button onClick={() => location.reload()}
+                  className="mt-4 px-4 py-2 bg-white border border-border rounded-cta text-button text-gray2">
+            刷新重试
+          </button>
+        )}
       </div>
     </div>
   )

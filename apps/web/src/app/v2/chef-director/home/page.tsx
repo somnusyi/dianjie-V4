@@ -129,6 +129,20 @@ export default function ChefDirectorHomePage() {
         </a>
       </Section>
 
+      {/* 代店下单入口 — 跨店调度 / 紧急补货 / 厨师长不在线时支援 */}
+      <Section title="代店下单">
+        <a href="/v2/chef-director/purchase/new" className="block bg-white rounded-card border border-border p-3">
+          <div className="flex items-center gap-3">
+            <span className="w-10 h-10 rounded-md bg-amber-bg text-amber-fg flex items-center justify-center text-h2">📦</span>
+            <div className="flex-1">
+              <div className="text-h2">为门店代下采购单</div>
+              <p className="text-caption text-gray2 mt-0.5">跨店调度 / 紧急补货 · 操作记录会标「总厨代下」</p>
+            </div>
+            <span className="text-gray3">›</span>
+          </div>
+        </a>
+      </Section>
+
       <Section title="各店报损排行" right={`${storeRank.length} 家店 · ${anomalyCount} 异常`} rightTone={anomalyCount > 0 ? 'orange' : undefined}>
         {losses === null && <p className="text-caption text-gray3 text-center py-4">加载中…</p>}
         {losses !== null && storeRank.length === 0 && (

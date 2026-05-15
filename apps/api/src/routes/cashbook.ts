@@ -22,10 +22,17 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
   app.post('/accounts', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
     if (!WRITE_ROLES.includes(role)) return reply.status(403).send({ error: '无权限' })
-    const { name, type, bankName, accountNo, note } = req.body as any
+    const { name, type, bankName, accountNo, note, cmbBindAccount } = req.body as any
     if (!name) return reply.status(400).send({ error: '账户名称不能为空' })
+    // 招行实时账户校验: cmbBindAccount 必须是合理的银行账号格式
+    if (cmbBindAccount && !/^[0-9]{10,25}$/.test(String(cmbBindAccount).trim())) {
+      return reply.status(400).send({ error: '招行账号格式不对, 应为 10-25 位数字' })
+    }
     const account = await prisma.cashAccount.create({
-      data: { tenantId, name, type: type || 'BANK', bankName, accountNo, note },
+      data: {
+        tenantId, name, type: type || 'BANK', bankName, accountNo, note,
+        cmbBindAccount: cmbBindAccount ? String(cmbBindAccount).trim() : null,
+      },
     })
     return reply.status(201).send(account)
   })
@@ -34,12 +41,35 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
   app.patch('/accounts/:id', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
     if (!WRITE_ROLES.includes(role)) return reply.status(403).send({ error: '无权限' })
-    const { name, bankName, accountNo, note, status } = req.body as any
+    const { name, bankName, accountNo, note, status, cmbBindAccount } = req.body as any
+    if (cmbBindAccount !== undefined && cmbBindAccount !== null && cmbBindAccount !== ''
+        && !/^[0-9]{10,25}$/.test(String(cmbBindAccount).trim())) {
+      return reply.status(400).send({ error: '招行账号格式不对, 应为 10-25 位数字' })
+    }
     const account = await prisma.cashAccount.updateMany({
       where: { id: req.params.id, tenantId },
-      data: { name, bankName, accountNo, note, status },
+      data: {
+        name, bankName, accountNo, note, status,
+        ...(cmbBindAccount !== undefined && {
+          cmbBindAccount: cmbBindAccount ? String(cmbBindAccount).trim() : null,
+        }),
+      },
     })
     return account
+  })
+
+  // ── 软删账户 (status=DISABLED, 不真 DELETE 防误删历史流水关联) ────
+  app.delete('/accounts/:id', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!WRITE_ROLES.includes(role)) return reply.status(403).send({ error: '无权限' })
+    const result = await prisma.cashAccount.updateMany({
+      where: { id: req.params.id, tenantId, status: 'ACTIVE' },
+      data: { status: 'DISABLED' },
+    })
+    if (result.count === 0) {
+      return reply.status(404).send({ error: '账户不存在或已停用' })
+    }
+    return { success: true }
   })
 
   // ── 流水列表（分页 + 过滤）────────────────────────────

@@ -9,7 +9,7 @@
  * + 底部 5 Tab
  */
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   MetricTile, BottomNav, StoreAvatar, Chip,
 } from '@/components/v2'
@@ -17,31 +17,27 @@ import { GlanceStrip } from '@/components/v2/glance-strip'
 import { Sparkline } from '@/components/v2/sparkline'
 import { UserMenu } from '@/components/v2/user-menu'
 import { useDashboard, LoadingScreen, ErrorScreen, greetingFor } from '@/components/v2/use-dashboard'
-import { BankAccountList, type BankAccountConfig } from '@/components/v2/bank-account-card'
+import { BankAccountCard } from '@/components/v2/bank-account-card'
+import { apiFetch } from '@/lib/v2-auth'
 
-// 招行实时账户列表（与 finance/funds 保持一致）
-// 同一个 UID (U061858575) 下绑多个账户, 前端传 account 参数后端按账户查
-const BANK_ACCOUNTS: BankAccountConfig[] = [
-  {
-    label: '母公司·主账户',
-    accountName: '南京云洱之境餐饮有限公司',
-    bankName: '招商银行南京城东支行',
-    accountType: '一般户',
-    // account 留空 → 后端用 env 默认值
-  },
-  {
-    label: '子公司·合肥分店',
-    account: '125925610910001',
-    accountName: '合肥云岳之境餐饮有限公司',
-    bankName: '招商银行南京城东支行',
-    accountType: '一般户',
-  },
-]
-
+// 招行实时账户从 cashbook/accounts 拉, 财务在 finance/funds 页可增删, 老板这里只读显示
+type BankAcct = {
+  id: string; name: string; bankName?: string; note?: string
+  cmbBindAccount?: string | null
+}
 
 export default function BossHomePage() {
   const [tab, setTab] = useState('home')
+  const [bankAccts, setBankAccts] = useState<BankAcct[]>([])
   const { data, error } = useDashboard()
+
+  // 拉招行账户列表 (cmbBindAccount 非空的才显示成实时卡片)
+  useEffect(() => {
+    apiFetch<BankAcct[]>('/api/cashbook/accounts')
+      .then(rows => setBankAccts((rows || []).filter(a => a.cmbBindAccount)))
+      .catch(() => { /* 无权限或网络挂了, 不阻塞 dashboard */ })
+  }, [])
+
   if (error) return <ErrorScreen message={error} />
   if (!data) return <LoadingScreen />
   const { greeting, today } = greetingFor(data.user?.name)
@@ -81,10 +77,22 @@ export default function BossHomePage() {
         </a>
       </div>
 
-      {/* 招行实时账户 — 老板可见母公司主账户余额 */}
-      <Section title="招行实时账户" right={`${BANK_ACCOUNTS.length} 个 · 实时`}>
-        <BankAccountList accounts={BANK_ACCOUNTS} />
-      </Section>
+      {/* 招行实时账户 — 老板只读, 财务在「资金」页管理(增删) */}
+      {bankAccts.length > 0 && (
+        <Section title="招行实时账户" right={`${bankAccts.length} 个 · 实时`}>
+          <div className="space-y-3">
+            {bankAccts.map(a => (
+              <BankAccountCard key={a.id} config={{
+                account:     a.cmbBindAccount!,
+                label:       '招行实时',
+                accountName: a.name,
+                bankName:    a.bankName || '招商银行',
+                accountType: a.note || undefined,
+              }} />
+            ))}
+          </div>
+        </Section>
+      )}
 
       {/* 待审批 */}
       {data.approvals && (

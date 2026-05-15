@@ -1208,7 +1208,11 @@ model CashAccount {
   accountNo    String?                         // 账号（展示时只显示后4位）
   balance      Decimal         @default(0) @db.Decimal(14, 2)
   note         String?
-  status       String          @default("ACTIVE")
+  // 招行实时账户绑定: 非空 → 走 cmb 微服务按此账号拉实时余额, 覆盖手工 balance
+  //                  空   → 普通手工录入账户 (balance 字段单一来源)
+  // 需要在招行客户经理处先把 UID 绑定到此账号才能拉到余额
+  cmbBindAccount String?
+  status       String          @default("ACTIVE")  // ACTIVE / DISABLED (软删)
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
 

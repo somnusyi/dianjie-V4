@@ -163,8 +163,8 @@ export async function executeBankPayment(scheduleId: string) {
     await prisma.paymentSchedule.update({
       where: { id: scheduleId },
       data: {
-        status: 'FAILED',
-        failReason: 'test tenant 演示环境 · 已阻止真实银行转账 (mock 成功不会扣钱)',
+        status: 'CANCELLED',
+        failReason: 'test tenant 演示环境 · 已阻止真实银行转账 (不会扣钱)',
       },
     })
     throw new Error('test tenant 演示环境禁止真实银行转账')

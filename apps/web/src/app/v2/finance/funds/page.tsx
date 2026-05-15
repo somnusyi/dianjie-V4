@@ -17,29 +17,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { GlanceStrip } from '@/components/v2/glance-strip'
 import { BottomNav, Chip } from '@/components/v2'
-import { BankAccountList, type BankAccountConfig } from '@/components/v2/bank-account-card'
+import { BankAccountCard } from '@/components/v2/bank-account-card'
 import { apiFetch } from '@/lib/v2-auth'
 import dayjs from 'dayjs'
-
-// 招行实时账户列表
-// 数组化设计 - 同一个 UID (U061858575) 下绑多个账户, 前端传 account 参数后端按账户查
-// account 留空 = 后端 env CMB_ACCOUNT 默认 (=125925235910001 南京云洱之境餐饮有限公司)
-const BANK_ACCOUNTS: BankAccountConfig[] = [
-  {
-    label: '母公司·主账户',
-    accountName: '南京云洱之境餐饮有限公司',
-    bankName: '招商银行南京城东支行',
-    accountType: '一般户',
-    // account 留空 → 后端用 env 默认值
-  },
-  {
-    label: '子公司·合肥分店',
-    account: '125925610910001',
-    accountName: '合肥云岳之境餐饮有限公司',
-    bankName: '招商银行南京城东支行',
-    accountType: '一般户',
-  },
-]
 
 type CashbookSummary = {
   totalBalance: number | string
@@ -50,7 +30,8 @@ type CashbookSummary = {
 }
 type Account = {
   id: string; name: string; type: string
-  bankName?: string; accountNo?: string
+  bankName?: string; accountNo?: string; note?: string
+  cmbBindAccount?: string | null              // 非空 → 招行实时账户, 走 cmb 微服务拉余额
   balance: string | number; status: string
 }
 type Schedule = {
@@ -85,7 +66,11 @@ export default function FinanceFundsPage() {
   const [error, setError] = useState<string | null>(null)
   // 新建账户 modal
   const [openNew, setOpenNew] = useState(false)
-  const [draft, setDraft] = useState({ name: '', type: 'BANK', bankName: '', accountNo: '', note: '' })
+  const [draft, setDraft] = useState({
+    name: '', type: 'BANK', bankName: '', accountNo: '', note: '',
+    isCmbLive: false,        // 勾选 "招行实时账户" → 提交 cmbBindAccount
+    cmbBindAccount: '',
+  })
   const [saving, setSaving] = useState(false)
   // 当日明细 弹层
   const [pickDay, setPickDay] = useState<string | null>(null)
@@ -105,6 +90,13 @@ export default function FinanceFundsPage() {
 
   async function createAccount() {
     if (!draft.name.trim()) { alert('账户名称必填'); return }
+    // 招行实时账户必须填合规账号
+    if (draft.isCmbLive) {
+      const cmbAcct = draft.cmbBindAccount.trim()
+      if (!/^[0-9]{10,25}$/.test(cmbAcct)) {
+        alert('招行账号格式不对, 应为 10-25 位数字'); return
+      }
+    }
     setSaving(true)
     try {
       await apiFetch('/api/cashbook/accounts', {
@@ -115,14 +107,25 @@ export default function FinanceFundsPage() {
           bankName: draft.bankName.trim() || undefined,
           accountNo: draft.accountNo.trim() || undefined,
           note: draft.note.trim() || undefined,
+          cmbBindAccount: draft.isCmbLive ? draft.cmbBindAccount.trim() : undefined,
         }),
       })
       setOpenNew(false)
-      setDraft({ name: '', type: 'BANK', bankName: '', accountNo: '', note: '' })
+      setDraft({ name: '', type: 'BANK', bankName: '', accountNo: '', note: '', isCmbLive: false, cmbBindAccount: '' })
       load()
     } catch (e: any) {
       alert(e.message || '创建失败')
     } finally { setSaving(false) }
+  }
+
+  async function softDeleteAccount(a: Account) {
+    if (!confirm(`确定停用「${a.name}」?\n停用后从列表消失但历史流水保留, 不能恢复时联系开发`)) return
+    try {
+      await apiFetch(`/api/cashbook/accounts/${a.id}`, { method: 'DELETE' })
+      load()
+    } catch (e: any) {
+      alert(e.message || '删除失败')
+    }
   }
 
   const totalBalance = Number(summary?.totalBalance || 0)
@@ -185,11 +188,6 @@ export default function FinanceFundsPage() {
 
       {error && <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">加载失败: {error}</div>}
 
-      {/* 招行实时账户 — 母公司 (cmb 接入) */}
-      <Section title="招行实时账户" right={`${BANK_ACCOUNTS.length} 个 · 实时`}>
-        <BankAccountList accounts={BANK_ACCOUNTS} />
-      </Section>
-
       {/* 失败付款 — P0 重要 */}
       {failedSch !== null && failedSch.length > 0 && (
         <Section title="付款失败 / 重试" right={`${failedSch.length} 笔`} rightTone="red">
@@ -222,37 +220,63 @@ export default function FinanceFundsPage() {
           </div>
         )}
         {accounts && accounts.length > 0 && (
-          <ul className="bg-white rounded-card border border-border divide-y divide-border">
-            {accounts.map(a => {
-              const amt = Number(a.balance)
-              const pct = totalBalance > 0 ? Math.round(amt / totalBalance * 100) : 0
-              const anomaly = amt <= 0
-              return (
-                <li key={a.id} className="px-3 py-3">
-                  <div className="flex items-center gap-3 mb-2">
-                    <span className="w-9 h-9 rounded-md bg-bg flex items-center justify-center font-num">{a.name?.[0] || '$'}</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-h2 truncate">{a.name}</span>
-                        {anomaly && <Chip tone="red">余额 0</Chip>}
+          <div className="space-y-2">
+            {/* 招行实时账户: 走 cmb 微服务拉实时余额 */}
+            {accounts.filter(a => a.cmbBindAccount).map(a => (
+              <div key={a.id} className="relative">
+                <BankAccountCard config={{
+                  account:     a.cmbBindAccount!,
+                  label:       '招行实时',
+                  accountName: a.name,
+                  bankName:    a.bankName || '招商银行',
+                  accountType: a.note || undefined,
+                }} />
+                <button
+                  onClick={() => softDeleteAccount(a)}
+                  className="absolute top-3 right-14 text-micro text-gray3 hover:text-red-fg px-2 py-1"
+                  title="停用账户"
+                >停用</button>
+              </div>
+            ))}
+
+            {/* 普通账户 (手工录入余额) */}
+            {accounts.filter(a => !a.cmbBindAccount).length > 0 && (
+              <ul className="bg-white rounded-card border border-border divide-y divide-border">
+                {accounts.filter(a => !a.cmbBindAccount).map(a => {
+                  const amt = Number(a.balance)
+                  const pct = totalBalance > 0 ? Math.round(amt / totalBalance * 100) : 0
+                  const anomaly = amt <= 0
+                  return (
+                    <li key={a.id} className="px-3 py-3">
+                      <div className="flex items-center gap-3 mb-2">
+                        <span className="w-9 h-9 rounded-md bg-bg flex items-center justify-center font-num">{a.name?.[0] || '$'}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-h2 truncate">{a.name}</span>
+                            {anomaly && <Chip tone="red">余额 0</Chip>}
+                          </div>
+                          <p className="text-micro text-gray3">
+                            {a.bankName || a.type}
+                            {a.accountNo ? ` · 尾号 ${String(a.accountNo).slice(-4)}` : ''}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-num text-h2">{fmtMoney(amt)}</div>
+                          <div className="text-micro text-gray3 font-num">{pct}%</div>
+                        </div>
+                        <button onClick={() => softDeleteAccount(a)}
+                                className="ml-2 text-micro text-gray3 hover:text-red-fg px-2 py-1"
+                                title="停用账户">停用</button>
                       </div>
-                      <p className="text-micro text-gray3">
-                        {a.bankName || a.type}
-                        {a.accountNo ? ` · 尾号 ${String(a.accountNo).slice(-4)}` : ''}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-num text-h2">{fmtMoney(amt)}</div>
-                      <div className="text-micro text-gray3 font-num">{pct}%</div>
-                    </div>
-                  </div>
-                  <div className="h-1 bg-bg rounded-full overflow-hidden">
-                    <div className={`h-full ${anomaly ? 'bg-red' : 'bg-gray2'}`} style={{ width: `${Math.max(2, pct)}%` }} />
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
+                      <div className="h-1 bg-bg rounded-full overflow-hidden">
+                        <div className={`h-full ${anomaly ? 'bg-red' : 'bg-gray2'}`} style={{ width: `${Math.max(2, pct)}%` }} />
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
         )}
       </Section>
 
@@ -327,11 +351,35 @@ export default function FinanceFundsPage() {
                            placeholder="如 6225 8888 8888 8888"
                            className="w-full bg-bg rounded-cta px-3 py-2 text-body font-num outline-none" />
                   </div>
+
+                  {/* 招行实时账户 — 走 cmb 微服务自动拉余额 */}
+                  <label className="flex items-start gap-2 bg-amber-bg/40 border border-amber/30 rounded-card p-3 cursor-pointer">
+                    <input type="checkbox" checked={draft.isCmbLive}
+                           onChange={e => setDraft({...draft, isCmbLive: e.target.checked})}
+                           className="mt-0.5" />
+                    <span className="flex-1 text-caption">
+                      <span className="text-button text-amber-fg">招行实时账户</span>
+                      <span className="block text-micro text-gray2 mt-0.5">
+                        勾选后从招商银行 API 自动拉余额, 无需手工录入。需先在招行客户经理处把 UID 绑定到该账号才生效。
+                      </span>
+                    </span>
+                  </label>
+                  {draft.isCmbLive && (
+                    <div>
+                      <label className="text-micro text-gray3 block mb-1">招行账号 * <span className="text-amber-fg">(10-25 位数字)</span></label>
+                      <input value={draft.cmbBindAccount}
+                             onChange={e => setDraft({...draft, cmbBindAccount: e.target.value.replace(/\D/g, '')})}
+                             inputMode="numeric"
+                             placeholder="如 125925235910001"
+                             className="w-full bg-bg rounded-cta px-3 py-2 text-body font-num outline-none" />
+                    </div>
+                  )}
                 </>
               )}
               <div>
-                <label className="text-micro text-gray3 block mb-1">备注 (可选)</label>
+                <label className="text-micro text-gray3 block mb-1">备注 (可选, 如「一般户」「基本户」)</label>
                 <input value={draft.note} onChange={e => setDraft({...draft, note: e.target.value})}
+                       placeholder="如 一般户"
                        className="w-full bg-bg rounded-cta px-3 py-2 text-body outline-none" />
               </div>
             </div>

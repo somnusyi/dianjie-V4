@@ -17,7 +17,8 @@
  * 限流: 招行同账号 10s 一次, 抽屉内自带 loading lock 防连点
  */
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { apiFetch } from '@/lib/v2-auth'
 
 type Tx = {
@@ -185,9 +186,13 @@ export function BankTransactionsDrawer({
     }
   }
 
-  if (!open) return null
+  // Portal 渲染到 document.body, 绕过祖先 transform 容器 (例如 SwipeableRow)
+  // 否则 fixed 会被祖先 transform 卷起来当 absolute 用, 抽屉被卡片裁掉
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
+  if (!open || !mounted) return null
 
-  return (
+  const sheet = (
     <div className="fixed inset-0 z-50" onClick={() => !loading && !downloadingSeq && onClose()}>
       <div className="absolute inset-0 bg-ink/60" />
       <div
@@ -299,4 +304,5 @@ export function BankTransactionsDrawer({
       </div>
     </div>
   )
+  return createPortal(sheet, document.body)
 }

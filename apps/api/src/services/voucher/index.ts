@@ -130,7 +130,12 @@ export function voucherForReceipt(opts: {
   })
 }
 
-/** 付款给供应商: 借 应付账款 / 贷 银行存款 */
+/**
+ * 付款给供应商: 借 应付账款 / 贷 银行存款 (按账户末四位决定明细科目)
+ * 用户好会计科目体系 (小企业会计准则):
+ *   100201 中国银行1674  / 100202 建设银行3618  / 1001 库存现金
+ * 招行账户在好会计里还没加, 暂兜底用一级 1002 银行存款 (财务可在凭证里手工改细)
+ */
 export function voucherForPayment(opts: {
   tenantId: string
   paymentId: string
@@ -139,11 +144,17 @@ export function voucherForPayment(opts: {
   amount: number
   method: string             // BANK_TRANSFER / CMB_AUTOPAY / OFFLINE / CASH
   date: Date
+  bankLast4?: string         // 付款银行末四位, 便于匹配明细科目
 }) {
-  // 默认走招行子户; OFFLINE/CASH 走库存现金
   const isCash = opts.method === 'CASH'
-  const bankAccountCode = isCash ? '1001' : '100201'
-  const bankAccountName = isCash ? '库存现金' : '银行存款-招商银行'
+  let bankAccountCode = '1002'
+  let bankAccountName = '银行存款'
+  if (isCash) {
+    bankAccountCode = '1001'; bankAccountName = '库存现金'
+  } else if (opts.bankLast4) {
+    if (opts.bankLast4 === '1674') { bankAccountCode = '100201'; bankAccountName = '中国银行1674' }
+    else if (opts.bankLast4 === '3618') { bankAccountCode = '100202'; bankAccountName = '建设银行3618' }
+  }
   return createVoucherAsync({
     tenantId: opts.tenantId,
     date: opts.date,
@@ -158,7 +169,8 @@ export function voucherForPayment(opts: {
   })
 }
 
-/** 报损 (供应商同意): 借 销售费用-报损 / 贷 库存商品 */
+/** 报损 (供应商同意): 借 营业外支出-存货毁损报废损失 / 贷 库存商品
+ *  小企业会计准则: 571106 营业外支出-存货毁损报废损失 */
 export function voucherForLossApproved(opts: {
   tenantId: string
   lossClaimId: string
@@ -175,14 +187,16 @@ export function voucherForLossApproved(opts: {
     sourceType: 'LossClaim',
     sourceId: opts.lossClaimId,
     entries: [
-      { accountCode: '660103', accountName: '销售费用-报损', debit: opts.amount },
+      { accountCode: '571106', accountName: '存货毁损报废损失', debit: opts.amount },
       { accountCode: '1405', accountName: '库存商品', credit: opts.amount,
         summary: `${opts.storeName} 短量 ${opts.lossClaimNo}` },
     ],
   })
 }
 
-/** 营业额录入: 借 银行/平台 / 贷 主营业务收入-堂食 (按渠道拆分) */
+/** 营业额录入: 借 银行/渠道资金 / 贷 主营业务收入
+ *  好会计小企业准则: 主营业务收入 5001 (无明细堂食/外卖, 摘要里区分)
+ *  收款渠道走 5601 销售费用-平台手续费 体现 (用户可在凭证里手工拆) */
 export function voucherForRevenue(opts: {
   tenantId: string
   revenueId: string
@@ -192,30 +206,27 @@ export function voucherForRevenue(opts: {
   date: Date
   paymentMethod?: 'cash' | 'wechat' | 'alipay' | 'meituan' | 'douyin' | 'bank'
 }) {
-  const channelMap = {
-    dine_in: { code: '600101', name: '主营业务收入-堂食' },
-    takeout: { code: '600102', name: '主营业务收入-外卖' },
-    card:    { code: '600103', name: '主营业务收入-储值' },
-  }
+  const channelLabel = { dine_in: '堂食', takeout: '外卖', card: '储值' }[opts.channel] || '堂食'
+  // 收款资金落地科目 (按收款渠道; 银行用 1002 一级, 暂未拆明细)
   const payMap: Record<string, { code: string; name: string }> = {
-    cash:    { code: '1001',   name: '库存现金' },
-    wechat:  { code: '101204', name: '其他货币资金-微信' },
-    alipay:  { code: '101203', name: '其他货币资金-支付宝' },
-    meituan: { code: '101201', name: '其他货币资金-美团' },
-    douyin:  { code: '101202', name: '其他货币资金-抖音' },
-    bank:    { code: '100201', name: '银行存款-招商银行' },
+    cash:    { code: '1001',  name: '库存现金' },
+    wechat:  { code: '1012',  name: '其他货币资金' },
+    alipay:  { code: '1012',  name: '其他货币资金' },
+    meituan: { code: '1012',  name: '其他货币资金' },
+    douyin:  { code: '1012',  name: '其他货币资金' },
+    bank:    { code: '1002',  name: '银行存款' },
   }
   const pay = payMap[opts.paymentMethod || 'bank'] || payMap.bank
-  const ch = channelMap[opts.channel] || channelMap.dine_in
   return createVoucherAsync({
     tenantId: opts.tenantId,
     date: opts.date,
-    summary: `${opts.storeName} 营业额 ${ch.name.replace('主营业务收入-','')}`,
+    summary: `${opts.storeName} 营业额 ${channelLabel}`,
     sourceType: 'Revenue',
     sourceId: opts.revenueId,
     entries: [
       { accountCode: pay.code, accountName: pay.name, debit: opts.amount },
-      { accountCode: ch.code, accountName: ch.name, credit: opts.amount },
+      { accountCode: '5001', accountName: '主营业务收入', credit: opts.amount,
+        summary: `${channelLabel} 收入` },
     ],
   })
 }

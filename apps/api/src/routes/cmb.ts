@@ -15,6 +15,7 @@ import {
   cmbReceipt,
   cmbHealthCheck,
 } from '../services/cmbPayment'
+import { prisma } from '@dianjie/db'
 import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
@@ -116,6 +117,36 @@ async function cachedBalance(account?: string) {
   })()
   inflightBalance.set(key, p)
   return await p
+}
+
+// 后台定时预热: 主动刷新所有 cmbBindAccount 非空账户的余额 cache
+// 用户开 app 时几乎都命中 cache, 极少看到 loading
+// 银行调用频率: 每账户每 ~60s 一次, 远低于 10s/次限流上限
+let prewarmRunning = false
+async function prewarmAllCmbAccounts() {
+  if (prewarmRunning) return  // 防并发 (上轮还没跑完时下轮触发)
+  prewarmRunning = true
+  try {
+    const accounts = await prisma.cashAccount.findMany({
+      where: { cmbBindAccount: { not: null }, status: 'ACTIVE' },
+      select: { cmbBindAccount: true, name: true },
+    })
+    if (accounts.length === 0) return
+    let ok = 0, fail = 0
+    for (const a of accounts) {
+      try {
+        const r = await cachedBalance(a.cmbBindAccount!)
+        if (r?.success || r?.cached) ok++; else fail++
+      } catch { fail++ }
+      // 同账户 10s 限流: 等 11s 再刷下一个 (不同账户不会撞限流, 但 UID 维度并发也别多)
+      await new Promise(r => setTimeout(r, 11_000))
+    }
+    console.log(`🔥 cmb prewarm: ${accounts.length} 账户 (${ok} ok / ${fail} fail)`)
+  } catch (e: any) {
+    console.error('cmb prewarm error:', e?.message || e)
+  } finally {
+    prewarmRunning = false
+  }
 }
 
 export const cmbRoutes: FastifyPluginAsync = async (app) => {
@@ -231,4 +262,9 @@ export const cmbRoutes: FastifyPluginAsync = async (app) => {
   ensureReceiptDir()
   cleanupReceipts()
   setInterval(cleanupReceipts, 60 * 60 * 1000).unref()  // 每小时清一次, unref 不阻止进程退出
+
+  // 启动后台 cmb 余额预热: 进程启动 10s 后跑第 1 次, 之后每 60s 跑一次
+  // 每个账户预热间隔 11s (避同账户限流), N 账户耗 N*11s, N 不大时绰绰有余
+  setTimeout(() => { prewarmAllCmbAccounts() }, 10_000)
+  setInterval(() => { prewarmAllCmbAccounts() }, 60_000).unref()
 }

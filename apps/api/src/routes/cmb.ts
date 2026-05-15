@@ -56,23 +56,36 @@ function requireFinance(req: any, reply: any): boolean {
   return true
 }
 
-// 服务端 11s 缓存 · 应对招行同账号 10s 限流
-// 跨用户/跨设备/跨浏览器都共享, sessionStorage 救不了的场景这里兜底
-// 11s > 10s, 留 1s safety margin
+// 服务端 11s 缓存 + singleflight · 应对招行同账号 10s 限流
+//   缓存挡串行重复, singleflight 挡"短时间内并发雷击"(同事手机 1 秒发 10 次都撞银行)
+// 跨用户/跨设备/跨浏览器都共享 — 同一 API 进程内的所有请求受益
 const BALANCE_TTL_MS = 11_000
 const balanceCache = new Map<string, { data: any; at: number }>()
+const inflightBalance = new Map<string, Promise<any>>()
 
 async function cachedBalance(account?: string) {
   const key = account || '__default__'
+  // 1. 缓存命中且新鲜 (11s 内)
   const hit = balanceCache.get(key)
   if (hit && Date.now() - hit.at < BALANCE_TTL_MS) {
     return { ...hit.data, cached: true, cachedAgeMs: Date.now() - hit.at }
   }
-  const fresh = await cmbBalance(account)
-  if (fresh.success) {
-    balanceCache.set(key, { data: fresh, at: Date.now() })
-  }
-  return fresh
+  // 2. singleflight: 当下已有同 key 请求在路上, 直接等它的结果
+  //    防并发雷击撞招行限流 (1 秒内 N 个并发请求只发 1 次银行)
+  const inflight = inflightBalance.get(key)
+  if (inflight) return await inflight
+  // 3. 发起新请求, 同时记入 inflight map 给后续并发等用
+  const p = (async () => {
+    try {
+      const fresh = await cmbBalance(account)
+      if (fresh.success) balanceCache.set(key, { data: fresh, at: Date.now() })
+      return fresh
+    } finally {
+      inflightBalance.delete(key)
+    }
+  })()
+  inflightBalance.set(key, p)
+  return await p
 }
 
 export const cmbRoutes: FastifyPluginAsync = async (app) => {

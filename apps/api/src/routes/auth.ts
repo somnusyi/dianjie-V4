@@ -17,8 +17,8 @@ const PHONE_RE = /^1[3-9]\d{9}$/
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
 
-  // POST /api/auth/login
-  app.post('/login', async (request, reply) => {
+  // POST /api/auth/login — P1: 单独限流防密码爆破 (10 次/分钟/IP)
+  app.post('/login', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } } as any, async (request, reply) => {
     const body = loginSchema.safeParse(request.body)
     if (!body.success) {
       return reply.status(400).send({ error: body.error.issues[0].message })

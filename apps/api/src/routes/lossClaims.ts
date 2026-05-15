@@ -17,14 +17,17 @@ export async function refundSupplierStockOnLossApproved(claim: any, operatorId: 
     const lossQty = Number(it.lossQty)
     if (!productId || lossQty <= 0) continue
     try {
-      const cur = await prisma.product.findUnique({ where: { id: productId }, select: { stock: true, supplierId: true } })
-      if (!cur || !cur.supplierId) continue
-      const newStock = Number(cur.stock) + lossQty
-      await prisma.product.update({ where: { id: productId }, data: { stock: newStock } })
+      // P0: 原子加, 避免并发报损同意时丢更新
+      const updated = await prisma.product.update({
+        where: { id: productId },
+        data: { stock: { increment: lossQty } },
+        select: { stock: true, supplierId: true },
+      })
+      if (!updated.supplierId) continue
       await prisma.supplierStockMovement.create({
         data: {
-          tenantId: claim.tenantId, supplierId: cur.supplierId, productId,
-          delta: lossQty, balanceAfter: newStock,
+          tenantId: claim.tenantId, supplierId: updated.supplierId, productId,
+          delta: lossQty, balanceAfter: updated.stock,
           type: 'ADJUSTMENT' as any,
           reason: `${reason}, 回补未送达 ${lossQty}`,
           sourceType: 'LossClaim', sourceId: claim.id,
@@ -86,32 +89,49 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 创建报损申请（门店）──────────────────────────
   app.post('/', { preHandler: [(app as any).authenticate] }, async (req: any) => {
-    const { tenantId, userId, storeId: userStoreId } = req.user
+    const { tenantId, userId, storeId: userStoreId, role } = req.user
     const { purchaseOrderId, description, evidenceImages, items } = req.body as any
 
+    // P0: 仅门店人员/管理员可创建针对采购订单的报损 (供应商不能给自己创建)
+    if (!['MANAGER', 'KITCHEN_LEAD', 'PURCHASER', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+      throw { statusCode: 403, message: '无权创建报损申请' }
+    }
     if (!items?.length) throw { statusCode: 400, message: '请填写报损明细' }
     if (!description) throw { statusCode: 400, message: '请填写报损说明' }
     if (!evidenceImages?.length) throw { statusCode: 400, message: '请上传证据图片' }
 
+    // 加 store scope: 店长/厨师长 只能给自己门店建报损
+    const orderWhere: any = { id: purchaseOrderId, tenantId }
+    if (isStoreScoped(role) && userStoreId) orderWhere.storeId = userStoreId
     const order = await prisma.purchaseOrder.findFirst({
-      where: { id: purchaseOrderId, tenantId },
+      where: orderWhere,
+      include: { items: true },
     })
     if (!order) throw { statusCode: 404, message: '采购订单不存在' }
 
+    // P0: 服务端用订单 item 的 shippedQty + unitPrice 作为权威值, 完全忽略客户端 orderedQty/unitPrice
+    // 之前漏洞: 客户端可任意构造 lossQty=99999 / unitPrice=10000 → 凭空扣对方账期
+    const poItemMap = new Map(order.items.map((it: any) => [it.productId, it]))
     let totalLossAmount = 0
-    const itemsData = items.map((i: any) => {
-      const lossQty = Number(i.orderedQty) - Number(i.receivedQty)
-      const lossAmount = lossQty * Number(i.unitPrice)
-      totalLossAmount += lossAmount
-      return {
+    const itemsData: any[] = []
+    for (const i of items) {
+      const poi: any = poItemMap.get(i.productId)
+      if (!poi) throw { statusCode: 400, message: `订单中无此 SKU: ${i.productId}` }
+      const orderedQty = Number(poi.shippedQty ?? poi.quantity)  // 应到 = 实发 (供应商在 ship 时填)
+      const receivedQty = Math.max(0, Math.min(orderedQty, Number(i.receivedQty || 0)))  // clamp [0, orderedQty]
+      const lossQty = +(orderedQty - receivedQty).toFixed(4)
+      if (lossQty <= 0) continue   // 没短量, 跳过
+      const unitPrice = Number(poi.unitPrice)  // 用订单 snapshot 价, 防客户端调价
+      const lossAmount = +(lossQty * unitPrice).toFixed(2)
+      totalLossAmount = +(totalLossAmount + lossAmount).toFixed(2)
+      itemsData.push({
         productId: i.productId,
-        orderedQty: i.orderedQty,
-        receivedQty: i.receivedQty,
-        lossQty,
-        unitPrice: i.unitPrice,
-        lossAmount,
-      }
-    })
+        orderedQty, receivedQty, lossQty, unitPrice, lossAmount,
+      })
+    }
+    if (itemsData.length === 0) {
+      throw { statusCode: 400, message: '没有需要报损的明细 (实收 ≥ 应到)' }
+    }
 
     const ym = dayjs().format('YYYYMM')
     const count = await prisma.lossClaim.count({ where: { tenantId, no: { startsWith: `LC${ym}` } } })
@@ -261,8 +281,11 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     if (!['approve', 'reject'].includes(action)) throw { statusCode: 400, message: 'action 必须是 approve 或 reject' }
     if (action === 'reject' && (!note || !note.trim())) throw { statusCode: 400, message: '拒绝时必须填写原因' }
 
+    // P0: 加 supplier scope, 避免 supplier A 处理 supplier B 的报损; 排除店内自有盘点报损 (isManual)
+    const claimWhere: any = { id, tenantId, status: { in: ['PENDING', 'AUTO_APPROVED'] }, isManual: false }
+    if (isSupplierRole(role) && req.user.supplierId) claimWhere.supplierId = req.user.supplierId
     const claim = await prisma.lossClaim.findFirst({
-      where: { id, tenantId, status: { in: ['PENDING', 'AUTO_APPROVED'] } },
+      where: claimWhere,
       include: { purchaseOrder: { include: { receipt: true } }, items: true },
     })
     if (!claim) throw { statusCode: 400, message: '报损申请不存在或已处理' }
@@ -286,14 +309,21 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       })
     } else {
       // 供应商拒绝: 主张全部送达, 门店应按全额付 → schedule 加回报损金额 + 暂停付款待协商
+      // claim.purchaseOrder 理论可空 (manual 报损), 上面 isManual=false 已过滤
+      if (!claim.purchaseOrder?.receiptId) {
+        throw { statusCode: 500, message: '订单收据未生成, 无法回退账期' }
+      }
       const schedule = await prisma.paymentSchedule.findUnique({
-        where: { receiptId: claim.purchaseOrder.receiptId! },
+        where: { receiptId: claim.purchaseOrder.receiptId },
       })
       if (schedule && (schedule.status === 'PENDING' || schedule.status === 'PENDING_APPROVAL' || schedule.status === 'APPROVED')) {
-        const newAmount = Number(schedule.amount) + Number(claim.totalLossAmount)
+        // P0: 原子加, 避免并发拒绝时丢更新
         await prisma.paymentSchedule.update({
           where: { id: schedule.id },
-          data: { amount: newAmount, status: 'ON_HOLD' as any },
+          data: {
+            amount: { increment: Number(claim.totalLossAmount) },
+            status: 'ON_HOLD' as any,
+          },
         })
       }
       await prisma.lossClaim.update({
@@ -326,7 +356,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // 检查该订单所有报损是否全部结案
-    void tryCompleteOrder(claim.purchaseOrderId, tenantId)
+    if (claim.purchaseOrderId) void tryCompleteOrder(claim.purchaseOrderId, tenantId)
 
     void notifyLossClaimResult(tenantId, claim.no, action, Number(claim.totalLossAmount))
     return { success: true, action }
@@ -404,11 +434,16 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     if (claim.purchaseOrder?.receiptId) {
       const sch = await prisma.paymentSchedule.findUnique({ where: { receiptId: claim.purchaseOrder.receiptId } })
       if (sch && sch.status === 'ON_HOLD') {
-        // 当前 amount 是 reject 时回补到全额, 减去协商扣减额
         const deduct = Number(finalDeductAmount || 0)
-        await prisma.paymentSchedule.update({
-          where: { id: sch.id },
-          data: { amount: Math.max(0, Number(sch.amount) - deduct), status: 'PENDING' as any },
+        // P0: 原子减, 避免并发争议时丢更新; 用 decrement + 在数据层保证非负无法直接做, 改用事务读改写并 clamp
+        await prisma.$transaction(async (tx) => {
+          const fresh = await tx.paymentSchedule.findUnique({ where: { id: sch.id }, select: { amount: true } })
+          if (!fresh) return
+          const next = Math.max(0, Number(fresh.amount) - deduct)
+          await tx.paymentSchedule.update({
+            where: { id: sch.id },
+            data: { amount: next, status: 'PENDING' as any },
+          })
         })
       }
       // 如果协商扣减 > 0, 视为部分认可短量, 也回补部分库存
@@ -433,7 +468,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       }
     } catch {}
 
-    void tryCompleteOrder(claim.purchaseOrderId, tenantId)
+    if (claim.purchaseOrderId) void tryCompleteOrder(claim.purchaseOrderId, tenantId)
     return { success: true, finalDeductAmount: Number(finalDeductAmount || 0) }
   })
 }

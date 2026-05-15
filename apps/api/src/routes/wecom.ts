@@ -30,7 +30,9 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
 
     const base = process.env.WECOM_REDIRECT_BASE || 'https://www.njdianjie.com'
     const redirectUri = encodeURIComponent(`${base}/api/wecom/oauth/callback`)
-    const state = encodeURIComponent(`${tenant}|${redirect || '/'}`)
+    // P2: 防 open redirect; 只允许相对路径
+    const safeRedirect = (typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')) ? redirect : '/'
+    const state = encodeURIComponent(`${tenant}|${safeRedirect}`)
     // 企微 OAuth 默认走静默授权 (snsapi_base), 仅企业内成员可用
     const url = `https://open.weixin.qq.com/connect/oauth2/authorize?appid=${cfg.corpId}&redirect_uri=${redirectUri}&response_type=code&scope=snsapi_base&state=${state}&agentid=${cfg.agentId}#wechat_redirect`
     return reply.send({ url })
@@ -40,7 +42,9 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
   app.get('/oauth/callback', async (req: any, reply: any) => {
     const { code, state } = req.query as any
     if (!code) return reply.status(400).send({ error: 'code 必填' })
-    const [tenantSlug, redirect] = decodeURIComponent(state || '').split('|')
+    const [tenantSlug, rawRedirect] = decodeURIComponent(state || '').split('|')
+    // P2: 防 open redirect
+    const redirect = (rawRedirect && rawRedirect.startsWith('/') && !rawRedirect.startsWith('//')) ? rawRedirect : '/'
     const t = await prisma.tenant.findUnique({ where: { slug: tenantSlug } })
     if (!t) return reply.status(404).send({ error: 'tenant 不存在' })
 

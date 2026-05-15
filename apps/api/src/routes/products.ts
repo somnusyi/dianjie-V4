@@ -370,11 +370,11 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       where.supplierId = supplierId
     }
     const body = req.body as any
-    const data = isSupplierRole(role)
-      ? Object.fromEntries(
-          Object.entries(body).filter(([k]) => ['price', 'spec', 'stock', 'minStock', 'minOrderQty', 'stepQty', 'shelfDays', 'status'].includes(k))
-        )
-      : body
+    // P1: 非供应商角色也必须白名单字段, 防 mass assignment (改 tenantId / supplierId / id)
+    const SUPPLIER_ALLOW = ['price', 'spec', 'stock', 'minStock', 'minOrderQty', 'stepQty', 'shelfDays', 'status']
+    const STAFF_ALLOW = [...SUPPLIER_ALLOW, 'name', 'unit', 'category', 'code']  // 内部员工额外可改名/类
+    const allow = isSupplierRole(role) ? SUPPLIER_ALLOW : STAFF_ALLOW
+    const data = Object.fromEntries(Object.entries(body).filter(([k]) => allow.includes(k)))
 
     // 供应商停售 SKU → 不直接落库, 创建 NEW_DISH(action=DISABLE) 审批单
     if (isSupplierRole(role) && data.status === 'DISABLED') {

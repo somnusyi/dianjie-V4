@@ -39,9 +39,18 @@ export const paymentRoutes: FastifyPluginAsync = async (app) => {
     if (!recon) return reply.status(404).send({ error: '对账单不存在' })
     if (recon.status !== 'APPROVED') return reply.status(400).send({ error: '对账单未审核通过' })
 
+    // P1: 校验金额. amount 必须 > 0 且 = 对账单总额 (单次全额付; 部分付款功能未上线)
+    const amt = Number(amount)
+    if (!Number.isFinite(amt) || amt <= 0) return reply.status(400).send({ error: '金额无效' })
+    if (Math.abs(amt - Number(recon.totalAmount)) > 0.01) {
+      return reply.status(400).send({ error: `金额与对账单不符 (¥${recon.totalAmount})` })
+    }
+    const ALLOWED_METHOD = ['BANK_TRANSFER', 'CMB_AUTOPAY', 'OFFLINE', 'CASH']
+    const finalMethod = ALLOWED_METHOD.includes(method) ? method : 'BANK_TRANSFER'
+
     const no = await generateNo('PY', tenantId)
     const payment = await prisma.payment.create({
-      data: { tenantId, no, supplierId: recon.supplierId, reconciliationId, amount, method: method || 'BANK_TRANSFER', status: 'UNPAID', note },
+      data: { tenantId, no, supplierId: recon.supplierId, reconciliationId, amount: amt, method: finalMethod, status: 'UNPAID', note },
     })
 
     await prisma.reconciliation.update({ where: { id: recon.id }, data: { status: 'PAYMENT_GENERATED' } })

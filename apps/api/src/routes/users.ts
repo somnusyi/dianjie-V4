@@ -36,7 +36,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
 
   // 创建用户
   app.post('/', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role, id: operatorId } = req.user
+    const { tenantId, role, userId: operatorId } = req.user
     if (!['ADMIN', 'SUPER_ADMIN'].includes(role)) {
       return reply.status(403).send({ error: '无权限' })
     }
@@ -99,7 +99,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
 
   // 更新用户
   app.patch('/:id', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role, id: operatorId } = req.user
+    const { tenantId, role, userId: operatorId } = req.user
     if (!['ADMIN', 'SUPER_ADMIN'].includes(role)) {
       return reply.status(403).send({ error: '无权限' })
     }
@@ -149,7 +149,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
 
   // 禁用/启用用户
   app.patch('/:id/toggle', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role, id: operatorId } = req.user
+    const { tenantId, role, userId: operatorId } = req.user
     if (!['ADMIN', 'SUPER_ADMIN'].includes(role)) {
       return reply.status(403).send({ error: '无权限' })
     }
@@ -171,7 +171,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
 
   // 重置密码
   app.patch('/:id/reset-password', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role, id: operatorId } = req.user
+    const { tenantId, role, userId: operatorId } = req.user
     if (!['ADMIN', 'SUPER_ADMIN'].includes(role)) {
       return reply.status(403).send({ error: '无权限' })
     }
@@ -183,6 +183,10 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
 
     const target = await prisma.user.findFirst({ where: { id: req.params.id, tenantId } })
     if (!target) return reply.status(404).send({ error: '用户不存在' })
+    // P0: ADMIN 不能重置 SUPER_ADMIN 密码 (权限提升攻击)
+    if (target.role === 'SUPER_ADMIN' && role !== 'SUPER_ADMIN') {
+      return reply.status(403).send({ error: '无权重置超级管理员密码' })
+    }
 
     await prisma.user.update({
       where: { id: target.id },

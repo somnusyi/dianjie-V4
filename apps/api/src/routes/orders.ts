@@ -164,11 +164,25 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const count = await prisma.purchaseOrder.count({ where: { tenantId, no: { startsWith: `PO${ym}` } } })
     const no = `PO${ym}${String(count + 1).padStart(6, '0')}`
 
+    // P1: 单价以 DB Product.price 为权威, 忽略客户端传的 unitPrice
+    // 防内部串通低报单价 / 客户端 bug
+    const priceMap = new Map(productsMoq.map((p: any) => [p.id, Number((p as any).price ?? 0)]))
+    // 需要价格但 productsMoq 不一定有 price 字段, 重拉一次只取 price
+    const priceRows = await prisma.product.findMany({
+      where: { id: { in: productIds }, tenantId },
+      select: { id: true, price: true },
+    })
+    for (const r of priceRows) priceMap.set(r.id, Number(r.price))
+
     let totalAmount = 0
     const itemsData = items.map((i: any) => {
-      const amount = Number(i.quantity) * Number(i.unitPrice)
-      totalAmount += amount
-      return { productId: i.productId, quantity: i.quantity, unitPrice: i.unitPrice, amount }
+      const dbPrice = priceMap.get(i.productId)
+      if (dbPrice === undefined) {
+        throw { statusCode: 400, message: `商品不存在: ${i.productId}` }
+      }
+      const amount = +(Number(i.quantity) * dbPrice).toFixed(2)
+      totalAmount = +(totalAmount + amount).toFixed(2)
+      return { productId: i.productId, quantity: i.quantity, unitPrice: dbPrice, amount }
     })
 
     const order = await prisma.purchaseOrder.create({
@@ -377,8 +391,11 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
 
     if (!isSupplierRole(role) && !['ADMIN', 'SUPER_ADMIN'].includes(role)) throw { statusCode: 403, message: '无权限' }
 
+    // P0: 加 supplier scope, 防供应商 A 替供应商 B 发货
+    const shipWhere: any = { id, tenantId, status: { in: ['SUBMITTED', 'CONFIRMED'] } }
+    if (isSupplierRole(role) && req.user.supplierId) shipWhere.supplierId = req.user.supplierId
     const order = await prisma.purchaseOrder.findFirst({
-      where: { id, tenantId, status: { in: ['SUBMITTED', 'CONFIRMED'] } },
+      where: shipWhere,
       include: { items: { include: { product: { select: { name: true, unit: true } } } } },
     })
     if (!order) throw { statusCode: 400, message: '订单不存在或状态不可发货' }
@@ -431,15 +448,20 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         for (const l of lineShipped) {
           const it = l.it
           if (l.shipped <= 0) continue   // 该行没发, 不扣库存
-          const cur = await tx.product.findUnique({ where: { id: it.productId }, select: { stock: true, supplierId: true } })
-          if (!cur || cur.supplierId !== order.supplierId) continue   // 商品不属于本供应商, 跳过
+          // P0: 校验商品归属 supplier (防越权用别家 SKU 扣库存)
+          const owns = await tx.product.findUnique({ where: { id: it.productId }, select: { supplierId: true } })
+          if (!owns || owns.supplierId !== order.supplierId) continue
           const qty = l.shipped
-          const newStock = Number(cur.stock) - qty   // 允许负库存
-          await tx.product.update({ where: { id: it.productId }, data: { stock: newStock } })
+          // 原子扣减 + 拿到结果, 避免读改写竞态
+          const updated = await tx.product.update({
+            where: { id: it.productId },
+            data: { stock: { decrement: qty } },
+            select: { stock: true },
+          })
           await tx.supplierStockMovement.create({
             data: {
               tenantId, supplierId: order.supplierId, productId: it.productId,
-              delta: -qty, balanceAfter: newStock,
+              delta: -qty, balanceAfter: updated.stock,
               type: 'OUTBOUND_PO' as any,
               reason: `发货 ${order.no}`,
               sourceType: 'PurchaseOrder', sourceId: order.id,

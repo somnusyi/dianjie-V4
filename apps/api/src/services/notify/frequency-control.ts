@@ -3,9 +3,12 @@
  * 频控本身在 index.ts 里查 NotificationLog 实现, 这里只放工具函数
  */
 
-/** 静默时段: 22:00 - 07:00 (亚洲/上海) */
+/** 静默时段: 22:00 - 07:00 (上海时区, 不依赖宿主时区) */
 export function isSilentHours(now: Date = new Date()): boolean {
-  // 用上海时区 (生产 ECS 默认 +08, 直接 getHours 即可)
-  const h = now.getHours()
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai',
+    hour: 'numeric', hour12: false,
+  })
+  const h = parseInt(fmt.format(now))
   return h >= 22 || h < 7
 }

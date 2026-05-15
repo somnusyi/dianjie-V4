@@ -63,20 +63,20 @@ export async function notify(opts: NotifyOptions): Promise<{ sent: number; suppr
     return { sent: 0, suppressed: userIds.length, failed: 0 }
   }
 
-  let sent = 0, suppressed = 0, failed = 0
-  for (const userId of userIds) {
+  // P1: 并发处理收件人, 避免 N 个用户串行 DB roundtrip 拖垮 prisma 连接池
+  const rendered = renderTemplate(event, payload)
+  const results = await Promise.all(userIds.map(async (userId) => {
     try {
-      // 3. 用户偏好检查
+      // 3. 用户偏好
       const pref = await prisma.notificationPref.findUnique({
         where: { userId_eventType: { userId, eventType: event } },
       })
       if (pref && !pref.enabled) {
         await logSuppressed(tenantId, userId, event, eventKey, 'user_disabled')
-        suppressed++
-        continue
+        return 'suppressed' as const
       }
 
-      // 4. 频控去重 (默认 5 分钟内同 eventKey 不重发)
+      // 4. 频控去重 (5 分钟内同 eventKey 不重发)
       if (!bypassFrequency) {
         const since = new Date(Date.now() - 5 * 60 * 1000)
         const dup = await prisma.notificationLog.findFirst({
@@ -84,57 +84,44 @@ export async function notify(opts: NotifyOptions): Promise<{ sent: number; suppr
         })
         if (dup) {
           await logSuppressed(tenantId, userId, event, eventKey, 'frequency_blocked')
-          suppressed++
-          continue
+          return 'suppressed' as const
         }
       }
 
       // 5. 选通道
       const user = await prisma.user.findUnique({ where: { id: userId } })
-      if (!user || user.status === 'INACTIVE') {
-        suppressed++
-        continue
-      }
+      if (!user || user.status === 'INACTIVE') return 'suppressed' as const
       const channels = pref?.channels?.length ? pref.channels : ['wecom']
 
-      // 渲染消息
-      const rendered = renderTemplate(event, payload)
-
-      let delivered = false
       for (const channel of channels) {
         if (channel === 'wecom' && user.wecomUserId) {
           try {
             await sendViaWeCom(tenantId, user.wecomUserId, rendered)
             await prisma.notificationLog.create({
-              data: {
-                tenantId, userId, eventType: event, eventKey,
-                channel: 'wecom', status: 'sent',
-                payload: payload as any,
-              },
+              data: { tenantId, userId, eventType: event, eventKey, channel: 'wecom', status: 'sent', payload: payload as any },
             })
-            delivered = true
-            sent++
-            break
+            return 'sent' as const
           } catch (e: any) {
             await prisma.notificationLog.create({
               data: {
-                tenantId, userId, eventType: event, eventKey,
-                channel: 'wecom', status: 'failed',
-                errorMsg: e.message || String(e),
-                payload: payload as any,
+                tenantId, userId, eventType: event, eventKey, channel: 'wecom', status: 'failed',
+                errorMsg: e.message || String(e), payload: payload as any,
               },
             })
-            // 继续尝试下一个通道
+            // 继续尝试下一个通道 (未来加 SMS / inapp)
           }
         }
-        // 未来加 SMS / inapp 通道时在此扩展
       }
-      if (!delivered) failed++
+      return 'failed' as const
     } catch (e: any) {
       console.error(`[notify] ${event} → ${userId} 异常:`, e.message)
-      failed++
+      return 'failed' as const
     }
-  }
+  }))
+
+  const sent = results.filter((r) => r === 'sent').length
+  const suppressed = results.filter((r) => r === 'suppressed').length
+  const failed = results.filter((r) => r === 'failed').length
   return { sent, suppressed, failed }
 }
 

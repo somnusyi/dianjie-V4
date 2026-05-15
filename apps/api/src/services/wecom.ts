@@ -124,12 +124,13 @@ export async function sendAppMsg(tenantId: string, toUser: string | string[], co
   return r
 }
 
-/** 发卡片消息 (跳转滇界 URL) */
+/** 发卡片消息 (跳转滇界 URL); 接受 btnTxt 或 btntxt 两种字段名 */
 export async function sendCardMsg(tenantId: string, toUser: string | string[], opts: {
   title: string
   description: string
   url: string
   btnTxt?: string
+  btntxt?: string
 }) {
   const cfg = await getConfig(tenantId)
   const token = await getAccessToken(tenantId)
@@ -141,7 +142,7 @@ export async function sendCardMsg(tenantId: string, toUser: string | string[], o
       title: opts.title,
       description: opts.description,
       url: opts.url,
-      btntxt: opts.btnTxt || '查看详情',
+      btntxt: opts.btntxt || opts.btnTxt || '查看详情',
     },
   }
   const r = await fetch(`${WECOM_BASE}/message/send?access_token=${token}`, {

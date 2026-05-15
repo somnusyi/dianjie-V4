@@ -21,6 +21,9 @@ const supplierCreateSchema = z.object({
   bankAccountName: z.string().trim().max(80).optional().default(''),
 }).strict()
 
+// PATCH 可改字段(白名单): 排除 tenantId/status/id 等敏感/系统字段
+const supplierUpdateSchema = supplierCreateSchema.partial()
+
 export const supplierRoutes: FastifyPluginAsync = async (app) => {
   app.get('/', auth(app), async (req: any) => {
     const { status, page, pageSize = '20' } = req.query as any
@@ -63,28 +66,38 @@ export const supplierRoutes: FastifyPluginAsync = async (app) => {
   })
 
   app.patch('/:id', auth(app), async (req: any, reply: any) => {
-    const existing = await prisma.supplier.findFirst({
-      where: { id: req.params.id, tenantId: req.user.tenantId },
+    const { tenantId, role } = req.user
+    // P0: 仅管理岗位可改供应商资料 (含银行账号), 否则供应商账号能改别家公司收款行户
+    if (!['ADMIN', 'FINANCE', 'SUPER_ADMIN'].includes(role))
+      return reply.status(403).send({ error: '无权修改供应商资料' })
+    const parsed = supplierUpdateSchema.safeParse(req.body)
+    if (!parsed.success) {
+      const first = parsed.error.errors[0]
+      return reply.status(400).send({ error: `${first.path.join('.')}: ${first.message}` })
+    }
+    // updateMany 保留 tenantId 守卫, 防 race / 路径篡改跨租户
+    const result = await prisma.supplier.updateMany({
+      where: { id: req.params.id, tenantId },
+      data: parsed.data as any,
     })
-    if (!existing) return reply.status(404).send({ error: '供应商不存在' })
-    const result = await prisma.supplier.update({
-      where: { id: req.params.id },
-      data: req.body,
-    })
-    void invalidatePattern(`suppliers:full:${req.user.tenantId}:*`)
-    return result
+    if (result.count === 0) return reply.status(404).send({ error: '供应商不存在' })
+    void invalidatePattern(`suppliers:full:${tenantId}:*`)
+    return prisma.supplier.findUnique({ where: { id: req.params.id } })
   })
 
   app.patch('/:id/toggle', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!['ADMIN', 'FINANCE', 'SUPER_ADMIN'].includes(role))
+      return reply.status(403).send({ error: '无权启用/停用供应商' })
     const s = await prisma.supplier.findFirst({
-      where: { id: req.params.id, tenantId: req.user.tenantId },
+      where: { id: req.params.id, tenantId },
     })
     if (!s) return reply.status(404).send({ error: '供应商不存在' })
     const updated = await prisma.supplier.update({
       where: { id: s.id },
       data: { status: s.status === 'ENABLED' ? 'DISABLED' : 'ENABLED' },
     })
-    void invalidatePattern(`suppliers:full:${req.user.tenantId}:*`)
+    void invalidatePattern(`suppliers:full:${tenantId}:*`)
     return updated
   })
 }

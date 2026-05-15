@@ -8,12 +8,14 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
+import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 
 type Supplier = { id: string; name: string; category: string | null; bankAccount: string | null }
 type Product  = { id: string; name: string; unit: string; price: string; supplierId: string | null
                   spec?: string | null; category?: string | null; code?: string
-                  minOrderQty?: string | number; stepQty?: string | number }
+                  minOrderQty?: string | number; stepQty?: string | number
+                  stock?: string | number | null }
 type LineItem = { productId: string; quantity: number; unitPrice: number }
 
 // 模糊匹配: name + spec + code 任意子串包含; 多关键字 AND
@@ -37,6 +39,7 @@ export default function ChefPONewPage() {
   const [idempotencyKey, setIdempotencyKey] = useState(() => `po-${Date.now()}-${Math.random().toString(36).slice(2,10)}`)
   const [error, setError] = useState<string | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [confirm, openConfirm] = useConfirmSheet()
   const [searchQ, setSearchQ] = useState('')
   const [catFilter, setCatFilter] = useState<string>('全部')
 
@@ -287,13 +290,18 @@ export default function ChefPONewPage() {
               {filteredProducts.map(p => {
                 const picked = items.find(i => i.productId === p.id)
                 const qty = picked?.quantity || 0
+                const stockNum = Number(p.stock || 0)
+                const outOfStock = stockNum <= 0
                 return (
                   <li key={p.id} className={`flex items-center px-4 py-3 ${picked ? 'bg-amber/5' : ''}`}>
                     <div className="flex-1 min-w-0">
-                      <div className="text-body truncate flex items-center gap-1">
+                      <div className="text-body truncate flex items-center gap-1 flex-wrap">
                         <span>{p.name}</span>
                         {Number(p.minOrderQty || 1) > 1 && (
                           <span className="text-micro px-1.5 py-0.5 bg-amber/10 text-amber-fg rounded-chip whitespace-nowrap">起订 {moq(p)}{step(p) > 1 ? `·步 ${step(p)}` : ''}</span>
+                        )}
+                        {outOfStock && (
+                          <span className="text-micro px-1.5 py-0.5 bg-red-50 text-red-600 rounded-chip whitespace-nowrap">⚠ 供应商断货</span>
                         )}
                       </div>
                       <div className="text-micro text-gray3 font-num">¥{Number(p.price).toFixed(2)} / {p.unit}{qty > 0 && <span className="text-amber-fg ml-2">小计 ¥{(qty * Number(p.price)).toFixed(2)}</span>}</div>
@@ -301,8 +309,21 @@ export default function ChefPONewPage() {
                     {qty === 0 ? (
                       <button
                         type="button"
-                        onClick={() => addItem(p)}
-                        className="px-3 py-1.5 rounded-cta bg-amber/10 text-amber-fg text-button"
+                        onClick={() => {
+                          if (outOfStock) {
+                            openConfirm({
+                              title: '供应商断货提醒',
+                              body: <span>「<b>{p.name}</b>」供应商当前库存为 <b className="text-red-600">0</b>,可能无法按时发货。仍要加入采购单吗?</span>,
+                              confirmLabel: '仍然加入',
+                              cancelLabel: '取消',
+                              tone: 'danger',
+                              onConfirm: () => addItem(p),
+                            })
+                          } else {
+                            addItem(p)
+                          }
+                        }}
+                        className={`px-3 py-1.5 rounded-cta text-button ${outOfStock ? 'bg-red-50 text-red-600' : 'bg-amber/10 text-amber-fg'}`}
                       >+ 加入</button>
                     ) : (
                       <div className="flex items-center gap-2">
@@ -355,6 +376,7 @@ export default function ChefPONewPage() {
           {submitting ? '提交中…' : `提交采购单${total > 0 ? ` · ¥${total.toFixed(2)}` : ''}`}
         </button>
       </div>
+      <ConfirmSheet {...confirm} />
     </div>
   )
 }

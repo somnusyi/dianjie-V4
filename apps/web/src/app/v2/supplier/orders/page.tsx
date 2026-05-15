@@ -190,49 +190,71 @@ export default function SupplierOrdersPage() {
 
       {error && <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}
 
-      {/* 报损 tab 内容 */}
-      {filter === '报损' && (
-        <ul className="px-4 mt-3 space-y-2">
-          {pendingClaims.length === 0 && (
-            <li className="text-caption text-gray3 text-center py-12">暂无待处理报损</li>
-          )}
-          {pendingClaims.map(c => (
-            <li key={c.id} className="relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full before:bg-red">
-              {/* 信息区可点击进订单详情 (含证据图等) */}
-              <a href={`/v2/supplier/orders/${c.purchaseOrder.id || c.purchaseOrderId}`} className="block">
-                <div className="flex items-center gap-2 mb-1">
-                  <Chip tone="red">报损待处理</Chip>
-                  <span className="text-micro text-gray3 ml-auto">{timeAgo(c.createdAt)}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-h2">{c.store.name} <span className="text-micro text-gray3 font-num">#{c.purchaseOrder.no}</span></span>
-                  <span className="font-num text-h2 text-red-fg">−¥{Number(c.totalLossAmount).toFixed(2)}</span>
-                </div>
-                <p className="text-caption text-gray2 mt-0.5">{c.description}</p>
-                <ul className="mt-2 text-micro text-gray2 space-y-0.5">
-                  {(c.items || []).map((it, idx) => (
-                    <li key={idx}>· {it.product?.name}: 下 {it.orderedQty} 收 {it.receivedQty}{it.product?.unit || ''} · 损 ¥{Number(it.lossAmount).toFixed(2)}</li>
-                  ))}
-                </ul>
-                <p className="text-micro text-amber-fg mt-2">查看证据图 / 完整明细 ›</p>
-              </a>
-              {/* 操作按钮 — 直接处理, 不需进详情 */}
-              <div className="grid grid-cols-2 gap-2 mt-3">
-                <button
-                  onClick={() => handleClaim(c, 'reject')}
-                  disabled={submitting === c.id}
-                  className="py-2 border border-red text-red rounded-cta text-button disabled:opacity-40"
-                >拒绝</button>
-                <button
-                  onClick={() => handleClaim(c, 'approve')}
-                  disabled={submitting === c.id}
-                  className="py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40"
-                >{submitting === c.id ? '提交中…' : `同意扣款 · ¥${Number(c.totalLossAmount).toFixed(2)}`}</button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+      {/* 报损 tab 内容 — 显示全部历史报损,PENDING 在最上 */}
+      {filter === '报损' && (() => {
+        const claimStatusMeta: Record<string, { label: string; tone: 'red' | 'gray' | 'orange' | 'blue' | 'green'; barClass: string }> = {
+          PENDING:     { label: '待处理',     tone: 'red',    barClass: 'before:bg-red' },
+          APPROVED:    { label: '已同意',     tone: 'gray',   barClass: 'before:bg-gray4' },
+          REJECTED:    { label: '已拒绝·待总厨', tone: 'orange', barClass: 'before:bg-orange' },
+          NEGOTIATING: { label: '协商中',     tone: 'orange', barClass: 'before:bg-orange' },
+          RESOLVED:    { label: '总厨已仲裁', tone: 'blue',   barClass: 'before:bg-gray4' },
+        }
+        const sorted = [...(claims || [])].sort((a, b) => {
+          if (a.status === 'PENDING' && b.status !== 'PENDING') return -1
+          if (a.status !== 'PENDING' && b.status === 'PENDING') return 1
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        })
+        return (
+          <ul className="px-4 mt-3 space-y-2">
+            {sorted.length === 0 && (
+              <li className="text-caption text-gray3 text-center py-12">暂无报损记录</li>
+            )}
+            {sorted.map(c => {
+              const meta = claimStatusMeta[c.status] || { label: c.status, tone: 'gray' as const, barClass: 'before:bg-gray4' }
+              const isPending = c.status === 'PENDING'
+              return (
+                <li key={c.id} className={`relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full ${meta.barClass}`}>
+                  <a href={`/v2/supplier/orders/${c.purchaseOrder.id || c.purchaseOrderId}`} className="block">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Chip tone={meta.tone}>{meta.label}</Chip>
+                      <span className="text-micro text-gray3 ml-auto">{timeAgo(c.createdAt)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-h2">{c.store.name} <span className="text-micro text-gray3 font-num">#{c.purchaseOrder.no}</span></span>
+                      <span className={`font-num text-h2 ${isPending ? 'text-red-fg' : 'text-gray2'}`}>−¥{Number(c.totalLossAmount).toFixed(2)}</span>
+                    </div>
+                    <p className="text-caption text-gray2 mt-0.5">{c.description}</p>
+                    <ul className="mt-2 text-micro text-gray2 space-y-0.5">
+                      {(c.items || []).map((it, idx) => (
+                        <li key={idx}>· {it.product?.name}: 下 {it.orderedQty} 收 {it.receivedQty}{it.product?.unit || ''} · 损 ¥{Number(it.lossAmount).toFixed(2)}</li>
+                      ))}
+                    </ul>
+                    {(c as any).handlerNote && (
+                      <p className="text-micro text-gray3 mt-1.5">处理备注:{(c as any).handlerNote}</p>
+                    )}
+                    <p className="text-micro text-amber-fg mt-2">查看证据图 / 完整明细 ›</p>
+                  </a>
+                  {/* 操作按钮仅 PENDING 时显示 */}
+                  {isPending && (
+                    <div className="grid grid-cols-2 gap-2 mt-3">
+                      <button
+                        onClick={() => handleClaim(c, 'reject')}
+                        disabled={submitting === c.id}
+                        className="py-2 border border-red text-red rounded-cta text-button disabled:opacity-40"
+                      >拒绝</button>
+                      <button
+                        onClick={() => handleClaim(c, 'approve')}
+                        disabled={submitting === c.id}
+                        className="py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40"
+                      >{submitting === c.id ? '提交中…' : `同意扣款 · ¥${Number(c.totalLossAmount).toFixed(2)}`}</button>
+                    </div>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        )
+      })()}
 
       {/* 普通订单 tabs 内容 */}
       {filter !== '报损' && (

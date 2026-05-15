@@ -29,10 +29,23 @@ export const supplierInsightRoutes: FastifyPluginAsync = async (app) => {
     const orders = await prisma.purchaseOrder.findMany({
       where: { supplierId: sid, createdAt: { gte: since } },
       select: {
+        id: true,
         storeId: true, totalAmount: true, status: true, createdAt: true,
         store: { select: { id: true, name: true, no: true } },
       },
     })
+    // 同期已生效的报损 (APPROVED / RESOLVED) — 用于扣除净销售
+    const approvedLoss = await prisma.lossClaim.groupBy({
+      by: ['purchaseOrderId'],
+      where: {
+        supplierId: sid,
+        status: { in: ['APPROVED', 'RESOLVED'] },
+        purchaseOrderId: { in: orders.map(o => o.id) },
+      },
+      _sum: { totalLossAmount: true },
+    })
+    const lossByOrder = new Map<string, number>()
+    approvedLoss.forEach(l => l.purchaseOrderId && lossByOrder.set(l.purchaseOrderId, Number(l._sum.totalLossAmount || 0)))
     // groupby storeId
     const byStore = new Map<string, {
       storeId: string; name: string; no: string
@@ -53,11 +66,12 @@ export const supplierInsightRoutes: FastifyPluginAsync = async (app) => {
       }
       // 排除取消的不算
       if (o.status === 'CANCELLED') continue
+      const net = Number(o.totalAmount) - (lossByOrder.get(o.id) || 0)
       cur.totalOrders++
-      cur.totalAmount += Number(o.totalAmount)
+      cur.totalAmount += net
       if (o.createdAt >= monthStart) {
         cur.monthOrders++
-        cur.monthAmount += Number(o.totalAmount)
+        cur.monthAmount += net
       }
       if (o.createdAt > cur.lastOrderAt) cur.lastOrderAt = o.createdAt
     }
@@ -97,6 +111,23 @@ export const supplierInsightRoutes: FastifyPluginAsync = async (app) => {
       select: { productId: true, quantity: true, shippedQty: true, amount: true,
                 product: { select: { name: true, unit: true } } },
     })
+    // 已生效报损按 SKU 维度扣减 (净销售 = 订单 amount - 报损 amount)
+    const lossItems = await prisma.lossClaimItem.findMany({
+      where: {
+        lossClaim: {
+          supplierId, createdAt: { gte: since },
+          status: { in: ['APPROVED', 'RESOLVED'] },
+        },
+      },
+      select: { productId: true, lossQty: true, lossAmount: true },
+    })
+    const lossByProd = new Map<string, { qty: number; amount: number }>()
+    for (const lc of lossItems) {
+      const cur = lossByProd.get(lc.productId) || { qty: 0, amount: 0 }
+      cur.qty += Number(lc.lossQty || 0)
+      cur.amount += Number(lc.lossAmount || 0)
+      lossByProd.set(lc.productId, cur)
+    }
     const byProd = new Map<string, { name: string; unit: string; qty: number; amount: number; orders: number }>()
     for (const it of items) {
       const k = it.productId
@@ -108,6 +139,14 @@ export const supplierInsightRoutes: FastifyPluginAsync = async (app) => {
       cur.qty += Number(it.shippedQty ?? it.quantity)
       cur.amount += Number(it.amount)
       cur.orders += 1
+    }
+    // 扣减报损
+    for (const [pid, loss] of lossByProd) {
+      const cur = byProd.get(pid)
+      if (cur) {
+        cur.qty = Math.max(0, cur.qty - loss.qty)
+        cur.amount = Math.max(0, cur.amount - loss.amount)
+      }
     }
     const list = Array.from(byProd.entries()).map(([id, v]) => ({ productId: id, ...v }))
     const top = [...list].sort((a, b) => b.amount - a.amount).slice(0, limit)
@@ -137,8 +176,19 @@ export const supplierInsightRoutes: FastifyPluginAsync = async (app) => {
     const orders = await prisma.purchaseOrder.findMany({
       where: { supplierId, createdAt: { gte: start },
                status: { in: ['CONFIRMED', 'PENDING_CONFIRM', 'RECEIVED', 'COMPLETED'] } },
-      select: { totalAmount: true, createdAt: true },
+      select: { id: true, totalAmount: true, createdAt: true },
     })
+    // 同期已生效报损
+    const losses = await prisma.lossClaim.findMany({
+      where: {
+        supplierId,
+        status: { in: ['APPROVED', 'RESOLVED'] },
+        purchaseOrderId: { in: orders.map(o => o.id) },
+      },
+      select: { purchaseOrderId: true, totalLossAmount: true },
+    })
+    const lossByOrder = new Map<string, number>()
+    losses.forEach(l => l.purchaseOrderId && lossByOrder.set(l.purchaseOrderId, (lossByOrder.get(l.purchaseOrderId) || 0) + Number(l.totalLossAmount)))
     // 按 YYYY-MM groupby
     const byMonth = new Map<string, { revenue: number; orders: number }>()
     for (let i = 0; i < months; i++) {
@@ -149,7 +199,7 @@ export const supplierInsightRoutes: FastifyPluginAsync = async (app) => {
       const k = dayjs(o.createdAt).format('YYYY-MM')
       const cur = byMonth.get(k)
       if (cur) {
-        cur.revenue += Number(o.totalAmount)
+        cur.revenue += Number(o.totalAmount) - (lossByOrder.get(o.id) || 0)
         cur.orders += 1
       }
     }

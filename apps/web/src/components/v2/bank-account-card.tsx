@@ -7,6 +7,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import { BankTransactionsDrawer } from './bank-transactions-drawer'
 
 export type BankAccountConfig = {
   /** 内部标识，用于 fetch */
@@ -62,6 +63,7 @@ export function BankAccountCard({ config, onTransfer }: {
   const [err, setErr]   = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshAt, setRefreshAt] = useState<Date | null>(null)
+  const [txDrawerOpen, setTxDrawerOpen] = useState(false)
 
   async function load(opts: { force?: boolean } = {}) {
     // 缓存命中且非强制刷新, 直接用缓存, 不打银行
@@ -163,12 +165,28 @@ export function BankAccountCard({ config, onTransfer }: {
         </div>
       )}
 
-      {refreshAt && (
-        <p className="text-micro text-gray4 mt-2 text-right">
-          更新于 {refreshAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-        </p>
+      {data && (
+        <div className="mt-2 flex items-center justify-between">
+          <button
+            onClick={() => setTxDrawerOpen(true)}
+            className="text-micro text-amber-fg px-2 py-1 rounded hover:bg-bg"
+          >
+            查流水 · 下回单 ›
+          </button>
+          {refreshAt && (
+            <span className="text-micro text-gray4">
+              更新于 {refreshAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </span>
+          )}
+        </div>
       )}
 
+      <BankTransactionsDrawer
+        open={txDrawerOpen}
+        account={config.account}
+        accountLabel={`${config.label} · ${config.accountName}`}
+        onClose={() => setTxDrawerOpen(false)}
+      />
     </div>
   )
 }

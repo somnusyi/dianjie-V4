@@ -20,7 +20,6 @@ import { BottomNav, Chip } from '@/components/v2'
 import { BankAccountCard } from '@/components/v2/bank-account-card'
 import { SwipeableRow } from '@/components/v2/swipeable-row'
 import { InternalTransferModal, type TransferAccount } from '@/components/v2/internal-transfer-modal'
-import { BankTransactionsDrawer } from '@/components/v2/bank-transactions-drawer'
 import { apiFetch } from '@/lib/v2-auth'
 import dayjs from 'dayjs'
 
@@ -79,8 +78,6 @@ export default function FinanceFundsPage() {
   const [pickDay, setPickDay] = useState<string | null>(null)
   // 内部转账 modal
   const [transferFrom, setTransferFrom] = useState<Account | null>(null)
-  // 招行流水 / 回单 抽屉 (按账户打开)
-  const [txAccount, setTxAccount] = useState<Account | null>(null)
 
   function load() {
     Promise.all([
@@ -314,31 +311,6 @@ export default function FinanceFundsPage() {
         </div>
       </Section>
 
-      {/* 招行流水 / 电子回单 — 按账户单独入口 */}
-      {accounts && accounts.filter(a => a.cmbBindAccount).length > 0 && (
-        <Section title="招行流水 / 回单" right={`${accounts.filter(a => a.cmbBindAccount).length} 个账户`}>
-          <ul className="bg-white rounded-card border border-border divide-y divide-border">
-            {accounts.filter(a => a.cmbBindAccount).map(a => (
-              <li key={a.id}>
-                <button
-                  onClick={() => setTxAccount(a)}
-                  className="w-full px-3 py-3 flex items-center gap-3 hover:bg-bg-warm text-left"
-                >
-                  <span className="w-9 h-9 rounded-md bg-bg flex items-center justify-center font-num">⛁</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-body truncate">{a.name}</div>
-                    <p className="text-micro text-gray3 truncate">
-                      {a.bankName || '招商银行'} · 尾号 {a.cmbBindAccount!.slice(-4)}
-                    </p>
-                  </div>
-                  <span className="text-micro text-amber-fg">查流水 · 下回单 ›</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
-
       {/* 新建账户 modal */}
       {openNew && (
         <div className="fixed inset-0 z-50 bg-ink/60 flex items-end justify-center"
@@ -473,14 +445,6 @@ export default function FinanceFundsPage() {
           .map(a => ({ id: a.id, name: a.name, cmbBindAccount: a.cmbBindAccount, bankName: a.bankName }))}
         onClose={() => setTransferFrom(null)}
         onSuccess={() => load()}
-      />
-
-      {/* 招行流水 / 回单 抽屉 — 底部 Section 各账户独立入口触发 */}
-      <BankTransactionsDrawer
-        open={!!txAccount}
-        account={txAccount?.cmbBindAccount || undefined}
-        accountLabel={txAccount ? `${txAccount.name} · 尾号 ${(txAccount.cmbBindAccount || '').slice(-4)}` : undefined}
-        onClose={() => setTxAccount(null)}
       />
 
       <BottomNav

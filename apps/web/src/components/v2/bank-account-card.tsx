@@ -7,7 +7,6 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
-import { BankTransactionsDrawer } from './bank-transactions-drawer'
 
 export type BankAccountConfig = {
   /** 内部标识，用于 fetch */
@@ -63,7 +62,6 @@ export function BankAccountCard({ config, onTransfer }: {
   const [err, setErr]   = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshAt, setRefreshAt] = useState<Date | null>(null)
-  const [txDrawerOpen, setTxDrawerOpen] = useState(false)
 
   async function load(opts: { force?: boolean } = {}) {
     // 缓存命中且非强制刷新, 直接用缓存, 不打银行
@@ -171,23 +169,6 @@ export function BankAccountCard({ config, onTransfer }: {
         </p>
       )}
 
-      {data && (
-        <div className="mt-2 pt-2 border-t border-border flex items-center justify-end">
-          <button
-            onClick={() => setTxDrawerOpen(true)}
-            className="text-micro text-amber-fg px-2 py-1 rounded hover:bg-bg"
-          >
-            查流水 · 下回单 ›
-          </button>
-        </div>
-      )}
-
-      <BankTransactionsDrawer
-        open={txDrawerOpen}
-        account={config.account}
-        accountLabel={`${config.label} · ${config.accountName}`}
-        onClose={() => setTxDrawerOpen(false)}
-      />
     </div>
   )
 }

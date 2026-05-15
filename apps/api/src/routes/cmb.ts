@@ -74,12 +74,42 @@ async function cachedBalance(account?: string) {
   //    防并发雷击撞招行限流 (1 秒内 N 个并发请求只发 1 次银行)
   const inflight = inflightBalance.get(key)
   if (inflight) return await inflight
-  // 3. 发起新请求, 同时记入 inflight map 给后续并发等用
+  // 3. 发起新请求 + 内部 retry on 429 + stale cache fallback
+  //    招行限流时不直接 502, 而是等 4s / 8s 重试; 全失败仍有过期 cache 时返 stale
   const p = (async () => {
     try {
-      const fresh = await cmbBalance(account)
-      if (fresh.success) balanceCache.set(key, { data: fresh, at: Date.now() })
-      return fresh
+      let lastFresh: any = null
+      let lastErr: any = null
+      const delays = [0, 4000, 8000]  // 第 1 次立刻, 第 2 次等 4s, 第 3 次等 8s
+      for (let attempt = 0; attempt < delays.length; attempt++) {
+        if (delays[attempt]) await new Promise(r => setTimeout(r, delays[attempt]))
+        try {
+          const fresh = await cmbBalance(account)
+          if (fresh.success) {
+            balanceCache.set(key, { data: fresh, at: Date.now() })
+            return fresh
+          }
+          lastFresh = fresh
+          // 招行限流码 → 继续 retry, 其他业务错直接返 (不重试)
+          if (fresh.resultCode !== 'RATE_LIMITED') return fresh
+        } catch (e: any) {
+          lastErr = e
+        }
+      }
+      // 3 次都失败 → stale fallback
+      const stale = balanceCache.get(key)
+      if (stale) {
+        return {
+          ...stale.data,
+          cached: true,
+          degraded: true,
+          cachedAgeMs: Date.now() - stale.at,
+          resultMsg: `招行接口繁忙, 显示 ${Math.round((Date.now() - stale.at) / 1000)}s 前数据`,
+        }
+      }
+      // 完全没缓存 → 把最后一次错抛出去, endpoint 转 502
+      if (lastErr) throw lastErr
+      return lastFresh ?? { success: false, resultCode: 'CMB_RETRY_EXHAUSTED', resultMsg: '招行接口持续繁忙, 请稍后再试' }
     } finally {
       inflightBalance.delete(key)
     }

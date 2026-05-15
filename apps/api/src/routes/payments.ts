@@ -80,6 +80,22 @@ export const paymentRoutes: FastifyPluginAsync = async (app) => {
       })
     }
     await prisma.opLog.create({ data: { tenantId, userId, role, action: '标记付款完成', target: payment.no } })
+
+    // 财务凭证: 付款 → 借:应付账款 / 贷:银行存款
+    try {
+      const supplier = await prisma.supplier.findUnique({ where: { id: payment.supplierId }, select: { name: true } })
+      const { voucherForPayment } = await import('../services/voucher')
+      voucherForPayment({
+        tenantId, paymentId: payment.id, paymentNo: payment.no,
+        supplierName: supplier?.name || '供应商',
+        amount: Number(payment.amount),
+        method: payment.method || 'BANK_TRANSFER',
+        date: new Date(),
+      })
+    } catch (e: any) {
+      req.log.warn({ err: e }, '付款凭证生成失败')
+    }
+
     return { message: '付款完成' }
   })
 }

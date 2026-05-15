@@ -54,6 +54,7 @@ import { userRoutes } from './routes/users'
 import { inventoryRoutes } from './routes/inventory'
 import { profitRoutes } from './routes/profit'
 import { wecomRoutes } from './routes/wecom'
+import { voucherRoutes } from './routes/vouchers'
 import { cashbookRoutes } from './routes/cashbook'
 import { notificationRoutes } from './routes/notifications'
 import { opsRoutes } from './routes/ops'
@@ -165,6 +166,7 @@ async function bootstrap() {
   app.register(inventoryRoutes, { prefix: '/api/inventory' })
   app.register(profitRoutes, { prefix: '/api/profit' })
   app.register(wecomRoutes, { prefix: '/api/wecom' })
+  app.register(voucherRoutes, { prefix: '/api/vouchers' })
   app.register(cashbookRoutes, { prefix: '/api/cashbook' })
   app.register(notificationRoutes, { prefix: '/api/notifications' })
   app.register(opsRoutes, { prefix: '/api/ops' })

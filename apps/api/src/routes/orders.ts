@@ -617,6 +617,22 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       },
     })
 
+    // 财务凭证: 收货入库 → 借:库存商品 / 贷:应付账款
+    try {
+      const supplier = await prisma.supplier.findUnique({ where: { id: order.supplierId }, select: { name: true } })
+      const store = await prisma.store.findUnique({ where: { id: order.storeId }, select: { name: true } })
+      const { voucherForReceipt } = await import('../services/voucher')
+      voucherForReceipt({
+        tenantId, receiptId: receipt.id, receiptNo: receipt.no,
+        supplierName: supplier?.name || '供应商',
+        storeName: store?.name || '门店',
+        amount: Number(actualReceivedTotal),
+        date: new Date(),
+      })
+    } catch (e: any) {
+      req.log.warn({ err: e }, '收货凭证生成失败 (不影响主流程)')
+    }
+
     // 判断是否存在报损 — 应到 = shippedQty (ship 时议定的量), 实收 < 应到 才算报损
     // 供应商在 ship 时调减不算报损 (金额已按实发算清, 没有未付的钱)
     const lossLines = (receivedItems || [])

@@ -94,6 +94,99 @@ model User {
   @@map("users")
 }
 
+// ══════════════════════════════════════════════════════
+//   财务凭证(好会计 Excel 导出兼容)
+// ══════════════════════════════════════════════════════
+
+// 会计科目表 — 一级科目按企业会计准则, 二级以下可由用户在好会计自定义后回填编码
+model ChartOfAccount {
+  id          String   @id @default(cuid())
+  tenantId    String
+  code        String   @db.VarChar(16)        // 1001 / 1002 / 1405 等
+  name        String                            // 库存现金 / 银行存款 / 库存商品 ...
+  type        AccountType                       // ASSET / LIABILITY / EQUITY / REVENUE / EXPENSE
+  parentCode  String?  @db.VarChar(16)          // 二级三级用,顶层 null
+  isDetail    Boolean  @default(true)           // 末级科目 = 可记账
+  builtin     Boolean  @default(false)          // 系统预置 vs 用户自加
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  entries     VoucherEntry[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, parentCode])
+  @@map("chart_of_accounts")
+}
+
+enum AccountType {
+  ASSET       // 资产
+  LIABILITY   // 负债
+  EQUITY      // 所有者权益
+  REVENUE     // 收入
+  EXPENSE     // 费用
+}
+
+// 凭证主表
+model Voucher {
+  id          String   @id @default(cuid())
+  tenantId    String
+  no          String                            // PZ-202605-0001 自动生成
+  date        DateTime @db.Date                 // 凭证日期(业务发生日)
+  word        String   @default("记") @db.VarChar(8)  // 凭证字, 一般为「记」
+  summary     String                            // 凭证摘要 (会计摘要, 简明)
+
+  // 来源业务 (业务事件 → 凭证 的反向关联)
+  sourceType  String?                           // 'Receipt' | 'Payment' | 'LossClaim' | 'Manual' | etc.
+  sourceId    String?                           // 业务记录 ID
+
+  totalDebit  Decimal  @db.Decimal(14, 2)       // 借方合计 (应等于 totalCredit)
+  totalCredit Decimal  @db.Decimal(14, 2)
+
+  status      VoucherStatus @default(DRAFT)     // DRAFT 草稿 / POSTED 已审 / VOIDED 已作废
+  postedAt    DateTime?
+  postedById  String?
+  exportedAt  DateTime?                         // 导出到好会计的时间 (审计用)
+
+  createdById String?                           // 系统生成时为 null
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  entries     VoucherEntry[]
+
+  @@unique([tenantId, no])
+  @@index([tenantId, date])
+  @@index([tenantId, sourceType, sourceId])
+  @@map("vouchers")
+}
+
+enum VoucherStatus {
+  DRAFT
+  POSTED
+  VOIDED
+}
+
+// 凭证分录
+model VoucherEntry {
+  id          String   @id @default(cuid())
+  voucherId   String
+  lineNo      Int                               // 行号 1..N
+  summary     String                            // 分录摘要(允许与凭证摘要不同)
+  accountCode String   @db.VarChar(16)          // 冗余存,便于导出不依赖 join
+  accountName String                            // 冗余存,导出时直接用
+  debit       Decimal  @db.Decimal(14, 2) @default(0)
+  credit      Decimal  @db.Decimal(14, 2) @default(0)
+
+  voucher     Voucher  @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  // 软引用: accountCode → ChartOfAccount.code (per tenant); 不做硬 FK 因为 accountCode 是字符串
+  account     ChartOfAccount? @relation(fields: [accountFkId], references: [id])
+  accountFkId String?
+
+  @@index([voucherId])
+  @@index([accountCode])
+  @@map("voucher_entries")
+}
+
 // ── 企微集成配置 ──────────────────────────────────────
 // 一个 Tenant 一份配置, 暂不支持多企微账号
 model WeComConfig {

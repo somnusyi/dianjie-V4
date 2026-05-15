@@ -295,6 +295,24 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       // 改为回补供应商库存 (我们 ship 时按订单量扣了, 短量没送的应该补回来)
       await refundSupplierStockOnLossApproved(claim, userId, '供应商同意报损 ' + claim.no)
 
+      // 财务凭证: 报损 → 借:销售费用-报损 / 贷:库存商品
+      try {
+        const [store, supplier] = await Promise.all([
+          prisma.store.findUnique({ where: { id: claim.storeId }, select: { name: true } }),
+          claim.supplierId ? prisma.supplier.findUnique({ where: { id: claim.supplierId }, select: { name: true } }) : Promise.resolve(null),
+        ])
+        const { voucherForLossApproved } = await import('../services/voucher')
+        voucherForLossApproved({
+          tenantId, lossClaimId: claim.id, lossClaimNo: claim.no,
+          storeName: store?.name || '门店',
+          supplierName: supplier?.name || '供应商',
+          amount: Number(claim.totalLossAmount),
+          date: new Date(),
+        })
+      } catch (e: any) {
+        console.error('[voucher] 报损凭证生成失败', e)
+      }
+
       await prisma.lossClaim.update({
         where: { id },
         data: { status: 'APPROVED', handledAt: new Date(), handledById: userId, handlerNote: note },

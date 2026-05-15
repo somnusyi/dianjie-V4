@@ -22,8 +22,8 @@ import { apiFetch } from '@/lib/v2-auth'
 import dayjs from 'dayjs'
 
 // 招行实时账户列表
-// 数组化设计 - 现在只有母公司主账户, 未来加子公司直接 push entry
-// account 留空 = 后端 env CMB_ACCOUNT (=125925235910001 南京云洱之境餐饮有限公司)
+// 数组化设计 - 同一个 UID (U061858575) 下绑多个账户, 前端传 account 参数后端按账户查
+// account 留空 = 后端 env CMB_ACCOUNT 默认 (=125925235910001 南京云洱之境餐饮有限公司)
 const BANK_ACCOUNTS: BankAccountConfig[] = [
   {
     label: '母公司·主账户',
@@ -32,7 +32,13 @@ const BANK_ACCOUNTS: BankAccountConfig[] = [
     accountType: '一般户',
     // account 留空 → 后端用 env 默认值
   },
-  // TODO: 子公司账户接入后在这里 push 更多 entry
+  {
+    label: '子公司·合肥分店',
+    account: '125925610910001',
+    accountName: '合肥云岳之境餐饮有限公司',
+    bankName: '招商银行南京城东支行',
+    accountType: '一般户',
+  },
 ]
 
 type CashbookSummary = {

@@ -5,6 +5,7 @@ import dayjs from 'dayjs'
 import { invalidatePattern } from '../lib/cache'
 import { notifyOrderSubmitted, notifyOrderShipped, notifyOrderConfirmed, notifyOrderRejected, sendNotification } from '../services/notification'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
+import { resignOssUrls } from './upload'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
 const orderItemSchema = z.object({
@@ -92,6 +93,13 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       },
     })
     if (!order) throw { statusCode: 404, message: '采购订单不存在' }
+    // OSS 签名 1h 过期 → 读取时把报损证据图统一重签
+    if (Array.isArray((order as any).lossClaims)) {
+      ;(order as any).lossClaims = (order as any).lossClaims.map((c: any) => ({
+        ...c,
+        evidenceImages: resignOssUrls(c.evidenceImages),
+      }))
+    }
     return order
   })
 

@@ -3,6 +3,7 @@ import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { notifyLossClaimResult } from '../services/notification'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
+import { resignOssUrls } from './upload'
 
 /**
  * 报损被批准 (含自动同意): 回补供应商库存
@@ -67,7 +68,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     if (isSupplierRole(role) && userSupplierId) where.supplierId = userSupplierId
     if (status) where.status = status
 
-    return prisma.lossClaim.findMany({
+    const claims = await prisma.lossClaim.findMany({
       where, orderBy: { createdAt: 'desc' },
       include: {
         store: { select: { name: true } },
@@ -78,6 +79,8 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
         items: { include: { product: { select: { name: true, unit: true } } } },
       },
     })
+    // OSS 签名 1h 过期 → 读取时统一重签,前端不会再看到裂图
+    return claims.map((c) => ({ ...c, evidenceImages: resignOssUrls(c.evidenceImages) }))
   })
 
   // ── 创建报损申请（门店）──────────────────────────

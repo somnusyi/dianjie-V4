@@ -18,6 +18,29 @@ function ossClient() {
   })
 }
 
+/**
+ * 重新签名一个 OSS URL: 把存在 DB 里、签名已过期的 URL 换成 1h 有效的新 URL
+ * 不是 OSS 域名的 URL(外链/CDN等)原样返回
+ */
+export function resignOssUrl(url: string | null | undefined): string {
+  if (!url || typeof url !== 'string') return url as any
+  try {
+    const u = new URL(url)
+    const bucket = process.env.OSS_BUCKET || 'dianjie-upload'
+    if (!u.hostname.startsWith(bucket + '.') || !u.hostname.includes('.aliyuncs.com')) return url
+    const key = decodeURIComponent(u.pathname.replace(/^\//, ''))
+    if (!key) return url
+    return ossClient().signatureUrl(key, { expires: 3600 })
+  } catch {
+    return url
+  }
+}
+
+export function resignOssUrls(urls: any): string[] {
+  if (!Array.isArray(urls)) return urls
+  return urls.map((u) => resignOssUrl(u))
+}
+
 async function uploadOne(req: any, reply: any, opts: { allowedMimes: string[]; category: string }) {
   const user = req.user
   if (!user) return reply.status(401).send({ error: '未登录' })

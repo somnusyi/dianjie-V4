@@ -57,10 +57,11 @@ function requireFinance(req: any, reply: any): boolean {
   return true
 }
 
-// 服务端 11s 缓存 + singleflight · 应对招行同账号 10s 限流
-//   缓存挡串行重复, singleflight 挡"短时间内并发雷击"(同事手机 1 秒发 10 次都撞银行)
-// 跨用户/跨设备/跨浏览器都共享 — 同一 API 进程内的所有请求受益
-const BALANCE_TTL_MS = 11_000
+// 服务端缓存 30s + singleflight · 应对招行同账号 10s 限流
+//   TTL 30s 比 prewarm 周期 (20s) 长, 保证 cache 永远 fresh, 用户不 loading
+//   30s 内余额延迟可接受 (财务看银行余额, 不需秒级实时)
+//   singleflight 挡并发雷击 (同账号 1 秒多次请求合并发 1 次)
+const BALANCE_TTL_MS = 30_000
 const balanceCache = new Map<string, { data: any; at: number }>()
 const inflightBalance = new Map<string, Promise<any>>()
 
@@ -120,8 +121,9 @@ async function cachedBalance(account?: string) {
 }
 
 // 后台定时预热: 主动刷新所有 cmbBindAccount 非空账户的余额 cache
-// 用户开 app 时几乎都命中 cache, 极少看到 loading
-// 银行调用频率: 每账户每 ~60s 一次, 远低于 10s/次限流上限
+// 用户开 app 时几乎都命中 cache, 几乎不 loading
+// 招行限流维度是 funcode+account, 不同账户**互不撞限流** → 并发预热
+// 银行调用频率: 每账户每 20s 一次, 远低于 10s/账户限流上限
 let prewarmRunning = false
 async function prewarmAllCmbAccounts() {
   if (prewarmRunning) return  // 防并发 (上轮还没跑完时下轮触发)
@@ -132,15 +134,12 @@ async function prewarmAllCmbAccounts() {
       select: { cmbBindAccount: true, name: true },
     })
     if (accounts.length === 0) return
-    let ok = 0, fail = 0
-    for (const a of accounts) {
-      try {
-        const r = await cachedBalance(a.cmbBindAccount!)
-        if (r?.success || r?.cached) ok++; else fail++
-      } catch { fail++ }
-      // 同账户 10s 限流: 等 11s 再刷下一个 (不同账户不会撞限流, 但 UID 维度并发也别多)
-      await new Promise(r => setTimeout(r, 11_000))
-    }
+    // 并发预热: 不同账户独立 10s 窗口, 互不阻塞, 完成时间 ≈ 1 次银行 RT (~1s)
+    const results = await Promise.allSettled(
+      accounts.map(a => cachedBalance(a.cmbBindAccount!)),
+    )
+    const ok = results.filter(r => r.status === 'fulfilled' && ((r.value as any)?.success || (r.value as any)?.cached)).length
+    const fail = accounts.length - ok
     console.log(`🔥 cmb prewarm: ${accounts.length} 账户 (${ok} ok / ${fail} fail)`)
   } catch (e: any) {
     console.error('cmb prewarm error:', e?.message || e)
@@ -263,8 +262,8 @@ export const cmbRoutes: FastifyPluginAsync = async (app) => {
   cleanupReceipts()
   setInterval(cleanupReceipts, 60 * 60 * 1000).unref()  // 每小时清一次, unref 不阻止进程退出
 
-  // 启动后台 cmb 余额预热: 进程启动 10s 后跑第 1 次, 之后每 60s 跑一次
-  // 每个账户预热间隔 11s (避同账户限流), N 账户耗 N*11s, N 不大时绰绰有余
-  setTimeout(() => { prewarmAllCmbAccounts() }, 10_000)
-  setInterval(() => { prewarmAllCmbAccounts() }, 60_000).unref()
+  // 后台 cmb 余额预热: 启动 5s 后第一次, 之后每 20s 一次 (覆盖 30s TTL)
+  // 不同账户并发预热, 单轮 ≈ 1 秒 RT, 完美填补 cache 窗口
+  setTimeout(() => { prewarmAllCmbAccounts() }, 5_000)
+  setInterval(() => { prewarmAllCmbAccounts() }, 20_000).unref()
 }

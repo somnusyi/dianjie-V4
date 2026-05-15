@@ -33,8 +33,8 @@ type BalanceResp = {
 }
 
 // 招行同账号 10s 限流, 用 sessionStorage 共享缓存
-// 跨页面切换 (finance ↔ boss) 也吃缓存, 避免 StrictMode 双调用 / 用户狂刷被限
-const CACHE_TTL_MS = 12_000  // 略大于 10s 限流, 留 safety margin
+// 跟服务端 30s TTL 对齐: 后台 prewarm 每 20s 自动刷新 cache, 用户开 app 几乎都命中
+const CACHE_TTL_MS = 30_000
 
 type Cached = { data: BalanceResp; at: number }
 function cacheKey(account?: string) { return `cmb:balance:${account || 'default'}` }

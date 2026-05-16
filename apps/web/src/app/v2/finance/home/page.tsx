@@ -201,16 +201,24 @@ export default function FinanceHomePage() {
         </a>
       </div>
 
-      {/* 凭证模板入口 (周期性自动建凭证) */}
-      <div className="px-4 mt-3">
+      {/* 凭证模板 + 付款申请 (并排) */}
+      <div className="px-4 mt-3 grid grid-cols-2 gap-2">
         <a href="/v2/finance/voucher-templates" className="block bg-white rounded-card border border-border p-3">
-          <div className="flex items-center gap-3">
-            <span className="w-10 h-10 rounded-md bg-amber-bg text-amber-fg flex items-center justify-center text-h2">🔁</span>
-            <div className="flex-1">
-              <div className="text-h2">凭证模板</div>
-              <p className="text-caption text-gray2 mt-0.5">房租 / 水电 / 折旧 月度自动建</p>
+          <div className="flex items-center gap-2">
+            <span className="w-8 h-8 rounded-md bg-amber-bg text-amber-fg flex items-center justify-center">🔁</span>
+            <div className="flex-1 min-w-0">
+              <div className="text-button">凭证模板</div>
+              <p className="text-micro text-gray3 mt-0.5 truncate">房租/水电/折旧月度自动</p>
             </div>
-            <span className="text-gray3">›</span>
+          </div>
+        </a>
+        <a href="/v2/finance/payment-requests" className="block bg-white rounded-card border border-border p-3">
+          <div className="flex items-center gap-2">
+            <span className="w-8 h-8 rounded-md bg-amber-bg text-amber-fg flex items-center justify-center">📤</span>
+            <div className="flex-1 min-w-0">
+              <div className="text-button">付款申请</div>
+              <p className="text-micro text-gray3 mt-0.5 truncate">税费/房租/维修等</p>
+            </div>
           </div>
         </a>
       </div>

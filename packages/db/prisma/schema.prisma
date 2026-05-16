@@ -1564,6 +1564,7 @@ enum DocumentType {
   STORE_TRANSFER          // 调拨
   MARKETING_BUDGET        // 营销预算
   PERSONNEL_PAY           // 调薪
+  PAYMENT_REQUEST         // 付款申请 (税费 / 房租 / 维修 / 咨询 等非订单类支出)
 }
 
 enum DocumentStatus {

@@ -16,6 +16,7 @@ export type DocumentType =
   | 'PETTY_CASH' | 'REIMBURSEMENT' | 'PURCHASE_FOOD_REGULAR' | 'PURCHASE_FOOD_OVER'
   | 'PURCHASE_NON_FOOD' | 'CONTRACT' | 'PRICE_ADJUSTMENT' | 'NEW_SUPPLIER'
   | 'NEW_DISH' | 'STORE_TRANSFER' | 'MARKETING_BUDGET' | 'PERSONNEL_PAY'
+  | 'PAYMENT_REQUEST'
 
 export interface RoutePlan {
   steps: Role[]                 // 待审批角色顺序
@@ -64,6 +65,12 @@ export function routeFor(type: DocumentType, amount: number): RoutePlan {
     case 'MARKETING_BUDGET':
     case 'PERSONNEL_PAY':
       return { steps: ['FINANCE', 'ADMIN'], autoApprove: false, thresholdRule: '走财务+老板审批', isOverThreshold: a > 10000 }
+
+    case 'PAYMENT_REQUEST':
+      // 非订单类付款 (税费/房租/维修/咨询): ≤ ¥1K 财务自审, > ¥1K 走老板
+      return a <= 1000
+        ? { steps: [], autoApprove: true, thresholdRule: '付款申请 ≤ ¥1K 财务自审', isOverThreshold: false }
+        : { steps: ['ADMIN'], autoApprove: false, thresholdRule: '付款申请 > ¥1K 走老板', isOverThreshold: true }
 
     default:
       return { steps: ['FINANCE', 'ADMIN'], autoApprove: false, thresholdRule: '默认走财务+老板', isOverThreshold: false }

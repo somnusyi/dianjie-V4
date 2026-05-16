@@ -57,6 +57,7 @@ import { wecomRoutes } from './routes/wecom'
 import { voucherRoutes } from './routes/vouchers'
 import { financeReportRoutes } from './routes/financeReports'
 import { voucherTemplateRoutes } from './routes/voucherTemplates'
+import { paymentRequestRoutes } from './routes/paymentRequests'
 import { cashbookRoutes } from './routes/cashbook'
 import { notificationRoutes } from './routes/notifications'
 import { opsRoutes } from './routes/ops'
@@ -171,6 +172,7 @@ async function bootstrap() {
   app.register(voucherRoutes, { prefix: '/api/vouchers' })
   app.register(financeReportRoutes, { prefix: '/api/finance/reports' })
   app.register(voucherTemplateRoutes, { prefix: '/api/voucher-templates' })
+  app.register(paymentRequestRoutes, { prefix: '/api/payment-requests' })
   app.register(cashbookRoutes, { prefix: '/api/cashbook' })
   app.register(notificationRoutes, { prefix: '/api/notifications' })
   app.register(opsRoutes, { prefix: '/api/ops' })

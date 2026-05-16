@@ -211,6 +211,90 @@ model VoucherTemplate {
   @@map("voucher_templates")
 }
 
+// ══════════════════════════════════════════════════════
+//   菜品 BOM (Bill of Materials) — 总厨/老板维度
+//   决定: 菜品销量 × 配方 → 食材消耗 / 毛利
+// ══════════════════════════════════════════════════════
+
+model Dish {
+  id          String   @id @default(cuid())
+  tenantId    String
+  code        String?  @db.VarChar(40)         // 内部编码 (与美团/抖音菜品 ID 关联用)
+  name        String                            // 菜品名: 「云南山珍菌汤锅」
+  category    String?                           // 分类: 汤锅 / 凉菜 / 主食 / 饮品 / ...
+  unit        String   @default("份")           // 计量单位
+  salePrice   Decimal  @db.Decimal(10, 2)       // 当前售价 (用于毛利计算)
+  imageUrl    String?
+  description String?
+  status      DishStatus @default(ACTIVE)
+  // 是否所有门店都卖 (group=true) 或仅部分 (storeIds[])
+  groupWide   Boolean  @default(true)
+  storeIds    String[] @default([])             // groupWide=false 时哪些店卖
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  recipes     DishRecipe[]
+  sales       DishSale[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, status])
+  @@map("dishes")
+}
+
+enum DishStatus {
+  ACTIVE
+  DISABLED
+  UPCOMING       // 待上架 (新品研发中)
+}
+
+// 菜品配方 — 一道菜含 N 种食材
+model DishRecipe {
+  id          String   @id @default(cuid())
+  dishId      String
+  productId   String                            // 食材 SKU
+  quantity    Decimal  @db.Decimal(10, 4)       // 用量 (按食材最小单位)
+  unit        String                            // 单位 (kg/瓶/件/包,与 Product.unit 对应)
+  lossRate    Decimal  @db.Decimal(5, 4) @default(0)   // 损耗率 0.05 = 5%
+  isMain      Boolean  @default(false)          // 主料标记
+  note        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  dish        Dish     @relation(fields: [dishId], references: [id], onDelete: Cascade)
+  product     Product  @relation(fields: [productId], references: [id])
+
+  @@unique([dishId, productId])
+  @@index([productId])
+  @@map("dish_recipes")
+}
+
+// 菜品销量 — 每店每日每菜的销量
+// 数据源: 美团 POS (后续接通) / 店长手工录 / 抖音 / 收银宝
+model DishSale {
+  id          String   @id @default(cuid())
+  tenantId    String
+  storeId     String
+  dishId      String
+  date        DateTime @db.Date
+  quantity    Decimal  @db.Decimal(10, 2)       // 销售份数
+  grossAmount Decimal  @db.Decimal(12, 2)       // 销售金额 (含折扣)
+  source      String   @default("manual")       // manual / meituan / douyin / cashier_pos
+  channel     String?                            // 堂食 / 外卖 / 储值
+  rawData     Json?                              // 原始数据 (订单 ID 等)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  dish        Dish     @relation(fields: [dishId], references: [id])
+  store       Store    @relation(fields: [storeId], references: [id])
+
+  @@unique([storeId, dishId, date, source])    // 同源同店同菜同日 唯一
+  @@index([tenantId, date])
+  @@index([dishId, date])
+  @@map("dish_sales")
+}
+
 // ── 企微集成配置 ──────────────────────────────────────
 // 一个 Tenant 一份配置, 暂不支持多企微账号
 model WeComConfig {
@@ -349,6 +433,7 @@ model Store {
   expenses       StoreExpense[]
   capitalProjects CapitalProject[]
   documents      Document[]
+  dishSales      DishSale[]
 
   @@unique([tenantId, no])
   @@map("stores")
@@ -450,6 +535,7 @@ model Product {
   lossClaimItems      LossClaimItem[]
   consumptions        StockConsumption[]
   stockMovements      SupplierStockMovement[]
+  dishRecipes         DishRecipe[]
 
   @@unique([tenantId, code])
   @@index([batchId])

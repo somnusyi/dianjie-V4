@@ -143,6 +143,20 @@ export default function ChefDirectorHomePage() {
         </a>
       </Section>
 
+      {/* 菜品 / 配方 (BOM) */}
+      <Section title="菜品 / 配方">
+        <a href="/v2/chef-director/dishes" className="block bg-white rounded-card border border-border p-3">
+          <div className="flex items-center gap-3">
+            <span className="w-10 h-10 rounded-md bg-amber-bg text-amber-fg flex items-center justify-center text-h2">🍲</span>
+            <div className="flex-1">
+              <div className="text-h2">菜品 BOM 管理</div>
+              <p className="text-caption text-gray2 mt-0.5">配方 · 成本 · 毛利 · 销量基础数据</p>
+            </div>
+            <span className="text-gray3">›</span>
+          </div>
+        </a>
+      </Section>
+
       <Section title="各店报损排行" right={`${storeRank.length} 家店 · ${anomalyCount} 异常`} rightTone={anomalyCount > 0 ? 'orange' : undefined}>
         {losses === null && <p className="text-caption text-gray3 text-center py-4">加载中…</p>}
         {losses !== null && storeRank.length === 0 && (

@@ -137,7 +137,7 @@ export default function FinanceHomePage() {
         </a>
       </div>
 
-      {/* 管理报表 — 利润 + 账龄 */}
+      {/* 管理报表 — 利润 / 账龄 / 食材 / 现金流 */}
       <div className="px-4 mt-3 grid grid-cols-2 gap-2">
         <a href="/v2/finance/reports/profit" className="block bg-white rounded-card border border-border p-3">
           <div className="text-button">📈 利润中心</div>
@@ -146,6 +146,14 @@ export default function FinanceHomePage() {
         <a href="/v2/finance/reports/aging" className="block bg-white rounded-card border border-border p-3">
           <div className="text-button">⏳ 账龄分析</div>
           <div className="text-micro text-gray3 mt-0.5">应付账期 · 逾期预警</div>
+        </a>
+        <a href="/v2/finance/reports/food-cost" className="block bg-white rounded-card border border-border p-3">
+          <div className="text-button">🍲 食材成本</div>
+          <div className="text-micro text-gray3 mt-0.5">采购 · 占比 · 损耗 · 趋势</div>
+        </a>
+        <a href="/v2/finance/reports/cash-flow" className="block bg-white rounded-card border border-border p-3">
+          <div className="text-button">💧 现金流</div>
+          <div className="text-micro text-gray3 mt-0.5">经营 · 投资 · 筹资</div>
         </a>
       </div>
 

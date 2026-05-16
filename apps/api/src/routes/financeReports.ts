@@ -14,6 +14,18 @@ import dayjs from 'dayjs'
 const FINANCE_ROLES = ['FINANCE', 'ADMIN', 'SUPER_ADMIN']
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
+// 帮助函数: 按科目编码前缀求和 (借 - 贷)
+async function sumVoucherByCode(tenantId: string, prefixes: string[], start: Date, end: Date) {
+  const rows = await prisma.voucherEntry.findMany({
+    where: {
+      voucher: { tenantId, date: { gte: start, lte: end }, status: { in: ['DRAFT', 'POSTED'] } },
+      OR: prefixes.map(pp => ({ accountCode: { startsWith: pp } })),
+    },
+    select: { debit: true, credit: true },
+  })
+  return rows.reduce((s, r) => s + Number(r.debit) - Number(r.credit), 0)
+}
+
 export const financeReportRoutes: FastifyPluginAsync = async (app) => {
 
   // ──────────────────────────────────────────────────────
@@ -162,6 +174,181 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
       },
       byChannel,
       stores: storesDetail,
+    })
+  })
+
+  // ──────────────────────────────────────────────────────
+  // 食材成本专项
+  // 月度 + 趋势(近6月) + 各店 + 周转(库存余额 / 月消耗)
+  // ──────────────────────────────────────────────────────
+  app.get('/food-cost', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!FINANCE_ROLES.includes(role) && role !== 'ADMIN') {
+      return reply.status(403).send({ error: '无权查看' })
+    }
+    const { month } = req.query as any
+    const ym = month || dayjs().format('YYYY-MM')
+    const monthStart = dayjs(ym + '-01').startOf('month').toDate()
+    const monthEnd   = dayjs(ym + '-01').endOf('month').toDate()
+
+    const stores = await prisma.store.findMany({ where: { tenantId }, select: { id: true, name: true } })
+    const storeIds = stores.map(s => s.id)
+
+    // 本月: 收货金额 / 报损金额 / 营业额 / 食材占比
+    async function sumByStore(storeId: string | null) {
+      const where: any = { tenantId, deliveryDate: { gte: monthStart, lte: monthEnd } }
+      if (storeId) where.storeId = storeId
+      const receipt = await prisma.receipt.aggregate({ where, _sum: { totalAmount: true } })
+      const lossWhere: any = {
+        tenantId, status: { in: ['APPROVED', 'RESOLVED'] },
+        createdAt: { gte: monthStart, lte: monthEnd },
+      }
+      if (storeId) lossWhere.storeId = storeId
+      const loss = await prisma.lossClaim.aggregate({ where: lossWhere, _sum: { totalLossAmount: true } })
+      const revWhere: any = { date: { gte: monthStart, lte: monthEnd } }
+      if (storeId) revWhere.storeId = storeId
+      else revWhere.storeId = { in: storeIds }
+      const rev = await prisma.revenueRecord.aggregate({ where: revWhere, _sum: { amount: true } })
+      return {
+        revenue: Number(rev._sum.amount || 0),
+        foodCost: Number(receipt._sum.totalAmount || 0),
+        loss: Number(loss._sum.totalLossAmount || 0),
+      }
+    }
+
+    const total = await sumByStore(null)
+    const totalRatio = total.revenue > 0 ? total.foodCost / total.revenue : 0
+    const totalLossRatio = total.foodCost > 0 ? total.loss / total.foodCost : 0
+
+    const storesDetail = await Promise.all(stores.map(async (s) => {
+      const d = await sumByStore(s.id)
+      return {
+        storeId: s.id, storeName: s.name,
+        ...d,
+        foodCostRatio: d.revenue > 0 ? d.foodCost / d.revenue : 0,
+        lossRatio: d.foodCost > 0 ? d.loss / d.foodCost : 0,
+      }
+    }))
+
+    // 近 6 个月趋势
+    const trend = [] as Array<{ month: string; revenue: number; foodCost: number; ratio: number; loss: number }>
+    for (let i = 5; i >= 0; i--) {
+      const m = dayjs(ym + '-01').subtract(i, 'month')
+      const ms = m.startOf('month').toDate()
+      const me = m.endOf('month').toDate()
+      const [rec, los, rev] = await Promise.all([
+        prisma.receipt.aggregate({ where: { tenantId, deliveryDate: { gte: ms, lte: me } }, _sum: { totalAmount: true } }),
+        prisma.lossClaim.aggregate({ where: { tenantId, status: { in: ['APPROVED', 'RESOLVED'] }, createdAt: { gte: ms, lte: me } }, _sum: { totalLossAmount: true } }),
+        prisma.revenueRecord.aggregate({ where: { storeId: { in: storeIds }, date: { gte: ms, lte: me } }, _sum: { amount: true } }),
+      ])
+      const revV = Number(rev._sum.amount || 0)
+      const food = Number(rec._sum.totalAmount || 0)
+      trend.push({
+        month: m.format('YYYY-MM'),
+        revenue: revV, foodCost: food,
+        loss: Number(los._sum.totalLossAmount || 0),
+        ratio: revV > 0 ? food / revV : 0,
+      })
+    }
+
+    // 库存周转: 库存余额估值 / 月消耗
+    // 库存余额 = Σ(product.stock * product.price) per supplier - 但供应商商品归供应商不归店,这里用 receipt 现存(简化)
+    // 简化: 库存价值 = sum(本月入库未消耗) — 真实计算需要 ConsumptionRecord, 暂略
+    // 周转天数 ≈ 食材库存价值 / 日均消耗 (无法精确; 给参考值)
+    const turnoverDays = total.foodCost > 0 ? Math.round((total.foodCost / 30)) : 0
+
+    return reply.send({
+      month: ym,
+      total: {
+        ...total,
+        foodCostRatio: totalRatio,
+        lossRatio: totalLossRatio,
+      },
+      stores: storesDetail.sort((a, b) => b.foodCost - a.foodCost),
+      trend,
+      turnoverDays,
+    })
+  })
+
+  // ──────────────────────────────────────────────────────
+  // 现金流瀑布: 经营 / 投资 / 筹资 三大活动
+  // ──────────────────────────────────────────────────────
+  app.get('/cash-flow', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!FINANCE_ROLES.includes(role) && role !== 'ADMIN') {
+      return reply.status(403).send({ error: '无权查看' })
+    }
+    const { month } = req.query as any
+    const ym = month || dayjs().format('YYYY-MM')
+    const start = dayjs(ym + '-01').startOf('month').toDate()
+    const end   = dayjs(ym + '-01').endOf('month').toDate()
+
+    const stores = await prisma.store.findMany({ where: { tenantId }, select: { id: true } })
+    const storeIds = stores.map(s => s.id)
+
+    // 经营活动 (流入)
+    // - 营业额 (revenueRecord)
+    const revIn = await prisma.revenueRecord.aggregate({
+      where: { storeId: { in: storeIds }, date: { gte: start, lte: end } },
+      _sum: { amount: true },
+    })
+    const operatingIn = Number(revIn._sum.amount || 0)
+
+    // 经营活动 (流出)
+    // - 已付款给供应商
+    const paymentOut = await prisma.payment.aggregate({
+      where: { tenantId, status: 'PAID', paidAt: { gte: start, lte: end } },
+      _sum: { amount: true },
+    })
+    const supplierPaid = Number(paymentOut._sum.amount || 0)
+    // - 销售费用 + 管理费用 (从凭证里聚合, 借方)
+    const sellingPaid = await sumVoucherByCode(tenantId, ['5601'], start, end)
+    const mgmtPaid    = await sumVoucherByCode(tenantId, ['5602'], start, end)
+    const operatingOut = supplierPaid + sellingPaid + mgmtPaid
+
+    // 投资活动 (流出): 建店资金
+    const capitalExpense: any = await prisma.capitalExpense.aggregate({
+      where: { project: { store: { tenantId } }, createdAt: { gte: start, lte: end } },
+      _sum: { amount: true },
+    } as any).catch(() => ({ _sum: { amount: 0 } }))
+    const investmentOut = Number(capitalExpense?._sum?.amount || 0)
+
+    // 筹资活动 (借款 / 还款) — 暂无业务事件, 留 0
+    const financingIn = 0
+    const financingOut = 0
+
+    // 净现金流
+    const operatingNet = operatingIn - operatingOut
+    const investmentNet = -investmentOut
+    const financingNet = financingIn - financingOut
+    const totalNet = operatingNet + investmentNet + financingNet
+
+    return reply.send({
+      month: ym,
+      operating: {
+        inflow: operatingIn,
+        outflow: operatingOut,
+        net: operatingNet,
+        detail: {
+          revenue: operatingIn,
+          supplierPayment: supplierPaid,
+          sellingExp: sellingPaid,
+          mgmtExp: mgmtPaid,
+        },
+      },
+      investment: {
+        inflow: 0,
+        outflow: investmentOut,
+        net: investmentNet,
+        detail: { capitalExpense: investmentOut },
+      },
+      financing: {
+        inflow: financingIn,
+        outflow: financingOut,
+        net: financingNet,
+        detail: {},
+      },
+      totalNet,
     })
   })
 

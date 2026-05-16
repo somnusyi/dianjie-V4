@@ -39,6 +39,7 @@ export default function FinanceVouchersPage() {
   const [data, setData] = useState<Voucher[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
 
   async function reload() {
     setError(null)
@@ -80,11 +81,40 @@ export default function FinanceVouchersPage() {
       for (const v of list.filter(v => v.status === 'DRAFT')) {
         await apiFetch(`/api/vouchers/${v.id}/post`, { method: 'PATCH' })
       }
+      setSelected(new Set())
       await reload()
     } catch (e: any) {
       alert(e.message)
     } finally { setBusy(false) }
   }
+  async function postSelected() {
+    const ids = Array.from(selected)
+    if (ids.length === 0) return
+    if (!confirm(`确定审核选中 ${ids.length} 笔凭证?`)) return
+    setBusy(true)
+    try {
+      for (const id of ids) {
+        const v = list.find(x => x.id === id)
+        if (v?.status === 'DRAFT') {
+          await apiFetch(`/api/vouchers/${id}/post`, { method: 'PATCH' })
+        }
+      }
+      setSelected(new Set())
+      await reload()
+    } catch (e: any) { alert(e.message) } finally { setBusy(false) }
+  }
+  function toggleSelect(id: string) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  function selectAllDraft() {
+    setSelected(new Set(list.filter(v => v.status === 'DRAFT').map(v => v.id)))
+  }
+  function clearSelection() { setSelected(new Set()) }
   async function exportExcel(scope: 'all' | 'posted') {
     const from = dayjs(month + '-01').startOf('month').format('YYYY-MM-DD')
     const to = dayjs(month + '-01').endOf('month').format('YYYY-MM-DD')
@@ -153,17 +183,34 @@ export default function FinanceVouchersPage() {
 
       {/* 批量操作 */}
       <div className="mx-4 mt-3 flex gap-2 flex-wrap">
-        <button onClick={postAll} disabled={busy || stats.draft === 0}
-                className="px-3 py-2 bg-amber/10 text-amber-fg rounded-cta text-button disabled:opacity-40">
-          一键审 {stats.draft} 笔草稿
-        </button>
+        {selected.size > 0 ? (
+          <>
+            <button onClick={postSelected} disabled={busy}
+                    className="px-3 py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40">
+              审选中 {selected.size} 笔
+            </button>
+            <button onClick={clearSelection} disabled={busy}
+                    className="px-3 py-2 bg-white border border-border text-gray2 rounded-cta text-button">
+              取消选择
+            </button>
+          </>
+        ) : (
+          <>
+            <button onClick={postAll} disabled={busy || stats.draft === 0}
+                    className="px-3 py-2 bg-amber/10 text-amber-fg rounded-cta text-button disabled:opacity-40">
+              一键审 {stats.draft} 笔草稿
+            </button>
+            {stats.draft > 1 && (
+              <button onClick={selectAllDraft} disabled={busy}
+                      className="px-3 py-2 bg-white border border-border text-gray2 rounded-cta text-button">
+                选草稿
+              </button>
+            )}
+          </>
+        )}
         <button onClick={() => exportExcel('posted')} disabled={busy || stats.posted === 0}
-                className="px-3 py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40">
-          导出已审 ({stats.posted}) → 好会计
-        </button>
-        <button onClick={() => exportExcel('all')} disabled={busy || stats.total === 0}
-                className="px-3 py-2 bg-white border border-border text-gray2 rounded-cta text-button disabled:opacity-40">
-          导出全部 ({stats.total})
+                className="px-3 py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40 ml-auto">
+          导出已审 ({stats.posted})
         </button>
       </div>
 
@@ -175,9 +222,23 @@ export default function FinanceVouchersPage() {
         )}
         {list.map(v => {
           const tone = v.status === 'POSTED' ? 'green' : v.status === 'VOIDED' ? 'gray' : 'red'
+          const isSelected = selected.has(v.id)
           return (
-            <li key={v.id}>
-              <a href={`/v2/finance/vouchers/${v.id}`} className="block bg-white rounded-card border border-border p-3 hover:bg-bg-warm transition">
+            <li key={v.id} className="flex items-start gap-2">
+              {v.status === 'DRAFT' && (
+                <button
+                  type="button"
+                  onClick={() => toggleSelect(v.id)}
+                  className={`mt-3 w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 ${
+                    isSelected ? 'bg-ink border-ink text-white' : 'bg-white border-border'
+                  }`}
+                  aria-label="选择"
+                >
+                  {isSelected && <span className="text-micro">✓</span>}
+                </button>
+              )}
+              {v.status !== 'DRAFT' && <div className="w-5 shrink-0" />}
+              <a href={`/v2/finance/vouchers/${v.id}`} className={`flex-1 block rounded-card border p-3 hover:bg-bg-warm transition ${isSelected ? 'bg-amber/5 border-amber/30' : 'bg-white border-border'}`}>
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
                   <Chip tone={tone as any}>{STATUS_LABEL[v.status]}</Chip>
                   {v.sourceType && <Chip tone="amber">{SOURCE_LABEL[v.sourceType] || v.sourceType}</Chip>}

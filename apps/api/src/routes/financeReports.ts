@@ -353,6 +353,92 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // ──────────────────────────────────────────────────────
+  // 对账自检: 凭证(银行存款分录) vs CashTransaction
+  // 帮财务发现"漏建凭证"或"重复入账"
+  // ──────────────────────────────────────────────────────
+  app.get('/recon-check', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!FINANCE_ROLES.includes(role) && role !== 'ADMIN') {
+      return reply.status(403).send({ error: '无权查看' })
+    }
+    const { month } = req.query as any
+    const ym = month || dayjs().format('YYYY-MM')
+    const start = dayjs(ym + '-01').startOf('month').toDate()
+    const end   = dayjs(ym + '-01').endOf('month').toDate()
+
+    // 拉本月所有"银行存款"类凭证分录 (1001 库存现金 / 1002* 银行存款 / 1012* 其他货币资金)
+    const entries = await prisma.voucherEntry.findMany({
+      where: {
+        voucher: { tenantId, date: { gte: start, lte: end }, status: { not: 'VOIDED' } },
+        OR: [
+          { accountCode: { startsWith: '1001' } },
+          { accountCode: { startsWith: '1002' } },
+          { accountCode: { startsWith: '1012' } },
+        ],
+      },
+      include: { voucher: { select: { id: true, no: true, date: true, summary: true } } },
+    })
+
+    // 拉本月所有 CashTransaction
+    const cashTxs = await prisma.cashTransaction.findMany({
+      where: { tenantId, txDate: { gte: start, lte: end } },
+      include: { account: { select: { name: true, type: true } } },
+    })
+
+    // 按金额+日期粗匹配 — 凭证分录 net (借-贷) 应等于 CashTransaction.amount * direction
+    const matched: any[] = []
+    const unmatchedEntries: any[] = []
+    const unmatchedTxs: any[] = []
+    const txUsed = new Set<string>()
+    for (const e of entries) {
+      const net = Number(e.debit) - Number(e.credit)
+      const eDate = dayjs(e.voucher.date).format('YYYY-MM-DD')
+      // 找一笔金额相同 + 日期同 ± 3 天 + 没用过的 cash tx
+      const cand = cashTxs.find(t => {
+        if (txUsed.has(t.id)) return false
+        const tDate = dayjs(t.txDate).format('YYYY-MM-DD')
+        const diff = Math.abs(dayjs(eDate).diff(tDate, 'day'))
+        if (diff > 3) return false
+        const tNet = Number(t.amount) * t.direction
+        return Math.abs(tNet - net) < 0.01
+      })
+      if (cand) {
+        txUsed.add(cand.id)
+        matched.push({ entryId: e.id, txId: cand.id, amount: net, voucherNo: e.voucher.no, voucherDate: eDate, txDate: dayjs(cand.txDate).format('YYYY-MM-DD') })
+      } else {
+        unmatchedEntries.push({
+          entryId: e.id, voucherId: e.voucher.id, voucherNo: e.voucher.no,
+          date: eDate, accountCode: e.accountCode, accountName: e.accountName,
+          debit: Number(e.debit), credit: Number(e.credit),
+          summary: e.summary, voucherSummary: e.voucher.summary,
+        })
+      }
+    }
+    for (const t of cashTxs) {
+      if (txUsed.has(t.id)) continue
+      unmatchedTxs.push({
+        txId: t.id, txDate: dayjs(t.txDate).format('YYYY-MM-DD'),
+        direction: t.direction, amount: Number(t.amount),
+        category: t.category, note: t.note,
+        accountName: t.account?.name,
+      })
+    }
+
+    return reply.send({
+      month: ym,
+      summary: {
+        voucherEntries: entries.length,
+        cashTxs: cashTxs.length,
+        matched: matched.length,
+        unmatchedEntries: unmatchedEntries.length,
+        unmatchedTxs: unmatchedTxs.length,
+      },
+      unmatchedEntries,
+      unmatchedTxs,
+    })
+  })
+
+  // ──────────────────────────────────────────────────────
   // 账龄分析: 应付账龄分桶
   // ──────────────────────────────────────────────────────
   app.get('/aging', auth(app), async (req: any, reply: any) => {

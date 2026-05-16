@@ -235,15 +235,19 @@ export default function FinanceHomePage() {
         </a>
       </div>
 
-      {/* 月度对账 + 净利总览 — 月末高频 */}
-      <div className="px-4 mt-3 grid grid-cols-2 gap-2">
+      {/* 月度对账 + 自检 + 净利 — 月末高频 */}
+      <div className="px-4 mt-3 grid grid-cols-3 gap-2">
         <a href="/v2/finance/reconcile" className="block bg-white rounded-card border border-border p-3">
-          <div className="text-button">📊 月度对账</div>
-          <div className="text-micro text-gray3 mt-0.5">按门店 / 供应商 · 导 Excel</div>
+          <div className="text-button">📊 对账</div>
+          <div className="text-micro text-gray3 mt-0.5">月度 · 导 Excel</div>
+        </a>
+        <a href="/v2/finance/reports/recon-check" className="block bg-white rounded-card border border-border p-3">
+          <div className="text-button">🔍 对账自检</div>
+          <div className="text-micro text-gray3 mt-0.5">凭证 vs 流水 差异</div>
         </a>
         <a href="/v2/profit" className="block bg-white rounded-card border border-border p-3">
-          <div className="text-button">⛁ 净利总览</div>
-          <div className="text-micro text-gray3 mt-0.5">月/季/年/累计</div>
+          <div className="text-button">⛁ 净利</div>
+          <div className="text-micro text-gray3 mt-0.5">月/季/年</div>
         </a>
       </div>
 

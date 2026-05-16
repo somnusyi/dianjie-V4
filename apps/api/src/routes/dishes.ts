@@ -257,6 +257,15 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     if (role === 'MANAGER' && userStoreId && d.storeId !== userStoreId) {
       return reply.status(403).send({ error: '店长只能录本店' })
     }
+    const wasUpdate = await prisma.dishSale.findUnique({
+      where: {
+        storeId_dishId_date_source: {
+          storeId: d.storeId, dishId: d.dishId,
+          date: new Date(d.date), source: d.source,
+        },
+      },
+    })
+    const prevQty = wasUpdate ? Number(wasUpdate.quantity) : 0
     const sale = await prisma.dishSale.upsert({
       where: {
         storeId_dishId_date_source: {
@@ -272,6 +281,40 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
         createdById: userId,
       },
     })
+
+    // 自动扣库存 — 销量 × BOM = 食材消耗
+    // 幂等: 同 sourceType+sourceId+productId 唯一; 改销量时先删旧再写新
+    const qtyChanged = !wasUpdate || Math.abs(prevQty - Number(d.quantity)) > 0.001
+    if (qtyChanged) {
+      const recipes = await prisma.dishRecipe.findMany({
+        where: { dishId: d.dishId },
+        select: { productId: true, quantity: true, lossRate: true },
+      })
+      const srcType = 'dish_sale'
+      const srcId = sale.id
+      if (wasUpdate) {
+        // 删除旧的 StockConsumption (该 sale 已有)
+        await prisma.stockConsumption.deleteMany({
+          where: { sourceType: srcType, sourceId: srcId },
+        })
+      }
+      // 新建对应每食材的消耗记录
+      for (const r of recipes) {
+        const need = Number(d.quantity) * Number(r.quantity) * (1 + Number(r.lossRate))
+        if (need <= 0) continue
+        await prisma.stockConsumption.create({
+          data: {
+            tenantId, storeId: d.storeId, productId: r.productId,
+            date: new Date(d.date),
+            quantity: Math.round(need * 10000) / 10000,
+            note: `菜品销售 ${d.quantity} 份`,
+            sourceType: srcType,
+            sourceId: srcId,
+            createdById: userId,
+          },
+        })
+      }
+    }
     return sale
   })
 

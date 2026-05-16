@@ -1463,8 +1463,11 @@ model StockConsumption {
   storeId     String
   productId   String
   date        DateTime @db.Date
-  quantity    Decimal  @db.Decimal(10, 2)
+  quantity    Decimal  @db.Decimal(10, 4)            // 改 4 位精度: BOM 推算可能 0.0005 kg
   note        String?
+  // 来源(用于幂等 + 审计): manual / dish_sale:<saleId> / meituan_ingest:<orderId>
+  sourceType  String?  @db.VarChar(20)
+  sourceId    String?  @db.VarChar(64)
   createdById String
   createdAt   DateTime @default(now())
   tenant      Tenant   @relation(fields: [tenantId], references: [id])
@@ -1472,6 +1475,8 @@ model StockConsumption {
   product     Product  @relation(fields: [productId], references: [id])
   createdBy   User     @relation(fields: [createdById], references: [id])
 
+  @@unique([sourceType, sourceId, productId], name: "stock_consumption_source_uk")
+  @@index([tenantId, date])
   @@map("stock_consumptions")
 }
 

@@ -155,8 +155,9 @@ model Voucher {
   entries     VoucherEntry[]
 
   @@unique([tenantId, no])
+  // P0: sourceType+sourceId 在 tenant 内唯一, 防并发重复建凭证 (允许 null sourceId)
+  @@unique([tenantId, sourceType, sourceId], name: "voucher_source_uk")
   @@index([tenantId, date])
-  @@index([tenantId, sourceType, sourceId])
   @@map("vouchers")
 }
 

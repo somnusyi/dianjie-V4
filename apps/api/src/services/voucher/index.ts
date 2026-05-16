@@ -34,22 +34,30 @@ export interface CreateVoucherOpts {
   createdById?: string | null
 }
 
-/** 生成凭证号 PZ-YYYYMM-NNNN, 按月递增 */
+/** 生成凭证号 PZ-YYYYMM-NNNN, 按月递增. 并发安全: 用最大号 + 1 取号 (单次), 撞 unique 重试 */
 async function generateNo(tenantId: string, date: Date): Promise<string> {
   const ym = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}`
   const prefix = `PZ-${ym}-`
-  const count = await prisma.voucher.count({ where: { tenantId, no: { startsWith: prefix } } })
-  return `${prefix}${String(count + 1).padStart(4, '0')}`
+  // 用 max(no) 而不是 count, 避免删除后号码回退
+  const last = await prisma.voucher.findFirst({
+    where: { tenantId, no: { startsWith: prefix } },
+    orderBy: { no: 'desc' },
+    select: { no: true },
+  })
+  const lastSeq = last ? parseInt(last.no.slice(-4)) || 0 : 0
+  return `${prefix}${String(lastSeq + 1).padStart(4, '0')}`
 }
 
 /**
- * 创建凭证 (幂等: 同 sourceType+sourceId 已有则返回旧 ID, 不重建)
+ * 创建凭证
+ * 幂等: 同 sourceType+sourceId 已有则返回旧 ID
+ * 并发安全: 撞 unique (P2002) 时最多重试 3 次重新取号
  */
 export async function createVoucher(opts: CreateVoucherOpts): Promise<string | null> {
   const { tenantId, sourceType, sourceId, entries, summary, word = '记', createdById = null } = opts
   const date = typeof opts.date === 'string' ? new Date(opts.date) : opts.date
 
-  // 幂等检查
+  // 幂等检查 (DB unique 兜底, 这里先查避免不必要的写)
   if (sourceType && sourceId) {
     const existing = await prisma.voucher.findFirst({
       where: { tenantId, sourceType, sourceId },
@@ -74,28 +82,47 @@ export async function createVoucher(opts: CreateVoucherOpts): Promise<string | n
     return null  // 全 0 不建
   }
 
-  const no = await generateNo(tenantId, date)
-  const voucher = await prisma.voucher.create({
-    data: {
-      tenantId, no, date, summary, word,
-      sourceType, sourceId,
-      totalDebit, totalCredit,
-      status: 'DRAFT',
-      createdById,
-      entries: {
-        create: entries.map((e, i) => ({
-          lineNo: i + 1,
-          summary: e.summary || summary,
-          accountCode: e.accountCode,
-          accountName: e.accountName,
-          debit: Number(e.debit || 0),
-          credit: Number(e.credit || 0),
-        })),
-      },
-    },
-    select: { id: true },
-  })
-  return voucher.id
+  // 最多 3 次重试 (撞凭证号 unique 或 sourceId unique 时)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const no = await generateNo(tenantId, date)
+      const voucher = await prisma.voucher.create({
+        data: {
+          tenantId, no, date, summary, word,
+          sourceType, sourceId,
+          totalDebit, totalCredit,
+          status: 'DRAFT',
+          createdById,
+          entries: {
+            create: entries.map((e, i) => ({
+              lineNo: i + 1,
+              summary: e.summary || summary,
+              accountCode: e.accountCode,
+              accountName: e.accountName,
+              debit: Number(e.debit || 0),
+              credit: Number(e.credit || 0),
+            })),
+          },
+        },
+        select: { id: true },
+      })
+      return voucher.id
+    } catch (e: any) {
+      // P2002 = unique violation
+      if (e?.code !== 'P2002') throw e
+      // 撞 sourceId unique → 已存在, 查到 ID 返回 (并发场景)
+      if (sourceType && sourceId) {
+        const existing = await prisma.voucher.findFirst({
+          where: { tenantId, sourceType, sourceId }, select: { id: true },
+        })
+        if (existing) return existing.id
+      }
+      // 撞 no unique → 重新取号重试
+      console.warn(`[voucher] P2002 撞号, attempt=${attempt + 1}, retrying...`)
+    }
+  }
+  console.error(`[voucher] 重试 3 次仍 P2002, 放弃: ${sourceType}/${sourceId}`)
+  return null
 }
 
 /** 业务侧用的 fire-and-forget */

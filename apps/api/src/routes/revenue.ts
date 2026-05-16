@@ -61,37 +61,75 @@ export const revenueRoutes: FastifyPluginAsync = async (app) => {
     if (!store) return reply.status(403).send({ error: '无权操作该门店' })
 
     try {
+      // 先看是否已有, 用于区分 create vs update (upsert 之前)
+      const prev = await prisma.revenueRecord.findUnique({
+        where: { storeId_date: { storeId: finalStoreId, date: new Date(date) } },
+      })
       const record = await prisma.revenueRecord.upsert({
         where: { storeId_date: { storeId: finalStoreId, date: new Date(date) } },
         update: { amount: finalAmount, source: source || 'manual', rawData },
         create: { storeId: finalStoreId, date: new Date(date), amount: finalAmount, source: source || 'manual', rawData },
       })
-      // 财务凭证: 按渠道拆分建多笔凭证 (借资金/平台 / 贷主营业务收入)
-      // 用 source 不同区分: dine_in/takeout/card. 渠道字段名约定:
-      //   cash / wechat / alipay / meituan / douyin / bank
+      const isUpdate = !!prev
+      const amountChanged = isUpdate && Math.abs(Number(prev.amount) - Number(finalAmount)) > 0.01
+
+      // 财务凭证: 按渠道拆分建多笔
       try {
         const { voucherForRevenue } = await import('../services/voucher')
         const recordedDate = new Date(date)
-        if (channels && typeof channels === 'object') {
-          // 按渠道逐笔建凭证(每渠道一张),便于对账
-          for (const [ch, amt] of Object.entries(channels)) {
-            const v = Number(amt || 0)
-            if (v <= 0) continue
-            const pay = ['cash','wechat','alipay','meituan','douyin','bank'].includes(ch) ? ch : 'bank'
-            voucherForRevenue({
-              tenantId, revenueId: `${record.id}-${ch}`,
-              storeName: store.name,
-              channel: ['takeout','meituan','douyin'].includes(ch) ? 'takeout' : 'dine_in',
-              amount: v, date: recordedDate,
-              paymentMethod: pay as any,
+
+        // 若金额变了 (重录), 先把旧凭证软撤销: 找 sourceType=Revenue + sourceId 前缀对应的 DRAFT 凭证置 VOIDED
+        // POSTED 的凭证不动 (财务已审, 让用户手工冲销), 但会在响应里提示
+        let lockedVouchers: { no: string; status: string }[] = []
+        if (amountChanged) {
+          const oldVouchers = await prisma.voucher.findMany({
+            where: {
+              tenantId,
+              sourceType: 'Revenue',
+              sourceId: { startsWith: `${record.id}-` },
+            },
+            select: { id: true, no: true, status: true },
+          })
+          const draftIds = oldVouchers.filter(v => v.status === 'DRAFT').map(v => v.id)
+          if (draftIds.length > 0) {
+            await prisma.voucher.updateMany({
+              where: { id: { in: draftIds } },
+              data: { status: 'VOIDED' },
             })
           }
-        } else {
-          // 没渠道明细, 整笔走默认银行通道
-          voucherForRevenue({
-            tenantId, revenueId: record.id, storeName: store.name,
-            channel: 'dine_in', amount: Number(finalAmount), date: recordedDate,
-            paymentMethod: 'bank',
+          lockedVouchers = oldVouchers.filter(v => v.status === 'POSTED')
+        }
+
+        // 若是 update + 金额没变, 跳过(原有凭证即可)
+        if (!isUpdate || amountChanged) {
+          // sourceId 后缀加时间戳避免新建撞老幂等
+          const stamp = amountChanged ? `:r${Date.now().toString(36)}` : ''
+          if (channels && typeof channels === 'object') {
+            for (const [ch, amt] of Object.entries(channels)) {
+              const v = Number(amt || 0)
+              if (v <= 0) continue
+              const pay = ['cash','wechat','alipay','meituan','douyin','bank'].includes(ch) ? ch : 'bank'
+              voucherForRevenue({
+                tenantId, revenueId: `${record.id}-${ch}${stamp}`,
+                storeName: store.name,
+                channel: ['takeout','meituan','douyin'].includes(ch) ? 'takeout' : 'dine_in',
+                amount: v, date: recordedDate,
+                paymentMethod: pay as any,
+              })
+            }
+          } else {
+            voucherForRevenue({
+              tenantId, revenueId: `${record.id}${stamp}`, storeName: store.name,
+              channel: 'dine_in', amount: Number(finalAmount), date: recordedDate,
+              paymentMethod: 'bank',
+            })
+          }
+        }
+
+        if (lockedVouchers.length > 0) {
+          return reply.status(201).send({
+            ...record,
+            _warning: `${lockedVouchers.length} 笔已审凭证 (${lockedVouchers.map(v => v.no).join(', ')}) 与新金额不符,请财务手工冲销`,
           })
         }
       } catch (e: any) {

@@ -137,6 +137,18 @@ export default function FinanceHomePage() {
         </a>
       </div>
 
+      {/* 管理报表 — 利润 + 账龄 */}
+      <div className="px-4 mt-3 grid grid-cols-2 gap-2">
+        <a href="/v2/finance/reports/profit" className="block bg-white rounded-card border border-border p-3">
+          <div className="text-button">📈 利润中心</div>
+          <div className="text-micro text-gray3 mt-0.5">店利润 · 损益占比 · 渠道</div>
+        </a>
+        <a href="/v2/finance/reports/aging" className="block bg-white rounded-card border border-border p-3">
+          <div className="text-button">⏳ 账龄分析</div>
+          <div className="text-micro text-gray3 mt-0.5">应付账期 · 逾期预警</div>
+        </a>
+      </div>
+
       {/* 月度对账 + 净利总览 — 月末高频 */}
       <div className="px-4 mt-3 grid grid-cols-2 gap-2">
         <a href="/v2/finance/reconcile" className="block bg-white rounded-card border border-border p-3">

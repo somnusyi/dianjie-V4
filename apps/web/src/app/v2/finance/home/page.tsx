@@ -113,8 +113,8 @@ export default function FinanceHomePage() {
         </Section>
       )}
 
-      {/* 快捷入口 — 4 + 1 grid, 移走"建店资金 Excel"低频入口 */}
-      <div className="px-4 mt-4 grid grid-cols-4 gap-2">
+      {/* 快捷入口 — 5 grid */}
+      <div className="px-4 mt-4 grid grid-cols-5 gap-2">
         <a href="/v2/finance/review" className="bg-white rounded-card border border-border p-2.5 text-center">
           <div className="text-button">✓</div>
           <div className="text-micro text-gray2 mt-1">初审</div>
@@ -130,6 +130,10 @@ export default function FinanceHomePage() {
         <a href="/v2/finance/funds" className="bg-white rounded-card border border-border p-2.5 text-center">
           <div className="text-button">⛁</div>
           <div className="text-micro text-gray2 mt-1">资金</div>
+        </a>
+        <a href="/v2/finance/vouchers" className="bg-white rounded-card border border-border p-2.5 text-center">
+          <div className="text-button">📋</div>
+          <div className="text-micro text-gray2 mt-1">凭证</div>
         </a>
       </div>
 

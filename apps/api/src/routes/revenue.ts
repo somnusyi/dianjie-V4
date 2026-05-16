@@ -66,6 +66,37 @@ export const revenueRoutes: FastifyPluginAsync = async (app) => {
         update: { amount: finalAmount, source: source || 'manual', rawData },
         create: { storeId: finalStoreId, date: new Date(date), amount: finalAmount, source: source || 'manual', rawData },
       })
+      // 财务凭证: 按渠道拆分建多笔凭证 (借资金/平台 / 贷主营业务收入)
+      // 用 source 不同区分: dine_in/takeout/card. 渠道字段名约定:
+      //   cash / wechat / alipay / meituan / douyin / bank
+      try {
+        const { voucherForRevenue } = await import('../services/voucher')
+        const recordedDate = new Date(date)
+        if (channels && typeof channels === 'object') {
+          // 按渠道逐笔建凭证(每渠道一张),便于对账
+          for (const [ch, amt] of Object.entries(channels)) {
+            const v = Number(amt || 0)
+            if (v <= 0) continue
+            const pay = ['cash','wechat','alipay','meituan','douyin','bank'].includes(ch) ? ch : 'bank'
+            voucherForRevenue({
+              tenantId, revenueId: `${record.id}-${ch}`,
+              storeName: store.name,
+              channel: ['takeout','meituan','douyin'].includes(ch) ? 'takeout' : 'dine_in',
+              amount: v, date: recordedDate,
+              paymentMethod: pay as any,
+            })
+          }
+        } else {
+          // 没渠道明细, 整笔走默认银行通道
+          voucherForRevenue({
+            tenantId, revenueId: record.id, storeName: store.name,
+            channel: 'dine_in', amount: Number(finalAmount), date: recordedDate,
+            paymentMethod: 'bank',
+          })
+        }
+      } catch (e: any) {
+        req.log.warn({ err: e }, '营业额凭证生成失败 (不影响主流程)')
+      }
       return reply.status(201).send(record)
     } catch (e: any) {
       return reply.status(500).send({ error: '录入失败: ' + e.message })

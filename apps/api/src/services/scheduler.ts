@@ -186,6 +186,15 @@ export async function runDailyCheck() {
   }
 
   console.log(`✅ 自动收货 ${overdueShipped.length} 单, 自动同意报损 ${overdueLossClaims.length} 笔`)
+
+  // 5. 周期性凭证模板 (房租/水电/折旧 月度自动建凭证)
+  try {
+    const { runAllTenants } = await import('./voucher/templates')
+    const r = await runAllTenants()
+    if (r.totalRun > 0) console.log(`✅ 周期凭证生成 ${r.totalRun} 笔 (${r.tenants} 租户)`)
+  } catch (e: any) {
+    console.error('凭证模板扫描失败:', e.message)
+  }
 }
 
 // 兼容旧版调用

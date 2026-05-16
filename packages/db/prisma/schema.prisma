@@ -187,6 +187,29 @@ model VoucherEntry {
   @@map("voucher_entries")
 }
 
+// 周期性凭证模板 (房租/水电/折旧 每月自动建)
+model VoucherTemplate {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String                          // 模板名 "门店租金" "固定资产折旧" 等
+  description String?
+  frequency   String   @default("MONTHLY")    // MONTHLY (一期一次, 暂不支持其他)
+  dayOfMonth  Int      @default(1)            // 月内执行日 1..28
+  // 模板分录 JSON: [{ accountCode, accountName, debit?, credit?, summary? }]
+  // amount 可以是固定数字 或 "VARIABLE" (运行时占位, 由财务在草稿里填)
+  entriesJson Json                            // 模板分录定义
+  summary     String                          // 凭证摘要模板, 支持 {YYYY-MM} 等占位
+  enabled     Boolean  @default(true)
+  lastRunAt   DateTime?                       // 最近一次执行
+  lastVoucherId String?                       // 最近一次生成的凭证 ID
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId, enabled])
+  @@map("voucher_templates")
+}
+
 // ── 企微集成配置 ──────────────────────────────────────
 // 一个 Tenant 一份配置, 暂不支持多企微账号
 model WeComConfig {

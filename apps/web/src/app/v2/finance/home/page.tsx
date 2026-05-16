@@ -52,6 +52,9 @@ export default function FinanceHomePage() {
   const [inbox, setInbox] = useState<InboxItem[] | null>(null)
   const [pendingInv, setPendingInv] = useState<Invoice[] | null>(null)
   const [dueToday, setDueToday] = useState<DueSchedule[] | null>(null)
+  const [profit, setProfit] = useState<any>(null)
+  const [aging, setAging] = useState<any>(null)
+  const [voucherDraft, setVoucherDraft] = useState<number>(0)
   useEffect(() => {
     apiFetch<InboxItem[]>('/api/documents/inbox')
       .then(d => setInbox(Array.isArray(d) ? d : []))
@@ -59,10 +62,14 @@ export default function FinanceHomePage() {
     apiFetch<Invoice[]>('/api/invoices?status=PENDING')
       .then(d => setPendingInv(Array.isArray(d) ? d : []))
       .catch(() => setPendingInv([]))
-    // 拉今日 + 已逾期的应付
     apiFetch<DueSchedule[]>('/api/schedules?days=1')
       .then(d => setDueToday(Array.isArray(d) ? d : []))
       .catch(() => setDueToday([]))
+    // 本月运营快照
+    const ym = new Date().toISOString().slice(0, 7)
+    apiFetch<any>(`/api/finance/reports/profit?month=${ym}`).then(setProfit).catch(() => {})
+    apiFetch<any>('/api/finance/reports/aging').then(setAging).catch(() => {})
+    apiFetch<any>(`/api/vouchers?status=DRAFT&pageSize=1`).then(d => setVoucherDraft(d?.total || 0)).catch(() => {})
   }, [])
   if (error) return <ErrorScreen message={error} />
   if (!data) return <LoadingScreen />
@@ -87,6 +94,60 @@ export default function FinanceHomePage() {
             : undefined}
         />
       </div>
+
+      {/* 本月运营快照 — 拉 4 张报表的核心数字 */}
+      {(profit?.summary || aging) && (
+        <div className="mx-4 mt-3 bg-bg-warm rounded-card border border-border p-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-h2">本月运营快照</span>
+            <span className="text-micro text-gray3">{new Date().toISOString().slice(0,7)}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-caption">
+            {profit?.summary && (
+              <>
+                <a href="/v2/finance/reports/profit" className="block">
+                  <div className="text-gray3">营业额 / 净利率</div>
+                  <div className="font-num text-body">
+                    ¥{Math.round(profit.summary.revenue).toLocaleString()}
+                    <span className={`ml-2 text-caption ${profit.summary.netMargin >= 0 ? 'text-green-fg' : 'text-red-fg'}`}>
+                      {(profit.summary.netMargin * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                </a>
+                <a href="/v2/finance/reports/food-cost" className="block">
+                  <div className="text-gray3">食材占比 / 损耗</div>
+                  <div className="font-num text-body">
+                    {(profit.summary.foodCostRatio * 100).toFixed(1)}%
+                    <span className="ml-2 text-caption text-red-fg">
+                      ¥{Math.round(profit.summary.cost.loss).toLocaleString()}
+                    </span>
+                  </div>
+                </a>
+              </>
+            )}
+            {aging && (
+              <a href="/v2/finance/reports/aging" className="block">
+                <div className="text-gray3">应付 / 已逾期</div>
+                <div className="font-num text-body">
+                  ¥{Math.round(aging.grandTotal).toLocaleString()}
+                  {aging.totalOverdue > 0 && (
+                    <span className="ml-2 text-caption text-red-fg">
+                      逾 ¥{Math.round(aging.totalOverdue).toLocaleString()}
+                    </span>
+                  )}
+                </div>
+              </a>
+            )}
+            <a href="/v2/finance/vouchers" className="block">
+              <div className="text-gray3">凭证草稿 / 本月</div>
+              <div className="font-num text-body">
+                {voucherDraft}
+                {voucherDraft > 0 && <span className="ml-2 text-caption text-red-fg">待审</span>}
+              </div>
+            </a>
+          </div>
+        </div>
+      )}
 
       {/* 今日待付清单 — 财务最常用功能, 一键看 / 一键付 */}
       {dueToday !== null && dueToday.length > 0 && (
@@ -131,9 +192,26 @@ export default function FinanceHomePage() {
           <div className="text-button">⛁</div>
           <div className="text-micro text-gray2 mt-1">资金</div>
         </a>
-        <a href="/v2/finance/vouchers" className="bg-white rounded-card border border-border p-2.5 text-center">
+        <a href="/v2/finance/vouchers" className="relative bg-white rounded-card border border-border p-2.5 text-center">
           <div className="text-button">📋</div>
           <div className="text-micro text-gray2 mt-1">凭证</div>
+          {voucherDraft > 0 && (
+            <span className="absolute -top-1 -right-1 bg-red text-white text-micro font-num rounded-full min-w-[20px] h-[20px] px-1 flex items-center justify-center">{voucherDraft}</span>
+          )}
+        </a>
+      </div>
+
+      {/* 凭证模板入口 (周期性自动建凭证) */}
+      <div className="px-4 mt-3">
+        <a href="/v2/finance/voucher-templates" className="block bg-white rounded-card border border-border p-3">
+          <div className="flex items-center gap-3">
+            <span className="w-10 h-10 rounded-md bg-amber-bg text-amber-fg flex items-center justify-center text-h2">🔁</span>
+            <div className="flex-1">
+              <div className="text-h2">凭证模板</div>
+              <p className="text-caption text-gray2 mt-0.5">房租 / 水电 / 折旧 月度自动建</p>
+            </div>
+            <span className="text-gray3">›</span>
+          </div>
         </a>
       </div>
 

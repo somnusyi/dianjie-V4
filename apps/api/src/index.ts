@@ -134,6 +134,20 @@ async function bootstrap() {
   app.decorate('authenticate', async (request: any, reply: any) => {
     try {
       await request.jwtVerify()
+      // 给 Sentry 当前请求作用域打上 tenant/role/route 标签, 后续 captureException
+      // (含 cmbPayment / paymentSchedule 等深层调用) 都能按维度聚合
+      try {
+        const u = request.user
+        if (u?.tenantId) {
+          const scope = Sentry.getIsolationScope()
+          scope.setTags({
+            'tenant.id': u.tenantId,
+            'user.role': u.role || 'unknown',
+            'http.route': request.routerPath || request.url,
+          })
+          scope.setUser({ id: u.userId, segment: u.role })
+        }
+      } catch { /* Sentry 失败不能阻塞业务 */ }
     } catch (err) {
       reply.status(401).send({ error: '未授权，请先登录' })
     }
@@ -214,11 +228,17 @@ async function bootstrap() {
     if (error.validation) {
       return reply.status(400).send({ error: '请求参数错误', details: error.validation })
     }
-    // 5xx 错误上报 Sentry
+    // 5xx 错误上报 Sentry; tenant/role/userId 由 authenticate decorator 写入 IsolationScope
     const statusCode = error.statusCode || 500
     if (statusCode >= 500) {
+      const u = (request as any).user
       Sentry.captureException(error, {
-        extra: { url: request.url, method: request.method, statusCode },
+        tags: {
+          'http.route':  (request as any).routerPath || request.url,
+          'http.method': request.method,
+          ...(u?.tenantId ? { 'tenant.id': u.tenantId, 'user.role': u.role || 'unknown' } : {}),
+        },
+        extra: { url: request.url, method: request.method, statusCode, userId: u?.userId },
       })
     }
     reply.status(statusCode).send({

@@ -1,9 +1,11 @@
 /**
  * 滇界 v2 · 客户端 token / user 存储 + API 封装
  *
- * - 沿用现有 /api/auth/login 返回 { token, user: {role, storeId, ...}, tenant }
- * - localStorage key 与旧 UI 兼容：'token' / 'user' / 'tenant'
- * - role 路由由 routeForRole() 决定
+ * - 沿用现有 /api/auth/login 返回 { token, refreshToken, user, tenant }
+ * - access token (token) 2h 短寿; refresh token (refreshToken) 30d
+ * - apiFetch 拿到 401 且 token 看似过期 时, 静默调 /api/auth/refresh 续期, 再重试原请求
+ *   refresh 失败 → 清 session + 跳 /v2/login
+ * - localStorage key 与旧 UI 兼容: 'token' / 'user' / 'tenant' / 'refreshToken'
  */
 
 export type StoredUser = {
@@ -18,6 +20,7 @@ export type StoredUser = {
 }
 
 const TOKEN_KEY = 'token'
+const REFRESH_KEY = 'refreshToken'
 const USER_KEY  = 'user'
 const TENANT_KEY = 'tenant'
 
@@ -25,19 +28,25 @@ export function getToken(): string | null {
   if (typeof window === 'undefined') return null
   return localStorage.getItem(TOKEN_KEY)
 }
+export function getRefreshToken(): string | null {
+  if (typeof window === 'undefined') return null
+  return localStorage.getItem(REFRESH_KEY)
+}
 export function getUser(): StoredUser | null {
   if (typeof window === 'undefined') return null
   const raw = localStorage.getItem(USER_KEY)
   if (!raw) return null
   try { return JSON.parse(raw) } catch { return null }
 }
-export function setSession(token: string, user: StoredUser, tenant?: any) {
+export function setSession(token: string, user: StoredUser, tenant?: any, refreshToken?: string) {
   localStorage.setItem(TOKEN_KEY, token)
   localStorage.setItem(USER_KEY, JSON.stringify(user))
   if (tenant) localStorage.setItem(TENANT_KEY, JSON.stringify(tenant))
+  if (refreshToken) localStorage.setItem(REFRESH_KEY, refreshToken)
 }
 export function clearSession() {
   localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(REFRESH_KEY)
   localStorage.removeItem(USER_KEY)
   localStorage.removeItem(TENANT_KEY)
 }
@@ -73,43 +82,101 @@ export function pcRouteForRole(_role: string): string | null {
   return null
 }
 
+// ── refresh 单例 + 并发去重 ────────────────────────────
+// 多个请求同时 401 时, 只发一次 /api/auth/refresh, 其余等结果复用
+let _refreshInFlight: Promise<string | null> | null = null
+
+async function refreshAccessOnce(): Promise<string | null> {
+  if (_refreshInFlight) return _refreshInFlight
+  const rt = getRefreshToken()
+  if (!rt) return null
+  _refreshInFlight = (async () => {
+    try {
+      const res = await fetch('/api/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: rt }),
+      })
+      if (!res.ok) return null
+      const j = await res.json()
+      if (!j?.token) return null
+      localStorage.setItem(TOKEN_KEY, j.token)
+      // user 也可能因角色变更被刷掉, 同步存
+      if (j.user) localStorage.setItem(USER_KEY, JSON.stringify(j.user))
+      return j.token as string
+    } catch {
+      return null
+    } finally {
+      _refreshInFlight = null
+    }
+  })()
+  return _refreshInFlight
+}
+
 /**
- * 带 token 的 fetch 封装。失败时抛错，401 自动清 session 并跳 login。
+ * 带 token 的 fetch 封装. 401 且 token 看似过期时, 自动 refresh + 重试一次.
+ * refresh 失败 → 清 session + 跳 /v2/login.
  */
 export async function apiFetch<T = any>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = getToken()
-  const headers = new Headers(init.headers)
-  // 只在有 body 时设 Content-Type. 否则 Fastify 看到 "application/json" 但 body 为空会 400.
-  // FormData / Blob 不要设 — 浏览器会自动加 multipart boundary
-  if (init.body != null && !headers.has('Content-Type')
-      && !(init.body instanceof FormData)
-      && !(init.body instanceof Blob)) {
-    headers.set('Content-Type', 'application/json')
+  const doFetch = async (token: string | null) => {
+    const headers = new Headers(init.headers)
+    // 只在有 body 时设 Content-Type. 否则 Fastify 看到 "application/json" 但 body 为空会 400.
+    // FormData / Blob 不要设 — 浏览器会自动加 multipart boundary
+    if (init.body != null && !headers.has('Content-Type')
+        && !(init.body instanceof FormData)
+        && !(init.body instanceof Blob)) {
+      headers.set('Content-Type', 'application/json')
+    }
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    return fetch(path, { ...init, headers })
   }
-  if (token) headers.set('Authorization', `Bearer ${token}`)
-  const res = await fetch(path, { ...init, headers })
+
+  let token = getToken()
+  let res = await doFetch(token)
+
   if (res.status === 401) {
-    // 解析后端原因. 只有"真 token 过期/无效"才清 session, 其他 401 (如某端点权限误判) 不踢人
+    // 解析后端原因: 真过期 vs 权限不足 (后者不应触发 refresh, 也不应踢人)
     let msg = '未登录或会话已过期'
     let isAuthExpired = false
+    let bodyClone: any
     try {
-      const j = await res.json()
-      msg = j.error || j.message || msg
+      bodyClone = await res.clone().json()
+      msg = bodyClone.error || bodyClone.message || msg
       const lc = String(msg).toLowerCase()
-      // 真过期标志: jwt expired / invalid token / unauthorized 等关键词
-      isAuthExpired = !token   // 没 token 才认定真未登录
-        || /expired|invalid token|jwt|未登录|token/i.test(msg) && !/权限|不能|无权/.test(msg)
+      isAuthExpired = !token
+        || (/expired|invalid token|jwt|未登录|token/i.test(msg) && !/权限|不能|无权/.test(msg))
     } catch {
       isAuthExpired = !token
     }
+
     if (isAuthExpired) {
-      clearSession()
-      if (typeof window !== 'undefined' && !location.pathname.startsWith('/v2/login')) {
-        location.href = '/v2/login'
+      // 尝试 refresh 续期
+      const newToken = await refreshAccessOnce()
+      if (newToken) {
+        res = await doFetch(newToken)
+        if (res.ok) return res.json()
+        // refresh 后仍 401: 真过期 / refresh 被撤销
+        if (res.status === 401) {
+          clearSession()
+          if (typeof window !== 'undefined' && !location.pathname.startsWith('/v2/login')) {
+            location.href = '/v2/login'
+          }
+          throw new Error('会话已过期')
+        }
+      } else {
+        // 没 refresh / refresh 失败 → 踢回登录
+        clearSession()
+        if (typeof window !== 'undefined' && !location.pathname.startsWith('/v2/login')) {
+          location.href = '/v2/login'
+        }
+        throw new Error(msg)
       }
+    } else {
+      // 不是过期 (是权限不足等), 抛错但不清 session
+      throw new Error(msg)
     }
-    throw new Error(msg)
   }
+
   if (!res.ok) {
     let msg = res.statusText
     try { const j = await res.json(); msg = j.error || j.message || msg } catch {}

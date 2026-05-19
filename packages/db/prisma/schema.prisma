@@ -1672,3 +1672,23 @@ enum StepStatus {
   REJECTED
   SKIPPED        // 阈值内自动跳过
 }
+
+// ── 撤销的 token (用于 JWT 主动作废: logout / 离职 / 异常登录) ──
+// 设计:
+//   - access token (2h) 不查此表, 靠 expiry 自然失效, 性能优先
+//   - refresh token (30d) 在 /api/auth/refresh 时查此表, 命中拒绝换 access
+//   - logout 把 refresh jti 写入此表, 客户端 access 自然过期后无法续期 → 真正"退出"
+//   - 定时清理 expiresAt < now 的行 (后续在 scheduler 加 daily cron)
+model RevokedToken {
+  id         String   @id @default(cuid())
+  jti        String   @unique           // JWT payload.jti (UUID)
+  userId     String                     // 便于按用户批量撤销 (离职/封号)
+  tokenType  String                     // "access" | "refresh"
+  expiresAt  DateTime                   // token 自然过期时间, 用于定时清理
+  revokedAt  DateTime @default(now())
+  reason     String?                    // logout / admin-revoke / suspicious-login
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("revoked_tokens")
+}

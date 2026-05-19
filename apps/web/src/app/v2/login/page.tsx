@@ -55,7 +55,7 @@ export default function LoginPage() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || data.message || '登录失败')
-      setSession(data.token, data.user, data.tenant)
+      setSession(data.token, data.user, data.tenant, data.refreshToken)
       const isWide = window.innerWidth >= 1024
       const pc = isWide ? pcRouteForRole(data.user.role) : null
       location.replace(pc || routeForRole(data.user.role))

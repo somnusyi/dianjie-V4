@@ -90,6 +90,8 @@ export const capitalRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // ─── 立项 (店长 / 老板都可) ────────────────────
+  // 注: 全局 registerIdempotency 中间件已支持 Idempotency-Key header (10min Redis 缓存)
+  // 这里再加一层业务级 dedup, 防止前端漏传 header 时双击仍创建重复
   app.post('/projects', auth, async (req: any, reply: any) => {
     const { tenantId, role, userId, storeId: userStoreId } = req.user
     if (!FINANCE_OR_BOSS.has(role) && !STORE_LEVEL.has(role)) {
@@ -102,9 +104,20 @@ export const capitalRoutes: FastifyPluginAsync = async (app) => {
     if (STORE_LEVEL.has(role) && !finalStoreId) {
       return reply.status(400).send({ error: '当前账号未绑定门店, 不能立项' })
     }
+    // 业务级 dedup: 同 tenant + storeId + name 在 60s 内已有, 直接返回旧的, 不创建新
+    const dupWindowMs = 60_000
+    const dup = await prisma.capitalProject.findFirst({
+      where: {
+        tenantId,
+        name: name.trim(),
+        storeId: finalStoreId,
+        createdAt: { gte: new Date(Date.now() - dupWindowMs) },
+      },
+    })
+    if (dup) return reply.status(200).send(dup)
     const p = await prisma.capitalProject.create({
       data: {
-        tenantId, name, type,
+        tenantId, name: name.trim(), type,
         storeId: finalStoreId,
         budget: budget ? Number(budget) : null,
         repaymentTerms: repaymentTerms || null,

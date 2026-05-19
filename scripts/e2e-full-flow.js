@@ -20,8 +20,13 @@
  * 输出: 每步 ✓ / ✗, 末尾汇总
  */
 
-const BASE = process.argv.includes('--base') ? process.argv[process.argv.indexOf('--base') + 1] : 'http://116.62.32.162:8080'
-const PASSWORDS = 'test1234'
+// BASE: --base 参数 > E2E_BASE 环境变量 > 生产地址 (默认)
+const BASE = process.argv.includes('--base')
+  ? process.argv[process.argv.indexOf('--base') + 1]
+  : (process.env.E2E_BASE || 'http://116.62.32.162:8080')
+// TENANT_SLUG: 默认 test (隔离测试库, 不污染生产 dianjie tenant). 跨 tenant 测试时覆盖
+const TENANT_SLUG = process.env.TENANT_SLUG || 'test'
+const PASSWORDS = process.env.E2E_PASSWORD || 'test1234'
 
 // 测试账号 (统一密码 test1234, 通过之前 DB 脚本创建)
 const ACCOUNTS = {
@@ -52,7 +57,7 @@ async function api(method, path, body, token) {
 
 async function login(key) {
   const a = ACCOUNTS[key]
-  const r = await api('POST', '/api/auth/login', { identifier: a.phone, password: PASSWORDS, tenantSlug: 'test' })
+  const r = await api('POST', '/api/auth/login', { identifier: a.phone, password: PASSWORDS, tenantSlug: TENANT_SLUG })
   if (!r.ok) throw new Error(`登录 ${key} 失败 ${r.status} ${JSON.stringify(r.data)}`)
   tokens[key] = r.data.token
   return r.data.user
@@ -61,6 +66,7 @@ async function login(key) {
 async function run() {
   console.log('================ 滇界 E2E 测试 ================')
   console.log('BASE:', BASE)
+  console.log('TENANT:', TENANT_SLUG)
 
   // ── 步骤 1: 6 角色全部登录 ──
   step('1. 角色登录')

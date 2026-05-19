@@ -1,7 +1,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import { notifyApprovalDone } from '../services/notification'
-import { isSupplierRole } from '../lib/auth-scope'
+import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
@@ -9,10 +9,11 @@ export const scheduleRoutes: FastifyPluginAsync = async (app) => {
 
   // 列表
   app.get('/', auth(app), async (req: any) => {
-    const { tenantId, role, supplierId } = req.user
+    const { tenantId, role, supplierId, storeId } = req.user
     const { status, days } = req.query as any
     const where: any = { tenantId }
     if (isSupplierRole(role)) where.supplierId = supplierId || '__NONE__'
+    if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
     if (status) where.status = status
     if (days) {
       const d = new Date()

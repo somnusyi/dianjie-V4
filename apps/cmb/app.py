@@ -59,11 +59,37 @@ BANK_PK_TEST    = "BNsIe9U0x8IeSe4h/dxUzVEz9pie0hDSfMRINRXc7s1UIXfkExnYECF4QqJ2S
 BANK_PK_PROD    = "BEynMEZOjNpwZIiD9jXtZSGr3Ecpwn7r+m+wtafXHb6VIZTnugfuxhcKASq3hX+KX9JlHODDl9/RDKQv4XLOFak="
 BANK_PUBLIC_KEY = os.getenv("CMB_BANK_PUBLIC_KEY", BANK_PK_PROD if USE_PROD else BANK_PK_TEST)
 
-UID         = os.getenv("CMB_UID",         "U005182425")
-PRIVATE_KEY = os.getenv("CMB_PRIVATE_KEY", "NBtl7WnuUtA2v5FaebEkU0/Jj1IodLGT6lQqwkzmd2E=")
-PUBLIC_KEY  = os.getenv("CMB_PUBLIC_KEY",  "BGN0+JR7IIs/KKLfrseFEPhYvButN/A4uVkDl1yWNr64WWU/sUVyfQLWXNaPICq8L/k+7OpHex3IH09lBiG4np0=")
-SYM_KEY     = os.getenv("CMB_SYM_KEY",     "VuAzSWQhsoNqzn0K").encode("utf-8")
-ACCOUNT     = os.getenv("CMB_ACCOUNT",     "655905978110000")   # 付款结算账户
+UID         = os.getenv("CMB_UID")
+# 私钥 / 对称密钥: 严禁 fallback 默认值. 必须由 env (开发/测试) 或 /etc/dianjie/secrets.env (生产) 注入
+PRIVATE_KEY = os.getenv("CMB_PRIVATE_KEY")
+PUBLIC_KEY  = os.getenv("CMB_PUBLIC_KEY")
+_sym_raw    = os.getenv("CMB_SYM_KEY")
+ACCOUNT     = os.getenv("CMB_ACCOUNT")   # 付款结算账户
+
+# ── 启动 fail-fast: 缺关键密钥/账户直接拒绝起服, 不允许 silent fallback ──
+_missing = [k for k, v in {
+    "CMB_UID":          UID,
+    "CMB_PRIVATE_KEY":  PRIVATE_KEY,
+    "CMB_PUBLIC_KEY":   PUBLIC_KEY,
+    "CMB_SYM_KEY":      _sym_raw,
+    "CMB_ACCOUNT":      ACCOUNT,
+}.items() if not v]
+if _missing:
+    raise RuntimeError(
+        f"[cmb] 缺失必填环境变量: {', '.join(_missing)}. "
+        f"本地: cp .env.example .env 并填值; 生产: pm2 start --env-file=/etc/dianjie/secrets.env."
+    )
+
+# 生产模式禁止误用测试 UID (老 fallback 值, 见 git 历史)
+_LEGACY_TEST_UID = "U005182425"
+_LEGACY_TEST_PRIVATE_KEY_PREFIX = "NBtl7Wnu"     # 老 fallback 私钥前缀
+if USE_PROD:
+    if UID == _LEGACY_TEST_UID:
+        raise RuntimeError("[cmb] CMB_USE_PROD=true 但 CMB_UID 仍是测试值, 拒绝起服")
+    if PRIVATE_KEY.startswith(_LEGACY_TEST_PRIVATE_KEY_PREFIX):
+        raise RuntimeError("[cmb] CMB_USE_PROD=true 但 CMB_PRIVATE_KEY 看起来是测试值, 拒绝起服")
+
+SYM_KEY = _sym_raw.encode("utf-8")
 
 # 业务模式（BB1PAYOP 用，规范 §3.1 / §3.3）
 # busMod: S100B = 支付自动标准模式（4/15 报告 §5.1 + §5.3 通过版用的就是这套）

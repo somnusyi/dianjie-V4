@@ -220,12 +220,14 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, userId, role, storeId } = req.user
     const { id } = req.params as any
     const { reason } = (req.body || {}) as any
-    // 仅下单方角色可取消 (店长/厨师长/老板/超管/采购)
-    if (!['MANAGER', 'KITCHEN_LEAD', 'PURCHASER', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+    // 仅下单方角色可取消 (店长/厨师长/老板/超管/采购/总厨代下)
+    if (!['MANAGER', 'KITCHEN_LEAD', 'PURCHASER', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
       return reply.status(403).send({ error: '无权撤回订单' })
     }
     const where: any = { id, tenantId, status: 'SUBMITTED' }   // 接单后由供应商拒, 不再走撤回
     if (isStoreScoped(role) && storeId) where.storeId = storeId
+    // 总厨只能撤自己下的单 (代下), 不能撤厨师长/店长下的单
+    if (role === 'CHEF_DIRECTOR') where.createdById = userId
     const order = await prisma.purchaseOrder.findFirst({ where })
     if (!order) return reply.status(400).send({ error: '订单不存在 / 已被供应商接单 / 状态不可撤回' })
 

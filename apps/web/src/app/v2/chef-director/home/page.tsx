@@ -143,6 +143,20 @@ export default function ChefDirectorHomePage() {
         </a>
       </Section>
 
+      {/* 门店订货 — 跨店查看所有订单明细 + 物流签收状态 (客户反馈新增) */}
+      <Section title="门店订货">
+        <a href="/v2/chef-director/orders" className="block bg-white rounded-card border border-border p-3">
+          <div className="flex items-center gap-3">
+            <span className="w-10 h-10 rounded-md bg-amber-bg text-amber-fg flex items-center justify-center text-h2">📋</span>
+            <div className="flex-1">
+              <div className="text-h2">查看门店订货</div>
+              <p className="text-caption text-gray2 mt-0.5">明细 · 物流签收状态 · 按门店 / 供应商 / 状态筛选</p>
+            </div>
+            <span className="text-gray3">›</span>
+          </div>
+        </a>
+      </Section>
+
       {/* 菜品 / 配方 (BOM) */}
       <Section title="菜品 / 配方">
         <a href="/v2/chef-director/dishes" className="block bg-white rounded-card border border-border p-3">

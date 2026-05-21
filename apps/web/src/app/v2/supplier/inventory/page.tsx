@@ -27,6 +27,7 @@ export default function InventoryPage() {
   const [items, setItems] = useState<Item[] | null>(null)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [filter, setFilter] = useState<'all'|'low'|'out'>('all')
+  const [searchQ, setSearchQ] = useState('')
   const [error, setError] = useState<string | null>(null)
 
   function load() {
@@ -35,9 +36,19 @@ export default function InventoryPage() {
   }
   useEffect(() => { load() }, [])
 
-  const visible = !items ? [] : items.filter(i =>
-    filter === 'all' ? true : filter === 'low' ? i.statusFlag === 'LOW' : i.statusFlag === 'OUT'
-  )
+  // 模糊匹配: name + spec + code, 多关键字 AND (跟选品抽屉一致风格)
+  function matchesQuery(i: Item, q: string) {
+    if (!q.trim()) return true
+    const hay = `${i.name} ${i.spec || ''} ${i.code || ''}`.toLowerCase()
+    return q.toLowerCase().split(/\s+/).filter(Boolean).every(t => hay.includes(t))
+  }
+
+  const visible = !items ? [] : items.filter(i => {
+    if (filter === 'low' && i.statusFlag !== 'LOW') return false
+    if (filter === 'out' && i.statusFlag !== 'OUT') return false
+    if (!matchesQuery(i, searchQ)) return false
+    return true
+  })
 
   return (
     <div className="min-h-screen bg-bg pb-24">
@@ -69,6 +80,28 @@ export default function InventoryPage() {
         </div>
       )}
 
+      {/* 搜索栏 — 客户反馈: 库存 SKU 多, 直接翻不方便 */}
+      <div className="px-4 mt-3">
+        <div className="relative">
+          <input
+            type="search"
+            value={searchQ}
+            onChange={e => setSearchQ(e.target.value)}
+            placeholder="搜索 名称 / 规格 / 编码"
+            className="w-full bg-white border border-border rounded-card pl-9 pr-9 py-2 text-body outline-none focus:border-amber"
+          />
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray3 text-caption pointer-events-none">🔍</span>
+          {searchQ && (
+            <button
+              type="button"
+              onClick={() => setSearchQ('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-gray5 text-gray2 text-caption flex items-center justify-center"
+              aria-label="清除搜索"
+            >×</button>
+          )}
+        </div>
+      </div>
+
       {/* Filter */}
       <div className="px-4 mt-3 flex gap-2">
         {([['all','全部'],['low','低于警戒'],['out','已断货']] as const).map(([k,l]) => (
@@ -77,6 +110,9 @@ export default function InventoryPage() {
             {l}
           </button>
         ))}
+        {searchQ && (
+          <span className="text-caption text-gray3 ml-auto self-center">匹配 {visible.length} 项</span>
+        )}
       </div>
 
       {/* List */}
@@ -85,7 +121,7 @@ export default function InventoryPage() {
         {items === null && <div className="text-caption text-gray3 text-center py-8">加载中…</div>}
         {items !== null && visible.length === 0 && (
           <div className="bg-white rounded-card border border-border p-8 text-center text-caption text-gray3">
-            {filter === 'all' ? '暂无 SKU. 先去 商品报价表 添加商品' : '没有符合的商品'}
+            {filter === 'all' && !searchQ ? '暂无 SKU. 先去 商品报价表 添加商品' : '没有符合的商品'}
           </div>
         )}
         <ul className="space-y-2">

@@ -75,7 +75,7 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     const dishes = await prisma.dish.findMany({
       where, orderBy: [{ status: 'asc' }, { category: 'asc' }, { name: 'asc' }],
       include: {
-        recipes: withCost === '1' ? { include: { product: { select: { name: true, unit: true, price: true } } } } : false,
+        recipes: withCost === '1' ? { include: { product: { select: { name: true, unit: true, price: true, spec: true } } } } : false,
       },
     })
     if (withCost === '1') {
@@ -103,7 +103,7 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
       where: { id: req.params.id, tenantId },
       include: {
         recipes: {
-          include: { product: { select: { id: true, name: true, unit: true, price: true, supplier: { select: { name: true } } } } },
+          include: { product: { select: { id: true, name: true, unit: true, price: true, spec: true, supplier: { select: { name: true } } } } },
         },
       },
     })
@@ -174,7 +174,7 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     if (!dish) return reply.status(404).send({ error: '菜品不存在' })
     return prisma.dishRecipe.findMany({
       where: { dishId: req.params.id },
-      include: { product: { select: { id: true, name: true, unit: true, price: true, code: true } } },
+      include: { product: { select: { id: true, name: true, unit: true, price: true, code: true, spec: true } } },
       orderBy: [{ isMain: 'desc' }, { createdAt: 'asc' }],
     })
   })
@@ -390,7 +390,7 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
 
     const recipes = await prisma.dishRecipe.findMany({
       where: { dishId: { in: Array.from(dishQty.keys()) } },
-      include: { product: { select: { id: true, name: true, unit: true } } },
+      include: { product: { select: { id: true, name: true, unit: true, spec: true } } },
     })
 
     // 按 productId 聚合消耗

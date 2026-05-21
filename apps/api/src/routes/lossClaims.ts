@@ -80,7 +80,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
         purchaseOrder: { select: { id: true, no: true } },
         createdBy: { select: { name: true } },
         handledBy: { select: { name: true, role: true } },
-        items: { include: { product: { select: { name: true, unit: true } } } },
+        items: { include: { product: { select: { name: true, unit: true, spec: true } } } },
       },
     })
     // OSS 签名 1h 过期 → 读取时统一重签,前端不会再看到裂图

@@ -266,7 +266,10 @@ export default function ChefPONewPage() {
               return (
                 <li key={it.productId} className="flex items-center gap-2 py-1.5 border-b border-border last:border-b-0">
                   <div className="flex-1 min-w-0">
-                    <div className="text-body truncate">{p?.name || it.productId}</div>
+                    <div className="text-body truncate">
+                      {p?.name || it.productId}
+                      {p?.spec && <span className="text-micro text-gray3 ml-1">· {p.spec}</span>}
+                    </div>
                     <div className="text-micro text-gray3">¥{it.unitPrice.toFixed(2)} / {p?.unit || '件'}{p && Number(p.minOrderQty || 1) > 1 && <span className="text-amber-fg ml-1">· 起订 {moq(p)}</span>}</div>
                   </div>
                   <input
@@ -378,6 +381,7 @@ export default function ChefPONewPage() {
                     <div className="flex-1 min-w-0">
                       <div className="text-body truncate flex items-center gap-1 flex-wrap">
                         <span>{p.name}</span>
+                        {p.spec && <span className="text-micro text-gray3">· {p.spec}</span>}
                         {Number(p.minOrderQty || 1) > 1 && (
                           <span className="text-micro px-1.5 py-0.5 bg-amber/10 text-amber-fg rounded-chip whitespace-nowrap">起订 {moq(p)}{step(p) > 1 ? `·步 ${step(p)}` : ''}</span>
                         )}

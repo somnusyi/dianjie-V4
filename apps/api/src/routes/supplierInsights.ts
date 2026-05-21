@@ -109,7 +109,7 @@ export const supplierInsightRoutes: FastifyPluginAsync = async (app) => {
         },
       },
       select: { productId: true, quantity: true, shippedQty: true, amount: true,
-                product: { select: { name: true, unit: true } } },
+                product: { select: { name: true, unit: true, spec: true } } },
     })
     // 已生效报损按 SKU 维度扣减 (净销售 = 订单 amount - 报损 amount)
     const lossItems = await prisma.lossClaimItem.findMany({

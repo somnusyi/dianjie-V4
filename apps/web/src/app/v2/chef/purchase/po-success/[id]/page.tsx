@@ -88,7 +88,10 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
           {(po.items || []).map((it: any) => (
             <li key={it.id} className="px-3 py-2.5 flex items-center justify-between">
               <div className="flex-1 min-w-0">
-                <div className="text-body truncate">{it.product?.name || it.productId}</div>
+                <div className="text-body truncate">
+                  {it.product?.name || it.productId}
+                  {it.product?.spec && <span className="text-micro text-gray3 ml-1">· {it.product.spec}</span>}
+                </div>
                 <div className="text-micro text-gray3 font-num">
                   {it.quantity} {it.product?.unit || ''} × ¥{Number(it.unitPrice).toFixed(2)}
                   {it.receivedQty != null && Number(it.receivedQty) !== Number(it.quantity) && (

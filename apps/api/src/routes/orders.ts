@@ -65,7 +65,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           store: { select: { id: true, name: true } },
           supplier: { select: { id: true, name: true } },
           createdBy: { select: { id: true, name: true, role: true } },
-          items: { include: { product: { select: { name: true, unit: true } } } },
+          items: { include: { product: { select: { name: true, unit: true, spec: true, code: true } } } },
           lossClaims: { select: { id: true, status: true, totalLossAmount: true } },
         },
       }),
@@ -398,7 +398,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (isSupplierRole(role) && req.user.supplierId) shipWhere.supplierId = req.user.supplierId
     const order = await prisma.purchaseOrder.findFirst({
       where: shipWhere,
-      include: { items: { include: { product: { select: { name: true, unit: true } } } } },
+      include: { items: { include: { product: { select: { name: true, unit: true, spec: true, code: true } } } } },
     })
     if (!order) throw { statusCode: 400, message: '订单不存在或状态不可发货' }
 

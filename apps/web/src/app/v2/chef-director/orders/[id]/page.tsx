@@ -13,7 +13,7 @@ import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 import dayjs from 'dayjs'
 
-type Product = { id: string; name: string; unit: string }
+type Product = { id: string; name: string; unit: string; spec?: string | null }
 type Item    = { id: string; productId: string; quantity: string | number; unitPrice: string | number; product?: Product }
 type Order = {
   id: string; no: string; status: string
@@ -182,7 +182,10 @@ export default function ChefDirectorOrderDetailPage() {
           {(order.items || []).map(it => (
             <li key={it.id} className="px-3 py-2.5 flex items-center gap-2">
               <div className="flex-1 min-w-0">
-                <div className="text-body truncate">{it.product?.name || it.productId}</div>
+                <div className="text-body truncate">
+                  {it.product?.name || it.productId}
+                  {it.product?.spec && <span className="text-micro text-gray3 ml-1">· {it.product.spec}</span>}
+                </div>
                 <div className="text-micro text-gray3 font-num">
                   ¥{Number(it.unitPrice).toFixed(2)} / {it.product?.unit || '件'} ×{' '}
                   <span>{Number(it.quantity)}</span>

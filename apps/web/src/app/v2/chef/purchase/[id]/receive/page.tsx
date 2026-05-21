@@ -133,7 +133,10 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
             return (
               <li key={it.productId} className={`px-3 py-3 ${isLoss ? 'bg-red-bg/30' : ''}`}>
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="text-h2 flex-1">{it.product?.name || it.productId}</span>
+                  <span className="text-h2 flex-1 truncate">
+                    {it.product?.name || it.productId}
+                    {it.product?.spec && <span className="text-micro text-gray3 ml-1 font-normal">· {it.product.spec}</span>}
+                  </span>
                   {isLoss && <Chip tone="red">报损 {(exp - rq).toFixed(2)}</Chip>}
                 </div>
                 <div className="text-micro text-gray3 mb-2 font-num">

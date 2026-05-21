@@ -35,7 +35,7 @@ type LossClaim = {
   store: { name: string }
   purchaseOrder: { id: string; no: string; totalAmount?: string }
   purchaseOrderId?: string
-  items: { product: { name: string; unit: string }; orderedQty: string; receivedQty: string; lossQty: string; lossAmount: string }[]
+  items: { product: { name: string; unit: string; spec?: string | null }; orderedQty: string; receivedQty: string; lossQty: string; lossAmount: string }[]
 }
 
 export default function SupplierOrdersPage() {
@@ -226,7 +226,7 @@ export default function SupplierOrdersPage() {
                     <p className="text-caption text-gray2 mt-0.5">{c.description}</p>
                     <ul className="mt-2 text-micro text-gray2 space-y-0.5">
                       {(c.items || []).map((it, idx) => (
-                        <li key={idx}>· {it.product?.name}: 下 {it.orderedQty} 收 {it.receivedQty}{it.product?.unit || ''} · 损 ¥{Number(it.lossAmount).toFixed(2)}</li>
+                        <li key={idx}>· {it.product?.name}{it.product?.spec ? ` (${it.product.spec})` : ''}: 下 {it.orderedQty} 收 {it.receivedQty}{it.product?.unit || ''} · 损 ¥{Number(it.lossAmount).toFixed(2)}</li>
                       ))}
                     </ul>
                     {(c as any).handlerNote && (

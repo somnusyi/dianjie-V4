@@ -111,22 +111,39 @@ export default function ChefHomePage() {
         <ul className="space-y-2">
           {orders === null && <li className="text-caption text-gray3 text-center py-4">加载中…</li>}
           {orders !== null && inProgress.length === 0 && <li className="text-caption text-gray3 text-center py-4">暂无进行中订单</li>}
-          {inProgress.slice(0, 3).map((o: any) => (
-            <li key={o.id} className="bg-white rounded-card border border-border p-3">
-              <div className="flex items-center justify-between mb-2">
-                <div>
-                  <span className="text-micro text-gray3 font-num">#{o.no}</span>
-                  <span className="ml-2 text-micro text-orange-fg bg-orange-bg px-1.5 rounded-chip">{STATUS_LABEL[o.status]}</span>
-                </div>
-                <span className="font-num text-h2">¥{Number(o.totalAmount).toLocaleString()}</span>
-              </div>
-              <div className="text-h2 mb-2">{o.supplier?.name}</div>
-              <ProgressDots
-                steps={[{label:'已发起'},{label:'接单'},{label:'在途'},{label:'送达'},{label:'验收'}]}
-                currentIndex={STATUS_TO_STEP[o.status] ?? 0}
-              />
-            </li>
-          ))}
+          {inProgress.slice(0, 3).map((o: any) => {
+            // 按状态路由: 待签收直接进签收页 (含报损); 其它进订单详情看进度
+            const canReceive = o.status === 'PENDING_CONFIRM'
+            const target = canReceive
+              ? `/v2/chef/purchase/${o.id}/receive`
+              : `/v2/chef/purchase/po-success/${o.id}`
+            return (
+              <li key={o.id}>
+                <a href={target} className="block bg-white rounded-card border border-border p-3 active:bg-bg">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-1 flex-wrap">
+                      <span className="text-micro text-gray3 font-num">#{o.no}</span>
+                      <span className={`text-micro px-1.5 rounded-chip ${canReceive ? 'text-red-fg bg-red-bg' : 'text-orange-fg bg-orange-bg'}`}>
+                        {STATUS_LABEL[o.status]}
+                      </span>
+                      {canReceive && (
+                        <span className="text-micro text-amber-fg bg-amber/10 px-1.5 rounded-chip">点击去签收 / 报损</span>
+                      )}
+                    </div>
+                    <span className="font-num text-h2">¥{Number(o.totalAmount).toLocaleString()}</span>
+                  </div>
+                  <div className="text-h2 mb-2 flex items-center justify-between gap-2">
+                    <span className="truncate">{o.supplier?.name}</span>
+                    <span className="text-caption text-gray3 shrink-0">›</span>
+                  </div>
+                  <ProgressDots
+                    steps={[{label:'已发起'},{label:'接单'},{label:'在途'},{label:'送达'},{label:'验收'}]}
+                    currentIndex={STATUS_TO_STEP[o.status] ?? 0}
+                  />
+                </a>
+              </li>
+            )
+          })}
           {inProgress.length > 3 && (
             <li className="text-center"><a href="/v2/chef/purchase" className="text-caption text-gray2">查看全部 {inProgress.length} 单 ›</a></li>
           )}

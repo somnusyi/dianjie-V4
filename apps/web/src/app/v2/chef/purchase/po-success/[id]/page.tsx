@@ -132,11 +132,17 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
                   <>
                     <div className="text-micro text-gray3 mt-2 mb-1">证据 {lc.evidenceImages.length} 张 · 点击放大</div>
                     <div className="flex gap-2 overflow-x-auto">
-                      {lc.evidenceImages.map((url: string, i: number) => (
-                        <button key={i} type="button" onClick={() => setZoomImg(url)} className="shrink-0">
-                          <img src={url} alt="" className="w-20 h-20 object-cover rounded border border-border" />
-                        </button>
-                      ))}
+                      {lc.evidenceImages.map((url: string, i: number) => {
+                        const isVideo = /\.(mp4|mov|webm|m4v|3gp|3gpp)(?:\?|$)/i.test(url)
+                        return (
+                          <button key={i} type="button" onClick={() => setZoomImg(url)} className="shrink-0 relative">
+                            {isVideo
+                              ? <video src={url} muted playsInline preload="metadata" className="w-20 h-20 object-cover rounded border border-border bg-gray5" />
+                              : <img src={url} alt="" className="w-20 h-20 object-cover rounded border border-border" />}
+                            {isVideo && <span className="absolute bottom-0 left-0 right-0 bg-ink/60 text-white text-micro text-center py-0.5 rounded-b">▶ 视频</span>}
+                          </button>
+                        )
+                      })}
                     </div>
                   </>
                 )}
@@ -184,7 +190,9 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
       {zoomImg && (
         <div className="fixed inset-0 z-50 bg-ink/90 flex items-center justify-center p-4"
              onClick={() => setZoomImg(null)}>
-          <img src={zoomImg} alt="" className="max-w-full max-h-full object-contain rounded" />
+          {/\.(mp4|mov|webm|m4v|3gp|3gpp)(?:\?|$)/i.test(zoomImg)
+            ? <video src={zoomImg} controls autoPlay playsInline className="max-w-full max-h-full rounded" />
+            : <img src={zoomImg} alt="" className="max-w-full max-h-full object-contain rounded" />}
           <button onClick={() => setZoomImg(null)}
                   className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/20 text-white text-h2 flex items-center justify-center">×</button>
         </div>

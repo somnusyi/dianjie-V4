@@ -195,36 +195,53 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
         </div>
       </Section>
 
-      {/* 报损证据照片 — 有报损时强制必传 */}
+      {/* 报损证据 — 有报损时强制必传 (支持图片 + 短视频 ≤30MB) */}
       {hasLoss && (
-        <Section id="evidence-section" title="报损证据 *" right={`${evidence.length} 张${evidence.length === 0 ? ' · 至少 1 张' : ''}`} rightTone={evidence.length === 0 ? 'red' : undefined}>
+        <Section id="evidence-section" title="报损证据 *" right={`${evidence.length} 份${evidence.length === 0 ? ' · 至少 1 份' : ''}`} rightTone={evidence.length === 0 ? 'red' : undefined}>
           <div className={`rounded-card border p-3 ${evidence.length === 0 ? 'bg-red-bg/30 border-red/40' : 'bg-white border-border'}`}>
             <p className={`text-micro mb-2 ${evidence.length === 0 ? 'text-red-fg' : 'text-gray3'}`}>
               {evidence.length === 0
-                ? '⚠ 报损必须上传至少 1 张现场照片, 否则供应商可拒赔'
-                : '拍照证据 — 短量 / 破损 / 变质 现场图, 已上传 ' + evidence.length + ' 张'}
+                ? '⚠ 报损必须上传至少 1 份证据 (图片或短视频), 否则供应商可拒赔'
+                : '现场证据 — 短量 / 破损 / 变质, 已上传 ' + evidence.length + ' 份'}
             </p>
             <div className="flex flex-wrap gap-2">
-              {evidence.map((url, i) => (
-                <div key={i} className="relative w-20 h-20 rounded border border-border overflow-hidden">
-                  <img src={url} alt="" className="w-full h-full object-cover" />
-                  <button onClick={() => setEvidence(evidence.filter((_, j) => j !== i))}
-                          className="absolute top-0 right-0 bg-ink/70 text-white w-5 h-5 rounded-bl text-micro flex items-center justify-center">×</button>
-                </div>
-              ))}
+              {evidence.map((url, i) => {
+                const isVideo = /\.(mp4|mov|webm|m4v|3gp|3gpp)(?:\?|$)/i.test(url)
+                return (
+                  <div key={i} className="relative w-20 h-20 rounded border border-border overflow-hidden bg-gray5">
+                    {isVideo ? (
+                      <video src={url} muted playsInline preload="metadata" className="w-full h-full object-cover" />
+                    ) : (
+                      <img src={url} alt="" className="w-full h-full object-cover" />
+                    )}
+                    {isVideo && (
+                      <span className="absolute bottom-0 left-0 right-0 bg-ink/60 text-white text-micro text-center py-0.5">▶ 视频</span>
+                    )}
+                    <button onClick={() => setEvidence(evidence.filter((_, j) => j !== i))}
+                            className="absolute top-0 right-0 bg-ink/70 text-white w-5 h-5 rounded-bl text-micro flex items-center justify-center">×</button>
+                  </div>
+                )
+              })}
               <label className="w-20 h-20 rounded border-2 border-dashed border-border flex flex-col items-center justify-center cursor-pointer hover:bg-bg-warm">
-                <input type="file" accept="image/*" multiple
+                <input type="file" accept="image/*,video/*" multiple
                        className="hidden"
                        onChange={async e => {
                          const files = Array.from(e.target.files || [])
                          e.target.value = ''
-                         // 串行上传, 顺序保留; 浏览器不限 input multiple 来源 (相册 / 相机均可)
-                         for (const f of files) await uploadPhoto(f)
+                         // 串行上传, 顺序保留; 视频客户端先校验大小给出友好错 (避免传完再被服务端拒)
+                         for (const f of files) {
+                           if (f.type.startsWith('video/') && f.size > 30 * 1024 * 1024) {
+                             alert(`视频"${f.name}"超过 30MB, 请压缩后再传`)
+                             continue
+                           }
+                           await uploadPhoto(f)
+                         }
                        }} />
                 <span className="text-h2 text-gray3">{uploading ? '⏳' : '+'}</span>
-                <span className="text-micro text-gray3">{uploading ? '上传中' : '加图'}</span>
+                <span className="text-micro text-gray3">{uploading ? '上传中' : '加证据'}</span>
               </label>
             </div>
+            <p className="text-micro text-gray3 mt-2">图片 ≤10MB · 视频 ≤30MB · 多选</p>
           </div>
         </Section>
       )}

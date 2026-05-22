@@ -5,7 +5,15 @@ import path from 'path'
 const uuidv4 = () => Math.random().toString(36).slice(2) + Date.now().toString(36)
 
 const IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
+// 报损/争议场景: 短视频证据 (供应商客户要求加视频)
+// iOS .mov = quicktime; Android 录视频常用 mp4 / 3gpp
+const VIDEO_MIMES = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-m4v', 'video/3gpp']
 const DOC_MIMES = ['application/pdf', ...IMAGE_MIMES]
+const MEDIA_MIMES = [...IMAGE_MIMES, ...VIDEO_MIMES]
+
+// 文件大小上限 (byte). image/pdf 10MB; video 30MB
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const MAX_VIDEO_BYTES = 30 * 1024 * 1024
 
 const ALLOWED_CATEGORIES = new Set(['loss-claims', 'invoices', 'capital', 'documents', 'reimbursements', 'misc'])
 
@@ -54,17 +62,26 @@ async function uploadOne(req: any, reply: any, opts: { allowedMimes: string[]; c
       return reply.status(400).send({ error: `不支持的文件类型: ${data.mimetype}` })
     }
 
+    // 按 mime 分级限大小: 视频 30MB, 图片/PDF 10MB
+    const isVideo = data.mimetype.startsWith('video/')
+    const maxBytes = isVideo ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES
+    const maxMb = Math.floor(maxBytes / 1024 / 1024)
+
     const chunks: Buffer[] = []
     let totalSize = 0
     for await (const chunk of data.file) {
       totalSize += chunk.length
-      if (totalSize > 10 * 1024 * 1024) {
-        return reply.status(400).send({ error: '文件大小不能超过 10MB' })
+      if (totalSize > maxBytes) {
+        return reply.status(400).send({ error: `文件大小不能超过 ${maxMb}MB` })
       }
       chunks.push(chunk)
     }
     const buffer = Buffer.concat(chunks)
-    const ext = path.extname(data.filename) || (data.mimetype === 'application/pdf' ? '.pdf' : '.jpg')
+    const ext = path.extname(data.filename) || (
+      data.mimetype === 'application/pdf' ? '.pdf' :
+      isVideo ? (data.mimetype === 'video/quicktime' ? '.mov' : '.mp4') :
+      '.jpg'
+    )
     const key = `${opts.category}/${user.tenantId}/${uuidv4()}${ext}`
     const client = ossClient()
     await client.put(key, buffer, {
@@ -89,9 +106,11 @@ export async function uploadRoutes(app: FastifyInstance) {
 
   // 通用路径：支持图片 + PDF, category 通过 query 指定
   // 使用：POST /api/upload?category=invoices
+  // 例外: category=loss-claims 允许图片+视频 (供应商客户要求加视频证据), 不接 PDF
   app.post('/upload', { preHandler: [(app as any).authenticate] }, (req: any, reply: any) => {
     const category = (req.query?.category || 'misc') as string
-    return uploadOne(req, reply, { allowedMimes: DOC_MIMES, category })
+    const allowedMimes = category === 'loss-claims' ? MEDIA_MIMES : DOC_MIMES
+    return uploadOne(req, reply, { allowedMimes, category })
   })
 
   // 重新签名: GET /api/upload/signed-url?key=xxx&expires=3600

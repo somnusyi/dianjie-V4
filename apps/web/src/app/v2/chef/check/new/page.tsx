@@ -174,30 +174,46 @@ export default function ChefLossNewPage() {
         />
       </div>
 
-      {/* 证据图片 — 支持本地选图 / 现场拍照 (浏览器自行选择来源, 多选) */}
+      {/* 证据 — 图片 + 短视频 (≤30MB), 多选 */}
       <div className="mx-4 mt-3">
-        <label className="text-micro text-gray3 block mb-1">证据图片（可选, 多选）</label>
+        <label className="text-micro text-gray3 block mb-1">证据（可选, 图片+短视频, 多选）</label>
         <div className="flex items-center gap-2 flex-wrap">
-          {evidence.map((url, i) => (
-            <div key={i} className="relative w-20 h-20 rounded border border-border overflow-hidden">
-              <img src={url} alt="" className="w-full h-full object-cover" />
-              <button type="button" onClick={() => setEvidence(evidence.filter((_, j) => j !== i))}
-                      className="absolute top-0 right-0 bg-ink/70 text-white w-5 h-5 rounded-bl text-micro flex items-center justify-center">×</button>
-            </div>
-          ))}
+          {evidence.map((url, i) => {
+            const isVideo = /\.(mp4|mov|webm|m4v|3gp|3gpp)(?:\?|$)/i.test(url)
+            return (
+              <div key={i} className="relative w-20 h-20 rounded border border-border overflow-hidden bg-gray5">
+                {isVideo ? (
+                  <video src={url} muted playsInline preload="metadata" className="w-full h-full object-cover" />
+                ) : (
+                  <img src={url} alt="" className="w-full h-full object-cover" />
+                )}
+                {isVideo && (
+                  <span className="absolute bottom-0 left-0 right-0 bg-ink/60 text-white text-micro text-center py-0.5">▶ 视频</span>
+                )}
+                <button type="button" onClick={() => setEvidence(evidence.filter((_, j) => j !== i))}
+                        className="absolute top-0 right-0 bg-ink/70 text-white w-5 h-5 rounded-bl text-micro flex items-center justify-center">×</button>
+              </div>
+            )
+          })}
           <label className="w-20 h-20 rounded border-2 border-dashed border-border flex flex-col items-center justify-center cursor-pointer hover:bg-bg-warm">
-            <input type="file" accept="image/*" multiple
+            <input type="file" accept="image/*,video/*" multiple
                    className="hidden"
                    onChange={async e => {
                      const files = Array.from(e.target.files || [])
                      e.target.value = ''
-                     for (const f of files) await uploadPhoto(f)
+                     for (const f of files) {
+                       if (f.type.startsWith('video/') && f.size > 30 * 1024 * 1024) {
+                         alert(`视频"${f.name}"超过 30MB, 请压缩后再传`)
+                         continue
+                       }
+                       await uploadPhoto(f)
+                     }
                    }} />
             <span className="text-h2 text-gray3">{uploading ? '⏳' : '+'}</span>
-            <span className="text-micro text-gray3">{uploading ? '上传中' : '加图'}</span>
+            <span className="text-micro text-gray3">{uploading ? '上传中' : '加证据'}</span>
           </label>
         </div>
-        <p className="text-micro text-gray3 mt-1">点 + 可从相册选图 / 现场拍照, 支持多选</p>
+        <p className="text-micro text-gray3 mt-1">图片 ≤10MB · 视频 ≤30MB · 点 + 可从相册 / 现场拍/录, 多选</p>
       </div>
 
       {/* 底部固定 */}

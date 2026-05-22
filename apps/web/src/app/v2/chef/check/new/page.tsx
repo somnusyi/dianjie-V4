@@ -36,7 +36,24 @@ export default function ChefLossNewPage() {
   const [items, setItems] = useState<Item[]>([])
   const [pickerOpen, setPickerOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [evidence, setEvidence] = useState<string[]>([])
   const [confirmState, openConfirm] = useConfirmSheet()
+
+  // 上传单张图片到 OSS, 复用 receive 页同款 endpoint
+  async function uploadPhoto(file: File) {
+    setUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file, file.name || 'evidence.jpg')
+      const res = await apiFetch<{ url: string }>('/api/upload?category=loss-claims', { method: 'POST', body: fd as any })
+      setEvidence(prev => [...prev, res.url])
+    } catch (e: any) {
+      alert('上传失败: ' + (e?.message || e))
+    } finally {
+      setUploading(false)
+    }
+  }
 
   useEffect(() => {
     apiFetch<Product[]>('/api/inventory')
@@ -70,7 +87,7 @@ export default function ChefLossNewPage() {
         try {
           await apiFetch('/api/loss-claims/manual', {
             method: 'POST',
-            body: JSON.stringify({ items, reason, description }),
+            body: JSON.stringify({ items, reason, description, evidenceImages: evidence }),
           })
           router.push('/v2/chef/check')
         } catch (e: any) {
@@ -155,6 +172,32 @@ export default function ChefLossNewPage() {
           placeholder="例: 鸭血保质期 04/30 · 已优先用 / 客退原因..."
           className="w-full bg-bg-card border border-border rounded-cta p-2 text-body text-ink placeholder:text-gray3 focus:outline-none focus:border-accent"
         />
+      </div>
+
+      {/* 证据图片 — 支持本地选图 / 现场拍照 (浏览器自行选择来源, 多选) */}
+      <div className="mx-4 mt-3">
+        <label className="text-micro text-gray3 block mb-1">证据图片（可选, 多选）</label>
+        <div className="flex items-center gap-2 flex-wrap">
+          {evidence.map((url, i) => (
+            <div key={i} className="relative w-20 h-20 rounded border border-border overflow-hidden">
+              <img src={url} alt="" className="w-full h-full object-cover" />
+              <button type="button" onClick={() => setEvidence(evidence.filter((_, j) => j !== i))}
+                      className="absolute top-0 right-0 bg-ink/70 text-white w-5 h-5 rounded-bl text-micro flex items-center justify-center">×</button>
+            </div>
+          ))}
+          <label className="w-20 h-20 rounded border-2 border-dashed border-border flex flex-col items-center justify-center cursor-pointer hover:bg-bg-warm">
+            <input type="file" accept="image/*" multiple
+                   className="hidden"
+                   onChange={async e => {
+                     const files = Array.from(e.target.files || [])
+                     e.target.value = ''
+                     for (const f of files) await uploadPhoto(f)
+                   }} />
+            <span className="text-h2 text-gray3">{uploading ? '⏳' : '+'}</span>
+            <span className="text-micro text-gray3">{uploading ? '上传中' : '加图'}</span>
+          </label>
+        </div>
+        <p className="text-micro text-gray3 mt-1">点 + 可从相册选图 / 现场拍照, 支持多选</p>
       </div>
 
       {/* 底部固定 */}

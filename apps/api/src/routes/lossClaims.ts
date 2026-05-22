@@ -191,7 +191,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     if (!['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
       return reply.status(403).send({ error: '无权创建报损' })
     }
-    const { items, reason, description } = req.body as any
+    const { items, reason, description, evidenceImages } = req.body as any
     if (!items?.length) return reply.status(400).send({ error: '请填写报损明细' })
     if (!reason) return reply.status(400).send({ error: '请选择报损原因' })
 
@@ -233,7 +233,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
         isManual: true,
         totalLossAmount,
         description: description || `${reason} · 店内盘点`,
-        evidenceImages: [],
+        evidenceImages: Array.isArray(evidenceImages) ? evidenceImages.slice(0, 9) : [],
         status: initialStatus as any,
         autoApproved: !needsReview,
         createdById: userId,

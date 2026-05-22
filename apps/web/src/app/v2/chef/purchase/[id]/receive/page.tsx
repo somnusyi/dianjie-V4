@@ -213,12 +213,13 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
                 </div>
               ))}
               <label className="w-20 h-20 rounded border-2 border-dashed border-border flex flex-col items-center justify-center cursor-pointer hover:bg-bg-warm">
-                <input type="file" accept="image/*" capture="environment"
+                <input type="file" accept="image/*" multiple
                        className="hidden"
-                       onChange={e => {
-                         const f = e.target.files?.[0]
-                         if (f) uploadPhoto(f)
+                       onChange={async e => {
+                         const files = Array.from(e.target.files || [])
                          e.target.value = ''
+                         // 串行上传, 顺序保留; 浏览器不限 input multiple 来源 (相册 / 相机均可)
+                         for (const f of files) await uploadPhoto(f)
                        }} />
                 <span className="text-h2 text-gray3">{uploading ? '⏳' : '+'}</span>
                 <span className="text-micro text-gray3">{uploading ? '上传中' : '加图'}</span>

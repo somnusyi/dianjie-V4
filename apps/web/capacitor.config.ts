@@ -16,6 +16,12 @@
  *          /api/* 拆出去 → ECS, 把页面改成纯客户端渲染再 next export)
  *
  * 切环境只改 server.url 这一行。
+ *
+ * 历史: 2026-05-22 之前用 http://116.62.32.162:8080 (cleartext) 走 IP;
+ *       njdianjie.com ICP 备案通过后切 https. 老 app 仍在客户手机里指 IP,
+ *       服务器 nginx 同时开 IP:80 + njdianjie.com:443 两个入口, 直到所有
+ *       客户重装新版本 app 后才能退役 IP 入口.
+ *       新打包的 iOS/Android/Harmony app 走这里的 https 域名.
  */
 import type { CapacitorConfig } from '@capacitor/cli'
 
@@ -26,17 +32,15 @@ const config: CapacitorConfig = {
   // 这里指 public 是因为我们目前走 server.url 在线模式, 离线不可用
   webDir: 'public',
   server: {
-    // staging: 阿里云 ECS, 走 nginx :8080 → web :3204 / api :4004
-    // 域名+HTTPS 上线后改成 https://app.dianjie.cc
-    url: 'http://116.62.32.162:8080',
-    // 暂时无 HTTPS, 必须打开 cleartext
-    cleartext: true,
+    // 生产: njdianjie.com 域名 + HTTPS (nginx vhost 已配 Let's Encrypt 证书)
+    url: 'https://www.njdianjie.com',
+    // HTTPS 不需要 cleartext; iOS ATS / Android NSC 自然允许
   },
   ios: {
     contentInset: 'automatic',
   },
   android: {
-    // 允许局域网 HTTP 调试
+    // 局域网 HTTP 调试仍允许 (dev 模式 server.url 可能指 192.168.x.x)
     allowMixedContent: true,
   },
 }

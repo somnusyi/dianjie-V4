@@ -89,7 +89,7 @@ async function bootstrap() {
     //  - 本地开发：localhost:3000
     //  - Capacitor 原生：capacitor://localhost (iOS) / http://localhost (Android)
     //  - Tauri 桌面：tauri://localhost (Windows/Mac/Linux)
-    //  - 生产 IP 和 dianjie.cc 域名（HTTP + HTTPS）
+    //  - 生产 IP (老 app 兼容期) + njdianjie.com (2026-05-22 备案通过新域名) + dianjie.cc 兼容
     origin: (origin, cb) => {
       // origin 为 undefined 表示同源、原生 fetch 或 curl，放行（受 JWT 鉴权保护）
       if (!origin) return cb(null, true)
@@ -102,15 +102,26 @@ async function bootstrap() {
         'tauri://localhost',
         'http://tauri.localhost',
         'https://tauri.localhost',
+        // 生产 IP — 老 app 在客户手机上还指 116.62.32.162:8080, 保留兼容直到 100% 重装迁完
         'http://116.62.32.162',
         'https://116.62.32.162',
+        'http://116.62.32.162:8080',
+        // njdianjie.com — 主域名 (2026-05 ICP 备案通过)
+        'http://njdianjie.com',
+        'https://njdianjie.com',
+        'http://www.njdianjie.com',
+        'https://www.njdianjie.com',
+        // dianjie.cc — 同事老规划的域名, 保留兼容
         'http://dianjie.cc',
         'https://dianjie.cc',
         'http://www.dianjie.cc',
         'https://www.dianjie.cc',
       ])
       if (allowed.has(origin)) return cb(null, true)
-      // dianjie.cc 任意子域名
+      // njdianjie.com / dianjie.cc 任意子域名
+      if (/^https?:\/\/[a-z0-9-]+\.njdianjie\.com$/.test(origin)) {
+        return cb(null, true)
+      }
       if (/^https?:\/\/[a-z0-9-]+\.dianjie\.cc$/.test(origin)) {
         return cb(null, true)
       }

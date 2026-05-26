@@ -597,6 +597,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const receipt = await prisma.receipt.create({
       data: {
         tenantId, no,
+        purchaseOrderId: order.id,          // 回填反向关联 (之前漏了, 导致 SELECT FROM receipts WHERE purchaseOrderId=X 查不到)
         storeId: order.storeId,
         supplierId: order.supplierId,
         deliveryDate: new Date(),

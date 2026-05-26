@@ -38,6 +38,50 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
   if (error) return <div className="p-6 text-red-fg">{error}</div>
   if (!po) return <div className="p-6 text-gray3 text-caption">加载中…</div>
 
+  // ── 状态守卫: 非待验收状态不让重复填表 ──
+  // 之前 bug: 已验收的单也能进 receive 页填一遍, 提交时后端拒, 用户白填
+  // 现在: 一进来看到 po.status 不是 PENDING_CONFIRM 就显示明确提示 + 出口
+  if (po.status !== 'PENDING_CONFIRM') {
+    const STATUS_LABEL: Record<string, string> = {
+      DRAFT: '草稿', SUBMITTED: '待接单', CONFIRMED: '已接单',
+      DELIVERING: '配送中', RECEIVED: '已验收',
+      COMPLETED: '已完成', CANCELLED: '已取消',
+    }
+    return (
+      <div className="min-h-screen bg-bg pb-10">
+        <header className="px-4 pt-4 pb-2 flex items-center gap-2">
+          <button onClick={() => router.back()} className="text-gray2 text-h2">‹</button>
+          <h1 className="text-h1">验收</h1>
+        </header>
+        <div className="mx-4 mt-4 bg-amber/10 border border-amber/40 rounded-card p-4">
+          <div className="text-h2 text-amber-fg mb-2">⚠ 此单不在待验收状态</div>
+          <div className="text-caption text-gray2 space-y-1">
+            <p>订单: <b>{po.no}</b></p>
+            <p>当前状态: <b>{STATUS_LABEL[po.status] || po.status}</b></p>
+            {po.receivedAt && (
+              <p>验收时间: <b>{new Date(po.receivedAt).toLocaleString('zh-CN')}</b>
+                {po.autoConfirmed ? ' (24h 超时系统自动验收)' : ''}
+              </p>
+            )}
+            <p className="text-gray3 pt-2">
+              如有短量 / 破损需要补报, 请到 <b>盘点 → 新增报损</b>(店内自有损耗) 操作.
+            </p>
+          </div>
+        </div>
+        <div className="mx-4 mt-3 flex gap-2">
+          <button onClick={() => router.push('/v2/chef/purchase')}
+                  className="flex-1 py-3 bg-ink text-white rounded-cta text-button">
+            返回采购列表
+          </button>
+          <button onClick={() => router.push('/v2/chef/check/new')}
+                  className="flex-1 py-3 bg-white border border-border text-ink rounded-cta text-button">
+            新增报损
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   const items = po.items || []
   // 应到量 = shippedQty (供应商发货时议定的量) ?? quantity (没改过). 实收 < 应到 才算报损
   const expected = (it: any) => Number(it.shippedQty ?? it.quantity)

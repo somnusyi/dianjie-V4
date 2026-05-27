@@ -19,6 +19,7 @@ const NAV: any[] = [
   { type: 'item', key: 'cashbook', label: '资金台账', desc: '收入支出流水', icon: '账', path: '/cashbook', roles: ['ADMIN','FINANCE','SUPER_ADMIN'] },
   { type: 'item', key: 'revenue',  label: '营业额',   desc: '门店收入录入', icon: '营', path: '/revenue' },
   { type: 'item', key: 'approval', label: '付款审批', desc: '阈值 / 凭证 / 终审', icon: '审', path: '/approval', roles: ['ADMIN','FINANCE','SUPER_ADMIN'] },
+  { type: 'item', key: 'meituan',  label: '美团 POS',  desc: '订单 / 营收数据', icon: '🍔', path: '/meituan', roles: ['BOSS','MANAGER','FINANCE','ADMIN','SUPER_ADMIN'] },
 
   { type: 'divider', label: '基础数据', roles: ['ADMIN','SUPER_ADMIN','FINANCE'] },
   { type: 'item', key: 'suppliers', label: '供应商',   desc: '账期 / 银行信息', icon: '供', path: '/suppliers', roles: ['ADMIN','FINANCE','SUPER_ADMIN'] },

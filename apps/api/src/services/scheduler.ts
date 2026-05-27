@@ -2,6 +2,7 @@ import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { executeBankPayment, approvePaymentSchedule } from './paymentSchedule'
 import { sendNotification as notify } from './notification'
+import { runMeituanHourlySync, runMeituanDailyReconcile } from './meituan/cron'
 
 export async function runDailyCheck() {
   console.log(`⏰ [${dayjs().format('YYYY-MM-DD HH:mm')}] 开始账期日扫描...`)
@@ -216,4 +217,35 @@ export function startScheduler() {
   }, msUntilNext)
   
   console.log('⏰ 账期调度器已启动（每天 01:00 扫描）')
+
+  // ── 美团智能版 API 同步 (spec: 2026-05-27) ──
+  if (process.env.MEITUAN_ENABLED === 'true') {
+    console.log('🍔 启动美团 cron: 每小时 + 每天 04:00')
+
+    // 进程启动 30s 后跑首次 (避免启动风暴)
+    setTimeout(() => {
+      runMeituanHourlySync().catch(err =>
+        console.error('[meituan-hourly-first-run] failed:', err)
+      )
+    }, 30_000)
+
+    // 每小时跑
+    setInterval(() => {
+      runMeituanHourlySync().catch(err =>
+        console.error('[meituan-hourly] failed:', err)
+      )
+    }, 60 * 60 * 1000)
+
+    // 每天 04:00 (用 setInterval + 时间窗判断, 简单不引 cron 库)
+    setInterval(() => {
+      const now = new Date()
+      if (now.getHours() === 4 && now.getMinutes() < 5) {
+        runMeituanDailyReconcile().catch(err =>
+          console.error('[meituan-daily-reconcile] failed:', err)
+        )
+      }
+    }, 5 * 60 * 1000)   // 每 5 分钟检查一次 04:00 窗口
+  } else {
+    console.log('🍔 美团 cron 未启用 (MEITUAN_ENABLED != true)')
+  }
 }

@@ -1914,8 +1914,8 @@ model MtOrderPayment {
 model MtRefundOrder {
   id              String    @id @default(cuid())
   mtRefundId      String    @unique
-  mtOrderId       String
-  order           MtOrder?  @relation(fields: [mtOrderId], references: [mtOrderId])
+  mtOrderId       String?
+  order           MtOrder?  @relation(fields: [mtOrderId], references: [mtOrderId], onDelete: SetNull)
 
   orgId           Int
   poiId           Int

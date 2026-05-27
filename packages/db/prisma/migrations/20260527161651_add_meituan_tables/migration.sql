@@ -221,7 +221,7 @@ CREATE INDEX IF NOT EXISTS "mt_order_payments_payType_idx"
 CREATE TABLE IF NOT EXISTS "mt_refund_orders" (
   "id"              TEXT          NOT NULL,
   "mtRefundId"      TEXT          NOT NULL,
-  "mtOrderId"       TEXT          NOT NULL,
+  "mtOrderId"       TEXT,
   "orgId"           INTEGER       NOT NULL,
   "poiId"           INTEGER       NOT NULL,
   "status"          INTEGER       NOT NULL,

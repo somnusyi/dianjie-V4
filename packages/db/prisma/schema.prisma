@@ -1692,3 +1692,267 @@ model RevokedToken {
   @@index([expiresAt])
   @@map("revoked_tokens")
 }
+
+// ════════════════════════════════════════════════════════════════
+// 美团智能版 API 集成（spec: 2026-05-27 设计稿）
+// ════════════════════════════════════════════════════════════════
+
+model MeituanApiCallLog {
+  id              String    @id @default(cuid())
+
+  correlationId   String
+  apiPath         String
+  apiTitle        String
+  mode            String    @db.VarChar(8)
+
+  requestPublic   Json
+  requestBiz      Json
+  signature       String?
+
+  httpStatus      Int?
+  httpDurationMs  Int?
+  responseRaw     String?   @db.Text
+  responseCode    String?
+  responseMsg     String?
+  responseData    Json?
+  traceId         String?
+
+  errorSeverity   String?   @db.VarChar(4)
+  errorMessage    String?   @db.Text
+  note            String?   @db.Text
+
+  createdAt       DateTime  @default(now())
+
+  @@index([createdAt(sort: Desc)])
+  @@index([responseCode])
+  @@index([errorSeverity])
+  @@index([correlationId])
+  @@map("meituan_api_call_logs")
+}
+
+model MeituanSyncCursor {
+  id                    String    @id @default(cuid())
+  apiPath               String
+  orgId                 Int
+
+  lastSyncedAt          DateTime?
+  lastSuccessAt         DateTime?
+  lastErrorAt           DateTime?
+  lastErrorCode         String?
+  consecutiveFailures   Int       @default(0)
+
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([apiPath, orgId])
+  @@map("meituan_sync_cursors")
+}
+
+model MtOrder {
+  id                 String    @id @default(cuid())
+
+  mtOrderId          String    @unique
+  orderNo            String
+  vendorOrderId      String?
+  orgId              Int
+  poiId              Int
+
+  storeId            String?
+  channel            String    @db.VarChar(16)
+  callLogId          String
+
+  businessTime       DateTime  @db.Date
+  orderTime          DateTime?
+  checkoutTime       DateTime?
+  refundTime         DateTime?
+  cancelTime         DateTime?
+  syncTime           DateTime?
+
+  status             Int
+  statusName         String?
+  refundStatus       Int?
+  makeStatus         Int?
+  isPartRefund       Boolean   @default(false)
+
+  payed              Int
+  receivable         Int
+  amount             Int
+  discount           Int       @default(0)
+  income             Int
+  serviceFee         Int       @default(0)
+  taxAmt             Int       @default(0)
+  taxExcludedAmt     Int?
+  keepAmount         Int       @default(0)
+  oddment            Int       @default(0)
+
+  source             Int?
+  sourceName         String?
+  businessType       Int?
+  businessTypeName   String?
+  typeName           String?
+  customerCount      Int       @default(0)
+  cashier            Int?
+  cashierName        String?
+  cashierNo          String?
+  tableId            Int?
+  tableComment       String?
+  unionType          Int?      @default(0)
+  parentOrderNo      String?
+
+  processed          Boolean   @default(false)
+  processedAt        DateTime?
+  processedAmount    Int       @default(0)
+  revenueRecordId    String?
+  processError       String?   @db.Text
+
+  rawPayload         Json
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  items              MtOrderItem[]
+  payments           MtOrderPayment[]
+  refundOrders       MtRefundOrder[]
+
+  @@index([storeId, businessTime(sort: Desc)])
+  @@index([processed])
+  @@index([channel])
+  @@index([businessTime])
+  @@map("mt_orders")
+}
+
+model MtOrderItem {
+  id                  String    @id @default(cuid())
+  mtOrderId           String
+  order               MtOrder   @relation(fields: [mtOrderId], references: [mtOrderId], onDelete: Cascade)
+
+  mtSkuId             String
+  mtSkuNo             String?
+  mtSpuId             String?
+  thirdSkuId          String?
+  name                String
+  specs               String?
+  spuName             String?
+
+  count               Decimal   @db.Decimal(10, 3)
+  price               Int
+  totalPrice          Int
+  actualPrice         Int
+  apportionPrice      Int?
+  newTotalPrice       Int?
+  income              Int       @default(0)
+  discountAmount      Int       @default(0)
+
+  isCombo             Int       @default(0)
+  comboAddPrice       Int?
+  parentItemNo        String?
+  itemNo              String?
+  serialNo            Int?
+  cateId              Int?
+  departmentOrgId     Int?
+  departmentOrgName   String?
+
+  present             Boolean   @default(false)
+  promotion           Boolean   @default(false)
+  retreat             Boolean   @default(false)
+  status              Int?
+  attrs               String?
+  newAttrs            Json?
+
+  taxRate             String?
+  taxAmt              Int?
+  taxExcludedAmt      Int?
+
+  comment             String?
+  rawPayload          Json
+  createdAt           DateTime  @default(now())
+
+  @@index([mtOrderId])
+  @@index([mtSkuId])
+  @@map("mt_order_items")
+}
+
+model MtOrderPayment {
+  id                  String    @id @default(cuid())
+  mtOrderId           String
+  order               MtOrder   @relation(fields: [mtOrderId], references: [mtOrderId], onDelete: Cascade)
+
+  payType             Int
+  payTypeName         String
+  payDetailType       Int?
+
+  payed               Int
+  discountAmount      Int       @default(0)
+  income              Int       @default(0)
+  debtAccount         Int       @default(0)
+
+  tradeNo             String?
+  payNo               String?
+  relatedPayNo        String?
+  refundTradeNo       String?
+  refundReason        String?
+  refundWay           Int?
+  refundTime          DateTime?
+
+  merchantNo          String?
+  merchantType        Int?
+  dealTitle           String?
+
+  status              Int?
+  type                Int?
+  manual              Int?
+  remarks             String?
+
+  rawPayload          Json
+  createdAt           DateTime  @default(now())
+
+  @@index([mtOrderId])
+  @@index([payType])
+  @@map("mt_order_payments")
+}
+
+model MtRefundOrder {
+  id              String    @id @default(cuid())
+  mtRefundId      String    @unique
+  mtOrderId       String
+  order           MtOrder?  @relation(fields: [mtOrderId], references: [mtOrderId])
+
+  orgId           Int
+  poiId           Int
+
+  status          Int
+  statusName      String?
+  refundAmount    Int
+  refundTime      DateTime?
+  businessTime    DateTime? @db.Date
+
+  callLogId       String
+  rawPayload      Json
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([mtOrderId])
+  @@index([businessTime])
+  @@index([status])
+  @@map("mt_refund_orders")
+}
+
+model MeituanAuthToken {
+  id                String    @id @default(cuid())
+  orgId             Int       @unique
+
+  appAuthToken      String    @db.Text
+  refreshToken      String?   @db.Text
+  expiresAt         DateTime?
+
+  lastRefreshedAt   DateTime?
+  refreshAttempts   Int       @default(0)
+
+  rawPayload        Json?
+
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@map("meituan_auth_tokens")
+}

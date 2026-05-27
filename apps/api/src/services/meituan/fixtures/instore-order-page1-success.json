@@ -1,0 +1,151 @@
+{
+  "code": "OP_SUCCESS",
+  "msg": "成功",
+  "traceId": "8531422235710213256",
+  "data": {
+    "orderList": [
+      {
+        "orderBase": {
+          "id": 10001,
+          "orderNo": "202605271234001",
+          "type": 100,
+          "status": 300,
+          "statusName": "已结账",
+          "payed": 12000,
+          "receivable": 12000,
+          "amount": 12000,
+          "discount": 0,
+          "income": 12000,
+          "serviceFee": 0,
+          "taxAmt": 0,
+          "orderTime": 1779860000000,
+          "checkoutTime": 1779860800000,
+          "businessTime": "2026-05-27",
+          "businessType": 1,
+          "businessTypeName": "快餐",
+          "typeName": "堂食",
+          "customerCount": 2,
+          "cashier": 1001,
+          "cashierName": "张三",
+          "cashierNo": "Z01",
+          "tableId": 5,
+          "tableComment": "A05",
+          "source": 1,
+          "sourceName": "POS",
+          "poiId": 600382210,
+          "orgId": 1076686,
+          "isPartRefund": false
+        },
+        "itemList": [
+          {
+            "orderId": 10001,
+            "skuId": "60001",
+            "name": "小炒肉",
+            "specs": "大份",
+            "count": 1,
+            "price": 4000,
+            "totalPrice": 4000,
+            "actualPrice": 4000,
+            "isCombo": 0,
+            "serialNo": 1
+          },
+          {
+            "orderId": 10001,
+            "skuId": "60002",
+            "name": "紫菜蛋汤",
+            "specs": "",
+            "count": 1,
+            "price": 1800,
+            "totalPrice": 1800,
+            "actualPrice": 1800,
+            "isCombo": 0,
+            "serialNo": 2
+          },
+          {
+            "orderId": 10001,
+            "skuId": "60003",
+            "name": "米饭",
+            "specs": "",
+            "count": 2,
+            "price": 300,
+            "totalPrice": 600,
+            "actualPrice": 600,
+            "isCombo": 0,
+            "serialNo": 3
+          },
+          {
+            "orderId": 10001,
+            "skuId": "60004",
+            "name": "可乐",
+            "specs": "中杯",
+            "count": 2,
+            "price": 800,
+            "totalPrice": 1600,
+            "actualPrice": 1600,
+            "isCombo": 0,
+            "serialNo": 4
+          }
+        ],
+        "payList": [
+          {
+            "orderId": 10001,
+            "payType": 1,
+            "payTypeName": "微信",
+            "payed": 12000,
+            "discountAmount": 0,
+            "income": 12000,
+            "tradeNo": "wx_trade_001"
+          }
+        ]
+      },
+      {
+        "orderBase": {
+          "id": 10002,
+          "orderNo": "202605271234002",
+          "type": 200,
+          "status": 300,
+          "statusName": "已结账",
+          "payed": 3800,
+          "receivable": 3800,
+          "amount": 3800,
+          "discount": 0,
+          "income": 3800,
+          "orderTime": 1779861000000,
+          "checkoutTime": 1779861100000,
+          "businessTime": "2026-05-27",
+          "typeName": "外卖",
+          "poiId": 600382210,
+          "orgId": 1076686
+        },
+        "itemList": [
+          {
+            "orderId": 10002,
+            "skuId": "60005",
+            "name": "招牌饭团",
+            "specs": "",
+            "count": 2,
+            "price": 1900,
+            "totalPrice": 3800,
+            "actualPrice": 3800,
+            "isCombo": 0,
+            "serialNo": 1
+          }
+        ],
+        "payList": [
+          {
+            "orderId": 10002,
+            "payType": 5,
+            "payTypeName": "美团外卖",
+            "payed": 3800,
+            "income": 3800,
+            "tradeNo": "mt_wm_002"
+          }
+        ]
+      }
+    ],
+    "total": 2,
+    "pageNo": 1,
+    "pageSize": 50,
+    "totalPageCount": 1
+  }
+}

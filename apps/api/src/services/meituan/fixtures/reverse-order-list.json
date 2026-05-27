@@ -1,0 +1,24 @@
+{
+  "code": "OP_SUCCESS",
+  "msg": "成功",
+  "traceId": "8531422235710213259",
+  "data": {
+    "refundOrderList": [
+      {
+        "refundId": 9001,
+        "orderId": 10001,
+        "status": 30,
+        "statusName": "已退单",
+        "refundAmount": 1600,
+        "refundTime": 1779870000000,
+        "businessTime": "2026-05-27",
+        "orgId": 1076686,
+        "poiId": 600382210
+      }
+    ],
+    "total": 1,
+    "pageNo": 1,
+    "pageSize": 50,
+    "totalPageCount": 1
+  }
+}

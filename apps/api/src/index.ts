@@ -70,6 +70,7 @@ import { documentRoutes } from './routes/documents'
 import { cmbRoutes } from './routes/cmb'
 import multipart from '@fastify/multipart'
 import { uploadRoutes } from './routes/upload'
+import { meituanAdminRoutes } from './routes/meituanAdmin'
 
 const app = Fastify({
   logger: {
@@ -212,6 +213,7 @@ async function bootstrap() {
   app.register(v2DashboardRoutes, { prefix: '/api/v2/dashboard' })
   app.register(documentRoutes, { prefix: '/api/documents' })
   app.register(cmbRoutes, { prefix: '/api/cmb' })
+  app.register(meituanAdminRoutes, { prefix: '/api/admin/meituan' })
 
   // ── 健康检查（含数据库连接验证）──────
   app.get('/health', async () => {

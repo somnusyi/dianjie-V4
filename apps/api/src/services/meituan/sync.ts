@@ -32,6 +32,7 @@ export async function syncInstoreOrders(p: SyncInstoreParams): Promise<SyncRepor
   const apiPath = '/rms/pos/api/v2/poi/orders/instore/query'
   const report: SyncReport = { pages: 0, orders: 0, refunds: 0, failures: [], durationMs: 0 }
 
+  let rateLimited = false
   let pageNo = 1
   while (true) {
     let resp
@@ -54,6 +55,7 @@ export async function syncInstoreOrders(p: SyncInstoreParams): Promise<SyncRepor
       if (e instanceof MeituanRateLimitError) {
         // 限流 → 中断本次 sync, 等下次 cron
         report.failures.push({ apiPath, code: e.responseCode })
+        rateLimited = true
         break
       }
       report.failures.push({ apiPath, code: e?.responseCode || 'TRANSPORT', traceId: e?.traceId })
@@ -69,18 +71,20 @@ export async function syncInstoreOrders(p: SyncInstoreParams): Promise<SyncRepor
     pageNo++
   }
 
-  // 推进 cursor
-  await prisma.meituanSyncCursor.upsert({
-    where: { apiPath_orgId: { apiPath, orgId: ORG_ID } },
-    create: {
-      apiPath, orgId: ORG_ID,
-      lastSyncedAt: p.until, lastSuccessAt: new Date(),
-    },
-    update: {
-      lastSyncedAt: p.until, lastSuccessAt: new Date(),
-      consecutiveFailures: 0, lastErrorAt: null, lastErrorCode: null,
-    },
-  })
+  // 推进 cursor（仅在完整成功时）
+  if (!rateLimited) {
+    await prisma.meituanSyncCursor.upsert({
+      where: { apiPath_orgId: { apiPath, orgId: ORG_ID } },
+      create: {
+        apiPath, orgId: ORG_ID,
+        lastSyncedAt: p.until, lastSuccessAt: new Date(),
+      },
+      update: {
+        lastSyncedAt: p.until, lastSuccessAt: new Date(),
+        consecutiveFailures: 0, lastErrorAt: null, lastErrorCode: null,
+      },
+    })
+  }
 
   report.durationMs = Date.now() - startedAt
   return report
@@ -101,6 +105,7 @@ export async function syncReverseOrders(p: SyncReverseParams): Promise<SyncRepor
   const apiPath = '/rms/pos/api/v1/poi/reverse/orders/search'
   const report: SyncReport = { pages: 0, orders: 0, refunds: 0, failures: [], durationMs: 0 }
 
+  let rateLimited = false
   let pageNo = 1
   while (true) {
     let resp
@@ -119,6 +124,7 @@ export async function syncReverseOrders(p: SyncReverseParams): Promise<SyncRepor
     } catch (e: any) {
       if (e instanceof MeituanRateLimitError) {
         report.failures.push({ apiPath, code: e.responseCode })
+        rateLimited = true
         break
       }
       report.failures.push({ apiPath, code: e?.responseCode || 'TRANSPORT', traceId: e?.traceId })
@@ -134,11 +140,13 @@ export async function syncReverseOrders(p: SyncReverseParams): Promise<SyncRepor
     pageNo++
   }
 
-  await prisma.meituanSyncCursor.upsert({
-    where: { apiPath_orgId: { apiPath, orgId: ORG_ID } },
-    create: { apiPath, orgId: ORG_ID, lastSyncedAt: p.until, lastSuccessAt: new Date() },
-    update: { lastSyncedAt: p.until, lastSuccessAt: new Date(), consecutiveFailures: 0 },
-  })
+  if (!rateLimited) {
+    await prisma.meituanSyncCursor.upsert({
+      where: { apiPath_orgId: { apiPath, orgId: ORG_ID } },
+      create: { apiPath, orgId: ORG_ID, lastSyncedAt: p.until, lastSuccessAt: new Date() },
+      update: { lastSyncedAt: p.until, lastSuccessAt: new Date(), consecutiveFailures: 0 },
+    })
+  }
 
   report.durationMs = Date.now() - startedAt
   return report

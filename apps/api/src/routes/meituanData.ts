@@ -17,10 +17,12 @@ export const meituanDataRoutes: FastifyPluginAsync = async (app) => {
   // ── GET /api/meituan/stats/today ──
   app.get('/stats/today', auth(app), async (req: any, reply) => {
     const denied = requireView(req, reply); if (denied) return denied
-    const today = dayjs().startOf('day').toDate()
+    const todayUtc = new Date()
+    todayUtc.setUTCHours(0, 0, 0, 0)
+    const today = todayUtc
 
     const agg = await prisma.mtOrder.aggregate({
-      where: { businessTime: today, status: { in: [300, 600] } },
+      where: { businessTime: today, status: 300 },
       _count: { _all: true },
       _sum: { payed: true, discount: true },
     })
@@ -43,7 +45,13 @@ export const meituanDataRoutes: FastifyPluginAsync = async (app) => {
   app.get('/stats/payment-breakdown', auth(app), async (req: any, reply) => {
     const denied = requireView(req, reply); if (denied) return denied
     const q = z.object({ date: z.string().optional() }).parse(req.query)
-    const day = dayjs(q.date || undefined).startOf('day').toDate()
+    let day: Date
+    if (q.date) {
+      day = new Date(`${q.date}T00:00:00.000Z`)
+    } else {
+      day = new Date()
+      day.setUTCHours(0, 0, 0, 0)
+    }
 
     const rows: { payTypeName: string; totalAmount: bigint; orderCount: bigint }[] = await prisma.$queryRaw`
       SELECT p.pay_type_name as "payTypeName",
@@ -68,7 +76,13 @@ export const meituanDataRoutes: FastifyPluginAsync = async (app) => {
   app.get('/stats/business-type-breakdown', auth(app), async (req: any, reply) => {
     const denied = requireView(req, reply); if (denied) return denied
     const q = z.object({ date: z.string().optional() }).parse(req.query)
-    const day = dayjs(q.date || undefined).startOf('day').toDate()
+    let day: Date
+    if (q.date) {
+      day = new Date(`${q.date}T00:00:00.000Z`)
+    } else {
+      day = new Date()
+      day.setUTCHours(0, 0, 0, 0)
+    }
 
     const rows = await prisma.mtOrder.groupBy({
       by: ['channel'],
@@ -89,7 +103,9 @@ export const meituanDataRoutes: FastifyPluginAsync = async (app) => {
   app.get('/stats/trend', auth(app), async (req: any, reply) => {
     const denied = requireView(req, reply); if (denied) return denied
     const q = z.object({ days: z.coerce.number().int().min(1).max(31).default(7) }).parse(req.query)
-    const since = dayjs().subtract(q.days - 1, 'day').startOf('day').toDate()
+    const since = new Date()
+    since.setUTCDate(since.getUTCDate() - (q.days - 1))
+    since.setUTCHours(0, 0, 0, 0)
 
     const rows: { date: Date; gmv: bigint; orderCount: bigint }[] = await prisma.$queryRaw`
       SELECT business_time as "date",

@@ -113,6 +113,9 @@ echo "==> [5/8] rsync 上传"
 rsync_run apps/api/dist/                          "$SERVER:$REMOTE/apps/api/dist/" | tail -2
 rsync_run apps/web/.next/standalone/apps/web/     "$SERVER:$REMOTE/apps/web/apps/web/" | tail -2
 rsync_run apps/web/.next/static/                  "$SERVER:$REMOTE/apps/web/apps/web/.next/static/" | tail -2
+# apps/web/public — PWA manifest / icons / 静态资源 (旧 deploy.sh 有, 新脚本之前漏了)
+# 历史教训: 改 icon / manifest 后 build 不动 public/, 不同步就用户看旧 icon
+rsync_run apps/web/public/                        "$SERVER:$REMOTE/apps/web/apps/web/public/" | tail -2
 # 同步 scripts — cron 跑的 mirror-business-to-test.cjs / e2e-full-flow.js 等
 # 历史教训: scripts 不同步会出现"代码已 push 但服务器仍跑旧版本"的脏状态
 # (e.g. 2026-05-28 mirror cron 修了 7 天没生效, 因为 cjs 没拷过去)
@@ -132,12 +135,30 @@ rsync_run apps/api/package.json                   "$SERVER:$REMOTE/apps/api/pack
 rsync_run --exclude='node_modules' --exclude='.env' \
           packages/db/                            "$SERVER:$REMOTE/packages/db/" | tail -2
 
-# ── 5.5 ECS 装新依赖 (用 /tmp 干净环境避开 workspace:* 协议) ───
+# ══════════════════════════════════════════════════════
+# ECS 状态同步 (5.1 → 5.5): 把 ECS 拉到跟 git HEAD 一致
+# 顺序敏感: 装依赖 → 跑 DB migration → regenerate prisma client → 校验 env
+# ══════════════════════════════════════════════════════
+
+# ── 5.1 cmb Python 依赖 ─────────────────────────────
+# rsync 把 requirements.txt 推上去了, 但不会自动 pip install.
+# 历史教训: 加 Python 包后 pm2 reload cmb 会 ModuleNotFoundError 起不来,
+# fail-fast 抓得到但用户看到的是"部署失败", 不知是缺包.
+echo ""
+echo "==> [5.1/8] ECS cmb Python 依赖 (pip install)"
+ssh_run "
+  set -e
+  cd $REMOTE/apps/cmb
+  pip3 install -q --disable-pip-version-check -r requirements.txt 2>&1 | tail -3 || true
+  echo '   ✓ cmb 依赖同步完成'
+"
+
+# ── 5.2 ECS api Node 依赖 (用 /tmp 干净环境避开 workspace:* 协议) ───
 # pnpm workspace:* 协议在生产端解析不动 (生产没 workspace 配置), npm 也不认.
 # 方案: /tmp 临时复制 package.json → 删 workspace: 行 → npm install → cp 缺失的包到
 # apps/api/node_modules, 保留 @dianjie/db symlink. 全套耗时 ~30s.
 echo ""
-echo "==> [5.5/8] ECS 装/补 apps/api 依赖 (axios / cuid2 / 任何 package.json 新加的)"
+echo "==> [5.2/8] ECS 装/补 apps/api 依赖 (axios / cuid2 / 任何 package.json 新加的)"
 ssh_run "
   set -e
   rm -rf /tmp/api-rebuild
@@ -156,23 +177,64 @@ ssh_run "
   echo '   ✓ apps/api 依赖同步完成'
 "
 
-# ── 5.6 ECS prisma generate + 同步到 apps/api/node_modules/.prisma ───
+# ── 5.3 prisma migrate deploy (DB schema 跟代码对齐) ───
+# 旧 deploy.sh line 160-165 有这步, 新 deploy-worktree.sh 之前漏了.
+# 不跑这步, schema.prisma 加的字段/表/enum 在 ECS DB 里不存在 →
+# 运行时第一次 query 报 "column does not exist" / "relation does not exist".
+# 必须在 prisma generate 之前 — generate 出来的 client 假设 DB 是 schema 描述的形状.
+echo ""
+echo "==> [5.3/8] ECS prisma migrate deploy (应用待执行的 migration)"
+ssh_run "
+  set -e
+  cd $REMOTE/packages/db
+  export \$(grep -E '^DATABASE_URL=' $REMOTE/.env | xargs)
+  npx -y prisma@5.22.0 migrate deploy --schema=./prisma/schema.prisma 2>&1 | tail -5
+  echo '   ✓ migration 应用完成 (idempotent, 无 pending 时不操作)'
+"
+
+# ── 5.4 ECS prisma generate + 同步到 apps/api/node_modules/.prisma ───
 # 历史教训 (2026-05-28): 同事在 schema 里加了 PAYMENT_REQUEST enum 值,
 # DB migrate 上去了, 但 ECS @prisma/client 还是旧 generated 版本 →
 # 老板审批报 "Value 'PAYMENT_REQUEST' not found in enum 'DocumentType'".
 # prisma migrate deploy 不会自动 regenerate client, 必须显式 prisma generate.
 # 每次 schema 改 (加表 / 加字段 / 加 enum 值) 都得跑这步.
 echo ""
-echo "==> [5.6/8] ECS prisma generate + 同步 client 到 apps/api"
+echo "==> [5.4/8] ECS prisma generate + 同步 client 到 apps/api"
 ssh_run "
   set -e
   cd $REMOTE/packages/db
   export \$(grep -E '^DATABASE_URL=' $REMOTE/.env | xargs)
   npx -y prisma@5.22.0 generate --schema=./prisma/schema.prisma 2>&1 | tail -3
+  # 校验 generate 真的产出了 client (npx 网络挂掉会静默)
+  test -d $REMOTE/packages/db/node_modules/.prisma/client || { echo '❌ prisma generate 没产出 client'; exit 1; }
   # 把新 generated client 同步到 apps/api 的 node_modules (运行时实际用的位置)
   rm -rf $REMOTE/apps/api/node_modules/.prisma
   cp -r $REMOTE/packages/db/node_modules/.prisma $REMOTE/apps/api/node_modules/.prisma
   echo '   ✓ prisma client 已 regenerate + 同步到 apps/api'
+"
+
+# ── 5.5 .env 一致性检测 (warn-only, 不阻断) ─────────
+# 历史教训: 新代码加 env 变量, .env.example 更了但 ECS .env 没更.
+# api 端大量 process.env.X || 'default' 或 ! non-null assert, 不会 fail-fast,
+# 跑到该 endpoint 才报奇怪错误, 排查成本高. 这里只是提醒, 不阻断部署.
+echo ""
+echo "==> [5.5/8] ECS .env 一致性检测 (vs .env.example, warn-only)"
+rsync_run .env.example "$SERVER:$REMOTE/.env.example" | tail -1
+ssh_run "
+  set -e
+  MISSING=''
+  for k in \$(grep -oE '^[A-Z_][A-Z0-9_]*=' $REMOTE/.env.example | sed 's/=//' | sort -u); do
+    if ! grep -qE \"^\$k=\" $REMOTE/.env; then
+      MISSING=\"\$MISSING \$k\"
+    fi
+  done
+  if [ -n \"\$MISSING\" ]; then
+    echo '   ⚠ ECS .env 缺以下 key (.env.example 里有):'
+    for k in \$MISSING; do echo \"      - \$k\"; done
+    echo '   → 部署不阻断, 但功能可能 lazy fail, 请尽快补'
+  else
+    echo '   ✓ ECS .env key 覆盖 .env.example'
+  fi
 "
 
 # ── 6. pm2 reload (api + web + cmb) ────────────────

@@ -1,0 +1,18 @@
+# ═══════════════════════════════════════════════════════════════
+# 滇界 V4 · 生产服务器 root crontab 的真理副本
+#
+# 服务器: root@116.62.32.162
+# 上次同步: 2026-05-28
+#
+# ⚠ 修改流程 (不要直接 ssh 改 ECS 上的 crontab!):
+#   1. 改本文件
+#   2. git commit + push
+#   3. 在本地跑 scripts/crontab-install.sh (会 diff ECS 现状 → 确认 → install)
+#   4. 跑完去 ECS 验证: ssh root@116.62.32.162 'crontab -l'
+#
+# 历史教训: 同事手动改过 ECS crontab 没存 git, 加新任务时不知道 ECS
+# 已有什么 → 容易冲突或漏改. 现在 git 上的版本是真理.
+# ═══════════════════════════════════════════════════════════════
+
+# 滇界 V4 · 每天 03:00 把 dianjie 业务流水镜像到 test tenant
+0 3 * * * /app/dianjie-v4/scripts/cron-mirror-to-test.sh >> /var/log/dianjie/cron.log 2>&1

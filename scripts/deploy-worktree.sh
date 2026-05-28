@@ -118,12 +118,20 @@ rsync_run apps/web/.next/static/                  "$SERVER:$REMOTE/apps/web/apps
 # (e.g. 2026-05-28 mirror cron 修了 7 天没生效, 因为 cjs 没拷过去)
 rsync_run apps/api/scripts/                       "$SERVER:$REMOTE/apps/api/scripts/" | tail -2
 rsync_run scripts/                                "$SERVER:$REMOTE/scripts/" | tail -2
+# apps/cmb (Python Flask 国密微服务) — 同事+我之前手 SSH 推过, 现在纳入 deploy
+# 排除 __pycache__ / *.pyc (本地 build 产物, ECS 自己会重新生成)
+# 排除 .env (ECS .env 是真理, 不能被 worktree 覆盖)
+rsync_run --exclude='__pycache__/' --exclude='*.pyc' --exclude='.env' \
+          apps/cmb/                               "$SERVER:$REMOTE/apps/cmb/" | tail -2
 
-# ── 6. pm2 reload (两个进程都要 reload 一次, 防止某次不响应) ──
+# ── 6. pm2 reload (api + web + cmb) ────────────────
 echo ""
-echo "==> [6/8] pm2 reload api + web"
+echo "==> [6/8] pm2 reload api + web + cmb"
 ssh_run "pm2 reload dianjie-v4-api --update-env" >/dev/null
 ssh_run "pm2 reload dianjie-v4-web --update-env" >/dev/null
+# cmb 是 Python 进程, reload 后会重跑 module-level 代码 (含 fail-fast 校验)
+# .env 缺关键字段会直接 raise; 启动失败 pm2 会反复重启, 后面验证会抓到
+ssh_run "pm2 reload dianjie-v4-cmb --update-env" >/dev/null
 sleep 4
 
 # ── 7. 验证 (4 项必过) ───────────────────────────────
@@ -139,7 +147,9 @@ ssh_run "
   [ \"\$REMOTE_MD5\" = '$LOCAL_API_MD5' ] || { echo \"❌ MD5 不一致 local=$LOCAL_API_MD5 remote=\$REMOTE_MD5\"; exit 1; }
   test \$(curl -s -o /dev/null -w '%{http_code}' http://localhost:4004/health) = '200' || { echo '❌ /health'; exit 1; }
   test \$(curl -s -o /dev/null -w '%{http_code}' http://localhost:4004/api/cmb/status) = '401' || { echo '❌ /api/cmb/status'; exit 1; }
-  echo '   ✓ 4 项验证全通过'
+  # cmb 微服务自身健康检查 (Python Flask, fail-fast 校验通过才能 200)
+  test \$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5001/health) = '200' || { echo '❌ cmb /health (Python fail-fast 可能抛了, 看 pm2 logs dianjie-v4-cmb)'; exit 1; }
+  echo '   ✓ 5 项验证全通过'
 "
 
 # ── 8. 标记 deployed commit (verify 通过才写, 失败留旧值) ─

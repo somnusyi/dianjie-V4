@@ -1,7 +1,8 @@
 {
   "name": "@dianjie/db",
   "version": "1.0.0",
-  "main": "./src/index.ts",
+  "main": "./index.js",
+  "types": "./src/index.ts",
   "scripts": {
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",

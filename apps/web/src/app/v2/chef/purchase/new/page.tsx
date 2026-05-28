@@ -15,7 +15,8 @@ type Supplier = { id: string; name: string; category: string | null; bankAccount
 type Product  = { id: string; name: string; unit: string; price: string; supplierId: string | null
                   spec?: string | null; category?: string | null; code?: string
                   minOrderQty?: string | number; stepQty?: string | number
-                  stock?: string | number | null }
+                  stock?: string | number | null
+                  status?: string  /* ENABLED / DISABLED / PENDING_APPROVAL / PENDING_DISABLE */ }
 type LineItem = { productId: string; quantity: number; unitPrice: number }
 
 // 模糊匹配: name + spec + code 任意子串包含; 多关键字 AND
@@ -149,6 +150,14 @@ export default function ChefPONewPage() {
     e.preventDefault()
     if (!supplierId) { setError('请选择供应商'); return }
     if (items.length === 0) { setError('请至少添加一个商品'); return }
+    // 前端兜底拦下已停售/待审批 SKU (草稿可能残留, server 端 orders.ts:298 也会兜底)
+    const blocked = items
+      .map(it => products.find(p => p.id === it.productId))
+      .filter((p): p is Product => !!p && p.status != null && p.status !== 'ENABLED')
+    if (blocked.length > 0) {
+      setError(`以下商品已停售/待审, 请先移除: ${blocked.map(p => p.name).join('、')}`)
+      return
+    }
     setError(null); setSubmitting(true)
     try {
       // 兜底: 显式传 storeId (后端旧版只对 MANAGER 用 token storeId, KITCHEN_LEAD 漏接)
@@ -376,22 +385,48 @@ export default function ChefPONewPage() {
                 const qty = picked?.quantity || 0
                 const stockNum = Number(p.stock || 0)
                 const outOfStock = stockNum <= 0
+                // 商品状态: 供应商下架 / 待审批的 SKU 不可加入采购单 (server 端 orders.ts:298 兜底拦)
+                const notOrderable = p.status != null && p.status !== 'ENABLED'
+                const statusChip = p.status === 'DISABLED'         ? { label: '已停售', cls: 'bg-gray5 text-gray2' }
+                                 : p.status === 'PENDING_DISABLE'  ? { label: '停售待审', cls: 'bg-orange-50 text-orange-fg' }
+                                 : p.status === 'PENDING_APPROVAL' ? { label: '待上架', cls: 'bg-orange-50 text-orange-fg' }
+                                 : null
                 return (
-                  <li key={p.id} className={`flex items-center px-4 py-3 ${picked ? 'bg-amber/5' : ''}`}>
+                  <li key={p.id} className={`flex items-center px-4 py-3 ${notOrderable ? 'opacity-60' : picked ? 'bg-amber/5' : ''}`}>
                     <div className="flex-1 min-w-0">
                       <div className="text-body truncate flex items-center gap-1 flex-wrap">
                         <span>{p.name}</span>
                         {p.spec && <span className="text-micro text-gray3">· {p.spec}</span>}
-                        {Number(p.minOrderQty || 1) > 1 && (
+                        {statusChip && (
+                          <span className={`text-micro px-1.5 py-0.5 rounded-chip whitespace-nowrap ${statusChip.cls}`}>{statusChip.label}</span>
+                        )}
+                        {!notOrderable && Number(p.minOrderQty || 1) > 1 && (
                           <span className="text-micro px-1.5 py-0.5 bg-amber/10 text-amber-fg rounded-chip whitespace-nowrap">起订 {moq(p)}{step(p) > 1 ? `·步 ${step(p)}` : ''}</span>
                         )}
-                        {outOfStock && (
+                        {!notOrderable && outOfStock && (
                           <span className="text-micro px-1.5 py-0.5 bg-red-50 text-red-600 rounded-chip whitespace-nowrap">⚠ 供应商断货</span>
                         )}
                       </div>
                       <div className="text-micro text-gray3 font-num">¥{Number(p.price).toFixed(2)} / {p.unit}{qty > 0 && <span className="text-amber-fg ml-2">小计 ¥{(qty * Number(p.price)).toFixed(2)}</span>}</div>
                     </div>
-                    {qty === 0 ? (
+                    {notOrderable ? (
+                      qty > 0 ? (
+                        /* 草稿里有已停售残留, 给一个"移除"按钮让用户清掉 (setQtyByProduct(p, 0) 触发 filter 移除) */
+                        <button
+                          type="button"
+                          onClick={() => setQtyByProduct(p, 0)}
+                          className="px-3 py-1.5 rounded-cta text-button bg-red-50 text-red-600"
+                          aria-label="移除已停售商品"
+                        >移除</button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled
+                          className="px-3 py-1.5 rounded-cta text-button bg-gray5 text-gray3 cursor-not-allowed"
+                          aria-label="该商品已停售"
+                        >不可加入</button>
+                      )
+                    ) : qty === 0 ? (
                       <button
                         type="button"
                         onClick={() => {

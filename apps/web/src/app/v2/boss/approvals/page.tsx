@@ -9,7 +9,7 @@
  */
 'use client'
 import { useEffect, useState } from 'react'
-import { Chip, StoreAvatar } from '@/components/v2'
+import { Chip, StoreAvatar, BottomNav } from '@/components/v2'
 
 type ApiDoc = {
   id: string
@@ -48,6 +48,7 @@ export default function BossApprovalsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [accountPending, setAccountPending] = useState(0)
+  const [tab, setTab] = useState('approval')
 
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null
@@ -174,6 +175,25 @@ export default function BossApprovalsPage() {
           )
         })}
       </ul>
+
+      {/* 底部 5 Tab — 跟 home / stores / reports 保持一致, 修复审批页底栏缺失 */}
+      <BottomNav
+        tabs={[
+          { key: 'home',     label: '首页', icon: '⌂' },
+          { key: 'stores',   label: '门店', icon: '☷' },
+          { key: 'reports',  label: '报表', icon: '⛁' },
+          { key: 'approval', label: '审批', icon: '✓' },
+          { key: 'me',       label: '我的', icon: '◐' },
+        ]}
+        activeKey={tab}
+        onChange={(k) => {
+          setTab(k)
+          if (k === 'home')     location.href = '/v2/boss/home'
+          if (k === 'stores')   location.href = '/v2/boss/stores'
+          if (k === 'reports')  location.href = '/v2/boss/reports'
+          if (k === 'me')       location.href = '/v2/me'
+        }}
+      />
     </div>
   )
 }

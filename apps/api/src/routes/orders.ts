@@ -398,7 +398,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (isSupplierRole(role) && req.user.supplierId) shipWhere.supplierId = req.user.supplierId
     const order = await prisma.purchaseOrder.findFirst({
       where: shipWhere,
-      include: { items: { include: { product: { select: { name: true, unit: true, spec: true, code: true } } } } },
+      // 实发上限是 per-product 配置 (shipUpperPct + shipUpperBuffer), 同时拉出来用于 ship 校验
+      include: { items: { include: { product: { select: { name: true, unit: true, spec: true, code: true, shipUpperPct: true, shipUpperBuffer: true } } } } },
     })
     if (!order) throw { statusCode: 400, message: '订单不存在或状态不可发货' }
 
@@ -410,19 +411,15 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         if (!orig) throw { statusCode: 400, message: `行 ${s.itemId} 不属于本订单` }
         const sq = Number(s.shippedQty)
         if (!Number.isFinite(sq) || sq < 0) throw { statusCode: 400, message: `${orig.product?.name || s.itemId} 数量非法` }
-        // 允许实发超过下单的上限: max(下单 + 5, 下单 × 1.1)
-        // 双阈值原因 (2026-05-28 客户反馈调整): 纯 110% 对小数量商品太死板
-        //   下单 1 件时 110% = 1.1 → 想发 2 件被拒
-        //   下单 100 件时 110% = 110 → 加 10 件合理
-        // 双阈值: 小数量按绝对量兜底 (+5), 大数量按百分比兜底 (×1.1)
-        //   下单 1 → 上限 max(6, 1.1) = 6 ✓
-        //   下单 10 → 上限 max(15, 11) = 15
-        //   下单 50 → 上限 max(55, 55) = 55
-        //   下单 100 → 上限 max(105, 110) = 110 ✓
+        // 实发上限 = max(下单 × shipUpperPct, 下单 + shipUpperBuffer), per-product 配置
+        // 字段在 Product 上 (2026-05-28 戊方案), 默认 1.10 / 5.00 跟之前全局阈值一致
+        // 供应商可在 supplier/products 编辑 (price/spec/stock 同款 SUPPLIER_ALLOW 白名单)
         const ordered = Number(orig.quantity)
-        const upper = Math.max(ordered + 5, ordered * 1.1)
+        const pct    = Number((orig.product as any)?.shipUpperPct    ?? 1.10)
+        const buffer = Number((orig.product as any)?.shipUpperBuffer ?? 5.00)
+        const upper  = Math.max(ordered * pct, ordered + buffer)
         if (sq > upper + 0.0001) {
-          throw { statusCode: 400, message: `${orig.product?.name || s.itemId} 实发 ${sq} 超过上限 ${upper.toFixed(2)} (下单 ${ordered}, 允许加量 ≤ 下单+5 或 ≤ 下单×110% 取大), 请联系下单人补单` }
+          throw { statusCode: 400, message: `${orig.product?.name || s.itemId} 实发 ${sq} 超过上限 ${upper.toFixed(2)} (下单 ${ordered}, 该商品阈值: ≤ ${pct}×下单 或 ≤ 下单+${buffer} 取大), 请联系下单人补单或在商品页调整阈值` }
         }
         shippedMap.set(s.itemId, sq)
       }

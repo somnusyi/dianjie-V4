@@ -17,6 +17,8 @@ type Product = {
   spec?: string | null
   price: number | string; stock: number | string; minStock: number | string
   minOrderQty?: number | string; stepQty?: number | string
+  shipUpperPct?: number | string       // 实发上限百分比 (1.10 = 110%)
+  shipUpperBuffer?: number | string    // 实发上限绝对加量 (单位件)
   status: string
 }
 
@@ -52,7 +54,7 @@ export default function SupplierProductsPage() {
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
   // 编辑草稿: 单价 + 规格 + 起订量 + 步长 (库存请到库存页)
-  const [draft, setDraft] = useState<{ price: string; spec: string; moq: string; step: string }>({ price: '', spec: '', moq: '', step: '' })
+  const [draft, setDraft] = useState<{ price: string; spec: string; moq: string; step: string; shipPct: string; shipBuf: string }>({ price: '', spec: '', moq: '', step: '', shipPct: '', shipBuf: '' })
   const [searchQ, setSearchQ] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [confirmState, openConfirm] = useConfirmSheet()
@@ -94,6 +96,8 @@ export default function SupplierProductsPage() {
       spec: String(p.spec || ''),
       moq: String(p.minOrderQty ?? 1),
       step: String(p.stepQty ?? 1),
+      shipPct: String(p.shipUpperPct ?? 1.10),
+      shipBuf: String(p.shipUpperBuffer ?? 5),
     })
   }
   function cancelEdit() {
@@ -106,24 +110,32 @@ export default function SupplierProductsPage() {
     const newMoq   = Number(draft.moq) || 1
     // step 取消独立配置, 强制 = moq (用户感知"起订量"就是"递增单位")
     const newStep  = newMoq
+    const newShipPct = Math.max(1, Math.min(10, Number(draft.shipPct) || 1.10))    // 钳制 [1, 10] (100%-1000%)
+    const newShipBuf = Math.max(0, Math.min(10000, Number(draft.shipBuf) || 0))    // 钳制 [0, 10000]
     const oldPrice = Number(p.price)
     const priceChanged = Math.abs(newPrice - oldPrice) > 0.01
     const specChanged  = newSpec !== String(p.spec || '').trim()
     const moqChanged   = Math.abs(newMoq - Number(p.minOrderQty ?? 1)) > 0.001
     const stepChanged  = Math.abs(newStep - Number(p.stepQty ?? 1)) > 0.001
-    if (!priceChanged && !specChanged && !moqChanged && !stepChanged) { setEditing(null); return }
+    const shipPctChanged = Math.abs(newShipPct - Number(p.shipUpperPct ?? 1.10)) > 0.001
+    const shipBufChanged = Math.abs(newShipBuf - Number(p.shipUpperBuffer ?? 5)) > 0.001
+    if (!priceChanged && !specChanged && !moqChanged && !stepChanged && !shipPctChanged && !shipBufChanged) { setEditing(null); return }
     const isUp = priceChanged && newPrice > oldPrice && oldPrice > 0
 
-    // 规格/起订量/步长 → 一并提交, 不走审批; 价格上调单独走审批
+    // 规格/起订量/步长/实发阈值 → 一并提交, 不走审批; 价格上调单独走审批
     const nonPriceBody: any = {}
-    if (specChanged) nonPriceBody.spec = newSpec || null
-    if (moqChanged)  nonPriceBody.minOrderQty = newMoq
-    if (stepChanged) nonPriceBody.stepQty = newStep
+    if (specChanged)    nonPriceBody.spec = newSpec || null
+    if (moqChanged)     nonPriceBody.minOrderQty = newMoq
+    if (stepChanged)    nonPriceBody.stepQty = newStep
+    if (shipPctChanged) nonPriceBody.shipUpperPct = newShipPct
+    if (shipBufChanged) nonPriceBody.shipUpperBuffer = newShipBuf
 
     const summary: string[] = []
-    if (priceChanged) summary.push(`单价 ¥${oldPrice.toFixed(2)} → ¥${newPrice.toFixed(2)}${isUp ? ' ⚠涨价审批' : ''}`)
-    if (specChanged)  summary.push(`规格 「${p.spec || '空'}」→「${newSpec || '空'}」`)
-    if (moqChanged)   summary.push(`起订量 ${p.minOrderQty ?? 1} → ${newMoq}`)
+    if (priceChanged)    summary.push(`单价 ¥${oldPrice.toFixed(2)} → ¥${newPrice.toFixed(2)}${isUp ? ' ⚠涨价审批' : ''}`)
+    if (specChanged)     summary.push(`规格 「${p.spec || '空'}」→「${newSpec || '空'}」`)
+    if (moqChanged)      summary.push(`起订量 ${p.minOrderQty ?? 1} → ${newMoq}`)
+    if (shipPctChanged)  summary.push(`实发百分比上限 ${Number(p.shipUpperPct ?? 1.10).toFixed(2)} → ${newShipPct.toFixed(2)} (${(newShipPct*100).toFixed(0)}%)`)
+    if (shipBufChanged)  summary.push(`实发加量上限 ${Number(p.shipUpperBuffer ?? 5)} → ${newShipBuf} ${p.unit}`)
 
     openConfirm({
       title: `修改「${p.name}」`,
@@ -390,6 +402,28 @@ export default function SupplierProductsPage() {
                           onChange={e => setDraft({ ...draft, moq: e.target.value })}
                           className="w-24 bg-white rounded-chip px-2 py-1 font-num border border-border text-right" />
                         <span className="text-micro text-gray3">{p.unit}</span>
+                      </div>
+                      {/* 实发量上限配置 (per-product, 2026-05-28 戊方案) */}
+                      <div className="border-t border-border pt-2">
+                        <div className="text-micro text-gray3 mb-1.5">实发量上限 (称重 / 库存浮动允许的弹性)</div>
+                        <div className="flex items-center gap-2">
+                          <label className="text-micro text-gray3 w-12">百分比</label>
+                          <input type="number" step="0.01" min="1" max="10" value={draft.shipPct}
+                            onChange={e => setDraft({ ...draft, shipPct: e.target.value })}
+                            className="w-20 bg-white rounded-chip px-2 py-1 font-num border border-border text-right" />
+                          <span className="text-micro text-gray3">× 下单 ({(Number(draft.shipPct) || 1.1) * 100 | 0}%)</span>
+                        </div>
+                        <div className="flex items-center gap-2 mt-1.5">
+                          <label className="text-micro text-gray3 w-12">加量</label>
+                          <input type="number" step="0.01" min="0" max="10000" value={draft.shipBuf}
+                            onChange={e => setDraft({ ...draft, shipBuf: e.target.value })}
+                            className="w-20 bg-white rounded-chip px-2 py-1 font-num border border-border text-right" />
+                          <span className="text-micro text-gray3">{p.unit} 以内</span>
+                        </div>
+                        <p className="text-micro text-gray3 mt-1.5">
+                          上限 = max(下单×百分比, 下单+加量) · 默认 1.10 / 5 ·
+                          示例: 下单 1 → 上限 {Math.max((Number(draft.shipPct) || 1.1), 1 + (Number(draft.shipBuf) || 5)).toFixed(2)}{p.unit}
+                        </p>
                       </div>
                       <div className="flex items-center justify-end gap-2 pt-1">
                         <button onClick={cancelEdit} className="px-3 py-1 text-gray3 text-button">取消</button>

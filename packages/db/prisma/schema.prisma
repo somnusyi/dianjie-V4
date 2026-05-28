@@ -519,6 +519,11 @@ model Product {
   minOrderQty Decimal  @default(1) @db.Decimal(10, 2)  // 起订量 (≥1)
   stepQty     Decimal  @default(1) @db.Decimal(10, 2)  // 整倍数步长 (1=随便; 10=必须 10/20/30...)
   shelfDays   Int      @default(7)          // 保质期天数
+  // 实发量上限 (供应商发货时允许调整的弹性, 2026-05-28 客户反馈 per-product 可配)
+  // 校验公式: upper = max(下单 × shipUpperPct, 下单 + shipUpperBuffer)
+  // 默认 1.10 / 5.00 跟之前全局阈值一致, 历史商品零行为变化
+  shipUpperPct    Decimal  @default(1.10) @db.Decimal(5, 2)   // 实发百分比上限 (1.10 = 110%)
+  shipUpperBuffer Decimal  @default(5.00) @db.Decimal(10, 2)  // 实发绝对加量上限 (单位件)
   status      ProductStatus @default(ENABLED)
   supplierId  String?
   createdAt   DateTime @default(now())

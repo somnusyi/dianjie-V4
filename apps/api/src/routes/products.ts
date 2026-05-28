@@ -371,7 +371,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     }
     const body = req.body as any
     // P1: 非供应商角色也必须白名单字段, 防 mass assignment (改 tenantId / supplierId / id)
-    const SUPPLIER_ALLOW = ['price', 'spec', 'stock', 'minStock', 'minOrderQty', 'stepQty', 'shelfDays', 'status']
+    const SUPPLIER_ALLOW = ['price', 'spec', 'stock', 'minStock', 'minOrderQty', 'stepQty', 'shelfDays', 'status', 'shipUpperPct', 'shipUpperBuffer']
     const STAFF_ALLOW = [...SUPPLIER_ALLOW, 'name', 'unit', 'category', 'code']  // 内部员工额外可改名/类
     const allow = isSupplierRole(role) ? SUPPLIER_ALLOW : STAFF_ALLOW
     const data = Object.fromEntries(Object.entries(body).filter(([k]) => allow.includes(k)))

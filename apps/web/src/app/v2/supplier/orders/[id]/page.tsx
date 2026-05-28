@@ -23,7 +23,7 @@ type Order = {
   supplier: { id: string; name: string; contactName?: string | null; contactPhone?: string | null }
   createdBy: { id: string; name: string }
   shippedBy: { id: string; name: string } | null
-  items: { id: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string; receivedQty: string | null; product?: { name: string; spec: string | null; unit: string; code: string } }[]
+  items: { id: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string; receivedQty: string | null; product?: { name: string; spec: string | null; unit: string; code: string; shipUpperPct?: string | number; shipUpperBuffer?: string | number } }[]
   lossClaims?: {
     id: string; no: string; status: string
     totalLossAmount: string; description: string
@@ -93,10 +93,21 @@ export default function SupplierOrderDetailPage() {
     })
     const newTotal = lines.reduce((s, l) => s + l.sq * Number(l.it.unitPrice), 0)
     const changed = lines.filter(l => l.changed)
-    // 实发上限: max(下单+5, 下单×1.1) — 解决小数量商品 110% 卡死 (2026-05-28 客户反馈)
-    const shipUpper = (ordered: number) => Math.max(ordered + 5, ordered * 1.1)
-    const overLimit = lines.find(l => l.sq > shipUpper(Number(l.it.quantity)) + 0.0001)
-    if (overLimit) { setError(`${overLimit.it.product?.name || ''} 实发超上限 ${shipUpper(Number(overLimit.it.quantity)).toFixed(2)} (下单 ${overLimit.it.quantity}, 允许加量 ≤ 下单+5 或 ≤ 110% 取大)`); return }
+    // 实发上限 per-product: max(下单 × shipUpperPct, 下单 + shipUpperBuffer)
+    // 阈值在 Product 上 (2026-05-28 戊方案), 供应商可在商品页自调; 默认 1.10 / 5.00
+    const shipUpper = (it: typeof lines[0]['it']) => {
+      const ordered = Number(it.quantity)
+      const pct    = Number(it.product?.shipUpperPct    ?? 1.10)
+      const buffer = Number(it.product?.shipUpperBuffer ?? 5)
+      return Math.max(ordered * pct, ordered + buffer)
+    }
+    const overLimit = lines.find(l => l.sq > shipUpper(l.it) + 0.0001)
+    if (overLimit) {
+      const pct = Number(overLimit.it.product?.shipUpperPct ?? 1.10)
+      const buf = Number(overLimit.it.product?.shipUpperBuffer ?? 5)
+      setError(`${overLimit.it.product?.name || ''} 实发超上限 ${shipUpper(overLimit.it).toFixed(2)} (下单 ${overLimit.it.quantity}, 该商品阈值: ≤ ${pct}×下单 或 ≤ 下单+${buf} 取大). 在商品页可调阈值.`)
+      return
+    }
     const itemsBody = changed.length > 0 ? lines.map(l => ({ itemId: l.it.id, shippedQty: l.sq })) : undefined
 
     let body = `${order.items.length} 件商品`
@@ -435,7 +446,9 @@ export default function SupplierOrderDetailPage() {
                     </div>
                     <div className="flex items-center gap-1">
                       {(() => {
-                        const upper = Math.max(l.orig + 5, l.orig * 1.1)  // 见 submit 函数注释
+                        const pct = Number(l.it.product?.shipUpperPct ?? 1.10)
+                        const buf = Number(l.it.product?.shipUpperBuffer ?? 5)
+                        const upper = Math.max(l.orig * pct, l.orig + buf)
                         return (
                           <input
                             type="number" inputMode="decimal" step="0.01" min="0" max={upper}
@@ -457,7 +470,7 @@ export default function SupplierOrderDetailPage() {
                   <span className="font-num text-amber-fg">¥{newTotal.toLocaleString()} <span className="text-gray3 line-through ml-1">¥{oldTotal.toLocaleString()}</span></span>
                 </div>
               )}
-              <p className="text-micro text-gray3 mt-2">⚠ 数量改为 0 = 该项不发货 · 允许加量 ≤ 下单+5 件 或 ≤ 110% 取大 (称重/库存浮动) · 超出需让店长补单</p>
+              <p className="text-micro text-gray3 mt-2">⚠ 数量改为 0 = 该项不发货 · 每个商品的上限独立配 (在商品页编辑 "实发量上限") · 默认下单×110% 或 下单+5 件 取大 · 超出需让店长补单</p>
             </div>
             <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
               <label className="text-micro text-gray3 block mb-1">发货备注 (选填)</label>

@@ -45,22 +45,17 @@ export const meituanDataRoutes: FastifyPluginAsync = async (app) => {
   app.get('/stats/payment-breakdown', auth(app), async (req: any, reply) => {
     const denied = requireView(req, reply); if (denied) return denied
     const q = z.object({ date: z.string().optional() }).parse(req.query)
-    let day: Date
-    if (q.date) {
-      day = new Date(`${q.date}T00:00:00.000Z`)
-    } else {
-      day = new Date()
-      day.setUTCHours(0, 0, 0, 0)
-    }
+    // businessTime 是 @db.Date (date-only); 用日期字符串 (YYYY-MM-DD) 让 PG 直接按 DATE 比较, 避开 JS Date → TIMESTAMP 的隐式转换坑
+    const dayStr = q.date || new Date().toISOString().slice(0, 10)
 
     const rows: { payTypeName: string; totalAmount: bigint; orderCount: bigint }[] = await prisma.$queryRaw`
-      SELECT p.pay_type_name as "payTypeName",
+      SELECT p."payTypeName" as "payTypeName",
              SUM(p.payed)::bigint as "totalAmount",
-             COUNT(DISTINCT p.mt_order_id)::bigint as "orderCount"
+             COUNT(DISTINCT p."mtOrderId")::bigint as "orderCount"
       FROM mt_order_payments p
-      JOIN mt_orders o ON o.mt_order_id = p.mt_order_id
-      WHERE o.business_time = ${day}
-      GROUP BY p.pay_type_name
+      JOIN mt_orders o ON o."mtOrderId" = p."mtOrderId"
+      WHERE o."businessTime" = ${dayStr}::date
+      GROUP BY p."payTypeName"
       ORDER BY "totalAmount" DESC
     `
     const total = rows.reduce((s, r) => s + Number(r.totalAmount), 0)
@@ -108,13 +103,13 @@ export const meituanDataRoutes: FastifyPluginAsync = async (app) => {
     since.setUTCHours(0, 0, 0, 0)
 
     const rows: { date: Date; gmv: bigint; orderCount: bigint }[] = await prisma.$queryRaw`
-      SELECT business_time as "date",
+      SELECT "businessTime" as "date",
              SUM(payed)::bigint as "gmv",
              COUNT(*)::bigint as "orderCount"
       FROM mt_orders
-      WHERE business_time >= ${since}
-      GROUP BY business_time
-      ORDER BY business_time ASC
+      WHERE "businessTime" >= ${since}
+      GROUP BY "businessTime"
+      ORDER BY "businessTime" ASC
     `
     return rows.map(r => ({
       date: dayjs(r.date).format('YYYY-MM-DD'),

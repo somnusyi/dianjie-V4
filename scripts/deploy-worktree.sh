@@ -245,24 +245,41 @@ ssh_run "pm2 reload dianjie-v4-web --update-env" >/dev/null
 # cmb 是 Python 进程, reload 后会重跑 module-level 代码 (含 fail-fast 校验)
 # .env 缺关键字段会直接 raise; 启动失败 pm2 会反复重启, 后面验证会抓到
 ssh_run "pm2 reload dianjie-v4-cmb --update-env" >/dev/null
-sleep 4
+sleep 2  # 给 pm2 拉起新进程的最小窗口, 验证步骤自己会 retry
 
-# ── 7. 验证 (4 项必过) ───────────────────────────────
+# ── 7. 验证 (静态产物即时校验 + 服务健康 retry 等 cold-start) ─
 echo ""
 echo "==> [7/8] 部署后验证"
 LOCAL_API_MD5=$(md5 -q apps/api/dist/index.js 2>/dev/null || md5sum apps/api/dist/index.js | awk '{print $1}')
 
+# 静态产物校验立刻可做 (md5/文件存在), 不依赖进程起好
 ssh_run "
   set -e
   test -f $REMOTE/apps/api/dist/routes/cmb.js || { echo '❌ cmb.js 不在'; exit 1; }
   test \$(grep -c cmbRoutes $REMOTE/apps/api/dist/index.js) -ge 1 || { echo '❌ cmbRoutes 没注册'; exit 1; }
   REMOTE_MD5=\$(md5sum $REMOTE/apps/api/dist/index.js | awk '{print \$1}')
   [ \"\$REMOTE_MD5\" = '$LOCAL_API_MD5' ] || { echo \"❌ MD5 不一致 local=$LOCAL_API_MD5 remote=\$REMOTE_MD5\"; exit 1; }
-  test \$(curl -s -o /dev/null -w '%{http_code}' http://localhost:4004/health) = '200' || { echo '❌ /health'; exit 1; }
-  test \$(curl -s -o /dev/null -w '%{http_code}' http://localhost:4004/api/cmb/status) = '401' || { echo '❌ /api/cmb/status'; exit 1; }
-  # cmb 微服务自身健康检查 (Python Flask, fail-fast 校验通过才能 200)
-  test \$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5001/health) = '200' || { echo '❌ cmb /health (Python fail-fast 可能抛了, 看 pm2 logs dianjie-v4-cmb)'; exit 1; }
-  echo '   ✓ 5 项验证全通过'
+  echo '   ✓ 静态产物校验通过 (md5 / cmb.js / cmbRoutes 注册)'
+"
+
+# 服务健康用 retry-with-backoff, 给 cold-start 留时间
+# 历史教训 (2026-05-28): 固定 sleep 4 + 一次 curl, 大 build 重启 + prisma client 加载会跑到 ~10s,
+# 第一次 curl 还在 hang, 脚本误报失败. 实际服务已起好.
+echo "   等服务起好 (最多 30s)..."
+ssh_run "
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    api_ok=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:4004/health 2>/dev/null || echo 000)
+    cmb_relay_ok=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:4004/api/cmb/status 2>/dev/null || echo 000)
+    cmb_self_ok=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:5001/health 2>/dev/null || echo 000)
+    if [ \"\$api_ok\" = '200' ] && [ \"\$cmb_relay_ok\" = '401' ] && [ \"\$cmb_self_ok\" = '200' ]; then
+      echo \"   ✓ 服务健康 (第 \${i} 次 retry, api=\$api_ok cmb-relay=\$cmb_relay_ok cmb-self=\$cmb_self_ok)\"
+      exit 0
+    fi
+    sleep 3
+  done
+  echo \"❌ 服务 30s 内未就绪: api=\$api_ok cmb-relay=\$cmb_relay_ok cmb-self=\$cmb_self_ok\"
+  echo '   pm2 logs dianjie-v4-api --lines 30 自查'
+  exit 1
 "
 
 # ── 8. 标记 deployed commit (verify 通过才写, 失败留旧值) ─

@@ -4,7 +4,7 @@
  */
 'use client'
 import { useEffect, useState } from 'react'
-import { BottomNav, ProgressDots, Chip } from '@/components/v2'
+import { BottomNav, Chip } from '@/components/v2'
 import { GlanceStrip } from '@/components/v2/glance-strip'
 import { EmptyState, SkeletonCard, FriendlyError } from '@/components/v2/skeleton'
 import { apiFetch } from '@/lib/v2-auth'
@@ -34,14 +34,6 @@ type OrderRow = {
   totalAmount: number | string
   supplier: { id: string; name: string }
   createdAt: string
-}
-
-const STATUS_STEPS = [
-  { label: '已发起' }, { label: '接单' }, { label: '在途' }, { label: '送达' }, { label: '验收' },
-]
-// currentIndex = 已完成步骤数 (步 < currentIndex ✓, 步 = currentIndex highlighted)
-const STATUS_TO_IDX: Record<string, number> = {
-  SUBMITTED: 1, CONFIRMED: 2, DELIVERING: 3, PENDING_CONFIRM: 4, RECEIVED: 5, COMPLETED: 5,
 }
 
 export default function ChefInventoryPage() {
@@ -194,21 +186,7 @@ export default function ChefInventoryPage() {
         </div>
       )}
 
-      {inProgress.length > 0 && (
-        <Section title="进行中采购" right={`${inProgress.length} 单 · ¥${Math.round(inProgressAmount).toLocaleString()}`}>
-          <ul className="space-y-2">
-            {inProgress.map(p => (
-              <li key={p.id} className="bg-white rounded-card border border-border p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-h2">{p.supplier?.name || '供应商'} <span className="text-micro text-gray3 ml-1 font-num">#{p.no}</span></span>
-                  <span className="font-num text-h2">¥{Math.round(Number(p.totalAmount || 0)).toLocaleString()}</span>
-                </div>
-                <ProgressDots steps={STATUS_STEPS} currentIndex={STATUS_TO_IDX[p.status] ?? 0} />
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
+      {/* "进行中采购" 段移除 — 已在工作台 (/v2/chef/home) 显示, 避免与库存页重复 */}
 
       <BottomNav
         tabs={[

@@ -37,8 +37,20 @@ async function main() {
     if (!dianjie || !test) throw new Error('dianjie 或 test tenant 不存在')
 
     // ─ 0. 清 test tenant 旧业务流水 ────────────────────
+    // 依赖链按 FK 反向拓扑顺序删:
+    //   ReconciliationItem (FK to Reconciliation + Receipt, 无 Cascade)  ← 之前漏了, 卡 receipt 删不掉, cron fail
+    //   Payment            (FK to Reconciliation, 无 SetNull)
+    //   Reconciliation
+    //   PaymentSchedule    (FK to Receipt)
+    //   ReceiptItem / Receipt
+    //   PurchaseOrderItem / PurchaseOrder
     const oldPOs      = await tx.purchaseOrder.findMany({ where: { tenantId: test.id }, select: { id: true } })
     const oldReceipts = await tx.receipt.findMany({ where: { tenantId: test.id }, select: { id: true } })
+
+    const delReconItems = await tx.reconciliationItem.deleteMany({ where: { reconciliation: { tenantId: test.id } } })
+    const delPayments   = await tx.payment.deleteMany({ where: { tenantId: test.id } })
+    const delRecons     = await tx.reconciliation.deleteMany({ where: { tenantId: test.id } })
+
     await tx.paymentSchedule.deleteMany({ where: { tenantId: test.id } })
     if (oldReceipts.length) {
       await tx.receiptItem.deleteMany({ where: { receiptId: { in: oldReceipts.map(r => r.id) } } })
@@ -48,7 +60,7 @@ async function main() {
       await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: { in: oldPOs.map(p => p.id) } } })
       await tx.purchaseOrder.deleteMany({ where: { tenantId: test.id } })
     }
-    console.log(`✓ wipe test: ${oldPOs.length} PO + ${oldReceipts.length} Receipt`)
+    console.log(`✓ wipe test: ${oldPOs.length} PO + ${oldReceipts.length} Receipt + ${delRecons.count} Recon + ${delReconItems.count} ReconItem + ${delPayments.count} Payment`)
 
     // ─ 1. 映射表 (store / supplier / product / user) ──
     const dStores = await tx.store.findMany({ where: { tenantId: dianjie.id } })

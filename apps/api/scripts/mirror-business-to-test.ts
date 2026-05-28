@@ -51,6 +51,20 @@ async function main() {
       console.log(`✓ test:    ${test.id}\n`)
 
       // ─ 0. 删 test tenant 已有的业务流水 ────────────────
+      // 依赖链 (按 FK 反向拓扑顺序删):
+      //   ReconciliationItem (FK to Reconciliation + Receipt, 无 Cascade)
+      //   Payment            (FK to Reconciliation, optional 无 SetNull)
+      //   Reconciliation
+      //   PaymentSchedule    (FK to Receipt)
+      //   ReceiptItem        (FK to Receipt)
+      //   Receipt
+      //   PurchaseOrderItem  (FK to PurchaseOrder)
+      //   PurchaseOrder
+      // 之前 bug: 漏了 ReconciliationItem, 导致 Receipt 删不掉, cron 整体 fail
+      const delReconItems = await tx.reconciliationItem.deleteMany({ where: { reconciliation: { tenantId: test.id } } })
+      const delPayments   = await tx.payment.deleteMany({ where: { tenantId: test.id } })
+      const delRecons     = await tx.reconciliation.deleteMany({ where: { tenantId: test.id } })
+
       const delSchedules = await tx.paymentSchedule.deleteMany({ where: { tenantId: test.id } })
       // ReceiptItem cascade by Receipt
       const delReceiptsCount = await tx.receipt.count({ where: { tenantId: test.id } })
@@ -65,7 +79,7 @@ async function main() {
         await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: { in: oldPOs.map(p => p.id) } } })
         await tx.purchaseOrder.deleteMany({ where: { tenantId: test.id } })
       }
-      console.log(`✓ 清 test tenant 旧业务流水: ${oldPOs.length} PO + ${delReceiptsCount} Receipt + ${delSchedules.count} Schedule\n`)
+      console.log(`✓ 清 test tenant 旧业务流水: ${oldPOs.length} PO + ${delReceiptsCount} Receipt + ${delSchedules.count} Schedule + ${delRecons.count} Reconciliation + ${delReconItems.count} ReconItem + ${delPayments.count} Payment\n`)
 
       // ─ 1. 建映射表 (store / supplier / product / user) ──
       console.log('--- 建映射表 ---')

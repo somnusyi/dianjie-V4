@@ -41,12 +41,18 @@ importers:
       '@paralleldrive/cuid2':
         specifier: ^2.3.1
         version: 2.3.1
+      '@prisma/client':
+        specifier: ^5.9.1
+        version: 5.22.0(prisma@5.22.0)
       '@sentry/node':
         specifier: ^10.48.0
         version: 10.48.0
       ali-oss:
         specifier: ^6.23.0
         version: 6.23.0
+      axios:
+        specifier: ^1.6.0
+        version: 1.15.0
       bcryptjs:
         specifier: ^2.4.3
         version: 2.4.3

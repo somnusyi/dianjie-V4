@@ -124,6 +124,38 @@ rsync_run scripts/                                "$SERVER:$REMOTE/scripts/" | t
 rsync_run --exclude='__pycache__/' --exclude='*.pyc' --exclude='.env' \
           apps/cmb/                               "$SERVER:$REMOTE/apps/cmb/" | tail -2
 
+# apps/api/package.json + packages/db (源码 + index.js + prisma) — 让 ECS install 依赖时用最新
+# 历史教训 (2026-05-28): 同事 commit 加 axios / @prisma/client / cuid2 等新依赖到 apps/api/package.json,
+# 但 deploy 只同步 dist 不同步 package.json → ECS node_modules 永远跟 git 不一致 → 运行时 MODULE_NOT_FOUND
+# 排除 packages/db/node_modules (ECS 自己维护) 和 prisma client 生成产物
+rsync_run apps/api/package.json                   "$SERVER:$REMOTE/apps/api/package.json" | tail -2
+rsync_run --exclude='node_modules' --exclude='.env' \
+          packages/db/                            "$SERVER:$REMOTE/packages/db/" | tail -2
+
+# ── 5.5 ECS 装新依赖 (用 /tmp 干净环境避开 workspace:* 协议) ───
+# pnpm workspace:* 协议在生产端解析不动 (生产没 workspace 配置), npm 也不认.
+# 方案: /tmp 临时复制 package.json → 删 workspace: 行 → npm install → cp 缺失的包到
+# apps/api/node_modules, 保留 @dianjie/db symlink. 全套耗时 ~30s.
+echo ""
+echo "==> [5.5/8] ECS 装/补 apps/api 依赖 (axios / cuid2 / 任何 package.json 新加的)"
+ssh_run "
+  set -e
+  rm -rf /tmp/api-rebuild
+  mkdir -p /tmp/api-rebuild
+  cd /tmp/api-rebuild
+  cp $REMOTE/apps/api/package.json ./
+  sed -i '/workspace:/d' package.json   # npm 不支持 workspace: 协议, 临时删
+  npm install --no-audit --no-fund --silent 2>&1 | tail -2
+  # cp 缺失的包 (--no-clobber 不覆盖已有), 保留 @dianjie/db symlink
+  cp -rn node_modules/* $REMOTE/apps/api/node_modules/ 2>/dev/null || true
+  # 确保 @dianjie/db symlink 完好
+  if [ ! -L $REMOTE/apps/api/node_modules/@dianjie/db ]; then
+    mkdir -p $REMOTE/apps/api/node_modules/@dianjie
+    ln -sf $REMOTE/packages/db $REMOTE/apps/api/node_modules/@dianjie/db
+  fi
+  echo '   ✓ apps/api 依赖同步完成'
+"
+
 # ── 6. pm2 reload (api + web + cmb) ────────────────
 echo ""
 echo "==> [6/8] pm2 reload api + web + cmb"

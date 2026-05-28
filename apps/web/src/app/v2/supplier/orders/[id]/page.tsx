@@ -93,8 +93,10 @@ export default function SupplierOrderDetailPage() {
     })
     const newTotal = lines.reduce((s, l) => s + l.sq * Number(l.it.unitPrice), 0)
     const changed = lines.filter(l => l.changed)
-    const overLimit = lines.find(l => l.sq > Number(l.it.quantity) * 1.1 + 0.0001)
-    if (overLimit) { setError(`${overLimit.it.product?.name || ''} 实发超下单 110% 上限 (最多 ${(Number(overLimit.it.quantity)*1.1).toFixed(2)})`); return }
+    // 实发上限: max(下单+5, 下单×1.1) — 解决小数量商品 110% 卡死 (2026-05-28 客户反馈)
+    const shipUpper = (ordered: number) => Math.max(ordered + 5, ordered * 1.1)
+    const overLimit = lines.find(l => l.sq > shipUpper(Number(l.it.quantity)) + 0.0001)
+    if (overLimit) { setError(`${overLimit.it.product?.name || ''} 实发超上限 ${shipUpper(Number(overLimit.it.quantity)).toFixed(2)} (下单 ${overLimit.it.quantity}, 允许加量 ≤ 下单+5 或 ≤ 110% 取大)`); return }
     const itemsBody = changed.length > 0 ? lines.map(l => ({ itemId: l.it.id, shippedQty: l.sq })) : undefined
 
     let body = `${order.items.length} 件商品`
@@ -432,12 +434,17 @@ export default function SupplierOrderDetailPage() {
                       <div className="text-micro text-gray3">下单 {l.orig} {l.it.product?.unit} · ¥{l.it.unitPrice}</div>
                     </div>
                     <div className="flex items-center gap-1">
-                      <input
-                        type="number" inputMode="decimal" step="0.01" min="0" max={l.orig * 1.1}
-                        value={l.sq}
-                        onChange={e => setShipQty(prev => ({ ...prev, [l.it.id]: Math.max(0, Math.min(l.orig * 1.1, Number(e.target.value) || 0)) }))}
-                        className={`w-20 text-right font-num bg-bg rounded-chip px-2 py-1 outline-none ${l.changed ? (l.sq > l.orig ? 'border border-red text-red-fg' : 'border border-amber text-amber-fg') : ''}`}
-                      />
+                      {(() => {
+                        const upper = Math.max(l.orig + 5, l.orig * 1.1)  // 见 submit 函数注释
+                        return (
+                          <input
+                            type="number" inputMode="decimal" step="0.01" min="0" max={upper}
+                            value={l.sq}
+                            onChange={e => setShipQty(prev => ({ ...prev, [l.it.id]: Math.max(0, Math.min(upper, Number(e.target.value) || 0)) }))}
+                            className={`w-20 text-right font-num bg-bg rounded-chip px-2 py-1 outline-none ${l.changed ? (l.sq > l.orig ? 'border border-red text-red-fg' : 'border border-amber text-amber-fg') : ''}`}
+                          />
+                        )
+                      })()}
                       <span className="text-micro text-gray3">{l.it.product?.unit}</span>
                     </div>
                     <span className="font-num text-caption w-20 text-right">¥{(l.sq * Number(l.it.unitPrice)).toFixed(2)}</span>
@@ -450,7 +457,7 @@ export default function SupplierOrderDetailPage() {
                   <span className="font-num text-amber-fg">¥{newTotal.toLocaleString()} <span className="text-gray3 line-through ml-1">¥{oldTotal.toLocaleString()}</span></span>
                 </div>
               )}
-              <p className="text-micro text-gray3 mt-2">⚠ 数量改为 0 = 该项不发货 · 允许加量 ≤ 下单 110% (称重/库存浮动) · 超 110% 需让店长补单</p>
+              <p className="text-micro text-gray3 mt-2">⚠ 数量改为 0 = 该项不发货 · 允许加量 ≤ 下单+5 件 或 ≤ 110% 取大 (称重/库存浮动) · 超出需让店长补单</p>
             </div>
             <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
               <label className="text-micro text-gray3 block mb-1">发货备注 (选填)</label>

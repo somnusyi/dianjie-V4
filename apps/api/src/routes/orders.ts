@@ -410,10 +410,19 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         if (!orig) throw { statusCode: 400, message: `行 ${s.itemId} 不属于本订单` }
         const sq = Number(s.shippedQty)
         if (!Number.isFinite(sq) || sq < 0) throw { statusCode: 400, message: `${orig.product?.name || s.itemId} 数量非法` }
-        // 允许实发超过下单 ≤ 10% (称重浮动 + 库存余量场景), 超 10% 拒绝避免强卖
+        // 允许实发超过下单的上限: max(下单 + 5, 下单 × 1.1)
+        // 双阈值原因 (2026-05-28 客户反馈调整): 纯 110% 对小数量商品太死板
+        //   下单 1 件时 110% = 1.1 → 想发 2 件被拒
+        //   下单 100 件时 110% = 110 → 加 10 件合理
+        // 双阈值: 小数量按绝对量兜底 (+5), 大数量按百分比兜底 (×1.1)
+        //   下单 1 → 上限 max(6, 1.1) = 6 ✓
+        //   下单 10 → 上限 max(15, 11) = 15
+        //   下单 50 → 上限 max(55, 55) = 55
+        //   下单 100 → 上限 max(105, 110) = 110 ✓
         const ordered = Number(orig.quantity)
-        if (sq > ordered * 1.1 + 0.0001) {
-          throw { statusCode: 400, message: `${orig.product?.name || s.itemId} 实发 ${sq} 超过下单 ${ordered} 的 110%, 上限 ${(ordered*1.1).toFixed(2)}, 请联系下单人补单` }
+        const upper = Math.max(ordered + 5, ordered * 1.1)
+        if (sq > upper + 0.0001) {
+          throw { statusCode: 400, message: `${orig.product?.name || s.itemId} 实发 ${sq} 超过上限 ${upper.toFixed(2)} (下单 ${ordered}, 允许加量 ≤ 下单+5 或 ≤ 下单×110% 取大), 请联系下单人补单` }
         }
         shippedMap.set(s.itemId, sq)
       }

@@ -54,15 +54,23 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role, supplierId } = req.user
     const where: any = { tenantId }
     if (category) where.category = category
-    if (status) where.status = status
+    // 状态过滤策略:
+    // - 供应商账号: 看全部状态 (要管理 ENABLED / DISABLED / PENDING_APPROVAL / PENDING_DISABLE)
+    // - 其他角色 (CHEF / CHEF_DIRECTOR / BOSS / PURCHASER 等): 默认只看 ENABLED,
+    //   避免下单 / 盘点页看到已停售商品
+    //   历史 bug (2026-05-28): 供应商下架商品后, chef 下单页还能看到, 下到接单时才被 orders.ts:298 拦住报"已停售"
+    // - 任何角色显式传 ?status=XXX 仍按显式值过滤 (admin 排查时可以看全部)
+    const effectiveStatus = status ?? (isSupplierRole(role) ? undefined : 'ENABLED')
+    if (effectiveStatus) where.status = effectiveStatus
     // 供应商账号只能看自己的商品
     if (isSupplierRole(role) && supplierId) where.supplierId = supplierId
 
     // 不传 page 时返回全量（兼容下拉框），缓存 10 分钟
     // 注意 cache key 加上 supplier scope，避免供应商之间互相污染
+    // cache key 用 effectiveStatus, 这样默认的 ENABLED 跟显式 ?status=ENABLED 共享同一 bucket
     if (!page) {
       const scopeKey = isSupplierRole(role) ? `sup:${supplierId}` : 'all'
-      return cached(`products:full:${tenantId}:${scopeKey}:${category || 'all'}:${status || 'all'}`, 600, () =>
+      return cached(`products:full:${tenantId}:${scopeKey}:${category || 'all'}:${effectiveStatus || 'all'}`, 600, () =>
         prisma.product.findMany({
           where,
           include: { supplier: { select: { id: true, name: true } } },

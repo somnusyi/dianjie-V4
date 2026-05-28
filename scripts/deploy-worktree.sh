@@ -113,6 +113,11 @@ echo "==> [5/8] rsync 上传"
 rsync_run apps/api/dist/                          "$SERVER:$REMOTE/apps/api/dist/" | tail -2
 rsync_run apps/web/.next/standalone/apps/web/     "$SERVER:$REMOTE/apps/web/apps/web/" | tail -2
 rsync_run apps/web/.next/static/                  "$SERVER:$REMOTE/apps/web/apps/web/.next/static/" | tail -2
+# 同步 scripts — cron 跑的 mirror-business-to-test.cjs / e2e-full-flow.js 等
+# 历史教训: scripts 不同步会出现"代码已 push 但服务器仍跑旧版本"的脏状态
+# (e.g. 2026-05-28 mirror cron 修了 7 天没生效, 因为 cjs 没拷过去)
+rsync_run apps/api/scripts/                       "$SERVER:$REMOTE/apps/api/scripts/" | tail -2
+rsync_run scripts/                                "$SERVER:$REMOTE/scripts/" | tail -2
 
 # ── 6. pm2 reload (两个进程都要 reload 一次, 防止某次不响应) ──
 echo ""

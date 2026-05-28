@@ -156,6 +156,25 @@ ssh_run "
   echo '   ✓ apps/api 依赖同步完成'
 "
 
+# ── 5.6 ECS prisma generate + 同步到 apps/api/node_modules/.prisma ───
+# 历史教训 (2026-05-28): 同事在 schema 里加了 PAYMENT_REQUEST enum 值,
+# DB migrate 上去了, 但 ECS @prisma/client 还是旧 generated 版本 →
+# 老板审批报 "Value 'PAYMENT_REQUEST' not found in enum 'DocumentType'".
+# prisma migrate deploy 不会自动 regenerate client, 必须显式 prisma generate.
+# 每次 schema 改 (加表 / 加字段 / 加 enum 值) 都得跑这步.
+echo ""
+echo "==> [5.6/8] ECS prisma generate + 同步 client 到 apps/api"
+ssh_run "
+  set -e
+  cd $REMOTE/packages/db
+  export \$(grep -E '^DATABASE_URL=' $REMOTE/.env | xargs)
+  npx -y prisma@5.22.0 generate --schema=./prisma/schema.prisma 2>&1 | tail -3
+  # 把新 generated client 同步到 apps/api 的 node_modules (运行时实际用的位置)
+  rm -rf $REMOTE/apps/api/node_modules/.prisma
+  cp -r $REMOTE/packages/db/node_modules/.prisma $REMOTE/apps/api/node_modules/.prisma
+  echo '   ✓ prisma client 已 regenerate + 同步到 apps/api'
+"
+
 # ── 6. pm2 reload (api + web + cmb) ────────────────
 echo ""
 echo "==> [6/8] pm2 reload api + web + cmb"

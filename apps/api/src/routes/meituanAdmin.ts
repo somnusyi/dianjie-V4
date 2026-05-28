@@ -12,6 +12,13 @@ const requireAdmin = (req: any, reply: any) => {
   }
 }
 
+const requireView = (req: any, reply: any) => {
+  const role = req.user?.role
+  if (!['SUPER_ADMIN', 'ADMIN', 'BOSS', 'MANAGER', 'FINANCE'].includes(role)) {
+    return reply.status(403).send({ error: '无权查看美团数据' })
+  }
+}
+
 /**
  * 美团工单 markdown 生成器 — 输出可直接粘贴到美团 TT 工单的 4-字段 markdown
  */
@@ -245,7 +252,10 @@ export const meituanAdminRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // ── GET /api/admin/meituan/health ──
-  app.get('/health', auth(app), async () => {
+  app.get('/health', auth(app), async (req: any, reply) => {
+    const denied = requireView(req, reply)
+    if (denied) return denied
+
     const orgId = Number(process.env.MEITUAN_ORG_ID || 0)
     const apiPath = '/rms/pos/api/v2/poi/orders/instore/query'
 
@@ -344,6 +354,20 @@ export const meituanAdminRoutes: FastifyPluginAsync = async (app) => {
     }
     if (since >= until) {
       return reply.status(400).send({ error: 'since 必须早于 until' })
+    }
+
+    const MAX_LOOKBACK_DAYS = 365
+    const MAX_FUTURE_HOURS = 24
+    const now = new Date()
+    if (since < new Date(now.getTime() - MAX_LOOKBACK_DAYS * 24 * 3600_000)) {
+      return reply.status(400).send({ error: `since 不能早于 ${MAX_LOOKBACK_DAYS} 天前 (避免误传)` })
+    }
+    if (until > new Date(now.getTime() + MAX_FUTURE_HOURS * 3600_000)) {
+      return reply.status(400).send({ error: `until 不能晚于现在 +${MAX_FUTURE_HOURS} 小时` })
+    }
+    const spanDays = (until.getTime() - since.getTime()) / (24 * 3600_000)
+    if (spanDays > 90) {
+      return reply.status(400).send({ error: `单次 backfill 跨度 ${spanDays.toFixed(1)} 天 > 90 天上限 (分批跑)` })
     }
 
     setImmediate(async () => {

@@ -17,6 +17,8 @@ type Order = {
   createdAt: string; expectedDate: string
   store: { id: string; name: string }
   items?: any[]
+  chefAckAt?: string | null      // DELIVERING 期间客户发的验收单 (有值=待供应商确认)
+  chefAckImages?: string[]
 }
 
 function timeAgo(iso: string) {
@@ -42,8 +44,15 @@ export default function SupplierHomePage() {
   if (!data) return <LoadingScreen />
   const { greeting, today } = greetingFor(data.user?.name)
   const ext = (data.hero as any)?.supplierExt || {}
-  // 待处理 = 需要供应商动作的订单 (待接单 + 待发货). 已发货等门店签收的不算待处理
-  const pending = (orders || []).filter(o => ['SUBMITTED', 'CONFIRMED'].includes(o.status))
+  // 待处理 = 需要供应商动作的订单:
+  //   SUBMITTED      → 待接单
+  //   CONFIRMED      → 待发货
+  //   DELIVERING + chefAckAt → 客户已发验收单, 待供应商确认送达 (2026-05-29 客户反馈)
+  // 已发货等门店签收 (PENDING_CONFIRM) 不算待处理
+  const pending = (orders || []).filter(o =>
+    ['SUBMITTED', 'CONFIRMED'].includes(o.status) ||
+    (o.status === 'DELIVERING' && o.chefAckAt)
+  )
   // 在途 = 已发货等门店签收
   const shipping = (orders || []).filter(o => o.status === 'PENDING_CONFIRM')
 
@@ -99,14 +108,23 @@ export default function SupplierHomePage() {
         )}
         <ul className="space-y-2">
           {pending.slice(0, 5).map(o => {
-            const isUrgent = o.status === 'SUBMITTED'
-            const tone = isUrgent ? 'red' : 'orange'
-            const label = isUrgent ? '待接单' : '待发货'
-            const cta = isUrgent ? '去接单 ›' : '去发货 ›'
+            // 3 种待处理状态分别配 label/cta/颜色
+            const isSubmitted = o.status === 'SUBMITTED'
+            const isAckPending = o.status === 'DELIVERING' && o.chefAckAt
+            const tone: 'red' | 'orange' | 'amber' = isSubmitted ? 'red' : isAckPending ? 'amber' : 'orange'
+            const label = isSubmitted ? '待接单'
+                        : isAckPending ? '📷 验收单待确认'
+                                       : '待发货'
+            const cta = isSubmitted ? '去接单 ›'
+                      : isAckPending ? '查看验收单 ›'
+                                     : '去发货 ›'
+            const stripeCls = isSubmitted ? 'before:bg-red'
+                            : isAckPending ? 'before:bg-amber'
+                                           : 'before:bg-orange'
             return (
               <li key={o.id}
                   onClick={() => location.href = `/v2/supplier/orders/${o.id}`}
-                  className={`relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full ${isUrgent ? 'before:bg-red' : 'before:bg-orange'} cursor-pointer hover:bg-bg-warm active:bg-bg transition-colors`}>
+                  className={`relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full ${stripeCls} cursor-pointer hover:bg-bg-warm active:bg-bg transition-colors`}>
                 <div className="flex items-center gap-2 mb-1">
                   <Chip tone={tone as any}>{label}</Chip>
                   <span className="text-micro text-gray3">{timeAgo(o.createdAt)}</span>

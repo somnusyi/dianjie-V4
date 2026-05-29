@@ -113,9 +113,10 @@ export default function ChefPurchasePage() {
           {orders && inProgress.length === 0 && <li className="text-caption text-gray3 text-center py-4">暂无进行中订单</li>}
           {inProgress.map((o) => {
             const stepIdx = STATUS_TO_STEP[o.status] ?? 1
+            const showAckBtn = o.status === 'DELIVERING'
             return (
-              <li key={o.id}>
-                <a href={`/v2/chef/purchase/po-success/${o.id}`} className="block bg-white rounded-card border border-border p-3">
+              <li key={o.id} className="bg-white rounded-card border border-border p-3">
+                <a href={`/v2/chef/purchase/po-success/${o.id}`} className="block">
                   <div className="flex items-center justify-between mb-1 gap-2">
                     <span className="text-h2 flex items-center gap-1 min-w-0 flex-wrap">
                       <span className="truncate">{o.supplier?.name}</span>
@@ -138,6 +139,22 @@ export default function ChefPurchasePage() {
                     currentIndex={stepIdx}
                   />
                 </a>
+                {/* DELIVERING (在途) 期间显示发验收单入口 */}
+                {showAckBtn && (
+                  <div className="mt-2 pt-2 border-t border-border">
+                    {o.chefAckAt ? (
+                      <div className="text-caption text-gray2">
+                        ✓ 验收单已发 <span className="text-gray3">({o.chefAckImages?.length || 0} 张, {new Date(o.chefAckAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}) · 等供应商确认</span>
+                        <a href={`/v2/chef/purchase/${o.id}/ack`} className="ml-2 text-amber-fg">重发 ›</a>
+                      </div>
+                    ) : (
+                      <a href={`/v2/chef/purchase/${o.id}/ack`}
+                        className="block w-full py-2 bg-amber/10 text-amber-fg text-button rounded-cta text-center">
+                        📷 货已收到? 发验收单给供应商
+                      </a>
+                    )}
+                  </div>
+                )}
               </li>
             )
           })}

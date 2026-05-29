@@ -507,6 +507,39 @@ export default function SupplierOrderDetailPage() {
       {/* DELIVERING (在途) — 司机到门店后填备注 + 点「确认送达」启动 24h 倒计时 */}
       {order.status === 'DELIVERING' && (
         <>
+          {/* 客户验收单 — 2026-05-29 客户反馈: 厨师收货后传照片+备注, 供应商看完确认无误才点送达 */}
+          {order.chefAckAt ? (
+            <div className="mx-4 mt-3 bg-green-50 border border-green-300 rounded-card p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-h2 text-green-700">📷 客户已发验收单</span>
+                <span className="text-micro text-gray3">{new Date(order.chefAckAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+              </div>
+              {order.chefAckImages?.length > 0 && (
+                <div className="grid grid-cols-3 gap-2 mb-2">
+                  {order.chefAckImages.map((url: string, i: number) => (
+                    <a key={i} href={url} target="_blank" rel="noopener noreferrer" className="aspect-square bg-bg rounded overflow-hidden border border-border">
+                      <img src={url} alt={`验收照 ${i + 1}`} className="w-full h-full object-cover" />
+                    </a>
+                  ))}
+                </div>
+              )}
+              {order.chefAckNote && (
+                <div className="text-caption text-gray2 bg-white rounded p-2 border border-border">
+                  <span className="text-micro text-gray3">客户备注: </span>
+                  {order.chefAckNote}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="mx-4 mt-3 bg-amber/10 border border-amber/40 rounded-card p-3">
+              <div className="text-caption text-amber-fg">
+                ⏳ 客户还未发验收单
+              </div>
+              <p className="text-micro text-gray3 mt-1">
+                建议等客户收货后确认无误再点送达; 如急可强制送达 (24h 倒计时会触发自动收货)
+              </p>
+            </div>
+          )}
           {/* 送达备注输入 — 在固定底部 bar 上方 */}
           <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
             <label className="text-micro text-gray3 block mb-1">送达备注 (选填, 比如 司机姓名 / 签收人)</label>
@@ -518,11 +551,14 @@ export default function SupplierOrderDetailPage() {
                style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom))' }}>
             <button
               onClick={() => {
+                const hasAck = !!order.chefAckAt
                 openConfirm({
-                  title: `确认 ${order.no} 已送达门店?`,
-                  body: `提交后系统会通知门店验收, 24h 内未确认将自动收货${deliverNote ? `\n\n备注: ${deliverNote}` : ''}`,
-                  confirmLabel: '确认送达',
-                  tone: 'primary',
+                  title: hasAck ? `确认 ${order.no} 已送达门店?` : `客户还没发验收单, 仍要送达?`,
+                  body: hasAck
+                    ? `客户已发验收单, 确认收货无误 — 提交后启动 24h 自动收货${deliverNote ? `\n\n备注: ${deliverNote}` : ''}`
+                    : `⚠ 客户还没发验收单, 强制送达会启动 24h 自动收货倒计时, 如客户有异议可能撞期。建议等客户发验收单后再点。${deliverNote ? `\n\n备注: ${deliverNote}` : ''}`,
+                  confirmLabel: hasAck ? '确认送达' : '强制送达',
+                  tone: hasAck ? 'primary' : 'danger',
                   onConfirm: async () => {
                     setSubmitting(true)
                     try {

@@ -1003,6 +1003,12 @@ model PurchaseOrder {
   autoConfirmed Boolean  @default(false)      // 是否超时自动确认
   receiptId     String?                       // 关联生成的入库单（Receipt.purchaseOrderId反向关联）
 
+  // 厨师验收单 (2026-05-29 客户反馈): DELIVERING 期间厨师收货后传照片+备注给供应商,
+  // 供应商看完确认无误才点"送达"。软约束 — 没传也能送达, 但 supplier 端弹确认。
+  chefAckImages String[]  @default([])         // OSS URL 数组, 上限 5 张 (前端限)
+  chefAckAt     DateTime?                      // 厨师发送验收单时间
+  chefAckNote   String?                        // 备注 (前端要求必填非空)
+
   createdById   String
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt

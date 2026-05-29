@@ -554,6 +554,61 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     return { success: true, autoConfirmAt }
   })
 
+  // ── 厨师发送验收单 ─ DELIVERING 状态下, 收到货物后传照片+备注给供应商 ──
+  // 2026-05-29 客户反馈: 供应商点"送达"前需要看到客户的验收单 (软约束 — 不强制阻断)
+  // 限制: 上限 3 张图 + 备注必填非空 (前端 + 后端双校验)
+  app.patch('/:id/chef-ack', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
+    const { tenantId, userId, role, storeId } = req.user
+    const { id } = req.params as any
+    const { images, note } = (req.body || {}) as any
+    if (!['KITCHEN_LEAD', 'MANAGER', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+      return reply.status(403).send({ error: '仅厨师长 / 店长 / 总厨 / 老板可发验收单' })
+    }
+    if (!Array.isArray(images) || images.length === 0) {
+      return reply.status(400).send({ error: '请至少上传 1 张验收照片' })
+    }
+    if (images.length > 5) {
+      return reply.status(400).send({ error: '验收单最多 5 张照片' })
+    }
+    if (typeof note !== 'string' || note.trim().length === 0) {
+      return reply.status(400).send({ error: '备注不能为空' })
+    }
+    if (note.length > 500) {
+      return reply.status(400).send({ error: '备注最长 500 字' })
+    }
+    const where: any = { id, tenantId, status: 'DELIVERING' }
+    // 厨师/店长只能给自己绑定门店的单发验收单
+    if (['KITCHEN_LEAD', 'MANAGER'].includes(role) && storeId) where.storeId = storeId
+    const order = await prisma.purchaseOrder.findFirst({ where })
+    if (!order) return reply.status(400).send({ error: '订单不存在 / 状态非"在途"不可发验收单' })
+    await prisma.purchaseOrder.update({
+      where: { id },
+      data: {
+        chefAckImages: images,
+        chefAckAt: new Date(),
+        chefAckNote: note.trim(),
+      },
+    })
+    await prisma.opLog.create({
+      data: {
+        tenantId, userId,
+        action: `厨师发送验收单 (${images.length} 张照片): ${note.trim().slice(0, 80)}`,
+        target: order.no, entityType: 'PurchaseOrder', targetId: id,
+        metadata: { imagesCount: images.length },
+      },
+    })
+    const supplier = await prisma.supplier.findUnique({ where: { id: order.supplierId }, select: { name: true } })
+    const store = await prisma.store.findUnique({ where: { id: order.storeId }, select: { name: true } })
+    void sendNotification({
+      tenantId, recipientRole: 'SUPPLIER_OWNER' as any,
+      type: 'CHEF_ACK_SENT' as any,
+      title: `${store?.name || '门店'} 已发验收单 ${order.no}`,
+      body: `客户已收货并发送验收单 (${images.length} 张照片), 请查看后点"已送达"`,
+      refType: 'PurchaseOrder', refId: id,
+    })
+    return { success: true, ackedAt: new Date() }
+  })
+
   // ── 门店确认收货（完全一致）──────────────────────
   app.patch('/:id/receive', { preHandler: [(app as any).authenticate] }, async (req: any) => {
     const { tenantId, userId, role, storeId } = req.user

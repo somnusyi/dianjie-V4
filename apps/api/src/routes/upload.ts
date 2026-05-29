@@ -15,7 +15,7 @@ const MEDIA_MIMES = [...IMAGE_MIMES, ...VIDEO_MIMES]
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const MAX_VIDEO_BYTES = 30 * 1024 * 1024
 
-const ALLOWED_CATEGORIES = new Set(['loss-claims', 'invoices', 'capital', 'documents', 'reimbursements', 'misc'])
+const ALLOWED_CATEGORIES = new Set(['loss-claims', 'invoices', 'capital', 'documents', 'reimbursements', 'misc', 'chef-ack'])
 
 function ossClient() {
   return new OSS({
@@ -106,10 +106,15 @@ export async function uploadRoutes(app: FastifyInstance) {
 
   // 通用路径：支持图片 + PDF, category 通过 query 指定
   // 使用：POST /api/upload?category=invoices
-  // 例外: category=loss-claims 允许图片+视频 (供应商客户要求加视频证据), 不接 PDF
+  // 例外:
+  //   - category=loss-claims 允许图片+视频 (供应商客户要求加视频证据), 不接 PDF
+  //   - category=chef-ack    只接图片 (验收单就是拍照, PDF/视频没意义)
   app.post('/upload', { preHandler: [(app as any).authenticate] }, (req: any, reply: any) => {
     const category = (req.query?.category || 'misc') as string
-    const allowedMimes = category === 'loss-claims' ? MEDIA_MIMES : DOC_MIMES
+    const allowedMimes =
+      category === 'loss-claims' ? MEDIA_MIMES
+        : category === 'chef-ack' ? IMAGE_MIMES
+          : DOC_MIMES
     return uploadOne(req, reply, { allowedMimes, category })
   })
 

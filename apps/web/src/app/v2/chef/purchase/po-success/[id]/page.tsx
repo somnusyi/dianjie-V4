@@ -105,6 +105,34 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
         </ul>
       </Section>
 
+      {/* 厨师发过的验收单 — DELIVERING 在途时可发, 后续状态保留展示 */}
+      {po.chefAckAt && (
+        <Section title="我已发的验收单">
+          <div className="bg-white rounded-card border border-border p-3">
+            <div className="text-micro text-gray3 mb-2">
+              发送时间: {new Date(po.chefAckAt).toLocaleString('zh-CN')}
+              {' · '}
+              {po.chefAckImages?.length || 0} 张照片
+            </div>
+            {po.chefAckImages?.length > 0 && (
+              <div className="flex gap-2 overflow-x-auto mb-2">
+                {po.chefAckImages.map((url: string, i: number) => (
+                  <button key={i} type="button" onClick={() => setZoomImg(url)} className="shrink-0">
+                    <img src={url} alt={`验收照 ${i + 1}`} className="w-20 h-20 object-cover rounded border border-border" />
+                  </button>
+                ))}
+              </div>
+            )}
+            {po.chefAckNote && (
+              <div className="text-caption text-gray2 bg-bg rounded p-2">
+                <span className="text-micro text-gray3">备注: </span>
+                {po.chefAckNote}
+              </div>
+            )}
+          </div>
+        </Section>
+      )}
+
       {po.lossClaims?.length > 0 && (
         <Section title="报损">
           <ul className="bg-white rounded-card border border-border divide-y divide-border">
@@ -179,7 +207,15 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
             去验收
           </button>
         )}
-        {!isPendingConfirm && po.status !== 'CANCELLED' && po.status !== 'SUBMITTED' && (
+        {/* DELIVERING (在途) → 发验收单入口. 已发过的话文案变成"重发验收单" */}
+        {po.status === 'DELIVERING' && (
+          <button
+            onClick={() => router.push(`/v2/chef/purchase/${po.id}/ack`)}
+            className={`flex-1 py-3 rounded-cta text-button ${po.chefAckAt ? 'bg-white border border-amber text-amber-fg' : 'bg-amber text-white'}`}>
+            {po.chefAckAt ? '重发验收单' : '📷 发验收单'}
+          </button>
+        )}
+        {!isPendingConfirm && po.status !== 'CANCELLED' && po.status !== 'SUBMITTED' && po.status !== 'DELIVERING' && (
           <button onClick={() => router.push('/v2/chef/purchase/new')} className="flex-1 py-3 bg-ink text-white rounded-cta text-button">
             再发一单
           </button>

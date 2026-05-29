@@ -515,13 +515,17 @@ export default function SupplierOrderDetailPage() {
                 <span className="text-micro text-gray3">{new Date(order.chefAckAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
               </div>
               {order.chefAckImages?.length > 0 && (
-                <div className="grid grid-cols-3 gap-2 mb-2">
-                  {order.chefAckImages.map((url: string, i: number) => (
-                    <a key={i} href={url} target="_blank" rel="noopener noreferrer" className="aspect-square bg-bg rounded overflow-hidden border border-border">
-                      <img src={url} alt={`验收照 ${i + 1}`} className="w-full h-full object-cover" />
-                    </a>
-                  ))}
-                </div>
+                <>
+                  <div className="text-micro text-gray3 mb-1">客户验收照 {order.chefAckImages.length} 张 · 点击放大</div>
+                  <div className="grid grid-cols-3 gap-2 mb-2">
+                    {order.chefAckImages.map((url: string, i: number) => (
+                      <button key={i} type="button" onClick={() => setZoomImg(url)}
+                        className="aspect-square bg-bg rounded overflow-hidden border border-border">
+                        <img src={url} alt={`验收照 ${i + 1}`} className="w-full h-full object-cover" />
+                      </button>
+                    ))}
+                  </div>
+                </>
               )}
               {order.chefAckNote && (
                 <div className="text-caption text-gray2 bg-white rounded p-2 border border-border">

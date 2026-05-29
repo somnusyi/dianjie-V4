@@ -112,18 +112,16 @@ export default function ChefHomePage() {
           {orders === null && <li className="text-caption text-gray3 text-center py-4">加载中…</li>}
           {orders !== null && inProgress.length === 0 && <li className="text-caption text-gray3 text-center py-4">暂无进行中订单</li>}
           {inProgress.slice(0, 3).map((o: any) => {
-            // 按状态路由:
+            // 按状态路由: 点订单卡始终去订单详情 (po-success). DELIVERING 在途的
+            // 发验收单入口在详情页底部按钮栏, 不在这里强制跳.
             //   PENDING_CONFIRM (送达) → 签收页 (含报损)
-            //   DELIVERING (在途) 且未发验收单 → 发验收单页
-            //   其它 → 订单详情看进度
+            //   其它 → 订单详情
             const canReceive = o.status === 'PENDING_CONFIRM'
             const needAck = o.status === 'DELIVERING' && !o.chefAckAt
             const ackedDelivering = o.status === 'DELIVERING' && o.chefAckAt
             const target = canReceive
               ? `/v2/chef/purchase/${o.id}/receive`
-              : needAck
-                ? `/v2/chef/purchase/${o.id}/ack`
-                : `/v2/chef/purchase/po-success/${o.id}`
+              : `/v2/chef/purchase/po-success/${o.id}`
             const chipCls = canReceive ? 'text-red-fg bg-red-bg'
                           : needAck    ? 'text-amber-fg bg-amber/10'
                                        : 'text-orange-fg bg-orange-bg'
@@ -140,7 +138,7 @@ export default function ChefHomePage() {
                         <span className="text-micro text-amber-fg bg-amber/10 px-1.5 rounded-chip">点击去签收 / 报损</span>
                       )}
                       {needAck && (
-                        <span className="text-micro text-amber-fg bg-amber/10 px-1.5 rounded-chip">📷 货已到? 点击发验收单</span>
+                        <span className="text-micro text-amber-fg bg-amber/10 px-1.5 rounded-chip">📷 货已到? 进详情发验收单</span>
                       )}
                       {ackedDelivering && (
                         <span className="text-micro text-gray3 bg-bg px-1.5 rounded-chip">✓ 验收单已发, 等供应商</span>

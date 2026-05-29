@@ -1,11 +1,11 @@
 /**
  * 厨师长 · 发验收单页 (2026-05-29 客户反馈)
  *
- * 流程: PO 在 DELIVERING 状态时, 厨师收到货物 → 进这个页面 → 上传 1-5 张照片 + 必填备注
+ * 流程: PO 在 DELIVERING 状态时, 厨师收到货物 → 进这个页面 → 上传 1-5 张照片 + 选填备注
  *      → 提交后供应商在 supplier/orders/[id] 页看到照片, 确认无误才点"送达"
  *
- * 接 PATCH /api/orders/:id/chef-ack { images: string[], note: string }
- * 限制: 1-5 张图 + 备注必填非空 (前后端双校验)
+ * 接 PATCH /api/orders/:id/chef-ack { images: string[], note?: string }
+ * 限制: 1-5 张图; 备注选填, 提供则上限 500 字
  */
 'use client'
 import { useEffect, useState } from 'react'
@@ -99,12 +99,11 @@ export default function ChefAckPage({ params }: { params: { id: string } }) {
     if (submitting) return
     if (images.length === 0) { alert('请至少上传 1 张验收照片'); return }
     if (images.length > 5)   { alert('最多 5 张'); return }
-    if (note.trim().length === 0) { alert('备注必填'); return }
     setSubmitting(true)
     try {
       await apiFetch(`/api/orders/${params.id}/chef-ack`, {
         method: 'PATCH',
-        body: JSON.stringify({ images, note: note.trim() }),
+        body: JSON.stringify({ images, note: note.trim() || undefined }),
       })
       alert('验收单已发送给供应商')
       router.push('/v2/chef/purchase')
@@ -186,11 +185,11 @@ export default function ChefAckPage({ params }: { params: { id: string } }) {
 
       {/* 备注 */}
       <section className="mx-4 mt-5">
-        <h2 className="text-h2 mb-2">备注 <span className="text-red-fg text-caption">*必填</span></h2>
+        <h2 className="text-h2 mb-2">备注 <span className="text-gray3 text-caption">(选填)</span></h2>
         <textarea
           value={note}
           onChange={e => setNote(e.target.value)}
-          placeholder="如: 货已收到, 数量对齐, 有 1 箱包装破损但商品完好。"
+          placeholder="如: 货已收到, 数量对齐, 有 1 箱包装破损但商品完好。(选填)"
           maxLength={500}
           rows={4}
           className="w-full bg-white border border-border rounded-card p-3 text-body outline-none focus:border-ink"
@@ -209,7 +208,7 @@ export default function ChefAckPage({ params }: { params: { id: string } }) {
         <button
           type="button"
           onClick={submit}
-          disabled={submitting || uploading || images.length === 0 || note.trim().length === 0}
+          disabled={submitting || uploading || images.length === 0}
           className="flex-1 py-3 bg-ink text-white rounded-cta text-button disabled:bg-gray3 disabled:cursor-not-allowed">
           {submitting ? '发送中…' : '发给供应商'}
         </button>

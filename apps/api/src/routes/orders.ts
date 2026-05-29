@@ -554,9 +554,9 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     return { success: true, autoConfirmAt }
   })
 
-  // ── 厨师发送验收单 ─ DELIVERING 状态下, 收到货物后传照片+备注给供应商 ──
+  // ── 厨师发送验收单 ─ DELIVERING 状态下, 收到货物后传照片+(选填)备注给供应商 ──
   // 2026-05-29 客户反馈: 供应商点"送达"前需要看到客户的验收单 (软约束 — 不强制阻断)
-  // 限制: 上限 3 张图 + 备注必填非空 (前端 + 后端双校验)
+  // 限制: 上限 5 张图 (前后端双校验); 备注选填, 提供则上限 500 字
   app.patch('/:id/chef-ack', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
     const { tenantId, userId, role, storeId } = req.user
     const { id } = req.params as any
@@ -570,12 +570,14 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (images.length > 5) {
       return reply.status(400).send({ error: '验收单最多 5 张照片' })
     }
-    if (typeof note !== 'string' || note.trim().length === 0) {
-      return reply.status(400).send({ error: '备注不能为空' })
+    // 备注选填 (2026-05-29 客户调整, 之前是必填)
+    if (note != null && typeof note !== 'string') {
+      return reply.status(400).send({ error: '备注格式错误' })
     }
-    if (note.length > 500) {
+    if (note != null && note.length > 500) {
       return reply.status(400).send({ error: '备注最长 500 字' })
     }
+    const noteValue = typeof note === 'string' ? note.trim() : ''
     const where: any = { id, tenantId, status: 'DELIVERING' }
     // 厨师/店长只能给自己绑定门店的单发验收单
     if (['KITCHEN_LEAD', 'MANAGER'].includes(role) && storeId) where.storeId = storeId
@@ -586,13 +588,13 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       data: {
         chefAckImages: images,
         chefAckAt: new Date(),
-        chefAckNote: note.trim(),
+        chefAckNote: noteValue || null,
       },
     })
     await prisma.opLog.create({
       data: {
         tenantId, userId,
-        action: `厨师发送验收单 (${images.length} 张照片): ${note.trim().slice(0, 80)}`,
+        action: `厨师发送验收单 (${images.length} 张照片)${noteValue ? ': ' + noteValue.slice(0, 80) : ''}`,
         target: order.no, entityType: 'PurchaseOrder', targetId: id,
         metadata: { imagesCount: images.length },
       },

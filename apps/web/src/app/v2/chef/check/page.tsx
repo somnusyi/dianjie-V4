@@ -17,6 +17,8 @@ type LossClaim = {
   id: string; no: string; status: string
   totalLossAmount: string | number
   description?: string | null
+  reason?: string | null
+  evidenceImages?: string[]
   isManual?: boolean
   createdAt: string
   store?: { name: string } | null
@@ -46,6 +48,8 @@ export default function ChefCheckPage() {
   const [tab, setTab] = useState('check')
   const [claims, setClaims] = useState<LossClaim[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [expandedId, setExpandedId] = useState<string | null>(null)  // 单条展开看明细
+  const [zoomImg, setZoomImg] = useState<string | null>(null)         // 证据照点击放大
   const user = typeof window !== 'undefined' ? getUser() : null
   const storeName = (user as any)?.store?.name || ''
 
@@ -113,19 +117,30 @@ export default function ChefCheckPage() {
           <ul className="bg-white rounded-card border border-border divide-y divide-border">
             {thisWeek.slice(0, 10).map(c => {
               const reason = extractReason(c.description)
-              const firstItem = c.items[0]
+              const firstItem = c.items?.[0]
+              const expanded = expandedId === c.id
               return (
-                <li key={c.id} className="px-3 py-3 flex items-center gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 truncate">
-                      <span className="text-h2 truncate">
-                        {firstItem?.product?.name || '?'}{c.items.length > 1 ? ` 等 ${c.items.length} 项` : ` · ${firstItem?.lossQty} ${firstItem?.product?.unit || ''}`}
-                      </span>
-                      <Chip tone={REASON_TONE[reason]}>{reason}</Chip>
+                <li key={c.id}>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedId(expanded ? null : c.id)}
+                    className="w-full text-left px-3 py-3 flex items-center gap-3 active:bg-bg-warm"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 truncate">
+                        <span className="text-h2 truncate">
+                          {firstItem?.product?.name || '?'}{c.items?.length > 1 ? ` 等 ${c.items.length} 项` : ` · ${firstItem?.lossQty} ${firstItem?.product?.unit || ''}`}
+                        </span>
+                        <Chip tone={REASON_TONE[reason]}>{reason}</Chip>
+                      </div>
+                      <p className="text-micro text-gray3">{timeAgo(c.createdAt)} · {c.createdBy?.name || '-'} · {c.no}</p>
                     </div>
-                    <p className="text-micro text-gray3">{timeAgo(c.createdAt)} · {c.createdBy?.name || '-'}</p>
-                  </div>
-                  <span className="font-num text-red-fg">-¥{Number(c.totalLossAmount).toFixed(0)}</span>
+                    <span className="font-num text-red-fg">-¥{Number(c.totalLossAmount).toFixed(0)}</span>
+                    <span className="text-gray3 text-caption ml-1">{expanded ? '▾' : '›'}</span>
+                  </button>
+                  {expanded && (
+                    <ClaimDetail c={c} onImg={setZoomImg} />
+                  )}
                 </li>
               )
             })}
@@ -138,19 +153,30 @@ export default function ChefCheckPage() {
           <ul className="bg-white rounded-card border border-border divide-y divide-border">
             {claims.filter(c => new Date(c.createdAt) < weekStart).slice(0, 10).map(c => {
               const reason = extractReason(c.description)
-              const firstItem = c.items[0]
+              const firstItem = c.items?.[0]
+              const expanded = expandedId === c.id
               return (
-                <li key={c.id} className="px-3 py-3 flex items-center gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 truncate">
-                      <span className="text-body truncate">
-                        {firstItem?.product?.name || '?'}{c.items.length > 1 ? ` 等 ${c.items.length} 项` : ''}
-                      </span>
-                      <Chip tone={REASON_TONE[reason]}>{reason}</Chip>
+                <li key={c.id}>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedId(expanded ? null : c.id)}
+                    className="w-full text-left px-3 py-3 flex items-center gap-3 active:bg-bg-warm"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 truncate">
+                        <span className="text-body truncate">
+                          {firstItem?.product?.name || '?'}{c.items?.length > 1 ? ` 等 ${c.items.length} 项` : ''}
+                        </span>
+                        <Chip tone={REASON_TONE[reason]}>{reason}</Chip>
+                      </div>
+                      <p className="text-micro text-gray3">{dayjs(c.createdAt).format('MM/DD')} · {c.createdBy?.name || '-'} · {c.no}</p>
                     </div>
-                    <p className="text-micro text-gray3">{dayjs(c.createdAt).format('MM/DD')} · {c.createdBy?.name || '-'}</p>
-                  </div>
-                  <span className="font-num text-gray2 text-caption">-¥{Number(c.totalLossAmount).toFixed(0)}</span>
+                    <span className="font-num text-gray2 text-caption">-¥{Number(c.totalLossAmount).toFixed(0)}</span>
+                    <span className="text-gray3 text-caption ml-1">{expanded ? '▾' : '›'}</span>
+                  </button>
+                  {expanded && (
+                    <ClaimDetail c={c} onImg={setZoomImg} />
+                  )}
                 </li>
               )
             })}
@@ -160,6 +186,18 @@ export default function ChefCheckPage() {
           <p className="text-caption text-gray3 text-center py-2">没有更早的记录</p>
         )}
       </Section>
+
+      {/* 证据照 / 视频 全屏 lightbox (target="_blank" 在 WebView 不工作) */}
+      {zoomImg && (
+        <div className="fixed inset-0 z-50 bg-ink/90 flex items-center justify-center p-4"
+             onClick={() => setZoomImg(null)}>
+          {/\.(mp4|mov|webm|m4v|3gp|3gpp)(?:\?|$)/i.test(zoomImg)
+            ? <video src={zoomImg} controls autoPlay playsInline className="max-w-full max-h-full rounded" />
+            : <img src={zoomImg} alt="" className="max-w-full max-h-full object-contain rounded" />}
+          <button onClick={() => setZoomImg(null)}
+                  className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/20 text-white text-h2 flex items-center justify-center">×</button>
+        </div>
+      )}
 
       <BottomNav
         tabs={[
@@ -188,5 +226,58 @@ function Section({ title, right, children }: { title: string; right?: string; ch
       </div>
       {children}
     </section>
+  )
+}
+
+// 点击卡片展开后的明细块: 商品列表 + 描述 + 证据照
+function ClaimDetail({ c, onImg }: { c: LossClaim; onImg: (url: string) => void }) {
+  return (
+    <div className="px-3 pb-3 bg-bg-warm/40 border-t border-border">
+      {/* 商品明细 */}
+      {(c.items?.length ?? 0) > 0 && (
+        <ul className="mt-2 text-caption text-gray2 space-y-0.5">
+          {c.items.map((it, i) => (
+            <li key={i} className="flex justify-between gap-2">
+              <span className="flex-1 truncate">· {it.product?.name || ''} 损 <b className="font-num text-red-fg">{Number(it.lossQty)}</b> {it.product?.unit || ''}</span>
+              <span className="font-num text-red-fg shrink-0">¥{Number(it.lossAmount).toFixed(2)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {/* 描述 / 原因 */}
+      {(c.description || c.reason) && (
+        <div className="mt-2 text-caption text-gray2 bg-white rounded p-2 border border-border">
+          {c.reason && <span className="text-micro text-gray3 mr-1">原因:</span>}
+          {c.description || c.reason}
+        </div>
+      )}
+      {/* 证据照 / 视频 */}
+      {(c.evidenceImages?.length ?? 0) > 0 && (
+        <>
+          <div className="text-micro text-gray3 mt-2 mb-1">证据 {c.evidenceImages?.length} 张 · 点击放大</div>
+          <div className="flex gap-2 overflow-x-auto">
+            {(c.evidenceImages || []).map((url, i) => {
+              const isVideo = /\.(mp4|mov|webm|m4v|3gp|3gpp)(?:\?|$)/i.test(url)
+              return (
+                <button key={i} type="button" onClick={() => onImg(url)} className="shrink-0 relative">
+                  {isVideo
+                    ? <video src={url} muted playsInline preload="metadata" className="w-20 h-20 object-cover rounded border border-border bg-gray5" />
+                    : <img src={url} alt="" className="w-20 h-20 object-cover rounded border border-border" />}
+                  {isVideo && <span className="absolute bottom-0 left-0 right-0 bg-ink/60 text-white text-micro text-center py-0.5 rounded-b">▶</span>}
+                </button>
+              )
+            })}
+          </div>
+        </>
+      )}
+      {/* 状态 + 处理结果 */}
+      <p className="text-micro text-gray3 mt-2">
+        状态: {c.status === 'AUTO_APPROVED' ? '阈值内自动通过 (店内自负)'
+              : c.status === 'PENDING' ? '待总厨审批'
+              : c.status === 'APPROVED' ? '已通过'
+              : c.status === 'REJECTED' ? '驳回'
+              : c.status}
+      </p>
+    </div>
   )
 }

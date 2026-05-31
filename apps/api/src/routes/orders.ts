@@ -94,12 +94,16 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       },
     })
     if (!order) throw { statusCode: 404, message: '采购订单不存在' }
-    // OSS 签名 1h 过期 → 读取时把报损证据图统一重签
+    // OSS 签名 1h 过期 → 读取时把所有 OSS URL 字段统一重签
     if (Array.isArray((order as any).lossClaims)) {
       ;(order as any).lossClaims = (order as any).lossClaims.map((c: any) => ({
         ...c,
         evidenceImages: resignOssUrls(c.evidenceImages),
       }))
+    }
+    // 厨师验收单照片 (2026-05-31 客户反馈: 不重签 1h 后碎图)
+    if (Array.isArray((order as any).chefAckImages)) {
+      ;(order as any).chefAckImages = resignOssUrls((order as any).chefAckImages)
     }
     return order
   })

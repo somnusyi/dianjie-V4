@@ -27,6 +27,7 @@ type Order    = {
   shippedAt?: string | null
   deliveredAt?: string | null
   receivedAt?: string | null
+  chefAckAt?: string | null      // 厨师验收单时间 (DELIVERING 期间)
   store?: Store
   supplier?: Supplier
   createdBy?: { id: string; name: string; role: string }
@@ -196,8 +197,16 @@ export default function ChefDirectorOrdersPage() {
                     </span>
                     <span className="font-num text-h2 shrink-0">¥{Number(o.totalAmount).toLocaleString()}</span>
                   </div>
-                  <div className="flex items-center gap-2 mb-2 text-micro">
+                  <div className="flex items-center gap-2 mb-2 text-micro flex-wrap">
                     <Chip tone={tone}>{STATUS_LABEL[o.status] || o.status}</Chip>
+                    {/* DELIVERING 期间显示验收单状态 (2026-05-31 客户反馈):
+                        已发 → 灰 chip (告诉总厨厨师长已处理)
+                        未发 → 黄 chip (提示总厨可能要催) */}
+                    {o.status === 'DELIVERING' && (
+                      o.chefAckAt
+                        ? <Chip tone="gray">✓ 验收单已发</Chip>
+                        : <Chip tone="orange">⏳ 厨师长未发验收单</Chip>
+                    )}
                     <span className="text-gray3 truncate">{o.store?.name || '未知门店'}</span>
                     <span className="text-gray3 ml-auto whitespace-nowrap">
                       {o.items?.length ?? 0} 项 · 期望 {dayjs(o.expectedDate).format('MM/DD')}

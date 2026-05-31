@@ -24,6 +24,10 @@ type Order = {
   shippedAt?: string | null; shippedNote?: string | null
   deliveredAt?: string | null; deliveredNote?: string | null
   receivedAt?: string | null; autoConfirmed?: boolean
+  // 厨师验收单 (DELIVERING 期间厨师发给供应商, 总厨只读)
+  chefAckAt?: string | null
+  chefAckImages?: string[]
+  chefAckNote?: string | null
   store?: { id: string; name: string; no?: string | null }
   supplier?: { id: string; name: string }
   createdBy?: { id: string; name: string; role: string }
@@ -60,6 +64,8 @@ export default function ChefDirectorOrderDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
   const [confirm, openConfirm] = useConfirmSheet()
+  // 验收单照片全屏放大 (target="_blank" 在 WebView 不工作, 走页内 lightbox)
+  const [zoomImg, setZoomImg] = useState<string | null>(null)
 
   useEffect(() => {
     if (!id) return
@@ -168,6 +174,35 @@ export default function ChefDirectorOrderDetailPage() {
         </ul>
       </section>
 
+      {/* 厨师验收单 (DELIVERING 期间厨师发给供应商, 总厨只读)
+          2026-05-31 客户反馈: 总厨也要能看到验收单 */}
+      {order.chefAckAt && (
+        <section className="px-4 mt-4">
+          <h2 className="text-h2 mb-2">厨师验收单</h2>
+          <div className="bg-white rounded-card border border-border p-3">
+            <div className="text-micro text-gray3 mb-2">
+              由 {order.createdBy?.name || '厨师长'} 发于 {dayjs(order.chefAckAt).format('MM-DD HH:mm')}
+              {(order.chefAckImages?.length || 0) > 0 && ` · ${order.chefAckImages?.length} 张照片 · 点击放大`}
+            </div>
+            {(order.chefAckImages?.length || 0) > 0 && (
+              <div className="flex gap-2 overflow-x-auto mb-2">
+                {(order.chefAckImages || []).map((url, i) => (
+                  <button key={i} type="button" onClick={() => setZoomImg(url)} className="shrink-0">
+                    <img src={url} alt={`验收照 ${i + 1}`} className="w-20 h-20 object-cover rounded border border-border" />
+                  </button>
+                ))}
+              </div>
+            )}
+            {order.chefAckNote && (
+              <div className="text-caption text-gray2 bg-bg rounded p-2">
+                <span className="text-micro text-gray3">备注: </span>
+                {order.chefAckNote}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* 元信息 */}
       <section className="px-4 mt-4">
         <h2 className="text-h2 mb-2">订单信息</h2>
@@ -232,6 +267,16 @@ export default function ChefDirectorOrderDetailPage() {
       )}
 
       <ConfirmSheet {...confirm} />
+
+      {/* 图片全屏 lightbox — 验收单照片点击放大 */}
+      {zoomImg && (
+        <div className="fixed inset-0 z-50 bg-ink/90 flex items-center justify-center p-4"
+             onClick={() => setZoomImg(null)}>
+          <img src={zoomImg} alt="" className="max-w-full max-h-full object-contain rounded" />
+          <button onClick={() => setZoomImg(null)}
+                  className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/20 text-white text-h2 flex items-center justify-center">×</button>
+        </div>
+      )}
     </div>
   )
 }

@@ -32,6 +32,7 @@ type Order    = {
   supplier?: Supplier
   createdBy?: { id: string; name: string; role: string }
   items?: Array<{ id: string; productId: string; quantity: string | number; unitPrice: string | number }>
+  lossClaims?: Array<{ id: string; status: string; totalLossAmount: string | number }>
 }
 
 const STATUS_TO_STEP: Record<string, number> = {
@@ -207,6 +208,12 @@ export default function ChefDirectorOrdersPage() {
                         ? <Chip tone="gray">✓ 验收单已发</Chip>
                         : <Chip tone="orange">⏳ 厨师长未发验收单</Chip>
                     )}
+                    {/* 订单报损总额 chip (2026-05-31): 一眼看出哪些单有报损要督导 */}
+                    {(o.lossClaims?.length ?? 0) > 0 && (() => {
+                      const lossTotal = (o.lossClaims || []).reduce((s, lc) => s + Number(lc.totalLossAmount || 0), 0)
+                      const hasPending = (o.lossClaims || []).some(lc => lc.status === 'PENDING' || lc.status === 'REJECTED' || lc.status === 'NEGOTIATING')
+                      return <Chip tone={hasPending ? 'red' : 'gray'}>报损 −¥{Math.round(lossTotal).toLocaleString()}{hasPending ? ' · 待处理' : ''}</Chip>
+                    })()}
                     <span className="text-gray3 truncate">{o.store?.name || '未知门店'}</span>
                     <span className="text-gray3 ml-auto whitespace-nowrap">
                       {o.items?.length ?? 0} 项 · 期望 {dayjs(o.expectedDate).format('MM/DD')}

@@ -32,6 +32,34 @@ type Order = {
   supplier?: { id: string; name: string }
   createdBy?: { id: string; name: string; role: string }
   items?: Item[]
+  lossClaims?: LossClaim[]
+}
+
+type LossClaim = {
+  id: string
+  no: string
+  status: string
+  totalLossAmount: string | number
+  description?: string | null
+  handlerNote?: string | null
+  evidenceImages?: string[]
+  items?: Array<{
+    id: string; productId: string
+    lossQty: string | number
+    lossAmount: string | number
+    product?: { name: string; unit?: string }
+  }>
+}
+
+function lossLabel(s: string) {
+  return ({
+    PENDING: '待供应商处理',
+    APPROVED: '供应商同意',
+    AUTO_APPROVED: '24h 自动同意',
+    REJECTED: '供应商拒绝',
+    NEGOTIATING: '协商中',
+    RESOLVED: '协商完成',
+  } as Record<string, string>)[s] || s
 }
 
 const STATUS_TO_STEP: Record<string, number> = {
@@ -241,6 +269,57 @@ export default function ChefDirectorOrderDetailPage() {
           <span className="font-num text-h2">¥{total.toLocaleString()}</span>
         </div>
       </section>
+
+      {/* 订单报损 (2026-05-31 客户反馈: 总厨要能看到具体订单的报损) — 复用 chef po-success 模式 */}
+      {(order.lossClaims?.length ?? 0) > 0 && (
+        <section className="px-4 mt-4">
+          <h2 className="text-h2 mb-2">订单报损 ({order.lossClaims?.length})</h2>
+          <ul className="bg-white rounded-card border border-border divide-y divide-border">
+            {(order.lossClaims || []).map((lc) => (
+              <li key={lc.id} className="px-3 py-3">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <Chip tone={lc.status === 'APPROVED' || lc.status === 'AUTO_APPROVED' || lc.status === 'RESOLVED' ? 'green' : lc.status === 'REJECTED' ? 'red' : 'orange'}>
+                      {lossLabel(lc.status)}
+                    </Chip>
+                    <span className="text-micro text-gray3 font-num">{lc.no}</span>
+                  </div>
+                  <span className="font-num text-body text-red-fg">−¥{Number(lc.totalLossAmount).toFixed(2)}</span>
+                </div>
+                {lc.description && <p className="text-caption text-gray2 mt-1">{lc.description}</p>}
+                {(lc.items?.length ?? 0) > 0 && (
+                  <ul className="mt-2 text-micro text-gray2 space-y-0.5">
+                    {(lc.items || []).map((it, i) => (
+                      <li key={i}>· {it.product?.name || ''} 损 <b className="font-num text-red-fg">{Number(it.lossQty)}</b> = ¥{Number(it.lossAmount).toFixed(2)}</li>
+                    ))}
+                  </ul>
+                )}
+                {(lc.evidenceImages?.length ?? 0) > 0 && (
+                  <>
+                    <div className="text-micro text-gray3 mt-2 mb-1">证据 {lc.evidenceImages?.length} 张 · 点击放大</div>
+                    <div className="flex gap-2 overflow-x-auto">
+                      {(lc.evidenceImages || []).map((url, i) => {
+                        const isVideo = /\.(mp4|mov|webm|m4v|3gp|3gpp)(?:\?|$)/i.test(url)
+                        return (
+                          <button key={i} type="button" onClick={() => setZoomImg(url)} className="shrink-0 relative">
+                            {isVideo
+                              ? <video src={url} muted playsInline preload="metadata" className="w-20 h-20 object-cover rounded border border-border bg-gray5" />
+                              : <img src={url} alt="" className="w-20 h-20 object-cover rounded border border-border" />}
+                            {isVideo && <span className="absolute bottom-0 left-0 right-0 bg-ink/60 text-white text-micro text-center py-0.5 rounded-b">▶ 视频</span>}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
+                {lc.handlerNote && (
+                  <p className="text-micro text-amber-fg mt-2">供应商: {lc.handlerNote}</p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {/* 撤单按钮 — 仅自己代下 + 供应商发货前 (SUBMITTED + CONFIRMED) */}
       {canCancel && (

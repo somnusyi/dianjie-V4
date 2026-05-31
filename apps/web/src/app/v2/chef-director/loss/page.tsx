@@ -16,6 +16,16 @@ type LossClaim = {
   description: string
   status: 'PENDING' | 'APPROVED' | 'AUTO_APPROVED' | 'NEGOTIATING' | 'REJECTED' | 'RESOLVED'
   createdAt: string
+  isManual?: boolean                // true = 盘点报损 (店内自负), false = 验收短量 (扣供应商)
+  reason?: string | null
+  evidenceImages?: string[]
+  items?: Array<{
+    id: string
+    productId: string
+    lossQty: string | number
+    lossAmount: string | number
+    product?: { name: string; unit?: string }
+  }>
   store?: { name: string } | null
   supplier?: { name: string } | null
   purchaseOrder?: { no: string } | null
@@ -38,6 +48,10 @@ export default function ChefDirectorLossPage() {
   const [tab] = useState('loss')
   const [items, setItems] = useState<LossClaim[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // 全部报损列表 默认显示头 10 条, 点击"查看全部"展开
+  const [showAllDetails, setShowAllDetails] = useState(false)
+  // 证据照点击放大 (复用其他页面同一套 lightbox 模式)
+  const [zoomImg, setZoomImg] = useState<string | null>(null)
 
   useEffect(() => {
     apiFetch<LossClaim[]>('/api/loss-claims?limit=200')
@@ -143,6 +157,88 @@ export default function ChefDirectorLossPage() {
         )}
       </Section>
 
+      {/* 全部报损明细 (2026-05-31 客户反馈: 总厨看不到盘点里自动通过的报损)
+          按时间倒序, 默认显示头 10 条, 点击查看全部. 复用 zoomImg lightbox 看证据照. */}
+      <Section
+        title="全部报损明细"
+        right={items ? `${items.length} 条` : ''}
+      >
+        {items === null && <p className="text-caption text-gray3 text-center py-4">加载中…</p>}
+        {items !== null && items.length === 0 && (
+          <div className="bg-white rounded-card border border-border p-6 text-center">
+            <p className="text-caption text-gray3">近 30 天暂无报损</p>
+          </div>
+        )}
+        {items !== null && items.length > 0 && (
+          <>
+            <ul className="space-y-2">
+              {(showAllDetails ? items : items.slice(0, 10)).map(lc => {
+                const isMan = lc.isManual === true
+                return (
+                  <li key={lc.id} className="bg-white rounded-card border border-border p-3">
+                    <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                      <Chip tone={STATUS_TONE[lc.status] || 'gray'}>{STATUS_LABEL[lc.status] || lc.status}</Chip>
+                      {isMan
+                        ? <Chip tone="blue">店内盘点</Chip>
+                        : <Chip tone="orange">验收短量</Chip>}
+                      <span className="text-micro text-gray3 font-num ml-auto">{fmtDate(lc.createdAt)} · {lc.no}</span>
+                    </div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-h2 truncate">{lc.store?.name || '—'}</span>
+                      <span className="font-num text-h2 text-red-fg">−¥{Number(lc.totalLossAmount).toLocaleString()}</span>
+                    </div>
+                    <p className="text-micro text-gray3 mb-1">
+                      {isMan
+                        ? `店内自负 · ${lc.createdBy?.name || '—'} 报${lc.reason ? ` · ${lc.reason}` : ''}`
+                        : `${lc.purchaseOrder?.no || '—'} · ${lc.supplier?.name || '—'} · ${lc.createdBy?.name || '—'} 发起`
+                      }
+                    </p>
+                    {lc.description && <p className="text-micro text-gray2 mb-1.5 line-clamp-2">{lc.description}</p>}
+                    {(lc.items?.length ?? 0) > 0 && (
+                      <ul className="text-micro text-gray2 space-y-0.5 mb-1.5">
+                        {(lc.items || []).slice(0, 5).map((it, i) => (
+                          <li key={i}>· {it.product?.name || ''} 损 <b className="font-num text-red-fg">{Number(it.lossQty)}</b> = ¥{Number(it.lossAmount).toFixed(2)}</li>
+                        ))}
+                        {(lc.items?.length || 0) > 5 && (
+                          <li className="text-gray3">… 还有 {(lc.items?.length || 0) - 5} 项</li>
+                        )}
+                      </ul>
+                    )}
+                    {(lc.evidenceImages?.length ?? 0) > 0 && (
+                      <>
+                        <div className="text-micro text-gray3 mb-1">证据 {lc.evidenceImages?.length} 张 · 点击放大</div>
+                        <div className="flex gap-2 overflow-x-auto">
+                          {(lc.evidenceImages || []).map((url, i) => {
+                            const isVideo = /\.(mp4|mov|webm|m4v|3gp|3gpp)(?:\?|$)/i.test(url)
+                            return (
+                              <button key={i} type="button" onClick={() => setZoomImg(url)} className="shrink-0 relative">
+                                {isVideo
+                                  ? <video src={url} muted playsInline preload="metadata" className="w-16 h-16 object-cover rounded border border-border bg-gray5" />
+                                  : <img src={url} alt="" className="w-16 h-16 object-cover rounded border border-border" />}
+                                {isVideo && <span className="absolute bottom-0 left-0 right-0 bg-ink/60 text-white text-micro text-center py-0.5 rounded-b">▶</span>}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+            {items.length > 10 && (
+              <button
+                type="button"
+                onClick={() => setShowAllDetails(v => !v)}
+                className="block w-full text-center py-3 mt-2 text-caption text-amber-fg bg-white rounded-card border border-border"
+              >
+                {showAllDetails ? '↑ 收起 (仅显示 10 条)' : `查看全部 ${items.length} 条 ›`}
+              </button>
+            )}
+          </>
+        )}
+      </Section>
+
       <Section title="各店报损排行" right={`${storeRank.length} 家店`}>
         {storeRank.length === 0 ? (
           <div className="bg-white rounded-card border border-border p-6 text-center">
@@ -188,6 +284,18 @@ export default function ChefDirectorLossPage() {
           if (k === 'material') location.href = '/v2/chef-director/inventory'
         }}
       />
+
+      {/* 证据照/视频 全屏 lightbox */}
+      {zoomImg && (
+        <div className="fixed inset-0 z-50 bg-ink/90 flex items-center justify-center p-4"
+             onClick={() => setZoomImg(null)}>
+          {/\.(mp4|mov|webm|m4v|3gp|3gpp)(?:\?|$)/i.test(zoomImg)
+            ? <video src={zoomImg} controls autoPlay playsInline className="max-w-full max-h-full rounded" />
+            : <img src={zoomImg} alt="" className="max-w-full max-h-full object-contain rounded" />}
+          <button onClick={() => setZoomImg(null)}
+                  className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/20 text-white text-h2 flex items-center justify-center">×</button>
+        </div>
+      )}
     </div>
   )
 }

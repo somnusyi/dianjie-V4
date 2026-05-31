@@ -219,18 +219,28 @@ async function main() {
     // ════════════════════════════════════════════════════════
 
     // 3.1 PurchaseOrder + Items (既有)
+    // 2026-05-31 重构: 用 ...rest 解构自动捕获所有非 FK 字段, 避免 schema 加字段时漏拷
+    // (踩坑: 5/28 加了 chefAckImages/chefAckAt/chefAckNote 三字段, mirror 硬列没含, 静默丢数据)
     const dPOs = await tx.purchaseOrder.findMany({ where: { tenantId: D }, include: { items: true } })
     const poIdMap = {}
     for (const po of dPOs) {
       const newStoreId = storeMap[po.storeId]; const newSupId = supMap[po.supplierId]
       if (!newStoreId || !newSupId) continue
+      const {
+        id, tenantId, createdAt, updatedAt,                                // Prisma 自动管理
+        storeId, supplierId,                                                // FK, 已 map
+        shippedById, deliveredById, createdById,                            // FK→User, 走 mapUser
+        receiptId,                                                          // 跨表, 后面 Receipt 阶段 backfill
+        items: _items,                                                      // 子表, 单独循环处理
+        ...rest                                                             // 其他全部 (status/note/shippedAt/chefAck*/未来加的)
+      } = po
       const newPO = await tx.purchaseOrder.create({
         data: {
-          tenantId: T, no: po.no, storeId: newStoreId, supplierId: newSupId,
-          expectedDate: po.expectedDate, totalAmount: po.totalAmount, status: po.status, note: po.note,
-          shippedAt: po.shippedAt, shippedNote: po.shippedNote, shippedById: mapUserOptional(po.shippedById),
-          deliveredAt: po.deliveredAt, deliveredNote: po.deliveredNote, deliveredById: mapUserOptional(po.deliveredById),
-          receivedAt: po.receivedAt, autoConfirmed: po.autoConfirmed, createdById: mapUser(po.createdById),
+          tenantId: T, storeId: newStoreId, supplierId: newSupId,
+          shippedById: mapUserOptional(po.shippedById),
+          deliveredById: mapUserOptional(po.deliveredById),
+          createdById: mapUser(po.createdById),
+          ...rest,
         },
       })
       poIdMap[po.id] = newPO.id

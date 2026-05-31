@@ -224,27 +224,30 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (!['MANAGER', 'KITCHEN_LEAD', 'PURCHASER', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
       return reply.status(403).send({ error: '无权撤回订单' })
     }
-    const where: any = { id, tenantId, status: 'SUBMITTED' }   // 接单后由供应商拒, 不再走撤回
+    // 2026-05-29 客户反馈: 撤回窗口放宽到"供应商发货前" (SUBMITTED 待接单 + CONFIRMED 已接单待发货)
+    // DELIVERING 起就是已发货, 货已经在路上, 不让撤; 该报损/拒收走原流程
+    const where: any = { id, tenantId, status: { in: ['SUBMITTED', 'CONFIRMED'] } as any }
     if (isStoreScoped(role) && storeId) where.storeId = storeId
     // 总厨只能撤自己下的单 (代下), 不能撤厨师长/店长下的单
     if (role === 'CHEF_DIRECTOR') where.createdById = userId
     const order = await prisma.purchaseOrder.findFirst({ where })
-    if (!order) return reply.status(400).send({ error: '订单不存在 / 已被供应商接单 / 状态不可撤回' })
+    if (!order) return reply.status(400).send({ error: '订单不存在 / 供应商已发货 / 状态不可撤回' })
 
+    const wasConfirmed = order.status === 'CONFIRMED'
     await prisma.purchaseOrder.update({
       where: { id },
-      data: { status: 'CANCELLED', note: (order.note ? order.note + ' | ' : '') + `[撤回] ${String(reason || '').trim().slice(0, 100)}` },
+      data: { status: 'CANCELLED', note: (order.note ? order.note + ' | ' : '') + `[撤回${wasConfirmed ? '(已接单后)' : ''}] ${String(reason || '').trim().slice(0, 100)}` },
     })
     await prisma.opLog.create({
-      data: { tenantId, userId, action: `下单方撤回订单${reason ? ': ' + String(reason).slice(0,80) : ''}`, target: order.no, entityType: 'PurchaseOrder', targetId: id },
+      data: { tenantId, userId, action: `下单方撤回订单 (原状态: ${order.status})${reason ? ': ' + String(reason).slice(0,80) : ''}`, target: order.no, entityType: 'PurchaseOrder', targetId: id },
     })
     // 通知供应商 (避免他正在准备发货)
     const sup = await prisma.supplier.findUnique({ where: { id: order.supplierId }, select: { name: true } })
     void sendNotification({
       tenantId, recipientRole: 'SUPPLIER_STAFF',
       type: 'ORDER_CANCELLED' as any,
-      title: `订单撤回 ${order.no}`,
-      body: `${sup?.name || ''} 的订单 ${order.no} 已被下单方撤回${reason ? ': ' + String(reason).slice(0,40) : ''}`,
+      title: `订单撤回 ${order.no}${wasConfirmed ? ' (已接单, 请停止备货)' : ''}`,
+      body: `${sup?.name || ''} 的订单 ${order.no} 已被下单方撤回${wasConfirmed ? ' — 该单你已接单, 请立即停止备货发货' : ''}${reason ? ': ' + String(reason).slice(0,40) : ''}`,
       refType: 'PurchaseOrder', refId: id,
     })
     return { success: true }

@@ -99,7 +99,11 @@ export default function ChefDirectorOrderDetailPage() {
   const stepIdx = STATUS_TO_STEP[order.status] ?? 1
   const tone = toneFor(order.status)
   const isMine = !!(me && order.createdBy && order.createdBy.id === me.id)
-  const canCancel = isMine && order.status === 'SUBMITTED'
+  // 2026-05-29 客户反馈: 撤回放宽到供应商发货前 (SUBMITTED + CONFIRMED)
+  const canCancel = isMine && ['SUBMITTED', 'CONFIRMED'].includes(order.status)
+  const cancelHint = order.status === 'CONFIRMED'
+    ? '⚠ 该单供应商已接单, 撤回后会通知供应商"立即停止备货". 请填写撤回原因.'
+    : '撤回后供应商会收到通知, 此操作不可恢复. 请填写撤回原因.'
   const total = Number(order.totalAmount || 0)
 
   // 时间轴节点 (跟 ProgressDots 对齐: 已发起 / 接单 / 在途 / 送达 / 签收)
@@ -203,7 +207,7 @@ export default function ChefDirectorOrderDetailPage() {
         </div>
       </section>
 
-      {/* 撤单按钮 — 仅自己代下 + SUBMITTED 状态 */}
+      {/* 撤单按钮 — 仅自己代下 + 供应商发货前 (SUBMITTED + CONFIRMED) */}
       {canCancel && (
         <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border p-3">
           <button
@@ -211,7 +215,7 @@ export default function ChefDirectorOrderDetailPage() {
             disabled={cancelling}
             onClick={() => openConfirm({
               title: '撤回订单?',
-              body: <span>撤回后供应商会收到通知, 此操作不可恢复. 请填写撤回原因.</span>,
+              body: <span>{cancelHint}</span>,
               confirmLabel: cancelling ? '撤回中…' : '撤回订单',
               cancelLabel: '不撤了',
               tone: 'danger',
@@ -222,7 +226,7 @@ export default function ChefDirectorOrderDetailPage() {
             })}
             className="w-full py-3 bg-red text-white rounded-cta text-button disabled:opacity-40"
           >
-            {cancelling ? '撤回中…' : '撤回订单 (供应商未接单前可撤)'}
+            {cancelling ? '撤回中…' : `撤回订单 (供应商发货前可撤${order.status === 'CONFIRMED' ? ', 已接单需立即撤' : ''})`}
           </button>
         </div>
       )}

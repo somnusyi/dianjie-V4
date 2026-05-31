@@ -185,11 +185,14 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
 
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border p-3 flex gap-3">
         <button onClick={() => router.push('/v2/chef/purchase')} className="px-4 py-3 bg-white border border-border rounded-cta text-button text-gray2">返回采购</button>
-        {/* SUBMITTED 状态可撤回 (供应商接单前) */}
-        {po.status === 'SUBMITTED' && (
+        {/* 撤回 — 2026-05-29 客户反馈: 放宽到供应商发货前 (SUBMITTED + CONFIRMED) */}
+        {(po.status === 'SUBMITTED' || po.status === 'CONFIRMED') && (
           <button
             onClick={async () => {
-              const reason = window.prompt('撤回原因 (供应商可见, 选填):') ?? ''
+              const hint = po.status === 'CONFIRMED'
+                ? `⚠ 该单供应商已接单 (可能正在备货). 撤回后供应商会被通知"立即停止备货".\n\n撤回原因 (供应商可见, 选填):`
+                : '撤回原因 (供应商可见, 选填):'
+              const reason = window.prompt(hint) ?? ''
               if (!confirm(`确认撤回订单 ${po.no}? 撤回后无法恢复, 需要重新下单`)) return
               try {
                 await apiFetch(`/api/orders/${po.id}/cancel`, {

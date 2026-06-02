@@ -19,6 +19,7 @@ import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { createVoucher, VoucherEntryInput } from './index'
 import { PNL_BUCKETS, resolveProfitAccount } from './coa-config'
+import { monthRangeForDateCol } from '../../lib/dateRange'
 
 interface CarryoverOpts {
   tenantId: string
@@ -53,8 +54,8 @@ export async function previewCarryover(opts: { tenantId: string; month: string; 
 }
 
 async function computeCarryover(tenantId: string, month: string, includeDraft = false): Promise<CarryoverPreview & { includedDraft: boolean }> {
-  const start = dayjs(month + '-01').startOf('month').toDate()
-  const end = dayjs(month + '-01').endOf('month').toDate()
+  // 用 UTC 边界避免 +8 时区把 4/30 凭证算成 5月 (PG DATE 列丢时间问题)
+  const { start, end } = monthRangeForDateCol(month)
   const profitAccount = await resolveProfitAccount(tenantId)
 
   // 1. 拉本月凭证的所有分录 (默认仅 POSTED; preview 可选 includeDraft 看"假如 POST 了" 场景)
@@ -187,8 +188,8 @@ export async function generateCarryoverVoucher(opts: CarryoverOpts): Promise<str
   }
   if (dryRun) return null
 
-  // 落库 (期末结转日期 = 该月最后一天)
-  const end = dayjs(month + '-01').endOf('month').toDate()
+  // 落库 (期末结转日期 = 该月最后一天 UTC)
+  const { end } = monthRangeForDateCol(month)
   const id = await createVoucher({
     tenantId,
     date: end,

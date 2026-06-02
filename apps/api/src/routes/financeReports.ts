@@ -11,6 +11,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { PNL_PREFIXES, BS_PREFIXES } from '../services/voucher/coa-config'
+import { monthRangeForDateCol, endOfDayUtcForDateCol } from '../lib/dateRange'
 
 const FINANCE_ROLES = ['FINANCE', 'ADMIN', 'SUPER_ADMIN']
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
@@ -567,8 +568,8 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
     if (!FINANCE_ROLES.includes(role)) return reply.status(403).send({ error: '无权' })
     const { month } = req.query as any
     const ym = month || dayjs().format('YYYY-MM')
-    const start = dayjs(ym + '-01').startOf('month').toDate()
-    const end = dayjs(ym + '-01').endOf('month').toDate()
+    // 用 UTC 边界 (避免 PG DATE 列时区跨日问题)
+    const { start, end } = monthRangeForDateCol(ym)
 
     // 收入类: 贷-借为正 (期间发生额) — 多前缀兼容 (企业会计准则 5xxx + 好会计旧准则 6xxx)
     const revenueMain = await aggregateByPrefix({ tenantId, prefixes: PNL_PREFIXES.revenueMain, start, end })
@@ -632,7 +633,7 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role } = req.user
     if (!FINANCE_ROLES.includes(role)) return reply.status(403).send({ error: '无权' })
     const { asOf } = req.query as any
-    const end = asOf ? dayjs(asOf).endOf('day').toDate() : dayjs().endOf('day').toDate()
+    const end = endOfDayUtcForDateCol(asOf || dayjs().format('YYYY-MM-DD'))
 
     // 资产类: 借方余额 (1xxx)
     // 负债类: 贷方余额 (2xxx)

@@ -5,13 +5,15 @@ import { useEffect, useState } from 'react'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 
 const TABS = [
-  { key: 'home',   label: '工作台', href: '/v2/finance-pc/home',   badgeKey: 'pendingReview' as const },
-  { key: 'review', label: '初审',   href: '/v2/finance-pc/review', badgeKey: 'pendingReview' as const },
-  { key: 'funds',  label: '资金',   href: '/v2/finance-pc/funds',  badgeKey: 'dueThisWeek'   as const },
-  { key: 'stores', label: '各店',   href: '/v2/finance-pc/stores' },
+  { key: 'home',     label: '工作台',   href: '/v2/finance-pc/home',             badgeKey: 'pendingReview' as const },
+  { key: 'review',   label: '初审',     href: '/v2/finance-pc/review',           badgeKey: 'pendingReview' as const },
+  { key: 'payreq',   label: '付款申请', href: '/v2/finance-pc/payment-requests', badgeKey: 'pendingReview' as const },
+  { key: 'vouchers', label: '凭证',     href: '/v2/finance-pc/vouchers',         badgeKey: 'draftVouchers' as const },
+  { key: 'funds',    label: '资金',     href: '/v2/finance-pc/funds',            badgeKey: 'dueThisWeek'   as const },
+  { key: 'stores',   label: '各店',     href: '/v2/finance-pc/stores' },
 ] as const
 
-type Badges = { pendingReview?: number; dueThisWeek?: number }
+type Badges = { pendingReview?: number; dueThisWeek?: number; draftVouchers?: number }
 
 export default function FinanceTopNav() {
   const pathname = usePathname() || ''
@@ -25,13 +27,18 @@ export default function FinanceTopNav() {
     let alive = true
     const load = async () => {
       try {
-        const [pr, sch] = await Promise.all([
+        // 拉 vouchers 仅本月 status=DRAFT, pageSize=1 拿 total
+        const monthFrom = `${new Date().toISOString().slice(0, 7)}-01`
+        const monthTo   = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().slice(0, 10)
+        const [pr, sch, vou] = await Promise.all([
           apiFetch<{ total: number }>('/api/payment-requests?status=PENDING&pageSize=1').catch(() => ({ total: 0 })),
           apiFetch<any[]>('/api/schedules?days=7').catch(() => []),
+          apiFetch<{ items: any[] }>(`/api/vouchers?from=${monthFrom}&to=${monthTo}&status=DRAFT&pageSize=200`).catch(() => ({ items: [] })),
         ])
         if (!alive) return
         const dueCount = Array.isArray(sch) ? sch.filter((s: any) => ['PENDING', 'APPROVED', 'NOTIFIED'].includes(s.status)).length : 0
-        setBadges({ pendingReview: pr.total || 0, dueThisWeek: dueCount })
+        const draftCount = vou.items?.length || 0
+        setBadges({ pendingReview: pr.total || 0, dueThisWeek: dueCount, draftVouchers: draftCount })
       } catch { /* 静默, badge 缺数据不阻断 */ }
     }
     load()

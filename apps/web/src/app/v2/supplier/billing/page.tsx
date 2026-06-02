@@ -174,9 +174,10 @@ export default function SupplierBillingPage() {
         <span className="text-amber-fg">上传 ›</span>
       </a>
 
-      {/* 本月报损快捷入口 (2026-06-02 客户反馈: 账单页要能直接看到报损汇总, 不用翻订单) */}
+      {/* 本月报损快捷入口 (2026-06-02 客户反馈: 账单页要能直接看到报损汇总, 不用翻订单)
+          v2: 跳订单 Tab + filter=报损, 跟底栏订单入口体验一致 (而不是跳 history 列表) */}
       {lossClaims !== null && lossThisMonth.count > 0 && (
-        <a href="/v2/supplier/history?filter=with-loss" className="block mx-4 mt-2 bg-red-bg/40 border border-red/30 rounded-card p-2.5 flex items-center gap-2 text-caption">
+        <a href="/v2/supplier/orders?filter=%E6%8A%A5%E6%8D%9F" className="block mx-4 mt-2 bg-red-bg/40 border border-red/30 rounded-card p-2.5 flex items-center gap-2 text-caption">
           <span className="text-red-fg">📊</span>
           <span className="flex-1 text-gray2">
             本月报损 <b className="font-num text-red-fg">{lossThisMonth.count} 单</b> · 累计 <b className="font-num text-red-fg">{fmtMoney(lossThisMonth.total)}</b>

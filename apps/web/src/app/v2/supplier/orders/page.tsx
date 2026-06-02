@@ -44,7 +44,13 @@ export default function SupplierOrdersPage() {
   const [claims, setClaims] = useState<LossClaim[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState<string | null>(null)
-  const [filter, setFilter] = useState<'待接单' | '待发货' | '运送中' | '报损' | '已完成'>('待接单')
+  // 2026-06-02: 支持 URL ?filter=报损 等 (从 billing 页报损 banner 跳过来直接进对应 filter)
+  const [filter, setFilter] = useState<'待接单' | '待发货' | '运送中' | '报损' | '已完成'>(() => {
+    if (typeof window === 'undefined') return '待接单'
+    const sp = new URLSearchParams(window.location.search)
+    const f = sp.get('filter') as any
+    return ['待接单', '待发货', '运送中', '报损', '已完成'].includes(f) ? f : '待接单'
+  })
   const [confirmState, openConfirm] = useConfirmSheet()
 
   async function load() {

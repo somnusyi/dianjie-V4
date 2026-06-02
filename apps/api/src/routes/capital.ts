@@ -18,6 +18,8 @@
  */
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
+import { writeCashTransaction } from '../services/cashbook'
+import { voucherForPayment } from '../services/voucher'
 
 const FINANCE_OR_BOSS = new Set(['ADMIN', 'SUPER_ADMIN', 'FINANCE'])
 const STORE_LEVEL = new Set(['MANAGER', 'KITCHEN_LEAD'])
@@ -317,20 +319,23 @@ export const capitalRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // ─── 财务付款 (APPROVED → PAID, 累加 spent) ─────
+  // 2026-06-01 Phase 1 修底盘: 财务点付款时同步写 CashTransaction + 生成凭证
   app.patch('/expenses/:id/pay', auth, async (req: any, reply: any) => {
     const { tenantId, role, userId } = req.user
     if (!FINANCE_OR_BOSS.has(role)) return reply.status(403).send({ error: '仅财务可付款' })
-    const { paymentMethod = 'cmb', bankTxNo, paidAt } = req.body as any
+    const { paymentMethod = 'cmb', bankTxNo, paidAt, accountId } = req.body as any
     const exp = await prisma.capitalExpense.findFirst({
       where: { id: req.params.id, tenantId, status: 'APPROVED' },
     })
     if (!exp) return reply.status(404).send({ error: '支出不存在或非已批状态' })
+    const paidAtDate = paidAt ? new Date(paidAt) : new Date()
+    const amtNum = Number(exp.amount)
     await prisma.$transaction(async (tx) => {
       await tx.capitalExpense.update({
         where: { id: exp.id },
         data: {
           status: 'PAID',
-          paidAt: paidAt ? new Date(paidAt) : new Date(),
+          paidAt: paidAtDate,
           paidById: userId,
           paymentMethod,
           bankTxNo: bankTxNo || null,
@@ -340,7 +345,7 @@ export const capitalRoutes: FastifyPluginAsync = async (app) => {
       if (exp.contractId) {
         const c = await tx.capitalContract.update({
           where: { id: exp.contractId },
-          data: { paidAmount: { increment: Number(exp.amount) } },
+          data: { paidAmount: { increment: amtNum } },
         })
         if (Math.abs(Number(c.paidAmount) - Number(c.totalAmount)) < 0.01) {
           await tx.capitalContract.update({ where: { id: c.id }, data: { status: 'COMPLETED' } })
@@ -348,9 +353,34 @@ export const capitalRoutes: FastifyPluginAsync = async (app) => {
       }
       await tx.capitalProject.update({
         where: { id: exp.projectId },
-        data: { spent: { increment: Number(exp.amount) } },
+        data: { spent: { increment: amtNum } },
+      })
+      // 写现金流水 -1 笔 (accountId 财务可显式传, 否则 fallback 招行账户)
+      await writeCashTransaction(tx, {
+        tenantId,
+        accountId: accountId || undefined,
+        direction: -1,
+        category: '资本支出',
+        amount: amtNum,
+        note: `${exp.vendor} ${exp.category}` + (bankTxNo ? ` 流水 ${bankTxNo}` : ''),
+        txDate: paidAtDate,
+        refType: 'CapitalExpense',
+        refId: exp.id,
+        createdById: userId,
       })
     })
+
+    // 生凭证 (资本支出仍按"付款"凭证模板: 借应付账款 / 贷银行存款)
+    voucherForPayment({
+      tenantId,
+      paymentId: exp.id,
+      paymentNo: `CE-${exp.id.slice(-8)}`,
+      supplierName: exp.vendor,
+      amount: amtNum,
+      method: paymentMethod === 'cmb' ? 'CMB_AUTOPAY' : paymentMethod === 'manual' ? 'OFFLINE' : 'BANK_TRANSFER',
+      date: paidAtDate,
+    })
+
     await prisma.opLog.create({
       data: { tenantId, userId,
         action: `付款 ${exp.vendor} ¥${exp.amount}` + (bankTxNo ? ` 流水 ${bankTxNo}` : ''),

@@ -14,6 +14,8 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import { isSupplierRole } from '../lib/auth-scope'
+import { writeCashTransaction } from '../services/cashbook'
+import { voucherForPayment } from '../services/voucher'
 
 const FINANCE_ROLES = new Set(['ADMIN', 'SUPER_ADMIN', 'FINANCE'])
 
@@ -153,14 +155,23 @@ export const invoicePaymentRoutes: FastifyPluginAsync = async (app) => {
 
     if (status === 'SUCCESS') {
       // 事务: 更新 payment + 累加 invoice.paidAmount + 检查是否付清
+      // 2026-06-01 Phase 1 修底盘: SUCCESS 时同步写 CashTransaction (-1 笔)
+      const paidAt = new Date()
+      const amtNum = Number(p.amount)
+      // 提前查 invoice 拿 supplier 信息 给凭证用
+      const invFull = await prisma.invoice.findUnique({
+        where: { id: p.invoiceId },
+        include: { supplier: { select: { name: true } } },
+      })
+      if (!invFull) return reply.status(404).send({ error: 'invoice missing' })
       await prisma.$transaction(async (tx) => {
         await tx.invoicePayment.update({
           where: { id: p.id },
-          data: { status: 'SUCCESS', paidAt: new Date(), bankTxNo: bankTxNo || null },
+          data: { status: 'SUCCESS', paidAt, bankTxNo: bankTxNo || null },
         })
         const inv = await tx.invoice.findUnique({ where: { id: p.invoiceId } })
         if (!inv) throw new Error('invoice missing')
-        const newPaid = Number(inv.paidAmount) + Number(p.amount)
+        const newPaid = Number(inv.paidAmount) + amtNum
         const fullyPaid = Math.abs(newPaid - Number(inv.amount)) < 0.01
         await tx.invoice.update({
           where: { id: p.invoiceId },
@@ -169,6 +180,28 @@ export const invoicePaymentRoutes: FastifyPluginAsync = async (app) => {
             fullyPaidAt: fullyPaid ? new Date() : null,
           },
         })
+        // 写流水 (不传 accountId 走 cmbBindAccount 招行账户; 财务侧未来可改 endpoint body 传 accountId)
+        await writeCashTransaction(tx, {
+          tenantId,
+          direction: -1,
+          category: '发票付款',
+          amount: amtNum,
+          note: `${invFull.supplier.name} 发票 ${invFull.invoiceNo}` + (bankTxNo ? ` 流水 ${bankTxNo}` : ''),
+          txDate: paidAt,
+          refType: 'InvoicePayment',
+          refId: p.id,
+          createdById: userId,
+        })
+      })
+      // 生凭证 (借 应付账款 / 贷 银行存款)
+      voucherForPayment({
+        tenantId,
+        paymentId: p.id,
+        paymentNo: invFull.invoiceNo,
+        supplierName: invFull.supplier.name,
+        amount: amtNum,
+        method: p.paymentMethod === 'cmb' ? 'CMB_AUTOPAY' : p.paymentMethod === 'manual' ? 'OFFLINE' : 'BANK_TRANSFER',
+        date: paidAt,
       })
       await prisma.opLog.create({
         data: { tenantId, userId,

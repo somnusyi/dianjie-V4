@@ -1,6 +1,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import { cmbTransfer, reportCmbError } from '../services/cmbPayment'
+import { voucherForInternalTransfer } from '../services/voucher'
 import crypto from 'crypto'
 import dayjs from 'dayjs'
 
@@ -190,6 +191,21 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
         data: { balance: { increment: amt } },
       }),
     ])
+
+    // 2026-06-01 Phase 1 修底盘: 生凭证 (借 1002 收款户 / 贷 1002 付款户, 同科目不同明细)
+    // 用 cmbBindAccount 末四位映射到好会计明细科目 (跟 voucherForPayment 同一套约定)
+    const last4 = (s?: string | null) => s ? s.slice(-4) : undefined
+    voucherForInternalTransfer({
+      tenantId,
+      transferBizNo: bizNo,
+      fromAccountName: fromAcc.name,
+      fromBankLast4: last4(fromAcc.cmbBindAccount),
+      toAccountName: toAcc.name,
+      toBankLast4: last4(toAcc.cmbBindAccount),
+      amount: amt,
+      remark: remark?.trim() || undefined,
+      date: now,
+    })
 
     return {
       success:    true,

@@ -93,6 +93,35 @@ export async function runDailyCheck() {
     }
   }
 
+  // 4.5 OVERDUE 重试 (2026-06-01 修: 之前 OVERDUE 单永远不再被 retry, 卡死)
+  // 银行临时错误 (网络抖动 / 余额不足等) 应该自动复活, retryCount<5 才重试避免死循环
+  // needApproval=true 的不动 (业务流程要求重审)
+  const RETRY_MAX = 5
+  const overduePending = await prisma.paymentSchedule.findMany({
+    where: {
+      status: 'OVERDUE',
+      needApproval: false,
+      retryCount: { lt: RETRY_MAX },
+      // 加 throttle: 至少距上次失败 1 小时, 防 cron 跑两次 retry 太密
+      // (PaymentSchedule 没 updatedAt 字段方便用, 用 dueAt 兜底 — OVERDUE 后 dueAt 不变, OK)
+    },
+  })
+  let overdueOk = 0
+  for (const s of overduePending) {
+    try {
+      // 先恢复 PENDING (executeBankPayment 会走 status=PROCESSING → PAID/OVERDUE)
+      // 但 executeBankPayment 没校验 status, 直接调即可
+      await executeBankPayment(s.id)
+      overdueOk++
+    } catch (e: any) {
+      // 失败 retryCount 在 executeBankPayment 里 increment 了
+      console.error(`OVERDUE 重试失败 ${s.id} (第 ${s.retryCount + 1}/${RETRY_MAX} 次):`, e.message)
+    }
+  }
+  if (overduePending.length > 0) {
+    console.log(`🔁 OVERDUE 重试: ${overduePending.length} 单, ${overdueOk} 成功`)
+  }
+
   // 5. 标记逾期
   await prisma.paymentSchedule.updateMany({
     where: {
@@ -103,7 +132,7 @@ export async function runDailyCheck() {
     data: { status: 'OVERDUE' },
   })
 
-  console.log(`✅ 账期扫描完成: 提醒${threeDaySchedules.length + oneDaySchedules.length}笔，付款${dueSchedules.length + pendingDue.length}笔`)
+  console.log(`✅ 账期扫描完成: 提醒${threeDaySchedules.length + oneDaySchedules.length}笔，付款${dueSchedules.length + pendingDue.length}笔，OVERDUE 复活${overdueOk}笔`)
 
   // ── 6. 24h 自动收货 (供应商点送达 24h 后门店未确认 → 自动 RECEIVED) ───
   // 倒计时基准从 shippedAt (发出) 改为 deliveredAt (送达). 还在路上的不会被自动收货

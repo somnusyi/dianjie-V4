@@ -196,6 +196,43 @@ export function voucherForPayment(opts: {
   })
 }
 
+/**
+ * 内部转账: 同一一级科目 1002 银行存款 借/贷, 用明细科目区分账户
+ * 2026-06-01 加: cashbook/internal-transfer 调银行成功后调用
+ * 借 1002 银行存款 (toAcc, by 末四位) / 贷 1002 银行存款 (fromAcc, by 末四位)
+ */
+export function voucherForInternalTransfer(opts: {
+  tenantId: string
+  transferBizNo: string                  // 唯一 ID (cashbook int-YYYYMMDDhhmmss-xxxxxx)
+  fromAccountName: string
+  fromBankLast4?: string
+  toAccountName: string
+  toBankLast4?: string
+  amount: number
+  remark?: string
+  date: Date
+}) {
+  // 末四位映射到明细科目 (跟 voucherForPayment 同一套约定)
+  const resolve = (last4?: string, fallbackName?: string) => {
+    if (last4 === '1674') return { code: '100201', name: '中国银行1674' }
+    if (last4 === '3618') return { code: '100202', name: '建设银行3618' }
+    return { code: '1002', name: fallbackName ? `银行存款 (${fallbackName})` : '银行存款' }
+  }
+  const from = resolve(opts.fromBankLast4, opts.fromAccountName)
+  const to   = resolve(opts.toBankLast4,   opts.toAccountName)
+  return createVoucherAsync({
+    tenantId: opts.tenantId,
+    date: opts.date,
+    summary: `内部转账 ${opts.fromAccountName} → ${opts.toAccountName}${opts.remark ? ` (${opts.remark})` : ''}`,
+    sourceType: 'CmbInternalTransfer',
+    sourceId: opts.transferBizNo,
+    entries: [
+      { accountCode: to.code,   accountName: to.name,   debit:  opts.amount, summary: `转入 ${opts.toAccountName}` },
+      { accountCode: from.code, accountName: from.name, credit: opts.amount, summary: `转出 ${opts.fromAccountName}` },
+    ],
+  })
+}
+
 /** 报损 (供应商同意): 借 营业外支出-存货毁损报废损失 / 贷 库存商品
  *  小企业会计准则: 571106 营业外支出-存货毁损报废损失 */
 export function voucherForLossApproved(opts: {

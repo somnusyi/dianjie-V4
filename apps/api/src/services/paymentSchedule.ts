@@ -7,6 +7,8 @@ import { notifyApprovalPending } from './notification'
 import { prisma, Supplier, Receipt } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { cmbTransferWithCheck, cmbHealthCheck, reportCmbError } from './cmbPayment'
+import { writeCashTransaction } from './cashbook'
+import { voucherForPayment } from './voucher'
 
 const AUTO_PAY_THRESHOLD = 2000  // 超过此金额需总部审批
 
@@ -222,14 +224,50 @@ export async function executeBankPayment(scheduleId: string) {
 
     if (bankResult.success) {
       // ── 付款成功 ───────────────────────────────────
-      await prisma.paymentSchedule.update({
-        where: { id: scheduleId },
-        data: {
-          status          : 'PAID',
-          paidAt          : new Date(),
-          bankTxNo        : bankResult.txNo,
-          bankRawResponse : bankResult.raw,
-        },
+      // 2026-06-01 Phase 1 修底盘: 招行付款成功后必须同步:
+      //   1. 改 PaymentSchedule.status=PAID (原有)
+      //   2. 写 CashTransaction -1 笔 (原来漏掉, 导致现金流账缺这笔出账)
+      //   3. 调 voucherForPayment 自动建凭证 DRAFT (原来漏掉, 导致月底导好会计缺这笔)
+      // 用一个事务包起来, 保证 3 件事原子
+      const paidAt = new Date()
+      // createdById fallback 链: 审批人 → receipt 创建人 (chef) — 自动付款没操作人
+      const createdById = schedule.approvedById || schedule.receipt.createdById
+      const amtNum = Number(schedule.amount)
+
+      await prisma.$transaction(async (tx) => {
+        await tx.paymentSchedule.update({
+          where: { id: scheduleId },
+          data: {
+            status          : 'PAID',
+            paidAt,
+            bankTxNo        : bankResult.txNo,
+            bankRawResponse : bankResult.raw,
+          },
+        })
+        // 写现金流水 (招行实时账户 cmbBindAccount, 不传 accountId 让 helper auto-find)
+        await writeCashTransaction(tx, {
+          tenantId: schedule.tenantId,
+          direction: -1,
+          category: '供应商付款',
+          amount: amtNum,
+          note: `招行自动付款 ${supplier.name} ${schedule.receipt.no}`,
+          txDate: paidAt,
+          refType: 'PaymentSchedule',
+          refId: scheduleId,
+          createdById,
+        })
+      })
+
+      // 生凭证 (async, 不阻塞主流程; 凭证失败不影响付款落账)
+      voucherForPayment({
+        tenantId: schedule.tenantId,
+        paymentId: scheduleId,
+        paymentNo: schedule.receipt.no,
+        supplierName: supplier.name,
+        amount: amtNum,
+        method: 'CMB_AUTOPAY',
+        date: paidAt,
+        // bankLast4 取付款账户 cmbBindAccount 末四位 (现在用招行单账户假设)
       })
 
       await prisma.opLog.create({

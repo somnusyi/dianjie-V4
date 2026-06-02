@@ -24,9 +24,17 @@ type Schedule = {
   supplier: { id: string; name: string }
   receipt: {
     id: string; no: string; deliveryDate: string; storeId: string
+    purchaseOrderId?: string | null  // 2026-06-02 客户反馈: 卡片要能点开看明细, 跳 PO 详情
     store: { name: string }
     invoice: { id: string; invoiceNo: string; status: string } | null
   }
+}
+
+type LossClaim = {
+  id: string
+  status: string
+  totalLossAmount: string | number
+  createdAt: string
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -56,6 +64,7 @@ function dueLabel(s: Schedule) {
 export default function SupplierBillingPage() {
   const [tab] = useState('billing')
   const [items, setItems] = useState<Schedule[] | null>(null)
+  const [lossClaims, setLossClaims] = useState<LossClaim[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [supplierName, setSupplierName] = useState('')
   type Filter = 'all' | 'pending' | 'overdue' | 'paid' | 'hold'
@@ -67,7 +76,22 @@ export default function SupplierBillingPage() {
     apiFetch<Schedule[]>('/api/schedules')
       .then(setItems)
       .catch(e => setError(e.message))
+    // 拉报损用作 hero 旁的"本月报损"快捷入口 (不阻断主流程, 失败静默)
+    apiFetch<LossClaim[]>('/api/loss-claims')
+      .then(d => setLossClaims(d || []))
+      .catch(() => setLossClaims([]))
   }, [])
+
+  // 本月报损集计 (含所有状态, 跟 supplier/history 口径一致)
+  const lossThisMonth = useMemo(() => {
+    if (!lossClaims) return { count: 0, total: 0 }
+    const monthStart = dayjs().startOf('month').valueOf()
+    const cur = lossClaims.filter(c => new Date(c.createdAt).getTime() >= monthStart)
+    return {
+      count: cur.length,
+      total: cur.reduce((s, c) => s + Number(c.totalLossAmount || 0), 0),
+    }
+  }, [lossClaims])
 
   // 集计
   const stats = useMemo(() => {
@@ -150,6 +174,17 @@ export default function SupplierBillingPage() {
         <span className="text-amber-fg">上传 ›</span>
       </a>
 
+      {/* 本月报损快捷入口 (2026-06-02 客户反馈: 账单页要能直接看到报损汇总, 不用翻订单) */}
+      {lossClaims !== null && lossThisMonth.count > 0 && (
+        <a href="/v2/supplier/history?filter=with-loss" className="block mx-4 mt-2 bg-red-bg/40 border border-red/30 rounded-card p-2.5 flex items-center gap-2 text-caption">
+          <span className="text-red-fg">📊</span>
+          <span className="flex-1 text-gray2">
+            本月报损 <b className="font-num text-red-fg">{lossThisMonth.count} 单</b> · 累计 <b className="font-num text-red-fg">{fmtMoney(lossThisMonth.total)}</b>
+          </span>
+          <span className="text-red-fg">查看明细 ›</span>
+        </a>
+      )}
+
       {/* 筛选 */}
       <div className="px-4 mt-4 flex gap-2 overflow-x-auto">
         {([
@@ -181,8 +216,14 @@ export default function SupplierBillingPage() {
         )}
         {visible.map(s => {
           const overdue = s.status !== 'PAID' && s.status !== 'ON_HOLD' && diffDays(s.dueAt) < 0
+          // 跳订单详情 (Receipt 1:1 PO, 详情页含商品明细+验收单+报损+付款历史)
+          // 2026-06-02 修 bug: 之前 <li> 完全没 onClick, 客户点不动
+          const poId = s.receipt?.purchaseOrderId
+          const clickable = !!poId
           return (
-            <li key={s.id} className={`bg-white rounded-card border border-border p-3 ${overdue ? 'border-l-4 border-l-red' : ''}`}>
+            <li key={s.id}
+                onClick={clickable ? () => location.href = `/v2/supplier/orders/${poId}` : undefined}
+                className={`bg-white rounded-card border border-border p-3 ${overdue ? 'border-l-4 border-l-red' : ''} ${clickable ? 'cursor-pointer hover:bg-bg-warm transition-colors' : ''}`}>
               <div className="flex items-center gap-2 mb-1 flex-wrap">
                 <Chip tone={STATUS_TONE[s.status] || 'gray'}>{STATUS_LABEL[s.status] || s.status}</Chip>
                 <span className="text-caption text-gray3 font-num">{s.receipt?.no}</span>
@@ -200,6 +241,7 @@ export default function SupplierBillingPage() {
                 {s.receipt?.invoice && (
                   <span className="text-amber-fg">· 已关联发票 #{s.receipt.invoice.invoiceNo}</span>
                 )}
+                {clickable && <span className="text-gray3 ml-auto">查看明细 ›</span>}
               </div>
               {s.status === 'PAID' && s.bankTxNo && (
                 <div className="text-micro text-green-fg mt-1">银行流水 {s.bankTxNo}</div>

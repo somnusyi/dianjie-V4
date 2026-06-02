@@ -29,7 +29,12 @@ const STATUS_LABEL: Record<string, string> = {
 
 export default function SupplierHistoryPage() {
   const [tab, setTab] = useState('me')
-  const [filter, setFilter] = useState<'all' | 'with-loss'>('all')
+  // 2026-06-02: 支持 URL ?filter=with-loss (从 billing 页报损 banner 跳过来直接显示报损单)
+  const [filter, setFilter] = useState<'all' | 'with-loss'>(() => {
+    if (typeof window === 'undefined') return 'all'
+    const sp = new URLSearchParams(window.location.search)
+    return sp.get('filter') === 'with-loss' ? 'with-loss' : 'all'
+  })
   const [orders, setOrders] = useState<OrderRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 

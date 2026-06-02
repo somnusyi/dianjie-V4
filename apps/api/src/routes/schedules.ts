@@ -27,6 +27,7 @@ export const scheduleRoutes: FastifyPluginAsync = async (app) => {
         receipt: {
           select: {
             id: true, no: true, deliveryDate: true, storeId: true,
+            purchaseOrderId: true,  // supplier/billing 卡片点击跳 PO 详情用 (2026-06-02)
             store: { select: { name: true } },
             invoice: { select: { id: true, invoiceNo: true, status: true } },
           },

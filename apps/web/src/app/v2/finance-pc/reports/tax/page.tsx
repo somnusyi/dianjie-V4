@@ -89,6 +89,7 @@ export default function FinancePCTaxReportsPage() {
       [['分类', '项目', '金额'],
        ['资产', '库存现金', balance.asset.cash.toFixed(2)],
        ['资产', '银行存款', balance.asset.bank.toFixed(2)],
+       ['资产', '其他货币资金', (balance.asset.otherCash || 0).toFixed(2)],
        ['资产', '应收账款', balance.asset.ar.toFixed(2)],
        ['资产', '库存商品', balance.asset.inventory.toFixed(2)],
        ['资产', '固定资产', balance.asset.fixedAsset.toFixed(2)],
@@ -99,8 +100,9 @@ export default function FinancePCTaxReportsPage() {
        ['负债', '应交税费', balance.liability.taxPayable.toFixed(2)],
        ['负债', '负债总计', balance.liability.total.toFixed(2)],
        ['权益', '实收资本', balance.equity.paidInCapital.toFixed(2)],
+       ['权益', '盈余公积', (balance.equity.surplusReserve || 0).toFixed(2)],
        ['权益', '本年利润', balance.equity.profitThisYear.toFixed(2)],
-       ['权益', '未分配利润', balance.equity.retainedEarnings.toFixed(2)],
+       ['权益', '利润分配', balance.equity.retainedEarnings.toFixed(2)],
        ['权益', '权益总计', balance.equity.total.toFixed(2)]])
   }
 
@@ -217,6 +219,7 @@ export default function FinancePCTaxReportsPage() {
                         <SubHead label="流动资产" />
                         <Row label="库存现金 (1001)" value={balance.asset.cash} />
                         <Row label="银行存款 (1002)" value={balance.asset.bank} />
+                        <Row label="其他货币资金 (1012)" value={balance.asset.otherCash || 0} />
                         <Row label="应收账款 (1122)" value={balance.asset.ar} />
                         <Row label="其他应收款 (1221)" value={balance.asset.otherAr} />
                         <Row label="预付账款 (1123)" value={balance.asset.prepaid} />
@@ -240,6 +243,7 @@ export default function FinancePCTaxReportsPage() {
                     <table className="w-full">
                       <tbody>
                         <SubHead label="流动负债" />
+                        <Row label="短期借款 (2001)" value={balance.liability.shortLoan || 0} />
                         <Row label="应付账款 (2202)" value={balance.liability.ap} />
                         <Row label="预收账款 (2203)" value={balance.liability.advance} />
                         <Row label="应付职工薪酬 (2211)" value={balance.liability.payroll} />
@@ -258,10 +262,11 @@ export default function FinancePCTaxReportsPage() {
                     </header>
                     <table className="w-full">
                       <tbody>
-                        <Row label="实收资本 (4001)" value={balance.equity.paidInCapital} />
-                        <Row label="资本公积 (4002)" value={balance.equity.capitalReserve} />
-                        <Row label="本年利润 (4103)" value={balance.equity.profitThisYear} />
-                        <Row label="未分配利润 (4104)" value={balance.equity.retainedEarnings} />
+                        <Row label="实收资本 (3001/4001)" value={balance.equity.paidInCapital} />
+                        <Row label="资本公积 (3002/4002)" value={balance.equity.capitalReserve} />
+                        <Row label="盈余公积 (3101/4101)" value={balance.equity.surplusReserve || 0} />
+                        <Row label="本年利润 (3103/4103)" value={balance.equity.profitThisYear} />
+                        <Row label="利润分配 (3104/4104)" value={balance.equity.retainedEarnings} />
                         <SubTotal label="权益合计" value={balance.equity.total} />
                       </tbody>
                     </table>

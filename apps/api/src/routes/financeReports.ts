@@ -10,6 +10,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
+import { PNL_PREFIXES, BS_PREFIXES } from '../services/voucher/coa-config'
 
 const FINANCE_ROLES = ['FINANCE', 'ADMIN', 'SUPER_ADMIN']
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
@@ -569,15 +570,16 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
     const start = dayjs(ym + '-01').startOf('month').toDate()
     const end = dayjs(ym + '-01').endOf('month').toDate()
 
-    // 收入类: 贷-借为正 (期间发生额)
-    const revenueMain = await aggregateByPrefix({ tenantId, prefixes: ['6001'], start, end })
-    const revenueOther = await aggregateByPrefix({ tenantId, prefixes: ['6051'], start, end }).catch(() => ({ totalDebit: 0, totalCredit: 0, net: 0, count: 0 }))
+    // 收入类: 贷-借为正 (期间发生额) — 多前缀兼容 (企业会计准则 5xxx + 好会计旧准则 6xxx)
+    const revenueMain = await aggregateByPrefix({ tenantId, prefixes: PNL_PREFIXES.revenueMain, start, end })
+    const revenueOther = await aggregateByPrefix({ tenantId, prefixes: PNL_PREFIXES.revenueOther, start, end })
+    const revenueNonOp = await aggregateByPrefix({ tenantId, prefixes: PNL_PREFIXES.revenueNonOp, start, end })
     // 成本费用: 借-贷为正
-    const costMain = await aggregateByPrefix({ tenantId, prefixes: ['6401'], start, end })
-    const sellingExp = await aggregateByPrefix({ tenantId, prefixes: ['6601'], start, end })
-    const mgmtExp = await aggregateByPrefix({ tenantId, prefixes: ['6602'], start, end })
-    const financeExp = await aggregateByPrefix({ tenantId, prefixes: ['6603'], start, end })
-    const tax = await aggregateByPrefix({ tenantId, prefixes: ['6403'], start, end }).catch(() => ({ totalDebit: 0, totalCredit: 0, net: 0, count: 0 }))  // 税金及附加
+    const costMain = await aggregateByPrefix({ tenantId, prefixes: PNL_PREFIXES.costMain, start, end })
+    const sellingExp = await aggregateByPrefix({ tenantId, prefixes: PNL_PREFIXES.sellingExp, start, end })
+    const mgmtExp = await aggregateByPrefix({ tenantId, prefixes: PNL_PREFIXES.mgmtExp, start, end })
+    const financeExp = await aggregateByPrefix({ tenantId, prefixes: PNL_PREFIXES.financeExp, start, end })
+    const tax = await aggregateByPrefix({ tenantId, prefixes: PNL_PREFIXES.tax, start, end })  // 税金及附加
 
     const operatingRevenue = revenueMain.totalCredit - revenueMain.totalDebit  // 营业收入
     const operatingCost    = costMain.totalDebit - costMain.totalCredit          // 营业成本
@@ -586,9 +588,10 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
     const financeExpAmt    = financeExp.totalDebit - financeExp.totalCredit
     const taxAmt           = tax.totalDebit - tax.totalCredit
     const otherIncome      = revenueOther.totalCredit - revenueOther.totalDebit
+    const nonOpIncome      = revenueNonOp.totalCredit - revenueNonOp.totalDebit
 
     const operatingProfit = operatingRevenue - operatingCost - taxAmt - sellingExpAmt - mgmtExpAmt - financeExpAmt
-    const totalProfit     = operatingProfit + otherIncome
+    const totalProfit     = operatingProfit + otherIncome + nonOpIncome
     // 小微企业暂不计所得税 (财务可在导出 Excel 后手工填)
     const netProfit       = totalProfit
 
@@ -606,15 +609,16 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
         { lineNo: 7,  label: '五、管理费用',     amount: mgmtExpAmt },
         { lineNo: 8,  label: '六、财务费用',     amount: financeExpAmt },
         { lineNo: 9,  label: '七、营业利润',     amount: operatingProfit, type: 'total' },
-        { lineNo: 10, label: '   +营业外收入',  amount: otherIncome, indent: 1 },
-        { lineNo: 11, label: '八、利润总额',     amount: totalProfit, type: 'total' },
-        { lineNo: 12, label: '九、所得税费用',   amount: 0, note: '小微企业核定征收, 此处不计' },
-        { lineNo: 13, label: '十、净利润',       amount: netProfit, type: 'grand' },
+        { lineNo: 10, label: '   +其他业务收入', amount: otherIncome, indent: 1 },
+        { lineNo: 11, label: '   +营业外收入',   amount: nonOpIncome, indent: 1 },
+        { lineNo: 12, label: '八、利润总额',     amount: totalProfit, type: 'total' },
+        { lineNo: 13, label: '九、所得税费用',   amount: 0, note: '小微企业核定征收, 此处不计' },
+        { lineNo: 14, label: '十、净利润',       amount: netProfit, type: 'grand' },
       ],
       summary: {
         operatingRevenue, operatingCost,
         sellingExp: sellingExpAmt, mgmtExp: mgmtExpAmt, financeExp: financeExpAmt,
-        tax: taxAmt, otherIncome,
+        tax: taxAmt, otherIncome, nonOpIncome,
         operatingProfit, totalProfit, netProfit,
       },
     }
@@ -632,46 +636,49 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
 
     // 资产类: 借方余额 (1xxx)
     // 负债类: 贷方余额 (2xxx)
-    // 所有者权益: 贷方余额 (4xxx)
+    // 所有者权益: 贷方余额 (3xxx / 4xxx — 兼容两套准则)
     // 累计自开账以来的所有 POSTED 凭证
-    const asAsset = async (prefix: string) => {
-      const r = await aggregateByPrefix({ tenantId, prefixes: [prefix], end, statuses: ['POSTED'] })
+    const asAssetMulti = async (prefixes: string[]) => {
+      const r = await aggregateByPrefix({ tenantId, prefixes, end, statuses: ['POSTED'] })
       return r.totalDebit - r.totalCredit
     }
-    const asLiabEquity = async (prefix: string) => {
-      const r = await aggregateByPrefix({ tenantId, prefixes: [prefix], end, statuses: ['POSTED'] })
+    const asLiabEquityMulti = async (prefixes: string[]) => {
+      const r = await aggregateByPrefix({ tenantId, prefixes, end, statuses: ['POSTED'] })
       return r.totalCredit - r.totalDebit
     }
 
     // ── 资产 ──
-    const cash      = await asAsset('1001')                       // 库存现金
-    const bank      = await asAsset('1002')                       // 银行存款
-    const ar        = await asAsset('1122')                       // 应收账款
-    const otherAr   = await asAsset('1221').catch(() => 0)        // 其他应收
-    const inventory = await asAsset('1405')                       // 库存商品
-    const prepaid   = await asAsset('1123').catch(() => 0)        // 预付账款
-    const fixedAsset = await asAsset('1601').catch(() => 0)       // 固定资产
-    const accumDep   = await asAsset('1602').catch(() => 0)       // 累计折旧 (借方负数)
-    const longExp    = await asAsset('1801').catch(() => 0)       // 长期待摊
-    const currentAsset = cash + bank + ar + otherAr + inventory + prepaid
-    const longTermAsset = fixedAsset + accumDep + longExp  // accumDep 通常为负
+    const cash       = await asAssetMulti(BS_PREFIXES.cash)
+    const bank       = await asAssetMulti(BS_PREFIXES.bank)
+    const otherCash  = await asAssetMulti(BS_PREFIXES.otherCash)   // 美团/抖音/支付宝/微信余额
+    const ar         = await asAssetMulti(BS_PREFIXES.ar)
+    const otherAr    = await asAssetMulti(BS_PREFIXES.otherAr)
+    const inventory  = await asAssetMulti(BS_PREFIXES.inventory)
+    const prepaid    = await asAssetMulti(BS_PREFIXES.prepaid)
+    const fixedAsset = await asAssetMulti(BS_PREFIXES.fixedAsset)
+    const accumDep   = await asAssetMulti(BS_PREFIXES.accumDep)    // 累计折旧, 借方贷余, 此值 <=0
+    const longExp    = await asAssetMulti(BS_PREFIXES.longExp)
+    const currentAsset = cash + bank + otherCash + ar + otherAr + inventory + prepaid
+    const longTermAsset = fixedAsset + accumDep + longExp
     const totalAsset = currentAsset + longTermAsset
 
     // ── 负债 ──
-    const ap         = await asLiabEquity('2202')                 // 应付账款
-    const otherAp    = await asLiabEquity('2241').catch(() => 0)  // 其他应付
-    const payroll    = await asLiabEquity('2211').catch(() => 0)  // 应付职工薪酬
-    const taxPayable = await asLiabEquity('2221').catch(() => 0)  // 应交税费
-    const advance    = await asLiabEquity('2203').catch(() => 0)  // 预收账款
-    const currentLiab = ap + otherAp + payroll + taxPayable + advance
+    const shortLoan  = await asLiabEquityMulti(BS_PREFIXES.shortLoan)
+    const ap         = await asLiabEquityMulti(BS_PREFIXES.ap)
+    const otherAp    = await asLiabEquityMulti(BS_PREFIXES.otherAp)
+    const payroll    = await asLiabEquityMulti(BS_PREFIXES.payroll)
+    const taxPayable = await asLiabEquityMulti(BS_PREFIXES.taxPayable)
+    const advance    = await asLiabEquityMulti(BS_PREFIXES.advance)
+    const currentLiab = shortLoan + ap + otherAp + payroll + taxPayable + advance
     const totalLiab = currentLiab
 
-    // ── 所有者权益 ──
-    const paidInCapital = await asLiabEquity('4001').catch(() => 0)  // 实收资本
-    const capitalReserve = await asLiabEquity('4002').catch(() => 0)  // 资本公积
-    const profitThisYear = await asLiabEquity('4103').catch(() => 0)  // 本年利润
-    const retainedEarnings = await asLiabEquity('4104').catch(() => 0)  // 未分配利润
-    const totalEquity = paidInCapital + capitalReserve + profitThisYear + retainedEarnings
+    // ── 所有者权益 (3xxx 优先, 4xxx 兜底) ──
+    const paidInCapital    = await asLiabEquityMulti(BS_PREFIXES.paidInCapital)
+    const capitalReserve   = await asLiabEquityMulti(BS_PREFIXES.capitalReserve)
+    const surplusReserve   = await asLiabEquityMulti(BS_PREFIXES.surplusReserve)
+    const profitThisYear   = await asLiabEquityMulti(BS_PREFIXES.profitYTD)
+    const retainedEarnings = await asLiabEquityMulti(BS_PREFIXES.retainedEarnings)
+    const totalEquity = paidInCapital + capitalReserve + surplusReserve + profitThisYear + retainedEarnings
 
     const balanced = Math.abs(totalAsset - (totalLiab + totalEquity)) < 0.01
 
@@ -679,19 +686,19 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
       asOf: end.toISOString(),
       currency: 'CNY',
       asset: {
-        cash, bank, ar, otherAr, inventory, prepaid,
+        cash, bank, otherCash, ar, otherAr, inventory, prepaid,
         currentAsset,
         fixedAsset, accumDep, longExp,
         longTermAsset,
         total: totalAsset,
       },
       liability: {
-        ap, otherAp, payroll, taxPayable, advance,
+        shortLoan, ap, otherAp, payroll, taxPayable, advance,
         currentLiab,
         total: totalLiab,
       },
       equity: {
-        paidInCapital, capitalReserve, profitThisYear, retainedEarnings,
+        paidInCapital, capitalReserve, surplusReserve, profitThisYear, retainedEarnings,
         total: totalEquity,
       },
       balanced,

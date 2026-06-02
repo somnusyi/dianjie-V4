@@ -13,7 +13,7 @@ import { createVoucher } from '../services/voucher'
 import { exportVouchersExcel, ExportFilter } from '../services/voucher/export'
 import { seedRestaurantCoA } from '../services/voucher/chart-of-accounts-restaurant'
 import { assertPeriodOpen, closePeriod, reopenPeriod, getOrCreatePeriod, isPeriodLocked } from '../services/accountingPeriod'
-import { generateCarryoverVoucher } from '../services/voucher/carryover'
+import { generateCarryoverVoucher, previewCarryover } from '../services/voucher/carryover'
 
 const FINANCE_ROLES = ['FINANCE', 'ADMIN', 'SUPER_ADMIN']
 
@@ -155,6 +155,23 @@ export const voucherRoutes: FastifyPluginAsync = async (app) => {
     }
     await prisma.voucher.update({ where: { id: v.id }, data: { status: 'VOIDED' } })
     return { ok: true }
+  })
+
+  // ── 月结锁账: 期末结转 dry-run (不落库, 看会算出啥) ──
+  // GET /api/vouchers/periods/preview?month=YYYY-MM
+  app.get('/periods/preview', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!ensureFinance(role)) return reply.status(403).send({ error: '无权' })
+    const { month } = req.query as any
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+      return reply.status(400).send({ error: 'month 必须 YYYY-MM' })
+    }
+    try {
+      const preview = await previewCarryover({ tenantId, month })
+      return preview
+    } catch (e: any) {
+      return reply.status(400).send({ error: e.message })
+    }
   })
 
   // ── 月结锁账: 列表 ────────────────────────────────────

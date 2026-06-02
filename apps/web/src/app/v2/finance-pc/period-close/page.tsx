@@ -47,6 +47,8 @@ export default function FinancePCPeriodClosePage() {
   const [reopenFor, setReopenFor] = useState<Period | null>(null)
   const [closeNote, setCloseNote] = useState('')
   const [reopenNote, setReopenNote] = useState('')
+  const [preview, setPreview] = useState<any | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
 
   function load() {
     apiFetch<Period[]>('/api/vouchers/periods')
@@ -79,6 +81,15 @@ export default function FinancePCPeriodClosePage() {
       load()
     } catch (e: any) { alert(e.message || '关账失败') }
     finally { setBusy(false) }
+  }
+
+  async function loadPreview(month: string) {
+    setPreview(null); setPreviewLoading(true)
+    try {
+      const p = await apiFetch<any>(`/api/vouchers/periods/preview?month=${month}`)
+      setPreview(p)
+    } catch (e: any) { alert(e.message || '预览失败') }
+    finally { setPreviewLoading(false) }
   }
 
   async function doReopen() {
@@ -160,14 +171,16 @@ export default function FinancePCPeriodClosePage() {
                       ) : <span className="text-micro text-gray3">—</span>}
                     </td>
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                      <button onClick={() => loadPreview(m)} disabled={busy}
+                              className="px-3 py-1.5 bg-white border border-border text-gray2 rounded-cta text-button disabled:opacity-40">预览结转</button>
                       {isOpenable && (
                         <button onClick={() => setCloseFor(m)}
                                 disabled={busy}
-                                className="px-3 py-1.5 bg-red text-white rounded-cta text-button disabled:opacity-40">关账</button>
+                                className="ml-2 px-3 py-1.5 bg-red text-white rounded-cta text-button disabled:opacity-40">关账</button>
                       )}
                       {isClosed && p && (
                         <button onClick={() => setReopenFor(p)} disabled={busy}
-                                className="px-3 py-1.5 bg-white border border-border text-gray2 rounded-cta text-button disabled:opacity-40">重开</button>
+                                className="ml-2 px-3 py-1.5 bg-white border border-border text-gray2 rounded-cta text-button disabled:opacity-40">重开</button>
                       )}
                     </td>
                   </tr>
@@ -177,6 +190,77 @@ export default function FinancePCPeriodClosePage() {
           </table>
         </div>
       </main>
+
+      {/* 预览结转 drawer (dry-run, 不落库) */}
+      {(preview || previewLoading) && (
+        <div className="fixed inset-0 z-50" onClick={() => { setPreview(null) }}>
+          <div className="absolute inset-0 bg-ink/40" />
+          <div className="absolute right-0 top-0 bottom-0 w-[640px] bg-white shadow-xl overflow-auto" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-border flex items-center justify-between sticky top-0 bg-white">
+              <h3 className="text-h2">期末结转预览 {preview?.month}</h3>
+              <button onClick={() => setPreview(null)} className="text-h2 text-gray3">×</button>
+            </div>
+            <div className="px-6 py-4 space-y-4">
+              {previewLoading && <div className="text-center py-12 text-caption text-gray3">加载中…</div>}
+              {preview && (
+                <>
+                  <div className={`rounded-card border p-3 text-caption ${preview.balanced ? 'bg-green-bg/30 border-green/30 text-green-fg' : 'bg-red-bg/30 border-red/30 text-red-fg'}`}>
+                    {preview.balanced ? '✓ 借贷平账' : '✗ 不平!'} · 借 ¥{preview.totalDebit.toFixed(2)} {preview.balanced ? '=' : '≠'} 贷 ¥{preview.totalCredit.toFixed(2)}
+                  </div>
+                  <div className="bg-bg-warm rounded-card border border-border p-3">
+                    <div className="text-micro text-gray3">本月净利</div>
+                    <div className={`text-h1 font-num ${preview.profitNet < 0 ? 'text-red-fg' : 'text-green-fg'}`}>
+                      ¥{preview.profitNet.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                    <div className="text-micro text-gray3 mt-1">结转目标科目: {preview.profitAccount.code} {preview.profitAccount.name}</div>
+                  </div>
+                  <div>
+                    <div className="text-h2 mb-2">损益归集 ({preview.buckets.filter((b: any) => Math.abs(b.net) > 0.01).length} 个 bucket)</div>
+                    {preview.buckets.filter((b: any) => Math.abs(b.net) > 0.01).map((b: any) => (
+                      <div key={b.key} className="flex items-center justify-between py-1.5 border-b border-border text-caption">
+                        <div>
+                          <span className={b.side === 'revenue' ? 'text-green-fg' : 'text-amber-fg'}>{b.name}</span>
+                          <span className="text-micro text-gray3 ml-1">[{b.prefixesHit.join(',') || '—'}]</span>
+                        </div>
+                        <span className={`font-num ${b.net < 0 ? 'text-red-fg' : ''}`}>{b.side === 'revenue' ? '收入' : '费用'} ¥{b.net.toFixed(2)}</span>
+                      </div>
+                    ))}
+                    {preview.buckets.filter((b: any) => Math.abs(b.net) > 0.01).length === 0 && (
+                      <div className="text-caption text-gray3 py-4 text-center">本月无可结转损益 (无 POSTED 凭证涉及 5xxx/6xxx 损益类科目)</div>
+                    )}
+                  </div>
+                  {preview.entries.length > 0 && (
+                    <div>
+                      <div className="text-h2 mb-2">将生成的分录 ({preview.entries.length} 行)</div>
+                      <table className="w-full">
+                        <thead className="bg-bg/40">
+                          <tr className="text-micro text-gray3 text-left">
+                            <th className="px-2 py-1.5 font-normal">科目</th>
+                            <th className="px-2 py-1.5 font-normal text-right">借</th>
+                            <th className="px-2 py-1.5 font-normal text-right">贷</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {preview.entries.map((e: any, i: number) => (
+                            <tr key={i} className="border-t border-border">
+                              <td className="px-2 py-1.5 text-caption"><span className="font-num text-gray3">{e.accountCode}</span> {e.accountName}</td>
+                              <td className="px-2 py-1.5 text-right font-num text-caption">{e.debit > 0 ? `¥${e.debit.toFixed(2)}` : ''}</td>
+                              <td className="px-2 py-1.5 text-right font-num text-caption">{e.credit > 0 ? `¥${e.credit.toFixed(2)}` : ''}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  <div className="bg-amber/10 rounded-card p-3 text-caption text-gray2">
+                    💡 这是 dry-run 预览, 没落库. 真关账请点列表里的 "关账" 按钮.
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 关账 confirm drawer */}
       {closeFor && (

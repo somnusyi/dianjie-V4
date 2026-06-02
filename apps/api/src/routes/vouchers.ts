@@ -158,16 +158,17 @@ export const voucherRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // ── 月结锁账: 期末结转 dry-run (不落库, 看会算出啥) ──
-  // GET /api/vouchers/periods/preview?month=YYYY-MM
+  // GET /api/vouchers/periods/preview?month=YYYY-MM&includeDraft=1
+  //   includeDraft=1 时把 DRAFT 也算进去 (用于"假如全 POST 了" 预演)
   app.get('/periods/preview', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
     if (!ensureFinance(role)) return reply.status(403).send({ error: '无权' })
-    const { month } = req.query as any
+    const { month, includeDraft } = req.query as any
     if (!month || !/^\d{4}-\d{2}$/.test(month)) {
       return reply.status(400).send({ error: 'month 必须 YYYY-MM' })
     }
     try {
-      const preview = await previewCarryover({ tenantId, month })
+      const preview = await previewCarryover({ tenantId, month, includeDraft: includeDraft === '1' || includeDraft === 'true' })
       return preview
     } catch (e: any) {
       return reply.status(400).send({ error: e.message })

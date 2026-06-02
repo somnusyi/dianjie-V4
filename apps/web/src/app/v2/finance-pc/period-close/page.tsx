@@ -83,11 +83,12 @@ export default function FinancePCPeriodClosePage() {
     finally { setBusy(false) }
   }
 
-  async function loadPreview(month: string) {
+  async function loadPreview(month: string, includeDraft = false) {
     setPreview(null); setPreviewLoading(true)
     try {
-      const p = await apiFetch<any>(`/api/vouchers/periods/preview?month=${month}`)
-      setPreview(p)
+      const url = `/api/vouchers/periods/preview?month=${month}${includeDraft ? '&includeDraft=1' : ''}`
+      const p = await apiFetch<any>(url)
+      setPreview({ ...p, _month: month })
     } catch (e: any) { alert(e.message || '预览失败') }
     finally { setPreviewLoading(false) }
   }
@@ -206,6 +207,17 @@ export default function FinancePCPeriodClosePage() {
                 <>
                   <div className={`rounded-card border p-3 text-caption ${preview.balanced ? 'bg-green-bg/30 border-green/30 text-green-fg' : 'bg-red-bg/30 border-red/30 text-red-fg'}`}>
                     {preview.balanced ? '✓ 借贷平账' : '✗ 不平!'} · 借 ¥{preview.totalDebit.toFixed(2)} {preview.balanced ? '=' : '≠'} 贷 ¥{preview.totalCredit.toFixed(2)}
+                    {preview.includedDraft && <span className="ml-2 text-amber-fg">(含 DRAFT, 假设全 POST 场景)</span>}
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => loadPreview(preview._month, false)}
+                            className={`px-3 py-1.5 rounded-cta text-button ${!preview.includedDraft ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
+                      仅 POSTED
+                    </button>
+                    <button onClick={() => loadPreview(preview._month, true)}
+                            className={`px-3 py-1.5 rounded-cta text-button ${preview.includedDraft ? 'bg-amber text-white' : 'bg-white border border-border text-gray2'}`}>
+                      含 DRAFT (预演)
+                    </button>
                   </div>
                   <div className="bg-bg-warm rounded-card border border-border p-3">
                     <div className="text-micro text-gray3">本月净利</div>

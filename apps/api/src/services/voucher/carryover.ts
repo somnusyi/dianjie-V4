@@ -47,22 +47,23 @@ export interface CarryoverPreview {
   balanced: boolean
 }
 
-/** 仅查算不落库 */
-export async function previewCarryover(opts: { tenantId: string; month: string }): Promise<CarryoverPreview> {
-  return computeCarryover(opts.tenantId, opts.month)
+/** 仅查算不落库. includeDraft: 若 true 把 DRAFT 也计入预览 (验证用) */
+export async function previewCarryover(opts: { tenantId: string; month: string; includeDraft?: boolean }): Promise<CarryoverPreview & { includedDraft: boolean }> {
+  return computeCarryover(opts.tenantId, opts.month, opts.includeDraft || false)
 }
 
-async function computeCarryover(tenantId: string, month: string): Promise<CarryoverPreview> {
+async function computeCarryover(tenantId: string, month: string, includeDraft = false): Promise<CarryoverPreview & { includedDraft: boolean }> {
   const start = dayjs(month + '-01').startOf('month').toDate()
   const end = dayjs(month + '-01').endOf('month').toDate()
   const profitAccount = await resolveProfitAccount(tenantId)
 
-  // 1. 拉本月 POSTED 凭证的所有分录
+  // 1. 拉本月凭证的所有分录 (默认仅 POSTED; preview 可选 includeDraft 看"假如 POST 了" 场景)
+  const allowedStatuses: ('POSTED'|'DRAFT')[] = includeDraft ? ['POSTED', 'DRAFT'] : ['POSTED']
   const entries = await prisma.voucherEntry.findMany({
     where: {
       voucher: {
         tenantId,
-        status: 'POSTED',
+        status: { in: allowedStatuses },
         date: { gte: start, lte: end },
         NOT: { sourceType: 'Carryover' },   // 不结转自己
       },
@@ -157,6 +158,7 @@ async function computeCarryover(tenantId: string, month: string): Promise<Carryo
     totalDebit: Math.round(totalDebit * 100) / 100,
     totalCredit: Math.round(totalCredit * 100) / 100,
     balanced: Math.abs(totalDebit - totalCredit) < 0.01,
+    includedDraft: includeDraft,
   }
 }
 

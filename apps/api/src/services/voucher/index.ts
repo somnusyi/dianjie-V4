@@ -14,6 +14,7 @@
  *   - generateNo(tenantId, date): 生成 PZ-YYYYMM-NNNN 编号
  */
 import { prisma } from '@dianjie/db'
+import { assertPeriodOpen, shiftDateIfLocked } from '../accountingPeriod'
 
 export interface VoucherEntryInput {
   accountCode: string
@@ -32,6 +33,12 @@ export interface CreateVoucherOpts {
   entries: VoucherEntryInput[]
   word?: string
   createdById?: string | null
+  /**
+   * 月结锁账行为:
+   *   - auto (默认): 当月已锁, 自动顺延 date 到下一个 OPEN 月 1 号
+   *   - strict: 当月已锁, 直接抛错 (用于手工凭证 / post / unpost / void)
+   */
+  lockMode?: 'auto' | 'strict'
 }
 
 /** 生成凭证号 PZ-YYYYMM-NNNN, 按月递增. 并发安全: 用最大号 + 1 取号 (单次), 撞 unique 重试 */
@@ -54,8 +61,17 @@ async function generateNo(tenantId: string, date: Date): Promise<string> {
  * 并发安全: 撞 unique (P2002) 时最多重试 3 次重新取号
  */
 export async function createVoucher(opts: CreateVoucherOpts): Promise<string | null> {
-  const { tenantId, sourceType, sourceId, entries, summary, word = '记', createdById = null } = opts
-  const date = typeof opts.date === 'string' ? new Date(opts.date) : opts.date
+  const { tenantId, sourceType, sourceId, entries, summary, word = '记', createdById = null, lockMode = 'auto' } = opts
+  let date = typeof opts.date === 'string' ? new Date(opts.date) : opts.date
+
+  // 月结锁账:
+  //   - strict: 锁了直接抛 (手工凭证 / post / unpost / void)
+  //   - auto:   锁了顺延到下一个 OPEN 月 (业务自动事件不能因为锁账丢)
+  if (lockMode === 'strict') {
+    await assertPeriodOpen(tenantId, date)
+  } else {
+    date = await shiftDateIfLocked(tenantId, date)
+  }
 
   // 幂等检查 (DB unique 兜底, 这里先查避免不必要的写)
   if (sourceType && sourceId) {

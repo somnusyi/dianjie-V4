@@ -24,16 +24,24 @@ const TABS: Tab[] = [
       { label: '资本支出审批', href: '/v2/finance-pc/capital-review', desc: '店长申请 → 老板批 → 财务付' },
     ],
   },
-  { key: 'vouchers', label: '凭证', href: '/v2/finance-pc/vouchers', badgeKey: 'draftVouchers' },
+  {
+    key: 'vouchers',
+    label: '凭证',
+    group: [
+      { label: '凭证管理', href: '/v2/finance-pc/vouchers',     desc: '草稿 / 已审 / 导出', badgeKey: 'draftVouchers' },
+      { label: '月结锁账', href: '/v2/finance-pc/period-close', desc: '关账 / 期末结转 / 重开' },
+    ],
+  },
   { key: 'funds',    label: '资金', href: '/v2/finance-pc/funds',    badgeKey: 'dueThisWeek' },
   {
     key: 'reports',
     label: '报表',
     matchPrefix: '/v2/finance-pc/reports',
     group: [
-      { label: '月度对账',   href: '/v2/finance-pc/reconcile',        desc: '门店净利 / 供应商收付' },
-      { label: '利润中心',   href: '/v2/finance-pc/reports/profit',   desc: '月度 P&L' },
+      { label: '月度对账',   href: '/v2/finance-pc/reconcile',         desc: '门店净利 / 供应商收付' },
+      { label: '利润中心',   href: '/v2/finance-pc/reports/profit',    desc: '月度 P&L (管理口径)' },
       { label: '现金流报表', href: '/v2/finance-pc/reports/cash-flow', desc: '经营 / 投资 / 筹资' },
+      { label: '报税报表',   href: '/v2/finance-pc/reports/tax',       desc: '利润表 / 资产负债表' },
     ],
   },
   { key: 'stores',   label: '各店',     href: '/v2/finance-pc/stores' },

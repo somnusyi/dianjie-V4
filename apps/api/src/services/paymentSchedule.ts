@@ -9,6 +9,7 @@ import dayjs from 'dayjs'
 import { cmbTransferWithCheck, cmbHealthCheck, reportCmbError } from './cmbPayment'
 import { writeCashTransaction } from './cashbook'
 import { voucherForPayment } from './voucher'
+import { checkReceiptBlockedByInvoicePath, cancelScheduleDueToInvoiceLock } from './paymentMutex'
 
 const AUTO_PAY_THRESHOLD = 2000  // 超过此金额需总部审批
 
@@ -184,6 +185,14 @@ export async function executeBankPayment(scheduleId: string) {
 
   if (!supplier.bankAccount) {
     throw new Error(`供应商「${supplier.name}」未配置收款账户，请先完善供应商信息`)
+  }
+
+  // 防重付互斥: 若该 receipt 关联发票已发起 InvoicePayment, 取消此 schedule
+  // (避免两条路径同时打款 → 供应商收两次)
+  const blockReason = await checkReceiptBlockedByInvoicePath(prisma, schedule.receiptId)
+  if (blockReason) {
+    await cancelScheduleDueToInvoiceLock(scheduleId, blockReason)
+    throw new Error(blockReason)
   }
 
   // 检查招行微服务是否在线

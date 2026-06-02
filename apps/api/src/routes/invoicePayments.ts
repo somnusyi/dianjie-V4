@@ -16,6 +16,7 @@ import { prisma } from '@dianjie/db'
 import { isSupplierRole } from '../lib/auth-scope'
 import { writeCashTransaction } from '../services/cashbook'
 import { voucherForPayment } from '../services/voucher'
+import { lockSchedulesForInvoicePayment } from '../services/paymentMutex'
 
 const FINANCE_ROLES = new Set(['ADMIN', 'SUPER_ADMIN', 'FINANCE'])
 
@@ -121,21 +122,35 @@ export const invoicePaymentRoutes: FastifyPluginAsync = async (app) => {
       })
     }
 
-    const payment = await prisma.invoicePayment.create({
-      data: {
-        tenantId, invoiceId,
-        amount: amt, paymentMethod,
-        status: 'PENDING',
-        initiatedById: userId,
-        note: note || null,
-      },
-    })
-    await prisma.opLog.create({
-      data: { tenantId, userId,
-        action: `发起发票付款 #${inv.invoiceNo} ¥${amt.toLocaleString()} (剩余 ¥${(realRemaining - amt).toLocaleString()})`,
-        entityType: 'InvoicePayment', targetId: payment.id,
-      },
-    })
+    // 防重付互斥 + 创建付款 用同一事务, 互斥失败整体回滚
+    let payment: any
+    try {
+      payment = await prisma.$transaction(async (tx) => {
+        // 1. 锁定关联账期 (防重付; PAID/PROCESSING 直接抛错回滚)
+        const { cancelledCount } = await lockSchedulesForInvoicePayment(tx, invoiceId, userId)
+        // 2. 创建付款单
+        const p = await tx.invoicePayment.create({
+          data: {
+            tenantId, invoiceId,
+            amount: amt, paymentMethod,
+            status: 'PENDING',
+            initiatedById: userId,
+            note: note || null,
+          },
+        })
+        await tx.opLog.create({
+          data: { tenantId, userId,
+            action: `发起发票付款 #${inv.invoiceNo} ¥${amt.toLocaleString()} (剩余 ¥${(realRemaining - amt).toLocaleString()})`
+              + (cancelledCount > 0 ? ` · 同步锁定 ${cancelledCount} 条关联账期` : ''),
+            entityType: 'InvoicePayment', targetId: p.id,
+          },
+        })
+        return p
+      })
+    } catch (e: any) {
+      // 互斥冲突 (PAID / PROCESSING) → 409
+      return reply.status(409).send({ error: e.message || '互斥失败' })
+    }
     // TODO Sprint B: 触发 cmb 转账, 完成后回调 /:id/confirm
     return reply.status(201).send(payment)
   })

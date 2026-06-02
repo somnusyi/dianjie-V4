@@ -46,6 +46,7 @@ model Tenant {
   documents      Document[]
   productBatches ProductBatch[]
   stockMovements SupplierStockMovement[]
+  accountingPeriods AccountingPeriod[]
 
   @@map("tenants")
 }
@@ -1947,6 +1948,41 @@ model MtRefundOrder {
   @@index([businessTime])
   @@index([status])
   @@map("mt_refund_orders")
+}
+
+// ── Phase 4 月结锁账 ────────────────────────────────
+// 财务在月末关账后, 此月份所有凭证操作 (新增/反审/作废) 锁定
+// 业务自动事件 (招行付款 / 入库) 若落账期间已 CLOSED, 由 voucher service 将日期顺延至下一个 OPEN 期
+// 关账同时记录期末结转 carryover (Phase 4 task 3): 主营收入 → 本年利润
+model AccountingPeriod {
+  id           String   @id @default(cuid())
+  tenantId     String
+  month        String   // YYYY-MM 例 "2026-06"
+  status       AccountingPeriodStatus @default(OPEN)
+  // 关账
+  closedAt     DateTime?
+  closedById   String?
+  closeNote    String?
+  // 重新打开 (审计)
+  reopenedAt   DateTime?
+  reopenedById String?
+  reopenNote   String?
+  // 期末结转凭证 (carryover, 主营收入 → 本年利润)
+  carryoverVoucherId String?
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, month])
+  @@map("accounting_periods")
+}
+
+enum AccountingPeriodStatus {
+  OPEN       // 未锁
+  CLOSED     // 已锁, 凭证不可改不可加
+  REOPENED   // 财务长重开 (留痕)
 }
 
 model MeituanAuthToken {

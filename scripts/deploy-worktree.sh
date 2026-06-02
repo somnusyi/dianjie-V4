@@ -237,17 +237,26 @@ ssh_run "
   fi
 "
 
-# ── 6. pm2 reload (api + web + cmb) ────────────────
+# ── 6. pm2 restart api + web + cmb (硬重启, 比 reload 更彻底) ────────────────
+# 历史教训 (2026-06-02 b5deea0 部署后 38 min 客户撞上 CSS 404):
+#   pm2 reload 在 fork mode 下虽然等同 restart, 但 Next.js 14 standalone 内部 manifest cache
+#   一旦因为 _error.js SSR 偶发 useContext null 进入 degraded mode, reload 信号不会 reset
+#   内存里的 stale file table. 改 restart (硬杀进程) 100% 干净, 避免静态资源 404.
+# 顺手清理 /app/dianjie-v4/apps/web/.next (May 9 老 standalone 目录残留, 跟现役混淆)
 echo ""
-echo "==> [6/8] pm2 reload api + web + cmb"
-ssh_run "pm2 reload dianjie-v4-api --update-env" >/dev/null
-ssh_run "pm2 reload dianjie-v4-web --update-env" >/dev/null
-# cmb 是 Python 进程, reload 后会重跑 module-level 代码 (含 fail-fast 校验)
+echo "==> [6/8] pm2 restart api + web + cmb (硬重启 + 清理废弃旧 .next)"
+ssh_run "
+  # 清理 May 9 残留废弃目录 (跟现役 /app/dianjie-v4/apps/web/apps/web/.next 同名混淆)
+  rm -rf $REMOTE/apps/web/.next 2>/dev/null || true
+"
+ssh_run "pm2 restart dianjie-v4-api --update-env" >/dev/null
+ssh_run "pm2 restart dianjie-v4-web --update-env" >/dev/null
+# cmb 是 Python 进程, restart 后会重跑 module-level 代码 (含 fail-fast 校验)
 # .env 缺关键字段会直接 raise; 启动失败 pm2 会反复重启, 后面验证会抓到
-ssh_run "pm2 reload dianjie-v4-cmb --update-env" >/dev/null
+ssh_run "pm2 restart dianjie-v4-cmb --update-env" >/dev/null
 sleep 2  # 给 pm2 拉起新进程的最小窗口, 验证步骤自己会 retry
 
-# ── 7. 验证 (静态产物即时校验 + 服务健康 retry 等 cold-start) ─
+# ── 7. 验证 (静态产物 + 服务健康 + web E2E) ─────────────
 echo ""
 echo "==> [7/8] 部署后验证"
 LOCAL_API_MD5=$(md5 -q apps/api/dist/index.js 2>/dev/null || md5sum apps/api/dist/index.js | awk '{print $1}')
@@ -265,20 +274,51 @@ ssh_run "
 # 服务健康用 retry-with-backoff, 给 cold-start 留时间
 # 历史教训 (2026-05-28): 固定 sleep 4 + 一次 curl, 大 build 重启 + prisma client 加载会跑到 ~10s,
 # 第一次 curl 还在 hang, 脚本误报失败. 实际服务已起好.
-echo "   等服务起好 (最多 30s)..."
+echo "   等 api + cmb 起好 (最多 30s)..."
 ssh_run "
   for i in 1 2 3 4 5 6 7 8 9 10; do
     api_ok=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:4004/health 2>/dev/null || echo 000)
     cmb_relay_ok=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:4004/api/cmb/status 2>/dev/null || echo 000)
     cmb_self_ok=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:5001/health 2>/dev/null || echo 000)
     if [ \"\$api_ok\" = '200' ] && [ \"\$cmb_relay_ok\" = '401' ] && [ \"\$cmb_self_ok\" = '200' ]; then
-      echo \"   ✓ 服务健康 (第 \${i} 次 retry, api=\$api_ok cmb-relay=\$cmb_relay_ok cmb-self=\$cmb_self_ok)\"
+      echo \"   ✓ api + cmb 健康 (第 \${i} 次 retry, api=\$api_ok cmb-relay=\$cmb_relay_ok cmb-self=\$cmb_self_ok)\"
       exit 0
     fi
     sleep 3
   done
-  echo \"❌ 服务 30s 内未就绪: api=\$api_ok cmb-relay=\$cmb_relay_ok cmb-self=\$cmb_self_ok\"
+  echo \"❌ api/cmb 服务 30s 内未就绪: api=\$api_ok cmb-relay=\$cmb_relay_ok cmb-self=\$cmb_self_ok\"
   echo '   pm2 logs dianjie-v4-api --lines 30 自查'
+  exit 1
+"
+
+# Web E2E 验证 (2026-06-02 加固): 防止 Next.js 14 standalone _error.js 触发 cache 死锁
+# 拉 HTML → 提 CSS path → 拉 CSS, 必须 200; 否则强制 pm2 restart 一次再试
+# 失败 2 次才放弃, 留 .deployed-commit 不写, 让人来排查
+echo "   验证 web (HTML + CSS 必须 200)..."
+ssh_run "
+  for attempt in 1 2; do
+    HTML_BODY=\$(curl -sk --max-time 5 http://localhost:3204/v2/login 2>/dev/null)
+    HTML_CODE=\$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:3204/v2/login 2>/dev/null || echo 000)
+    CSS_PATH=\$(echo \"\$HTML_BODY\" | grep -oE 'href=\"/_next/static/css/[^\"]+\"' | head -1 | sed 's/href=\"//; s/\"//')
+    if [ -n \"\$CSS_PATH\" ]; then
+      CSS_CODE=\$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 \"http://localhost:3204\$CSS_PATH\" 2>/dev/null || echo 000)
+      CSS_SIZE=\$(curl -sk -o /dev/null -w '%{size_download}' --max-time 5 \"http://localhost:3204\$CSS_PATH\" 2>/dev/null || echo 0)
+    else
+      CSS_CODE='no_path'
+      CSS_SIZE=0
+    fi
+    if [ \"\$HTML_CODE\" = '200' ] && [ \"\$CSS_CODE\" = '200' ] && [ \"\$CSS_SIZE\" -gt 1000 ]; then
+      echo \"   ✓ web 健康 (HTML=\$HTML_CODE, CSS=\$CSS_CODE, \${CSS_SIZE}b)\"
+      exit 0
+    fi
+    if [ \"\$attempt\" = '1' ]; then
+      echo \"   ⚠ web 异常 (HTML=\$HTML_CODE, CSS=\$CSS_CODE, \${CSS_SIZE}b), pm2 restart 一次再试...\"
+      pm2 restart dianjie-v4-web --update-env >/dev/null
+      sleep 6
+    fi
+  done
+  echo \"❌ web 经 1 次 restart 后仍异常: HTML=\$HTML_CODE CSS=\$CSS_CODE size=\$CSS_SIZE\"
+  echo '   pm2 logs dianjie-v4-web --lines 30 自查'
   exit 1
 "
 

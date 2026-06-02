@@ -10,14 +10,14 @@ const nextConfig = {
   eslint:     { ignoreDuringBuilds: true },
   // standalone output: 产物自包含, ~50M, 部署时只 scp .next/standalone + .next/static
   output: 'standalone',
-  // 老的 PC demo 路由（boss-pc / finance-pc 是早期硬编码 mock 数据的页面）已弃用,
-  // 全部转向真实移动版页面, 保证 PC 与 APP 共用一套数据 + 一份退出登录逻辑。
+  // Phase 3: /v2/finance-pc/* 已重写为接真实 API 的 PC 端工作台 (FinanceTopNav + max-w-1440),
+  // 与 /v2/finance/* 手机端共存. 原本兜底转手机的 redirect 已移除.
+  // /v2/boss-pc 仍弃用, 继续 redirect.
   async redirects() {
     return [
       { source: '/v2/boss-pc',            destination: '/v2/boss/home',      permanent: false },
       { source: '/v2/boss-pc/:path*',     destination: '/v2/boss/:path*',    permanent: false },
-      { source: '/v2/finance-pc',         destination: '/v2/finance/home',   permanent: false },
-      { source: '/v2/finance-pc/:path*',  destination: '/v2/finance/:path*', permanent: false },
+      { source: '/v2/finance-pc',         destination: '/v2/finance-pc/home', permanent: false },
     ]
   },
 }

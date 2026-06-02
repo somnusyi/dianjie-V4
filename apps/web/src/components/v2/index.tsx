@@ -335,10 +335,11 @@ export function StoreAvatar({ name, anomaly, size = 'md' }: {
 // ════════════════════════════════════════════════════
 // 辅助：CHIP（在 PDF 第 02 章颜色系统）
 // ════════════════════════════════════════════════════
-export function Chip({ children, tone = 'gray' }: { children: ReactNode; tone?: 'red' | 'orange' | 'green' | 'gray' | 'blue' }) {
+export function Chip({ children, tone = 'gray' }: { children: ReactNode; tone?: 'red' | 'orange' | 'amber' | 'green' | 'gray' | 'blue' }) {
   const cls =
     tone === 'red'    ? 'bg-red-bg text-red-fg' :
     tone === 'orange' ? 'bg-orange-bg text-orange-fg' :
+    tone === 'amber'  ? 'bg-amber/15 text-amber-fg' :
     tone === 'green'  ? 'bg-green-bg text-green-fg' :
     tone === 'blue'   ? 'bg-bg text-blue' :
     'bg-bg text-gray2'

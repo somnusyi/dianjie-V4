@@ -71,7 +71,7 @@ export default function SupplierCustomersPage() {
           {(vipCount > 0 || sleepingCount > 0) && (
             <div className="mt-3 pt-3 border-t border-border flex gap-3 text-caption">
               {vipCount > 0 && <span><b className="text-amber-fg">{vipCount}</b> 家 VIP</span>}
-              {sleepingCount > 0 && <span><b className="text-red-fg">{sleepingCount}</b> 家 沉睡 (>30天没下单)</span>}
+              {sleepingCount > 0 && <span><b className="text-red-fg">{sleepingCount}</b> 家 沉睡 (&gt;30天没下单)</span>}
             </div>
           )}
         </div>

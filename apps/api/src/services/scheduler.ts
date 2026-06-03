@@ -3,6 +3,7 @@ import dayjs from 'dayjs'
 import { executeBankPayment, approvePaymentSchedule } from './paymentSchedule'
 import { sendNotification as notify } from './notification'
 import { runMeituanHourlySync, runMeituanDailyReconcile } from './meituan/cron'
+import { syncAllCmbAccounts } from './cmbAutoSync'
 
 export async function runDailyCheck() {
   console.log(`⏰ [${dayjs().format('YYYY-MM-DD HH:mm')}] 开始账期日扫描...`)
@@ -277,4 +278,28 @@ export function startScheduler() {
   } else {
     console.log('🍔 美团 cron 未启用 (MEITUAN_ENABLED != true)')
   }
+
+  // ── CMB 流水自动同步到本地 cashbook ──
+  // 解决: 老板/财务在招行 APP 直接转账等不经过滇界的流水永远不进本地账本
+  // 频率: 启动 60s 后跑首次 (拉近 3 天), 之后每 30 分钟跑一次 (拉昨天+今天)
+  setTimeout(() => {
+    syncAllCmbAccounts(3)
+      .then(results => {
+        const totals = results.reduce((acc, r) => ({
+          pulled: acc.pulled + r.pulled,
+          matched: acc.matched + r.matched,
+          alreadySynced: acc.alreadySynced + r.alreadySynced,
+          newlyWritten: acc.newlyWritten + r.newlyWritten,
+          errors: acc.errors + r.errors,
+        }), { pulled: 0, matched: 0, alreadySynced: 0, newlyWritten: 0, errors: 0 })
+        console.log(`💰 cmb-auto-sync 首跑: ${results.length} 账户, 拉 ${totals.pulled} 条 (${totals.matched} 已 sink / ${totals.alreadySynced} 同步过 / ${totals.newlyWritten} 新写入 / ${totals.errors} 错)`)
+      })
+      .catch(err => console.error('[cmb-auto-sync-first] failed:', err))
+  }, 60_000)
+
+  setInterval(() => {
+    syncAllCmbAccounts(1).catch(err => console.error('[cmb-auto-sync] failed:', err))
+  }, 30 * 60 * 1000)
+
+  console.log('💰 CMB 流水自动同步已启动 (启动后 60s 首跑, 之后每 30 分钟一次)')
 }

@@ -2,6 +2,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import { cmbTransfer, reportCmbError } from '../services/cmbPayment'
 import { voucherForInternalTransfer } from '../services/voucher'
+import { syncCmbAccount, syncAllCmbAccounts } from '../services/cmbAutoSync'
 import crypto from 'crypto'
 import dayjs from 'dayjs'
 
@@ -315,6 +316,55 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
     })
 
     return reply.status(201).send(tx)
+  })
+
+  // ── CMB 流水手动同步 (财务点 funds 页 "立即同步" 按钮触发) ──
+  // POST /api/cashbook/sync-from-cmb
+  //   body: { accountId?: string; daysBack?: number }
+  //   不传 accountId 同步该 tenant 所有 cmbBindAccount; 传则只同步指定
+  //   daysBack 默认 1 (昨天+今天); 历史首次接入可传 30 拉一个月
+  app.post('/sync-from-cmb', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!WRITE_ROLES.includes(role)) return reply.status(403).send({ error: '无权操作' })
+    const { accountId, daysBack = 1 } = (req.body || {}) as { accountId?: string; daysBack?: number }
+    const days = Math.min(60, Math.max(1, Number(daysBack)))
+    try {
+      if (accountId) {
+        const acc = await prisma.cashAccount.findFirst({
+          where: { id: accountId, tenantId, status: 'ACTIVE' },
+          select: { id: true, name: true, cmbBindAccount: true },
+        })
+        if (!acc?.cmbBindAccount) return reply.status(400).send({ error: '账户未绑定 CMB' })
+        const r = await syncCmbAccount({
+          tenantId, cashAccountId: acc.id, cmbAccount: acc.cmbBindAccount,
+          accountName: acc.name,
+          fromDate: dayjs().subtract(days, 'day').toDate(),
+          toDate: dayjs().toDate(),
+        })
+        return { results: [r] }
+      }
+      // 全量 (tenant 内所有 cmbBindAccount)
+      // syncAllCmbAccounts 跨 tenant, 这里 filter 仅当前 tenant
+      const accounts = await prisma.cashAccount.findMany({
+        where: { tenantId, cmbBindAccount: { not: null }, status: 'ACTIVE' },
+        select: { id: true, name: true, cmbBindAccount: true },
+      })
+      const results = await Promise.all(
+        accounts.map(a => syncCmbAccount({
+          tenantId, cashAccountId: a.id, cmbAccount: a.cmbBindAccount!,
+          accountName: a.name,
+          fromDate: dayjs().subtract(days, 'day').toDate(),
+          toDate: dayjs().toDate(),
+        }).catch(e => ({
+          account: a.cmbBindAccount!, accountName: a.name,
+          pulled: 0, matched: 0, alreadySynced: 0, newlyWritten: 0,
+          errors: 1, errorMsg: e?.message || String(e),
+        }))),
+      )
+      return { results }
+    } catch (e: any) {
+      return reply.status(500).send({ error: e?.message || '同步失败' })
+    }
   })
 
   // ── 汇总（本月收支 + 各账户余额）────────────────────

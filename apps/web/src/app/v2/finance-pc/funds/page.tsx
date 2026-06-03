@@ -69,6 +69,9 @@ export default function FinancePCFundsPage() {
   // 对账 drawer
   const [reconcileOpen, setReconcileOpen] = useState(false)
   const [reconcileAccount, setReconcileAccount] = useState<Account | null>(null)
+  // CMB 自动同步
+  const [syncing, setSyncing] = useState(false)
+  const [syncResult, setSyncResult] = useState<Array<{ accountName: string; pulled: number; newlyWritten: number; matched: number; alreadySynced: number; errors: number; errorMsg?: string }> | null>(null)
 
   useEffect(() => {
     Promise.all([
@@ -143,6 +146,29 @@ export default function FinancePCFundsPage() {
           </div>
           <div className="flex items-center gap-2">
             <button
+              onClick={async () => {
+                if (syncing) return
+                setSyncing(true); setSyncResult(null)
+                try {
+                  const r = await apiFetch<{ results: any[] }>('/api/cashbook/sync-from-cmb', {
+                    method: 'POST', body: JSON.stringify({ daysBack: 7 }),
+                  })
+                  setSyncResult(r.results)
+                  // 重新拉 summary 刷新余额 + 账面
+                  const s = await apiFetch<Summary>('/api/cashbook/summary')
+                  setSummary(s)
+                } catch (e: any) {
+                  alert('同步失败: ' + (e?.message || e))
+                } finally {
+                  setSyncing(false)
+                }
+              }}
+              disabled={syncing || accounts.length === 0}
+              className="px-4 py-2 bg-amber/15 hover:bg-amber/25 text-amber-fg border border-amber/30 rounded-cta text-button transition disabled:opacity-40"
+              title="把招行最近 7 天流水拉到本地账本 (按 yurRef 配对, 已 sink 的跳过)">
+              {syncing ? '同步中…' : '⟲ 同步 CMB'}
+            </button>
+            <button
               onClick={() => { setReconcileAccount(accounts[0] || null); setReconcileOpen(true) }}
               disabled={accounts.length === 0}
               className="px-4 py-2 bg-white border border-border rounded-cta text-button text-gray2 disabled:opacity-40">
@@ -154,6 +180,21 @@ export default function FinancePCFundsPage() {
 
         {error && (
           <div className="bg-red-bg text-red-fg rounded-card p-3 text-caption mb-4">{error}</div>
+        )}
+
+        {/* 同步结果摘要 (点 ⟲ 同步 CMB 后显示, 自动消失) */}
+        {syncResult && (
+          <div className="bg-green-bg/40 border border-green/30 rounded-card p-3 text-caption mb-4 flex items-center justify-between">
+            <div>
+              <b className="text-green-fg">CMB 同步完成</b> · {' '}
+              {syncResult.map((r, i) => (
+                <span key={i} className="mx-1">
+                  {r.accountName} (拉 {r.pulled} / 已 sink {r.matched} / 新写入 <b className="text-green-fg">{r.newlyWritten}</b>{r.errors > 0 && <span className="text-red-fg"> / 错 {r.errors}</span>})
+                </span>
+              ))}
+            </div>
+            <button onClick={() => setSyncResult(null)} className="text-gray3 hover:text-ink px-2">×</button>
+          </div>
         )}
 
         <BlackHero

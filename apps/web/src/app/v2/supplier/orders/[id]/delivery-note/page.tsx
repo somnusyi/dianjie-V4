@@ -63,6 +63,7 @@ export default function DeliveryNotePrintPage() {
   const [printedAt] = useState(() => new Date())
 
   const [exporting, setExporting] = useState(false)
+  const [exportingXlsx, setExportingXlsx] = useState(false)
   const [pdfUrl, setPdfUrl] = useState<string | null>(null)  // data URI 用于 iframe 预览 (本地)
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null)  // blob 用于 Share API / 下载
   const [ossUrl, setOssUrl] = useState<string | null>(null)  // 真 https URL (上传到 OSS 后拿到, ArkWeb / 微信都可用)
@@ -183,6 +184,112 @@ export default function DeliveryNotePrintPage() {
   function openSameTab() {
     if (pdfUrl) window.location.href = pdfUrl
   }
+
+  // 导出 Excel — 客户(供应商)需要拿结构化数据回 ERP 或自己核算, PDF 是看的, Excel 是用的
+  // 跟 PDF 并存, 不互斥
+  async function exportExcel() {
+    if (!order || exportingXlsx) return
+    setExportingXlsx(true)
+    try {
+      const XLSX = await import('xlsx')
+      const itemQtyLocal = (i: Order['items'][number]) => i.shippedQty != null ? Number(i.shippedQty) : Number(i.quantity)
+      const itemAmtLocal = (i: Order['items'][number]) => itemQtyLocal(i) * Number(i.unitPrice)
+      const totalLocal = order.items.reduce((s, i) => s + itemAmtLocal(i), 0)
+      const totalQtyLocal = order.items.reduce((s, i) => s + itemQtyLocal(i), 0)
+
+      // 构造表格 (aoa = array of arrays)
+      const aoa: any[][] = [
+        [`送货单 · ${order.no}`, '', '', '', '', '', ''],
+        [],
+        ['供应商', order.supplier.name, '', '', '收货方', order.store.name, ''],
+        ['供应方联系人', `${order.supplier.contactName || '—'}${order.supplier.contactPhone ? ' · ' + order.supplier.contactPhone : ''}`, '', '', '收货方联系人', `${order.store.managerName || '—'}${order.store.phone ? ' · ' + order.store.phone : ''}`, ''],
+        ['收货地址', order.store.address || '—', '', '', '', '', ''],
+        ['下单时间', dayjs(order.createdAt).format('YYYY-MM-DD HH:mm'), '', '', '下单人', order.createdBy?.name || '—', ''],
+        ['期望到货', dayjs(order.expectedDate).format('YYYY-MM-DD'), '', '', '发货时间', order.shippedAt ? dayjs(order.shippedAt).format('YYYY-MM-DD HH:mm') : '—', ''],
+        order.note ? ['订单备注', order.note, '', '', '', '', ''] : null,
+        order.shippedNote ? ['发货备注', order.shippedNote, '', '', '', '', ''] : null,
+        [],
+        ['#', '品名', '规格', '单位', '数量', '单价(¥)', '金额(¥)'],
+        ...order.items.map((it, i) => [
+          i + 1,
+          it.product?.name || '—',
+          it.product?.spec || '—',
+          it.product?.unit || '—',
+          itemQtyLocal(it),
+          Number(it.unitPrice),
+          Number(itemAmtLocal(it).toFixed(2)),
+        ]),
+        ['合计', '', '', '', totalQtyLocal, '', Number(totalLocal.toFixed(2))],
+        ['大写', `人民币 ${num2cn(totalLocal)}`, '', '', '', '', ''],
+      ].filter(Boolean) as any[][]
+
+      const ws = XLSX.utils.aoa_to_sheet(aoa)
+      // 列宽
+      ws['!cols'] = [
+        { wch: 6 }, { wch: 30 }, { wch: 22 }, { wch: 8 },
+        { wch: 12 }, { wch: 14 }, { wch: 16 },
+      ]
+      // 合并标题行
+      ws['!merges'] = ws['!merges'] || []
+      ws['!merges'].push({ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } })   // 标题横跨 7 列
+      // 大写行第二列 → 第七列合并
+      const lastRowIdx = aoa.length - 1
+      ws['!merges'].push({ s: { r: lastRowIdx, c: 1 }, e: { r: lastRowIdx, c: 6 } })
+      // 备注行 (如果有) 合并第二列横到末
+      let noteRowIdx = 7   // 7=订单备注潜在位置 (前面是 7 行 + 1 空行)
+      // 安全地按内容查找备注行
+      aoa.forEach((row, i) => {
+        if (row[0] === '订单备注' || row[0] === '发货备注' || row[0] === '收货地址') {
+          ws['!merges']!.push({ s: { r: i, c: 1 }, e: { r: i, c: 6 } })
+        }
+      })
+
+      // 货币列数字格式
+      const headerRow = aoa.findIndex(r => r[0] === '#')
+      if (headerRow >= 0) {
+        for (let r = headerRow + 1; r < aoa.length - 2; r++) {
+          ;['F', 'G'].forEach(col => {
+            const cellRef = `${col}${r + 1}`
+            if (ws[cellRef]) ws[cellRef].z = '¥#,##0.00'
+          })
+        }
+        // 合计行
+        const totalCell = `G${aoa.length - 1}`
+        if (ws[totalCell]) ws[totalCell].z = '¥#,##0.00'
+      }
+
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, '送货单')
+
+      // 走 Blob 路线, 跨平台兼容 (Web Share API + a[download] 兜底)
+      const arrayBuffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
+      const blob = new Blob([arrayBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      const filename = `送货单-${order.no}.xlsx`
+      const file = new File([blob], filename, { type: blob.type })
+      const nav = navigator as any
+
+      // 移动端 / iOS / 安卓 Chrome — Web Share API
+      if (nav.canShare && nav.canShare({ files: [file] })) {
+        try {
+          await nav.share({ files: [file], title: `送货单 ${order.no}`, text: `送货单 Excel ${order.no}` })
+          return
+        } catch (e) { /* 用户取消, 走 fallback */ }
+      }
+      // PC / 其他 — <a download> 直接下载
+      const link = document.createElement('a')
+      const url = URL.createObjectURL(blob)
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      setTimeout(() => URL.revokeObjectURL(url), 5000)
+    } catch (e: any) {
+      alert('导出 Excel 失败: ' + (e?.message || e))
+    } finally {
+      setExportingXlsx(false)
+    }
+  }
   // 系统浏览器打印 (PC) — 在 WebView 里多半无效, 已不推荐
   function tryPrint() {
     if (typeof window.print === 'function') window.print()
@@ -218,7 +325,12 @@ export default function DeliveryNotePrintPage() {
         <span className="flex-1 text-h2 truncate">送货单 · {order.no}</span>
         <button onClick={exportPDF} disabled={exporting}
                 className="px-4 py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40">
-          {exporting ? '生成中…' : '生成 PDF'}
+          {exporting ? '生成中…' : '📄 生成 PDF'}
+        </button>
+        <button onClick={exportExcel} disabled={exportingXlsx}
+                className="px-4 py-2 bg-[#1F7A4B] text-white rounded-cta text-button disabled:opacity-40"
+                title="导出 Excel 文件 (.xlsx), 可在 WPS/Excel 打开后编辑">
+          {exportingXlsx ? '生成中…' : '📊 导出 Excel'}
         </button>
         <button onClick={tryPrint}
                 className="px-3 py-2 border border-border rounded-cta text-caption text-gray2"

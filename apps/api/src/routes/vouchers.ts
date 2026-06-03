@@ -128,12 +128,23 @@ export const voucherRoutes: FastifyPluginAsync = async (app) => {
     }).safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
 
-    // 月结锁: 改的 date 落 CLOSED 月份, 直接拒绝
-    if (parsed.data.date) {
-      const newDate = new Date(parsed.data.date)
-      const ym = `${newDate.getFullYear()}-${String(newDate.getMonth() + 1).padStart(2, '0')}`
-      const period = await prisma.accountingPeriod.findFirst({ where: { tenantId, month: ym, status: 'CLOSED' } })
-      if (period) return reply.status(423).send({ error: `${ym} 已关账, 不可改到该月` })
+    // 月结锁 (两层):
+    //   1. 凭证当前 date 落在 CLOSED 月份 → 拒绝任何改 (除非该月先 reopen)
+    //   2. 改后的 date 落 CLOSED 月份 → 也拒绝
+    {
+      const curDate = v.date
+      const curYm = `${curDate.getFullYear()}-${String(curDate.getMonth() + 1).padStart(2, '0')}`
+      const curPeriod = await prisma.accountingPeriod.findFirst({ where: { tenantId, month: curYm, status: 'CLOSED' } })
+      if (curPeriod) return reply.status(423).send({ error: `凭证所在月份 ${curYm} 已关账, 改前请先重开 (reopen)` })
+
+      if (parsed.data.date) {
+        const newDate = new Date(parsed.data.date)
+        const newYm = `${newDate.getFullYear()}-${String(newDate.getMonth() + 1).padStart(2, '0')}`
+        if (newYm !== curYm) {
+          const newPeriod = await prisma.accountingPeriod.findFirst({ where: { tenantId, month: newYm, status: 'CLOSED' } })
+          if (newPeriod) return reply.status(423).send({ error: `目标月份 ${newYm} 已关账, 不可改到该月` })
+        }
+      }
     }
 
     // 借贷平衡校验 (如果改 entries)

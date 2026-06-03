@@ -112,10 +112,8 @@ export function BankTransactionsDrawer({
   }
 
   async function downloadReceipt(tx: Tx) {
-    if (!tx.yurRef) {
-      alert('该笔流水缺 yurRef (银行未返业务参考号), 无法下载回单。入账流水通常没有 yurRef。')
-      return
-    }
+    // 入账 / 老数据缺 yurRef → 按钮本身已 disabled (无 yurRef), 此分支兜底
+    if (!tx.yurRef) return
     setDownloadingSeq(tx.sequence)
     try {
       const r = await apiFetch<ReceiptResp>('/api/cmb/receipt', {
@@ -283,9 +281,16 @@ export function BankTransactionsDrawer({
                     <button
                       onClick={() => downloadReceipt(tx)}
                       disabled={!!downloadingSeq || !tx.yurRef}
-                      className="text-micro text-amber-fg px-3 py-1 rounded border border-amber/30 hover:bg-amber/10 disabled:opacity-40"
+                      title={!tx.yurRef
+                        ? '招行未返业务参考号(yurRef), 无法在线下载回单.\n入账流水招行不提供电子回单接口, 请到招行 APP / 网银自行下载.'
+                        : '下载招行电子回单 PDF'}
+                      className="text-micro text-amber-fg px-3 py-1 rounded border border-amber/30 hover:bg-amber/10 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                     >
-                      {downloadingSeq === tx.sequence ? '生成中…' : '⬇ 回单'}
+                      {downloadingSeq === tx.sequence
+                        ? '生成中…'
+                        : !tx.yurRef
+                          ? '⊘ 无回单'
+                          : '⬇ 回单'}
                     </button>
                   </div>
                 </li>

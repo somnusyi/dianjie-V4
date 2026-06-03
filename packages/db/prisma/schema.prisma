@@ -1363,10 +1363,11 @@ enum SupplierStatus {
   DISABLED
 }
 
-// 供应商数据源类型 (财务月度核对工作台 3 栏区分)
+// 供应商数据源类型 (财务月度核对工作台 4 栏区分)
 enum SupplierSourceType {
   HEADQ_WAREHOUSE  // 总仓内部调拨 (何姐管, 不走外部付款)
   B2B_PLATFORM     // B2B 电商平台 (美菜 / 快驴 等, 财务批量录账单)
+  MAIN_SUPPLIER    // 主营供应商 (长期固定合同, 有专属应付账款明细科目, 餐饮门店核心货源)
   SCATTERED        // 散户供应商 (微信群直接对接, 老板/店长谈)
 }
 

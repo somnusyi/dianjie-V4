@@ -75,6 +75,7 @@ export const costCheckRoutes: FastifyPluginAsync = async (app) => {
     const groups = {
       HEADQ_WAREHOUSE: enriched.filter(r => r.supplier?.sourceType === 'HEADQ_WAREHOUSE'),
       B2B_PLATFORM:    enriched.filter(r => r.supplier?.sourceType === 'B2B_PLATFORM'),
+      MAIN_SUPPLIER:   enriched.filter(r => r.supplier?.sourceType === 'MAIN_SUPPLIER'),
       SCATTERED:       enriched.filter(r => r.supplier?.sourceType === 'SCATTERED'),
       UNCATEGORIZED:   enriched.filter(r => !r.supplier?.sourceType),
     }
@@ -93,6 +94,7 @@ export const costCheckRoutes: FastifyPluginAsync = async (app) => {
       groups: {
         HEADQ_WAREHOUSE: { label: '总仓 (何姐)', items: groups.HEADQ_WAREHOUSE, summary: summarize(groups.HEADQ_WAREHOUSE) },
         B2B_PLATFORM:    { label: 'B2B 平台 (美菜/快驴)', items: groups.B2B_PLATFORM, summary: summarize(groups.B2B_PLATFORM) },
+        MAIN_SUPPLIER:   { label: '主营供应商 (合同长期)', items: groups.MAIN_SUPPLIER, summary: summarize(groups.MAIN_SUPPLIER) },
         SCATTERED:       { label: '散户 (微信群)', items: groups.SCATTERED, summary: summarize(groups.SCATTERED) },
         UNCATEGORIZED:   { label: '未分类 (财务请给供应商打标)', items: groups.UNCATEGORIZED, summary: summarize(groups.UNCATEGORIZED) },
       },
@@ -102,7 +104,7 @@ export const costCheckRoutes: FastifyPluginAsync = async (app) => {
 
   // BUG#11: 批量打标
   // POST /api/finance/cost-check/suppliers/batch-source-type
-  //   body: { ids: string[], sourceType: 'HEADQ_WAREHOUSE'|'B2B_PLATFORM'|'SCATTERED'|null }
+  //   body: { ids: string[], sourceType: 'HEADQ_WAREHOUSE'|'B2B_PLATFORM'|'MAIN_SUPPLIER'|'SCATTERED'|null }
   app.post('/cost-check/suppliers/batch-source-type', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
     if (!FINANCE_ROLES.has(role)) return reply.status(403).send({ error: '无权' })
@@ -110,7 +112,7 @@ export const costCheckRoutes: FastifyPluginAsync = async (app) => {
     if (!Array.isArray(ids) || ids.length === 0) {
       return reply.status(400).send({ error: 'ids 必须是非空数组' })
     }
-    if (sourceType != null && !['HEADQ_WAREHOUSE', 'B2B_PLATFORM', 'SCATTERED'].includes(sourceType)) {
+    if (sourceType != null && !['HEADQ_WAREHOUSE', 'B2B_PLATFORM', 'MAIN_SUPPLIER', 'SCATTERED'].includes(sourceType)) {
       return reply.status(400).send({ error: 'sourceType 无效' })
     }
     const r = await prisma.supplier.updateMany({
@@ -126,8 +128,8 @@ export const costCheckRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role } = req.user
     if (!FINANCE_ROLES.has(role)) return reply.status(403).send({ error: '无权' })
     const { sourceType } = (req.body || {}) as { sourceType: string | null }
-    if (sourceType != null && !['HEADQ_WAREHOUSE', 'B2B_PLATFORM', 'SCATTERED'].includes(sourceType)) {
-      return reply.status(400).send({ error: 'sourceType 必须是 HEADQ_WAREHOUSE/B2B_PLATFORM/SCATTERED 或 null' })
+    if (sourceType != null && !['HEADQ_WAREHOUSE', 'B2B_PLATFORM', 'MAIN_SUPPLIER', 'SCATTERED'].includes(sourceType)) {
+      return reply.status(400).send({ error: 'sourceType 必须是 HEADQ_WAREHOUSE/B2B_PLATFORM/MAIN_SUPPLIER/SCATTERED 或 null' })
     }
     const s = await prisma.supplier.findFirst({ where: { id: req.params.id, tenantId } })
     if (!s) return reply.status(404).send({ error: '供应商不存在' })

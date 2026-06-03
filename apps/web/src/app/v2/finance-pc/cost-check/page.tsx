@@ -32,7 +32,7 @@ type Receipt = {
   allVerified: boolean
   doneCount: number
 }
-type GroupKey = 'HEADQ_WAREHOUSE' | 'B2B_PLATFORM' | 'SCATTERED' | 'UNCATEGORIZED'
+type GroupKey = 'HEADQ_WAREHOUSE' | 'B2B_PLATFORM' | 'MAIN_SUPPLIER' | 'SCATTERED' | 'UNCATEGORIZED'
 type Group = {
   label: string
   items: Receipt[]
@@ -54,10 +54,11 @@ type Data = {
 const fmtMoney = (n: number) => `¥${Math.round(n).toLocaleString()}`
 const fmtKMoney = (n: number) => n >= 1000 ? `¥${(n / 1000).toFixed(1)}K` : `¥${Math.round(n)}`
 
-const GROUP_ORDER: GroupKey[] = ['HEADQ_WAREHOUSE', 'B2B_PLATFORM', 'SCATTERED', 'UNCATEGORIZED']
+const GROUP_ORDER: GroupKey[] = ['HEADQ_WAREHOUSE', 'B2B_PLATFORM', 'MAIN_SUPPLIER', 'SCATTERED', 'UNCATEGORIZED']
 const GROUP_COLORS: Record<GroupKey, string> = {
   HEADQ_WAREHOUSE: 'bg-[#FAF8F2]',
   B2B_PLATFORM: 'bg-amber/10',
+  MAIN_SUPPLIER: 'bg-blue/10',
   SCATTERED: 'bg-green-bg/30',
   UNCATEGORIZED: 'bg-red-bg/30',
 }
@@ -167,6 +168,8 @@ export default function FinancePCCostCheckPage() {
                     className="px-3 py-1.5 bg-[#FAF8F2] border border-border rounded-cta text-caption hover:bg-white">总仓</button>
             <button onClick={() => batchSetSourceType('B2B_PLATFORM')}
                     className="px-3 py-1.5 bg-amber/20 border border-amber/30 rounded-cta text-caption hover:bg-amber/30">B2B</button>
+            <button onClick={() => batchSetSourceType('MAIN_SUPPLIER')}
+                    className="px-3 py-1.5 bg-blue/20 border border-blue/30 rounded-cta text-caption hover:bg-blue/30">主营</button>
             <button onClick={() => batchSetSourceType('SCATTERED')}
                     className="px-3 py-1.5 bg-green-bg/40 border border-green/30 rounded-cta text-caption hover:bg-green-bg">散户</button>
             <button onClick={() => setSelected(new Set())}
@@ -197,7 +200,7 @@ export default function FinancePCCostCheckPage() {
         )}
 
         {/* 4 列卡片 */}
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-5 gap-3">
           {GROUP_ORDER.map(gKey => {
             const g = data?.groups[gKey]
             const items = g?.items || []
@@ -301,6 +304,8 @@ export default function FinancePCCostCheckPage() {
                                           className="px-2 py-1 bg-[#FAF8F2] border border-border rounded text-micro">总仓</button>
                                   <button onClick={() => setSourceType(r.supplier.id, 'B2B_PLATFORM')}
                                           className="px-2 py-1 bg-amber/10 border border-amber/30 rounded text-micro">B2B</button>
+                                  <button onClick={() => setSourceType(r.supplier.id, 'MAIN_SUPPLIER')}
+                                          className="px-2 py-1 bg-blue/10 border border-blue/30 rounded text-micro">主营</button>
                                   <button onClick={() => setSourceType(r.supplier.id, 'SCATTERED')}
                                           className="px-2 py-1 bg-green-bg/30 border border-green/30 rounded text-micro">散户</button>
                                 </div>

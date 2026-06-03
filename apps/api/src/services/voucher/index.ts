@@ -39,6 +39,11 @@ export interface CreateVoucherOpts {
    *   - strict: 当月已锁, 直接抛错 (用于手工凭证 / post / unpost / void)
    */
   lockMode?: 'auto' | 'strict'
+  /**
+   * BUG#8: 凭证生成后立即设 POSTED (已发生业务事件用, 财务不需要再手工审)
+   * 默认 false (DRAFT). 业务事件用 true, 手工凭证 / 期末结转用 false.
+   */
+  autoPost?: boolean
 }
 
 /** 生成凭证号 PZ-YYYYMM-NNNN, 按月递增. 并发安全: 用最大号 + 1 取号 (单次), 撞 unique 重试 */
@@ -61,7 +66,7 @@ async function generateNo(tenantId: string, date: Date): Promise<string> {
  * 并发安全: 撞 unique (P2002) 时最多重试 3 次重新取号
  */
 export async function createVoucher(opts: CreateVoucherOpts): Promise<string | null> {
-  const { tenantId, sourceType, sourceId, entries, summary, word = '记', createdById = null, lockMode = 'auto' } = opts
+  const { tenantId, sourceType, sourceId, entries, summary, word = '记', createdById = null, lockMode = 'auto', autoPost = false } = opts
   let date = typeof opts.date === 'string' ? new Date(opts.date) : opts.date
 
   // 月结锁账:
@@ -102,12 +107,16 @@ export async function createVoucher(opts: CreateVoucherOpts): Promise<string | n
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const no = await generateNo(tenantId, date)
+      const now = new Date()
       const voucher = await prisma.voucher.create({
         data: {
           tenantId, no, date, summary, word,
           sourceType, sourceId,
           totalDebit, totalCredit,
-          status: 'DRAFT',
+          // BUG#8: autoPost=true 时直接 POSTED, 关账不挡路
+          status: autoPost ? 'POSTED' : 'DRAFT',
+          postedAt: autoPost ? now : null,
+          postedById: autoPost ? createdById : null,
           createdById,
           entries: {
             create: entries.map((e, i) => ({
@@ -170,6 +179,7 @@ export function voucherForReceipt(opts: {
       { accountCode: '2202', accountName: '应付账款', credit: opts.amount,
         summary: `应付 ${opts.supplierName}` },
     ],
+    autoPost: true,   // BUG#8: 收货已发生, 直接 POSTED
   })
 }
 
@@ -209,6 +219,7 @@ export function voucherForPayment(opts: {
         summary: `应付 ${opts.supplierName}` },
       { accountCode: bankAccountCode, accountName: bankAccountName, credit: opts.amount },
     ],
+    autoPost: true,   // BUG#8: 付款已发生, 直接 POSTED
   })
 }
 
@@ -246,6 +257,7 @@ export function voucherForInternalTransfer(opts: {
       { accountCode: to.code,   accountName: to.name,   debit:  opts.amount, summary: `转入 ${opts.toAccountName}` },
       { accountCode: from.code, accountName: from.name, credit: opts.amount, summary: `转出 ${opts.fromAccountName}` },
     ],
+    autoPost: true,   // BUG#8: 内部转账已发生, 直接 POSTED
   })
 }
 
@@ -271,6 +283,7 @@ export function voucherForLossApproved(opts: {
       { accountCode: '1405', accountName: '库存商品', credit: opts.amount,
         summary: `${opts.storeName} 短量 ${opts.lossClaimNo}` },
     ],
+    autoPost: true,
   })
 }
 
@@ -308,5 +321,6 @@ export function voucherForRevenue(opts: {
       { accountCode: '5001', accountName: '主营业务收入', credit: opts.amount,
         summary: `${channelLabel} 收入` },
     ],
+    autoPost: true,
   })
 }

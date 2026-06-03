@@ -81,12 +81,14 @@ export const invoiceRoutes: FastifyPluginAsync = async (app) => {
     const FINANCE_ROLES = ['FINANCE', 'ADMIN', 'SUPER_ADMIN']
     if (!FINANCE_ROLES.includes(role)) return reply.status(403).send({ error: '仅财务/老板可访问' })
 
+    // BUG#3: 排除总仓 (HEADQ_WAREHOUSE) — 内部调拨不需要发票
     const items = await prisma.receipt.findMany({
       where: {
         tenantId,
         invoiceId: null,
         status: { notIn: ['VOID', 'REJECTED'] },
-        paymentSchedule: { status: 'PAID' },   // 已付款的优先
+        paymentSchedule: { status: 'PAID' },
+        supplier: { NOT: { sourceType: 'HEADQ_WAREHOUSE' } },
       },
       include: {
         supplier: { select: { id: true, name: true, contactName: true, contactPhone: true } },
@@ -105,12 +107,13 @@ export const invoiceRoutes: FastifyPluginAsync = async (app) => {
         : null,
     }))
 
-    // 二级: 已入库但未付款的 (这种也没发票, 但属于"先催付款再催票"场景)
+    // 二级: 已入库但未付款的 (BUG#3 同样排除总仓)
     const itemsPending = await prisma.receipt.findMany({
       where: {
         tenantId,
         invoiceId: null,
         status: { notIn: ['VOID', 'REJECTED'] },
+        supplier: { NOT: { sourceType: 'HEADQ_WAREHOUSE' } },
         OR: [
           { paymentSchedule: { status: { in: ['PENDING', 'APPROVED', 'PENDING_APPROVAL', 'OVERDUE'] } } },
           { paymentSchedule: null },

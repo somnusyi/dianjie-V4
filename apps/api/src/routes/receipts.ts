@@ -140,15 +140,24 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     const confirmedAt = new Date()
     await prisma.receipt.update({ where: { id: receipt.id }, data: { status: 'CONFIRMED', confirmedAt } })
 
-    // 按全额生成账期
-    await autoProcessAfterConfirm({ tenantId, receipt: { ...receipt, confirmedAt }, supplier: receipt.supplier })
+    // 按全额生成账期 (总仓 HEADQ_WAREHOUSE 短路, 不建账期)
+    const procResult: any = await autoProcessAfterConfirm({ tenantId, receipt: { ...receipt, confirmedAt }, supplier: receipt.supplier })
+    const isHeadq = procResult?.isHeadqWarehouse === true
 
-    await prisma.opLog.create({ data: { tenantId, userId, action: `确认入库 ${receipt.no}，账期已创建`, target: receipt.no, entityType: 'Receipt', targetId: receipt.id } })
+    await prisma.opLog.create({
+      data: {
+        tenantId, userId,
+        action: isHeadq
+          ? `确认入库 ${receipt.no} (总仓内部调拨, 不建账期)`
+          : `确认入库 ${receipt.no}, 账期已创建`,
+        target: receipt.no, entityType: 'Receipt', targetId: receipt.id,
+      },
+    })
     void invalidatePattern(`dashboard:stats:${tenantId}:*`)
     void invalidatePattern(`stores:list:${tenantId}:*`)
     const store = await prisma.store.findUnique({ where: { id: receipt.storeId }, select: { name: true } })
     void notifyReceiptConfirmed(tenantId, receipt.no, store?.name || '', false, 0)
-    return { message: '入库确认成功，账期已自动创建' }
+    return { message: isHeadq ? '总仓入库确认 (内部调拨, 不建账期)' : '入库确认成功，账期已自动创建' }
   })
 
   // ── 店长报损入库（部分收货，按实收金额生成账期）──────
@@ -334,9 +343,15 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // 财务核对要求: 门店已建 + 厨师长已 confirm + 供应商已核对
+    // BUG#4: B2B/HEADQ supplier 不需要外部核对, 直接放行
     if (actor === 'finance') {
       if (!receipt.confirmedAt) return reply.status(400).send({ error: '厨师长尚未确认, 无法财务核对' })
-      if (!receipt.supplierVerifiedAt) return reply.status(400).send({ error: '供应商尚未核对, 无法财务核对' })
+      const srcType = (receipt as any).supplier?.sourceType
+        ?? (await prisma.supplier.findUnique({ where: { id: receipt.supplierId }, select: { sourceType: true } }))?.sourceType
+      const autoSupplier = srcType === 'B2B_PLATFORM' || srcType === 'HEADQ_WAREHOUSE'
+      if (!receipt.supplierVerifiedAt && !autoSupplier) {
+        return reply.status(400).send({ error: '供应商尚未核对, 无法财务核对' })
+      }
     }
 
     const now = new Date()

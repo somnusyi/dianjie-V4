@@ -51,11 +51,19 @@ export const costCheckRoutes: FastifyPluginAsync = async (app) => {
     })
 
     // 标 4 方核对状态
+    // BUG#4: B2B 平台数据=供应商账单本身, 自动算供应商已核对 (财务无需代点)
+    //        HEADQ 总仓内部调拨无外部供应商, 自动算供应商已核对
     const enriched = receipts.map(r => {
+      const srcType = r.supplier?.sourceType
+      const autoSupplierDone = srcType === 'B2B_PLATFORM' || srcType === 'HEADQ_WAREHOUSE'
       const v = {
-        store: { done: true, at: r.createdAt },                                              // 门店店长建单 = createdAt
-        chef: { done: !!r.confirmedAt, at: r.confirmedAt },                                  // 厨师长 confirm
-        supplier: { done: !!r.supplierVerifiedAt, at: r.supplierVerifiedAt },
+        store: { done: true, at: r.createdAt },
+        chef: { done: !!r.confirmedAt, at: r.confirmedAt },
+        supplier: {
+          done: !!r.supplierVerifiedAt || autoSupplierDone,
+          at: r.supplierVerifiedAt,
+          auto: autoSupplierDone && !r.supplierVerifiedAt ? srcType : null,
+        },
         finance: { done: !!r.financeVerifiedAt, at: r.financeVerifiedAt },
       }
       const allDone = v.store.done && v.chef.done && v.supplier.done && v.finance.done
@@ -90,6 +98,26 @@ export const costCheckRoutes: FastifyPluginAsync = async (app) => {
       },
       total: summarize(enriched),
     }
+  })
+
+  // BUG#11: 批量打标
+  // POST /api/finance/cost-check/suppliers/batch-source-type
+  //   body: { ids: string[], sourceType: 'HEADQ_WAREHOUSE'|'B2B_PLATFORM'|'SCATTERED'|null }
+  app.post('/cost-check/suppliers/batch-source-type', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!FINANCE_ROLES.has(role)) return reply.status(403).send({ error: '无权' })
+    const { ids, sourceType } = (req.body || {}) as { ids: string[]; sourceType: any }
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return reply.status(400).send({ error: 'ids 必须是非空数组' })
+    }
+    if (sourceType != null && !['HEADQ_WAREHOUSE', 'B2B_PLATFORM', 'SCATTERED'].includes(sourceType)) {
+      return reply.status(400).send({ error: 'sourceType 无效' })
+    }
+    const r = await prisma.supplier.updateMany({
+      where: { id: { in: ids }, tenantId },
+      data: { sourceType: sourceType as any },
+    })
+    return { updated: r.count }
   })
 
   // PATCH /api/finance/cost-check/suppliers/:id/source-type body: { sourceType }

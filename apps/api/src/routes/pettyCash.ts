@@ -17,6 +17,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import { z } from 'zod'
+import { createVoucher } from '../services/voucher'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const FINANCE_ROLES = new Set(['FINANCE', 'ADMIN', 'SUPER_ADMIN', 'BOSS'])
@@ -106,11 +107,10 @@ export const pettyCashRoutes: FastifyPluginAsync = async (app) => {
     }
   })
 
-  // 财务批 + 发放
+  // BUG#12: 拆分 批准 / 发放 两步
+  // 财务批 (REQUESTED → APPROVED), 不立即扣款
   const approveSchema = z.object({
     approvedAmount: z.number().positive(),
-    paymentMethod: z.string().optional(),
-    bankTxNo: z.string().optional(),
   })
   app.patch('/:id/approve', auth(app), async (req: any, reply: any) => {
     const { tenantId, userId, role } = req.user
@@ -123,14 +123,64 @@ export const pettyCashRoutes: FastifyPluginAsync = async (app) => {
     const updated = await prisma.pettyCash.update({
       where: { id: item.id },
       data: {
-        status: 'PAID',
+        status: 'APPROVED',
         approvedById: userId, approvedAt: new Date(),
         approvedAmount: parsed.data.approvedAmount,
-        paymentMethod: parsed.data.paymentMethod || '现金',
-        bankTxNo: parsed.data.bankTxNo || null,
-        paidAt: new Date(), paidById: userId,
       },
     })
+    return updated
+  })
+
+  // 财务发放 (APPROVED → PAID, 真扣款 + 建凭证)
+  const paySchema = z.object({
+    paymentMethod: z.string().optional(),
+    bankTxNo: z.string().optional(),
+  })
+  app.patch('/:id/pay', auth(app), async (req: any, reply: any) => {
+    const { tenantId, userId, role } = req.user
+    if (!FINANCE_ROLES.has(role)) return reply.status(403).send({ error: '仅财务可发放' })
+    const parsed = paySchema.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
+    const item = await prisma.pettyCash.findFirst({
+      where: { id: req.params.id, tenantId },
+      include: { store: { select: { name: true } } },
+    })
+    if (!item) return reply.status(404).send({ error: '不存在' })
+    if (item.status !== 'APPROVED') return reply.status(400).send({ error: `当前状态 ${item.status} 不可发放 (需先 APPROVE)` })
+    const now = new Date()
+    const updated = await prisma.pettyCash.update({
+      where: { id: item.id },
+      data: {
+        status: 'PAID',
+        paymentMethod: parsed.data.paymentMethod || '现金',
+        bankTxNo: parsed.data.bankTxNo || null,
+        paidAt: now, paidById: userId,
+      },
+    })
+    // BUG#5: 发放时自动建凭证 借 其他应收-备用金 / 贷 1001 库存现金 或 银行
+    const amt = Number(item.approvedAmount || 0)
+    const isCash = (parsed.data.paymentMethod || '现金') === '现金'
+    const cashCode = isCash ? '1001' : '100201'
+    const cashName = isCash ? '库存现金' : '中国银行1674'
+    try {
+      await createVoucher({
+        tenantId,
+        date: now,
+        summary: `${item.month} 备用金发放 (${item.store.name})`,
+        sourceType: 'PettyCashPay',
+        sourceId: item.id,
+        entries: [
+          { accountCode: '1221', accountName: '其他应收款-备用金', debit: amt,
+            summary: `${item.store.name} ${item.month} 备用金发放` },
+          { accountCode: cashCode, accountName: cashName, credit: amt },
+        ],
+        createdById: userId,
+        lockMode: 'auto',
+        autoPost: true,
+      })
+    } catch (e: any) {
+      console.warn('[pettyCash] approve voucher failed', e?.message)
+    }
     return updated
   })
 
@@ -171,12 +221,46 @@ export const pettyCashRoutes: FastifyPluginAsync = async (app) => {
 
   // 财务关账 (RECONCILING → CLOSED)
   app.patch('/:id/close', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role } = req.user
+    const { tenantId, userId, role } = req.user
     if (!FINANCE_ROLES.has(role)) return reply.status(403).send({ error: '仅财务可关账' })
-    const item = await prisma.pettyCash.findFirst({ where: { id: req.params.id, tenantId } })
+    const item = await prisma.pettyCash.findFirst({
+      where: { id: req.params.id, tenantId },
+      include: { store: { select: { name: true } }, expenses: true },
+    })
     if (!item) return reply.status(404).send({ error: '不存在' })
     if (item.status !== 'RECONCILING') return reply.status(400).send({ error: '仅 RECONCILING 可关账' })
     const updated = await prisma.pettyCash.update({ where: { id: item.id }, data: { status: 'CLOSED' } })
+    // BUG#5: 关账时自动建凭证 借 5602 ¥spent + 借 1001 ¥returned / 贷 1221 ¥approved
+    const now = new Date()
+    const approved = Number(item.approvedAmount || 0)
+    const spent = Number(item.spentAmount || 0)
+    const returned = Number(item.returnedAmount || 0)
+    if (approved > 0 && Math.abs(spent + returned - approved) < 0.01) {
+      const entries: any[] = []
+      if (spent > 0) entries.push({
+        accountCode: '5602', accountName: '管理费用-备用金核销', debit: spent,
+        summary: `${item.month} 备用金核销 (${item.store.name})`,
+      })
+      if (returned > 0) entries.push({
+        accountCode: '1001', accountName: '库存现金', debit: returned,
+        summary: '退余款入库',
+      })
+      entries.push({
+        accountCode: '1221', accountName: '其他应收款-备用金',
+        credit: approved,
+      })
+      try {
+        await createVoucher({
+          tenantId, date: now,
+          summary: `${item.month} 备用金关账 (${item.store.name})`,
+          sourceType: 'PettyCashClose', sourceId: item.id,
+          entries, createdById: userId, lockMode: 'auto',
+          autoPost: true,
+        })
+      } catch (e: any) {
+        console.warn('[pettyCash] close voucher failed', e?.message)
+      }
+    }
     return updated
   })
 

@@ -93,6 +93,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   // 集团方写权限 + 供应商所有角色都可改/建自己 SKU
   const PRODUCT_WRITE_ROLES = new Set([
     'ADMIN', 'SUPER_ADMIN', 'PURCHASER',
+    'CHEF_DIRECTOR',                       // BUG#10: 总厨是 SKU 主管理人
     'SUPPLIER_OWNER', 'SUPPLIER_STAFF', 'SUPPLIER_SUB',
   ])
 

@@ -225,10 +225,10 @@ export const payrollRoutes: FastifyPluginAsync = async (app) => {
         entries,
         createdById: userId,
         lockMode: 'auto',
+        autoPost: true,   // BUG#8: 工资已发放, 直接 POSTED
       })
     } catch (e: any) {
       console.error('[payroll] voucher gen failed', e?.message)
-      // 凭证失败不阻断发放, 给警告
     }
 
     const updated = await prisma.payroll.update({

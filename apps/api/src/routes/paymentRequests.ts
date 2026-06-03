@@ -17,6 +17,9 @@ import { routeFor } from '../services/documentRouting'
 import { createVoucher } from '../services/voucher'
 
 const FINANCE_ROLES = ['FINANCE', 'ADMIN', 'SUPER_ADMIN']
+// BUG#1: 真实业务里店长 / 总厨 也要能发起付款申请 (店里有维修/水电/采购需要付款)
+// 创建权限放宽到店长 + 厨师长 + 总厨, 审批仍由财务/老板把关
+const CREATE_ROLES = ['FINANCE', 'ADMIN', 'SUPER_ADMIN', 'MANAGER', 'KITCHEN_LEAD', 'CHEF_DIRECTOR']
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
 // 用途分类 → 默认会计科目 (借方)
@@ -48,11 +51,11 @@ const createSchema = z.object({
 
 export const paymentRequestRoutes: FastifyPluginAsync = async (app) => {
 
-  // ── 创建付款申请 ─────────────────────────────────
+  // ── 创建付款申请 (店长/厨师长/财务都可发起, 审批由财务+老板把关) ──
   app.post('/', auth(app), async (req: any, reply: any) => {
     const { tenantId, userId, role, storeId } = req.user
-    if (!FINANCE_ROLES.includes(role)) {
-      return reply.status(403).send({ error: '仅财务可发起付款申请' })
+    if (!CREATE_ROLES.includes(role)) {
+      return reply.status(403).send({ error: '此角色不可发起付款申请' })
     }
     const parsed = createSchema.safeParse(req.body)
     if (!parsed.success) {
@@ -174,7 +177,9 @@ export const paymentRequestRoutes: FastifyPluginAsync = async (app) => {
     if (amount <= 0) return reply.status(400).send({ error: '金额无效' })
 
     // 决定付款账户 (用户传 或 payload 里的 或默认中国银行)
-    const bankCode = bankFrom || payload.bankFrom || '100201'
+    // BUG#9: 一级科目 1002 改成末级 100201 (中行) 默认
+    let bankCode = bankFrom || payload.bankFrom || '100201'
+    if (bankCode === '1002') bankCode = '100201'   // 自动 normalize 一级到默认末级
     const bankName = bankCode === '100202' ? '建设银行3618'
                   : bankCode === '1001'   ? '库存现金'
                   : '中国银行1674'
@@ -229,9 +234,11 @@ export const paymentRequestRoutes: FastifyPluginAsync = async (app) => {
       })
     })
 
-    // 4. 生成凭证草稿 (借: 费用科目 / 贷: 银行存款)
+    // 4. 生成凭证 (借: 费用科目 / 贷: 银行存款), 已发生事件直接 POSTED
+    let vid: string | null = null
+    let voucherWarning: string | null = null
     try {
-      const vid = await createVoucher({
+      vid = await createVoucher({
         tenantId,
         date: now,
         summary: `${doc.no} ${payload.payeeName} ${payload.usageLabel || ''}`,
@@ -243,12 +250,30 @@ export const paymentRequestRoutes: FastifyPluginAsync = async (app) => {
           { accountCode: bankCode, accountName: bankName, credit: amount },
         ],
         createdById: userId,
+        autoPost: true,
       })
-      return reply.send({ ok: true, voucherId: vid })
     } catch (e: any) {
       req.log.warn({ err: e }, '付款申请凭证生成失败 (主流程已完成)')
-      return reply.send({ ok: true, voucherId: null, voucherWarning: e.message })
+      voucherWarning = e.message
     }
+
+    // BUG#2: voucherId 写回 payload, PC UI 才能展示"关联凭证"
+    if (vid) {
+      try {
+        const fresh = await prisma.document.findUnique({
+          where: { id: doc.id }, select: { payload: true },
+        })
+        const freshPayload: any = fresh?.payload || {}
+        await prisma.document.update({
+          where: { id: doc.id },
+          data: { payload: { ...freshPayload, voucherId: vid } as any },
+        })
+      } catch (e: any) {
+        req.log.warn({ err: e }, 'voucherId 回写 payload 失败 (不阻断)')
+      }
+    }
+
+    return reply.send({ ok: true, voucherId: vid, voucherWarning })
   })
 
   // ── 撤回 (发起人, 仅 PENDING 可撤) ─────────────────

@@ -35,6 +35,7 @@ type Item = {
   store: { id: string; name: string }
   _count: { expenses: number }
 }
+
 type Store = { id: string; name: string }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -91,6 +92,17 @@ export default function FinancePCPettyCashPage() {
     if (!confirm('确定取消申请?')) return
     try {
       await apiFetch(`/api/petty-cash/${it.id}/cancel`, { method: 'PATCH' })
+      await load()
+    } catch (e: any) { alert(e?.message || '失败') }
+  }
+  async function doPay(it: Item) {
+    const method = prompt(`发放方式 (现金/转账/招行):`, '现金')
+    if (!method) return
+    try {
+      await apiFetch(`/api/petty-cash/${it.id}/pay`, {
+        method: 'PATCH',
+        body: JSON.stringify({ paymentMethod: method }),
+      })
       await load()
     } catch (e: any) { alert(e?.message || '失败') }
   }
@@ -178,10 +190,14 @@ export default function FinancePCPettyCashPage() {
                           {it.status === 'REQUESTED' && (
                             <>
                               <button onClick={() => setShowApprove(it)}
-                                      className="px-2.5 py-1 bg-ink text-white rounded text-caption">批准+发放</button>
+                                      className="px-2.5 py-1 bg-ink text-white rounded text-caption">批准</button>
                               <button onClick={() => doCancel(it)}
                                       className="px-2 py-1 text-caption text-red-fg">取消</button>
                             </>
+                          )}
+                          {it.status === 'APPROVED' && (
+                            <button onClick={() => doPay(it)}
+                                    className="px-2.5 py-1 bg-amber text-white rounded text-caption">发放</button>
                           )}
                           {it.status === 'RECONCILING' && (
                             <button onClick={() => doClose(it)}
@@ -317,8 +333,6 @@ function NewModal({ stores, onClose, onCreated }: { stores: Store[]; onClose: ()
 
 function ApproveModal({ item, onClose, onApproved }: { item: Item; onClose: () => void; onApproved: () => void }) {
   const [amount, setAmount] = useState(String(item.requestedAmount))
-  const [paymentMethod, setPaymentMethod] = useState('现金')
-  const [bankTxNo, setBankTxNo] = useState('')
   const [busy, setBusy] = useState(false)
 
   async function submit() {
@@ -328,7 +342,7 @@ function ApproveModal({ item, onClose, onApproved }: { item: Item; onClose: () =
     try {
       await apiFetch(`/api/petty-cash/${item.id}/approve`, {
         method: 'PATCH',
-        body: JSON.stringify({ approvedAmount: amt, paymentMethod, bankTxNo: bankTxNo || undefined }),
+        body: JSON.stringify({ approvedAmount: amt }),
       })
       onApproved(); onClose()
     } catch (e: any) { alert(e?.message || '失败'); setBusy(false) }
@@ -338,39 +352,26 @@ function ApproveModal({ item, onClose, onApproved }: { item: Item; onClose: () =
     <div className="fixed inset-0 z-50 bg-ink/40 flex items-center justify-center" onClick={onClose}>
       <div className="bg-white rounded-card max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-3 border-b border-border flex items-center justify-between">
-          <h3 className="text-h2">批准 + 发放 {item.store.name} {item.month}</h3>
+          <h3 className="text-h2">批准 {item.store.name} {item.month}</h3>
           <button onClick={onClose} className="text-gray3 text-h2">×</button>
         </div>
         <div className="p-5 space-y-3">
           <div className="bg-bg-warm rounded-card p-3 text-caption">
             申请金额: <span className="font-num">¥{Number(item.requestedAmount).toLocaleString()}</span>
             {item.requestNote && <div className="text-gray3 mt-1">备注: {item.requestNote}</div>}
+            <div className="text-amber-fg mt-2">💡 批准后不立即扣款, 还需点 "发放" 才扣 + 生凭证</div>
           </div>
           <div>
             <label className="text-micro text-gray3 block mb-1">批准金额</label>
             <input type="number" step="0.01" value={amount} onChange={e => setAmount(e.target.value)}
                    className="w-full px-3 py-2 rounded-cta border border-border bg-white text-button font-num" />
           </div>
-          <div>
-            <label className="text-micro text-gray3 block mb-1">发放方式</label>
-            <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}
-                    className="w-full px-3 py-2 rounded-cta border border-border bg-white text-button">
-              <option value="现金">现金</option>
-              <option value="转账">转账</option>
-              <option value="招行">招行</option>
-            </select>
-          </div>
-          <div>
-            <label className="text-micro text-gray3 block mb-1">流水号 (可选, 转账时填)</label>
-            <input value={bankTxNo} onChange={e => setBankTxNo(e.target.value)}
-                   className="w-full px-3 py-2 rounded-cta border border-border bg-white text-caption font-num" />
-          </div>
         </div>
         <div className="px-5 py-3 border-t border-border flex justify-end gap-2">
           <button onClick={onClose} className="px-4 py-2 bg-white border border-border rounded-cta text-button text-gray2">取消</button>
           <button onClick={submit} disabled={busy}
                   className="px-4 py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40">
-            {busy ? '处理中…' : '确认批准并发放'}
+            {busy ? '处理中…' : '确认批准'}
           </button>
         </div>
       </div>

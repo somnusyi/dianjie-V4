@@ -2,6 +2,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { isStoreScoped } from '../lib/auth-scope'
+import { monthRangeForDateCol, monthRangeForTimestampCol } from '../lib/dateRange'
 
 // 费用项配置
 export const EXPENSE_ITEMS = {
@@ -36,27 +37,28 @@ export const profitRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const targetMonth = month || dayjs().format('YYYY-MM')
-    const start = dayjs(targetMonth + '-01').startOf('month').toDate()
-    const end = dayjs(targetMonth + '-01').endOf('month').toDate()
+    // DATE 列 (RevenueRecord.date) → UTC 边界; timestamp 列 (createdAt) → ts 边界
+    const { start, end } = monthRangeForDateCol(targetMonth)
+    const { start: startTs, end: endTs } = monthRangeForTimestampCol(targetMonth)
 
     // 验证门店属于当前租户
     const store = await prisma.store.findFirst({ where: { id: storeId, tenantId } })
     if (!store) return reply.status(404).send({ error: '门店不存在' })
 
     const [revenues, receipts, lossClaims, expenses] = await Promise.all([
-      // 营业额（含渠道）
+      // 营业额（含渠道, date 是 DATE）
       prisma.revenueRecord.findMany({
         where: { storeId, date: { gte: start, lte: end } },
         orderBy: { date: 'asc' },
       }),
-      // 食材采购成本
+      // 食材采购成本 (createdAt 是 timestamp)
       prisma.receipt.findMany({
-        where: { storeId, tenantId, status: { notIn: ['VOID', 'REJECTED'] }, createdAt: { gte: start, lte: end } },
+        where: { storeId, tenantId, status: { notIn: ['VOID', 'REJECTED'] }, createdAt: { gte: startTs, lte: endTs } },
         select: { totalAmount: true },
       }),
-      // 报损金额
+      // 报损金额 (createdAt 是 timestamp)
       prisma.lossClaim.findMany({
-        where: { storeId, tenantId, status: { in: ['APPROVED', 'AUTO_APPROVED'] }, createdAt: { gte: start, lte: end } },
+        where: { storeId, tenantId, status: { in: ['APPROVED', 'AUTO_APPROVED'] }, createdAt: { gte: startTs, lte: endTs } },
         select: { totalLossAmount: true },
       }),
       // 手动录入费用
@@ -153,14 +155,16 @@ export const profitRoutes: FastifyPluginAsync = async (app) => {
     if (!store) return reply.status(404).send({ error: '门店不存在' })
 
     const now = dayjs()
-    const monthStart = now.startOf('month').toDate()
-    const monthEnd = now.endOf('month').toDate()
-    // 季度: 不依赖 quarterOfYear 插件, 手工算
+    // 这些边界同时给 DATE 列 (RevenueRecord.date) 和 timestamp 列 (createdAt) 用,
+    // 用 UTC 边界优先保证 DATE 列正确 (PG 隐式 cast 丢时间会跨日);
+    // 对 timestamp 列在月度边界上 0-8h 偏移可忽略 (季/年范围内尤其无感)
+    const monthStart = monthRangeForDateCol(now.format('YYYY-MM')).start
+    const monthEnd = monthRangeForDateCol(now.format('YYYY-MM')).end
     const quarterIdx = Math.floor(now.month() / 3)  // 0..3
-    const quarterStart = now.month(quarterIdx * 3).startOf('month').toDate()
-    const quarterEnd = now.month(quarterIdx * 3 + 2).endOf('month').toDate()
-    const yearStart = now.startOf('year').toDate()
-    const yearEnd = now.endOf('year').toDate()
+    const quarterStart = monthRangeForDateCol(now.month(quarterIdx * 3).format('YYYY-MM')).start
+    const quarterEnd = monthRangeForDateCol(now.month(quarterIdx * 3 + 2).format('YYYY-MM')).end
+    const yearStart = monthRangeForDateCol(now.startOf('year').format('YYYY-MM')).start
+    const yearEnd = monthRangeForDateCol(now.month(11).format('YYYY-MM')).end
     const sinceStart = (store as any).createdAt
     const sinceEnd = now.endOf('day').toDate()
 
@@ -251,8 +255,9 @@ export const profitRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(403).send({ error: '无权限' })
     }
     const now = dayjs()
-    const monthStart = now.startOf('month').toDate()
-    const monthEnd = now.endOf('month').toDate()
+    // DATE 列优先: UTC 边界. timestamp 列 (createdAt) 0-8h 偏移可忽略.
+    const monthStart = monthRangeForDateCol(now.format('YYYY-MM')).start
+    const monthEnd = monthRangeForDateCol(now.format('YYYY-MM')).end
     const stores = await prisma.store.findMany({
       where: { tenantId, status: 'ENABLED' },
       orderBy: { no: 'asc' },

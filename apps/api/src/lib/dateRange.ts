@@ -27,6 +27,20 @@ export function monthRangeForDateCol(month: string): { start: Date; end: Date } 
 }
 
 /**
+ * 给 PG timestamp(tz) 列用的月份范围 (保持 Asia/Shanghai 本地语义)
+ * 这是 ts 列正常用法 — 不需要 UTC 校正, 因为 timestamp 列保留时分秒.
+ * 写成 helper 是为了跟 monthRangeForDateCol 在同一文件中互相参照, 减少混用.
+ * @param month YYYY-MM 字串, 不传则当月
+ */
+export function monthRangeForTimestampCol(month?: string): { start: Date; end: Date } {
+  const m = month ? dayjs(month + '-01') : dayjs()
+  return {
+    start: m.startOf('month').toDate(),
+    end: m.endOf('month').toDate(),
+  }
+}
+
+/**
  * 给 PG DATE 列用的"截止日"边界
  * @param asOf YYYY-MM-DD 字串或 Date
  */

@@ -11,7 +11,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { PNL_PREFIXES, BS_PREFIXES } from '../services/voucher/coa-config'
-import { monthRangeForDateCol, endOfDayUtcForDateCol } from '../lib/dateRange'
+import { monthRangeForDateCol, monthRangeForTimestampCol, endOfDayUtcForDateCol } from '../lib/dateRange'
 
 const FINANCE_ROLES = ['FINANCE', 'ADMIN', 'SUPER_ADMIN']
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
@@ -40,12 +40,13 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
     }
     const { month, storeId } = req.query as any
     const ym = month || dayjs().format('YYYY-MM')
-    const monthStart = dayjs(ym + '-01').startOf('month').toDate()
-    const monthEnd   = dayjs(ym + '-01').endOf('month').toDate()
-    // 同比 (上年同月)
+    // DATE 列 (RevenueRecord.date / Receipt.deliveryDate / Voucher.date): 用 UTC 边界防 timezone 跨日
+    const { start: monthStart, end: monthEnd } = monthRangeForDateCol(ym)
+    // timestamp 列 (LossClaim.createdAt 等): 用 Asia/Shanghai 边界保留本地语义
+    const { start: monthStartTs, end: monthEndTs } = monthRangeForTimestampCol(ym)
+    // 同比/环比 衍生 (用 DATE 边界 + 偏移, 因主要给 DATE 列查询用)
     const lyStart = dayjs(monthStart).subtract(1, 'year').toDate()
     const lyEnd   = dayjs(monthEnd).subtract(1, 'year').toDate()
-    // 环比 (上月)
     const lmStart = dayjs(monthStart).subtract(1, 'month').toDate()
     const lmEnd   = dayjs(monthStart).subtract(1, 'day').endOf('day').toDate()
 
@@ -104,7 +105,8 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
       where: {
         tenantId, storeId: { in: storeIds },
         status: { in: ['APPROVED', 'RESOLVED'] },
-        createdAt: { gte: monthStart, lte: monthEnd },
+        // createdAt 是 timestamp 列, 用 ts 边界
+        createdAt: { gte: monthStartTs, lte: monthEndTs },
       },
       _sum: { totalLossAmount: true },
     })
@@ -190,8 +192,9 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
     }
     const { month } = req.query as any
     const ym = month || dayjs().format('YYYY-MM')
-    const monthStart = dayjs(ym + '-01').startOf('month').toDate()
-    const monthEnd   = dayjs(ym + '-01').endOf('month').toDate()
+    // DATE 列 (deliveryDate, date): UTC 边界. timestamp 列 (createdAt): Asia/Shanghai 边界.
+    const { start: monthStart, end: monthEnd } = monthRangeForDateCol(ym)
+    const { start: monthStartTs, end: monthEndTs } = monthRangeForTimestampCol(ym)
 
     const stores = await prisma.store.findMany({ where: { tenantId }, select: { id: true, name: true } })
     const storeIds = stores.map(s => s.id)
@@ -203,7 +206,7 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
       const receipt = await prisma.receipt.aggregate({ where, _sum: { totalAmount: true } })
       const lossWhere: any = {
         tenantId, status: { in: ['APPROVED', 'RESOLVED'] },
-        createdAt: { gte: monthStart, lte: monthEnd },
+        createdAt: { gte: monthStartTs, lte: monthEndTs },
       }
       if (storeId) lossWhere.storeId = storeId
       const loss = await prisma.lossClaim.aggregate({ where: lossWhere, _sum: { totalLossAmount: true } })
@@ -235,18 +238,19 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
     // 近 6 个月趋势
     const trend = [] as Array<{ month: string; revenue: number; foodCost: number; ratio: number; loss: number }>
     for (let i = 5; i >= 0; i--) {
-      const m = dayjs(ym + '-01').subtract(i, 'month')
-      const ms = m.startOf('month').toDate()
-      const me = m.endOf('month').toDate()
+      const m = dayjs(ym + '-01').subtract(i, 'month').format('YYYY-MM')
+      // DATE 列用 UTC 边界, timestamp 列用 ts 边界
+      const { start: ms, end: me } = monthRangeForDateCol(m)
+      const { start: msTs, end: meTs } = monthRangeForTimestampCol(m)
       const [rec, los, rev] = await Promise.all([
         prisma.receipt.aggregate({ where: { tenantId, deliveryDate: { gte: ms, lte: me } }, _sum: { totalAmount: true } }),
-        prisma.lossClaim.aggregate({ where: { tenantId, status: { in: ['APPROVED', 'RESOLVED'] }, createdAt: { gte: ms, lte: me } }, _sum: { totalLossAmount: true } }),
+        prisma.lossClaim.aggregate({ where: { tenantId, status: { in: ['APPROVED', 'RESOLVED'] }, createdAt: { gte: msTs, lte: meTs } }, _sum: { totalLossAmount: true } }),
         prisma.revenueRecord.aggregate({ where: { storeId: { in: storeIds }, date: { gte: ms, lte: me } }, _sum: { amount: true } }),
       ])
       const revV = Number(rev._sum.amount || 0)
       const food = Number(rec._sum.totalAmount || 0)
       trend.push({
-        month: m.format('YYYY-MM'),
+        month: m,
         revenue: revV, foodCost: food,
         loss: Number(los._sum.totalLossAmount || 0),
         ratio: revV > 0 ? food / revV : 0,
@@ -282,8 +286,9 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
     }
     const { month } = req.query as any
     const ym = month || dayjs().format('YYYY-MM')
-    const start = dayjs(ym + '-01').startOf('month').toDate()
-    const end   = dayjs(ym + '-01').endOf('month').toDate()
+    // DATE 列 (RevenueRecord.date, Voucher.date) 用 UTC; timestamp 列 (paidAt, createdAt) 用 ts
+    const { start, end } = monthRangeForDateCol(ym)
+    const { start: tsStart, end: tsEnd } = monthRangeForTimestampCol(ym)
 
     const stores = await prisma.store.findMany({ where: { tenantId }, select: { id: true } })
     const storeIds = stores.map(s => s.id)
@@ -297,20 +302,20 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
     const operatingIn = Number(revIn._sum.amount || 0)
 
     // 经营活动 (流出)
-    // - 已付款给供应商
+    // - 已付款给供应商 (paidAt 是 timestamp)
     const paymentOut = await prisma.payment.aggregate({
-      where: { tenantId, status: 'PAID', paidAt: { gte: start, lte: end } },
+      where: { tenantId, status: 'PAID', paidAt: { gte: tsStart, lte: tsEnd } },
       _sum: { amount: true },
     })
     const supplierPaid = Number(paymentOut._sum.amount || 0)
-    // - 销售费用 + 管理费用 (从凭证里聚合, 借方)
+    // - 销售费用 + 管理费用 (从凭证里聚合, 借方; voucher.date 是 DATE)
     const sellingPaid = await sumVoucherByCode(tenantId, ['5601'], start, end)
     const mgmtPaid    = await sumVoucherByCode(tenantId, ['5602'], start, end)
     const operatingOut = supplierPaid + sellingPaid + mgmtPaid
 
-    // 投资活动 (流出): 建店资金
+    // 投资活动 (流出): 建店资金 (createdAt 是 timestamp)
     const capitalExpense: any = await prisma.capitalExpense.aggregate({
-      where: { project: { store: { tenantId } }, createdAt: { gte: start, lte: end } },
+      where: { project: { store: { tenantId } }, createdAt: { gte: tsStart, lte: tsEnd } },
       _sum: { amount: true },
     } as any).catch(() => ({ _sum: { amount: 0 } }))
     const investmentOut = Number(capitalExpense?._sum?.amount || 0)
@@ -365,8 +370,8 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
     }
     const { month } = req.query as any
     const ym = month || dayjs().format('YYYY-MM')
-    const start = dayjs(ym + '-01').startOf('month').toDate()
-    const end   = dayjs(ym + '-01').endOf('month').toDate()
+    // voucher.date 是 DATE 列 → UTC 边界
+    const { start, end } = monthRangeForDateCol(ym)
 
     // 拉本月所有"银行存款"类凭证分录 (1001 库存现金 / 1002* 银行存款 / 1012* 其他货币资金)
     const entries = await prisma.voucherEntry.findMany({

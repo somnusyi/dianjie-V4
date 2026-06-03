@@ -10,6 +10,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import { z } from 'zod'
 import dayjs from 'dayjs'
+import { monthRangeForDateCol } from '../lib/dateRange'
 
 const CHEF_ROLES = ['CHEF_DIRECTOR', 'CHEF', 'ADMIN', 'SUPER_ADMIN']
 const VIEW_ROLES = [...CHEF_ROLES, 'FINANCE', 'MANAGER', 'KITCHEN_LEAD']
@@ -324,8 +325,8 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     if (!VIEW_ROLES.includes(role)) return reply.status(403).send({ error: '无权' })
     const { month, storeId, limit = '20' } = req.query as any
     const ym = month || dayjs().format('YYYY-MM')
-    const start = dayjs(ym + '-01').startOf('month').toDate()
-    const end   = dayjs(ym + '-01').endOf('month').toDate()
+    // DishSale.date 是 PG DATE 列, 用 UTC 边界防 timezone 跨日
+    const { start, end } = monthRangeForDateCol(ym)
     const where: any = { tenantId, date: { gte: start, lte: end } }
     if (storeId) where.storeId = storeId
     const rows = await prisma.dishSale.groupBy({

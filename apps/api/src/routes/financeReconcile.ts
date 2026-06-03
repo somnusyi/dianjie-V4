@@ -9,6 +9,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
+import { monthRangeForDateCol, monthRangeForTimestampCol } from '../lib/dateRange'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const ALLOW = new Set(['FINANCE', 'ADMIN', 'SUPER_ADMIN', 'BOSS'])
@@ -20,8 +21,9 @@ export const financeReconcileRoutes: FastifyPluginAsync = async (app) => {
 
     const monthStr = String((req.query as any).month || dayjs().format('YYYY-MM'))
     const view = String((req.query as any).view || 'store')
-    const start = dayjs(monthStr + '-01').startOf('month').toDate()
-    const end = dayjs(monthStr + '-01').endOf('month').toDate()
+    // DATE 列 (RevenueRecord.date) → UTC 边界; timestamp 列 (createdAt/paidAt/dueAt) → ts 边界
+    const { start, end } = monthRangeForDateCol(monthStr)
+    const { start: startTs, end: endTs } = monthRangeForTimestampCol(monthStr)
 
     if (view === 'store') {
       const stores = await prisma.store.findMany({
@@ -36,11 +38,11 @@ export const financeReconcileRoutes: FastifyPluginAsync = async (app) => {
           }).catch(() => ({ _sum: { amount: 0 } as any })),
           prisma.receipt.aggregate({
             _sum: { totalAmount: true },
-            where: { storeId: s.id, createdAt: { gte: start, lte: end } },
+            where: { storeId: s.id, createdAt: { gte: startTs, lte: endTs } },
           }).catch(() => ({ _sum: { totalAmount: 0 } as any })),
           prisma.lossClaim.aggregate({
             _sum: { totalLossAmount: true },
-            where: { storeId: s.id, createdAt: { gte: start, lte: end },
+            where: { storeId: s.id, createdAt: { gte: startTs, lte: endTs },
                      status: { in: ['APPROVED', 'AUTO_APPROVED', 'RESOLVED'] } },
           }).catch(() => ({ _sum: { totalLossAmount: 0 } as any })),
         ])
@@ -63,23 +65,23 @@ export const financeReconcileRoutes: FastifyPluginAsync = async (app) => {
       })
       const result = await Promise.all(suppliers.map(async s => {
         const [delAgg, paidAgg, unpaidAgg, lossAgg] = await Promise.all([
-          // 本月交付 = receipt 总额 by supplier
+          // 这些全是 timestamp 列 (createdAt/paidAt/dueAt), 用 ts 边界
           prisma.receipt.aggregate({
             _sum: { totalAmount: true },
-            where: { supplierId: s.id, createdAt: { gte: start, lte: end } },
+            where: { supplierId: s.id, createdAt: { gte: startTs, lte: endTs } },
           }).catch(() => ({ _sum: { totalAmount: 0 } as any })),
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
-            where: { supplierId: s.id, status: 'PAID' as any, paidAt: { gte: start, lte: end } },
+            where: { supplierId: s.id, status: 'PAID' as any, paidAt: { gte: startTs, lte: endTs } },
           }).catch(() => ({ _sum: { amount: 0 } as any })),
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
             where: { supplierId: s.id, status: { in: ['PENDING', 'NOTIFIED', 'APPROVED', 'OVERDUE', 'ON_HOLD'] as any },
-                     dueAt: { gte: start, lte: end } },
+                     dueAt: { gte: startTs, lte: endTs } },
           }).catch(() => ({ _sum: { amount: 0 } as any })),
           prisma.lossClaim.aggregate({
             _sum: { totalLossAmount: true },
-            where: { supplierId: s.id, createdAt: { gte: start, lte: end },
+            where: { supplierId: s.id, createdAt: { gte: startTs, lte: endTs },
                      status: { in: ['APPROVED', 'AUTO_APPROVED', 'RESOLVED'] } },
           }).catch(() => ({ _sum: { totalLossAmount: 0 } as any })),
         ])

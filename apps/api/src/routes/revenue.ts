@@ -2,6 +2,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { isStoreScoped } from '../lib/auth-scope'
+import { monthRangeForDateCol } from '../lib/dateRange'
 
 export const revenueRoutes: FastifyPluginAsync = async (app) => {
   const auth = { preHandler: [(app as any).authenticate] }
@@ -16,8 +17,8 @@ export const revenueRoutes: FastifyPluginAsync = async (app) => {
       where.storeId = storeId
     }
     if (month) {
-      const start = dayjs(month + '-01').startOf('month').toDate()
-      const end = dayjs(month + '-01').endOf('month').toDate()
+      // RevenueRecord.date 是 PG DATE 列 (无时间), 需 UTC 边界防 timezone 跨日 bug
+      const { start, end } = monthRangeForDateCol(month)
       where.date = { gte: start, lte: end }
     }
     try {
@@ -145,8 +146,8 @@ export const revenueRoutes: FastifyPluginAsync = async (app) => {
   app.get('/summary', auth, async (req: any) => {
     const { month } = req.query as any
     const { tenantId, storeId, role } = req.user
-    const start = dayjs((month || dayjs().format('YYYY-MM')) + '-01').startOf('month').toDate()
-    const end = dayjs((month || dayjs().format('YYYY-MM')) + '-01').endOf('month').toDate()
+    // RevenueRecord.date 是 PG DATE 列, 用 UTC 边界
+    const { start, end } = monthRangeForDateCol(month || dayjs().format('YYYY-MM'))
     const where: any = { store: { tenantId }, date: { gte: start, lte: end } }
     if (role === 'MANAGER') {
       if (!storeId) return { month: month || dayjs().format('YYYY-MM'), total: 0, stores: [] }

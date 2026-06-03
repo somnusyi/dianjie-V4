@@ -28,12 +28,16 @@ import { createVoucher } from '../services/voucher'
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const FINANCE_ROLES = new Set(['FINANCE', 'ADMIN', 'SUPER_ADMIN', 'BOSS'])
 
-// 工资 → 会计科目映射 (5xxx 体系)
+// 工资 → 会计科目映射 (按好会计真实科目表, 餐饮门店员工默认走销售费用)
+// 客户实际科目表 (科目表.xlsx 自查):
+//   560101 销售人员职工薪酬 (餐饮店员/厨师/服务员 — 多数场景)
+//   560201 管理人员职工薪酬 (管理岗 — 后续可加 item.isMgmt 区分)
+//   221104 应付社会保险费 (末级, 非 2211 一级)
+//   222121 应交个人所得税 (末级, 非 2221 一级)
 const ACCT = {
-  expenseGross: { code: '5602', name: '管理费用-工资' },
-  cashOut:      { code: '1002', name: '银行存款' },
-  socialSec:    { code: '2211', name: '应付职工薪酬-社保' },
-  tax:          { code: '2221', name: '应交税费-个人所得税' },
+  expenseGross: { code: '560101', name: '销售人员职工薪酬' },
+  socialSec:    { code: '221104', name: '应付社会保险费' },
+  tax:          { code: '222121', name: '应交个人所得税' },
 }
 
 const itemSchema = z.object({
@@ -192,8 +196,9 @@ export const payrollRoutes: FastifyPluginAsync = async (app) => {
     })
     // 银行/现金 (实发净额)
     entries.push({
-      accountCode: parsed.data.payMethod === '现金' ? '1001' : ACCT.cashOut.code,
-      accountName: parsed.data.payMethod === '现金' ? '库存现金' : ACCT.cashOut.name,
+      // 银行用末级科目 (100201=中行/100202=建行), 默认中行
+      accountCode: parsed.data.payMethod === '现金' ? '1001' : '100201',
+      accountName: parsed.data.payMethod === '现金' ? '库存现金' : '中国银行1674',
       debit: 0,
       credit: totalNet,
       summary: `${p.month} 工资发放`,

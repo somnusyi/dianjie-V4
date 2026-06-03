@@ -208,11 +208,20 @@ export default function FinancePCPaymentRequestDetailPage() {
             {/* 已付信息 */}
             {isPaid && (
               <section className="bg-green-bg rounded-card border border-green/30 p-4">
-                <div className="text-h2 text-green-fg">✓ 已付款</div>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="text-h2 text-green-fg">✓ 已付款</div>
+                  {/* BUG#2 fix: 关联凭证链接 */}
+                  {d.payload.voucherId && (
+                    <a href={`/v2/finance-pc/vouchers/${d.payload.voucherId}`}
+                       className="px-3 py-1.5 bg-white border border-green/40 text-green-fg rounded-cta text-caption">
+                      📄 查看凭证 →
+                    </a>
+                  )}
+                </div>
                 <div className="text-caption text-gray2 mt-1 grid grid-cols-2 gap-1">
                   <div><span className="text-gray3">付款时间</span>: {dayjs(d.payload.paidAt).format('YYYY-MM-DD HH:mm')}</div>
                   {d.payload.bankTxNo && <div><span className="text-gray3">银行流水</span>: <span className="font-num">{d.payload.bankTxNo}</span></div>}
-                  {d.payload.paidById && <div><span className="text-gray3">执行人 ID</span>: <span className="font-num">{d.payload.paidById}</span></div>}
+                  {d.payload.bankFrom && <div><span className="text-gray3">付款账户</span>: <span className="font-num">{d.payload.bankFrom}</span></div>}
                 </div>
               </section>
             )}

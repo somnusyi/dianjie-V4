@@ -68,6 +68,8 @@ export default function FinancePCCostCheckPage() {
   const [error, setError] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // 未分类列表批量打标 (selectedSupplierIds 是 Set, 跨 receipt 同 supplier 自动复用)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
 
   async function load() {
     setData(null); setError(null)
@@ -111,6 +113,31 @@ export default function FinancePCCostCheckPage() {
     finally { setBusy(false) }
   }
 
+  // 批量打标 (BUG#11 fix)
+  async function batchSetSourceType(sourceType: GroupKey) {
+    if (busy || selected.size === 0) return
+    if (!confirm(`批量打标 ${selected.size} 个供应商 → ${sourceType}?`)) return
+    setBusy(true)
+    try {
+      const r = await apiFetch<{ updated: number }>('/api/finance/cost-check/suppliers/batch-source-type', {
+        method: 'POST',
+        body: JSON.stringify({ ids: Array.from(selected), sourceType }),
+      })
+      alert(`✓ 已打标 ${r.updated} 个供应商`)
+      setSelected(new Set())
+      await load()
+    } catch (e: any) { alert(e?.message || '失败') }
+    finally { setBusy(false) }
+  }
+  function toggleSelect(supplierId: string) {
+    setSelected(s => {
+      const next = new Set(s)
+      if (next.has(supplierId)) next.delete(supplierId)
+      else next.add(supplierId)
+      return next
+    })
+  }
+
   const overall = data?.total
   const overallPct = overall && overall.count > 0 ? (overall.allVerifiedCount / overall.count * 100) : 0
 
@@ -131,6 +158,21 @@ export default function FinancePCCostCheckPage() {
         </div>
 
         {error && <div className="bg-red-bg text-red-fg rounded-card p-3 text-caption mb-4">{error}</div>}
+
+        {/* 批量打标 sticky bar (有选时显示) */}
+        {selected.size > 0 && (
+          <div className="sticky top-0 z-20 bg-amber/10 border border-amber/40 rounded-card p-3 mb-4 flex items-center gap-3">
+            <span className="text-caption">已选 <b className="font-num">{selected.size}</b> 个供应商, 批量打标为:</span>
+            <button onClick={() => batchSetSourceType('HEADQ_WAREHOUSE')}
+                    className="px-3 py-1.5 bg-[#FAF8F2] border border-border rounded-cta text-caption hover:bg-white">总仓</button>
+            <button onClick={() => batchSetSourceType('B2B_PLATFORM')}
+                    className="px-3 py-1.5 bg-amber/20 border border-amber/30 rounded-cta text-caption hover:bg-amber/30">B2B</button>
+            <button onClick={() => batchSetSourceType('SCATTERED')}
+                    className="px-3 py-1.5 bg-green-bg/40 border border-green/30 rounded-cta text-caption hover:bg-green-bg">散户</button>
+            <button onClick={() => setSelected(new Set())}
+                    className="ml-auto text-caption text-gray3 px-2">清空选择</button>
+          </div>
+        )}
 
         {/* 总进度 */}
         {overall && (
@@ -188,8 +230,17 @@ export default function FinancePCCostCheckPage() {
                     const isExpanded = expandedId === r.id
                     return (
                       <div key={r.id} className="bg-white">
-                        <button onClick={() => setExpandedId(isExpanded ? null : r.id)}
-                                className="w-full px-3 py-2.5 text-left hover:bg-bg/40 transition">
+                        <div className="px-3 py-2.5 hover:bg-bg/40 transition flex items-start gap-2">
+                          {/* 仅未分类列加复选, 用于批量打标 */}
+                          {gKey === 'UNCATEGORIZED' && (
+                            <input type="checkbox"
+                                   checked={selected.has(r.supplier.id)}
+                                   onChange={e => { e.stopPropagation(); toggleSelect(r.supplier.id) }}
+                                   className="mt-1 shrink-0"
+                                   title={`选中 ${r.supplier.name} 批量打标`} />
+                          )}
+                          <button onClick={() => setExpandedId(isExpanded ? null : r.id)}
+                                  className="flex-1 text-left">
                           <div className="flex items-center justify-between gap-2">
                             <div className="text-button truncate flex-1">{r.supplier.name}</div>
                             <span className="font-num text-button shrink-0">{fmtKMoney(Number(r.totalAmount))}</span>
@@ -207,6 +258,7 @@ export default function FinancePCCostCheckPage() {
                             {r.allVerified && <Chip tone="green">✓ 已对账</Chip>}
                           </div>
                         </button>
+                        </div>
                         {isExpanded && (
                           <div className="px-3 py-3 bg-bg/40 border-t border-border space-y-2">
                             {r.note && <p className="text-micro text-gray3">{r.note}</p>}

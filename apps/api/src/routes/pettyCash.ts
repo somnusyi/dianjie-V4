@@ -170,7 +170,7 @@ export const pettyCashRoutes: FastifyPluginAsync = async (app) => {
         sourceType: 'PettyCashPay',
         sourceId: item.id,
         entries: [
-          { accountCode: '1221', accountName: '其他应收款-备用金', debit: amt,
+          { accountCode: '122101', accountName: '备用金', debit: amt,
             summary: `${item.store.name} ${item.month} 备用金发放` },
           { accountCode: cashCode, accountName: cashName, credit: amt },
         ],
@@ -237,16 +237,18 @@ export const pettyCashRoutes: FastifyPluginAsync = async (app) => {
     const returned = Number(item.returnedAmount || 0)
     if (approved > 0 && Math.abs(spent + returned - approved) < 0.01) {
       const entries: any[] = []
+      // 备用金报销默认走 560125 销售费用-其他 (餐饮门店备用金多用于零星采购)
+      // 财务可在凭证编辑里手工拆分到具体类目 (560117 门店租金 / 560120 电费 等)
       if (spent > 0) entries.push({
-        accountCode: '5602', accountName: '管理费用-备用金核销', debit: spent,
-        summary: `${item.month} 备用金核销 (${item.store.name})`,
+        accountCode: '560125', accountName: '销售费用-其他', debit: spent,
+        summary: `${item.month} 备用金报销 (${item.store.name}) — 可手工拆细`,
       })
       if (returned > 0) entries.push({
         accountCode: '1001', accountName: '库存现金', debit: returned,
         summary: '退余款入库',
       })
       entries.push({
-        accountCode: '1221', accountName: '其他应收款-备用金',
+        accountCode: '122101', accountName: '备用金',
         credit: approved,
       })
       try {

@@ -112,7 +112,7 @@ export default function FinancePCPaymentRequestsPage() {
               placeholder="搜索 (标题 / 单号 / 收款方 / 发起人)"
               className="px-3 py-2 rounded-cta border border-border bg-white text-button w-72"
             />
-            <a href="/v2/finance/payment-requests/new"
+            <a href="/v2/finance-pc/payment-requests/new"
                className="px-4 py-2 bg-ink text-white rounded-cta text-button">+ 新建</a>
           </div>
         </div>

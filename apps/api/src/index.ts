@@ -41,6 +41,7 @@ import { financeReconcileRoutes } from './routes/financeReconcile'
 import { costCheckRoutes } from './routes/costCheck'
 import { pettyCashRoutes } from './routes/pettyCash'
 import { b2bImportRoutes } from './routes/b2bImport'
+import { payrollRoutes } from './routes/payroll'
 import { receiptRoutes } from './routes/receipts'
 import { reconciliationRoutes } from './routes/reconciliations'
 import { paymentRoutes } from './routes/payments'
@@ -190,6 +191,7 @@ async function bootstrap() {
   await app.register(costCheckRoutes,        { prefix: '/api/finance' })
   await app.register(pettyCashRoutes,        { prefix: '/api/petty-cash' })
   await app.register(b2bImportRoutes,        { prefix: '/api/finance/b2b' })
+  await app.register(payrollRoutes,          { prefix: '/api/payroll' })
   await app.register(receiptRoutes,        { prefix: '/api/receipts' })
   await app.register(reconciliationRoutes, { prefix: '/api/reconciliations' })
   await app.register(paymentRoutes,        { prefix: '/api/payments' })

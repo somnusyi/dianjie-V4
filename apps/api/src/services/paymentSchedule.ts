@@ -28,6 +28,18 @@ interface CreateScheduleParams {
 export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: CreateScheduleParams) {
   const confirmedAt = receipt.confirmedAt
 
+  // P2-2: 总仓 (HEADQ_WAREHOUSE) 是内部调拨, 不走外部付款
+  //   只更新 receipt 状态, 不建对账单 / 不建 paymentSchedule
+  //   后续走 cost-check 4 方核对完毕 → 财务自己建凭证 (借库存 / 贷 总仓往来)
+  if ((supplier as any).sourceType === 'HEADQ_WAREHOUSE') {
+    await prisma.receipt.update({
+      where: { id: receipt.id },
+      data: { status: 'CONFIRMED' },     // 入库即终态, 等财务核对入账
+    })
+    console.log(`[autoProcess] 总仓入库 ${receipt.no} 不建 paymentSchedule (HEADQ_WAREHOUSE 内部调拨)`)
+    return { isHeadqWarehouse: true }
+  }
+
   // ── 1. 自动生成对账单 ──────────────────────────
   const reconNo = await generateNo('DC', tenantId)
   const recon = await prisma.reconciliation.create({

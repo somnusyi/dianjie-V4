@@ -13,7 +13,7 @@
  *   - 显示关账人 / 关账时间 / carryover 凭证号
  */
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
 import { Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
@@ -39,6 +39,15 @@ const STATUS_TONE: Record<string, 'green' | 'red' | 'amber'> = {
   OPEN: 'green', CLOSED: 'red', REOPENED: 'amber',
 }
 
+type WizardData = {
+  pendingApproval: number       // 待审付款申请
+  costCheckRemaining: number    // 待 4 方核对完毕
+  pendingInvoice: number        // 已付未开票 (信息备查, 不阻塞关账)
+  pettyCashReconciling: number  // 备用金待财务关账
+  payrollDraftCount: number     // 工资单 DRAFT/APPROVED 未发
+  voucherDraftCount: number     // 凭证草稿数
+}
+
 export default function FinancePCPeriodClosePage() {
   const [periods, setPeriods] = useState<Period[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -49,12 +58,37 @@ export default function FinancePCPeriodClosePage() {
   const [reopenNote, setReopenNote] = useState('')
   const [preview, setPreview] = useState<any | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
+  const [wizard, setWizard] = useState<WizardData | null>(null)
+  const currentMonth = dayjs().subtract(1, 'month').format('YYYY-MM')   // 默认聚焦上个月 (实际要关账的月)
 
   function load() {
     apiFetch<Period[]>('/api/vouchers/periods')
       .then(setPeriods).catch(e => setError(e.message))
   }
   useEffect(() => { load() }, [])
+
+  // 关账前清单数据 (并发拉)
+  useEffect(() => {
+    const monthFrom = `${currentMonth}-01`
+    const monthTo = dayjs(currentMonth + '-01').endOf('month').format('YYYY-MM-DD')
+    Promise.all([
+      apiFetch<{ total: number }>('/api/payment-requests?status=PENDING&pageSize=1').catch(() => ({ total: 0 })),
+      apiFetch<any>(`/api/finance/cost-check?month=${currentMonth}`).catch(() => ({ total: { count: 0, allVerifiedCount: 0 } })),
+      apiFetch<any>('/api/invoices/pending-from-finance').catch(() => ({ summary: { paidCount: 0 } })),
+      apiFetch<any[]>(`/api/petty-cash?status=RECONCILING`).catch(() => []),
+      apiFetch<any[]>(`/api/payroll?month=${currentMonth}`).catch(() => []),
+      apiFetch<{ items: any[] }>(`/api/vouchers?from=${monthFrom}&to=${monthTo}&status=DRAFT&pageSize=200`).catch(() => ({ items: [] })),
+    ]).then(([pr, cc, pInv, pcRec, pr2, vou]) => {
+      setWizard({
+        pendingApproval: pr.total || 0,
+        costCheckRemaining: cc.total ? (cc.total.count - cc.total.allVerifiedCount) : 0,
+        pendingInvoice: pInv.summary?.paidCount || 0,
+        pettyCashReconciling: Array.isArray(pcRec) ? pcRec.length : 0,
+        payrollDraftCount: Array.isArray(pr2) ? pr2.filter((p: any) => ['DRAFT', 'APPROVED'].includes(p.status)).length : 0,
+        voucherDraftCount: vou.items?.length || 0,
+      })
+    }).catch(() => {})
+  }, [currentMonth])
 
   // 生成近 12 个月候选 (包含未在 DB 的月份)
   const candidateMonths: string[] = []
@@ -122,6 +156,48 @@ export default function FinancePCPeriodClosePage() {
         </div>
 
         {error && <div className="bg-red-bg text-red-fg rounded-card p-3 text-caption mb-4">{error}</div>}
+
+        {/* 关账前清单 wizard (聚焦上月 = 实际要关账的月) */}
+        <section className="bg-white rounded-card border border-border p-4 mb-4">
+          <header className="flex items-center justify-between mb-3">
+            <div>
+              <h2 className="text-h2">{currentMonth} 关账前清单</h2>
+              <p className="text-caption text-gray3">完成下方 6 项再关账, 避免数据缺失或对账错位</p>
+            </div>
+            {wizard && (() => {
+              const blockers = [
+                wizard.pendingApproval,
+                wizard.costCheckRemaining,
+                wizard.pettyCashReconciling,
+                wizard.payrollDraftCount,
+                wizard.voucherDraftCount,
+              ].filter(n => n > 0).length
+              return (
+                <div className="text-right">
+                  <div className="text-h2 font-num">{5 - blockers} / 5</div>
+                  <div className="text-micro text-gray3">已完成 (待开票不阻塞)</div>
+                </div>
+              )
+            })()}
+          </header>
+          <div className="grid grid-cols-3 gap-2">
+            <WizardCheck title="① 报销/付款审批" count={wizard?.pendingApproval}
+                         href="/v2/finance-pc/payment-requests" hint="待审单数" required />
+            <WizardCheck title="② 入库 4 方核对" count={wizard?.costCheckRemaining}
+                         href="/v2/finance-pc/cost-check" hint="未对账完笔数" required />
+            <WizardCheck title="③ 待开票跟踪" count={wizard?.pendingInvoice}
+                         href="/v2/finance-pc/invoices-pending" hint="已付未开张数" optional />
+            <WizardCheck title="④ 备用金归档" count={wizard?.pettyCashReconciling}
+                         href="/v2/finance-pc/petty-cash" hint="待财务关账笔数" required />
+            <WizardCheck title="⑤ 工资发放" count={wizard?.payrollDraftCount}
+                         href="/v2/finance-pc/payroll" hint="未发放工资单数" required />
+            <WizardCheck title="⑥ 本月凭证" count={wizard?.voucherDraftCount}
+                         href="/v2/finance-pc/vouchers" hint="草稿数 (需 POSTED)" required />
+          </div>
+          <div className="mt-3 text-caption text-gray3">
+            📌 红色 = 待办, 绿色 = 已完成 / 灰色 = 可选 · 6 项做完才点 "关账"
+          </div>
+        </section>
 
         <div className="bg-amber/10 border border-amber/30 rounded-card p-3 mb-4 text-caption text-gray2">
           📌 关账流程: ① 先确认本月所有凭证已 POSTED (导出过最稳); ② 关账 → 自动期末结转 → 锁; ③ 异常情况只有财务长可重开 (留痕).
@@ -341,5 +417,38 @@ export default function FinancePCPeriodClosePage() {
         </div>
       )}
     </div>
+  )
+}
+
+function WizardCheck({ title, count, href, hint, required, optional }: {
+  title: string
+  count?: number
+  href: string
+  hint: string
+  required?: boolean
+  optional?: boolean
+}) {
+  const loading = count === undefined
+  const done = !loading && count === 0
+  const cls = loading ? 'bg-bg border-border'
+    : done ? 'bg-green-bg/40 border-green/30'
+    : optional ? 'bg-bg border-border'
+    : 'bg-red-bg/30 border-red/30'
+  return (
+    <a href={href}
+       className={`flex items-start gap-3 p-3 rounded-card border transition hover:bg-white ${cls}`}>
+      <span className={`w-7 h-7 rounded-full shrink-0 flex items-center justify-center text-button ${
+        loading ? 'bg-bg text-gray3'
+        : done ? 'bg-green-bg text-green-fg'
+        : optional ? 'bg-bg text-gray2'
+        : 'bg-red-bg text-red-fg'
+      }`}>{loading ? '·' : done ? '✓' : count}</span>
+      <div className="flex-1 min-w-0">
+        <div className="text-button text-ink">{title}</div>
+        <p className="text-micro text-gray3 mt-0.5">
+          {loading ? '加载中…' : done ? '已完成' : `${hint}: ${count}`}
+        </p>
+      </div>
+    </a>
   )
 }

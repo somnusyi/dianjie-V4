@@ -48,6 +48,7 @@ model Tenant {
   stockMovements SupplierStockMovement[]
   accountingPeriods AccountingPeriod[]
   pettyCash         PettyCash[]
+  payrolls          Payroll[]
 
   @@map("tenants")
 }
@@ -437,6 +438,7 @@ model Store {
   documents      Document[]
   dishSales      DishSale[]
   pettyCash      PettyCash[]
+  payrolls       Payroll[]
 
   @@unique([tenantId, no])
   @@map("stores")
@@ -2098,4 +2100,68 @@ model PettyCashExpense {
 
   @@index([pettyCashId])
   @@map("petty_cash_expenses")
+}
+
+// ── 工资 (P2-1) ───────────────────────────────────────
+// 简化版: 财务上传 Excel 月工资单 → 系统记 batch + 每人明细 → 审批 → 发放 → 自动生成凭证
+model Payroll {
+  id              String   @id @default(cuid())
+  tenantId        String
+  storeId         String
+  month           String                     // YYYY-MM
+  // 汇总 (从 items 累加, 落库快照)
+  totalGross      Decimal? @db.Decimal(12, 2) // 应发合计
+  totalNet        Decimal  @db.Decimal(12, 2) // 实发合计 (主要)
+  totalSocialSec  Decimal? @db.Decimal(12, 2) // 社保合计 (扣的)
+  totalTax        Decimal? @db.Decimal(12, 2) // 个税合计
+  // 审批
+  status          PayrollStatus @default(DRAFT)
+  approvedById    String?
+  approvedAt      DateTime?
+  // 发放
+  payDate         DateTime?
+  payMethod       String?                     // 现金 / 招行 / 转账 / 微信
+  bankTxNo        String?
+  // 自动生成凭证 关联
+  voucherId       String?                     // 凭证 id (生成后回填)
+  note            String?
+
+  createdById     String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+  store           Store    @relation(fields: [storeId], references: [id])
+  items           PayrollItem[]
+
+  @@unique([tenantId, storeId, month])
+  @@index([tenantId, status])
+  @@map("payrolls")
+}
+
+enum PayrollStatus {
+  DRAFT       // 上传明细, 财务/老板待批
+  APPROVED    // 已批待发
+  PAID        // 已发, 凭证已生成
+  VOIDED      // 作废
+}
+
+model PayrollItem {
+  id              String   @id @default(cuid())
+  payrollId       String
+  employeeName    String
+  position        String?
+  baseSalary      Decimal? @db.Decimal(10, 2)
+  bonus           Decimal? @db.Decimal(10, 2)
+  overtime        Decimal? @db.Decimal(10, 2)
+  deductSocialSec Decimal? @db.Decimal(10, 2)
+  deductTax       Decimal? @db.Decimal(10, 2)
+  deductOther     Decimal? @db.Decimal(10, 2)
+  netAmount       Decimal  @db.Decimal(10, 2) // 实发
+  note            String?
+
+  payroll         Payroll  @relation(fields: [payrollId], references: [id], onDelete: Cascade)
+
+  @@index([payrollId])
+  @@map("payroll_items")
 }

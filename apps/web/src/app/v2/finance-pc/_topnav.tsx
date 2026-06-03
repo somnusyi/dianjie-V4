@@ -33,6 +33,7 @@ const TABS: Tab[] = [
       { label: '月度成本核对',  href: '/v2/finance-pc/cost-check',           desc: '4 方核对 (门店→厨师长→供应商→财务)' },
       { label: 'B2B 平台导入',  href: '/v2/finance-pc/cost-check/import-b2b', desc: '美菜/快驴 月账单批量录入' },
       { label: '备用金管理',    href: '/v2/finance-pc/petty-cash',           desc: '店长申请 → 财务发 → 月底报账' },
+      { label: '工资管理',      href: '/v2/finance-pc/payroll',              desc: 'Excel 上传 → 审批 → 发放 (自动凭证)' },
     ],
   },
   {

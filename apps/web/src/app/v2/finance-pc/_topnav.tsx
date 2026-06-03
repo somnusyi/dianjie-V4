@@ -55,6 +55,32 @@ export default function FinanceTopNav() {
   const [badges, setBadges] = useState<Badges>({})
   const [openKey, setOpenKey] = useState<string | null>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const [installPrompt, setInstallPrompt] = useState<any>(null)
+
+  // PWA 安装支持: 浏览器认为可装时 (Chrome/Edge 桌面) 才弹按钮
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+    if (isStandalone) return  // 已在 PWA 模式内, 不显示
+    const handler = (e: any) => {
+      e.preventDefault()
+      setInstallPrompt(e)
+    }
+    window.addEventListener('beforeinstallprompt', handler)
+    const installed = () => setInstallPrompt(null)
+    window.addEventListener('appinstalled', installed)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handler)
+      window.removeEventListener('appinstalled', installed)
+    }
+  }, [])
+
+  async function handleInstall() {
+    if (!installPrompt) return
+    installPrompt.prompt()
+    const { outcome } = await installPrompt.userChoice
+    if (outcome === 'accepted') setInstallPrompt(null)
+  }
 
   useEffect(() => {
     setUser(getUser())
@@ -159,6 +185,13 @@ export default function FinanceTopNav() {
           })}
         </nav>
         <div className="flex items-center gap-3">
+          {installPrompt && (
+            <button onClick={handleInstall}
+                    className="px-3 py-1.5 bg-amber/15 hover:bg-amber/25 text-amber-fg rounded-cta text-button border border-amber/30 transition flex items-center gap-1"
+                    title="把财务工作台装到桌面, 双击图标直接打开">
+              <span>⬇</span>装到桌面
+            </button>
+          )}
           <button className="w-9 h-9 rounded-full bg-bg flex items-center justify-center" aria-label="通知">🔔</button>
           <span className="w-9 h-9 rounded-full bg-red text-white flex items-center justify-center font-num">{initial}</span>
           <span className="text-caption">{user?.name || '加载中…'}</span>

@@ -1,0 +1,50 @@
+{
+  "id": "/v2/finance-pc/",
+  "name": "滇界 · 财务工作台",
+  "short_name": "滇界财务",
+  "description": "财务 PC 工作台 — 凭证 / 月结 / 报税 / 对账 / 应付管理",
+  "start_url": "/v2/finance-pc/home",
+  "scope": "/v2/finance-pc/",
+  "display": "standalone",
+  "background_color": "#FAF8F2",
+  "theme_color": "#0A0A0A",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "categories": ["business", "finance", "productivity"],
+  "icons": [
+    { "src": "/icons/icon-48.webp",   "sizes": "48x48",     "type": "image/webp", "purpose": "any" },
+    { "src": "/icons/icon-72.webp",   "sizes": "72x72",     "type": "image/webp", "purpose": "any" },
+    { "src": "/icons/icon-96.webp",   "sizes": "96x96",     "type": "image/webp", "purpose": "any" },
+    { "src": "/icons/icon-128.webp",  "sizes": "128x128",   "type": "image/webp", "purpose": "any" },
+    { "src": "/icons/icon-192.webp",  "sizes": "192x192",   "type": "image/webp", "purpose": "any maskable" },
+    { "src": "/icons/icon-256.webp",  "sizes": "256x256",   "type": "image/webp", "purpose": "any" },
+    { "src": "/icons/icon-512.webp",  "sizes": "512x512",   "type": "image/webp", "purpose": "any maskable" },
+    { "src": "/icons/icon-1024.png",  "sizes": "1024x1024", "type": "image/png",  "purpose": "any" }
+  ],
+  "shortcuts": [
+    {
+      "name": "凭证",
+      "short_name": "凭证",
+      "description": "会计凭证 / 一键审 / 导好会计 Excel",
+      "url": "/v2/finance-pc/vouchers"
+    },
+    {
+      "name": "付款申请",
+      "short_name": "付款",
+      "description": "审批 + 执行付款",
+      "url": "/v2/finance-pc/payment-requests"
+    },
+    {
+      "name": "应付管理",
+      "short_name": "应付",
+      "description": "供应商发票 + 资金缺口",
+      "url": "/v2/finance-pc/payable"
+    },
+    {
+      "name": "月结锁账",
+      "short_name": "月结",
+      "description": "期末结转 + 关账",
+      "url": "/v2/finance-pc/period-close"
+    }
+  ]
+}

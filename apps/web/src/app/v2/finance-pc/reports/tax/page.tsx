@@ -15,6 +15,7 @@
 import { useEffect, useState } from 'react'
 import dayjs from 'dayjs'
 import { Chip, MonthPicker, DatePicker } from '@/components/v2'
+import { exportXlsx } from '@/lib/exportXlsx'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../../_topnav'
 
@@ -83,6 +84,69 @@ export default function FinancePCTaxReportsPage() {
       [['行', '项目', '本月金额', '备注'],
        ...income.rows.map(r => [r.lineNo, (r.indent ? '  ' : '') + r.label, r.amount.toFixed(2), r.note || ''])])
   }
+  async function exportIncomeXlsx() {
+    if (!income) return
+    await exportXlsx(`利润表-${month}.xlsx`, [{
+      name: `利润表 ${month}`,
+      rows: [
+        [`利润表 · ${month}`, '', '', ''],
+        [],
+        ['行号', '项目', '本月金额', '备注'],
+        ...income.rows.map(r => [
+          r.lineNo,
+          (r.indent ? '   ' : '') + r.label,
+          Number(r.amount.toFixed(2)),
+          r.note || '',
+        ]),
+      ],
+      cols: [{ wch: 6 }, { wch: 28 }, { wch: 16 }, { wch: 24 }],
+      merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 3 } }],
+      moneyCols: ['C'],
+      headerRowIdx: 2,
+    }])
+  }
+  async function exportBalanceXlsx() {
+    if (!balance) return
+    const rows: any[][] = [
+      [`资产负债表 · ${asOf}`, '', ''],
+      [],
+      ['分类', '项目', '余额'],
+      ['资产', '库存现金 (1001)', Number(balance.asset.cash.toFixed(2))],
+      ['资产', '银行存款 (1002)', Number(balance.asset.bank.toFixed(2))],
+      ['资产', '其他货币资金 (1012)', Number((balance.asset.otherCash || 0).toFixed(2))],
+      ['资产', '应收账款 (1122)', Number(balance.asset.ar.toFixed(2))],
+      ['资产', '其他应收款 (1221)', Number(balance.asset.otherAr.toFixed(2))],
+      ['资产', '预付账款 (1123)', Number(balance.asset.prepaid.toFixed(2))],
+      ['资产', '库存商品 (1405)', Number(balance.asset.inventory.toFixed(2))],
+      ['资产', '固定资产 (1601)', Number(balance.asset.fixedAsset.toFixed(2))],
+      ['资产', '累计折旧 (1602)', Number(balance.asset.accumDep.toFixed(2))],
+      ['资产', '长期待摊费用 (1701/1801)', Number(balance.asset.longExp.toFixed(2))],
+      ['资产', '资产总计', Number(balance.asset.total.toFixed(2))],
+      ['负债', '短期借款 (2001)', Number((balance.liability.shortLoan || 0).toFixed(2))],
+      ['负债', '应付账款 (2202)', Number(balance.liability.ap.toFixed(2))],
+      ['负债', '应付职工薪酬 (2211)', Number(balance.liability.payroll.toFixed(2))],
+      ['负债', '应交税费 (2221)', Number(balance.liability.taxPayable.toFixed(2))],
+      ['负债', '其他应付款 (2241)', Number(balance.liability.otherAp.toFixed(2))],
+      ['负债', '预收账款 (2203/2401)', Number(balance.liability.advance.toFixed(2))],
+      ['负债', '负债总计', Number(balance.liability.total.toFixed(2))],
+      ['权益', '实收资本 (3001/4001)', Number(balance.equity.paidInCapital.toFixed(2))],
+      ['权益', '资本公积 (3002/4002)', Number(balance.equity.capitalReserve.toFixed(2))],
+      ['权益', '盈余公积 (3101/4101)', Number((balance.equity.surplusReserve || 0).toFixed(2))],
+      ['权益', '本年利润 (3103/4103)', Number(balance.equity.profitThisYear.toFixed(2))],
+      ['权益', '利润分配 (3104/4104)', Number(balance.equity.retainedEarnings.toFixed(2))],
+      ['权益', '权益总计', Number(balance.equity.total.toFixed(2))],
+      [],
+      ['平衡', balance.balanced ? '✓ 平' : `✗ 不平, 差额 ${balance.diff.toFixed(2)}`, ''],
+    ]
+    await exportXlsx(`资产负债表-${asOf}.xlsx`, [{
+      name: `资负表 ${asOf}`,
+      rows,
+      cols: [{ wch: 8 }, { wch: 28 }, { wch: 16 }],
+      merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 2 } }],
+      moneyCols: ['C'],
+      headerRowIdx: 2,
+    }])
+  }
   function exportBalance() {
     if (!balance) return
     downloadCsv(`资产负债表-${asOf}.csv`,
@@ -128,9 +192,12 @@ export default function FinancePCTaxReportsPage() {
             {tab === 'balance' && (
               <DatePicker value={asOf} onChange={setAsOf} quickButtons={['today', 'yesterday', 'monthEnd', 'lastMonthEnd']} />
             )}
+            <button onClick={tab === 'income' ? exportIncomeXlsx : exportBalanceXlsx}
+                    disabled={tab === 'income' ? !income : !balance}
+                    className="px-3 py-2 bg-[#1F7A4B] text-white rounded-cta text-button disabled:opacity-40">📊 导出 Excel</button>
             <button onClick={tab === 'income' ? exportIncome : exportBalance}
                     disabled={tab === 'income' ? !income : !balance}
-                    className="px-3 py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40">⬇ 导出 CSV</button>
+                    className="px-3 py-2 bg-white border border-border text-gray2 rounded-cta text-button disabled:opacity-40">⬇ CSV</button>
           </div>
         </div>
 

@@ -15,6 +15,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
 import { Chip, MonthPicker } from '@/components/v2'
+import { exportXlsx } from '@/lib/exportXlsx'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../_topnav'
 
@@ -125,6 +126,43 @@ export default function FinancePCReconcilePage() {
       ])
     }
   }
+  async function exportXlsxBoth() {
+    const sheets: any[] = []
+    if (storeData && storeData.length > 0) {
+      sheets.push({
+        name: `门店对账 ${month}`,
+        rows: [
+          [`门店月度对账 · ${month}`, '', '', '', '', ''],
+          [],
+          ['门店编号', '门店名', '本月营收', '食材成本', '报损', '净利'],
+          ...storeData.map(r => [r.no, r.name, Number(r.revenue.toFixed(2)), Number(r.foodCost.toFixed(2)), Number(r.loss.toFixed(2)), Number(r.net.toFixed(2))]),
+          ['合计', '', Number(storeTotals.revenue.toFixed(2)), Number(storeTotals.foodCost.toFixed(2)), Number(storeTotals.loss.toFixed(2)), Number(storeTotals.net.toFixed(2))],
+        ],
+        cols: [{ wch: 14 }, { wch: 24 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 14 }],
+        merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }],
+        moneyCols: ['C', 'D', 'E', 'F'],
+        headerRowIdx: 2,
+      })
+    }
+    if (supplierData && supplierData.length > 0) {
+      sheets.push({
+        name: `供应商对账 ${month}`,
+        rows: [
+          [`供应商月度对账 · ${month}`, '', '', '', ''],
+          [],
+          ['供应商', '本月交付', '已付', '未付', '报损'],
+          ...supplierData.map(r => [r.name, Number(r.delivered.toFixed(2)), Number(r.paid.toFixed(2)), Number(r.unpaid.toFixed(2)), Number(r.loss.toFixed(2))]),
+          ['合计', Number(supplierTotals.delivered.toFixed(2)), Number(supplierTotals.paid.toFixed(2)), Number(supplierTotals.unpaid.toFixed(2)), Number(supplierTotals.loss.toFixed(2))],
+        ],
+        cols: [{ wch: 24 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 }],
+        merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 4 } }],
+        moneyCols: ['B', 'C', 'D', 'E'],
+        headerRowIdx: 2,
+      })
+    }
+    if (sheets.length === 0) return
+    await exportXlsx(`月度对账-${month}.xlsx`, sheets)
+  }
 
   const currentRows = view === 'store' ? storeData : supplierData
 
@@ -146,8 +184,10 @@ export default function FinancePCReconcilePage() {
               <button onClick={() => setMonth(dayjs().format('YYYY-MM'))}
                       className="px-3 py-2 bg-ink text-white rounded-cta text-button">本月</button>
             )}
+            <button onClick={exportXlsxBoth} disabled={!currentRows || currentRows.length === 0}
+                    className="px-3 py-2 bg-[#1F7A4B] text-white rounded-cta text-button disabled:opacity-40">📊 Excel</button>
             <button onClick={exportCsv} disabled={!currentRows || currentRows.length === 0}
-                    className="px-3 py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40">⬇ 导出 CSV</button>
+                    className="px-3 py-2 bg-white border border-border text-gray2 rounded-cta text-button disabled:opacity-40">⬇ CSV</button>
           </div>
         </div>
 

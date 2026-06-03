@@ -16,6 +16,7 @@ import { useEffect, useState } from 'react'
 import dayjs from 'dayjs'
 import { apiFetch } from '@/lib/v2-auth'
 import { MonthPicker } from '@/components/v2'
+import { exportXlsx } from '@/lib/exportXlsx'
 import FinanceTopNav from '../../_topnav'
 
 type Cost = {
@@ -71,6 +72,54 @@ export default function FinancePCProfitPage() {
   const shift = (delta: number) => setMonth(dayjs(month + '-01').add(delta, 'month').format('YYYY-MM'))
   const isThisMonth = month === dayjs().format('YYYY-MM')
 
+  async function exportProfitXlsx() {
+    if (!data?.summary) return
+    const s = data.summary
+    const c = s.cost
+    const summaryRows = [
+      [`利润中心 (管理口径) · ${month}`, '', '', ''],
+      [],
+      ['项目', '本月', '同比', '环比'],
+      ['营业收入', Number(s.revenue.toFixed(2)), s.revenueYoy != null ? (s.revenueYoy * 100).toFixed(1) + '%' : '—', s.revenueMom != null ? (s.revenueMom * 100).toFixed(1) + '%' : '—'],
+      ['食材成本', Number(c.food.toFixed(2)), '', ''],
+      ['报损', Number(c.loss.toFixed(2)), '', ''],
+      ['人工 (工资)', Number(c.payroll.toFixed(2)), '', ''],
+      ['房租', Number(c.rent.toFixed(2)), '', ''],
+      ['水电', Number(c.utility.toFixed(2)), '', ''],
+      ['营销', Number(c.marketing.toFixed(2)), '', ''],
+      ['销售费用', Number(c.sellingExp.toFixed(2)), '', ''],
+      ['管理费用', Number(c.mgmtExp.toFixed(2)), '', ''],
+      ['财务费用', Number(c.financeExp.toFixed(2)), '', ''],
+      ['其他成本', Number(c.other.toFixed(2)), '', ''],
+      ['净利润', Number(s.netProfit.toFixed(2)), '', ''],
+      ['净利率', (s.netMargin * 100).toFixed(1) + '%', '', ''],
+      ['食材占比', (s.foodCostRatio * 100).toFixed(1) + '%', '', ''],
+    ]
+    const channelRows = [
+      ['渠道', '金额', '占比'],
+      ...Object.entries(data.byChannel).map(([k, v]) => {
+        const pct = s.revenue > 0 ? (Number(v) / s.revenue * 100).toFixed(1) + '%' : '—'
+        const label = ({ cash: '现金', wechat: '微信', alipay: '支付宝', meituan: '美团', douyin: '抖音', bank: '银行', unknown: '未分类' } as Record<string, string>)[k] || k
+        return [label, Number(Number(v).toFixed(2)), pct]
+      }),
+    ]
+    const storeRows = [
+      ['门店', '营业额', '食材成本', '毛利', '毛利率'],
+      ...data.stores.map(st => [
+        st.storeName,
+        Number(st.revenue.toFixed(2)),
+        Number(st.foodCost.toFixed(2)),
+        Number(st.grossProfit.toFixed(2)),
+        (st.grossMargin * 100).toFixed(1) + '%',
+      ]),
+    ]
+    await exportXlsx(`利润中心-${month}.xlsx`, [
+      { name: `汇总 ${month}`, rows: summaryRows, cols: [{ wch: 16 }, { wch: 14 }, { wch: 10 }, { wch: 10 }], merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 3 } }], moneyCols: ['B'], headerRowIdx: 2 },
+      { name: '渠道分布', rows: channelRows, cols: [{ wch: 12 }, { wch: 14 }, { wch: 10 }], moneyCols: ['B'] },
+      { name: '各店明细', rows: storeRows, cols: [{ wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 10 }], moneyCols: ['B', 'C', 'D'] },
+    ])
+  }
+
   const s = data?.summary
   const channelTotal = Object.values(data?.byChannel || {}).reduce((a, b) => a + b, 0)
 
@@ -92,6 +141,8 @@ export default function FinancePCProfitPage() {
               <button onClick={() => setMonth(dayjs().format('YYYY-MM'))}
                       className="px-3 py-2 bg-ink text-white rounded-cta text-button">本月</button>
             )}
+            <button onClick={exportProfitXlsx} disabled={!data?.summary}
+                    className="px-3 py-2 bg-[#1F7A4B] text-white rounded-cta text-button disabled:opacity-40">📊 导出 Excel</button>
           </div>
         </div>
 

@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react'
 import dayjs from 'dayjs'
 import { Chip, MonthPicker } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
+import { exportXlsx } from '@/lib/exportXlsx'
 import FinanceTopNav from '../../_topnav'
 
 type Section = {
@@ -38,6 +39,44 @@ const DETAIL_LABEL: Record<string, string> = {
 
 const fmtMoney = (n: number, d = 0) => `¥${n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })}`
 const signed = (n: number, d = 0) => `${n >= 0 ? '+' : '−'}${fmtMoney(Math.abs(n), d)}`
+
+async function exportCashFlowXlsx(data: CashFlow | null, month: string) {
+  if (!data) return
+  const sectionRows = (label: string, s: Section) => {
+    const out: any[][] = [[label, '', '', '']]
+    Object.entries(s.detail).forEach(([k, v]) => {
+      const cnLabel = DETAIL_LABEL[k] || k
+      out.push(['  ' + cnLabel, Number(Number(v).toFixed(2)), '', ''])
+    })
+    out.push([
+      '  小计',
+      `流入 ${Number(s.inflow.toFixed(2))}`,
+      `流出 ${Number(s.outflow.toFixed(2))}`,
+      Number(s.net.toFixed(2)),
+    ])
+    return out
+  }
+  const rows: any[][] = [
+    [`现金流报表 · ${month}`, '', '', ''],
+    [],
+    ['活动 / 项目', '流入 / 金额', '流出', '净额'],
+    ...sectionRows('一、经营活动', data.operating),
+    [],
+    ...sectionRows('二、投资活动', data.investment),
+    [],
+    ...sectionRows('三、筹资活动', data.financing),
+    [],
+    ['本月现金净增加', '', '', Number(data.totalNet.toFixed(2))],
+  ]
+  await exportXlsx(`现金流报表-${month}.xlsx`, [{
+    name: `现金流 ${month}`,
+    rows,
+    cols: [{ wch: 32 }, { wch: 16 }, { wch: 16 }, { wch: 16 }],
+    merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 3 } }],
+    moneyCols: ['B', 'D'],
+    headerRowIdx: 2,
+  }])
+}
 
 export default function FinancePCCashFlowPage() {
   const [month, setMonth] = useState(() => {
@@ -75,6 +114,8 @@ export default function FinancePCCashFlowPage() {
               <button onClick={() => setMonth(dayjs().format('YYYY-MM'))}
                       className="px-3 py-2 bg-ink text-white rounded-cta text-button">本月</button>
             )}
+            <button onClick={() => exportCashFlowXlsx(data, month)} disabled={!data}
+                    className="px-3 py-2 bg-[#1F7A4B] text-white rounded-cta text-button disabled:opacity-40">📊 导出 Excel</button>
           </div>
         </div>
 

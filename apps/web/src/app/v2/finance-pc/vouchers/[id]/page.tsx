@@ -164,6 +164,10 @@ export default function FinancePCVoucherDetailPage() {
                           className="w-full py-3 bg-ink text-white rounded-cta text-button disabled:opacity-40">
                     {busy ? '处理中…' : '✓ 审核通过'}
                   </button>
+                  <a href={`/v2/finance-pc/vouchers/new?edit=${v.id}`}
+                     className="w-full py-2 block text-center border border-border bg-white text-gray2 rounded-cta text-button">
+                    ✎ 编辑分录
+                  </a>
                   <button onClick={() => action('void', '确定作废此凭证? 作废后不可恢复.')} disabled={busy}
                           className="w-full py-2 border border-red text-red-fg rounded-cta text-button disabled:opacity-40">
                     作废

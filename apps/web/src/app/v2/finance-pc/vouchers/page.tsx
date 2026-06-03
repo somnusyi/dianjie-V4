@@ -189,6 +189,10 @@ export default function FinancePCVouchersPage() {
               placeholder="搜索 (凭证号 / 摘要 / 科目)"
               className="px-3 py-2 rounded-cta border border-border bg-white text-button w-64"
             />
+            <a href="/v2/finance-pc/vouchers/new"
+               className="px-4 py-2 bg-amber text-white rounded-cta text-button">
+              + 新建凭证
+            </a>
             <button onClick={() => exportExcel('posted')} disabled={busy || stats.posted === 0}
                     className="px-4 py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40">
               导出已审 ({stats.posted})

@@ -107,6 +107,83 @@ export const voucherRoutes: FastifyPluginAsync = async (app) => {
     return reply.status(201).send(v)
   })
 
+  // ── 编辑 (仅 DRAFT 可改, 重写所有分录) ─────────────────
+  // PATCH /api/vouchers/:id
+  //   body: { date?, summary?, word?, entries? }
+  //   entries 传则全量替换 (旧的全删, 新的全建)
+  //   月结锁: 改后的 date 落在 已 CLOSED 月份 → 拒绝
+  app.patch('/:id', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!ensureFinance(role)) return reply.status(403).send({ error: '无权' })
+    const v = await prisma.voucher.findFirst({ where: { id: req.params.id, tenantId } })
+    if (!v) return reply.status(404).send({ error: '凭证不存在' })
+    if (v.status !== 'DRAFT') return reply.status(400).send({ error: `仅草稿凭证可编辑 (当前: ${v.status})` })
+    if (v.exportedAt) return reply.status(400).send({ error: '已导出凭证不可改' })
+
+    const parsed = z.object({
+      date: z.string().optional(),
+      summary: z.string().min(1).optional(),
+      word: z.string().optional(),
+      entries: z.array(entrySchema).min(2, '至少 2 条分录').optional(),
+    }).safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
+
+    // 月结锁: 改的 date 落 CLOSED 月份, 直接拒绝
+    if (parsed.data.date) {
+      const newDate = new Date(parsed.data.date)
+      const ym = `${newDate.getFullYear()}-${String(newDate.getMonth() + 1).padStart(2, '0')}`
+      const period = await prisma.accountingPeriod.findFirst({ where: { tenantId, month: ym, status: 'CLOSED' } })
+      if (period) return reply.status(423).send({ error: `${ym} 已关账, 不可改到该月` })
+    }
+
+    // 借贷平衡校验 (如果改 entries)
+    if (parsed.data.entries) {
+      const debitSum = parsed.data.entries.reduce((s, e) => s + Number(e.debit || 0), 0)
+      const creditSum = parsed.data.entries.reduce((s, e) => s + Number(e.credit || 0), 0)
+      if (Math.abs(debitSum - creditSum) > 0.01) {
+        return reply.status(400).send({ error: `借贷不平: 借 ${debitSum.toFixed(2)} ≠ 贷 ${creditSum.toFixed(2)}` })
+      }
+      if (debitSum === 0) return reply.status(400).send({ error: '金额不能为 0' })
+    }
+
+    try {
+      const updated = await prisma.$transaction(async (tx: any) => {
+        // 1. 更新 voucher 头
+        const updateData: any = {}
+        if (parsed.data.date) updateData.date = new Date(parsed.data.date)
+        if (parsed.data.summary) updateData.summary = parsed.data.summary
+        if (parsed.data.word) updateData.word = parsed.data.word
+        if (parsed.data.entries) {
+          const debitSum = parsed.data.entries.reduce((s, e) => s + Number(e.debit || 0), 0)
+          const creditSum = parsed.data.entries.reduce((s, e) => s + Number(e.credit || 0), 0)
+          updateData.totalDebit = debitSum
+          updateData.totalCredit = creditSum
+        }
+        await tx.voucher.update({ where: { id: v.id }, data: updateData })
+
+        // 2. 如果 entries 改了, 全量重写
+        if (parsed.data.entries) {
+          await tx.voucherEntry.deleteMany({ where: { voucherId: v.id } })
+          await tx.voucherEntry.createMany({
+            data: parsed.data.entries.map((e, i) => ({
+              voucherId: v.id,
+              lineNo: i + 1,
+              accountCode: e.accountCode,
+              accountName: e.accountName,
+              debit: e.debit || 0,
+              credit: e.credit || 0,
+              summary: e.summary || '',
+            })),
+          })
+        }
+        return tx.voucher.findUnique({ where: { id: v.id }, include: { entries: { orderBy: { lineNo: 'asc' } } } })
+      })
+      return updated
+    } catch (e: any) {
+      return reply.status(500).send({ error: e?.message || '编辑失败' })
+    }
+  })
+
   // ── 审核 (DRAFT → POSTED) ─────────────────────────────
   app.patch('/:id/post', auth(app), async (req: any, reply: any) => {
     const { tenantId, userId, role } = req.user

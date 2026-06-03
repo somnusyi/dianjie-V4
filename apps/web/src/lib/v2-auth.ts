@@ -78,7 +78,12 @@ export function routeForRole(role: string): string {
  * 现在 PC 与移动端共用一套真实页面（boss/home, finance/home 等）。
  * 返回 null 让调用方走 routeForRole() 的真实页面。
  */
-export function pcRouteForRole(_role: string): string | null {
+export function pcRouteForRole(role: string): string | null {
+  // 财务 PC 工作台 (Phase 2/3/4 重写过, 已是真实业务系统, 不再是 demo)
+  if (role === 'FINANCE' || role === 'BOSS' || role === 'ADMIN' || role === 'SUPER_ADMIN') {
+    // FINANCE 优先跳 finance-pc; BOSS/ADMIN 暂时仍走老板主页 (boss-pc 还是 demo, 留给同事重做)
+    if (role === 'FINANCE') return '/v2/finance-pc/home'
+  }
   return null
 }
 

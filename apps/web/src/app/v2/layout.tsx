@@ -12,7 +12,13 @@ import { InstallHint } from '@/components/v2/install-hint'
 export default function V2Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || ''
   // 登录页 / 申请账号页 / 邀请激活页 不守卫
-  if (pathname.startsWith('/v2/login') || pathname.startsWith('/v2/apply') || pathname.startsWith('/v2/invite/')) {
+  // 还要例外 sub-login (/v2/finance-pc/login), 不然 PWA 桌面图标双击 → 跳出 scope
+  if (
+    pathname.startsWith('/v2/login') ||
+    pathname.startsWith('/v2/apply') ||
+    pathname.startsWith('/v2/invite/') ||
+    pathname === '/v2/finance-pc/login'
+  ) {
     return <>{children}<InstallHint /></>
   }
   // home 页才弹 onboarding (不打扰二级页)

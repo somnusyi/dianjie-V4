@@ -2,7 +2,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
-import { apiFetch, getUser } from '@/lib/v2-auth'
+import { apiFetch, getUser, clearSession } from '@/lib/v2-auth'
 
 type Tab =
   | { key: string; label: string; href: string; badgeKey?: keyof Badges }
@@ -51,11 +51,19 @@ type Badges = { pendingReview?: number; dueThisWeek?: number; draftVouchers?: nu
 
 export default function FinanceTopNav() {
   const pathname = usePathname() || ''
-  const [user, setUser] = useState<{ name?: string } | null>(null)
+  const [user, setUser] = useState<{ name?: string; role?: string; email?: string } | null>(null)
   const [badges, setBadges] = useState<Badges>({})
   const [openKey, setOpenKey] = useState<string | null>(null)
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const userMenuRef = useRef<HTMLDivElement>(null)
   const [installPrompt, setInstallPrompt] = useState<any>(null)
+
+  function logout() {
+    clearSession()
+    // PWA scope 内的 login, 不会跳出桌面 PWA 窗口
+    location.href = '/v2/finance-pc/login'
+  }
 
   // PWA 安装支持: 浏览器认为可装时 (Chrome/Edge 桌面) 才弹按钮
   useEffect(() => {
@@ -110,8 +118,9 @@ export default function FinanceTopNav() {
   // 外部点击关闭 dropdown
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
-      if (!dropdownRef.current) return
-      if (!dropdownRef.current.contains(e.target as Node)) setOpenKey(null)
+      const target = e.target as Node
+      if (dropdownRef.current && !dropdownRef.current.contains(target)) setOpenKey(null)
+      if (userMenuRef.current && !userMenuRef.current.contains(target)) setUserMenuOpen(false)
     }
     document.addEventListener('mousedown', onDocClick)
     return () => document.removeEventListener('mousedown', onDocClick)
@@ -193,8 +202,36 @@ export default function FinanceTopNav() {
             </button>
           )}
           <button className="w-9 h-9 rounded-full bg-bg flex items-center justify-center" aria-label="通知">🔔</button>
-          <span className="w-9 h-9 rounded-full bg-red text-white flex items-center justify-center font-num">{initial}</span>
-          <span className="text-caption">{user?.name || '加载中…'}</span>
+          {/* 用户菜单 (头像点击 → 切换/退出, 都留在 PWA scope 内) */}
+          <div className="relative" ref={userMenuRef}>
+            <button
+              onClick={() => setUserMenuOpen(o => !o)}
+              className="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-bg transition"
+              title="点击切换账号 / 退出">
+              <span className="w-9 h-9 rounded-full bg-red text-white flex items-center justify-center font-num">{initial}</span>
+              <span className="text-caption">{user?.name || '加载中…'}</span>
+              <span className={`text-micro text-gray3 transition-transform ${userMenuOpen ? 'rotate-180' : ''}`}>▾</span>
+            </button>
+            {userMenuOpen && (
+              <div className="absolute right-0 top-full mt-2 w-60 bg-white border border-border rounded-card shadow-lg overflow-hidden z-40">
+                <div className="px-4 py-3 border-b border-border">
+                  <div className="text-button text-ink">{user?.name}</div>
+                  <div className="text-micro text-gray3 mt-0.5">
+                    {user?.role}
+                    {user?.email && ` · ${user.email}`}
+                  </div>
+                </div>
+                <button onClick={logout}
+                        className="w-full text-left px-4 py-3 text-button text-gray2 hover:bg-bg transition">
+                  换个账号登录
+                </button>
+                <button onClick={logout}
+                        className="w-full text-left px-4 py-3 text-button text-red-fg hover:bg-red-bg transition border-t border-border">
+                  退出登录
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </header>

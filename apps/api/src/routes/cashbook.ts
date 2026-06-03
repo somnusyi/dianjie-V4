@@ -327,7 +327,8 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
     const [accounts, monthTx] = await Promise.all([
       prisma.cashAccount.findMany({
         where: { tenantId, status: 'ACTIVE' },
-        select: { id: true, name: true, type: true, balance: true },
+        // 补 cmbBindAccount + bankName + accountNo: 前端 finance-pc/funds 需要这些字段来拉 CMB 实时余额 + 显示银行名/尾号
+        select: { id: true, name: true, type: true, balance: true, cmbBindAccount: true, bankName: true, accountNo: true },
         orderBy: { createdAt: 'asc' },
       }),
       prisma.cashTransaction.findMany({

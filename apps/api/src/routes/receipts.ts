@@ -306,4 +306,80 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     await prisma.opLog.create({ data: { tenantId, userId, action: `作废入库单 ${receipt.no}`, target: receipt.no, entityType: 'Receipt', targetId: receipt.id } })
     return { message: '已作废' }
   })
+
+  // ── P1-1: 三方核对 (供应商 / 财务) ─────────────────
+  // PATCH /api/receipts/:id/verify  body: { actor: 'supplier' | 'finance', note? }
+  // 门店店长 = createdBy (隐含, 入库时已发生)
+  // 厨师长 = status=RECEIVED + confirmedAt (现有流程)
+  // 供应商 = supplierVerifiedAt (新加)
+  // 财务 = financeVerifiedAt (新加, 三方齐了才可标)
+  app.patch('/:id/verify', auth(app), async (req: any, reply: any) => {
+    const { tenantId, userId, role } = req.user
+    const { actor, note } = (req.body || {}) as { actor: 'supplier' | 'finance'; note?: string }
+    if (!['supplier', 'finance'].includes(actor)) {
+      return reply.status(400).send({ error: 'actor 必须 supplier 或 finance' })
+    }
+    const receipt = await prisma.receipt.findFirst({
+      where: { id: req.params.id, tenantId },
+      include: { supplier: { select: { name: true } } },
+    })
+    if (!receipt) return reply.status(404).send({ error: '入库单不存在' })
+
+    // 权限
+    if (actor === 'supplier' && !['SUPPLIER_OWNER', 'SUPPLIER_STAFF', 'FINANCE', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+      return reply.status(403).send({ error: '供应商核对仅供应商或财务可执行' })
+    }
+    if (actor === 'finance' && !['FINANCE', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+      return reply.status(403).send({ error: '财务核对仅财务/老板可执行' })
+    }
+
+    // 财务核对要求: 门店已建 + 厨师长已 confirm + 供应商已核对
+    if (actor === 'finance') {
+      if (!receipt.confirmedAt) return reply.status(400).send({ error: '厨师长尚未确认, 无法财务核对' })
+      if (!receipt.supplierVerifiedAt) return reply.status(400).send({ error: '供应商尚未核对, 无法财务核对' })
+    }
+
+    const now = new Date()
+    const updateData: any = {}
+    if (actor === 'supplier') {
+      updateData.supplierVerifiedAt = now
+      updateData.supplierVerifiedById = userId
+      if (note != null) updateData.supplierVerifyNote = note
+    } else {
+      updateData.financeVerifiedAt = now
+      updateData.financeVerifiedById = userId
+      if (note != null) updateData.financeVerifyNote = note
+    }
+    await prisma.receipt.update({ where: { id: receipt.id }, data: updateData })
+    await prisma.opLog.create({
+      data: {
+        tenantId, userId,
+        action: `${actor === 'supplier' ? '供应商' : '财务'}核对入库单 ${receipt.no} (${receipt.supplier?.name || ''})`,
+        target: receipt.no, entityType: 'Receipt', targetId: receipt.id,
+      },
+    })
+    return { ok: true, actor, at: now }
+  })
+
+  // 撤销核对 (改错了可以撤)
+  app.patch('/:id/verify/revoke', auth(app), async (req: any, reply: any) => {
+    const { tenantId, userId, role } = req.user
+    const { actor } = (req.body || {}) as { actor: 'supplier' | 'finance' }
+    if (!['FINANCE', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+      return reply.status(403).send({ error: '撤销核对仅财务/老板可执行' })
+    }
+    const r = await prisma.receipt.findFirst({ where: { id: req.params.id, tenantId } })
+    if (!r) return reply.status(404).send({ error: '入库单不存在' })
+
+    const updateData: any = {}
+    if (actor === 'supplier') {
+      updateData.supplierVerifiedAt = null; updateData.supplierVerifiedById = null; updateData.supplierVerifyNote = null
+      // 撤销供应商核对自动级联撤销财务核对
+      updateData.financeVerifiedAt = null; updateData.financeVerifiedById = null; updateData.financeVerifyNote = null
+    } else {
+      updateData.financeVerifiedAt = null; updateData.financeVerifiedById = null; updateData.financeVerifyNote = null
+    }
+    await prisma.receipt.update({ where: { id: r.id }, data: updateData })
+    return { ok: true }
+  })
 }

@@ -47,6 +47,7 @@ model Tenant {
   productBatches ProductBatch[]
   stockMovements SupplierStockMovement[]
   accountingPeriods AccountingPeriod[]
+  pettyCash         PettyCash[]
 
   @@map("tenants")
 }
@@ -435,6 +436,7 @@ model Store {
   capitalProjects CapitalProject[]
   documents      Document[]
   dishSales      DishSale[]
+  pettyCash      PettyCash[]
 
   @@unique([tenantId, no])
   @@map("stores")
@@ -480,6 +482,10 @@ model Supplier {
   bankCode      String?                      // 联行号/SWIFT，用于跨行付款
 
   // [Plan B 方案预留] 双向开户流程字段 — 落地时再加 enum + 字段
+
+  // 财务数据源分类 (真实业务: 总仓何姐给 / 美菜快驴 B2B / 散户微信群)
+  // 用于月度成本核对工作台 (/v2/finance-pc/cost-check) 三栏展示
+  sourceType    SupplierSourceType?           // 不设默认值, 旧数据保持 null = 未分类
 
   // AI 评分
   scoreTotal    Int        @default(80)     // 综合评分
@@ -601,6 +607,18 @@ model Receipt {
   // 1 张发票可对多个 receipt(月底批量开票场景), 1 个 receipt 当前最多对 1 张发票
   invoiceId   String?
   invoice     Invoice? @relation(fields: [invoiceId], references: [id])
+
+  // 三方核对 (P1-1 真实业务: 门店+厨师长+供应商三方核对无误才入账)
+  // 门店店长确认: 入库时即为店长签收, 隐含在 createdById 里 (无需单字段)
+  // 厨师长确认: status=RECEIVED + confirmedAt 已表达
+  // 供应商核对 (新): 财务把入库单 push 给供应商对账, 供应商点确认
+  supplierVerifiedAt   DateTime?
+  supplierVerifiedById String?
+  supplierVerifyNote   String?
+  // 财务核对完毕 (新): 三方都对完, 财务核对金额无误, 准备入账
+  financeVerifiedAt   DateTime?
+  financeVerifiedById String?
+  financeVerifyNote   String?
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -1343,6 +1361,13 @@ enum SupplierStatus {
   DISABLED
 }
 
+// 供应商数据源类型 (财务月度核对工作台 3 栏区分)
+enum SupplierSourceType {
+  HEADQ_WAREHOUSE  // 总仓内部调拨 (何姐管, 不走外部付款)
+  B2B_PLATFORM     // B2B 电商平台 (美菜 / 快驴 等, 财务批量录账单)
+  SCATTERED        // 散户供应商 (微信群直接对接, 老板/店长谈)
+}
+
 enum SkuApprovalAction {
   CREATE   // 新建 SKU
   DISABLE  // 停售 SKU
@@ -2002,4 +2027,75 @@ model MeituanAuthToken {
   updatedAt         DateTime  @updatedAt
 
   @@map("meituan_auth_tokens")
+}
+
+// ── 备用金 (P1-3) ──────────────────────────────────────
+// 真实业务: 店长每月按需申请备用金 (买美菜/快驴等无现场付款的渠道),
+//   财务发放, 月底店长报开支明细 + 退回余额, 财务对账归档.
+model PettyCash {
+  id            String   @id @default(cuid())
+  tenantId      String
+  storeId       String
+  month         String                       // YYYY-MM, 一个店一个月一笔
+  // 申请
+  requestedAmount  Decimal  @db.Decimal(12, 2)
+  requestedById    String
+  requestNote      String?
+  requestedAt      DateTime @default(now())
+  // 财务批准 + 发放
+  approvedById     String?
+  approvedAt       DateTime?
+  approvedAmount   Decimal? @db.Decimal(12, 2)
+  paidAt           DateTime?
+  paidById         String?
+  paymentMethod    String?                    // 现金 / 转账 / 招行
+  bankTxNo         String?
+  // 月底回收 / 对账
+  reconciledAt     DateTime?
+  reconciledById   String?
+  spentAmount      Decimal? @db.Decimal(12, 2) // 实际花掉
+  returnedAmount   Decimal? @db.Decimal(12, 2) // 退回的现金
+  reconcileNote    String?
+
+  status        PettyCashStatus @default(REQUESTED)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  store         Store    @relation(fields: [storeId], references: [id])
+  expenses      PettyCashExpense[]
+
+  @@unique([tenantId, storeId, month])      // 一店一月一笔
+  @@index([tenantId, status])
+  @@map("petty_cash")
+}
+
+enum PettyCashStatus {
+  REQUESTED      // 店长已申请, 待财务批
+  APPROVED       // 财务已批, 待发放
+  PAID           // 已发放, 店长使用中
+  RECONCILING    // 月底已提报开支明细, 待财务对账
+  CLOSED         // 财务对账完毕 + 退款入账, 归档
+  CANCELED       // 取消 (申请但没批)
+}
+
+model PettyCashExpense {
+  id            String   @id @default(cuid())
+  pettyCashId   String
+  date          DateTime @db.Date
+  category      String                       // 美菜 / 快驴 / 散户 / 其他
+  amount        Decimal  @db.Decimal(12, 2)
+  note          String?
+  attachments   String[]                     // OSS URL 数组 (小票/收据照片)
+  // 关联 (可选: 报销关联到具体入库单 / 供应商)
+  receiptId     String?
+  supplierId    String?
+  createdById   String
+  createdAt     DateTime @default(now())
+
+  pettyCash     PettyCash @relation(fields: [pettyCashId], references: [id], onDelete: Cascade)
+
+  @@index([pettyCashId])
+  @@map("petty_cash_expenses")
 }

@@ -345,3 +345,7 @@ export function Chip({ children, tone = 'gray' }: { children: ReactNode; tone?: 
     'bg-bg text-gray2'
   return <span className={`inline-block px-1.5 py-0.5 text-micro rounded-chip ${cls}`}>{children}</span>
 }
+
+// 月份/日期 快捷选择器 (财务专用)
+export { MonthPicker, DatePicker } from './date-quick-picker'
+export type { MonthShortcutKey, DateShortcutKey } from './date-quick-picker'

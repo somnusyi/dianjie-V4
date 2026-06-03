@@ -12,7 +12,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import dayjs from 'dayjs'
-import { Chip } from '@/components/v2'
+import { Chip, MonthPicker } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../../_topnav'
 
@@ -68,10 +68,7 @@ export default function FinancePCCashFlowPage() {
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => shift(-1)} className="px-3 py-2 bg-white border border-border rounded-cta text-button text-gray2">← 上月</button>
-            <input
-              type="month" value={month} onChange={e => setMonth(e.target.value)}
-              className="bg-white border border-border rounded-cta px-3 py-2 text-button font-num"
-            />
+            <MonthPicker value={month} onChange={setMonth} />
             <button onClick={() => shift(1)} disabled={isThisMonth}
                     className="px-3 py-2 bg-white border border-border rounded-cta text-button text-gray2 disabled:opacity-40">下月 →</button>
             {!isThisMonth && (

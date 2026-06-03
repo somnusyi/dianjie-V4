@@ -14,7 +14,7 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
-import { Chip } from '@/components/v2'
+import { Chip, MonthPicker } from '@/components/v2'
 import { apiFetch, getToken } from '@/lib/v2-auth'
 import FinanceTopNav from '../_topnav'
 
@@ -182,12 +182,7 @@ export default function FinancePCVouchersPage() {
             <p className="text-caption text-gray3">自动生成 · 一键导好会计 Excel · 月结主战场</p>
           </div>
           <div className="flex items-center gap-3">
-            <input
-              type="month"
-              value={month}
-              onChange={e => setMonth(e.target.value || dayjs().format('YYYY-MM'))}
-              className="px-3 py-2 rounded-cta border border-border bg-white text-button"
-            />
+            <MonthPicker value={month} onChange={v => setMonth(v || dayjs().format('YYYY-MM'))} />
             <input
               value={search}
               onChange={e => setSearch(e.target.value)}

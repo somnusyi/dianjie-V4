@@ -14,7 +14,7 @@
  */
 'use client'
 import { useEffect, useMemo, useState } from 'react'
-import { Chip, StoreAvatar, BlackHero } from '@/components/v2'
+import { Chip, StoreAvatar, BlackHero, MonthPicker } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import dayjs from 'dayjs'
 import FinanceTopNav from '../_topnav'
@@ -109,12 +109,7 @@ export default function FinancePCStoresPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <input
-              type="month"
-              value={month}
-              onChange={e => setMonth(e.target.value || dayjs().format('YYYY-MM'))}
-              className="px-3 py-2 rounded-cta border border-border bg-white text-button"
-            />
+            <MonthPicker value={month} onChange={v => setMonth(v || dayjs().format('YYYY-MM'))} />
             <button className="px-4 py-2 bg-white border border-border rounded-cta text-button text-gray2">导出</button>
           </div>
         </div>

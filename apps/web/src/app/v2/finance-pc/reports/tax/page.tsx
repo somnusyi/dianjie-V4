@@ -14,7 +14,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import dayjs from 'dayjs'
-import { Chip } from '@/components/v2'
+import { Chip, MonthPicker, DatePicker } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../../_topnav'
 
@@ -123,12 +123,10 @@ export default function FinancePCTaxReportsPage() {
                       className={`px-4 py-1.5 rounded-cta text-button ${tab === 'balance' ? 'bg-ink text-white' : 'text-gray2'}`}>资产负债表</button>
             </div>
             {tab === 'income' && (
-              <input type="month" value={month} onChange={e => setMonth(e.target.value)}
-                     className="bg-white border border-border rounded-cta px-3 py-2 text-button font-num" />
+              <MonthPicker value={month} onChange={setMonth} />
             )}
             {tab === 'balance' && (
-              <input type="date" value={asOf} onChange={e => setAsOf(e.target.value)}
-                     className="bg-white border border-border rounded-cta px-3 py-2 text-button font-num" />
+              <DatePicker value={asOf} onChange={setAsOf} quickButtons={['today', 'yesterday', 'monthEnd', 'lastMonthEnd']} />
             )}
             <button onClick={tab === 'income' ? exportIncome : exportBalance}
                     disabled={tab === 'income' ? !income : !balance}

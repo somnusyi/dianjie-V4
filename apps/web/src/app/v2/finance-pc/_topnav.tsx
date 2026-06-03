@@ -19,9 +19,10 @@ const TABS: Tab[] = [
     label: '应付',
     matchPrefix: '/v2/finance-pc/payable',
     group: [
-      { label: '应付管理',     href: '/v2/finance-pc/payable',        desc: '按发票分次付款' },
-      { label: '发票审核',     href: '/v2/finance-pc/invoices',       desc: '财务通过后解锁付款', badgeKey: 'invoicePending' },
-      { label: '资本支出审批', href: '/v2/finance-pc/capital-review', desc: '店长申请 → 老板批 → 财务付' },
+      { label: '应付管理',     href: '/v2/finance-pc/payable',           desc: '按发票分次付款' },
+      { label: '发票审核',     href: '/v2/finance-pc/invoices',          desc: '财务通过后解锁付款', badgeKey: 'invoicePending' },
+      { label: '待开票跟踪',   href: '/v2/finance-pc/invoices-pending',  desc: '已付款但供应商没开发票, 催办主战场', badgeKey: 'pendingInvoice' },
+      { label: '资本支出审批', href: '/v2/finance-pc/capital-review',    desc: '店长申请 → 老板批 → 财务付' },
     ],
   },
   {
@@ -47,7 +48,7 @@ const TABS: Tab[] = [
   { key: 'stores',   label: '各店',     href: '/v2/finance-pc/stores' },
 ]
 
-type Badges = { pendingReview?: number; dueThisWeek?: number; draftVouchers?: number; invoicePending?: number }
+type Badges = { pendingReview?: number; dueThisWeek?: number; draftVouchers?: number; invoicePending?: number; pendingInvoice?: number }
 
 export default function FinanceTopNav() {
   const pathname = usePathname() || ''
@@ -97,17 +98,19 @@ export default function FinanceTopNav() {
       try {
         const monthFrom = `${new Date().toISOString().slice(0, 7)}-01`
         const monthTo   = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().slice(0, 10)
-        const [pr, sch, vou, inv] = await Promise.all([
+        const [pr, sch, vou, inv, pInv] = await Promise.all([
           apiFetch<{ total: number }>('/api/payment-requests?status=PENDING&pageSize=1').catch(() => ({ total: 0 })),
           apiFetch<any[]>('/api/schedules?days=7').catch(() => []),
           apiFetch<{ items: any[] }>(`/api/vouchers?from=${monthFrom}&to=${monthTo}&status=DRAFT&pageSize=200`).catch(() => ({ items: [] })),
           apiFetch<any[]>('/api/invoices?status=PENDING').catch(() => []),
+          apiFetch<{ summary?: { paidCount?: number } }>('/api/invoices/pending-from-finance').catch(() => ({ summary: { paidCount: 0 } })),
         ])
         if (!alive) return
         const dueCount = Array.isArray(sch) ? sch.filter((s: any) => ['PENDING', 'APPROVED', 'NOTIFIED'].includes(s.status)).length : 0
         const draftCount = vou.items?.length || 0
         const invoicePending = Array.isArray(inv) ? inv.length : 0
-        setBadges({ pendingReview: pr.total || 0, dueThisWeek: dueCount, draftVouchers: draftCount, invoicePending })
+        const pendingInvoice = pInv?.summary?.paidCount || 0
+        setBadges({ pendingReview: pr.total || 0, dueThisWeek: dueCount, draftVouchers: draftCount, invoicePending, pendingInvoice })
       } catch { /* 静默 */ }
     }
     load()

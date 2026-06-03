@@ -72,6 +72,72 @@ export const invoiceRoutes: FastifyPluginAsync = async (app) => {
     return inv
   })
 
+  // ── 财务: 已付款但未开发票 跟进 ──────────────
+  // 真实业务: 财务付了款给供应商, 但供应商一直没把发票寄回 → 需要催
+  //   条件: Receipt 入库 + invoiceId IS NULL + PaymentSchedule.status=PAID (已付款)
+  //   排序: 已付款时间最早的优先 (拖最久要催)
+  app.get('/pending-from-finance', auth, async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    const FINANCE_ROLES = ['FINANCE', 'ADMIN', 'SUPER_ADMIN']
+    if (!FINANCE_ROLES.includes(role)) return reply.status(403).send({ error: '仅财务/老板可访问' })
+
+    const items = await prisma.receipt.findMany({
+      where: {
+        tenantId,
+        invoiceId: null,
+        status: { notIn: ['VOID', 'REJECTED'] },
+        paymentSchedule: { status: 'PAID' },   // 已付款的优先
+      },
+      include: {
+        supplier: { select: { id: true, name: true, contactName: true, contactPhone: true } },
+        store: { select: { id: true, name: true, managerName: true, phone: true } },
+        paymentSchedule: { select: { paidAt: true, amount: true, status: true } },
+      },
+      orderBy: { paymentSchedule: { paidAt: 'asc' } },
+      take: 200,
+    })
+
+    const now = Date.now()
+    const enriched = items.map(r => ({
+      ...r,
+      daysSincePaid: r.paymentSchedule?.paidAt
+        ? Math.floor((now - new Date(r.paymentSchedule.paidAt).getTime()) / 86400000)
+        : null,
+    }))
+
+    // 二级: 已入库但未付款的 (这种也没发票, 但属于"先催付款再催票"场景)
+    const itemsPending = await prisma.receipt.findMany({
+      where: {
+        tenantId,
+        invoiceId: null,
+        status: { notIn: ['VOID', 'REJECTED'] },
+        OR: [
+          { paymentSchedule: { status: { in: ['PENDING', 'APPROVED', 'PENDING_APPROVAL', 'OVERDUE'] } } },
+          { paymentSchedule: null },
+        ],
+      },
+      include: {
+        supplier: { select: { id: true, name: true, contactName: true, contactPhone: true } },
+        store: { select: { id: true, name: true } },
+        paymentSchedule: { select: { dueAt: true, amount: true, status: true } },
+      },
+      orderBy: { deliveryDate: 'asc' },
+      take: 200,
+    })
+
+    return {
+      paid: enriched,            // 已付款未开票 — 主要催办对象
+      pending: itemsPending,     // 未付款未开票 — 次要
+      summary: {
+        paidCount: enriched.length,
+        paidAmount: enriched.reduce((s, r) => s + Number(r.totalAmount), 0),
+        pendingCount: itemsPending.length,
+        pendingAmount: itemsPending.reduce((s, r) => s + Number(r.totalAmount), 0),
+        oldestPaidDays: enriched[0]?.daysSincePaid || 0,
+      },
+    }
+  })
+
   // ── 待开票订单 (供应商上传时选关联) ──────────────
   // 已确认入库 + 未关联发票
   app.get('/pending-payable', auth, async (req: any, reply: any) => {

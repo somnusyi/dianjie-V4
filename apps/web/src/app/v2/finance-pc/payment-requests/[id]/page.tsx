@@ -200,6 +200,11 @@ export default function FinancePCPaymentRequestDetailPage() {
               </section>
             )}
 
+            {/* 报销附件 (财务核对必看, P0-3 改进) */}
+            {Array.isArray(d.payload?.attachments) && d.payload.attachments.length > 0 && (
+              <AttachmentGrid attachments={d.payload.attachments} title={`报销附件 (${d.payload.attachments.length})`} />
+            )}
+
             {/* 已付信息 */}
             {isPaid && (
               <section className="bg-green-bg rounded-card border border-green/30 p-4">
@@ -307,5 +312,97 @@ export default function FinancePCPaymentRequestDetailPage() {
         </div>
       </main>
     </div>
+  )
+}
+
+// 附件聚合 grid + 放大 lightbox
+// 真实场景: 财务每天看大量报销单, 多份附件需要逐张点开放大 + 上下张切换 + 旋转
+function AttachmentGrid({ attachments, title }: { attachments: string[]; title: string }) {
+  const [zoomIdx, setZoomIdx] = useState<number | null>(null)
+  const [rotation, setRotation] = useState(0)
+
+  const isPdf = (url: string) => url.toLowerCase().endsWith('.pdf') || url.toLowerCase().includes('.pdf?')
+  const isImage = (url: string) => /\.(jpg|jpeg|png|webp|gif|heic|heif)(\?|$)/i.test(url)
+
+  function open(i: number) { setZoomIdx(i); setRotation(0) }
+  function close() { setZoomIdx(null); setRotation(0) }
+  function prev(e: React.MouseEvent) { e.stopPropagation(); if (zoomIdx == null) return; setZoomIdx((zoomIdx + attachments.length - 1) % attachments.length); setRotation(0) }
+  function next(e: React.MouseEvent) { e.stopPropagation(); if (zoomIdx == null) return; setZoomIdx((zoomIdx + 1) % attachments.length); setRotation(0) }
+  function rotate(e: React.MouseEvent) { e.stopPropagation(); setRotation(r => (r + 90) % 360) }
+
+  // ESC + 左右键
+  useEffect(() => {
+    if (zoomIdx == null) return
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close()
+      if (e.key === 'ArrowLeft') setZoomIdx(i => i == null ? null : (i + attachments.length - 1) % attachments.length)
+      if (e.key === 'ArrowRight') setZoomIdx(i => i == null ? null : (i + 1) % attachments.length)
+      if (e.key === 'r' || e.key === 'R') setRotation(r => (r + 90) % 360)
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [zoomIdx, attachments.length])
+
+  const currentUrl = zoomIdx != null ? attachments[zoomIdx] : null
+
+  return (
+    <section className="bg-white rounded-card border border-border p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-h2">{title}</h2>
+        <span className="text-caption text-gray3">点击放大 · 键盘 ←/→ 切换 · R 旋转</span>
+      </div>
+      <div className="grid grid-cols-4 gap-2">
+        {attachments.map((url, i) => (
+          <button key={i} onClick={() => open(i)}
+                  className="aspect-square bg-bg rounded-card border border-border overflow-hidden flex items-center justify-center hover:border-ink transition relative">
+            {isImage(url) ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={url} alt={`附件 ${i + 1}`} className="w-full h-full object-cover" />
+            ) : isPdf(url) ? (
+              <div className="text-h2 text-red-fg">📄 PDF</div>
+            ) : (
+              <div className="text-h2 text-gray3">📎</div>
+            )}
+            <span className="absolute bottom-1 right-1 bg-ink/70 text-white text-micro px-1 rounded">{i + 1}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Lightbox 放大查看 */}
+      {currentUrl && zoomIdx != null && (
+        <div className="fixed inset-0 z-50 bg-ink/90 flex items-center justify-center" onClick={close}>
+          <button onClick={close}
+                  className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/20 hover:bg-white/30 text-white text-h2">×</button>
+          <button onClick={rotate}
+                  className="absolute top-4 right-16 w-10 h-10 rounded-full bg-white/20 hover:bg-white/30 text-white"
+                  title="旋转 90° (R 键)">↻</button>
+          <a href={currentUrl} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
+             className="absolute top-4 right-28 w-10 h-10 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center"
+             title="新窗口打开 / 下载">⬇</a>
+          {attachments.length > 1 && (
+            <>
+              <button onClick={prev}
+                      className="absolute left-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-white/20 hover:bg-white/30 text-white text-h2">‹</button>
+              <button onClick={next}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-white/20 hover:bg-white/30 text-white text-h2">›</button>
+            </>
+          )}
+          <div className="absolute top-4 left-4 bg-white/20 text-white px-3 py-1.5 rounded-cta text-caption">
+            {zoomIdx + 1} / {attachments.length}
+          </div>
+          <div className="max-w-[90vw] max-h-[90vh] flex items-center justify-center" onClick={e => e.stopPropagation()}>
+            {isPdf(currentUrl) ? (
+              <iframe src={currentUrl} className="w-[90vw] h-[90vh] bg-white rounded-card" />
+            ) : isImage(currentUrl) ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={currentUrl} alt="" className="max-w-full max-h-full object-contain"
+                   style={{ transform: `rotate(${rotation}deg)`, transition: 'transform 0.2s' }} />
+            ) : (
+              <div className="text-white text-h2">不可预览, 请下载查看</div>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
   )
 }

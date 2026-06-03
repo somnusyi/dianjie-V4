@@ -16,6 +16,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Chip, StoreAvatar, BlackHero, MonthPicker } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
+import { exportXlsx } from '@/lib/exportXlsx'
 import dayjs from 'dayjs'
 import FinanceTopNav from '../_topnav'
 
@@ -110,7 +111,74 @@ export default function FinancePCStoresPage() {
           </div>
           <div className="flex items-center gap-3">
             <MonthPicker value={month} onChange={v => setMonth(v || dayjs().format('YYYY-MM'))} />
-            <button className="px-4 py-2 bg-white border border-border rounded-cta text-button text-gray2">导出</button>
+            <button
+              onClick={async () => {
+                if (!profit || !s) return
+                const sheets: any[] = []
+                // Sheet 1: 各店核心指标
+                sheets.push({
+                  name: `各店指标 ${month}`,
+                  rows: [
+                    [`各店财务 · ${month}`, '', '', '', '', ''],
+                    [],
+                    ['门店', '营业额', '食材成本', '毛利', '毛利率', '净利率'],
+                    ...profit.stores.map(st => [
+                      st.storeName,
+                      Number(st.revenue.toFixed(2)),
+                      Number(st.foodCost.toFixed(2)),
+                      Number(st.grossProfit.toFixed(2)),
+                      `${(st.grossMargin * 100).toFixed(1)}%`,
+                      // 净利率是 group-level, 各店没有, 用 grossMargin 代显
+                      `${(st.grossMargin * 100).toFixed(1)}%`,
+                    ]),
+                    [],
+                    ['汇总', Number(s.revenue.toFixed(2)), Number(s.cost.food.toFixed(2)), Number(s.netProfit.toFixed(2)),
+                      `${(s.foodCostRatio * 100).toFixed(1)}% (食材占比)`,
+                      `${(s.netMargin * 100).toFixed(1)}%`],
+                  ],
+                  cols: [{ wch: 24 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 12 }],
+                  merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }],
+                  moneyCols: ['B', 'C', 'D'],
+                  headerRowIdx: 2,
+                })
+                // Sheet 2: 成本结构
+                sheets.push({
+                  name: `成本结构 ${month}`,
+                  rows: [
+                    [`成本结构 · ${month}`, '', ''],
+                    [],
+                    ['项目', '金额', '占比'],
+                    ...costRows.map(r => [r.label, Number(r.value.toFixed(2)), `${(r.pct * 100).toFixed(1)}%`]),
+                    [],
+                    ['合计', Number(costRows.reduce((sum, r) => sum + r.value, 0).toFixed(2)), '100%'],
+                  ],
+                  cols: [{ wch: 18 }, { wch: 14 }, { wch: 10 }],
+                  merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 2 } }],
+                  moneyCols: ['B'],
+                  headerRowIdx: 2,
+                })
+                // Sheet 3: 渠道分布
+                if (channelRows.length > 0) {
+                  sheets.push({
+                    name: `营收渠道 ${month}`,
+                    rows: [
+                      [`营收渠道分布 · ${month}`, '', ''],
+                      [],
+                      ['渠道', '金额', '占比'],
+                      ...channelRows.map(c => [c.label, Number(c.value.toFixed(2)), `${(c.pct * 100).toFixed(1)}%`]),
+                    ],
+                    cols: [{ wch: 14 }, { wch: 14 }, { wch: 10 }],
+                    merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 2 } }],
+                    moneyCols: ['B'],
+                    headerRowIdx: 2,
+                  })
+                }
+                await exportXlsx(`各店财务-${month}.xlsx`, sheets)
+              }}
+              disabled={!profit || !s}
+              className="px-4 py-2 bg-[#1F7A4B] text-white rounded-cta text-button disabled:opacity-40">
+              📊 导出
+            </button>
           </div>
         </div>
 

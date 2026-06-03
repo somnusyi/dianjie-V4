@@ -14,6 +14,7 @@ import { createPortal } from 'react-dom'
 import { BlackHero, Chip, MonthPicker } from '@/components/v2'
 import { BankTransactionsDrawer } from '@/components/v2/bank-transactions-drawer'
 import { apiFetch } from '@/lib/v2-auth'
+import { exportXlsx } from '@/lib/exportXlsx'
 import dayjs from 'dayjs'
 import FinanceTopNav from '../_topnav'
 
@@ -174,7 +175,76 @@ export default function FinancePCFundsPage() {
               className="px-4 py-2 bg-white border border-border rounded-cta text-button text-gray2 disabled:opacity-40">
               🔍 对账
             </button>
-            <button className="px-4 py-2 bg-white border border-border rounded-cta text-button text-gray2">导出对账单</button>
+            <button
+              onClick={async () => {
+                if (!summary || accounts.length === 0) return
+                const ym = dayjs().format('YYYY-MM')
+                try {
+                  // 拉每个账户本月的本地流水
+                  const txByAcc = await Promise.all(accounts.map(async a => {
+                    const r = await apiFetch<{ items: any[] }>(`/api/cashbook/transactions?accountId=${a.id}&month=${ym}&pageSize=200`).catch(() => ({ items: [] }))
+                    return { account: a, items: r.items || [] }
+                  }))
+                  const sheets: any[] = []
+                  // Sheet 1: 账户余额汇总
+                  sheets.push({
+                    name: `账户余额 ${ym}`,
+                    rows: [
+                      [`资金对账单 · ${ym}`, '', '', '', ''],
+                      [],
+                      ['账户', '银行', '账号', 'CMB 实时', '本地账面'],
+                      ...accounts.map(a => {
+                        const cmb = cmbBalances.get(a.id)
+                        return [
+                          a.name,
+                          a.bankName || '',
+                          a.accountNo || '',
+                          cmb?.available ? Number(Number(cmb.available).toFixed(2)) : '—',
+                          Number(Number(a.balance).toFixed(2)),
+                        ]
+                      }),
+                      ['合计', '', '',
+                        cmbAllLoaded ? Number(cmbTotalAvail.toFixed(2)) : '—',
+                        Number(accounts.reduce((s, a) => s + Number(a.balance), 0).toFixed(2))],
+                    ],
+                    cols: [{ wch: 24 }, { wch: 16 }, { wch: 18 }, { wch: 14 }, { wch: 14 }],
+                    merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 4 } }],
+                    moneyCols: ['D', 'E'],
+                    headerRowIdx: 2,
+                  })
+                  // Sheet per 账户: 本月流水
+                  for (const { account, items } of txByAcc) {
+                    if (items.length === 0) continue
+                    sheets.push({
+                      name: `${account.name.slice(0, 20)} 流水`,
+                      rows: [
+                        [`${account.name} · ${ym} 流水`, '', '', '', '', ''],
+                        [],
+                        ['日期', '方向', '类目', '金额', '余额', '业务参考'],
+                        ...items.map((it: any) => [
+                          dayjs(it.txDate).format('YYYY-MM-DD HH:mm'),
+                          it.direction === 1 ? '收' : '支',
+                          it.category,
+                          Number(Number(it.amount).toFixed(2)),
+                          Number(Number(it.balanceAfter).toFixed(2)),
+                          `${it.refType}: ${it.refId}`,
+                        ]),
+                      ],
+                      cols: [{ wch: 18 }, { wch: 6 }, { wch: 18 }, { wch: 14 }, { wch: 14 }, { wch: 36 }],
+                      merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }],
+                      moneyCols: ['D', 'E'],
+                      headerRowIdx: 2,
+                    })
+                  }
+                  await exportXlsx(`资金对账单-${ym}.xlsx`, sheets)
+                } catch (e: any) {
+                  alert('导出失败: ' + (e?.message || e))
+                }
+              }}
+              disabled={!summary || accounts.length === 0}
+              className="px-4 py-2 bg-[#1F7A4B] text-white rounded-cta text-button disabled:opacity-40">
+              📊 导出对账单
+            </button>
           </div>
         </div>
 

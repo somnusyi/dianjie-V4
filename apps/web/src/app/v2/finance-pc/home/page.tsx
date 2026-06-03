@@ -21,13 +21,22 @@ type Doc = {
   initiator?: { name: string } | null
   store?: { name: string } | null
 }
-type Account = { id: string; name: string; balance: string | number; type: string }
+type Account = {
+  id: string; name: string; balance: string | number; type: string
+  cmbBindAccount?: string | null
+}
 type Summary = {
   totalBalance: number
   monthIncome: number
   monthExpense: number
   monthNet: number
   accounts: Account[]
+}
+type CmbBal = {
+  success: boolean
+  available?: string
+  balance?: string
+  cached?: boolean
 }
 type Schedule = {
   id: string; amount: string | number; dueAt: string; status: string
@@ -49,6 +58,7 @@ export default function FinancePCHomePage() {
   const [pending, setPending] = useState<{ items: Doc[]; total: number } | null>(null)
   const [schedules, setSchedules] = useState<Schedule[] | null>(null)
   const [summary, setSummary] = useState<Summary | null>(null)
+  const [cmbBalances, setCmbBalances] = useState<Map<string, CmbBal>>(new Map())
   const [error, setError] = useState<string | null>(null)
   const [user, setUser] = useState<{ name?: string } | null>(null)
 
@@ -67,6 +77,27 @@ export default function FinancePCHomePage() {
       .catch(e => setError(String(e?.message || e)))
   }, [])
 
+  // 拉 CMB 实时余额 (跟 funds 页一致) — 替代显示用的"本地账本"假值
+  useEffect(() => {
+    if (!summary?.accounts) return
+    const cmbAccounts = summary.accounts.filter(a => a.cmbBindAccount)
+    if (cmbAccounts.length === 0) return
+    Promise.all(
+      cmbAccounts.map(async a => {
+        try {
+          const r = await apiFetch<CmbBal>(`/api/cmb/balance?account=${encodeURIComponent(a.cmbBindAccount!)}`)
+          return [a.id, r] as const
+        } catch {
+          return [a.id, { success: false } as CmbBal] as const
+        }
+      }),
+    ).then(rows => {
+      const m = new Map<string, CmbBal>()
+      rows.forEach(([id, r]) => m.set(id, r))
+      setCmbBalances(m)
+    })
+  }, [summary])
+
   // 待办合并: payment-requests (待初审) + schedules (3 天内到期 — 紧急)
   const todos = useMemo(() => {
     const list: Array<{ id: string; tone: 'red' | 'orange' | 'gray'; type: string; tag: string; title: string; sub: string; amount: number; href: string }> = []
@@ -80,7 +111,8 @@ export default function FinancePCHomePage() {
         title: d.title,
         sub: `${d.store?.name || '集团'} · ${d.initiator?.name || '—'} 发起`,
         amount: Number(d.amount || 0),
-        href: `/v2/finance/payment-requests/${d.id}`,
+        // PWA scope 内 — 不能跳 /v2/finance/* 出 scope
+        href: `/v2/finance-pc/payment-requests/${d.id}`,
       })
     }
     // 2. 紧急到期 (3 天内 PENDING/APPROVED) — 红色
@@ -95,7 +127,7 @@ export default function FinancePCHomePage() {
         title: `${s.supplier?.name || '供应商'} · ${s.receipt?.no || ''}`,
         sub: `${s.receipt?.store?.name || ''} · ${dayjs(s.dueAt).format('MM/DD')} 到期`,
         amount: Number(s.amount),
-        href: `/v2/finance/funds`,
+        href: `/v2/finance-pc/funds`,
       })
     }
     return list.slice(0, 10)
@@ -103,6 +135,16 @@ export default function FinancePCHomePage() {
 
   const todoCount = (pending?.total || 0) + ((schedules || []).filter(s => ['PENDING', 'APPROVED', 'NOTIFIED'].includes(s.status) && daysUntil(s.dueAt) <= 3).length)
   const todoAmt = todos.reduce((s, t) => s + t.amount, 0)
+
+  // CMB 实时合计 (替本地账本 totalBalance 显示)
+  const cmbTotal = useMemo(() => {
+    if (!summary?.accounts) return 0
+    return summary.accounts.reduce((acc, a) => {
+      const b = cmbBalances.get(a.id)
+      return acc + (b?.available ? Number(b.available) : 0)
+    }, 0)
+  }, [summary, cmbBalances])
+  const cmbReady = summary && summary.accounts.length > 0 && cmbBalances.size === summary.accounts.filter(a => a.cmbBindAccount).length && cmbBalances.size > 0
 
   return (
     <div className="min-h-screen bg-bg">
@@ -192,8 +234,8 @@ export default function FinancePCHomePage() {
               </header>
               <div className="grid grid-cols-2 gap-2">
                 <MetricTile
-                  label="总账户余额"
-                  value={summary ? fmtKMoney(summary.totalBalance) : '—'}
+                  label={cmbReady ? 'CMB 实时余额' : '总账户余额'}
+                  value={cmbReady ? fmtKMoney(cmbTotal) : (summary ? fmtKMoney(summary.totalBalance) : '—')}
                   delta={summary ? `${summary.accounts.length} 个账户` : ''}
                 />
                 <MetricTile
@@ -213,13 +255,21 @@ export default function FinancePCHomePage() {
                   tone="red"
                 />
               </div>
-              {/* 低余额账户告警 (低于 1k) */}
-              {summary && summary.accounts.filter(a => Number(a.balance) < 1000).map(a => (
-                <div key={a.id} className="mt-3 bg-orange-bg rounded-card p-2.5 text-caption text-orange-fg flex items-center gap-2">
-                  <span>余额低</span>
-                  <span className="font-num text-h2 ml-auto">{a.name} {fmtMoney(Number(a.balance))}</span>
-                </div>
-              ))}
+              {/* 低余额告警 (低于 1k, 优先用 CMB 实时, fallback 本地账本) */}
+              {summary && summary.accounts.filter(a => {
+                const cmb = cmbBalances.get(a.id)
+                const bal = cmb?.available ? Number(cmb.available) : Number(a.balance)
+                return cmb?.success ? bal < 1000 : false   // CMB 没拿到不告警, 避免误报
+              }).map(a => {
+                const cmb = cmbBalances.get(a.id)
+                const bal = Number(cmb?.available || 0)
+                return (
+                  <div key={a.id} className="mt-3 bg-orange-bg rounded-card p-2.5 text-caption text-orange-fg flex items-center gap-2">
+                    <span>余额低</span>
+                    <span className="font-num text-h2 ml-auto">{a.name} {fmtMoney(bal)}</span>
+                  </div>
+                )
+              })}
             </section>
 
             {/* 账户列表 */}
@@ -231,8 +281,11 @@ export default function FinancePCHomePage() {
                 {summary === null && <li className="px-4 py-3 text-caption text-gray3">加载中…</li>}
                 {summary && summary.accounts.length === 0 && <li className="px-4 py-3 text-caption text-gray3">暂无账户</li>}
                 {summary && summary.accounts.map(a => {
-                  const bal = Number(a.balance)
-                  const low = bal < 1000
+                  const cmb = cmbBalances.get(a.id)
+                  // 显示优先级: CMB 实时 > 本地账本
+                  const displayBal = cmb?.available != null ? Number(cmb.available) : Number(a.balance)
+                  const isReal = cmb?.success && cmb.available != null
+                  const low = isReal && displayBal < 1000
                   return (
                     <li key={a.id} className={`px-4 py-2.5 flex items-center gap-3 ${low ? 'bg-orange-bg/30' : ''}`}>
                       <span className="w-9 h-9 rounded-md bg-bg flex items-center justify-center font-num">{a.name.slice(0, 1)}</span>
@@ -240,10 +293,14 @@ export default function FinancePCHomePage() {
                         <div className="text-body flex items-center gap-2">
                           {a.name}
                           {low && <Chip tone="orange">告警</Chip>}
+                          {isReal && <Chip tone="green">实时</Chip>}
                         </div>
-                        <p className="text-micro text-gray3">{a.type === 'BANK' ? '银行账户' : a.type}</p>
+                        <p className="text-micro text-gray3">
+                          {a.type === 'BANK' ? '银行账户' : a.type}
+                          {a.cmbBindAccount && !cmb && ' · CMB 查询中…'}
+                        </p>
                       </div>
-                      <span className="font-num text-button">{fmtMoney(bal)}</span>
+                      <span className="font-num text-button">{fmtMoney(displayBal)}</span>
                     </li>
                   )
                 })}

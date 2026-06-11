@@ -622,7 +622,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   app.patch('/:id/receive', { preHandler: [(app as any).authenticate] }, async (req: any) => {
     const { tenantId, userId, role, storeId } = req.user
     const { id } = req.params as any
-    const { items: receivedItems, evidenceImages } = req.body as any  // [{ productId, receivedQty }] + 可选证据图
+    const { items: receivedItems, evidenceImages, reason } = req.body as any  // [{ productId, receivedQty }] + 可选证据图 + 可选自定义报损原因
+    const lossReason = (typeof reason === 'string' && reason.trim()) ? reason.trim().slice(0, 30) : null
 
     // P1-1: 仅店长 / 厨师长 / 老板 / 超管 能确认收货 (供应商不该能调)
     if (!['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
@@ -746,7 +747,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           storeId: order.storeId,
           supplierId: order.supplierId,
           totalLossAmount: totalLoss,
-          description: `验收短量自动报损 (${order.no})`,
+          reason: lossReason,
+          description: lossReason ? `${lossReason} · 验收报损 (${order.no})` : `验收短量自动报损 (${order.no})`,
           evidenceImages: Array.isArray(evidenceImages) ? evidenceImages.slice(0, 9) : [],
           status: 'PENDING' as any,
           createdById: userId,

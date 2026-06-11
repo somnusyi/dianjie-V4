@@ -19,6 +19,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [received, setReceived] = useState<Record<string, number>>({})
+  const [lossReason, setLossReason] = useState('')           // 自定义报损原因 (可选)
   const [evidence, setEvidence] = useState<string[]>([])     // OSS URL 数组
   const [uploading, setUploading] = useState(false)
   const [confirmState, openConfirm] = useConfirmSheet()
@@ -120,6 +121,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
               receivedQty: Number(received[it.productId] ?? 0),
             })),
             evidenceImages: hasLoss ? evidence : undefined,
+            reason: hasLoss && lossReason.trim() ? lossReason.trim() : undefined,
           }),
         })
         router.push(`/v2/chef/purchase/po-success/${params.id}`)
@@ -239,6 +241,20 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
           )}
         </div>
       </Section>
+
+      {/* 报损原因 — 自定义 (2026-06 客户要求: 每单报损可自填原因, 不止"短缺") */}
+      {hasLoss && (
+        <Section title="报损原因 (可自定义)" right={lossReason.trim() ? '' : '默认: 短缺'}>
+          <input
+            type="text"
+            value={lossReason}
+            onChange={(e) => setLossReason(e.target.value)}
+            maxLength={30}
+            placeholder="如: 少送 2 件 / 菜品变质 / 规格不符 / 破损…  (留空默认按短缺)"
+            className="w-full bg-white border border-border rounded-cta px-3 py-2.5 text-body text-ink placeholder:text-gray3 focus:outline-none focus:border-accent"
+          />
+        </Section>
+      )}
 
       {/* 报损证据 — 可选 (2026-06 客户要求), 但强烈建议传, 否则供应商易拒赔 (支持图片 + 短视频 ≤30MB) */}
       {hasLoss && (

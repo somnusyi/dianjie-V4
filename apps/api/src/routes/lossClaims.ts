@@ -90,7 +90,8 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
   // ── 创建报损申请（门店）──────────────────────────
   app.post('/', { preHandler: [(app as any).authenticate] }, async (req: any) => {
     const { tenantId, userId, storeId: userStoreId, role } = req.user
-    const { purchaseOrderId, description, evidenceImages, items } = req.body as any
+    const { purchaseOrderId, description, evidenceImages, items, reason } = req.body as any
+    const lossReason = (typeof reason === 'string' && reason.trim()) ? reason.trim().slice(0, 30) : null
 
     // P0: 仅门店人员/管理员可创建针对采购订单的报损 (供应商不能给自己创建)
     if (!['MANAGER', 'KITCHEN_LEAD', 'PURCHASER', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
@@ -147,6 +148,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
         storeId: order.storeId,
         supplierId: order.supplierId,
         totalLossAmount,
+        reason: lossReason,
         description,
         evidenceImages: evidenceImages || [],
         status: 'PENDING',

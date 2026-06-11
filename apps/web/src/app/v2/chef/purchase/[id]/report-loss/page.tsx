@@ -25,6 +25,7 @@ export default function ReportLossPage({ params }: { params: { id: string } }) {
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [shortage, setShortage] = useState<Record<string, number>>({})   // 本次短缺量
+  const [lossReason, setLossReason] = useState('')                       // 自定义报损原因 (可选)
   const [description, setDescription] = useState('')
   const [evidence, setEvidence] = useState<string[]>([])
   const [uploading, setUploading] = useState(false)
@@ -78,11 +79,15 @@ export default function ReportLossPage({ params }: { params: { id: string } }) {
               productId: it.productId,
               receivedQty: Math.max(0, expected(it) - Number(shortage[it.productId] || 0)),
             }))
+          const reasonTrim = lossReason.trim()
+          const desc = description.trim()
+            || (reasonTrim ? `${reasonTrim} · 验收后补报 (${po.no})` : `验收后补报短量 (${po.no})`)
           await apiFetch('/api/loss-claims', {
             method: 'POST',
             body: JSON.stringify({
               purchaseOrderId: po.id,
-              description: description.trim() || `验收后补报短量 (${po.no})`,
+              reason: reasonTrim || undefined,
+              description: desc,
               evidenceImages: evidence,
               items: payloadItems,
             }),
@@ -159,6 +164,18 @@ export default function ReportLossPage({ params }: { params: { id: string } }) {
             )
           })}
         </ul>
+      </Section>
+
+      {/* 报损原因 — 自定义 */}
+      <Section title="报损原因 (可自定义)" right={lossReason.trim() ? '' : '默认: 短缺'}>
+        <input
+          type="text"
+          value={lossReason}
+          onChange={(e) => setLossReason(e.target.value)}
+          maxLength={30}
+          placeholder="如: 少送 2 件 / 菜品变质 / 规格不符 / 破损…  (留空默认按短缺)"
+          className="w-full bg-white border border-border rounded-cta px-3 py-2.5 text-body text-ink placeholder:text-gray3 focus:outline-none focus:border-accent"
+        />
       </Section>
 
       {/* 备注 */}

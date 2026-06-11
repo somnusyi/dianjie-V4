@@ -21,7 +21,8 @@ module.exports = {
       env_file: '/app/dianjie-v4/.env',
       env: { PORT: '4004', API_PORT: '4004' },
       node_args: '--experimental-require-module',
-      max_memory_restart: '400M',
+      // 600M: 上传时整文件 buffer 进内存, 50MB 视频 concat 瞬时 ~2x, 给足余量 (2026-06)
+      max_memory_restart: '600M',
       exec_mode: 'fork',
       out_file: '/var/log/pm2/dianjie-v4-api.out.log',
       error_file: '/var/log/pm2/dianjie-v4-api.err.log',

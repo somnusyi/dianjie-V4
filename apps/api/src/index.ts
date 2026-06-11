@@ -213,8 +213,9 @@ async function bootstrap() {
   app.register(cashbookRoutes, { prefix: '/api/cashbook' })
   app.register(notificationRoutes, { prefix: '/api/notifications' })
   app.register(opsRoutes, { prefix: '/api/ops' })
-  // multipart 入口护栏 31MB; upload.ts 内部按 mime 分级严格限 (image/pdf 10MB, video 30MB)
-  app.register(multipart, { limits: { fileSize: 31 * 1024 * 1024 } })
+  // multipart 入口护栏 55MB; upload.ts 内部按 mime 分级严格限 (image/pdf 10MB, video 50MB)
+  // 护栏须 > 视频上限, 否则 50MB 视频会被 multipart 先截断成坏文件
+  app.register(multipart, { limits: { fileSize: 55 * 1024 * 1024 } })
   app.register(uploadRoutes, { prefix: '/api' })
   app.register(invoiceRoutes, { prefix: '/api/invoices' })
   app.register(invoicePaymentRoutes, { prefix: '/api/invoice-payments' })

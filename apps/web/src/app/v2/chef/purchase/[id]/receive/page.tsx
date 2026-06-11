@@ -256,7 +256,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
         </Section>
       )}
 
-      {/* 报损证据 — 可选 (2026-06 客户要求), 但强烈建议传, 否则供应商易拒赔 (支持图片 + 短视频 ≤30MB) */}
+      {/* 报损证据 — 可选 (2026-06 客户要求), 但强烈建议传, 否则供应商易拒赔 (支持图片 + 短视频 ≤50MB) */}
       {hasLoss && (
         <Section id="evidence-section" title="报损证据 (建议)" right={`${evidence.length} 份`} rightTone={evidence.length === 0 ? undefined : undefined}>
           <div className={`rounded-card border p-3 ${evidence.length === 0 ? 'bg-amber/10 border-amber/40' : 'bg-white border-border'}`}>
@@ -291,8 +291,8 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
                          e.target.value = ''
                          // 串行上传, 顺序保留; 视频客户端先校验大小给出友好错 (避免传完再被服务端拒)
                          for (const f of files) {
-                           if (f.type.startsWith('video/') && f.size > 30 * 1024 * 1024) {
-                             alert(`视频"${f.name}"超过 30MB, 请压缩后再传`)
+                           if (f.type.startsWith('video/') && f.size > 50 * 1024 * 1024) {
+                             alert(`视频"${f.name}"超过 50MB, 请压缩后再传`)
                              continue
                            }
                            await uploadPhoto(f)
@@ -302,7 +302,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
                 <span className="text-micro text-gray3">{uploading ? '上传中' : '加证据'}</span>
               </label>
             </div>
-            <p className="text-micro text-gray3 mt-2">图片 ≤10MB · 视频 ≤30MB · 多选</p>
+            <p className="text-micro text-gray3 mt-2">图片 ≤10MB · 视频 ≤50MB · 多选</p>
           </div>
         </Section>
       )}

@@ -11,9 +11,9 @@ const VIDEO_MIMES = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-m4v'
 const DOC_MIMES = ['application/pdf', ...IMAGE_MIMES]
 const MEDIA_MIMES = [...IMAGE_MIMES, ...VIDEO_MIMES]
 
-// 文件大小上限 (byte). image/pdf 10MB; video 30MB
+// 文件大小上限 (byte). image/pdf 10MB; video 50MB (2026-06 客户: 手机视频常 >30MB)
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
-const MAX_VIDEO_BYTES = 30 * 1024 * 1024
+const MAX_VIDEO_BYTES = 50 * 1024 * 1024
 
 const ALLOWED_CATEGORIES = new Set(['loss-claims', 'invoices', 'capital', 'documents', 'reimbursements', 'misc', 'chef-ack'])
 
@@ -83,6 +83,10 @@ async function uploadOne(req: any, reply: any, opts: { allowedMimes: string[]; c
         return reply.status(400).send({ error: `文件大小不能超过 ${maxMb}MB` })
       }
       chunks.push(chunk)
+    }
+    // multipart fileSize 闸门触发会把流截断 → 存进去就是坏文件 (视频"加载不了"根因之一)
+    if ((data.file as any).truncated) {
+      return reply.status(400).send({ error: `文件过大被截断, 请压缩到 ${maxMb}MB 内重试` })
     }
     const buffer = Buffer.concat(chunks)
     const ext = path.extname(data.filename) || (

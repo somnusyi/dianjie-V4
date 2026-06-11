@@ -190,7 +190,7 @@ export default function ChefLossNewPage() {
         />
       </div>
 
-      {/* 证据 — 图片 + 短视频 (≤30MB), 多选 */}
+      {/* 证据 — 图片 + 短视频 (≤50MB), 多选 */}
       <div className="mx-4 mt-3">
         <label className="text-micro text-gray3 block mb-1">证据（可选, 图片+短视频, 多选）</label>
         <div className="flex items-center gap-2 flex-wrap">
@@ -218,8 +218,8 @@ export default function ChefLossNewPage() {
                      const files = Array.from(e.target.files || [])
                      e.target.value = ''
                      for (const f of files) {
-                       if (f.type.startsWith('video/') && f.size > 30 * 1024 * 1024) {
-                         alert(`视频"${f.name}"超过 30MB, 请压缩后再传`)
+                       if (f.type.startsWith('video/') && f.size > 50 * 1024 * 1024) {
+                         alert(`视频"${f.name}"超过 50MB, 请压缩后再传`)
                          continue
                        }
                        await uploadPhoto(f)
@@ -229,7 +229,7 @@ export default function ChefLossNewPage() {
             <span className="text-micro text-gray3">{uploading ? '上传中' : '加证据'}</span>
           </label>
         </div>
-        <p className="text-micro text-gray3 mt-1">图片 ≤10MB · 视频 ≤30MB · 点 + 可从相册 / 现场拍/录, 多选</p>
+        <p className="text-micro text-gray3 mt-1">图片 ≤10MB · 视频 ≤50MB · 点 + 可从相册 / 现场拍/录, 多选</p>
       </div>
 
       {/* 底部固定 */}

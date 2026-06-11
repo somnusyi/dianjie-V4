@@ -213,8 +213,8 @@ export default function ReportLossPage({ params }: { params: { id: string } }) {
                        const files = Array.from(e.target.files || [])
                        e.target.value = ''
                        for (const f of files) {
-                         if (f.type.startsWith('video/') && f.size > 30 * 1024 * 1024) {
-                           alert(`视频"${f.name}"超过 30MB, 请压缩后再传`)
+                         if (f.type.startsWith('video/') && f.size > 50 * 1024 * 1024) {
+                           alert(`视频"${f.name}"超过 50MB, 请压缩后再传`)
                            continue
                          }
                          await uploadPhoto(f)
@@ -224,7 +224,7 @@ export default function ReportLossPage({ params }: { params: { id: string } }) {
               <span className="text-micro text-gray3">{uploading ? '上传中' : '加证据'}</span>
             </label>
           </div>
-          <p className="text-micro text-gray3 mt-2">图片 ≤10MB · 视频 ≤30MB · 多选</p>
+          <p className="text-micro text-gray3 mt-2">图片 ≤10MB · 视频 ≤50MB · 多选</p>
         </div>
       </Section>
 

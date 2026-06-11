@@ -64,18 +64,19 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
               </p>
             )}
             <p className="text-gray3 pt-2">
-              如有短量 / 破损需要补报, 请到 <b>盘点 → 新增报损</b>(店内自有损耗) 操作.
+              如有遗漏的短量需要 <b>向供应商补报</b>(扣账期), 点下方「补报短量」, 可多轮补报;
+              若是店内自有损耗 (临期 / 变质等), 走「店内盘损」.
             </p>
           </div>
         </div>
         <div className="mx-4 mt-3 flex gap-2">
-          <button onClick={() => router.push('/v2/chef/purchase')}
+          <button onClick={() => router.push(`/v2/chef/purchase/${po.id}/report-loss`)}
                   className="flex-1 py-3 bg-ink text-white rounded-cta text-button">
-            返回采购列表
+            补报短量
           </button>
           <button onClick={() => router.push('/v2/chef/check/new')}
                   className="flex-1 py-3 bg-white border border-border text-ink rounded-cta text-button">
-            新增报损
+            店内盘损
           </button>
         </div>
       </div>
@@ -239,13 +240,13 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
         </div>
       </Section>
 
-      {/* 报损证据 — 有报损时强制必传 (支持图片 + 短视频 ≤30MB) */}
+      {/* 报损证据 — 可选 (2026-06 客户要求), 但强烈建议传, 否则供应商易拒赔 (支持图片 + 短视频 ≤30MB) */}
       {hasLoss && (
-        <Section id="evidence-section" title="报损证据 *" right={`${evidence.length} 份${evidence.length === 0 ? ' · 至少 1 份' : ''}`} rightTone={evidence.length === 0 ? 'red' : undefined}>
-          <div className={`rounded-card border p-3 ${evidence.length === 0 ? 'bg-red-bg/30 border-red/40' : 'bg-white border-border'}`}>
-            <p className={`text-micro mb-2 ${evidence.length === 0 ? 'text-red-fg' : 'text-gray3'}`}>
+        <Section id="evidence-section" title="报损证据 (建议)" right={`${evidence.length} 份`} rightTone={evidence.length === 0 ? undefined : undefined}>
+          <div className={`rounded-card border p-3 ${evidence.length === 0 ? 'bg-amber/10 border-amber/40' : 'bg-white border-border'}`}>
+            <p className={`text-micro mb-2 ${evidence.length === 0 ? 'text-amber-fg' : 'text-gray3'}`}>
               {evidence.length === 0
-                ? '⚠ 报损必须上传至少 1 份证据 (图片或短视频), 否则供应商可拒赔'
+                ? '💡 建议上传现场照片/短视频作为证据, 否则供应商可能拒赔 (非必填)'
                 : '现场证据 — 短量 / 破损 / 变质, 已上传 ' + evidence.length + ' 份'}
             </p>
             <div className="flex flex-wrap gap-2">
@@ -293,26 +294,11 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border p-3 flex gap-3">
         <button type="button" onClick={() => router.back()} className="px-4 py-3 bg-white border border-border rounded-cta text-button text-gray2">取消</button>
         <button
-          onClick={() => {
-            // 没传证据时点按钮 → 自动滚到上传区, 不直接 disabled (用户摸不着头脑)
-            if (hasLoss && evidence.length === 0) {
-              const el = document.getElementById('evidence-section')
-              if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-              return
-            }
-            submit()
-          }}
+          onClick={submit}
           disabled={submitting}
-          className={`flex-1 py-3 rounded-cta text-button transition ${
-            (hasLoss && evidence.length === 0)
-              ? 'bg-amber text-white animate-pulse'
-              : 'bg-ink text-white disabled:opacity-40'
-          }`}
+          className="flex-1 py-3 rounded-cta text-button transition bg-ink text-white disabled:opacity-40"
         >
-          {submitting ? '提交中…' :
-            (hasLoss && evidence.length === 0)
-              ? '⚠ 点这里去上传报损证据 ↓'
-              : `确认收货 · ¥${total.toFixed(2)}`}
+          {submitting ? '提交中…' : `确认收货 · ¥${total.toFixed(2)}`}
         </button>
       </div>
 

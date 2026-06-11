@@ -731,10 +731,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
 
     const hasLoss = lossLines.length > 0
 
-    // 强制: 有报损时必须上传至少 1 张证据图 (双保险, UI 也禁了按钮)
-    if (hasLoss && (!Array.isArray(evidenceImages) || evidenceImages.length === 0)) {
-      throw { statusCode: 400, message: '存在报损时必须上传至少 1 张现场照片作为证据' }
-    }
+    // 证据改为可选 (2026-06 客户要求): 不再强制上传. 无证据时供应商更易拒赔, UI 已给软提示.
 
     // 自动建报损单（v2 流程：收货时短量自动发起索赔，24h 内供应商未响应自动同意）
     if (hasLoss) {

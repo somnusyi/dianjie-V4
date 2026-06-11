@@ -23,7 +23,15 @@ function ossClient() {
     accessKeyId: process.env.OSS_ACCESS_KEY_ID!,
     accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET!,
     bucket: process.env.OSS_BUCKET || 'dianjie-upload',
+    // secure: true → signatureUrl 返回 https://. 不设则默认 http://, 而站点是 https,
+    // 浏览器按 mixed content 直接拦掉所有证据图/视频 (报损碎图根因, 2026-06)
+    secure: true,
   })
+}
+
+/** 把已签名 URL 的 scheme 强制成 https (防御历史 http 残留 / SDK 兜底) */
+function toHttps(url: string): string {
+  return typeof url === 'string' ? url.replace(/^http:\/\//i, 'https://') : url
 }
 
 /**
@@ -38,7 +46,7 @@ export function resignOssUrl(url: string | null | undefined): string {
     if (!u.hostname.startsWith(bucket + '.') || !u.hostname.includes('.aliyuncs.com')) return url
     const key = decodeURIComponent(u.pathname.replace(/^\//, ''))
     if (!key) return url
-    return ossClient().signatureUrl(key, { expires: 3600 })
+    return toHttps(ossClient().signatureUrl(key, { expires: 3600 }))
   } catch {
     return url
   }
@@ -90,7 +98,7 @@ async function uploadOne(req: any, reply: any, opts: { allowedMimes: string[]; c
     })
     // P0 安全修复: 返回签名 URL (1 小时过期), 避免敏感图片/PDF 被链接传出去后无限期暴露
     // 长期保留: bucket 内对象仍在, 需要再次下载时调 /api/upload/signed-url?key=...
-    const url = client.signatureUrl(key, { expires: 3600 })
+    const url = toHttps(client.signatureUrl(key, { expires: 3600 }))
     return reply.send({ url, key, name: data.filename, mime: data.mimetype, size: totalSize })
   } catch (err: any) {
     req.log.error(err)
@@ -125,7 +133,7 @@ export async function uploadRoutes(app: FastifyInstance) {
     if (!key || !key.startsWith) return reply.status(400).send({ error: 'key 必填' })
     // 防越权: 只能签自己 tenant 的对象 (路径里包含 tenantId)
     if (!String(key).includes(`/${req.user.tenantId}/`)) return reply.status(403).send({ error: '无权访问' })
-    const url = ossClient().signatureUrl(String(key), { expires: Math.min(86400, Math.max(60, parseInt(expires as string) || 3600)) })
+    const url = toHttps(ossClient().signatureUrl(String(key), { expires: Math.min(86400, Math.max(60, parseInt(expires as string) || 3600)) }))
     return reply.send({ url })
   })
 }

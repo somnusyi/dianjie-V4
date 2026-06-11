@@ -32,7 +32,11 @@ export default function ChefLossNewPage() {
   const router = useRouter()
   const [products, setProducts] = useState<Product[] | null>(null)
   const [reason, setReason] = useState<Reason>('临期')
+  const [customReason, setCustomReason] = useState('')   // 选"其他"时自填原因
   const [description, setDescription] = useState('')
+
+  // 实际提交的原因: 选"其他"且填了自定义文本时用自定义, 否则用标签
+  const effectiveReason = reason === '其他' && customReason.trim() ? customReason.trim() : reason
   const [items, setItems] = useState<Item[]>([])
   const [pickerOpen, setPickerOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -77,8 +81,9 @@ export default function ChefLossNewPage() {
   function submit() {
     if (submitting) return
     if (items.length === 0) return alert('请选择至少 1 项商品')
+    if (reason === '其他' && !customReason.trim()) return alert('选「其他」时请填写自定义原因')
     openConfirm({
-      title: `${reason} · ¥${total.toFixed(2)}`,
+      title: `${effectiveReason} · ¥${total.toFixed(2)}`,
       body: `登记 ${items.length} 项店内报损 · 直接计入 P&L 损耗成本，不影响供应商账期`,
       confirmLabel: '提交',
       tone: 'primary',
@@ -87,7 +92,7 @@ export default function ChefLossNewPage() {
         try {
           await apiFetch('/api/loss-claims/manual', {
             method: 'POST',
-            body: JSON.stringify({ items, reason, description, evidenceImages: evidence }),
+            body: JSON.stringify({ items, reason: effectiveReason, description, evidenceImages: evidence }),
           })
           router.push('/v2/chef/check')
         } catch (e: any) {
@@ -122,6 +127,17 @@ export default function ChefLossNewPage() {
             >{r.key}</button>
           ))}
         </div>
+        {/* 选「其他」时自填原因 (2026-06 客户要求: 店内盘损支持自定义) */}
+        {reason === '其他' && (
+          <input
+            type="text"
+            value={customReason}
+            onChange={(e) => setCustomReason(e.target.value)}
+            maxLength={20}
+            placeholder="自定义原因 (如: 设备故障损坏 / 试菜消耗)"
+            className="mt-2 w-full bg-white border border-border rounded-cta px-3 py-2 text-body text-ink placeholder:text-gray3 focus:outline-none focus:border-accent"
+          />
+        )}
       </div>
 
       {/* 商品列表 */}

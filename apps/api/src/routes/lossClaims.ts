@@ -98,7 +98,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     }
     if (!items?.length) throw { statusCode: 400, message: '请填写报损明细' }
     if (!description) throw { statusCode: 400, message: '请填写报损说明' }
-    if (!evidenceImages?.length) throw { statusCode: 400, message: '请上传证据图片' }
+    // 证据改为可选 (2026-06 客户要求): 不强制上传, 无证据时供应商更易拒赔
 
     // 加 store scope: 店长/厨师长 只能给自己门店建报损
     const orderWhere: any = { id: purchaseOrderId, tenantId }

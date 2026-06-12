@@ -308,8 +308,11 @@ export default function SupplierOrderDetailPage() {
                 {it.product?.spec && <div className="text-micro text-gray3">{it.product.spec}</div>}
               </div>
               <div className="text-right font-num">
-                <div>{it.quantity} {it.product?.unit}</div>
-                <div className="text-micro text-gray3">¥{it.unitPrice} → ¥{Number(it.amount).toLocaleString()}</div>
+                {/* 总价醒目 + 下方"数量 × 单价"拆解, 替代原来易误解的 "¥50 → ¥250" 箭头 */}
+                <div className="text-caption">¥{Number(it.amount).toLocaleString()}</div>
+                <div className="text-micro text-gray3">
+                  {it.quantity}{it.product?.unit || ''} × ¥{it.unitPrice}{it.product?.unit ? `/${it.product.unit}` : ''}
+                </div>
                 {it.shippedQty != null && Math.abs(Number(it.shippedQty) - Number(it.quantity)) > 0.0001 && (
                   <div className="text-micro text-amber-fg">实发 {it.shippedQty}</div>
                 )}

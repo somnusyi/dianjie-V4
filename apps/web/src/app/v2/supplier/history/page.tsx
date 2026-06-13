@@ -69,7 +69,17 @@ export default function SupplierHistoryPage() {
         </div>
       </header>
 
-      <div className="px-4 mt-2 flex gap-2 overflow-x-auto">
+      {/* 账户 — 修改密码入口 (2026-06 客户要求, 供应商"我的"页落在本页) */}
+      <div className="px-4 mt-3">
+        <a href="/v2/me/password"
+           className="bg-white rounded-card border border-border flex items-center px-3 py-3">
+          <span className="w-8 h-8 rounded-md bg-bg flex items-center justify-center mr-3">密</span>
+          <span className="flex-1 text-body">修改密码</span>
+          <span className="text-gray3">›</span>
+        </a>
+      </div>
+
+      <div className="px-4 mt-3 flex gap-2 overflow-x-auto">
         {([
           { key: 'all',       label: `全部 ${completed.length}` },
           { key: 'with-loss', label: `含报损 ${withLoss.length}` },

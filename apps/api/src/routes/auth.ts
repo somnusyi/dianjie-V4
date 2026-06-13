@@ -247,4 +247,30 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     })
     return { message: '已退出登录' }
   })
+
+  // POST /api/auth/change-password — 登录用户自助修改密码 (供应商等所有角色通用)
+  app.post('/change-password', { preHandler: [(app as any).authenticate] }, async (request: any, reply) => {
+    const { userId, tenantId } = request.user
+    const { oldPassword, newPassword } = (request.body || {}) as any
+    if (!oldPassword || !newPassword) {
+      return reply.status(400).send({ error: '请填写原密码和新密码' })
+    }
+    if (typeof newPassword !== 'string' || newPassword.length < 6) {
+      return reply.status(400).send({ error: '新密码至少 6 位' })
+    }
+    if (oldPassword === newPassword) {
+      return reply.status(400).send({ error: '新密码不能与原密码相同' })
+    }
+    const user = await prisma.user.findUnique({ where: { id: userId } })
+    if (!user) return reply.status(404).send({ error: '用户不存在' })
+    const valid = await bcrypt.compare(oldPassword, user.password)
+    if (!valid) return reply.status(401).send({ error: '原密码错误' })
+
+    const hashed = await bcrypt.hash(newPassword, 10)
+    await prisma.user.update({ where: { id: userId }, data: { password: hashed } })
+    await prisma.opLog.create({
+      data: { tenantId, userId, role: user.role, action: '修改密码', ip: request.ip },
+    })
+    return reply.send({ success: true, message: '密码已修改, 下次登录请用新密码' })
+  })
 }

@@ -165,6 +165,13 @@ export default function MePage() {
             </>
           )}
           <li>
+            <a href="/v2/me/password" className="flex items-center px-3 py-3">
+              <span className="w-8 h-8 rounded-md bg-bg flex items-center justify-center mr-3">密</span>
+              <span className="flex-1 text-body">修改密码</span>
+              <span className="text-gray3">›</span>
+            </a>
+          </li>
+          <li>
             <button onClick={resetOnboarding} className="w-full flex items-center px-3 py-3 text-left">
               <span className="w-8 h-8 rounded-md bg-bg flex items-center justify-center mr-3">？</span>
               <span className="flex-1 text-body">重看新手引导</span>

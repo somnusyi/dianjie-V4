@@ -51,6 +51,34 @@ export const EVENTS = {
     scopedBy: 'tenant',
     urgent: false,
   },
+  PO_ACCEPTED: {
+    label: '订单已接单',
+    desc: '供应商点接单 → 通知下单门店(店长/厨师长)',
+    defaultRoles: ['KITCHEN_LEAD', 'MANAGER'],
+    scopedBy: 'store',
+    urgent: false,
+  },
+  PO_RECEIVED: {
+    label: '验收完成',
+    desc: '门店确认收货 → 通知供应商(可结算)',
+    defaultRoles: ['SUPPLIER_OWNER', 'SUPPLIER_STAFF'],
+    scopedBy: 'supplier',
+    urgent: false,
+  },
+  LOSS_AGREED: {
+    label: '报损已通过',
+    desc: '供应商同意报损 → 通知门店(店长/厨师长)',
+    defaultRoles: ['KITCHEN_LEAD', 'MANAGER'],
+    scopedBy: 'store',
+    urgent: false,
+  },
+  PO_AUTO_RECEIVED: {
+    label: '超时自动收货',
+    desc: '送达 24h 未验收自动收货 → 提醒厨师长',
+    defaultRoles: ['KITCHEN_LEAD'],
+    scopedBy: 'store',
+    urgent: false,
+  },
 } as const
 
 export type EventKey = keyof typeof EVENTS
@@ -113,6 +141,46 @@ export function renderTemplate(event: EventKey, payload: Record<string, any>): R
           description: `${payload.supplierName} · 账期到 · 共 ${payload.orderCount || 0} 张订单`,
           url: `${baseUrl()}/v2/finance/review`,
           btntxt: '去放行',
+        },
+      }
+    case 'PO_ACCEPTED':
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: `✅ 订单已接单 #${payload.no || ''}`,
+          description: `${payload.supplierName || '供应商'} 已接单,正在备货。请留意后续发货通知。`,
+          url: `${baseUrl()}/v2/chef/purchase/${payload.orderId}`,
+          btntxt: '查看订单',
+        },
+      }
+    case 'PO_RECEIVED':
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: `📦 验收完成 #${payload.no || ''}`,
+          description: `门店已确认收货,实收金额 ¥${fmt(payload.total)}${payload.hasLoss ? ' (含报损待处理)' : ',可结算'}。`,
+          url: `${baseUrl()}/v2/supplier/orders/${payload.orderId}`,
+          btntxt: '查看',
+        },
+      }
+    case 'LOSS_AGREED':
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: `✅ 报损已通过 ${payload.lossNo || ''}`,
+          description: `供应商已同意 ¥${fmt(payload.amount)} 报损,库存已回补。`,
+          url: `${baseUrl()}/v2/chef/purchase/${payload.orderId}`,
+          btntxt: '查看',
+        },
+      }
+    case 'PO_AUTO_RECEIVED':
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: `⏰ 订单超时自动收货 #${payload.no || ''}`,
+          description: `该订单送达 24h 内未验收,系统已自动确认收货。如有短量请及时报损。`,
+          url: `${baseUrl()}/v2/chef/purchase/${payload.orderId}`,
+          btntxt: '查看',
         },
       }
     default:

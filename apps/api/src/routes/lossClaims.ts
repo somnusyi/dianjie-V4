@@ -327,6 +327,12 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
           target: claim.no, entityType: 'LossClaim', targetId: id,
         },
       })
+      notify({
+        tenantId, event: 'LOSS_AGREED',
+        eventKey: `LOSS:${claim.id}:AGREED`,
+        payload: { lossNo: claim.no, amount: Number(claim.totalLossAmount), orderId: claim.purchaseOrderId },
+        toStoreIds: claim.storeId ? [claim.storeId] : undefined,
+      })
     } else {
       // 供应商拒绝: 主张全部送达, 门店应按全额付 → schedule 加回报损金额 + 暂停付款待协商
       // claim.purchaseOrder 理论可空 (manual 报损), 上面 isManual=false 已过滤

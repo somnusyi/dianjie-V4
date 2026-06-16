@@ -2,6 +2,7 @@ import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { executeBankPayment, approvePaymentSchedule } from './paymentSchedule'
 import { sendNotification as notify } from './notification'
+import { fireAndForget as notifyWeCom } from './notify'
 import { runMeituanHourlySync, runMeituanDailyReconcile } from './meituan/cron'
 import { syncAllCmbAccounts } from './cmbAutoSync'
 
@@ -184,6 +185,12 @@ export async function runDailyCheck() {
       fullReceipt.confirmedAt = new Date()
       await autoProcessAfterConfirm({ tenantId: o.tenantId, receipt: fullReceipt, supplier: o.supplier })
       await prisma.opLog.create({ data: { tenantId: o.tenantId, userId: o.createdById, action: `[自动] 24h 自动确认收货 ${o.no}`, target: o.no, entityType: 'PurchaseOrder', targetId: o.id } })
+      notifyWeCom({
+        tenantId: o.tenantId, event: 'PO_AUTO_RECEIVED',
+        eventKey: `PO:${o.id}:AUTO_RECEIVED`,
+        payload: { orderId: o.id, no: o.no },
+        toStoreIds: o.storeId ? [o.storeId] : undefined,
+      })
     } catch (e: any) {
       console.error(`自动收货失败 ${o.no}:`, e.message)
     }

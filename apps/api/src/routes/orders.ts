@@ -272,6 +272,12 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     })
     const sup = await prisma.supplier.findUnique({ where: { id: order.supplierId }, select: { name: true } })
     void notifyOrderConfirmed(tenantId, order.no, sup?.name || '', order.storeId)
+    notify({
+      tenantId, event: 'PO_ACCEPTED',
+      eventKey: `PO:${order.id}:ACCEPTED`,
+      payload: { orderId: order.id, no: order.no, supplierName: sup?.name || '' },
+      toStoreIds: order.storeId ? [order.storeId] : undefined,
+    })
     return { success: true }
   })
 
@@ -778,6 +784,12 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     await prisma.opLog.create({ data: { tenantId, userId, action: `确认收货 ${order.no}，生成入库单 ${no}`, target: order.no, entityType: 'PurchaseOrder', targetId: id } })
     void invalidatePattern(`dashboard:stats:${tenantId}:*`)
     void invalidatePattern(`stores:list:${tenantId}:*`)
+    notify({
+      tenantId, event: 'PO_RECEIVED',
+      eventKey: `PO:${order.id}:RECEIVED`,
+      payload: { orderId: order.id, no: order.no, total: Number(actualReceivedTotal), hasLoss },
+      toSupplierIds: order.supplierId ? [order.supplierId] : undefined,
+    })
     return { success: true, receipt }
   })
 

@@ -22,6 +22,20 @@ export default function LoginPage() {
     const t = (url.searchParams.get('tenant') || '').trim()
     if (t === 'test') setTenantSlug('test')
 
+    // 企微 App 内打开 → 自动走 snsapi_base 静默授权, 零操作直接登录对应账号
+    // 守卫: ① 仅企微环境(wxwork) ② 带 error 说明刚静默失败回来, 不再自动(显示登录页)
+    //       ③ 本会话只试一次(防失败时死循环)
+    const inWeCom = /wxwork/i.test(navigator.userAgent)
+    if (inWeCom && !url.searchParams.has('error') && !sessionStorage.getItem('wecomSilentTried')) {
+      sessionStorage.setItem('wecomSilentTried', '1')
+      const tn = t === 'test' ? 'test' : 'dianjie'
+      fetch(`/api/wecom/oauth/url?tenant=${tn}&mode=silent&redirect=/`)
+        .then((r) => r.json())
+        .then((d) => { if (d.url) location.href = d.url })
+        .catch(() => {})
+      return
+    }
+
     const token = getToken()
     const u = getUser()
     if (token && u) setExistingUser(u as any)

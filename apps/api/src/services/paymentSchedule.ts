@@ -288,7 +288,8 @@ export async function executeBankPayment(scheduleId: string) {
         amount: amtNum,
         method: 'CMB_AUTOPAY',
         date: paidAt,
-        // bankLast4 取付款账户 cmbBindAccount 末四位 (现在用招行单账户假设)
+        // 招行单账户 (尾号 0001) → 好会计明细科目 100203 招商银行0001
+        bankLast4: '0001',
       })
 
       await prisma.opLog.create({

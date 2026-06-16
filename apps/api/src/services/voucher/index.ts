@@ -213,8 +213,8 @@ export function voucherForReceipt(opts: {
 /**
  * 付款给供应商: 借 应付账款 / 贷 银行存款 (按账户末四位决定明细科目)
  * 用户好会计科目体系 (小企业会计准则):
- *   100201 中国银行1674  / 100202 建设银行3618  / 1001 库存现金
- * 招行账户在好会计里还没加, 暂兜底用一级 1002 银行存款 (财务可在凭证里手工改细)
+ *   100201 中国银行1674  / 100202 建设银行3618  / 100203 招商银行0001  / 1001 库存现金
+ * 其余未登记账户兜底用一级 1002 银行存款 (财务可在凭证里手工改细)
  */
 export function voucherForPayment(opts: {
   tenantId: string
@@ -234,6 +234,7 @@ export function voucherForPayment(opts: {
   } else if (opts.bankLast4) {
     if (opts.bankLast4 === '1674') { bankAccountCode = '100201'; bankAccountName = '中国银行1674' }
     else if (opts.bankLast4 === '3618') { bankAccountCode = '100202'; bankAccountName = '建设银行3618' }
+    else if (opts.bankLast4 === '0001') { bankAccountCode = '100203'; bankAccountName = '招商银行0001' }
   }
   return createVoucherAsync({
     tenantId: opts.tenantId,
@@ -270,6 +271,7 @@ export function voucherForInternalTransfer(opts: {
   const resolve = (last4?: string, fallbackName?: string) => {
     if (last4 === '1674') return { code: '100201', name: '中国银行1674' }
     if (last4 === '3618') return { code: '100202', name: '建设银行3618' }
+    if (last4 === '0001') return { code: '100203', name: '招商银行0001' }
     return { code: '1002', name: fallbackName ? `银行存款 (${fallbackName})` : '银行存款' }
   }
   const from = resolve(opts.fromBankLast4, opts.fromAccountName)

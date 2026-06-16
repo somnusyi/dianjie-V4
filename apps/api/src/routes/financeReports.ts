@@ -397,18 +397,23 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
     const unmatchedEntries: any[] = []
     const unmatchedTxs: any[] = []
     const txUsed = new Set<string>()
-    for (const e of entries) {
+    // 按凭证日期升序处理, 让先发生的分录优先匹配 (减少跨日错配)
+    const sortedEntries = [...entries].sort((a, b) => dayjs(a.voucher.date).valueOf() - dayjs(b.voucher.date).valueOf())
+    for (const e of sortedEntries) {
       const net = Number(e.debit) - Number(e.credit)
       const eDate = dayjs(e.voucher.date).format('YYYY-MM-DD')
-      // 找一笔金额相同 + 日期同 ± 3 天 + 没用过的 cash tx
-      const cand = cashTxs.find(t => {
-        if (txUsed.has(t.id)) return false
-        const tDate = dayjs(t.txDate).format('YYYY-MM-DD')
-        const diff = Math.abs(dayjs(eDate).diff(tDate, 'day'))
-        if (diff > 3) return false
+      // 金额相同 + 日期 ±3 天 + 没用过的 cash tx 里, 选"日期最接近"的那笔
+      // (原来用 .find 取第一笔贪心匹配, 同金额多笔时会错配 — 2026-06 技术债修复)
+      let cand: typeof cashTxs[number] | null = null
+      let bestDiff = Infinity
+      for (const t of cashTxs) {
+        if (txUsed.has(t.id)) continue
         const tNet = Number(t.amount) * t.direction
-        return Math.abs(tNet - net) < 0.01
-      })
+        if (Math.abs(tNet - net) >= 0.01) continue
+        const diff = Math.abs(dayjs(eDate).diff(dayjs(t.txDate).format('YYYY-MM-DD'), 'day'))
+        if (diff > 3) continue
+        if (diff < bestDiff) { bestDiff = diff; cand = t }
+      }
       if (cand) {
         txUsed.add(cand.id)
         matched.push({ entryId: e.id, txId: cand.id, amount: net, voucherNo: e.voucher.no, voucherDate: eDate, txDate: dayjs(cand.txDate).format('YYYY-MM-DD') })

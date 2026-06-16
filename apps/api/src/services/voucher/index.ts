@@ -46,6 +46,28 @@ export interface CreateVoucherOpts {
   autoPost?: boolean
 }
 
+/**
+ * 凭证生成失败落账 (2026-06 技术债修复): 原来失败只 console.error 静默吞.
+ * best-effort 写库, 自身出错也不能影响业务主流程, 故吞掉自己的异常.
+ */
+async function recordVoucherFailure(opts: CreateVoucherOpts, reason: string, detail?: string): Promise<void> {
+  try {
+    await prisma.voucherGenerationFailure.create({
+      data: {
+        tenantId: opts.tenantId,
+        sourceType: opts.sourceType ?? null,
+        sourceId: opts.sourceId ?? null,
+        summary: opts.summary,
+        reason,
+        detail: detail ?? null,
+        entriesJson: opts.entries as any,
+      },
+    })
+  } catch (e) {
+    console.error('[voucher] 记录失败表失败 (已忽略, 不影响业务):', e)
+  }
+}
+
 /** 生成凭证号 PZ-YYYYMM-NNNN, 按月递增. 并发安全: 用最大号 + 1 取号 (单次), 撞 unique 重试 */
 async function generateNo(tenantId: string, date: Date): Promise<string> {
   const ym = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}`
@@ -97,6 +119,7 @@ export async function createVoucher(opts: CreateVoucherOpts): Promise<string | n
   totalCredit = Math.round(totalCredit * 100) / 100
   if (Math.abs(totalDebit - totalCredit) > 0.01) {
     console.error(`[voucher] 借贷不平 ${sourceType}/${sourceId}: debit=${totalDebit} credit=${totalCredit}`)
+    await recordVoucherFailure(opts, 'unbalanced', `借=${totalDebit} 贷=${totalCredit}`)
     return null
   }
   if (totalDebit < 0.01) {
@@ -134,7 +157,10 @@ export async function createVoucher(opts: CreateVoucherOpts): Promise<string | n
       return voucher.id
     } catch (e: any) {
       // P2002 = unique violation
-      if (e?.code !== 'P2002') throw e
+      if (e?.code !== 'P2002') {
+        await recordVoucherFailure(opts, 'exception', e?.message || String(e))
+        throw e
+      }
       // 撞 sourceId unique → 已存在, 查到 ID 返回 (并发场景)
       if (sourceType && sourceId) {
         const existing = await prisma.voucher.findFirst({
@@ -147,6 +173,7 @@ export async function createVoucher(opts: CreateVoucherOpts): Promise<string | n
     }
   }
   console.error(`[voucher] 重试 3 次仍 P2002, 放弃: ${sourceType}/${sourceId}`)
+  await recordVoucherFailure(opts, 'retry_exhausted', '撞凭证号 unique 重试 3 次仍失败')
   return null
 }
 

@@ -19,6 +19,10 @@ type Order = {
   shippedAt: string | null; receivedAt: string | null
   shippedNote: string | null
   note: string | null
+  // 厨师发的验收单 (DELIVERING 在途时发) — 补类型, 修历史 TS 报错 (2026-06)
+  chefAckAt?: string | null
+  chefAckImages?: string[] | null
+  chefAckNote?: string | null
   store: { id: string; name: string; no: string; address?: string | null }
   supplier: { id: string; name: string; contactName?: string | null; contactPhone?: string | null }
   createdBy: { id: string; name: string }
@@ -515,13 +519,13 @@ export default function SupplierOrderDetailPage() {
             <div className="mx-4 mt-3 bg-green-50 border border-green-300 rounded-card p-3">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-h2 text-green-700">📷 客户已发验收单</span>
-                <span className="text-micro text-gray3">{new Date(order.chefAckAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                <span className="text-micro text-gray3">{order.chefAckAt && new Date(order.chefAckAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
               </div>
-              {order.chefAckImages?.length > 0 && (
+              {(order.chefAckImages?.length ?? 0) > 0 && (
                 <>
-                  <div className="text-micro text-gray3 mb-1">客户验收照 {order.chefAckImages.length} 张 · 点击放大</div>
+                  <div className="text-micro text-gray3 mb-1">客户验收照 {order.chefAckImages!.length} 张 · 点击放大</div>
                   <div className="grid grid-cols-3 gap-2 mb-2">
-                    {order.chefAckImages.map((url: string, i: number) => (
+                    {order.chefAckImages!.map((url: string, i: number) => (
                       <button key={i} type="button" onClick={() => setZoomImg(url)}
                         className="aspect-square bg-bg rounded overflow-hidden border border-border">
                         <img src={url} alt={`验收照 ${i + 1}`} className="w-full h-full object-cover" />

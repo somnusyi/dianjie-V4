@@ -10,6 +10,21 @@ import { runDueTemplates } from '../services/voucher/templates'
 const FINANCE_ROLES = ['FINANCE', 'ADMIN', 'SUPER_ADMIN']
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
+/**
+ * 校验模板分录的 accountCode 都在该租户科目表里 (2026-06 技术债修复)
+ * 返回不存在的科目代码数组; 全部存在则返回 []
+ */
+async function findUnknownAccountCodes(tenantId: string, entries: { accountCode: string }[]): Promise<string[]> {
+  const codes = [...new Set(entries.map(e => e.accountCode))]
+  if (codes.length === 0) return []
+  const found = await prisma.chartOfAccount.findMany({
+    where: { tenantId, code: { in: codes } },
+    select: { code: true },
+  })
+  const foundSet = new Set(found.map(f => f.code))
+  return codes.filter(c => !foundSet.has(c))
+}
+
 const entrySchema = z.object({
   accountCode: z.string().min(1),
   accountName: z.string().min(1),
@@ -50,6 +65,10 @@ export const voucherTemplateRoutes: FastifyPluginAsync = async (app) => {
     if (Math.abs(sumD - sumC) > 0.01) {
       return reply.status(400).send({ error: `借贷不平 (借 ¥${sumD.toFixed(2)} / 贷 ¥${sumC.toFixed(2)})` })
     }
+    const unknown = await findUnknownAccountCodes(tenantId, parsed.data.entries)
+    if (unknown.length) {
+      return reply.status(400).send({ error: `科目代码不在科目表中: ${unknown.join(', ')} (请先在科目表维护)` })
+    }
     const t = await prisma.voucherTemplate.create({
       data: {
         tenantId, name: parsed.data.name, description: parsed.data.description,
@@ -68,6 +87,18 @@ export const voucherTemplateRoutes: FastifyPluginAsync = async (app) => {
     if (!FINANCE_ROLES.includes(role)) return reply.status(403).send({ error: '无权' })
     const parsed = templateSchema.partial().safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
+    // 改了分录时同样校验借贷平 + 科目存在
+    if (parsed.data.entries) {
+      const sumD = parsed.data.entries.reduce((s, e) => s + Number(e.debit || 0), 0)
+      const sumC = parsed.data.entries.reduce((s, e) => s + Number(e.credit || 0), 0)
+      if (Math.abs(sumD - sumC) > 0.01) {
+        return reply.status(400).send({ error: `借贷不平 (借 ¥${sumD.toFixed(2)} / 贷 ¥${sumC.toFixed(2)})` })
+      }
+      const unknown = await findUnknownAccountCodes(tenantId, parsed.data.entries)
+      if (unknown.length) {
+        return reply.status(400).send({ error: `科目代码不在科目表中: ${unknown.join(', ')} (请先在科目表维护)` })
+      }
+    }
     const data: any = { ...parsed.data }
     if (parsed.data.entries) data.entriesJson = parsed.data.entries
     delete data.entries

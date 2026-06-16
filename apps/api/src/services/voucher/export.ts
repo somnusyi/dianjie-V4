@@ -19,7 +19,7 @@ export interface ExportFilter {
   voucherIds?: string[]        // 显式指定凭证 ID 列表 (前端勾选场景)
 }
 
-export async function exportVouchersExcel(filter: ExportFilter): Promise<Buffer> {
+export async function exportVouchersExcel(filter: ExportFilter): Promise<{ buf: Buffer; voucherIds: string[] }> {
   const where: any = { tenantId: filter.tenantId }
   if (filter.voucherIds?.length) {
     where.id = { in: filter.voucherIds }
@@ -71,14 +71,17 @@ export async function exportVouchersExcel(filter: ExportFilter): Promise<Buffer>
   ws.getColumn('debit').numFmt = '#,##0.00'
   ws.getColumn('credit').numFmt = '#,##0.00'
 
-  // 标记已导出 (审计) — 一次写入, 避免下次重复导入
-  if (vouchers.length > 0) {
-    await prisma.voucher.updateMany({
-      where: { id: { in: vouchers.map((v) => v.id) } },
-      data: { exportedAt: new Date() },
-    })
-  }
-
+  // 注意: exportedAt 标记改由路由在"响应成功发出后"写 (见 routes/vouchers.ts /export),
+  // 不在这里写 — 否则下载途中网络断, 凭证被误标已导出, 财务无法重导 (2026-06 技术债修复)
   const buf = await wb.xlsx.writeBuffer()
-  return Buffer.from(buf)
+  return { buf: Buffer.from(buf), voucherIds: vouchers.map((v) => v.id) }
+}
+
+/** 响应成功发出后再标记已导出 (审计), 避免下载失败误标 */
+export async function markVouchersExported(voucherIds: string[]): Promise<void> {
+  if (!voucherIds.length) return
+  await prisma.voucher.updateMany({
+    where: { id: { in: voucherIds } },
+    data: { exportedAt: new Date() },
+  })
 }

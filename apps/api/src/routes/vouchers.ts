@@ -10,7 +10,7 @@ import { prisma } from '@dianjie/db'
 import { z } from 'zod'
 import dayjs from 'dayjs'
 import { createVoucher } from '../services/voucher'
-import { exportVouchersExcel, ExportFilter } from '../services/voucher/export'
+import { exportVouchersExcel, markVouchersExported, ExportFilter } from '../services/voucher/export'
 import { seedRestaurantCoA } from '../services/voucher/chart-of-accounts-restaurant'
 import { assertPeriodOpen, closePeriod, reopenPeriod, getOrCreatePeriod, isPeriodLocked } from '../services/accountingPeriod'
 import { generateCarryoverVoucher, previewCarryover } from '../services/voucher/carryover'
@@ -334,8 +334,10 @@ export const voucherRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role } = req.user
     if (!ensureFinance(role)) return reply.status(403).send({ error: '无权' })
     const { from, to, status } = req.query as any
-    const buf = await exportVouchersExcel({ tenantId, from, to, status: status || 'ALL' })
+    const { buf, voucherIds } = await exportVouchersExcel({ tenantId, from, to, status: status || 'ALL' })
     const fname = `凭证_${dayjs(from || undefined).format('YYYYMMDD')}_${dayjs(to || undefined).format('YYYYMMDD')}.xlsx`
+    // 响应成功发出后再标已导出, 下载失败不误标
+    reply.raw.on('finish', () => { void markVouchersExported(voucherIds).catch(e => console.error('[voucher] markExported 失败', e)) })
     reply
       .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
       .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fname)}`)
@@ -349,8 +351,9 @@ export const voucherRoutes: FastifyPluginAsync = async (app) => {
     if (!Array.isArray(voucherIds) || voucherIds.length === 0) {
       return reply.status(400).send({ error: 'voucherIds 必填' })
     }
-    const buf = await exportVouchersExcel({ tenantId, voucherIds })
+    const { buf, voucherIds: exportedIds } = await exportVouchersExcel({ tenantId, voucherIds })
     const fname = `凭证_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`
+    reply.raw.on('finish', () => { void markVouchersExported(exportedIds).catch(e => console.error('[voucher] markExported 失败', e)) })
     reply
       .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
       .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fname)}`)

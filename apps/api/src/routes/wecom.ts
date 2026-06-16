@@ -59,17 +59,29 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
       const { wecomUserId } = await exchangeOAuthCode(t.id, code)
       // 2. 看 wecomUserId 在 User 表里是否已绑定
       let user = await prisma.user.findUnique({ where: { tenantId_wecomUserId: { tenantId: t.id, wecomUserId } } })
-      // 3. 没绑定 → 自动按 mobile 匹配现有员工; 都没匹配上则跳「绑定页」
+      // 3. 没绑定 → 自动匹配现有员工; 都没匹配上则跳「绑定页」
+      //    优先按手机号 (企微授权读敏感信息时最可靠); 读不到手机号时退回按姓名
+      //    (企微 OAuth 一定返回姓名; 通讯录"敏感信息"权限受限时手机号可能为空)
       if (!user) {
         const info = await getUserInfo(t.id, wecomUserId)
+        // 3a. 按手机号匹配
         if (info.mobile) {
           user = await prisma.user.findUnique({ where: { tenantId_phone: { tenantId: t.id, phone: info.mobile } } })
-          if (user) {
-            await prisma.user.update({
-              where: { id: user.id },
-              data: { wecomUserId, wecomDeptIds: info.deptIds, lastLoginAt: new Date() },
-            })
-          }
+        }
+        // 3b. 手机号匹配不到 → 按姓名匹配「未绑定」的同名员工, 须唯一 (多个同名则不自动绑, 避免误绑)
+        if (!user && info.name) {
+          const byName = await prisma.user.findMany({
+            where: { tenantId: t.id, name: info.name, wecomUserId: null },
+            take: 2,
+          })
+          if (byName.length === 1) user = byName[0]
+        }
+        // 命中 → 写入绑定
+        if (user) {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { wecomUserId, wecomDeptIds: info.deptIds, lastLoginAt: new Date() },
+          })
         }
         // 仍没找到 → 提示员工先让管理员加账号
         if (!user) {

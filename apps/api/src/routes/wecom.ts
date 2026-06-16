@@ -33,8 +33,14 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
     // P2: 防 open redirect; 只允许相对路径
     const safeRedirect = (typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')) ? redirect : '/'
     const state = encodeURIComponent(`${tenant}|${safeRedirect}`)
-    // 企微 OAuth 默认走静默授权 (snsapi_base), 仅企业内成员可用
-    const url = `https://open.weixin.qq.com/connect/oauth2/authorize?appid=${cfg.corpId}&redirect_uri=${redirectUri}&response_type=code&scope=snsapi_base&state=${state}&agentid=${cfg.agentId}#wechat_redirect`
+    // 企微登录:
+    //   默认 wwlogin — 扫码/拉起一键登录, 在普通浏览器 / 独立 App(套壳) 里点也能拉起企微授权后跳回
+    //   ?mode=silent — snsapi_base 静默授权, 仅在企微 App WebView 内有效 (老的企微内登录入口)
+    // 两者回调都落 /api/wecom/oauth/callback, 用同一个 auth/getuserinfo 换 userid, 后端无需区分
+    const mode = (req.query as any).mode
+    const url = mode === 'silent'
+      ? `https://open.weixin.qq.com/connect/oauth2/authorize?appid=${cfg.corpId}&redirect_uri=${redirectUri}&response_type=code&scope=snsapi_base&state=${state}&agentid=${cfg.agentId}#wechat_redirect`
+      : `https://login.work.weixin.qq.com/wwlogin/sso/login?login_type=CorpApp&appid=${cfg.corpId}&agentid=${cfg.agentId}&redirect_uri=${redirectUri}&state=${state}`
     return reply.send({ url })
   })
 

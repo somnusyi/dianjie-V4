@@ -53,6 +53,11 @@ export default function StoreSettingsPage() {
   const [error, setError] = useState<string | null>(null)
   const [savedOk, setSavedOk] = useState(false)
   const [usingLocalStorage, setUsingLocalStorage] = useState(false)
+  // 指定收货人 (送货单显示的收货人, 默认空=回退店长)
+  const [cgUsers, setCgUsers] = useState<{ id: string; name: string; role: string }[]>([])
+  const [consigneeId, setConsigneeId] = useState<string>('')
+  const [cgSaving, setCgSaving] = useState(false)
+  const [cgSaved, setCgSaved] = useState(false)
 
   useEffect(() => {
     if (!id) return
@@ -90,6 +95,29 @@ export default function StoreSettingsPage() {
       })
       .finally(() => setLoading(false))
   }, [id])
+
+  // 拉门店成员 (供收货人下拉) + 当前指定收货人
+  useEffect(() => {
+    if (!id) return
+    apiFetch<any[]>('/api/stores').then(list => {
+      const s = (Array.isArray(list) ? list : []).find(x => x.id === id)
+      if (!s) return
+      const users: { id: string; name: string; role: string }[] = Array.isArray(s.users) ? s.users : []
+      // 厨师长优先, 其余成员次之
+      const sorted = [...users].sort((a, b) => (a.role === 'KITCHEN_LEAD' ? -1 : 0) - (b.role === 'KITCHEN_LEAD' ? -1 : 0))
+      setCgUsers(sorted)
+      setConsigneeId(s.consigneeId || '')
+    }).catch(() => {})
+  }, [id])
+
+  async function saveConsignee() {
+    setCgSaving(true); setCgSaved(false)
+    try {
+      await apiFetch(`/api/stores/${id}`, { method: 'PATCH', body: JSON.stringify({ consigneeId: consigneeId || null }) })
+      setCgSaved(true)
+    } catch { /* 静默 */ }
+    setCgSaving(false)
+  }
 
   function setV(k: string, v: string) { setVals(prev => ({ ...prev, [k]: v })); setSavedOk(false) }
 
@@ -160,6 +188,31 @@ export default function StoreSettingsPage() {
           </label>
         </div>
       </div>
+
+      {/* 指定收货人 — 送货单显示给供应商 */}
+      <Section title="指定收货人" right="送货单/对接供应商">
+        <div className="bg-white rounded-card border border-border p-3">
+          <p className="text-caption text-gray2 mb-2">供应商送货单上显示的收货人与电话。不指定则默认显示店长。</p>
+          <select
+            value={consigneeId}
+            onChange={e => { setConsigneeId(e.target.value); setCgSaved(false) }}
+            className="w-full text-body bg-bg border border-border rounded-card px-3 py-2.5 outline-none">
+            <option value="">默认（店长）</option>
+            {cgUsers.map(u => (
+              <option key={u.id} value={u.id}>
+                {u.name}{u.role === 'KITCHEN_LEAD' ? ' · 厨师长' : ''}
+              </option>
+            ))}
+          </select>
+          <div className="flex items-center gap-2 mt-2">
+            <button onClick={saveConsignee} disabled={cgSaving}
+                    className="px-4 py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40">
+              {cgSaving ? '保存中…' : '保存收货人'}
+            </button>
+            {cgSaved && <span className="text-caption text-green-fg">✓ 已保存</span>}
+          </div>
+        </div>
+      </Section>
 
       {/* 主通道:聚合平台 */}
       <Section title="主收款通道" right="店内扫码 / 小程序 / 桌签码">

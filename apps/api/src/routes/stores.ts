@@ -68,6 +68,14 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
       })
     }
 
+    // 收货人 consigneeId 用 raw 查 (不在 Prisma client), 按门店 merge 进列表
+    const cgRows = storeIds.length
+      ? await prisma.$queryRaw<{ id: string; consigneeId: string | null }[]>`
+          SELECT id, "consigneeId" FROM stores WHERE id = ANY(${storeIds})`
+      : []
+    const cgMap: Record<string, string | null> = {}
+    for (const r of cgRows) cgMap[r.id] = r.consigneeId
+
     return stores.map(store => {
       const purchase = monthPurchases.find(p => p.storeId === store.id)
       const pending = pendingReceipts.find(p => p.storeId === store.id)
@@ -86,6 +94,7 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
 
       return {
         ...store,
+        consigneeId: cgMap[store.id] ?? null,
         stats: {
           monthPurchase: purchaseAmt,
           purchaseCount: purchase?._count?.id || 0,
@@ -285,6 +294,10 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
     if (body.engineerId !== undefined) data.engineerId = body.engineerId || null
 
     const store = await prisma.store.update({ where: { id: req.params.id }, data })
+    // 收货人 (consigneeId, 一般是厨师长) 用 raw 更新, 避免改 Prisma client; 空串/null = 清除
+    if (body.consigneeId !== undefined) {
+      await prisma.$executeRaw`UPDATE stores SET "consigneeId" = ${body.consigneeId || null} WHERE id = ${req.params.id} AND "tenantId" = ${tenantId}`
+    }
     await prisma.opLog.create({ data: { tenantId, userId, action: `更新门店 ${store.name}`, entityType: 'Store', targetId: store.id } })
     void invalidatePattern(`stores:list:${tenantId}:*`)
     return store

@@ -412,6 +412,7 @@ model Store {
   address     String?
   phone       String?
   managerName String?
+  consigneeId String?                       // 指定收货人 (User.id, 一般是厨师长) — 供应商送货单显示此人姓名+电话; 空则回退店长 managerName/phone
   status      StoreStatus @default(ENABLED)
   // 平台券核销
   meituanShopId       String?               // 美团门店ID (导对账 CSV 用)

@@ -105,6 +105,18 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (Array.isArray((order as any).chefAckImages)) {
       ;(order as any).chefAckImages = resignOssUrls((order as any).chefAckImages)
     }
+    // 收货人 = 门店指定 consigneeId(一般厨师长)的姓名+电话; 未指定则回退店长 managerName/phone
+    // consigneeId 用 raw 查 (避免改 Prisma client). 供应商送货单显示此人, 方便联系实际收货的人
+    try {
+      const cg = await prisma.$queryRaw<{ name: string | null; phone: string | null }[]>`
+        SELECT COALESCE(u.name, s."managerName") AS name, COALESCE(u.phone, s.phone) AS phone
+        FROM stores s LEFT JOIN users u ON u.id = s."consigneeId"
+        WHERE s.id = ${(order as any).storeId}
+      `
+      ;(order as any).consignee = cg[0] || { name: (order as any).store?.managerName ?? null, phone: (order as any).store?.phone ?? null }
+    } catch {
+      ;(order as any).consignee = { name: (order as any).store?.managerName ?? null, phone: (order as any).store?.phone ?? null }
+    }
     return order
   })
 

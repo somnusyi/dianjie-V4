@@ -21,6 +21,7 @@ type Order = {
   note: string | null
   store: { id: string; name: string; no: string; address?: string | null
            managerName?: string | null; phone?: string | null }
+  consignee?: { name?: string | null; phone?: string | null }  // 收货人 = 门店指定(厨师长), 后端已回退店长
   supplier: { id: string; name: string; contactName?: string | null; contactPhone?: string | null }
   createdBy: { id: string; name: string }
   shippedBy: { id: string; name: string } | null
@@ -202,7 +203,7 @@ export default function DeliveryNotePrintPage() {
         [`送货单 · ${order.no}`, '', '', '', '', '', ''],
         [],
         ['供应商', order.supplier.name, '', '', '收货方', order.store.name, ''],
-        ['供应方联系人', `${order.supplier.contactName || '—'}${order.supplier.contactPhone ? ' · ' + order.supplier.contactPhone : ''}`, '', '', '收货方联系人', `${order.store.managerName || '—'}${order.store.phone ? ' · ' + order.store.phone : ''}`, ''],
+        ['供应方联系人', `${order.supplier.contactName || '—'}${order.supplier.contactPhone ? ' · ' + order.supplier.contactPhone : ''}`, '', '', '收货人', `${(order.consignee?.name ?? order.store.managerName) || '—'}${(order.consignee?.phone ?? order.store.phone) ? ' · ' + (order.consignee?.phone ?? order.store.phone) : ''}`, ''],
         ['收货地址', order.store.address || '—', '', '', '', '', ''],
         ['下单时间', dayjs(order.createdAt).format('YYYY-MM-DD HH:mm'), '', '', '下单人', order.createdBy?.name || '—', ''],
         ['期望到货', dayjs(order.expectedDate).format('YYYY-MM-DD'), '', '', '发货时间', order.shippedAt ? dayjs(order.shippedAt).format('YYYY-MM-DD HH:mm') : '—', ''],
@@ -416,11 +417,11 @@ export default function DeliveryNotePrintPage() {
                 <td className="border border-gray3 px-2 py-1.5" colSpan={3}>{order.store.address}</td>
               </tr>
             )}
-            {(order.store.managerName || order.store.phone) && (
+            {((order.consignee?.name ?? order.store.managerName) || (order.consignee?.phone ?? order.store.phone)) && (
               <tr>
-                <td className="border border-gray3 px-2 py-1.5 bg-bg">收货方联系人</td>
+                <td className="border border-gray3 px-2 py-1.5 bg-bg">收货人</td>
                 <td className="border border-gray3 px-2 py-1.5" colSpan={3}>
-                  {order.store.managerName || '—'}{order.store.phone ? ` · ${order.store.phone}` : ''}
+                  {(order.consignee?.name ?? order.store.managerName) || '—'}{(order.consignee?.phone ?? order.store.phone) ? ` · ${order.consignee?.phone ?? order.store.phone}` : ''}
                 </td>
               </tr>
             )}

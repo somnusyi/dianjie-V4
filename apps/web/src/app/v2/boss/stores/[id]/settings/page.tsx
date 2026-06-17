@@ -163,7 +163,7 @@ export default function StoreSettingsPage() {
       <header className="px-4 pt-4 pb-2 flex items-center gap-3">
         <button onClick={() => router.back()} className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</button>
         <div>
-          <h1 className="text-h1">门店收款配置</h1>
+          <h1 className="text-h1">门店设置</h1>
           <p className="text-caption text-gray3">{cfg.name || '门店'} · {cfg.no || ''}</p>
         </div>
       </header>

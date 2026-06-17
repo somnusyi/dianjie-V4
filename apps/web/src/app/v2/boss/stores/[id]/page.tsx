@@ -76,7 +76,10 @@ export default function BossStoreDetailPage({ params }: { params: { id: string }
             <p className="text-caption text-gray3">{profit.month} · 单店财务画像 · #{profit.store.no}</p>
           </div>
         </a>
-        <a href={`/v2/profit/${profit.store.id}`} className="text-button text-amber-fg">月/季/年/累计 ›</a>
+        <div className="flex flex-col items-end gap-1.5">
+          <a href={`/v2/boss/stores/${profit.store.id}/settings`} className="px-3 py-1.5 rounded-full bg-ink text-white text-micro whitespace-nowrap">门店设置</a>
+          <a href={`/v2/profit/${profit.store.id}`} className="text-button text-amber-fg whitespace-nowrap">月/季/年/累计 ›</a>
+        </div>
       </header>
 
       <div className="mt-3">

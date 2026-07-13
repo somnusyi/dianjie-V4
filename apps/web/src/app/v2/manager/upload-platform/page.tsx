@@ -79,7 +79,7 @@ export default function UploadPlatformPage() {
   return (
     <div className="min-h-screen bg-bg pb-12">
       <header className="px-4 pt-4 pb-2 flex items-center gap-3">
-        <button onClick={() => history && history.length > 0 ? location.href = '/v2/manager/ops' : history.back?.()} className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</button>
+        <button onClick={() => history && history.length > 0 ? location.href = '/v2/manager/ops' : window.history.back()} className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</button>
         <div>
           <h1 className="text-h1">上传平台对账</h1>
           <p className="text-caption text-gray3">{storeName} · 美团 / 抖音 CSV 自动入账</p>

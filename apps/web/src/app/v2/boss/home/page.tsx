@@ -41,7 +41,8 @@ export default function BossHomePage() {
   if (error) return <ErrorScreen message={error} />
   if (!data) return <LoadingScreen />
   const { greeting, today } = greetingFor(data.user?.name)
-  const storeCount = data.storesOverview?.length ?? 0
+  const storesOverview = data.storesOverview ?? []
+  const storeCount = storesOverview.length
   const storesOpen = `集团 · ${storeCount} 家店 · ${today}`
   return (
     <div className="min-h-screen bg-bg pb-20">
@@ -113,10 +114,10 @@ export default function BossHomePage() {
       )}
 
       {/* 门店概览 — 把"未录入数据"折叠成一个柔和卡片，不让首屏全是 ¥0 */}
-      {data.storesOverview?.length > 0 && (() => {
+      {storesOverview.length > 0 && (() => {
         // 划分：有营收的 vs 无营收的
-        const active   = data.storesOverview.filter((s: any) => Number(s.revenueRaw || 0) > 0)
-        const inactive = data.storesOverview.filter((s: any) => Number(s.revenueRaw || 0) === 0)
+        const active   = storesOverview.filter((s: any) => Number(s.revenueRaw || 0) > 0)
+        const inactive = storesOverview.filter((s: any) => Number(s.revenueRaw || 0) === 0)
         // 2×2 网格首屏只露 4 张，多的折叠
         const showActive = active.slice(0, 4)
         const collapsedActive = active.slice(4)
@@ -221,4 +222,3 @@ function Section({ title, right, rightTone, children }: { title: string; right?:
     </section>
   )
 }
-

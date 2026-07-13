@@ -75,7 +75,6 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
     const list = await prisma.inviteToken.findMany({
       where: { tenantId, OR: [{ consumedAt: null, revokedAt: null }, { createdAt: { gte: cutoff } }] },
       orderBy: { createdAt: 'desc' },
-      include: {},
     })
     // 富化 store / supplier 名字
     const storeIds = [...new Set(list.map(l => l.storeId).filter(Boolean) as string[])]

@@ -47,17 +47,36 @@ function timeAgo(iso: string) {
 export default function ChefCheckPage() {
   const [tab, setTab] = useState('check')
   const [claims, setClaims] = useState<LossClaim[] | null>(null)
+  const [total, setTotal] = useState(0)
+  const [kind, setKind] = useState<'manual' | 'receipt'>('manual')
+  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)  // 单条展开看明细
   const [zoomImg, setZoomImg] = useState<string | null>(null)         // 证据照点击放大
   const user = typeof window !== 'undefined' ? getUser() : null
   const storeName = (user as any)?.store?.name || ''
 
+  async function loadPage(page = 1) {
+    if (page > 1) setLoadingMore(true)
+    try {
+      const d = await apiFetch<{ items: LossClaim[]; total: number }>(
+        `/api/loss-claims?page=${page}&pageSize=20&isManual=${kind === 'manual'}`,
+      )
+      const next = d.items || []
+      setClaims(current => page === 1 ? next : [...(current || []), ...next])
+      setTotal(Number(d.total ?? next.length))
+      setError(null)
+    } catch (e: any) {
+      setError(e.message || '加载失败')
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
   useEffect(() => {
-    apiFetch<LossClaim[]>('/api/loss-claims')
-      .then(list => setClaims((list || []).filter(c => c.isManual)))   // 仅店内报损
-      .catch(e => setError(e.message || '加载失败'))
-  }, [])
+    setClaims(null)
+    void loadPage()
+  }, [kind])
 
   // 本月集计
   const monthStart = dayjs().startOf('month').toDate()
@@ -69,6 +88,8 @@ export default function ChefCheckPage() {
   const weekStart = dayjs().startOf('week').toDate()
   const thisWeek = (claims || []).filter(c => new Date(c.createdAt) >= weekStart)
   const weekAmount = thisWeek.reduce((s, c) => s + Number(c.totalLossAmount), 0)
+  const hasMore = claims !== null && claims.length < total
+  const kindLabel = kind === 'manual' ? '店内报损' : '验收短量'
 
   return (
     <div className="min-h-screen bg-bg pb-20">
@@ -81,15 +102,29 @@ export default function ChefCheckPage() {
 
       <div className="mt-3">
         <GlanceStrip
-          label="本月店内报损"
+          label={`本月${kindLabel}`}
           value={`¥${monthAmount.toLocaleString()}`}
           meta={`本周 ¥${weekAmount.toLocaleString()} · 临期/变质/客退/破损`}
           stats={[
             { label: '本月笔数', value: `${monthCount} 笔`, tone: 'default' },
             { label: '本周笔数', value: `${thisWeek.length} 笔`, tone: 'default' },
-            { label: '总累计', value: `${claims?.length ?? 0} 笔`, tone: 'default' },
+            { label: '已加载', value: `${claims?.length ?? 0}/${total || claims?.length || 0}`, tone: 'default' },
           ]}
         />
+      </div>
+
+      <div className="px-4 mt-3 flex gap-2">
+        {([
+          { key: 'manual', label: '店内报损' },
+          { key: 'receipt', label: '验收短量' },
+        ] as const).map(item => (
+          <button
+            key={item.key}
+            type="button"
+            onClick={() => setKind(item.key)}
+            className={`flex-1 py-2 rounded-cta text-button ${kind === item.key ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}
+          >{item.label}</button>
+        ))}
       </div>
 
       {/* 报损黑色大入口 */}
@@ -151,7 +186,7 @@ export default function ChefCheckPage() {
       <Section title="历史报损" right={`累计 ${claims?.length ?? 0} 笔`}>
         {claims && claims.length > thisWeek.length && (
           <ul className="bg-white rounded-card border border-border divide-y divide-border">
-            {claims.filter(c => new Date(c.createdAt) < weekStart).slice(0, 10).map(c => {
+            {claims.filter(c => new Date(c.createdAt) < weekStart).map(c => {
               const reason = extractReason(c.description)
               const firstItem = c.items?.[0]
               const expanded = expandedId === c.id
@@ -184,6 +219,16 @@ export default function ChefCheckPage() {
         )}
         {claims && claims.length <= thisWeek.length && (
           <p className="text-caption text-gray3 text-center py-2">没有更早的记录</p>
+        )}
+        {hasMore && (
+          <button
+            type="button"
+            onClick={() => void loadPage(Math.floor((claims?.length || 0) / 20) + 1)}
+            disabled={loadingMore}
+            className="block w-full text-center py-3 mt-2 text-caption text-amber-fg bg-white rounded-card border border-border disabled:opacity-50"
+          >
+            {loadingMore ? '加载中…' : `加载更多${kindLabel} · 已显示 ${claims?.length || 0}/${total}`}
+          </button>
         )}
       </Section>
 

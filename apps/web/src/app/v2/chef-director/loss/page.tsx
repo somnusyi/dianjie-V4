@@ -47,22 +47,31 @@ function fmtDate(iso: string) {
 export default function ChefDirectorLossPage() {
   const [tab] = useState('loss')
   const [items, setItems] = useState<LossClaim[] | null>(null)
+  const [total, setTotal] = useState(0)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // 全部报损列表 默认显示头 10 条, 点击"查看全部"展开
   const [showAllDetails, setShowAllDetails] = useState(false)
   // 证据照点击放大 (复用其他页面同一套 lightbox 模式)
   const [zoomImg, setZoomImg] = useState<string | null>(null)
 
-  useEffect(() => {
-    apiFetch<LossClaim[]>('/api/loss-claims?limit=200')
-      .then(rows => {
-        // 过滤业务上线前的 seed 异常数据 (2026-04 起为真实业务)
-        const cutoff = new Date('2026-04-01').getTime()
-        const clean = (rows || []).filter(r => new Date(r.createdAt).getTime() >= cutoff)
-        setItems(clean)
-      })
-      .catch(e => setError(e.message))
-  }, [])
+  async function loadPage(page = 1) {
+    if (page > 1) setLoadingMore(true)
+    try {
+      const d = await apiFetch<{ items: LossClaim[]; total: number }>(
+        `/api/loss-claims?page=${page}&pageSize=50&createdAfter=2026-04-01`,
+      )
+      const next = d.items || []
+      setItems(current => page === 1 ? next : [...(current || []), ...next])
+      setTotal(Number(d.total ?? next.length))
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
+  useEffect(() => { void loadPage() }, [])
 
   const stats = useMemo(() => {
     if (!items) return null
@@ -95,6 +104,7 @@ export default function ChefDirectorLossPage() {
       i.status === 'PENDING' || i.status === 'NEGOTIATING' || Number(i.totalLossAmount) >= 200
     ).slice(0, 5)
   }, [items])
+  const hasMore = items !== null && items.length < total
 
   return (
     <div className="min-h-screen bg-bg pb-20">
@@ -161,7 +171,7 @@ export default function ChefDirectorLossPage() {
           按时间倒序, 默认显示头 10 条, 点击查看全部. 复用 zoomImg lightbox 看证据照. */}
       <Section
         title="全部报损明细"
-        right={items ? `${items.length} 条` : ''}
+        right={items ? `已加载 ${items.length}/${total || items.length} 条` : ''}
       >
         {items === null && <p className="text-caption text-gray3 text-center py-4">加载中…</p>}
         {items !== null && items.length === 0 && (
@@ -233,6 +243,16 @@ export default function ChefDirectorLossPage() {
                 className="block w-full text-center py-3 mt-2 text-caption text-amber-fg bg-white rounded-card border border-border"
               >
                 {showAllDetails ? '↑ 收起 (仅显示 10 条)' : `查看全部 ${items.length} 条 ›`}
+              </button>
+            )}
+            {hasMore && (
+              <button
+                type="button"
+                onClick={() => void loadPage(Math.floor((items?.length || 0) / 50) + 1)}
+                disabled={loadingMore}
+                className="block w-full text-center py-3 mt-2 text-caption text-amber-fg bg-white rounded-card border border-border disabled:opacity-50"
+              >
+                {loadingMore ? '加载中…' : `加载更多报损 · 已显示 ${items?.length || 0}/${total}`}
               </button>
             )}
           </>

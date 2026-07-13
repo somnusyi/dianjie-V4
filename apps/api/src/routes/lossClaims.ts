@@ -65,15 +65,29 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
   // ── 列表 ──────────────────────────────────────────
   app.get('/', { preHandler: [(app as any).authenticate] }, async (req: any) => {
     const { tenantId, storeId, role, supplierId: userSupplierId } = req.user
-    const { status } = req.query as any
+    const { status, page, pageSize, isManual, createdAfter } = req.query as any
     const where: any = { tenantId }
 
     if (isStoreScoped(role) && storeId) where.storeId = storeId
     if (isSupplierRole(role) && userSupplierId) where.supplierId = userSupplierId
     if (status) where.status = status
+    if (isManual === 'true') where.isManual = true
+    if (isManual === 'false') where.isManual = false
+    if (createdAfter) {
+      const from = new Date(String(createdAfter))
+      if (!Number.isNaN(from.getTime())) where.createdAt = { gte: from }
+    }
+
+    // Keep the legacy array response when no pagination was requested. Newer
+    // clients opt in with page/pageSize and receive the standard list envelope.
+    const paginated = page !== undefined || pageSize !== undefined
+    const p = Math.max(1, Number.parseInt(String(page || '1'), 10) || 1)
+    const ps = Math.min(100, Math.max(1, Number.parseInt(String(pageSize || '20'), 10) || 20))
+    const total = paginated ? await prisma.lossClaim.count({ where }) : 0
 
     const claims = await prisma.lossClaim.findMany({
       where, orderBy: { createdAt: 'desc' },
+      ...(paginated ? { skip: (p - 1) * ps, take: ps } : {}),
       include: {
         store: { select: { name: true } },
         supplier: { select: { name: true } },
@@ -84,7 +98,8 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       },
     })
     // OSS 签名 1h 过期 → 读取时统一重签,前端不会再看到裂图
-    return claims.map((c) => ({ ...c, evidenceImages: resignOssUrls(c.evidenceImages) }))
+    const items = claims.map((c) => ({ ...c, evidenceImages: resignOssUrls(c.evidenceImages) }))
+    return paginated ? { items, total, page: p, pageSize: ps } : items
   })
 
   // ── 创建报损申请（门店）──────────────────────────

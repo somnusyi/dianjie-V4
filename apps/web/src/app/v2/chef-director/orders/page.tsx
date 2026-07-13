@@ -68,6 +68,8 @@ const STATUS_FILTERS: Array<{ key: string; label: string }> = [
 export default function ChefDirectorOrdersPage() {
   const me = typeof window !== 'undefined' ? getUser() : null
   const [orders, setOrders]       = useState<Order[] | null>(null)
+  const [total, setTotal]         = useState(0)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [stores, setStores]       = useState<Store[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [error, setError]         = useState<string | null>(null)
@@ -75,10 +77,23 @@ export default function ChefDirectorOrdersPage() {
   const [supplierId, setSupplierId] = useState<string>('')
   const [statusFilter, setStatus] = useState<string>('ALL')
 
+  async function loadPage(page = 1) {
+    if (page > 1) setLoadingMore(true)
+    try {
+      const params = new URLSearchParams({ page: String(page), pageSize: '100' })
+      const d = await apiFetch<{ items: Order[]; total: number }>(`/api/orders?${params}`)
+      const next = d.items || []
+      setOrders(current => page === 1 ? next : [...(current || []), ...next])
+      setTotal(Number(d.total ?? next.length))
+    } catch (e: any) {
+      setError(String(e?.message || e))
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
   useEffect(() => {
-    apiFetch<{ items: Order[] }>('/api/orders?pageSize=200')
-      .then(d => setOrders((d as any).items || (d as any) || []))
-      .catch(e => setError(String(e?.message || e)))
+    void loadPage()
     apiFetch<any>('/api/stores').then(d => {
       setStores(Array.isArray(d) ? d : (d?.items || []))
     }).catch(() => {})
@@ -104,6 +119,7 @@ export default function ChefDirectorOrdersPage() {
     const total    = list.reduce((s, o) => s + Number(o.totalAmount || 0), 0)
     return { count: list.length, pending, inflight, total }
   }, [filtered])
+  const hasMore = orders !== null && orders.length < total
 
   if (error) return (
     <div className="min-h-screen bg-bg flex items-center justify-center p-6">
@@ -233,6 +249,16 @@ export default function ChefDirectorOrdersPage() {
             )
           })}
         </ul>
+        {hasMore && (
+          <button
+            type="button"
+            onClick={() => void loadPage(Math.floor((orders?.length || 0) / 100) + 1)}
+            disabled={loadingMore}
+            className="w-full mt-3 py-3 bg-white rounded-card border border-border text-caption text-amber-fg disabled:opacity-50"
+          >
+            {loadingMore ? '加载中…' : `加载更多订单 · 已显示 ${orders?.length || 0}/${total}`}
+          </button>
+        )}
       </section>
     </div>
   )

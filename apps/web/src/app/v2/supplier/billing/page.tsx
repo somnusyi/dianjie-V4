@@ -162,7 +162,7 @@ export default function SupplierBillingPage() {
           stats={[
             { label: '本月已收', value: fmtMoney(stats.paidM), tone: 'default' as const },
             { label: '逾期金额', value: fmtMoney(stats.overdueAmt), tone: stats.overdueAmt > 0 ? 'red' as const : 'default' as const },
-            { label: '冻结', value: fmtMoney(stats.onHoldAmt), tone: stats.onHoldAmt > 0 ? 'red' as const : 'default' as const, delta: stats.onHoldAmt > 0 ? '报损争议中' : undefined },
+            { label: '冻结', value: fmtMoney(stats.onHoldAmt), tone: stats.onHoldAmt > 0 ? 'red' as const : 'default' as const },
           ]}
         />
       </div>

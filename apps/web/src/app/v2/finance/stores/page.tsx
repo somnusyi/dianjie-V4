@@ -73,7 +73,7 @@ export default function FinanceStoresPage() {
           stats={[
             { label: '运营中',     value: `${operating.length} 家`, tone: 'default' as const },
             { label: '筹建中',     value: `${planning.length} 家`, tone: 'default' as const },
-            { label: '本月异常',   value: `${anomalies.length} 家`, tone: anomalies.length > 0 ? 'red' as const : 'default' as const, delta: '净利亏损' },
+            { label: '本月异常',   value: `${anomalies.length} 家`, tone: anomalies.length > 0 ? 'red' as const : 'default' as const },
           ]}
         />
       </div>

@@ -296,7 +296,7 @@ export default function BatchUploadPage() {
             <span className="text-h2">解析结果</span>
             <Chip tone="green">{valid} 行可上传</Chip>
             {invalid > 0 && <Chip tone="red">{invalid} 行有错</Chip>}
-            {result && <Chip tone="default">已提交</Chip>}
+            {result && <Chip tone="gray">已提交</Chip>}
           </div>
           {rows.length === 0 && <p className="text-caption text-gray3 py-4 text-center">没有有效数据行（必填全空都被跳过了）</p>}
           <ul className="space-y-1 max-h-[400px] overflow-y-auto">

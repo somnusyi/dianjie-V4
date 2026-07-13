@@ -22,14 +22,26 @@ const STATUS_LABEL: Record<string, string> = {
 export default function ChefPurchasePage() {
   const [tab, setTab] = useState('purchase')
   const [orders, setOrders] = useState<any[] | null>(null)
+  const [total, setTotal] = useState(0)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [now] = useState(new Date())
 
-  useEffect(() => {
-    apiFetch<{ items: any[] }>('/api/orders?pageSize=50')
-      .then((d: any) => setOrders(d.items || d || []))
-      .catch(e => setError(String(e?.message || e)))
-  }, [])
+  async function loadPage(page = 1) {
+    if (page > 1) setLoadingMore(true)
+    try {
+      const d = await apiFetch<{ items: any[]; total: number }>(`/api/orders?page=${page}&pageSize=50`)
+      const next = (d as any).items || (d as any) || []
+      setOrders(current => page === 1 ? next : [...(current || []), ...next])
+      setTotal(Number((d as any).total ?? next.length))
+    } catch (e: any) {
+      setError(String(e?.message || e))
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
+  useEffect(() => { void loadPage() }, [])
 
   if (error) return <ErrorScreen message={error} />
   const allOrders = orders || []
@@ -46,7 +58,7 @@ export default function ChefPurchasePage() {
   const inTransitTotal = inProgress.reduce((s, o) => s + Number(o.totalAmount || 0), 0)
   const history = allOrders
     .filter(o => ['COMPLETED', 'RECEIVED', 'CANCELLED'].includes(o.status))
-    .slice(0, 20)   // 最近 20 单
+  const hasMore = orders !== null && allOrders.length < total
 
   return (
     <div className="min-h-screen bg-bg pb-20">
@@ -163,7 +175,7 @@ export default function ChefPurchasePage() {
 
       {/* 历史 (已完成 / 已取消) */}
       {history.length > 0 && (
-        <Section title="历史订单" right={`最近 ${history.length} 单`}>
+        <Section title="历史订单" right={`已显示 ${history.length} 单`}>
           <ul className="bg-white rounded-card border border-border divide-y divide-border">
             {history.map(o => (
               <li key={o.id}>
@@ -184,6 +196,19 @@ export default function ChefPurchasePage() {
             ))}
           </ul>
         </Section>
+      )}
+
+      {hasMore && (
+        <div className="px-4 mt-3">
+          <button
+            type="button"
+            onClick={() => void loadPage(Math.floor(allOrders.length / 50) + 1)}
+            disabled={loadingMore}
+            className="w-full py-3 bg-white rounded-card border border-border text-caption text-amber-fg disabled:opacity-50"
+          >
+            {loadingMore ? '加载中…' : `加载更多历史订单 · 已显示 ${allOrders.length}/${total}`}
+          </button>
+        </div>
       )}
 
       <BottomNav

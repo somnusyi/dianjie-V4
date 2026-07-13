@@ -42,8 +42,12 @@ export default function SupplierOrdersPage() {
   const [tab, setTab] = useState('orders')
   const [orders, setOrders] = useState<Order[] | null>(null)
   const [claims, setClaims] = useState<LossClaim[] | null>(null)
+  const [ordersTotal, setOrdersTotal] = useState(0)
+  const [claimsTotal, setClaimsTotal] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState<string | null>(null)
+  const [loadingOrders, setLoadingOrders] = useState(false)
+  const [loadingClaims, setLoadingClaims] = useState(false)
   // 2026-06-02: 支持 URL ?filter=报损 等 (从 billing 页报损 banner 跳过来直接进对应 filter)
   const [filter, setFilter] = useState<'待接单' | '待发货' | '运送中' | '报损' | '已完成'>(() => {
     if (typeof window === 'undefined') return '待接单'
@@ -56,14 +60,47 @@ export default function SupplierOrdersPage() {
   async function load() {
     try {
       const [o, c] = await Promise.all([
-        apiFetch<{ items: Order[] }>('/api/orders?pageSize=50'),
-        apiFetch<{ items: LossClaim[] }>('/api/loss-claims?pageSize=20').catch(() => ({ items: [] as LossClaim[] })),
+        apiFetch<{ items: Order[]; total: number }>('/api/orders?page=1&pageSize=50'),
+        apiFetch<{ items: LossClaim[]; total: number }>('/api/loss-claims?page=1&pageSize=20')
+          .catch(() => ({ items: [] as LossClaim[], total: 0 })),
       ])
       setOrders((o as any).items || (o as any) || [])
       setClaims((c as any).items || (c as any) || [])
+      setOrdersTotal(Number((o as any).total ?? (o as any).items?.length ?? 0))
+      setClaimsTotal(Number((c as any).total ?? (c as any).items?.length ?? 0))
     } catch (e: any) { setError(e.message || '加载失败') }
   }
   useEffect(() => { load() }, [])
+
+  async function loadMoreOrders() {
+    if (!orders || loadingOrders) return
+    setLoadingOrders(true)
+    try {
+      const page = Math.floor(orders.length / 50) + 1
+      const d = await apiFetch<{ items: Order[]; total: number }>(`/api/orders?page=${page}&pageSize=50`)
+      setOrders(current => [...(current || []), ...(d.items || [])])
+      setOrdersTotal(Number(d.total ?? ordersTotal))
+    } catch (e: any) {
+      setError(e.message || '加载失败')
+    } finally {
+      setLoadingOrders(false)
+    }
+  }
+
+  async function loadMoreClaims() {
+    if (!claims || loadingClaims) return
+    setLoadingClaims(true)
+    try {
+      const page = Math.floor(claims.length / 20) + 1
+      const d = await apiFetch<{ items: LossClaim[]; total: number }>(`/api/loss-claims?page=${page}&pageSize=20`)
+      setClaims(current => [...(current || []), ...(d.items || [])])
+      setClaimsTotal(Number(d.total ?? claimsTotal))
+    } catch (e: any) {
+      setError(e.message || '加载失败')
+    } finally {
+      setLoadingClaims(false)
+    }
+  }
 
   function ship(o: Order) {
     if (submitting) return
@@ -152,6 +189,8 @@ export default function SupplierOrdersPage() {
     return false
   }
   const visible = (orders || []).filter(o => statusInTab(o.status, filter))
+  const hasMoreOrders = orders !== null && orders.length < ordersTotal
+  const hasMoreClaims = claims !== null && claims.length < claimsTotal
 
   return (
     <div className="min-h-screen bg-bg pb-20">
@@ -258,6 +297,18 @@ export default function SupplierOrdersPage() {
                 </li>
               )
             })}
+            {hasMoreClaims && (
+              <li>
+                <button
+                  type="button"
+                  onClick={() => void loadMoreClaims()}
+                  disabled={loadingClaims}
+                  className="w-full py-3 bg-white rounded-card border border-border text-caption text-amber-fg disabled:opacity-50"
+                >
+                  {loadingClaims ? '加载中…' : `加载更多报损 · 已显示 ${claims?.length || 0}/${claimsTotal}`}
+                </button>
+              </li>
+            )}
           </ul>
         )
       })()}
@@ -321,6 +372,18 @@ export default function SupplierOrdersPage() {
             </li>
           )
         })}
+        {hasMoreOrders && (
+          <li>
+            <button
+              type="button"
+              onClick={() => void loadMoreOrders()}
+              disabled={loadingOrders}
+              className="w-full py-3 bg-white rounded-card border border-border text-caption text-amber-fg disabled:opacity-50"
+            >
+              {loadingOrders ? '加载中…' : `加载更多订单 · 已显示 ${orders?.length || 0}/${ordersTotal}`}
+            </button>
+          </li>
+        )}
       </ul>
       )}
 

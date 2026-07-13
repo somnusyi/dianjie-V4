@@ -36,17 +36,30 @@ export default function SupplierHistoryPage() {
     return sp.get('filter') === 'with-loss' ? 'with-loss' : 'all'
   })
   const [orders, setOrders] = useState<OrderRow[] | null>(null)
+  const [total, setTotal] = useState(0)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    apiFetch<any>('/api/orders?pageSize=100')
-      .then(d => setOrders((d.items as OrderRow[]) || []))
-      .catch(e => setError(String(e?.message || e)))
-  }, [])
+  async function loadPage(page = 1) {
+    if (page > 1) setLoadingMore(true)
+    try {
+      const d = await apiFetch<{ items: OrderRow[]; total: number }>(`/api/orders?page=${page}&pageSize=50`)
+      const next = d.items || []
+      setOrders(current => page === 1 ? next : [...(current || []), ...next])
+      setTotal(Number(d.total ?? next.length))
+    } catch (e: any) {
+      setError(String(e?.message || e))
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
+  useEffect(() => { void loadPage() }, [])
 
   const completed = (orders || []).filter(o => ['RECEIVED', 'PENDING_CONFIRM'].includes(o.status))
   const withLoss = completed.filter(o => (o.lossClaims?.length || 0) > 0)
   const shown = filter === 'with-loss' ? withLoss : completed
+  const hasMore = orders !== null && orders.length < total
 
   const totalLossAmount = withLoss.reduce(
     (s, o) => s + (o.lossClaims || []).reduce((ss, l) => ss + Number(l.totalLossAmount || 0), 0),
@@ -114,10 +127,21 @@ export default function SupplierHistoryPage() {
             title={filter === 'with-loss' ? '没有含报损的订单' : '还没有已完成订单'}
             hint={filter === 'with-loss' ? '保持就好 ✓' : '订单完成入库后会出现在这里'}
           />
+          {hasMore && (
+            <button
+              type="button"
+              onClick={() => void loadPage(Math.floor((orders?.length || 0) / 50) + 1)}
+              disabled={loadingMore}
+              className="w-full py-3 mt-3 bg-white rounded-card border border-border text-caption text-amber-fg disabled:opacity-50"
+            >
+              {loadingMore ? '加载中…' : `加载更多历史 · 已显示 ${orders?.length || 0}/${total}`}
+            </button>
+          )}
         </div>
       ) : (
-        <ul className="px-4 mt-3 space-y-2">
-          {shown.map(o => {
+        <div className="px-4 mt-3">
+          <ul className="space-y-2">
+            {shown.map(o => {
             const loss = (o.lossClaims || []).reduce((s, l) => s + Number(l.totalLossAmount || 0), 0)
             const date = new Date(o.receivedAt || o.createdAt)
             const dateLabel = `${date.getMonth() + 1}/${String(date.getDate()).padStart(2, '0')}`
@@ -138,8 +162,19 @@ export default function SupplierHistoryPage() {
                 </p>
               </li>
             )
-          })}
-        </ul>
+            })}
+          </ul>
+          {hasMore && (
+            <button
+              type="button"
+              onClick={() => void loadPage(Math.floor((orders?.length || 0) / 50) + 1)}
+              disabled={loadingMore}
+              className="w-full py-3 mt-3 bg-white rounded-card border border-border text-caption text-amber-fg disabled:opacity-50"
+            >
+              {loadingMore ? '加载中…' : `加载更多历史 · 已显示 ${orders?.length || 0}/${total}`}
+            </button>
+          )}
+        </div>
       )}
 
       <BottomNav

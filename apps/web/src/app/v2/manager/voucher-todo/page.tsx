@@ -107,7 +107,7 @@ export default function VoucherTodoPage() {
   return (
     <div className="min-h-screen bg-bg pb-12">
       <header className="px-4 pt-4 pb-2 flex items-center gap-3">
-        <button onClick={() => history.back()} className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</button>
+        <button onClick={() => window.history.back()} className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</button>
         <div>
           <h1 className="text-h1">平台券核销</h1>
           <p className="text-caption text-gray3">{storeName} · {date}</p>

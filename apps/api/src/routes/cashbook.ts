@@ -80,6 +80,14 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(403).send({ error: '无权发起转账' })
     }
 
+    // 真实扣款入口默认关闭；修复持久幂等前只能由生产环境显式开启。
+    if (process.env.CMB_INTERNAL_TRANSFER_ENABLED !== 'true') {
+      return reply.status(503).send({
+        error: '内部账户转账已临时停用，未调用银行',
+        code: 'CMB_INTERNAL_TRANSFER_DISABLED',
+      })
+    }
+
     const { fromAccountId, toAccountId, amount, remark } = (req.body || {}) as {
       fromAccountId: string; toAccountId: string; amount: number; remark?: string
     }

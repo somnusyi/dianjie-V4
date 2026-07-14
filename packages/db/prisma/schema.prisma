@@ -46,6 +46,7 @@ model Tenant {
   documents      Document[]
   productBatches ProductBatch[]
   stockMovements SupplierStockMovement[]
+  inventorySnapshots InventorySnapshot[]
   accountingPeriods AccountingPeriod[]
   pettyCash         PettyCash[]
   payrolls          Payroll[]
@@ -461,6 +462,7 @@ model Store {
   dishSales      DishSale[]
   pettyCash      PettyCash[]
   payrolls       Payroll[]
+  inventorySnapshots InventorySnapshot[]
 
   @@unique([tenantId, no])
   @@map("stores")
@@ -572,6 +574,7 @@ model Product {
   consumptions        StockConsumption[]
   stockMovements      SupplierStockMovement[]
   dishRecipes         DishRecipe[]
+  inventorySnapshotItems InventorySnapshotItem[]
 
   @@unique([tenantId, code])
   @@index([batchId])
@@ -1540,6 +1543,54 @@ model StockConsumption {
   @@unique([sourceType, sourceId, productId], name: "stock_consumption_source_uk")
   @@index([tenantId, date])
   @@map("stock_consumptions")
+}
+
+// ── 门店实物盘点快照 ─────────────────────────────────
+// 快照是库存的可信基准。历史销售未产生消耗记录时，不能用“累计入库-消耗”冒充现存库存。
+model InventorySnapshot {
+  id             String   @id @default(cuid())
+  tenantId       String
+  storeId        String
+  snapshotDate   DateTime @db.Date                  // 闭店盘点日；次日作为期初库存
+  sourceFilename String?
+  sourceHash     String?  @db.VarChar(64)
+  totalValue     Decimal  @db.Decimal(14, 3)
+  itemCount      Int
+  nonzeroCount   Int
+  zeroCount      Int
+  matchedCount   Int      @default(0)               // 已唯一匹配到采购 SKU 的品项
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+  store         Store    @relation(fields: [storeId], references: [id])
+  items         InventorySnapshotItem[]
+
+  @@unique([storeId, snapshotDate])
+  @@index([tenantId, snapshotDate])
+  @@map("inventory_snapshots")
+}
+
+model InventorySnapshotItem {
+  id            String   @id @default(cuid())
+  snapshotId    String
+  productId     String?
+  section       String?
+  rawName       String
+  rawSpec       String?
+  unit          String
+  quantity      Decimal  @db.Decimal(14, 4)
+  unitPrice     Decimal  @db.Decimal(14, 4)
+  amount        Decimal  @db.Decimal(14, 3)
+  sortOrder     Int
+  createdAt     DateTime @default(now())
+
+  snapshot      InventorySnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  product       Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([snapshotId, sortOrder])
+  @@index([productId])
+  @@map("inventory_snapshot_items")
 }
 
 // ── 门店费用录入（利润表用）────────────────────────

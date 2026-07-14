@@ -1,10 +1,21 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
+import { latestStoreInventorySnapshot } from '../services/storeInventory'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
 export const inventoryRoutes: FastifyPluginAsync = async (app) => {
+
+  // 最新实物盘点快照：店长工作台与移动端库存明细共用
+  app.get('/snapshot/latest', auth(app), async (req: any, reply) => {
+    const { tenantId, storeId, role } = req.user
+    if (!storeId) return reply.status(400).send({ error: '当前账号未绑定门店' })
+    if (!['MANAGER', 'KITCHEN_LEAD', 'CHEF', 'CHEF_DIRECTOR', 'ADMIN'].includes(role)) {
+      return reply.status(403).send({ error: '无权查看门店库存' })
+    }
+    return latestStoreInventorySnapshot(tenantId, storeId, true)
+  })
 
   // 门店库存列表 (P0 修复: 之前错误显示供应商 catalog stock, 改为门店实际入库 - 已消耗)
   app.get('/', auth(app), async (req: any) => {

@@ -17,6 +17,21 @@ export type DashboardData = {
   approvals?: { total: number; totalAmount: string; byType: { type: string; n: number; tone: any }[] }
   storesOverview?: { id: string; rank: number; name: string; revenue: string; growth: string; anomaly: boolean }[]
   monthlyMetrics?: { label: string; value: string; delta?: string; tone?: any }[]
+  inventorySummary?: {
+    status: 'AVAILABLE' | 'NO_BASELINE'
+    basis: 'PHYSICAL_COUNT'
+    isRealtime: false
+    asOf: string | null
+    openingDate: string | null
+    totalValue: number | null
+    itemCount: number
+    nonzeroCount: number
+    zeroCount: number
+    matchedCount: number
+    unmatchedCount: number
+    lowStockCount: number
+    sourceFilename: string | null
+  }
   pendingReviewCount?: number
   pendingApprovalCount?: number
 }

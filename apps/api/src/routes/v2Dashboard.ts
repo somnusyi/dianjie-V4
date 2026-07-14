@@ -11,6 +11,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
+import { latestStoreInventorySnapshot, type StoreInventorySummary } from '../services/storeInventory'
 
 const fmtMoney = (n: number) => '¥' + Math.round(n).toLocaleString()
 
@@ -104,6 +105,7 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
     let monthlyMetrics: any = undefined
     let pendingReviewCount: number | undefined
     let pendingApprovalCount: number | undefined
+    let inventorySummary: StoreInventorySummary | undefined
 
     if (role === 'ADMIN' || role === 'SUPER_ADMIN') {
       // BOSS 视角
@@ -248,9 +250,13 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
 
     if (role === 'MANAGER') {
       hero.label = '今日本店营业额'
-      const recvDays = await prisma.revenueRecord.count({
-        where: { storeId: storeId!, date: { gte: monthStart, lte: monthEnd } },
-      })
+      const [recvDays, inventory] = await Promise.all([
+        prisma.revenueRecord.count({
+          where: { storeId: storeId!, date: { gte: monthStart, lte: monthEnd } },
+        }),
+        latestStoreInventorySnapshot(tenantId, storeId!),
+      ])
+      inventorySummary = inventory.summary
       monthlyMetrics = [
         { label: '本月累计', value: fmtMoney(monthRevenue), tone: 'default' as const, delta: `${recvDays} 天有录入` },
         { label: '日均', value: fmtMoney(recvDays > 0 ? monthRevenue / recvDays : 0), tone: 'default' as const, delta: '本月平均' },
@@ -453,6 +459,7 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
       monthlyMetrics,
       pendingReviewCount,
       pendingApprovalCount,
+      inventorySummary,
     })
   })
 }

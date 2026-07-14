@@ -141,6 +141,8 @@ export default function ManagerHomePage() {
         </div>
       </Section>
 
+      <InventoryOverviewCard inventory={data.inventorySummary} />
+
       <Section title="本月经营" right={today}>
         <div className="grid grid-cols-2 gap-2">
           {(data.monthlyMetrics || []).map((m: any) => (
@@ -170,6 +172,68 @@ export default function ManagerHomePage() {
         fabKey="fab"
         onFab={() => setDrawerOpen(true)}
       />
+    </div>
+  )
+}
+
+function InventoryOverviewCard({ inventory }: { inventory: NonNullable<ReturnType<typeof useDashboard>['data']>['inventorySummary'] }) {
+  const available = inventory?.status === 'AVAILABLE'
+  const asOf = inventory?.asOf ? inventory.asOf.slice(5).replace('-', '/') : null
+
+  return (
+    <Section title="库存概况" right={available && asOf ? `截至 ${asOf} 盘点` : '实物库存'}>
+      {available ? (
+        <a href="/v2/manager/inventory"
+           className="block overflow-hidden rounded-card border border-border bg-white active:bg-bg/50">
+          <div className="flex items-start justify-between gap-3 px-4 pt-4 pb-3">
+            <div>
+              <div className="text-caption text-gray2">库存金额</div>
+              <div className="font-num text-[28px] leading-tight mt-1">
+                ¥{Number(inventory.totalValue || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+              <div className="text-micro text-gray3 mt-1">{inventory.openingDate?.slice(5).replace('-', '/')} 期初基准 · 非实时估算</div>
+            </div>
+            <span className="shrink-0 rounded-chip bg-green-bg px-2 py-1 text-micro text-green-fg">实物盘点</span>
+          </div>
+
+          <div className="grid grid-cols-3 border-y border-border bg-bg/40">
+            <InventoryStat label="盘点品项" value={`${inventory.itemCount}`} unit="种" />
+            <InventoryStat label="有库存" value={`${inventory.nonzeroCount}`} unit="种" />
+            <InventoryStat label="盘点为 0" value={`${inventory.zeroCount}`} unit="种" tone={inventory.zeroCount > 0 ? 'red' : undefined} />
+          </div>
+
+          <div className="flex items-center gap-2 px-4 py-3">
+            <span className={`w-2 h-2 rounded-full ${inventory.unmatchedCount > 0 ? 'bg-amber' : 'bg-green'}`} />
+            <span className="text-caption text-gray2 flex-1">
+              {inventory.unmatchedCount > 0
+                ? `${inventory.unmatchedCount} 个品项待匹配采购 SKU，当前按盘点原始数据展示`
+                : '盘点品项已完成采购 SKU 匹配'}
+            </span>
+            <span className="text-gray3">›</span>
+          </div>
+        </a>
+      ) : (
+        <a href="/v2/manager/inventory"
+           className="flex items-center gap-3 rounded-card border border-amber/30 bg-amber/10 px-4 py-4">
+          <span className="w-10 h-10 shrink-0 rounded-full bg-amber text-white flex items-center justify-center text-h2">库</span>
+          <div className="flex-1">
+            <div className="text-button text-amber-fg">盘点基准待导入</div>
+            <div className="text-caption text-gray2 mt-0.5">暂不展示历史累计入库推算值，避免库存虚高</div>
+          </div>
+          <span className="text-gray3">›</span>
+        </a>
+      )}
+    </Section>
+  )
+}
+
+function InventoryStat({ label, value, unit, tone }: { label: string; value: string; unit: string; tone?: 'red' }) {
+  return (
+    <div className="px-3 py-3 text-center border-r border-border last:border-r-0">
+      <div className="text-micro text-gray3">{label}</div>
+      <div className={`font-num text-h2 mt-0.5 ${tone === 'red' ? 'text-red-fg' : 'text-ink'}`}>
+        {value}<span className="text-micro font-normal ml-0.5">{unit}</span>
+      </div>
     </div>
   )
 }

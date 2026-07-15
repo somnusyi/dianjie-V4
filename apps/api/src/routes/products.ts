@@ -822,28 +822,58 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const b = await prisma.productBatch.findFirst({ where })
     if (!b) return reply.status(404).send({ error: '批次不存在' })
     if (b.revokedAt) return reply.status(400).send({ error: '已撤回, 不可重复操作' })
-    const products = await prisma.product.findMany({
-      where: { batchId: b.id, tenantId }, select: { id: true },
-    })
-    await prisma.$transaction(async tx => {
-      await tx.product.updateMany({
-        where: { batchId: b.id, tenantId }, data: { status: 'DISABLED' },
+    try {
+      const result = await prisma.$transaction(async tx => {
+        const pendingDocuments = await tx.document.findMany({
+          where: {
+            tenantId, type: 'NEW_DISH', status: 'PENDING',
+            payload: { path: ['batchId'], equals: b.id },
+          },
+          select: { id: true },
+          orderBy: { id: 'asc' },
+        })
+        for (const document of pendingDocuments) {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`document:${document.id}`}))`
+        }
+        const claimed = await tx.productBatch.updateMany({
+          where: { id: b.id, tenantId, revokedAt: null },
+          data: { revokedAt: new Date(), revokedById: userId },
+        })
+        if (claimed.count !== 1) {
+          throw Object.assign(new Error('批次状态已变化，请刷新后重试'), { statusCode: 409 })
+        }
+        const products = await tx.product.findMany({
+          where: { batchId: b.id, tenantId }, select: { id: true },
+        })
+        await tx.product.updateMany({
+          where: { batchId: b.id, tenantId }, data: { status: 'DISABLED' },
+        })
+        if (pendingDocuments.length > 0) {
+          await tx.document.updateMany({
+            where: { id: { in: pendingDocuments.map(document => document.id) }, tenantId, status: 'PENDING' },
+            data: { status: 'CANCELED', finalizedAt: new Date() },
+          })
+        }
+        await tx.opLog.create({
+          data: {
+            tenantId, userId, role,
+            action: `撤回批次上传 ${b.id}，停售 ${products.length} 个 SKU（历史保留）`,
+            entityType: 'ProductBatch', targetId: b.id,
+            metadata: {
+              supplierId: b.supplierId, productIds: products.map(item => item.id),
+              canceledDocumentIds: pendingDocuments.map(document => document.id),
+            },
+          },
+        })
+        return { disabledCount: products.length }
       })
-      await tx.productBatch.update({
-        where: { id: b.id },
-        data: { revokedAt: new Date(), revokedById: userId },
-      })
-      await tx.opLog.create({
-        data: {
-          tenantId, userId, role,
-          action: `撤回批次上传 ${b.id}，停售 ${products.length} 个 SKU（历史保留）`,
-          entityType: 'ProductBatch', targetId: b.id,
-          metadata: { supplierId: b.supplierId, productIds: products.map(item => item.id) },
-        },
-      })
-    })
-    void invalidatePattern(`products:full:${tenantId}:*`)
-    return { success: true, disabledCount: products.length }
+      void invalidatePattern(`products:full:${tenantId}:*`)
+      return { success: true, disabledCount: result.disabledCount }
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      req.log.error({ err: error }, 'product batch revoke failed')
+      return reply.status(500).send({ error: '撤回失败，未保存任何变更' })
+    }
   })
 
   // 历史商品、库存流水和批次禁止物理清除；保留旧接口并明确拒绝，防旧前端误调用。

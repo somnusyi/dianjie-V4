@@ -69,6 +69,7 @@ async function main() {
   let rollbackTriggerInstalled = false
   let temporaryAdminId: string | null = null
   let temporaryUnboundSupplierId: string | null = null
+  let temporaryChefId: string | null = null
   let temporaryTenantId: string | null = null
   let temporarySupplierId: string | null = null
   let batch500RowsMs = 0
@@ -80,6 +81,23 @@ async function main() {
     })
     assert.equal(login.status, 200, JSON.stringify(login.body))
     const token = login.body.token as string
+
+    const chefMarker = Date.now()
+    const chefEmail = `verify-product-chef-${chefMarker}@local.test`
+    const chefPassword = `verify-chef-${chefMarker}`
+    const temporaryChef = await prisma.user.create({
+      data: {
+        tenantId: tenant.id, name: '商品审批并发验证总厨', email: chefEmail,
+        password: await bcrypt.hash(chefPassword, 4), role: 'CHEF_DIRECTOR',
+      },
+    })
+    temporaryChefId = temporaryChef.id
+    const chefLogin = await api('/api/auth/login', null, {
+      method: 'POST',
+      body: JSON.stringify({ identifier: chefEmail, password: chefPassword, tenantSlug: TENANT_SLUG }),
+    })
+    assert.equal(chefLogin.status, 200, JSON.stringify(chefLogin.body))
+    const chefToken = chefLogin.body.token as string
 
     const categories = await api('/api/products/categories', token)
     assert.equal(categories.status, 200, JSON.stringify(categories.body))
@@ -180,6 +198,21 @@ async function main() {
     const batchPayload = batchDocument.payload as any
     assert.equal(batchPayload.batchId, batchState.id)
     assert.deepEqual(new Set(batchPayload.productIds), new Set(batchState.products.map(item => item.id)))
+    const duplicateApproval = await Promise.all([
+      api(`/api/documents/${batchDocument.id}/decisions`, chefToken, {
+        method: 'POST', body: JSON.stringify({ decision: 'APPROVE', comment: '并发审批验证' }),
+      }),
+      api(`/api/documents/${batchDocument.id}/decisions`, chefToken, {
+        method: 'POST', body: JSON.stringify({ decision: 'APPROVE', comment: '并发审批验证' }),
+      }),
+    ])
+    assert.equal(duplicateApproval.filter(result => result.status === 200).length, 1, JSON.stringify(duplicateApproval))
+    assert.equal(duplicateApproval.filter(result => [404, 409].includes(result.status)).length, 1, JSON.stringify(duplicateApproval))
+    assert.equal(await prisma.documentDecision.count({ where: { documentId: batchDocument.id } }), 1)
+    assert.equal((await prisma.document.findUniqueOrThrow({ where: { id: batchDocument.id } })).status, 'APPROVED')
+    assert.equal(await prisma.product.count({
+      where: { id: { in: batchState.products.map(item => item.id) }, status: 'ENABLED' },
+    }), batchState.products.length)
 
     const batch500Marker = Date.now()
     const batch500StartedAt = performance.now()
@@ -207,6 +240,61 @@ async function main() {
     documentIds.push(batch500Document.id)
     assert.equal((batch500Document.payload as any).count, 500)
     assert.equal((batch500Document.payload as any).productIds.length, 500)
+
+    const createRevokeBatch = async (label: string) => {
+      const marker = `${Date.now()}-${label}`
+      const response = await api('/api/products/batch', token, {
+        method: 'POST',
+        body: JSON.stringify({
+          filename: `verify-revoke-${marker}.xlsx`,
+          items: [{
+            code: `VERIFY-REVOKE-${marker}`, name: `撤回审批验证品 ${label}`,
+            category: '验证分类A', unit: '件', price: 18,
+          }],
+        }),
+      })
+      assert.equal(response.status, 201, JSON.stringify(response.body))
+      assert.equal(response.body.createdCount, 1)
+      batchIds.push(response.body.batchId)
+      batchProductIds.push(response.body.created[0].id)
+      const document = await prisma.document.findFirstOrThrow({
+        where: { tenantId: tenant.id, no: response.body.approvalDocNo },
+      })
+      documentIds.push(document.id)
+      return { response, document, productId: response.body.created[0].id as string }
+    }
+
+    const sequentialRevoke = await createRevokeBatch('sequential')
+    const revoked = await api(`/api/products/batches/${sequentialRevoke.response.body.batchId}/revoke`, token, {
+      method: 'PATCH', body: JSON.stringify({}),
+    })
+    assert.equal(revoked.status, 200, JSON.stringify(revoked.body))
+    assert.equal((await prisma.document.findUniqueOrThrow({ where: { id: sequentialRevoke.document.id } })).status, 'CANCELED')
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: sequentialRevoke.productId } })).status, 'DISABLED')
+    const approveRevoked = await api(`/api/documents/${sequentialRevoke.document.id}/decisions`, chefToken, {
+      method: 'POST', body: JSON.stringify({ decision: 'APPROVE', comment: '撤回后审批验证' }),
+    })
+    assert.ok([404, 409].includes(approveRevoked.status), JSON.stringify(approveRevoked.body))
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: sequentialRevoke.productId } })).status, 'DISABLED')
+
+    const concurrentRevoke = await createRevokeBatch('concurrent')
+    const [revokeRace, approveRace] = await Promise.all([
+      api(`/api/products/batches/${concurrentRevoke.response.body.batchId}/revoke`, token, {
+        method: 'PATCH', body: JSON.stringify({}),
+      }),
+      api(`/api/documents/${concurrentRevoke.document.id}/decisions`, chefToken, {
+        method: 'POST', body: JSON.stringify({ decision: 'APPROVE', comment: '撤回审批竞争验证' }),
+      }),
+    ])
+    assert.equal(revokeRace.status, 200, JSON.stringify(revokeRace.body))
+    assert.ok([200, 404, 409].includes(approveRace.status), JSON.stringify(approveRace.body))
+    assert.equal((await prisma.productBatch.findUniqueOrThrow({
+      where: { id: concurrentRevoke.response.body.batchId },
+    })).revokedAt instanceof Date, true)
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: concurrentRevoke.productId } })).status, 'DISABLED')
+    assert.ok(['APPROVED', 'CANCELED'].includes((await prisma.document.findUniqueOrThrow({
+      where: { id: concurrentRevoke.document.id },
+    })).status))
 
     await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS verify_product_batch_document_failure_trigger ON documents')
     await prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS verify_product_batch_document_failure()')
@@ -344,6 +432,8 @@ async function main() {
       duplicateDisableRejected: true,
       batchPartialSuccessAtomic: true,
       batch500RowsMs,
+      duplicateApprovalSerialized: true,
+      revokeApprovalRaceSafe: true,
       batchDocumentFailureRolledBack: true,
       singleDocumentFailureRolledBack: true,
       crossTenantSupplierBlocked: true,
@@ -359,7 +449,11 @@ async function main() {
     await prisma.opLog.deleteMany({
       where: {
         tenantId: tenant.id,
-        userId: { in: [user.id, ...(temporaryAdminId ? [temporaryAdminId] : []), ...(temporaryUnboundSupplierId ? [temporaryUnboundSupplierId] : [])] },
+        userId: {
+          in: [user.id, ...(temporaryAdminId ? [temporaryAdminId] : []),
+            ...(temporaryUnboundSupplierId ? [temporaryUnboundSupplierId] : []),
+            ...(temporaryChefId ? [temporaryChefId] : [])],
+        },
         createdAt: { gte: startedAt },
         entityType: { in: ['Product', 'ProductBatch', 'ProductCategory'] },
       },
@@ -370,6 +464,9 @@ async function main() {
     if (temporaryUnboundSupplierId) {
       await prisma.opLog.deleteMany({ where: { tenantId: tenant.id, userId: temporaryUnboundSupplierId } })
     }
+    if (temporaryChefId) {
+      await prisma.opLog.deleteMany({ where: { tenantId: tenant.id, userId: temporaryChefId } })
+    }
     if (documentIds.length) await prisma.document.deleteMany({ where: { id: { in: documentIds } } })
     await prisma.product.deleteMany({ where: { id: { in: [...products.map(item => item.id), ...batchProductIds] } } })
     await prisma.product.deleteMany({ where: { tenantId: tenant.id, code: { in: [rollbackCode, singleRollbackCode] } } })
@@ -377,7 +474,7 @@ async function main() {
     await prisma.supplierProductCategory.deleteMany({
       where: { tenantId: tenant.id, supplierId, name: { in: [...categoryNames, rollbackCategory, singleRollbackCategory] } },
     })
-    const temporaryUserIds = [temporaryAdminId, temporaryUnboundSupplierId].filter(Boolean) as string[]
+    const temporaryUserIds = [temporaryAdminId, temporaryUnboundSupplierId, temporaryChefId].filter(Boolean) as string[]
     if (temporaryUserIds.length) await prisma.user.deleteMany({ where: { id: { in: temporaryUserIds } } })
     if (temporarySupplierId) await prisma.supplier.deleteMany({ where: { id: temporarySupplierId } })
     if (temporaryTenantId) await prisma.tenant.deleteMany({ where: { id: temporaryTenantId } })

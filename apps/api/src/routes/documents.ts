@@ -26,6 +26,93 @@ function approverRolesFor(role: string): Set<string> {
   return set
 }
 
+async function applyProductDecision(
+  tx: any,
+  doc: { type: string; payload: unknown },
+  tenantId: string,
+  decision: 'APPROVE' | 'REJECT',
+): Promise<boolean> {
+  const payload = (doc.payload as any) || {}
+  if (decision === 'APPROVE' && doc.type === 'PRICE_ADJUSTMENT' && payload.productId && payload.newPrice != null) {
+    await tx.product.updateMany({
+      where: { id: payload.productId, tenantId },
+      data: { price: Number(payload.newPrice) },
+    })
+    return true
+  }
+  if (doc.type !== 'NEW_DISH') return false
+
+  if (decision === 'APPROVE') {
+    if (payload.action === 'CREATE' && payload.productId) {
+      await tx.product.updateMany({
+        where: { id: payload.productId, tenantId, status: 'PENDING_APPROVAL' },
+        data: { status: 'ENABLED' },
+      })
+      return true
+    }
+    if (payload.action === 'BATCH' && Array.isArray(payload.productIds)) {
+      if (payload.batchId) {
+        const batch = await tx.productBatch.findFirst({
+          where: { id: payload.batchId, tenantId }, select: { revokedAt: true },
+        })
+        if (!batch || batch.revokedAt) {
+          throw Object.assign(new Error('商品批次已撤回，不能再批准'), { statusCode: 409 })
+        }
+      }
+      await tx.product.updateMany({
+        where: { id: { in: payload.productIds }, tenantId, status: 'PENDING_APPROVAL' },
+        data: { status: 'ENABLED' },
+      })
+      return true
+    }
+    if (payload.action === 'DISABLE' && payload.productId) {
+      await tx.product.updateMany({
+        where: { id: payload.productId, tenantId, status: 'PENDING_DISABLE' },
+        data: { status: 'DISABLED' },
+      })
+      return true
+    }
+    if (payload.action === 'BATCH_DISABLE' && Array.isArray(payload.productIds)) {
+      await tx.product.updateMany({
+        where: { id: { in: payload.productIds }, tenantId, status: 'PENDING_DISABLE' },
+        data: { status: 'DISABLED' },
+      })
+      return true
+    }
+    return false
+  }
+
+  if (payload.action === 'CREATE' && payload.productId) {
+    await tx.product.updateMany({
+      where: { id: payload.productId, tenantId, status: 'PENDING_APPROVAL' },
+      data: { status: 'DISABLED' },
+    })
+    return true
+  }
+  if (payload.action === 'BATCH' && Array.isArray(payload.productIds)) {
+    await tx.product.updateMany({
+      where: { id: { in: payload.productIds }, tenantId, status: 'PENDING_APPROVAL' },
+      data: { status: 'DISABLED' },
+    })
+    return true
+  }
+  if (payload.action === 'DISABLE' && payload.productId) {
+    await tx.product.updateMany({
+      where: { id: payload.productId, tenantId, status: 'PENDING_DISABLE' },
+      data: { status: 'ENABLED' },
+    })
+    return true
+  }
+  if (payload.action === 'BATCH_DISABLE' && Array.isArray(payload.productIds)) {
+    await tx.product.updateMany({
+      where: { id: { in: payload.productIds }, tenantId, status: 'PENDING_DISABLE' },
+      data: { status: 'ENABLED' },
+    })
+    return true
+  }
+  return false
+}
+
 export const documentRoutes: FastifyPluginAsync = async (app) => {
 
   // ── inbox: 待当前角色审批的步骤 + 单据 ─────────────────────
@@ -260,145 +347,94 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: '驳回必须填原因' })
     }
 
-    const doc = await prisma.document.findFirst({
-      where: { id, tenantId, status: 'PENDING' },
-      include: { steps: { orderBy: { seq: 'asc' } } },
-    })
-    if (!doc) return reply.status(404).send({ error: '单据不存在或已终结' })
+    try {
+      const result = await prisma.$transaction(async tx => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`document:${id}`}))`
+        const doc = await tx.document.findFirst({
+          where: { id, tenantId, status: 'PENDING' },
+          include: { steps: { orderBy: { seq: 'asc' } } },
+        })
+        if (!doc) throw Object.assign(new Error('单据不存在或已终结'), { statusCode: 404 })
 
-    // 找当前轮到的 step
-    const current = doc.steps.find(s => s.status === 'PENDING')
-    if (!current) return reply.status(400).send({ error: '无待审步骤' })
-    const allowedRoles = approverRolesFor(role)
-    if (!allowedRoles.has(current.approverRole)) {
-      return reply.status(403).send({ error: `当前轮到 ${current.approverRole} 审批, 你的角色 ${role} 无权处理` })
-    }
+        const current = doc.steps.find(step => step.status === 'PENDING')
+        if (!current) throw Object.assign(new Error('无待审步骤'), { statusCode: 400 })
+        const allowedRoles = approverRolesFor(role)
+        if (!allowedRoles.has(current.approverRole)) {
+          throw Object.assign(
+            new Error(`当前轮到 ${current.approverRole} 审批, 你的角色 ${role} 无权处理`),
+            { statusCode: 403 },
+          )
+        }
 
-    if (decision === 'REJECT') {
-      await prisma.$transaction([
-        prisma.documentStep.update({
+        const isLast = doc.steps[doc.steps.length - 1].id === current.id
+        await tx.documentStep.update({
           where: { id: current.id },
-          data: { status: 'REJECTED', approverId: userId, decidedAt: new Date(), comment: comment || null },
-        }),
-        prisma.document.update({
-          where: { id: doc.id },
-          data: { status: 'REJECTED', finalizedAt: new Date() },
-        }),
-        prisma.documentDecision.create({
-          data: { documentId: doc.id, stepId: current.id, userId, decision: 'REJECT', comment },
-        }),
-      ])
-    } else {
-      // APPROVE
-      const isLast = doc.steps[doc.steps.length - 1].id === current.id
-      const ops: any[] = [
-        prisma.documentStep.update({
-          where: { id: current.id },
-          data: { status: 'APPROVED', approverId: userId, decidedAt: new Date(), comment: comment || null },
-        }),
-        prisma.documentDecision.create({
-          data: { documentId: doc.id, stepId: current.id, userId, decision: 'APPROVE', comment: comment || null },
-        }),
-      ]
-      if (isLast) {
-        ops.push(prisma.document.update({
-          where: { id: doc.id },
-          data: { status: 'APPROVED', finalizedAt: new Date() },
-        }))
-      }
-      await prisma.$transaction(ops)
+          data: {
+            status: decision === 'APPROVE' ? 'APPROVED' : 'REJECTED',
+            approverId: userId, decidedAt: new Date(), comment: comment || null,
+          },
+        })
+        await tx.documentDecision.create({
+          data: { documentId: doc.id, stepId: current.id, userId, decision, comment: comment || null },
+        })
 
-      // ── 终态回调: 审批通过后, 按 type 应用业务变更 ─────────
-      if (isLast) {
-        const payload = (doc.payload as any) || {}
         let touchedProducts = false
-        if (doc.type === 'PRICE_ADJUSTMENT' && payload.productId && payload.newPrice != null) {
-          await prisma.product.updateMany({
-            where: { id: payload.productId, tenantId },
-            data: { price: Number(payload.newPrice) },
-          }).catch(e => req.log?.error({ err: e }, '调价回调失败'))
-          touchedProducts = true
-        } else if (doc.type === 'NEW_DISH') {
-          if (payload.action === 'CREATE' && payload.productId) {
-            await prisma.product.updateMany({
-              where: { id: payload.productId, tenantId }, data: { status: 'ENABLED' },
-            }).catch(e => req.log?.error({ err: e }, '新品上架回调失败'))
-            touchedProducts = true
-          } else if (payload.action === 'BATCH' && Array.isArray(payload.productIds)) {
-            await prisma.product.updateMany({
-              where: { id: { in: payload.productIds }, tenantId }, data: { status: 'ENABLED' },
-            }).catch(e => req.log?.error({ err: e }, '批量上架回调失败'))
-            touchedProducts = true
-          } else if (payload.action === 'DISABLE' && payload.productId) {
-            await prisma.product.updateMany({
-              where: { id: payload.productId, tenantId }, data: { status: 'DISABLED' },
-            }).catch(e => req.log?.error({ err: e }, '停售回调失败'))
-            touchedProducts = true
-          } else if (payload.action === 'BATCH_DISABLE' && Array.isArray(payload.productIds)) {
-            await prisma.product.updateMany({
-              where: { id: { in: payload.productIds }, tenantId, status: 'PENDING_DISABLE' as any },
-              data: { status: 'DISABLED' },
-            }).catch(e => req.log?.error({ err: e }, '批量停售回调失败'))
-            touchedProducts = true
-          }
+        if (decision === 'REJECT') {
+          await tx.document.update({
+            where: { id: doc.id }, data: { status: 'REJECTED', finalizedAt: new Date() },
+          })
+          touchedProducts = await applyProductDecision(tx, doc, tenantId, 'REJECT')
+        } else if (isLast) {
+          touchedProducts = await applyProductDecision(tx, doc, tenantId, 'APPROVE')
+          await tx.document.update({
+            where: { id: doc.id }, data: { status: 'APPROVED', finalizedAt: new Date() },
+          })
         }
-        // 关键修复: 任何 product 变更后必须刷缓存, 否则 GET /api/products 还返回 600s 旧数据
-        if (touchedProducts) void invalidatePattern(`products:full:${tenantId}:*`)
-      }
-    }
-    // REJECT 回滚 + 同样要刷缓存
-    if (decision === 'REJECT') {
-      const payload = (doc.payload as any) || {}
-      let touchedProducts = false
-      if (doc.type === 'NEW_DISH') {
-        if ((payload.action === 'CREATE') && payload.productId) {
-          await prisma.product.updateMany({ where: { id: payload.productId, tenantId, status: 'PENDING_APPROVAL' as any }, data: { status: 'DISABLED' } })
-            .catch(e => req.log?.error({ err: e }, '新品拒绝-停售失败'))
-          touchedProducts = true
-        } else if (payload.action === 'BATCH' && Array.isArray(payload.productIds)) {
-          await prisma.product.updateMany({ where: { id: { in: payload.productIds }, tenantId, status: 'PENDING_APPROVAL' as any }, data: { status: 'DISABLED' } })
-            .catch(e => req.log?.error({ err: e }, '批量拒绝-停售失败'))
-          touchedProducts = true
-        } else if (payload.action === 'DISABLE' && payload.productId) {
-          await prisma.product.updateMany({ where: { id: payload.productId, tenantId, status: 'PENDING_DISABLE' as any }, data: { status: 'ENABLED' } })
-            .catch(e => req.log?.error({ err: e }, '停售拒绝-恢复失败'))
-          touchedProducts = true
-        } else if (payload.action === 'BATCH_DISABLE' && Array.isArray(payload.productIds)) {
-          await prisma.product.updateMany({
-            where: { id: { in: payload.productIds }, tenantId, status: 'PENDING_DISABLE' as any },
-            data: { status: 'ENABLED' },
-          }).catch(e => req.log?.error({ err: e }, '批量停售拒绝-恢复失败'))
-          touchedProducts = true
-        }
-      }
-      if (touchedProducts) void invalidatePattern(`products:full:${tenantId}:*`)
-    }
 
-    await prisma.opLog.create({
-      data: {
-        tenantId, userId,
-        action: `${decision === 'APPROVE' ? '批准' : '驳回'}单据 ${doc.no} 步骤 ${current.seq}`,
-        target: doc.no, entityType: 'Document', targetId: doc.id,
-      },
-    })
-
-    return { success: true, decision, finalized: doc.steps[doc.steps.length - 1].id === current.id || decision === 'REJECT' }
+        await tx.opLog.create({
+          data: {
+            tenantId, userId,
+            action: `${decision === 'APPROVE' ? '批准' : '驳回'}单据 ${doc.no} 步骤 ${current.seq}`,
+            target: doc.no, entityType: 'Document', targetId: doc.id,
+          },
+        })
+        return { touchedProducts, finalized: isLast || decision === 'REJECT' }
+      })
+      if (result.touchedProducts) void invalidatePattern(`products:full:${tenantId}:*`)
+      return { success: true, decision, finalized: result.finalized }
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      req.log.error({ err: error }, 'document decision failed')
+      return reply.status(500).send({ error: '审批失败，未保存任何变更' })
+    }
   })
 
   // ── 撤回（发起人）────────────────────────────────────────
   app.patch('/:id/cancel', auth(app), async (req: any, reply) => {
     const { tenantId, userId } = req.user
-    const doc = await prisma.document.findFirst({
-      where: { id: req.params.id, tenantId, status: 'PENDING', initiatorId: userId },
-    })
-    if (!doc) return reply.status(404).send({ error: '单据不存在或不可撤回' })
-    await prisma.document.update({
-      where: { id: doc.id },
-      data: { status: 'CANCELED', finalizedAt: new Date() },
-    })
-    await prisma.opLog.create({
-      data: { tenantId, userId, action: `撤回单据 ${doc.no}`, target: doc.no, entityType: 'Document', targetId: doc.id },
-    })
-    return { success: true }
+    const id = req.params.id as string
+    try {
+      const touchedProducts = await prisma.$transaction(async tx => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`document:${id}`}))`
+        const doc = await tx.document.findFirst({
+          where: { id, tenantId, status: 'PENDING', initiatorId: userId },
+        })
+        if (!doc) throw Object.assign(new Error('单据不存在或不可撤回'), { statusCode: 404 })
+        const touched = await applyProductDecision(tx, doc, tenantId, 'REJECT')
+        await tx.document.update({
+          where: { id: doc.id }, data: { status: 'CANCELED', finalizedAt: new Date() },
+        })
+        await tx.opLog.create({
+          data: { tenantId, userId, action: `撤回单据 ${doc.no}`, target: doc.no, entityType: 'Document', targetId: doc.id },
+        })
+        return touched
+      })
+      if (touchedProducts) void invalidatePattern(`products:full:${tenantId}:*`)
+      return { success: true }
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      req.log.error({ err: error }, 'document cancel failed')
+      return reply.status(500).send({ error: '撤回失败，未保存任何变更' })
+    }
   })
 }

@@ -206,3 +206,30 @@
 ### 风险与待确认
 
 - 已移除的值仍可能存在于 Git 历史和外部副本；按夜间边界本轮不擅自轮换，发布负责人应在受控流程中确认是否需要轮换并清理历史。
+
+## 2026-07-16 06:16 第十轮
+
+### 检查范围
+
+- Web `dev` / `build` 共用 `.next` 的缓存污染风险，以及根构建和既有部署脚本调用的 Web package 入口。
+- 3200 端口现有本仓库 Next dev 进程、生产 standalone 产物和恢复开发服务后的移动端页面。
+
+### 修改
+
+- 新增 `scripts/web-next-safe.sh`，让 Web build/dev 共用进程锁；并发启动或 dev 未停时明确失败，不再清理正在使用的 `.next`。
+- 生产构建开始前强制清理旧 `.next`，完成后校验 `BUILD_ID` 和 standalone server；dev 启动时若识别到生产产物，先清理再启动。
+- `apps/web/package.json` 的 `build`、`dev` 统一接入安全入口，因此根构建和现有部署脚本无需各自维护不同清理规则。
+- 按要求停止原 Web dev，完成生产构建后通过新入口干净恢复 3200 开发服务；未部署或写入生产。
+
+### 自动化验证
+
+- 负向流程：dev 运行时 build 被进程锁拒绝，开发缓存与服务保持正常；构建结束锁自动清理，生产 `BUILD_ID` 不会被带入恢复后的 dev。
+- Web 全量生产构建两次通过，134 个页面生成完成，standalone server 产物校验通过；Web TypeScript 检查通过。
+- 配送流端到端通过：两张独立配送单、两张入库单，发货与收货数量均为 5。
+- API 单元/集成测试 45/45、API TypeScript build、shell 语法检查、`git diff --check` 和高置信敏感信息扫描：通过。
+- 390 × 844 浏览器复核：首页与订单页正常，订货单/配送单切换、商品名称/编码/单号和日期范围查询入口可用，控制台无 warning/error。
+
+### 风险与待确认
+
+- Next/Sentry 依赖仍输出既有 OpenTelemetry 动态依赖构建 warning，但构建和页面生成成功；本轮未升级依赖。
+- 安全入口覆盖仓库 package scripts；绕过 package scripts 直接执行 `next dev/build` 仍属于非标准操作，需在发布手册中保持禁止。

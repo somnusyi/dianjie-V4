@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3200",
-    "build": "next build",
+    "dev": "bash ../../scripts/web-next-safe.sh dev",
+    "build": "bash ../../scripts/web-next-safe.sh build",
     "start": "next start",
     "test": "vitest run",
     "test:watch": "vitest",

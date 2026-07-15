@@ -1128,7 +1128,33 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         },
       },
     })
-    if (!order) throw { statusCode: 400, message: '订单不存在 / 非待确认 / 非本店' }
+    if (!order) {
+      // 客户端可能在收货成功后因断网未拿到响应并重试。此时 PO 已离开
+      // PENDING_CONFIRM，但 deliveryOrderId 的唯一约束已经证明该配送单收过货。
+      // 返回原入库单，避免把一次成功操作表现成失败，也避免前端诱导重复处理。
+      const duplicateWhere: any = { tenantId, purchaseOrderId: id, deliveryOrderId: { not: null } }
+      if (isStoreScoped(role)) duplicateWhere.storeId = storeId
+      const existingReceipt = await prisma.receipt.findFirst({
+        where: duplicateWhere,
+        orderBy: { createdAt: 'desc' },
+      })
+      if (existingReceipt) {
+        const currentOrder = await prisma.purchaseOrder.findFirst({
+          where: { id, tenantId, ...(isStoreScoped(role) ? { storeId } : {}) },
+          select: { status: true },
+        })
+        const fullyShipped = currentOrder?.status !== 'CONFIRMED'
+        return {
+          success: true,
+          receipt: existingReceipt,
+          deliveryId: existingReceipt.deliveryOrderId,
+          fullyShipped,
+          remainingDelivery: !fullyShipped,
+          duplicated: true,
+        }
+      }
+      throw { statusCode: 400, message: '订单不存在 / 非待确认 / 非本店' }
+    }
     const delivery = order.deliveries[0]
     if (!delivery) throw { statusCode: 409, message: '未找到待收货的独立配送单' }
 

@@ -97,6 +97,14 @@ async function main() {
     assert.equal(firstReceive.body.remainingDelivery, true)
     assert.equal((await api(`/api/orders/${orderId}`, managerToken)).body.status, 'CONFIRMED')
 
+    const repeatedReceive = await api(`/api/orders/${orderId}/receive`, managerToken, {
+      method: 'PATCH', body: JSON.stringify({ items: [{ productId: product.id, receivedQty: 2 }] }),
+    })
+    assert.equal(repeatedReceive.status, 200, JSON.stringify(repeatedReceive.body))
+    assert.equal(repeatedReceive.body.duplicated, true, '收货响应丢失后的重试必须返回原入库单')
+    assert.equal(repeatedReceive.body.receipt.id, firstReceive.body.receipt.id)
+    assert.equal(await prisma.receipt.count({ where: { deliveryOrderId: firstShip.body.deliveryId } }), 1)
+
     const secondShip = await api(`/api/orders/${orderId}/ship`, supplierToken, {
       method: 'PATCH', body: JSON.stringify({ idempotencyKey: `delivery-second-${Date.now()}` }),
     })

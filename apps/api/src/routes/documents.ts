@@ -15,6 +15,7 @@ import { invalidatePattern } from '../lib/cache'
 import { isSupplierRole } from '../lib/auth-scope'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
+const GROUP_DOCUMENT_ROLES = new Set(['BOSS', 'ADMIN', 'SUPER_ADMIN', 'FINANCE', 'CHEF_DIRECTOR', 'CHEF', 'ENGINEERING'])
 
 /** 把当前用户的角色映射到能批的 step.role 集合（处理 BOSS/ADMIN/CHEF 别名）*/
 function approverRolesFor(role: string): Set<string> {
@@ -24,6 +25,39 @@ function approverRolesFor(role: string): Set<string> {
   if (role === 'CHEF') set.add('CHEF_DIRECTOR')
   if (role === 'CHEF_DIRECTOR') set.add('CHEF')
   return set
+}
+
+async function supplierCanViewPayload(
+  tenantId: string,
+  supplierId: string | null | undefined,
+  payload: unknown,
+): Promise<boolean> {
+  if (!supplierId) return false
+  const value = (payload as any) || {}
+  if (value.supplierId) return value.supplierId === supplierId
+  if (value.batchId) {
+    const batch = await prisma.productBatch.findFirst({
+      where: { id: value.batchId, tenantId }, select: { supplierId: true },
+    })
+    if (batch) return batch.supplierId === supplierId
+  }
+  if (value.productId) {
+    const product = await prisma.product.findFirst({
+      where: { id: value.productId, tenantId }, select: { supplierId: true },
+    })
+    if (product) return product.supplierId === supplierId
+  }
+  if (Array.isArray(value.productIds) && value.productIds.length > 0) {
+    const productCount = await prisma.product.count({
+      where: { id: { in: value.productIds }, tenantId, supplierId },
+    })
+    if (productCount > 0) return productCount === new Set(value.productIds).size
+  }
+  if (!value.supplierName) return false
+  const matchingSuppliers = await prisma.supplier.findMany({
+    where: { tenantId, name: value.supplierName }, select: { id: true }, take: 2,
+  })
+  return matchingSuppliers.length === 1 && matchingSuppliers[0].id === supplierId
 }
 
 async function applyProductDecision(
@@ -172,29 +206,19 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
     })
     if (!doc) return reply.status(404).send({ error: '单据不存在' })
     // 集团角色 (BOSS/ADMIN/SUPER_ADMIN/FINANCE/CHEF_DIRECTOR) 全可见
-    const groupRoles = new Set(['BOSS', 'ADMIN', 'SUPER_ADMIN', 'FINANCE', 'CHEF_DIRECTOR', 'CHEF', 'ENGINEERING'])
-    if (groupRoles.has(role)) return { ...doc, attachments: [] }
+    if (GROUP_DOCUMENT_ROLES.has(role)) return { ...doc, attachments: [] }
     // 发起人/审批人始终可见
     if (doc.initiatorId === userId) return { ...doc, attachments: [] }
     if (doc.steps.some(s => s.approverId === userId)) return { ...doc, attachments: [] }
     // 店长只看自己店
     if (role === 'MANAGER' || role === 'KITCHEN_LEAD') {
-      if (doc.storeId && doc.storeId !== storeId) {
-        return reply.status(403).send({ error: '无权查看其他门店单据' })
-      }
-      return { ...doc, attachments: [] }
+      if (doc.storeId && doc.storeId === storeId) return { ...doc, attachments: [] }
+      return reply.status(403).send({ error: '无权查看其他门店或集团单据' })
     }
-    // 供应商: 只看 payload 里 supplierId/supplierName 跟自己关联的
+    // 供应商: 优先按 supplierId；兼容历史单时严格比对当前租户供应商名称。
     if (isSupplierRole(role)) {
-      const pl = (doc.payload as any) || {}
-      if (pl.supplierId && pl.supplierId !== supplierId) {
-        return reply.status(403).send({ error: '无权查看其他供应商单据' })
-      }
-      // 没有明确 supplierId 关联的单据 (人事/合同等), 供应商不可见
-      if (!pl.supplierId && !pl.supplierName) {
-        return reply.status(403).send({ error: '无权查看此单据' })
-      }
-      return { ...doc, attachments: [] }
+      if (await supplierCanViewPayload(tenantId, supplierId, doc.payload)) return { ...doc, attachments: [] }
+      return reply.status(403).send({ error: '无权查看其他供应商单据' })
     }
     return { ...doc, attachments: [] }
   })
@@ -207,16 +231,30 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
    *  NEW_DISH (CREATE): 新增商品全部字段
    *  NEW_DISH (BATCH):  批次内所有商品列表 (前 50 + 总数)
    *  NEW_DISH (DISABLE):停售商品基础信息 + 历史售出/库存
-   */
+  */
   app.get('/:id/preview', auth(app), async (req: any, reply) => {
-    const { tenantId } = req.user
+    const { tenantId, role, userId, storeId, supplierId } = req.user
     const doc = await prisma.document.findFirst({ where: { id: req.params.id, tenantId } })
     if (!doc) return reply.status(404).send({ error: '单据不存在' })
+    if (!GROUP_DOCUMENT_ROLES.has(role) && doc.initiatorId !== userId) {
+      const approvedByUser = await prisma.documentStep.count({
+        where: { documentId: doc.id, approverId: userId },
+      })
+      if (approvedByUser === 0 && (role === 'MANAGER' || role === 'KITCHEN_LEAD')) {
+        if (!doc.storeId || doc.storeId !== storeId) {
+          return reply.status(403).send({ error: '无权预览其他门店或集团单据' })
+        }
+      } else if (approvedByUser === 0 && isSupplierRole(role)) {
+        if (!await supplierCanViewPayload(tenantId, supplierId, doc.payload)) {
+          return reply.status(403).send({ error: '无权预览其他供应商单据' })
+        }
+      }
+    }
     const p = (doc.payload as any) || {}
 
     if (doc.type === 'PRICE_ADJUSTMENT' && p.productId) {
-      const pr = await prisma.product.findUnique({
-        where: { id: p.productId },
+      const pr = await prisma.product.findFirst({
+        where: { id: p.productId, tenantId },
         select: { id: true, code: true, name: true, spec: true, unit: true, category: true, price: true, supplier: { select: { name: true } } },
       })
       return {
@@ -229,8 +267,8 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
 
     if (doc.type === 'NEW_DISH') {
       if (p.action === 'CREATE' && p.productId) {
-        const pr = await prisma.product.findUnique({
-          where: { id: p.productId },
+        const pr = await prisma.product.findFirst({
+          where: { id: p.productId, tenantId },
           select: { id: true, code: true, name: true, spec: true, unit: true, category: true, price: true, shelfDays: true, status: true, supplier: { select: { name: true } } },
         })
         return { kind: 'NEW_DISH_CREATE', product: pr }
@@ -241,15 +279,15 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
         const wantFull = (req.query as any)?.full === '1' || (req.query as any)?.full === 'true'
         const limit = wantFull ? total : 50
         const sample = await prisma.product.findMany({
-          where: { id: { in: p.productIds.slice(0, limit) } },
+          where: { id: { in: p.productIds.slice(0, limit) }, tenantId },
           select: { id: true, code: true, name: true, spec: true, unit: true, category: true, price: true, status: true },
           orderBy: { name: 'asc' },
         })
         // 统计有价/无价
-        const withPrice = await prisma.product.count({ where: { id: { in: p.productIds }, price: { gt: 0 } } })
+        const withPrice = await prisma.product.count({ where: { id: { in: p.productIds }, tenantId, price: { gt: 0 } } })
         const noPrice = total - withPrice
         const byCategory: Record<string, number> = {}
-        const cats = await prisma.product.findMany({ where: { id: { in: p.productIds } }, select: { category: true } })
+        const cats = await prisma.product.findMany({ where: { id: { in: p.productIds }, tenantId }, select: { category: true } })
         cats.forEach(c => { byCategory[c.category || '其他'] = (byCategory[c.category || '其他'] || 0) + 1 })
         return {
           kind: 'NEW_DISH_BATCH',
@@ -260,19 +298,23 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
         }
       }
       if (p.action === 'DISABLE' && p.productId) {
-        const pr = await prisma.product.findUnique({
-          where: { id: p.productId },
+        const pr = await prisma.product.findFirst({
+          where: { id: p.productId, tenantId },
           select: { id: true, code: true, name: true, spec: true, unit: true, price: true, stock: true, supplier: { select: { name: true } } },
         })
         // 历史 28 天有没有被订过
         const used = await prisma.purchaseOrderItem.count({
-          where: { productId: p.productId, purchaseOrder: { createdAt: { gte: new Date(Date.now() - 28 * 86400000) } } },
+          where: {
+            productId: p.productId,
+            product: { tenantId },
+            purchaseOrder: { tenantId, createdAt: { gte: new Date(Date.now() - 28 * 86400000) } },
+          },
         })
         return { kind: 'NEW_DISH_DISABLE', product: pr, recentOrders: used }
       }
       if (p.action === 'BATCH_DISABLE' && Array.isArray(p.productIds)) {
         const products = await prisma.product.findMany({
-          where: { id: { in: p.productIds } },
+          where: { id: { in: p.productIds }, tenantId },
           select: { id: true, code: true, name: true, spec: true, unit: true, price: true, stock: true, status: true },
           orderBy: { name: 'asc' },
         })

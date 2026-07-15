@@ -72,6 +72,7 @@ async function main() {
   let temporaryChefId: string | null = null
   let temporaryTenantId: string | null = null
   let temporarySupplierId: string | null = null
+  let temporaryForeignProductId: string | null = null
   let batch500RowsMs = 0
 
   try {
@@ -197,6 +198,7 @@ async function main() {
     documentIds.push(batchDocument.id)
     const batchPayload = batchDocument.payload as any
     assert.equal(batchPayload.batchId, batchState.id)
+    assert.equal(batchPayload.supplierId, supplierId)
     assert.deepEqual(new Set(batchPayload.productIds), new Set(batchState.products.map(item => item.id)))
     const duplicateApproval = await Promise.all([
       api(`/api/documents/${batchDocument.id}/decisions`, chefToken, {
@@ -371,6 +373,45 @@ async function main() {
       body: JSON.stringify({ identifier: adminEmail, password: adminPassword, tenantSlug: TENANT_SLUG }),
     })
     assert.equal(adminLogin.status, 200, JSON.stringify(adminLogin.body))
+    const foreignProduct = await prisma.product.create({
+      data: {
+        tenantId: temporaryTenant.id, supplierId: temporarySupplier.id,
+        code: `VERIFY-FOREIGN-${isolationMarker}`, name: '外租户预览验证品',
+        category: '其他', unit: '件', price: 99,
+      },
+    })
+    temporaryForeignProductId = foreignProduct.id
+    const currentSupplier = await prisma.supplier.findFirstOrThrow({
+      where: { id: supplierId, tenantId: tenant.id }, select: { name: true },
+    })
+    const foreignPreviewDocument = await prisma.document.create({
+      data: {
+        tenantId: tenant.id, no: `VERIFY-PREVIEW-${isolationMarker}`, type: 'NEW_DISH',
+        title: '跨租户商品预览隔离验证', initiatorId: user.id,
+        payload: {
+          action: 'CREATE', productId: foreignProduct.id,
+          supplierId, supplierName: currentSupplier.name,
+        },
+      },
+    })
+    documentIds.push(foreignPreviewDocument.id)
+    const foreignPreview = await api(`/api/documents/${foreignPreviewDocument.id}/preview`, token)
+    assert.equal(foreignPreview.status, 200, JSON.stringify(foreignPreview.body))
+    assert.equal(foreignPreview.body.product, null, '审批预览不得返回外租户商品')
+
+    const otherSupplierDocument = await prisma.document.create({
+      data: {
+        tenantId: tenant.id, no: `VERIFY-SUPPLIER-VIS-${isolationMarker}`, type: 'NEW_DISH',
+        title: '其他供应商单据可见性验证', initiatorId: temporaryAdmin.id,
+        payload: { action: 'CREATE', supplierName: temporarySupplier.name },
+      },
+    })
+    documentIds.push(otherSupplierDocument.id)
+    const otherSupplierDetail = await api(`/api/documents/${otherSupplierDocument.id}`, token)
+    const otherSupplierPreview = await api(`/api/documents/${otherSupplierDocument.id}/preview`, token)
+    assert.equal(otherSupplierDetail.status, 403, JSON.stringify(otherSupplierDetail.body))
+    assert.equal(otherSupplierPreview.status, 403, JSON.stringify(otherSupplierPreview.body))
+
     const isolationCode = `VERIFY-ISOLATION-${isolationMarker}`
     const isolatedBatch = await api('/api/products/batch', adminLogin.body.token, {
       method: 'POST',
@@ -437,6 +478,8 @@ async function main() {
       batchDocumentFailureRolledBack: true,
       singleDocumentFailureRolledBack: true,
       crossTenantSupplierBlocked: true,
+      crossTenantPreviewBlocked: true,
+      otherSupplierDocumentBlocked: true,
       unboundSupplierListBlocked: true,
       auditHistory: true,
       destructiveClearBlocked: true,
@@ -476,6 +519,7 @@ async function main() {
     })
     const temporaryUserIds = [temporaryAdminId, temporaryUnboundSupplierId, temporaryChefId].filter(Boolean) as string[]
     if (temporaryUserIds.length) await prisma.user.deleteMany({ where: { id: { in: temporaryUserIds } } })
+    if (temporaryForeignProductId) await prisma.product.deleteMany({ where: { id: temporaryForeignProductId } })
     if (temporarySupplierId) await prisma.supplier.deleteMany({ where: { id: temporarySupplierId } })
     if (temporaryTenantId) await prisma.tenant.deleteMany({ where: { id: temporaryTenantId } })
   }

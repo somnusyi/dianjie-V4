@@ -390,7 +390,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       const eligible = matched.filter(item => item.status === 'ENABLED')
       if (eligible.length === 0) return reply.status(400).send({ error: '所选商品没有可提交停售的启用项' })
       const supplierName = supplierId
-        ? (await prisma.supplier.findUnique({ where: { id: supplierId }, select: { name: true } }))?.name
+        ? (await prisma.supplier.findFirst({ where: { id: supplierId, tenantId }, select: { name: true } }))?.name
         : null
       const documentNo = await prisma.$transaction(async tx => {
         const claimed = await tx.product.updateMany({
@@ -408,7 +408,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
             amount: null, isOverThreshold: false, thresholdRule: '批量 SKU 停售 直送总厨',
             payload: {
               action: 'BATCH_DISABLE', productIds: eligible.map(item => item.id),
-              count: eligible.length, supplierName: supplierName || null,
+              count: eligible.length, supplierId, supplierName: supplierName || null,
             },
             initiatorId: userId, status: 'PENDING',
             steps: { create: [{ seq: 1, approverRole: 'CHEF_DIRECTOR', status: 'PENDING' }] },
@@ -540,7 +540,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
                 productId: created.id, productName: created.name,
                 productCode: created.code, spec: created.spec, unit: created.unit,
                 price: Number(created.price), category: created.category,
-                supplierName,
+                supplierId: created.supplierId, supplierName,
               },
               initiatorId: userId, status: 'PENDING',
               steps: { create: [{ seq: 1, approverRole: 'CHEF_DIRECTOR', status: 'PENDING' }] },
@@ -750,7 +750,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
                 action: 'BATCH', batchId: batch.id,
                 productIds: created.map(product => product.id),
                 count: created.length, filename: filename || null,
-                supplierName: supplier?.name || null,
+                supplierId: userSupplierId, supplierName: supplier?.name || null,
               },
               initiatorId: userId, status: 'PENDING',
               steps: { create: [{ seq: 1, approverRole: 'CHEF_DIRECTOR', status: 'PENDING' }] },
@@ -941,7 +941,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
             payload: {
               action: 'DISABLE',
               productId: cur.id, productName: cur.name, productCode: cur.code,
-              supplierName: cur.supplier?.name || null,
+              supplierId, supplierName: cur.supplier?.name || null,
             },
             initiatorId: userId, status: 'PENDING',
             steps: { create: [{ seq: 1, approverRole: 'CHEF_DIRECTOR', status: 'PENDING' }] },
@@ -1009,7 +1009,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
               thresholdRule: '调价 直送总厨',
               payload: {
                 productId: cur.id, productName: cur.name, productCode: cur.code,
-                supplierName: cur.supplier?.name || null,
+                supplierId, supplierName: cur.supplier?.name || null,
                 oldPrice, newPrice, delta, pct,
               },
               initiatorId: userId, status: 'PENDING',

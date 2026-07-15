@@ -10,6 +10,7 @@ import { cmbTransferWithCheck, cmbHealthCheck, reportCmbError } from './cmbPayme
 import { writeCashTransaction } from './cashbook'
 import { voucherForPayment } from './voucher'
 import { checkReceiptBlockedByInvoicePath, cancelScheduleDueToInvoiceLock } from './paymentMutex'
+import { nextBusinessNo } from './purchaseOrderIntegrity'
 
 const AUTO_PAY_THRESHOLD = 2000  // 超过此金额需总部审批
 
@@ -18,7 +19,6 @@ interface CreateScheduleParams {
   receipt: Receipt & { confirmedAt: Date }
   supplier: Supplier
 }
-
 /**
  * ★ 入库确认后全自动流程：
  * 1. 自动生成对账单
@@ -40,29 +40,7 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
     return { isHeadqWarehouse: true }
   }
 
-  // ── 1. 自动生成对账单 ──────────────────────────
-  const reconNo = await generateNo('DC', tenantId)
-  const recon = await prisma.reconciliation.create({
-    data: {
-      tenantId,
-      no: reconNo,
-      supplierId: supplier.id,
-      storeId: receipt.storeId,
-      periodStart: receipt.deliveryDate,
-      periodEnd: receipt.deliveryDate,
-      totalAmount: receipt.totalAmount,
-      status: 'APPROVED',  // 自动对账直接通过
-      items: { create: [{ receiptId: receipt.id, amount: receipt.totalAmount }] },
-    },
-  })
-
-  // 更新入库单状态为已对账
-  await prisma.receipt.update({
-    where: { id: receipt.id },
-    data: { status: 'ACCOUNTED' },
-  })
-
-  // ── 2. 计算到期日 ──────────────────────────────
+  // ── 1. 计算到期日 ──────────────────────────────
   let dueAt: Date
   switch (supplier.creditType) {
     case 'FIXED_DAYS':
@@ -81,33 +59,93 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
       dueAt = dayjs(confirmedAt).add(30, 'day').toDate()
   }
 
-  // ── 3. 判断是否需要总部审批 ────────────────────
+  // ── 2. 判断是否需要总部审批 ────────────────────
   const amount = Number(receipt.totalAmount)
   const needApproval = amount > AUTO_PAY_THRESHOLD
 
-  const schedule = await prisma.paymentSchedule.create({
-    data: {
-      tenantId,
-      receiptId: receipt.id,
-      supplierId: supplier.id,
-      storeId: receipt.storeId,
-      amount: receipt.totalAmount,
-      creditDays: supplier.creditDays,
-      confirmedAt,
-      dueAt,
-      needApproval,
-      status: needApproval ? 'PENDING_APPROVAL' : 'PENDING',
-    },
+  // ── 3. 原子生成对账单和账期 ────────────────────
+  // receiptId 级 advisory lock 让并发重试串行化；第二个请求会读回首个请求的结果。
+  // 对账单、账期和 Receipt.status 在同一事务内提交，避免留下孤立对账单或无账期入库单。
+  const processed = await prisma.$transaction(async tx => {
+    // PostgreSQL advisory lock 返回 void；显式转 text，避免 Prisma 尝试反序列化 void。
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`receipt-finance:${receipt.id}`}))::text AS locked`
+
+    const existingSchedule = await tx.paymentSchedule.findUnique({ where: { receiptId: receipt.id } })
+    const existingReconItem = await tx.reconciliationItem.findFirst({
+      where: { receiptId: receipt.id },
+      include: { reconciliation: true },
+    })
+
+    let schedule = existingSchedule
+    let scheduleCreated = false
+    if (!schedule) {
+      schedule = await tx.paymentSchedule.create({
+        data: {
+          tenantId,
+          receiptId: receipt.id,
+          supplierId: supplier.id,
+          storeId: receipt.storeId,
+          amount: receipt.totalAmount,
+          creditDays: supplier.creditDays,
+          confirmedAt,
+          dueAt,
+          needApproval,
+          status: needApproval ? 'PENDING_APPROVAL' : 'PENDING',
+        },
+      })
+      scheduleCreated = true
+    }
+
+    let recon = existingReconItem?.reconciliation
+    if (!recon) {
+      const ym = dayjs(confirmedAt).format('YYYYMM')
+      const latestRecon = await tx.reconciliation.findFirst({
+        where: { tenantId, no: { startsWith: `DC${ym}` } },
+        orderBy: { no: 'desc' },
+        select: { no: true },
+      })
+      const parsedFloor = Number(latestRecon?.no.slice(`DC${ym}`.length) || 0)
+      const reconFloor = Number.isFinite(parsedFloor) ? parsedFloor : 0
+      const reconNo = await nextBusinessNo(tx, tenantId, 'RECONCILIATION', ym, 'DC', reconFloor)
+      recon = await tx.reconciliation.create({
+        data: {
+          tenantId,
+          no: reconNo,
+          supplierId: supplier.id,
+          storeId: receipt.storeId,
+          periodStart: receipt.deliveryDate,
+          periodEnd: receipt.deliveryDate,
+          totalAmount: receipt.totalAmount,
+          status: 'APPROVED',
+          items: { create: [{ receiptId: receipt.id, amount: receipt.totalAmount }] },
+        },
+      })
+    }
+
+    await tx.receipt.update({
+      where: { id: receipt.id },
+      data: { status: 'ACCOUNTED' },
+    })
+
+    return {
+      recon,
+      schedule,
+      needApproval: schedule.needApproval,
+      duplicated: Boolean(existingSchedule && existingReconItem),
+      scheduleCreated,
+    }
   })
+
+  const { recon, schedule } = processed
 
   console.log(`
   ✅ 自动对账完成: ${receipt.no}
-  📋 对账单: ${reconNo}
+  📋 对账单: ${recon.no}
   📅 到期日: ${dayjs(dueAt).format('YYYY-MM-DD')}
   💰 金额: ¥${amount} ${needApproval ? '→ 需总部审批' : '→ 到期自动付款'}
   `)
 
-  if (needApproval) {
+  if (processed.needApproval && processed.scheduleCreated) {
     void notifyApprovalPending(tenantId, Number(receipt.totalAmount), supplier.name)
     // M2 触达层: 大额付款通知财务+老板
     const { fireAndForget: notify } = await import('./notify')
@@ -120,7 +158,7 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
       },
     })
   }
-  return { recon, schedule, needApproval }
+  return { recon, schedule, needApproval: processed.needApproval, duplicated: processed.duplicated }
 }
 
 /**
@@ -159,7 +197,6 @@ export async function approvePaymentSchedule(
     console.log(`❌ 审批拒绝: ¥${schedule.amount}`)
   }
 }
-
 /**
  * 招行免前置自动付款
  * 到期时由 scheduler 自动触发，从招行对公账户向供应商打款
@@ -359,12 +396,4 @@ export async function executeBankPayment(scheduleId: string) {
     }
     throw err
   }
-}
-
-async function generateNo(prefix: string, tenantId: string): Promise<string> {
-  const ym = dayjs().format('YYYYMM')
-  const count = await prisma.reconciliation.count({
-    where: { tenantId, no: { startsWith: `${prefix}${ym}` } },
-  })
-  return `${prefix}${ym}${String(count + 1).padStart(6, '0')}`
 }

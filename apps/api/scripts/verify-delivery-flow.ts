@@ -39,8 +39,8 @@ async function main() {
   const manager = await prisma.user.findFirstOrThrow({ where: { tenantId: tenant.id, role: 'MANAGER', storeId: store.id } })
   const supplier = await prisma.supplier.upsert({
     where: { tenantId_no: { tenantId: tenant.id, no: 'LOCAL-DELIVERY-VERIFY' } },
-    update: { status: 'ENABLED', sourceType: 'HEADQ_WAREHOUSE' },
-    create: { tenantId: tenant.id, no: 'LOCAL-DELIVERY-VERIFY', name: '本地配送验证供应商', status: 'ENABLED', sourceType: 'HEADQ_WAREHOUSE' },
+    update: { status: 'ENABLED', sourceType: 'MAIN_SUPPLIER' },
+    create: { tenantId: tenant.id, no: 'LOCAL-DELIVERY-VERIFY', name: '本地配送验证供应商', status: 'ENABLED', sourceType: 'MAIN_SUPPLIER' },
   })
   const password = await bcrypt.hash(PASSWORD, 10)
   const supplierUser = await prisma.user.upsert({
@@ -109,6 +109,8 @@ async function main() {
     assert.equal(repeatedReceive.body.receipt.id, firstReceive.body.receipt.id)
     assert.equal(await prisma.receipt.count({ where: { deliveryOrderId: firstShip.body.deliveryId } }), 1)
     assert.equal(await prisma.deliveryOrderEvent.count({ where: { deliveryOrderId: firstShip.body.deliveryId, eventType: 'RECEIVED' } }), 1)
+    assert.equal(await prisma.paymentSchedule.count({ where: { receiptId: firstReceive.body.receipt.id } }), 1)
+    assert.equal(await prisma.reconciliationItem.count({ where: { receiptId: firstReceive.body.receipt.id } }), 1)
 
     const secondShip = await api(`/api/orders/${orderId}/ship`, supplierToken, {
       method: 'PATCH', body: JSON.stringify({ idempotencyKey: `delivery-second-${Date.now()}` }),
@@ -170,10 +172,16 @@ async function main() {
       })
       const cleanupReceiptIds = [...new Set([...receiptIds, ...runReceipts.map(receipt => receipt.id)])]
       const vouchers = await prisma.voucher.findMany({ where: { sourceType: 'Receipt', sourceId: { in: cleanupReceiptIds } }, select: { id: true } })
+      const reconciliationItems = await prisma.reconciliationItem.findMany({
+        where: { receiptId: { in: cleanupReceiptIds } },
+        select: { reconciliationId: true },
+      })
+      const reconciliationIds = [...new Set(reconciliationItems.map(item => item.reconciliationId))]
       await prisma.$transaction(async tx => {
         await tx.voucher.deleteMany({ where: { id: { in: vouchers.map(voucher => voucher.id) } } })
         await tx.paymentSchedule.deleteMany({ where: { receiptId: { in: cleanupReceiptIds } } })
         await tx.reconciliationItem.deleteMany({ where: { receiptId: { in: cleanupReceiptIds } } })
+        await tx.reconciliation.deleteMany({ where: { id: { in: reconciliationIds } } })
         await tx.receiptItem.deleteMany({ where: { receiptId: { in: cleanupReceiptIds } } })
         await tx.receipt.deleteMany({ where: { id: { in: cleanupReceiptIds } } })
         await tx.supplierStockMovement.deleteMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })

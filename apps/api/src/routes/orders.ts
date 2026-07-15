@@ -1177,6 +1177,22 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         orderBy: { createdAt: 'desc' },
       })
       if (!existingReceipt) return null
+      try {
+        const supplier = await prisma.supplier.findUnique({ where: { id: existingReceipt.supplierId } })
+        if (supplier) {
+          const { autoProcessAfterConfirm } = await import('../services/paymentSchedule')
+          await autoProcessAfterConfirm({
+            tenantId,
+            receipt: {
+              ...existingReceipt,
+              confirmedAt: existingReceipt.confirmedAt || existingReceipt.createdAt,
+            },
+            supplier,
+          })
+        }
+      } catch (error) {
+        req.log.warn({ err: error, receiptId: existingReceipt.id }, '重复收货补偿财务派生记录失败')
+      }
       const currentOrder = await prisma.purchaseOrder.findFirst({
         where: { id, tenantId, ...(isStoreScoped(role) ? { storeId } : {}) },
         select: { status: true },
@@ -1408,10 +1424,16 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // 触发自动对账+账期
-    const { autoProcessAfterConfirm } = await import('../services/paymentSchedule')
-    const receiptFull = await prisma.receipt.findUnique({ where: { id: receipt.id } }) as any
-    receiptFull.confirmedAt = new Date()
-    await autoProcessAfterConfirm({ tenantId, receipt: receiptFull, supplier: order.supplier })
+    try {
+      const { autoProcessAfterConfirm } = await import('../services/paymentSchedule')
+      const receiptFull = await prisma.receipt.findUnique({ where: { id: receipt.id } }) as any
+      receiptFull.confirmedAt = receiptFull.confirmedAt || receivedAt
+      await autoProcessAfterConfirm({ tenantId, receipt: receiptFull, supplier: order.supplier })
+    } catch (error) {
+      // 收货主事务已经成功，不把派生财务流程的临时故障伪装成收货失败。
+      // 客户端重试会进入上方幂等分支，再次补偿对账单和账期。
+      req.log.error({ err: error, receiptId: receipt.id }, '收货后财务派生记录生成失败，等待幂等补偿')
+    }
 
     void invalidatePattern(`dashboard:stats:${tenantId}:*`)
     void invalidatePattern(`stores:list:${tenantId}:*`)

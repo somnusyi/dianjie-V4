@@ -11,7 +11,7 @@
  */
 import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
-import { prisma } from '@dianjie/db'
+import { Prisma, prisma } from '@dianjie/db'
 import { isSupplierRole } from '../lib/auth-scope'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
@@ -57,6 +57,42 @@ const lossSchema = z.object({
   reason:    z.string().trim().min(1, '请说明报损原因').max(120),
 })
 
+type SupplierContext = { tenantId: string; userId: string; supplierId: string }
+
+/**
+ * Lock supplier product rows in a stable order before any read-modify-write.
+ *
+ * PostgreSQL row locks coordinate these manual inventory mutations with the
+ * atomic stock decrement used by delivery shipment. Stable ordering prevents
+ * inverse-order batch requests from deadlocking each other.
+ */
+async function lockSupplierProducts(
+  tx: Prisma.TransactionClient,
+  ctx: SupplierContext,
+  productIds: string[],
+  notFound: { statusCode: number; message: string } = {
+    statusCode: 400,
+    message: '商品不属于本供应商或不存在',
+  },
+) {
+  const ids = [...new Set(productIds)].sort()
+  if (ids.length === 0) return new Map<string, number>()
+
+  const rows = await tx.$queryRaw<Array<{ id: string; stock: Prisma.Decimal }>>(Prisma.sql`
+    SELECT "id", "stock"
+    FROM "products"
+    WHERE "tenantId" = ${ctx.tenantId}
+      AND "supplierId" = ${ctx.supplierId}
+      AND "id" IN (${Prisma.join(ids)})
+    ORDER BY "id"
+    FOR UPDATE
+  `)
+  if (rows.length !== ids.length) {
+    throw Object.assign(new Error(notFound.message), { statusCode: notFound.statusCode })
+  }
+  return new Map(rows.map(row => [row.id, Number(row.stock)]))
+}
+
 async function ensureInventoryCategory(tenantId: string, supplierId: string, rawName?: string) {
   const name = (rawName || '其他').trim() || '其他'
   const existing = await prisma.supplierProductCategory.findUnique({
@@ -97,7 +133,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
     const since7  = new Date(Date.now() - 7  * 86400_000)
     const since30 = new Date(Date.now() - 30 * 86400_000)
     const movs = await prisma.supplierStockMovement.findMany({
-      where: { supplierId: ctx.supplierId, createdAt: { gte: since30 } },
+      where: { tenantId: ctx.tenantId, supplierId: ctx.supplierId, createdAt: { gte: since30 } },
       select: { productId: true, delta: true, createdAt: true, type: true },
     })
     const byProd = new Map<string, { in7: number; out7: number; in30: number; out30: number }>()
@@ -112,7 +148,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
 
     // 每个 SKU 取"最近到期日"= 所有正向入库流水里最早的 expiryDate
     const expRows = await prisma.supplierStockMovement.findMany({
-      where: { supplierId: ctx.supplierId, delta: { gt: 0 }, expiryDate: { not: null } },
+      where: { tenantId: ctx.tenantId, supplierId: ctx.supplierId, delta: { gt: 0 }, expiryDate: { not: null } },
       select: { productId: true, expiryDate: true },
       orderBy: { expiryDate: 'asc' },
     })
@@ -182,10 +218,11 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
     const created: any[] = []
 
     await prisma.$transaction(async (tx) => {
+      const balances = await lockSupplierProducts(tx, ctx, productIds)
       for (const it of items) {
-        const cur = await tx.product.findUnique({ where: { id: it.productId }, select: { stock: true } })
-        const newStock = Number(cur!.stock) + it.qty
+        const newStock = balances.get(it.productId)! + it.qty
         await tx.product.update({ where: { id: it.productId }, data: { stock: newStock } })
+        balances.set(it.productId, newStock)
         const m = await tx.supplierStockMovement.create({
           data: {
             tenantId: ctx.tenantId, supplierId: ctx.supplierId, productId: it.productId,
@@ -211,16 +248,14 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { productId, newQty, reason } = parsed.data
 
-    const cur = await prisma.product.findFirst({
-      where: { id: productId, supplierId: ctx.supplierId, tenantId: ctx.tenantId },
-      select: { id: true, stock: true },
-    })
-    if (!cur) return reply.status(404).send({ error: '商品不存在' })
-
-    const delta = newQty - Number(cur.stock)
-    if (delta === 0) return { ok: true, message: '库存无变化', balanceAfter: newQty }
-
+    let result: { delta: number; balanceAfter: number; unchanged?: boolean }
     await prisma.$transaction(async (tx) => {
+      const balances = await lockSupplierProducts(tx, ctx, [productId], { statusCode: 404, message: '商品不存在' })
+      const delta = newQty - balances.get(productId)!
+      if (delta === 0) {
+        result = { delta, balanceAfter: newQty, unchanged: true }
+        return
+      }
       await tx.product.update({ where: { id: productId }, data: { stock: newQty } })
       await tx.supplierStockMovement.create({
         data: {
@@ -231,8 +266,10 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
           createdById: ctx.userId,
         },
       })
+      result = { delta, balanceAfter: newQty }
     })
-    return { ok: true, delta, balanceAfter: newQty }
+    if (result!.unchanged) return { ok: true, message: '库存无变化', balanceAfter: newQty }
+    return { ok: true, delta: result!.delta, balanceAfter: result!.balanceAfter }
   })
 
   /** POST /api/supplier/stock/loss — 报损 */
@@ -242,16 +279,12 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { productId, qty, reason } = parsed.data
 
-    const cur = await prisma.product.findFirst({
-      where: { id: productId, supplierId: ctx.supplierId, tenantId: ctx.tenantId },
-      select: { id: true, stock: true },
-    })
-    if (!cur) return reply.status(404).send({ error: '商品不存在' })
-
-    const newStock = Math.max(0, Number(cur.stock) - qty)
-    const actualDelta = newStock - Number(cur.stock)   // 负数
-
+    let balanceAfter = 0
     await prisma.$transaction(async (tx) => {
+      const balances = await lockSupplierProducts(tx, ctx, [productId], { statusCode: 404, message: '商品不存在' })
+      const currentStock = balances.get(productId)!
+      const newStock = Math.max(0, currentStock - qty)
+      const actualDelta = newStock - currentStock
       await tx.product.update({ where: { id: productId }, data: { stock: newStock } })
       await tx.supplierStockMovement.create({
         data: {
@@ -262,8 +295,9 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
           createdById: ctx.userId,
         },
       })
+      balanceAfter = newStock
     })
-    return { ok: true, balanceAfter: newStock }
+    return { ok: true, balanceAfter }
   })
 
   /** POST /api/supplier/stock/import-snapshot — 全量库存清单导入
@@ -319,6 +353,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
         await prisma.$transaction(async (tx) => {
           let prod = byName.get(it.name) ? await tx.product.findFirst({ where: { id: byName.get(it.name)!.id } }) : null
           let isNew = false
+          let oldStock = 0
           if (!prod) {
             prod = await tx.product.create({
               data: {
@@ -335,7 +370,8 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
             })
             isNew = true
           } else {
-            const oldStock = Number(prod.stock)
+            const balances = await lockSupplierProducts(tx, ctx, [prod.id])
+            oldStock = balances.get(prod.id)!
             if (Math.abs(oldStock - it.qty) < 0.001) {
               skipped.push({ row: i + 1, name: it.name, stock: oldStock })
               return
@@ -345,7 +381,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
           await tx.supplierStockMovement.create({
             data: {
               tenantId: ctx.tenantId, supplierId: ctx.supplierId, productId: prod.id,
-              delta: isNew ? it.qty : (it.qty - Number(prod.stock)),
+              delta: isNew ? it.qty : (it.qty - oldStock),
               balanceAfter: it.qty,
               type: isNew ? 'INITIAL' as any : 'ADJUSTMENT' as any,
               reason,
@@ -354,7 +390,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
             },
           })
           if (isNew) created.push({ row: i + 1, name: it.name, qty: it.qty, code: prod.code })
-          else adjusted.push({ row: i + 1, name: it.name, oldStock: Number(prod.stock), newStock: it.qty })
+          else adjusted.push({ row: i + 1, name: it.name, oldStock, newStock: it.qty })
         })
       } catch (e: any) {
         failed.push({ row: i + 1, name: it.name, error: e.message || 'unknown' })
@@ -378,7 +414,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
   app.get('/movements', auth(app), async (req: any, reply: any) => {
     const ctx = ensureSupplier(req, reply); if (!ctx) return
     const { productId, type, limit } = req.query as any
-    const where: any = { supplierId: ctx.supplierId }
+    const where: any = { tenantId: ctx.tenantId, supplierId: ctx.supplierId }
     if (productId) where.productId = productId
     if (type) where.type = type
     const ms = await prisma.supplierStockMovement.findMany({

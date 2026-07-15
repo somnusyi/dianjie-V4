@@ -52,12 +52,12 @@ function downloadTemplate() {
   const supplierName = u?.supplier?.name || ''
   const today = new Date().toISOString().slice(0, 10)
   const aoa: any[][] = [
-    [`供应商：${supplierName}`, '', '', '', '', '', '', ''],
-    [`报价日期：${today}`,      '', '', '', '', '', '', ''],
-    ['序号', '品项名称', '规格型号', '采购单位', '金额', '保质期(天)', '初始库存', '安全库存'],
-    ['1', '见手青啤酒', '24瓶*330ml/件', '件', 248, 90, 0, 0],
-    ['2', '乌苏罐装',   '6罐*1L/件',     '件', 85,  90, 0, 0],
-    ['3', '红乌苏瓶装', '620ml*12瓶/件', '件', 80,  '', '', ''],
+    [`供应商：${supplierName}`, '', '', '', '', '', ''],
+    [`报价日期：${today}`,      '', '', '', '', '', ''],
+    ['序号', '品项名称', '规格型号', '采购单位', '金额', '分类', '保质期(天)'],
+    ['1', '见手青啤酒', '24瓶*330ml/件', '件', 248, '酒水', 90],
+    ['2', '乌苏罐装',   '6罐*1L/件',     '件', 85,  '酒水', 90],
+    ['3', '红乌苏瓶装', '620ml*12瓶/件', '件', 80,  '酒水', ''],
   ]
   // 后面留 30 行空, 像用户提供的模板那样
   for (let i = 4; i <= 33; i++) aoa.push([String(i), '', '', '', '', '', '', ''])
@@ -65,12 +65,12 @@ function downloadTemplate() {
   const ws = XLSX.utils.aoa_to_sheet(aoa)
   ws['!cols'] = [
     { wch: 6 }, { wch: 22 }, { wch: 22 }, { wch: 10 },
-    { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 10 },
+    { wch: 10 }, { wch: 14 }, { wch: 12 },
   ]
-  // 合并 A1:H1, A2:H2 让"供应商：" / "报价日期：" 横跨整张表
+  // 合并标题行，让"供应商：" / "报价日期："横跨整张表
   ws['!merges'] = [
-    { s: { r: 0, c: 0 }, e: { r: 0, c: 7 } },
-    { s: { r: 1, c: 0 }, e: { r: 1, c: 7 } },
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 6 } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: 6 } },
   ]
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, '报价表')
@@ -225,8 +225,6 @@ export default function BatchUploadPage() {
               minOrderQty: moq,
               stepQty: moq,
               price: numOr(r.price, 0),
-              stock: numOr(r.stock, 0),
-              minStock: numOr(r.minStock, 0),
               shelfDays: numOr(r.shelfDays, 7),
             }
           })

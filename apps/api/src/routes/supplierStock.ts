@@ -57,6 +57,27 @@ const lossSchema = z.object({
   reason:    z.string().trim().min(1, '请说明报损原因').max(120),
 })
 
+async function ensureInventoryCategory(tenantId: string, supplierId: string, rawName?: string) {
+  const name = (rawName || '其他').trim() || '其他'
+  const existing = await prisma.supplierProductCategory.findUnique({
+    where: { tenantId_supplierId_name: { tenantId, supplierId, name } },
+  })
+  if (existing) {
+    if (!existing.isActive) throw new Error(`分类「${name}」已停用，请先恢复后再导入`)
+    return existing
+  }
+  const max = await prisma.supplierProductCategory.aggregate({
+    where: { tenantId, supplierId }, _max: { sortOrder: true },
+  })
+  return prisma.supplierProductCategory.create({
+    data: {
+      tenantId, supplierId, name,
+      sortOrder: (max._max.sortOrder ?? -1) + 1,
+      isSystem: name === '其他',
+    },
+  })
+}
+
 export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
 
   /** GET /api/supplier/stock — 列表 + 摘要 */
@@ -294,6 +315,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
     for (let i = 0; i < items.length; i++) {
       const it = items[i]
       try {
+        await ensureInventoryCategory(ctx.tenantId, ctx.supplierId, it.category)
         await prisma.$transaction(async (tx) => {
           let prod = byName.get(it.name) ? await tx.product.findFirst({ where: { id: byName.get(it.name)!.id } }) : null
           let isNew = false

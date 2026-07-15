@@ -12,7 +12,7 @@
  */
 'use client'
 import { useEffect, useState } from 'react'
-import { BlackHero, BottomNav, PeriodPills, Chip } from '@/components/v2'
+import { BottomNav, PeriodPills, Chip } from '@/components/v2'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 
 type Profit = {
@@ -23,6 +23,14 @@ type Profit = {
     platformFeeBreakdown?: { meituan: number; douyin: number }
     channels?: Record<string, number>
     recordCount: number
+    metrics?: OperatingMetrics
+    comparison?: {
+      label: string
+      month: string
+      rangeLabel: string
+      metrics: OperatingMetrics
+      changes: Record<'grossAmount' | 'netRevenue' | 'orders' | 'discountAmount', number | null>
+    }
   }
   cost: {
     food: number; loss: number
@@ -36,34 +44,60 @@ type Profit = {
   netProfit: number; netMargin: number
 }
 
+type OperatingMetrics = {
+  grossAmount: number
+  netRevenue: number
+  orders: number
+  discountAmount: number
+  recordCount: number
+}
+
 function thisMonth() {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
+type Period = 'month' | 'prev'
+
+function monthForPeriod(period: Period) {
+  const d = new Date()
+  if (period === 'prev') d.setMonth(d.getMonth() - 1)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
 export default function ManagerOpsPage() {
-  const [period, setPeriod] = useState('month')
+  const [period, setPeriod] = useState<Period>('month')
   const [data, setData] = useState<Profit | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [storeName, setStoreName] = useState('本店')
-  const [storeId, setStoreId] = useState<string | null>(null)
 
   useEffect(() => {
+    let cancelled = false
     const u = getUser()
     const sid = u?.storeId || u?.store?.id || null
-    setStoreId(sid); setStoreName(u?.store?.name || '本店')
+    setStoreName(u?.store?.name || '本店')
     if (!sid) { setError('未绑定门店'); return }
-    apiFetch<Profit>(`/api/profit/store/${sid}?month=${thisMonth()}`)
-      .then(setData)
-      .catch(e => setError(e.message))
-  }, [])
+    setData(null)
+    setError(null)
+    apiFetch<Profit>(`/api/profit/store/${sid}?month=${monthForPeriod(period)}`)
+      .then(result => { if (!cancelled) setData(result) })
+      .catch(e => { if (!cancelled) setError(e.message) })
+    return () => { cancelled = true }
+  }, [period])
 
   const r = data?.revenue
   const c = data?.cost
   const platformFee = Number(r?.platformFee || 0)
   const platformBreak = r?.platformFeeBreakdown
-  const gmv = Number(r?.total || 0)
-  const netRev = Number(r?.net ?? gmv)
+  const operatingRevenue = Number(r?.total || 0)
+  const netRev = Number(r?.net ?? operatingRevenue)
+  const metrics: OperatingMetrics = r?.metrics || {
+    grossAmount: operatingRevenue,
+    netRevenue: operatingRevenue,
+    orders: 0,
+    discountAmount: 0,
+    recordCount: r?.recordCount || 0,
+  }
   const food = Number(c?.food || 0)
   const loss = Number(c?.loss || 0)
   const labor = Number(c?.labor?.total || 0)
@@ -72,7 +106,7 @@ export default function ManagerOpsPage() {
   const mgmt = Number(c?.mgmt?.total || 0)
   const fin = Number(c?.finance?.total || 0)
   const netProfit = Number(data?.netProfit || 0)
-  const pct = (n: number) => gmv > 0 ? (n / gmv * 100).toFixed(1) : '0'
+  const pct = (n: number) => operatingRevenue > 0 ? (n / operatingRevenue * 100).toFixed(1) : '0'
 
   return (
     <div className="min-h-screen bg-bg pb-20">
@@ -91,36 +125,26 @@ export default function ManagerOpsPage() {
 
       <div className="px-4 mt-2">
         <PeriodPills
-          value={period} onChange={setPeriod}
+          value={period} onChange={value => setPeriod(value as Period)}
           options={[
-            { label: '今日', value: 'day' },
-            { label: '本周', value: 'week' },
             { label: '本月', value: 'month' },
             { label: '上月', value: 'prev' },
           ]}
         />
       </div>
 
-      <div className="px-4 mt-3">
-        <BlackHero
-          label="本月营收 (GMV)"
-          value={data ? `¥${gmv.toLocaleString()}` : '加载中…'}
-          delta={platformFee > 0 ? { text: `平台抽成 −¥${platformFee.toLocaleString()}`, trend: 'down' } : undefined}
-          meta={data ? `净到账 ¥${netRev.toLocaleString()} · 录入 ${r?.recordCount || 0} 天` : ''}
-          stats={data ? [
-            { label: '净利润', value: `¥${netProfit.toLocaleString()}`, tone: netProfit >= 0 ? 'green' : 'red' as any },
-            { label: '净利率', value: `${data.netMargin.toFixed(1)}%`, tone: 'default' as any },
-            { label: '食材占比', value: `${pct(food)}%`, tone: 'default' as any },
-          ] : []}
-        />
-      </div>
+      <OperatingOverview
+        loading={!data && !error}
+        metrics={metrics}
+        comparison={r?.comparison}
+      />
 
       {error && <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">加载失败: {error}</div>}
 
       {/* P&L */}
       <Section title="P&L 拆解" right={data?.month || ''}>
         <div className="bg-white rounded-card border border-border overflow-hidden">
-          <Row item="营业收入 (GMV)" amount={gmv} pct={pct(gmv)} bold />
+          <Row item="营业收入" amount={operatingRevenue} pct={pct(operatingRevenue)} bold />
           {platformFee > 0 && (
             <Row
               item="  平台抽成"
@@ -131,13 +155,13 @@ export default function ManagerOpsPage() {
               indent
             />
           )}
-          {netRev !== gmv && <Row item="实际到账 (净)" amount={netRev} pct={pct(netRev)} tone="amber" sub />}
+          {netRev !== operatingRevenue && <Row item="实际到账 (净)" amount={netRev} pct={pct(netRev)} tone="amber" sub />}
           <Row item="食材成本" amount={-food} pct={'-' + pct(food)} controllable note={loss > 0 ? `含报损 ¥${loss.toLocaleString()}` : undefined} />
           <Row item="人工成本" amount={-labor} pct={'-' + pct(labor)} controllable={false} />
           <Row item="销售费用 (门店)" amount={-salesOnly} pct={'-' + pct(salesOnly)} controllable note="租金/水电/营销" />
           <Row item="管理费用" amount={-mgmt} pct={'-' + pct(mgmt)} controllable={false} />
           {fin > 0 && <Row item="财务费用" amount={-fin} pct={'-' + pct(fin)} />}
-          <Row item="净利润" amount={netProfit} pct={`${data?.netMargin.toFixed(1) || 0}%`} bold profit />
+          <Row item="净利润" amount={netProfit} pct={`${data?.netMargin.toFixed(1) || 0}`} bold profit />
         </div>
       </Section>
 
@@ -154,7 +178,7 @@ export default function ManagerOpsPage() {
                     <span className="font-num text-body">¥{c.value.toLocaleString()} <span className="text-micro text-gray3">{pct(c.value)}%</span></span>
                   </div>
                   <div className="h-1.5 bg-bg rounded-full overflow-hidden mt-1">
-                    <div className={`h-full ${c.tone}`} style={{ width: `${Math.min(100, c.value / gmv * 100)}%` }} />
+                    <div className={`h-full ${c.tone}`} style={{ width: `${Math.min(100, c.value / operatingRevenue * 100)}%` }} />
                   </div>
                 </li>
               ))}
@@ -182,6 +206,139 @@ export default function ManagerOpsPage() {
       />
     </div>
   )
+}
+
+function OperatingOverview({ loading, metrics, comparison }: {
+  loading: boolean
+  metrics: OperatingMetrics
+  comparison?: Profit['revenue']['comparison']
+}) {
+  const cards = [
+    {
+      key: 'grossAmount' as const,
+      label: '营业额',
+      hint: '折前',
+      value: metrics.grossAmount,
+      previous: comparison?.metrics.grossAmount,
+      change: comparison?.changes.grossAmount,
+      kind: 'money' as const,
+    },
+    {
+      key: 'netRevenue' as const,
+      label: '营业收入',
+      hint: '折后',
+      value: metrics.netRevenue,
+      previous: comparison?.metrics.netRevenue,
+      change: comparison?.changes.netRevenue,
+      kind: 'money' as const,
+    },
+    {
+      key: 'orders' as const,
+      label: '订单量',
+      hint: '成交订单',
+      value: metrics.orders,
+      previous: comparison?.metrics.orders,
+      change: comparison?.changes.orders,
+      kind: 'count' as const,
+    },
+    {
+      key: 'discountAmount' as const,
+      label: '优惠金额',
+      hint: '折扣让利',
+      value: metrics.discountAmount,
+      previous: comparison?.metrics.discountAmount,
+      change: comparison?.changes.discountAmount,
+      kind: 'money' as const,
+      inverse: true,
+    },
+  ]
+
+  return (
+    <section className="px-4 mt-3">
+      <div className="flex items-end justify-between mb-2 gap-3">
+        <div>
+          <h2 className="text-h2">经营概览</h2>
+          <p className="text-micro text-gray3 mt-0.5">
+            {comparison?.rangeLabel || '营业数据加载中'}
+          </p>
+        </div>
+        <span className="shrink-0 rounded-full bg-bg-warm px-2 py-1 text-micro text-gray2">
+          {comparison?.label || '时间对比'}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 bg-white rounded-card border border-border overflow-hidden">
+        {cards.map((card, index) => {
+          const { key, ...metricProps } = card
+          return (
+            <OperatingMetricCard
+              key={key}
+              {...metricProps}
+              loading={loading}
+              compareLabel={comparison?.label || '较上期'}
+              className={`${index % 2 === 0 ? 'border-r' : ''} ${index < 2 ? 'border-b' : ''} border-border`}
+            />
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function OperatingMetricCard({
+  label, hint, value, previous, change, kind, inverse, loading, compareLabel, className,
+}: {
+  label: string
+  hint: string
+  value: number
+  previous?: number
+  change?: number | null
+  kind: 'money' | 'count'
+  inverse?: boolean
+  loading: boolean
+  compareLabel: string
+  className?: string
+}) {
+  const hasComparison = change !== null && change !== undefined
+  const improved = hasComparison && (inverse ? change <= 0 : change >= 0)
+  const changeTone = !hasComparison || change === 0
+    ? 'text-gray3'
+    : improved ? 'text-green-fg' : 'text-red-fg'
+  const displayValue = loading
+    ? '—'
+    : kind === 'money'
+      ? `¥${formatMoney(value)}`
+      : `${Math.round(value).toLocaleString('zh-CN')} 单`
+  const previousValue = previous === undefined
+    ? '—'
+    : kind === 'money'
+      ? `¥${formatMoney(previous)}`
+      : `${Math.round(previous).toLocaleString('zh-CN')} 单`
+
+  return (
+    <div className={`min-w-0 p-3.5 ${className || ''}`}>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-caption text-gray2">{label}</span>
+        <span className="text-micro text-gray3">{hint}</span>
+      </div>
+      <div className="font-num text-[22px] leading-tight font-semibold tracking-tight mt-2 truncate">
+        {displayValue}
+      </div>
+      <div className={`text-micro mt-2 font-medium ${changeTone}`}>
+        {hasComparison
+          ? `${compareLabel} ${change! > 0 ? '+' : ''}${change!.toFixed(1)}% ${change! > 0 ? '↑' : change! < 0 ? '↓' : '→'}`
+          : `${compareLabel} 暂无可比`}
+      </div>
+      <div className="text-micro text-gray3 mt-1 truncate">上期 {previousValue}</div>
+    </div>
+  )
+}
+
+function formatMoney(value: number) {
+  return Number(value || 0).toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
 }
 
 const CHANNEL_META: Record<string, { label: string; tone: string }> = {

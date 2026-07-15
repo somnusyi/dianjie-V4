@@ -16,6 +16,8 @@ type InventoryRow = {
   category: string
   unit: string
   price: number | string
+  avgUnitCost: number
+  inventoryValue: number
   stock: number | string
   minStock: number | string
   shelfDays: number
@@ -25,6 +27,12 @@ type InventoryRow = {
   daysToExpiry: number | null
   monthIn: number
   monthOut: number
+  openingDate: string
+  asOf: string
+  hasDataIssue: boolean
+  baselineItemCount: number
+  baselineMatchedCount: number
+  estimateIncomplete: boolean
 }
 
 type OrderRow = {
@@ -36,26 +44,42 @@ type OrderRow = {
   createdAt: string
 }
 
+type SnapshotResponse = {
+  summary: {
+    status: 'AVAILABLE' | 'NO_BASELINE'
+    openingDate: string | null
+    itemCount: number
+    matchedCount: number
+    unmatchedCount: number
+  }
+}
+
 export default function ChefInventoryPage() {
   const [tab, setTab] = useState('inventory')
   const [inv, setInv] = useState<InventoryRow[] | null>(null)
   const [orders, setOrders] = useState<OrderRow[] | null>(null)
+  const [snapshot, setSnapshot] = useState<SnapshotResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [expandedCat, setExpandedCat] = useState<string | null>(null)
 
   useEffect(() => {
     Promise.all([
       apiFetch<InventoryRow[]>('/api/inventory').catch(() => []),
+      apiFetch<SnapshotResponse>('/api/inventory/snapshot/latest').catch(() => null),
       apiFetch<any>('/api/orders?pageSize=20').then(d => (d.items || [])).catch(() => []),
     ])
-      .then(([i, o]) => { setInv(i); setOrders(o) })
+      .then(([i, s, o]) => { setInv(i); setSnapshot(s); setOrders(o) })
       .catch(e => setError(String(e?.message || e)))
   }, [])
 
   const lowStock = (inv || []).filter(p => p.isLowStock)
   const expiring = (inv || []).filter(p => p.isExpiringSoon && !p.isExpired)
-  const totalValue = (inv || []).reduce((s, p) => s + Number(p.stock) * Number(p.price), 0)
+  const totalValue = (inv || []).reduce((s, p) => s + Number(p.inventoryValue || 0), 0)
   const totalSku = (inv || []).length
+  const openingDate = inv?.[0]?.openingDate || snapshot?.summary.openingDate || null
+  const baselineItemCount = inv?.[0]?.baselineItemCount ?? snapshot?.summary.itemCount ?? 0
+  const baselineMatchedCount = inv?.[0]?.baselineMatchedCount ?? snapshot?.summary.matchedCount ?? 0
+  const estimateIncomplete = baselineMatchedCount < baselineItemCount
 
   // 按 category 分组
   const byCategory: Record<string, { count: number; value: number }> = {}
@@ -63,7 +87,7 @@ export default function ChefInventoryPage() {
     const k = p.category || '其他'
     byCategory[k] = byCategory[k] || { count: 0, value: 0 }
     byCategory[k].count++
-    byCategory[k].value += Number(p.stock) * Number(p.price)
+    byCategory[k].value += Number(p.inventoryValue || 0)
   })
   const categories = Object.entries(byCategory).map(([label, v]) => ({ label, ...v }))
 
@@ -85,9 +109,9 @@ export default function ChefInventoryPage() {
 
       <div className="mt-3">
         <GlanceStrip
-          label="库存价值 ● 实时"
+          label="预计库存金额"
           value={`¥${Math.round(totalValue).toLocaleString()}`}
-          meta={`SKU ${totalSku} 项`}
+          meta={`${openingDate ? `${openingDate.slice(5).replace('-', '/')} 盘点后滚动` : '等待盘点基准'} · SKU ${totalSku} 项`}
           stats={[
             { label: '紧急补货', value: `${lowStock.length} 项`, tone: lowStock.length > 0 ? 'red' : 'default' },
             { label: '临期预警', value: `${expiring.length} 项`, tone: expiring.length > 0 ? 'orange' : 'default' },
@@ -95,6 +119,17 @@ export default function ChefInventoryPage() {
           ]}
         />
       </div>
+
+      {inv && snapshot?.summary.status === 'AVAILABLE' && (
+        <div className="mx-4 mt-3 rounded-card border border-amber/30 bg-amber/10 p-3 text-micro text-gray2">
+          月内数量按“最近实物盘点＋采购实收－BOM 理论消耗－门店报损”估算，并非实时实物盘点；月底盘点后重新校准。
+          {estimateIncomplete && (
+            <span className="block mt-1 text-amber-fg">
+              当前盘点品项仅匹配 {baselineMatchedCount}/{baselineItemCount}，未匹配食材暂不参与滚动估算。
+            </span>
+          )}
+        </div>
+      )}
 
       {error && <div className="px-4 mt-3"><FriendlyError message={error} /></div>}
       {!inv && !error && (
@@ -163,11 +198,12 @@ export default function ChefInventoryPage() {
                         <li key={p.id} className="px-3 py-2 flex items-center gap-2">
                           <div className="flex-1 min-w-0">
                             <div className="text-body truncate">{p.name}</div>
-                            <div className="text-micro text-gray3 font-num">¥{Number(p.price).toFixed(2)} / {p.unit}</div>
+                            <div className="text-micro text-gray3 font-num">移动均价 ¥{Number(p.avgUnitCost || p.price).toFixed(2)} / {p.unit}</div>
                           </div>
                           <div className="text-right">
                             <div className="font-num text-body">{Number(p.stock)} {p.unit}</div>
                             {p.isLowStock && <Chip tone="red">低库存</Chip>}
+                            {p.hasDataIssue && <Chip tone="red">需盘点校准</Chip>}
                           </div>
                         </li>
                       ))}
@@ -182,7 +218,13 @@ export default function ChefInventoryPage() {
 
       {inv && inv.length === 0 && !error && (
         <div className="px-4 mt-4">
-          <EmptyState icon="🥬" title="还没有库存" hint="到「商品管理」录入第一个商品, 或等待入库" />
+          <EmptyState
+            icon="🥬"
+            title={snapshot?.summary.status === 'AVAILABLE' ? '预计库存尚未生成' : '还没有库存'}
+            hint={snapshot?.summary.status === 'AVAILABLE'
+              ? `${snapshot.summary.unmatchedCount} 个盘点品项待匹配采购 SKU，完成匹配后开始滚动估算`
+              : '等待导入门店实物盘点'}
+          />
         </div>
       )}
 

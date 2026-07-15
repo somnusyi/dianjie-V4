@@ -1,0 +1,179 @@
+import 'dotenv/config'
+import assert from 'node:assert/strict'
+import bcrypt from 'bcryptjs'
+import { prisma } from '@dianjie/db'
+
+const API_BASE = process.env.TEST_API_BASE || 'http://localhost:4445'
+const TENANT_SLUG = process.env.PREVIEW_TENANT_SLUG || 'yaohai-test'
+const LOCAL_PASSWORD = 'yaohai@123'
+const KEEP_TEST_ORDER = process.env.KEEP_TEST_ORDER === 'true'
+const STOP_AT_PENDING = process.env.STOP_AT_PENDING === 'true'
+
+function assertLocalOnly() {
+  const url = process.env.DATABASE_URL || ''
+  if (process.env.NODE_ENV === 'production' || process.env.PREVIEW_MODE !== 'true' || !url.includes('dianjie_v4_local')) {
+    throw new Error('安全护栏: 订货单验证脚本仅允许本地 PREVIEW_MODE 隔离库')
+  }
+}
+
+async function api(path: string, token: string | null, init: RequestInit = {}) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      'content-type': 'application/json',
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(init.headers || {}),
+    },
+  })
+  const body = await response.json().catch(() => ({}))
+  return { status: response.status, body }
+}
+
+async function login(identifier: string) {
+  const result = await api('/api/auth/login', null, {
+    method: 'POST',
+    body: JSON.stringify({ identifier, password: LOCAL_PASSWORD, tenantSlug: TENANT_SLUG }),
+  })
+  assert.equal(result.status, 200, `登录失败: ${JSON.stringify(result.body)}`)
+  return result.body.token as string
+}
+
+async function main() {
+  assertLocalOnly()
+  const tenant = await prisma.tenant.findUniqueOrThrow({ where: { slug: TENANT_SLUG } })
+  const store = await prisma.store.findFirstOrThrow({ where: { tenantId: tenant.id } })
+  const manager = await prisma.user.findFirstOrThrow({ where: { tenantId: tenant.id, role: 'MANAGER', storeId: store.id } })
+  const password = await bcrypt.hash(LOCAL_PASSWORD, 10)
+  const supplier = await prisma.supplier.upsert({
+    where: { tenantId_no: { tenantId: tenant.id, no: 'LOCAL-PO-VERIFY' } },
+    update: { name: '本地订货单验证供应商', status: 'ENABLED' },
+    create: { tenantId: tenant.id, no: 'LOCAL-PO-VERIFY', name: '本地订货单验证供应商', status: 'ENABLED' },
+  })
+  const supplierUser = await prisma.user.upsert({
+    where: { tenantId_email: { tenantId: tenant.id, email: 'supplier-order-verify@local.test' } },
+    update: { password, role: 'SUPPLIER_OWNER', status: 'ACTIVE', supplierId: supplier.id },
+    create: {
+      tenantId: tenant.id, name: '本地供应商验证账号', email: 'supplier-order-verify@local.test',
+      password, role: 'SUPPLIER_OWNER', status: 'ACTIVE', supplierId: supplier.id,
+    },
+  })
+  const productA = await prisma.product.upsert({
+    where: { tenantId_code: { tenantId: tenant.id, code: 'LOCAL-PO-A' } },
+    update: { supplierId: supplier.id, status: 'ENABLED', price: 3.33 },
+    create: { tenantId: tenant.id, supplierId: supplier.id, code: 'LOCAL-PO-A', name: '验证土豆', unit: 'kg', price: 3.33, status: 'ENABLED' },
+  })
+  const productB = await prisma.product.upsert({
+    where: { tenantId_code: { tenantId: tenant.id, code: 'LOCAL-PO-B' } },
+    update: { supplierId: supplier.id, status: 'ENABLED', price: 4.5 },
+    create: { tenantId: tenant.id, supplierId: supplier.id, code: 'LOCAL-PO-B', name: '验证青椒', unit: 'kg', price: 4.5, status: 'ENABLED' },
+  })
+
+  const managerToken = await login(manager.email)
+  const supplierToken = await login(supplierUser.email)
+  const idempotencyKey = `verify-${Date.now()}`
+  let orderId: string | null = null
+  let orderNo: string | null = null
+
+  try {
+    const createBody = {
+      supplierId: supplier.id,
+      expectedDate: '2026-07-16',
+      note: '原始备注不可修改',
+      idempotencyKey,
+      items: [{ productId: productA.id, quantity: 5, unitPrice: 0 }],
+    }
+    const created = await api('/api/orders', managerToken, { method: 'POST', body: JSON.stringify(createBody) })
+    assert.equal(created.status, 200)
+    orderId = created.body.id
+    orderNo = created.body.no
+    assert.ok(created.body.submittedSnapshotHash, `创建响应缺少快照哈希: ${JSON.stringify(created.body)}`)
+    assert.equal(Number(created.body.originalTotalAmount), 16.65)
+
+    const duplicate = await api('/api/orders', managerToken, { method: 'POST', body: JSON.stringify(createBody) })
+    assert.equal(duplicate.status, 200)
+    assert.equal(duplicate.body.id, orderId, '持久化幂等必须返回同一订单')
+
+    const originalHash = created.body.submittedSnapshotHash
+    const forbiddenPriceChange = await api(`/api/orders/${orderId}/revisions`, supplierToken, {
+      method: 'POST',
+      body: JSON.stringify({
+        reason: '尝试修改价格', baseRowVersion: created.body.rowVersion,
+        requestKey: `forbidden-price-${Date.now()}`,
+        items: [{ productId: productA.id, quantity: 4, unitPrice: 0.01 }],
+      }),
+    })
+    assert.equal(forbiddenPriceChange.status, 400, '改单接口必须明确拒绝单价字段')
+
+    const revision = await api(`/api/orders/${orderId}/revisions`, supplierToken, {
+      method: 'POST',
+      body: JSON.stringify({
+        reason: '库存不足并补充青椒', baseRowVersion: created.body.rowVersion,
+        requestKey: `revision-${Date.now()}`,
+        items: [
+          { productId: productA.id, quantity: 4 },
+          { productId: productB.id, quantity: 3 },
+        ],
+      }),
+    })
+    assert.equal(revision.status, 201, JSON.stringify(revision.body))
+
+    const blockedConfirm = await api(`/api/orders/${orderId}/confirm`, supplierToken, { method: 'PATCH', body: '{}' })
+    assert.equal(blockedConfirm.status, 409, '有待确认改单时必须禁止接单')
+
+    if (STOP_AT_PENDING) {
+      console.log(JSON.stringify({
+        ok: true,
+        stage: 'PENDING_REVISION',
+        orderId,
+        orderNo,
+        managerUrl: `/v2/chef/purchase/po-success/${orderId}`,
+        supplierUrl: `/v2/supplier/orders/${orderId}`,
+      }))
+      return
+    }
+
+    const approved = await api(`/api/orders/${orderId}/revisions/${revision.body.id}/approve`, managerToken, {
+      method: 'PATCH', body: JSON.stringify({ note: '同意库存调整' }),
+    })
+    assert.equal(approved.status, 200, JSON.stringify(approved.body))
+
+    const detail = await api(`/api/orders/${orderId}`, managerToken)
+    assert.equal(detail.status, 200)
+    assert.equal(detail.body.submittedSnapshotHash, originalHash, '改单后原始快照 hash 不能改变')
+    assert.equal(Number(detail.body.originalTotalAmount), 16.65)
+    assert.equal(Number(detail.body.currentOrderAmount), 26.82)
+    assert.equal(detail.body.original.items.length, 1)
+    assert.equal(detail.body.current.items.length, 2)
+    assert.equal(detail.body.revisions[0].status, 'APPROVED')
+
+    const confirmed = await api(`/api/orders/${orderId}/confirm`, supplierToken, { method: 'PATCH', body: '{}' })
+    assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body))
+    const finalDetail = await api(`/api/orders/${orderId}`, supplierToken)
+    assert.equal(finalDetail.body.status, 'CONFIRMED')
+    assert.equal(finalDetail.body.submittedSnapshotHash, originalHash)
+    assert.ok(finalDetail.body.timeline.some((event: any) => event.eventType === 'REVISION_REQUESTED'))
+    assert.ok(finalDetail.body.timeline.some((event: any) => event.eventType === 'REVISION_APPROVED'))
+    assert.ok(finalDetail.body.timeline.some((event: any) => event.eventType === 'ACCEPTED'))
+
+    console.log(JSON.stringify({ ok: true, orderNo: finalDetail.body.no, originalAmount: 16.65, currentAmount: 26.82, events: finalDetail.body.timeline.length }))
+  } finally {
+    if (orderId && !KEEP_TEST_ORDER) {
+      await prisma.$transaction(async tx => {
+        await tx.notification.deleteMany({ where: { refType: 'PurchaseOrder', refId: orderId! } })
+        await tx.opLog.deleteMany({
+          where: { OR: [{ targetId: orderId! }, ...(orderNo ? [{ target: orderNo }] : [])] },
+        })
+        await tx.purchaseOrderEvent.deleteMany({ where: { purchaseOrderId: orderId! } })
+        await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: orderId! } })
+        await tx.purchaseOrderRevision.deleteMany({ where: { purchaseOrderId: orderId! } })
+        await tx.purchaseOrder.delete({ where: { id: orderId! } })
+      })
+    }
+  }
+}
+
+main().then(() => prisma.$disconnect()).catch(async error => {
+  console.error(error)
+  await prisma.$disconnect()
+  process.exit(1)
+})

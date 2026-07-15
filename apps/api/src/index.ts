@@ -50,6 +50,7 @@ import { scheduleRoutes } from './routes/schedules'
 import { logRoutes } from './routes/logs'
 import { startScheduler } from './services/scheduler'
 import { purchaseOrderRoutes } from './routes/orders'
+import { deliveryRoutes } from './routes/deliveries'
 import { registerIdempotency } from './lib/idempotency'
 import { lossClaimRoutes } from './routes/lossClaims'
 import { paymentRuleRoutes } from './routes/paymentRules'
@@ -198,6 +199,7 @@ async function bootstrap() {
   await app.register(scheduleRoutes,       { prefix: '/api/schedules' })
   await app.register(logRoutes,            { prefix: '/api/logs' })
   app.register(purchaseOrderRoutes, { prefix: '/api/orders' })
+  app.register(deliveryRoutes, { prefix: '/api/deliveries' })
   app.register(lossClaimRoutes, { prefix: '/api/loss-claims' })
   app.register(paymentRuleRoutes, { prefix: '/api/payment-rules' })
   app.register(revenueRoutes, { prefix: '/api/revenue' })
@@ -272,7 +274,11 @@ async function bootstrap() {
   })
 
   // ── 启动账期调度器 ────────────────────
-  await startScheduler()
+  if (process.env.PREVIEW_MODE === 'true') {
+    console.log('🔒 PREVIEW_MODE: 已禁用账期、美团及银行后台任务')
+  } else {
+    await startScheduler()
+  }
 
   // ── 监听 ──────────────────────────────
   const port = parseInt(process.env.API_PORT || '4000')

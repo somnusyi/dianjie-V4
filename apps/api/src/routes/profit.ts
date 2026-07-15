@@ -37,18 +37,26 @@ export const profitRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const targetMonth = month || dayjs().format('YYYY-MM')
+    const targetMonthDay = dayjs(`${targetMonth}-01`)
+    const comparisonMonth = targetMonthDay.subtract(1, 'month').format('YYYY-MM')
     // DATE 列 (RevenueRecord.date) → UTC 边界; timestamp 列 (createdAt) → ts 边界
     const { start, end } = monthRangeForDateCol(targetMonth)
     const { start: startTs, end: endTs } = monthRangeForTimestampCol(targetMonth)
+    const { start: comparisonStart, end: comparisonEnd } = monthRangeForDateCol(comparisonMonth)
 
     // 验证门店属于当前租户
     const store = await prisma.store.findFirst({ where: { id: storeId, tenantId } })
     if (!store) return reply.status(404).send({ error: '门店不存在' })
 
-    const [revenues, receipts, lossClaims, expenses] = await Promise.all([
+    const [revenues, comparisonRevenueRows, receipts, lossClaims, expenses] = await Promise.all([
       // 营业额（含渠道, date 是 DATE）
       prisma.revenueRecord.findMany({
         where: { storeId, date: { gte: start, lte: end } },
+        orderBy: { date: 'asc' },
+      }),
+      // 对比期营业数据；本月会在查询后截到相同营业日，避免拿半个月对比完整上月
+      prisma.revenueRecord.findMany({
+        where: { storeId, date: { gte: comparisonStart, lte: comparisonEnd } },
         orderBy: { date: 'asc' },
       }),
       // 食材采购成本 (createdAt 是 timestamp)
@@ -67,6 +75,48 @@ export const profitRoutes: FastifyPluginAsync = async (app) => {
         orderBy: { category: 'asc' },
       }),
     ])
+
+    // 营业核心指标。历史 POS 导入在 rawData 中保留折前/优惠/折后/订单量；
+    // 老的手工记录没有这些字段时，以 amount 作为营业额和营业收入兜底。
+    function operatingMetrics(rows: typeof revenues) {
+      return rows.reduce((result, record) => {
+        const raw = (record.rawData as any) || {}
+        const netRevenue = Number(raw.netRevenue ?? record.amount ?? 0)
+        const grossAmount = Number(raw.grossAmount ?? record.amount ?? 0)
+        result.grossAmount += grossAmount
+        result.netRevenue += netRevenue
+        result.discountAmount += Number(raw.discountAmount ?? Math.max(0, grossAmount - netRevenue))
+        result.orders += Number(raw.orders ?? 0)
+        result.recordCount += 1
+        return result
+      }, { grossAmount: 0, netRevenue: 0, discountAmount: 0, orders: 0, recordCount: 0 })
+    }
+
+    const metrics = operatingMetrics(revenues)
+    const isCurrentMonth = targetMonth === dayjs().format('YYYY-MM')
+    const latestRecordedDay = revenues.length > 0
+      ? Math.max(...revenues.map(record => record.date.getUTCDate()))
+      : 0
+    const comparableRevenueRows = isCurrentMonth && latestRecordedDay > 0
+      ? comparisonRevenueRows.filter(record => record.date.getUTCDate() <= latestRecordedDay)
+      : comparisonRevenueRows
+    const comparisonMetrics = operatingMetrics(comparableRevenueRows)
+    const changePct = (current: number, previous: number) => previous > 0
+      ? ((current - previous) / previous) * 100
+      : null
+    const currentMonthLabel = `${targetMonthDay.month() + 1}月`
+    const comparisonMonthDay = targetMonthDay.subtract(1, 'month')
+    const comparisonMonthLabel = `${comparisonMonthDay.month() + 1}月`
+    const comparisonLabel = isCurrentMonth && latestRecordedDay > 0 ? '较上月同期' : '较上月'
+    const dataRangeLabel = (monthLabel: string, monthDay: dayjs.Dayjs, rows: typeof revenues) => {
+      if (rows.length === 0) return `${monthLabel}暂无数据`
+      const firstDay = Math.min(...rows.map(record => record.date.getUTCDate()))
+      const lastDay = Math.max(...rows.map(record => record.date.getUTCDate()))
+      return firstDay === 1 && lastDay === monthDay.daysInMonth()
+        ? monthLabel
+        : `${monthLabel}${firstDay}–${lastDay}日`
+    }
+    const rangeLabel = `${dataRangeLabel(currentMonthLabel, targetMonthDay, revenues)} · 对比${dataRangeLabel(comparisonMonthLabel, comparisonMonthDay, comparableRevenueRows)}`
 
     // 营业额合计 + 渠道分解
     // amount 字段是 GMV (顾客实际花费), 包含平台券面值
@@ -126,6 +176,19 @@ export const profitRoutes: FastifyPluginAsync = async (app) => {
         },
         channels: channelSummary,
         recordCount: revenues.length,
+        metrics,
+        comparison: {
+          label: comparisonLabel,
+          month: comparisonMonth,
+          rangeLabel,
+          metrics: comparisonMetrics,
+          changes: {
+            grossAmount: changePct(metrics.grossAmount, comparisonMetrics.grossAmount),
+            netRevenue: changePct(metrics.netRevenue, comparisonMetrics.netRevenue),
+            orders: changePct(metrics.orders, comparisonMetrics.orders),
+            discountAmount: changePct(metrics.discountAmount, comparisonMetrics.discountAmount),
+          },
+        },
       },
       cost: {
         food: foodCost,

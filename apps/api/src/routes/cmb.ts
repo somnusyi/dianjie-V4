@@ -264,6 +264,8 @@ export const cmbRoutes: FastifyPluginAsync = async (app) => {
 
   // 后台 cmb 余额预热: 启动 5s 后第一次, 之后每 20s 一次 (覆盖 30s TTL)
   // 不同账户并发预热, 单轮 ≈ 1 秒 RT, 完美填补 cache 窗口
-  setTimeout(() => { prewarmAllCmbAccounts() }, 5_000)
-  setInterval(() => { prewarmAllCmbAccounts() }, 20_000).unref()
+  if (process.env.PREVIEW_MODE !== 'true') {
+    setTimeout(() => { prewarmAllCmbAccounts() }, 5_000)
+    setInterval(() => { prewarmAllCmbAccounts() }, 20_000).unref()
+  }
 }

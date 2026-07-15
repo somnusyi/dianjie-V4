@@ -15,6 +15,7 @@ import { apiFetch } from '@/lib/v2-auth'
 type Product = {
   id: string; code: string; name: string; category: string; unit: string
   spec?: string | null
+  imageKey?: string | null; imageUrl?: string | null
   price: number | string; stock: number | string; minStock: number | string
   minOrderQty?: number | string; stepQty?: number | string
   shipUpperPct?: number | string       // 实发上限百分比 (1.10 = 110%)
@@ -24,12 +25,22 @@ type Product = {
 
 type NewSku = {
   code: string; name: string; spec: string; category: string; unit: string
-  price: string; stock: string; minStock: string; shelfDays: string
+  imageKey: string
+  price: string; shelfDays: string
   minOrderQty: string; stepQty: string
 }
 // 默认值跟报价模板对齐: 必填只有 名称 + 规格 + 单位 + 单价
 // code 留空会自动生成 (供应商前缀+时间戳), category 缺省"其他"
-const EMPTY_SKU: NewSku = { code: '', name: '', spec: '', category: '', unit: '件', price: '', stock: '0', minStock: '0', shelfDays: '7', minOrderQty: '1', stepQty: '1' }
+const EMPTY_SKU: NewSku = { code: '', name: '', spec: '', category: '', unit: '件', imageKey: '', price: '', shelfDays: '7', minOrderQty: '1', stepQty: '1' }
+
+type CategoryOption = {
+  id?: string | null; name: string; count: number
+  sortOrder?: number; isActive?: boolean; isSystem?: boolean
+}
+type HistoryRow = {
+  id: string; action: string; operator: string; createdAt: string
+  target?: string | null
+}
 
 type Batch = {
   id: string; filename: string | null
@@ -63,6 +74,14 @@ export default function SupplierProductsPage() {
   const [createErr, setCreateErr] = useState<string | null>(null)
   const [batches, setBatches] = useState<Batch[] | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [categories, setCategories] = useState<CategoryOption[]>([])
+  const [categoryFilter, setCategoryFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bulkCategory, setBulkCategory] = useState('')
+  const [operations, setOperations] = useState<HistoryRow[]>([])
+  const [operationsOpen, setOperationsOpen] = useState(false)
+  const [uploadingId, setUploadingId] = useState<string | null>(null)
 
   function load() {
     apiFetch<Product[]>('/api/products')
@@ -71,13 +90,19 @@ export default function SupplierProductsPage() {
     apiFetch<Batch[]>('/api/products/batches')
       .then(d => setBatches(Array.isArray(d) ? d : []))
       .catch(() => setBatches([]))
+    apiFetch<CategoryOption[]>('/api/products/categories')
+      .then(d => setCategories(Array.isArray(d) ? d : []))
+      .catch(() => setCategories([]))
+    apiFetch<HistoryRow[]>('/api/products/history?limit=50')
+      .then(d => setOperations(Array.isArray(d) ? d : []))
+      .catch(() => setOperations([]))
   }
   useEffect(() => { load() }, [])
 
   function revokeBatch(b: Batch) {
     openConfirm({
       title: `撤回这次上传?`,
-      body: `${b.filename || '(未命名)'} · 上架 ${b.createdCount} 个商品\n撤回会删除该批次仍未单独删除的商品 (${b._count?.products ?? '?'} 个), 不可恢复`,
+      body: `${b.filename || '(未命名)'} · 上架 ${b.createdCount} 个商品\n撤回后会停止供应该批次商品，但商品、订单和库存历史会永久保留。`,
       confirmLabel: '撤回',
       tone: 'danger',
       onConfirm: async () => {
@@ -192,31 +217,86 @@ export default function SupplierProductsPage() {
     const hay = `${p.name} ${p.spec || ''} ${p.code}`.toLowerCase()
     return q.toLowerCase().split(/\s+/).filter(Boolean).every(t => hay.includes(t))
   }
-  const filtered = (products || []).filter(p => matches(p, searchQ))
+  const filtered = (products || []).filter(p =>
+    matches(p, searchQ) &&
+    (!categoryFilter || p.category === categoryFilter) &&
+    (!statusFilter || p.status === statusFilter)
+  )
   const byCat: Record<string, Product[]> = {}
   filtered.forEach(p => { (byCat[p.category] = byCat[p.category] || []).push(p) })
+  const categoryOrder = new Map(categories.map((category, index) => [category.name, category.sortOrder ?? index]))
+  const categorySections = Object.entries(byCat).sort(([a], [b]) =>
+    (categoryOrder.get(a) ?? 9999) - (categoryOrder.get(b) ?? 9999) || a.localeCompare(b, 'zh-CN')
+  )
+  const activeCategories = categories.filter(category => category.isActive !== false)
 
   function openCreate() {
     setNewSku(EMPTY_SKU)
     setCreateErr(null)
     setCreateOpen(true)
   }
-  function clearAll() {
-    if (!products || products.length === 0) { alert('已经是空的'); return }
+
+  function toggleSelected(id: string) {
+    setSelected(current => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  async function uploadProductImage(product: Product | null, file: File) {
+    const target = product?.id || 'new'
+    setUploadingId(target)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const uploaded: any = await apiFetch('/api/upload?category=products', { method: 'POST', body: form })
+      if (product) {
+        await apiFetch(`/api/products/${product.id}`, {
+          method: 'PATCH', body: JSON.stringify({ imageKey: uploaded.key }),
+        })
+        load()
+      } else {
+        setNewSku(current => ({ ...current, imageKey: uploaded.key }))
+      }
+    } catch (e: any) {
+      alert(e.message || '图片上传失败')
+    } finally {
+      setUploadingId(null)
+    }
+  }
+
+  function batchChangeCategory() {
+    if (selected.size === 0 || !bulkCategory.trim()) return
     openConfirm({
-      title: `⚠ 危险操作: 清除全部 ${products.length} 个 SKU?`,
-      body: `将永久删除你名下所有商品 + 库存流水 + 上传批次记录, 不可恢复.\n如果有商品被订单引用, 系统会拒绝并提示.\n\n仅在: 测试环境清理 / 重新规划 SKU 时使用.`,
-      confirmLabel: '我确认, 全部清除',
-      tone: 'danger',
+      title: `修改 ${selected.size} 个商品分类?`,
+      body: `统一改为「${bulkCategory.trim()}」，操作记录会永久保留。`,
+      confirmLabel: '确认修改', tone: 'primary',
       onConfirm: async () => {
-        try {
-          const res: any = await apiFetch('/api/products/clear-all', {
-            method: 'DELETE',
-            body: JSON.stringify({ confirm: 'CLEAR_ALL' }),
-          })
-          alert(`✓ 已清除 ${res.deletedProducts} 商品 / ${res.deletedMovements} 流水 / ${res.deletedBatches} 批次`)
-          load()
-        } catch (e: any) { alert(e.message || '清除失败'); throw e }
+        await apiFetch('/api/products/batch-category', {
+          method: 'PATCH',
+          body: JSON.stringify({ ids: [...selected], category: bulkCategory.trim() }),
+        })
+        setSelected(new Set()); setBulkCategory(''); load()
+      },
+    })
+  }
+
+  function batchChangeStatus(status: 'ENABLED' | 'DISABLED') {
+    if (selected.size === 0) return
+    openConfirm({
+      title: `${status === 'DISABLED' ? '批量停售' : '批量恢复'} ${selected.size} 个商品?`,
+      body: status === 'DISABLED'
+        ? '将生成一张批量停售审批单，总厨批准后生效。'
+        : '所选已停售商品将恢复供应，完整操作记录会保留。',
+      confirmLabel: status === 'DISABLED' ? '提交审批' : '确认恢复',
+      tone: status === 'DISABLED' ? 'danger' : 'primary',
+      onConfirm: async () => {
+        const res: any = await apiFetch('/api/products/batch-status', {
+          method: 'PATCH', body: JSON.stringify({ ids: [...selected], status }),
+        })
+        if (res?.documentNo) alert(`✓ 已提交审批单 ${res.documentNo}`)
+        setSelected(new Set()); load()
       },
     })
   }
@@ -233,8 +313,6 @@ export default function SupplierProductsPage() {
         name: newSku.name.trim(),
         unit: newSku.unit.trim() || '件',
         price: Number(newSku.price),
-        stock: Number(newSku.stock) || 0,
-        minStock: Number(newSku.minStock) || 0,
         shelfDays: Number(newSku.shelfDays) || 7,
         minOrderQty: Number(newSku.minOrderQty) || 1,
         stepQty: Number(newSku.stepQty) || 1,
@@ -242,6 +320,7 @@ export default function SupplierProductsPage() {
       if (newSku.code.trim()) body.code = newSku.code.trim()
       if (newSku.spec.trim()) body.spec = newSku.spec.trim()
       if (newSku.category.trim()) body.category = newSku.category.trim()
+      if (newSku.imageKey) body.imageKey = newSku.imageKey
       await apiFetch('/api/products', {
         method: 'POST',
         body: JSON.stringify(body),
@@ -265,14 +344,15 @@ export default function SupplierProductsPage() {
             {products ? `${products.length} SKU · ${Object.keys(byCat).length} 类` : '加载中…'}
           </p>
         </div>
-        <div className="flex gap-2">
-          {products && products.length > 0 && (
-            <button
-              onClick={clearAll}
-              className="px-2 py-2 bg-white border border-red/30 rounded-cta text-caption text-red-fg"
-              title="清除当前供应商所有 SKU (谨慎)"
-            >🗑 全清</button>
-          )}
+        <div className="flex gap-2 flex-wrap justify-end">
+          <a
+            href="/v2/supplier/categories"
+            className="px-2 py-2 bg-white border border-border rounded-cta text-caption text-gray2"
+          >分类管理</a>
+          <button
+            onClick={() => setOperationsOpen(v => !v)}
+            className="px-2 py-2 bg-white border border-border rounded-cta text-caption text-gray2"
+          >操作记录</button>
           <a
             href="/v2/supplier/products/upload"
             className="px-3 py-2 bg-white border border-border rounded-cta text-button text-gray2"
@@ -310,6 +390,65 @@ export default function SupplierProductsPage() {
           {searchQ && (
             <p className="text-micro text-gray3 mt-1">{filtered.length} / {products.length} 命中</p>
           )}
+          <div className="grid grid-cols-2 gap-2 mt-2">
+            <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} className={INPUT_CLS}>
+              <option value="">全部分类</option>
+              {categories.map(category => <option key={category.name} value={category.name}>{category.name} ({category.count})</option>)}
+            </select>
+            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className={INPUT_CLS}>
+              <option value="">全部状态</option>
+              <option value="ENABLED">供应中</option>
+              <option value="PENDING_APPROVAL">上架待审</option>
+              <option value="PENDING_DISABLE">停售待审</option>
+              <option value="DISABLED">已停售</option>
+            </select>
+          </div>
+        </div>
+      )}
+
+      {operationsOpen && (
+        <div className="px-4 mt-3">
+          <div className="bg-bg-card border border-border rounded-card p-3">
+            <div className="text-h2 mb-2">最近操作</div>
+            {operations.length === 0 && <p className="text-caption text-gray3">暂无商品操作记录</p>}
+            <ul className="space-y-2 max-h-64 overflow-y-auto">
+              {operations.map(row => (
+                <li key={row.id} className="border-b border-border/60 pb-2 last:border-0">
+                  <div className="text-caption text-ink">{row.action}</div>
+                  <div className="text-micro text-gray3 mt-0.5">{row.operator} · {new Date(row.createdAt).toLocaleString('zh-CN')}</div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {products && products.length > 0 && (
+        <div className="px-4 mt-3">
+          <div className="bg-bg-card border border-border rounded-card p-3">
+            <div className="flex items-center gap-2">
+              <label className="flex items-center gap-2 text-caption text-gray2">
+                <input
+                  type="checkbox"
+                  checked={filtered.length > 0 && filtered.every(product => selected.has(product.id))}
+                  onChange={e => setSelected(e.target.checked ? new Set(filtered.map(product => product.id)) : new Set())}
+                />
+                选择当前 {filtered.length} 项
+              </label>
+              <span className="ml-auto text-caption text-accent">已选 {selected.size}</span>
+            </div>
+            {selected.size > 0 && (
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <select value={bulkCategory} onChange={e => setBulkCategory(e.target.value)} className={INPUT_CLS}>
+                  <option value="">选择新分类</option>
+                  {activeCategories.map(category => <option key={category.name} value={category.name}>{category.name}</option>)}
+                </select>
+                <button onClick={batchChangeCategory} disabled={!bulkCategory} className="rounded-cta bg-white border border-border text-button disabled:opacity-40">批量改类</button>
+                <button onClick={() => batchChangeStatus('DISABLED')} className="py-2 rounded-cta bg-red-bg text-red-fg text-button">批量停售</button>
+                <button onClick={() => batchChangeStatus('ENABLED')} className="py-2 rounded-cta bg-green-bg text-green-fg text-button">批量恢复</button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -364,7 +503,7 @@ export default function SupplierProductsPage() {
         </div>
       )}
 
-      {products && Object.entries(byCat).map(([cat, items]) => (
+      {products && categorySections.map(([cat, items]) => (
         <section key={cat} className="px-4 mt-4">
           <h2 className="text-h2 mb-2">{cat}<span className="text-caption text-gray3 ml-2">({items.length})</span></h2>
           <ul className="bg-bg-card rounded-card border border-border divide-y divide-border">
@@ -373,6 +512,17 @@ export default function SupplierProductsPage() {
               return (
                 <li key={p.id} className="px-3 py-3">
                   <div className="flex items-center gap-2 mb-1">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(p.id)}
+                      onChange={() => toggleSelected(p.id)}
+                      aria-label={`选择 ${p.name}`}
+                    />
+                    {p.imageUrl ? (
+                      <img src={p.imageUrl} alt="" className="w-10 h-10 rounded-chip object-cover border border-border" />
+                    ) : (
+                      <div className="w-10 h-10 rounded-chip bg-bg border border-border flex items-center justify-center text-gray3">图</div>
+                    )}
                     <span className="text-h2 truncate flex-1">{p.name}</span>
                     {p.status === 'DISABLED' && <Chip tone="gray">已停售</Chip>}
                     {p.status === 'PENDING_APPROVAL' && <Chip tone="orange">待审核</Chip>}
@@ -443,6 +593,18 @@ export default function SupplierProductsPage() {
                         </span>
                         {p.spec && <span className="text-micro text-gray3 truncate">· {p.spec}</span>}
                         <span className="ml-auto flex items-center gap-2">
+                          <label onClick={e => e.stopPropagation()} className="text-caption text-accent cursor-pointer">
+                            {uploadingId === p.id ? '上传中…' : '图片'}
+                            <input
+                              type="file" accept="image/jpeg,image/png,image/webp" className="hidden"
+                              disabled={uploadingId === p.id}
+                              onChange={e => {
+                                const file = e.target.files?.[0]
+                                if (file) void uploadProductImage(p, file)
+                                e.target.value = ''
+                              }}
+                            />
+                          </label>
                           {p.status === 'ENABLED' && (
                             <span onClick={(e) => { e.stopPropagation(); toggleStatus(p) }}
                                   className="text-caption text-accent cursor-pointer">停售</span>
@@ -491,9 +653,24 @@ export default function SupplierProductsPage() {
                onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 bg-border rounded-full mx-auto mb-4" />
             <h3 className="text-h2 text-ink">新建 SKU</h3>
-            <p className="text-micro text-gray3 mt-1">上架后餐厅下单时可见, 价格 / 库存随时可改</p>
+            <p className="text-micro text-gray3 mt-1">上架审批通过后餐厅可下单；库存请到「库存」页维护</p>
 
             <div className="grid grid-cols-2 gap-3 mt-4">
+              <div className="col-span-2">
+                <label className="text-micro text-gray3 block mb-1">商品主图</label>
+                <label className="flex items-center justify-center gap-2 h-20 rounded-cta border-2 border-dashed border-border bg-bg cursor-pointer text-caption text-gray2">
+                  {uploadingId === 'new' ? '上传中…' : newSku.imageKey ? '✓ 图片已上传，可重新选择' : '选择 JPG / PNG / WebP'}
+                  <input
+                    type="file" accept="image/jpeg,image/png,image/webp" className="hidden"
+                    disabled={uploadingId === 'new'}
+                    onChange={e => {
+                      const file = e.target.files?.[0]
+                      if (file) void uploadProductImage(null, file)
+                      e.target.value = ''
+                    }}
+                  />
+                </label>
+              </div>
               {/* —— 报价模板必填的 4 项 —— */}
               <Field label="品项名称 *">
                 <input value={newSku.name} onChange={e => setNewSku({...newSku, name: e.target.value})}
@@ -558,22 +735,14 @@ export default function SupplierProductsPage() {
                        placeholder="例: SH001" className={INPUT_CLS} />
               </Field>
               <Field label="类目 (默认其他)">
-                <input value={newSku.category} onChange={e => setNewSku({...newSku, category: e.target.value})}
-                       placeholder="例: 酒水 / 水产" className={INPUT_CLS} />
+                <select value={newSku.category} onChange={e => setNewSku({...newSku, category: e.target.value})} className={INPUT_CLS}>
+                  <option value="">其他（默认）</option>
+                  {activeCategories.filter(category => category.name !== '其他').map(category => <option key={category.name} value={category.name}>{category.name}</option>)}
+                </select>
               </Field>
               <Field label="保质期 (天)">
                 <input type="number" min="0" value={newSku.shelfDays}
                        onChange={e => setNewSku({...newSku, shelfDays: e.target.value})}
-                       className={INPUT_CLS} />
-              </Field>
-              <Field label="初始库存">
-                <input type="number" step="0.01" min="0" value={newSku.stock}
-                       onChange={e => setNewSku({...newSku, stock: e.target.value})}
-                       className={INPUT_CLS} />
-              </Field>
-              <Field label="安全库存">
-                <input type="number" step="0.01" min="0" value={newSku.minStock}
-                       onChange={e => setNewSku({...newSku, minStock: e.target.value})}
                        className={INPUT_CLS} />
               </Field>
               <Field label="起订量 (默认1)">

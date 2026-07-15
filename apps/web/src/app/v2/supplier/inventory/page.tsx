@@ -19,6 +19,7 @@ type Item = {
   nearestExpiry: string | null; daysToExpiry: number | null
 }
 type Summary = { totalSku: number; lowStock: number; outOfStock: number; totalValue: number }
+type Category = { id?: string | null; name: string; count: number; sortOrder?: number; isActive?: boolean }
 
 const STATUS_LABEL: Record<string, string> = { OUT: '已断货', LOW: '低于警戒', OK: '充足' }
 const STATUS_TONE: Record<string, 'red'|'orange'|'green'|'gray'> = { OUT: 'red', LOW: 'orange', OK: 'green' }
@@ -28,11 +29,14 @@ export default function InventoryPage() {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [filter, setFilter] = useState<'all'|'low'|'out'>('all')
   const [searchQ, setSearchQ] = useState('')
+  const [categories, setCategories] = useState<Category[]>([])
+  const [categoryFilter, setCategoryFilter] = useState('')
   const [error, setError] = useState<string | null>(null)
 
   function load() {
     apiFetch<Item[]>('/api/supplier/stock').then(setItems).catch(e => setError(e.message))
     apiFetch<Summary>('/api/supplier/stock/summary').then(setSummary).catch(() => {})
+    apiFetch<Category[]>('/api/products/categories').then(rows => setCategories(Array.isArray(rows) ? rows : [])).catch(() => {})
   }
   useEffect(() => { load() }, [])
 
@@ -46,14 +50,23 @@ export default function InventoryPage() {
   const visible = !items ? [] : items.filter(i => {
     if (filter === 'low' && i.statusFlag !== 'LOW') return false
     if (filter === 'out' && i.statusFlag !== 'OUT') return false
+    if (categoryFilter && i.category !== categoryFilter) return false
     if (!matchesQuery(i, searchQ)) return false
     return true
   })
+  const categoryOrder = new Map(categories.map((category, index) => [category.name, category.sortOrder ?? index]))
+  const grouped = Object.entries(visible.reduce<Record<string, Item[]>>((result, item) => {
+    ;(result[item.category || '其他'] ||= []).push(item)
+    return result
+  }, {})).sort(([a], [b]) =>
+    (categoryOrder.get(a) ?? 9999) - (categoryOrder.get(b) ?? 9999) || a.localeCompare(b, 'zh-CN')
+  )
 
   return (
     <div className="min-h-screen bg-bg pb-24">
-      <header className="px-4 pt-4 pb-2 flex items-center gap-3">
+      <header className="px-4 pt-4 pb-2 flex items-center gap-2 flex-wrap">
         <h1 className="text-h1 flex-1">库存</h1>
+        <a href="/v2/supplier/categories" className="px-3 py-2 bg-white border border-border rounded-cta text-button text-gray2">分类管理</a>
         <a href="/v2/supplier/inventory/import" className="px-3 py-2 bg-white border border-border rounded-cta text-button text-gray2">↥ 导入清单</a>
         <a href="/v2/supplier/inventory/inbound" className="px-3 py-2 bg-amber text-white rounded-cta text-button">↓ 入库</a>
       </header>
@@ -102,6 +115,26 @@ export default function InventoryPage() {
         </div>
       </div>
 
+      {/* 商品与库存共用分类主数据 */}
+      <div className="px-4 mt-2 flex items-center gap-2">
+        <select
+          value={categoryFilter}
+          onChange={event => setCategoryFilter(event.target.value)}
+          className="flex-1 bg-white border border-border rounded-cta px-3 py-2 text-body outline-none focus:border-amber"
+          aria-label="库存分类"
+        >
+          <option value="">全部分类 ({items?.length ?? 0})</option>
+          {categories.map(category => (
+            <option key={category.name} value={category.name}>
+              {category.name} ({category.count}){category.isActive === false ? ' · 已停用' : ''}
+            </option>
+          ))}
+        </select>
+        {categoryFilter && (
+          <button onClick={() => setCategoryFilter('')} className="px-3 py-2 text-caption text-gray2">清除</button>
+        )}
+      </div>
+
       {/* Filter */}
       <div className="px-4 mt-3 flex gap-2">
         {([['all','全部'],['low','低于警戒'],['out','已断货']] as const).map(([k,l]) => (
@@ -124,9 +157,19 @@ export default function InventoryPage() {
             {filter === 'all' && !searchQ ? '暂无 SKU. 先去 商品报价表 添加商品' : '没有符合的商品'}
           </div>
         )}
-        <ul className="space-y-2">
-          {visible.map(i => (
-            <li key={i.id} className="bg-white rounded-card border border-border p-3">
+        <div className="space-y-4">
+          {grouped.map(([category, categoryItems]) => (
+            <section key={category}>
+              <div className="flex items-end mb-2 px-1">
+                <h2 className="text-h2">{category}</h2>
+                <span className="text-caption text-gray3 ml-2">{categoryItems.length} 项</span>
+                <span className="text-micro text-gray3 ml-auto">
+                  库存价值 ¥{categoryItems.reduce((sum, item) => sum + item.stock * item.price, 0).toLocaleString()}
+                </span>
+              </div>
+              <ul className="space-y-2">
+                {categoryItems.map(i => (
+                  <li key={i.id} className="bg-white rounded-card border border-border p-3">
               <a href={`/v2/supplier/inventory/${i.id}`} className="flex items-start gap-3">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
@@ -161,9 +204,12 @@ export default function InventoryPage() {
                 </div>
                 <span className="text-gray3 self-center">›</span>
               </a>
-            </li>
+                  </li>
+                ))}
+              </ul>
+            </section>
           ))}
-        </ul>
+        </div>
       </div>
 
       <BottomNav

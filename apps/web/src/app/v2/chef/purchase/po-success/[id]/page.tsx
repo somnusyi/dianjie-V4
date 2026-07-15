@@ -23,6 +23,7 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
   const router = useRouter()
   const [po, setPo] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
+  const [reviewing, setReviewing] = useState(false)
   // 图片放大: target="_blank" 在 WebView 不工作, 用全屏 lightbox
   const [zoomImg, setZoomImg] = useState<string | null>(null)
   useEffect(() => {
@@ -33,7 +34,30 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
 
   const stepIdx = STATUS_TO_STEP[po.status] ?? 1
   const isPendingConfirm = po.status === 'PENDING_CONFIRM'
-  const total = Number(po.totalAmount || 0)
+  const total = Number(po.currentOrderAmount ?? po.originalTotalAmount ?? po.totalAmount ?? 0)
+  const originalTotal = Number(po.originalTotalAmount ?? po.totalAmount ?? 0)
+  const pendingRevision = po.revisions?.find((revision: any) => revision.status === 'PENDING')
+
+  async function reviewRevision(action: 'approve' | 'reject') {
+    if (!pendingRevision || reviewing) return
+    let note = ''
+    if (action === 'reject') {
+      note = window.prompt('请填写驳回原因（供应商可见）:')?.trim() || ''
+      if (!note) return
+    } else if (!confirm(`确认第 ${pendingRevision.revisionNo} 次改单？确认后供应商才能接单。`)) return
+    setReviewing(true)
+    try {
+      await apiFetch(`/api/orders/${po.id}/revisions/${pendingRevision.id}/${action}`, {
+        method: 'PATCH', body: JSON.stringify(note ? { note } : {}),
+      })
+      const refreshed = await apiFetch(`/api/orders/${params.id}`)
+      setPo(refreshed)
+    } catch (e: any) {
+      setError(e.message || '处理失败')
+    } finally {
+      setReviewing(false)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-bg pb-32">
@@ -48,6 +72,9 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
         <p className="text-caption text-gray4 mt-1">
           {po.supplier?.name || '—'} · 期望 {new Date(po.expectedDate).toLocaleDateString('zh-CN')}
         </p>
+        {(po.currentRevisionNo || 0) > 0 && (
+          <p className="text-micro text-gray4 mt-1">原始 ¥{originalTotal.toLocaleString()} · 当前第 {po.currentRevisionNo} 版</p>
+        )}
         <div className="flex gap-2 mt-3 flex-wrap">
           <Chip tone={po.status === 'COMPLETED' ? 'green' : isPendingConfirm ? 'orange' : 'gray'}>
             {statusLabel(po.status)}
@@ -56,6 +83,31 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
           {po.status === 'PENDING_CONFIRM' && <Chip tone="orange">24h 内验收否则自动确认</Chip>}
         </div>
       </div>
+
+      {pendingRevision && (
+        <Section title="供应商改单待确认">
+          <div className="bg-amber/10 rounded-card border border-amber/50 p-3">
+            <div className="flex items-center gap-2">
+              <Chip tone="orange">第 {pendingRevision.revisionNo} 次改单</Chip>
+              <span className="text-caption text-gray2">{pendingRevision.reason}</span>
+            </div>
+            <ul className="mt-2 space-y-1 text-caption text-gray2">
+              {(pendingRevision.changeSet || []).map((change: any, index: number) => (
+                <li key={index}>· {changeLabel(change)}</li>
+              ))}
+            </ul>
+            <div className="text-micro text-gray3 mt-2">
+              申请人 {pendingRevision.requestedBy?.name || '供应商'} · 确认后供应商才能接单 · 价格不可修改
+            </div>
+            <div className="grid grid-cols-2 gap-2 mt-3">
+              <button disabled={reviewing} onClick={() => reviewRevision('reject')}
+                className="py-2.5 bg-white border border-red text-red-fg rounded-cta text-button disabled:opacity-50">驳回</button>
+              <button disabled={reviewing} onClick={() => reviewRevision('approve')}
+                className="py-2.5 bg-ink text-white rounded-cta text-button disabled:opacity-50">{reviewing ? '处理中…' : '确认改单'}</button>
+            </div>
+          </div>
+        </Section>
+      )}
 
       <Section title="物流进度">
         <div className="bg-white rounded-card border border-border p-4">
@@ -190,13 +242,14 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
           <button
             onClick={async () => {
               const hint = po.status === 'CONFIRMED'
-                ? `⚠ 该单供应商已接单 (可能正在备货). 撤回后供应商会被通知"立即停止备货".\n\n撤回原因 (供应商可见, 选填):`
-                : '撤回原因 (供应商可见, 选填):'
-              const reason = window.prompt(hint) ?? ''
+                ? `⚠ 该单供应商已接单 (可能正在备货). 撤回后供应商会被通知"立即停止备货".\n\n撤回原因 (必填, 供应商可见):`
+                : '撤回原因 (必填, 供应商可见):'
+              const reason = window.prompt(hint)?.trim() || ''
+              if (!reason) return
               if (!confirm(`确认撤回订单 ${po.no}? 撤回后无法恢复, 需要重新下单`)) return
               try {
                 await apiFetch(`/api/orders/${po.id}/cancel`, {
-                  method: 'PATCH', body: JSON.stringify({ reason: reason.trim() })
+                  method: 'PATCH', body: JSON.stringify({ reason })
                 })
                 location.reload()
               } catch (e: any) { alert(e.message || '撤回失败') }
@@ -265,6 +318,15 @@ function lossLabel(s: string) {
     NEGOTIATING: '协商中',
     RESOLVED: '协商完成',
   } as Record<string, string>)[s] || s
+}
+
+function changeLabel(change: any) {
+  if (change.kind === 'ADD_ITEM') return `新增 ${change.after?.name || change.productId} × ${change.after?.quantity || '-'}`
+  if (change.kind === 'REMOVE_ITEM') return `移除 ${change.before?.name || change.productId}`
+  if (change.kind === 'CHANGE_QTY') return `${change.name || change.productId}: 数量 ${change.before} → ${change.after}`
+  if (change.kind === 'CHANGE_EXPECTED_DATE') return `期望到货 ${change.before} → ${change.after}`
+  if (change.kind === 'CHANGE_NOTE') return `备注已修改`
+  return change.kind || '订单修改'
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

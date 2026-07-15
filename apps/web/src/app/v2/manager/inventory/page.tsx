@@ -32,17 +32,33 @@ type InventoryItem = {
 }
 
 type SnapshotResponse = { summary: InventorySummary; items: InventoryItem[] }
+type EstimatedItem = {
+  id: string
+  stock: number
+  inventoryValue: number
+  isLowStock: boolean
+  hasDataIssue: boolean
+  openingDate: string
+  asOf: string
+  baselineItemCount: number
+  baselineMatchedCount: number
+  estimateIncomplete: boolean
+}
 type Filter = 'all' | 'inStock' | 'zero' | 'unmatched'
 
 export default function ManagerInventoryPage() {
   const [data, setData] = useState<SnapshotResponse | null>(null)
+  const [estimate, setEstimate] = useState<EstimatedItem[]>([])
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
 
   useEffect(() => {
-    apiFetch<SnapshotResponse>('/api/inventory/snapshot/latest')
-      .then(setData)
+    Promise.all([
+      apiFetch<SnapshotResponse>('/api/inventory/snapshot/latest'),
+      apiFetch<EstimatedItem[]>('/api/inventory').catch(() => []),
+    ])
+      .then(([snapshot, estimated]) => { setData(snapshot); setEstimate(estimated) })
       .catch((e) => setError(String(e?.message || e)))
   }, [])
 
@@ -67,6 +83,10 @@ export default function ManagerInventoryPage() {
 
   const summary = data?.summary
   const asOf = summary?.asOf?.slice(5).replace('-', '/')
+  const estimatedValue = estimate.reduce((sum, item) => sum + Number(item.inventoryValue || 0), 0)
+  const lowCount = estimate.filter(item => item.isLowStock).length
+  const issueCount = estimate.filter(item => item.hasDataIssue).length
+  const estimateAsOf = estimate[0]?.asOf
 
   return (
     <div className="min-h-screen bg-bg pb-8">
@@ -93,7 +113,30 @@ export default function ManagerInventoryPage() {
         <>
           <section className="m-4 overflow-hidden rounded-card bg-white border border-border">
             <div className="px-4 pt-4 pb-3">
-              <div className="text-caption text-gray2">盘点库存金额</div>
+              <div className="text-caption text-gray2">预计库存金额</div>
+              <div className="font-num text-[32px] leading-tight mt-1">
+                ¥{estimatedValue.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+              <div className="text-micro text-gray3 mt-1">
+                {estimateAsOf ? `数据更新至 ${new Date(estimateAsOf).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}` : '等待生成预计库存'}
+                {' '}· 月底实物盘点后校准
+              </div>
+              {summary.matchedCount < summary.itemCount && (
+                <div className="text-micro text-amber-fg mt-2">
+                  盘点品项匹配 {summary.matchedCount}/{summary.itemCount}；未匹配食材暂不计入预计库存，下面仍保留完整实物盘点。
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-3 border-t border-border bg-bg/40">
+              <SummaryCell label="预计有库存" value={estimate.filter(item => Number(item.stock) > 0).length} />
+              <SummaryCell label="低库存" value={lowCount} tone={lowCount > 0 ? 'red' : undefined} />
+              <SummaryCell label="需校准" value={issueCount} tone={issueCount > 0 ? 'red' : undefined} />
+            </div>
+          </section>
+
+          <section className="m-4 overflow-hidden rounded-card bg-white border border-border">
+            <div className="px-4 pt-4 pb-3">
+              <div className="text-caption text-gray2">最近实物盘点金额</div>
               <div className="font-num text-[32px] leading-tight mt-1">
                 ¥{Number(summary.totalValue || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>

@@ -14,6 +14,8 @@ import dayjs from 'dayjs'
 
 type Order = {
   id: string; no: string; status: string
+  purchaseOrderNo?: string
+  purchaseOrderTotalAmount?: string
   totalAmount: string
   expectedDate: string; createdAt: string
   shippedAt: string | null
@@ -27,6 +29,9 @@ type Order = {
   shippedBy: { id: string; name: string } | null
   items: { id: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string
            product?: { name: string; spec: string | null; unit: string; code: string } }[]
+  deliveries?: { id: string; no: string; status: string; actualTotalAmount: string; note?: string | null; shippedAt?: string | null
+    items: { id: string; orderedQtySnapshot: string; shippedQty: string; unitPriceSnapshot: string; amount: string
+      product?: { name: string; spec: string | null; unit: string; code: string } }[] }[]
 }
 
 // 阿拉伯数字 → 中文大写金额 (财务规范)
@@ -72,7 +77,29 @@ export default function DeliveryNotePrintPage() {
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
-    apiFetch<Order>(`/api/orders/${id}`).then(setOrder).catch(e => setError(e.message || '加载失败'))
+    apiFetch<Order>(`/api/orders/${id}`).then(data => {
+      const latest = [...(data.deliveries || [])]
+        .filter(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
+        .sort((a, b) => String(b.shippedAt || '').localeCompare(String(a.shippedAt || '')))[0]
+      if (!latest) return setOrder(data)
+      setOrder({
+        ...data,
+        purchaseOrderNo: data.no,
+        purchaseOrderTotalAmount: data.totalAmount,
+        no: latest.no,
+        totalAmount: latest.actualTotalAmount,
+        shippedAt: latest.shippedAt || data.shippedAt,
+        shippedNote: latest.note || null,
+        items: latest.items.map(item => ({
+          id: item.id,
+          quantity: item.orderedQtySnapshot,
+          shippedQty: item.shippedQty,
+          unitPrice: item.unitPriceSnapshot,
+          amount: item.amount,
+          product: item.product,
+        })),
+      })
+    }).catch(e => setError(e.message || '加载失败'))
     return () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl) }
   }, [id])
 
@@ -407,6 +434,12 @@ export default function DeliveryNotePrintPage() {
               <td className="border border-gray3 px-2 py-1.5 bg-bg w-24">下单日期</td>
               <td className="border border-gray3 px-2 py-1.5">{dayjs(order.createdAt).format('YYYY-MM-DD HH:mm')}</td>
             </tr>
+            {order.purchaseOrderNo && (
+              <tr>
+                <td className="border border-gray3 px-2 py-1.5 bg-bg">来源订货单</td>
+                <td className="border border-gray3 px-2 py-1.5 font-mono" colSpan={3}>{order.purchaseOrderNo}</td>
+              </tr>
+            )}
             <tr>
               <td className="border border-gray3 px-2 py-1.5 bg-bg">收货方</td>
               <td className="border border-gray3 px-2 py-1.5" colSpan={3}>{order.store.name}</td>
@@ -495,7 +528,7 @@ export default function DeliveryNotePrintPage() {
         {/* 调整提示 */}
         {hasAdjust && (
           <div className="mt-3 text-xs text-amber-fg border-l-4 border-amber pl-2">
-            ⚠ 本单部分商品按称重 / 库存实际发货量调整, 与原下单量不同 (原合同金额 ¥{Number(order.totalAmount).toFixed(2)})
+            ⚠ 本配送单数量与原订货单不同 (原订货单总额 ¥{Number(order.purchaseOrderTotalAmount || order.totalAmount).toFixed(2)})
           </div>
         )}
         {/* 备注 */}

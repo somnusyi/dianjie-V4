@@ -15,6 +15,10 @@ import dayjs from 'dayjs'
 type Order = {
   id: string; no: string; status: string
   totalAmount: string
+  originalTotalAmount?: string | null
+  currentOrderAmount?: string | null
+  rowVersion: number
+  currentRevisionNo?: number
   expectedDate: string; createdAt: string
   shippedAt: string | null; receivedAt: string | null
   shippedNote: string | null
@@ -27,7 +31,17 @@ type Order = {
   supplier: { id: string; name: string; contactName?: string | null; contactPhone?: string | null }
   createdBy: { id: string; name: string }
   shippedBy: { id: string; name: string } | null
-  items: { id: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string; receivedQty: string | null; product?: { name: string; spec: string | null; unit: string; code: string; shipUpperPct?: string | number; shipUpperBuffer?: string | number } }[]
+  items: { id: string; productId: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string; receivedQty: string | null; product?: { name: string; spec: string | null; unit: string; code: string; shipUpperPct?: string | number; shipUpperBuffer?: string | number } }[]
+  revisions?: {
+    id: string; revisionNo: number; status: string; reason: string; requestedAt: string
+    changeSet: { kind: string; productId?: string; before?: any; after?: any }[]
+    requestedBy?: { name: string }; reviewedBy?: { name: string } | null; reviewedAt?: string | null; reviewNote?: string | null
+  }[]
+  deliveries?: {
+    id: string; no: string; status: string; actualTotalAmount: string; shippedAt?: string | null; deliveredAt?: string | null; receivedAt?: string | null
+    items: { id: string; productId: string; shippedQty: string; receivedQty?: string | null; product?: { name: string; unit: string } }[]
+    receipt?: { id: string; no: string; totalAmount: string; status: string } | null
+  }[]
   lossClaims?: {
     id: string; no: string; status: string
     totalLossAmount: string; description: string
@@ -75,11 +89,12 @@ export default function SupplierOrderDetailPage() {
   const [rejectNote, setRejectNote] = useState('')
   // 图片全屏放大 (target="_blank" 在 WebView 不工作)
   const [zoomImg, setZoomImg] = useState<string | null>(null)
-  // 追加物品 picker
+  // 接单前改单申请: 当前订货数量 + 可追加商品, 全部须门店确认
   const [addOpen, setAddOpen] = useState(false)
   const [catalog, setCatalog] = useState<{ id: string; name: string; unit: string; price: string; spec?: string | null; category?: string; status: string }[]>([])
   const [addQty, setAddQty] = useState<Record<string, number>>({})
   const [addSearch, setAddSearch] = useState('')
+  const [adjustReason, setAdjustReason] = useState('')
   const [confirmState, openConfirm] = useConfirmSheet()
 
   function load() {
@@ -91,9 +106,11 @@ export default function SupplierOrderDetailPage() {
     if (!order) return
     // 计算实际发货金额 + 找出有调整的行
     const lines = order.items.map(it => {
-      const orig = Number(it.quantity)
-      const sq = shipQty[it.id] != null ? shipQty[it.id] : orig
-      return { it, sq, changed: Math.abs(sq - orig) > 0.0001 }
+      const ordered = Number(it.quantity)
+      const previous = Number(it.shippedQty || 0)
+      const remaining = Math.max(0, ordered - previous)
+      const sq = shipQty[it.id] != null ? shipQty[it.id] : remaining
+      return { it, ordered, previous, remaining, sq, changed: Math.abs(sq - remaining) > 0.0001 }
     })
     const newTotal = lines.reduce((s, l) => s + l.sq * Number(l.it.unitPrice), 0)
     const changed = lines.filter(l => l.changed)
@@ -105,7 +122,7 @@ export default function SupplierOrderDetailPage() {
       const buffer = Number(it.product?.shipUpperBuffer ?? 5)
       return Math.max(ordered * pct, ordered + buffer)
     }
-    const overLimit = lines.find(l => l.sq > shipUpper(l.it) + 0.0001)
+    const overLimit = lines.find(l => l.previous + l.sq > shipUpper(l.it) + 0.0001)
     if (overLimit) {
       const pct = Number(overLimit.it.product?.shipUpperPct ?? 1.10)
       const buf = Number(overLimit.it.product?.shipUpperBuffer ?? 5)
@@ -116,8 +133,8 @@ export default function SupplierOrderDetailPage() {
 
     let body = `${order.items.length} 件商品`
     if (changed.length > 0) {
-      body += `\n⚠ 已调整 ${changed.length} 项: ${changed.slice(0, 3).map(l => `${l.it.product?.name || ''} ${l.it.quantity}→${l.sq}`).join(', ')}${changed.length > 3 ? ' …' : ''}`
-      body += `\n实发金额 ¥${newTotal.toLocaleString()} (原 ¥${Number(order.totalAmount).toLocaleString()})`
+      body += `\n⚠ 已调整 ${changed.length} 项: ${changed.slice(0, 3).map(l => `${l.it.product?.name || ''} 剩余${l.remaining}→本次${l.sq}`).join(', ')}${changed.length > 3 ? ' …' : ''}`
+      body += `\n本次配送金额 ¥${newTotal.toLocaleString()}`
     } else {
       body += ` · 共 ¥${Number(order.totalAmount).toLocaleString()}`
     }
@@ -133,7 +150,7 @@ export default function SupplierOrderDetailPage() {
         try {
           await apiFetch(`/api/orders/${order.id}/ship`, {
             method: 'PATCH',
-            body: JSON.stringify({ note: shipNote.trim() || undefined, items: itemsBody }),
+            body: JSON.stringify({ note: shipNote.trim() || undefined, items: itemsBody, idempotencyKey: crypto.randomUUID() }),
           })
           load()
         } catch (e: any) { setError(e.message || '发货失败'); throw e }
@@ -146,7 +163,7 @@ export default function SupplierOrderDetailPage() {
     if (!order) return
     openConfirm({
       title: `接单 ${order.no}?`,
-      body: `${order.items.length} 件商品 · 共 ¥${Number(order.totalAmount).toLocaleString()}\n接单后店长能看到"已接单"状态, 你需要按期望日期 ${dayjs(order.expectedDate).format('MM/DD')} 前发货.`,
+      body: `${order.items.length} 件商品 · 共 ¥${Number(order.currentOrderAmount ?? order.originalTotalAmount ?? order.totalAmount).toLocaleString()}\n接单后店长能看到"已接单"状态, 你需要按期望日期 ${dayjs(order.expectedDate).format('MM/DD')} 前发货.`,
       confirmLabel: '接单',
       tone: 'primary',
       onConfirm: async () => {
@@ -160,19 +177,16 @@ export default function SupplierOrderDetailPage() {
     })
   }
 
-  // 打开追加 picker — 拉自家 catalog, 排除已在订单里的 SKU
+  // 打开改单 picker — 拉自家 catalog, 预填当前订单数量
   async function openAddPicker() {
     setAddOpen(true)
-    setAddQty({}); setAddSearch('')
+    setAddSearch(''); setAdjustReason('')
+    setAddQty(Object.fromEntries((order?.items || []).map(it => [it.productId, Number(it.quantity)])))
     try {
       const data = await apiFetch<any>('/api/products')
       const list = Array.isArray(data) ? data : (data?.items || [])
-      const existed = new Set(order?.items.map(it => it.product as any).filter(Boolean).map((p: any) => p.id || p.code))
-      // /api/products 返回的 product 对象里有 id, 但 order item.product 没暴露 id, 用 productId
-      const existedProductIds = new Set(
-        await apiFetch<any>(`/api/orders/${order?.id}`).then(o => (o.items || []).map((i: any) => i.productId)).catch(() => [])
-      )
-      setCatalog(list.filter((p: any) => p.status === 'ENABLED' && !existedProductIds.has(p.id)))
+      const existingIds = new Set((order?.items || []).map(it => it.productId))
+      setCatalog(list.filter((p: any) => p.status === 'ENABLED' || existingIds.has(p.id)))
     } catch (e: any) {
       setError(e.message || '加载 catalog 失败')
       setAddOpen(false)
@@ -189,22 +203,31 @@ export default function SupplierOrderDetailPage() {
   async function submitAdd() {
     if (!order) return
     const items = Object.entries(addQty).filter(([, q]) => q > 0).map(([productId, quantity]) => ({ productId, quantity }))
-    if (items.length === 0) { setAddOpen(false); return }
+    if (items.length === 0) { setError('订货单至少保留一个商品'); return }
+    if (!adjustReason.trim()) { setError('请填写改单原因'); return }
     const total = items.reduce((s, i) => {
       const p = catalog.find(c => c.id === i.productId)
       return s + (p ? Number(p.price) * i.quantity : 0)
     }, 0)
     openConfirm({
-      title: `追加 ${items.length} 项?`,
-      body: `本次新增金额 +¥${total.toLocaleString()}, 厨师长 / 店长 会收到通知.`,
-      confirmLabel: '追加',
+      title: `申请调整订货单?`,
+      body: `调整后 ${items.length} 项 · ¥${total.toLocaleString()}\n提交后须门店确认，确认前不能接单。\n原因: ${adjustReason.trim()}`,
+      confirmLabel: '提交申请',
       tone: 'primary',
       onConfirm: async () => {
         setSubmitting(true)
         try {
-          await apiFetch(`/api/orders/${order.id}/add-items`, { method: 'POST', body: JSON.stringify({ items }) })
+          await apiFetch(`/api/orders/${order.id}/revisions`, {
+            method: 'POST',
+            body: JSON.stringify({
+              items,
+              reason: adjustReason.trim(),
+              baseRowVersion: order.rowVersion,
+              requestKey: crypto.randomUUID(),
+            }),
+          })
           setAddOpen(false); load()
-        } catch (e: any) { setError(e.message || '追加失败'); throw e }
+        } catch (e: any) { setError(e.message || '改单申请失败'); throw e }
         finally { setSubmitting(false) }
       },
     })
@@ -253,6 +276,9 @@ export default function SupplierOrderDetailPage() {
 
   const step = STATUS_TO_STEP[order.status] ?? 0
   const tone = STATUS_TONE[order.status] || 'gray'
+  const pendingRevision = order.revisions?.find(revision => revision.status === 'PENDING')
+  const originalAmount = Number(order.originalTotalAmount ?? order.totalAmount)
+  const currentOrderAmount = Number(order.currentOrderAmount ?? order.originalTotalAmount ?? order.totalAmount)
 
   return (
     <div className="min-h-screen bg-bg pb-32">
@@ -272,7 +298,7 @@ export default function SupplierOrderDetailPage() {
         <div className="text-micro text-gray3 font-num">#{order.no}</div>
         <div className="flex items-baseline justify-between mt-1">
           <span className="text-h2">{order.store.name}</span>
-          <span className="font-num text-h1">¥{Number(order.totalAmount).toLocaleString()}</span>
+          <span className="font-num text-h1">¥{currentOrderAmount.toLocaleString()}</span>
         </div>
         {order.store.address && <div className="text-micro text-gray3 mt-1">📍 {order.store.address}</div>}
         <div className="text-caption text-gray2 mt-2">
@@ -283,7 +309,56 @@ export default function SupplierOrderDetailPage() {
         </div>
         {order.note && <div className="mt-2 bg-bg rounded p-2 text-caption text-gray2">📝 {order.note}</div>}
         {order.shippedNote && <div className="mt-2 bg-amber/10 rounded p-2 text-caption text-amber-fg">📦 发货备注: {order.shippedNote}</div>}
+        {(order.currentRevisionNo || 0) > 0 && (
+          <div className="mt-2 text-micro text-gray3">
+            原始订货 ¥{originalAmount.toLocaleString()} · 当前第 {order.currentRevisionNo} 版 ¥{currentOrderAmount.toLocaleString()}
+          </div>
+        )}
       </div>
+
+      {/* 改单审批状态与历史 */}
+      {(order.revisions?.length ?? 0) > 0 && (
+        <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
+          <h2 className="text-h2">改单记录 ({order.revisions!.length})</h2>
+          <ul className="mt-2 space-y-2">
+            {order.revisions!.map(revision => (
+              <li key={revision.id} className={`rounded-cta border p-2 ${revision.status === 'PENDING' ? 'border-amber bg-amber/10' : 'border-border bg-bg'}`}>
+                <div className="flex items-center gap-2">
+                  <span className="text-caption">第 {revision.revisionNo} 次 · {revision.reason}</span>
+                  <Chip tone={revision.status === 'PENDING' ? 'orange' : revision.status === 'APPROVED' ? 'green' : 'gray'}>
+                    {revision.status === 'PENDING' ? '待门店确认' : revision.status === 'APPROVED' ? '已确认' : '已驳回'}
+                  </Chip>
+                </div>
+                <div className="text-micro text-gray3 mt-1">
+                  {revision.requestedBy?.name || '供应商'} · {dayjs(revision.requestedAt).format('MM/DD HH:mm')} · {revision.changeSet?.length || 0} 项变化
+                  {revision.reviewedBy?.name && <> · {revision.reviewedBy.name} 已处理</>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {(order.deliveries?.length ?? 0) > 0 && (
+        <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
+          <h2 className="text-h2">关联配送单 ({order.deliveries!.length})</h2>
+          <ul className="mt-2 space-y-2">
+            {order.deliveries!.map(delivery => (
+              <li key={delivery.id} className="rounded-cta border border-border bg-bg p-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-num text-caption">{delivery.no}</span>
+                  <Chip tone={delivery.status === 'RECEIVED' ? 'green' : 'orange'}>{delivery.status}</Chip>
+                  <span className="ml-auto font-num text-caption">¥{Number(delivery.actualTotalAmount).toLocaleString()}</span>
+                </div>
+                <div className="text-micro text-gray3 mt-1">
+                  本次 {delivery.items.map(item => `${item.product?.name || ''} ${item.shippedQty}${item.product?.unit || ''}`).join('、')}
+                  {delivery.receipt && <> · 入库单 {delivery.receipt.no}</>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* 进度条 */}
       <div className="mx-4 mt-3 bg-white rounded-card border border-border p-4">
@@ -297,12 +372,12 @@ export default function SupplierOrderDetailPage() {
       <div className="mx-4 mt-3 bg-white rounded-card border border-border">
         <div className="px-3 pt-3 pb-2 flex items-center gap-2">
           <h2 className="text-h2 flex-1">商品明细 ({order.items.length})</h2>
-          {order.status === 'CONFIRMED' && (
+          {order.status === 'SUBMITTED' && !pendingRevision && (
             <button onClick={openAddPicker}
                     className="px-2 py-1 rounded-cta border border-amber text-amber-fg text-caption"
-                    title="门店在群里追单时, 你可以代加">+ 追加</button>
+                    title="库存核查后申请调整，须门店确认">申请调整</button>
           )}
-          <span className="text-caption text-gray3 font-num">合计 ¥{Number(order.totalAmount).toLocaleString()}</span>
+          <span className="text-caption text-gray3 font-num">合计 ¥{currentOrderAmount.toLocaleString()}</span>
         </div>
         <ul className="divide-y divide-border">
           {order.items.map(it => (
@@ -426,8 +501,10 @@ export default function SupplierOrderDetailPage() {
       {order.status === 'CONFIRMED' && (() => {
         const lines = order.items.map(it => {
           const orig = Number(it.quantity)
-          const sq = shipQty[it.id] != null ? shipQty[it.id] : orig
-          return { it, orig, sq, changed: Math.abs(sq - orig) > 0.0001 }
+          const previous = Number(it.shippedQty || 0)
+          const remaining = Math.max(0, orig - previous)
+          const sq = shipQty[it.id] != null ? shipQty[it.id] : remaining
+          return { it, orig, previous, remaining, sq, changed: Math.abs(sq - remaining) > 0.0001 }
         })
         const newTotal = lines.reduce((s, l) => s + l.sq * Number(l.it.unitPrice), 0)
         const oldTotal = Number(order.totalAmount)
@@ -442,20 +519,20 @@ export default function SupplierOrderDetailPage() {
                   onClick={() => setShipQty({})}
                   className="text-micro text-accent"
                   disabled={lines.every(l => !l.changed)}
-                >全部按下单量</button>
+                >全部按剩余量</button>
               </div>
               <ul className="divide-y divide-border">
                 {lines.map(l => (
                   <li key={l.it.id} className="py-2 flex items-center gap-2">
                     <div className="flex-1 min-w-0">
                       <div className="text-body truncate">{l.it.product?.name || '-'}</div>
-                      <div className="text-micro text-gray3">下单 {l.orig} {l.it.product?.unit} · ¥{l.it.unitPrice}</div>
+                      <div className="text-micro text-gray3">下单 {l.orig} · 已发 {l.previous} · 剩余 {l.remaining} {l.it.product?.unit} · ¥{l.it.unitPrice}</div>
                     </div>
                     <div className="flex items-center gap-1">
                       {(() => {
                         const pct = Number(l.it.product?.shipUpperPct ?? 1.10)
                         const buf = Number(l.it.product?.shipUpperBuffer ?? 5)
-                        const upper = Math.max(l.orig * pct, l.orig + buf)
+                        const upper = Math.max(0, Math.max(l.orig * pct, l.orig + buf) - l.previous)
                         return (
                           <input
                             type="number" inputMode="decimal" step="0.01" min="0" max={upper}
@@ -477,7 +554,7 @@ export default function SupplierOrderDetailPage() {
                   <span className="font-num text-amber-fg">¥{newTotal.toLocaleString()} <span className="text-gray3 line-through ml-1">¥{oldTotal.toLocaleString()}</span></span>
                 </div>
               )}
-              <p className="text-micro text-gray3 mt-2">⚠ 数量改为 0 = 该项不发货 · 每个商品的上限独立配 (在商品页编辑 "实发量上限") · 默认下单×110% 或 下单+5 件 取大 · 超出需让店长补单</p>
+              <p className="text-micro text-gray3 mt-2">默认按剩余未配送数量发完；数量改为 0 表示本次不发，可在本次收货完成后继续补送。价格继承已确认订货单，配送不可改价。</p>
             </div>
             <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
               <label className="text-micro text-gray3 block mb-1">发货备注 (选填)</label>
@@ -490,14 +567,22 @@ export default function SupplierOrderDetailPage() {
 
       {/* 底部固定操作栏 - 按状态显示按钮 */}
       {order.status === 'SUBMITTED' && (
-        <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border p-4 grid grid-cols-2 gap-2"
+        <div className={`fixed bottom-0 left-0 right-0 bg-white border-t border-border p-4 grid ${pendingRevision ? 'grid-cols-2' : 'grid-cols-3'} gap-2`}
              style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom))' }}>
           <button onClick={rejectOrder} disabled={submitting}
             className="py-3 bg-white border border-red text-red-fg rounded-cta text-button disabled:opacity-40">拒单</button>
-          <button onClick={confirmOrder} disabled={submitting}
-            className="py-3 bg-ink text-white rounded-cta text-button disabled:opacity-40">
-            {submitting ? '提交中…' : '接单'}
-          </button>
+          {pendingRevision ? (
+            <button disabled className="py-3 bg-amber/10 border border-amber text-amber-fg rounded-cta text-button opacity-70">待门店确认</button>
+          ) : (
+            <>
+              <button onClick={openAddPicker} disabled={submitting}
+                className="py-3 bg-white border border-amber text-amber-fg rounded-cta text-button disabled:opacity-40">申请调整</button>
+              <button onClick={confirmOrder} disabled={submitting}
+                className="py-3 bg-ink text-white rounded-cta text-button disabled:opacity-40">
+                {submitting ? '提交中…' : '接单'}
+              </button>
+            </>
+          )}
         </div>
       )}
       {order.status === 'CONFIRMED' && (
@@ -592,7 +677,7 @@ export default function SupplierOrderDetailPage() {
         </>
       )}
 
-      {/* 追加物品 抽屉 */}
+      {/* 接单前改单申请抽屉 */}
       {addOpen && (() => {
         const filtered = catalog.filter(p => {
           if (!addSearch.trim()) return true
@@ -611,10 +696,16 @@ export default function SupplierOrderDetailPage() {
                  onClick={e => e.stopPropagation()}>
               <div className="w-12 h-1 bg-gray5 rounded-full mx-auto mt-2" />
               <div className="px-4 pt-3 pb-2 flex items-baseline justify-between">
-                <h3 className="text-h2">追加物品</h3>
-                <span className="text-caption text-gray3">{filtered.length}/{catalog.length} 可选</span>
+                <h3 className="text-h2">申请调整订货单</h3>
+                <span className="text-caption text-gray3">{filtered.length}/{catalog.length} 商品</span>
               </div>
-              <p className="px-4 pb-2 text-micro text-gray3">门店在群里追单 → 你帮加 · 单价按报价表当前价 · 已在订单里的 SKU 不会出现</p>
+              <p className="px-4 pb-2 text-micro text-gray3">可调整数量、移除或增加商品；价格不可修改。提交后须门店确认才能接单。</p>
+              <div className="px-4 pb-2">
+                <label className="text-micro text-gray3 block mb-1">改单原因 *</label>
+                <textarea value={adjustReason} onChange={e => setAdjustReason(e.target.value)} maxLength={200} rows={2}
+                  placeholder="例如：土豆库存不足，申请 20kg 调整为 15kg"
+                  className="w-full bg-bg border border-border rounded-cta px-3 py-2 text-body outline-none focus:border-amber" />
+              </div>
               <div className="px-4 pb-2 relative">
                 <input type="search" value={addSearch} onChange={e => setAddSearch(e.target.value)}
                        placeholder="搜索 名称 / 规格" className="w-full bg-bg rounded-chip px-9 py-2 text-body outline-none" />
@@ -655,12 +746,12 @@ export default function SupplierOrderDetailPage() {
               <div className="border-t border-border p-3 flex items-center gap-3">
                 <div className="flex-1">
                   <div className="text-micro text-gray3">已选 {selectedCount} 项</div>
-                  <div className="font-num text-h2">+ ¥{selectedTotal.toFixed(2)}</div>
+                  <div className="font-num text-h2">调整后 ¥{selectedTotal.toFixed(2)}</div>
                 </div>
                 <button onClick={() => setAddOpen(false)}
                         className="px-4 py-3 rounded-cta border border-border text-button text-gray2">取消</button>
-                <button onClick={submitAdd} disabled={submitting || selectedCount === 0}
-                        className="px-6 py-3 bg-amber text-white rounded-cta text-button disabled:opacity-40">提交追加</button>
+                <button onClick={submitAdd} disabled={submitting || selectedCount === 0 || !adjustReason.trim()}
+                        className="px-6 py-3 bg-amber text-white rounded-cta text-button disabled:opacity-40">提交申请</button>
               </div>
             </div>
           </div>

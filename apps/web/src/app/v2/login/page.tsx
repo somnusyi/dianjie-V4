@@ -20,7 +20,9 @@ export default function LoginPage() {
   useEffect(() => {
     const url = new URL(window.location.href)
     const t = (url.searchParams.get('tenant') || '').trim()
-    if (t === 'test') setTenantSlug('test')
+    // 本地/验收环境可能使用 yaohai-test 等独立租户；允许 URL 明确指定，
+    // 实际可登录范围仍由 API 的 PREVIEW_TENANT_SLUG 白名单强制约束。
+    if (t) setTenantSlug(t)
 
     // 企微 App 内打开 → 自动走 snsapi_base 静默授权, 零操作直接登录对应账号
     // 守卫: ① 仅企微环境(wxwork) ② 带 error 说明刚静默失败回来, 不再自动(显示登录页)
@@ -28,7 +30,7 @@ export default function LoginPage() {
     const inWeCom = /wxwork/i.test(navigator.userAgent)
     if (inWeCom && !url.searchParams.has('error') && !sessionStorage.getItem('wecomSilentTried')) {
       sessionStorage.setItem('wecomSilentTried', '1')
-      const tn = t === 'test' ? 'test' : 'dianjie'
+      const tn = t || 'dianjie'
       fetch(`/api/wecom/oauth/url?tenant=${tn}&mode=silent&redirect=/`)
         .then((r) => r.json())
         .then((d) => { if (d.url) location.href = d.url })

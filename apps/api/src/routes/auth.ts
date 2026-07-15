@@ -36,6 +36,11 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const { identifier, email: emailField, password, tenantSlug } = body.data
     const id = (identifier || emailField || '').trim()
 
+    const previewTenant = process.env.PREVIEW_TENANT_SLUG
+    if (previewTenant && tenantSlug !== previewTenant) {
+      return reply.status(403).send({ error: `本地预览仅允许 ${previewTenant} 测试租户` })
+    }
+
     const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug } })
     if (!tenant || tenant.status !== 'ACTIVE') {
       return reply.status(401).send({ error: '租户不存在或已停用' })

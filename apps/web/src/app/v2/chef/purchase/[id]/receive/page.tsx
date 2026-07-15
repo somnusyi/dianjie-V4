@@ -27,10 +27,12 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
   useEffect(() => {
     apiFetch(`/api/orders/${params.id}`).then((d: any) => {
       setPo(d)
-      // 默认 实收 = 供应商实际发货量 (shippedQty), 没有就回退下单 quantity
+      // 每次只验收当前已送达的独立配送单，不能用订货单累计 shippedQty。
+      const activeDelivery = (d.deliveries || []).find((delivery: any) => delivery.status === 'DELIVERED')
+      const deliveryItems = activeDelivery?.items || []
       const init: Record<string, number> = {}
-      ;(d.items || []).forEach((it: any) => {
-        init[it.productId] = Number(it.shippedQty ?? it.quantity)
+      deliveryItems.forEach((it: any) => {
+        init[it.productId] = Number(it.shippedQty)
       })
       setReceived(init)
     }).catch(e => setError(String(e?.message || e)))
@@ -84,7 +86,12 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
     )
   }
 
-  const items = po.items || []
+  const activeDelivery = (po.deliveries || []).find((delivery: any) => delivery.status === 'DELIVERED')
+  const items = (activeDelivery?.items || []).map((item: any) => ({
+    ...item,
+    quantity: item.orderedQtySnapshot,
+    unitPrice: item.unitPriceSnapshot,
+  }))
   // 应到量 = shippedQty (供应商发货时议定的量) ?? quantity (没改过). 实收 < 应到 才算报损
   const expected = (it: any) => Number(it.shippedQty ?? it.quantity)
   const hasLoss = items.some((it: any) => Number(received[it.productId] ?? 0) < expected(it))
@@ -157,7 +164,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
           <span className="text-h2">{po.supplier?.name}</span>
           <span className="font-num text-h2">¥{Number(po.totalAmount).toLocaleString()}</span>
         </div>
-        <p className="text-caption text-gray3 mt-1">{po.no} · {items.length} 项</p>
+        <p className="text-caption text-gray3 mt-1">订货 {po.no} · 配送 {activeDelivery?.no || '-'} · {items.length} 项</p>
       </div>
 
       {/* 商品逐条核对 */}

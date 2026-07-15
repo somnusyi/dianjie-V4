@@ -7,7 +7,6 @@
 import { usePathname } from 'next/navigation'
 import { AuthGate } from '@/components/v2/auth-gate'
 import { Onboarding } from '@/components/v2/onboarding'
-import { InstallHint } from '@/components/v2/install-hint'
 
 export default function V2Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || ''
@@ -22,9 +21,9 @@ export default function V2Layout({ children }: { children: React.ReactNode }) {
     pathname.startsWith('/v2/invite/') ||
     pathname === '/v2/finance-pc/login'
   ) {
-    return <>{children}<InstallHint /></>
+    return <>{children}</>
   }
   // home 页才弹 onboarding (不打扰二级页)
   const isHome = /^\/v2\/[^/]+\/home\/?$/.test(pathname)
-  return <AuthGate>{children}{isHome && <Onboarding />}<InstallHint /></AuthGate>
+  return <AuthGate>{children}{isHome && <Onboarding />}</AuthGate>
 }

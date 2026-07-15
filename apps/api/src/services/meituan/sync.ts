@@ -3,7 +3,10 @@ import { createMeituanClient, MeituanRateLimitError } from './client'
 import { parseOrderListResponse, parseRefundOrderListResponse } from './parser'
 import type { DomainOrder, DomainRefundOrder } from './parser'
 
-const ORG_ID = Number(process.env.MEITUAN_ORG_ID || 0)
+function getOrgId(): number {
+  const orgId = Number(process.env.MEITUAN_ORG_ID || 0)
+  return Number.isFinite(orgId) ? orgId : 0
+}
 
 export interface SyncReport {
   pages: number
@@ -28,6 +31,7 @@ export interface SyncInstoreParams {
 
 export async function syncInstoreOrders(p: SyncInstoreParams): Promise<SyncReport> {
   const client = createMeituanClient()
+  const orgId = getOrgId()
   const startedAt = Date.now()
   const apiPath = '/rms/pos/api/v2/poi/orders/instore/query'
   const report: SyncReport = { pages: 0, orders: 0, refunds: 0, failures: [], durationMs: 0 }
@@ -38,7 +42,7 @@ export async function syncInstoreOrders(p: SyncInstoreParams): Promise<SyncRepor
     let resp
     try {
       resp = await client.fetchInstoreOrders({
-        orgId: ORG_ID,
+        orgId,
         req: {
           queryTimeType: p.queryTimeType,
           beginTime: p.since.getTime(),
@@ -74,9 +78,9 @@ export async function syncInstoreOrders(p: SyncInstoreParams): Promise<SyncRepor
   // 推进 cursor（仅在完整成功时）
   if (!rateLimited) {
     await prisma.meituanSyncCursor.upsert({
-      where: { apiPath_orgId: { apiPath, orgId: ORG_ID } },
+      where: { apiPath_orgId: { apiPath, orgId } },
       create: {
-        apiPath, orgId: ORG_ID,
+        apiPath, orgId,
         lastSyncedAt: p.until, lastSuccessAt: new Date(),
       },
       update: {
@@ -101,6 +105,7 @@ export interface SyncReverseParams {
 
 export async function syncReverseOrders(p: SyncReverseParams): Promise<SyncReport> {
   const client = createMeituanClient()
+  const orgId = getOrgId()
   const startedAt = Date.now()
   const apiPath = '/rms/pos/api/v1/poi/reverse/orders/search'
   const report: SyncReport = { pages: 0, orders: 0, refunds: 0, failures: [], durationMs: 0 }
@@ -111,7 +116,7 @@ export async function syncReverseOrders(p: SyncReverseParams): Promise<SyncRepor
     let resp
     try {
       resp = await client.fetchReverseOrders({
-        orgId: ORG_ID,
+        orgId,
         req: {
           queryTimeType: 1,             // 退单接口只支持 1（营业日）
           beginTime: p.since.getTime(),
@@ -142,8 +147,8 @@ export async function syncReverseOrders(p: SyncReverseParams): Promise<SyncRepor
 
   if (!rateLimited) {
     await prisma.meituanSyncCursor.upsert({
-      where: { apiPath_orgId: { apiPath, orgId: ORG_ID } },
-      create: { apiPath, orgId: ORG_ID, lastSyncedAt: p.until, lastSuccessAt: new Date() },
+      where: { apiPath_orgId: { apiPath, orgId } },
+      create: { apiPath, orgId, lastSyncedAt: p.until, lastSuccessAt: new Date() },
       update: { lastSyncedAt: p.until, lastSuccessAt: new Date(), consecutiveFailures: 0 },
     })
   }

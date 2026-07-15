@@ -1,0 +1,126 @@
+import 'dotenv/config'
+import assert from 'node:assert/strict'
+import { prisma } from '@dianjie/db'
+
+const API_BASE = process.env.TEST_API_BASE || 'http://localhost:4444'
+const TENANT_SLUG = process.env.PREVIEW_TENANT_SLUG || 'yaohai-test'
+const IDENTIFIER = 'supplier-delivery-verify@local.test'
+const PASSWORD = 'yaohai@123'
+
+function assertLocalOnly() {
+  const url = process.env.DATABASE_URL || ''
+  if (process.env.PREVIEW_MODE !== 'true' || process.env.NODE_ENV === 'production' || !url.includes('dianjie_v4_local')) {
+    throw new Error('安全护栏：商品管理验证仅允许本地 PREVIEW_MODE 隔离库')
+  }
+}
+
+async function api(path: string, token: string | null, init: RequestInit = {}) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      ...(init.body instanceof FormData ? {} : { 'content-type': 'application/json' }),
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(init.headers || {}),
+    },
+  })
+  const body = await response.json().catch(() => ({}))
+  return { status: response.status, body }
+}
+
+async function main() {
+  assertLocalOnly()
+  const startedAt = new Date()
+  const tenant = await prisma.tenant.findUniqueOrThrow({ where: { slug: TENANT_SLUG } })
+  const user = await prisma.user.findFirstOrThrow({
+    where: { tenantId: tenant.id, email: IDENTIFIER, supplierId: { not: null } },
+  })
+  const supplierId = user.supplierId!
+  const categoryNames = ['验证分类A', '验证分类B', '验证分类C']
+  for (let index = 0; index < categoryNames.length; index++) {
+    await prisma.supplierProductCategory.upsert({
+      where: { tenantId_supplierId_name: { tenantId: tenant.id, supplierId, name: categoryNames[index] } },
+      create: { tenantId: tenant.id, supplierId, name: categoryNames[index], sortOrder: 900 + index },
+      update: { isActive: true },
+    })
+  }
+  const code = `VERIFY-SKU-${Date.now()}`
+  const product = await prisma.product.create({
+    data: {
+      tenantId: tenant.id, supplierId, code,
+      name: '本地商品管理验证品', spec: '1kg/件', category: '验证分类A', unit: '件',
+      price: 10, stock: 0, minStock: 0, status: 'ENABLED',
+    },
+  })
+  let documentId: string | null = null
+
+  try {
+    const login = await api('/api/auth/login', null, {
+      method: 'POST',
+      body: JSON.stringify({ identifier: IDENTIFIER, password: PASSWORD, tenantSlug: TENANT_SLUG }),
+    })
+    assert.equal(login.status, 200, JSON.stringify(login.body))
+    const token = login.body.token as string
+
+    const categories = await api('/api/products/categories', token)
+    assert.equal(categories.status, 200, JSON.stringify(categories.body))
+    assert.ok(categories.body.some((item: any) => item.name === '验证分类A'))
+
+    const patch = await api(`/api/products/${product.id}`, token, {
+      method: 'PATCH',
+      body: JSON.stringify({ category: '验证分类B', imageKey: `products/${tenant.id}/verify.jpg` }),
+    })
+    assert.equal(patch.status, 200, JSON.stringify(patch.body))
+    assert.equal(patch.body.product.category, '验证分类B')
+
+    const batchCategory = await api('/api/products/batch-category', token, {
+      method: 'PATCH',
+      body: JSON.stringify({ ids: [product.id], category: '验证分类C' }),
+    })
+    assert.equal(batchCategory.status, 200, JSON.stringify(batchCategory.body))
+    assert.equal(batchCategory.body.count, 1)
+
+    const batchDisable = await api('/api/products/batch-status', token, {
+      method: 'PATCH',
+      body: JSON.stringify({ ids: [product.id], status: 'DISABLED' }),
+    })
+    assert.equal(batchDisable.status, 200, JSON.stringify(batchDisable.body))
+    assert.equal(batchDisable.body.statusChange, 'PENDING_APPROVAL')
+    const pending = await prisma.product.findUniqueOrThrow({ where: { id: product.id } })
+    assert.equal(pending.status, 'PENDING_DISABLE')
+    const doc = await prisma.document.findFirstOrThrow({ where: { tenantId: tenant.id, no: batchDisable.body.documentNo } })
+    documentId = doc.id
+
+    const history = await api('/api/products/history?limit=100', token)
+    assert.equal(history.status, 200, JSON.stringify(history.body))
+    assert.ok(history.body.some((row: any) => row.targetId === product.id || row.action.includes('批量')))
+
+    const clearAll = await api('/api/products/clear-all', token, {
+      method: 'DELETE', body: JSON.stringify({ confirm: 'CLEAR_ALL' }),
+    })
+    assert.equal(clearAll.status, 410)
+
+    console.log(JSON.stringify({
+      ok: true,
+      categoryFilter: true,
+      imageKey: true,
+      batchCategory: true,
+      batchDisableApproval: true,
+      auditHistory: true,
+      destructiveClearBlocked: true,
+    }))
+  } finally {
+    await prisma.opLog.deleteMany({
+      where: {
+        tenantId: tenant.id, userId: user.id, createdAt: { gte: startedAt },
+        entityType: { in: ['Product', 'ProductBatch', 'ProductCategory'] },
+      },
+    })
+    if (documentId) await prisma.document.deleteMany({ where: { id: documentId } })
+    await prisma.product.deleteMany({ where: { id: product.id } })
+    await prisma.supplierProductCategory.deleteMany({
+      where: { tenantId: tenant.id, supplierId, name: { in: categoryNames } },
+    })
+  }
+}
+
+main().finally(() => prisma.$disconnect())

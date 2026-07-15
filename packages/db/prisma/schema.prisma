@@ -14,83 +14,97 @@ datasource db {
 
 // ── 租户（SaaS 多租户）────────────────────────────────
 model Tenant {
-  id          String   @id @default(cuid())
-  name        String                        // 品牌名称
-  slug        String   @unique              // URL 标识 dianjie
-  logo        String?                       // Logo URL
-  plan        Plan     @default(STARTER)
-  status      TenantStatus @default(ACTIVE)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String       @id @default(cuid())
+  name      String // 品牌名称
+  slug      String       @unique // URL 标识 dianjie
+  logo      String? // Logo URL
+  plan      Plan         @default(STARTER)
+  status    TenantStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
 
-  users       User[]
-  stores      Store[]
-  suppliers   Supplier[]
-  products    Product[]
-  receipts    Receipt[]
-  reconciliations Reconciliation[]
-  payments    Payment[]
-  paymentSchedules PaymentSchedule[]
-  opLogs         OpLog[]
-  purchaseOrders PurchaseOrder[]
-  lossClaims     LossClaim[]
-  paymentRules   PaymentRule[]
-  consumptions   StockConsumption[]
-  expenses       StoreExpense[]
-  cashAccounts   CashAccount[]
-  cashTransactions CashTransaction[]
-  notifications  Notification[]
-  invoices       Invoice[]
-  invoicePayments InvoicePayment[]
-  capitalProjects CapitalProject[]
-  documents      Document[]
-  productBatches ProductBatch[]
-  stockMovements SupplierStockMovement[]
-  inventorySnapshots InventorySnapshot[]
-  accountingPeriods AccountingPeriod[]
-  pettyCash         PettyCash[]
-  payrolls          Payroll[]
+  users                  User[]
+  stores                 Store[]
+  suppliers              Supplier[]
+  products               Product[]
+  supplierProductCategories SupplierProductCategory[]
+  receipts               Receipt[]
+  reconciliations        Reconciliation[]
+  payments               Payment[]
+  paymentSchedules       PaymentSchedule[]
+  opLogs                 OpLog[]
+  purchaseOrders         PurchaseOrder[]
+  purchaseOrderRevisions PurchaseOrderRevision[]
+  purchaseOrderEvents    PurchaseOrderEvent[]
+  deliveryOrders         DeliveryOrder[]
+  deliveryOrderEvents    DeliveryOrderEvent[]
+  businessSequences      BusinessSequence[]
+  lossClaims             LossClaim[]
+  paymentRules           PaymentRule[]
+  consumptions           StockConsumption[]
+  expenses               StoreExpense[]
+  cashAccounts           CashAccount[]
+  cashTransactions       CashTransaction[]
+  notifications          Notification[]
+  invoices               Invoice[]
+  invoicePayments        InvoicePayment[]
+  capitalProjects        CapitalProject[]
+  documents              Document[]
+  productBatches         ProductBatch[]
+  stockMovements         SupplierStockMovement[]
+  inventorySnapshots     InventorySnapshot[]
+  accountingPeriods      AccountingPeriod[]
+  pettyCash              PettyCash[]
+  payrolls               Payroll[]
 
   @@map("tenants")
 }
 
 // ── 用户 ──────────────────────────────────────────────
 model User {
-  id          String   @id @default(cuid())
-  tenantId    String
-  name        String
-  email       String
-  phone       String?
-  password    String                        // bcrypt hash
-  role        Role     @default(MANAGER)
-  status      UserStatus @default(ACTIVE)
-  storeId     String?                       // 店长绑定门店 (DEPRECATED, 用 storeIds[]; 兼容期保留)
-  storeIds    String[] @default([])         // 多店店长支持; 单店 = [storeId]
-  supplierId  String?                       // 供应商人员绑定供应商
-  lastLoginAt DateTime?
+  id           String     @id @default(cuid())
+  tenantId     String
+  name         String
+  email        String
+  phone        String?
+  password     String // bcrypt hash
+  role         Role       @default(MANAGER)
+  status       UserStatus @default(ACTIVE)
+  storeId      String? // 店长绑定门店 (DEPRECATED, 用 storeIds[]; 兼容期保留)
+  storeIds     String[]   @default([]) // 多店店长支持; 单店 = [storeId]
+  supplierId   String? // 供应商人员绑定供应商
+  lastLoginAt  DateTime?
   // 企微集成: wecomUserId 是企微通讯录里的 UserID, 用于 SSO 单点登录映射
-  wecomUserId String?  @db.VarChar(64)
-  wecomDeptIds Int[]   @default([])
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  wecomUserId  String?    @db.VarChar(64)
+  wecomDeptIds Int[]      @default([])
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
-  tenant      Tenant   @relation(fields: [tenantId], references: [id])
-  store       Store?   @relation(fields: [storeId], references: [id])
-  supplier    Supplier? @relation("SupplierUsers", fields: [supplierId], references: [id])
-  receipts    Receipt[]
-  opLogs      OpLog[]
-  consumptions  StockConsumption[]
-  createdPOs  PurchaseOrder[] @relation("POCreatedBy")
-  shippedPOs  PurchaseOrder[] @relation("POShippedBy")
-  createdLCs  LossClaim[]     @relation("LCCreatedBy")
-  handledLCs  LossClaim[]     @relation("LCHandledBy")
-  cashTransactions CashTransaction[]
-  notifications    Notification[]
-  uploadedInvoices Invoice[] @relation("InvoiceUploader")
-  initiatedDocuments Document[]
-  approvedSteps    DocumentStep[]
-  documentDecisions DocumentDecision[]
-  stockMovements   SupplierStockMovement[]
+  tenant               Tenant                  @relation(fields: [tenantId], references: [id])
+  store                Store?                  @relation(fields: [storeId], references: [id])
+  supplier             Supplier?               @relation("SupplierUsers", fields: [supplierId], references: [id])
+  receipts             Receipt[]
+  opLogs               OpLog[]
+  consumptions         StockConsumption[]
+  createdPOs           PurchaseOrder[]         @relation("POCreatedBy")
+  shippedPOs           PurchaseOrder[]         @relation("POShippedBy")
+  requestedPORevisions PurchaseOrderRevision[] @relation("PORevisionRequestedBy")
+  reviewedPORevisions  PurchaseOrderRevision[] @relation("PORevisionReviewedBy")
+  purchaseOrderEvents  PurchaseOrderEvent[]
+  createdDeliveries    DeliveryOrder[]         @relation("DeliveryCreatedBy")
+  shippedDeliveries    DeliveryOrder[]         @relation("DeliveryShippedBy")
+  deliveredDeliveries  DeliveryOrder[]         @relation("DeliveryDeliveredBy")
+  receivedDeliveries   DeliveryOrder[]         @relation("DeliveryReceivedBy")
+  deliveryOrderEvents  DeliveryOrderEvent[]
+  createdLCs           LossClaim[]             @relation("LCCreatedBy")
+  handledLCs           LossClaim[]             @relation("LCHandledBy")
+  cashTransactions     CashTransaction[]
+  notifications        Notification[]
+  uploadedInvoices     Invoice[]               @relation("InvoiceUploader")
+  initiatedDocuments   Document[]
+  approvedSteps        DocumentStep[]
+  documentDecisions    DocumentDecision[]
+  stockMovements       SupplierStockMovement[]
 
   @@unique([tenantId, email])
   @@unique([tenantId, phone])
@@ -104,19 +118,19 @@ model User {
 
 // 会计科目表 — 一级科目按企业会计准则, 二级以下可由用户在好会计自定义后回填编码
 model ChartOfAccount {
-  id          String   @id @default(cuid())
-  tenantId    String
-  code        String   @db.VarChar(16)        // 1001 / 1002 / 1405 等
-  name        String                            // 库存现金 / 银行存款 / 库存商品 ...
-  type        AccountType                       // ASSET / LIABILITY / EQUITY / REVENUE / EXPENSE
-  parentCode  String?  @db.VarChar(16)          // 二级三级用,顶层 null
-  isDetail    Boolean  @default(true)           // 末级科目 = 可记账
-  builtin     Boolean  @default(false)          // 系统预置 vs 用户自加
-  enabled     Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         String      @id @default(cuid())
+  tenantId   String
+  code       String      @db.VarChar(16) // 1001 / 1002 / 1405 等
+  name       String // 库存现金 / 银行存款 / 库存商品 ...
+  type       AccountType // ASSET / LIABILITY / EQUITY / REVENUE / EXPENSE
+  parentCode String?     @db.VarChar(16) // 二级三级用,顶层 null
+  isDetail   Boolean     @default(true) // 末级科目 = 可记账
+  builtin    Boolean     @default(false) // 系统预置 vs 用户自加
+  enabled    Boolean     @default(true)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
 
-  entries     VoucherEntry[]
+  entries VoucherEntry[]
 
   @@unique([tenantId, code])
   @@index([tenantId, parentCode])
@@ -124,39 +138,39 @@ model ChartOfAccount {
 }
 
 enum AccountType {
-  ASSET       // 资产
-  LIABILITY   // 负债
-  EQUITY      // 所有者权益
-  REVENUE     // 收入
-  EXPENSE     // 费用
+  ASSET // 资产
+  LIABILITY // 负债
+  EQUITY // 所有者权益
+  REVENUE // 收入
+  EXPENSE // 费用
 }
 
 // 凭证主表
 model Voucher {
-  id          String   @id @default(cuid())
-  tenantId    String
-  no          String                            // PZ-202605-0001 自动生成
-  date        DateTime @db.Date                 // 凭证日期(业务发生日)
-  word        String   @default("记") @db.VarChar(8)  // 凭证字, 一般为「记」
-  summary     String                            // 凭证摘要 (会计摘要, 简明)
+  id       String   @id @default(cuid())
+  tenantId String
+  no       String // PZ-202605-0001 自动生成
+  date     DateTime @db.Date // 凭证日期(业务发生日)
+  word     String   @default("记") @db.VarChar(8) // 凭证字, 一般为「记」
+  summary  String // 凭证摘要 (会计摘要, 简明)
 
   // 来源业务 (业务事件 → 凭证 的反向关联)
-  sourceType  String?                           // 'Receipt' | 'Payment' | 'LossClaim' | 'Manual' | etc.
-  sourceId    String?                           // 业务记录 ID
+  sourceType String? // 'Receipt' | 'Payment' | 'LossClaim' | 'Manual' | etc.
+  sourceId   String? // 业务记录 ID
 
-  totalDebit  Decimal  @db.Decimal(14, 2)       // 借方合计 (应等于 totalCredit)
-  totalCredit Decimal  @db.Decimal(14, 2)
+  totalDebit  Decimal @db.Decimal(14, 2) // 借方合计 (应等于 totalCredit)
+  totalCredit Decimal @db.Decimal(14, 2)
 
-  status      VoucherStatus @default(DRAFT)     // DRAFT 草稿 / POSTED 已审 / VOIDED 已作废
-  postedAt    DateTime?
-  postedById  String?
-  exportedAt  DateTime?                         // 导出到好会计的时间 (审计用)
+  status     VoucherStatus @default(DRAFT) // DRAFT 草稿 / POSTED 已审 / VOIDED 已作废
+  postedAt   DateTime?
+  postedById String?
+  exportedAt DateTime? // 导出到好会计的时间 (审计用)
 
-  createdById String?                           // 系统生成时为 null
+  createdById String? // 系统生成时为 null
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  entries     VoucherEntry[]
+  entries VoucherEntry[]
 
   @@unique([tenantId, no])
   // P0: sourceType+sourceId 在 tenant 内唯一, 防并发重复建凭证 (允许 null sourceId)
@@ -173,16 +187,16 @@ enum VoucherStatus {
 
 // 凭证分录
 model VoucherEntry {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   voucherId   String
-  lineNo      Int                               // 行号 1..N
-  summary     String                            // 分录摘要(允许与凭证摘要不同)
-  accountCode String   @db.VarChar(16)          // 冗余存,便于导出不依赖 join
-  accountName String                            // 冗余存,导出时直接用
-  debit       Decimal  @db.Decimal(14, 2) @default(0)
-  credit      Decimal  @db.Decimal(14, 2) @default(0)
+  lineNo      Int // 行号 1..N
+  summary     String // 分录摘要(允许与凭证摘要不同)
+  accountCode String  @db.VarChar(16) // 冗余存,便于导出不依赖 join
+  accountName String // 冗余存,导出时直接用
+  debit       Decimal @default(0) @db.Decimal(14, 2)
+  credit      Decimal @default(0) @db.Decimal(14, 2)
 
-  voucher     Voucher  @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  voucher     Voucher         @relation(fields: [voucherId], references: [id], onDelete: Cascade)
   // 软引用: accountCode → ChartOfAccount.code (per tenant); 不做硬 FK 因为 accountCode 是字符串
   account     ChartOfAccount? @relation(fields: [accountFkId], references: [id])
   accountFkId String?
@@ -194,22 +208,22 @@ model VoucherEntry {
 
 // 周期性凭证模板 (房租/水电/折旧 每月自动建)
 model VoucherTemplate {
-  id          String   @id @default(cuid())
-  tenantId    String
-  name        String                          // 模板名 "门店租金" "固定资产折旧" 等
-  description String?
-  frequency   String   @default("MONTHLY")    // MONTHLY (一期一次, 暂不支持其他)
-  dayOfMonth  Int      @default(1)            // 月内执行日 1..28
+  id            String    @id @default(cuid())
+  tenantId      String
+  name          String // 模板名 "门店租金" "固定资产折旧" 等
+  description   String?
+  frequency     String    @default("MONTHLY") // MONTHLY (一期一次, 暂不支持其他)
+  dayOfMonth    Int       @default(1) // 月内执行日 1..28
   // 模板分录 JSON: [{ accountCode, accountName, debit?, credit?, summary? }]
   // amount 可以是固定数字 或 "VARIABLE" (运行时占位, 由财务在草稿里填)
-  entriesJson Json                            // 模板分录定义
-  summary     String                          // 凭证摘要模板, 支持 {YYYY-MM} 等占位
-  enabled     Boolean  @default(true)
-  lastRunAt   DateTime?                       // 最近一次执行
-  lastVoucherId String?                       // 最近一次生成的凭证 ID
-  createdById String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  entriesJson   Json // 模板分录定义
+  summary       String // 凭证摘要模板, 支持 {YYYY-MM} 等占位
+  enabled       Boolean   @default(true)
+  lastRunAt     DateTime? // 最近一次执行
+  lastVoucherId String? // 最近一次生成的凭证 ID
+  createdById   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@index([tenantId, enabled])
   @@map("voucher_templates")
@@ -219,7 +233,7 @@ model VoucherTemplate {
 /// 原 fire-and-forget 凭证生成失败只 console.error 静默吞,审计无从发现。
 /// 现失败写本表,可在后台排查 + 手工补凭证 + 标记 resolved。
 model VoucherGenerationFailure {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   tenantId    String
   sourceType  String?
   sourceId    String?
@@ -227,9 +241,9 @@ model VoucherGenerationFailure {
   reason      String
   detail      String?
   entriesJson Json?
-  resolved    Boolean  @default(false)
+  resolved    Boolean   @default(false)
   resolvedAt  DateTime?
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
 
   @@index([tenantId, resolved])
   @@index([tenantId, sourceType, sourceId])
@@ -242,25 +256,25 @@ model VoucherGenerationFailure {
 // ══════════════════════════════════════════════════════
 
 model Dish {
-  id          String   @id @default(cuid())
+  id          String     @id @default(cuid())
   tenantId    String
-  code        String?  @db.VarChar(40)         // 内部编码 (与美团/抖音菜品 ID 关联用)
-  name        String                            // 菜品名: 「云南山珍菌汤锅」
-  category    String?                           // 分类: 汤锅 / 凉菜 / 主食 / 饮品 / ...
-  unit        String   @default("份")           // 计量单位
-  salePrice   Decimal  @db.Decimal(10, 2)       // 当前售价 (用于毛利计算)
+  code        String?    @db.VarChar(40) // 内部编码 (与美团/抖音菜品 ID 关联用)
+  name        String // 菜品名: 「云南山珍菌汤锅」
+  category    String? // 分类: 汤锅 / 凉菜 / 主食 / 饮品 / ...
+  unit        String     @default("份") // 计量单位
+  salePrice   Decimal    @db.Decimal(10, 2) // 当前售价 (用于毛利计算)
   imageUrl    String?
   description String?
   status      DishStatus @default(ACTIVE)
   // 是否所有门店都卖 (group=true) 或仅部分 (storeIds[])
-  groupWide   Boolean  @default(true)
-  storeIds    String[] @default([])             // groupWide=false 时哪些店卖
+  groupWide   Boolean    @default(true)
+  storeIds    String[]   @default([]) // groupWide=false 时哪些店卖
   createdById String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
 
-  recipes     DishRecipe[]
-  sales       DishSale[]
+  recipes DishRecipe[]
+  sales   DishSale[]
 
   @@unique([tenantId, name])
   @@index([tenantId, status])
@@ -270,24 +284,24 @@ model Dish {
 enum DishStatus {
   ACTIVE
   DISABLED
-  UPCOMING       // 待上架 (新品研发中)
+  UPCOMING // 待上架 (新品研发中)
 }
 
 // 菜品配方 — 一道菜含 N 种食材
 model DishRecipe {
-  id          String   @id @default(cuid())
-  dishId      String
-  productId   String                            // 食材 SKU
-  quantity    Decimal  @db.Decimal(10, 4)       // 用量 (按食材最小单位)
-  unit        String                            // 单位 (kg/瓶/件/包,与 Product.unit 对应)
-  lossRate    Decimal  @db.Decimal(5, 4) @default(0)   // 损耗率 0.05 = 5%
-  isMain      Boolean  @default(false)          // 主料标记
-  note        String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(cuid())
+  dishId    String
+  productId String // 食材 SKU
+  quantity  Decimal  @db.Decimal(10, 4) // 用量 (按食材最小单位)
+  unit      String // 单位 (kg/瓶/件/包,与 Product.unit 对应)
+  lossRate  Decimal  @default(0) @db.Decimal(5, 4) // 损耗率 0.05 = 5%
+  isMain    Boolean  @default(false) // 主料标记
+  note      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  dish        Dish     @relation(fields: [dishId], references: [id], onDelete: Cascade)
-  product     Product  @relation(fields: [productId], references: [id])
+  dish    Dish    @relation(fields: [dishId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
 
   @@unique([dishId, productId])
   @@index([productId])
@@ -302,19 +316,19 @@ model DishSale {
   storeId     String
   dishId      String
   date        DateTime @db.Date
-  quantity    Decimal  @db.Decimal(10, 2)       // 销售份数
-  grossAmount Decimal  @db.Decimal(12, 2)       // 销售金额 (含折扣)
-  source      String   @default("manual")       // manual / meituan / douyin / cashier_pos
-  channel     String?                            // 堂食 / 外卖 / 储值
-  rawData     Json?                              // 原始数据 (订单 ID 等)
+  quantity    Decimal  @db.Decimal(10, 2) // 销售份数
+  grossAmount Decimal  @db.Decimal(12, 2) // 销售金额 (含折扣)
+  source      String   @default("manual") // manual / meituan / douyin / cashier_pos
+  channel     String? // 堂食 / 外卖 / 储值
+  rawData     Json? // 原始数据 (订单 ID 等)
   createdById String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  dish        Dish     @relation(fields: [dishId], references: [id])
-  store       Store    @relation(fields: [storeId], references: [id])
+  dish  Dish  @relation(fields: [dishId], references: [id])
+  store Store @relation(fields: [storeId], references: [id])
 
-  @@unique([storeId, dishId, date, source])    // 同源同店同菜同日 唯一
+  @@unique([storeId, dishId, date, source]) // 同源同店同菜同日 唯一
   @@index([tenantId, date])
   @@index([dishId, date])
   @@map("dish_sales")
@@ -323,22 +337,22 @@ model DishSale {
 // ── 企微集成配置 ──────────────────────────────────────
 // 一个 Tenant 一份配置, 暂不支持多企微账号
 model WeComConfig {
-  id              String   @id @default(cuid())
-  tenantId        String   @unique
-  corpId          String   @db.VarChar(64)    // 企业 ID
-  agentId         String   @db.VarChar(32)    // 自建应用 AgentId
-  appSecret       String                       // 应用 Secret (加密存储, 应用 access_token 用)
-  contactSecret   String?                      // 通讯录同步 Secret (可选, M2 启用)
-  callbackToken   String?                      // 接收事件回调 Token
-  encodingAESKey  String?                      // 回调消息体 AES key
+  id              String    @id @default(cuid())
+  tenantId        String    @unique
+  corpId          String    @db.VarChar(64) // 企业 ID
+  agentId         String    @db.VarChar(32) // 自建应用 AgentId
+  appSecret       String // 应用 Secret (加密存储, 应用 access_token 用)
+  contactSecret   String? // 通讯录同步 Secret (可选, M2 启用)
+  callbackToken   String? // 接收事件回调 Token
+  encodingAESKey  String? // 回调消息体 AES key
   // 当前可用 access_token 缓存 (避免每次重取, 企微限制每天有限调用次数)
   accessToken     String?
   accessTokenExp  DateTime?
   contactToken    String?
   contactTokenExp DateTime?
-  enabled         Boolean  @default(false)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  enabled         Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@map("wecom_configs")
 }
@@ -347,13 +361,13 @@ model WeComConfig {
 model StoreHandover {
   id            String   @id @default(cuid())
   tenantId      String
-  storeId       String                       // 移出/接收的门店
-  fromUserId    String                       // 移出人 (离职/调走的店长)
-  toUserId      String                       // 接管人 (继任/代管的店长)
-  reason        String?                      // '调岗' / '离职' / '临时代管'
-  handoverItems Json?                        // [{type:'application', id, status}, ...] 接管时的待办快照
+  storeId       String // 移出/接收的门店
+  fromUserId    String // 移出人 (离职/调走的店长)
+  toUserId      String // 接管人 (继任/代管的店长)
+  reason        String? // '调岗' / '离职' / '临时代管'
+  handoverItems Json? // [{type:'application', id, status}, ...] 接管时的待办快照
   note          String?
-  createdById   String                       // 操作人 (一般是老板)
+  createdById   String // 操作人 (一般是老板)
   createdAt     DateTime @default(now())
 
   @@index([tenantId, storeId, createdAt])
@@ -362,11 +376,11 @@ model StoreHandover {
 
 // ── 通知偏好 (每用户每事件可关) ─────────────────────────
 model NotificationPref {
-  userId      String
-  eventType   String                         // 'PO_SUBMITTED' / 'LOSS_PENDING' / etc.
-  enabled     Boolean @default(true)
-  channels    String[] @default(["wecom"])   // ['wecom', 'sms', 'inapp']
-  updatedAt   DateTime @updatedAt
+  userId    String
+  eventType String // 'PO_SUBMITTED' / 'LOSS_PENDING' / etc.
+  enabled   Boolean  @default(true)
+  channels  String[] @default(["wecom"]) // ['wecom', 'sms', 'inapp']
+  updatedAt DateTime @updatedAt
 
   @@id([userId, eventType])
   @@map("notification_prefs")
@@ -374,16 +388,16 @@ model NotificationPref {
 
 // ── 通知日志 (频控去重 + 审计) ──────────────────────────
 model NotificationLog {
-  id          String   @id @default(cuid())
-  tenantId    String
-  userId      String
-  eventType   String
-  eventKey    String                         // 去重 key 如 'PO123:DELIVERED'
-  channel     String                         // 'wecom' / 'sms' / 'inapp'
-  status      String                         // 'sent' / 'failed' / 'suppressed' / 'frequency_blocked'
-  errorMsg    String?
-  payload     Json?
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  eventType String
+  eventKey  String // 去重 key 如 'PO123:DELIVERED'
+  channel   String // 'wecom' / 'sms' / 'inapp'
+  status    String // 'sent' / 'failed' / 'suppressed' / 'frequency_blocked'
+  errorMsg  String?
+  payload   Json?
+  createdAt DateTime @default(now())
 
   @@index([userId, eventType, createdAt])
   @@index([tenantId, eventKey])
@@ -392,13 +406,13 @@ model NotificationLog {
 
 // ── 企微同步日志 (审计 + 排错用) ───────────────────────
 model WeComSyncLog {
-  id          String   @id @default(cuid())
-  tenantId    String
-  kind        String                       // 'oauth_login' | 'contact_sync' | 'send_msg' | 'webhook'
-  status      String                       // 'ok' | 'error'
-  payload     Json?                        // 输入/输出摘要
-  errorMsg    String?
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  tenantId  String
+  kind      String // 'oauth_login' | 'contact_sync' | 'send_msg' | 'webhook'
+  status    String // 'ok' | 'error'
+  payload   Json? // 输入/输出摘要
+  errorMsg  String?
+  createdAt DateTime @default(now())
 
   @@index([tenantId, kind, createdAt])
   @@map("wecom_sync_logs")
@@ -406,62 +420,63 @@ model WeComSyncLog {
 
 // ── 门店 ──────────────────────────────────────────────
 model Store {
-  id          String   @id @default(cuid())
-  tenantId    String
-  no          String                        // DJ001
-  name        String
-  address     String?
-  phone       String?
-  managerName String?
-  consigneeId String?                       // 指定收货人 (User.id, 一般是厨师长) — 供应商送货单显示此人姓名+电话; 空则回退店长 managerName/phone
-  status      StoreStatus @default(ENABLED)
+  id            String      @id @default(cuid())
+  tenantId      String
+  no            String // DJ001
+  name          String
+  address       String?
+  phone         String?
+  managerName   String?
+  consigneeId   String? // 指定收货人 (User.id, 一般是厨师长) — 供应商送货单显示此人姓名+电话; 空则回退店长 managerName/phone
+  status        StoreStatus @default(ENABLED)
   // 平台券核销
-  meituanShopId       String?               // 美团门店ID (导对账 CSV 用)
-  douyinShopId        String?               // 抖音门店ID (导对账 CSV 用)
+  meituanShopId String? // 美团门店ID (导对账 CSV 用)
+  douyinShopId  String? // 抖音门店ID (导对账 CSV 用)
 
   // 主收款通道(线下扫码 / 桌签码) — 一等公民
   // 推荐用聚合平台, 多店分账 + 接入快
-  paymentChannelType  String?               // 'AGGREGATOR' | 'WECHAT_DIRECT' | 'ALIPAY_DIRECT'
-  aggregatorVendor    String?               // 'qianqian'(收钱吧) | 'qfpay' | 'lakala' | 'hesh'
-  aggregatorMerchantId   String?            // 聚合平台分配的商户号 / 店铺ID
-  aggregatorApiKeyEnc    String?            // 聚合平台 API key (加密)
-  aggregatorSecretEnc    String?            // 聚合平台 API secret (加密, 部分平台需要)
+  paymentChannelType   String? // 'AGGREGATOR' | 'WECHAT_DIRECT' | 'ALIPAY_DIRECT'
+  aggregatorVendor     String? // 'qianqian'(收钱吧) | 'qfpay' | 'lakala' | 'hesh'
+  aggregatorMerchantId String? // 聚合平台分配的商户号 / 店铺ID
+  aggregatorApiKeyEnc  String? // 聚合平台 API key (加密)
+  aggregatorSecretEnc  String? // 聚合平台 API secret (加密, 部分平台需要)
 
   // 自营生态 (有小程序/App 时才需, 大多数中型连锁不需要)
-  wechatMerchantId    String?               // 微信支付商户号 (mchid)
-  wechatApiV3KeyEnc   String?               // 微信 V3 APIv3 密钥 (加密)
-  alipayAppId         String?               // 支付宝应用ID
-  alipayPrivateKeyEnc String?               // 支付宝商户私钥 (加密)
+  wechatMerchantId    String? // 微信支付商户号 (mchid)
+  wechatApiV3KeyEnc   String? // 微信 V3 APIv3 密钥 (加密)
+  alipayAppId         String? // 支付宝应用ID
+  alipayPrivateKeyEnc String? // 支付宝商户私钥 (加密)
 
   // 开票信息 / 出账银行 (聚合/直连 T+1 也打这里)
-  bankAccountNo       String?               // 银行账户号
-  bankAccountName     String?               // 户名 = 公司全称 (开票抬头)
-  bankName            String?               // 开户行
-  invoiceTaxId        String?               // 税号 (统一社会信用代码 / 纳税人识别号)
+  bankAccountNo   String? // 银行账户号
+  bankAccountName String? // 户名 = 公司全称 (开票抬头)
+  bankName        String? // 开户行
+  invoiceTaxId    String? // 税号 (统一社会信用代码 / 纳税人识别号)
 
-  autoSyncRevenue     Boolean  @default(false)
+  autoSyncRevenue Boolean @default(false)
 
   // 门店生命周期: 工程部开店流程
-  lifecyclePhase  StoreLifecyclePhase @default(OPERATING)
-  engineerId      String?              // 工程部负责人 (StoreLifecyclePhase != OPERATING 时使用)
-  expectedOpenAt  DateTime?            // 预计开业日
+  lifecyclePhase StoreLifecyclePhase @default(OPERATING)
+  engineerId     String? // 工程部负责人 (StoreLifecyclePhase != OPERATING 时使用)
+  expectedOpenAt DateTime? // 预计开业日
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  tenant      Tenant   @relation(fields: [tenantId], references: [id])
-  users       User[]
-  receipts    Receipt[]
-  revenueRecords RevenueRecord[]
-  purchaseOrders PurchaseOrder[]
-  lossClaims     LossClaim[]
-  consumptions   StockConsumption[]
-  expenses       StoreExpense[]
-  capitalProjects CapitalProject[]
-  documents      Document[]
-  dishSales      DishSale[]
-  pettyCash      PettyCash[]
-  payrolls       Payroll[]
+  tenant             Tenant              @relation(fields: [tenantId], references: [id])
+  users              User[]
+  receipts           Receipt[]
+  revenueRecords     RevenueRecord[]
+  purchaseOrders     PurchaseOrder[]
+  deliveryOrders     DeliveryOrder[]
+  lossClaims         LossClaim[]
+  consumptions       StockConsumption[]
+  expenses           StoreExpense[]
+  capitalProjects    CapitalProject[]
+  documents          Document[]
+  dishSales          DishSale[]
+  pettyCash          PettyCash[]
+  payrolls           Payroll[]
   inventorySnapshots InventorySnapshot[]
 
   @@unique([tenantId, no])
@@ -470,15 +485,15 @@ model Store {
 
 // ── 营业额记录（美团收银机同步）──────────────────────
 model RevenueRecord {
-  id          String   @id @default(cuid())
-  storeId     String
-  date        DateTime @db.Date
-  amount      Decimal  @db.Decimal(12, 2)
-  source      String   @default("manual")  // manual / meituan
-  rawData     Json?                         // 原始数据备份
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  storeId   String
+  date      DateTime @db.Date
+  amount    Decimal  @db.Decimal(12, 2)
+  source    String   @default("manual") // manual / meituan
+  rawData   Json? // 原始数据备份
+  createdAt DateTime @default(now())
 
-  store       Store    @relation(fields: [storeId], references: [id])
+  store Store @relation(fields: [storeId], references: [id])
 
   @@unique([storeId, date])
   @@map("revenue_records")
@@ -486,52 +501,54 @@ model RevenueRecord {
 
 // ── 供应商 ────────────────────────────────────────────
 model Supplier {
-  id            String   @id @default(cuid())
-  tenantId      String
-  no            String                      // SUP001
-  name          String
-  contactName   String?
-  contactPhone  String?
-  category      String?                     // 菌类 / 蔬菜 / 水产
-  status        SupplierStatus @default(ENABLED)
+  id           String         @id @default(cuid())
+  tenantId     String
+  no           String // SUP001
+  name         String
+  contactName  String?
+  contactPhone String?
+  category     String? // 菌类 / 蔬菜 / 水产
+  status       SupplierStatus @default(ENABLED)
 
   // 账期配置
-  creditType    CreditType @default(FIXED_DAYS)
-  creditDays    Int        @default(30)     // 账期天数
-  autoPay       Boolean    @default(false)  // 是否自动打款
-  autoPayLimit  Decimal?   @db.Decimal(12, 2) // 自动付款金额上限
+  creditType   CreditType @default(FIXED_DAYS)
+  creditDays   Int        @default(30) // 账期天数
+  autoPay      Boolean    @default(false) // 是否自动打款
+  autoPayLimit Decimal?   @db.Decimal(12, 2) // 自动付款金额上限
 
   // 收款信息
-  bankName      String?
-  bankAccount   String?
+  bankName        String?
+  bankAccount     String?
   bankAccountName String?
-  bankCode      String?                      // 联行号/SWIFT，用于跨行付款
+  bankCode        String? // 联行号/SWIFT，用于跨行付款
 
   // [Plan B 方案预留] 双向开户流程字段 — 落地时再加 enum + 字段
 
   // 财务数据源分类 (真实业务: 总仓何姐给 / 美菜快驴 B2B / 散户微信群)
   // 用于月度成本核对工作台 (/v2/finance-pc/cost-check) 三栏展示
-  sourceType    SupplierSourceType?           // 不设默认值, 旧数据保持 null = 未分类
+  sourceType SupplierSourceType? // 不设默认值, 旧数据保持 null = 未分类
 
   // AI 评分
-  scoreTotal    Int        @default(80)     // 综合评分
-  onTimeRate    Int        @default(90)     // 准时交货率
-  totalOrders   Int        @default(0)
+  scoreTotal  Int @default(80) // 综合评分
+  onTimeRate  Int @default(90) // 准时交货率
+  totalOrders Int @default(0)
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  tenant        Tenant   @relation(fields: [tenantId], references: [id])
-  users         User[]   @relation("SupplierUsers")
-  products      Product[]
-  receipts      Receipt[]
-  reconciliations Reconciliation[]
-  payments      Payment[]
+  tenant           Tenant                  @relation(fields: [tenantId], references: [id])
+  users            User[]                  @relation("SupplierUsers")
+  products         Product[]
+  receipts         Receipt[]
+  reconciliations  Reconciliation[]
+  payments         Payment[]
   paymentSchedules PaymentSchedule[]
   purchaseOrders   PurchaseOrder[]
+  deliveryOrders   DeliveryOrder[]
   lossClaims       LossClaim[]
   invoices         Invoice[]
   stockMovements   SupplierStockMovement[]
+  productCategories SupplierProductCategory[]
 
   @@unique([tenantId, no])
   @@map("suppliers")
@@ -539,65 +556,90 @@ model Supplier {
 
 // ── 商品 ──────────────────────────────────────────────
 model Product {
-  id          String   @id @default(cuid())
-  tenantId    String
-  code        String                        // MR001
-  name        String
-  spec        String?                       // 规格型号 (如 "24瓶*330ml/件" / "5kg/袋")
-  category    String   @default("其他")     // 类目可选, 默认"其他"
-  unit        String   @default("kg")
-  price       Decimal  @db.Decimal(10, 2)  // 参考单价
-  stock       Decimal  @default(0) @db.Decimal(10, 2)
-  minStock    Decimal  @default(0) @db.Decimal(10, 2)  // 安全库存
-  minOrderQty Decimal  @default(1) @db.Decimal(10, 2)  // 起订量 (≥1)
-  stepQty     Decimal  @default(1) @db.Decimal(10, 2)  // 整倍数步长 (1=随便; 10=必须 10/20/30...)
-  shelfDays   Int      @default(7)          // 保质期天数
+  id              String        @id @default(cuid())
+  tenantId        String
+  code            String // MR001
+  name            String
+  spec            String? // 规格型号 (如 "24瓶*330ml/件" / "5kg/袋")
+  category        String        @default("其他") // 类目可选, 默认"其他"
+  imageKey        String? // OSS 对象 key；读取时动态签名，避免长期保存过期 URL
+  unit            String        @default("kg")
+  price           Decimal       @db.Decimal(10, 2) // 参考单价
+  stock           Decimal       @default(0) @db.Decimal(10, 2)
+  minStock        Decimal       @default(0) @db.Decimal(10, 2) // 安全库存
+  minOrderQty     Decimal       @default(1) @db.Decimal(10, 2) // 起订量 (≥1)
+  stepQty         Decimal       @default(1) @db.Decimal(10, 2) // 整倍数步长 (1=随便; 10=必须 10/20/30...)
+  shelfDays       Int           @default(7) // 保质期天数
   // 实发量上限 (供应商发货时允许调整的弹性, 2026-05-28 客户反馈 per-product 可配)
   // 校验公式: upper = max(下单 × shipUpperPct, 下单 + shipUpperBuffer)
   // 默认 1.10 / 5.00 跟之前全局阈值一致, 历史商品零行为变化
-  shipUpperPct    Decimal  @default(1.10) @db.Decimal(5, 2)   // 实发百分比上限 (1.10 = 110%)
-  shipUpperBuffer Decimal  @default(5.00) @db.Decimal(10, 2)  // 实发绝对加量上限 (单位件)
-  status      ProductStatus @default(ENABLED)
-  supplierId  String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  shipUpperPct    Decimal       @default(1.10) @db.Decimal(5, 2) // 实发百分比上限 (1.10 = 110%)
+  shipUpperBuffer Decimal       @default(5.00) @db.Decimal(10, 2) // 实发绝对加量上限 (单位件)
+  status          ProductStatus @default(ENABLED)
+  supplierId      String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
   // 批量上传归属（用于导入历史 + 撤回；单条创建为 null）
-  batchId     String?
-  batch       ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  batchId String?
+  batch   ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
 
-  tenant      Tenant   @relation(fields: [tenantId], references: [id])
-  supplier    Supplier? @relation(fields: [supplierId], references: [id])
-  receiptItems        ReceiptItem[]
-  purchaseOrderItems  PurchaseOrderItem[]
-  lossClaimItems      LossClaimItem[]
-  consumptions        StockConsumption[]
-  stockMovements      SupplierStockMovement[]
-  dishRecipes         DishRecipe[]
+  tenant                 Tenant                  @relation(fields: [tenantId], references: [id])
+  supplier               Supplier?               @relation(fields: [supplierId], references: [id])
+  receiptItems           ReceiptItem[]
+  purchaseOrderItems     PurchaseOrderItem[]
+  deliveryOrderItems     DeliveryOrderItem[]
+  lossClaimItems         LossClaimItem[]
+  consumptions           StockConsumption[]
+  stockMovements         SupplierStockMovement[]
+  dishRecipes            DishRecipe[]
   inventorySnapshotItems InventorySnapshotItem[]
 
   @@unique([tenantId, code])
   @@index([batchId])
+  @@index([tenantId, supplierId, category, status])
   @@map("products")
+}
+
+// ── 供应商商品/库存分类主数据 ─────────────────────────
+// Product.category 继续保留名称快照以兼容订单、导入和历史数据；
+// 此表负责分类的新增、改名、排序及停用状态。
+model SupplierProductCategory {
+  id         String   @id @default(cuid())
+  tenantId   String
+  supplierId String
+  name       String   @db.VarChar(40)
+  sortOrder  Int      @default(0)
+  isActive   Boolean  @default(true)
+  isSystem   Boolean  @default(false) // “其他”等系统兜底分类不可停用/改名
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  supplier Supplier @relation(fields: [supplierId], references: [id])
+
+  @@unique([tenantId, supplierId, name])
+  @@index([tenantId, supplierId, isActive, sortOrder], map: "supplier_product_categories_tenantId_supplierId_isActive_so_idx")
+  @@map("supplier_product_categories")
 }
 
 // ── 批量上传历史 (商品报价表导入)──────────────────────────
 model ProductBatch {
-  id            String   @id @default(cuid())
-  tenantId      String
-  supplierId    String?                       // 供应商角色上传时记录
-  uploadedById  String                        // 操作人
-  filename      String?                       // 原始文件名
-  totalRows     Int                           // 上传时声称的行数
-  createdCount  Int                           // 实际成功创建数
-  failedCount   Int
-  failedRows    Json?                         // [{row, code, error}, ...] 用于复盘
-  revokedAt     DateTime?                     // 撤回时间 (null = 仍有效)
-  revokedById   String?
-  createdAt     DateTime @default(now())
+  id           String    @id @default(cuid())
+  tenantId     String
+  supplierId   String? // 供应商角色上传时记录
+  uploadedById String // 操作人
+  filename     String? // 原始文件名
+  totalRows    Int // 上传时声称的行数
+  createdCount Int // 实际成功创建数
+  failedCount  Int
+  failedRows   Json? // [{row, code, error}, ...] 用于复盘
+  revokedAt    DateTime? // 撤回时间 (null = 仍有效)
+  revokedById  String?
+  createdAt    DateTime  @default(now())
 
-  tenant        Tenant   @relation(fields: [tenantId], references: [id])
-  products      Product[]                     // 反向关联
+  tenant   Tenant    @relation(fields: [tenantId], references: [id])
+  products Product[] // 反向关联
 
   @@index([tenantId, supplierId])
   @@map("product_batches")
@@ -605,20 +647,20 @@ model ProductBatch {
 
 // ── 入库单 ────────────────────────────────────────────
 model Receipt {
-  id          String   @id @default(cuid())
-  tenantId    String
-  no          String                        // RK202401001
-  storeId     String
-  supplierId  String
-  deliveryDate DateTime @db.Date
-  totalAmount Decimal  @db.Decimal(12, 2)
-  status      ReceiptStatus @default(DRAFT)
-  note        String?
-  createdById String
-  confirmedAt DateTime?
+  id           String        @id @default(cuid())
+  tenantId     String
+  no           String // RK202401001
+  storeId      String
+  supplierId   String
+  deliveryDate DateTime      @db.Date
+  totalAmount  Decimal       @db.Decimal(12, 2)
+  status       ReceiptStatus @default(DRAFT)
+  note         String?
+  createdById  String
+  confirmedAt  DateTime?
 
   // 补录入库单（非采购单流程）
-  isManual         Boolean  @default(false)
+  isManual         Boolean @default(false)
   tempSupplierName String?
   tempBankAccount  String?
   tempBankName     String?
@@ -627,13 +669,14 @@ model Receipt {
   rejectReason String?
   rejectedAt   DateTime?
 
-  // 关联采购订单
-  purchaseOrderId String? @unique
+  // 关联订货单与独立配送单。一张订货单可分多次配送，因此 purchaseOrderId 不再唯一。
+  purchaseOrderId String?
+  deliveryOrderId String? @unique
 
   // 发票关联 (供应商上传, 财务审核通过 → 关联订单付款解锁)
   // 1 张发票可对多个 receipt(月底批量开票场景), 1 个 receipt 当前最多对 1 张发票
-  invoiceId   String?
-  invoice     Invoice? @relation(fields: [invoiceId], references: [id])
+  invoiceId String?
+  invoice   Invoice? @relation(fields: [invoiceId], references: [id])
 
   // 三方核对 (P1-1 真实业务: 门店+厨师长+供应商三方核对无误才入账)
   // 门店店长确认: 入库时即为店长签收, 隐含在 createdById 里 (无需单字段)
@@ -643,62 +686,65 @@ model Receipt {
   supplierVerifiedById String?
   supplierVerifyNote   String?
   // 财务核对完毕 (新): 三方都对完, 财务核对金额无误, 准备入账
-  financeVerifiedAt   DateTime?
-  financeVerifiedById String?
-  financeVerifyNote   String?
+  financeVerifiedAt    DateTime?
+  financeVerifiedById  String?
+  financeVerifyNote    String?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  tenant      Tenant   @relation(fields: [tenantId], references: [id])
-  store       Store    @relation(fields: [storeId], references: [id])
-  supplier    Supplier @relation(fields: [supplierId], references: [id])
-  createdBy   User     @relation(fields: [createdById], references: [id])
-  items       ReceiptItem[]
-  paymentSchedule PaymentSchedule?
+  tenant              Tenant               @relation(fields: [tenantId], references: [id])
+  store               Store                @relation(fields: [storeId], references: [id])
+  supplier            Supplier             @relation(fields: [supplierId], references: [id])
+  createdBy           User                 @relation(fields: [createdById], references: [id])
+  items               ReceiptItem[]
+  paymentSchedule     PaymentSchedule?
   reconciliationItems ReconciliationItem[]
-  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  purchaseOrder       PurchaseOrder?       @relation("PurchaseOrderReceipts", fields: [purchaseOrderId], references: [id])
+  primaryForOrder     PurchaseOrder?       @relation("PurchaseOrderPrimaryReceipt")
+  deliveryOrder       DeliveryOrder?       @relation(fields: [deliveryOrderId], references: [id])
 
   @@unique([tenantId, no])
+  @@index([purchaseOrderId, deliveryDate])
   @@map("receipts")
 }
 
 model ReceiptItem {
-  id          String   @id @default(cuid())
-  receiptId   String
-  productId   String
-  quantity    Decimal  @db.Decimal(10, 2)
-  unitPrice   Decimal  @db.Decimal(10, 2)
-  amount      Decimal  @db.Decimal(12, 2)  // quantity * unitPrice
+  id        String  @id @default(cuid())
+  receiptId String
+  productId String
+  quantity  Decimal @db.Decimal(10, 2)
+  unitPrice Decimal @db.Decimal(10, 2)
+  amount    Decimal @db.Decimal(12, 2) // quantity * unitPrice
 
-  productionDate DateTime? @db.Date @map("production_date")
-  expiryDate  DateTime? @db.Date @map("expiry_date")
+  productionDate DateTime? @map("production_date") @db.Date
+  expiryDate     DateTime? @map("expiry_date") @db.Date
 
-  receipt     Receipt  @relation(fields: [receiptId], references: [id], onDelete: Cascade)
-  product     Product  @relation(fields: [productId], references: [id])
+  receipt Receipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
 
   @@map("receipt_items")
 }
 
 // ── 账期记录（核心）──────────────────────────────────
 model PaymentSchedule {
-  id            String   @id @default(cuid())
+  id            String         @id @default(cuid())
   tenantId      String
-  receiptId     String   @unique
+  receiptId     String         @unique
   supplierId    String
-  storeId       String?                      // 关联门店（用于银行付款来源账户）
-  amount        Decimal  @db.Decimal(12, 2)
-  creditDays    Int                          // 快照：当时的账期天数
-  confirmedAt   DateTime                     // 入库确认时间
-  dueAt         DateTime                     // 到期时间 = confirmedAt + creditDays
+  storeId       String? // 关联门店（用于银行付款来源账户）
+  amount        Decimal        @db.Decimal(12, 2)
+  creditDays    Int // 快照：当时的账期天数
+  confirmedAt   DateTime // 入库确认时间
+  dueAt         DateTime // 到期时间 = confirmedAt + creditDays
   status        ScheduleStatus @default(PENDING)
-  notified3Days Boolean  @default(false)     // T-3天已通知
-  notified1Day  Boolean  @default(false)     // T-1天已通知
+  notified3Days Boolean        @default(false) // T-3天已通知
+  notified1Day  Boolean        @default(false) // T-1天已通知
   paidAt        DateTime?
   paymentId     String?
 
   // 审批流（金额 > 阈值时需要总部审批）
-  needApproval  Boolean  @default(false)
+  needApproval  Boolean   @default(false)
   approvedById  String?
   approvedAt    DateTime?
   approvalNote  String?
@@ -706,93 +752,93 @@ model PaymentSchedule {
   rejectionNote String?
 
   // 银行转账结果
-  bankTxNo         String?                   // 银行流水号（招行 refext）
-  bankRawResponse  Json?                     // 招行原始响应
-  retryCount       Int      @default(0)
-  failReason       String?
+  bankTxNo        String? // 银行流水号（招行 refext）
+  bankRawResponse Json? // 招行原始响应
+  retryCount      Int     @default(0)
+  failReason      String?
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  tenant        Tenant   @relation(fields: [tenantId], references: [id])
-  receipt       Receipt  @relation(fields: [receiptId], references: [id])
-  supplier      Supplier @relation(fields: [supplierId], references: [id])
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  receipt  Receipt  @relation(fields: [receiptId], references: [id])
+  supplier Supplier @relation(fields: [supplierId], references: [id])
 
-  @@index([dueAt, status])                   // 账期引擎查询优化
+  @@index([dueAt, status]) // 账期引擎查询优化
   @@map("payment_schedules")
 }
 
 // ── 发票 (供应商上传 → 财务审核 → 财务分次付款) ──
 // 月度场景: 1 张总票对应 N 个订单, 财务可分次部分付款, 累计 ≤ 开票金额
 model Invoice {
-  id             String   @id @default(cuid())
-  tenantId       String
-  supplierId     String
+  id               String           @id @default(cuid())
+  tenantId         String
+  supplierId       String
   // 发票信息
-  invoiceNo      String                              // 发票号码
-  invoiceCode    String?                             // 发票代码 (旧版增值税票有, 电子发票无)
-  amount         Decimal  @db.Decimal(12, 2)         // 价税合计 (开票金额)
-  amountWithoutTax Decimal? @db.Decimal(12, 2)       // 不含税金额
-  taxRate        Decimal? @db.Decimal(5, 4)          // 税率, 例 0.06
-  taxAmount      Decimal? @db.Decimal(12, 2)         // 税额
-  issueDate      DateTime                            // 开票日期
+  invoiceNo        String // 发票号码
+  invoiceCode      String? // 发票代码 (旧版增值税票有, 电子发票无)
+  amount           Decimal          @db.Decimal(12, 2) // 价税合计 (开票金额)
+  amountWithoutTax Decimal?         @db.Decimal(12, 2) // 不含税金额
+  taxRate          Decimal?         @db.Decimal(5, 4) // 税率, 例 0.06
+  taxAmount        Decimal?         @db.Decimal(12, 2) // 税额
+  issueDate        DateTime // 开票日期
   // 文件
-  fileUrl        String                              // OSS URL
-  fileType       String   @default("image")          // image | pdf
-  note           String?
+  fileUrl          String // OSS URL
+  fileType         String           @default("image") // image | pdf
+  note             String?
   // 上传 / 审核
-  uploadedById   String                              // 谁上传(供应商账号)
-  uploadedAt     DateTime @default(now())
-  status         InvoiceStatus @default(PENDING)
-  reviewedById   String?
-  reviewedAt     DateTime?
-  reviewNote     String?
+  uploadedById     String // 谁上传(供应商账号)
+  uploadedAt       DateTime         @default(now())
+  status           InvoiceStatus    @default(PENDING)
+  reviewedById     String?
+  reviewedAt       DateTime?
+  reviewNote       String?
   // 付款累计 (分次部分付款, 关键)
-  paidAmount     Decimal  @default(0) @db.Decimal(12, 2)  // 累计已付金额, paidAmount ≤ amount
-  fullyPaidAt    DateTime?                            // 全部付清的时间(=null 说明还有余额)
+  paidAmount       Decimal          @default(0) @db.Decimal(12, 2) // 累计已付金额, paidAmount ≤ amount
+  fullyPaidAt      DateTime? // 全部付清的时间(=null 说明还有余额)
   // 派生字段(计算): remainingAmount = amount - paidAmount
   // 关联
-  tenant         Tenant   @relation(fields: [tenantId], references: [id])
-  supplier       Supplier @relation(fields: [supplierId], references: [id])
-  uploadedBy     User     @relation("InvoiceUploader", fields: [uploadedById], references: [id])
-  receipts       Receipt[]                            // 一张发票可对多张订单/入库(月底统一开票)
-  payments       InvoicePayment[]                     // 多次部分付款
+  tenant           Tenant           @relation(fields: [tenantId], references: [id])
+  supplier         Supplier         @relation(fields: [supplierId], references: [id])
+  uploadedBy       User             @relation("InvoiceUploader", fields: [uploadedById], references: [id])
+  receipts         Receipt[] // 一张发票可对多张订单/入库(月底统一开票)
+  payments         InvoicePayment[] // 多次部分付款
 
-  @@unique([tenantId, supplierId, invoiceNo])         // 同一供应商同一票号唯一
+  @@unique([tenantId, supplierId, invoiceNo]) // 同一供应商同一票号唯一
   @@index([tenantId, status])
   @@map("invoices")
 }
 
 enum InvoiceStatus {
-  PENDING       // 待审核 (供应商已上传)
-  VERIFIED      // 财务审核通过, 可发起付款 (paidAmount 可能 0/部分/全部)
-  REJECTED      // 财务驳回, 供应商需重传
+  PENDING // 待审核 (供应商已上传)
+  VERIFIED // 财务审核通过, 可发起付款 (paidAmount 可能 0/部分/全部)
+  REJECTED // 财务驳回, 供应商需重传
 }
 
 // ── 发票付款记录 (一张发票可分多次付款, 累计 ≤ 发票金额) ──
 model InvoicePayment {
-  id             String   @id @default(cuid())
-  tenantId       String
-  tenant         Tenant   @relation(fields: [tenantId], references: [id])
-  invoiceId      String
-  invoice        Invoice  @relation(fields: [invoiceId], references: [id])
+  id              String        @id @default(cuid())
+  tenantId        String
+  tenant          Tenant        @relation(fields: [tenantId], references: [id])
+  invoiceId       String
+  invoice         Invoice       @relation(fields: [invoiceId], references: [id])
   // 本次付款
-  amount         Decimal  @db.Decimal(12, 2)         // 本次付款金额
-  paymentMethod  String   @default("cmb")             // cmb / manual / wechat / alipay
+  amount          Decimal       @db.Decimal(12, 2) // 本次付款金额
+  paymentMethod   String        @default("cmb") // cmb / manual / wechat / alipay
   // 银行流水
-  bankTxNo       String?                              // 招行 refext / 微信支付单号
+  bankTxNo        String? // 招行 refext / 微信支付单号
   bankRawResponse Json?
   // 状态
-  status         PaymentStatus @default(PENDING)
-  paidAt         DateTime?                            // 银行确认到账时间
-  failReason     String?
+  status          PaymentStatus @default(PENDING)
+  paidAt          DateTime? // 银行确认到账时间
+  failReason      String?
   // 操作
-  initiatedById  String                               // 财务操作员
-  approvedById   String?                              // 大额需要老板审批
-  approvedAt     DateTime?
-  note           String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  initiatedById   String // 财务操作员
+  approvedById    String? // 大额需要老板审批
+  approvedAt      DateTime?
+  note            String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
   @@index([tenantId, status])
   @@index([invoiceId])
@@ -800,127 +846,129 @@ model InvoicePayment {
 }
 
 enum PaymentStatus {
-  PENDING        // 已发起, 等待银行确认
-  SUCCESS        // 银行确认到账
-  FAILED         // 银行返回失败
-  CANCELED       // 财务主动取消
+  PENDING // 已发起, 等待银行确认
+  SUCCESS // 银行确认到账
+  FAILED // 银行返回失败
+  CANCELED // 财务主动取消
 }
 
 // ── 总部代付项目 (新店筹建 + 大型升级) ─────────────────
 // 场景: 新店没营业执照/银行卡时, 总部公司代付租金/装修/设备等;
 //      开业后从店铺利润逐步偿还; 全程要合同+凭证可追溯
 model CapitalProject {
-  id              String   @id @default(cuid())
-  tenantId        String
-  tenant          Tenant   @relation(fields: [tenantId], references: [id])
-  storeId         String?                              // 已确定门店则关联(可能立项时门店还没建)
-  store           Store?   @relation(fields: [storeId], references: [id])
-  name            String                               // "南京新街口店 · 筹建"
-  type            CapitalProjectType @default(NEW_STORE)
-  status          CapitalProjectStatus @default(PREPARING)
+  id             String               @id @default(cuid())
+  tenantId       String
+  tenant         Tenant               @relation(fields: [tenantId], references: [id])
+  storeId        String? // 已确定门店则关联(可能立项时门店还没建)
+  store          Store?               @relation(fields: [storeId], references: [id])
+  name           String // "南京新街口店 · 筹建"
+  type           CapitalProjectType   @default(NEW_STORE)
+  status         CapitalProjectStatus @default(PREPARING)
   // 预算 / 进度
-  budget          Decimal? @db.Decimal(12, 2)          // 预算总额(可选)
-  spent           Decimal  @default(0) @db.Decimal(12, 2)  // 已付出累计
+  budget         Decimal?             @db.Decimal(12, 2) // 预算总额(可选)
+  spent          Decimal              @default(0) @db.Decimal(12, 2) // 已付出累计
   // 还款约定
-  repaymentTerms  String?                              // 文本约定: "每月营收 10%" / "固定每月 ¥10K"
-  repaidAmount    Decimal  @default(0) @db.Decimal(12, 2)  // 已偿还总部累计
+  repaymentTerms String? // 文本约定: "每月营收 10%" / "固定每月 ¥10K"
+  repaidAmount   Decimal              @default(0) @db.Decimal(12, 2) // 已偿还总部累计
   // 时间线
-  startedAt       DateTime @default(now())             // 立项日
-  openedAt        DateTime?                            // 开业日
-  closedAt        DateTime?                            // 项目关闭(还清/废弃)
-  note            String?
-  contracts       CapitalContract[]
-  expenses        CapitalExpense[]
-  repayments      StoreRepayment[]
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  startedAt      DateTime             @default(now()) // 立项日
+  openedAt       DateTime? // 开业日
+  closedAt       DateTime? // 项目关闭(还清/废弃)
+  note           String?
+  contracts      CapitalContract[]
+  expenses       CapitalExpense[]
+  repayments     StoreRepayment[]
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
 
   @@index([tenantId, status])
   @@map("capital_projects")
 }
 
 enum CapitalProjectType {
-  NEW_STORE       // 新店筹建
-  RENOVATION      // 大型翻新升级
-  EQUIPMENT       // 重大设备投入
+  NEW_STORE // 新店筹建
+  RENOVATION // 大型翻新升级
+  EQUIPMENT // 重大设备投入
   OTHER
 }
+
 enum CapitalProjectStatus {
-  PREPARING       // 筹建中
-  OPERATING       // 已开业, 还款中
-  REPAID          // 已还清
-  CANCELED        // 项目取消
+  PREPARING // 筹建中
+  OPERATING // 已开业, 还款中
+  REPAID // 已还清
+  CANCELED // 项目取消
 }
 
 // ── 代付项目下的合同 (按支出类别分) ────────────────────
 model CapitalContract {
-  id              String   @id @default(cuid())
-  tenantId        String
-  projectId       String
-  project         CapitalProject @relation(fields: [projectId], references: [id])
-  category        CapitalCategory                     // 租金/装修/设备...
-  vendor          String                              // 房东/装修公司/设备商
-  contractNo      String?                             // 合同编号
-  totalAmount     Decimal  @db.Decimal(12, 2)         // 合同总额
-  paidAmount      Decimal  @default(0) @db.Decimal(12, 2)  // 已付(由 expenses 累加)
-  startDate       DateTime?
-  endDate         DateTime?
-  fileUrl         String?                             // 合同扫描件
-  note            String?
-  status          ContractStatus @default(ACTIVE)
-  expenses        CapitalExpense[]
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id          String           @id @default(cuid())
+  tenantId    String
+  projectId   String
+  project     CapitalProject   @relation(fields: [projectId], references: [id])
+  category    CapitalCategory // 租金/装修/设备...
+  vendor      String // 房东/装修公司/设备商
+  contractNo  String? // 合同编号
+  totalAmount Decimal          @db.Decimal(12, 2) // 合同总额
+  paidAmount  Decimal          @default(0) @db.Decimal(12, 2) // 已付(由 expenses 累加)
+  startDate   DateTime?
+  endDate     DateTime?
+  fileUrl     String? // 合同扫描件
+  note        String?
+  status      ContractStatus   @default(ACTIVE)
+  expenses    CapitalExpense[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
 
   @@index([tenantId, projectId])
   @@map("capital_contracts")
 }
 
 enum CapitalCategory {
-  RENT            // 租金/押金
-  DECORATION      // 装修
-  EQUIPMENT       // 设备
-  PAYROLL         // 人员/培训
-  LEGAL           // 工商/证照/律师
-  MARKETING       // 开业营销
+  RENT // 租金/押金
+  DECORATION // 装修
+  EQUIPMENT // 设备
+  PAYROLL // 人员/培训
+  LEGAL // 工商/证照/律师
+  MARKETING // 开业营销
   OTHER
 }
+
 enum ContractStatus {
   ACTIVE
-  COMPLETED       // 全付清
-  TERMINATED      // 终止
+  COMPLETED // 全付清
+  TERMINATED // 终止
 }
 
 // ── 代付支出明细 (店长发起申请 → 老板/财务审批 → 财务付款) ──
 model CapitalExpense {
-  id              String   @id @default(cuid())
-  tenantId        String
-  projectId       String
-  project         CapitalProject @relation(fields: [projectId], references: [id])
-  contractId      String?                             // 可选:不绑合同的零散支出
-  contract        CapitalContract? @relation(fields: [contractId], references: [id])
-  category        CapitalCategory
-  vendor          String                              // 收款方
-  amount          Decimal  @db.Decimal(12, 2)
+  id            String               @id @default(cuid())
+  tenantId      String
+  projectId     String
+  project       CapitalProject       @relation(fields: [projectId], references: [id])
+  contractId    String? // 可选:不绑合同的零散支出
+  contract      CapitalContract?     @relation(fields: [contractId], references: [id])
+  category      CapitalCategory
+  vendor        String // 收款方
+  amount        Decimal              @db.Decimal(12, 2)
   // 申请发起 (店长录入)
-  requestedAt     DateTime @default(now())            // 发起申请时间
-  requestedById   String                              // 谁发起(MANAGER 居多)
-  fileUrl         String?                             // 凭证(发票/合同截图)
-  note            String?
+  requestedAt   DateTime             @default(now()) // 发起申请时间
+  requestedById String // 谁发起(MANAGER 居多)
+  fileUrl       String? // 凭证(发票/合同截图)
+  note          String?
   // 审批 (老板/财务)
-  status          CapitalExpenseStatus @default(PENDING_APPROVAL)
-  approvedById    String?                             // 谁审批
-  approvedAt      DateTime?
-  approvalNote    String?
-  rejectReason    String?
+  status        CapitalExpenseStatus @default(PENDING_APPROVAL)
+  approvedById  String? // 谁审批
+  approvedAt    DateTime?
+  approvalNote  String?
+  rejectReason  String?
   // 实际付款 (财务执行)
-  paidAt          DateTime?                           // 银行确认付款时间
-  paidById        String?                             // 财务操作员
-  paymentMethod   String   @default("cmb")            // cmb / manual / wechat / alipay
-  bankTxNo        String?
-  failReason      String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  paidAt        DateTime? // 银行确认付款时间
+  paidById      String? // 财务操作员
+  paymentMethod String               @default("cmb") // cmb / manual / wechat / alipay
+  bankTxNo      String?
+  failReason    String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
 
   @@index([tenantId, status])
   @@index([projectId, contractId])
@@ -928,28 +976,28 @@ model CapitalExpense {
 }
 
 enum CapitalExpenseStatus {
-  PENDING_APPROVAL    // 店长已申请, 待审批
-  APPROVED            // 老板/财务已批, 待财务付款
-  PAID                // 已付款
-  REJECTED            // 驳回
-  CANCELED            // 店长撤回
-  FAILED              // 银行付款失败
+  PENDING_APPROVAL // 店长已申请, 待审批
+  APPROVED // 老板/财务已批, 待财务付款
+  PAID // 已付款
+  REJECTED // 驳回
+  CANCELED // 店长撤回
+  FAILED // 银行付款失败
 }
 
 // ── 门店还款 (店铺向总部偿还代付款) ───────────────────
 model StoreRepayment {
-  id              String   @id @default(cuid())
-  tenantId        String
-  projectId       String
-  project         CapitalProject @relation(fields: [projectId], references: [id])
-  storeId         String
-  amount          Decimal  @db.Decimal(12, 2)
-  paidAt          DateTime
-  source          String   @default("MANUAL")         // MANUAL / AUTO_FROM_PROFIT / TRANSFER
-  bankTxNo        String?
-  note            String?
-  initiatedById   String
-  createdAt       DateTime @default(now())
+  id            String         @id @default(cuid())
+  tenantId      String
+  projectId     String
+  project       CapitalProject @relation(fields: [projectId], references: [id])
+  storeId       String
+  amount        Decimal        @db.Decimal(12, 2)
+  paidAt        DateTime
+  source        String         @default("MANUAL") // MANUAL / AUTO_FROM_PROFIT / TRANSFER
+  bankTxNo      String?
+  note          String?
+  initiatedById String
+  createdAt     DateTime       @default(now())
 
   @@index([tenantId, projectId])
   @@index([storeId])
@@ -958,86 +1006,98 @@ model StoreRepayment {
 
 // ── 对账单 ────────────────────────────────────────────
 model Reconciliation {
-  id          String   @id @default(cuid())
+  id          String      @id @default(cuid())
   tenantId    String
-  no          String                        // DC202401001
+  no          String // DC202401001
   supplierId  String
-  storeId     String?                       // 关联门店（自动对账时填入）
-  periodStart DateTime @db.Date
-  periodEnd   DateTime @db.Date
-  totalAmount Decimal  @db.Decimal(12, 2)
+  storeId     String? // 关联门店（自动对账时填入）
+  periodStart DateTime    @db.Date
+  periodEnd   DateTime    @db.Date
+  totalAmount Decimal     @db.Decimal(12, 2)
   status      ReconStatus @default(DRAFT)
   note        String?
   reviewedAt  DateTime?
   reviewNote  String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
 
-  tenant      Tenant   @relation(fields: [tenantId], references: [id])
-  supplier    Supplier @relation(fields: [supplierId], references: [id])
-  items       ReconciliationItem[]
-  payments    Payment[]
+  tenant   Tenant               @relation(fields: [tenantId], references: [id])
+  supplier Supplier             @relation(fields: [supplierId], references: [id])
+  items    ReconciliationItem[]
+  payments Payment[]
 
   @@unique([tenantId, no])
   @@map("reconciliations")
 }
 
 model ReconciliationItem {
-  id               String @id @default(cuid())
+  id               String  @id @default(cuid())
   reconciliationId String
   receiptId        String
   amount           Decimal @db.Decimal(12, 2)
 
-  reconciliation   Reconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
-  receipt          Receipt        @relation(fields: [receiptId], references: [id])
+  reconciliation Reconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+  receipt        Receipt        @relation(fields: [receiptId], references: [id])
 
   @@map("reconciliation_items")
 }
 
 // ── 付款单 ────────────────────────────────────────────
 model Payment {
-  id               String   @id @default(cuid())
+  id               String    @id @default(cuid())
   tenantId         String
-  no               String                    // PY202401001
+  no               String // PY202401001
   supplierId       String
   reconciliationId String?
-  amount           Decimal  @db.Decimal(12, 2)
+  amount           Decimal   @db.Decimal(12, 2)
   method           PayMethod @default(BANK_TRANSFER)
   status           PayStatus @default(UNPAID)
-  bankTxNo         String?                   // 银行流水号
-  bankRawResponse  Json?                     // 银行接口原始响应
+  bankTxNo         String? // 银行流水号
+  bankRawResponse  Json? // 银行接口原始响应
   note             String?
   paidAt           DateTime?
   failReason       String?
-  retryCount       Int      @default(0)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  retryCount       Int       @default(0)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  tenant           Tenant         @relation(fields: [tenantId], references: [id])
-  supplier         Supplier       @relation(fields: [supplierId], references: [id])
-  reconciliation   Reconciliation? @relation(fields: [reconciliationId], references: [id])
+  tenant         Tenant          @relation(fields: [tenantId], references: [id])
+  supplier       Supplier        @relation(fields: [supplierId], references: [id])
+  reconciliation Reconciliation? @relation(fields: [reconciliationId], references: [id])
 
   @@unique([tenantId, no])
   @@map("payments")
 }
 
-
 // ── 采购订单（店长下单）────────────────────────────────
 model PurchaseOrder {
-  id            String   @id @default(cuid())
-  tenantId      String
-  no            String                        // PO202403001
-  storeId       String
-  supplierId    String
-  expectedDate  DateTime @db.Date             // 期望到货日期
-  totalAmount   Decimal  @db.Decimal(12, 2)
-  status        PurchaseOrderStatus @default(DRAFT)
-  note          String?
+  id                    String              @id @default(cuid())
+  tenantId              String
+  no                    String // PO202403001
+  storeId               String
+  supplierId            String
+  expectedDate          DateTime            @db.Date // 期望到货日期
+  totalAmount           Decimal             @db.Decimal(12, 2)
+  // 订货单不可变口径: original 永远保存门店首次提交值; current 保存已批准修订后的值。
+  // totalAmount 在配送模块切换前保留旧口径, 新代码不得用它表示原始订货金额。
+  originalTotalAmount   Decimal?            @db.Decimal(12, 2)
+  currentOrderAmount    Decimal?            @db.Decimal(12, 2)
+  status                PurchaseOrderStatus @default(DRAFT)
+  note                  String?
+  submittedAt           DateTime?
+  submittedSnapshot     Json?
+  submittedSnapshotHash String?             @db.VarChar(64)
+  currentRevisionNo     Int                 @default(0)
+  idempotencyKey        String?             @db.VarChar(80)
+  cancelReason          String?
+  cancelledAt           DateTime?
+  cancelledById         String?
+  rowVersion            Int                 @default(0)
 
   // 发货信息（供应商填写）
-  shippedAt     DateTime?
-  shippedNote   String?
-  shippedById   String?                       // 供应商操作人 userId
+  shippedAt   DateTime?
+  shippedNote String?
+  shippedById String? // 供应商操作人 userId
 
   // 送达信息（供应商/司机点"已送达"才启动 24h 自动收货倒计时）
   deliveredAt   DateTime?
@@ -1045,90 +1105,266 @@ model PurchaseOrder {
   deliveredById String?
 
   // 收货确认
-  receivedAt    DateTime?                     // 实际确认时间
-  autoConfirmed Boolean  @default(false)      // 是否超时自动确认
-  receiptId     String?                       // 关联生成的入库单（Receipt.purchaseOrderId反向关联）
+  receivedAt    DateTime? // 实际确认时间
+  autoConfirmed Boolean   @default(false) // 是否超时自动确认
+  receiptId     String?   @unique // 兼容旧页面: 指向最近一次/主入库单；完整列表见 receipts
 
   // 厨师验收单 (2026-05-29 客户反馈): DELIVERING 期间厨师收货后传照片+备注给供应商,
   // 供应商看完确认无误才点"送达"。软约束 — 没传也能送达, 但 supplier 端弹确认。
-  chefAckImages String[]  @default([])         // OSS URL 数组, 上限 5 张 (前端限)
-  chefAckAt     DateTime?                      // 厨师发送验收单时间
-  chefAckNote   String?                        // 备注 (前端要求必填非空)
+  chefAckImages String[]  @default([]) // OSS URL 数组, 上限 5 张 (前端限)
+  chefAckAt     DateTime? // 厨师发送验收单时间
+  chefAckNote   String? // 备注 (前端要求必填非空)
 
-  createdById   String
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  tenant        Tenant   @relation(fields: [tenantId], references: [id])
-  store         Store    @relation(fields: [storeId], references: [id])
-  supplier      Supplier @relation(fields: [supplierId], references: [id])
-  createdBy     User     @relation("POCreatedBy", fields: [createdById], references: [id])
-  shippedBy     User?    @relation("POShippedBy", fields: [shippedById], references: [id])
-  items         PurchaseOrderItem[]
-  lossClaims    LossClaim[]
-  receipt       Receipt?
+  tenant     Tenant                  @relation(fields: [tenantId], references: [id])
+  store      Store                   @relation(fields: [storeId], references: [id])
+  supplier   Supplier                @relation(fields: [supplierId], references: [id])
+  createdBy  User                    @relation("POCreatedBy", fields: [createdById], references: [id])
+  shippedBy  User?                   @relation("POShippedBy", fields: [shippedById], references: [id])
+  items      PurchaseOrderItem[]
+  revisions  PurchaseOrderRevision[]
+  events     PurchaseOrderEvent[]
+  deliveries DeliveryOrder[]
+  lossClaims LossClaim[]
+  receipt    Receipt?                @relation("PurchaseOrderPrimaryReceipt", fields: [receiptId], references: [id])
+  receipts   Receipt[]               @relation("PurchaseOrderReceipts")
 
   @@unique([tenantId, no])
+  @@unique([tenantId, createdById, idempotencyKey])
   @@index([supplierId, status])
   @@map("purchase_orders")
 }
 
 model PurchaseOrderItem {
-  id              String  @id @default(cuid())
-  purchaseOrderId String
-  productId       String
-  quantity        Decimal @db.Decimal(10, 2)  // 下单数量 (原始, 不变)
-  shippedQty      Decimal? @db.Decimal(10, 2) // 实际发货数量 (供应商确认发货时填; null = 全发)
-  unitPrice       Decimal @db.Decimal(10, 2)
-  amount          Decimal @db.Decimal(12, 2)
-  receivedQty     Decimal? @db.Decimal(10, 2) // 实际收到数量（确认时填写）
+  id                String                  @id @default(cuid())
+  purchaseOrderId   String
+  productId         String
+  quantity          Decimal                 @db.Decimal(10, 2) // 当前有效订货数量; 首次提交值由 originalQuantity 保存
+  originalQuantity  Decimal?                @db.Decimal(10, 2) // 首次提交数量; 修订新增行为空
+  shippedQty        Decimal?                @db.Decimal(10, 2) // 实际发货数量 (供应商确认发货时填; null = 全发)
+  unitPrice         Decimal                 @db.Decimal(10, 2)
+  originalUnitPrice Decimal?                @db.Decimal(10, 2)
+  amount            Decimal                 @db.Decimal(12, 2)
+  originalAmount    Decimal?                @db.Decimal(12, 2)
+  receivedQty       Decimal?                @db.Decimal(10, 2) // 实际收到数量（确认时填写）
+  lineOrigin        PurchaseOrderItemOrigin @default(ORIGINAL)
+  isActive          Boolean                 @default(true)
+  lastRevisionId    String?
 
-  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
-  product         Product       @relation(fields: [productId], references: [id])
+  purchaseOrder PurchaseOrder          @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product       Product                @relation(fields: [productId], references: [id])
+  lastRevision  PurchaseOrderRevision? @relation("POItemLastRevision", fields: [lastRevisionId], references: [id])
+  deliveryItems DeliveryOrderItem[]
 
+  @@index([purchaseOrderId, isActive])
   @@map("purchase_order_items")
+}
+
+// ── 订货单修订: 原始快照不可变, 所有改单先申请、后由门店确认 ─────────────
+model PurchaseOrderRevision {
+  id              String                      @id @default(cuid())
+  tenantId        String
+  purchaseOrderId String
+  revisionNo      Int
+  type            PurchaseOrderRevisionType
+  status          PurchaseOrderRevisionStatus @default(PENDING)
+  reason          String
+  beforeSnapshot  Json
+  afterSnapshot   Json
+  changeSet       Json
+  requestKey      String?                     @db.VarChar(80)
+  baseRowVersion  Int
+  requestedById   String
+  requestedAt     DateTime                    @default(now())
+  reviewedById    String?
+  reviewedAt      DateTime?
+  reviewNote      String?
+  createdAt       DateTime                    @default(now())
+  updatedAt       DateTime                    @updatedAt
+
+  tenant        Tenant              @relation(fields: [tenantId], references: [id])
+  purchaseOrder PurchaseOrder       @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  requestedBy   User                @relation("PORevisionRequestedBy", fields: [requestedById], references: [id])
+  reviewedBy    User?               @relation("PORevisionReviewedBy", fields: [reviewedById], references: [id])
+  affectedItems PurchaseOrderItem[] @relation("POItemLastRevision")
+
+  @@unique([purchaseOrderId, revisionNo])
+  @@unique([purchaseOrderId, requestKey])
+  @@index([tenantId, status, createdAt])
+  @@map("purchase_order_revisions")
+}
+
+// ── 订货单不可变事件时间线 ─────────────────────────────────────────
+model PurchaseOrderEvent {
+  id              String                 @id @default(cuid())
+  tenantId        String
+  purchaseOrderId String
+  eventType       PurchaseOrderEventType
+  actorId         String?
+  actorRole       String?
+  fromStatus      PurchaseOrderStatus?
+  toStatus        PurchaseOrderStatus?
+  metadata        Json?
+  requestId       String?
+  ip              String?
+  occurredAt      DateTime               @default(now())
+
+  tenant        Tenant        @relation(fields: [tenantId], references: [id])
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  actor         User?         @relation(fields: [actorId], references: [id])
+
+  @@index([purchaseOrderId, occurredAt])
+  @@index([tenantId, eventType, occurredAt])
+  @@map("purchase_order_events")
+}
+
+// ── 独立配送单: 一张订货单可分多次配送，发货后冻结 ──────────────────
+model DeliveryOrder {
+  id                String              @id @default(cuid())
+  tenantId          String
+  no                String
+  purchaseOrderId   String
+  storeId           String
+  supplierId        String
+  warehouseId       String?             @db.VarChar(64) // 本期为空=单一虚拟仓；为多仓预留
+  status            DeliveryOrderStatus @default(DRAFT)
+  actualTotalAmount Decimal             @default(0) @db.Decimal(12, 2)
+  note              String?
+  idempotencyKey    String?             @db.VarChar(80)
+  rowVersion        Int                 @default(0)
+  createdById       String
+  shippedById       String?
+  deliveredById     String?
+  receivedById      String?
+  shippedAt         DateTime?
+  deliveredAt       DateTime?
+  receivedAt        DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  tenant        Tenant               @relation(fields: [tenantId], references: [id])
+  purchaseOrder PurchaseOrder        @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  store         Store                @relation(fields: [storeId], references: [id])
+  supplier      Supplier             @relation(fields: [supplierId], references: [id])
+  createdBy     User                 @relation("DeliveryCreatedBy", fields: [createdById], references: [id])
+  shippedBy     User?                @relation("DeliveryShippedBy", fields: [shippedById], references: [id])
+  deliveredBy   User?                @relation("DeliveryDeliveredBy", fields: [deliveredById], references: [id])
+  receivedBy    User?                @relation("DeliveryReceivedBy", fields: [receivedById], references: [id])
+  items         DeliveryOrderItem[]
+  events        DeliveryOrderEvent[]
+  receipt       Receipt?
+
+  @@unique([tenantId, no])
+  @@unique([purchaseOrderId, idempotencyKey])
+  @@index([tenantId, supplierId, status, createdAt])
+  @@index([tenantId, storeId, status, createdAt])
+  @@map("delivery_orders")
+}
+
+model DeliveryOrderItem {
+  id                  String    @id @default(cuid())
+  deliveryOrderId     String
+  purchaseOrderItemId String?
+  productId           String
+  orderedQtySnapshot  Decimal   @db.Decimal(10, 2)
+  shippedQty          Decimal   @db.Decimal(10, 2)
+  receivedQty         Decimal?  @db.Decimal(10, 2)
+  unitPriceSnapshot   Decimal   @db.Decimal(10, 2)
+  amount              Decimal   @db.Decimal(12, 2)
+  manufactureDate     DateTime? @db.Date
+  expiryDate          DateTime? @db.Date
+  createdAt           DateTime  @default(now())
+
+  deliveryOrder     DeliveryOrder      @relation(fields: [deliveryOrderId], references: [id], onDelete: Cascade)
+  purchaseOrderItem PurchaseOrderItem? @relation(fields: [purchaseOrderItemId], references: [id], onDelete: SetNull)
+  product           Product            @relation(fields: [productId], references: [id])
+
+  @@unique([deliveryOrderId, productId])
+  @@index([productId, deliveryOrderId])
+  @@map("delivery_order_items")
+}
+
+model DeliveryOrderEvent {
+  id              String                 @id @default(cuid())
+  tenantId        String
+  deliveryOrderId String
+  eventType       DeliveryOrderEventType
+  actorId         String?
+  actorRole       String?
+  fromStatus      DeliveryOrderStatus?
+  toStatus        DeliveryOrderStatus?
+  metadata        Json?
+  requestId       String?
+  ip              String?
+  occurredAt      DateTime               @default(now())
+
+  tenant        Tenant        @relation(fields: [tenantId], references: [id])
+  deliveryOrder DeliveryOrder @relation(fields: [deliveryOrderId], references: [id], onDelete: Restrict)
+  actor         User?         @relation(fields: [actorId], references: [id])
+
+  @@index([deliveryOrderId, occurredAt])
+  @@index([tenantId, eventType, occurredAt])
+  @@map("delivery_order_events")
+}
+
+// ── 并发安全业务单号计数器 ──────────────────────────────────────────
+model BusinessSequence {
+  id        String   @id @default(cuid())
+  tenantId  String
+  scope     String   @db.VarChar(20)
+  period    String   @db.VarChar(12)
+  value     Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, scope, period])
+  @@map("business_sequences")
 }
 
 // ── 报损申请 ──────────────────────────────────────────
 model LossClaim {
-  id              String   @id @default(cuid())
+  id              String  @id @default(cuid())
   tenantId        String
-  no              String                        // LC202403001
-  purchaseOrderId String?                       // 与供应商无关的店内报损可空
+  no              String // LC202403001
+  purchaseOrderId String? // 与供应商无关的店内报损可空
   storeId         String
-  supplierId      String?                       // 同上
-  reason          String?                       // 临期/变质/客退/掉落/破损/其他
-  isManual        Boolean  @default(false)      // true = 店内盘点报损，不扣供应商账期
+  supplierId      String? // 同上
+  reason          String? // 临期/变质/客退/掉落/破损/其他
+  isManual        Boolean @default(false) // true = 店内盘点报损，不扣供应商账期
 
   // 报损明细
-  totalLossAmount Decimal  @db.Decimal(12, 2)  // 损失金额（从账期扣减）
-  description     String                        // 文字说明
-  evidenceImages  String[]                      // 图片URL数组（OSS）
+  totalLossAmount Decimal  @db.Decimal(12, 2) // 损失金额（从账期扣减）
+  description     String // 文字说明
+  evidenceImages  String[] // 图片URL数组（OSS）
 
-  status          LossClaimStatus @default(PENDING)
+  status LossClaimStatus @default(PENDING)
 
   // 供应商处理
-  handledAt       DateTime?
-  handledById     String?                       // 供应商处理人
-  handlerNote     String?
-  autoApproved    Boolean  @default(false)      // 超时自动同意
+  handledAt    DateTime?
+  handledById  String? // 供应商处理人
+  handlerNote  String?
+  autoApproved Boolean   @default(false) // 超时自动同意
 
   // 协商记录（被拒绝后）
   negotiationNote String?
   resolvedAt      DateTime?
   resolvedNote    String?
 
-  createdById     String
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  tenant          Tenant        @relation(fields: [tenantId], references: [id])
-  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
-  store           Store         @relation(fields: [storeId], references: [id])
-  supplier        Supplier?     @relation(fields: [supplierId], references: [id])
-  createdBy       User          @relation("LCCreatedBy", fields: [createdById], references: [id])
-  handledBy       User?         @relation("LCHandledBy", fields: [handledById], references: [id])
-  items           LossClaimItem[]
+  tenant        Tenant          @relation(fields: [tenantId], references: [id])
+  purchaseOrder PurchaseOrder?  @relation(fields: [purchaseOrderId], references: [id])
+  store         Store           @relation(fields: [storeId], references: [id])
+  supplier      Supplier?       @relation(fields: [supplierId], references: [id])
+  createdBy     User            @relation("LCCreatedBy", fields: [createdById], references: [id])
+  handledBy     User?           @relation("LCHandledBy", fields: [handledById], references: [id])
+  items         LossClaimItem[]
 
   @@unique([tenantId, no])
   @@index([supplierId, status])
@@ -1136,42 +1372,41 @@ model LossClaim {
 }
 
 model LossClaimItem {
-  id           String  @id @default(cuid())
-  lossClaimId  String
-  productId    String
-  orderedQty   Decimal @db.Decimal(10, 2)   // 下单数量
-  receivedQty  Decimal @db.Decimal(10, 2)   // 实际收到
-  lossQty      Decimal @db.Decimal(10, 2)   // 损耗数量
-  unitPrice    Decimal @db.Decimal(10, 2)
-  lossAmount   Decimal @db.Decimal(12, 2)   // 损耗金额
+  id          String  @id @default(cuid())
+  lossClaimId String
+  productId   String
+  orderedQty  Decimal @db.Decimal(10, 2) // 下单数量
+  receivedQty Decimal @db.Decimal(10, 2) // 实际收到
+  lossQty     Decimal @db.Decimal(10, 2) // 损耗数量
+  unitPrice   Decimal @db.Decimal(10, 2)
+  lossAmount  Decimal @db.Decimal(12, 2) // 损耗金额
 
-  lossClaim    LossClaim @relation(fields: [lossClaimId], references: [id], onDelete: Cascade)
-  product      Product   @relation(fields: [productId], references: [id])
+  lossClaim LossClaim @relation(fields: [lossClaimId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id])
 
   @@map("loss_claim_items")
 }
-
 
 // ── 付款规则引擎（可配置）────────────────────────────
 model PaymentRule {
   id          String   @id @default(cuid())
   tenantId    String
-  name        String                        // 规则名称
-  description String?                       // 说明
-  condition   String                        // 触发条件类型
+  name        String // 规则名称
+  description String? // 说明
+  condition   String // 触发条件类型
   // condition 枚举值：
   // AMOUNT_OVER       单笔金额超过阈值
   // MONTHLY_OVER      同供应商月累计超过阈值
   // NEW_SUPPLIER      新供应商首次付款
   // ALWAYS_AUTO       始终自动付款
-  threshold   Decimal? @db.Decimal(12, 2)  // 金额阈值
-  action      String                        // auto_pay | require_approval | block
-  priority    Int      @default(0)          // 优先级，数字越大越先匹配
+  threshold   Decimal? @db.Decimal(12, 2) // 金额阈值
+  action      String // auto_pay | require_approval | block
+  priority    Int      @default(0) // 优先级，数字越大越先匹配
   enabled     Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  tenant Tenant @relation(fields: [tenantId], references: [id])
 
   @@index([tenantId, enabled])
   @@map("payment_rules")
@@ -1179,21 +1414,21 @@ model PaymentRule {
 
 // ── 操作日志 ──────────────────────────────────────────
 model OpLog {
-  id        String   @id @default(cuid())
-  tenantId  String
-  userId    String?
-  role      String?
-  action    String                           // 操作描述
-  target    String?                          // 关联单号
-  targetId  String?
-  entityType String?                         // Receipt / Payment 等
-  metadata  Json?                            // 额外数据
-  isAi      Boolean  @default(false)
-  ip        String?
-  createdAt DateTime @default(now())
+  id         String   @id @default(cuid())
+  tenantId   String
+  userId     String?
+  role       String?
+  action     String // 操作描述
+  target     String? // 关联单号
+  targetId   String?
+  entityType String? // Receipt / Payment 等
+  metadata   Json? // 额外数据
+  isAi       Boolean  @default(false)
+  ip         String?
+  createdAt  DateTime @default(now())
 
-  tenant    Tenant  @relation(fields: [tenantId], references: [id])
-  user      User?   @relation(fields: [userId], references: [id])
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  user   User?  @relation(fields: [userId], references: [id])
 
   @@index([tenantId, createdAt(sort: Desc)])
   @@map("op_logs")
@@ -1216,50 +1451,50 @@ enum TenantStatus {
 }
 
 enum Role {
-  SUPER_ADMIN   // 平台超管
-  ADMIN         // 品牌管理员（v2 = 老板 BOSS）
-  FINANCE       // 财务
-  MANAGER       // 店长
-  PURCHASER     // 采购专员
+  SUPER_ADMIN // 平台超管
+  ADMIN // 品牌管理员（v2 = 老板 BOSS）
+  FINANCE // 财务
+  MANAGER // 店长
+  PURCHASER // 采购专员
   SUPPLIER_STAFF // 供应商人员
-  CHEF           // 总厨/集团厨长（保留兼容）
+  CHEF // 总厨/集团厨长（保留兼容）
   // ── v2 新增：与 apps/api/src/lib/auth-scope.ts 对应 ──
-  KITCHEN_LEAD   // 厨师长（单店级）
-  CHEF_DIRECTOR  // 总厨（集团级）
+  KITCHEN_LEAD // 厨师长（单店级）
+  CHEF_DIRECTOR // 总厨（集团级）
   SUPPLIER_OWNER // 供应商负责人
-  ENGINEERING    // 工程部（开店前: 选址 / 装修 / 物料 / 证照）
-  SUPERVISOR     // 主管(本店有限事务, 比店长低半级)
-  STAFF          // 一线员工(暂不开滇界账号, 留口位)
+  ENGINEERING // 工程部（开店前: 选址 / 装修 / 物料 / 证照）
+  SUPERVISOR // 主管(本店有限事务, 比店长低半级)
+  STAFF // 一线员工(暂不开滇界账号, 留口位)
 }
 
 enum UserStatus {
   ACTIVE
   INACTIVE
-  PENDING_BIND   // 企微员工但滇界还没分角色, 老板待开通
+  PENDING_BIND // 企微员工但滇界还没分角色, 老板待开通
 }
 
 // ── 账号申请: 公共申请 → 老板审批通过后落到 users 表 ──
 model UserApplication {
-  id              String   @id @default(cuid())
-  tenantId        String
-  name            String
-  phone           String
-  passwordHash    String       // bcrypt, 通过审批后直接搬到 users.password
-  requestedRole   Role
-  reason          String?      // 申请理由
+  id            String  @id @default(cuid())
+  tenantId      String
+  name          String
+  phone         String
+  passwordHash  String // bcrypt, 通过审批后直接搬到 users.password
+  requestedRole Role
+  reason        String? // 申请理由
 
   // 供应商专用 (requestedRole 为 SUPPLIER_OWNER / SUPPLIER_STAFF 时)
-  supplierId      String?      // 加入已有供应商 → 审批后 SUPPLIER_STAFF + 绑定到该 Supplier
-  supplierName    String?      // 注册新供应商公司名 → 审批后 SUPPLIER_OWNER + 自动创建 Supplier
+  supplierId   String? // 加入已有供应商 → 审批后 SUPPLIER_STAFF + 绑定到该 Supplier
+  supplierName String? // 注册新供应商公司名 → 审批后 SUPPLIER_OWNER + 自动创建 Supplier
 
   // 门店绑定 (requestedRole 为 MANAGER / KITCHEN_LEAD 时必填; 老板审批时预填可改)
   requestedStoreId String?
 
-  status          ApplicationStatus @default(PENDING)
-  decidedById     String?
-  decidedAt       DateTime?
-  rejectReason    String?
-  createdAt       DateTime @default(now())
+  status       ApplicationStatus @default(PENDING)
+  decidedById  String?
+  decidedAt    DateTime?
+  rejectReason String?
+  createdAt    DateTime          @default(now())
 
   @@index([tenantId, status])
   @@map("user_applications")
@@ -1273,19 +1508,19 @@ enum ApplicationStatus {
 
 // ── 邀请链接: 老板生成 → 员工凭链接 + 手机号 + 自设密码激活 ──
 model InviteToken {
-  id              String   @id @default(cuid())
-  tenantId        String
-  token           String   @unique         // url-safe 32+ chars
-  role            Role
-  storeId         String?                  // MANAGER/KITCHEN_LEAD 必填
-  supplierId      String?                  // SUPPLIER_OWNER/STAFF 必填
-  invitedById     String                   // 谁发的
-  note            String?                  // 备注: "翠湖店店长 张三"
-  expiresAt       DateTime                 // 默认 +24h
-  consumedAt      DateTime?
+  id               String    @id @default(cuid())
+  tenantId         String
+  token            String    @unique // url-safe 32+ chars
+  role             Role
+  storeId          String? // MANAGER/KITCHEN_LEAD 必填
+  supplierId       String? // SUPPLIER_OWNER/STAFF 必填
+  invitedById      String // 谁发的
+  note             String? // 备注: "翠湖店店长 张三"
+  expiresAt        DateTime // 默认 +24h
+  consumedAt       DateTime?
   consumedByUserId String?
-  revokedAt       DateTime?
-  createdAt       DateTime @default(now())
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
 
   @@index([tenantId, consumedAt, revokedAt])
   @@map("invite_tokens")
@@ -1298,46 +1533,46 @@ enum StoreStatus {
 
 // 门店生命周期阶段 (工程部主战场)
 enum StoreLifecyclePhase {
-  PLANNING        // 选址勘察
-  NEGOTIATING     // 合同谈判
-  CONSTRUCTION    // 装修施工
-  EQUIPMENT       // 设备/物料采购
-  LICENSING       // 证照办理
-  TRIAL           // 试营业
-  OPERATING       // 正常运营 (= 现有 ENABLED 默认)
-  CLOSED          // 已关店
+  PLANNING // 选址勘察
+  NEGOTIATING // 合同谈判
+  CONSTRUCTION // 装修施工
+  EQUIPMENT // 设备/物料采购
+  LICENSING // 证照办理
+  TRIAL // 试营业
+  OPERATING // 正常运营 (= 现有 ENABLED 默认)
+  CLOSED // 已关店
 }
 
 // 开店任务清单 (筹建期 30 多项默认任务)
 model OpeningTask {
-  id            String   @id @default(cuid())
-  tenantId      String
-  storeId       String
-  category      OpeningTaskCategory
-  name          String
-  description   String?
-  assigneeId    String?                  // 默认 = store.engineerId
-  dueDate       DateTime?
-  status        OpeningTaskStatus @default(TODO)
-  priority      Int      @default(0)     // 排序权重, 越大越靠前
-  cost          Decimal? @db.Decimal(12, 2)
-  capitalExpenseId String?                // 关联代付申请 (出账时填)
-  completedAt   DateTime?
-  completedById String?
-  blockerNote   String?                  // 卡住原因
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id               String              @id @default(cuid())
+  tenantId         String
+  storeId          String
+  category         OpeningTaskCategory
+  name             String
+  description      String?
+  assigneeId       String? // 默认 = store.engineerId
+  dueDate          DateTime?
+  status           OpeningTaskStatus   @default(TODO)
+  priority         Int                 @default(0) // 排序权重, 越大越靠前
+  cost             Decimal?            @db.Decimal(12, 2)
+  capitalExpenseId String? // 关联代付申请 (出账时填)
+  completedAt      DateTime?
+  completedById    String?
+  blockerNote      String? // 卡住原因
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
 
   @@index([tenantId, storeId, status])
   @@map("opening_tasks")
 }
 
 enum OpeningTaskCategory {
-  BUSINESS      // 商务 (选址/合同/物业)
-  CONSTRUCTION  // 装修 (拆改/水电/木工/油漆)
-  EQUIPMENT     // 设备/物料 (厨房/家具/POS)
-  LICENSING     // 证照
-  PREPARATION   // 筹备 (招牌/培训/试营业)
+  BUSINESS // 商务 (选址/合同/物业)
+  CONSTRUCTION // 装修 (拆改/水电/木工/油漆)
+  EQUIPMENT // 设备/物料 (厨房/家具/POS)
+  LICENSING // 证照
+  PREPARATION // 筹备 (招牌/培训/试营业)
 }
 
 enum OpeningTaskStatus {
@@ -1351,36 +1586,36 @@ enum OpeningTaskStatus {
 // 建店资金台账 (一店一份, 财务统一录入, 老板可看可改)
 // 二期 OA 时给每行加 ownerRole 字段, 各部门维护自己的行
 model StoreOpeningBudget {
-  id              String   @id @default(cuid())
-  tenantId        String
-  storeId         String
-  category        BudgetCategory
-  name            String                          // 明细 (租金/装修费/...)
-  budget          Decimal? @db.Decimal(14, 2)     // 预算金额
-  contractAmount  Decimal? @db.Decimal(14, 2)     // 实付/合同确认金额
-  paidAmount      Decimal? @db.Decimal(14, 2)     // 已付金额
-  approvalNo      String?                          // 审批编号 / 付款凭证编号 (Excel 导入时存原文)
-  note            String?                          // 备注
-  voucherUrl      String?                          // 凭证图 OSS URL
-  ownerRole       String?                          // [phase 2 OA] 行的责任部门
-  rowOrder        Int      @default(0)             // 显示顺序 (Excel 导入时按行序)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id             String         @id @default(cuid())
+  tenantId       String
+  storeId        String
+  category       BudgetCategory
+  name           String // 明细 (租金/装修费/...)
+  budget         Decimal?       @db.Decimal(14, 2) // 预算金额
+  contractAmount Decimal?       @db.Decimal(14, 2) // 实付/合同确认金额
+  paidAmount     Decimal?       @db.Decimal(14, 2) // 已付金额
+  approvalNo     String? // 审批编号 / 付款凭证编号 (Excel 导入时存原文)
+  note           String? // 备注
+  voucherUrl     String? // 凭证图 OSS URL
+  ownerRole      String? // [phase 2 OA] 行的责任部门
+  rowOrder       Int            @default(0) // 显示顺序 (Excel 导入时按行序)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
 
   @@index([tenantId, storeId])
   @@map("store_opening_budgets")
 }
 
 enum BudgetCategory {
-  CONTRACT      // 合同 (租金/保证金/管理费/推广费 等签合同的钱)
-  CONSTRUCTION  // 装修工程
-  FIRE          // 消防
-  HVAC          // 空调
-  VENTILATION   // 油烟排风
-  EQUIPMENT     // 设备 (厨房/网络/监控)
-  MARKETING     // 市场 (推广/软装/桌椅/绿植) [phase 2]
-  HR            // 人事 [phase 2]
-  OTHER         // 其它
+  CONTRACT // 合同 (租金/保证金/管理费/推广费 等签合同的钱)
+  CONSTRUCTION // 装修工程
+  FIRE // 消防
+  HVAC // 空调
+  VENTILATION // 油烟排风
+  EQUIPMENT // 设备 (厨房/网络/监控)
+  MARKETING // 市场 (推广/软装/桌椅/绿植) [phase 2]
+  HR // 人事 [phase 2]
+  OTHER // 其它
 }
 
 enum SupplierStatus {
@@ -1390,53 +1625,53 @@ enum SupplierStatus {
 
 // 供应商数据源类型 (财务月度核对工作台 4 栏区分)
 enum SupplierSourceType {
-  HEADQ_WAREHOUSE  // 总仓内部调拨 (何姐管, 不走外部付款)
-  B2B_PLATFORM     // B2B 电商平台 (美菜 / 快驴 等, 财务批量录账单)
-  MAIN_SUPPLIER    // 主营供应商 (长期固定合同, 有专属应付账款明细科目, 餐饮门店核心货源)
-  SCATTERED        // 散户供应商 (微信群直接对接, 老板/店长谈)
+  HEADQ_WAREHOUSE // 总仓内部调拨 (何姐管, 不走外部付款)
+  B2B_PLATFORM // B2B 电商平台 (美菜 / 快驴 等, 财务批量录账单)
+  MAIN_SUPPLIER // 主营供应商 (长期固定合同, 有专属应付账款明细科目, 餐饮门店核心货源)
+  SCATTERED // 散户供应商 (微信群直接对接, 老板/店长谈)
 }
 
 enum SkuApprovalAction {
-  CREATE   // 新建 SKU
-  DISABLE  // 停售 SKU
-  BATCH    // 批量上传 SKU
+  CREATE // 新建 SKU
+  DISABLE // 停售 SKU
+  BATCH // 批量上传 SKU
 }
 
 enum ProductStatus {
-  PENDING_APPROVAL  // 等待总厨审批 (新建 / 批量上传)
-  PENDING_DISABLE   // 等待总厨审批停售
+  PENDING_APPROVAL // 等待总厨审批 (新建 / 批量上传)
+  PENDING_DISABLE // 等待总厨审批停售
   ENABLED
   DISABLED
 }
 
 enum CreditType {
-  FIXED_DAYS    // 固定账期（如到货后30天）
-  MONTHLY       // 月结
-  WEEKLY        // 周结
-  ON_DELIVERY   // 到货即付
+  FIXED_DAYS // 固定账期（如到货后30天）
+  MONTHLY // 月结
+  WEEKLY // 周结
+  ON_DELIVERY // 到货即付
 }
 
 enum ReceiptStatus {
   DRAFT
   PENDING
-  PENDING_CONFIRM  // 供应商已送达，等待门店操作
-  CONFIRMED        // 正常确认
-  ACCOUNTED        // 已对账
-  VOID             // 作废
-  REJECTED         // 拒收
+  PENDING_CONFIRM // 供应商已送达，等待门店操作
+  CONFIRMED // 正常确认
+  ACCOUNTED // 已对账
+  VOID // 作废
+  REJECTED // 拒收
 }
 
 enum ScheduleStatus {
-  PENDING           // 待支付（无需审批，到期自动付）
-  PENDING_APPROVAL  // 待审批（金额超阈值，需总部审核）
-  APPROVED          // 审批通过，等待到期自动付款
-  REJECTED          // 审批拒绝
-  NOTIFIED          // 已提醒
-  PROCESSING        // 支付中（已调用招行API）
-  PAID              // 已支付
-  OVERDUE           // 已逾期
-  CANCELLED         // 已取消
-  ON_HOLD           // 报损争议中, 暂停付款 (等门店 resolve)
+  PENDING // 待支付（无需审批，到期自动付）
+  PENDING_APPROVAL // 待审批（金额超阈值，需总部审核）
+  APPROVED // 审批通过，等待到期自动付款
+  REJECTED // 审批拒绝
+  NOTIFIED // 已提醒
+  PROCESSING // 支付中（已调用招行API）
+  PAID // 已支付
+  OVERDUE // 已逾期
+  CANCELLED // 已取消
+  ON_HOLD // 报损争议中, 暂停付款 (等门店 resolve)
 }
 
 enum ReconStatus {
@@ -1455,57 +1690,108 @@ enum PayStatus {
 }
 
 enum PayMethod {
-  BANK_TRANSFER   // 网银转账
-  ALIPAY          // 支付宝企业付
-  WECHAT          // 微信商户
-  CASH            // 现金
+  BANK_TRANSFER // 网银转账
+  ALIPAY // 支付宝企业付
+  WECHAT // 微信商户
+  CASH // 现金
 }
 
 enum PurchaseOrderStatus {
-  DRAFT          // 草稿
-  SUBMITTED      // 已提交给供应商
-  CONFIRMED      // 供应商已确认
-  DELIVERING     // 配送中
+  DRAFT // 草稿
+  SUBMITTED // 已提交给供应商
+  CONFIRMED // 供应商已确认
+  DELIVERING // 配送中
   PENDING_CONFIRM // 已到货，等门店确认(24h)
-  RECEIVED       // 门店已确认收货
-  COMPLETED      // 完成（含报损处理完毕）
-  CANCELLED      // 已取消
+  RECEIVED // 门店已确认收货
+  COMPLETED // 完成（含报损处理完毕）
+  CANCELLED // 已取消
+}
+
+enum PurchaseOrderItemOrigin {
+  ORIGINAL
+  APPROVED_REVISION
+  LEGACY_UNKNOWN
+}
+
+enum PurchaseOrderRevisionType {
+  ADD_ITEM
+  REMOVE_ITEM
+  CHANGE_QTY
+  CHANGE_EXPECTED_DATE
+  CHANGE_NOTE
+  MIXED
+}
+
+enum PurchaseOrderRevisionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum PurchaseOrderEventType {
+  CREATED
+  SUBMITTED
+  ACCEPTED
+  REVISION_REQUESTED
+  REVISION_APPROVED
+  REVISION_REJECTED
+  CANCELLED
+  LEGACY_MIGRATED
+}
+
+enum DeliveryOrderStatus {
+  DRAFT
+  SHIPPED
+  DELIVERED
+  RECEIVED
+  CANCELLED
+}
+
+enum DeliveryOrderEventType {
+  CREATED
+  UPDATED
+  SHIPPED
+  DELIVERED
+  RECEIVED
+  CANCELLED
+  LEGACY_MIGRATED
 }
 
 enum LossClaimStatus {
-  PENDING        // 待供应商处理(24h)
-  APPROVED       // 供应商同意，扣减账期
-  REJECTED       // 供应商拒绝，退回协商
-  NEGOTIATING    // 协商中
-  RESOLVED       // 协商完成
-  AUTO_APPROVED  // 超时自动同意
+  PENDING // 待供应商处理(24h)
+  APPROVED // 供应商同意，扣减账期
+  REJECTED // 供应商拒绝，退回协商
+  NEGOTIATING // 协商中
+  RESOLVED // 协商完成
+  AUTO_APPROVED // 超时自动同意
 }
 
 // ── 供应商库存流水（每次入库/出库/盘点都一条审计记录）────
 // 设计原则: append-only, 不修改/不删除. balanceAfter 记录变动后余额, 方便审计核对.
 model SupplierStockMovement {
-  id              String   @id @default(cuid())
-  tenantId        String
-  supplierId      String                          // 哪家供应商的库存
-  productId       String                          // 哪个 SKU
-  delta           Decimal  @db.Decimal(12, 3)     // +入库 / -出库
-  balanceAfter    Decimal  @db.Decimal(12, 3)     // 变动完之后的余额 (审计用)
-  type            StockMovementType               // 变动类型
-  reason          String?                         // 备注 (盘点理由 / 报损原因等)
-  sourceType      String?                         // 'PurchaseOrder' / 'ProductBatch' / 'Manual'
-  sourceId        String?                         // 关联 ID (PO id 等)
+  id           String            @id @default(cuid())
+  tenantId     String
+  supplierId   String // 哪家供应商的库存
+  productId    String // 哪个 SKU
+  delta        Decimal           @db.Decimal(12, 3) // +入库 / -出库
+  balanceAfter Decimal           @db.Decimal(12, 3) // 变动完之后的余额 (审计用)
+  type         StockMovementType // 变动类型
+  reason       String? // 备注 (盘点理由 / 报损原因等)
+  sourceType   String? // 'PurchaseOrder' / 'ProductBatch' / 'Manual'
+  sourceId     String? // 关联 ID (PO id 等)
 
   // 批次/保质期 (入库时填, 出库时为空) — 第一期: 仅记录显示, 不做 FIFO 扣减
-  manufactureDate DateTime? @db.Date              // 生产日期
-  expiryDate      DateTime? @db.Date              // 到期日期 (= 生产 + 保质期)
+  manufactureDate DateTime? @db.Date // 生产日期
+  expiryDate      DateTime? @db.Date // 到期日期 (= 生产 + 保质期)
 
-  createdById     String                          // 操作人 userId
-  createdAt       DateTime @default(now())
+  createdById String // 操作人 userId
+  createdAt   DateTime @default(now())
 
-  tenant       Tenant   @relation(fields: [tenantId], references: [id])
-  supplier     Supplier @relation(fields: [supplierId], references: [id])
-  product      Product  @relation(fields: [productId], references: [id])
-  createdBy    User     @relation(fields: [createdById], references: [id])
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  supplier  Supplier @relation(fields: [supplierId], references: [id])
+  product   Product  @relation(fields: [productId], references: [id])
+  createdBy User     @relation(fields: [createdById], references: [id])
 
   @@index([supplierId, productId, createdAt])
   @@index([tenantId, createdAt])
@@ -1513,12 +1799,12 @@ model SupplierStockMovement {
 }
 
 enum StockMovementType {
-  INITIAL          // SKU 创建时的初始库存
-  INBOUND_MANUAL   // 单条手动入库
-  INBOUND_EXCEL    // Excel 批量入库
-  OUTBOUND_PO      // 接单发货自动出库
-  ADJUSTMENT       // 盘点调整
-  LOSS             // 报损
+  INITIAL // SKU 创建时的初始库存
+  INBOUND_MANUAL // 单条手动入库
+  INBOUND_EXCEL // Excel 批量入库
+  OUTBOUND_PO // 接单发货自动出库
+  ADJUSTMENT // 盘点调整
+  LOSS // 报损
 }
 
 // ── 库存消耗记录（总厨每日录入）──────────────────────
@@ -1528,7 +1814,7 @@ model StockConsumption {
   storeId     String
   productId   String
   date        DateTime @db.Date
-  quantity    Decimal  @db.Decimal(10, 4)            // 改 4 位精度: BOM 推算可能 0.0005 kg
+  quantity    Decimal  @db.Decimal(10, 4) // 改 4 位精度: BOM 推算可能 0.0005 kg
   note        String?
   // 来源(用于幂等 + 审计): manual / dish_sale:<saleId> / meituan_ingest:<orderId>
   sourceType  String?  @db.VarChar(20)
@@ -1551,20 +1837,20 @@ model InventorySnapshot {
   id             String   @id @default(cuid())
   tenantId       String
   storeId        String
-  snapshotDate   DateTime @db.Date                  // 闭店盘点日；次日作为期初库存
+  snapshotDate   DateTime @db.Date // 闭店盘点日；次日作为期初库存
   sourceFilename String?
   sourceHash     String?  @db.VarChar(64)
   totalValue     Decimal  @db.Decimal(14, 3)
   itemCount      Int
   nonzeroCount   Int
   zeroCount      Int
-  matchedCount   Int      @default(0)               // 已唯一匹配到采购 SKU 的品项
+  matchedCount   Int      @default(0) // 已唯一匹配到采购 SKU 的品项
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  tenant        Tenant   @relation(fields: [tenantId], references: [id])
-  store         Store    @relation(fields: [storeId], references: [id])
-  items         InventorySnapshotItem[]
+  tenant Tenant                  @relation(fields: [tenantId], references: [id])
+  store  Store                   @relation(fields: [storeId], references: [id])
+  items  InventorySnapshotItem[]
 
   @@unique([storeId, snapshotDate])
   @@index([tenantId, snapshotDate])
@@ -1572,21 +1858,21 @@ model InventorySnapshot {
 }
 
 model InventorySnapshotItem {
-  id            String   @id @default(cuid())
-  snapshotId    String
-  productId     String?
-  section       String?
-  rawName       String
-  rawSpec       String?
-  unit          String
-  quantity      Decimal  @db.Decimal(14, 4)
-  unitPrice     Decimal  @db.Decimal(14, 4)
-  amount        Decimal  @db.Decimal(14, 3)
-  sortOrder     Int
-  createdAt     DateTime @default(now())
+  id         String   @id @default(cuid())
+  snapshotId String
+  productId  String?
+  section    String?
+  rawName    String
+  rawSpec    String?
+  unit       String
+  quantity   Decimal  @db.Decimal(14, 4)
+  unitPrice  Decimal  @db.Decimal(14, 4)
+  amount     Decimal  @db.Decimal(14, 3)
+  sortOrder  Int
+  createdAt  DateTime @default(now())
 
-  snapshot      InventorySnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
-  product       Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  snapshot InventorySnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  product  Product?          @relation(fields: [productId], references: [id], onDelete: SetNull)
 
   @@index([snapshotId, sortOrder])
   @@index([productId])
@@ -1598,38 +1884,39 @@ model StoreExpense {
   id        String   @id @default(cuid())
   tenantId  String
   storeId   String
-  month     String   // 格式 YYYY-MM
-  category  String   // LABOR / SALES / MGMT / FINANCE
-  item      String   // 具体项目名，如：门店租金、工资成本
+  month     String // 格式 YYYY-MM
+  category  String // LABOR / SALES / MGMT / FINANCE
+  item      String // 具体项目名，如：门店租金、工资成本
   amount    Decimal  @db.Decimal(12, 2)
   note      String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   tenant    Tenant   @relation(fields: [tenantId], references: [id])
   store     Store    @relation(fields: [storeId], references: [id])
+
   @@unique([storeId, month, item])
   @@map("store_expenses")
 }
 
 // ── 资金台账 ──────────────────────────────────────────
 model CashAccount {
-  id           String          @id @default(cuid())
-  tenantId     String
-  name         String                          // "工商银行对公账户"
-  type         CashAccountType @default(BANK)
-  bankName     String?                         // "工商银行昆明分行"
-  accountNo    String?                         // 账号（展示时只显示后4位）
-  balance      Decimal         @default(0) @db.Decimal(14, 2)
-  note         String?
+  id             String          @id @default(cuid())
+  tenantId       String
+  name           String // "工商银行对公账户"
+  type           CashAccountType @default(BANK)
+  bankName       String? // "工商银行昆明分行"
+  accountNo      String? // 账号（展示时只显示后4位）
+  balance        Decimal         @default(0) @db.Decimal(14, 2)
+  note           String?
   // 招行实时账户绑定: 非空 → 走 cmb 微服务按此账号拉实时余额, 覆盖手工 balance
   //                  空   → 普通手工录入账户 (balance 字段单一来源)
   // 需要在招行客户经理处先把 UID 绑定到此账号才能拉到余额
   cmbBindAccount String?
-  status       String          @default("ACTIVE")  // ACTIVE / DISABLED (软删)
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
+  status         String          @default("ACTIVE") // ACTIVE / DISABLED (软删)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
-  tenant       Tenant          @relation(fields: [tenantId], references: [id])
+  tenant       Tenant            @relation(fields: [tenantId], references: [id])
   transactions CashTransaction[]
 
   @@index([tenantId])
@@ -1637,23 +1924,23 @@ model CashAccount {
 }
 
 model CashTransaction {
-  id           String      @id @default(cuid())
+  id           String   @id @default(cuid())
   tenantId     String
   accountId    String
-  direction    Int                             // +1 收入  -1 支出
-  category     String                          // "供应商付款" / "营业收入" / "人工" / "其他"
-  amount       Decimal     @db.Decimal(12, 2)  // 恒正数
-  balanceAfter Decimal     @db.Decimal(14, 2)  // 交易后余额快照
+  direction    Int // +1 收入  -1 支出
+  category     String // "供应商付款" / "营业收入" / "人工" / "其他"
+  amount       Decimal  @db.Decimal(12, 2) // 恒正数
+  balanceAfter Decimal  @db.Decimal(14, 2) // 交易后余额快照
   note         String?
-  txDate       DateTime                        // 实际交易日期（可填历史）
-  refType      String?                         // 可选关联 "Payment" / "StoreExpense" / "RevenueRecord"
+  txDate       DateTime // 实际交易日期（可填历史）
+  refType      String? // 可选关联 "Payment" / "StoreExpense" / "RevenueRecord"
   refId        String?
   createdById  String
-  createdAt    DateTime    @default(now())
+  createdAt    DateTime @default(now())
 
-  tenant       Tenant      @relation(fields: [tenantId], references: [id])
-  account      CashAccount @relation(fields: [accountId], references: [id])
-  createdBy    User        @relation(fields: [createdById], references: [id])
+  tenant    Tenant      @relation(fields: [tenantId], references: [id])
+  account   CashAccount @relation(fields: [accountId], references: [id])
+  createdBy User        @relation(fields: [createdById], references: [id])
 
   @@index([tenantId, txDate(sort: Desc)])
   @@index([accountId])
@@ -1661,28 +1948,28 @@ model CashTransaction {
 }
 
 enum CashAccountType {
-  BANK      // 银行账户
-  ALIPAY    // 支付宝
-  WECHAT    // 微信支付
-  CASH      // 现金/备用金
+  BANK // 银行账户
+  ALIPAY // 支付宝
+  WECHAT // 微信支付
+  CASH // 现金/备用金
 }
 
 // ── 系统通知 ──────────────────────────────────────────
 model Notification {
   id            String   @id @default(cuid())
   tenantId      String
-  recipientRole String                        // 目标角色: MANAGER / SUPPLIER_STAFF / ADMIN / FINANCE
-  recipientId   String?                       // 指定用户（空=按角色广播）
-  type          String                        // ORDER_SUBMITTED / SHIPPED / RECEIPT_CONFIRMED / LOSS_CLAIM_RESULT / APPROVAL_PENDING / APPROVAL_DONE
+  recipientRole String // 目标角色: MANAGER / SUPPLIER_STAFF / ADMIN / FINANCE
+  recipientId   String? // 指定用户（空=按角色广播）
+  type          String // ORDER_SUBMITTED / SHIPPED / RECEIPT_CONFIRMED / LOSS_CLAIM_RESULT / APPROVAL_PENDING / APPROVAL_DONE
   title         String
   body          String
-  refType       String?                       // PurchaseOrder / LossClaim / PaymentSchedule
+  refType       String? // PurchaseOrder / LossClaim / PaymentSchedule
   refId         String?
   read          Boolean  @default(false)
   createdAt     DateTime @default(now())
 
-  tenant        Tenant   @relation(fields: [tenantId], references: [id])
-  recipient     User?    @relation(fields: [recipientId], references: [id])
+  tenant    Tenant @relation(fields: [tenantId], references: [id])
+  recipient User?  @relation(fields: [recipientId], references: [id])
 
   @@index([tenantId, recipientRole, read])
   @@index([recipientId, read])
@@ -1695,27 +1982,27 @@ model Notification {
 // 阈值 + 角色路由由 services/documentRouting.ts 决定
 // ══════════════════════════════════════════════════════
 model Document {
-  id              String   @id @default(cuid())
+  id              String         @id @default(cuid())
   tenantId        String
-  no              String                            // DOC202605000001
+  no              String // DOC202605000001
   type            DocumentType
-  title           String                            // 简述: "5月差旅报销 / 王伟"
-  amount          Decimal? @db.Decimal(12, 2)       // 金额（部分类型可空，如新供应商）
-  isOverThreshold Boolean  @default(false)          // 是否超阈值（决定是否升级到老板）
-  thresholdRule   String?                           // 命中的规则文字描述
-  payload         Json?                             // 业务字段：报销明细 / 调价对比 / 新菜品定价 等
-  storeId         String?                           // 关联门店（部分单据可空，如调价集团级）
-  initiatorId     String                            // 发起人
+  title           String // 简述: "5月差旅报销 / 王伟"
+  amount          Decimal?       @db.Decimal(12, 2) // 金额（部分类型可空，如新供应商）
+  isOverThreshold Boolean        @default(false) // 是否超阈值（决定是否升级到老板）
+  thresholdRule   String? // 命中的规则文字描述
+  payload         Json? // 业务字段：报销明细 / 调价对比 / 新菜品定价 等
+  storeId         String? // 关联门店（部分单据可空，如调价集团级）
+  initiatorId     String // 发起人
   status          DocumentStatus @default(PENDING)
-  finalizedAt     DateTime?                         // 终态时间（APPROVED/REJECTED/CANCELED）
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  finalizedAt     DateTime? // 终态时间（APPROVED/REJECTED/CANCELED）
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 
-  tenant          Tenant   @relation(fields: [tenantId], references: [id])
-  store           Store?   @relation(fields: [storeId], references: [id])
-  initiator       User     @relation(fields: [initiatorId], references: [id])
-  steps           DocumentStep[]
-  decisions       DocumentDecision[]
+  tenant    Tenant             @relation(fields: [tenantId], references: [id])
+  store     Store?             @relation(fields: [storeId], references: [id])
+  initiator User               @relation(fields: [initiatorId], references: [id])
+  steps     DocumentStep[]
+  decisions DocumentDecision[]
 
   @@unique([tenantId, no])
   @@index([tenantId, status, type])
@@ -1723,17 +2010,17 @@ model Document {
 }
 
 model DocumentStep {
-  id            String   @id @default(cuid())
-  documentId    String
-  seq           Int                                 // 第几步 (1-based)
-  approverRole  String                              // FINANCE / ADMIN / CHEF_DIRECTOR
-  approverId    String?                             // 完成时记录是谁批的
-  status        StepStatus @default(PENDING)
-  decidedAt     DateTime?
-  comment       String?
+  id           String     @id @default(cuid())
+  documentId   String
+  seq          Int // 第几步 (1-based)
+  approverRole String // FINANCE / ADMIN / CHEF_DIRECTOR
+  approverId   String? // 完成时记录是谁批的
+  status       StepStatus @default(PENDING)
+  decidedAt    DateTime?
+  comment      String?
 
-  document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  approver      User?    @relation(fields: [approverId], references: [id])
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  approver User?    @relation(fields: [approverId], references: [id])
 
   @@unique([documentId, seq])
   @@index([approverRole, status])
@@ -1741,49 +2028,49 @@ model DocumentStep {
 }
 
 model DocumentDecision {
-  id          String   @id @default(cuid())
-  documentId  String
-  stepId      String?
-  userId      String
-  decision    String                                // APPROVE / REJECT / FORWARD
-  comment     String?
-  createdAt   DateTime @default(now())
+  id         String   @id @default(cuid())
+  documentId String
+  stepId     String?
+  userId     String
+  decision   String // APPROVE / REJECT / FORWARD
+  comment    String?
+  createdAt  DateTime @default(now())
 
-  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  user        User     @relation(fields: [userId], references: [id])
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id])
 
   @@map("document_decisions")
 }
 
 enum DocumentType {
-  PETTY_CASH              // 备用金申请
-  REIMBURSEMENT           // 报销
-  PURCHASE_FOOD_REGULAR   // 食材采购（小额免审，留位备用）
-  PURCHASE_FOOD_OVER      // 食材采购超阈值
-  PURCHASE_NON_FOOD       // 非食材采购
-  CONTRACT                // 合同
-  PRICE_ADJUSTMENT        // 调价
-  NEW_SUPPLIER            // 新供应商
-  NEW_DISH                // 新菜品
-  STORE_TRANSFER          // 调拨
-  MARKETING_BUDGET        // 营销预算
-  PERSONNEL_PAY           // 调薪
-  PAYMENT_REQUEST         // 付款申请 (税费 / 房租 / 维修 / 咨询 等非订单类支出)
+  PETTY_CASH // 备用金申请
+  REIMBURSEMENT // 报销
+  PURCHASE_FOOD_REGULAR // 食材采购（小额免审，留位备用）
+  PURCHASE_FOOD_OVER // 食材采购超阈值
+  PURCHASE_NON_FOOD // 非食材采购
+  CONTRACT // 合同
+  PRICE_ADJUSTMENT // 调价
+  NEW_SUPPLIER // 新供应商
+  NEW_DISH // 新菜品
+  STORE_TRANSFER // 调拨
+  MARKETING_BUDGET // 营销预算
+  PERSONNEL_PAY // 调薪
+  PAYMENT_REQUEST // 付款申请 (税费 / 房租 / 维修 / 咨询 等非订单类支出)
 }
 
 enum DocumentStatus {
-  PENDING        // 进行中（在某步等审）
-  APPROVED       // 全部步骤通过
-  AUTO_APPROVED  // 命中阈值自动通过（未走完整审批链）
-  REJECTED       // 任一步驳回
-  CANCELED       // 发起人撤回
+  PENDING // 进行中（在某步等审）
+  APPROVED // 全部步骤通过
+  AUTO_APPROVED // 命中阈值自动通过（未走完整审批链）
+  REJECTED // 任一步驳回
+  CANCELED // 发起人撤回
 }
 
 enum StepStatus {
   PENDING
   APPROVED
   REJECTED
-  SKIPPED        // 阈值内自动跳过
+  SKIPPED // 阈值内自动跳过
 }
 
 // ── 撤销的 token (用于 JWT 主动作废: logout / 离职 / 异常登录) ──
@@ -1793,13 +2080,13 @@ enum StepStatus {
 //   - logout 把 refresh jti 写入此表, 客户端 access 自然过期后无法续期 → 真正"退出"
 //   - 定时清理 expiresAt < now 的行 (后续在 scheduler 加 daily cron)
 model RevokedToken {
-  id         String   @id @default(cuid())
-  jti        String   @unique           // JWT payload.jti (UUID)
-  userId     String                     // 便于按用户批量撤销 (离职/封号)
-  tokenType  String                     // "access" | "refresh"
-  expiresAt  DateTime                   // token 自然过期时间, 用于定时清理
-  revokedAt  DateTime @default(now())
-  reason     String?                    // logout / admin-revoke / suspicious-login
+  id        String   @id @default(cuid())
+  jti       String   @unique // JWT payload.jti (UUID)
+  userId    String // 便于按用户批量撤销 (离职/封号)
+  tokenType String // "access" | "refresh"
+  expiresAt DateTime // token 自然过期时间, 用于定时清理
+  revokedAt DateTime @default(now())
+  reason    String? // logout / admin-revoke / suspicious-login
 
   @@index([userId])
   @@index([expiresAt])
@@ -1811,30 +2098,30 @@ model RevokedToken {
 // ════════════════════════════════════════════════════════════════
 
 model MeituanApiCallLog {
-  id              String    @id @default(cuid())
+  id String @id @default(cuid())
 
-  correlationId   String
-  apiPath         String
-  apiTitle        String
-  mode            String    @db.VarChar(8)
+  correlationId String
+  apiPath       String
+  apiTitle      String
+  mode          String @db.VarChar(8)
 
-  requestPublic   Json
-  requestBiz      Json
-  signature       String?
+  requestPublic Json
+  requestBiz    Json
+  signature     String?
 
-  httpStatus      Int?
-  httpDurationMs  Int?
-  responseRaw     String?   @db.Text
-  responseCode    String?
-  responseMsg     String?
-  responseData    Json?
-  traceId         String?
+  httpStatus     Int?
+  httpDurationMs Int?
+  responseRaw    String? @db.Text
+  responseCode   String?
+  responseMsg    String?
+  responseData   Json?
+  traceId        String?
 
-  errorSeverity   String?   @db.VarChar(4)
-  errorMessage    String?   @db.Text
-  note            String?   @db.Text
+  errorSeverity String? @db.VarChar(4)
+  errorMessage  String? @db.Text
+  note          String? @db.Text
 
-  createdAt       DateTime  @default(now())
+  createdAt DateTime @default(now())
 
   @@index([createdAt(sort: Desc)])
   @@index([responseCode])
@@ -1844,88 +2131,88 @@ model MeituanApiCallLog {
 }
 
 model MeituanSyncCursor {
-  id                    String    @id @default(cuid())
-  apiPath               String
-  orgId                 Int
+  id      String @id @default(cuid())
+  apiPath String
+  orgId   Int
 
-  lastSyncedAt          DateTime?
-  lastSuccessAt         DateTime?
-  lastErrorAt           DateTime?
-  lastErrorCode         String?
-  consecutiveFailures   Int       @default(0)
+  lastSyncedAt        DateTime?
+  lastSuccessAt       DateTime?
+  lastErrorAt         DateTime?
+  lastErrorCode       String?
+  consecutiveFailures Int       @default(0)
 
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([apiPath, orgId])
   @@map("meituan_sync_cursors")
 }
 
 model MtOrder {
-  id                 String    @id @default(cuid())
+  id String @id @default(cuid())
 
-  mtOrderId          String    @unique
-  orderNo            String
-  vendorOrderId      String?
-  orgId              Int
-  poiId              Int
+  mtOrderId     String  @unique
+  orderNo       String
+  vendorOrderId String?
+  orgId         Int
+  poiId         Int
 
-  storeId            String?
-  channel            String    @db.VarChar(16)
-  callLogId          String
+  storeId   String?
+  channel   String  @db.VarChar(16)
+  callLogId String
 
-  businessTime       DateTime  @db.Date
-  orderTime          DateTime?
-  checkoutTime       DateTime?
-  refundTime         DateTime?
-  cancelTime         DateTime?
-  syncTime           DateTime?
+  businessTime DateTime  @db.Date
+  orderTime    DateTime?
+  checkoutTime DateTime?
+  refundTime   DateTime?
+  cancelTime   DateTime?
+  syncTime     DateTime?
 
-  status             Int
-  statusName         String?
-  refundStatus       Int?
-  makeStatus         Int?
-  isPartRefund       Boolean   @default(false)
+  status       Int
+  statusName   String?
+  refundStatus Int?
+  makeStatus   Int?
+  isPartRefund Boolean @default(false)
 
-  payed              Int
-  receivable         Int
-  amount             Int
-  discount           Int       @default(0)
-  income             Int
-  serviceFee         Int       @default(0)
-  taxAmt             Int       @default(0)
-  taxExcludedAmt     Int?
-  keepAmount         Int       @default(0)
-  oddment            Int       @default(0)
+  payed          Int
+  receivable     Int
+  amount         Int
+  discount       Int  @default(0)
+  income         Int
+  serviceFee     Int  @default(0)
+  taxAmt         Int  @default(0)
+  taxExcludedAmt Int?
+  keepAmount     Int  @default(0)
+  oddment        Int  @default(0)
 
-  source             Int?
-  sourceName         String?
-  businessType       Int?
-  businessTypeName   String?
-  typeName           String?
-  customerCount      Int       @default(0)
-  cashier            Int?
-  cashierName        String?
-  cashierNo          String?
-  tableId            Int?
-  tableComment       String?
-  unionType          Int?      @default(0)
-  parentOrderNo      String?
+  source           Int?
+  sourceName       String?
+  businessType     Int?
+  businessTypeName String?
+  typeName         String?
+  customerCount    Int     @default(0)
+  cashier          Int?
+  cashierName      String?
+  cashierNo        String?
+  tableId          Int?
+  tableComment     String?
+  unionType        Int?    @default(0)
+  parentOrderNo    String?
 
-  processed          Boolean   @default(false)
-  processedAt        DateTime?
-  processedAmount    Int       @default(0)
-  revenueRecordId    String?
-  processError       String?   @db.Text
+  processed       Boolean   @default(false)
+  processedAt     DateTime?
+  processedAmount Int       @default(0)
+  revenueRecordId String?
+  processError    String?   @db.Text
 
-  rawPayload         Json
+  rawPayload Json
 
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  items              MtOrderItem[]
-  payments           MtOrderPayment[]
-  refundOrders       MtRefundOrder[]
+  items        MtOrderItem[]
+  payments     MtOrderPayment[]
+  refundOrders MtRefundOrder[]
 
   @@index([storeId, businessTime(sort: Desc)])
   @@index([processed])
@@ -1935,50 +2222,50 @@ model MtOrder {
 }
 
 model MtOrderItem {
-  id                  String    @id @default(cuid())
-  mtOrderId           String
-  order               MtOrder   @relation(fields: [mtOrderId], references: [mtOrderId], onDelete: Cascade)
+  id        String  @id @default(cuid())
+  mtOrderId String
+  order     MtOrder @relation(fields: [mtOrderId], references: [mtOrderId], onDelete: Cascade)
 
-  mtSkuId             String
-  mtSkuNo             String?
-  mtSpuId             String?
-  thirdSkuId          String?
-  name                String
-  specs               String?
-  spuName             String?
+  mtSkuId    String
+  mtSkuNo    String?
+  mtSpuId    String?
+  thirdSkuId String?
+  name       String
+  specs      String?
+  spuName    String?
 
-  count               Decimal   @db.Decimal(10, 3)
-  price               Int
-  totalPrice          Int
-  actualPrice         Int
-  apportionPrice      Int?
-  newTotalPrice       Int?
-  income              Int       @default(0)
-  discountAmount      Int       @default(0)
+  count          Decimal @db.Decimal(10, 3)
+  price          Int
+  totalPrice     Int
+  actualPrice    Int
+  apportionPrice Int?
+  newTotalPrice  Int?
+  income         Int     @default(0)
+  discountAmount Int     @default(0)
 
-  isCombo             Int       @default(0)
-  comboAddPrice       Int?
-  parentItemNo        String?
-  itemNo              String?
-  serialNo            Int?
-  cateId              Int?
-  departmentOrgId     Int?
-  departmentOrgName   String?
+  isCombo           Int     @default(0)
+  comboAddPrice     Int?
+  parentItemNo      String?
+  itemNo            String?
+  serialNo          Int?
+  cateId            Int?
+  departmentOrgId   Int?
+  departmentOrgName String?
 
-  present             Boolean   @default(false)
-  promotion           Boolean   @default(false)
-  retreat             Boolean   @default(false)
-  status              Int?
-  attrs               String?
-  newAttrs            Json?
+  present   Boolean @default(false)
+  promotion Boolean @default(false)
+  retreat   Boolean @default(false)
+  status    Int?
+  attrs     String?
+  newAttrs  Json?
 
-  taxRate             String?
-  taxAmt              Int?
-  taxExcludedAmt      Int?
+  taxRate        String?
+  taxAmt         Int?
+  taxExcludedAmt Int?
 
-  comment             String?
-  rawPayload          Json
-  createdAt           DateTime  @default(now())
+  comment    String?
+  rawPayload Json
+  createdAt  DateTime @default(now())
 
   @@index([mtOrderId])
   @@index([mtSkuId])
@@ -1986,38 +2273,38 @@ model MtOrderItem {
 }
 
 model MtOrderPayment {
-  id                  String    @id @default(cuid())
-  mtOrderId           String
-  order               MtOrder   @relation(fields: [mtOrderId], references: [mtOrderId], onDelete: Cascade)
+  id        String  @id @default(cuid())
+  mtOrderId String
+  order     MtOrder @relation(fields: [mtOrderId], references: [mtOrderId], onDelete: Cascade)
 
-  payType             Int
-  payTypeName         String
-  payDetailType       Int?
+  payType       Int
+  payTypeName   String
+  payDetailType Int?
 
-  payed               Int
-  discountAmount      Int       @default(0)
-  income              Int       @default(0)
-  debtAccount         Int       @default(0)
+  payed          Int
+  discountAmount Int @default(0)
+  income         Int @default(0)
+  debtAccount    Int @default(0)
 
-  tradeNo             String?
-  payNo               String?
-  relatedPayNo        String?
-  refundTradeNo       String?
-  refundReason        String?
-  refundWay           Int?
-  refundTime          DateTime?
+  tradeNo       String?
+  payNo         String?
+  relatedPayNo  String?
+  refundTradeNo String?
+  refundReason  String?
+  refundWay     Int?
+  refundTime    DateTime?
 
-  merchantNo          String?
-  merchantType        Int?
-  dealTitle           String?
+  merchantNo   String?
+  merchantType Int?
+  dealTitle    String?
 
-  status              Int?
-  type                Int?
-  manual              Int?
-  remarks             String?
+  status  Int?
+  type    Int?
+  manual  Int?
+  remarks String?
 
-  rawPayload          Json
-  createdAt           DateTime  @default(now())
+  rawPayload Json
+  createdAt  DateTime @default(now())
 
   @@index([mtOrderId])
   @@index([payType])
@@ -2025,25 +2312,25 @@ model MtOrderPayment {
 }
 
 model MtRefundOrder {
-  id              String    @id @default(cuid())
-  mtRefundId      String    @unique
-  mtOrderId       String?
-  order           MtOrder?  @relation(fields: [mtOrderId], references: [mtOrderId], onDelete: SetNull)
+  id         String   @id @default(cuid())
+  mtRefundId String   @unique
+  mtOrderId  String?
+  order      MtOrder? @relation(fields: [mtOrderId], references: [mtOrderId], onDelete: SetNull)
 
-  orgId           Int
-  poiId           Int
+  orgId Int
+  poiId Int
 
-  status          Int
-  statusName      String?
-  refundAmount    Int
-  refundTime      DateTime?
-  businessTime    DateTime? @db.Date
+  status       Int
+  statusName   String?
+  refundAmount Int
+  refundTime   DateTime?
+  businessTime DateTime? @db.Date
 
-  callLogId       String
-  rawPayload      Json
+  callLogId  String
+  rawPayload Json
 
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([mtOrderId])
   @@index([businessTime])
@@ -2056,51 +2343,51 @@ model MtRefundOrder {
 // 业务自动事件 (招行付款 / 入库) 若落账期间已 CLOSED, 由 voucher service 将日期顺延至下一个 OPEN 期
 // 关账同时记录期末结转 carryover (Phase 4 task 3): 主营收入 → 本年利润
 model AccountingPeriod {
-  id           String   @id @default(cuid())
-  tenantId     String
-  month        String   // YYYY-MM 例 "2026-06"
-  status       AccountingPeriodStatus @default(OPEN)
+  id                 String                 @id @default(cuid())
+  tenantId           String
+  month              String // YYYY-MM 例 "2026-06"
+  status             AccountingPeriodStatus @default(OPEN)
   // 关账
-  closedAt     DateTime?
-  closedById   String?
-  closeNote    String?
+  closedAt           DateTime?
+  closedById         String?
+  closeNote          String?
   // 重新打开 (审计)
-  reopenedAt   DateTime?
-  reopenedById String?
-  reopenNote   String?
+  reopenedAt         DateTime?
+  reopenedById       String?
+  reopenNote         String?
   // 期末结转凭证 (carryover, 主营收入 → 本年利润)
   carryoverVoucherId String?
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+  tenant Tenant @relation(fields: [tenantId], references: [id])
 
   @@unique([tenantId, month])
   @@map("accounting_periods")
 }
 
 enum AccountingPeriodStatus {
-  OPEN       // 未锁
-  CLOSED     // 已锁, 凭证不可改不可加
-  REOPENED   // 财务长重开 (留痕)
+  OPEN // 未锁
+  CLOSED // 已锁, 凭证不可改不可加
+  REOPENED // 财务长重开 (留痕)
 }
 
 model MeituanAuthToken {
-  id                String    @id @default(cuid())
-  orgId             Int       @unique
+  id    String @id @default(cuid())
+  orgId Int    @unique
 
-  appAuthToken      String    @db.Text
-  refreshToken      String?   @db.Text
-  expiresAt         DateTime?
+  appAuthToken String    @db.Text
+  refreshToken String?   @db.Text
+  expiresAt    DateTime?
 
-  lastRefreshedAt   DateTime?
-  refreshAttempts   Int       @default(0)
+  lastRefreshedAt DateTime?
+  refreshAttempts Int       @default(0)
 
-  rawPayload        Json?
+  rawPayload Json?
 
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("meituan_auth_tokens")
 }
@@ -2109,68 +2396,68 @@ model MeituanAuthToken {
 // 真实业务: 店长每月按需申请备用金 (买美菜/快驴等无现场付款的渠道),
 //   财务发放, 月底店长报开支明细 + 退回余额, 财务对账归档.
 model PettyCash {
-  id            String   @id @default(cuid())
-  tenantId      String
-  storeId       String
-  month         String                       // YYYY-MM, 一个店一个月一笔
+  id              String    @id @default(cuid())
+  tenantId        String
+  storeId         String
+  month           String // YYYY-MM, 一个店一个月一笔
   // 申请
-  requestedAmount  Decimal  @db.Decimal(12, 2)
-  requestedById    String
-  requestNote      String?
-  requestedAt      DateTime @default(now())
+  requestedAmount Decimal   @db.Decimal(12, 2)
+  requestedById   String
+  requestNote     String?
+  requestedAt     DateTime  @default(now())
   // 财务批准 + 发放
-  approvedById     String?
-  approvedAt       DateTime?
-  approvedAmount   Decimal? @db.Decimal(12, 2)
-  paidAt           DateTime?
-  paidById         String?
-  paymentMethod    String?                    // 现金 / 转账 / 招行
-  bankTxNo         String?
+  approvedById    String?
+  approvedAt      DateTime?
+  approvedAmount  Decimal?  @db.Decimal(12, 2)
+  paidAt          DateTime?
+  paidById        String?
+  paymentMethod   String? // 现金 / 转账 / 招行
+  bankTxNo        String?
   // 月底回收 / 对账
-  reconciledAt     DateTime?
-  reconciledById   String?
-  spentAmount      Decimal? @db.Decimal(12, 2) // 实际花掉
-  returnedAmount   Decimal? @db.Decimal(12, 2) // 退回的现金
-  reconcileNote    String?
+  reconciledAt    DateTime?
+  reconciledById  String?
+  spentAmount     Decimal?  @db.Decimal(12, 2) // 实际花掉
+  returnedAmount  Decimal?  @db.Decimal(12, 2) // 退回的现金
+  reconcileNote   String?
 
-  status        PettyCashStatus @default(REQUESTED)
+  status PettyCashStatus @default(REQUESTED)
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  tenant        Tenant   @relation(fields: [tenantId], references: [id])
-  store         Store    @relation(fields: [storeId], references: [id])
-  expenses      PettyCashExpense[]
+  tenant   Tenant             @relation(fields: [tenantId], references: [id])
+  store    Store              @relation(fields: [storeId], references: [id])
+  expenses PettyCashExpense[]
 
-  @@unique([tenantId, storeId, month])      // 一店一月一笔
+  @@unique([tenantId, storeId, month]) // 一店一月一笔
   @@index([tenantId, status])
   @@map("petty_cash")
 }
 
 enum PettyCashStatus {
-  REQUESTED      // 店长已申请, 待财务批
-  APPROVED       // 财务已批, 待发放
-  PAID           // 已发放, 店长使用中
-  RECONCILING    // 月底已提报开支明细, 待财务对账
-  CLOSED         // 财务对账完毕 + 退款入账, 归档
-  CANCELED       // 取消 (申请但没批)
+  REQUESTED // 店长已申请, 待财务批
+  APPROVED // 财务已批, 待发放
+  PAID // 已发放, 店长使用中
+  RECONCILING // 月底已提报开支明细, 待财务对账
+  CLOSED // 财务对账完毕 + 退款入账, 归档
+  CANCELED // 取消 (申请但没批)
 }
 
 model PettyCashExpense {
-  id            String   @id @default(cuid())
-  pettyCashId   String
-  date          DateTime @db.Date
-  category      String                       // 美菜 / 快驴 / 散户 / 其他
-  amount        Decimal  @db.Decimal(12, 2)
-  note          String?
-  attachments   String[]                     // OSS URL 数组 (小票/收据照片)
+  id          String   @id @default(cuid())
+  pettyCashId String
+  date        DateTime @db.Date
+  category    String // 美菜 / 快驴 / 散户 / 其他
+  amount      Decimal  @db.Decimal(12, 2)
+  note        String?
+  attachments String[] // OSS URL 数组 (小票/收据照片)
   // 关联 (可选: 报销关联到具体入库单 / 供应商)
-  receiptId     String?
-  supplierId    String?
-  createdById   String
-  createdAt     DateTime @default(now())
+  receiptId   String?
+  supplierId  String?
+  createdById String
+  createdAt   DateTime @default(now())
 
-  pettyCash     PettyCash @relation(fields: [pettyCashId], references: [id], onDelete: Cascade)
+  pettyCash PettyCash @relation(fields: [pettyCashId], references: [id], onDelete: Cascade)
 
   @@index([pettyCashId])
   @@map("petty_cash_expenses")
@@ -2179,34 +2466,34 @@ model PettyCashExpense {
 // ── 工资 (P2-1) ───────────────────────────────────────
 // 简化版: 财务上传 Excel 月工资单 → 系统记 batch + 每人明细 → 审批 → 发放 → 自动生成凭证
 model Payroll {
-  id              String   @id @default(cuid())
-  tenantId        String
-  storeId         String
-  month           String                     // YYYY-MM
+  id             String        @id @default(cuid())
+  tenantId       String
+  storeId        String
+  month          String // YYYY-MM
   // 汇总 (从 items 累加, 落库快照)
-  totalGross      Decimal? @db.Decimal(12, 2) // 应发合计
-  totalNet        Decimal  @db.Decimal(12, 2) // 实发合计 (主要)
-  totalSocialSec  Decimal? @db.Decimal(12, 2) // 社保合计 (扣的)
-  totalTax        Decimal? @db.Decimal(12, 2) // 个税合计
+  totalGross     Decimal?      @db.Decimal(12, 2) // 应发合计
+  totalNet       Decimal       @db.Decimal(12, 2) // 实发合计 (主要)
+  totalSocialSec Decimal?      @db.Decimal(12, 2) // 社保合计 (扣的)
+  totalTax       Decimal?      @db.Decimal(12, 2) // 个税合计
   // 审批
-  status          PayrollStatus @default(DRAFT)
-  approvedById    String?
-  approvedAt      DateTime?
+  status         PayrollStatus @default(DRAFT)
+  approvedById   String?
+  approvedAt     DateTime?
   // 发放
-  payDate         DateTime?
-  payMethod       String?                     // 现金 / 招行 / 转账 / 微信
-  bankTxNo        String?
+  payDate        DateTime?
+  payMethod      String? // 现金 / 招行 / 转账 / 微信
+  bankTxNo       String?
   // 自动生成凭证 关联
-  voucherId       String?                     // 凭证 id (生成后回填)
-  note            String?
+  voucherId      String? // 凭证 id (生成后回填)
+  note           String?
 
-  createdById     String
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  tenant          Tenant   @relation(fields: [tenantId], references: [id])
-  store           Store    @relation(fields: [storeId], references: [id])
-  items           PayrollItem[]
+  tenant Tenant        @relation(fields: [tenantId], references: [id])
+  store  Store         @relation(fields: [storeId], references: [id])
+  items  PayrollItem[]
 
   @@unique([tenantId, storeId, month])
   @@index([tenantId, status])
@@ -2214,10 +2501,10 @@ model Payroll {
 }
 
 enum PayrollStatus {
-  DRAFT       // 上传明细, 财务/老板待批
-  APPROVED    // 已批待发
-  PAID        // 已发, 凭证已生成
-  VOIDED      // 作废
+  DRAFT // 上传明细, 财务/老板待批
+  APPROVED // 已批待发
+  PAID // 已发, 凭证已生成
+  VOIDED // 作废
 }
 
 model PayrollItem {
@@ -2234,7 +2521,7 @@ model PayrollItem {
   netAmount       Decimal  @db.Decimal(10, 2) // 实发
   note            String?
 
-  payroll         Payroll  @relation(fields: [payrollId], references: [id], onDelete: Cascade)
+  payroll Payroll @relation(fields: [payrollId], references: [id], onDelete: Cascade)
 
   @@index([payrollId])
   @@map("payroll_items")

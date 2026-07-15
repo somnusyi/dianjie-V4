@@ -183,6 +183,19 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
         })
         return { kind: 'NEW_DISH_DISABLE', product: pr, recentOrders: used }
       }
+      if (p.action === 'BATCH_DISABLE' && Array.isArray(p.productIds)) {
+        const products = await prisma.product.findMany({
+          where: { id: { in: p.productIds } },
+          select: { id: true, code: true, name: true, spec: true, unit: true, price: true, stock: true, status: true },
+          orderBy: { name: 'asc' },
+        })
+        return {
+          kind: 'NEW_DISH_BATCH_DISABLE',
+          total: products.length,
+          sample: products.slice(0, 50),
+          supplierName: p.supplierName || null,
+        }
+      }
     }
 
     return { kind: 'UNKNOWN', payload: p }
@@ -322,6 +335,12 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
               where: { id: payload.productId }, data: { status: 'DISABLED' },
             }).catch(e => req.log?.error({ err: e }, '停售回调失败'))
             touchedProducts = true
+          } else if (payload.action === 'BATCH_DISABLE' && Array.isArray(payload.productIds)) {
+            await prisma.product.updateMany({
+              where: { id: { in: payload.productIds }, status: 'PENDING_DISABLE' as any },
+              data: { status: 'DISABLED' },
+            }).catch(e => req.log?.error({ err: e }, '批量停售回调失败'))
+            touchedProducts = true
           }
         }
         // 关键修复: 任何 product 变更后必须刷缓存, 否则 GET /api/products 还返回 600s 旧数据
@@ -334,16 +353,22 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
       let touchedProducts = false
       if (doc.type === 'NEW_DISH') {
         if ((payload.action === 'CREATE') && payload.productId) {
-          await prisma.product.deleteMany({ where: { id: payload.productId, status: 'PENDING_APPROVAL' as any } })
-            .catch(e => req.log?.error({ err: e }, '新品拒绝-删除失败'))
+          await prisma.product.updateMany({ where: { id: payload.productId, status: 'PENDING_APPROVAL' as any }, data: { status: 'DISABLED' } })
+            .catch(e => req.log?.error({ err: e }, '新品拒绝-停售失败'))
           touchedProducts = true
         } else if (payload.action === 'BATCH' && Array.isArray(payload.productIds)) {
-          await prisma.product.deleteMany({ where: { id: { in: payload.productIds }, status: 'PENDING_APPROVAL' as any } })
-            .catch(e => req.log?.error({ err: e }, '批量拒绝-删除失败'))
+          await prisma.product.updateMany({ where: { id: { in: payload.productIds }, status: 'PENDING_APPROVAL' as any }, data: { status: 'DISABLED' } })
+            .catch(e => req.log?.error({ err: e }, '批量拒绝-停售失败'))
           touchedProducts = true
         } else if (payload.action === 'DISABLE' && payload.productId) {
           await prisma.product.updateMany({ where: { id: payload.productId, status: 'PENDING_DISABLE' as any }, data: { status: 'ENABLED' } })
             .catch(e => req.log?.error({ err: e }, '停售拒绝-恢复失败'))
+          touchedProducts = true
+        } else if (payload.action === 'BATCH_DISABLE' && Array.isArray(payload.productIds)) {
+          await prisma.product.updateMany({
+            where: { id: { in: payload.productIds }, status: 'PENDING_DISABLE' as any },
+            data: { status: 'ENABLED' },
+          }).catch(e => req.log?.error({ err: e }, '批量停售拒绝-恢复失败'))
           touchedProducts = true
         }
       }

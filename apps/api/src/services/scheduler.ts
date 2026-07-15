@@ -143,7 +143,13 @@ export async function runDailyCheck() {
       status: 'PENDING_CONFIRM',
       deliveredAt: { lt: now.subtract(24, 'hour').toDate() },   // 必须有 deliveredAt 且超 24h
     },
-    include: { items: true, supplier: true, store: true },
+    include: {
+      items: { where: { isActive: true } }, supplier: true, store: true,
+      deliveries: {
+        where: { status: 'DELIVERED' }, orderBy: { deliveredAt: 'desc' }, take: 1,
+        include: { items: { include: { product: { select: { shelfDays: true } } } } },
+      },
+    },
     take: 200,
   })
   for (const o of overdueShipped) {
@@ -157,28 +163,67 @@ export async function runDailyCheck() {
         console.log(`⏭ 跳过 ${o.no} (并发竞争: 已不是 PENDING_CONFIRM)`)
         continue
       }
+      const delivery = o.deliveries[0]
+      if (!delivery) {
+        console.error(`自动收货跳过 ${o.no}: 未找到待收货配送单`)
+        continue
+      }
       // 默认按下单数量全收 (没有报损)
       const ym = dayjs().format('YYYYMM')
       const cnt = await prisma.receipt.count({ where: { tenantId: o.tenantId, no: { startsWith: `RK${ym}` } } })
       const no = `RK${ym}${String(cnt + 1).padStart(6, '0')}`
       // 24h 自动收货 — 按 shippedQty (供应商实发量), 没填回退 quantity
-      const totalAmt = o.items.reduce((s, i) => s + Number(i.shippedQty ?? i.quantity) * Number(i.unitPrice), 0)
+      const totalAmt = delivery.items.reduce((s, i) => s + Number(i.shippedQty) * Number(i.unitPriceSnapshot), 0)
+      const autoReceivedAt = new Date()
       const receipt = await prisma.receipt.create({
         data: {
           tenantId: o.tenantId, no,
           storeId: o.storeId, supplierId: o.supplierId,
-          deliveryDate: new Date(),
+          purchaseOrderId: o.id, deliveryOrderId: delivery.id,
+          deliveryDate: autoReceivedAt,
           totalAmount: totalAmt, status: 'CONFIRMED',
-          confirmedAt: new Date(), createdById: o.createdById,
-          items: { create: o.items.map(i => {
-            const q = i.shippedQty ?? i.quantity
-            return { productId: i.productId, quantity: q, unitPrice: i.unitPrice, amount: Number(i.unitPrice) * Number(q) }
+          confirmedAt: autoReceivedAt, createdById: o.createdById,
+          items: { create: delivery.items.map(i => {
+            const q = i.shippedQty
+            return {
+              productId: i.productId, quantity: q, unitPrice: i.unitPriceSnapshot,
+              amount: Number(i.unitPriceSnapshot) * Number(q),
+              productionDate: i.manufactureDate || autoReceivedAt,
+              expiryDate: i.expiryDate || dayjs(autoReceivedAt).add(i.product.shelfDays, 'day').toDate(),
+            }
           }) },
         },
       })
-      await prisma.purchaseOrder.update({
-        where: { id: o.id },
-        data: { status: 'COMPLETED', receivedAt: new Date(), receiptId: receipt.id, autoConfirmed: true },
+      const fullyShipped = o.items.every(i => Number(i.shippedQty || 0) + 0.0001 >= Number(i.quantity))
+      await prisma.$transaction(async tx => {
+        for (const item of delivery.items) {
+          await tx.deliveryOrderItem.update({ where: { id: item.id }, data: { receivedQty: item.shippedQty } })
+          const previous = await tx.deliveryOrderItem.aggregate({
+            where: { productId: item.productId, deliveryOrder: { purchaseOrderId: o.id, status: 'RECEIVED', id: { not: delivery.id } } },
+            _sum: { receivedQty: true },
+          })
+          await tx.purchaseOrderItem.updateMany({
+            where: { purchaseOrderId: o.id, productId: item.productId },
+            data: { receivedQty: Number(previous._sum.receivedQty || 0) + Number(item.shippedQty) },
+          })
+        }
+        await tx.deliveryOrder.update({
+          where: { id: delivery.id },
+          data: { status: 'RECEIVED', receivedAt: new Date(), rowVersion: { increment: 1 } },
+        })
+        await tx.deliveryOrderEvent.create({
+          data: {
+            tenantId: o.tenantId, deliveryOrderId: delivery.id, eventType: 'RECEIVED',
+            fromStatus: 'DELIVERED', toStatus: 'RECEIVED', metadata: { receiptId: receipt.id, autoConfirmed: true },
+          },
+        })
+        await tx.purchaseOrder.update({
+          where: { id: o.id },
+          data: {
+            status: fullyShipped ? 'COMPLETED' : 'CONFIRMED', receivedAt: fullyShipped ? new Date() : null,
+            receiptId: receipt.id, autoConfirmed: true,
+          },
+        })
       })
       const { autoProcessAfterConfirm } = await import('./paymentSchedule')
       const fullReceipt = await prisma.receipt.findUnique({ where: { id: receipt.id } }) as any

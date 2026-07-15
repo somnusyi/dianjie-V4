@@ -15,7 +15,7 @@ const MEDIA_MIMES = [...IMAGE_MIMES, ...VIDEO_MIMES]
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024
 
-const ALLOWED_CATEGORIES = new Set(['loss-claims', 'invoices', 'capital', 'documents', 'reimbursements', 'misc', 'chef-ack'])
+const ALLOWED_CATEGORIES = new Set(['loss-claims', 'invoices', 'capital', 'documents', 'reimbursements', 'misc', 'chef-ack', 'products'])
 
 function ossClient() {
   return new OSS({
@@ -55,6 +55,16 @@ export function resignOssUrl(url: string | null | undefined): string {
 export function resignOssUrls(urls: any): string[] {
   if (!Array.isArray(urls)) return urls
   return urls.map((u) => resignOssUrl(u))
+}
+
+/** 用持久化对象 key 生成短期可访问 URL；数据库不保存会过期的签名 URL。 */
+export function signOssKey(key: string | null | undefined): string | null {
+  if (!key) return null
+  try {
+    return toHttps(ossClient().signatureUrl(key, { expires: 3600 }))
+  } catch {
+    return null
+  }
 }
 
 async function uploadOne(req: any, reply: any, opts: { allowedMimes: string[]; category: string }) {
@@ -125,7 +135,7 @@ export async function uploadRoutes(app: FastifyInstance) {
     const category = (req.query?.category || 'misc') as string
     const allowedMimes =
       category === 'loss-claims' ? MEDIA_MIMES
-        : category === 'chef-ack' ? IMAGE_MIMES
+        : category === 'chef-ack' || category === 'products' ? IMAGE_MIMES
           : DOC_MIMES
     return uploadOne(req, reply, { allowedMimes, category })
   })

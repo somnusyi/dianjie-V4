@@ -44,14 +44,19 @@ async function main() {
     })
   }
   const code = `VERIFY-SKU-${Date.now()}`
-  const product = await prisma.product.create({
+  const products = await Promise.all([
+    { code, name: '本地商品管理验证品' },
+    { code: `${code}-B`, name: '并发停售验证品 B' },
+    { code: `${code}-C`, name: '并发停售验证品 C' },
+  ].map(item => prisma.product.create({
     data: {
-      tenantId: tenant.id, supplierId, code,
-      name: '本地商品管理验证品', spec: '1kg/件', category: '验证分类A', unit: '件',
+      tenantId: tenant.id, supplierId, code: item.code,
+      name: item.name, spec: '1kg/件', category: '验证分类A', unit: '件',
       price: 10, stock: 0, minStock: 0, status: 'ENABLED',
     },
-  })
-  let documentId: string | null = null
+  })))
+  const [product, productB, productC] = products
+  const documentIds: string[] = []
 
   try {
     const login = await api('/api/auth/login', null, {
@@ -79,16 +84,48 @@ async function main() {
     assert.equal(batchCategory.status, 200, JSON.stringify(batchCategory.body))
     assert.equal(batchCategory.body.count, 1)
 
-    const batchDisable = await api('/api/products/batch-status', token, {
-      method: 'PATCH',
-      body: JSON.stringify({ ids: [product.id], status: 'DISABLED' }),
+    const independentDisable = await Promise.all([
+      api('/api/products/batch-status', token, {
+        method: 'PATCH', body: JSON.stringify({ ids: [productB.id], status: 'DISABLED' }),
+      }),
+      api('/api/products/batch-status', token, {
+        method: 'PATCH', body: JSON.stringify({ ids: [productC.id], status: 'DISABLED' }),
+      }),
+    ])
+    independentDisable.forEach(result => assert.equal(result.status, 200, JSON.stringify(result.body)))
+    assert.notEqual(independentDisable[0].body.documentNo, independentDisable[1].body.documentNo, '并发审批单号必须唯一')
+    const independentDocs = await prisma.document.findMany({
+      where: { tenantId: tenant.id, no: { in: independentDisable.map(result => result.body.documentNo) } },
     })
-    assert.equal(batchDisable.status, 200, JSON.stringify(batchDisable.body))
-    assert.equal(batchDisable.body.statusChange, 'PENDING_APPROVAL')
-    const pending = await prisma.product.findUniqueOrThrow({ where: { id: product.id } })
-    assert.equal(pending.status, 'PENDING_DISABLE')
-    const doc = await prisma.document.findFirstOrThrow({ where: { tenantId: tenant.id, no: batchDisable.body.documentNo } })
-    documentId = doc.id
+    assert.equal(independentDocs.length, 2)
+    documentIds.push(...independentDocs.map(doc => doc.id))
+
+    const duplicateDisable = await Promise.all([
+      api('/api/products/batch-status', token, {
+        method: 'PATCH', body: JSON.stringify({ ids: [product.id], status: 'DISABLED' }),
+      }),
+      api('/api/products/batch-status', token, {
+        method: 'PATCH', body: JSON.stringify({ ids: [product.id], status: 'DISABLED' }),
+      }),
+    ])
+    const successfulDisable = duplicateDisable.filter(result => result.status === 200)
+    const rejectedDisable = duplicateDisable.filter(result => result.status === 400 || result.status === 409)
+    assert.equal(successfulDisable.length, 1, JSON.stringify(duplicateDisable))
+    assert.equal(rejectedDisable.length, 1, JSON.stringify(duplicateDisable))
+    const duplicateDoc = await prisma.document.findFirstOrThrow({
+      where: { tenantId: tenant.id, no: successfulDisable[0].body.documentNo },
+    })
+    documentIds.push(duplicateDoc.id)
+    assert.equal(await prisma.document.count({
+      where: {
+        tenantId: tenant.id, status: 'PENDING',
+        payload: { path: ['productIds'], array_contains: [product.id] },
+      },
+    }), 1, '重复停售只能生成一张待审批单')
+    const pendingProducts = await prisma.product.findMany({
+      where: { id: { in: products.map(item => item.id) } }, select: { status: true },
+    })
+    assert.ok(pendingProducts.every(item => item.status === 'PENDING_DISABLE'))
 
     const history = await api('/api/products/history?limit=100', token)
     assert.equal(history.status, 200, JSON.stringify(history.body))
@@ -105,6 +142,8 @@ async function main() {
       imageKey: true,
       batchCategory: true,
       batchDisableApproval: true,
+      concurrentDocumentNumbers: true,
+      duplicateDisableRejected: true,
       auditHistory: true,
       destructiveClearBlocked: true,
     }))
@@ -115,8 +154,8 @@ async function main() {
         entityType: { in: ['Product', 'ProductBatch', 'ProductCategory'] },
       },
     })
-    if (documentId) await prisma.document.deleteMany({ where: { id: documentId } })
-    await prisma.product.deleteMany({ where: { id: product.id } })
+    if (documentIds.length) await prisma.document.deleteMany({ where: { id: { in: documentIds } } })
+    await prisma.product.deleteMany({ where: { id: { in: products.map(item => item.id) } } })
     await prisma.supplierProductCategory.deleteMany({
       where: { tenantId: tenant.id, supplierId, name: { in: categoryNames } },
     })

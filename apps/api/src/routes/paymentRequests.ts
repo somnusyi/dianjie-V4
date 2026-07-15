@@ -12,8 +12,8 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import { z } from 'zod'
-import dayjs from 'dayjs'
 import { routeFor } from '../services/documentRouting'
+import { nextDocumentNo } from '../services/documentNo'
 import { createVoucher } from '../services/voucher'
 
 const FINANCE_ROLES = ['FINANCE', 'ADMIN', 'SUPER_ADMIN']
@@ -67,10 +67,6 @@ export const paymentRequestRoutes: FastifyPluginAsync = async (app) => {
       : USE_TO_ACCOUNT[d.usage]
     if (!accountInfo) return reply.status(400).send({ error: '科目无效' })
 
-    // 编号 + 路由
-    const ym = dayjs().format('YYYYMM')
-    const count = await prisma.document.count({ where: { tenantId, no: { startsWith: `DOC${ym}` } } })
-    const no = `DOC${ym}${String(count + 1).padStart(6, '0')}`
     const plan = routeFor('PAYMENT_REQUEST' as any, d.amount)
 
     const usageLabel = ({
@@ -80,31 +76,34 @@ export const paymentRequestRoutes: FastifyPluginAsync = async (app) => {
     } as any)[d.usage] || d.usage
     const title = `${usageLabel} · ${d.payeeName} · ¥${d.amount.toFixed(2)}`
 
-    const doc = await prisma.document.create({
-      data: {
-        tenantId, no,
-        type: 'PAYMENT_REQUEST',
-        title, amount: d.amount,
-        isOverThreshold: plan.isOverThreshold,
-        thresholdRule: plan.thresholdRule || null,
-        payload: {
-          payeeName: d.payeeName, payeeBank: d.payeeBank, payeeAccount: d.payeeAccount,
-          usage: d.usage, usageLabel,
-          accountCode: accountInfo.code, accountName: accountInfo.name,
-          note: d.note, attachments: d.attachments,
-          bankFrom: d.bankFrom || null,
-        } as any,
-        storeId: storeId || null,
-        initiatorId: userId,
-        status: plan.autoApprove ? 'AUTO_APPROVED' : 'PENDING',
-        finalizedAt: plan.autoApprove ? new Date() : null,
-        steps: {
-          create: plan.steps.map((r: any, i: number) => ({
-            seq: i + 1, approverRole: r, status: 'PENDING' as const,
-          })),
+    const doc = await prisma.$transaction(async tx => {
+      const no = await nextDocumentNo(tx, tenantId)
+      return tx.document.create({
+        data: {
+          tenantId, no,
+          type: 'PAYMENT_REQUEST',
+          title, amount: d.amount,
+          isOverThreshold: plan.isOverThreshold,
+          thresholdRule: plan.thresholdRule || null,
+          payload: {
+            payeeName: d.payeeName, payeeBank: d.payeeBank, payeeAccount: d.payeeAccount,
+            usage: d.usage, usageLabel,
+            accountCode: accountInfo.code, accountName: accountInfo.name,
+            note: d.note, attachments: d.attachments,
+            bankFrom: d.bankFrom || null,
+          } as any,
+          storeId: storeId || null,
+          initiatorId: userId,
+          status: plan.autoApprove ? 'AUTO_APPROVED' : 'PENDING',
+          finalizedAt: plan.autoApprove ? new Date() : null,
+          steps: {
+            create: plan.steps.map((r: any, i: number) => ({
+              seq: i + 1, approverRole: r, status: 'PENDING' as const,
+            })),
+          },
         },
-      },
-      include: { steps: true },
+        include: { steps: true },
+      })
     })
     return reply.status(201).send(doc)
   })

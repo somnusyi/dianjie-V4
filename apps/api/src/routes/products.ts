@@ -4,6 +4,7 @@ import { prisma } from '@dianjie/db'
 import { cached, invalidatePattern } from '../lib/cache'
 import { isSupplierRole } from '../lib/auth-scope'
 import { signOssKey } from './upload'
+import { nextDocumentNo } from '../services/documentNo'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
@@ -416,14 +417,18 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     if (isSupplierRole(role) && parsed.data.status === 'DISABLED') {
       const eligible = matched.filter(item => item.status === 'ENABLED')
       if (eligible.length === 0) return reply.status(400).send({ error: '所选商品没有可提交停售的启用项' })
-      const ym = new Date().toISOString().slice(0, 7).replace('-', '')
-      const count = await prisma.document.count({ where: { tenantId, no: { startsWith: `DOC${ym}` } } })
-      const no = `DOC${ym}${String(count + 1).padStart(6, '0')}`
       const supplierName = supplierId
         ? (await prisma.supplier.findUnique({ where: { id: supplierId }, select: { name: true } }))?.name
         : null
-      await prisma.$transaction(async tx => {
-        await tx.product.updateMany({ where: { id: { in: eligible.map(item => item.id) } }, data: { status: 'PENDING_DISABLE' } })
+      const documentNo = await prisma.$transaction(async tx => {
+        const claimed = await tx.product.updateMany({
+          where: { ...where, id: { in: eligible.map(item => item.id) }, status: 'ENABLED' },
+          data: { status: 'PENDING_DISABLE' },
+        })
+        if (claimed.count !== eligible.length) {
+          throw Object.assign(new Error('商品状态已变化，请刷新后重试'), { statusCode: 409 })
+        }
+        const no = await nextDocumentNo(tx, tenantId)
         await tx.document.create({
           data: {
             tenantId, no, type: 'NEW_DISH',
@@ -445,9 +450,10 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
             metadata: { supplierId: supplierId || null, productIds: eligible.map(item => item.id) },
           },
         })
+        return no
       })
       void invalidatePattern(`products:full:${tenantId}:*`)
-      return { ok: true, count: eligible.length, statusChange: 'PENDING_APPROVAL', documentNo: no }
+      return { ok: true, count: eligible.length, statusChange: 'PENDING_APPROVAL', documentNo }
     }
 
     const targetStatus = parsed.data.status
@@ -500,47 +506,50 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       }
     }
     try {
-      const product = await prisma.product.create({
-        data: { tenantId, ...data } as any,
-      })
-      // 供应商创建 → 同时生成审批单
-      if (isSupplierRole(role)) {
-        const sup = await prisma.supplier.findUnique({ where: { id: userSupplierId }, select: { name: true } })
-        const ym = new Date().toISOString().slice(0, 7).replace('-', '')
-        const cnt = await prisma.document.count({ where: { tenantId, no: { startsWith: `DOC${ym}` } } })
-        const no = `DOC${ym}${String(cnt + 1).padStart(6, '0')}`
-        await prisma.document.create({
-          data: {
-            tenantId, no, type: 'NEW_DISH',
-            title: `新品上架: ${product.name}${product.spec ? ' (' + product.spec + ')' : ''} ¥${Number(product.price)}`,
-            amount: Number(product.price), isOverThreshold: false,
-            thresholdRule: '新供应商商品 直送总厨',
-            payload: {
-              action: 'CREATE',
-              productId: product.id, productName: product.name,
-              productCode: product.code, spec: product.spec, unit: product.unit,
-              price: Number(product.price), category: product.category,
-              supplierName: sup?.name || null,
+      const supplierName = isSupplierRole(role)
+        ? (await prisma.supplier.findUnique({ where: { id: userSupplierId! }, select: { name: true } }))?.name || null
+        : null
+      const product = await prisma.$transaction(async tx => {
+        const created = await tx.product.create({
+          data: { tenantId, ...data } as any,
+        })
+        // 供应商创建 → 商品、审批单和操作日志原子提交。
+        if (isSupplierRole(role)) {
+          const no = await nextDocumentNo(tx, tenantId)
+          await tx.document.create({
+            data: {
+              tenantId, no, type: 'NEW_DISH',
+              title: `新品上架: ${created.name}${created.spec ? ' (' + created.spec + ')' : ''} ¥${Number(created.price)}`,
+              amount: Number(created.price), isOverThreshold: false,
+              thresholdRule: '新供应商商品 直送总厨',
+              payload: {
+                action: 'CREATE',
+                productId: created.id, productName: created.name,
+                productCode: created.code, spec: created.spec, unit: created.unit,
+                price: Number(created.price), category: created.category,
+                supplierName,
+              },
+              initiatorId: userId, status: 'PENDING',
+              steps: { create: [{ seq: 1, approverRole: 'CHEF_DIRECTOR', status: 'PENDING' }] },
             },
-            initiatorId: userId, status: 'PENDING',
-            steps: { create: [{ seq: 1, approverRole: 'CHEF_DIRECTOR', status: 'PENDING' }] },
+          })
+        }
+        await tx.opLog.create({
+          data: {
+            tenantId, userId, role,
+            action: `新建商品 ${created.name} (#${created.code})`,
+            entityType: 'Product', target: created.code, targetId: created.id,
+            metadata: {
+              supplierId: created.supplierId,
+              after: {
+                code: created.code, name: created.name, spec: created.spec,
+                category: created.category, unit: created.unit, price: Number(created.price),
+                status: created.status, imageKey: created.imageKey,
+              },
+            },
           },
         })
-      }
-      await prisma.opLog.create({
-        data: {
-          tenantId, userId, role,
-          action: `新建商品 ${product.name} (#${product.code})`,
-          entityType: 'Product', target: product.code, targetId: product.id,
-          metadata: {
-            supplierId: product.supplierId,
-            after: {
-              code: product.code, name: product.name, spec: product.spec,
-              category: product.category, unit: product.unit, price: Number(product.price),
-              status: product.status, imageKey: product.imageKey,
-            },
-          },
-        },
+        return created
       })
       void invalidatePattern(`products:full:${tenantId}:*`)
       return reply.status(201).send(product)
@@ -648,26 +657,26 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     let approvalDocNo: string | null = null
     if (isSupplierRole(role) && created.length > 0) {
       const sup = await prisma.supplier.findUnique({ where: { id: userSupplierId }, select: { name: true } })
-      const ym = new Date().toISOString().slice(0, 7).replace('-', '')
-      const cnt = await prisma.document.count({ where: { tenantId, no: { startsWith: `DOC${ym}` } } })
-      const no = `DOC${ym}${String(cnt + 1).padStart(6, '0')}`
-      const doc = await prisma.document.create({
-        data: {
-          tenantId, no, type: 'NEW_DISH',
-          title: `批量新品: ${sup?.name || '供应商'} 上架 ${created.length} 个 SKU${filename ? ` (${filename})` : ''}`,
-          amount: null, isOverThreshold: false,
-          thresholdRule: '批量新供应商商品 直送总厨',
-          payload: {
-            action: 'BATCH',
-            batchId,
-            productIds: created.map(c => c.id),
-            count: created.length,
-            filename: filename || null,
-            supplierName: sup?.name || null,
+      const doc = await prisma.$transaction(async tx => {
+        const no = await nextDocumentNo(tx, tenantId)
+        return tx.document.create({
+          data: {
+            tenantId, no, type: 'NEW_DISH',
+            title: `批量新品: ${sup?.name || '供应商'} 上架 ${created.length} 个 SKU${filename ? ` (${filename})` : ''}`,
+            amount: null, isOverThreshold: false,
+            thresholdRule: '批量新供应商商品 直送总厨',
+            payload: {
+              action: 'BATCH',
+              batchId,
+              productIds: created.map(c => c.id),
+              count: created.length,
+              filename: filename || null,
+              supplierName: sup?.name || null,
+            },
+            initiatorId: userId, status: 'PENDING',
+            steps: { create: [{ seq: 1, approverRole: 'CHEF_DIRECTOR', status: 'PENDING' }] },
           },
-          initiatorId: userId, status: 'PENDING',
-          steps: { create: [{ seq: 1, approverRole: 'CHEF_DIRECTOR', status: 'PENDING' }] },
-        },
+        })
       })
       approvalDocNo = doc.no
     }
@@ -799,35 +808,39 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         },
       })
       if (pending) return reply.status(400).send({ error: `该商品已有待审批单 ${pending.no}` })
-      const ym = new Date().toISOString().slice(0, 7).replace('-', '')
-      const cnt = await prisma.document.count({ where: { tenantId, no: { startsWith: `DOC${ym}` } } })
-      const no = `DOC${ym}${String(cnt + 1).padStart(6, '0')}`
-      const doc = await prisma.document.create({
-        data: {
-          tenantId, no, type: 'NEW_DISH',
-          title: `停售: ${cur.name} (#${cur.code})`,
-          amount: null, isOverThreshold: false,
-          thresholdRule: 'SKU 停售 直送总厨',
-          payload: {
-            action: 'DISABLE',
-            productId: cur.id, productName: cur.name, productCode: cur.code,
-            supplierName: cur.supplier?.name || null,
+      const doc = await prisma.$transaction(async tx => {
+        const claimed = await tx.product.updateMany({
+          where: { ...where, status: 'ENABLED' },
+          data: { status: 'PENDING_DISABLE' as any },
+        })
+        if (claimed.count !== 1) {
+          throw Object.assign(new Error('商品状态已变化，请刷新后重试'), { statusCode: 409 })
+        }
+        const no = await nextDocumentNo(tx, tenantId)
+        const created = await tx.document.create({
+          data: {
+            tenantId, no, type: 'NEW_DISH',
+            title: `停售: ${cur.name} (#${cur.code})`,
+            amount: null, isOverThreshold: false,
+            thresholdRule: 'SKU 停售 直送总厨',
+            payload: {
+              action: 'DISABLE',
+              productId: cur.id, productName: cur.name, productCode: cur.code,
+              supplierName: cur.supplier?.name || null,
+            },
+            initiatorId: userId, status: 'PENDING',
+            steps: { create: [{ seq: 1, approverRole: 'CHEF_DIRECTOR', status: 'PENDING' }] },
           },
-          initiatorId: userId, status: 'PENDING',
-          steps: { create: [{ seq: 1, approverRole: 'CHEF_DIRECTOR', status: 'PENDING' }] },
-        },
-      })
-      // 当前商品状态改为 PENDING_DISABLE 标记审批中, 餐厅看不到 ENABLED 但流水仍清晰
-      await prisma.$transaction(async tx => {
-        await tx.product.updateMany({ where, data: { status: 'PENDING_DISABLE' as any } })
+        })
         await tx.opLog.create({
           data: {
             tenantId, userId, role,
-            action: `申请停售商品 ${cur.name} (#${cur.code})，审批单 ${doc.no}`,
+            action: `申请停售商品 ${cur.name} (#${cur.code})，审批单 ${created.no}`,
             entityType: 'Product', target: cur.code, targetId: cur.id,
-            metadata: { supplierId, before: { status: cur.status }, after: { status: 'PENDING_DISABLE' }, documentNo: doc.no },
+            metadata: { supplierId, before: { status: cur.status }, after: { status: 'PENDING_DISABLE' }, documentNo: created.no },
           },
         })
+        return created
       })
       void invalidatePattern(`products:full:${tenantId}:*`)
       return { count: 1, statusChange: 'PENDING_APPROVAL', documentNo: doc.no, message: '停售已提交总厨审批' }
@@ -855,40 +868,49 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         if (pending) {
           return reply.status(400).send({ error: `该商品已有待审批的调价单 ${pending.no}, 请等总厨处理后再改` })
         }
-        const ym = new Date().toISOString().slice(0, 7).replace('-', '')
-        const count = await prisma.document.count({ where: { tenantId, no: { startsWith: `DOC${ym}` } } })
-        const no = `DOC${ym}${String(count + 1).padStart(6, '0')}`
         const delta = newPrice - oldPrice
         const pct = oldPrice > 0 ? (delta / oldPrice * 100).toFixed(1) : 'N/A'
         const sign = delta > 0 ? '↑' : '↓'
         const title = `调价: ${cur.name} ¥${oldPrice} → ¥${newPrice} (${sign}${Math.abs(delta).toFixed(2)} / ${pct}%)`
-        const doc = await prisma.document.create({
-          data: {
-            tenantId, no, type: 'PRICE_ADJUSTMENT', title,
-            amount: newPrice, isOverThreshold: false,
-            thresholdRule: '调价 直送总厨',
-            payload: {
-              productId: cur.id, productName: cur.name, productCode: cur.code,
-              supplierName: cur.supplier?.name || null,
-              oldPrice, newPrice, delta, pct,
-            },
-            initiatorId: userId, status: 'PENDING',
-            steps: { create: [{ seq: 1, approverRole: 'CHEF_DIRECTOR', status: 'PENDING' }] },
-          },
-        })
-        // 价格字段从本次更新 data 里去除, 其他字段 (stock/minStock/...) 仍直接生效
+        // 价格字段从本次更新 data 里去除, 其他字段仍可与审批单原子提交。
         delete data.price
-        // 应用其他字段
-        if (Object.keys(data).length > 0) {
-          await prisma.product.updateMany({ where, data })
-        }
-        await prisma.opLog.create({
-          data: {
-            tenantId, userId, role,
-            action: `申请调价 ${cur.name} (#${cur.code})：¥${oldPrice} → ¥${newPrice}`,
-            entityType: 'Product', target: cur.code, targetId: cur.id,
-            metadata: { supplierId, before: { price: oldPrice }, requested: { price: newPrice }, documentNo: doc.no },
-          },
+        const doc = await prisma.$transaction(async tx => {
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`product-price:${cur.id}`}))::text AS locked`
+          const concurrent = await tx.document.findFirst({
+            where: {
+              tenantId, type: 'PRICE_ADJUSTMENT', status: 'PENDING',
+              payload: { path: ['productId'], equals: cur.id },
+            },
+            select: { no: true },
+          })
+          if (concurrent) {
+            throw Object.assign(new Error(`该商品已有待审批的调价单 ${concurrent.no}`), { statusCode: 409 })
+          }
+          const no = await nextDocumentNo(tx, tenantId)
+          const created = await tx.document.create({
+            data: {
+              tenantId, no, type: 'PRICE_ADJUSTMENT', title,
+              amount: newPrice, isOverThreshold: false,
+              thresholdRule: '调价 直送总厨',
+              payload: {
+                productId: cur.id, productName: cur.name, productCode: cur.code,
+                supplierName: cur.supplier?.name || null,
+                oldPrice, newPrice, delta, pct,
+              },
+              initiatorId: userId, status: 'PENDING',
+              steps: { create: [{ seq: 1, approverRole: 'CHEF_DIRECTOR', status: 'PENDING' }] },
+            },
+          })
+          if (Object.keys(data).length > 0) await tx.product.updateMany({ where, data })
+          await tx.opLog.create({
+            data: {
+              tenantId, userId, role,
+              action: `申请调价 ${cur.name} (#${cur.code})：¥${oldPrice} → ¥${newPrice}`,
+              entityType: 'Product', target: cur.code, targetId: cur.id,
+              metadata: { supplierId, before: { price: oldPrice }, requested: { price: newPrice }, documentNo: created.no },
+            },
+          })
+          return created
         })
         void invalidatePattern(`products:full:${tenantId}:*`)
         return { count: 1, priceChangeStatus: 'PENDING_APPROVAL', documentNo: doc.no, message: '涨价已提交总厨审批, 通过后自动生效' }

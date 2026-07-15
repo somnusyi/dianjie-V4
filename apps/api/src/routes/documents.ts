@@ -9,8 +9,8 @@
  */
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
-import dayjs from 'dayjs'
 import { routeFor, DocumentType, Role } from '../services/documentRouting'
+import { nextDocumentNo } from '../services/documentNo'
 import { invalidatePattern } from '../lib/cache'
 import { isSupplierRole } from '../lib/auth-scope'
 
@@ -207,43 +207,42 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
     const { type, title, amount, payload, storeId: bodyStoreId } = req.body as any
     if (!type || !title) return reply.status(400).send({ error: 'type 和 title 必填' })
 
-    const ym = dayjs().format('YYYYMM')
-    const count = await prisma.document.count({ where: { tenantId, no: { startsWith: `DOC${ym}` } } })
-    const no = `DOC${ym}${String(count + 1).padStart(6, '0')}`
-
     const plan = routeFor(type as DocumentType, Number(amount || 0))
 
-    const doc = await prisma.document.create({
-      data: {
-        tenantId, no,
-        type, title,
-        amount: amount ? Number(amount) : null,
-        isOverThreshold: plan.isOverThreshold,
-        thresholdRule: plan.thresholdRule || null,
-        payload: payload || {},
-        storeId: bodyStoreId || storeId || null,
-        initiatorId: userId,
-        status: plan.autoApprove ? 'AUTO_APPROVED' : 'PENDING',
-        finalizedAt: plan.autoApprove ? new Date() : null,
-        steps: {
-          create: plan.steps.map((r, i) => ({
-            seq: i + 1,
-            approverRole: r,
-            status: 'PENDING' as const,
-          })),
+    const doc = await prisma.$transaction(async tx => {
+      const no = await nextDocumentNo(tx, tenantId)
+      const created = await tx.document.create({
+        data: {
+          tenantId, no,
+          type, title,
+          amount: amount ? Number(amount) : null,
+          isOverThreshold: plan.isOverThreshold,
+          thresholdRule: plan.thresholdRule || null,
+          payload: payload || {},
+          storeId: bodyStoreId || storeId || null,
+          initiatorId: userId,
+          status: plan.autoApprove ? 'AUTO_APPROVED' : 'PENDING',
+          finalizedAt: plan.autoApprove ? new Date() : null,
+          steps: {
+            create: plan.steps.map((r, i) => ({
+              seq: i + 1,
+              approverRole: r,
+              status: 'PENDING' as const,
+            })),
+          },
         },
-      },
-      include: { steps: true },
-    })
-
-    await prisma.opLog.create({
-      data: {
-        tenantId, userId,
-        action: plan.autoApprove
-          ? `提交单据 ${no} (${type}) ¥${amount || 0} → 阈值内自动通过`
-          : `提交单据 ${no} (${type}) ¥${amount || 0} → ${plan.steps.join(' → ')}`,
-        target: no, entityType: 'Document', targetId: doc.id,
-      },
+        include: { steps: true },
+      })
+      await tx.opLog.create({
+        data: {
+          tenantId, userId,
+          action: plan.autoApprove
+            ? `提交单据 ${no} (${type}) ¥${amount || 0} → 阈值内自动通过`
+            : `提交单据 ${no} (${type}) ¥${amount || 0} → ${plan.steps.join(' → ')}`,
+          target: no, entityType: 'Document', targetId: created.id,
+        },
+      })
+      return created
     })
 
     return reply.status(201).send(doc)
@@ -314,30 +313,30 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
         const payload = (doc.payload as any) || {}
         let touchedProducts = false
         if (doc.type === 'PRICE_ADJUSTMENT' && payload.productId && payload.newPrice != null) {
-          await prisma.product.update({
-            where: { id: payload.productId },
+          await prisma.product.updateMany({
+            where: { id: payload.productId, tenantId },
             data: { price: Number(payload.newPrice) },
           }).catch(e => req.log?.error({ err: e }, '调价回调失败'))
           touchedProducts = true
         } else if (doc.type === 'NEW_DISH') {
           if (payload.action === 'CREATE' && payload.productId) {
-            await prisma.product.update({
-              where: { id: payload.productId }, data: { status: 'ENABLED' },
+            await prisma.product.updateMany({
+              where: { id: payload.productId, tenantId }, data: { status: 'ENABLED' },
             }).catch(e => req.log?.error({ err: e }, '新品上架回调失败'))
             touchedProducts = true
           } else if (payload.action === 'BATCH' && Array.isArray(payload.productIds)) {
             await prisma.product.updateMany({
-              where: { id: { in: payload.productIds } }, data: { status: 'ENABLED' },
+              where: { id: { in: payload.productIds }, tenantId }, data: { status: 'ENABLED' },
             }).catch(e => req.log?.error({ err: e }, '批量上架回调失败'))
             touchedProducts = true
           } else if (payload.action === 'DISABLE' && payload.productId) {
-            await prisma.product.update({
-              where: { id: payload.productId }, data: { status: 'DISABLED' },
+            await prisma.product.updateMany({
+              where: { id: payload.productId, tenantId }, data: { status: 'DISABLED' },
             }).catch(e => req.log?.error({ err: e }, '停售回调失败'))
             touchedProducts = true
           } else if (payload.action === 'BATCH_DISABLE' && Array.isArray(payload.productIds)) {
             await prisma.product.updateMany({
-              where: { id: { in: payload.productIds }, status: 'PENDING_DISABLE' as any },
+              where: { id: { in: payload.productIds }, tenantId, status: 'PENDING_DISABLE' as any },
               data: { status: 'DISABLED' },
             }).catch(e => req.log?.error({ err: e }, '批量停售回调失败'))
             touchedProducts = true
@@ -353,20 +352,20 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
       let touchedProducts = false
       if (doc.type === 'NEW_DISH') {
         if ((payload.action === 'CREATE') && payload.productId) {
-          await prisma.product.updateMany({ where: { id: payload.productId, status: 'PENDING_APPROVAL' as any }, data: { status: 'DISABLED' } })
+          await prisma.product.updateMany({ where: { id: payload.productId, tenantId, status: 'PENDING_APPROVAL' as any }, data: { status: 'DISABLED' } })
             .catch(e => req.log?.error({ err: e }, '新品拒绝-停售失败'))
           touchedProducts = true
         } else if (payload.action === 'BATCH' && Array.isArray(payload.productIds)) {
-          await prisma.product.updateMany({ where: { id: { in: payload.productIds }, status: 'PENDING_APPROVAL' as any }, data: { status: 'DISABLED' } })
+          await prisma.product.updateMany({ where: { id: { in: payload.productIds }, tenantId, status: 'PENDING_APPROVAL' as any }, data: { status: 'DISABLED' } })
             .catch(e => req.log?.error({ err: e }, '批量拒绝-停售失败'))
           touchedProducts = true
         } else if (payload.action === 'DISABLE' && payload.productId) {
-          await prisma.product.updateMany({ where: { id: payload.productId, status: 'PENDING_DISABLE' as any }, data: { status: 'ENABLED' } })
+          await prisma.product.updateMany({ where: { id: payload.productId, tenantId, status: 'PENDING_DISABLE' as any }, data: { status: 'ENABLED' } })
             .catch(e => req.log?.error({ err: e }, '停售拒绝-恢复失败'))
           touchedProducts = true
         } else if (payload.action === 'BATCH_DISABLE' && Array.isArray(payload.productIds)) {
           await prisma.product.updateMany({
-            where: { id: { in: payload.productIds }, status: 'PENDING_DISABLE' as any },
+            where: { id: { in: payload.productIds }, tenantId, status: 'PENDING_DISABLE' as any },
             data: { status: 'ENABLED' },
           }).catch(e => req.log?.error({ err: e }, '批量停售拒绝-恢复失败'))
           touchedProducts = true

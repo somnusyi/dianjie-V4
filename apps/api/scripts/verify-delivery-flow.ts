@@ -2,6 +2,7 @@ import 'dotenv/config'
 import assert from 'node:assert/strict'
 import bcrypt from 'bcryptjs'
 import { prisma } from '@dianjie/db'
+import { autoReceivePurchaseOrder } from '../src/services/scheduler'
 
 const API_BASE = process.env.TEST_API_BASE || 'http://localhost:4445'
 const TENANT_SLUG = process.env.PREVIEW_TENANT_SLUG || 'yaohai-test'
@@ -119,11 +120,30 @@ async function main() {
     deliveryIds.push(secondShip.body.deliveryId)
     assert.equal(Number(secondShip.body.newTotal), 18.75, '第二次默认只配送剩余 3kg')
     assert.equal((await api(`/api/orders/${orderId}/deliver`, supplierToken, { method: 'PATCH', body: '{}' })).status, 200)
-    const secondReceive = await api(`/api/orders/${orderId}/receive`, managerToken, {
-      method: 'PATCH', body: JSON.stringify({ items: [{ productId: product.id, receivedQty: 3 }] }),
-    })
-    assert.equal(secondReceive.status, 200, JSON.stringify(secondReceive.body))
-    receiptIds.push(secondReceive.body.receipt.id)
+    const overdueDeliveredAt = new Date(Date.now() - 25 * 60 * 60 * 1000)
+    await prisma.$transaction([
+      prisma.purchaseOrder.update({ where: { id: orderId }, data: { deliveredAt: overdueDeliveredAt } }),
+      prisma.deliveryOrder.update({ where: { id: secondShip.body.deliveryId }, data: { deliveredAt: overdueDeliveredAt } }),
+    ])
+    const [secondAutoReceive, secondManualReceive] = await Promise.all([
+      autoReceivePurchaseOrder(orderId),
+      api(`/api/orders/${orderId}/receive`, managerToken, {
+        method: 'PATCH', body: JSON.stringify({ items: [{ productId: product.id, receivedQty: 3 }] }),
+      }),
+    ])
+    assert.ok(secondAutoReceive, '自动收货竞争后必须返回入库单')
+    assert.equal(secondManualReceive.status, 200, JSON.stringify(secondManualReceive.body))
+    assert.equal(secondAutoReceive.receipt.id, secondManualReceive.body.receipt.id)
+    assert.equal(
+      [secondAutoReceive.duplicated, secondManualReceive.body.duplicated === true].filter(Boolean).length,
+      1,
+      '自动收货与手工收货竞争时必须恰好一方命中幂等结果',
+    )
+    assert.equal(await prisma.receipt.count({ where: { deliveryOrderId: secondShip.body.deliveryId } }), 1)
+    assert.equal(await prisma.deliveryOrderEvent.count({ where: { deliveryOrderId: secondShip.body.deliveryId, eventType: 'RECEIVED' } }), 1)
+    assert.equal(await prisma.paymentSchedule.count({ where: { receiptId: secondAutoReceive.receipt.id } }), 1)
+    assert.equal(await prisma.reconciliationItem.count({ where: { receiptId: secondAutoReceive.receipt.id } }), 1)
+    receiptIds.push(secondAutoReceive.receipt.id)
 
     const detail = await api(`/api/orders/${orderId}`, managerToken)
     assert.equal(detail.status, 200)

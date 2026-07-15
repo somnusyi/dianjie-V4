@@ -1,10 +1,196 @@
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
-import { executeBankPayment, approvePaymentSchedule } from './paymentSchedule'
+import { executeBankPayment, autoProcessAfterConfirm } from './paymentSchedule'
 import { sendNotification as notify } from './notification'
 import { fireAndForget as notifyWeCom } from './notify'
 import { runMeituanHourlySync, runMeituanDailyReconcile } from './meituan/cron'
 import { syncAllCmbAccounts } from './cmbAutoSync'
+import { nextBusinessNo } from './purchaseOrderIntegrity'
+
+/**
+ * 对一张已经送达、超时未确认的订货单执行自动收货。
+ * 配送单状态抢占、入库单、累计实收和订单状态在同一事务内提交；
+ * 因而可与门店手工收货安全竞争，失败方只读取已生成的入库单。
+ */
+export async function autoReceivePurchaseOrder(orderId: string) {
+  const overdueBefore = dayjs().subtract(24, 'hour').toDate()
+  const order = await prisma.purchaseOrder.findFirst({
+    where: { id: orderId, status: 'PENDING_CONFIRM', deliveredAt: { lt: overdueBefore } },
+    include: {
+      items: { where: { isActive: true } },
+      supplier: true,
+      store: true,
+      deliveries: {
+        where: { status: 'DELIVERED' },
+        orderBy: { deliveredAt: 'desc' },
+        take: 1,
+        include: { items: { include: { product: { select: { shelfDays: true } } } } },
+      },
+    },
+  })
+  if (!order) {
+    const existing = await prisma.receipt.findFirst({
+      where: { purchaseOrderId: orderId, deliveryOrderId: { not: null } },
+      orderBy: { createdAt: 'desc' },
+    })
+    return existing ? { receipt: existing, duplicated: true } : null
+  }
+
+  const delivery = order.deliveries[0]
+  if (!delivery) {
+    console.error(`自动收货跳过 ${order.no}: 未找到待收货配送单`)
+    return null
+  }
+
+  const receivedAt = new Date()
+  const fullyShipped = order.items.every(item => Number(item.shippedQty || 0) + 0.0001 >= Number(item.quantity))
+  const totalAmount = delivery.items.reduce(
+    (sum, item) => sum + Number(item.shippedQty) * Number(item.unitPriceSnapshot),
+    0,
+  )
+  const ym = dayjs(receivedAt).format('YYYYMM')
+
+  const receipt = await prisma.$transaction(async tx => {
+    const claimed = await tx.deliveryOrder.updateMany({
+      where: {
+        id: delivery.id,
+        tenantId: order.tenantId,
+        status: 'DELIVERED',
+        rowVersion: delivery.rowVersion,
+      },
+      data: {
+        status: 'RECEIVED',
+        receivedAt,
+        receivedById: order.createdById,
+        rowVersion: { increment: 1 },
+      },
+    })
+    if (claimed.count !== 1) return null
+
+    const latestReceipt = await tx.receipt.findFirst({
+      where: { tenantId: order.tenantId, no: { startsWith: `RK${ym}` } },
+      orderBy: { no: 'desc' },
+      select: { no: true },
+    })
+    const parsedFloor = Number(latestReceipt?.no.slice(`RK${ym}`.length) || 0)
+    const receiptFloor = Number.isFinite(parsedFloor) ? parsedFloor : 0
+    const no = await nextBusinessNo(tx, order.tenantId, 'RECEIPT', ym, 'RK', receiptFloor)
+
+    const created = await tx.receipt.create({
+      data: {
+        tenantId: order.tenantId,
+        no,
+        storeId: order.storeId,
+        supplierId: order.supplierId,
+        purchaseOrderId: order.id,
+        deliveryOrderId: delivery.id,
+        deliveryDate: receivedAt,
+        totalAmount,
+        status: 'CONFIRMED',
+        confirmedAt: receivedAt,
+        createdById: order.createdById,
+        items: {
+          create: delivery.items.map(item => ({
+            productId: item.productId,
+            quantity: item.shippedQty,
+            unitPrice: item.unitPriceSnapshot,
+            amount: Number(item.unitPriceSnapshot) * Number(item.shippedQty),
+            productionDate: item.manufactureDate || receivedAt,
+            expiryDate: item.expiryDate || dayjs(receivedAt).add(item.product.shelfDays, 'day').toDate(),
+          })),
+        },
+      },
+    })
+
+    for (const item of delivery.items) {
+      await tx.deliveryOrderItem.update({
+        where: { id: item.id },
+        data: { receivedQty: item.shippedQty },
+      })
+      const previous = await tx.deliveryOrderItem.aggregate({
+        where: {
+          productId: item.productId,
+          deliveryOrder: { purchaseOrderId: order.id, status: 'RECEIVED', id: { not: delivery.id } },
+        },
+        _sum: { receivedQty: true },
+      })
+      await tx.purchaseOrderItem.updateMany({
+        where: { purchaseOrderId: order.id, productId: item.productId },
+        data: { receivedQty: Number(previous._sum.receivedQty || 0) + Number(item.shippedQty) },
+      })
+    }
+
+    await tx.deliveryOrderEvent.create({
+      data: {
+        tenantId: order.tenantId,
+        deliveryOrderId: delivery.id,
+        eventType: 'RECEIVED',
+        fromStatus: 'DELIVERED',
+        toStatus: 'RECEIVED',
+        metadata: { receiptId: created.id, autoConfirmed: true },
+      },
+    })
+    await tx.purchaseOrder.update({
+      where: { id: order.id },
+      data: {
+        status: fullyShipped ? 'COMPLETED' : 'CONFIRMED',
+        receivedAt: fullyShipped ? receivedAt : null,
+        receiptId: created.id,
+        autoConfirmed: true,
+      },
+    })
+    await tx.opLog.create({
+      data: {
+        tenantId: order.tenantId,
+        userId: order.createdById,
+        action: `[自动] 24h 自动确认收货 ${order.no}`,
+        target: order.no,
+        entityType: 'PurchaseOrder',
+        targetId: order.id,
+      },
+    })
+    return created
+  })
+
+  if (!receipt) {
+    const existing = await prisma.receipt.findUnique({ where: { deliveryOrderId: delivery.id } })
+    return existing ? { receipt: existing, duplicated: true } : null
+  }
+
+  try {
+    const { voucherForReceipt } = await import('./voucher')
+    voucherForReceipt({
+      tenantId: order.tenantId,
+      receiptId: receipt.id,
+      receiptNo: receipt.no,
+      supplierName: order.supplier.name,
+      storeName: order.store.name,
+      amount: totalAmount,
+      date: receivedAt,
+    })
+  } catch (error: any) {
+    console.error(`自动收货凭证生成失败 ${order.no}:`, error.message)
+  }
+
+  try {
+    await autoProcessAfterConfirm({
+      tenantId: order.tenantId,
+      receipt: { ...receipt, confirmedAt: receipt.confirmedAt || receivedAt },
+      supplier: order.supplier,
+    })
+  } catch (error: any) {
+    console.error(`自动收货财务派生记录失败 ${order.no}:`, error.message)
+  }
+
+  notifyWeCom({
+    tenantId: order.tenantId,
+    event: 'PO_AUTO_RECEIVED',
+    eventKey: `PO:${order.id}:AUTO_RECEIVED`,
+    payload: { orderId: order.id, no: order.no },
+    toStoreIds: order.storeId ? [order.storeId] : undefined,
+  })
+  return { receipt, duplicated: false }
+}
 
 export async function runDailyCheck() {
   console.log(`⏰ [${dayjs().format('YYYY-MM-DD HH:mm')}] 开始账期日扫描...`)
@@ -143,99 +329,14 @@ export async function runDailyCheck() {
       status: 'PENDING_CONFIRM',
       deliveredAt: { lt: now.subtract(24, 'hour').toDate() },   // 必须有 deliveredAt 且超 24h
     },
-    include: {
-      items: { where: { isActive: true } }, supplier: true, store: true,
-      deliveries: {
-        where: { status: 'DELIVERED' }, orderBy: { deliveredAt: 'desc' }, take: 1,
-        include: { items: { include: { product: { select: { shelfDays: true } } } } },
-      },
-    },
+    select: { id: true, no: true },
     take: 200,
   })
+  let autoReceivedCount = 0
   for (const o of overdueShipped) {
     try {
-      // P0 race condition guard: 用 updateMany 抢占, 防止用户在同时间确认收货导致重复 receipt
-      const claim = await prisma.purchaseOrder.updateMany({
-        where: { id: o.id, status: 'PENDING_CONFIRM' },
-        data: { autoConfirmed: true },   // 先标 autoConfirmed, 后续再补 status
-      })
-      if (claim.count === 0) {
-        console.log(`⏭ 跳过 ${o.no} (并发竞争: 已不是 PENDING_CONFIRM)`)
-        continue
-      }
-      const delivery = o.deliveries[0]
-      if (!delivery) {
-        console.error(`自动收货跳过 ${o.no}: 未找到待收货配送单`)
-        continue
-      }
-      // 默认按下单数量全收 (没有报损)
-      const ym = dayjs().format('YYYYMM')
-      const cnt = await prisma.receipt.count({ where: { tenantId: o.tenantId, no: { startsWith: `RK${ym}` } } })
-      const no = `RK${ym}${String(cnt + 1).padStart(6, '0')}`
-      // 24h 自动收货 — 按 shippedQty (供应商实发量), 没填回退 quantity
-      const totalAmt = delivery.items.reduce((s, i) => s + Number(i.shippedQty) * Number(i.unitPriceSnapshot), 0)
-      const autoReceivedAt = new Date()
-      const receipt = await prisma.receipt.create({
-        data: {
-          tenantId: o.tenantId, no,
-          storeId: o.storeId, supplierId: o.supplierId,
-          purchaseOrderId: o.id, deliveryOrderId: delivery.id,
-          deliveryDate: autoReceivedAt,
-          totalAmount: totalAmt, status: 'CONFIRMED',
-          confirmedAt: autoReceivedAt, createdById: o.createdById,
-          items: { create: delivery.items.map(i => {
-            const q = i.shippedQty
-            return {
-              productId: i.productId, quantity: q, unitPrice: i.unitPriceSnapshot,
-              amount: Number(i.unitPriceSnapshot) * Number(q),
-              productionDate: i.manufactureDate || autoReceivedAt,
-              expiryDate: i.expiryDate || dayjs(autoReceivedAt).add(i.product.shelfDays, 'day').toDate(),
-            }
-          }) },
-        },
-      })
-      const fullyShipped = o.items.every(i => Number(i.shippedQty || 0) + 0.0001 >= Number(i.quantity))
-      await prisma.$transaction(async tx => {
-        for (const item of delivery.items) {
-          await tx.deliveryOrderItem.update({ where: { id: item.id }, data: { receivedQty: item.shippedQty } })
-          const previous = await tx.deliveryOrderItem.aggregate({
-            where: { productId: item.productId, deliveryOrder: { purchaseOrderId: o.id, status: 'RECEIVED', id: { not: delivery.id } } },
-            _sum: { receivedQty: true },
-          })
-          await tx.purchaseOrderItem.updateMany({
-            where: { purchaseOrderId: o.id, productId: item.productId },
-            data: { receivedQty: Number(previous._sum.receivedQty || 0) + Number(item.shippedQty) },
-          })
-        }
-        await tx.deliveryOrder.update({
-          where: { id: delivery.id },
-          data: { status: 'RECEIVED', receivedAt: new Date(), rowVersion: { increment: 1 } },
-        })
-        await tx.deliveryOrderEvent.create({
-          data: {
-            tenantId: o.tenantId, deliveryOrderId: delivery.id, eventType: 'RECEIVED',
-            fromStatus: 'DELIVERED', toStatus: 'RECEIVED', metadata: { receiptId: receipt.id, autoConfirmed: true },
-          },
-        })
-        await tx.purchaseOrder.update({
-          where: { id: o.id },
-          data: {
-            status: fullyShipped ? 'COMPLETED' : 'CONFIRMED', receivedAt: fullyShipped ? new Date() : null,
-            receiptId: receipt.id, autoConfirmed: true,
-          },
-        })
-      })
-      const { autoProcessAfterConfirm } = await import('./paymentSchedule')
-      const fullReceipt = await prisma.receipt.findUnique({ where: { id: receipt.id } }) as any
-      fullReceipt.confirmedAt = new Date()
-      await autoProcessAfterConfirm({ tenantId: o.tenantId, receipt: fullReceipt, supplier: o.supplier })
-      await prisma.opLog.create({ data: { tenantId: o.tenantId, userId: o.createdById, action: `[自动] 24h 自动确认收货 ${o.no}`, target: o.no, entityType: 'PurchaseOrder', targetId: o.id } })
-      notifyWeCom({
-        tenantId: o.tenantId, event: 'PO_AUTO_RECEIVED',
-        eventKey: `PO:${o.id}:AUTO_RECEIVED`,
-        payload: { orderId: o.id, no: o.no },
-        toStoreIds: o.storeId ? [o.storeId] : undefined,
-      })
+      const result = await autoReceivePurchaseOrder(o.id)
+      if (result && !result.duplicated) autoReceivedCount++
     } catch (e: any) {
       console.error(`自动收货失败 ${o.no}:`, e.message)
     }
@@ -268,7 +369,7 @@ export async function runDailyCheck() {
     }
   }
 
-  console.log(`✅ 自动收货 ${overdueShipped.length} 单, 自动同意报损 ${overdueLossClaims.length} 笔`)
+  console.log(`✅ 自动收货 ${autoReceivedCount}/${overdueShipped.length} 单, 自动同意报损 ${overdueLossClaims.length} 笔`)
 
   // 5. 周期性凭证模板 (房租/水电/折旧 月度自动建凭证)
   try {

@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import assert from 'node:assert/strict'
+import bcrypt from 'bcryptjs'
 import { prisma } from '@dianjie/db'
 
 const API_BASE = process.env.TEST_API_BASE || 'http://localhost:4444'
@@ -57,6 +58,17 @@ async function main() {
   })))
   const [product, productB, productC] = products
   const documentIds: string[] = []
+  const batchIds: string[] = []
+  const batchProductIds: string[] = []
+  const rollbackMarker = Date.now()
+  const rollbackFilename = `verify-rollback-${rollbackMarker}.xlsx`
+  const rollbackCode = `VERIFY-ROLLBACK-${rollbackMarker}`
+  const rollbackCategory = `验证回滚分类${rollbackMarker}`
+  let rollbackTriggerInstalled = false
+  let temporaryAdminId: string | null = null
+  let temporaryUnboundSupplierId: string | null = null
+  let temporaryTenantId: string | null = null
+  let temporarySupplierId: string | null = null
 
   try {
     const login = await api('/api/auth/login', null, {
@@ -131,6 +143,149 @@ async function main() {
     assert.equal(history.status, 200, JSON.stringify(history.body))
     assert.ok(history.body.some((row: any) => row.targetId === product.id || row.action.includes('批量')))
 
+    const batchCode = `VERIFY-BATCH-${Date.now()}`
+    const batchCreate = await api('/api/products/batch', token, {
+      method: 'POST',
+      body: JSON.stringify({
+        filename: `verify-batch-${Date.now()}.xlsx`,
+        items: [
+          { code: batchCode, name: '批量事务验证品', category: '验证分类A', unit: '件', price: 12 },
+          { code, name: '重复编码验证品', category: '验证分类A', unit: '件', price: 12 },
+          { name: '自动编码验证品一', category: '验证分类B', unit: '件', price: 13 },
+          { name: '自动编码验证品二', category: '验证分类B', unit: '件', price: 14 },
+        ],
+      }),
+    })
+    assert.equal(batchCreate.status, 201, JSON.stringify(batchCreate.body))
+    assert.equal(batchCreate.body.createdCount, 3, JSON.stringify(batchCreate.body))
+    assert.equal(batchCreate.body.failedCount, 1, JSON.stringify(batchCreate.body))
+    assert.equal(new Set(batchCreate.body.created.map((item: any) => item.code)).size, 3, '自动编码必须批内唯一')
+    assert.ok(batchCreate.body.approvalDocNo)
+    batchIds.push(batchCreate.body.batchId)
+    batchProductIds.push(...batchCreate.body.created.map((item: any) => item.id))
+    const batchState = await prisma.productBatch.findFirstOrThrow({
+      where: { id: batchCreate.body.batchId, tenantId: tenant.id, supplierId },
+      include: { products: { select: { id: true, status: true } } },
+    })
+    assert.equal(batchState.createdCount, 3)
+    assert.equal(batchState.failedCount, 1)
+    assert.ok(batchState.products.every(item => item.status === 'PENDING_APPROVAL'))
+    const batchDocument = await prisma.document.findFirstOrThrow({
+      where: { tenantId: tenant.id, no: batchCreate.body.approvalDocNo },
+    })
+    documentIds.push(batchDocument.id)
+    const batchPayload = batchDocument.payload as any
+    assert.equal(batchPayload.batchId, batchState.id)
+    assert.deepEqual(new Set(batchPayload.productIds), new Set(batchState.products.map(item => item.id)))
+
+    await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS verify_product_batch_document_failure_trigger ON documents')
+    await prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS verify_product_batch_document_failure()')
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION verify_product_batch_document_failure()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW.payload ->> 'filename' = '${rollbackFilename}' THEN
+          RAISE EXCEPTION 'verify product batch document rollback';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `)
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER verify_product_batch_document_failure_trigger
+      BEFORE INSERT ON documents
+      FOR EACH ROW EXECUTE FUNCTION verify_product_batch_document_failure()
+    `)
+    rollbackTriggerInstalled = true
+    try {
+      const rollbackBatch = await api('/api/products/batch', token, {
+        method: 'POST',
+        body: JSON.stringify({
+          filename: rollbackFilename,
+          items: [{ code: rollbackCode, name: '事务回滚验证品', category: rollbackCategory, unit: '件', price: 15 }],
+        }),
+      })
+      assert.equal(rollbackBatch.status, 500, JSON.stringify(rollbackBatch.body))
+    } finally {
+      await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS verify_product_batch_document_failure_trigger ON documents')
+      await prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS verify_product_batch_document_failure()')
+      rollbackTriggerInstalled = false
+    }
+    assert.equal(await prisma.product.count({ where: { tenantId: tenant.id, code: rollbackCode } }), 0)
+    assert.equal(await prisma.productBatch.count({ where: { tenantId: tenant.id, filename: rollbackFilename } }), 0)
+    assert.equal(await prisma.supplierProductCategory.count({
+      where: { tenantId: tenant.id, supplierId, name: rollbackCategory },
+    }), 0)
+
+    const isolationMarker = Date.now()
+    const temporaryTenant = await prisma.tenant.create({
+      data: { name: '批量租户隔离验证', slug: `verify-batch-isolation-${isolationMarker}` },
+    })
+    temporaryTenantId = temporaryTenant.id
+    const temporarySupplier = await prisma.supplier.create({
+      data: { tenantId: temporaryTenant.id, no: 'VERIFY-SUP', name: '跨租户验证供应商' },
+    })
+    temporarySupplierId = temporarySupplier.id
+    const adminEmail = `verify-batch-admin-${isolationMarker}@local.test`
+    const adminPassword = `verify-local-${isolationMarker}`
+    const temporaryAdmin = await prisma.user.create({
+      data: {
+        tenantId: tenant.id, name: '批量租户隔离验证管理员', email: adminEmail,
+        password: await bcrypt.hash(adminPassword, 4), role: 'ADMIN',
+      },
+    })
+    temporaryAdminId = temporaryAdmin.id
+    const adminLogin = await api('/api/auth/login', null, {
+      method: 'POST',
+      body: JSON.stringify({ identifier: adminEmail, password: adminPassword, tenantSlug: TENANT_SLUG }),
+    })
+    assert.equal(adminLogin.status, 200, JSON.stringify(adminLogin.body))
+    const isolationCode = `VERIFY-ISOLATION-${isolationMarker}`
+    const isolatedBatch = await api('/api/products/batch', adminLogin.body.token, {
+      method: 'POST',
+      body: JSON.stringify({
+        filename: `verify-isolation-${isolationMarker}.xlsx`,
+        items: [{
+          code: isolationCode, name: '跨租户供应商验证品', supplierId: temporarySupplier.id,
+          category: '其他', unit: '件', price: 16,
+        }],
+      }),
+    })
+    assert.equal(isolatedBatch.status, 201, JSON.stringify(isolatedBatch.body))
+    assert.equal(isolatedBatch.body.createdCount, 0)
+    assert.equal(isolatedBatch.body.failedCount, 1)
+    assert.match(isolatedBatch.body.failed[0].error, /不属于当前租户/)
+    batchIds.push(isolatedBatch.body.batchId)
+    assert.equal(await prisma.product.count({ where: { tenantId: tenant.id, code: isolationCode } }), 0)
+    const isolatedSingleCode = `${isolationCode}-SINGLE`
+    const isolatedSingle = await api('/api/products', adminLogin.body.token, {
+      method: 'POST',
+      body: JSON.stringify({
+        code: isolatedSingleCode, name: '单条跨租户供应商验证品', supplierId: temporarySupplier.id,
+        category: '其他', unit: '件', price: 16,
+      }),
+    })
+    if (isolatedSingle.body?.id) batchProductIds.push(isolatedSingle.body.id)
+    assert.equal(isolatedSingle.status, 400, JSON.stringify(isolatedSingle.body))
+    assert.equal(await prisma.product.count({ where: { tenantId: tenant.id, code: isolatedSingleCode } }), 0)
+
+    const unboundEmail = `verify-unbound-supplier-${isolationMarker}@local.test`
+    const unboundPassword = `verify-unbound-${isolationMarker}`
+    const unboundSupplier = await prisma.user.create({
+      data: {
+        tenantId: tenant.id, name: '未绑定供应商隔离验证', email: unboundEmail,
+        password: await bcrypt.hash(unboundPassword, 4), role: 'SUPPLIER_STAFF', supplierId: null,
+      },
+    })
+    temporaryUnboundSupplierId = unboundSupplier.id
+    const unboundLogin = await api('/api/auth/login', null, {
+      method: 'POST',
+      body: JSON.stringify({ identifier: unboundEmail, password: unboundPassword, tenantSlug: TENANT_SLUG }),
+    })
+    assert.equal(unboundLogin.status, 200, JSON.stringify(unboundLogin.body))
+    const unboundList = await api('/api/products?page=1&pageSize=20', unboundLogin.body.token)
+    assert.equal(unboundList.status, 403, JSON.stringify(unboundList.body))
+
     const clearAll = await api('/api/products/clear-all', token, {
       method: 'DELETE', body: JSON.stringify({ confirm: 'CLEAR_ALL' }),
     })
@@ -144,21 +299,42 @@ async function main() {
       batchDisableApproval: true,
       concurrentDocumentNumbers: true,
       duplicateDisableRejected: true,
+      batchPartialSuccessAtomic: true,
+      batchDocumentFailureRolledBack: true,
+      crossTenantSupplierBlocked: true,
+      unboundSupplierListBlocked: true,
       auditHistory: true,
       destructiveClearBlocked: true,
     }))
   } finally {
+    if (rollbackTriggerInstalled) {
+      await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS verify_product_batch_document_failure_trigger ON documents')
+      await prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS verify_product_batch_document_failure()')
+    }
     await prisma.opLog.deleteMany({
       where: {
-        tenantId: tenant.id, userId: user.id, createdAt: { gte: startedAt },
+        tenantId: tenant.id,
+        userId: { in: [user.id, ...(temporaryAdminId ? [temporaryAdminId] : []), ...(temporaryUnboundSupplierId ? [temporaryUnboundSupplierId] : [])] },
+        createdAt: { gte: startedAt },
         entityType: { in: ['Product', 'ProductBatch', 'ProductCategory'] },
       },
     })
+    if (temporaryAdminId) {
+      await prisma.opLog.deleteMany({ where: { tenantId: tenant.id, userId: temporaryAdminId } })
+    }
+    if (temporaryUnboundSupplierId) {
+      await prisma.opLog.deleteMany({ where: { tenantId: tenant.id, userId: temporaryUnboundSupplierId } })
+    }
     if (documentIds.length) await prisma.document.deleteMany({ where: { id: { in: documentIds } } })
-    await prisma.product.deleteMany({ where: { id: { in: products.map(item => item.id) } } })
+    await prisma.product.deleteMany({ where: { id: { in: [...products.map(item => item.id), ...batchProductIds] } } })
+    if (batchIds.length) await prisma.productBatch.deleteMany({ where: { id: { in: batchIds } } })
     await prisma.supplierProductCategory.deleteMany({
-      where: { tenantId: tenant.id, supplierId, name: { in: categoryNames } },
+      where: { tenantId: tenant.id, supplierId, name: { in: [...categoryNames, rollbackCategory] } },
     })
+    const temporaryUserIds = [temporaryAdminId, temporaryUnboundSupplierId].filter(Boolean) as string[]
+    if (temporaryUserIds.length) await prisma.user.deleteMany({ where: { id: { in: temporaryUserIds } } })
+    if (temporarySupplierId) await prisma.supplier.deleteMany({ where: { id: temporarySupplierId } })
+    if (temporaryTenantId) await prisma.tenant.deleteMany({ where: { id: temporaryTenantId } })
   }
 }
 

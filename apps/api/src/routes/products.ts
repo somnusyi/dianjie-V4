@@ -5,6 +5,7 @@ import { cached, invalidatePattern } from '../lib/cache'
 import { isSupplierRole } from '../lib/auth-scope'
 import { signOssKey } from './upload'
 import { nextDocumentNo } from '../services/documentNo'
+import { createId } from '@paralleldrive/cuid2'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
@@ -41,14 +42,13 @@ const productCreateSchema = z.object({
   shelfDays: z.preprocess(v => (v === null || v === '' || (typeof v === 'number' && !Number.isFinite(v))) ? undefined : v,
                           z.number().int().min(0).max(3650).optional().default(7)),
   supplierId: z.string().optional(),
-  status:    z.string().optional(),
+  status:    z.enum(['PENDING_APPROVAL', 'PENDING_DISABLE', 'ENABLED', 'DISABLED']).optional(),
 }).strict()
 
-/** 自动生成商品 code: 取 supplierId 末 4 位 + 6 位时间戳 */
+/** 自动生成商品 code: 供应商短码 + 随机短 ID，避免同毫秒批量导入互撞。 */
 function autoCode(supplierId: string | undefined): string {
   const sup = supplierId ? supplierId.slice(-4).toUpperCase() : 'TEN0'
-  const ts = Date.now().toString(36).slice(-6).toUpperCase()
-  return `${sup}-${ts}`
+  return `${sup}-${createId().slice(-10).toUpperCase()}`
 }
 
 function jsonSafe(value: unknown): any {
@@ -89,7 +89,7 @@ async function ensureActiveSupplierCategory(tenantId: string, supplierId: string
 }
 
 export const productRoutes: FastifyPluginAsync = async (app) => {
-  app.get('/', auth(app), async (req: any) => {
+  app.get('/', auth(app), async (req: any, reply: any) => {
     const { category, status, q, page, pageSize = '20' } = req.query as any
     const { tenantId, role, supplierId } = req.user
     const where: any = { tenantId }
@@ -104,7 +104,10 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       ]
     }
     // 供应商账号只能看自己的商品
-    if (isSupplierRole(role) && supplierId) where.supplierId = supplierId
+    if (isSupplierRole(role)) {
+      if (!supplierId) return reply.status(403).send({ error: '账号未绑定供应商' })
+      where.supplierId = supplierId
+    }
 
     // 不传 page 时返回全量（兼容下拉框），缓存 10 分钟
     // 注意 cache key 加上 supplier scope，避免供应商之间互相污染
@@ -487,11 +490,20 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     if (isSupplierRole(role)) {
       if (!userSupplierId) return reply.status(403).send({ error: '账号未绑定供应商' })
       data.supplierId = userSupplierId
+      const scopedSupplier = await prisma.supplier.findFirst({
+        where: { id: userSupplierId, tenantId }, select: { id: true },
+      })
+      if (!scopedSupplier) return reply.status(403).send({ error: '账号绑定的供应商不属于当前租户' })
       // 供应商新建 SKU 默认进入"待总厨审批"状态, 通过后才上架
       data.status = 'PENDING_APPROVAL'
       // 商品报价与供应商库存解耦；库存只能通过库存入库/调整接口形成流水。
       delete data.stock
       delete data.minStock
+    } else if (data.supplierId) {
+      const scopedSupplier = await prisma.supplier.findFirst({
+        where: { id: data.supplierId, tenantId }, select: { id: true },
+      })
+      if (!scopedSupplier) return reply.status(400).send({ error: '供应商不存在或不属于当前租户' })
     }
     if (data.imageKey && !String(data.imageKey).startsWith(`products/${tenantId}/`)) {
       return reply.status(400).send({ error: '商品图片不属于当前租户' })
@@ -507,8 +519,11 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     }
     try {
       const supplierName = isSupplierRole(role)
-        ? (await prisma.supplier.findUnique({ where: { id: userSupplierId! }, select: { name: true } }))?.name || null
+        ? (await prisma.supplier.findFirst({ where: { id: userSupplierId!, tenantId }, select: { name: true } }))?.name || null
         : null
+      if (isSupplierRole(role) && !supplierName) {
+        return reply.status(403).send({ error: '账号绑定的供应商不属于当前租户' })
+      }
       const product = await prisma.$transaction(async tx => {
         const created = await tx.product.create({
           data: { tenantId, ...data } as any,
@@ -578,23 +593,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: '单次最多 500 行' })
     }
 
-    // 先建一个 batch 记录, 创建的 product 都挂上 batchId
-    const batch = await prisma.productBatch.create({
-      data: {
-        tenantId,
-        supplierId: isSupplierRole(role) ? userSupplierId || null : null,
-        uploadedById: userId,
-        filename,
-        totalRows: items.length,
-        createdCount: 0,
-        failedCount: 0,
-        failedRows: [] as any,
-      },
-    })
-    const batchId = batch.id
-
-    const created: any[] = []
     const failed: { row: number; code?: string; error: string }[] = []
+    let candidates: { row: number; id: string; data: any }[] = []
 
     for (let i = 0; i < items.length; i++) {
       const raw = items[i]
@@ -621,89 +621,175 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       delete data.minStock
       // 供应商批量上传 → 默认 PENDING_APPROVAL, 一会儿一并起一个审批单
       if (isSupplierRole(role)) data.status = 'PENDING_APPROVAL'
-      try {
-        if (isSupplierRole(role)) {
-          await ensureActiveSupplierCategory(tenantId, userSupplierId!, data.category)
-        }
-        const product = await prisma.product.create({ data: { tenantId, batchId, ...data } as any })
-        created.push({ row: i + 1, id: product.id, code: product.code, name: product.name })
-      } catch (e: any) {
-        if (e.code === 'P2002') {
-          if (data.code?.includes('-')) {
-            data.code = autoCode(data.supplierId || userSupplierId)
-            try {
-              const p2 = await prisma.product.create({ data: { tenantId, batchId, ...data } as any })
-              created.push({ row: i + 1, id: p2.id, code: p2.code, name: p2.name })
-              continue
-            } catch { /* fall through */ }
-          }
-          failed.push({ row: i + 1, code: data.code, error: '编码已存在' })
-        } else {
-          failed.push({ row: i + 1, code: data.code, error: e.message || 'unknown' })
-        }
-      }
+      candidates.push({ row: i + 1, id: createId(), data })
     }
-    // 更新 batch 终态 (createdCount 0 时也保留, 让用户能在历史里看到失败)
-    await prisma.productBatch.update({
-      where: { id: batchId },
-      data: {
-        createdCount: created.length,
-        failedCount: failed.length,
-        failedRows: failed as any,
-      },
-    })
 
-    // 供应商批量上传 → 起一个 NEW_DISH(action=BATCH) 审批单, 总厨一次批准全部
-    let approvalDocNo: string | null = null
-    if (isSupplierRole(role) && created.length > 0) {
-      const sup = await prisma.supplier.findUnique({ where: { id: userSupplierId }, select: { name: true } })
-      const doc = await prisma.$transaction(async tx => {
-        const no = await nextDocumentNo(tx, tenantId)
-        return tx.document.create({
+    if (isSupplierRole(role) && userSupplierId) {
+      const categoryNames = [...new Set(candidates.map(candidate => candidate.data.category))]
+      const categories = await prisma.supplierProductCategory.findMany({
+        where: { tenantId, supplierId: userSupplierId, name: { in: categoryNames } },
+        select: { name: true, isActive: true },
+      })
+      const inactive = new Set(categories.filter(category => !category.isActive).map(category => category.name))
+      candidates = candidates.filter(candidate => {
+        if (!inactive.has(candidate.data.category)) return true
+        failed.push({ row: candidate.row, code: candidate.data.code, error: `分类「${candidate.data.category}」已停用，请先恢复后再使用` })
+        return false
+      })
+    } else if (!isSupplierRole(role)) {
+      // 总部账号可为商品指定供应商，但只能引用本租户供应商。
+      const requestedSupplierIds = [...new Set(candidates.map(candidate => candidate.data.supplierId).filter(Boolean))] as string[]
+      const allowedSuppliers = requestedSupplierIds.length > 0
+        ? await prisma.supplier.findMany({
+          where: { tenantId, id: { in: requestedSupplierIds } }, select: { id: true },
+        })
+        : []
+      const allowedSupplierIds = new Set(allowedSuppliers.map(supplier => supplier.id))
+      candidates = candidates.filter(candidate => {
+        const candidateSupplierId = candidate.data.supplierId
+        if (!candidateSupplierId || allowedSupplierIds.has(candidateSupplierId)) return true
+        failed.push({ row: candidate.row, code: candidate.data.code, error: '供应商不存在或不属于当前租户' })
+        return false
+      })
+    }
+
+    const supplier = isSupplierRole(role) && userSupplierId
+      ? await prisma.supplier.findFirst({ where: { id: userSupplierId, tenantId }, select: { name: true } })
+      : null
+    if (isSupplierRole(role) && userSupplierId && !supplier) {
+      return reply.status(403).send({ error: '账号绑定的供应商不属于当前租户' })
+    }
+
+    try {
+      const result = await prisma.$transaction(async tx => {
+        const batch = await tx.productBatch.create({
           data: {
-            tenantId, no, type: 'NEW_DISH',
-            title: `批量新品: ${sup?.name || '供应商'} 上架 ${created.length} 个 SKU${filename ? ` (${filename})` : ''}`,
-            amount: null, isOverThreshold: false,
-            thresholdRule: '批量新供应商商品 直送总厨',
-            payload: {
-              action: 'BATCH',
-              batchId,
-              productIds: created.map(c => c.id),
-              count: created.length,
-              filename: filename || null,
-              supplierName: sup?.name || null,
-            },
-            initiatorId: userId, status: 'PENDING',
-            steps: { create: [{ seq: 1, approverRole: 'CHEF_DIRECTOR', status: 'PENDING' }] },
+            tenantId,
+            supplierId: isSupplierRole(role) ? userSupplierId || null : null,
+            uploadedById: userId,
+            filename,
+            totalRows: items.length,
+            createdCount: 0,
+            failedCount: 0,
+            failedRows: [] as any,
           },
         })
-      })
-      approvalDocNo = doc.no
-    }
 
-    void invalidatePattern(`products:full:${tenantId}:*`)
-    if (created.length > 0) {
-      await prisma.opLog.create({
-        data: {
-          tenantId, userId, role,
-          action: `批量上传商品：成功 ${created.length}，失败 ${failed.length}`,
-          entityType: 'ProductBatch', target: filename || undefined, targetId: batchId,
-          metadata: {
-            supplierId: isSupplierRole(role) ? userSupplierId || null : null,
-            productIds: created.map(item => item.id), filename,
-            createdCount: created.length, failedCount: failed.length,
+        if (isSupplierRole(role) && userSupplierId && candidates.length > 0) {
+          const categoryNames = [...new Set(candidates.map(candidate => candidate.data.category))]
+          const existingCategories = await tx.supplierProductCategory.findMany({
+            where: { tenantId, supplierId: userSupplierId, name: { in: categoryNames } },
+            select: { name: true },
+          })
+          const existingNames = new Set(existingCategories.map(category => category.name))
+          const missingNames = categoryNames.filter(name => !existingNames.has(name))
+          if (missingNames.length > 0) {
+            const max = await tx.supplierProductCategory.aggregate({
+              where: { tenantId, supplierId: userSupplierId }, _max: { sortOrder: true },
+            })
+            await tx.supplierProductCategory.createMany({
+              data: missingNames.map((name, index) => ({
+                tenantId, supplierId: userSupplierId, name,
+                sortOrder: (max._max.sortOrder ?? -1) + index + 1,
+                isSystem: name === '其他',
+              })),
+              skipDuplicates: true,
+            })
+          }
+          const activeCategoryCount = await tx.supplierProductCategory.count({
+            where: { tenantId, supplierId: userSupplierId, name: { in: categoryNames }, isActive: true },
+          })
+          if (activeCategoryCount !== categoryNames.length) {
+            throw new Error('商品分类状态已变化，请刷新后重试')
+          }
+        }
+
+        if (candidates.length > 0) {
+          await tx.product.createMany({
+            data: candidates.map(candidate => ({
+              id: candidate.id, tenantId, batchId: batch.id, ...candidate.data,
+            })) as any,
+            skipDuplicates: true,
+          })
+        }
+        const insertedProducts = candidates.length > 0
+          ? await tx.product.findMany({
+            where: { tenantId, id: { in: candidates.map(candidate => candidate.id) } },
+            select: { id: true, code: true, name: true },
+          })
+          : []
+        const insertedById = new Map(insertedProducts.map(product => [product.id, product]))
+        const created = candidates.flatMap(candidate => {
+          const product = insertedById.get(candidate.id)
+          if (!product) {
+            failed.push({ row: candidate.row, code: candidate.data.code, error: '编码已存在' })
+            return []
+          }
+          return [{ row: candidate.row, id: product.id, code: product.code, name: product.name }]
+        })
+        failed.sort((a, b) => a.row - b.row)
+
+        await tx.productBatch.update({
+          where: { id: batch.id },
+          data: {
+            createdCount: created.length,
+            failedCount: failed.length,
+            failedRows: failed as any,
           },
-        },
+        })
+
+        let approvalDocNo: string | null = null
+        if (isSupplierRole(role) && created.length > 0) {
+          const no = await nextDocumentNo(tx, tenantId)
+          const doc = await tx.document.create({
+            data: {
+              tenantId, no, type: 'NEW_DISH',
+              title: `批量新品: ${supplier?.name || '供应商'} 上架 ${created.length} 个 SKU${filename ? ` (${filename})` : ''}`,
+              amount: null, isOverThreshold: false,
+              thresholdRule: '批量新供应商商品 直送总厨',
+              payload: {
+                action: 'BATCH', batchId: batch.id,
+                productIds: created.map(product => product.id),
+                count: created.length, filename: filename || null,
+                supplierName: supplier?.name || null,
+              },
+              initiatorId: userId, status: 'PENDING',
+              steps: { create: [{ seq: 1, approverRole: 'CHEF_DIRECTOR', status: 'PENDING' }] },
+            },
+          })
+          approvalDocNo = doc.no
+        }
+
+        if (created.length > 0) {
+          await tx.opLog.create({
+            data: {
+              tenantId, userId, role,
+              action: `批量上传商品：成功 ${created.length}，失败 ${failed.length}`,
+              entityType: 'ProductBatch', target: filename || undefined, targetId: batch.id,
+              metadata: {
+                supplierId: isSupplierRole(role) ? userSupplierId || null : null,
+                productIds: created.map(item => item.id), filename,
+                createdCount: created.length, failedCount: failed.length,
+              },
+            },
+          })
+        }
+        return { batchId: batch.id, created, approvalDocNo }
       })
+      void invalidatePattern(`products:full:${tenantId}:*`)
+      return reply.status(201).send({
+        batchId: result.batchId,
+        total: items.length,
+        createdCount: result.created.length,
+        failedCount: failed.length,
+        created: result.created,
+        failed,
+        approvalDocNo: result.approvalDocNo,
+      })
+    } catch (error: any) {
+      req.log.error({ err: error }, 'product batch create failed')
+      return reply.status(500).send({ error: '批量创建失败，未保存任何商品' })
     }
-    return reply.status(201).send({
-      batchId,
-      total: items.length,
-      createdCount: created.length,
-      failedCount: failed.length,
-      created, failed,
-      approvalDocNo,   // 供应商批量时返回, 前端可提示"待总厨审批"
-    })
   })
 
   // ─── 上传历史列表 ─────────────────────────────────

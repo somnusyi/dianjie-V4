@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   buildOrderSnapshot,
   diffOrderSnapshots,
   lineAmount,
+  nextBusinessNo,
   revisionType,
   snapshotHash,
   sumOrderAmount,
@@ -90,5 +91,22 @@ describe('purchase order integrity', () => {
     })
     expect(buildOrderSnapshot(order, 'original').items).toHaveLength(1)
     expect(buildOrderSnapshot(order, 'current').items).toHaveLength(2)
+  })
+
+  it('starts a new business sequence above historical document numbers', async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 0 })
+    const upsert = vi.fn().mockResolvedValue({ value: 43 })
+    const tx = { businessSequence: { updateMany, upsert } } as any
+
+    const no = await nextBusinessNo(tx, 'tenant-1', 'RECEIPT', '202607', 'RK', 42)
+
+    expect(no).toBe('RK202607000043')
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { tenantId: 'tenant-1', scope: 'RECEIPT', period: '202607', value: { lt: 42 } },
+      data: { value: 42 },
+    })
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ value: 43 }),
+    }))
   })
 })

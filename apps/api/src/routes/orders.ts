@@ -74,6 +74,13 @@ const orderListQuerySchema = z.object({
   path: ['dateFrom'],
 })
 
+class ReceiptAlreadyProcessedError extends Error {
+  constructor() {
+    super('delivery receipt already processed')
+    this.name = 'ReceiptAlreadyProcessedError'
+  }
+}
+
 // 内存级幂等缓存 (60s TTL) — 防止厨师长双击 / 网络重试创双单
 const idempotencyCache = new Map<string, { orderId: string; orderNo: string; expiresAt: number }>()
 function getIdempotent(key: string) {
@@ -1158,6 +1165,33 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const { items: receivedItems, evidenceImages, reason } = req.body as any  // [{ productId, receivedQty }] + 可选证据图 + 可选自定义报损原因
     const lossReason = (typeof reason === 'string' && reason.trim()) ? reason.trim().slice(0, 30) : null
 
+    const findDuplicateReceiptResponse = async (deliveryOrderId?: string) => {
+      const duplicateWhere: any = {
+        tenantId,
+        purchaseOrderId: id,
+        deliveryOrderId: deliveryOrderId || { not: null },
+      }
+      if (isStoreScoped(role)) duplicateWhere.storeId = storeId
+      const existingReceipt = await prisma.receipt.findFirst({
+        where: duplicateWhere,
+        orderBy: { createdAt: 'desc' },
+      })
+      if (!existingReceipt) return null
+      const currentOrder = await prisma.purchaseOrder.findFirst({
+        where: { id, tenantId, ...(isStoreScoped(role) ? { storeId } : {}) },
+        select: { status: true },
+      })
+      const fullyShipped = currentOrder?.status !== 'CONFIRMED'
+      return {
+        success: true,
+        receipt: existingReceipt,
+        deliveryId: existingReceipt.deliveryOrderId,
+        fullyShipped,
+        remainingDelivery: !fullyShipped,
+        duplicated: true,
+      }
+    }
+
     // P1-1: 仅店长 / 厨师长 / 老板 / 超管 能确认收货 (供应商不该能调)
     if (!['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
       throw { statusCode: 403, message: '仅门店人员可确认收货' }
@@ -1180,27 +1214,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       // 客户端可能在收货成功后因断网未拿到响应并重试。此时 PO 已离开
       // PENDING_CONFIRM，但 deliveryOrderId 的唯一约束已经证明该配送单收过货。
       // 返回原入库单，避免把一次成功操作表现成失败，也避免前端诱导重复处理。
-      const duplicateWhere: any = { tenantId, purchaseOrderId: id, deliveryOrderId: { not: null } }
-      if (isStoreScoped(role)) duplicateWhere.storeId = storeId
-      const existingReceipt = await prisma.receipt.findFirst({
-        where: duplicateWhere,
-        orderBy: { createdAt: 'desc' },
-      })
-      if (existingReceipt) {
-        const currentOrder = await prisma.purchaseOrder.findFirst({
-          where: { id, tenantId, ...(isStoreScoped(role) ? { storeId } : {}) },
-          select: { status: true },
-        })
-        const fullyShipped = currentOrder?.status !== 'CONFIRMED'
-        return {
-          success: true,
-          receipt: existingReceipt,
-          deliveryId: existingReceipt.deliveryOrderId,
-          fullyShipped,
-          remainingDelivery: !fullyShipped,
-          duplicated: true,
-        }
-      }
+      const duplicate = await findDuplicateReceiptResponse()
+      if (duplicate) return duplicate
       throw { statusCode: 400, message: '订单不存在 / 非待确认 / 非本店' }
     }
     const delivery = order.deliveries[0]
@@ -1227,53 +1242,6 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       (sum, item) => sum + item.actualReceivedQty * Number(item.unitPriceSnapshot), 0,
     )
 
-    // 生成入库单
-    const ym = dayjs().format('YYYYMM')
-    const count = await prisma.receipt.count({ where: { tenantId, no: { startsWith: `RK${ym}` } } })
-    const no = `RK${ym}${String(count + 1).padStart(6, '0')}`
-
-    const receivedAt = new Date()
-    const receipt = await prisma.receipt.create({
-      data: {
-        tenantId, no,
-        purchaseOrderId: order.id,
-        deliveryOrderId: delivery.id,
-        storeId: order.storeId,
-        supplierId: order.supplierId,
-        deliveryDate: receivedAt,
-        totalAmount: actualReceivedTotal,   // 实收金额, 不含损耗
-        status: 'CONFIRMED',
-        confirmedAt: receivedAt,
-        createdById: userId,
-        items: {
-          create: deliveryReceivedItems.map(item => ({
-            productId: item.productId,
-            quantity: new Prisma.Decimal(item.actualReceivedQty),
-            unitPrice: item.unitPriceSnapshot,
-            amount: new Prisma.Decimal(item.actualReceivedQty).mul(item.unitPriceSnapshot),
-            productionDate: item.manufactureDate || receivedAt,
-            expiryDate: item.expiryDate || dayjs(receivedAt).add(item.product.shelfDays, 'day').toDate(),
-          })),
-        },
-      },
-    })
-
-    // 财务凭证: 收货入库 → 借:库存商品 / 贷:应付账款
-    try {
-      const supplier = await prisma.supplier.findUnique({ where: { id: order.supplierId }, select: { name: true } })
-      const store = await prisma.store.findUnique({ where: { id: order.storeId }, select: { name: true } })
-      const { voucherForReceipt } = await import('../services/voucher')
-      voucherForReceipt({
-        tenantId, receiptId: receipt.id, receiptNo: receipt.no,
-        supplierName: supplier?.name || '供应商',
-        storeName: store?.name || '门店',
-        amount: Number(actualReceivedTotal),
-        date: new Date(),
-      })
-    } catch (e: any) {
-      req.log.warn({ err: e }, '收货凭证生成失败 (不影响主流程)')
-    }
-
     // 判断是否存在报损 — 应到 = shippedQty (ship 时议定的量), 实收 < 应到 才算报损
     // 供应商在 ship 时调减不算报损 (金额已按实发算清, 没有未付的钱)
     const lossLines = deliveryReceivedItems
@@ -1299,75 +1267,145 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const hasLoss = lossLines.length > 0
 
     // 证据改为可选 (2026-06 客户要求): 不再强制上传. 无证据时供应商更易拒赔, UI 已给软提示.
-
-    // 自动建报损单（v2 流程：收货时短量自动发起索赔，24h 内供应商未响应自动同意）
-    if (hasLoss) {
-      const ym = dayjs().format('YYYYMM')
-      const lcCount = await prisma.lossClaim.count({ where: { tenantId, no: { startsWith: `LC${ym}` } } })
-      const lcNo = `LC${ym}${String(lcCount + 1).padStart(6, '0')}`
-      const totalLoss = lossLines.reduce((s, l) => s + l.lossAmount, 0)
-      await prisma.lossClaim.create({
-        data: {
-          tenantId, no: lcNo,
-          purchaseOrderId: id,
-          storeId: order.storeId,
-          supplierId: order.supplierId,
-          totalLossAmount: totalLoss,
-          reason: lossReason,
-          description: lossReason ? `${lossReason} · 验收报损 (${order.no})` : `验收短量自动报损 (${order.no})`,
-          evidenceImages: Array.isArray(evidenceImages) ? evidenceImages.slice(0, 9) : [],
-          status: 'PENDING' as any,
-          createdById: userId,
-          items: { create: lossLines },
-        },
-      })
-      await prisma.opLog.create({
-        data: {
-          tenantId, userId,
-          action: `验收短量自动建报损 ${lcNo}，损失 ¥${totalLoss.toFixed(2)}`,
-          target: lcNo, entityType: 'LossClaim',
-        },
-      })
-    }
-
     const fullyShipped = order.items.every(item => Number(item.shippedQty || 0) + 0.0001 >= Number(item.quantity))
-    await prisma.$transaction(async tx => {
-      for (const item of deliveryReceivedItems) {
-        await tx.deliveryOrderItem.update({
-          where: { id: item.id }, data: { receivedQty: new Prisma.Decimal(item.actualReceivedQty) },
+    const receivedAt = new Date()
+    const ym = dayjs(receivedAt).format('YYYYMM')
+    let committed: { receipt: any; no: string }
+    try {
+      committed = await prisma.$transaction(async tx => {
+        // 首条成功请求锁住并推进配送单；并发请求等待后会得到 count=0，转为幂等响应。
+        const claimed = await tx.deliveryOrder.updateMany({
+          where: { id: delivery.id, tenantId, status: 'DELIVERED', rowVersion: delivery.rowVersion },
+          data: { status: 'RECEIVED', receivedAt, receivedById: userId, rowVersion: { increment: 1 } },
         })
-        const priorDeliveryReceived = await tx.deliveryOrderItem.aggregate({
-          where: {
-            productId: item.productId,
-            deliveryOrder: { purchaseOrderId: id, status: 'RECEIVED', id: { not: delivery.id } },
+        if (claimed.count !== 1) throw new ReceiptAlreadyProcessedError()
+
+        const latestReceipt = await tx.receipt.findFirst({
+          where: { tenantId, no: { startsWith: `RK${ym}` } },
+          orderBy: { no: 'desc' }, select: { no: true },
+        })
+        const receiptFloor = Number(latestReceipt?.no.slice(`RK${ym}`.length) || 0)
+        const no = await nextBusinessNo(tx, tenantId, 'RECEIPT', ym, 'RK', receiptFloor)
+        const receipt = await tx.receipt.create({
+          data: {
+            tenantId, no,
+            purchaseOrderId: order.id,
+            deliveryOrderId: delivery.id,
+            storeId: order.storeId,
+            supplierId: order.supplierId,
+            deliveryDate: receivedAt,
+            totalAmount: actualReceivedTotal,
+            status: 'CONFIRMED',
+            confirmedAt: receivedAt,
+            createdById: userId,
+            items: {
+              create: deliveryReceivedItems.map(item => ({
+                productId: item.productId,
+                quantity: new Prisma.Decimal(item.actualReceivedQty),
+                unitPrice: item.unitPriceSnapshot,
+                amount: new Prisma.Decimal(item.actualReceivedQty).mul(item.unitPriceSnapshot),
+                productionDate: item.manufactureDate || receivedAt,
+                expiryDate: item.expiryDate || dayjs(receivedAt).add(item.product.shelfDays, 'day').toDate(),
+              })),
+            },
           },
-          _sum: { receivedQty: true },
         })
-        await tx.purchaseOrderItem.updateMany({
-          where: { purchaseOrderId: id, productId: item.productId },
-          data: { receivedQty: new Prisma.Decimal(Number(priorDeliveryReceived._sum.receivedQty || 0) + item.actualReceivedQty) },
+
+        if (hasLoss) {
+          const latestClaim = await tx.lossClaim.findFirst({
+            where: { tenantId, no: { startsWith: `LC${ym}` } },
+            orderBy: { no: 'desc' }, select: { no: true },
+          })
+          const claimFloor = Number(latestClaim?.no.slice(`LC${ym}`.length) || 0)
+          const lcNo = await nextBusinessNo(tx, tenantId, 'LOSS_CLAIM', ym, 'LC', claimFloor)
+          const totalLoss = lossLines.reduce((s, l) => s + l.lossAmount, 0)
+          await tx.lossClaim.create({
+            data: {
+              tenantId, no: lcNo,
+              purchaseOrderId: id,
+              storeId: order.storeId,
+              supplierId: order.supplierId,
+              totalLossAmount: totalLoss,
+              reason: lossReason,
+              description: lossReason ? `${lossReason} · 验收报损 (${order.no})` : `验收短量自动报损 (${order.no})`,
+              evidenceImages: Array.isArray(evidenceImages) ? evidenceImages.slice(0, 9) : [],
+              status: 'PENDING' as any,
+              createdById: userId,
+              items: { create: lossLines },
+            },
+          })
+          await tx.opLog.create({
+            data: {
+              tenantId, userId,
+              action: `验收短量自动建报损 ${lcNo}，损失 ¥${totalLoss.toFixed(2)}`,
+              target: lcNo, entityType: 'LossClaim',
+            },
+          })
+        }
+
+        for (const item of deliveryReceivedItems) {
+          await tx.deliveryOrderItem.update({
+            where: { id: item.id }, data: { receivedQty: new Prisma.Decimal(item.actualReceivedQty) },
+          })
+          const priorDeliveryReceived = await tx.deliveryOrderItem.aggregate({
+            where: {
+              productId: item.productId,
+              deliveryOrder: { purchaseOrderId: id, status: 'RECEIVED', id: { not: delivery.id } },
+            },
+            _sum: { receivedQty: true },
+          })
+          await tx.purchaseOrderItem.updateMany({
+            where: { purchaseOrderId: id, productId: item.productId },
+            data: { receivedQty: new Prisma.Decimal(Number(priorDeliveryReceived._sum.receivedQty || 0) + item.actualReceivedQty) },
+          })
+        }
+        await tx.deliveryOrderEvent.create({
+          data: {
+            tenantId, deliveryOrderId: delivery.id, eventType: 'RECEIVED', actorId: userId, actorRole: role,
+            fromStatus: 'DELIVERED', toStatus: 'RECEIVED', requestId: req.id, ip: req.ip,
+            metadata: { receiptId: receipt.id, hasLoss, actualReceivedTotal },
+          },
         })
+        await tx.purchaseOrder.update({
+          where: { id },
+          data: {
+            status: fullyShipped ? (hasLoss ? 'RECEIVED' : 'COMPLETED') : 'CONFIRMED',
+            receivedAt: fullyShipped ? receivedAt : null,
+            receiptId: receipt.id,
+          },
+        })
+        await tx.opLog.create({
+          data: {
+            tenantId, userId,
+            action: `确认收货 ${order.no}，生成入库单 ${no}`,
+            target: order.no, entityType: 'PurchaseOrder', targetId: id,
+          },
+        })
+        return { receipt, no }
+      })
+    } catch (error) {
+      if (error instanceof ReceiptAlreadyProcessedError) {
+        const duplicate = await findDuplicateReceiptResponse(delivery.id)
+        if (duplicate) return duplicate
       }
-      await tx.deliveryOrder.update({
-        where: { id: delivery.id },
-        data: { status: 'RECEIVED', receivedAt, receivedById: userId, rowVersion: { increment: 1 } },
+      throw error
+    }
+    const { receipt, no } = committed
+
+    // 财务凭证是主事务后的幂等派生记录；凭证服务用 Receipt sourceId 防重复。
+    try {
+      const store = await prisma.store.findUnique({ where: { id: order.storeId }, select: { name: true } })
+      const { voucherForReceipt } = await import('../services/voucher')
+      voucherForReceipt({
+        tenantId, receiptId: receipt.id, receiptNo: receipt.no,
+        supplierName: order.supplier?.name || '供应商',
+        storeName: store?.name || '门店',
+        amount: Number(actualReceivedTotal),
+        date: receivedAt,
       })
-      await tx.deliveryOrderEvent.create({
-        data: {
-          tenantId, deliveryOrderId: delivery.id, eventType: 'RECEIVED', actorId: userId, actorRole: role,
-          fromStatus: 'DELIVERED', toStatus: 'RECEIVED', requestId: req.id, ip: req.ip,
-          metadata: { receiptId: receipt.id, hasLoss, actualReceivedTotal },
-        },
-      })
-      await tx.purchaseOrder.update({
-        where: { id },
-        data: {
-          status: fullyShipped ? (hasLoss ? 'RECEIVED' : 'COMPLETED') : 'CONFIRMED',
-          receivedAt: fullyShipped ? receivedAt : null,
-          receiptId: receipt.id,
-        },
-      })
-    })
+    } catch (e: any) {
+      req.log.warn({ err: e }, '收货凭证生成失败 (不影响主流程)')
+    }
 
     // 触发自动对账+账期
     const { autoProcessAfterConfirm } = await import('../services/paymentSchedule')
@@ -1375,7 +1413,6 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     receiptFull.confirmedAt = new Date()
     await autoProcessAfterConfirm({ tenantId, receipt: receiptFull, supplier: order.supplier })
 
-    await prisma.opLog.create({ data: { tenantId, userId, action: `确认收货 ${order.no}，生成入库单 ${no}`, target: order.no, entityType: 'PurchaseOrder', targetId: id } })
     void invalidatePattern(`dashboard:stats:${tenantId}:*`)
     void invalidatePattern(`stores:list:${tenantId}:*`)
     notify({

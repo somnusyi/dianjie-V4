@@ -177,10 +177,17 @@ export async function nextBusinessNo(
   scope: string,
   period: string,
   prefix: string,
+  floor = 0,
 ): Promise<string> {
+  if (floor > 0) {
+    await tx.businessSequence.updateMany({
+      where: { tenantId, scope, period, value: { lt: floor } },
+      data: { value: floor },
+    })
+  }
   const sequence = await tx.businessSequence.upsert({
     where: { tenantId_scope_period: { tenantId, scope, period } },
-    create: { tenantId, scope, period, value: 1 },
+    create: { tenantId, scope, period, value: Math.max(1, floor + 1) },
     update: { value: { increment: 1 } },
     select: { value: true },
   })

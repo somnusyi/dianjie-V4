@@ -55,6 +55,7 @@ async function main() {
   })
   const managerToken = await login(manager.email)
   const supplierToken = await login(supplierUser.email)
+  const startedAt = new Date()
   let orderId: string | null = null
   let orderNo: string | null = null
   const deliveryIds: string[] = []
@@ -89,21 +90,25 @@ async function main() {
     assert.equal(repeatedShip.body.deliveryId, firstShip.body.deliveryId, '发货重试必须返回同一配送单')
     assert.equal(repeatedShip.body.duplicated, true)
     assert.equal((await api(`/api/orders/${orderId}/deliver`, supplierToken, { method: 'PATCH', body: '{}' })).status, 200)
-    const firstReceive = await api(`/api/orders/${orderId}/receive`, managerToken, {
-      method: 'PATCH', body: JSON.stringify({ items: [{ productId: product.id, receivedQty: 2 }] }),
-    })
+    const firstReceiveBody = JSON.stringify({ items: [{ productId: product.id, receivedQty: 2 }] })
+    const [receiveA, receiveB] = await Promise.all([
+      api(`/api/orders/${orderId}/receive`, managerToken, { method: 'PATCH', body: firstReceiveBody }),
+      api(`/api/orders/${orderId}/receive`, managerToken, { method: 'PATCH', body: firstReceiveBody }),
+    ])
+    assert.equal(receiveA.status, 200, JSON.stringify(receiveA.body))
+    assert.equal(receiveB.status, 200, JSON.stringify(receiveB.body))
+    const firstReceive = receiveA.body.duplicated ? receiveB : receiveA
+    const repeatedReceive = receiveA.body.duplicated ? receiveA : receiveB
     assert.equal(firstReceive.status, 200, JSON.stringify(firstReceive.body))
     receiptIds.push(firstReceive.body.receipt.id)
     assert.equal(firstReceive.body.remainingDelivery, true)
     assert.equal((await api(`/api/orders/${orderId}`, managerToken)).body.status, 'CONFIRMED')
 
-    const repeatedReceive = await api(`/api/orders/${orderId}/receive`, managerToken, {
-      method: 'PATCH', body: JSON.stringify({ items: [{ productId: product.id, receivedQty: 2 }] }),
-    })
     assert.equal(repeatedReceive.status, 200, JSON.stringify(repeatedReceive.body))
-    assert.equal(repeatedReceive.body.duplicated, true, '收货响应丢失后的重试必须返回原入库单')
+    assert.equal(repeatedReceive.body.duplicated, true, '并发双收货必须有一个请求返回原入库单')
     assert.equal(repeatedReceive.body.receipt.id, firstReceive.body.receipt.id)
     assert.equal(await prisma.receipt.count({ where: { deliveryOrderId: firstShip.body.deliveryId } }), 1)
+    assert.equal(await prisma.deliveryOrderEvent.count({ where: { deliveryOrderId: firstShip.body.deliveryId, eventType: 'RECEIVED' } }), 1)
 
     const secondShip = await api(`/api/orders/${orderId}/ship`, supplierToken, {
       method: 'PATCH', body: JSON.stringify({ idempotencyKey: `delivery-second-${Date.now()}` }),
@@ -151,13 +156,26 @@ async function main() {
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))
-      const vouchers = await prisma.voucher.findMany({ where: { sourceType: 'Receipt', sourceId: { in: receiptIds } }, select: { id: true } })
+      const runReceipts = await prisma.receipt.findMany({
+        where: {
+          tenantId: tenant.id,
+          OR: [
+            { id: { in: receiptIds } },
+            { purchaseOrderId: orderId },
+            ...(deliveryIds.length ? [{ deliveryOrderId: { in: deliveryIds } }] : []),
+            { supplierId: supplier.id, createdById: manager.id, createdAt: { gte: startedAt } },
+          ],
+        },
+        select: { id: true },
+      })
+      const cleanupReceiptIds = [...new Set([...receiptIds, ...runReceipts.map(receipt => receipt.id)])]
+      const vouchers = await prisma.voucher.findMany({ where: { sourceType: 'Receipt', sourceId: { in: cleanupReceiptIds } }, select: { id: true } })
       await prisma.$transaction(async tx => {
         await tx.voucher.deleteMany({ where: { id: { in: vouchers.map(voucher => voucher.id) } } })
-        await tx.paymentSchedule.deleteMany({ where: { receiptId: { in: receiptIds } } })
-        await tx.reconciliationItem.deleteMany({ where: { receiptId: { in: receiptIds } } })
-        await tx.receiptItem.deleteMany({ where: { receiptId: { in: receiptIds } } })
-        await tx.receipt.deleteMany({ where: { id: { in: receiptIds } } })
+        await tx.paymentSchedule.deleteMany({ where: { receiptId: { in: cleanupReceiptIds } } })
+        await tx.reconciliationItem.deleteMany({ where: { receiptId: { in: cleanupReceiptIds } } })
+        await tx.receiptItem.deleteMany({ where: { receiptId: { in: cleanupReceiptIds } } })
+        await tx.receipt.deleteMany({ where: { id: { in: cleanupReceiptIds } } })
         await tx.supplierStockMovement.deleteMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
         await tx.deliveryOrderEvent.deleteMany({ where: { deliveryOrderId: { in: deliveryIds } } })
         await tx.deliveryOrderItem.deleteMany({ where: { deliveryOrderId: { in: deliveryIds } } })

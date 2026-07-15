@@ -7,7 +7,7 @@
 
 set -e
 
-SSHPASS_PWD='weiyi9216!'
+SSHPASS_PWD='<redacted>'
 ECS_HOST='root@116.62.32.162'
 ECS_API_DIST='/app/dianjie-v4/apps/api/dist'
 ECS_WEB_NEXT='/app/dianjie-v4/apps/web/apps/web/.next'

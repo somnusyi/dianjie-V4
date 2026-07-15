@@ -15,7 +15,7 @@
 ## 关键基础设施
 
 ```
-ECS:        116.62.32.162 (root / weiyi9216!)
+ECS:        116.62.32.162 (root / <redacted>)
 公网 URL:   http://116.62.32.162:8080  (备案后切 https://www.njdianjie.com)
 PM2 进程:   dianjie-v4-api (port 4004) + dianjie-v4-web (port 3204) + dianjie-v4-cmb (5001)
 DB:         dianjie_v4 @ 阿里云 RDS PostgreSQL
@@ -29,17 +29,17 @@ GitHub:     git@github.com:somnusyi/dianjie-V4.git  (private, ssh key ~/.ssh/git
 cd packages/db && pnpm prisma generate
 # 推 migration 到 ECS 同时去 pnpm 快照
 PNPM_DB=/app/dianjie-v4/apps/api/node_modules/.pnpm/@dianjie+db@file+packages+db_prisma@5.22.0/node_modules/@dianjie/db
-sshpass -p 'weiyi9216!' rsync -az packages/db/prisma/ root@116.62.32.162:/app/dianjie-v4/packages/db/prisma/
-sshpass -p 'weiyi9216!' rsync -az packages/db/prisma/ root@116.62.32.162:$PNPM_DB/prisma/
-sshpass -p 'weiyi9216!' ssh root@116.62.32.162 "cd /app/dianjie-v4/packages/db && DATABASE_URL=\$(grep ^DATABASE_URL /app/dianjie-v4/apps/api/.env | cut -d= -f2-) pnpm prisma migrate deploy"
-sshpass -p 'weiyi9216!' ssh root@116.62.32.162 "cd /app/dianjie-v4/apps/api && set -a; . .env; set +a; npx --yes prisma@5.22.0 generate --schema=$PNPM_DB/prisma/schema.prisma"
+sshpass -p '<redacted>' rsync -az packages/db/prisma/ root@116.62.32.162:/app/dianjie-v4/packages/db/prisma/
+sshpass -p '<redacted>' rsync -az packages/db/prisma/ root@116.62.32.162:$PNPM_DB/prisma/
+sshpass -p '<redacted>' ssh root@116.62.32.162 "cd /app/dianjie-v4/packages/db && DATABASE_URL=\$(grep ^DATABASE_URL /app/dianjie-v4/apps/api/.env | cut -d= -f2-) pnpm prisma migrate deploy"
+sshpass -p '<redacted>' ssh root@116.62.32.162 "cd /app/dianjie-v4/apps/api && set -a; . .env; set +a; npx --yes prisma@5.22.0 generate --schema=$PNPM_DB/prisma/schema.prisma"
 
 # 2. 编译 + 推 dist + 重启
 cd apps/api && npx tsc --skipLibCheck
 cd apps/web && pnpm build
-sshpass -p 'weiyi9216!' rsync -az --delete apps/api/dist/ root@116.62.32.162:/app/dianjie-v4/apps/api/dist/
-sshpass -p 'weiyi9216!' rsync -az --delete apps/web/.next/ root@116.62.32.162:/app/dianjie-v4/apps/web/apps/web/.next/
-sshpass -p 'weiyi9216!' ssh root@116.62.32.162 'pm2 restart dianjie-v4-api dianjie-v4-web'
+sshpass -p '<redacted>' rsync -az --delete apps/api/dist/ root@116.62.32.162:/app/dianjie-v4/apps/api/dist/
+sshpass -p '<redacted>' rsync -az --delete apps/web/.next/ root@116.62.32.162:/app/dianjie-v4/apps/web/apps/web/.next/
+sshpass -p '<redacted>' ssh root@116.62.32.162 'pm2 restart dianjie-v4-api dianjie-v4-web'
 
 # 3. 验证 (必跑)
 bash scripts/deploy-verify.sh

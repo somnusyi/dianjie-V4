@@ -10,8 +10,8 @@
 所有脚本读两个 env：
 
 ```bash
-export V4_SSH_PASSWORD='weiyi9216!'    # ECS root 密码
-export V4_DB_PASSWORD='weiyi9216!'     # RDS dianjie_v4 密码
+export V4_SSH_PASSWORD='<redacted>'    # ECS root 密码
+export V4_DB_PASSWORD='<redacted>'     # RDS dianjie_v4 密码
 ```
 
 **强烈建议尽快改成 SSH key + ~/.pgpass 免密**（详见末尾「SSH key 一次性配置」）。
@@ -169,7 +169,7 @@ EOF
 
 ```bash
 cat >> ~/.pgpass <<'EOF'
-pgm-bp14m7g69y66165r.pg.rds.aliyuncs.com:5432:dianjie_v4:dianjie_v4:weiyi9216!
+pgm-bp14m7g69y66165r.pg.rds.aliyuncs.com:5432:dianjie_v4:dianjie_v4:<redacted>
 EOF
 chmod 600 ~/.pgpass
 ```

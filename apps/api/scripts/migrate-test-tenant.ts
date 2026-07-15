@@ -13,7 +13,7 @@
  *   - dianjie tenant 数据完全不动 (17 个真实 user + 原 Store/Supplier/Product/PO/Receipt 全保留)
  *
  * 怎么跑:
- *   PROD_DATABASE_URL='postgresql://dianjie_v4:weiyi9216%21@pgm-bp14m7g69y66165r.pg.rds.aliyuncs.com:5432/dianjie_v4?connection_limit=3' \
+ *   PROD_DATABASE_URL='postgresql://dianjie_v4:<redacted>@pgm-bp14m7g69y66165r.pg.rds.aliyuncs.com:5432/dianjie_v4?connection_limit=3' \
  *     pnpm --filter @dianjie/api exec tsx scripts/migrate-test-tenant.ts
  *
  * 备份: pg_dump 已经在 /app/backups/before-tenant-split-20260514-145953.dump

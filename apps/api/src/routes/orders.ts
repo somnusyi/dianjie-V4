@@ -59,6 +59,21 @@ const deliveryShipSchema = z.object({
   }).strict()).max(500).optional(),
 }).strict()
 
+const orderListQuerySchema = z.object({
+  status: z.enum(['DRAFT', 'SUBMITTED', 'CONFIRMED', 'DELIVERING', 'PENDING_CONFIRM', 'RECEIVED', 'COMPLETED', 'CANCELLED']).optional(),
+  storeId: z.string().optional(),
+  supplierId: z.string().optional(),
+  productId: z.string().optional(),
+  keyword: z.string().trim().max(80).optional(),
+  dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().positive().max(100).default(20),
+}).refine(q => !q.dateFrom || !q.dateTo || q.dateFrom <= q.dateTo, {
+  message: '开始日期不能晚于结束日期',
+  path: ['dateFrom'],
+})
+
 // 内存级幂等缓存 (60s TTL) — 防止厨师长双击 / 网络重试创双单
 const idempotencyCache = new Map<string, { orderId: string; orderNo: string; expiresAt: number }>()
 function getIdempotent(key: string) {
@@ -74,9 +89,11 @@ function setIdempotent(key: string, orderId: string, orderNo: string) {
 export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 列表 ──────────────────────────────────────────
-  app.get('/', { preHandler: [(app as any).authenticate] }, async (req: any) => {
+  app.get('/', { preHandler: [(app as any).authenticate] }, async (req: any, reply) => {
+    const parsed = orderListQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { tenantId, storeId, role, supplierId: userSupplierId } = req.user
-    const { status, storeId: qStore, supplierId: qSupplier, page = '1', pageSize = '20' } = req.query as any
+    const q = parsed.data
     const where: any = { tenantId }
 
     // 门店级角色（店长/总厨/采购）只看自己门店
@@ -84,12 +101,43 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     // 供应商只看发给自己的
     if (isSupplierRole(role) && userSupplierId) where.supplierId = userSupplierId
 
-    if (status) where.status = status
-    if (qStore && !isStoreScoped(role)) where.storeId = qStore
-    if (qSupplier && !isSupplierRole(role)) where.supplierId = qSupplier
+    if (q.status) where.status = q.status
+    if (q.storeId && !isStoreScoped(role)) where.storeId = q.storeId
+    if (q.supplierId && !isSupplierRole(role)) where.supplierId = q.supplierId
+    const and: any[] = []
+    if (q.productId) and.push({ items: { some: { productId: q.productId, isActive: true } } })
+    if (q.keyword) {
+      and.push({
+        OR: [
+          { no: { contains: q.keyword, mode: 'insensitive' } },
+          { store: { name: { contains: q.keyword, mode: 'insensitive' } } },
+          {
+            items: {
+              some: {
+                isActive: true,
+                product: {
+                  OR: [
+                    { name: { contains: q.keyword, mode: 'insensitive' } },
+                    { code: { contains: q.keyword, mode: 'insensitive' } },
+                    { spec: { contains: q.keyword, mode: 'insensitive' } },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      })
+    }
+    if (and.length) where.AND = and
+    if (q.dateFrom || q.dateTo) {
+      where.createdAt = {
+        ...(q.dateFrom ? { gte: new Date(`${q.dateFrom}T00:00:00+08:00`) } : {}),
+        ...(q.dateTo ? { lte: new Date(`${q.dateTo}T23:59:59.999+08:00`) } : {}),
+      }
+    }
 
-    const p = Math.max(1, parseInt(page))
-    const ps = Math.min(100, Math.max(1, parseInt(pageSize)))
+    const p = q.page
+    const ps = q.pageSize
     const skip = (p - 1) * ps
 
     const [items, total] = await Promise.all([

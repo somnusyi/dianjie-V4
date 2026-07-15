@@ -13,6 +13,9 @@ const listQuerySchema = z.object({
   dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(100).default(20),
+}).refine(q => !q.dateFrom || !q.dateTo || q.dateFrom <= q.dateTo, {
+  message: '开始日期不能晚于结束日期',
+  path: ['dateFrom'],
 })
 
 export const deliveryRoutes: FastifyPluginAsync = async app => {
@@ -27,13 +30,31 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
     if (isSupplierRole(role)) where.supplierId = actorSupplierId
     else if (q.supplierId) where.supplierId = q.supplierId
     if (q.status) where.status = q.status
-    if (q.productId) where.items = { some: { productId: q.productId } }
+    const and: any[] = []
+    if (q.productId) and.push({ items: { some: { productId: q.productId } } })
     if (q.keyword) {
-      where.OR = [
-        { no: { contains: q.keyword, mode: 'insensitive' } },
-        { purchaseOrder: { no: { contains: q.keyword, mode: 'insensitive' } } },
-      ]
+      and.push({
+        OR: [
+          { no: { contains: q.keyword, mode: 'insensitive' } },
+          { purchaseOrder: { no: { contains: q.keyword, mode: 'insensitive' } } },
+          { store: { name: { contains: q.keyword, mode: 'insensitive' } } },
+          {
+            items: {
+              some: {
+                product: {
+                  OR: [
+                    { name: { contains: q.keyword, mode: 'insensitive' } },
+                    { code: { contains: q.keyword, mode: 'insensitive' } },
+                    { spec: { contains: q.keyword, mode: 'insensitive' } },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      })
     }
+    if (and.length) where.AND = and
     if (q.dateFrom || q.dateTo) {
       where.createdAt = {
         ...(q.dateFrom ? { gte: new Date(`${q.dateFrom}T00:00:00+08:00`) } : {}),

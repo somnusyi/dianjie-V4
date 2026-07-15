@@ -20,6 +20,21 @@ type Order = {
   lossClaims?: { id: string; status: string; totalLossAmount: string }[]
 }
 
+type Delivery = {
+  id: string; no: string; status: string; actualTotalAmount: string
+  createdAt: string; shippedAt?: string | null; deliveredAt?: string | null; receivedAt?: string | null
+  store: { id: string; name: string }
+  purchaseOrder: { id: string; no: string; status: string }
+  receipt?: { id: string; no: string; status: string } | null
+  items: {
+    id: string; shippedQty: string; receivedQty?: string | null
+    product: { id: string; code: string; name: string; unit: string; spec?: string | null }
+  }[]
+}
+
+type SearchCriteria = { keyword: string; dateFrom: string; dateTo: string }
+const EMPTY_SEARCH: SearchCriteria = { keyword: '', dateFrom: '', dateTo: '' }
+
 const STATUS_TO_STEP: Record<string, number> = {
   SUBMITTED: 0, CONFIRMED: 1, DELIVERING: 2,
   PENDING_CONFIRM: 3, RECEIVED: 4, COMPLETED: 4,
@@ -40,14 +55,20 @@ type LossClaim = {
 
 export default function SupplierOrdersPage() {
   const [tab, setTab] = useState('orders')
+  const [documentView, setDocumentView] = useState<'orders' | 'deliveries'>('orders')
   const [orders, setOrders] = useState<Order[] | null>(null)
+  const [deliveries, setDeliveries] = useState<Delivery[] | null>(null)
   const [claims, setClaims] = useState<LossClaim[] | null>(null)
   const [ordersTotal, setOrdersTotal] = useState(0)
+  const [deliveriesTotal, setDeliveriesTotal] = useState(0)
   const [claimsTotal, setClaimsTotal] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState<string | null>(null)
   const [loadingOrders, setLoadingOrders] = useState(false)
+  const [loadingDeliveries, setLoadingDeliveries] = useState(false)
   const [loadingClaims, setLoadingClaims] = useState(false)
+  const [searchDraft, setSearchDraft] = useState<SearchCriteria>(EMPTY_SEARCH)
+  const [appliedSearch, setAppliedSearch] = useState<SearchCriteria>(EMPTY_SEARCH)
   // 2026-06-02: 支持 URL ?filter=报损 等 (从 billing 页报损 banner 跳过来直接进对应 filter)
   const [filter, setFilter] = useState<'待接单' | '待发货' | '运送中' | '报损' | '已完成'>(() => {
     if (typeof window === 'undefined') return '待接单'
@@ -57,10 +78,18 @@ export default function SupplierOrdersPage() {
   })
   const [confirmState, openConfirm] = useConfirmSheet()
 
-  async function load() {
+  function buildListQuery(page: number, pageSize: number, criteria = appliedSearch) {
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+    if (criteria.keyword.trim()) params.set('keyword', criteria.keyword.trim())
+    if (criteria.dateFrom) params.set('dateFrom', criteria.dateFrom)
+    if (criteria.dateTo) params.set('dateTo', criteria.dateTo)
+    return params.toString()
+  }
+
+  async function load(criteria = appliedSearch) {
     try {
       const [o, c] = await Promise.all([
-        apiFetch<{ items: Order[]; total: number }>('/api/orders?page=1&pageSize=50'),
+        apiFetch<{ items: Order[]; total: number }>(`/api/orders?${buildListQuery(1, 50, criteria)}`),
         apiFetch<{ items: LossClaim[]; total: number }>('/api/loss-claims?page=1&pageSize=20')
           .catch(() => ({ items: [] as LossClaim[], total: 0 })),
       ])
@@ -70,20 +99,69 @@ export default function SupplierOrdersPage() {
       setClaimsTotal(Number((c as any).total ?? (c as any).items?.length ?? 0))
     } catch (e: any) { setError(e.message || '加载失败') }
   }
-  useEffect(() => { load() }, [])
+
+  async function loadDeliveries(criteria = appliedSearch) {
+    setLoadingDeliveries(true)
+    try {
+      const d = await apiFetch<{ items: Delivery[]; total: number }>(`/api/deliveries?${buildListQuery(1, 50, criteria)}`)
+      setDeliveries(d.items || [])
+      setDeliveriesTotal(Number(d.total ?? d.items?.length ?? 0))
+    } catch (e: any) {
+      setError(e.message || '配送单加载失败')
+    } finally {
+      setLoadingDeliveries(false)
+    }
+  }
+
+  useEffect(() => { void load(); void loadDeliveries() }, [])
+
+  function applySearch() {
+    if (searchDraft.dateFrom && searchDraft.dateTo && searchDraft.dateFrom > searchDraft.dateTo) {
+      setError('开始日期不能晚于结束日期')
+      return
+    }
+    const next = { ...searchDraft, keyword: searchDraft.keyword.trim() }
+    setError(null)
+    setAppliedSearch(next)
+    if (documentView === 'orders') void load(next)
+    else void loadDeliveries(next)
+  }
+
+  function clearSearch() {
+    setSearchDraft(EMPTY_SEARCH)
+    setAppliedSearch(EMPTY_SEARCH)
+    setError(null)
+    if (documentView === 'orders') void load(EMPTY_SEARCH)
+    else void loadDeliveries(EMPTY_SEARCH)
+  }
 
   async function loadMoreOrders() {
     if (!orders || loadingOrders) return
     setLoadingOrders(true)
     try {
       const page = Math.floor(orders.length / 50) + 1
-      const d = await apiFetch<{ items: Order[]; total: number }>(`/api/orders?page=${page}&pageSize=50`)
+      const d = await apiFetch<{ items: Order[]; total: number }>(`/api/orders?${buildListQuery(page, 50)}`)
       setOrders(current => [...(current || []), ...(d.items || [])])
       setOrdersTotal(Number(d.total ?? ordersTotal))
     } catch (e: any) {
       setError(e.message || '加载失败')
     } finally {
       setLoadingOrders(false)
+    }
+  }
+
+  async function loadMoreDeliveries() {
+    if (!deliveries || loadingDeliveries) return
+    setLoadingDeliveries(true)
+    try {
+      const page = Math.floor(deliveries.length / 50) + 1
+      const d = await apiFetch<{ items: Delivery[]; total: number }>(`/api/deliveries?${buildListQuery(page, 50)}`)
+      setDeliveries(current => [...(current || []), ...(d.items || [])])
+      setDeliveriesTotal(Number(d.total ?? deliveriesTotal))
+    } catch (e: any) {
+      setError(e.message || '配送单加载失败')
+    } finally {
+      setLoadingDeliveries(false)
     }
   }
 
@@ -116,7 +194,7 @@ export default function SupplierOrdersPage() {
             method: 'PATCH',
             body: JSON.stringify({ note: '已按时发出' }),
           })
-          await load()
+          await Promise.all([load(), loadDeliveries()])
         } catch (e: any) {
           alert(e.message || '发货失败')
           throw e
@@ -190,19 +268,60 @@ export default function SupplierOrdersPage() {
   }
   const visible = (orders || []).filter(o => statusInTab(o.status, filter))
   const hasMoreOrders = orders !== null && orders.length < ordersTotal
+  const hasMoreDeliveries = deliveries !== null && deliveries.length < deliveriesTotal
   const hasMoreClaims = claims !== null && claims.length < claimsTotal
 
   return (
     <div className="min-h-screen bg-bg pb-20">
       <header className="px-4 pt-4 pb-2 flex items-center justify-between">
         <div>
-          <h1 className="text-h1">订单</h1>
-          <p className="text-caption text-gray3">{orders === null ? '加载中…' : `${orders.length} 单`}</p>
+          <h1 className="text-h1">单据</h1>
+          <p className="text-caption text-gray3">
+            {documentView === 'orders'
+              ? orders === null ? '加载中…' : `订货单 ${ordersTotal} 张`
+              : deliveries === null || loadingDeliveries && deliveries.length === 0 ? '加载中…' : `配送单 ${deliveriesTotal} 张`}
+          </p>
         </div>
       </header>
 
+      <div className="px-4 grid grid-cols-2 gap-2">
+        <button type="button" onClick={() => { setDocumentView('orders'); void load(appliedSearch) }}
+          className={`py-2 rounded-cta text-button ${documentView === 'orders' ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
+          门店订货单
+        </button>
+        <button type="button" onClick={() => { setDocumentView('deliveries'); void loadDeliveries(appliedSearch) }}
+          className={`py-2 rounded-cta text-button ${documentView === 'deliveries' ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
+          配送单
+        </button>
+      </div>
+
+      <form className="mx-4 mt-3 bg-white border border-border rounded-card p-3 space-y-2" onSubmit={e => { e.preventDefault(); applySearch() }}>
+        <input
+          value={searchDraft.keyword}
+          onChange={e => setSearchDraft(current => ({ ...current, keyword: e.target.value }))}
+          placeholder="搜索商品名称 / 编码 / 单号"
+          className="w-full px-3 py-2 rounded-cta border border-border bg-bg text-caption outline-none focus:border-ink"
+        />
+        <div className="grid grid-cols-2 gap-2">
+          <label className="text-micro text-gray3">开始日期
+            <input type="date" value={searchDraft.dateFrom}
+              onChange={e => setSearchDraft(current => ({ ...current, dateFrom: e.target.value }))}
+              className="mt-1 w-full px-2 py-2 rounded-cta border border-border bg-bg text-caption font-num" />
+          </label>
+          <label className="text-micro text-gray3">结束日期
+            <input type="date" value={searchDraft.dateTo}
+              onChange={e => setSearchDraft(current => ({ ...current, dateTo: e.target.value }))}
+              className="mt-1 w-full px-2 py-2 rounded-cta border border-border bg-bg text-caption font-num" />
+          </label>
+        </div>
+        <div className="grid grid-cols-[1fr_2fr] gap-2">
+          <button type="button" onClick={clearSearch} className="py-2 border border-border rounded-cta text-caption text-gray2">清空</button>
+          <button type="submit" className="py-2 bg-amber text-white rounded-cta text-button">查询</button>
+        </div>
+      </form>
+
       {/* 报损待处理 banner（仅 PENDING 数量 > 0 时显示，强制提醒）*/}
-      {pendingClaims.length > 0 && filter !== '报损' && (
+      {documentView === 'orders' && pendingClaims.length > 0 && filter !== '报损' && (
         <button
           onClick={() => setFilter('报损')}
           className="mx-4 mt-2 w-[calc(100%-32px)] bg-red-bg border border-red/30 rounded-card p-3 flex items-center gap-3 text-left"
@@ -216,7 +335,7 @@ export default function SupplierOrdersPage() {
         </button>
       )}
 
-      <div className="px-4 mt-2 flex gap-2 overflow-x-auto">
+      {documentView === 'orders' && <div className="px-4 mt-2 flex gap-2 overflow-x-auto">
         {(['待接单', '待发货', '运送中', '报损', '已完成'] as const).map((f) => {
           const cnt = f === '报损'
             ? pendingClaims.length
@@ -231,12 +350,12 @@ export default function SupplierOrdersPage() {
             </button>
           )
         })}
-      </div>
+      </div>}
 
       {error && <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}
 
       {/* 报损 tab 内容 — 显示全部历史报损,PENDING 在最上 */}
-      {filter === '报损' && (() => {
+      {documentView === 'orders' && filter === '报损' && (() => {
         const claimStatusMeta: Record<string, { label: string; tone: 'red' | 'gray' | 'orange' | 'blue' | 'green'; barClass: string }> = {
           PENDING:     { label: '待处理',     tone: 'red',    barClass: 'before:bg-red' },
           APPROVED:    { label: '已同意',     tone: 'gray',   barClass: 'before:bg-gray4' },
@@ -314,7 +433,7 @@ export default function SupplierOrdersPage() {
       })()}
 
       {/* 普通订单 tabs 内容 */}
-      {filter !== '报损' && (
+      {documentView === 'orders' && filter !== '报损' && (
       <ul className="px-4 mt-3 space-y-2">
         {visible.length === 0 && orders !== null && (
           <li className="text-caption text-gray3 text-center py-12">暂无{filter}订单</li>
@@ -387,6 +506,45 @@ export default function SupplierOrdersPage() {
       </ul>
       )}
 
+      {documentView === 'deliveries' && (
+        <ul className="px-4 mt-3 space-y-2">
+          {deliveries?.length === 0 && !loadingDeliveries && (
+            <li className="text-caption text-gray3 text-center py-12">暂无符合条件的配送单</li>
+          )}
+          {(deliveries || []).map(delivery => {
+            const tone = delivery.status === 'RECEIVED' ? 'green' : delivery.status === 'CANCELLED' ? 'gray' : 'orange'
+            return (
+              <li key={delivery.id}
+                onClick={() => { location.href = `/v2/supplier/orders/${delivery.purchaseOrder.id}` }}
+                className="relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full before:bg-amber cursor-pointer hover:bg-bg-warm transition-colors">
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                  <Chip tone={tone}>{deliveryStatusLabel(delivery.status)}</Chip>
+                  <span className="font-num text-micro text-gray3">#{delivery.no}</span>
+                  <span className="text-micro text-gray3 ml-auto">{dayjs(delivery.shippedAt || delivery.createdAt).format('YYYY/MM/DD HH:mm')}</span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-h2">{delivery.store.name}</span>
+                  <span className="font-num text-h2">¥{Number(delivery.actualTotalAmount).toLocaleString()}</span>
+                </div>
+                <p className="text-caption text-gray2 mt-0.5">源订货单 #{delivery.purchaseOrder.no}</p>
+                <p className="text-caption text-gray2 mt-1 line-clamp-2">
+                  {delivery.items.map(item => `${item.product.name} ${item.shippedQty}${item.product.unit}`).join('、')}
+                </p>
+                {delivery.receipt && <p className="text-micro text-green-fg mt-2">已生成入库单 #{delivery.receipt.no}</p>}
+              </li>
+            )
+          })}
+          {hasMoreDeliveries && (
+            <li>
+              <button type="button" onClick={() => void loadMoreDeliveries()} disabled={loadingDeliveries}
+                className="w-full py-3 bg-white rounded-card border border-border text-caption text-amber-fg disabled:opacity-50">
+                {loadingDeliveries ? '加载中…' : `加载更多配送单 · 已显示 ${deliveries?.length || 0}/${deliveriesTotal}`}
+              </button>
+            </li>
+          )}
+        </ul>
+      )}
+
       <BottomNav
         tabs={[
           { key: 'home', label: '首页', icon: '⌂' },
@@ -414,6 +572,12 @@ function statusLabel(s: string) {
     SUBMITTED: '待接单', CONFIRMED: '已接单',
     DELIVERING: '配送中', PENDING_CONFIRM: '已送达',
     RECEIVED: '已收货', COMPLETED: '已完成', CANCELLED: '已取消',
+  } as Record<string, string>)[s] || s
+}
+function deliveryStatusLabel(s: string) {
+  return ({
+    DRAFT: '草稿', SHIPPED: '已发货', DELIVERED: '已送达',
+    RECEIVED: '已收货', CANCELLED: '已取消',
   } as Record<string, string>)[s] || s
 }
 function timeAgo(iso: string) {

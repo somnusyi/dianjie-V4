@@ -57,37 +57,6 @@ function jsonSafe(value: unknown): any {
 
 const categoryNameSchema = z.string().trim().min(1, '分类名称必填').max(40)
 
-async function ensureActiveSupplierCategory(tenantId: string, supplierId: string, rawName: string) {
-  const name = categoryNameSchema.parse(rawName)
-  const existing = await prisma.supplierProductCategory.findUnique({
-    where: { tenantId_supplierId_name: { tenantId, supplierId, name } },
-  })
-  if (existing) {
-    if (!existing.isActive) throw new Error(`分类「${name}」已停用，请先恢复后再使用`)
-    return existing
-  }
-  const max = await prisma.supplierProductCategory.aggregate({
-    where: { tenantId, supplierId }, _max: { sortOrder: true },
-  })
-  try {
-    return await prisma.supplierProductCategory.create({
-      data: {
-        tenantId, supplierId, name,
-        sortOrder: (max._max.sortOrder ?? -1) + 1,
-        isSystem: name === '其他',
-      },
-    })
-  } catch (error: any) {
-    if (error?.code === 'P2002') {
-      const concurrent = await prisma.supplierProductCategory.findUnique({
-        where: { tenantId_supplierId_name: { tenantId, supplierId, name } },
-      })
-      if (concurrent?.isActive) return concurrent
-    }
-    throw error
-  }
-}
-
 export const productRoutes: FastifyPluginAsync = async (app) => {
   app.get('/', auth(app), async (req: any, reply: any) => {
     const { category, status, q, page, pageSize = '20' } = req.query as any
@@ -511,10 +480,12 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     if (!data.code) data.code = autoCode(data.supplierId)
     if (!data.category) data.category = '其他'
     if (isSupplierRole(role)) {
-      try {
-        await ensureActiveSupplierCategory(tenantId, userSupplierId!, data.category)
-      } catch (error: any) {
-        return reply.status(400).send({ error: error?.message || '商品分类不可用' })
+      const existingCategory = await prisma.supplierProductCategory.findUnique({
+        where: { tenantId_supplierId_name: { tenantId, supplierId: userSupplierId!, name: data.category } },
+        select: { isActive: true },
+      })
+      if (existingCategory && !existingCategory.isActive) {
+        return reply.status(400).send({ error: `分类「${data.category}」已停用，请先恢复后再使用` })
       }
     }
     try {
@@ -525,6 +496,33 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(403).send({ error: '账号绑定的供应商不属于当前租户' })
       }
       const product = await prisma.$transaction(async tx => {
+        if (isSupplierRole(role)) {
+          const categoryWhere = {
+            tenantId_supplierId_name: { tenantId, supplierId: userSupplierId!, name: data.category },
+          }
+          const currentCategory = await tx.supplierProductCategory.findUnique({
+            where: categoryWhere, select: { isActive: true },
+          })
+          if (!currentCategory) {
+            const max = await tx.supplierProductCategory.aggregate({
+              where: { tenantId, supplierId: userSupplierId! }, _max: { sortOrder: true },
+            })
+            await tx.supplierProductCategory.createMany({
+              data: [{
+                tenantId, supplierId: userSupplierId!, name: data.category,
+                sortOrder: (max._max.sortOrder ?? -1) + 1,
+                isSystem: data.category === '其他',
+              }],
+              skipDuplicates: true,
+            })
+          }
+          const activeCategory = await tx.supplierProductCategory.findUnique({
+            where: categoryWhere, select: { isActive: true },
+          })
+          if (!activeCategory?.isActive) {
+            throw Object.assign(new Error('商品分类状态已变化，请刷新后重试'), { statusCode: 409 })
+          }
+        }
         const created = await tx.product.create({
           data: { tenantId, ...data } as any,
         })
@@ -572,6 +570,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       if (e.code === 'P2002') {
         return reply.status(409).send({ error: '商品编码已存在（请换一个 code）' })
       }
+      if (e.statusCode === 409) return reply.status(409).send({ error: e.message })
       req.log.error({ err: e }, 'product create failed')
       return reply.status(500).send({ error: '创建失败（请检查日志）' })
     }

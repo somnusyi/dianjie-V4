@@ -64,11 +64,14 @@ async function main() {
   const rollbackFilename = `verify-rollback-${rollbackMarker}.xlsx`
   const rollbackCode = `VERIFY-ROLLBACK-${rollbackMarker}`
   const rollbackCategory = `验证回滚分类${rollbackMarker}`
+  const singleRollbackCode = `VERIFY-SINGLE-ROLLBACK-${rollbackMarker}`
+  const singleRollbackCategory = `验证单条回滚分类${rollbackMarker}`
   let rollbackTriggerInstalled = false
   let temporaryAdminId: string | null = null
   let temporaryUnboundSupplierId: string | null = null
   let temporaryTenantId: string | null = null
   let temporarySupplierId: string | null = null
+  let batch500RowsMs = 0
 
   try {
     const login = await api('/api/auth/login', null, {
@@ -178,13 +181,41 @@ async function main() {
     assert.equal(batchPayload.batchId, batchState.id)
     assert.deepEqual(new Set(batchPayload.productIds), new Set(batchState.products.map(item => item.id)))
 
+    const batch500Marker = Date.now()
+    const batch500StartedAt = performance.now()
+    const batch500 = await api('/api/products/batch', token, {
+      method: 'POST',
+      body: JSON.stringify({
+        filename: `verify-500-${batch500Marker}.xlsx`,
+        items: Array.from({ length: 500 }, (_, index) => ({
+          code: `VERIFY-500-${batch500Marker}-${String(index + 1).padStart(3, '0')}`,
+          name: `五百行事务验证品 ${index + 1}`,
+          category: '验证分类A', unit: '件', price: 10 + (index % 10),
+        })),
+      }),
+    })
+    batch500RowsMs = Math.round(performance.now() - batch500StartedAt)
+    assert.equal(batch500.status, 201, JSON.stringify(batch500.body))
+    assert.equal(batch500.body.createdCount, 500)
+    assert.equal(batch500.body.failedCount, 0)
+    assert.ok(batch500.body.approvalDocNo)
+    batchIds.push(batch500.body.batchId)
+    batchProductIds.push(...batch500.body.created.map((item: any) => item.id))
+    const batch500Document = await prisma.document.findFirstOrThrow({
+      where: { tenantId: tenant.id, no: batch500.body.approvalDocNo },
+    })
+    documentIds.push(batch500Document.id)
+    assert.equal((batch500Document.payload as any).count, 500)
+    assert.equal((batch500Document.payload as any).productIds.length, 500)
+
     await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS verify_product_batch_document_failure_trigger ON documents')
     await prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS verify_product_batch_document_failure()')
     await prisma.$executeRawUnsafe(`
       CREATE FUNCTION verify_product_batch_document_failure()
       RETURNS trigger AS $$
       BEGIN
-        IF NEW.payload ->> 'filename' = '${rollbackFilename}' THEN
+        IF NEW.payload ->> 'filename' = '${rollbackFilename}'
+           OR NEW.payload ->> 'productCode' = '${singleRollbackCode}' THEN
           RAISE EXCEPTION 'verify product batch document rollback';
         END IF;
         RETURN NEW;
@@ -206,6 +237,14 @@ async function main() {
         }),
       })
       assert.equal(rollbackBatch.status, 500, JSON.stringify(rollbackBatch.body))
+      const rollbackSingle = await api('/api/products', token, {
+        method: 'POST',
+        body: JSON.stringify({
+          code: singleRollbackCode, name: '单条事务回滚验证品',
+          category: singleRollbackCategory, unit: '件', price: 15,
+        }),
+      })
+      assert.equal(rollbackSingle.status, 500, JSON.stringify(rollbackSingle.body))
     } finally {
       await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS verify_product_batch_document_failure_trigger ON documents')
       await prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS verify_product_batch_document_failure()')
@@ -215,6 +254,10 @@ async function main() {
     assert.equal(await prisma.productBatch.count({ where: { tenantId: tenant.id, filename: rollbackFilename } }), 0)
     assert.equal(await prisma.supplierProductCategory.count({
       where: { tenantId: tenant.id, supplierId, name: rollbackCategory },
+    }), 0)
+    assert.equal(await prisma.product.count({ where: { tenantId: tenant.id, code: singleRollbackCode } }), 0)
+    assert.equal(await prisma.supplierProductCategory.count({
+      where: { tenantId: tenant.id, supplierId, name: singleRollbackCategory },
     }), 0)
 
     const isolationMarker = Date.now()
@@ -300,7 +343,9 @@ async function main() {
       concurrentDocumentNumbers: true,
       duplicateDisableRejected: true,
       batchPartialSuccessAtomic: true,
+      batch500RowsMs,
       batchDocumentFailureRolledBack: true,
+      singleDocumentFailureRolledBack: true,
       crossTenantSupplierBlocked: true,
       unboundSupplierListBlocked: true,
       auditHistory: true,
@@ -327,9 +372,10 @@ async function main() {
     }
     if (documentIds.length) await prisma.document.deleteMany({ where: { id: { in: documentIds } } })
     await prisma.product.deleteMany({ where: { id: { in: [...products.map(item => item.id), ...batchProductIds] } } })
+    await prisma.product.deleteMany({ where: { tenantId: tenant.id, code: { in: [rollbackCode, singleRollbackCode] } } })
     if (batchIds.length) await prisma.productBatch.deleteMany({ where: { id: { in: batchIds } } })
     await prisma.supplierProductCategory.deleteMany({
-      where: { tenantId: tenant.id, supplierId, name: { in: [...categoryNames, rollbackCategory] } },
+      where: { tenantId: tenant.id, supplierId, name: { in: [...categoryNames, rollbackCategory, singleRollbackCategory] } },
     })
     const temporaryUserIds = [temporaryAdminId, temporaryUnboundSupplierId].filter(Boolean) as string[]
     if (temporaryUserIds.length) await prisma.user.deleteMany({ where: { id: { in: temporaryUserIds } } })

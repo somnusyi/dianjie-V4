@@ -6,6 +6,7 @@ import { ensureReceiptDerivatives } from '../services/receiptDerivatives'
 import { invalidatePattern } from '../lib/cache'
 import { notifyReceiptConfirmed } from '../services/notification'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
+import { parsePagination } from '../lib/pagination'
 import { nextBusinessNo } from '../services/purchaseOrderIntegrity'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
@@ -73,7 +74,7 @@ const confirmWithLossSchema = z.object({
 export const receiptRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 列表 ──────────────────────────────────────────
-  app.get('/', auth(app), async (req: any) => {
+  app.get('/', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, storeId } = req.user
     const { status, supplierId, storeId: qStore, page = '1', pageSize = '20' } = req.query as any
     const where: any = { tenantId }
@@ -84,8 +85,9 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     if (isStoreScoped(role)) where.storeId = storeId
     else if (qStore) where.storeId = qStore
 
-    const p = Math.max(1, parseInt(page))
-    const ps = Math.min(100, Math.max(1, parseInt(pageSize)))
+    const pagination = parsePagination({ page, pageSize }, { defaultPageSize: 20, maxPageSize: 100 })
+    if (!pagination) return reply.status(400).send({ error: '分页参数格式不正确' })
+    const { page: p, pageSize: ps } = pagination
     const skip = (p - 1) * ps
 
     const [items, total] = await Promise.all([

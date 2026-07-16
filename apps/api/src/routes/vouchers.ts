@@ -14,6 +14,7 @@ import { exportVouchersExcel, markVouchersExported, ExportFilter } from '../serv
 import { seedRestaurantCoA } from '../services/voucher/chart-of-accounts-restaurant'
 import { assertPeriodOpen, closePeriod, reopenPeriod, getOrCreatePeriod, isPeriodLocked } from '../services/accountingPeriod'
 import { generateCarryoverVoucher, previewCarryover } from '../services/voucher/carryover'
+import { parsePagination } from '../lib/pagination'
 
 const FINANCE_ROLES = ['FINANCE', 'ADMIN', 'SUPER_ADMIN']
 
@@ -53,8 +54,9 @@ export const voucherRoutes: FastifyPluginAsync = async (app) => {
     }
     if (status && status !== 'ALL') where.status = status
     if (sourceType) where.sourceType = sourceType
-    const p = Math.max(1, parseInt(page))
-    const ps = Math.min(200, Math.max(1, parseInt(pageSize)))
+    const pagination = parsePagination({ page, pageSize }, { defaultPageSize: 20, maxPageSize: 200 })
+    if (!pagination) return reply.status(400).send({ error: '分页参数格式不正确' })
+    const { page: p, pageSize: ps } = pagination
     const [items, total] = await Promise.all([
       prisma.voucher.findMany({
         where, orderBy: [{ date: 'desc' }, { no: 'desc' }],

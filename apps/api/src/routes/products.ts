@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { prisma } from '@dianjie/db'
 import { cached, invalidatePattern } from '../lib/cache'
 import { isSupplierRole } from '../lib/auth-scope'
+import { parsePagination } from '../lib/pagination'
 import { signOssKey } from './upload'
 import { nextDocumentNo } from '../services/documentNo'
 import { createId } from '@paralleldrive/cuid2'
@@ -103,8 +104,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       })
       return rows.map(product => ({ ...product, imageUrl: signOssKey(product.imageKey) }))
     }
-    const p = Math.max(1, parseInt(page))
-    const ps = Math.min(100, Math.max(1, parseInt(pageSize)))
+    const pagination = parsePagination({ page, pageSize }, { defaultPageSize: 20, maxPageSize: 100 })
+    if (!pagination) return reply.status(400).send({ error: '分页参数格式不正确' })
+    const { page: p, pageSize: ps } = pagination
     const [items, total] = await Promise.all([
       prisma.product.findMany({
         where,

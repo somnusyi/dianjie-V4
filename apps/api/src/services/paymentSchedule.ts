@@ -331,7 +331,8 @@ export async function executeBankPayment(scheduleId: string) {
           entityType: 'PaymentSchedule',
           targetId  : schedule.id,
           metadata  : {
-            toAccount  : supplier.bankAccount,
+            // 操作日志供通用后台查询，不能保存完整收款账号；完整业务请求只留在受控付款记录。
+            toAccountLast4: supplier.bankAccount.slice(-4),
             txNo       : bankResult.txNo,
             amount     : schedule.amount,
             resultCode : bankResult.resultCode,

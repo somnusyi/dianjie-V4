@@ -179,8 +179,12 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
 
   if (!res.ok) {
     let msg = res.statusText
-    try { const j = await res.json(); msg = j.error || j.message || msg } catch {}
-    throw new Error(msg)
+    let data: any = null
+    try { data = await res.json(); msg = data.error || data.message || msg } catch {}
+    const error = new Error(msg) as Error & { status?: number; data?: any }
+    error.status = res.status
+    error.data = data
+    throw error
   }
   return res.json()
 }

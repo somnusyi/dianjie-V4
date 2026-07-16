@@ -116,8 +116,8 @@ export default function ManagerOpsPage() {
           <p className="text-caption text-gray3">{storeName} · {data?.month || thisMonth()}</p>
         </div>
         <div className="flex items-center gap-2">
-          <a href="/v2/manager/revenue" className="px-3 h-9 rounded-cta bg-amber text-white text-button flex items-center gap-1">
-            <span>＋</span><span>录营业额</span>
+          <a href="/v2/manager/upload-platform" className="px-3 h-9 rounded-cta bg-amber text-white text-button flex items-center gap-1">
+            <span>⇪</span><span>上传日报</span>
           </a>
           <a href="/v2/manager/expenses" className="px-3 h-9 rounded-cta bg-white border border-border text-button text-gray2 flex items-center">杂费</a>
         </div>

@@ -265,6 +265,9 @@ model Dish {
   salePrice   Decimal    @db.Decimal(10, 2) // 当前售价 (用于毛利计算)
   imageUrl    String?
   description String?
+  // 库存扣减策略。BOM=按配方扣减；EXCLUDE=明确不扣（如百家蘸料）。
+  inventoryPolicy     DishInventoryPolicy @default(BOM)
+  inventoryPolicyNote String?
   status      DishStatus @default(ACTIVE)
   // 是否所有门店都卖 (group=true) 或仅部分 (storeIds[])
   groupWide   Boolean    @default(true)
@@ -287,12 +290,20 @@ enum DishStatus {
   UPCOMING // 待上架 (新品研发中)
 }
 
+enum DishInventoryPolicy {
+  BOM
+  EXCLUDE
+}
+
 // 菜品配方 — 一道菜含 N 种食材
 model DishRecipe {
   id        String   @id @default(cuid())
   dishId    String
   productId String // 食材 SKU
-  quantity  Decimal  @db.Decimal(10, 4) // 用量 (按食材最小单位)
+  // 收银系统同一菜品可带“大份/小份”等规格。空字符串代表默认配方，
+  // 非空时按规范化规格精确匹配；找不到规格配方再回退默认配方。
+  variantKey String   @default("") @db.VarChar(80)
+  quantity  Decimal  @db.Decimal(14, 6) // 小包装换算可能低于 0.0001 箱
   unit      String // 单位 (kg/瓶/件/包,与 Product.unit 对应)
   lossRate  Decimal  @default(0) @db.Decimal(5, 4) // 损耗率 0.05 = 5%
   isMain    Boolean  @default(false) // 主料标记
@@ -303,7 +314,7 @@ model DishRecipe {
   dish    Dish    @relation(fields: [dishId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id])
 
-  @@unique([dishId, productId])
+  @@unique([dishId, variantKey, productId])
   @@index([productId])
   @@map("dish_recipes")
 }
@@ -332,6 +343,43 @@ model DishSale {
   @@index([tenantId, date])
   @@index([dishId, date])
   @@map("dish_sales")
+}
+
+// 店长每日上传“综合营业统计 + 菜品销售明细”的解析、确认与更正审计。
+// PREVIEWED 不影响业务；CONFIRMED 原子更新营收/销量/库存消耗；旧版本保留为 SUPERSEDED。
+model DailyBusinessImport {
+  id               String   @id @default(cuid())
+  tenantId         String
+  storeId          String
+  businessDate     DateTime @db.Date
+  revision         Int
+  status           String   @db.VarChar(20)
+  businessFileName String
+  businessFileHash String   @db.VarChar(64)
+  salesFileName    String
+  salesFileHash    String   @db.VarChar(64)
+  calculationFingerprint String @db.VarChar(64)
+  grossAmount      Decimal  @db.Decimal(12, 2)
+  discountAmount   Decimal  @db.Decimal(12, 2)
+  netRevenue       Decimal  @db.Decimal(12, 2)
+  orderCount       Int
+  dishRowCount     Int
+  parsedData       Json
+  previewData      Json
+  blockingIssues   Json
+  warningIssues    Json
+  createdById      String
+  confirmedById    String?
+  confirmedAt      DateTime?
+  supersededAt     DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([storeId, businessDate, revision])
+  @@unique([storeId, businessDate, businessFileHash, salesFileHash, calculationFingerprint], name: "daily_import_version_uk")
+  @@index([tenantId, storeId, businessDate])
+  @@index([storeId, status, createdAt])
+  @@map("daily_business_imports")
 }
 
 // ── 企微集成配置 ──────────────────────────────────────
@@ -1814,7 +1862,7 @@ model StockConsumption {
   storeId     String
   productId   String
   date        DateTime @db.Date
-  quantity    Decimal  @db.Decimal(10, 4) // 改 4 位精度: BOM 推算可能 0.0005 kg
+  quantity    Decimal  @db.Decimal(14, 6) // BOM 小包装换算需 6 位精度
   note        String?
   // 来源(用于幂等 + 审计): manual / dish_sale:<saleId> / meituan_ingest:<orderId>
   sourceType  String?  @db.VarChar(20)

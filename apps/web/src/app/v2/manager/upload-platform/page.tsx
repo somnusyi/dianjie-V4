@@ -1,176 +1,266 @@
-/**
- * 店长 · 上传美团/抖音 对账 CSV (Sprint B-3 过渡方案)
- *
- * 在我们没接平台 API 之前的"快速过桥":
- *   1. 店长每周从美团商户后台 / 抖音生活服务后台 下载对账 CSV
- *   2. 上传到这里
- *   3. 系统解析 → 按日期合并到 RevenueRecord
- *
- * 平台账单 CSV 格式不一(美团/抖音不同), 后端解析交给微服务做。
- * 此页仅做上传 + 状态展示。
- */
+/** 店长每日两表上传：综合营业统计 + 菜品销售明细。 */
 'use client'
-import { useEffect, useState } from 'react'
+
+import { useEffect, useMemo, useState } from 'react'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 
-type Platform = 'meituan' | 'douyin'
-type Upload = {
-  id: string; platform: Platform; filename: string; uploadedAt: string
-  status: 'PENDING' | 'PROCESSING' | 'DONE' | 'FAILED'
-  rowsImported?: number; totalGmv?: number; totalNet?: number; error?: string
+type Issue = { code: string; message: string; detail?: string }
+type ImportRecord = {
+  id: string
+  businessDate: string
+  revision: number
+  status: 'PREVIEWED' | 'CONFIRMING' | 'CONFIRMED' | 'SUPERSEDED'
+  businessFileName: string
+  salesFileName: string
+  grossAmount: number
+  discountAmount: number
+  netRevenue: number
+  orderCount: number
+  dishRowCount: number
+  blockingIssues: Issue[]
+  warningIssues: Issue[]
+  previewData: {
+    totals: { quantity: number; grossAmount: number; discountAmount: number; netIncome: number }
+    dishSales: Array<unknown>
+    consumptions: Array<{ productName: string; unit: string; quantity: number }>
+    excludedDishes: Array<unknown>
+    existingConfirmedRevision: number | null
+  }
+  createdAt: string
+  confirmedAt?: string | null
+}
+type DailyStatus = {
+  store: { id: string; name: string; no: string }
+  requestedDate: string
+  expectedBusinessDate: string
+  dueAt: string
+  state: 'PENDING' | 'OVERDUE' | 'CONFIRMED'
+  latest: ImportRecord | null
+  history: ImportRecord[]
 }
 
-const PLATFORMS = [
-  { key: 'meituan' as const, label: '美团/大众点评', hint: '商户后台 → 财务 → 对账 → 导出 CSV', color: 'orange' },
-  { key: 'douyin'  as const, label: '抖音生活服务',  hint: '生活服务后台 → 经营 → 对账下载 CSV', color: 'red' },
-]
+const money = (value: number) => `¥${Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+const shortDate = (value: string) => String(value || '').slice(0, 10)
 
-export default function UploadPlatformPage() {
-  const [tab, setTab] = useState<Platform>('meituan')
-  const [history, setHistory] = useState<Upload[] | null>(null)
-  const [submitting, setSubmitting] = useState(false)
+export default function DailyBusinessUploadPage() {
+  const [status, setStatus] = useState<DailyStatus | null>(null)
+  const [businessFile, setBusinessFile] = useState<File | null>(null)
+  const [salesFile, setSalesFile] = useState<File | null>(null)
+  const [preview, setPreview] = useState<ImportRecord | null>(null)
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [storeName, setStoreName] = useState('')
-  const [storeId, setStoreId] = useState<string | null>(null)
+  const user = useMemo(() => getUser(), [])
 
-  useEffect(() => {
-    const u = getUser()
-    setStoreId(u?.storeId || u?.store?.id || null)
-    setStoreName(u?.store?.name || '本店')
-    loadHistory()
-  }, [])
-
-  function loadHistory() {
-    apiFetch<Upload[]>('/api/platform-uploads?limit=10')
-      .then(setHistory)
-      .catch(() => setHistory([]))   // 后端未就绪时降级显示空
+  async function loadStatus() {
+    try {
+      const data = await apiFetch<DailyStatus>('/api/daily-business-imports/status')
+      setStatus(data)
+      if (data.latest?.status === 'PREVIEWED') setPreview(data.latest)
+    } catch (reason: any) {
+      setError(reason.message || '状态加载失败')
+    }
   }
 
-  async function pickFile(platform: Platform) {
+  useEffect(() => { loadStatus() }, [])
+
+  function selectFile(kind: 'business' | 'sales') {
     const input = document.createElement('input')
     input.type = 'file'
-    input.accept = '.csv,.xlsx,.xls,text/csv'
-    input.onchange = async () => {
+    input.accept = '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    input.onchange = () => {
       const file = input.files?.[0]
       if (!file) return
-      if (file.size > 5 * 1024 * 1024) { setError('文件过大 (上限 5MB)'); return }
-      setSubmitting(true); setError(null)
-      try {
-        const form = new FormData()
-        form.append('file', file)
-        form.append('platform', platform)
-        if (storeId) form.append('storeId', storeId)
-        const res = await fetch('/api/platform-uploads', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${localStorage.getItem('token') || ''}` },
-          body: form,
-        })
-        if (!res.ok) {
-          const j = await res.json().catch(() => ({}))
-          throw new Error(j.error || '上传失败')
-        }
-        loadHistory()
-      } catch (e: any) { setError(e.message || '上传失败') }
-      setSubmitting(false)
+      if (file.size > 5 * 1024 * 1024) { setError('单个文件不能超过 5MB'); return }
+      if (kind === 'business') setBusinessFile(file)
+      else setSalesFile(file)
+      setPreview(null)
+      setError(null)
     }
     input.click()
   }
 
+  async function createPreview() {
+    if (!businessFile || !salesFile) { setError('请先选择两份文件'); return }
+    setBusy(true); setError(null)
+    try {
+      const form = new FormData()
+      form.append('businessFile', businessFile)
+      form.append('salesFile', salesFile)
+      if (user?.storeId) form.append('storeId', user.storeId)
+      const result = await apiFetch<ImportRecord>('/api/daily-business-imports/preview', { method: 'POST', body: form })
+      setPreview(result)
+      await loadStatus()
+    } catch (reason: any) {
+      setError(reason.message || '预览失败')
+    } finally { setBusy(false) }
+  }
+
+  async function confirmImport() {
+    if (!preview || preview.blockingIssues.length > 0) return
+    if (!window.confirm(`确认导入 ${shortDate(preview.businessDate)} 的营业与销量数据，并按 BOM 扣减库存？`)) return
+    setBusy(true); setError(null)
+    try {
+      const result = await apiFetch<ImportRecord>(`/api/daily-business-imports/${preview.id}/confirm`, { method: 'POST' })
+      setPreview(result)
+      setBusinessFile(null); setSalesFile(null)
+      await loadStatus()
+    } catch (reason: any) {
+      if (reason?.data?.code === 'PREVIEW_REFRESHED' && reason.data.import) {
+        setPreview(reason.data.import)
+        setError('BOM 或菜品规则刚刚发生变化，扣减预览已刷新。请重新核对后再确认。')
+        return
+      }
+      setError(reason.message || '确认失败')
+    } finally { setBusy(false) }
+  }
+
+  const expected = status?.expectedBusinessDate || '前一日'
   return (
-    <div className="min-h-screen bg-bg pb-12">
+    <div className="min-h-screen bg-bg pb-16">
       <header className="px-4 pt-4 pb-2 flex items-center gap-3">
-        <button onClick={() => history && history.length > 0 ? location.href = '/v2/manager/ops' : window.history.back()} className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</button>
-        <div>
-          <h1 className="text-h1">上传平台对账</h1>
-          <p className="text-caption text-gray3">{storeName} · 美团 / 抖音 CSV 自动入账</p>
+        <button onClick={() => history.back()} className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</button>
+        <div className="flex-1">
+          <h1 className="text-h1">每日营业数据</h1>
+          <p className="text-caption text-gray3">{status?.store.name || user?.store?.name || '本店'} · 每日上午 11:00 前</p>
         </div>
       </header>
 
-      <div className="mx-4 mt-3 bg-bg-warm rounded-card border border-border p-3 text-caption text-gray2">
-        <p><span className="text-amber-fg">为何上传?</span> 美团/抖音 API 接入需企业资质审核 1-3 月,
-          先用商户后台导出的 CSV 作为过桥, 系统按日期匹配到营业额记录。</p>
-        <p className="text-micro text-gray3 mt-1">⏱ 建议每周一次, 涵盖前一周核销明细</p>
-      </div>
-
-      {/* 平台切换 */}
-      <div className="px-4 mt-3 flex gap-2">
-        {PLATFORMS.map(p => (
-          <button key={p.key}
-            onClick={() => setTab(p.key)}
-            className={`px-3 py-1.5 rounded-cta text-button ${tab === p.key ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
-            {p.label}
-          </button>
-        ))}
-      </div>
-
-      {/* 上传卡 */}
-      <div className="mx-4 mt-3">
-        {PLATFORMS.filter(p => p.key === tab).map(p => (
-          <div key={p.key} className="bg-white rounded-card border border-border p-4">
-            <div className="text-h2 mb-1">{p.label}</div>
-            <p className="text-caption text-gray3 mb-3">{p.hint}</p>
-            <button
-              onClick={() => pickFile(p.key)}
-              disabled={submitting}
-              className="w-full py-3 bg-amber text-white rounded-cta text-button disabled:opacity-40"
-            >
-              {submitting ? '上传中…' : '选择 CSV 文件'}
-            </button>
-            <p className="text-micro text-gray3 mt-2">支持: CSV / XLSX, 单文件 ≤ 5MB</p>
+      <div className={`mx-4 mt-3 rounded-card border p-3 ${
+        status?.state === 'CONFIRMED' ? 'bg-green-bg border-green-fg/20' :
+          status?.state === 'OVERDUE' ? 'bg-red-bg border-red-fg/20' : 'bg-amber/10 border-amber/30'
+      }`}>
+        <div className="flex items-center gap-3">
+          <span className="text-h2">{status?.state === 'CONFIRMED' ? '✓' : status?.state === 'OVERDUE' ? '!' : '◷'}</span>
+          <div className="flex-1">
+            <div className="text-button">
+              {status?.state === 'CONFIRMED' ? `${expected} 已确认` : status?.state === 'OVERDUE' ? `${expected} 日报已逾期` : `请上传 ${expected} 日报`}
+            </div>
+            <div className="text-micro text-gray2 mt-0.5">
+              {status?.state === 'CONFIRMED' ? '营业、销量和库存消耗已同步' : '两份表必须为同一营业日，预览无误后再确认'}
+            </div>
           </div>
-        ))}
+          {status?.latest && <span className="text-micro text-gray3">第 {status.latest.revision} 版</span>}
+        </div>
       </div>
+
+      <section className="px-4 mt-5">
+        <div className="flex items-baseline justify-between mb-2">
+          <h2 className="text-h2">1. 选择两份文件</h2>
+          <span className="text-micro text-gray3">仅 XLSX · 单份 ≤ 5MB</span>
+        </div>
+        <div className="space-y-2">
+          <FileCard
+            title="综合营业统计"
+            hint="包含营业额、营业收入、优惠金额、订单量"
+            file={businessFile}
+            onPick={() => selectFile('business')}
+          />
+          <FileCard
+            title="菜品销售明细"
+            hint="选择“单品+套餐明细”，用于销量与 BOM 扣减"
+            file={salesFile}
+            onPick={() => selectFile('sales')}
+          />
+        </div>
+        <button
+          onClick={createPreview}
+          disabled={busy || !businessFile || !salesFile}
+          className="w-full mt-3 py-3 rounded-cta bg-ink text-white text-button disabled:opacity-35"
+        >{busy ? '解析中…' : '生成预览'}</button>
+      </section>
 
       {error && <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}
 
-      {/* 历史 */}
-      <Section title="上传历史" right={history === null ? '加载中…' : `${history.length} 次`}>
-        {history === null && <p className="text-caption text-gray3 text-center py-6">加载中…</p>}
-        {history?.length === 0 && (
-          <div className="bg-white rounded-card border border-border p-6 text-center">
-            <p className="text-caption text-gray3">暂无上传记录</p>
-            <p className="text-micro text-gray4 mt-1">第一次上传后, 这里会显示解析进度 + 入账金额</p>
+      {preview && (
+        <section className="px-4 mt-5">
+          <div className="flex items-baseline justify-between mb-2">
+            <h2 className="text-h2">2. 核对并确认</h2>
+            <span className="text-caption text-gray3">{shortDate(preview.businessDate)} · 第 {preview.revision} 版</span>
           </div>
-        )}
-        {history && history.length > 0 && (
-          <ul className="bg-white rounded-card border border-border divide-y divide-border">
-            {history.map(u => (
-              <li key={u.id} className="px-3 py-3">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-caption text-gray3">{u.platform === 'meituan' ? '美团' : '抖音'}</span>
-                  <span className={`text-micro px-2 py-0.5 rounded-chip ${
-                    u.status === 'DONE' ? 'bg-green-bg text-green-fg' :
-                    u.status === 'FAILED' ? 'bg-red-bg text-red-fg' :
-                    'bg-orange-bg text-orange-fg'
-                  }`}>
-                    {u.status === 'DONE' ? '已入账' : u.status === 'FAILED' ? '失败' : u.status === 'PROCESSING' ? '处理中' : '待处理'}
-                  </span>
-                  <span className="text-micro text-gray3 ml-auto">{new Date(u.uploadedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
-                </div>
-                <div className="text-body truncate">{u.filename}</div>
-                {u.status === 'DONE' && u.rowsImported != null && (
-                  <p className="text-caption text-gray2 mt-0.5 font-num">
-                    导入 {u.rowsImported} 行 · GMV ¥{u.totalGmv?.toLocaleString()} · 净到账 ¥{u.totalNet?.toLocaleString()}
-                  </p>
-                )}
-                {u.error && <p className="text-micro text-red-fg mt-1">{u.error}</p>}
-              </li>
-            ))}
-          </ul>
-        )}
-      </Section>
+          <div className="bg-white rounded-card border border-border overflow-hidden">
+            <div className="grid grid-cols-2 divide-x divide-y divide-border">
+              <Metric label="营业额" value={money(preview.grossAmount)} />
+              <Metric label="营业收入" value={money(preview.netRevenue)} />
+              <Metric label="订单量" value={`${preview.orderCount} 笔`} />
+              <Metric label="优惠金额" value={money(preview.discountAmount)} />
+            </div>
+            <div className="px-3 py-3 border-t border-border text-caption text-gray2 flex justify-between">
+              <span>销售 {preview.previewData?.dishSales?.length || preview.dishRowCount} 个菜品</span>
+              <span>扣减 {preview.previewData?.consumptions?.length || 0} 个食材 SKU</span>
+            </div>
+          </div>
+
+          {preview.blockingIssues.length > 0 && (
+            <IssueBox tone="red" title={`${preview.blockingIssues.length} 项问题阻止确认`} issues={preview.blockingIssues} />
+          )}
+          {preview.warningIssues.length > 0 && (
+            <IssueBox tone="amber" title="请留意" issues={preview.warningIssues} />
+          )}
+
+          {preview.status === 'CONFIRMED' ? (
+            <div className="mt-3 py-3 rounded-cta bg-green-bg text-green-fg text-button text-center">✓ 已确认并更新数据</div>
+          ) : (
+            <button
+              onClick={confirmImport}
+              disabled={busy || preview.blockingIssues.length > 0}
+              className="w-full mt-3 py-3 rounded-cta bg-amber text-white text-button disabled:opacity-35"
+            >{busy ? '确认中…' : preview.previewData?.existingConfirmedRevision ? '确认更正并替换旧版' : '确认导入并扣减库存'}</button>
+          )}
+          <p className="text-micro text-gray3 mt-2 text-center">确认采用原子事务：任一步失败，营业、销量与库存均不会部分写入</p>
+        </section>
+      )}
+
+      <section className="px-4 mt-6">
+        <div className="flex items-baseline justify-between mb-2">
+          <h2 className="text-h2">导入历史</h2>
+          <span className="text-caption text-gray3">{status?.history.length || 0} 条</span>
+        </div>
+        <div className="bg-white rounded-card border border-border divide-y divide-border">
+          {!status && <div className="p-4 text-caption text-gray3 text-center">加载中…</div>}
+          {status?.history.length === 0 && <div className="p-5 text-caption text-gray3 text-center">暂无导入记录</div>}
+          {status?.history.map(row => (
+            <button key={row.id} onClick={() => setPreview(row)} className="w-full px-3 py-3 text-left flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="text-body">{shortDate(row.businessDate)} · {money(row.netRevenue)}</div>
+                <div className="text-micro text-gray3 mt-0.5 truncate">第 {row.revision} 版 · {row.orderCount} 笔 · {row.businessFileName}</div>
+              </div>
+              <span className={`text-micro px-2 py-1 rounded-chip ${
+                row.status === 'CONFIRMED' ? 'bg-green-bg text-green-fg' :
+                  row.status === 'SUPERSEDED' ? 'bg-bg text-gray3' : 'bg-orange-bg text-orange-fg'
+              }`}>{row.status === 'CONFIRMED' ? '已确认' : row.status === 'SUPERSEDED' ? '旧版本' : '待确认'}</span>
+            </button>
+          ))}
+        </div>
+      </section>
     </div>
   )
 }
 
-function Section({ title, right, children }: { title: string; right?: string; children: React.ReactNode }) {
+function FileCard({ title, hint, file, onPick }: { title: string; hint: string; file: File | null; onPick: () => void }) {
   return (
-    <section className="px-4 mt-5">
-      <div className="flex items-baseline justify-between mb-2">
-        <h2 className="text-h2">{title}</h2>
-        {right && <span className="text-caption text-gray3">{right}</span>}
+    <button onClick={onPick} className="w-full bg-white rounded-card border border-border p-3 text-left flex items-center gap-3">
+      <span className={`w-10 h-10 rounded-md flex items-center justify-center ${file ? 'bg-green-bg text-green-fg' : 'bg-bg text-gray3'}`}>{file ? '✓' : '⇪'}</span>
+      <div className="flex-1 min-w-0">
+        <div className="text-button">{title}</div>
+        <div className={`text-micro mt-0.5 truncate ${file ? 'text-green-fg' : 'text-gray3'}`}>{file?.name || hint}</div>
       </div>
-      {children}
-    </section>
+      <span className="text-caption text-gray3">{file ? '更换' : '选择'}</span>
+    </button>
+  )
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div className="p-3"><div className="text-micro text-gray3">{label}</div><div className="text-h2 font-num mt-1">{value}</div></div>
+}
+
+function IssueBox({ tone, title, issues }: { tone: 'red' | 'amber'; title: string; issues: Issue[] }) {
+  const colors = tone === 'red' ? 'bg-red-bg text-red-fg' : 'bg-orange-bg text-orange-fg'
+  return (
+    <div className={`mt-3 rounded-card p-3 ${colors}`}>
+      <div className="text-button">{title}</div>
+      <ul className="mt-2 space-y-2">
+        {issues.map((issue, index) => <li key={`${issue.code}-${index}`} className="text-caption"><div>• {issue.message}</div>{issue.detail && <div className="text-micro opacity-75 ml-3 mt-0.5">{issue.detail}</div>}</li>)}
+      </ul>
+    </div>
   )
 }

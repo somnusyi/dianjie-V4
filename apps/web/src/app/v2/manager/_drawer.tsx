@@ -6,7 +6,7 @@
 const ITEMS = [
   { icon: '¥', title: '录入营业额', sub: '今日 4 渠道 · 自营 + 平台券',                 href: '/v2/manager/revenue' },
   { icon: '✓', title: '券核销待办', sub: '美团 / 抖音 实时核销日记 + 平台后台快捷入口',  href: '/v2/manager/voucher-todo' },
-  { icon: '⇪', title: '平台对账',   sub: '每周上传 美团 / 抖音 CSV · 自动入账',          href: '/v2/manager/upload-platform' },
+  { icon: '⇪', title: '每日营业数据', sub: '上午 11 点前上传两表 · 预览后更新销量与库存', href: '/v2/manager/upload-platform' },
   { icon: '◧', title: '月度杂费',   sub: '租金 / 水电 / 人工 / 管理 · 月度录入',          href: '/v2/manager/expenses' },
   { icon: '⊞', title: '筹建/代付',  sub: '本店合同 · 申请支出 · 老板审批后由总部代付',    href: '/v2/manager/capital' },
   { icon: '🍲', title: '食材采购单', sub: '面向供应商 · 直发不审批 · 含验收报损链',  href: '/v2/chef/purchase/new' },

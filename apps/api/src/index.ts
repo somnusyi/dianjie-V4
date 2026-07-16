@@ -77,6 +77,7 @@ import multipart from '@fastify/multipart'
 import { uploadRoutes } from './routes/upload'
 import { meituanAdminRoutes } from './routes/meituanAdmin'
 import { meituanDataRoutes } from './routes/meituanData'
+import { dailyBusinessImportRoutes } from './routes/dailyBusinessImports'
 
 const app = Fastify({
   logger: {
@@ -227,6 +228,7 @@ async function bootstrap() {
   app.register(cmbRoutes, { prefix: '/api/cmb' })
   app.register(meituanAdminRoutes, { prefix: '/api/admin/meituan' })
   app.register(meituanDataRoutes, { prefix: '/api/meituan' })
+  app.register(dailyBusinessImportRoutes, { prefix: '/api/daily-business-imports' })
 
   // ── 健康检查（含数据库连接验证）──────
   // /api/health is the public path behind app.dianjie.cc's nginx proxy;

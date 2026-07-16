@@ -51,7 +51,7 @@ const saleSchema = z.object({
 /** 算菜品的食材成本 (基于当前配方 + Product.price) */
 async function calcDishCost(dishId: string): Promise<number> {
   const recipes = await prisma.dishRecipe.findMany({
-    where: { dishId },
+    where: { dishId, variantKey: '' },
     include: { product: { select: { price: true } } },
   })
   let cost = 0
@@ -76,7 +76,10 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     const dishes = await prisma.dish.findMany({
       where, orderBy: [{ status: 'asc' }, { category: 'asc' }, { name: 'asc' }],
       include: {
-        recipes: withCost === '1' ? { include: { product: { select: { name: true, unit: true, price: true, spec: true } } } } : false,
+        recipes: withCost === '1' ? {
+          where: { variantKey: '' },
+          include: { product: { select: { name: true, unit: true, price: true, spec: true } } },
+        } : false,
       },
     })
     if (withCost === '1') {
@@ -288,7 +291,8 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     const qtyChanged = !wasUpdate || Math.abs(prevQty - Number(d.quantity)) > 0.001
     if (qtyChanged) {
       const recipes = await prisma.dishRecipe.findMany({
-        where: { dishId: d.dishId },
+        // 手工销量没有 POS 规格字段，只允许使用默认 BOM，不能把大/小份配方叠加。
+        where: { dishId: d.dishId, variantKey: '' },
         select: { productId: true, quantity: true, lossRate: true },
       })
       const srcType = 'dish_sale'
@@ -339,7 +343,12 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     if (rows.length === 0) return []
     const dishes = await prisma.dish.findMany({
       where: { id: { in: rows.map(r => r.dishId) } },
-      include: { recipes: { include: { product: { select: { price: true } } } } },
+      include: {
+        recipes: {
+          where: { variantKey: '' },
+          include: { product: { select: { price: true } } },
+        },
+      },
     })
     const dishMap = new Map(dishes.map(d => [d.id, d]))
     return rows.map(r => {
@@ -390,7 +399,8 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const recipes = await prisma.dishRecipe.findMany({
-      where: { dishId: { in: Array.from(dishQty.keys()) } },
+      // 汇总销量没有规格维度，只以默认 BOM 做估算；实际日报库存扣减使用规格明细。
+      where: { dishId: { in: Array.from(dishQty.keys()) }, variantKey: '' },
       include: { product: { select: { id: true, name: true, unit: true, spec: true } } },
     })
 

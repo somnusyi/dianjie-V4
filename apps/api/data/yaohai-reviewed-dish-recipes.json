@@ -1,0 +1,4571 @@
+{
+  "version": 1,
+  "tenantSlug": "dianjie",
+  "source": "滇界菜品利润分析表（用户确认毛重口径）",
+  "policies": [
+    "BOM按毛重",
+    "退菜不补库存",
+    "百家蘸料不扣",
+    "鲜冻可替代并优先鲜鸡",
+    "赠品直接扣库存"
+  ],
+  "productsToCreate": [
+    {
+      "code": "DJ-BOM-00C6DC4A7E",
+      "name": "七彩土豆",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-00E1C2DD56",
+      "name": "紫山药",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-0105C57A7E",
+      "name": "爆浆豆腐(小)",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-0395C98665",
+      "name": "酸萝卜汁",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-10F69666C6",
+      "name": "耗油、油",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-127EB306E2",
+      "name": "新鲜芭乐",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-12CA837BCA",
+      "name": "新鲜胡萝卜",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-1B258C71BA",
+      "name": "酒精块",
+      "unit": "个",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-1EDE8951B8",
+      "name": "单山蘸水",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-2EF2523339",
+      "name": "血皮菜",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-3126D4D5EF",
+      "name": "生姜",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-3448187C8F",
+      "name": "蒜籽",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-3617F8B48B",
+      "name": "折耳根碎",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-3A0FE29383",
+      "name": "花草",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-3BC24E0B7A",
+      "name": "清香木",
+      "unit": "片",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-3EB2EE4A26",
+      "name": "胡萝卜",
+      "unit": "片",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-410B6BF26E",
+      "name": "纯净水",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-42AC05459A",
+      "name": "咖奶",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-466614B314",
+      "name": "农夫山泉1.5升瓶装矿泉水",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-51D341DDF2",
+      "name": "青提果茸",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-54E4DE84CC",
+      "name": "生抽",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-55DF851350",
+      "name": "苹果鲜果",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-5B347C2623",
+      "name": "黄姜末",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-5DBE27263C",
+      "name": "豌豆尖",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-5E59F91B24",
+      "name": "牛奶",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-5ECB01727D",
+      "name": "桂花乌龙",
+      "unit": "ml",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-5FFB8E1AA1",
+      "name": "大香菜",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-62EDC9A49B",
+      "name": "黄柠檬",
+      "unit": "片",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-69A0237028",
+      "name": "橙片",
+      "unit": "片",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-6A1E28E246",
+      "name": "菜籽油",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-6E2C26F125",
+      "name": "紫包菜",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-7341C156CD",
+      "name": "芒果片5片",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-80695A5EBA",
+      "name": "薄荷叶",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-81F824E505",
+      "name": "新鲜小番茄",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-8A481AAADF",
+      "name": "酸木瓜片",
+      "unit": "片",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-8CE9C0D9BB",
+      "name": "蒜苗段",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-9638A63BC6",
+      "name": "冰块170",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-9649E9D55D",
+      "name": "大豆油",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-9CE2FD999A",
+      "name": "9°白米醋",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-9D34F53976",
+      "name": "凤梨片",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-9FA04E58E9",
+      "name": "X调味糖浆",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-A227F18B44",
+      "name": "冷冻柠檬汁",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-A488CAB3D4",
+      "name": "盐",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-A5C9230FFC",
+      "name": "冰块",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-A74481B032",
+      "name": "山葵",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-A8CE283315",
+      "name": "直饮水",
+      "unit": "ml",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-AA3058B349",
+      "name": "香菜",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-ABD7E693AA",
+      "name": "土豆",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-B75CC44037",
+      "name": "香芹段",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-B948EDFFC0",
+      "name": "冷冻胡萝卜香橙汁",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-B9B756BCA3",
+      "name": "小米椒",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-BA42BCB314",
+      "name": "冰块170g",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-BFF42E745E",
+      "name": "干花/清香木",
+      "unit": "片",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-C0CB921C34",
+      "name": "番茄瓣",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-C18D92058B",
+      "name": "牛肉丸已下架",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-C668CED3EE",
+      "name": "芥末",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-CABA5B16B2",
+      "name": "蒜片",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-CC5971B53D",
+      "name": "冷冻柳橙汁",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-CDBE3CA43C",
+      "name": "蓝莓装饰",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-CE6A01ED85",
+      "name": "米饭",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-D184A6A0AD",
+      "name": "羽衣甘蓝叶子",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-DA61CFAAEF",
+      "name": "薄荷",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-DE54D21139",
+      "name": "冰水",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-E27B4AF270",
+      "name": "巧克力小花",
+      "unit": "个",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-E423A1AE01",
+      "name": "粉色棉花糖",
+      "unit": "个",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-E6CEF6B0C1",
+      "name": "花椒油",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-EE9E539AB0",
+      "name": "奇亚籽",
+      "unit": "勺",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-F3A6A85879",
+      "name": "味极鲜",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-F3DDE5EEDC",
+      "name": "洋葱",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-F568FEB67D",
+      "name": "青椒片",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-F5E2D26175",
+      "name": "小米椒碎",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-FAD3A2A857",
+      "name": "蒜末",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-FAF3BE1EF7",
+      "name": "鸡蛋",
+      "unit": "个",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-FC6FFA14B8",
+      "name": "奇亚籽",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-FCE58304A6",
+      "name": "木瓜丝",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-FE03ED9FAB",
+      "name": "紫白菜",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-FF56332B3C",
+      "name": "娃娃菜",
+      "unit": "g",
+      "category": "BOM待采购映射",
+      "spec": null
+    }
+  ],
+  "rules": [
+    {
+      "dishName": "十界菌菇汤锅",
+      "spec": "菌菇+武定跑山鸡",
+      "policy": "BOM",
+      "bomName": "十界菌菇汤锅配跑山鸡",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL5L",
+          "productName": "竹荪",
+          "productUnit": "件",
+          "quantity": 0.0606,
+          "rawIngredient": "X-竹荪",
+          "rawQuantity": 30.3,
+          "rawUnit": "g",
+          "note": "锅底 第3行，按毛重；按采购规格 件/500g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5P",
+          "productName": "猪肚菌",
+          "productUnit": "件",
+          "quantity": 0.035133,
+          "rawIngredient": "X-猪肚菌",
+          "rawQuantity": 52.7,
+          "rawUnit": "g",
+          "note": "锅底 第4行，按毛重；按采购规格 件/1500g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL65",
+          "productName": "滑子菇",
+          "productUnit": "盒",
+          "quantity": 0.2108,
+          "rawIngredient": "滑子菇",
+          "rawQuantity": 52.7,
+          "rawUnit": "g",
+          "note": "锅底 第5行，按毛重；按采购规格 盒/250g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5Y",
+          "productName": "野生香菇",
+          "productUnit": "kg",
+          "quantity": 0.0532,
+          "rawIngredient": "X-野生香菇",
+          "rawQuantity": 53.2,
+          "rawUnit": "g",
+          "note": "锅底 第6行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-2DYL64",
+          "productName": "金耳菌",
+          "productUnit": "kg",
+          "quantity": 0.051,
+          "rawIngredient": "X-金耳菌",
+          "rawQuantity": 51,
+          "rawUnit": "g",
+          "note": "锅底 第7行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-2DYL60",
+          "productName": "鹿茸菇",
+          "productUnit": "件",
+          "quantity": 0.02,
+          "rawIngredient": "X-鹿茸菇",
+          "rawQuantity": 50,
+          "rawUnit": "g",
+          "note": "锅底 第8行，按毛重；按采购规格 件/2500g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5F",
+          "productName": "赤松茸A",
+          "productUnit": "件",
+          "quantity": 0.0244,
+          "rawIngredient": "X-赤松茸A",
+          "rawQuantity": 54.9,
+          "rawUnit": "g",
+          "note": "锅底 第9行，按毛重；按采购规格 件/2250g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5I",
+          "productName": "榆黄蘑件装",
+          "productUnit": "件",
+          "quantity": 0.024444,
+          "rawIngredient": "X-榆黄蘑件装",
+          "rawQuantity": 55,
+          "rawUnit": "g",
+          "note": "锅底 第10行，按毛重；按采购规格 件/2250g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5N",
+          "productName": "黑牛肝菌",
+          "productUnit": "kg",
+          "quantity": 0.032,
+          "rawIngredient": "X-黑牛肝菌",
+          "rawQuantity": 32,
+          "rawUnit": "g",
+          "note": "锅底 第11行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-2DYL69",
+          "productName": "人工灰虎掌",
+          "productUnit": "kg",
+          "quantity": 0.1,
+          "rawIngredient": "X-灰虎掌",
+          "rawQuantity": 100,
+          "rawUnit": "g",
+          "note": "锅底 第12行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-2DYLAL",
+          "productName": "红枣",
+          "productUnit": "箱",
+          "quantity": 0.001,
+          "rawIngredient": "X-红枣",
+          "rawQuantity": 10,
+          "rawUnit": "g",
+          "note": "锅底 第13行，按毛重；按采购规格 箱/20斤 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL67",
+          "productName": "虫草花",
+          "productUnit": "袋",
+          "quantity": 0.02,
+          "rawIngredient": "X-虫草花",
+          "rawQuantity": 10,
+          "rawUnit": "g",
+          "note": "锅底 第14行，按毛重；按采购规格 袋/500g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLAH",
+          "productName": "枸杞",
+          "productUnit": "件",
+          "quantity": 0.001,
+          "rawIngredient": "X-枸杞",
+          "rawQuantity": 5,
+          "rawUnit": "g",
+          "note": "锅底 第15行，按毛重；按采购规格 件/10斤 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLA8",
+          "productName": "汤底调味粉·滇界定制",
+          "productUnit": "箱",
+          "quantity": 0.001,
+          "rawIngredient": "X-汤底调味粉（定制）",
+          "rawQuantity": 15,
+          "rawUnit": "g",
+          "note": "锅底 第16行，按毛重；按采购规格 箱/2500g*6包 换算"
+        },
+        {
+          "productCode": "DJ-BOM-466614B314",
+          "productName": "农夫山泉1.5升瓶装矿泉水",
+          "productUnit": "g",
+          "quantity": 1500,
+          "rawIngredient": "X-农夫山泉1.5升瓶装矿泉水",
+          "rawQuantity": 1500,
+          "rawUnit": "g",
+          "note": "锅底 第17行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-3126D4D5EF",
+          "productName": "生姜",
+          "productUnit": "g",
+          "quantity": 10.3,
+          "rawIngredient": "生姜",
+          "rawQuantity": 10.3,
+          "rawUnit": "g",
+          "note": "锅底 第18行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5W",
+          "productName": "龙爪菇",
+          "productUnit": "kg",
+          "quantity": 0.05555,
+          "rawIngredient": "X-龙爪菇",
+          "rawQuantity": 55.55,
+          "rawUnit": "g",
+          "note": "锅底 第20行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-WJEQBC",
+          "productName": "清远鸡盒装",
+          "productUnit": "盒",
+          "quantity": 1,
+          "rawIngredient": "X-清远鸡/真空包装",
+          "rawQuantity": 1,
+          "rawUnit": "盒",
+          "note": "锅底 第21行，按毛重；原表成本13.5元，对应清远鸡1盒，不按克解释；盘点单位与采购SKU单位一致"
+        }
+      ],
+      "variantKey": "菌菇+武定跑山鸡"
+    },
+    {
+      "dishName": "四季鲜菌汤锅",
+      "spec": "菌菇+武定跑山鸡",
+      "policy": "BOM",
+      "bomName": "四季鲜菌汤锅",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL60",
+          "productName": "鹿茸菇",
+          "productUnit": "件",
+          "quantity": 0.0324,
+          "rawIngredient": "X-鹿茸菇",
+          "rawQuantity": 81,
+          "rawUnit": "g",
+          "note": "锅底 第43行，按毛重；按采购规格 件/2500g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL64",
+          "productName": "金耳菌",
+          "productUnit": "kg",
+          "quantity": 0.0816,
+          "rawIngredient": "X-金耳菌",
+          "rawQuantity": 81.6,
+          "rawUnit": "g",
+          "note": "锅底 第44行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5Y",
+          "productName": "野生香菇",
+          "productUnit": "kg",
+          "quantity": 0.07446,
+          "rawIngredient": "X-野生香菇",
+          "rawQuantity": 74.46,
+          "rawUnit": "g",
+          "note": "锅底 第45行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5N",
+          "productName": "黑牛肝菌",
+          "productUnit": "kg",
+          "quantity": 0.07446,
+          "rawIngredient": "X-黑牛肝菌",
+          "rawQuantity": 74.46,
+          "rawUnit": "g",
+          "note": "锅底 第46行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-2DYLAL",
+          "productName": "红枣",
+          "productUnit": "箱",
+          "quantity": 0.001,
+          "rawIngredient": "X-红枣",
+          "rawQuantity": 10,
+          "rawUnit": "g",
+          "note": "锅底 第47行，按毛重；按采购规格 箱/20斤 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL67",
+          "productName": "虫草花",
+          "productUnit": "袋",
+          "quantity": 0.02,
+          "rawIngredient": "X-虫草花",
+          "rawQuantity": 10,
+          "rawUnit": "g",
+          "note": "锅底 第48行，按毛重；按采购规格 袋/500g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLAH",
+          "productName": "枸杞",
+          "productUnit": "件",
+          "quantity": 0.001,
+          "rawIngredient": "X-枸杞",
+          "rawQuantity": 5,
+          "rawUnit": "g",
+          "note": "锅底 第49行，按毛重；按采购规格 件/10斤 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLA8",
+          "productName": "汤底调味粉·滇界定制",
+          "productUnit": "箱",
+          "quantity": 0.001333,
+          "rawIngredient": "X-汤底调味粉（定制）",
+          "rawQuantity": 20,
+          "rawUnit": "g",
+          "note": "锅底 第50行，按毛重；按采购规格 箱/2500g*6包 换算"
+        },
+        {
+          "productCode": "DJ-BOM-466614B314",
+          "productName": "农夫山泉1.5升瓶装矿泉水",
+          "productUnit": "g",
+          "quantity": 1500,
+          "rawIngredient": "X-农夫山泉1.5升瓶装矿泉水",
+          "rawQuantity": 1500,
+          "rawUnit": "g",
+          "note": "锅底 第51行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-3126D4D5EF",
+          "productName": "生姜",
+          "productUnit": "g",
+          "quantity": 10,
+          "rawIngredient": "生姜",
+          "rawQuantity": 10,
+          "rawUnit": "g",
+          "note": "锅底 第52行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYL9D",
+          "productName": "云南腊火腿",
+          "productUnit": "斤",
+          "quantity": 0.1,
+          "rawIngredient": "X-云南腊火腿",
+          "rawQuantity": 50,
+          "rawUnit": "g",
+          "note": "锅底 第53行，按毛重；g换算为斤"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5W",
+          "productName": "龙爪菇",
+          "productUnit": "kg",
+          "quantity": 0.05555,
+          "rawIngredient": "X-龙爪菇",
+          "rawQuantity": 55.55,
+          "rawUnit": "g",
+          "note": "锅底 第54行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-WJEQBC",
+          "productName": "清远鸡盒装",
+          "productUnit": "盒",
+          "quantity": 1,
+          "rawIngredient": "X-清远鸡/真空包装",
+          "rawQuantity": 1,
+          "rawUnit": "盒",
+          "note": "锅底 第55行，按毛重；原表成本13.5元，对应清远鸡1盒，不按克解释；盘点单位与采购SKU单位一致"
+        }
+      ],
+      "variantKey": "菌菇+武定跑山鸡"
+    },
+    {
+      "dishName": "宣威火腿",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "宣威腊火腿",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL9D",
+          "productName": "云南腊火腿",
+          "productUnit": "斤",
+          "quantity": 0.142,
+          "rawIngredient": "X-云南腊火腿",
+          "rawQuantity": 71,
+          "rawUnit": "g",
+          "note": "荤菜 第38行，按毛重；g换算为斤"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "小香肠",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "小香肠",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL7U",
+          "productName": "火锅小香肠",
+          "productUnit": "箱",
+          "quantity": 0.02,
+          "rawIngredient": "X火锅小香肠",
+          "rawQuantity": 85,
+          "rawUnit": "g",
+          "note": "荤菜 第13行，按毛重；按采购规格 箱/50包/85g 换算"
+        },
+        {
+          "productCode": "DJ-BOM-3A0FE29383",
+          "productName": "花草",
+          "productUnit": "g",
+          "quantity": 8,
+          "rawIngredient": "花草",
+          "rawQuantity": 8,
+          "rawUnit": "g",
+          "note": "荤菜 第14行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "山野炸蘑菇",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "香炸蘑菇",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL8V",
+          "productName": "酥炸平菇",
+          "productUnit": "箱",
+          "quantity": 0.0122,
+          "rawIngredient": "X-酥炸平菇",
+          "rawQuantity": 122,
+          "rawUnit": "g",
+          "note": "油炸 第11行，按毛重；按采购规格 箱/10袋/1000g 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "百家蘸料",
+      "spec": "",
+      "policy": "EXCLUDE",
+      "target": null,
+      "note": "用户确认本轮不扣库存",
+      "items": [],
+      "variantKey": ""
+    },
+    {
+      "dishName": "石屏包浆豆腐",
+      "spec": "",
+      "policy": "BOM",
+      "target": "石屏包浆豆腐（小）",
+      "note": "利润表毛重每份140g",
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL92",
+          "productName": "炸小包浆豆腐·滇界定制",
+          "productUnit": "箱",
+          "quantity": 0.013333,
+          "rawIngredient": "石屏包浆豆腐（小）",
+          "rawQuantity": 140,
+          "rawUnit": "g",
+          "note": "利润表毛重每份140g；按采购规格 箱/30盒/350g 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "长寿菜",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "豌豆苗/长寿菜",
+      "note": null,
+      "items": [
+        {
+          "productCode": "DJ-BOM-5DBE27263C",
+          "productName": "豌豆尖",
+          "productUnit": "g",
+          "quantity": 100,
+          "rawIngredient": "豌豆尖",
+          "rawQuantity": 100,
+          "rawUnit": "g",
+          "note": "素菜 第5行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "元阳哈尼米线",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "元阳哈尼米线",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL8E",
+          "productName": "白米线·滇界定制1.6mm",
+          "productUnit": "箱",
+          "quantity": 0.007272,
+          "rawIngredient": "X-白米线.1.6mm-定制",
+          "rawQuantity": 90.9,
+          "rawUnit": "g",
+          "note": "素菜 第5行，按毛重；按采购规格 箱/25斤 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "十界菌菇汤锅",
+      "spec": "纯菌菇",
+      "policy": "BOM",
+      "bomName": "十界菌菇汤锅配跑山鸡",
+      "note": "纯菌菇规格：扣除配方中的清远鸡",
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL5L",
+          "productName": "竹荪",
+          "productUnit": "件",
+          "quantity": 0.0606,
+          "rawIngredient": "X-竹荪",
+          "rawQuantity": 30.3,
+          "rawUnit": "g",
+          "note": "锅底 第3行，按毛重；按采购规格 件/500g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5P",
+          "productName": "猪肚菌",
+          "productUnit": "件",
+          "quantity": 0.035133,
+          "rawIngredient": "X-猪肚菌",
+          "rawQuantity": 52.7,
+          "rawUnit": "g",
+          "note": "锅底 第4行，按毛重；按采购规格 件/1500g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL65",
+          "productName": "滑子菇",
+          "productUnit": "盒",
+          "quantity": 0.2108,
+          "rawIngredient": "滑子菇",
+          "rawQuantity": 52.7,
+          "rawUnit": "g",
+          "note": "锅底 第5行，按毛重；按采购规格 盒/250g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5Y",
+          "productName": "野生香菇",
+          "productUnit": "kg",
+          "quantity": 0.0532,
+          "rawIngredient": "X-野生香菇",
+          "rawQuantity": 53.2,
+          "rawUnit": "g",
+          "note": "锅底 第6行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-2DYL64",
+          "productName": "金耳菌",
+          "productUnit": "kg",
+          "quantity": 0.051,
+          "rawIngredient": "X-金耳菌",
+          "rawQuantity": 51,
+          "rawUnit": "g",
+          "note": "锅底 第7行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-2DYL60",
+          "productName": "鹿茸菇",
+          "productUnit": "件",
+          "quantity": 0.02,
+          "rawIngredient": "X-鹿茸菇",
+          "rawQuantity": 50,
+          "rawUnit": "g",
+          "note": "锅底 第8行，按毛重；按采购规格 件/2500g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5F",
+          "productName": "赤松茸A",
+          "productUnit": "件",
+          "quantity": 0.0244,
+          "rawIngredient": "X-赤松茸A",
+          "rawQuantity": 54.9,
+          "rawUnit": "g",
+          "note": "锅底 第9行，按毛重；按采购规格 件/2250g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5I",
+          "productName": "榆黄蘑件装",
+          "productUnit": "件",
+          "quantity": 0.024444,
+          "rawIngredient": "X-榆黄蘑件装",
+          "rawQuantity": 55,
+          "rawUnit": "g",
+          "note": "锅底 第10行，按毛重；按采购规格 件/2250g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5N",
+          "productName": "黑牛肝菌",
+          "productUnit": "kg",
+          "quantity": 0.032,
+          "rawIngredient": "X-黑牛肝菌",
+          "rawQuantity": 32,
+          "rawUnit": "g",
+          "note": "锅底 第11行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-2DYL69",
+          "productName": "人工灰虎掌",
+          "productUnit": "kg",
+          "quantity": 0.1,
+          "rawIngredient": "X-灰虎掌",
+          "rawQuantity": 100,
+          "rawUnit": "g",
+          "note": "锅底 第12行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-2DYLAL",
+          "productName": "红枣",
+          "productUnit": "箱",
+          "quantity": 0.001,
+          "rawIngredient": "X-红枣",
+          "rawQuantity": 10,
+          "rawUnit": "g",
+          "note": "锅底 第13行，按毛重；按采购规格 箱/20斤 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL67",
+          "productName": "虫草花",
+          "productUnit": "袋",
+          "quantity": 0.02,
+          "rawIngredient": "X-虫草花",
+          "rawQuantity": 10,
+          "rawUnit": "g",
+          "note": "锅底 第14行，按毛重；按采购规格 袋/500g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLAH",
+          "productName": "枸杞",
+          "productUnit": "件",
+          "quantity": 0.001,
+          "rawIngredient": "X-枸杞",
+          "rawQuantity": 5,
+          "rawUnit": "g",
+          "note": "锅底 第15行，按毛重；按采购规格 件/10斤 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLA8",
+          "productName": "汤底调味粉·滇界定制",
+          "productUnit": "箱",
+          "quantity": 0.001,
+          "rawIngredient": "X-汤底调味粉（定制）",
+          "rawQuantity": 15,
+          "rawUnit": "g",
+          "note": "锅底 第16行，按毛重；按采购规格 箱/2500g*6包 换算"
+        },
+        {
+          "productCode": "DJ-BOM-466614B314",
+          "productName": "农夫山泉1.5升瓶装矿泉水",
+          "productUnit": "g",
+          "quantity": 1500,
+          "rawIngredient": "X-农夫山泉1.5升瓶装矿泉水",
+          "rawQuantity": 1500,
+          "rawUnit": "g",
+          "note": "锅底 第17行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-3126D4D5EF",
+          "productName": "生姜",
+          "productUnit": "g",
+          "quantity": 10.3,
+          "rawIngredient": "生姜",
+          "rawQuantity": 10.3,
+          "rawUnit": "g",
+          "note": "锅底 第18行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5W",
+          "productName": "龙爪菇",
+          "productUnit": "kg",
+          "quantity": 0.05555,
+          "rawIngredient": "X-龙爪菇",
+          "rawQuantity": 55.55,
+          "rawUnit": "g",
+          "note": "锅底 第20行，按毛重；g换算为kg"
+        }
+      ],
+      "variantKey": "纯菌菇"
+    },
+    {
+      "dishName": "武定跑山鸡",
+      "spec": "",
+      "policy": "BOM",
+      "target": "清远鸡",
+      "note": "鲜冻可替代，本规则优先扣清远鸡盒装",
+      "items": [
+        {
+          "productCode": "ZZ9M-WJEQBC",
+          "productName": "清远鸡盒装",
+          "productUnit": "盒",
+          "quantity": 1,
+          "rawIngredient": "清远鸡",
+          "rawQuantity": 1,
+          "rawUnit": "盒",
+          "note": "鲜冻可替代，本规则优先扣清远鸡盒装；盘点单位与采购SKU单位一致"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "牛干巴炒饭",
+      "spec": "加葱",
+      "policy": "BOM",
+      "bomName": "牛干巴炒饭",
+      "note": null,
+      "items": [
+        {
+          "productCode": "DJ-BOM-CE6A01ED85",
+          "productName": "米饭",
+          "productUnit": "g",
+          "quantity": 170,
+          "rawIngredient": "米饭",
+          "rawQuantity": 170,
+          "rawUnit": "g",
+          "note": "油炸 第6行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYL98",
+          "productName": "云南牛干巴",
+          "productUnit": "斤",
+          "quantity": 0.064,
+          "rawIngredient": "X-云南牛干巴",
+          "rawQuantity": 32,
+          "rawUnit": "g",
+          "note": "油炸 第7行，按毛重；g换算为斤"
+        },
+        {
+          "productCode": "DJ-BOM-FAF3BE1EF7",
+          "productName": "鸡蛋",
+          "productUnit": "个",
+          "quantity": 1,
+          "rawIngredient": "鸡蛋",
+          "rawQuantity": 1,
+          "rawUnit": "个",
+          "note": "油炸 第8行，按毛重；原表单价及成本对应整蛋计数；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": "加葱"
+    },
+    {
+      "dishName": "鲜切牛五花趾",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "鲜切牛五花趾",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL6U",
+          "productName": "板腱切片（五花趾）",
+          "productUnit": "箱",
+          "quantity": 0.02,
+          "rawIngredient": "X-板腱切片（五花趾）",
+          "rawQuantity": 150,
+          "rawUnit": "g",
+          "note": "荤菜 第5行，按毛重；按采购规格 箱/50包/150g 换算"
+        },
+        {
+          "productCode": "DJ-BOM-3A0FE29383",
+          "productName": "花草",
+          "productUnit": "g",
+          "quantity": 8,
+          "rawIngredient": "花草",
+          "rawQuantity": 8,
+          "rawUnit": "g",
+          "note": "荤菜 第6行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "见手青啤酒",
+      "spec": "瓶装",
+      "policy": "BOM",
+      "target": "见手青啤酒",
+      "note": "每份1瓶",
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYLBD",
+          "productName": "见手青啤酒",
+          "productUnit": "箱",
+          "quantity": 0.041667,
+          "rawIngredient": "见手青啤酒",
+          "rawQuantity": 1,
+          "rawUnit": "瓶",
+          "note": "每份1瓶；按每箱24瓶换算"
+        }
+      ],
+      "variantKey": "瓶装"
+    },
+    {
+      "dishName": "爆味见手青",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "爆味见手青",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYLAZ",
+          "productName": "特级丘北辣椒",
+          "productUnit": "斤",
+          "quantity": 0.012,
+          "rawIngredient": "X-特级丘北辣椒",
+          "rawQuantity": 6,
+          "rawUnit": "g",
+          "note": "小吃 第15行，按毛重；g换算为斤"
+        },
+        {
+          "productCode": "DJ-BOM-F568FEB67D",
+          "productName": "青椒片",
+          "productUnit": "g",
+          "quantity": 43,
+          "rawIngredient": "青椒片",
+          "rawQuantity": 43,
+          "rawUnit": "g",
+          "note": "小吃 第16行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-A488CAB3D4",
+          "productName": "盐",
+          "productUnit": "g",
+          "quantity": 1,
+          "rawIngredient": "盐",
+          "rawQuantity": 1,
+          "rawUnit": "g",
+          "note": "小吃 第17行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-CABA5B16B2",
+          "productName": "蒜片",
+          "productUnit": "g",
+          "quantity": 30,
+          "rawIngredient": "蒜片",
+          "rawQuantity": 30,
+          "rawUnit": "g",
+          "note": "小吃 第18行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-6A1E28E246",
+          "productName": "菜籽油",
+          "productUnit": "g",
+          "quantity": 40,
+          "rawIngredient": "菜籽油",
+          "rawQuantity": 40,
+          "rawUnit": "g",
+          "note": "小吃 第19行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5C",
+          "productName": "人工见手青",
+          "productUnit": "件",
+          "quantity": 0.222,
+          "rawIngredient": "X-人工见手青",
+          "rawQuantity": 222,
+          "rawUnit": "g",
+          "note": "小吃 第20行，按毛重；按采购规格 件/1000g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLA8",
+          "productName": "汤底调味粉·滇界定制",
+          "productUnit": "箱",
+          "quantity": 0.0001,
+          "rawIngredient": "X-汤底调味粉（定制）",
+          "rawQuantity": 1.5,
+          "rawUnit": "g",
+          "note": "小吃 第21行，按毛重；按采购规格 箱/2500g*6包 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "鲜切牛吊龙",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "鲜切牛吊龙",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL6W",
+          "productName": "吊龙切片A（吊龙前段）",
+          "productUnit": "箱",
+          "quantity": 0.016667,
+          "rawIngredient": "X-吊龙切片吊龙",
+          "rawQuantity": 120,
+          "rawUnit": "g",
+          "note": "荤菜 第25行，按毛重；按采购规格 箱/60包/120g 换算"
+        },
+        {
+          "productCode": "DJ-BOM-3A0FE29383",
+          "productName": "花草",
+          "productUnit": "g",
+          "quantity": 8,
+          "rawIngredient": "花草",
+          "rawQuantity": 8,
+          "rawUnit": "g",
+          "note": "荤菜 第26行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "云南秘制黄牛肉（微微辣）",
+      "spec": "小份",
+      "policy": "BOM",
+      "bomName": "秘制黄牛肉小份",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL70",
+          "productName": "味角秘制嫩牛肉（牛霖肉）",
+          "productUnit": "箱",
+          "quantity": 0.032,
+          "rawIngredient": "X-味角秘制嫩牛肉（牛霖肉）",
+          "rawQuantity": 240,
+          "rawUnit": "g",
+          "note": "荤菜 第21行，按毛重；按采购规格 箱/50包/150g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLA0",
+          "productName": "火锅专用红油·滇界定制",
+          "productUnit": "箱",
+          "quantity": 0.000833,
+          "rawIngredient": "X-火锅专用红油(定制）",
+          "rawQuantity": 10,
+          "rawUnit": "g",
+          "note": "荤菜 第22行，按毛重；按采购规格 箱/2000g*6包 换算"
+        }
+      ],
+      "variantKey": "小份"
+    },
+    {
+      "dishName": "东川三色面",
+      "spec": "",
+      "policy": "BOM",
+      "target": "东川三色面",
+      "note": "每份1袋",
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL8H",
+          "productName": "东川三色面·滇界定制",
+          "productUnit": "箱",
+          "quantity": 0.025,
+          "rawIngredient": "东川三色面",
+          "rawQuantity": 1,
+          "rawUnit": "袋",
+          "note": "每份1袋；按每箱40袋换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "和牛·奶香雪花牛",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "奶香雪花牛",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL75",
+          "productName": "大米龙（奶香雪花）",
+          "productUnit": "件",
+          "quantity": 0.138,
+          "rawIngredient": "X-大米龙（奶香雪花）",
+          "rawQuantity": 138,
+          "rawUnit": "g",
+          "note": "荤菜 第7行，按毛重；按采购规格 件/1000g 换算"
+        },
+        {
+          "productCode": "DJ-BOM-3A0FE29383",
+          "productName": "花草",
+          "productUnit": "g",
+          "quantity": 8,
+          "rawIngredient": "花草",
+          "rawQuantity": 8,
+          "rawUnit": "g",
+          "note": "荤菜 第8行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "虎掌菌",
+      "spec": "",
+      "policy": "PENDING",
+      "target": "虎掌菌",
+      "note": "；单份用量待确认",
+      "items": [],
+      "variantKey": ""
+    },
+    {
+      "dishName": "赤松茸",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "赤松茸",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL5F",
+          "productName": "赤松茸A",
+          "productUnit": "件",
+          "quantity": 0.048889,
+          "rawIngredient": "X-赤松茸A",
+          "rawQuantity": 110,
+          "rawUnit": "g",
+          "note": "蘑菇 第9行，按毛重；按采购规格 件/2250g 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "酸木瓜罗望子冰茶",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "罗望子酸木瓜",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYLD6",
+          "productName": "酸角汁浓浆",
+          "productUnit": "箱",
+          "quantity": 0.002222,
+          "rawIngredient": "酸角汁",
+          "rawQuantity": 32,
+          "rawUnit": "g",
+          "note": "饮品 第52行，按毛重；按采购规格 1.2kg*12瓶/箱 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLBU",
+          "productName": "SevenQ茉莉绿茶",
+          "productUnit": "袋",
+          "quantity": 0.0002,
+          "rawIngredient": "茉莉绿茶",
+          "rawQuantity": 3,
+          "rawUnit": "g",
+          "note": "饮品 第53行，按毛重；按采购规格 500g*30袋 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLBW",
+          "productName": "冰糖糖浆",
+          "productUnit": "箱",
+          "quantity": 0.0015,
+          "rawIngredient": "冰糖浆",
+          "rawQuantity": 36,
+          "rawUnit": "g",
+          "note": "饮品 第54行，按毛重；按采购规格 6kg*4桶 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLCN",
+          "productName": "冷冻酸木瓜汁",
+          "productUnit": "箱",
+          "quantity": 0.003333,
+          "rawIngredient": "冷冻酸木瓜汁",
+          "rawQuantity": 40,
+          "rawUnit": "g",
+          "note": "饮品 第55行，按毛重；按采购规格 1kg*12瓶/箱 换算"
+        },
+        {
+          "productCode": "DJ-BOM-410B6BF26E",
+          "productName": "纯净水",
+          "productUnit": "g",
+          "quantity": 100,
+          "rawIngredient": "纯净水",
+          "rawQuantity": 100,
+          "rawUnit": "g",
+          "note": "饮品 第56行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "黑牛肝菌",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "黑牛肝菌",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL5N",
+          "productName": "黑牛肝菌",
+          "productUnit": "kg",
+          "quantity": 0.085,
+          "rawIngredient": "X-黑牛肝菌",
+          "rawQuantity": 85,
+          "rawUnit": "g",
+          "note": "蘑菇 第7行，按毛重；g换算为kg"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "金耳菌",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "金耳",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL64",
+          "productName": "金耳菌",
+          "productUnit": "kg",
+          "quantity": 0.102,
+          "rawIngredient": "X-金耳菌",
+          "rawQuantity": 102,
+          "rawUnit": "g",
+          "note": "蘑菇 第17行，按毛重；g换算为kg"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "鲜打牛肉丸（原味）",
+      "spec": "个",
+      "policy": "BOM",
+      "bomName": "鲜打牛肉丸",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-YDKQFT",
+          "productName": "精品牛肉浆",
+          "productUnit": "箱",
+          "quantity": 0.015,
+          "rawIngredient": "X-精品牛肉浆",
+          "rawQuantity": 150,
+          "rawUnit": "g",
+          "note": "荤菜 第42行，按毛重；按采购规格 500g*20包/箱 换算"
+        },
+        {
+          "productCode": "DJ-BOM-6E2C26F125",
+          "productName": "紫包菜",
+          "productUnit": "g",
+          "quantity": 100,
+          "rawIngredient": "紫包菜",
+          "rawQuantity": 100,
+          "rawUnit": "g",
+          "note": "荤菜 第43行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": "个"
+    },
+    {
+      "dishName": "香炸小酥肉",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "香炸小酥肉",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL8S",
+          "productName": "小酥肉",
+          "productUnit": "箱",
+          "quantity": 0.0122,
+          "rawIngredient": "X-小酥肉",
+          "rawQuantity": 122,
+          "rawUnit": "g",
+          "note": "油炸 第9行，按毛重；按采购规格 箱/10袋/1000g 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "云滇豆三拼",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "云滇豆三拼",
+      "note": null,
+      "items": [
+        {
+          "productCode": "DJ001-INV-0136",
+          "productName": "包浆豆腐（大）",
+          "productUnit": "箱",
+          "quantity": 0.007479,
+          "rawIngredient": "X-包浆豆腐（大）",
+          "rawQuantity": 70,
+          "rawUnit": "g",
+          "note": "素菜 第21行，按毛重；按采购规格 520g*18包/箱 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL83",
+          "productName": "黑豆花",
+          "productUnit": "箱",
+          "quantity": 0.00625,
+          "rawIngredient": "X-黑豆花",
+          "rawQuantity": 80,
+          "rawUnit": "g",
+          "note": "素菜 第22行，按毛重；按采购规格 箱/32盒/400g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLAP",
+          "productName": "云南豆腐皮",
+          "productUnit": "箱",
+          "quantity": 0.005,
+          "rawIngredient": "X-云南豆腐皮豆皮",
+          "rawQuantity": 25,
+          "rawUnit": "g",
+          "note": "素菜 第23行，按毛重；按采购规格 箱/10斤/500g 换算"
+        },
+        {
+          "productCode": "DJ-BOM-3A0FE29383",
+          "productName": "花草",
+          "productUnit": "g",
+          "quantity": 8,
+          "rawIngredient": "花草",
+          "rawQuantity": 8,
+          "rawUnit": "g",
+          "note": "素菜 第24行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "八鲜山菌汤锅·武定跑山鸡",
+      "spec": "8鲜野山菌+武定跑山鸡",
+      "policy": "BOM",
+      "bomName": "八鲜山菌武定跑山鸡汤锅鲜",
+      "note": "鲜冻可替代；本轮按鲜菌配方试算",
+      "items": [
+        {
+          "productCode": "ZZ9M-3EQQXU",
+          "productName": "鲜美味牛肝菌",
+          "productUnit": "件",
+          "quantity": 0.033,
+          "rawIngredient": "X-鲜美味牛肝菌",
+          "rawQuantity": 33,
+          "rawUnit": "g",
+          "note": "锅底 第24行，按毛重；按采购规格 件/1000g 换算"
+        },
+        {
+          "productCode": "ZZ9M-3EOTNP",
+          "productName": "鲜黄牛肝菌",
+          "productUnit": "件",
+          "quantity": 0.032,
+          "rawIngredient": "X-鲜黄牛肝菌",
+          "rawQuantity": 32,
+          "rawUnit": "g",
+          "note": "锅底 第25行，按毛重；按采购规格 件/1000g 换算"
+        },
+        {
+          "productCode": "ZZ9M-3EQ1V1",
+          "productName": "紫葱见手青",
+          "productUnit": "件",
+          "quantity": 0.0315,
+          "rawIngredient": "X-鲜紫葱见手青",
+          "rawQuantity": 31.5,
+          "rawUnit": "g",
+          "note": "锅底 第26行，按毛重；按采购规格 件/1000g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5C",
+          "productName": "人工见手青",
+          "productUnit": "件",
+          "quantity": 0.0405,
+          "rawIngredient": "X-人工见手青",
+          "rawQuantity": 40.5,
+          "rawUnit": "g",
+          "note": "锅底 第27行，按毛重；按采购规格 件/1000g 换算"
+        },
+        {
+          "productCode": "ZZ9M-3EQDK6",
+          "productName": "鲜老人头",
+          "productUnit": "件",
+          "quantity": 0.031,
+          "rawIngredient": "X-鲜老人头菌",
+          "rawQuantity": 31,
+          "rawUnit": "g",
+          "note": "锅底 第28行，按毛重；按采购规格 件/1000g 换算"
+        },
+        {
+          "productCode": "ZZ9M-3EOAPD",
+          "productName": "新鲜奶浆菌",
+          "productUnit": "件",
+          "quantity": 0.031,
+          "rawIngredient": "X-鲜奶浆菌",
+          "rawQuantity": 31,
+          "rawUnit": "g",
+          "note": "锅底 第29行，按毛重；按采购规格 件/1000g 换算"
+        },
+        {
+          "productCode": "ZZ9M-ANUKAE",
+          "productName": "鲜青头菌",
+          "productUnit": "件",
+          "quantity": 0.0315,
+          "rawIngredient": "X-鲜青头菌",
+          "rawQuantity": 31.5,
+          "rawUnit": "g",
+          "note": "锅底 第30行，按毛重；按采购规格 件/1000g 换算"
+        },
+        {
+          "productCode": "ZZ9M-3EPSH1",
+          "productName": "白葱见手青",
+          "productUnit": "件",
+          "quantity": 0.0325,
+          "rawIngredient": "X-鲜白葱见手青",
+          "rawQuantity": 32.5,
+          "rawUnit": "g",
+          "note": "锅底 第31行，按毛重；按采购规格 件/1000g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLAL",
+          "productName": "红枣",
+          "productUnit": "箱",
+          "quantity": 0.001,
+          "rawIngredient": "X-红枣",
+          "rawQuantity": 10,
+          "rawUnit": "g",
+          "note": "锅底 第32行，按毛重；按采购规格 箱/20斤 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL67",
+          "productName": "虫草花",
+          "productUnit": "袋",
+          "quantity": 0.02,
+          "rawIngredient": "X-虫草花",
+          "rawQuantity": 10,
+          "rawUnit": "g",
+          "note": "锅底 第33行，按毛重；按采购规格 袋/500g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLAH",
+          "productName": "枸杞",
+          "productUnit": "件",
+          "quantity": 0.001,
+          "rawIngredient": "X-枸杞",
+          "rawQuantity": 5,
+          "rawUnit": "g",
+          "note": "锅底 第34行，按毛重；按采购规格 件/10斤 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLA8",
+          "productName": "汤底调味粉·滇界定制",
+          "productUnit": "箱",
+          "quantity": 0.001333,
+          "rawIngredient": "X-汤底调味粉（定制）",
+          "rawQuantity": 20,
+          "rawUnit": "g",
+          "note": "锅底 第35行，按毛重；按采购规格 箱/2500g*6包 换算"
+        },
+        {
+          "productCode": "DJ-BOM-466614B314",
+          "productName": "农夫山泉1.5升瓶装矿泉水",
+          "productUnit": "g",
+          "quantity": 1500,
+          "rawIngredient": "X-农夫山泉1.5升瓶装矿泉水",
+          "rawQuantity": 1500,
+          "rawUnit": "g",
+          "note": "锅底 第36行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-3126D4D5EF",
+          "productName": "生姜",
+          "productUnit": "g",
+          "quantity": 10,
+          "rawIngredient": "生姜",
+          "rawQuantity": 10,
+          "rawUnit": "g",
+          "note": "锅底 第37行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYL9D",
+          "productName": "云南腊火腿",
+          "productUnit": "斤",
+          "quantity": 0.1,
+          "rawIngredient": "X-云南腊火腿",
+          "rawQuantity": 50,
+          "rawUnit": "g",
+          "note": "锅底 第38行，按毛重；g换算为斤"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5W",
+          "productName": "龙爪菇",
+          "productUnit": "kg",
+          "quantity": 0.05555,
+          "rawIngredient": "X-龙爪菇",
+          "rawQuantity": 55.55,
+          "rawUnit": "g",
+          "note": "锅底 第39行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-WJEQBC",
+          "productName": "清远鸡盒装",
+          "productUnit": "盒",
+          "quantity": 1,
+          "rawIngredient": "X-清远鸡/真空包装",
+          "rawQuantity": 1,
+          "rawUnit": "盒",
+          "note": "锅底 第40行，按毛重；原表成本13.5元，对应清远鸡1盒，不按克解释；盘点单位与采购SKU单位一致"
+        }
+      ],
+      "variantKey": "8鲜野山菌+武定跑山鸡"
+    },
+    {
+      "dishName": "大地飞雪",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "和牛大地飞雪",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL73",
+          "productName": "保乐肩（M2安格斯）",
+          "productUnit": "件",
+          "quantity": 0.14,
+          "rawIngredient": "X-保乐肩保乐肩",
+          "rawQuantity": 140,
+          "rawUnit": "g",
+          "note": "荤菜 第11行，按毛重；按采购规格 件/1000g 换算"
+        },
+        {
+          "productCode": "DJ-BOM-3A0FE29383",
+          "productName": "花草",
+          "productUnit": "g",
+          "quantity": 8,
+          "rawIngredient": "花草",
+          "rawQuantity": 8,
+          "rawUnit": "g",
+          "note": "荤菜 第12行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "10 秒脆毛肚",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "黄牛脆毛肚",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL7D",
+          "productName": "水牛毛肚",
+          "productUnit": "包",
+          "quantity": 0.00668,
+          "rawIngredient": "X-水牛毛肚",
+          "rawQuantity": 167,
+          "rawUnit": "g",
+          "note": "荤菜 第34行，按毛重；按采购规格 箱/10包/2500g 换算"
+        },
+        {
+          "productCode": "DJ-BOM-3A0FE29383",
+          "productName": "花草",
+          "productUnit": "g",
+          "quantity": 8,
+          "rawIngredient": "花草",
+          "rawQuantity": 8,
+          "rawUnit": "g",
+          "note": "荤菜 第35行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "山野鲜蔬",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "山野鲜蔬",
+      "note": null,
+      "items": [
+        {
+          "productCode": "DJ-BOM-FE03ED9FAB",
+          "productName": "紫白菜",
+          "productUnit": "g",
+          "quantity": 87,
+          "rawIngredient": "紫白菜",
+          "rawQuantity": 87,
+          "rawUnit": "g",
+          "note": "素菜 第23行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-5DBE27263C",
+          "productName": "豌豆尖",
+          "productUnit": "g",
+          "quantity": 62.5,
+          "rawIngredient": "豌豆尖",
+          "rawQuantity": 62.5,
+          "rawUnit": "g",
+          "note": "素菜 第24行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-2EF2523339",
+          "productName": "血皮菜",
+          "productUnit": "g",
+          "quantity": 88.88,
+          "rawIngredient": "血皮菜",
+          "rawQuantity": 88.88,
+          "rawUnit": "g",
+          "note": "素菜 第25行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-FF56332B3C",
+          "productName": "娃娃菜",
+          "productUnit": "g",
+          "quantity": 87,
+          "rawIngredient": "娃娃菜",
+          "rawQuantity": 87,
+          "rawUnit": "g",
+          "note": "素菜 第26行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "石屏豆腐皮",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "石屏豆腐皮",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYLAP",
+          "productName": "云南豆腐皮",
+          "productUnit": "箱",
+          "quantity": 0.01,
+          "rawIngredient": "X-云南豆腐皮豆皮",
+          "rawQuantity": 50,
+          "rawUnit": "g",
+          "note": "素菜 第7行，按毛重；按采购规格 箱/10斤/500g 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "石屏黑豆花",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "石屏黑豆花",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL83",
+          "productName": "黑豆花",
+          "productUnit": "箱",
+          "quantity": 0.0125,
+          "rawIngredient": "X-黑豆花",
+          "rawQuantity": 160,
+          "rawUnit": "g",
+          "note": "素菜 第9行，按毛重；按采购规格 箱/32盒/400g 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "纳西族腊排骨",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "纳西族腊排骨",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL9A",
+          "productName": "云南腊排骨",
+          "productUnit": "件",
+          "quantity": 0.066,
+          "rawIngredient": "X-云南腊排骨",
+          "rawQuantity": 330,
+          "rawUnit": "g",
+          "note": "荤菜 第40行，按毛重；按采购规格 件/5000g 换算"
+        },
+        {
+          "productCode": "DJ-BOM-3A0FE29383",
+          "productName": "花草",
+          "productUnit": "g",
+          "quantity": 8,
+          "rawIngredient": "花草",
+          "rawQuantity": 8,
+          "rawUnit": "g",
+          "note": "荤菜 第41行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "娃娃菜",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "娃娃菜",
+      "note": null,
+      "items": [
+        {
+          "productCode": "DJ-BOM-FF56332B3C",
+          "productName": "娃娃菜",
+          "productUnit": "g",
+          "quantity": 130,
+          "rawIngredient": "娃娃菜",
+          "rawQuantity": 130,
+          "rawUnit": "g",
+          "note": "素菜 第3行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-3A0FE29383",
+          "productName": "花草",
+          "productUnit": "g",
+          "quantity": 8,
+          "rawIngredient": "花草",
+          "rawQuantity": 8,
+          "rawUnit": "g",
+          "note": "素菜 第4行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "干巴菌炒饭",
+      "spec": "加葱",
+      "policy": "BOM",
+      "bomName": "干巴菌炒饭",
+      "note": null,
+      "items": [
+        {
+          "productCode": "DJ-BOM-CE6A01ED85",
+          "productName": "米饭",
+          "productUnit": "g",
+          "quantity": 170,
+          "rawIngredient": "米饭",
+          "rawQuantity": 170,
+          "rawUnit": "g",
+          "note": "油炸 第3行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYL6D",
+          "productName": "冻干巴菌",
+          "productUnit": "件",
+          "quantity": 0.035,
+          "rawIngredient": "X-冻干巴菌",
+          "rawQuantity": 35,
+          "rawUnit": "g",
+          "note": "油炸 第4行，按毛重；按采购规格 件/1000g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL9D",
+          "productName": "云南腊火腿",
+          "productUnit": "斤",
+          "quantity": 0.04,
+          "rawIngredient": "X-云南腊火腿",
+          "rawQuantity": 20,
+          "rawUnit": "g",
+          "note": "油炸 第5行，按毛重；g换算为斤"
+        }
+      ],
+      "variantKey": "加葱"
+    },
+    {
+      "dishName": "琅琊土豆（微辣）",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "琅琊土豆",
+      "note": null,
+      "items": [
+        {
+          "productCode": "DJ-BOM-ABD7E693AA",
+          "productName": "土豆",
+          "productUnit": "g",
+          "quantity": 411,
+          "rawIngredient": "土豆",
+          "rawQuantity": 411,
+          "rawUnit": "g",
+          "note": "小吃 第3行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-DA61CFAAEF",
+          "productName": "薄荷",
+          "productUnit": "g",
+          "quantity": 12.5,
+          "rawIngredient": "薄荷",
+          "rawQuantity": 12.5,
+          "rawUnit": "g",
+          "note": "小吃 第4行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-3617F8B48B",
+          "productName": "折耳根碎",
+          "productUnit": "g",
+          "quantity": 12.04,
+          "rawIngredient": "折耳根碎",
+          "rawQuantity": 12.04,
+          "rawUnit": "g",
+          "note": "小吃 第5行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-AA3058B349",
+          "productName": "香菜",
+          "productUnit": "g",
+          "quantity": 10.9,
+          "rawIngredient": "香菜",
+          "rawQuantity": 10.9,
+          "rawUnit": "g",
+          "note": "小吃 第6行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-E6CEF6B0C1",
+          "productName": "花椒油",
+          "productUnit": "g",
+          "quantity": 5,
+          "rawIngredient": "花椒油",
+          "rawQuantity": 5,
+          "rawUnit": "g",
+          "note": "小吃 第7行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-F5E2D26175",
+          "productName": "小米椒碎",
+          "productUnit": "g",
+          "quantity": 5.32,
+          "rawIngredient": "小米椒碎",
+          "rawQuantity": 5.32,
+          "rawUnit": "g",
+          "note": "小吃 第8行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-FAD3A2A857",
+          "productName": "蒜末",
+          "productUnit": "g",
+          "quantity": 4,
+          "rawIngredient": "蒜末",
+          "rawQuantity": 4,
+          "rawUnit": "g",
+          "note": "小吃 第9行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-1EDE8951B8",
+          "productName": "单山蘸水",
+          "productUnit": "g",
+          "quantity": 10,
+          "rawIngredient": "单山蘸水",
+          "rawQuantity": 10,
+          "rawUnit": "g",
+          "note": "小吃 第10行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-F3A6A85879",
+          "productName": "味极鲜",
+          "productUnit": "g",
+          "quantity": 15,
+          "rawIngredient": "味极鲜",
+          "rawQuantity": 15,
+          "rawUnit": "g",
+          "note": "小吃 第11行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYL9L",
+          "productName": "木姜子香辣蘸料·滇界定制",
+          "productUnit": "箱",
+          "quantity": 0.000188,
+          "rawIngredient": "X-木姜子香辣蘸（定制）",
+          "rawQuantity": 3,
+          "rawUnit": "g",
+          "note": "小吃 第12行，按毛重；按采购规格 箱/2000g*8包 换算"
+        },
+        {
+          "productCode": "DJ-BOM-54E4DE84CC",
+          "productName": "生抽",
+          "productUnit": "g",
+          "quantity": 20,
+          "rawIngredient": "生抽",
+          "rawQuantity": 20,
+          "rawUnit": "g",
+          "note": "小吃 第13行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "赠（炸黄粉皮）",
+      "spec": "",
+      "policy": "BOM",
+      "target": "黄粉皮",
+      "note": "用户确认每份32g",
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYLB7",
+          "productName": "黄粉皮",
+          "productUnit": "箱",
+          "quantity": 0.0064,
+          "rawIngredient": "黄粉皮",
+          "rawQuantity": 32,
+          "rawUnit": "g",
+          "note": "用户确认每份32g；按采购规格 件/5Kg 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "丽江七彩洋芋",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "丽江七彩洋芋",
+      "note": null,
+      "items": [
+        {
+          "productCode": "DJ-BOM-00C6DC4A7E",
+          "productName": "七彩土豆",
+          "productUnit": "g",
+          "quantity": 220,
+          "rawIngredient": "七彩土豆",
+          "rawQuantity": 220,
+          "rawUnit": "g",
+          "note": "素菜 第11行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "建水香酥豆腐",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "建水香酥豆腐",
+      "note": null,
+      "items": [
+        {
+          "productCode": "DJ-BOM-0105C57A7E",
+          "productName": "爆浆豆腐(小)",
+          "productUnit": "g",
+          "quantity": 137,
+          "rawIngredient": "X-爆浆豆腐（小）",
+          "rawQuantity": 137,
+          "rawUnit": "g",
+          "note": "油炸 第7行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "手打牛肉丸",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "手打牛肉丸",
+      "note": null,
+      "items": [
+        {
+          "productCode": "DJ-BOM-C18D92058B",
+          "productName": "牛肉丸已下架",
+          "productUnit": "g",
+          "quantity": 130,
+          "rawIngredient": "牛肉丸已下架",
+          "rawQuantity": 130,
+          "rawUnit": "g",
+          "note": "荤菜 第11行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "野鲜菌火腿焖饭",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "野鲜菌火腿焖饭",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYLAN",
+          "productName": "长稻香米",
+          "productUnit": "箱",
+          "quantity": 0.00792,
+          "rawIngredient": "X-长稻香米（定制）",
+          "rawQuantity": 198,
+          "rawUnit": "g",
+          "note": "油炸 第15行，按毛重；按采购规格 箱/5袋*5kg 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLA2",
+          "productName": "焖饭汁·滇界专用",
+          "productUnit": "箱",
+          "quantity": 0.00115,
+          "rawIngredient": "X-焖饭汁(定制）",
+          "rawQuantity": 23,
+          "rawUnit": "g",
+          "note": "油炸 第16行，按毛重；按采购规格 箱/2000g*10包 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL9D",
+          "productName": "云南腊火腿",
+          "productUnit": "斤",
+          "quantity": 0.048,
+          "rawIngredient": "X-云南腊火腿",
+          "rawQuantity": 24,
+          "rawUnit": "g",
+          "note": "油炸 第17行，按毛重；g换算为斤"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5R",
+          "productName": "舞茸菇",
+          "productUnit": "件",
+          "quantity": 0.027778,
+          "rawIngredient": "X-舞茸菇",
+          "rawQuantity": 25,
+          "rawUnit": "g",
+          "note": "油炸 第18行，按毛重；按采购规格 件/150g*6盒 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5U",
+          "productName": "黑皮鸡枞菌",
+          "productUnit": "kg",
+          "quantity": 0.0255,
+          "rawIngredient": "X-黑皮鸡纵",
+          "rawQuantity": 25.5,
+          "rawUnit": "g",
+          "note": "油炸 第19行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "DJ-BOM-10F69666C6",
+          "productName": "耗油、油",
+          "productUnit": "g",
+          "quantity": 3,
+          "rawIngredient": "耗油、油",
+          "rawQuantity": 3,
+          "rawUnit": "g",
+          "note": "油炸 第20行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-1B258C71BA",
+          "productName": "酒精块",
+          "productUnit": "个",
+          "quantity": 1,
+          "rawIngredient": "酒精块",
+          "rawQuantity": 1,
+          "rawUnit": "个",
+          "note": "油炸 第21行，按毛重；原表净用量明确标注1个；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5N",
+          "productName": "黑牛肝菌",
+          "productUnit": "kg",
+          "quantity": 0.028,
+          "rawIngredient": "X-黑牛肝菌",
+          "rawQuantity": 28,
+          "rawUnit": "g",
+          "note": "油炸 第22行，按毛重；g换算为kg"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "云南特色酸汤锅底",
+      "spec": "我是特色呀",
+      "policy": "BOM",
+      "bomName": "云滇特色酸辣锅底微辣",
+      "note": null,
+      "items": [
+        {
+          "productCode": "DJ-BOM-9649E9D55D",
+          "productName": "大豆油",
+          "productUnit": "g",
+          "quantity": 180,
+          "rawIngredient": "大豆油",
+          "rawQuantity": 180,
+          "rawUnit": "g",
+          "note": "锅底 第3行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-5B347C2623",
+          "productName": "黄姜末",
+          "productUnit": "g",
+          "quantity": 31,
+          "rawIngredient": "黄姜末",
+          "rawQuantity": 31,
+          "rawUnit": "g",
+          "note": "锅底 第4行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-FAD3A2A857",
+          "productName": "蒜末",
+          "productUnit": "g",
+          "quantity": 30,
+          "rawIngredient": "蒜末",
+          "rawQuantity": 30,
+          "rawUnit": "g",
+          "note": "锅底 第5行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYL8N",
+          "productName": "新平酸菜（整）",
+          "productUnit": "箱",
+          "quantity": 0.008583,
+          "rawIngredient": "X-新平酸菜（整）",
+          "rawQuantity": 103,
+          "rawUnit": "g",
+          "note": "锅底 第6行，按毛重；按采购规格 箱/12kg（12包） 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLAR",
+          "productName": "酸萝卜丝·富源酸菜",
+          "productUnit": "箱",
+          "quantity": 0.017813,
+          "rawIngredient": "X-酸萝卜丝.富源酸菜",
+          "rawQuantity": 285,
+          "rawUnit": "g",
+          "note": "锅底 第7行，按毛重；按采购规格 箱/16kg 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL9Y",
+          "productName": "秘制底料·滇界定制",
+          "productUnit": "箱",
+          "quantity": 0.006667,
+          "rawIngredient": "X-秘制底料（定制）",
+          "rawQuantity": 100,
+          "rawUnit": "g",
+          "note": "锅底 第8行，按毛重；按采购规格 箱/150g*100包 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLA0",
+          "productName": "火锅专用红油·滇界定制",
+          "productUnit": "箱",
+          "quantity": 0.004167,
+          "rawIngredient": "X-火锅专用红油(定制）",
+          "rawQuantity": 50,
+          "rawUnit": "g",
+          "note": "锅底 第9行，按毛重；按采购规格 箱/2000g*6包 换算"
+        },
+        {
+          "productCode": "DJ-BOM-B75CC44037",
+          "productName": "香芹段",
+          "productUnit": "g",
+          "quantity": 32,
+          "rawIngredient": "香芹段",
+          "rawQuantity": 32,
+          "rawUnit": "g",
+          "note": "锅底 第10行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-8CE9C0D9BB",
+          "productName": "蒜苗段",
+          "productUnit": "g",
+          "quantity": 31,
+          "rawIngredient": "蒜苗段",
+          "rawQuantity": 31,
+          "rawUnit": "g",
+          "note": "锅底 第11行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYLA8",
+          "productName": "汤底调味粉·滇界定制",
+          "productUnit": "箱",
+          "quantity": 0.003333,
+          "rawIngredient": "X-汤底调味粉（定制）",
+          "rawQuantity": 50,
+          "rawUnit": "g",
+          "note": "锅底 第12行，按毛重；按采购规格 箱/2500g*6包 换算"
+        },
+        {
+          "productCode": "DJ-BOM-9CE2FD999A",
+          "productName": "9°白米醋",
+          "productUnit": "g",
+          "quantity": 50,
+          "rawIngredient": "X-9°白米醋",
+          "rawQuantity": 50,
+          "rawUnit": "g",
+          "note": "锅底 第13行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-0395C98665",
+          "productName": "酸萝卜汁",
+          "productUnit": "g",
+          "quantity": 50,
+          "rawIngredient": "酸萝卜汁",
+          "rawQuantity": 50,
+          "rawUnit": "g",
+          "note": "锅底 第14行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYLAX",
+          "productName": "特级灯笼椒",
+          "productUnit": "斤",
+          "quantity": 0.01,
+          "rawIngredient": "X-特级灯笼椒",
+          "rawQuantity": 5,
+          "rawUnit": "g",
+          "note": "锅底 第15行，按毛重；g换算为斤"
+        },
+        {
+          "productCode": "ZZ9M-2DYLAZ",
+          "productName": "特级丘北辣椒",
+          "productUnit": "斤",
+          "quantity": 0.02,
+          "rawIngredient": "X-特级丘北辣椒",
+          "rawQuantity": 10,
+          "rawUnit": "g",
+          "note": "锅底 第16行，按毛重；g换算为斤"
+        },
+        {
+          "productCode": "ZZ9M-2DYLB2",
+          "productName": "特级子弹头",
+          "productUnit": "斤",
+          "quantity": 0.01,
+          "rawIngredient": "X-特级子弹头椒",
+          "rawQuantity": 5,
+          "rawUnit": "g",
+          "note": "锅底 第17行，按毛重；g换算为斤"
+        },
+        {
+          "productCode": "DJ-BOM-C0CB921C34",
+          "productName": "番茄瓣",
+          "productUnit": "g",
+          "quantity": 101,
+          "rawIngredient": "番茄瓣",
+          "rawQuantity": 101,
+          "rawUnit": "g",
+          "note": "锅底 第18行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-80695A5EBA",
+          "productName": "薄荷叶",
+          "productUnit": "g",
+          "quantity": 2.8,
+          "rawIngredient": "薄荷叶",
+          "rawQuantity": 2.8,
+          "rawUnit": "g",
+          "note": "锅底 第19行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": "我是特色呀"
+    },
+    {
+      "dishName": "云滇三脆",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "云滇三脆",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL7D",
+          "productName": "水牛毛肚",
+          "productUnit": "包",
+          "quantity": 0.00278,
+          "rawIngredient": "X-水牛毛肚",
+          "rawQuantity": 69.5,
+          "rawUnit": "g",
+          "note": "荤菜 第31行，按毛重；按采购规格 箱/10包/2500g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL7G",
+          "productName": "猪黄喉",
+          "productUnit": "包",
+          "quantity": 0.00232,
+          "rawIngredient": "X-猪黄喉",
+          "rawQuantity": 58,
+          "rawUnit": "g",
+          "note": "荤菜 第32行，按毛重；按采购规格 箱/10包/2500g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL7M",
+          "productName": "鸭肠",
+          "productUnit": "箱",
+          "quantity": 0.004833,
+          "rawIngredient": "X-鸭肠",
+          "rawQuantity": 58,
+          "rawUnit": "g",
+          "note": "荤菜 第33行，按毛重；按采购规格 箱/24袋/500g 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "六味珍菌拼盘",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "六味珍菌拼盘",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL5N",
+          "productName": "黑牛肝菌",
+          "productUnit": "kg",
+          "quantity": 0.0532,
+          "rawIngredient": "X-黑牛肝菌",
+          "rawQuantity": 53.2,
+          "rawUnit": "g",
+          "note": "蘑菇 第15行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5Y",
+          "productName": "野生香菇",
+          "productUnit": "kg",
+          "quantity": 0.0532,
+          "rawIngredient": "X-野生香菇",
+          "rawQuantity": 53.2,
+          "rawUnit": "g",
+          "note": "蘑菇 第16行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-2DYL61",
+          "productName": "绣球菌",
+          "productUnit": "盒",
+          "quantity": 0.05,
+          "rawIngredient": "X-绣球菌",
+          "rawQuantity": 50,
+          "rawUnit": "g",
+          "note": "蘑菇 第17行，按毛重；按采购规格 盒/1000g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5F",
+          "productName": "赤松茸A",
+          "productUnit": "件",
+          "quantity": 0.0244,
+          "rawIngredient": "X-赤松茸A",
+          "rawQuantity": 54.9,
+          "rawUnit": "g",
+          "note": "蘑菇 第18行，按毛重；按采购规格 件/2250g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5U",
+          "productName": "黑皮鸡枞菌",
+          "productUnit": "kg",
+          "quantity": 0.051,
+          "rawIngredient": "X-黑皮鸡纵",
+          "rawQuantity": 51,
+          "rawUnit": "g",
+          "note": "蘑菇 第19行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-2DYL65",
+          "productName": "滑子菇",
+          "productUnit": "盒",
+          "quantity": 0.2108,
+          "rawIngredient": "X-滑子菇",
+          "rawQuantity": 52.7,
+          "rawUnit": "g",
+          "note": "蘑菇 第20行，按毛重；按采购规格 盒/250g 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "山葵鲜牛肉",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "山葵鲜牛肉",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL6Y",
+          "productName": "鲜嫩西冷",
+          "productUnit": "箱",
+          "quantity": 0.016667,
+          "rawIngredient": "X-鲜嫩西冷",
+          "rawQuantity": 120,
+          "rawUnit": "g",
+          "note": "荤菜 第34行，按毛重；按采购规格 箱/60包/120g 换算"
+        },
+        {
+          "productCode": "DJ-BOM-A74481B032",
+          "productName": "山葵",
+          "productUnit": "g",
+          "quantity": 5.5,
+          "rawIngredient": "山葵",
+          "rawQuantity": 5.5,
+          "rawUnit": "g",
+          "note": "荤菜 第35行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "鲜打一米丸子",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "一米丸子",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-YDKQFT",
+          "productName": "精品牛肉浆",
+          "productUnit": "箱",
+          "quantity": 0.0265,
+          "rawIngredient": "X-精品牛肉浆",
+          "rawQuantity": 265,
+          "rawUnit": "g",
+          "note": "荤菜 第44行，按毛重；按采购规格 500g*20包/箱 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "七彩云南蔬菜拼盘",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "七彩云南蔬菜拼盘",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL8R",
+          "productName": "海菜花（水性杨花）",
+          "productUnit": "斤",
+          "quantity": 0.206,
+          "rawIngredient": "X-海菜花（水性杨花）",
+          "rawQuantity": 103,
+          "rawUnit": "g",
+          "note": "素菜 第19行，按毛重；g换算为斤"
+        },
+        {
+          "productCode": "DJ-BOM-00C6DC4A7E",
+          "productName": "七彩土豆",
+          "productUnit": "g",
+          "quantity": 122,
+          "rawIngredient": "七彩土豆",
+          "rawQuantity": 122,
+          "rawUnit": "g",
+          "note": "素菜 第20行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYL8P",
+          "productName": "姜柄瓜",
+          "productUnit": "斤",
+          "quantity": 0.206,
+          "rawIngredient": "X-姜柄瓜",
+          "rawQuantity": 103,
+          "rawUnit": "g",
+          "note": "素菜 第21行，按毛重；g换算为斤"
+        },
+        {
+          "productCode": "DJ-BOM-00E1C2DD56",
+          "productName": "紫山药",
+          "productUnit": "g",
+          "quantity": 139,
+          "rawIngredient": "紫山药",
+          "rawQuantity": 139,
+          "rawUnit": "g",
+          "note": "素菜 第22行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "千丝蟹柳",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "千丝蟹柳",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL7O",
+          "productName": "千丝鳕蟹柳",
+          "productUnit": "箱",
+          "quantity": 0.0155,
+          "rawIngredient": "X-千丝蟹柳",
+          "rawQuantity": 155,
+          "rawUnit": "g",
+          "note": "荤菜 第15行，按毛重；按采购规格 箱/10包/1000g 换算"
+        },
+        {
+          "productCode": "DJ-BOM-3A0FE29383",
+          "productName": "花草",
+          "productUnit": "g",
+          "quantity": 4,
+          "rawIngredient": "花草",
+          "rawQuantity": 4,
+          "rawUnit": "g",
+          "note": "荤菜 第16行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "洱海虎虾滑",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "洱海虎虾滑",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL7I",
+          "productName": "3A黑虎虾滑",
+          "productUnit": "箱",
+          "quantity": 0.0121,
+          "rawIngredient": "X-3A黑虎虾滑",
+          "rawQuantity": 121,
+          "rawUnit": "g",
+          "note": "荤菜 第5行，按毛重；按采购规格 箱/20包/500g 换算"
+        },
+        {
+          "productCode": "DJ-BOM-3A0FE29383",
+          "productName": "花草",
+          "productUnit": "g",
+          "quantity": 8,
+          "rawIngredient": "花草",
+          "rawQuantity": 8,
+          "rawUnit": "g",
+          "note": "荤菜 第6行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "滇宝四小福",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "滇宝四小福",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL7W",
+          "productName": "猪肉饼(午餐肉升级)",
+          "productUnit": "箱",
+          "quantity": 0.004157,
+          "rawIngredient": "X-猪肉饼（午餐肉升级）",
+          "rawQuantity": 53,
+          "rawUnit": "g",
+          "note": "荤菜 第19行，按毛重；按采购规格 箱/17包/750g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL7O",
+          "productName": "千丝鳕蟹柳",
+          "productUnit": "箱",
+          "quantity": 0.0077,
+          "rawIngredient": "X-千丝蟹柳",
+          "rawQuantity": 77,
+          "rawUnit": "g",
+          "note": "荤菜 第20行，按毛重；按采购规格 箱/10包/1000g 换算"
+        },
+        {
+          "productCode": "ZZ9M-YDKQFT",
+          "productName": "精品牛肉浆",
+          "productUnit": "箱",
+          "quantity": 0.0065,
+          "rawIngredient": "X-精品牛肉浆",
+          "rawQuantity": 65,
+          "rawUnit": "g",
+          "note": "荤菜 第21行，按毛重；按采购规格 500g*20包/箱 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL7U",
+          "productName": "火锅小香肠",
+          "productUnit": "箱",
+          "quantity": 0.010118,
+          "rawIngredient": "X火锅小香肠",
+          "rawQuantity": 43,
+          "rawUnit": "g",
+          "note": "荤菜 第22行，按毛重；按采购规格 箱/50包/85g 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "牛干巴炒饭",
+      "spec": "不加葱",
+      "policy": "BOM",
+      "bomName": "牛干巴炒饭",
+      "note": null,
+      "items": [
+        {
+          "productCode": "DJ-BOM-CE6A01ED85",
+          "productName": "米饭",
+          "productUnit": "g",
+          "quantity": 170,
+          "rawIngredient": "米饭",
+          "rawQuantity": 170,
+          "rawUnit": "g",
+          "note": "油炸 第6行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYL98",
+          "productName": "云南牛干巴",
+          "productUnit": "斤",
+          "quantity": 0.064,
+          "rawIngredient": "X-云南牛干巴",
+          "rawQuantity": 32,
+          "rawUnit": "g",
+          "note": "油炸 第7行，按毛重；g换算为斤"
+        },
+        {
+          "productCode": "DJ-BOM-FAF3BE1EF7",
+          "productName": "鸡蛋",
+          "productUnit": "个",
+          "quantity": 1,
+          "rawIngredient": "鸡蛋",
+          "rawQuantity": 1,
+          "rawUnit": "个",
+          "note": "油炸 第8行，按毛重；原表单价及成本对应整蛋计数；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": "不加葱"
+    },
+    {
+      "dishName": "赠（鲜花饼/个）",
+      "spec": "",
+      "policy": "BOM",
+      "target": "鲜花饼",
+      "note": "用户确认每份1枚",
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL8W",
+          "productName": "烤制鲜花饼",
+          "productUnit": "箱",
+          "quantity": 0.006944,
+          "rawIngredient": "鲜花饼",
+          "rawQuantity": 1,
+          "rawUnit": "枚",
+          "note": "用户确认每份1枚；按每箱144枚换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "鲜打牛肉丸",
+      "spec": "原味",
+      "policy": "BOM",
+      "bomName": "鲜打牛肉丸",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-YDKQFT",
+          "productName": "精品牛肉浆",
+          "productUnit": "箱",
+          "quantity": 0.015,
+          "rawIngredient": "X-精品牛肉浆",
+          "rawQuantity": 150,
+          "rawUnit": "g",
+          "note": "荤菜 第42行，按毛重；按采购规格 500g*20包/箱 换算"
+        },
+        {
+          "productCode": "DJ-BOM-6E2C26F125",
+          "productName": "紫包菜",
+          "productUnit": "g",
+          "quantity": 100,
+          "rawIngredient": "紫包菜",
+          "rawQuantity": 100,
+          "rawUnit": "g",
+          "note": "荤菜 第43行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": "原味"
+    },
+    {
+      "dishName": "芒芒雪酪",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "芒芒雪酪",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYLCX",
+          "productName": "芒果果酱",
+          "productUnit": "桶",
+          "quantity": 26,
+          "rawIngredient": "芒果果肉",
+          "rawQuantity": 37,
+          "rawUnit": "g",
+          "note": "饮品 第23行，按毛重；按采购规格 3Gg/桶 换算；饮品 第25行，按毛重；按采购规格 3Gg/桶 换算"
+        },
+        {
+          "productCode": "DJ-BOM-7341C156CD",
+          "productName": "芒果片5片",
+          "productUnit": "g",
+          "quantity": 86,
+          "rawIngredient": "芒果片5片",
+          "rawQuantity": 86,
+          "rawUnit": "g",
+          "note": "饮品 第24行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYLBW",
+          "productName": "冰糖糖浆",
+          "productUnit": "箱",
+          "quantity": 0.000438,
+          "rawIngredient": "糖浆",
+          "rawQuantity": 10.5,
+          "rawUnit": "g",
+          "note": "饮品 第27行，按毛重；按采购规格 6kg*4桶 换算"
+        },
+        {
+          "productCode": "ZZ9M-2FQDZD-0",
+          "productName": "光明冰淇淋",
+          "productUnit": "件",
+          "quantity": 0.008333,
+          "rawIngredient": "冰淇淋球",
+          "rawQuantity": 25,
+          "rawUnit": "g",
+          "note": "饮品 第29行，按毛重；按采购规格 桶/3KG 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "茉香轻乳茶",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "茉香轻乳茶",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYLE5",
+          "productName": "冷冻茉莉奶绿（果汁包）",
+          "productUnit": "箱",
+          "quantity": 0.0125,
+          "rawIngredient": "X-冷冻茉香奶绿（果汁包）",
+          "rawQuantity": 1,
+          "rawUnit": "袋",
+          "note": "部分门店上架饮品 第82行，按毛重；按每箱80袋换算"
+        },
+        {
+          "productCode": "DJ-BOM-A8CE283315",
+          "productName": "直饮水",
+          "productUnit": "ml",
+          "quantity": 100,
+          "rawIngredient": "直饮水",
+          "rawQuantity": 100,
+          "rawUnit": "ml",
+          "note": "部分门店上架饮品 第83行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYLCZ",
+          "productName": "纯牛奶",
+          "productUnit": "箱",
+          "quantity": 0.0025,
+          "rawIngredient": "X-纯牛奶",
+          "rawQuantity": 30,
+          "rawUnit": "ml",
+          "note": "部分门店上架饮品 第84行，按毛重；按采购规格 1L*12盒/箱 换算"
+        },
+        {
+          "productCode": "DJ-BOM-BFF42E745E",
+          "productName": "干花/清香木",
+          "productUnit": "片",
+          "quantity": 1,
+          "rawIngredient": "干花/清香木",
+          "rawQuantity": 1,
+          "rawUnit": "片",
+          "note": "部分门店上架饮品 第85行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "超A醒目胡萝卜橙",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "超A醒目胡萝卜橙",
+      "note": null,
+      "items": [
+        {
+          "productCode": "DJ-BOM-B948EDFFC0",
+          "productName": "冷冻胡萝卜香橙汁",
+          "productUnit": "g",
+          "quantity": 90,
+          "rawIngredient": "冷冻胡萝卜香橙汁",
+          "rawQuantity": 90,
+          "rawUnit": "g",
+          "note": "饮品 第29行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYLBU",
+          "productName": "SevenQ茉莉绿茶",
+          "productUnit": "袋",
+          "quantity": 0.000223,
+          "rawIngredient": "茉莉绿茶",
+          "rawQuantity": 3.34,
+          "rawUnit": "g",
+          "note": "饮品 第30行，按毛重；按采购规格 500g*30袋 换算"
+        },
+        {
+          "productCode": "DJ-BOM-CC5971B53D",
+          "productName": "冷冻柳橙汁",
+          "productUnit": "g",
+          "quantity": 50,
+          "rawIngredient": "冷冻柳橙汁",
+          "rawQuantity": 50,
+          "rawUnit": "g",
+          "note": "饮品 第31行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ001-INV-0113",
+          "productName": "黄柠檬",
+          "productUnit": "斤",
+          "quantity": 0.02,
+          "rawIngredient": "去籽黄柠檬",
+          "rawQuantity": 10,
+          "rawUnit": "g",
+          "note": "饮品 第32行，按毛重；g换算为斤"
+        },
+        {
+          "productCode": "DJ-BOM-FC6FFA14B8",
+          "productName": "奇亚籽",
+          "productUnit": "g",
+          "quantity": 20,
+          "rawIngredient": "奇亚籽",
+          "rawQuantity": 20,
+          "rawUnit": "g",
+          "note": "饮品 第33行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-12CA837BCA",
+          "productName": "新鲜胡萝卜",
+          "productUnit": "g",
+          "quantity": 88.88,
+          "rawIngredient": "新鲜胡萝卜",
+          "rawQuantity": 88.88,
+          "rawUnit": "g",
+          "note": "饮品 第34行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYLEE",
+          "productName": "胡萝卜香橙（果汁包）",
+          "productUnit": "箱",
+          "quantity": 0.01,
+          "rawIngredient": "X-胡萝卜香橙（果汁包）",
+          "rawQuantity": 1,
+          "rawUnit": "袋",
+          "note": "部分门店上架饮品 第76行，按毛重；按每箱100袋换算"
+        },
+        {
+          "productCode": "DJ-BOM-62EDC9A49B",
+          "productName": "黄柠檬",
+          "productUnit": "片",
+          "quantity": 1,
+          "rawIngredient": "黄柠檬",
+          "rawQuantity": 1,
+          "rawUnit": "片",
+          "note": "部分门店上架饮品 第76行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYLDZ",
+          "productName": "马蹄爆爆珠",
+          "productUnit": "罐",
+          "quantity": 0.044444,
+          "rawIngredient": "X-甄选马蹄爆珠",
+          "rawQuantity": 20,
+          "rawUnit": "g",
+          "note": "部分门店上架饮品 第77行，按毛重；按采购规格 900g/罐 换算；部分门店上架饮品 第78行，按毛重；按采购规格 900g/罐 换算"
+        },
+        {
+          "productCode": "DJ-BOM-3EB2EE4A26",
+          "productName": "胡萝卜",
+          "productUnit": "片",
+          "quantity": 3,
+          "rawIngredient": "胡萝卜",
+          "rawQuantity": 3,
+          "rawUnit": "片",
+          "note": "部分门店上架饮品 第77行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-A8CE283315",
+          "productName": "直饮水",
+          "productUnit": "ml",
+          "quantity": 120,
+          "rawIngredient": "直饮水",
+          "rawQuantity": 120,
+          "rawUnit": "ml",
+          "note": "部分门店上架饮品 第78行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-EE9E539AB0",
+          "productName": "奇亚籽",
+          "productUnit": "勺",
+          "quantity": 1,
+          "rawIngredient": "奇亚籽",
+          "rawQuantity": 1,
+          "rawUnit": "勺",
+          "note": "部分门店上架饮品 第79行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-3BC24E0B7A",
+          "productName": "清香木",
+          "productUnit": "片",
+          "quantity": 1,
+          "rawIngredient": "清香木",
+          "rawQuantity": 1,
+          "rawUnit": "片",
+          "note": "部分门店上架饮品 第79行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-69A0237028",
+          "productName": "橙片",
+          "productUnit": "片",
+          "quantity": 1,
+          "rawIngredient": "橙片",
+          "rawQuantity": 1,
+          "rawUnit": "片",
+          "note": "部分门店上架饮品 第80行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "野菜粑粑",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "野菜粑粑",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL94",
+          "productName": "野菜糍粑",
+          "productUnit": "箱",
+          "quantity": 0.022097,
+          "rawIngredient": "X-野菜糍粑",
+          "rawQuantity": 137,
+          "rawUnit": "g",
+          "note": "油炸 第3行，按毛重；按采购规格 箱/20包/310g 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "青芒酸木瓜冰茶",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "青芒酸木瓜",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-AU432A",
+          "productName": "青芒酸木瓜汁（果汁包）",
+          "productUnit": "箱",
+          "quantity": 0.0125,
+          "rawIngredient": "X-青芒酸木瓜汁(果汁包）",
+          "rawQuantity": 1,
+          "rawUnit": "袋",
+          "note": "部分门店上架饮品 第72行，按毛重；按每箱80袋换算"
+        },
+        {
+          "productCode": "DJ-BOM-A8CE283315",
+          "productName": "直饮水",
+          "productUnit": "ml",
+          "quantity": 120,
+          "rawIngredient": "直饮水",
+          "rawQuantity": 120,
+          "rawUnit": "ml",
+          "note": "部分门店上架饮品 第72行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYLDZ",
+          "productName": "马蹄爆爆珠",
+          "productUnit": "罐",
+          "quantity": 0.022222,
+          "rawIngredient": "X-甄选马蹄爆珠",
+          "rawQuantity": 20,
+          "rawUnit": "g",
+          "note": "部分门店上架饮品 第73行，按毛重；按采购规格 900g/罐 换算"
+        },
+        {
+          "productCode": "DJ-BOM-3BC24E0B7A",
+          "productName": "清香木",
+          "productUnit": "片",
+          "quantity": 1,
+          "rawIngredient": "清香木",
+          "rawQuantity": 1,
+          "rawUnit": "片",
+          "note": "部分门店上架饮品 第73行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-8A481AAADF",
+          "productName": "酸木瓜片",
+          "productUnit": "片",
+          "quantity": 2,
+          "rawIngredient": "酸木瓜片",
+          "rawQuantity": 2,
+          "rawUnit": "片",
+          "note": "部分门店上架饮品 第74行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "云南姜柄瓜",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "云南姜柄瓜",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL8P",
+          "productName": "姜柄瓜",
+          "productUnit": "斤",
+          "quantity": 0.38,
+          "rawIngredient": "X-姜柄瓜",
+          "rawQuantity": 190,
+          "rawUnit": "g",
+          "note": "素菜 第9行，按毛重；g换算为斤"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "蓝莓浆浆",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "蓝莓浆浆",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYLC5",
+          "productName": "蓝莓果酱",
+          "productUnit": "桶",
+          "quantity": 0.020334,
+          "rawIngredient": "蓝莓",
+          "rawQuantity": 20,
+          "rawUnit": "g",
+          "note": "饮品 第9行，按毛重；按采购规格 3Kg/桶 换算；饮品 第11行，按毛重；按采购规格 3Kg/桶 换算"
+        },
+        {
+          "productCode": "DJ-BOM-CDBE3CA43C",
+          "productName": "蓝莓装饰",
+          "productUnit": "g",
+          "quantity": 30,
+          "rawIngredient": "蓝莓装饰",
+          "rawQuantity": 30,
+          "rawUnit": "g",
+          "note": "饮品 第10行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-BA42BCB314",
+          "productName": "冰块170g",
+          "productUnit": "g",
+          "quantity": 170,
+          "rawIngredient": "冰块170g",
+          "rawQuantity": 170,
+          "rawUnit": "g",
+          "note": "饮品 第12行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2FQDZD-0",
+          "productName": "光明冰淇淋",
+          "productUnit": "件",
+          "quantity": 0.008333,
+          "rawIngredient": "冰淇淋球",
+          "rawQuantity": 25,
+          "rawUnit": "g",
+          "note": "饮品 第13行，按毛重；按采购规格 桶/3KG 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "猪肉饼",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "猪肉饼",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL7W",
+          "productName": "猪肉饼(午餐肉升级)",
+          "productUnit": "箱",
+          "quantity": 0.011922,
+          "rawIngredient": "X-猪肉饼（午餐肉升级）",
+          "rawQuantity": 152,
+          "rawUnit": "g",
+          "note": "荤菜 第17行，按毛重；按采购规格 箱/17包/750g 换算"
+        },
+        {
+          "productCode": "DJ-BOM-3A0FE29383",
+          "productName": "花草",
+          "productUnit": "g",
+          "quantity": 8,
+          "rawIngredient": "花草",
+          "rawQuantity": 8,
+          "rawUnit": "g",
+          "note": "荤菜 第18行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "紫白菜",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "紫白菜",
+      "note": null,
+      "items": [
+        {
+          "productCode": "DJ-BOM-FE03ED9FAB",
+          "productName": "紫白菜",
+          "productUnit": "g",
+          "quantity": 130,
+          "rawIngredient": "紫白菜",
+          "rawQuantity": 130,
+          "rawUnit": "g",
+          "note": "素菜 第17行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "翡翠贡菜",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "翡翠贡菜",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYLAJ",
+          "productName": "贡菜A",
+          "productUnit": "箱",
+          "quantity": 0.012,
+          "rawIngredient": "X-贡菜A",
+          "rawQuantity": 60,
+          "rawUnit": "g",
+          "note": "素菜 第15行，按毛重；按采购规格 箱/10斤/500g 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "胡辣椒鲜牛肉",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "胡辣椒鲜牛肉",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL6Y",
+          "productName": "鲜嫩西冷",
+          "productUnit": "箱",
+          "quantity": 0.016667,
+          "rawIngredient": "X-鲜嫩西冷",
+          "rawQuantity": 120,
+          "rawUnit": "g",
+          "note": "荤菜 第32行，按毛重；按采购规格 箱/60包/120g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLB9",
+          "productName": "糊辣椒",
+          "productUnit": "斤",
+          "quantity": 0.01,
+          "rawIngredient": "X-胡辣椒",
+          "rawQuantity": 5,
+          "rawUnit": "g",
+          "note": "荤菜 第33行，按毛重；g换算为斤"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "VC番茄芭乐",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "VC番茄芭乐",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2FQDUS-77",
+          "productName": "红芭乐饮料浓浆",
+          "productUnit": "件",
+          "quantity": 0.002153,
+          "rawIngredient": "芭乐果茸",
+          "rawQuantity": 31,
+          "rawUnit": "g",
+          "note": "饮品 第13行，按毛重；按采购规格 1.2kg*12瓶 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLBU",
+          "productName": "SevenQ茉莉绿茶",
+          "productUnit": "袋",
+          "quantity": 0.000333,
+          "rawIngredient": "茉莉绿茶",
+          "rawQuantity": 5,
+          "rawUnit": "g",
+          "note": "饮品 第14行，按毛重；按采购规格 500g*30袋 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLBW",
+          "productName": "冰糖糖浆",
+          "productUnit": "箱",
+          "quantity": 0.001096,
+          "rawIngredient": "冰糖糖浆",
+          "rawQuantity": 26.3,
+          "rawUnit": "g",
+          "note": "饮品 第15行，按毛重；按采购规格 6kg*4桶 换算"
+        },
+        {
+          "productCode": "DJ-BOM-CC5971B53D",
+          "productName": "冷冻柳橙汁",
+          "productUnit": "g",
+          "quantity": 31.5,
+          "rawIngredient": "冷冻柳橙汁",
+          "rawQuantity": 31.5,
+          "rawUnit": "g",
+          "note": "饮品 第16行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYLC9",
+          "productName": "冷冻红颜草莓肉",
+          "productUnit": "箱",
+          "quantity": 0.001222,
+          "rawIngredient": "冷冻草莓果",
+          "rawQuantity": 22,
+          "rawUnit": "g",
+          "note": "饮品 第17行，按毛重；按采购规格 1kg/18包/箱 换算"
+        },
+        {
+          "productCode": "DJ-BOM-81F824E505",
+          "productName": "新鲜小番茄",
+          "productUnit": "g",
+          "quantity": 103,
+          "rawIngredient": "新鲜小番茄",
+          "rawQuantity": 103,
+          "rawUnit": "g",
+          "note": "饮品 第18行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ001-INV-0113",
+          "productName": "黄柠檬",
+          "productUnit": "斤",
+          "quantity": 0.021,
+          "rawIngredient": "去籽黄柠檬",
+          "rawQuantity": 10.5,
+          "rawUnit": "g",
+          "note": "饮品 第19行，按毛重；g换算为斤"
+        },
+        {
+          "productCode": "DJ-BOM-FC6FFA14B8",
+          "productName": "奇亚籽",
+          "productUnit": "g",
+          "quantity": 20,
+          "rawIngredient": "奇亚籽",
+          "rawQuantity": 20,
+          "rawUnit": "g",
+          "note": "饮品 第20行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-127EB306E2",
+          "productName": "新鲜芭乐",
+          "productUnit": "g",
+          "quantity": 20,
+          "rawIngredient": "新鲜芭乐",
+          "rawQuantity": 20,
+          "rawUnit": "g",
+          "note": "饮品 第21行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "云南曲靖饵块",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "云南曲靖饵块",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYLBA",
+          "productName": "饵块",
+          "productUnit": "包",
+          "quantity": 0.113,
+          "rawIngredient": "X-饵块",
+          "rawQuantity": 113,
+          "rawUnit": "g",
+          "note": "素菜 第17行，按毛重；按采购规格 包/1000g 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "云南百味鲜牛肉",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "云南百味鲜牛肉",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL6W",
+          "productName": "吊龙切片A（吊龙前段）",
+          "productUnit": "箱",
+          "quantity": 0.013889,
+          "rawIngredient": "X-吊龙切片吊龙",
+          "rawQuantity": 100,
+          "rawUnit": "g",
+          "note": "荤菜 第23行，按毛重；按采购规格 箱/60包/120g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL6U",
+          "productName": "板腱切片（五花趾）",
+          "productUnit": "箱",
+          "quantity": 0.013333,
+          "rawIngredient": "X-板腱切片（五花趾）",
+          "rawQuantity": 100,
+          "rawUnit": "g",
+          "note": "荤菜 第24行，按毛重；按采购规格 箱/50包/150g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL70",
+          "productName": "味角秘制嫩牛肉（牛霖肉）",
+          "productUnit": "箱",
+          "quantity": 0.013333,
+          "rawIngredient": "X-味角秘制嫩牛肉（牛霖肉）",
+          "rawQuantity": 100,
+          "rawUnit": "g",
+          "note": "荤菜 第25行，按毛重；按采购规格 箱/50包/150g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL6Y",
+          "productName": "鲜嫩西冷",
+          "productUnit": "箱",
+          "quantity": 0.013889,
+          "rawIngredient": "X-鲜嫩西冷",
+          "rawQuantity": 100,
+          "rawUnit": "g",
+          "note": "荤菜 第26行，按毛重；按采购规格 箱/60包/120g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLB9",
+          "productName": "糊辣椒",
+          "productUnit": "斤",
+          "quantity": 0.12,
+          "rawIngredient": "辣椒",
+          "rawQuantity": 60,
+          "rawUnit": "g",
+          "note": "荤菜 第27行，按毛重；g换算为斤"
+        },
+        {
+          "productCode": "DJ-BOM-3A0FE29383",
+          "productName": "花草",
+          "productUnit": "g",
+          "quantity": 12,
+          "rawIngredient": "花草",
+          "rawQuantity": 12,
+          "rawUnit": "g",
+          "note": "荤菜 第28行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "水性杨花",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "水性杨花",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL8R",
+          "productName": "海菜花（水性杨花）",
+          "productUnit": "斤",
+          "quantity": 0.25,
+          "rawIngredient": "X-海菜花（水性杨花）",
+          "rawQuantity": 125,
+          "rawUnit": "g",
+          "note": "素菜 第7行，按毛重；g换算为斤"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "紫山药",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "紫山药",
+      "note": null,
+      "items": [
+        {
+          "productCode": "DJ-BOM-00E1C2DD56",
+          "productName": "紫山药",
+          "productUnit": "g",
+          "quantity": 250,
+          "rawIngredient": "紫山药",
+          "rawQuantity": 250,
+          "rawUnit": "g",
+          "note": "素菜 第13行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "轻颜羽衣甘蓝",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "轻颜羽衣甘蓝",
+      "note": null,
+      "items": [
+        {
+          "productCode": "DJ-BOM-51D341DDF2",
+          "productName": "青提果茸",
+          "productUnit": "g",
+          "quantity": 10.5,
+          "rawIngredient": "青提果茸",
+          "rawQuantity": 10.5,
+          "rawUnit": "g",
+          "note": "饮品 第3行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYLD3",
+          "productName": "奇异果果茸",
+          "productUnit": "桶",
+          "quantity": 0.002192,
+          "rawIngredient": "奇异果茸",
+          "rawQuantity": 31.57,
+          "rawUnit": "g",
+          "note": "饮品 第4行，按毛重；按采购规格 1.2kg*12瓶/箱 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLBU",
+          "productName": "SevenQ茉莉绿茶",
+          "productUnit": "袋",
+          "quantity": 0.000333,
+          "rawIngredient": "茉莉绿茶",
+          "rawQuantity": 5,
+          "rawUnit": "g",
+          "note": "饮品 第5行，按毛重；按采购规格 500g*30袋 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLBW",
+          "productName": "冰糖糖浆",
+          "productUnit": "箱",
+          "quantity": 0.001096,
+          "rawIngredient": "冰糖糖浆",
+          "rawQuantity": 26.31,
+          "rawUnit": "g",
+          "note": "饮品 第6行，按毛重；按采购规格 6kg*4桶 换算"
+        },
+        {
+          "productCode": "DJ-BOM-DE54D21139",
+          "productName": "冰水",
+          "productUnit": "g",
+          "quantity": 100,
+          "rawIngredient": "冰水",
+          "rawQuantity": 100,
+          "rawUnit": "g",
+          "note": "饮品 第7行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-55DF851350",
+          "productName": "苹果鲜果",
+          "productUnit": "g",
+          "quantity": 32,
+          "rawIngredient": "苹果鲜果",
+          "rawQuantity": 32,
+          "rawUnit": "g",
+          "note": "饮品 第8行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYLD1",
+          "productName": "奇异果果酱",
+          "productUnit": "桶",
+          "quantity": 18.333333,
+          "rawIngredient": "奇异果鲜果",
+          "rawQuantity": 55,
+          "rawUnit": "g",
+          "note": "饮品 第9行，按毛重；按采购规格 3Gg/桶 换算"
+        },
+        {
+          "productCode": "DJ001-INV-0113",
+          "productName": "黄柠檬",
+          "productUnit": "斤",
+          "quantity": 0.021,
+          "rawIngredient": "去籽黄柠檬",
+          "rawQuantity": 10.5,
+          "rawUnit": "g",
+          "note": "饮品 第10行，按毛重；g换算为斤"
+        },
+        {
+          "productCode": "DJ-BOM-D184A6A0AD",
+          "productName": "羽衣甘蓝叶子",
+          "productUnit": "g",
+          "quantity": 15.5,
+          "rawIngredient": "羽衣甘蓝叶子",
+          "rawQuantity": 15.5,
+          "rawUnit": "g",
+          "note": "饮品 第11行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "竹荪菌",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "竹荪",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL5L",
+          "productName": "竹荪",
+          "productUnit": "件",
+          "quantity": 0.102,
+          "rawIngredient": "X-竹荪",
+          "rawQuantity": 51,
+          "rawUnit": "g",
+          "note": "蘑菇 第21行，按毛重；按采购规格 件/500g 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "脆皖鱼",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "脆皖鱼",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL7K",
+          "productName": "鲷鱼片/免浆",
+          "productUnit": "箱",
+          "quantity": 0.014,
+          "rawIngredient": "X-鲷鱼片",
+          "rawQuantity": 140,
+          "rawUnit": "g",
+          "note": "荤菜 第13行，按毛重；按采购规格 箱/40袋/250g 换算"
+        },
+        {
+          "productCode": "DJ-BOM-3A0FE29383",
+          "productName": "花草",
+          "productUnit": "g",
+          "quantity": 8,
+          "rawIngredient": "花草",
+          "rawQuantity": 8,
+          "rawUnit": "g",
+          "note": "荤菜 第14行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "罐罐鲜花奶茶",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "罐罐鲜花奶茶",
+      "note": null,
+      "items": [
+        {
+          "productCode": "DJ-BOM-5E59F91B24",
+          "productName": "牛奶",
+          "productUnit": "g",
+          "quantity": 150,
+          "rawIngredient": "牛奶",
+          "rawQuantity": 150,
+          "rawUnit": "g",
+          "note": "饮品 第47行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-42AC05459A",
+          "productName": "咖奶",
+          "productUnit": "g",
+          "quantity": 25,
+          "rawIngredient": "咖奶",
+          "rawQuantity": 25,
+          "rawUnit": "g",
+          "note": "饮品 第49行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYLBW",
+          "productName": "冰糖糖浆",
+          "productUnit": "箱",
+          "quantity": 0.00065,
+          "rawIngredient": "冰糖糖浆",
+          "rawQuantity": 15.6,
+          "rawUnit": "g",
+          "note": "饮品 第50行，按毛重；按采购规格 6kg*4桶 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLBU",
+          "productName": "SevenQ茉莉绿茶",
+          "productUnit": "袋",
+          "quantity": 0.000445,
+          "rawIngredient": "茉莉绿茶",
+          "rawQuantity": 6.67,
+          "rawUnit": "g",
+          "note": "饮品 第51行，按毛重；按采购规格 500g*30袋 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "云南鲜嫩牛肉",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "云南鲜嫩牛肉",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL6Y",
+          "productName": "鲜嫩西冷",
+          "productUnit": "箱",
+          "quantity": 0.020833,
+          "rawIngredient": "X-鲜嫩西冷",
+          "rawQuantity": 150,
+          "rawUnit": "g",
+          "note": "荤菜 第3行，按毛重；按采购规格 箱/60包/120g 换算"
+        },
+        {
+          "productCode": "DJ-BOM-3A0FE29383",
+          "productName": "花草",
+          "productUnit": "g",
+          "quantity": 8,
+          "rawIngredient": "花草",
+          "rawQuantity": 8,
+          "rawUnit": "g",
+          "note": "荤菜 第4行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "十界珍菌拼盘",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "十界珍菌拼盘",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL5L",
+          "productName": "竹荪",
+          "productUnit": "件",
+          "quantity": 0.062,
+          "rawIngredient": "X-竹荪",
+          "rawQuantity": 31,
+          "rawUnit": "g",
+          "note": "蘑菇 第21行，按毛重；按采购规格 件/500g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5P",
+          "productName": "猪肚菌",
+          "productUnit": "件",
+          "quantity": 0.035133,
+          "rawIngredient": "X-猪肚菌",
+          "rawQuantity": 52.7,
+          "rawUnit": "g",
+          "note": "蘑菇 第22行，按毛重；按采购规格 件/1500g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL65",
+          "productName": "滑子菇",
+          "productUnit": "盒",
+          "quantity": 0.2108,
+          "rawIngredient": "X-滑子菇",
+          "rawQuantity": 52.7,
+          "rawUnit": "g",
+          "note": "蘑菇 第23行，按毛重；按采购规格 盒/250g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5Y",
+          "productName": "野生香菇",
+          "productUnit": "kg",
+          "quantity": 0.0532,
+          "rawIngredient": "X-野生香菇",
+          "rawQuantity": 53.2,
+          "rawUnit": "g",
+          "note": "蘑菇 第24行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-2DYL64",
+          "productName": "金耳菌",
+          "productUnit": "kg",
+          "quantity": 0.051,
+          "rawIngredient": "X-金耳菌",
+          "rawQuantity": 51,
+          "rawUnit": "g",
+          "note": "蘑菇 第25行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-2DYL60",
+          "productName": "鹿茸菇",
+          "productUnit": "件",
+          "quantity": 0.02,
+          "rawIngredient": "X-鹿茸菇",
+          "rawQuantity": 50,
+          "rawUnit": "g",
+          "note": "蘑菇 第26行，按毛重；按采购规格 件/2500g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5F",
+          "productName": "赤松茸A",
+          "productUnit": "件",
+          "quantity": 0.0244,
+          "rawIngredient": "X-赤松茸A",
+          "rawQuantity": 54.9,
+          "rawUnit": "g",
+          "note": "蘑菇 第27行，按毛重；按采购规格 件/2250g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5I",
+          "productName": "榆黄蘑件装",
+          "productUnit": "件",
+          "quantity": 0.024444,
+          "rawIngredient": "X-榆黄蘑件装",
+          "rawQuantity": 55,
+          "rawUnit": "g",
+          "note": "蘑菇 第28行，按毛重；按采购规格 件/2250g 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYL5N",
+          "productName": "黑牛肝菌",
+          "productUnit": "kg",
+          "quantity": 0.032,
+          "rawIngredient": "X-黑牛肝菌",
+          "rawQuantity": 32,
+          "rawUnit": "g",
+          "note": "蘑菇 第29行，按毛重；g换算为kg"
+        },
+        {
+          "productCode": "ZZ9M-2DYL69",
+          "productName": "人工灰虎掌",
+          "productUnit": "kg",
+          "quantity": 0.032,
+          "rawIngredient": "X-灰虎掌",
+          "rawQuantity": 32,
+          "rawUnit": "g",
+          "note": "蘑菇 第30行，按毛重；g换算为kg"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "满杯凤梨",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "满杯凤梨",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYLBX",
+          "productName": "凤梨果酱",
+          "productUnit": "桶",
+          "quantity": 0.027667,
+          "rawIngredient": "凤梨果肉",
+          "rawQuantity": 42,
+          "rawUnit": "g",
+          "note": "饮品 第3行，按毛重；按采购规格 3kg/桶 换算；饮品 第5行，按毛重；按采购规格 3kg/桶 换算"
+        },
+        {
+          "productCode": "DJ-BOM-9D34F53976",
+          "productName": "凤梨片",
+          "productUnit": "g",
+          "quantity": 112,
+          "rawIngredient": "凤梨片",
+          "rawQuantity": 112,
+          "rawUnit": "g",
+          "note": "饮品 第4行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-9638A63BC6",
+          "productName": "冰块170",
+          "productUnit": "g",
+          "quantity": 10,
+          "rawIngredient": "冰块170",
+          "rawQuantity": 10,
+          "rawUnit": "g",
+          "note": "饮品 第6行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2FQDZD-0",
+          "productName": "光明冰淇淋",
+          "productUnit": "件",
+          "quantity": 0.008333,
+          "rawIngredient": "冰淇球",
+          "rawQuantity": 25,
+          "rawUnit": "g",
+          "note": "饮品 第7行，按毛重；按采购规格 桶/3KG 换算"
+        },
+        {
+          "productCode": "DJ-BOM-DA61CFAAEF",
+          "productName": "薄荷",
+          "productUnit": "g",
+          "quantity": 1,
+          "rawIngredient": "薄荷",
+          "rawQuantity": 1,
+          "rawUnit": "g",
+          "note": "饮品 第8行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "鞭炮笋",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "鞭炮笋",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL8J",
+          "productName": "冷冻鞭炮笋",
+          "productUnit": "箱",
+          "quantity": 0.011,
+          "rawIngredient": "X-鞭炮笋",
+          "rawQuantity": 110,
+          "rawUnit": "g",
+          "note": "素菜 第15行，按毛重；按采购规格 箱/20袋/500g 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "鲜打牛肉丸",
+      "spec": "菌菇味",
+      "policy": "BOM",
+      "bomName": "鲜打牛肉丸",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-YDKQFT",
+          "productName": "精品牛肉浆",
+          "productUnit": "箱",
+          "quantity": 0.015,
+          "rawIngredient": "X-精品牛肉浆",
+          "rawQuantity": 150,
+          "rawUnit": "g",
+          "note": "荤菜 第42行，按毛重；按采购规格 500g*20包/箱 换算"
+        },
+        {
+          "productCode": "DJ-BOM-6E2C26F125",
+          "productName": "紫包菜",
+          "productUnit": "g",
+          "quantity": 100,
+          "rawIngredient": "紫包菜",
+          "rawQuantity": 100,
+          "rawUnit": "g",
+          "note": "荤菜 第43行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": "菌菇味"
+    },
+    {
+      "dishName": "夏日桃桃",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "夏日桃桃",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYLDU",
+          "productName": "冷冻水蜜桃酱",
+          "productUnit": "瓶",
+          "quantity": 0.1,
+          "rawIngredient": "X-冷冻水蜜桃酱（春日桃桃用",
+          "rawQuantity": 100,
+          "rawUnit": "g",
+          "note": "部分门店上架饮品 第87行，按毛重；按采购规格 1kg/瓶 换算"
+        },
+        {
+          "productCode": "DJ-BOM-A5C9230FFC",
+          "productName": "冰块",
+          "productUnit": "g",
+          "quantity": 180,
+          "rawIngredient": "冰块",
+          "rawQuantity": 180,
+          "rawUnit": "g",
+          "note": "部分门店上架饮品 第87行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-5ECB01727D",
+          "productName": "桂花乌龙",
+          "productUnit": "ml",
+          "quantity": 100,
+          "rawIngredient": "桂花乌龙",
+          "rawQuantity": 100,
+          "rawUnit": "ml",
+          "note": "部分门店上架饮品 第88行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-E423A1AE01",
+          "productName": "粉色棉花糖",
+          "productUnit": "个",
+          "quantity": 1,
+          "rawIngredient": "粉色棉花糖",
+          "rawQuantity": 1,
+          "rawUnit": "个",
+          "note": "部分门店上架饮品 第88行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2FQE0K-8C",
+          "productName": "开心果 酱",
+          "productUnit": "件",
+          "quantity": 0.002,
+          "rawIngredient": "X-开心果酱（夏日桃桃用）",
+          "rawQuantity": 20,
+          "rawUnit": "g",
+          "note": "部分门店上架饮品 第89行，按毛重；按采购规格 500g*20袋/箱 换算"
+        },
+        {
+          "productCode": "DJ-BOM-E27B4AF270",
+          "productName": "巧克力小花",
+          "productUnit": "个",
+          "quantity": 1,
+          "rawIngredient": "巧克力小花",
+          "rawQuantity": 1,
+          "rawUnit": "个",
+          "note": "部分门店上架饮品 第89行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYLDW",
+          "productName": "常温酸奶",
+          "productUnit": "瓶",
+          "quantity": 0.053571,
+          "rawIngredient": "X-常温酸奶（夏日桃桃用）",
+          "rawQuantity": 60,
+          "rawUnit": "g",
+          "note": "部分门店上架饮品 第90行，按毛重；按采购规格 1.12kg/瓶 换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLDL",
+          "productName": "糯米纸蝴蝶",
+          "productUnit": "件",
+          "quantity": 0.005,
+          "rawIngredient": "糯米纸蝴蝶",
+          "rawQuantity": 1,
+          "rawUnit": "个",
+          "note": "部分门店上架饮品 第90行，按毛重；按每件200个换算"
+        },
+        {
+          "productCode": "ZZ9M-2DYLDY",
+          "productName": "雪燕味饮品",
+          "productUnit": "包",
+          "quantity": 0.06,
+          "rawIngredient": "雪燕",
+          "rawQuantity": 30,
+          "rawUnit": "g",
+          "note": "部分门店上架饮品 第91行，按毛重；按采购规格 500g/包 换算"
+        },
+        {
+          "productCode": "DJ-BOM-9FA04E58E9",
+          "productName": "X调味糖浆",
+          "productUnit": "g",
+          "quantity": 10,
+          "rawIngredient": "X调味糖浆",
+          "rawQuantity": 10,
+          "rawUnit": "g",
+          "note": "部分门店上架饮品 第92行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "绣球菌",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "绣球菌",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL61",
+          "productName": "绣球菌",
+          "productUnit": "盒",
+          "quantity": 0.103,
+          "rawIngredient": "X-绣球菌",
+          "rawQuantity": 103,
+          "rawUnit": "g",
+          "note": "蘑菇 第5行，按毛重；按采购规格 盒/1000g 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "雪碧摩登罐",
+      "spec": "",
+      "policy": "BOM",
+      "target": "雪碧摩登罐",
+      "note": "每份1罐",
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYLBO",
+          "productName": "雪碧摩登罐",
+          "productUnit": "箱",
+          "quantity": 0.041667,
+          "rawIngredient": "雪碧摩登罐",
+          "rawQuantity": 1,
+          "rawUnit": "罐",
+          "note": "每份1罐；按每箱24罐换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "赠【冰淇淋】",
+      "spec": "",
+      "policy": "BOM",
+      "target": "光明冰淇淋",
+      "note": "用户确认每份50g",
+      "items": [
+        {
+          "productCode": "ZZ9M-2FQDZD-0",
+          "productName": "光明冰淇淋",
+          "productUnit": "件",
+          "quantity": 0.016667,
+          "rawIngredient": "光明冰淇淋",
+          "rawQuantity": 50,
+          "rawUnit": "g",
+          "note": "用户确认每份50g；按采购规格 桶/3KG 换算"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "傣味柠檬虾",
+      "spec": "",
+      "policy": "BOM",
+      "bomName": "傣味柠檬虾",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-2FQE7L-OL",
+          "productName": "盐冻虾30/40",
+          "productUnit": "件",
+          "quantity": 0.116667,
+          "rawIngredient": "X-盐冻虾30/40",
+          "rawQuantity": 175,
+          "rawUnit": "g",
+          "note": "小吃 第22行，按毛重；按采购规格 1.5kg*6/箱 换算"
+        },
+        {
+          "productCode": "DJ-BOM-A74481B032",
+          "productName": "山葵",
+          "productUnit": "g",
+          "quantity": 5.3,
+          "rawIngredient": "山葵",
+          "rawQuantity": 5.3,
+          "rawUnit": "g",
+          "note": "小吃 第23行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-FCE58304A6",
+          "productName": "木瓜丝",
+          "productUnit": "g",
+          "quantity": 22.23,
+          "rawIngredient": "木瓜丝",
+          "rawQuantity": 22.23,
+          "rawUnit": "g",
+          "note": "小吃 第24行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-F3DDE5EEDC",
+          "productName": "洋葱",
+          "productUnit": "g",
+          "quantity": 33,
+          "rawIngredient": "洋葱",
+          "rawQuantity": 33,
+          "rawUnit": "g",
+          "note": "小吃 第25行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-5FFB8E1AA1",
+          "productName": "大香菜",
+          "productUnit": "g",
+          "quantity": 11.9,
+          "rawIngredient": "大香菜",
+          "rawQuantity": 11.9,
+          "rawUnit": "g",
+          "note": "小吃 第26行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-3448187C8F",
+          "productName": "蒜籽",
+          "productUnit": "g",
+          "quantity": 5,
+          "rawIngredient": "蒜籽",
+          "rawQuantity": 5,
+          "rawUnit": "g",
+          "note": "小吃 第27行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "DJ-BOM-B9B756BCA3",
+          "productName": "小米椒",
+          "productUnit": "g",
+          "quantity": 8.5,
+          "rawIngredient": "小米椒",
+          "rawQuantity": 8.5,
+          "rawUnit": "g",
+          "note": "小吃 第28行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYLBX",
+          "productName": "凤梨果酱",
+          "productUnit": "桶",
+          "quantity": 0.046667,
+          "rawIngredient": "凤梨",
+          "rawQuantity": 140,
+          "rawUnit": "g",
+          "note": "小吃 第30行，按毛重；按采购规格 3kg/桶 换算"
+        },
+        {
+          "productCode": "DJ-BOM-C668CED3EE",
+          "productName": "芥末",
+          "productUnit": "g",
+          "quantity": 2,
+          "rawIngredient": "芥末",
+          "rawQuantity": 2,
+          "rawUnit": "g",
+          "note": "小吃 第31行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        },
+        {
+          "productCode": "ZZ9M-2DYL9U",
+          "productName": "傣味春鸡爪酱",
+          "productUnit": "箱",
+          "quantity": 0.00475,
+          "rawIngredient": "X-傣味舂鸡爪酱（定制）",
+          "rawQuantity": 76,
+          "rawUnit": "g",
+          "note": "小吃 第32行，按毛重；按采购规格 箱/2000g*8包 换算"
+        },
+        {
+          "productCode": "DJ-BOM-A227F18B44",
+          "productName": "冷冻柠檬汁",
+          "productUnit": "g",
+          "quantity": 15,
+          "rawIngredient": "X-冷冻柠檬汁",
+          "rawQuantity": 15,
+          "rawUnit": "g",
+          "note": "小吃 第33行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": ""
+    },
+    {
+      "dishName": "鲜打牛肉丸（鲜菌味）",
+      "spec": "个",
+      "policy": "BOM",
+      "bomName": "鲜打牛肉丸",
+      "note": null,
+      "items": [
+        {
+          "productCode": "ZZ9M-YDKQFT",
+          "productName": "精品牛肉浆",
+          "productUnit": "箱",
+          "quantity": 0.015,
+          "rawIngredient": "X-精品牛肉浆",
+          "rawQuantity": 150,
+          "rawUnit": "g",
+          "note": "荤菜 第42行，按毛重；按采购规格 500g*20包/箱 换算"
+        },
+        {
+          "productCode": "DJ-BOM-6E2C26F125",
+          "productName": "紫包菜",
+          "productUnit": "g",
+          "quantity": 100,
+          "rawIngredient": "紫包菜",
+          "rawQuantity": 100,
+          "rawUnit": "g",
+          "note": "荤菜 第43行，按毛重；暂无可靠采购SKU，先按BOM原单位建档，后续可归并"
+        }
+      ],
+      "variantKey": "个"
+    }
+  ],
+  "audit": {
+    "rules": 85,
+    "activeRules": 84,
+    "pendingRules": [
+      "虎掌菌"
+    ],
+    "recipeItems": 314,
+    "existingProductItems": 198,
+    "pendingProductItems": 116,
+    "productsToCreate": 77,
+    "conversionWarnings": [
+      "X-农夫山泉1.5升瓶装矿泉水: 无法可靠换算 g → 箱；需补充包装规格，改用BOM原始单位独立SKU",
+      "土豆: 无法可靠换算 g → 件；需补充包装规格，改用BOM原始单位独立SKU",
+      "生抽: 无法可靠换算 g → 箱；需补充包装规格，改用BOM原始单位独立SKU",
+      "七彩土豆: 无法可靠换算 g → 件；需补充包装规格，改用BOM原始单位独立SKU",
+      "X-9°白米醋: 无法可靠换算 g → 箱；需补充包装规格，改用BOM原始单位独立SKU",
+      "鲜打一米丸子: 紫包菜 毛重为 0，已忽略零用量行",
+      "冷冻胡萝卜香橙汁: 无法可靠换算 g → 瓶；需补充包装规格，改用BOM原始单位独立SKU",
+      "冷冻柳橙汁: 无法可靠换算 g → 瓶；需补充包装规格，改用BOM原始单位独立SKU",
+      "黄柠檬: 无法可靠换算 片 → 斤；需补充包装规格，改用BOM原始单位独立SKU",
+      "胡萝卜: 无法可靠换算 片 → 箱；需补充包装规格，改用BOM原始单位独立SKU",
+      "酸木瓜片: 无法可靠换算 片 → 包；需补充包装规格，改用BOM原始单位独立SKU",
+      "牛奶: 无法可靠换算 g → 箱；需补充包装规格，改用BOM原始单位独立SKU",
+      "桂花乌龙: 无法可靠换算 ml → 袋；需补充包装规格，改用BOM原始单位独立SKU",
+      "粉色棉花糖: 无法可靠换算 个 → 件；需补充包装规格，改用BOM原始单位独立SKU",
+      "X-冷冻柠檬汁: 无法可靠换算 g → 瓶；需补充包装规格，改用BOM原始单位独立SKU"
+    ]
+  }
+}

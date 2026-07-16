@@ -23,22 +23,17 @@ const DOC_TYPE_LABEL: Record<string, string> = {
 export default function ManagerHomePage() {
   const [tab, setTab] = useState<'home' | 'ops' | 'fab' | 'customer' | 'team'>('home')
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [todayRevenueRecorded, setTodayRevenueRecorded] = useState<boolean | null>(null)
+  const [dailyReportState, setDailyReportState] = useState<'PENDING' | 'OVERDUE' | 'CONFIRMED' | null>(null)
   const [pendingLoss, setPendingLoss] = useState<LossClaim[] | null>(null)
   const [pendingInv, setPendingInv] = useState<any[] | null>(null)
   const [myDocs, setMyDocs] = useState<DocItem[] | null>(null)
   const { data, error } = useDashboard()
 
   useEffect(() => {
-    // 检测今日是否已录营业额
-    const today = new Date().toISOString().slice(0, 10)
-    const month = today.slice(0, 7)
-    apiFetch<any[]>(`/api/revenue?month=${month}`)
-      .then(rows => {
-        const hit = (rows || []).find(r => r.date?.slice(0, 10) === today && Number(r.amount) > 0)
-        setTodayRevenueRecorded(!!hit)
-      })
-      .catch(() => setTodayRevenueRecorded(true))
+    // 每日上午 11 点前提交前一营业日两表；后端统一按北京时间判断逾期。
+    apiFetch<{ state: 'PENDING' | 'OVERDUE' | 'CONFIRMED' }>('/api/daily-business-imports/status')
+      .then(result => setDailyReportState(result.state))
+      .catch(() => setDailyReportState(null))
     // 本店报损待处理 (店长视角看自己店的报损)
     apiFetch<LossClaim[]>('/api/loss-claims?limit=10')
       .then(rows => setPendingLoss((rows || []).filter(r => r.status === 'PENDING' || r.status === 'NEGOTIATING')))
@@ -53,10 +48,8 @@ export default function ManagerHomePage() {
   if (!data) return <LoadingScreen />
   const { greeting, today } = greetingFor(data.user?.name)
   const storeName = data.store?.name || '门店'
-  // 22 点后还没录提示更明显, 中午就温和提醒
-  const now = new Date()
-  const isLate = now.getHours() >= 21
-  const showRecordReminder = todayRevenueRecorded === false
+  const isLate = dailyReportState === 'OVERDUE'
+  const showRecordReminder = dailyReportState === 'PENDING' || dailyReportState === 'OVERDUE'
 
   return (
     <div className="min-h-screen bg-bg pb-20">
@@ -81,30 +74,30 @@ export default function ManagerHomePage() {
         />
       </div>
 
-      {/* 每日 1 件事:今日营业额未录提醒 */}
+      {/* 每日 1 件事：上午 11 点前上传前一日营业与菜品两表 */}
       {showRecordReminder && (
-        <a href="/v2/manager/revenue"
+        <a href="/v2/manager/upload-platform"
            className={`mx-4 mt-3 flex items-center gap-3 rounded-card px-3 py-3 ${
              isLate ? 'bg-red text-white' : 'bg-amber/10 border border-amber/30'
            }`}>
           <span className={`w-9 h-9 rounded-full flex items-center justify-center text-h2 ${
             isLate ? 'bg-white/20' : 'bg-amber text-white'
-          }`}>¥</span>
+          }`}>⇪</span>
           <div className="flex-1">
             <div className={`text-button ${isLate ? '' : 'text-amber-fg'}`}>
-              {isLate ? '今日营业额还没录入' : '记得录今日营业额'}
+              {isLate ? '昨日营业日报已逾期' : '请上传昨日营业日报'}
             </div>
             <div className={`text-micro mt-0.5 ${isLate ? 'text-white/70' : 'text-gray2'}`}>
-              {isLate ? '马上闭店, 录完今日数据才能上传' : '收档后录今日 4 渠道流水'}
+              {isLate ? '已超过上午 11 点，请尽快上传两表并确认' : '综合营业统计 + 菜品销售明细，预览后确认'}
             </div>
           </div>
           <span className={isLate ? 'text-white' : 'text-gray3'}>›</span>
         </a>
       )}
-      {todayRevenueRecorded && (
+      {dailyReportState === 'CONFIRMED' && (
         <div className="mx-4 mt-3 flex items-center gap-2 px-3 py-2">
           <span className="text-green-fg">✓</span>
-          <span className="text-caption text-gray2">今日营业额已录入</span>
+          <span className="text-caption text-gray2">昨日营业日报已确认，销量与库存已同步</span>
         </div>
       )}
 

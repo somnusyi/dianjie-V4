@@ -14,16 +14,52 @@
  *   POST /api/wecom/test-msg                       自测发送应用消息给自己
  */
 import { FastifyPluginAsync } from 'fastify'
+import { z } from 'zod'
 import { prisma } from '@dianjie/db'
 import { exchangeOAuthCode, getUserInfo, sendAppMsg, getContactToken } from '../services/wecom'
 import { issueSessionTokens } from '../services/authTokens'
 
+const ADMIN_ROLES = new Set(['ADMIN', 'SUPER_ADMIN'])
+const tenantSlugSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9][a-z0-9-]*$/i, 'tenant 格式不正确')
+const safeRedirectSchema = z.string().max(500).refine(
+  value => value.startsWith('/') && !value.startsWith('//'),
+  'redirect 只允许站内相对路径',
+)
+const oauthUrlSchema = z.object({
+  tenant: tenantSlugSchema,
+  redirect: safeRedirectSchema.optional(),
+  mode: z.enum(['silent']).optional(),
+}).strict()
+const oauthCallbackSchema = z.object({
+  code: z.string().trim().min(1).max(512),
+  state: z.string().min(1).max(1024),
+}).strict()
+const configSchema = z.object({
+  corpId: z.string().trim().min(1, 'corpId 必填').max(64),
+  agentId: z.string().trim().regex(/^\d{1,32}$/, 'agentId 必须为数字'),
+  appSecret: z.string().max(512).optional(),
+  contactSecret: z.union([z.string().max(512), z.null()]).optional(),
+  callbackToken: z.union([z.string().max(256), z.null()]).optional(),
+  encodingAESKey: z.union([z.string().max(128), z.null()]).optional(),
+  enabled: z.boolean().optional(),
+}).strict()
+const testMessageSchema = z.object({
+  content: z.string().trim().min(1).max(1000).optional(),
+}).strict()
+
+function firstIssue(parsed: { success: false; error: z.ZodError }) {
+  return parsed.error.issues[0]?.message || '请求参数错误'
+}
+
 export const wecomRoutes: FastifyPluginAsync = async (app) => {
 
   // ── OAuth 跳转 URL 生成 (前端用) ─────────────────────
-  app.get('/oauth/url', async (req: any, reply: any) => {
-    const { tenant, redirect } = req.query as any
-    if (!tenant) return reply.status(400).send({ error: 'tenant 必填' })
+  app.get('/oauth/url', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  } as any, async (req: any, reply: any) => {
+    const parsed = oauthUrlSchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: firstIssue(parsed) })
+    const { tenant, redirect, mode } = parsed.data
     const t = await prisma.tenant.findUnique({ where: { slug: tenant } })
     if (!t || t.status !== 'ACTIVE') return reply.status(404).send({ error: 'tenant 不存在或已停用' })
     const cfg = await prisma.weComConfig.findUnique({ where: { tenantId: t.id } })
@@ -32,13 +68,12 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
     const base = process.env.WECOM_REDIRECT_BASE || 'https://www.njdianjie.com'
     const redirectUri = encodeURIComponent(`${base}/api/wecom/oauth/callback`)
     // P2: 防 open redirect; 只允许相对路径
-    const safeRedirect = (typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')) ? redirect : '/'
+    const safeRedirect = redirect || '/'
     const state = encodeURIComponent(`${tenant}|${safeRedirect}`)
     // 企微登录:
     //   默认 wwlogin — 扫码/拉起一键登录, 在普通浏览器 / 独立 App(套壳) 里点也能拉起企微授权后跳回
     //   ?mode=silent — snsapi_base 静默授权, 仅在企微 App WebView 内有效 (老的企微内登录入口)
     // 两者回调都落 /api/wecom/oauth/callback, 用同一个 auth/getuserinfo 换 userid, 后端无需区分
-    const mode = (req.query as any).mode
     const url = mode === 'silent'
       ? `https://open.weixin.qq.com/connect/oauth2/authorize?appid=${cfg.corpId}&redirect_uri=${redirectUri}&response_type=code&scope=snsapi_base&state=${state}&agentid=${cfg.agentId}#wechat_redirect`
       : `https://login.work.weixin.qq.com/wwlogin/sso/login?login_type=CorpApp&appid=${cfg.corpId}&agentid=${cfg.agentId}&redirect_uri=${redirectUri}&state=${state}`
@@ -46,10 +81,22 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // ── OAuth 回调: 用 code 换 user, 自动登录 ─────────────
-  app.get('/oauth/callback', async (req: any, reply: any) => {
-    const { code, state } = req.query as any
-    if (!code) return reply.status(400).send({ error: 'code 必填' })
-    const [tenantSlug, rawRedirect] = decodeURIComponent(state || '').split('|')
+  app.get('/oauth/callback', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  } as any, async (req: any, reply: any) => {
+    const parsed = oauthCallbackSchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: firstIssue(parsed) })
+    const { code, state } = parsed.data
+    let decodedState: string
+    try {
+      decodedState = decodeURIComponent(state)
+    } catch {
+      return reply.status(400).send({ error: 'state 格式不正确' })
+    }
+    const [tenantSlug, rawRedirect] = decodedState.split('|')
+    if (!tenantSlugSchema.safeParse(tenantSlug).success) {
+      return reply.status(400).send({ error: 'state 中的 tenant 格式不正确' })
+    }
     // P2: 防 open redirect
     const redirect = (rawRedirect && rawRedirect.startsWith('/') && !rawRedirect.startsWith('//')) ? rawRedirect : '/'
     const t = await prisma.tenant.findUnique({ where: { slug: tenantSlug } })
@@ -139,7 +186,7 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 查看 / 设置配置 (仅 ADMIN) ───────────────────────
   app.get('/config', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
-    if (req.user.role !== 'ADMIN') return reply.status(403).send({ error: '仅老板可查看' })
+    if (!ADMIN_ROLES.has(req.user.role)) return reply.status(403).send({ error: '仅老板或超级管理员可查看' })
     const cfg = await prisma.weComConfig.findUnique({ where: { tenantId: req.user.tenantId } })
     if (!cfg) return reply.send(null)
     // secret 脱敏返回
@@ -152,32 +199,56 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
   })
 
   app.put('/config', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
-    if (req.user.role !== 'ADMIN') return reply.status(403).send({ error: '仅老板可设置' })
-    const { corpId, agentId, appSecret, contactSecret, callbackToken, encodingAESKey, enabled } = req.body as any
-    if (!corpId || !agentId) return reply.status(400).send({ error: 'corpId / agentId 必填' })
-    const cfg = await prisma.weComConfig.upsert({
-      where: { tenantId: req.user.tenantId },
-      create: {
-        tenantId: req.user.tenantId, corpId, agentId,
-        appSecret: appSecret || '',
-        contactSecret, callbackToken, encodingAESKey,
-        enabled: enabled !== false,
-      },
-      update: {
-        corpId, agentId,
-        ...(appSecret !== undefined && { appSecret, accessToken: null, accessTokenExp: null }),
-        ...(contactSecret !== undefined && { contactSecret, contactToken: null, contactTokenExp: null }),
-        ...(callbackToken !== undefined && { callbackToken }),
-        ...(encodingAESKey !== undefined && { encodingAESKey }),
-        ...(enabled !== undefined && { enabled }),
-      },
+    if (!ADMIN_ROLES.has(req.user.role)) return reply.status(403).send({ error: '仅老板或超级管理员可设置' })
+    const parsed = configSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: firstIssue(parsed) })
+    const { corpId, agentId, appSecret, contactSecret, callbackToken, encodingAESKey, enabled } = parsed.data
+    // 审计只记录字段名，不记录任何 Secret / Token 值。
+    const changedFields = Object.keys(parsed.data)
+    const cfg = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`wecom-config:${req.user.tenantId}`}))::text AS locked`
+      const existing = await tx.weComConfig.findUnique({ where: { tenantId: req.user.tenantId } })
+      const effectiveEnabled = enabled ?? existing?.enabled ?? true
+      const effectiveAppSecret = appSecret ?? existing?.appSecret ?? ''
+      if (effectiveEnabled && !effectiveAppSecret) {
+        throw { statusCode: 400, message: '启用企微前必须填写 appSecret' }
+      }
+      const saved = await tx.weComConfig.upsert({
+        where: { tenantId: req.user.tenantId },
+        create: {
+          tenantId: req.user.tenantId, corpId, agentId,
+          appSecret: appSecret || '',
+          contactSecret, callbackToken, encodingAESKey,
+          enabled: effectiveEnabled,
+        },
+        update: {
+          corpId, agentId,
+          ...(appSecret !== undefined && { appSecret, accessToken: null, accessTokenExp: null }),
+          ...(contactSecret !== undefined && { contactSecret, contactToken: null, contactTokenExp: null }),
+          ...(callbackToken !== undefined && { callbackToken }),
+          ...(encodingAESKey !== undefined && { encodingAESKey }),
+          ...(enabled !== undefined && { enabled }),
+        },
+      })
+      await tx.opLog.create({
+        data: {
+          tenantId: req.user.tenantId,
+          userId: req.user.userId,
+          role: req.user.role,
+          action: existing ? '更新企微配置' : '创建企微配置',
+          targetId: saved.id,
+          entityType: 'WeComConfig',
+          metadata: { changedFields, enabled: saved.enabled },
+        },
+      })
+      return saved
     })
     return reply.send({ ok: true, id: cfg.id })
   })
 
   // ── 手动同步通讯录 (按 mobile 自动绑) ────────────────
   app.post('/sync-contacts', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
-    if (req.user.role !== 'ADMIN') return reply.status(403).send({ error: '仅老板可同步' })
+    if (!ADMIN_ROLES.has(req.user.role)) return reply.status(403).send({ error: '仅老板或超级管理员可同步' })
     try {
       const token = await getContactToken(req.user.tenantId)
       // 拉取根部门所有人员 (department=1 = 企业根)
@@ -215,10 +286,15 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // ── 自测发消息给自己 ─────────────────────────────────
-  app.post('/test-msg', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
+  app.post('/test-msg', {
+    preHandler: [(app as any).authenticate],
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  } as any, async (req: any, reply: any) => {
+    const parsed = testMessageSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: firstIssue(parsed) })
+    const { content } = parsed.data
     const me = await prisma.user.findUnique({ where: { id: req.user.userId } })
     if (!me?.wecomUserId) return reply.status(400).send({ error: '你的账号未绑定企微' })
-    const { content } = req.body as any
     await sendAppMsg(req.user.tenantId, me.wecomUserId, content || '滇界云管 · 集成测试消息 ' + new Date().toLocaleString('zh-CN'))
     return reply.send({ ok: true })
   })

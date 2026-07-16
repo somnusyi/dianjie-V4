@@ -162,42 +162,6 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
 }
 
 /**
- * 总部审批账期付款（>2000的单子）
- */
-export async function approvePaymentSchedule(
-  scheduleId: string,
-  approverId: string,
-  action: 'approve' | 'reject',
-  note?: string
-) {
-  const schedule = await prisma.paymentSchedule.findUnique({ where: { id: scheduleId } })
-  if (!schedule) throw new Error('账期记录不存在')
-  if (schedule.status !== 'PENDING_APPROVAL') throw new Error('当前状态不可审批')
-
-  if (action === 'approve') {
-    await prisma.paymentSchedule.update({
-      where: { id: scheduleId },
-      data: {
-        status: 'APPROVED',
-        approvedById: approverId,
-        approvedAt: new Date(),
-        approvalNote: note,
-      },
-    })
-    console.log(`✅ 审批通过: ¥${schedule.amount}，到期日 ${dayjs(schedule.dueAt).format('YYYY-MM-DD')} 自动付款`)
-  } else {
-    await prisma.paymentSchedule.update({
-      where: { id: scheduleId },
-      data: {
-        status: 'REJECTED',
-        rejectedAt: new Date(),
-        rejectionNote: note,
-      },
-    })
-    console.log(`❌ 审批拒绝: ¥${schedule.amount}`)
-  }
-}
-/**
  * 招行免前置自动付款
  * 到期时由 scheduler 自动触发，从招行对公账户向供应商打款
  */

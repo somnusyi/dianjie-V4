@@ -45,6 +45,7 @@ const pagesToVisit = {
     { path: '/v2/finance-pc/capital-review', mustNotContain: ['页面不存在', '404', '加载失败'] },
     { path: '/v2/finance/funds', mustNotContain: ['页面不存在', '404', '加载失败'] },
     { path: '/cashbook', mustNotContain: ['页面不存在', '404', '加载失败'] },
+    { path: '/approval', mustNotContain: ['页面不存在', '404', '审批数据读取失败'] },
   ],
   supplier: [
     { path: '/v2/supplier/orders', mustNotContain: ['页面不存在', '404'] },

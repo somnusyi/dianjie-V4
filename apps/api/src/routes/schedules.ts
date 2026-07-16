@@ -11,6 +11,19 @@ const scheduleStatusSchema = z.enum([
   'PROCESSING', 'PAID', 'OVERDUE', 'CANCELLED', 'ON_HOLD',
 ])
 
+const reviewSchema = z.object({
+  action: z.enum(['approve', 'reject']),
+  note: z.string().trim().max(1000).optional(),
+}).strict()
+
+const legacyRejectSchema = z.object({
+  note: z.string().trim().min(1, '驳回必须填写原因').max(1000),
+}).strict()
+
+function httpError(message: string, statusCode: number) {
+  return Object.assign(new Error(message), { statusCode })
+}
+
 export const scheduleRoutes: FastifyPluginAsync = async (app) => {
 
   // 列表
@@ -67,60 +80,120 @@ export const scheduleRoutes: FastifyPluginAsync = async (app) => {
     })
   })
 
+  async function reviewSchedule(params: {
+    id: string
+    tenantId: string
+    userId: string
+    role: string
+    action: 'approve' | 'reject'
+    note?: string
+  }) {
+    const { id, tenantId, userId, role, action, note } = params
+    if (action === 'reject' && !note) throw httpError('驳回必须填写原因', 400)
+
+    return prisma.$transaction(async tx => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`payment-schedule-review:${id}`}))`
+      const schedule = await tx.paymentSchedule.findFirst({
+        where: { id, tenantId },
+        include: { supplier: { select: { name: true } } },
+      })
+      if (!schedule) throw httpError('账期不存在', 404)
+
+      const targetStatus = action === 'approve' ? 'APPROVED' : 'REJECTED'
+      if (schedule.status !== 'PENDING_APPROVAL') {
+        let sameActor = schedule.approvedById === userId
+        if (action === 'reject' && schedule.status === 'REJECTED' && schedule.rejectionNote === note) {
+          const priorLog = await tx.opLog.findFirst({
+            where: {
+              tenantId, userId, entityType: 'PaymentSchedule', targetId: schedule.id,
+              action: { startsWith: '拒绝账期付款' },
+            },
+            select: { id: true },
+          })
+          sameActor = Boolean(priorLog)
+        }
+        if (schedule.status === targetStatus && sameActor &&
+            (action === 'approve' || schedule.rejectionNote === note)) {
+          return {
+            success: true, status: targetStatus, duplicated: true,
+            amount: Number(schedule.amount), supplierName: schedule.supplier.name,
+          }
+        }
+        throw httpError(`账期当前状态 ${schedule.status}，不可重复审批`, 409)
+      }
+
+      const now = new Date()
+      await tx.paymentSchedule.update({
+        where: { id: schedule.id },
+        data: action === 'approve'
+          ? {
+              status: 'APPROVED', approvedById: userId, approvedAt: now,
+              approvalNote: note || null, rejectedAt: null, rejectionNote: null,
+            }
+          : {
+              status: 'REJECTED', rejectedAt: now, rejectionNote: note,
+              approvedById: null, approvedAt: null, approvalNote: null,
+            },
+      })
+      await tx.opLog.create({
+        data: {
+          tenantId, userId, role,
+          action: action === 'approve'
+            ? `审批通过账期付款 ¥${schedule.amount}`
+            : `拒绝账期付款 ¥${schedule.amount}: ${note}`,
+          entityType: 'PaymentSchedule', targetId: schedule.id,
+          metadata: { action, note: note || null, previousStatus: schedule.status, targetStatus },
+        },
+      })
+      return {
+        success: true, status: targetStatus, duplicated: false,
+        amount: Number(schedule.amount), supplierName: schedule.supplier.name,
+      }
+    })
+  }
+
   // 审批（approve / reject，前端统一调此接口并传 action 字段）
-  app.patch('/:id/approve', auth(app), async (req: any) => {
+  app.patch('/:id/approve', auth(app), async (req: any, reply: any) => {
     const { tenantId, userId, role } = req.user
     if (!['ADMIN', 'FINANCE', 'SUPER_ADMIN'].includes(role)) {
-      throw { statusCode: 403, message: '无权限' }
+      return reply.status(403).send({ error: '无权限' })
     }
-    const { action = 'approve', note } = req.body as any
-    const schedule = await prisma.paymentSchedule.findFirst({
-      where: { id: req.params.id, tenantId, status: 'PENDING_APPROVAL' },
-    })
-    if (!schedule) throw { statusCode: 404, message: '账期不存在或状态不对' }
-
-    if (action === 'approve') {
-      await prisma.paymentSchedule.update({
-        where: { id: schedule.id },
-        data: { status: 'APPROVED', approvedById: userId, approvedAt: new Date(), approvalNote: note },
+    const parsed = reviewSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
+    try {
+      const result = await reviewSchedule({
+        id: req.params.id, tenantId, userId, role, ...parsed.data,
       })
-    } else {
-      await prisma.paymentSchedule.update({
-        where: { id: schedule.id },
-        data: { status: 'REJECTED', rejectedAt: new Date(), rejectionNote: note },
-      })
+      if (parsed.data.action === 'approve' && !result.duplicated) {
+        void notifyApprovalDone(tenantId, result.amount, result.supplierName, req.params.id).catch(error => {
+          req.log.error({ err: error, scheduleId: req.params.id }, 'payment approval notification failed')
+        })
+      }
+      return result
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      req.log.error({ err: error }, 'payment schedule review failed')
+      return reply.status(500).send({ error: '账期审批失败，未保存任何变更' })
     }
-
-    await prisma.opLog.create({
-      data: {
-        tenantId, userId, role,
-        action: action === 'approve' ? `审批通过账期付款 ¥${schedule.amount}` : `拒绝账期付款 ¥${schedule.amount}`,
-        entityType: 'PaymentSchedule', targetId: schedule.id,
-      },
-    })
-
-    if (action === 'approve') {
-      const supplier = await prisma.supplier.findUnique({ where: { id: schedule.supplierId }, select: { name: true } })
-      void notifyApprovalDone(tenantId, Number(schedule.amount), supplier?.name || '')
-    }
-    return { success: true }
   })
 
   // 兼容旧版单独的 reject 接口
-  app.patch('/:id/reject', auth(app), async (req: any) => {
+  app.patch('/:id/reject', auth(app), async (req: any, reply: any) => {
     const { tenantId, userId, role } = req.user
     if (!['ADMIN', 'FINANCE', 'SUPER_ADMIN'].includes(role)) {
-      throw { statusCode: 403, message: '无权限' }
+      return reply.status(403).send({ error: '无权限' })
     }
-    const { note } = req.body as any
-    const schedule = await prisma.paymentSchedule.findFirst({
-      where: { id: req.params.id, tenantId, status: 'PENDING_APPROVAL' },
-    })
-    if (!schedule) throw { statusCode: 404, message: '账期不存在' }
-    await prisma.paymentSchedule.update({
-      where: { id: schedule.id },
-      data: { status: 'REJECTED', rejectedAt: new Date(), rejectionNote: note },
-    })
-    return { success: true }
+    const parsed = legacyRejectSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
+    try {
+      return await reviewSchedule({
+        id: req.params.id, tenantId, userId, role,
+        action: 'reject', note: parsed.data.note,
+      })
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      req.log.error({ err: error }, 'payment schedule rejection failed')
+      return reply.status(500).send({ error: '账期驳回失败，未保存任何变更' })
+    }
   })
 }

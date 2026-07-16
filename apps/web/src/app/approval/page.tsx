@@ -35,10 +35,14 @@ export default function ApprovalPage() {
   }
 
   const submit = async () => {
+    if (action === 'reject' && !note.trim()) {
+      show('请填写拒绝原因', 'error')
+      return
+    }
     setSubmitting(true)
     try {
       await api.patch(`/api/schedules/${current.id}/approve`, { action, note })
-      show(action === 'approve' ? '✅ 已审批通过，到期自动付款' : '已拒绝')
+      show(action === 'approve' ? '✅ 已审批通过，已进入待付款流程' : '已拒绝')
       setModalOpen(false)
       load()
     } catch (e: any) {
@@ -103,7 +107,7 @@ export default function ApprovalPage() {
           <div>
             <span>付款审批 · 老板终审</span>
             <h1>审批决策台</h1>
-            <p>超过规则阈值的供应商付款，在这里完成风险判断和终审</p>
+            <p>超过规则阈值的供应商付款，在这里完成风险判断和终审；通过后由财务执行付款</p>
           </div>
           <span className={summary.urgentCount ? 'dj-chip dj-chip-orange' : 'dj-chip dj-chip-green'}>
             {summary.urgentCount ? `${summary.urgentCount} 笔临近到期` : '暂无紧急审批'}
@@ -191,10 +195,10 @@ export default function ApprovalPage() {
 
             <div className="dj-section-title finance-side-title">
               <h2>审批后链路</h2>
-              <span>自动执行</span>
+              <span>财务执行</span>
             </div>
             <div className="dj-card order-timeline">
-              {['总部审批通过', '等待账期到期', '系统生成付款单', '财务付款执行', '供应商账款结清'].map((text, i) => (
+              {['总部审批通过', '等待账期到期', '系统生成付款单', '财务确认并付款', '供应商账款结清'].map((text, i) => (
                 <article key={text} className={i <= 2 ? 'active' : ''}>
                   <i>{i + 1}</i>
                   <span>{text}</span>
@@ -224,17 +228,21 @@ export default function ApprovalPage() {
 
             {action === 'approve' && (
               <div style={{ background: '#eff6ff', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#2563eb', marginBottom: 14 }}>
-                审批通过后，系统将在 <b>{fmtDate(current.dueAt)}</b> 自动从门店账户转账 <b>{fmt(current.amount)}</b> 至供应商账户
+                审批通过后，该笔 <b>{fmt(current.amount)}</b> 将进入待付款流程；到期后由财务核对账户并执行付款
               </div>
             )}
 
-            <Field label={action === 'approve' ? '审批备注（可选）' : '拒绝原因（建议填写）'}>
+            <Field label={action === 'approve' ? '审批备注（可选）' : '拒绝原因（必填）'}>
               <Input value={note} onChange={setNote} placeholder={action === 'approve' ? '无需备注可留空' : '请说明拒绝原因，将通知门店负责人'} />
             </Field>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20, paddingTop: 16, borderTop: '1px solid #e5e7eb' }}>
               <Btn onClick={() => setModalOpen(false)}>取消</Btn>
-              <Btn variant={action === 'approve' ? 'primary' : 'danger'} onClick={submit} disabled={submitting}>
+              <Btn
+                variant={action === 'approve' ? 'primary' : 'danger'}
+                onClick={submit}
+                disabled={submitting || (action === 'reject' && !note.trim())}
+              >
                 {submitting ? '处理中...' : action === 'approve' ? '确认审批通过' : '确认拒绝'}
               </Btn>
             </div>

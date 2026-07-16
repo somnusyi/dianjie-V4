@@ -167,7 +167,7 @@ export function notifyApprovalPending(tenantId: string, amount: number, supplier
   })
 }
 
-export function notifyApprovalDone(tenantId: string, amount: number, supplierName: string) {
+export function notifyApprovalDone(tenantId: string, amount: number, supplierName: string, scheduleId?: string) {
   return sendNotification({
     tenantId,
     recipientRole: 'FINANCE',
@@ -175,5 +175,6 @@ export function notifyApprovalDone(tenantId: string, amount: number, supplierNam
     title: '付款已审批',
     body: `${supplierName} 付款 ¥${amount.toLocaleString()} 已审批通过`,
     refType: 'PaymentSchedule',
+    refId: scheduleId,
   })
 }

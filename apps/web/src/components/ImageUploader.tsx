@@ -25,7 +25,7 @@ export default function ImageUploader({ images, onChange, maxCount = 6, disabled
       for (const file of toUpload) {
         const formData = new FormData()
         formData.append('file', file)
-        const token = localStorage.getItem('dj_token')
+        const token = localStorage.getItem('token') || localStorage.getItem('dj_token')
         const res = await fetch('/api/upload/image', {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },

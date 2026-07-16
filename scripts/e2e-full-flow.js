@@ -104,6 +104,7 @@ async function run() {
     { path: '/api/budgets',              role: 'supOwner', check: r => r.status === 403, name: '供应商 GET /budgets 应 403' },
     { path: '/api/users',                role: 'manager',  check: r => r.status === 403, name: '店长 GET /users 应 403' },
     { path: '/api/cashbook/accounts',    role: 'manager',  check: r => r.status === 403, name: '店长 GET /cashbook 应 403' },
+    { path: '/api/schedules',            role: 'chef',     check: r => r.status === 403, name: '总厨 GET /schedules 应 403' },
   ]
   for (const c of guardChecks) {
     const r = await api('GET', c.path, null, tokens[c.role])

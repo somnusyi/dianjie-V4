@@ -26,29 +26,38 @@ const TENANT_KEY = 'tenant'
 
 export function getToken(): string | null {
   if (typeof window === 'undefined') return null
-  return localStorage.getItem(TOKEN_KEY)
+  return localStorage.getItem(TOKEN_KEY) || localStorage.getItem('dj_token')
 }
 export function getRefreshToken(): string | null {
   if (typeof window === 'undefined') return null
-  return localStorage.getItem(REFRESH_KEY)
+  return localStorage.getItem(REFRESH_KEY) || localStorage.getItem('dj_refresh')
 }
 export function getUser(): StoredUser | null {
   if (typeof window === 'undefined') return null
-  const raw = localStorage.getItem(USER_KEY)
+  const raw = localStorage.getItem(USER_KEY) || localStorage.getItem('dj_user')
   if (!raw) return null
   try { return JSON.parse(raw) } catch { return null }
 }
 export function setSession(token: string, user: StoredUser, tenant?: any, refreshToken?: string) {
   localStorage.setItem(TOKEN_KEY, token)
   localStorage.setItem(USER_KEY, JSON.stringify(user))
+  // 兼容仍在使用旧 AppLayout/axios 的桌面页面。
+  localStorage.setItem('dj_token', token)
+  localStorage.setItem('dj_user', JSON.stringify(user))
   if (tenant) localStorage.setItem(TENANT_KEY, JSON.stringify(tenant))
-  if (refreshToken) localStorage.setItem(REFRESH_KEY, refreshToken)
+  if (refreshToken) {
+    localStorage.setItem(REFRESH_KEY, refreshToken)
+    localStorage.setItem('dj_refresh', refreshToken)
+  }
 }
 export function clearSession() {
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(REFRESH_KEY)
   localStorage.removeItem(USER_KEY)
   localStorage.removeItem(TENANT_KEY)
+  localStorage.removeItem('dj_token')
+  localStorage.removeItem('dj_refresh')
+  localStorage.removeItem('dj_user')
 }
 
 /** 角色 → 默认 home 路由（手机端） */
@@ -101,6 +110,7 @@ async function refreshAccessOnce(): Promise<string | null> {
       const j = await res.json()
       if (!j?.token) return null
       localStorage.setItem(TOKEN_KEY, j.token)
+      localStorage.setItem('dj_token', j.token)
       // user 也可能因角色变更被刷掉, 同步存
       if (j.user) localStorage.setItem(USER_KEY, JSON.stringify(j.user))
       return j.token as string

@@ -1,14 +1,67 @@
 import { FastifyPluginAsync } from 'fastify'
-import { prisma } from '@dianjie/db'
+import { Prisma, prisma } from '@dianjie/db'
+import { z } from 'zod'
 import { cmbTransfer, reportCmbError } from '../services/cmbPayment'
 import { voucherForInternalTransfer } from '../services/voucher'
-import { syncCmbAccount, syncAllCmbAccounts } from '../services/cmbAutoSync'
+import { syncCmbAccount } from '../services/cmbAutoSync'
+import { writeCashTransaction } from '../services/cashbook'
 import crypto from 'crypto'
 import dayjs from 'dayjs'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const WRITE_ROLES = ['ADMIN', 'FINANCE', 'SUPER_ADMIN']
 const READ_ROLES = new Set(['ADMIN', 'FINANCE', 'SUPER_ADMIN', 'BOSS'])  // 仅集团财务/老板可看现金账
+const accountTypeSchema = z.enum(['BANK', 'ALIPAY', 'WECHAT', 'CASH'])
+const nullableText = (max: number) => z.string().trim().max(max).optional().nullable()
+const moneySchema = z.number().positive().max(9_999_999_999.99, '金额超出系统上限')
+  .refine(value => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, '金额最多保留两位小数')
+
+function httpError(message: string, statusCode: number) {
+  return Object.assign(new Error(message), { statusCode })
+}
+
+function parseBusinessDate(value: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  const date = new Date(`${value}T12:00:00+08:00`)
+  const [year, month, day] = value.split('-').map(Number)
+  if (Number.isNaN(date.getTime()) || date.getFullYear() !== year ||
+      date.getMonth() + 1 !== month || date.getDate() !== day) return null
+  return date
+}
+
+function businessDateKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+async function lockAccountIdentifiers(tx: any, values: Array<string | null | undefined>) {
+  const keys = [...new Set(values.filter(Boolean).map(value => `cash-account-id:${value!.toLowerCase()}`))].sort()
+  for (const key of keys) await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`
+}
+
+async function assertUniqueAccountIdentifiers(
+  tx: any,
+  tenantId: string,
+  values: { name?: string | null; accountNo?: string | null; cmbBindAccount?: string | null },
+  excludeId?: string,
+) {
+  const clauses: any[] = []
+  if (values.name) clauses.push({ name: { equals: values.name, mode: 'insensitive' } })
+  if (values.accountNo) clauses.push({ accountNo: values.accountNo })
+  if (values.cmbBindAccount) clauses.push({ cmbBindAccount: values.cmbBindAccount })
+  if (clauses.length === 0) return
+  const duplicate = await tx.cashAccount.findFirst({
+    where: { tenantId, status: 'ACTIVE', ...(excludeId ? { id: { not: excludeId } } : {}), OR: clauses },
+    select: { id: true, name: true, accountNo: true, cmbBindAccount: true },
+  })
+  if (!duplicate) return
+  if (values.cmbBindAccount && duplicate.cmbBindAccount === values.cmbBindAccount) {
+    throw httpError('该招行实时账号已绑定其他活动账户', 409)
+  }
+  if (values.accountNo && duplicate.accountNo === values.accountNo) {
+    throw httpError('该银行账号已存在于其他活动账户', 409)
+  }
+  throw httpError('已存在同名活动资金账户', 409)
+}
 
 export const cashbookRoutes: FastifyPluginAsync = async (app) => {
 
@@ -23,43 +76,116 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // ── 创建账户 ──────────────────────────────────────────
+  const accountCreateSchema = z.object({
+    name: z.string().trim().min(1, '账户名称不能为空').max(100),
+    type: accountTypeSchema.optional().default('BANK'),
+    bankName: nullableText(100),
+    accountNo: nullableText(64),
+    note: nullableText(500),
+    cmbBindAccount: nullableText(25),
+  }).strict()
   app.post('/accounts', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role } = req.user
+    const { tenantId, role, userId } = req.user
     if (!WRITE_ROLES.includes(role)) return reply.status(403).send({ error: '无权限' })
-    const { name, type, bankName, accountNo, note, cmbBindAccount } = req.body as any
-    if (!name) return reply.status(400).send({ error: '账户名称不能为空' })
-    // 招行实时账户校验: cmbBindAccount 必须是合理的银行账号格式
-    if (cmbBindAccount && !/^[0-9]{10,25}$/.test(String(cmbBindAccount).trim())) {
+    const parsed = accountCreateSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
+    const { name, type, bankName, accountNo, note, cmbBindAccount } = parsed.data
+    if (cmbBindAccount && !/^[0-9]{10,25}$/.test(cmbBindAccount)) {
       return reply.status(400).send({ error: '招行账号格式不对, 应为 10-25 位数字' })
     }
-    const account = await prisma.cashAccount.create({
-      data: {
-        tenantId, name, type: type || 'BANK', bankName, accountNo, note,
-        cmbBindAccount: cmbBindAccount ? String(cmbBindAccount).trim() : null,
-      },
-    })
-    return reply.status(201).send(account)
+    if (cmbBindAccount && type !== 'BANK') {
+      return reply.status(400).send({ error: '只有银行账户可以绑定招行实时账号' })
+    }
+    try {
+      const account = await prisma.$transaction(async tx => {
+        await lockAccountIdentifiers(tx, [name, accountNo, cmbBindAccount])
+        await assertUniqueAccountIdentifiers(tx, tenantId, { name, accountNo, cmbBindAccount })
+        const created = await tx.cashAccount.create({
+          data: {
+            tenantId, name, type,
+            bankName: bankName || null, accountNo: accountNo || null, note: note || null,
+            cmbBindAccount: cmbBindAccount || null,
+          },
+        })
+        await tx.opLog.create({
+          data: {
+            tenantId, userId, action: `创建资金账户 ${created.name}`,
+            entityType: 'CashAccount', targetId: created.id,
+            metadata: { type: created.type, bankName: created.bankName } as any,
+          },
+        })
+        return created
+      })
+      return reply.status(201).send(account)
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      req.log.error({ err: error }, 'cash account create failed')
+      return reply.status(500).send({ error: '资金账户创建失败，未保存任何变更' })
+    }
   })
 
   // ── 更新账户 ──────────────────────────────────────────
+  const accountUpdateSchema = z.object({
+    name: z.string().trim().min(1).max(100).optional(),
+    bankName: nullableText(100),
+    accountNo: nullableText(64),
+    note: nullableText(500),
+    status: z.enum(['ACTIVE', 'DISABLED']).optional(),
+    cmbBindAccount: nullableText(25),
+  }).strict().refine(body => Object.keys(body).length > 0, '没有可更新字段')
   app.patch('/accounts/:id', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role } = req.user
+    const { tenantId, role, userId } = req.user
     if (!WRITE_ROLES.includes(role)) return reply.status(403).send({ error: '无权限' })
-    const { name, bankName, accountNo, note, status, cmbBindAccount } = req.body as any
-    if (cmbBindAccount !== undefined && cmbBindAccount !== null && cmbBindAccount !== ''
-        && !/^[0-9]{10,25}$/.test(String(cmbBindAccount).trim())) {
+    const parsed = accountUpdateSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
+    const { name, bankName, accountNo, note, status, cmbBindAccount } = parsed.data
+    if (cmbBindAccount && !/^[0-9]{10,25}$/.test(cmbBindAccount)) {
       return reply.status(400).send({ error: '招行账号格式不对, 应为 10-25 位数字' })
     }
-    const account = await prisma.cashAccount.updateMany({
-      where: { id: req.params.id, tenantId },
-      data: {
-        name, bankName, accountNo, note, status,
-        ...(cmbBindAccount !== undefined && {
-          cmbBindAccount: cmbBindAccount ? String(cmbBindAccount).trim() : null,
-        }),
-      },
-    })
-    return account
+    try {
+      const account = await prisma.$transaction(async tx => {
+        await lockAccountIdentifiers(tx, [name, accountNo, cmbBindAccount])
+        const id = req.params.id as string
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`cash-account:${id}`}))`
+        const current = await tx.cashAccount.findFirst({ where: { id, tenantId } })
+        if (!current) throw httpError('账户不存在', 404)
+        const nextName = name ?? current.name
+        const nextAccountNo = accountNo === undefined ? current.accountNo : (accountNo || null)
+        const nextCmb = cmbBindAccount === undefined ? current.cmbBindAccount : (cmbBindAccount || null)
+        await lockAccountIdentifiers(tx, [nextName, nextAccountNo, nextCmb])
+        if (nextCmb && current.type !== 'BANK') throw httpError('只有银行账户可以绑定招行实时账号', 400)
+        if (status === 'DISABLED' && !current.balance.equals(0)) {
+          throw httpError(`账户余额为 ¥${current.balance.toFixed(2)}，清零后才能停用`, 409)
+        }
+        await assertUniqueAccountIdentifiers(
+          tx, tenantId, { name: nextName, accountNo: nextAccountNo, cmbBindAccount: nextCmb }, current.id,
+        )
+        const updated = await tx.cashAccount.update({
+          where: { id: current.id },
+          data: {
+            ...(name !== undefined ? { name } : {}),
+            ...(bankName !== undefined ? { bankName: bankName || null } : {}),
+            ...(accountNo !== undefined ? { accountNo: accountNo || null } : {}),
+            ...(note !== undefined ? { note: note || null } : {}),
+            ...(status !== undefined ? { status } : {}),
+            ...(cmbBindAccount !== undefined ? { cmbBindAccount: cmbBindAccount || null } : {}),
+          },
+        })
+        await tx.opLog.create({
+          data: {
+            tenantId, userId, action: `更新资金账户 ${current.name}`,
+            entityType: 'CashAccount', targetId: current.id,
+            metadata: { before: { name: current.name, status: current.status }, after: { name: updated.name, status: updated.status } } as any,
+          },
+        })
+        return updated
+      })
+      return account
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      req.log.error({ err: error }, 'cash account update failed')
+      return reply.status(500).send({ error: '资金账户更新失败，未保存任何变更' })
+    }
   })
 
   // ── 内部账户间转账 (招行实时账户之间) ────────────────
@@ -81,7 +207,9 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // 真实扣款入口默认关闭；修复持久幂等前只能由生产环境显式开启。
-    if (process.env.CMB_INTERNAL_TRANSFER_ENABLED !== 'true') {
+    // PREVIEW/开发环境即使误配开关也绝不调用银行。
+    if (process.env.NODE_ENV !== 'production' || process.env.PREVIEW_MODE === 'true' ||
+        process.env.CMB_INTERNAL_TRANSFER_ENABLED !== 'true') {
       return reply.status(503).send({
         error: '内部账户转账已临时停用，未调用银行',
         code: 'CMB_INTERNAL_TRANSFER_DISABLED',
@@ -148,9 +276,10 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
         // 同行 (都是招行) 不传 bankCode
       })
     } catch (e: any) {
+      req.log.error({ err: e, bizNo }, 'CMB internal transfer call failed')
       return reply.status(502).send({
         error: '招行服务调用失败',
-        detail: e?.message || String(e),
+        code: 'CMB_SERVICE_ERROR',
       })
     }
 
@@ -204,17 +333,22 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
     // 2026-06-01 Phase 1 修底盘: 生凭证 (借 1002 收款户 / 贷 1002 付款户, 同科目不同明细)
     // 用 cmbBindAccount 末四位映射到好会计明细科目 (跟 voucherForPayment 同一套约定)
     const last4 = (s?: string | null) => s ? s.slice(-4) : undefined
-    voucherForInternalTransfer({
-      tenantId,
-      transferBizNo: bizNo,
-      fromAccountName: fromAcc.name,
-      fromBankLast4: last4(fromAcc.cmbBindAccount),
-      toAccountName: toAcc.name,
-      toBankLast4: last4(toAcc.cmbBindAccount),
-      amount: amt,
-      remark: remark?.trim() || undefined,
-      date: now,
-    })
+    let voucherId: string | null = null
+    try {
+      voucherId = await voucherForInternalTransfer({
+        tenantId,
+        transferBizNo: bizNo,
+        fromAccountName: fromAcc.name,
+        fromBankLast4: last4(fromAcc.cmbBindAccount),
+        toAccountName: toAcc.name,
+        toBankLast4: last4(toAcc.cmbBindAccount),
+        amount: amt,
+        remark: remark?.trim() || undefined,
+        date: now,
+      })
+    } catch (error: any) {
+      req.log.warn({ err: error, bizNo }, 'internal transfer voucher failed after bank success')
+    }
 
     return {
       success:    true,
@@ -224,41 +358,72 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
       fromAccount: { id: fromAcc.id, name: fromAcc.name },
       toAccount:   { id: toAcc.id, name: toAcc.name },
       amount:     amt,
+      voucherId,
+      voucherWarning: voucherId ? null : '银行转账和资金流水已完成，但凭证生成失败，请按业务号补建',
     }
   })
 
   // ── 软删账户 (status=DISABLED, 不真 DELETE 防误删历史流水关联) ────
   app.delete('/accounts/:id', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role } = req.user
+    const { tenantId, role, userId } = req.user
     if (!WRITE_ROLES.includes(role)) return reply.status(403).send({ error: '无权限' })
-    const result = await prisma.cashAccount.updateMany({
-      where: { id: req.params.id, tenantId, status: 'ACTIVE' },
-      data: { status: 'DISABLED' },
-    })
-    if (result.count === 0) {
-      return reply.status(404).send({ error: '账户不存在或已停用' })
+    try {
+      const result = await prisma.$transaction(async tx => {
+        const id = req.params.id as string
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`cash-account:${id}`}))`
+        const account = await tx.cashAccount.findFirst({ where: { id, tenantId } })
+        if (!account) throw httpError('账户不存在', 404)
+        if (account.status === 'DISABLED') return { duplicated: true }
+        if (!account.balance.equals(0)) {
+          throw httpError(`账户余额为 ¥${account.balance.toFixed(2)}，清零后才能停用`, 409)
+        }
+        await tx.cashAccount.update({ where: { id: account.id }, data: { status: 'DISABLED' } })
+        await tx.opLog.create({
+          data: {
+            tenantId, userId, action: `停用资金账户 ${account.name}`,
+            entityType: 'CashAccount', targetId: account.id,
+          },
+        })
+        return { duplicated: false }
+      })
+      return { success: true, ...result }
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      req.log.error({ err: error }, 'cash account disable failed')
+      return reply.status(500).send({ error: '资金账户停用失败，未保存任何变更' })
     }
-    return { success: true }
   })
 
   // ── 流水列表（分页 + 过滤）────────────────────────────
+  const transactionQuerySchema = z.object({
+    accountId: z.string().min(1).optional(),
+    direction: z.enum(['1', '-1']).optional(),
+    category: z.string().trim().min(1).max(80).optional(),
+    month: z.string().regex(/^\d{4}-\d{2}(?:-\d{2})?$/, '月份格式应为 YYYY-MM').optional(),
+    page: z.string().regex(/^\d+$/).optional().default('1'),
+    pageSize: z.string().regex(/^\d+$/).optional().default('20'),
+  }).strict()
   app.get('/transactions', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
     if (!READ_ROLES.has(role)) return reply.status(403).send({ error: '无权访问现金流水' })
-    const { accountId, direction, category, month, page = '1', pageSize = '20' } = req.query as any
+    const parsed = transactionQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
+    const { accountId, direction, category, month, page, pageSize } = parsed.data
 
     const where: any = { tenantId }
     if (accountId) where.accountId = accountId
     if (direction) where.direction = Number(direction)
     if (category) where.category = category
     if (month) {
-      const start = dayjs(month).startOf('month').toDate()
-      const end = dayjs(month).endOf('month').toDate()
+      const monthNumber = Number(month.slice(5, 7))
+      if (monthNumber < 1 || monthNumber > 12) return reply.status(400).send({ error: '月份无效' })
+      const start = dayjs(`${month.slice(0, 7)}-01`).startOf('month').toDate()
+      const end = dayjs(`${month.slice(0, 7)}-01`).endOf('month').toDate()
       where.txDate = { gte: start, lte: end }
     }
 
-    const p = Math.max(1, parseInt(page))
-    const ps = Math.min(100, Math.max(1, parseInt(pageSize)))
+    const p = Math.max(1, Number(page))
+    const ps = Math.min(100, Math.max(1, Number(pageSize)))
 
     const [items, total] = await Promise.all([
       prisma.cashTransaction.findMany({
@@ -278,52 +443,66 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // ── 录入流水（原子更新账户余额）──────────────────────
+  const manualTransactionSchema = z.object({
+    operationId: z.string().uuid('operationId 必须是 UUID'),
+    accountId: z.string().min(1, '请选择资金账户'),
+    direction: z.union([z.literal(1), z.literal(-1)]),
+    category: z.string().trim().min(1, '请选择流水分类').max(80),
+    amount: moneySchema,
+    note: z.string().trim().max(1000).optional().nullable(),
+    txDate: z.string(),
+  }).strict()
   app.post('/transactions', auth(app), async (req: any, reply: any) => {
     const { tenantId, userId, role } = req.user
     if (!WRITE_ROLES.includes(role)) return reply.status(403).send({ error: '无权限' })
-
-    const { accountId, direction, category, amount, note, txDate, refType, refId } = req.body as any
-    if (!accountId || !direction || !category || !amount || !txDate)
-      return reply.status(400).send({ error: '请填写完整信息' })
-    if (![1, -1].includes(Number(direction)))
-      return reply.status(400).send({ error: 'direction 只能是 1（收入）或 -1（支出）' })
-    if (Number(amount) <= 0)
-      return reply.status(400).send({ error: '金额必须大于 0' })
-
-    const tx = await prisma.$transaction(async (client) => {
-      const account = await client.cashAccount.findFirst({
-        where: { id: accountId, tenantId, status: 'ACTIVE' },
+    const parsed = manualTransactionSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
+    const { operationId, accountId, direction, category, amount, note, txDate } = parsed.data
+    const txDateValue = parseBusinessDate(txDate)
+    if (!txDateValue) return reply.status(400).send({ error: '流水日期无效' })
+    const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999)
+    if (txDateValue > endOfToday) return reply.status(400).send({ error: '流水日期不能晚于今天' })
+    try {
+      const result = await prisma.$transaction(async client => {
+        await client.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`cash-manual:${tenantId}:${operationId}`}))`
+        const existing = await client.cashTransaction.findFirst({
+          where: { tenantId, refType: 'MANUAL_CASHBOOK', refId: operationId },
+          include: { account: { select: { id: true, name: true, type: true } } },
+        })
+        if (existing) {
+          const same = existing.accountId === accountId && existing.createdById === userId &&
+            existing.direction === direction && existing.category === category &&
+            existing.amount.equals(amount) && (existing.note || '') === (note || '') &&
+            businessDateKey(existing.txDate) === txDate
+          if (!same) throw httpError('该 operationId 已用于其他流水参数，不可覆盖', 409)
+          return { transaction: existing, duplicated: true }
+        }
+        const written = await writeCashTransaction(client, {
+          tenantId, accountId, direction, category, amount,
+          note: note || undefined, txDate: txDateValue,
+          refType: 'MANUAL_CASHBOOK', refId: operationId, createdById: userId,
+        })
+        if (!written) throw httpError('账户不存在或已停用', 404)
+        await client.opLog.create({
+          data: {
+            tenantId, userId,
+            action: `手工录入资金${direction === 1 ? '收入' : '支出'} ${category} ¥${new Prisma.Decimal(amount).toFixed(2)}`,
+            entityType: 'CashTransaction', targetId: written.id,
+            metadata: { operationId, accountId, balanceAfter: written.balanceAfter } as any,
+          },
+        })
+        const transaction = await client.cashTransaction.findUniqueOrThrow({
+          where: { id: written.id },
+          include: { account: { select: { id: true, name: true, type: true } } },
+        })
+        return { transaction, duplicated: false }
       })
-      if (!account) throw { statusCode: 404, message: '账户不存在' }
-
-      const newBalance = Number(account.balance) + Number(direction) * Number(amount)
-
-      await client.cashAccount.update({
-        where: { id: accountId },
-        data: { balance: newBalance },
-      })
-
-      return client.cashTransaction.create({
-        data: {
-          tenantId,
-          accountId,
-          direction: Number(direction),
-          category,
-          amount: Number(amount),
-          balanceAfter: newBalance,
-          note,
-          txDate: new Date(txDate),
-          refType,
-          refId,
-          createdById: userId,
-        },
-        include: {
-          account: { select: { id: true, name: true, type: true } },
-        },
-      })
-    })
-
-    return reply.status(201).send(tx)
+      return reply.status(result.duplicated ? 200 : 201).send({ ...result.transaction, duplicated: result.duplicated })
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      req.log.error({ err: error }, 'manual cash transaction failed')
+      return reply.status(500).send({ error: '手工流水录入失败，未保存任何变更' })
+    }
   })
 
   // ── CMB 流水手动同步 (财务点 funds 页 "立即同步" 按钮触发) ──
@@ -331,11 +510,19 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
   //   body: { accountId?: string; daysBack?: number }
   //   不传 accountId 同步该 tenant 所有 cmbBindAccount; 传则只同步指定
   //   daysBack 默认 1 (昨天+今天); 历史首次接入可传 30 拉一个月
+  const cmbSyncSchema = z.object({
+    accountId: z.string().min(1).optional(),
+    daysBack: z.number().int().min(1).max(60).optional().default(1),
+  }).strict()
   app.post('/sync-from-cmb', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
     if (!WRITE_ROLES.includes(role)) return reply.status(403).send({ error: '无权操作' })
-    const { accountId, daysBack = 1 } = (req.body || {}) as { accountId?: string; daysBack?: number }
-    const days = Math.min(60, Math.max(1, Number(daysBack)))
+    if (process.env.NODE_ENV !== 'production' || process.env.PREVIEW_MODE === 'true') {
+      return reply.status(503).send({ error: '预览/开发环境不允许连接银行流水', code: 'CMB_SYNC_DISABLED' })
+    }
+    const parsed = cmbSyncSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
+    const { accountId, daysBack: days } = parsed.data
     try {
       if (accountId) {
         const acc = await prisma.cashAccount.findFirst({
@@ -352,7 +539,6 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
         return { results: [r] }
       }
       // 全量 (tenant 内所有 cmbBindAccount)
-      // syncAllCmbAccounts 跨 tenant, 这里 filter 仅当前 tenant
       const accounts = await prisma.cashAccount.findMany({
         where: { tenantId, cmbBindAccount: { not: null }, status: 'ACTIVE' },
         select: { id: true, name: true, cmbBindAccount: true },
@@ -371,7 +557,8 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
       )
       return { results }
     } catch (e: any) {
-      return reply.status(500).send({ error: e?.message || '同步失败' })
+      req.log.error({ err: e }, 'CMB transaction sync failed')
+      return reply.status(500).send({ error: '银行流水同步失败，请稍后重试' })
     }
   })
 

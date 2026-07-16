@@ -5,7 +5,7 @@
  *   /api/cashbook/summary       总余额 + 月流入流出
  *   /api/cashbook/accounts      账户列表 (POST 创建)
  *   /api/schedules?days=7       本周应付到期
- *   /api/schedules?status=FAILED 失败付款
+ *   /api/schedules?status=OVERDUE 逾期/失败付款
  *
  * 改进:
  *   - 单位规范 (¥0 / 万 切换, 不再 ¥0.0K)
@@ -84,7 +84,7 @@ export default function FinanceFundsPage() {
       apiFetch<CashbookSummary>('/api/cashbook/summary').catch(e => { setError(e.message); return null }),
       apiFetch<Account[]>('/api/cashbook/accounts').catch(() => []),
       apiFetch<Schedule[]>('/api/schedules?days=7').catch(() => []),
-      apiFetch<Schedule[]>('/api/schedules?status=FAILED').catch(() => []),
+      apiFetch<Schedule[]>('/api/schedules?status=OVERDUE').catch(() => []),
     ]).then(([s, a, sch, f]) => {
       setSummary(s); setAccounts(a || []); setSchedules(sch || [])
       setFailedSch(f || [])

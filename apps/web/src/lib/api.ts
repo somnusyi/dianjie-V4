@@ -8,7 +8,7 @@ const api = axios.create({
 // 自动带上 token
 api.interceptors.request.use((config) => {
   if (typeof window !== 'undefined') {
-    const token = localStorage.getItem('dj_token')
+    const token = localStorage.getItem('token') || localStorage.getItem('dj_token')
     if (token) config.headers.Authorization = `Bearer ${token}`
   }
   return config
@@ -23,7 +23,7 @@ api.interceptors.response.use(
   async (err) => {
     const original = err.config
     if (err.response?.status === 401 && typeof window !== 'undefined' && !original._retry) {
-      const refresh = localStorage.getItem('dj_refresh')
+      const refresh = localStorage.getItem('refreshToken') || localStorage.getItem('dj_refresh')
       if (refresh) {
         original._retry = true
         if (isRefreshing) {
@@ -43,7 +43,11 @@ api.interceptors.response.use(
           )
           const newToken = r.data.token
           localStorage.setItem('dj_token', newToken)
-          if (r.data.refreshToken) localStorage.setItem('dj_refresh', r.data.refreshToken)
+          localStorage.setItem('token', newToken)
+          if (r.data.refreshToken) {
+            localStorage.setItem('dj_refresh', r.data.refreshToken)
+            localStorage.setItem('refreshToken', r.data.refreshToken)
+          }
           refreshQueue.forEach(cb => cb(newToken))
           refreshQueue = []
           original.headers.Authorization = `Bearer ${newToken}`
@@ -53,6 +57,8 @@ api.interceptors.response.use(
           // 只清自己的 key, 不能 clear() 把 v2 的 token / user 也带走
           localStorage.removeItem('dj_token')
           localStorage.removeItem('dj_refresh')
+          localStorage.removeItem('token')
+          localStorage.removeItem('refreshToken')
           window.location.href = '/v2/login'
         } finally {
           isRefreshing = false
@@ -60,6 +66,8 @@ api.interceptors.response.use(
       } else {
         localStorage.removeItem('dj_token')
         localStorage.removeItem('dj_refresh')
+        localStorage.removeItem('token')
+        localStorage.removeItem('refreshToken')
         window.location.href = '/v2/login'
       }
     }

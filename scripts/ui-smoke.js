@@ -43,6 +43,8 @@ const pagesToVisit = {
     { path: '/v2/finance-pc/petty-cash', mustNotContain: ['页面不存在', '404', '加载失败'] },
     { path: '/v2/finance/capital-review', mustNotContain: ['页面不存在', '404', '加载失败'] },
     { path: '/v2/finance-pc/capital-review', mustNotContain: ['页面不存在', '404', '加载失败'] },
+    { path: '/v2/finance/funds', mustNotContain: ['页面不存在', '404', '加载失败'] },
+    { path: '/cashbook', mustNotContain: ['页面不存在', '404', '加载失败'] },
   ],
   supplier: [
     { path: '/v2/supplier/orders', mustNotContain: ['页面不存在', '404'] },
@@ -86,6 +88,9 @@ async function run() {
     const ctx = await browser.newContext()
     const page = await ctx.newPage()
     page.on('pageerror', err => consoleErrors.push(`[${key}] ${err.message}`))
+    page.on('console', msg => {
+      if (msg.type() === 'error') consoleErrors.push(`[${key}] console.error ${msg.text()}`)
+    })
     page.on('response', r => { if (r.status() >= 500) consoleErrors.push(`[${key}] ${r.status()} ${r.url()}`) })
 
     try {
@@ -133,7 +138,7 @@ async function run() {
 
   console.log('\n================ 结果 ================')
   console.log(`✓ 通过 ${stats.pass}  ✗ 失败 ${stats.fail}  · 控制台错误 ${consoleErrors.length}`)
-  if (stats.fail > 0) {
+  if (stats.fail > 0 || consoleErrors.length > 0) {
     console.log('\n失败明细:')
     stats.errors.forEach(e => console.log(' -', e))
     process.exit(1)

@@ -1,23 +1,37 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
+import { z } from 'zod'
 import { notifyApprovalDone } from '../services/notification'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
+const GROUP_READ_ROLES = new Set(['ADMIN', 'FINANCE', 'SUPER_ADMIN'])
+const scheduleStatusSchema = z.enum([
+  'PENDING', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'NOTIFIED',
+  'PROCESSING', 'PAID', 'OVERDUE', 'CANCELLED', 'ON_HOLD',
+])
 
 export const scheduleRoutes: FastifyPluginAsync = async (app) => {
 
   // 列表
-  app.get('/', auth(app), async (req: any) => {
+  app.get('/', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, supplierId, storeId } = req.user
-    const { status, days } = req.query as any
+    if (!GROUP_READ_ROLES.has(role) && !isSupplierRole(role) && !isStoreScoped(role)) {
+      return reply.status(403).send({ error: '无权查看付款计划' })
+    }
+    const parsed = z.object({
+      status: scheduleStatusSchema.optional(),
+      days: z.string().regex(/^\d+$/).transform(Number).refine(value => value <= 365, 'days 最大为 365').optional(),
+    }).strict().safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
+    const { status, days } = parsed.data
     const where: any = { tenantId }
     if (isSupplierRole(role)) where.supplierId = supplierId || '__NONE__'
     if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
     if (status) where.status = status
-    if (days) {
+    if (days !== undefined) {
       const d = new Date()
-      d.setDate(d.getDate() + Number(days))
+      d.setDate(d.getDate() + days)
       where.dueAt = { lte: d }
     }
     return prisma.paymentSchedule.findMany({

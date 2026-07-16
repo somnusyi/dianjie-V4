@@ -298,7 +298,7 @@ export function voucherForInternalTransfer(opts: {
   }
   const from = resolve(opts.fromBankLast4, opts.fromAccountName)
   const to   = resolve(opts.toBankLast4,   opts.toAccountName)
-  return createVoucherAsync({
+  return createVoucher({
     tenantId: opts.tenantId,
     date: opts.date,
     summary: `内部转账 ${opts.fromAccountName} → ${opts.toAccountName}${opts.remark ? ` (${opts.remark})` : ''}`,

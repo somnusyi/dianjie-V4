@@ -51,7 +51,7 @@ const ROLE_HINT: Record<string, string> = {
 
 function safeParseUser() {
   if (typeof window === 'undefined') return null
-  const raw = localStorage.getItem('dj_user')
+  const raw = localStorage.getItem('user') || localStorage.getItem('dj_user')
   if (!raw) return null
   try {
     return JSON.parse(raw)
@@ -82,7 +82,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const currentUser = user || localUser
 
   const loadBadges = async (u: any) => {
-    const token = localStorage.getItem('dj_token')
+    const token = localStorage.getItem('token') || localStorage.getItem('dj_token')
     const headers = { Authorization: `Bearer ${token}` }
     const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'
     const b: Record<string, number> = {}

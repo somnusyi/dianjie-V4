@@ -348,22 +348,22 @@ export async function runDailyCheck() {
     include: { items: true, purchaseOrder: { include: { receipt: true } } },
     take: 200,
   })
-  const { refundSupplierStockOnLossApproved } = await import('../routes/lossClaims')
+  const { approveLossClaimAtomically } = await import('../routes/lossClaims')
   for (const c of overdueLossClaims) {
     try {
-      // P0 race condition fix: 用 updateMany + WHERE status=PENDING guard
-      // 防止供应商在 23:59 拒绝 / 同意时, scheduler 在 23:59 同时跑导致状态冲突
-      const upd = await prisma.lossClaim.updateMany({
-        where: { id: c.id, status: 'PENDING' },   // 只在仍是 PENDING 时改
-        data: { status: 'AUTO_APPROVED', autoApproved: true, handledAt: new Date() },
+      // 状态抢占、库存回补、库存流水和审计日志同事务，且与供应商人工处理共用事务锁。
+      const result = await approveLossClaimAtomically({
+        claimId: c.id,
+        tenantId: c.tenantId,
+        operatorId: c.createdById,
+        reason: `[自动] 24h 自动同意报损 ${c.no}`,
+        automatic: true,
       })
-      if (upd.count === 0) {
+      if (!result.transitioned) {
         // 供应商在 schedule fire 之前已抢先操作 — 跳过此条
         console.log(`⏭ 跳过 ${c.no} (并发竞争: 已不是 PENDING)`)
         continue
       }
-      await refundSupplierStockOnLossApproved(c, c.createdById, `[自动] 24h 自动同意报损 ${c.no}`)
-      await prisma.opLog.create({ data: { tenantId: c.tenantId, userId: c.createdById, action: `[自动] 报损 ${c.no} 24h 自动同意`, target: c.no, entityType: 'LossClaim', targetId: c.id } })
     } catch (e: any) {
       console.error(`自动同意报损失败 ${c.no}:`, e.message)
     }

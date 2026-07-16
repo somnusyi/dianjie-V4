@@ -1,43 +1,110 @@
 import { FastifyPluginAsync } from 'fastify'
-import { prisma } from '@dianjie/db'
+import { Prisma, prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { notifyLossClaimResult } from '../services/notification'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 import { resignOssUrls } from './upload'
 import { fireAndForget as notify } from '../services/notify'
 
-/**
- * 报损被批准 (含自动同意): 回补供应商库存
- * 我们 ship 时按订单量扣了, 短量没真正送达的应该补回
- */
-export async function refundSupplierStockOnLossApproved(claim: any, operatorId: string, reason: string) {
-  if (!claim.items || claim.items.length === 0) return
+async function refundSupplierStockInTransaction(
+  tx: Prisma.TransactionClient,
+  claim: any,
+  operatorId: string,
+  reason: string,
+) {
+  if (!claim.items || claim.items.length === 0) return 0
+  let movementCount = 0
   for (const it of claim.items) {
     const productId = it.productId
-    const lossQty = Number(it.lossQty)
-    if (!productId || lossQty <= 0) continue
-    try {
-      // P0: 原子加, 避免并发报损同意时丢更新
-      const updated = await prisma.product.update({
-        where: { id: productId },
-        data: { stock: { increment: lossQty } },
-        select: { stock: true, supplierId: true },
-      })
-      if (!updated.supplierId) continue
-      await prisma.supplierStockMovement.create({
-        data: {
-          tenantId: claim.tenantId, supplierId: updated.supplierId, productId,
-          delta: lossQty, balanceAfter: updated.stock,
-          type: 'ADJUSTMENT' as any,
-          reason: `${reason}, 回补未送达 ${lossQty}`,
-          sourceType: 'LossClaim', sourceId: claim.id,
-          createdById: operatorId,
-        },
-      })
-    } catch (e) {
-      console.error('回补库存失败', productId, e)
-    }
+    const lossQty = new Prisma.Decimal(it.lossQty)
+    if (!productId || lossQty.lte(0)) continue
+    const existing = await tx.supplierStockMovement.findFirst({
+      where: { tenantId: claim.tenantId, sourceType: 'LossClaim', sourceId: claim.id, productId },
+      select: { id: true },
+    })
+    if (existing) continue
+    const product = await tx.product.findFirst({
+      where: { id: productId, tenantId: claim.tenantId, supplierId: claim.supplierId || '__NONE__' },
+      select: { id: true, supplierId: true },
+    })
+    if (!product?.supplierId) throw new Error(`报损 ${claim.no} 的商品 ${productId} 不属于责任供应商`)
+    const updated = await tx.product.update({
+      where: { id: product.id },
+      data: { stock: { increment: lossQty } },
+      select: { stock: true },
+    })
+    await tx.supplierStockMovement.create({
+      data: {
+        tenantId: claim.tenantId, supplierId: product.supplierId, productId,
+        delta: lossQty, balanceAfter: updated.stock,
+        type: 'ADJUSTMENT' as any,
+        reason: `${reason}, 回补未送达 ${lossQty.toString()}`,
+        sourceType: 'LossClaim', sourceId: claim.id,
+        createdById: operatorId,
+      },
+    })
+    movementCount += 1
   }
+  return movementCount
+}
+
+/**
+ * 协商路径的库存回补兼容入口。库存和流水原子提交，并按 claim+product 幂等。
+ * 正常供应商同意与 24h 自动同意应调用 approveLossClaimAtomically，确保状态也在同一事务。
+ */
+export async function refundSupplierStockOnLossApproved(claim: any, operatorId: string, reason: string) {
+  return prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`loss-handle:${claim.id}`}))::text AS locked`
+    return refundSupplierStockInTransaction(tx, claim, operatorId, reason)
+  })
+}
+
+export async function approveLossClaimAtomically(params: {
+  claimId: string
+  tenantId: string
+  operatorId: string
+  reason: string
+  automatic?: boolean
+  handlerNote?: string | null
+}) {
+  return prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`loss-handle:${params.claimId}`}))::text AS locked`
+    const claim = await tx.lossClaim.findFirst({
+      where: { id: params.claimId, tenantId: params.tenantId, isManual: false },
+      include: { items: true, purchaseOrder: { include: { receipt: true } } },
+    })
+    if (!claim) return { transitioned: false, duplicated: false, claim: null }
+    if (claim.status === 'APPROVED' || claim.status === 'AUTO_APPROVED') {
+      return { transitioned: false, duplicated: true, claim }
+    }
+    if (claim.status !== 'PENDING') return { transitioned: false, duplicated: false, claim }
+
+    await refundSupplierStockInTransaction(tx, claim, params.operatorId, params.reason)
+    const status = params.automatic ? 'AUTO_APPROVED' : 'APPROVED'
+    await tx.lossClaim.update({
+      where: { id: claim.id },
+      data: {
+        status,
+        autoApproved: Boolean(params.automatic),
+        handledAt: new Date(),
+        handledById: params.automatic ? null : params.operatorId,
+        handlerNote: params.handlerNote || null,
+      },
+    })
+    await tx.opLog.create({
+      data: {
+        tenantId: params.tenantId,
+        userId: params.operatorId,
+        action: params.automatic
+          ? `[自动] 报损 ${claim.no} 24h 自动同意并回补供应商库存`
+          : `供应商同意报损 ${claim.no}，回补供应商库存 (账期金额已是实收, 不再扣)`,
+        target: claim.no,
+        entityType: 'LossClaim',
+        targetId: claim.id,
+      },
+    })
+    return { transitioned: true, duplicated: false, claim: { ...claim, status } }
+  })
 }
 
 /**
@@ -68,8 +135,8 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     const { status, page, pageSize, isManual, createdAfter } = req.query as any
     const where: any = { tenantId }
 
-    if (isStoreScoped(role) && storeId) where.storeId = storeId
-    if (isSupplierRole(role) && userSupplierId) where.supplierId = userSupplierId
+    if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
+    if (isSupplierRole(role)) where.supplierId = userSupplierId || '__NONE__'
     if (status) where.status = status
     if (isManual === 'true') where.isManual = true
     if (isManual === 'false') where.isManual = false
@@ -118,7 +185,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
 
     // 加 store scope: 店长/厨师长 只能给自己门店建报损
     const orderWhere: any = { id: purchaseOrderId, tenantId }
-    if (isStoreScoped(role) && userStoreId) orderWhere.storeId = userStoreId
+    if (isStoreScoped(role)) orderWhere.storeId = userStoreId || '__NONE__'
     const order = await prisma.purchaseOrder.findFirst({
       where: orderWhere,
       include: { items: true },
@@ -299,8 +366,8 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     if (action === 'reject' && (!note || !note.trim())) throw { statusCode: 400, message: '拒绝时必须填写原因' }
 
     // P0: 加 supplier scope, 避免 supplier A 处理 supplier B 的报损; 排除店内自有盘点报损 (isManual)
-    const claimWhere: any = { id, tenantId, status: { in: ['PENDING', 'AUTO_APPROVED'] }, isManual: false }
-    if (isSupplierRole(role) && req.user.supplierId) claimWhere.supplierId = req.user.supplierId
+    const claimWhere: any = { id, tenantId, status: 'PENDING', isManual: false }
+    if (isSupplierRole(role)) claimWhere.supplierId = req.user.supplierId || '__NONE__'
     const claim = await prisma.lossClaim.findFirst({
       where: claimWhere,
       include: { purchaseOrder: { include: { receipt: true } }, items: true },
@@ -310,7 +377,17 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     if (action === 'approve') {
       // P0 修复设计: receipt.totalAmount 已经是实收金额, schedule.amount 已经按实收, 不再扣
       // 改为回补供应商库存 (我们 ship 时按订单量扣了, 短量没送的应该补回来)
-      await refundSupplierStockOnLossApproved(claim, userId, '供应商同意报损 ' + claim.no)
+      const approved = await approveLossClaimAtomically({
+        claimId: claim.id,
+        tenantId,
+        operatorId: userId,
+        reason: '供应商同意报损 ' + claim.no,
+        handlerNote: note,
+      })
+      if (!approved.transitioned) {
+        if (approved.duplicated) return { success: true, action, duplicated: true }
+        throw { statusCode: 409, message: '报损已被其他操作处理，请刷新后查看' }
+      }
 
       // 财务凭证: 报损 → 借:销售费用-报损 / 贷:库存商品
       try {
@@ -330,18 +407,6 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
         console.error('[voucher] 报损凭证生成失败', e)
       }
 
-      await prisma.lossClaim.update({
-        where: { id },
-        data: { status: 'APPROVED', handledAt: new Date(), handledById: userId, handlerNote: note },
-      })
-
-      await prisma.opLog.create({
-        data: {
-          tenantId, userId,
-          action: `供应商同意报损 ${claim.no}，回补供应商库存 (账期金额已是实收, 不再扣)`,
-          target: claim.no, entityType: 'LossClaim', targetId: id,
-        },
-      })
       notify({
         tenantId, event: 'LOSS_AGREED',
         eventKey: `LOSS:${claim.id}:AGREED`,
@@ -354,31 +419,33 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       if (!claim.purchaseOrder?.receiptId) {
         throw { statusCode: 500, message: '订单收据未生成, 无法回退账期' }
       }
-      const schedule = await prisma.paymentSchedule.findUnique({
-        where: { receiptId: claim.purchaseOrder.receiptId },
-      })
-      if (schedule && (schedule.status === 'PENDING' || schedule.status === 'PENDING_APPROVAL' || schedule.status === 'APPROVED')) {
-        // P0: 原子加, 避免并发拒绝时丢更新
-        await prisma.paymentSchedule.update({
-          where: { id: schedule.id },
+      const rejected = await prisma.$transaction(async tx => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`loss-handle:${claim.id}`}))::text AS locked`
+        const fresh = await tx.lossClaim.findFirst({ where: claimWhere, select: { id: true } })
+        if (!fresh) return false
+        const schedule = await tx.paymentSchedule.findUnique({
+          where: { receiptId: claim.purchaseOrder!.receiptId! },
+        })
+        if (schedule && ['PENDING', 'PENDING_APPROVAL', 'APPROVED'].includes(schedule.status)) {
+          await tx.paymentSchedule.update({
+            where: { id: schedule.id },
+            data: { amount: { increment: claim.totalLossAmount }, status: 'ON_HOLD' as any },
+          })
+        }
+        await tx.lossClaim.update({
+          where: { id },
+          data: { status: 'REJECTED', handledAt: new Date(), handledById: userId, handlerNote: note },
+        })
+        await tx.opLog.create({
           data: {
-            amount: { increment: Number(claim.totalLossAmount) },
-            status: 'ON_HOLD' as any,
+            tenantId, userId,
+            action: `供应商拒绝报损 ${claim.no}, 账期金额加回 ¥${claim.totalLossAmount} + 冻结付款待协商`,
+            target: claim.no, entityType: 'LossClaim', targetId: id,
           },
         })
-      }
-      await prisma.lossClaim.update({
-        where: { id },
-        data: { status: 'REJECTED', handledAt: new Date(), handledById: userId, handlerNote: note },
+        return true
       })
-
-      await prisma.opLog.create({
-        data: {
-          tenantId, userId,
-          action: `供应商拒绝报损 ${claim.no}, 账期金额加回 ¥${claim.totalLossAmount} + 冻结付款待协商`,
-          target: claim.no, entityType: 'LossClaim', targetId: id,
-        },
-      })
+      if (!rejected) return { success: true, action, duplicated: true }
 
       // 通知总厨仲裁 (M2 触达层)
       const [store, supplier] = await Promise.all([

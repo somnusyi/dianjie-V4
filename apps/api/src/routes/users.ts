@@ -38,6 +38,7 @@ const createUserSchema = z.object({
 
 const updateUserSchema = z.object({
   name: z.string().trim().min(1).max(40).optional(),
+  email: z.string().trim().email('邮箱格式不正确').max(120).optional(),
   phone: nullablePhoneSchema,
   role: z.enum(USER_ROLES).optional(),
   storeId: nullableEntityIdSchema,
@@ -168,6 +169,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
         if (target.role === 'SUPER_ADMIN') return { status: 403, error: '不能修改超管账号' }
 
         const phone = parsed.data.phone === undefined ? target.phone : (parsed.data.phone || null)
+        const email = parsed.data.email || target.email
         const newRole = parsed.data.role || target.role
         const storeId = parsed.data.storeId === undefined ? target.storeId : normalizedId(parsed.data.storeId)
         const supplierId = parsed.data.supplierId === undefined ? target.supplierId : normalizedId(parsed.data.supplierId)
@@ -175,6 +177,10 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
           const duplicate = await tx.user.findUnique({ where: { tenantId_phone: { tenantId, phone } }, select: { id: true } })
           if (duplicate && duplicate.id !== target.id) return { status: 400, error: '该手机号已被使用' }
         }
+        const emailDuplicate = await tx.user.findUnique({
+          where: { tenantId_email: { tenantId, email } }, select: { id: true },
+        })
+        if (emailDuplicate && emailDuplicate.id !== target.id) return { status: 400, error: '该邮箱已被使用' }
         if (STORE_BOUND_ROLES.has(newRole) && !storeId) return { status: 400, error: '该角色必须绑定门店' }
         if (SUPPLIER_BOUND_ROLES.has(newRole) && !supplierId) return { status: 400, error: '该角色必须绑定供应商' }
         if (storeId) {
@@ -189,6 +195,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
           where: { id: target.id },
           data: {
             ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+            ...(parsed.data.email !== undefined ? { email } : {}),
             ...(parsed.data.phone !== undefined ? { phone } : {}),
             ...(parsed.data.role !== undefined ? { role: newRole } : {}),
             ...(parsed.data.storeId !== undefined ? { storeId, storeIds: storeId ? [storeId] : [] } : {}),
@@ -203,7 +210,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
       })
       if ('error' in result) return reply.status(result.status).send({ error: result.error })
     } catch (error: any) {
-      if (error?.code === 'P2002') return reply.status(400).send({ error: '手机号已被使用' })
+      if (error?.code === 'P2002') return reply.status(400).send({ error: '手机号或邮箱已被使用' })
       throw error
     }
     return { message: '更新成功' }

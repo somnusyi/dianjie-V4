@@ -131,7 +131,10 @@ async function main() {
     userIds.push(recoveredCreate.body.id)
     assert.equal(await prisma.opLog.count({ where: { targetId: recoveredCreate.body.id, entityType: 'User' } }), 1)
     assert.equal((await request(`/api/users/${target.id}`, {
-      method: 'PATCH', headers: adminAuth, body: JSON.stringify({ name: '审计恢复后的名字' }),
+      method: 'PATCH', headers: adminAuth, body: JSON.stringify({
+        name: '审计恢复后的名字', email: target.email, phone: target.phone,
+        role: target.role, storeId: null,
+      }),
     })).status, 200)
     assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: target.id } })).name, '审计恢复后的名字')
 

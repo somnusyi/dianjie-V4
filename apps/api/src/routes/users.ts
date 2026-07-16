@@ -200,7 +200,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
             ...(parsed.data.role !== undefined ? { role: newRole } : {}),
             ...(parsed.data.storeId !== undefined ? { storeId, storeIds: storeId ? [storeId] : [] } : {}),
             ...(parsed.data.supplierId !== undefined ? { supplierId } : {}),
-            ...(hashed ? { password: hashed } : {}),
+            ...(hashed ? { password: hashed, authVersion: { increment: 1 } } : {}),
           },
         })
         await tx.opLog.create({
@@ -265,7 +265,10 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
       if (target.role === 'SUPER_ADMIN' && role !== 'SUPER_ADMIN') {
         return { status: 403, error: '无权重置超级管理员密码' }
       }
-      await tx.user.update({ where: { id: target.id }, data: { password } })
+      await tx.user.update({
+        where: { id: target.id },
+        data: { password, authVersion: { increment: 1 } },
+      })
       await tx.opLog.create({
         data: {
           tenantId, userId: operatorId, role,

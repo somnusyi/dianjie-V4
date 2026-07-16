@@ -137,6 +137,12 @@ async function main() {
       }),
     })).status, 200)
     assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: target.id } })).name, '审计恢复后的名字')
+    assert.equal((await request(`/api/users/${target.id}/reset-password`, {
+      method: 'PATCH', headers: adminAuth, body: JSON.stringify({ password: `${PASSWORD}-reset` }),
+    })).status, 200)
+    const resetTarget = await prisma.user.findUniqueOrThrow({ where: { id: target.id } })
+    assert.equal(resetTarget.authVersion, 1)
+    assert.equal(await bcrypt.compare(`${PASSWORD}-reset`, resetTarget.password), true)
 
     const allowedSuperCreate = await request('/api/users', {
       method: 'POST', headers: superAuth,

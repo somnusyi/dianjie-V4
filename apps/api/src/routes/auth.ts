@@ -138,7 +138,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         tenant: { select: { status: true } },
       },
     })
-    if (!user || user.status !== 'ACTIVE' || user.tenant.status !== 'ACTIVE') {
+    const tokenVersion = typeof decoded.ver === 'number' ? decoded.ver : 0
+    if (!user || user.status !== 'ACTIVE' || user.tenant.status !== 'ACTIVE' || user.authVersion !== tokenVersion) {
       return reply.status(401).send({ error: '用户不存在或已停用' })
     }
 
@@ -243,7 +244,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       if (!await bcrypt.compare(parsed.data.oldPassword, user.password)) {
         return { status: 401, error: '原密码错误' }
       }
-      await tx.user.update({ where: { id: user.id }, data: { password: hashed } })
+      await tx.user.update({
+        where: { id: user.id },
+        data: { password: hashed, authVersion: { increment: 1 } },
+      })
       await tx.opLog.create({
         data: { tenantId, userId, role: user.role, action: '修改密码', ip: request.ip },
       })

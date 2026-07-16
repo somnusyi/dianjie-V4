@@ -15,6 +15,7 @@ type SessionUser = {
   role: string
   storeId?: string | null
   supplierId?: string | null
+  authVersion?: number
 }
 
 export function issueAccessToken(jwt: JwtSigner, user: SessionUser) {
@@ -26,6 +27,7 @@ export function issueAccessToken(jwt: JwtSigner, user: SessionUser) {
     supplierId: user.supplierId || null,
     jti: crypto.randomUUID(),
     typ: 'access',
+    ver: user.authVersion ?? 0,
   }, { expiresIn: ACCESS_TTL })
 }
 
@@ -36,6 +38,7 @@ export function issueSessionTokens(jwt: JwtSigner, user: SessionUser) {
     tenantId: user.tenantId,
     jti: crypto.randomUUID(),
     typ: 'refresh',
+    ver: user.authVersion ?? 0,
   }, { expiresIn: REFRESH_TTL })
   return { token, refreshToken, expiresInMs: ACCESS_TTL_MS }
 }

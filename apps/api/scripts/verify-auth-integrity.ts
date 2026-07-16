@@ -106,7 +106,9 @@ async function main() {
       body: JSON.stringify({ oldPassword: PASSWORD, newPassword: `${PASSWORD}-new` }),
     })
     assert.equal(failedChange.status, 500, JSON.stringify(failedChange))
-    assert.equal(await bcrypt.compare(PASSWORD, (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).password), true)
+    const afterFailedChange = await prisma.user.findUniqueOrThrow({ where: { id: user.id } })
+    assert.equal(await bcrypt.compare(PASSWORD, afterFailedChange.password), true)
+    assert.equal(afterFailedChange.authVersion, 0)
     await prisma.$executeRawUnsafe('DROP TRIGGER IF EXISTS test_fail_auth_audit_trigger ON op_logs')
     await prisma.$executeRawUnsafe('DROP FUNCTION IF EXISTS test_fail_auth_audit()')
     triggerInstalled = false
@@ -116,6 +118,10 @@ async function main() {
       body: JSON.stringify({ oldPassword: PASSWORD, newPassword: `${PASSWORD}-new` }),
     })
     assert.equal(recovered.status, 200, JSON.stringify(recovered))
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).authVersion, 1)
+    assert.equal((await request('/api/auth/refresh', {
+      method: 'POST', body: JSON.stringify({ token: login.body.refreshToken }),
+    })).status, 401, '改密后旧 refresh token 必须立即失效')
     const concurrency = await Promise.all([
       request('/api/auth/change-password', {
         method: 'POST', headers: auth,
@@ -131,6 +137,7 @@ async function main() {
     const finalHash = (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).password
     assert.equal(await bcrypt.compare(`${PASSWORD}-a`, finalHash) || await bcrypt.compare(`${PASSWORD}-b`, finalHash), true)
     assert.equal(await prisma.opLog.count({ where: { userId: user.id, action: '修改密码' } }), 2)
+    assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).authVersion, 2)
 
     console.log(JSON.stringify({
       ok: true,

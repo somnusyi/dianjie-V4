@@ -3,7 +3,7 @@ import { ACCESS_TTL, ACCESS_TTL_MS, REFRESH_TTL, issueAccessToken, issueSessionT
 
 describe('authentication token issuance', () => {
   const user = {
-    id: 'user-1', tenantId: 'tenant-1', role: 'FINANCE', storeId: null, supplierId: null,
+    id: 'user-1', tenantId: 'tenant-1', role: 'FINANCE', storeId: null, supplierId: null, authVersion: 5,
   }
 
   it('issues typed short access and long refresh tokens from one policy', () => {
@@ -16,9 +16,9 @@ describe('authentication token issuance', () => {
     }
     const result = issueSessionTokens(jwt, user)
     expect(result).toEqual({ token: 'token-1', refreshToken: 'token-2', expiresInMs: ACCESS_TTL_MS })
-    expect(calls[0].payload).toMatchObject({ userId: user.id, tenantId: user.tenantId, role: 'FINANCE', typ: 'access' })
+    expect(calls[0].payload).toMatchObject({ userId: user.id, tenantId: user.tenantId, role: 'FINANCE', typ: 'access', ver: 5 })
     expect(calls[0].expiresIn).toBe(ACCESS_TTL)
-    expect(calls[1].payload).toMatchObject({ userId: user.id, tenantId: user.tenantId, typ: 'refresh' })
+    expect(calls[1].payload).toMatchObject({ userId: user.id, tenantId: user.tenantId, typ: 'refresh', ver: 5 })
     expect(calls[1].payload).not.toHaveProperty('role')
     expect(calls[1].expiresIn).toBe(REFRESH_TTL)
     expect(calls[0].payload.jti).not.toBe(calls[1].payload.jti)

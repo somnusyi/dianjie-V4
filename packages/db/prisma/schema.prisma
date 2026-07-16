@@ -75,6 +75,7 @@ model User {
   storeIds     String[]   @default([]) // 多店店长支持; 单店 = [storeId]
   supplierId   String? // 供应商人员绑定供应商
   lastLoginAt  DateTime?
+  authVersion  Int        @default(0) // 改密/管理员重置时递增，使旧 refresh token 立即失效
   // 企微集成: wecomUserId 是企微通讯录里的 UserID, 用于 SSO 单点登录映射
   wecomUserId  String?    @db.VarChar(64)
   wecomDeptIds Int[]      @default([])

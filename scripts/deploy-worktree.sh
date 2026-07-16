@@ -26,18 +26,43 @@ if [ "$(basename "$ROOT_DIR")" != "dianjie-V4-deploy" ]; then
   exit 1
 fi
 
-: "${V4_SSH_PASSWORD:?需先 export V4_SSH_PASSWORD=...}"
-
 SERVER='root@116.62.32.162'
 REMOTE='/app/dianjie-v4'
 SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10"
 
 ssh_run() {
-  sshpass -p "$V4_SSH_PASSWORD" ssh $SSH_OPTS "$SERVER" "$@"
+  if [ -n "${V4_SSH_PASSWORD:-}" ]; then
+    sshpass -p "$V4_SSH_PASSWORD" ssh $SSH_OPTS "$SERVER" "$@"
+  else
+    ssh $SSH_OPTS "$SERVER" "$@"
+  fi
 }
 rsync_run() {
-  sshpass -p "$V4_SSH_PASSWORD" rsync -avz --delete -e "ssh $SSH_OPTS" "$@"
+  if [ -n "${V4_SSH_PASSWORD:-}" ]; then
+    sshpass -p "$V4_SSH_PASSWORD" rsync -avz --delete -e "ssh $SSH_OPTS" "$@"
+  else
+    rsync -avz --delete -e "ssh $SSH_OPTS" "$@"
+  fi
 }
+
+# Sparse worktrees may omit tracked static assets. Materialize them before the
+# clean-worktree check so a release cannot fail after partially uploading build
+# output.
+if [ ! -d apps/web/public ]; then
+  git checkout --ignore-skip-worktree-bits HEAD -- apps/web/public
+fi
+[ -d apps/web/public ] || { echo "❌ apps/web/public 缺失，停止部署"; exit 1; }
+
+if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+  echo "❌ 部署 worktree 不是干净状态，停止部署:"
+  git status --short
+  exit 1
+fi
+
+if [ -z "${DATABASE_URL:-}" ] && [ ! -f apps/api/.env ]; then
+  echo "❌ 缺少本地测试 DATABASE_URL；它必须指向隔离测试库，不能指向生产库。"
+  exit 1
+fi
 
 # ── 1. 上锁 ─────────────────────────────────────────
 echo "==> [1/8] 抢占部署锁 (服务器 .deploy-lock)"
@@ -97,7 +122,7 @@ pnpm --filter @dianjie/db exec prisma generate >/dev/null 2>&1
 pnpm --filter @dianjie/api test
 pnpm --filter @dianjie/api build
 pnpm --filter @dianjie/web exec tsc --noEmit
-pnpm --filter @dianjie/web build 2>&1 | grep -E "(error|Failed|✓ Compiled|✓ Generating)" | tail -5
+WEB_PORT="${V4_BUILD_GUARD_PORT:-3299}" pnpm --filter @dianjie/web build 2>&1 | grep -E "(error|Failed|✓ Compiled|✓ Generating)" | tail -5
 
 # 校验产物 (build 完整性)
 [ -f apps/api/dist/index.js ] || { echo "❌ api dist 缺失"; exit 1; }

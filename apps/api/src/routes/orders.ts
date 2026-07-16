@@ -1193,18 +1193,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       })
       if (!existingReceipt) return null
       try {
-        const supplier = await prisma.supplier.findUnique({ where: { id: existingReceipt.supplierId } })
-        if (supplier) {
-          const { autoProcessAfterConfirm } = await import('../services/paymentSchedule')
-          await autoProcessAfterConfirm({
-            tenantId,
-            receipt: {
-              ...existingReceipt,
-              confirmedAt: existingReceipt.confirmedAt || existingReceipt.createdAt,
-            },
-            supplier,
-          })
-        }
+        const { ensureReceiptDerivatives } = await import('../services/receiptDerivatives')
+        await ensureReceiptDerivatives(existingReceipt.id)
       } catch (error) {
         req.log.warn({ err: error, receiptId: existingReceipt.id }, '重复收货补偿财务派生记录失败')
       }
@@ -1423,27 +1413,13 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     }
     const { receipt, no } = committed
 
-    // 财务凭证是主事务后的幂等派生记录；凭证服务用 Receipt sourceId 防重复。
+    // 入库主事务后的派生记录独立、幂等；任一分支失败都由重复请求和每日扫描补偿。
     try {
-      const store = await prisma.store.findUnique({ where: { id: order.storeId }, select: { name: true } })
-      const { voucherForReceipt } = await import('../services/voucher')
-      voucherForReceipt({
-        tenantId, receiptId: receipt.id, receiptNo: receipt.no,
-        supplierName: order.supplier?.name || '供应商',
-        storeName: store?.name || '门店',
-        amount: Number(actualReceivedTotal),
-        date: receivedAt,
-      })
-    } catch (e: any) {
-      req.log.warn({ err: e }, '收货凭证生成失败 (不影响主流程)')
-    }
-
-    // 触发自动对账+账期
-    try {
-      const { autoProcessAfterConfirm } = await import('../services/paymentSchedule')
-      const receiptFull = await prisma.receipt.findUnique({ where: { id: receipt.id } }) as any
-      receiptFull.confirmedAt = receiptFull.confirmedAt || receivedAt
-      await autoProcessAfterConfirm({ tenantId, receipt: receiptFull, supplier: order.supplier })
+      const { ensureReceiptDerivatives } = await import('../services/receiptDerivatives')
+      const result = await ensureReceiptDerivatives(receipt.id)
+      if (!result.voucher.ok || !result.finance.ok) {
+        req.log.error({ receiptId: receipt.id, result }, '收货后财务派生记录未完整生成，等待幂等补偿')
+      }
     } catch (error) {
       // 收货主事务已经成功，不把派生财务流程的临时故障伪装成收货失败。
       // 客户端重试会进入上方幂等分支，再次补偿对账单和账期。

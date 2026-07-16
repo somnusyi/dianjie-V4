@@ -235,11 +235,19 @@ async function main() {
       where: { receiptId: { in: receiptIds } }, select: { reconciliationId: true },
     })
     const reconciliationIds = [...new Set(reconciliationItems.map(item => item.reconciliationId))]
+    const vouchers = await prisma.voucher.findMany({
+      where: { sourceType: 'Receipt', sourceId: { in: receiptIds } }, select: { id: true },
+    })
     const claimIds = (await prisma.lossClaim.findMany({
       where: { storeId: { in: createdStoreIds }, createdById: { in: createdUserIds }, createdAt: { gte: startedAt } },
       select: { id: true },
     })).map(item => item.id)
     await prisma.$transaction(async tx => {
+      await tx.voucherEntry.deleteMany({ where: { voucherId: { in: vouchers.map(item => item.id) } } })
+      await tx.voucher.deleteMany({ where: { id: { in: vouchers.map(item => item.id) } } })
+      await tx.voucherGenerationFailure.deleteMany({
+        where: { tenantId: tenant.id, sourceType: 'Receipt', sourceId: { in: receiptIds } },
+      })
       for (const no of receiptNos) {
         await tx.notification.deleteMany({
           where: { tenantId: tenant.id, type: 'RECEIPT_CONFIRMED', createdAt: { gte: startedAt }, body: { contains: no } },

@@ -97,6 +97,7 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
     }
 
     let recon = existingReconItem?.reconciliation
+    let reconciliationCreated = false
     if (!recon) {
       const ym = dayjs(confirmedAt).format('YYYYMM')
       const latestRecon = await tx.reconciliation.findFirst({
@@ -120,6 +121,7 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
           items: { create: [{ receiptId: receipt.id, amount: receipt.totalAmount }] },
         },
       })
+      reconciliationCreated = true
     }
 
     await tx.receipt.update({
@@ -127,12 +129,32 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
       data: { status: 'ACCOUNTED' },
     })
 
+    if (scheduleCreated || reconciliationCreated) {
+      await tx.opLog.create({
+        data: {
+          tenantId,
+          userId: receipt.createdById,
+          action: `自动补全入库财务派生 ${receipt.no}`,
+          target: receipt.no,
+          targetId: receipt.id,
+          entityType: 'Receipt',
+          metadata: {
+            paymentScheduleId: schedule.id,
+            reconciliationId: recon.id,
+            scheduleCreated,
+            reconciliationCreated,
+          },
+        },
+      })
+    }
+
     return {
       recon,
       schedule,
       needApproval: schedule.needApproval,
       duplicated: Boolean(existingSchedule && existingReconItem),
       scheduleCreated,
+      reconciliationCreated,
     }
   })
 

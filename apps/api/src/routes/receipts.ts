@@ -2,7 +2,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { Prisma, prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
-import { autoProcessAfterConfirm } from '../services/paymentSchedule'
+import { ensureReceiptDerivatives } from '../services/receiptDerivatives'
 import { invalidatePattern } from '../lib/cache'
 import { notifyReceiptConfirmed } from '../services/notification'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
@@ -227,8 +227,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       })
       if (claimed.count !== 1) return reply.status(409).send({ error: '入库单已被处理，请刷新后查看' })
     } else {
-      // 主状态可能已提交，但账期/对账派生曾短暂失败。允许客户端重试补偿，
-      // autoProcessAfterConfirm 会按 receiptId 加锁并幂等读取既有派生记录。
+      // 主状态可能已提交，但凭证/账期/对账派生曾短暂失败。允许客户端重试补偿。
       receipt = await prisma.receipt.findFirst({
         where: { ...scopeWhere, status: { in: ['CONFIRMED', 'ACCOUNTED'] } },
         include: { supplier: true },
@@ -238,9 +237,13 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       duplicated = true
     }
 
-    // 按全额生成账期 (总仓 HEADQ_WAREHOUSE 短路, 不建账期)
-    const procResult: any = await autoProcessAfterConfirm({ tenantId, receipt: { ...receipt, confirmedAt }, supplier: receipt.supplier })
-    const isHeadq = procResult?.isHeadqWarehouse === true
+    // 按全额确保凭证与账期派生；总仓 HEADQ_WAREHOUSE 在账期分支短路。
+    const derivativeResult = await ensureReceiptDerivatives(receipt.id)
+    if (!derivativeResult.voucher.ok) {
+      req.log.error({ receiptId: receipt.id, error: derivativeResult.voucher.error }, '入库凭证生成失败，等待每日补偿')
+    }
+    if (!derivativeResult.finance.ok) throw new Error(derivativeResult.finance.error)
+    const isHeadq = receipt.supplier.sourceType === 'HEADQ_WAREHOUSE'
 
     if (!duplicated) {
       await prisma.opLog.create({
@@ -372,11 +375,11 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       }
     })
 
-    await autoProcessAfterConfirm({
-      tenantId,
-      receipt: { ...receipt, confirmedAt, totalAmount: actualAmount } as any,
-      supplier: receipt.supplier,
-    })
+    const derivativeResult = await ensureReceiptDerivatives(receipt.id)
+    if (!derivativeResult.voucher.ok) {
+      req.log.error({ receiptId: receipt.id, error: derivativeResult.voucher.error }, '报损入库凭证生成失败，等待每日补偿')
+    }
+    if (!derivativeResult.finance.ok) throw new Error(derivativeResult.finance.error)
 
     const store = await prisma.store.findUnique({ where: { id: receipt.storeId }, select: { name: true } })
     void notifyReceiptConfirmed(tenantId, receipt.no, store?.name || '', totalLossAmount.gt(0), totalLossAmount.toNumber())

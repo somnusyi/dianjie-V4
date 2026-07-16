@@ -1,11 +1,12 @@
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
-import { executeBankPayment, autoProcessAfterConfirm } from './paymentSchedule'
+import { executeBankPayment } from './paymentSchedule'
 import { sendNotification as notify } from './notification'
 import { fireAndForget as notifyWeCom } from './notify'
 import { runMeituanHourlySync, runMeituanDailyReconcile } from './meituan/cron'
 import { isCmbSyncEnabled, syncAllCmbAccounts } from './cmbAutoSync'
 import { nextBusinessNo } from './purchaseOrderIntegrity'
+import { ensureReceiptDerivatives, repairReceiptDerivatives } from './receiptDerivatives'
 
 /**
  * 对一张已经送达、超时未确认的订货单执行自动收货。
@@ -33,7 +34,9 @@ export async function autoReceivePurchaseOrder(orderId: string) {
       where: { purchaseOrderId: orderId, deliveryOrderId: { not: null } },
       orderBy: { createdAt: 'desc' },
     })
-    return existing ? { receipt: existing, duplicated: true } : null
+    if (!existing) return null
+    const derivatives = await ensureReceiptDerivatives(existing.id)
+    return { receipt: existing, duplicated: true, derivatives }
   }
 
   const delivery = order.deliveries[0]
@@ -154,33 +157,14 @@ export async function autoReceivePurchaseOrder(orderId: string) {
 
   if (!receipt) {
     const existing = await prisma.receipt.findUnique({ where: { deliveryOrderId: delivery.id } })
-    return existing ? { receipt: existing, duplicated: true } : null
+    if (!existing) return null
+    const derivatives = await ensureReceiptDerivatives(existing.id)
+    return { receipt: existing, duplicated: true, derivatives }
   }
 
-  try {
-    const { voucherForReceipt } = await import('./voucher')
-    voucherForReceipt({
-      tenantId: order.tenantId,
-      receiptId: receipt.id,
-      receiptNo: receipt.no,
-      supplierName: order.supplier.name,
-      storeName: order.store.name,
-      amount: totalAmount,
-      date: receivedAt,
-    })
-  } catch (error: any) {
-    console.error(`自动收货凭证生成失败 ${order.no}:`, error.message)
-  }
-
-  try {
-    await autoProcessAfterConfirm({
-      tenantId: order.tenantId,
-      receipt: { ...receipt, confirmedAt: receipt.confirmedAt || receivedAt },
-      supplier: order.supplier,
-    })
-  } catch (error: any) {
-    console.error(`自动收货财务派生记录失败 ${order.no}:`, error.message)
-  }
+  const derivatives = await ensureReceiptDerivatives(receipt.id)
+  if (!derivatives.voucher.ok) console.error(`自动收货凭证生成失败 ${order.no}:`, derivatives.voucher.error)
+  if (!derivatives.finance.ok) console.error(`自动收货财务派生记录失败 ${order.no}:`, derivatives.finance.error)
 
   notifyWeCom({
     tenantId: order.tenantId,
@@ -189,7 +173,7 @@ export async function autoReceivePurchaseOrder(orderId: string) {
     payload: { orderId: order.id, no: order.no },
     toStoreIds: order.storeId ? [order.storeId] : undefined,
   })
-  return { receipt, duplicated: false }
+  return { receipt, duplicated: false, derivatives }
 }
 
 export async function runDailyCheck() {
@@ -343,6 +327,20 @@ export async function runDailyCheck() {
     } catch (e: any) {
       console.error(`自动收货失败 ${o.no}:`, e.message)
     }
+  }
+
+  // 已确认的入库单不会再次进入待确认扫描；独立补偿最近缺失的财务派生记录。
+  try {
+    const derivativeRepair = await repairReceiptDerivatives()
+    if (derivativeRepair.incomplete > 0) {
+      console.log(`🧾 入库派生修复: ${derivativeRepair.repaired}/${derivativeRepair.incomplete} 成功, ${derivativeRepair.failed} 失败`)
+      for (const failure of derivativeRepair.failures) {
+        console.error(`入库派生修复失败 ${failure.receiptId}: ${failure.errors.join('; ')}`)
+      }
+    }
+  } catch (error: any) {
+    // 修复扫描本身失败不能阻断后续报损、周期凭证等日任务。
+    console.error('入库派生修复扫描失败:', error?.message || error)
   }
 
   // ── 7. 报损 24h 自动同意 (PENDING 超 24h → AUTO_APPROVED + 回补供应商库存) ───

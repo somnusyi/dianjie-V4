@@ -73,6 +73,8 @@ async function main() {
     },
   })))
   const [productA, productB] = products
+  const concurrentSnapshotName = `并发快照新商品-${suffix}`
+  const duplicateSnapshotName = `重复清单商品-${suffix}`
 
   const foreignTenant = await prisma.tenant.create({
     data: { name: `库存隔离验证-${suffix}`, slug: `stock-boundary-${suffix}` },
@@ -127,6 +129,77 @@ async function main() {
     })
     assert.equal(login.status, 200, JSON.stringify(login.body))
     const token = login.body.token as string
+
+    const invalidPrecision = await api('/api/supplier/stock/inbound', token, {
+      method: 'POST', body: JSON.stringify({ items: [{ productId: productA.id, qty: 0.001 }] }),
+    })
+    assert.equal(invalidPrecision.status, 400, '供应商库存不得接受超过 Product.stock 精度的数量')
+    const invalidDate = await api('/api/supplier/stock/inbound', token, {
+      method: 'POST',
+      body: JSON.stringify({ items: [{ productId: productA.id, qty: 1, manufactureDate: '2026-02-30' }] }),
+    })
+    assert.equal(invalidDate.status, 400, '无效日历日期必须被拒绝')
+    const reversedDates = await api('/api/supplier/stock/inbound', token, {
+      method: 'POST',
+      body: JSON.stringify({ items: [{
+        productId: productA.id, qty: 1,
+        manufactureDate: '2026-07-16', expiryDate: '2026-07-15',
+      }] }),
+    })
+    assert.equal(reversedDates.status, 400, '到期日早于生产日必须被拒绝')
+    const invalidMovementLimit = await api('/api/supplier/stock/movements?limit=oops', token)
+    assert.equal(invalidMovementLimit.status, 400, '非法流水分页参数不得变成 500')
+    const invalidMovementType = await api('/api/supplier/stock/movements?type=UNKNOWN', token)
+    assert.equal(invalidMovementType.status, 400, '非法流水类型不得传给 Prisma')
+
+    await reset()
+    const excessiveLoss = await api('/api/supplier/stock/loss', token, {
+      method: 'POST', body: JSON.stringify({ productId: productA.id, qty: 11, reason: '超过当前库存' }),
+    })
+    assert.equal(excessiveLoss.status, 409, '超库存报损不得静默截断为全损')
+    assert.equal(Number((await prisma.product.findUniqueOrThrow({ where: { id: productA.id } })).stock), 10)
+    assert.equal(await prisma.supplierStockMovement.count({ where: { productId: productA.id } }), 0)
+
+    const duplicateSnapshot = await api('/api/supplier/stock/import-snapshot', token, {
+      method: 'POST',
+      body: JSON.stringify({
+        items: [
+          { name: duplicateSnapshotName, category: categoryName, unit: '件', qty: 1 },
+          { name: duplicateSnapshotName, category: categoryName, unit: '件', qty: 2 },
+        ],
+      }),
+    })
+    assert.equal(duplicateSnapshot.status, 400, '同一清单内重复品名必须整体拒绝')
+    assert.equal(await prisma.product.count({
+      where: { tenantId: tenant.id, supplierId: supplier.id, name: duplicateSnapshotName },
+    }), 0)
+
+    const concurrentNewSnapshot = await Promise.all([
+      api('/api/supplier/stock/import-snapshot', token, {
+        method: 'POST',
+        body: JSON.stringify({
+          items: [{ name: concurrentSnapshotName, category: categoryName, unit: '件', qty: 6 }],
+          reason: '并发创建快照 A',
+        }),
+      }),
+      api('/api/supplier/stock/import-snapshot', token, {
+        method: 'POST',
+        body: JSON.stringify({
+          items: [{ name: concurrentSnapshotName, category: categoryName, unit: '件', qty: 6 }],
+          reason: '并发创建快照 B',
+        }),
+      }),
+    ])
+    concurrentNewSnapshot.forEach(result => {
+      assert.equal(result.status, 200, JSON.stringify(result.body))
+      assert.equal(result.body.summary.failed, 0, JSON.stringify(result.body))
+    })
+    const concurrentProducts = await prisma.product.findMany({
+      where: { tenantId: tenant.id, supplierId: supplier.id, name: concurrentSnapshotName },
+    })
+    assert.equal(concurrentProducts.length, 1, '并发快照不得创建同名重复 SKU')
+    assert.equal(Number(concurrentProducts[0].stock), 6)
+    assert.equal(await prisma.supplierStockMovement.count({ where: { productId: concurrentProducts[0].id } }), 1)
 
     const foreignInbound = await api('/api/supplier/stock/inbound', token, {
       method: 'POST',
@@ -229,6 +302,9 @@ async function main() {
     console.log(JSON.stringify({
       ok: true,
       crossTenantIsolation: true,
+      strictQuantityAndDateValidation: true,
+      excessiveLossRejected: true,
+      snapshotDuplicateAndCreateRaceSafe: true,
       concurrentInbound: true,
       inboundLossRace: true,
       inverseBatchDeadlockSafe: true,
@@ -236,6 +312,18 @@ async function main() {
       snapshotRace: true,
     }))
   } finally {
+    const snapshotProducts = await prisma.product.findMany({
+      where: {
+        tenantId: tenant.id,
+        supplierId: supplier.id,
+        name: { in: [concurrentSnapshotName, duplicateSnapshotName] },
+      },
+      select: { id: true },
+    })
+    await prisma.supplierStockMovement.deleteMany({
+      where: { productId: { in: snapshotProducts.map(product => product.id) } },
+    })
+    await prisma.product.deleteMany({ where: { id: { in: snapshotProducts.map(product => product.id) } } })
     await prisma.supplierStockMovement.deleteMany({ where: { productId: { in: products.map(product => product.id) } } })
     await prisma.product.deleteMany({ where: { id: { in: products.map(product => product.id) } } })
     await prisma.supplierProductCategory.deleteMany({

@@ -7,13 +7,15 @@
  *  - 销量榜 / 食材消耗推算
  */
 import { FastifyPluginAsync } from 'fastify'
-import { prisma } from '@dianjie/db'
+import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import dayjs from 'dayjs'
 import { monthRangeForDateCol } from '../lib/dateRange'
+import { isStoreScoped } from '../lib/auth-scope'
 
 const CHEF_ROLES = ['CHEF_DIRECTOR', 'CHEF', 'ADMIN', 'SUPER_ADMIN']
 const VIEW_ROLES = [...CHEF_ROLES, 'FINANCE', 'MANAGER', 'KITCHEN_LEAD']
+const SALE_WRITE_ROLES = ['MANAGER', 'KITCHEN_LEAD', ...CHEF_ROLES]
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
 const dishSchema = z.object({
@@ -44,9 +46,30 @@ const saleSchema = z.object({
   date:        z.string(),
   quantity:    z.number().nonnegative(),
   grossAmount: z.number().nonnegative(),
-  source:      z.string().optional().default('manual'),
+  source:      z.literal('manual').optional().default('manual'),
   channel:     z.string().optional(),
 })
+
+function dateOnly(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return null
+  const parsed = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])))
+  if (
+    parsed.getUTCFullYear() !== Number(match[1])
+    || parsed.getUTCMonth() !== Number(match[2]) - 1
+    || parsed.getUTCDate() !== Number(match[3])
+  ) return null
+  return parsed
+}
+
+function scopedStoreId(user: any, requestedStoreId?: string) {
+  if (!isStoreScoped(user.role)) return requestedStoreId || null
+  if (!user.storeId) throw Object.assign(new Error('当前账号没有绑定门店'), { statusCode: 403 })
+  if (requestedStoreId && requestedStoreId !== user.storeId) {
+    throw Object.assign(new Error('只能操作当前账号绑定的门店'), { statusCode: 403 })
+  }
+  return user.storeId
+}
 
 /** 算菜品的食材成本 (基于当前配方 + Product.price) */
 async function calcDishCost(dishId: string): Promise<number> {
@@ -193,6 +216,9 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     // 校验 product 是否属于本 tenant
     const product = await prisma.product.findFirst({ where: { id: parsed.data.productId, tenantId } })
     if (!product) return reply.status(400).send({ error: '食材 SKU 不存在' })
+    if (parsed.data.unit !== product.unit) {
+      return reply.status(400).send({ error: `配方单位必须与食材库存单位一致（${product.unit}）` })
+    }
     try {
       const r = await prisma.dishRecipe.create({
         data: { dishId: req.params.id, ...parsed.data },
@@ -212,9 +238,19 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     // 校验 recipe 归属(经 dishId → dish.tenantId)
     const recipe = await prisma.dishRecipe.findUnique({
       where: { id: req.params.rid },
-      include: { dish: { select: { tenantId: true } } },
+      include: { dish: { select: { tenantId: true } }, product: { select: { id: true, tenantId: true, unit: true } } },
     })
     if (!recipe || recipe.dish.tenantId !== tenantId) return reply.status(404).send({ error: '配方不存在' })
+    const product = parsed.data.productId && parsed.data.productId !== recipe.productId
+      ? await prisma.product.findFirst({ where: { id: parsed.data.productId, tenantId }, select: { id: true, unit: true } })
+      : recipe.product
+    if (!product || (product as any).tenantId && (product as any).tenantId !== tenantId) {
+      return reply.status(400).send({ error: '食材 SKU 不存在' })
+    }
+    const nextUnit = parsed.data.unit || recipe.unit
+    if (nextUnit !== product.unit) {
+      return reply.status(400).send({ error: `配方单位必须与食材库存单位一致（${product.unit}）` })
+    }
     const r = await prisma.dishRecipe.update({ where: { id: req.params.rid }, data: parsed.data })
     return r
   })
@@ -233,7 +269,7 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 销量 ──────────────────────────────────────────
   app.get('/sales', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role, storeId } = req.user
+    const { tenantId, role } = req.user
     if (!VIEW_ROLES.includes(role)) return reply.status(403).send({ error: '无权' })
     const { from, to, storeId: qStore } = req.query as any
     const where: any = { tenantId }
@@ -242,8 +278,12 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
       if (from) where.date.gte = new Date(from)
       if (to) where.date.lte = new Date(to)
     }
-    if (qStore) where.storeId = qStore
-    else if (role === 'MANAGER' && storeId) where.storeId = storeId
+    try {
+      const targetStoreId = scopedStoreId(req.user, qStore)
+      if (targetStoreId) where.storeId = targetStoreId
+    } catch (error: any) {
+      return reply.status(error.statusCode || 403).send({ error: error.message })
+    }
     return prisma.dishSale.findMany({
       where, orderBy: { date: 'desc' }, take: 500,
       include: { dish: { select: { name: true, salePrice: true } }, store: { select: { name: true } } },
@@ -251,75 +291,63 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
   })
 
   app.post('/sales', auth(app), async (req: any, reply: any) => {
-    const { tenantId, userId, role, storeId: userStoreId } = req.user
-    if (!['MANAGER', 'ADMIN', 'SUPER_ADMIN', 'CHEF_DIRECTOR', 'CHEF'].includes(role)) {
+    const { tenantId, userId, role } = req.user
+    if (!SALE_WRITE_ROLES.includes(role)) {
       return reply.status(403).send({ error: '无权录入销量' })
     }
     const parsed = saleSchema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
     const d = parsed.data
-    if (role === 'MANAGER' && userStoreId && d.storeId !== userStoreId) {
-      return reply.status(403).send({ error: '店长只能录本店' })
+    const saleDate = dateOnly(d.date)
+    if (!saleDate) return reply.status(400).send({ error: '营业日期格式错误，请使用 YYYY-MM-DD' })
+    try {
+      scopedStoreId(req.user, d.storeId)
+    } catch (error: any) {
+      return reply.status(error.statusCode || 403).send({ error: error.message })
     }
-    const wasUpdate = await prisma.dishSale.findUnique({
-      where: {
-        storeId_dishId_date_source: {
-          storeId: d.storeId, dishId: d.dishId,
-          date: new Date(d.date), source: d.source,
-        },
-      },
-    })
-    const prevQty = wasUpdate ? Number(wasUpdate.quantity) : 0
-    const sale = await prisma.dishSale.upsert({
-      where: {
-        storeId_dishId_date_source: {
-          storeId: d.storeId, dishId: d.dishId,
-          date: new Date(d.date), source: d.source,
-        },
-      },
-      update: { quantity: d.quantity, grossAmount: d.grossAmount, channel: d.channel },
-      create: {
-        tenantId, storeId: d.storeId, dishId: d.dishId,
-        date: new Date(d.date), quantity: d.quantity, grossAmount: d.grossAmount,
-        source: d.source, channel: d.channel,
-        createdById: userId,
-      },
-    })
+    const [store, dish] = await Promise.all([
+      prisma.store.findFirst({ where: { id: d.storeId, tenantId }, select: { id: true } }),
+      prisma.dish.findFirst({ where: { id: d.dishId, tenantId }, select: { id: true, inventoryPolicy: true } }),
+    ])
+    if (!store) return reply.status(404).send({ error: '门店不存在' })
+    if (!dish) return reply.status(404).send({ error: '菜品不存在' })
 
-    // 自动扣库存 — 销量 × BOM = 食材消耗
-    // 幂等: 同 sourceType+sourceId+productId 唯一; 改销量时先删旧再写新
-    const qtyChanged = !wasUpdate || Math.abs(prevQty - Number(d.quantity)) > 0.001
-    if (qtyChanged) {
-      const recipes = await prisma.dishRecipe.findMany({
-        // 手工销量没有 POS 规格字段，只允许使用默认 BOM，不能把大/小份配方叠加。
+    const sale = await prisma.$transaction(async tx => {
+      const saleLock = `dish-sale:${tenantId}:${d.storeId}:${d.dishId}:${d.date}`
+      await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${saleLock}))`)
+      const unique = {
+        storeId: d.storeId, dishId: d.dishId, date: saleDate, source: d.source,
+      }
+      const wasUpdate = await tx.dishSale.findUnique({ where: { storeId_dishId_date_source: unique } })
+      const saved = await tx.dishSale.upsert({
+        where: { storeId_dishId_date_source: unique },
+        update: { quantity: d.quantity, grossAmount: d.grossAmount, channel: d.channel },
+        create: {
+          tenantId, storeId: d.storeId, dishId: d.dishId,
+          date: saleDate, quantity: d.quantity, grossAmount: d.grossAmount,
+          source: d.source, channel: d.channel, createdById: userId,
+        },
+      })
+      const qtyChanged = !wasUpdate || Math.abs(Number(wasUpdate.quantity) - Number(d.quantity)) > 0.001
+      if (!qtyChanged) return saved
+      await tx.stockConsumption.deleteMany({ where: { sourceType: 'dish_sale', sourceId: saved.id } })
+      if (dish.inventoryPolicy === 'EXCLUDE') return saved
+      const recipes = await tx.dishRecipe.findMany({
         where: { dishId: d.dishId, variantKey: '' },
         select: { productId: true, quantity: true, lossRate: true },
       })
-      const srcType = 'dish_sale'
-      const srcId = sale.id
-      if (wasUpdate) {
-        // 删除旧的 StockConsumption (该 sale 已有)
-        await prisma.stockConsumption.deleteMany({
-          where: { sourceType: srcType, sourceId: srcId },
-        })
-      }
-      // 新建对应每食材的消耗记录
-      for (const r of recipes) {
-        const need = Number(d.quantity) * Number(r.quantity) * (1 + Number(r.lossRate))
-        if (need <= 0) continue
-        await prisma.stockConsumption.create({
-          data: {
-            tenantId, storeId: d.storeId, productId: r.productId,
-            date: new Date(d.date),
-            quantity: Math.round(need * 10000) / 10000,
-            note: `菜品销售 ${d.quantity} 份`,
-            sourceType: srcType,
-            sourceId: srcId,
-            createdById: userId,
-          },
-        })
-      }
-    }
+      const consumptions = recipes.flatMap(recipe => {
+        const need = Number(d.quantity) * Number(recipe.quantity) * (1 + Number(recipe.lossRate))
+        if (need <= 0) return []
+        return [{
+          tenantId, storeId: d.storeId, productId: recipe.productId, date: saleDate,
+          quantity: new Prisma.Decimal(need.toFixed(6)), note: `菜品销售 ${d.quantity} 份`,
+          sourceType: 'dish_sale', sourceId: saved.id, createdById: userId,
+        }]
+      })
+      if (consumptions.length > 0) await tx.stockConsumption.createMany({ data: consumptions })
+      return saved
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 30_000 })
     return sale
   })
 
@@ -332,7 +360,12 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     // DishSale.date 是 PG DATE 列, 用 UTC 边界防 timezone 跨日
     const { start, end } = monthRangeForDateCol(ym)
     const where: any = { tenantId, date: { gte: start, lte: end } }
-    if (storeId) where.storeId = storeId
+    try {
+      const targetStoreId = scopedStoreId(req.user, storeId)
+      if (targetStoreId) where.storeId = targetStoreId
+    } catch (error: any) {
+      return reply.status(error.statusCode || 403).send({ error: error.message })
+    }
     const rows = await prisma.dishSale.groupBy({
       by: ['dishId'],
       where,
@@ -384,7 +417,12 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
       if (from) where.date.gte = new Date(from)
       if (to) where.date.lte = new Date(to)
     }
-    if (storeId) where.storeId = storeId
+    try {
+      const targetStoreId = scopedStoreId(req.user, storeId)
+      if (targetStoreId) where.storeId = targetStoreId
+    } catch (error: any) {
+      return reply.status(error.statusCode || 403).send({ error: error.message })
+    }
 
     const sales = await prisma.dishSale.findMany({
       where,

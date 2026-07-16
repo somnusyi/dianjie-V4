@@ -14,14 +14,22 @@ const ACCESS_TTL_MS = 2 * 60 * 60 * 1000
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 // identifier: 手机号 (11 位) 或邮箱; 兼容旧字段 email
+const tenantSlugSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9-]+$/i, '租户标识格式不正确')
 const loginSchema = z.object({
-  identifier: z.string().trim().optional(),
-  email:      z.string().trim().optional(),
-  password:   z.string().min(1, '密码不能为空'),
-  tenantSlug: z.string().default('dianjie'),
-}).refine(d => !!(d.identifier?.length || d.email?.length), {
+  identifier: z.string().trim().max(120).optional(),
+  email:      z.string().trim().max(120).optional(),
+  password:   z.string().min(1, '密码不能为空').max(72),
+  tenantSlug: tenantSlugSchema.default('dianjie'),
+}).strict().refine(d => !!(d.identifier?.length || d.email?.length), {
   message: '请输入手机号或邮箱',
 })
+
+const refreshSchema = z.object({ token: z.string().min(1).max(4096) }).strict()
+const logoutSchema = z.object({ refreshToken: z.string().max(4096).optional() }).strict()
+const changePasswordSchema = z.object({
+  oldPassword: z.string().min(1).max(72),
+  newPassword: z.string().min(6, '新密码至少 6 位').max(72),
+}).strict().refine(data => data.oldPassword !== data.newPassword, { message: '新密码不能与原密码相同' })
 
 const PHONE_RE = /^1[3-9]\d{9}$/
 
@@ -95,20 +103,15 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const token        = app.jwt.sign(accessPayload,  { expiresIn: ACCESS_TTL })
     const refreshToken = app.jwt.sign(refreshPayload, { expiresIn: REFRESH_TTL })
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { lastLoginAt: new Date() },
-    })
-
-    await prisma.opLog.create({
-      data: {
-        tenantId: tenant.id,
-        userId: user.id,
-        role: user.role,
-        action: '用户登录',
-        ip: request.ip,
-      },
-    })
+    await prisma.$transaction([
+      prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } }),
+      prisma.opLog.create({
+        data: {
+          tenantId: tenant.id, userId: user.id, role: user.role,
+          action: '用户登录', ip: request.ip,
+        },
+      }),
+    ])
 
     return reply.send({
       token,
@@ -129,9 +132,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // POST /api/auth/refresh — 用 refresh token 换新 access
-  app.post('/refresh', async (request, reply) => {
-    const { token: rt } = (request.body || {}) as any
-    if (!rt) return reply.status(400).send({ error: '缺 refresh token' })
+  app.post('/refresh', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+  }, async (request, reply) => {
+    const parsed = refreshSchema.safeParse(request.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const rt = parsed.data.token
 
     let decoded: any
     try {
@@ -149,14 +155,15 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     })
     if (revoked) return reply.status(401).send({ error: 'refresh token 已撤销, 请重新登录' })
 
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
+    const user = await prisma.user.findFirst({
+      where: { id: decoded.userId, tenantId: decoded.tenantId },
       include: {
         store:    { select: { id: true, name: true, no: true } },
         supplier: { select: { id: true, name: true } },
+        tenant: { select: { status: true } },
       },
     })
-    if (!user || user.status !== 'ACTIVE') {
+    if (!user || user.status !== 'ACTIVE' || user.tenant.status !== 'ACTIVE') {
       return reply.status(401).send({ error: '用户不存在或已停用' })
     }
 
@@ -207,9 +214,11 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // POST /api/auth/logout — 撤销 refresh token (核心), 顺便记一笔 access
-  app.post('/logout', { preHandler: [(app as any).authenticate] }, async (request: any) => {
+  app.post('/logout', { preHandler: [(app as any).authenticate] }, async (request: any, reply) => {
     const { userId, tenantId, jti: accessJti } = request.user
-    const { refreshToken: rt } = (request.body || {}) as any
+    const parsed = logoutSchema.safeParse(request.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const rt = parsed.data.refreshToken
 
     // 撤销 access (虽 2h 自然失效, 记录便于审计 + 异常追溯).
     // access 撤销是 audit-only, 不影响业务流程 → 这里吞错保住 logout 主路径成功
@@ -254,28 +263,28 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // POST /api/auth/change-password — 登录用户自助修改密码 (供应商等所有角色通用)
-  app.post('/change-password', { preHandler: [(app as any).authenticate] }, async (request: any, reply) => {
+  app.post('/change-password', {
+    preHandler: [(app as any).authenticate],
+    config: { rateLimit: { max: 10, timeWindow: '1 hour' } },
+  }, async (request: any, reply) => {
     const { userId, tenantId } = request.user
-    const { oldPassword, newPassword } = (request.body || {}) as any
-    if (!oldPassword || !newPassword) {
-      return reply.status(400).send({ error: '请填写原密码和新密码' })
-    }
-    if (typeof newPassword !== 'string' || newPassword.length < 6) {
-      return reply.status(400).send({ error: '新密码至少 6 位' })
-    }
-    if (oldPassword === newPassword) {
-      return reply.status(400).send({ error: '新密码不能与原密码相同' })
-    }
-    const user = await prisma.user.findUnique({ where: { id: userId } })
-    if (!user) return reply.status(404).send({ error: '用户不存在' })
-    const valid = await bcrypt.compare(oldPassword, user.password)
-    if (!valid) return reply.status(401).send({ error: '原密码错误' })
-
-    const hashed = await bcrypt.hash(newPassword, 10)
-    await prisma.user.update({ where: { id: userId }, data: { password: hashed } })
-    await prisma.opLog.create({
-      data: { tenantId, userId, role: user.role, action: '修改密码', ip: request.ip },
+    const parsed = changePasswordSchema.safeParse(request.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const hashed = await bcrypt.hash(parsed.data.newPassword, 10)
+    const result = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`user-password:${userId}`}))::text AS locked`
+      const user = await tx.user.findFirst({ where: { id: userId, tenantId, status: 'ACTIVE' } })
+      if (!user) return { status: 404, error: '用户不存在或已停用' }
+      if (!await bcrypt.compare(parsed.data.oldPassword, user.password)) {
+        return { status: 401, error: '原密码错误' }
+      }
+      await tx.user.update({ where: { id: user.id }, data: { password: hashed } })
+      await tx.opLog.create({
+        data: { tenantId, userId, role: user.role, action: '修改密码', ip: request.ip },
+      })
+      return { status: 200, ok: true }
     })
+    if ('error' in result) return reply.status(result.status).send({ error: result.error })
     return reply.send({ success: true, message: '密码已修改, 下次登录请用新密码' })
   })
 }

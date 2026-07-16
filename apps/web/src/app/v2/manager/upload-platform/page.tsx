@@ -1,15 +1,16 @@
 /** 店长每日两表上传：综合营业统计 + 菜品销售明细。 */
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { apiFetch, getUser } from '@/lib/v2-auth'
+import { canConfirmDailyImport, formatUploadFileSize, IMPORT_STATUS, type DailyImportStatus } from './upload-state'
 
 type Issue = { code: string; message: string; detail?: string }
 type ImportRecord = {
   id: string
   businessDate: string
   revision: number
-  status: 'PREVIEWED' | 'CONFIRMING' | 'CONFIRMED' | 'SUPERSEDED'
+  status: DailyImportStatus
   businessFileName: string
   salesFileName: string
   grossAmount: number
@@ -41,7 +42,6 @@ type DailyStatus = {
 
 const money = (value: number) => `¥${Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 const shortDate = (value: string) => String(value || '').slice(0, 10)
-
 export default function DailyBusinessUploadPage() {
   const [status, setStatus] = useState<DailyStatus | null>(null)
   const [businessFile, setBusinessFile] = useState<File | null>(null)
@@ -51,17 +51,26 @@ export default function DailyBusinessUploadPage() {
   const [error, setError] = useState<string | null>(null)
   const user = useMemo(() => getUser(), [])
 
-  async function loadStatus() {
+  const loadStatus = useCallback(async (quiet = false, selectLatest = false) => {
     try {
       const data = await apiFetch<DailyStatus>('/api/daily-business-imports/status')
       setStatus(data)
-      if (data.latest?.status === 'PREVIEWED') setPreview(data.latest)
+      setPreview(current => {
+        if (data.latest?.status === 'PREVIEWED' && (current?.id === data.latest.id || (selectLatest && !current))) return data.latest
+        if (current) return data.history.find(row => row.id === current.id) || current
+        return null
+      })
+      if (!quiet) setError(null)
     } catch (reason: any) {
-      setError(reason.message || '状态加载失败')
+      if (!quiet) setError(reason.message || '状态加载失败')
     }
-  }
+  }, [])
 
-  useEffect(() => { loadStatus() }, [])
+  useEffect(() => {
+    loadStatus(false, true)
+    const timer = window.setInterval(() => loadStatus(true), 60_000)
+    return () => window.clearInterval(timer)
+  }, [loadStatus])
 
   function selectFile(kind: 'business' | 'sales') {
     const input = document.createElement('input')
@@ -89,21 +98,21 @@ export default function DailyBusinessUploadPage() {
       if (user?.storeId) form.append('storeId', user.storeId)
       const result = await apiFetch<ImportRecord>('/api/daily-business-imports/preview', { method: 'POST', body: form })
       setPreview(result)
-      await loadStatus()
+      await loadStatus(true)
     } catch (reason: any) {
       setError(reason.message || '预览失败')
     } finally { setBusy(false) }
   }
 
   async function confirmImport() {
-    if (!preview || preview.blockingIssues.length > 0) return
+    if (!preview || !canConfirmDailyImport(preview.status, preview.blockingIssues.length)) return
     if (!window.confirm(`确认导入 ${shortDate(preview.businessDate)} 的营业与销量数据，并按 BOM 扣减库存？`)) return
     setBusy(true); setError(null)
     try {
       const result = await apiFetch<ImportRecord>(`/api/daily-business-imports/${preview.id}/confirm`, { method: 'POST' })
       setPreview(result)
       setBusinessFile(null); setSalesFile(null)
-      await loadStatus()
+      await loadStatus(true)
     } catch (reason: any) {
       if (reason?.data?.code === 'PREVIEW_REFRESHED' && reason.data.import) {
         setPreview(reason.data.import)
@@ -188,7 +197,25 @@ export default function DailyBusinessUploadPage() {
               <span>销售 {preview.previewData?.dishSales?.length || preview.dishRowCount} 个菜品</span>
               <span>扣减 {preview.previewData?.consumptions?.length || 0} 个食材 SKU</span>
             </div>
+            <div className="px-3 py-2 border-t border-border text-micro text-gray3 space-y-1">
+              <div className="truncate">营业表：{preview.businessFileName}</div>
+              <div className="truncate">销售表：{preview.salesFileName}</div>
+            </div>
           </div>
+
+          {preview.previewData?.consumptions?.length > 0 && (
+            <details className="mt-3 bg-white rounded-card border border-border">
+              <summary className="px-3 py-3 text-caption cursor-pointer">查看预计食材扣减明细（{preview.previewData.consumptions.length} 项）</summary>
+              <div className="border-t border-border divide-y divide-border max-h-72 overflow-auto">
+                {preview.previewData.consumptions.map((row, index) => (
+                  <div key={`${row.productName}-${index}`} className="px-3 py-2 flex justify-between gap-3 text-caption">
+                    <span className="min-w-0 truncate">{row.productName}</span>
+                    <span className="font-num whitespace-nowrap">{Number(row.quantity).toLocaleString('zh-CN', { maximumFractionDigits: 6 })} {row.unit}</span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
 
           {preview.blockingIssues.length > 0 && (
             <IssueBox tone="red" title={`${preview.blockingIssues.length} 项问题阻止确认`} issues={preview.blockingIssues} />
@@ -199,10 +226,14 @@ export default function DailyBusinessUploadPage() {
 
           {preview.status === 'CONFIRMED' ? (
             <div className="mt-3 py-3 rounded-cta bg-green-bg text-green-fg text-button text-center">✓ 已确认并更新数据</div>
+          ) : preview.status === 'SUPERSEDED' ? (
+            <div className="mt-3 py-3 rounded-cta bg-bg text-gray3 text-button text-center">此版本已被新版替代，仅供审计查看</div>
+          ) : preview.status === 'CONFIRMING' ? (
+            <div className="mt-3 py-3 rounded-cta bg-blue/10 text-blue-fg text-button text-center">正在确认，请稍后刷新状态</div>
           ) : (
             <button
               onClick={confirmImport}
-              disabled={busy || preview.blockingIssues.length > 0}
+              disabled={busy || !canConfirmDailyImport(preview.status, preview.blockingIssues.length)}
               className="w-full mt-3 py-3 rounded-cta bg-amber text-white text-button disabled:opacity-35"
             >{busy ? '确认中…' : preview.previewData?.existingConfirmedRevision ? '确认更正并替换旧版' : '确认导入并扣减库存'}</button>
           )}
@@ -213,7 +244,9 @@ export default function DailyBusinessUploadPage() {
       <section className="px-4 mt-6">
         <div className="flex items-baseline justify-between mb-2">
           <h2 className="text-h2">导入历史</h2>
-          <span className="text-caption text-gray3">{status?.history.length || 0} 条</span>
+          <button onClick={() => loadStatus()} disabled={busy} className="text-caption text-amber-fg disabled:opacity-35">
+            刷新 · {status?.history.length || 0} 条
+          </button>
         </div>
         <div className="bg-white rounded-card border border-border divide-y divide-border">
           {!status && <div className="p-4 text-caption text-gray3 text-center">加载中…</div>}
@@ -224,10 +257,9 @@ export default function DailyBusinessUploadPage() {
                 <div className="text-body">{shortDate(row.businessDate)} · {money(row.netRevenue)}</div>
                 <div className="text-micro text-gray3 mt-0.5 truncate">第 {row.revision} 版 · {row.orderCount} 笔 · {row.businessFileName}</div>
               </div>
-              <span className={`text-micro px-2 py-1 rounded-chip ${
-                row.status === 'CONFIRMED' ? 'bg-green-bg text-green-fg' :
-                  row.status === 'SUPERSEDED' ? 'bg-bg text-gray3' : 'bg-orange-bg text-orange-fg'
-              }`}>{row.status === 'CONFIRMED' ? '已确认' : row.status === 'SUPERSEDED' ? '旧版本' : '待确认'}</span>
+              <span className={`text-micro px-2 py-1 rounded-chip ${IMPORT_STATUS[row.status].badge}`}>
+                {IMPORT_STATUS[row.status].label}
+              </span>
             </button>
           ))}
         </div>
@@ -242,7 +274,9 @@ function FileCard({ title, hint, file, onPick }: { title: string; hint: string; 
       <span className={`w-10 h-10 rounded-md flex items-center justify-center ${file ? 'bg-green-bg text-green-fg' : 'bg-bg text-gray3'}`}>{file ? '✓' : '⇪'}</span>
       <div className="flex-1 min-w-0">
         <div className="text-button">{title}</div>
-        <div className={`text-micro mt-0.5 truncate ${file ? 'text-green-fg' : 'text-gray3'}`}>{file?.name || hint}</div>
+        <div className={`text-micro mt-0.5 truncate ${file ? 'text-green-fg' : 'text-gray3'}`}>
+          {file ? `${file.name} · ${formatUploadFileSize(file.size)}` : hint}
+        </div>
       </div>
       <span className="text-caption text-gray3">{file ? '更换' : '选择'}</span>
     </button>

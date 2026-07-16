@@ -6,7 +6,17 @@ const prisma = new PrismaClient()
 const hash = (pw: string) => bcrypt.hashSync(pw, 10)
 const d = (s: string) => new Date(s)
 
+function requiredDemoPassword() {
+  if (process.env.NODE_ENV === 'production' || process.env.ALLOW_DEMO_SEED !== 'true') {
+    throw new Error('安全护栏: 演示种子仅允许非生产环境且必须显式设置 ALLOW_DEMO_SEED=true')
+  }
+  const password = process.env.DEMO_SEED_PASSWORD || ''
+  if (password.length < 12) throw new Error('安全护栏: DEMO_SEED_PASSWORD 必须至少 12 位')
+  return password
+}
+
 async function main() {
+  const seedPassword = requiredDemoPassword()
   console.log('🌱 开始初始化种子数据...')
 
   // ── 租户 ──────────────────────────────────────────
@@ -20,12 +30,12 @@ async function main() {
   const admin = await prisma.user.upsert({
     where: { tenantId_email: { tenantId: tenant.id, email: 'admin@dianjie.com' } },
     update: {},
-    create: { tenantId: tenant.id, name: '系统管理员', email: 'admin@dianjie.com', password: hash('admin123'), role: Role.ADMIN },
+    create: { tenantId: tenant.id, name: '系统管理员', email: 'admin@dianjie.com', password: hash(seedPassword), role: Role.ADMIN },
   })
   const finance = await prisma.user.upsert({
     where: { tenantId_email: { tenantId: tenant.id, email: 'finance@dianjie.com' } },
     update: {},
-    create: { tenantId: tenant.id, name: '李慧芳', email: 'finance@dianjie.com', password: hash('fin123'), role: Role.FINANCE },
+    create: { tenantId: tenant.id, name: '李慧芳', email: 'finance@dianjie.com', password: hash(seedPassword), role: Role.FINANCE },
   })
 
   // ── 门店 ──────────────────────────────────────────
@@ -51,12 +61,12 @@ async function main() {
   const mgr1 = await prisma.user.upsert({
     where: { tenantId_email: { tenantId: tenant.id, email: 'manager1@dianjie.com' } },
     update: {},
-    create: { tenantId: tenant.id, name: '王建国', email: 'manager1@dianjie.com', password: hash('mgr123'), role: Role.MANAGER, storeId: stores[0].id },
+    create: { tenantId: tenant.id, name: '王建国', email: 'manager1@dianjie.com', password: hash(seedPassword), role: Role.MANAGER, storeId: stores[0].id },
   })
   const mgr2 = await prisma.user.upsert({
     where: { tenantId_email: { tenantId: tenant.id, email: 'manager2@dianjie.com' } },
     update: {},
-    create: { tenantId: tenant.id, name: '张晓燕', email: 'manager2@dianjie.com', password: hash('mgr123'), role: Role.MANAGER, storeId: stores[1].id },
+    create: { tenantId: tenant.id, name: '张晓燕', email: 'manager2@dianjie.com', password: hash(seedPassword), role: Role.MANAGER, storeId: stores[1].id },
   })
 
   console.log('✓ 用户 & 门店创建完成')
@@ -102,7 +112,7 @@ async function main() {
     update: {},
     create: {
       tenantId: tenant.id, name: '赵总（楚雄菌业）',
-      email: 'supplier1@dianjie.com', password: hash('sup123'),
+      email: 'supplier1@dianjie.com', password: hash(seedPassword),
       role: 'SUPPLIER_STAFF' as Role,
     },
   })
@@ -111,7 +121,7 @@ async function main() {
     update: {},
     create: {
       tenantId: tenant.id, name: '扎西（迪庆蔬菜）',
-      email: 'supplier2@dianjie.com', password: hash('sup123'),
+      email: 'supplier2@dianjie.com', password: hash(seedPassword),
       role: 'SUPPLIER_STAFF' as Role,
     },
   })

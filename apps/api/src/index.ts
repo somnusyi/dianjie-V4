@@ -79,6 +79,14 @@ import { meituanAdminRoutes } from './routes/meituanAdmin'
 import { meituanDataRoutes } from './routes/meituanData'
 import { dailyBusinessImportRoutes } from './routes/dailyBusinessImports'
 
+function resolveJwtSecret() {
+  const secret = process.env.JWT_SECRET || ''
+  if (process.env.NODE_ENV === 'production' && (secret.length < 32 || secret === 'change_me_in_production')) {
+    throw new Error('生产环境 JWT_SECRET 必须配置为至少 32 位的独立随机值')
+  }
+  return secret || 'local-development-only-jwt-secret'
+}
+
 const app = Fastify({
   logger: {
     transport: process.env.NODE_ENV === 'development'
@@ -146,7 +154,7 @@ async function bootstrap() {
     timeWindow: '1 minute',
   })
   await app.register(jwt, {
-    secret: process.env.JWT_SECRET || 'change_me_in_production',
+    secret: resolveJwtSecret(),
   })
 
   // ── 认证装饰器 ────────────────────────
@@ -162,7 +170,7 @@ async function bootstrap() {
           scope.setTags({
             'tenant.id': u.tenantId,
             'user.role': u.role || 'unknown',
-            'http.route': request.routerPath || request.url,
+            'http.route': request.routeOptions?.url || request.url,
           })
           scope.setUser({ id: u.userId, segment: u.role })
         }
@@ -267,16 +275,17 @@ async function bootstrap() {
       const u = (request as any).user
       Sentry.captureException(error, {
         tags: {
-          'http.route':  (request as any).routerPath || request.url,
+          'http.route': request.routeOptions?.url || request.url,
           'http.method': request.method,
           ...(u?.tenantId ? { 'tenant.id': u.tenantId, 'user.role': u.role || 'unknown' } : {}),
         },
         extra: { url: request.url, method: request.method, statusCode, userId: u?.userId },
       })
     }
-    reply.status(statusCode).send({
-      error: error.message || '服务器内部错误',
-    })
+    const publicMessage = statusCode >= 500 && process.env.NODE_ENV === 'production'
+      ? '服务器内部错误'
+      : (error.message || '服务器内部错误')
+    reply.status(statusCode).send({ error: publicMessage })
   })
 
   // ── 启动账期调度器 ────────────────────

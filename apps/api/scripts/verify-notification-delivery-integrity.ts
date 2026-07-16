@@ -22,6 +22,12 @@ async function markRead(id: string, token: string) {
   })
 }
 
+async function authenticated(path: string, token: string, method = 'GET') {
+  return fetch(`${API_BASE}/api/notifications${path}`, {
+    method, headers: { authorization: `Bearer ${token}` },
+  })
+}
+
 async function main() {
   assertLocalOnly()
   const suffix = Date.now().toString(36)
@@ -109,9 +115,21 @@ async function main() {
     const tokenFor = (target: typeof user) => sign({
       userId: target.id, tenantId: tenant.id, role: target.role, typ: 'access', ver: 0,
     })
-    assert.equal((await markRead(direct.id, tokenFor(otherUser))).status, 404)
+    const otherToken = tokenFor(otherUser)
+    const intendedToken = tokenFor(user)
+    assert.equal((await authenticated('?page=NaN', otherToken)).status, 400)
+    assert.equal((await authenticated('?forged=true', otherToken)).status, 400)
+    const otherList = await authenticated('?unreadOnly=true&page=1&pageSize=50', otherToken)
+    assert.equal(otherList.status, 200)
+    assert.equal((await otherList.json() as any).items.some((item: any) => item.id === direct.id), false)
+    assert.equal((await authenticated('/read-all', otherToken, 'PATCH')).status, 200)
     assert.equal((await prisma.notification.findUniqueOrThrow({ where: { id: direct.id } })).read, false)
-    assert.equal((await markRead(direct.id, tokenFor(user))).status, 200)
+    assert.equal((await markRead(direct.id, otherToken)).status, 404)
+    assert.equal((await prisma.notification.findUniqueOrThrow({ where: { id: direct.id } })).read, false)
+    const intendedList = await authenticated('?unreadOnly=true&page=1&pageSize=50', intendedToken)
+    assert.equal(intendedList.status, 200)
+    assert.equal((await intendedList.json() as any).items.some((item: any) => item.id === direct.id), true)
+    assert.equal((await markRead(direct.id, intendedToken)).status, 200)
     assert.equal((await prisma.notification.findUniqueOrThrow({ where: { id: direct.id } })).read, true)
 
     console.log(JSON.stringify({
@@ -123,6 +141,8 @@ async function main() {
       bypassFrequencyPreserved: true,
       reservationFailureFailClosed: true,
       directNotificationReadIsolated: true,
+      directNotificationListAndReadAllIsolated: true,
+      notificationListQueryValidated: true,
     }))
   } finally {
     await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${triggerName}" ON "notification_logs"`).catch(() => {})

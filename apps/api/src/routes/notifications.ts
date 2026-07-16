@@ -3,13 +3,20 @@ import { prisma } from '@dianjie/db'
 import { z } from 'zod'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
+const listQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).max(100_000).default(1),
+  pageSize: z.coerce.number().int().min(1).max(50).default(20),
+  unreadOnly: z.enum(['true', 'false']).optional().transform(value => value === 'true'),
+}).strict()
 
 export const notificationRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 通知列表（当前用户，分页）──────────────────────
-  app.get('/', auth(app), async (req: any) => {
+  app.get('/', auth(app), async (req: any, reply: any) => {
     const { tenantId, userId, role } = req.user
-    const { page = '1', pageSize = '20', unreadOnly } = req.query as any
+    const parsed = listQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: '通知查询参数格式不正确' })
+    const { page, pageSize, unreadOnly } = parsed.data
 
     const where: any = {
       tenantId,
@@ -18,22 +25,19 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
         { recipientId: null, recipientRole: role },
       ],
     }
-    if (unreadOnly === 'true') where.read = false
-
-    const p = Math.max(1, parseInt(page))
-    const ps = Math.min(50, Math.max(1, parseInt(pageSize)))
+    if (unreadOnly) where.read = false
 
     const [items, total] = await Promise.all([
       prisma.notification.findMany({
         where,
         orderBy: { createdAt: 'desc' },
-        skip: (p - 1) * ps,
-        take: ps,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
       }),
       prisma.notification.count({ where }),
     ])
 
-    return { items, total, page: p, pageSize: ps }
+    return { items, total, page, pageSize }
   })
 
   // ── 未读数量（轻量接口，给角标用）──────────────────

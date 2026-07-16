@@ -6,12 +6,31 @@ import { cached, invalidatePattern } from '../lib/cache'
 import { isStoreScoped } from '../lib/auth-scope'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
+const SENSITIVE_STORE_ROLES = new Set(['ADMIN', 'SUPER_ADMIN', 'FINANCE'])
+const SAFE_STORE_SELECT = {
+  id: true, no: true, name: true, address: true, phone: true, managerName: true,
+  consigneeId: true, status: true, lifecyclePhase: true, engineerId: true,
+  expectedOpenAt: true, createdAt: true, updatedAt: true,
+} as const
 
 export const storeRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 门店列表（含运营概览数据）────────────────────
   app.get('/', auth(app), async (req: any) => {
     const { tenantId, role, storeId, userId } = req.user
+    if (!SENSITIVE_STORE_ROLES.has(role)) {
+      const safeWhere: any = { tenantId }
+      if (isStoreScoped(role)) {
+        if (!storeId) return []
+        safeWhere.id = storeId
+      } else if (role === 'ENGINEERING') {
+        safeWhere.engineerId = userId
+      } else {
+        // 供应商/总厨等跨店角色只拿业务候选，不得读取银行、支付配置、税号、员工或经营指标。
+        safeWhere.status = 'ENABLED'
+      }
+      return prisma.store.findMany({ where: safeWhere, select: SAFE_STORE_SELECT, orderBy: { no: 'asc' } })
+    }
     const cacheKey = `stores:list:${tenantId}:${role}:${storeId || 'all'}:${role === 'ENGINEERING' ? userId : 'x'}`
     return cached(cacheKey, 300, async () => {
     const monthStart = dayjs().startOf('month').toDate()
@@ -117,6 +136,16 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
 
     // 店长只能看自己
     if (isStoreScoped(role) && id !== userStoreId) throw { statusCode: 403, message: '无权限' }
+
+    if (!SENSITIVE_STORE_ROLES.has(role)) {
+      const safeWhere: any = { id, tenantId }
+      if (role === 'ENGINEERING') safeWhere.engineerId = req.user.userId
+      if (!isStoreScoped(role) && role !== 'ENGINEERING') safeWhere.status = 'ENABLED'
+      const store = await prisma.store.findFirst({ where: safeWhere, select: SAFE_STORE_SELECT })
+      if (!store) throw { statusCode: 404, message: '门店不存在' }
+      // 保持旧详情响应形状，低权限角色不会获得采购、账期、报损或人员数据。
+      return { store, stats: null, receipts: [], schedules: [], lossClaims: [], purchaseTrend: [] }
+    }
 
     const monthStart = dayjs().startOf('month').toDate()
     const last3Months = dayjs().subtract(3, 'month').startOf('month').toDate()

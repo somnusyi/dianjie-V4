@@ -34,6 +34,9 @@ type Repayment = {
   id: string; amount: string | number; paidAt: string
   source: string; bankTxNo?: string | null; note?: string | null
 }
+type CashAccount = {
+  id: string; name: string; type: 'BANK' | 'CASH' | 'ALIPAY' | 'WECHAT'; balance: string | number
+}
 type Project = {
   id: string; name: string; type: string; status: string
   budget?: string | number | null
@@ -333,6 +336,18 @@ function Drawer({ type, project, onClose, onSuccess }: {
   const [form, setForm] = useState<any>({})
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [accounts, setAccounts] = useState<CashAccount[]>([])
+
+  useEffect(() => {
+    if (type !== 'REPAYMENT') return
+    apiFetch<CashAccount[]>('/api/cashbook/accounts')
+      .then(items => {
+        const eligible = items.filter(account => account.type === 'BANK' || account.type === 'CASH')
+        setAccounts(eligible)
+        setForm((current: any) => ({ ...current, accountId: current.accountId || eligible[0]?.id || '' }))
+      })
+      .catch(e => setError(e?.message || '资金账户加载失败'))
+  }, [type])
 
   async function submit() {
     setError(null); setSubmitting(true)
@@ -370,6 +385,8 @@ function Drawer({ type, project, onClose, onSuccess }: {
       } else if (type === 'REPAYMENT') {
         if (!form.amount) throw new Error('请填还款金额')
         if (!project.store) throw new Error('项目未关联门店, 不能还款')
+        if (!form.accountId) throw new Error('请选择实际收款账户')
+        if (!form.bankTxNo?.trim()) throw new Error('请填写唯一到账流水号')
         await apiFetch('/api/capital/repayments', {
           method: 'POST',
           body: JSON.stringify({
@@ -378,6 +395,8 @@ function Drawer({ type, project, onClose, onSuccess }: {
             amount: Number(form.amount),
             paidAt: form.paidAt || new Date().toISOString().slice(0, 10),
             source: form.source || 'MANUAL',
+            accountId: form.accountId,
+            bankTxNo: form.bankTxNo,
             note: form.note,
           }),
         })
@@ -488,6 +507,15 @@ function Drawer({ type, project, onClose, onSuccess }: {
                   <option value="AUTO_FROM_PROFIT">自动 (利润抽成)</option>
                   <option value="TRANSFER">银行转账</option>
                 </select>
+              </Field>
+              <Field label="实际收款账户 *">
+                <select value={form.accountId || ''} onChange={e => setForm((s: any) => ({...s, accountId: e.target.value}))} className={IN}>
+                  {accounts.length === 0 && <option value="">— 没有可用的银行或现金账户 —</option>}
+                  {accounts.map(account => <option key={account.id} value={account.id}>{account.name} · 余额 ¥{Number(account.balance).toLocaleString()}</option>)}
+                </select>
+              </Field>
+              <Field label="到账流水号 *" hint="用于防止重复入账；同一项目内不可重复">
+                <input value={form.bankTxNo || ''} onChange={e => setForm((s: any) => ({...s, bankTxNo: e.target.value}))} className={IN + ' font-num'} />
               </Field>
             </>
           )}

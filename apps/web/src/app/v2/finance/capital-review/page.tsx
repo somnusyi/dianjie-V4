@@ -7,6 +7,7 @@
  */
 'use client'
 import { useEffect, useMemo, useState } from 'react'
+import dayjs from 'dayjs'
 import { apiFetch } from '@/lib/v2-auth'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
@@ -28,6 +29,10 @@ type Expense = {
   projectName?: string
   storeName?: string
   projectId?: string
+}
+type CashAccount = {
+  id: string; name: string; type: 'BANK' | 'CASH' | 'ALIPAY' | 'WECHAT'
+  balance: string | number; cmbBindAccount?: string | null
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -57,6 +62,7 @@ export default function CapitalReviewPage() {
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<'PENDING_APPROVAL'|'APPROVED'|'PAID'|'ALL'>('PENDING_APPROVAL')
   const [submitting, setSubmitting] = useState<string | null>(null)
+  const [payFor, setPayFor] = useState<Expense | null>(null)
   const [confirmState, openConfirm] = useConfirmSheet()
 
   function load() {
@@ -135,22 +141,7 @@ export default function CapitalReviewPage() {
 
   function pay(e: Expense) {
     if (submitting) return
-    openConfirm({
-      title: `付款 ¥${Number(e.amount).toLocaleString()}?`,
-      body: `${e.vendor} · 走招行 cmb 自动转账`,
-      confirmLabel: '付款',
-      tone: 'primary',
-      onConfirm: async () => {
-        setSubmitting(e.id)
-        try {
-          await apiFetch(`/api/capital/expenses/${e.id}/pay`, {
-            method: 'PATCH', body: JSON.stringify({ paymentMethod: 'cmb' }),
-          })
-          load()
-        } catch (err: any) { alert(err.message); throw err }
-        finally { setSubmitting(null) }
-      },
-    })
+    setPayFor(e)
   }
 
   return (
@@ -233,6 +224,69 @@ export default function CapitalReviewPage() {
       </ul>
 
       <ConfirmSheet {...confirmState} />
+      {payFor && (
+        <MobileCapitalPayModal
+          expense={payFor}
+          onClose={() => setPayFor(null)}
+          onDone={() => { setPayFor(null); load() }}
+        />
+      )}
+    </div>
+  )
+}
+
+function MobileCapitalPayModal({ expense, onClose, onDone }: { expense: Expense; onClose: () => void; onDone: () => void }) {
+  const [paymentMethod, setPaymentMethod] = useState<'cmb' | 'bank' | 'cash'>('bank')
+  const [accounts, setAccounts] = useState<CashAccount[]>([])
+  const [accountId, setAccountId] = useState('')
+  const [bankTxNo, setBankTxNo] = useState('')
+  const [paidAt, setPaidAt] = useState(dayjs().format('YYYY-MM-DD'))
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    apiFetch<CashAccount[]>('/api/cashbook/accounts').then(setAccounts).catch(e => setError(e?.message || '账户加载失败'))
+  }, [])
+  const eligible = accounts.filter(account => {
+    if (paymentMethod === 'cash') return account.type === 'CASH'
+    if (paymentMethod === 'cmb') return account.type === 'BANK' && !!account.cmbBindAccount
+    return account.type === 'BANK'
+  })
+  useEffect(() => {
+    if (!eligible.some(account => account.id === accountId)) setAccountId(eligible[0]?.id || '')
+  }, [accounts, accountId, paymentMethod])
+
+  async function submit() {
+    if (!accountId) return
+    setBusy(true); setError('')
+    try {
+      const result = await apiFetch<any>(`/api/capital/expenses/${expense.id}/pay`, {
+        method: 'PATCH', body: JSON.stringify({ paymentMethod, accountId, bankTxNo: bankTxNo || undefined, paidAt }),
+      })
+      if (result?.voucherWarning) alert(result.voucherWarning)
+      onDone()
+    } catch (e: any) { setError(e?.message || '付款失败'); setBusy(false) }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50" onClick={onClose}>
+      <div className="absolute inset-0 bg-ink/50" />
+      <div className="absolute bottom-0 left-0 right-0 bg-white rounded-t-card p-4 space-y-3" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between"><div><h3 className="text-h2">资本支出付款</h3><p className="text-caption text-gray3">{expense.vendor} · ¥{Number(expense.amount).toLocaleString()}</p></div><button onClick={onClose}>×</button></div>
+        <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value as any)} className="w-full bg-bg rounded-chip px-3 py-2">
+          <option value="bank">银行转账</option><option value="cmb">招行 APP</option><option value="cash">库存现金</option>
+        </select>
+        <select value={accountId} onChange={e => setAccountId(e.target.value)} className="w-full bg-bg rounded-chip px-3 py-2">
+          {eligible.length === 0 && <option value="">— 没有符合条件的活动账户 —</option>}
+          {eligible.map(account => <option key={account.id} value={account.id}>{account.name} · 余额 ¥{Number(account.balance).toLocaleString()}</option>)}
+        </select>
+        <input type="date" value={paidAt} onChange={e => setPaidAt(e.target.value)} className="w-full bg-bg rounded-chip px-3 py-2 font-num" />
+        <input value={bankTxNo} onChange={e => setBankTxNo(e.target.value)} placeholder="银行流水号（可选）" className="w-full bg-bg rounded-chip px-3 py-2 font-num" />
+        {error && <div className="bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}
+        <button onClick={submit} disabled={busy || !accountId} className="w-full py-3 bg-amber text-white rounded-cta text-button disabled:opacity-40">
+          {busy ? '付款中…' : `确认付款 · ¥${Number(expense.amount).toLocaleString()}`}
+        </button>
+      </div>
     </div>
   )
 }

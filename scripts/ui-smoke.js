@@ -18,6 +18,7 @@ const HEADED = process.argv.includes('--headed')
 const TENANT_SLUG = process.env.UI_TENANT_SLUG || process.env.TENANT_SLUG || 'test'
 const LOCAL_TARGET = /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/)/.test(BASE)
 const PASSWORD = process.env.E2E_PASSWORD || (LOCAL_TARGET ? 'test1234' : '')
+const ROLE_COOLDOWN_SECONDS = Number(process.env.UI_ROLE_COOLDOWN_SECONDS ?? (LOCAL_TARGET ? 65 : 0))
 
 if (!PASSWORD) {
   console.error('E2E_PASSWORD is required for non-local targets')
@@ -65,6 +66,8 @@ const pagesToVisit = {
   boss: [
     { path: '/v2/boss/approvals', mustNotContain: ['页面不存在'] },
     { path: '/v2/boss/stores', mustNotContain: ['页面不存在'] },
+    { path: '/users', mustNotContain: ['页面不存在', '404', '加载失败'] },
+    { path: '/v2/me/team', mustNotContain: ['页面不存在', '404', '加载失败'] },
   ],
 }
 
@@ -93,6 +96,12 @@ async function run() {
   const consoleErrors = []
 
   for (const [key, account] of Object.entries(ACCOUNTS)) {
+    // Next 开发模式会为部分页面重复发起数据请求；整套门禁共用一个测试 IP。
+    // 在最后一个高请求量角色前自然跨过全局限流窗口，不放宽服务端生产阈值。
+    if (key === 'supplier' && ROLE_COOLDOWN_SECONDS > 0) {
+      console.log(`\n[rate-limit] 冷却 ${ROLE_COOLDOWN_SECONDS}s 后继续供应商流程`)
+      await new Promise(resolve => setTimeout(resolve, ROLE_COOLDOWN_SECONDS * 1000))
+    }
     const ctx = await browser.newContext()
     const page = await ctx.newPage()
     page.on('pageerror', err => consoleErrors.push(`[${key}] ${err.message}`))

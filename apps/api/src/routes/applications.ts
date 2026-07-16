@@ -17,19 +17,22 @@ const APPLICABLE_ROLES = [
 const APPROVE_ROLES = new Set(['ADMIN', 'SUPER_ADMIN', 'BOSS'])
 const PHONE_RE = /^1[3-9]\d{9}$/
 
+const entityIdSchema = z.string().trim().min(1).max(64)
+const tenantSlugSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9-]+$/i, '租户标识格式不正确')
+
 const applySchema = z.object({
   name:     z.string().trim().min(1, '请填写姓名').max(20),
   phone:    z.string().trim().regex(PHONE_RE, '手机号格式不正确'),
   password: z.string().min(6, '密码至少 6 位').max(40),
   requestedRole: z.enum(APPLICABLE_ROLES, { errorMap: () => ({ message: '角色无效' }) }),
   reason:   z.string().trim().max(200).optional(),
-  tenantSlug: z.string().default('dianjie'),
+  tenantSlug: tenantSlugSchema.default('dianjie'),
   // 供应商专用 (二选一):
-  supplierId:   z.string().optional(),   // 加入已有供应商
+  supplierId:   entityIdSchema.optional(),   // 加入已有供应商
   supplierName: z.string().trim().max(80).optional(),  // 注册新供应商公司名
   // 店长/厨师长专用: 申请时必须指定门店
-  requestedStoreId: z.string().optional(),
-}).refine(
+  requestedStoreId: entityIdSchema.optional(),
+}).strict().refine(
   (d) => d.requestedRole !== 'SUPPLIER_OWNER' || !!d.supplierName,
   { message: '注册新供应商需填写公司名称', path: ['supplierName'] },
 ).refine(
@@ -49,7 +52,9 @@ const rejectSchema = z.object({
 
 /** 公开申请端点: POST /api/auth/apply (挂在 auth 路由 prefix 下) */
 export const publicApplyRoute: FastifyPluginAsync = async (app) => {
-  app.post('/apply', async (req: any, reply: any) => {
+  app.post('/apply', {
+    config: { rateLimit: { max: 5, timeWindow: '1 hour' } },
+  }, async (req: any, reply: any) => {
     const parsed = applySchema.safeParse(req.body)
     if (!parsed.success) {
       return reply.status(400).send({ error: parsed.error.issues[0].message })
@@ -61,48 +66,54 @@ export const publicApplyRoute: FastifyPluginAsync = async (app) => {
       return reply.status(404).send({ error: '租户不存在' })
     }
 
-    // 重复检查: 已经是用户 / 有未决申请
-    const existingUser = await prisma.user.findUnique({
-      where: { tenantId_phone: { tenantId: tenant.id, phone: d.phone } },
-    })
-    if (existingUser) return reply.status(400).send({ error: '该手机号已注册, 请直接登录' })
-
-    const pending = await prisma.userApplication.findFirst({
-      where: { tenantId: tenant.id, phone: d.phone, status: 'PENDING' },
-    })
-    if (pending) return reply.status(400).send({ error: '该手机号已有待审批的申请' })
-
-    // 供应商: 加入已有公司时校验 supplierId 真存在
-    if (d.requestedRole === 'SUPPLIER_STAFF' && d.supplierId) {
-      const sup = await prisma.supplier.findFirst({
-        where: { id: d.supplierId, tenantId: tenant.id, status: 'ENABLED' },
-      })
-      if (!sup) return reply.status(400).send({ error: '所选供应商不存在或已停用' })
-    }
-    // 店长/厨师长: 校验门店真存在
-    if (['MANAGER', 'KITCHEN_LEAD'].includes(d.requestedRole) && d.requestedStoreId) {
-      const st = await prisma.store.findFirst({ where: { id: d.requestedStoreId, tenantId: tenant.id } })
-      if (!st) return reply.status(400).send({ error: '所选门店不存在' })
-    }
-
     const passwordHash = await bcrypt.hash(d.password, 10)
-    await prisma.userApplication.create({
-      data: {
-        tenantId: tenant.id,
-        name: d.name, phone: d.phone, passwordHash,
-        requestedRole: d.requestedRole as any,
-        reason: d.reason || null,
-        supplierId:   d.supplierId   || null,
-        supplierName: d.supplierName || null,
-        requestedStoreId: d.requestedStoreId || null,
-      },
+    const result = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`public-application:${tenant.id}:${d.phone}`}))::text AS locked`
+      const existingUser = await tx.user.findUnique({
+        where: { tenantId_phone: { tenantId: tenant.id, phone: d.phone } },
+        select: { id: true },
+      })
+      if (existingUser) return { error: '该手机号已注册, 请直接登录' }
+      const pending = await tx.userApplication.findFirst({
+        where: { tenantId: tenant.id, phone: d.phone, status: 'PENDING' }, select: { id: true },
+      })
+      if (pending) return { error: '该手机号已有待审批的申请' }
+
+      if (d.requestedRole === 'SUPPLIER_STAFF' && d.supplierId) {
+        const supplier = await tx.supplier.findFirst({
+          where: { id: d.supplierId, tenantId: tenant.id, status: 'ENABLED' }, select: { id: true },
+        })
+        if (!supplier) return { error: '所选供应商不存在或已停用' }
+      }
+      if (['MANAGER', 'KITCHEN_LEAD'].includes(d.requestedRole) && d.requestedStoreId) {
+        const store = await tx.store.findFirst({
+          where: { id: d.requestedStoreId, tenantId: tenant.id, status: 'ENABLED' }, select: { id: true },
+        })
+        if (!store) return { error: '所选门店不存在或已停用' }
+      }
+
+      await tx.userApplication.create({
+        data: {
+          tenantId: tenant.id,
+          name: d.name, phone: d.phone, passwordHash,
+          requestedRole: d.requestedRole as any,
+          reason: d.reason || null,
+          supplierId: d.supplierId || null,
+          supplierName: d.supplierName || null,
+          requestedStoreId: d.requestedStoreId || null,
+        },
+      })
+      return { ok: true }
     })
+    if ('error' in result) return reply.status(400).send({ error: result.error })
     return reply.status(201).send({ ok: true, message: '申请已提交, 等待老板审批' })
   })
 
   // 公开端点: 列出本租户的可加入供应商 (apply 表单"加入已有公司"用)
-  app.get('/supplier-list', async (req: any, reply: any) => {
-    const slug = (req.query?.tenantSlug as string) || 'dianjie'
+  app.get('/supplier-list', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (req: any, reply: any) => {
+    const parsed = z.object({ tenantSlug: tenantSlugSchema.default('dianjie') }).strict().safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const slug = parsed.data.tenantSlug
     const tenant = await prisma.tenant.findUnique({ where: { slug } })
     if (!tenant) return reply.status(404).send({ error: '租户不存在' })
     const list = await prisma.supplier.findMany({
@@ -114,12 +125,14 @@ export const publicApplyRoute: FastifyPluginAsync = async (app) => {
   })
 
   // 公开端点: 列出本租户的门店 (apply 表单"店长/厨师长选店"用)
-  app.get('/store-list', async (req: any, reply: any) => {
-    const slug = (req.query?.tenantSlug as string) || 'dianjie'
+  app.get('/store-list', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (req: any, reply: any) => {
+    const parsed = z.object({ tenantSlug: tenantSlugSchema.default('dianjie') }).strict().safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const slug = parsed.data.tenantSlug
     const tenant = await prisma.tenant.findUnique({ where: { slug } })
     if (!tenant) return reply.status(404).send({ error: '租户不存在' })
     const list = await prisma.store.findMany({
-      where: { tenantId: tenant.id },
+      where: { tenantId: tenant.id, status: 'ENABLED' },
       select: { id: true, name: true, no: true },
       orderBy: { no: 'asc' },
     })

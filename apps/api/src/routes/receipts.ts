@@ -211,39 +211,58 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
   app.patch('/:id/confirm', auth(app), async (req: any, reply: any) => {
     const { tenantId, userId, role, storeId } = req.user
     if (!canOperateReceipt(role)) return reply.status(403).send({ error: '仅门店店长、厨师长或品牌管理员可确认入库' })
-    const where: any = { id: req.params.id, tenantId, status: { in: ['DRAFT', 'PENDING', 'PENDING_CONFIRM'] } }
-    if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
-    const receipt = await prisma.receipt.findFirst({
-      where,
+    const scopeWhere: any = { id: req.params.id, tenantId }
+    if (isStoreScoped(role)) scopeWhere.storeId = storeId || '__NONE__'
+    const pendingWhere = { ...scopeWhere, status: { in: ['DRAFT', 'PENDING', 'PENDING_CONFIRM'] as const } }
+    let receipt = await prisma.receipt.findFirst({
+      where: pendingWhere,
       include: { supplier: true },
     })
-    if (!receipt) return reply.status(404).send({ error: '入库单不存在或状态不可确认' })
-
-    const confirmedAt = new Date()
-    const claimed = await prisma.receipt.updateMany({
-      where,
-      data: { status: 'CONFIRMED', confirmedAt },
-    })
-    if (claimed.count !== 1) return reply.status(409).send({ error: '入库单已被处理，请刷新后查看' })
+    let duplicated = false
+    let confirmedAt = new Date()
+    if (receipt) {
+      const claimed = await prisma.receipt.updateMany({
+        where: pendingWhere,
+        data: { status: 'CONFIRMED', confirmedAt },
+      })
+      if (claimed.count !== 1) return reply.status(409).send({ error: '入库单已被处理，请刷新后查看' })
+    } else {
+      // 主状态可能已提交，但账期/对账派生曾短暂失败。允许客户端重试补偿，
+      // autoProcessAfterConfirm 会按 receiptId 加锁并幂等读取既有派生记录。
+      receipt = await prisma.receipt.findFirst({
+        where: { ...scopeWhere, status: { in: ['CONFIRMED', 'ACCOUNTED'] } },
+        include: { supplier: true },
+      })
+      if (!receipt?.confirmedAt) return reply.status(404).send({ error: '入库单不存在或状态不可确认' })
+      confirmedAt = receipt.confirmedAt
+      duplicated = true
+    }
 
     // 按全额生成账期 (总仓 HEADQ_WAREHOUSE 短路, 不建账期)
     const procResult: any = await autoProcessAfterConfirm({ tenantId, receipt: { ...receipt, confirmedAt }, supplier: receipt.supplier })
     const isHeadq = procResult?.isHeadqWarehouse === true
 
-    await prisma.opLog.create({
-      data: {
-        tenantId, userId,
-        action: isHeadq
-          ? `确认入库 ${receipt.no} (总仓内部调拨, 不建账期)`
-          : `确认入库 ${receipt.no}, 账期已创建`,
-        target: receipt.no, entityType: 'Receipt', targetId: receipt.id,
-      },
-    })
+    if (!duplicated) {
+      await prisma.opLog.create({
+        data: {
+          tenantId, userId,
+          action: isHeadq
+            ? `确认入库 ${receipt.no} (总仓内部调拨, 不建账期)`
+            : `确认入库 ${receipt.no}, 账期已创建`,
+          target: receipt.no, entityType: 'Receipt', targetId: receipt.id,
+        },
+      })
+    }
     void invalidatePattern(`dashboard:stats:${tenantId}:*`)
     void invalidatePattern(`stores:list:${tenantId}:*`)
-    const store = await prisma.store.findUnique({ where: { id: receipt.storeId }, select: { name: true } })
-    void notifyReceiptConfirmed(tenantId, receipt.no, store?.name || '', false, 0)
-    return { message: isHeadq ? '总仓入库确认 (内部调拨, 不建账期)' : '入库确认成功，账期已自动创建' }
+    if (!duplicated) {
+      const store = await prisma.store.findUnique({ where: { id: receipt.storeId }, select: { name: true } })
+      void notifyReceiptConfirmed(tenantId, receipt.no, store?.name || '', false, 0)
+    }
+    return {
+      message: isHeadq ? '总仓入库确认 (内部调拨, 不建账期)' : '入库确认成功，账期已自动创建',
+      duplicated,
+    }
   })
 
   // ── 店长报损入库（部分收货，按实收金额生成账期）──────

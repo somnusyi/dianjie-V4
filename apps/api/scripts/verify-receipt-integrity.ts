@@ -43,6 +43,9 @@ async function main() {
   const tenant = await prisma.tenant.findUniqueOrThrow({ where: { slug: TENANT_SLUG } })
   let receiptId: string | null = null
   let receiptNo: string | null = null
+  const failureFunction = `local_receipt_finance_fail_${suffix}`
+  const failureTrigger = `local_receipt_finance_trigger_${suffix}`
+  let failureTriggerInstalled = false
   const createdStoreIds: string[] = []
   const createdSupplierIds: string[] = []
   const createdUserIds: string[] = []
@@ -164,17 +167,59 @@ async function main() {
       method: 'PATCH', body: JSON.stringify({ actor: 'supplier', note: '数量金额已核对' }),
     })).status, 200)
 
+    const recoveryCreated = await api('/api/receipts', managerTokenA, {
+      method: 'POST', body: JSON.stringify({ ...baseBody, note: '财务派生故障恢复验证' }),
+    })
+    assert.equal(recoveryCreated.status, 201, JSON.stringify(recoveryCreated.body))
+    const recoveryReceiptId = recoveryCreated.body.id as string
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION "${failureFunction}"() RETURNS trigger AS $$
+      BEGIN
+        IF NEW."receiptId" = '${recoveryReceiptId}' THEN
+          RAISE EXCEPTION 'local receipt finance failure injection';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `)
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER "${failureTrigger}"
+      BEFORE INSERT ON payment_schedules
+      FOR EACH ROW EXECUTE FUNCTION "${failureFunction}"()
+    `)
+    failureTriggerInstalled = true
+    const failedConfirm = await api(`/api/receipts/${recoveryReceiptId}/confirm`, managerTokenA, { method: 'PATCH', body: '{}' })
+    assert.equal(failedConfirm.status, 500, '财务派生失败时首次确认应明确失败')
+    assert.equal((await prisma.receipt.findUniqueOrThrow({ where: { id: recoveryReceiptId } })).status, 'CONFIRMED', '主确认状态应保留供重试补偿')
+    assert.equal(await prisma.paymentSchedule.count({ where: { receiptId: recoveryReceiptId } }), 0)
+    assert.equal(await prisma.reconciliationItem.count({ where: { receiptId: recoveryReceiptId } }), 0)
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${failureTrigger}" ON payment_schedules`)
+    await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${failureFunction}"()`)
+    failureTriggerInstalled = false
+
+    const recoveredConfirm = await api(`/api/receipts/${recoveryReceiptId}/confirm`, managerTokenA, { method: 'PATCH', body: '{}' })
+    assert.equal(recoveredConfirm.status, 200, JSON.stringify(recoveredConfirm.body))
+    assert.equal(recoveredConfirm.body.duplicated, true, '重试应进入幂等补偿分支')
+    assert.equal((await prisma.receipt.findUniqueOrThrow({ where: { id: recoveryReceiptId } })).status, 'ACCOUNTED')
+    assert.equal(await prisma.paymentSchedule.count({ where: { receiptId: recoveryReceiptId } }), 1)
+    assert.equal(await prisma.reconciliationItem.count({ where: { receiptId: recoveryReceiptId } }), 1)
+
     console.log(JSON.stringify({
       ok: true,
       tenantIsolation: true,
       storeIsolation: true,
       supplierIsolation: true,
       atomicLossConfirmation: true,
+      financeFailureRecovery: true,
       actualAmount: 14.43,
       lossAmount: 4.44,
     }))
   } finally {
     await new Promise(resolve => setTimeout(resolve, 150))
+    if (failureTriggerInstalled) {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${failureTrigger}" ON payment_schedules`)
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${failureFunction}"()`)
+    }
     const discoveredReceipts = await prisma.receipt.findMany({
       where: {
         tenantId: tenant.id,

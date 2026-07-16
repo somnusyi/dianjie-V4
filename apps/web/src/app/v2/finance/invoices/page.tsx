@@ -42,6 +42,7 @@ export default function FinanceInvoicesPage() {
   const [confirmState, openConfirm] = useConfirmSheet()
 
   function load() {
+    setError(null)
     const url = filter === '全部' ? '/api/invoices' : `/api/invoices?status=${filter}`
     apiFetch<Invoice[]>(url).then(setItems).catch(e => setError(e.message))
   }

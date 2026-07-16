@@ -40,6 +40,11 @@ function fmt(iso: string) {
   return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
 }
 
+function localToday() {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
+
 export default function SupplierInvoicesPage() {
   const [pending, setPending] = useState<Receipt[] | null>(null)
   const [history, setHistory] = useState<Invoice[] | null>(null)
@@ -48,17 +53,21 @@ export default function SupplierInvoicesPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [form, setForm] = useState({
     invoiceNo: '', invoiceCode: '', amount: '', taxRate: '0.06',
-    issueDate: new Date().toISOString().slice(0, 10), note: '',
+    issueDate: localToday(), note: '',
   })
   const [file, setFile] = useState<File | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   function load() {
+    setError(null)
     Promise.all([
-      apiFetch<Receipt[]>('/api/invoices/pending-payable').catch(() => []),
-      apiFetch<Invoice[]>('/api/invoices').catch(() => []),
+      apiFetch<Receipt[]>('/api/invoices/pending-payable'),
+      apiFetch<Invoice[]>('/api/invoices'),
     ]).then(([p, h]) => {
       setPending(p || []); setHistory(h || [])
+    }).catch(e => {
+      setError(e?.message || '发票数据加载失败')
+      setPending([]); setHistory([])
     })
   }
   useEffect(() => { load() }, [])
@@ -105,7 +114,7 @@ export default function SupplierInvoicesPage() {
       // reset
       setShowForm(false); setSelectedIds(new Set()); setFile(null)
       setForm({ invoiceNo: '', invoiceCode: '', amount: '', taxRate: '0.06',
-                issueDate: new Date().toISOString().slice(0, 10), note: '' })
+                issueDate: localToday(), note: '' })
       load()
     } catch (e: any) { setError(e.message || '上传失败') }
     setSubmitting(false)
@@ -202,7 +211,10 @@ export default function SupplierInvoicesPage() {
 
       {/* 上传按钮(浮动) */}
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border p-3">
-        <button onClick={() => setShowForm(true)}
+        <button onClick={() => {
+                  setForm(current => ({ ...current, amount: totalSelected.toFixed(2), issueDate: localToday() }))
+                  setShowForm(true)
+                }}
                 disabled={selectedIds.size === 0}
                 className="w-full py-3 bg-ink text-white rounded-cta text-button disabled:opacity-40">
           {selectedIds.size > 0 ? `上传发票 · ${selectedIds.size} 单 ¥${totalSelected.toLocaleString()}` : '请先勾选订单'}

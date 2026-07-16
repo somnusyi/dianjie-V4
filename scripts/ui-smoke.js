@@ -44,6 +44,8 @@ const pagesToVisit = {
     { path: '/v2/finance/capital-review', mustNotContain: ['页面不存在', '404', '加载失败'] },
     { path: '/v2/finance-pc/capital-review', mustNotContain: ['页面不存在', '404', '加载失败'] },
     { path: '/v2/finance/funds', mustNotContain: ['页面不存在', '404', '加载失败'] },
+    { path: '/v2/finance/invoices', mustNotContain: ['页面不存在', '404', '加载失败'] },
+    { path: '/v2/finance-pc/invoices', mustNotContain: ['页面不存在', '404', '加载失败'] },
     { path: '/cashbook', mustNotContain: ['页面不存在', '404', '加载失败'] },
     { path: '/approval', mustNotContain: ['页面不存在', '404', '审批数据读取失败'] },
     { path: '/reconciliations', mustNotContain: ['页面不存在', '404', '对账数据读取失败'] },
@@ -53,6 +55,7 @@ const pagesToVisit = {
     { path: '/v2/supplier/orders', mustNotContain: ['页面不存在', '404'] },
     { path: '/v2/supplier/products', mustNotContain: ['页面不存在', 'undefined'] },
     { path: '/v2/supplier/inventory', mustNotContain: ['页面不存在'] },
+    { path: '/v2/supplier/invoices', mustNotContain: ['页面不存在', '加载失败'] },
   ],
   chef: [
     { path: '/v2/chef-director/approvals', mustNotContain: ['页面不存在'] },

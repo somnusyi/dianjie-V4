@@ -105,6 +105,7 @@ async function run() {
     { path: '/api/users',                role: 'manager',  check: r => r.status === 403, name: '店长 GET /users 应 403' },
     { path: '/api/cashbook/accounts',    role: 'manager',  check: r => r.status === 403, name: '店长 GET /cashbook 应 403' },
     { path: '/api/reconciliations',      role: 'manager',  check: r => r.status === 403, name: '店长 GET /reconciliations 应 403' },
+    { path: '/api/invoices',             role: 'manager',  check: r => r.status === 403, name: '店长 GET /invoices 应 403' },
     { path: '/api/schedules',            role: 'chef',     check: r => r.status === 403, name: '总厨 GET /schedules 应 403' },
   ]
   for (const c of guardChecks) {

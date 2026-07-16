@@ -12,13 +12,42 @@
  *   PATCH  /api/invoice-payments/:id/cancel  财务取消(仅 PENDING 状态可)
  */
 import { FastifyPluginAsync } from 'fastify'
-import { prisma } from '@dianjie/db'
+import { Prisma, prisma } from '@dianjie/db'
+import { z } from 'zod'
 import { isSupplierRole } from '../lib/auth-scope'
 import { writeCashTransaction } from '../services/cashbook'
 import { voucherForPayment } from '../services/voucher'
 import { lockSchedulesForInvoicePayment } from '../services/paymentMutex'
 
 const FINANCE_ROLES = new Set(['ADMIN', 'SUPER_ADMIN', 'FINANCE'])
+const paymentCreateSchema = z.object({
+  invoiceId: z.string().trim().min(1),
+  amount: z.number().positive('付款金额必须 > 0').max(999_999_999_999.99).refine(
+    value => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8,
+    '付款金额最多保留 2 位小数',
+  ),
+  paymentMethod: z.enum(['cmb', 'manual', 'wechat', 'alipay']).default('cmb'),
+  note: z.string().trim().max(500).optional(),
+}).strict()
+
+const paymentConfirmSchema = z.object({
+  status: z.enum(['SUCCESS', 'FAILED']),
+  bankTxNo: z.string().trim().max(100).optional(),
+  failReason: z.string().trim().max(500).optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.status === 'FAILED' && !value.failReason) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['failReason'], message: '付款失败必须填写原因' })
+  }
+})
+
+type InvoicePaymentVoucherInput = {
+  paymentId: string
+  invoiceNo: string
+  supplierName: string
+  amount: number
+  paymentMethod: string
+  paidAt: Date
+}
 
 export const invoicePaymentRoutes: FastifyPluginAsync = async (app) => {
   const auth = { preHandler: [(app as any).authenticate] }
@@ -29,12 +58,15 @@ export const invoicePaymentRoutes: FastifyPluginAsync = async (app) => {
     if (!FINANCE_ROLES.has(role) && !isSupplierRole(role)) {
       return reply.status(403).send({ error: '无权限' })
     }
+    if (isSupplierRole(role) && !supplierId) {
+      return reply.status(403).send({ error: '账号未绑定供应商' })
+    }
     const where: any = {
       tenantId,
       status: 'VERIFIED',
       fullyPaidAt: null,
     }
-    if (isSupplierRole(role) && supplierId) where.supplierId = supplierId
+    if (isSupplierRole(role)) where.supplierId = supplierId
 
     const list = await prisma.invoice.findMany({
       where,
@@ -75,13 +107,19 @@ export const invoicePaymentRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // ── 某发票的付款历史 ──────────────────────────
-  app.get('/', auth, async (req: any) => {
+  app.get('/', auth, async (req: any, reply: any) => {
     const { tenantId, role, supplierId } = req.user
+    if (!FINANCE_ROLES.has(role) && !isSupplierRole(role)) {
+      return reply.status(403).send({ error: '无权限' })
+    }
+    if (isSupplierRole(role) && !supplierId) {
+      return reply.status(403).send({ error: '账号未绑定供应商' })
+    }
     const { invoiceId } = req.query as any
     const where: any = { tenantId }
     if (invoiceId) where.invoiceId = invoiceId
     // 供应商只看自己发票的付款
-    if (isSupplierRole(role) && supplierId) {
+    if (isSupplierRole(role)) {
       where.invoice = { supplierId }
     }
     return prisma.invoicePayment.findMany({
@@ -99,33 +137,39 @@ export const invoicePaymentRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role, userId } = req.user
     if (!FINANCE_ROLES.has(role)) return reply.status(403).send({ error: '仅财务可发起付款' })
 
-    const { invoiceId, amount, paymentMethod = 'cmb', note } = req.body as any
-    if (!invoiceId) return reply.status(400).send({ error: '缺 invoiceId' })
-    const amt = Number(amount)
-    if (!amt || amt <= 0) return reply.status(400).send({ error: '付款金额必须 > 0' })
-
-    const inv = await prisma.invoice.findFirst({
-      where: { id: invoiceId, tenantId, status: 'VERIFIED' },
-      include: {
-        payments: { where: { status: { in: ['PENDING', 'SUCCESS'] } } },
-      },
-    })
-    if (!inv) return reply.status(404).send({ error: '发票不存在或未审核通过' })
-    if (inv.fullyPaidAt) return reply.status(400).send({ error: '该发票已付清' })
-
-    // 计算实际剩余 (paidAmount 是 SUCCESS 累计, PENDING 也要扣留, 防超付)
-    const reservedSuccessOrPending = inv.payments.reduce((s, p) => s + Number(p.amount), 0)
-    const realRemaining = Number(inv.amount) - reservedSuccessOrPending
-    if (amt > realRemaining + 0.01) {
-      return reply.status(400).send({
-        error: `本次付款 ¥${amt.toLocaleString()} 超过剩余可付 ¥${realRemaining.toLocaleString()}`,
-      })
-    }
+    const parsed = paymentCreateSchema.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const { invoiceId, amount, paymentMethod, note } = parsed.data
+    const amt = new Prisma.Decimal(amount)
 
     // 防重付互斥 + 创建付款 用同一事务, 互斥失败整体回滚
     let payment: any
     try {
       payment = await prisma.$transaction(async (tx) => {
+        const locked = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+          SELECT "id" FROM "invoices"
+          WHERE "id" = ${invoiceId} AND "tenantId" = ${tenantId}
+          FOR UPDATE
+        `)
+        if (locked.length !== 1) throw Object.assign(new Error('发票不存在'), { statusCode: 404 })
+        const inv = await tx.invoice.findFirst({
+          where: { id: invoiceId, tenantId, status: 'VERIFIED' },
+          include: { payments: { where: { status: { in: ['PENDING', 'SUCCESS'] } } } },
+        })
+        if (!inv) throw Object.assign(new Error('发票不存在或未审核通过'), { statusCode: 404 })
+        if (inv.fullyPaidAt) throw Object.assign(new Error('该发票已付清'), { statusCode: 409 })
+        const reserved = inv.payments.reduce(
+          (sum, existing) => sum.plus(existing.amount),
+          new Prisma.Decimal(0),
+        )
+        const realRemaining = inv.amount.minus(reserved)
+        if (amt.greaterThan(realRemaining)) {
+          throw Object.assign(
+            new Error(`本次付款 ¥${amt.toFixed(2)} 超过剩余可付 ¥${realRemaining.toFixed(2)}`),
+            { statusCode: 409 },
+          )
+        }
+
         // 1. 锁定关联账期 (防重付; PAID/PROCESSING 直接抛错回滚)
         const { cancelledCount } = await lockSchedulesForInvoicePayment(tx, invoiceId, userId)
         // 2. 创建付款单
@@ -140,7 +184,7 @@ export const invoicePaymentRoutes: FastifyPluginAsync = async (app) => {
         })
         await tx.opLog.create({
           data: { tenantId, userId,
-            action: `发起发票付款 #${inv.invoiceNo} ¥${amt.toLocaleString()} (剩余 ¥${(realRemaining - amt).toLocaleString()})`
+            action: `发起发票付款 #${inv.invoiceNo} ¥${amt.toFixed(2)} (剩余 ¥${realRemaining.minus(amt).toFixed(2)})`
               + (cancelledCount > 0 ? ` · 同步锁定 ${cancelledCount} 条关联账期` : ''),
             entityType: 'InvoicePayment', targetId: p.id,
           },
@@ -148,8 +192,7 @@ export const invoicePaymentRoutes: FastifyPluginAsync = async (app) => {
         return p
       })
     } catch (e: any) {
-      // 互斥冲突 (PAID / PROCESSING) → 409
-      return reply.status(409).send({ error: e.message || '互斥失败' })
+      return reply.status(e?.statusCode || 409).send({ error: e.message || '互斥失败' })
     }
     // TODO Sprint B: 触发 cmb 转账, 完成后回调 /:id/confirm
     return reply.status(201).send(payment)
@@ -159,101 +202,160 @@ export const invoicePaymentRoutes: FastifyPluginAsync = async (app) => {
   app.patch('/:id/confirm', auth, async (req: any, reply: any) => {
     const { tenantId, role, userId } = req.user
     if (!FINANCE_ROLES.has(role)) return reply.status(403).send({ error: '无权限' })
-    const { status, bankTxNo, failReason } = req.body as any
-    if (!['SUCCESS', 'FAILED'].includes(status)) {
-      return reply.status(400).send({ error: 'status 必须是 SUCCESS 或 FAILED' })
-    }
-    const p = await prisma.invoicePayment.findFirst({
-      where: { id: req.params.id, tenantId, status: 'PENDING' },
-    })
-    if (!p) return reply.status(404).send({ error: '付款单不存在或非 PENDING' })
+    const parsed = paymentConfirmSchema.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const { status, bankTxNo, failReason } = parsed.data
 
+    let voucherInput: InvoicePaymentVoucherInput | null = null
+    let duplicated = false
     if (status === 'SUCCESS') {
-      // 事务: 更新 payment + 累加 invoice.paidAmount + 检查是否付清
-      // 2026-06-01 Phase 1 修底盘: SUCCESS 时同步写 CashTransaction (-1 笔)
-      const paidAt = new Date()
-      const amtNum = Number(p.amount)
-      // 提前查 invoice 拿 supplier 信息 给凭证用
-      const invFull = await prisma.invoice.findUnique({
-        where: { id: p.invoiceId },
-        include: { supplier: { select: { name: true } } },
-      })
-      if (!invFull) return reply.status(404).send({ error: 'invoice missing' })
-      await prisma.$transaction(async (tx) => {
-        await tx.invoicePayment.update({
-          where: { id: p.id },
-          data: { status: 'SUCCESS', paidAt, bankTxNo: bankTxNo || null },
+      try {
+        await prisma.$transaction(async (tx) => {
+          const lockedPayments = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+            SELECT "id" FROM "invoice_payments"
+            WHERE "id" = ${req.params.id} AND "tenantId" = ${tenantId}
+            FOR UPDATE
+          `)
+          if (lockedPayments.length !== 1) throw Object.assign(new Error('付款单不存在'), { statusCode: 404 })
+          const p = await tx.invoicePayment.findFirst({ where: { id: req.params.id, tenantId } })
+          if (!p) throw Object.assign(new Error('付款单不存在'), { statusCode: 404 })
+          if (p.status === 'SUCCESS') {
+            duplicated = true
+            return
+          }
+          if (p.status !== 'PENDING') {
+            throw Object.assign(new Error(`付款单当前状态 ${p.status}，不能确认成功`), { statusCode: 409 })
+          }
+          const lockedInvoices = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+            SELECT "id" FROM "invoices"
+            WHERE "id" = ${p.invoiceId} AND "tenantId" = ${tenantId}
+            FOR UPDATE
+          `)
+          if (lockedInvoices.length !== 1) throw Object.assign(new Error('发票不存在'), { statusCode: 404 })
+          const inv = await tx.invoice.findUnique({
+            where: { id: p.invoiceId },
+            include: { supplier: { select: { name: true } } },
+          })
+          if (!inv) throw Object.assign(new Error('发票不存在'), { statusCode: 404 })
+          const newPaid = inv.paidAmount.plus(p.amount)
+          if (newPaid.greaterThan(inv.amount)) {
+            throw Object.assign(new Error('付款累计超过发票金额，已阻断到账确认'), { statusCode: 409 })
+          }
+          const paidAt = new Date()
+          await tx.invoicePayment.update({
+            where: { id: p.id },
+            data: { status: 'SUCCESS', paidAt, bankTxNo: bankTxNo || null },
+          })
+          await tx.invoice.update({
+            where: { id: p.invoiceId },
+            data: { paidAmount: newPaid, fullyPaidAt: newPaid.equals(inv.amount) ? paidAt : null },
+          })
+          await writeCashTransaction(tx, {
+            tenantId,
+            direction: -1,
+            category: '发票付款',
+            amount: Number(p.amount),
+            note: `${inv.supplier.name} 发票 ${inv.invoiceNo}` + (bankTxNo ? ` 流水 ${bankTxNo}` : ''),
+            txDate: paidAt,
+            refType: 'InvoicePayment',
+            refId: p.id,
+            createdById: userId,
+          })
+          await tx.opLog.create({
+            data: {
+              tenantId, userId,
+              action: `付款到账 ¥${p.amount}` + (bankTxNo ? ` 流水 ${bankTxNo}` : ''),
+              entityType: 'InvoicePayment', targetId: p.id,
+            },
+          })
+          voucherInput = {
+            paymentId: p.id,
+            invoiceNo: inv.invoiceNo,
+            supplierName: inv.supplier.name,
+            amount: Number(p.amount),
+            paymentMethod: p.paymentMethod,
+            paidAt,
+          }
         })
-        const inv = await tx.invoice.findUnique({ where: { id: p.invoiceId } })
-        if (!inv) throw new Error('invoice missing')
-        const newPaid = Number(inv.paidAmount) + amtNum
-        const fullyPaid = Math.abs(newPaid - Number(inv.amount)) < 0.01
-        await tx.invoice.update({
-          where: { id: p.invoiceId },
-          data: {
-            paidAmount: newPaid,
-            fullyPaidAt: fullyPaid ? new Date() : null,
-          },
-        })
-        // 写流水 (不传 accountId 走 cmbBindAccount 招行账户; 财务侧未来可改 endpoint body 传 accountId)
-        await writeCashTransaction(tx, {
-          tenantId,
-          direction: -1,
-          category: '发票付款',
-          amount: amtNum,
-          note: `${invFull.supplier.name} 发票 ${invFull.invoiceNo}` + (bankTxNo ? ` 流水 ${bankTxNo}` : ''),
-          txDate: paidAt,
-          refType: 'InvoicePayment',
-          refId: p.id,
-          createdById: userId,
-        })
-      })
+      } catch (error: any) {
+        return reply.status(error?.statusCode || 500).send({ error: error.message || '付款确认失败' })
+      }
       // 生凭证 (借 应付账款 / 贷 银行存款)
-      voucherForPayment({
+      const voucher = voucherInput as unknown as InvoicePaymentVoucherInput | null
+      if (voucher) voucherForPayment({
         tenantId,
-        paymentId: p.id,
-        paymentNo: invFull.invoiceNo,
-        supplierName: invFull.supplier.name,
-        amount: amtNum,
-        method: p.paymentMethod === 'cmb' ? 'CMB_AUTOPAY' : p.paymentMethod === 'manual' ? 'OFFLINE' : 'BANK_TRANSFER',
-        date: paidAt,
-      })
-      await prisma.opLog.create({
-        data: { tenantId, userId,
-          action: `付款到账 ¥${p.amount}` + (bankTxNo ? ` 流水 ${bankTxNo}` : ''),
-          entityType: 'InvoicePayment', targetId: p.id,
-        },
+        paymentId: voucher.paymentId,
+        paymentNo: voucher.invoiceNo,
+        supplierName: voucher.supplierName,
+        amount: voucher.amount,
+        method: voucher.paymentMethod === 'cmb' ? 'CMB_AUTOPAY' : voucher.paymentMethod === 'manual' ? 'OFFLINE' : 'BANK_TRANSFER',
+        date: voucher.paidAt,
       })
     } else {
-      // FAILED
-      await prisma.invoicePayment.update({
-        where: { id: p.id },
-        data: { status: 'FAILED', failReason: failReason || '银行返回失败' },
-      })
-      await prisma.opLog.create({
-        data: { tenantId, userId, action: `付款失败 ¥${p.amount} ${failReason || ''}`,
-          entityType: 'InvoicePayment', targetId: p.id },
-      })
+      try {
+        await prisma.$transaction(async tx => {
+          const locked = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+            SELECT "id" FROM "invoice_payments"
+            WHERE "id" = ${req.params.id} AND "tenantId" = ${tenantId}
+            FOR UPDATE
+          `)
+          if (locked.length !== 1) throw Object.assign(new Error('付款单不存在'), { statusCode: 404 })
+          const p = await tx.invoicePayment.findFirst({ where: { id: req.params.id, tenantId } })
+          if (!p) throw Object.assign(new Error('付款单不存在'), { statusCode: 404 })
+          if (p.status === 'FAILED') {
+            duplicated = true
+            return
+          }
+          if (p.status !== 'PENDING') {
+            throw Object.assign(new Error(`付款单当前状态 ${p.status}，不能确认失败`), { statusCode: 409 })
+          }
+          await tx.invoicePayment.update({
+            where: { id: p.id },
+            data: { status: 'FAILED', failReason },
+          })
+          await tx.opLog.create({
+            data: { tenantId, userId, action: `付款失败 ¥${p.amount} ${failReason}`,
+              entityType: 'InvoicePayment', targetId: p.id },
+          })
+        })
+      } catch (error: any) {
+        return reply.status(error?.statusCode || 500).send({ error: error.message || '付款确认失败' })
+      }
     }
-    return { success: true, status }
+    return { success: true, status, duplicated }
   })
 
   // ── 取消(仅 PENDING) ─────────────────────────
   app.patch('/:id/cancel', auth, async (req: any, reply: any) => {
     const { tenantId, role, userId } = req.user
     if (!FINANCE_ROLES.has(role)) return reply.status(403).send({ error: '无权限' })
-    const p = await prisma.invoicePayment.findFirst({
-      where: { id: req.params.id, tenantId, status: 'PENDING' },
-    })
-    if (!p) return reply.status(404).send({ error: '付款单不存在或不可取消' })
-    await prisma.invoicePayment.update({
-      where: { id: p.id },
-      data: { status: 'CANCELED' },
-    })
-    await prisma.opLog.create({
-      data: { tenantId, userId, action: `取消付款 ¥${p.amount}`,
-        entityType: 'InvoicePayment', targetId: p.id },
-    })
-    return { success: true }
+    try {
+      let duplicated = false
+      await prisma.$transaction(async tx => {
+        const locked = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+          SELECT "id" FROM "invoice_payments"
+          WHERE "id" = ${req.params.id} AND "tenantId" = ${tenantId}
+          FOR UPDATE
+        `)
+        if (locked.length !== 1) throw Object.assign(new Error('付款单不存在'), { statusCode: 404 })
+        const p = await tx.invoicePayment.findFirst({ where: { id: req.params.id, tenantId } })
+        if (!p) throw Object.assign(new Error('付款单不存在'), { statusCode: 404 })
+        if (p.status === 'CANCELED') {
+          duplicated = true
+          return
+        }
+        if (p.status !== 'PENDING') {
+          throw Object.assign(new Error(`付款单当前状态 ${p.status}，不可取消`), { statusCode: 409 })
+        }
+        await tx.invoicePayment.update({ where: { id: p.id }, data: { status: 'CANCELED' } })
+        await tx.opLog.create({
+          data: { tenantId, userId, action: `取消付款 ¥${p.amount}`,
+            entityType: 'InvoicePayment', targetId: p.id },
+        })
+      })
+      return { success: true, duplicated }
+    } catch (error: any) {
+      return reply.status(error?.statusCode || 500).send({ error: error.message || '取消付款失败' })
+    }
   })
 }

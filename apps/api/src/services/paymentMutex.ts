@@ -118,7 +118,7 @@ export async function lockSchedulesForInvoicePayment(
     },
   })
 
-  // 写 opLog (每条单独写, 不阻塞主路径)
+  // 写 opLog；与账期取消、付款创建同事务，审计失败时整体回滚。
   await tx.opLog.create({
     data: {
       tenantId: invoice.tenantId,
@@ -128,7 +128,7 @@ export async function lockSchedulesForInvoicePayment(
       targetId: invoiceId,
       metadata: { cancelledScheduleIds: cancellableIds },
     },
-  }).catch(() => {})
+  })
 
   return { cancelledCount: cancellableIds.length }
 }

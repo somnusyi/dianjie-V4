@@ -19,7 +19,7 @@
  *   - 如果 cmbBindAccount 找不到匹配账户, 不阻断业务, 返 null + 告警 (让付款本身成功)
  *   - createdById 必填, 上游传 (审批人/操作人 fallback 到 receipt creator)
  */
-import { prisma } from '@dianjie/db'
+import { Prisma, prisma } from '@dianjie/db'
 
 // prisma 事务 client 类型 — 不精确导出, 用 any 避免 .prisma/client type 解析问题
 // (runtime 行为完全一致, 调用方传入 prisma.$transaction(async (tx) => {...}) 的 tx)
@@ -59,24 +59,28 @@ export async function writeCashTransaction(
   tx: TxClient,
   opts: WriteCashTxOpts,
 ): Promise<{ id: string; balanceAfter: number } | null> {
+  if (!Number.isFinite(opts.amount) || opts.amount <= 0) {
+    throw new Error('现金流水金额必须是正数')
+  }
   let accountId = opts.accountId
-  let account: { id: string; balance: any } | null = null
+  let candidate: { id: string } | null = null
 
   if (accountId) {
-    account = await tx.cashAccount.findFirst({
+    candidate = await tx.cashAccount.findFirst({
       where: { id: accountId, tenantId: opts.tenantId, status: 'ACTIVE' },
-      select: { id: true, balance: true },
+      select: { id: true },
     })
   } else {
     // 不传 accountId 走 cmbBindAccount auto-find (招行自动付款场景)
-    account = await tx.cashAccount.findFirst({
+    candidate = await tx.cashAccount.findFirst({
       where: { tenantId: opts.tenantId, cmbBindAccount: { not: null }, status: 'ACTIVE' },
-      select: { id: true, balance: true },
+      orderBy: { id: 'asc' },
+      select: { id: true },
     })
-    accountId = account?.id
+    accountId = candidate?.id
   }
 
-  if (!account || !accountId) {
+  if (!candidate || !accountId) {
     // 不阻断业务, 但告警
     console.warn(
       `[cashbook] writeCashTransaction 找不到账户 tenantId=${opts.tenantId} refType=${opts.refType} refId=${opts.refId} ` +
@@ -85,7 +89,16 @@ export async function writeCashTransaction(
     return null
   }
 
-  const newBalance = Number(account.balance) + opts.direction * opts.amount
+  const locked = await tx.$queryRaw(Prisma.sql`
+    SELECT "id", "balance"
+    FROM "cash_accounts"
+    WHERE "id" = ${accountId}
+      AND "tenantId" = ${opts.tenantId}
+      AND "status" = 'ACTIVE'
+    FOR UPDATE
+  `) as Array<{ id: string; balance: Prisma.Decimal }>
+  if (locked.length !== 1) throw new Error('现金账户状态已变化，请刷新后重试')
+  const newBalance = locked[0].balance.plus(new Prisma.Decimal(opts.amount).times(opts.direction))
 
   await tx.cashAccount.update({
     where: { id: accountId },
@@ -109,5 +122,5 @@ export async function writeCashTransaction(
     select: { id: true },
   })
 
-  return { id: created.id, balanceAfter: newBalance }
+  return { id: created.id, balanceAfter: Number(newBalance) }
 }

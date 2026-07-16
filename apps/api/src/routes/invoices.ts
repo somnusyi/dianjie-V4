@@ -21,12 +21,15 @@ export const invoiceRoutes: FastifyPluginAsync = async (app) => {
   const auth = { preHandler: [(app as any).authenticate] }
 
   // ── 列表 ──────────────────────────────────────
-  app.get('/', auth, async (req: any) => {
+  app.get('/', auth, async (req: any, reply: any) => {
     const { tenantId, role, supplierId } = req.user
     const { status } = req.query as any
     const where: any = { tenantId }
     if (status) where.status = status
-    if (isSupplierRole(role) && supplierId) where.supplierId = supplierId
+    if (isSupplierRole(role)) {
+      if (!supplierId) return reply.status(403).send({ error: '账号未绑定供应商' })
+      where.supplierId = supplierId
+    }
     return prisma.invoice.findMany({
       where,
       include: {

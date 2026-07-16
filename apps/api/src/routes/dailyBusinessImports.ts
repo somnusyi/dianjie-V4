@@ -5,6 +5,7 @@ import {
   normalizeVariantKey,
   parseDailyFiles,
   sha256,
+  storeNameMatches,
   type ImportIssue,
   type ParsedDailyFiles,
 } from '../services/dailyBusinessImport'
@@ -50,8 +51,19 @@ function json<T>(value: T): Prisma.InputJsonValue {
 }
 
 function dateOnly(value: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error(`日期格式错误：${value}`)
-  return new Date(`${value}T00:00:00.000Z`)
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  const invalid = () => Object.assign(new Error(`日期格式错误：${value}`), { statusCode: 400 })
+  if (!match) throw invalid()
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  if (
+    parsed.getUTCFullYear() !== year
+    || parsed.getUTCMonth() !== month - 1
+    || parsed.getUTCDate() !== day
+  ) throw invalid()
+  return parsed
 }
 
 function round(value: number, digits = 4) {
@@ -154,6 +166,17 @@ async function readMultipart(req: any) {
 async function buildPreview(store: { id: string; tenantId: string }, parsed: ParsedDailyFiles) {
   const blockingIssues: ImportIssue[] = [...parsed.blockingIssues]
   const warningIssues: ImportIssue[] = [...parsed.warningIssues]
+  const storeRecord = await prisma.store.findFirst({
+    where: { id: store.id, tenantId: store.tenantId },
+    select: { name: true },
+  })
+  if (!storeRecord || !storeNameMatches(storeRecord.name, parsed.business.storeName)) {
+    blockingIssues.push({
+      code: 'TARGET_STORE_MISMATCH',
+      message: '报表门店与当前操作门店不一致',
+      detail: `当前门店：${storeRecord?.name || '未知'}；报表门店：${parsed.business.storeName}`,
+    })
+  }
   const names = [...new Set(parsed.sales.map(row => row.name))]
   const dishes = await prisma.dish.findMany({
     where: { tenantId: store.tenantId },
@@ -323,69 +346,78 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
       const store = await targetStore(req.user, upload.storeId)
       const parsed = await parseDailyFiles(upload.business.buffer, upload.sales.buffer)
       const businessDate = dateOnly(parsed.business.date)
-      if (businessDate > dateOnly(chinaClock().today)) return reply.status(400).send({ error: '不能导入未来营业日' })
+      if (businessDate > dateOnly(chinaClock().expectedBusinessDate)) {
+        return reply.status(400).send({ error: '只能导入已结束的营业日，不能导入当天或未来数据' })
+      }
       const businessHash = sha256(upload.business.buffer)
       const salesHash = sha256(upload.sales.buffer)
       const built = await buildPreview(store, parsed)
-      const existing = await prisma.dailyBusinessImport.findUnique({
-        where: {
-          daily_import_version_uk: {
+      const allocated = await prisma.$transaction(async tx => {
+        const lockKey = `daily-import:${store.tenantId}:${store.id}:${parsed.business.date}`
+        await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`)
+        const existing = await tx.dailyBusinessImport.findUnique({
+          where: {
+            daily_import_version_uk: {
+              storeId: store.id,
+              businessDate,
+              businessFileHash: businessHash,
+              salesFileHash: salesHash,
+              calculationFingerprint: built.preview.calculationFingerprint,
+            },
+          },
+        })
+        if (existing) return { existing, created: null }
+        const latest = await tx.dailyBusinessImport.aggregate({
+          where: { storeId: store.id, businessDate }, _max: { revision: true },
+        })
+        const created = await tx.dailyBusinessImport.create({
+          data: {
+            tenantId: store.tenantId,
+            storeId: store.id,
+            businessDate,
+            revision: (latest._max.revision || 0) + 1,
+            status: 'PREVIEWED',
+            businessFileName: upload.business.filename,
+            businessFileHash: businessHash,
+            salesFileName: upload.sales.filename,
+            salesFileHash: salesHash,
+            calculationFingerprint: built.preview.calculationFingerprint,
+            grossAmount: parsed.business.grossAmount,
+            discountAmount: parsed.business.discountAmount,
+            netRevenue: parsed.business.netRevenue,
+            orderCount: parsed.business.orders,
+            dishRowCount: parsed.sales.length,
+            parsedData: json(parsed),
+            previewData: json(built.preview),
+            blockingIssues: json(built.blockingIssues),
+            warningIssues: json(built.warningIssues),
+            createdById: req.user.userId,
+          },
+        })
+        await tx.dailyBusinessImport.updateMany({
+          where: {
+            id: { not: created.id },
             storeId: store.id,
             businessDate,
             businessFileHash: businessHash,
             salesFileHash: salesHash,
-            calculationFingerprint: built.preview.calculationFingerprint,
+            status: 'PREVIEWED',
           },
-        },
-      })
-      if (existing?.status === 'PREVIEWED') return reply.send(publicImport(existing))
-      if (existing?.status === 'CONFIRMED') return reply.send(publicImport(existing))
-      if (existing) {
+          data: { status: 'SUPERSEDED', supersededAt: new Date() },
+        })
+        return { existing: null, created }
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 30_000 })
+      if (allocated.existing?.status === 'PREVIEWED' || allocated.existing?.status === 'CONFIRMED') {
+        return reply.send(publicImport(allocated.existing))
+      }
+      if (allocated.existing) {
         return reply.status(409).send({
-          error: existing.status === 'SUPERSEDED'
+          error: allocated.existing.status === 'SUPERSEDED'
             ? '这组文件已被后续更正版本替代，请上传新的更正文件'
-            : `这组文件当前状态为 ${existing.status}，请稍后刷新`,
+            : `这组文件当前状态为 ${allocated.existing.status}，请稍后刷新`,
         })
       }
-      const latest = await prisma.dailyBusinessImport.aggregate({
-        where: { storeId: store.id, businessDate }, _max: { revision: true },
-      })
-      const created = await prisma.dailyBusinessImport.create({
-        data: {
-          tenantId: store.tenantId,
-          storeId: store.id,
-          businessDate,
-          revision: (latest._max.revision || 0) + 1,
-          status: 'PREVIEWED',
-          businessFileName: upload.business.filename,
-          businessFileHash: businessHash,
-          salesFileName: upload.sales.filename,
-          salesFileHash: salesHash,
-          calculationFingerprint: built.preview.calculationFingerprint,
-          grossAmount: parsed.business.grossAmount,
-          discountAmount: parsed.business.discountAmount,
-          netRevenue: parsed.business.netRevenue,
-          orderCount: parsed.business.orders,
-          dishRowCount: parsed.sales.length,
-          parsedData: json(parsed),
-          previewData: json(built.preview),
-          blockingIssues: json(built.blockingIssues),
-          warningIssues: json(built.warningIssues),
-          createdById: req.user.userId,
-        },
-      })
-      await prisma.dailyBusinessImport.updateMany({
-        where: {
-          id: { not: created.id },
-          storeId: store.id,
-          businessDate,
-          businessFileHash: businessHash,
-          salesFileHash: salesHash,
-          status: 'PREVIEWED',
-        },
-        data: { status: 'SUPERSEDED', supersededAt: new Date() },
-      })
-      return reply.status(201).send(publicImport(created))
+      return reply.status(201).send(publicImport(allocated.created!))
     } catch (error: any) {
       req.log.warn({ error }, 'daily import preview failed')
       return reply.status(error.statusCode || 400).send({ error: error.message || '文件解析失败' })

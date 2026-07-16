@@ -38,6 +38,8 @@ export type ParsedDailyFiles = {
   business: BusinessMetrics
   sales: PosDishVariant[]
   returns: PosDishVariant[]
+  salesStoreNames: string[]
+  returnStoreNames: string[]
   totals: {
     quantity: number
     grossAmount: number
@@ -58,6 +60,32 @@ export function normalizeDishName(value: string) {
 
 export function normalizeVariantKey(value: string | null | undefined) {
   return normalizeDishName(String(value || ''))
+}
+
+function storeIdentity(value: string) {
+  return normalizeDishName(value)
+    .replaceAll('南京云洱之境餐饮集团', '')
+    .replaceAll('云洱之境餐饮集团', '')
+    .replaceAll('云南山珍菌汤锅', '')
+    .replaceAll('滇界', '')
+    .replaceAll('门店', '')
+    .replaceAll('店', '')
+}
+
+export function storeNameMatches(targetStoreName: string, sourceStoreName: string) {
+  const target = storeIdentity(targetStoreName)
+  const source = storeIdentity(sourceStoreName)
+  if (!target || !source) return false
+  if (target.includes(source) || source.includes(target)) return true
+  let longest = 0
+  for (let left = 0; left < target.length; left += 1) {
+    for (let right = 0; right < source.length; right += 1) {
+      let length = 0
+      while (target[left + length] && target[left + length] === source[right + length]) length += 1
+      longest = Math.max(longest, length)
+    }
+  }
+  return longest >= 2
 }
 
 function round(value: number, digits: number) {
@@ -92,6 +120,15 @@ function dateString(value: ExcelJS.CellValue | string | undefined | null): strin
   const raw = text(value as ExcelJS.CellValue)
   const match = raw.match(/(20\d{2})[\/-](\d{1,2})[\/-](\d{1,2})/)
   if (!match) return null
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  if (
+    parsed.getUTCFullYear() !== year
+    || parsed.getUTCMonth() !== month - 1
+    || parsed.getUTCDate() !== day
+  ) return null
   return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`
 }
 
@@ -146,13 +183,16 @@ export async function parseBusinessWorkbook(buffer: Buffer): Promise<BusinessMet
   const dinersColumn = headerColumn(found.indexes, '用餐人数')
   const tablesColumn = headerColumn(found.indexes, '消费桌数')
 
+  const rows: BusinessMetrics[] = []
   for (let rowNumber = found.rowNumber + 1; rowNumber <= worksheet.rowCount; rowNumber += 1) {
     const row = worksheet.getRow(rowNumber)
     const date = dateString(row.getCell(dateColumn).value)
     if (!date || text(row.getCell(1).value) === '合计') continue
-    return {
+    const storeName = text(row.getCell(storeColumn).value)
+    if (!storeName) throw new Error(`综合营业统计第 ${rowNumber} 行缺少门店名称`)
+    const metrics = {
       date,
-      storeName: text(row.getCell(storeColumn).value),
+      storeName,
       grossAmount: round(numberValue(row.getCell(grossColumn).value), 2),
       discountAmount: round(numberValue(row.getCell(discountColumn).value), 2),
       netRevenue: round(numberValue(row.getCell(netColumn).value), 2),
@@ -160,15 +200,22 @@ export async function parseBusinessWorkbook(buffer: Buffer): Promise<BusinessMet
       diners: dinersColumn ? Math.round(numberValue(row.getCell(dinersColumn).value)) : 0,
       tables: tablesColumn ? Math.round(numberValue(row.getCell(tablesColumn).value)) : 0,
     }
+    if (metrics.grossAmount < 0 || metrics.discountAmount < 0 || metrics.netRevenue < 0 || metrics.orders < 0) {
+      throw new Error(`综合营业统计第 ${rowNumber} 行包含负数，不能导入`)
+    }
+    rows.push(metrics)
   }
-  throw new Error('综合营业统计没有可导入的数据行')
+  if (rows.length === 0) throw new Error('综合营业统计没有可导入的数据行')
+  if (rows.length > 1) throw new Error('综合营业统计包含多个门店或多个营业日，请只导出单店单日数据')
+  return rows[0]
 }
 
-function parseDishWorksheet(worksheet: ExcelJS.Worksheet): PosDishVariant[] {
+function parseDishWorksheet(worksheet: ExcelJS.Worksheet) {
   const found = findHeader(worksheet, ['菜品名称', '销售数量'])
     || findHeader(worksheet, ['菜品名称', '菜品销量'])
   if (!found) throw new Error(`工作表“${worksheet.name}”无法识别菜品销售表头`)
   const nameColumn = requiredColumn(found.indexes, '菜品名称')
+  const storeColumn = headerColumn(found.indexes, '门店', '门店名称')
   const dateColumn = headerColumn(found.indexes, '营业日期', '营业日', '日期')
   const specColumn = headerColumn(found.indexes, '规格')
   const codeColumn = headerColumn(found.indexes, '菜品编码', '商品编码')
@@ -191,10 +238,13 @@ function parseDishWorksheet(worksheet: ExcelJS.Worksheet): PosDishVariant[] {
   })()
 
   const grouped = new Map<string, PosDishVariant & { codes: Set<string>; orders: Set<string> }>()
+  const storeNames = new Set<string>()
   for (let rowNumber = found.rowNumber + 1; rowNumber <= worksheet.rowCount; rowNumber += 1) {
     const row = worksheet.getRow(rowNumber)
     const name = text(row.getCell(nameColumn).value)
     if (!name || name === '合计') continue
+    const storeName = storeColumn ? text(row.getCell(storeColumn).value) : ''
+    if (storeName) storeNames.add(storeName)
     const date = (dateColumn ? dateString(row.getCell(dateColumn).value) : null) || metadataDate
     if (!date) throw new Error(`工作表“${worksheet.name}”第 ${rowNumber} 行无法识别营业日期`)
     const spec = specColumn ? text(row.getCell(specColumn).value) : ''
@@ -219,15 +269,16 @@ function parseDishWorksheet(worksheet: ExcelJS.Worksheet): PosDishVariant[] {
     current.lineCount += 1
     grouped.set(key, current)
   }
-  return [...grouped.values()].map(({ codes, orders, ...row }) => ({
+  const rows = [...grouped.values()].map(({ codes, orders, ...row }) => ({
     ...row,
     externalCodes: [...codes].sort(),
     uniqueOrders: orders.size,
     quantity: round(row.quantity, 4),
     grossAmount: round(row.grossAmount, 2),
     discountAmount: round(row.discountAmount, 2),
-    netIncome: round(row.netIncome || (row.grossAmount - row.discountAmount), 2),
+    netIncome: round(netColumn ? row.netIncome : (row.grossAmount - row.discountAmount), 2),
   })).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN') || a.spec.localeCompare(b.spec, 'zh-CN'))
+  return { rows, storeNames: [...storeNames].sort((a, b) => a.localeCompare(b, 'zh-CN')) }
 }
 
 export async function parseSalesWorkbook(buffer: Buffer) {
@@ -236,10 +287,9 @@ export async function parseSalesWorkbook(buffer: Buffer) {
   const soldSheet = workbook.getWorksheet('已销售') || workbook.worksheets.find(sheet => findHeader(sheet, ['菜品名称', '销售数量']))
   if (!soldSheet) throw new Error('菜品销售文件缺少“已销售”工作表')
   const returnSheet = workbook.getWorksheet('退菜')
-  return {
-    sales: parseDishWorksheet(soldSheet),
-    returns: returnSheet ? parseDishWorksheet(returnSheet) : [],
-  }
+  const sold = parseDishWorksheet(soldSheet)
+  const returned = returnSheet ? parseDishWorksheet(returnSheet) : { rows: [], storeNames: [] }
+  return { sales: sold.rows, returns: returned.rows, salesStoreNames: sold.storeNames, returnStoreNames: returned.storeNames }
 }
 
 export async function parseDailyFiles(businessBuffer: Buffer, salesBuffer: Buffer): Promise<ParsedDailyFiles> {
@@ -264,6 +314,29 @@ export async function parseDailyFiles(businessBuffer: Buffer, salesBuffer: Buffe
       detail: `综合营业：${business.date}；菜品销售：${salesDates.join('、') || '未识别'}`,
     })
   }
+  if (parsedSales.salesStoreNames.length !== 1) {
+    blockingIssues.push({
+      code: 'SALES_STORE_INVALID',
+      message: parsedSales.salesStoreNames.length === 0 ? '菜品销售文件无法识别门店' : '菜品销售文件包含多个门店',
+      detail: parsedSales.salesStoreNames.join('、') || '请重新导出包含门店列的单店单日报表',
+    })
+  } else if (normalizeDishName(parsedSales.salesStoreNames[0]) !== normalizeDishName(business.storeName)) {
+    blockingIssues.push({
+      code: 'FILE_STORE_MISMATCH',
+      message: '两份文件的门店不一致',
+      detail: `综合营业：${business.storeName}；菜品销售：${parsedSales.salesStoreNames[0]}`,
+    })
+  }
+  const mismatchedReturnStores = parsedSales.returnStoreNames.filter(
+    name => normalizeDishName(name) !== normalizeDishName(business.storeName),
+  )
+  if (mismatchedReturnStores.length > 0) {
+    blockingIssues.push({
+      code: 'RETURN_STORE_MISMATCH',
+      message: '退菜工作表包含其他门店数据',
+      detail: mismatchedReturnStores.join('、'),
+    })
+  }
   const checks: Array<[string, string, number, number]> = [
     ['GROSS_MISMATCH', '营业额', totals.grossAmount, business.grossAmount],
     ['DISCOUNT_MISMATCH', '优惠金额', totals.discountAmount, business.discountAmount],
@@ -283,5 +356,14 @@ export async function parseDailyFiles(businessBuffer: Buffer, salesBuffer: Buffe
       code: 'RETURNS_NOT_RESTOCKED', message: `检测到 ${parsedSales.returns.length} 个退菜品项，按已确认规则不补回库存`,
     })
   }
-  return { business, sales: parsedSales.sales, returns: parsedSales.returns, totals, blockingIssues, warningIssues }
+  return {
+    business,
+    sales: parsedSales.sales,
+    returns: parsedSales.returns,
+    salesStoreNames: parsedSales.salesStoreNames,
+    returnStoreNames: parsedSales.returnStoreNames,
+    totals,
+    blockingIssues,
+    warningIssues,
+  }
 }

@@ -1,30 +1,32 @@
 import ExcelJS from 'exceljs'
 import { describe, expect, it } from 'vitest'
-import { normalizeDishName, normalizeVariantKey, parseDailyFiles } from '../../src/services/dailyBusinessImport'
+import { normalizeDishName, normalizeVariantKey, parseDailyFiles, storeNameMatches } from '../../src/services/dailyBusinessImport'
 
 async function workbookBuffer(workbook: ExcelJS.Workbook) {
   const value = await workbook.xlsx.writeBuffer()
   return Buffer.from(value)
 }
 
-async function businessFile(input: { date?: string; gross?: number; discount?: number; net?: number } = {}) {
+async function businessFile(input: { date?: string; gross?: number; discount?: number; net?: number; store?: string; extraStore?: string } = {}) {
   const workbook = new ExcelJS.Workbook()
   const sheet = workbook.addWorksheet('综合营业统计')
   sheet.addRow(['综合营业统计'])
   sheet.addRow(['营业日期【2026/07/15-2026/07/15】'])
   sheet.addRow(['城市', '门店', '营业日', '营业额(元)', '优惠金额(元)', '营业收入(元)', '订单量', '用餐人数', '消费桌数'])
-  sheet.addRow(['合肥市', '瑶海店', input.date || '2026/07/15', input.gross ?? 100, input.discount ?? 20, input.net ?? 80, 2, 4, 2])
+  sheet.addRow(['合肥市', input.store || '瑶海店', input.date || '2026/07/15', input.gross ?? 100, input.discount ?? 20, input.net ?? 80, 2, 4, 2])
+  if (input.extraStore) sheet.addRow(['合肥市', input.extraStore, input.date || '2026/07/15', 1, 0, 1, 1, 1, 1])
   return workbookBuffer(workbook)
 }
 
-async function salesFile(input: { date?: string; net?: number } = {}) {
+async function salesFile(input: { date?: string; net?: number; store?: string; freeDish?: boolean } = {}) {
   const workbook = new ExcelJS.Workbook()
   const sold = workbook.addWorksheet('已销售')
   sold.addRow(['菜品销售明细'])
   sold.addRow([`【结账时间】；【${input.date || '2026/07/15'} 00:00 至 ${input.date || '2026/07/15'} 23:59】`])
   sold.addRow(['城市', '门店', '营业日期', '菜品编码', '菜品名称', '规格', '单位', '菜品大类', '订单编号', '销售数量', '销售额（元）', '菜品优惠（元）', '菜品收入（元）'])
-  sold.addRow(['合肥', '瑶海店', input.date || '2026/07/15', '1001', '云南秘制黄牛肉（微微辣）', '小份', '份', '牛肉', 'A1', 1, 60, 10, input.net ?? 50])
-  sold.addRow(['合肥', '瑶海店', input.date || '2026/07/15', '1001', '云南秘制黄牛肉（微微辣）', '小份', '份', '牛肉', 'A2', 1, 40, 10, 30])
+  sold.addRow(['合肥', input.store || '瑶海店', input.date || '2026/07/15', '1001', '云南秘制黄牛肉（微微辣）', '小份', '份', '牛肉', 'A1', 1, 60, 10, input.net ?? 50])
+  sold.addRow(['合肥', input.store || '瑶海店', input.date || '2026/07/15', '1001', '云南秘制黄牛肉（微微辣）', '小份', '份', '牛肉', 'A2', 1, 40, 10, 30])
+  if (input.freeDish) sold.addRow(['合肥', input.store || '瑶海店', input.date || '2026/07/15', '1003', '赠品', '', '份', '赠品', 'A3', 1, 6, 0, 0])
   const returned = workbook.addWorksheet('退菜')
   returned.addRow(['退菜'])
   returned.addRow([`【结账时间】；【${input.date || '2026/07/15'} 00:00 至 ${input.date || '2026/07/15'} 23:59】`])
@@ -59,9 +61,30 @@ describe('daily business import parser', () => {
     expect(parsed.blockingIssues.map(issue => issue.code)).toContain('NET_MISMATCH')
   })
 
+  it('keeps an explicit zero dish income instead of replacing it with gross minus discount', async () => {
+    const parsed = await parseDailyFiles(
+      await businessFile({ gross: 106, discount: 20, net: 80 }),
+      await salesFile({ freeDish: true }),
+    )
+    expect(parsed.sales.find(row => row.name === '赠品')?.netIncome).toBe(0)
+    expect(parsed.blockingIssues).toEqual([])
+  })
+
+  it('blocks files exported for different stores', async () => {
+    const parsed = await parseDailyFiles(await businessFile(), await salesFile({ store: '万象汇店' }))
+    expect(parsed.blockingIssues.map(issue => issue.code)).toContain('FILE_STORE_MISMATCH')
+  })
+
+  it('rejects a comprehensive workbook that contains more than one store row', async () => {
+    await expect(parseDailyFiles(await businessFile({ extraStore: '万象汇店' }), await salesFile()))
+      .rejects.toThrow('单店单日')
+  })
+
   it('normalizes POS names and specification keys consistently', () => {
     expect(normalizeDishName('10 秒·脆毛肚')).toBe(normalizeDishName('10秒脆毛肚'))
     expect(normalizeVariantKey('（大 份）')).toBe('大份')
     expect(normalizeVariantKey('')).toBe('')
+    expect(storeNameMatches('合肥瑶海店', '滇界·云南山珍菌汤锅（瑶海万达店）')).toBe(true)
+    expect(storeNameMatches('合肥瑶海店', '滇界·云南山珍菌汤锅（万象汇店）')).toBe(false)
   })
 })

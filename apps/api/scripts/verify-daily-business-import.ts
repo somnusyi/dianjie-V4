@@ -118,7 +118,11 @@ async function main() {
   const date = new Date(`${DATE}T00:00:00.000Z`)
   try {
     const token = await login()
-    const firstPreview = await preview(token, 1)
+    const concurrentPreviews = await Promise.all([preview(token, 1), preview(token, 1)])
+    if (concurrentPreviews[0].id !== concurrentPreviews[1].id) {
+      throw new Error('相同文件并发预览没有命中同一幂等记录')
+    }
+    const firstPreview = concurrentPreviews[0]
     const duplicatePreview = await preview(token, 1)
     if (duplicatePreview.id !== firstPreview.id) throw new Error('相同文件对未命中幂等记录')
     await prisma.dishRecipe.update({

@@ -1113,7 +1113,7 @@ model Payment {
   tenantId         String
   no               String // PY202401001
   supplierId       String
-  reconciliationId String?
+  reconciliationId String?   @unique
   amount           Decimal   @db.Decimal(12, 2)
   method           PayMethod @default(BANK_TRANSFER)
   status           PayStatus @default(UNPAID)
@@ -1131,6 +1131,7 @@ model Payment {
   reconciliation Reconciliation? @relation(fields: [reconciliationId], references: [id])
 
   @@unique([tenantId, no])
+  @@unique([tenantId, bankTxNo])
   @@map("payments")
 }
 

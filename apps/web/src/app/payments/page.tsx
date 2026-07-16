@@ -5,53 +5,84 @@ import { PageHeader, Card, Table, Badge, Btn, Modal, Field, Input, Select, fmt, 
 import api from '@/lib/api'
 
 const PAGE_SIZE = 20
+const ACCOUNT_TYPE_BY_METHOD: Record<string, string> = {
+  BANK_TRANSFER: 'BANK', ALIPAY: 'ALIPAY', WECHAT: 'WECHAT', CASH: 'CASH',
+}
+
+function localToday() {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
 
 export default function PaymentsPage() {
   const [payments, setPayments] = useState<any[]>([])
   const [recons, setRecons] = useState<any[]>([])
+  const [accounts, setAccounts] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [createOpen, setCreateOpen] = useState(false)
   const [paidOpen, setPaidOpen] = useState(false)
   const [current, setCurrent] = useState<any>(null)
   const [form, setForm] = useState({ reconciliationId: '', amount: '', method: 'BANK_TRANSFER', note: '' })
-  const [bankTxNo, setBankTxNo] = useState('')
+  const [paidForm, setPaidForm] = useState({ accountId: '', paidAt: localToday(), bankTxNo: '', note: '' })
   const { show, ToastEl } = useToast()
 
   const load = async (p = page) => {
     setLoading(true)
     try {
-      const [pm, r] = await Promise.all([
+      const [pm, r, a] = await Promise.all([
         api.get(`/api/payments?page=${p}&pageSize=${PAGE_SIZE}`),
         api.get('/api/reconciliations'),
+        api.get('/api/cashbook/accounts'),
       ])
       const data = pm.data
       setPayments(Array.isArray(data) ? data : data.items || [])
       setTotal(data.total || 0)
       setPage(p)
       setRecons(r.data.filter((r: any) => r.status === 'APPROVED'))
-    } catch {}
+      setAccounts(Array.isArray(a.data) ? a.data : [])
+    } catch (e: any) {
+      show(e.response?.data?.error || '付款数据加载失败', 'error')
+    }
     setLoading(false)
   }
   useEffect(() => { load(1) }, [])
 
-  const openPaid = (row: any) => { setCurrent(row); setBankTxNo(''); setPaidOpen(true) }
+  const openPaid = (row: any) => {
+    const expectedType = ACCOUNT_TYPE_BY_METHOD[row.method]
+    const firstAccount = accounts.find(account => account.type === expectedType)
+    setCurrent(row)
+    setPaidForm({ accountId: firstAccount?.id || '', paidAt: localToday(), bankTxNo: '', note: '' })
+    setPaidOpen(true)
+  }
 
   const submitCreate = async () => {
     if (!form.reconciliationId || !form.amount) return show('请填写完整信息', 'error')
+    if (saving) return
+    setSaving(true)
     try {
       await api.post('/api/payments', { ...form, amount: Number(form.amount) })
       show('付款单已创建'); setCreateOpen(false); load(1)
     } catch (e: any) { show(e.response?.data?.error || '创建失败', 'error') }
+    finally { setSaving(false) }
   }
 
   const submitPaid = async () => {
+    if (!paidForm.accountId || !paidForm.paidAt) return show('请选择付款账户和付款日期', 'error')
+    if (current.method !== 'CASH' && !paidForm.bankTxNo.trim()) return show('非现金付款必须填写实际支付流水号', 'error')
+    if (saving) return
+    setSaving(true)
     try {
-      await api.patch(`/api/payments/${current.id}/paid`, { bankTxNo })
-      show('已标记付款完成'); setPaidOpen(false); load(page)
+      const response = await api.patch(`/api/payments/${current.id}/paid`, paidForm)
+      show(response.data?.voucherWarning || '付款已完成并记入资金台账', response.data?.voucherWarning ? 'error' : 'success')
+      setPaidOpen(false); load(page)
     } catch (e: any) { show(e.response?.data?.error || '操作失败', 'error') }
+    finally { setSaving(false) }
   }
+
+  const eligibleAccounts = accounts.filter(account => account.type === ACCOUNT_TYPE_BY_METHOD[current?.method])
 
   const cols = [
     { key: 'no', title: '付款单号', render: (v: string) => <span style={{ color: '#156b43', fontWeight: 600 }}>{v}</span> },
@@ -74,7 +105,10 @@ export default function PaymentsPage() {
       {ToastEl}
       <div style={{ padding: 28 }}>
         <PageHeader title="付款管理" sub="创建付款单，录入银行流水，完成供应商货款支付"
-          action={<Btn variant="primary" onClick={() => setCreateOpen(true)}>＋ 创建付款单</Btn>} />
+          action={<Btn variant="primary" onClick={() => {
+            setForm({ reconciliationId: '', amount: '', method: 'BANK_TRANSFER', note: '' })
+            setCreateOpen(true)
+          }}>＋ 创建付款单</Btn>} />
         <Card style={{ padding: loading ? 16 : 0 }}>
           {loading ? <TableSkeleton rows={8} /> : <Table columns={cols} data={payments} />}
           <div style={{ padding: '0 12px' }}>
@@ -90,15 +124,15 @@ export default function PaymentsPage() {
             setForm({ ...form, reconciliationId: v, amount: r ? String(r.totalAmount) : '' })
           }} options={recons.map(r => ({ value: r.id, label: `${r.no} · ${r.supplier?.name} · ${fmt(r.totalAmount)}` }))} placeholder="选择已审核的对账单" />
         </Field>
-        <Field label="付款金额" required><Input value={form.amount} onChange={v => setForm({ ...form, amount: v })} type="number" /></Field>
+        <Field label="付款金额" required><Input value={form.amount} onChange={() => {}} type="number" disabled /></Field>
         <Field label="付款方式">
           <Select value={form.method} onChange={v => setForm({ ...form, method: v })}
-            options={[{ value: 'BANK_TRANSFER', label: '网银转账' }, { value: 'ALIPAY', label: '支付宝' }, { value: 'CASH', label: '现金' }]} />
+            options={[{ value: 'BANK_TRANSFER', label: '网银转账' }, { value: 'ALIPAY', label: '支付宝' }, { value: 'WECHAT', label: '微信支付' }, { value: 'CASH', label: '现金' }]} />
         </Field>
         <Field label="备注"><Input value={form.note} onChange={v => setForm({ ...form, note: v })} placeholder="可选" /></Field>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20, paddingTop: 16, borderTop: '1px solid #e5e7eb' }}>
-          <Btn onClick={() => setCreateOpen(false)}>取消</Btn>
-          <Btn variant="primary" onClick={submitCreate}>创建</Btn>
+          <Btn onClick={() => setCreateOpen(false)} disabled={saving}>取消</Btn>
+          <Btn variant="primary" onClick={submitCreate} disabled={saving}>{saving ? '创建中…' : '创建'}</Btn>
         </div>
       </Modal>
 
@@ -110,12 +144,25 @@ export default function PaymentsPage() {
               <div style={{ marginTop: 4 }}>付款金额：<b style={{ color: '#d97706', fontSize: 15 }}>{fmt(current.amount)}</b></div>
               <div style={{ marginTop: 4 }}>收款账号：<span style={{ color: '#6b7280' }}>{current.supplier?.bankAccount || '未填写'}</span></div>
             </div>
-            <Field label="银行流水号">
-              <Input value={bankTxNo} onChange={setBankTxNo} placeholder="请填写银行转账流水号" />
+            <Field label="实际付款账户" required>
+              <Select value={paidForm.accountId} onChange={accountId => setPaidForm({ ...paidForm, accountId })}
+                options={eligibleAccounts.map(account => ({ value: account.id, label: `${account.name} · 余额 ${fmt(account.balance)}` }))}
+                placeholder={eligibleAccounts.length ? '请选择实际出款账户' : `未配置可用的 ${ACCOUNT_TYPE_BY_METHOD[current.method]} 账户`} />
             </Field>
+            <Field label="实际付款日期" required>
+              <Input value={paidForm.paidAt} onChange={paidAt => setPaidForm({ ...paidForm, paidAt })} type="date" />
+            </Field>
+            <Field label={current.method === 'CASH' ? '支付凭据号（可选）' : '支付流水号'} required={current.method !== 'CASH'}>
+              <Input value={paidForm.bankTxNo} onChange={bankTxNo => setPaidForm({ ...paidForm, bankTxNo })}
+                placeholder={current.method === 'CASH' ? '现金付款可不填' : '必须填写银行/平台真实流水号'} />
+            </Field>
+            <Field label="付款备注">
+              <Input value={paidForm.note} onChange={note => setPaidForm({ ...paidForm, note })} placeholder="可选，将写入资金流水" />
+            </Field>
+            {!eligibleAccounts.length && <div style={{ color: '#b45309', fontSize: 12, marginTop: -4 }}>请先到资金台账创建并启用对应类型的账户。</div>}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20, paddingTop: 16, borderTop: '1px solid #e5e7eb' }}>
-              <Btn onClick={() => setPaidOpen(false)}>取消</Btn>
-              <Btn variant="primary" onClick={submitPaid}>确认已付款</Btn>
+              <Btn onClick={() => setPaidOpen(false)} disabled={saving}>取消</Btn>
+              <Btn variant="primary" onClick={submitPaid} disabled={saving || !eligibleAccounts.length}>{saving ? '提交中…' : '确认已付款并扣款'}</Btn>
             </div>
           </>
         )}

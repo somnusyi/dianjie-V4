@@ -2039,6 +2039,7 @@ enum CashAccountType {
 model Notification {
   id            String   @id @default(cuid())
   tenantId      String
+  dedupeKey     String?  @db.VarChar(160) // 可选业务幂等键；同租户内只发送一次
   recipientRole String // 目标角色: MANAGER / SUPPLIER_STAFF / ADMIN / FINANCE
   recipientId   String? // 指定用户（空=按角色广播）
   type          String // ORDER_SUBMITTED / SHIPPED / RECEIPT_CONFIRMED / LOSS_CLAIM_RESULT / APPROVAL_PENDING / APPROVAL_DONE
@@ -2054,6 +2055,7 @@ model Notification {
 
   @@index([tenantId, recipientRole, read])
   @@index([recipientId, read])
+  @@unique([tenantId, dedupeKey])
   @@map("notifications")
 }
 

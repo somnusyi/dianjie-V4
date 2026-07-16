@@ -176,6 +176,49 @@ export async function autoReceivePurchaseOrder(orderId: string) {
   return { receipt, duplicated: false, derivatives }
 }
 
+export type PaymentReminderKind = '3DAY' | '1DAY'
+
+/**
+ * Persist a due reminder once and then advance the schedule marker. The durable
+ * notification dedupe key closes both multi-instance races and the crash window
+ * between notification insertion and marker update.
+ */
+export async function ensurePaymentDueReminder(scheduleId: string, kind: PaymentReminderKind) {
+  const schedule = await prisma.paymentSchedule.findFirst({
+    where: { id: scheduleId, status: { in: ['PENDING', 'APPROVED'] } },
+    include: { supplier: true, receipt: { include: { store: true } } },
+  })
+  if (!schedule) return { created: false, duplicated: false, skipped: true }
+  if ((kind === '3DAY' && schedule.notified3Days) || (kind === '1DAY' && schedule.notified1Day)) {
+    return { created: false, duplicated: true, skipped: true }
+  }
+
+  const type = kind === '3DAY' ? 'DUE_REMINDER_3DAY' : 'DUE_REMINDER_1DAY'
+  const result = await notify({
+    tenantId: schedule.tenantId,
+    recipientRole: 'FINANCE',
+    type,
+    title: kind === '3DAY' ? '账期提醒：3天后到期' : '紧急：明日到期',
+    body: kind === '3DAY'
+      ? `${schedule.receipt.store.name} → ${schedule.supplier.name} ¥${Number(schedule.amount).toLocaleString()}，到期日 ${dayjs(schedule.dueAt).format('MM/DD')}`
+      : `${schedule.receipt.store.name} → ${schedule.supplier.name} ¥${Number(schedule.amount).toLocaleString()}`,
+    refType: 'PaymentSchedule',
+    refId: schedule.id,
+    dedupeKey: `PaymentSchedule:${schedule.id}:${type}`,
+  })
+
+  if (kind === '3DAY') {
+    await prisma.paymentSchedule.updateMany({
+      where: { id: schedule.id, notified3Days: false }, data: { notified3Days: true },
+    })
+  } else {
+    await prisma.paymentSchedule.updateMany({
+      where: { id: schedule.id, notified1Day: false }, data: { notified1Day: true },
+    })
+  }
+  return { ...result, skipped: false }
+}
+
 export async function runDailyCheck() {
   console.log(`⏰ [${dayjs().format('YYYY-MM-DD HH:mm')}] 开始账期日扫描...`)
   const now = dayjs()
@@ -190,20 +233,19 @@ export async function runDailyCheck() {
         lte: now.add(3, 'day').endOf('day').toDate(),
       },
     },
-    include: { supplier: true, receipt: { include: { store: true } } },
+    select: { id: true },
   })
 
+  let reminderSuccess = 0
+  let reminderFailed = 0
   for (const s of threeDaySchedules) {
-    await notify({
-      tenantId: s.tenantId,
-      recipientRole: 'FINANCE',
-      type: 'DUE_REMINDER_3DAY',
-      title: '账期提醒：3天后到期',
-      body: `${s.receipt.store.name} → ${s.supplier.name} ¥${Number(s.amount).toLocaleString()}，到期日 ${dayjs(s.dueAt).format('MM/DD')}`,
-      refType: 'PaymentSchedule',
-      refId: s.id,
-    })
-    await prisma.paymentSchedule.update({ where: { id: s.id }, data: { notified3Days: true } })
+    try {
+      await ensurePaymentDueReminder(s.id, '3DAY')
+      reminderSuccess++
+    } catch (error: any) {
+      reminderFailed++
+      console.error(`账期 T-3 提醒失败 ${s.id}:`, error?.message || error)
+    }
   }
 
   // 2. T-1天提醒
@@ -216,20 +258,17 @@ export async function runDailyCheck() {
         lte: now.add(1, 'day').endOf('day').toDate(),
       },
     },
-    include: { supplier: true, receipt: { include: { store: true } } },
+    select: { id: true },
   })
 
   for (const s of oneDaySchedules) {
-    await notify({
-      tenantId: s.tenantId,
-      recipientRole: 'FINANCE',
-      type: 'DUE_REMINDER_1DAY',
-      title: '紧急：明日到期',
-      body: `${s.receipt.store.name} → ${s.supplier.name} ¥${Number(s.amount).toLocaleString()}`,
-      refType: 'PaymentSchedule',
-      refId: s.id,
-    })
-    await prisma.paymentSchedule.update({ where: { id: s.id }, data: { notified1Day: true } })
+    try {
+      await ensurePaymentDueReminder(s.id, '1DAY')
+      reminderSuccess++
+    } catch (error: any) {
+      reminderFailed++
+      console.error(`账期 T-1 提醒失败 ${s.id}:`, error?.message || error)
+    }
   }
 
   // 3. 到期自动付款（APPROVED 状态 = 已审批或不需审批）
@@ -307,7 +346,7 @@ export async function runDailyCheck() {
     data: { status: 'OVERDUE' },
   })
 
-  console.log(`✅ 账期扫描完成: 提醒${threeDaySchedules.length + oneDaySchedules.length}笔，付款${dueSchedules.length + pendingDue.length}笔，OVERDUE 复活${overdueOk}笔`)
+  console.log(`✅ 账期扫描完成: 提醒成功${reminderSuccess}笔/失败${reminderFailed}笔，付款${dueSchedules.length + pendingDue.length}笔，OVERDUE 复活${overdueOk}笔`)
 
   // ── 6. 24h 自动收货 (供应商点送达 24h 后门店未确认 → 自动 RECEIVED) ───
   // 倒计时基准从 shippedAt (发出) 改为 deliveredAt (送达). 还在路上的不会被自动收货

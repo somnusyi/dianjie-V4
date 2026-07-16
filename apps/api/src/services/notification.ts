@@ -1,5 +1,4 @@
-import dayjs from 'dayjs'
-import { prisma } from '@dianjie/db'
+import { Prisma, prisma } from '@dianjie/db'
 
 interface NotifyPayload {
   tenantId: string
@@ -10,6 +9,7 @@ interface NotifyPayload {
   body: string
   refType?: string               // 关联实体类型
   refId?: string                 // 关联实体 ID
+  dedupeKey?: string             // 同租户业务幂等键（可选）
   // 兼容旧调用
   supplierName?: string
   amount?: number
@@ -24,14 +24,21 @@ interface NotifyPayload {
  * 3. 企业微信 Webhook（配置后生效）
  */
 export async function sendNotification(payload: NotifyPayload) {
-  const { tenantId, recipientRole, recipientId, type, title, body, refType, refId } = payload
+  const { tenantId, recipientRole, recipientId, type, title, body, refType, refId, dedupeKey } = payload
 
   // 1. 写入 DB
+  let created = false
   try {
     await prisma.notification.create({
-      data: { tenantId, recipientRole, recipientId, type, title, body, refType, refId },
+      data: { tenantId, dedupeKey, recipientRole, recipientId, type, title, body, refType, refId },
     })
-  } catch (err) {
+    created = true
+  } catch (err: any) {
+    if (dedupeKey && err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      return { created: false, duplicated: true }
+    }
+    // 带幂等键的通知是后台状态机的一部分：写库失败必须上抛，不能发完外部消息再错误标记完成。
+    if (dedupeKey) throw err
     console.error('写入通知失败:', err)
   }
 
@@ -54,6 +61,7 @@ export async function sendNotification(payload: NotifyPayload) {
       console.error('企业微信通知失败:', err)
     }
   }
+  return { created, duplicated: false }
 }
 
 function buildWechatMarkdown(payload: NotifyPayload): string {

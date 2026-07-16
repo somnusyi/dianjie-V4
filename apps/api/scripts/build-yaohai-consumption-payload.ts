@@ -16,10 +16,11 @@ const REVIEWED_ALIASES: Record<string, string> = {
   'X-木姜子香辣蘸（定制）': '木姜子香辣蘸料·滇界定制',
   'X-汤底调味粉（定制）': '汤底调味粉·滇界定制',
   'X-火锅专用红油(定制）': '火锅专用红油·滇界定制',
-  'X-甄选马蹄爆珠': '甄选马蹄爆爆珠',
+  'X-甄选马蹄爆珠': '马蹄爆爆珠',
   'X-白米线.1.6mm-定制': '白米线·滇界定制1.6mm',
   'X-秘制底料（定制）': '秘制底料·滇界定制',
   'X-胡辣椒': '糊辣椒',
+  'X-灰虎掌': '人工灰虎掌',
   'X-酸萝卜丝.富源酸菜': '酸萝卜丝·富源酸菜',
   'X-黑皮鸡纵': '黑皮鸡枞菌',
   'X调味糖浆': '冰糖糖浆',
@@ -75,11 +76,15 @@ async function main() {
   }
 
   for (const row of stage.dailyIngredientUsage) {
-    const candidate = candidateByIngredient.get(row.ingredient)?.candidates[0]
-    let product = candidate && candidate.score >= 1.19 && candidate.linked && candidate.productId
-      ? byId.get(candidate.productId)
+    // Human-reviewed aliases take precedence over fuzzy candidates. This avoids
+    // selecting duplicate zero-history SKUs that merely have a closer name.
+    let product = REVIEWED_ALIASES[row.ingredient]
+      ? byName.get(normalize(REVIEWED_ALIASES[row.ingredient]))
       : undefined
-    if (!product && REVIEWED_ALIASES[row.ingredient]) product = byName.get(normalize(REVIEWED_ALIASES[row.ingredient]))
+    const candidate = candidateByIngredient.get(row.ingredient)?.candidates[0]
+    if (!product && candidate && candidate.score >= 1.19 && candidate.linked && candidate.productId) {
+      product = byId.get(candidate.productId)
+    }
     if (!product) {
       skipped.push({ date: row.date, source: row.ingredient, quantity: row.grossUsage, reason: '未通过高可信SKU映射审核' })
       continue

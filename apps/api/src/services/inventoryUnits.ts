@@ -139,9 +139,10 @@ export function normalizeInventoryQuantity(input: {
   }
 
   const rawPhysical = amountToBase(input.quantity, rawUnit)
+  const rawUnitPhysical = amountToBase(1, rawUnit)
   const productPhysical = amountToBase(1, productUnit)
   if (rawPhysical && productPhysical && rawPhysical.dimension === productPhysical.dimension) {
-    const factor = rawPhysical.value / productPhysical.value / input.quantity
+    const factor = rawUnitPhysical!.value / productPhysical.value
     return {
       status: 'CONVERTED', normalizedQuantity: rawPhysical.value / productPhysical.value,
       normalizedUnit, factor, note: `${input.rawUnit}换算为${input.productUnit}`,
@@ -150,10 +151,11 @@ export function normalizeInventoryQuantity(input: {
 
   const productPackage = physicalAmountPerPackage(input.productSpec)
   if (rawPhysical && productPackage && rawPhysical.dimension === productPackage.dimension) {
-    const normalizedQuantity = rawPhysical.value / productPackage.value
+    const factor = rawUnitPhysical!.value / productPackage.value
+    const normalizedQuantity = input.quantity * factor
     return {
       status: 'CONVERTED', normalizedQuantity, normalizedUnit,
-      factor: normalizedQuantity / input.quantity,
+      factor,
       note: `按采购规格 ${input.productSpec || '-'} 换算`,
     }
   }
@@ -173,10 +175,11 @@ export function normalizeInventoryQuantity(input: {
 
   const rawPackage = physicalAmountPerPackage(input.rawSpec)
   if (rawPackage && productPackage && rawPackage.dimension === productPackage.dimension && PACKAGE_UNITS.has(rawUnit)) {
-    const normalizedQuantity = input.quantity * rawPackage.value / productPackage.value
+    const factor = rawPackage.value / productPackage.value
+    const normalizedQuantity = input.quantity * factor
     return {
       status: 'CONVERTED', normalizedQuantity, normalizedUnit,
-      factor: normalizedQuantity / input.quantity,
+      factor,
       note: `按盘点规格 ${input.rawSpec || '-'} 与采购规格 ${input.productSpec || '-'} 换算`,
     }
   }

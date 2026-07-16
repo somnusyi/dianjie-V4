@@ -50,4 +50,12 @@ describe('inventory unit normalization', () => {
       quantity: 2, rawUnit: '盒', rawSpec: '盒', productUnit: '件', productSpec: null,
     }).status).toBe('PENDING')
   })
+
+  it('keeps a deterministic factor when the physical count is zero', () => {
+    expect(normalizeInventoryQuantity({
+      quantity: 0, rawUnit: '斤', productUnit: '桶', productSpec: '45kg/桶',
+    })).toMatchObject({
+      status: 'CONVERTED', normalizedQuantity: 0, normalizedUnit: '桶', factor: 1 / 90,
+    })
+  })
 })

@@ -12,6 +12,23 @@ const SAFE_STORE_SELECT = {
   consigneeId: true, status: true, lifecyclePhase: true, engineerId: true,
   expectedOpenAt: true, createdAt: true, updatedAt: true,
 } as const
+const paymentConfigSchema = z.object({
+  paymentChannelType: z.enum(['AGGREGATOR', 'WECHAT_DIRECT', 'ALIPAY_DIRECT']).nullable().optional(),
+  aggregatorVendor: z.enum(['qianqian', 'qfpay', 'lakala', 'hesh']).nullable().optional(),
+  aggregatorMerchantId: z.string().trim().max(128).nullable().optional(),
+  aggregatorApiKey: z.string().min(1).max(2048).optional(),
+  aggregatorSecret: z.string().min(1).max(2048).optional(),
+  wechatMerchantId: z.string().trim().max(64).nullable().optional(),
+  wechatApiV3Key: z.string().min(1).max(2048).optional(),
+  alipayAppId: z.string().trim().max(64).nullable().optional(),
+  alipayPrivateKey: z.string().min(1).max(8192).optional(),
+  meituanShopId: z.string().trim().max(128).nullable().optional(),
+  douyinShopId: z.string().trim().max(128).nullable().optional(),
+  bankAccountNo: z.string().trim().regex(/^[\d\s-]+$/, '银行账号只能包含数字、空格或短横线').max(64).optional(),
+  bankAccountName: z.string().trim().max(100).nullable().optional(),
+  bankName: z.string().trim().max(100).nullable().optional(),
+  autoSyncRevenue: z.boolean().optional(),
+}).strict().refine(body => Object.keys(body).length > 0, '没有可更新字段')
 
 export const storeRoutes: FastifyPluginAsync = async (app) => {
 
@@ -341,6 +358,9 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
     if (!['ADMIN','SUPER_ADMIN','FINANCE','MANAGER'].includes(role)) {
       return reply.status(403).send({ error: '无权限' })
     }
+    if (role === 'MANAGER' && req.params.id !== req.user.storeId) {
+      return reply.status(403).send({ error: '只能查看本门店收款配置' })
+    }
     const s = await prisma.store.findFirst({
       where: { id: req.params.id, tenantId },
       select: {
@@ -381,9 +401,8 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
     if (!['ADMIN','SUPER_ADMIN','FINANCE'].includes(role)) {
       return reply.status(403).send({ error: '无权限' })
     }
-    const existing = await prisma.store.findFirst({ where: { id: req.params.id, tenantId } })
-    if (!existing) return reply.status(404).send({ error: '门店不存在' })
-
+    const parsed = paymentConfigSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0]?.message || '请求参数错误' })
     const {
       paymentChannelType,
       aggregatorVendor, aggregatorMerchantId, aggregatorApiKey, aggregatorSecret,
@@ -392,7 +411,7 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
       meituanShopId, douyinShopId,
       bankAccountNo, bankAccountName, bankName,
       autoSyncRevenue,
-    } = req.body as any
+    } = parsed.data
 
     // TODO Sprint B: 用 KMS / aes-256-gcm 加密后再写
     const data: any = {}
@@ -403,7 +422,7 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
     if (alipayAppId           !== undefined) data.alipayAppId           = alipayAppId || null
     if (meituanShopId         !== undefined) data.meituanShopId         = meituanShopId || null
     if (douyinShopId          !== undefined) data.douyinShopId          = douyinShopId || null
-    if (bankAccountNo         !== undefined) data.bankAccountNo         = bankAccountNo || null
+    if (bankAccountNo         !== undefined) data.bankAccountNo         = bankAccountNo.replace(/[\s-]/g, '')
     if (bankAccountName       !== undefined) data.bankAccountName       = bankAccountName || null
     if (bankName              !== undefined) data.bankName              = bankName || null
     if (autoSyncRevenue       !== undefined) data.autoSyncRevenue       = !!autoSyncRevenue
@@ -413,9 +432,27 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
     if (wechatApiV3Key)    data.wechatApiV3KeyEnc   = wechatApiV3Key
     if (alipayPrivateKey)  data.alipayPrivateKeyEnc = alipayPrivateKey
 
-    await prisma.store.update({ where: { id: req.params.id }, data })
-    await prisma.opLog.create({ data: { tenantId, userId, action: `更新门店收款配置 ${existing.name}`, entityType: 'Store', targetId: existing.id } })
-    void invalidatePattern(`stores:list:${tenantId}:*`)
-    return { success: true }
+    try {
+      await prisma.$transaction(async tx => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`store-payment-config:${req.params.id}`}))`
+        const existing = await tx.store.findFirst({ where: { id: req.params.id, tenantId } })
+        if (!existing) throw Object.assign(new Error('门店不存在'), { statusCode: 404 })
+        await tx.store.update({ where: { id: existing.id }, data })
+        await tx.opLog.create({
+          data: {
+            tenantId, userId, role,
+            action: `更新门店收款配置 ${existing.name}`,
+            entityType: 'Store', targetId: existing.id,
+            metadata: { changedFields: Object.keys(parsed.data) },
+          },
+        })
+      })
+      void invalidatePattern(`stores:list:${tenantId}:*`)
+      return { success: true }
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      req.log.error({ err: error }, 'store payment config update failed')
+      return reply.status(500).send({ error: '门店收款配置更新失败，未保存任何变更' })
+    }
   })
 }

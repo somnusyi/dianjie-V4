@@ -23,39 +23,40 @@ model Tenant {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
-  users                  User[]
-  stores                 Store[]
-  suppliers              Supplier[]
-  products               Product[]
+  users                     User[]
+  stores                    Store[]
+  suppliers                 Supplier[]
+  products                  Product[]
   supplierProductCategories SupplierProductCategory[]
-  receipts               Receipt[]
-  reconciliations        Reconciliation[]
-  payments               Payment[]
-  paymentSchedules       PaymentSchedule[]
-  opLogs                 OpLog[]
-  purchaseOrders         PurchaseOrder[]
-  purchaseOrderRevisions PurchaseOrderRevision[]
-  purchaseOrderEvents    PurchaseOrderEvent[]
-  deliveryOrders         DeliveryOrder[]
-  deliveryOrderEvents    DeliveryOrderEvent[]
-  businessSequences      BusinessSequence[]
-  lossClaims             LossClaim[]
-  paymentRules           PaymentRule[]
-  consumptions           StockConsumption[]
-  expenses               StoreExpense[]
-  cashAccounts           CashAccount[]
-  cashTransactions       CashTransaction[]
-  notifications          Notification[]
-  invoices               Invoice[]
-  invoicePayments        InvoicePayment[]
-  capitalProjects        CapitalProject[]
-  documents              Document[]
-  productBatches         ProductBatch[]
-  stockMovements         SupplierStockMovement[]
-  inventorySnapshots     InventorySnapshot[]
-  accountingPeriods      AccountingPeriod[]
-  pettyCash              PettyCash[]
-  payrolls               Payroll[]
+  receipts                  Receipt[]
+  reconciliations           Reconciliation[]
+  payments                  Payment[]
+  paymentSchedules          PaymentSchedule[]
+  opLogs                    OpLog[]
+  purchaseOrders            PurchaseOrder[]
+  purchaseOrderRevisions    PurchaseOrderRevision[]
+  purchaseOrderEvents       PurchaseOrderEvent[]
+  deliveryOrders            DeliveryOrder[]
+  deliveryOrderEvents       DeliveryOrderEvent[]
+  businessSequences         BusinessSequence[]
+  lossClaims                LossClaim[]
+  paymentRules              PaymentRule[]
+  consumptions              StockConsumption[]
+  expenses                  StoreExpense[]
+  cashAccounts              CashAccount[]
+  cashTransactions          CashTransaction[]
+  notifications             Notification[]
+  invoices                  Invoice[]
+  invoicePayments           InvoicePayment[]
+  capitalProjects           CapitalProject[]
+  documents                 Document[]
+  productBatches            ProductBatch[]
+  stockMovements            SupplierStockMovement[]
+  inventorySnapshots        InventorySnapshot[]
+  accountingPeriods         AccountingPeriod[]
+  pettyCash                 PettyCash[]
+  payrolls                  Payroll[]
+  dailyBusinessImports      DailyBusinessImport[]
 
   @@map("tenants")
 }
@@ -80,31 +81,33 @@ model User {
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  tenant               Tenant                  @relation(fields: [tenantId], references: [id])
-  store                Store?                  @relation(fields: [storeId], references: [id])
-  supplier             Supplier?               @relation("SupplierUsers", fields: [supplierId], references: [id])
-  receipts             Receipt[]
-  opLogs               OpLog[]
-  consumptions         StockConsumption[]
-  createdPOs           PurchaseOrder[]         @relation("POCreatedBy")
-  shippedPOs           PurchaseOrder[]         @relation("POShippedBy")
-  requestedPORevisions PurchaseOrderRevision[] @relation("PORevisionRequestedBy")
-  reviewedPORevisions  PurchaseOrderRevision[] @relation("PORevisionReviewedBy")
-  purchaseOrderEvents  PurchaseOrderEvent[]
-  createdDeliveries    DeliveryOrder[]         @relation("DeliveryCreatedBy")
-  shippedDeliveries    DeliveryOrder[]         @relation("DeliveryShippedBy")
-  deliveredDeliveries  DeliveryOrder[]         @relation("DeliveryDeliveredBy")
-  receivedDeliveries   DeliveryOrder[]         @relation("DeliveryReceivedBy")
-  deliveryOrderEvents  DeliveryOrderEvent[]
-  createdLCs           LossClaim[]             @relation("LCCreatedBy")
-  handledLCs           LossClaim[]             @relation("LCHandledBy")
-  cashTransactions     CashTransaction[]
-  notifications        Notification[]
-  uploadedInvoices     Invoice[]               @relation("InvoiceUploader")
-  initiatedDocuments   Document[]
-  approvedSteps        DocumentStep[]
-  documentDecisions    DocumentDecision[]
-  stockMovements       SupplierStockMovement[]
+  tenant                        Tenant                  @relation(fields: [tenantId], references: [id])
+  store                         Store?                  @relation(fields: [storeId], references: [id])
+  supplier                      Supplier?               @relation("SupplierUsers", fields: [supplierId], references: [id])
+  receipts                      Receipt[]
+  opLogs                        OpLog[]
+  consumptions                  StockConsumption[]
+  createdPOs                    PurchaseOrder[]         @relation("POCreatedBy")
+  shippedPOs                    PurchaseOrder[]         @relation("POShippedBy")
+  requestedPORevisions          PurchaseOrderRevision[] @relation("PORevisionRequestedBy")
+  reviewedPORevisions           PurchaseOrderRevision[] @relation("PORevisionReviewedBy")
+  purchaseOrderEvents           PurchaseOrderEvent[]
+  createdDeliveries             DeliveryOrder[]         @relation("DeliveryCreatedBy")
+  shippedDeliveries             DeliveryOrder[]         @relation("DeliveryShippedBy")
+  deliveredDeliveries           DeliveryOrder[]         @relation("DeliveryDeliveredBy")
+  receivedDeliveries            DeliveryOrder[]         @relation("DeliveryReceivedBy")
+  deliveryOrderEvents           DeliveryOrderEvent[]
+  createdLCs                    LossClaim[]             @relation("LCCreatedBy")
+  handledLCs                    LossClaim[]             @relation("LCHandledBy")
+  cashTransactions              CashTransaction[]
+  notifications                 Notification[]
+  uploadedInvoices              Invoice[]               @relation("InvoiceUploader")
+  initiatedDocuments            Document[]
+  approvedSteps                 DocumentStep[]
+  documentDecisions             DocumentDecision[]
+  stockMovements                SupplierStockMovement[]
+  createdDailyBusinessImports   DailyBusinessImport[]   @relation("DailyBusinessImportCreatedBy")
+  confirmedDailyBusinessImports DailyBusinessImport[]   @relation("DailyBusinessImportConfirmedBy")
 
   @@unique([tenantId, email])
   @@unique([tenantId, phone])
@@ -256,25 +259,25 @@ model VoucherGenerationFailure {
 // ══════════════════════════════════════════════════════
 
 model Dish {
-  id          String     @id @default(cuid())
-  tenantId    String
-  code        String?    @db.VarChar(40) // 内部编码 (与美团/抖音菜品 ID 关联用)
-  name        String // 菜品名: 「云南山珍菌汤锅」
-  category    String? // 分类: 汤锅 / 凉菜 / 主食 / 饮品 / ...
-  unit        String     @default("份") // 计量单位
-  salePrice   Decimal    @db.Decimal(10, 2) // 当前售价 (用于毛利计算)
-  imageUrl    String?
-  description String?
+  id                  String              @id @default(cuid())
+  tenantId            String
+  code                String?             @db.VarChar(40) // 内部编码 (与美团/抖音菜品 ID 关联用)
+  name                String // 菜品名: 「云南山珍菌汤锅」
+  category            String? // 分类: 汤锅 / 凉菜 / 主食 / 饮品 / ...
+  unit                String              @default("份") // 计量单位
+  salePrice           Decimal             @db.Decimal(10, 2) // 当前售价 (用于毛利计算)
+  imageUrl            String?
+  description         String?
   // 库存扣减策略。BOM=按配方扣减；EXCLUDE=明确不扣（如百家蘸料）。
   inventoryPolicy     DishInventoryPolicy @default(BOM)
   inventoryPolicyNote String?
-  status      DishStatus @default(ACTIVE)
+  status              DishStatus          @default(ACTIVE)
   // 是否所有门店都卖 (group=true) 或仅部分 (storeIds[])
-  groupWide   Boolean    @default(true)
-  storeIds    String[]   @default([]) // groupWide=false 时哪些店卖
-  createdById String?
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  groupWide           Boolean             @default(true)
+  storeIds            String[]            @default([]) // groupWide=false 时哪些店卖
+  createdById         String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
 
   recipes DishRecipe[]
   sales   DishSale[]
@@ -295,21 +298,28 @@ enum DishInventoryPolicy {
   EXCLUDE
 }
 
+enum DailyBusinessImportStatus {
+  PREVIEWED
+  CONFIRMING
+  CONFIRMED
+  SUPERSEDED
+}
+
 // 菜品配方 — 一道菜含 N 种食材
 model DishRecipe {
-  id        String   @id @default(cuid())
-  dishId    String
-  productId String // 食材 SKU
+  id         String   @id @default(cuid())
+  dishId     String
+  productId  String // 食材 SKU
   // 收银系统同一菜品可带“大份/小份”等规格。空字符串代表默认配方，
   // 非空时按规范化规格精确匹配；找不到规格配方再回退默认配方。
   variantKey String   @default("") @db.VarChar(80)
-  quantity  Decimal  @db.Decimal(14, 6) // 小包装换算可能低于 0.0001 箱
-  unit      String // 单位 (kg/瓶/件/包,与 Product.unit 对应)
-  lossRate  Decimal  @default(0) @db.Decimal(5, 4) // 损耗率 0.05 = 5%
-  isMain    Boolean  @default(false) // 主料标记
-  note      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  quantity   Decimal  @db.Decimal(14, 6) // 小包装换算可能低于 0.0001 箱
+  unit       String // 单位 (kg/瓶/件/包,与 Product.unit 对应)
+  lossRate   Decimal  @default(0) @db.Decimal(5, 4) // 损耗率 0.05 = 5%
+  isMain     Boolean  @default(false) // 主料标记
+  note       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   dish    Dish    @relation(fields: [dishId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id])
@@ -348,35 +358,40 @@ model DishSale {
 // 店长每日上传“综合营业统计 + 菜品销售明细”的解析、确认与更正审计。
 // PREVIEWED 不影响业务；CONFIRMED 原子更新营收/销量/库存消耗；旧版本保留为 SUPERSEDED。
 model DailyBusinessImport {
-  id               String   @id @default(cuid())
-  tenantId         String
-  storeId          String
-  businessDate     DateTime @db.Date
-  revision         Int
-  status           String   @db.VarChar(20)
-  businessFileName String
-  businessFileHash String   @db.VarChar(64)
-  salesFileName    String
-  salesFileHash    String   @db.VarChar(64)
-  calculationFingerprint String @db.VarChar(64)
-  grossAmount      Decimal  @db.Decimal(12, 2)
-  discountAmount   Decimal  @db.Decimal(12, 2)
-  netRevenue       Decimal  @db.Decimal(12, 2)
-  orderCount       Int
-  dishRowCount     Int
-  parsedData       Json
-  previewData      Json
-  blockingIssues   Json
-  warningIssues    Json
-  createdById      String
-  confirmedById    String?
-  confirmedAt      DateTime?
-  supersededAt     DateTime?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id                     String                    @id @default(cuid())
+  tenantId               String
+  storeId                String
+  businessDate           DateTime                  @db.Date
+  revision               Int
+  status                 DailyBusinessImportStatus
+  businessFileName       String
+  businessFileHash       String                    @db.VarChar(64)
+  salesFileName          String
+  salesFileHash          String                    @db.VarChar(64)
+  calculationFingerprint String                    @db.VarChar(64)
+  grossAmount            Decimal                   @db.Decimal(12, 2)
+  discountAmount         Decimal                   @db.Decimal(12, 2)
+  netRevenue             Decimal                   @db.Decimal(12, 2)
+  orderCount             Int
+  dishRowCount           Int
+  parsedData             Json
+  previewData            Json
+  blockingIssues         Json
+  warningIssues          Json
+  createdById            String
+  confirmedById          String?
+  confirmedAt            DateTime?
+  supersededAt           DateTime?
+  createdAt              DateTime                  @default(now())
+  updatedAt              DateTime                  @updatedAt
+
+  tenant      Tenant @relation(fields: [tenantId], references: [id])
+  store       Store  @relation(fields: [storeId], references: [id])
+  createdBy   User   @relation("DailyBusinessImportCreatedBy", fields: [createdById], references: [id])
+  confirmedBy User?  @relation("DailyBusinessImportConfirmedBy", fields: [confirmedById], references: [id])
 
   @@unique([storeId, businessDate, revision])
-  @@unique([storeId, businessDate, businessFileHash, salesFileHash, calculationFingerprint], name: "daily_import_version_uk")
+  @@unique([storeId, businessDate, businessFileHash, salesFileHash, calculationFingerprint], name: "daily_import_version_uk", map: "daily_import_version_uk")
   @@index([tenantId, storeId, businessDate])
   @@index([storeId, status, createdAt])
   @@map("daily_business_imports")
@@ -511,21 +526,22 @@ model Store {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant             Tenant              @relation(fields: [tenantId], references: [id])
-  users              User[]
-  receipts           Receipt[]
-  revenueRecords     RevenueRecord[]
-  purchaseOrders     PurchaseOrder[]
-  deliveryOrders     DeliveryOrder[]
-  lossClaims         LossClaim[]
-  consumptions       StockConsumption[]
-  expenses           StoreExpense[]
-  capitalProjects    CapitalProject[]
-  documents          Document[]
-  dishSales          DishSale[]
-  pettyCash          PettyCash[]
-  payrolls           Payroll[]
-  inventorySnapshots InventorySnapshot[]
+  tenant               Tenant                @relation(fields: [tenantId], references: [id])
+  users                User[]
+  receipts             Receipt[]
+  revenueRecords       RevenueRecord[]
+  purchaseOrders       PurchaseOrder[]
+  deliveryOrders       DeliveryOrder[]
+  lossClaims           LossClaim[]
+  consumptions         StockConsumption[]
+  expenses             StoreExpense[]
+  capitalProjects      CapitalProject[]
+  documents            Document[]
+  dishSales            DishSale[]
+  pettyCash            PettyCash[]
+  payrolls             Payroll[]
+  inventorySnapshots   InventorySnapshot[]
+  dailyBusinessImports DailyBusinessImport[]
 
   @@unique([tenantId, no])
   @@map("stores")
@@ -584,18 +600,18 @@ model Supplier {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant           Tenant                  @relation(fields: [tenantId], references: [id])
-  users            User[]                  @relation("SupplierUsers")
-  products         Product[]
-  receipts         Receipt[]
-  reconciliations  Reconciliation[]
-  payments         Payment[]
-  paymentSchedules PaymentSchedule[]
-  purchaseOrders   PurchaseOrder[]
-  deliveryOrders   DeliveryOrder[]
-  lossClaims       LossClaim[]
-  invoices         Invoice[]
-  stockMovements   SupplierStockMovement[]
+  tenant            Tenant                    @relation(fields: [tenantId], references: [id])
+  users             User[]                    @relation("SupplierUsers")
+  products          Product[]
+  receipts          Receipt[]
+  reconciliations   Reconciliation[]
+  payments          Payment[]
+  paymentSchedules  PaymentSchedule[]
+  purchaseOrders    PurchaseOrder[]
+  deliveryOrders    DeliveryOrder[]
+  lossClaims        LossClaim[]
+  invoices          Invoice[]
+  stockMovements    SupplierStockMovement[]
   productCategories SupplierProductCategory[]
 
   @@unique([tenantId, no])

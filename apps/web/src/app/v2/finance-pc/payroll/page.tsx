@@ -29,6 +29,10 @@ type Item = {
   store: { id: string; name: string }
   _count: { items: number }
 }
+type CashAccount = {
+  id: string; name: string; type: 'BANK' | 'CASH' | 'ALIPAY' | 'WECHAT'
+  balance: string | number; cmbBindAccount?: string | null
+}
 
 const STATUS_LABEL: Record<string, string> = {
   DRAFT: '草稿', APPROVED: '已批待发', PAID: '已发放', VOIDED: '已作废',
@@ -169,16 +173,38 @@ export default function FinancePCPayrollPage() {
 
 function MarkPaidModal({ item, onClose, onDone }: { item: Item; onClose: () => void; onDone: () => void }) {
   const [payMethod, setPayMethod] = useState('转账')
+  const [accounts, setAccounts] = useState<CashAccount[]>([])
+  const [accountId, setAccountId] = useState('')
+  const [accountError, setAccountError] = useState<string | null>(null)
   const [bankTxNo, setBankTxNo] = useState('')
   const [payDate, setPayDate] = useState(dayjs().format('YYYY-MM-DD'))
   const [busy, setBusy] = useState(false)
 
+  useEffect(() => {
+    apiFetch<CashAccount[]>('/api/cashbook/accounts')
+      .then(setAccounts)
+      .catch(e => setAccountError(e?.message || '资金账户加载失败'))
+  }, [])
+
+  const eligibleAccounts = accounts.filter(account => {
+    if (payMethod === '现金') return account.type === 'CASH'
+    if (payMethod === '招行') return account.type === 'BANK' && !!account.cmbBindAccount
+    return account.type === 'BANK'
+  })
+
+  useEffect(() => {
+    if (!eligibleAccounts.some(account => account.id === accountId)) {
+      setAccountId(eligibleAccounts[0]?.id || '')
+    }
+  }, [payMethod, accounts, accountId])
+
   async function submit() {
+    if (!accountId) return
     setBusy(true)
     try {
       const r = await apiFetch<any>(`/api/payroll/${item.id}/mark-paid`, {
         method: 'PATCH',
-        body: JSON.stringify({ payMethod, bankTxNo: bankTxNo || undefined, payDate }),
+        body: JSON.stringify({ payMethod, accountId, bankTxNo: bankTxNo || undefined, payDate }),
       })
       if (r?.voucherWarning) alert(r.voucherWarning)
       onDone(); onClose()
@@ -215,6 +241,22 @@ function MarkPaidModal({ item, onClose, onDone }: { item: Item; onClose: () => v
             </select>
           </div>
           <div>
+            <label className="text-micro text-gray3 block mb-1">扣款资金账户</label>
+            <select value={accountId} onChange={e => setAccountId(e.target.value)}
+                    className="w-full px-3 py-2 rounded-cta border border-border bg-white text-button">
+              {eligibleAccounts.length === 0 && <option value="">— 没有符合条件的活动账户 —</option>}
+              {eligibleAccounts.map(account => (
+                <option key={account.id} value={account.id}>
+                  {account.name} · 余额 {fmt(Number(account.balance))}
+                </option>
+              ))}
+            </select>
+            {accountError && <p className="text-micro text-red-fg mt-1">{accountError}</p>}
+            {!accountError && eligibleAccounts.length === 0 && (
+              <p className="text-micro text-red-fg mt-1">请先到“资金账户”配置对应的活动账户</p>
+            )}
+          </div>
+          <div>
             <label className="text-micro text-gray3 block mb-1">发放日期</label>
             <input type="date" value={payDate} onChange={e => setPayDate(e.target.value)}
                    className="w-full px-3 py-2 rounded-cta border border-border bg-white text-button font-num" />
@@ -227,7 +269,7 @@ function MarkPaidModal({ item, onClose, onDone }: { item: Item; onClose: () => v
         </div>
         <div className="px-5 py-3 border-t border-border flex justify-end gap-2">
           <button onClick={onClose} className="px-4 py-2 bg-white border border-border rounded-cta text-button text-gray2">取消</button>
-          <button onClick={submit} disabled={busy}
+          <button onClick={submit} disabled={busy || !accountId}
                   className="px-4 py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40">
             {busy ? '处理中…' : '确认发放 + 生成凭证'}
           </button>

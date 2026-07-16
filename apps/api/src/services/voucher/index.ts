@@ -68,6 +68,21 @@ async function recordVoucherFailure(opts: CreateVoucherOpts, reason: string, det
   }
 }
 
+/** 幂等补建成功后关闭同来源的历史失败告警，避免失败队列长期保留已恢复事件。 */
+async function resolveVoucherFailures(opts: CreateVoucherOpts): Promise<void> {
+  if (!opts.sourceType || !opts.sourceId) return
+  try {
+    await prisma.voucherGenerationFailure.updateMany({
+      where: {
+        tenantId: opts.tenantId, sourceType: opts.sourceType, sourceId: opts.sourceId, resolved: false,
+      },
+      data: { resolved: true, resolvedAt: new Date() },
+    })
+  } catch (e) {
+    console.error('[voucher] 标记历史失败为已解决时失败 (不影响凭证):', e)
+  }
+}
+
 /** 生成凭证号 PZ-YYYYMM-NNNN, 按月递增. 并发安全: 用最大号 + 1 取号 (单次), 撞 unique 重试 */
 async function generateNo(tenantId: string, date: Date): Promise<string> {
   const ym = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}`
@@ -106,7 +121,10 @@ export async function createVoucher(opts: CreateVoucherOpts): Promise<string | n
       where: { tenantId, sourceType, sourceId },
       select: { id: true },
     })
-    if (existing) return existing.id
+    if (existing) {
+      await resolveVoucherFailures(opts)
+      return existing.id
+    }
   }
 
   // 平账校验
@@ -154,6 +172,7 @@ export async function createVoucher(opts: CreateVoucherOpts): Promise<string | n
         },
         select: { id: true },
       })
+      await resolveVoucherFailures(opts)
       return voucher.id
     } catch (e: any) {
       // P2002 = unique violation
@@ -166,7 +185,10 @@ export async function createVoucher(opts: CreateVoucherOpts): Promise<string | n
         const existing = await prisma.voucher.findFirst({
           where: { tenantId, sourceType, sourceId }, select: { id: true },
         })
-        if (existing) return existing.id
+        if (existing) {
+          await resolveVoucherFailures(opts)
+          return existing.id
+        }
       }
       // 撞 no unique → 重新取号重试
       console.warn(`[voucher] P2002 撞号, attempt=${attempt + 1}, retrying...`)

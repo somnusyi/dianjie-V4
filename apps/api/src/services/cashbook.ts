@@ -38,6 +38,26 @@ export interface WriteCashTxOpts {
   createdById: string                     // 操作人 (审批人/财务/receipt creator fallback)
 }
 
+export interface CashLedgerAccountLike {
+  name: string
+  type: string
+  accountNo?: string | null
+  cmbBindAccount?: string | null
+}
+
+/**
+ * 资金账户 → 会计明细科目。
+ * 已确认的三张银行卡按末四位落末级科目，其他银行保守落 1002 并保留账户名。
+ */
+export function cashLedgerAccount(account: CashLedgerAccountLike): { code: string; name: string } {
+  if (account.type === 'CASH') return { code: '1001', name: '库存现金' }
+  const last4 = (account.accountNo || account.cmbBindAccount || '').slice(-4)
+  if (last4 === '1674') return { code: '100201', name: '中国银行1674' }
+  if (last4 === '3618') return { code: '100202', name: '建设银行3618' }
+  if (last4 === '0001') return { code: '100203', name: '招商银行0001' }
+  return { code: '1002', name: `银行存款 (${account.name})` }
+}
+
 /**
  * 找该 tenant 的招行实时账户 (单账户假设).
  * 若有多个 cmbBindAccount 账户, 取第一个 ACTIVE 的 (TODO: 多账户场景下需要业务层显式选)

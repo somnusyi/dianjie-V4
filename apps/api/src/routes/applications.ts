@@ -44,11 +44,14 @@ const applySchema = z.object({
 )
 
 const approveSchema = z.object({
-  storeId: z.string().optional(),  // MANAGER/KITCHEN_LEAD 可选绑店
-})
+  storeId: entityIdSchema.optional(),  // MANAGER/KITCHEN_LEAD 可选绑店
+}).strict()
 const rejectSchema = z.object({
   reason: z.string().trim().min(1, '请说明拒绝原因').max(200),
-})
+}).strict()
+const listQuerySchema = z.object({
+  status: z.enum(['PENDING', 'APPROVED', 'REJECTED']).optional(),
+}).strict()
 
 /** 公开申请端点: POST /api/auth/apply (挂在 auth 路由 prefix 下) */
 export const publicApplyRoute: FastifyPluginAsync = async (app) => {
@@ -148,7 +151,9 @@ export const applicationRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role } = req.user
     if (!APPROVE_ROLES.has(role)) return reply.status(403).send({ error: '无权限' })
 
-    const { status } = req.query as any
+    const parsed = listQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const { status } = parsed.data
     const where: any = { tenantId }
     if (status) {
       where.status = status
@@ -198,89 +203,85 @@ export const applicationRoutes: FastifyPluginAsync = async (app) => {
     const parsed = approveSchema.safeParse(req.body || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
 
-    const appl = await prisma.userApplication.findFirst({
-      where: { id: req.params.id, tenantId },
-    })
-    if (!appl) return reply.status(404).send({ error: '申请不存在' })
-    if (appl.status !== 'PENDING') return reply.status(400).send({ error: '该申请已处理' })
+    const idParsed = entityIdSchema.safeParse(req.params.id)
+    if (!idParsed.success) return reply.status(400).send({ error: '申请标识格式不正确' })
+    try {
+      const result = await prisma.$transaction(async tx => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`application:${idParsed.data}`}))::text AS locked`
+        const appl = await tx.userApplication.findFirst({ where: { id: idParsed.data, tenantId } })
+        if (!appl) return { status: 404, error: '申请不存在' }
+        if (appl.status !== 'PENDING') return { status: 400, error: '该申请已处理' }
 
-    // 老板审批时, 如果没传 storeId, 默认用申请人 申请时填的 requestedStoreId
-    if (!parsed.data.storeId && appl.requestedStoreId) {
-      parsed.data.storeId = appl.requestedStoreId
-    }
-    // 店长 / 厨师长 必须有门店
-    if (['MANAGER', 'KITCHEN_LEAD'].includes(appl.requestedRole) && !parsed.data.storeId) {
-      return reply.status(400).send({ error: `${appl.requestedRole === 'MANAGER' ? '店长' : '厨师长'}角色必须绑定门店` })
-    }
-    if (parsed.data.storeId) {
-      const s = await prisma.store.findFirst({ where: { id: parsed.data.storeId, tenantId } })
-      if (!s) return reply.status(400).send({ error: '门店不存在' })
-    }
+        const storeId = parsed.data.storeId || appl.requestedStoreId || null
+        if (['MANAGER', 'KITCHEN_LEAD'].includes(appl.requestedRole) && !storeId) {
+          return { status: 400, error: `${appl.requestedRole === 'MANAGER' ? '店长' : '厨师长'}角色必须绑定门店` }
+        }
+        if (storeId) {
+          const store = await tx.store.findFirst({ where: { id: storeId, tenantId, status: 'ENABLED' }, select: { id: true } })
+          if (!store) return { status: 400, error: '门店不存在或已停用' }
+        }
+        const exists = await tx.user.findUnique({
+          where: { tenantId_phone: { tenantId, phone: appl.phone } }, select: { id: true },
+        })
+        if (exists) return { status: 400, error: '该手机号已注册, 请拒绝该申请' }
 
-    // 再次确认手机号未被占用 (并发兜底)
-    const exists = await prisma.user.findUnique({
-      where: { tenantId_phone: { tenantId, phone: appl.phone } },
-    })
-    if (exists) return reply.status(400).send({ error: '该手机号已注册, 请拒绝该申请' })
+        let finalSupplierId: string | null = null
+        let createdSupplierNote = ''
+        if (appl.requestedRole === 'SUPPLIER_STAFF') {
+          if (!appl.supplierId) return { status: 400, error: '该申请缺少供应商ID, 请拒绝并让其重新申请' }
+          const supplier = await tx.supplier.findFirst({
+            where: { id: appl.supplierId, tenantId, status: 'ENABLED' }, select: { id: true },
+          })
+          if (!supplier) return { status: 400, error: '所选供应商不存在或已停用' }
+          finalSupplierId = supplier.id
+        } else if (appl.requestedRole === 'SUPPLIER_OWNER') {
+          if (!appl.supplierName) return { status: 400, error: '该申请缺少供应商公司名, 请拒绝并让其重新申请' }
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`supplier-sequence:${tenantId}`}))::text AS locked`
+          const supplierNos = await tx.supplier.findMany({
+            where: { tenantId, no: { startsWith: 'SUP' } }, select: { no: true },
+          })
+          const next = supplierNos.reduce((max, item) => {
+            const match = /^SUP(\d+)$/.exec(item.no)
+            return match ? Math.max(max, Number(match[1])) : max
+          }, 0) + 1
+          const newNo = `SUP${String(next).padStart(3, '0')}`
+          const supplier = await tx.supplier.create({
+            data: {
+              tenantId, no: newNo, name: appl.supplierName,
+              contactName: appl.name, contactPhone: appl.phone, status: 'ENABLED',
+            },
+          })
+          finalSupplierId = supplier.id
+          createdSupplierNote = ` + 创建供应商 ${newNo} ${appl.supplierName}`
+        }
 
-    const emailFinal = `${appl.phone}@phone.dianjie`
-
-    // 供应商分支处理: 计算最终的 supplierId
-    let finalSupplierId: string | null = null
-    let createdSupplierNote = ''
-    if (appl.requestedRole === 'SUPPLIER_STAFF') {
-      // 加入已有供应商, 校验并使用 appl.supplierId
-      if (!appl.supplierId) return reply.status(400).send({ error: '该申请缺少供应商ID, 请拒绝并让其重新申请' })
-      const sup = await prisma.supplier.findFirst({ where: { id: appl.supplierId, tenantId } })
-      if (!sup) return reply.status(400).send({ error: '所选供应商不存在' })
-      finalSupplierId = sup.id
-    } else if (appl.requestedRole === 'SUPPLIER_OWNER') {
-      // 注册新供应商, 用 appl.supplierName 创建一个 Supplier
-      if (!appl.supplierName) return reply.status(400).send({ error: '该申请缺少供应商公司名, 请拒绝并让其重新申请' })
-      // 找下一个可用 SUP 编号
-      const lastSup = await prisma.supplier.findFirst({
-        where: { tenantId, no: { startsWith: 'SUP' } },
-        orderBy: { no: 'desc' }, select: { no: true },
+        await tx.user.create({
+          data: {
+            tenantId, name: appl.name, phone: appl.phone,
+            email: `${appl.phone}@phone.dianjie`, password: appl.passwordHash,
+            role: appl.requestedRole, storeId,
+            storeIds: storeId ? [storeId] : [],
+            supplierId: finalSupplierId, status: 'ACTIVE',
+          },
+        })
+        await tx.userApplication.update({
+          where: { id: appl.id },
+          data: { status: 'APPROVED', decidedById: operatorId, decidedAt: new Date() },
+        })
+        await tx.opLog.create({
+          data: {
+            tenantId, userId: operatorId, role,
+            action: `通过账号申请 ${appl.name} (${appl.phone})${createdSupplierNote}`,
+            entityType: 'UserApplication', targetId: appl.id,
+          },
+        })
+        return { status: 200, ok: true }
       })
-      const n = lastSup?.no ? parseInt(lastSup.no.replace(/^SUP/, ''), 10) + 1 : 1
-      const newNo = 'SUP' + String(n).padStart(3, '0')
-      const newSup = await prisma.supplier.create({
-        data: {
-          tenantId, no: newNo, name: appl.supplierName,
-          contactName: appl.name, contactPhone: appl.phone, status: 'ENABLED',
-        },
-      })
-      finalSupplierId = newSup.id
-      createdSupplierNote = ` + 创建供应商 ${newNo} ${appl.supplierName}`
+      if ('error' in result) return reply.status(result.status).send({ error: result.error })
+    } catch (error: any) {
+      if (error?.code === 'P2002') return reply.status(400).send({ error: '手机号、邮箱或供应商编号已被占用' })
+      throw error
     }
-
-    const [, _appl] = await prisma.$transaction([
-      prisma.user.create({
-        data: {
-          tenantId,
-          name: appl.name,
-          phone: appl.phone,
-          email: emailFinal,
-          password: appl.passwordHash,
-          role: appl.requestedRole,
-          storeId: parsed.data.storeId || null,
-          supplierId: finalSupplierId,
-          status: 'ACTIVE',
-        },
-      }),
-      prisma.userApplication.update({
-        where: { id: appl.id },
-        data: {
-          status: 'APPROVED',
-          decidedById: operatorId,
-          decidedAt: new Date(),
-        },
-      }),
-    ])
-
-    await prisma.opLog.create({
-      data: { tenantId, userId: operatorId, action: `通过账号申请 ${appl.name} (${appl.phone})${createdSupplierNote}`, entityType: 'UserApplication', targetId: appl.id },
-    })
     return { ok: true }
   })
 
@@ -292,24 +293,30 @@ export const applicationRoutes: FastifyPluginAsync = async (app) => {
     const parsed = rejectSchema.safeParse(req.body || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
 
-    const appl = await prisma.userApplication.findFirst({
-      where: { id: req.params.id, tenantId },
+    const idParsed = entityIdSchema.safeParse(req.params.id)
+    if (!idParsed.success) return reply.status(400).send({ error: '申请标识格式不正确' })
+    const result = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`application:${idParsed.data}`}))::text AS locked`
+      const appl = await tx.userApplication.findFirst({ where: { id: idParsed.data, tenantId } })
+      if (!appl) return { status: 404, error: '申请不存在' }
+      if (appl.status !== 'PENDING') return { status: 400, error: '该申请已处理' }
+      await tx.userApplication.update({
+        where: { id: appl.id },
+        data: {
+          status: 'REJECTED', decidedById: operatorId,
+          decidedAt: new Date(), rejectReason: parsed.data.reason,
+        },
+      })
+      await tx.opLog.create({
+        data: {
+          tenantId, userId: operatorId, role,
+          action: `拒绝账号申请 ${appl.name} (${appl.phone}): ${parsed.data.reason}`,
+          entityType: 'UserApplication', targetId: appl.id,
+        },
+      })
+      return { status: 200, ok: true }
     })
-    if (!appl) return reply.status(404).send({ error: '申请不存在' })
-    if (appl.status !== 'PENDING') return reply.status(400).send({ error: '该申请已处理' })
-
-    await prisma.userApplication.update({
-      where: { id: appl.id },
-      data: {
-        status: 'REJECTED',
-        decidedById: operatorId,
-        decidedAt: new Date(),
-        rejectReason: parsed.data.reason,
-      },
-    })
-    await prisma.opLog.create({
-      data: { tenantId, userId: operatorId, action: `拒绝账号申请 ${appl.name} (${appl.phone}): ${parsed.data.reason}`, entityType: 'UserApplication', targetId: appl.id },
-    })
+    if ('error' in result) return reply.status(result.status).send({ error: result.error })
     return { ok: true }
   })
 }

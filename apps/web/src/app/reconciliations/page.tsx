@@ -9,6 +9,8 @@ export default function ReconciliationsPage() {
   const [suppliers, setSuppliers] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [reviewingId, setReviewingId] = useState<string | null>(null)
   const [form, setForm] = useState({ supplierId: '', periodStart: '', periodEnd: '' })
   const { show, ToastEl } = useToast()
 
@@ -17,25 +19,36 @@ export default function ReconciliationsPage() {
     try {
       const [r, s] = await Promise.all([api.get('/api/reconciliations'), api.get('/api/suppliers?status=ENABLED')])
       setRecons(r.data); setSuppliers(s.data)
-    } catch {}
+    } catch { show('对账数据读取失败', 'error') }
     setLoading(false)
   }
   useEffect(() => { load() }, [])
 
   const review = async (id: string, action: 'approve' | 'reject') => {
-    if (!window.confirm(action === 'approve' ? '确认审核通过？' : '确认驳回？')) return
+    let note: string | undefined
+    if (action === 'reject') {
+      const value = window.prompt('请输入驳回原因（必填）')
+      if (value === null) return
+      note = value.trim()
+      if (!note) return show('请填写驳回原因', 'error')
+    } else if (!window.confirm('确认审核通过？')) return
+    setReviewingId(id)
     try {
-      await api.patch(`/api/reconciliations/${id}/review`, { action })
+      await api.patch(`/api/reconciliations/${id}/review`, { action, note })
       show(action === 'approve' ? '已审核通过' : '已驳回'); load()
     } catch (e: any) { show(e.response?.data?.error || '操作失败', 'error') }
+    finally { setReviewingId(null) }
   }
 
   const submit = async () => {
     if (!form.supplierId || !form.periodStart || !form.periodEnd) return show('请填写完整信息', 'error')
+    if (form.periodEnd < form.periodStart) return show('结束日期不得早于开始日期', 'error')
+    setSubmitting(true)
     try {
       await api.post('/api/reconciliations', form)
       show('对账单已生成'); setModalOpen(false); load()
     } catch (e: any) { show(e.response?.data?.error || '生成失败', 'error') }
+    finally { setSubmitting(false) }
   }
 
   const cols = [
@@ -48,8 +61,8 @@ export default function ReconciliationsPage() {
     { key: 'actions', title: '操作', render: (_: any, row: any) => (
       <div style={{ display: 'flex', gap: 6 }}>
         {row.status === 'DRAFT' && <>
-          <Btn size="sm" variant="primary" onClick={() => review(row.id, 'approve')}>审核通过</Btn>
-          <Btn size="sm" variant="danger" onClick={() => review(row.id, 'reject')}>驳回</Btn>
+          <Btn size="sm" variant="primary" disabled={reviewingId === row.id} onClick={() => review(row.id, 'approve')}>审核通过</Btn>
+          <Btn size="sm" variant="danger" disabled={reviewingId === row.id} onClick={() => review(row.id, 'reject')}>驳回</Btn>
         </>}
       </div>
     )},
@@ -79,7 +92,7 @@ export default function ReconciliationsPage() {
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20, paddingTop: 16, borderTop: '1px solid #e5e7eb' }}>
           <Btn onClick={() => setModalOpen(false)}>取消</Btn>
-          <Btn variant="primary" onClick={submit}>生成对账单</Btn>
+          <Btn variant="primary" onClick={submit} disabled={submitting}>{submitting ? '生成中...' : '生成对账单'}</Btn>
         </div>
       </Modal>
     </AppLayout>

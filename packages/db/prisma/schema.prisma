@@ -1103,6 +1103,7 @@ model ReconciliationItem {
   reconciliation Reconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
   receipt        Receipt        @relation(fields: [receiptId], references: [id])
 
+  @@unique([receiptId])
   @@map("reconciliation_items")
 }
 

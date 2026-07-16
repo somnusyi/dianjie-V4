@@ -168,7 +168,8 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
 export async function executeBankPayment(scheduleId: string) {
   // 真实扣款必须显式开启；缺失或非 true 时默认关闭（fail closed）。
   // 临时停用期间仍保留余额查询、流水同步等只读 CMB 能力。
-  if (process.env.CMB_AUTOPAY_ENABLED !== 'true') {
+  if (process.env.NODE_ENV !== 'production' || process.env.PREVIEW_MODE === 'true'
+      || process.env.CMB_AUTOPAY_ENABLED !== 'true') {
     throw new Error('自动账期付款已临时停用，未调用银行')
   }
 

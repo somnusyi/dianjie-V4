@@ -4,7 +4,7 @@ import { executeBankPayment, autoProcessAfterConfirm } from './paymentSchedule'
 import { sendNotification as notify } from './notification'
 import { fireAndForget as notifyWeCom } from './notify'
 import { runMeituanHourlySync, runMeituanDailyReconcile } from './meituan/cron'
-import { syncAllCmbAccounts } from './cmbAutoSync'
+import { isCmbSyncEnabled, syncAllCmbAccounts } from './cmbAutoSync'
 import { nextBusinessNo } from './purchaseOrderIntegrity'
 
 /**
@@ -249,12 +249,15 @@ export async function runDailyCheck() {
   }
 
   // 3. 到期自动付款（APPROVED 状态 = 已审批或不需审批）
-  const dueSchedules = await prisma.paymentSchedule.findMany({
+  const autoPayEnabled = process.env.NODE_ENV === 'production'
+    && process.env.CMB_AUTOPAY_ENABLED === 'true'
+    && process.env.PREVIEW_MODE !== 'true'
+  const dueSchedules = autoPayEnabled ? await prisma.paymentSchedule.findMany({
     where: {
       status: 'APPROVED',
       dueAt: { lte: now.endOf('day').toDate() },
     },
-  })
+  }) : []
 
   for (const s of dueSchedules) {
     try {
@@ -265,13 +268,13 @@ export async function runDailyCheck() {
   }
 
   // 4. 不需审批且到期的 PENDING 单直接触发
-  const pendingDue = await prisma.paymentSchedule.findMany({
+  const pendingDue = autoPayEnabled ? await prisma.paymentSchedule.findMany({
     where: {
       status: 'PENDING',
       needApproval: false,
       dueAt: { lte: now.endOf('day').toDate() },
     },
-  })
+  }) : []
 
   for (const s of pendingDue) {
     try {
@@ -285,7 +288,7 @@ export async function runDailyCheck() {
   // 银行临时错误 (网络抖动 / 余额不足等) 应该自动复活, retryCount<5 才重试避免死循环
   // needApproval=true 的不动 (业务流程要求重审)
   const RETRY_MAX = 5
-  const overduePending = await prisma.paymentSchedule.findMany({
+  const overduePending = autoPayEnabled ? await prisma.paymentSchedule.findMany({
     where: {
       status: 'OVERDUE',
       needApproval: false,
@@ -293,7 +296,7 @@ export async function runDailyCheck() {
       // 加 throttle: 至少距上次失败 1 小时, 防 cron 跑两次 retry 太密
       // (PaymentSchedule 没 updatedAt 字段方便用, 用 dueAt 兜底 — OVERDUE 后 dueAt 不变, OK)
     },
-  })
+  }) : []
   let overdueOk = 0
   for (const s of overduePending) {
     try {
@@ -435,6 +438,10 @@ export function startScheduler() {
   // ── CMB 流水自动同步到本地 cashbook ──
   // 解决: 老板/财务在招行 APP 直接转账等不经过滇界的流水永远不进本地账本
   // 频率: 启动 60s 后跑首次 (拉近 3 天), 之后每 30 分钟跑一次 (拉昨天+今天)
+  if (!isCmbSyncEnabled()) {
+    console.log('🔒 CMB 流水自动同步未启用 (需要生产环境显式设置 CMB_SYNC_ENABLED=true)')
+    return
+  }
   setTimeout(() => {
     syncAllCmbAccounts(3)
       .then(results => {

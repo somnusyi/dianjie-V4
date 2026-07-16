@@ -2024,6 +2024,7 @@ model CashTransaction {
 
   @@index([tenantId, txDate(sort: Desc)])
   @@index([accountId])
+  @@unique([tenantId, accountId, refType, refId])
   @@map("cash_transactions")
 }
 

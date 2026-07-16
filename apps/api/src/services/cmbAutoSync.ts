@@ -25,11 +25,19 @@
  *   - cmbTransactions API 同账户 10s/次, 多账户并行不互撞
  *   - 30 分钟一轮足够安全
  */
-import { prisma } from '@dianjie/db'
-import { cmbTransactions } from './cmbPayment'
+import { Prisma, prisma } from '@dianjie/db'
+import { cmbTransactions, type CmbTransaction } from './cmbPayment'
 import dayjs from 'dayjs'
+import { writeCashTransaction } from './cashbook'
 
 const SYNC_REF_TYPE = 'CmbAutoSync'
+
+/** 银行读取也必须显式开启；开发/预览环境即使误配开关也绝不调用外部服务。 */
+export function isCmbSyncEnabled() {
+  return process.env.NODE_ENV === 'production'
+    && process.env.PREVIEW_MODE !== 'true'
+    && process.env.CMB_SYNC_ENABLED === 'true'
+}
 
 export interface CmbSyncResult {
   account: string
@@ -63,7 +71,7 @@ async function getSystemActor(tenantId: string): Promise<string> {
 }
 
 /** 把 CMB date+time (YYYYMMDD + HHMMSS) 转 Date */
-function parseCmbDateTime(date: string, time: string): Date {
+export function parseCmbDateTime(date: string, time: string): Date {
   const y = date.slice(0, 4)
   const m = date.slice(4, 6)
   const d = date.slice(6, 8)
@@ -71,6 +79,95 @@ function parseCmbDateTime(date: string, time: string): Date {
   const mm = time.slice(2, 4) || '00'
   const ss = time.slice(4, 6) || '00'
   return new Date(`${y}-${m}-${d}T${hh}:${mm}:${ss}+08:00`)
+}
+
+/**
+ * 把一条已经从银行获取的流水原子落入资金台账。
+ * 该函数不访问外部银行，可由测试和同步循环复用。
+ */
+export async function applyCmbTransaction(opts: {
+  tenantId: string
+  cashAccountId: string
+  cmbAccount: string
+  actorId: string
+  transaction: CmbTransaction
+}): Promise<{ created: boolean; syncKey: string; cashTransactionId?: string }> {
+  const item = opts.transaction
+  const syncKey = `cmb:${opts.cmbAccount}:${item.date}:${item.sequence}`
+  const amount = Math.abs(Number(item.amount))
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error(`招行流水金额无效: ${item.amount}`)
+  }
+  try {
+    return await prisma.$transaction(async tx => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`cmb-sync:${opts.tenantId}:${opts.cashAccountId}:${syncKey}`}))`
+      const existing = await tx.cashTransaction.findFirst({
+        where: {
+          tenantId: opts.tenantId,
+          accountId: opts.cashAccountId,
+          refType: SYNC_REF_TYPE,
+          refId: syncKey,
+        },
+        select: { id: true },
+      })
+      if (existing) return { created: false, syncKey, cashTransactionId: existing.id }
+
+      const direction: 1 | -1 = item.direction === 'C' ? 1 : -1
+      const noteParts: string[] = []
+      if (item.counterName) noteParts.push(`对方: ${item.counterName}`)
+      if (item.remark) noteParts.push(`附言: ${item.remark}`)
+      if (item.yurRef) noteParts.push(`参考号: ${item.yurRef}`)
+      noteParts.push('(招行自动同步)')
+      const note = noteParts.join(' · ').slice(0, 500)
+      const cashTx = await writeCashTransaction(tx, {
+        tenantId: opts.tenantId,
+        accountId: opts.cashAccountId,
+        direction,
+        category: direction === 1 ? '未分类入账' : '未分类出账',
+        amount,
+        note,
+        txDate: parseCmbDateTime(item.date, item.time),
+        refType: SYNC_REF_TYPE,
+        refId: syncKey,
+        createdById: opts.actorId,
+      })
+      if (!cashTx) throw new Error('招行流水资金账户写入失败')
+      await tx.opLog.create({
+        data: {
+          tenantId: opts.tenantId,
+          userId: opts.actorId,
+          isAi: true,
+          action: `同步招行${direction === 1 ? '入账' : '出账'} ¥${amount.toFixed(2)}`,
+          entityType: 'CashTransaction',
+          targetId: cashTx.id,
+          metadata: {
+            cashAccountId: opts.cashAccountId,
+            syncKey,
+            direction,
+            amount: amount.toFixed(2),
+            bankSequence: item.sequence,
+            bankDate: item.date,
+            yurRef: item.yurRef || null,
+          },
+        },
+      })
+      return { created: true, syncKey, cashTransactionId: cashTx.id }
+    })
+  } catch (error: any) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      const existing = await prisma.cashTransaction.findFirst({
+        where: {
+          tenantId: opts.tenantId,
+          accountId: opts.cashAccountId,
+          refType: SYNC_REF_TYPE,
+          refId: syncKey,
+        },
+        select: { id: true },
+      })
+      if (existing) return { created: false, syncKey, cashTransactionId: existing.id }
+    }
+    throw error
+  }
 }
 
 /** 同步单个账户 */
@@ -82,6 +179,9 @@ export async function syncCmbAccount(opts: {
   fromDate: Date
   toDate: Date
 }): Promise<CmbSyncResult> {
+  if (!isCmbSyncEnabled()) {
+    throw new Error('招行流水同步未启用，未调用银行')
+  }
   const result: CmbSyncResult = {
     account: opts.cmbAccount,
     accountName: opts.accountName || opts.cmbAccount,
@@ -161,50 +261,15 @@ export async function syncCmbAccount(opts: {
     }
 
     try {
-      const direction: 1 | -1 = t.direction === 'C' ? 1 : -1
-      const amount = Math.abs(Number(t.amount))
-      const category = direction === 1 ? '未分类入账' : '未分类出账'
-      const noteParts: string[] = []
-      if (t.counterName) noteParts.push(`对方: ${t.counterName}`)
-      if (t.remark) noteParts.push(`附言: ${t.remark}`)
-      if (t.yurRef) noteParts.push(`参考号: ${t.yurRef}`)
-      noteParts.push('(招行自动同步)')
-      const note = noteParts.join(' · ').slice(0, 500)
-
-      await prisma.$transaction(async (txDb: any) => {
-        // 二次查防并发重复 (跨 worker)
-        const dup = await txDb.cashTransaction.findFirst({
-          where: { tenantId: opts.tenantId, refType: SYNC_REF_TYPE, refId: syncKey },
-          select: { id: true },
-        })
-        if (dup) return
-
-        const acc = await txDb.cashAccount.findUnique({
-          where: { id: opts.cashAccountId },
-          select: { balance: true },
-        })
-        const newBalance = Number(acc?.balance || 0) + direction * amount
-        await txDb.cashAccount.update({
-          where: { id: opts.cashAccountId },
-          data: { balance: newBalance },
-        })
-        await txDb.cashTransaction.create({
-          data: {
-            tenantId: opts.tenantId,
-            accountId: opts.cashAccountId,
-            direction,
-            category,
-            amount,
-            balanceAfter: newBalance,
-            note,
-            txDate: parseCmbDateTime(t.date, t.time),
-            refType: SYNC_REF_TYPE,
-            refId: syncKey,
-            createdById: actor,
-          },
-        })
+      const applied = await applyCmbTransaction({
+        tenantId: opts.tenantId,
+        cashAccountId: opts.cashAccountId,
+        cmbAccount: opts.cmbAccount,
+        actorId: actor,
+        transaction: t,
       })
-      result.newlyWritten++
+      if (applied.created) result.newlyWritten++
+      else result.alreadySynced++
     } catch (e: any) {
       console.error(`[cmbAutoSync] ${syncKey} write failed:`, e?.message)
       result.errors++
@@ -219,6 +284,7 @@ export async function syncCmbAccount(opts: {
  * @param daysBack 拉最近几天 (默认 1, 即昨天+今天)
  */
 export async function syncAllCmbAccounts(daysBack = 1): Promise<CmbSyncResult[]> {
+  if (!isCmbSyncEnabled()) return []
   const accounts = await prisma.cashAccount.findMany({
     where: { cmbBindAccount: { not: null }, status: 'ACTIVE' },
     select: { id: true, tenantId: true, cmbBindAccount: true, name: true },

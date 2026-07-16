@@ -73,6 +73,9 @@ async function main() {
     assert.equal(login.status, 200, JSON.stringify(login))
     const auth = { authorization: `Bearer ${login.body.token}` }
     assert.ok(login.body.refreshToken)
+    assert.equal((await request('/api/auth/me', {
+      headers: { authorization: `Bearer ${login.body.refreshToken}` },
+    })).status, 401, 'refresh token 不得作为普通 API access token 使用')
     assert.equal((await request('/api/auth/refresh', {
       method: 'POST', body: JSON.stringify({ token: login.body.refreshToken, forged: true }),
     })).status, 400)

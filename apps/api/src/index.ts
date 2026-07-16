@@ -161,6 +161,9 @@ async function bootstrap() {
   app.decorate('authenticate', async (request: any, reply: any) => {
     try {
       await request.jwtVerify()
+      if (request.user?.typ !== 'access') {
+        throw new Error('JWT token type is not access')
+      }
       // 给 Sentry 当前请求作用域打上 tenant/role/route 标签, 后续 captureException
       // (含 cmbPayment / paymentSchedule 等深层调用) 都能按维度聚合
       try {

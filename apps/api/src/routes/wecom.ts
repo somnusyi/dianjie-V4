@@ -16,6 +16,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import { exchangeOAuthCode, getUserInfo, sendAppMsg, getContactToken } from '../services/wecom'
+import { issueSessionTokens } from '../services/authTokens'
 
 export const wecomRoutes: FastifyPluginAsync = async (app) => {
 
@@ -24,7 +25,7 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
     const { tenant, redirect } = req.query as any
     if (!tenant) return reply.status(400).send({ error: 'tenant 必填' })
     const t = await prisma.tenant.findUnique({ where: { slug: tenant } })
-    if (!t) return reply.status(404).send({ error: 'tenant 不存在' })
+    if (!t || t.status !== 'ACTIVE') return reply.status(404).send({ error: 'tenant 不存在或已停用' })
     const cfg = await prisma.weComConfig.findUnique({ where: { tenantId: t.id } })
     if (!cfg || !cfg.enabled) return reply.status(400).send({ error: '该 tenant 未启用企微' })
 
@@ -52,7 +53,7 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
     // P2: 防 open redirect
     const redirect = (rawRedirect && rawRedirect.startsWith('/') && !rawRedirect.startsWith('//')) ? rawRedirect : '/'
     const t = await prisma.tenant.findUnique({ where: { slug: tenantSlug } })
-    if (!t) return reply.status(404).send({ error: 'tenant 不存在' })
+    if (!t || t.status !== 'ACTIVE') return reply.status(404).send({ error: 'tenant 不存在或已停用' })
 
     try {
       // 1. code 换 userid
@@ -98,11 +99,19 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
         await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } })
       }
 
-      // 4. 签滇界 JWT (复用现有 365d 长会话)
-      const token = (app as any).jwt.sign({
-        userId: user.id, tenantId: t.id, role: user.role,
-        storeId: user.storeId, supplierId: user.supplierId,
-      }, { expiresIn: '365d' })
+      if (user.status !== 'ACTIVE') {
+        await prisma.weComSyncLog.create({
+          data: {
+            tenantId: t.id, kind: 'oauth_login', status: 'error',
+            payload: { userId: user.id, wecomUserId } as any,
+            errorMsg: '企微绑定账号已停用',
+          },
+        })
+        return reply.redirect(`/v2/login?error=${encodeURIComponent('该滇界账号已停用, 请联系管理员')}`)
+      }
+
+      // 4. 与密码登录共用 2h access + 30d refresh，禁止企微产生旧式 365d 旁路令牌。
+      const { token, refreshToken } = issueSessionTokens((app as any).jwt, user)
 
       await prisma.weComSyncLog.create({
         data: {
@@ -116,7 +125,7 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
       const userJson = encodeURIComponent(JSON.stringify({
         id: user.id, name: user.name, role: user.role, storeId: user.storeId, supplierId: user.supplierId,
       }))
-      return reply.redirect(`${base}/v2/wecom-bridge#token=${token}&user=${userJson}&tenant=${tenantSlug}&redirect=${encodeURIComponent(redirect || '/')}`)
+      return reply.redirect(`${base}/v2/wecom-bridge#token=${token}&refreshToken=${refreshToken}&user=${userJson}&tenant=${tenantSlug}&redirect=${encodeURIComponent(redirect || '/')}`)
     } catch (e: any) {
       await prisma.weComSyncLog.create({
         data: {

@@ -1,6 +1,6 @@
 /**
  * 企微 OAuth bridge: 后端 redirect 到这里, hash 里带 token + user, 客户端落地后跳目标页
- * URL 形如: /v2/wecom-bridge#token=xxx&user={...}&tenant=dianjie&redirect=/v2/chef/home
+ * URL 形如: /v2/wecom-bridge#token=xxx&refreshToken=xxx&user={...}&tenant=dianjie&redirect=/v2/chef/home
  */
 'use client'
 import { useEffect, useState } from 'react'
@@ -13,15 +13,16 @@ export default function WeComBridgePage() {
       const hash = window.location.hash.replace(/^#/, '')
       const params = new URLSearchParams(hash)
       const token = params.get('token')
+      const refreshToken = params.get('refreshToken')
       const userRaw = params.get('user')
       const tenant = params.get('tenant')
       const redirect = params.get('redirect') || ''
-      if (!token || !userRaw) {
-        setErr('企微登录回调缺少 token/user 信息')
+      if (!token || !refreshToken || !userRaw) {
+        setErr('企微登录回调缺少 token/refreshToken/user 信息')
         return
       }
       const user = JSON.parse(decodeURIComponent(userRaw))
-      setSession(token, user, tenant ? { slug: tenant } : undefined)
+      setSession(token, user, tenant ? { slug: tenant } : undefined, refreshToken)
       // 跳转到目标页 或 角色 home
       const target = redirect && redirect !== '/' ? decodeURIComponent(redirect) : routeForRole(user.role)
       window.location.replace(target)

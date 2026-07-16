@@ -1,18 +1,13 @@
 import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import bcrypt from 'bcryptjs'
-import crypto from 'crypto'
 import { prisma } from '@dianjie/db'
+import { ACCESS_TTL_MS, REFRESH_TTL_MS, issueAccessToken, issueSessionTokens } from '../services/authTokens'
 
 // ── JWT 寿命 ─────────────────────────────────────────────
 // access 短 (2h): API 请求带这个, 不查 DB; 过期就靠 refresh 续
 // refresh 长 (30d): 只在 /api/auth/refresh 用; 入 RevokedToken 表撤销
 // 老 365d 设计已废, 见 docs/cmb/CMB_ERROR_CODES.md (不, 这里是说 auth.ts git 历史)
-const ACCESS_TTL    = '2h'
-const REFRESH_TTL   = '30d'
-const ACCESS_TTL_MS = 2 * 60 * 60 * 1000
-const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000
-
 // identifier: 手机号 (11 位) 或邮箱; 兼容旧字段 email
 const tenantSlugSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9-]+$/i, '租户标识格式不正确')
 const loginSchema = z.object({
@@ -81,27 +76,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // access + refresh 各分配独立 jti, 撤销表按 jti 索引
-    const accessJti  = crypto.randomUUID()
-    const refreshJti = crypto.randomUUID()
-
-    const accessPayload = {
-      userId: user.id,
-      tenantId: tenant.id,
-      role: user.role,
-      storeId: user.storeId,
-      supplierId: user.supplierId,
-      jti: accessJti,
-      typ: 'access',
-    }
-    const refreshPayload = {
-      userId: user.id,
-      tenantId: tenant.id,
-      jti: refreshJti,
-      typ: 'refresh',
-    }
-
-    const token        = app.jwt.sign(accessPayload,  { expiresIn: ACCESS_TTL })
-    const refreshToken = app.jwt.sign(refreshPayload, { expiresIn: REFRESH_TTL })
+    const { token, refreshToken, expiresInMs } = issueSessionTokens(app.jwt, user)
 
     await prisma.$transaction([
       prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } }),
@@ -116,7 +91,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({
       token,
       refreshToken,
-      expiresInMs: ACCESS_TTL_MS,            // 客户端可用于排程主动 refresh
+      expiresInMs,            // 客户端可用于排程主动 refresh
       user: {
         id: user.id,
         name: user.name,
@@ -167,17 +142,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(401).send({ error: '用户不存在或已停用' })
     }
 
-    const accessJti = crypto.randomUUID()
-    const accessPayload = {
-      userId:     user.id,
-      tenantId:   decoded.tenantId,
-      role:       user.role,
-      storeId:    user.storeId,
-      supplierId: user.supplierId,
-      jti:        accessJti,
-      typ:        'access',
-    }
-    const token = app.jwt.sign(accessPayload, { expiresIn: ACCESS_TTL })
+    const token = issueAccessToken(app.jwt, user)
 
     // refresh 不轮换 (保持原 30d window), 简化客户端实现; 如要轮换在此颁新 refresh
     return reply.send({

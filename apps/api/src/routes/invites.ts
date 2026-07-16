@@ -11,20 +11,22 @@ const INVITABLE_ROLES = ['MANAGER','KITCHEN_LEAD','CHEF_DIRECTOR','FINANCE','PUR
 const STORE_BOUND_ROLES = new Set(['MANAGER','KITCHEN_LEAD'])
 const SUPPLIER_BOUND_ROLES = new Set(['SUPPLIER_OWNER','SUPPLIER_STAFF'])
 const PHONE_RE = /^1[3-9]\d{9}$/
+const entityIdSchema = z.string().trim().min(1).max(64)
+const tokenSchema = z.string().min(32).max(64).regex(/^[A-Za-z0-9_-]+$/, '邀请链接格式不正确')
 
 const createSchema = z.object({
   role: z.enum(INVITABLE_ROLES, { errorMap: () => ({ message: '角色无效' }) }),
-  storeId:    z.string().optional(),
-  supplierId: z.string().optional(),
+  storeId:    entityIdSchema.optional(),
+  supplierId: entityIdSchema.optional(),
   note:       z.string().trim().max(60).optional(),
   expiresHours: z.number().int().min(1).max(168).default(24),
-})
+}).strict()
 
 const acceptSchema = z.object({
   name:     z.string().trim().min(1, '请填写姓名').max(20),
   phone:    z.string().trim().regex(PHONE_RE, '手机号格式不正确'),
   password: z.string().min(6, '密码至少 6 位').max(40),
-})
+}).strict()
 
 function genToken(): string {
   return crypto.randomBytes(24).toString('base64url')
@@ -44,25 +46,36 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
 
     if (STORE_BOUND_ROLES.has(d.role)) {
       if (!d.storeId) return reply.status(400).send({ error: '该角色必须绑定门店' })
-      const s = await prisma.store.findFirst({ where: { id: d.storeId, tenantId } })
+      const s = await prisma.store.findFirst({ where: { id: d.storeId, tenantId, status: 'ENABLED' } })
       if (!s) return reply.status(400).send({ error: '门店不存在' })
     }
     if (SUPPLIER_BOUND_ROLES.has(d.role)) {
       if (!d.supplierId) return reply.status(400).send({ error: '该角色必须绑定供应商' })
-      const sup = await prisma.supplier.findFirst({ where: { id: d.supplierId, tenantId } })
+      const sup = await prisma.supplier.findFirst({ where: { id: d.supplierId, tenantId, status: 'ENABLED' } })
       if (!sup) return reply.status(400).send({ error: '供应商不存在' })
     }
 
-    const inv = await prisma.inviteToken.create({
-      data: {
-        tenantId, role: d.role as any,
-        storeId: d.storeId || null,
-        supplierId: d.supplierId || null,
-        invitedById: userId,
-        note: d.note || null,
-        token: genToken(),
-        expiresAt: new Date(Date.now() + d.expiresHours * 3600_000),
-      },
+    const inv = await prisma.$transaction(async tx => {
+      const created = await tx.inviteToken.create({
+        data: {
+          tenantId, role: d.role as any,
+          storeId: d.storeId || null,
+          supplierId: d.supplierId || null,
+          invitedById: userId,
+          note: d.note || null,
+          token: genToken(),
+          expiresAt: new Date(Date.now() + d.expiresHours * 3600_000),
+        },
+      })
+      await tx.opLog.create({
+        data: {
+          tenantId, userId, role,
+          action: `创建账号邀请 ${d.role}`,
+          entityType: 'InviteToken', targetId: created.id,
+          metadata: { role: d.role, storeId: d.storeId || null, supplierId: d.supplierId || null },
+        },
+      })
+      return created
     })
     return reply.status(201).send(inv)
   })
@@ -94,13 +107,23 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
 
   // 撤销
   app.delete('/:id', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role } = req.user
+    const { tenantId, role, userId } = req.user
     if (!INVITER_ROLES.has(role)) return reply.status(403).send({ error: '无权限' })
-    const inv = await prisma.inviteToken.findFirst({ where: { id: req.params.id, tenantId } })
-    if (!inv) return reply.status(404).send({ error: '邀请不存在' })
-    if (inv.consumedAt) return reply.status(400).send({ error: '已被使用, 不能撤销' })
-    if (inv.revokedAt) return reply.status(400).send({ error: '已撤销' })
-    await prisma.inviteToken.update({ where: { id: inv.id }, data: { revokedAt: new Date() } })
+    const idParsed = entityIdSchema.safeParse(req.params.id)
+    if (!idParsed.success) return reply.status(400).send({ error: '邀请标识格式不正确' })
+    const result = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`invite:${idParsed.data}`}))::text AS locked`
+      const inv = await tx.inviteToken.findFirst({ where: { id: idParsed.data, tenantId } })
+      if (!inv) return { status: 404, error: '邀请不存在' }
+      if (inv.consumedAt) return { status: 400, error: '已被使用, 不能撤销' }
+      if (inv.revokedAt) return { status: 400, error: '已撤销' }
+      await tx.inviteToken.update({ where: { id: inv.id }, data: { revokedAt: new Date() } })
+      await tx.opLog.create({
+        data: { tenantId, userId, role, action: '撤销账号邀请', entityType: 'InviteToken', targetId: inv.id },
+      })
+      return { status: 200, ok: true }
+    })
+    if ('error' in result) return reply.status(result.status).send({ error: result.error })
     return { ok: true }
   })
 }
@@ -109,8 +132,12 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
 export const inviteAcceptRoutes: FastifyPluginAsync = async (app) => {
 
   // GET /:token — 查看邀请详情 (公开)
-  app.get('/:token', async (req: any, reply: any) => {
-    const t = req.params.token
+  app.get('/:token', {
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+  }, async (req: any, reply: any) => {
+    const tokenParsed = tokenSchema.safeParse(req.params.token)
+    if (!tokenParsed.success) return reply.status(400).send({ error: tokenParsed.error.issues[0].message })
+    const t = tokenParsed.data
     const inv = await prisma.inviteToken.findUnique({ where: { token: t } })
     if (!inv) return reply.status(404).send({ error: '邀请链接无效' })
     if (inv.revokedAt) return reply.status(400).send({ error: '邀请已被老板撤销' })
@@ -132,55 +159,72 @@ export const inviteAcceptRoutes: FastifyPluginAsync = async (app) => {
   app.post('/:token/accept', {
     config: { rateLimit: { max: 10, timeWindow: '1 hour' } },
   }, async (req: any, reply: any) => {
-    const t = req.params.token
+    const tokenParsed = tokenSchema.safeParse(req.params.token)
+    if (!tokenParsed.success) return reply.status(400).send({ error: tokenParsed.error.issues[0].message })
+    const t = tokenParsed.data
     const parsed = acceptSchema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const d = parsed.data
 
-    const inv = await prisma.inviteToken.findUnique({ where: { token: t } })
-    if (!inv) return reply.status(404).send({ error: '邀请链接无效' })
-    if (inv.revokedAt) return reply.status(400).send({ error: '邀请已被撤销' })
-    if (inv.consumedAt) return reply.status(400).send({ error: '邀请已被使用' })
-    if (inv.expiresAt < new Date()) return reply.status(400).send({ error: '邀请已过期' })
-
-    // 手机号唯一性
-    const exists = await prisma.user.findUnique({
-      where: { tenantId_phone: { tenantId: inv.tenantId, phone: d.phone } },
-    })
-    if (exists) return reply.status(400).send({ error: '该手机号已注册, 请直接登录' })
-
+    const preliminary = await prisma.inviteToken.findUnique({ where: { token: t }, select: { id: true } })
+    if (!preliminary) return reply.status(404).send({ error: '邀请链接无效' })
     const passwordHash = await bcrypt.hash(d.password, 10)
     const emailFinal = `${d.phone}@phone.dianjie`
+    try {
+      const result = await prisma.$transaction(async tx => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`invite:${preliminary.id}`}))::text AS locked`
+        const inv = await tx.inviteToken.findUnique({ where: { id: preliminary.id } })
+        if (!inv) return { status: 404, error: '邀请链接无效' }
+        if (inv.revokedAt) return { status: 400, error: '邀请已被撤销' }
+        if (inv.consumedAt) return { status: 400, error: '邀请已被使用' }
+        if (inv.expiresAt < new Date()) return { status: 400, error: '邀请已过期' }
 
-    const [user] = await prisma.$transaction([
-      prisma.user.create({
-        data: {
-          tenantId: inv.tenantId,
-          name: d.name,
-          phone: d.phone,
-          email: emailFinal,
-          password: passwordHash,
-          role: inv.role,
-          storeId: inv.storeId || null,
-          supplierId: inv.supplierId || null,
-          status: 'ACTIVE',
-        },
-      }),
-      prisma.inviteToken.update({
-        where: { id: inv.id },
-        data: { consumedAt: new Date(), consumedByUserId: undefined },
-      }),
-    ])
+        const tenant = await tx.tenant.findFirst({ where: { id: inv.tenantId, status: 'ACTIVE' }, select: { id: true } })
+        if (!tenant) return { status: 400, error: '所属租户已停用' }
+        if (inv.storeId) {
+          const store = await tx.store.findFirst({ where: { id: inv.storeId, tenantId: inv.tenantId, status: 'ENABLED' }, select: { id: true } })
+          if (!store) return { status: 400, error: '邀请关联门店不存在或已停用' }
+        }
+        if (inv.supplierId) {
+          const supplier = await tx.supplier.findFirst({ where: { id: inv.supplierId, tenantId: inv.tenantId, status: 'ENABLED' }, select: { id: true } })
+          if (!supplier) return { status: 400, error: '邀请关联供应商不存在或已停用' }
+        }
+        const exists = await tx.user.findUnique({
+          where: { tenantId_phone: { tenantId: inv.tenantId, phone: d.phone } }, select: { id: true },
+        })
+        if (exists) return { status: 400, error: '该手机号已注册, 请直接登录' }
 
-    // 记录激活者 id
-    await prisma.inviteToken.update({
-      where: { id: inv.id },
-      data: { consumedByUserId: user.id },
-    })
-
-    await prisma.opLog.create({
-      data: { tenantId: inv.tenantId, userId: user.id, action: `通过邀请链接激活账号 ${user.name}`, entityType: 'InviteToken', targetId: inv.id },
-    })
+        const user = await tx.user.create({
+          data: {
+            tenantId: inv.tenantId,
+            name: d.name,
+            phone: d.phone,
+            email: emailFinal,
+            password: passwordHash,
+            role: inv.role,
+            storeId: inv.storeId || null,
+            storeIds: inv.storeId ? [inv.storeId] : [],
+            supplierId: inv.supplierId || null,
+            status: 'ACTIVE',
+          },
+        })
+        await tx.inviteToken.update({
+          where: { id: inv.id }, data: { consumedAt: new Date(), consumedByUserId: user.id },
+        })
+        await tx.opLog.create({
+          data: {
+            tenantId: inv.tenantId, userId: user.id, role: inv.role,
+            action: `通过邀请链接激活账号 ${user.name}`,
+            entityType: 'InviteToken', targetId: inv.id,
+          },
+        })
+        return { status: 201, ok: true }
+      })
+      if ('error' in result) return reply.status(result.status).send({ error: result.error })
+    } catch (error: any) {
+      if (error?.code === 'P2002') return reply.status(400).send({ error: '该手机号已注册, 请直接登录' })
+      throw error
+    }
     return reply.status(201).send({ ok: true })
   })
 }

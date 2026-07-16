@@ -86,7 +86,9 @@ echo ""
 echo "==> [1/7] 安装依赖 + 构建"
 run "pnpm install --frozen-lockfile"
 run "pnpm --filter @dianjie/db exec prisma generate"
+run "pnpm --filter @dianjie/api test"
 run "pnpm --filter @dianjie/api build"
+run "pnpm --filter @dianjie/web exec tsc --noEmit"
 run "pnpm --filter @dianjie/web build"
 
 # 校验产物存在
@@ -99,6 +101,23 @@ run "pnpm --filter @dianjie/web build"
 echo ""
 echo "==> [2/7] 备份生产 DB"
 run "bash '$SCRIPT_DIR/backup-db.sh'"
+
+# 2026-07 P0 one-time guard: the historical drift migration must be baselined
+# after the production fingerprint check, otherwise migrate deploy will fail on
+# objects that already exist in the legacy database.
+if [ -d packages/db/prisma/migrations/20260715101500_reconcile_schema_drift ]; then
+  BASELINE_COUNT=$(sshpass -p "$V4_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no "$SERVER" '
+    DB_URL=$(grep -E "^DATABASE_URL=" /app/dianjie-v4/.env | head -1 | cut -d= -f2-)
+    DB_URL_PG=$(printf "%s" "$DB_URL" | sed "s/?[^?]*$//")
+    psql "$DB_URL_PG" -X -Atc "SELECT count(*) FROM \"_prisma_migrations\" WHERE migration_name='"'"'20260715101500_reconcile_schema_drift'"'"' AND finished_at IS NOT NULL AND rolled_back_at IS NULL"
+  ')
+  if [ "$BASELINE_COUNT" != "1" ]; then
+    echo "❌ 生产历史漂移迁移尚未完成安全 baseline，停止上传。"
+    echo "   先执行: ./scripts/prepare-production-p0-baseline.sh"
+    echo "   在已批准窗口和新备份后再显式执行 --apply-baseline。"
+    exit 1
+  fi
+fi
 
 # ══════════════════════════════════════════════════════
 # 3. 备份当前部署产物（用于回滚）
@@ -193,8 +212,9 @@ echo "   /api/health: $HEALTH"
 
 if [ $SKIP_TESTS -eq 0 ]; then
   bash "$SCRIPT_DIR/smoke-test.sh" "https://app.dianjie.cc" || {
-    echo "⚠️  Smoke test 有失败，但 health OK，先继续观察。如需回滚:"
+    echo "❌ Smoke test 失败，发布不记为成功。请立即评估回滚:"
     echo "   ./scripts/rollback.sh"
+    exit 1
   }
 fi
 

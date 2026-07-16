@@ -63,13 +63,33 @@ deploy.sh 内部最后一步会自动调。也能独立跑（任何时候健康�
 
 ```bash
 ./scripts/smoke-test.sh                          # 测生产 https://app.dianjie.cc
-./scripts/smoke-test.sh http://localhost:4444    # 测本地
+./scripts/smoke-test.sh http://localhost:4444 http://localhost:3200
+                                                  # 测本地 API + Web
 ```
 
 实际跑 3 项：
 1. `/api/health` curl
 2. `e2e-full-flow.js`（全 6 角色 API 链路）
 3. `ui-smoke.js`（Playwright headless 6 角色登录）
+
+任意一项失败都会返回非零状态并阻断发布，不允许用“health 正常”掩盖业务链路失败。
+
+### `prepare-production-p0-baseline.sh` · P0 历史迁移基线
+
+这是 2026-07 P0 发布的一次性安全工具。默认只读核查生产迁移账本和历史 schema 指纹：
+
+```bash
+./scripts/prepare-production-p0-baseline.sh
+```
+
+只有在生产新备份已完成、发布窗口获批且只读指纹完全一致时，才允许登记历史漂移迁移：
+
+```bash
+CONFIRM_PRODUCTION_BASELINE=APPLY_BASELINE_dianjie_v4 \
+  ./scripts/prepare-production-p0-baseline.sh --apply-baseline
+```
+
+它不会执行 `migrate deploy`、上传应用或重启服务。正式迁移仍由标准部署脚本执行。
 
 ---
 

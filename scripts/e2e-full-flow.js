@@ -107,7 +107,10 @@ async function run() {
 
   // ── 步骤 4: 公开 API ──
   step('4. 公开 API')
-  for (const path of ['/api/auth/supplier-list', '/api/auth/store-list']) {
+  for (const path of [
+    `/api/auth/supplier-list?tenantSlug=${encodeURIComponent(TENANT_SLUG)}`,
+    `/api/auth/store-list?tenantSlug=${encodeURIComponent(TENANT_SLUG)}`,
+  ]) {
     const r = await api('GET', path)
     if (Array.isArray(r.data) && r.data.length > 0) ok(`${path} → ${r.data.length} 条`)
     else bad(`${path} → ${r.status} ${JSON.stringify(r.data).slice(0,100)}`)

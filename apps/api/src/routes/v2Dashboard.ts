@@ -121,9 +121,13 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
           where: { tenantId, status: 'PENDING' },
         }).catch(() => 0) ?? 0,
         // 单据审批 step inbox: 当前用户能审且未决
-        (prisma as any).documentStep?.count({
-          where: { document: { tenantId }, decidedAt: null, isActive: true },
-        }).catch(() => 0) ?? 0,
+        prisma.documentStep.count({
+          where: {
+            document: { tenantId, status: 'PENDING' },
+            status: 'PENDING',
+            decidedAt: null,
+          },
+        }).catch(() => 0),
         prisma.store.findMany({
           where: { tenantId, status: 'ENABLED' },
           select: { id: true, name: true },
@@ -209,9 +213,11 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
           where: { tenantId, status: { in: ['PENDING', 'NOTIFIED', 'APPROVED', 'OVERDUE'] as any },
                    dueAt: { lt: today } },
         }).catch(() => ({ _sum: { amount: 0 } as any })),
-        prisma.paymentSchedule.count({
-          where: { tenantId, status: { in: ['FAILED', 'OVERDUE'] as any } },
-        }).catch(() => 0),
+        Promise.all([
+          prisma.paymentSchedule.count({ where: { tenantId, status: 'OVERDUE' } }),
+          prisma.invoicePayment.count({ where: { tenantId, status: 'FAILED' } }),
+        ]).then(([overdueSchedules, failedPayments]) => overdueSchedules + failedPayments)
+          .catch(() => 0),
         (prisma as any).invoice?.count({ where: { tenantId, status: 'PENDING' } }).catch(() => 0) ?? 0,
         prisma.documentStep.count({
           where: { document: { tenantId, status: 'PENDING' }, status: 'PENDING',

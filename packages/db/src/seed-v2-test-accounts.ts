@@ -6,7 +6,9 @@
  * - 已有 email 账号（admin@dianjie.com 等）→ 补 phone 字段
  * - 新角色（ENGINEERING / SUPPLIER_OWNER 等）→ 直接创建
  *
- * 跑法: pnpm --filter @dianjie/db exec tsx src/seed-v2-test-accounts.ts
+ * 跑法:
+ *   TARGET_TENANT_SLUG=yaohai-test \
+ *     pnpm --filter @dianjie/db exec tsx src/seed-v2-test-accounts.ts
  */
 import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
@@ -39,11 +41,18 @@ async function main() {
   console.log('补全 v2 UI 手机号登录测试账号 (xlsx 同步)')
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 
-  const tenant = await prisma.tenant.findFirst()
-  if (!tenant) {
-    console.error('❌ 没有 tenant，先跑 pnpm db:seed')
+  const targetSlug = process.env.TARGET_TENANT_SLUG?.trim()
+  if (!targetSlug || !targetSlug.includes('test')) {
+    console.error('❌ TARGET_TENANT_SLUG 必须显式指定测试租户（slug 必须包含 test）')
     process.exit(1)
   }
+
+  const tenant = await prisma.tenant.findUnique({ where: { slug: targetSlug } })
+  if (!tenant) {
+    console.error(`❌ 找不到测试租户 slug=${targetSlug}`)
+    process.exit(1)
+  }
+  console.log(`目标测试租户: ${tenant.slug} (${tenant.id})`)
 
   // 保证至少一家门店（按 schema, store.no = 'DJ001'）
   let store = await prisma.store.findFirst({ where: { tenantId: tenant.id, no: 'DJ001' } })
@@ -110,7 +119,7 @@ async function main() {
       await prisma.user.create({
         data: {
           tenantId: tenant.id,
-          email: `${acc.phone}@local.dev`,   // 邮箱占位（唯一约束需要）
+          email: `${acc.phone}.${tenant.slug}@local.dev`, // 跨租户也保持全局唯一
           phone: acc.phone,
           name: acc.name,
           role: acc.role as any,

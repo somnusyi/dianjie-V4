@@ -94,10 +94,9 @@ echo ""
 echo "==> [4/8] pnpm install + build (worktree, 主仓库 dev 不受影响)"
 pnpm install --frozen-lockfile
 pnpm --filter @dianjie/db exec prisma generate >/dev/null 2>&1
-
-# tsc 有 7 个 pre-existing error 但 emit dist (按内部规则)
-pnpm --filter @dianjie/api exec tsc 2>&1 | tail -3 || echo "   ⚠ tsc 有 pre-existing error, 但 dist 已 emit"
-
+pnpm --filter @dianjie/api test
+pnpm --filter @dianjie/api build
+pnpm --filter @dianjie/web exec tsc --noEmit
 pnpm --filter @dianjie/web build 2>&1 | grep -E "(error|Failed|✓ Compiled|✓ Generating)" | tail -5
 
 # 校验产物 (build 完整性)
@@ -106,6 +105,27 @@ pnpm --filter @dianjie/web build 2>&1 | grep -E "(error|Failed|✓ Compiled|✓ 
 [ -f apps/web/.next/standalone/apps/web/server.js ] || { echo "❌ web standalone 缺失"; exit 1; }
 grep -q "cmbRoutes" apps/api/dist/index.js || { echo "❌ index.js 没注册 cmbRoutes"; exit 1; }
 echo "   ✓ 本地产物校验通过"
+
+# ── 4.1 当前生产快照（上传任何新产物之前）──────────────
+BACKUP_TAG="$(date +%Y%m%d-%H%M%S)-${SHORT_HEAD}"
+echo ""
+echo "==> [4.1/8] 备份当前生产 DB + build"
+ssh_run "
+  set -e
+  DB_URL=\$(grep -E '^DATABASE_URL=' $REMOTE/.env | head -1 | cut -d= -f2-)
+  DB_URL_PG=\$(printf '%s' \"\$DB_URL\" | sed 's/?[^?]*$//')
+  mkdir -p /app/backups
+  chmod 700 /app/backups
+  pg_dump \"\$DB_URL_PG\" --no-owner --no-acl --format=custom \\
+    --file=/app/backups/dianjie_v4-deploy-bak-${BACKUP_TAG}.dump
+  pg_restore -l /app/backups/dianjie_v4-deploy-bak-${BACKUP_TAG}.dump >/dev/null
+  tar -czf /app/backups/v4-build-bak-${BACKUP_TAG}.tar.gz -C $REMOTE \\
+    .deployed-commit apps/api/dist apps/web/apps/web apps/cmb packages/db/prisma scripts
+  tar -tzf /app/backups/v4-build-bak-${BACKUP_TAG}.tar.gz >/dev/null
+  chmod 600 /app/backups/dianjie_v4-deploy-bak-${BACKUP_TAG}.dump \\
+    /app/backups/v4-build-bak-${BACKUP_TAG}.tar.gz
+  echo '   ✓ 当前生产 DB 与 build 快照均已校验'
+"
 
 # ── 5. rsync ────────────────────────────────────────
 echo ""
@@ -184,6 +204,21 @@ ssh_run "
 # 必须在 prisma generate 之前 — generate 出来的 client 假设 DB 是 schema 描述的形状.
 echo ""
 echo "==> [5.3/8] ECS prisma migrate deploy (应用待执行的 migration)"
+
+if [ -d packages/db/prisma/migrations/20260715101500_reconcile_schema_drift ]; then
+  BASELINE_COUNT=$(ssh_run "
+    DB_URL=\$(grep -E '^DATABASE_URL=' $REMOTE/.env | head -1 | cut -d= -f2-)
+    DB_URL_PG=\$(printf '%s' \"\$DB_URL\" | sed 's/?[^?]*$//')
+    psql \"\$DB_URL_PG\" -X -Atc \"SELECT count(*) FROM \\\"_prisma_migrations\\\" WHERE migration_name='20260715101500_reconcile_schema_drift' AND finished_at IS NOT NULL AND rolled_back_at IS NULL\"
+  ")
+  if [ "$BASELINE_COUNT" != "1" ]; then
+    echo "❌ 生产历史漂移迁移尚未完成安全 baseline，停止执行 migration。"
+    echo "   先在开发仓库运行 scripts/prepare-production-p0-baseline.sh，"
+    echo "   并在新备份和批准窗口后显式执行 --apply-baseline。"
+    exit 1
+  fi
+fi
+
 ssh_run "
   set -e
   cd $REMOTE/packages/db

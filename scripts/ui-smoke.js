@@ -15,15 +15,17 @@ const { chromium } = require('playwright')
 
 const BASE = process.argv.includes('--base') ? process.argv[process.argv.indexOf('--base') + 1] : 'http://116.62.32.162:8080'
 const HEADED = process.argv.includes('--headed')
+const TENANT_SLUG = process.env.UI_TENANT_SLUG || process.env.TENANT_SLUG || 'test'
+const PASSWORD = process.env.E2E_PASSWORD || 'test1234'
 
 // keyText 每个角色用其实际 BottomNav 文字 (不同角色 label 不同)
 const ACCOUNTS = {
-  boss:    { phone: '13900000003', expectURL: /\/v2\/boss\/home/,    keyText: ['集团'] },
-  manager: { phone: '13900000004', expectURL: /\/v2\/manager\/home/, keyText: ['店长'] },
-  kitchen: { phone: '13900000005', expectURL: /\/v2\/chef\/home/,    keyText: ['厨师长'] },
-  finance: { phone: '13900000006', expectURL: /\/v2\/finance\/home/, keyText: ['工作台', '资金'] },
-  chef:    { phone: '13900000002', expectURL: /\/v2\/chef-director/, keyText: ['工作台', '审批'] },
-  supplier:{ phone: '13900000001', expectURL: /\/v2\/supplier\/home/,keyText: ['订单', '库存'] },
+  boss:    { phone: '13900000003', short: 'boss', expectURL: /\/v2\/boss\/home/,    keyText: ['集团'] },
+  manager: { phone: '13900000004', short: 'mgr',  expectURL: /\/v2\/manager\/home/, keyText: ['店长'] },
+  kitchen: { phone: '13900000005', short: 'chef', expectURL: /\/v2\/chef\/home/,    keyText: ['厨师长'] },
+  finance: { phone: '13900000006', short: 'fin',  expectURL: /\/v2\/finance\/home/, keyText: ['工作台', '资金'] },
+  chef:    { phone: '13900000002', short: 'cd',   expectURL: /\/v2\/chef-director/, keyText: ['工作台', '审批'] },
+  supplier:{ phone: '13900000001', short: 'sup1', expectURL: /\/v2\/supplier\/home/,keyText: ['订单', '库存'] },
 }
 
 const pagesToVisit = {
@@ -46,10 +48,11 @@ function ok(msg) { stats.pass++; console.log('  ✓', msg) }
 function bad(msg, e) { stats.fail++; stats.errors.push(msg + (e ? ' → ' + e : '')); console.log('  ✗', msg, e ? '→ ' + e : '') }
 
 async function loginAs(page, account) {
-  await page.goto(BASE + '/v2/login')
+  await page.goto(BASE + '/v2/login?tenant=' + encodeURIComponent(TENANT_SLUG))
   await page.waitForLoadState('networkidle')
-  await page.fill('input[placeholder*="13800138000"]', account.phone)
-  await page.fill('input[type="password"]', 'test1234')
+  const identifier = TENANT_SLUG === 'test' ? account.short : account.phone
+  await page.fill('input[placeholder*="13800138000"]', identifier)
+  await page.fill('input[type="password"]', PASSWORD)
   // 等密码栏的两个 input 都填好
   await page.click('button:has-text("登录")')
   // 等跳转
@@ -60,7 +63,7 @@ async function loginAs(page, account) {
 
 async function run() {
   console.log('================ UI Smoke ================')
-  console.log('BASE:', BASE, '· HEADED:', HEADED)
+  console.log('BASE:', BASE, '· TENANT:', TENANT_SLUG, '· HEADED:', HEADED)
   const browser = await chromium.launch({ headless: !HEADED })
   const consoleErrors = []
 

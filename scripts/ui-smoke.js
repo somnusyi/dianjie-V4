@@ -41,6 +41,7 @@ const pagesToVisit = {
     { path: '/v2/manager/initiate?type=PETTY_CASH', mustNotContain: ['页面不存在', '未知申请类型'] },
   ],
   finance: [
+    { path: '/finance', mustNotContain: ['页面不存在', '404', '规则加载失败'] },
     { path: '/v2/finance-pc/petty-cash', mustNotContain: ['页面不存在', '404', '加载失败'] },
     { path: '/v2/finance/capital-review', mustNotContain: ['页面不存在', '404', '加载失败'] },
     { path: '/v2/finance-pc/capital-review', mustNotContain: ['页面不存在', '404', '加载失败'] },

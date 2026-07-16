@@ -1,13 +1,46 @@
 import { FastifyPluginAsync } from 'fastify'
+import { z } from 'zod'
 import { prisma } from '@dianjie/db'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
-const CONDITION_LABELS: Record<string, string> = {
-  AMOUNT_OVER:   '单笔金额超过',
-  MONTHLY_OVER:  '月累计超过',
-  NEW_SUPPLIER:  '新供应商首次付款',
-  ALWAYS_AUTO:   '始终自动付款',
+const conditionSchema = z.enum(['AMOUNT_OVER', 'MONTHLY_OVER', 'NEW_SUPPLIER', 'ALWAYS_AUTO'])
+const actionSchema = z.enum(['auto_pay', 'require_approval', 'block'])
+const entityIdSchema = z.string().trim().min(1).max(64)
+const moneySchema = z.number().finite().min(0).max(1_000_000_000)
+const ruleSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  description: z.union([z.string().trim().max(500), z.null()]).optional(),
+  condition: conditionSchema,
+  threshold: z.union([moneySchema, z.null()]).optional(),
+  action: actionSchema,
+  priority: z.number().int().min(-1000).max(1000).default(0),
+  enabled: z.boolean().optional().default(true),
+}).strict().superRefine((value, ctx) => {
+  const needsThreshold = value.condition === 'AMOUNT_OVER' || value.condition === 'MONTHLY_OVER'
+  if (needsThreshold && value.threshold == null) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['threshold'], message: '该条件必须填写金额阈值' })
+  }
+  if (!needsThreshold && value.threshold != null) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['threshold'], message: '该条件不使用金额阈值' })
+  }
+})
+const updateSchema = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
+  description: z.union([z.string().trim().max(500), z.null()]).optional(),
+  condition: conditionSchema.optional(),
+  threshold: z.union([moneySchema, z.null()]).optional(),
+  action: actionSchema.optional(),
+  priority: z.number().int().min(-1000).max(1000).optional(),
+  enabled: z.boolean().optional(),
+}).strict().refine(value => Object.keys(value).length > 0, '没有可更新字段')
+const evaluateSchema = z.object({
+  supplierId: entityIdSchema,
+  amount: moneySchema.refine(value => value > 0, '付款金额必须大于 0'),
+}).strict()
+
+function firstIssue(parsed: { success: false; error: z.ZodError }) {
+  return parsed.error.issues[0]?.message || '请求参数错误'
 }
 
 export const paymentRuleRoutes: FastifyPluginAsync = async (app) => {
@@ -23,62 +56,95 @@ export const paymentRuleRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // 创建规则
-  app.post('/', auth(app), async (req: any) => {
+  app.post('/', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, userId } = req.user
     if (!['ADMIN', 'SUPER_ADMIN'].includes(role)) throw { statusCode: 403, message: '无权限' }
-    const { name, description, condition, threshold, action, priority } = req.body as any
+    const parsed = ruleSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: firstIssue(parsed) })
 
-    if (!name || !condition || !action) throw { statusCode: 400, message: '请填写完整规则信息' }
-
-    const rule = await prisma.paymentRule.create({
-      data: { tenantId, name, description, condition, threshold, action, priority: priority || 0 },
+    return prisma.$transaction(async tx => {
+      const rule = await tx.paymentRule.create({ data: { tenantId, ...parsed.data } })
+      await tx.opLog.create({
+        data: {
+          tenantId, userId, role,
+          action: `创建付款规则：${rule.name}`,
+          entityType: 'PaymentRule', targetId: rule.id,
+          metadata: { condition: rule.condition, action: rule.action, priority: rule.priority },
+        },
+      })
+      return rule
     })
-
-    await prisma.opLog.create({
-      data: { tenantId, userId, action: `创建付款规则：${name}`, entityType: 'PaymentRule', targetId: rule.id },
-    })
-    return rule
   })
 
   // 更新规则
-  app.patch('/:id', auth(app), async (req: any) => {
+  app.patch('/:id', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, userId } = req.user
     if (!['ADMIN', 'SUPER_ADMIN'].includes(role)) throw { statusCode: 403, message: '无权限' }
-    const { name, description, condition, threshold, action, priority, enabled } = req.body as any
+    const idParsed = entityIdSchema.safeParse(req.params.id)
+    if (!idParsed.success) return reply.status(400).send({ error: firstIssue(idParsed) })
+    const patch = updateSchema.safeParse(req.body || {})
+    if (!patch.success) return reply.status(400).send({ error: firstIssue(patch) })
 
-    const rule = await prisma.paymentRule.findFirst({ where: { id: req.params.id, tenantId } })
-    if (!rule) throw { statusCode: 404, message: '规则不存在' }
-
-    const updated = await prisma.paymentRule.update({
-      where: { id: rule.id },
-      data: { name, description, condition, threshold, action, priority, enabled },
+    return prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`payment-rule:${idParsed.data}`}))::text AS locked`
+      const rule = await tx.paymentRule.findFirst({ where: { id: idParsed.data, tenantId } })
+      if (!rule) throw { statusCode: 404, message: '规则不存在' }
+      const candidate = ruleSchema.safeParse({
+        name: patch.data.name ?? rule.name,
+        description: patch.data.description === undefined ? rule.description : patch.data.description,
+        condition: patch.data.condition ?? rule.condition,
+        threshold: patch.data.threshold === undefined ? (rule.threshold == null ? null : Number(rule.threshold)) : patch.data.threshold,
+        action: patch.data.action ?? rule.action,
+        priority: patch.data.priority ?? rule.priority,
+        enabled: patch.data.enabled ?? rule.enabled,
+      })
+      if (!candidate.success) throw { statusCode: 400, message: firstIssue(candidate) }
+      const updated = await tx.paymentRule.update({ where: { id: rule.id }, data: candidate.data })
+      await tx.opLog.create({
+        data: {
+          tenantId, userId, role,
+          action: `更新付款规则：${updated.name}`,
+          entityType: 'PaymentRule', targetId: rule.id,
+          metadata: { changedFields: Object.keys(patch.data), condition: updated.condition, action: updated.action },
+        },
+      })
+      return updated
     })
-
-    await prisma.opLog.create({
-      data: { tenantId, userId, action: `更新付款规则：${updated.name}`, entityType: 'PaymentRule', targetId: rule.id },
-    })
-    return updated
   })
 
   // 删除规则
-  app.delete('/:id', auth(app), async (req: any) => {
+  app.delete('/:id', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, userId } = req.user
     if (!['ADMIN', 'SUPER_ADMIN'].includes(role)) throw { statusCode: 403, message: '无权限' }
+    const idParsed = entityIdSchema.safeParse(req.params.id)
+    if (!idParsed.success) return reply.status(400).send({ error: firstIssue(idParsed) })
 
-    const rule = await prisma.paymentRule.findFirst({ where: { id: req.params.id, tenantId } })
-    if (!rule) throw { statusCode: 404, message: '规则不存在' }
-
-    await prisma.paymentRule.delete({ where: { id: rule.id } })
-    await prisma.opLog.create({
-      data: { tenantId, userId, action: `删除付款规则：${rule.name}`, entityType: 'PaymentRule', targetId: rule.id },
+    await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`payment-rule:${idParsed.data}`}))::text AS locked`
+      const rule = await tx.paymentRule.findFirst({ where: { id: idParsed.data, tenantId } })
+      if (!rule) throw { statusCode: 404, message: '规则不存在' }
+      await tx.paymentRule.delete({ where: { id: rule.id } })
+      await tx.opLog.create({
+        data: {
+          tenantId, userId, role,
+          action: `删除付款规则：${rule.name}`,
+          entityType: 'PaymentRule', targetId: rule.id,
+          metadata: { condition: rule.condition, action: rule.action },
+        },
+      })
     })
     return { success: true }
   })
 
   // 规则引擎：判断某笔付款应该怎么处理
-  app.post('/evaluate', auth(app), async (req: any) => {
-    const { tenantId } = req.user
-    const { supplierId, amount } = req.body as any
+  app.post('/evaluate', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!['ADMIN', 'FINANCE', 'SUPER_ADMIN'].includes(role)) throw { statusCode: 403, message: '无权限' }
+    const parsed = evaluateSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: firstIssue(parsed) })
+    const { supplierId, amount } = parsed.data
+    const supplier = await prisma.supplier.findFirst({ where: { id: supplierId, tenantId, status: 'ENABLED' }, select: { id: true } })
+    if (!supplier) return reply.status(400).send({ error: '供应商不存在或已停用' })
 
     const rules = await prisma.paymentRule.findMany({
       where: { tenantId, enabled: true },
@@ -122,7 +188,7 @@ export const paymentRuleRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    // 默认自动付款
-    return { action: 'auto_pay', ruleName: '默认规则', needApproval: false }
+    // 没有规则明确放行时必须人工审批，防止空配置或错误优先级直接触发真实付款。
+    return { action: 'require_approval', ruleName: '安全默认规则', needApproval: true }
   })
 }

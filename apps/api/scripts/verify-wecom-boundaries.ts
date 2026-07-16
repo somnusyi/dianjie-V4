@@ -87,6 +87,11 @@ async function main() {
       method: 'PUT', headers: adminAuth, body: JSON.stringify(updateBody),
     })
     assert.equal(saved.status, 200, JSON.stringify(saved))
+    const redacted = await request('/api/wecom/config', { headers: adminAuth })
+    assert.equal(redacted.status, 200)
+    assert.equal(redacted.body.hasCallbackToken, true)
+    assert.equal('callbackToken' in redacted.body, false)
+    assert.equal(JSON.stringify(redacted.body).includes(marker), false)
     const audit = await prisma.opLog.findFirstOrThrow({
       where: { tenantId: tenant.id, userId: admin.id, targetId: saved.body.id, entityType: 'WeComConfig' },
       orderBy: { createdAt: 'desc' },
@@ -120,6 +125,7 @@ async function main() {
       adminBoundary: true,
       superAdminCompatibility: true,
       secretFreeAtomicAudit: true,
+      secretFreeConfigRead: true,
       externalWeComCalls: 0,
     }))
   } finally {

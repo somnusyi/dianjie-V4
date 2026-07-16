@@ -194,7 +194,8 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
       corpId: cfg.corpId, agentId: cfg.agentId, enabled: cfg.enabled,
       hasAppSecret: !!cfg.appSecret,
       hasContactSecret: !!cfg.contactSecret,
-      callbackToken: cfg.callbackToken, // token 不敏感
+      hasCallbackToken: !!cfg.callbackToken,
+      hasEncodingAESKey: !!cfg.encodingAESKey,
     })
   })
 

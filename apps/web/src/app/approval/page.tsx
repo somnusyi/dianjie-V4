@@ -14,6 +14,7 @@ export default function ApprovalPage() {
   const [action, setAction] = useState<'approve' | 'reject'>('approve')
   const [note, setNote] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [currentTime, setCurrentTime] = useState('--:--')
   const { show, ToastEl } = useToast()
 
   const load = async () => {
@@ -28,7 +29,10 @@ export default function ApprovalPage() {
     } catch { show('审批数据读取失败', 'error') }
     setLoading(false)
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    setCurrentTime(dayjs().format('HH:mm'))
+    load()
+  }, [])
 
   const openApproval = (row: any, act: 'approve' | 'reject') => {
     setCurrent(row); setAction(act); setNote(''); setModalOpen(true)
@@ -117,7 +121,7 @@ export default function ApprovalPage() {
         <section className="dj-hero approval-hero">
           <div className="dj-hero-meta">
             <span>审批队列 <i /> 付款前置决策</span>
-            <span>{dayjs().format('HH:mm')}</span>
+            <span>{currentTime}</span>
           </div>
           <div className="dj-hero-main">
             <strong>{pending.length} 笔</strong>

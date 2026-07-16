@@ -19,6 +19,7 @@ const TENANT_SLUG = process.env.UI_TENANT_SLUG || process.env.TENANT_SLUG || 'te
 const LOCAL_TARGET = /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/)/.test(BASE)
 const PASSWORD = process.env.E2E_PASSWORD || (LOCAL_TARGET ? 'test1234' : '')
 const ROLE_COOLDOWN_SECONDS = Number(process.env.UI_ROLE_COOLDOWN_SECONDS ?? (LOCAL_TARGET ? 65 : 0))
+const ROLE_FILTER = new Set((process.env.UI_ROLES || '').split(',').map(value => value.trim()).filter(Boolean))
 
 if (!PASSWORD) {
   console.error('E2E_PASSWORD is required for non-local targets')
@@ -99,6 +100,7 @@ async function run() {
   const consoleErrors = []
 
   for (const [key, account] of Object.entries(ACCOUNTS)) {
+    if (ROLE_FILTER.size > 0 && !ROLE_FILTER.has(key)) continue
     // Next 开发模式会为部分页面重复发起数据请求；整套门禁共用一个测试 IP。
     // 在最后一个高请求量角色前自然跨过全局限流窗口，不放宽服务端生产阈值。
     if (key === 'supplier' && ROLE_COOLDOWN_SECONDS > 0) {
@@ -107,11 +109,12 @@ async function run() {
     }
     const ctx = await browser.newContext()
     const page = await ctx.newPage()
-    page.on('pageerror', err => consoleErrors.push(`[${key}] ${err.message}`))
+    const pageLocation = () => page.url().replace(BASE, '') || '/'
+    page.on('pageerror', err => consoleErrors.push(`[${key} ${pageLocation()}] ${err.message}`))
     page.on('console', msg => {
-      if (msg.type() === 'error') consoleErrors.push(`[${key}] console.error ${msg.text()}`)
+      if (msg.type() === 'error') consoleErrors.push(`[${key} ${pageLocation()}] console.error ${msg.text()}`)
     })
-    page.on('response', r => { if (r.status() >= 500) consoleErrors.push(`[${key}] ${r.status()} ${r.url()}`) })
+    page.on('response', r => { if (r.status() >= 500) consoleErrors.push(`[${key} ${pageLocation()}] ${r.status()} ${r.url()}`) })
 
     try {
       console.log('\n[' + key + ']')

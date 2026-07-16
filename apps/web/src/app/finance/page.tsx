@@ -61,6 +61,7 @@ export default function FinancePage() {
   const [filterStatus, setFilterStatus] = useState('')
   const [payPage, setPayPage] = useState(1)
   const [payTotal, setPayTotal] = useState(0)
+  const [currentTime, setCurrentTime] = useState('--:--')
   const { show, ToastEl } = useToast()
 
   const [approvalOpen, setApprovalOpen] = useState(false)
@@ -81,6 +82,7 @@ export default function FinancePage() {
 
   useEffect(() => {
     setUser(safeUser())
+    setCurrentTime(dayjs().format('HH:mm'))
   }, [])
 
   useEffect(() => {
@@ -296,7 +298,7 @@ export default function FinancePage() {
         <section className="dj-hero finance-hero">
           <div className="dj-hero-meta">
             <span>本期应付 <i /> 实时账期</span>
-            <span>{dayjs().format('HH:mm')}</span>
+            <span>{currentTime}</span>
           </div>
           <div className="dj-hero-main">
             <strong>{fmt(summary.activeTotal).replace('.00', '')}</strong>

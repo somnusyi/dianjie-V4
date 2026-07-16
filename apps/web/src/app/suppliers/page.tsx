@@ -60,7 +60,21 @@ export default function SuppliersPage() {
     if (!form.no || !form.name) return show('请填写供应商编号和名称', 'error')
     setSubmitting(true)
     try {
-      const payload = { ...form, creditDays: Number(form.creditDays) }
+      // API 使用严格白名单；编辑态的 row 含 id/tenantId/status/时间戳等只读字段，不能原样回传。
+      const payload = {
+        no: String(form.no || '').trim(),
+        name: String(form.name || '').trim(),
+        contactName: String(form.contactName || '').trim(),
+        contactPhone: String(form.contactPhone || '').trim(),
+        category: String(form.category || '').trim(),
+        creditType: form.creditType,
+        creditDays: Number(form.creditDays),
+        autoPay: Boolean(form.autoPay),
+        bankName: String(form.bankName || '').trim(),
+        bankAccount: String(form.bankAccount || '').trim(),
+        bankAccountName: String(form.bankAccountName || '').trim(),
+        bankCode: String(form.bankCode || '').trim(),
+      }
       if (editing) await api.patch(`/api/suppliers/${editing.id}`, payload)
       else await api.post('/api/suppliers', payload)
       show(editing ? '已更新' : '供应商已创建')

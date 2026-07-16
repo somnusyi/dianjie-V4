@@ -67,6 +67,8 @@ const pagesToVisit = {
   boss: [
     { path: '/v2/boss/approvals', mustNotContain: ['页面不存在'] },
     { path: '/v2/boss/stores', mustNotContain: ['页面不存在'] },
+    { path: '/suppliers', mustNotContain: ['页面不存在', '404', '加载失败'] },
+    { path: '/v2/me/suppliers', mustNotContain: ['页面不存在', '404', '加载失败'] },
     { path: '/users', mustNotContain: ['页面不存在', '404', '加载失败'] },
     { path: '/v2/me/team', mustNotContain: ['页面不存在', '404', '加载失败'] },
   ],

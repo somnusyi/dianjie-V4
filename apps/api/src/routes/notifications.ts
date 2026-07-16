@@ -1,5 +1,6 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
+import { z } from 'zod'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
@@ -53,12 +54,21 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 标记单条已读 ──────────────────────────────────
   app.patch('/:id/read', auth(app), async (req: any, reply: any) => {
-    const { tenantId } = req.user
-    const { id } = req.params as any
-    await prisma.notification.updateMany({
-      where: { id, tenantId },
+    const { tenantId, userId, role } = req.user
+    const parsed = z.object({ id: z.string().trim().min(1).max(64) }).strict().safeParse(req.params || {})
+    if (!parsed.success) return reply.status(400).send({ error: '通知标识格式不正确' })
+    const result = await prisma.notification.updateMany({
+      where: {
+        id: parsed.data.id,
+        tenantId,
+        OR: [
+          { recipientId: userId },
+          { recipientId: null, recipientRole: role },
+        ],
+      },
       data: { read: true },
     })
+    if (result.count === 0) return reply.status(404).send({ error: '通知不存在或无权访问' })
     return { success: true }
   })
 

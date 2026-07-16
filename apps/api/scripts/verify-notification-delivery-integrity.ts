@@ -1,16 +1,25 @@
 import 'dotenv/config'
 import assert from 'node:assert/strict'
 import bcrypt from 'bcryptjs'
+import { createSigner } from 'fast-jwt'
 import { prisma } from '@dianjie/db'
 import { completeNotificationDelivery, reserveNotificationDelivery } from '../src/services/notify'
 
 const TENANT_SLUG = process.env.PREVIEW_TENANT_SLUG || 'yaohai-test'
+const API_BASE = process.env.TEST_API_BASE || 'http://localhost:4444'
 
 function assertLocalOnly() {
   const url = process.env.DATABASE_URL || ''
   if (process.env.PREVIEW_MODE !== 'true' || process.env.NODE_ENV === 'production' || !url.includes('dianjie_v4_local')) {
     throw new Error('安全护栏: 通知投递完整性验证仅允许本地 PREVIEW_MODE 隔离库')
   }
+  if (!/^http:\/\/(localhost|127\.0\.0\.1):/.test(API_BASE)) throw new Error('安全护栏: 只允许本地 API')
+}
+
+async function markRead(id: string, token: string) {
+  return fetch(`${API_BASE}/api/notifications/${id}/read`, {
+    method: 'PATCH', headers: { authorization: `Bearer ${token}` },
+  })
 }
 
 async function main() {
@@ -20,6 +29,12 @@ async function main() {
   const user = await prisma.user.create({
     data: {
       tenantId: tenant.id, name: '通知并发验证账号', email: `notification-delivery-${suffix}@local.test`,
+      password: await bcrypt.hash('local-only', 10), role: 'FINANCE',
+    },
+  })
+  const otherUser = await prisma.user.create({
+    data: {
+      tenantId: tenant.id, name: '通知越权验证账号', email: `notification-other-${suffix}@local.test`,
       password: await bcrypt.hash('local-only', 10), role: 'FINANCE',
     },
   })
@@ -84,6 +99,21 @@ async function main() {
     await assert.rejects(() => reserve(failureKey), /forced notification reservation failure/)
     assert.equal(await prisma.notificationLog.count({ where: { tenantId: tenant.id, eventKey: failureKey } }), 0)
 
+    const direct = await prisma.notification.create({
+      data: {
+        tenantId: tenant.id, recipientId: user.id, recipientRole: user.role,
+        type: 'LOCAL_VERIFY', title: '通知归属验证', body: '仅指定用户可标记已读',
+      },
+    })
+    const sign = createSigner({ key: process.env.JWT_SECRET || 'local-development-only-jwt-secret', expiresIn: 7_200_000 })
+    const tokenFor = (target: typeof user) => sign({
+      userId: target.id, tenantId: tenant.id, role: target.role, typ: 'access', ver: 0,
+    })
+    assert.equal((await markRead(direct.id, tokenFor(otherUser))).status, 404)
+    assert.equal((await prisma.notification.findUniqueOrThrow({ where: { id: direct.id } })).read, false)
+    assert.equal((await markRead(direct.id, tokenFor(user))).status, 200)
+    assert.equal((await prisma.notification.findUniqueOrThrow({ where: { id: direct.id } })).read, true)
+
     console.log(JSON.stringify({
       ok: true,
       twentyWayConcurrentReservationSingleWinner: true,
@@ -92,6 +122,7 @@ async function main() {
       staleProcessingRecoverable: true,
       bypassFrequencyPreserved: true,
       reservationFailureFailClosed: true,
+      directNotificationReadIsolated: true,
     }))
   } finally {
     await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${triggerName}" ON "notification_logs"`).catch(() => {})
@@ -99,7 +130,8 @@ async function main() {
     await prisma.notificationLog.deleteMany({
       where: { tenantId: tenant.id, userId: user.id, eventKey: { startsWith: eventPrefix } },
     })
-    await prisma.user.delete({ where: { id: user.id } })
+    await prisma.notification.deleteMany({ where: { tenantId: tenant.id, recipientId: { in: [user.id, otherUser.id] } } })
+    await prisma.user.deleteMany({ where: { id: { in: [user.id, otherUser.id] } } })
   }
 }
 

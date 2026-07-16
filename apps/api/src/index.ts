@@ -229,7 +229,9 @@ async function bootstrap() {
   app.register(meituanDataRoutes, { prefix: '/api/meituan' })
 
   // ── 健康检查（含数据库连接验证）──────
-  app.get('/health', async () => {
+  // /api/health is the public path behind app.dianjie.cc's nginx proxy;
+  // /health remains available for direct process and internal checks.
+  const healthHandler = async () => {
     let db = 'ok'
     try {
       await prisma.$queryRaw`SELECT 1`
@@ -242,7 +244,9 @@ async function bootstrap() {
       version: '1.1.0',
       db,
     }
-  })
+  }
+  app.get('/health', healthHandler)
+  app.get('/api/health', healthHandler)
 
   // ── 404 处理 ──────────────────────────
   app.setNotFoundHandler((request, reply) => {

@@ -37,6 +37,63 @@ export interface NotifyOptions {
   bypassSilent?: boolean
 }
 
+interface DeliveryReservationOptions {
+  tenantId: string
+  userId: string
+  eventType: string
+  eventKey: string
+  channel: string
+  payload: Record<string, any>
+  bypassFrequency?: boolean
+}
+
+/**
+ * Reserve one external delivery before calling the provider. The advisory lock
+ * closes the find-then-send race across application instances. A stale
+ * `processing` row suppresses duplicates for the same five-minute window;
+ * `failed` rows do not block a retry.
+ */
+export async function reserveNotificationDelivery(opts: DeliveryReservationOptions): Promise<string | null> {
+  return prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`notification:${opts.tenantId}:${opts.userId}:${opts.eventKey}:${opts.channel}`}))::text AS locked`
+    if (!opts.bypassFrequency) {
+      const since = new Date(Date.now() - 5 * 60 * 1000)
+      const duplicate = await tx.notificationLog.findFirst({
+        where: {
+          tenantId: opts.tenantId,
+          userId: opts.userId,
+          eventKey: opts.eventKey,
+          channel: opts.channel,
+          status: { in: ['processing', 'sent'] },
+          createdAt: { gte: since },
+        },
+        select: { id: true },
+      })
+      if (duplicate) return null
+    }
+    const reservation = await tx.notificationLog.create({
+      data: {
+        tenantId: opts.tenantId,
+        userId: opts.userId,
+        eventType: opts.eventType,
+        eventKey: opts.eventKey,
+        channel: opts.channel,
+        status: 'processing',
+        payload: opts.payload as any,
+      },
+      select: { id: true },
+    })
+    return reservation.id
+  })
+}
+
+export async function completeNotificationDelivery(reservationId: string, status: 'sent' | 'failed', errorMsg?: string) {
+  return prisma.notificationLog.update({
+    where: { id: reservationId },
+    data: { status, errorMsg: status === 'failed' ? (errorMsg || 'unknown delivery failure') : null },
+  })
+}
+
 export async function notify(opts: NotifyOptions): Promise<{ sent: number; suppressed: number; failed: number }> {
   const { tenantId, event, eventKey, payload, bypassFrequency, bypassSilent } = opts
   const meta = EVENTS[event]
@@ -76,40 +133,37 @@ export async function notify(opts: NotifyOptions): Promise<{ sent: number; suppr
         return 'suppressed' as const
       }
 
-      // 4. 频控去重 (5 分钟内同 eventKey 不重发)
-      if (!bypassFrequency) {
-        const since = new Date(Date.now() - 5 * 60 * 1000)
-        const dup = await prisma.notificationLog.findFirst({
-          where: { tenantId, userId, eventKey, status: 'sent', createdAt: { gte: since } },
-        })
-        if (dup) {
-          await logSuppressed(tenantId, userId, event, eventKey, 'frequency_blocked')
-          return 'suppressed' as const
-        }
-      }
-
-      // 5. 选通道
+      // 4. 选通道并在外部发送前原子占位
       const user = await prisma.user.findUnique({ where: { id: userId } })
       if (!user || user.status === 'INACTIVE') return 'suppressed' as const
       const channels = pref?.channels?.length ? pref.channels : ['wecom']
 
       for (const channel of channels) {
         if (channel === 'wecom' && user.wecomUserId) {
+          const reservationId = await reserveNotificationDelivery({
+            tenantId, userId, eventType: event, eventKey, channel: 'wecom', payload, bypassFrequency,
+          })
+          if (!reservationId) {
+            await logSuppressed(tenantId, userId, event, eventKey, 'frequency_blocked')
+            return 'suppressed' as const
+          }
           try {
             await sendViaWeCom(tenantId, user.wecomUserId, rendered)
-            await prisma.notificationLog.create({
-              data: { tenantId, userId, eventType: event, eventKey, channel: 'wecom', status: 'sent', payload: payload as any },
-            })
-            return 'sent' as const
           } catch (e: any) {
-            await prisma.notificationLog.create({
-              data: {
-                tenantId, userId, eventType: event, eventKey, channel: 'wecom', status: 'failed',
-                errorMsg: e.message || String(e), payload: payload as any,
-              },
+            await completeNotificationDelivery(reservationId, 'failed', e.message || String(e)).catch(logError => {
+              console.error(`[notify] 更新失败投递日志 ${reservationId}:`, logError)
             })
             // 继续尝试下一个通道 (未来加 SMS / inapp)
+            continue
           }
+          try {
+            await completeNotificationDelivery(reservationId, 'sent')
+          } catch (logError) {
+            // 外部发送已经成功时绝不能把占位改成 failed，否则下一次会重复触达。
+            // 保留 processing 让当前频控窗口继续抑制，并记录基础设施告警。
+            console.error(`[notify] 投递已成功但日志完成失败 ${reservationId}:`, logError)
+          }
+          return 'sent' as const
         }
       }
       return 'failed' as const

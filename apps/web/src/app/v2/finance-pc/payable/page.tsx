@@ -16,15 +16,17 @@ import { apiFetch } from '@/lib/v2-auth'
 import { Chip } from '@/components/v2'
 import dayjs from 'dayjs'
 import FinanceTopNav from '../_topnav'
+import InvoicePaymentResultDialog, { invoicePaymentMethods } from '@/components/v2/InvoicePaymentResultDialog'
 
 type Receipt = {
   id: string; no: string; totalAmount: string | number; deliveryDate: string
   store?: { name: string } | null
   paymentSchedule?: { dueAt: string; status: string } | null
 }
+type CashAccount = { id: string; type: string; status: string; balance: string | number }
 type Payment = {
   id: string; amount: string | number; status: 'PENDING'|'SUCCESS'|'FAILED'|'CANCELED'
-  paidAt?: string | null; createdAt: string
+  paidAt?: string | null; createdAt: string; paymentMethod: string
 }
 type Invoice = {
   id: string; invoiceNo: string
@@ -50,11 +52,15 @@ export default function FinancePCPayablePage() {
   const [target, setTarget] = useState<Invoice | null>(null)
   const [payAmount, setPayAmount] = useState('')
   const [payNote, setPayNote] = useState('')
+  const [paymentMethod, setPaymentMethod] = useState('manual')
+  const [requestId, setRequestId] = useState('')
+  const [resultTarget, setResultTarget] = useState<{ invoice: Invoice; payment: Payment } | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [bankAvailable, setBankAvailable] = useState<number | null>(null)
   const [search, setSearch] = useState('')
 
   function load() {
+    setError(null)
     apiFetch<Invoice[]>('/api/invoice-payments/payable')
       .then(setItems)
       .catch(e => setError(e.message))
@@ -62,8 +68,10 @@ export default function FinancePCPayablePage() {
   useEffect(() => { load() }, [])
 
   useEffect(() => {
-    apiFetch<{ success: boolean; available?: string }>('/api/cmb/balance')
-      .then(r => r.success && r.available != null && setBankAvailable(Number(r.available)))
+    apiFetch<CashAccount[]>('/api/cashbook/accounts')
+      .then(accounts => setBankAvailable(accounts
+        .filter(account => account.status === 'ACTIVE' && account.type === 'BANK')
+        .reduce((sum, account) => sum + Number(account.balance), 0)))
       .catch(() => {})
   }, [])
 
@@ -101,6 +109,8 @@ export default function FinancePCPayablePage() {
     setTarget(inv)
     setPayAmount(inv.remainingAmount.toFixed(2))
     setPayNote('')
+    setPaymentMethod('manual')
+    setRequestId(crypto.randomUUID())
   }
 
   async function submitPay() {
@@ -114,7 +124,10 @@ export default function FinancePCPayablePage() {
     try {
       await apiFetch('/api/invoice-payments', {
         method: 'POST',
-        body: JSON.stringify({ invoiceId: target.id, amount: amt, paymentMethod: 'cmb', note: payNote || null }),
+        body: JSON.stringify({
+          invoiceId: target.id, amount: amt, paymentMethod, requestId,
+          note: payNote || undefined,
+        }),
       })
       setTarget(null); setPayAmount(''); setPayNote('')
       load()
@@ -148,7 +161,7 @@ export default function FinancePCPayablePage() {
         <div className="grid grid-cols-4 gap-3 mb-4">
           <Stat label="应付合计" value={fmt(totals.remaining)} unit={`${totals.count} 张`} tone={totals.overdue > 0 ? 'red' : 'default'} />
           <Stat label="逾期" value={String(totals.overdue)} unit="张" tone={totals.overdue > 0 ? 'red' : 'gray'} />
-          <Stat label="招行实时可用" value={bankAvailable != null ? fmt(bankAvailable) : '—'} tone="green" />
+          <Stat label="银行账户余额 · 资金台账" value={bankAvailable != null ? fmt(bankAvailable) : '—'} tone="green" />
           <Stat label={shortfall ? '现金缺口' : '可付盈余'}
                 value={gap != null ? `${gap < 0 ? '−' : '+'}${fmt(Math.abs(gap))}` : '—'}
                 tone={shortfall ? 'red' : gap != null ? 'green' : 'gray'} />
@@ -206,10 +219,19 @@ export default function FinancePCPayablePage() {
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
                       <a href={inv.fileUrl} target="_blank" rel="noreferrer"
                          className="px-2 py-1 text-caption text-gray2 hover:text-ink">看发票</a>
-                      <button onClick={() => openPay(inv)} disabled={hasPending}
-                              className="ml-1 px-3 py-1.5 bg-ink text-white rounded-cta text-button disabled:opacity-40">
-                        发起付款
-                      </button>
+                      {hasPending ? (
+                        <button onClick={() => {
+                          const pending = inv.payments.find(payment => payment.status === 'PENDING')
+                          if (pending) setResultTarget({ invoice: inv, payment: pending })
+                        }} className="ml-1 px-3 py-1.5 bg-amber text-ink rounded-cta text-button">
+                          确认结果
+                        </button>
+                      ) : (
+                        <button onClick={() => openPay(inv)}
+                                className="ml-1 px-3 py-1.5 bg-ink text-white rounded-cta text-button">
+                          发起付款
+                        </button>
+                      )}
                     </td>
                   </tr>
                 )
@@ -253,13 +275,22 @@ export default function FinancePCPayablePage() {
                 </div>
               </div>
               <div>
+                <label className="text-micro text-gray3 block mb-1">付款方式 *</label>
+                <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}
+                        className="w-full bg-bg rounded-chip px-3 py-2 text-body">
+                  {invoicePaymentMethods.map(method => (
+                    <option key={method.value} value={method.value}>{method.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
                 <label className="text-micro text-gray3 block mb-1">备注 (选填)</label>
                 <textarea rows={3} value={payNote} onChange={e => setPayNote(e.target.value)}
                           placeholder="本次付款说明: 现金流紧张 / 分批 / ..."
                           className="w-full bg-bg rounded-chip px-3 py-2 outline-none text-body resize-none" />
               </div>
               <div className="bg-orange-bg/30 rounded-card p-3 text-caption text-gray2">
-                💡 提交后创建付款单 (PENDING), 招行 cmb 自动转账, 银行确认 SUCCESS 后累加已付金额
+                提交仅创建待确认付款单，不会自动扣款。核对真实支付结果后，在列表点“确认结果”并绑定实际账户和流水号。
               </div>
             </div>
             <div className="border-t border-border px-6 py-3 flex gap-3 sticky bottom-0 bg-white">
@@ -270,6 +301,16 @@ export default function FinancePCPayablePage() {
             </div>
           </div>
         </div>
+      )}
+      {resultTarget && (
+        <InvoicePaymentResultDialog
+          payment={resultTarget.payment}
+          invoiceLabel={resultTarget.invoice.invoiceNo}
+          supplierName={resultTarget.invoice.supplier.name}
+          mode="pc"
+          onClose={() => setResultTarget(null)}
+          onDone={() => { setResultTarget(null); load() }}
+        />
       )}
     </div>
   )

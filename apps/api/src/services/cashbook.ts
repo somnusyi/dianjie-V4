@@ -47,10 +47,12 @@ export interface CashLedgerAccountLike {
 
 /**
  * 资金账户 → 会计明细科目。
- * 已确认的三张银行卡按末四位落末级科目，其他银行保守落 1002 并保留账户名。
+ * 现金、支付宝、微信分别落对应明细科目；已确认银行卡按末四位落末级科目。
  */
 export function cashLedgerAccount(account: CashLedgerAccountLike): { code: string; name: string } {
   if (account.type === 'CASH') return { code: '1001', name: '库存现金' }
+  if (account.type === 'ALIPAY') return { code: '101203', name: '其他货币资金-支付宝' }
+  if (account.type === 'WECHAT') return { code: '101204', name: '其他货币资金-微信' }
   const last4 = (account.accountNo || account.cmbBindAccount || '').slice(-4)
   if (last4 === '1674') return { code: '100201', name: '中国银行1674' }
   if (last4 === '3618') return { code: '100202', name: '建设银行3618' }

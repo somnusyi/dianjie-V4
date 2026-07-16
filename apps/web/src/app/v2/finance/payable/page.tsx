@@ -11,19 +11,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import { Chip } from '@/components/v2'
+import InvoicePaymentResultDialog, { invoicePaymentMethods } from '@/components/v2/InvoicePaymentResultDialog'
 
-// 复用 bank-account-card 同款 sessionStorage 缓存 key, 跨页面共享 10s 窗口
-type BalanceMini = { balance?: string; available?: string; success?: boolean }
-function readBalanceCache(): { data: BalanceMini; at: number } | null {
-  if (typeof window === 'undefined') return null
-  try {
-    const raw = sessionStorage.getItem('cmb:balance:default')
-    if (!raw) return null
-    const c = JSON.parse(raw)
-    if (Date.now() - c.at > 12_000) return null
-    return c
-  } catch { return null }
-}
+type CashAccount = { id: string; type: string; status: string; balance: string | number }
 
 type Receipt = {
   id: string; no: string; totalAmount: string | number; deliveryDate: string
@@ -32,7 +22,7 @@ type Receipt = {
 }
 type Payment = {
   id: string; amount: string | number; status: 'PENDING'|'SUCCESS'|'FAILED'|'CANCELED'
-  paidAt?: string | null; createdAt: string
+  paidAt?: string | null; createdAt: string; paymentMethod: string
 }
 type Invoice = {
   id: string
@@ -64,34 +54,27 @@ export default function FinancePayablePage() {
   const [target, setTarget] = useState<Invoice | null>(null)   // 发起付款抽屉
   const [payAmount, setPayAmount] = useState('')
   const [payNote, setPayNote] = useState('')
+  const [paymentMethod, setPaymentMethod] = useState('manual')
+  const [requestId, setRequestId] = useState('')
+  const [resultTarget, setResultTarget] = useState<{ invoice: Invoice; payment: Payment } | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [bankAvailable, setBankAvailable] = useState<number | null>(null)
 
   function load() {
+    setError(null)
     apiFetch<Invoice[]>('/api/invoice-payments/payable')
       .then(setItems)
       .catch(e => setError(e.message))
   }
   useEffect(() => { load() }, [])
 
-  // 招行实时可用余额, 用于"应付 vs 可用"对比
-  // 先吃 sessionStorage 缓存避撞 10s 限流, miss 再打银行
+  // 证书/实时银行接口未启用前，以系统资金台账中的活动银行账户余额为唯一页面口径。
   useEffect(() => {
-    const cached = readBalanceCache()
-    if (cached?.data?.success && cached.data.available != null) {
-      setBankAvailable(Number(cached.data.available))
-      return
-    }
-    apiFetch<{ success: boolean; available?: string; balance?: string }>('/api/cmb/balance')
-      .then(resp => {
-        if (resp.success && resp.available != null) {
-          setBankAvailable(Number(resp.available))
-          try {
-            sessionStorage.setItem('cmb:balance:default', JSON.stringify({ data: resp, at: Date.now() }))
-          } catch {}
-        }
-      })
-      .catch(() => { /* 银行查询失败不阻塞应付列表 */ })
+    apiFetch<CashAccount[]>('/api/cashbook/accounts')
+      .then(accounts => setBankAvailable(accounts
+        .filter(account => account.status === 'ACTIVE' && account.type === 'BANK')
+        .reduce((sum, account) => sum + Number(account.balance), 0)))
+      .catch(() => { /* 账户查询失败不阻塞应付列表 */ })
   }, [])
 
   // 排序: 逾期 > 即将到期 > 余额大 > 余额小
@@ -119,6 +102,8 @@ export default function FinancePayablePage() {
     setTarget(inv)
     setPayAmount(inv.remainingAmount.toFixed(2))
     setPayNote('')
+    setPaymentMethod('manual')
+    setRequestId(crypto.randomUUID())
   }
 
   async function submitPay() {
@@ -134,7 +119,7 @@ export default function FinancePayablePage() {
         method: 'POST',
         body: JSON.stringify({
           invoiceId: target.id, amount: amt,
-          paymentMethod: 'cmb', note: payNote || null,
+          paymentMethod, requestId, note: payNote || undefined,
         }),
       })
       setTarget(null); setPayAmount(''); setPayNote('')
@@ -176,7 +161,7 @@ export default function FinancePayablePage() {
           return (
             <div className="mt-3 pt-3 border-t border-white/15 flex items-center gap-3 text-caption">
               <div className="flex-1">
-                <div className="text-micro text-white/60">招行可用 · 实时</div>
+                <div className="text-micro text-white/60">银行账户余额 · 资金台账</div>
                 <div className="font-num text-button">¥{bankAvailable.toLocaleString()}</div>
               </div>
               <div className="flex-1 text-right">
@@ -227,11 +212,15 @@ export default function FinancePayablePage() {
               {inv.payments.length > 0 && (
                 <ul className="text-micro text-gray3 space-y-0.5 mb-2 pl-2 border-l-2 border-border">
                   {inv.payments.map(p => (
-                    <li key={p.id} className="flex items-center gap-2">
+                    <li key={p.id} className="flex items-center gap-2 flex-wrap">
                       <span>{p.status === 'SUCCESS' ? '✓' : p.status === 'PENDING' ? '⏳' : '✗'}</span>
                       <span className="font-num">¥{Number(p.amount).toLocaleString()}</span>
                       <span>{p.status === 'SUCCESS' ? '已到账' : p.status === 'PENDING' ? '处理中' : '失败'}</span>
                       <span className="ml-auto">{fmt(p.paidAt || p.createdAt)}</span>
+                      {p.status === 'PENDING' && (
+                        <button onClick={() => setResultTarget({ invoice: inv, payment: p })}
+                                className="text-amber-fg underline underline-offset-2">确认结果</button>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -298,6 +287,16 @@ export default function FinancePayablePage() {
               </div>
 
               <div>
+                <label className="text-micro text-gray3 block mb-1">付款方式 *</label>
+                <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}
+                        className="w-full bg-bg rounded-chip px-3 py-2 text-body">
+                  {invoicePaymentMethods.map(method => (
+                    <option key={method.value} value={method.value}>{method.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
                 <label className="text-micro text-gray3 block mb-1">备注(可选)</label>
                 <textarea rows={2} value={payNote} onChange={e => setPayNote(e.target.value)}
                           placeholder="本次付款说明: 现金流紧张/分批/...."
@@ -305,7 +304,7 @@ export default function FinancePayablePage() {
               </div>
 
               <div className="bg-orange-bg/30 rounded-card p-2 text-micro text-gray2">
-                💡 提交后将创建付款单 (PENDING), 招行 cmb 自动发起转账, 银行确认后状态变 SUCCESS, 累加到已付金额
+                提交仅创建待确认付款单，不会自动扣款。核对真实支付结果后，请在列表点“确认结果”并选择实际出款账户和填写流水号。
               </div>
             </div>
 
@@ -319,6 +318,15 @@ export default function FinancePayablePage() {
             </div>
           </div>
         </div>
+      )}
+      {resultTarget && (
+        <InvoicePaymentResultDialog
+          payment={resultTarget.payment}
+          invoiceLabel={resultTarget.invoice.invoiceNo}
+          supplierName={resultTarget.invoice.supplier.name}
+          onClose={() => setResultTarget(null)}
+          onDone={() => { setResultTarget(null); load() }}
+        />
       )}
     </div>
   )

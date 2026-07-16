@@ -889,6 +889,9 @@ model InvoicePayment {
   // 本次付款
   amount          Decimal       @db.Decimal(12, 2) // 本次付款金额
   paymentMethod   String        @default("cmb") // cmb / manual / wechat / alipay
+  requestId       String?       // 客户端幂等操作号，防止双击/网络重试重复创建
+  cashAccountId   String?       // 实际出款资金账户（确认成功时写入）
+  cashAccount     CashAccount?  @relation(fields: [cashAccountId], references: [id], onDelete: SetNull)
   // 银行流水
   bankTxNo        String? // 招行 refext / 微信支付单号
   bankRawResponse Json?
@@ -906,6 +909,9 @@ model InvoicePayment {
 
   @@index([tenantId, status])
   @@index([invoiceId])
+  @@index([cashAccountId])
+  @@unique([tenantId, requestId])
+  @@unique([tenantId, bankTxNo])
   @@map("invoice_payments")
 }
 
@@ -1991,6 +1997,7 @@ model CashAccount {
 
   tenant       Tenant            @relation(fields: [tenantId], references: [id])
   transactions CashTransaction[]
+  invoicePayments InvoicePayment[]
 
   @@index([tenantId])
   @@map("cash_accounts")

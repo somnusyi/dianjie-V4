@@ -26,7 +26,13 @@ const BASE = process.argv.includes('--base')
   : (process.env.E2E_BASE || 'http://116.62.32.162:8080')
 // TENANT_SLUG: 默认 test (隔离测试库, 不污染生产 dianjie tenant). 跨 tenant 测试时覆盖
 const TENANT_SLUG = process.env.TENANT_SLUG || 'test'
-const PASSWORDS = process.env.E2E_PASSWORD || 'test1234'
+const LOCAL_TARGET = /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/)/.test(BASE)
+const PASSWORDS = process.env.E2E_PASSWORD || (LOCAL_TARGET ? 'test1234' : '')
+
+if (!PASSWORDS) {
+  console.error('E2E_PASSWORD is required for non-local targets')
+  process.exit(2)
+}
 
 // 测试账号 (统一密码 test1234, 通过之前 DB 脚本创建)
 const ACCOUNTS = {

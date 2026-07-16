@@ -11,11 +11,28 @@ set -euo pipefail
 API_BASE="${1:-https://app.dianjie.cc}"
 WEB_BASE="${2:-$API_BASE}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 FAILURES=0
 LOGIN_COOLDOWN_SECONDS="${SMOKE_LOGIN_COOLDOWN_SECONDS:-60}"
 
+if [[ "$API_BASE" =~ ^https?://(localhost|127\.0\.0\.1)(:|/) ]]; then
+  if [ -z "${TENANT_SLUG:-}" ] && [ -f "$ROOT_DIR/apps/api/.env" ]; then
+    PREVIEW_TENANT="$(sed -nE 's/^[[:space:]]*PREVIEW_TENANT_SLUG[[:space:]]*=[[:space:]]*([^#[:space:]]+).*/\1/p' "$ROOT_DIR/apps/api/.env" | tail -1)"
+    if [ -n "$PREVIEW_TENANT" ]; then
+      export TENANT_SLUG="$PREVIEW_TENANT"
+    fi
+  fi
+  if [ -n "${TENANT_SLUG:-}" ] && [ -z "${UI_TENANT_SLUG:-}" ]; then
+    export UI_TENANT_SLUG="$TENANT_SLUG"
+  fi
+elif [ -z "${E2E_PASSWORD:-}" ]; then
+  echo "❌ 非本地 smoke 必须通过 E2E_PASSWORD 显式提供隔离测试账号密码"
+  exit 2
+fi
+
 echo "==> API target: $API_BASE"
 echo "==> Web target: $WEB_BASE"
+echo "==> Test tenant: ${TENANT_SLUG:-test}"
 echo ""
 
 # 1. /api/health

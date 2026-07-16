@@ -2,19 +2,35 @@
  * 本地 dev DB 测试账号补全（按 ~/Desktop/dianjie-V4/测试账号清单.xlsx）
  *
  * - 手机号统一 13900000001-13900000008
- * - 密码统一 test1234（bcrypt）
+ * - 密码必须通过 TEST_ACCOUNT_PASSWORD 显式提供（bcrypt）
  * - 已有 email 账号（admin@dianjie.com 等）→ 补 phone 字段
  * - 新角色（ENGINEERING / SUPPLIER_OWNER 等）→ 直接创建
  *
  * 跑法:
- *   TARGET_TENANT_SLUG=yaohai-test \
+ *   PREVIEW_MODE=true ALLOW_TEST_ACCOUNT_SEED=true \
+ *   DATABASE_URL=postgresql://.../dianjie_v4_local \
+ *   TARGET_TENANT_SLUG=yaohai-test TEST_ACCOUNT_PASSWORD='<至少12位本地口令>' \
  *     pnpm --filter @dianjie/db exec tsx src/seed-v2-test-accounts.ts
  */
 import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 
 const prisma = new PrismaClient()
-const PASSWORD = 'test1234'
+
+function requiredTestPassword() {
+  const databaseUrl = process.env.DATABASE_URL || ''
+  if (
+    process.env.NODE_ENV === 'production' ||
+    process.env.PREVIEW_MODE !== 'true' ||
+    process.env.ALLOW_TEST_ACCOUNT_SEED !== 'true' ||
+    !databaseUrl.includes('dianjie_v4_local')
+  ) {
+    throw new Error('安全护栏: 测试账号脚本仅允许显式授权的本地 PREVIEW_MODE 隔离库')
+  }
+  const password = process.env.TEST_ACCOUNT_PASSWORD || ''
+  if (password.length < 12) throw new Error('安全护栏: TEST_ACCOUNT_PASSWORD 必须至少 12 位')
+  return password
+}
 
 interface Account {
   phone: string
@@ -37,6 +53,7 @@ const ACCOUNTS: Account[] = [
 ]
 
 async function main() {
+  const password = requiredTestPassword()
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
   console.log('补全 v2 UI 手机号登录测试账号 (xlsx 同步)')
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
@@ -75,7 +92,7 @@ async function main() {
     console.log(`✓ 新建供应商 ${supplier.name} (${supplier.no})`)
   }
 
-  const passwordHash = await bcrypt.hash(PASSWORD, 10)
+  const passwordHash = await bcrypt.hash(password, 10)
 
   for (const acc of ACCOUNTS) {
     const storeId = acc.storeNo === 'DJ001' ? store.id : null
@@ -135,7 +152,7 @@ async function main() {
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
   console.log('登录方式: http://localhost:3200/v2/login')
   console.log('账号: 13900000001-13900000008')
-  console.log('密码: test1234')
+  console.log('密码: 使用 TEST_ACCOUNT_PASSWORD 环境变量中提供的本地测试口令')
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 
   await prisma.$disconnect()

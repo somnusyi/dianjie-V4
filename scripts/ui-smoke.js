@@ -16,7 +16,13 @@ const { chromium } = require('playwright')
 const BASE = process.argv.includes('--base') ? process.argv[process.argv.indexOf('--base') + 1] : 'http://116.62.32.162:8080'
 const HEADED = process.argv.includes('--headed')
 const TENANT_SLUG = process.env.UI_TENANT_SLUG || process.env.TENANT_SLUG || 'test'
-const PASSWORD = process.env.E2E_PASSWORD || 'test1234'
+const LOCAL_TARGET = /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/)/.test(BASE)
+const PASSWORD = process.env.E2E_PASSWORD || (LOCAL_TARGET ? 'test1234' : '')
+
+if (!PASSWORD) {
+  console.error('E2E_PASSWORD is required for non-local targets')
+  process.exit(2)
+}
 
 // keyText 每个角色用其实际 BottomNav 文字 (不同角色 label 不同)
 const ACCOUNTS = {

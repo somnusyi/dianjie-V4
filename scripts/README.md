@@ -67,6 +67,12 @@ deploy.sh 内部最后一步会自动调。也能独立跑（任何时候健康�
                                                   # 测本地 API + Web
 ```
 
+本地地址会自动读取 `apps/api/.env` 中的 `PREVIEW_TENANT_SLUG`，避免把预览环境安全护栏误报成登录失败。非本地目标必须显式提供隔离测试账号密码：
+
+```bash
+TENANT_SLUG=test E2E_PASSWORD='<隔离测试账号密码>' ./scripts/smoke-test.sh
+```
+
 实际跑 3 项：
 1. `/api/health` curl
 2. `e2e-full-flow.js`（全 6 角色 API 链路）

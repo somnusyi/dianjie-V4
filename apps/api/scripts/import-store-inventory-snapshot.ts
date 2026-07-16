@@ -11,6 +11,7 @@ import crypto from 'node:crypto'
 import path from 'node:path'
 import ExcelJS from 'exceljs'
 import { prisma } from '@dianjie/db'
+import { normalizeInventoryQuantity, type InventoryUnitNormalization } from '../src/services/inventoryUnits'
 
 type ParsedItem = {
   section: string | null
@@ -22,6 +23,7 @@ type ParsedItem = {
   amount: number
   sortOrder: number
   productId?: string
+  normalization?: InventoryUnitNormalization
 }
 
 function numeric(value: ExcelJS.CellValue): number {
@@ -137,7 +139,16 @@ async function main() {
   const ambiguous: Array<{ name: string; candidates: string[] }> = []
   for (const item of items) {
     const candidates = productByName.get(normalizeName(item.name)) || []
-    if (candidates.length === 1) item.productId = candidates[0].id
+    if (candidates.length === 1) {
+      item.productId = candidates[0].id
+      item.normalization = normalizeInventoryQuantity({
+        quantity: item.quantity,
+        rawUnit: item.unit,
+        rawSpec: item.spec,
+        productUnit: candidates[0].unit,
+        productSpec: candidates[0].spec,
+      })
+    }
     else if (candidates.length > 1) ambiguous.push({ name: item.name, candidates: candidates.map((p) => `${p.code}:${p.name}`) })
   }
 
@@ -148,6 +159,7 @@ async function main() {
     matchedCount,
     unmatchedCount: items.length - matchedCount,
     ambiguousCount: ambiguous.length,
+    normalizationPendingCount: items.filter(item => item.normalization?.status === 'PENDING').length,
     ambiguous: ambiguous.slice(0, 20),
   }
   console.log(JSON.stringify(report, null, 2))
@@ -186,6 +198,11 @@ async function main() {
             quantity: item.quantity,
             unitPrice: item.unitPrice,
             amount: item.amount.toFixed(3),
+            normalizedQuantity: item.normalization?.normalizedQuantity,
+            normalizedUnit: item.normalization?.normalizedUnit,
+            normalizationFactor: item.normalization?.factor,
+            normalizationStatus: item.normalization?.status,
+            normalizationNote: item.normalization?.note,
             sortOrder: item.sortOrder,
           })),
         },

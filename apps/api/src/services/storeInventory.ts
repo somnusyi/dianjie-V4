@@ -13,6 +13,7 @@ export type StoreInventorySummary = {
   zeroCount: number
   matchedCount: number
   unmatchedCount: number
+  normalizationPendingCount: number
   lowStockCount: number
   sourceFilename: string | null
 }
@@ -29,6 +30,7 @@ const emptySummary = (): StoreInventorySummary => ({
   zeroCount: 0,
   matchedCount: 0,
   unmatchedCount: 0,
+  normalizationPendingCount: 0,
   lowStockCount: 0,
   sourceFilename: null,
 })
@@ -65,7 +67,13 @@ export async function latestStoreInventorySnapshot(tenantId: string, storeId: st
     // 低库存只对已经唯一匹配到采购 SKU、且配置了安全库存的品项计算。
     const lowStockCount = snapshot.items.filter((item) => {
       const minStock = Number(item.product?.minStock || 0)
-      const quantity = Number(item.quantity)
+      const exactWithoutStoredNormalization = item.unit.trim().toLowerCase() === item.product?.unit.trim().toLowerCase()
+      const quantity = item.normalizedQuantity != null
+        ? Number(item.normalizedQuantity)
+        : exactWithoutStoredNormalization
+          ? Number(item.quantity)
+          : null
+      if (quantity == null) return false
       return minStock > 0 && quantity > 0 && quantity < minStock
     }).length
 
@@ -84,6 +92,7 @@ export async function latestStoreInventorySnapshot(tenantId: string, storeId: st
       zeroCount: snapshot.zeroCount,
       matchedCount: snapshot.matchedCount,
       unmatchedCount: Math.max(0, snapshot.itemCount - snapshot.matchedCount),
+      normalizationPendingCount: snapshot.items.filter(item => item.productId && item.normalizationStatus === 'PENDING').length,
       lowStockCount,
       sourceFilename: snapshot.sourceFilename,
     }
@@ -97,6 +106,10 @@ export async function latestStoreInventorySnapshot(tenantId: string, storeId: st
           quantity: Number(item.quantity),
           unitPrice: Number(item.unitPrice),
           amount: Number(item.amount),
+          normalizedQuantity: item.normalizedQuantity == null ? null : Number(item.normalizedQuantity),
+          normalizedUnit: item.normalizedUnit,
+          normalizationStatus: item.normalizationStatus,
+          normalizationNote: item.normalizationNote,
           matched: Boolean(item.productId),
           product: item.product
             ? { ...item.product, minStock: Number(item.product.minStock) }
@@ -135,7 +148,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string)
   const snapshot = await prisma.inventorySnapshot.findFirst({
     where: { tenantId, storeId },
     orderBy: [{ snapshotDate: 'desc' }, { createdAt: 'desc' }],
-    include: { items: true },
+    include: { items: { include: { product: { select: { unit: true } } } } },
   })
   if (!snapshot) return { summary: emptySummary(), items: [] }
 
@@ -175,9 +188,19 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string)
   ])
 
   const slots = new Map<string, EstimatedSlot>()
+  let normalizationPendingCount = 0
   for (const item of snapshot.items) {
     if (!item.productId) continue
-    const quantity = Number(item.quantity)
+    const exactWithoutStoredNormalization = item.unit.trim().toLowerCase() === item.product?.unit.trim().toLowerCase()
+    const quantity = item.normalizedQuantity != null
+      ? Number(item.normalizedQuantity)
+      : exactWithoutStoredNormalization
+        ? Number(item.quantity)
+        : null
+    if (quantity == null) {
+      normalizationPendingCount += 1
+      continue
+    }
     const value = Number(item.amount)
     const current = slots.get(item.productId) || { quantity: 0, avgUnitCost: 0, monthIn: 0, monthOut: 0 }
     const currentValue = current.quantity * current.avgUnitCost
@@ -289,6 +312,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string)
       zeroCount: rows.filter(row => Math.abs(row.stock) < 0.0001).length,
       matchedCount: snapshot.matchedCount,
       unmatchedCount: Math.max(0, snapshot.itemCount - snapshot.matchedCount),
+      normalizationPendingCount,
       lowStockCount: rows.filter(row => row.isLowStock).length,
       sourceFilename: snapshot.sourceFilename,
     },

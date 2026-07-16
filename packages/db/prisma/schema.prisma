@@ -1858,18 +1858,25 @@ model InventorySnapshot {
 }
 
 model InventorySnapshotItem {
-  id         String   @id @default(cuid())
-  snapshotId String
-  productId  String?
-  section    String?
-  rawName    String
-  rawSpec    String?
-  unit       String
-  quantity   Decimal  @db.Decimal(14, 4)
-  unitPrice  Decimal  @db.Decimal(14, 4)
-  amount     Decimal  @db.Decimal(14, 3)
-  sortOrder  Int
-  createdAt  DateTime @default(now())
+  id                  String   @id @default(cuid())
+  snapshotId          String
+  productId           String?
+  section             String?
+  rawName             String
+  rawSpec             String?
+  unit                String
+  quantity            Decimal  @db.Decimal(14, 4)
+  unitPrice           Decimal  @db.Decimal(14, 4)
+  amount              Decimal  @db.Decimal(14, 3)
+  // 盘点表保留原单位；以下字段把数量换算到 Product.unit，供盘点后滚动库存使用。
+  // 无法可靠换算时保持 null，预计库存必须跳过，不能把“袋/斤”直接当“箱/件”。
+  normalizedQuantity  Decimal? @db.Decimal(14, 6)
+  normalizedUnit      String?
+  normalizationFactor Decimal? @db.Decimal(18, 8)
+  normalizationStatus String?  @db.VarChar(20) // EXACT / CONVERTED / PENDING
+  normalizationNote   String?
+  sortOrder           Int
+  createdAt           DateTime @default(now())
 
   snapshot InventorySnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
   product  Product?          @relation(fields: [productId], references: [id], onDelete: SetNull)

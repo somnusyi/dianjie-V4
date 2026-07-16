@@ -50,6 +50,7 @@ type Payload = {
   importPolicy: {
     targetTenantSlug: string
     targetStoreName: string
+    targetStoreNo?: string
     source: string
     inventoryBackfill: boolean
     generateVouchers: boolean
@@ -110,6 +111,7 @@ async function main() {
   const stores = await prisma.store.findMany({
     where: {
       tenant: { slug: tenantSlug },
+      ...(payload.importPolicy.targetStoreNo ? { no: payload.importPolicy.targetStoreNo } : {}),
       OR: [
         { name: payload.importPolicy.targetStoreName },
         { name: { contains: '瑶海' } },
@@ -118,7 +120,10 @@ async function main() {
     select: { id: true, tenantId: true, name: true, no: true },
   })
   if (stores.length !== 1) {
-    throw new Error(`期望唯一瑶海门店，实际 ${stores.length} 家: ${stores.map((s) => `${s.no}:${s.name}`).join(', ')}`)
+    const target = payload.importPolicy.targetStoreNo
+      ? `${payload.importPolicy.targetStoreNo}:${payload.importPolicy.targetStoreName}`
+      : payload.importPolicy.targetStoreName
+    throw new Error(`期望唯一目标门店 ${target}，实际 ${stores.length} 家: ${stores.map((s) => `${s.no}:${s.name}`).join(', ')}`)
   }
   const store = stores[0]
   const start = dateOnly(String(payload.totals.startDate))

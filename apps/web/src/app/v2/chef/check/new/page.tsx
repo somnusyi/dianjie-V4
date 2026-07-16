@@ -14,7 +14,7 @@ import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch } from '@/lib/v2-auth'
 
 type Product = {
-  id: string; code: string; name: string; unit: string; price: number | string; stock?: number | string
+  id: string; code: string; name: string; unit: string; price: number | string; avgUnitCost?: number | string; stock?: number | string
 }
 type Reason = '临期' | '变质' | '客退' | '掉落' | '破损' | '其他'
 const REASONS: { key: Reason; tone: 'orange' | 'red' | 'blue' | 'gray' }[] = [
@@ -67,7 +67,7 @@ export default function ChefLossNewPage() {
 
   function addItem(p: Product) {
     if (items.some(i => i.productId === p.id)) return
-    setItems([...items, { productId: p.id, quantity: 1, unitPrice: Number(p.price) }])
+    setItems([...items, { productId: p.id, quantity: 1, unitPrice: Number(p.avgUnitCost ?? p.price) }])
   }
   function updateQty(idx: number, q: number) {
     setItems(items.map((it, i) => i === idx ? { ...it, quantity: q } : it))
@@ -161,7 +161,7 @@ export default function ChefLossNewPage() {
               <li key={it.productId} className="flex items-center gap-2 py-1.5 border-b border-border last:border-b-0">
                 <div className="flex-1 min-w-0">
                   <div className="text-body truncate">{p?.name || it.productId}</div>
-                  <div className="text-micro text-gray3">¥{it.unitPrice.toFixed(2)} / {p?.unit || '件'}</div>
+                  <div className="text-micro text-gray3">移动均价 ¥{it.unitPrice.toFixed(2)} / {p?.unit || '件'}</div>
                 </div>
                 <input
                   type="number"

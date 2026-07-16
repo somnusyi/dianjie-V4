@@ -1,10 +1,71 @@
 import { FastifyPluginAsync } from 'fastify'
 import { Prisma, prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
+import { z } from 'zod'
 import { notifyLossClaimResult } from '../services/notification'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 import { resignOssUrls } from './upload'
 import { fireAndForget as notify } from '../services/notify'
+import { businessNoFloor, nextBusinessNo } from '../services/purchaseOrderIntegrity'
+import { estimatedStoreInventory } from '../services/storeInventory'
+
+const manualLossSchema = z.object({
+  items: z.array(z.object({
+    productId: z.string().min(1),
+    quantity: z.number().positive().max(1_000_000).refine(
+      value => new Prisma.Decimal(value).decimalPlaces() <= 2,
+      '报损数量最多保留 2 位小数',
+    ),
+    // 兼容旧客户端；服务端始终忽略该值并使用门店移动平均成本。
+    unitPrice: z.number().optional(),
+  }).strict()).min(1, '请填写报损明细').max(100),
+  reason: z.string().trim().min(1, '请选择报损原因').max(30),
+  description: z.string().trim().max(500).optional(),
+  evidenceImages: z.array(z.string().max(2048)).max(9).optional(),
+}).strict().superRefine((value, ctx) => {
+  const productIds = value.items.map(item => item.productId)
+  if (new Set(productIds).size !== productIds.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['items'], message: '同一食材不能重复报损' })
+  }
+})
+
+const supplierLossSchema = z.object({
+  purchaseOrderId: z.string().min(1),
+  description: z.string().trim().min(1, '请填写报损说明').max(500),
+  reason: z.string().trim().max(30).optional(),
+  evidenceImages: z.array(z.string().max(2048)).max(9).optional(),
+  items: z.array(z.object({
+    productId: z.string().min(1),
+    receivedQty: z.number().nonnegative().max(1_000_000).refine(
+      value => new Prisma.Decimal(value).decimalPlaces() <= 2,
+      '实收数量最多保留 2 位小数',
+    ),
+    // 兼容旧客户端字段；应到量和单价始终取订单快照。
+    orderedQty: z.number().optional(),
+    unitPrice: z.number().optional(),
+  }).strict()).min(1, '请填写报损明细').max(100),
+}).strict().superRefine((value, ctx) => {
+  const productIds = value.items.map(item => item.productId)
+  if (new Set(productIds).size !== productIds.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['items'], message: '同一订单商品不能重复报损' })
+  }
+})
+
+async function nextLossClaimNo(tx: Prisma.TransactionClient, tenantId: string, period: string) {
+  const latest = await tx.lossClaim.findFirst({
+    where: { tenantId, no: { startsWith: `LC${period}` } },
+    orderBy: { no: 'desc' },
+    select: { no: true },
+  })
+  return nextBusinessNo(
+    tx,
+    tenantId,
+    'LOSS_CLAIM',
+    period,
+    'LC',
+    businessNoFloor(latest?.no, 'LC', period),
+  )
+}
 
 async function refundSupplierStockInTransaction(
   tx: Prisma.TransactionClient,
@@ -172,15 +233,15 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
   // ── 创建报损申请（门店）──────────────────────────
   app.post('/', { preHandler: [(app as any).authenticate] }, async (req: any) => {
     const { tenantId, userId, storeId: userStoreId, role } = req.user
-    const { purchaseOrderId, description, evidenceImages, items, reason } = req.body as any
-    const lossReason = (typeof reason === 'string' && reason.trim()) ? reason.trim().slice(0, 30) : null
 
     // P0: 仅门店人员/管理员可创建针对采购订单的报损 (供应商不能给自己创建)
     if (!['MANAGER', 'KITCHEN_LEAD', 'PURCHASER', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
       throw { statusCode: 403, message: '无权创建报损申请' }
     }
-    if (!items?.length) throw { statusCode: 400, message: '请填写报损明细' }
-    if (!description) throw { statusCode: 400, message: '请填写报损说明' }
+    const parsed = supplierLossSchema.safeParse(req.body)
+    if (!parsed.success) throw { statusCode: 400, message: parsed.error.issues[0].message }
+    const { purchaseOrderId, description, evidenceImages, items, reason } = parsed.data
+    const lossReason = reason || null
     // 证据改为可选 (2026-06 客户要求): 不强制上传, 无证据时供应商更易拒赔
 
     // 加 store scope: 店长/厨师长 只能给自己门店建报损
@@ -216,38 +277,38 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       throw { statusCode: 400, message: '没有需要报损的明细 (实收 ≥ 应到)' }
     }
 
-    const ym = dayjs().format('YYYYMM')
-    const count = await prisma.lossClaim.count({ where: { tenantId, no: { startsWith: `LC${ym}` } } })
-    const no = `LC${ym}${String(count + 1).padStart(6, '0')}`
-
     // 计算24小时自动批准时间
     const autoApproveAt = dayjs().add(24, 'hour').toDate()
-
-    const claim = await prisma.lossClaim.create({
-      data: {
-        tenantId, no,
-        purchaseOrderId,
-        storeId: order.storeId,
-        supplierId: order.supplierId,
-        totalLossAmount,
-        reason: lossReason,
-        description,
-        evidenceImages: evidenceImages || [],
-        status: 'PENDING',
-        createdById: userId,
-        items: { create: itemsData },
-      },
-      include: { items: { include: { product: true } } },
+    const ym = dayjs().format('YYYYMM')
+    const claim = await prisma.$transaction(async tx => {
+      const no = await nextLossClaimNo(tx, tenantId, ym)
+      const created = await tx.lossClaim.create({
+        data: {
+          tenantId, no,
+          purchaseOrderId,
+          storeId: order.storeId,
+          supplierId: order.supplierId,
+          totalLossAmount,
+          reason: lossReason,
+          description,
+          evidenceImages: Array.isArray(evidenceImages) ? evidenceImages.slice(0, 9) : [],
+          status: 'PENDING',
+          createdById: userId,
+          items: { create: itemsData },
+        },
+        include: { items: { include: { product: true } } },
+      })
+      await tx.opLog.create({
+        data: {
+          tenantId, userId,
+          action: `提交报损申请 ${no}，损失 ¥${totalLossAmount}`,
+          target: no, entityType: 'LossClaim', targetId: created.id,
+          metadata: { autoApproveAt },
+        },
+      })
+      return created
     })
-
-    await prisma.opLog.create({
-      data: {
-        tenantId, userId,
-        action: `提交报损申请 ${no}，损失 ¥${totalLossAmount}`,
-        target: no, entityType: 'LossClaim', targetId: claim.id,
-        metadata: { autoApproveAt },
-      },
-    })
+    const no = claim.no
 
     // 通知供应商 (M2 触达层)
     if (order.supplierId) {
@@ -275,70 +336,87 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     if (!['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
       return reply.status(403).send({ error: '无权创建报损' })
     }
-    const { items, reason, description, evidenceImages } = req.body as any
-    if (!items?.length) return reply.status(400).send({ error: '请填写报损明细' })
-    if (!reason) return reply.status(400).send({ error: '请选择报损原因' })
+    const parsed = manualLossSchema.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const { items, reason, description, evidenceImages } = parsed.data
 
     const storeId = userStoreId
     if (!storeId) return reply.status(400).send({ error: '当前账号未绑定门店' })
 
-    // items: [{ productId, quantity, unitPrice }]
-    let totalLossAmount = 0
-    const itemsData = items.map((i: any) => {
-      const lossQty = Number(i.quantity)
-      const lossAmount = lossQty * Number(i.unitPrice)
-      totalLossAmount += lossAmount
+    const inventory = await estimatedStoreInventory(tenantId, storeId)
+    if (inventory.summary.status !== 'AVAILABLE') {
+      return reply.status(409).send({ error: '当前门店尚无库存盘点基准，不能计算报损成本' })
+    }
+    const inventoryByProduct = new Map(inventory.items.map(item => [item.id, item]))
+    const products = await prisma.product.findMany({
+      where: { tenantId, id: { in: items.map(item => item.productId) } },
+      select: { id: true, name: true },
+    })
+    if (products.length !== items.length) return reply.status(400).send({ error: '存在不属于当前租户的食材' })
+    const productNames = new Map(products.map(product => [product.id, product.name]))
+    const missingCost = items.find(item => !inventoryByProduct.has(item.productId))
+    if (missingCost) {
+      return reply.status(409).send({ error: `食材“${productNames.get(missingCost.productId) || missingCost.productId}”未进入门店库存基准，不能计算报损成本` })
+    }
+
+    let totalLossAmount = new Prisma.Decimal(0)
+    const itemsData = items.map(item => {
+      const lossQty = new Prisma.Decimal(item.quantity)
+      const unitPrice = new Prisma.Decimal(inventoryByProduct.get(item.productId)!.avgUnitCost).toDecimalPlaces(2)
+      const lossAmount = lossQty.mul(unitPrice).toDecimalPlaces(2)
+      totalLossAmount = totalLossAmount.add(lossAmount)
       return {
-        productId: i.productId,
-        orderedQty: lossQty,    // 盘点报损：下单 = 报损（占位）
+        productId: item.productId,
+        orderedQty: lossQty,
         receivedQty: 0,
         lossQty,
-        unitPrice: i.unitPrice,
+        unitPrice,
         lossAmount,
       }
     })
 
-    const ym = dayjs().format('YYYYMM')
-    const count = await prisma.lossClaim.count({ where: { tenantId, no: { startsWith: `LC${ym}` } } })
-    const no = `LC${ym}${String(count + 1).padStart(6, '0')}`
-
     // 阈值审批: ≥¥500 进 PENDING 等总厨审, ≥¥3000 通知老板. 防止店员私自录大额损耗
     const NEED_REVIEW_THRESHOLD = 500
-    const needsReview = totalLossAmount >= NEED_REVIEW_THRESHOLD
+    const needsReview = totalLossAmount.gte(NEED_REVIEW_THRESHOLD)
     const initialStatus = needsReview ? 'PENDING' : 'AUTO_APPROVED'
-
-    const claim = await prisma.lossClaim.create({
-      data: {
-        tenantId, no,
-        storeId,
-        purchaseOrderId: null,
-        supplierId: null,
-        reason,
-        isManual: true,
-        totalLossAmount,
-        description: description || `${reason} · 店内盘点`,
-        evidenceImages: Array.isArray(evidenceImages) ? evidenceImages.slice(0, 9) : [],
-        status: initialStatus as any,
-        autoApproved: !needsReview,
-        createdById: userId,
-        items: { create: itemsData },
-      },
-      include: { items: { include: { product: true } } },
+    const ym = dayjs().format('YYYYMM')
+    const claim = await prisma.$transaction(async tx => {
+      const no = await nextLossClaimNo(tx, tenantId, ym)
+      const created = await tx.lossClaim.create({
+        data: {
+          tenantId, no,
+          storeId,
+          purchaseOrderId: null,
+          supplierId: null,
+          reason,
+          isManual: true,
+          totalLossAmount: totalLossAmount.toDecimalPlaces(2),
+          description: description || `${reason} · 店内盘点`,
+          evidenceImages: evidenceImages || [],
+          status: initialStatus as any,
+          autoApproved: !needsReview,
+          createdById: userId,
+          items: { create: itemsData },
+        },
+        include: { items: { include: { product: true } } },
+      })
+      await tx.opLog.create({
+        data: {
+          tenantId, userId,
+          action: `店内报损 ${no} ¥${totalLossAmount.toFixed(2)} ${needsReview ? '(待总厨审)' : '(阈值内自动通过)'}`,
+          target: no, entityType: 'LossClaim', targetId: created.id,
+          metadata: { costBasis: 'STORE_MOVING_AVERAGE' },
+        },
+      })
+      return created
     })
-
-    await prisma.opLog.create({
-      data: {
-        tenantId, userId,
-        action: `店内报损 ${no} ¥${totalLossAmount.toFixed(2)} ${needsReview ? '(待总厨审)' : '(阈值内自动通过)'}`,
-        target: no, entityType: 'LossClaim', targetId: claim.id,
-      },
-    })
+    const no = claim.no
 
     // 超阈值时通知总厨 (阈值 ¥500) + 老板 (阈值 ¥3000)
     if (needsReview) {
       try {
         const { sendNotification } = await import('../services/notification')
-        const isHigh = totalLossAmount >= 3000
+        const isHigh = totalLossAmount.gte(3000)
         const recipients = isHigh ? ['CHEF_DIRECTOR', 'ADMIN'] : ['CHEF_DIRECTOR']
         for (const r of recipients) {
           void sendNotification({
@@ -484,23 +562,27 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     if (action === 'reject' && (!note || !String(note).trim())) {
       return reply.status(400).send({ error: '拒绝时必须填写原因' })
     }
-    const claim = await prisma.lossClaim.findFirst({
-      where: { id, tenantId, isManual: true, status: 'PENDING' },
-    })
-    if (!claim) return reply.status(400).send({ error: '不存在 / 非待审 / 非店内报损' })
-
     const newStatus = action === 'approve' ? 'APPROVED' : 'REJECTED'
-    await prisma.lossClaim.update({
-      where: { id },
-      data: { status: newStatus as any, handledAt: new Date(), handledById: userId, handlerNote: note || null },
+    const reviewed = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`loss-handle:${id}`}))::text AS locked`
+      const claim = await tx.lossClaim.findFirst({
+        where: { id, tenantId, isManual: true, status: 'PENDING' },
+      })
+      if (!claim) return null
+      await tx.lossClaim.update({
+        where: { id },
+        data: { status: newStatus as any, handledAt: new Date(), handledById: userId, handlerNote: note || null },
+      })
+      await tx.opLog.create({
+        data: {
+          tenantId, userId,
+          action: `[总厨审] 店内报损 ${claim.no} ¥${claim.totalLossAmount} → ${action === 'approve' ? '通过' : '驳回'}${note ? ' (' + String(note).slice(0,80) + ')' : ''}`,
+          target: claim.no, entityType: 'LossClaim', targetId: id,
+        },
+      })
+      return claim
     })
-    await prisma.opLog.create({
-      data: {
-        tenantId, userId,
-        action: `[总厨审] 店内报损 ${claim.no} ¥${claim.totalLossAmount} → ${action === 'approve' ? '通过' : '驳回'}${note ? ' (' + String(note).slice(0,80) + ')' : ''}`,
-        target: claim.no, entityType: 'LossClaim', targetId: id,
-      },
-    })
+    if (!reviewed) return reply.status(409).send({ error: '报损不存在、非待审或已被其他操作处理' })
     // 通知发起人
     try {
       const { sendNotification } = await import('../services/notification')
@@ -508,7 +590,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
         tenantId, recipientRole: 'KITCHEN_LEAD' as any,
         type: 'LOSS_CLAIM_RESULT' as any,
         title: action === 'approve' ? '店内报损通过' : '店内报损被驳回',
-        body: `${claim.no} ${action === 'approve' ? '已计入损耗' : '驳回, 请核对实物'}${note ? ' · ' + String(note).slice(0,40) : ''}`,
+        body: `${reviewed.no} ${action === 'approve' ? '已计入损耗' : '驳回, 请核对实物'}${note ? ' · ' + String(note).slice(0,40) : ''}`,
         refType: 'LossClaim', refId: id,
       })
     } catch {}

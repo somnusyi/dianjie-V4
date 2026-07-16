@@ -37,6 +37,13 @@ type Item = {
 }
 
 type Store = { id: string; name: string }
+type CashAccount = {
+  id: string
+  name: string
+  type: 'BANK' | 'CASH' | 'ALIPAY' | 'WECHAT'
+  balance: string | number
+  cmbBindAccount?: string | null
+}
 
 const STATUS_LABEL: Record<string, string> = {
   REQUESTED: '待批准', APPROVED: '已批待发', PAID: '已发放使用中',
@@ -56,6 +63,7 @@ export default function FinancePCPettyCashPage() {
   const [showNew, setShowNew] = useState(false)
   const [showApprove, setShowApprove] = useState<Item | null>(null)
   const [showPay, setShowPay] = useState<Item | null>(null)
+  const [showClose, setShowClose] = useState<Item | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [expenses, setExpenses] = useState<Record<string, any[]>>({})
 
@@ -82,13 +90,6 @@ export default function FinancePCPettyCashPage() {
     }
   }
 
-  async function doClose(it: Item) {
-    if (!confirm(`确定将 ${it.store.name} ${it.month} 备用金归档?`)) return
-    try {
-      await apiFetch(`/api/petty-cash/${it.id}/close`, { method: 'PATCH' })
-      await load()
-    } catch (e: any) { alert(e?.message || '失败') }
-  }
   async function doCancel(it: Item) {
     if (!confirm('确定取消申请?')) return
     try {
@@ -190,7 +191,7 @@ export default function FinancePCPettyCashPage() {
                                     className="px-2.5 py-1 bg-amber text-white rounded text-caption">发放</button>
                           )}
                           {it.status === 'RECONCILING' && (
-                            <button onClick={() => doClose(it)}
+                            <button onClick={() => setShowClose(it)}
                                     className="px-2.5 py-1 bg-ink text-white rounded text-caption">关账归档</button>
                           )}
                           <button onClick={() => expand(it)}
@@ -245,6 +246,7 @@ export default function FinancePCPettyCashPage() {
         {showApprove && <ApproveModal item={showApprove} onClose={() => setShowApprove(null)} onApproved={load} />}
         {/* 发放 modal */}
         {showPay && <PayModal item={showPay} onClose={() => setShowPay(null)} onDone={load} />}
+        {showClose && <CloseModal item={showClose} onClose={() => setShowClose(null)} onDone={load} />}
       </main>
     </div>
   )
@@ -372,17 +374,41 @@ function ApproveModal({ item, onClose, onApproved }: { item: Item; onClose: () =
 }
 
 function PayModal({ item, onClose, onDone }: { item: Item; onClose: () => void; onDone: () => void }) {
-  const [paymentMethod, setPaymentMethod] = useState('现金')
+  const [paymentMethod, setPaymentMethod] = useState('转账')
+  const [accounts, setAccounts] = useState<CashAccount[]>([])
+  const [accountId, setAccountId] = useState('')
+  const [accountError, setAccountError] = useState<string | null>(null)
   const [bankTxNo, setBankTxNo] = useState('')
+  const [paymentDate, setPaymentDate] = useState(dayjs().format('YYYY-MM-DD'))
   const [busy, setBusy] = useState(false)
 
+  useEffect(() => {
+    apiFetch<CashAccount[]>('/api/cashbook/accounts')
+      .then(setAccounts)
+      .catch(e => setAccountError(e?.message || '资金账户加载失败'))
+  }, [])
+
+  const eligibleAccounts = accounts.filter(account => {
+    if (paymentMethod === '现金') return account.type === 'CASH'
+    if (paymentMethod === '招行') return account.type === 'BANK' && !!account.cmbBindAccount
+    return account.type === 'BANK'
+  })
+
+  useEffect(() => {
+    if (!eligibleAccounts.some(account => account.id === accountId)) {
+      setAccountId(eligibleAccounts[0]?.id || '')
+    }
+  }, [paymentMethod, accounts, accountId])
+
   async function submit() {
+    if (!accountId) return
     setBusy(true)
     try {
-      await apiFetch(`/api/petty-cash/${item.id}/pay`, {
+      const result = await apiFetch<any>(`/api/petty-cash/${item.id}/pay`, {
         method: 'PATCH',
-        body: JSON.stringify({ paymentMethod, bankTxNo: bankTxNo || undefined }),
+        body: JSON.stringify({ paymentMethod, accountId, bankTxNo: bankTxNo || undefined, paymentDate }),
       })
+      if (result?.voucherWarning) alert(result.voucherWarning)
       onDone(); onClose()
     } catch (e: any) { alert(e?.message || '失败'); setBusy(false) }
   }
@@ -399,7 +425,7 @@ function PayModal({ item, onClose, onDone }: { item: Item; onClose: () => void; 
         <div className="p-5 space-y-3">
           <div className="bg-bg-warm rounded-card p-3 text-caption">
             批准金额: <span className="font-num">{fmt(Number(item.approvedAmount || 0))}</span>
-            <div className="text-amber-fg mt-2">💡 确认发放后立即扣账户 + 自动生成凭证 (借 122101 备用金 / 贷 1001 或 100201)</div>
+            <div className="text-amber-fg mt-2">确认发放后立即扣减所选账户，并按该账户生成资金流水和凭证。</div>
           </div>
           <div>
             <label className="text-micro text-gray3 block mb-1">发放方式</label>
@@ -411,6 +437,27 @@ function PayModal({ item, onClose, onDone }: { item: Item; onClose: () => void; 
             </select>
           </div>
           <div>
+            <label className="text-micro text-gray3 block mb-1">扣款资金账户</label>
+            <select value={accountId} onChange={e => setAccountId(e.target.value)}
+                    className="w-full px-3 py-2 rounded-cta border border-border bg-white text-button">
+              {eligibleAccounts.length === 0 && <option value="">— 没有符合条件的活动账户 —</option>}
+              {eligibleAccounts.map(account => (
+                <option key={account.id} value={account.id}>
+                  {account.name} · 余额 {fmt(Number(account.balance))}
+                </option>
+              ))}
+            </select>
+            {accountError && <p className="text-micro text-red-fg mt-1">{accountError}</p>}
+            {!accountError && eligibleAccounts.length === 0 && (
+              <p className="text-micro text-red-fg mt-1">请先到“资金账户”配置对应的活动账户</p>
+            )}
+          </div>
+          <div>
+            <label className="text-micro text-gray3 block mb-1">发放日期</label>
+            <input type="date" value={paymentDate} onChange={e => setPaymentDate(e.target.value)}
+                   className="w-full px-3 py-2 rounded-cta border border-border bg-white text-button font-num" />
+          </div>
+          <div>
             <label className="text-micro text-gray3 block mb-1">流水号 (可选, 转账时填)</label>
             <input value={bankTxNo} onChange={e => setBankTxNo(e.target.value)}
                    className="w-full px-3 py-2 rounded-cta border border-border bg-white text-caption font-num" />
@@ -418,9 +465,93 @@ function PayModal({ item, onClose, onDone }: { item: Item; onClose: () => void; 
         </div>
         <div className="px-5 py-3 border-t border-border flex justify-end gap-2">
           <button onClick={onClose} className="px-4 py-2 bg-white border border-border rounded-cta text-button text-gray2">取消</button>
-          <button onClick={submit} disabled={busy}
+          <button onClick={submit} disabled={busy || !accountId}
                   className="px-4 py-2 bg-amber text-white rounded-cta text-button disabled:opacity-40">
             {busy ? '处理中…' : '确认发放 + 生凭证'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CloseModal({ item, onClose, onDone }: { item: Item; onClose: () => void; onDone: () => void }) {
+  const returned = Number(item.returnedAmount || 0)
+  const [accounts, setAccounts] = useState<CashAccount[]>([])
+  const [accountId, setAccountId] = useState('')
+  const [accountError, setAccountError] = useState<string | null>(null)
+  const [returnDate, setReturnDate] = useState(dayjs().format('YYYY-MM-DD'))
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (returned <= 0) return
+    apiFetch<CashAccount[]>('/api/cashbook/accounts')
+      .then(data => {
+        const eligible = data.filter(account => account.type === 'CASH' || account.type === 'BANK')
+        setAccounts(eligible)
+        setAccountId(eligible[0]?.id || '')
+      })
+      .catch(e => setAccountError(e?.message || '资金账户加载失败'))
+  }, [returned])
+
+  async function submit() {
+    if (returned > 0 && !accountId) return
+    setBusy(true)
+    try {
+      const result = await apiFetch<any>(`/api/petty-cash/${item.id}/close`, {
+        method: 'PATCH',
+        body: JSON.stringify(returned > 0 ? { returnAccountId: accountId, returnDate } : {}),
+      })
+      if (result?.voucherWarning) alert(result.voucherWarning)
+      onDone(); onClose()
+    } catch (e: any) { alert(e?.message || '失败'); setBusy(false) }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-ink/40 flex items-center justify-center" onClick={onClose}>
+      <div className="bg-white rounded-card max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-3 border-b border-border flex items-center justify-between">
+          <h3 className="text-h2">关账 {item.store.name} {item.month}</h3>
+          <button onClick={onClose} className="text-gray3 text-h2">×</button>
+        </div>
+        <div className="p-5 space-y-3">
+          <div className="bg-bg-warm rounded-card p-3 text-caption space-y-1">
+            <div>批准额：<b className="font-num">{fmtMoney(Number(item.approvedAmount || 0))}</b></div>
+            <div>已录开支：<b className="font-num">{fmtMoney(Number(item.spentAmount || 0))}</b></div>
+            <div>退余款：<b className="font-num">{fmtMoney(returned)}</b></div>
+            <div className="text-amber-fg mt-2">关账后开支不可再修改；退余款将实时计入所选资金账户。</div>
+          </div>
+          {returned > 0 && (
+            <>
+              <div>
+                <label className="text-micro text-gray3 block mb-1">退余款实际收款账户</label>
+                <select value={accountId} onChange={e => setAccountId(e.target.value)}
+                        className="w-full px-3 py-2 rounded-cta border border-border bg-white text-button">
+                  {accounts.length === 0 && <option value="">— 没有可用的现金或银行账户 —</option>}
+                  {accounts.map(account => (
+                    <option key={account.id} value={account.id}>
+                      {account.name} · 余额 {fmtMoney(Number(account.balance))}
+                    </option>
+                  ))}
+                </select>
+                {accountError && <p className="text-micro text-red-fg mt-1">{accountError}</p>}
+                {!accountError && accounts.length === 0 && (
+                  <p className="text-micro text-red-fg mt-1">请先到“资金账户”配置活动账户</p>
+                )}
+              </div>
+              <div>
+                <label className="text-micro text-gray3 block mb-1">实际收款日期</label>
+                <input type="date" value={returnDate} onChange={e => setReturnDate(e.target.value)}
+                       className="w-full px-3 py-2 rounded-cta border border-border bg-white text-button font-num" />
+              </div>
+            </>
+          )}
+        </div>
+        <div className="px-5 py-3 border-t border-border flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 bg-white border border-border rounded-cta text-button text-gray2">取消</button>
+          <button onClick={submit} disabled={busy || (returned > 0 && !accountId)}
+                  className="px-4 py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40">
+            {busy ? '处理中…' : '确认收款并关账'}
           </button>
         </div>
       </div>

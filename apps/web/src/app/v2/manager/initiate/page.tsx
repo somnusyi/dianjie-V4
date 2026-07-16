@@ -8,7 +8,8 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
-import { Chip } from '@/components/v2'
+import dayjs from 'dayjs'
+import { Chip, MonthPicker } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 
 const TYPES: Record<string, {
@@ -59,8 +60,10 @@ export default function InitiatePage() {
   const router = useRouter()
   const typeKey = (params?.get('type') || 'PETTY_CASH').toUpperCase()
   const cfg = TYPES[typeKey]
+  const isPettyCash = typeKey === 'PETTY_CASH'
 
   const [amount, setAmount] = useState<string>('')
+  const [month, setMonth] = useState(dayjs().format('YYYY-MM'))
   const [payload, setPayload] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -82,8 +85,17 @@ export default function InitiatePage() {
     if (amountN <= 0) { setError('请输入正确金额'); return }
     setError(null); setSubmitting(true)
     try {
+      if (isPettyCash) {
+        const result = await apiFetch<{ id: string }>('/api/petty-cash', {
+          method: 'POST',
+          body: JSON.stringify({
+            month, requestedAmount: amountN, requestNote: payload.reason || undefined,
+          }),
+        })
+        router.push(`/v2/manager/petty-cash?created=${result.id}`)
+        return
+      }
       const title = (() => {
-        if (typeKey === 'PETTY_CASH') return `备用金申请 · ¥${amountN.toLocaleString()}`
         if (typeKey === 'REIMBURSEMENT') return `${payload.category || '报销'} · ¥${amountN.toLocaleString()}`
         if (typeKey === 'PURCHASE_NON_FOOD') return `${payload.item || '非食材采购'} · ¥${amountN.toLocaleString()}`
         return cfg.label
@@ -117,12 +129,20 @@ export default function InitiatePage() {
           <span className="w-10 h-10 rounded-md bg-amber-bg text-amber-fg flex items-center justify-center text-h2">{cfg.icon}</span>
           <div className="flex-1">
             <div className="text-h2">{cfg.label}</div>
-            <p className="text-caption text-gray2 mt-0.5">{cfg.threshold.rule}</p>
+            <p className="text-caption text-gray2 mt-0.5">
+              {isPettyCash ? '提交后由财务批准，批准后再由财务发放' : cfg.threshold.rule}
+            </p>
           </div>
         </div>
       </div>
 
       <form onSubmit={submit} className="space-y-3 mt-4 px-4">
+        {isPettyCash && (
+          <div className="bg-white rounded-card border border-border p-3">
+            <label className="text-micro text-gray3 block mb-1">备用金月份</label>
+            <MonthPicker value={month} onChange={setMonth} />
+          </div>
+        )}
         {/* 金额（带实时阈值反馈） */}
         <div className="bg-white rounded-card border border-border p-3">
           <label className="text-micro text-gray3 block mb-1">{cfg.amountLabel}</label>
@@ -140,7 +160,7 @@ export default function InitiatePage() {
               autoFocus
             />
           </div>
-          {amountN > 0 && (
+          {amountN > 0 && !isPettyCash && (
             <div className="mt-2 flex items-center gap-2">
               {willAutoApprove ? (
                 <Chip tone="green">阈值内 · 自动通过</Chip>
@@ -153,6 +173,9 @@ export default function InitiatePage() {
                   : `≥ ¥${cfg.threshold.auto.toLocaleString()} 阈值`}
               </span>
             </div>
+          )}
+          {amountN > 0 && isPettyCash && (
+            <div className="mt-2"><Chip tone="amber">提交后待财务批准</Chip></div>
           )}
         </div>
 

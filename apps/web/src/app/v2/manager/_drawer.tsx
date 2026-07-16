@@ -10,7 +10,7 @@ const ITEMS = [
   { icon: '◧', title: '月度杂费',   sub: '租金 / 水电 / 人工 / 管理 · 月度录入',          href: '/v2/manager/expenses' },
   { icon: '⊞', title: '筹建/代付',  sub: '本店合同 · 申请支出 · 老板审批后由总部代付',    href: '/v2/manager/capital' },
   { icon: '🍲', title: '食材采购单', sub: '面向供应商 · 直发不审批 · 含验收报损链',  href: '/v2/chef/purchase/new' },
-  { icon: '⎙', title: '备用金申请', sub: '日常零钱周转 · 3,000 内自动批',          href: '/v2/manager/initiate?type=PETTY_CASH' },
+  { icon: '⎙', title: '备用金管理', sub: '申请 · 录开支 · 月末报账',              href: '/v2/manager/petty-cash' },
   { icon: '⊞', title: '报销',       sub: '垫付费用回款 · 5,000 内财务直批',         href: '/v2/manager/initiate?type=REIMBURSEMENT' },
   { icon: '⌧', title: '非食材采购', sub: '办公 / 家具 / 设备 / 餐具 · 30,000 内自动', href: '/v2/manager/initiate?type=PURCHASE_NON_FOOD' },
   { icon: '☷', title: '调班 / 请假', sub: '临时调换班次 · 替工人指派 (P1)',          href: null },

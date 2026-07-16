@@ -171,6 +171,16 @@ export function revisionType(changes: OrderChange[]):
   return kinds.length === 1 ? kinds[0] : 'MIXED'
 }
 
+export function businessNoFloor(no: string | null | undefined, prefix: string, period: string): number {
+  if (!no) return 0
+  const head = `${prefix}${period}`
+  if (!no.startsWith(head)) return 0
+  const suffix = no.slice(head.length)
+  if (!/^\d+$/.test(suffix)) return 0
+  const value = Number(suffix)
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0
+}
+
 export async function nextBusinessNo(
   tx: Prisma.TransactionClient,
   tenantId: string,

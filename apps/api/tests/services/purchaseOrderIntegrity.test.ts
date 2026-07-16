@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  businessNoFloor,
   buildOrderSnapshot,
   diffOrderSnapshots,
   lineAmount,
@@ -108,5 +109,12 @@ describe('purchase order integrity', () => {
     expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
       create: expect.objectContaining({ value: 43 }),
     }))
+  })
+
+  it('extracts the historical floor from a current-period business number', () => {
+    expect(businessNoFloor('PO202607000016', 'PO', '202607')).toBe(16)
+    expect(businessNoFloor('PO202606000999', 'PO', '202607')).toBe(0)
+    expect(businessNoFloor('PO202607BAD', 'PO', '202607')).toBe(0)
+    expect(businessNoFloor(null, 'PO', '202607')).toBe(0)
   })
 })

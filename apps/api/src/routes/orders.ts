@@ -8,6 +8,7 @@ import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 import { resignOssUrls } from './upload'
 import { fireAndForget as notify } from '../services/notify'
 import {
+  businessNoFloor,
   buildOrderSnapshot,
   diffOrderSnapshots,
   lineAmount,
@@ -337,7 +338,21 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     let order: any
     try {
       order = await prisma.$transaction(async (tx) => {
-        const no = await nextBusinessNo(tx, tenantId, 'PO', ym, 'PO')
+        // A new sequence table can be empty while historical orders already exist.
+        // Correct it from the largest current-period order number before incrementing.
+        const latestOrder = await tx.purchaseOrder.findFirst({
+          where: { tenantId, no: { startsWith: `PO${ym}` } },
+          orderBy: { no: 'desc' },
+          select: { no: true },
+        })
+        const no = await nextBusinessNo(
+          tx,
+          tenantId,
+          'PO',
+          ym,
+          'PO',
+          businessNoFloor(latestOrder?.no, 'PO', ym),
+        )
         const created = await tx.purchaseOrder.create({
           data: {
             tenantId, no, storeId: finalStoreId, supplierId,

@@ -244,6 +244,45 @@ describe('supplier tenant scope (integration)', () => {
     }
   })
 
+  it('keeps stock snapshot import supplier-scoped and repeat-safe', async () => {
+    const foreign = await app.inject({
+      method: 'POST', url: '/api/supplier/stock/import-snapshot',
+      payload: { items: [{ name: 'B 商品', qty: 1 }], reason: '跨供应商导入回归' },
+    })
+    expect(foreign.statusCode).toBe(409)
+    expect(foreign.json()).toMatchObject({ code: 'UNMATCHED_STOCK_SKU', unmatchedTotal: 1 })
+    expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productBId } })).stock)).toBe(22)
+
+    const duplicate = await app.inject({
+      method: 'POST', url: '/api/supplier/stock/import-snapshot',
+      payload: {
+        items: [{ name: 'A 商品', qty: 9 }, { name: ' A 商品 ', qty: 9 }],
+        reason: '重复品名回归',
+      },
+    })
+    expect(duplicate.statusCode).toBe(400)
+
+    const payload = { items: [{ name: 'A 商品', qty: 9 }], reason: '目标库存幂等回归' }
+    const adjusted = await app.inject({ method: 'POST', url: '/api/supplier/stock/import-snapshot', payload })
+    const repeated = await app.inject({ method: 'POST', url: '/api/supplier/stock/import-snapshot', payload })
+    expect(adjusted.statusCode).toBe(200)
+    expect(adjusted.json().summary).toMatchObject({ adjusted: 1, skipped: 0, failed: 0 })
+    expect(repeated.statusCode).toBe(200)
+    expect(repeated.json().summary).toMatchObject({ adjusted: 0, skipped: 1, failed: 0 })
+    expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productAId } })).stock)).toBe(9)
+
+    const restored = await app.inject({
+      method: 'POST', url: '/api/supplier/stock/import-snapshot',
+      payload: { items: [{ name: 'A 商品', qty: 10 }], reason: '恢复测试库存' },
+    })
+    expect(restored.statusCode).toBe(200)
+    expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productAId } })).stock)).toBe(10)
+    const batches = await prisma.supplierStockBatch.aggregate({
+      where: { tenantId, supplierId: supplierAId, productId: productAId }, _sum: { remainingQty: true },
+    })
+    expect(Number(batches._sum.remainingQty)).toBe(10)
+  })
+
   it('shows every approved supplier offer to stores but hides pending offers', async () => {
     const products = await app.inject({
       method: 'GET', url: '/api/products?page=1&pageSize=100', headers: { 'x-test-actor': 'chef' },

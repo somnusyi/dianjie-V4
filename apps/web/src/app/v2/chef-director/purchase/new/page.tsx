@@ -16,6 +16,7 @@ type Store    = { id: string; name: string; no?: string | null }
 type Supplier = { id: string; name: string; category: string | null; bankAccount: string | null }
 type Product  = { id: string; name: string; unit: string; price: string; supplierId: string | null
                   spec?: string | null; category?: string | null; code?: string
+                  imageUrl?: string | null
                   minOrderQty?: string | number; stepQty?: string | number
                   stock?: string | number | null
                   status?: string  /* ENABLED / DISABLED / PENDING_APPROVAL / PENDING_DISABLE */ }
@@ -293,6 +294,10 @@ export default function ChefDirectorPONewPage() {
               const p = products.find(pr => pr.id === it.productId)
               return (
                 <li key={it.productId} className="flex items-center gap-2 py-1.5 border-b border-border last:border-b-0">
+                  {p?.imageUrl && (
+                    <img src={p.imageUrl} alt={`${p.name} 商品图`} loading="lazy"
+                      className="h-10 w-10 shrink-0 rounded-chip border border-border object-cover" />
+                  )}
                   <div className="flex-1 min-w-0">
                     <div className="text-body truncate">
                       {p?.name || it.productId}
@@ -398,6 +403,10 @@ export default function ChefDirectorPONewPage() {
                                  : null
                 return (
                   <li key={p.id} className={`flex items-center px-4 py-3 ${notOrderable ? 'opacity-60' : picked ? 'bg-amber/5' : ''}`}>
+                    {p.imageUrl && (
+                      <img src={p.imageUrl} alt={`${p.name} 商品图`} loading="lazy"
+                        className="mr-3 h-12 w-12 shrink-0 rounded-chip border border-border object-cover" />
+                    )}
                     <div className="flex-1 min-w-0">
                       <div className="text-body truncate flex items-center gap-1 flex-wrap">
                         <span>{p.name}</span>

@@ -414,6 +414,37 @@ describe('supplier tenant scope (integration)', () => {
     }
   })
 
+  it('does not orphan products during concurrent category rename and assignment', async () => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const sourceName = `并发改名前-${attempt}-${suffix.slice(-6)}`
+      const targetName = `并发改名后-${attempt}-${suffix.slice(-6)}`
+      const source = await app.inject({
+        method: 'POST', url: '/api/products/categories', payload: { name: sourceName },
+      })
+      expect(source.statusCode).toBe(201)
+      await prisma.product.update({ where: { id: productAId }, data: { category: '其他' } })
+
+      const [renamed, assigned] = await Promise.all([
+        app.inject({
+          method: 'PATCH', url: `/api/products/categories/${source.json().id}`,
+          payload: { name: targetName },
+        }),
+        app.inject({
+          method: 'PATCH', url: '/api/products/batch-category',
+          payload: { ids: [productAId], category: sourceName },
+        }),
+      ])
+      expect(renamed.statusCode).toBe(200)
+      expect([200, 400]).toContain(assigned.statusCode)
+      expect(await prisma.product.findUniqueOrThrow({ where: { id: productAId } })).toMatchObject({
+        category: assigned.statusCode === 200 ? targetName : '其他',
+      })
+      expect(await prisma.supplierProductCategory.findUnique({
+        where: { tenantId_supplierId_name: { tenantId, supplierId: supplierAId, name: sourceName } },
+      })).toBeNull()
+    }
+  })
+
   it('isolates upload batches and rejects unauthorized revocation', async () => {
     const tiedAt = new Date('2030-07-18T00:00:00.000Z')
     const supplierABatchIds = [`upload-batch-a-${suffix}`, `upload-batch-b-${suffix}`]

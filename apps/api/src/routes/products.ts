@@ -295,27 +295,28 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       isActive: z.boolean().optional(),
     }).refine(value => value.name !== undefined || value.isActive !== undefined, '没有需要修改的字段').safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-    const current = await prisma.supplierProductCategory.findFirst({
-      where: { id: req.params.id, tenantId, supplierId: scopedSupplierId },
-    })
-    if (!current) return reply.status(404).send({ error: '分类不存在' })
-    if (current.isSystem && parsed.data.name && parsed.data.name !== current.name) {
-      return reply.status(400).send({ error: '系统兜底分类不能改名' })
-    }
-    if (current.isSystem && parsed.data.isActive === false) {
-      return reply.status(400).send({ error: '系统兜底分类不能停用' })
-    }
-    const nextName = parsed.data.name || current.name
-    if (nextName !== current.name) {
-      const duplicate = await prisma.supplierProductCategory.findUnique({
-        where: { tenantId_supplierId_name: { tenantId, supplierId: scopedSupplierId, name: nextName } },
-      })
-      if (duplicate) return reply.status(409).send({ error: '分类名称已存在' })
-    }
-    const nextActive = parsed.data.isActive ?? current.isActive
-    let productCount: number
+    let result: { id: string; name: string; isActive: boolean; productCount: number }
     try {
-      productCount = await prisma.$transaction(async tx => {
+      result = await prisma.$transaction(async tx => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`supplier-categories:${tenantId}:${scopedSupplierId}`}))`
+        const current = await tx.supplierProductCategory.findFirst({
+          where: { id: req.params.id, tenantId, supplierId: scopedSupplierId },
+        })
+        if (!current) throw Object.assign(new Error('分类不存在'), { statusCode: 404 })
+        if (current.isSystem && parsed.data.name && parsed.data.name !== current.name) {
+          throw Object.assign(new Error('系统兜底分类不能改名'), { statusCode: 400 })
+        }
+        if (current.isSystem && parsed.data.isActive === false) {
+          throw Object.assign(new Error('系统兜底分类不能停用'), { statusCode: 400 })
+        }
+        const nextName = parsed.data.name || current.name
+        const nextActive = parsed.data.isActive ?? current.isActive
+        if (nextName !== current.name) {
+          const duplicate = await tx.supplierProductCategory.findUnique({
+            where: { tenantId_supplierId_name: { tenantId, supplierId: scopedSupplierId, name: nextName } },
+          })
+          if (duplicate) throw Object.assign(new Error('分类名称已存在'), { statusCode: 409 })
+        }
         const updatedProducts = nextName === current.name
           ? { count: 0 }
           : await tx.product.updateMany({
@@ -341,14 +342,15 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
             },
           },
         })
-        return updatedProducts.count
+        return { id: current.id, name: nextName, isActive: nextActive, productCount: updatedProducts.count }
       })
     } catch (error: any) {
       if (error?.code === 'P2002') return reply.status(409).send({ error: '分类名称已存在' })
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
       throw error
     }
     void invalidatePattern(`products:full:${tenantId}:*`)
-    return { ok: true, id: current.id, name: nextName, isActive: nextActive, productCount }
+    return { ok: true, ...result }
   })
 
   /**
@@ -538,6 +540,15 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const matched = await prisma.product.findMany({ where, select: { id: true, category: true, code: true } })
     if (matched.length !== new Set(parsed.data.ids).size) return reply.status(400).send({ error: '包含不存在或无权限的商品' })
     await prisma.$transaction(async tx => {
+      if (isSupplierRole(role)) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`supplier-categories:${tenantId}:${supplierId}`}))`
+        const category = await tx.supplierProductCategory.findUnique({
+          where: { tenantId_supplierId_name: { tenantId, supplierId: supplierId!, name: parsed.data.category } },
+        })
+        if (!category?.isActive) {
+          throw Object.assign(new Error('请选择一个启用中的分类'), { statusCode: 400 })
+        }
+      }
       await tx.product.updateMany({ where, data: { category: parsed.data.category } })
       await tx.opLog.create({
         data: {

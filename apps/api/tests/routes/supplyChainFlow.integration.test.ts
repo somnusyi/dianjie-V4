@@ -126,16 +126,20 @@ describe('supplier order to receipt flow (integration)', () => {
       where: { purchaseOrderId: order.id, status: 'ACTIVE' },
     })).toBe(1)
 
-    const shipPayload = {
-      idempotencyKey: `ship-${suffix}`,
+    const shipPayloads = [`ship-a-${suffix}`, `ship-b-${suffix}`].map(idempotencyKey => ({
+      idempotencyKey,
       items: [{ itemId: order.items[0].id, shippedQty: 6 }],
-    }
-    const ship = await app.inject({
-      method: 'PATCH', url: `/api/orders/${order.id}/ship`, headers: { 'x-test-actor': 'supplier' }, payload: shipPayload,
-    })
-    expect(ship.statusCode).toBe(200)
+    }))
+    const shipAttempts = await Promise.all(shipPayloads.map(payload => app.inject({
+      method: 'PATCH', url: `/api/orders/${order.id}/ship`, headers: { 'x-test-actor': 'supplier' }, payload,
+    })))
+    const successfulShipIndex = shipAttempts.findIndex(response => response.statusCode === 200)
+    expect(shipAttempts.filter(response => response.statusCode === 200)).toHaveLength(1)
+    expect(shipAttempts.filter(response => response.statusCode >= 400 && response.statusCode < 500)).toHaveLength(1)
+    expect(successfulShipIndex).toBeGreaterThanOrEqual(0)
+
     const duplicateShip = await app.inject({
-      method: 'PATCH', url: `/api/orders/${order.id}/ship`, headers: { 'x-test-actor': 'supplier' }, payload: shipPayload,
+      method: 'PATCH', url: `/api/orders/${order.id}/ship`, headers: { 'x-test-actor': 'supplier' }, payload: shipPayloads[successfulShipIndex],
     })
     expect(duplicateShip.statusCode).toBe(200)
     expect(duplicateShip.json().duplicated).toBe(true)

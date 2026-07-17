@@ -16,6 +16,7 @@ import { isSupplierRole } from '../lib/auth-scope'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const GROUP_DOCUMENT_ROLES = new Set(['BOSS', 'ADMIN', 'SUPER_ADMIN', 'FINANCE', 'CHEF_DIRECTOR', 'CHEF', 'ENGINEERING'])
+const SUPPLIER_OFFER_DOCUMENT_TYPES = new Set(['NEW_DISH', 'SUPPLIER_OFFER_CREATE', 'SUPPLIER_OFFER_DISABLE'])
 
 /** 把当前用户的角色映射到能批的 step.role 集合（处理 BOSS/ADMIN/CHEF 别名）*/
 function approverRolesFor(role: string): Set<string> {
@@ -74,7 +75,7 @@ async function applyProductDecision(
     })
     return true
   }
-  if (doc.type !== 'NEW_DISH') return false
+  if (!SUPPLIER_OFFER_DOCUMENT_TYPES.has(doc.type)) return false
 
   if (decision === 'APPROVE') {
     if (payload.action === 'CREATE' && payload.productId) {
@@ -228,9 +229,9 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
 
   /** GET /api/documents/:id/preview — 按 type/payload 自动解析出审批所需的业务上下文
    *  PRICE_ADJUSTMENT: 商品 + 旧价 + 新价 + 涨跌幅
-   *  NEW_DISH (CREATE): 新增商品全部字段
-   *  NEW_DISH (BATCH):  批次内所有商品列表 (前 50 + 总数)
-   *  NEW_DISH (DISABLE):停售商品基础信息 + 历史售出/库存
+   *  SUPPLIER_OFFER_CREATE: 新增供应商商品（单个/批量）
+   *  SUPPLIER_OFFER_DISABLE: 停售供应商商品（单个/批量）
+   *  NEW_DISH: 仅兼容历史供应商商品审批单和真正的菜品审批
   */
   app.get('/:id/preview', auth(app), async (req: any, reply) => {
     const { tenantId, role, userId, storeId, supplierId } = req.user
@@ -265,7 +266,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    if (doc.type === 'NEW_DISH') {
+    if (SUPPLIER_OFFER_DOCUMENT_TYPES.has(doc.type)) {
       if (p.action === 'CREATE' && p.productId) {
         const pr = await prisma.product.findFirst({
           where: { id: p.productId, tenantId },

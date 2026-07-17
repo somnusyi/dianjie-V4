@@ -19,7 +19,8 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [received, setReceived] = useState<Record<string, number>>({})
-  const [lossReason, setLossReason] = useState('')           // 自定义报损原因 (可选)
+  const [differenceKind, setDifferenceKind] = useState<'ARRIVAL_SHORTAGE' | 'ARRIVAL_DAMAGE'>('ARRIVAL_SHORTAGE')
+  const [lossReason, setLossReason] = useState('')           // 自定义差异原因 (可选)
   const [evidence, setEvidence] = useState<string[]>([])     // OSS URL 数组
   const [uploading, setUploading] = useState(false)
   const [confirmState, openConfirm] = useConfirmSheet()
@@ -67,7 +68,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
               </p>
             )}
             <p className="text-gray3 pt-2">
-              如有遗漏的短量需要 <b>向供应商补报</b>(扣账期), 点下方「补报短量」, 可多轮补报;
+              如有遗漏的短量需要 <b>向供应商补报</b>，点下方「补报短量」；系统会绑定具体收货单并冻结待核账期；
               若是店内自有损耗 (临期 / 变质等), 走「店内盘损」.
             </p>
           </div>
@@ -128,6 +129,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
               receivedQty: Number(received[it.productId] ?? 0),
             })),
             evidenceImages: hasLoss ? evidence : undefined,
+            kind: hasLoss ? differenceKind : undefined,
             reason: hasLoss && lossReason.trim() ? lossReason.trim() : undefined,
           }),
         })
@@ -140,8 +142,8 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
     }
     if (hasLoss) {
       openConfirm({
-        title: `本单存在报损 ¥${lossAmount.toFixed(2)}`,
-        body: '确认收货后将自动向供应商发起报损索赔，24h 内未响应自动同意。',
+        title: `本单存在到货差异 ¥${lossAmount.toFixed(2)}`,
+        body: '确认收货后将按实收金额生成应付，并通知供应商确认差异；24h 未响应自动确认，不会再次重复扣款。',
         confirmLabel: '确认收货',
         tone: 'primary',
         onConfirm: doSubmit,
@@ -168,7 +170,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
       </div>
 
       {/* 商品逐条核对 */}
-      <Section title="逐条核对实收数量" right={hasLoss ? `报损 ¥${lossAmount.toFixed(2)}` : '一致'} rightTone={hasLoss ? 'red' : 'green'}>
+      <Section title="逐条核对实收数量" right={hasLoss ? `差异 ¥${lossAmount.toFixed(2)}` : '一致'} rightTone={hasLoss ? 'red' : 'green'}>
         <ul className="bg-white rounded-card border border-border divide-y divide-border">
           {items.map((it: any) => {
             const rq = received[it.productId] ?? 0
@@ -191,7 +193,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
                     {it.product?.name || it.productId}
                     {it.product?.spec && <span className="text-micro text-gray3 ml-1 font-normal">· {it.product.spec}</span>}
                   </span>
-                  {isLoss && <Chip tone="red">报损 {(exp - rq).toFixed(2)}</Chip>}
+                  {isLoss && <Chip tone="red">差异 {(exp - rq).toFixed(2)}</Chip>}
                 </div>
                 <div className="text-micro text-gray3 mb-2 font-num">
                   下单 {ordered} {it.product?.unit || ''}
@@ -242,30 +244,35 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
           </p>
           {hasLoss && (
             <p className="text-caption text-red-fg mt-1">
-              本单存在报损 ¥{lossAmount.toFixed(2)}，提交后自动向 {po.supplier?.name} 发起索赔。
-              对方 24h 未响应将自动同意扣减账期。
+              本单存在到货差异 ¥{lossAmount.toFixed(2)}，应付按实收金额生成，并通知 {po.supplier?.name} 确认。
+              对方 24h 未响应将自动确认差异。
             </p>
           )}
         </div>
       </Section>
 
-      {/* 报损原因 — 自定义 (2026-06 客户要求: 每单报损可自填原因, 不止"短缺") */}
+      {/* 到货差异类型和原因 */}
       {hasLoss && (
-        <Section title="报损原因 (可自定义)" right={lossReason.trim() ? '' : '默认: 短缺'}>
-          <input
-            type="text"
-            value={lossReason}
-            onChange={(e) => setLossReason(e.target.value)}
-            maxLength={30}
-            placeholder="如: 少送 2 件 / 菜品变质 / 规格不符 / 破损…  (留空默认按短缺)"
-            className="w-full bg-white border border-border rounded-cta px-3 py-2.5 text-body text-ink placeholder:text-gray3 focus:outline-none focus:border-accent"
-          />
+        <Section title="到货差异类型" right={lossReason.trim() ? '' : '可补充说明'}>
+          <div className="grid grid-cols-2 gap-2 mb-2">
+            <button type="button" onClick={() => setDifferenceKind('ARRIVAL_SHORTAGE')}
+              className={`py-2 rounded-cta text-button border ${differenceKind === 'ARRIVAL_SHORTAGE' ? 'bg-ink text-white border-ink' : 'bg-white text-gray2 border-border'}`}>
+              数量短缺
+            </button>
+            <button type="button" onClick={() => setDifferenceKind('ARRIVAL_DAMAGE')}
+              className={`py-2 rounded-cta text-button border ${differenceKind === 'ARRIVAL_DAMAGE' ? 'bg-ink text-white border-ink' : 'bg-white text-gray2 border-border'}`}>
+              破损 / 品质异常
+            </button>
+          </div>
+          <input type="text" value={lossReason} onChange={(e) => setLossReason(e.target.value)} maxLength={30}
+            placeholder={differenceKind === 'ARRIVAL_DAMAGE' ? '如：包装破损、变质、规格不符…' : '如：少送 2 斤、短斤…'}
+            className="w-full bg-white border border-border rounded-cta px-3 py-2.5 text-body text-ink placeholder:text-gray3 focus:outline-none focus:border-accent" />
         </Section>
       )}
 
-      {/* 报损证据 — 可选 (2026-06 客户要求), 但强烈建议传, 否则供应商易拒赔 (支持图片 + 短视频 ≤50MB) */}
+      {/* 到货差异证据 — 可选，但建议上传 */}
       {hasLoss && (
-        <Section id="evidence-section" title="报损证据 (建议)" right={`${evidence.length} 份`} rightTone={evidence.length === 0 ? undefined : undefined}>
+        <Section id="evidence-section" title="到货差异证据 (建议)" right={`${evidence.length} 份`} rightTone={evidence.length === 0 ? undefined : undefined}>
           <div className={`rounded-card border p-3 ${evidence.length === 0 ? 'bg-amber/10 border-amber/40' : 'bg-white border-border'}`}>
             <p className={`text-micro mb-2 ${evidence.length === 0 ? 'text-amber-fg' : 'text-gray3'}`}>
               {evidence.length === 0

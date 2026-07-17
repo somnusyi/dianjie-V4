@@ -25,12 +25,18 @@ const TYPE_LABEL: Record<string, string> = {
   PRICE_ADJUSTMENT: '调价',
   NEW_SUPPLIER: '新供应商',
   NEW_DISH: '新菜品',
+  SUPPLIER_OFFER_CREATE: '商品上架',
+  SUPPLIER_OFFER_DISABLE: '商品停售',
 }
 const TYPE_TONE: Record<string, 'red' | 'orange' | 'gray'> = {
   PRICE_ADJUSTMENT: 'red',
   NEW_SUPPLIER: 'orange',
   NEW_DISH: 'gray',
+  SUPPLIER_OFFER_CREATE: 'gray',
+  SUPPLIER_OFFER_DISABLE: 'orange',
 }
+
+const OFFER_TYPES = new Set(['NEW_DISH', 'SUPPLIER_OFFER_CREATE', 'SUPPLIER_OFFER_DISABLE'])
 
 export default function ChefDirectorApprovalsPage() {
   const [tab, setTab] = useState('review')
@@ -128,7 +134,7 @@ export default function ChefDirectorApprovalsPage() {
       </header>
 
       <div className="px-4 mt-2 flex gap-2 overflow-x-auto">
-        {(['全部', 'PRICE_ADJUSTMENT', 'NEW_SUPPLIER', 'NEW_DISH'] as const).map((f) => {
+        {(['全部', 'PRICE_ADJUSTMENT', 'NEW_SUPPLIER', 'SUPPLIER_OFFER_CREATE', 'SUPPLIER_OFFER_DISABLE', 'NEW_DISH'] as const).map((f) => {
           const cnt = f === '全部' ? items?.length ?? 0 : (groupCount[f] || 0)
           return (
             <button key={f}
@@ -175,19 +181,19 @@ export default function ChefDirectorApprovalsPage() {
                 </p>
               )}
               {/* 批量上架: 显示总数 + 供应商 + 文件名 */}
-              {d.type === 'NEW_DISH' && p.action === 'BATCH' && (
+              {OFFER_TYPES.has(d.type) && p.action === 'BATCH' && (
                 <div className="text-caption text-gray2 mt-1">
                   📦 <b className="font-num">{p.count}</b> 个 SKU · {p.supplierName || '未知供应商'}
                   {p.filename && <span className="text-micro text-gray3 ml-1">({p.filename})</span>}
                 </div>
               )}
               {/* 单条新建/停售: 内嵌简要 */}
-              {d.type === 'NEW_DISH' && p.action === 'CREATE' && (
+              {OFFER_TYPES.has(d.type) && p.action === 'CREATE' && (
                 <div className="text-caption text-gray2 mt-1">
                   {p.spec && <>规格 {p.spec} · </>}单价 <b className="font-num">¥{p.price}</b> / {p.unit} · {p.supplierName}
                 </div>
               )}
-              {d.type === 'NEW_DISH' && p.action === 'DISABLE' && (
+              {OFFER_TYPES.has(d.type) && p.action === 'DISABLE' && (
                 <div className="text-caption text-gray2 mt-1">{p.supplierName} 申请下架</div>
               )}
 

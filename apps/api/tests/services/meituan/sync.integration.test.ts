@@ -3,17 +3,18 @@ import { prisma } from '@dianjie/db'
 import { syncInstoreOrders, syncReverseOrders } from '../../../src/services/meituan/sync'
 
 const TEST_ORG_ID = 1076686  // Meituan doc sample, never a real customer
+const TEST_ORDER_IDS = ['10001', '10002']
 
 describe('syncInstoreOrders (integration, mock client)', () => {
   beforeEach(async () => {
     // Clean up both TEST_ORG_ID and ORG_ID=0 artifacts (module uses env var at load time)
-    await prisma.mtOrderItem.deleteMany({})
-    await prisma.mtOrderPayment.deleteMany({})
+    await prisma.mtOrderItem.deleteMany({ where: { mtOrderId: { in: TEST_ORDER_IDS } } })
+    await prisma.mtOrderPayment.deleteMany({ where: { mtOrderId: { in: TEST_ORDER_IDS } } })
     await prisma.mtRefundOrder.deleteMany({ where: { orgId: TEST_ORG_ID } })
     await prisma.mtOrder.deleteMany({ where: { orgId: TEST_ORG_ID } })
     await prisma.meituanApiCallLog.deleteMany({ where: { correlationId: { startsWith: 'test-corr-' } } })
     // Clean both orgId 0 and TEST_ORG_ID to avoid stale cursors
-    await prisma.meituanSyncCursor.deleteMany({})
+    await prisma.meituanSyncCursor.deleteMany({ where: { orgId: { in: [0, TEST_ORG_ID] } } })
     // Make sure env is in mock mode
     process.env.MEITUAN_MODE = 'mock'
     process.env.MEITUAN_ORG_ID = String(TEST_ORG_ID)
@@ -85,10 +86,10 @@ describe('syncReverseOrders (integration, mock client)', () => {
   beforeEach(async () => {
     // Clean up everything including stale cursors with orgId=0
     await prisma.mtRefundOrder.deleteMany({ where: { orgId: TEST_ORG_ID } })
-    await prisma.mtOrderItem.deleteMany({})
-    await prisma.mtOrderPayment.deleteMany({})
+    await prisma.mtOrderItem.deleteMany({ where: { mtOrderId: { in: TEST_ORDER_IDS } } })
+    await prisma.mtOrderPayment.deleteMany({ where: { mtOrderId: { in: TEST_ORDER_IDS } } })
     await prisma.mtOrder.deleteMany({ where: { orgId: TEST_ORG_ID } })
-    await prisma.meituanSyncCursor.deleteMany({})
+    await prisma.meituanSyncCursor.deleteMany({ where: { orgId: { in: [0, TEST_ORG_ID] } } })
     process.env.MEITUAN_MODE = 'mock'
     process.env.MEITUAN_ORG_ID = String(TEST_ORG_ID)
   })

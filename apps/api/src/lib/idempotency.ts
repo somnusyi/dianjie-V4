@@ -5,11 +5,10 @@
  * 的重放请求直接返回首次的响应，不再落库。
  *
  * 注意：
- *   - 只处理 POST / PATCH / PUT / DELETE
+ *   - 只处理已登录的 POST / PATCH / PUT / DELETE
  *   - 不带 header 的请求不走幂等（兼容旧代码）
- *   - 用 onRequest 阶段（在 authenticate 之前），所以不依赖 req.user；
- *     key 维度 = method + url + clientKey（UUID）。客户端生成的 UUID 本身
- *     就足以唯一，不需要 userId 维度
+ *   - 必须在读取缓存前验证 access JWT，不能让过期或 refresh token 绕过认证命中缓存
+ *   - key 维度 = tenant + user + method + url + clientKey，并校验请求体 hash
  *   - Redis 不可用时降级为"无幂等"，业务不阻断
  *   - 只缓存 2xx 响应；4xx/5xx 让客户端重试
  */
@@ -32,17 +31,32 @@ interface CachedResponse {
   status: number
   body: string
   bodyHash: string
+  requestHash: string
 }
 
 export function registerIdempotency(app: FastifyInstance) {
-  // onRequest：在 authenticate preHandler 之前跑。此时还没 req.user，但 clientKey
-  // 就够唯一（UUID），不需要 tenant/user 维度
-  app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
+  app.addHook('preHandler', async (req: FastifyRequest, reply: FastifyReply) => {
     if (!METHODS.has(req.method)) return
     const clientKey = req.headers['idempotency-key'] as string | undefined
     if (!clientKey) return // 无 key 不走幂等
+    if (clientKey.length < 8 || clientKey.length > 200) {
+      return reply.status(400).send({ error: 'Idempotency-Key 长度必须为 8-200 字符' })
+    }
+    if (!req.headers.authorization?.startsWith('Bearer ')) return
+
+    // Global preHandler runs before route-level authenticate. Verify here so a
+    // cached response can never bypass token expiry/revocation checks.
+    await (req as any).jwtVerify()
+    const user = (req as any).user || {}
+    if (user.typ !== 'access') {
+      return reply.status(401).send({ error: '未授权，请先登录' })
+    }
+    if (!user.tenantId || !user.userId) return
+    const requestHash = hashRequestBody(req.body, req.headers['content-type'])
 
     const fullKey = buildKey({
+      tenantId: user.tenantId,
+      userId: user.userId,
       method: req.method,
       url: req.url.split('?')[0],
       clientKey,
@@ -52,6 +66,9 @@ export function registerIdempotency(app: FastifyInstance) {
       const hit = await redis.get(fullKey)
       if (hit) {
         const cached: CachedResponse = JSON.parse(hit)
+        if (cached.requestHash !== requestHash) {
+          return reply.status(409).send({ error: '同一 Idempotency-Key 不能用于不同请求内容' })
+        }
         reply.header('Idempotent-Replay', 'true')
         reply.header('Idempotent-Replay-Hash', cached.bodyHash)
         reply.code(cached.status).type('application/json').send(cached.body)
@@ -63,12 +80,14 @@ export function registerIdempotency(app: FastifyInstance) {
     }
 
     ;(req as any)._idemFullKey = fullKey
+    ;(req as any)._idemRequestHash = requestHash
   })
 
   // onSend：响应即将发出时把 2xx 的 body 缓存
   app.addHook('onSend', async (req: FastifyRequest, reply: FastifyReply, payload: any) => {
     const fullKey = (req as any)._idemFullKey as string | undefined
-    if (!fullKey) return payload
+    const requestHash = (req as any)._idemRequestHash as string | undefined
+    if (!fullKey || !requestHash) return payload
     if (reply.statusCode < 200 || reply.statusCode >= 300) return payload
 
     const body = typeof payload === 'string' ? payload : Buffer.isBuffer(payload) ? payload.toString('utf8') : null
@@ -79,6 +98,7 @@ export function registerIdempotency(app: FastifyInstance) {
         status: reply.statusCode,
         body,
         bodyHash: crypto.createHash('sha256').update(body).digest('hex').slice(0, 12),
+        requestHash,
       }
       await redis.setex(fullKey, TTL_SECONDS, JSON.stringify(entry))
     } catch { /* 缓存失败不阻断响应 */ }
@@ -87,10 +107,32 @@ export function registerIdempotency(app: FastifyInstance) {
   })
 }
 
-function buildKey(args: { method: string; url: string; clientKey: string }): string {
+export function buildIdempotencyKey(args: {
+  tenantId: string
+  userId: string
+  method: string
+  url: string
+  clientKey: string
+}): string {
   const h = crypto.createHash('sha256')
-    .update(`${args.method}|${args.url}|${args.clientKey}`)
+    .update(`${args.tenantId}|${args.userId}|${args.method}|${args.url}|${args.clientKey}`)
     .digest('hex')
     .slice(0, 32)
   return `idem:${h}`
+}
+
+function buildKey(args: Parameters<typeof buildIdempotencyKey>[0]) {
+  return buildIdempotencyKey(args)
+}
+
+export function hashRequestBody(body: unknown, contentType: unknown): string {
+  let serialized = 'null'
+  try {
+    serialized = JSON.stringify(body ?? null)
+  } catch {
+    serialized = String(body ?? '')
+  }
+  return crypto.createHash('sha256')
+    .update(`${String(contentType || '')}|${serialized}`)
+    .digest('hex')
 }

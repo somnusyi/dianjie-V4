@@ -13,12 +13,13 @@ import { BottomNav, Chip } from '@/components/v2'
 type Item = {
   id: string; code: string; name: string; spec: string | null; unit: string
   category: string; stock: number; minStock: number; price: number
+  physicalStock: number; reservedStock: number; availableStock: number
   shelfDays: number | null
   statusFlag: 'OUT' | 'LOW' | 'OK'
   in7d: number; out7d: number; in30d: number; out30d: number
   nearestExpiry: string | null; daysToExpiry: number | null
 }
-type Summary = { totalSku: number; lowStock: number; outOfStock: number; totalValue: number }
+type Summary = { totalSku: number; lowStock: number; outOfStock: number; totalValue: number; availableValue: number; reservedValue: number }
 type Category = { id?: string | null; name: string; count: number; sortOrder?: number; isActive?: boolean }
 
 const STATUS_LABEL: Record<string, string> = { OUT: '已断货', LOW: '低于警戒', OK: '充足' }
@@ -81,6 +82,7 @@ export default function InventoryPage() {
           <div className="bg-white rounded-card border border-border p-3">
             <div className="text-micro text-gray3">库存总价值</div>
             <div className="text-h1 font-num">¥{summary.totalValue.toLocaleString()}</div>
+            <div className="text-micro text-gray3 mt-1">可用 ¥{summary.availableValue.toLocaleString()} · 已占 ¥{summary.reservedValue.toLocaleString()}</div>
           </div>
           <div className={`rounded-card border p-3 ${summary.lowStock > 0 ? 'bg-amber/10 border-amber/30' : 'bg-white border-border'}`}>
             <div className="text-micro text-gray3">低于警戒</div>
@@ -164,7 +166,7 @@ export default function InventoryPage() {
                 <h2 className="text-h2">{category}</h2>
                 <span className="text-caption text-gray3 ml-2">{categoryItems.length} 项</span>
                 <span className="text-micro text-gray3 ml-auto">
-                  库存价值 ¥{categoryItems.reduce((sum, item) => sum + item.stock * item.price, 0).toLocaleString()}
+                  可用价值 ¥{categoryItems.reduce((sum, item) => sum + item.availableStock * item.price, 0).toLocaleString()}
                 </span>
               </div>
               <ul className="space-y-2">
@@ -198,9 +200,12 @@ export default function InventoryPage() {
                 </div>
                 <div className="text-right">
                   <div className={`text-h1 font-num ${i.statusFlag==='OUT'?'text-red-fg':i.statusFlag==='LOW'?'text-amber-fg':'text-ink'}`}>
-                    {i.stock}
+                    {i.availableStock}
                   </div>
-                  <div className="text-micro text-gray3">{i.unit} · 警戒 {i.minStock}</div>
+                  <div className="text-micro text-gray3">可用 {i.unit} · 警戒 {i.minStock}</div>
+                  {i.reservedStock > 0 && (
+                    <div className="text-micro text-amber-fg mt-0.5">物理 {i.physicalStock} · 已占 {i.reservedStock}</div>
+                  )}
                 </div>
                 <span className="text-gray3 self-center">›</span>
               </a>

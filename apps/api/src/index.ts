@@ -78,6 +78,7 @@ import { uploadRoutes } from './routes/upload'
 import { meituanAdminRoutes } from './routes/meituanAdmin'
 import { meituanDataRoutes } from './routes/meituanData'
 import { dailyBusinessImportRoutes } from './routes/dailyBusinessImports'
+import { isSupplierRole } from './lib/auth-scope'
 
 function resolveJwtSecret() {
   const secret = process.env.JWT_SECRET || ''
@@ -163,6 +164,22 @@ async function bootstrap() {
       await request.jwtVerify()
       if (request.user?.typ !== 'access') {
         throw new Error('JWT token type is not access')
+      }
+      // 供应商停用/账号停用/解除绑定后，旧 access token 也必须在下一次请求立即失效。
+      // 当前只有供应商域做逐请求状态核验；其岗位权限仍由 capability 层统一控制。
+      if (isSupplierRole(request.user?.role)) {
+        const principal = await prisma.user.findFirst({
+          where: {
+            id: request.user.userId,
+            tenantId: request.user.tenantId,
+            supplierId: request.user.supplierId,
+            status: 'ACTIVE',
+            authVersion: Number(request.user.ver ?? 0),
+            supplier: { status: 'ENABLED', tenantId: request.user.tenantId },
+          },
+          select: { id: true },
+        })
+        if (!principal) throw new Error('supplier principal is inactive')
       }
       // 给 Sentry 当前请求作用域打上 tenant/role/route 标签, 后续 captureException
       // (含 cmbPayment / paymentSchedule 等深层调用) 都能按维度聚合

@@ -21,9 +21,24 @@ type Movement = {
 type StockItem = {
   id: string; code: string; name: string; spec: string | null; unit: string
   stock: number; minStock: number; price: number; shelfDays: number | null
+  physicalStock: number; reservedStock: number; availableStock: number
   statusFlag: 'OUT'|'LOW'|'OK'
   in7d: number; out7d: number; in30d: number; out30d: number
   nearestExpiry: string | null; daysToExpiry: number | null
+}
+type Reservation = {
+  id: string; quantity: number; createdAt: string
+  order: { id: string; no: string; status: string; expectedDate: string; store: { id: string; name: string } }
+}
+type StockBatch = {
+  id: string; batchNo: string; kind: 'OPENING'|'INBOUND'|'ADJUSTMENT'|'RETURN'
+  initialQty: number; remainingQty: number
+  manufactureDate: string | null; expiryDate: string | null; createdAt: string
+  source: { type: string; reason: string | null; sourceType: string | null; sourceId: string | null } | null
+}
+
+const BATCH_KIND_LABEL: Record<StockBatch['kind'], string> = {
+  OPENING: '期初', INBOUND: '入库', ADJUSTMENT: '调整', RETURN: '退回',
 }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -41,6 +56,8 @@ export default function SkuDetailPage() {
 
   const [item, setItem] = useState<StockItem | null>(null)
   const [movements, setMovements] = useState<Movement[]>([])
+  const [reservations, setReservations] = useState<Reservation[]>([])
+  const [batches, setBatches] = useState<StockBatch[]>([])
   const [error, setError] = useState<string | null>(null)
   const [sheet, setSheet] = useState<'adjust'|'loss'|null>(null)
   const [adjustQty, setAdjustQty] = useState('')
@@ -52,6 +69,10 @@ export default function SkuDetailPage() {
       .catch(e => setError(e.message))
     apiFetch<Movement[]>(`/api/supplier/stock/movements?productId=${productId}`)
       .then(setMovements).catch(() => {})
+    apiFetch<Reservation[]>(`/api/supplier/stock/reservations?productId=${productId}`)
+      .then(setReservations).catch(() => {})
+    apiFetch<StockBatch[]>(`/api/supplier/stock/batches?productId=${encodeURIComponent(productId)}`)
+      .then(setBatches).catch(() => {})
   }
   useEffect(() => { load() }, [productId])
 
@@ -96,12 +117,12 @@ export default function SkuDetailPage() {
           {item.shelfDays != null && <span className="ml-1.5">· 默认保质期 {item.shelfDays} 天</span>}
         </div>
         <div className="flex items-end gap-2 mt-2">
-          <span className={`text-h1 font-num text-3xl ${item.statusFlag==='OUT'?'text-red-fg':item.statusFlag==='LOW'?'text-amber-fg':'text-ink'}`}>{item.stock}</span>
+          <span className={`text-h1 font-num text-3xl ${item.statusFlag==='OUT'?'text-red-fg':item.statusFlag==='LOW'?'text-amber-fg':'text-ink'}`}>{item.availableStock}</span>
           <span className="text-body text-gray3 mb-0.5">{item.unit}</span>
           <span className="ml-auto text-caption text-gray2">单价 ¥{item.price}</span>
         </div>
         <div className="text-caption text-gray2 mt-2">
-          安全库存 {item.minStock} {item.unit} ·
+          可用库存 · 物理 {item.physicalStock} - 已占 {item.reservedStock} · 安全库存 {item.minStock} {item.unit} ·
           近 30 日 <span className="text-green-fg">+{item.in30d}</span> / <span className="text-red-fg">-{item.out30d}</span>
         </div>
         {item.nearestExpiry && (
@@ -126,6 +147,54 @@ export default function SkuDetailPage() {
           className="py-2.5 bg-white border border-border rounded-cta text-button">⇄ 盘点</button>
         <button onClick={() => { setSheet('loss'); setAdjustQty(''); setAdjustReason('') }}
           className="py-2.5 bg-white border border-border rounded-cta text-button text-red-fg">⊖ 报损</button>
+      </div>
+
+      {reservations.length > 0 && (
+        <div className="px-4 mt-4">
+          <h2 className="text-h2 mb-2">已占订单 ({reservations.length})</h2>
+          <ul className="space-y-2">
+            {reservations.map(reservation => (
+              <li key={reservation.id} className="bg-amber/10 border border-amber/30 rounded-card p-3">
+                <a href={`/v2/supplier/orders/${reservation.order.id}`} className="flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-body truncate">{reservation.order.store.name} · #{reservation.order.no}</div>
+                    <div className="text-micro text-gray3 mt-0.5">期望到货 {new Date(reservation.order.expectedDate).toLocaleDateString('zh-CN')}</div>
+                  </div>
+                  <div className="font-num text-h2 text-amber-fg">{reservation.quantity} {item.unit}</div>
+                  <span className="text-gray3">›</span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="px-4 mt-5">
+        <h2 className="text-h2 mb-2">在库批次 ({batches.length})</h2>
+        {batches.length === 0 ? (
+          <p className="text-caption text-gray3 text-center py-6 bg-white border border-border rounded-card">当前没有在库批次</p>
+        ) : (
+          <ul className="space-y-2">
+            {batches.map(batch => (
+              <li key={batch.id} className="bg-white rounded-card border border-border p-3">
+                <div className="flex items-center gap-2">
+                  <Chip tone={batch.kind === 'INBOUND' || batch.kind === 'RETURN' ? 'green' : 'gray'}>
+                    {BATCH_KIND_LABEL[batch.kind]}
+                  </Chip>
+                  <span className="text-caption font-num truncate">{batch.batchNo}</span>
+                  <span className="ml-auto text-h2 font-num">{batch.remainingQty} {item.unit}</span>
+                </div>
+                <div className="text-micro text-gray3 mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                  <span>初始 {batch.initialQty}</span>
+                  {batch.manufactureDate && <span>生产 {batch.manufactureDate}</span>}
+                  {batch.expiryDate && <span className="text-amber-fg">到期 {batch.expiryDate}</span>}
+                  <span>入账 {new Date(batch.createdAt).toLocaleDateString('zh-CN')}</span>
+                </div>
+                {batch.source?.reason && <div className="text-caption text-gray2 mt-1">{batch.source.reason}</div>}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       {/* 流水 */}

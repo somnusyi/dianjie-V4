@@ -14,6 +14,7 @@ export default defineConfig({
     },
     sequence: { shuffle: false },
     include: ['tests/**/*.test.ts'],
+    exclude: ['tests/**/*.integration.test.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

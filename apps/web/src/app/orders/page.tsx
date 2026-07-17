@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import AppLayout from '@/components/AppLayout'
 import { Table, Btn, Modal, Field, Input, Select, fmt, fmtDate, useToast, Pagination } from '@/components/ui'
 import api from '@/lib/api'
+import { clientRequestId } from '@/lib/client-id'
 import dayjs from 'dayjs'
 import { z } from 'zod'
 
@@ -88,7 +89,7 @@ export default function OrdersPage() {
 
   const ship = async (id: string, note = '') => {
     try {
-      await api.patch(`/api/orders/${id}/ship`, { note })
+      await api.patch(`/api/orders/${id}/ship`, { note, idempotencyKey: clientRequestId() })
       show('已标记送达，入库单已自动生成，等待门店确认')
       load()
     } catch (e: any) { show(e.response?.data?.error || '操作失败', 'error') }

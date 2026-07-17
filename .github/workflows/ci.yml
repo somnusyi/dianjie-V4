@@ -68,9 +68,11 @@ jobs:
       - name: API tests and build
         run: |
           pnpm --filter @dianjie/api test
+          pnpm --filter @dianjie/api test:integration
           pnpm --filter @dianjie/api build
 
-      - name: Web typecheck and production build
+      - name: Web tests, typecheck and production build
         run: |
+          pnpm --filter @dianjie/web test
           pnpm --filter @dianjie/web exec tsc --noEmit
           pnpm --filter @dianjie/web build

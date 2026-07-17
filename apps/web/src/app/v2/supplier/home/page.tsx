@@ -11,6 +11,7 @@ import { GlanceStrip } from '@/components/v2/glance-strip'
 import { UserMenu } from '@/components/v2/user-menu'
 import { useDashboard, LoadingScreen, ErrorScreen, greetingFor } from '@/components/v2/use-dashboard'
 import { apiFetch } from '@/lib/v2-auth'
+import { supplierOrderBucket } from '@/lib/supplier-domain'
 
 type Order = {
   id: string; no: string; status: string; totalAmount: number | string
@@ -20,6 +21,8 @@ type Order = {
   chefAckAt?: string | null      // DELIVERING 期间客户发的验收单 (有值=待供应商确认)
   chefAckImages?: string[]
 }
+type StockSummary = { totalSku: number; lowStock: number; outOfStock: number; reservedValue: number }
+type SupplyAudit = { summary: { errors: number; warnings: number }; issues: Array<{ label: string; detail: string }> }
 
 function timeAgo(iso: string) {
   const d = new Date(iso).getTime()
@@ -35,10 +38,16 @@ export default function SupplierHomePage() {
   const [tab, setTab] = useState('home')
   const { data, error } = useDashboard()
   const [orders, setOrders] = useState<Order[] | null>(null)
+  const [stockSummary, setStockSummary] = useState<StockSummary | null>(null)
+  const [supplyAudit, setSupplyAudit] = useState<SupplyAudit | null>(null)
   useEffect(() => {
     apiFetch<any>('/api/orders?pageSize=20')
       .then((d: any) => setOrders((d.items || d || [])))
       .catch(() => setOrders([]))
+    apiFetch<StockSummary>('/api/supplier/stock/summary')
+      .then(setStockSummary).catch(() => setStockSummary(null))
+    apiFetch<SupplyAudit>('/api/supplier/insights/audit?days=90')
+      .then(setSupplyAudit).catch(() => setSupplyAudit(null))
   }, [])
   if (error) return <ErrorScreen message={error} />
   if (!data) return <LoadingScreen />
@@ -54,7 +63,12 @@ export default function SupplierHomePage() {
     (o.status === 'DELIVERING' && o.chefAckAt)
   )
   // 在途 = 已发货等门店签收
-  const shipping = (orders || []).filter(o => o.status === 'PENDING_CONFIRM')
+  const shipping = (orders || []).filter(o =>
+    supplierOrderBucket(o.status) === 'shipping' && !(o.status === 'DELIVERING' && o.chefAckAt)
+  )
+  const lowStockCnt = stockSummary
+    ? stockSummary.lowStock + stockSummary.outOfStock
+    : Number(ext.lowStockCnt || 0)
 
   return (
     <div className="min-h-screen bg-bg pb-20">
@@ -85,14 +99,33 @@ export default function SupplierHomePage() {
       </Section>
 
       {/* 库存预警 */}
-      {(ext.lowStockCnt > 0 || ext.expiringCnt > 0) && (
+      {(lowStockCnt > 0 || ext.expiringCnt > 0) && (
         <Section title="库存预警" right="点击去库存处理" rightTone="red">
           <a href="/v2/supplier/inventory" className="block bg-red-bg/30 rounded-card border border-red/30 p-3">
             <div className="flex items-center gap-3">
               <span className="text-2xl">⚠</span>
               <div className="flex-1">
-                {ext.lowStockCnt > 0 && <div className="text-body"><b className="text-red-fg">{ext.lowStockCnt}</b> 个 SKU 低于安全库存,请尽快补货</div>}
+                {lowStockCnt > 0 && <div className="text-body"><b className="text-red-fg">{lowStockCnt}</b> 个 SKU 的可用库存低于安全线，请尽快补货</div>}
                 {ext.expiringCnt > 0 && <div className="text-body"><b className="text-orange-fg">{ext.expiringCnt}</b> 批商品 7 天内到期,请尽快出货</div>}
+              </div>
+              <span className="text-gray3">›</span>
+            </div>
+          </a>
+        </Section>
+      )}
+
+      {supplyAudit && (supplyAudit.summary.errors > 0 || supplyAudit.summary.warnings > 0) && (
+        <Section
+          title="数据健康待办"
+          right={supplyAudit.summary.errors > 0 ? `${supplyAudit.summary.errors} 项错误` : `${supplyAudit.summary.warnings} 项提醒`}
+          rightTone={supplyAudit.summary.errors > 0 ? 'red' : undefined}
+        >
+          <a href="/v2/supplier/analytics" className={`block rounded-card border p-3 ${supplyAudit.summary.errors > 0 ? 'border-red/30 bg-red-bg/30' : 'border-amber/30 bg-amber/10'}`}>
+            <div className="flex items-start gap-3">
+              <span className="text-2xl">{supplyAudit.summary.errors > 0 ? '⚠' : '◐'}</span>
+              <div className="min-w-0 flex-1">
+                <div className="text-body">库存账本、预占、配送与应付自动核查发现待处理项</div>
+                {supplyAudit.issues[0] && <p className="mt-1 truncate text-caption text-gray2">{supplyAudit.issues[0].label} · {supplyAudit.issues[0].detail}</p>}
               </div>
               <span className="text-gray3">›</span>
             </div>

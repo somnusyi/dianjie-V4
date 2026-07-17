@@ -2,13 +2,23 @@ import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '@dianjie/db'
 import { cached, invalidatePattern } from '../lib/cache'
-import { isSupplierRole } from '../lib/auth-scope'
+import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
+import { requireSupplierCapability, SupplierCapability } from '../lib/supplier-access'
 import { parsePagination } from '../lib/pagination'
 import { signOssKey } from './upload'
 import { nextDocumentNo } from '../services/documentNo'
+import { mergeSupplierCategory } from '../services/supplierCategory'
 import { createId } from '@paralleldrive/cuid2'
+import { getSupplierReservedStock, stockAvailability } from '../services/supplierStockReservation'
+import { createSupplierStockBatchIncrease } from '../services/supplierStockBatch'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
+
+export function productCatalogCacheScope(role: string, supplierId?: string | null) {
+  if (isSupplierRole(role)) return `supplier:${supplierId || 'unbound'}`
+  if (isStoreScoped(role)) return 'store:approved'
+  return 'governance:all'
+}
 
 // CLAUDE.md 规约：所有写入用 zod 校验
 // preprocess: 把 null/空字符串/NaN 统一转成 undefined, 让 .optional().default() 生效.
@@ -58,7 +68,26 @@ function jsonSafe(value: unknown): any {
 
 const categoryNameSchema = z.string().trim().min(1, '分类名称必填').max(40)
 
+function supplierScopeOrReply(req: any, reply: any, capability: SupplierCapability): string | null {
+  const { role, supplierId } = req.user
+  try {
+    return requireSupplierCapability(role, supplierId, capability)
+  } catch (error: any) {
+    reply.status(error?.statusCode || 403).send({ error: error?.message || '无权限' })
+    return null
+  }
+}
+
 export const productRoutes: FastifyPluginAsync = async (app) => {
+  async function withAvailability<T extends { id: string; stock: unknown }>(tenantId: string, rows: T[]) {
+    const reserved = await getSupplierReservedStock({ tenantId, productIds: rows.map(row => row.id) })
+    return rows.map(product => ({
+      ...product,
+      ...stockAvailability(Number(product.stock || 0), reserved.get(product.id) || 0),
+      imageUrl: signOssKey((product as any).imageKey),
+    }))
+  }
+
   app.get('/', auth(app), async (req: any, reply: any) => {
     const { category, status, q, page, pageSize = '20' } = req.query as any
     const { tenantId, role, supplierId } = req.user
@@ -75,8 +104,13 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     }
     // 供应商账号只能看自己的商品
     if (isSupplierRole(role)) {
+      if (!supplierScopeOrReply(req, reply, 'catalog.read')) return
       if (!supplierId) return reply.status(403).send({ error: '账号未绑定供应商' })
       where.supplierId = supplierId
+    } else if (isStoreScoped(role)) {
+      // Approved offers are tenant-wide for every store. Pending/disabled
+      // supplier catalog data is governance-only and must not leak to stores.
+      where.status = 'ENABLED'
     }
 
     // 不传 page 时返回全量（兼容下拉框），缓存 10 分钟
@@ -86,15 +120,16 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     // 而不是把 DISABLED 商品悄悄藏掉. chef 下单选品页负责显示 chip + 禁用加入按钮,
     // orders.ts:298 做 server-side 兜底拦截.
     if (!page && !q) {
-      const scopeKey = isSupplierRole(role) ? `sup:${supplierId}` : 'all'
-      const rows = await cached(`products:full:${tenantId}:${scopeKey}:${category || 'all'}:${status || 'all'}`, 600, () =>
+      const scopeKey = productCatalogCacheScope(role, supplierId)
+      const effectiveStatus = typeof where.status === 'string' ? where.status : 'all'
+      const rows = await cached(`products:full:${tenantId}:${scopeKey}:${category || 'all'}:${effectiveStatus}`, 600, () =>
         prisma.product.findMany({
           where,
           include: { supplier: { select: { id: true, name: true } } },
           orderBy: { createdAt: 'asc' },
         })
       )
-      return rows.map((product: any) => ({ ...product, imageUrl: signOssKey(product.imageKey) }))
+      return withAvailability(tenantId, rows as any[])
     }
     if (!page) {
       const rows = await prisma.product.findMany({
@@ -102,7 +137,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         include: { supplier: { select: { id: true, name: true } } },
         orderBy: { createdAt: 'asc' },
       })
-      return rows.map(product => ({ ...product, imageUrl: signOssKey(product.imageKey) }))
+      return withAvailability(tenantId, rows)
     }
     const pagination = parsePagination({ page, pageSize }, { defaultPageSize: 20, maxPageSize: 100 })
     if (!pagination) return reply.status(400).send({ error: '分页参数格式不正确' })
@@ -118,7 +153,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       prisma.product.count({ where }),
     ])
     return {
-      items: items.map(product => ({ ...product, imageUrl: signOssKey(product.imageKey) })),
+      items: await withAvailability(tenantId, items),
       total, page: p, pageSize: ps,
     }
   })
@@ -136,8 +171,11 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role, supplierId } = req.user
     const where: any = { tenantId }
     if (isSupplierRole(role)) {
-      if (!supplierId) return reply.status(403).send({ error: '账号未绑定供应商' })
-      where.supplierId = supplierId
+      const scopedSupplierId = supplierScopeOrReply(req, reply, 'catalog.read')
+      if (!scopedSupplierId) return
+      where.supplierId = scopedSupplierId
+    } else if (isStoreScoped(role)) {
+      where.status = 'ENABLED'
     }
     const rows = await prisma.product.groupBy({
       by: ['category'],
@@ -178,48 +216,56 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   /** 新增供应商商品/库存分类。 */
   app.post('/categories', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, userId, supplierId } = req.user
-    if (!isSupplierRole(role) || !supplierId) return reply.status(403).send({ error: '仅供应商账号可管理分类' })
+    const scopedSupplierId = supplierScopeOrReply(req, reply, 'catalog.manage')
+    if (!scopedSupplierId) return
     const parsed = z.object({ name: categoryNameSchema }).safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const duplicate = await prisma.supplierProductCategory.findUnique({
-      where: { tenantId_supplierId_name: { tenantId, supplierId, name: parsed.data.name } },
+      where: { tenantId_supplierId_name: { tenantId, supplierId: scopedSupplierId, name: parsed.data.name } },
     })
     if (duplicate) return reply.status(409).send({ error: '分类名称已存在' })
     const max = await prisma.supplierProductCategory.aggregate({
-      where: { tenantId, supplierId }, _max: { sortOrder: true },
+      where: { tenantId, supplierId: scopedSupplierId }, _max: { sortOrder: true },
     })
-    const category = await prisma.$transaction(async tx => {
-      const created = await tx.supplierProductCategory.create({
-        data: {
-          tenantId, supplierId, name: parsed.data.name,
-          sortOrder: (max._max.sortOrder ?? -1) + 1,
-          isSystem: parsed.data.name === '其他',
-        },
+    let category: any
+    try {
+      category = await prisma.$transaction(async tx => {
+        const created = await tx.supplierProductCategory.create({
+          data: {
+            tenantId, supplierId: scopedSupplierId, name: parsed.data.name,
+            sortOrder: (max._max.sortOrder ?? -1) + 1,
+            isSystem: parsed.data.name === '其他',
+          },
+        })
+        await tx.opLog.create({
+          data: {
+            tenantId, userId, role,
+            action: `新增商品分类「${created.name}」`,
+            entityType: 'ProductCategory', target: created.name, targetId: created.id,
+            metadata: { supplierId: scopedSupplierId, after: { name: created.name, sortOrder: created.sortOrder, isActive: true } },
+          },
+        })
+        return created
       })
-      await tx.opLog.create({
-        data: {
-          tenantId, userId, role,
-          action: `新增商品分类「${created.name}」`,
-          entityType: 'ProductCategory', target: created.name, targetId: created.id,
-          metadata: { supplierId, after: { name: created.name, sortOrder: created.sortOrder, isActive: true } },
-        },
-      })
-      return created
-    })
+    } catch (error: any) {
+      if (error?.code === 'P2002') return reply.status(409).send({ error: '分类名称已存在' })
+      throw error
+    }
     return reply.status(201).send({ ...category, count: 0 })
   })
 
   /** 改名、停用或恢复分类。改名会同步更新该分类下全部商品，库存自动联动。 */
   app.patch('/categories/:id', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, userId, supplierId } = req.user
-    if (!isSupplierRole(role) || !supplierId) return reply.status(403).send({ error: '仅供应商账号可管理分类' })
+    const scopedSupplierId = supplierScopeOrReply(req, reply, 'catalog.manage')
+    if (!scopedSupplierId) return
     const parsed = z.object({
       name: categoryNameSchema.optional(),
       isActive: z.boolean().optional(),
     }).refine(value => value.name !== undefined || value.isActive !== undefined, '没有需要修改的字段').safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const current = await prisma.supplierProductCategory.findFirst({
-      where: { id: req.params.id, tenantId, supplierId },
+      where: { id: req.params.id, tenantId, supplierId: scopedSupplierId },
     })
     if (!current) return reply.status(404).send({ error: '分类不存在' })
     if (current.isSystem && parsed.data.name && parsed.data.name !== current.name) {
@@ -231,52 +277,92 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const nextName = parsed.data.name || current.name
     if (nextName !== current.name) {
       const duplicate = await prisma.supplierProductCategory.findUnique({
-        where: { tenantId_supplierId_name: { tenantId, supplierId, name: nextName } },
+        where: { tenantId_supplierId_name: { tenantId, supplierId: scopedSupplierId, name: nextName } },
       })
       if (duplicate) return reply.status(409).send({ error: '分类名称已存在' })
     }
     const nextActive = parsed.data.isActive ?? current.isActive
-    const productCount = await prisma.$transaction(async tx => {
-      const updatedProducts = nextName === current.name
-        ? { count: 0 }
-        : await tx.product.updateMany({
-            where: { tenantId, supplierId, category: current.name },
-            data: { category: nextName },
-          })
-      await tx.supplierProductCategory.update({
-        where: { id: current.id },
-        data: { name: nextName, isActive: nextActive },
-      })
-      await tx.opLog.create({
-        data: {
-          tenantId, userId, role,
-          action: nextName !== current.name
-            ? `商品分类改名「${current.name}」→「${nextName}」，同步 ${updatedProducts.count} 个 SKU`
-            : `${nextActive ? '恢复' : '停用'}商品分类「${current.name}」`,
-          entityType: 'ProductCategory', target: nextName, targetId: current.id,
-          metadata: {
-            supplierId,
-            before: { name: current.name, isActive: current.isActive },
-            after: { name: nextName, isActive: nextActive },
-            productCount: updatedProducts.count,
+    let productCount: number
+    try {
+      productCount = await prisma.$transaction(async tx => {
+        const updatedProducts = nextName === current.name
+          ? { count: 0 }
+          : await tx.product.updateMany({
+              where: { tenantId, supplierId: scopedSupplierId, category: current.name },
+              data: { category: nextName },
+            })
+        await tx.supplierProductCategory.update({
+          where: { id: current.id },
+          data: { name: nextName, isActive: nextActive },
+        })
+        await tx.opLog.create({
+          data: {
+            tenantId, userId, role,
+            action: nextName !== current.name
+              ? `商品分类改名「${current.name}」→「${nextName}」，同步 ${updatedProducts.count} 个 SKU`
+              : `${nextActive ? '恢复' : '停用'}商品分类「${current.name}」`,
+            entityType: 'ProductCategory', target: nextName, targetId: current.id,
+            metadata: {
+              supplierId: scopedSupplierId,
+              before: { name: current.name, isActive: current.isActive },
+              after: { name: nextName, isActive: nextActive },
+              productCount: updatedProducts.count,
+            },
           },
-        },
+        })
+        return updatedProducts.count
       })
-      return updatedProducts.count
-    })
+    } catch (error: any) {
+      if (error?.code === 'P2002') return reply.status(409).send({ error: '分类名称已存在' })
+      throw error
+    }
     void invalidatePattern(`products:full:${tenantId}:*`)
     return { ok: true, id: current.id, name: nextName, isActive: nextActive, productCount }
+  })
+
+  /**
+   * 合并分类：将来源分类中的全部商品移动到目标分类，并停用来源分类。
+   * 使用供应商级事务锁，避免改名、合并和批量归类并发时产生孤立分类。
+   */
+  app.post('/categories/:id/merge', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role, userId } = req.user
+    const scopedSupplierId = supplierScopeOrReply(req, reply, 'catalog.manage')
+    if (!scopedSupplierId) return
+    const parsed = z.object({ targetId: z.string().trim().min(1) }).safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const sourceId = String(req.params.id)
+    try {
+      const result = await mergeSupplierCategory({
+        tenantId,
+        supplierId: scopedSupplierId,
+        userId,
+        role,
+        sourceId,
+        targetId: parsed.data.targetId,
+      })
+      void invalidatePattern(`products:full:${tenantId}:*`)
+      return {
+        ok: true,
+        source: { id: result.source.id, name: result.source.name, isActive: false },
+        target: { id: result.target.id, name: result.target.name },
+        productCount: result.productCount,
+      }
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      throw error
+    }
   })
 
   /** 保存分类顺序；必须一次提交当前供应商全部分类，防止越权/遗漏。 */
   app.patch('/categories-order', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, userId, supplierId } = req.user
-    if (!isSupplierRole(role) || !supplierId) return reply.status(403).send({ error: '仅供应商账号可管理分类' })
+    const scopedSupplierId = supplierScopeOrReply(req, reply, 'catalog.manage')
+    if (!scopedSupplierId) return
     const parsed = z.object({ ids: z.array(z.string()).min(1).max(200) }).safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const ids = [...new Set(parsed.data.ids)]
     const existing = await prisma.supplierProductCategory.findMany({
-      where: { tenantId, supplierId }, select: { id: true },
+      where: { tenantId, supplierId: scopedSupplierId }, select: { id: true },
     })
     if (ids.length !== existing.length || existing.some(row => !ids.includes(row.id))) {
       return reply.status(400).send({ error: '分类顺序必须包含当前全部分类' })
@@ -289,8 +375,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         data: {
           tenantId, userId, role,
           action: `调整商品分类顺序：${ids.length} 类`,
-          entityType: 'ProductCategory', targetId: supplierId,
-          metadata: { supplierId, categoryIds: ids },
+          entityType: 'ProductCategory', targetId: scopedSupplierId,
+          metadata: { supplierId: scopedSupplierId, categoryIds: ids },
         },
       })
     })
@@ -303,6 +389,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const limit = Math.min(200, Math.max(1, Number((req.query as any)?.limit || 50)))
     let productIds: string[] | undefined
     if (isSupplierRole(role)) {
+      if (!supplierScopeOrReply(req, reply, 'catalog.read')) return
       if (!supplierId) return reply.status(403).send({ error: '账号未绑定供应商' })
       productIds = (await prisma.product.findMany({
         where: { tenantId, supplierId }, select: { id: true },
@@ -339,6 +426,68 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     ids: z.array(z.string()).min(1).max(200),
   })
 
+  app.post('/batch-status/preview', auth(app), async (req: any, reply: any) => {
+    const { role, tenantId, supplierId } = req.user
+    if (!PRODUCT_WRITE_ROLES.has(role)) return reply.status(403).send({ error: '无权预览批量商品操作' })
+    const parsed = bulkIdsSchema.extend({ status: z.enum(['ENABLED', 'DISABLED']) }).safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const uniqueIds = [...new Set(parsed.data.ids)]
+    const where: any = { id: { in: uniqueIds }, tenantId }
+    if (isSupplierRole(role)) {
+      if (!supplierScopeOrReply(req, reply, 'catalog.manage')) return
+      where.supplierId = supplierId
+    }
+    const products = await prisma.product.findMany({
+      where,
+      select: { id: true, name: true, status: true, stock: true, price: true },
+      orderBy: { name: 'asc' },
+    })
+    if (products.length !== uniqueIds.length) {
+      return reply.status(400).send({ error: '包含不存在或无权限的商品' })
+    }
+    const [reservations, recentOrderLines] = await Promise.all([
+      prisma.supplierStockReservation.groupBy({
+        by: ['productId'],
+        where: { tenantId, productId: { in: uniqueIds }, status: 'ACTIVE' },
+        _sum: { quantity: true },
+      }),
+      prisma.purchaseOrderItem.findMany({
+        where: {
+          productId: { in: uniqueIds },
+          isActive: true,
+          purchaseOrder: {
+            tenantId,
+            createdAt: { gte: new Date(Date.now() - 28 * 86_400_000) },
+            status: { not: 'CANCELLED' },
+          },
+        },
+        select: { purchaseOrderId: true, productId: true },
+      }),
+    ])
+    const reservedByProduct = new Map(reservations.map(row => [row.productId, Number(row._sum.quantity || 0)]))
+    const activeReservations = [...reservedByProduct.values()].reduce((sum, quantity) => sum + quantity, 0)
+    const physicalStockValue = products.reduce((sum, product) => sum + Number(product.stock) * Number(product.price), 0)
+    const impacted = products.filter(product =>
+      parsed.data.status === 'DISABLED' ? product.status === 'ENABLED' : product.status === 'DISABLED'
+    )
+    return {
+      requested: products.length,
+      impacted: impacted.length,
+      alreadyInTargetStatus: products.length - impacted.length,
+      activeReservationSku: reservations.length,
+      activeReservationQty: Number(activeReservations.toFixed(3)),
+      recent28DayOrders: new Set(recentOrderLines.map(line => line.purchaseOrderId)).size,
+      recent28DayOrderLines: recentOrderLines.length,
+      physicalStockValue: Number(physicalStockValue.toFixed(2)),
+      sample: impacted.slice(0, 10).map(product => ({
+        id: product.id,
+        name: product.name,
+        stock: Number(product.stock),
+        reserved: reservedByProduct.get(product.id) || 0,
+      })),
+    }
+  })
+
   app.patch('/batch-category', auth(app), async (req: any, reply: any) => {
     const { role, tenantId, userId, supplierId } = req.user
     if (!PRODUCT_WRITE_ROLES.has(role)) return reply.status(403).send({ error: '无权批量修改商品' })
@@ -346,6 +495,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const where: any = { id: { in: parsed.data.ids }, tenantId }
     if (isSupplierRole(role)) {
+      if (!supplierScopeOrReply(req, reply, 'catalog.manage')) return
       if (!supplierId) return reply.status(403).send({ error: '账号未绑定供应商' })
       where.supplierId = supplierId
       const category = await prisma.supplierProductCategory.findUnique({
@@ -382,6 +532,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const where: any = { id: { in: parsed.data.ids }, tenantId }
     if (isSupplierRole(role)) {
+      if (!supplierScopeOrReply(req, reply, 'catalog.manage')) return
       if (!supplierId) return reply.status(403).send({ error: '账号未绑定供应商' })
       where.supplierId = supplierId
     }
@@ -405,7 +556,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         const no = await nextDocumentNo(tx, tenantId)
         await tx.document.create({
           data: {
-            tenantId, no, type: 'NEW_DISH',
+            tenantId, no, type: 'SUPPLIER_OFFER_DISABLE',
             title: `批量停售：${supplierName || '供应商'} ${eligible.length} 个 SKU`,
             amount: null, isOverThreshold: false, thresholdRule: '批量 SKU 停售 直送总厨',
             payload: {
@@ -451,6 +602,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     if (!PRODUCT_WRITE_ROLES.has(role)) {
       return reply.status(403).send({ error: '无权创建商品' })
     }
+    if (isSupplierRole(role) && !supplierScopeOrReply(req, reply, 'catalog.manage')) return
     const parsed = productCreateSchema.safeParse(req.body)
     if (!parsed.success) {
       const first = parsed.error.errors[0]
@@ -528,12 +680,38 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         const created = await tx.product.create({
           data: { tenantId, ...data } as any,
         })
+        if (created.supplierId && Number(created.stock) > 0) {
+          const movement = await tx.supplierStockMovement.create({
+            data: {
+              tenantId,
+              supplierId: created.supplierId,
+              productId: created.id,
+              delta: created.stock,
+              balanceAfter: created.stock,
+              type: 'INITIAL',
+              reason: '商品建档期初库存',
+              sourceType: 'Product',
+              sourceId: created.id,
+              createdById: userId,
+            },
+          })
+          await createSupplierStockBatchIncrease(tx, {
+            tenantId,
+            supplierId: created.supplierId,
+            productId: created.id,
+            quantity: created.stock,
+            movementId: movement.id,
+            createdById: userId,
+            kind: 'OPENING',
+            batchNo: `OPENING-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}`,
+          })
+        }
         // 供应商创建 → 商品、审批单和操作日志原子提交。
         if (isSupplierRole(role)) {
           const no = await nextDocumentNo(tx, tenantId)
           await tx.document.create({
             data: {
-              tenantId, no, type: 'NEW_DISH',
+              tenantId, no, type: 'SUPPLIER_OFFER_CREATE',
               title: `新品上架: ${created.name}${created.spec ? ' (' + created.spec + ')' : ''} ¥${Number(created.price)}`,
               amount: Number(created.price), isOverThreshold: false,
               thresholdRule: '新供应商商品 直送总厨',
@@ -584,6 +762,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     if (!PRODUCT_WRITE_ROLES.has(role)) {
       return reply.status(403).send({ error: '无权创建商品' })
     }
+    if (isSupplierRole(role) && !supplierScopeOrReply(req, reply, 'catalog.manage')) return
     const body = req.body as any
     const items = Array.isArray(body?.items) ? body.items : null
     const filename = (body?.filename as string | undefined) || null
@@ -744,7 +923,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           const no = await nextDocumentNo(tx, tenantId)
           const doc = await tx.document.create({
             data: {
-              tenantId, no, type: 'NEW_DISH',
+              tenantId, no, type: 'SUPPLIER_OFFER_CREATE',
               title: `批量新品: ${supplier?.name || '供应商'} 上架 ${created.length} 个 SKU${filename ? ` (${filename})` : ''}`,
               amount: null, isOverThreshold: false,
               thresholdRule: '批量新供应商商品 直送总厨',
@@ -794,10 +973,11 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // ─── 上传历史列表 ─────────────────────────────────
-  app.get('/batches', auth(app), async (req: any) => {
+  app.get('/batches', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, supplierId } = req.user
     const where: any = { tenantId }
     if (isSupplierRole(role)) {
+      if (!supplierScopeOrReply(req, reply, 'catalog.read')) return
       if (!supplierId) return []
       where.supplierId = supplierId
     }
@@ -818,6 +998,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const { id } = req.params as any
     const where: any = { id, tenantId }
     if (isSupplierRole(role)) {
+      if (!supplierScopeOrReply(req, reply, 'catalog.manage')) return
       if (!supplierId) return reply.status(403).send({ error: '账号未绑定供应商' })
       where.supplierId = supplierId
     }
@@ -828,7 +1009,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       const result = await prisma.$transaction(async tx => {
         const pendingDocuments = await tx.document.findMany({
           where: {
-            tenantId, type: 'NEW_DISH', status: 'PENDING',
+            tenantId, type: { in: ['NEW_DISH', 'SUPPLIER_OFFER_CREATE'] }, status: 'PENDING',
             payload: { path: ['batchId'], equals: b.id },
           },
           select: { id: true },
@@ -891,6 +1072,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     // 供应商只能改自己 SKU
     const where: any = { id: req.params.id, tenantId }
     if (isSupplierRole(role)) {
+      if (!supplierScopeOrReply(req, reply, 'catalog.manage')) return
       if (!supplierId) return reply.status(403).send({ error: '账号未绑定供应商' })
       where.supplierId = supplierId
     }
@@ -920,7 +1102,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       if (cur.status !== 'ENABLED') return reply.status(400).send({ error: `商品当前状态 ${cur.status}, 不能再申请停售` })
       const pending = await prisma.document.findFirst({
         where: {
-          tenantId, type: 'NEW_DISH', status: 'PENDING',
+          tenantId, type: { in: ['NEW_DISH', 'SUPPLIER_OFFER_DISABLE'] }, status: 'PENDING',
           payload: { path: ['productId'], equals: cur.id },
         },
       })
@@ -936,7 +1118,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         const no = await nextDocumentNo(tx, tenantId)
         const created = await tx.document.create({
           data: {
-            tenantId, no, type: 'NEW_DISH',
+            tenantId, no, type: 'SUPPLIER_OFFER_DISABLE',
             title: `停售: ${cur.name} (#${cur.code})`,
             amount: null, isOverThreshold: false,
             thresholdRule: 'SKU 停售 直送总厨',

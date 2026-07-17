@@ -6,7 +6,7 @@
  * PATCH /api/products/:id { price, stock, minStock, status }
  */
 'use client'
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { BottomNav, Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { EmptyState, SkeletonCard, FriendlyError } from '@/components/v2/skeleton'
@@ -17,6 +17,7 @@ type Product = {
   spec?: string | null
   imageKey?: string | null; imageUrl?: string | null
   price: number | string; stock: number | string; minStock: number | string
+  physicalStock?: number | string; reservedStock?: number | string; availableStock?: number | string
   minOrderQty?: number | string; stepQty?: number | string
   shipUpperPct?: number | string       // 实发上限百分比 (1.10 = 110%)
   shipUpperBuffer?: number | string    // 实发上限绝对加量 (单位件)
@@ -57,6 +58,13 @@ function timeAgo(iso: string) {
   if (min < 1440) return `${Math.round(min/60)} 小时前`
   const d = new Date(iso)
   return `${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`
+}
+
+function ProductStatusChip({ status }: { status: string }) {
+  if (status === 'DISABLED') return <Chip tone="gray">已停售</Chip>
+  if (status === 'PENDING_APPROVAL') return <Chip tone="orange">上架待审</Chip>
+  if (status === 'PENDING_DISABLE') return <Chip tone="orange">停售待审</Chip>
+  return <Chip tone="green">供应中</Chip>
 }
 
 export default function SupplierProductsPage() {
@@ -147,13 +155,15 @@ export default function SupplierProductsPage() {
     if (!priceChanged && !specChanged && !moqChanged && !stepChanged && !shipPctChanged && !shipBufChanged) { setEditing(null); return }
     const isUp = priceChanged && newPrice > oldPrice && oldPrice > 0
 
-    // 规格/起订量/步长/实发阈值 → 一并提交, 不走审批; 价格上调单独走审批
-    const nonPriceBody: any = {}
-    if (specChanged)    nonPriceBody.spec = newSpec || null
-    if (moqChanged)     nonPriceBody.minOrderQty = newMoq
-    if (stepChanged)    nonPriceBody.stepQty = newStep
-    if (shipPctChanged) nonPriceBody.shipUpperPct = newShipPct
-    if (shipBufChanged) nonPriceBody.shipUpperBuffer = newShipBuf
+    // 所有字段一次提交给后端：涨价审批单与其他字段在同一数据库事务内创建/保存，
+    // 避免“商品资料已保存、调价申请失败”的半成功状态。
+    const updateBody: any = {}
+    if (priceChanged)   updateBody.price = newPrice
+    if (specChanged)    updateBody.spec = newSpec || null
+    if (moqChanged)     updateBody.minOrderQty = newMoq
+    if (stepChanged)    updateBody.stepQty = newStep
+    if (shipPctChanged) updateBody.shipUpperPct = newShipPct
+    if (shipBufChanged) updateBody.shipUpperBuffer = newShipBuf
 
     const summary: string[] = []
     if (priceChanged)    summary.push(`单价 ¥${oldPrice.toFixed(2)} → ¥${newPrice.toFixed(2)}${isUp ? ' ⚠涨价审批' : ''}`)
@@ -164,22 +174,19 @@ export default function SupplierProductsPage() {
 
     openConfirm({
       title: `修改「${p.name}」`,
-      body: summary.join('\n') + (isUp ? '\n\n⚠ 涨价需总厨审批通过后才生效, 其他改动立即生效.' : '\n\n✓ 立即生效, 无需审批.'),
+      body: summary.join('\n') + (isUp ? '\n\n⚠ 本次修改将一次提交；其他资料立即生效，涨价需总厨审批后生效。' : '\n\n✓ 立即生效, 无需审批.'),
       confirmLabel: isUp ? '提交' : '保存',
       tone: 'primary',
       onConfirm: async () => {
         setSubmitting(true)
         try {
-          // 先存非价字段 (没审批门槛)
-          if (Object.keys(nonPriceBody).length > 0) {
-            await apiFetch(`/api/products/${p.id}`, { method: 'PATCH', body: JSON.stringify(nonPriceBody) })
-          }
-          // 再存价 (可能走审批)
-          let approvalMsg = ''
-          if (priceChanged) {
-            const res: any = await apiFetch(`/api/products/${p.id}`, { method: 'PATCH', body: JSON.stringify({ price: newPrice }) })
-            if (res?.priceChangeStatus === 'PENDING_APPROVAL') approvalMsg = `\n⏳ 涨价单 ${res.documentNo} 已提交总厨审批`
-          }
+          const res: any = await apiFetch(`/api/products/${p.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify(updateBody),
+          })
+          const approvalMsg = res?.priceChangeStatus === 'PENDING_APPROVAL'
+            ? `\n⏳ 涨价单 ${res.documentNo} 已提交总厨审批`
+            : ''
           setEditing(null)
           alert('✓ 已保存' + approvalMsg)
           load()
@@ -229,6 +236,10 @@ export default function SupplierProductsPage() {
     (categoryOrder.get(a) ?? 9999) - (categoryOrder.get(b) ?? 9999) || a.localeCompare(b, 'zh-CN')
   )
   const activeCategories = categories.filter(category => category.isActive !== false)
+  const desktopRows = [...filtered].sort((left, right) =>
+    (categoryOrder.get(left.category) ?? 9999) - (categoryOrder.get(right.category) ?? 9999)
+      || left.name.localeCompare(right.name, 'zh-CN')
+  )
 
   function openCreate() {
     setNewSku(EMPTY_SKU)
@@ -282,13 +293,34 @@ export default function SupplierProductsPage() {
     })
   }
 
-  function batchChangeStatus(status: 'ENABLED' | 'DISABLED') {
+  async function batchChangeStatus(status: 'ENABLED' | 'DISABLED') {
     if (selected.size === 0) return
+    let impact: {
+      impacted: number; alreadyInTargetStatus: number
+      activeReservationSku: number; activeReservationQty: number
+      recent28DayOrders: number; physicalStockValue: number
+    }
+    try {
+      impact = await apiFetch('/api/products/batch-status/preview', {
+        method: 'POST', body: JSON.stringify({ ids: [...selected], status }),
+      })
+    } catch (error: any) {
+      alert(error?.message || '影响范围预览失败')
+      return
+    }
+    const impactSummary = [
+      `实际影响 ${impact.impacted} 个 SKU，已有 ${impact.alreadyInTargetStatus} 个无需变更。`,
+      `当前库存货值 ¥${impact.physicalStockValue.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}。`,
+      impact.activeReservationSku > 0
+        ? `其中 ${impact.activeReservationSku} 个 SKU 已被订单占用，共 ${impact.activeReservationQty}；现有订单仍会继续履约。`
+        : '当前没有有效订单预占。',
+      `近 28 天涉及 ${impact.recent28DayOrders} 张订货单。`,
+    ].join('\n')
     openConfirm({
       title: `${status === 'DISABLED' ? '批量停售' : '批量恢复'} ${selected.size} 个商品?`,
       body: status === 'DISABLED'
-        ? '将生成一张批量停售审批单，总厨批准后生效。'
-        : '所选已停售商品将恢复供应，完整操作记录会保留。',
+        ? `${impactSummary}\n\n将生成一张批量停售审批单，总厨批准后生效。`
+        : `${impactSummary}\n\n所选已停售商品将恢复供应，完整操作记录会保留。`,
       confirmLabel: status === 'DISABLED' ? '提交审批' : '确认恢复',
       tone: status === 'DISABLED' ? 'danger' : 'primary',
       onConfirm: async () => {
@@ -503,6 +535,99 @@ export default function SupplierProductsPage() {
         </div>
       )}
 
+      {products && products.length > 0 && (
+        <section className="hidden lg:block px-4 mt-4">
+          <div className="overflow-hidden rounded-card border border-border bg-bg-card">
+            <table className="w-full table-fixed text-caption">
+              <thead className="bg-bg text-gray2">
+                <tr className="border-b border-border text-left">
+                  <th className="w-11 px-3 py-3">
+                    <input
+                      type="checkbox"
+                      checked={desktopRows.length > 0 && desktopRows.every(product => selected.has(product.id))}
+                      onChange={event => setSelected(event.target.checked ? new Set(desktopRows.map(product => product.id)) : new Set())}
+                      aria-label="选择当前筛选商品"
+                    />
+                  </th>
+                  <th className="w-[30%] px-3 py-3 font-medium">商品 / SKU</th>
+                  <th className="w-[13%] px-3 py-3 font-medium">分类</th>
+                  <th className="w-[13%] px-3 py-3 font-medium text-right">报价</th>
+                  <th className="w-[11%] px-3 py-3 font-medium text-right">起订量</th>
+                  <th className="w-[13%] px-3 py-3 font-medium text-right">可用库存</th>
+                  <th className="w-[11%] px-3 py-3 font-medium">状态</th>
+                  <th className="w-32 px-3 py-3 font-medium text-right">操作</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {desktopRows.map(product => {
+                  const isEdit = editing === product.id
+                  const available = Number(product.availableStock ?? product.stock ?? 0)
+                  const reserved = Number(product.reservedStock ?? 0)
+                  return (
+                    <Fragment key={product.id}>
+                      <tr className={selected.has(product.id) ? 'bg-accent/5' : 'hover:bg-bg/60'}>
+                        <td className="px-3 py-3 align-middle">
+                          <input type="checkbox" checked={selected.has(product.id)} onChange={() => toggleSelected(product.id)} aria-label={`选择 ${product.name}`} />
+                        </td>
+                        <td className="px-3 py-3 align-middle">
+                          <div className="flex min-w-0 items-center gap-3">
+                            {product.imageUrl
+                              ? <img src={product.imageUrl} alt="" className="h-10 w-10 shrink-0 rounded-chip border border-border object-cover" />
+                              : <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-chip border border-border bg-bg text-gray3">图</div>}
+                            <div className="min-w-0">
+                              <div className="truncate font-medium text-ink">{product.name}</div>
+                              <div className="truncate text-micro text-gray3">#{product.code}{product.spec ? ` · ${product.spec}` : ''}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-3 py-3 align-middle text-gray2">{product.category || '其他'}</td>
+                        <td className="px-3 py-3 text-right align-middle font-num">¥{Number(product.price).toFixed(2)}<span className="ml-1 text-micro text-gray3">/{product.unit}</span></td>
+                        <td className="px-3 py-3 text-right align-middle font-num">{Number(product.minOrderQty ?? 1)} {product.unit}</td>
+                        <td className="px-3 py-3 text-right align-middle">
+                          <div className={`font-num ${available <= Number(product.minStock || 0) ? 'text-red-fg' : 'text-ink'}`}>{available.toLocaleString('zh-CN')} {product.unit}</div>
+                          {reserved > 0 && <div className="text-micro text-gray3">已占 {reserved.toLocaleString('zh-CN')}</div>}
+                        </td>
+                        <td className="px-3 py-3 align-middle"><ProductStatusChip status={product.status} /></td>
+                        <td className="px-3 py-3 align-middle">
+                          <div className="flex items-center justify-end gap-3 whitespace-nowrap">
+                            <button type="button" onClick={() => isEdit ? cancelEdit() : startEdit(product)} className="text-accent">{isEdit ? '收起' : '编辑'}</button>
+                            {product.status === 'ENABLED' && <button type="button" onClick={() => toggleStatus(product)} className="text-red-fg">停售</button>}
+                            {product.status === 'DISABLED' && <button type="button" onClick={() => toggleStatus(product)} className="text-green-fg">恢复</button>}
+                          </div>
+                        </td>
+                      </tr>
+                      {isEdit && (
+                        <tr className="bg-bg/60">
+                          <td colSpan={8} className="px-5 py-4">
+                            <div className="grid grid-cols-6 gap-3">
+                              <Field label="单价 (¥)"><input type="number" step="0.01" min="0" value={draft.price} onChange={event => setDraft({ ...draft, price: event.target.value })} className={INPUT_CLS} /></Field>
+                              <Field label="规格"><input type="text" value={draft.spec} maxLength={80} onChange={event => setDraft({ ...draft, spec: event.target.value })} className={INPUT_CLS} /></Field>
+                              <Field label={`起订量 (${product.unit})`}><input type="number" step="0.01" min="0.01" value={draft.moq} onChange={event => setDraft({ ...draft, moq: event.target.value })} className={INPUT_CLS} /></Field>
+                              <Field label="实发百分比上限"><input type="number" step="0.01" min="1" max="10" value={draft.shipPct} onChange={event => setDraft({ ...draft, shipPct: event.target.value })} className={INPUT_CLS} /></Field>
+                              <Field label={`实发加量上限 (${product.unit})`}><input type="number" step="0.01" min="0" max="10000" value={draft.shipBuf} onChange={event => setDraft({ ...draft, shipBuf: event.target.value })} className={INPUT_CLS} /></Field>
+                              <div className="flex items-end justify-end gap-2">
+                                <label className="cursor-pointer px-3 py-2 text-button text-accent">
+                                  {uploadingId === product.id ? '上传中…' : '更换图片'}
+                                  <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" disabled={uploadingId === product.id} onChange={event => { const file = event.target.files?.[0]; if (file) void uploadProductImage(product, file); event.target.value = '' }} />
+                                </label>
+                                <button type="button" onClick={cancelEdit} className="px-3 py-2 text-button text-gray3">取消</button>
+                                <button type="button" onClick={() => save(product)} disabled={submitting} className="rounded-cta bg-accent px-4 py-2 text-button text-white disabled:opacity-50">保存</button>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
+              </tbody>
+            </table>
+            {desktopRows.length === 0 && <div className="p-10 text-center text-caption text-gray3">当前筛选条件没有商品</div>}
+          </div>
+        </section>
+      )}
+
+      <div className="lg:hidden">
       {products && categorySections.map(([cat, items]) => (
         <section key={cat} className="px-4 mt-4">
           <h2 className="text-h2 mb-2">{cat}<span className="text-caption text-gray3 ml-2">({items.length})</span></h2>
@@ -626,6 +751,7 @@ export default function SupplierProductsPage() {
           </ul>
         </section>
       ))}
+      </div>
 
       <BottomNav
         tabs={[

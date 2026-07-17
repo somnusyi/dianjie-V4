@@ -16,6 +16,7 @@ type Product  = { id: string; name: string; unit: string; price: string; supplie
                   spec?: string | null; category?: string | null; code?: string
                   minOrderQty?: string | number; stepQty?: string | number
                   stock?: string | number | null
+                  physicalStock?: number; reservedStock?: number; availableStock?: number
                   status?: string  /* ENABLED / DISABLED / PENDING_APPROVAL / PENDING_DISABLE */ }
 type LineItem = { productId: string; quantity: number; unitPrice: number }
 
@@ -383,7 +384,7 @@ export default function ChefPONewPage() {
               {filteredProducts.map(p => {
                 const picked = items.find(i => i.productId === p.id)
                 const qty = picked?.quantity || 0
-                const stockNum = Number(p.stock || 0)
+                const stockNum = Number(p.availableStock ?? p.stock ?? 0)
                 const outOfStock = stockNum <= 0
                 // 商品状态: 供应商下架 / 待审批的 SKU 不可加入采购单 (server 端 orders.ts:298 兜底拦)
                 const notOrderable = p.status != null && p.status !== 'ENABLED'
@@ -407,7 +408,11 @@ export default function ChefPONewPage() {
                           <span className="text-micro px-1.5 py-0.5 bg-red-50 text-red-600 rounded-chip whitespace-nowrap">⚠ 供应商断货</span>
                         )}
                       </div>
-                      <div className="text-micro text-gray3 font-num">¥{Number(p.price).toFixed(2)} / {p.unit}{qty > 0 && <span className="text-amber-fg ml-2">小计 ¥{(qty * Number(p.price)).toFixed(2)}</span>}</div>
+                      <div className="text-micro text-gray3 font-num">
+                        ¥{Number(p.price).toFixed(2)} / {p.unit} · 可用 {stockNum}
+                        {(p.reservedStock || 0) > 0 && <span className="text-amber-fg">（已占 {p.reservedStock}）</span>}
+                        {qty > 0 && <span className="text-amber-fg ml-2">小计 ¥{(qty * Number(p.price)).toFixed(2)}</span>}
+                      </div>
                     </div>
                     {notOrderable ? (
                       qty > 0 ? (

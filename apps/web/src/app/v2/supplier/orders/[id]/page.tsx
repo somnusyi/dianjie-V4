@@ -8,6 +8,13 @@
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { apiFetch } from '@/lib/v2-auth'
+import {
+  SUPPLIER_MONEY_TERMS,
+  supplierLossClaimKindMeta,
+  supplierLossClaimResponsibility,
+  supplierLossClaimSettlementHint,
+  supplierOrderStatusMeta,
+} from '@/lib/supplier-domain'
 import { Chip, ProgressDots } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import dayjs from 'dayjs'
@@ -45,32 +52,18 @@ type Order = {
   }[]
   lossClaims?: {
     id: string; no: string; status: string
+    kind?: string | null
+    payableBasis?: string | null
     totalLossAmount: string; description: string
+    deliveryOrder?: { id: string; no: string } | null
+    receipt?: { id: string; no: string } | null
     evidenceImages?: string[] | null
     handlerNote?: string | null
     createdAt?: string
     items: { product: { name: string; unit?: string }; lossQty: string; lossAmount: string }[]
   }[]
   receipt?: { id: string; no: string } | null
-}
-
-const STATUS_LABEL: Record<string, string> = {
-  SUBMITTED: '待接单', CONFIRMED: '已接单 待发货', DELIVERING: '配送中 (在途)',
-  PENDING_CONFIRM: '已送达 (24h 内门店未确认自动收货)', RECEIVED: '已收货', COMPLETED: '已完成',
-  CANCELED: '已取消',
-}
-const STATUS_TONE: Record<string, 'red' | 'orange' | 'gray' | 'green'> = {
-  SUBMITTED: 'red', CONFIRMED: 'orange', DELIVERING: 'orange',
-  PENDING_CONFIRM: 'orange', RECEIVED: 'green', COMPLETED: 'green', CANCELED: 'gray',
-}
-// currentIndex = 已完成步骤数 (已完成 ✓, 当前 highlighted)
-// 5 步: 已发起=步0, 接单=步1, 在途=步2, 送达=步3, 门店已收=步4
-const STATUS_TO_STEP: Record<string, number> = {
-  SUBMITTED: 1,        // 已发起 ✓ 接单 current
-  CONFIRMED: 2,        // 接单 ✓ 在途 current
-  DELIVERING: 3,       // 在途 ✓ 送达 current
-  PENDING_CONFIRM: 4,  // 送达 ✓ 已收 current
-  RECEIVED: 5, COMPLETED: 5,
+  receipts?: { id: string; no: string; totalAmount: string; status: string }[]
 }
 
 export default function SupplierOrderDetailPage() {
@@ -275,11 +268,16 @@ export default function SupplierOrderDetailPage() {
   }
   if (!order) return null
 
-  const step = STATUS_TO_STEP[order.status] ?? 0
-  const tone = STATUS_TONE[order.status] || 'gray'
+  const status = supplierOrderStatusMeta(order.status)
+  const step = status.progressStep
+  const tone = status.tone
   const pendingRevision = order.revisions?.find(revision => revision.status === 'PENDING')
   const originalAmount = Number(order.originalTotalAmount ?? order.totalAmount)
   const currentOrderAmount = Number(order.currentOrderAmount ?? order.originalTotalAmount ?? order.totalAmount)
+  const shipmentAmount = (order.deliveries || [])
+    .filter(delivery => delivery.status !== 'CANCELLED')
+    .reduce((sum, delivery) => sum + Number(delivery.actualTotalAmount || 0), 0)
+  const receivedAmount = (order.receipts || []).reduce((sum, receipt) => sum + Number(receipt.totalAmount || 0), 0)
 
   return (
     <div className="min-h-screen bg-bg pb-32">
@@ -291,7 +289,7 @@ export default function SupplierOrderDetailPage() {
           className="px-3 py-1.5 rounded-cta border border-border bg-white text-button text-gray2 whitespace-nowrap"
           title="打开打印 / 导出 PDF 页面"
         >🖨 送货单</button>
-        <Chip tone={tone}>{STATUS_LABEL[order.status] || order.status}</Chip>
+        <Chip tone={tone}>{status.detailLabel}</Chip>
       </header>
 
       {/* 主信息 */}
@@ -299,7 +297,7 @@ export default function SupplierOrderDetailPage() {
         <div className="text-micro text-gray3 font-num">#{order.no}</div>
         <div className="flex items-baseline justify-between mt-1">
           <span className="text-h2">{order.store.name}</span>
-          <span className="font-num text-h1">¥{currentOrderAmount.toLocaleString()}</span>
+          <span className="text-right"><span className="text-micro text-gray3 block">{SUPPLIER_MONEY_TERMS.orderedAmount}</span><span className="font-num text-h1">¥{currentOrderAmount.toLocaleString()}</span></span>
         </div>
         {order.store.address && <div className="text-micro text-gray3 mt-1">📍 {order.store.address}</div>}
         <div className="text-caption text-gray2 mt-2">
@@ -315,6 +313,21 @@ export default function SupplierOrderDetailPage() {
             原始订货 ¥{originalAmount.toLocaleString()} · 当前第 {order.currentRevisionNo} 版 ¥{currentOrderAmount.toLocaleString()}
           </div>
         )}
+        <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-border">
+          <div>
+            <div className="text-micro text-gray3">{SUPPLIER_MONEY_TERMS.orderedAmount}</div>
+            <div className="font-num text-caption">¥{currentOrderAmount.toLocaleString()}</div>
+          </div>
+          <div>
+            <div className="text-micro text-gray3">{SUPPLIER_MONEY_TERMS.shipmentAmount}</div>
+            <div className="font-num text-caption">{shipmentAmount > 0 ? `¥${shipmentAmount.toLocaleString()}` : '—'}</div>
+          </div>
+          <div>
+            <div className="text-micro text-gray3">{SUPPLIER_MONEY_TERMS.payableAmount}</div>
+            <div className="font-num text-caption">{receivedAmount > 0 ? `¥${receivedAmount.toLocaleString()}` : '—'}</div>
+          </div>
+        </div>
+        <p className="text-micro text-gray3 mt-2">订货按已确认订单；实发按配送单；应付按门店实收入库单，三者不混用。</p>
       </div>
 
       {/* 改单审批状态与历史 */}
@@ -405,11 +418,12 @@ export default function SupplierOrderDetailPage() {
         </ul>
       </div>
 
-      {/* 报损 — 显示完整明细 + 证据图 + 处理按钮(供应商) */}
+      {/* 到货差异 — 显示履约链、完整明细、证据与处理按钮 */}
       {(order.lossClaims?.length ?? 0) > 0 && (
         <div className="mx-4 mt-3 bg-red-bg/40 rounded-card border border-red/30 p-3">
-          <div className="text-h2 text-red-fg mb-2">⚠ 报损 {order.lossClaims!.length} 条</div>
+          <div className="text-h2 text-red-fg mb-2">⚠ 到货差异 {order.lossClaims!.length} 条</div>
           {order.lossClaims!.map(c => {
+            const kind = supplierLossClaimKindMeta(c.kind)
             const statusLabel = ({
               PENDING: '待处理', APPROVED: '已同意', AUTO_APPROVED: '24h 自动同意',
               REJECTED: '已拒绝', RESOLVED: '总厨已仲裁', NEGOTIATING: '协商中',
@@ -420,13 +434,19 @@ export default function SupplierOrderDetailPage() {
               <div key={c.id} className="bg-white rounded-cta p-3 mt-2 first:mt-0 border border-red/20">
                 <div className="flex items-baseline gap-2 mb-1">
                   <Chip tone={statusTone as any}>{statusLabel}</Chip>
+                  <Chip tone="blue">{kind.label}</Chip>
                   <span className="text-caption text-gray3 font-num">#{c.no}</span>
                   <span className="ml-auto font-num text-h2 text-red-fg">−¥{Number(c.totalLossAmount).toLocaleString()}</span>
                 </div>
                 {c.description && <div className="text-caption text-gray2 mt-1">{c.description}</div>}
+                <div className="mt-2 grid grid-cols-1 lg:grid-cols-3 gap-1 text-micro text-gray3">
+                  <span>责任节点：{supplierLossClaimResponsibility(c.status)}</span>
+                  <span>配送单：{c.deliveryOrder?.no || '历史未关联'}</span>
+                  <span>收货单：{c.receipt?.no || '历史未关联'}</span>
+                </div>
                 <ul className="mt-2 text-micro text-gray2 space-y-0.5">
                   {c.items.map((ci, i) => (
-                    <li key={i}>· {ci.product.name} 短缺 <b className="font-num text-red-fg">{ci.lossQty}{ci.product.unit || ''}</b> = ¥{Number(ci.lossAmount).toLocaleString()}</li>
+                    <li key={i}>· {ci.product.name} {kind.quantityLabel} <b className="font-num text-red-fg">{ci.lossQty}{ci.product.unit || ''}</b> = ¥{Number(ci.lossAmount).toLocaleString()}</li>
                   ))}
                 </ul>
                 {/* 证据图 */}
@@ -451,6 +471,10 @@ export default function SupplierOrderDetailPage() {
                 {c.handlerNote && (
                   <p className="text-micro text-amber-fg mt-2">已处理: {c.handlerNote}</p>
                 )}
+                <a
+                  href={`/v2/loss-claims/${c.id}/print`}
+                  className="mt-3 w-full py-2 rounded-cta border border-ink text-ink text-button flex items-center justify-center"
+                >查看并打印差异单</a>
                 {/* 处理按钮 — 仅 PENDING 状态可操作 */}
                 {c.status === 'PENDING' && (
                   <div className="flex gap-2 mt-3 pt-2 border-t border-border">
@@ -460,14 +484,14 @@ export default function SupplierOrderDetailPage() {
                         setRejectNote('')
                       }}
                       className="flex-1 py-2 border border-red text-red-fg rounded-cta text-button">
-                      拒绝 (送总厨仲裁)
+                      提出异议 (送总厨仲裁)
                     </button>
                     <button
                       onClick={() => {
                         openConfirm({
-                          title: `同意报损 ¥${Number(c.totalLossAmount).toFixed(2)}?`,
-                          body: `通过后系统自动从应付账期里扣减, 你少收 ¥${Number(c.totalLossAmount).toFixed(2)}`,
-                          confirmLabel: '同意',
+                          title: `${kind.supplierActionLabel} ¥${Number(c.totalLossAmount).toFixed(2)}`,
+                          body: supplierLossClaimSettlementHint(c.payableBasis),
+                          confirmLabel: kind.supplierActionLabel,
                           tone: 'primary',
                           onConfirm: async () => {
                             try {
@@ -481,7 +505,7 @@ export default function SupplierOrderDetailPage() {
                         })
                       }}
                       className="flex-1 py-2 bg-ink text-white rounded-cta text-button">
-                      同意 (扣账期)
+                      {kind.supplierActionLabel}
                     </button>
                   </div>
                 )}

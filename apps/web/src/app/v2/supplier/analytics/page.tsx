@@ -17,12 +17,18 @@ type SkuRank = {
   price?: number
 }
 type Trend = { month: string; revenue: number; orders: number }
+type Audit = {
+  checkedAt: string
+  summary: { errors: number; warnings: number; products: number; activeReservations: number; deliveries: number; receipts: number }
+  issues: { code: string; severity: 'ERROR'|'WARNING'; entityType: string; entityId: string; label: string; detail: string }[]
+}
 
 export default function SupplierAnalyticsPage() {
   const router = useRouter()
   const [rank, setRank] = useState<{ top: SkuRank[]; bottom: SkuRank[]; periodDays: number } | null>(null)
   const [trend, setTrend] = useState<Trend[] | null>(null)
   const [days, setDays] = useState(30)
+  const [audit, setAudit] = useState<Audit | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   function load() {
@@ -30,6 +36,8 @@ export default function SupplierAnalyticsPage() {
       .then(setRank).catch(e => setError(e.message || '加载失败'))
     apiFetch<Trend[]>(`/api/supplier/insights/sales-trend?months=6`)
       .then(setTrend).catch(() => setTrend([]))
+    apiFetch<Audit>('/api/supplier/insights/audit?days=90')
+      .then(setAudit).catch(() => setAudit(null))
   }
   useEffect(() => { load() }, [days])
 
@@ -49,6 +57,31 @@ export default function SupplierAnalyticsPage() {
         <h1 className="text-h1 flex-1">销售分析</h1>
       </header>
       <p className="px-4 mt-1 text-micro text-gray3">看清你卖了啥, 决定下个月备啥货</p>
+
+      {audit && (
+        <Section title="数据健康" right={audit.summary.errors > 0 ? `${audit.summary.errors} 项错误` : audit.summary.warnings > 0 ? `${audit.summary.warnings} 项提醒` : '全部正常'}>
+          <div className={`rounded-card border p-3 ${audit.summary.errors > 0 ? 'bg-red-bg border-red/30' : audit.summary.warnings > 0 ? 'bg-amber/10 border-amber/30' : 'bg-white border-border'}`}>
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">{audit.summary.errors > 0 ? '⚠' : audit.summary.warnings > 0 ? '◐' : '✓'}</span>
+              <div className="flex-1">
+                <div className="text-body">库存预占、配送金额、实收与应付自动核查</div>
+                <div className="text-micro text-gray3 mt-0.5">近 90 天 · {audit.summary.deliveries} 配送 · {audit.summary.receipts} 入库</div>
+              </div>
+            </div>
+            {audit.issues.length > 0 && (
+              <ul className="mt-3 space-y-2 border-t border-current/10 pt-3">
+                {audit.issues.slice(0, 8).map(issue => (
+                  <li key={`${issue.code}-${issue.entityId}`} className="text-caption">
+                    <b className={issue.severity === 'ERROR' ? 'text-red-fg' : 'text-amber-fg'}>{issue.label}</b>
+                    <span className="text-gray2"> · {issue.detail}</span>
+                  </li>
+                ))}
+                {audit.issues.length > 8 && <li className="text-micro text-gray3">另有 {audit.issues.length - 8} 项，请联系管理员导出完整审计。</li>}
+              </ul>
+            )}
+          </div>
+        </Section>
+      )}
 
       {/* 月度趋势 */}
       <Section title="月度销售趋势" right="近 6 月">

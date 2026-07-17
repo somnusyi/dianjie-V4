@@ -32,6 +32,7 @@ const TYPE_LABEL: Record<string, string> = {
   PURCHASE_NON_FOOD: '采购', REIMBURSEMENT: '报销',
   PRICE_ADJUSTMENT: '调价', NEW_SUPPLIER: '新供应商',
   NEW_DISH: '新菜品', CONTRACT: '合同',
+  SUPPLIER_OFFER_CREATE: '商品上架', SUPPLIER_OFFER_DISABLE: '商品停售',
   STORE_TRANSFER: '调拨', PETTY_CASH: '备用金',
   MARKETING_BUDGET: '营销', PERSONNEL_PAY: '人事',
 }

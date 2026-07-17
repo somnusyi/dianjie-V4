@@ -11,3 +11,9 @@ body {
 
 /* tabular-nums 让数字列宽度一致（HERO 大数字 / KPI / 表格） */
 .font-num { font-variant-numeric: tabular-nums; }
+
+/* 供应商以电脑端为主：宽屏使用统一侧边栏，手机端继续保留页面底部快捷导航。 */
+@media (min-width: 1024px) {
+  .supplier-portal [data-bottom-nav='true'] { display: none; }
+  .supplier-portal > main > div > .min-h-screen { border-radius: 16px; overflow: hidden; }
+}

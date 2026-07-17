@@ -5,6 +5,7 @@ import { processPendingOrders } from '../../../src/services/meituan/processor'
 const STORE_ID = 'test-store-meituan'
 const TENANT_ID = 'test-tenant-meituan'
 const TEST_ORG_ID = 1076686
+const TEST_ORDER_IDS = ['a1', 'a2']
 
 async function setupStore() {
   await prisma.tenant.upsert({
@@ -61,8 +62,8 @@ function makeMtOrder(opts: {
 describe('processPendingOrders (integration)', () => {
   beforeEach(async () => {
     await setupStore()
-    await prisma.mtOrderItem.deleteMany({})
-    await prisma.mtOrderPayment.deleteMany({})
+    await prisma.mtOrderItem.deleteMany({ where: { mtOrderId: { in: TEST_ORDER_IDS } } })
+    await prisma.mtOrderPayment.deleteMany({ where: { mtOrderId: { in: TEST_ORDER_IDS } } })
     await prisma.mtOrder.deleteMany({ where: { orgId: TEST_ORG_ID } })
     await prisma.revenueRecord.deleteMany({ where: { storeId: STORE_ID } })
   })

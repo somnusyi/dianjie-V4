@@ -113,6 +113,7 @@ export default function ImportSnapshotPage() {
       <div className="mx-4 mt-2 bg-bg-warm border border-border rounded-card p-3 text-caption text-gray2">
         <p>本功能用于<b>首次系统化 / 月末盘点 / 第三方系统迁移</b> — 把整批库存一次性导入。</p>
         <p className="mt-1">日常到货增量请走「<a href="/v2/supplier/inventory/inbound" className="text-amber-fg underline">↓ 入库</a>」。</p>
+        <p className="mt-1 text-amber-fg">导入只能调整已建档 SKU；未知品名会阻止整批写入，请先在商品档案完成建档与审批。</p>
         <p className="mt-1 text-micro text-gray3">Excel 列名（必填）: 物品名称 / 品项名称 + 库存量 / 数量。可选: 规格 / 类别 / 单位</p>
       </div>
 
@@ -162,13 +163,12 @@ export default function ImportSnapshotPage() {
           <div className="text-h2">✓ 导入完成</div>
           <ul className="mt-2 space-y-0.5">
             <li>· 总行数: <b className="font-num">{result.summary.total}</b></li>
-            <li>· 新建 SKU: <b className="font-num">{result.summary.created}</b></li>
             <li>· 调整库存: <b className="font-num">{result.summary.adjusted}</b></li>
             <li>· 已是目标值跳过: <b className="font-num">{result.summary.skipped}</b></li>
             {result.summary.failed > 0 && <li className="text-red-fg">· 失败: <b className="font-num">{result.summary.failed}</b></li>}
           </ul>
           <a href="/v2/supplier/inventory" className="block mt-3 py-2 bg-amber text-white rounded-cta text-button text-center">回到库存总览</a>
-          <p className="mt-2 text-micro text-gray3">⚠ 自动新建的 SKU 价格为 0, 请去「商品报价表」单条改价。</p>
+          <p className="mt-2 text-micro text-gray3">本次只调整已建档 SKU，不会自动新建可订商品。</p>
         </div>
       )}
 

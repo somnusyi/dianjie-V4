@@ -2,6 +2,8 @@ import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
+import { requireSupplierCapability } from '../lib/supplier-access'
+import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 
 const listQuerySchema = z.object({
   status: z.enum(['DRAFT', 'SHIPPED', 'DELIVERED', 'RECEIVED', 'CANCELLED']).optional(),
@@ -27,7 +29,7 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
     const where: any = { tenantId }
     if (isStoreScoped(role)) where.storeId = actorStoreId
     else if (q.storeId) where.storeId = q.storeId
-    if (isSupplierRole(role)) where.supplierId = actorSupplierId
+    if (isSupplierRole(role)) where.supplierId = requireSupplierCapability(role, actorSupplierId, 'order.read')
     else if (q.supplierId) where.supplierId = q.supplierId
     if (q.status) where.status = q.status
     const and: any[] = []
@@ -75,14 +77,20 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
       }),
       prisma.deliveryOrder.count({ where }),
     ])
-    return { items, total, page: q.page, pageSize: q.pageSize }
+    return {
+      items: items.map(delivery => ({
+        ...delivery,
+        items: delivery.items.map(withDocumentProductSnapshot),
+      })),
+      total, page: q.page, pageSize: q.pageSize,
+    }
   })
 
   app.get('/:id', { preHandler: [(app as any).authenticate] }, async (req: any) => {
     const { tenantId, role, storeId, supplierId } = req.user
     const where: any = { id: req.params.id, tenantId }
     if (isStoreScoped(role)) where.storeId = storeId
-    if (isSupplierRole(role)) where.supplierId = supplierId
+    if (isSupplierRole(role)) where.supplierId = requireSupplierCapability(role, supplierId, 'order.read')
     const delivery = await prisma.deliveryOrder.findFirst({
       where,
       include: {
@@ -98,6 +106,13 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
       },
     })
     if (!delivery) throw { statusCode: 404, message: '配送单不存在' }
-    return delivery
+    return {
+      ...delivery,
+      items: delivery.items.map(withDocumentProductSnapshot),
+      receipt: delivery.receipt ? {
+        ...delivery.receipt,
+        items: delivery.receipt.items.map(withDocumentProductSnapshot),
+      } : null,
+    }
   })
 }

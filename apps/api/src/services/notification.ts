@@ -153,13 +153,13 @@ export function notifyReceiptConfirmed(tenantId: string, receiptNo: string, stor
 }
 
 export function notifyLossClaimResult(tenantId: string, claimNo: string, action: 'approve' | 'reject', amount: number) {
-  const label = action === 'approve' ? '已同意' : '已拒绝'
+  const label = action === 'approve' ? '已确认' : '已提出异议'
   return sendNotification({
     tenantId,
     recipientRole: 'MANAGER',
     type: 'LOSS_CLAIM_RESULT',
-    title: `报损${label}`,
-    body: `供应商${label}报损 ${claimNo}，金额 ¥${amount.toLocaleString()}`,
+    title: `到货差异${label}`,
+    body: `供应商${label}到货差异 ${claimNo}，涉及 ¥${amount.toLocaleString()}`,
     refType: 'LossClaim',
   })
 }

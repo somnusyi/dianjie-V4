@@ -1,23 +1,34 @@
 /**
  * 供应商 App · 订单 Tab  PDF: supplier_order_list_and_detail
  * 接真实 GET /api/orders (后端按 supplierId 自动过滤)
- * 「发货」按钮 → PATCH /api/orders/:id/ship
+ * 发货必须进入详情页逐项核对实发数量。
  */
 'use client'
 import { useEffect, useState } from 'react'
 import { BottomNav, Chip, ProgressDots } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch } from '@/lib/v2-auth'
+import {
+  SUPPLIER_MONEY_TERMS,
+  supplierDeliveryStatusMeta,
+  supplierLossClaimKindMeta,
+  supplierLossClaimResponsibility,
+  supplierLossClaimSettlementHint,
+  supplierOrderStatusMeta,
+} from '@/lib/supplier-domain'
 import dayjs from 'dayjs'
 
 type Order = {
   id: string; no: string; status: string
   totalAmount: string
+  originalTotalAmount?: string | null; currentOrderAmount?: string | null
   expectedDate: string; createdAt: string
   shippedAt: string | null
   store: { id: string; name: string }
   items: { id: string; quantity: string; unitPrice: string; product?: { name: string; unit: string } }[]
   lossClaims?: { id: string; status: string; totalLossAmount: string }[]
+  deliveries?: { id: string; status: string; actualTotalAmount: string }[]
+  receipts?: { id: string; status: string; totalAmount: string }[]
 }
 
 type Delivery = {
@@ -35,21 +46,17 @@ type Delivery = {
 type SearchCriteria = { keyword: string; dateFrom: string; dateTo: string }
 const EMPTY_SEARCH: SearchCriteria = { keyword: '', dateFrom: '', dateTo: '' }
 
-const STATUS_TO_STEP: Record<string, number> = {
-  SUBMITTED: 0, CONFIRMED: 1, DELIVERING: 2,
-  PENDING_CONFIRM: 3, RECEIVED: 4, COMPLETED: 4,
-}
-const STATUS_TONE: Record<string, 'red' | 'orange' | 'gray' | 'green'> = {
-  SUBMITTED: 'red', CONFIRMED: 'orange', DELIVERING: 'orange',
-  PENDING_CONFIRM: 'orange', RECEIVED: 'green', COMPLETED: 'green',
-}
-
 type LossClaim = {
   id: string; no: string; status: string
+  kind?: string | null
+  payableBasis?: string | null
   totalLossAmount: string; description: string; createdAt: string
+  handlerNote?: string | null
   store: { name: string }
   purchaseOrder: { id: string; no: string; totalAmount?: string }
   purchaseOrderId?: string
+  deliveryOrder?: { id: string; no: string } | null
+  receipt?: { id: string; no: string } | null
   items: { product: { name: string; unit: string; spec?: string | null }; orderedQty: string; receivedQty: string; lossQty: string; lossAmount: string }[]
 }
 
@@ -70,11 +77,12 @@ export default function SupplierOrdersPage() {
   const [searchDraft, setSearchDraft] = useState<SearchCriteria>(EMPTY_SEARCH)
   const [appliedSearch, setAppliedSearch] = useState<SearchCriteria>(EMPTY_SEARCH)
   // 2026-06-02: 支持 URL ?filter=报损 等 (从 billing 页报损 banner 跳过来直接进对应 filter)
-  const [filter, setFilter] = useState<'待接单' | '待发货' | '运送中' | '报损' | '已完成'>(() => {
+  const [filter, setFilter] = useState<'待接单' | '待发货' | '运送中' | '到货差异' | '已完成'>(() => {
     if (typeof window === 'undefined') return '待接单'
     const sp = new URLSearchParams(window.location.search)
-    const f = sp.get('filter') as any
-    return ['待接单', '待发货', '运送中', '报损', '已完成'].includes(f) ? f : '待接单'
+    const raw = sp.get('filter')
+    const f = raw === '报损' ? '到货差异' : raw
+    return ['待接单', '待发货', '运送中', '到货差异', '已完成'].includes(String(f)) ? f as any : '待接单'
   })
   const [confirmState, openConfirm] = useConfirmSheet()
 
@@ -180,38 +188,14 @@ export default function SupplierOrdersPage() {
     }
   }
 
-  function ship(o: Order) {
-    if (submitting) return
-    openConfirm({
-      title: `确认 ${o.store.name} 已发货？`,
-      body: `订单 #${o.no} · 金额 ¥${Number(o.totalAmount).toLocaleString()}\n发货后 24h 内餐厅未确认将自动收货。`,
-      confirmLabel: '确认发货',
-      tone: 'primary',
-      onConfirm: async () => {
-        setSubmitting(o.id)
-        try {
-          await apiFetch(`/api/orders/${o.id}/ship`, {
-            method: 'PATCH',
-            body: JSON.stringify({ note: '已按时发出' }),
-          })
-          await Promise.all([load(), loadDeliveries()])
-        } catch (e: any) {
-          alert(e.message || '发货失败')
-          throw e
-        } finally {
-          setSubmitting(null)
-        }
-      },
-    })
-  }
-
   function handleClaim(c: LossClaim, action: 'approve' | 'reject') {
     if (submitting) return
+    const kind = supplierLossClaimKindMeta(c.kind)
     if (action === 'reject') {
       openConfirm({
-        title: `拒绝报损 ${c.no}`,
-        body: '请简述拒绝原因，将通知餐厅。',
-        confirmLabel: '拒绝',
+        title: `对 ${c.no} 提出异议`,
+        body: '请填写异议依据。提交后由总厨仲裁，相关应付会保持冻结。',
+        confirmLabel: '提交异议',
         tone: 'danger',
         withInput: true,
         inputRequired: true,
@@ -234,16 +218,16 @@ export default function SupplierOrdersPage() {
       })
     } else {
       openConfirm({
-        title: `同意扣款 ¥${Number(c.totalLossAmount).toFixed(2)}`,
-        body: '此金额将从下次账期中扣减。',
-        confirmLabel: '同意扣款',
+        title: `${kind.supplierActionLabel} ¥${Number(c.totalLossAmount).toFixed(2)}`,
+        body: supplierLossClaimSettlementHint(c.payableBasis),
+        confirmLabel: kind.supplierActionLabel,
         tone: 'primary',
         onConfirm: async () => {
           setSubmitting(c.id)
           try {
             await apiFetch(`/api/loss-claims/${c.id}/handle`, {
               method: 'PATCH',
-              body: JSON.stringify({ action: 'approve', note: '已确认报损属实' }),
+              body: JSON.stringify({ action: 'approve', note: `已确认${kind.label}` }),
             })
             await load()
           } catch (e: any) {
@@ -320,29 +304,29 @@ export default function SupplierOrdersPage() {
         </div>
       </form>
 
-      {/* 报损待处理 banner（仅 PENDING 数量 > 0 时显示，强制提醒）*/}
-      {documentView === 'orders' && pendingClaims.length > 0 && filter !== '报损' && (
+      {/* 到货差异待处理 banner（仅 PENDING 数量 > 0 时显示，强制提醒）*/}
+      {documentView === 'orders' && pendingClaims.length > 0 && filter !== '到货差异' && (
         <button
-          onClick={() => setFilter('报损')}
+          onClick={() => { location.href = '/v2/supplier/differences' }}
           className="mx-4 mt-2 w-[calc(100%-32px)] bg-red-bg border border-red/30 rounded-card p-3 flex items-center gap-3 text-left"
         >
           <span className="w-9 h-9 rounded-md bg-red text-white flex items-center justify-center text-h2">⚠</span>
           <div className="flex-1">
-            <div className="text-h2 text-red-fg">{pendingClaims.length} 笔报损待处理</div>
-            <p className="text-micro text-red-fg">总损失 ¥{pendingClaims.reduce((s, c) => s + Number(c.totalLossAmount || 0), 0).toFixed(2)} · 24h 未响应自动同意</p>
+            <div className="text-h2 text-red-fg">{pendingClaims.length} 笔到货差异待确认</div>
+            <p className="text-micro text-red-fg">涉及 ¥{pendingClaims.reduce((s, c) => s + Number(c.totalLossAmount || 0), 0).toFixed(2)} · 24h 未响应自动确认</p>
           </div>
           <span className="text-red-fg">›</span>
         </button>
       )}
 
       {documentView === 'orders' && <div className="px-4 mt-2 flex gap-2 overflow-x-auto">
-        {(['待接单', '待发货', '运送中', '报损', '已完成'] as const).map((f) => {
-          const cnt = f === '报损'
+        {(['待接单', '待发货', '运送中', '到货差异', '已完成'] as const).map((f) => {
+          const cnt = f === '到货差异'
             ? pendingClaims.length
             : (orders || []).filter(o => statusInTab(o.status, f)).length
-          const isUrgent = (f === '待接单' || f === '报损') && cnt > 0
+          const isUrgent = (f === '待接单' || f === '到货差异') && cnt > 0
           return (
-            <button key={f} onClick={() => setFilter(f)}
+            <button key={f} onClick={() => f === '到货差异' ? location.href = '/v2/supplier/differences' : setFilter(f)}
               className={`shrink-0 px-3 py-1.5 rounded-cta text-button relative ${filter === f ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
               <span>{f}</span>
               {cnt > 0 && <span className={`font-num ml-1 ${filter === f ? '' : isUrgent ? 'text-red-fg' : 'text-gray3'}`}>{cnt}</span>}
@@ -354,11 +338,12 @@ export default function SupplierOrdersPage() {
 
       {error && <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}
 
-      {/* 报损 tab 内容 — 显示全部历史报损,PENDING 在最上 */}
-      {documentView === 'orders' && filter === '报损' && (() => {
+      {/* 到货差异工作台 — 显示全部历史记录，PENDING 在最上 */}
+      {documentView === 'orders' && filter === '到货差异' && (() => {
         const claimStatusMeta: Record<string, { label: string; tone: 'red' | 'gray' | 'orange' | 'blue' | 'green'; barClass: string }> = {
           PENDING:     { label: '待处理',     tone: 'red',    barClass: 'before:bg-red' },
           APPROVED:    { label: '已同意',     tone: 'gray',   barClass: 'before:bg-gray4' },
+          AUTO_APPROVED: { label: '超时自动确认', tone: 'gray', barClass: 'before:bg-gray4' },
           REJECTED:    { label: '已拒绝·待总厨', tone: 'orange', barClass: 'before:bg-orange' },
           NEGOTIATING: { label: '协商中',     tone: 'orange', barClass: 'before:bg-orange' },
           RESOLVED:    { label: '总厨已仲裁', tone: 'blue',   barClass: 'before:bg-gray4' },
@@ -371,16 +356,18 @@ export default function SupplierOrdersPage() {
         return (
           <ul className="px-4 mt-3 space-y-2">
             {sorted.length === 0 && (
-              <li className="text-caption text-gray3 text-center py-12">暂无报损记录</li>
+              <li className="text-caption text-gray3 text-center py-12">暂无到货差异记录</li>
             )}
             {sorted.map(c => {
               const meta = claimStatusMeta[c.status] || { label: c.status, tone: 'gray' as const, barClass: 'before:bg-gray4' }
               const isPending = c.status === 'PENDING'
+              const kind = supplierLossClaimKindMeta(c.kind)
               return (
                 <li key={c.id} className={`relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full ${meta.barClass}`}>
                   <a href={`/v2/supplier/orders/${c.purchaseOrder.id || c.purchaseOrderId}`} className="block">
                     <div className="flex items-center gap-2 mb-1">
                       <Chip tone={meta.tone}>{meta.label}</Chip>
+                      <Chip tone="blue">{kind.label}</Chip>
                       <span className="text-micro text-gray3 ml-auto">{timeAgo(c.createdAt)}</span>
                     </div>
                     <div className="flex items-center justify-between">
@@ -388,15 +375,26 @@ export default function SupplierOrdersPage() {
                       <span className={`font-num text-h2 ${isPending ? 'text-red-fg' : 'text-gray2'}`}>−¥{Number(c.totalLossAmount).toFixed(2)}</span>
                     </div>
                     <p className="text-caption text-gray2 mt-0.5">{c.description}</p>
+                    <div className="mt-2 grid grid-cols-1 lg:grid-cols-3 gap-1 text-micro text-gray3">
+                      <span>责任节点：{supplierLossClaimResponsibility(c.status)}</span>
+                      <span>配送单：{c.deliveryOrder?.no || '历史未关联'}</span>
+                      <span>收货单：{c.receipt?.no || '历史未关联'}</span>
+                    </div>
                     <ul className="mt-2 text-micro text-gray2 space-y-0.5">
                       {(c.items || []).map((it, idx) => (
-                        <li key={idx}>· {it.product?.name}{it.product?.spec ? ` (${it.product.spec})` : ''}: 下 {it.orderedQty} 收 {it.receivedQty}{it.product?.unit || ''} · 损 ¥{Number(it.lossAmount).toFixed(2)}</li>
+                        <li key={idx}>· {it.product?.name}{it.product?.spec ? ` (${it.product.spec})` : ''}: 应到 {it.orderedQty} / 实收 {it.receivedQty}{it.product?.unit || ''} · {kind.quantityLabel} {it.lossQty} · ¥{Number(it.lossAmount).toFixed(2)}</li>
                       ))}
                     </ul>
-                    {(c as any).handlerNote && (
-                      <p className="text-micro text-gray3 mt-1.5">处理备注:{(c as any).handlerNote}</p>
+                    {c.handlerNote && (
+                      <p className="text-micro text-gray3 mt-1.5">处理备注：{c.handlerNote}</p>
                     )}
                     <p className="text-micro text-amber-fg mt-2">查看证据图 / 完整明细 ›</p>
+                  </a>
+                  <a
+                    href={`/v2/loss-claims/${c.id}/print`}
+                    className="mt-3 w-full py-2 rounded-cta border border-ink text-ink text-button flex items-center justify-center"
+                  >
+                    查看并打印差异单
                   </a>
                   {/* 操作按钮仅 PENDING 时显示 */}
                   {isPending && (
@@ -405,12 +403,12 @@ export default function SupplierOrdersPage() {
                         onClick={() => handleClaim(c, 'reject')}
                         disabled={submitting === c.id}
                         className="py-2 border border-red text-red rounded-cta text-button disabled:opacity-40"
-                      >拒绝</button>
+                      >提出异议</button>
                       <button
                         onClick={() => handleClaim(c, 'approve')}
                         disabled={submitting === c.id}
                         className="py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40"
-                      >{submitting === c.id ? '提交中…' : `同意扣款 · ¥${Number(c.totalLossAmount).toFixed(2)}`}</button>
+                      >{submitting === c.id ? '提交中…' : kind.supplierActionLabel}</button>
                     </div>
                   )}
                 </li>
@@ -424,7 +422,7 @@ export default function SupplierOrdersPage() {
                   disabled={loadingClaims}
                   className="w-full py-3 bg-white rounded-card border border-border text-caption text-amber-fg disabled:opacity-50"
                 >
-                  {loadingClaims ? '加载中…' : `加载更多报损 · 已显示 ${claims?.length || 0}/${claimsTotal}`}
+                  {loadingClaims ? '加载中…' : `加载更多差异 · 已显示 ${claims?.length || 0}/${claimsTotal}`}
                 </button>
               </li>
             )}
@@ -433,21 +431,29 @@ export default function SupplierOrdersPage() {
       })()}
 
       {/* 普通订单 tabs 内容 */}
-      {documentView === 'orders' && filter !== '报损' && (
+      {documentView === 'orders' && filter !== '到货差异' && (
       <ul className="px-4 mt-3 space-y-2">
         {visible.length === 0 && orders !== null && (
           <li className="text-caption text-gray3 text-center py-12">暂无{filter}订单</li>
         )}
         {visible.map(o => {
-          const tone = STATUS_TONE[o.status] || 'gray'
-          const stepIdx = STATUS_TO_STEP[o.status] ?? 0
+          const status = supplierOrderStatusMeta(o.status)
+          const tone = status.tone
+          const stepIdx = Math.max(0, status.progressStep - 1)
           const isToShip = o.status === 'SUBMITTED' || o.status === 'CONFIRMED'
+          const orderedAmount = Number(o.currentOrderAmount ?? o.originalTotalAmount ?? o.totalAmount)
+          const shippedAmount = (o.deliveries || []).reduce((sum, delivery) => sum + Number(delivery.actualTotalAmount || 0), 0)
+          const receivedAmount = (o.receipts || []).reduce((sum, receipt) => sum + Number(receipt.totalAmount || 0), 0)
+          const displayAmount = receivedAmount > 0 ? receivedAmount : shippedAmount > 0 ? shippedAmount : orderedAmount
+          const displayLabel = receivedAmount > 0
+            ? SUPPLIER_MONEY_TERMS.payableAmount
+            : shippedAmount > 0 ? SUPPLIER_MONEY_TERMS.shipmentAmount : SUPPLIER_MONEY_TERMS.orderedAmount
           return (
             <li key={o.id}
                 onClick={() => location.href = `/v2/supplier/orders/${o.id}`}
                 className={`relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full ${tone === 'red' ? 'before:bg-red' : tone === 'orange' ? 'before:bg-orange' : 'before:bg-gray4'} cursor-pointer hover:bg-bg-warm transition-colors`}>
               <div className="flex items-center gap-2 mb-1 flex-wrap">
-                <Chip tone={tone}>{statusLabel(o.status)}</Chip>
+                <Chip tone={tone}>{status.label}</Chip>
                 {isToShip && <Chip tone="red">需即办</Chip>}
                 {/* 已完成 tab 内的报损标识 */}
                 {(o.status === 'RECEIVED' || o.status === 'COMPLETED') && (o.lossClaims?.length ?? 0) > 0 && (
@@ -457,10 +463,10 @@ export default function SupplierOrdersPage() {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-h2">{o.store.name} <span className="text-micro text-gray3 font-num">#{o.no}</span></span>
-                <span className="font-num text-h2">¥{Number(o.totalAmount).toLocaleString()}</span>
+                <span className="font-num text-h2">¥{displayAmount.toLocaleString()}</span>
               </div>
               <p className="text-caption text-gray2 mt-0.5">
-                {o.items.length} 项 · 期望 {dayjs(o.expectedDate).format('MM/DD')}
+                {displayLabel} · {o.items.length} 项 · 期望 {dayjs(o.expectedDate).format('MM/DD')}
               </p>
               {!isToShip && (
                 <div className="mt-3">
@@ -482,10 +488,10 @@ export default function SupplierOrdersPage() {
               )}
               {o.status === 'CONFIRMED' && (
                 <div className="mt-3" onClick={e => e.stopPropagation()}>
-                  <button onClick={() => ship(o)} disabled={submitting === o.id}
-                    className="w-full py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40">
-                    {submitting === o.id ? '提交中…' : '确认发货'}
-                  </button>
+                  <a href={`/v2/supplier/orders/${o.id}`}
+                    className="block w-full py-2 bg-ink text-white rounded-cta text-button text-center">
+                    核对实发数量并发货
+                  </a>
                 </div>
               )}
             </li>
@@ -518,7 +524,7 @@ export default function SupplierOrdersPage() {
                 onClick={() => { location.href = `/v2/supplier/orders/${delivery.purchaseOrder.id}` }}
                 className="relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full before:bg-amber cursor-pointer hover:bg-bg-warm transition-colors">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
-                  <Chip tone={tone}>{deliveryStatusLabel(delivery.status)}</Chip>
+                  <Chip tone={tone}>{supplierDeliveryStatusMeta(delivery.status).label}</Chip>
                   <span className="font-num text-micro text-gray3">#{delivery.no}</span>
                   <span className="text-micro text-gray3 ml-auto">{dayjs(delivery.shippedAt || delivery.createdAt).format('YYYY/MM/DD HH:mm')}</span>
                 </div>
@@ -567,19 +573,6 @@ export default function SupplierOrdersPage() {
   )
 }
 
-function statusLabel(s: string) {
-  return ({
-    SUBMITTED: '待接单', CONFIRMED: '已接单',
-    DELIVERING: '配送中', PENDING_CONFIRM: '已送达',
-    RECEIVED: '已收货', COMPLETED: '已完成', CANCELLED: '已取消',
-  } as Record<string, string>)[s] || s
-}
-function deliveryStatusLabel(s: string) {
-  return ({
-    DRAFT: '草稿', SHIPPED: '已发货', DELIVERED: '已送达',
-    RECEIVED: '已收货', CANCELLED: '已取消',
-  } as Record<string, string>)[s] || s
-}
 function timeAgo(iso: string) {
   const min = Math.round((Date.now() - new Date(iso).getTime()) / 60000)
   if (min < 1) return '刚刚'

@@ -4,7 +4,7 @@ import { Prisma, prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { invalidatePattern } from '../lib/cache'
 import { notifyOrderSubmitted, notifyOrderShipped, notifyOrderConfirmed, notifyOrderRejected, sendNotification } from '../services/notification'
-import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
+import { isStoreScoped, isSupplierRole, requireSupplierBinding } from '../lib/auth-scope'
 import { resignOssUrls } from './upload'
 import { fireAndForget as notify } from '../services/notify'
 import {
@@ -18,6 +18,12 @@ import {
   sumOrderAmount,
   type OrderSnapshot,
 } from '../services/purchaseOrderIntegrity'
+import {
+  consumeSupplierStockForShipment,
+  releaseSupplierStockForOrder,
+  reserveSupplierStockForOrder,
+} from '../services/supplierStockReservation'
+import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
 const orderItemSchema = z.object({
@@ -53,7 +59,7 @@ const revisionReviewSchema = z.object({
 
 const deliveryShipSchema = z.object({
   note: z.string().trim().max(200).optional(),
-  idempotencyKey: z.string().trim().min(8).max(80).optional(),
+  idempotencyKey: z.string().trim().min(8).max(80),
   items: z.array(z.object({
     itemId: z.string().min(1),
     shippedQty: z.number().nonnegative(),
@@ -104,10 +110,12 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const q = parsed.data
     const where: any = { tenantId }
 
+    const scopedSupplierId = requireSupplierBinding(role, userSupplierId)
+
     // 门店级角色（店长/总厨/采购）只看自己门店
     if (isStoreScoped(role) && storeId) where.storeId = storeId
     // 供应商只看发给自己的
-    if (isSupplierRole(role) && userSupplierId) where.supplierId = userSupplierId
+    if (scopedSupplierId) where.supplierId = scopedSupplierId
 
     if (q.status) where.status = q.status
     if (q.storeId && !isStoreScoped(role)) where.storeId = q.storeId
@@ -158,6 +166,11 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           createdBy: { select: { id: true, name: true, role: true } },
           items: { where: { isActive: true }, include: { product: { select: { name: true, unit: true, spec: true, code: true } } } },
           lossClaims: { select: { id: true, status: true, totalLossAmount: true } },
+          deliveries: {
+            where: { status: { not: 'CANCELLED' } },
+            select: { id: true, status: true, actualTotalAmount: true },
+          },
+          receipts: { select: { id: true, totalAmount: true, status: true } },
         },
       }),
       prisma.purchaseOrder.count({ where }),
@@ -171,8 +184,9 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const { id } = req.params as any
     // 按角色 scope 过滤，避免店长/供应商越权读到别家单据
     const where: any = { id, tenantId }
+    const scopedSupplierId = requireSupplierBinding(role, userSupplierId)
     if (isStoreScoped(role) && storeId) where.storeId = storeId
-    if (isSupplierRole(role) && userSupplierId) where.supplierId = userSupplierId
+    if (scopedSupplierId) where.supplierId = scopedSupplierId
     const order = await prisma.purchaseOrder.findFirst({
       where,
       include: {
@@ -198,16 +212,29 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             receipt: { select: { id: true, no: true, totalAmount: true, status: true } },
           },
         },
-        lossClaims: { include: { items: { include: { product: true } } } },
+        lossClaims: {
+          include: {
+            deliveryOrder: { select: { id: true, no: true } },
+            receipt: { select: { id: true, no: true } },
+            items: { include: { product: true } },
+          },
+        },
         receipt: true,
         receipts: { orderBy: { deliveryDate: 'asc' } },
       },
     })
     if (!order) throw { statusCode: 404, message: '采购订单不存在' }
+    if (Array.isArray((order as any).deliveries)) {
+      ;(order as any).deliveries = (order as any).deliveries.map((delivery: any) => ({
+        ...delivery,
+        items: Array.isArray(delivery.items) ? delivery.items.map(withDocumentProductSnapshot) : [],
+      }))
+    }
     // OSS 签名 1h 过期 → 读取时把所有 OSS URL 字段统一重签
     if (Array.isArray((order as any).lossClaims)) {
       ;(order as any).lossClaims = (order as any).lossClaims.map((c: any) => ({
         ...c,
+        items: Array.isArray(c.items) ? c.items.map(withDocumentProductSnapshot) : [],
         evidenceImages: resignOssUrls(c.evidenceImages),
       }))
     }
@@ -455,6 +482,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         },
       })
       if (updated.count === 0) throw { statusCode: 409, message: '订单状态已变化，请刷新后重试' }
+      if (wasConfirmed) await releaseSupplierStockForOrder(tx, id)
       await tx.purchaseOrderEvent.create({
         data: {
           tenantId, purchaseOrderId: id, eventType: 'CANCELLED', actorId: userId, actorRole: role,
@@ -619,7 +647,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role, supplierId, storeId } = req.user
     const { id } = req.params as any
     const where: any = { id, tenantId }
-    if (isSupplierRole(role)) where.supplierId = supplierId
+    const scopedSupplierId = requireSupplierBinding(role, supplierId)
+    if (scopedSupplierId) where.supplierId = scopedSupplierId
     if (isStoreScoped(role)) where.storeId = storeId
     const exists = await prisma.purchaseOrder.findFirst({ where, select: { id: true } })
     if (!exists) return reply.status(404).send({ error: '订单不存在' })
@@ -787,10 +816,17 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (!isSupplierRole(role) && !['ADMIN', 'SUPER_ADMIN'].includes(role)) throw { statusCode: 403, message: '无权限' }
 
     const where: any = { id, tenantId, status: 'SUBMITTED' }
-    if (isSupplierRole(role) && req.user.supplierId) where.supplierId = req.user.supplierId
+    const scopedSupplierId = requireSupplierBinding(role, req.user.supplierId)
+    if (scopedSupplierId) where.supplierId = scopedSupplierId
     const order = await prisma.purchaseOrder.findFirst({
       where,
-      include: { revisions: { where: { status: 'PENDING' }, select: { id: true } } },
+      include: {
+        revisions: { where: { status: 'PENDING' }, select: { id: true } },
+        items: {
+          where: { isActive: true },
+          include: { product: { select: { name: true } } },
+        },
+      },
     })
     if (!order) throw { statusCode: 400, message: '订单不存在或当前状态不可接单' }
     if (order.revisions.length > 0) throw { statusCode: 409, message: '订单有待门店确认的修改，确认完成后才能接单' }
@@ -800,6 +836,17 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         data: { status: 'CONFIRMED', rowVersion: { increment: 1 } },
       })
       if (updated.count === 0) throw { statusCode: 409, message: '订单状态已变化，请刷新后重试' }
+      await reserveSupplierStockForOrder(tx, {
+        tenantId,
+        supplierId: order.supplierId,
+        purchaseOrderId: order.id,
+        lines: order.items.map(item => ({
+          purchaseOrderItemId: item.id,
+          productId: item.productId,
+          quantity: item.quantity,
+          productName: item.product?.name,
+        })),
+      })
       await tx.purchaseOrderEvent.create({
         data: {
           tenantId, purchaseOrderId: id, eventType: 'ACCEPTED', actorId: userId, actorRole: role,
@@ -841,7 +888,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (!isSupplierRole(role) && !['ADMIN', 'SUPER_ADMIN'].includes(role)) throw { statusCode: 403, message: '无权限' }
     if (!reason || !String(reason).trim()) throw { statusCode: 400, message: '请说明拒单原因' }
     const where: any = { id, tenantId, status: { in: ['SUBMITTED', 'CONFIRMED'] } }
-    if (isSupplierRole(role) && req.user.supplierId) where.supplierId = req.user.supplierId
+    const scopedSupplierId = requireSupplierBinding(role, req.user.supplierId)
+    if (scopedSupplierId) where.supplierId = scopedSupplierId
     const order = await prisma.purchaseOrder.findFirst({
       where,
       include: { revisions: { where: { status: 'PENDING' }, select: { id: true } } },
@@ -858,6 +906,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         },
       })
       if (updated.count === 0) throw { statusCode: 409, message: '订单状态已变化，请刷新后重试' }
+      if (order.status === 'CONFIRMED') await releaseSupplierStockForOrder(tx, id)
       await tx.purchaseOrderEvent.create({
         data: {
           tenantId, purchaseOrderId: id, eventType: 'CANCELLED', actorId: userId, actorRole: role,
@@ -887,23 +936,22 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const { note, items: shippedItems, idempotencyKey } = parsedShip.data
 
     if (!isSupplierRole(role) && !['ADMIN', 'SUPER_ADMIN'].includes(role)) throw { statusCode: 403, message: '无权限' }
+    const scopedSupplierId = requireSupplierBinding(role, req.user.supplierId)
 
     // 网络重试必须在检查订货单当前状态前命中，否则首次发货已把 PO 改为 DELIVERING，重试会误报不可发货。
-    if (idempotencyKey) {
-      const duplicateWhere: any = { purchaseOrderId: id, idempotencyKey, tenantId }
-      if (isSupplierRole(role) && req.user.supplierId) duplicateWhere.supplierId = req.user.supplierId
-      const duplicate = await prisma.deliveryOrder.findFirst({ where: duplicateWhere })
-      if (duplicate) return { success: true, deliveryId: duplicate.id, deliveryNo: duplicate.no, duplicated: true }
-    }
+    const duplicateWhere: any = { purchaseOrderId: id, idempotencyKey, tenantId }
+    if (scopedSupplierId) duplicateWhere.supplierId = scopedSupplierId
+    const duplicate = await prisma.deliveryOrder.findFirst({ where: duplicateWhere })
+    if (duplicate) return { success: true, deliveryId: duplicate.id, deliveryNo: duplicate.no, duplicated: true }
 
     // P0: 加 supplier scope, 防供应商 A 替供应商 B 发货
-    const shipWhere: any = { id, tenantId, status: { in: ['SUBMITTED', 'CONFIRMED'] } }
-    if (isSupplierRole(role) && req.user.supplierId) shipWhere.supplierId = req.user.supplierId
+    const shipWhere: any = { id, tenantId, status: 'CONFIRMED' }
+    if (scopedSupplierId) shipWhere.supplierId = scopedSupplierId
     const order = await prisma.purchaseOrder.findFirst({
       where: shipWhere,
       // 实发上限是 per-product 配置 (shipUpperPct + shipUpperBuffer), 同时拉出来用于 ship 校验
       include: {
-        items: { where: { isActive: true }, include: { product: { select: { name: true, unit: true, spec: true, code: true, shipUpperPct: true, shipUpperBuffer: true } } } },
+        items: { where: { isActive: true }, include: { product: { select: { name: true, unit: true, spec: true, code: true, category: true, shipUpperPct: true, shipUpperBuffer: true } } } },
         deliveries: { where: { status: { not: 'CANCELLED' } }, include: { items: true } },
       },
     })
@@ -956,18 +1004,44 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     // 事务: 更新 PO 状态 + 行 shippedQty + 总金额 + 自动扣减供应商库存
     let deliveryResult: { id: string; no: string }
     await prisma.$transaction(async (tx) => {
+      const claimed = await tx.purchaseOrder.updateMany({
+        where: {
+          id: order.id,
+          tenantId,
+          status: 'CONFIRMED',
+          rowVersion: order.rowVersion,
+          ...(scopedSupplierId ? { supplierId: scopedSupplierId } : {}),
+        },
+        data: {
+          status: 'DELIVERING' as any,
+          shippedAt: new Date(),
+          shippedNote: note,
+          shippedById: userId,
+          totalAmount: cumulativeTotal,
+          rowVersion: { increment: 1 },
+        },
+      })
+      if (claimed.count === 0) {
+        throw { statusCode: 409, message: '订单已被其他人处理，请刷新后重试' }
+      }
+
       const ym = dayjs().format('YYYYMM')
       const deliveryNo = await nextBusinessNo(tx, tenantId, 'DO', ym, 'DO')
       const delivery = await tx.deliveryOrder.create({
         data: {
           tenantId, no: deliveryNo, purchaseOrderId: order.id, storeId: order.storeId, supplierId: order.supplierId,
           status: 'SHIPPED', actualTotalAmount: new Prisma.Decimal(newTotal), note: note || null,
-          idempotencyKey: idempotencyKey || null, createdById: userId, shippedById: userId, shippedAt: new Date(),
+          idempotencyKey, createdById: userId, shippedById: userId, shippedAt: new Date(),
           items: {
             create: lineShipped.filter(line => line.shipped > 0).map(line => ({
               purchaseOrderItemId: line.it.id, productId: line.it.productId,
               orderedQtySnapshot: line.it.quantity, shippedQty: new Prisma.Decimal(line.shipped),
               unitPriceSnapshot: line.it.unitPrice, amount: new Prisma.Decimal(line.shipped).mul(line.it.unitPrice),
+              productCodeSnapshot: line.it.product?.code || null,
+              productNameSnapshot: line.it.product?.name || null,
+              productSpecSnapshot: line.it.product?.spec || null,
+              productUnitSnapshot: line.it.product?.unit || null,
+              productCategorySnapshot: line.it.product?.category || null,
             })),
           },
         },
@@ -979,14 +1053,6 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           { tenantId, deliveryOrderId: delivery.id, eventType: 'SHIPPED', actorId: userId, actorRole: role, fromStatus: 'DRAFT', toStatus: 'SHIPPED', requestId: req.id, ip: req.ip },
         ],
       })
-      await tx.purchaseOrder.update({
-        where: { id },
-        data: {
-          // 发货 → DELIVERING (在途, 不启动收货倒计时). 倒计时从 deliveredAt 开始
-          status: 'DELIVERING' as any, shippedAt: new Date(), shippedNote: note, shippedById: userId,
-          totalAmount: cumulativeTotal,
-        },
-      })
       // 写入每行 shippedQty + 重算行 amount (不动 unitPrice)
       for (const l of lineShipped) {
         await tx.purchaseOrderItem.update({
@@ -994,34 +1060,21 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           data: { shippedQty: l.previous + l.shipped, amount: (l.previous + l.shipped) * Number(l.it.unitPrice) },
         })
       }
-      // 仅供应商角色发货时, 同步扣减自家库存. 按 shippedQty 扣 (称重/缺货后真实出库量).
-      if (isSupplierRole(role)) {
-        for (const l of lineShipped) {
-          const it = l.it
-          if (l.shipped <= 0) continue   // 该行没发, 不扣库存
-          // P0: 校验商品归属 supplier (防越权用别家 SKU 扣库存)
-          const owns = await tx.product.findUnique({ where: { id: it.productId }, select: { supplierId: true } })
-          if (!owns || owns.supplierId !== order.supplierId) continue
-          const qty = l.shipped
-          // 原子扣减 + 拿到结果, 避免读改写竞态
-          const deducted = await tx.product.updateMany({
-            where: { id: it.productId, stock: { gte: qty } },
-            data: { stock: { decrement: qty } },
-          })
-          if (deducted.count === 0) throw { statusCode: 409, message: `${it.product?.name || '商品'} 库存不足，禁止产生负库存` }
-          const updated = await tx.product.findUniqueOrThrow({ where: { id: it.productId }, select: { stock: true } })
-          await tx.supplierStockMovement.create({
-            data: {
-              tenantId, supplierId: order.supplierId, productId: it.productId,
-              delta: -qty, balanceAfter: updated.stock,
-              type: 'OUTBOUND_PO' as any,
-              reason: `发货 ${order.no}`,
-              sourceType: 'DeliveryOrder', sourceId: delivery.id,
-              createdById: userId,
-            },
-          })
-        }
-      }
+      await consumeSupplierStockForShipment(tx, {
+        tenantId,
+        supplierId: order.supplierId,
+        purchaseOrderId: order.id,
+        deliveryOrderId: delivery.id,
+        orderNo: order.no,
+        userId,
+        lines: lineShipped.map(line => ({
+          purchaseOrderItemId: line.it.id,
+          productId: line.it.productId,
+          quantity: line.it.quantity,
+          shippedQty: line.shipped,
+          productName: line.it.product?.name,
+        })),
+      })
     })
 
     // opLog — 调整数量时详细记录
@@ -1061,7 +1114,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(403).send({ error: '仅供应商 / 管理员可标记送达' })
     }
     const where: any = { id, tenantId, status: 'DELIVERING' }
-    if (isSupplierRole(role) && req.user.supplierId) where.supplierId = req.user.supplierId
+    const scopedSupplierId = requireSupplierBinding(role, req.user.supplierId)
+    if (scopedSupplierId) where.supplierId = scopedSupplierId
     const order = await prisma.purchaseOrder.findFirst({
       where,
       include: { deliveries: { where: { status: 'SHIPPED' }, orderBy: { shippedAt: 'desc' }, take: 1 } },
@@ -1177,8 +1231,12 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   app.patch('/:id/receive', { preHandler: [(app as any).authenticate] }, async (req: any) => {
     const { tenantId, userId, role, storeId } = req.user
     const { id } = req.params as any
-    const { items: receivedItems, evidenceImages, reason } = req.body as any  // [{ productId, receivedQty }] + 可选证据图 + 可选自定义报损原因
+    const { items: receivedItems, evidenceImages, reason, kind } = req.body as any  // [{ productId, receivedQty }] + 可选证据图 + 差异类型/原因
     const lossReason = (typeof reason === 'string' && reason.trim()) ? reason.trim().slice(0, 30) : null
+    const lossKind = kind == null ? 'ARRIVAL_SHORTAGE' : String(kind)
+    if (!['ARRIVAL_SHORTAGE', 'ARRIVAL_DAMAGE'].includes(lossKind)) {
+      throw { statusCode: 400, message: '到货差异类型无效' }
+    }
 
     const findDuplicateReceiptResponse = async (deliveryOrderId?: string) => {
       const duplicateWhere: any = {
@@ -1273,16 +1331,25 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         if (lossQty <= 0) return null
         return {
           productId: item.productId,
+          deliveryOrderItemId: item.id,
           orderedQty: original?.quantity ?? item.orderedQtySnapshot,
           receivedQty: item.actualReceivedQty,
           lossQty,
           unitPrice: item.unitPriceSnapshot,
           lossAmount: lossQty * Number(item.unitPriceSnapshot),
+          productCodeSnapshot: item.productCodeSnapshot,
+          productNameSnapshot: item.productNameSnapshot,
+          productSpecSnapshot: item.productSpecSnapshot,
+          productUnitSnapshot: item.productUnitSnapshot,
+          productCategorySnapshot: item.productCategorySnapshot,
         }
       })
       .filter(Boolean) as Array<{
-        productId: string; orderedQty: any; receivedQty: number;
+        productId: string; deliveryOrderItemId: string; orderedQty: any; receivedQty: number;
         lossQty: number; unitPrice: any; lossAmount: number;
+        productCodeSnapshot: string | null; productNameSnapshot: string | null;
+        productSpecSnapshot: string | null; productUnitSnapshot: string | null;
+        productCategorySnapshot: string | null;
       }>
 
     const hasLoss = lossLines.length > 0
@@ -1325,6 +1392,11 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
                 quantity: new Prisma.Decimal(item.actualReceivedQty),
                 unitPrice: item.unitPriceSnapshot,
                 amount: new Prisma.Decimal(item.actualReceivedQty).mul(item.unitPriceSnapshot),
+                productCodeSnapshot: item.productCodeSnapshot,
+                productNameSnapshot: item.productNameSnapshot,
+                productSpecSnapshot: item.productSpecSnapshot,
+                productUnitSnapshot: item.productUnitSnapshot,
+                productCategorySnapshot: item.productCategorySnapshot,
                 productionDate: item.manufactureDate || receivedAt,
                 expiryDate: item.expiryDate || dayjs(receivedAt).add(item.product.shelfDays, 'day').toDate(),
               })),
@@ -1343,12 +1415,20 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           await tx.lossClaim.create({
             data: {
               tenantId, no: lcNo,
+              kind: lossKind as any,
+              payableBasis: 'NET_AT_RECEIPT',
               purchaseOrderId: id,
+              deliveryOrderId: delivery.id,
+              receiptId: receipt.id,
               storeId: order.storeId,
               supplierId: order.supplierId,
               totalLossAmount: totalLoss,
               reason: lossReason,
-              description: lossReason ? `${lossReason} · 验收报损 (${order.no})` : `验收短量自动报损 (${order.no})`,
+              description: lossReason
+                ? `${lossReason} · 验收到货差异 (${order.no})`
+                : lossKind === 'ARRIVAL_DAMAGE'
+                  ? `验收破损/品质异常 (${order.no})`
+                  : `验收短量自动记录 (${order.no})`,
               evidenceImages: Array.isArray(evidenceImages) ? evidenceImages.slice(0, 9) : [],
               status: 'PENDING' as any,
               createdById: userId,
@@ -1419,6 +1499,15 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       const result = await ensureReceiptDerivatives(receipt.id)
       if (!result.voucher.ok || !result.finance.ok) {
         req.log.error({ receiptId: receipt.id, result }, '收货后财务派生记录未完整生成，等待幂等补偿')
+      }
+      if (hasLoss && result.finance.ok) {
+        await prisma.paymentSchedule.updateMany({
+          where: {
+            receiptId: receipt.id,
+            status: { in: ['PENDING', 'NOTIFIED', 'PENDING_APPROVAL', 'APPROVED', 'OVERDUE'] },
+          },
+          data: { status: 'ON_HOLD' },
+        })
       }
     } catch (error) {
       // 收货主事务已经成功，不把派生财务流程的临时故障伪装成收货失败。

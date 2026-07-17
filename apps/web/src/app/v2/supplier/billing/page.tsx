@@ -76,13 +76,13 @@ export default function SupplierBillingPage() {
     apiFetch<Schedule[]>('/api/schedules')
       .then(setItems)
       .catch(e => setError(e.message))
-    // 拉报损用作 hero 旁的"本月报损"快捷入口 (不阻断主流程, 失败静默)
+    // 拉到货差异用作账单旁的快捷入口（不阻断主流程，失败静默）
     apiFetch<LossClaim[]>('/api/loss-claims')
       .then(d => setLossClaims(d || []))
       .catch(() => setLossClaims([]))
   }, [])
 
-  // 本月报损集计 (含所有状态, 跟 supplier/history 口径一致)
+  // 本月到货差异集计（含所有状态，跟 supplier/history 口径一致）
   const lossThisMonth = useMemo(() => {
     if (!lossClaims) return { count: 0, total: 0 }
     const monthStart = dayjs().startOf('month').valueOf()
@@ -114,6 +114,8 @@ export default function SupplierBillingPage() {
         if (s.paidAt && new Date(s.paidAt).getTime() >= monthStart) init.paidM += amt
         init.counts.paid++
       } else if (s.status === 'ON_HOLD') {
+        // 冻结只是暂缓付款，债权仍存在；应收总额必须包含，另行拆出冻结金额。
+        init.arTotal += amt
         init.onHoldAmt += amt
         init.counts.hold++
       } else {
@@ -168,19 +170,24 @@ export default function SupplierBillingPage() {
       </div>
 
       {/* 月度开票次要入口 */}
+      <a href={`/v2/supplier/reconciliation?month=${dayjs().format('YYYY-MM')}`} className="block mx-4 mt-3 bg-white border border-border rounded-card p-2.5 flex items-center gap-2 text-caption">
+        <span className="text-amber-fg">核</span>
+        <span className="flex-1 text-gray2">月度对账 · 逐笔核对订货、实发、实收与应付</span>
+        <span className="text-amber-fg">查看 ›</span>
+      </a>
+
       <a href="/v2/supplier/invoices" className="block mx-4 mt-3 bg-amber/5 border border-amber/30 rounded-card p-2.5 flex items-center gap-2 text-caption">
         <span className="text-amber-fg">📃</span>
         <span className="flex-1 text-gray2">月度开票 · 关联多笔订单合并 1 张发票</span>
         <span className="text-amber-fg">上传 ›</span>
       </a>
 
-      {/* 本月报损快捷入口 (2026-06-02 客户反馈: 账单页要能直接看到报损汇总, 不用翻订单)
-          v2: 跳订单 Tab + filter=报损, 跟底栏订单入口体验一致 (而不是跳 history 列表) */}
+      {/* 本月到货差异快捷入口 */}
       {lossClaims !== null && lossThisMonth.count > 0 && (
-        <a href="/v2/supplier/orders?filter=%E6%8A%A5%E6%8D%9F" className="block mx-4 mt-2 bg-red-bg/40 border border-red/30 rounded-card p-2.5 flex items-center gap-2 text-caption">
+        <a href="/v2/supplier/differences" className="block mx-4 mt-2 bg-red-bg/40 border border-red/30 rounded-card p-2.5 flex items-center gap-2 text-caption">
           <span className="text-red-fg">📊</span>
           <span className="flex-1 text-gray2">
-            本月报损 <b className="font-num text-red-fg">{lossThisMonth.count} 单</b> · 累计 <b className="font-num text-red-fg">{fmtMoney(lossThisMonth.total)}</b>
+            本月到货差异 <b className="font-num text-red-fg">{lossThisMonth.count} 单</b> · 涉及 <b className="font-num text-red-fg">{fmtMoney(lossThisMonth.total)}</b>
           </span>
           <span className="text-red-fg">查看明细 ›</span>
         </a>
@@ -217,7 +224,7 @@ export default function SupplierBillingPage() {
         )}
         {visible.map(s => {
           const overdue = s.status !== 'PAID' && s.status !== 'ON_HOLD' && diffDays(s.dueAt) < 0
-          // 跳订单详情 (Receipt 1:1 PO, 详情页含商品明细+验收单+报损+付款历史)
+          // 跳订单详情（含商品、配送、验收、到货差异与付款历史）
           // 2026-06-02 修 bug: 之前 <li> 完全没 onClick, 客户点不动
           const poId = s.receipt?.purchaseOrderId
           const clickable = !!poId
@@ -251,7 +258,7 @@ export default function SupplierBillingPage() {
                 <div className="text-micro text-red-fg mt-1">付款失败: {s.failReason}</div>
               )}
               {s.status === 'ON_HOLD' && (
-                <div className="text-micro text-red-fg mt-1">⚠ 此单有报损争议, 仲裁后才会付款</div>
+                <div className="text-micro text-red-fg mt-1">⚠ 此单存在到货差异争议，仲裁后才会付款</div>
               )}
             </li>
           )

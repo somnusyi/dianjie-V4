@@ -143,7 +143,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       prisma.supplier.findFirst({ where: { id: supplierId, tenantId }, select: { id: true } }),
       prisma.product.findMany({
         where: { tenantId, supplierId, id: { in: items.map(item => item.productId) } },
-        select: { id: true },
+        select: { id: true, code: true, name: true, spec: true, unit: true, category: true },
       }),
     ])
     if (!store) return reply.status(400).send({ error: '门店不存在或不属于当前租户' })
@@ -152,6 +152,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: '存在不属于当前租户或供应商的商品' })
     }
 
+    const productById = new Map(products.map(product => [product.id, product]))
     const normalizedItems = items.map(item => ({ ...item, unitPrice: money(item.unitPrice) }))
     const totalAmount = normalizedItems.reduce(
       (sum, item) => sum.add(lineAmount(item.quantity, item.unitPrice)),
@@ -178,6 +179,11 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
               quantity: new Prisma.Decimal(item.quantity),
               unitPrice: item.unitPrice,
               amount: lineAmount(item.quantity, item.unitPrice),
+              productCodeSnapshot: productById.get(item.productId)?.code || null,
+              productNameSnapshot: productById.get(item.productId)?.name || null,
+              productSpecSnapshot: productById.get(item.productId)?.spec || null,
+              productUnitSnapshot: productById.get(item.productId)?.unit || null,
+              productCategorySnapshot: productById.get(item.productId)?.category || null,
             })),
           },
         },
@@ -281,7 +287,11 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
     const receipt = await prisma.receipt.findFirst({
       where,
-      include: { supplier: true, items: { include: { product: true } } },
+      include: {
+        supplier: true,
+        deliveryOrder: { select: { id: true, items: { select: { id: true, productId: true } } } },
+        items: { include: { product: true } },
+      },
     })
     if (!receipt) return reply.status(404).send({ error: '入库单不存在' })
 
@@ -307,14 +317,23 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
         lossAmount: lineAmount(lossQty, original.unitPrice),
       }
     })
+    const deliveryItemByProduct = new Map(
+      (receipt.deliveryOrder?.items || []).map(item => [item.productId, item.id]),
+    )
     const actualAmount = calculatedItems.reduce((sum, item) => sum.add(item.actualAmount), new Prisma.Decimal(0)).toDecimalPlaces(2)
     const lossItemsData = calculatedItems.filter(item => item.lossQty.gt(0)).map(item => ({
       productId: item.original.productId,
+      deliveryOrderItemId: deliveryItemByProduct.get(item.original.productId) || null,
       orderedQty: item.original.quantity,
       receivedQty: item.receivedQty,
       lossQty: item.lossQty,
       unitPrice: item.original.unitPrice,
       lossAmount: item.lossAmount,
+      productCodeSnapshot: item.original.productCodeSnapshot || item.original.product.code,
+      productNameSnapshot: item.original.productNameSnapshot || item.original.product.name,
+      productSpecSnapshot: item.original.productSpecSnapshot || item.original.product.spec,
+      productUnitSnapshot: item.original.productUnitSnapshot || item.original.product.unit,
+      productCategorySnapshot: item.original.productCategorySnapshot || item.original.product.category,
     }))
     const totalLossAmount = lossItemsData.reduce((sum, item) => sum.add(item.lossAmount), new Prisma.Decimal(0)).toDecimalPlaces(2)
     const confirmedAt = new Date()
@@ -343,7 +362,11 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
         await tx.lossClaim.create({
           data: {
             tenantId, no: lcNo,
+            kind: 'ARRIVAL_SHORTAGE',
+            payableBasis: 'NET_AT_RECEIPT',
             purchaseOrderId: receipt.purchaseOrderId,
+            deliveryOrderId: receipt.deliveryOrderId,
+            receiptId: receipt.id,
             storeId: receipt.storeId,
             supplierId: receipt.supplierId,
             totalLossAmount,

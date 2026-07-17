@@ -6,6 +6,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest run --reporter=verbose",
+    "test:integration": "vitest run --config vitest.integration.config.ts --reporter=verbose",
     "test:watch": "vitest --reporter=verbose",
     "test:coverage": "vitest run --coverage",
     "test:remote": "vitest run --reporter=verbose"

@@ -3,6 +3,7 @@ node_modules/
 
 # 构建产物
 .next/
+.next-verify/
 .next.stale-*/
 dist/
 build/

@@ -31,6 +31,7 @@ type LossClaim = {
 
 const TYPE_LABEL: Record<string, string> = {
   PRICE_ADJUSTMENT: '调价', NEW_SUPPLIER: '新供应商', NEW_DISH: '新菜品',
+  SUPPLIER_OFFER_CREATE: '商品上架', SUPPLIER_OFFER_DISABLE: '商品停售',
   CONTRACT: '合同',
 }
 function timeAgo(iso: string) {

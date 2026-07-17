@@ -3,6 +3,9 @@ const { withSentryConfig } = require('@sentry/nextjs')
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Allow CI/local verification builds to use an isolated output directory
+  // while the developer server keeps using `.next`.
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   // /api/* 走 app/api/[...path]/route.ts 做服务端代理（去掉 browser Origin 避免 CORS）
   // 生产环境由 Nginx 处理 /api/* 转发 → :4000
   // v2 开发阶段, 暂跳过 TS strict 检查 (运行时正常, 大量 useDashboard data?.x 严格非空检查)

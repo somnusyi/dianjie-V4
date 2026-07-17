@@ -16,6 +16,7 @@ export type DocumentType =
   | 'PETTY_CASH' | 'REIMBURSEMENT' | 'PURCHASE_FOOD_REGULAR' | 'PURCHASE_FOOD_OVER'
   | 'PURCHASE_NON_FOOD' | 'CONTRACT' | 'PRICE_ADJUSTMENT' | 'NEW_SUPPLIER'
   | 'NEW_DISH' | 'STORE_TRANSFER' | 'MARKETING_BUDGET' | 'PERSONNEL_PAY'
+  | 'SUPPLIER_OFFER_CREATE' | 'SUPPLIER_OFFER_DISABLE'
   | 'PAYMENT_REQUEST'
 
 export interface RoutePlan {
@@ -58,6 +59,8 @@ export function routeFor(type: DocumentType, amount: number): RoutePlan {
     case 'PRICE_ADJUSTMENT':
     case 'NEW_SUPPLIER':
     case 'NEW_DISH':
+    case 'SUPPLIER_OFFER_CREATE':
+    case 'SUPPLIER_OFFER_DISABLE':
       return { steps: ['CHEF_DIRECTOR'], autoApprove: false, thresholdRule: '调价/新供应商/新菜品 直送总厨', isOverThreshold: false }
 
     case 'CONTRACT':

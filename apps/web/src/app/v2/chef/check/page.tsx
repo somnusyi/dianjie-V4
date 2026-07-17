@@ -323,6 +323,12 @@ function ClaimDetail({ c, onImg }: { c: LossClaim; onImg: (url: string) => void 
               : c.status === 'REJECTED' ? '驳回'
               : c.status}
       </p>
+      <a
+        href={`/v2/loss-claims/${c.id}/print`}
+        className="mt-3 w-full py-2 rounded-cta border border-ink text-ink text-button flex items-center justify-center"
+      >
+        查看并打印报损单
+      </a>
     </div>
   )
 }

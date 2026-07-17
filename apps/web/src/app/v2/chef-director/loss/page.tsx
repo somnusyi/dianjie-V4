@@ -232,6 +232,12 @@ export default function ChefDirectorLossPage() {
                         </div>
                       </>
                     )}
+                    <a
+                      href={`/v2/loss-claims/${lc.id}/print`}
+                      className="mt-3 w-full py-2 rounded-cta border border-ink text-ink text-button flex items-center justify-center"
+                    >
+                      查看并打印报损单
+                    </a>
                   </li>
                 )
               })}

@@ -151,7 +151,7 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
     let bodyClone: any
     try {
       bodyClone = await res.clone().json()
-      msg = bodyClone.error || bodyClone.message || msg
+      msg = bodyClone.message || bodyClone.error || msg
       const lc = String(msg).toLowerCase()
       isAuthExpired = !token
         || (/expired|invalid token|jwt|未登录|token/i.test(msg) && !/权限|不能|无权/.test(msg))
@@ -190,11 +190,44 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
   if (!res.ok) {
     let msg = res.statusText
     let data: any = null
-    try { data = await res.json(); msg = data.error || data.message || msg } catch {}
+    // Fastify's default error envelope contains both error="Conflict" and a
+    // domain-specific message. Always surface the actionable domain message.
+    try { data = await res.json(); msg = data.message || data.error || msg } catch {}
     const error = new Error(msg) as Error & { status?: number; data?: any }
     error.status = res.status
     error.data = data
     throw error
   }
   return res.json()
+}
+
+/** Download an authenticated non-JSON API response using the same refresh policy. */
+export async function apiDownload(path: string, fallbackFilename: string) {
+  const request = (token: string | null) => fetch(path, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  })
+  let res = await request(getToken())
+  if (res.status === 401) {
+    const refreshed = await refreshAccessOnce()
+    if (refreshed) res = await request(refreshed)
+    if (!refreshed || res.status === 401) {
+      clearSession()
+      if (typeof window !== 'undefined' && !location.pathname.startsWith('/v2/login')) location.href = '/v2/login'
+      throw new Error('会话已过期')
+    }
+  }
+  if (!res.ok) {
+    let message = res.statusText || '下载失败'
+    try {
+      const data = await res.clone().json()
+      message = data.message || data.error || message
+    } catch {}
+    throw new Error(message)
+  }
+  const disposition = res.headers.get('Content-Disposition') || ''
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+  const plain = disposition.match(/filename="?([^";]+)"?/i)?.[1]
+  let filename = fallbackFilename
+  try { filename = encoded ? decodeURIComponent(encoded) : plain || fallbackFilename } catch {}
+  return { blob: await res.blob(), filename }
 }

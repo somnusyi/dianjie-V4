@@ -1,208 +1,188 @@
 /**
- * 供应商洞察 — 客户/门店关系 + SKU 销售排行 + 月度趋势
- *
- * 仅供 SUPPLIER_OWNER / STAFF / SUB / ADMIN 访问. 数据按 token.supplierId 隔离.
+ * 供应商洞察只使用已经发生的履约事实：
+ * - 客户与趋势按已确认入库单（实收/应付口径）
+ * - SKU 排行按入库明细（实收数量与金额）
+ * 不再用订货单金额冒充供应商销售额。
  */
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
-import { isSupplierRole } from '../lib/auth-scope'
 import dayjs from 'dayjs'
+import { isSupplierRole } from '../lib/auth-scope'
+import { requireSupplierCapability } from '../lib/supplier-access'
+import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
+import { auditSupplierSupplyChain } from '../services/supplyChainAudit'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
+const RECEIVED_STATUSES = ['CONFIRMED', 'ACCOUNTED'] as const
+
+function insightSupplierId(req: any) {
+  const { role, supplierId } = req.user
+  if (isSupplierRole(role)) return requireSupplierCapability(role, supplierId, 'analytics.read')
+  if (['ADMIN', 'SUPER_ADMIN'].includes(role)) {
+    const requested = String((req.query as any)?.supplierId || '').trim()
+    if (!requested) throw Object.assign(new Error('管理员查看供应商洞察时必须指定 supplierId'), { statusCode: 400 })
+    return requested
+  }
+  throw Object.assign(new Error('无权查看供应商洞察'), { statusCode: 403 })
+}
 
 export const supplierInsightRoutes: FastifyPluginAsync = async (app) => {
+  app.get('/audit', auth(app), async (req: any) => {
+    const supplierId = insightSupplierId(req)
+    const days = Math.min(365, Math.max(7, Number.parseInt((req.query as any).days, 10) || 90))
+    return auditSupplierSupplyChain({ tenantId: req.user.tenantId, supplierId, days })
+  })
 
-  // ── 客户/门店关系列表 ─────────────────────────────
-  // GET /api/supplier/insights/customers?days=90
-  app.get('/customers', auth(app), async (req: any, reply: any) => {
-    const { role, supplierId } = req.user
-    if (!isSupplierRole(role) && !['ADMIN', 'SUPER_ADMIN'].includes(role)) {
-      return reply.status(403).send({ error: '仅供应商角色' })
-    }
-    const sid = supplierId
-    if (!sid) return reply.send([])
-    const days = Math.min(365, Math.max(7, parseInt((req.query as any).days) || 90))
-    const since = dayjs().subtract(days, 'day').toDate()
+  app.get('/customers', auth(app), async (req: any) => {
+    const { tenantId } = req.user
+    const supplierId = insightSupplierId(req)
+    const days = Math.min(365, Math.max(7, Number.parseInt((req.query as any).days, 10) || 90))
+    const since = dayjs().subtract(days, 'day').startOf('day').toDate()
     const monthStart = dayjs().startOf('month').toDate()
-
-    // 该供应商所有合作过的订单
-    const orders = await prisma.purchaseOrder.findMany({
-      where: { supplierId: sid, createdAt: { gte: since } },
+    const receipts = await prisma.receipt.findMany({
+      where: {
+        tenantId, supplierId,
+        status: { in: [...RECEIVED_STATUSES] },
+        deliveryDate: { gte: since },
+      },
       select: {
-        id: true,
-        storeId: true, totalAmount: true, status: true, createdAt: true,
+        id: true, purchaseOrderId: true, storeId: true, totalAmount: true,
+        deliveryDate: true, createdAt: true,
         store: { select: { id: true, name: true, no: true } },
       },
     })
-    // 同期已生效的报损 (APPROVED / RESOLVED) — 用于扣除净销售
-    const approvedLoss = await prisma.lossClaim.groupBy({
-      by: ['purchaseOrderId'],
-      where: {
-        supplierId: sid,
-        status: { in: ['APPROVED', 'RESOLVED'] },
-        purchaseOrderId: { in: orders.map(o => o.id) },
-      },
-      _sum: { totalLossAmount: true },
-    })
-    const lossByOrder = new Map<string, number>()
-    approvedLoss.forEach(l => l.purchaseOrderId && lossByOrder.set(l.purchaseOrderId, Number(l._sum.totalLossAmount || 0)))
-    // groupby storeId
+
     const byStore = new Map<string, {
       storeId: string; name: string; no: string
-      totalOrders: number; totalAmount: number
-      monthOrders: number; monthAmount: number
-      lastOrderAt: Date
+      orderKeys: Set<string>; monthOrderKeys: Set<string>
+      totalAmount: number; monthAmount: number; lastOrderAt: Date
     }>()
-    for (const o of orders) {
-      const k = o.storeId
-      let cur = byStore.get(k)
-      if (!cur) {
-        cur = {
-          storeId: k, name: o.store?.name || '?', no: o.store?.no || '',
-          totalOrders: 0, totalAmount: 0, monthOrders: 0, monthAmount: 0,
-          lastOrderAt: o.createdAt,
-        }
-        byStore.set(k, cur)
+    for (const receipt of receipts) {
+      const at = receipt.deliveryDate || receipt.createdAt
+      const current = byStore.get(receipt.storeId) || {
+        storeId: receipt.storeId,
+        name: receipt.store?.name || '?',
+        no: receipt.store?.no || '',
+        orderKeys: new Set<string>(),
+        monthOrderKeys: new Set<string>(),
+        totalAmount: 0,
+        monthAmount: 0,
+        lastOrderAt: at,
       }
-      // 排除取消的不算
-      if (o.status === 'CANCELLED') continue
-      const net = Number(o.totalAmount) - (lossByOrder.get(o.id) || 0)
-      cur.totalOrders++
-      cur.totalAmount += net
-      if (o.createdAt >= monthStart) {
-        cur.monthOrders++
-        cur.monthAmount += net
+      const orderKey = receipt.purchaseOrderId || `receipt:${receipt.id}`
+      current.orderKeys.add(orderKey)
+      current.totalAmount += Number(receipt.totalAmount)
+      if (at >= monthStart) {
+        current.monthOrderKeys.add(orderKey)
+        current.monthAmount += Number(receipt.totalAmount)
       }
-      if (o.createdAt > cur.lastOrderAt) cur.lastOrderAt = o.createdAt
+      if (at > current.lastOrderAt) current.lastOrderAt = at
+      byStore.set(receipt.storeId, current)
     }
-    const list = Array.from(byStore.values())
-      .map(c => {
-        const daysSince = Math.floor((Date.now() - c.lastOrderAt.getTime()) / 86400_000)
-        return {
-          ...c,
-          daysSinceLastOrder: daysSince,
-          isVip: c.monthAmount >= 5000,        // 本月 ≥¥5000 = VIP
-          isSleeping: daysSince > 30,           // 30天没下单 = 沉睡
-        }
-      })
-      .sort((a, b) => b.totalAmount - a.totalAmount)
-    return reply.send(list)
+
+    return [...byStore.values()].map(current => {
+      const daysSinceLastOrder = Math.floor((Date.now() - current.lastOrderAt.getTime()) / 86_400_000)
+      return {
+        storeId: current.storeId,
+        name: current.name,
+        no: current.no,
+        totalOrders: current.orderKeys.size,
+        totalAmount: current.totalAmount,
+        monthOrders: current.monthOrderKeys.size,
+        monthAmount: current.monthAmount,
+        lastOrderAt: current.lastOrderAt,
+        daysSinceLastOrder,
+        isVip: current.monthAmount >= 5000,
+        isSleeping: daysSinceLastOrder > 30,
+        amountBasis: 'RECEIPT_PAYABLE',
+      }
+    }).sort((a, b) => b.totalAmount - a.totalAmount)
   })
 
-  // ── SKU 销售排行 ─────────────────────────────────
-  // GET /api/supplier/insights/sku-rank?days=30&limit=10
-  app.get('/sku-rank', auth(app), async (req: any, reply: any) => {
-    const { role, supplierId } = req.user
-    if (!isSupplierRole(role) && !['ADMIN', 'SUPER_ADMIN'].includes(role)) {
-      return reply.status(403).send({ error: '仅供应商角色' })
-    }
-    if (!supplierId) return reply.send({ top: [], bottom: [] })
-    const days  = Math.min(365, Math.max(7, parseInt((req.query as any).days) || 30))
-    const limit = Math.min(50, Math.max(3, parseInt((req.query as any).limit) || 10))
-    const since = dayjs().subtract(days, 'day').toDate()
+  app.get('/sku-rank', auth(app), async (req: any) => {
+    const { tenantId } = req.user
+    const supplierId = insightSupplierId(req)
+    const days = Math.min(365, Math.max(7, Number.parseInt((req.query as any).days, 10) || 30))
+    const limit = Math.min(50, Math.max(3, Number.parseInt((req.query as any).limit, 10) || 10))
+    const since = dayjs().subtract(days, 'day').startOf('day').toDate()
+    const items = await prisma.receiptItem.findMany({
+      where: {
+        receipt: {
+          tenantId, supplierId,
+          status: { in: [...RECEIVED_STATUSES] },
+          deliveryDate: { gte: since },
+        },
+      },
+      include: { product: { select: { name: true, unit: true, spec: true } } },
+    })
 
-    const items = await prisma.purchaseOrderItem.findMany({
-      where: {
-        purchaseOrder: {
-          supplierId, createdAt: { gte: since },
-          status: { in: ['CONFIRMED', 'PENDING_CONFIRM', 'RECEIVED', 'COMPLETED'] },
-        },
-      },
-      select: { productId: true, quantity: true, shippedQty: true, amount: true,
-                product: { select: { name: true, unit: true, spec: true } } },
-    })
-    // 已生效报损按 SKU 维度扣减 (净销售 = 订单 amount - 报损 amount)
-    const lossItems = await prisma.lossClaimItem.findMany({
-      where: {
-        lossClaim: {
-          supplierId, createdAt: { gte: since },
-          status: { in: ['APPROVED', 'RESOLVED'] },
-        },
-      },
-      select: { productId: true, lossQty: true, lossAmount: true },
-    })
-    const lossByProd = new Map<string, { qty: number; amount: number }>()
-    for (const lc of lossItems) {
-      const cur = lossByProd.get(lc.productId) || { qty: 0, amount: 0 }
-      cur.qty += Number(lc.lossQty || 0)
-      cur.amount += Number(lc.lossAmount || 0)
-      lossByProd.set(lc.productId, cur)
-    }
-    const byProd = new Map<string, { name: string; unit: string; qty: number; amount: number; orders: number }>()
-    for (const it of items) {
-      const k = it.productId
-      let cur = byProd.get(k)
-      if (!cur) {
-        cur = { name: it.product?.name || '?', unit: it.product?.unit || '', qty: 0, amount: 0, orders: 0 }
-        byProd.set(k, cur)
+    const byProduct = new Map<string, { name: string; unit: string; qty: number; amount: number; orders: number }>()
+    for (const raw of items) {
+      const item = withDocumentProductSnapshot(raw)
+      const current = byProduct.get(item.productId) || {
+        name: String(item.product.name || '?'),
+        unit: String(item.product.unit || ''),
+        qty: 0,
+        amount: 0,
+        orders: 0,
       }
-      cur.qty += Number(it.shippedQty ?? it.quantity)
-      cur.amount += Number(it.amount)
-      cur.orders += 1
+      current.qty += Number(item.quantity)
+      current.amount += Number(item.amount)
+      current.orders += 1
+      byProduct.set(item.productId, current)
     }
-    // 扣减报损
-    for (const [pid, loss] of lossByProd) {
-      const cur = byProd.get(pid)
-      if (cur) {
-        cur.qty = Math.max(0, cur.qty - loss.qty)
-        cur.amount = Math.max(0, cur.amount - loss.amount)
-      }
-    }
-    const list = Array.from(byProd.entries()).map(([id, v]) => ({ productId: id, ...v }))
+    const list = [...byProduct.entries()].map(([productId, value]) => ({ productId, ...value }))
     const top = [...list].sort((a, b) => b.amount - a.amount).slice(0, limit)
-    // 滞销 = 本期销量为 0 但是上架的 SKU
-    const allActive = await prisma.product.findMany({
-      where: { supplierId, status: 'ENABLED' },
+    const activeProducts = await prisma.product.findMany({
+      where: { tenantId, supplierId, status: 'ENABLED' },
       select: { id: true, name: true, unit: true, price: true },
     })
-    const soldIds = new Set(list.map(l => l.productId))
-    const bottom = allActive.filter(p => !soldIds.has(p.id)).map(p => ({
-      productId: p.id, name: p.name, unit: p.unit, qty: 0, amount: 0, orders: 0,
-      price: Number(p.price),
-    })).slice(0, limit)
-    return reply.send({ top, bottom, periodDays: days })
+    const soldIds = new Set(list.map(item => item.productId))
+    const bottom = activeProducts.filter(product => !soldIds.has(product.id)).slice(0, limit).map(product => ({
+      productId: product.id,
+      name: product.name,
+      unit: product.unit,
+      qty: 0,
+      amount: 0,
+      orders: 0,
+      price: Number(product.price),
+    }))
+    return { top, bottom, periodDays: days, amountBasis: 'RECEIPT_PAYABLE' }
   })
 
-  // ── 月度销售趋势 (近 6 个月) ──────────────────────
-  // GET /api/supplier/insights/sales-trend?months=6
-  app.get('/sales-trend', auth(app), async (req: any, reply: any) => {
-    const { role, supplierId } = req.user
-    if (!isSupplierRole(role) && !['ADMIN', 'SUPER_ADMIN'].includes(role)) {
-      return reply.status(403).send({ error: '仅供应商角色' })
-    }
-    if (!supplierId) return reply.send([])
-    const months = Math.min(12, Math.max(3, parseInt((req.query as any).months) || 6))
+  app.get('/sales-trend', auth(app), async (req: any) => {
+    const { tenantId } = req.user
+    const supplierId = insightSupplierId(req)
+    const months = Math.min(12, Math.max(3, Number.parseInt((req.query as any).months, 10) || 6))
     const start = dayjs().subtract(months - 1, 'month').startOf('month').toDate()
-    const orders = await prisma.purchaseOrder.findMany({
-      where: { supplierId, createdAt: { gte: start },
-               status: { in: ['CONFIRMED', 'PENDING_CONFIRM', 'RECEIVED', 'COMPLETED'] } },
-      select: { id: true, totalAmount: true, createdAt: true },
-    })
-    // 同期已生效报损
-    const losses = await prisma.lossClaim.findMany({
+    const receipts = await prisma.receipt.findMany({
       where: {
-        supplierId,
-        status: { in: ['APPROVED', 'RESOLVED'] },
-        purchaseOrderId: { in: orders.map(o => o.id) },
+        tenantId, supplierId,
+        status: { in: [...RECEIVED_STATUSES] },
+        deliveryDate: { gte: start },
       },
-      select: { purchaseOrderId: true, totalLossAmount: true },
+      select: { id: true, purchaseOrderId: true, totalAmount: true, deliveryDate: true },
     })
-    const lossByOrder = new Map<string, number>()
-    losses.forEach(l => l.purchaseOrderId && lossByOrder.set(l.purchaseOrderId, (lossByOrder.get(l.purchaseOrderId) || 0) + Number(l.totalLossAmount)))
-    // 按 YYYY-MM groupby
-    const byMonth = new Map<string, { revenue: number; orders: number }>()
-    for (let i = 0; i < months; i++) {
-      const k = dayjs().subtract(months - 1 - i, 'month').format('YYYY-MM')
-      byMonth.set(k, { revenue: 0, orders: 0 })
+    const byMonth = new Map<string, { revenue: number; orderKeys: Set<string> }>()
+    for (let index = 0; index < months; index++) {
+      byMonth.set(dayjs().subtract(months - 1 - index, 'month').format('YYYY-MM'), {
+        revenue: 0,
+        orderKeys: new Set<string>(),
+      })
     }
-    for (const o of orders) {
-      const k = dayjs(o.createdAt).format('YYYY-MM')
-      const cur = byMonth.get(k)
-      if (cur) {
-        cur.revenue += Number(o.totalAmount) - (lossByOrder.get(o.id) || 0)
-        cur.orders += 1
-      }
+    for (const receipt of receipts) {
+      const month = dayjs(receipt.deliveryDate).format('YYYY-MM')
+      const current = byMonth.get(month)
+      if (!current) continue
+      current.revenue += Number(receipt.totalAmount)
+      current.orderKeys.add(receipt.purchaseOrderId || `receipt:${receipt.id}`)
     }
-    return reply.send(Array.from(byMonth.entries()).map(([month, v]) => ({ month, ...v })))
+    return [...byMonth.entries()].map(([month, value]) => ({
+      month,
+      revenue: value.revenue,
+      receivedAmount: value.revenue,
+      orders: value.orderKeys.size,
+      amountBasis: 'RECEIPT_PAYABLE',
+    }))
   })
 }

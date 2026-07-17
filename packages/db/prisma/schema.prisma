@@ -52,6 +52,9 @@ model Tenant {
   documents                 Document[]
   productBatches            ProductBatch[]
   stockMovements            SupplierStockMovement[]
+  supplierStockBatches      SupplierStockBatch[]
+  supplierStockBatchAllocations SupplierStockBatchAllocation[]
+  supplierStockReservations SupplierStockReservation[]
   inventorySnapshots        InventorySnapshot[]
   accountingPeriods         AccountingPeriod[]
   pettyCash                 PettyCash[]
@@ -101,6 +104,7 @@ model User {
   deliveryOrderEvents           DeliveryOrderEvent[]
   createdLCs                    LossClaim[]             @relation("LCCreatedBy")
   handledLCs                    LossClaim[]             @relation("LCHandledBy")
+  resolvedLCs                   LossClaim[]             @relation("LCResolvedBy")
   cashTransactions              CashTransaction[]
   notifications                 Notification[]
   uploadedInvoices              Invoice[]               @relation("InvoiceUploader")
@@ -108,6 +112,7 @@ model User {
   approvedSteps                 DocumentStep[]
   documentDecisions             DocumentDecision[]
   stockMovements                SupplierStockMovement[]
+  supplierStockBatches          SupplierStockBatch[]
   createdDailyBusinessImports   DailyBusinessImport[]   @relation("DailyBusinessImportCreatedBy")
   confirmedDailyBusinessImports DailyBusinessImport[]   @relation("DailyBusinessImportConfirmedBy")
   resolvedDeferredBomTasks      DeferredBomTask[]       @relation("DeferredBomTaskResolvedBy")
@@ -438,7 +443,7 @@ model DeferredBomTask {
   dish                Dish?               @relation(fields: [dishId], references: [id])
   resolvedBy          User?               @relation("DeferredBomTaskResolvedBy", fields: [resolvedById], references: [id])
 
-  @@unique([dailyBusinessImportId, rawDishName, variantKey], name: "deferred_bom_task_import_dish_variant_uk")
+  @@unique([dailyBusinessImportId, rawDishName, variantKey], name: "deferred_bom_task_import_dish_variant_uk", map: "deferred_bom_task_import_dish_variant_uk")
   @@index([tenantId, status, businessDate])
   @@index([dishId, status])
   @@map("deferred_bom_tasks")
@@ -648,8 +653,8 @@ model Supplier {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant            Tenant                    @relation(fields: [tenantId], references: [id])
-  users             User[]                    @relation("SupplierUsers")
+  tenant            Tenant                     @relation(fields: [tenantId], references: [id])
+  users             User[]                     @relation("SupplierUsers")
   products          Product[]
   receipts          Receipt[]
   reconciliations   Reconciliation[]
@@ -660,6 +665,9 @@ model Supplier {
   lossClaims        LossClaim[]
   invoices          Invoice[]
   stockMovements    SupplierStockMovement[]
+  stockBatches      SupplierStockBatch[]
+  stockBatchAllocations SupplierStockBatchAllocation[]
+  stockReservations SupplierStockReservation[]
   productCategories SupplierProductCategory[]
 
   @@unique([tenantId, no])
@@ -696,14 +704,17 @@ model Product {
   batchId String?
   batch   ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
 
-  tenant                 Tenant                  @relation(fields: [tenantId], references: [id])
-  supplier               Supplier?               @relation(fields: [supplierId], references: [id])
+  tenant                 Tenant                     @relation(fields: [tenantId], references: [id])
+  supplier               Supplier?                  @relation(fields: [supplierId], references: [id])
   receiptItems           ReceiptItem[]
   purchaseOrderItems     PurchaseOrderItem[]
   deliveryOrderItems     DeliveryOrderItem[]
   lossClaimItems         LossClaimItem[]
   consumptions           StockConsumption[]
   stockMovements         SupplierStockMovement[]
+  stockBatches           SupplierStockBatch[]
+  stockBatchAllocations  SupplierStockBatchAllocation[]
+  stockReservations      SupplierStockReservation[]
   dishRecipes            DishRecipe[]
   inventorySnapshotItems InventorySnapshotItem[]
 
@@ -815,6 +826,7 @@ model Receipt {
   purchaseOrder       PurchaseOrder?       @relation("PurchaseOrderReceipts", fields: [purchaseOrderId], references: [id])
   primaryForOrder     PurchaseOrder?       @relation("PurchaseOrderPrimaryReceipt")
   deliveryOrder       DeliveryOrder?       @relation(fields: [deliveryOrderId], references: [id])
+  lossClaims          LossClaim[]
 
   @@unique([tenantId, no])
   @@index([purchaseOrderId, deliveryDate])
@@ -822,12 +834,17 @@ model Receipt {
 }
 
 model ReceiptItem {
-  id        String  @id @default(cuid())
-  receiptId String
-  productId String
-  quantity  Decimal @db.Decimal(10, 2)
-  unitPrice Decimal @db.Decimal(10, 2)
-  amount    Decimal @db.Decimal(12, 2) // quantity * unitPrice
+  id                      String  @id @default(cuid())
+  receiptId               String
+  productId               String
+  quantity                Decimal @db.Decimal(10, 2)
+  unitPrice               Decimal @db.Decimal(10, 2)
+  amount                  Decimal @db.Decimal(12, 2) // quantity * unitPrice
+  productCodeSnapshot     String?
+  productNameSnapshot     String?
+  productSpecSnapshot     String?
+  productUnitSnapshot     String?
+  productCategorySnapshot String?
 
   productionDate DateTime? @map("production_date") @db.Date
   expiryDate     DateTime? @map("expiry_date") @db.Date
@@ -1239,18 +1256,19 @@ model PurchaseOrder {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  tenant     Tenant                  @relation(fields: [tenantId], references: [id])
-  store      Store                   @relation(fields: [storeId], references: [id])
-  supplier   Supplier                @relation(fields: [supplierId], references: [id])
-  createdBy  User                    @relation("POCreatedBy", fields: [createdById], references: [id])
-  shippedBy  User?                   @relation("POShippedBy", fields: [shippedById], references: [id])
-  items      PurchaseOrderItem[]
-  revisions  PurchaseOrderRevision[]
-  events     PurchaseOrderEvent[]
-  deliveries DeliveryOrder[]
-  lossClaims LossClaim[]
-  receipt    Receipt?                @relation("PurchaseOrderPrimaryReceipt", fields: [receiptId], references: [id])
-  receipts   Receipt[]               @relation("PurchaseOrderReceipts")
+  tenant            Tenant                     @relation(fields: [tenantId], references: [id])
+  store             Store                      @relation(fields: [storeId], references: [id])
+  supplier          Supplier                   @relation(fields: [supplierId], references: [id])
+  createdBy         User                       @relation("POCreatedBy", fields: [createdById], references: [id])
+  shippedBy         User?                      @relation("POShippedBy", fields: [shippedById], references: [id])
+  items             PurchaseOrderItem[]
+  revisions         PurchaseOrderRevision[]
+  events            PurchaseOrderEvent[]
+  deliveries        DeliveryOrder[]
+  lossClaims        LossClaim[]
+  receipt           Receipt?                   @relation("PurchaseOrderPrimaryReceipt", fields: [receiptId], references: [id])
+  receipts          Receipt[]                  @relation("PurchaseOrderReceipts")
+  stockReservations SupplierStockReservation[]
 
   @@unique([tenantId, no])
   @@unique([tenantId, createdById, idempotencyKey])
@@ -1274,10 +1292,11 @@ model PurchaseOrderItem {
   isActive          Boolean                 @default(true)
   lastRevisionId    String?
 
-  purchaseOrder PurchaseOrder          @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
-  product       Product                @relation(fields: [productId], references: [id])
-  lastRevision  PurchaseOrderRevision? @relation("POItemLastRevision", fields: [lastRevisionId], references: [id])
-  deliveryItems DeliveryOrderItem[]
+  purchaseOrder    PurchaseOrder             @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product          Product                   @relation(fields: [productId], references: [id])
+  lastRevision     PurchaseOrderRevision?    @relation("POItemLastRevision", fields: [lastRevisionId], references: [id])
+  deliveryItems    DeliveryOrderItem[]
+  stockReservation SupplierStockReservation?
 
   @@index([purchaseOrderId, isActive])
   @@map("purchase_order_items")
@@ -1376,6 +1395,7 @@ model DeliveryOrder {
   items         DeliveryOrderItem[]
   events        DeliveryOrderEvent[]
   receipt       Receipt?
+  lossClaims    LossClaim[]
 
   @@unique([tenantId, no])
   @@unique([purchaseOrderId, idempotencyKey])
@@ -1385,22 +1405,28 @@ model DeliveryOrder {
 }
 
 model DeliveryOrderItem {
-  id                  String    @id @default(cuid())
-  deliveryOrderId     String
-  purchaseOrderItemId String?
-  productId           String
-  orderedQtySnapshot  Decimal   @db.Decimal(10, 2)
-  shippedQty          Decimal   @db.Decimal(10, 2)
-  receivedQty         Decimal?  @db.Decimal(10, 2)
-  unitPriceSnapshot   Decimal   @db.Decimal(10, 2)
-  amount              Decimal   @db.Decimal(12, 2)
-  manufactureDate     DateTime? @db.Date
-  expiryDate          DateTime? @db.Date
-  createdAt           DateTime  @default(now())
+  id                      String    @id @default(cuid())
+  deliveryOrderId         String
+  purchaseOrderItemId     String?
+  productId               String
+  orderedQtySnapshot      Decimal   @db.Decimal(10, 2)
+  shippedQty              Decimal   @db.Decimal(10, 2)
+  receivedQty             Decimal?  @db.Decimal(10, 2)
+  unitPriceSnapshot       Decimal   @db.Decimal(10, 2)
+  amount                  Decimal   @db.Decimal(12, 2)
+  productCodeSnapshot     String?
+  productNameSnapshot     String?
+  productSpecSnapshot     String?
+  productUnitSnapshot     String?
+  productCategorySnapshot String?
+  manufactureDate         DateTime? @db.Date
+  expiryDate              DateTime? @db.Date
+  createdAt               DateTime  @default(now())
 
   deliveryOrder     DeliveryOrder      @relation(fields: [deliveryOrderId], references: [id], onDelete: Cascade)
   purchaseOrderItem PurchaseOrderItem? @relation(fields: [purchaseOrderItemId], references: [id], onDelete: SetNull)
   product           Product            @relation(fields: [productId], references: [id])
+  lossClaimItems    LossClaimItem[]
 
   @@unique([deliveryOrderId, productId])
   @@index([productId, deliveryOrderId])
@@ -1447,17 +1473,21 @@ model BusinessSequence {
 
 // ── 报损申请 ──────────────────────────────────────────
 model LossClaim {
-  id              String  @id @default(cuid())
+  id              String                @id @default(cuid())
   tenantId        String
   no              String // LC202403001
   purchaseOrderId String? // 与供应商无关的店内报损可空
   storeId         String
   supplierId      String? // 同上
+  kind            LossClaimKind         @default(LEGACY_UNRESOLVED)
+  payableBasis    LossClaimPayableBasis @default(LEGACY_UNKNOWN)
+  deliveryOrderId String?
+  receiptId       String?
   reason          String? // 临期/变质/客退/掉落/破损/其他
-  isManual        Boolean @default(false) // true = 店内盘点报损，不扣供应商账期
+  isManual        Boolean               @default(false) // true = 店内盘点报损，不扣供应商账期
 
   // 报损明细
-  totalLossAmount Decimal  @db.Decimal(12, 2) // 损失金额（从账期扣减）
+  totalLossAmount Decimal  @db.Decimal(12, 2) // 争议涉及金额；是否调整应付由 payableBasis 决定
   description     String // 文字说明
   evidenceImages  String[] // 图片URL数组（OSS）
 
@@ -1470,9 +1500,11 @@ model LossClaim {
   autoApproved Boolean   @default(false) // 超时自动同意
 
   // 协商记录（被拒绝后）
-  negotiationNote String?
-  resolvedAt      DateTime?
-  resolvedNote    String?
+  negotiationNote      String?
+  resolvedAt           DateTime?
+  resolvedNote         String?
+  resolvedDeductAmount Decimal?  @db.Decimal(12, 2) // 仲裁最终认可的扣减金额
+  resolvedById         String?
 
   createdById String
   createdAt   DateTime @default(now())
@@ -1482,28 +1514,43 @@ model LossClaim {
   purchaseOrder PurchaseOrder?  @relation(fields: [purchaseOrderId], references: [id])
   store         Store           @relation(fields: [storeId], references: [id])
   supplier      Supplier?       @relation(fields: [supplierId], references: [id])
+  deliveryOrder DeliveryOrder?  @relation(fields: [deliveryOrderId], references: [id], onDelete: SetNull)
+  receipt       Receipt?        @relation(fields: [receiptId], references: [id], onDelete: SetNull)
   createdBy     User            @relation("LCCreatedBy", fields: [createdById], references: [id])
   handledBy     User?           @relation("LCHandledBy", fields: [handledById], references: [id])
+  resolvedBy    User?           @relation("LCResolvedBy", fields: [resolvedById], references: [id])
   items         LossClaimItem[]
 
   @@unique([tenantId, no])
   @@index([supplierId, status])
+  @@index([deliveryOrderId])
+  @@index([receiptId])
+  @@index([tenantId, kind, createdAt])
+  @@index([resolvedById])
   @@map("loss_claims")
 }
 
 model LossClaimItem {
-  id          String  @id @default(cuid())
-  lossClaimId String
-  productId   String
-  orderedQty  Decimal @db.Decimal(10, 2) // 下单数量
-  receivedQty Decimal @db.Decimal(10, 2) // 实际收到
-  lossQty     Decimal @db.Decimal(10, 2) // 损耗数量
-  unitPrice   Decimal @db.Decimal(10, 2)
-  lossAmount  Decimal @db.Decimal(12, 2) // 损耗金额
+  id                      String  @id @default(cuid())
+  lossClaimId             String
+  productId               String
+  deliveryOrderItemId     String?
+  orderedQty              Decimal @db.Decimal(10, 2) // 下单数量
+  receivedQty             Decimal @db.Decimal(10, 2) // 实际收到
+  lossQty                 Decimal @db.Decimal(10, 2) // 损耗数量
+  unitPrice               Decimal @db.Decimal(10, 2)
+  lossAmount              Decimal @db.Decimal(12, 2) // 损耗金额
+  productCodeSnapshot     String?
+  productNameSnapshot     String?
+  productSpecSnapshot     String?
+  productUnitSnapshot     String?
+  productCategorySnapshot String?
 
-  lossClaim LossClaim @relation(fields: [lossClaimId], references: [id], onDelete: Cascade)
-  product   Product   @relation(fields: [productId], references: [id])
+  lossClaim         LossClaim          @relation(fields: [lossClaimId], references: [id], onDelete: Cascade)
+  product           Product            @relation(fields: [productId], references: [id])
+  deliveryOrderItem DeliveryOrderItem? @relation(fields: [deliveryOrderItemId], references: [id], onDelete: SetNull)
 
+  @@index([deliveryOrderItemId])
   @@map("loss_claim_items")
 }
 
@@ -1880,11 +1927,25 @@ enum DeliveryOrderEventType {
 
 enum LossClaimStatus {
   PENDING // 待供应商处理(24h)
-  APPROVED // 供应商同意，扣减账期
+  APPROVED // 供应商确认差异；实收应付已按验收数量生成，不重复扣减
   REJECTED // 供应商拒绝，退回协商
   NEGOTIATING // 协商中
   RESOLVED // 协商完成
-  AUTO_APPROVED // 超时自动同意
+  AUTO_APPROVED // 超时自动确认差异
+}
+
+enum LossClaimKind {
+  ARRIVAL_SHORTAGE // 到货数量短缺，必须尽量关联配送与收货明细
+  ARRIVAL_DAMAGE // 到货破损/品质异常，由门店提交供应商处理
+  INTERNAL_WASTE // 门店经营过程中的内部报损，不追责供应商
+  LEGACY_UNRESOLVED // 历史数据或无法安全确认来源的数据
+}
+
+enum LossClaimPayableBasis {
+  NET_AT_RECEIPT // 入库应付已按实收净额生成，确认差异时不重复扣款
+  GROSS_PENDING_CLAIM // 验收后补报，原应付尚未扣减；确认后才扣
+  NOT_APPLICABLE // 门店内部报损，不进入供应商应付
+  LEGACY_UNKNOWN // 历史记录维持旧兼容逻辑，不推断财务基准
 }
 
 // ── 供应商库存流水（每次入库/出库/盘点都一条审计记录）────
@@ -1901,7 +1962,7 @@ model SupplierStockMovement {
   sourceType   String? // 'PurchaseOrder' / 'ProductBatch' / 'Manual'
   sourceId     String? // 关联 ID (PO id 等)
 
-  // 批次/保质期 (入库时填, 出库时为空) — 第一期: 仅记录显示, 不做 FIFO 扣减
+  // 批次/保质期 (入库时填, 出库时为空)，实际余额与出库分配见 SupplierStockBatch。
   manufactureDate DateTime? @db.Date // 生产日期
   expiryDate      DateTime? @db.Date // 到期日期 (= 生产 + 保质期)
 
@@ -1912,10 +1973,74 @@ model SupplierStockMovement {
   supplier  Supplier @relation(fields: [supplierId], references: [id])
   product   Product  @relation(fields: [productId], references: [id])
   createdBy User     @relation(fields: [createdById], references: [id])
+  sourceBatch SupplierStockBatch? @relation("SupplierStockBatchSourceMovement")
+  batchAllocations SupplierStockBatchAllocation[]
 
   @@index([supplierId, productId, createdAt])
   @@index([tenantId, createdAt])
   @@map("supplier_stock_movements")
+}
+
+// ── 供应商批次余额（单默认仓）────────────────────────
+// 上线时每个正库存 SKU 建一笔 OPENING 批次；之后入库形成新批次，出库/报损/负调整
+// 通过 allocation 消耗批次。批次余额合计必须始终等于 Product.stock。
+model SupplierStockBatch {
+  id               String                 @id @default(cuid())
+  tenantId         String
+  supplierId       String
+  productId        String
+  batchNo          String                 @db.VarChar(80)
+  kind             SupplierStockBatchKind
+  initialQty       Decimal                @db.Decimal(12, 3)
+  remainingQty     Decimal                @db.Decimal(12, 3)
+  manufactureDate  DateTime?              @db.Date
+  expiryDate       DateTime?              @db.Date
+  sourceMovementId String?                @unique
+  createdById      String?
+  depletedAt       DateTime?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  tenant         Tenant                  @relation(fields: [tenantId], references: [id])
+  supplier       Supplier                @relation(fields: [supplierId], references: [id])
+  product        Product                 @relation(fields: [productId], references: [id])
+  sourceMovement SupplierStockMovement?  @relation("SupplierStockBatchSourceMovement", fields: [sourceMovementId], references: [id], onDelete: Restrict)
+  createdBy      User?                   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  allocations    SupplierStockBatchAllocation[]
+
+  @@unique([tenantId, productId, batchNo])
+  @@index([tenantId, supplierId, productId, remainingQty], map: "supplier_stock_batches_scope_product_balance_idx")
+  @@index([tenantId, supplierId, expiryDate], map: "supplier_stock_batches_scope_expiry_idx")
+  @@map("supplier_stock_batches")
+}
+
+enum SupplierStockBatchKind {
+  OPENING
+  INBOUND
+  ADJUSTMENT
+  RETURN
+}
+
+model SupplierStockBatchAllocation {
+  id         String   @id @default(cuid())
+  tenantId   String
+  supplierId String
+  productId  String
+  batchId    String
+  movementId String
+  quantity   Decimal  @db.Decimal(12, 3)
+  createdAt  DateTime @default(now())
+
+  tenant   Tenant                @relation(fields: [tenantId], references: [id])
+  supplier Supplier              @relation(fields: [supplierId], references: [id])
+  product  Product               @relation(fields: [productId], references: [id])
+  batch    SupplierStockBatch    @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  movement SupplierStockMovement @relation(fields: [movementId], references: [id], onDelete: Restrict)
+
+  @@unique([batchId, movementId])
+  @@index([movementId])
+  @@index([tenantId, supplierId, productId], map: "supplier_stock_batch_allocations_scope_product_idx")
+  @@map("supplier_stock_batch_allocations")
 }
 
 enum StockMovementType {
@@ -1925,6 +2050,41 @@ enum StockMovementType {
   OUTBOUND_PO // 接单发货自动出库
   ADJUSTMENT // 盘点调整
   LOSS // 报损
+}
+
+// ── 供应商库存预占（单默认仓）────────────────────────
+// 接单时占用、拒单/撤单时释放、发货时核销。物理库存仍由 Product.stock 表示，
+// 可用库存 = 物理库存 - ACTIVE 预占；该表是预占审计事实，不允许直接删除。
+model SupplierStockReservation {
+  id                  String                         @id @default(cuid())
+  tenantId            String
+  supplierId          String
+  productId           String
+  purchaseOrderId     String
+  purchaseOrderItemId String                         @unique
+  quantity            Decimal                        @db.Decimal(12, 3)
+  fulfilledQty        Decimal                        @default(0) @db.Decimal(12, 3)
+  status              SupplierStockReservationStatus @default(ACTIVE)
+  releasedAt          DateTime?
+  consumedAt          DateTime?
+  createdAt           DateTime                       @default(now())
+  updatedAt           DateTime                       @updatedAt
+
+  tenant            Tenant            @relation(fields: [tenantId], references: [id])
+  supplier          Supplier          @relation(fields: [supplierId], references: [id])
+  product           Product           @relation(fields: [productId], references: [id])
+  purchaseOrder     PurchaseOrder     @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  purchaseOrderItem PurchaseOrderItem @relation(fields: [purchaseOrderItemId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, supplierId, status, productId], map: "supplier_stock_reservations_scope_status_product_idx")
+  @@index([purchaseOrderId, status], map: "supplier_stock_reservations_order_status_idx")
+  @@map("supplier_stock_reservations")
+}
+
+enum SupplierStockReservationStatus {
+  ACTIVE
+  RELEASED
+  CONSUMED
 }
 
 // ── 库存消耗记录（总厨每日录入）──────────────────────
@@ -2183,6 +2343,8 @@ enum DocumentType {
   PRICE_ADJUSTMENT // 调价
   NEW_SUPPLIER // 新供应商
   NEW_DISH // 新菜品
+  SUPPLIER_OFFER_CREATE // 供应商商品上架（单个或批量）
+  SUPPLIER_OFFER_DISABLE // 供应商商品停售（单个或批量）
   STORE_TRANSFER // 调拨
   MARKETING_BUDGET // 营销预算
   PERSONNEL_PAY // 调薪

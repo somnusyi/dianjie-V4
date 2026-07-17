@@ -2,13 +2,14 @@
  * 供应商 App · 已完成历史
  * 接 /api/orders?status=RECEIVED + 同时拉所有状态做计数
  *
- * 报损统计来自每单 lossClaims[].totalLossAmount
+ * 到货差异统计来自每单 lossClaims[].totalLossAmount；应付金额来自确认入库单。
  */
 'use client'
 import { useEffect, useState } from 'react'
 import { BottomNav, Chip } from '@/components/v2'
 import { EmptyState, SkeletonCard, FriendlyError } from '@/components/v2/skeleton'
 import { apiFetch } from '@/lib/v2-auth'
+import { SUPPLIER_MONEY_TERMS, supplierOrderStatusMeta } from '@/lib/supplier-domain'
 
 type OrderRow = {
   id: string
@@ -20,11 +21,8 @@ type OrderRow = {
   store: { id: string; name: string }
   items?: any[]
   lossClaims?: { id: string; status: string; totalLossAmount: number | string }[]
-}
-
-const STATUS_LABEL: Record<string, string> = {
-  SUBMITTED: '待接单', CONFIRMED: '已接单', SHIPPED: '已发货',
-  PENDING_CONFIRM: '已送达', RECEIVED: '已结清 ✓', CANCELED: '已取消',
+  receipts?: { id: string; status: string; totalAmount: number | string }[]
+  deliveries?: { id: string; status: string; actualTotalAmount: number | string }[]
 }
 
 export default function SupplierHistoryPage() {
@@ -56,16 +54,16 @@ export default function SupplierHistoryPage() {
 
   useEffect(() => { void loadPage() }, [])
 
-  const completed = (orders || []).filter(o => ['RECEIVED', 'PENDING_CONFIRM'].includes(o.status))
+  const completed = (orders || []).filter(o => ['RECEIVED', 'COMPLETED'].includes(o.status))
   const withLoss = completed.filter(o => (o.lossClaims?.length || 0) > 0)
   const shown = filter === 'with-loss' ? withLoss : completed
   const hasMore = orders !== null && orders.length < total
 
-  const totalLossAmount = withLoss.reduce(
+  const totalDifferenceAmount = withLoss.reduce(
     (s, o) => s + (o.lossClaims || []).reduce((ss, l) => ss + Number(l.totalLossAmount || 0), 0),
     0,
   )
-  const lossRate = completed.length > 0 ? (withLoss.length / completed.length) * 100 : 0
+  const differenceRate = completed.length > 0 ? (withLoss.length / completed.length) * 100 : 0
 
   return (
     <div className="min-h-screen bg-bg pb-20">
@@ -73,7 +71,7 @@ export default function SupplierHistoryPage() {
         <div>
           <h1 className="text-h1">订单</h1>
           <p className="text-caption text-gray3">
-            {orders ? `累计 ${completed.length} 单已完成 · ${withLoss.length} 单含报损` : '加载中…'}
+            {orders ? `累计 ${completed.length} 单已完成 · ${withLoss.length} 单有到货差异` : '加载中…'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -95,7 +93,7 @@ export default function SupplierHistoryPage() {
       <div className="px-4 mt-3 flex gap-2 overflow-x-auto">
         {([
           { key: 'all',       label: `全部 ${completed.length}` },
-          { key: 'with-loss', label: `含报损 ${withLoss.length}` },
+          { key: 'with-loss', label: `有到货差异 ${withLoss.length}` },
         ] as const).map(f => (
           <button
             key={f.key}
@@ -105,13 +103,13 @@ export default function SupplierHistoryPage() {
         ))}
       </div>
 
-      {/* 报损洞察 banner */}
+      {/* 到货差异概况 */}
       {orders && completed.length > 0 && (
         <div className="px-4 mt-3">
           <div className={`rounded-card p-3 text-caption ${withLoss.length === 0 ? 'bg-green-bg text-green-fg' : 'bg-amber/10 text-amber-fg'}`}>
-            报损概况 · <span className="font-num">{withLoss.length} 单</span>
-            {totalLossAmount > 0 && <> · <span className="font-num text-red-fg">¥{Math.round(totalLossAmount).toLocaleString()} 损失</span></>}
-            · 报损率 <span className="font-num">{lossRate.toFixed(1)}%</span>
+            到货差异 · <span className="font-num">{withLoss.length} 单</span>
+            {totalDifferenceAmount > 0 && <> · <span className="font-num text-red-fg">涉及 ¥{Math.round(totalDifferenceAmount).toLocaleString()}</span></>}
+            · 差异单率 <span className="font-num">{differenceRate.toFixed(1)}%</span>
           </div>
         </div>
       )}
@@ -124,7 +122,7 @@ export default function SupplierHistoryPage() {
         <div className="px-4 mt-4">
           <EmptyState
             icon="📦"
-            title={filter === 'with-loss' ? '没有含报损的订单' : '还没有已完成订单'}
+            title={filter === 'with-loss' ? '没有到货差异订单' : '还没有已完成订单'}
             hint={filter === 'with-loss' ? '保持就好 ✓' : '订单完成入库后会出现在这里'}
           />
           {hasMore && (
@@ -142,23 +140,28 @@ export default function SupplierHistoryPage() {
         <div className="px-4 mt-3">
           <ul className="space-y-2">
             {shown.map(o => {
-            const loss = (o.lossClaims || []).reduce((s, l) => s + Number(l.totalLossAmount || 0), 0)
+            const difference = (o.lossClaims || []).reduce((s, l) => s + Number(l.totalLossAmount || 0), 0)
+            const payable = (o.receipts || []).reduce((s, receipt) => s + Number(receipt.totalAmount || 0), 0)
+            const shipped = (o.deliveries || []).reduce((s, delivery) => s + Number(delivery.actualTotalAmount || 0), 0)
+            const displayAmount = payable > 0 ? payable : shipped > 0 ? shipped : Number(o.totalAmount || 0)
+            const amountLabel = payable > 0
+              ? SUPPLIER_MONEY_TERMS.payableAmount
+              : shipped > 0 ? SUPPLIER_MONEY_TERMS.shipmentAmount : SUPPLIER_MONEY_TERMS.orderedAmount
             const date = new Date(o.receivedAt || o.createdAt)
             const dateLabel = `${date.getMonth() + 1}/${String(date.getDate()).padStart(2, '0')}`
             return (
-              <li key={o.id} className={`bg-white rounded-card border ${loss > 0 ? 'border-red/30' : 'border-border'} p-3`}>
+              <li key={o.id} className={`bg-white rounded-card border ${difference > 0 ? 'border-red/30' : 'border-border'} p-3`}>
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
-                  {loss > 0 && <Chip tone="red">含报损</Chip>}
-                  <span className="text-micro text-gray3">{dateLabel} · {STATUS_LABEL[o.status] || o.status}</span>
+                  {difference > 0 && <Chip tone="red">有到货差异</Chip>}
+                  <span className="text-micro text-gray3">{dateLabel} · {supplierOrderStatusMeta(o.status).label}</span>
                   <span className="ml-auto font-num text-h2">
-                    ¥{Math.round(Number(o.totalAmount || 0)).toLocaleString()}
-                    {loss > 0 && <span className="text-micro text-red-fg ml-1">−¥{Math.round(loss).toLocaleString()}</span>}
+                    ¥{Math.round(displayAmount).toLocaleString()}
                   </span>
                 </div>
                 <div className="text-h2">{o.store?.name || '门店'} <span className="text-micro text-gray3 font-num ml-1">#{o.no}</span></div>
                 <p className="text-caption text-gray2 mt-0.5">
-                  {(o.items?.length ?? 0)} 项商品
-                  {loss > 0 && ` · ${o.lossClaims?.length} 笔报损`}
+                  {amountLabel} · {(o.items?.length ?? 0)} 项商品
+                  {difference > 0 && ` · ${o.lossClaims?.length} 笔差异涉及 ¥${Math.round(difference).toLocaleString()}`}
                 </p>
               </li>
             )

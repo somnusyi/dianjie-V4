@@ -238,7 +238,7 @@ export function BottomNav({ tabs, activeKey, onChange, fabKey, onFab }: {
   onFab?: () => void
 }) {
   return (
-    <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-border flex items-stretch h-16 z-40"
+    <nav data-bottom-nav="true" className="fixed bottom-0 left-0 right-0 bg-white border-t border-border flex items-stretch h-16 z-40"
          style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {tabs.map((t) => {
         const active = t.key === activeKey

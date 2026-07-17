@@ -7,7 +7,7 @@
  * 与验收页区别:
  *   - 验收页 (receive): PATCH /api/orders/:id/receive, 一次性, 仅 PENDING_CONFIRM
  *   - 本页 (report-loss): POST /api/loss-claims, 可对已验收/已完成的 PO 反复发起,
- *     每轮生成一张新的 LossClaim, 各自走 24h 未响应自动同意 + 扣账期
+ *     每轮绑定一张明确收货单，冻结对应账期，供应商确认后才调整应付。
  *
  * 录入口径: 每项填「本次还短缺多少」, 后端 lossQty = 实发(shippedQty) − receivedQty,
  * 故 receivedQty = shippedQty − 本次短缺.
@@ -25,6 +25,8 @@ export default function ReportLossPage({ params }: { params: { id: string } }) {
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [shortage, setShortage] = useState<Record<string, number>>({})   // 本次短缺量
+  const [receiptId, setReceiptId] = useState('')
+  const [differenceKind, setDifferenceKind] = useState<'ARRIVAL_SHORTAGE' | 'ARRIVAL_DAMAGE'>('ARRIVAL_SHORTAGE')
   const [lossReason, setLossReason] = useState('')                       // 自定义报损原因 (可选)
   const [description, setDescription] = useState('')
   const [evidence, setEvidence] = useState<string[]>([])
@@ -32,15 +34,25 @@ export default function ReportLossPage({ params }: { params: { id: string } }) {
   const [confirmState, openConfirm] = useConfirmSheet()
 
   useEffect(() => {
-    apiFetch(`/api/orders/${params.id}`).then((d: any) => setPo(d))
+    apiFetch(`/api/orders/${params.id}`).then((d: any) => {
+      setPo(d)
+      const first = (d.deliveries || []).find((delivery: any) => delivery.receipt?.id)
+      setReceiptId(first?.receipt?.id || '')
+    })
       .catch(e => setError(String(e?.message || e)))
   }, [params.id])
 
   if (error) return <div className="p-6 text-red-fg">{error}</div>
   if (!po) return <div className="p-6 text-gray3 text-caption">加载中…</div>
 
-  const items = po.items || []
-  const expected = (it: any) => Number(it.shippedQty ?? it.quantity)
+  const eligibleDeliveries = (po.deliveries || []).filter((delivery: any) => delivery.receipt?.id)
+  const selectedDelivery = eligibleDeliveries.find((delivery: any) => delivery.receipt.id === receiptId)
+  const items = (selectedDelivery?.items || []).map((item: any) => ({
+    ...item,
+    unitPrice: item.unitPriceSnapshot,
+    product: item.product || {},
+  }))
+  const expected = (it: any) => Number(it.shippedQty)
   const lossAmount = items.reduce((s: number, it: any) => {
     const n = Number(shortage[it.productId] || 0)
     return n > 0 ? s + n * Number(it.unitPrice) : s
@@ -63,10 +75,11 @@ export default function ReportLossPage({ params }: { params: { id: string } }) {
 
   function submit() {
     if (submitting) return
-    if (!hasLoss) return alert('请至少为 1 项填写本次短缺数量')
+    if (!receiptId || !selectedDelivery) return alert('请先选择本次补报对应的收货单')
+    if (!hasLoss) return alert('请至少为 1 项填写本次差异数量')
     openConfirm({
-      title: `补报短量 ¥${lossAmount.toFixed(2)}`,
-      body: `向 ${po.supplier?.name || '供应商'} 补发起报损索赔，24h 内未响应自动同意。可多轮补报。`,
+      title: `补报到货差异 ¥${lossAmount.toFixed(2)}`,
+      body: `提交后会冻结收货单 ${selectedDelivery.receipt.no} 的待付账期；供应商确认后按本次差异调整，24h 未响应自动确认。`,
       confirmLabel: '提交补报',
       tone: 'primary',
       onConfirm: async () => {
@@ -81,11 +94,17 @@ export default function ReportLossPage({ params }: { params: { id: string } }) {
             }))
           const reasonTrim = lossReason.trim()
           const desc = description.trim()
-            || (reasonTrim ? `${reasonTrim} · 验收后补报 (${po.no})` : `验收后补报短量 (${po.no})`)
+            || (reasonTrim
+              ? `${reasonTrim} · 验收后补报 (${po.no})`
+              : differenceKind === 'ARRIVAL_DAMAGE'
+                ? `验收后补报破损/品质异常 (${po.no})`
+                : `验收后补报短量 (${po.no})`)
           await apiFetch('/api/loss-claims', {
             method: 'POST',
             body: JSON.stringify({
               purchaseOrderId: po.id,
+              receiptId,
+              kind: differenceKind,
               reason: reasonTrim || undefined,
               description: desc,
               evidenceImages: evidence,
@@ -106,7 +125,7 @@ export default function ReportLossPage({ params }: { params: { id: string } }) {
     <div className="min-h-screen bg-bg pb-32">
       <header className="px-4 pt-4 pb-2 flex items-center gap-2">
         <button onClick={() => router.back()} className="text-gray2 text-h2">‹</button>
-        <h1 className="text-h1">补报短量</h1>
+        <h1 className="text-h1">补报到货差异</h1>
       </header>
 
       {/* PO 信息 */}
@@ -119,11 +138,26 @@ export default function ReportLossPage({ params }: { params: { id: string } }) {
       </div>
 
       <div className="mx-4 mt-3 bg-amber/10 border border-amber/40 rounded-card p-3 text-micro text-gray2">
-        💡 验收时已报过损也没关系, 这里可继续补报遗漏的短量. 每次补报独立生成报损单, 24h 内供应商未响应自动同意.
+        💡 每次补报必须对应一张具体收货单。系统会防止同一配送明细重复超额主张，并冻结该笔账期待核。
       </div>
 
+      <Section title="对应收货单" right={eligibleDeliveries.length > 1 ? '必须选择' : ''}>
+        {eligibleDeliveries.length === 0 ? (
+          <div className="bg-red-bg text-red-fg rounded-card border border-red/30 p-3 text-caption">没有可补报的已确认收货单</div>
+        ) : (
+          <select value={receiptId} onChange={e => { setReceiptId(e.target.value); setShortage({}) }}
+            className="w-full bg-white border border-border rounded-cta px-3 py-3 text-body text-ink">
+            {eligibleDeliveries.map((delivery: any) => (
+              <option key={delivery.receipt.id} value={delivery.receipt.id}>
+                {delivery.receipt.no} · 配送 {delivery.no} · ¥{Number(delivery.receipt.totalAmount).toFixed(2)}
+              </option>
+            ))}
+          </select>
+        )}
+      </Section>
+
       {/* 逐条填本次短缺 */}
-      <Section title="逐条填写本次短缺数量" right={hasLoss ? `补报 ¥${lossAmount.toFixed(2)}` : '未填'} rightTone={hasLoss ? 'red' : undefined}>
+      <Section title="逐条填写本次差异数量" right={hasLoss ? `涉及 ¥${lossAmount.toFixed(2)}` : '未填'} rightTone={hasLoss ? 'red' : undefined}>
         <ul className="bg-white rounded-card border border-border divide-y divide-border">
           {items.map((it: any) => {
             const exp = expected(it)
@@ -142,7 +176,7 @@ export default function ReportLossPage({ params }: { params: { id: string } }) {
                   实发 {exp} {it.product?.unit || ''} × ¥{Number(it.unitPrice).toFixed(2)}
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-caption text-gray2">本次短缺</span>
+                  <span className="text-caption text-gray2">本次差异</span>
                   <button type="button"
                     onClick={() => setShortage({ ...shortage, [it.productId]: Math.max(0, (shortage[it.productId] || 0) - 1) })}
                     className="w-8 h-8 rounded-md bg-bg flex items-center justify-center text-h2">−</button>
@@ -166,14 +200,20 @@ export default function ReportLossPage({ params }: { params: { id: string } }) {
         </ul>
       </Section>
 
-      {/* 报损原因 — 自定义 */}
-      <Section title="报损原因 (可自定义)" right={lossReason.trim() ? '' : '默认: 短缺'}>
+      {/* 到货差异类型与原因 */}
+      <Section title="到货差异类型" right={lossReason.trim() ? '' : '可补充说明'}>
+        <div className="grid grid-cols-2 gap-2 mb-2">
+          <button type="button" onClick={() => setDifferenceKind('ARRIVAL_SHORTAGE')}
+            className={`py-2 rounded-cta text-button border ${differenceKind === 'ARRIVAL_SHORTAGE' ? 'bg-ink text-white border-ink' : 'bg-white text-gray2 border-border'}`}>数量短缺</button>
+          <button type="button" onClick={() => setDifferenceKind('ARRIVAL_DAMAGE')}
+            className={`py-2 rounded-cta text-button border ${differenceKind === 'ARRIVAL_DAMAGE' ? 'bg-ink text-white border-ink' : 'bg-white text-gray2 border-border'}`}>破损 / 品质异常</button>
+        </div>
         <input
           type="text"
           value={lossReason}
           onChange={(e) => setLossReason(e.target.value)}
           maxLength={30}
-          placeholder="如: 少送 2 件 / 菜品变质 / 规格不符 / 破损…  (留空默认按短缺)"
+          placeholder={differenceKind === 'ARRIVAL_DAMAGE' ? '如：开箱后发现变质、包装破损…' : '如：复核发现少 2 斤…'}
           className="w-full bg-white border border-border rounded-cta px-3 py-2.5 text-body text-ink placeholder:text-gray3 focus:outline-none focus:border-accent"
         />
       </Section>
@@ -186,7 +226,7 @@ export default function ReportLossPage({ params }: { params: { id: string } }) {
       </Section>
 
       {/* 证据 — 可选 */}
-      <Section title="报损证据 (建议)" right={`${evidence.length} 份`}>
+      <Section title="到货差异证据 (建议)" right={`${evidence.length} 份`}>
         <div className={`rounded-card border p-3 ${evidence.length === 0 ? 'bg-amber/10 border-amber/40' : 'bg-white border-border'}`}>
           <p className={`text-micro mb-2 ${evidence.length === 0 ? 'text-amber-fg' : 'text-gray3'}`}>
             {evidence.length === 0
@@ -232,7 +272,7 @@ export default function ReportLossPage({ params }: { params: { id: string } }) {
         <button type="button" onClick={() => router.back()} className="px-4 py-3 bg-white border border-border rounded-cta text-button text-gray2">取消</button>
         <button onClick={submit} disabled={submitting || !hasLoss}
           className="flex-1 py-3 rounded-cta text-button bg-ink text-white disabled:opacity-40">
-          {submitting ? '提交中…' : hasLoss ? `提交补报 · ¥${lossAmount.toFixed(2)}` : '请填写短缺数量'}
+          {submitting ? '提交中…' : hasLoss ? `提交补报 · ¥${lossAmount.toFixed(2)}` : '请填写差异数量'}
         </button>
       </div>
 

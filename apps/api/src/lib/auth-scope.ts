@@ -30,3 +30,19 @@ export function isSupplierRole(role: string | undefined | null): boolean {
   if (!role) return false
   return SUPPLIER_ROLES.has(role)
 }
+
+/**
+ * Supplier-domain requests must fail closed when the account has no supplier
+ * binding. Silently omitting the supplier filter turns a supplier request into
+ * a tenant-wide query, which is never a safe fallback.
+ */
+export function requireSupplierBinding(
+  role: string | undefined | null,
+  supplierId: string | undefined | null,
+): string | undefined {
+  if (!isSupplierRole(role)) return undefined
+  if (!supplierId) {
+    throw { statusCode: 403, message: '供应商账号未绑定供应商，请联系管理员' }
+  }
+  return supplierId
+}

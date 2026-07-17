@@ -4,9 +4,14 @@ import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { isSupplierRole } from '../lib/auth-scope'
 import { nextBusinessNo } from '../services/purchaseOrderIntegrity'
+import { buildSupplierStatement, supplierStatementToCsv } from '../services/supplierStatement'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const FINANCE_ROLES = new Set(['ADMIN', 'FINANCE', 'SUPER_ADMIN'])
+const supplierStatementQuerySchema = z.object({
+  month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, '月份格式应为 YYYY-MM'),
+  supplierId: z.string().trim().min(1).max(100).optional(),
+}).strict()
 
 const businessDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式应为 YYYY-MM-DD').refine(value => {
   const date = new Date(`${value}T00:00:00.000Z`)
@@ -40,7 +45,102 @@ function isUniqueConflict(error: any) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002'
 }
 
+async function loadSupplierStatement(params: {
+  tenantId: string
+  role: string
+  actorSupplierId?: string | null
+  query: z.infer<typeof supplierStatementQuerySchema>
+}) {
+  const scopedSupplierId = isSupplierRole(params.role) ? params.actorSupplierId : params.query.supplierId
+  if (!scopedSupplierId) {
+    throw httpError(isSupplierRole(params.role) ? '供应商账号未绑定供应商' : '请选择供应商', 403)
+  }
+  const supplier = await prisma.supplier.findFirst({
+    where: { id: scopedSupplierId, tenantId: params.tenantId }, select: { id: true, no: true, name: true },
+  })
+  if (!supplier) throw httpError('供应商不存在或无权查看', 404)
+
+  const periodStart = new Date(`${params.query.month}-01T00:00:00.000Z`)
+  const periodEnd = dayjs(periodStart).add(1, 'month').toDate()
+  const rows = await prisma.receipt.findMany({
+    where: {
+      tenantId: params.tenantId, supplierId: scopedSupplierId,
+      status: { in: ['CONFIRMED', 'ACCOUNTED'] },
+      deliveryDate: { gte: periodStart, lt: periodEnd },
+    },
+    select: {
+      id: true, no: true, deliveryDate: true, totalAmount: true,
+      store: { select: { id: true, name: true } },
+      purchaseOrder: { select: { id: true, no: true, totalAmount: true, currentOrderAmount: true } },
+      deliveryOrder: { select: { id: true, no: true, actualTotalAmount: true } },
+      paymentSchedule: {
+        select: { id: true, amount: true, status: true, dueAt: true, paidAt: true, bankTxNo: true },
+      },
+      lossClaims: {
+        where: { kind: { in: ['ARRIVAL_SHORTAGE', 'ARRIVAL_DAMAGE', 'LEGACY_UNRESOLVED'] } },
+        select: {
+          id: true, no: true, kind: true, status: true, payableBasis: true,
+          totalLossAmount: true, resolvedDeductAmount: true,
+        },
+        orderBy: { createdAt: 'asc' },
+      },
+    },
+    orderBy: [{ deliveryDate: 'asc' }, { no: 'asc' }],
+  })
+  return {
+    supplier,
+    month: params.query.month,
+    periodStart,
+    periodEnd: dayjs(periodEnd).subtract(1, 'day').toDate(),
+    ...buildSupplierStatement(rows),
+  }
+}
+
 export const reconciliationRoutes: FastifyPluginAsync = async (app) => {
+  app.get('/supplier-statement', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role, supplierId: actorSupplierId } = req.user
+    if (!FINANCE_ROLES.has(role) && !isSupplierRole(role)) {
+      return reply.status(403).send({ error: '无权查看供应商月度对账' })
+    }
+    const parsed = supplierStatementQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
+    try {
+      return await loadSupplierStatement({ tenantId, role, actorSupplierId, query: parsed.data })
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      throw error
+    }
+  })
+
+  app.get('/supplier-statement/export', auth(app), async (req: any, reply: any) => {
+    const { tenantId, userId, role, supplierId: actorSupplierId } = req.user
+    if (!FINANCE_ROLES.has(role) && !isSupplierRole(role)) {
+      return reply.status(403).send({ error: '无权导出供应商月度对账' })
+    }
+    const parsed = supplierStatementQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
+    try {
+      const statement = await loadSupplierStatement({ tenantId, role, actorSupplierId, query: parsed.data })
+      await prisma.opLog.create({
+        data: {
+          tenantId, userId, role,
+          action: `导出供应商月度对账 ${statement.supplier.name} ${statement.month}`,
+          entityType: 'SupplierStatement', targetId: statement.supplier.id,
+          metadata: { month: statement.month, supplierId: statement.supplier.id, receiptCount: statement.summary.receiptCount },
+        },
+      })
+      const filename = `${statement.supplier.name}_${statement.month}_月度对账.csv`
+      return reply
+        .header('Content-Type', 'text/csv; charset=utf-8')
+        .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`)
+        .header('Cache-Control', 'private, no-store')
+        .send(supplierStatementToCsv(statement))
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      throw error
+    }
+  })
+
   app.get('/', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, supplierId } = req.user
     if (!FINANCE_ROLES.has(role) && !isSupplierRole(role)) {

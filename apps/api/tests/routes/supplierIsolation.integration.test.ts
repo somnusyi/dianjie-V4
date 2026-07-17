@@ -290,6 +290,44 @@ describe('supplier tenant scope (integration)', () => {
     expect(document.payload).toMatchObject({ oldPrice: 10, newPrice: 12 })
   })
 
+  it('validates product edits and cannot self-approve a pending offer', async () => {
+    const invalidBodies = [
+      { price: -1 },
+      { minOrderQty: 0 },
+      { stepQty: -1 },
+      { shelfDays: 3651 },
+      { shipUpperPct: 0.99 },
+      { shipUpperPct: 10.01 },
+      { shipUpperBuffer: -1 },
+      { shipUpperBuffer: 10_001 },
+      { spec: 'x'.repeat(81) },
+    ]
+    for (const payload of invalidBodies) {
+      const response = await app.inject({ method: 'PATCH', url: `/api/products/${productAId}`, payload })
+      expect(response.statusCode).toBe(400)
+    }
+    expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productAId } })).price)).toBe(10)
+
+    const pending = await prisma.product.create({
+      data: {
+        tenantId, supplierId: supplierAId, code: `PENDING-BYPASS-${suffix}`,
+        name: '待审批不可自助启用', price: 1, status: 'PENDING_APPROVAL',
+      },
+    })
+    const directEnable = await app.inject({
+      method: 'PATCH', url: `/api/products/${pending.id}`, payload: { status: 'ENABLED' },
+    })
+    expect(directEnable.statusCode).toBe(400)
+    const batchEnable = await app.inject({
+      method: 'PATCH', url: '/api/products/batch-status',
+      payload: { ids: [pending.id], status: 'ENABLED' },
+    })
+    expect(batchEnable.statusCode).toBe(400)
+    expect(await prisma.product.findUniqueOrThrow({ where: { id: pending.id } })).toMatchObject({
+      status: 'PENDING_APPROVAL',
+    })
+  })
+
   it('rejects a cross-supplier batch status impact preview', async () => {
     const response = await app.inject({
       method: 'POST', url: '/api/products/batch-status/preview',

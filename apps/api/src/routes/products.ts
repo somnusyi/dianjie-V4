@@ -65,6 +65,23 @@ const productListFilterSchema = z.object({
   q: z.string().trim().max(80).optional(),
 }).passthrough()
 
+const productPatchSchema = z.object({
+  code: z.string().trim().min(1).max(40).optional(),
+  name: z.string().trim().min(1).max(80).optional(),
+  spec: z.string().trim().max(80).nullable().optional(),
+  category: z.string().trim().min(1).max(40).optional(),
+  imageKey: z.string().trim().max(500).nullable().optional(),
+  unit: z.string().trim().min(1).max(10)
+    .refine(value => !/^\d/.test(value), '单位不能以数字开头').optional(),
+  price: z.number().nonnegative().max(99_999_999.99).optional(),
+  minOrderQty: z.number().positive().max(99_999_999.99).optional(),
+  stepQty: z.number().positive().max(99_999_999.99).optional(),
+  shelfDays: z.number().int().min(0).max(3650).optional(),
+  status: z.enum(['PENDING_APPROVAL', 'PENDING_DISABLE', 'ENABLED', 'DISABLED']).optional(),
+  shipUpperPct: z.number().min(1).max(10).optional(),
+  shipUpperBuffer: z.number().min(0).max(10_000).optional(),
+}).strict()
+
 /** 自动生成商品 code: 供应商短码 + 随机短 ID，避免同毫秒批量导入互撞。 */
 function autoCode(supplierId: string | undefined): string {
   const sup = supplierId ? supplierId.slice(-4).toUpperCase() : 'TEN0'
@@ -594,8 +611,20 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const targetStatus = parsed.data.status
+    if (isSupplierRole(role) && targetStatus === 'ENABLED') {
+      const ineligible = matched.filter(item => item.status !== 'DISABLED')
+      if (ineligible.length > 0) {
+        return reply.status(400).send({ error: '供应商只能恢复已停用商品，待审批商品不能直接启用' })
+      }
+    }
     await prisma.$transaction(async tx => {
-      await tx.product.updateMany({ where, data: { status: targetStatus } })
+      const updated = await tx.product.updateMany({
+        where: isSupplierRole(role) && targetStatus === 'ENABLED' ? { ...where, status: 'DISABLED' } : where,
+        data: { status: targetStatus },
+      })
+      if (updated.count !== matched.length) {
+        throw Object.assign(new Error('商品状态已变化，请刷新后重试'), { statusCode: 409 })
+      }
       await tx.opLog.create({
         data: {
           tenantId, userId, role,
@@ -775,7 +804,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(403).send({ error: '无权创建商品' })
     }
     if (isSupplierRole(role) && !supplierScopeOrReply(req, reply, 'catalog.manage')) return
-    const body = req.body as any
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as any : {}
     const items = Array.isArray(body?.items) ? body.items : null
     const parsedFilename = z.string().trim().max(255).nullable().optional().safeParse(body?.filename)
     if (!parsedFilename.success) {
@@ -1094,12 +1123,16 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       if (!supplierId) return reply.status(403).send({ error: '账号未绑定供应商' })
       where.supplierId = supplierId
     }
-    const body = req.body as any
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as any : {}
     // P1: 非供应商角色也必须白名单字段, 防 mass assignment (改 tenantId / supplierId / id)
     const SUPPLIER_ALLOW = ['price', 'spec', 'category', 'imageKey', 'minOrderQty', 'stepQty', 'shelfDays', 'status', 'shipUpperPct', 'shipUpperBuffer']
     const STAFF_ALLOW = [...SUPPLIER_ALLOW, 'name', 'unit', 'category', 'code']  // 内部员工额外可改名/类
     const allow = isSupplierRole(role) ? SUPPLIER_ALLOW : STAFF_ALLOW
-    const data = Object.fromEntries(Object.entries(body).filter(([k]) => allow.includes(k)))
+    const parsedPatch = productPatchSchema.safeParse(
+      Object.fromEntries(Object.entries(body).filter(([k]) => allow.includes(k))),
+    )
+    if (!parsedPatch.success) return reply.status(400).send({ error: parsedPatch.error.issues[0].message })
+    const data: any = parsedPatch.data
     if (data.imageKey && !String(data.imageKey).startsWith(`products/${tenantId}/`)) {
       return reply.status(400).send({ error: '商品图片不属于当前租户' })
     }
@@ -1109,6 +1142,17 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       })
       if (!category?.isActive) return reply.status(400).send({ error: '请选择一个启用中的分类' })
       data.category = category.name
+    }
+    if (isSupplierRole(role) && data.status && !['ENABLED', 'DISABLED'].includes(data.status)) {
+      return reply.status(400).send({ error: '供应商不能直接设置待审批状态' })
+    }
+    if (isSupplierRole(role) && data.status === 'ENABLED') {
+      const current = await prisma.product.findFirst({ where, select: { status: true } })
+      if (!current) return reply.status(404).send({ error: '商品不存在或无权修改' })
+      if (current.status !== 'DISABLED') {
+        return reply.status(400).send({ error: '供应商只能恢复已停用商品，待审批商品不能直接启用' })
+      }
+      where.status = 'DISABLED'
     }
 
     // 供应商停售 SKU → 不直接落库, 创建 NEW_DISH(action=DISABLE) 审批单
@@ -1247,7 +1291,16 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     })
     if (!before) return reply.status(404).send({ error: '商品不存在或无权修改' })
     const after = await prisma.$transaction(async tx => {
-      const updated = await tx.product.update({ where: { id: before.id }, data })
+      let updated
+      if (isSupplierRole(role) && data.status === 'ENABLED') {
+        const claimed = await tx.product.updateMany({ where: { ...where, id: before.id }, data })
+        if (claimed.count !== 1) {
+          throw Object.assign(new Error('商品状态已变化，请刷新后重试'), { statusCode: 409 })
+        }
+        updated = await tx.product.findUniqueOrThrow({ where: { id: before.id } })
+      } else {
+        updated = await tx.product.update({ where: { id: before.id }, data })
+      }
       await tx.opLog.create({
         data: {
           tenantId, userId, role,

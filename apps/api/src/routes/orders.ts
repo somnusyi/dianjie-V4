@@ -35,7 +35,7 @@ const orderItemSchema = z.object({
 const orderCreateSchema = z.object({
   storeId:      z.string().optional(),
   supplierId:   z.string().min(1, 'supplierId 必填'),
-  expectedDate: z.string().min(1, 'expectedDate 必填'),
+  expectedDate: calendarDateSchema,
   note:         z.string().optional().default(''),
   items:        z.array(orderItemSchema).min(1, '至少一条采购明细'),
   // 防重复提交: 客户端 uuid, 后端缓存 60s 拦截重复 POST
@@ -48,7 +48,7 @@ const revisionCreateSchema = z.object({
     productId: z.string().min(1),
     quantity: z.number().positive('订货数量必须大于 0'),
   }).strict()).min(1, '订货单至少保留一个商品').max(500).optional(),
-  expectedDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  expectedDate: calendarDateSchema.optional(),
   note: z.string().max(500).nullable().optional(),
   baseRowVersion: z.number().int().nonnegative(),
   requestKey: z.string().trim().min(8).max(80).optional(),

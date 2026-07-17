@@ -114,6 +114,14 @@ describe('supplier order to receipt flow (integration)', () => {
         expect(response.statusCode).toBe(400)
       }
     }
+    const invalidCreate = await app.inject({
+      method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' },
+      payload: {
+        supplierId, storeId, expectedDate: '2026-02-29',
+        items: [{ productId, quantity: 1, unitPrice: 10 }],
+      },
+    })
+    expect(invalidCreate.statusCode).toBe(400)
   })
 
   it('orders, reserves, ships once, receives actual quantity and creates payable facts', async () => {
@@ -132,6 +140,12 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(create.statusCode).toBe(200)
     const order = create.json()
     expect(Number(order.totalAmount)).toBe(60)
+
+    const invalidRevision = await app.inject({
+      method: 'POST', url: `/api/orders/${order.id}/revisions`, headers: { 'x-test-actor': 'chef' },
+      payload: { reason: '验证非法日期', expectedDate: '2026-04-31', baseRowVersion: order.rowVersion },
+    })
+    expect(invalidRevision.statusCode).toBe(400)
 
     const confirm = await app.inject({
       method: 'PATCH', url: `/api/orders/${order.id}/confirm`, headers: { 'x-test-actor': 'supplier' },

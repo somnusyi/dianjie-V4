@@ -91,6 +91,12 @@ if [ "$LOCAL_HEAD" != "$ORIGIN_HEAD" ]; then
   git checkout "$ORIGIN_HEAD"
   echo "   worktree 切到 $ORIGIN_HEAD"
 fi
+# 稀疏 worktree 在 checkout 新提交时可能再次把 tracked public/ 隐藏。
+# 必须在切换目标提交后重新物化，否则前面的检查通过、上传阶段仍会失败。
+if [ ! -d apps/web/public ]; then
+  git checkout --ignore-skip-worktree-bits HEAD -- apps/web/public
+fi
+[ -d apps/web/public ] || { echo "❌ 切换目标提交后 apps/web/public 缺失，停止部署"; exit 1; }
 SHORT_HEAD=$(git rev-parse --short HEAD)
 
 # ── 3. 版本检查 (服务器是不是你的祖先?) ─────────────

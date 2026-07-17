@@ -1,6 +1,6 @@
 import ExcelJS from 'exceljs'
 import { describe, expect, it } from 'vitest'
-import { normalizeDishName, normalizeVariantKey, parseDailyFiles, storeNameMatches } from '../../src/services/dailyBusinessImport'
+import { calculateDeferredBomConsumptions, normalizeDishName, normalizeVariantKey, parseDailyFiles, partitionImportIssues, storeNameMatches } from '../../src/services/dailyBusinessImport'
 
 async function workbookBuffer(workbook: ExcelJS.Workbook) {
   const value = await workbook.xlsx.writeBuffer()
@@ -86,5 +86,28 @@ describe('daily business import parser', () => {
     expect(normalizeVariantKey('')).toBe('')
     expect(storeNameMatches('合肥瑶海店', '滇界·云南山珍菌汤锅（瑶海万达店）')).toBe(true)
     expect(storeNameMatches('合肥瑶海店', '滇界·云南山珍菌汤锅（万象汇店）')).toBe(false)
+  })
+
+  it('only allows missing dish and BOM issues to be explicitly deferred', () => {
+    const result = partitionImportIssues([
+      { code: 'DISH_UNMATCHED', message: '菜品未建档' },
+      { code: 'BOM_MISSING', message: '缺少 BOM' },
+      { code: 'DISH_AMBIGUOUS', message: '菜品匹配不唯一' },
+      { code: 'TARGET_STORE_MISMATCH', message: '门店不一致' },
+    ])
+    expect(result.deferrable.map(issue => issue.code)).toEqual(['DISH_UNMATCHED', 'BOM_MISSING'])
+    expect(result.hard.map(issue => issue.code)).toEqual(['DISH_AMBIGUOUS', 'TARGET_STORE_MISMATCH'])
+  })
+
+  it('calculates deferred BOM backfill with loss and aggregates duplicate products', () => {
+    expect(calculateDeferredBomConsumptions(3, [
+      { productId: 'p2', quantity: '0.2', lossRate: '0.1' },
+      { productId: 'p1', quantity: '0.1', lossRate: '0' },
+      { productId: 'p1', quantity: '0.05', lossRate: '0' },
+      { productId: 'ignored', quantity: '0', lossRate: '0' },
+    ])).toEqual([
+      { productId: 'p1', quantity: 0.45 },
+      { productId: 'p2', quantity: 0.66 },
+    ])
   })
 })

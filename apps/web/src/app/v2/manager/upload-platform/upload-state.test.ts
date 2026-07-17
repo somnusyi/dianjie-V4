@@ -1,13 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { canConfirmDailyImport, formatUploadFileSize, IMPORT_STATUS } from './upload-state'
+import { canConfirmDailyImport, formatUploadFileSize, IMPORT_STATUS, splitDailyImportIssues } from './upload-state'
 
 describe('daily business import presentation', () => {
   it('only allows an unblocked preview to be confirmed', () => {
-    expect(canConfirmDailyImport('PREVIEWED', 0)).toBe(true)
-    expect(canConfirmDailyImport('PREVIEWED', 1)).toBe(false)
-    expect(canConfirmDailyImport('CONFIRMING', 0)).toBe(false)
-    expect(canConfirmDailyImport('CONFIRMED', 0)).toBe(false)
-    expect(canConfirmDailyImport('SUPERSEDED', 0)).toBe(false)
+    expect(canConfirmDailyImport('PREVIEWED', [])).toBe(true)
+    expect(canConfirmDailyImport('PREVIEWED', [{ code: 'BOM_MISSING' }])).toBe(true)
+    expect(canConfirmDailyImport('PREVIEWED', [{ code: 'DISH_UNMATCHED' }])).toBe(true)
+    expect(canConfirmDailyImport('PREVIEWED', [{ code: 'TARGET_STORE_MISMATCH' }])).toBe(false)
+    expect(canConfirmDailyImport('CONFIRMING', [])).toBe(false)
+    expect(canConfirmDailyImport('CONFIRMED', [])).toBe(false)
+    expect(canConfirmDailyImport('SUPERSEDED', [])).toBe(false)
+  })
+
+  it('only classifies missing dish and BOM as deferrable', () => {
+    const result = splitDailyImportIssues([
+      { code: 'BOM_MISSING' }, { code: 'DISH_UNMATCHED' }, { code: 'DISH_AMBIGUOUS' },
+    ])
+    expect(result.deferred).toHaveLength(2)
+    expect(result.hard).toEqual([{ code: 'DISH_AMBIGUOUS' }])
   })
 
   it('uses distinct labels for every audit state', () => {

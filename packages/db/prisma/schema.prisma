@@ -57,6 +57,7 @@ model Tenant {
   pettyCash                 PettyCash[]
   payrolls                  Payroll[]
   dailyBusinessImports      DailyBusinessImport[]
+  deferredBomTasks          DeferredBomTask[]
 
   @@map("tenants")
 }
@@ -109,6 +110,7 @@ model User {
   stockMovements                SupplierStockMovement[]
   createdDailyBusinessImports   DailyBusinessImport[]   @relation("DailyBusinessImportCreatedBy")
   confirmedDailyBusinessImports DailyBusinessImport[]   @relation("DailyBusinessImportConfirmedBy")
+  resolvedDeferredBomTasks      DeferredBomTask[]       @relation("DeferredBomTaskResolvedBy")
 
   @@unique([tenantId, email])
   @@unique([tenantId, phone])
@@ -280,8 +282,9 @@ model Dish {
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
-  recipes DishRecipe[]
-  sales   DishSale[]
+  recipes          DishRecipe[]
+  sales            DishSale[]
+  deferredBomTasks DeferredBomTask[]
 
   @@unique([tenantId, name])
   @@index([tenantId, status])
@@ -303,6 +306,12 @@ enum DailyBusinessImportStatus {
   PREVIEWED
   CONFIRMING
   CONFIRMED
+  SUPERSEDED
+}
+
+enum DeferredBomTaskStatus {
+  PENDING
+  BACKFILLED
   SUPERSEDED
 }
 
@@ -386,16 +395,53 @@ model DailyBusinessImport {
   createdAt              DateTime                  @default(now())
   updatedAt              DateTime                  @updatedAt
 
-  tenant      Tenant @relation(fields: [tenantId], references: [id])
-  store       Store  @relation(fields: [storeId], references: [id])
-  createdBy   User   @relation("DailyBusinessImportCreatedBy", fields: [createdById], references: [id])
-  confirmedBy User?  @relation("DailyBusinessImportConfirmedBy", fields: [confirmedById], references: [id])
+  tenant           Tenant            @relation(fields: [tenantId], references: [id])
+  store            Store             @relation(fields: [storeId], references: [id])
+  createdBy        User              @relation("DailyBusinessImportCreatedBy", fields: [createdById], references: [id])
+  confirmedBy      User?             @relation("DailyBusinessImportConfirmedBy", fields: [confirmedById], references: [id])
+  deferredBomTasks DeferredBomTask[]
 
   @@unique([storeId, businessDate, revision])
   @@unique([storeId, businessDate, businessFileHash, salesFileHash, calculationFingerprint], name: "daily_import_version_uk", map: "daily_import_version_uk")
   @@index([tenantId, storeId, businessDate])
   @@index([storeId, status, createdAt])
   @@map("daily_business_imports")
+}
+
+// 日报确认时暂缓的菜品/BOM。总厨补齐菜品与配方后，系统按此销售快照
+// 幂等回补历史库存消耗，避免日报因少量待维护主数据而整单停滞。
+model DeferredBomTask {
+  id                    String                @id @default(cuid())
+  tenantId              String
+  storeId               String
+  dailyBusinessImportId String
+  businessDate          DateTime              @db.Date
+  rawDishName           String                @db.VarChar(120)
+  spec                  String                @default("") @db.VarChar(120)
+  variantKey            String                @default("") @db.VarChar(80)
+  reasonCode            String                @db.VarChar(32)
+  quantity              Decimal               @db.Decimal(12, 4)
+  grossAmount           Decimal               @db.Decimal(12, 2)
+  netIncome             Decimal               @db.Decimal(12, 2)
+  rawData               Json
+  saleRecorded          Boolean               @default(false)
+  dishId                String?
+  status                DeferredBomTaskStatus @default(PENDING)
+  resolvedById          String?
+  backfilledAt          DateTime?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  tenant              Tenant              @relation(fields: [tenantId], references: [id])
+  store               Store               @relation(fields: [storeId], references: [id])
+  dailyBusinessImport DailyBusinessImport @relation(fields: [dailyBusinessImportId], references: [id])
+  dish                Dish?               @relation(fields: [dishId], references: [id])
+  resolvedBy          User?               @relation("DeferredBomTaskResolvedBy", fields: [resolvedById], references: [id])
+
+  @@unique([dailyBusinessImportId, rawDishName, variantKey], name: "deferred_bom_task_import_dish_variant_uk")
+  @@index([tenantId, status, businessDate])
+  @@index([dishId, status])
+  @@map("deferred_bom_tasks")
 }
 
 // ── 企微集成配置 ──────────────────────────────────────
@@ -543,6 +589,7 @@ model Store {
   payrolls             Payroll[]
   inventorySnapshots   InventorySnapshot[]
   dailyBusinessImports DailyBusinessImport[]
+  deferredBomTasks     DeferredBomTask[]
 
   @@unique([tenantId, no])
   @@map("stores")
@@ -890,8 +937,8 @@ model InvoicePayment {
   // 本次付款
   amount          Decimal       @db.Decimal(12, 2) // 本次付款金额
   paymentMethod   String        @default("cmb") // cmb / manual / wechat / alipay
-  requestId       String?       // 客户端幂等操作号，防止双击/网络重试重复创建
-  cashAccountId   String?       // 实际出款资金账户（确认成功时写入）
+  requestId       String? // 客户端幂等操作号，防止双击/网络重试重复创建
+  cashAccountId   String? // 实际出款资金账户（确认成功时写入）
   cashAccount     CashAccount?  @relation(fields: [cashAccountId], references: [id], onDelete: SetNull)
   // 银行流水
   bankTxNo        String? // 招行 refext / 微信支付单号
@@ -908,11 +955,11 @@ model InvoicePayment {
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
+  @@unique([tenantId, requestId])
+  @@unique([tenantId, bankTxNo])
   @@index([tenantId, status])
   @@index([invoiceId])
   @@index([cashAccountId])
-  @@unique([tenantId, requestId])
-  @@unique([tenantId, bankTxNo])
   @@map("invoice_payments")
 }
 
@@ -1996,8 +2043,8 @@ model CashAccount {
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
-  tenant       Tenant            @relation(fields: [tenantId], references: [id])
-  transactions CashTransaction[]
+  tenant          Tenant            @relation(fields: [tenantId], references: [id])
+  transactions    CashTransaction[]
   invoicePayments InvoicePayment[]
 
   @@index([tenantId])
@@ -2023,9 +2070,9 @@ model CashTransaction {
   account   CashAccount @relation(fields: [accountId], references: [id])
   createdBy User        @relation(fields: [createdById], references: [id])
 
+  @@unique([tenantId, accountId, refType, refId])
   @@index([tenantId, txDate(sort: Desc)])
   @@index([accountId])
-  @@unique([tenantId, accountId, refType, refId])
   @@map("cash_transactions")
 }
 
@@ -2054,9 +2101,9 @@ model Notification {
   tenant    Tenant @relation(fields: [tenantId], references: [id])
   recipient User?  @relation(fields: [recipientId], references: [id])
 
+  @@unique([tenantId, dedupeKey])
   @@index([tenantId, recipientRole, read])
   @@index([recipientId, read])
-  @@unique([tenantId, dedupeKey])
   @@map("notifications")
 }
 

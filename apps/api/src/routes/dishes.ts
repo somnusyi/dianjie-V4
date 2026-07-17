@@ -34,6 +34,7 @@ const dishSchema = z.object({
 
 const recipeSchema = z.object({
   productId: z.string().min(1),
+  variantKey: z.string().max(80).optional().default(''),
   quantity:  z.number().positive(),
   unit:      z.string().min(1),
   lossRate:  z.number().min(0).max(1).optional().default(0),
@@ -226,7 +227,7 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
       })
       return reply.status(201).send(r)
     } catch (e: any) {
-      if (e?.code === 'P2002') return reply.status(400).send({ error: '该 SKU 已在配方中' })
+      if (e?.code === 'P2002') return reply.status(400).send({ error: '该 SKU 已在当前规格配方中' })
       throw e
     }
   })

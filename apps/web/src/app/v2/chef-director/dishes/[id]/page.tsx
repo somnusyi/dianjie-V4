@@ -7,7 +7,7 @@
  */
 'use client'
 import { useEffect, useMemo, useState } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { ErrorScreen } from '@/components/v2/use-dashboard'
@@ -19,6 +19,7 @@ type Product = {
 }
 type Recipe = {
   id: string; productId: string
+  variantKey: string
   quantity: string; unit: string
   lossRate: string; isMain: boolean
   note?: string | null
@@ -43,7 +44,10 @@ function fmt(n: number, d = 2) {
 export default function DishDetailPage() {
   const router = useRouter()
   const params = useParams() as any
+  const searchParams = useSearchParams()
   const id = String(params.id)
+  const targetVariant = searchParams.get('variant') || ''
+  const targetSpec = searchParams.get('spec') || ''
   const [d, setD] = useState<Dish | null>(null)
   const [products, setProducts] = useState<Product[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -64,7 +68,7 @@ export default function DishDetailPage() {
 
   const filteredProducts = useMemo(() => {
     if (!products) return []
-    const used = new Set((d?.recipes || []).map(r => r.productId))
+    const used = new Set((d?.recipes || []).filter(r => r.variantKey === targetVariant).map(r => r.productId))
     return products.filter(p => {
       if (used.has(p.id)) return false
       if (!productQ.trim()) return true
@@ -85,7 +89,7 @@ export default function DishDetailPage() {
       if (!p) return
       await apiFetch(`/api/dishes/${id}/recipes`, {
         method: 'POST',
-        body: JSON.stringify({ productId, quantity: 1, unit: p.unit, lossRate: 0 }),
+        body: JSON.stringify({ productId, variantKey: targetVariant, quantity: 1, unit: p.unit, lossRate: 0 }),
       })
       setPickerOpen(false)
       setProductQ('')
@@ -161,7 +165,10 @@ export default function DishDetailPage() {
       {/* 配料列表 */}
       <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-h2">配料 ({d.recipes.length})</span>
+          <div>
+            <span className="text-h2">配料 ({d.recipes.length})</span>
+            {targetVariant && <div className="text-micro text-amber-fg mt-0.5">正在维护规格：{targetSpec || targetVariant}</div>}
+          </div>
           <button onClick={() => setPickerOpen(true)}
                   className="px-3 py-1.5 bg-amber/10 text-amber-fg rounded-cta text-button">+ 加配料</button>
         </div>
@@ -180,6 +187,7 @@ export default function DishDetailPage() {
                   <span className="text-body truncate flex-1">
                     {r.isMain && <Chip tone="amber">主料</Chip>}
                     {' '}{r.product.name}
+                    {r.variantKey && <span className="text-micro text-amber-fg"> · 规格 {r.variantKey}</span>}
                   </span>
                   <span className="font-num text-caption text-gray3">¥{fmt(price)}/{r.product.unit}</span>
                 </div>

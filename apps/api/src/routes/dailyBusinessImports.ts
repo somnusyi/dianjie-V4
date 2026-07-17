@@ -1,8 +1,10 @@
 import { FastifyPluginAsync } from 'fastify'
 import { Prisma, prisma } from '@dianjie/db'
 import {
+  calculateDeferredBomConsumptions,
   normalizeDishName,
   normalizeVariantKey,
+  partitionImportIssues,
   parseDailyFiles,
   sha256,
   storeNameMatches,
@@ -13,7 +15,9 @@ import {
 const ALLOWED_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN', 'BOSS'])
 const SOURCE = 'daily_pos_upload'
 const CONSUMPTION_SOURCE = 'daily_pos'
+const BOM_BACKFILL_SOURCE = 'daily_bom_backfill'
 const MAX_FILE_BYTES = 5 * 1024 * 1024
+const BOM_TASK_ROLES = new Set(['CHEF_DIRECTOR', 'CHEF', 'ADMIN', 'SUPER_ADMIN'])
 
 type PreviewDishSale = {
   dishId: string
@@ -33,6 +37,20 @@ type PreviewConsumption = {
   sources: string[]
 }
 
+type DeferredBomRow = {
+  rawDishName: string
+  spec: string
+  variantKey: string
+  reasonCode: 'DISH_UNMATCHED' | 'BOM_MISSING'
+  dishId: string | null
+  dishName: string | null
+  quantity: number
+  grossAmount: number
+  netIncome: number
+  saleRecorded: boolean
+  variants: ParsedDailyFiles['sales']
+}
+
 type PreviewData = {
   businessDate: string
   metrics: ParsedDailyFiles['business']
@@ -41,6 +59,7 @@ type PreviewData = {
   consumptions: PreviewConsumption[]
   returns: ParsedDailyFiles['returns']
   excludedDishes: Array<{ name: string; quantity: number; note: string | null }>
+  deferredBomRows: DeferredBomRow[]
   existingConfirmedRevision: number | null
   existingRevenue: { amount: number; source: string } | null
   calculationFingerprint: string
@@ -107,6 +126,16 @@ function calculationFingerprint(preview: Omit<PreviewData, 'calculationFingerpri
     consumptions: [...preview.consumptions]
       .map(row => ({ productId: row.productId, quantity: row.quantity }))
       .sort((a, b) => a.productId.localeCompare(b.productId)),
+    deferredBomRows: [...preview.deferredBomRows]
+      .map(row => ({
+        rawDishName: row.rawDishName,
+        variantKey: row.variantKey,
+        dishId: row.dishId,
+        quantity: row.quantity,
+        grossAmount: row.grossAmount,
+        netIncome: row.netIncome,
+      }))
+      .sort((a, b) => `${a.rawDishName}\u0000${a.variantKey}`.localeCompare(`${b.rawDishName}\u0000${b.variantKey}`)),
   }))))
 }
 
@@ -163,6 +192,35 @@ async function readMultipart(req: any) {
   return { business, sales, storeId: fields.get('storeId') || null }
 }
 
+function addDeferredRow(
+  target: Map<string, DeferredBomRow>,
+  row: ParsedDailyFiles['sales'][number],
+  dish: { id: string; name: string } | null,
+  reasonCode: DeferredBomRow['reasonCode'],
+  saleRecorded: boolean,
+) {
+  const variantKey = normalizeVariantKey(row.spec)
+  const key = `${normalizeDishName(row.name)}\u0000${variantKey}`
+  const current = target.get(key) || {
+    rawDishName: row.name,
+    spec: row.spec,
+    variantKey,
+    reasonCode,
+    dishId: dish?.id || null,
+    dishName: dish?.name || null,
+    quantity: 0,
+    grossAmount: 0,
+    netIncome: 0,
+    saleRecorded,
+    variants: [],
+  }
+  current.quantity += row.quantity
+  current.grossAmount += row.grossAmount
+  current.netIncome += row.netIncome
+  current.variants.push(row)
+  target.set(key, current)
+}
+
 async function buildPreview(store: { id: string; tenantId: string }, parsed: ParsedDailyFiles) {
   const blockingIssues: ImportIssue[] = [...parsed.blockingIssues]
   const warningIssues: ImportIssue[] = [...parsed.warningIssues]
@@ -202,10 +260,14 @@ async function buildPreview(store: { id: string; tenantId: string }, parsed: Par
   const saleByDish = new Map<string, PreviewDishSale>()
   const consumptionByProduct = new Map<string, PreviewConsumption>()
   const excludedDishes: PreviewData['excludedDishes'] = []
+  const deferredByDishVariant = new Map<string, DeferredBomRow>()
   const missingRecipeKeys = new Set<string>()
   for (const row of parsed.sales) {
     const dish = matched.get(row.name)
-    if (!dish) continue
+    if (!dish) {
+      addDeferredRow(deferredByDishVariant, row, null, 'DISH_UNMATCHED', false)
+      continue
+    }
     const currentSale = saleByDish.get(dish.id) || {
       dishId: dish.id, dishName: dish.name, quantity: 0, grossAmount: 0, netIncome: 0, variants: [],
     }
@@ -224,6 +286,7 @@ async function buildPreview(store: { id: string; tenantId: string }, parsed: Par
     const fallback = dish.recipes.filter(recipe => recipe.variantKey === '')
     const recipes = exact.length > 0 ? exact : fallback
     if (recipes.length === 0) {
+      addDeferredRow(deferredByDishVariant, row, dish, 'BOM_MISSING', true)
       const issueKey = `${row.name}\u0000${row.spec}`
       if (!missingRecipeKeys.has(issueKey)) {
         missingRecipeKeys.add(issueKey)
@@ -281,6 +344,12 @@ async function buildPreview(store: { id: string; tenantId: string }, parsed: Par
     consumptions: [...consumptionByProduct.values()].map(row => ({ ...row, quantity: round(row.quantity, 6) })),
     returns: parsed.returns,
     excludedDishes,
+    deferredBomRows: [...deferredByDishVariant.values()].map(row => ({
+      ...row,
+      quantity: round(row.quantity),
+      grossAmount: round(row.grossAmount, 2),
+      netIncome: round(row.netIncome, 2),
+    })),
     existingConfirmedRevision: previous?.revision || null,
     existingRevenue: existingRevenue ? { amount: Number(existingRevenue.amount), source: existingRevenue.source } : null,
   }
@@ -297,6 +366,18 @@ function publicImport(row: any) {
     grossAmount: Number(row.grossAmount),
     discountAmount: Number(row.discountAmount),
     netRevenue: Number(row.netRevenue),
+  }
+}
+
+function publicDeferredTask(row: any) {
+  const variantRecipes = row.dish?.recipes?.filter((recipe: any) => recipe.variantKey === row.variantKey) || []
+  const fallbackRecipes = row.dish?.recipes?.filter((recipe: any) => recipe.variantKey === '') || []
+  return {
+    ...row,
+    quantity: Number(row.quantity),
+    grossAmount: Number(row.grossAmount),
+    netIncome: Number(row.netIncome),
+    recipeReady: variantRecipes.length > 0 || fallbackRecipes.length > 0,
   }
 }
 
@@ -424,6 +505,125 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
     }
   })
 
+  app.get('/bom-tasks', auth, async (req: any, reply: any) => {
+    if (!BOM_TASK_ROLES.has(req.user.role)) return reply.status(403).send({ error: '仅总厨/管理员可处理菜品 BOM 待办' })
+    const status = String(req.query?.status || 'PENDING')
+    if (!['PENDING', 'BACKFILLED', 'SUPERSEDED', 'ALL'].includes(status)) {
+      return reply.status(400).send({ error: '待办状态无效' })
+    }
+    const tasks = await prisma.deferredBomTask.findMany({
+      where: { tenantId: req.user.tenantId, ...(status === 'ALL' ? {} : { status: status as any }) },
+      include: {
+        store: { select: { id: true, name: true, no: true } },
+        dish: {
+          select: {
+            id: true, name: true, status: true,
+            recipes: {
+              select: {
+                id: true, variantKey: true, quantity: true, unit: true,
+                product: { select: { id: true, name: true, code: true, unit: true } },
+              },
+            },
+          },
+        },
+      },
+      orderBy: [{ businessDate: 'asc' }, { createdAt: 'asc' }],
+      take: 500,
+    })
+    return tasks.map(publicDeferredTask)
+  })
+
+  app.put('/bom-tasks/:taskId/dish', auth, async (req: any, reply: any) => {
+    if (!BOM_TASK_ROLES.has(req.user.role)) return reply.status(403).send({ error: '仅总厨/管理员可关联菜品' })
+    const dishId = String(req.body?.dishId || '')
+    if (!dishId) return reply.status(400).send({ error: '请选择菜品' })
+    const [task, dish] = await Promise.all([
+      prisma.deferredBomTask.findFirst({ where: { id: req.params.taskId, tenantId: req.user.tenantId, status: 'PENDING' } }),
+      prisma.dish.findFirst({ where: { id: dishId, tenantId: req.user.tenantId } }),
+    ])
+    if (!task) return reply.status(404).send({ error: '待办不存在或已处理' })
+    if (!dish) return reply.status(400).send({ error: '菜品不存在或不属于当前品牌' })
+    const updated = await prisma.deferredBomTask.update({ where: { id: task.id }, data: { dishId: dish.id } })
+    return publicDeferredTask(updated)
+  })
+
+  app.post('/bom-tasks/:taskId/backfill', auth, async (req: any, reply: any) => {
+    if (!BOM_TASK_ROLES.has(req.user.role)) return reply.status(403).send({ error: '仅总厨/管理员可回补库存消耗' })
+    const task = await prisma.deferredBomTask.findFirst({
+      where: { id: req.params.taskId, tenantId: req.user.tenantId },
+      include: { dish: { include: { recipes: true } } },
+    })
+    if (!task) return reply.status(404).send({ error: 'BOM 待办不存在' })
+    if (task.status === 'BACKFILLED') return reply.send(publicDeferredTask(task))
+    if (task.status !== 'PENDING') return reply.status(409).send({ error: `当前状态 ${task.status} 不能回补` })
+    if (!task.dish) return reply.status(409).send({ error: '请先关联或新建菜品' })
+    const dish = task.dish
+    const exact = dish.recipes.filter(recipe => recipe.variantKey === task.variantKey)
+    const fallback = dish.recipes.filter(recipe => recipe.variantKey === '')
+    const recipes = exact.length > 0 ? exact : fallback
+    if (recipes.length === 0) {
+      return reply.status(409).send({ error: `菜品“${task.dish.name}”仍缺少${task.spec ? `“${task.spec}”规格或默认` : '默认'} BOM` })
+    }
+    const now = new Date()
+    try {
+      await prisma.$transaction(async tx => {
+        const locked = await tx.deferredBomTask.updateMany({
+          where: { id: task.id, status: 'PENDING' },
+          data: { status: 'BACKFILLED', resolvedById: req.user.userId, backfilledAt: now },
+        })
+        if (locked.count !== 1) throw Object.assign(new Error('该待办已被其他操作处理，请刷新'), { statusCode: 409 })
+        const consumptions = calculateDeferredBomConsumptions(Number(task.quantity), recipes)
+        if (consumptions.length > 0) {
+          await tx.stockConsumption.createMany({
+            data: consumptions.map(({ productId, quantity }) => ({
+              tenantId: task.tenantId,
+              storeId: task.storeId,
+              productId,
+              date: task.businessDate,
+              quantity,
+              note: `总厨补齐 BOM 后回补；${task.rawDishName}${task.spec ? `(${task.spec})` : ''} ${Number(task.quantity)}份`,
+              sourceType: BOM_BACKFILL_SOURCE,
+              sourceId: task.id,
+              createdById: req.user.userId,
+            })),
+          })
+        }
+        if (!task.saleRecorded) {
+          await tx.dishSale.upsert({
+            where: {
+              storeId_dishId_date_source: {
+                storeId: task.storeId, dishId: dish.id, date: task.businessDate, source: SOURCE,
+              },
+            },
+            update: {
+              quantity: { increment: task.quantity },
+              grossAmount: { increment: task.netIncome },
+            },
+            create: {
+              tenantId: task.tenantId,
+              storeId: task.storeId,
+              dishId: dish.id,
+              date: task.businessDate,
+              quantity: task.quantity,
+              grossAmount: task.netIncome,
+              source: SOURCE,
+              channel: '收银POS日报',
+              rawData: json({ deferredBomTaskId: task.id, grossAmount: Number(task.grossAmount), netIncome: Number(task.netIncome) }),
+              createdById: req.user.userId,
+            },
+          })
+        }
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 })
+      const completed = await prisma.deferredBomTask.findUniqueOrThrow({
+        where: { id: task.id }, include: { dish: { include: { recipes: true } }, store: true },
+      })
+      return reply.send(publicDeferredTask(completed))
+    } catch (error: any) {
+      req.log.error({ error, taskId: task.id }, 'deferred BOM backfill failed')
+      return reply.status(error.statusCode || 500).send({ error: error.message || '回补失败，库存未发生部分扣减' })
+    }
+  })
+
   app.get('/:id', auth, async (req: any, reply: any) => {
     if (!ALLOWED_ROLES.has(req.user.role)) return reply.status(403).send({ error: '无权' })
     const row = await prisma.dailyBusinessImport.findFirst({ where: { id: req.params.id, tenantId: req.user.tenantId } })
@@ -442,9 +642,11 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
     const parsed = record.parsedData as unknown as ParsedDailyFiles
     const store = await prisma.store.findUniqueOrThrow({ where: { id: record.storeId } })
     const rebuilt = await buildPreview(store, parsed)
+    const deferBomIssues = req.body?.deferBomIssues === true
+    const partitionedIssues = partitionImportIssues(rebuilt.blockingIssues)
     const storedPreview = record.previewData as unknown as PreviewData
     const storedFingerprint = storedPreview.calculationFingerprint || calculationFingerprint(storedPreview)
-    if (rebuilt.blockingIssues.length > 0) {
+    if (partitionedIssues.hard.length > 0 || (partitionedIssues.deferrable.length > 0 && !deferBomIssues)) {
       await prisma.dailyBusinessImport.update({
         where: { id: record.id },
         data: {
@@ -455,8 +657,11 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
         },
       })
       return reply.status(409).send({
-        error: `仍有 ${rebuilt.blockingIssues.length} 项阻断问题，请修复后重新预览`,
+        error: partitionedIssues.hard.length > 0
+          ? `仍有 ${partitionedIssues.hard.length} 项不可暂缓的问题，请修复后重新预览`
+          : `仍有 ${partitionedIssues.deferrable.length} 项菜品/BOM待处理，可选择“暂缓并确认”转交总厨`,
         issues: rebuilt.blockingIssues,
+        deferrableCount: partitionedIssues.deferrable.length,
       })
     }
     if (storedFingerprint !== rebuilt.preview.calculationFingerprint) {
@@ -490,6 +695,17 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
         })
         const previousIds = previous.map(item => item.id)
         if (previousIds.length > 0) {
+          const previousTasks = await tx.deferredBomTask.findMany({
+            where: { dailyBusinessImportId: { in: previousIds } }, select: { id: true },
+          })
+          if (previousTasks.length > 0) {
+            await tx.stockConsumption.deleteMany({
+              where: { sourceType: BOM_BACKFILL_SOURCE, sourceId: { in: previousTasks.map(item => item.id) } },
+            })
+            await tx.deferredBomTask.updateMany({
+              where: { id: { in: previousTasks.map(item => item.id) } }, data: { status: 'SUPERSEDED' },
+            })
+          }
           await tx.stockConsumption.deleteMany({
             where: { tenantId: record.tenantId, storeId: record.storeId, sourceType: CONSUMPTION_SOURCE, sourceId: { in: previousIds } },
           })
@@ -564,9 +780,40 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
             })),
           })
         }
+        if (preview.deferredBomRows.length > 0) {
+          await tx.deferredBomTask.createMany({
+            data: preview.deferredBomRows.map(row => ({
+              tenantId: record.tenantId,
+              storeId: record.storeId,
+              dailyBusinessImportId: record.id,
+              businessDate: record.businessDate,
+              rawDishName: row.rawDishName,
+              spec: row.spec,
+              variantKey: row.variantKey,
+              reasonCode: row.reasonCode,
+              quantity: row.quantity,
+              grossAmount: row.grossAmount,
+              netIncome: row.netIncome,
+              rawData: json({ variants: row.variants }),
+              saleRecorded: row.saleRecorded,
+              dishId: row.dishId,
+            })),
+          })
+        }
+        const confirmedWarnings = preview.deferredBomRows.length > 0
+          ? [...rebuilt.warningIssues, {
+              code: 'BOM_DEFERRED',
+              message: `${preview.deferredBomRows.length} 个菜品/规格已转交总厨，补齐 BOM 后自动回补本日库存消耗`,
+            }]
+          : rebuilt.warningIssues
         await tx.dailyBusinessImport.update({
           where: { id: record.id },
-          data: { status: 'CONFIRMED', confirmedById: req.user.userId, confirmedAt: now },
+          data: {
+            status: 'CONFIRMED', confirmedById: req.user.userId, confirmedAt: now,
+            previewData: json(preview),
+            blockingIssues: json(rebuilt.blockingIssues),
+            warningIssues: json(confirmedWarnings),
+          },
         })
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 })
       const confirmed = await prisma.dailyBusinessImport.findUniqueOrThrow({ where: { id: record.id } })

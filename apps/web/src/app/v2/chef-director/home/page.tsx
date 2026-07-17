@@ -159,16 +159,17 @@ export default function ChefDirectorHomePage() {
 
       {/* 菜品 / 配方 (BOM) */}
       <Section title="菜品 / 配方">
-        <a href="/v2/chef-director/dishes" className="block bg-white rounded-card border border-border p-3">
+        <a href="/v2/chef-director/bom" className="block bg-white rounded-card border border-border p-3">
           <div className="flex items-center gap-3">
             <span className="w-10 h-10 rounded-md bg-amber-bg text-amber-fg flex items-center justify-center text-h2">🍲</span>
             <div className="flex-1">
-              <div className="text-h2">菜品 BOM 管理</div>
-              <p className="text-caption text-gray2 mt-0.5">配方 · 成本 · 毛利 · 销量基础数据</p>
+              <div className="text-h2">菜品 BOM 待办</div>
+              <p className="text-caption text-gray2 mt-0.5">处理日报缺失配方 · 自动回补历史库存消耗</p>
             </div>
             <span className="text-gray3">›</span>
           </div>
         </a>
+        <a href="/v2/chef-director/dishes" className="block text-center w-full mt-2 py-3 bg-white border border-border rounded-cta text-button text-gray2">全部菜品与配方 ›</a>
       </Section>
 
       <Section title="各店报损排行" right={`${storeRank.length} 家店 · ${anomalyCount} 异常`} rightTone={anomalyCount > 0 ? 'orange' : undefined}>

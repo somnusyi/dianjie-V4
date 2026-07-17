@@ -3,12 +3,13 @@
  */
 'use client'
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { apiFetch } from '@/lib/v2-auth'
 
 export default function DishNewPage() {
   const router = useRouter()
-  const [name, setName] = useState('')
+  const searchParams = useSearchParams()
+  const [name, setName] = useState(() => searchParams.get('name') || '')
   const [code, setCode] = useState('')
   const [category, setCategory] = useState('汤锅')
   const [salePrice, setSalePrice] = useState('')

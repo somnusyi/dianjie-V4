@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { apiFetch, getUser } from '@/lib/v2-auth'
-import { canConfirmDailyImport, formatUploadFileSize, IMPORT_STATUS, type DailyImportStatus } from './upload-state'
+import { canConfirmDailyImport, formatUploadFileSize, IMPORT_STATUS, splitDailyImportIssues, type DailyImportStatus } from './upload-state'
 
 type Issue = { code: string; message: string; detail?: string }
 type ImportRecord = {
@@ -105,11 +105,17 @@ export default function DailyBusinessUploadPage() {
   }
 
   async function confirmImport() {
-    if (!preview || !canConfirmDailyImport(preview.status, preview.blockingIssues.length)) return
-    if (!window.confirm(`确认导入 ${shortDate(preview.businessDate)} 的营业与销量数据，并按 BOM 扣减库存？`)) return
+    if (!preview || !canConfirmDailyImport(preview.status, preview.blockingIssues)) return
+    const { deferred } = splitDailyImportIssues(preview.blockingIssues)
+    const message = deferred.length > 0
+      ? `确认导入 ${shortDate(preview.businessDate)} 的营业与销量数据？\n\n已能计算的 ${preview.previewData?.consumptions?.length || 0} 个食材 SKU 会立即扣减；${deferred.length} 项将转交总厨，补齐 BOM 后自动回补本日消耗。`
+      : `确认导入 ${shortDate(preview.businessDate)} 的营业与销量数据，并按 BOM 扣减库存？`
+    if (!window.confirm(message)) return
     setBusy(true); setError(null)
     try {
-      const result = await apiFetch<ImportRecord>(`/api/daily-business-imports/${preview.id}/confirm`, { method: 'POST' })
+      const result = await apiFetch<ImportRecord>(`/api/daily-business-imports/${preview.id}/confirm`, {
+        method: 'POST', body: JSON.stringify({ deferBomIssues: deferred.length > 0 }),
+      })
       setPreview(result)
       setBusinessFile(null); setSalesFile(null)
       await loadStatus(true)
@@ -124,6 +130,7 @@ export default function DailyBusinessUploadPage() {
   }
 
   const expected = status?.expectedBusinessDate || '前一日'
+  const issueGroups = splitDailyImportIssues(preview?.blockingIssues || [])
   return (
     <div className="min-h-screen bg-bg pb-16">
       <header className="px-4 pt-4 pb-2 flex items-center gap-3">
@@ -217,8 +224,17 @@ export default function DailyBusinessUploadPage() {
             </details>
           )}
 
-          {preview.blockingIssues.length > 0 && (
-            <IssueBox tone="red" title={`${preview.blockingIssues.length} 项问题阻止确认`} issues={preview.blockingIssues} />
+          {issueGroups.hard.length > 0 && (
+            <IssueBox tone="red" title={`${issueGroups.hard.length} 项问题阻止确认`} issues={issueGroups.hard as Issue[]} />
+          )}
+          {issueGroups.deferred.length > 0 && (
+            <IssueBox
+              tone="amber"
+              title={preview.status === 'CONFIRMED'
+                ? `${issueGroups.deferred.length} 项已转交总厨处理`
+                : `${issueGroups.deferred.length} 项可暂缓，确认后转交总厨`}
+              issues={issueGroups.deferred as Issue[]}
+            />
           )}
           {preview.warningIssues.length > 0 && (
             <IssueBox tone="amber" title="请留意" issues={preview.warningIssues} />
@@ -233,9 +249,11 @@ export default function DailyBusinessUploadPage() {
           ) : (
             <button
               onClick={confirmImport}
-              disabled={busy || !canConfirmDailyImport(preview.status, preview.blockingIssues.length)}
+              disabled={busy || !canConfirmDailyImport(preview.status, preview.blockingIssues)}
               className="w-full mt-3 py-3 rounded-cta bg-amber text-white text-button disabled:opacity-35"
-            >{busy ? '确认中…' : preview.previewData?.existingConfirmedRevision ? '确认更正并替换旧版' : '确认导入并扣减库存'}</button>
+            >{busy ? '确认中…' : issueGroups.deferred.length > 0
+                ? `暂缓 ${issueGroups.deferred.length} 项并确认导入`
+                : preview.previewData?.existingConfirmedRevision ? '确认更正并替换旧版' : '确认导入并扣减库存'}</button>
           )}
           <p className="text-micro text-gray3 mt-2 text-center">确认采用原子事务：任一步失败，营业、销量与库存均不会部分写入</p>
         </section>

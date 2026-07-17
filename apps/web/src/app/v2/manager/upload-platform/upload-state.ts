@@ -7,8 +7,19 @@ export const IMPORT_STATUS: Record<DailyImportStatus, { label: string; badge: st
   SUPERSEDED: { label: '已被新版替代', badge: 'bg-bg text-gray3' },
 }
 
-export function canConfirmDailyImport(status: DailyImportStatus, blockingIssueCount: number) {
-  return status === 'PREVIEWED' && blockingIssueCount === 0
+export type DailyImportIssue = { code: string }
+
+const DEFERRABLE_CODES = new Set(['DISH_UNMATCHED', 'BOM_MISSING'])
+
+export function splitDailyImportIssues(issues: DailyImportIssue[]) {
+  return {
+    deferred: issues.filter(issue => DEFERRABLE_CODES.has(issue.code)),
+    hard: issues.filter(issue => !DEFERRABLE_CODES.has(issue.code)),
+  }
+}
+
+export function canConfirmDailyImport(status: DailyImportStatus, issues: DailyImportIssue[]) {
+  return status === 'PREVIEWED' && splitDailyImportIssues(issues).hard.length === 0
 }
 
 export function formatUploadFileSize(value: number) {

@@ -7,6 +7,29 @@ export type ImportIssue = {
   detail?: string
 }
 
+const DEFERRABLE_BOM_ISSUES = new Set(['DISH_UNMATCHED', 'BOM_MISSING'])
+
+export function partitionImportIssues(issues: ImportIssue[]) {
+  return {
+    deferrable: issues.filter(issue => DEFERRABLE_BOM_ISSUES.has(issue.code)),
+    hard: issues.filter(issue => !DEFERRABLE_BOM_ISSUES.has(issue.code)),
+  }
+}
+
+export function calculateDeferredBomConsumptions(
+  saleQuantity: number,
+  recipes: Array<{ productId: string; quantity: unknown; lossRate: unknown }>,
+) {
+  const byProduct = new Map<string, number>()
+  for (const recipe of recipes) {
+    const quantity = saleQuantity * Number(recipe.quantity) * (1 + Number(recipe.lossRate))
+    if (quantity > 0) byProduct.set(recipe.productId, (byProduct.get(recipe.productId) || 0) + quantity)
+  }
+  return [...byProduct.entries()]
+    .map(([productId, quantity]) => ({ productId, quantity: Math.round((quantity + Number.EPSILON) * 1_000_000) / 1_000_000 }))
+    .sort((left, right) => left.productId.localeCompare(right.productId))
+}
+
 export type BusinessMetrics = {
   date: string
   storeName: string

@@ -13,6 +13,7 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import { clientRequestId } from '@/lib/client-id'
 import { Chip } from '@/components/v2'
 import dayjs from 'dayjs'
 import FinanceTopNav from '../_topnav'
@@ -110,7 +111,7 @@ export default function FinancePCPayablePage() {
     setPayAmount(inv.remainingAmount.toFixed(2))
     setPayNote('')
     setPaymentMethod('manual')
-    setRequestId(crypto.randomUUID())
+    setRequestId(clientRequestId())
   }
 
   async function submitPay() {

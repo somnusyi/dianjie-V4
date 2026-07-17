@@ -11,6 +11,7 @@ import { apiFetch } from '@/lib/v2-auth'
 import { Chip, ProgressDots } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import dayjs from 'dayjs'
+import { clientRequestId } from '@/lib/client-id'
 
 type Order = {
   id: string; no: string; status: string
@@ -150,7 +151,7 @@ export default function SupplierOrderDetailPage() {
         try {
           await apiFetch(`/api/orders/${order.id}/ship`, {
             method: 'PATCH',
-            body: JSON.stringify({ note: shipNote.trim() || undefined, items: itemsBody, idempotencyKey: crypto.randomUUID() }),
+            body: JSON.stringify({ note: shipNote.trim() || undefined, items: itemsBody, idempotencyKey: clientRequestId() }),
           })
           load()
         } catch (e: any) { setError(e.message || '发货失败'); throw e }
@@ -223,7 +224,7 @@ export default function SupplierOrderDetailPage() {
               items,
               reason: adjustReason.trim(),
               baseRowVersion: order.rowVersion,
-              requestKey: crypto.randomUUID(),
+              requestKey: clientRequestId(),
             }),
           })
           setAddOpen(false); load()

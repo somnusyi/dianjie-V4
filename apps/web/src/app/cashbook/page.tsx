@@ -4,6 +4,7 @@ import AppLayout from '@/components/AppLayout'
 import { PageHeader, Card, Table, Btn, Modal, Field, Input, Select, fmt, fmtDate, useToast, Pagination } from '@/components/ui'
 import api from '@/lib/api'
 import dayjs from 'dayjs'
+import { clientRequestId } from '@/lib/client-id'
 
 type Tab = 'transactions' | 'summary'
 
@@ -55,7 +56,7 @@ export default function CashbookPage() {
     accountId: '', direction: '1', category: '供应商付款',
     amount: '', txDate: dayjs().format('YYYY-MM-DD'), note: '',
   })
-  const [txOperationId, setTxOperationId] = useState(() => crypto.randomUUID())
+  const [txOperationId, setTxOperationId] = useState(() => clientRequestId())
 
   const { show, ToastEl } = useToast()
 
@@ -109,7 +110,7 @@ export default function CashbookPage() {
       show(`${txForm.direction === '1' ? '收入' : '支出'}已录入`)
       setTxOpen(false)
       setTxForm({ accountId: '', direction: '1', category: '供应商付款', amount: '', txDate: dayjs().format('YYYY-MM-DD'), note: '' })
-      setTxOperationId(crypto.randomUUID())
+      setTxOperationId(clientRequestId())
       loadAll(1)
     } catch (e: any) { show(e.response?.data?.error || '录入失败', 'error') }
   }
@@ -149,7 +150,7 @@ export default function CashbookPage() {
           action={
             <div style={{ display: 'flex', gap: 8 }}>
               <Btn onClick={() => setAccountOpen(true)}>＋ 新增账户</Btn>
-              <Btn variant="primary" onClick={() => { setTxOperationId(crypto.randomUUID()); setTxOpen(true) }}>＋ 录入流水</Btn>
+              <Btn variant="primary" onClick={() => { setTxOperationId(clientRequestId()); setTxOpen(true) }}>＋ 录入流水</Btn>
             </div>
           }
         />

@@ -10,6 +10,7 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import { clientRequestId } from '@/lib/client-id'
 import { Chip } from '@/components/v2'
 import InvoicePaymentResultDialog, { invoicePaymentMethods } from '@/components/v2/InvoicePaymentResultDialog'
 
@@ -103,7 +104,7 @@ export default function FinancePayablePage() {
     setPayAmount(inv.remainingAmount.toFixed(2))
     setPayNote('')
     setPaymentMethod('manual')
-    setRequestId(crypto.randomUUID())
+    setRequestId(clientRequestId())
   }
 
   async function submitPay() {

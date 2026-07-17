@@ -4,7 +4,7 @@ import { prisma } from '@dianjie/db'
 import { cached, invalidatePattern } from '../lib/cache'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 import { requireSupplierCapability, SupplierCapability } from '../lib/supplier-access'
-import { parsePagination } from '../lib/pagination'
+import { parseBoundedInteger, parsePagination } from '../lib/pagination'
 import { signOssKey } from './upload'
 import { nextDocumentNo } from '../services/documentNo'
 import { mergeSupplierCategory } from '../services/supplierCategory'
@@ -386,7 +386,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   /** 商品关键操作记录；供应商只能查看自家商品相关日志。 */
   app.get('/history', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, supplierId } = req.user
-    const limit = Math.min(200, Math.max(1, Number((req.query as any)?.limit || 50)))
+    const limit = parseBoundedInteger((req.query as any)?.limit, { defaultValue: 50, max: 200 })
+    if (limit === null) return reply.status(400).send({ error: 'limit 必须是 1 至 200 的整数' })
     let productIds: string[] | undefined
     if (isSupplierRole(role)) {
       if (!supplierScopeOrReply(req, reply, 'catalog.read')) return

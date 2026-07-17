@@ -258,6 +258,52 @@ describe('supplier tenant scope (integration)', () => {
     expect(response.json().error).toContain('无权限')
   })
 
+  it('records isolated batch category and restore operations with bounded history input', async () => {
+    for (const limit of ['NaN', '1.5', '201']) {
+      const invalid = await app.inject({ method: 'GET', url: `/api/products/history?limit=${limit}` })
+      expect(invalid.statusCode).toBe(400)
+    }
+
+    const category = await app.inject({
+      method: 'POST', url: '/api/products/categories', payload: { name: '批量回归分类' },
+    })
+    expect(category.statusCode).toBe(201)
+    const categorized = await app.inject({
+      method: 'PATCH', url: '/api/products/batch-category',
+      payload: { ids: [productAId], category: '批量回归分类' },
+    })
+    expect(categorized.statusCode).toBe(200)
+    expect(categorized.json()).toMatchObject({ ok: true, count: 1, category: '批量回归分类' })
+
+    await prisma.product.update({ where: { id: productAId }, data: { status: 'DISABLED' } })
+    const restored = await app.inject({
+      method: 'PATCH', url: '/api/products/batch-status',
+      payload: { ids: [productAId], status: 'ENABLED' },
+    })
+    expect(restored.statusCode).toBe(200)
+    expect(restored.json()).toMatchObject({ ok: true, count: 1, status: 'ENABLED' })
+    expect(await prisma.product.findUniqueOrThrow({ where: { id: productAId } })).toMatchObject({
+      category: '批量回归分类', status: 'ENABLED',
+    })
+
+    const hiddenAction = `供应商 B 私有商品操作 ${suffix}`
+    await prisma.opLog.create({
+      data: {
+        tenantId, userId: chefUserId, action: hiddenAction, entityType: 'ProductBatch',
+        targetId: supplierBId, metadata: { supplierId: supplierBId, productIds: [productBId] },
+      },
+    })
+    const history = await app.inject({ method: 'GET', url: '/api/products/history?limit=200' })
+    expect(history.statusCode).toBe(200)
+    const rows = history.json()
+    expect(rows.some((row: any) => row.action === hiddenAction)).toBe(false)
+    for (const action of ['批量修改商品分类', '批量恢复供应']) {
+      const row = rows.find((item: any) => String(item.action).includes(action))
+      expect(row).toMatchObject({ operator: '供应商 A 账号' })
+      expect(Number.isNaN(Date.parse(row.createdAt))).toBe(false)
+    }
+  })
+
   it('cannot list or open supplier B orders and deliveries', async () => {
     const orders = await app.inject({ method: 'GET', url: '/api/orders?page=1&pageSize=100' })
     expect(orders.statusCode).toBe(200)

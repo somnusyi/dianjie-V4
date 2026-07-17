@@ -150,7 +150,7 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
         product: { select: { name: true, unit: true, spec: true, code: true } },
         createdBy: { select: { name: true } },
       },
-      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
       take: 100,
     })
   })

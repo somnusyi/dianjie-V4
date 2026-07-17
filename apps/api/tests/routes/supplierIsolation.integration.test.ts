@@ -8,6 +8,7 @@ import { deliveryRoutes } from '../../src/routes/deliveries'
 import { lossClaimRoutes } from '../../src/routes/lossClaims'
 import { reconciliationRoutes } from '../../src/routes/reconciliations'
 import { receiptRoutes } from '../../src/routes/receipts'
+import { inventoryRoutes } from '../../src/routes/inventory'
 
 const suffix = `supplier-isolation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 let tenantId = ''
@@ -120,6 +121,7 @@ describe('supplier tenant scope (integration)', () => {
     await app.register(lossClaimRoutes, { prefix: '/api/loss-claims' })
     await app.register(reconciliationRoutes, { prefix: '/api/reconciliations' })
     await app.register(receiptRoutes, { prefix: '/api/receipts' })
+    await app.register(inventoryRoutes, { prefix: '/api/inventory' })
     await app.ready()
   })
 
@@ -144,6 +146,7 @@ describe('supplier tenant scope (integration)', () => {
     await prisma.supplierStockBatchAllocation.deleteMany({ where: { tenantId } })
     await prisma.supplierStockBatch.deleteMany({ where: { tenantId } })
     await prisma.supplierStockMovement.deleteMany({ where: { tenantId } })
+    await prisma.stockConsumption.deleteMany({ where: { tenantId } })
     await prisma.documentDecision.deleteMany({ where: { document: { tenantId } } })
     await prisma.documentStep.deleteMany({ where: { document: { tenantId } } })
     await prisma.document.deleteMany({ where: { tenantId } })
@@ -376,6 +379,48 @@ describe('supplier tenant scope (integration)', () => {
       summary: { receiptCount: 0, payableAmount: 0 },
       lines: [],
     })
+  })
+
+  it('keeps store consumption history scoped, validated and stably ordered', async () => {
+    const otherStore = await prisma.store.create({
+      data: { tenantId, no: `S-OTHER-${suffix}`, name: '另一隔离测试门店' },
+    })
+    const tiedDate = new Date()
+    tiedDate.setUTCHours(0, 0, 0, 0)
+    const tiedCreatedAt = new Date('2030-07-18T00:00:00.000Z')
+    const scopedIds = [`stable-consumption-a-${suffix}`, `stable-consumption-b-${suffix}`]
+    await prisma.stockConsumption.createMany({
+      data: [
+        ...scopedIds.map((id, index) => ({
+          id, tenantId, storeId, productId: productAId, date: tiedDate, quantity: 1,
+          sourceType: 'manual', sourceId: `scoped-${index}-${suffix}`,
+          createdById: chefUserId, createdAt: tiedCreatedAt,
+        })),
+        {
+          id: `foreign-consumption-${suffix}`, tenantId, storeId: otherStore.id,
+          productId: productAId, date: tiedDate, quantity: 1,
+          sourceType: 'manual', sourceId: `foreign-${suffix}`,
+          createdById: chefUserId, createdAt: tiedCreatedAt,
+        },
+      ],
+    })
+
+    for (const days of ['0', '366', 'NaN']) {
+      const invalid = await app.inject({
+        method: 'GET', url: `/api/inventory/consumptions?days=${days}`,
+        headers: { 'x-test-actor': 'chef' },
+      })
+      expect(invalid.statusCode).toBe(400)
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/inventory/consumptions?days=30&storeId=${otherStore.id}`,
+        headers: { 'x-test-actor': 'chef' },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().map((row: any) => row.id)).toEqual([...scopedIds].sort().reverse())
+    }
   })
 
   it('cannot export supplier B receipts or differences through supplier A downloads', async () => {

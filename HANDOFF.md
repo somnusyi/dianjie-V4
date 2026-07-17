@@ -1,5 +1,8 @@
 # 滇界 v4 · 上下文交接(2026-05-16)
 
+> [!WARNING]
+> 本文件是 2026-05-16 历史快照，提交号、部署方式、测试基线和待办均已过期。多人并行开发请先阅读当前权威文档：[TEAM_HANDOFF_2026-07-17.md](./TEAM_HANDOFF_2026-07-17.md)。
+
 > 写给下一个会话。用户在 auto mode 下连续工作多日,此文档 = 当前进度快照 + 待办 + 关键决策。
 > **用中文回复**(用户偏好,见 `~/.claude/projects/-Users-somnusyi-Desktop/memory/MEMORY.md`)。
 > Repo: `/Users/somnusyi/Projects/dianjie-local`

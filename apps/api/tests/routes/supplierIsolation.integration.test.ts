@@ -7,6 +7,7 @@ import { purchaseOrderRoutes } from '../../src/routes/orders'
 import { deliveryRoutes } from '../../src/routes/deliveries'
 import { lossClaimRoutes } from '../../src/routes/lossClaims'
 import { reconciliationRoutes } from '../../src/routes/reconciliations'
+import { receiptRoutes } from '../../src/routes/receipts'
 
 const suffix = `supplier-isolation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 let tenantId = ''
@@ -19,6 +20,7 @@ let productAId = ''
 let productBId = ''
 let orderBId = ''
 let deliveryBId = ''
+let receiptBId = ''
 let app: ReturnType<typeof Fastify>
 
 describe('supplier tenant scope (integration)', () => {
@@ -88,6 +90,7 @@ describe('supplier tenant scope (integration)', () => {
         confirmedAt: new Date(), purchaseOrderId: orderB.id, deliveryOrderId: deliveryB.id,
       },
     })
+    receiptBId = receiptB.id
     await prisma.paymentSchedule.create({
       data: {
         tenantId, receiptId: receiptB.id, supplierId: supplierB.id, storeId: store.id,
@@ -116,6 +119,7 @@ describe('supplier tenant scope (integration)', () => {
     await app.register(deliveryRoutes, { prefix: '/api/deliveries' })
     await app.register(lossClaimRoutes, { prefix: '/api/loss-claims' })
     await app.register(reconciliationRoutes, { prefix: '/api/reconciliations' })
+    await app.register(receiptRoutes, { prefix: '/api/receipts' })
     await app.ready()
   })
 
@@ -337,6 +341,14 @@ describe('supplier tenant scope (integration)', () => {
     expect(order.statusCode).toBe(404)
     const delivery = await app.inject({ method: 'GET', url: `/api/deliveries/${deliveryBId}` })
     expect(delivery.statusCode).toBe(404)
+
+    const receipts = await app.inject({ method: 'GET', url: '/api/receipts?page=1&pageSize=100' })
+    expect(receipts.statusCode).toBe(200)
+    expect(receipts.json()).toMatchObject({ total: 0, items: [] })
+    const receipt = await app.inject({ method: 'GET', url: `/api/receipts/${receiptBId}` })
+    expect(receipt.statusCode).toBe(404)
+    const invalidReceiptStatus = await app.inject({ method: 'GET', url: '/api/receipts?status=UNKNOWN' })
+    expect(invalidReceiptStatus.statusCode).toBe(400)
   })
 
   it('cannot list supplier B arrival claims', async () => {
@@ -382,11 +394,12 @@ describe('supplier tenant scope (integration)', () => {
     expect(exportLogs).toBe(2)
   })
 
-  it('keeps product, order and delivery offset pages stable when timestamps tie', async () => {
+  it('keeps product, order, delivery and receipt offset pages stable when timestamps tie', async () => {
     const tiedAt = new Date('2026-07-18T00:00:00.000Z')
     const productIds = [`stable-product-a-${suffix}`, `stable-product-b-${suffix}`]
     const orderIds = [`stable-order-a-${suffix}`, `stable-order-b-${suffix}`]
     const deliveryIds = [`stable-delivery-a-${suffix}`, `stable-delivery-b-${suffix}`]
+    const receiptIds = [`stable-receipt-a-${suffix}`, `stable-receipt-b-${suffix}`]
     await prisma.product.createMany({
       data: productIds.map((id, index) => ({
         id, tenantId, supplierId: supplierAId, code: `STABLE-PRODUCT-${index}-${suffix}`,
@@ -406,11 +419,19 @@ describe('supplier tenant scope (integration)', () => {
         createdById: userAId, createdAt: tiedAt,
       })),
     })
+    await prisma.receipt.createMany({
+      data: receiptIds.map((id, index) => ({
+        id, tenantId, no: `STABLE-RECEIPT-${index}-${suffix}`, storeId, supplierId: supplierAId,
+        deliveryDate: tiedAt, totalAmount: 0, status: 'CONFIRMED', createdById: chefUserId,
+        confirmedAt: tiedAt, createdAt: tiedAt,
+      })),
+    })
 
     const cases = [
       { endpoint: '/api/products?q=STABLE-PRODUCT', expected: [...productIds].sort() },
       { endpoint: '/api/orders?keyword=STABLE-ORDER', expected: [...orderIds].sort().reverse() },
       { endpoint: '/api/deliveries?keyword=STABLE-DELIVERY', expected: [...deliveryIds].sort().reverse() },
+      { endpoint: '/api/receipts?status=CONFIRMED', expected: [...receiptIds].sort().reverse() },
     ]
     for (const testCase of cases) {
       for (let attempt = 0; attempt < 3; attempt++) {

@@ -12,6 +12,15 @@ import { nextBusinessNo } from '../services/purchaseOrderIntegrity'
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const RECEIPT_OPERATOR_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN'])
 
+const receiptListFilterSchema = z.object({
+  status: z.preprocess(
+    value => value === '' ? undefined : value,
+    z.enum(['DRAFT', 'PENDING', 'PENDING_CONFIRM', 'CONFIRMED', 'ACCOUNTED', 'VOID', 'REJECTED']).optional(),
+  ),
+  supplierId: z.string().trim().min(1).max(100).optional(),
+  storeId: z.string().trim().min(1).max(100).optional(),
+}).passthrough()
+
 function canOperateReceipt(role: string | undefined) {
   return Boolean(role && RECEIPT_OPERATOR_ROLES.has(role))
 }
@@ -76,7 +85,9 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
   // ── 列表 ──────────────────────────────────────────
   app.get('/', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, storeId } = req.user
-    const { status, supplierId, storeId: qStore, page = '1', pageSize = '20' } = req.query as any
+    const parsedFilters = receiptListFilterSchema.safeParse(req.query || {})
+    if (!parsedFilters.success) return reply.status(400).send({ error: parsedFilters.error.issues[0].message })
+    const { status, supplierId, storeId: qStore, page = '1', pageSize = '20' } = parsedFilters.data as any
     const where: any = { tenantId }
     if (status) where.status = status
     // 供应商: 强制按自家 supplierId 过滤
@@ -92,7 +103,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
 
     const [items, total] = await Promise.all([
       prisma.receipt.findMany({
-        where, orderBy: { createdAt: 'desc' },
+        where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip, take: ps,
         include: {
           store: { select: { id: true, name: true } },

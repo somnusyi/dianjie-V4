@@ -2,6 +2,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import bcrypt from 'bcryptjs'
 import { prisma } from '@dianjie/db'
+import { resolveLoginTenantSlug } from '../lib/preview-tenant'
 import { ACCESS_TTL_MS, REFRESH_TTL_MS, issueAccessToken, issueSessionTokens } from '../services/authTokens'
 
 // ── JWT 寿命 ─────────────────────────────────────────────
@@ -39,12 +40,13 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const { identifier, email: emailField, password, tenantSlug } = body.data
     const id = (identifier || emailField || '').trim()
 
-    const previewTenant = process.env.PREVIEW_TENANT_SLUG
-    if (previewTenant && tenantSlug !== previewTenant) {
+    const previewTenant = process.env.PREVIEW_TENANT_SLUG?.trim()
+    const resolvedTenantSlug = resolveLoginTenantSlug(tenantSlug, previewTenant)
+    if (!resolvedTenantSlug) {
       return reply.status(403).send({ error: `本地预览仅允许 ${previewTenant} 测试租户` })
     }
 
-    const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug } })
+    const tenant = await prisma.tenant.findUnique({ where: { slug: resolvedTenantSlug } })
     if (!tenant || tenant.status !== 'ACTIVE') {
       return reply.status(401).send({ error: '租户不存在或已停用' })
     }

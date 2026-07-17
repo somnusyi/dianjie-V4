@@ -4,6 +4,7 @@ import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import dayjs from 'dayjs'
 import { isStoreScoped } from '../lib/auth-scope'
+import { buildIdempotencyKey } from '../lib/idempotency'
 import { estimatedStoreInventory, latestStoreInventorySnapshot } from '../services/storeInventory'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
@@ -11,6 +12,7 @@ const INVENTORY_VIEW_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF', 'CHEF_D
 const INVENTORY_WRITE_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF'])
 
 const consumeSchema = z.object({
+  idempotencyKey: z.string().trim().min(8).max(80).optional(),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式应为 YYYY-MM-DD').optional(),
   note: z.string().trim().max(500).optional(),
   items: z.array(z.object({
@@ -78,7 +80,7 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
     if (!storeId) return reply.status(400).send({ error: '当前账号未绑定门店' })
     const parsed = consumeSchema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-    const { items, note } = parsed.data
+    const { items, note, idempotencyKey } = parsed.data
     const dateText = parsed.data.date || chinaToday()
     let consumeDate: Date
     try {
@@ -95,8 +97,32 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
     if (!store) return reply.status(400).send({ error: '绑定门店不存在或不属于当前租户' })
     if (products.length !== items.length) return reply.status(400).send({ error: '存在不属于当前租户的食材' })
 
-    const operationId = randomUUID()
-    await prisma.$transaction(async tx => {
+    const operationId = idempotencyKey
+      ? buildIdempotencyKey({
+          tenantId, userId, method: 'POST', url: '/api/inventory/consume', clientKey: idempotencyKey,
+        })
+      : randomUUID()
+    const result = await prisma.$transaction(async tx => {
+      if (idempotencyKey) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`inventory-consume:${operationId}`}))`
+        const existing = await tx.stockConsumption.findMany({
+          where: { tenantId, storeId, createdById: userId, sourceType: 'manual', sourceId: operationId },
+          select: { productId: true, quantity: true, date: true, note: true },
+        })
+        if (existing.length > 0) {
+          const requested = new Map(items.map(item => [item.productId, item.quantity]))
+          const sameRequest = existing.length === items.length && existing.every(row =>
+            row.date.toISOString().slice(0, 10) === dateText
+            && (row.note || null) === (note || null)
+            && requested.has(row.productId)
+            && new Prisma.Decimal(requested.get(row.productId)!).equals(row.quantity),
+          )
+          if (!sameRequest) {
+            throw Object.assign(new Error('同一幂等键不能用于不同的领用内容'), { statusCode: 409 })
+          }
+          return { count: existing.length, duplicated: true }
+        }
+      }
       await tx.stockConsumption.createMany({
         data: items.map(item => ({
           tenantId,
@@ -119,9 +145,10 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
           metadata: { storeId, date: dateText, itemCount: items.length },
         },
       })
+      return { count: items.length, duplicated: false }
     })
 
-    return { success: true, count: items.length, operationId }
+    return { success: true, count: result.count, operationId, duplicated: result.duplicated }
   })
 
   app.get('/consumptions', auth(app), async (req: any, reply: any) => {

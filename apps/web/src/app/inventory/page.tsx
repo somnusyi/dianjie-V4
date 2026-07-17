@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import AppLayout from '@/components/AppLayout'
 import { Btn, Field, Input, Select, fmt, useToast } from '@/components/ui'
 import api from '@/lib/api'
+import { clientRequestId } from '@/lib/client-id'
 import dayjs from 'dayjs'
 
 type FilterAlert = '' | 'low' | 'expiring'
@@ -16,6 +17,8 @@ export default function InventoryPage() {
   const [consumeItems, setConsumeItems] = useState([{ productId: '', quantity: '' }])
   const [consumeDate, setConsumeDate] = useState(dayjs().format('YYYY-MM-DD'))
   const [consumeNote, setConsumeNote] = useState('')
+  const [consumeRequestId, setConsumeRequestId] = useState(() => clientRequestId())
+  const [submittingConsume, setSubmittingConsume] = useState(false)
   const { show, ToastEl } = useToast()
 
   useEffect(() => { load() }, [])
@@ -60,22 +63,33 @@ export default function InventoryPage() {
   }, [products])
 
   const submitConsume = async () => {
+    if (submittingConsume) return
     const valid = consumeItems.filter(i => i.productId && Number(i.quantity) > 0)
     if (!valid.length) return show('请填写消耗明细', 'error')
+    setSubmittingConsume(true)
     try {
       await api.post('/api/inventory/consume', {
         items: valid.map(i => ({ productId: i.productId, quantity: Number(i.quantity) })),
         date: consumeDate,
         note: consumeNote,
+        idempotencyKey: consumeRequestId,
       })
       show(`已录入 ${valid.length} 种食材消耗`)
       setShowConsume(false)
       setConsumeItems([{ productId: '', quantity: '' }])
       setConsumeNote('')
+      setConsumeRequestId(clientRequestId())
       load()
     } catch (e: any) {
       show(e.response?.data?.error || '录入失败', 'error')
+    } finally {
+      setSubmittingConsume(false)
     }
+  }
+
+  const openConsume = () => {
+    setConsumeRequestId(clientRequestId())
+    setShowConsume(true)
   }
 
   const getExpiryStyle = (p: any) => {
@@ -101,7 +115,7 @@ export default function InventoryPage() {
             <h1>库存风控台</h1>
             <p>看清食材库存、安全线、临期风险，并快速录入今日消耗</p>
           </div>
-          <Btn variant="primary" onClick={() => setShowConsume(true)}>录入今日消耗</Btn>
+          <Btn variant="primary" onClick={openConsume}>录入今日消耗</Btn>
         </div>
 
         <section className="dj-hero inventory-hero">
@@ -291,7 +305,9 @@ export default function InventoryPage() {
 
             <div className="finance-modal-actions">
               <Btn onClick={() => setShowConsume(false)}>取消</Btn>
-              <Btn variant="primary" onClick={submitConsume}>确认录入</Btn>
+              <Btn variant="primary" onClick={submitConsume} disabled={submittingConsume}>
+                {submittingConsume ? '录入中...' : '确认录入'}
+              </Btn>
             </div>
           </div>
         </div>

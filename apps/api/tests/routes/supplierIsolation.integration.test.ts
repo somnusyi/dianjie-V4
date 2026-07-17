@@ -424,6 +424,36 @@ describe('supplier tenant scope (integration)', () => {
     }
   })
 
+  it('makes concurrent manual consumption retries idempotent', async () => {
+    const idempotencyKey = `consume-${suffix}`
+    const payload = {
+      date: new Date().toISOString().slice(0, 10),
+      note: '并发领用回归',
+      idempotencyKey,
+      items: [{ productId: productAId, quantity: 1.25 }],
+    }
+    const responses = await Promise.all([
+      app.inject({ method: 'POST', url: '/api/inventory/consume', payload, headers: { 'x-test-actor': 'chef' } }),
+      app.inject({ method: 'POST', url: '/api/inventory/consume', payload, headers: { 'x-test-actor': 'chef' } }),
+    ])
+    expect(responses.map(response => response.statusCode)).toEqual([200, 200])
+    expect(responses.map(response => response.json().duplicated).sort()).toEqual([false, true])
+    const operationIds = responses.map(response => response.json().operationId)
+    expect(new Set(operationIds).size).toBe(1)
+    expect(await prisma.stockConsumption.count({
+      where: { tenantId, storeId, sourceType: 'manual', sourceId: operationIds[0] },
+    })).toBe(1)
+    expect(await prisma.opLog.count({
+      where: { tenantId, entityType: 'StockConsumptionBatch', targetId: operationIds[0] },
+    })).toBe(1)
+
+    const conflict = await app.inject({
+      method: 'POST', url: '/api/inventory/consume', headers: { 'x-test-actor': 'chef' },
+      payload: { ...payload, items: [{ productId: productAId, quantity: 2 }] },
+    })
+    expect(conflict.statusCode).toBe(409)
+  })
+
   it('keeps bound-store snapshot and estimated inventory rows stably ordered', async () => {
     const otherStore = await prisma.store.create({
       data: { tenantId, no: `S-SNAPSHOT-${suffix}`, name: '另一盘点测试门店' },

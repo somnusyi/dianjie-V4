@@ -126,7 +126,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         prisma.product.findMany({
           where,
           include: { supplier: { select: { id: true, name: true } } },
-          orderBy: { createdAt: 'asc' },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         })
       )
       return withAvailability(tenantId, rows as any[])
@@ -135,7 +135,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       const rows = await prisma.product.findMany({
         where,
         include: { supplier: { select: { id: true, name: true } } },
-        orderBy: { createdAt: 'asc' },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       })
       return withAvailability(tenantId, rows)
     }
@@ -146,7 +146,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       prisma.product.findMany({
         where,
         include: { supplier: { select: { id: true, name: true } } },
-        orderBy: { createdAt: 'asc' },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         skip: (p - 1) * ps,
         take: ps,
       }),

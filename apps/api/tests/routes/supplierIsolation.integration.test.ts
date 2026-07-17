@@ -357,4 +357,48 @@ describe('supplier tenant scope (integration)', () => {
     })
     expect(exportLogs).toBe(2)
   })
+
+  it('keeps product, order and delivery offset pages stable when timestamps tie', async () => {
+    const tiedAt = new Date('2026-07-18T00:00:00.000Z')
+    const productIds = [`stable-product-a-${suffix}`, `stable-product-b-${suffix}`]
+    const orderIds = [`stable-order-a-${suffix}`, `stable-order-b-${suffix}`]
+    const deliveryIds = [`stable-delivery-a-${suffix}`, `stable-delivery-b-${suffix}`]
+    await prisma.product.createMany({
+      data: productIds.map((id, index) => ({
+        id, tenantId, supplierId: supplierAId, code: `STABLE-PRODUCT-${index}-${suffix}`,
+        name: `STABLE-PRODUCT-${index}`, price: 1, createdAt: tiedAt,
+      })),
+    })
+    await prisma.purchaseOrder.createMany({
+      data: orderIds.map((id, index) => ({
+        id, tenantId, no: `STABLE-ORDER-${index}-${suffix}`, storeId, supplierId: supplierAId,
+        expectedDate: tiedAt, totalAmount: 0, status: 'SUBMITTED', createdById: chefUserId, createdAt: tiedAt,
+      })),
+    })
+    await prisma.deliveryOrder.createMany({
+      data: deliveryIds.map((id, index) => ({
+        id, tenantId, no: `STABLE-DELIVERY-${index}-${suffix}`, purchaseOrderId: orderIds[index],
+        storeId, supplierId: supplierAId, status: 'SHIPPED', actualTotalAmount: 0,
+        createdById: userAId, createdAt: tiedAt,
+      })),
+    })
+
+    const cases = [
+      { endpoint: '/api/products?q=STABLE-PRODUCT', expected: [...productIds].sort() },
+      { endpoint: '/api/orders?keyword=STABLE-ORDER', expected: [...orderIds].sort().reverse() },
+      { endpoint: '/api/deliveries?keyword=STABLE-DELIVERY', expected: [...deliveryIds].sort().reverse() },
+    ]
+    for (const testCase of cases) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const [first, second] = await Promise.all([
+          app.inject({ method: 'GET', url: `${testCase.endpoint}&page=1&pageSize=1` }),
+          app.inject({ method: 'GET', url: `${testCase.endpoint}&page=2&pageSize=1` }),
+        ])
+        expect([first.statusCode, second.statusCode]).toEqual([200, 200])
+        expect([first.json().items[0].id, second.json().items[0].id]).toEqual(testCase.expected)
+        expect(first.json().total).toBe(2)
+        expect(second.json().total).toBe(2)
+      }
+    }
+  })
 })

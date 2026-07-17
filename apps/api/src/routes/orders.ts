@@ -159,7 +159,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
 
     const [items, total] = await Promise.all([
       prisma.purchaseOrder.findMany({
-        where, orderBy: { createdAt: 'desc' },
+        where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip, take: ps,
         include: {
           store: { select: { id: true, name: true } },

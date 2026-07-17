@@ -74,7 +74,7 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
     const skip = (q.page - 1) * q.pageSize
     const [items, total] = await Promise.all([
       prisma.deliveryOrder.findMany({
-        where, orderBy: { createdAt: 'desc' }, skip, take: q.pageSize,
+        where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip, take: q.pageSize,
         include: {
           purchaseOrder: { select: { id: true, no: true, status: true, originalTotalAmount: true, currentOrderAmount: true } },
           store: { select: { id: true, name: true } },

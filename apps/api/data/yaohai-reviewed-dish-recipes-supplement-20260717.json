@@ -1,0 +1,189 @@
+{
+  "version": 1,
+  "tenantSlug": "dianjie",
+  "source": "滇界菜品利润分析表 2026-07-15（遗漏分区补录，用户确认毛重口径）",
+  "productsToCreate": [
+    {
+      "code": "DJ-BOM-6D8DDB5CE1",
+      "name": "鲍鱼/个",
+      "unit": "个",
+      "category": "BOM待采购映射",
+      "spec": null
+    },
+    {
+      "code": "DJ-BOM-C449034135",
+      "name": "生蚝-牡蛎半壳个",
+      "unit": "个",
+      "category": "BOM待采购映射",
+      "spec": null
+    }
+  ],
+  "rules": [
+    {
+      "dishName": "鲜切牛脊背肉",
+      "spec": "",
+      "variantKey": "",
+      "policy": "BOM",
+      "note": "荤菜第17-18行，按毛重",
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL6Y",
+          "productName": "鲜嫩西冷",
+          "productUnit": "箱",
+          "quantity": 0.016667,
+          "rawIngredient": "X-鲜嫩西冷",
+          "rawQuantity": 120,
+          "rawUnit": "g",
+          "note": "荤菜第17行，按毛重；按采购规格 箱/60包/120g 换算"
+        },
+        {
+          "productCode": "DJ-BOM-3A0FE29383",
+          "productName": "花草",
+          "productUnit": "g",
+          "quantity": 8,
+          "rawIngredient": "花草",
+          "rawQuantity": 8,
+          "rawUnit": "g",
+          "note": "荤菜第18行，按毛重；BOM原单位SKU"
+        }
+      ]
+    },
+    {
+      "dishName": "海味四重奏",
+      "spec": "",
+      "variantKey": "",
+      "policy": "BOM",
+      "note": "荤菜第27-30行，按毛重",
+      "items": [
+        {
+          "productCode": "ZZ9M-2FQE7L-OL",
+          "productName": "盐冻虾30/40",
+          "productUnit": "件",
+          "quantity": 0.008333,
+          "rawIngredient": "X-盐冻虾30/40",
+          "rawQuantity": 75,
+          "rawUnit": "g",
+          "note": "荤菜第27行，按毛重；按采购规格 1.5kg*6/箱 换算"
+        },
+        {
+          "productCode": "DJ-BOM-6D8DDB5CE1",
+          "productName": "鲍鱼/个",
+          "productUnit": "个",
+          "quantity": 4,
+          "rawIngredient": "X-鲍鱼/个",
+          "rawQuantity": 4,
+          "rawUnit": "个",
+          "note": "荤菜第28行，按毛重；采购箱规格缺每箱个数，先按原单位SKU记录"
+        },
+        {
+          "productCode": "ZZ9M-2DYL8A",
+          "productName": "八爪鱼",
+          "productUnit": "箱",
+          "quantity": 0.029804,
+          "rawIngredient": "X-八爪鱼",
+          "rawQuantity": 152,
+          "rawUnit": "g",
+          "note": "荤菜第29行，按毛重；按采购规格 箱/12包/425g 换算"
+        },
+        {
+          "productCode": "DJ-BOM-C449034135",
+          "productName": "生蚝-牡蛎半壳个",
+          "productUnit": "个",
+          "quantity": 2,
+          "rawIngredient": "X-生蚝-牡蛎半壳个",
+          "rawQuantity": 2,
+          "rawUnit": "个",
+          "note": "荤菜第30行，按毛重；采购箱规格缺每箱个数，先按原单位SKU记录"
+        }
+      ]
+    },
+    {
+      "dishName": "脆爽黄喉",
+      "spec": "",
+      "variantKey": "",
+      "policy": "BOM",
+      "note": "荤菜第36行，按毛重",
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL7G",
+          "productName": "猪黄喉",
+          "productUnit": "包",
+          "quantity": 0.05584,
+          "rawIngredient": "X-猪黄喉",
+          "rawQuantity": 139.6,
+          "rawUnit": "g",
+          "note": "荤菜第36行，按毛重；按采购规格 箱/10包/2500g 的内包单位换算"
+        }
+      ]
+    },
+    {
+      "dishName": "魔幻见手青",
+      "spec": "",
+      "variantKey": "",
+      "policy": "BOM",
+      "note": "蘑菇第13行，按毛重；花草行无可执行数量，未猜测",
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL5C",
+          "productName": "人工见手青",
+          "productUnit": "件",
+          "quantity": 0.105,
+          "rawIngredient": "X-人工见手青",
+          "rawQuantity": 105,
+          "rawUnit": "g",
+          "note": "蘑菇第13行，按毛重；按采购规格 件/1000g 换算"
+        }
+      ]
+    },
+    {
+      "dishName": "手剥丛林嫩笋",
+      "spec": "",
+      "variantKey": "",
+      "policy": "BOM",
+      "note": "素菜第19行，按毛重；花草行无可执行数量，未猜测",
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL8L",
+          "productName": "手剥笋(小嫩笋升级)",
+          "productUnit": "箱",
+          "quantity": 0.037,
+          "rawIngredient": "X-手剥笋",
+          "rawQuantity": 185,
+          "rawUnit": "g",
+          "note": "素菜第19行，按毛重；按采购规格 1*5kg/箱 换算"
+        }
+      ]
+    },
+    {
+      "dishName": "黑皮鸡枞",
+      "spec": "",
+      "variantKey": "",
+      "policy": "BOM",
+      "note": "蘑菇第11行，按毛重；原表菜名为黑皮鸡纵",
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYL5U",
+          "productName": "黑皮鸡枞菌",
+          "productUnit": "kg",
+          "quantity": 0.102,
+          "rawIngredient": "X-黑皮鸡纵",
+          "rawQuantity": 102,
+          "rawUnit": "g",
+          "note": "蘑菇第11行，按毛重；g换算为kg"
+        }
+      ]
+    }
+  ],
+  "audit": {
+    "rules": 6,
+    "activeRules": 6,
+    "pendingRules": [],
+    "recipeItems": 10,
+    "existingProductItems": 8,
+    "pendingProductItems": 2,
+    "productsToCreate": 2,
+    "conversionWarnings": [
+      "鲍鱼和生蚝的采购箱规格缺每箱个数，先按BOM原单位建立待映射SKU"
+    ]
+  }
+}

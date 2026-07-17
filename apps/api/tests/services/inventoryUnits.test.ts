@@ -45,6 +45,24 @@ describe('inventory unit normalization', () => {
     }).normalizedQuantity).toBeCloseTo(1 / 60)
   })
 
+  it('respects an inner purchasing unit described inside an outer-case spec', () => {
+    expect(convertBomUsageToProductUnit({
+      quantity: 139.6, bomUnit: 'g', productUnit: '包', productSpec: '箱/10包/2500g',
+    }).normalizedQuantity).toBeCloseTo(139.6 / 2500)
+  })
+
+  it('treats 件 as the outer case when a bare inner multiplier ends in 箱', () => {
+    expect(convertBomUsageToProductUnit({
+      quantity: 75, bomUnit: 'g', productUnit: '件', productSpec: '1.5kg*6/箱',
+    }).normalizedQuantity).toBeCloseTo(75 / 9000)
+  })
+
+  it('keeps outer-case conversion for explicit inner package counts', () => {
+    expect(convertBomUsageToProductUnit({
+      quantity: 120, bomUnit: 'g', productUnit: '箱', productSpec: '箱/60包/120g',
+    }).normalizedQuantity).toBeCloseTo(1 / 60)
+  })
+
   it('marks an ambiguous conversion pending', () => {
     expect(normalizeInventoryQuantity({
       quantity: 2, rawUnit: '盒', rawSpec: '盒', productUnit: '件', productSpec: null,

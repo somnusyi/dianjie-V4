@@ -68,6 +68,14 @@ function quantityTokenToBase(value: number, unit: string) {
   return null
 }
 
+function packageUnitsEquivalent(left: string, right: string) {
+  const a = cleanUnit(left)
+  const b = cleanUnit(right)
+  if (a === b) return true
+  const groups = [new Set(['箱', '件']), new Set(['包', '袋']), new Set(['个', '枚'])]
+  return groups.some(group => group.has(a) && group.has(b))
+}
+
 /** Returns the physical mass/volume represented by one purchasing package. */
 export function physicalAmountPerPackage(specValue: string | null | undefined) {
   const spec = cleanSpec(specValue)
@@ -96,6 +104,50 @@ export function physicalAmountPerPackage(specValue: string | null | undefined) {
   const dimension = candidates[0].dimension
   const sameDimension = candidates.filter(item => item.dimension === dimension)
   return sameDimension.reduce((largest, item) => item.value > largest.value ? item : largest)
+}
+
+/**
+ * Returns the physical amount represented by one Product.unit.
+ *
+ * A supplier spec can describe both an outer case and an inner selling unit,
+ * for example `箱/10包/2500g`.  `physicalAmountPerPackage` intentionally returns
+ * the outer-case total (25kg), while a Product whose unit is `包` represents only
+ * the inner 2500g.  BOM conversion must respect that distinction or consumption is
+ * understated by the inner package count.
+ */
+function physicalAmountPerProductUnit(specValue: string | null | undefined, productUnitValue: string) {
+  const spec = cleanSpec(specValue)
+  const productUnit = cleanUnit(productUnitValue)
+  if (!spec || !productUnit) return null
+
+  // 500g*20包/箱, 1l*12瓶/件
+  const amountThenCount = spec.match(/(\d+(?:\.\d+)?)(kg|g|斤|ml|l)[*\/](\d+(?:\.\d+)?)(包|袋|瓶|盒|桶|罐|个|枚|支|片)(?:\/(?:箱|件))?/)
+  if (amountThenCount) {
+    const oneInner = quantityTokenToBase(Number(amountThenCount[1]), amountThenCount[2])
+    if (oneInner) {
+      if (packageUnitsEquivalent(productUnit, amountThenCount[4])) return oneInner
+      return { dimension: oneInner.dimension, value: oneInner.value * Number(amountThenCount[3]) }
+    }
+  }
+
+  // 箱/20包/500g, 件/24瓶/330ml
+  const countThenAmount = spec.match(/(\d+(?:\.\d+)?)(包|袋|瓶|盒|桶|罐|个|枚|支|片)[*\/](\d+(?:\.\d+)?)(kg|g|斤|ml|l)/)
+  if (countThenAmount) {
+    const oneInner = quantityTokenToBase(Number(countThenAmount[3]), countThenAmount[4])
+    if (oneInner) {
+      if (packageUnitsEquivalent(productUnit, countThenAmount[2])) return oneInner
+      return { dimension: oneInner.dimension, value: oneInner.value * Number(countThenAmount[1]) }
+    }
+  }
+
+  // 1.5kg*6/箱.  Here the inner unit label is omitted; 箱/件 is the outer unit.
+  const amountTimesBareCount = spec.match(/(\d+(?:\.\d+)?)(kg|g|斤|ml|l)\*(\d+(?:\.\d+)?)\/(?:箱|件)/)
+  if (amountTimesBareCount && (productUnit === '箱' || productUnit === '件')) {
+    const oneInner = quantityTokenToBase(Number(amountTimesBareCount[1]), amountTimesBareCount[2])
+    if (oneInner) return { dimension: oneInner.dimension, value: oneInner.value * Number(amountTimesBareCount[3]) }
+  }
+
+  return physicalAmountPerPackage(specValue)
 }
 
 function countPerPackage(specValue: string | null | undefined, rawUnit: string) {
@@ -149,7 +201,7 @@ export function normalizeInventoryQuantity(input: {
     }
   }
 
-  const productPackage = physicalAmountPerPackage(input.productSpec)
+  const productPackage = physicalAmountPerProductUnit(input.productSpec, productUnit)
   if (rawPhysical && productPackage && rawPhysical.dimension === productPackage.dimension) {
     const factor = rawUnitPhysical!.value / productPackage.value
     const normalizedQuantity = input.quantity * factor

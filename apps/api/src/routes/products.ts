@@ -777,7 +777,11 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     if (isSupplierRole(role) && !supplierScopeOrReply(req, reply, 'catalog.manage')) return
     const body = req.body as any
     const items = Array.isArray(body?.items) ? body.items : null
-    const filename = (body?.filename as string | undefined) || null
+    const parsedFilename = z.string().trim().max(255).nullable().optional().safeParse(body?.filename)
+    if (!parsedFilename.success) {
+      return reply.status(400).send({ error: 'filename 最多 255 个字符' })
+    }
+    const filename = parsedFilename.data || null
     if (!items || items.length === 0) {
       return reply.status(400).send({ error: 'items 必须是非空数组' })
     }
@@ -987,6 +991,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   // ─── 上传历史列表 ─────────────────────────────────
   app.get('/batches', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, supplierId } = req.user
+    if (!PRODUCT_WRITE_ROLES.has(role)) return reply.status(403).send({ error: '无权查看商品上传历史' })
     const where: any = { tenantId }
     if (isSupplierRole(role)) {
       if (!supplierScopeOrReply(req, reply, 'catalog.read')) return
@@ -995,7 +1000,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     }
     const list = await prisma.productBatch.findMany({
       where,
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 50,
       include: {
         _count: { select: { products: true } },     // 当前还存在的 product 数 (撤回 / 单删后会变少)
@@ -1007,6 +1012,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   // ─── 撤回上传：只停售并留存历史，禁止物理删除商品/库存流水 ──────
   app.patch('/batches/:id/revoke', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, userId, supplierId } = req.user
+    if (!PRODUCT_WRITE_ROLES.has(role)) return reply.status(403).send({ error: '无权撤回商品上传批次' })
     const { id } = req.params as any
     const where: any = { id, tenantId }
     if (isSupplierRole(role)) {

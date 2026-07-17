@@ -154,6 +154,7 @@ describe('supplier tenant scope (integration)', () => {
     await prisma.opLog.deleteMany({ where: { tenantId } })
     await prisma.businessSequence.deleteMany({ where: { tenantId } })
     await prisma.product.deleteMany({ where: { tenantId } })
+    await prisma.productBatch.deleteMany({ where: { tenantId } })
     await prisma.supplierProductCategory.deleteMany({ where: { tenantId } })
     await prisma.user.deleteMany({ where: { tenantId } })
     await prisma.store.deleteMany({ where: { tenantId } })
@@ -342,6 +343,55 @@ describe('supplier tenant scope (integration)', () => {
       expect(row).toMatchObject({ operator: '供应商 A 账号' })
       expect(Number.isNaN(Date.parse(row.createdAt))).toBe(false)
     }
+  })
+
+  it('isolates upload batches and rejects unauthorized revocation', async () => {
+    const tiedAt = new Date('2030-07-18T00:00:00.000Z')
+    const supplierABatchIds = [`upload-batch-a-${suffix}`, `upload-batch-b-${suffix}`]
+    await prisma.productBatch.createMany({
+      data: [
+        ...supplierABatchIds.map(id => ({
+          id, tenantId, supplierId: supplierAId, uploadedById: userAId,
+          filename: 'supplier-a.xlsx', totalRows: 0, createdCount: 0, failedCount: 0, createdAt: tiedAt,
+        })),
+        {
+          id: `foreign-upload-batch-${suffix}`, tenantId, supplierId: supplierBId,
+          uploadedById: chefUserId, filename: 'supplier-b.xlsx',
+          totalRows: 0, createdCount: 0, failedCount: 0, createdAt: tiedAt,
+        },
+      ],
+    })
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const batches = await app.inject({ method: 'GET', url: '/api/products/batches' })
+      expect(batches.statusCode).toBe(200)
+      expect(batches.json().map((row: any) => row.id)).toEqual([...supplierABatchIds].sort().reverse())
+    }
+    const chefList = await app.inject({
+      method: 'GET', url: '/api/products/batches', headers: { 'x-test-actor': 'chef' },
+    })
+    expect(chefList.statusCode).toBe(403)
+    const chefRevoke = await app.inject({
+      method: 'PATCH', url: `/api/products/batches/${supplierABatchIds[0]}/revoke`,
+      headers: { 'x-test-actor': 'chef' },
+    })
+    expect(chefRevoke.statusCode).toBe(403)
+    expect(await prisma.productBatch.findUniqueOrThrow({ where: { id: supplierABatchIds[0] } })).toMatchObject({
+      revokedAt: null,
+    })
+    const crossSupplierRevoke = await app.inject({
+      method: 'PATCH', url: `/api/products/batches/foreign-upload-batch-${suffix}/revoke`,
+    })
+    expect(crossSupplierRevoke.statusCode).toBe(404)
+
+    const longFilename = await app.inject({
+      method: 'POST', url: '/api/products/batch',
+      payload: {
+        filename: 'x'.repeat(256),
+        items: [{ name: '文件名校验商品', price: 1 }],
+      },
+    })
+    expect(longFilename.statusCode).toBe(400)
   })
 
   it('cannot list or open supplier B orders and deliveries', async () => {

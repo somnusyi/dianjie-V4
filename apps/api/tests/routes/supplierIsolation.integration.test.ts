@@ -147,6 +147,7 @@ describe('supplier tenant scope (integration)', () => {
     await prisma.supplierStockBatch.deleteMany({ where: { tenantId } })
     await prisma.supplierStockMovement.deleteMany({ where: { tenantId } })
     await prisma.stockConsumption.deleteMany({ where: { tenantId } })
+    await prisma.inventorySnapshot.deleteMany({ where: { tenantId } })
     await prisma.documentDecision.deleteMany({ where: { document: { tenantId } } })
     await prisma.documentStep.deleteMany({ where: { document: { tenantId } } })
     await prisma.document.deleteMany({ where: { tenantId } })
@@ -420,6 +421,61 @@ describe('supplier tenant scope (integration)', () => {
       })
       expect(response.statusCode).toBe(200)
       expect(response.json().map((row: any) => row.id)).toEqual([...scopedIds].sort().reverse())
+    }
+  })
+
+  it('keeps bound-store snapshot and estimated inventory rows stably ordered', async () => {
+    const otherStore = await prisma.store.create({
+      data: { tenantId, no: `S-SNAPSHOT-${suffix}`, name: '另一盘点测试门店' },
+    })
+    const snapshotDate = new Date()
+    snapshotDate.setUTCHours(0, 0, 0, 0)
+    snapshotDate.setUTCDate(snapshotDate.getUTCDate() - 1)
+    const productIds = [`inventory-product-a-${suffix}`, `inventory-product-b-${suffix}`]
+    const itemIds = [`inventory-item-a-${suffix}`, `inventory-item-b-${suffix}`]
+    await prisma.product.createMany({
+      data: productIds.map((id, index) => ({
+        id, tenantId, supplierId: supplierAId, code: `INVENTORY-${index}-${suffix}`,
+        name: '同名库存商品', unit: '件', price: 2,
+      })),
+    })
+    await prisma.inventorySnapshot.create({
+      data: {
+        tenantId, storeId, snapshotDate, sourceFilename: 'integration-fixture.xlsx',
+        totalValue: 6, itemCount: 2, nonzeroCount: 2, zeroCount: 0, matchedCount: 2,
+        items: {
+          create: itemIds.map((id, index) => ({
+            id, productId: productIds[index], rawName: '同名库存商品', unit: '件',
+            quantity: index + 1, unitPrice: 2, amount: (index + 1) * 2,
+            normalizationStatus: 'EXACT', normalizedQuantity: index + 1,
+            normalizedUnit: '件', sortOrder: 1,
+          })),
+        },
+      },
+    })
+    await prisma.inventorySnapshot.create({
+      data: {
+        tenantId, storeId: otherStore.id, snapshotDate, sourceFilename: 'foreign-fixture.xlsx',
+        totalValue: 0, itemCount: 0, nonzeroCount: 0, zeroCount: 0, matchedCount: 0,
+      },
+    })
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const [snapshot, estimated] = await Promise.all([
+        app.inject({
+          method: 'GET', url: `/api/inventory/snapshot/latest?storeId=${otherStore.id}`,
+          headers: { 'x-test-actor': 'chef' },
+        }),
+        app.inject({
+          method: 'GET', url: `/api/inventory?storeId=${otherStore.id}`,
+          headers: { 'x-test-actor': 'chef' },
+        }),
+      ])
+      expect([snapshot.statusCode, estimated.statusCode]).toEqual([200, 200])
+      expect(snapshot.json().items.map((row: any) => row.id)).toEqual([...itemIds].sort())
+      expect(estimated.json()
+        .map((row: any) => row.id)
+        .filter((id: string) => productIds.includes(id))).toEqual([...productIds].sort())
     }
   })
 

@@ -55,7 +55,7 @@ export async function latestStoreInventorySnapshot(tenantId: string, storeId: st
       orderBy: [{ snapshotDate: 'desc' }, { createdAt: 'desc' }],
       include: {
         items: {
-          orderBy: { sortOrder: 'asc' },
+          orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
           include: {
             product: { select: { id: true, code: true, name: true, unit: true, minStock: true } },
           },
@@ -261,7 +261,10 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string)
 
   const productIds = [...slots.keys()]
   const products = productIds.length > 0
-    ? await prisma.product.findMany({ where: { tenantId, id: { in: productIds } }, orderBy: { name: 'asc' } })
+    ? await prisma.product.findMany({
+        where: { tenantId, id: { in: productIds } },
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      })
     : []
   const nearestExpiry = new Map<string, Date>()
   for (const item of receiptItems

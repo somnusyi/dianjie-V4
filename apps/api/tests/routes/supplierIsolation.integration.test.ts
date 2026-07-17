@@ -383,6 +383,37 @@ describe('supplier tenant scope (integration)', () => {
     }
   })
 
+  it('serializes category sort allocation and stabilizes product history', async () => {
+    const categoryNames = [`并发分类A-${suffix.slice(-8)}`, `并发分类B-${suffix.slice(-8)}`]
+    const created = await Promise.all(categoryNames.map(name => app.inject({
+      method: 'POST', url: '/api/products/categories', payload: { name },
+    })))
+    expect(created.map(response => response.statusCode)).toEqual([201, 201])
+    const categories = await prisma.supplierProductCategory.findMany({
+      where: { tenantId, supplierId: supplierAId, name: { in: categoryNames } },
+      orderBy: { sortOrder: 'asc' },
+    })
+    expect(categories).toHaveLength(2)
+    expect(new Set(categories.map(category => category.sortOrder)).size).toBe(2)
+
+    const tiedAt = new Date('2031-07-18T00:00:00.000Z')
+    const logIds = [`stable-product-log-a-${suffix}`, `stable-product-log-b-${suffix}`]
+    await prisma.opLog.createMany({
+      data: logIds.map((id, index) => ({
+        id, tenantId, userId: userAId, action: `稳定商品历史 ${index}`,
+        entityType: 'ProductCategory', targetId: categories[index].id,
+        metadata: { supplierId: supplierAId }, createdAt: tiedAt,
+      })),
+    })
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const history = await app.inject({ method: 'GET', url: '/api/products/history?limit=200' })
+      expect(history.statusCode).toBe(200)
+      expect(history.json()
+        .filter((row: any) => String(row.action).startsWith('稳定商品历史'))
+        .map((row: any) => row.id)).toEqual([...logIds].sort().reverse())
+    }
+  })
+
   it('isolates upload batches and rejects unauthorized revocation', async () => {
     const tiedAt = new Date('2030-07-18T00:00:00.000Z')
     const supplierABatchIds = [`upload-batch-a-${suffix}`, `upload-batch-b-${suffix}`]

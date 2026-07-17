@@ -248,16 +248,17 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     if (!scopedSupplierId) return
     const parsed = z.object({ name: categoryNameSchema }).safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-    const duplicate = await prisma.supplierProductCategory.findUnique({
-      where: { tenantId_supplierId_name: { tenantId, supplierId: scopedSupplierId, name: parsed.data.name } },
-    })
-    if (duplicate) return reply.status(409).send({ error: '分类名称已存在' })
-    const max = await prisma.supplierProductCategory.aggregate({
-      where: { tenantId, supplierId: scopedSupplierId }, _max: { sortOrder: true },
-    })
     let category: any
     try {
       category = await prisma.$transaction(async tx => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`supplier-categories:${tenantId}:${scopedSupplierId}`}))`
+        const duplicate = await tx.supplierProductCategory.findUnique({
+          where: { tenantId_supplierId_name: { tenantId, supplierId: scopedSupplierId, name: parsed.data.name } },
+        })
+        if (duplicate) throw Object.assign(new Error('分类名称已存在'), { statusCode: 409 })
+        const max = await tx.supplierProductCategory.aggregate({
+          where: { tenantId, supplierId: scopedSupplierId }, _max: { sortOrder: true },
+        })
         const created = await tx.supplierProductCategory.create({
           data: {
             tenantId, supplierId: scopedSupplierId, name: parsed.data.name,
@@ -276,7 +277,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         return created
       })
     } catch (error: any) {
-      if (error?.code === 'P2002') return reply.status(409).send({ error: '分类名称已存在' })
+      if (error?.code === 'P2002' || error?.statusCode === 409) {
+        return reply.status(409).send({ error: '分类名称已存在' })
+      }
       throw error
     }
     return reply.status(201).send({ ...category, count: 0 })
@@ -435,7 +438,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           ],
         } : {}),
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit,
       include: { user: { select: { name: true } } },
     })

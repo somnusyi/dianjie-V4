@@ -172,14 +172,52 @@
           "note": "蘑菇第11行，按毛重；g换算为kg"
         }
       ]
+    },
+    {
+      "dishName": "保拉纳白啤",
+      "spec": "",
+      "variantKey": "",
+      "policy": "BOM",
+      "note": "成品直扣：每份1瓶，采购规格20瓶/箱",
+      "items": [
+        {
+          "productCode": "ZZ9M-DOTNWA",
+          "productName": "保拉纳小麦啤酒（白）",
+          "productUnit": "箱",
+          "quantity": 0.05,
+          "rawIngredient": "保拉纳小麦啤酒（白）",
+          "rawQuantity": 1,
+          "rawUnit": "瓶",
+          "note": "每份1瓶；按采购规格 1箱/20瓶-500ml 换算"
+        }
+      ]
+    },
+    {
+      "dishName": "可乐摩登罐",
+      "spec": "",
+      "variantKey": "",
+      "policy": "BOM",
+      "note": "成品直扣：每份1罐，采购规格24罐/箱",
+      "items": [
+        {
+          "productCode": "ZZ9M-2DYLBQ",
+          "productName": "可乐摩登罐",
+          "productUnit": "箱",
+          "quantity": 0.041667,
+          "rawIngredient": "可乐摩登罐",
+          "rawQuantity": 1,
+          "rawUnit": "罐",
+          "note": "每份1罐；按采购规格 330*24/箱 换算"
+        }
+      ]
     }
   ],
   "audit": {
-    "rules": 6,
-    "activeRules": 6,
+    "rules": 8,
+    "activeRules": 8,
     "pendingRules": [],
-    "recipeItems": 10,
-    "existingProductItems": 8,
+    "recipeItems": 12,
+    "existingProductItems": 10,
     "pendingProductItems": 2,
     "productsToCreate": 2,
     "conversionWarnings": [

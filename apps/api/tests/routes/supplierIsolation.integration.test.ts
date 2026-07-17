@@ -164,6 +164,30 @@ describe('supplier tenant scope (integration)', () => {
     expect(stock.json().some((item: any) => item.id === productBId)).toBe(false)
   })
 
+  it('filters supplier products by code and category while rejecting invalid filters', async () => {
+    const byCode = await app.inject({
+      method: 'GET', url: `/api/products?q=${encodeURIComponent(`A-P-${suffix}`)}&page=1&pageSize=20`,
+    })
+    expect(byCode.statusCode).toBe(200)
+    expect(byCode.json()).toMatchObject({ total: 1, items: [{ id: productAId }] })
+
+    const byCategory = await app.inject({
+      method: 'GET', url: `/api/products?category=${encodeURIComponent('其他')}&page=1&pageSize=20`,
+    })
+    expect(byCategory.statusCode).toBe(200)
+    expect(byCategory.json().items.map((item: any) => item.id)).toEqual([productAId])
+
+    const invalidQueries = [
+      'status=UNKNOWN',
+      `q=${'x'.repeat(81)}`,
+      `category=${'x'.repeat(41)}`,
+    ]
+    for (const query of invalidQueries) {
+      const response = await app.inject({ method: 'GET', url: `/api/products?${query}&page=1` })
+      expect(response.statusCode).toBe(400)
+    }
+  })
+
   it('keeps inbound, adjustment and loss aligned with supplier A batch balances', async () => {
     const denied = await app.inject({
       method: 'POST', url: '/api/supplier/stock/inbound',

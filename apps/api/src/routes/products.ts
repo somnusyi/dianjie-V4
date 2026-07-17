@@ -56,6 +56,15 @@ const productCreateSchema = z.object({
   status:    z.enum(['PENDING_APPROVAL', 'PENDING_DISABLE', 'ENABLED', 'DISABLED']).optional(),
 }).strict()
 
+const productListFilterSchema = z.object({
+  category: z.string().trim().max(40).optional(),
+  status: z.preprocess(
+    value => value === '' ? undefined : value,
+    z.enum(['PENDING_APPROVAL', 'PENDING_DISABLE', 'ENABLED', 'DISABLED']).optional(),
+  ),
+  q: z.string().trim().max(80).optional(),
+}).passthrough()
+
 /** 自动生成商品 code: 供应商短码 + 随机短 ID，避免同毫秒批量导入互撞。 */
 function autoCode(supplierId: string | undefined): string {
   const sup = supplierId ? supplierId.slice(-4).toUpperCase() : 'TEN0'
@@ -89,7 +98,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   }
 
   app.get('/', auth(app), async (req: any, reply: any) => {
-    const { category, status, q, page, pageSize = '20' } = req.query as any
+    const parsedFilters = productListFilterSchema.safeParse(req.query || {})
+    if (!parsedFilters.success) return reply.status(400).send({ error: parsedFilters.error.issues[0].message })
+    const { category, status, q, page, pageSize = '20' } = parsedFilters.data as any
     const { tenantId, role, supplierId } = req.user
     const where: any = { tenantId }
     if (category) where.category = category

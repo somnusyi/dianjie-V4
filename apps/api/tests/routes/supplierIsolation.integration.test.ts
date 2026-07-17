@@ -229,6 +229,14 @@ describe('supplier tenant scope (integration)', () => {
     expect(batches.json().reduce((sum: number, row: any) => sum + row.remainingQty, 0)).toBe(10)
     expect(batches.json().every((row: any) => row.product.id === productAId)).toBe(true)
     expect(await prisma.supplierStockBatchAllocation.count({ where: { tenantId, productId: productAId } })).toBe(2)
+
+    for (const endpoint of ['reservations', 'batches', 'movements']) {
+      const foreignProduct = await app.inject({
+        method: 'GET', url: `/api/supplier/stock/${endpoint}?productId=${productBId}`,
+      })
+      expect(foreignProduct.statusCode).toBe(200)
+      expect(foreignProduct.json()).toEqual([])
+    }
   })
 
   it('shows every approved supplier offer to stores but hides pending offers', async () => {
@@ -400,6 +408,7 @@ describe('supplier tenant scope (integration)', () => {
     const orderIds = [`stable-order-a-${suffix}`, `stable-order-b-${suffix}`]
     const deliveryIds = [`stable-delivery-a-${suffix}`, `stable-delivery-b-${suffix}`]
     const receiptIds = [`stable-receipt-a-${suffix}`, `stable-receipt-b-${suffix}`]
+    const movementIds = [`stable-movement-a-${suffix}`, `stable-movement-b-${suffix}`]
     await prisma.product.createMany({
       data: productIds.map((id, index) => ({
         id, tenantId, supplierId: supplierAId, code: `STABLE-PRODUCT-${index}-${suffix}`,
@@ -426,6 +435,13 @@ describe('supplier tenant scope (integration)', () => {
         confirmedAt: tiedAt, createdAt: tiedAt,
       })),
     })
+    await prisma.supplierStockMovement.createMany({
+      data: movementIds.map(id => ({
+        id, tenantId, supplierId: supplierAId, productId: productAId,
+        delta: 0, balanceAfter: 10, type: 'ADJUSTMENT', reason: '稳定排序回归',
+        createdById: userAId, createdAt: new Date('2030-07-18T00:00:00.000Z'),
+      })),
+    })
 
     const cases = [
       { endpoint: '/api/products?q=STABLE-PRODUCT', expected: [...productIds].sort() },
@@ -444,6 +460,13 @@ describe('supplier tenant scope (integration)', () => {
         expect(first.json().total).toBe(2)
         expect(second.json().total).toBe(2)
       }
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const movements = await app.inject({
+        method: 'GET', url: `/api/supplier/stock/movements?productId=${productAId}&type=ADJUSTMENT&limit=2`,
+      })
+      expect(movements.statusCode).toBe(200)
+      expect(movements.json().map((row: any) => row.id)).toEqual([...movementIds].sort().reverse())
     }
   })
 })

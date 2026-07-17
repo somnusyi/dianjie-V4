@@ -136,7 +136,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
 
     const products = await prisma.product.findMany({
       where: { tenantId: ctx.tenantId, supplierId: ctx.supplierId, status: 'ENABLED' },
-      orderBy: [{ stock: 'asc' }, { name: 'asc' }],   // 库存少的排前面
+      orderBy: [{ stock: 'asc' }, { name: 'asc' }, { id: 'asc' }],   // 库存少的排前面
       select: {
         id: true, code: true, name: true, spec: true, unit: true, category: true,
         stock: true, minStock: true, price: true, shelfDays: true,
@@ -174,7 +174,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
         expiryDate: { not: null },
       },
       select: { productId: true, expiryDate: true },
-      orderBy: { expiryDate: 'asc' },
+      orderBy: [{ expiryDate: 'asc' }, { id: 'asc' }],
     })
     const nearestExpiry = new Map<string, Date>()
     for (const r of expRows) {
@@ -250,7 +250,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
         status: 'ACTIVE',
         ...(parsed.data.productId ? { productId: parsed.data.productId } : {}),
       },
-      orderBy: [{ purchaseOrder: { expectedDate: 'asc' } }, { createdAt: 'asc' }],
+      orderBy: [{ purchaseOrder: { expectedDate: 'asc' } }, { createdAt: 'asc' }, { id: 'asc' }],
       take: parsed.data.limit,
       include: {
         product: { select: { id: true, code: true, name: true, unit: true } },
@@ -293,6 +293,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
         { kind: 'asc' },
         { expiryDate: { sort: 'asc', nulls: 'last' } },
         { createdAt: 'asc' },
+        { id: 'asc' },
       ],
       take: parsed.data.limit,
       include: {
@@ -608,7 +609,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
     if (type) where.type = type
     const ms = await prisma.supplierStockMovement.findMany({
       where,
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit,
       include: {
         product: { select: { name: true, code: true, unit: true, spec: true } },

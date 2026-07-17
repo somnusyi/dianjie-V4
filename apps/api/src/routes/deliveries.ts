@@ -43,13 +43,20 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
           {
             items: {
               some: {
-                product: {
-                  OR: [
-                    { name: { contains: q.keyword, mode: 'insensitive' } },
-                    { code: { contains: q.keyword, mode: 'insensitive' } },
-                    { spec: { contains: q.keyword, mode: 'insensitive' } },
-                  ],
-                },
+                OR: [
+                  { productNameSnapshot: { contains: q.keyword, mode: 'insensitive' } },
+                  { productCodeSnapshot: { contains: q.keyword, mode: 'insensitive' } },
+                  { productSpecSnapshot: { contains: q.keyword, mode: 'insensitive' } },
+                  {
+                    product: {
+                      OR: [
+                        { name: { contains: q.keyword, mode: 'insensitive' } },
+                        { code: { contains: q.keyword, mode: 'insensitive' } },
+                        { spec: { contains: q.keyword, mode: 'insensitive' } },
+                      ],
+                    },
+                  },
+                ],
               },
             },
           },

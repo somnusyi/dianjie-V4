@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { prisma } from '@dianjie/db'
+import { deliveryRoutes } from '../../src/routes/deliveries'
 import { purchaseOrderRoutes } from '../../src/routes/orders'
 import { lossClaimRoutes } from '../../src/routes/lossClaims'
 import { auditSupplierSupplyChain } from '../../src/services/supplyChainAudit'
@@ -62,6 +63,7 @@ describe('supplier order to receipt flow (integration)', () => {
           : { tenantId, storeId, storeIds: [storeId], userId: chefUserId, role: 'KITCHEN_LEAD' }
     })
     await app.register(purchaseOrderRoutes, { prefix: '/api/orders' })
+    await app.register(deliveryRoutes, { prefix: '/api/deliveries' })
     await app.register(lossClaimRoutes, { prefix: '/api/loss-claims' })
     await app.ready()
   })
@@ -147,6 +149,24 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).stock)).toBe(4)
     expect(await prisma.supplierStockMovement.count({ where: { tenantId, type: 'OUTBOUND_PO' } })).toBe(1)
     expect(Number((await prisma.supplierStockBatch.findFirstOrThrow({ where: { tenantId, productId } })).remainingQty)).toBe(4)
+
+    await prisma.product.update({
+      where: { id: productId },
+      data: { name: '流程鲜菌已改名', code: `${suffix}-P-NEW` },
+    })
+    for (const keyword of ['流程鲜菌', `${suffix}-P`]) {
+      const deliverySearch = await app.inject({
+        method: 'GET',
+        url: `/api/deliveries?keyword=${encodeURIComponent(keyword)}&page=1&pageSize=20`,
+        headers: { 'x-test-actor': 'supplier' },
+      })
+      expect(deliverySearch.statusCode).toBe(200)
+      expect(deliverySearch.json()).toMatchObject({ total: 1 })
+      expect(deliverySearch.json().items[0].items[0].product).toMatchObject({
+        name: '流程鲜菌',
+        code: `${suffix}-P`,
+      })
+    }
 
     const deliver = await app.inject({
       method: 'PATCH', url: `/api/orders/${order.id}/deliver`, headers: { 'x-test-actor': 'supplier' }, payload: { note: '已到店' },

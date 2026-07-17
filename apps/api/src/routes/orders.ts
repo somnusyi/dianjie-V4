@@ -24,6 +24,7 @@ import {
   reserveSupplierStockForOrder,
 } from '../services/supplierStockReservation'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
+import { calendarDateSchema } from '../lib/calendar-date'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
 const orderItemSchema = z.object({
@@ -72,9 +73,9 @@ const orderListQuerySchema = z.object({
   supplierId: z.string().optional(),
   productId: z.string().optional(),
   keyword: z.string().trim().max(80).optional(),
-  dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  page: z.coerce.number().int().positive().default(1),
+  dateFrom: calendarDateSchema.optional(),
+  dateTo: calendarDateSchema.optional(),
+  page: z.coerce.number().int().positive().max(100_000).default(1),
   pageSize: z.coerce.number().int().positive().max(100).default(20),
 }).refine(q => !q.dateFrom || !q.dateTo || q.dateFrom <= q.dateTo, {
   message: '开始日期不能晚于结束日期',

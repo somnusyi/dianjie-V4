@@ -103,6 +103,19 @@ describe('supplier order to receipt flow (integration)', () => {
     await prisma.tenant.delete({ where: { id: tenantId } })
   })
 
+  it('rejects invalid list dates and oversized pages before querying', async () => {
+    for (const endpoint of ['/api/orders', '/api/deliveries']) {
+      for (const query of ['dateFrom=2026-02-29', 'dateTo=2026-04-31', 'page=100001']) {
+        const response = await app.inject({
+          method: 'GET',
+          url: `${endpoint}?${query}`,
+          headers: { 'x-test-actor': 'supplier' },
+        })
+        expect(response.statusCode).toBe(400)
+      }
+    }
+  })
+
   it('orders, reserves, ships once, receives actual quantity and creates payable facts', async () => {
     const create = await app.inject({
       method: 'POST',

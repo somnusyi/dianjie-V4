@@ -19,6 +19,7 @@ import { prisma } from '@dianjie/db'
 import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
+import { z } from 'zod'
 
 // 回单 PDF 落盘目录
 //   生产: /app/dianjie-v4/receipts/
@@ -27,6 +28,9 @@ import path from 'path'
 const RECEIPT_DIR = process.env.RECEIPT_STORAGE_DIR
   || path.resolve(process.cwd(), '../../.receipts')
 const RECEIPT_TTL_MS = 24 * 60 * 60 * 1000
+const receiptDownloadQuerySchema = z.object({
+  download: z.enum(['0', '1']).optional(),
+}).strict()
 
 function ensureReceiptDir() {
   try { fs.mkdirSync(RECEIPT_DIR, { recursive: true }) } catch {}
@@ -228,12 +232,16 @@ export const cmbRoutes: FastifyPluginAsync = async (app) => {
   //   不暴露目录列表, 路径用正则锁死
   //   query ?download=1 → Content-Disposition: attachment (Android WebView 触发 DownloadManager)
   //   默认 inline → iOS WKWebView / 桌面浏览器内嵌 PDF preview
-  app.get('/receipt/:token', async (req: any, reply: any) => {
+  app.get('/receipt/:token', {
+    config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
+  }, async (req: any, reply: any) => {
     const { token } = req.params as { token: string }
-    const { download } = (req.query || {}) as { download?: string }
     if (!/^[a-f0-9]{32}\.pdf$/.test(token)) {
       return reply.status(400).send({ error: 'invalid token format' })
     }
+    const parsedQuery = receiptDownloadQuerySchema.safeParse(req.query || {})
+    if (!parsedQuery.success) return reply.status(400).send({ error: 'invalid receipt query' })
+    const download = parsedQuery.data.download === '1'
     const filepath = path.join(RECEIPT_DIR, token)
     try {
       const stat = await fs.promises.stat(filepath)

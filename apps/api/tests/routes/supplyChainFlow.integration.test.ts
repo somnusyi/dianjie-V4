@@ -186,16 +186,21 @@ describe('supplier order to receipt flow (integration)', () => {
     })
     expect(deliver.statusCode).toBe(200)
 
-    const receive = await app.inject({
+    const receiveAttempts = await Promise.all([1, 2].map(() => app.inject({
       method: 'PATCH',
       url: `/api/orders/${order.id}/receive`,
       headers: { 'x-test-actor': 'chef' },
       payload: { items: [{ productId, receivedQty: 5 }], reason: '短量' },
-    })
-    expect(receive.statusCode).toBe(200)
+    })))
+    expect(receiveAttempts.map(response => response.statusCode)).toEqual([200, 200])
+    const receiveResults = receiveAttempts.map(response => response.json())
+    expect(receiveResults.filter(result => result.duplicated === true)).toHaveLength(1)
+    expect(new Set(receiveResults.map(result => result.receipt.id))).toHaveProperty('size', 1)
     const receipt = await prisma.receipt.findFirstOrThrow({
       where: { purchaseOrderId: order.id }, include: { items: true, paymentSchedule: true },
     })
+    expect(await prisma.receipt.count({ where: { deliveryOrderId: receiveResults[0].deliveryId } })).toBe(1)
+    expect(await prisma.lossClaim.count({ where: { deliveryOrderId: receiveResults[0].deliveryId } })).toBe(1)
     expect(Number(receipt.totalAmount)).toBe(50)
     expect(Number(receipt.paymentSchedule?.amount)).toBe(50)
     expect(receipt.paymentSchedule?.status).toBe('ON_HOLD')

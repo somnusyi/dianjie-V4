@@ -2,6 +2,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 import { canConfirmDailyImport, formatUploadFileSize, IMPORT_STATUS, splitDailyImportIssues, type DailyImportStatus } from './upload-state'
 
@@ -49,6 +50,7 @@ export default function DailyBusinessUploadPage() {
   const [preview, setPreview] = useState<ImportRecord | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [confirmSheet, openConfirmSheet] = useConfirmSheet()
   const user = useMemo(() => getUser(), [])
 
   const loadStatus = useCallback(async (quiet = false, selectLatest = false) => {
@@ -104,17 +106,11 @@ export default function DailyBusinessUploadPage() {
     } finally { setBusy(false) }
   }
 
-  async function confirmImport() {
-    if (!preview || !canConfirmDailyImport(preview.status, preview.blockingIssues)) return
-    const { deferred } = splitDailyImportIssues(preview.blockingIssues)
-    const message = deferred.length > 0
-      ? `确认导入 ${shortDate(preview.businessDate)} 的营业与销量数据？\n\n已能计算的 ${preview.previewData?.consumptions?.length || 0} 个食材 SKU 会立即扣减；${deferred.length} 项将转交总厨，补齐 BOM 后自动回补本日消耗。`
-      : `确认导入 ${shortDate(preview.businessDate)} 的营业与销量数据，并按 BOM 扣减库存？`
-    if (!window.confirm(message)) return
+  async function performConfirmImport(target: ImportRecord, deferredCount: number) {
     setBusy(true); setError(null)
     try {
-      const result = await apiFetch<ImportRecord>(`/api/daily-business-imports/${preview.id}/confirm`, {
-        method: 'POST', body: JSON.stringify({ deferBomIssues: deferred.length > 0 }),
+      const result = await apiFetch<ImportRecord>(`/api/daily-business-imports/${target.id}/confirm`, {
+        method: 'POST', body: JSON.stringify({ deferBomIssues: deferredCount > 0 }),
       })
       setPreview(result)
       setBusinessFile(null); setSalesFile(null)
@@ -122,11 +118,27 @@ export default function DailyBusinessUploadPage() {
     } catch (reason: any) {
       if (reason?.data?.code === 'PREVIEW_REFRESHED' && reason.data.import) {
         setPreview(reason.data.import)
-        setError('BOM 或菜品规则刚刚发生变化，扣减预览已刷新。请重新核对后再确认。')
+        setError('扣减结果已自动刷新，本次尚未写入数据。请重新核对后，再点击下方按钮完成确认。')
         return
       }
       setError(reason.message || '确认失败')
     } finally { setBusy(false) }
+  }
+
+  function requestConfirmImport() {
+    if (!preview || !canConfirmDailyImport(preview.status, preview.blockingIssues)) return
+    const target = preview
+    const { deferred } = splitDailyImportIssues(target.blockingIssues)
+    const hasDeferred = deferred.length > 0
+    openConfirmSheet({
+      title: hasDeferred ? `暂缓 ${deferred.length} 项并确认导入？` : '确认导入？',
+      body: hasDeferred
+        ? `营业日：${shortDate(target.businessDate)}\n已能计算的 ${target.previewData?.consumptions?.length || 0} 个食材 SKU 将立即扣减。\n${deferred.length} 项将转交总厨，补齐 BOM 后自动回补本日消耗。`
+        : `确认导入 ${shortDate(target.businessDate)} 的营业与销量数据，并按 BOM 扣减库存？`,
+      confirmLabel: hasDeferred ? '暂缓并确认' : '确认导入',
+      tone: 'primary',
+      onConfirm: () => performConfirmImport(target, deferred.length),
+    })
   }
 
   const expected = status?.expectedBusinessDate || '前一日'
@@ -248,7 +260,8 @@ export default function DailyBusinessUploadPage() {
             <div className="mt-3 py-3 rounded-cta bg-blue/10 text-blue-fg text-button text-center">正在确认，请稍后刷新状态</div>
           ) : (
             <button
-              onClick={confirmImport}
+              data-testid="confirm-daily-import"
+              onClick={requestConfirmImport}
               disabled={busy || !canConfirmDailyImport(preview.status, preview.blockingIssues)}
               className="w-full mt-3 py-3 rounded-cta bg-amber text-white text-button disabled:opacity-35"
             >{busy ? '确认中…' : issueGroups.deferred.length > 0
@@ -282,6 +295,7 @@ export default function DailyBusinessUploadPage() {
           ))}
         </div>
       </section>
+      <ConfirmSheet {...confirmSheet} />
     </div>
   )
 }

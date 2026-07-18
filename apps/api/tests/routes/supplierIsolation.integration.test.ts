@@ -310,6 +310,37 @@ describe('supplier tenant scope (integration)', () => {
     expect(document.type).toBe('SUPPLIER_OFFER_CREATE')
   })
 
+  it('rejects product create values beyond database decimal bounds before writes', async () => {
+    const invalidBodies = [
+      { price: 100_000_000 },
+      { stock: 100_000_000 },
+      { minStock: 100_000_000 },
+      { minOrderQty: 100_000_000 },
+      { stepQty: 100_000_000 },
+    ]
+    for (const [index, fields] of invalidBodies.entries()) {
+      const response = await app.inject({
+        method: 'POST', url: '/api/products',
+        payload: { name: `创建数值边界-${index}-${suffix}`, ...fields },
+      })
+      expect(response.statusCode).toBe(400)
+    }
+
+    const batch = await app.inject({
+      method: 'POST', url: '/api/products/batch',
+      payload: {
+        filename: 'decimal-boundary.xlsx',
+        items: [{ name: `批量数值边界-${suffix}`, price: 100_000_000 }],
+      },
+    })
+    expect(batch.statusCode).toBe(201)
+    expect(batch.json()).toMatchObject({ total: 1, createdCount: 0, failedCount: 1 })
+    expect(await prisma.product.count({
+      where: { tenantId, name: { contains: '数值边界' } },
+    })).toBe(0)
+    await prisma.productBatch.delete({ where: { id: batch.json().batchId } })
+  })
+
   it('submits product fields and a price increase as one atomic command', async () => {
     const response = await app.inject({
       method: 'PATCH', url: `/api/products/${productAId}`,

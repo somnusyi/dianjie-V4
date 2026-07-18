@@ -24,9 +24,11 @@ export function productCatalogCacheScope(role: string, supplierId?: string | nul
 // preprocess: 把 null/空字符串/NaN 统一转成 undefined, 让 .optional().default() 生效.
 // 用户报价 Excel 里数字列经常出现 "—"/"无"/空格, 前端 Number() 转 NaN, JSON 序列化为 null.
 // 不加这层 zod 直接 reject "Expected number, received null".
+const PRODUCT_DECIMAL_MAX = 99_999_999.99
+
 const numNullable = (def: number) =>
   z.preprocess(v => (v === null || v === '' || (typeof v === 'number' && !Number.isFinite(v))) ? undefined : v,
-               z.number().nonnegative().optional().default(def))
+               z.number().nonnegative().max(PRODUCT_DECIMAL_MAX, '数值超过商品字段上限').optional().default(def))
 
 const productCreateSchema = z.object({
   // code 可选: 上传时若缺失, 后端用 "<supplierId 前缀>-<五位序号>" 自动生成
@@ -46,15 +48,15 @@ const productCreateSchema = z.object({
   unitConversionNote: z.string().trim().max(500).optional().nullable(),
   // 价格可选, 缺省 0. 仓库库存初始化场景常常没价格 (供应商内部物品), 先建 SKU 后续单条改价
   price:     z.preprocess(v => (v === null || v === '' || (typeof v === 'number' && !Number.isFinite(v))) ? 0 : v,
-                          z.number().nonnegative('金额不能为负').optional().default(0)),
+                          z.number().nonnegative('金额不能为负').max(PRODUCT_DECIMAL_MAX, '金额超过商品字段上限').optional().default(0)),
   stock:     numNullable(0),
   minStock:  numNullable(0),
   // 起订量 (默认 1, 最小 0.01)
   minOrderQty: z.preprocess(v => (v === null || v === '' || (typeof v === 'number' && !Number.isFinite(v))) ? undefined : v,
-                            z.number().positive('起订量必须大于 0').optional().default(1)),
+                            z.number().positive('起订量必须大于 0').max(PRODUCT_DECIMAL_MAX, '起订量超过商品字段上限').optional().default(1)),
   // 订量步长 (默认 1, 0/缺省视作 1)
   stepQty:   z.preprocess(v => (v === null || v === '' || (typeof v === 'number' && !Number.isFinite(v)) || v === 0) ? undefined : v,
-                          z.number().positive('步长必须大于 0').optional().default(1)),
+                          z.number().positive('步长必须大于 0').max(PRODUCT_DECIMAL_MAX, '步长超过商品字段上限').optional().default(1)),
   shelfDays: z.preprocess(v => (v === null || v === '' || (typeof v === 'number' && !Number.isFinite(v))) ? undefined : v,
                           z.number().int().min(0).max(3650).optional().default(7)),
   supplierId: z.string().optional(),
@@ -91,9 +93,9 @@ const productPatchSchema = z.object({
   inventoryUnitsPerPurchaseUnit: z.number().positive().max(1_000_000_000).nullable().optional(),
   unitConversionStatus: z.enum(['PENDING', 'INFERRED', 'VERIFIED']).optional(),
   unitConversionNote: z.string().trim().max(500).nullable().optional(),
-  price: z.number().nonnegative().max(99_999_999.99).optional(),
-  minOrderQty: z.number().positive().max(99_999_999.99).optional(),
-  stepQty: z.number().positive().max(99_999_999.99).optional(),
+  price: z.number().nonnegative().max(PRODUCT_DECIMAL_MAX).optional(),
+  minOrderQty: z.number().positive().max(PRODUCT_DECIMAL_MAX).optional(),
+  stepQty: z.number().positive().max(PRODUCT_DECIMAL_MAX).optional(),
   shelfDays: z.number().int().min(0).max(3650).optional(),
   status: z.enum(['PENDING_APPROVAL', 'PENDING_DISABLE', 'ENABLED', 'DISABLED']).optional(),
   shipUpperPct: z.number().min(1).max(10).optional(),

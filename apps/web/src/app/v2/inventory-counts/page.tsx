@@ -7,6 +7,8 @@ type CountRow = {
   id: string; no: string; countDate: string; revision: number; status: string
   itemCount: number; countedCount: number; differenceCount: number
   totalDifferenceValue: number; rowVersion: number
+  recordType?: 'ONLINE_COUNT' | 'IMPORTED_BASELINE'
+  sourceFilename?: string | null
   store: { id: string; no: string; name: string }
 }
 
@@ -17,6 +19,7 @@ const STATUS: Record<string, { label: string; style: string }> = {
   CONFIRMED: { label: '已确认', style: 'bg-green-bg text-green-fg' },
   CANCELLED: { label: '已取消', style: 'bg-bg text-gray3' },
   REVERSED: { label: '已冲销', style: 'bg-red-bg text-red-fg' },
+  BASELINE: { label: '历史基准', style: 'bg-blue/10 text-blue-fg' },
 }
 
 function yesterday() {
@@ -88,26 +91,34 @@ export default function InventoryCountsPage() {
         {error && <div className="mt-3 rounded-card bg-red-bg text-red-fg p-3 text-caption">{error}</div>}
 
         <section className="mt-5">
-          <div className="flex items-baseline justify-between mb-2"><h2 className="text-h2">盘点记录</h2><button onClick={load} className="text-caption text-amber-fg">刷新</button></div>
+          <div className="flex items-baseline justify-between mb-2"><h2 className="text-h2">盘点历史记录</h2><button onClick={load} className="text-caption text-amber-fg">刷新</button></div>
           <div className="space-y-2">
             {rows === null && <div className="text-caption text-gray3 text-center py-8">加载中…</div>}
             {rows?.length === 0 && <div className="rounded-card bg-white border border-border p-6 text-caption text-gray3 text-center">暂无盘点单</div>}
             {rows?.map(row => {
               const status = STATUS[row.status] || STATUS.DRAFT
-              return (
-                <a key={row.id} href={`/v2/inventory-counts/${row.id}`} className="block rounded-card bg-white border border-border p-3">
+              const card = (
+                <>
                   <div className="flex items-center gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="text-button truncate">{row.store.name} · {row.countDate}</div>
-                      <div className="text-micro text-gray3 mt-1">{row.no} · 第 {row.revision} 版 · 已盘 {row.countedCount}/{row.itemCount}</div>
+                      <div className="text-micro text-gray3 mt-1">
+                        {row.recordType === 'IMPORTED_BASELINE'
+                          ? `${row.sourceFilename || row.no} · ${row.itemCount} 个品项`
+                          : `${row.no} · 第 ${row.revision} 版 · 已盘 ${row.countedCount}/${row.itemCount}`}
+                      </div>
                     </div>
-                    <span className={`text-micro rounded-chip px-2 py-1 ${status.style}`}>{status.label}</span><span className="text-gray3">›</span>
+                    <span className={`text-micro rounded-chip px-2 py-1 ${status.style}`}>{status.label}</span>
+                    {row.recordType !== 'IMPORTED_BASELINE' && <span className="text-gray3">›</span>}
                   </div>
                   {(row.status === 'REVIEWING' || row.status === 'CONFIRMED') && (
                     <div className="mt-2 pt-2 border-t border-border flex justify-between text-caption"><span className="text-gray3">差异 {row.differenceCount} 项</span><span className={row.totalDifferenceValue < 0 ? 'text-red-fg' : 'text-green-fg'}>¥{row.totalDifferenceValue.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}</span></div>
                   )}
-                </a>
+                </>
               )
+              return row.recordType === 'IMPORTED_BASELINE'
+                ? <div key={row.id} className="rounded-card bg-white border border-border p-3">{card}</div>
+                : <a key={row.id} href={`/v2/inventory-counts/${row.id}`} className="block rounded-card bg-white border border-border p-3">{card}</a>
             })}
           </div>
         </section>

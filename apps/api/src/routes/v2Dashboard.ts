@@ -11,7 +11,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
-import { latestStoreInventorySnapshot, type StoreInventorySummary } from '../services/storeInventory'
+import { estimatedStoreInventory, type StoreInventorySummary } from '../services/storeInventory'
 
 const fmtMoney = (n: number) => '¥' + Math.round(n).toLocaleString()
 
@@ -260,7 +260,7 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
         prisma.revenueRecord.count({
           where: { storeId: storeId!, date: { gte: monthStart, lte: monthEnd } },
         }),
-        latestStoreInventorySnapshot(tenantId, storeId!),
+        estimatedStoreInventory(tenantId, storeId!),
       ])
       inventorySummary = inventory.summary
       monthlyMetrics = [

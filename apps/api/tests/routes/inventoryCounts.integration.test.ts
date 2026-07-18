@@ -113,6 +113,12 @@ describe('store inventory count workflow (integration)', () => {
     const forbidden = await app.inject({ method: 'GET', url: '/api/inventory-counts', headers: { 'x-test-actor': 'supplier' } })
     expect(forbidden.statusCode).toBe(403)
 
+    const history = await app.inject({ method: 'GET', url: '/api/inventory-counts' })
+    expect(history.statusCode).toBe(200)
+    expect(history.json()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ recordType: 'IMPORTED_BASELINE', status: 'BASELINE', countDate: '2026-07-10', itemCount: 2 }),
+    ]))
+
     const createdResponse = await app.inject({
       method: 'POST', url: '/api/inventory-counts', payload: { countDate: '2026-07-18' },
     })

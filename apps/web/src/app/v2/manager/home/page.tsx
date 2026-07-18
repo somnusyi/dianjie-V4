@@ -171,36 +171,38 @@ export default function ManagerHomePage() {
 
 function InventoryOverviewCard({ inventory }: { inventory: NonNullable<ReturnType<typeof useDashboard>['data']>['inventorySummary'] }) {
   const available = inventory?.status === 'AVAILABLE'
-  const asOf = inventory?.asOf ? inventory.asOf.slice(5).replace('-', '/') : null
+  const asOf = inventory?.asOf
+    ? new Date(inventory.asOf).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : null
 
   return (
-    <Section title="库存概况" right={available && asOf ? `截至 ${asOf} 盘点` : '实物库存'}>
+    <Section title="库存概况" right={available && asOf ? `更新 ${asOf}` : '实时账面预估'}>
       {available ? (
         <a href="/v2/manager/inventory"
            className="block overflow-hidden rounded-card border border-border bg-white active:bg-bg/50">
           <div className="flex items-start justify-between gap-3 px-4 pt-4 pb-3">
             <div>
-              <div className="text-caption text-gray2">库存金额</div>
+              <div className="text-caption text-gray2">实时预估库存金额</div>
               <div className="font-num text-[28px] leading-tight mt-1">
                 ¥{Number(inventory.totalValue || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
-              <div className="text-micro text-gray3 mt-1">{inventory.openingDate?.slice(5).replace('-', '/')} 期初基准 · 非实时估算</div>
+              <div className="text-micro text-gray3 mt-1">最近盘点基准 + 收货 − BOM/人工消耗 − 门店报损</div>
             </div>
-            <span className="shrink-0 rounded-chip bg-green-bg px-2 py-1 text-micro text-green-fg">实物盘点</span>
+            <span className="shrink-0 rounded-chip bg-green-bg px-2 py-1 text-micro text-green-fg">实时预估</span>
           </div>
 
           <div className="grid grid-cols-3 border-y border-border bg-bg/40">
-            <InventoryStat label="盘点品项" value={`${inventory.itemCount}`} unit="种" />
-            <InventoryStat label="有库存" value={`${inventory.nonzeroCount}`} unit="种" />
-            <InventoryStat label="盘点为 0" value={`${inventory.zeroCount}`} unit="种" tone={inventory.zeroCount > 0 ? 'red' : undefined} />
+            <InventoryStat label="预计品项" value={`${inventory.itemCount}`} unit="种" />
+            <InventoryStat label="预计有库存" value={`${inventory.nonzeroCount}`} unit="种" />
+            <InventoryStat label="预计为 0" value={`${inventory.zeroCount}`} unit="种" tone={inventory.zeroCount > 0 ? 'red' : undefined} />
           </div>
 
           <div className="flex items-center gap-2 px-4 py-3">
             <span className={`w-2 h-2 rounded-full ${inventory.unmatchedCount > 0 ? 'bg-amber' : 'bg-green'}`} />
             <span className="text-caption text-gray2 flex-1">
               {inventory.unmatchedCount > 0
-                ? `${inventory.unmatchedCount} 个品项待匹配采购 SKU，当前按盘点原始数据展示`
-                : '盘点品项已完成采购 SKU 匹配'}
+                ? `${inventory.unmatchedCount} 个盘点品项待匹配，暂不计入实时预估`
+                : '预计库存已按最新收货、消耗和报损滚动计算'}
             </span>
             <span className="text-gray3">›</span>
           </div>

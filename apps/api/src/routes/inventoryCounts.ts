@@ -155,7 +155,51 @@ export const inventoryCountRoutes: FastifyPluginAsync = async app => {
         orderBy: [{ countDate: 'desc' }, { revision: 'desc' }, { createdAt: 'desc' }],
         take: query.data.limit,
       })
-      return rows.map(row => publicCount(row))
+      const countRows = rows.map(row => ({ ...publicCount(row), recordType: 'ONLINE_COUNT' as const }))
+      if (query.data.status) return countRows
+
+      // 早期 Excel/脚本导入的实物盘点只生成 InventorySnapshot，没有在线盘点单。
+      // 将这些未关联快照补进历史列表，避免“最近基准存在但盘点历史为空”。
+      const linked = await prisma.inventoryCount.findMany({
+        where: {
+          tenantId: req.user.tenantId,
+          ...(store ? { storeId: store.id } : {}),
+          snapshotId: { not: null },
+        },
+        select: { snapshotId: true },
+      })
+      const linkedSnapshotIds = linked.map(row => row.snapshotId!).filter(Boolean)
+      const importedSnapshots = await prisma.inventorySnapshot.findMany({
+        where: {
+          tenantId: req.user.tenantId,
+          ...(store ? { storeId: store.id } : {}),
+          ...(linkedSnapshotIds.length > 0 ? { id: { notIn: linkedSnapshotIds } } : {}),
+        },
+        include: { store: { select: { id: true, no: true, name: true } } },
+        orderBy: [{ snapshotDate: 'desc' }, { createdAt: 'desc' }],
+        take: query.data.limit,
+      })
+      const baselineRows = importedSnapshots.map(snapshot => ({
+        id: snapshot.id,
+        recordType: 'IMPORTED_BASELINE' as const,
+        no: '历史盘点基准',
+        countDate: snapshot.snapshotDate.toISOString().slice(0, 10),
+        revision: 1,
+        status: 'BASELINE',
+        itemCount: snapshot.itemCount,
+        countedCount: snapshot.itemCount,
+        differenceCount: 0,
+        totalBookValue: Number(snapshot.totalValue),
+        totalCountedValue: Number(snapshot.totalValue),
+        totalDifferenceValue: 0,
+        rowVersion: 0,
+        store: snapshot.store,
+        sourceFilename: snapshot.sourceFilename,
+        createdAt: snapshot.createdAt,
+      }))
+      return [...countRows, ...baselineRows]
+        .sort((a, b) => b.countDate.localeCompare(a.countDate) || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, query.data.limit)
     } catch (error: any) {
       return reply.status(error.statusCode || 400).send({ error: error.message })
     }

@@ -19,8 +19,8 @@ export type DashboardData = {
   monthlyMetrics?: { label: string; value: string; delta?: string; tone?: any }[]
   inventorySummary?: {
     status: 'AVAILABLE' | 'NO_BASELINE'
-    basis: 'PHYSICAL_COUNT'
-    isRealtime: false
+    basis: 'PHYSICAL_COUNT' | 'ESTIMATED_FROM_PHYSICAL_COUNT'
+    isRealtime: boolean
     asOf: string | null
     openingDate: string | null
     totalValue: number | null

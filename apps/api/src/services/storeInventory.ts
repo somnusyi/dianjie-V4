@@ -3,8 +3,8 @@ import dayjs from 'dayjs'
 
 export type StoreInventorySummary = {
   status: 'AVAILABLE' | 'NO_BASELINE'
-  basis: 'PHYSICAL_COUNT'
-  isRealtime: false
+  basis: 'PHYSICAL_COUNT' | 'ESTIMATED_FROM_PHYSICAL_COUNT'
+  isRealtime: boolean
   asOf: string | null
   openingDate: string | null
   totalValue: number | null
@@ -311,7 +311,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
     summary: {
       status: 'AVAILABLE' as const,
       basis: 'ESTIMATED_FROM_PHYSICAL_COUNT' as const,
-      isRealtime: false as const,
+      isRealtime: true as const,
       asOf: asOfEnd?.toISOString() || new Date().toISOString(),
       openingDate: openingDateText,
       totalValue: rows.reduce((sum, row) => sum + row.inventoryValue, 0),

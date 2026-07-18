@@ -34,7 +34,13 @@ type InventoryItem = {
 type SnapshotResponse = { summary: InventorySummary; items: InventoryItem[] }
 type EstimatedItem = {
   id: string
+  code: string
+  name: string
+  spec: string | null
+  category: string
+  unit: string
   stock: number
+  avgUnitCost: number
   inventoryValue: number
   isLowStock: boolean
   hasDataIssue: boolean
@@ -44,10 +50,10 @@ type EstimatedItem = {
   baselineMatchedCount: number
   estimateIncomplete: boolean
 }
-type Filter = 'all' | 'inStock' | 'zero' | 'unmatched'
+type Filter = 'all' | 'inStock' | 'zero' | 'issue'
 
 export default function ManagerInventoryPage() {
-  const [data, setData] = useState<SnapshotResponse | null>(null)
+  const [snapshot, setSnapshot] = useState<SnapshotResponse | null>(null)
   const [estimate, setEstimate] = useState<EstimatedItem[]>([])
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
@@ -58,30 +64,30 @@ export default function ManagerInventoryPage() {
       apiFetch<SnapshotResponse>('/api/inventory/snapshot/latest'),
       apiFetch<EstimatedItem[]>('/api/inventory').catch(() => []),
     ])
-      .then(([snapshot, estimated]) => { setData(snapshot); setEstimate(estimated) })
+      .then(([latestSnapshot, estimated]) => { setSnapshot(latestSnapshot); setEstimate(estimated) })
       .catch((e) => setError(String(e?.message || e)))
   }, [])
 
   const visible = useMemo(() => {
     const keyword = query.trim().toLowerCase()
-    return (data?.items || []).filter((item) => {
-      if (filter === 'inStock' && item.quantity <= 0) return false
-      if (filter === 'zero' && item.quantity > 0) return false
-      if (filter === 'unmatched' && item.matched) return false
-      return !keyword || `${item.name} ${item.spec || ''} ${item.section || ''}`.toLowerCase().includes(keyword)
+    return estimate.filter((item) => {
+      if (filter === 'inStock' && item.stock <= 0) return false
+      if (filter === 'zero' && Math.abs(item.stock) >= 0.0001) return false
+      if (filter === 'issue' && !item.hasDataIssue) return false
+      return !keyword || `${item.name} ${item.spec || ''} ${item.category || ''} ${item.code || ''}`.toLowerCase().includes(keyword)
     })
-  }, [data, filter, query])
+  }, [estimate, filter, query])
 
   const grouped = useMemo(() => {
-    const groups = new Map<string, InventoryItem[]>()
+    const groups = new Map<string, EstimatedItem[]>()
     for (const item of visible) {
-      const key = item.section || '未分岗'
+      const key = item.category || '其他'
       groups.set(key, [...(groups.get(key) || []), item])
     }
     return [...groups.entries()]
   }, [visible])
 
-  const summary = data?.summary
+  const summary = snapshot?.summary
   const asOf = summary?.asOf?.slice(5).replace('-', '/')
   const estimatedValue = estimate.reduce((sum, item) => sum + Number(item.inventoryValue || 0), 0)
   const lowCount = estimate.filter(item => item.isLowStock).length
@@ -94,8 +100,8 @@ export default function ManagerInventoryPage() {
         <a href="/v2/manager/home" aria-label="返回工作台"
            className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center text-h2">‹</a>
         <div className="flex-1">
-          <h1 className="text-h1">门店库存</h1>
-          <p className="text-micro text-gray3">{asOf ? `${asOf} 闭店实物盘点` : '等待建立盘点基准'}</p>
+          <h1 className="text-h1">门店实时预估库存</h1>
+          <p className="text-micro text-gray3">{asOf ? `基于 ${asOf} 最近盘点持续滚动` : '等待建立盘点基准'}</p>
         </div>
         <UserMenu />
       </header>
@@ -110,28 +116,28 @@ export default function ManagerInventoryPage() {
 
       {error ? (
         <div className="m-4 rounded-card border border-red/30 bg-red-bg p-4 text-body text-red-fg">库存读取失败：{error}</div>
-      ) : !data ? (
+      ) : !snapshot ? (
         <div className="p-8 text-center text-caption text-gray3">正在读取库存…</div>
       ) : summary?.status !== 'AVAILABLE' ? (
         <div className="m-4 rounded-card border border-amber/30 bg-amber/10 p-5">
           <div className="text-h2 text-amber-fg">盘点基准待导入</div>
-          <p className="text-body text-gray2 mt-2">系统没有用历史累计采购量冒充当前库存。导入实物盘点后，这里会显示真实盘点品项和金额。</p>
+          <p className="text-body text-gray2 mt-2">建立首次实物盘点后，系统会叠加后续收货、BOM/人工消耗和门店报损，形成实时账面预估库存。</p>
         </div>
       ) : (
         <>
           <section className="m-4 overflow-hidden rounded-card bg-white border border-border">
             <div className="px-4 pt-4 pb-3">
-              <div className="text-caption text-gray2">预计库存金额</div>
+              <div className="text-caption text-gray2">实时预估库存金额</div>
               <div className="font-num text-[32px] leading-tight mt-1">
                 ¥{estimatedValue.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
               <div className="text-micro text-gray3 mt-1">
                 {estimateAsOf ? `数据更新至 ${new Date(estimateAsOf).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}` : '等待生成预计库存'}
-                {' '}· 月底实物盘点后校准
+                {' '}· 每次打开按最新业务流水重新计算
               </div>
               {summary.matchedCount < summary.itemCount && (
                 <div className="text-micro text-amber-fg mt-2">
-                  盘点品项匹配 {summary.matchedCount}/{summary.itemCount}；未匹配食材暂不计入预计库存，下面仍保留完整实物盘点。
+                  最近盘点品项匹配 {summary.matchedCount}/{summary.itemCount}；未匹配食材暂不计入实时预估，请在下次盘点前完成主数据匹配。
                 </div>
               )}
             </div>
@@ -142,21 +148,6 @@ export default function ManagerInventoryPage() {
             </div>
           </section>
 
-          <section className="m-4 overflow-hidden rounded-card bg-white border border-border">
-            <div className="px-4 pt-4 pb-3">
-              <div className="text-caption text-gray2">最近实物盘点金额</div>
-              <div className="font-num text-[32px] leading-tight mt-1">
-                ¥{Number(summary.totalValue || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </div>
-              <div className="text-micro text-gray3 mt-1">{summary.openingDate?.slice(5).replace('-', '/')} 期初库存基准 · 尚非实时库存</div>
-            </div>
-            <div className="grid grid-cols-3 border-t border-border bg-bg/40">
-              <SummaryCell label="全部品项" value={summary.itemCount} />
-              <SummaryCell label="有库存" value={summary.nonzeroCount} />
-              <SummaryCell label="盘点为 0" value={summary.zeroCount} tone="red" />
-            </div>
-          </section>
-
           <section className="px-4">
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray3">⌕</span>
@@ -164,10 +155,10 @@ export default function ManagerInventoryPage() {
                      className="w-full rounded-cta border border-border bg-white py-2.5 pl-9 pr-3 text-body outline-none focus:border-amber" />
             </div>
             <div className="flex gap-2 mt-3 overflow-x-auto pb-1">
-              <FilterButton active={filter === 'all'} onClick={() => setFilter('all')}>全部 {summary.itemCount}</FilterButton>
-              <FilterButton active={filter === 'inStock'} onClick={() => setFilter('inStock')}>有库存 {summary.nonzeroCount}</FilterButton>
-              <FilterButton active={filter === 'zero'} onClick={() => setFilter('zero')}>盘点为0 {summary.zeroCount}</FilterButton>
-              <FilterButton active={filter === 'unmatched'} onClick={() => setFilter('unmatched')}>待匹配 {summary.unmatchedCount}</FilterButton>
+              <FilterButton active={filter === 'all'} onClick={() => setFilter('all')}>全部 {estimate.length}</FilterButton>
+              <FilterButton active={filter === 'inStock'} onClick={() => setFilter('inStock')}>有库存 {estimate.filter(item => item.stock > 0).length}</FilterButton>
+              <FilterButton active={filter === 'zero'} onClick={() => setFilter('zero')}>预计为0 {estimate.filter(item => Math.abs(item.stock) < 0.0001).length}</FilterButton>
+              <FilterButton active={filter === 'issue'} onClick={() => setFilter('issue')}>需校准 {issueCount}</FilterButton>
             </div>
           </section>
 
@@ -185,13 +176,13 @@ export default function ManagerInventoryPage() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
                           <span className="text-button truncate">{item.name}</span>
-                          {!item.matched && <span className="shrink-0 rounded-chip bg-amber/10 px-1.5 py-0.5 text-micro text-amber-fg">待匹配</span>}
+                          {item.hasDataIssue && <span className="shrink-0 rounded-chip bg-red-bg px-1.5 py-0.5 text-micro text-red-fg">需校准</span>}
                         </div>
-                        <div className="text-micro text-gray3 truncate mt-0.5">{item.spec || '未记录规格'} · ¥{item.unitPrice.toFixed(3)}/{item.unit}</div>
+                        <div className="text-micro text-gray3 truncate mt-0.5">{item.spec || item.code} · 移动均价 ¥{Number(item.avgUnitCost).toFixed(3)}/{item.unit}</div>
                       </div>
                       <div className="text-right shrink-0">
-                        <div className={`font-num text-h2 ${item.quantity <= 0 ? 'text-red-fg' : 'text-ink'}`}>{item.quantity} <span className="text-micro font-normal">{item.unit}</span></div>
-                        <div className="font-num text-micro text-gray3">¥{item.amount.toFixed(2)}</div>
+                        <div className={`font-num text-h2 ${item.stock <= 0 ? 'text-red-fg' : 'text-ink'}`}>{Number(item.stock)} <span className="text-micro font-normal">{item.unit}</span></div>
+                        <div className="font-num text-micro text-gray3">¥{Number(item.inventoryValue).toFixed(2)}</div>
                       </div>
                     </article>
                   ))}

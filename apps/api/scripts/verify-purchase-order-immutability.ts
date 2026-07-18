@@ -57,15 +57,25 @@ async function main() {
       password, role: 'SUPPLIER_OWNER', status: 'ACTIVE', supplierId: supplier.id,
     },
   })
-  const productA = await prisma.product.upsert({
-    where: { tenantId_code: { tenantId: tenant.id, code: 'LOCAL-PO-A' } },
-    update: { supplierId: supplier.id, status: 'ENABLED', price: 3.33 },
-    create: { tenantId: tenant.id, supplierId: supplier.id, code: 'LOCAL-PO-A', name: '验证土豆', unit: 'kg', price: 3.33, status: 'ENABLED' },
+  const runMarker = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const productA = await prisma.product.create({
+    data: {
+      tenantId: tenant.id, supplierId: supplier.id, code: `LOCAL-PO-A-${runMarker}`,
+      name: '验证土豆', unit: 'kg', price: 3.33, stock: 20, status: 'ENABLED',
+    },
   })
-  const productB = await prisma.product.upsert({
-    where: { tenantId_code: { tenantId: tenant.id, code: 'LOCAL-PO-B' } },
-    update: { supplierId: supplier.id, status: 'ENABLED', price: 4.5 },
-    create: { tenantId: tenant.id, supplierId: supplier.id, code: 'LOCAL-PO-B', name: '验证青椒', unit: 'kg', price: 4.5, status: 'ENABLED' },
+  const productB = await prisma.product.create({
+    data: {
+      tenantId: tenant.id, supplierId: supplier.id, code: `LOCAL-PO-B-${runMarker}`,
+      name: '验证青椒', unit: 'kg', price: 4.5, stock: 20, status: 'ENABLED',
+    },
+  })
+  await prisma.supplierStockBatch.createMany({
+    data: [productA, productB].map((product, index) => ({
+      tenantId: tenant.id, supplierId: supplier.id, productId: product.id,
+      batchNo: `OPENING-${runMarker}-${index + 1}`, kind: 'OPENING' as const,
+      initialQty: 20, remainingQty: 20, createdById: supplierUser.id,
+    })),
   })
 
   const managerToken = await login(manager.email)
@@ -164,9 +174,16 @@ async function main() {
           where: { OR: [{ targetId: orderId! }, ...(orderNo ? [{ target: orderNo }] : [])] },
         })
         await tx.purchaseOrderEvent.deleteMany({ where: { purchaseOrderId: orderId! } })
+        await tx.supplierStockReservation.deleteMany({ where: { purchaseOrderId: orderId! } })
         await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: orderId! } })
         await tx.purchaseOrderRevision.deleteMany({ where: { purchaseOrderId: orderId! } })
         await tx.purchaseOrder.delete({ where: { id: orderId! } })
+      })
+    }
+    if (!KEEP_TEST_ORDER) {
+      await prisma.$transaction(async tx => {
+        await tx.supplierStockBatch.deleteMany({ where: { productId: { in: [productA.id, productB.id] } } })
+        await tx.product.deleteMany({ where: { id: { in: [productA.id, productB.id] } } })
       })
     }
   }

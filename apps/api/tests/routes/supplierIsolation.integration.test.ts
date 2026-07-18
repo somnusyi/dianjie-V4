@@ -498,6 +498,19 @@ describe('supplier tenant scope (integration)', () => {
     await prisma.productBatch.deleteMany({ where: { id: { in: importBatchIds } } })
     await prisma.supplierProductCategory.deleteMany({ where: { id: { in: importedCategories.map(category => category.id) } } })
 
+    const allCategoryIds = (await prisma.supplierProductCategory.findMany({
+      where: { tenantId, supplierId: supplierAId }, orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }], select: { id: true },
+    })).map(category => category.id)
+    const reorderResults = await Promise.all([
+      app.inject({ method: 'PATCH', url: '/api/products/categories-order', payload: { ids: allCategoryIds } }),
+      app.inject({ method: 'PATCH', url: '/api/products/categories-order', payload: { ids: [...allCategoryIds].reverse() } }),
+    ])
+    expect(reorderResults.map(response => response.statusCode)).toEqual([200, 200])
+    const reorderedCategories = await prisma.supplierProductCategory.findMany({
+      where: { tenantId, supplierId: supplierAId }, select: { sortOrder: true },
+    })
+    expect(new Set(reorderedCategories.map(category => category.sortOrder)).size).toBe(reorderedCategories.length)
+
     const tiedAt = new Date('2031-07-18T00:00:00.000Z')
     const logIds = [`stable-product-log-a-${suffix}`, `stable-product-log-b-${suffix}`]
     await prisma.opLog.createMany({

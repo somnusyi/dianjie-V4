@@ -113,6 +113,19 @@ async function main() {
     const names = afterOrder.body.map((row: any) => row.name)
     assert.ok(names.indexOf(secondName) < names.indexOf(renamedName))
 
+    const concurrentReorders = await Promise.all([
+      api('/api/products/categories-order', token, {
+        method: 'PATCH', body: JSON.stringify({ ids: reorderedIds }),
+      }),
+      api('/api/products/categories-order', token, {
+        method: 'PATCH', body: JSON.stringify({ ids: [...reorderedIds].reverse() }),
+      }),
+    ])
+    assert.deepEqual(concurrentReorders.map(result => result.status), [200, 200], '并发分类排序必须串行成功')
+    const afterConcurrentOrder = await api('/api/products/categories', token)
+    assert.equal(afterConcurrentOrder.status, 200, JSON.stringify(afterConcurrentOrder.body))
+    assert.equal(new Set(afterConcurrentOrder.body.map((row: any) => row.sortOrder)).size, afterConcurrentOrder.body.length)
+
     const history = await api('/api/products/history?limit=100', token)
     assert.equal(history.status, 200, JSON.stringify(history.body))
     assert.ok(history.body.some((row: any) => row.entityType === 'ProductCategory' && row.targetId === categoryId))
@@ -125,6 +138,7 @@ async function main() {
       disableBlocksNewSku: true,
       restore: true,
       reorder: true,
+      concurrentReorder: true,
       auditHistory: true,
     }))
   } finally {

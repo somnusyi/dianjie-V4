@@ -415,25 +415,36 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const parsed = z.object({ ids: z.array(z.string()).min(1).max(200) }).safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const ids = [...new Set(parsed.data.ids)]
-    const existing = await prisma.supplierProductCategory.findMany({
-      where: { tenantId, supplierId: scopedSupplierId }, select: { id: true },
-    })
-    if (ids.length !== existing.length || existing.some(row => !ids.includes(row.id))) {
-      return reply.status(400).send({ error: '分类顺序必须包含当前全部分类' })
-    }
-    await prisma.$transaction(async tx => {
-      for (let i = 0; i < ids.length; i++) {
-        await tx.supplierProductCategory.update({ where: { id: ids[i] }, data: { sortOrder: i } })
-      }
-      await tx.opLog.create({
-        data: {
-          tenantId, userId, role,
-          action: `调整商品分类顺序：${ids.length} 类`,
-          entityType: 'ProductCategory', targetId: scopedSupplierId,
-          metadata: { supplierId: scopedSupplierId, categoryIds: ids },
-        },
+    try {
+      await prisma.$transaction(async tx => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`supplier-categories:${tenantId}:${scopedSupplierId}`}))`
+        const existing = await tx.supplierProductCategory.findMany({
+          where: { tenantId, supplierId: scopedSupplierId }, select: { id: true },
+        })
+        if (ids.length !== existing.length || existing.some(row => !ids.includes(row.id))) {
+          throw Object.assign(new Error('分类顺序必须包含当前全部分类'), { statusCode: 400 })
+        }
+        for (let i = 0; i < ids.length; i++) {
+          const updated = await tx.supplierProductCategory.updateMany({
+            where: { id: ids[i], tenantId, supplierId: scopedSupplierId }, data: { sortOrder: i },
+          })
+          if (updated.count !== 1) {
+            throw Object.assign(new Error('分类状态已变化，请刷新后重试'), { statusCode: 409 })
+          }
+        }
+        await tx.opLog.create({
+          data: {
+            tenantId, userId, role,
+            action: `调整商品分类顺序：${ids.length} 类`,
+            entityType: 'ProductCategory', targetId: scopedSupplierId,
+            metadata: { supplierId: scopedSupplierId, categoryIds: ids },
+          },
+        })
       })
-    })
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      throw error
+    }
     return { ok: true, count: ids.length }
   })
 

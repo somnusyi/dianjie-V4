@@ -359,6 +359,20 @@ describe('supplier order to receipt flow (integration)', () => {
     // Simulate a split-delivery era order whose legacy primary-receipt
     // pointer is absent. The claim exact receipt must still drive payable.
     await prisma.purchaseOrder.update({ where: { id: order.id }, data: { receiptId: null } })
+    for (const payload of [
+      null,
+      { action: 'reject', note: {} },
+      { action: 'approve', note: 'x'.repeat(501) },
+      { action: 'approve', unexpected: true },
+    ]) {
+      const invalidReview = await app.inject({
+        method: 'PATCH', url: `/api/loss-claims/${claim.id}/handle`,
+        headers: { 'x-test-actor': 'supplier' }, payload,
+      })
+      expect(invalidReview.statusCode).toBe(400)
+    }
+    expect((await prisma.lossClaim.findUniqueOrThrow({ where: { id: claim.id } })).status).toBe('PENDING')
+    expect(Number((await prisma.paymentSchedule.findUniqueOrThrow({ where: { receiptId: receipt.id } })).amount)).toBe(50)
     const reject = await app.inject({
       method: 'PATCH', url: `/api/loss-claims/${claim.id}/handle`,
       headers: { 'x-test-actor': 'supplier' }, payload: { action: 'reject', note: '实发数量无误，申请复核' },

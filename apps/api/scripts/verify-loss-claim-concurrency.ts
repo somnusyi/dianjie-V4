@@ -123,14 +123,24 @@ async function main() {
 
     const approveScenario = await createScenario(1)
     const unboundList = await api('/api/loss-claims?page=1&pageSize=20', unboundToken)
-    assert.equal(unboundList.status, 200)
-    assert.equal(unboundList.body.total, 0, '未绑定 supplierId 的供应商账号不能看到租户全部报损')
+    assert.equal(unboundList.status, 401, '未绑定 supplierId 的供应商账号必须由全局认证关闭')
     assert.equal((await api(`/api/loss-claims/${approveScenario.claim.id}/handle`, unboundToken, {
       method: 'PATCH', body: JSON.stringify({ action: 'approve' }),
-    })).status, 400, '未绑定 supplierId 的供应商账号不能处理任意报损')
+    })).status, 401, '未绑定 supplierId 的供应商账号不能处理任意报损')
     assert.equal((await api(`/api/loss-claims/${approveScenario.claim.id}/handle`, tokenB, {
       method: 'PATCH', body: JSON.stringify({ action: 'approve' }),
     })).status, 400, '供应商不能处理其他供应商的报损')
+    for (const body of [
+      null,
+      { action: 'reject', note: {} },
+      { action: 'approve', note: 'x'.repeat(501) },
+      { action: 'approve', unexpected: true },
+    ]) {
+      assert.equal((await api(`/api/loss-claims/${approveScenario.claim.id}/handle`, tokenA, {
+        method: 'PATCH', body: JSON.stringify(body),
+      })).status, 400, '畸形供应商报损处理请求必须稳定返回 400')
+    }
+    assert.equal((await prisma.lossClaim.findUniqueOrThrow({ where: { id: approveScenario.claim.id } })).status, 'PENDING')
     const [approveA, approveB] = await Promise.all([
       api(`/api/loss-claims/${approveScenario.claim.id}/handle`, tokenA, { method: 'PATCH', body: JSON.stringify({ action: 'approve' }) }),
       api(`/api/loss-claims/${approveScenario.claim.id}/handle`, tokenA, { method: 'PATCH', body: JSON.stringify({ action: 'approve' }) }),
@@ -138,10 +148,10 @@ async function main() {
     assert.deepEqual([approveA.status, approveB.status], [200, 200])
     assert.equal([approveA.body.duplicated, approveB.body.duplicated].filter(Boolean).length, 1, '并发同意必须一主一幂等')
     assert.equal((await prisma.lossClaim.findUniqueOrThrow({ where: { id: approveScenario.claim.id } })).status, 'APPROVED')
-    assert.equal(Number((await prisma.product.findUniqueOrThrow({ where: { id: approveScenario.product.id } })).stock), 97)
+    assert.equal(Number((await prisma.product.findUniqueOrThrow({ where: { id: approveScenario.product.id } })).stock), 95)
     assert.equal(await prisma.supplierStockMovement.count({
       where: { sourceType: 'LossClaim', sourceId: approveScenario.claim.id, productId: approveScenario.product.id },
-    }), 1)
+    }), 0)
     assert.equal(Number((await prisma.paymentSchedule.findUniqueOrThrow({ where: { receiptId: approveScenario.receipt.id } })).amount), 15)
 
     const rejectScenario = await createScenario(2)
@@ -174,9 +184,9 @@ async function main() {
     const raceSchedule = await prisma.paymentSchedule.findUniqueOrThrow({ where: { receiptId: raceScenario.receipt.id } })
     if (raceClaim.status === 'AUTO_APPROVED') {
       assert.equal(automatic.transitioned, true)
-      assert.equal(raceStock, 97)
+      assert.equal(raceStock, 95)
       assert.equal(Number(raceSchedule.amount), 15)
-      assert.equal(await prisma.supplierStockMovement.count({ where: { sourceId: raceScenario.claim.id } }), 1)
+      assert.equal(await prisma.supplierStockMovement.count({ where: { sourceId: raceScenario.claim.id } }), 0)
     } else {
       assert.equal(raceClaim.status, 'REJECTED')
       assert.equal(automatic.transitioned, false)

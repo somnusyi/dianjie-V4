@@ -78,6 +78,15 @@ const deliveryShipSchema = z.object({
   }).strict()).max(500).optional(),
 }).strict()
 
+const deliveryDeliverSchema = z.object({
+  note: z.string().trim().max(500, '送达备注最长 500 字').optional(),
+}).strict()
+
+const chefAckSchema = z.object({
+  images: z.array(z.string().trim().min(1, '验收照片地址不能为空')).min(1, '请至少上传 1 张验收照片').max(5, '验收单最多 5 张照片'),
+  note: z.string().max(500, '备注最长 500 字').optional(),
+}).strict()
+
 const deliveryReceiveSchema = z.object({
   items: z.array(z.object({
     productId: z.string().min(1, 'productId 必填'),
@@ -1166,10 +1175,12 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   app.patch('/:id/deliver', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
     const { tenantId, userId, role } = req.user
     const { id } = req.params as any
-    const { note } = (req.body || {}) as any
     if (!isSupplierRole(role) && !['ADMIN', 'SUPER_ADMIN'].includes(role)) {
       return reply.status(403).send({ error: '仅供应商 / 管理员可标记送达' })
     }
+    const parsedDeliver = deliveryDeliverSchema.safeParse(req.body || {})
+    if (!parsedDeliver.success) return reply.status(400).send({ error: parsedDeliver.error.issues[0].message })
+    const { note } = parsedDeliver.data
     const where: any = { id, tenantId, status: 'DELIVERING' }
     const scopedSupplierId = requireSupplierBinding(role, req.user.supplierId)
     if (scopedSupplierId) where.supplierId = scopedSupplierId
@@ -1233,24 +1244,13 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   app.patch('/:id/chef-ack', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
     const { tenantId, userId, role, storeId } = req.user
     const { id } = req.params as any
-    const { images, note } = (req.body || {}) as any
     if (!['KITCHEN_LEAD', 'MANAGER', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
       return reply.status(403).send({ error: '仅厨师长 / 店长 / 总厨 / 老板可发验收单' })
     }
-    if (!Array.isArray(images) || images.length === 0) {
-      return reply.status(400).send({ error: '请至少上传 1 张验收照片' })
-    }
-    if (images.length > 5) {
-      return reply.status(400).send({ error: '验收单最多 5 张照片' })
-    }
-    // 备注选填 (2026-05-29 客户调整, 之前是必填)
-    if (note != null && typeof note !== 'string') {
-      return reply.status(400).send({ error: '备注格式错误' })
-    }
-    if (note != null && note.length > 500) {
-      return reply.status(400).send({ error: '备注最长 500 字' })
-    }
-    const noteValue = typeof note === 'string' ? note.trim() : ''
+    const parsedAck = chefAckSchema.safeParse(req.body || {})
+    if (!parsedAck.success) return reply.status(400).send({ error: parsedAck.error.issues[0].message })
+    const { images, note } = parsedAck.data
+    const noteValue = note?.trim() || ''
     const where: any = { id, tenantId, status: 'DELIVERING' }
     // 厨师/店长只能给自己绑定门店的单发验收单
     if (['KITCHEN_LEAD', 'MANAGER'].includes(role) && storeId) where.storeId = storeId

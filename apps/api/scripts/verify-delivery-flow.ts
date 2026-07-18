@@ -127,6 +127,16 @@ async function main() {
     assert.equal(repeatedShip.status, 200)
     assert.equal(repeatedShip.body.deliveryId, firstShip.body.deliveryId, '发货重试必须返回同一配送单')
     assert.equal(repeatedShip.body.duplicated, true)
+    const invalidAck = await api(`/api/orders/${orderId}/chef-ack`, managerToken, {
+      method: 'PATCH', body: JSON.stringify({ images: [123] }),
+    })
+    assert.equal(invalidAck.status, 400, JSON.stringify(invalidAck.body))
+    const invalidDeliver = await api(`/api/orders/${orderId}/deliver`, supplierToken, {
+      method: 'PATCH', body: JSON.stringify({ note: { invalid: true } }),
+    })
+    assert.equal(invalidDeliver.status, 400, JSON.stringify(invalidDeliver.body))
+    assert.equal((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: orderId } })).chefAckImages.length, 0)
+    assert.equal((await prisma.deliveryOrder.findUniqueOrThrow({ where: { id: firstShip.body.deliveryId } })).status, 'SHIPPED')
     assert.equal((await api(`/api/orders/${orderId}/deliver`, supplierToken, { method: 'PATCH', body: '{}' })).status, 200)
     for (const payload of [
       { items: [null] },
@@ -224,7 +234,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))

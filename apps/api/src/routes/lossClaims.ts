@@ -14,6 +14,8 @@ import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 import { setReceiptSettlementAmountInTransaction } from '../services/receiptSettlement'
 import { arrivalDifferencesToCsv } from '../services/arrivalDifferenceExport'
 
+const LOSS_AMOUNT_MAX = new Prisma.Decimal('9999999999.99')
+
 const manualLossSchema = z.object({
   items: z.array(z.object({
     productId: z.string().min(1),
@@ -385,6 +387,12 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
         productCategorySnapshot: productById.get(item.productId)?.category || null,
       }
     })
+    if (itemsData.some(item => item.lossAmount.gt(LOSS_AMOUNT_MAX))) {
+      return reply.status(400).send({ error: '报损单单行金额超过系统上限' })
+    }
+    if (totalLossAmount.gt(LOSS_AMOUNT_MAX)) {
+      return reply.status(400).send({ error: '报损单总金额超过系统上限' })
+    }
 
     // 阈值审批: ≥¥500 进 PENDING 等总厨审, ≥¥3000 通知老板. 防止店员私自录大额损耗
     const NEED_REVIEW_THRESHOLD = 500

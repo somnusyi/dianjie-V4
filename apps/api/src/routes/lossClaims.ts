@@ -17,6 +17,15 @@ import { arrivalDifferencesToCsv } from '../services/arrivalDifferenceExport'
 
 const LOSS_AMOUNT_MAX = new Prisma.Decimal('9999999999.99')
 
+const lossClaimReviewSchema = z.object({
+  action: z.enum(['approve', 'reject']),
+  note: z.string().trim().max(500, '备注不能超过 500 字').optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.action === 'reject' && !value.note) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['note'], message: '拒绝时必须填写原因' })
+  }
+})
+
 const manualLossSchema = z.object({
   items: z.array(z.object({
     productId: z.string().min(1),
@@ -474,11 +483,11 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
   app.patch('/:id/handle', { preHandler: [(app as any).authenticate] }, async (req: any) => {
     const { tenantId, userId, role } = req.user
     const { id } = req.params as any
-    const { action, note } = req.body as any  // approve | reject
 
     if (!['SUPPLIER_OWNER', 'SUPPLIER_STAFF', 'SUPPLIER_SUB', 'ADMIN', 'SUPER_ADMIN'].includes(role)) throw { statusCode: 403, message: '无权限' }
-    if (!['approve', 'reject'].includes(action)) throw { statusCode: 400, message: 'action 必须是 approve 或 reject' }
-    if (action === 'reject' && (!note || !note.trim())) throw { statusCode: 400, message: '拒绝时必须填写原因' }
+    const parsed = lossClaimReviewSchema.safeParse(req.body || {})
+    if (!parsed.success) throw { statusCode: 400, message: parsed.error.issues[0].message }
+    const { action, note } = parsed.data
 
     // P0: 加 supplier scope, 避免 supplier A 处理 supplier B 的报损; 排除店内自有盘点报损 (isManual)
     const claimWhere: any = { id, tenantId, status: 'PENDING', isManual: false }
@@ -601,16 +610,12 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
   app.patch('/:id/manual-review', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
     const { tenantId, userId, role } = req.user
     const { id } = req.params as any
-    const { action, note } = (req.body || {}) as any
     if (!['CHEF_DIRECTOR', 'CHEF', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
       return reply.status(403).send({ error: '仅总厨/老板可审核店内报损' })
     }
-    if (!['approve', 'reject'].includes(action)) {
-      return reply.status(400).send({ error: 'action 必须 approve/reject' })
-    }
-    if (action === 'reject' && (!note || !String(note).trim())) {
-      return reply.status(400).send({ error: '拒绝时必须填写原因' })
-    }
+    const parsed = lossClaimReviewSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const { action, note } = parsed.data
     const newStatus = action === 'approve' ? 'APPROVED' : 'REJECTED'
     const reviewed = await prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`loss-handle:${id}`}))::text AS locked`

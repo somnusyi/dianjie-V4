@@ -156,6 +156,18 @@ async function main() {
     assert.equal(reviewClaim.status, 201, JSON.stringify(reviewClaim.body))
     assert.equal(reviewClaim.body.status, 'PENDING')
     createdClaimIds.push(reviewClaim.body.id)
+    for (const body of [
+      null,
+      { action: 'reject', note: {} },
+      { action: 'approve', note: 'x'.repeat(501) },
+      { action: 'approve', unexpected: true },
+    ]) {
+      const invalidReview = await api(`/api/loss-claims/${reviewClaim.body.id}/manual-review`, reviewerLogin.body.token, {
+        method: 'PATCH', body: JSON.stringify(body),
+      })
+      assert.equal(invalidReview.status, 400, '畸形店内报损审核请求必须稳定返回 400')
+    }
+    assert.equal((await prisma.lossClaim.findUniqueOrThrow({ where: { id: reviewClaim.body.id } })).status, 'PENDING')
     const reviewResults = await Promise.all(['approve', 'reject'].map(action => api(`/api/loss-claims/${reviewClaim.body.id}/manual-review`, reviewerLogin.body.token, {
       method: 'PATCH', body: JSON.stringify({ action, note: `并发${action}` }),
     })))

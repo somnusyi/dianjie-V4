@@ -104,7 +104,7 @@ describe('supplier order to receipt flow (integration)', () => {
     await prisma.tenant.delete({ where: { id: tenantId } })
   })
 
-  it('rejects invalid list dates and oversized pages before querying', async () => {
+  it('rejects invalid list dates, oversized pages and order numeric overflows before writes', async () => {
     for (const endpoint of ['/api/orders', '/api/deliveries']) {
       for (const query of ['dateFrom=2026-02-29', 'dateTo=2026-04-31', 'page=100001']) {
         const response = await app.inject({
@@ -123,6 +123,57 @@ describe('supplier order to receipt flow (integration)', () => {
       },
     })
     expect(invalidCreate.statusCode).toBe(400)
+
+    const beforeOrderCount = await prisma.purchaseOrder.count({ where: { tenantId } })
+    const invalidQuantity = await app.inject({
+      method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' },
+      payload: {
+        supplierId, storeId, expectedDate: '2026-07-20',
+        items: [{ productId, quantity: 100_000_000, unitPrice: 10 }],
+      },
+    })
+    expect(invalidQuantity.statusCode).toBe(400)
+    const tooManyLines = await app.inject({
+      method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' },
+      payload: {
+        supplierId, storeId, expectedDate: '2026-07-20',
+        items: Array.from({ length: 501 }, () => ({ productId, quantity: 1, unitPrice: 10 })),
+      },
+    })
+    expect(tooManyLines.statusCode).toBe(400)
+
+    const highPriceProduct = await prisma.product.create({
+      data: {
+        tenantId, supplierId, code: `${suffix}-HIGH`, name: '金额边界商品',
+        category: '菌菇', unit: '斤', price: 99_999_999.99, stock: 0,
+      },
+    })
+    await prisma.product.update({ where: { id: productId }, data: { price: 99_999_999.99 } })
+    try {
+      const lineOverflow = await app.inject({
+        method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' },
+        payload: {
+          supplierId, storeId, expectedDate: '2026-07-20',
+          items: [{ productId, quantity: 101, unitPrice: 0 }],
+        },
+      })
+      expect(lineOverflow.statusCode).toBe(400)
+      const totalOverflow = await app.inject({
+        method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' },
+        payload: {
+          supplierId, storeId, expectedDate: '2026-07-20',
+          items: [
+            { productId, quantity: 100, unitPrice: 0 },
+            { productId: highPriceProduct.id, quantity: 100, unitPrice: 0 },
+          ],
+        },
+      })
+      expect(totalOverflow.statusCode).toBe(400)
+    } finally {
+      await prisma.product.update({ where: { id: productId }, data: { price: 10 } })
+      await prisma.product.delete({ where: { id: highPriceProduct.id } })
+    }
+    expect(await prisma.purchaseOrder.count({ where: { tenantId } })).toBe(beforeOrderCount)
   })
 
   it('orders, reserves, ships once, receives actual quantity and creates payable facts', async () => {
@@ -147,6 +198,14 @@ describe('supplier order to receipt flow (integration)', () => {
       payload: { reason: '验证非法日期', expectedDate: '2026-04-31', baseRowVersion: order.rowVersion },
     })
     expect(invalidRevision.statusCode).toBe(400)
+    const oversizedRevision = await app.inject({
+      method: 'POST', url: `/api/orders/${order.id}/revisions`, headers: { 'x-test-actor': 'chef' },
+      payload: {
+        reason: '验证订货数量上限', baseRowVersion: order.rowVersion,
+        items: [{ productId, quantity: 100_000_000 }],
+      },
+    })
+    expect(oversizedRevision.statusCode).toBe(400)
 
     const confirm = await app.inject({
       method: 'PATCH', url: `/api/orders/${order.id}/confirm`, headers: { 'x-test-actor': 'supplier' },
@@ -155,6 +214,15 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(await prisma.supplierStockReservation.count({
       where: { purchaseOrderId: order.id, status: 'ACTIVE' },
     })).toBe(1)
+
+    const oversizedShipment = await app.inject({
+      method: 'PATCH', url: `/api/orders/${order.id}/ship`, headers: { 'x-test-actor': 'supplier' },
+      payload: {
+        idempotencyKey: `ship-oversized-${suffix}`,
+        items: [{ itemId: order.items[0].id, shippedQty: 100_000_000 }],
+      },
+    })
+    expect(oversizedShipment.statusCode).toBe(400)
 
     const shipPayloads = [`ship-a-${suffix}`, `ship-b-${suffix}`].map(idempotencyKey => ({
       idempotencyKey,

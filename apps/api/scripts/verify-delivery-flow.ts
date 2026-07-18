@@ -49,10 +49,19 @@ async function main() {
     update: { password, role: 'SUPPLIER_OWNER', status: 'ACTIVE', supplierId: supplier.id },
     create: { tenantId: tenant.id, name: '本地配送验证账号', email: 'supplier-delivery-verify@local.test', password, role: 'SUPPLIER_OWNER', status: 'ACTIVE', supplierId: supplier.id },
   })
-  const product = await prisma.product.upsert({
-    where: { tenantId_code: { tenantId: tenant.id, code: 'LOCAL-DELIVERY-A' } },
-    update: { supplierId: supplier.id, status: 'ENABLED', price: 6.25, stock: 100 },
-    create: { tenantId: tenant.id, supplierId: supplier.id, code: 'LOCAL-DELIVERY-A', name: '配送验证菌菇', unit: 'kg', price: 6.25, stock: 100, status: 'ENABLED' },
+  const runMarker = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const product = await prisma.product.create({
+    data: {
+      tenantId: tenant.id, supplierId: supplier.id, code: `LOCAL-DELIVERY-${runMarker}`,
+      name: `配送验证菌菇-${runMarker}`, unit: 'kg', price: 6.25, stock: 100, status: 'ENABLED',
+    },
+  })
+  await prisma.supplierStockBatch.create({
+    data: {
+      tenantId: tenant.id, supplierId: supplier.id, productId: product.id,
+      batchNo: `OPENING-${runMarker}`, kind: 'OPENING', initialQty: 100, remainingQty: 100,
+      createdById: supplierUser.id,
+    },
   })
   const managerToken = await login(manager.email)
   const supplierToken = await login(supplierUser.email)
@@ -63,6 +72,15 @@ async function main() {
   const receiptIds: string[] = []
 
   try {
+    const oversizedOrder = await api('/api/orders', managerToken, {
+      method: 'POST',
+      body: JSON.stringify({
+        supplierId: supplier.id, expectedDate: '2026-07-16',
+        items: [{ productId: product.id, quantity: 100_000_000, unitPrice: 0 }],
+      }),
+    })
+    assert.equal(oversizedOrder.status, 400, JSON.stringify(oversizedOrder.body))
+
     const created = await api('/api/orders', managerToken, {
       method: 'POST',
       body: JSON.stringify({ supplierId: supplier.id, expectedDate: '2026-07-16', note: '分批配送原始备注', idempotencyKey: `delivery-order-${Date.now()}`, items: [{ productId: product.id, quantity: 5, unitPrice: 0 }] }),
@@ -72,6 +90,15 @@ async function main() {
     orderNo = created.body.no
     const originalHash = created.body.submittedSnapshotHash
     assert.equal((await api(`/api/orders/${orderId}/confirm`, supplierToken, { method: 'PATCH', body: '{}' })).status, 200)
+
+    const oversizedShipment = await api(`/api/orders/${orderId}/ship`, supplierToken, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        idempotencyKey: `delivery-oversized-${Date.now()}`,
+        items: [{ itemId: created.body.items[0].id, shippedQty: 100_000_000 }],
+      }),
+    })
+    assert.equal(oversizedShipment.status, 400, JSON.stringify(oversizedShipment.body))
 
     const forbiddenPrice = await api(`/api/orders/${orderId}/ship`, supplierToken, {
       method: 'PATCH',
@@ -174,7 +201,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, numericBounds: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))
@@ -204,6 +231,7 @@ async function main() {
         await tx.reconciliation.deleteMany({ where: { id: { in: reconciliationIds } } })
         await tx.receiptItem.deleteMany({ where: { receiptId: { in: cleanupReceiptIds } } })
         await tx.receipt.deleteMany({ where: { id: { in: cleanupReceiptIds } } })
+        await tx.supplierStockBatchAllocation.deleteMany({ where: { productId: product.id } })
         await tx.supplierStockMovement.deleteMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
         await tx.deliveryOrderEvent.deleteMany({ where: { deliveryOrderId: { in: deliveryIds } } })
         await tx.deliveryOrderItem.deleteMany({ where: { deliveryOrderId: { in: deliveryIds } } })
@@ -211,8 +239,17 @@ async function main() {
         await tx.notification.deleteMany({ where: { refType: 'PurchaseOrder', refId: orderId! } })
         await tx.opLog.deleteMany({ where: { OR: [{ targetId: orderId! }, ...(orderNo ? [{ target: orderNo }] : [])] } })
         await tx.purchaseOrderEvent.deleteMany({ where: { purchaseOrderId: orderId! } })
+        await tx.supplierStockReservation.deleteMany({ where: { purchaseOrderId: orderId! } })
         await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: orderId! } })
         await tx.purchaseOrder.delete({ where: { id: orderId! } })
+      })
+    }
+    if (!KEEP_TEST_ORDER) {
+      await prisma.$transaction(async tx => {
+        await tx.supplierStockBatchAllocation.deleteMany({ where: { productId: product.id } })
+        await tx.supplierStockMovement.deleteMany({ where: { productId: product.id } })
+        await tx.supplierStockBatch.deleteMany({ where: { productId: product.id } })
+        await tx.product.delete({ where: { id: product.id } })
       })
     }
   }

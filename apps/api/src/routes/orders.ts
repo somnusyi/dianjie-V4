@@ -29,9 +29,18 @@ import { ensureReceiptInventoryUnitSnapshots } from '../services/receiptInventor
 import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
+const PURCHASE_QUANTITY_MAX = 99_999_999.99
+const PURCHASE_AMOUNT_MAX = new Prisma.Decimal('9999999999.99')
+
+function orderAmountBoundError(lineAmounts: Prisma.Decimal[], total: Prisma.Decimal): string | null {
+  if (lineAmounts.some(amount => amount.gt(PURCHASE_AMOUNT_MAX))) return '单行金额超过系统上限'
+  if (total.gt(PURCHASE_AMOUNT_MAX)) return '订货单总金额超过系统上限'
+  return null
+}
+
 const orderItemSchema = z.object({
   productId: z.string().min(1, 'productId 必填'),
-  quantity:  z.number().positive('quantity 必须 > 0'),
+  quantity:  z.number().positive('quantity 必须 > 0').max(PURCHASE_QUANTITY_MAX, '订货数量超过系统上限'),
   unitPrice: z.number().nonnegative('unitPrice 不能为负'),
 })
 const orderCreateSchema = z.object({
@@ -39,7 +48,7 @@ const orderCreateSchema = z.object({
   supplierId:   z.string().min(1, 'supplierId 必填'),
   expectedDate: calendarDateSchema,
   note:         z.string().optional().default(''),
-  items:        z.array(orderItemSchema).min(1, '至少一条采购明细'),
+  items:        z.array(orderItemSchema).min(1, '至少一条采购明细').max(500, '单次最多 500 条采购明细'),
   // 防重复提交: 客户端 uuid, 后端缓存 60s 拦截重复 POST
   idempotencyKey: z.string().max(80).optional(),
 })
@@ -48,7 +57,7 @@ const revisionCreateSchema = z.object({
   reason: z.string().trim().min(2, '请填写改单原因').max(200),
   items: z.array(z.object({
     productId: z.string().min(1),
-    quantity: z.number().positive('订货数量必须大于 0'),
+    quantity: z.number().positive('订货数量必须大于 0').max(PURCHASE_QUANTITY_MAX, '订货数量超过系统上限'),
   }).strict()).min(1, '订货单至少保留一个商品').max(500).optional(),
   expectedDate: calendarDateSchema.optional(),
   note: z.string().max(500).nullable().optional(),
@@ -65,7 +74,7 @@ const deliveryShipSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(80),
   items: z.array(z.object({
     itemId: z.string().min(1),
-    shippedQty: z.number().nonnegative(),
+    shippedQty: z.number().nonnegative().max(PURCHASE_QUANTITY_MAX, '实发数量超过系统上限'),
   }).strict()).max(500).optional(),
 }).strict()
 
@@ -362,6 +371,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       }
     })
     const totalAmount = sumOrderAmount(itemsData)
+    const amountError = orderAmountBoundError(itemsData.map(item => item.amount), totalAmount)
+    if (amountError) return reply.status(400).send({ error: amountError })
     const submittedAt = new Date()
     const ym = dayjs().format('YYYYMM')
 
@@ -581,12 +592,15 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         lineOrigin: previous?.lineOrigin ?? 'APPROVED_REVISION' as const,
       }
     }).sort((a, b) => a.productId.localeCompare(b.productId))
+    const afterTotal = afterItems.reduce((sum, item) => sum.add(item.amount), new Prisma.Decimal(0)).toDecimalPlaces(2)
+    const amountError = orderAmountBoundError(afterItems.map(item => new Prisma.Decimal(item.amount)), afterTotal)
+    if (amountError) return reply.status(400).send({ error: amountError })
     const after: OrderSnapshot = {
       ...before,
       expectedDate: input.expectedDate ?? before.expectedDate,
       note: input.note !== undefined ? input.note : before.note,
       items: afterItems,
-      totalAmount: afterItems.reduce((sum, item) => sum.add(item.amount), new Prisma.Decimal(0)).toFixed(2),
+      totalAmount: afterTotal.toFixed(2),
       revisionNo: before.revisionNo + 1,
     }
     const changes = diffOrderSnapshots(before, after)
@@ -1001,8 +1015,25 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       shipped: shippedMap.has(it.id) ? shippedMap.get(it.id)! : Math.max(0, Number(it.quantity) - (priorShipped.get(it.productId) || 0)),
     }))
     if (!lineShipped.some(line => line.shipped > 0)) throw { statusCode: 400, message: '本次配送数量必须大于 0' }
-    const newTotal = lineShipped.reduce((s, l) => s + l.shipped * Number(l.it.unitPrice), 0)
-    const cumulativeTotal = lineShipped.reduce((s, l) => s + (l.previous + l.shipped) * Number(l.it.unitPrice), 0)
+    const quantityOverflow = lineShipped.some(line =>
+      new Prisma.Decimal(line.previous).add(line.shipped).gt(PURCHASE_QUANTITY_MAX)
+    )
+    if (quantityOverflow) throw { statusCode: 400, message: '累计实发数量超过系统上限' }
+    const newLineAmounts = lineShipped.map(line =>
+      new Prisma.Decimal(line.shipped).mul(line.it.unitPrice).toDecimalPlaces(2)
+    )
+    const cumulativeLineAmounts = lineShipped.map(line =>
+      new Prisma.Decimal(line.previous).add(line.shipped).mul(line.it.unitPrice).toDecimalPlaces(2)
+    )
+    const newTotalAmount = newLineAmounts.reduce((sum, amount) => sum.add(amount), new Prisma.Decimal(0)).toDecimalPlaces(2)
+    const cumulativeTotalAmount = cumulativeLineAmounts.reduce((sum, amount) => sum.add(amount), new Prisma.Decimal(0)).toDecimalPlaces(2)
+    const amountError = orderAmountBoundError(
+      [...newLineAmounts, ...cumulativeLineAmounts],
+      Prisma.Decimal.max(newTotalAmount, cumulativeTotalAmount),
+    )
+    if (amountError) throw { statusCode: 400, message: amountError }
+    const newTotal = Number(newTotalAmount)
+    const cumulativeTotal = Number(cumulativeTotalAmount)
     const oldTotal = Number(order.totalAmount)
     const changedLines = lineShipped.filter(l => Math.abs(l.shipped - Number(l.it.quantity)) > 0.0001)
 
@@ -1024,7 +1055,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           shippedAt: new Date(),
           shippedNote: note,
           shippedById: userId,
-          totalAmount: cumulativeTotal,
+          totalAmount: cumulativeTotalAmount,
           rowVersion: { increment: 1 },
         },
       })
@@ -1037,13 +1068,13 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       const delivery = await tx.deliveryOrder.create({
         data: {
           tenantId, no: deliveryNo, purchaseOrderId: order.id, storeId: order.storeId, supplierId: order.supplierId,
-          status: 'SHIPPED', actualTotalAmount: new Prisma.Decimal(newTotal), note: note || null,
+          status: 'SHIPPED', actualTotalAmount: newTotalAmount, note: note || null,
           idempotencyKey, createdById: userId, shippedById: userId, shippedAt: new Date(),
           items: {
             create: lineShipped.filter(line => line.shipped > 0).map(line => ({
               purchaseOrderItemId: line.it.id, productId: line.it.productId,
               orderedQtySnapshot: line.it.quantity, shippedQty: new Prisma.Decimal(line.shipped),
-              unitPriceSnapshot: line.it.unitPrice, amount: new Prisma.Decimal(line.shipped).mul(line.it.unitPrice),
+              unitPriceSnapshot: line.it.unitPrice, amount: new Prisma.Decimal(line.shipped).mul(line.it.unitPrice).toDecimalPlaces(2),
               productCodeSnapshot: line.it.product?.code || null,
               productNameSnapshot: line.it.product?.name || null,
               productSpecSnapshot: line.it.product?.spec || null,
@@ -1064,7 +1095,10 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       for (const l of lineShipped) {
         await tx.purchaseOrderItem.update({
           where: { id: l.it.id },
-          data: { shippedQty: l.previous + l.shipped, amount: (l.previous + l.shipped) * Number(l.it.unitPrice) },
+          data: {
+            shippedQty: new Prisma.Decimal(l.previous).add(l.shipped),
+            amount: new Prisma.Decimal(l.previous).add(l.shipped).mul(l.it.unitPrice).toDecimalPlaces(2),
+          },
         })
       }
       if (order.supplier.inventoryMode === 'STRICT') {

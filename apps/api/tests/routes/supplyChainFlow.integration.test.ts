@@ -4,6 +4,7 @@ import { prisma } from '@dianjie/db'
 import { deliveryRoutes } from '../../src/routes/deliveries'
 import { purchaseOrderRoutes } from '../../src/routes/orders'
 import { lossClaimRoutes } from '../../src/routes/lossClaims'
+import { receiptRoutes } from '../../src/routes/receipts'
 import { auditSupplierSupplyChain } from '../../src/services/supplyChainAudit'
 
 const suffix = `supply-flow-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -65,6 +66,7 @@ describe('supplier order to receipt flow (integration)', () => {
     await app.register(purchaseOrderRoutes, { prefix: '/api/orders' })
     await app.register(deliveryRoutes, { prefix: '/api/deliveries' })
     await app.register(lossClaimRoutes, { prefix: '/api/loss-claims' })
+    await app.register(receiptRoutes, { prefix: '/api/receipts' })
     await app.ready()
   })
 
@@ -168,6 +170,28 @@ describe('supplier order to receipt flow (integration)', () => {
         },
       })
       expect(totalOverflow.statusCode).toBe(400)
+
+      const manualReceiptCount = await prisma.receipt.count({ where: { tenantId } })
+      const manualLineOverflow = await app.inject({
+        method: 'POST', url: '/api/receipts', headers: { 'x-test-actor': 'chef' },
+        payload: {
+          storeId, supplierId, deliveryDate: '2026-07-20',
+          items: [{ productId, quantity: 1_000, unitPrice: 10_000_000 }],
+        },
+      })
+      expect(manualLineOverflow.statusCode).toBe(400)
+      const manualTotalOverflow = await app.inject({
+        method: 'POST', url: '/api/receipts', headers: { 'x-test-actor': 'chef' },
+        payload: {
+          storeId, supplierId, deliveryDate: '2026-07-20',
+          items: [
+            { productId, quantity: 500, unitPrice: 10_000_000 },
+            { productId: highPriceProduct.id, quantity: 500, unitPrice: 10_000_000 },
+          ],
+        },
+      })
+      expect(manualTotalOverflow.statusCode).toBe(400)
+      expect(await prisma.receipt.count({ where: { tenantId } })).toBe(manualReceiptCount)
     } finally {
       await prisma.product.update({ where: { id: productId }, data: { price: 10 } })
       await prisma.product.delete({ where: { id: highPriceProduct.id } })

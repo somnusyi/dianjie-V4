@@ -63,15 +63,25 @@ async function main() {
       createdById: supplierUser.id,
     },
   })
-  const managerToken = await login(manager.email)
-  const supplierToken = await login(supplierUser.email)
-  const startedAt = new Date()
+    const managerToken = await login(manager.email)
+    const supplierToken = await login(supplierUser.email)
+    const startedAt = new Date()
   let orderId: string | null = null
   let orderNo: string | null = null
   const deliveryIds: string[] = []
   const receiptIds: string[] = []
 
   try {
+    const localDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())
+    const oversizedManualReceipt = await api('/api/receipts', managerToken, {
+      method: 'POST',
+      body: JSON.stringify({
+        storeId: store.id, supplierId: supplier.id, deliveryDate: localDate,
+        items: [{ productId: product.id, quantity: 1_000, unitPrice: 10_000_000 }],
+      }),
+    })
+    assert.equal(oversizedManualReceipt.status, 400, JSON.stringify(oversizedManualReceipt.body))
+
     const oversizedOrder = await api('/api/orders', managerToken, {
       method: 'POST',
       body: JSON.stringify({
@@ -194,7 +204,6 @@ async function main() {
     assert.equal(Number(detail.body.items[0].shippedQty), 5)
     assert.equal(Number(detail.body.items[0].receivedQty), 5)
     assert.equal(detail.body.status, 'COMPLETED')
-    const localDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())
     const orderByProductName = await api(`/api/orders?keyword=${encodeURIComponent(product.name)}&dateFrom=${localDate}&dateTo=${localDate}`, supplierToken)
     assert.equal(orderByProductName.status, 200, JSON.stringify(orderByProductName.body))
     assert.equal(orderByProductName.body.items.some((item: any) => item.id === orderId), true, '订货单应支持按商品名称和日期检索')
@@ -215,7 +224,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, numericBounds: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))

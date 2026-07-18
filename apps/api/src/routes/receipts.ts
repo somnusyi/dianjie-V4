@@ -11,6 +11,7 @@ import { nextBusinessNo } from '../services/purchaseOrderIntegrity'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const RECEIPT_OPERATOR_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN'])
+const RECEIPT_AMOUNT_MAX = new Prisma.Decimal('9999999999.99')
 
 const receiptListFilterSchema = z.object({
   status: z.preprocess(
@@ -164,11 +165,20 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const productById = new Map(products.map(product => [product.id, product]))
-    const normalizedItems = items.map(item => ({ ...item, unitPrice: money(item.unitPrice) }))
+    const normalizedItems = items.map(item => {
+      const unitPrice = money(item.unitPrice)
+      return { ...item, unitPrice, amount: lineAmount(item.quantity, unitPrice) }
+    })
     const totalAmount = normalizedItems.reduce(
-      (sum, item) => sum.add(lineAmount(item.quantity, item.unitPrice)),
+      (sum, item) => sum.add(item.amount),
       new Prisma.Decimal(0),
     ).toDecimalPlaces(2)
+    if (normalizedItems.some(item => item.amount.gt(RECEIPT_AMOUNT_MAX))) {
+      return reply.status(400).send({ error: '入库单单行金额超过系统上限' })
+    }
+    if (totalAmount.gt(RECEIPT_AMOUNT_MAX)) {
+      return reply.status(400).send({ error: '入库单总金额超过系统上限' })
+    }
     const ym = dayjs().format('YYYYMM')
     const receipt = await prisma.$transaction(async tx => {
       const latest = await tx.receipt.findFirst({
@@ -189,7 +199,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
               productId: item.productId,
               quantity: new Prisma.Decimal(item.quantity),
               unitPrice: item.unitPrice,
-              amount: lineAmount(item.quantity, item.unitPrice),
+              amount: item.amount,
               productCodeSnapshot: productById.get(item.productId)?.code || null,
               productNameSnapshot: productById.get(item.productId)?.name || null,
               productSpecSnapshot: productById.get(item.productId)?.spec || null,

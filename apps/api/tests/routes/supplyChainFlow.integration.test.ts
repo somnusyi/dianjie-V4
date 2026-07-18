@@ -269,6 +269,19 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(await prisma.supplierStockMovement.count({ where: { tenantId, type: 'OUTBOUND_PO' } })).toBe(1)
     expect(Number((await prisma.supplierStockBatch.findFirstOrThrow({ where: { tenantId, productId } })).remainingQty)).toBe(4)
 
+    const invalidAck = await app.inject({
+      method: 'PATCH', url: `/api/orders/${order.id}/chef-ack`, headers: { 'x-test-actor': 'chef' },
+      payload: { images: [123] },
+    })
+    expect(invalidAck.statusCode).toBe(400)
+    const invalidDeliver = await app.inject({
+      method: 'PATCH', url: `/api/orders/${order.id}/deliver`, headers: { 'x-test-actor': 'supplier' },
+      payload: { note: { invalid: true } },
+    })
+    expect(invalidDeliver.statusCode).toBe(400)
+    expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })).chefAckImages).toEqual([])
+    expect((await prisma.deliveryOrder.findFirstOrThrow({ where: { purchaseOrderId: order.id } })).status).toBe('SHIPPED')
+
     await prisma.product.update({
       where: { id: productId },
       data: { name: '流程鲜菌已改名', code: `${suffix}-P-NEW` },

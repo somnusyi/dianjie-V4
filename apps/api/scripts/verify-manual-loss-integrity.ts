@@ -38,6 +38,9 @@ async function main() {
   const unmappedProduct = await prisma.product.create({
     data: { tenantId: tenant.id, supplierId: supplier.id, code: `LOSS-U-${suffix}`, name: `未映射报损食材-${suffix}`, unit: 'kg', price: 88, stock: 20 },
   })
+  const highCostProduct = await prisma.product.create({
+    data: { tenantId: tenant.id, supplierId: supplier.id, code: `LOSS-H-${suffix}`, name: `高成本报损食材-${suffix}`, unit: 'kg', price: 20_000, stock: 0 },
+  })
   const foreignTenant = await prisma.tenant.create({ data: { name: `报损边界验证-${suffix}`, slug: `loss-boundary-${suffix.toLowerCase()}` } })
   const foreignProduct = await prisma.product.create({
     data: { tenantId: foreignTenant.id, code: `LOSS-F-${suffix}`, name: '跨租户报损食材', unit: 'kg', price: 66 },
@@ -52,8 +55,11 @@ async function main() {
     data: {
       tenantId: tenant.id, storeId: store.id, snapshotDate: new Date('2026-07-14T00:00:00.000Z'),
       sourceFilename: '店内报损自动化验证.xlsx', sourceHash: `loss-verify-${suffix}`,
-      totalValue: 1000, itemCount: 1, nonzeroCount: 1, zeroCount: 0, matchedCount: 1,
-      items: { create: [{ productId: product.id, section: '验证', rawName: product.name, unit: 'kg', quantity: 100, unitPrice: 10, amount: 1000, sortOrder: 1 }] },
+      totalValue: 21_000, itemCount: 2, nonzeroCount: 2, zeroCount: 0, matchedCount: 2,
+      items: { create: [
+        { productId: product.id, section: '验证', rawName: product.name, unit: 'kg', quantity: 100, unitPrice: 10, amount: 1000, sortOrder: 1 },
+        { productId: highCostProduct.id, section: '验证', rawName: highCostProduct.name, unit: 'kg', quantity: 1, unitPrice: 20_000, amount: 20_000, sortOrder: 2 },
+      ] },
     },
   })
   const receipt = await prisma.receipt.create({
@@ -78,13 +84,15 @@ async function main() {
       method: 'POST', body: JSON.stringify({ identifier: reviewer.email, password: PASSWORD, tenantSlug: TENANT_SLUG }),
     })
     assert.equal(reviewerLogin.status, 200, JSON.stringify(reviewerLogin.body))
-    assert.equal((await api('/api/loss-claims', token, {
+    const closedArrivalClaim = await api('/api/loss-claims', token, {
       method: 'POST',
       body: JSON.stringify({
         purchaseOrderId: 'schema-check-only', description: '重复行必须在查订单前被拒绝',
         items: [{ productId: product.id, receivedQty: 1 }, { productId: product.id, receivedQty: 1 }],
       }),
-    })).status, 400, '供应商责任报损不得重复提交同一订单行')
+    })
+    assert.equal(closedArrivalClaim.status, 409, '验收后补报入口必须明确关闭')
+    assert.equal(closedArrivalClaim.body.code, 'ARRIVAL_CLAIM_WINDOW_CLOSED')
 
     for (const body of [
       { items: [{ productId: product.id, quantity: -1 }], reason },
@@ -99,6 +107,9 @@ async function main() {
     assert.equal((await api('/api/loss-claims/manual', token, {
       method: 'POST', body: JSON.stringify({ items: [{ productId: unmappedProduct.id, quantity: 1 }], reason }),
     })).status, 409, '未进入门店库存基准的食材必须拒绝')
+    assert.equal((await api('/api/loss-claims/manual', token, {
+      method: 'POST', body: JSON.stringify({ items: [{ productId: highCostProduct.id, quantity: 1_000_000 }], reason }),
+    })).status, 400, '店内报损金额超过数据库上限时必须在写入前拒绝')
 
     await prisma.$executeRawUnsafe(`
       CREATE FUNCTION "${failureFunction}"() RETURNS trigger AS $$
@@ -160,7 +171,7 @@ async function main() {
     assert.ok(Math.abs(Number(row.avgUnitCost) - (1300 / 120)) < 0.0001)
     const unchanged = await prisma.product.findUniqueOrThrow({ where: { id: product.id }, select: { stock: true } })
     assert.equal(Number(unchanged.stock), 50, '店内报损不能修改供应商库存')
-    console.log(JSON.stringify({ ok: true, claims: createdClaimIds.length, uniqueNos: 4, authoritativeCost: 10.83, reviewStatus: reviewed.status, estimatedStock: row.stock }))
+    console.log(JSON.stringify({ ok: true, amountBounds: true, claims: createdClaimIds.length, uniqueNos: 4, authoritativeCost: 10.83, reviewStatus: reviewed.status, estimatedStock: row.stock }))
   } finally {
     if (failureTriggerInstalled) {
       await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${failureTrigger}" ON op_logs`)
@@ -172,7 +183,7 @@ async function main() {
       await tx.lossClaim.deleteMany({ where: { id: { in: createdClaimIds } } })
       await tx.receipt.delete({ where: { id: receipt.id } })
       await tx.inventorySnapshot.delete({ where: { id: snapshot.id } })
-      await tx.product.deleteMany({ where: { id: { in: [product.id, unmappedProduct.id] } } })
+      await tx.product.deleteMany({ where: { id: { in: [product.id, unmappedProduct.id, highCostProduct.id] } } })
       await tx.opLog.deleteMany({ where: { userId: reviewer.id, createdAt: { gte: startedAt } } })
       await tx.user.delete({ where: { id: reviewer.id } })
       await tx.product.delete({ where: { id: foreignProduct.id } })

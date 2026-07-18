@@ -592,6 +592,43 @@ describe('supplier tenant scope (integration)', () => {
     expect(claims.json()).toMatchObject({ total: 0, items: [] })
   })
 
+  it('rejects manual loss amounts beyond database bounds before writes', async () => {
+    const highCostProduct = await prisma.product.create({
+      data: {
+        tenantId, supplierId: supplierAId, code: `LOSS-BOUND-${suffix}`,
+        name: '店内报损金额边界商品', unit: '件', price: 20_000, stock: 0,
+      },
+    })
+    const snapshot = await prisma.inventorySnapshot.create({
+      data: {
+        tenantId, storeId, snapshotDate: new Date('2026-07-18T00:00:00.000Z'),
+        sourceFilename: 'manual-loss-amount-boundary.xlsx', sourceHash: `loss-bound-${suffix}`,
+        totalValue: 20_000, itemCount: 1, nonzeroCount: 1, zeroCount: 0, matchedCount: 1,
+        items: {
+          create: {
+            productId: highCostProduct.id, section: '测试', rawName: highCostProduct.name,
+            unit: '件', quantity: 1, unitPrice: 20_000, amount: 20_000, sortOrder: 1,
+          },
+        },
+      },
+    })
+    try {
+      const beforeCount = await prisma.lossClaim.count({ where: { tenantId, isManual: true } })
+      const response = await app.inject({
+        method: 'POST', url: '/api/loss-claims/manual', headers: { 'x-test-actor': 'chef' },
+        payload: {
+          items: [{ productId: highCostProduct.id, quantity: 1_000_000 }],
+          reason: '金额边界验证',
+        },
+      })
+      expect(response.statusCode).toBe(400)
+      expect(await prisma.lossClaim.count({ where: { tenantId, isManual: true } })).toBe(beforeCount)
+    } finally {
+      await prisma.inventorySnapshot.delete({ where: { id: snapshot.id } })
+      await prisma.product.delete({ where: { id: highCostProduct.id } })
+    }
+  })
+
   it('cannot include supplier B receipts in supplier A monthly statement', async () => {
     const month = new Date().toISOString().slice(0, 7)
     const statement = await app.inject({

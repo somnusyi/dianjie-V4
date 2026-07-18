@@ -76,6 +76,16 @@ const deliveryShipSchema = z.object({
   }).strict()).max(500).optional(),
 }).strict()
 
+const deliveryReceiveSchema = z.object({
+  items: z.array(z.object({
+    productId: z.string().min(1, 'productId 必填'),
+    receivedQty: z.number().nonnegative('实收数量不能为负').max(PURCHASE_QUANTITY_MAX, '实收数量超过系统上限'),
+  }).strict()).max(500, '单次最多 500 条收货明细').optional(),
+  evidenceImages: z.array(z.string().min(1, '证据图片地址不能为空')).max(9, '证据图片最多 9 张').optional(),
+  reason: z.string().optional(),
+  kind: z.enum(['ARRIVAL_SHORTAGE', 'ARRIVAL_DAMAGE']).optional(),
+}).strict()
+
 const orderListQuerySchema = z.object({
   status: z.enum(['DRAFT', 'SUBMITTED', 'CONFIRMED', 'DELIVERING', 'PENDING_CONFIRM', 'RECEIVED', 'COMPLETED', 'CANCELLED']).optional(),
   storeId: z.string().optional(),
@@ -1263,15 +1273,14 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // ── 门店确认收货（完全一致）──────────────────────
-  app.patch('/:id/receive', { preHandler: [(app as any).authenticate] }, async (req: any) => {
+  app.patch('/:id/receive', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
     const { tenantId, userId, role, storeId } = req.user
     const { id } = req.params as any
-    const { items: receivedItems, evidenceImages, reason, kind } = req.body as any  // [{ productId, receivedQty }] + 可选证据图 + 差异类型/原因
+    const parsedReceive = deliveryReceiveSchema.safeParse(req.body || {})
+    if (!parsedReceive.success) return reply.status(400).send({ error: parsedReceive.error.issues[0].message })
+    const { items: receivedItems, evidenceImages, reason, kind } = parsedReceive.data
     const lossReason = (typeof reason === 'string' && reason.trim()) ? reason.trim().slice(0, 30) : null
-    const lossKind = kind == null ? 'ARRIVAL_SHORTAGE' : String(kind)
-    if (!['ARRIVAL_SHORTAGE', 'ARRIVAL_DAMAGE'].includes(lossKind)) {
-      throw { statusCode: 400, message: '到货差异类型无效' }
-    }
+    const lossKind = kind ?? 'ARRIVAL_SHORTAGE'
 
     const findDuplicateReceiptResponse = async (deliveryOrderId?: string) => {
       const duplicateWhere: any = {
@@ -1335,10 +1344,14 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const delivery = order.deliveries[0]
     if (!delivery) throw { statusCode: 409, message: '未找到待收货的独立配送单' }
 
+    const receivedProductIds = (receivedItems || []).map(item => item.productId)
+    if (new Set(receivedProductIds).size !== receivedProductIds.length) {
+      throw { statusCode: 400, message: '同一商品不能重复提交多行实收数量' }
+    }
     const receivedMap = new Map<string, number>()
-    for (const ri of Array.isArray(receivedItems) ? receivedItems : []) {
+    for (const ri of receivedItems || []) {
       const item = delivery.items.find(i => i.productId === ri.productId)
-      const qty = Number(ri.receivedQty)
+      const qty = ri.receivedQty
       if (!item) throw { statusCode: 400, message: `商品 ${ri.productId} 不属于本次配送` }
       if (!Number.isFinite(qty) || qty < 0 || qty > Number(item.shippedQty) + 0.0001) {
         throw { statusCode: 400, message: `商品实收数量必须在 0 至 ${item.shippedQty} 之间` }

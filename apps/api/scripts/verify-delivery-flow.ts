@@ -118,6 +118,20 @@ async function main() {
     assert.equal(repeatedShip.body.deliveryId, firstShip.body.deliveryId, '发货重试必须返回同一配送单')
     assert.equal(repeatedShip.body.duplicated, true)
     assert.equal((await api(`/api/orders/${orderId}/deliver`, supplierToken, { method: 'PATCH', body: '{}' })).status, 200)
+    for (const payload of [
+      { items: [null] },
+      { items: [{ productId: product.id, receivedQty: '2' }] },
+      { items: [{ productId: product.id, receivedQty: 2 }, { productId: product.id, receivedQty: 1 }] },
+      { evidenceImages: [123] },
+      { unexpected: true },
+    ]) {
+      const invalidReceive = await api(`/api/orders/${orderId}/receive`, managerToken, {
+        method: 'PATCH', body: JSON.stringify(payload),
+      })
+      assert.equal(invalidReceive.status, 400, JSON.stringify(invalidReceive.body))
+    }
+    assert.equal(await prisma.receipt.count({ where: { deliveryOrderId: firstShip.body.deliveryId } }), 0)
+    assert.equal((await prisma.deliveryOrder.findUniqueOrThrow({ where: { id: firstShip.body.deliveryId } })).status, 'DELIVERED')
     const firstReceiveBody = JSON.stringify({ items: [{ productId: product.id, receivedQty: 2 }] })
     const [receiveA, receiveB] = await Promise.all([
       api(`/api/orders/${orderId}/receive`, managerToken, { method: 'PATCH', body: firstReceiveBody }),
@@ -201,7 +215,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, numericBounds: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, numericBounds: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))

@@ -165,6 +165,27 @@ async function main() {
     assert.equal(history.status, 200, JSON.stringify(history.body))
     assert.ok(history.body.some((row: any) => row.targetId === product.id || row.action.includes('批量')))
 
+    const decimalBoundaryMarker = Date.now()
+    const invalidSingle = await api('/api/products', token, {
+      method: 'POST',
+      body: JSON.stringify({ name: `数值上限单条-${decimalBoundaryMarker}`, price: 100_000_000 }),
+    })
+    assert.equal(invalidSingle.status, 400, JSON.stringify(invalidSingle.body))
+    const invalidBatch = await api('/api/products/batch', token, {
+      method: 'POST',
+      body: JSON.stringify({
+        filename: `verify-decimal-boundary-${decimalBoundaryMarker}.xlsx`,
+        items: [{ name: `数值上限批量-${decimalBoundaryMarker}`, minOrderQty: 100_000_000 }],
+      }),
+    })
+    assert.equal(invalidBatch.status, 201, JSON.stringify(invalidBatch.body))
+    assert.equal(invalidBatch.body.createdCount, 0, JSON.stringify(invalidBatch.body))
+    assert.equal(invalidBatch.body.failedCount, 1, JSON.stringify(invalidBatch.body))
+    batchIds.push(invalidBatch.body.batchId)
+    assert.equal(await prisma.product.count({
+      where: { tenantId: tenant.id, name: { contains: `数值上限` } },
+    }), 0)
+
     const batchCode = `VERIFY-BATCH-${Date.now()}`
     const batchCreate = await api('/api/products/batch', token, {
       method: 'POST',
@@ -456,7 +477,7 @@ async function main() {
     })
     assert.equal(unboundLogin.status, 200, JSON.stringify(unboundLogin.body))
     const unboundList = await api('/api/products?page=1&pageSize=20', unboundLogin.body.token)
-    assert.equal(unboundList.status, 403, JSON.stringify(unboundList.body))
+    assert.equal(unboundList.status, 401, JSON.stringify(unboundList.body))
 
     const clearAll = await api('/api/products/clear-all', token, {
       method: 'DELETE', body: JSON.stringify({ confirm: 'CLEAR_ALL' }),
@@ -471,6 +492,7 @@ async function main() {
       batchDisableApproval: true,
       concurrentDocumentNumbers: true,
       duplicateDisableRejected: true,
+      databaseDecimalBounds: true,
       batchPartialSuccessAtomic: true,
       batch500RowsMs,
       duplicateApprovalSerialized: true,

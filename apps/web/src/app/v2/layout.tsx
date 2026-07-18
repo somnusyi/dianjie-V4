@@ -7,6 +7,7 @@
 import { usePathname } from 'next/navigation'
 import { AuthGate } from '@/components/v2/auth-gate'
 import { Onboarding } from '@/components/v2/onboarding'
+import { rolesForV2Path } from '@/lib/v2-route-access'
 
 export default function V2Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() || ''
@@ -25,5 +26,6 @@ export default function V2Layout({ children }: { children: React.ReactNode }) {
   }
   // home 页才弹 onboarding (不打扰二级页)
   const isHome = /^\/v2\/[^/]+\/home\/?$/.test(pathname)
-  return <AuthGate>{children}{isHome && <Onboarding />}</AuthGate>
+  const requireRole = rolesForV2Path(pathname)
+  return <AuthGate requireRole={requireRole ? [...requireRole] : undefined}>{children}{isHome && <Onboarding />}</AuthGate>
 }

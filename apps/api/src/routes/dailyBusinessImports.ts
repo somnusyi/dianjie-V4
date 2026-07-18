@@ -1,5 +1,6 @@
 import { FastifyPluginAsync } from 'fastify'
 import { Prisma, prisma } from '@dianjie/db'
+import { z } from 'zod'
 import {
   calculateDeferredBomConsumptions,
   normalizeDishName,
@@ -11,6 +12,8 @@ import {
   type ImportIssue,
   type ParsedDailyFiles,
 } from '../services/dailyBusinessImport'
+import { isStoreScoped } from '../lib/auth-scope'
+import { estimatedStoreInventory } from '../services/storeInventory'
 
 const ALLOWED_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN', 'BOSS'])
 const SOURCE = 'daily_pos_upload'
@@ -18,6 +21,9 @@ const CONSUMPTION_SOURCE = 'daily_pos'
 const BOM_BACKFILL_SOURCE = 'daily_bom_backfill'
 const MAX_FILE_BYTES = 5 * 1024 * 1024
 const BOM_TASK_ROLES = new Set(['CHEF_DIRECTOR', 'CHEF', 'ADMIN', 'SUPER_ADMIN'])
+const CONTROL_CENTER_ROLES = new Set([
+  'MANAGER', 'KITCHEN_LEAD', 'CHEF', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN', 'BOSS',
+])
 
 type PreviewDishSale = {
   dishId: string
@@ -151,8 +157,25 @@ function chinaClock(now = new Date()) {
   }
 }
 
+function addUtcDays(dateText: string, days: number) {
+  const value = dateOnly(dateText)
+  value.setUTCDate(value.getUTCDate() + days)
+  return value.toISOString().slice(0, 10)
+}
+
+function dateRange(endDate: string, days: number) {
+  return Array.from({ length: days }, (_, index) => addUtcDays(endDate, index - days + 1))
+}
+
+function countByStatus(rows: Array<{ status: string }>) {
+  return rows.reduce<Record<string, number>>((result, row) => {
+    result[row.status] = (result[row.status] || 0) + 1
+    return result
+  }, {})
+}
+
 async function targetStore(user: any, requestedStoreId?: string | null) {
-  const isStoreRole = user.role === 'MANAGER' || user.role === 'KITCHEN_LEAD'
+  const isStoreRole = isStoreScoped(user.role)
   if (isStoreRole && requestedStoreId && requestedStoreId !== user.storeId) {
     throw Object.assign(new Error('只能操作当前账号绑定的门店'), { statusCode: 403 })
   }
@@ -417,6 +440,152 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
       state: confirmed ? 'CONFIRMED' : (isExpectedDate && new Date() >= clock.dueAt ? 'OVERDUE' : 'PENDING'),
       latest: latest ? publicImport(latest) : null,
       history: history.map(publicImport),
+    }
+  })
+
+  // 每日运营控制中心：把日报、销量、BOM 待办和门店预计库存放在同一份只读状态中。
+  // 页面只是角色视图，状态口径仍来自日报、BOM 和库存三个权威模块。
+  app.get('/control-center', auth, async (req: any, reply: any) => {
+    if (!CONTROL_CENTER_ROLES.has(req.user.role)) return reply.status(403).send({ error: '无权查看每日运营控制中心' })
+    const parsedQuery = z.object({
+      days: z.coerce.number().int().min(1).max(31).default(7),
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      storeId: z.string().trim().min(1).optional(),
+    }).safeParse(req.query || {})
+    if (!parsedQuery.success) return reply.status(400).send({ error: parsedQuery.error.issues[0].message })
+
+    try {
+      const clock = chinaClock()
+      const endDate = parsedQuery.data.endDate || clock.expectedBusinessDate
+      dateOnly(endDate)
+      if (endDate > clock.expectedBusinessDate) {
+        return reply.status(400).send({ error: '运营控制中心只能查看已结束的营业日' })
+      }
+      const dates = dateRange(endDate, parsedQuery.data.days)
+      const start = dateOnly(dates[0])
+      const end = dateOnly(endDate)
+
+      let stores: Array<{ id: string; name: string; no: string }>
+      if (isStoreScoped(req.user.role)) {
+        const store = await targetStore(req.user, parsedQuery.data.storeId)
+        stores = [{ id: store.id, name: store.name, no: store.no }]
+      } else if (parsedQuery.data.storeId) {
+        const store = await targetStore(req.user, parsedQuery.data.storeId)
+        stores = [{ id: store.id, name: store.name, no: store.no }]
+      } else {
+        stores = await prisma.store.findMany({
+          where: { tenantId: req.user.tenantId, status: 'ENABLED' },
+          select: { id: true, name: true, no: true },
+          orderBy: [{ no: 'asc' }, { id: 'asc' }],
+        })
+      }
+      const storeIds = stores.map(store => store.id)
+      if (storeIds.length === 0) {
+        return {
+          generatedAt: new Date().toISOString(), expectedBusinessDate: clock.expectedBusinessDate,
+          dueAt: clock.dueAt.toISOString(), dates, summary: { storeCount: 0, missingDays: 0, pendingBomTasks: 0, negativeStockSkus: 0 }, stores: [],
+        }
+      }
+
+      const [imports, deferredTasks, inventoryByStore] = await Promise.all([
+        prisma.dailyBusinessImport.findMany({
+          where: { tenantId: req.user.tenantId, storeId: { in: storeIds }, businessDate: { gte: start, lte: end } },
+          orderBy: [{ businessDate: 'desc' }, { revision: 'desc' }, { createdAt: 'desc' }],
+          select: {
+            id: true, storeId: true, businessDate: true, revision: true, status: true,
+            grossAmount: true, discountAmount: true, netRevenue: true, orderCount: true,
+            dishRowCount: true, previewData: true, blockingIssues: true, warningIssues: true,
+            businessFileName: true, salesFileName: true, confirmedAt: true, createdAt: true,
+          },
+        }),
+        prisma.deferredBomTask.findMany({
+          where: { tenantId: req.user.tenantId, storeId: { in: storeIds }, businessDate: { gte: start, lte: end } },
+          select: { dailyBusinessImportId: true, storeId: true, businessDate: true, status: true },
+        }),
+        Promise.all(stores.map(async store => {
+          const inventory = await estimatedStoreInventory(req.user.tenantId, store.id)
+          return [store.id, inventory] as const
+        })),
+      ])
+
+      const importsByStoreDate = new Map<string, typeof imports>()
+      for (const row of imports) {
+        const key = `${row.storeId}:${row.businessDate.toISOString().slice(0, 10)}`
+        const values = importsByStoreDate.get(key) || []
+        values.push(row)
+        importsByStoreDate.set(key, values)
+      }
+      const tasksByImport = new Map<string, Array<{ status: string }>>()
+      for (const task of deferredTasks) {
+        const values = tasksByImport.get(task.dailyBusinessImportId) || []
+        values.push(task)
+        tasksByImport.set(task.dailyBusinessImportId, values)
+      }
+      const inventoryMap = new Map(inventoryByStore)
+      const now = new Date()
+      const storeRows = stores.map(store => {
+        const inventory = inventoryMap.get(store.id)!
+        const rows = [...dates].reverse().map(businessDate => {
+          const versions = importsByStoreDate.get(`${store.id}:${businessDate}`) || []
+          const latest = versions[0] || null
+          const confirmed = versions.find(row => row.status === 'CONFIRMED') || null
+          const taskCounts = confirmed ? countByStatus(tasksByImport.get(confirmed.id) || []) : {}
+          const preview = (confirmed?.previewData || latest?.previewData || {}) as any
+          const missingState = businessDate < clock.expectedBusinessDate || now >= clock.dueAt ? 'OVERDUE' : 'PENDING'
+          return {
+            businessDate,
+            state: confirmed ? 'CONFIRMED' : (latest ? latest.status : missingState),
+            revision: confirmed?.revision || latest?.revision || null,
+            correctionPending: Boolean(confirmed && latest && latest.revision > confirmed.revision && latest.status !== 'SUPERSEDED'),
+            metrics: confirmed ? {
+              grossAmount: Number(confirmed.grossAmount), discountAmount: Number(confirmed.discountAmount),
+              netRevenue: Number(confirmed.netRevenue), orderCount: confirmed.orderCount,
+            } : null,
+            dishSaleCount: Array.isArray(preview?.dishSales) ? preview.dishSales.length : (confirmed?.dishRowCount || latest?.dishRowCount || 0),
+            consumptionSkuCount: Array.isArray(preview?.consumptions) ? preview.consumptions.length : 0,
+            deferredBom: {
+              pending: taskCounts.PENDING || 0,
+              backfilled: taskCounts.BACKFILLED || 0,
+              superseded: taskCounts.SUPERSEDED || 0,
+            },
+            issueCount: Array.isArray(latest?.blockingIssues) ? latest!.blockingIssues.length : 0,
+            warningCount: Array.isArray(confirmed?.warningIssues || latest?.warningIssues)
+              ? ((confirmed?.warningIssues || latest?.warningIssues) as any[]).length
+              : 0,
+            files: latest ? { business: latest.businessFileName, sales: latest.salesFileName } : null,
+            confirmedAt: confirmed?.confirmedAt?.toISOString() || null,
+          }
+        })
+        const inventoryItems = inventory.items || []
+        return {
+          store,
+          inventory: {
+            ...inventory.summary,
+            negativeStockCount: inventoryItems.filter((item: any) => item.hasDataIssue).length,
+            expiringCount: inventoryItems.filter((item: any) => item.isExpired || item.isExpiringSoon).length,
+          },
+          rows,
+        }
+      })
+      const allRows = storeRows.flatMap(store => store.rows)
+      return {
+        generatedAt: new Date().toISOString(),
+        expectedBusinessDate: clock.expectedBusinessDate,
+        dueAt: clock.dueAt.toISOString(),
+        dates,
+        summary: {
+          storeCount: stores.length,
+          missingDays: allRows.filter(row => row.state === 'PENDING' || row.state === 'OVERDUE').length,
+          overdueDays: allRows.filter(row => row.state === 'OVERDUE').length,
+          pendingBomTasks: allRows.reduce((sum, row) => sum + row.deferredBom.pending, 0),
+          negativeStockSkus: storeRows.reduce((sum, row) => sum + row.inventory.negativeStockCount, 0),
+          baselineIssueStores: storeRows.filter(row => row.inventory.status !== 'AVAILABLE' || row.inventory.unmatchedCount > 0 || row.inventory.normalizationPendingCount > 0).length,
+        },
+        stores: storeRows,
+      }
+    } catch (error: any) {
+      req.log.error({ error }, 'daily operations control center failed')
+      return reply.status(error.statusCode || 400).send({ error: error.message || '运营控制中心加载失败' })
     }
   })
 

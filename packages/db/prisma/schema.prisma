@@ -23,44 +23,45 @@ model Tenant {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
-  users                     User[]
-  stores                    Store[]
-  suppliers                 Supplier[]
-  products                  Product[]
-  supplierProductCategories SupplierProductCategory[]
-  receipts                  Receipt[]
-  reconciliations           Reconciliation[]
-  payments                  Payment[]
-  paymentSchedules          PaymentSchedule[]
-  opLogs                    OpLog[]
-  purchaseOrders            PurchaseOrder[]
-  purchaseOrderRevisions    PurchaseOrderRevision[]
-  purchaseOrderEvents       PurchaseOrderEvent[]
-  deliveryOrders            DeliveryOrder[]
-  deliveryOrderEvents       DeliveryOrderEvent[]
-  businessSequences         BusinessSequence[]
-  lossClaims                LossClaim[]
-  paymentRules              PaymentRule[]
-  consumptions              StockConsumption[]
-  expenses                  StoreExpense[]
-  cashAccounts              CashAccount[]
-  cashTransactions          CashTransaction[]
-  notifications             Notification[]
-  invoices                  Invoice[]
-  invoicePayments           InvoicePayment[]
-  capitalProjects           CapitalProject[]
-  documents                 Document[]
-  productBatches            ProductBatch[]
-  stockMovements            SupplierStockMovement[]
-  supplierStockBatches      SupplierStockBatch[]
+  users                         User[]
+  stores                        Store[]
+  suppliers                     Supplier[]
+  products                      Product[]
+  supplierProductCategories     SupplierProductCategory[]
+  receipts                      Receipt[]
+  reconciliations               Reconciliation[]
+  payments                      Payment[]
+  paymentSchedules              PaymentSchedule[]
+  opLogs                        OpLog[]
+  purchaseOrders                PurchaseOrder[]
+  purchaseOrderRevisions        PurchaseOrderRevision[]
+  purchaseOrderEvents           PurchaseOrderEvent[]
+  deliveryOrders                DeliveryOrder[]
+  deliveryOrderEvents           DeliveryOrderEvent[]
+  businessSequences             BusinessSequence[]
+  lossClaims                    LossClaim[]
+  paymentRules                  PaymentRule[]
+  consumptions                  StockConsumption[]
+  expenses                      StoreExpense[]
+  cashAccounts                  CashAccount[]
+  cashTransactions              CashTransaction[]
+  notifications                 Notification[]
+  invoices                      Invoice[]
+  invoicePayments               InvoicePayment[]
+  capitalProjects               CapitalProject[]
+  documents                     Document[]
+  productBatches                ProductBatch[]
+  stockMovements                SupplierStockMovement[]
+  supplierStockBatches          SupplierStockBatch[]
   supplierStockBatchAllocations SupplierStockBatchAllocation[]
-  supplierStockReservations SupplierStockReservation[]
-  inventorySnapshots        InventorySnapshot[]
-  accountingPeriods         AccountingPeriod[]
-  pettyCash                 PettyCash[]
-  payrolls                  Payroll[]
-  dailyBusinessImports      DailyBusinessImport[]
-  deferredBomTasks          DeferredBomTask[]
+  supplierStockReservations     SupplierStockReservation[]
+  inventorySnapshots            InventorySnapshot[]
+  inventoryCounts               InventoryCount[]
+  accountingPeriods             AccountingPeriod[]
+  pettyCash                     PettyCash[]
+  payrolls                      Payroll[]
+  dailyBusinessImports          DailyBusinessImport[]
+  deferredBomTasks              DeferredBomTask[]
 
   @@map("tenants")
 }
@@ -116,6 +117,10 @@ model User {
   createdDailyBusinessImports   DailyBusinessImport[]   @relation("DailyBusinessImportCreatedBy")
   confirmedDailyBusinessImports DailyBusinessImport[]   @relation("DailyBusinessImportConfirmedBy")
   resolvedDeferredBomTasks      DeferredBomTask[]       @relation("DeferredBomTaskResolvedBy")
+  createdInventoryCounts        InventoryCount[]        @relation("InventoryCountCreatedBy")
+  submittedInventoryCounts      InventoryCount[]        @relation("InventoryCountSubmittedBy")
+  confirmedInventoryCounts      InventoryCount[]        @relation("InventoryCountConfirmedBy")
+  reversedInventoryCounts       InventoryCount[]        @relation("InventoryCountReversedBy")
 
   @@unique([tenantId, email])
   @@unique([tenantId, phone])
@@ -593,6 +598,7 @@ model Store {
   pettyCash            PettyCash[]
   payrolls             Payroll[]
   inventorySnapshots   InventorySnapshot[]
+  inventoryCounts      InventoryCount[]
   dailyBusinessImports DailyBusinessImport[]
   deferredBomTasks     DeferredBomTask[]
 
@@ -653,22 +659,22 @@ model Supplier {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant            Tenant                     @relation(fields: [tenantId], references: [id])
-  users             User[]                     @relation("SupplierUsers")
-  products          Product[]
-  receipts          Receipt[]
-  reconciliations   Reconciliation[]
-  payments          Payment[]
-  paymentSchedules  PaymentSchedule[]
-  purchaseOrders    PurchaseOrder[]
-  deliveryOrders    DeliveryOrder[]
-  lossClaims        LossClaim[]
-  invoices          Invoice[]
-  stockMovements    SupplierStockMovement[]
-  stockBatches      SupplierStockBatch[]
+  tenant                Tenant                         @relation(fields: [tenantId], references: [id])
+  users                 User[]                         @relation("SupplierUsers")
+  products              Product[]
+  receipts              Receipt[]
+  reconciliations       Reconciliation[]
+  payments              Payment[]
+  paymentSchedules      PaymentSchedule[]
+  purchaseOrders        PurchaseOrder[]
+  deliveryOrders        DeliveryOrder[]
+  lossClaims            LossClaim[]
+  invoices              Invoice[]
+  stockMovements        SupplierStockMovement[]
+  stockBatches          SupplierStockBatch[]
   stockBatchAllocations SupplierStockBatchAllocation[]
-  stockReservations SupplierStockReservation[]
-  productCategories SupplierProductCategory[]
+  stockReservations     SupplierStockReservation[]
+  productCategories     SupplierProductCategory[]
 
   @@unique([tenantId, no])
   @@map("suppliers")
@@ -704,8 +710,8 @@ model Product {
   batchId String?
   batch   ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
 
-  tenant                 Tenant                     @relation(fields: [tenantId], references: [id])
-  supplier               Supplier?                  @relation(fields: [supplierId], references: [id])
+  tenant                 Tenant                         @relation(fields: [tenantId], references: [id])
+  supplier               Supplier?                      @relation(fields: [supplierId], references: [id])
   receiptItems           ReceiptItem[]
   purchaseOrderItems     PurchaseOrderItem[]
   deliveryOrderItems     DeliveryOrderItem[]
@@ -717,6 +723,7 @@ model Product {
   stockReservations      SupplierStockReservation[]
   dishRecipes            DishRecipe[]
   inventorySnapshotItems InventorySnapshotItem[]
+  inventoryCountItems    InventoryCountItem[]
 
   @@unique([tenantId, code])
   @@index([batchId])
@@ -1969,11 +1976,11 @@ model SupplierStockMovement {
   createdById String // 操作人 userId
   createdAt   DateTime @default(now())
 
-  tenant    Tenant   @relation(fields: [tenantId], references: [id])
-  supplier  Supplier @relation(fields: [supplierId], references: [id])
-  product   Product  @relation(fields: [productId], references: [id])
-  createdBy User     @relation(fields: [createdById], references: [id])
-  sourceBatch SupplierStockBatch? @relation("SupplierStockBatchSourceMovement")
+  tenant           Tenant                         @relation(fields: [tenantId], references: [id])
+  supplier         Supplier                       @relation(fields: [supplierId], references: [id])
+  product          Product                        @relation(fields: [productId], references: [id])
+  createdBy        User                           @relation(fields: [createdById], references: [id])
+  sourceBatch      SupplierStockBatch?            @relation("SupplierStockBatchSourceMovement")
   batchAllocations SupplierStockBatchAllocation[]
 
   @@index([supplierId, productId, createdAt])
@@ -2001,11 +2008,11 @@ model SupplierStockBatch {
   createdAt        DateTime               @default(now())
   updatedAt        DateTime               @updatedAt
 
-  tenant         Tenant                  @relation(fields: [tenantId], references: [id])
-  supplier       Supplier                @relation(fields: [supplierId], references: [id])
-  product        Product                 @relation(fields: [productId], references: [id])
-  sourceMovement SupplierStockMovement?  @relation("SupplierStockBatchSourceMovement", fields: [sourceMovementId], references: [id], onDelete: Restrict)
-  createdBy      User?                   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  tenant         Tenant                         @relation(fields: [tenantId], references: [id])
+  supplier       Supplier                       @relation(fields: [supplierId], references: [id])
+  product        Product                        @relation(fields: [productId], references: [id])
+  sourceMovement SupplierStockMovement?         @relation("SupplierStockBatchSourceMovement", fields: [sourceMovementId], references: [id], onDelete: Restrict)
+  createdBy      User?                          @relation(fields: [createdById], references: [id], onDelete: SetNull)
   allocations    SupplierStockBatchAllocation[]
 
   @@unique([tenantId, productId, batchNo])
@@ -2164,6 +2171,89 @@ model InventorySnapshotItem {
   @@index([snapshotId, sortOrder])
   @@index([productId])
   @@map("inventory_snapshot_items")
+}
+
+enum InventoryCountStatus {
+  DRAFT
+  COUNTING
+  REVIEWING
+  CONFIRMED
+  CANCELLED
+  REVERSED
+}
+
+// 门店月度在线盘点。盘点单是不可变业务事实，确认后衍生 InventorySnapshot 可信基准。
+// 盘点差异只属于门店内部库存，不创建供应商报损或应付调整。
+model InventoryCount {
+  id                   String               @id @default(cuid())
+  tenantId             String
+  storeId              String
+  no                   String
+  countDate            DateTime             @db.Date
+  revision             Int                  @default(1)
+  status               InventoryCountStatus @default(DRAFT)
+  rowVersion           Int                  @default(0)
+  snapshotId           String?              @unique
+  itemCount            Int                  @default(0)
+  countedCount         Int                  @default(0)
+  differenceCount      Int                  @default(0)
+  totalBookValue       Decimal              @default(0) @db.Decimal(14, 3)
+  totalCountedValue    Decimal              @default(0) @db.Decimal(14, 3)
+  totalDifferenceValue Decimal              @default(0) @db.Decimal(14, 3)
+  note                 String?
+  reversalReason       String?
+  createdById          String
+  submittedById        String?
+  confirmedById        String?
+  reversedById         String?
+  submittedAt          DateTime?
+  confirmedAt          DateTime?
+  reversedAt           DateTime?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+
+  tenant      Tenant               @relation(fields: [tenantId], references: [id])
+  store       Store                @relation(fields: [storeId], references: [id])
+  createdBy   User                 @relation("InventoryCountCreatedBy", fields: [createdById], references: [id])
+  submittedBy User?                @relation("InventoryCountSubmittedBy", fields: [submittedById], references: [id])
+  confirmedBy User?                @relation("InventoryCountConfirmedBy", fields: [confirmedById], references: [id])
+  reversedBy  User?                @relation("InventoryCountReversedBy", fields: [reversedById], references: [id])
+  items       InventoryCountItem[]
+
+  @@unique([tenantId, no])
+  @@unique([storeId, countDate, revision])
+  @@index([tenantId, storeId, status, countDate])
+  @@map("inventory_counts")
+}
+
+model InventoryCountItem {
+  id                  String   @id @default(cuid())
+  inventoryCountId    String
+  productId           String
+  productCodeSnapshot String
+  productNameSnapshot String
+  productSpecSnapshot String?
+  categorySnapshot    String?
+  unitSnapshot        String
+  bookQuantity        Decimal  @db.Decimal(14, 6)
+  countedQuantity     Decimal? @db.Decimal(14, 6)
+  averageUnitCost     Decimal  @db.Decimal(14, 4)
+  differenceQuantity  Decimal? @db.Decimal(14, 6)
+  differenceAmount    Decimal? @db.Decimal(14, 3)
+  reasonCode          String?  @db.VarChar(40)
+  reasonNote          String?
+  evidenceKeys        String[] @default([])
+  sortOrder           Int
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  inventoryCount InventoryCount @relation(fields: [inventoryCountId], references: [id], onDelete: Cascade)
+  product        Product        @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([inventoryCountId, productId])
+  @@index([inventoryCountId, sortOrder])
+  @@index([productId])
+  @@map("inventory_count_items")
 }
 
 // ── 门店费用录入（利润表用）────────────────────────

@@ -160,6 +160,16 @@ export default function ChefDirectorHomePage() {
 
       {/* 菜品 / 配方 (BOM) */}
       <Section title="菜品 / 配方">
+        <a href="/v2/operations-control" className="block bg-white rounded-card border border-border p-3 mb-2">
+          <div className="flex items-center gap-3">
+            <span className="w-10 h-10 rounded-md bg-green-bg text-green-fg flex items-center justify-center text-h2">◎</span>
+            <div className="flex-1">
+              <div className="text-h2">每日运营控制中心</div>
+              <p className="text-caption text-gray2 mt-0.5">跨店检查日报、BOM 回补与库存数据质量</p>
+            </div>
+            <span className="text-gray3">›</span>
+          </div>
+        </a>
         <a href="/v2/chef-director/bom" className="block bg-white rounded-card border border-border p-3">
           <div className="flex items-center gap-3">
             <span className="w-10 h-10 rounded-md bg-amber-bg text-amber-fg flex items-center justify-center text-h2">🍲</span>

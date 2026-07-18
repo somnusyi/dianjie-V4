@@ -107,6 +107,14 @@ export default function ChefInventoryPage() {
         </div>
       </header>
 
+      <div className="mx-4 mt-2">
+        <a href="/v2/inventory-counts" className="flex items-center gap-3 rounded-card border border-amber/30 bg-amber/10 px-3 py-3">
+          <span className="w-9 h-9 rounded-full bg-amber text-white flex items-center justify-center">盘</span>
+          <div className="flex-1"><div className="text-button text-amber-fg">月度在线盘点</div><div className="text-micro text-gray2">全品项录入 · 差异原因与图片 · 确认后校准库存</div></div>
+          <span className="text-gray3">›</span>
+        </a>
+      </div>
+
       <div className="mt-3">
         <GlanceStrip
           label="预计库存金额"

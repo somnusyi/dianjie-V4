@@ -144,9 +144,14 @@ type EstimatedEvent = {
  * 从最近一次闭店实物盘点向后滚动门店预计库存。
  * 这是账面估算，不冒充实时实物库存；下次盘点会重新建立可信基准。
  */
-export async function estimatedStoreInventory(tenantId: string, storeId: string) {
+export async function estimatedStoreInventory(tenantId: string, storeId: string, asOfDate?: string) {
+  const asOfDay = asOfDate ? new Date(`${asOfDate}T00:00:00.000Z`) : null
+  if (asOfDay && (Number.isNaN(asOfDay.getTime()) || asOfDay.toISOString().slice(0, 10) !== asOfDate)) {
+    throw Object.assign(new Error('库存截止日期无效'), { statusCode: 400 })
+  }
+  const asOfEnd = asOfDate ? new Date(`${asOfDate}T23:59:59.999Z`) : null
   const snapshot = await prisma.inventorySnapshot.findFirst({
-    where: { tenantId, storeId },
+    where: { tenantId, storeId, ...(asOfDay ? { snapshotDate: { lte: asOfDay } } : {}) },
     orderBy: [{ snapshotDate: 'desc' }, { createdAt: 'desc' }],
     include: { items: { include: { product: { select: { unit: true } } } } },
   })
@@ -155,7 +160,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string)
   const snapshotDateText = dateOnly(snapshot.snapshotDate)
   const openingDateText = dayjs(snapshotDateText).add(1, 'day').format('YYYY-MM-DD')
   const openingDate = new Date(`${openingDateText}T00:00:00.000Z`)
-  const monthStart = dayjs().startOf('month').toDate()
+  const monthStart = dayjs(asOfDate || undefined).startOf('month').toDate()
   const validReceiptStatuses = ['CONFIRMED', 'ACCOUNTED'] as const
   const [receiptItems, consumptions, manualLossItems] = await Promise.all([
     prisma.receiptItem.findMany({
@@ -163,7 +168,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string)
         receipt: {
           tenantId, storeId,
           status: { in: [...validReceiptStatuses] },
-          deliveryDate: { gte: openingDate },
+          deliveryDate: { gte: openingDate, ...(asOfDay ? { lte: asOfDay } : {}) },
         },
       },
       select: {
@@ -172,7 +177,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string)
       },
     }),
     prisma.stockConsumption.findMany({
-      where: { tenantId, storeId, date: { gte: openingDate } },
+      where: { tenantId, storeId, date: { gte: openingDate, ...(asOfDay ? { lte: asOfDay } : {}) } },
       select: { productId: true, quantity: true, date: true },
     }),
     prisma.lossClaimItem.findMany({
@@ -180,7 +185,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string)
         lossClaim: {
           tenantId, storeId, isManual: true,
           status: { in: ['APPROVED', 'AUTO_APPROVED', 'RESOLVED'] },
-          createdAt: { gte: openingDate },
+          createdAt: { gte: openingDate, ...(asOfEnd ? { lte: asOfEnd } : {}) },
         },
       },
       select: { productId: true, lossQty: true, lossClaim: { select: { createdAt: true } } },
@@ -273,7 +278,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string)
     if (!nearestExpiry.has(item.productId)) nearestExpiry.set(item.productId, item.expiryDate!)
   }
 
-  const today = dayjs().startOf('day')
+  const today = dayjs(asOfDate || undefined).startOf('day')
   const rows = products.map(product => {
     const slot = slots.get(product.id)!
     const expiry = nearestExpiry.get(product.id) || null
@@ -295,7 +300,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string)
       hasDataIssue: stock < -0.0001,
       inventoryBasis: 'ESTIMATED_FROM_PHYSICAL_COUNT' as const,
       openingDate: openingDateText,
-      asOf: new Date().toISOString(),
+      asOf: asOfEnd?.toISOString() || new Date().toISOString(),
       baselineItemCount: snapshot.itemCount,
       baselineMatchedCount: snapshot.matchedCount,
       estimateIncomplete: snapshot.matchedCount < snapshot.itemCount,
@@ -307,7 +312,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string)
       status: 'AVAILABLE' as const,
       basis: 'ESTIMATED_FROM_PHYSICAL_COUNT' as const,
       isRealtime: false as const,
-      asOf: new Date().toISOString(),
+      asOf: asOfEnd?.toISOString() || new Date().toISOString(),
       openingDate: openingDateText,
       totalValue: rows.reduce((sum, row) => sum + row.inventoryValue, 0),
       itemCount: rows.length,

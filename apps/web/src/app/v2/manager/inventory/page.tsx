@@ -100,6 +100,14 @@ export default function ManagerInventoryPage() {
         <UserMenu />
       </header>
 
+      <div className="mx-4 mt-3">
+        <a href="/v2/inventory-counts" className="flex items-center gap-3 rounded-card border border-amber/30 bg-amber/10 px-3 py-3">
+          <span className="w-9 h-9 rounded-full bg-amber text-white flex items-center justify-center">盘</span>
+          <div className="flex-1"><div className="text-button text-amber-fg">月度在线盘点</div><div className="text-micro text-gray2">创建、录入、确认或冲销盘点单</div></div>
+          <span className="text-gray3">›</span>
+        </a>
+      </div>
+
       {error ? (
         <div className="m-4 rounded-card border border-red/30 bg-red-bg p-4 text-body text-red-fg">库存读取失败：{error}</div>
       ) : !data ? (

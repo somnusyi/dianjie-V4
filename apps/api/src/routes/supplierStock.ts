@@ -61,6 +61,13 @@ const inboundSchema = z.object({
   items:     z.array(inboundItemSchema).min(1).max(500),
   source:    z.enum(['MANUAL', 'EXCEL']).default('MANUAL'),
   reason:    z.string().trim().max(120).optional(),  // 整批理由
+}).superRefine((value, ctx) => {
+  const customBatchKeys = value.items
+    .filter(item => item.batchNo)
+    .map(item => `${item.productId}\u0000${item.batchNo}`)
+  if (new Set(customBatchKeys).size !== customBatchKeys.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['items'], message: '同一商品不能重复提交相同批次号' })
+  }
 })
 
 const adjustSchema = z.object({
@@ -341,6 +348,20 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
     try {
       await prisma.$transaction(async (tx) => {
         const balances = await lockSupplierProducts(tx, ctx, productIds)
+        const customBatches = items.filter((item): item is typeof item & { batchNo: string } => Boolean(item.batchNo))
+        if (customBatches.length > 0) {
+          const existingBatch = await tx.supplierStockBatch.findFirst({
+            where: {
+              tenantId: ctx.tenantId,
+              supplierId: ctx.supplierId,
+              OR: customBatches.map(item => ({ productId: item.productId, batchNo: item.batchNo })),
+            },
+            select: { batchNo: true },
+          })
+          if (existingBatch) {
+            throw Object.assign(new Error(`批次号已存在：${existingBatch.batchNo}`), { statusCode: 409 })
+          }
+        }
         for (const it of items) {
           const newStock = balances.get(it.productId)!.plus(it.qty)
           if (newStock.greaterThan(99_999_999.99)) {

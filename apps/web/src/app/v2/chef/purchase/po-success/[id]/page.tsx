@@ -271,13 +271,6 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
             {po.chefAckAt ? '重发验收单' : '📷 发验收单'}
           </button>
         )}
-        {/* 验收后「补报短量」入口 — 一直开放, 支持多轮 (2026-06 客户要求) */}
-        {(po.status === 'RECEIVED' || po.status === 'COMPLETED') && (
-          <button onClick={() => router.push(`/v2/chef/purchase/${po.id}/report-loss`)}
-                  className="flex-1 py-3 bg-white border border-amber text-amber-fg rounded-cta text-button">
-            补报短量
-          </button>
-        )}
         {!isPendingConfirm && po.status !== 'CANCELLED' && po.status !== 'SUBMITTED' && po.status !== 'DELIVERING' && (
           <button onClick={() => router.push('/v2/chef/purchase/new')} className="flex-1 py-3 bg-ink text-white rounded-cta text-button">
             再发一单

@@ -11,9 +11,9 @@
  *
  * 提供原子函数:
  *   - createVoucher({...}) : 创建并落库, 返回凭证 ID
- *   - generateNo(tenantId, date): 生成 PZ-YYYYMM-NNNN 编号
+ *   - nextVoucherNo(tx, tenantId, date): 事务内生成 PZ-YYYYMM-NNNN 编号
  */
-import { prisma } from '@dianjie/db'
+import { Prisma, prisma } from '@dianjie/db'
 import { assertPeriodOpen, shiftDateIfLocked } from '../accountingPeriod'
 
 export interface VoucherEntryInput {
@@ -83,18 +83,39 @@ async function resolveVoucherFailures(opts: CreateVoucherOpts): Promise<void> {
   }
 }
 
-/** 生成凭证号 PZ-YYYYMM-NNNN, 按月递增. 并发安全: 用最大号 + 1 取号 (单次), 撞 unique 重试 */
-async function generateNo(tenantId: string, date: Date): Promise<string> {
+/**
+ * 生成凭证号 PZ-YYYYMM-NNNN。
+ *
+ * 编号和凭证必须在同一个数据库事务中创建。BusinessSequence 的唯一键与
+ * upsert increment 负责串行分配号码；历史最大号仅用于首次建立/修复序列下限。
+ */
+async function nextVoucherNo(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  date: Date,
+): Promise<string> {
   const ym = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}`
   const prefix = `PZ-${ym}-`
-  // 用 max(no) 而不是 count, 避免删除后号码回退
-  const last = await prisma.voucher.findFirst({
+  const last = await tx.voucher.findFirst({
     where: { tenantId, no: { startsWith: prefix } },
     orderBy: { no: 'desc' },
     select: { no: true },
   })
-  const lastSeq = last ? parseInt(last.no.slice(-4)) || 0 : 0
-  return `${prefix}${String(lastSeq + 1).padStart(4, '0')}`
+  const parsed = Number(last?.no.slice(prefix.length) || 0)
+  const floor = Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0
+  if (floor > 0) {
+    await tx.businessSequence.updateMany({
+      where: { tenantId, scope: 'VOUCHER', period: ym, value: { lt: floor } },
+      data: { value: floor },
+    })
+  }
+  const sequence = await tx.businessSequence.upsert({
+    where: { tenantId_scope_period: { tenantId, scope: 'VOUCHER', period: ym } },
+    create: { tenantId, scope: 'VOUCHER', period: ym, value: Math.max(1, floor + 1) },
+    update: { value: { increment: 1 } },
+    select: { value: true },
+  })
+  return `${prefix}${String(sequence.value).padStart(4, '0')}`
 }
 
 /**
@@ -144,36 +165,49 @@ export async function createVoucher(opts: CreateVoucherOpts): Promise<string | n
     return null  // 全 0 不建
   }
 
-  // 最多 3 次重试 (撞凭证号 unique 或 sourceId unique 时)
+  // 最多 3 次重试，兼容序列启用前仍可能并发写入的旧进程。
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const no = await generateNo(tenantId, date)
-      const now = new Date()
-      const voucher = await prisma.voucher.create({
-        data: {
-          tenantId, no, date, summary, word,
-          sourceType, sourceId,
-          totalDebit, totalCredit,
-          // BUG#8: autoPost=true 时直接 POSTED, 关账不挡路
-          status: autoPost ? 'POSTED' : 'DRAFT',
-          postedAt: autoPost ? now : null,
-          postedById: autoPost ? createdById : null,
-          createdById,
-          entries: {
-            create: entries.map((e, i) => ({
-              lineNo: i + 1,
-              summary: e.summary || summary,
-              accountCode: e.accountCode,
-              accountName: e.accountName,
-              debit: Number(e.debit || 0),
-              credit: Number(e.credit || 0),
-            })),
+      const result = await prisma.$transaction(async tx => {
+        // 同一来源先串行，再在锁内重查，避免并发请求浪费号码或触发 source unique。
+        if (sourceType && sourceId) {
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`voucher-source:${tenantId}:${sourceType}:${sourceId}`}))::text AS locked`
+          const existing = await tx.voucher.findFirst({
+            where: { tenantId, sourceType, sourceId },
+            select: { id: true },
+          })
+          if (existing) return { id: existing.id, duplicated: true }
+        }
+
+        const no = await nextVoucherNo(tx, tenantId, date)
+        const now = new Date()
+        const voucher = await tx.voucher.create({
+          data: {
+            tenantId, no, date, summary, word,
+            sourceType, sourceId,
+            totalDebit, totalCredit,
+            // BUG#8: autoPost=true 时直接 POSTED, 关账不挡路
+            status: autoPost ? 'POSTED' : 'DRAFT',
+            postedAt: autoPost ? now : null,
+            postedById: autoPost ? createdById : null,
+            createdById,
+            entries: {
+              create: entries.map((e, i) => ({
+                lineNo: i + 1,
+                summary: e.summary || summary,
+                accountCode: e.accountCode,
+                accountName: e.accountName,
+                debit: Number(e.debit || 0),
+                credit: Number(e.credit || 0),
+              })),
+            },
           },
-        },
-        select: { id: true },
+          select: { id: true },
+        })
+        return { id: voucher.id, duplicated: false }
       })
       await resolveVoucherFailures(opts)
-      return voucher.id
+      return result.id
     } catch (e: any) {
       // P2002 = unique violation
       if (e?.code !== 'P2002') {

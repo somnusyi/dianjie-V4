@@ -252,10 +252,12 @@ describe('supplier order to receipt flow (integration)', () => {
 
     const resolve = await app.inject({
       method: 'PATCH', url: `/api/loss-claims/${claim.id}/resolve`,
-      headers: { 'x-test-actor': 'admin' }, payload: { finalDeductAmount: 0, note: '原差异不成立' },
+      headers: { 'x-test-actor': 'admin' }, payload: { finalDeductAmount: 5, note: '最终确认部分差异' },
     })
     expect(resolve.statusCode).toBe(200)
-    expect(Number((await prisma.paymentSchedule.findUniqueOrThrow({ where: { receiptId: receipt.id } })).amount)).toBe(60)
+    expect(Number((await prisma.paymentSchedule.findUniqueOrThrow({ where: { receiptId: receipt.id } })).amount)).toBe(55)
+    expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).stock)).toBe(4)
+    expect(await prisma.supplierStockMovement.count({ where: { tenantId, sourceType: 'LossClaim' } })).toBe(0)
 
     const lateClaimResponse = await app.inject({
       method: 'POST', url: '/api/loss-claims', headers: { 'x-test-actor': 'chef' },
@@ -268,42 +270,9 @@ describe('supplier order to receipt flow (integration)', () => {
         items: [{ productId, receivedQty: 4 }],
       },
     })
-    expect(lateClaimResponse.statusCode).toBe(200)
-    const lateClaim = lateClaimResponse.json()
-    expect(lateClaim).toMatchObject({
-      receiptId: receipt.id,
-      deliveryOrderId: claim.deliveryOrderId,
-      kind: 'ARRIVAL_DAMAGE',
-      payableBasis: 'GROSS_PENDING_CLAIM',
-      status: 'PENDING',
-    })
-    const heldSchedule = await prisma.paymentSchedule.findUniqueOrThrow({ where: { receiptId: receipt.id } })
-    expect(heldSchedule.status).toBe('ON_HOLD')
-    expect(Number(heldSchedule.amount)).toBe(60)
-
-    const duplicateOpenClaim = await app.inject({
-      method: 'POST', url: '/api/loss-claims', headers: { 'x-test-actor': 'chef' },
-      payload: {
-        purchaseOrderId: order.id, receiptId: receipt.id,
-        description: '重复补报', items: [{ productId, receivedQty: 4 }],
-      },
-    })
-    expect(duplicateOpenClaim.statusCode).toBe(409)
-    expect(duplicateOpenClaim.json().message).toContain('已有未结差异')
-
-    const approveLateClaim = await app.inject({
-      method: 'PATCH', url: `/api/loss-claims/${lateClaim.id}/handle`,
-      headers: { 'x-test-actor': 'supplier' }, payload: { action: 'approve', note: '确认品质异常' },
-    })
-    expect(approveLateClaim.statusCode).toBe(200)
-    const adjustedSchedule = await prisma.paymentSchedule.findUniqueOrThrow({ where: { receiptId: receipt.id } })
-    expect(adjustedSchedule.status).toBe('PENDING')
-    expect(Number(adjustedSchedule.amount)).toBe(40)
-    const adjustedRecon = await prisma.reconciliationItem.findUniqueOrThrow({
-      where: { receiptId: receipt.id }, include: { reconciliation: true },
-    })
-    expect(Number(adjustedRecon.amount)).toBe(40)
-    expect(Number(adjustedRecon.reconciliation.totalAmount)).toBe(40)
+    expect(lateClaimResponse.statusCode).toBe(409)
+    expect(lateClaimResponse.json()).toMatchObject({ code: 'ARRIVAL_CLAIM_WINDOW_CLOSED' })
+    expect(Number((await prisma.paymentSchedule.findUniqueOrThrow({ where: { receiptId: receipt.id } })).amount)).toBe(55)
     const adjustedAudit = await auditSupplierSupplyChain({ tenantId, supplierId, days: 30 })
     expect(adjustedAudit.issues.filter(issue => [
       'PAYABLE_RECEIPT_AMOUNT_MISMATCH',
@@ -311,14 +280,5 @@ describe('supplier order to receipt flow (integration)', () => {
       'STOCK_BATCH_BALANCE_MISMATCH',
     ].includes(issue.code))).toEqual([])
 
-    const overClaim = await app.inject({
-      method: 'POST', url: '/api/loss-claims', headers: { 'x-test-actor': 'chef' },
-      payload: {
-        purchaseOrderId: order.id, receiptId: receipt.id,
-        description: '超过尚可补报数量', items: [{ productId, receivedQty: 0 }],
-      },
-    })
-    expect(overClaim.statusCode).toBe(409)
-    expect(overClaim.json().message).toContain('超过尚可补报')
   })
 })

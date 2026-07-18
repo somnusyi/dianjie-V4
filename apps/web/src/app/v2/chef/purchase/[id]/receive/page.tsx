@@ -68,16 +68,11 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
               </p>
             )}
             <p className="text-gray3 pt-2">
-              如有遗漏的短量需要 <b>向供应商补报</b>，点下方「补报短量」；系统会绑定具体收货单并冻结待核账期；
-              若是店内自有损耗 (临期 / 变质等), 走「店内盘损」.
+              收货确认是供应商责任截止点。确认后发现的临期、变质、遗失或盘点差异均属于门店内部损耗，请走「店内盘损」。
             </p>
           </div>
         </div>
         <div className="mx-4 mt-3 flex gap-2">
-          <button onClick={() => router.push(`/v2/chef/purchase/${po.id}/report-loss`)}
-                  className="flex-1 py-3 bg-ink text-white rounded-cta text-button">
-            补报短量
-          </button>
           <button onClick={() => router.push('/v2/chef/check/new')}
                   className="flex-1 py-3 bg-white border border-border text-ink rounded-cta text-button">
             店内盘损
@@ -239,6 +234,9 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
 
       <Section title="收货说明">
         <div className="bg-white rounded-card border border-border p-3">
+          <p className="text-caption text-amber-fg mb-2">
+            请在提交前核对数量、破损、品质和现场证据。确认收货后不再接受向供应商补报差异。
+          </p>
           <p className="text-caption text-gray2">
             实收金额：<span className="font-num text-h2 text-ink">¥{total.toFixed(2)}</span>
           </p>

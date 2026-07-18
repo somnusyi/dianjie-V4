@@ -739,6 +739,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       }
       const product = await prisma.$transaction(async tx => {
         if (isSupplierRole(role)) {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`supplier-categories:${tenantId}:${userSupplierId}`}))`
           const categoryWhere = {
             tenantId_supplierId_name: { tenantId, supplierId: userSupplierId!, name: data.category },
           }
@@ -948,6 +949,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         })
 
         if (isSupplierRole(role) && userSupplierId && candidates.length > 0) {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`supplier-categories:${tenantId}:${userSupplierId}`}))`
           const categoryNames = [...new Set(candidates.map(candidate => candidate.data.category))]
           const existingCategories = await tx.supplierProductCategory.findMany({
             where: { tenantId, supplierId: userSupplierId, name: { in: categoryNames } },

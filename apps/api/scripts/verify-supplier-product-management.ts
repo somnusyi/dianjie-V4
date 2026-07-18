@@ -37,6 +37,7 @@ async function main() {
   })
   const supplierId = user.supplierId!
   const categoryNames = ['验证分类A', '验证分类B', '验证分类C']
+  const concurrentImportCategories = Array.from({ length: 4 }, (_, index) => `并发导入分类-${Date.now()}-${index}`)
   for (let index = 0; index < categoryNames.length; index++) {
     await prisma.supplierProductCategory.upsert({
       where: { tenantId_supplierId_name: { tenantId: tenant.id, supplierId, name: categoryNames[index] } },
@@ -82,6 +83,33 @@ async function main() {
     })
     assert.equal(login.status, 200, JSON.stringify(login.body))
     const token = login.body.token as string
+
+    const concurrentImports = await Promise.all(concurrentImportCategories.map((category, index) => api('/api/products/batch', token, {
+      method: 'POST',
+      body: JSON.stringify({
+        filename: `verify-concurrent-category-${index}.xlsx`,
+        items: [{
+          code: `VERIFY-CATEGORY-${Date.now()}-${index}`, name: `并发分类导入验证品 ${index}`,
+          category, unit: '件', price: 10 + index,
+        }],
+      }),
+    })))
+    concurrentImports.forEach(result => {
+      assert.equal(result.status, 201, JSON.stringify(result.body))
+      assert.equal(result.body.createdCount, 1, JSON.stringify(result.body))
+      batchIds.push(result.body.batchId)
+      batchProductIds.push(result.body.created[0].id)
+    })
+    const concurrentImportDocs = await prisma.document.findMany({
+      where: { tenantId: tenant.id, no: { in: concurrentImports.map(result => result.body.approvalDocNo) } },
+    })
+    assert.equal(concurrentImportDocs.length, concurrentImportCategories.length)
+    documentIds.push(...concurrentImportDocs.map(document => document.id))
+    const importedCategories = await prisma.supplierProductCategory.findMany({
+      where: { tenantId: tenant.id, supplierId, name: { in: concurrentImportCategories } },
+    })
+    assert.equal(importedCategories.length, concurrentImportCategories.length)
+    assert.equal(new Set(importedCategories.map(category => category.sortOrder)).size, concurrentImportCategories.length, '并发导入自动分类排序号必须唯一')
 
     const chefMarker = Date.now()
     const chefEmail = `verify-product-chef-${chefMarker}@local.test`
@@ -488,6 +516,7 @@ async function main() {
       ok: true,
       categoryFilter: true,
       imageKey: true,
+      concurrentImportCategoryOrder: true,
       batchCategory: true,
       batchDisableApproval: true,
       concurrentDocumentNumbers: true,
@@ -537,7 +566,7 @@ async function main() {
     await prisma.product.deleteMany({ where: { tenantId: tenant.id, code: { in: [rollbackCode, singleRollbackCode] } } })
     if (batchIds.length) await prisma.productBatch.deleteMany({ where: { id: { in: batchIds } } })
     await prisma.supplierProductCategory.deleteMany({
-      where: { tenantId: tenant.id, supplierId, name: { in: [...categoryNames, rollbackCategory, singleRollbackCategory] } },
+      where: { tenantId: tenant.id, supplierId, name: { in: [...categoryNames, ...concurrentImportCategories, rollbackCategory, singleRollbackCategory] } },
     })
     const temporaryUserIds = [temporaryAdminId, temporaryUnboundSupplierId, temporaryChefId].filter(Boolean) as string[]
     if (temporaryUserIds.length) await prisma.user.deleteMany({ where: { id: { in: temporaryUserIds } } })

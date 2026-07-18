@@ -504,6 +504,35 @@ describe('supplier tenant scope (integration)', () => {
     expect(categories).toHaveLength(2)
     expect(new Set(categories.map(category => category.sortOrder)).size).toBe(2)
 
+    const importCategories = Array.from({ length: 4 }, (_, index) => `并发导入分类${index}-${suffix.slice(-8)}`)
+    const imported = await Promise.all(importCategories.map((category, index) => app.inject({
+      method: 'POST', url: '/api/products/batch',
+      payload: {
+        filename: `concurrent-category-${index}.xlsx`,
+        items: [{
+          code: `CAT-IMP-${index}-${suffix.slice(-8)}`, name: `并发分类导入商品 ${index}`,
+          category, unit: '件', price: 10 + index,
+        }],
+      },
+    })))
+    expect(imported.map(response => response.statusCode)).toEqual([201, 201, 201, 201])
+    expect(imported.every(response => response.json().createdCount === 1)).toBe(true)
+    const importedCategories = await prisma.supplierProductCategory.findMany({
+      where: { tenantId, supplierId: supplierAId, name: { in: importCategories } },
+      orderBy: { sortOrder: 'asc' },
+    })
+    expect(importedCategories).toHaveLength(importCategories.length)
+    expect(new Set(importedCategories.map(category => category.sortOrder)).size).toBe(importCategories.length)
+    const importBatchIds = imported.map(response => response.json().batchId as string)
+    const importProductIds = imported.flatMap(response => response.json().created.map((item: any) => item.id as string))
+    await prisma.document.deleteMany({
+      where: { tenantId, no: { in: imported.map(response => response.json().approvalDocNo as string) } },
+    })
+    await prisma.opLog.deleteMany({ where: { targetId: { in: importBatchIds } } })
+    await prisma.product.deleteMany({ where: { id: { in: importProductIds } } })
+    await prisma.productBatch.deleteMany({ where: { id: { in: importBatchIds } } })
+    await prisma.supplierProductCategory.deleteMany({ where: { id: { in: importedCategories.map(category => category.id) } } })
+
     const tiedAt = new Date('2031-07-18T00:00:00.000Z')
     const logIds = [`stable-product-log-a-${suffix}`, `stable-product-log-b-${suffix}`]
     await prisma.opLog.createMany({

@@ -247,6 +247,44 @@ describe('supplier tenant scope (integration)', () => {
     }
   })
 
+  it('serializes custom inbound batch numbers without partial stock writes', async () => {
+    const beforeStock = Number((await prisma.product.findUniqueOrThrow({ where: { id: productAId } })).stock)
+    const duplicateInRequest = await app.inject({
+      method: 'POST', url: '/api/supplier/stock/inbound',
+      payload: {
+        items: [
+          { productId: productAId, qty: 1, batchNo: `DUP-IN-${suffix}` },
+          { productId: productAId, qty: 1, batchNo: ` DUP-IN-${suffix} ` },
+        ],
+      },
+    })
+    expect(duplicateInRequest.statusCode).toBe(400)
+    expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productAId } })).stock)).toBe(beforeStock)
+
+    const batchNo = `CONCURRENT-IN-${suffix}`
+    const payload = { items: [{ productId: productAId, qty: 1, batchNo }] }
+    const attempts = await Promise.all([1, 2].map(() => app.inject({
+      method: 'POST', url: '/api/supplier/stock/inbound', payload,
+    })))
+    expect(attempts.map(response => response.statusCode).sort()).toEqual([200, 409])
+    expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productAId } })).stock)).toBe(beforeStock + 1)
+    const batch = await prisma.supplierStockBatch.findUniqueOrThrow({
+      where: { tenantId_productId_batchNo: { tenantId, productId: productAId, batchNo } },
+    })
+    expect(Number(batch.remainingQty)).toBe(1)
+    expect(await prisma.supplierStockMovement.count({ where: { tenantId, productId: productAId, id: batch.sourceMovementId! } })).toBe(1)
+
+    const repeated = await app.inject({ method: 'POST', url: '/api/supplier/stock/inbound', payload })
+    expect(repeated.statusCode).toBe(409)
+    expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productAId } })).stock)).toBe(beforeStock + 1)
+
+    await prisma.$transaction([
+      prisma.supplierStockBatch.delete({ where: { id: batch.id } }),
+      prisma.supplierStockMovement.delete({ where: { id: batch.sourceMovementId! } }),
+      prisma.product.update({ where: { id: productAId }, data: { stock: beforeStock } }),
+    ])
+  })
+
   it('keeps stock snapshot import supplier-scoped and repeat-safe', async () => {
     const foreign = await app.inject({
       method: 'POST', url: '/api/supplier/stock/import-snapshot',

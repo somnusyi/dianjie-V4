@@ -269,6 +269,24 @@ describe('supplier order to receipt flow (integration)', () => {
     })
     expect(deliver.statusCode).toBe(200)
 
+    const invalidReceivePayloads = [
+      { items: [null] },
+      { items: [{ productId, receivedQty: '5' }] },
+      { items: [{ productId, receivedQty: 5 }, { productId, receivedQty: 4 }] },
+      { items: Array.from({ length: 501 }, () => ({ productId, receivedQty: 5 })) },
+      { evidenceImages: [123] },
+      { kind: 'UNKNOWN' },
+      { unexpected: true },
+    ]
+    for (const payload of invalidReceivePayloads) {
+      const invalidReceive = await app.inject({
+        method: 'PATCH', url: `/api/orders/${order.id}/receive`, headers: { 'x-test-actor': 'chef' }, payload,
+      })
+      expect(invalidReceive.statusCode).toBe(400)
+    }
+    expect(await prisma.receipt.count({ where: { purchaseOrderId: order.id } })).toBe(0)
+    expect((await prisma.deliveryOrder.findFirstOrThrow({ where: { purchaseOrderId: order.id } })).status).toBe('DELIVERED')
+
     const receiveAttempts = await Promise.all([1, 2].map(() => app.inject({
       method: 'PATCH',
       url: `/api/orders/${order.id}/receive`,

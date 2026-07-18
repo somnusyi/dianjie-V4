@@ -1028,3 +1028,23 @@
 
 - 锁粒度仍限定为当前租户的当前供应商，不影响其他供应商同时维护分类。
 - 本轮继续使用应用事务锁保护新写入，不新增数据库排序唯一约束；历史相同排序号仍由名称稳定兜底，不在夜间擅自重排客户数据。
+
+## 2026-07-19 06:49 第四十八轮（发布迁移复验与收口）
+
+### 检查范围与结果
+
+- 对当前 release 分支、既有 `dianjie_v4_local` 和唯一命名的临时空库复验 Prisma 迁移；全程未连接生产，未执行 `db reset`、`db push` 或 schema 写入到既有库。
+- 既有本地库 `migrate status` 显示当前 release 的 56 个迁移均已应用，但 schema diff 检出额外的 `InventoryCountStatus`、`inventory_counts` 和 `inventory_count_items`。核对迁移账本和 Git 图后确认：该库曾在 main/`feature/ops-control-stocktake` 上应用 `20260718130000_store_inventory_counts`，而该提交不是 release 分支祖先。
+- 按边界没有合入 main，也没有为 release 生成删除这些 main 专属对象的迁移。它们是共享本地库的跨分支额外对象，不是 release 56 个迁移从零部署产生的漂移。
+- 本机未安装 `createdb/psql/dropdb`，首个命令在工具存在性检查处、任何数据库操作前退出；随后使用仓库锁定的 Prisma `db execute` 创建精确命名临时库 `dianjie_v4_migrate_ci_20260719_0647`，退出 trap 负责精确删除。
+
+### 自动化与端到端验证
+
+- 临时空库从零执行 `migrate deploy`，56/56 全部成功；随后 `migrate status` 为最新，`migrate diff --exit-code` 输出 `No difference detected`。退出后通过 PostgreSQL 系统目录确认临时库计数为 0。
+- 本轮复用前两轮已通过的真实 4444 API 商品/分类端到端证据，并再次执行全量 API 单元测试 106/106、API TypeScript build、独立 `dianjie_v4_ci` 集成测试 50/50、Web 测试 13/13 和 Web TypeScript 检查，全部通过。
+- API 4444 健康、Web 3200 根路径按现有认证导航返回 307；业务 Excel 始终保持未跟踪，未暂存。
+
+### 风险与待确认
+
+- 共享 `dianjie_v4_local` 不能作为 release 的“零 schema diff”证据，因为它包含 main 分支更晚的盘点功能；release 自身的干净部署证据应以本轮临时空库结果为准。
+- 部署前应确认目标环境的迁移账本属于哪条分支；若目标库已应用 main 专属盘点迁移，不应由 release 反向删除。完整在线盘点流程仍是既定业务确认边界，本轮未擅自引入。

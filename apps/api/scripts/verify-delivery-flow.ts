@@ -266,6 +266,17 @@ async function main() {
     assert.equal(repeatedShip.status, 200)
     assert.equal(repeatedShip.body.deliveryId, firstShip.body.deliveryId, '发货重试必须返回同一配送单')
     assert.equal(repeatedShip.body.duplicated, true)
+    const conflictingShipReplay = await api(`/api/orders/${orderId}/ship`, supplierToken, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        idempotencyKey: firstKey,
+        note: '同一幂等键冲突请求',
+        items: [{ itemId: created.body.items[0].id, shippedQty: 3 }],
+      }),
+    })
+    assert.equal(conflictingShipReplay.status, 409, JSON.stringify(conflictingShipReplay.body))
+    assert.equal(await prisma.deliveryOrder.count({ where: { purchaseOrderId: orderId } }), 1)
+    assert.equal(Number((await prisma.product.findUniqueOrThrow({ where: { id: product.id } })).stock), 98)
     const invalidAck = await api(`/api/orders/${orderId}/chef-ack`, managerToken, {
       method: 'PATCH', body: JSON.stringify({ images: [123] }),
     })
@@ -374,7 +385,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, shipmentAuditRollback: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, shipmentAuditRollback: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))

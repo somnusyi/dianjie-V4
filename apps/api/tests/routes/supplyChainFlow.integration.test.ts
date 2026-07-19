@@ -580,6 +580,15 @@ describe('supplier order to receipt flow (integration)', () => {
     })
     expect(duplicateShip.statusCode).toBe(200)
     expect(duplicateShip.json().duplicated).toBe(true)
+    const conflictingDuplicateShip = await app.inject({
+      method: 'PATCH', url: `/api/orders/${order.id}/ship`, headers: { 'x-test-actor': 'supplier' },
+      payload: {
+        ...shipPayloads[successfulShipIndex],
+        note: '同一幂等键不应接受不同请求',
+        items: [{ itemId: order.items[0].id, shippedQty: 5 }],
+      },
+    })
+    expect(conflictingDuplicateShip.statusCode).toBe(409)
     expect(await prisma.deliveryOrder.count({ where: { purchaseOrderId: order.id } })).toBe(1)
     expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).stock)).toBe(4)
     expect(await prisma.supplierStockMovement.count({ where: { tenantId, type: 'OUTBOUND_PO' } })).toBe(1)

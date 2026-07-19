@@ -124,6 +124,22 @@ function supplierScopeOrReply(req: any, reply: any, capability: SupplierCapabili
   }
 }
 
+async function lockActiveSupplierCategory(
+  tx: any,
+  tenantId: string,
+  supplierId: string,
+  categoryName: string,
+) {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`supplier-categories:${tenantId}:${supplierId}`}))`
+  const category = await tx.supplierProductCategory.findUnique({
+    where: { tenantId_supplierId_name: { tenantId, supplierId, name: categoryName } },
+    select: { isActive: true },
+  })
+  if (!category?.isActive) {
+    throw Object.assign(new Error('商品分类状态已变化，请刷新后重试'), { statusCode: 409 })
+  }
+}
+
 export const productRoutes: FastifyPluginAsync = async (app) => {
   async function withAvailability<T extends { id: string; stock: unknown }>(tenantId: string, rows: T[]) {
     const reserved = await getSupplierReservedStock({ tenantId, productIds: rows.map(row => row.id) })
@@ -1301,6 +1317,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         // 价格字段从本次更新 data 里去除, 其他字段仍可与审批单原子提交。
         delete data.price
         const doc = await prisma.$transaction(async tx => {
+          if (data.category) {
+            await lockActiveSupplierCategory(tx, tenantId, supplierId!, data.category)
+          }
           await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`product-price:${cur.id}`}))::text AS locked`
           const concurrent = await tx.document.findFirst({
             where: {
@@ -1389,6 +1408,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       }
     }
     const after = await prisma.$transaction(async tx => {
+      if (isSupplierRole(role) && data.category) {
+        await lockActiveSupplierCategory(tx, tenantId, supplierId!, data.category)
+      }
       let updated
       if (isSupplierRole(role) && data.status === 'ENABLED') {
         const claimed = await tx.product.updateMany({ where: { ...where, id: before.id }, data })

@@ -560,6 +560,109 @@ describe('supplier tenant scope (integration)', () => {
     }
   })
 
+  it('does not orphan single-product edits during concurrent category rename', async () => {
+    const sqlSuffix = Date.now().toString()
+    const delaySequence = `test_product_category_delay_seq_${sqlSuffix}`
+    const delayFunction = `test_product_category_delay_fn_${sqlSuffix}`
+    const delayTrigger = `test_product_category_delay_trg_${sqlSuffix}`
+    const productIds: string[] = []
+    const categoryIds: string[] = []
+    const documentNos: string[] = []
+
+    await prisma.$executeRawUnsafe(`CREATE SEQUENCE "${delaySequence}"`)
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION "${delayFunction}"() RETURNS trigger AS $$
+      BEGIN
+        IF NEW."category" LIKE '单条并发旧分类-%' THEN
+          PERFORM nextval('${delaySequence}');
+          PERFORM pg_sleep(0.75);
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `)
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER "${delayTrigger}"
+      BEFORE UPDATE OF "category" ON "products"
+      FOR EACH ROW EXECUTE FUNCTION "${delayFunction}"()
+    `)
+
+    const sequenceValue = async () => {
+      const [row] = await prisma.$queryRawUnsafe<Array<{ value: bigint; is_called: boolean }>>(
+        `SELECT last_value::bigint AS value, is_called FROM "${delaySequence}"`,
+      )
+      return row.is_called ? row.value : 0n
+    }
+    const waitForDelayedUpdate = async (previous: bigint) => {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const value = await sequenceValue()
+        if (value > previous) return
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      throw new Error('未观察到商品分类更新进入并发延迟触发器')
+    }
+
+    try {
+      for (const mode of ['plain', 'price'] as const) {
+        const marker = `${mode}-${suffix.slice(-6)}`
+        const sourceName = `单条并发旧分类-${marker}`
+        const targetName = `单条并发新分类-${marker}`
+        const category = await app.inject({
+          method: 'POST', url: '/api/products/categories', payload: { name: sourceName },
+        })
+        expect(category.statusCode).toBe(201)
+        categoryIds.push(category.json().id)
+
+        const product = await prisma.product.create({
+          data: {
+            tenantId, supplierId: supplierAId, code: `SINGLE-${marker}`,
+            name: `单条并发归类-${mode}`, category: '其他', price: 10,
+          },
+        })
+        productIds.push(product.id)
+
+        const previous = await sequenceValue()
+        const patchPromise = app.inject({
+          method: 'PATCH', url: `/api/products/${product.id}`,
+          payload: mode === 'price'
+            ? { category: sourceName, price: 12 }
+            : { category: sourceName, spec: '并发分类复核' },
+        })
+        await waitForDelayedUpdate(previous)
+        const renamePromise = app.inject({
+          method: 'PATCH', url: `/api/products/categories/${category.json().id}`,
+          payload: { name: targetName },
+        })
+        const [patched, renamed] = await Promise.all([patchPromise, renamePromise])
+        expect([patched.statusCode, renamed.statusCode]).toEqual([200, 200])
+        if (mode === 'price') {
+          expect(patched.json()).toMatchObject({ priceChangeStatus: 'PENDING_APPROVAL' })
+          documentNos.push(patched.json().documentNo)
+        }
+        expect(await prisma.product.findUniqueOrThrow({ where: { id: product.id } })).toMatchObject({
+          category: targetName,
+        })
+        expect(await prisma.supplierProductCategory.findUnique({
+          where: { tenantId_supplierId_name: { tenantId, supplierId: supplierAId, name: sourceName } },
+        })).toBeNull()
+      }
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${delayTrigger}" ON "products"`)
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${delayFunction}"()`)
+      await prisma.$executeRawUnsafe(`DROP SEQUENCE IF EXISTS "${delaySequence}"`)
+      if (documentNos.length > 0) {
+        await prisma.documentDecision.deleteMany({ where: { document: { tenantId, no: { in: documentNos } } } })
+        await prisma.documentStep.deleteMany({ where: { document: { tenantId, no: { in: documentNos } } } })
+        await prisma.document.deleteMany({ where: { tenantId, no: { in: documentNos } } })
+      }
+      await prisma.opLog.deleteMany({
+        where: { tenantId, targetId: { in: [...productIds, ...categoryIds] } },
+      })
+      await prisma.product.deleteMany({ where: { id: { in: productIds } } })
+      await prisma.supplierProductCategory.deleteMany({ where: { id: { in: categoryIds } } })
+    }
+  })
+
   it('isolates upload batches and rejects unauthorized revocation', async () => {
     const tiedAt = new Date('2030-07-18T00:00:00.000Z')
     const supplierABatchIds = [`upload-batch-a-${suffix}`, `upload-batch-b-${suffix}`]

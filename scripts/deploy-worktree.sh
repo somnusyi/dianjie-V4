@@ -123,6 +123,10 @@ fi
 # ── 4. 依赖 + 构建 ───────────────────────────────────
 echo ""
 echo "==> [4/8] pnpm install + build (worktree, 主仓库 dev 不受影响)"
+# Never let a caller's API development environment leak into `next build`.
+# A forced NODE_ENV=development makes Next load both dev and production React
+# runtimes during prerender and can fail every static page with useContext null.
+unset NODE_ENV
 pnpm install --frozen-lockfile
 pnpm --filter @dianjie/db exec prisma generate >/dev/null 2>&1
 pnpm --filter @dianjie/api test

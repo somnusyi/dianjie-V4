@@ -9,7 +9,6 @@
 'use client'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
-import * as XLSX from 'xlsx'
 import { Chip } from '@/components/v2'
 import FinanceTopNav from '../_topnav'
 
@@ -98,6 +97,7 @@ export default function BudgetPCPage() {
     if (!file) return
     setError(null)
     try {
+      const XLSX = await import('xlsx')
       const buf = await file.arrayBuffer()
       const wb = XLSX.read(buf, { type: 'array' })
       const sheet = wb.Sheets[wb.SheetNames[0]]

@@ -7,7 +7,6 @@
 'use client'
 import { useEffect, useState, useRef } from 'react'
 import { getUser, getToken } from '@/lib/v2-auth'
-import * as XLSX from 'xlsx'
 
 const CATEGORY_LABEL: Record<string, string> = {
   CONTRACT: '合同', CONSTRUCTION: '装修工程', FIRE: '消防',
@@ -73,8 +72,9 @@ function parseBudgetExcel(file: File): Promise<any[]> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onerror = () => reject(new Error('文件读取失败'))
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
+        const XLSX = await import('xlsx')
         const buf = e.target?.result as ArrayBuffer
         const wb = XLSX.read(buf, { type: 'array' })
         const sheet = wb.Sheets[wb.SheetNames[0]]

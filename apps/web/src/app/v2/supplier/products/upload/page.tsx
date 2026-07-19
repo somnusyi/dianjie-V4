@@ -15,7 +15,6 @@
 'use client'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import * as XLSX from 'xlsx'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch, getUser } from '@/lib/v2-auth'
@@ -47,7 +46,8 @@ const HEADER_MAP: Record<string, keyof Row> = {
 }
 
 /** 下载模板 — 兼容 webview 的 Blob+a 下载, 自动预填供应商名 */
-function downloadTemplate() {
+async function downloadTemplate() {
+  const XLSX = await import('xlsx')
   const u = getUser()
   const supplierName = u?.supplier?.name || ''
   const today = new Date().toISOString().slice(0, 10)
@@ -93,8 +93,9 @@ function parseFile(file: File): Promise<Row[]> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onerror = () => reject(reader.error)
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
+        const XLSX = await import('xlsx')
         const wb = XLSX.read(e.target!.result, { type: 'array' })
         const sheet = wb.Sheets[wb.SheetNames[0]]
         const aoa: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' })

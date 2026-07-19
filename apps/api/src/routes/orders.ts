@@ -535,7 +535,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         return { ...created, submittedSnapshot: original, submittedSnapshotHash: hash }
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
     } catch (error: any) {
-      if (error?.code === 'P2002' && idempotencyKey) {
+      if ((error?.code === 'P2002' || error?.code === 'P2034') && idempotencyKey) {
         const existing = await prisma.purchaseOrder.findFirst({
           where: { tenantId, createdById: userId, idempotencyKey },
           include: replayInclude,

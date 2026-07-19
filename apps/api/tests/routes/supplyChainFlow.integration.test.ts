@@ -256,6 +256,22 @@ describe('supplier order to receipt flow (integration)', () => {
     })
     expect(conflicting.statusCode).toBe(409)
     expect(await prisma.purchaseOrder.count({ where: { tenantId, createdById: chefUserId, idempotencyKey } })).toBe(1)
+
+    const concurrentKey = `create-concurrent-${suffix}`
+    const concurrentPayload = { ...payload, idempotencyKey: concurrentKey, note: '订货创建并发幂等' }
+    const concurrentCreates = await Promise.all([0, 1].map(() => app.inject({
+      method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' }, payload: concurrentPayload,
+    })))
+    expect(concurrentCreates.map(result => result.statusCode)).toEqual([200, 200])
+    expect(new Set(concurrentCreates.map(result => result.json().id)).size).toBe(1)
+    const concurrentOrderId = concurrentCreates[0].json().id
+    expect(await prisma.purchaseOrder.count({
+      where: { tenantId, createdById: chefUserId, idempotencyKey: concurrentKey },
+    })).toBe(1)
+    expect(await prisma.purchaseOrderEvent.count({ where: { purchaseOrderId: concurrentOrderId } })).toBe(2)
+    expect(await prisma.opLog.count({
+      where: { tenantId, userId: chefUserId, targetId: concurrentOrderId, action: { startsWith: '创建采购订单' } },
+    })).toBe(1)
   })
 
   it('serializes receipt delivery, confirmation, rejection and void transitions', async () => {

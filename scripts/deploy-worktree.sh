@@ -128,7 +128,18 @@ pnpm --filter @dianjie/db exec prisma generate >/dev/null 2>&1
 pnpm --filter @dianjie/api test
 pnpm --filter @dianjie/api build
 pnpm --filter @dianjie/web exec tsc --noEmit
-WEB_PORT="${V4_BUILD_GUARD_PORT:-3299}" pnpm --filter @dianjie/web build 2>&1 | grep -E "(error|Failed|✓ Compiled|✓ Generating)" | tail -5
+WEB_BUILD_LOG="${TMPDIR:-/tmp}/dianjie-v4-web-build-${SHORT_HEAD}-$$.log"
+if ! WEB_PORT="${V4_BUILD_GUARD_PORT:-3299}" pnpm --filter @dianjie/web build >"$WEB_BUILD_LOG" 2>&1; then
+  echo "   ⚠ Web 首次正式构建失败，保留完整日志并清缓存重试一次"
+  tail -80 "$WEB_BUILD_LOG"
+  if ! WEB_PORT="${V4_BUILD_GUARD_PORT:-3299}" pnpm --filter @dianjie/web build >"$WEB_BUILD_LOG" 2>&1; then
+    echo "❌ Web 正式构建重试后仍失败"
+    tail -160 "$WEB_BUILD_LOG"
+    exit 1
+  fi
+fi
+grep -E "(error|Failed|✓ Compiled|✓ Generating|Web production build verified)" "$WEB_BUILD_LOG" | tail -6 || true
+rm -f "$WEB_BUILD_LOG"
 
 # 校验产物 (build 完整性)
 [ -f apps/api/dist/index.js ] || { echo "❌ api dist 缺失"; exit 1; }

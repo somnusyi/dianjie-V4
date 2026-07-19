@@ -37,14 +37,28 @@ export default function DishesPage() {
   const [status, setStatus] = useState<string>('ACTIVE')
   const [category, setCategory] = useState<string>('all')
 
-  async function reload() {
-    setDishes(null)
+  async function reload(showLoading = true) {
+    if (showLoading) setDishes(null)
     try {
       const d = await apiFetch<Dish[]>(`/api/dishes?status=${status}&category=${category}&withCost=1`)
       setDishes(d)
     } catch (e: any) { setError(e.message) }
   }
-  useEffect(() => { reload() }, [status, category])
+  useEffect(() => {
+    void reload()
+    // 从 BOM 详情页返回时，Safari / PWA 可能恢复旧页面而不重新挂载。
+    // 在页面恢复、重新获得焦点或重新可见时静默刷新，避免已发布 BOM 仍显示“缺配方”。
+    const refresh = () => { void reload(false) }
+    const refreshWhenVisible = () => { if (document.visibilityState === 'visible') refresh() }
+    window.addEventListener('pageshow', refresh)
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => {
+      window.removeEventListener('pageshow', refresh)
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
+  }, [status, category])
 
   if (error) return <ErrorScreen message={error} />
 

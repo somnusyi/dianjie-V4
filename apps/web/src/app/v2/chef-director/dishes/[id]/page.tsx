@@ -96,6 +96,7 @@ export default function DishDetailPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [publishedResult, setPublishedResult] = useState<BomVersion | null>(null)
   const [busy, setBusy] = useState(false)
   const [draftItems, setDraftItems] = useState<BomItem[]>([])
   const [reason, setReason] = useState(taskId ? '补齐历史日报缺失 BOM' : '配方调整')
@@ -201,16 +202,19 @@ export default function DishDetailPage() {
     if (!(await saveDraft())) return
     setBusy(true); setError(null)
     try {
+      let published: BomVersion
       try {
-        await apiFetch(`/api/dishes/bom-versions/${draft.id}/publish`, { method: 'POST', body: JSON.stringify({}) })
+        published = await apiFetch<BomVersion>(`/api/dishes/bom-versions/${draft.id}/publish`, { method: 'POST', body: JSON.stringify({}) })
       } catch (reason: any) {
         if (reason.data?.code !== 'HISTORICAL_CONFIRMATION_REQUIRED') throw reason
         if (!window.confirm(`${reason.message}\n\n确认发布这次历史纠错吗？发布后请回到 BOM 待办执行历史回补。`)) return
-        await apiFetch(`/api/dishes/bom-versions/${draft.id}/publish`, {
+        published = await apiFetch<BomVersion>(`/api/dishes/bom-versions/${draft.id}/publish`, {
           method: 'POST', body: JSON.stringify({ confirmHistoricalCorrection: true }),
         })
       }
-      setNotice('BOM 已发布。系统将按营业日期选择对应版本，不会覆盖旧版本。')
+      const liveDate = shortDate(published.effectiveFrom)
+      setPublishedResult(published)
+      setNotice(`BOM v${published.versionNo} 已发布，${liveDate}起生效。`)
       await reload()
     } catch (reason: any) { setError(reason.message) }
     finally { setBusy(false) }
@@ -398,6 +402,22 @@ export default function DishDetailPage() {
       </section>
 
       {pickerOpen && <div className="fixed inset-0 z-50 bg-ink/60" onClick={() => setPickerOpen(false)}><div className="absolute bottom-0 left-0 right-0 bg-white rounded-t-card max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}><div className="px-4 pt-4 pb-2"><div className="flex justify-between"><h3 className="text-h2">选择原材料</h3><button onClick={() => setPickerOpen(false)}>×</button></div><input value={productQ} onChange={e => setProductQ(e.target.value)} placeholder="搜索名称 / 编码 / 规格" className="w-full bg-bg rounded-cta px-3 py-2 text-body mt-2" /></div><ul className="overflow-y-auto divide-y divide-border">{filteredProducts.map(product => <li key={product.id} className="px-4 py-3 flex items-center gap-2"><div className="flex-1 min-w-0"><div className="text-body truncate">{product.name}</div><div className="text-micro text-gray3">{product.spec} · ¥{fmt(Number(product.price))}/{product.unit}</div></div><button onClick={() => addProduct(product)} className="px-3 py-1.5 bg-amber/10 text-amber-fg rounded-cta text-button">添加</button></li>)}</ul></div></div>}
+      {publishedResult && (
+        <div className="fixed inset-0 z-[60] bg-ink/60 flex items-end" role="dialog" aria-modal="true" aria-label="BOM 发布成功">
+          <div className="w-full bg-white rounded-t-card p-5 pb-8">
+            <div className="w-12 h-12 rounded-full bg-green-bg text-green-fg flex items-center justify-center text-h1 mx-auto">✓</div>
+            <h3 className="text-h1 text-center mt-3">发布成功</h3>
+            <p className="text-body text-center mt-2">
+              BOM v{publishedResult.versionNo} 已发布 · <span className="font-num">{shortDate(publishedResult.effectiveFrom)}</span>起生效
+            </p>
+            <p className="text-caption text-gray3 text-center mt-1">如设置未来生效日，生效前继续使用当前版本，不会中断库存扣减。</p>
+            <div className="grid grid-cols-2 gap-2 mt-5">
+              <button onClick={() => setPublishedResult(null)} className="py-3 border border-border rounded-cta text-button">继续查看</button>
+              <button onClick={() => { location.href = '/v2/chef-director/dishes' }} className="py-3 bg-ink text-white rounded-cta text-button">返回菜品列表</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

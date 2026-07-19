@@ -463,6 +463,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (amountError) return reply.status(400).send({ error: amountError })
     const submittedAt = new Date()
     const ym = dayjs().format('YYYYMM')
+    const actionPrefix = role === 'CHEF_DIRECTOR' ? `总厨代下单` : `创建采购订单`
 
     let order: any
     try {
@@ -522,6 +523,13 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             },
           ],
         })
+        await tx.opLog.create({
+          data: {
+            tenantId, userId,
+            action: role === 'CHEF_DIRECTOR' ? `总厨代 ${created.store.name} 下单 ${created.no}` : `${actionPrefix} ${created.no}`,
+            target: created.no, entityType: 'PurchaseOrder', targetId: created.id,
+          },
+        })
         return { ...created, submittedSnapshot: original, submittedSnapshotHash: hash }
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
     } catch (error: any) {
@@ -538,8 +546,6 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       throw error
     }
 
-    const actionPrefix = role === 'CHEF_DIRECTOR' ? `总厨代 ${order.store.name} 下单` : `创建采购订单`
-    await prisma.opLog.create({ data: { tenantId, userId, action: `${actionPrefix} ${order.no}`, target: order.no, entityType: 'PurchaseOrder', targetId: order.id } })
     void invalidatePattern(`dashboard:stats:${tenantId}:*`)
     void invalidatePattern(`stores:list:${tenantId}:*`)
     void notifyOrderSubmitted(tenantId, order.no, order.store.name, supplierId)

@@ -200,6 +200,41 @@ describe('supplier order to receipt flow (integration)', () => {
   })
 
   it('rejects conflicting purchase order creation replays', async () => {
+    const failureSuffix = Date.now().toString()
+    const failureFunction = `test_order_create_log_failure_fn_${failureSuffix}`
+    const failureTrigger = `test_order_create_log_failure_trg_${failureSuffix}`
+    const failureKey = `create-log-failure-${suffix}`
+    try {
+      await prisma.$executeRawUnsafe(`
+        CREATE FUNCTION "${failureFunction}"() RETURNS trigger AS $$
+        BEGIN
+          IF NEW."tenantId" = '${tenantId}' AND NEW."userId" = '${chefUserId}' AND NEW."action" LIKE '创建采购订单%' THEN
+            RAISE EXCEPTION 'test order creation audit failure';
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+      `)
+      await prisma.$executeRawUnsafe(`
+        CREATE TRIGGER "${failureTrigger}"
+        BEFORE INSERT ON "op_logs"
+        FOR EACH ROW EXECUTE FUNCTION "${failureFunction}"()
+      `)
+      const failedCreate = await app.inject({
+        method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' },
+        payload: {
+          supplierId, storeId, expectedDate: '2026-07-20', idempotencyKey: failureKey,
+          items: [{ productId, quantity: 1, unitPrice: 999 }],
+        },
+      })
+      expect(failedCreate.statusCode).toBe(500)
+      expect(await prisma.purchaseOrder.count({ where: { tenantId, createdById: chefUserId, idempotencyKey: failureKey } })).toBe(0)
+      expect(await prisma.opLog.count({ where: { tenantId, userId: chefUserId, action: { startsWith: '创建采购订单' } } })).toBe(0)
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${failureTrigger}" ON "op_logs"`)
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${failureFunction}"()`)
+    }
+
     const idempotencyKey = `create-replay-${suffix}`
     const payload = {
       supplierId, storeId, expectedDate: '2026-07-20', note: '订货创建幂等', idempotencyKey,

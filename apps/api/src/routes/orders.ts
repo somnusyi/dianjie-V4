@@ -986,23 +986,30 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     // 网络重试必须在检查订货单当前状态前命中，否则首次发货已把 PO 改为 DELIVERING，重试会误报不可发货。
     const duplicateWhere: any = { purchaseOrderId: id, idempotencyKey, tenantId }
     if (scopedSupplierId) duplicateWhere.supplierId = scopedSupplierId
+    const duplicateInclude = {
+      items: { select: { purchaseOrderItemId: true, shippedQty: true } },
+      events: {
+        where: { eventType: 'CREATED' as const }, orderBy: { occurredAt: 'asc' as const }, take: 1,
+        select: { metadata: true },
+      },
+    }
+    const replayMatches = (candidate: {
+      note: string | null
+      items: Array<{ purchaseOrderItemId: string | null; shippedQty: Prisma.Decimal }>
+      events: Array<{ metadata: Prisma.JsonValue }>
+    }) => {
+      const storedFingerprint = (candidate.events[0]?.metadata as Record<string, unknown> | null)?.requestFingerprint
+      if (typeof storedFingerprint === 'string') return storedFingerprint === requestFingerprint
+      const legacyItemQty = new Map(candidate.items.map(item => [item.purchaseOrderItemId, Number(item.shippedQty)]))
+      return (candidate.note || null) === (note || null)
+        && (!shippedItems || shippedItems.every(item => Math.abs((legacyItemQty.get(item.itemId) ?? Number.NaN) - item.shippedQty) < 0.0001))
+    }
     const duplicate = await prisma.deliveryOrder.findFirst({
       where: duplicateWhere,
-      include: {
-        items: { select: { purchaseOrderItemId: true, shippedQty: true } },
-        events: {
-          where: { eventType: 'CREATED' }, orderBy: { occurredAt: 'asc' }, take: 1,
-          select: { metadata: true },
-        },
-      },
+      include: duplicateInclude,
     })
     if (duplicate) {
-      const storedFingerprint = (duplicate.events[0]?.metadata as Record<string, unknown> | null)?.requestFingerprint
-      const legacyItemQty = new Map(duplicate.items.map(item => [item.purchaseOrderItemId, Number(item.shippedQty)]))
-      const legacyReplayMatches = (duplicate.note || null) === (note || null)
-        && (!shippedItems || shippedItems.every(item => Math.abs((legacyItemQty.get(item.itemId) ?? Number.NaN) - item.shippedQty) < 0.0001))
-      if ((typeof storedFingerprint === 'string' && storedFingerprint !== requestFingerprint)
-        || (typeof storedFingerprint !== 'string' && !legacyReplayMatches)) {
+      if (!replayMatches(duplicate)) {
         return reply.status(409).send({ error: '同一幂等键不能用于不同的发货请求' })
       }
       return { success: true, deliveryId: duplicate.id, deliveryNo: duplicate.no, duplicated: true }
@@ -1087,7 +1094,21 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
 
     // 事务: 更新 PO 状态 + 行 shippedQty + 总金额 + 自动扣减供应商库存
     let deliveryResult: { id: string; no: string }
+    let duplicatedShipment = false
     await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`shipment:${tenantId}:${id}:${idempotencyKey}`}))::text AS locked`
+      const concurrentDuplicate = await tx.deliveryOrder.findFirst({
+        where: duplicateWhere,
+        include: duplicateInclude,
+      })
+      if (concurrentDuplicate) {
+        if (!replayMatches(concurrentDuplicate)) {
+          throw { statusCode: 409, message: '同一幂等键不能用于不同的发货请求' }
+        }
+        deliveryResult = { id: concurrentDuplicate.id, no: concurrentDuplicate.no }
+        duplicatedShipment = true
+        return
+      }
       const claimed = await tx.purchaseOrder.updateMany({
         where: {
           id: order.id,
@@ -1174,6 +1195,10 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         },
       })
     })
+
+    if (duplicatedShipment) {
+      return { success: true, deliveryId: deliveryResult!.id, deliveryNo: deliveryResult!.no, duplicated: true }
+    }
 
     // 通知 — 调整时高亮告知店长 / 厨师长
     const supplier = await prisma.supplier.findUnique({ where: { id: order.supplierId }, select: { name: true } })

@@ -25,6 +25,7 @@ import {
 } from '../services/supplierStockReservation'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 import { calendarDateSchema } from '../lib/calendar-date'
+import { hashRequestBody } from '../lib/idempotency'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
 const PURCHASE_QUANTITY_MAX = 99_999_999.99
@@ -79,6 +80,15 @@ const deliveryShipSchema = z.object({
 const deliveryDeliverSchema = z.object({
   note: z.string().trim().max(500, '送达备注最长 500 字').optional(),
 }).strict()
+
+function shipmentRequestFingerprint(note: string | undefined, items: Array<{ itemId: string; shippedQty: number }> | undefined) {
+  const normalizedItems = items
+    ? [...new Map(items.map(item => [item.itemId, item.shippedQty])).entries()]
+      .map(([itemId, shippedQty]) => ({ itemId, shippedQty }))
+      .sort((a, b) => a.itemId.localeCompare(b.itemId))
+    : null
+  return hashRequestBody({ note: note || null, items: normalizedItems }, 'supplier-shipment')
+}
 
 const chefAckSchema = z.object({
   images: z.array(z.string().trim().min(1, '验收照片地址不能为空')).min(1, '请至少上传 1 张验收照片').max(5, '验收单最多 5 张照片'),
@@ -968,6 +978,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const parsedShip = deliveryShipSchema.safeParse(req.body || {})
     if (!parsedShip.success) return reply.status(400).send({ error: parsedShip.error.issues[0].message })
     const { note, items: shippedItems, idempotencyKey } = parsedShip.data
+    const requestFingerprint = shipmentRequestFingerprint(note, shippedItems)
 
     if (!isSupplierRole(role) && !['ADMIN', 'SUPER_ADMIN'].includes(role)) throw { statusCode: 403, message: '无权限' }
     const scopedSupplierId = requireSupplierBinding(role, req.user.supplierId)
@@ -975,8 +986,27 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     // 网络重试必须在检查订货单当前状态前命中，否则首次发货已把 PO 改为 DELIVERING，重试会误报不可发货。
     const duplicateWhere: any = { purchaseOrderId: id, idempotencyKey, tenantId }
     if (scopedSupplierId) duplicateWhere.supplierId = scopedSupplierId
-    const duplicate = await prisma.deliveryOrder.findFirst({ where: duplicateWhere })
-    if (duplicate) return { success: true, deliveryId: duplicate.id, deliveryNo: duplicate.no, duplicated: true }
+    const duplicate = await prisma.deliveryOrder.findFirst({
+      where: duplicateWhere,
+      include: {
+        items: { select: { purchaseOrderItemId: true, shippedQty: true } },
+        events: {
+          where: { eventType: 'CREATED' }, orderBy: { occurredAt: 'asc' }, take: 1,
+          select: { metadata: true },
+        },
+      },
+    })
+    if (duplicate) {
+      const storedFingerprint = (duplicate.events[0]?.metadata as Record<string, unknown> | null)?.requestFingerprint
+      const legacyItemQty = new Map(duplicate.items.map(item => [item.purchaseOrderItemId, Number(item.shippedQty)]))
+      const legacyReplayMatches = (duplicate.note || null) === (note || null)
+        && (!shippedItems || shippedItems.every(item => Math.abs((legacyItemQty.get(item.itemId) ?? Number.NaN) - item.shippedQty) < 0.0001))
+      if ((typeof storedFingerprint === 'string' && storedFingerprint !== requestFingerprint)
+        || (typeof storedFingerprint !== 'string' && !legacyReplayMatches)) {
+        return reply.status(409).send({ error: '同一幂等键不能用于不同的发货请求' })
+      }
+      return { success: true, deliveryId: duplicate.id, deliveryNo: duplicate.no, duplicated: true }
+    }
 
     // P0: 加 supplier scope, 防供应商 A 替供应商 B 发货
     const shipWhere: any = { id, tenantId, status: 'CONFIRMED' }
@@ -1103,7 +1133,10 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       deliveryResult = { id: delivery.id, no: delivery.no }
       await tx.deliveryOrderEvent.createMany({
         data: [
-          { tenantId, deliveryOrderId: delivery.id, eventType: 'CREATED', actorId: userId, actorRole: role, toStatus: 'DRAFT', requestId: req.id, ip: req.ip },
+          {
+            tenantId, deliveryOrderId: delivery.id, eventType: 'CREATED', actorId: userId, actorRole: role,
+            toStatus: 'DRAFT', requestId: req.id, ip: req.ip, metadata: { requestFingerprint },
+          },
           { tenantId, deliveryOrderId: delivery.id, eventType: 'SHIPPED', actorId: userId, actorRole: role, fromStatus: 'DRAFT', toStatus: 'SHIPPED', requestId: req.id, ip: req.ip },
         ],
       })

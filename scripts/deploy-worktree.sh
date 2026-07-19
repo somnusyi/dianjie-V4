@@ -186,6 +186,11 @@ rsync_run apps/web/public/                        "$SERVER:$REMOTE/apps/web/apps
 # 历史教训: scripts 不同步会出现"代码已 push 但服务器仍跑旧版本"的脏状态
 # (e.g. 2026-05-28 mirror cron 修了 7 天没生效, 因为 cjs 没拷过去)
 rsync_run apps/api/scripts/                       "$SERVER:$REMOTE/apps/api/scripts/" | tail -2
+# Operational TypeScript scripts import shared validators/services from src/.
+# Keeping only scripts/ made migrations pass in a production clone but fail on
+# ECS with MODULE_NOT_FOUND.  Source is not used by the running dist process;
+# it is deployed solely so audited one-off jobs can execute the same code.
+rsync_run apps/api/src/                           "$SERVER:$REMOTE/apps/api/src/" | tail -2
 rsync_run scripts/                                "$SERVER:$REMOTE/scripts/" | tail -2
 # apps/cmb (Python Flask 国密微服务) — 同事+我之前手 SSH 推过, 现在纳入 deploy
 # 排除 __pycache__ / *.pyc (本地 build 产物, ECS 自己会重新生成)

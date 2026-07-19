@@ -2,7 +2,6 @@ import { FastifyPluginAsync } from 'fastify'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import {
-  calculateDeferredBomConsumptions,
   normalizeDishName,
   normalizeVariantKey,
   partitionImportIssues,
@@ -14,6 +13,11 @@ import {
 } from '../services/dailyBusinessImport'
 import { isStoreScoped } from '../lib/auth-scope'
 import { estimatedStoreInventory } from '../services/storeInventory'
+import {
+  bomCalculationSnapshot,
+  calculateBomConsumptions,
+  selectEffectiveBomVersion,
+} from '../services/bomLifecycle'
 
 const ALLOWED_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN', 'BOSS'])
 const SOURCE = 'daily_pos_upload'
@@ -41,6 +45,13 @@ type PreviewConsumption = {
   unit: string
   quantity: number
   sources: string[]
+  dishId: string
+  dishName: string
+  variantKey: string
+  sourceLineKey: string
+  bomVersionId: string
+  bomVersionNo: number
+  calculationSnapshot: ReturnType<typeof bomCalculationSnapshot>
 }
 
 type DeferredBomRow = {
@@ -91,6 +102,10 @@ function dateOnly(value: string) {
   return parsed
 }
 
+function dateText(value: Date) {
+  return value.toISOString().slice(0, 10)
+}
+
 function round(value: number, digits = 4) {
   const factor = 10 ** digits
   return Math.round((value + Number.EPSILON) * factor) / factor
@@ -130,8 +145,13 @@ function calculationFingerprint(preview: Omit<PreviewData, 'calculationFingerpri
       }))
       .sort((a, b) => a.dishId.localeCompare(b.dishId)),
     consumptions: [...preview.consumptions]
-      .map(row => ({ productId: row.productId, quantity: row.quantity }))
-      .sort((a, b) => a.productId.localeCompare(b.productId)),
+      .map(row => ({
+        productId: row.productId,
+        quantity: row.quantity,
+        sourceLineKey: row.sourceLineKey,
+        bomVersionId: row.bomVersionId,
+      }))
+      .sort((a, b) => `${a.sourceLineKey}\u0000${a.productId}`.localeCompare(`${b.sourceLineKey}\u0000${b.productId}`)),
     deferredBomRows: [...preview.deferredBomRows]
       .map(row => ({
         rawDishName: row.rawDishName,
@@ -258,15 +278,25 @@ async function buildPreview(store: { id: string; tenantId: string }, parsed: Par
       detail: `当前门店：${storeRecord?.name || '未知'}；报表门店：${parsed.business.storeName}`,
     })
   }
+  const businessDate = dateOnly(parsed.business.date)
   const names = [...new Set(parsed.sales.map(row => row.name))]
   const dishes = await prisma.dish.findMany({
     where: { tenantId: store.tenantId },
-    include: { recipes: { include: { product: { select: { id: true, code: true, name: true, unit: true } } } } },
+    include: {
+      aliases: { where: { source: 'daily_pos', isActive: true } },
+      bomVersions: {
+        where: { status: 'PUBLISHED' },
+        include: { items: { include: { product: { select: { id: true, code: true, name: true, unit: true } } } } },
+      },
+    },
   })
   const normalizedDishes = new Map<string, typeof dishes>()
   for (const dish of dishes) {
-    const key = normalizeDishName(dish.name)
-    normalizedDishes.set(key, [...(normalizedDishes.get(key) || []), dish])
+    const keys = new Set([normalizeDishName(dish.name), ...dish.aliases.map(alias => alias.normalizedName)])
+    for (const key of keys) {
+      const candidates = normalizedDishes.get(key) || []
+      if (!candidates.some(candidate => candidate.id === dish.id)) normalizedDishes.set(key, [...candidates, dish])
+    }
   }
   const matched = new Map<string, (typeof dishes)[number]>()
   for (const name of names) {
@@ -305,10 +335,8 @@ async function buildPreview(store: { id: string; tenantId: string }, parsed: Par
       continue
     }
     const variantKey = normalizeVariantKey(row.spec)
-    const exact = dish.recipes.filter(recipe => recipe.variantKey === variantKey)
-    const fallback = dish.recipes.filter(recipe => recipe.variantKey === '')
-    const recipes = exact.length > 0 ? exact : fallback
-    if (recipes.length === 0) {
+    const bomVersion = selectEffectiveBomVersion(dish.bomVersions, businessDate, variantKey)
+    if (!bomVersion || bomVersion.items.length === 0) {
       addDeferredRow(deferredByDishVariant, row, dish, 'BOM_MISSING', true)
       const issueKey = `${row.name}\u0000${row.spec}`
       if (!missingRecipeKeys.has(issueKey)) {
@@ -321,26 +349,42 @@ async function buildPreview(store: { id: string; tenantId: string }, parsed: Par
       }
       continue
     }
-    for (const recipe of recipes) {
+    const calculationSnapshot = bomCalculationSnapshot({
+      dishId: dish.id,
+      dishName: dish.name,
+      variantKey,
+      saleQuantity: row.quantity,
+      version: bomVersion,
+    })
+    const sourceLineKey = sha256(Buffer.from(`${dish.id}\u0000${variantKey}\u0000${bomVersion.id}`)).slice(0, 32)
+    for (const recipe of bomVersion.items) {
       const quantity = row.quantity * Number(recipe.quantity) * (1 + Number(recipe.lossRate))
       if (quantity <= 0) continue
-      const current = consumptionByProduct.get(recipe.productId) || {
+      const consumptionKey = `${sourceLineKey}\u0000${recipe.productId}`
+      const current = consumptionByProduct.get(consumptionKey) || {
         productId: recipe.product.id,
         productCode: recipe.product.code,
         productName: recipe.product.name,
         unit: recipe.product.unit,
         quantity: 0,
         sources: [],
+        dishId: dish.id,
+        dishName: dish.name,
+        variantKey,
+        sourceLineKey,
+        bomVersionId: bomVersion.id,
+        bomVersionNo: bomVersion.versionNo,
+        calculationSnapshot: { ...calculationSnapshot, saleQuantity: 0 },
       }
       current.quantity += quantity
+      current.calculationSnapshot.saleQuantity += row.quantity
       current.sources.push(`${row.name}${row.spec ? `(${row.spec})` : ''} ${row.quantity}份`)
-      consumptionByProduct.set(recipe.productId, current)
+      consumptionByProduct.set(consumptionKey, current)
     }
   }
   if (excludedDishes.length > 0) {
     warningIssues.push({ code: 'INVENTORY_EXCLUDED', message: `${excludedDishes.length} 个品项按已确认规则不扣库存` })
   }
-  const businessDate = dateOnly(parsed.business.date)
   const [previous, existingRevenue] = await Promise.all([
     prisma.dailyBusinessImport.findFirst({
       where: { storeId: store.id, businessDate, status: 'CONFIRMED' },
@@ -393,14 +437,21 @@ function publicImport(row: any) {
 }
 
 function publicDeferredTask(row: any) {
-  const variantRecipes = row.dish?.recipes?.filter((recipe: any) => recipe.variantKey === row.variantKey) || []
-  const fallbackRecipes = row.dish?.recipes?.filter((recipe: any) => recipe.variantKey === '') || []
+  const bomVersion = row.dish
+    ? selectEffectiveBomVersion(row.dish.bomVersions || [], row.businessDate, row.variantKey)
+    : null
   return {
     ...row,
     quantity: Number(row.quantity),
     grossAmount: Number(row.grossAmount),
     netIncome: Number(row.netIncome),
-    recipeReady: variantRecipes.length > 0 || fallbackRecipes.length > 0,
+    recipeReady: Boolean(bomVersion?.items?.length),
+    bomVersion: bomVersion ? {
+      id: bomVersion.id,
+      versionNo: bomVersion.versionNo,
+      variantKey: bomVersion.variantKey,
+      effectiveFrom: bomVersion.effectiveFrom,
+    } : null,
   }
 }
 
@@ -691,10 +742,16 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
         dish: {
           select: {
             id: true, name: true, status: true,
-            recipes: {
+            bomVersions: {
+              where: { status: 'PUBLISHED' },
               select: {
-                id: true, variantKey: true, quantity: true, unit: true,
-                product: { select: { id: true, name: true, code: true, unit: true } },
+                id: true, variantKey: true, versionNo: true, status: true, effectiveFrom: true, effectiveTo: true,
+                items: {
+                  select: {
+                    productId: true, quantity: true, unit: true, lossRate: true,
+                    product: { select: { id: true, name: true, code: true, unit: true } },
+                  },
+                },
               },
             },
           },
@@ -716,7 +773,26 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
     ])
     if (!task) return reply.status(404).send({ error: '待办不存在或已处理' })
     if (!dish) return reply.status(400).send({ error: '菜品不存在或不属于当前品牌' })
-    const updated = await prisma.deferredBomTask.update({ where: { id: task.id }, data: { dishId: dish.id } })
+    const normalizedName = normalizeDishName(task.rawDishName)
+    const updated = await prisma.$transaction(async tx => {
+      const existingAlias = await tx.dishAlias.findUnique({
+        where: { tenantId_source_normalizedName: { tenantId: req.user.tenantId, source: 'daily_pos', normalizedName } },
+      })
+      if (existingAlias && existingAlias.dishId !== dish.id) {
+        throw Object.assign(new Error('该收银菜名已关联到其他菜品，请先处理别名冲突'), { statusCode: 409 })
+      }
+      if (existingAlias) {
+        await tx.dishAlias.update({ where: { id: existingAlias.id }, data: { isActive: true, rawName: task.rawDishName } })
+      } else if (normalizeDishName(dish.name) !== normalizedName) {
+        await tx.dishAlias.create({
+          data: {
+            tenantId: req.user.tenantId, dishId: dish.id, source: 'daily_pos',
+            rawName: task.rawDishName, normalizedName, createdById: req.user.userId,
+          },
+        })
+      }
+      return tx.deferredBomTask.update({ where: { id: task.id }, data: { dishId: dish.id } })
+    })
     return publicDeferredTask(updated)
   })
 
@@ -724,17 +800,21 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
     if (!BOM_TASK_ROLES.has(req.user.role)) return reply.status(403).send({ error: '仅总厨/管理员可回补库存消耗' })
     const task = await prisma.deferredBomTask.findFirst({
       where: { id: req.params.taskId, tenantId: req.user.tenantId },
-      include: { dish: { include: { recipes: true } } },
+      include: {
+        dish: {
+          include: {
+            bomVersions: { where: { status: 'PUBLISHED' }, include: { items: true } },
+          },
+        },
+      },
     })
     if (!task) return reply.status(404).send({ error: 'BOM 待办不存在' })
     if (task.status === 'BACKFILLED') return reply.send(publicDeferredTask(task))
     if (task.status !== 'PENDING') return reply.status(409).send({ error: `当前状态 ${task.status} 不能回补` })
     if (!task.dish) return reply.status(409).send({ error: '请先关联或新建菜品' })
     const dish = task.dish
-    const exact = dish.recipes.filter(recipe => recipe.variantKey === task.variantKey)
-    const fallback = dish.recipes.filter(recipe => recipe.variantKey === '')
-    const recipes = exact.length > 0 ? exact : fallback
-    if (recipes.length === 0) {
+    const bomVersion = selectEffectiveBomVersion(dish.bomVersions, task.businessDate, task.variantKey)
+    if (!bomVersion || bomVersion.items.length === 0) {
       return reply.status(409).send({ error: `菜品“${task.dish.name}”仍缺少${task.spec ? `“${task.spec}”规格或默认` : '默认'} BOM` })
     }
     const now = new Date()
@@ -745,8 +825,15 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
           data: { status: 'BACKFILLED', resolvedById: req.user.userId, backfilledAt: now },
         })
         if (locked.count !== 1) throw Object.assign(new Error('该待办已被其他操作处理，请刷新'), { statusCode: 409 })
-        const consumptions = calculateDeferredBomConsumptions(Number(task.quantity), recipes)
+        const consumptions = calculateBomConsumptions(Number(task.quantity), bomVersion.items)
         if (consumptions.length > 0) {
+          const snapshot = bomCalculationSnapshot({
+            dishId: dish.id,
+            dishName: dish.name,
+            variantKey: task.variantKey,
+            saleQuantity: Number(task.quantity),
+            version: bomVersion,
+          })
           await tx.stockConsumption.createMany({
             data: consumptions.map(({ productId, quantity }) => ({
               tenantId: task.tenantId,
@@ -757,6 +844,11 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
               note: `总厨补齐 BOM 后回补；${task.rawDishName}${task.spec ? `(${task.spec})` : ''} ${Number(task.quantity)}份`,
               sourceType: BOM_BACKFILL_SOURCE,
               sourceId: task.id,
+              sourceLineKey: bomVersion.id,
+              dishId: dish.id,
+              variantKey: task.variantKey,
+              bomVersionId: bomVersion.id,
+              calculationSnapshot: json(snapshot),
               createdById: req.user.userId,
             })),
           })
@@ -788,12 +880,152 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
         }
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 })
       const completed = await prisma.deferredBomTask.findUniqueOrThrow({
-        where: { id: task.id }, include: { dish: { include: { recipes: true } }, store: true },
+        where: { id: task.id },
+        include: {
+          dish: { include: { bomVersions: { where: { status: 'PUBLISHED' }, include: { items: true } } } },
+          store: true,
+        },
       })
       return reply.send(publicDeferredTask(completed))
     } catch (error: any) {
       req.log.error({ error, taskId: task.id }, 'deferred BOM backfill failed')
       return reply.status(error.statusCode || 500).send({ error: error.message || '回补失败，库存未发生部分扣减' })
+    }
+  })
+
+  // 历史 BOM 纠错必须先看影响，再由总厨明确确认。按原日报快照整日重算，避免只修一道菜时破坏聚合消耗。
+  app.get('/bom-recalculation-impact', auth, async (req: any, reply: any) => {
+    if (!BOM_TASK_ROLES.has(req.user.role)) return reply.status(403).send({ error: '仅总厨/管理员可查看历史重算影响' })
+    const versionId = String(req.query?.versionId || '')
+    if (!versionId) return reply.status(400).send({ error: '缺少 BOM 版本' })
+    const version = await prisma.dishBomVersion.findFirst({
+      where: { id: versionId, tenantId: req.user.tenantId, status: 'PUBLISHED' },
+      include: { dish: { select: { id: true, name: true } } },
+    })
+    if (!version || !version.effectiveFrom) return reply.status(404).send({ error: '已发布 BOM 版本不存在' })
+    if (version.changeType !== 'HISTORICAL_CORRECTION') return reply.status(409).send({ error: '只有历史配方纠错需要重算历史日报' })
+    const end = version.effectiveTo || dateOnly(chinaClock().expectedBusinessDate)
+    const [imports, sales] = await Promise.all([
+      prisma.dailyBusinessImport.findMany({
+        where: { tenantId: req.user.tenantId, status: 'CONFIRMED', businessDate: { gte: version.effectiveFrom, lte: end } },
+        select: { id: true, businessDate: true, store: { select: { id: true, name: true } } },
+        orderBy: { businessDate: 'asc' },
+      }),
+      prisma.dishSale.aggregate({
+        where: { tenantId: req.user.tenantId, dishId: version.dishId, date: { gte: version.effectiveFrom, lte: end } },
+        _sum: { quantity: true, grossAmount: true }, _count: true,
+      }),
+    ])
+    return {
+      version: { id: version.id, versionNo: version.versionNo, dish: version.dish, variantKey: version.variantKey, effectiveFrom: version.effectiveFrom, effectiveTo: version.effectiveTo },
+      importCount: imports.length,
+      stores: [...new Map(imports.map(row => [row.store.id, row.store])).values()],
+      from: version.effectiveFrom,
+      to: end,
+      saleDays: sales._count,
+      saleQuantity: Number(sales._sum.quantity || 0),
+      saleRevenue: Number(sales._sum.grossAmount || 0),
+    }
+  })
+
+  app.post('/bom-recalculation', auth, async (req: any, reply: any) => {
+    if (!BOM_TASK_ROLES.has(req.user.role)) return reply.status(403).send({ error: '仅总厨/管理员可重算历史日报' })
+    const parsed = z.object({ versionId: z.string().min(1), confirm: z.literal(true) }).safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: '必须明确确认历史重算' })
+    const version = await prisma.dishBomVersion.findFirst({
+      where: { id: parsed.data.versionId, tenantId: req.user.tenantId, status: 'PUBLISHED', changeType: 'HISTORICAL_CORRECTION' },
+      include: { dish: { select: { name: true } } },
+    })
+    if (!version?.effectiveFrom) return reply.status(404).send({ error: '历史纠错 BOM 版本不存在' })
+    const end = version.effectiveTo || dateOnly(chinaClock().expectedBusinessDate)
+    const imports = await prisma.dailyBusinessImport.findMany({
+      where: { tenantId: req.user.tenantId, status: 'CONFIRMED', businessDate: { gte: version.effectiveFrom, lte: end } },
+      orderBy: { businessDate: 'asc' },
+    })
+    const rebuilt = [] as Array<{ record: typeof imports[number]; result: Awaited<ReturnType<typeof buildPreview>> }>
+    for (const record of imports) {
+      const result = await buildPreview({ id: record.storeId, tenantId: record.tenantId }, record.parsedData as unknown as ParsedDailyFiles)
+      const hard = partitionImportIssues(result.blockingIssues).hard
+      if (hard.length > 0) {
+        return reply.status(409).send({
+          error: `${dateText(record.businessDate)} 日报存在阻断问题，历史数据未发生任何改动`,
+          issues: hard,
+        })
+      }
+      rebuilt.push({ record, result })
+    }
+    try {
+      await prisma.$transaction(async tx => {
+        for (const { record, result } of rebuilt) {
+          await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`daily-bom-recalc:${record.id}`}))`)
+          const preview = result.preview
+          const tasks = await tx.deferredBomTask.findMany({
+            where: { dailyBusinessImportId: record.id }, select: { id: true, rawDishName: true, variantKey: true, status: true },
+          })
+          const unresolved = new Set(preview.deferredBomRows.map(row => `${normalizeDishName(row.rawDishName)}\u0000${row.variantKey}`))
+          const nowResolved = tasks.filter(task => task.status !== 'SUPERSEDED'
+            && !unresolved.has(`${normalizeDishName(task.rawDishName)}\u0000${task.variantKey}`))
+          if (nowResolved.length > 0) {
+            await tx.stockConsumption.deleteMany({
+              where: { sourceType: BOM_BACKFILL_SOURCE, sourceId: { in: nowResolved.map(task => task.id) } },
+            })
+            await tx.deferredBomTask.updateMany({
+              where: { id: { in: nowResolved.map(task => task.id) } }, data: { status: 'SUPERSEDED' },
+            })
+          }
+          await tx.stockConsumption.deleteMany({
+            where: { tenantId: record.tenantId, storeId: record.storeId, sourceType: CONSUMPTION_SOURCE, sourceId: record.id },
+          })
+          if (preview.consumptions.length > 0) {
+            await tx.stockConsumption.createMany({
+              data: preview.consumptions.map(row => ({
+                tenantId: record.tenantId, storeId: record.storeId, productId: row.productId,
+                date: record.businessDate, quantity: row.quantity,
+                note: `历史 BOM 纠错重算；${row.sources.join('；')}`.slice(0, 1000),
+                sourceType: CONSUMPTION_SOURCE, sourceId: record.id, sourceLineKey: row.sourceLineKey,
+                dishId: row.dishId, variantKey: row.variantKey, bomVersionId: row.bomVersionId,
+                calculationSnapshot: json(row.calculationSnapshot), createdById: req.user.userId,
+              })),
+            })
+          }
+          await tx.dishSale.deleteMany({
+            where: { tenantId: record.tenantId, storeId: record.storeId, date: record.businessDate, source: SOURCE },
+          })
+          if (preview.dishSales.length > 0) {
+            await tx.dishSale.createMany({
+              data: preview.dishSales.map(row => ({
+                tenantId: record.tenantId, storeId: record.storeId, dishId: row.dishId,
+                date: record.businessDate, quantity: row.quantity, grossAmount: row.netIncome,
+                source: SOURCE, channel: '收银POS日报',
+                rawData: json({ importId: record.id, grossAmount: row.grossAmount, netIncome: row.netIncome, variants: row.variants }),
+                createdById: req.user.userId,
+              })),
+            })
+          }
+          await tx.dailyBusinessImport.update({
+            where: { id: record.id },
+            data: {
+              previewData: json(preview), calculationFingerprint: preview.calculationFingerprint,
+              blockingIssues: json(result.blockingIssues), warningIssues: json([
+                ...result.warningIssues,
+                { code: 'HISTORICAL_BOM_RECALCULATED', message: `按 ${version.dish.name} BOM v${version.versionNo} 完成历史消耗重算` },
+              ]),
+            },
+          })
+        }
+        await tx.opLog.create({
+          data: {
+            tenantId: req.user.tenantId, userId: req.user.userId, role: req.user.role,
+            action: `历史 BOM 重算 ${rebuilt.length} 个营业日`, target: version.dish.name,
+            targetId: version.id, entityType: 'DishBomVersion',
+            metadata: { versionNo: version.versionNo, from: dateText(version.effectiveFrom!), to: dateText(end), importIds: imports.map(row => row.id) },
+          },
+        })
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 60_000 })
+      return { ok: true, recalculatedImportCount: rebuilt.length, from: version.effectiveFrom, to: end }
+    } catch (error: any) {
+      req.log.error({ error, versionId: version.id }, 'historical BOM recalculation failed')
+      return reply.status(error.statusCode || 500).send({ error: error.message || '历史重算失败，数据未发生部分写入' })
     }
   })
 
@@ -949,6 +1181,11 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
               note: `每日销量×BOM；${row.sources.join('；')}`.slice(0, 1000),
               sourceType: CONSUMPTION_SOURCE,
               sourceId: record.id,
+              sourceLineKey: row.sourceLineKey,
+              dishId: row.dishId,
+              variantKey: row.variantKey,
+              bomVersionId: row.bomVersionId,
+              calculationSnapshot: json(row.calculationSnapshot),
               createdById: req.user.userId,
             })),
           })

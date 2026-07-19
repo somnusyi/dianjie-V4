@@ -9,6 +9,7 @@ import { apiFetch } from '@/lib/v2-auth'
 export default function DishNewPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const fromBomTask = searchParams.get('fromBomTask') || ''
   const [name, setName] = useState(() => searchParams.get('name') || '')
   const [code, setCode] = useState('')
   const [category, setCategory] = useState('汤锅')
@@ -29,9 +30,21 @@ export default function DishNewPage() {
         body: JSON.stringify({
           name, code: code || undefined, category, salePrice: p,
           description: description || undefined,
+          status: 'UPCOMING',
         }),
       })
-      router.push(`/v2/chef-director/dishes/${r.id}`)
+      if (fromBomTask) {
+        await apiFetch(`/api/daily-business-imports/bom-tasks/${fromBomTask}/dish`, {
+          method: 'PUT', body: JSON.stringify({ dishId: r.id }),
+        })
+      }
+      const next = new URLSearchParams()
+      for (const key of ['variant', 'spec', 'effectiveFrom', 'changeType']) {
+        const value = searchParams.get(key)
+        if (value) next.set(key, value)
+      }
+      if (fromBomTask) next.set('task', fromBomTask)
+      router.push(`/v2/chef-director/dishes/${r.id}${next.size ? `?${next.toString()}` : ''}`)
     } catch (e: any) {
       setErr(e.message)
       setSubmitting(false)

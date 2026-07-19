@@ -62,6 +62,8 @@ model Tenant {
   payrolls                      Payroll[]
   dailyBusinessImports          DailyBusinessImport[]
   deferredBomTasks              DeferredBomTask[]
+  dishAliases                   DishAlias[]
+  dishBomVersions               DishBomVersion[]
 
   @@map("tenants")
 }
@@ -285,6 +287,8 @@ model Dish {
   inventoryPolicy     DishInventoryPolicy @default(BOM)
   inventoryPolicyNote String?
   status              DishStatus          @default(ACTIVE)
+  availableFrom       DateTime?           @db.Date
+  availableTo         DateTime?           @db.Date
   // 是否所有门店都卖 (group=true) 或仅部分 (storeIds[])
   groupWide           Boolean             @default(true)
   storeIds            String[]            @default([]) // groupWide=false 时哪些店卖
@@ -292,9 +296,12 @@ model Dish {
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
-  recipes          DishRecipe[]
-  sales            DishSale[]
-  deferredBomTasks DeferredBomTask[]
+  recipes           DishRecipe[]
+  aliases           DishAlias[]
+  bomVersions       DishBomVersion[]
+  stockConsumptions StockConsumption[]
+  sales             DishSale[]
+  deferredBomTasks  DeferredBomTask[]
 
   @@unique([tenantId, name])
   @@index([tenantId, status])
@@ -310,6 +317,18 @@ enum DishStatus {
 enum DishInventoryPolicy {
   BOM
   EXCLUDE
+}
+
+enum DishBomVersionStatus {
+  DRAFT
+  PUBLISHED
+  RETIRED
+}
+
+enum DishBomChangeType {
+  INITIAL
+  BUSINESS_CHANGE
+  HISTORICAL_CORRECTION
 }
 
 enum DailyBusinessImportStatus {
@@ -347,6 +366,76 @@ model DishRecipe {
   @@unique([dishId, variantKey, productId])
   @@index([productId])
   @@map("dish_recipes")
+}
+
+// 收银/POS 菜名与标准菜品的长期映射。标准菜名仍可直接匹配；别名用于改名、简称和历史名称。
+model DishAlias {
+  id             String   @id @default(cuid())
+  tenantId       String
+  dishId         String
+  source         String   @default("daily_pos") @db.VarChar(32)
+  rawName        String   @db.VarChar(120)
+  normalizedName String   @db.VarChar(120)
+  isActive       Boolean  @default(true)
+  createdById    String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  dish   Dish   @relation(fields: [dishId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, source, normalizedName])
+  @@index([dishId, isActive])
+  @@map("dish_aliases")
+}
+
+// BOM 版本头。已发布版本不可原地修改；变更必须复制为草稿并设置生效日期。
+model DishBomVersion {
+  id            String               @id @default(cuid())
+  tenantId      String
+  dishId        String
+  variantKey    String               @default("") @db.VarChar(80)
+  versionNo     Int
+  status        DishBomVersionStatus @default(DRAFT)
+  changeType    DishBomChangeType    @default(BUSINESS_CHANGE)
+  changeReason  String?              @db.VarChar(500)
+  effectiveFrom DateTime?            @db.Date
+  effectiveTo   DateTime?            @db.Date
+  createdById   String
+  publishedById String?
+  publishedAt   DateTime?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  tenant       Tenant             @relation(fields: [tenantId], references: [id])
+  dish         Dish               @relation(fields: [dishId], references: [id], onDelete: Cascade)
+  items        DishBomItem[]
+  consumptions StockConsumption[]
+
+  @@unique([dishId, variantKey, versionNo])
+  @@index([tenantId, status, effectiveFrom])
+  @@index([dishId, variantKey, status, effectiveFrom])
+  @@map("dish_bom_versions")
+}
+
+model DishBomItem {
+  id        String   @id @default(cuid())
+  versionId String
+  productId String
+  quantity  Decimal  @db.Decimal(14, 6)
+  unit      String
+  lossRate  Decimal  @default(0) @db.Decimal(5, 4)
+  isMain    Boolean  @default(false)
+  note      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  version DishBomVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  product Product        @relation(fields: [productId], references: [id])
+
+  @@unique([versionId, productId])
+  @@index([productId])
+  @@map("dish_bom_items")
 }
 
 // 菜品销量 — 每店每日每菜的销量
@@ -635,7 +724,7 @@ model Supplier {
 
   // 供应商仓库库存策略。试运行阶段未完成期初盘点时不应阻断履约；
   // 完成库存初始化并持续维护入库后，再显式切换为 STRICT。
-  inventoryMode SupplierInventoryMode @default(NOT_TRACKED)
+  inventoryMode        SupplierInventoryMode @default(NOT_TRACKED)
   inventoryActivatedAt DateTime?
 
   // 账期配置
@@ -727,6 +816,7 @@ model Product {
   stockBatchAllocations  SupplierStockBatchAllocation[]
   stockReservations      SupplierStockReservation[]
   dishRecipes            DishRecipe[]
+  dishBomItems           DishBomItem[]
   inventorySnapshotItems InventorySnapshotItem[]
   inventoryCountItems    InventoryCountItem[]
 
@@ -1804,7 +1894,7 @@ enum SupplierStatus {
 
 enum SupplierInventoryMode {
   NOT_TRACKED // 不核算供应商仓库库存；接单/发货不预占、不扣减
-  STRICT      // 严格按供应商物理库存、预占和批次余额控制履约
+  STRICT // 严格按供应商物理库存、预占和批次余额控制履约
 }
 
 // 供应商数据源类型 (财务月度核对工作台 4 栏区分)
@@ -2106,25 +2196,34 @@ enum SupplierStockReservationStatus {
 
 // ── 库存消耗记录（总厨每日录入）──────────────────────
 model StockConsumption {
-  id          String   @id @default(cuid())
-  tenantId    String
-  storeId     String
-  productId   String
-  date        DateTime @db.Date
-  quantity    Decimal  @db.Decimal(14, 6) // BOM 小包装换算需 6 位精度
-  note        String?
+  id                  String          @id @default(cuid())
+  tenantId            String
+  storeId             String
+  productId           String
+  date                DateTime        @db.Date
+  quantity            Decimal         @db.Decimal(14, 6) // BOM 小包装换算需 6 位精度
+  note                String?
   // 来源(用于幂等 + 审计): manual / dish_sale:<saleId> / meituan_ingest:<orderId>
-  sourceType  String?  @db.VarChar(20)
-  sourceId    String?  @db.VarChar(64)
-  createdById String
-  createdAt   DateTime @default(now())
-  tenant      Tenant   @relation(fields: [tenantId], references: [id])
-  store       Store    @relation(fields: [storeId], references: [id])
-  product     Product  @relation(fields: [productId], references: [id])
-  createdBy   User     @relation(fields: [createdById], references: [id])
+  sourceType          String?         @db.VarChar(20)
+  sourceId            String?         @db.VarChar(64)
+  sourceLineKey       String          @default("") @db.VarChar(80)
+  dishId              String?
+  variantKey          String          @default("") @db.VarChar(80)
+  bomVersionId        String?
+  calculationSnapshot Json?
+  createdById         String
+  createdAt           DateTime        @default(now())
+  tenant              Tenant          @relation(fields: [tenantId], references: [id])
+  store               Store           @relation(fields: [storeId], references: [id])
+  product             Product         @relation(fields: [productId], references: [id])
+  createdBy           User            @relation(fields: [createdById], references: [id])
+  dish                Dish?           @relation(fields: [dishId], references: [id], onDelete: SetNull)
+  bomVersion          DishBomVersion? @relation(fields: [bomVersionId], references: [id], onDelete: SetNull)
 
-  @@unique([sourceType, sourceId, productId], name: "stock_consumption_source_uk")
+  @@unique([sourceType, sourceId, sourceLineKey, productId], map: "stock_consumption_source_line_uk")
   @@index([tenantId, date])
+  @@index([dishId, date])
+  @@index([bomVersionId])
   @@map("stock_consumptions")
 }
 

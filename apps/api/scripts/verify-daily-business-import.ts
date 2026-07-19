@@ -110,10 +110,15 @@ async function main() {
     update: { inventoryPolicy: 'BOM', salePrice: 50 },
     create: { tenantId: tenant.id, name: DISH_NAME, category: '测试', unit: '份', salePrice: 50, createdById: manager.id },
   })
-  await prisma.dishRecipe.upsert({
-    where: { dishId_variantKey_productId: { dishId: dish.id, variantKey: '', productId: product.id } },
-    update: { quantity: 0.25, unit: 'kg', lossRate: 0 },
-    create: { dishId: dish.id, variantKey: '', productId: product.id, quantity: 0.25, unit: 'kg', lossRate: 0 },
+  await prisma.dishBomVersion.deleteMany({ where: { dishId: dish.id } })
+  const firstVersion = await prisma.dishBomVersion.create({
+    data: {
+      tenantId: tenant.id, dishId: dish.id, variantKey: '', versionNo: 1,
+      status: 'PUBLISHED', changeType: 'INITIAL', changeReason: '日报 E2E 初始版本',
+      effectiveFrom: new Date('2026-01-01T00:00:00.000Z'), createdById: manager.id,
+      publishedById: manager.id, publishedAt: new Date(),
+      items: { create: [{ productId: product.id, quantity: 0.25, unit: 'kg', lossRate: 0, isMain: true }] },
+    },
   })
   const date = new Date(`${DATE}T00:00:00.000Z`)
   try {
@@ -125,19 +130,36 @@ async function main() {
     const firstPreview = concurrentPreviews[0]
     const duplicatePreview = await preview(token, 1)
     if (duplicatePreview.id !== firstPreview.id) throw new Error('相同文件对未命中幂等记录')
-    await prisma.dishRecipe.update({
-      where: { dishId_variantKey_productId: { dishId: dish.id, variantKey: '', productId: product.id } },
-      data: { quantity: 0.3 },
-    })
+    await prisma.$transaction([
+      prisma.dishBomVersion.update({ where: { id: firstVersion.id }, data: { effectiveTo: new Date('2026-01-01T00:00:00.000Z') } }),
+      prisma.dishBomVersion.create({
+        data: {
+          tenantId: tenant.id, dishId: dish.id, variantKey: '', versionNo: 2,
+          status: 'PUBLISHED', changeType: 'BUSINESS_CHANGE', changeReason: '日报 E2E 预览刷新',
+          effectiveFrom: date, createdById: manager.id, publishedById: manager.id, publishedAt: new Date(),
+          items: { create: [{ productId: product.id, quantity: 0.3, unit: 'kg', lossRate: 0, isMain: true }] },
+        },
+      }),
+    ])
     const refreshed = await expectPreviewRefresh(token, firstPreview.id)
     if (Number(refreshed.previewData.consumptions[0]?.quantity) !== 0.6) {
       throw new Error(`BOM 刷新后的扣减异常: ${JSON.stringify(refreshed.previewData.consumptions)}`)
     }
     await confirm(token, firstPreview.id)
-    await prisma.dishRecipe.update({
-      where: { dishId_variantKey_productId: { dishId: dish.id, variantKey: '', productId: product.id } },
-      data: { quantity: 0.25 },
+    const secondVersion = await prisma.dishBomVersion.findFirstOrThrow({
+      where: { dishId: dish.id, variantKey: '', versionNo: 2 },
     })
+    await prisma.$transaction([
+      prisma.dishBomVersion.update({ where: { id: secondVersion.id }, data: { status: 'RETIRED' } }),
+      prisma.dishBomVersion.create({
+        data: {
+          tenantId: tenant.id, dishId: dish.id, variantKey: '', versionNo: 3,
+          status: 'PUBLISHED', changeType: 'HISTORICAL_CORRECTION', changeReason: '日报 E2E 历史纠错',
+          effectiveFrom: date, createdById: manager.id, publishedById: manager.id, publishedAt: new Date(),
+          items: { create: [{ productId: product.id, quantity: 0.25, unit: 'kg', lossRate: 0, isMain: true }] },
+        },
+      }),
+    ])
     const sameFileCorrection = await preview(token, 1)
     if (sameFileCorrection.id === firstPreview.id || sameFileCorrection.revision !== firstPreview.revision + 1) {
       throw new Error('同一文件在 BOM 更新后没有生成新的更正版本')
@@ -174,7 +196,6 @@ async function main() {
     await prisma.dishSale.deleteMany({ where: { storeId: store.id, date, source: SOURCE } })
     await prisma.revenueRecord.deleteMany({ where: { storeId: store.id, date, source: SOURCE } })
     await prisma.dailyBusinessImport.deleteMany({ where: { storeId: store.id, businessDate: date } })
-    await prisma.dishRecipe.deleteMany({ where: { dishId: dish.id } })
     await prisma.dish.deleteMany({ where: { id: dish.id } })
     await prisma.product.deleteMany({ where: { id: product.id } })
   }

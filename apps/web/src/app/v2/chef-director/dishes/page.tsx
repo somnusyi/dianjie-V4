@@ -12,8 +12,12 @@ type Dish = {
   id: string; name: string; code?: string | null
   category?: string | null; unit: string; salePrice: string
   status: 'ACTIVE' | 'DISABLED' | 'UPCOMING'
+  inventoryPolicy: 'BOM' | 'EXCLUDE'
   foodCost?: number; grossProfit?: number; grossMargin?: number
   recipes?: any[]
+  activeBomVariants?: string[]
+  hasAnyEffectiveBom?: boolean
+  primaryBomVariant?: string
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -47,7 +51,7 @@ export default function DishesPage() {
   const list = dishes || []
   const categories = ['all', ...Array.from(new Set(list.map(d => d.category || '未分类')))]
   const totalDishes = list.length
-  const noBOM = list.filter(d => !d.recipes?.length).length
+  const noBOM = list.filter(d => d.inventoryPolicy === 'BOM' && !d.hasAnyEffectiveBom).length
 
   return (
     <div className="min-h-screen bg-bg pb-32">
@@ -97,31 +101,42 @@ export default function DishesPage() {
 
       <ul className="px-4 mt-3 space-y-2">
         {list.map(d => {
-          const hasBOM = (d.recipes?.length || 0) > 0
+          const hasDefaultBOM = (d.recipes?.length || 0) > 0
+          const hasBOM = Boolean(d.hasAnyEffectiveBom)
+          const excluded = d.inventoryPolicy === 'EXCLUDE'
           const margin = d.grossMargin || 0
           const marginTone: any = margin >= 0.6 ? 'green' : margin >= 0.4 ? 'amber' : 'red'
+          const variantQuery = !hasDefaultBOM && d.primaryBomVariant
+            ? `?variant=${encodeURIComponent(d.primaryBomVariant)}`
+            : ''
           return (
             <li key={d.id}>
-              <a href={`/v2/chef-director/dishes/${d.id}`}
+              <a href={`/v2/chef-director/dishes/${d.id}${variantQuery}`}
                  className="block bg-white rounded-card border border-border p-3">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
                   <Chip tone={STATUS_TONE[d.status]}>{STATUS_LABEL[d.status]}</Chip>
                   {d.category && <span className="text-micro text-gray3">{d.category}</span>}
-                  {!hasBOM && <Chip tone="red">缺配方</Chip>}
-                  {hasBOM && <Chip tone={marginTone}>毛利 {(margin * 100).toFixed(0)}%</Chip>}
+                  {!excluded && !hasBOM && <Chip tone="red">缺配方</Chip>}
+                  {excluded && <Chip tone="gray">不扣库存</Chip>}
+                  {hasDefaultBOM && <Chip tone={marginTone}>毛利 {(margin * 100).toFixed(0)}%</Chip>}
+                  {!hasDefaultBOM && hasBOM && <Chip tone="amber">{d.activeBomVariants?.length || 0} 个规格 BOM</Chip>}
                 </div>
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="text-h2 truncate flex-1">{d.name}</span>
                   <span className="font-num text-h2 shrink-0">¥{fmt(Number(d.salePrice))}</span>
                 </div>
-                {hasBOM && (
+                {hasDefaultBOM && (
                   <p className="text-micro text-gray3 mt-0.5">
                     成本 ¥{fmt(d.foodCost || 0)} · 毛利 ¥{fmt(d.grossProfit || 0)}
                   </p>
                 )}
-                {!hasBOM && (
+                {!excluded && !hasBOM && (
                   <p className="text-micro text-amber-fg mt-0.5">未录配方 — 点进去配 ›</p>
                 )}
+                {!hasDefaultBOM && hasBOM && (
+                  <p className="text-micro text-amber-fg mt-0.5">已有规格配方；没有默认兜底 BOM ›</p>
+                )}
+                {excluded && <p className="text-micro text-gray3 mt-0.5">纸巾、赠品等明确不参与食材扣减</p>}
               </a>
             </li>
           )

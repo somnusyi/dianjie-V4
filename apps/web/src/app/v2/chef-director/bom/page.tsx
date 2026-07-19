@@ -21,24 +21,37 @@ type BomTask = {
   store: { id: string; name: string; no: string }
   dish: { id: string; name: string; recipes: Recipe[] } | null
 }
+type Coverage = {
+  days: number
+  salesQuantityCoverage: number
+  salesRevenueCoverage: number
+  pendingTaskCount: number
+  activeDishCount: number
+  masterReadyCount: number
+  masterCoverage: number
+  uncoveredRevenue: number
+}
 
 const shortDate = (value: string) => String(value || '').slice(0, 10)
 
 export default function ChefDirectorBomPage() {
   const [tasks, setTasks] = useState<BomTask[] | null>(null)
   const [dishes, setDishes] = useState<Dish[]>([])
+  const [coverage, setCoverage] = useState<Coverage | null>(null)
   const [selected, setSelected] = useState<Record<string, string>>({})
   const [busyId, setBusyId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   async function reload() {
     try {
-      const [pending, allDishes] = await Promise.all([
+      const [pending, allDishes, nextCoverage] = await Promise.all([
         apiFetch<BomTask[]>('/api/daily-business-imports/bom-tasks?status=PENDING'),
-        apiFetch<Dish[]>('/api/dishes?status=ACTIVE'),
+        apiFetch<Dish[]>('/api/dishes'),
+        apiFetch<Coverage>('/api/dishes/bom-coverage?days=30'),
       ])
-      setTasks(pending)
+      setTasks([...pending].sort((left, right) => right.netIncome - left.netIncome || right.quantity - left.quantity))
       setDishes(allDishes)
+      setCoverage(nextCoverage)
       setError(null)
     } catch (reason: any) {
       setError(reason.message || 'BOM 待办加载失败')
@@ -77,6 +90,8 @@ export default function ChefDirectorBomPage() {
     if (task.variantKey) query.set('variant', task.variantKey)
     if (task.spec) query.set('spec', task.spec)
     query.set('task', task.id)
+    query.set('effectiveFrom', shortDate(task.businessDate))
+    query.set('changeType', 'HISTORICAL_CORRECTION')
     return `/v2/chef-director/dishes/${task.dish!.id}?${query.toString()}`
   }
 
@@ -92,12 +107,20 @@ export default function ChefDirectorBomPage() {
 
       <div className="mx-4 mt-3 grid grid-cols-2 gap-2">
         <div className="bg-white rounded-card border border-border p-3">
-          <div className="text-micro text-gray3">待处理</div>
-          <div className="text-h1 font-num mt-1">{tasks?.length ?? '—'} 项</div>
+          <div className="text-micro text-gray3">近30天销量覆盖</div>
+          <div className="text-h1 font-num mt-1">{coverage ? `${(coverage.salesQuantityCoverage * 100).toFixed(1)}%` : '—'}</div>
         </div>
         <div className="bg-green-bg rounded-card border border-green-fg/20 p-3">
-          <div className="text-micro text-green-fg">配方已就绪</div>
-          <div className="text-h1 font-num text-green-fg mt-1">{readyCount} 项</div>
+          <div className="text-micro text-green-fg">近30天收入覆盖</div>
+          <div className="text-h1 font-num text-green-fg mt-1">{coverage ? `${(coverage.salesRevenueCoverage * 100).toFixed(1)}%` : '—'}</div>
+        </div>
+        <div className="bg-white rounded-card border border-border p-3">
+          <div className="text-micro text-gray3">待处理 / 已就绪</div>
+          <div className="text-h2 font-num mt-1">{tasks?.length ?? '—'} / {readyCount} 项</div>
+        </div>
+        <div className="bg-orange-bg rounded-card border border-orange-fg/20 p-3">
+          <div className="text-micro text-orange-fg">未覆盖营业收入</div>
+          <div className="text-h2 font-num text-orange-fg mt-1">¥{coverage ? coverage.uncoveredRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</div>
         </div>
       </div>
 
@@ -137,7 +160,14 @@ export default function ChefDirectorBomPage() {
                     </select>
                     <button onClick={() => linkDish(task)} disabled={!selected[task.id] || busyId === task.id} className="px-3 py-2 bg-ink text-white rounded-cta text-button disabled:opacity-35">关联</button>
                   </div>
-                  <a href={`/v2/chef-director/dishes/new?name=${encodeURIComponent(task.rawDishName)}&fromBomTask=${task.id}`} className="inline-block mt-2 text-caption text-amber-fg">没有对应菜品？新建菜品 ›</a>
+                  <a href={`/v2/chef-director/dishes/new?${new URLSearchParams({
+                    name: task.rawDishName,
+                    fromBomTask: task.id,
+                    variant: task.variantKey,
+                    spec: task.spec,
+                    effectiveFrom: shortDate(task.businessDate),
+                    changeType: 'HISTORICAL_CORRECTION',
+                  }).toString()}`} className="inline-block mt-2 text-caption text-amber-fg">没有对应菜品？新建菜品 ›</a>
                 </div>
               ) : (
                 <div className="mt-3 flex items-center justify-between gap-2 bg-bg rounded-card p-3">

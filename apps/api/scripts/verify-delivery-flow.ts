@@ -33,6 +33,46 @@ async function login(identifier: string) {
   return result.body.token as string
 }
 
+async function verifyShipmentAuditRollback(orderId: string, itemId: string, productId: string, supplierToken: string) {
+  const sqlSuffix = Date.now().toString()
+  const failureFunction = `local_shipment_log_failure_fn_${sqlSuffix}`
+  const failureTrigger = `local_shipment_log_failure_trg_${sqlSuffix}`
+  const idempotencyKey = `local-shipment-log-failure-${sqlSuffix}`
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION "${failureFunction}"() RETURNS trigger AS $$
+      BEGIN
+        IF NEW."targetId" = '${orderId}' AND NEW."action" LIKE '供应商确认发货%' THEN
+          RAISE EXCEPTION 'local shipment audit failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `)
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER "${failureTrigger}"
+      BEFORE INSERT ON "op_logs"
+      FOR EACH ROW EXECUTE FUNCTION "${failureFunction}"()
+    `)
+    const failedShipment = await api(`/api/orders/${orderId}/ship`, supplierToken, {
+      method: 'PATCH',
+      body: JSON.stringify({ idempotencyKey, items: [{ itemId, shippedQty: 2 }] }),
+    })
+    assert.equal(failedShipment.status, 500, JSON.stringify(failedShipment.body))
+    assert.equal((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: orderId } })).status, 'CONFIRMED')
+    assert.equal(await prisma.deliveryOrder.count({ where: { purchaseOrderId: orderId, idempotencyKey } }), 0)
+    assert.equal(Number((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).stock), 100)
+    assert.equal(Number((await prisma.supplierStockBatch.findFirstOrThrow({ where: { productId } })).remainingQty), 100)
+    assert.equal(await prisma.supplierStockMovement.count({ where: { productId, type: 'OUTBOUND_PO' } }), 0)
+    assert.equal(await prisma.opLog.count({
+      where: { targetId: orderId, action: { startsWith: '供应商确认发货' } },
+    }), 0)
+  } finally {
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${failureTrigger}" ON "op_logs"`)
+    await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${failureFunction}"()`)
+  }
+}
+
 async function verifyDeliveryAuditRollback(orderId: string, deliveryId: string, supplierToken: string) {
   const sqlSuffix = Date.now().toString()
   const failureFunction = `local_delivery_log_failure_fn_${sqlSuffix}`
@@ -213,6 +253,8 @@ async function main() {
     })
     assert.equal(forbiddenPrice.status, 400, '配送接口必须拒绝单价字段')
 
+    await verifyShipmentAuditRollback(orderId, created.body.items[0].id, product.id, supplierToken)
+
     const firstKey = `delivery-first-${Date.now()}`
     const firstShipBody = JSON.stringify({ idempotencyKey: firstKey, items: [{ itemId: created.body.items[0].id, shippedQty: 2 }] })
     const firstShip = await api(`/api/orders/${orderId}/ship`, supplierToken, {
@@ -332,7 +374,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, shipmentAuditRollback: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))

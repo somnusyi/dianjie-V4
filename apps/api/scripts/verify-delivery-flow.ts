@@ -280,13 +280,19 @@ async function main() {
       supplierId: supplier.id, expectedDate: '2026-07-16', note: '分批配送原始备注', idempotencyKey: orderCreateKey,
       items: [{ productId: product.id, quantity: 5, unitPrice: 0 }],
     }
-    const created = await api('/api/orders', managerToken, {
-      method: 'POST',
-      body: JSON.stringify(orderCreatePayload),
-    })
-    assert.equal(created.status, 200, JSON.stringify(created.body))
+    const concurrentCreates = await Promise.all([0, 1].map(() => api('/api/orders', managerToken, {
+      method: 'POST', body: JSON.stringify(orderCreatePayload),
+    })))
+    assert.deepEqual(concurrentCreates.map(result => result.status), [200, 200], JSON.stringify(concurrentCreates.map(result => result.body)))
+    assert.equal(new Set(concurrentCreates.map(result => result.body.id)).size, 1)
+    const created = concurrentCreates[0]
     orderId = created.body.id
     orderNo = created.body.no
+    assert.equal(await prisma.purchaseOrder.count({ where: { tenantId: tenant.id, createdById: manager.id, idempotencyKey: orderCreateKey } }), 1)
+    assert.equal(await prisma.purchaseOrderEvent.count({ where: { purchaseOrderId: orderId } }), 2)
+    assert.equal(await prisma.opLog.count({
+      where: { tenantId: tenant.id, userId: manager.id, targetId: orderId, action: { startsWith: '创建采购订单' } },
+    }), 1)
     const repeatedCreate = await api('/api/orders', managerToken, {
       method: 'POST', body: JSON.stringify(orderCreatePayload),
     })
@@ -450,7 +456,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, orderCreateAuditRollback: true, orderCreateReplayConflict: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, orderCreateAuditRollback: true, orderCreateConcurrentReplay: true, orderCreateReplayConflict: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))

@@ -23,7 +23,7 @@ export async function auditSupplierSupplyChain(input: {
   const [supplier, products, reservations, stockMovements, stockBatches, deliveries, receipts, arrivalDiscrepancies] = await Promise.all([
     prisma.supplier.findFirst({
       where: { id: input.supplierId, tenantId: input.tenantId },
-      select: { id: true, sourceType: true },
+      select: { id: true, sourceType: true, inventoryMode: true },
     }),
     prisma.product.findMany({
       where: { tenantId: input.tenantId, supplierId: input.supplierId },
@@ -92,6 +92,7 @@ export async function auditSupplierSupplyChain(input: {
   if (!supplier) throw Object.assign(new Error('供应商不存在或不属于当前租户'), { statusCode: 404 })
 
   const issues: SupplyChainAuditIssue[] = []
+  const inventoryTracked = supplier.inventoryMode === 'STRICT'
   const movementsByProduct = new Map<string, typeof stockMovements>()
   for (const movement of stockMovements) {
     const rows = movementsByProduct.get(movement.productId) || []
@@ -100,7 +101,7 @@ export async function auditSupplierSupplyChain(input: {
   }
   const reservedByProduct = new Map<string, number>()
   const batchBalanceByProduct = new Map<string, number>()
-  for (const batch of stockBatches) {
+  for (const batch of inventoryTracked ? stockBatches : []) {
     const initial = Number(batch.initialQty)
     const remaining = Number(batch.remainingQty)
     batchBalanceByProduct.set(batch.productId, (batchBalanceByProduct.get(batch.productId) || 0) + remaining)
@@ -117,7 +118,7 @@ export async function auditSupplierSupplyChain(input: {
       })
     }
   }
-  for (const reservation of reservations) {
+  for (const reservation of inventoryTracked ? reservations : []) {
     reservedByProduct.set(
       reservation.productId,
       (reservedByProduct.get(reservation.productId) || 0) + Number(reservation.quantity),
@@ -131,7 +132,7 @@ export async function auditSupplierSupplyChain(input: {
       })
     }
   }
-  for (const product of products) {
+  for (const product of inventoryTracked ? products : []) {
     const physical = Number(product.stock)
     const reserved = reservedByProduct.get(product.id) || 0
     if (physical < -0.001) {
@@ -277,6 +278,7 @@ export async function auditSupplierSupplyChain(input: {
   return {
     checkedAt: new Date(),
     periodDays: days,
+    inventoryMode: supplier.inventoryMode,
     summary: {
       errors: issues.filter(issue => issue.severity === 'ERROR').length,
       warnings: issues.filter(issue => issue.severity === 'WARNING').length,

@@ -14,7 +14,7 @@ describe('supplier insights receipt facts (integration)', () => {
   beforeAll(async () => {
     const tenant = await prisma.tenant.create({ data: { name: `洞察测试 ${suffix}`, slug: suffix } })
     tenantId = tenant.id
-    const supplier = await prisma.supplier.create({ data: { tenantId, no: `SUP-${suffix}`, name: '洞察测试供应商' } })
+    const supplier = await prisma.supplier.create({ data: { tenantId, no: `SUP-${suffix}`, name: '洞察测试供应商', inventoryMode: 'STRICT' } })
     supplierId = supplier.id
     const store = await prisma.store.create({ data: { tenantId, no: `STORE-${suffix}`, name: '洞察测试门店' } })
     storeId = store.id
@@ -69,6 +69,7 @@ describe('supplier insights receipt facts (integration)', () => {
     await prisma.receipt.deleteMany({ where: { tenantId } })
     await prisma.purchaseOrder.deleteMany({ where: { tenantId } })
     await prisma.supplierStockBatch.deleteMany({ where: { tenantId } })
+    await prisma.supplierStockMovement.deleteMany({ where: { tenantId } })
     await prisma.product.deleteMany({ where: { tenantId } })
     await prisma.user.deleteMany({ where: { tenantId } })
     await prisma.store.deleteMany({ where: { tenantId } })

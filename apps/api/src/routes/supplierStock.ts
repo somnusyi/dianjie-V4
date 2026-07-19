@@ -207,10 +207,16 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
   /** GET /api/supplier/stock/summary — 顶部 KPI */
   app.get('/summary', auth(app), async (req: any, reply: any) => {
     const ctx = ensureSupplier(req, reply, 'inventory.read'); if (!ctx) return
-    const ps = await prisma.product.findMany({
-      where: { tenantId: ctx.tenantId, supplierId: ctx.supplierId, status: 'ENABLED' },
-      select: { id: true, stock: true, minStock: true, price: true },
-    })
+    const [supplier, ps] = await Promise.all([
+      prisma.supplier.findFirstOrThrow({
+        where: { id: ctx.supplierId, tenantId: ctx.tenantId },
+        select: { inventoryMode: true, inventoryActivatedAt: true },
+      }),
+      prisma.product.findMany({
+        where: { tenantId: ctx.tenantId, supplierId: ctx.supplierId, status: 'ENABLED' },
+        select: { id: true, stock: true, minStock: true, price: true },
+      }),
+    ])
     const reservedByProduct = await getSupplierReservedStock({
       tenantId: ctx.tenantId,
       supplierId: ctx.supplierId,
@@ -228,6 +234,8 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       reservedValue += reserved * v
     }
     return {
+      inventoryMode: supplier.inventoryMode,
+      inventoryActivatedAt: supplier.inventoryActivatedAt,
       totalSku, lowStock, outOfStock,
       totalValue: Math.round(totalValue * 100) / 100,
       availableValue: Math.round(availableValue * 100) / 100,

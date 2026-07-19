@@ -633,6 +633,11 @@ model Supplier {
   category     String? // 菌类 / 蔬菜 / 水产
   status       SupplierStatus @default(ENABLED)
 
+  // 供应商仓库库存策略。试运行阶段未完成期初盘点时不应阻断履约；
+  // 完成库存初始化并持续维护入库后，再显式切换为 STRICT。
+  inventoryMode SupplierInventoryMode @default(NOT_TRACKED)
+  inventoryActivatedAt DateTime?
+
   // 账期配置
   creditType   CreditType @default(FIXED_DAYS)
   creditDays   Int        @default(30) // 账期天数
@@ -1795,6 +1800,11 @@ enum BudgetCategory {
 enum SupplierStatus {
   ENABLED
   DISABLED
+}
+
+enum SupplierInventoryMode {
+  NOT_TRACKED // 不核算供应商仓库库存；接单/发货不预占、不扣减
+  STRICT      // 严格按供应商物理库存、预占和批次余额控制履约
 }
 
 // 供应商数据源类型 (财务月度核对工作台 4 栏区分)

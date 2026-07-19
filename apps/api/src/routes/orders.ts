@@ -822,6 +822,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const order = await prisma.purchaseOrder.findFirst({
       where,
       include: {
+        supplier: { select: { inventoryMode: true } },
         revisions: { where: { status: 'PENDING' }, select: { id: true } },
         items: {
           where: { isActive: true },
@@ -837,17 +838,19 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         data: { status: 'CONFIRMED', rowVersion: { increment: 1 } },
       })
       if (updated.count === 0) throw { statusCode: 409, message: '订单状态已变化，请刷新后重试' }
-      await reserveSupplierStockForOrder(tx, {
-        tenantId,
-        supplierId: order.supplierId,
-        purchaseOrderId: order.id,
-        lines: order.items.map(item => ({
-          purchaseOrderItemId: item.id,
-          productId: item.productId,
-          quantity: item.quantity,
-          productName: item.product?.name,
-        })),
-      })
+      if (order.supplier.inventoryMode === 'STRICT') {
+        await reserveSupplierStockForOrder(tx, {
+          tenantId,
+          supplierId: order.supplierId,
+          purchaseOrderId: order.id,
+          lines: order.items.map(item => ({
+            purchaseOrderItemId: item.id,
+            productId: item.productId,
+            quantity: item.quantity,
+            productName: item.product?.name,
+          })),
+        })
+      }
       await tx.purchaseOrderEvent.create({
         data: {
           tenantId, purchaseOrderId: id, eventType: 'ACCEPTED', actorId: userId, actorRole: role,
@@ -952,6 +955,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       where: shipWhere,
       // 实发上限是 per-product 配置 (shipUpperPct + shipUpperBuffer), 同时拉出来用于 ship 校验
       include: {
+        supplier: { select: { inventoryMode: true } },
         items: { where: { isActive: true }, include: { product: { select: { name: true, unit: true, spec: true, code: true, category: true, shipUpperPct: true, shipUpperBuffer: true } } } },
         deliveries: { where: { status: { not: 'CANCELLED' } }, include: { items: true } },
       },
@@ -1061,21 +1065,27 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           data: { shippedQty: l.previous + l.shipped, amount: (l.previous + l.shipped) * Number(l.it.unitPrice) },
         })
       }
-      await consumeSupplierStockForShipment(tx, {
-        tenantId,
-        supplierId: order.supplierId,
-        purchaseOrderId: order.id,
-        deliveryOrderId: delivery.id,
-        orderNo: order.no,
-        userId,
-        lines: lineShipped.map(line => ({
-          purchaseOrderItemId: line.it.id,
-          productId: line.it.productId,
-          quantity: line.it.quantity,
-          shippedQty: line.shipped,
-          productName: line.it.product?.name,
-        })),
-      })
+      if (order.supplier.inventoryMode === 'STRICT') {
+        await consumeSupplierStockForShipment(tx, {
+          tenantId,
+          supplierId: order.supplierId,
+          purchaseOrderId: order.id,
+          deliveryOrderId: delivery.id,
+          orderNo: order.no,
+          userId,
+          lines: lineShipped.map(line => ({
+            purchaseOrderItemId: line.it.id,
+            productId: line.it.productId,
+            quantity: line.it.quantity,
+            shippedQty: line.shipped,
+            productName: line.it.product?.name,
+          })),
+        })
+      } else {
+        // 供应商在试运行期可能从 STRICT 切回 NOT_TRACKED；释放历史预占，
+        // 但不改 Product.stock，也不制造无法审计的负库存/空批次扣减。
+        await releaseSupplierStockForOrder(tx, order.id)
+      }
     })
 
     // opLog — 调整数量时详细记录

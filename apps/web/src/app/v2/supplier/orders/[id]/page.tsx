@@ -36,7 +36,7 @@ type Order = {
   chefAckImages?: string[] | null
   chefAckNote?: string | null
   store: { id: string; name: string; no: string; address?: string | null }
-  supplier: { id: string; name: string; contactName?: string | null; contactPhone?: string | null }
+  supplier: { id: string; name: string; contactName?: string | null; contactPhone?: string | null; inventoryMode?: 'NOT_TRACKED' | 'STRICT' }
   createdBy: { id: string; name: string }
   shippedBy: { id: string; name: string } | null
   items: { id: string; productId: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string; receivedQty: string | null; product?: { name: string; spec: string | null; unit: string; code: string; shipUpperPct?: string | number; shipUpperBuffer?: string | number } }[]
@@ -132,7 +132,9 @@ export default function SupplierOrderDetailPage() {
     } else {
       body += ` · 共 ¥${Number(order.totalAmount).toLocaleString()}`
     }
-    body += `\n发货后会自动扣减库存, 24h 内门店未确认则自动收货.`
+    body += order.supplier.inventoryMode === 'STRICT'
+      ? `\n发货后会自动扣减供应商库存，门店收货后再更新门店库存。`
+      : `\n当前未核算供应商仓库库存，本次发货不会扣供应商库存；门店收货后仍会正常更新门店库存。`
 
     openConfirm({
       title: `确认发货 ${order.no}?`,
@@ -157,7 +159,7 @@ export default function SupplierOrderDetailPage() {
     if (!order) return
     openConfirm({
       title: `接单 ${order.no}?`,
-      body: `${order.items.length} 件商品 · 共 ¥${Number(order.currentOrderAmount ?? order.originalTotalAmount ?? order.totalAmount).toLocaleString()}\n接单后店长能看到"已接单"状态, 你需要按期望日期 ${dayjs(order.expectedDate).format('MM/DD')} 前发货.`,
+      body: `${order.items.length} 件商品 · 共 ¥${Number(order.currentOrderAmount ?? order.originalTotalAmount ?? order.totalAmount).toLocaleString()}\n接单后店长能看到"已接单"状态, 你需要按期望日期 ${dayjs(order.expectedDate).format('MM/DD')} 前发货.${order.supplier.inventoryMode === 'STRICT' ? '\n系统会预占本单所需的供应商库存。' : '\n当前未核算供应商仓库库存，不会因库存数字不完整阻断接单。'}`,
       confirmLabel: '接单',
       tone: 'primary',
       onConfirm: async () => {

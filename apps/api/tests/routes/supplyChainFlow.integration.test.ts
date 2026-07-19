@@ -19,7 +19,7 @@ describe('supplier order to receipt flow (integration)', () => {
   beforeAll(async () => {
     const tenant = await prisma.tenant.create({ data: { name: `供应链流程测试 ${suffix}`, slug: suffix } })
     tenantId = tenant.id
-    const supplier = await prisma.supplier.create({ data: { tenantId, no: `SUP-${suffix}`, name: '供应链流程供应商' } })
+    const supplier = await prisma.supplier.create({ data: { tenantId, no: `SUP-${suffix}`, name: '供应链流程供应商', inventoryMode: 'STRICT' } })
     supplierId = supplier.id
     const store = await prisma.store.create({ data: { tenantId, no: `STORE-${suffix}`, name: '供应链流程门店' } })
     storeId = store.id
@@ -280,5 +280,48 @@ describe('supplier order to receipt flow (integration)', () => {
       'STOCK_BATCH_BALANCE_MISMATCH',
     ].includes(issue.code))).toEqual([])
 
+  })
+
+  it('allows order confirmation and shipment when supplier inventory is not tracked', async () => {
+    await prisma.supplier.update({
+      where: { id: supplierId },
+      data: { inventoryMode: 'NOT_TRACKED', inventoryActivatedAt: null },
+    })
+    await prisma.product.update({ where: { id: productId }, data: { stock: 0 } })
+    const movementCountBefore = await prisma.supplierStockMovement.count({ where: { tenantId } })
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/orders',
+      headers: { 'x-test-actor': 'chef' },
+      payload: {
+        supplierId,
+        storeId,
+        expectedDate: '2026-07-21',
+        idempotencyKey: `untracked-create-${suffix}`,
+        items: [{ productId, quantity: 3, unitPrice: 10 }],
+      },
+    })
+    expect(create.statusCode).toBe(200)
+    const order = create.json()
+
+    const confirm = await app.inject({
+      method: 'PATCH', url: `/api/orders/${order.id}/confirm`, headers: { 'x-test-actor': 'supplier' },
+    })
+    expect(confirm.statusCode).toBe(200)
+    expect(await prisma.supplierStockReservation.count({ where: { purchaseOrderId: order.id } })).toBe(0)
+
+    const ship = await app.inject({
+      method: 'PATCH',
+      url: `/api/orders/${order.id}/ship`,
+      headers: { 'x-test-actor': 'supplier' },
+      payload: {
+        idempotencyKey: `untracked-ship-${suffix}`,
+        items: [{ itemId: order.items[0].id, shippedQty: 3 }],
+      },
+    })
+    expect(ship.statusCode).toBe(200)
+    expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).stock)).toBe(0)
+    expect(await prisma.supplierStockMovement.count({ where: { tenantId } })).toBe(movementCountBefore)
   })
 })

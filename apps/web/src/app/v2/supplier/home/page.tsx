@@ -21,7 +21,7 @@ type Order = {
   chefAckAt?: string | null      // DELIVERING 期间客户发的验收单 (有值=待供应商确认)
   chefAckImages?: string[]
 }
-type StockSummary = { totalSku: number; lowStock: number; outOfStock: number; reservedValue: number }
+type StockSummary = { inventoryMode: 'NOT_TRACKED' | 'STRICT'; totalSku: number; lowStock: number; outOfStock: number; reservedValue: number }
 type SupplyAudit = { summary: { errors: number; warnings: number }; issues: Array<{ label: string; detail: string }> }
 
 function timeAgo(iso: string) {
@@ -66,7 +66,9 @@ export default function SupplierHomePage() {
   const shipping = (orders || []).filter(o =>
     supplierOrderBucket(o.status) === 'shipping' && !(o.status === 'DELIVERING' && o.chefAckAt)
   )
-  const lowStockCnt = stockSummary
+  const lowStockCnt = stockSummary?.inventoryMode === 'NOT_TRACKED'
+    ? 0
+    : stockSummary
     ? stockSummary.lowStock + stockSummary.outOfStock
     : Number(ext.lowStockCnt || 0)
 
@@ -87,6 +89,12 @@ export default function SupplierHomePage() {
       <div className="mt-3">
         <GlanceStrip {...(data.hero as any)} />
       </div>
+
+      {stockSummary?.inventoryMode === 'NOT_TRACKED' && (
+        <div className="mx-4 mt-3 rounded-card border border-amber/30 bg-amber/10 p-3 text-caption text-gray2">
+          <b className="text-amber-fg">供应商库存暂未启用：</b>接单和发货不受供应商库存数字影响；门店收货与门店库存仍正常记录。
+        </div>
+      )}
 
       {/* 应收账期分桶 — 顶尖供应商最关心 */}
       <Section title="应收账期" right={ext.arOverdue > 0 ? `⚠ 逾期 ¥${Math.round(ext.arOverdue).toLocaleString()}` : undefined} rightTone={ext.arOverdue > 0 ? 'red' : undefined}>

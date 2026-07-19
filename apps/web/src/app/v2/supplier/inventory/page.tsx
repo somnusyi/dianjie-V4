@@ -19,7 +19,7 @@ type Item = {
   in7d: number; out7d: number; in30d: number; out30d: number
   nearestExpiry: string | null; daysToExpiry: number | null
 }
-type Summary = { totalSku: number; lowStock: number; outOfStock: number; totalValue: number; availableValue: number; reservedValue: number }
+type Summary = { inventoryMode: 'NOT_TRACKED' | 'STRICT'; inventoryActivatedAt?: string | null; totalSku: number; lowStock: number; outOfStock: number; totalValue: number; availableValue: number; reservedValue: number }
 type Category = { id?: string | null; name: string; count: number; sortOrder?: number; isActive?: boolean }
 
 const STATUS_LABEL: Record<string, string> = { OUT: '已断货', LOW: '低于警戒', OK: '充足' }
@@ -72,6 +72,13 @@ export default function InventoryPage() {
         <a href="/v2/supplier/inventory/inbound" className="px-3 py-2 bg-amber text-white rounded-cta text-button">↓ 入库</a>
       </header>
 
+      {summary?.inventoryMode === 'NOT_TRACKED' && (
+        <div className="mx-4 mb-3 rounded-card border border-amber/30 bg-amber/10 p-3">
+          <div className="text-body font-medium text-amber-fg">供应商库存暂未启用</div>
+          <p className="mt-1 text-caption text-gray2">下方数量仅作历史参考，不参与接单或发货校验，也不会随发货扣减。完成供应商首次盘点并持续维护入库后，再启用严格库存。</p>
+        </div>
+      )}
+
       {/* KPI */}
       {summary && (
         <div className="px-4 grid grid-cols-2 gap-2">
@@ -80,7 +87,7 @@ export default function InventoryPage() {
             <div className="text-h1 font-num">{summary.totalSku}</div>
           </div>
           <div className="bg-white rounded-card border border-border p-3">
-            <div className="text-micro text-gray3">库存总价值</div>
+            <div className="text-micro text-gray3">{summary.inventoryMode === 'STRICT' ? '库存总价值' : '历史参考价值'}</div>
             <div className="text-h1 font-num">¥{summary.totalValue.toLocaleString()}</div>
             <div className="text-micro text-gray3 mt-1">可用 ¥{summary.availableValue.toLocaleString()} · 已占 ¥{summary.reservedValue.toLocaleString()}</div>
           </div>

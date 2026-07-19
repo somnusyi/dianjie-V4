@@ -64,6 +64,8 @@ model Tenant {
   deferredBomTasks              DeferredBomTask[]
   dishAliases                   DishAlias[]
   dishBomVersions               DishBomVersion[]
+  monthlyCloses                 StoreMonthlyClose[]
+  storeInventoryPolicies        StoreInventoryPolicy[]
 
   @@map("tenants")
 }
@@ -123,6 +125,7 @@ model User {
   submittedInventoryCounts      InventoryCount[]        @relation("InventoryCountSubmittedBy")
   confirmedInventoryCounts      InventoryCount[]        @relation("InventoryCountConfirmedBy")
   reversedInventoryCounts       InventoryCount[]        @relation("InventoryCountReversedBy")
+  confirmedMonthlyCloses        StoreMonthlyClose[]     @relation("StoreMonthlyCloseConfirmedBy")
 
   @@unique([tenantId, email])
   @@unique([tenantId, phone])
@@ -353,7 +356,7 @@ model DishRecipe {
   // 非空时按规范化规格精确匹配；找不到规格配方再回退默认配方。
   variantKey String   @default("") @db.VarChar(80)
   quantity   Decimal  @db.Decimal(14, 6) // 小包装换算可能低于 0.0001 箱
-  unit       String // 单位 (kg/瓶/件/包,与 Product.unit 对应)
+  unit       String // BOM 消耗单位；正式配方应与 Product.inventoryUnit 对应
   lossRate   Decimal  @default(0) @db.Decimal(5, 4) // 损耗率 0.05 = 5%
   isMain     Boolean  @default(false) // 主料标记
   note       String?
@@ -423,7 +426,7 @@ model DishBomItem {
   versionId String
   productId String
   quantity  Decimal  @db.Decimal(14, 6)
-  unit      String
+  unit      String // BOM 消耗单位；正式配方应与 Product.inventoryUnit 对应
   lossRate  Decimal  @default(0) @db.Decimal(5, 4)
   isMain    Boolean  @default(false)
   note      String?
@@ -672,7 +675,7 @@ model Store {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant               Tenant                @relation(fields: [tenantId], references: [id])
+  tenant               Tenant                 @relation(fields: [tenantId], references: [id])
   users                User[]
   receipts             Receipt[]
   revenueRecords       RevenueRecord[]
@@ -690,6 +693,8 @@ model Store {
   inventoryCounts      InventoryCount[]
   dailyBusinessImports DailyBusinessImport[]
   deferredBomTasks     DeferredBomTask[]
+  monthlyCloses        StoreMonthlyClose[]
+  inventoryPolicies    StoreInventoryPolicy[]
 
   @@unique([tenantId, no])
   @@map("stores")
@@ -776,29 +781,36 @@ model Supplier {
 
 // ── 商品 ──────────────────────────────────────────────
 model Product {
-  id              String        @id @default(cuid())
-  tenantId        String
-  code            String // MR001
-  name            String
-  spec            String? // 规格型号 (如 "24瓶*330ml/件" / "5kg/袋")
-  category        String        @default("其他") // 类目可选, 默认"其他"
-  imageKey        String? // OSS 对象 key；读取时动态签名，避免长期保存过期 URL
-  unit            String        @default("kg")
-  price           Decimal       @db.Decimal(10, 2) // 参考单价
-  stock           Decimal       @default(0) @db.Decimal(10, 2)
-  minStock        Decimal       @default(0) @db.Decimal(10, 2) // 安全库存
-  minOrderQty     Decimal       @default(1) @db.Decimal(10, 2) // 起订量 (≥1)
-  stepQty         Decimal       @default(1) @db.Decimal(10, 2) // 整倍数步长 (1=随便; 10=必须 10/20/30...)
-  shelfDays       Int           @default(7) // 保质期天数
+  id                            String                      @id @default(cuid())
+  tenantId                      String
+  code                          String // MR001
+  name                          String
+  spec                          String? // 规格型号 (如 "24瓶*330ml/件" / "5kg/袋")
+  category                      String                      @default("其他") // 类目可选, 默认"其他"
+  imageKey                      String? // OSS 对象 key；读取时动态签名，避免长期保存过期 URL
+  unit                          String                      @default("kg") // 采购/订货单位；历史 API 字段保持不变
+  // 门店库存与 BOM 统一使用 inventoryUnit。例：乌苏按箱采购、按罐消耗，
+  // inventoryUnit=罐，inventoryUnitsPerPurchaseUnit=6。
+  inventoryUnit                 String?                     @db.VarChar(16)
+  inventoryUnitsPerPurchaseUnit Decimal?                    @db.Decimal(18, 6)
+  unitConversionStatus          ProductUnitConversionStatus @default(PENDING)
+  unitConversionNote            String?                     @db.VarChar(500)
+  unitConversionVerifiedAt      DateTime?
+  price                         Decimal                     @db.Decimal(10, 2) // 参考单价
+  stock                         Decimal                     @default(0) @db.Decimal(10, 2)
+  minStock                      Decimal                     @default(0) @db.Decimal(10, 2) // 安全库存
+  minOrderQty                   Decimal                     @default(1) @db.Decimal(10, 2) // 起订量 (≥1)
+  stepQty                       Decimal                     @default(1) @db.Decimal(10, 2) // 整倍数步长 (1=随便; 10=必须 10/20/30...)
+  shelfDays                     Int                         @default(7) // 保质期天数
   // 实发量上限 (供应商发货时允许调整的弹性, 2026-05-28 客户反馈 per-product 可配)
   // 校验公式: upper = max(下单 × shipUpperPct, 下单 + shipUpperBuffer)
   // 默认 1.10 / 5.00 跟之前全局阈值一致, 历史商品零行为变化
-  shipUpperPct    Decimal       @default(1.10) @db.Decimal(5, 2) // 实发百分比上限 (1.10 = 110%)
-  shipUpperBuffer Decimal       @default(5.00) @db.Decimal(10, 2) // 实发绝对加量上限 (单位件)
-  status          ProductStatus @default(ENABLED)
-  supplierId      String?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  shipUpperPct                  Decimal                     @default(1.10) @db.Decimal(5, 2) // 实发百分比上限 (1.10 = 110%)
+  shipUpperBuffer               Decimal                     @default(5.00) @db.Decimal(10, 2) // 实发绝对加量上限 (单位件)
+  status                        ProductStatus               @default(ENABLED)
+  supplierId                    String?
+  createdAt                     DateTime                    @default(now())
+  updatedAt                     DateTime                    @updatedAt
 
   // 批量上传归属（用于导入历史 + 撤回；单条创建为 null）
   batchId String?
@@ -819,6 +831,7 @@ model Product {
   dishBomItems           DishBomItem[]
   inventorySnapshotItems InventorySnapshotItem[]
   inventoryCountItems    InventoryCountItem[]
+  storeInventoryPolicies StoreInventoryPolicy[]
 
   @@unique([tenantId, code])
   @@index([batchId])
@@ -936,17 +949,23 @@ model Receipt {
 }
 
 model ReceiptItem {
-  id                      String  @id @default(cuid())
-  receiptId               String
-  productId               String
-  quantity                Decimal @db.Decimal(10, 2)
-  unitPrice               Decimal @db.Decimal(10, 2)
-  amount                  Decimal @db.Decimal(12, 2) // quantity * unitPrice
-  productCodeSnapshot     String?
-  productNameSnapshot     String?
-  productSpecSnapshot     String?
-  productUnitSnapshot     String?
-  productCategorySnapshot String?
+  id                                    String   @id @default(cuid())
+  receiptId                             String
+  productId                             String
+  quantity                              Decimal  @db.Decimal(10, 2)
+  unitPrice                             Decimal  @db.Decimal(10, 2)
+  amount                                Decimal  @db.Decimal(12, 2) // quantity * unitPrice
+  productCodeSnapshot                   String?
+  productNameSnapshot                   String?
+  productSpecSnapshot                   String?
+  productUnitSnapshot                   String?
+  productCategorySnapshot               String?
+  // quantity/unitPrice 始终保留采购口径；以下字段冻结本次入库转换到门店库存
+  // 基础单位后的数量和成本，避免商品主数据后续调整改写历史。
+  inventoryQuantity                     Decimal? @db.Decimal(18, 6)
+  inventoryUnitSnapshot                 String?  @db.VarChar(16)
+  inventoryUnitsPerPurchaseUnitSnapshot Decimal? @db.Decimal(18, 6)
+  inventoryUnitCostSnapshot             Decimal? @db.Decimal(18, 6)
 
   productionDate DateTime? @map("production_date") @db.Date
   expiryDate     DateTime? @map("expiry_date") @db.Date
@@ -1633,20 +1652,24 @@ model LossClaim {
 }
 
 model LossClaimItem {
-  id                      String  @id @default(cuid())
-  lossClaimId             String
-  productId               String
-  deliveryOrderItemId     String?
-  orderedQty              Decimal @db.Decimal(10, 2) // 下单数量
-  receivedQty             Decimal @db.Decimal(10, 2) // 实际收到
-  lossQty                 Decimal @db.Decimal(10, 2) // 损耗数量
-  unitPrice               Decimal @db.Decimal(10, 2)
-  lossAmount              Decimal @db.Decimal(12, 2) // 损耗金额
-  productCodeSnapshot     String?
-  productNameSnapshot     String?
-  productSpecSnapshot     String?
-  productUnitSnapshot     String?
-  productCategorySnapshot String?
+  id                        String   @id @default(cuid())
+  lossClaimId               String
+  productId                 String
+  deliveryOrderItemId       String?
+  orderedQty                Decimal  @db.Decimal(10, 2) // 下单数量
+  receivedQty               Decimal  @db.Decimal(10, 2) // 实际收到
+  lossQty                   Decimal  @db.Decimal(10, 2) // 损耗数量
+  unitPrice                 Decimal  @db.Decimal(10, 2)
+  lossAmount                Decimal  @db.Decimal(12, 2) // 损耗金额
+  productCodeSnapshot       String?
+  productNameSnapshot       String?
+  productSpecSnapshot       String?
+  productUnitSnapshot       String?
+  productCategorySnapshot   String?
+  // 仅店内报损使用基础库存口径；到货短少仍以采购单位结算。
+  inventoryQuantity         Decimal? @db.Decimal(18, 6)
+  inventoryUnitSnapshot     String?  @db.VarChar(16)
+  inventoryUnitCostSnapshot Decimal? @db.Decimal(18, 6)
 
   lossClaim         LossClaim          @relation(fields: [lossClaimId], references: [id], onDelete: Cascade)
   product           Product            @relation(fields: [productId], references: [id])
@@ -1916,6 +1939,21 @@ enum ProductStatus {
   PENDING_DISABLE // 等待总厨审批停售
   ENABLED
   DISABLED
+}
+
+// 采购 SKU 与门店库存/BOM 基础单位的换算治理状态。
+// PENDING 只允许兼容读取，不能作为新 BOM 的可靠换算；INFERRED 由规格/历史
+// 配方推导，可运行但仍需总厨复核；VERIFIED 是人工确认后的正式主数据。
+enum ProductUnitConversionStatus {
+  PENDING
+  INFERRED
+  VERIFIED
+}
+
+enum StoreMonthlyCloseStatus {
+  DRAFT
+  CONFIRMED
+  SUPERSEDED
 }
 
 enum CreditType {
@@ -2196,29 +2234,36 @@ enum SupplierStockReservationStatus {
 
 // ── 库存消耗记录（总厨每日录入）──────────────────────
 model StockConsumption {
-  id                  String          @id @default(cuid())
-  tenantId            String
-  storeId             String
-  productId           String
-  date                DateTime        @db.Date
-  quantity            Decimal         @db.Decimal(14, 6) // BOM 小包装换算需 6 位精度
-  note                String?
+  id                    String          @id @default(cuid())
+  tenantId              String
+  storeId               String
+  productId             String
+  date                  DateTime        @db.Date
+  quantity              Decimal         @db.Decimal(14, 6) // BOM 小包装换算需 6 位精度
+  note                  String?
   // 来源(用于幂等 + 审计): manual / dish_sale:<saleId> / meituan_ingest:<orderId>
-  sourceType          String?         @db.VarChar(20)
-  sourceId            String?         @db.VarChar(64)
-  sourceLineKey       String          @default("") @db.VarChar(80)
-  dishId              String?
-  variantKey          String          @default("") @db.VarChar(80)
-  bomVersionId        String?
-  calculationSnapshot Json?
-  createdById         String
-  createdAt           DateTime        @default(now())
-  tenant              Tenant          @relation(fields: [tenantId], references: [id])
-  store               Store           @relation(fields: [storeId], references: [id])
-  product             Product         @relation(fields: [productId], references: [id])
-  createdBy           User            @relation(fields: [createdById], references: [id])
-  dish                Dish?           @relation(fields: [dishId], references: [id], onDelete: SetNull)
-  bomVersion          DishBomVersion? @relation(fields: [bomVersionId], references: [id], onDelete: SetNull)
+  sourceType            String?         @db.VarChar(20)
+  sourceId              String?         @db.VarChar(64)
+  sourceLineKey         String          @default("") @db.VarChar(80)
+  dishId                String?
+  variantKey            String          @default("") @db.VarChar(80)
+  bomVersionId          String?
+  calculationSnapshot   Json?
+  // quantity 保留 BOM 行原始口径以兼容历史；门店库存和成本以 inventoryQuantity
+  // 为准。历史数据为空时由 unitSnapshot + 商品换算规则安全回放。
+  inventoryQuantity     Decimal?        @db.Decimal(18, 6)
+  unitSnapshot          String?         @db.VarChar(16)
+  inventoryUnitSnapshot String?         @db.VarChar(16)
+  unitCostSnapshot      Decimal?        @db.Decimal(18, 6)
+  costAmountSnapshot    Decimal?        @db.Decimal(18, 4)
+  createdById           String
+  createdAt             DateTime        @default(now())
+  tenant                Tenant          @relation(fields: [tenantId], references: [id])
+  store                 Store           @relation(fields: [storeId], references: [id])
+  product               Product         @relation(fields: [productId], references: [id])
+  createdBy             User            @relation(fields: [createdById], references: [id])
+  dish                  Dish?           @relation(fields: [dishId], references: [id], onDelete: SetNull)
+  bomVersion            DishBomVersion? @relation(fields: [bomVersionId], references: [id], onDelete: SetNull)
 
   @@unique([sourceType, sourceId, sourceLineKey, productId], map: "stock_consumption_source_line_uk")
   @@index([tenantId, date])
@@ -2264,7 +2309,7 @@ model InventorySnapshotItem {
   quantity            Decimal  @db.Decimal(14, 4)
   unitPrice           Decimal  @db.Decimal(14, 4)
   amount              Decimal  @db.Decimal(14, 3)
-  // 盘点表保留原单位；以下字段把数量换算到 Product.unit，供盘点后滚动库存使用。
+  // 盘点表保留原单位；以下字段把数量换算到 Product.inventoryUnit，供盘点后滚动库存使用。
   // 无法可靠换算时保持 null，预计库存必须跳过，不能把“袋/斤”直接当“箱/件”。
   normalizedQuantity  Decimal? @db.Decimal(14, 6)
   normalizedUnit      String?
@@ -2382,6 +2427,70 @@ model StoreExpense {
 
   @@unique([storeId, month, item])
   @@map("store_expenses")
+}
+
+// ── 门店级库存策略 ─────────────────────────────────────
+// Product.minStock 属于供应商库存口径；门店补货阈值必须按门店隔离，避免
+// 多门店共用一个安全库存值。数量统一使用 Product.inventoryUnit。
+model StoreInventoryPolicy {
+  id          String   @id @default(cuid())
+  tenantId    String
+  storeId     String
+  productId   String
+  minStock    Decimal  @default(0) @db.Decimal(18, 6)
+  targetStock Decimal? @db.Decimal(18, 6)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id])
+  store   Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, productId])
+  @@index([tenantId, storeId])
+  @@map("store_inventory_policies")
+}
+
+// ── 门店财务月结 ───────────────────────────────────────
+// 日报保留运营口径；月结保存财务确认口径，两者不互相覆盖并提供差异对账。
+model StoreMonthlyClose {
+  id                  String                  @id @default(cuid())
+  tenantId            String
+  storeId             String
+  month               String // YYYY-MM
+  status              StoreMonthlyCloseStatus @default(DRAFT)
+  operatingRevenue    Decimal                 @db.Decimal(14, 2) // 含税营业收入
+  revenueExTax        Decimal                 @db.Decimal(14, 2)
+  vat                 Decimal                 @default(0) @db.Decimal(14, 2)
+  surcharge           Decimal                 @default(0) @db.Decimal(14, 2)
+  foodCost            Decimal                 @default(0) @db.Decimal(14, 2)
+  beverageCost        Decimal                 @default(0) @db.Decimal(14, 2)
+  consumablesCost     Decimal                 @default(0) @db.Decimal(14, 2)
+  laborCost           Decimal                 @default(0) @db.Decimal(14, 2)
+  salesExpense        Decimal                 @default(0) @db.Decimal(14, 2)
+  managementExpense   Decimal                 @default(0) @db.Decimal(14, 2)
+  financeExpense      Decimal                 @default(0) @db.Decimal(14, 2)
+  nonOperatingIncome  Decimal                 @default(0) @db.Decimal(14, 2)
+  nonOperatingExpense Decimal                 @default(0) @db.Decimal(14, 2)
+  profitBeforeTax     Decimal                 @db.Decimal(14, 2)
+  incomeTax           Decimal                 @default(0) @db.Decimal(14, 2)
+  netProfit           Decimal                 @db.Decimal(14, 2)
+  detail              Json?
+  sourceFilename      String
+  sourceHash          String                  @db.VarChar(64)
+  confirmedAt         DateTime?
+  confirmedById       String?
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+
+  tenant      Tenant @relation(fields: [tenantId], references: [id])
+  store       Store  @relation(fields: [storeId], references: [id])
+  confirmedBy User?  @relation("StoreMonthlyCloseConfirmedBy", fields: [confirmedById], references: [id])
+
+  @@unique([storeId, month])
+  @@index([tenantId, month, status])
+  @@index([sourceHash])
+  @@map("store_monthly_closes")
 }
 
 // ── 资金台账 ──────────────────────────────────────────

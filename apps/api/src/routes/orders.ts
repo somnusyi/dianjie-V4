@@ -25,6 +25,8 @@ import {
 } from '../services/supplierStockReservation'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 import { calendarDateSchema } from '../lib/calendar-date'
+import { ensureReceiptInventoryUnitSnapshots } from '../services/receiptInventoryUnits'
+import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
 const orderItemSchema = z.object({
@@ -1414,6 +1416,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             },
           },
         })
+        await ensureReceiptInventoryUnitSnapshots(tx, receipt.id)
 
         if (hasLoss) {
           const latestClaim = await tx.lossClaim.findFirst({
@@ -1525,6 +1528,9 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       // 客户端重试会进入上方幂等分支，再次补偿对账单和账期。
       req.log.error({ err: error, receiptId: receipt.id }, '收货后财务派生记录生成失败，等待幂等补偿')
     }
+    await revalueStoreConsumptionCosts(tenantId, order.storeId).catch(error => {
+      req.log.error({ error, receiptId: receipt.id }, 'received order cost snapshot refresh failed')
+    })
 
     void invalidatePattern(`dashboard:stats:${tenantId}:*`)
     void invalidatePattern(`stores:list:${tenantId}:*`)

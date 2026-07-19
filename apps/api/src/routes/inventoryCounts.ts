@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { isStoreScoped } from '../lib/auth-scope'
 import { businessNoFloor, nextBusinessNo } from '../services/purchaseOrderIntegrity'
 import { estimatedStoreInventory } from '../services/storeInventory'
+import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
 import { signOssKey } from './upload'
 
 const VIEW_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN', 'BOSS'])
@@ -265,17 +266,19 @@ export const inventoryCountRoutes: FastifyPluginAsync = async app => {
             itemCount: products.length, note: body.data.note || null, createdById: req.user.userId,
             totalBookValue: products.reduce((sum, product) => {
               const estimateRow: any = estimatedByProduct.get(product.id)
-              return sum.add(new Prisma.Decimal(estimateRow?.stock || 0).mul(estimateRow?.avgUnitCost || product.price))
+              const fallbackCost = Number(product.price) / Number(product.inventoryUnitsPerPurchaseUnit || 1)
+              return sum.add(new Prisma.Decimal(estimateRow?.stock || 0).mul(estimateRow?.avgUnitCost || fallbackCost))
             }, new Prisma.Decimal(0)),
             items: {
               create: products.map((product, index) => {
                 const estimateRow: any = estimatedByProduct.get(product.id)
+                const fallbackCost = Number(product.price) / Number(product.inventoryUnitsPerPurchaseUnit || 1)
                 return {
                   productId: product.id, productCodeSnapshot: product.code,
                   productNameSnapshot: product.name, productSpecSnapshot: product.spec,
-                  categorySnapshot: product.category, unitSnapshot: product.unit,
+                  categorySnapshot: product.category, unitSnapshot: product.inventoryUnit || product.unit,
                   bookQuantity: new Prisma.Decimal(estimateRow?.stock || 0),
-                  averageUnitCost: new Prisma.Decimal(estimateRow?.avgUnitCost || product.price),
+                  averageUnitCost: new Prisma.Decimal(estimateRow?.avgUnitCost || fallbackCost),
                   sortOrder: index,
                 }
               }),
@@ -471,6 +474,9 @@ export const inventoryCountRoutes: FastifyPluginAsync = async app => {
           data: { tenantId: row.tenantId, userId: req.user.userId, action: `确认门店盘点单 ${row.no}`, entityType: 'InventoryCount', targetId: row.id, metadata: { storeId: row.storeId, snapshotId: snapshot.id, differenceCount: row.differenceCount, differenceValue: row.totalDifferenceValue.toString() } },
         })
       }, 30_000)
+      await revalueStoreConsumptionCosts(current.tenantId, current.storeId).catch(error => {
+        req.log.error({ error, storeId: current.storeId }, 'inventory count cost snapshot refresh failed')
+      })
       return publicCount((await loadCount(current.id, req.user.tenantId))!, true)
     } catch (error: any) {
       req.log.error({ error, inventoryCountId: current.id }, 'inventory count confirmation failed')

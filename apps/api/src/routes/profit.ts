@@ -13,7 +13,7 @@ export const EXPENSE_ITEMS = {
     '门店租金', '门店物业费', '抽成租金', '仓库租金', '商场其他费用',
     '洗碗机租金', '炒菜机租金', '水费', '电费', '燃气费',
     '运费', '维修费', '推广费', '设备', '前厅餐具', '厨房厨具',
-    '消杀费', '清洗费', '垃圾清运费', '清洁用品', '平台服务费', '前期开办费摊销',
+    '消杀费', '清洗费', '垃圾清运费', '清洁用品', '平台服务费', '前期开办费摊销', '其他销售费用',
   ],
   MGMT: [
     '交通费', '差旅费', '代账代办费', '招聘费', '办公费', '通讯费',
@@ -48,7 +48,7 @@ export const profitRoutes: FastifyPluginAsync = async (app) => {
     const store = await prisma.store.findFirst({ where: { id: storeId, tenantId } })
     if (!store) return reply.status(404).send({ error: '门店不存在' })
 
-    const [revenues, comparisonRevenueRows, receipts, lossClaims, expenses] = await Promise.all([
+    const [revenues, comparisonRevenueRows, receipts, lossClaims, expenses, accountingClose] = await Promise.all([
       // 营业额（含渠道, date 是 DATE）
       prisma.revenueRecord.findMany({
         where: { storeId, date: { gte: start, lte: end } },
@@ -73,6 +73,9 @@ export const profitRoutes: FastifyPluginAsync = async (app) => {
       prisma.storeExpense.findMany({
         where: { storeId, month: targetMonth },
         orderBy: { category: 'asc' },
+      }),
+      prisma.storeMonthlyClose.findFirst({
+        where: { tenantId, storeId, month: targetMonth, status: 'CONFIRMED' },
       }),
     ])
 
@@ -142,34 +145,53 @@ export const profitRoutes: FastifyPluginAsync = async (app) => {
     const platformFeeTotal = platformFeeMeituan + platformFeeDouyin
 
     // 食材成本
-    const foodCost = receipts.reduce((s, r) => s + Number(r.totalAmount), 0)
+    const operationalPurchaseCost = receipts.reduce((s, r) => s + Number(r.totalAmount), 0)
+    const closedCostOfGoods = accountingClose
+      ? Number(accountingClose.foodCost) + Number(accountingClose.beverageCost) + Number(accountingClose.consumablesCost)
+      : null
+    const foodCost = closedCostOfGoods ?? operationalPurchaseCost
     const lossAmount = lossClaims.reduce((s, l) => s + Number(l.totalLossAmount), 0)
-
-    // 毛利
-    const grossProfit = totalRevenue - foodCost
 
     // 各类费用汇总
     const expenseByItem: Record<string, number> = {}
     expenses.forEach(e => { expenseByItem[e.item] = Number(e.amount) })
 
-    const laborTotal = EXPENSE_ITEMS.LABOR.reduce((s, item) => s + (expenseByItem[item] || 0), 0)
-    const salesTotal = EXPENSE_ITEMS.SALES.reduce((s, item) => s + (expenseByItem[item] || 0), 0)
-    const mgmtTotal = EXPENSE_ITEMS.MGMT.reduce((s, item) => s + (expenseByItem[item] || 0), 0)
-    const financeTotal = EXPENSE_ITEMS.FINANCE.reduce((s, item) => s + (expenseByItem[item] || 0), 0)
+    const laborTotal = accountingClose ? Number(accountingClose.laborCost) : EXPENSE_ITEMS.LABOR.reduce((s, item) => s + (expenseByItem[item] || 0), 0)
+    const salesTotal = accountingClose ? Number(accountingClose.salesExpense) : EXPENSE_ITEMS.SALES.reduce((s, item) => s + (expenseByItem[item] || 0), 0)
+    const mgmtTotal = accountingClose ? Number(accountingClose.managementExpense) : EXPENSE_ITEMS.MGMT.reduce((s, item) => s + (expenseByItem[item] || 0), 0)
+    const financeTotal = accountingClose ? Number(accountingClose.financeExpense) : EXPENSE_ITEMS.FINANCE.reduce((s, item) => s + (expenseByItem[item] || 0), 0)
     // 平台抽成单独算入"销售费用"
-    const salesTotalWithPlatform = salesTotal + platformFeeTotal
-    const totalExpense = laborTotal + salesTotalWithPlatform + mgmtTotal + financeTotal
+    const salesTotalWithPlatform = accountingClose ? salesTotal : salesTotal + platformFeeTotal
+    const closeAdjustments = accountingClose
+      ? Number(accountingClose.vat) + Number(accountingClose.surcharge) + Number(accountingClose.nonOperatingExpense)
+        - Number(accountingClose.nonOperatingIncome) + Number(accountingClose.incomeTax)
+      : 0
+    const totalExpense = laborTotal + salesTotalWithPlatform + mgmtTotal + financeTotal + closeAdjustments
     const totalCost = foodCost + totalExpense
-    const netProfit = totalRevenue - totalCost
-    const netRevenue = totalRevenue - platformFeeTotal   // 实际到账 (现金流口径)
+    const financialRevenue = accountingClose ? Number(accountingClose.operatingRevenue) : totalRevenue
+    const netProfit = accountingClose ? Number(accountingClose.netProfit) : totalRevenue - totalCost
+    const netRevenue = accountingClose ? financialRevenue : totalRevenue - platformFeeTotal   // 实际到账 (现金流口径)
 
     return {
       store: { id: store.id, name: store.name, no: store.no },
       month: targetMonth,
+      accountingClose: accountingClose ? {
+        status: accountingClose.status,
+        operatingRevenue: Number(accountingClose.operatingRevenue),
+        operationalRevenue: totalRevenue,
+        reconciliationDifference: Number(accountingClose.operatingRevenue) - totalRevenue,
+        sourceFilename: accountingClose.sourceFilename,
+        confirmedAt: accountingClose.confirmedAt,
+        tax: Number(accountingClose.vat) + Number(accountingClose.surcharge),
+        incomeTax: Number(accountingClose.incomeTax),
+        nonOperatingNet: Number(accountingClose.nonOperatingIncome) - Number(accountingClose.nonOperatingExpense),
+      } : null,
       revenue: {
-        total: totalRevenue,                              // GMV
+        total: financialRevenue,                          // 已月结时为财务确认收入，否则为运营日报收入
+        operationalTotal: totalRevenue,
         net: netRevenue,                                  // 净到账
-        platformFee: platformFeeTotal,
+        platformFee: accountingClose ? 0 : platformFeeTotal,
+        operationalPlatformFee: platformFeeTotal,
         platformFeeBreakdown: {
           meituan: platformFeeMeituan,
           douyin:  platformFeeDouyin,
@@ -200,10 +222,10 @@ export const profitRoutes: FastifyPluginAsync = async (app) => {
         totalExpense,
         totalCost,
       },
-      grossProfit,
-      grossMargin: totalRevenue > 0 ? (grossProfit / totalRevenue * 100) : 0,
+      grossProfit: financialRevenue - foodCost,
+      grossMargin: financialRevenue > 0 ? ((financialRevenue - foodCost) / financialRevenue * 100) : 0,
       netProfit,
-      netMargin: totalRevenue > 0 ? (netProfit / totalRevenue * 100) : 0,
+      netMargin: financialRevenue > 0 ? (netProfit / financialRevenue * 100) : 0,
     }
   })
 
@@ -375,6 +397,10 @@ export const profitRoutes: FastifyPluginAsync = async (app) => {
 
     const store = await prisma.store.findFirst({ where: { id: storeId, tenantId } })
     if (!store) return reply.status(404).send({ error: '门店不存在' })
+    const confirmedClose = await prisma.storeMonthlyClose.findFirst({
+      where: { tenantId, storeId, month, status: 'CONFIRMED' }, select: { id: true },
+    })
+    if (confirmedClose) return reply.status(409).send({ error: '该月已完成财务月结，费用明细不可直接修改' })
 
     // upsert 每个费用项
     const results = await Promise.all(

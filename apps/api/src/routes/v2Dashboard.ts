@@ -280,11 +280,11 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
           _sum: { totalAmount: true },
           where: { storeId: storeId!, createdAt: { gte: monthStart, lte: monthEnd } },
         }).catch(() => ({ _sum: { totalAmount: 0 } as any })),
-        // 实际消耗 = StockConsumption × 每个 product 的当时单价 (粗算用 product.price)
-        prisma.stockConsumption.findMany({
+        // 实际消耗成本使用落账时的移动平均成本快照，避免包装价直接乘基础用量。
+        prisma.stockConsumption.aggregate({
           where: { tenantId, storeId: storeId!, date: { gte: monthStart, lte: monthEnd } },
-          select: { quantity: true, product: { select: { price: true } } },
-        }).then(arr => arr.reduce((s, c) => s + Number(c.quantity) * Number(c.product?.price || 0), 0))
+          _sum: { costAmountSnapshot: true },
+        }).then(result => Number(result._sum.costAmountSnapshot || 0))
           .catch(() => 0),
         prisma.lossClaim.aggregate({
           _sum: { totalLossAmount: true },

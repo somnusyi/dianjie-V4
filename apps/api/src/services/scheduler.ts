@@ -7,6 +7,8 @@ import { runMeituanHourlySync, runMeituanDailyReconcile } from './meituan/cron'
 import { isCmbSyncEnabled, syncAllCmbAccounts } from './cmbAutoSync'
 import { nextBusinessNo } from './purchaseOrderIntegrity'
 import { ensureReceiptDerivatives, repairReceiptDerivatives } from './receiptDerivatives'
+import { ensureReceiptInventoryUnitSnapshots } from './receiptInventoryUnits'
+import { revalueStoreConsumptionCosts } from './inventoryCosting'
 
 /**
  * 对一张已经送达、超时未确认的订货单执行自动收货。
@@ -109,6 +111,7 @@ export async function autoReceivePurchaseOrder(orderId: string) {
         },
       },
     })
+    await ensureReceiptInventoryUnitSnapshots(tx, created.id)
 
     for (const item of delivery.items) {
       await tx.deliveryOrderItem.update({
@@ -170,6 +173,9 @@ export async function autoReceivePurchaseOrder(orderId: string) {
   const derivatives = await ensureReceiptDerivatives(receipt.id)
   if (!derivatives.voucher.ok) console.error(`自动收货凭证生成失败 ${order.no}:`, derivatives.voucher.error)
   if (!derivatives.finance.ok) console.error(`自动收货财务派生记录失败 ${order.no}:`, derivatives.finance.error)
+  await revalueStoreConsumptionCosts(order.tenantId, order.storeId).catch(error => {
+    console.error(`自动收货成本快照刷新失败 ${order.no}:`, error)
+  })
 
   notifyWeCom({
     tenantId: order.tenantId,

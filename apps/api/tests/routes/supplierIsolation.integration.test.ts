@@ -44,8 +44,10 @@ describe('supplier tenant scope (integration)', () => {
     userAId = userA.id
     chefUserId = chef.id
     const [productA, productB] = await Promise.all([
-      prisma.product.create({ data: { tenantId, supplierId: supplierA.id, code: `A-P-${suffix}`, name: 'A 商品', price: 10, stock: 11 } }),
-      prisma.product.create({ data: { tenantId, supplierId: supplierB.id, code: `B-P-${suffix}`, name: 'B 商品', price: 20, stock: 22 } }),
+      prisma.product.create({ data: { tenantId, supplierId: supplierA.id, code: `A-P-${suffix}`, name: 'A 商品', price: 10, stock: 11,
+        inventoryUnit: 'kg', inventoryUnitsPerPurchaseUnit: 1, unitConversionStatus: 'VERIFIED' } }),
+      prisma.product.create({ data: { tenantId, supplierId: supplierB.id, code: `B-P-${suffix}`, name: 'B 商品', price: 20, stock: 22,
+        inventoryUnit: 'kg', inventoryUnitsPerPurchaseUnit: 1, unitConversionStatus: 'VERIFIED' } }),
     ])
     productAId = productA.id
     productBId = productB.id
@@ -147,6 +149,7 @@ describe('supplier tenant scope (integration)', () => {
     await prisma.supplierStockBatch.deleteMany({ where: { tenantId } })
     await prisma.supplierStockMovement.deleteMany({ where: { tenantId } })
     await prisma.stockConsumption.deleteMany({ where: { tenantId } })
+    await prisma.storeInventoryPolicy.deleteMany({ where: { tenantId } })
     await prisma.inventorySnapshot.deleteMany({ where: { tenantId } })
     await prisma.documentDecision.deleteMany({ where: { document: { tenantId } } })
     await prisma.documentStep.deleteMany({ where: { document: { tenantId } } })
@@ -672,6 +675,14 @@ describe('supplier tenant scope (integration)', () => {
         },
       },
     })
+
+    const policy = await app.inject({
+      method: 'PATCH', url: `/api/inventory/policies/${productIds[0]}`,
+      headers: { 'x-test-actor': 'chef' },
+      payload: { minStock: 2, targetStock: 4 },
+    })
+    expect(policy.statusCode).toBe(200)
+    expect(policy.json()).toMatchObject({ productId: productIds[0], storeId, minStock: 2, targetStock: 4, unit: '件' })
     await prisma.inventorySnapshot.create({
       data: {
         tenantId, storeId: otherStore.id, snapshotDate, sourceFilename: 'foreign-fixture.xlsx',
@@ -695,6 +706,8 @@ describe('supplier tenant scope (integration)', () => {
       expect(estimated.json()
         .map((row: any) => row.id)
         .filter((id: string) => productIds.includes(id))).toEqual([...productIds].sort())
+      const first = estimated.json().find((row: any) => row.id === productIds[0])
+      expect(first).toMatchObject({ minStock: 2, targetStock: 4, isLowStock: true })
     }
   })
 

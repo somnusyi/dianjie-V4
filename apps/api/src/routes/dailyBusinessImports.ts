@@ -18,6 +18,8 @@ import {
   calculateBomConsumptions,
   selectEffectiveBomVersion,
 } from '../services/bomLifecycle'
+import { convertQuantityToInventoryUnit } from '../services/inventoryUnits'
+import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
 
 const ALLOWED_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN', 'BOSS'])
 const SOURCE = 'daily_pos_upload'
@@ -44,6 +46,8 @@ type PreviewConsumption = {
   productName: string
   unit: string
   quantity: number
+  sourceUnit: string
+  sourceQuantity: number
   sources: string[]
   dishId: string
   dishName: string
@@ -286,7 +290,10 @@ async function buildPreview(store: { id: string; tenantId: string }, parsed: Par
       aliases: { where: { source: 'daily_pos', isActive: true } },
       bomVersions: {
         where: { status: 'PUBLISHED' },
-        include: { items: { include: { product: { select: { id: true, code: true, name: true, unit: true } } } } },
+        include: { items: { include: { product: { select: {
+          id: true, code: true, name: true, unit: true, spec: true,
+          inventoryUnit: true, inventoryUnitsPerPurchaseUnit: true, unitConversionStatus: true,
+        } } } } },
       },
     },
   })
@@ -315,6 +322,7 @@ async function buildPreview(store: { id: string; tenantId: string }, parsed: Par
   const excludedDishes: PreviewData['excludedDishes'] = []
   const deferredByDishVariant = new Map<string, DeferredBomRow>()
   const missingRecipeKeys = new Set<string>()
+  const pendingUnitProducts = new Set<string>()
   for (const row of parsed.sales) {
     const dish = matched.get(row.name)
     if (!dish) {
@@ -358,15 +366,35 @@ async function buildPreview(store: { id: string; tenantId: string }, parsed: Par
     })
     const sourceLineKey = sha256(Buffer.from(`${dish.id}\u0000${variantKey}\u0000${bomVersion.id}`)).slice(0, 32)
     for (const recipe of bomVersion.items) {
-      const quantity = row.quantity * Number(recipe.quantity) * (1 + Number(recipe.lossRate))
-      if (quantity <= 0) continue
+      const sourceQuantity = row.quantity * Number(recipe.quantity) * (1 + Number(recipe.lossRate))
+      if (sourceQuantity <= 0) continue
+      const normalized = convertQuantityToInventoryUnit({
+        quantity: sourceQuantity,
+        sourceUnit: recipe.unit,
+        product: recipe.product,
+        productSpec: recipe.product.spec,
+      })
+      if (normalized.normalizedQuantity == null) {
+        if (!pendingUnitProducts.has(recipe.productId)) {
+          pendingUnitProducts.add(recipe.productId)
+          blockingIssues.push({
+            code: 'INVENTORY_UNIT_PENDING',
+            message: `原材料单位换算待核验：${recipe.product.name}`,
+            detail: `${sourceQuantity}${recipe.unit} 无法换算为库存基础单位，请先维护商品单位后重新预览`,
+          })
+        }
+        continue
+      }
+      const quantity = normalized.normalizedQuantity
       const consumptionKey = `${sourceLineKey}\u0000${recipe.productId}`
       const current = consumptionByProduct.get(consumptionKey) || {
         productId: recipe.product.id,
         productCode: recipe.product.code,
         productName: recipe.product.name,
-        unit: recipe.product.unit,
+        unit: normalized.normalizedUnit,
         quantity: 0,
+        sourceUnit: recipe.unit,
+        sourceQuantity: 0,
         sources: [],
         dishId: dish.id,
         dishName: dish.name,
@@ -377,6 +405,7 @@ async function buildPreview(store: { id: string; tenantId: string }, parsed: Par
         calculationSnapshot: { ...calculationSnapshot, saleQuantity: 0 },
       }
       current.quantity += quantity
+      current.sourceQuantity += sourceQuantity
       current.calculationSnapshot.saleQuantity += row.quantity
       current.sources.push(`${row.name}${row.spec ? `(${row.spec})` : ''} ${row.quantity}份`)
       consumptionByProduct.set(consumptionKey, current)
@@ -408,7 +437,11 @@ async function buildPreview(store: { id: string; tenantId: string }, parsed: Par
       grossAmount: round(row.grossAmount, 2),
       netIncome: round(row.netIncome, 2),
     })),
-    consumptions: [...consumptionByProduct.values()].map(row => ({ ...row, quantity: round(row.quantity, 6) })),
+    consumptions: [...consumptionByProduct.values()].map(row => ({
+      ...row,
+      quantity: round(row.quantity, 6),
+      sourceQuantity: round(row.sourceQuantity, 6),
+    })),
     returns: parsed.returns,
     excludedDishes,
     deferredBomRows: [...deferredByDishVariant.values()].map(row => ({
@@ -803,7 +836,10 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
       include: {
         dish: {
           include: {
-            bomVersions: { where: { status: 'PUBLISHED' }, include: { items: true } },
+            bomVersions: {
+              where: { status: 'PUBLISHED' },
+              include: { items: { include: { product: true } } },
+            },
           },
         },
       },
@@ -817,6 +853,24 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
     if (!bomVersion || bomVersion.items.length === 0) {
       return reply.status(409).send({ error: `菜品“${task.dish.name}”仍缺少${task.spec ? `“${task.spec}”规格或默认` : '默认'} BOM` })
     }
+    const normalizedConsumptions = calculateBomConsumptions(Number(task.quantity), bomVersion.items).map(row => {
+      const item = bomVersion.items.find(candidate => candidate.productId === row.productId)!
+      const normalized = convertQuantityToInventoryUnit({
+        quantity: row.quantity,
+        sourceUnit: item.unit,
+        product: item.product,
+        productSpec: item.product.spec,
+      })
+      if (normalized.normalizedQuantity == null) {
+        throw Object.assign(new Error(`原材料“${item.product.name}”单位换算待核验，不能回补库存`), { statusCode: 409 })
+      }
+      return {
+        ...row,
+        sourceUnit: item.unit,
+        inventoryQuantity: normalized.normalizedQuantity,
+        inventoryUnit: normalized.normalizedUnit,
+      }
+    })
     const now = new Date()
     try {
       await prisma.$transaction(async tx => {
@@ -825,8 +879,7 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
           data: { status: 'BACKFILLED', resolvedById: req.user.userId, backfilledAt: now },
         })
         if (locked.count !== 1) throw Object.assign(new Error('该待办已被其他操作处理，请刷新'), { statusCode: 409 })
-        const consumptions = calculateBomConsumptions(Number(task.quantity), bomVersion.items)
-        if (consumptions.length > 0) {
+        if (normalizedConsumptions.length > 0) {
           const snapshot = bomCalculationSnapshot({
             dishId: dish.id,
             dishName: dish.name,
@@ -835,12 +888,15 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
             version: bomVersion,
           })
           await tx.stockConsumption.createMany({
-            data: consumptions.map(({ productId, quantity }) => ({
+            data: normalizedConsumptions.map(({ productId, quantity, sourceUnit, inventoryQuantity, inventoryUnit }) => ({
               tenantId: task.tenantId,
               storeId: task.storeId,
               productId,
               date: task.businessDate,
               quantity,
+              unitSnapshot: sourceUnit,
+              inventoryQuantity,
+              inventoryUnitSnapshot: inventoryUnit,
               note: `总厨补齐 BOM 后回补；${task.rawDishName}${task.spec ? `(${task.spec})` : ''} ${Number(task.quantity)}份`,
               sourceType: BOM_BACKFILL_SOURCE,
               sourceId: task.id,
@@ -879,6 +935,9 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
           })
         }
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 })
+      await revalueStoreConsumptionCosts(task.tenantId, task.storeId).catch(error => {
+        req.log.error({ error, storeId: task.storeId }, 'consumption cost snapshot refresh failed after BOM backfill')
+      })
       const completed = await prisma.deferredBomTask.findUniqueOrThrow({
         where: { id: task.id },
         include: {
@@ -979,8 +1038,11 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
           if (preview.consumptions.length > 0) {
             await tx.stockConsumption.createMany({
               data: preview.consumptions.map(row => ({
-                tenantId: record.tenantId, storeId: record.storeId, productId: row.productId,
-                date: record.businessDate, quantity: row.quantity,
+              tenantId: record.tenantId, storeId: record.storeId, productId: row.productId,
+                date: record.businessDate, quantity: row.sourceQuantity,
+                unitSnapshot: row.sourceUnit,
+                inventoryQuantity: row.quantity,
+                inventoryUnitSnapshot: row.unit,
                 note: `历史 BOM 纠错重算；${row.sources.join('；')}`.slice(0, 1000),
                 sourceType: CONSUMPTION_SOURCE, sourceId: record.id, sourceLineKey: row.sourceLineKey,
                 dishId: row.dishId, variantKey: row.variantKey, bomVersionId: row.bomVersionId,
@@ -1022,6 +1084,11 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
           },
         })
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 60_000 })
+      for (const storeId of new Set(imports.map(record => record.storeId))) {
+        await revalueStoreConsumptionCosts(req.user.tenantId, storeId).catch(error => {
+          req.log.error({ error, storeId }, 'consumption cost snapshot refresh failed after historical BOM recalculation')
+        })
+      }
       return { ok: true, recalculatedImportCount: rebuilt.length, from: version.effectiveFrom, to: end }
     } catch (error: any) {
       req.log.error({ error, versionId: version.id }, 'historical BOM recalculation failed')
@@ -1177,7 +1244,10 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
               storeId: record.storeId,
               productId: row.productId,
               date: record.businessDate,
-              quantity: row.quantity,
+              quantity: row.sourceQuantity,
+              unitSnapshot: row.sourceUnit,
+              inventoryQuantity: row.quantity,
+              inventoryUnitSnapshot: row.unit,
               note: `每日销量×BOM；${row.sources.join('；')}`.slice(0, 1000),
               sourceType: CONSUMPTION_SOURCE,
               sourceId: record.id,
@@ -1226,6 +1296,9 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
           },
         })
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 })
+      await revalueStoreConsumptionCosts(record.tenantId, record.storeId).catch(error => {
+        req.log.error({ error, storeId: record.storeId }, 'consumption cost snapshot refresh failed after daily import')
+      })
       const confirmed = await prisma.dailyBusinessImport.findUniqueOrThrow({ where: { id: record.id } })
       return reply.send(publicImport(confirmed))
     } catch (error: any) {

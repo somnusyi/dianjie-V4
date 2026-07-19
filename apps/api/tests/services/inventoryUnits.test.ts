@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { convertBomUsageToProductUnit, normalizeInventoryQuantity, physicalAmountPerPackage } from '../../src/services/inventoryUnits'
+import {
+  convertBomUsageToProductUnit,
+  convertQuantityToInventoryUnit,
+  normalizeInventoryQuantity,
+  physicalAmountPerPackage,
+  purchasePriceToInventoryUnitCost,
+  resolveProductInventoryUnit,
+} from '../../src/services/inventoryUnits'
 
 describe('inventory unit normalization', () => {
   it('parses package physical totals', () => {
@@ -83,6 +90,48 @@ describe('inventory unit normalization', () => {
       quantity: 0, rawUnit: '斤', productUnit: '桶', productSpec: '45kg/桶',
     })).toMatchObject({
       status: 'CONVERTED', normalizedQuantity: 0, normalizedUnit: '桶', factor: 1 / 90,
+    })
+  })
+
+  it('uses a structured case-to-each contract for oysters', () => {
+    const product = {
+      unit: '箱', inventoryUnit: '个', inventoryUnitsPerPurchaseUnit: 18,
+      unitConversionStatus: 'VERIFIED',
+    }
+    expect(resolveProductInventoryUnit(product)).toMatchObject({
+      purchaseUnit: '箱', inventoryUnit: '个', inventoryUnitsPerPurchaseUnit: 18,
+      status: 'VERIFIED', structured: true,
+    })
+    expect(convertQuantityToInventoryUnit({ quantity: 2, sourceUnit: '箱', product })).toMatchObject({
+      status: 'CONVERTED', normalizedQuantity: 36, normalizedUnit: '个', factor: 18,
+    })
+    expect(convertQuantityToInventoryUnit({ quantity: 2, sourceUnit: '个', product })).toMatchObject({
+      status: 'EXACT', normalizedQuantity: 2, normalizedUnit: '个', factor: 1,
+    })
+  })
+
+  it('converts purchase price into moving-average inventory-unit cost', () => {
+    const product = {
+      unit: '箱', inventoryUnit: '罐', inventoryUnitsPerPurchaseUnit: '6',
+      unitConversionStatus: 'INFERRED',
+    }
+    expect(purchasePriceToInventoryUnitCost({ purchaseUnitPrice: 180, product })).toBe(30)
+  })
+
+  it('does not override a structured contract with specification heuristics', () => {
+    const product = {
+      unit: '箱', inventoryUnit: '个', inventoryUnitsPerPurchaseUnit: 18,
+      unitConversionStatus: 'VERIFIED',
+    }
+    expect(convertQuantityToInventoryUnit({
+      quantity: 500, sourceUnit: 'g', product, productSpec: '18个/箱',
+    })).toMatchObject({ status: 'PENDING', normalizedQuantity: null, normalizedUnit: '个' })
+  })
+
+  it('keeps unmigrated products readable without marking them verified', () => {
+    expect(resolveProductInventoryUnit({ unit: '袋' })).toEqual({
+      purchaseUnit: '袋', inventoryUnit: '袋', inventoryUnitsPerPurchaseUnit: 1,
+      status: 'PENDING', structured: false,
     })
   })
 })

@@ -31,10 +31,13 @@ async function main() {
   const supplier = await prisma.supplier.findFirstOrThrow({ where: { tenantId: tenant.id } })
   const suffix = Date.now().toString(36).toUpperCase()
   const startedAt = new Date()
+  const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)
   const product = await prisma.product.create({
     data: {
       tenantId: tenant.id, supplierId: supplier.id, code: `INV-${suffix}`,
-      name: `库存验证食材-${suffix}`, unit: 'kg', price: 12, stock: 50, minStock: 10, shelfDays: 7,
+      name: `库存验证食材-${suffix}`, unit: 'kg', inventoryUnit: 'g',
+      inventoryUnitsPerPurchaseUnit: 1000, unitConversionStatus: 'VERIFIED',
+      price: 12, stock: 50, minStock: 10, shelfDays: 7,
     },
   })
   const snapshot = await prisma.inventorySnapshot.create({
@@ -43,7 +46,9 @@ async function main() {
       sourceFilename: '自动化库存验证.xlsx', sourceHash: `verify-${suffix}`,
       totalValue: 1000, itemCount: 1, nonzeroCount: 1, zeroCount: 0, matchedCount: 1,
       items: {
-        create: [{ productId: product.id, section: '验证', rawName: product.name, unit: 'kg', quantity: 100, unitPrice: 10, amount: 1000, sortOrder: 1 }],
+        create: [{ productId: product.id, section: '验证', rawName: product.name, unit: 'kg', quantity: 100, unitPrice: 10, amount: 1000,
+          normalizedQuantity: 100000, normalizedUnit: 'g', normalizationFactor: 1000,
+          normalizationStatus: 'EXACT', sortOrder: 1 }],
       },
     },
   })
@@ -55,6 +60,8 @@ async function main() {
       items: {
         create: [{
           productId: product.id, quantity: 20, unitPrice: 15, amount: 300,
+          inventoryQuantity: 20000, inventoryUnitSnapshot: 'g',
+          inventoryUnitsPerPurchaseUnitSnapshot: 1000, inventoryUnitCostSnapshot: 0.015,
           productionDate: new Date('2026-07-15T00:00:00.000Z'), expiryDate: new Date('2026-07-22T00:00:00.000Z'),
         }],
       },
@@ -63,7 +70,8 @@ async function main() {
   const secondProduct = await prisma.product.create({
     data: {
       tenantId: tenant.id, supplierId: supplier.id, code: `INV2-${suffix}`,
-      name: `库存原子验证食材-${suffix}`, unit: 'kg', price: 8, stock: 20,
+      name: `库存原子验证食材-${suffix}`, unit: 'kg', inventoryUnit: 'g',
+      inventoryUnitsPerPurchaseUnit: 1000, unitConversionStatus: 'VERIFIED', price: 8, stock: 20,
     },
   })
   const foreignTenant = await prisma.tenant.create({ data: { name: `库存边界验证-${suffix}`, slug: `inventory-boundary-${suffix.toLowerCase()}` } })
@@ -108,7 +116,7 @@ async function main() {
       method: 'POST', body: JSON.stringify({ items: [{ productId: product.id, quantity: 1 }, { productId: product.id, quantity: 2 }] }),
     })).status, 400, '同一食材不能重复提交')
     assert.equal((await api('/api/inventory/consume', login.body.token, {
-      method: 'POST', body: JSON.stringify({ date: '2026-07-17', items: [{ productId: product.id, quantity: 1 }] }),
+      method: 'POST', body: JSON.stringify({ date: tomorrow, items: [{ productId: product.id, quantity: 1 }] }),
     })).status, 400, '不能录入未来消耗')
     assert.equal((await api('/api/inventory/consume', login.body.token, {
       method: 'POST', body: JSON.stringify({ items: [{ productId: product.id, quantity: 0.1234567 }] }),
@@ -144,7 +152,7 @@ async function main() {
     failureTriggerInstalled = false
 
     const consumed = await api('/api/inventory/consume', login.body.token, {
-      method: 'POST', body: JSON.stringify({ date: '2026-07-15', note: '自动化验证', items: [{ productId: product.id, quantity: 15 }] }),
+      method: 'POST', body: JSON.stringify({ date: '2026-07-15', note: '自动化验证', items: [{ productId: product.id, quantity: 15000 }] }),
     })
     assert.equal(consumed.status, 200, JSON.stringify(consumed.body))
     operationId = consumed.body.operationId
@@ -158,12 +166,13 @@ async function main() {
     const estimate = await estimatedStoreInventory(tenant.id, store.id)
     const row = estimate.items.find(item => item.id === product.id)
     assert.ok(row, '验证食材必须出现在预计库存')
-    assert.equal(Number(row.stock), 105)
-    assert.ok(Math.abs(Number(row.avgUnitCost) - (1300 / 120)) < 0.0001)
+    assert.equal(Number(row.stock), 105000)
+    assert.equal(row.unit, 'g')
+    assert.ok(Math.abs(Number(row.avgUnitCost) - (1300 / 120000)) < 0.000001)
     assert.ok(Math.abs(Number(row.inventoryValue) - 1137.5) < 0.001)
     const unchanged = await prisma.product.findUniqueOrThrow({ where: { id: product.id }, select: { stock: true } })
     assert.equal(Number(unchanged.stock), 50, '门店消耗不得修改供应商库存 Product.stock')
-    console.log(JSON.stringify({ ok: true, opening: 100, inbound: 20, consumption: 15, estimated: row.stock, avgUnitCost: row.avgUnitCost }))
+    console.log(JSON.stringify({ ok: true, opening: '100kg', inbound: '20kg', consumption: '15kg', estimated: row.stock, unit: row.unit, avgUnitCost: row.avgUnitCost }))
   } finally {
     if (failureTriggerInstalled) {
       await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${failureTrigger}" ON stock_consumptions`)

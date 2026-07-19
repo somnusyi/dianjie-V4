@@ -42,6 +42,8 @@ type EstimatedItem = {
   stock: number
   avgUnitCost: number
   inventoryValue: number
+  minStock: number
+  targetStock: number | null
   isLowStock: boolean
   hasDataIssue: boolean
   openingDate: string
@@ -58,6 +60,29 @@ export default function ManagerInventoryPage() {
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
+
+  async function configurePolicy(item: EstimatedItem) {
+    const minimumText = window.prompt(`设置“${item.name}”安全库存（单位：${item.unit}）`, String(item.minStock || 0))
+    if (minimumText == null) return
+    const minStock = Number(minimumText)
+    if (!Number.isFinite(minStock) || minStock < 0) return window.alert('安全库存必须是大于等于 0 的数字')
+    const targetText = window.prompt(`设置“${item.name}”建议补货目标（单位：${item.unit}，可留空）`, item.targetStock == null ? '' : String(item.targetStock))
+    if (targetText == null) return
+    const targetStock = targetText.trim() === '' ? null : Number(targetText)
+    if (targetStock != null && (!Number.isFinite(targetStock) || targetStock < minStock)) {
+      return window.alert('建议补货目标必须大于等于安全库存')
+    }
+    try {
+      const policy = await apiFetch<{ minStock: number; targetStock: number | null }>(`/api/inventory/policies/${item.id}`, {
+        method: 'PATCH', body: JSON.stringify({ minStock, targetStock }),
+      })
+      setEstimate(rows => rows.map(row => row.id === item.id
+        ? { ...row, ...policy, isLowStock: policy.minStock > 0 && Number(row.stock) < policy.minStock }
+        : row))
+    } catch (e: any) {
+      window.alert(e?.message || '保存安全库存失败')
+    }
+  }
 
   useEffect(() => {
     Promise.all([
@@ -183,6 +208,9 @@ export default function ManagerInventoryPage() {
                       <div className="text-right shrink-0">
                         <div className={`font-num text-h2 ${item.stock <= 0 ? 'text-red-fg' : 'text-ink'}`}>{Number(item.stock)} <span className="text-micro font-normal">{item.unit}</span></div>
                         <div className="font-num text-micro text-gray3">¥{Number(item.inventoryValue).toFixed(2)}</div>
+                        <button type="button" onClick={() => configurePolicy(item)} className="mt-1 text-micro text-amber-fg">
+                          {item.minStock > 0 ? `安全线 ${item.minStock}` : '设置安全线'}
+                        </button>
                       </div>
                     </article>
                   ))}

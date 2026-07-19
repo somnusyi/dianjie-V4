@@ -1,5 +1,6 @@
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
+import { applyReceiptToCostSlot } from './inventoryCosting'
 
 export type StoreInventorySummary = {
   status: 'AVAILABLE' | 'NO_BASELINE'
@@ -57,17 +58,25 @@ export async function latestStoreInventorySnapshot(tenantId: string, storeId: st
         items: {
           orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
           include: {
-            product: { select: { id: true, code: true, name: true, unit: true, minStock: true } },
+            product: { select: { id: true, code: true, name: true, unit: true, inventoryUnit: true } },
           },
         },
       },
     })
     if (!snapshot) return { summary: emptySummary(), items: [] }
 
-    // 低库存只对已经唯一匹配到采购 SKU、且配置了安全库存的品项计算。
+    const policies = await prisma.storeInventoryPolicy.findMany({
+      where: { tenantId, storeId, productId: { in: snapshot.items.flatMap(item => item.productId ? [item.productId] : []) } },
+      select: { productId: true, minStock: true, targetStock: true },
+    })
+    const policyByProduct = new Map(policies.map(policy => [policy.productId, policy]))
+
+    // 门店安全库存按 storeId 隔离；Product.minStock 是供应商库存口径，不能复用。
     const lowStockCount = snapshot.items.filter((item) => {
-      const minStock = Number(item.product?.minStock || 0)
-      const exactWithoutStoredNormalization = item.unit.trim().toLowerCase() === item.product?.unit.trim().toLowerCase()
+      if (!item.productId) return false
+      const minStock = Number(policyByProduct.get(item.productId)?.minStock || 0)
+      const expectedUnit = item.product?.inventoryUnit || item.product?.unit || ''
+      const exactWithoutStoredNormalization = item.unit.trim().toLowerCase() === expectedUnit.trim().toLowerCase()
       const quantity = item.normalizedQuantity != null
         ? Number(item.normalizedQuantity)
         : exactWithoutStoredNormalization
@@ -112,7 +121,13 @@ export async function latestStoreInventorySnapshot(tenantId: string, storeId: st
           normalizationNote: item.normalizationNote,
           matched: Boolean(item.productId),
           product: item.product
-            ? { ...item.product, minStock: Number(item.product.minStock) }
+            ? {
+                ...item.product,
+                minStock: Number(policyByProduct.get(item.product.id)?.minStock || 0),
+                targetStock: policyByProduct.get(item.product.id)?.targetStock == null
+                  ? null
+                  : Number(policyByProduct.get(item.product.id)!.targetStock),
+              }
             : null,
         }))
       : []
@@ -153,7 +168,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
   const snapshot = await prisma.inventorySnapshot.findFirst({
     where: { tenantId, storeId, ...(asOfDay ? { snapshotDate: { lte: asOfDay } } : {}) },
     orderBy: [{ snapshotDate: 'desc' }, { createdAt: 'desc' }],
-    include: { items: { include: { product: { select: { unit: true } } } } },
+    include: { items: { include: { product: { select: { unit: true, inventoryUnit: true } } } } },
   })
   if (!snapshot) return { summary: emptySummary(), items: [] }
 
@@ -173,12 +188,13 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
       },
       select: {
         productId: true, quantity: true, unitPrice: true, expiryDate: true,
+        inventoryQuantity: true, inventoryUnitCostSnapshot: true,
         receipt: { select: { deliveryDate: true, createdAt: true } },
       },
     }),
     prisma.stockConsumption.findMany({
       where: { tenantId, storeId, date: { gte: openingDate, ...(asOfDay ? { lte: asOfDay } : {}) } },
-      select: { productId: true, quantity: true, date: true },
+      select: { productId: true, quantity: true, inventoryQuantity: true, date: true },
     }),
     prisma.lossClaimItem.findMany({
       where: {
@@ -188,7 +204,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
           createdAt: { gte: openingDate, ...(asOfEnd ? { lte: asOfEnd } : {}) },
         },
       },
-      select: { productId: true, lossQty: true, lossClaim: { select: { createdAt: true } } },
+      select: { productId: true, lossQty: true, inventoryQuantity: true, lossClaim: { select: { createdAt: true } } },
     }),
   ])
 
@@ -196,7 +212,8 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
   let normalizationPendingCount = 0
   for (const item of snapshot.items) {
     if (!item.productId) continue
-    const exactWithoutStoredNormalization = item.unit.trim().toLowerCase() === item.product?.unit.trim().toLowerCase()
+    const expectedUnit = item.product?.inventoryUnit || item.product?.unit || ''
+    const exactWithoutStoredNormalization = item.unit.trim().toLowerCase() === expectedUnit.trim().toLowerCase()
     const quantity = item.normalizedQuantity != null
       ? Number(item.normalizedQuantity)
       : exactWithoutStoredNormalization
@@ -221,22 +238,22 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
       occurredAt: item.receipt.deliveryDate,
       productId: item.productId,
       direction: 'IN' as const,
-      quantity: Number(item.quantity),
-      unitCost: Number(item.unitPrice),
+      quantity: Number(item.inventoryQuantity ?? item.quantity),
+      unitCost: Number(item.inventoryUnitCostSnapshot ?? item.unitPrice),
       monthBucket: item.receipt.deliveryDate >= monthStart,
     })),
     ...consumptions.map(item => ({
       occurredAt: item.date,
       productId: item.productId,
       direction: 'OUT' as const,
-      quantity: Number(item.quantity),
+      quantity: Number(item.inventoryQuantity ?? item.quantity),
       monthBucket: item.date >= monthStart,
     })),
     ...manualLossItems.map(item => ({
       occurredAt: item.lossClaim.createdAt,
       productId: item.productId,
       direction: 'OUT' as const,
-      quantity: Number(item.lossQty),
+      quantity: Number(item.inventoryQuantity ?? item.lossQty),
       monthBucket: item.lossClaim.createdAt >= monthStart,
     })),
   ].sort((a, b) => {
@@ -250,12 +267,9 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
     const current = slots.get(event.productId) || { quantity: 0, avgUnitCost: 0, monthIn: 0, monthOut: 0 }
     if (event.direction === 'IN') {
       const incomingCost = Number(event.unitCost || 0)
-      const currentValue = Math.max(0, current.quantity) * current.avgUnitCost
-      const nextQty = current.quantity + event.quantity
-      current.avgUnitCost = nextQty > 0
-        ? (currentValue + event.quantity * incomingCost) / nextQty
-        : incomingCost
-      current.quantity = nextQty
+      const next = applyReceiptToCostSlot({ quantity: current.quantity, averageCost: current.avgUnitCost }, event.quantity, incomingCost)
+      current.quantity = next.quantity
+      current.avgUnitCost = next.averageCost
       if (event.monthBucket) current.monthIn += event.quantity
     } else {
       current.quantity -= event.quantity
@@ -265,12 +279,19 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
   }
 
   const productIds = [...slots.keys()]
-  const products = productIds.length > 0
-    ? await prisma.product.findMany({
-        where: { tenantId, id: { in: productIds } },
-        orderBy: [{ name: 'asc' }, { id: 'asc' }],
-      })
-    : []
+  const [products, policies] = productIds.length > 0
+    ? await Promise.all([
+        prisma.product.findMany({
+          where: { tenantId, id: { in: productIds } },
+          orderBy: [{ name: 'asc' }, { id: 'asc' }],
+        }),
+        prisma.storeInventoryPolicy.findMany({
+          where: { tenantId, storeId, productId: { in: productIds } },
+          select: { productId: true, minStock: true, targetStock: true },
+        }),
+      ])
+    : [[], []]
+  const policyByProduct = new Map(policies.map(policy => [policy.productId, policy]))
   const nearestExpiry = new Map<string, Date>()
   for (const item of receiptItems
     .filter(item => item.expiryDate)
@@ -284,9 +305,16 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
     const expiry = nearestExpiry.get(product.id) || null
     const daysToExpiry = expiry ? dayjs(expiry).startOf('day').diff(today, 'day') : null
     const stock = slot.quantity
-    const avgUnitCost = slot.avgUnitCost || Number(product.price)
+    const purchaseFactor = Number(product.inventoryUnitsPerPurchaseUnit || 1)
+    const avgUnitCost = slot.avgUnitCost || Number(product.price) / purchaseFactor
+    const policy = policyByProduct.get(product.id)
+    const minStock = Number(policy?.minStock || 0)
     return {
       ...product,
+      purchaseUnit: product.unit,
+      unit: product.inventoryUnit || product.unit,
+      minStock,
+      targetStock: policy?.targetStock == null ? null : Number(policy.targetStock),
       stock,
       avgUnitCost,
       inventoryValue: Math.max(0, stock) * avgUnitCost,
@@ -296,7 +324,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
       daysToExpiry,
       isExpired: daysToExpiry != null && daysToExpiry < 0,
       isExpiringSoon: daysToExpiry != null && daysToExpiry >= 0 && daysToExpiry <= 7,
-      isLowStock: stock < Number(product.minStock),
+      isLowStock: minStock > 0 && stock < minStock,
       hasDataIssue: stock < -0.0001,
       inventoryBasis: 'ESTIMATED_FROM_PHYSICAL_COUNT' as const,
       openingDate: openingDateText,

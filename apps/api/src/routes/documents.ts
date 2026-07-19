@@ -68,6 +68,27 @@ async function applyProductDecision(
   decision: 'APPROVE' | 'REJECT',
 ): Promise<boolean> {
   const payload = (doc.payload as any) || {}
+  const enableProducts = async (productIds: string[]) => {
+    const products = await tx.product.findMany({
+      where: { id: { in: productIds }, tenantId, status: 'PENDING_APPROVAL' },
+      select: { id: true, unit: true, inventoryUnit: true, inventoryUnitsPerPurchaseUnit: true, unitConversionStatus: true },
+    })
+    for (const product of products) {
+      const needsFallback = !product.inventoryUnit || !product.inventoryUnitsPerPurchaseUnit
+      await tx.product.update({
+        where: { id: product.id },
+        data: {
+          status: 'ENABLED',
+          ...(needsFallback ? {
+            inventoryUnit: product.unit,
+            inventoryUnitsPerPurchaseUnit: 1,
+            unitConversionStatus: 'INFERRED',
+            unitConversionNote: '新品审批暂按采购单位等同库存单位，复杂包装由总厨复核',
+          } : {}),
+        },
+      })
+    }
+  }
   if (decision === 'APPROVE' && doc.type === 'PRICE_ADJUSTMENT' && payload.productId && payload.newPrice != null) {
     await tx.product.updateMany({
       where: { id: payload.productId, tenantId },
@@ -79,10 +100,7 @@ async function applyProductDecision(
 
   if (decision === 'APPROVE') {
     if (payload.action === 'CREATE' && payload.productId) {
-      await tx.product.updateMany({
-        where: { id: payload.productId, tenantId, status: 'PENDING_APPROVAL' },
-        data: { status: 'ENABLED' },
-      })
+      await enableProducts([payload.productId])
       return true
     }
     if (payload.action === 'BATCH' && Array.isArray(payload.productIds)) {
@@ -94,10 +112,7 @@ async function applyProductDecision(
           throw Object.assign(new Error('商品批次已撤回，不能再批准'), { statusCode: 409 })
         }
       }
-      await tx.product.updateMany({
-        where: { id: { in: payload.productIds }, tenantId, status: 'PENDING_APPROVAL' },
-        data: { status: 'ENABLED' },
-      })
+      await enableProducts(payload.productIds)
       return true
     }
     if (payload.action === 'DISABLE' && payload.productId) {

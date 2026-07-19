@@ -39,6 +39,11 @@ const productCreateSchema = z.object({
   unit:      z.string().trim().max(10)
                 .refine(v => !/^\d/.test(v), { message: '单位不能以数字开头, 数字应记到 spec / 起订量字段' })
                 .optional().default('件'),
+  inventoryUnit: z.string().trim().min(1).max(16)
+    .refine(v => !/^\d/.test(v), { message: '库存基础单位不能以数字开头' }).optional(),
+  inventoryUnitsPerPurchaseUnit: z.number().positive().max(1_000_000_000).optional(),
+  unitConversionStatus: z.enum(['PENDING', 'INFERRED', 'VERIFIED']).optional(),
+  unitConversionNote: z.string().trim().max(500).optional().nullable(),
   // 价格可选, 缺省 0. 仓库库存初始化场景常常没价格 (供应商内部物品), 先建 SKU 后续单条改价
   price:     z.preprocess(v => (v === null || v === '' || (typeof v === 'number' && !Number.isFinite(v))) ? 0 : v,
                           z.number().nonnegative('金额不能为负').optional().default(0)),
@@ -54,7 +59,15 @@ const productCreateSchema = z.object({
                           z.number().int().min(0).max(3650).optional().default(7)),
   supplierId: z.string().optional(),
   status:    z.enum(['PENDING_APPROVAL', 'PENDING_DISABLE', 'ENABLED', 'DISABLED']).optional(),
-}).strict()
+}).strict().superRefine((value, context) => {
+  if (Boolean(value.inventoryUnit) !== Boolean(value.inventoryUnitsPerPurchaseUnit)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['inventoryUnit'],
+      message: '库存基础单位与每采购单位换算数量必须同时填写',
+    })
+  }
+})
 
 const productListFilterSchema = z.object({
   category: z.string().trim().max(40).optional(),
@@ -73,6 +86,11 @@ const productPatchSchema = z.object({
   imageKey: z.string().trim().max(500).nullable().optional(),
   unit: z.string().trim().min(1).max(10)
     .refine(value => !/^\d/.test(value), '单位不能以数字开头').optional(),
+  inventoryUnit: z.string().trim().min(1).max(16)
+    .refine(value => !/^\d/.test(value), '库存基础单位不能以数字开头').nullable().optional(),
+  inventoryUnitsPerPurchaseUnit: z.number().positive().max(1_000_000_000).nullable().optional(),
+  unitConversionStatus: z.enum(['PENDING', 'INFERRED', 'VERIFIED']).optional(),
+  unitConversionNote: z.string().trim().max(500).nullable().optional(),
   price: z.number().nonnegative().max(99_999_999.99).optional(),
   minOrderQty: z.number().positive().max(99_999_999.99).optional(),
   stepQty: z.number().positive().max(99_999_999.99).optional(),
@@ -193,6 +211,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     'CHEF_DIRECTOR',                       // BUG#10: 总厨是 SKU 主管理人
     'SUPPLIER_OWNER', 'SUPPLIER_STAFF', 'SUPPLIER_SUB',
   ])
+  const UNIT_GOVERNANCE_ROLES = new Set(['ADMIN', 'SUPER_ADMIN', 'CHEF_DIRECTOR'])
 
   /** 当前租户/供应商实际使用的分类主数据，供筛选和下拉选择。 */
   app.get('/categories', auth(app), async (req: any, reply: any) => {
@@ -663,6 +682,10 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       const first = parsed.error.errors[0]
       return reply.status(400).send({ error: `${first.path.join('.')}: ${first.message}` })
     }
+    const requestedUnitMapping = Boolean(parsed.data.inventoryUnit || parsed.data.inventoryUnitsPerPurchaseUnit)
+    if (requestedUnitMapping && !UNIT_GOVERNANCE_ROLES.has(role)) {
+      return reply.status(403).send({ error: '只有总厨或品牌管理员可以确认库存基础单位换算' })
+    }
     // 供应商角色：忽略 body.supplierId，强制用当前账号绑定的 supplierId
     let data: any = { ...parsed.data }
     if (isSupplierRole(role)) {
@@ -677,11 +700,19 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       // 商品报价与供应商库存解耦；库存只能通过库存入库/调整接口形成流水。
       delete data.stock
       delete data.minStock
+      delete data.inventoryUnit
+      delete data.inventoryUnitsPerPurchaseUnit
+      delete data.unitConversionStatus
+      delete data.unitConversionNote
     } else if (data.supplierId) {
       const scopedSupplier = await prisma.supplier.findFirst({
         where: { id: data.supplierId, tenantId }, select: { id: true },
       })
       if (!scopedSupplier) return reply.status(400).send({ error: '供应商不存在或不属于当前租户' })
+    }
+    if (requestedUnitMapping) {
+      data.unitConversionStatus = data.unitConversionStatus === 'INFERRED' ? 'INFERRED' : 'VERIFIED'
+      data.unitConversionVerifiedAt = data.unitConversionStatus === 'VERIFIED' ? new Date() : null
     }
     if (data.imageKey && !String(data.imageKey).startsWith(`products/${tenantId}/`)) {
       return reply.status(400).send({ error: '商品图片不属于当前租户' })
@@ -1141,7 +1172,12 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     // P1: 非供应商角色也必须白名单字段, 防 mass assignment (改 tenantId / supplierId / id)
     const SUPPLIER_ALLOW = ['price', 'spec', 'category', 'imageKey', 'minOrderQty', 'stepQty', 'shelfDays', 'status', 'shipUpperPct', 'shipUpperBuffer']
     const STAFF_ALLOW = [...SUPPLIER_ALLOW, 'name', 'unit', 'category', 'code']  // 内部员工额外可改名/类
-    const allow = isSupplierRole(role) ? SUPPLIER_ALLOW : STAFF_ALLOW
+    const UNIT_ALLOW = ['inventoryUnit', 'inventoryUnitsPerPurchaseUnit', 'unitConversionStatus', 'unitConversionNote']
+    const allow = isSupplierRole(role)
+      ? SUPPLIER_ALLOW
+      : UNIT_GOVERNANCE_ROLES.has(role)
+        ? [...STAFF_ALLOW, ...UNIT_ALLOW]
+        : STAFF_ALLOW
     const parsedPatch = productPatchSchema.safeParse(
       Object.fromEntries(Object.entries(body).filter(([k]) => allow.includes(k))),
     )
@@ -1301,9 +1337,42 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         id: true, code: true, name: true, supplierId: true, price: true, spec: true,
         category: true, imageKey: true, minOrderQty: true, stepQty: true,
         shelfDays: true, status: true, shipUpperPct: true, shipUpperBuffer: true,
+        unit: true, inventoryUnit: true, inventoryUnitsPerPurchaseUnit: true,
+        unitConversionStatus: true, unitConversionNote: true, unitConversionVerifiedAt: true,
       },
     })
     if (!before) return reply.status(404).send({ error: '商品不存在或无权修改' })
+    const mappingTouched = UNIT_ALLOW.some(field => Object.prototype.hasOwnProperty.call(data, field))
+    if (Object.prototype.hasOwnProperty.call(data, 'unit') && !mappingTouched) {
+      // 改采购单位会使原换算失效，必须重新复核，不能沿用旧系数。
+      data.inventoryUnit = null
+      data.inventoryUnitsPerPurchaseUnit = null
+      data.unitConversionStatus = 'PENDING'
+      data.unitConversionNote = '采购单位已变更，待重新配置库存基础单位换算'
+      data.unitConversionVerifiedAt = null
+    } else if (mappingTouched) {
+      const nextUnit = Object.prototype.hasOwnProperty.call(data, 'inventoryUnit')
+        ? data.inventoryUnit
+        : before.inventoryUnit
+      const nextFactor = Object.prototype.hasOwnProperty.call(data, 'inventoryUnitsPerPurchaseUnit')
+        ? data.inventoryUnitsPerPurchaseUnit
+        : before.inventoryUnitsPerPurchaseUnit
+      if (Boolean(nextUnit) !== Boolean(nextFactor)) {
+        return reply.status(400).send({ error: '库存基础单位与每采购单位换算数量必须同时填写' })
+      }
+      if (!nextUnit || !nextFactor) {
+        data.inventoryUnit = null
+        data.inventoryUnitsPerPurchaseUnit = null
+        data.unitConversionStatus = 'PENDING'
+        data.unitConversionVerifiedAt = null
+      } else {
+        if (!data.unitConversionStatus || data.unitConversionStatus === 'PENDING') {
+          // 总厨/管理员在界面明确保存即视为人工复核。
+          data.unitConversionStatus = 'VERIFIED'
+        }
+        data.unitConversionVerifiedAt = data.unitConversionStatus === 'VERIFIED' ? new Date() : null
+      }
+    }
     const after = await prisma.$transaction(async tx => {
       let updated
       if (isSupplierRole(role) && data.status === 'ENABLED') {

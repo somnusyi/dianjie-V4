@@ -6,6 +6,21 @@ export type InventoryUnitNormalization = {
   note: string
 }
 
+export type ProductInventoryUnitLike = {
+  unit: string
+  inventoryUnit?: string | null
+  inventoryUnitsPerPurchaseUnit?: number | string | { toString(): string } | null
+  unitConversionStatus?: 'PENDING' | 'INFERRED' | 'VERIFIED' | string | null
+}
+
+export type ResolvedProductInventoryUnit = {
+  purchaseUnit: string
+  inventoryUnit: string
+  inventoryUnitsPerPurchaseUnit: number
+  status: 'PENDING' | 'INFERRED' | 'VERIFIED'
+  structured: boolean
+}
+
 const MASS_TO_GRAMS: Record<string, number> = {
   g: 1,
   克: 1,
@@ -57,6 +72,122 @@ function amountToBase(value: number, unit: string) {
   const volume = volumeUnitFactor(unit)
   if (volume) return { dimension: 'volume' as const, value: value * volume }
   return null
+}
+
+function positiveNumber(value: unknown) {
+  const number = Number(value)
+  return Number.isFinite(number) && number > 0 ? number : null
+}
+
+/**
+ * Resolve the authoritative unit contract for one purchasing SKU.
+ *
+ * Legacy products deliberately fall back to 1 purchase unit = 1 inventory unit
+ * with status PENDING.  That preserves historical reads without pretending the
+ * master data has been verified.
+ */
+export function resolveProductInventoryUnit(product: ProductInventoryUnitLike): ResolvedProductInventoryUnit {
+  const purchaseUnit = String(product.unit || '').trim()
+  const configuredUnit = String(product.inventoryUnit || '').trim()
+  const configuredFactor = positiveNumber(product.inventoryUnitsPerPurchaseUnit)
+  const rawStatus = String(product.unitConversionStatus || 'PENDING')
+  const status: ResolvedProductInventoryUnit['status'] = rawStatus === 'VERIFIED'
+    ? 'VERIFIED'
+    : rawStatus === 'INFERRED'
+      ? 'INFERRED'
+      : 'PENDING'
+  if (configuredUnit && configuredFactor) {
+    return {
+      purchaseUnit,
+      inventoryUnit: configuredUnit,
+      inventoryUnitsPerPurchaseUnit: configuredFactor,
+      status,
+      structured: true,
+    }
+  }
+  return {
+    purchaseUnit,
+    inventoryUnit: purchaseUnit,
+    inventoryUnitsPerPurchaseUnit: 1,
+    status: 'PENDING',
+    structured: false,
+  }
+}
+
+/** Convert a quantity expressed in sourceUnit to the product inventory unit. */
+export function convertQuantityToInventoryUnit(input: {
+  quantity: number
+  sourceUnit: string
+  product: ProductInventoryUnitLike
+  productSpec?: string | null
+}): InventoryUnitNormalization {
+  const contract = resolveProductInventoryUnit(input.product)
+  const sourceUnit = cleanUnit(input.sourceUnit)
+  const inventoryUnit = cleanUnit(contract.inventoryUnit)
+  const purchaseUnit = cleanUnit(contract.purchaseUnit)
+  if (!Number.isFinite(input.quantity)) {
+    return {
+      status: 'PENDING', normalizedQuantity: null, normalizedUnit: contract.inventoryUnit,
+      factor: null, note: '数量无效',
+    }
+  }
+  if (sourceUnit === inventoryUnit) {
+    return {
+      status: 'EXACT', normalizedQuantity: input.quantity, normalizedUnit: contract.inventoryUnit,
+      factor: 1, note: '已使用库存基础单位',
+    }
+  }
+  if (sourceUnit === purchaseUnit && contract.structured) {
+    return {
+      status: 'CONVERTED',
+      normalizedQuantity: input.quantity * contract.inventoryUnitsPerPurchaseUnit,
+      normalizedUnit: contract.inventoryUnit,
+      factor: contract.inventoryUnitsPerPurchaseUnit,
+      note: `按主数据 1${contract.purchaseUnit}=${contract.inventoryUnitsPerPurchaseUnit}${contract.inventoryUnit} 换算`,
+    }
+  }
+
+  const sourcePhysical = amountToBase(input.quantity, input.sourceUnit)
+  const oneSourcePhysical = amountToBase(1, input.sourceUnit)
+  const oneInventoryPhysical = amountToBase(1, contract.inventoryUnit)
+  if (sourcePhysical && oneSourcePhysical && oneInventoryPhysical
+    && sourcePhysical.dimension === oneInventoryPhysical.dimension) {
+    const factor = oneSourcePhysical.value / oneInventoryPhysical.value
+    return {
+      status: 'CONVERTED', normalizedQuantity: input.quantity * factor,
+      normalizedUnit: contract.inventoryUnit, factor,
+      note: `${input.sourceUnit}换算为${contract.inventoryUnit}`,
+    }
+  }
+
+  // A structured contract is authoritative.  Do not let a later spec typo
+  // silently override it with heuristic parsing.
+  if (contract.structured) {
+    return {
+      status: 'PENDING', normalizedQuantity: null, normalizedUnit: contract.inventoryUnit,
+      factor: null,
+      note: `无法按主数据换算 ${input.sourceUnit} → ${contract.inventoryUnit}`,
+    }
+  }
+
+  // Compatibility for unmigrated products only.  The result remains PENDING at
+  // governance level even when the old spec parser can calculate a quantity.
+  return normalizeInventoryQuantity({
+    quantity: input.quantity,
+    rawUnit: input.sourceUnit,
+    productUnit: contract.purchaseUnit,
+    productSpec: input.productSpec,
+  })
+}
+
+export function purchasePriceToInventoryUnitCost(input: {
+  purchaseUnitPrice: number
+  product: ProductInventoryUnitLike
+}) {
+  const contract = resolveProductInventoryUnit(input.product)
+  if (!Number.isFinite(input.purchaseUnitPrice) || input.purchaseUnitPrice < 0) return null
+  if (!contract.structured || contract.inventoryUnitsPerPurchaseUnit <= 0) return null
+  return input.purchaseUnitPrice / contract.inventoryUnitsPerPurchaseUnit
 }
 
 function quantityTokenToBase(value: number, unit: string) {

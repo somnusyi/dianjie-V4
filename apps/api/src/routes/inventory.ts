@@ -6,10 +6,13 @@ import dayjs from 'dayjs'
 import { isStoreScoped } from '../lib/auth-scope'
 import { buildIdempotencyKey } from '../lib/idempotency'
 import { estimatedStoreInventory, latestStoreInventorySnapshot } from '../services/storeInventory'
+import { resolveProductInventoryUnit } from '../services/inventoryUnits'
+import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const INVENTORY_VIEW_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'])
 const INVENTORY_WRITE_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF'])
+const INVENTORY_POLICY_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'])
 
 const consumeSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(80).optional(),
@@ -26,6 +29,16 @@ const consumeSchema = z.object({
   const ids = value.items.map(item => item.productId)
   if (new Set(ids).size !== ids.length) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['items'], message: '同一食材不能重复提交' })
+  }
+})
+
+const inventoryPolicySchema = z.object({
+  storeId: z.string().min(1).optional(),
+  minStock: z.number().min(0).max(1_000_000_000),
+  targetStock: z.number().min(0).max(1_000_000_000).nullable().optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.targetStock != null && value.targetStock < value.minStock) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['targetStock'], message: '目标库存不能低于安全库存' })
   }
 })
 
@@ -73,6 +86,50 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
     }
   })
 
+  // 多门店必须各自维护补货阈值；数量统一使用当前 SKU 的库存基础单位。
+  app.patch('/policies/:productId', auth(app), async (req: any, reply: any) => {
+    const { tenantId, userId, role } = req.user
+    if (!INVENTORY_POLICY_ROLES.has(role)) return reply.status(403).send({ error: '无权设置门店库存策略' })
+    const parsed = inventoryPolicySchema.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    let storeId: string
+    try {
+      storeId = await resolveInventoryStore(req.user, parsed.data.storeId)
+    } catch (error: any) {
+      return reply.status(error.statusCode || 400).send({ error: error.message })
+    }
+    const product = await prisma.product.findFirst({
+      where: { id: req.params.productId, tenantId },
+      select: { id: true, name: true, unit: true, inventoryUnit: true },
+    })
+    if (!product) return reply.status(404).send({ error: '原材料不存在' })
+    const result = await prisma.$transaction(async tx => {
+      const policy = await tx.storeInventoryPolicy.upsert({
+        where: { storeId_productId: { storeId, productId: product.id } },
+        update: { minStock: parsed.data.minStock, targetStock: parsed.data.targetStock ?? null },
+        create: {
+          tenantId, storeId, productId: product.id,
+          minStock: parsed.data.minStock, targetStock: parsed.data.targetStock ?? null,
+        },
+      })
+      await tx.opLog.create({
+        data: {
+          tenantId, userId, role,
+          action: `设置门店安全库存 ${product.name} ${parsed.data.minStock}${product.inventoryUnit || product.unit}`,
+          entityType: 'StoreInventoryPolicy', targetId: policy.id, target: product.name,
+          metadata: { storeId, productId: product.id, ...parsed.data },
+        },
+      })
+      return policy
+    })
+    return {
+      id: result.id, productId: result.productId, storeId: result.storeId,
+      minStock: Number(result.minStock),
+      targetStock: result.targetStock == null ? null : Number(result.targetStock),
+      unit: product.inventoryUnit || product.unit,
+    }
+  })
+
   // 人工补录食材消耗。一次请求中的全部明细和审计日志原子提交。
   app.post('/consume', auth(app), async (req: any, reply: any) => {
     const { tenantId, userId, storeId, role } = req.user
@@ -92,10 +149,22 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
 
     const [store, products] = await Promise.all([
       prisma.store.findFirst({ where: { id: storeId, tenantId }, select: { id: true } }),
-      prisma.product.findMany({ where: { tenantId, id: { in: items.map(item => item.productId) } }, select: { id: true } }),
+      prisma.product.findMany({
+        where: { tenantId, id: { in: items.map(item => item.productId) } },
+        select: {
+          id: true, name: true, unit: true, inventoryUnit: true,
+          inventoryUnitsPerPurchaseUnit: true, unitConversionStatus: true,
+        },
+      }),
     ])
     if (!store) return reply.status(400).send({ error: '绑定门店不存在或不属于当前租户' })
     if (products.length !== items.length) return reply.status(400).send({ error: '存在不属于当前租户的食材' })
+    const productById = new Map(products.map(product => [product.id, product]))
+    const pendingProduct = products.find(product => {
+      const contract = resolveProductInventoryUnit(product)
+      return !contract.structured || contract.status === 'PENDING'
+    })
+    if (pendingProduct) return reply.status(409).send({ error: `原材料“${pendingProduct.name}”库存单位尚未核验` })
 
     const operationId = idempotencyKey
       ? buildIdempotencyKey({
@@ -107,7 +176,7 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`inventory-consume:${operationId}`}))`
         const existing = await tx.stockConsumption.findMany({
           where: { tenantId, storeId, createdById: userId, sourceType: 'manual', sourceId: operationId },
-          select: { productId: true, quantity: true, date: true, note: true },
+          select: { productId: true, quantity: true, inventoryQuantity: true, date: true, note: true },
         })
         if (existing.length > 0) {
           const requested = new Map(items.map(item => [item.productId, item.quantity]))
@@ -115,7 +184,7 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
             row.date.toISOString().slice(0, 10) === dateText
             && (row.note || null) === (note || null)
             && requested.has(row.productId)
-            && new Prisma.Decimal(requested.get(row.productId)!).equals(row.quantity),
+            && new Prisma.Decimal(requested.get(row.productId)!).equals(row.inventoryQuantity ?? row.quantity),
           )
           if (!sameRequest) {
             throw Object.assign(new Error('同一幂等键不能用于不同的领用内容'), { statusCode: 409 })
@@ -124,17 +193,23 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
         }
       }
       await tx.stockConsumption.createMany({
-        data: items.map(item => ({
+        data: items.map(item => {
+          const contract = resolveProductInventoryUnit(productById.get(item.productId)!)
+          return {
           tenantId,
           storeId,
           productId: item.productId,
           quantity: new Prisma.Decimal(item.quantity),
+          unitSnapshot: contract.inventoryUnit,
+          inventoryQuantity: new Prisma.Decimal(item.quantity),
+          inventoryUnitSnapshot: contract.inventoryUnit,
           date: consumeDate,
           note: note || null,
           sourceType: 'manual',
           sourceId: operationId,
           createdById: userId,
-        })),
+          }
+        }),
       })
       await tx.opLog.create({
         data: {
@@ -146,6 +221,10 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
         },
       })
       return { count: items.length, duplicated: false }
+    })
+
+    await revalueStoreConsumptionCosts(tenantId, storeId).catch(error => {
+      req.log.error({ error, storeId }, 'manual inventory consumption cost snapshot refresh failed')
     })
 
     return { success: true, count: result.count, operationId, duplicated: result.duplicated }

@@ -13,6 +13,9 @@ type Product = {
   code?: string
   spec?: string | null
   unit: string
+  inventoryUnit?: string | null
+  inventoryUnitsPerPurchaseUnit?: string | number | null
+  unitConversionStatus?: 'PENDING' | 'INFERRED' | 'VERIFIED'
   price: string
   status?: string
   supplier?: { name: string } | null
@@ -101,6 +104,10 @@ export default function DishDetailPage() {
   const [changeType, setChangeType] = useState<'BUSINESS_CHANGE' | 'HISTORICAL_CORRECTION'>(suggestedType)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [productQ, setProductQ] = useState('')
+  const [mappingProduct, setMappingProduct] = useState<Product | null>(null)
+  const [mappingUnit, setMappingUnit] = useState('')
+  const [mappingFactor, setMappingFactor] = useState('')
+  const [mappingNote, setMappingNote] = useState('')
   const [aliasName, setAliasName] = useState('')
   const [lifecycleDate, setLifecycleDate] = useState(today())
   const [lifecycleReason, setLifecycleReason] = useState('')
@@ -218,8 +225,13 @@ export default function DishDetailPage() {
   }
 
   function addProduct(product: Product) {
+    if (!product.inventoryUnit || !product.inventoryUnitsPerPurchaseUnit || product.unitConversionStatus === 'PENDING') {
+      setError(`“${product.name}”尚未核验采购单位与库存单位换算，暂不能加入 BOM`)
+      setPickerOpen(false)
+      return
+    }
     setDraftItems(items => [...items, {
-      productId: product.id, quantity: 1, unit: product.unit, lossRate: 0,
+      productId: product.id, quantity: 1, unit: product.inventoryUnit!, lossRate: 0,
       isMain: items.length === 0, product,
     }])
     setPickerOpen(false); setProductQ('')
@@ -227,6 +239,36 @@ export default function DishDetailPage() {
 
   function patchItem(productId: string, patch: Partial<BomItem>) {
     setDraftItems(items => items.map(item => item.productId === productId ? { ...item, ...patch } : item))
+  }
+
+  function openUnitMapping(product: Product) {
+    setMappingProduct(product)
+    setMappingUnit(product.inventoryUnit || '')
+    setMappingFactor(product.inventoryUnitsPerPurchaseUnit ? String(product.inventoryUnitsPerPurchaseUnit) : '')
+    setMappingNote('总厨核验 BOM 库存单位')
+  }
+
+  async function saveUnitMapping() {
+    if (!mappingProduct || !mappingUnit.trim() || !(Number(mappingFactor) > 0)) {
+      setError('请填写库存基础单位和每采购单位包含的数量')
+      return
+    }
+    setBusy(true); setError(null)
+    try {
+      await apiFetch(`/api/products/${mappingProduct.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          inventoryUnit: mappingUnit.trim(),
+          inventoryUnitsPerPurchaseUnit: Number(mappingFactor),
+          unitConversionStatus: 'VERIFIED',
+          unitConversionNote: mappingNote.trim() || '总厨人工核验',
+        }),
+      })
+      setNotice(`“${mappingProduct.name}”单位换算已核验。`)
+      setMappingProduct(null)
+      await reload()
+    } catch (reason: any) { setError(reason.message) }
+    finally { setBusy(false) }
   }
 
   async function addAlias() {
@@ -395,7 +437,8 @@ export default function DishDetailPage() {
         <div className="mt-2 space-y-2">{versions.length === 0 && <p className="text-caption text-gray3">暂无版本记录</p>}{versions.map(version => <div key={version.id} className="bg-bg rounded-card p-2 text-caption"><div className="flex justify-between"><span>v{version.versionNo} · {version.status === 'DRAFT' ? '草稿' : version.status === 'PUBLISHED' ? '已发布' : '已退役'}</span><span className="font-num text-gray3">{shortDate(version.effectiveFrom)}{version.effectiveTo ? ` ～ ${shortDate(version.effectiveTo)}` : ' 起'}</span></div><div className="text-micro text-gray3 mt-1">{version.changeType === 'HISTORICAL_CORRECTION' ? '历史纠错' : version.changeType === 'INITIAL' ? '初始版本' : '业务变更'} · {version.changeReason || '未填写原因'} · {version.items.length} 项原材料</div>{version.status === 'PUBLISHED' && version.changeType === 'HISTORICAL_CORRECTION' && <button onClick={() => recalculateHistory(version)} disabled={busy} className="mt-2 w-full py-2 border border-amber text-amber-fg rounded-cta text-button disabled:opacity-40">预览并重算历史营业日</button>}</div>)}</div>
       </section>
 
-      {pickerOpen && <div className="fixed inset-0 z-50 bg-ink/60" onClick={() => setPickerOpen(false)}><div className="absolute bottom-0 left-0 right-0 bg-white rounded-t-card max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}><div className="px-4 pt-4 pb-2"><div className="flex justify-between"><h3 className="text-h2">选择原材料</h3><button onClick={() => setPickerOpen(false)}>×</button></div><input value={productQ} onChange={e => setProductQ(e.target.value)} placeholder="搜索名称 / 编码 / 规格" className="w-full bg-bg rounded-cta px-3 py-2 text-body mt-2" /></div><ul className="overflow-y-auto divide-y divide-border">{filteredProducts.map(product => <li key={product.id} className="px-4 py-3 flex items-center gap-2"><div className="flex-1 min-w-0"><div className="text-body truncate">{product.name}</div><div className="text-micro text-gray3">{product.spec} · ¥{fmt(Number(product.price))}/{product.unit}</div></div><button onClick={() => addProduct(product)} className="px-3 py-1.5 bg-amber/10 text-amber-fg rounded-cta text-button">添加</button></li>)}</ul></div></div>}
+      {pickerOpen && <div className="fixed inset-0 z-50 bg-ink/60" onClick={() => setPickerOpen(false)}><div className="absolute bottom-0 left-0 right-0 bg-white rounded-t-card max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}><div className="px-4 pt-4 pb-2"><div className="flex justify-between"><h3 className="text-h2">选择原材料</h3><button onClick={() => setPickerOpen(false)}>×</button></div><input value={productQ} onChange={e => setProductQ(e.target.value)} placeholder="搜索名称 / 编码 / 规格" className="w-full bg-bg rounded-cta px-3 py-2 text-body mt-2" /></div><ul className="overflow-y-auto divide-y divide-border">{filteredProducts.map(product => { const ready = Boolean(product.inventoryUnit && product.inventoryUnitsPerPurchaseUnit && product.unitConversionStatus !== 'PENDING'); return <li key={product.id} className="px-4 py-3 flex items-center gap-2"><div className="flex-1 min-w-0"><div className="text-body truncate">{product.name}</div><div className="text-micro text-gray3">{product.spec} · 采购 ¥{fmt(Number(product.price))}/{product.unit}{ready ? ` · 1${product.unit}=${Number(product.inventoryUnitsPerPurchaseUnit)}${product.inventoryUnit}` : ' · 单位待核验'}</div></div><button onClick={() => ready ? addProduct(product) : openUnitMapping(product)} className="px-3 py-1.5 bg-amber/10 text-amber-fg rounded-cta text-button">{ready ? '添加' : '配置'}</button></li> })}</ul></div></div>}
+      {mappingProduct && <div className="fixed inset-0 z-[55] bg-ink/60 flex items-end" onClick={() => setMappingProduct(null)}><div className="w-full bg-white rounded-t-card p-4 pb-8" onClick={event => event.stopPropagation()}><h3 className="text-h2">核验库存单位</h3><p className="text-caption text-gray3 mt-1">{mappingProduct.name} · 采购单位 {mappingProduct.unit} · {mappingProduct.spec || '无规格'}</p><div className="grid grid-cols-[1fr_auto_1fr] gap-2 items-end mt-4"><label className="text-micro text-gray3">每 1 {mappingProduct.unit} 含<input type="number" min="0.000001" step="0.001" value={mappingFactor} onChange={event => setMappingFactor(event.target.value)} className="mt-1 w-full bg-bg rounded-cta px-3 py-2 text-body" /></label><span className="pb-2 text-caption text-gray3">×</span><label className="text-micro text-gray3">库存基础单位<input value={mappingUnit} onChange={event => setMappingUnit(event.target.value)} placeholder="如 个 / 罐 / g" className="mt-1 w-full bg-bg rounded-cta px-3 py-2 text-body" /></label></div><input value={mappingNote} onChange={event => setMappingNote(event.target.value)} placeholder="核验依据" className="mt-3 w-full bg-bg rounded-cta px-3 py-2 text-body" /><div className="grid grid-cols-2 gap-2 mt-4"><button onClick={() => setMappingProduct(null)} className="py-3 border border-border rounded-cta text-button">取消</button><button onClick={saveUnitMapping} disabled={busy} className="py-3 bg-amber text-white rounded-cta text-button disabled:opacity-40">保存并核验</button></div></div></div>}
       {publishedResult && (
         <div className="fixed inset-0 z-[60] bg-ink/60 flex items-end" role="dialog" aria-modal="true" aria-label="BOM 发布成功">
           <div className="w-full bg-white rounded-t-card p-5 pb-8">

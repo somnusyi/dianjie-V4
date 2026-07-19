@@ -8,6 +8,7 @@ import { resignOssUrls } from './upload'
 import { fireAndForget as notify } from '../services/notify'
 import { businessNoFloor, nextBusinessNo } from '../services/purchaseOrderIntegrity'
 import { estimatedStoreInventory } from '../services/storeInventory'
+import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
 import { lossClaimScope } from '../lib/loss-claim-scope'
 import { lossClaimResolutionSchema } from '../services/lossClaimResolution'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
@@ -355,7 +356,10 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     const inventoryByProduct = new Map(inventory.items.map(item => [item.id, item]))
     const products = await prisma.product.findMany({
       where: { tenantId, id: { in: items.map(item => item.productId) } },
-      select: { id: true, code: true, name: true, spec: true, unit: true, category: true },
+      select: {
+        id: true, code: true, name: true, spec: true, unit: true, category: true,
+        inventoryUnit: true, inventoryUnitsPerPurchaseUnit: true, unitConversionStatus: true,
+      },
     })
     if (products.length !== items.length) return reply.status(400).send({ error: '存在不属于当前租户的食材' })
     const productById = new Map(products.map(product => [product.id, product]))
@@ -368,20 +372,27 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     let totalLossAmount = new Prisma.Decimal(0)
     const itemsData = items.map(item => {
       const lossQty = new Prisma.Decimal(item.quantity)
-      const unitPrice = new Prisma.Decimal(inventoryByProduct.get(item.productId)!.avgUnitCost).toDecimalPlaces(2)
-      const lossAmount = lossQty.mul(unitPrice).toDecimalPlaces(2)
+      // 基础库存单位可能是 g/ml/个，单位成本经常低于 0.01 元。历史
+      // unitPrice 字段只有两位小数，仅作兼容展示；报损金额和新的成本快照
+      // 必须使用完整移动均价，否则低单价原料会被放大或直接归零。
+      const preciseUnitCost = new Prisma.Decimal(inventoryByProduct.get(item.productId)!.avgUnitCost).toDecimalPlaces(6)
+      const legacyUnitPrice = preciseUnitCost.toDecimalPlaces(2)
+      const lossAmount = lossQty.mul(preciseUnitCost).toDecimalPlaces(2)
       totalLossAmount = totalLossAmount.add(lossAmount)
       return {
         productId: item.productId,
         orderedQty: lossQty,
         receivedQty: 0,
         lossQty,
-        unitPrice,
+        unitPrice: legacyUnitPrice,
         lossAmount,
+        inventoryQuantity: lossQty,
+        inventoryUnitSnapshot: productById.get(item.productId)?.inventoryUnit || productById.get(item.productId)?.unit || null,
+        inventoryUnitCostSnapshot: preciseUnitCost,
         productCodeSnapshot: productById.get(item.productId)?.code || null,
         productNameSnapshot: productById.get(item.productId)?.name || null,
         productSpecSnapshot: productById.get(item.productId)?.spec || null,
-        productUnitSnapshot: productById.get(item.productId)?.unit || null,
+        productUnitSnapshot: productById.get(item.productId)?.inventoryUnit || productById.get(item.productId)?.unit || null,
         productCategorySnapshot: productById.get(item.productId)?.category || null,
       }
     })
@@ -424,6 +435,11 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       return created
     })
     const no = claim.no
+    if (!needsReview) {
+      await revalueStoreConsumptionCosts(tenantId, storeId).catch(error => {
+        req.log.error({ error, storeId }, 'automatic internal loss cost refresh failed')
+      })
+    }
 
     // 超阈值时通知总厨 (阈值 ¥500) + 老板 (阈值 ¥3000)
     if (needsReview) {
@@ -608,6 +624,11 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       return claim
     })
     if (!reviewed) return reply.status(409).send({ error: '报损不存在、非待审或已被其他操作处理' })
+    if (action === 'approve') {
+      await revalueStoreConsumptionCosts(tenantId, reviewed.storeId).catch(error => {
+        req.log.error({ error, storeId: reviewed.storeId }, 'approved internal loss cost refresh failed')
+      })
+    }
     // 通知发起人
     try {
       const { sendNotification } = await import('../services/notification')

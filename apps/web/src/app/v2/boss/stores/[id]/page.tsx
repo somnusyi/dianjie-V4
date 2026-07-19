@@ -12,6 +12,11 @@ import { apiFetch } from '@/lib/v2-auth'
 type Profit = {
   store: { id: string; name: string; no: string }
   month: string
+  accountingClose?: {
+    status: string; operatingRevenue: number; operationalRevenue: number
+    reconciliationDifference: number; sourceFilename: string; confirmedAt: string
+    tax: number; incomeTax: number; nonOperatingNet: number
+  } | null
   revenue: { total: number; net: number; platformFee: number; recordCount: number }
   cost: {
     food: number; loss: number
@@ -56,13 +61,16 @@ export default function BossStoreDetailPage({ params }: { params: { id: string }
 
   const { revenue, cost, grossProfit, netProfit, netMargin } = profit
   const pnl = [
-    { item: '营业收入 (GMV)', amount: revenue.total, pct: 100, kind: 'rev' as const },
+    { item: profit.accountingClose ? '营业收入 (财务月结)' : '营业收入 (GMV)', amount: revenue.total, pct: 100, kind: 'rev' as const },
     { item: '平台抽成', amount: -revenue.platformFee, pct: revenue.total > 0 ? -(revenue.platformFee / revenue.total * 100) : 0, controllable: false, neg: true },
     { item: '食材成本', amount: -cost.food, pct: revenue.total > 0 ? -(cost.food / revenue.total * 100) : 0, controllable: true, neg: true },
     { item: '人工成本', amount: -cost.labor.total, pct: revenue.total > 0 ? -(cost.labor.total / revenue.total * 100) : 0, controllable: false, neg: true },
     { item: '销售费用', amount: -(cost.sales.total - cost.sales.platformFee), pct: revenue.total > 0 ? -((cost.sales.total - cost.sales.platformFee) / revenue.total * 100) : 0, controllable: true, neg: true },
     { item: '管理费用', amount: -cost.mgmt.total, pct: revenue.total > 0 ? -(cost.mgmt.total / revenue.total * 100) : 0, controllable: false, neg: true },
     { item: '财务费用', amount: -cost.finance.total, pct: revenue.total > 0 ? -(cost.finance.total / revenue.total * 100) : 0, controllable: false, neg: true },
+    ...(profit.accountingClose?.tax ? [{ item: '流转税费', amount: -profit.accountingClose.tax, pct: revenue.total > 0 ? -(profit.accountingClose.tax / revenue.total * 100) : 0, neg: true }] : []),
+    ...(profit.accountingClose?.nonOperatingNet ? [{ item: '营业外净额', amount: profit.accountingClose.nonOperatingNet, pct: revenue.total > 0 ? (profit.accountingClose.nonOperatingNet / revenue.total * 100) : 0 }] : []),
+    ...(profit.accountingClose?.incomeTax ? [{ item: '企业所得税', amount: -profit.accountingClose.incomeTax, pct: revenue.total > 0 ? -(profit.accountingClose.incomeTax / revenue.total * 100) : 0, neg: true }] : []),
     { item: '净利润', amount: netProfit, pct: netMargin, kind: 'profit' as const },
   ]
 
@@ -84,7 +92,7 @@ export default function BossStoreDetailPage({ params }: { params: { id: string }
 
       <div className="mt-3">
         <GlanceStrip
-          label={`${profit.month} GMV`}
+          label={`${profit.month} ${profit.accountingClose ? '财务收入' : 'GMV'}`}
           value={`¥${Math.round(revenue.total).toLocaleString()}`}
           delta={revenue.platformFee > 0 ? { text: `平台抽成 −¥${Math.round(revenue.platformFee).toLocaleString()}`, trend: 'down' } : undefined}
           meta={`净到账 ¥${Math.round(revenue.net).toLocaleString()} · 录入 ${revenue.recordCount} 天`}
@@ -95,6 +103,13 @@ export default function BossStoreDetailPage({ params }: { params: { id: string }
           ]}
         />
       </div>
+
+      {profit.accountingClose && (
+        <div className="mx-4 mt-3 bg-green-bg border border-green-fg/20 rounded-card p-3 text-caption text-gray2">
+          <span className="text-green-fg font-medium">财务月结已确认</span>
+          <span> · 与日报折后收入相差 {profit.accountingClose.reconciliationDifference >= 0 ? '+' : ''}¥{profit.accountingClose.reconciliationDifference.toLocaleString()}</span>
+        </div>
+      )}
 
       <Section title="P&L 拆解" right={profit.month}>
         <div className="bg-bg-card rounded-card border border-border overflow-hidden">

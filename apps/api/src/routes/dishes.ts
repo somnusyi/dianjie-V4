@@ -15,6 +15,9 @@ import { isStoreScoped } from '../lib/auth-scope'
 import { parseBoundedInteger } from '../lib/pagination'
 import { normalizeDishName, normalizeVariantKey } from '../services/dailyBusinessImport'
 import { bomCalculationSnapshot, bomDateRangesOverlap, calculateBomConsumptions, isBomVersionEffective, selectEffectiveBomVersion } from '../services/bomLifecycle'
+import { resolveProductInventoryUnit } from '../services/inventoryUnits'
+import { convertQuantityToInventoryUnit } from '../services/inventoryUnits'
+import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
 
 const CHEF_ROLES = ['CHEF_DIRECTOR', 'CHEF', 'ADMIN', 'SUPER_ADMIN']
 const VIEW_ROLES = [...CHEF_ROLES, 'FINANCE', 'MANAGER', 'KITCHEN_LEAD']
@@ -127,22 +130,6 @@ function scopedStoreId(user: any, requestedStoreId?: string) {
   return user.storeId
 }
 
-/** 算菜品的食材成本 (基于今天生效的默认 BOM + Product.price) */
-async function calcDishCost(dishId: string): Promise<number> {
-  const versions = await prisma.dishBomVersion.findMany({
-    where: { dishId, variantKey: '', status: 'PUBLISHED' },
-    include: { items: { include: { product: { select: { price: true } } } } },
-  })
-  const current = selectEffectiveBomVersion(versions, chinaDateText(), '')
-  let cost = 0
-  for (const r of current?.items || []) {
-    const unitPrice = Number(r.product?.price || 0)
-    const qty = Number(r.quantity) * (1 + Number(r.lossRate))   // 算上损耗
-    cost += unitPrice * qty
-  }
-  return Math.round(cost * 100) / 100
-}
-
 export const dishRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 菜品列表 ──────────────────────────────────────
@@ -157,7 +144,10 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
       include: {
         bomVersions: withCost === '1' ? {
           where: { status: 'PUBLISHED' },
-          include: { items: { include: { product: { select: { name: true, unit: true, price: true, spec: true } } } } },
+          include: { items: { include: { product: { select: {
+            name: true, unit: true, price: true, spec: true,
+            inventoryUnit: true, inventoryUnitsPerPurchaseUnit: true, unitConversionStatus: true,
+          } } } } },
         } : false,
       },
     })
@@ -172,14 +162,6 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
           .filter((version: any) => isBomVersionEffective(version, businessDate) && version.items?.length)
           .map((version: any) => version.variantKey))].sort() as string[]
         const recipes = (current?.items || []).map((item: any) => ({ ...item, variantKey: '' }))
-        let cost = 0
-        for (const r of recipes) {
-          cost += Number(r.product?.price || 0) * Number(r.quantity) * (1 + Number(r.lossRate))
-        }
-        cost = Math.round(cost * 100) / 100
-        const sale = Number(d.salePrice)
-        const grossProfit = sale - cost
-        const grossMargin = sale > 0 ? grossProfit / sale : 0
         return {
           ...d,
           status: effectiveDishStatus(d),
@@ -188,9 +170,12 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
           activeBomVariants,
           hasAnyEffectiveBom: activeBomVariants.length > 0,
           primaryBomVariant: activeBomVariants.includes('') ? '' : (activeBomVariants[0] || ''),
-          foodCost: cost,
-          grossProfit,
-          grossMargin,
+          // BOM 只描述用量。菜品成本必须来自入库移动平均成本快照，
+          // 不能再拿采购包装价直接乘基础单位用量。
+          foodCost: null,
+          grossProfit: null,
+          grossMargin: null,
+          costStatus: 'FROM_MOVING_AVERAGE_SNAPSHOTS',
         }
       })
       return reply.send(enriched)
@@ -287,7 +272,11 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
           orderBy: [{ variantKey: 'asc' }, { versionNo: 'desc' }],
           include: {
             items: {
-              include: { product: { select: { id: true, name: true, unit: true, price: true, spec: true, supplier: { select: { name: true } } } } },
+              include: { product: { select: {
+                id: true, name: true, unit: true, price: true, spec: true,
+                inventoryUnit: true, inventoryUnitsPerPurchaseUnit: true, unitConversionStatus: true,
+                supplier: { select: { name: true } },
+              } } },
               orderBy: [{ isMain: 'desc' }, { createdAt: 'asc' }],
             },
           },
@@ -295,13 +284,12 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
       },
     })
     if (!d) return reply.status(404).send({ error: '菜品不存在' })
-    const cost = await calcDishCost(d.id)
     const current = selectEffectiveBomVersion(d.bomVersions as any, chinaDateText(), '') as any
     const recipes = (current?.items || []).map((item: any) => ({ ...item, variantKey: '' }))
     return reply.send({
-      ...d, status: effectiveDishStatus(d), recipes, activeBomVersion: current || null, foodCost: cost,
-      grossProfit: Number(d.salePrice) - cost,
-      grossMargin: Number(d.salePrice) > 0 ? (Number(d.salePrice) - cost) / Number(d.salePrice) : 0,
+      ...d, status: effectiveDishStatus(d), recipes, activeBomVersion: current || null,
+      foodCost: null, grossProfit: null, grossMargin: null,
+      costStatus: 'FROM_MOVING_AVERAGE_SNAPSHOTS',
     })
   })
 
@@ -500,14 +488,26 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     if (new Set(productIds).size !== productIds.length) return reply.status(400).send({ error: '同一 BOM 版本中不能重复添加相同原材料' })
     const [version, products] = await Promise.all([
       prisma.dishBomVersion.findFirst({ where: { id: req.params.versionId, tenantId, status: 'DRAFT' }, select: { id: true } }),
-      prisma.product.findMany({ where: { tenantId, id: { in: productIds }, status: 'ENABLED' }, select: { id: true, unit: true } }),
+      prisma.product.findMany({
+        where: { tenantId, id: { in: productIds }, status: 'ENABLED' },
+        select: {
+          id: true, unit: true, inventoryUnit: true,
+          inventoryUnitsPerPurchaseUnit: true, unitConversionStatus: true,
+        },
+      }),
     ])
     if (!version) return reply.status(404).send({ error: 'BOM 草稿不存在或已经发布' })
     const productMap = new Map(products.map(product => [product.id, product]))
     for (const item of parsed.data.items) {
       const product = productMap.get(item.productId)
       if (!product) return reply.status(400).send({ error: '配方包含不存在或已停用的原材料' })
-      if (product.unit !== item.unit) return reply.status(400).send({ error: `配方单位必须与库存单位一致（${product.unit}）` })
+      const contract = resolveProductInventoryUnit(product)
+      if (!contract.structured || contract.status === 'PENDING') {
+        return reply.status(409).send({ error: '原材料尚未完成采购单位与库存单位换算，请先在商品档案核验单位' })
+      }
+      if (contract.inventoryUnit !== item.unit) {
+        return reply.status(400).send({ error: `配方单位必须使用库存基础单位（${contract.inventoryUnit}）` })
+      }
     }
     await prisma.$transaction(async tx => {
       await tx.dishBomItem.deleteMany({ where: { versionId: version.id } })
@@ -529,13 +529,22 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
       const published = await prisma.$transaction(async tx => {
         const draft = await tx.dishBomVersion.findFirst({
           where: { id: req.params.versionId, tenantId, status: 'DRAFT' },
-          include: { items: { include: { product: { select: { id: true, unit: true, status: true } } } }, dish: true },
+          include: { items: { include: { product: { select: {
+            id: true, unit: true, status: true, inventoryUnit: true,
+            inventoryUnitsPerPurchaseUnit: true, unitConversionStatus: true,
+          } } } }, dish: true },
         })
         if (!draft) throw Object.assign(new Error('BOM 草稿不存在或已经发布'), { statusCode: 404 })
         await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`dish-bom:${tenantId}:${draft.dishId}:${draft.variantKey}`}))`)
         if (!draft.effectiveFrom) throw Object.assign(new Error('请先设置 BOM 生效日期'), { statusCode: 400 })
         if (draft.items.length === 0) throw Object.assign(new Error('BOM 至少需要一项有效原材料'), { statusCode: 400 })
-        if (draft.items.some(item => item.product.status !== 'ENABLED' || item.unit !== item.product.unit)) {
+        if (draft.items.some(item => {
+          const contract = resolveProductInventoryUnit(item.product)
+          return item.product.status !== 'ENABLED'
+            || !contract.structured
+            || contract.status === 'PENDING'
+            || item.unit !== contract.inventoryUnit
+        })) {
           throw Object.assign(new Error('BOM 包含已停用原材料或单位不一致，请修正后再发布'), { statusCode: 409 })
         }
         const today = chinaDateText()
@@ -693,7 +702,7 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
       prisma.store.findFirst({ where: { id: d.storeId, tenantId }, select: { id: true } }),
       prisma.dish.findFirst({
         where: { id: d.dishId, tenantId },
-        include: { bomVersions: { where: { status: 'PUBLISHED' }, include: { items: true } } },
+        include: { bomVersions: { where: { status: 'PUBLISHED' }, include: { items: { include: { product: true } } } } },
       }),
     ])
     if (!store) return reply.status(404).send({ error: '门店不存在' })
@@ -725,19 +734,34 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
       if (!qtyChanged) return saved
       await tx.stockConsumption.deleteMany({ where: { sourceType: 'dish_sale', sourceId: saved.id } })
       if (dish.inventoryPolicy === 'EXCLUDE') return saved
-      const consumptions = calculateBomConsumptions(Number(d.quantity), bomVersion!.items).map(item => ({
+      const consumptions = calculateBomConsumptions(Number(d.quantity), bomVersion!.items).map(item => {
+        const bomItem = bomVersion!.items.find(candidate => candidate.productId === item.productId)!
+        const normalized = convertQuantityToInventoryUnit({
+          quantity: item.quantity, sourceUnit: bomItem.unit, product: bomItem.product, productSpec: bomItem.product.spec,
+        })
+        if (normalized.normalizedQuantity == null) {
+          throw Object.assign(new Error(`原材料“${bomItem.product.name}”单位换算待核验`), { statusCode: 409 })
+        }
+        return {
         tenantId, storeId: d.storeId, productId: item.productId, date: saleDate,
-        quantity: new Prisma.Decimal(item.quantity.toFixed(6)), note: `菜品销售 ${d.quantity} 份`,
+        quantity: new Prisma.Decimal(item.quantity.toFixed(6)), unitSnapshot: bomItem.unit,
+        inventoryQuantity: new Prisma.Decimal(normalized.normalizedQuantity.toFixed(6)),
+        inventoryUnitSnapshot: normalized.normalizedUnit,
+        note: `菜品销售 ${d.quantity} 份`,
         sourceType: 'dish_sale', sourceId: saved.id, sourceLineKey: bomVersion!.id,
         dishId: dish.id, variantKey: '', bomVersionId: bomVersion!.id,
         calculationSnapshot: bomCalculationSnapshot({
           dishId: dish.id, dishName: dish.name, variantKey: '', saleQuantity: Number(d.quantity), version: bomVersion!,
         }) as any,
         createdById: userId,
-      }))
+        }
+      })
       if (consumptions.length > 0) await tx.stockConsumption.createMany({ data: consumptions })
       return saved
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 30_000 })
+    await revalueStoreConsumptionCosts(tenantId, d.storeId).catch(error => {
+      req.log.error({ error, storeId: d.storeId }, 'manual dish sale cost snapshot refresh failed')
+    })
     return sale
   })
 
@@ -768,49 +792,42 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     if (rows.length === 0) return []
     const dishIds = rows.map(r => r.dishId)
     const [dishes, consumptionRows] = await Promise.all([
-      prisma.dish.findMany({
-        where: { id: { in: dishIds } },
-        include: {
-          bomVersions: {
-            where: { status: 'PUBLISHED', variantKey: '' },
-            include: { items: { include: { product: { select: { price: true } } } } },
-          },
-        },
-      }),
+      prisma.dish.findMany({ where: { id: { in: dishIds } } }),
       prisma.stockConsumption.findMany({
         where: {
           tenantId, dishId: { in: dishIds }, date: { gte: start, lte: end },
           ...(where.storeId ? { storeId: where.storeId } : {}),
           sourceType: { in: ['daily_pos', 'daily_bom_backfill', 'dish_sale'] },
         },
-        select: { dishId: true, quantity: true, product: { select: { price: true } } },
+        select: { dishId: true, costAmountSnapshot: true },
       }),
     ])
     const dishMap = new Map(dishes.map(d => [d.id, d]))
     const actualCost = new Map<string, number>()
     for (const consumption of consumptionRows) {
       if (!consumption.dishId) continue
-      actualCost.set(consumption.dishId, (actualCost.get(consumption.dishId) || 0)
-        + Number(consumption.quantity) * Number(consumption.product.price || 0))
+      if (consumption.costAmountSnapshot != null) {
+        actualCost.set(consumption.dishId, (actualCost.get(consumption.dishId) || 0)
+          + Number(consumption.costAmountSnapshot))
+      }
     }
     return rows.map(r => {
       const d = dishMap.get(r.dishId) as any
       if (!d) return null
       const qty = Number(r._sum.quantity || 0)
       const gross = Number(r._sum.grossAmount || 0)
-      const currentVersion = selectEffectiveBomVersion(d.bomVersions || [], chinaDateText(), '') as any
-      const fallbackUnitCost = (currentVersion?.items || []).reduce((s: number, x: any) =>
-        s + Number(x.product?.price || 0) * Number(x.quantity) * (1 + Number(x.lossRate)), 0)
-      const totalCost = actualCost.has(d.id) ? actualCost.get(d.id)! : fallbackUnitCost * qty
-      const unitCost = qty > 0 ? totalCost / qty : fallbackUnitCost
+      const hasCost = actualCost.has(d.id)
+      const totalCost = hasCost ? actualCost.get(d.id)! : null
+      const unitCost = totalCost != null && qty > 0 ? totalCost / qty : null
       return {
         dishId: d.id, name: d.name, category: d.category,
         salePrice: Number(d.salePrice),
-        unitCost: Math.round(unitCost * 100) / 100,
+        unitCost: unitCost == null ? null : Math.round(unitCost * 100) / 100,
         qty, gross,
-        totalCost: Math.round(totalCost * 100) / 100,
-        grossProfit: Math.round((gross - totalCost) * 100) / 100,
-        grossMargin: gross > 0 ? (gross - totalCost) / gross : 0,
+        totalCost: totalCost == null ? null : Math.round(totalCost * 100) / 100,
+        grossProfit: totalCost == null ? null : Math.round((gross - totalCost) * 100) / 100,
+        grossMargin: totalCost != null && gross > 0 ? (gross - totalCost) / gross : null,
+        costStatus: hasCost ? 'MOVING_AVERAGE' : 'PENDING_COST_SNAPSHOT',
       }
     }).filter(Boolean)
   })
@@ -841,7 +858,7 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
         ...(where.storeId ? { storeId: where.storeId } : {}),
         sourceType: { in: ['daily_pos', 'daily_bom_backfill', 'dish_sale'] },
       },
-      include: { product: { select: { id: true, name: true, unit: true, spec: true } } },
+      include: { product: { select: { id: true, name: true, unit: true, inventoryUnit: true, spec: true } } },
     })
     if (consumptions.length === 0) return []
 
@@ -849,9 +866,11 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     const consumed = new Map<string, { name: string; unit: string; qty: number }>()
     for (const r of consumptions) {
       const cur = consumed.get(r.productId) || {
-        name: r.product?.name || '?', unit: r.product?.unit || '', qty: 0,
+        name: r.product?.name || '?',
+        unit: r.inventoryUnitSnapshot || r.product?.inventoryUnit || r.product?.unit || '',
+        qty: 0,
       }
-      cur.qty += Number(r.quantity)
+      cur.qty += Number(r.inventoryQuantity ?? r.quantity)
       consumed.set(r.productId, cur)
     }
 

@@ -18,6 +18,11 @@ import { apiFetch, getUser } from '@/lib/v2-auth'
 type Profit = {
   store: { name: string }
   month: string
+  accountingClose?: {
+    status: string; operatingRevenue: number; operationalRevenue: number
+    reconciliationDifference: number; sourceFilename: string; confirmedAt: string
+    tax: number; incomeTax: number; nonOperatingNet: number
+  } | null
   revenue: {
     total: number; net?: number; platformFee?: number
     platformFeeBreakdown?: { meituan: number; douyin: number }
@@ -102,7 +107,9 @@ export default function ManagerOpsPage() {
   const loss = Number(c?.loss || 0)
   const labor = Number(c?.labor?.total || 0)
   // sales 后端已含 platformFee, 减去得到"门店杂费销售类"
-  const salesOnly = Math.max(0, Number(c?.sales?.total || 0) - platformFee)
+  const salesOnly = data?.accountingClose
+    ? Number(c?.sales?.total || 0)
+    : Math.max(0, Number(c?.sales?.total || 0) - platformFee)
   const mgmt = Number(c?.mgmt?.total || 0)
   const fin = Number(c?.finance?.total || 0)
   const netProfit = Number(data?.netProfit || 0)
@@ -139,6 +146,16 @@ export default function ManagerOpsPage() {
         comparison={r?.comparison}
       />
 
+      {data?.accountingClose && (
+        <div className="mx-4 mt-3 bg-green-bg border border-green-fg/20 rounded-card p-3 text-caption">
+          <div className="text-green-fg font-medium">财务月结已确认</div>
+          <div className="text-gray2 mt-1">
+            本页 P&amp;L 采用财务收入 ¥{data.accountingClose.operatingRevenue.toLocaleString()}；
+            与日报折后收入相差 {data.accountingClose.reconciliationDifference >= 0 ? '+' : ''}¥{data.accountingClose.reconciliationDifference.toLocaleString()}。
+          </div>
+        </div>
+      )}
+
       {error && <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">加载失败: {error}</div>}
 
       {/* P&L */}
@@ -156,11 +173,14 @@ export default function ManagerOpsPage() {
             />
           )}
           {netRev !== operatingRevenue && <Row item="实际到账 (净)" amount={netRev} pct={pct(netRev)} tone="amber" sub />}
-          <Row item="食材成本" amount={-food} pct={'-' + pct(food)} controllable note={loss > 0 ? `含报损 ¥${loss.toLocaleString()}` : undefined} />
+          <Row item={data?.accountingClose ? '主营成本' : '食材成本'} amount={-food} pct={'-' + pct(food)} controllable note={loss > 0 ? `报损参考 ¥${loss.toLocaleString()}` : undefined} />
           <Row item="人工成本" amount={-labor} pct={'-' + pct(labor)} controllable={false} />
           <Row item="销售费用 (门店)" amount={-salesOnly} pct={'-' + pct(salesOnly)} controllable note="租金/水电/营销" />
           <Row item="管理费用" amount={-mgmt} pct={'-' + pct(mgmt)} controllable={false} />
           {fin > 0 && <Row item="财务费用" amount={-fin} pct={'-' + pct(fin)} />}
+          {data?.accountingClose && data.accountingClose.tax > 0 && <Row item="流转税费" amount={-data.accountingClose.tax} pct={'-' + pct(data.accountingClose.tax)} />}
+          {data?.accountingClose && data.accountingClose.nonOperatingNet !== 0 && <Row item="营业外净额" amount={data.accountingClose.nonOperatingNet} pct={pct(data.accountingClose.nonOperatingNet)} />}
+          {data?.accountingClose && data.accountingClose.incomeTax > 0 && <Row item="企业所得税" amount={-data.accountingClose.incomeTax} pct={'-' + pct(data.accountingClose.incomeTax)} />}
           <Row item="净利润" amount={netProfit} pct={`${data?.netMargin.toFixed(1) || 0}`} bold profit />
         </div>
       </Section>

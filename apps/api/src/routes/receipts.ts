@@ -8,6 +8,8 @@ import { notifyReceiptConfirmed } from '../services/notification'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 import { parsePagination } from '../lib/pagination'
 import { nextBusinessNo } from '../services/purchaseOrderIntegrity'
+import { ensureReceiptInventoryUnitSnapshots } from '../services/receiptInventoryUnits'
+import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const RECEIPT_OPERATOR_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN'])
@@ -240,9 +242,12 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     let duplicated = false
     let confirmedAt = new Date()
     if (receipt) {
-      const claimed = await prisma.receipt.updateMany({
-        where: pendingWhere,
-        data: { status: 'CONFIRMED', confirmedAt },
+      const claimed = await prisma.$transaction(async tx => {
+        await ensureReceiptInventoryUnitSnapshots(tx, receipt!.id)
+        return tx.receipt.updateMany({
+          where: pendingWhere,
+          data: { status: 'CONFIRMED', confirmedAt },
+        })
       })
       if (claimed.count !== 1) return reply.status(409).send({ error: '入库单已被处理，请刷新后查看' })
     } else {
@@ -281,6 +286,9 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       const store = await prisma.store.findUnique({ where: { id: receipt.storeId }, select: { name: true } })
       void notifyReceiptConfirmed(tenantId, receipt.no, store?.name || '', false, 0)
     }
+    await revalueStoreConsumptionCosts(tenantId, receipt.storeId).catch(error => {
+      req.log.error({ error, receiptId: receipt!.id }, 'receipt cost snapshot refresh failed')
+    })
     return {
       message: isHeadq ? '总仓入库确认 (内部调拨, 不建账期)' : '入库确认成功，账期已自动创建',
       duplicated,
@@ -363,6 +371,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
           data: { quantity: item.receivedQty, amount: item.actualAmount },
         })
       }
+      await ensureReceiptInventoryUnitSnapshots(tx, receipt.id)
 
       if (lossItemsData.length > 0) {
         const latest = await tx.lossClaim.findFirst({
@@ -416,6 +425,9 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       req.log.error({ receiptId: receipt.id, error: derivativeResult.voucher.error }, '报损入库凭证生成失败，等待每日补偿')
     }
     if (!derivativeResult.finance.ok) throw new Error(derivativeResult.finance.error)
+    await revalueStoreConsumptionCosts(tenantId, receipt.storeId).catch(error => {
+      req.log.error({ error, receiptId: receipt.id }, 'loss receipt cost snapshot refresh failed')
+    })
 
     const store = await prisma.store.findUnique({ where: { id: receipt.storeId }, select: { name: true } })
     void notifyReceiptConfirmed(tenantId, receipt.no, store?.name || '', totalLossAmount.gt(0), totalLossAmount.toNumber())

@@ -42,6 +42,7 @@ describe('supplier order to receipt flow (integration)', () => {
     const product = await prisma.product.create({
       data: {
         tenantId, supplierId, code: `${suffix}-P`, name: '流程鲜菌', category: '菌菇', unit: '斤',
+        inventoryUnit: 'g', inventoryUnitsPerPurchaseUnit: 500, unitConversionStatus: 'VERIFIED',
         price: 10, stock: 10, minOrderQty: 1, stepQty: 1, shelfDays: 7,
       },
     })
@@ -219,6 +220,10 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(Number(receipt.paymentSchedule?.amount)).toBe(50)
     expect(receipt.paymentSchedule?.status).toBe('ON_HOLD')
     expect(receipt.items[0]).toMatchObject({ productNameSnapshot: '流程鲜菌', productUnitSnapshot: '斤' })
+    expect(Number(receipt.items[0].inventoryQuantity)).toBe(2500)
+    expect(receipt.items[0].inventoryUnitSnapshot).toBe('g')
+    expect(Number(receipt.items[0].inventoryUnitsPerPurchaseUnitSnapshot)).toBe(500)
+    expect(Number(receipt.items[0].inventoryUnitCostSnapshot)).toBeCloseTo(0.02)
     const claim = await prisma.lossClaim.findFirstOrThrow({
       where: { purchaseOrderId: order.id }, include: { items: true },
     })

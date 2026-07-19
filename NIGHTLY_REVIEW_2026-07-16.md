@@ -1070,3 +1070,23 @@
 - 首次集成测试在业务用例前被共享 `node_modules` 中跨分支 Prisma Client 拦住，它错误期待 main 的 `inventoryMode` 字段；按 release schema 重新 `prisma generate` 后恢复。首次 4444 端到端也证实旧直启 API 进程未跟随分支切换；精确停止本仓库旧进程、用标准 dev 入口恢复后全量通过。
 - API 4444 与 Web 3200 已均以当前 release 代码干净恢复，健康检查均为 HTTP 200。切换共享 worktree 分支后仍必须重新生成 Prisma Client 并重启长驻 dev，否则会得到与分支不一致的假回归结果。
 - 补送、已确认入库单更正、报损后供应商物理库存口径和在线盘点流程仍为待确认项，本轮未擅自推进。
+
+## 2026-07-20 05:51 第五十轮（API Prisma 分支一致性门禁）
+
+### 检查范围与修改
+
+- 针对上轮实际命中的共享 `node_modules` Prisma Client 污染继续审计 API 标准命令；原 `dev/build/start/test/test:integration` 均可直接复用其他分支生成的 Client，切换 worktree 分支后可在业务代码运行前因字段不一致失败，或让长驻进程继续服务旧分支模型。
+- API package 新增统一 `prisma:generate` 命令，并为 `dev`、`build`、`start`、`test`、`test:integration`、`test:watch`、`test:coverage` 和 `test:remote` 八个标准入口补齐 pre-hook。每次入口启动前都会按当前 checkout 的 `packages/db/prisma/schema.prisma` 重新生成 Client。
+- 生成步骤只更新本地依赖产物，不连接或修改数据库；本轮未执行 `db reset`、`db push` 或生产部署。
+
+### 自动化与运行验证
+
+- 标准 API `test`、`build` 和 `test:integration` 均在日志中先执行 release Prisma generate；生成后 DMMF 明确不包含 main 专属 `Supplier.inventoryMode`，证明 Client 已回到 release 模型。
+- API 单元测试 106/106、独立 `dianjie_v4_ci` 全量 PostgreSQL 集成测试 51/51、API TypeScript build、Web 测试 13/13 及 Web TypeScript 检查全部通过。
+- `prestart` 独立校验通过；标准 `pnpm --filter @dianjie/api dev` 在日志中先执行 `predev` 并生成 Client，随后 4444 成功启动。
+- 新进程上的 `dianjie_v4_local` 真实供应商商品管理端到端再次全项通过：四路分类并发、500 行导入（77ms）、批量操作、审批/撤回竞争、故障回滚和租户边界正常，测试数据已清理。API 4444 和 Web 3200 健康检查均为 HTTP 200。
+
+### 风险与使用边界
+
+- 根工作区 `pnpm build` 原已在递归构建前生成 Prisma Client；API `prebuild` 会额外重复一次，代价约半秒，但保证直接运行 API package 构建也安全。
+- 绕过 package scripts 直接执行 `tsx`、`vitest` 或 `node dist/index.js` 仍会绕过门禁；发布和开发回归应继续使用标准 pnpm 入口。

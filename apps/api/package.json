@@ -2,13 +2,22 @@
   "name": "@dianjie/api",
   "version": "1.0.0",
   "scripts": {
+    "prisma:generate": "pnpm --filter @dianjie/db generate",
+    "predev": "pnpm run prisma:generate",
     "dev": "tsx watch src/index.ts",
+    "prebuild": "pnpm run prisma:generate",
     "build": "tsc",
+    "prestart": "pnpm run prisma:generate",
     "start": "node dist/index.js",
+    "pretest": "pnpm run prisma:generate",
     "test": "vitest run --reporter=verbose",
+    "pretest:integration": "pnpm run prisma:generate",
     "test:integration": "vitest run --config vitest.integration.config.ts --reporter=verbose",
+    "pretest:watch": "pnpm run prisma:generate",
     "test:watch": "vitest --reporter=verbose",
+    "pretest:coverage": "pnpm run prisma:generate",
     "test:coverage": "vitest run --coverage",
+    "pretest:remote": "pnpm run prisma:generate",
     "test:remote": "vitest run --reporter=verbose"
   },
   "dependencies": {

@@ -1049,6 +1049,9 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const cumulativeTotal = Number(cumulativeTotalAmount)
     const oldTotal = Number(order.totalAmount)
     const changedLines = lineShipped.filter(l => Math.abs(l.shipped - Number(l.it.quantity)) > 0.0001)
+    const adjustNote = changedLines.length > 0
+      ? '调整: ' + changedLines.map(l => `${l.it.product?.name || l.it.id} ${l.it.quantity}→${l.shipped}`).join(', ')
+      : ''
 
     // 注:发货后只是 DELIVERING (在途), 不启动倒计时. 待供应商点「送达」改 PENDING_CONFIRM 才计时
 
@@ -1129,19 +1132,14 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           productName: line.it.product?.name,
         })),
       })
-    })
-
-    // opLog — 调整数量时详细记录
-    const adjustNote = changedLines.length > 0
-      ? '调整: ' + changedLines.map(l => `${l.it.product?.name || l.it.id} ${l.it.quantity}→${l.shipped}`).join(', ')
-      : ''
-    await prisma.opLog.create({
-      data: {
-        tenantId, userId, isAi: false,
-        action: `供应商确认发货${adjustNote ? ' (' + adjustNote + ')' : ''}, 金额 ¥${newTotal.toFixed(2)}${Math.abs(newTotal - oldTotal) > 0.01 ? ` (原 ¥${oldTotal.toFixed(2)})` : ''}`,
-        target: order.no, entityType: 'PurchaseOrder', targetId: id,
-        metadata: { oldTotal, newTotal, changedLines: changedLines.map(l => ({ name: l.it.product?.name, ordered: Number(l.it.quantity), shipped: l.shipped })) },
-      },
+      await tx.opLog.create({
+        data: {
+          tenantId, userId, isAi: false,
+          action: `供应商确认发货${adjustNote ? ' (' + adjustNote + ')' : ''}, 金额 ¥${newTotal.toFixed(2)}${Math.abs(newTotal - oldTotal) > 0.01 ? ` (原 ¥${oldTotal.toFixed(2)})` : ''}`,
+          target: order.no, entityType: 'PurchaseOrder', targetId: id,
+          metadata: { oldTotal, newTotal, changedLines: changedLines.map(l => ({ name: l.it.product?.name, ordered: Number(l.it.quantity), shipped: l.shipped })) },
+        },
+      })
     })
 
     // 通知 — 调整时高亮告知店长 / 厨师长

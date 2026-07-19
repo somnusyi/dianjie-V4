@@ -517,6 +517,42 @@ describe('supplier order to receipt flow (integration)', () => {
       where: { purchaseOrderId: order.id, status: 'ACTIVE' },
     })).toBe(1)
 
+    const shipmentFailureSuffix = Date.now().toString()
+    const shipmentFailureFunction = `test_shipment_log_failure_fn_${shipmentFailureSuffix}`
+    const shipmentFailureTrigger = `test_shipment_log_failure_trg_${shipmentFailureSuffix}`
+    const failedShipmentKey = `ship-log-failure-${suffix}`
+    try {
+      await prisma.$executeRawUnsafe(`
+        CREATE FUNCTION "${shipmentFailureFunction}"() RETURNS trigger AS $$
+        BEGIN
+          IF NEW."targetId" = '${order.id}' AND NEW."action" LIKE '供应商确认发货%' THEN
+            RAISE EXCEPTION 'test shipment audit failure';
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+      `)
+      await prisma.$executeRawUnsafe(`
+        CREATE TRIGGER "${shipmentFailureTrigger}"
+        BEFORE INSERT ON "op_logs"
+        FOR EACH ROW EXECUTE FUNCTION "${shipmentFailureFunction}"()
+      `)
+      const failedShipment = await app.inject({
+        method: 'PATCH', url: `/api/orders/${order.id}/ship`, headers: { 'x-test-actor': 'supplier' },
+        payload: { idempotencyKey: failedShipmentKey, items: [{ itemId: order.items[0].id, shippedQty: 6 }] },
+      })
+      expect(failedShipment.statusCode).toBe(500)
+      expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })).status).toBe('CONFIRMED')
+      expect(await prisma.deliveryOrder.count({ where: { purchaseOrderId: order.id, idempotencyKey: failedShipmentKey } })).toBe(0)
+      expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).stock)).toBe(10)
+      expect(Number((await prisma.supplierStockBatch.findFirstOrThrow({ where: { tenantId, productId } })).remainingQty)).toBe(10)
+      expect(await prisma.supplierStockMovement.count({ where: { tenantId, productId, type: 'OUTBOUND_PO' } })).toBe(0)
+      expect(await prisma.opLog.count({ where: { targetId: order.id, action: { startsWith: '供应商确认发货' } } })).toBe(0)
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${shipmentFailureTrigger}" ON "op_logs"`)
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${shipmentFailureFunction}"()`)
+    }
+
     const oversizedShipment = await app.inject({
       method: 'PATCH', url: `/api/orders/${order.id}/ship`, headers: { 'x-test-actor': 'supplier' },
       payload: {

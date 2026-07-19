@@ -228,13 +228,29 @@ async function main() {
     })
     assert.equal(oversizedOrder.status, 400, JSON.stringify(oversizedOrder.body))
 
+    const orderCreateKey = `delivery-order-${Date.now()}`
+    const orderCreatePayload = {
+      supplierId: supplier.id, expectedDate: '2026-07-16', note: '分批配送原始备注', idempotencyKey: orderCreateKey,
+      items: [{ productId: product.id, quantity: 5, unitPrice: 0 }],
+    }
     const created = await api('/api/orders', managerToken, {
       method: 'POST',
-      body: JSON.stringify({ supplierId: supplier.id, expectedDate: '2026-07-16', note: '分批配送原始备注', idempotencyKey: `delivery-order-${Date.now()}`, items: [{ productId: product.id, quantity: 5, unitPrice: 0 }] }),
+      body: JSON.stringify(orderCreatePayload),
     })
     assert.equal(created.status, 200, JSON.stringify(created.body))
     orderId = created.body.id
     orderNo = created.body.no
+    const repeatedCreate = await api('/api/orders', managerToken, {
+      method: 'POST', body: JSON.stringify(orderCreatePayload),
+    })
+    assert.equal(repeatedCreate.status, 200, JSON.stringify(repeatedCreate.body))
+    assert.equal(repeatedCreate.body.id, orderId)
+    const conflictingCreate = await api('/api/orders', managerToken, {
+      method: 'POST',
+      body: JSON.stringify({ ...orderCreatePayload, items: [{ productId: product.id, quantity: 4, unitPrice: 0 }] }),
+    })
+    assert.equal(conflictingCreate.status, 409, JSON.stringify(conflictingCreate.body))
+    assert.equal(await prisma.purchaseOrder.count({ where: { idempotencyKey: orderCreateKey } }), 1)
     const originalHash = created.body.submittedSnapshotHash
     assert.equal((await api(`/api/orders/${orderId}/confirm`, supplierToken, { method: 'PATCH', body: '{}' })).status, 200)
 
@@ -387,7 +403,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, orderCreateReplayConflict: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))

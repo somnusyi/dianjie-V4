@@ -200,6 +200,29 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(await prisma.purchaseOrder.count({ where: { tenantId } })).toBe(beforeOrderCount)
   })
 
+  it('rejects conflicting purchase order creation replays', async () => {
+    const idempotencyKey = `create-replay-${suffix}`
+    const payload = {
+      supplierId, storeId, expectedDate: '2026-07-20', note: '订货创建幂等', idempotencyKey,
+      items: [{ productId, quantity: 1, unitPrice: 999 }],
+    }
+    const created = await app.inject({
+      method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' }, payload,
+    })
+    expect(created.statusCode).toBe(200)
+    const replayed = await app.inject({
+      method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' }, payload,
+    })
+    expect(replayed.statusCode).toBe(200)
+    expect(replayed.json().id).toBe(created.json().id)
+    const conflicting = await app.inject({
+      method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' },
+      payload: { ...payload, items: [{ productId, quantity: 2, unitPrice: 999 }] },
+    })
+    expect(conflicting.statusCode).toBe(409)
+    expect(await prisma.purchaseOrder.count({ where: { tenantId, createdById: chefUserId, idempotencyKey } })).toBe(1)
+  })
+
   it('serializes receipt delivery, confirmation, rejection and void transitions', async () => {
     const sqlSuffix = Date.now().toString()
     const delaySequence = `test_receipt_state_delay_seq_${sqlSuffix}`

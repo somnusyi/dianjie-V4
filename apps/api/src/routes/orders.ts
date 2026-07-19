@@ -92,6 +92,28 @@ function shipmentRequestFingerprint(note: string | undefined, items: Array<{ ite
   return hashRequestBody({ note: note || null, items: normalizedItems }, 'supplier-shipment')
 }
 
+function normalizeOrderCreateItems(items: Array<{ productId: string; quantity: number | string }>) {
+  return items
+    .map(item => ({ productId: item.productId, quantity: new Prisma.Decimal(item.quantity).toFixed(2) }))
+    .sort((a, b) => a.productId.localeCompare(b.productId))
+}
+
+function orderCreateRequestFingerprint(input: {
+  storeId: string
+  supplierId: string
+  expectedDate: string
+  note: string
+  items: Array<{ productId: string; quantity: number }>
+}) {
+  return hashRequestBody({
+    storeId: input.storeId,
+    supplierId: input.supplierId,
+    expectedDate: input.expectedDate,
+    note: input.note || null,
+    items: normalizeOrderCreateItems(input.items),
+  }, 'purchase-order-create')
+}
+
 const chefAckSchema = z.object({
   images: z.array(z.string().trim().min(1, '验收照片地址不能为空')).min(1, '请至少上传 1 张验收照片').max(5, '验收单最多 5 张照片'),
   note: z.string().max(500, '备注最长 500 字').optional(),
@@ -328,6 +350,44 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(403).send({ error: '无权创建采购订单' })
     }
 
+    // 单店级角色 (店长/厨师长/...) 强制用 token 里的 storeId, 防止跨店越权
+    // 集团级 (BOSS/FINANCE) 才允许传 storeId 指定门店
+    const finalStoreId = isStoreScoped(role) ? userStoreId : storeId
+    if (!finalStoreId) return reply.status(400).send({ error: '请指定门店 (storeId)' })
+    const requestFingerprint = orderCreateRequestFingerprint({ storeId: finalStoreId, supplierId, expectedDate, note, items })
+    const replayInclude = {
+      store: true,
+      supplier: true,
+      items: { where: { isActive: true }, include: { product: true } },
+      events: {
+        where: { eventType: 'CREATED' as const }, orderBy: { occurredAt: 'asc' as const }, take: 1,
+        select: { metadata: true },
+      },
+    }
+    const createReplayMatches = (candidate: any) => {
+      const storedFingerprint = (candidate.events?.[0]?.metadata as Record<string, unknown> | null)?.requestFingerprint
+      if (typeof storedFingerprint === 'string') return storedFingerprint === requestFingerprint
+      const original = candidate.submittedSnapshot as OrderSnapshot | null
+      const candidateStoreId = original?.store.id || candidate.storeId
+      const candidateSupplierId = original?.supplier.id || candidate.supplierId
+      const candidateExpectedDate = original?.expectedDate || dayjs(candidate.expectedDate).format('YYYY-MM-DD')
+      const candidateNote = (original ? original.note : candidate.note) || null
+      const candidateItems = original
+        ? normalizeOrderCreateItems(original.items.map(item => ({ productId: item.productId, quantity: item.quantity })))
+        : normalizeOrderCreateItems(candidate.items.map((item: any) => ({
+          productId: item.productId, quantity: item.originalQuantity ?? item.quantity,
+        })))
+      return candidateStoreId === finalStoreId
+        && candidateSupplierId === supplierId
+        && candidateExpectedDate === expectedDate
+        && candidateNote === (note || null)
+        && JSON.stringify(candidateItems) === JSON.stringify(normalizeOrderCreateItems(items))
+    }
+    const replayResponse = (candidate: any) => {
+      const { events: _events, ...orderWithoutEvents } = candidate
+      return orderWithoutEvents
+    }
+
     // 快速防重复: 内存缓存只作为性能优化；数据库唯一键才是最终幂等保障。
     if (idempotencyKey) {
       const cacheKey = `${tenantId}:${userId}:${idempotencyKey}`
@@ -335,21 +395,22 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       if (cached) {
         const dup = await prisma.purchaseOrder.findUnique({
           where: { id: cached.orderId },
-          include: { store: true, supplier: true, items: { where: { isActive: true }, include: { product: true } } },
+          include: replayInclude,
         })
-        if (dup) return dup    // 静默返回首单, 不报错
+        if (dup) {
+          if (!createReplayMatches(dup)) return reply.status(409).send({ error: '同一幂等键不能用于不同的订货请求' })
+          return replayResponse(dup)
+        }
       }
       const persisted = await prisma.purchaseOrder.findFirst({
         where: { tenantId, createdById: userId, idempotencyKey },
-        include: { store: true, supplier: true, items: { where: { isActive: true }, include: { product: true } } },
+        include: replayInclude,
       })
-      if (persisted) return persisted
+      if (persisted) {
+        if (!createReplayMatches(persisted)) return reply.status(409).send({ error: '同一幂等键不能用于不同的订货请求' })
+        return replayResponse(persisted)
+      }
     }
-
-    // 单店级角色 (店长/厨师长/...) 强制用 token 里的 storeId, 防止跨店越权
-    // 集团级 (BOSS/FINANCE) 才允许传 storeId 指定门店
-    const finalStoreId = isStoreScoped(role) ? userStoreId : storeId
-    if (!finalStoreId) return reply.status(400).send({ error: '请指定门店 (storeId)' })
 
     // 起订量 / 步长 校验 — 防止厨师长漏看 picker 提示直接 POST
     const productIds = items.map((i: any) => i.productId)
@@ -454,7 +515,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             {
               tenantId, purchaseOrderId: created.id, eventType: 'CREATED',
               actorId: userId, actorRole: role, toStatus: 'SUBMITTED', requestId: req.id, ip: req.ip,
-              metadata: { no, orderedTotalAmount: totalAmount.toFixed(2) },
+              metadata: { no, orderedTotalAmount: totalAmount.toFixed(2), requestFingerprint },
             },
             {
               tenantId, purchaseOrderId: created.id, eventType: 'SUBMITTED',
@@ -469,9 +530,12 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       if (error?.code === 'P2002' && idempotencyKey) {
         const existing = await prisma.purchaseOrder.findFirst({
           where: { tenantId, createdById: userId, idempotencyKey },
-          include: { store: true, supplier: true, items: { where: { isActive: true }, include: { product: true } } },
+          include: replayInclude,
         })
-        if (existing) return existing
+        if (existing) {
+          if (!createReplayMatches(existing)) return reply.status(409).send({ error: '同一幂等键不能用于不同的订货请求' })
+          return replayResponse(existing)
+        }
       }
       throw error
     }

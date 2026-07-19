@@ -407,6 +407,78 @@ describe('supplier order to receipt flow (integration)', () => {
     }
   })
 
+  it('rolls back supplier delivery when its audit log cannot be written', async () => {
+    const sqlSuffix = Date.now().toString()
+    const failureFunction = `test_delivery_log_failure_fn_${sqlSuffix}`
+    const failureTrigger = `test_delivery_log_failure_trg_${sqlSuffix}`
+    const order = await prisma.purchaseOrder.create({
+      data: {
+        tenantId,
+        no: `DELIVERY-ROLLBACK-${suffix}`,
+        storeId,
+        supplierId,
+        expectedDate: new Date('2026-07-20T00:00:00.000Z'),
+        totalAmount: 10,
+        status: 'DELIVERING',
+        createdById: chefUserId,
+      },
+    })
+    const delivery = await prisma.deliveryOrder.create({
+      data: {
+        tenantId,
+        no: `DO-DELIVERY-ROLLBACK-${suffix}`,
+        purchaseOrderId: order.id,
+        storeId,
+        supplierId,
+        status: 'SHIPPED',
+        actualTotalAmount: 10,
+        createdById: supplierUserId,
+        shippedById: supplierUserId,
+        shippedAt: new Date(),
+      },
+    })
+
+    try {
+      await prisma.$executeRawUnsafe(`
+        CREATE FUNCTION "${failureFunction}"() RETURNS trigger AS $$
+        BEGIN
+          IF NEW."targetId" = '${order.id}' AND NEW."action" LIKE '供应商标记送达%' THEN
+            RAISE EXCEPTION 'test delivery audit failure';
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+      `)
+      await prisma.$executeRawUnsafe(`
+        CREATE TRIGGER "${failureTrigger}"
+        BEFORE INSERT ON "op_logs"
+        FOR EACH ROW EXECUTE FUNCTION "${failureFunction}"()
+      `)
+      const failedDelivery = await app.inject({
+        method: 'PATCH', url: `/api/orders/${order.id}/deliver`,
+        headers: { 'x-test-actor': 'supplier' }, payload: { note: '故障注入送达' },
+      })
+      expect(failedDelivery.statusCode).toBe(500)
+      expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })).status).toBe('DELIVERING')
+      expect((await prisma.deliveryOrder.findUniqueOrThrow({ where: { id: delivery.id } })).status).toBe('SHIPPED')
+      expect(await prisma.deliveryOrderEvent.count({ where: { deliveryOrderId: delivery.id } })).toBe(0)
+      expect(await prisma.opLog.count({ where: { targetId: order.id, action: { startsWith: '供应商标记送达' } } })).toBe(0)
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${failureTrigger}" ON "op_logs"`)
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${failureFunction}"()`)
+    }
+
+    const retry = await app.inject({
+      method: 'PATCH', url: `/api/orders/${order.id}/deliver`,
+      headers: { 'x-test-actor': 'supplier' }, payload: { note: '清除故障后重试' },
+    })
+    expect(retry.statusCode).toBe(200)
+    expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })).status).toBe('PENDING_CONFIRM')
+    expect((await prisma.deliveryOrder.findUniqueOrThrow({ where: { id: delivery.id } })).status).toBe('DELIVERED')
+    expect(await prisma.deliveryOrderEvent.count({ where: { deliveryOrderId: delivery.id } })).toBe(1)
+    expect(await prisma.opLog.count({ where: { targetId: order.id, action: { startsWith: '供应商标记送达' } } })).toBe(1)
+  })
+
   it('orders, reserves, ships once, receives actual quantity and creates payable facts', async () => {
     const create = await app.inject({
       method: 'POST',

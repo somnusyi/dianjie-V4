@@ -33,6 +33,42 @@ async function login(identifier: string) {
   return result.body.token as string
 }
 
+async function verifyDeliveryAuditRollback(orderId: string, deliveryId: string, supplierToken: string) {
+  const sqlSuffix = Date.now().toString()
+  const failureFunction = `local_delivery_log_failure_fn_${sqlSuffix}`
+  const failureTrigger = `local_delivery_log_failure_trg_${sqlSuffix}`
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION "${failureFunction}"() RETURNS trigger AS $$
+      BEGIN
+        IF NEW."targetId" = '${orderId}' AND NEW."action" LIKE '供应商标记送达%' THEN
+          RAISE EXCEPTION 'local delivery audit failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `)
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER "${failureTrigger}"
+      BEFORE INSERT ON "op_logs"
+      FOR EACH ROW EXECUTE FUNCTION "${failureFunction}"()
+    `)
+    const failedDelivery = await api(`/api/orders/${orderId}/deliver`, supplierToken, {
+      method: 'PATCH', body: JSON.stringify({ note: '真实 HTTP 送达日志故障' }),
+    })
+    assert.equal(failedDelivery.status, 500, JSON.stringify(failedDelivery.body))
+    assert.equal((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: orderId } })).status, 'DELIVERING')
+    assert.equal((await prisma.deliveryOrder.findUniqueOrThrow({ where: { id: deliveryId } })).status, 'SHIPPED')
+    assert.equal(await prisma.deliveryOrderEvent.count({ where: { deliveryOrderId: deliveryId, eventType: 'DELIVERED' } }), 0)
+    assert.equal(await prisma.opLog.count({
+      where: { targetId: orderId, action: { startsWith: '供应商标记送达' } },
+    }), 0)
+  } finally {
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${failureTrigger}" ON "op_logs"`)
+    await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${failureFunction}"()`)
+  }
+}
+
 async function verifyChefAckDeliveryRace(orderId: string, supplierToken: string, managerToken: string) {
   const sqlSuffix = Date.now().toString()
   const delaySequence = `local_chef_ack_delay_seq_${sqlSuffix}`
@@ -195,6 +231,7 @@ async function main() {
     assert.equal(invalidDeliver.status, 400, JSON.stringify(invalidDeliver.body))
     assert.equal((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: orderId } })).chefAckImages.length, 0)
     assert.equal((await prisma.deliveryOrder.findUniqueOrThrow({ where: { id: firstShip.body.deliveryId } })).status, 'SHIPPED')
+    await verifyDeliveryAuditRollback(orderId, firstShip.body.deliveryId, supplierToken)
     await verifyChefAckDeliveryRace(orderId, supplierToken, managerToken)
     for (const payload of [
       { items: [null] },
@@ -292,7 +329,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))

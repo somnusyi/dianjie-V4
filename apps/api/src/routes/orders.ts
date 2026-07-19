@@ -1180,31 +1180,32 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const delivery = order.deliveries[0]
     if (!delivery) return reply.status(409).send({ error: '未找到可送达的独立配送单' })
     const deliveredAt = new Date()
+    const autoConfirmAt = dayjs(deliveredAt).add(24, 'hour').toDate()
     await prisma.$transaction(async tx => {
       const upd = await tx.deliveryOrder.updateMany({
         where: { id: delivery.id, status: 'SHIPPED', rowVersion: delivery.rowVersion },
         data: { status: 'DELIVERED', deliveredAt, deliveredById: userId, rowVersion: { increment: 1 } },
       })
       if (upd.count === 0) throw { statusCode: 409, message: '配送单状态已变化，请刷新' }
-      await tx.purchaseOrder.updateMany({
+      const orderUpd = await tx.purchaseOrder.updateMany({
         where: { id, status: 'DELIVERING' },
         data: { status: 'PENDING_CONFIRM', deliveredAt, deliveredNote: note, deliveredById: userId },
       })
+      if (orderUpd.count === 0) throw { statusCode: 409, message: '订单状态已变化，请刷新后重试' }
       await tx.deliveryOrderEvent.create({
         data: {
           tenantId, deliveryOrderId: delivery.id, eventType: 'DELIVERED', actorId: userId, actorRole: role,
           fromStatus: 'SHIPPED', toStatus: 'DELIVERED', requestId: req.id, ip: req.ip,
         },
       })
-    })
-    const autoConfirmAt = dayjs().add(24, 'hour').toDate()
-    await prisma.opLog.create({
-      data: {
-        tenantId, userId,
-        action: `供应商标记送达${note ? ': ' + String(note).slice(0,80) : ''}, 24h 内门店未确认将自动收货`,
-        target: order.no, entityType: 'PurchaseOrder', targetId: id,
-        metadata: { autoConfirmAt },
-      },
+      await tx.opLog.create({
+        data: {
+          tenantId, userId,
+          action: `供应商标记送达${note ? ': ' + String(note).slice(0,80) : ''}, 24h 内门店未确认将自动收货`,
+          target: order.no, entityType: 'PurchaseOrder', targetId: id,
+          metadata: { autoConfirmAt },
+        },
+      })
     })
     const supplier = await prisma.supplier.findUnique({ where: { id: order.supplierId }, select: { name: true } })
     void sendNotification({

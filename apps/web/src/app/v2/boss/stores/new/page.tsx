@@ -1,5 +1,5 @@
 /**
- * v2 新建门店 · 仅 BOSS / ADMIN
+ * v2 新建门店 · BOSS / ADMIN / FINANCE / ENGINEERING
  */
 'use client'
 import { useEffect, useState } from 'react'
@@ -18,7 +18,7 @@ export default function NewStorePage() {
     const user = getUser()
     setU(user)
     if (!user) { location.replace('/v2/login'); return }
-    if (!['BOSS','ADMIN','SUPER_ADMIN','ENGINEERING'].includes(user.role)) {
+    if (!['BOSS','ADMIN','SUPER_ADMIN','FINANCE','ENGINEERING'].includes(user.role)) {
       location.replace('/v2/login')
     }
     // 自动建议下一个 no (从全量 stores 推算, 工程部也能拿到避免冲突)
@@ -67,7 +67,8 @@ export default function NewStorePage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || '创建失败')
       const isEng = u?.role === 'ENGINEERING'
-      location.replace(isEng ? `/v2/engineer/stores/${data.id}` : '/v2/boss/stores')
+      const isFinance = u?.role === 'FINANCE'
+      location.replace(isEng ? `/v2/engineer/stores/${data.id}` : isFinance ? '/v2/finance/stores' : '/v2/boss/stores')
     } catch (e: any) {
       setError(e.message || '创建失败')
       setSubmitting(false)
@@ -79,7 +80,7 @@ export default function NewStorePage() {
   return (
     <div className="min-h-screen bg-bg pb-24">
       <header className="px-4 pt-4 pb-2 flex items-center gap-3">
-        <a href={u?.role === 'ENGINEERING' ? '/v2/engineer/home' : '/v2/boss/stores'}
+        <a href={u?.role === 'ENGINEERING' ? '/v2/engineer/home' : u?.role === 'FINANCE' ? '/v2/finance/stores' : '/v2/boss/stores'}
            className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</a>
         <h1 className="text-h1 flex-1">{u?.role === 'ENGINEERING' ? '新建筹建店' : '新建门店'}</h1>
       </header>

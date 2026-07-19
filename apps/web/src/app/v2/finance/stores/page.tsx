@@ -54,11 +54,17 @@ export default function FinanceStoresPage() {
 
   return (
     <div className="min-h-screen bg-bg pb-20">
-      <header className="px-4 pt-4 pb-2">
-        <h1 className="text-h1">各店</h1>
-        <p className="text-caption text-gray3">
-          {list === null ? '加载中…' : `${list.length} 家 · ${monthLabel} · 财务视角`}
-        </p>
+      <header className="px-4 pt-4 pb-2 flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-h1">各店</h1>
+          <p className="text-caption text-gray3">
+            {list === null ? '加载中…' : `${list.length} 家 · ${monthLabel} · 财务视角`}
+          </p>
+        </div>
+        <a href="/v2/finance/stores/new"
+          className="shrink-0 px-3 py-2 mt-1 rounded-cta bg-ink text-white text-button">
+          + 新建店铺
+        </a>
       </header>
 
       {error && <div className="mx-4 mt-2 bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}

@@ -3,6 +3,14 @@ const { withSentryConfig } = require('@sentry/nextjs')
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // This application has many client-heavy operational pages. Next 14's
+  // default four-process prerender occasionally makes the shared error pages
+  // fail non-deterministically on the release host. Keep production builds
+  // deterministic; runtime request concurrency is unaffected.
+  experimental: {
+    cpus: 1,
+    workerThreads: false,
+  },
   // Allow CI/local verification builds to use an isolated output directory
   // while the developer server keeps using `.next`.
   distDir: process.env.NEXT_DIST_DIR || '.next',

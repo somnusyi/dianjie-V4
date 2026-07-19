@@ -32,8 +32,10 @@ type Row = {
 export default function FinanceStoresPage() {
   const [list, setList] = useState<Row[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [createdStoreId, setCreatedStoreId] = useState<string | null>(null)
 
   useEffect(() => {
+    setCreatedStoreId(new URLSearchParams(window.location.search).get('created'))
     fetch('/api/profit/group/snapshot', { headers: { Authorization: `Bearer ${getToken()}` } })
       .then(async r => {
         const d = await r.json()
@@ -68,6 +70,25 @@ export default function FinanceStoresPage() {
       </header>
 
       {error && <div className="mx-4 mt-2 bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}
+
+      {createdStoreId && (
+        <section className="mx-4 mt-2 rounded-card border border-amber/30 bg-amber/10 p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-button text-amber-fg">门店主档已创建</h2>
+              <ol className="mt-1 space-y-1 text-micro text-gray2">
+                <li>1. 通知系统管理员创建并绑定店长、厨师长账号</li>
+                <li>2. 厨师长完成开业初始盘点</li>
+                <li>3. 店长设置本店安全库存与补货目标</li>
+                <li>4. 店长上传首份日报并核对 BOM 扣减</li>
+              </ol>
+            </div>
+            <button type="button" onClick={() => setCreatedStoreId(null)} className="shrink-0 text-micro text-gray2">
+              知道了
+            </button>
+          </div>
+        </section>
+      )}
 
       <div className="px-4 mt-2">
         <GlanceStrip

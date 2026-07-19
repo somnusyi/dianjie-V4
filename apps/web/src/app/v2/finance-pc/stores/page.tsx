@@ -61,6 +61,11 @@ export default function FinancePCStoresPage() {
   const [month, setMonth] = useState(dayjs().format('YYYY-MM'))
   const [profit, setProfit] = useState<Profit | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [createdStoreId, setCreatedStoreId] = useState<string | null>(null)
+
+  useEffect(() => {
+    setCreatedStoreId(new URLSearchParams(window.location.search).get('created'))
+  }, [])
 
   useEffect(() => {
     setProfit(null)
@@ -194,6 +199,25 @@ export default function FinancePCStoresPage() {
 
         {error && (
           <div className="bg-red-bg text-red-fg rounded-card p-3 text-caption mb-4">{error}</div>
+        )}
+
+        {createdStoreId && (
+          <section className="mb-4 rounded-card border border-amber/30 bg-amber/10 p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-h2 text-amber-fg">门店主档已创建，继续完成上线清单</h2>
+                <ol className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-caption text-gray2">
+                  <li>1. 管理员创建并绑定店长、厨师长账号</li>
+                  <li>2. 厨师长完成开业初始盘点</li>
+                  <li>3. 店长为本店设置安全库存与补货目标</li>
+                  <li>4. 店长上传首份日报并核对 BOM 扣减</li>
+                </ol>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <button type="button" onClick={() => setCreatedStoreId(null)} className="px-3 py-2 text-button text-gray2">知道了</button>
+              </div>
+            </div>
+          </section>
         )}
 
         <BlackHero

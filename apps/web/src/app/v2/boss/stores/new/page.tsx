@@ -68,7 +68,11 @@ export default function NewStorePage() {
       if (!res.ok) throw new Error(data.error || '创建失败')
       const isEng = u?.role === 'ENGINEERING'
       const isFinance = u?.role === 'FINANCE'
-      location.replace(isEng ? `/v2/engineer/stores/${data.id}` : isFinance ? '/v2/finance/stores' : '/v2/boss/stores')
+      location.replace(isEng
+        ? `/v2/engineer/stores/${data.id}`
+        : isFinance
+          ? `/v2/finance/stores?created=${encodeURIComponent(data.id)}`
+          : '/v2/boss/stores')
     } catch (e: any) {
       setError(e.message || '创建失败')
       setSubmitting(false)

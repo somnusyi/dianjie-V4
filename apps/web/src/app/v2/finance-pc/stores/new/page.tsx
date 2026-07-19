@@ -95,7 +95,7 @@ export default function FinanceNewStorePage() {
       const expectedOpenAt = form.expectedOpenAt
         ? new Date(`${form.expectedOpenAt}T00:00:00+08:00`).toISOString()
         : undefined
-      await apiFetch('/api/stores', {
+      const created = await apiFetch<{ id: string }>('/api/stores', {
         method: 'POST',
         body: JSON.stringify({
           no: form.no.trim().toUpperCase(),
@@ -111,7 +111,7 @@ export default function FinanceNewStorePage() {
           bankAccountNo: form.bankAccountNo.trim() || undefined,
         }),
       })
-      router.replace('/v2/finance-pc/stores?created=1')
+      router.replace(`/v2/finance-pc/stores?created=${encodeURIComponent(created.id)}`)
     } catch (e: any) {
       setError(e?.message || '创建店铺失败')
       setSubmitting(false)

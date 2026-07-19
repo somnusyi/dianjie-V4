@@ -50,7 +50,7 @@ const resetPasswordSchema = z.object({
   password: z.string().min(6, '密码至少 6 位').max(72),
 }).strict()
 
-const STORE_BOUND_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'SUPERVISOR'])
+const STORE_BOUND_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF', 'SUPERVISOR'])
 const SUPPLIER_BOUND_ROLES = new Set(['SUPPLIER_OWNER', 'SUPPLIER_STAFF'])
 
 function normalizedId(value: string | null | undefined) {

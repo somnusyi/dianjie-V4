@@ -33,6 +33,64 @@ async function login(identifier: string) {
   return result.body.token as string
 }
 
+async function verifyChefAckDeliveryRace(orderId: string, supplierToken: string, managerToken: string) {
+  const sqlSuffix = Date.now().toString()
+  const delaySequence = `local_chef_ack_delay_seq_${sqlSuffix}`
+  const delayFunction = `local_chef_ack_delay_fn_${sqlSuffix}`
+  const delayTrigger = `local_chef_ack_delay_trg_${sqlSuffix}`
+  try {
+    await prisma.$executeRawUnsafe(`CREATE SEQUENCE "${delaySequence}"`)
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION "${delayFunction}"() RETURNS trigger AS $$
+      BEGIN
+        IF NEW."id" = '${orderId}' AND NEW."status" = 'PENDING_CONFIRM' THEN
+          PERFORM nextval('${delaySequence}');
+          PERFORM pg_sleep(0.75);
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `)
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER "${delayTrigger}"
+      BEFORE UPDATE OF "status" ON "purchase_orders"
+      FOR EACH ROW EXECUTE FUNCTION "${delayFunction}"()
+    `)
+    const sequenceValue = async () => {
+      const [row] = await prisma.$queryRawUnsafe<Array<{ value: bigint; is_called: boolean }>>(
+        `SELECT last_value::bigint AS value, is_called FROM "${delaySequence}"`,
+      )
+      return row.is_called ? row.value : 0n
+    }
+    const deliveryPromise = api(`/api/orders/${orderId}/deliver`, supplierToken, {
+      method: 'PATCH', body: JSON.stringify({ note: '真实 HTTP 并发送达' }),
+    })
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (await sequenceValue() > 0n) break
+      if (attempt === 99) throw new Error('未观察到真实 API 送达更新进入并发延迟触发器')
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    const acknowledgementPromise = api(`/api/orders/${orderId}/chef-ack`, managerToken, {
+      method: 'PATCH',
+      body: JSON.stringify({ images: ['local://chef-ack-race'], note: '过期验收单必须被拒绝' }),
+    })
+    const [delivery, acknowledgement] = await Promise.all([deliveryPromise, acknowledgementPromise])
+    assert.equal(delivery.status, 200, JSON.stringify(delivery.body))
+    assert.equal(acknowledgement.status, 409, JSON.stringify(acknowledgement.body))
+    const finalOrder = await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: orderId } })
+    assert.equal(finalOrder.status, 'PENDING_CONFIRM')
+    assert.deepEqual(finalOrder.chefAckImages, [])
+    assert.equal(finalOrder.chefAckAt, null)
+    assert.equal(await prisma.opLog.count({
+      where: { tenantId: finalOrder.tenantId, targetId: orderId, action: { startsWith: '厨师发送验收单' } },
+    }), 0)
+  } finally {
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${delayTrigger}" ON "purchase_orders"`)
+    await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${delayFunction}"()`)
+    await prisma.$executeRawUnsafe(`DROP SEQUENCE IF EXISTS "${delaySequence}"`)
+  }
+}
+
 async function main() {
   assertLocalOnly()
   const tenant = await prisma.tenant.findUniqueOrThrow({ where: { slug: TENANT_SLUG } })
@@ -137,7 +195,7 @@ async function main() {
     assert.equal(invalidDeliver.status, 400, JSON.stringify(invalidDeliver.body))
     assert.equal((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: orderId } })).chefAckImages.length, 0)
     assert.equal((await prisma.deliveryOrder.findUniqueOrThrow({ where: { id: firstShip.body.deliveryId } })).status, 'SHIPPED')
-    assert.equal((await api(`/api/orders/${orderId}/deliver`, supplierToken, { method: 'PATCH', body: '{}' })).status, 200)
+    await verifyChefAckDeliveryRace(orderId, supplierToken, managerToken)
     for (const payload of [
       { items: [null] },
       { items: [{ productId: product.id, receivedQty: '2' }] },
@@ -234,7 +292,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))

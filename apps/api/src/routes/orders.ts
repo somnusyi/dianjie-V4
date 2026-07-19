@@ -1244,21 +1244,25 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (['KITCHEN_LEAD', 'MANAGER'].includes(role) && storeId) where.storeId = storeId
     const order = await prisma.purchaseOrder.findFirst({ where })
     if (!order) return reply.status(400).send({ error: '订单不存在 / 状态非"在途"不可发验收单' })
-    await prisma.purchaseOrder.update({
-      where: { id },
-      data: {
-        chefAckImages: images,
-        chefAckAt: new Date(),
-        chefAckNote: noteValue || null,
-      },
-    })
-    await prisma.opLog.create({
-      data: {
-        tenantId, userId,
-        action: `厨师发送验收单 (${images.length} 张照片)${noteValue ? ': ' + noteValue.slice(0, 80) : ''}`,
-        target: order.no, entityType: 'PurchaseOrder', targetId: id,
-        metadata: { imagesCount: images.length },
-      },
+    const ackedAt = new Date()
+    await prisma.$transaction(async tx => {
+      const updated = await tx.purchaseOrder.updateMany({
+        where,
+        data: {
+          chefAckImages: images,
+          chefAckAt: ackedAt,
+          chefAckNote: noteValue || null,
+        },
+      })
+      if (updated.count === 0) throw { statusCode: 409, message: '订单状态已变化，请刷新后重试' }
+      await tx.opLog.create({
+        data: {
+          tenantId, userId,
+          action: `厨师发送验收单 (${images.length} 张照片)${noteValue ? ': ' + noteValue.slice(0, 80) : ''}`,
+          target: order.no, entityType: 'PurchaseOrder', targetId: id,
+          metadata: { imagesCount: images.length },
+        },
+      })
     })
     const supplier = await prisma.supplier.findUnique({ where: { id: order.supplierId }, select: { name: true } })
     const store = await prisma.store.findUnique({ where: { id: order.storeId }, select: { name: true } })
@@ -1269,7 +1273,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       body: `客户已收货并发送验收单 (${images.length} 张照片), 请查看后点"已送达"`,
       refType: 'PurchaseOrder', refId: id,
     })
-    return { success: true, ackedAt: new Date() }
+    return { success: true, ackedAt }
   })
 
   // ── 门店确认收货（完全一致）──────────────────────

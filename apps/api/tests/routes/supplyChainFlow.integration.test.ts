@@ -314,6 +314,98 @@ describe('supplier order to receipt flow (integration)', () => {
     }
   })
 
+  it('rejects a stale chef acknowledgement after supplier delivery wins the race', async () => {
+    const sqlSuffix = Date.now().toString()
+    const delaySequence = `test_chef_ack_delay_seq_${sqlSuffix}`
+    const delayFunction = `test_chef_ack_delay_fn_${sqlSuffix}`
+    const delayTrigger = `test_chef_ack_delay_trg_${sqlSuffix}`
+    const order = await prisma.purchaseOrder.create({
+      data: {
+        tenantId,
+        no: `ACK-RACE-${suffix}`,
+        storeId,
+        supplierId,
+        expectedDate: new Date('2026-07-20T00:00:00.000Z'),
+        totalAmount: 10,
+        status: 'DELIVERING',
+        createdById: chefUserId,
+      },
+    })
+    await prisma.deliveryOrder.create({
+      data: {
+        tenantId,
+        no: `DO-ACK-RACE-${suffix}`,
+        purchaseOrderId: order.id,
+        storeId,
+        supplierId,
+        status: 'SHIPPED',
+        actualTotalAmount: 10,
+        createdById: supplierUserId,
+        shippedById: supplierUserId,
+        shippedAt: new Date(),
+      },
+    })
+
+    await prisma.$executeRawUnsafe(`CREATE SEQUENCE "${delaySequence}"`)
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION "${delayFunction}"() RETURNS trigger AS $$
+      BEGIN
+        IF NEW."id" = '${order.id}' AND NEW."status" = 'PENDING_CONFIRM' THEN
+          PERFORM nextval('${delaySequence}');
+          PERFORM pg_sleep(0.75);
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `)
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER "${delayTrigger}"
+      BEFORE UPDATE OF "status" ON "purchase_orders"
+      FOR EACH ROW EXECUTE FUNCTION "${delayFunction}"()
+    `)
+
+    const sequenceValue = async () => {
+      const [row] = await prisma.$queryRawUnsafe<Array<{ value: bigint; is_called: boolean }>>(
+        `SELECT last_value::bigint AS value, is_called FROM "${delaySequence}"`,
+      )
+      return row.is_called ? row.value : 0n
+    }
+    const waitForDeliveryUpdate = async () => {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (await sequenceValue() > 0n) return
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      throw new Error('未观察到订货单送达状态更新进入并发延迟触发器')
+    }
+
+    try {
+      const deliveryPromise = app.inject({
+        method: 'PATCH', url: `/api/orders/${order.id}/deliver`,
+        headers: { 'x-test-actor': 'supplier' }, payload: { note: '供应商已送达' },
+      })
+      await waitForDeliveryUpdate()
+      const acknowledgementPromise = app.inject({
+        method: 'PATCH', url: `/api/orders/${order.id}/chef-ack`,
+        headers: { 'x-test-actor': 'chef' },
+        payload: { images: ['local://chef-ack-race'], note: '并发验收单不应越过送达终态' },
+      })
+      const [delivery, acknowledgement] = await Promise.all([deliveryPromise, acknowledgementPromise])
+      expect(delivery.statusCode).toBe(200)
+      expect(acknowledgement.statusCode).toBe(409)
+      const finalOrder = await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })
+      expect(finalOrder.status).toBe('PENDING_CONFIRM')
+      expect(finalOrder.chefAckImages).toEqual([])
+      expect(finalOrder.chefAckAt).toBeNull()
+      expect(await prisma.opLog.count({
+        where: { tenantId, targetId: order.id, action: { startsWith: '厨师发送验收单' } },
+      })).toBe(0)
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${delayTrigger}" ON "purchase_orders"`)
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${delayFunction}"()`)
+      await prisma.$executeRawUnsafe(`DROP SEQUENCE IF EXISTS "${delaySequence}"`)
+    }
+  })
+
   it('orders, reserves, ships once, receives actual quantity and creates payable facts', async () => {
     const create = await app.inject({
       method: 'POST',

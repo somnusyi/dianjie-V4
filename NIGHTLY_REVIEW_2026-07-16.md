@@ -1312,3 +1312,21 @@
 
 - 本轮不改变改单需门店确认、供应商只能调整商品/数量、批准后订单行替换或驳回后沿用原单的既定规则。
 - 补送的业务审批/通知口径、已确认入库单更正、报损后供应商物理库存口径和在线盘点流程仍保持待确认。
+
+## 2026-07-20 07:11 第六十二轮（发布迁移与共享库漂移复核）
+
+### 检查范围与结果
+
+- 在本机 PostgreSQL 容器创建明确命名的一次性验证库和 shadow 库，从零执行 release 分支全部 56 个 migration；`migrate deploy`、`migrate status` 均成功，migrations 到空库的 `schema diff --exit-code` 为零。验证结束后两库强制断开并删除，数据库名残留计数为 0。
+- `dianjie_v4_local` 的 release 56 个 migration 账本仍显示全部应用、`migrate status` 最新；但 migrations 到既有库的 schema diff 非零。除前夜已记录的 `20260718130000_store_inventory_counts` 外，账本现又包含 main 专属的 `20260719113000_supplier_inventory_mode`、`20260719140000_dish_bom_lifecycle`、`20260719180000_product_inventory_units` 和 `20260719190000_store_monthly_close`。
+- 对应额外对象包括供应商库存模式、版本化 BOM、库存单位/成本、门店月结相关枚举、表、字段和索引；这些迁移提交均不在 `release/20260715-p0` 祖先链。`20260719140000_dish_bom_lifecycle` 账本同时有一条未完成尝试和一条完成记录，进一步证明这是共享本地库被其他分支使用后的状态，不是 release 空库部署结果。
+
+### 处理与发布判断
+
+- 严格按边界没有执行 `db reset`、`prisma db push`、DROP 既有业务对象或补造反向迁移，也没有合并 main。共享既有库继续只用于兼容回归，不能作为 release 零漂移证据。
+- release 发布候选的迁移完整性以本轮一次性空库为准：56 个 migration 可从零部署且最终 schema 与 migration 历史一致。当前代码测试证据沿用上一轮同一提交的集成 56/56、API 单元 106/106、API build、Web 13/13、Web `tsc` 与真实 HTTP 全链路通过结果。
+
+### 风险与待确认
+
+- 若后续需要把 `dianjie_v4_local` 恢复为 release 专用零漂移库，应另行授权新建隔离库或安排可恢复的数据迁移；本夜不删除共享库中的 main 对象。
+- 生产迁移前仍必须对生产只读执行独立 `migrate status/schema diff`，但本夜严格未连接生产。

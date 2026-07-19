@@ -33,6 +33,54 @@ async function login(identifier: string) {
   return result.body.token as string
 }
 
+async function verifyOrderCreationAuditRollback(
+  tenantId: string,
+  userId: string,
+  supplierId: string,
+  productId: string,
+  managerToken: string,
+) {
+  const sqlSuffix = Date.now().toString()
+  const failureFunction = `local_order_create_log_failure_fn_${sqlSuffix}`
+  const failureTrigger = `local_order_create_log_failure_trg_${sqlSuffix}`
+  const idempotencyKey = `local-order-create-log-failure-${sqlSuffix}`
+  const logCountBefore = await prisma.opLog.count({
+    where: { tenantId, userId, action: { startsWith: '创建采购订单' } },
+  })
+  try {
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION "${failureFunction}"() RETURNS trigger AS $$
+      BEGIN
+        IF NEW."tenantId" = '${tenantId}' AND NEW."userId" = '${userId}' AND NEW."action" LIKE '创建采购订单%' THEN
+          RAISE EXCEPTION 'local order creation audit failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `)
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER "${failureTrigger}"
+      BEFORE INSERT ON "op_logs"
+      FOR EACH ROW EXECUTE FUNCTION "${failureFunction}"()
+    `)
+    const failedCreate = await api('/api/orders', managerToken, {
+      method: 'POST',
+      body: JSON.stringify({
+        supplierId, expectedDate: '2026-07-16', idempotencyKey,
+        items: [{ productId, quantity: 1, unitPrice: 0 }],
+      }),
+    })
+    assert.equal(failedCreate.status, 500, JSON.stringify(failedCreate.body))
+    assert.equal(await prisma.purchaseOrder.count({ where: { tenantId, createdById: userId, idempotencyKey } }), 0)
+    assert.equal(await prisma.opLog.count({
+      where: { tenantId, userId, action: { startsWith: '创建采购订单' } },
+    }), logCountBefore)
+  } finally {
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${failureTrigger}" ON "op_logs"`)
+    await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${failureFunction}"()`)
+  }
+}
+
 async function verifyShipmentAuditRollback(orderId: string, itemId: string, productId: string, supplierToken: string) {
   const sqlSuffix = Date.now().toString()
   const failureFunction = `local_shipment_log_failure_fn_${sqlSuffix}`
@@ -228,6 +276,8 @@ async function main() {
     })
     assert.equal(oversizedOrder.status, 400, JSON.stringify(oversizedOrder.body))
 
+    await verifyOrderCreationAuditRollback(tenant.id, manager.id, supplier.id, product.id, managerToken)
+
     const orderCreateKey = `delivery-order-${Date.now()}`
     const orderCreatePayload = {
       supplierId: supplier.id, expectedDate: '2026-07-16', note: '分批配送原始备注', idempotencyKey: orderCreateKey,
@@ -403,7 +453,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, orderCreateReplayConflict: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, orderCreateAuditRollback: true, orderCreateReplayConflict: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))

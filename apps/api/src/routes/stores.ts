@@ -227,17 +227,18 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
     }
   })
 
-  // ── 创建/更新门店（管理员）───────────────────────
+  // ── 创建/更新门店（管理员 / 财务 / 工程）──────────────
   app.post('/', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, userId } = req.user
-    // ADMIN / SUPER_ADMIN 可以建任意状态; ENGINEERING 只能建筹建店 (默认 PLANNING)
-    if (!['ADMIN','SUPER_ADMIN','ENGINEERING'].includes(role)) throw { statusCode: 403, message: '无权限' }
+    // FINANCE 负责新店财务档案开户，与管理员一样可登记门店基础信息；
+    // ENGINEERING 只能建筹建店 (默认 PLANNING)。
+    if (!['ADMIN','SUPER_ADMIN','FINANCE','ENGINEERING'].includes(role)) throw { statusCode: 403, message: '无权限' }
     const body = z.object({
-      no: z.string().min(1, '门店编号不能为空'),
-      name: z.string().min(1, '门店名称不能为空'),
-      address: z.string().optional(),
-      phone: z.string().optional(),
-      managerName: z.string().optional(),
+      no: z.string().trim().min(1, '门店编号不能为空').max(20, '门店编号最多20个字符'),
+      name: z.string().trim().min(1, '门店名称不能为空').max(80, '门店名称最多80个字符'),
+      address: z.string().trim().max(240).optional(),
+      phone: z.string().trim().max(40).optional(),
+      managerName: z.string().trim().max(40).optional(),
       // 开票信息
       bankAccountName: z.string().trim().max(80).optional(),
       invoiceTaxId:    z.string().trim().max(40).optional(),
@@ -266,7 +267,8 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
     try {
       store = await prisma.store.create({
         data: {
-          tenantId, no, name, address, phone, managerName, status: 'ENABLED',
+          tenantId, no: no.toUpperCase(), name, address: address || null, phone: phone || null,
+          managerName: managerName || null, status: 'ENABLED',
           bankAccountName: bankAccountName || null,
           invoiceTaxId: invoiceTaxId || null,
           bankName: bankName || null,
@@ -288,7 +290,7 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
   // 给前端用: 建议下一个可用 no (扫所有店, 不暴露 store 详情)
   app.get('/next-no', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
-    if (!['ADMIN','SUPER_ADMIN','ENGINEERING'].includes(role)) return reply.status(403).send({ error: '无权限' })
+    if (!['ADMIN','SUPER_ADMIN','FINANCE','ENGINEERING'].includes(role)) return reply.status(403).send({ error: '无权限' })
     const list = await prisma.store.findMany({
       where: { tenantId },
       select: { no: true },

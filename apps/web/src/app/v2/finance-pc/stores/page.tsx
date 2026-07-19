@@ -14,7 +14,7 @@
  */
 'use client'
 import { useEffect, useMemo, useState } from 'react'
-import { Chip, StoreAvatar, BlackHero, MonthPicker } from '@/components/v2'
+import { Chip, BlackHero, MonthPicker } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import { exportXlsx } from '@/lib/exportXlsx'
 import dayjs from 'dayjs'
@@ -35,7 +35,22 @@ type Profit = {
     foodCostRatio: number
   }
   byChannel: Record<string, number>
-  stores: Array<{ storeId: string; storeName: string; revenue: number; foodCost: number; grossProfit: number; grossMargin: number }>
+  stores: Array<{
+    storeId: string
+    storeNo: string
+    storeName: string
+    lifecyclePhase: string
+    revenue: number
+    foodCost: number
+    grossProfit: number
+    grossMargin: number
+  }>
+}
+
+const lifecycleLabels: Record<string, string> = {
+  PLANNING: '选址筹备', NEGOTIATING: '合同谈判', CONSTRUCTION: '装修施工',
+  EQUIPMENT: '设备物料', LICENSING: '证照办理', TRIAL: '试营业',
+  OPERATING: '正常营业', CLOSED: '已关店',
 }
 
 const fmtKMoney = (n: number) => Math.abs(n) >= 1000 ? `¥${(n / 1000).toFixed(1)}K` : `¥${Math.round(n)}`
@@ -54,7 +69,6 @@ export default function FinancePCStoresPage() {
       .catch(e => setError(String(e?.message || e)))
   }, [month])
 
-  const store = profit?.stores?.[0]   // 单店业务: 取第一个
   const s = profit?.summary
 
   // 成本结构表 (按金额降序)
@@ -89,15 +103,6 @@ export default function FinancePCStoresPage() {
       .sort((a, b) => b.value - a.value)
   }, [profit])
 
-  // 净利异常判定: 净利率 < 5% 关注, < 0% 异常
-  const status: 'normal' | 'watch' | 'anomaly' =
-    !s ? 'normal'
-    : s.netMargin < 0 ? 'anomaly'
-    : s.netMargin < 0.05 ? 'watch'
-    : 'normal'
-  const statusLabel = status === 'anomaly' ? '异常' : status === 'watch' ? '关注' : '正常'
-  const statusTone: 'red' | 'orange' | 'green' = status === 'anomaly' ? 'red' : status === 'watch' ? 'orange' : 'green'
-
   return (
     <div className="min-h-screen bg-bg">
       <FinanceTopNav />
@@ -111,6 +116,11 @@ export default function FinancePCStoresPage() {
           </div>
           <div className="flex items-center gap-3">
             <MonthPicker value={month} onChange={v => setMonth(v || dayjs().format('YYYY-MM'))} />
+            <a
+              href="/v2/finance-pc/stores/new"
+              className="px-4 py-2 bg-ink text-white rounded-cta text-button">
+              + 新建店铺
+            </a>
             <button
               onClick={async () => {
                 if (!profit || !s) return
@@ -204,32 +214,46 @@ export default function FinancePCStoresPage() {
           ] : []}
         />
 
-        {/* 本店大卡 (单店简化 — 不分异常/关注/正常三栏) */}
-        {store && s && (
-          <section className={`mt-4 rounded-card border p-4 ${status === 'anomaly' ? 'bg-red-bg border-red/30' : status === 'watch' ? 'bg-orange-bg border-orange/30' : 'bg-white border-border'}`}>
-            <div className="flex items-center gap-3 mb-3">
-              <StoreAvatar name={store.storeName} anomaly={status === 'anomaly'} />
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-h2">{store.storeName}</span>
-                  <Chip tone={statusTone}>{statusLabel}</Chip>
-                </div>
-                <p className={`text-caption mt-0.5 ${status === 'anomaly' ? 'text-red-fg' : status === 'watch' ? 'text-orange-fg' : 'text-gray2'}`}>
-                  {status === 'anomaly' ? '净利为负, 需立即排查成本结构' :
-                   status === 'watch' ? '净利率偏低, 关注食材/人工占比' :
-                   '财务健康, 各项指标在合理区间'}
-                </p>
-              </div>
+        <section className="mt-4 bg-white rounded-card border border-border overflow-hidden">
+          <header className="px-4 py-3 border-b border-border flex items-center justify-between">
+            <div>
+              <h2 className="text-h2">门店清单</h2>
+              <p className="text-micro text-gray3 mt-0.5">新建店铺会立即出现在此处，未产生业务数据时金额为 0</p>
             </div>
-            <div className="grid grid-cols-5 gap-2 text-center">
-              <Metric label="营收"        value={fmtMoney(s.revenue)} />
-              <Metric label="食材成本"    value={fmtMoney(s.cost.food)} />
-              <Metric label="食材占比"    value={fmtPct(s.foodCostRatio)} warn={s.foodCostRatio > 0.5} />
-              <Metric label="净利"        value={fmtMoney(s.netProfit)} warn={s.netProfit < 0} />
-              <Metric label="净利率"      value={fmtPct(s.netMargin)} warn={s.netMargin < 0.05} />
-            </div>
-          </section>
-        )}
+            <span className="text-caption text-gray3">{profit ? `${profit.stores.length} 家` : '—'}</span>
+          </header>
+          <table className="w-full">
+            <thead className="bg-bg/40">
+              <tr className="text-micro text-gray3 text-left">
+                <th className="px-3 py-2 font-normal">门店</th>
+                <th className="px-3 py-2 font-normal">阶段</th>
+                <th className="px-3 py-2 font-normal text-right">营收</th>
+                <th className="px-3 py-2 font-normal text-right">食材成本</th>
+                <th className="px-3 py-2 font-normal text-right">毛利</th>
+                <th className="px-3 py-2 font-normal text-right">毛利率</th>
+              </tr>
+            </thead>
+            <tbody>
+              {profit === null && <tr><td colSpan={6} className="px-4 py-6 text-center text-caption text-gray3">加载中…</td></tr>}
+              {profit?.stores.map(st => {
+                const tone: 'green' | 'red' | 'orange' = st.lifecyclePhase === 'OPERATING' ? 'green' : st.lifecyclePhase === 'CLOSED' ? 'red' : 'orange'
+                return (
+                  <tr key={st.storeId} className="border-t border-border">
+                    <td className="px-3 py-3">
+                      <div className="text-body">{st.storeName}</div>
+                      <div className="text-micro text-gray3 font-num">{st.storeNo}</div>
+                    </td>
+                    <td className="px-3 py-3"><Chip tone={tone}>{lifecycleLabels[st.lifecyclePhase] || st.lifecyclePhase}</Chip></td>
+                    <td className="px-3 py-3 text-right font-num">{fmtMoney(st.revenue)}</td>
+                    <td className="px-3 py-3 text-right font-num">{fmtMoney(st.foodCost)}</td>
+                    <td className={`px-3 py-3 text-right font-num ${st.grossProfit < 0 ? 'text-red-fg' : ''}`}>{fmtMoney(st.grossProfit)}</td>
+                    <td className={`px-3 py-3 text-right font-num ${st.grossMargin < 0 ? 'text-red-fg' : ''}`}>{fmtPct(st.grossMargin)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </section>
 
         {/* 成本结构 + 渠道分布 并排 */}
         <div className="grid grid-cols-2 gap-4 mt-4">
@@ -319,15 +343,6 @@ export default function FinancePCStoresPage() {
           </section>
         </div>
       </main>
-    </div>
-  )
-}
-
-function Metric({ label, value, warn = false }: { label: string; value: string; warn?: boolean }) {
-  return (
-    <div>
-      <div className="text-micro text-gray3">{label}</div>
-      <div className={`font-num text-button mt-0.5 ${warn ? 'text-red-fg' : ''}`}>{value}</div>
     </div>
   )
 }

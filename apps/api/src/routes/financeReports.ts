@@ -52,7 +52,11 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
 
     const storeWhere: any = { tenant: { id: tenantId } }
     if (storeId) storeWhere.id = storeId
-    const stores = await prisma.store.findMany({ where: { tenantId, ...(storeId && { id: storeId }) }, select: { id: true, name: true } })
+    const stores = await prisma.store.findMany({
+      where: { tenantId, ...(storeId && { id: storeId }) },
+      select: { id: true, no: true, name: true, lifecyclePhase: true },
+      orderBy: { no: 'asc' },
+    })
     const storeIds = stores.map((s) => s.id)
     if (storeIds.length === 0) return reply.send({ stores: [], summary: null })
 
@@ -146,7 +150,7 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
       const revVal = Number(rev._sum.amount || 0)
       const foodVal = Number(food._sum.totalAmount || 0)
       return {
-        storeId: s.id, storeName: s.name,
+        storeId: s.id, storeNo: s.no, storeName: s.name, lifecyclePhase: s.lifecyclePhase,
         revenue: revVal,
         foodCost: foodVal,
         grossProfit: revVal - foodVal,

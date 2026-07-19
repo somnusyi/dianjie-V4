@@ -347,6 +347,48 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(receipt.items[0].inventoryUnitSnapshot).toBe('g')
     expect(Number(receipt.items[0].inventoryUnitsPerPurchaseUnitSnapshot)).toBe(500)
     expect(Number(receipt.items[0].inventoryUnitCostSnapshot)).toBeCloseTo(0.02)
+    const verificationAt = new Date('2026-07-20T00:00:00.000Z')
+    await prisma.receipt.update({
+      where: { id: receipt.id },
+      data: {
+        supplierVerifiedAt: verificationAt,
+        supplierVerifiedById: supplierUserId,
+        supplierVerifyNote: '供应商原核对备注',
+        financeVerifiedAt: verificationAt,
+        financeVerifiedById: chefUserId,
+        financeVerifyNote: '财务原核对备注',
+      },
+    })
+    for (const payload of [
+      { actor: 'supplier', note: { invalid: true } },
+      { actor: 'supplier', note: 'x'.repeat(501) },
+      { actor: 'supplier', unexpected: true },
+    ]) {
+      const invalidVerify = await app.inject({
+        method: 'PATCH', url: `/api/receipts/${receipt.id}/verify`,
+        headers: { 'x-test-actor': 'supplier' }, payload,
+      })
+      expect(invalidVerify.statusCode).toBe(400)
+    }
+    for (const payload of [
+      {},
+      { actor: 'invalid' },
+      { actor: 'finance', unexpected: true },
+    ]) {
+      const invalidRevoke = await app.inject({
+        method: 'PATCH', url: `/api/receipts/${receipt.id}/verify/revoke`,
+        headers: { 'x-test-actor': 'admin' }, payload,
+      })
+      expect(invalidRevoke.statusCode).toBe(400)
+    }
+    expect(await prisma.receipt.findUniqueOrThrow({ where: { id: receipt.id } })).toMatchObject({
+      supplierVerifiedAt: verificationAt,
+      supplierVerifiedById: supplierUserId,
+      supplierVerifyNote: '供应商原核对备注',
+      financeVerifiedAt: verificationAt,
+      financeVerifiedById: chefUserId,
+      financeVerifyNote: '财务原核对备注',
+    })
     const claim = await prisma.lossClaim.findFirstOrThrow({
       where: { purchaseOrderId: order.id }, include: { items: true },
     })

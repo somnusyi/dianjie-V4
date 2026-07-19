@@ -83,6 +83,15 @@ const confirmWithLossSchema = z.object({
   }
 })
 
+const receiptVerifySchema = z.object({
+  actor: z.enum(['supplier', 'finance']),
+  note: z.string().max(500).optional(),
+}).strict()
+
+const receiptVerifyRevokeSchema = z.object({
+  actor: z.enum(['supplier', 'finance']),
+}).strict()
+
 export const receiptRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 列表 ──────────────────────────────────────────
@@ -505,10 +514,17 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
   // 财务 = financeVerifiedAt (新加, 三方齐了才可标)
   app.patch('/:id/verify', auth(app), async (req: any, reply: any) => {
     const { tenantId, userId, role, supplierId } = req.user
-    const { actor, note } = (req.body || {}) as { actor: 'supplier' | 'finance'; note?: string }
-    if (!['supplier', 'finance'].includes(actor)) {
-      return reply.status(400).send({ error: 'actor 必须 supplier 或 finance' })
+    const parsed = receiptVerifySchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const { actor, note } = parsed.data
+
+    if (actor === 'supplier' && !['SUPPLIER_OWNER', 'SUPPLIER_STAFF', 'FINANCE', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+      return reply.status(403).send({ error: '供应商核对仅供应商或财务可执行' })
     }
+    if (actor === 'finance' && !['FINANCE', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+      return reply.status(403).send({ error: '财务核对仅财务/老板可执行' })
+    }
+
     const receiptWhere: any = { id: req.params.id, tenantId }
     if (actor === 'supplier' && isSupplierRole(role)) receiptWhere.supplierId = supplierId || '__NONE__'
     const receipt = await prisma.receipt.findFirst({
@@ -516,14 +532,6 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       include: { supplier: { select: { name: true } } },
     })
     if (!receipt) return reply.status(404).send({ error: '入库单不存在' })
-
-    // 权限
-    if (actor === 'supplier' && !['SUPPLIER_OWNER', 'SUPPLIER_STAFF', 'FINANCE', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
-      return reply.status(403).send({ error: '供应商核对仅供应商或财务可执行' })
-    }
-    if (actor === 'finance' && !['FINANCE', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
-      return reply.status(403).send({ error: '财务核对仅财务/老板可执行' })
-    }
 
     // 财务核对要求: 门店已建 + 厨师长已 confirm + 供应商已核对
     // BUG#4: B2B/HEADQ supplier 不需要外部核对, 直接放行
@@ -562,10 +570,12 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
   // 撤销核对 (改错了可以撤)
   app.patch('/:id/verify/revoke', auth(app), async (req: any, reply: any) => {
     const { tenantId, userId, role } = req.user
-    const { actor } = (req.body || {}) as { actor: 'supplier' | 'finance' }
     if (!['FINANCE', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
       return reply.status(403).send({ error: '撤销核对仅财务/老板可执行' })
     }
+    const parsed = receiptVerifyRevokeSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const { actor } = parsed.data
     const r = await prisma.receipt.findFirst({ where: { id: req.params.id, tenantId } })
     if (!r) return reply.status(404).send({ error: '入库单不存在' })
 

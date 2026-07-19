@@ -63,7 +63,7 @@ async function main() {
     ])
     createdSupplierIds.push(supplierA.id, supplierB.id)
     const password = await bcrypt.hash(PASSWORD, 10)
-    const [managerA, managerB, supplierUserA, supplierUserB] = await Promise.all([
+    const [managerA, managerB, supplierUserA, supplierUserB, financeUser] = await Promise.all([
       prisma.user.create({
         data: { tenantId: tenant.id, name: '验证店长甲', email: `manager-a-${suffix}@local.test`, password, role: 'MANAGER', storeId: storeA.id, storeIds: [storeA.id] },
       }),
@@ -76,8 +76,11 @@ async function main() {
       prisma.user.create({
         data: { tenantId: tenant.id, name: '验证供应商乙', email: `supplier-b-${suffix}@local.test`, password, role: 'SUPPLIER_OWNER', supplierId: supplierB.id },
       }),
+      prisma.user.create({
+        data: { tenantId: tenant.id, name: '验证财务', email: `finance-${suffix}@local.test`, password, role: 'FINANCE' },
+      }),
     ])
-    createdUserIds.push(managerA.id, managerB.id, supplierUserA.id, supplierUserB.id)
+    createdUserIds.push(managerA.id, managerB.id, supplierUserA.id, supplierUserB.id, financeUser.id)
     const [productA1, productA2, productB] = await Promise.all([
       prisma.product.create({ data: { tenantId: tenant.id, supplierId: supplierA.id, code: `RVP-${suffix}-A1`, name: '验证菌菇', price: 3.33 } }),
       prisma.product.create({ data: { tenantId: tenant.id, supplierId: supplierA.id, code: `RVP-${suffix}-A2`, name: '验证蔬菜', price: 1.11 } }),
@@ -85,11 +88,12 @@ async function main() {
     ])
     createdProductIds.push(productA1.id, productA2.id, productB.id)
 
-    const [managerTokenA, managerTokenB, supplierTokenA, supplierTokenB] = await Promise.all([
+    const [managerTokenA, managerTokenB, supplierTokenA, supplierTokenB, financeToken] = await Promise.all([
       login(managerA.email, tenant.slug),
       login(managerB.email, tenant.slug),
       login(supplierUserA.email, tenant.slug),
       login(supplierUserB.email, tenant.slug),
+      login(financeUser.email, tenant.slug),
     ])
     const baseBody = {
       storeId: storeA.id,
@@ -163,9 +167,36 @@ async function main() {
     assert.equal((await api(`/api/receipts/${receiptId}/verify`, supplierTokenB, {
       method: 'PATCH', body: JSON.stringify({ actor: 'supplier', note: '不应成功' }),
     })).status, 404, '供应商只能核对自己的入库单')
+    for (const payload of [
+      { actor: 'supplier', note: { invalid: true } },
+      { actor: 'supplier', note: 'x'.repeat(501) },
+      { actor: 'supplier', unexpected: true },
+    ]) {
+      assert.equal((await api(`/api/receipts/${receiptId}/verify`, supplierTokenA, {
+        method: 'PATCH', body: JSON.stringify(payload),
+      })).status, 400, '核对异常输入必须在写入前拒绝')
+    }
     assert.equal((await api(`/api/receipts/${receiptId}/verify`, supplierTokenA, {
       method: 'PATCH', body: JSON.stringify({ actor: 'supplier', note: '数量金额已核对' }),
     })).status, 200)
+    assert.equal((await api(`/api/receipts/${receiptId}/verify`, financeToken, {
+      method: 'PATCH', body: JSON.stringify({ actor: 'finance', note: '财务已核对' }),
+    })).status, 200)
+    const verifiedReceipt = await prisma.receipt.findUniqueOrThrow({ where: { id: receiptId } })
+    for (const payload of [{}, { actor: 'invalid' }, { actor: 'finance', unexpected: true }]) {
+      assert.equal((await api(`/api/receipts/${receiptId}/verify/revoke`, financeToken, {
+        method: 'PATCH', body: JSON.stringify(payload),
+      })).status, 400, '撤销核对必须明确指定合法 actor')
+    }
+    assert.deepEqual(
+      (await prisma.receipt.findUniqueOrThrow({ where: { id: receiptId } })).financeVerifiedAt,
+      verifiedReceipt.financeVerifiedAt,
+      '非法撤销请求不得改写财务核对时间',
+    )
+    assert.equal((await api(`/api/receipts/${receiptId}/verify/revoke`, financeToken, {
+      method: 'PATCH', body: JSON.stringify({ actor: 'finance' }),
+    })).status, 200)
+    assert.equal((await prisma.receipt.findUniqueOrThrow({ where: { id: receiptId } })).financeVerifiedAt, null)
 
     const recoveryCreated = await api('/api/receipts', managerTokenA, {
       method: 'POST', body: JSON.stringify({ ...baseBody, note: '财务派生故障恢复验证' }),

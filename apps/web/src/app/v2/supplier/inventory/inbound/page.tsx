@@ -12,7 +12,6 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
-import * as XLSX from 'xlsx'
 
 type Sku = { id: string; code: string; name: string; spec: string | null; unit: string; stock: number; shelfDays?: number }
 type Row = {
@@ -98,6 +97,7 @@ export default function InboundPage() {
   }
 
   async function parseExcel(file: File) {
+    const XLSX = await import('xlsx')
     const buf = await file.arrayBuffer()
     const wb = XLSX.read(buf, { type: 'array' })
     const sheet = wb.Sheets[wb.SheetNames[0]]

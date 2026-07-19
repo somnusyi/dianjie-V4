@@ -13,7 +13,6 @@
 'use client'
 import { useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
-import * as XLSX from 'xlsx'
 
 type Row = {
   __row: number; name: string; spec?: string; category?: string; unit?: string; qty: number
@@ -40,6 +39,7 @@ export default function ImportSnapshotPage() {
   async function parseFile(file: File) {
     setError(null); setResult(null)
     setFilename(file.name)
+    const XLSX = await import('xlsx')
     const buf = await file.arrayBuffer()
     const wb = XLSX.read(buf, { type: 'array' })
     const sheet = wb.Sheets[wb.SheetNames[0]]

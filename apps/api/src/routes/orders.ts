@@ -644,14 +644,6 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: '供应商只能申请调整商品或数量' })
     }
 
-    if (input.requestKey) {
-      const duplicate = await prisma.purchaseOrderRevision.findFirst({
-        where: { purchaseOrderId: id, requestKey: input.requestKey },
-        include: { requestedBy: { select: { id: true, name: true, role: true } } },
-      })
-      if (duplicate) return duplicate
-    }
-
     const before = buildOrderSnapshot(order as any, 'current')
     const requestedItems = input.items ?? before.items.map(item => ({ productId: item.productId, quantity: Number(item.quantity) }))
     if (new Set(requestedItems.map(item => item.productId)).size !== requestedItems.length) {
@@ -702,6 +694,22 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     }
     const changes = diffOrderSnapshots(before, after)
     if (changes.length === 0) return reply.status(400).send({ error: '没有检测到任何修改' })
+    const revisionReplayMatches = (candidate: any) => candidate.requestedById === userId
+      && candidate.reason === input.reason
+      && candidate.baseRowVersion === input.baseRowVersion
+      && snapshotHash(candidate.afterSnapshot as OrderSnapshot) === snapshotHash(after)
+    const findRevisionReplay = () => prisma.purchaseOrderRevision.findFirst({
+      where: { purchaseOrderId: id, requestKey: input.requestKey },
+      include: { requestedBy: { select: { id: true, name: true, role: true } } },
+    })
+
+    if (input.requestKey) {
+      const duplicate = await findRevisionReplay()
+      if (duplicate) {
+        if (!revisionReplayMatches(duplicate)) return reply.status(409).send({ error: '同一改单请求键不能用于不同请求内容或申请人' })
+        return duplicate
+      }
+    }
 
     try {
       const revision = await prisma.$transaction(async (tx) => {
@@ -752,6 +760,13 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       }
       return reply.status(201).send(revision)
     } catch (error: any) {
+      if ((error?.code === 'P2002' || error?.code === 'P2034') && input.requestKey) {
+        const duplicate = await findRevisionReplay()
+        if (duplicate) {
+          if (!revisionReplayMatches(duplicate)) return reply.status(409).send({ error: '同一改单请求键不能用于不同请求内容或申请人' })
+          return reply.status(200).send(duplicate)
+        }
+      }
       if (error?.code === 'P2002') return reply.status(409).send({ error: '该订单已有待确认修改或请求已提交' })
       throw error
     }

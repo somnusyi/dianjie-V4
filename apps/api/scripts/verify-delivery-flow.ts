@@ -304,6 +304,34 @@ async function main() {
     })
     assert.equal(conflictingCreate.status, 409, JSON.stringify(conflictingCreate.body))
     assert.equal(await prisma.purchaseOrder.count({ where: { idempotencyKey: orderCreateKey } }), 1)
+    const revisionRequestKey = `delivery-revision-${Date.now()}`
+    const revisionPayload = {
+      reason: '真实 HTTP 供应商申请调整数量', baseRowVersion: created.body.rowVersion, requestKey: revisionRequestKey,
+      items: [{ productId: product.id, quantity: 4 }],
+    }
+    const concurrentRevisions = await Promise.all([0, 1].map(() => api(`/api/orders/${orderId}/revisions`, supplierToken, {
+      method: 'POST', body: JSON.stringify(revisionPayload),
+    })))
+    assert.deepEqual(concurrentRevisions.map(result => result.status).sort(), [200, 201], JSON.stringify(concurrentRevisions.map(result => result.body)))
+    assert.equal(new Set(concurrentRevisions.map(result => result.body.id)).size, 1)
+    const revisionId = concurrentRevisions[0].body.id
+    assert.equal(await prisma.purchaseOrderRevision.count({ where: { purchaseOrderId: orderId, requestKey: revisionRequestKey } }), 1)
+    const conflictingRevision = await api(`/api/orders/${orderId}/revisions`, supplierToken, {
+      method: 'POST',
+      body: JSON.stringify({ ...revisionPayload, items: [{ productId: product.id, quantity: 3 }] }),
+    })
+    assert.equal(conflictingRevision.status, 409, JSON.stringify(conflictingRevision.body))
+    const rejectedRevision = await api(`/api/orders/${orderId}/revisions/${revisionId}/reject`, managerToken, {
+      method: 'PATCH', body: JSON.stringify({ note: '真实 HTTP 保持原订货数量' }),
+    })
+    assert.equal(rejectedRevision.status, 200, JSON.stringify(rejectedRevision.body))
+    const revisionList = await api(`/api/orders/${orderId}/revisions`, managerToken)
+    assert.equal(revisionList.status, 200, JSON.stringify(revisionList.body))
+    const revisionDetail = revisionList.body.find((revision: any) => revision.id === revisionId)
+    assert.equal(revisionDetail.requestedBy.id, supplierUser.id)
+    assert.equal(revisionDetail.reviewedBy.id, manager.id)
+    assert.ok(revisionDetail.requestedAt)
+    assert.ok(revisionDetail.reviewedAt)
     const originalHash = created.body.submittedSnapshotHash
     assert.equal((await api(`/api/orders/${orderId}/confirm`, supplierToken, { method: 'PATCH', body: '{}' })).status, 200)
 
@@ -456,7 +484,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, orderCreateAuditRollback: true, orderCreateConcurrentReplay: true, orderCreateReplayConflict: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, orderCreateAuditRollback: true, orderCreateConcurrentReplay: true, orderCreateReplayConflict: true, revisionConcurrentReplay: true, revisionReplayConflict: true, revisionActorsRecorded: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))
@@ -495,6 +523,7 @@ async function main() {
         await tx.opLog.deleteMany({ where: { OR: [{ targetId: orderId! }, ...(orderNo ? [{ target: orderNo }] : [])] } })
         await tx.purchaseOrderEvent.deleteMany({ where: { purchaseOrderId: orderId! } })
         await tx.supplierStockReservation.deleteMany({ where: { purchaseOrderId: orderId! } })
+        await tx.purchaseOrderRevision.deleteMany({ where: { purchaseOrderId: orderId! } })
         await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: orderId! } })
         await tx.purchaseOrder.delete({ where: { id: orderId! } })
       })

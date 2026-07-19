@@ -626,6 +626,40 @@ describe('supplier order to receipt flow (integration)', () => {
     })
     expect(oversizedRevision.statusCode).toBe(400)
 
+    const revisionRequestKey = `revision-replay-${suffix}`
+    const revisionPayload = {
+      reason: '供应商申请调整数量', baseRowVersion: order.rowVersion, requestKey: revisionRequestKey,
+      items: [{ productId, quantity: 5 }],
+    }
+    const concurrentRevisions = await Promise.all([0, 1].map(() => app.inject({
+      method: 'POST', url: `/api/orders/${order.id}/revisions`, headers: { 'x-test-actor': 'supplier' }, payload: revisionPayload,
+    })))
+    expect(concurrentRevisions.map(result => result.statusCode).sort()).toEqual([200, 201])
+    expect(new Set(concurrentRevisions.map(result => result.json().id)).size).toBe(1)
+    const revisionId = concurrentRevisions[0].json().id
+    expect(await prisma.purchaseOrderRevision.count({ where: { purchaseOrderId: order.id, requestKey: revisionRequestKey } })).toBe(1)
+    expect(await prisma.purchaseOrderEvent.count({
+      where: { purchaseOrderId: order.id, eventType: 'REVISION_REQUESTED', metadata: { path: ['revisionId'], equals: revisionId } },
+    })).toBe(1)
+    expect(await prisma.opLog.count({
+      where: { tenantId, userId: supplierUserId, targetId: revisionId, action: { startsWith: '申请修改订货单' } },
+    })).toBe(1)
+    const conflictingRevisionReplay = await app.inject({
+      method: 'POST', url: `/api/orders/${order.id}/revisions`, headers: { 'x-test-actor': 'supplier' },
+      payload: { ...revisionPayload, items: [{ productId, quantity: 4 }] },
+    })
+    expect(conflictingRevisionReplay.statusCode).toBe(409)
+    const rejectRevision = await app.inject({
+      method: 'PATCH', url: `/api/orders/${order.id}/revisions/${revisionId}/reject`, headers: { 'x-test-actor': 'chef' },
+      payload: { note: '保持原订货数量' },
+    })
+    expect(rejectRevision.statusCode).toBe(200)
+    const revisionDetail = await prisma.purchaseOrderRevision.findUniqueOrThrow({ where: { id: revisionId } })
+    expect(revisionDetail.requestedById).toBe(supplierUserId)
+    expect(revisionDetail.reviewedById).toBe(chefUserId)
+    expect(revisionDetail.requestedAt).toBeInstanceOf(Date)
+    expect(revisionDetail.reviewedAt).toBeInstanceOf(Date)
+
     const confirm = await app.inject({
       method: 'PATCH', url: `/api/orders/${order.id}/confirm`, headers: { 'x-test-actor': 'supplier' },
     })

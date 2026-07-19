@@ -594,7 +594,11 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
     try {
       const upload = await readMultipart(req)
       const store = await targetStore(req.user, upload.storeId)
-      const parsed = await parseDailyFiles(upload.business.buffer, upload.sales.buffer)
+      const parsed = await parseDailyFiles(
+        upload.business.buffer,
+        upload.sales.buffer,
+        { targetStoreName: store.name },
+      )
       const businessDate = dateOnly(parsed.business.date)
       if (businessDate > dateOnly(chinaClock().expectedBusinessDate)) {
         return reply.status(400).send({ error: '只能导入已结束的营业日，不能导入当天或未来数据' })

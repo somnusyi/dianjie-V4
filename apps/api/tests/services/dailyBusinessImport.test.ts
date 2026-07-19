@@ -7,31 +7,55 @@ async function workbookBuffer(workbook: ExcelJS.Workbook) {
   return Buffer.from(value)
 }
 
-async function businessFile(input: { date?: string; gross?: number; discount?: number; net?: number; store?: string; extraStore?: string } = {}) {
+async function businessFile(input: { date?: string; gross?: number; discount?: number; net?: number; store?: string; extraStore?: string; omitStore?: boolean } = {}) {
   const workbook = new ExcelJS.Workbook()
   const sheet = workbook.addWorksheet('综合营业统计')
   sheet.addRow(['综合营业统计'])
   sheet.addRow(['营业日期【2026/07/15-2026/07/15】'])
-  sheet.addRow(['城市', '门店', '营业日', '营业额(元)', '优惠金额(元)', '营业收入(元)', '订单量', '用餐人数', '消费桌数'])
-  sheet.addRow(['合肥市', input.store || '瑶海店', input.date || '2026/07/15', input.gross ?? 100, input.discount ?? 20, input.net ?? 80, 2, 4, 2])
-  if (input.extraStore) sheet.addRow(['合肥市', input.extraStore, input.date || '2026/07/15', 1, 0, 1, 1, 1, 1])
+  const headers = ['城市', '门店', '营业日', '营业额(元)', '优惠金额(元)', '营业收入(元)', '订单量', '用餐人数', '消费桌数']
+  const row = ['合肥市', input.store || '瑶海店', input.date || '2026/07/15', input.gross ?? 100, input.discount ?? 20, input.net ?? 80, 2, 4, 2]
+  if (input.omitStore) {
+    headers.splice(1, 1)
+    row.splice(1, 1)
+  }
+  sheet.addRow(headers)
+  sheet.addRow(row)
+  if (input.extraStore) {
+    const extraRow = ['合肥市', input.extraStore, input.date || '2026/07/15', 1, 0, 1, 1, 1, 1]
+    if (input.omitStore) extraRow.splice(1, 1)
+    sheet.addRow(extraRow)
+  }
   return workbookBuffer(workbook)
 }
 
-async function salesFile(input: { date?: string; net?: number; store?: string; freeDish?: boolean } = {}) {
+async function salesFile(input: { date?: string; net?: number; store?: string; freeDish?: boolean; omitStore?: boolean } = {}) {
   const workbook = new ExcelJS.Workbook()
   const sold = workbook.addWorksheet('已销售')
   sold.addRow(['菜品销售明细'])
   sold.addRow([`【结账时间】；【${input.date || '2026/07/15'} 00:00 至 ${input.date || '2026/07/15'} 23:59】`])
-  sold.addRow(['城市', '门店', '营业日期', '菜品编码', '菜品名称', '规格', '单位', '菜品大类', '订单编号', '销售数量', '销售额（元）', '菜品优惠（元）', '菜品收入（元）'])
-  sold.addRow(['合肥', input.store || '瑶海店', input.date || '2026/07/15', '1001', '云南秘制黄牛肉（微微辣）', '小份', '份', '牛肉', 'A1', 1, 60, 10, input.net ?? 50])
-  sold.addRow(['合肥', input.store || '瑶海店', input.date || '2026/07/15', '1001', '云南秘制黄牛肉（微微辣）', '小份', '份', '牛肉', 'A2', 1, 40, 10, 30])
-  if (input.freeDish) sold.addRow(['合肥', input.store || '瑶海店', input.date || '2026/07/15', '1003', '赠品', '', '份', '赠品', 'A3', 1, 6, 0, 0])
+  const soldHeaders = ['城市', '门店', '营业日期', '菜品编码', '菜品名称', '规格', '单位', '菜品大类', '订单编号', '销售数量', '销售额（元）', '菜品优惠（元）', '菜品收入（元）']
+  const soldRows: any[][] = [
+    ['合肥', input.store || '瑶海店', input.date || '2026/07/15', '1001', '云南秘制黄牛肉（微微辣）', '小份', '份', '牛肉', 'A1', 1, 60, 10, input.net ?? 50],
+    ['合肥', input.store || '瑶海店', input.date || '2026/07/15', '1001', '云南秘制黄牛肉（微微辣）', '小份', '份', '牛肉', 'A2', 1, 40, 10, 30],
+  ]
+  if (input.freeDish) soldRows.push(['合肥', input.store || '瑶海店', input.date || '2026/07/15', '1003', '赠品', '', '份', '赠品', 'A3', 1, 6, 0, 0])
+  if (input.omitStore) {
+    soldHeaders.splice(1, 1)
+    soldRows.forEach(row => row.splice(1, 1))
+  }
+  sold.addRow(soldHeaders)
+  soldRows.forEach(row => sold.addRow(row))
   const returned = workbook.addWorksheet('退菜')
   returned.addRow(['退菜'])
   returned.addRow([`【结账时间】；【${input.date || '2026/07/15'} 00:00 至 ${input.date || '2026/07/15'} 23:59】`])
-  returned.addRow(['城市', '门店', '营业日期', '菜品编码', '菜品名称', '规格', '单位', '菜品大类', '订单编号', '销售数量', '销售额（元）', '菜品优惠（元）', '菜品收入（元）'])
-  returned.addRow(['合肥', '瑶海店', input.date || '2026/07/15', '1002', '百家蘸料', '', '份', '蘸料', 'A3', 1, 6, 0, 0])
+  const returnHeaders = ['城市', '门店', '营业日期', '菜品编码', '菜品名称', '规格', '单位', '菜品大类', '订单编号', '销售数量', '销售额（元）', '菜品优惠（元）', '菜品收入（元）']
+  const returnRow = ['合肥', '瑶海店', input.date || '2026/07/15', '1002', '百家蘸料', '', '份', '蘸料', 'A3', 1, 6, 0, 0]
+  if (input.omitStore) {
+    returnHeaders.splice(1, 1)
+    returnRow.splice(1, 1)
+  }
+  returned.addRow(returnHeaders)
+  returned.addRow(returnRow)
   return workbookBuffer(workbook)
 }
 
@@ -73,6 +97,27 @@ describe('daily business import parser', () => {
   it('blocks files exported for different stores', async () => {
     const parsed = await parseDailyFiles(await businessFile(), await salesFile({ store: '万象汇店' }))
     expect(parsed.blockingIssues.map(issue => issue.code)).toContain('FILE_STORE_MISMATCH')
+  })
+
+  it('uses the authenticated target store when both exports omit the store column', async () => {
+    const parsed = await parseDailyFiles(
+      await businessFile({ omitStore: true }),
+      await salesFile({ omitStore: true }),
+      { targetStoreName: '合肥瑶海店' },
+    )
+    expect(parsed.business.storeName).toBe('合肥瑶海店')
+    expect(parsed.blockingIssues).toEqual([])
+  })
+
+  it('still blocks missing store identity outside an authenticated store context', async () => {
+    const parsed = await parseDailyFiles(
+      await businessFile({ omitStore: true }),
+      await salesFile({ omitStore: true }),
+    )
+    expect(parsed.blockingIssues.map(issue => issue.code)).toEqual(expect.arrayContaining([
+      'BUSINESS_STORE_INVALID',
+      'SALES_STORE_INVALID',
+    ]))
   })
 
   it('rejects a comprehensive workbook that contains more than one store row', async () => {

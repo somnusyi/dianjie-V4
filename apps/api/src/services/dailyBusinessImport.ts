@@ -73,6 +73,15 @@ export type ParsedDailyFiles = {
   warningIssues: ImportIssue[]
 }
 
+export type DailyFileParseOptions = {
+  /**
+   * Authenticated uploads already have an authoritative target store.
+   * POS exports may omit their store column, so use this value as the
+   * identity fallback while still validating any store name they do provide.
+   */
+  targetStoreName?: string
+}
+
 export function sha256(buffer: Buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex')
 }
@@ -198,7 +207,7 @@ export async function parseBusinessWorkbook(buffer: Buffer): Promise<BusinessMet
   if (!found) throw new Error('无法识别综合营业统计表头')
 
   const dateColumn = requiredColumn(found.indexes, '营业日', '营业日期')
-  const storeColumn = requiredColumn(found.indexes, '门店')
+  const storeColumn = headerColumn(found.indexes, '门店', '门店名称')
   const grossColumn = requiredColumn(found.indexes, '营业额(元)')
   const discountColumn = requiredColumn(found.indexes, '优惠金额(元)')
   const netColumn = requiredColumn(found.indexes, '营业收入(元)')
@@ -211,8 +220,7 @@ export async function parseBusinessWorkbook(buffer: Buffer): Promise<BusinessMet
     const row = worksheet.getRow(rowNumber)
     const date = dateString(row.getCell(dateColumn).value)
     if (!date || text(row.getCell(1).value) === '合计') continue
-    const storeName = text(row.getCell(storeColumn).value)
-    if (!storeName) throw new Error(`综合营业统计第 ${rowNumber} 行缺少门店名称`)
+    const storeName = storeColumn ? text(row.getCell(storeColumn).value) : ''
     const metrics = {
       date,
       storeName,
@@ -315,11 +323,19 @@ export async function parseSalesWorkbook(buffer: Buffer) {
   return { sales: sold.rows, returns: returned.rows, salesStoreNames: sold.storeNames, returnStoreNames: returned.storeNames }
 }
 
-export async function parseDailyFiles(businessBuffer: Buffer, salesBuffer: Buffer): Promise<ParsedDailyFiles> {
-  const [business, parsedSales] = await Promise.all([
+export async function parseDailyFiles(
+  businessBuffer: Buffer,
+  salesBuffer: Buffer,
+  options: DailyFileParseOptions = {},
+): Promise<ParsedDailyFiles> {
+  const [parsedBusiness, parsedSales] = await Promise.all([
     parseBusinessWorkbook(businessBuffer),
     parseSalesWorkbook(salesBuffer),
   ])
+  const targetStoreName = options.targetStoreName?.trim() || ''
+  const business = parsedBusiness.storeName
+    ? parsedBusiness
+    : { ...parsedBusiness, storeName: targetStoreName }
   const salesDates = [...new Set(parsedSales.sales.map(row => row.date))]
   const totals = parsedSales.sales.reduce((result, row) => ({
     quantity: result.quantity + row.quantity,
@@ -331,19 +347,36 @@ export async function parseDailyFiles(businessBuffer: Buffer, salesBuffer: Buffe
 
   const blockingIssues: ImportIssue[] = []
   const warningIssues: ImportIssue[] = []
+  if (!business.storeName) {
+    blockingIssues.push({
+      code: 'BUSINESS_STORE_INVALID',
+      message: '综合营业文件无法识别门店',
+      detail: '请从已绑定唯一门店的账号上传，或使用包含门店列的报表',
+    })
+  }
   if (salesDates.length !== 1 || salesDates[0] !== business.date) {
     blockingIssues.push({
       code: 'DATE_MISMATCH', message: '两份文件的营业日期不一致',
       detail: `综合营业：${business.date}；菜品销售：${salesDates.join('、') || '未识别'}`,
     })
   }
-  if (parsedSales.salesStoreNames.length !== 1) {
+  if (parsedSales.salesStoreNames.length > 1) {
     blockingIssues.push({
       code: 'SALES_STORE_INVALID',
-      message: parsedSales.salesStoreNames.length === 0 ? '菜品销售文件无法识别门店' : '菜品销售文件包含多个门店',
-      detail: parsedSales.salesStoreNames.join('、') || '请重新导出包含门店列的单店单日报表',
+      message: '菜品销售文件包含多个门店',
+      detail: parsedSales.salesStoreNames.join('、'),
     })
-  } else if (normalizeDishName(parsedSales.salesStoreNames[0]) !== normalizeDishName(business.storeName)) {
+  } else if (parsedSales.salesStoreNames.length === 0 && !targetStoreName) {
+    blockingIssues.push({
+      code: 'SALES_STORE_INVALID',
+      message: '菜品销售文件无法识别门店',
+      detail: '请从已绑定唯一门店的账号上传，或使用包含门店列的报表',
+    })
+  } else if (
+    parsedSales.salesStoreNames.length === 1
+    && business.storeName
+    && normalizeDishName(parsedSales.salesStoreNames[0]) !== normalizeDishName(business.storeName)
+  ) {
     blockingIssues.push({
       code: 'FILE_STORE_MISMATCH',
       message: '两份文件的门店不一致',

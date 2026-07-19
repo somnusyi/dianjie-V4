@@ -1,6 +1,6 @@
 /**
  * 总厨 · 菜品管理 (BOM 主入口)
- * 列表 + 状态/分类筛选 + 毛利率显示
+ * 列表 + 状态/分类筛选 + BOM 完整性显示
  */
 'use client'
 import { useEffect, useState } from 'react'
@@ -13,7 +13,6 @@ type Dish = {
   category?: string | null; unit: string; salePrice: string
   status: 'ACTIVE' | 'DISABLED' | 'UPCOMING'
   inventoryPolicy: 'BOM' | 'EXCLUDE'
-  foodCost?: number; grossProfit?: number; grossMargin?: number
   recipes?: any[]
   activeBomVariants?: string[]
   hasAnyEffectiveBom?: boolean
@@ -72,7 +71,7 @@ export default function DishesPage() {
       <header className="px-4 pt-4 pb-2 flex items-center justify-between">
         <div>
           <h1 className="text-h1">菜品 / 配方</h1>
-          <p className="text-caption text-gray3">维护菜品 BOM, 算成本和毛利</p>
+          <p className="text-caption text-gray3">维护菜品 BOM 与库存扣减规则</p>
         </div>
         <a href="/v2/chef-director/dishes/new" className="px-3 py-2 bg-ink text-white rounded-cta text-button">+ 新建</a>
       </header>
@@ -118,8 +117,6 @@ export default function DishesPage() {
           const hasDefaultBOM = (d.recipes?.length || 0) > 0
           const hasBOM = Boolean(d.hasAnyEffectiveBom)
           const excluded = d.inventoryPolicy === 'EXCLUDE'
-          const margin = d.grossMargin || 0
-          const marginTone: any = margin >= 0.6 ? 'green' : margin >= 0.4 ? 'amber' : 'red'
           const variantQuery = !hasDefaultBOM && d.primaryBomVariant
             ? `?variant=${encodeURIComponent(d.primaryBomVariant)}`
             : ''
@@ -132,18 +129,14 @@ export default function DishesPage() {
                   {d.category && <span className="text-micro text-gray3">{d.category}</span>}
                   {!excluded && !hasBOM && <Chip tone="red">缺配方</Chip>}
                   {excluded && <Chip tone="gray">不扣库存</Chip>}
-                  {hasDefaultBOM && <Chip tone={marginTone}>毛利 {(margin * 100).toFixed(0)}%</Chip>}
+                  {hasDefaultBOM && <Chip tone="green">已配方</Chip>}
                   {!hasDefaultBOM && hasBOM && <Chip tone="amber">{d.activeBomVariants?.length || 0} 个规格 BOM</Chip>}
                 </div>
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="text-h2 truncate flex-1">{d.name}</span>
                   <span className="font-num text-h2 shrink-0">¥{fmt(Number(d.salePrice))}</span>
                 </div>
-                {hasDefaultBOM && (
-                  <p className="text-micro text-gray3 mt-0.5">
-                    成本 ¥{fmt(d.foodCost || 0)} · 毛利 ¥{fmt(d.grossProfit || 0)}
-                  </p>
-                )}
+                {hasDefaultBOM && <p className="text-micro text-gray3 mt-0.5">按已发布 BOM 扣减库存</p>}
                 {!excluded && !hasBOM && (
                   <p className="text-micro text-amber-fg mt-0.5">未录配方 — 点进去配 ›</p>
                 )}

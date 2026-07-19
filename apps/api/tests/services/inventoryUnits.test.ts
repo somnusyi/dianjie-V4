@@ -69,6 +69,15 @@ describe('inventory unit normalization', () => {
     }).status).toBe('PENDING')
   })
 
+  it('rejects malformed physical unit tokens instead of guessing grams', () => {
+    expect(physicalAmountPerPackage('3Gg/桶')).toBeNull()
+    expect(convertBomUsageToProductUnit({
+      quantity: 55, bomUnit: 'g', productUnit: '桶', productSpec: '3Gg/桶',
+    })).toMatchObject({
+      status: 'PENDING', normalizedQuantity: null,
+    })
+  })
+
   it('keeps a deterministic factor when the physical count is zero', () => {
     expect(normalizeInventoryQuantity({
       quantity: 0, rawUnit: '斤', productUnit: '桶', productSpec: '45kg/桶',

@@ -82,14 +82,14 @@ export function physicalAmountPerPackage(specValue: string | null | undefined) {
   if (!spec) return null
 
   // 500g*20包, 2kg/6袋, 1l*12瓶
-  const amountThenCount = spec.match(/(\d+(?:\.\d+)?)(kg|g|斤|ml|l)(?:[*\/])(\d+(?:\.\d+)?)(?:包|袋|瓶|盒|桶|罐|个|枚|支|片)/)
+  const amountThenCount = spec.match(/(\d+(?:\.\d+)?)(kg|g|斤|ml|l)(?![a-z])(?:[*\/])(\d+(?:\.\d+)?)(?:包|袋|瓶|盒|桶|罐|个|枚|支|片)/)
   if (amountThenCount) {
     const base = quantityTokenToBase(Number(amountThenCount[1]), amountThenCount[2])
     if (base) return { dimension: base.dimension, value: base.value * Number(amountThenCount[3]) }
   }
 
   // 20包/500g, 24瓶/330ml
-  const countThenAmount = spec.match(/(\d+(?:\.\d+)?)(?:包|袋|瓶|盒|桶|罐|个|枚|支|片)[*\/](\d+(?:\.\d+)?)(kg|g|斤|ml|l)/)
+  const countThenAmount = spec.match(/(\d+(?:\.\d+)?)(?:包|袋|瓶|盒|桶|罐|个|枚|支|片)[*\/](\d+(?:\.\d+)?)(kg|g|斤|ml|l)(?![a-z])/)
   if (countThenAmount) {
     const base = quantityTokenToBase(Number(countThenAmount[2]), countThenAmount[3])
     if (base) return { dimension: base.dimension, value: base.value * Number(countThenAmount[1]) }
@@ -97,7 +97,11 @@ export function physicalAmountPerPackage(specValue: string | null | undefined) {
 
   // If several physical amounts are present (e.g. 箱/10斤/500g), the largest
   // one is the package total and the smaller one is normally a per-bag hint.
-  const candidates = [...spec.matchAll(/(\d+(?:\.\d+)?)(kg|g|斤|ml|l)/g)]
+  // Unit tokens must end cleanly.  Previously `3Gg/桶` was lower-cased to
+  // `3gg/桶` and the first `g` was silently accepted as grams, turning 55g into
+  // 18.333333 purchasing buckets.  Invalid specifications must remain pending
+  // instead of being guessed.
+  const candidates = [...spec.matchAll(/(\d+(?:\.\d+)?)(kg|g|斤|ml|l)(?![a-z])/g)]
     .map(match => quantityTokenToBase(Number(match[1]), match[2]))
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
   if (candidates.length === 0) return null
@@ -121,7 +125,7 @@ function physicalAmountPerProductUnit(specValue: string | null | undefined, prod
   if (!spec || !productUnit) return null
 
   // 500g*20包/箱, 1l*12瓶/件
-  const amountThenCount = spec.match(/(\d+(?:\.\d+)?)(kg|g|斤|ml|l)[*\/](\d+(?:\.\d+)?)(包|袋|瓶|盒|桶|罐|个|枚|支|片)(?:\/(?:箱|件))?/)
+  const amountThenCount = spec.match(/(\d+(?:\.\d+)?)(kg|g|斤|ml|l)(?![a-z])[*\/](\d+(?:\.\d+)?)(包|袋|瓶|盒|桶|罐|个|枚|支|片)(?:\/(?:箱|件))?/)
   if (amountThenCount) {
     const oneInner = quantityTokenToBase(Number(amountThenCount[1]), amountThenCount[2])
     if (oneInner) {
@@ -131,7 +135,7 @@ function physicalAmountPerProductUnit(specValue: string | null | undefined, prod
   }
 
   // 箱/20包/500g, 件/24瓶/330ml
-  const countThenAmount = spec.match(/(\d+(?:\.\d+)?)(包|袋|瓶|盒|桶|罐|个|枚|支|片)[*\/](\d+(?:\.\d+)?)(kg|g|斤|ml|l)/)
+  const countThenAmount = spec.match(/(\d+(?:\.\d+)?)(包|袋|瓶|盒|桶|罐|个|枚|支|片)[*\/](\d+(?:\.\d+)?)(kg|g|斤|ml|l)(?![a-z])/)
   if (countThenAmount) {
     const oneInner = quantityTokenToBase(Number(countThenAmount[3]), countThenAmount[4])
     if (oneInner) {
@@ -141,7 +145,7 @@ function physicalAmountPerProductUnit(specValue: string | null | undefined, prod
   }
 
   // 1.5kg*6/箱.  Here the inner unit label is omitted; 箱/件 is the outer unit.
-  const amountTimesBareCount = spec.match(/(\d+(?:\.\d+)?)(kg|g|斤|ml|l)\*(\d+(?:\.\d+)?)\/(?:箱|件)/)
+  const amountTimesBareCount = spec.match(/(\d+(?:\.\d+)?)(kg|g|斤|ml|l)(?![a-z])\*(\d+(?:\.\d+)?)\/(?:箱|件)/)
   if (amountTimesBareCount && (productUnit === '箱' || productUnit === '件')) {
     const oneInner = quantityTokenToBase(Number(amountTimesBareCount[1]), amountTimesBareCount[2])
     if (oneInner) return { dimension: oneInner.dimension, value: oneInner.value * Number(amountTimesBareCount[3]) }

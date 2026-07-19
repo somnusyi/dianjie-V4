@@ -60,9 +60,6 @@ type Dish = {
   availableTo?: string | null
   aliases: Array<{ id: string; rawName: string; source: string }>
   bomVersions: BomVersion[]
-  foodCost: number
-  grossProfit: number
-  grossMargin: number
 }
 
 const shortDate = (value?: string | null) => value ? value.slice(0, 10) : ''
@@ -284,9 +281,6 @@ export default function DishDetailPage() {
   }
 
   const displayItems = draft ? draftItems : (displayVersion?.items || [])
-  const cost = displayItems.reduce((sum, item) => sum + Number(item.product.price || 0) * Number(item.quantity) * (1 + Number(item.lossRate)), 0)
-  const margin = Number(dish.salePrice) > 0 ? (Number(dish.salePrice) - cost) / Number(dish.salePrice) : 0
-  const costLabel = draft ? '草稿成本' : current ? '当前成本' : scheduled ? '待生效成本' : latest ? '最近版本成本' : '当前成本'
   const copyButtonLabel = current
     ? '复制当前版本并发起变更'
     : scheduled
@@ -321,12 +315,12 @@ export default function DishDetailPage() {
       {taskId && <a href="/v2/chef-director/bom" className="block mx-4 mt-2 bg-amber/10 text-amber-fg rounded-card p-3 text-caption">完成配方发布后，返回 BOM 待办执行历史回补 ›</a>}
 
       <section className="mx-4 mt-3 bg-bg-warm rounded-card border border-border p-4">
-        <div className="grid grid-cols-3 gap-2 text-caption">
+        <div className="grid grid-cols-2 gap-2 text-caption">
           <div><div className="text-gray3">售价</div><div className="font-num text-h2">¥{fmt(Number(dish.salePrice))}</div></div>
-          <div><div className="text-gray3">{costLabel}</div><div className="font-num text-h2 text-red-fg">¥{fmt(cost)}</div></div>
-          <div><div className="text-gray3">预计毛利率</div><div className="font-num text-h2 text-green-fg">{(margin * 100).toFixed(1)}%</div></div>
+          <div><div className="text-gray3">配方用途</div><div className="text-body mt-1">库存扣减</div></div>
         </div>
         <div className="text-micro text-gray3 mt-3">当前规格：{targetSpec || targetVariant || '默认规格'} · 库存策略：{dish.inventoryPolicy === 'BOM' ? '按配方扣减' : '明确不扣库存'}</div>
+        <div className="text-micro text-gray3 mt-1">本页只维护实际消耗量；成本将在单位和移动平均成本完整后单独提供。</div>
       </section>
 
       {(variantKeys.length > 0 || targetVariant) && (

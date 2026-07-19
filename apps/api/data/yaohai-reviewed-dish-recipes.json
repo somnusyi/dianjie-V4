@@ -3050,11 +3050,11 @@
           "productCode": "ZZ9M-2DYLCX",
           "productName": "芒果果酱",
           "productUnit": "桶",
-          "quantity": 26,
-          "rawIngredient": "芒果果肉",
-          "rawQuantity": 37,
+          "quantity": 0.026,
+          "rawIngredient": "芒果果肉 + X-芒果果酱",
+          "rawQuantity": 78,
           "rawUnit": "g",
-          "note": "饮品 第23行，按毛重；按采购规格 3Gg/桶 换算；饮品 第25行，按毛重；按采购规格 3Gg/桶 换算"
+          "note": "饮品 第23行 37g + 第25行 41g，按毛重；按采购规格 3kg/桶 换算"
         },
         {
           "productCode": "DJ-BOM-7341C156CD",
@@ -3840,11 +3840,11 @@
           "productCode": "ZZ9M-2DYLD1",
           "productName": "奇异果果酱",
           "productUnit": "桶",
-          "quantity": 18.333333,
+          "quantity": 0.018333,
           "rawIngredient": "奇异果鲜果",
           "rawQuantity": 55,
           "rawUnit": "g",
-          "note": "饮品 第9行，按毛重；按采购规格 3Gg/桶 换算"
+          "note": "饮品 第9行，按毛重；按采购规格 3kg/桶 换算"
         },
         {
           "productCode": "DJ001-INV-0113",

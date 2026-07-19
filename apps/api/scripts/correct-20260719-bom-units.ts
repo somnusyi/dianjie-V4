@@ -6,7 +6,6 @@
  */
 import 'dotenv/config'
 import { Prisma, prisma } from '@dianjie/db'
-import { selectEffectiveBomVersion } from '../src/services/bomLifecycle'
 
 const CONFIRM = 'correct-20260719-bom-units'
 const REASON = '2026-07-19 包装单位纠错：3Gg→3kg，乌苏6罐/箱，生蚝18个/箱'
@@ -16,6 +15,22 @@ const WUSU_FUTURE_DATE = new Date('2026-07-20T00:00:00.000Z')
 type ItemWithProduct = Prisma.DishBomItemGetPayload<{ include: { product: true } }>
 
 const dateText = (value: Date | null | undefined) => value?.toISOString().slice(0, 10) || null
+
+function selectEffectiveDefaultVersion<T extends {
+  status: string; variantKey: string; effectiveFrom: Date | null; effectiveTo: Date | null; versionNo: number
+}>(versions: T[], businessDate: Date) {
+  const target = dateText(businessDate)!
+  return versions
+    .filter(version => version.status === 'PUBLISHED'
+      && version.variantKey === ''
+      && Boolean(version.effectiveFrom)
+      && dateText(version.effectiveFrom)! <= target
+      && (!version.effectiveTo || dateText(version.effectiveTo)! >= target))
+    .sort((left, right) => {
+      const byDate = dateText(right.effectiveFrom)!.localeCompare(dateText(left.effectiveFrom)!)
+      return byDate || right.versionNo - left.versionNo
+    })[0] || null
+}
 
 async function main() {
   const args = process.argv.slice(2)
@@ -116,7 +131,7 @@ async function main() {
         },
       })
       await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`dish-bom:${tenant.id}:${dish.id}:`}))`)
-      const source = selectEffectiveBomVersion(dish.bomVersions, input.effectiveFrom, '')
+      const source = selectEffectiveDefaultVersion(dish.bomVersions, input.effectiveFrom)
         || [...dish.bomVersions].reverse().find(version => version.status === 'PUBLISHED' && version.variantKey === '')
       if (!source) throw new Error(`${input.dishName} 没有可纠正的已发布默认BOM`)
       const items = input.transform(source.items as ItemWithProduct[])

@@ -479,6 +479,49 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(await prisma.opLog.count({ where: { targetId: order.id, action: { startsWith: '供应商标记送达' } } })).toBe(1)
   })
 
+  it('returns the same delivery for concurrent identical shipment retries', async () => {
+    const replayProduct = await prisma.product.create({
+      data: {
+        tenantId, supplierId, code: `${suffix}-REPLAY`, name: '并发幂等商品', category: '菌菇', unit: '斤',
+        price: 10, stock: 3, minOrderQty: 1, stepQty: 1,
+      },
+    })
+    await prisma.supplierStockBatch.create({
+      data: {
+        tenantId, supplierId, productId: replayProduct.id, batchNo: `REPLAY-${suffix}`, kind: 'OPENING',
+        initialQty: 3, remainingQty: 3, createdById: supplierUserId,
+      },
+    })
+    const create = await app.inject({
+      method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' },
+      payload: {
+        supplierId, storeId, expectedDate: '2026-07-20', idempotencyKey: `replay-create-${suffix}`,
+        items: [{ productId: replayProduct.id, quantity: 2, unitPrice: 10 }],
+      },
+    })
+    expect(create.statusCode).toBe(200)
+    const order = create.json()
+    const confirm = await app.inject({
+      method: 'PATCH', url: `/api/orders/${order.id}/confirm`, headers: { 'x-test-actor': 'supplier' },
+    })
+    expect(confirm.statusCode).toBe(200)
+    const payload = {
+      idempotencyKey: `concurrent-replay-${suffix}`,
+      note: '完全相同的并发重试',
+      items: [{ itemId: order.items[0].id, shippedQty: 2 }],
+    }
+    const responses = await Promise.all([0, 1].map(() => app.inject({
+      method: 'PATCH', url: `/api/orders/${order.id}/ship`, headers: { 'x-test-actor': 'supplier' }, payload,
+    })))
+    expect(responses.map(response => response.statusCode)).toEqual([200, 200])
+    const deliveryIds = responses.map(response => response.json().deliveryId)
+    expect(new Set(deliveryIds).size).toBe(1)
+    expect(responses.filter(response => response.json().duplicated === true)).toHaveLength(1)
+    expect(await prisma.deliveryOrder.count({ where: { purchaseOrderId: order.id } })).toBe(1)
+    expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: replayProduct.id } })).stock)).toBe(1)
+    expect(await prisma.supplierStockMovement.count({ where: { tenantId, productId: replayProduct.id, type: 'OUTBOUND_PO' } })).toBe(1)
+  })
+
   it('orders, reserves, ships once, receives actual quantity and creates payable facts', async () => {
     const create = await app.inject({
       method: 'POST',
@@ -591,7 +634,7 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(conflictingDuplicateShip.statusCode).toBe(409)
     expect(await prisma.deliveryOrder.count({ where: { purchaseOrderId: order.id } })).toBe(1)
     expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).stock)).toBe(4)
-    expect(await prisma.supplierStockMovement.count({ where: { tenantId, type: 'OUTBOUND_PO' } })).toBe(1)
+    expect(await prisma.supplierStockMovement.count({ where: { tenantId, productId, type: 'OUTBOUND_PO' } })).toBe(1)
     expect(Number((await prisma.supplierStockBatch.findFirstOrThrow({ where: { tenantId, productId } })).remainingQty)).toBe(4)
 
     const invalidAck = await app.inject({

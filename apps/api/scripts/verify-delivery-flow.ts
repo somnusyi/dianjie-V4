@@ -257,13 +257,15 @@ async function main() {
 
     const firstKey = `delivery-first-${Date.now()}`
     const firstShipBody = JSON.stringify({ idempotencyKey: firstKey, items: [{ itemId: created.body.items[0].id, shippedQty: 2 }] })
-    const firstShip = await api(`/api/orders/${orderId}/ship`, supplierToken, {
+    const concurrentShips = await Promise.all([0, 1].map(() => api(`/api/orders/${orderId}/ship`, supplierToken, {
       method: 'PATCH', body: firstShipBody,
-    })
-    assert.equal(firstShip.status, 200, JSON.stringify(firstShip.body))
+    })))
+    assert.deepEqual(concurrentShips.map(result => result.status), [200, 200], JSON.stringify(concurrentShips.map(result => result.body)))
+    const firstShip = concurrentShips.find(result => result.body.duplicated !== true)!
+    const repeatedShip = concurrentShips.find(result => result.body.duplicated === true)!
+    assert.ok(firstShip)
+    assert.ok(repeatedShip)
     deliveryIds.push(firstShip.body.deliveryId)
-    const repeatedShip = await api(`/api/orders/${orderId}/ship`, supplierToken, { method: 'PATCH', body: firstShipBody })
-    assert.equal(repeatedShip.status, 200)
     assert.equal(repeatedShip.body.deliveryId, firstShip.body.deliveryId, '发货重试必须返回同一配送单')
     assert.equal(repeatedShip.body.duplicated, true)
     const conflictingShipReplay = await api(`/api/orders/${orderId}/ship`, supplierToken, {
@@ -385,7 +387,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, shipmentAuditRollback: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))

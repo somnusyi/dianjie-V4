@@ -200,6 +200,121 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(await prisma.purchaseOrder.count({ where: { tenantId } })).toBe(beforeOrderCount)
   })
 
+  it('serializes receipt delivery, confirmation, rejection and void transitions', async () => {
+    const sqlSuffix = Date.now().toString()
+    const delaySequence = `test_receipt_state_delay_seq_${sqlSuffix}`
+    const delayFunction = `test_receipt_state_delay_fn_${sqlSuffix}`
+    const delayTrigger = `test_receipt_state_delay_trg_${sqlSuffix}`
+    const createReceipt = (marker: string, status: 'DRAFT' | 'PENDING_CONFIRM') => prisma.receipt.create({
+      data: {
+        tenantId,
+        no: `RACE-${marker}-${suffix}`,
+        storeId,
+        supplierId,
+        deliveryDate: new Date('2026-07-20T00:00:00.000Z'),
+        totalAmount: 10,
+        status,
+        isManual: true,
+        createdById: chefUserId,
+        items: {
+          create: {
+            productId,
+            quantity: 1,
+            unitPrice: 10,
+            amount: 10,
+            productCodeSnapshot: `${suffix}-P`,
+            productNameSnapshot: '流程鲜菌',
+            productUnitSnapshot: '斤',
+          },
+        },
+      },
+    })
+    const [rejectRace, voidRace, deliveryRace] = await Promise.all([
+      createReceipt('REJECT', 'PENDING_CONFIRM'),
+      createReceipt('VOID', 'PENDING_CONFIRM'),
+      createReceipt('DELIVERY', 'DRAFT'),
+    ])
+
+    await prisma.$executeRawUnsafe(`CREATE SEQUENCE "${delaySequence}"`)
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION "${delayFunction}"() RETURNS trigger AS $$
+      BEGIN
+        IF (
+          NEW."id" IN ('${rejectRace.id}', '${voidRace.id}')
+          AND NEW."status" = 'CONFIRMED'
+        ) OR (
+          NEW."id" = '${deliveryRace.id}'
+          AND NEW."status" = 'PENDING_CONFIRM'
+        ) THEN
+          PERFORM nextval('${delaySequence}');
+          PERFORM pg_sleep(0.75);
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `)
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER "${delayTrigger}"
+      BEFORE UPDATE OF "status" ON "receipts"
+      FOR EACH ROW EXECUTE FUNCTION "${delayFunction}"()
+    `)
+
+    const sequenceValue = async () => {
+      const [row] = await prisma.$queryRawUnsafe<Array<{ value: bigint; is_called: boolean }>>(
+        `SELECT last_value::bigint AS value, is_called FROM "${delaySequence}"`,
+      )
+      return row.is_called ? row.value : 0n
+    }
+    const waitForDelayedUpdate = async (previous: bigint) => {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (await sequenceValue() > previous) return
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      throw new Error('未观察到入库单状态更新进入并发延迟触发器')
+    }
+
+    try {
+      for (const race of [
+        { receiptId: rejectRace.id, endpoint: 'reject', payload: { reason: '并发拒收' } },
+        { receiptId: voidRace.id, endpoint: 'void', payload: undefined },
+      ]) {
+        const previous = await sequenceValue()
+        const confirmPromise = app.inject({
+          method: 'PATCH', url: `/api/receipts/${race.receiptId}/confirm`,
+          headers: { 'x-test-actor': 'chef' },
+        })
+        await waitForDelayedUpdate(previous)
+        const competingPromise = app.inject({
+          method: 'PATCH', url: `/api/receipts/${race.receiptId}/${race.endpoint}`,
+          headers: { 'x-test-actor': 'chef' },
+          ...(race.payload ? { payload: race.payload } : {}),
+        })
+        const [confirmed, competing] = await Promise.all([confirmPromise, competingPromise])
+        expect(confirmed.statusCode).toBe(200)
+        expect(competing.statusCode).toBe(409)
+        expect((await prisma.receipt.findUniqueOrThrow({ where: { id: race.receiptId } })).status).toBe('ACCOUNTED')
+      }
+
+      const previous = await sequenceValue()
+      const firstDelivery = app.inject({
+        method: 'PATCH', url: `/api/receipts/${deliveryRace.id}/mark-delivered`,
+        headers: { 'x-test-actor': 'admin' },
+      })
+      await waitForDelayedUpdate(previous)
+      const secondDelivery = app.inject({
+        method: 'PATCH', url: `/api/receipts/${deliveryRace.id}/mark-delivered`,
+        headers: { 'x-test-actor': 'admin' },
+      })
+      const deliveryResponses = await Promise.all([firstDelivery, secondDelivery])
+      expect(deliveryResponses.map(response => response.statusCode).sort()).toEqual([200, 409])
+      expect((await prisma.receipt.findUniqueOrThrow({ where: { id: deliveryRace.id } })).status).toBe('PENDING_CONFIRM')
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${delayTrigger}" ON "receipts"`)
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${delayFunction}"()`)
+      await prisma.$executeRawUnsafe(`DROP SEQUENCE IF EXISTS "${delaySequence}"`)
+    }
+  })
+
   it('orders, reserves, ships once, receives actual quantity and creates payable facts', async () => {
     const create = await app.inject({
       method: 'POST',

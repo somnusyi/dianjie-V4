@@ -243,7 +243,8 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     if (isSupplierRole(role)) where.supplierId = supplierId || '__NONE__'
     const receipt = await prisma.receipt.findFirst({ where })
     if (!receipt) return reply.status(400).send({ error: '入库单不存在或状态不对' })
-    await prisma.receipt.update({ where: { id: receipt.id }, data: { status: 'PENDING_CONFIRM' } })
+    const claimed = await prisma.receipt.updateMany({ where, data: { status: 'PENDING_CONFIRM' } })
+    if (claimed.count !== 1) return reply.status(409).send({ error: '入库单已被处理，请刷新后查看' })
     return { success: true }
   })
 
@@ -472,13 +473,15 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     })
     if (!receipt) return reply.status(404).send({ error: '入库单不存在或不可拒收' })
 
-    await prisma.receipt.update({
-      where: { id: receipt.id },
-      data: { status: 'REJECTED', rejectReason: reason, rejectedAt: new Date() },
-    })
-
-    await prisma.opLog.create({
-      data: { tenantId, userId, action: `拒收入库单 ${receipt.no}：${reason}`, target: receipt.no, entityType: 'Receipt', targetId: receipt.id },
+    await prisma.$transaction(async tx => {
+      const claimed = await tx.receipt.updateMany({
+        where,
+        data: { status: 'REJECTED', rejectReason: reason, rejectedAt: new Date() },
+      })
+      if (claimed.count !== 1) throw { statusCode: 409, message: '入库单已被处理，请刷新后查看' }
+      await tx.opLog.create({
+        data: { tenantId, userId, action: `拒收入库单 ${receipt.no}：${reason}`, target: receipt.no, entityType: 'Receipt', targetId: receipt.id },
+      })
     })
 
     return { message: '已拒收，请联系供应商协商处理' }
@@ -496,13 +499,16 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: '当前状态不可作废' })
     }
 
-    await prisma.receipt.update({ where: { id: receipt.id }, data: { status: 'VOID' } })
-    await prisma.paymentSchedule.updateMany({
-      where: { receiptId: receipt.id, status: { in: ['PENDING', 'NOTIFIED'] } },
-      data: { status: 'CANCELLED' },
+    const voidableWhere = { ...where, status: { notIn: ['ACCOUNTED', 'VOID', 'CONFIRMED'] as const } }
+    await prisma.$transaction(async tx => {
+      const claimed = await tx.receipt.updateMany({ where: voidableWhere, data: { status: 'VOID' } })
+      if (claimed.count !== 1) throw { statusCode: 409, message: '入库单已被处理，请刷新后查看' }
+      await tx.paymentSchedule.updateMany({
+        where: { receiptId: receipt.id, status: { in: ['PENDING', 'NOTIFIED'] } },
+        data: { status: 'CANCELLED' },
+      })
+      await tx.opLog.create({ data: { tenantId, userId, action: `作废入库单 ${receipt.no}`, target: receipt.no, entityType: 'Receipt', targetId: receipt.id } })
     })
-
-    await prisma.opLog.create({ data: { tenantId, userId, action: `作废入库单 ${receipt.no}`, target: receipt.no, entityType: 'Receipt', targetId: receipt.id } })
     return { message: '已作废' }
   })
 

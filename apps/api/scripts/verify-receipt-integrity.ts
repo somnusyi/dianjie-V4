@@ -46,6 +46,10 @@ async function main() {
   const failureFunction = `local_receipt_finance_fail_${suffix}`
   const failureTrigger = `local_receipt_finance_trigger_${suffix}`
   let failureTriggerInstalled = false
+  const stateSequence = `local_receipt_state_seq_${suffix}`
+  const stateFunction = `local_receipt_state_fn_${suffix}`
+  const stateTrigger = `local_receipt_state_trigger_${suffix}`
+  let stateArtifactsCreated = false
   const createdStoreIds: string[] = []
   const createdSupplierIds: string[] = []
   const createdUserIds: string[] = []
@@ -200,6 +204,93 @@ async function main() {
     })).status, 200)
     assert.equal((await prisma.receipt.findUniqueOrThrow({ where: { id: receiptId } })).financeVerifiedAt, null)
 
+    const [rejectRaceCreated, voidRaceCreated, deliveryRaceCreated] = await Promise.all([
+      api('/api/receipts', managerTokenA, {
+        method: 'POST', body: JSON.stringify({ ...baseBody, note: '并发拒收验证' }),
+      }),
+      api('/api/receipts', managerTokenA, {
+        method: 'POST', body: JSON.stringify({ ...baseBody, note: '并发作废验证' }),
+      }),
+      api('/api/receipts', managerTokenA, {
+        method: 'POST', body: JSON.stringify({ ...baseBody, note: '并发送达验证' }),
+      }),
+    ])
+    for (const createdReceipt of [rejectRaceCreated, voidRaceCreated, deliveryRaceCreated]) {
+      assert.equal(createdReceipt.status, 201, JSON.stringify(createdReceipt.body))
+    }
+    const rejectRaceId = rejectRaceCreated.body.id as string
+    const voidRaceId = voidRaceCreated.body.id as string
+    const deliveryRaceId = deliveryRaceCreated.body.id as string
+    for (const stateReceiptId of [rejectRaceId, voidRaceId]) {
+      assert.equal((await api(`/api/receipts/${stateReceiptId}/mark-delivered`, supplierTokenA, {
+        method: 'PATCH', body: '{}',
+      })).status, 200)
+    }
+
+    await prisma.$executeRawUnsafe(`CREATE SEQUENCE "${stateSequence}"`)
+    stateArtifactsCreated = true
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION "${stateFunction}"() RETURNS trigger AS $$
+      BEGIN
+        IF (
+          NEW."id" IN ('${rejectRaceId}', '${voidRaceId}')
+          AND NEW."status" = 'CONFIRMED'
+        ) OR (
+          NEW."id" = '${deliveryRaceId}'
+          AND NEW."status" = 'PENDING_CONFIRM'
+        ) THEN
+          PERFORM nextval('${stateSequence}');
+          PERFORM pg_sleep(0.75);
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `)
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER "${stateTrigger}"
+      BEFORE UPDATE OF "status" ON "receipts"
+      FOR EACH ROW EXECUTE FUNCTION "${stateFunction}"()
+    `)
+    const stateSequenceValue = async () => {
+      const [row] = await prisma.$queryRawUnsafe<Array<{ value: bigint; is_called: boolean }>>(
+        `SELECT last_value::bigint AS value, is_called FROM "${stateSequence}"`,
+      )
+      return row.is_called ? row.value : 0n
+    }
+    const waitForStateDelay = async (previous: bigint) => {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (await stateSequenceValue() > previous) return
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      throw new Error('未观察到真实 API 入库单状态进入并发延迟触发器')
+    }
+    for (const race of [
+      { receiptId: rejectRaceId, endpoint: 'reject', body: JSON.stringify({ reason: '并发拒收' }) },
+      { receiptId: voidRaceId, endpoint: 'void', body: '{}' },
+    ]) {
+      const previous = await stateSequenceValue()
+      const confirmPromise = api(`/api/receipts/${race.receiptId}/confirm`, managerTokenA, { method: 'PATCH', body: '{}' })
+      await waitForStateDelay(previous)
+      const competingPromise = api(`/api/receipts/${race.receiptId}/${race.endpoint}`, managerTokenA, {
+        method: 'PATCH', body: race.body,
+      })
+      const [confirmed, competing] = await Promise.all([confirmPromise, competingPromise])
+      assert.equal(confirmed.status, 200, JSON.stringify({ confirmed, competing }))
+      assert.equal(competing.status, 409, JSON.stringify({ confirmed, competing }))
+      assert.equal((await prisma.receipt.findUniqueOrThrow({ where: { id: race.receiptId } })).status, 'ACCOUNTED')
+    }
+    const previousDelivery = await stateSequenceValue()
+    const firstDelivery = api(`/api/receipts/${deliveryRaceId}/mark-delivered`, supplierTokenA, { method: 'PATCH', body: '{}' })
+    await waitForStateDelay(previousDelivery)
+    const secondDelivery = api(`/api/receipts/${deliveryRaceId}/mark-delivered`, supplierTokenA, { method: 'PATCH', body: '{}' })
+    const deliveryStatuses = (await Promise.all([firstDelivery, secondDelivery])).map(result => result.status).sort()
+    assert.deepEqual(deliveryStatuses, [200, 409])
+    assert.equal((await prisma.receipt.findUniqueOrThrow({ where: { id: deliveryRaceId } })).status, 'PENDING_CONFIRM')
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${stateTrigger}" ON "receipts"`)
+    await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${stateFunction}"()`)
+    await prisma.$executeRawUnsafe(`DROP SEQUENCE IF EXISTS "${stateSequence}"`)
+    stateArtifactsCreated = false
+
     const recoveryCreated = await api('/api/receipts', managerTokenA, {
       method: 'POST', body: JSON.stringify({ ...baseBody, note: '财务派生故障恢复验证' }),
     })
@@ -243,6 +334,7 @@ async function main() {
       storeIsolation: true,
       supplierIsolation: true,
       atomicLossConfirmation: true,
+      serializedReceiptTransitions: true,
       financeFailureRecovery: true,
       actualAmount: 14.43,
       lossAmount: 4.44,
@@ -252,6 +344,11 @@ async function main() {
     if (failureTriggerInstalled) {
       await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${failureTrigger}" ON payment_schedules`)
       await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${failureFunction}"()`)
+    }
+    if (stateArtifactsCreated) {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${stateTrigger}" ON "receipts"`)
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${stateFunction}"()`)
+      await prisma.$executeRawUnsafe(`DROP SEQUENCE IF EXISTS "${stateSequence}"`)
     }
     const discoveredReceipts = await prisma.receipt.findMany({
       where: {

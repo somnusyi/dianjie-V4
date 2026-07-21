@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isStoreScoped, isSupplierRole, requireSupplierBinding } from '../../src/lib/auth-scope'
+import { isStoreScoped, isSupplierRole, requireStoreBinding, requireSupplierBinding } from '../../src/lib/auth-scope'
 
 describe('auth scope helpers', () => {
   it('recognizes store and supplier roles', () => {
@@ -7,6 +7,13 @@ describe('auth scope helpers', () => {
     expect(isStoreScoped('ADMIN')).toBe(false)
     expect(isSupplierRole('SUPPLIER_OWNER')).toBe(true)
     expect(isSupplierRole('MANAGER')).toBe(false)
+  })
+
+  it('fails closed when a store account is not bound', () => {
+    expect(requireStoreBinding('MANAGER', 'store-a')).toBe('store-a')
+    expect(requireStoreBinding('ADMIN', undefined)).toBeUndefined()
+    expect(() => requireStoreBinding('KITCHEN_LEAD', undefined)).toThrow()
+    expect(() => requireStoreBinding('PURCHASER', null)).toThrow()
   })
 
   it('returns the supplier binding for supplier accounts', () => {

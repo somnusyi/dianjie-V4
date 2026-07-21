@@ -396,6 +396,15 @@ async function main() {
     assert.equal((await api(`/api/orders/${orderId}`, unboundManagerToken)).status, 404)
     assert.equal((await api(`/api/orders/${orderId}/revisions`, unboundManagerToken)).status, 404)
     assert.equal((await api(`/api/deliveries/${firstShip.body.deliveryId}`, unboundManagerToken)).status, 404)
+    for (const path of ['/api/dashboard/stats', '/api/dashboard/purchase-trend', '/api/v2/dashboard/me']) {
+      assert.equal((await api(path, unboundManagerToken)).status, 403, path)
+    }
+    for (const path of ['/api/inventory', '/api/inventory/snapshot/latest', '/api/inventory/consumptions']) {
+      assert.equal((await api(path, unboundManagerToken)).status, 400, path)
+    }
+    const unboundStores = await api('/api/stores', unboundManagerToken)
+    assert.equal(unboundStores.status, 200, JSON.stringify(unboundStores.body))
+    assert.deepEqual(unboundStores.body, [])
     const unboundAck = await api(`/api/orders/${orderId}/chef-ack`, unboundManagerToken, {
       method: 'PATCH', body: JSON.stringify({ images: ['/local/unbound-ack.jpg'] }),
     })
@@ -513,7 +522,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, orderCreateAuditRollback: true, orderCreateConcurrentReplay: true, orderCreateReplayConflict: true, revisionConcurrentReplay: true, revisionReplayConflict: true, revisionActorsRecorded: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, unboundStoreFailsClosed: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, orderCreateAuditRollback: true, orderCreateConcurrentReplay: true, orderCreateReplayConflict: true, revisionConcurrentReplay: true, revisionReplayConflict: true, revisionActorsRecorded: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, unboundStoreFailsClosed: true, unboundDashboardFailsClosed: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))

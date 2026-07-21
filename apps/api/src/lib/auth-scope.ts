@@ -6,7 +6,9 @@
  * 漏掉了 CHEF / PURCHASER，于是 chef 看到跨店的采购单 / 入库 / 库存等
  * （Round 4 QA 抓到的 P1 数据泄漏）。
  *
- * 用法：`if (storeId && isStoreScoped(role)) where.storeId = storeId`
+ * 判断角色后仍必须处理未绑定门店的情况；不要把可选 `storeId` 直接交给 Prisma，
+ * 否则 `undefined` 会被忽略并退化为租户级查询。需要门店 ID 时使用
+ * `requireStoreBinding`。
  */
 
 const STORE_SCOPED_ROLES = new Set([
@@ -19,6 +21,17 @@ const STORE_SCOPED_ROLES = new Set([
 export function isStoreScoped(role: string | undefined | null): boolean {
   if (!role) return false
   return STORE_SCOPED_ROLES.has(role)
+}
+
+export function requireStoreBinding(
+  role: string | undefined | null,
+  storeId: string | undefined | null,
+): string | undefined {
+  if (!isStoreScoped(role)) return undefined
+  if (!storeId) {
+    throw { statusCode: 403, message: '门店账号未绑定门店，请联系管理员' }
+  }
+  return storeId
 }
 
 /**

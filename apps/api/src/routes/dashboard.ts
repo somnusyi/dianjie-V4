@@ -2,14 +2,15 @@ import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { cached } from '../lib/cache'
-import { isStoreScoped } from '../lib/auth-scope'
+import { isStoreScoped, requireStoreBinding } from '../lib/auth-scope'
 
 export const dashboardRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 总部看板数据 ──────────────────────────────────
   app.get('/stats', { preHandler: [(app as any).authenticate] }, async (req: any) => {
     const { tenantId, role, storeId } = req.user
-    const cacheKey = `dashboard:stats:${tenantId}:${role}:${storeId || 'all'}`
+    const scopedStoreId = requireStoreBinding(role, storeId)
+    const cacheKey = `dashboard:stats:${tenantId}:${role}:${scopedStoreId || 'all'}`
     return cached(cacheKey, 300, async () => {
     const now = dayjs()
     const monthStart = now.startOf('month').toDate()
@@ -17,9 +18,8 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
     const lastMonthEnd = now.subtract(1, 'month').endOf('month').toDate()
 
     // 门店级角色（店长/总厨/采购）只看自己门店
-    const storeFilter = isStoreScoped(role) && storeId ? { storeId } : {}
-    const scheduleStoreFilter = isStoreScoped(role) && storeId
-      ? { receipt: { storeId } } : {}
+    const storeFilter = scopedStoreId ? { storeId: scopedStoreId } : {}
+    const scheduleStoreFilter = scopedStoreId ? { receipt: { storeId: scopedStoreId } } : {}
 
     const [
       monthPurchase, lastMonthPurchase,
@@ -48,7 +48,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
         where: { tenantId, status: 'OVERDUE', ...scheduleStoreFilter },
       }),
       // 待审批数（总部用）
-      role !== 'MANAGER' ? prisma.paymentSchedule.count({
+      !isStoreScoped(role) ? prisma.paymentSchedule.count({
         where: { tenantId, status: 'PENDING_APPROVAL' },
       }) : Promise.resolve(0),
       // 待收货入库单
@@ -57,7 +57,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
       }),
       // 待处理报损
       prisma.lossClaim.count({
-        where: { tenantId, status: 'PENDING' },
+        where: { tenantId, status: 'PENDING', ...storeFilter },
       }),
       // 全部商品（算低库存）
       prisma.product.findMany({
@@ -90,7 +90,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
         take: 6,
       }),
       // 各门店本月采购汇总（总部用）
-      role !== 'MANAGER' ? prisma.receipt.groupBy({
+      !isStoreScoped(role) ? prisma.receipt.groupBy({
         by: ['storeId'],
         where: { tenantId, status: { notIn: ['VOID','REJECTED'] }, createdAt: { gte: monthStart } },
         _sum: { totalAmount: true },
@@ -137,9 +137,10 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
   // ── 采购趋势（近30天）────────────────────────────
   app.get('/purchase-trend', { preHandler: [(app as any).authenticate] }, async (req: any) => {
     const { tenantId, role, storeId } = req.user
+    const scopedStoreId = requireStoreBinding(role, storeId)
     const { days = 30 } = req.query as any
     const since = dayjs().subtract(Number(days), 'day').startOf('day').toDate()
-    const storeFilter = isStoreScoped(role) && storeId ? { storeId } : {}
+    const storeFilter = scopedStoreId ? { storeId: scopedStoreId } : {}
 
     const receipts = await prisma.receipt.findMany({
       where: { tenantId, status: { notIn: ['VOID','REJECTED'] }, createdAt: { gte: since }, ...storeFilter },

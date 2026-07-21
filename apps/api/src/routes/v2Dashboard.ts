@@ -12,6 +12,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { latestStoreInventorySnapshot, type StoreInventorySummary } from '../services/storeInventory'
+import { requireStoreBinding } from '../lib/auth-scope'
 
 const fmtMoney = (n: number) => '¥' + Math.round(n).toLocaleString()
 
@@ -69,8 +70,7 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
     const monthEnd = utcDateForLocal(todayLocal.endOf('month'))
 
     // ── 共享数据：根据角色范围算今日 / 本月 / 7 日营收 ──
-    const isStore = role === 'MANAGER' || role === 'KITCHEN_LEAD'
-    const scopeStoreId = isStore ? storeId : undefined
+    const scopeStoreId = requireStoreBinding(role, storeId)
 
     const [todayAgg, monthAgg, revenue7d] = await Promise.all([
       prisma.revenueRecord.aggregate({

@@ -9,6 +9,9 @@ import { lossClaimRoutes } from '../../src/routes/lossClaims'
 import { reconciliationRoutes } from '../../src/routes/reconciliations'
 import { receiptRoutes } from '../../src/routes/receipts'
 import { inventoryRoutes } from '../../src/routes/inventory'
+import { dashboardRoutes } from '../../src/routes/dashboard'
+import { v2DashboardRoutes } from '../../src/routes/v2Dashboard'
+import { storeRoutes } from '../../src/routes/stores'
 
 const suffix = `supplier-isolation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 let tenantId = ''
@@ -113,6 +116,8 @@ describe('supplier tenant scope (integration)', () => {
       const actor = String(request.headers['x-test-actor'] || 'supplier')
       request.user = actor === 'chef'
         ? { tenantId, storeId, storeIds: [storeId], userId: chefUserId, role: 'KITCHEN_LEAD' }
+        : actor === 'purchaser'
+          ? { tenantId, storeId, storeIds: [storeId], userId: chefUserId, role: 'PURCHASER' }
         : actor === 'unbound-store'
           ? { tenantId, userId: chefUserId, role: 'MANAGER' }
         : actor === 'admin'
@@ -127,6 +132,9 @@ describe('supplier tenant scope (integration)', () => {
     await app.register(reconciliationRoutes, { prefix: '/api/reconciliations' })
     await app.register(receiptRoutes, { prefix: '/api/receipts' })
     await app.register(inventoryRoutes, { prefix: '/api/inventory' })
+    await app.register(dashboardRoutes, { prefix: '/api/dashboard' })
+    await app.register(v2DashboardRoutes, { prefix: '/api/v2/dashboard' })
+    await app.register(storeRoutes, { prefix: '/api/stores' })
     await app.ready()
   })
 
@@ -894,6 +902,94 @@ describe('supplier tenant scope (integration)', () => {
     expect(await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: orderBId } })).toMatchObject({
       status: 'CONFIRMED',
     })
+
+    for (const url of ['/api/dashboard/stats', '/api/dashboard/purchase-trend', '/api/v2/dashboard/me']) {
+      const response = await app.inject({ method: 'GET', url, headers })
+      expect(response.statusCode).toBe(403)
+    }
+    for (const url of ['/api/inventory', '/api/inventory/snapshot/latest', '/api/inventory/consumptions']) {
+      const response = await app.inject({ method: 'GET', url, headers })
+      expect(response.statusCode).toBe(400)
+    }
+    const stores = await app.inject({ method: 'GET', url: '/api/stores', headers })
+    expect(stores.statusCode).toBe(200)
+    expect(stores.json()).toEqual([])
+  })
+
+  it('keeps legacy and v2 dashboards scoped for every store role', async () => {
+    const marker = suffix.slice(-8)
+    const otherStore = await prisma.store.create({
+      data: { tenantId, no: `DASH-${marker}`, name: '看板隔离门店' },
+    })
+    const todayLocal = new Date()
+    const revenueDate = new Date(Date.UTC(todayLocal.getFullYear(), todayLocal.getMonth(), todayLocal.getDate()))
+    let otherReceiptId = ''
+    let otherLossId = ''
+    try {
+      const [boundRevenue, otherRevenue, otherReceipt] = await prisma.$transaction([
+        prisma.revenueRecord.create({
+          data: { storeId, date: revenueDate, amount: 11, source: 'dashboard-scope-test' },
+        }),
+        prisma.revenueRecord.create({
+          data: { storeId: otherStore.id, date: revenueDate, amount: 999, source: 'dashboard-scope-test' },
+        }),
+        prisma.receipt.create({
+          data: {
+            tenantId, no: `RK-DASH-${marker}`, storeId: otherStore.id, supplierId: supplierBId,
+            deliveryDate: revenueDate, totalAmount: 777, status: 'ACCOUNTED', createdById: chefUserId,
+            confirmedAt: new Date(), isManual: true,
+          },
+        }),
+      ])
+      expect(boundRevenue.storeId).toBe(storeId)
+      expect(otherRevenue.storeId).toBe(otherStore.id)
+      otherReceiptId = otherReceipt.id
+      const [schedule, otherLoss] = await prisma.$transaction([
+        prisma.paymentSchedule.create({
+          data: {
+            tenantId, receiptId: otherReceipt.id, supplierId: supplierBId, storeId: otherStore.id,
+            amount: 777, creditDays: 30, confirmedAt: new Date(),
+            dueAt: new Date(Date.now() + 30 * 86_400_000), status: 'PENDING_APPROVAL', needApproval: true,
+          },
+        }),
+        prisma.lossClaim.create({
+          data: {
+            tenantId, no: `LC-DASH-${marker}`, kind: 'INTERNAL_WASTE', payableBasis: 'NOT_APPLICABLE', storeId: otherStore.id,
+            totalLossAmount: 333, description: '看板隔离报损', evidenceImages: [],
+            status: 'PENDING', isManual: true, createdById: chefUserId,
+          },
+        }),
+      ])
+      expect(schedule.storeId).toBe(otherStore.id)
+      otherLossId = otherLoss.id
+
+      const stats = await app.inject({
+        method: 'GET', url: '/api/dashboard/stats', headers: { 'x-test-actor': 'chef' },
+      })
+      expect(stats.statusCode).toBe(200)
+      expect(stats.json()).toMatchObject({ pendingApprovalCount: 0, pendingLossCount: 1, storeBreakdown: [] })
+      expect(stats.json().recentReceipts.some((receipt: any) => receipt.id === otherReceipt.id)).toBe(false)
+
+      const trend = await app.inject({
+        method: 'GET', url: '/api/dashboard/purchase-trend', headers: { 'x-test-actor': 'chef' },
+      })
+      expect(trend.statusCode).toBe(200)
+      expect(trend.json().reduce((sum: number, row: any) => sum + Number(row.amount), 0)).toBe(40)
+
+      const purchaserDashboard = await app.inject({
+        method: 'GET', url: '/api/v2/dashboard/me', headers: { 'x-test-actor': 'purchaser' },
+      })
+      expect(purchaserDashboard.statusCode).toBe(200)
+      expect(purchaserDashboard.json().hero).toMatchObject({
+        value: '¥11', stats: [{ label: '月营收', value: '¥11' }],
+      })
+    } finally {
+      if (otherReceiptId) await prisma.paymentSchedule.deleteMany({ where: { receiptId: otherReceiptId } })
+      if (otherLossId) await prisma.lossClaim.deleteMany({ where: { id: otherLossId } })
+      if (otherReceiptId) await prisma.receipt.deleteMany({ where: { id: otherReceiptId } })
+      await prisma.revenueRecord.deleteMany({ where: { storeId: { in: [storeId, otherStore.id] }, source: 'dashboard-scope-test' } })
+      await prisma.store.delete({ where: { id: otherStore.id } })
+    }
   })
 
   it('cannot list supplier B arrival claims', async () => {

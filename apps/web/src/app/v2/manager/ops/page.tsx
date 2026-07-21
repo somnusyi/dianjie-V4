@@ -13,7 +13,7 @@
  */
 'use client'
 import { useEffect, useState } from 'react'
-import { BottomNav, PeriodPills, Chip } from '@/components/v2'
+import { BottomNav, Chip } from '@/components/v2'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 
 type Profit = {
@@ -63,14 +63,6 @@ function thisMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
-type Period = 'month' | 'prev'
-
-function monthForPeriod(period: Period) {
-  const d = new Date()
-  if (period === 'prev') d.setMonth(d.getMonth() - 1)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-}
-
 type ClosedMonth = {
   month: string
   confirmedAt: string | null
@@ -84,14 +76,21 @@ function closedMonthLabel(month: string, latestYear: string) {
   return year === latestYear ? label : `${year.slice(2)}年${label}`
 }
 
+type ConsumptionSummary = {
+  month: string
+  totalCost: number
+  daysWithData: number
+  top: Array<{ productId: string; code: string; name: string; unit: string; qty: number; cost: number }>
+}
+
 export default function ManagerOpsPage() {
-  const [period, setPeriod] = useState<Period>('month')
+  const [selectedMonth, setSelectedMonth] = useState(thisMonth())
   const [data, setData] = useState<Profit | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [storeName, setStoreName] = useState('本店')
   const [storeId, setStoreId] = useState<string | null>(null)
   const [closedMonths, setClosedMonths] = useState<ClosedMonth[]>([])
-  const [historyMonth, setHistoryMonth] = useState<string | null>(null)
+  const [consumption, setConsumption] = useState<ConsumptionSummary | null>(null)
 
   // 挂载: 解析门店并拉取已确认月结月份列表 (失败时降级为空列表, 不影响主流程)
   useEffect(() => {
@@ -105,19 +104,20 @@ export default function ManagerOpsPage() {
       .catch(() => setClosedMonths([]))
   }, [])
 
-  // 「上月」Tab: 默认显示最近月结月份; 无月结记录时回退上一自然月 (旧行为)
-  const activeMonth = period === 'month'
-    ? monthForPeriod('month')
-    : historyMonth || closedMonths[0]?.month || monthForPeriod('prev')
+  const activeMonth = selectedMonth
 
   useEffect(() => {
     if (!storeId) return
     let cancelled = false
     setData(null)
     setError(null)
+    setConsumption(null)
     apiFetch<Profit>(`/api/profit/store/${storeId}?month=${activeMonth}`)
       .then(result => { if (!cancelled) setData(result) })
       .catch(e => { if (!cancelled) setError(e.message) })
+    apiFetch<ConsumptionSummary>(`/api/stores/${storeId}/consumption/summary?month=${activeMonth}`)
+      .then(result => { if (!cancelled) setConsumption(result) })
+      .catch(() => { if (!cancelled) setConsumption(null) })
     return () => { cancelled = true }
   }, [storeId, activeMonth])
 
@@ -161,47 +161,38 @@ export default function ManagerOpsPage() {
         </div>
       </header>
 
+      {/* 单行月份条: 本月 + 已确认月结的历史月份, 全局仅一个选中态, 超出横向滑动 */}
       <div className="px-4 mt-2">
-        <PeriodPills
-          value={period} onChange={value => setPeriod(value as Period)}
-          options={[
-            { label: '本月', value: 'month' },
-            { label: '上月', value: 'prev' },
-          ]}
-        />
-      </div>
-
-      {period === 'prev' && closedMonths.length > 0 && (
-        <div className="px-4 mt-2 flex items-center gap-1.5 overflow-x-auto">
-          <span className="shrink-0 text-micro text-gray3">财务月结</span>
-          <div className="inline-flex bg-bg rounded-cta p-0.5">
-            {closedMonths.map(close => {
-              const value = historyMonth || closedMonths[0]?.month
-              const selected = close.month === value
-              return (
-                <button
-                  key={close.month}
-                  onClick={() => setHistoryMonth(close.month)}
-                  className={`px-3 py-1 text-button rounded-cta transition whitespace-nowrap ${
-                    selected ? 'bg-ink text-white' : 'text-gray2 hover:text-ink'
-                  }`}
-                >
-                  {closedMonthLabel(close.month, closedMonths[0]!.month.split('-')[0])}
-                </button>
-              )
-            })}
-          </div>
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <MonthPill
+            label={`${Number(thisMonth().split('-')[1])}月·本月`}
+            selected={selectedMonth === thisMonth()}
+            onClick={() => setSelectedMonth(thisMonth())}
+          />
+          {closedMonths
+            .filter(close => close.month !== thisMonth())
+            .map(close => (
+              <MonthPill
+                key={close.month}
+                label={closedMonthLabel(close.month, closedMonths[0]!.month.split('-')[0])}
+                closed
+                selected={selectedMonth === close.month}
+                onClick={() => setSelectedMonth(close.month)}
+              />
+            ))}
         </div>
-      )}
-
-      {period === 'prev' && closedMonths.length === 0 && (
-        <p className="px-4 mt-2 text-micro text-gray3">暂无历史财务月结，显示上一自然月</p>
-      )}
+      </div>
 
       <OperatingOverview
         loading={!data && !error}
         metrics={metrics}
         comparison={r?.comparison}
+      />
+
+      <FoodCostCard
+        summary={consumption}
+        operatingRevenue={operatingRevenue}
+        monthLabel={`${Number(activeMonth.split('-')[1])}月`}
       />
 
       {data?.accountingClose && (
@@ -283,6 +274,86 @@ export default function ManagerOpsPage() {
         onFab={() => location.href = '/v2/manager/home'}
       />
     </div>
+  )
+}
+
+function MonthPill({ label, closed, selected, onClick }: {
+  label: string
+  closed?: boolean
+  selected: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`shrink-0 px-3 py-1 text-button rounded-cta transition flex items-center ${
+        selected ? 'bg-ink text-white' : 'bg-bg text-gray2 hover:text-ink'
+      }`}
+    >
+      {label}
+      {closed && (
+        <span
+          title="财务月结已确认"
+          className="ml-1.5 inline-block w-1.5 h-1.5 rounded-full bg-green"
+        />
+      )}
+    </button>
+  )
+}
+
+/** 食材成本卡: 当前选中月份的 BOM/报损消耗口径 (与 P&L 的食材成本不同源) */
+function FoodCostCard({ summary, operatingRevenue, monthLabel }: {
+  summary: ConsumptionSummary | null
+  operatingRevenue: number
+  monthLabel: string
+}) {
+  const total = Number(summary?.totalCost || 0)
+  const days = summary?.daysWithData ?? 0
+  const costRate = operatingRevenue > 0 ? (total / operatingRevenue * 100).toFixed(1) : null
+
+  return (
+    <Section title="食材成本" right={summary && days > 0 ? `有数据 ${days} 天` : ''}>
+      <div className="bg-white rounded-card border border-border p-3">
+        {!summary ? (
+          <p className="text-caption text-gray3 text-center py-2">加载中…</p>
+        ) : days === 0 ? (
+          <p className="text-caption text-gray3 text-center py-2">{monthLabel}日报未确认，暂无消耗数据</p>
+        ) : (
+          <>
+            <div className="flex items-end justify-between">
+              <div>
+                <div className="text-caption text-gray2">消耗总金额</div>
+                <div className="font-num text-[22px] leading-tight font-semibold tracking-tight mt-1">
+                  ¥{formatMoney(total)}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-caption text-gray2">食材成本率</div>
+                <div className="font-num text-[22px] leading-tight font-semibold tracking-tight mt-1">
+                  {costRate === null ? '—' : `${costRate}%`}
+                </div>
+              </div>
+            </div>
+            {summary.top.length > 0 && (
+              <ul className="mt-3 pt-3 border-t border-border space-y-1.5">
+                {summary.top.map((item, index) => (
+                  <li key={item.productId} className="flex items-center gap-2">
+                    <span className="w-4 text-micro text-gray3 font-num">{index + 1}</span>
+                    <span className="flex-1 min-w-0 text-body truncate">{item.name}</span>
+                    <span className="text-micro text-gray3 font-num shrink-0">{item.qty} {item.unit}</span>
+                    <span className="font-num text-body shrink-0 w-20 text-right">¥{formatMoney(item.cost)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+        <p className="text-micro text-gray3 mt-3 pt-2 border-t border-border">
+          消耗仅含已发布 BOM 的菜品扣减与门店报损；日报未确认的日期无数据
+        </p>
+      </div>
+    </Section>
   )
 }
 

@@ -81,10 +81,12 @@ async function main() {
       }),
     ])
     createdUserIds.push(managerA.id, managerB.id, supplierUserA.id, supplierUserB.id, financeUser.id)
+    // main 新增: 入库确认前必须完成采购单位→库存单位换算核验, 脚本商品显式补齐已核验合约
+    const verifiedConversion = { unit: '斤', inventoryUnit: 'g', inventoryUnitsPerPurchaseUnit: 500, unitConversionStatus: 'VERIFIED' as const }
     const [productA1, productA2, productB] = await Promise.all([
-      prisma.product.create({ data: { tenantId: tenant.id, supplierId: supplierA.id, code: `RVP-${suffix}-A1`, name: '验证菌菇', price: 3.33 } }),
-      prisma.product.create({ data: { tenantId: tenant.id, supplierId: supplierA.id, code: `RVP-${suffix}-A2`, name: '验证蔬菜', price: 1.11 } }),
-      prisma.product.create({ data: { tenantId: tenant.id, supplierId: supplierB.id, code: `RVP-${suffix}-B1`, name: '跨供应商商品', price: 9.99 } }),
+      prisma.product.create({ data: { tenantId: tenant.id, supplierId: supplierA.id, code: `RVP-${suffix}-A1`, name: '验证菌菇', price: 3.33, ...verifiedConversion } }),
+      prisma.product.create({ data: { tenantId: tenant.id, supplierId: supplierA.id, code: `RVP-${suffix}-A2`, name: '验证蔬菜', price: 1.11, ...verifiedConversion } }),
+      prisma.product.create({ data: { tenantId: tenant.id, supplierId: supplierB.id, code: `RVP-${suffix}-B1`, name: '跨供应商商品', price: 9.99, ...verifiedConversion } }),
     ])
     createdProductIds.push(productA1.id, productA2.id, productB.id)
 

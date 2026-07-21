@@ -139,7 +139,8 @@ async function main() {
     })
     assert.equal(first.status, 201, JSON.stringify(first.body))
     createdClaimIds.push(first.body.id)
-    assert.equal(Number(first.body.totalLossAmount), 21.66)
+    // main 语义: 金额按完整移动均价 (10.833333) 计算后两位舍入 = 21.67, unitPrice 仍为两位兼容展示
+    assert.equal(Number(first.body.totalLossAmount), 21.67)
     assert.equal(Number(first.body.items[0].unitPrice), 10.83, '必须使用盘点+收货形成的移动平均成本')
     assert.equal(first.body.status, 'AUTO_APPROVED')
 

@@ -38,10 +38,11 @@ async function main() {
   const tenant = await prisma.tenant.findUniqueOrThrow({ where: { slug: TENANT_SLUG } })
   const store = await prisma.store.findFirstOrThrow({ where: { tenantId: tenant.id } })
   const manager = await prisma.user.findFirstOrThrow({ where: { tenantId: tenant.id, role: 'MANAGER', storeId: store.id } })
+  // main 新增供应商库存模式: 本脚本断言物理库存扣减与流水, 需 STRICT
   const supplier = await prisma.supplier.upsert({
     where: { tenantId_no: { tenantId: tenant.id, no: 'LOCAL-DELIVERY-VERIFY' } },
-    update: { status: 'ENABLED', sourceType: 'MAIN_SUPPLIER' },
-    create: { tenantId: tenant.id, no: 'LOCAL-DELIVERY-VERIFY', name: '本地配送验证供应商', status: 'ENABLED', sourceType: 'MAIN_SUPPLIER' },
+    update: { status: 'ENABLED', sourceType: 'MAIN_SUPPLIER', inventoryMode: 'STRICT' },
+    create: { tenantId: tenant.id, no: 'LOCAL-DELIVERY-VERIFY', name: '本地配送验证供应商', status: 'ENABLED', sourceType: 'MAIN_SUPPLIER', inventoryMode: 'STRICT' },
   })
   const password = await bcrypt.hash(PASSWORD, 10)
   const supplierUser = await prisma.user.upsert({
@@ -54,6 +55,8 @@ async function main() {
     data: {
       tenantId: tenant.id, supplierId: supplier.id, code: `LOCAL-DELIVERY-${runMarker}`,
       name: `配送验证菌菇-${runMarker}`, unit: 'kg', price: 6.25, stock: 100, status: 'ENABLED',
+      // main 新增: 入库确认需已核验的采购单位→库存单位换算合约
+      inventoryUnit: 'g', inventoryUnitsPerPurchaseUnit: 1000, unitConversionStatus: 'VERIFIED',
     },
   })
   await prisma.supplierStockBatch.create({

@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import { UserMenu } from '@/components/v2/user-menu'
+import { formatQuantity } from '@/lib/format'
 
 type InventorySummary = {
   status: 'AVAILABLE' | 'NO_BASELINE'
@@ -206,7 +207,7 @@ export default function ManagerInventoryPage() {
                         <div className="text-micro text-gray3 truncate mt-0.5">{item.spec || item.code} · 移动均价 ¥{Number(item.avgUnitCost).toFixed(3)}/{item.unit}</div>
                       </div>
                       <div className="text-right shrink-0">
-                        <div className={`font-num text-h2 ${item.stock <= 0 ? 'text-red-fg' : 'text-ink'}`}>{Number(item.stock)} <span className="text-micro font-normal">{item.unit}</span></div>
+                        <div className={`font-num text-h2 ${item.stock <= 0 ? 'text-red-fg' : 'text-ink'}`}>{formatQuantity(Number(item.stock), item.unit)}</div>
                         <div className="font-num text-micro text-gray3">¥{Number(item.inventoryValue).toFixed(2)}</div>
                         <button type="button" onClick={() => configurePolicy(item)} className="mt-1 text-micro text-amber-fg">
                           {item.minStock > 0 ? `安全线 ${item.minStock}` : '设置安全线'}

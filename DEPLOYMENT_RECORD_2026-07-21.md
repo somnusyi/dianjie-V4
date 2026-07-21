@@ -90,3 +90,7 @@
 ## 第 7 次：库存数量格式化（92b4db5）
 - 内容：门店实时预估库存 + 盘点单账面/实盘数量统一 formatQuantity 可读化（自动 kg 进位、去尾零）
 - 部署：DEPLOY_EXIT_CODE=0，.deployed-commit=92b4db552e43…，pm2 全部 online
+
+## 第 8 次：数据质量待办通知事件（690d63d）
+- 内容：新增 DATA_QUALITY_TASK 企微通知事件（主数据/规格待确认 → 总厨，聚合成一条卡片）；附一次性触发脚本 scripts/notify-chef-data-tasks.ts
+- 部署：DEPLOY_EXIT_CODE=0，.deployed-commit=690d63d9dd3c…，pm2 全部 online

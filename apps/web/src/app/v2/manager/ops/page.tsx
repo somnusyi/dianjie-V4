@@ -15,6 +15,7 @@
 import { useEffect, useState } from 'react'
 import { BottomNav, Chip } from '@/components/v2'
 import { apiFetch, getUser } from '@/lib/v2-auth'
+import { formatQuantity } from '@/lib/format'
 
 type Profit = {
   store: { name: string }
@@ -341,7 +342,7 @@ function FoodCostCard({ summary, operatingRevenue, monthLabel }: {
                   <li key={item.productId} className="flex items-center gap-2">
                     <span className="w-4 text-micro text-gray3 font-num">{index + 1}</span>
                     <span className="flex-1 min-w-0 text-body truncate">{item.name}</span>
-                    <span className="text-micro text-gray3 font-num shrink-0">{item.qty} {item.unit}</span>
+                    <span className="text-micro text-gray3 font-num shrink-0">{formatQuantity(item.qty, item.unit)}</span>
                     <span className="font-num text-body shrink-0 w-20 text-right">¥{formatMoney(item.cost)}</span>
                   </li>
                 ))}

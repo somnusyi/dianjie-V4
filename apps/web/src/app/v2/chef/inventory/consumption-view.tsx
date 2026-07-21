@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { EmptyState, SkeletonCard, FriendlyError } from '@/components/v2/skeleton'
 import { apiFetch, getUser } from '@/lib/v2-auth'
+import { formatQuantity } from '@/lib/format'
 
 type DailyItem = {
   productId: string
@@ -51,7 +52,6 @@ function shiftDay(date: string, delta: number) {
 }
 
 const money = (n: number) => `¥${Number(n || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-const qtyText = (n: number) => Number(n.toFixed(3)).toLocaleString('zh-CN')
 
 export default function ChefConsumptionView() {
   const [storeId] = useState<string | null>(() => {
@@ -161,7 +161,7 @@ export default function ChefConsumptionView() {
                       </div>
                     </div>
                     <div className="text-right shrink-0">
-                      <div className="font-num text-body">{qtyText(item.qty)} {item.unit}</div>
+                      <div className="font-num text-body">{formatQuantity(item.qty, item.unit)}</div>
                       <div className="text-micro text-gray3 font-num">{money(item.cost)}</div>
                     </div>
                     <ChangeBadge changePct={item.changePct} />
@@ -182,7 +182,7 @@ export default function ChefConsumptionView() {
                                 ? <Chip tone="orange">人工报损</Chip>
                                 : <span className="text-body flex-1 min-w-0 truncate">{row.dishName || '其他扣减'}</span>}
                               {row.manual && <span className="flex-1" />}
-                              <span className="font-num text-caption text-gray2 shrink-0">{qtyText(row.qty)} {detail.product.unit}</span>
+                              <span className="font-num text-caption text-gray2 shrink-0">{formatQuantity(row.qty, detail.product.unit)}</span>
                               <span className="font-num text-caption shrink-0 w-20 text-right">{money(row.cost)}</span>
                             </li>
                           ))}

@@ -51,7 +51,7 @@ const inboundItemSchema = z.object({
   batchNo:         z.string().trim().min(1).max(80).optional(),
   manufactureDate: dateSchema,   // 生产日期 YYYY-MM-DD (可空)
   expiryDate:      dateSchema,   // 到期日期 (前端按 生产日期+保质期天数 自动算或手动改)
-}).superRefine((item, ctx) => {
+}).strict().superRefine((item, ctx) => {
   if (item.manufactureDate && item.expiryDate && item.expiryDate < item.manufactureDate) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['expiryDate'], message: '到期日期不能早于生产日期' })
   }
@@ -61,7 +61,7 @@ const inboundSchema = z.object({
   items:     z.array(inboundItemSchema).min(1).max(500),
   source:    z.enum(['MANUAL', 'EXCEL']).default('MANUAL'),
   reason:    z.string().trim().max(120).optional(),  // 整批理由
-}).superRefine((value, ctx) => {
+}).strict().superRefine((value, ctx) => {
   const customBatchKeys = value.items
     .filter(item => item.batchNo)
     .map(item => `${item.productId}\u0000${item.batchNo}`)
@@ -74,13 +74,13 @@ const adjustSchema = z.object({
   productId: z.string(),
   newQty:    stockQtySchema,
   reason:    z.string().trim().min(1, '请说明盘点/调整原因').max(120),
-})
+}).strict()
 
 const lossSchema = z.object({
   productId: z.string(),
   qty:       stockQtySchema.refine(value => value > 0, '报损数量必须 > 0'),
   reason:    z.string().trim().min(1, '请说明报损原因').max(120),
-})
+}).strict()
 
 type SupplierContext = { tenantId: string; userId: string; supplierId: string }
 
@@ -514,9 +514,9 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
         category: z.string().trim().max(40).optional(),
         unit:     z.string().trim().max(10).optional().default('件'),
         qty:      stockQtySchema,
-      })).min(1).max(1000),
+      }).strict()).min(1).max(1000),
       reason:    z.string().trim().max(120).default('全量库存导入'),
-    })
+    }).strict()
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { items, reason } = parsed.data

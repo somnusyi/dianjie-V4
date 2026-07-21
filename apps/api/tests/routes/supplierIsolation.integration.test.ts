@@ -247,6 +247,27 @@ describe('supplier tenant scope (integration)', () => {
     }
   })
 
+  it('rejects unknown supplier stock command fields before writes', async () => {
+    const beforeProduct = await prisma.product.findUniqueOrThrow({ where: { id: productAId } })
+    const beforeMovements = await prisma.supplierStockMovement.count({ where: { tenantId, productId: productAId } })
+    const beforeBatches = await prisma.supplierStockBatch.count({ where: { tenantId, productId: productAId } })
+    const requests = [
+      { url: '/api/supplier/stock/inbound', payload: { items: [{ productId: productAId, qty: 1 }], unexpected: true } },
+      { url: '/api/supplier/stock/inbound', payload: { items: [{ productId: productAId, qty: 1, unexpected: true }] } },
+      { url: '/api/supplier/stock/adjust', payload: { productId: productAId, newQty: 8, reason: '严格命令验证', unexpected: true } },
+      { url: '/api/supplier/stock/loss', payload: { productId: productAId, qty: 1, reason: '严格命令验证', unexpected: true } },
+      { url: '/api/supplier/stock/import-snapshot', payload: { items: [{ name: 'A 商品', qty: 8 }], unexpected: true } },
+      { url: '/api/supplier/stock/import-snapshot', payload: { items: [{ name: 'A 商品', qty: 8, unexpected: true }] } },
+    ]
+    for (const request of requests) {
+      const response = await app.inject({ method: 'POST', ...request })
+      expect(response.statusCode).toBe(400)
+    }
+    expect(await prisma.product.findUniqueOrThrow({ where: { id: productAId } })).toMatchObject({ stock: beforeProduct.stock })
+    expect(await prisma.supplierStockMovement.count({ where: { tenantId, productId: productAId } })).toBe(beforeMovements)
+    expect(await prisma.supplierStockBatch.count({ where: { tenantId, productId: productAId } })).toBe(beforeBatches)
+  })
+
   it('serializes custom inbound batch numbers without partial stock writes', async () => {
     const beforeStock = Number((await prisma.product.findUniqueOrThrow({ where: { id: productAId } })).stock)
     const duplicateInRequest = await app.inject({

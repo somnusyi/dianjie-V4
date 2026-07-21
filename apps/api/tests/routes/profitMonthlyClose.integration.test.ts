@@ -75,4 +75,26 @@ describe('store monthly close projection (integration)', () => {
     })
     expect(response.statusCode).toBe(409)
   })
+
+  it('lists confirmed close months descending for the history month picker', async () => {
+    await prisma.storeMonthlyClose.create({
+      data: {
+        tenantId, storeId, month: '2026-04', status: 'CONFIRMED',
+        operatingRevenue: 50, revenueExTax: 49, profitBeforeTax: 10, netProfit: 8,
+        sourceFilename: 'monthly-close-04.xlsx', sourceHash: 'b'.repeat(64),
+        confirmedAt: new Date(), confirmedById: userId,
+      },
+    })
+    await prisma.storeMonthlyClose.create({
+      data: {
+        tenantId, storeId, month: '2026-05', status: 'DRAFT',
+        operatingRevenue: 60, revenueExTax: 59, profitBeforeTax: 12, netProfit: 10,
+        sourceFilename: 'monthly-close-05-draft.xlsx', sourceHash: 'c'.repeat(64),
+      },
+    })
+
+    const response = await app.inject({ method: 'GET', url: `/api/profit/store/${storeId}/closed-months` })
+    expect(response.statusCode).toBe(200)
+    expect(response.json().months.map((row: any) => row.month)).toEqual(['2026-06', '2026-04'])
+  })
 })

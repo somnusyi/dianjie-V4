@@ -629,6 +629,47 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(rejected.statusCode).toBe(200)
   })
 
+  it('rejects unknown order creation fields and confirmation bodies before writes', async () => {
+    const beforeOrderCount = await prisma.purchaseOrder.count({ where: { tenantId } })
+    const basePayload = {
+      supplierId, storeId, expectedDate: '2026-07-20',
+      items: [{ productId, quantity: 1, unitPrice: 10 }],
+    }
+    for (const payload of [
+      { ...basePayload, unexpected: true },
+      { ...basePayload, items: [{ ...basePayload.items[0], unexpected: true }] },
+      { ...basePayload, note: 'x'.repeat(501) },
+    ]) {
+      const response = await app.inject({
+        method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' }, payload,
+      })
+      expect(response.statusCode).toBe(400)
+    }
+    expect(await prisma.purchaseOrder.count({ where: { tenantId } })).toBe(beforeOrderCount)
+
+    const create = await app.inject({
+      method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' },
+      payload: { ...basePayload, idempotencyKey: `confirm-body-${suffix}` },
+    })
+    expect(create.statusCode).toBe(200)
+    const order = create.json()
+    const invalidConfirm = await app.inject({
+      method: 'PATCH', url: `/api/orders/${order.id}/confirm`, headers: { 'x-test-actor': 'supplier' },
+      payload: { unexpected: true },
+    })
+    expect(invalidConfirm.statusCode).toBe(400)
+    expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })).status).toBe('SUBMITTED')
+    expect(await prisma.supplierStockReservation.count({ where: { purchaseOrderId: order.id } })).toBe(0)
+    expect(await prisma.purchaseOrderEvent.count({
+      where: { purchaseOrderId: order.id, eventType: 'ACCEPTED' },
+    })).toBe(0)
+
+    const validConfirm = await app.inject({
+      method: 'PATCH', url: `/api/orders/${order.id}/confirm`, headers: { 'x-test-actor': 'supplier' },
+    })
+    expect(validConfirm.statusCode).toBe(200)
+  })
+
   it('rejects a stale chef acknowledgement after supplier delivery wins the race', async () => {
     const sqlSuffix = Date.now().toString()
     const delaySequence = `test_chef_ack_delay_seq_${sqlSuffix}`

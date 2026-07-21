@@ -86,6 +86,22 @@ async function main() {
   const cleanupOrders: Array<{ id: string; no: string | null }> = []
 
   try {
+    const createBoundaryPayload = {
+      supplierId: supplier.id,
+      expectedDate: '2026-07-16',
+      items: [{ productId: productA.id, quantity: 1, unitPrice: 0 }],
+    }
+    for (const invalidPayload of [
+      { ...createBoundaryPayload, unexpected: true },
+      { ...createBoundaryPayload, items: [{ ...createBoundaryPayload.items[0], unexpected: true }] },
+      { ...createBoundaryPayload, note: 'x'.repeat(501) },
+    ]) {
+      const invalidCreate = await api('/api/orders', managerToken, {
+        method: 'POST', body: JSON.stringify(invalidPayload),
+      })
+      assert.equal(invalidCreate.status, 400, `订货创建必须拒绝未知或超长字段: ${JSON.stringify(invalidCreate.body)}`)
+    }
+
     for (const transition of [
       { marker: 'cancel', endpoint: 'cancel', token: managerToken, maxLength: 200, validReason: '门店正常撤回' },
       { marker: 'reject', endpoint: 'reject', token: supplierToken, maxLength: 100, validReason: '供应商正常拒单' },
@@ -192,6 +208,14 @@ async function main() {
     assert.equal(detail.body.original.items.length, 1)
     assert.equal(detail.body.current.items.length, 2)
     assert.equal(detail.body.revisions[0].status, 'APPROVED')
+
+    const invalidConfirm = await api(`/api/orders/${orderId}/confirm`, supplierToken, {
+      method: 'PATCH', body: JSON.stringify({ unexpected: true }),
+    })
+    assert.equal(invalidConfirm.status, 400, '接单必须拒绝未使用字段')
+    const beforeConfirm = await api(`/api/orders/${orderId}`, supplierToken)
+    assert.equal(beforeConfirm.body.status, 'SUBMITTED')
+    assert.equal(beforeConfirm.body.timeline.filter((event: any) => event.eventType === 'ACCEPTED').length, 0)
 
     const confirmed = await api(`/api/orders/${orderId}/confirm`, supplierToken, { method: 'PATCH', body: '{}' })
     assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body))

@@ -46,16 +46,16 @@ const orderItemSchema = z.object({
   productId: z.string().min(1, 'productId 必填'),
   quantity:  z.number().positive('quantity 必须 > 0').max(PURCHASE_QUANTITY_MAX, '订货数量超过系统上限'),
   unitPrice: z.number().nonnegative('unitPrice 不能为负'),
-})
+}).strict()
 const orderCreateSchema = z.object({
   storeId:      z.string().optional(),
   supplierId:   z.string().min(1, 'supplierId 必填'),
   expectedDate: calendarDateSchema,
-  note:         z.string().optional().default(''),
+  note:         z.string().max(500, '备注最长 500 字').optional().default(''),
   items:        z.array(orderItemSchema).min(1, '至少一条采购明细').max(500, '单次最多 500 条采购明细'),
   // 防重复提交: 客户端 uuid, 后端缓存 60s 拦截重复 POST
   idempotencyKey: z.string().max(80).optional(),
-})
+}).strict()
 
 const revisionCreateSchema = z.object({
   reason: z.string().trim().min(2, '请填写改单原因').max(200),
@@ -80,6 +80,8 @@ const orderCancelSchema = z.object({
 const orderRejectSchema = z.object({
   reason: z.string().trim().min(1, '请说明拒单原因').max(100, '拒单原因最长 100 字'),
 }).strict()
+
+const emptyCommandSchema = z.object({}).strict()
 
 const deliveryShipSchema = z.object({
   note: z.string().trim().max(200).optional(),
@@ -982,7 +984,9 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // ── 供应商接单 ────────────────────────────────
-  app.patch('/:id/confirm', { preHandler: [(app as any).authenticate] }, async (req: any) => {
+  app.patch('/:id/confirm', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
+    const parsed = emptyCommandSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { tenantId, userId, role } = req.user
     const { id } = req.params as any
     if (!isSupplierRole(role) && !['ADMIN', 'SUPER_ADMIN'].includes(role)) throw { statusCode: 403, message: '无权限' }

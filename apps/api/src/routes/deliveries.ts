@@ -28,7 +28,7 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
     const { tenantId, role, storeId: actorStoreId, supplierId: actorSupplierId } = req.user
     const q = parsed.data
     const where: any = { tenantId }
-    if (isStoreScoped(role)) where.storeId = actorStoreId
+    if (isStoreScoped(role)) where.storeId = actorStoreId || '__NONE__'
     else if (q.storeId) where.storeId = q.storeId
     if (isSupplierRole(role)) where.supplierId = requireSupplierCapability(role, actorSupplierId, 'order.read')
     else if (q.supplierId) where.supplierId = q.supplierId
@@ -97,7 +97,7 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
   app.get('/:id', { preHandler: [(app as any).authenticate] }, async (req: any) => {
     const { tenantId, role, storeId, supplierId } = req.user
     const where: any = { id: req.params.id, tenantId }
-    if (isStoreScoped(role)) where.storeId = storeId
+    if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
     if (isSupplierRole(role)) where.supplierId = requireSupplierCapability(role, supplierId, 'order.read')
     const delivery = await prisma.deliveryOrder.findFirst({
       where,

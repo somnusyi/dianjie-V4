@@ -113,6 +113,8 @@ describe('supplier tenant scope (integration)', () => {
       const actor = String(request.headers['x-test-actor'] || 'supplier')
       request.user = actor === 'chef'
         ? { tenantId, storeId, storeIds: [storeId], userId: chefUserId, role: 'KITCHEN_LEAD' }
+        : actor === 'unbound-store'
+          ? { tenantId, userId: chefUserId, role: 'MANAGER' }
         : actor === 'admin'
           ? { tenantId, userId: chefUserId, role: 'ADMIN' }
           : { tenantId, supplierId: supplierAId, userId: userAId, role: 'SUPPLIER_OWNER' }
@@ -864,6 +866,34 @@ describe('supplier tenant scope (integration)', () => {
     expect(receipt.statusCode).toBe(404)
     const invalidReceiptStatus = await app.inject({ method: 'GET', url: '/api/receipts?status=UNKNOWN' })
     expect(invalidReceiptStatus.statusCode).toBe(400)
+  })
+
+  it('fails closed when a store-scoped role has no store binding', async () => {
+    const headers = { 'x-test-actor': 'unbound-store' }
+    for (const url of ['/api/orders?page=1&pageSize=100', '/api/deliveries?page=1&pageSize=100', '/api/receipts?page=1&pageSize=100']) {
+      const response = await app.inject({ method: 'GET', url, headers })
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toMatchObject({ total: 0, items: [] })
+    }
+
+    for (const url of [
+      `/api/orders/${orderBId}`,
+      `/api/orders/${orderBId}/revisions`,
+      `/api/deliveries/${deliveryBId}`,
+      `/api/receipts/${receiptBId}`,
+    ]) {
+      const response = await app.inject({ method: 'GET', url, headers })
+      expect(response.statusCode).toBe(404)
+    }
+
+    const cancel = await app.inject({
+      method: 'PATCH', url: `/api/orders/${orderBId}/cancel`, headers,
+      payload: { reason: '未绑定门店账号不应能撤回订单' },
+    })
+    expect(cancel.statusCode).toBe(400)
+    expect(await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: orderBId } })).toMatchObject({
+      status: 'CONFIRMED',
+    })
   })
 
   it('cannot list supplier B arrival claims', async () => {

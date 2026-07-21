@@ -103,7 +103,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     // 供应商: 强制按自家 supplierId 过滤
     if (isSupplierRole(role)) where.supplierId = req.user.supplierId || '__NONE__'
     else if (supplierId) where.supplierId = supplierId
-    if (isStoreScoped(role)) where.storeId = storeId
+    if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
     else if (qStore) where.storeId = qStore
 
     const pagination = parsePagination({ page, pageSize }, { defaultPageSize: 20, maxPageSize: 100 })
@@ -133,7 +133,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role, storeId } = req.user
     const detailWhere: any = { id: req.params.id, tenantId }
     if (isSupplierRole(role)) detailWhere.supplierId = req.user.supplierId || '__NONE__'
-    if (isStoreScoped(role)) detailWhere.storeId = storeId
+    if (isStoreScoped(role)) detailWhere.storeId = storeId || '__NONE__'
     const receipt = await prisma.receipt.findFirst({
       where: detailWhere,
       include: {

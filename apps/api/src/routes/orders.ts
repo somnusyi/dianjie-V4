@@ -188,8 +188,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
 
     const scopedSupplierId = requireSupplierBinding(role, userSupplierId)
 
-    // 门店级角色（店长/总厨/采购）只看自己门店
-    if (isStoreScoped(role) && storeId) where.storeId = storeId
+    // 门店级角色（店长/总厨/采购）只看自己门店；未绑定门店时必须 fail-closed
+    if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
     // 供应商只看发给自己的
     if (scopedSupplierId) where.supplierId = scopedSupplierId
 
@@ -261,7 +261,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     // 按角色 scope 过滤，避免店长/供应商越权读到别家单据
     const where: any = { id, tenantId }
     const scopedSupplierId = requireSupplierBinding(role, userSupplierId)
-    if (isStoreScoped(role) && storeId) where.storeId = storeId
+    if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
     if (scopedSupplierId) where.supplierId = scopedSupplierId
     const order = await prisma.purchaseOrder.findFirst({
       where,
@@ -592,7 +592,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     // 2026-05-29 客户反馈: 撤回窗口放宽到"供应商发货前" (SUBMITTED 待接单 + CONFIRMED 已接单待发货)
     // DELIVERING 起就是已发货, 货已经在路上, 不让撤; 该报损/拒收走原流程
     const where: any = { id, tenantId, status: { in: ['SUBMITTED', 'CONFIRMED'] } as any }
-    if (isStoreScoped(role) && storeId) where.storeId = storeId
+    if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
     // 总厨只能撤自己下的单 (代下), 不能撤厨师长/店长下的单
     if (role === 'CHEF_DIRECTOR') where.createdById = userId
     const order = await prisma.purchaseOrder.findFirst({ where })
@@ -817,7 +817,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const where: any = { id, tenantId }
     const scopedSupplierId = requireSupplierBinding(role, supplierId)
     if (scopedSupplierId) where.supplierId = scopedSupplierId
-    if (isStoreScoped(role)) where.storeId = storeId
+    if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
     const exists = await prisma.purchaseOrder.findFirst({ where, select: { id: true } })
     if (!exists) return reply.status(404).send({ error: '订单不存在' })
     return prisma.purchaseOrderRevision.findMany({
@@ -1460,7 +1460,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const noteValue = note?.trim() || ''
     const where: any = { id, tenantId, status: 'DELIVERING' }
     // 厨师/店长只能给自己绑定门店的单发验收单
-    if (['KITCHEN_LEAD', 'MANAGER'].includes(role) && storeId) where.storeId = storeId
+    if (['KITCHEN_LEAD', 'MANAGER'].includes(role)) where.storeId = storeId || '__NONE__'
     const order = await prisma.purchaseOrder.findFirst({ where })
     if (!order) return reply.status(400).send({ error: '订单不存在 / 状态非"在途"不可发验收单' })
     const ackedAt = new Date()
@@ -1511,7 +1511,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         purchaseOrderId: id,
         deliveryOrderId: deliveryOrderId || { not: null },
       }
-      if (isStoreScoped(role)) duplicateWhere.storeId = storeId
+      if (isStoreScoped(role)) duplicateWhere.storeId = storeId || '__NONE__'
       const existingReceipt = await prisma.receipt.findFirst({
         where: duplicateWhere,
         orderBy: { createdAt: 'desc' },
@@ -1524,7 +1524,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         req.log.warn({ err: error, receiptId: existingReceipt.id }, '重复收货补偿财务派生记录失败')
       }
       const currentOrder = await prisma.purchaseOrder.findFirst({
-        where: { id, tenantId, ...(isStoreScoped(role) ? { storeId } : {}) },
+        where: { id, tenantId, ...(isStoreScoped(role) ? { storeId: storeId || '__NONE__' } : {}) },
         select: { status: true },
       })
       const fullyShipped = currentOrder?.status !== 'CONFIRMED'
@@ -1545,7 +1545,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
 
     // 加 store scope: 店长/厨师长 只能确认本店的单
     const orderWhere: any = { id, tenantId, status: 'PENDING_CONFIRM' }
-    if (isStoreScoped(role)) orderWhere.storeId = storeId
+    if (isStoreScoped(role)) orderWhere.storeId = storeId || '__NONE__'
     const order = await prisma.purchaseOrder.findFirst({
       where: orderWhere,
       include: {

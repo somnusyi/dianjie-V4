@@ -232,6 +232,16 @@ async function main() {
     create: { tenantId: tenant.id, name: '本地配送验证账号', email: 'supplier-delivery-verify@local.test', password, role: 'SUPPLIER_OWNER', status: 'ACTIVE', supplierId: supplier.id },
   })
   const runMarker = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const unboundManager = await prisma.user.create({
+    data: {
+      tenantId: tenant.id,
+      name: '未绑定门店配送边界验证账号',
+      email: `unbound-delivery-${runMarker}@local.test`,
+      password,
+      role: 'MANAGER',
+      status: 'ACTIVE',
+    },
+  })
   const product = await prisma.product.create({
     data: {
       tenantId: tenant.id, supplierId: supplier.id, code: `LOCAL-DELIVERY-${runMarker}`,
@@ -245,9 +255,10 @@ async function main() {
       createdById: supplierUser.id,
     },
   })
-    const managerToken = await login(manager.email)
-    const supplierToken = await login(supplierUser.email)
-    const startedAt = new Date()
+  const managerToken = await login(manager.email)
+  const supplierToken = await login(supplierUser.email)
+  const unboundManagerToken = await login(unboundManager.email)
+  const startedAt = new Date()
   let orderId: string | null = null
   let orderNo: string | null = null
   const deliveryIds: string[] = []
@@ -376,6 +387,19 @@ async function main() {
     assert.equal(conflictingShipReplay.status, 409, JSON.stringify(conflictingShipReplay.body))
     assert.equal(await prisma.deliveryOrder.count({ where: { purchaseOrderId: orderId } }), 1)
     assert.equal(Number((await prisma.product.findUniqueOrThrow({ where: { id: product.id } })).stock), 98)
+    for (const path of ['/api/orders?page=1&pageSize=100', '/api/deliveries?page=1&pageSize=100', '/api/receipts?page=1&pageSize=100']) {
+      const list = await api(path, unboundManagerToken)
+      assert.equal(list.status, 200, JSON.stringify(list.body))
+      assert.equal(list.body.total, 0, JSON.stringify(list.body))
+      assert.deepEqual(list.body.items, [])
+    }
+    assert.equal((await api(`/api/orders/${orderId}`, unboundManagerToken)).status, 404)
+    assert.equal((await api(`/api/orders/${orderId}/revisions`, unboundManagerToken)).status, 404)
+    assert.equal((await api(`/api/deliveries/${firstShip.body.deliveryId}`, unboundManagerToken)).status, 404)
+    const unboundAck = await api(`/api/orders/${orderId}/chef-ack`, unboundManagerToken, {
+      method: 'PATCH', body: JSON.stringify({ images: ['/local/unbound-ack.jpg'] }),
+    })
+    assert.equal(unboundAck.status, 400, JSON.stringify(unboundAck.body))
     const invalidAck = await api(`/api/orders/${orderId}/chef-ack`, managerToken, {
       method: 'PATCH', body: JSON.stringify({ images: [123] }),
     })
@@ -388,6 +412,11 @@ async function main() {
     assert.equal((await prisma.deliveryOrder.findUniqueOrThrow({ where: { id: firstShip.body.deliveryId } })).status, 'SHIPPED')
     await verifyDeliveryAuditRollback(orderId, firstShip.body.deliveryId, supplierToken)
     await verifyChefAckDeliveryRace(orderId, supplierToken, managerToken)
+    const unboundReceive = await api(`/api/orders/${orderId}/receive`, unboundManagerToken, {
+      method: 'PATCH', body: JSON.stringify({ items: [{ productId: product.id, receivedQty: 2 }] }),
+    })
+    assert.equal(unboundReceive.status, 400, JSON.stringify(unboundReceive.body))
+    assert.equal(await prisma.receipt.count({ where: { deliveryOrderId: firstShip.body.deliveryId } }), 0)
     for (const payload of [
       { items: [null] },
       { items: [{ productId: product.id, receivedQty: '2' }] },
@@ -484,7 +513,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, orderCreateAuditRollback: true, orderCreateConcurrentReplay: true, orderCreateReplayConflict: true, revisionConcurrentReplay: true, revisionReplayConflict: true, revisionActorsRecorded: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, orderCreateAuditRollback: true, orderCreateConcurrentReplay: true, orderCreateReplayConflict: true, revisionConcurrentReplay: true, revisionReplayConflict: true, revisionActorsRecorded: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, unboundStoreFailsClosed: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))
@@ -534,6 +563,8 @@ async function main() {
         await tx.supplierStockMovement.deleteMany({ where: { productId: product.id } })
         await tx.supplierStockBatch.deleteMany({ where: { productId: product.id } })
         await tx.product.delete({ where: { id: product.id } })
+        await tx.opLog.deleteMany({ where: { tenantId: tenant.id, userId: unboundManager.id } })
+        await tx.user.delete({ where: { id: unboundManager.id } })
       })
     }
   }

@@ -86,3 +86,7 @@
 - 新事件：USER_APPLICATION_PENDING（账号申请→老板/管理员）、BOM_TASK_PENDING（日报缺BOM→总厨，聚合一条）、COUNT_PENDING_CONFIRM（盘点提交→厨师长+店长）；到货差异仲裁经核查已由 LOSS_REJECTED 覆盖不重复加
 - 定时任务：DAILY_REPORT_MISSING 每日 11:00–11:05（Asia/Shanghai）检查前一营业日日报，未确认提醒店长；每店每天一条持久去重；未开业/从未传过日报的店不提醒
 - 测试：API 单测 136/136（新增 9）、集成 81/81（新增 5）
+
+## 第 7 次：库存数量格式化（92b4db5）
+- 内容：门店实时预估库存 + 盘点单账面/实盘数量统一 formatQuantity 可读化（自动 kg 进位、去尾零）
+- 部署：DEPLOY_EXIT_CODE=0，.deployed-commit=92b4db552e43…，pm2 全部 online

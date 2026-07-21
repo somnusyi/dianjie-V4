@@ -107,6 +107,13 @@ export const EVENTS = {
     scopedBy: 'store',
     urgent: false,
   },
+  DATA_QUALITY_TASK: {
+    label: '数据质量待办',
+    desc: '系统审计发现主数据/规格/换算待确认 → 总厨确认修正 (一次审计聚合成一条)',
+    defaultRoles: ['CHEF_DIRECTOR'],
+    scopedBy: 'tenant',
+    urgent: false,
+  },
 } as const
 
 export type EventKey = keyof typeof EVENTS
@@ -239,6 +246,16 @@ export function renderTemplate(event: EventKey, payload: Record<string, any>): R
           description: `${payload.storeName || '门店'} ${payload.submittedByName || ''} 提交了盘点单,共 ${payload.itemCount ?? '-'} 项,请核对差异后确认。`,
           url: `${baseUrl()}/v2/inventory-counts/${payload.countId}`,
           btntxt: '去确认',
+        },
+      }
+    case 'DATA_QUALITY_TASK':
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: `🧹 数据质量待办 ${payload.count || 0} 项`,
+          description: `${payload.summary || ''}。请核对后在系统内修正,有疑问联系管理员。`,
+          url: payload.url || `${baseUrl()}/v2/chef-director/bom`,
+          btntxt: '去处理',
         },
       }
     case 'DAILY_REPORT_MISSING':

@@ -189,10 +189,22 @@ export default function OrdersPage() {
           </Btn>
         )}
         {/* 取消 */}
-        {!['RECEIVED','COMPLETED','CANCELLED','PENDING_CONFIRM'].includes(row.status) && ['MANAGER','ADMIN'].includes(user?.role) && (
+        {['SUBMITTED','CONFIRMED'].includes(row.status) && ['MANAGER','ADMIN'].includes(user?.role) && (
           <Btn size="sm" variant="danger" onClick={async () => {
-            if (!window.confirm('确认取消？')) return
-            try { await api.patch(`/api/orders/${row.id}/cancel`); load() } catch {}
+            const reason = window.prompt('撤回原因 (必填, 供应商可见, 最长 200 字):')?.trim() || ''
+            if (!reason) return
+            if (reason.length > 200) {
+              show('撤回原因最长 200 字', 'error')
+              return
+            }
+            if (!window.confirm('确认撤回？撤回后无法恢复，需要重新下单')) return
+            try {
+              await api.patch(`/api/orders/${row.id}/cancel`, { reason })
+              show('订单已撤回')
+              load()
+            } catch (e: any) {
+              show(e.response?.data?.error || '撤回失败', 'error')
+            }
           }}>取消</Btn>
         )}
         {row.lossClaims?.length > 0 && (

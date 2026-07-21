@@ -264,7 +264,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role, userId, supplierId } = req.user
     const scopedSupplierId = supplierScopeOrReply(req, reply, 'catalog.manage')
     if (!scopedSupplierId) return
-    const parsed = z.object({ name: categoryNameSchema }).safeParse(req.body)
+    const parsed = z.object({ name: categoryNameSchema }).strict().safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     let category: any
     try {
@@ -311,7 +311,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const parsed = z.object({
       name: categoryNameSchema.optional(),
       isActive: z.boolean().optional(),
-    }).refine(value => value.name !== undefined || value.isActive !== undefined, '没有需要修改的字段').safeParse(req.body)
+    }).strict().refine(value => value.name !== undefined || value.isActive !== undefined, '没有需要修改的字段').safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     let result: { id: string; name: string; isActive: boolean; productCount: number }
     try {
@@ -379,7 +379,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role, userId } = req.user
     const scopedSupplierId = supplierScopeOrReply(req, reply, 'catalog.manage')
     if (!scopedSupplierId) return
-    const parsed = z.object({ targetId: z.string().trim().min(1) }).safeParse(req.body)
+    const parsed = z.object({ targetId: z.string().trim().min(1) }).strict().safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const sourceId = String(req.params.id)
     try {
@@ -409,7 +409,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role, userId, supplierId } = req.user
     const scopedSupplierId = supplierScopeOrReply(req, reply, 'catalog.manage')
     if (!scopedSupplierId) return
-    const parsed = z.object({ ids: z.array(z.string()).min(1).max(200) }).safeParse(req.body)
+    const parsed = z.object({ ids: z.array(z.string()).min(1).max(200) }).strict().safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const ids = [...new Set(parsed.data.ids)]
     try {
@@ -487,7 +487,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
 
   const bulkIdsSchema = z.object({
     ids: z.array(z.string()).min(1).max(200),
-  })
+  }).strict()
 
   app.post('/batch-status/preview', auth(app), async (req: any, reply: any) => {
     const { role, tenantId, supplierId } = req.user
@@ -848,19 +848,15 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(403).send({ error: '无权创建商品' })
     }
     if (isSupplierRole(role) && !supplierScopeOrReply(req, reply, 'catalog.manage')) return
-    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as any : {}
-    const items = Array.isArray(body?.items) ? body.items : null
-    const parsedFilename = z.string().trim().max(255).nullable().optional().safeParse(body?.filename)
-    if (!parsedFilename.success) {
-      return reply.status(400).send({ error: 'filename 最多 255 个字符' })
+    const parsedBatch = z.object({
+      items: z.array(z.any()).min(1, 'items 必须是非空数组').max(500, '单次最多 500 行'),
+      filename: z.string().trim().max(255, 'filename 最多 255 个字符').nullable().optional(),
+    }).strict().safeParse(req.body)
+    if (!parsedBatch.success) {
+      return reply.status(400).send({ error: parsedBatch.error.issues[0].message })
     }
-    const filename = parsedFilename.data || null
-    if (!items || items.length === 0) {
-      return reply.status(400).send({ error: 'items 必须是非空数组' })
-    }
-    if (items.length > 500) {
-      return reply.status(400).send({ error: '单次最多 500 行' })
-    }
+    const { items } = parsedBatch.data
+    const filename = parsedBatch.data.filename || null
 
     const failed: { row: number; code?: string; error: string }[] = []
     let candidates: { row: number; id: string; data: any }[] = []
@@ -1087,6 +1083,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   app.patch('/batches/:id/revoke', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, userId, supplierId } = req.user
     if (!PRODUCT_WRITE_ROLES.has(role)) return reply.status(403).send({ error: '无权撤回商品上传批次' })
+    const parsedCommand = z.object({}).strict().safeParse(req.body || {})
+    if (!parsedCommand.success) return reply.status(400).send({ error: parsedCommand.error.issues[0].message })
     const { id } = req.params as any
     const where: any = { id, tenantId }
     if (isSupplierRole(role)) {

@@ -84,6 +84,20 @@ async function main() {
     assert.equal(login.status, 200, JSON.stringify(login.body))
     const token = login.body.token as string
 
+    const invalidBatchEnvelopeFilename = `verify-strict-envelope-${Date.now()}.xlsx`
+    const invalidBatchEnvelope = await api('/api/products/batch', token, {
+      method: 'POST',
+      body: JSON.stringify({
+        filename: invalidBatchEnvelopeFilename,
+        items: [{ name: '不应创建的导入商品', price: 1 }],
+        unexpected: true,
+      }),
+    })
+    assert.equal(invalidBatchEnvelope.status, 400, JSON.stringify(invalidBatchEnvelope.body))
+    assert.equal(await prisma.productBatch.count({
+      where: { tenantId: tenant.id, filename: invalidBatchEnvelopeFilename },
+    }), 0)
+
     const concurrentImports = await Promise.all(concurrentImportCategories.map((category, index) => api('/api/products/batch', token, {
       method: 'POST',
       body: JSON.stringify({
@@ -155,6 +169,17 @@ async function main() {
     })
     assert.equal(patch.status, 200, JSON.stringify(patch.body))
     assert.equal(patch.body.product.category, '验证分类B')
+
+    for (const [path, method, body] of [
+      ['/api/products/batch-status/preview', 'POST', { ids: [product.id], status: 'DISABLED', unexpected: true }],
+      ['/api/products/batch-category', 'PATCH', { ids: [product.id], category: '验证分类C', unexpected: true }],
+      ['/api/products/batch-status', 'PATCH', { ids: [product.id], status: 'DISABLED', unexpected: true }],
+    ] as const) {
+      const invalidBulk = await api(path, token, { method, body: JSON.stringify(body) })
+      assert.equal(invalidBulk.status, 400, JSON.stringify(invalidBulk.body))
+    }
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: product.id } })).category, '验证分类B')
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: product.id } })).status, 'ENABLED')
 
     const batchCategory = await api('/api/products/batch-category', token, {
       method: 'PATCH',
@@ -333,6 +358,13 @@ async function main() {
     }
 
     const sequentialRevoke = await createRevokeBatch('sequential')
+    const invalidRevoke = await api(`/api/products/batches/${sequentialRevoke.response.body.batchId}/revoke`, token, {
+      method: 'PATCH', body: JSON.stringify({ unexpected: true }),
+    })
+    assert.equal(invalidRevoke.status, 400, JSON.stringify(invalidRevoke.body))
+    assert.equal((await prisma.productBatch.findUniqueOrThrow({
+      where: { id: sequentialRevoke.response.body.batchId },
+    })).revokedAt, null)
     const revoked = await api(`/api/products/batches/${sequentialRevoke.response.body.batchId}/revoke`, token, {
       method: 'PATCH', body: JSON.stringify({}),
     })
@@ -539,6 +571,7 @@ async function main() {
       categoryFilter: true,
       imageKey: true,
       strictPatchFields: true,
+      strictCommandFields: true,
       concurrentImportCategoryOrder: true,
       batchCategory: true,
       batchDisableApproval: true,

@@ -468,6 +468,53 @@ describe('supplier tenant scope (integration)', () => {
     })
   })
 
+  it('rejects unknown category, import and bulk command fields before writes', async () => {
+    const categoryName = `严格命令分类-${suffix.slice(-8)}`
+    const beforeBatchCount = await prisma.productBatch.count({ where: { tenantId } })
+    const beforeProduct = await prisma.product.findUniqueOrThrow({ where: { id: productAId } })
+
+    const invalidCreate = await app.inject({
+      method: 'POST', url: '/api/products/categories',
+      payload: { name: categoryName, unexpected: true },
+    })
+    expect(invalidCreate.statusCode).toBe(400)
+    expect(await prisma.supplierProductCategory.count({ where: { tenantId, supplierId: supplierAId, name: categoryName } })).toBe(0)
+
+    const category = await app.inject({
+      method: 'POST', url: '/api/products/categories', payload: { name: categoryName },
+    })
+    expect(category.statusCode).toBe(201)
+    try {
+      const categoryIds = (await prisma.supplierProductCategory.findMany({
+        where: { tenantId, supplierId: supplierAId }, select: { id: true },
+      })).map(row => row.id)
+      const requests = [
+        { method: 'PATCH', url: `/api/products/categories/${category.json().id}`, payload: { isActive: false, unexpected: true } },
+        { method: 'PATCH', url: '/api/products/categories-order', payload: { ids: categoryIds, unexpected: true } },
+        { method: 'POST', url: '/api/products/batch-status/preview', payload: { ids: [productAId], status: 'DISABLED', unexpected: true } },
+        { method: 'PATCH', url: '/api/products/batch-category', payload: { ids: [productAId], category: categoryName, unexpected: true } },
+        { method: 'PATCH', url: '/api/products/batch-status', payload: { ids: [productAId], status: 'DISABLED', unexpected: true } },
+        {
+          method: 'POST', url: '/api/products/batch',
+          payload: { filename: 'strict-envelope.xlsx', items: [{ name: '不应创建的商品', price: 1 }], unexpected: true },
+        },
+      ]
+      for (const request of requests) {
+        const response = await app.inject(request as any)
+        expect(response.statusCode).toBe(400)
+      }
+      expect(await prisma.supplierProductCategory.findUniqueOrThrow({ where: { id: category.json().id } })).toMatchObject({ isActive: true })
+      expect(await prisma.product.findUniqueOrThrow({ where: { id: productAId } })).toMatchObject({
+        category: beforeProduct.category,
+        status: beforeProduct.status,
+      })
+      expect(await prisma.productBatch.count({ where: { tenantId } })).toBe(beforeBatchCount)
+    } finally {
+      await prisma.opLog.deleteMany({ where: { tenantId, targetId: category.json().id } })
+      await prisma.supplierProductCategory.deleteMany({ where: { id: category.json().id } })
+    }
+  })
+
   it('rejects a cross-supplier batch status impact preview', async () => {
     const response = await app.inject({
       method: 'POST', url: '/api/products/batch-status/preview',

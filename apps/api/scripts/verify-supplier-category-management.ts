@@ -51,6 +51,14 @@ async function main() {
     assert.equal(login.status, 200, JSON.stringify(login.body))
     const token = login.body.token as string
 
+    const invalidCreate = await api('/api/products/categories', token, {
+      method: 'POST', body: JSON.stringify({ name: originalName, unexpected: true }),
+    })
+    assert.equal(invalidCreate.status, 400, JSON.stringify(invalidCreate.body))
+    assert.equal(await prisma.supplierProductCategory.count({
+      where: { tenantId: tenant.id, supplierId, name: originalName },
+    }), 0)
+
     const created = await api('/api/products/categories', token, {
       method: 'POST', body: JSON.stringify({ name: originalName }),
     })
@@ -71,6 +79,12 @@ async function main() {
       },
     })
     productId = product.id
+
+    const invalidRename = await api(`/api/products/categories/${categoryId}`, token, {
+      method: 'PATCH', body: JSON.stringify({ name: renamedName, unexpected: true }),
+    })
+    assert.equal(invalidRename.status, 400, JSON.stringify(invalidRename.body))
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).category, originalName)
 
     const renamed = await api(`/api/products/categories/${categoryId}`, token, {
       method: 'PATCH', body: JSON.stringify({ name: renamedName }),
@@ -105,6 +119,10 @@ async function main() {
     const ids = beforeOrder.body.map((row: any) => row.id).filter(Boolean)
     const withoutTest = ids.filter((id: string) => id !== categoryId && id !== secondId)
     const reorderedIds = [...withoutTest, secondId, categoryId]
+    const invalidReorder = await api('/api/products/categories-order', token, {
+      method: 'PATCH', body: JSON.stringify({ ids: reorderedIds, unexpected: true }),
+    })
+    assert.equal(invalidReorder.status, 400, JSON.stringify(invalidReorder.body))
     const reordered = await api('/api/products/categories-order', token, {
       method: 'PATCH', body: JSON.stringify({ ids: reorderedIds }),
     })
@@ -132,6 +150,7 @@ async function main() {
 
     console.log(JSON.stringify({
       ok: true,
+      strictCommandFields: true,
       create: true,
       renameUpdatesProductsAndInventory: true,
       disableBlocksAssignment: true,

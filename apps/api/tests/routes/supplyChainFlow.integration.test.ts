@@ -484,6 +484,93 @@ describe('supplier order to receipt flow (integration)', () => {
     }
   })
 
+  it('serializes new revision requests with supplier confirmation and rejection', async () => {
+    const sqlSuffix = Date.now().toString()
+    const delaySequence = `test_revision_transition_delay_seq_${sqlSuffix}`
+    const delayFunction = `test_revision_transition_delay_fn_${sqlSuffix}`
+    const delayTrigger = `test_revision_transition_delay_trg_${sqlSuffix}`
+    const createOrder = async (marker: string) => {
+      const response = await app.inject({
+        method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' },
+        payload: {
+          supplierId, storeId, expectedDate: '2026-07-20', idempotencyKey: `revision-transition-${marker}-${suffix}`,
+          items: [{ productId, quantity: 1, unitPrice: 10 }],
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      return response.json()
+    }
+    const confirmOrder = await createOrder('confirm')
+    const rejectOrder = await createOrder('reject')
+
+    await prisma.$executeRawUnsafe(`CREATE SEQUENCE "${delaySequence}"`)
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION "${delayFunction}"() RETURNS trigger AS $$
+      BEGIN
+        IF NEW."id" IN ('${confirmOrder.id}', '${rejectOrder.id}')
+          AND NEW."status" IN ('CONFIRMED', 'CANCELLED') THEN
+          PERFORM nextval('${delaySequence}');
+          PERFORM pg_sleep(0.75);
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `)
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER "${delayTrigger}"
+      BEFORE UPDATE OF "status" ON "purchase_orders"
+      FOR EACH ROW EXECUTE FUNCTION "${delayFunction}"()
+    `)
+
+    const sequenceValue = async () => {
+      const [row] = await prisma.$queryRawUnsafe<Array<{ value: bigint; is_called: boolean }>>(
+        `SELECT last_value::bigint AS value, is_called FROM "${delaySequence}"`,
+      )
+      return row.is_called ? row.value : 0n
+    }
+    const waitForTransitionUpdate = async (previous: bigint) => {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (await sequenceValue() > previous) return
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      throw new Error('未观察到订货单状态转换进入并发延迟触发器')
+    }
+
+    try {
+      for (const race of [
+        { order: confirmOrder, endpoint: 'confirm', payload: undefined, status: 'CONFIRMED' },
+        { order: rejectOrder, endpoint: 'reject', payload: { reason: '供应商并发拒单' }, status: 'CANCELLED' },
+      ]) {
+        const previous = await sequenceValue()
+        const transitionPromise = app.inject({
+          method: 'PATCH', url: `/api/orders/${race.order.id}/${race.endpoint}`,
+          headers: { 'x-test-actor': 'supplier' },
+          ...(race.payload ? { payload: race.payload } : {}),
+        })
+        await waitForTransitionUpdate(previous)
+        const revisionPromise = app.inject({
+          method: 'POST', url: `/api/orders/${race.order.id}/revisions`, headers: { 'x-test-actor': 'supplier' },
+          payload: {
+            reason: '并发状态转换回归', baseRowVersion: race.order.rowVersion,
+            requestKey: `revision-transition-request-${race.endpoint}-${suffix}`,
+            items: [{ productId, quantity: 2 }],
+          },
+        })
+        const [transition, revision] = await Promise.all([transitionPromise, revisionPromise])
+        expect(transition.statusCode).toBe(200)
+        expect(revision.statusCode, JSON.stringify(revision.json())).toBe(409)
+        expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: race.order.id } })).status).toBe(race.status)
+        expect(await prisma.purchaseOrderRevision.count({
+          where: { purchaseOrderId: race.order.id, status: 'PENDING' },
+        })).toBe(0)
+      }
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${delayTrigger}" ON "purchase_orders"`)
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${delayFunction}"()`)
+      await prisma.$executeRawUnsafe(`DROP SEQUENCE IF EXISTS "${delaySequence}"`)
+    }
+  })
+
   it('rejects a stale chef acknowledgement after supplier delivery wins the race', async () => {
     const sqlSuffix = Date.now().toString()
     const delaySequence = `test_chef_ack_delay_seq_${sqlSuffix}`

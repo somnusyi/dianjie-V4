@@ -37,6 +37,11 @@ function orderAmountBoundError(lineAmounts: Prisma.Decimal[], total: Prisma.Deci
   return null
 }
 
+function isSerializationConflict(error: any): boolean {
+  return error?.code === 'P2034'
+    || (error?.code === 'P2010' && String(error?.meta?.code) === '40001')
+}
+
 const orderItemSchema = z.object({
   productId: z.string().min(1, 'productId 必填'),
   quantity:  z.number().positive('quantity 必须 > 0').max(PURCHASE_QUANTITY_MAX, '订货数量超过系统上限'),
@@ -713,6 +718,16 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
 
     try {
       const revision = await prisma.$transaction(async (tx) => {
+        const lockedOrder = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id"
+          FROM "purchase_orders"
+          WHERE "id" = ${id}
+            AND "tenantId" = ${tenantId}
+            AND "status"::text = 'SUBMITTED'
+            AND "rowVersion" = ${order.rowVersion}
+          FOR UPDATE
+        `
+        if (lockedOrder.length === 0) throw { statusCode: 409, message: '订单状态已变化，请刷新后重新提交' }
         const pending = await tx.purchaseOrderRevision.findFirst({ where: { purchaseOrderId: id, status: 'PENDING' } })
         if (pending) throw { statusCode: 409, message: '该订单已有待门店确认的修改' }
         const maxRevision = await tx.purchaseOrderRevision.aggregate({ where: { purchaseOrderId: id }, _max: { revisionNo: true } })
@@ -760,12 +775,26 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       }
       return reply.status(201).send(revision)
     } catch (error: any) {
-      if ((error?.code === 'P2002' || error?.code === 'P2034') && input.requestKey) {
+      if ((error?.code === 'P2002' || isSerializationConflict(error)) && input.requestKey) {
         const duplicate = await findRevisionReplay()
         if (duplicate) {
           if (!revisionReplayMatches(duplicate)) return reply.status(409).send({ error: '同一改单请求键不能用于不同请求内容或申请人' })
           return reply.status(200).send(duplicate)
         }
+      }
+      if (isSerializationConflict(error)) {
+        const [currentOrder, pendingRevision] = await Promise.all([
+          prisma.purchaseOrder.findFirst({
+            where: { id, tenantId, status: 'SUBMITTED', rowVersion: order.rowVersion },
+            select: { id: true },
+          }),
+          prisma.purchaseOrderRevision.findFirst({
+            where: { purchaseOrderId: id, status: 'PENDING' },
+            select: { id: true },
+          }),
+        ])
+        if (!currentOrder) return reply.status(409).send({ error: '订单状态已变化，请刷新后重新提交' })
+        if (pendingRevision) return reply.status(409).send({ error: '该订单已有待门店确认的修改' })
       }
       if (error?.code === 'P2002') return reply.status(409).send({ error: '该订单已有待确认修改或请求已提交' })
       throw error
@@ -966,6 +995,21 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (!order) throw { statusCode: 400, message: '订单不存在或当前状态不可接单' }
     if (order.revisions.length > 0) throw { statusCode: 409, message: '订单有待门店确认的修改，确认完成后才能接单' }
     await prisma.$transaction(async (tx) => {
+      const lockedOrder = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id"
+        FROM "purchase_orders"
+        WHERE "id" = ${id}
+          AND "tenantId" = ${tenantId}
+          AND "status"::text = 'SUBMITTED'
+          AND "rowVersion" = ${order.rowVersion}
+        FOR UPDATE
+      `
+      if (lockedOrder.length === 0) throw { statusCode: 409, message: '订单状态已变化，请刷新后重试' }
+      const pendingRevision = await tx.purchaseOrderRevision.findFirst({
+        where: { purchaseOrderId: id, status: 'PENDING' },
+        select: { id: true },
+      })
+      if (pendingRevision) throw { statusCode: 409, message: '订单有待门店确认的修改，确认完成后才能接单' }
       const updated = await tx.purchaseOrder.updateMany({
         where: { id, status: 'SUBMITTED', rowVersion: order.rowVersion },
         data: { status: 'CONFIRMED', rowVersion: { increment: 1 } },
@@ -1033,6 +1077,21 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (order.revisions.length > 0) throw { statusCode: 409, message: '订单有待门店确认的修改，请等待门店处理后再拒单' }
     const rejectReason = String(reason).trim().slice(0, 100)
     await prisma.$transaction(async (tx) => {
+      const lockedOrder = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id"
+        FROM "purchase_orders"
+        WHERE "id" = ${id}
+          AND "tenantId" = ${tenantId}
+          AND "status"::text = ${order.status}
+          AND "rowVersion" = ${order.rowVersion}
+        FOR UPDATE
+      `
+      if (lockedOrder.length === 0) throw { statusCode: 409, message: '订单状态已变化，请刷新后重试' }
+      const pendingRevision = await tx.purchaseOrderRevision.findFirst({
+        where: { purchaseOrderId: id, status: 'PENDING' },
+        select: { id: true },
+      })
+      if (pendingRevision) throw { statusCode: 409, message: '订单有待门店确认的修改，请等待门店处理后再拒单' }
       const updated = await tx.purchaseOrder.updateMany({
         where: { id, status: order.status, rowVersion: order.rowVersion },
         data: {

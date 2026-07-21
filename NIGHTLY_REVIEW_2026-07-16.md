@@ -1567,3 +1567,22 @@
 
 - 未绑定门店的旧账号此前可能收到空列表或租户汇总，现在营业额三条入口统一明确返回 403，需要管理员修复账号绑定。
 - 本轮不改变营业额、门店库存或供应商库存之间的业务口径；补送、报损收货、已确认入库单更正和完整在线盘点流程继续待确认。
+
+## 2026-07-22 06:51 第七十四轮（发布迁移空库与既有库复验）
+
+### 检查范围与执行
+
+- 每轮前确认 `release/20260715-p0` 与远端均在 `314c4a1`，报告和工作树干净，仅保留用户未跟踪文件。本轮只执行本地数据库发布验证，不修改 schema、migration 或业务数据。
+- 从 `dianjie_v4_local` 的本机连接参数派生管理连接，在进程内创建精确命名临时库 `dianjie_v4_migrate_ci_20260722_0650`；未输出连接凭证，退出 trap 精确强制删除该临时库，最终 `pg_database` 计数为 0。
+- 临时空库依次执行 release 分支全部 56 个 migration，`migrate deploy` 全部成功，`migrate status` 为 up to date，数据库到当前 schema 的 diff 为 `No difference detected`。
+- 既有 `dianjie_v4_local` 的 56 个 release migration 状态同样为 up to date；只读 schema diff 仍显示 main 分支已写入的额外菜品 BOM 版本、盘点单、门店月结、库存策略和单位换算表/字段。未执行 diff SQL，未删除这些额外结构，未运行 `db push`、reset 或任何反向 migration。
+
+### 自动化验证
+
+- 迁移复验后独立 `dianjie_v4_ci` 全量 PostgreSQL 集成 65/65、API 单元测试 107/107、API TypeScript build、Web 测试 13/13 和 Web `tsc --noEmit` 全部通过。
+- 临时迁移库和 CI 测试租户均已清理；API 4444 与 Web 3200 服务继续保持健康。本轮无 Web 改动，沿用首轮移动端浏览器基线。
+
+### 风险与待确认
+
+- `dianjie_v4_local` 是跨分支共享的本地既有库，额外 main 结构使其无法与 release schema 做零差异比较；这是已知本地环境漂移，不代表 release migration 缺失。严禁为了得到 clean diff 删除这些表/字段。
+- 临时空库提供了 release 自洽证据；生产迁移仍未连接、未执行。补送、报损收货、已确认入库单更正和完整在线盘点流程继续待业务确认。

@@ -12,7 +12,7 @@ import { prisma } from '@dianjie/db'
 import { routeFor, DocumentType, Role } from '../services/documentRouting'
 import { nextDocumentNo } from '../services/documentNo'
 import { invalidatePattern } from '../lib/cache'
-import { isSupplierRole } from '../lib/auth-scope'
+import { isSupplierRole, requireStoreBinding } from '../lib/auth-scope'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const GROUP_DOCUMENT_ROLES = new Set(['BOSS', 'ADMIN', 'SUPER_ADMIN', 'FINANCE', 'CHEF_DIRECTOR', 'CHEF', 'ENGINEERING'])
@@ -333,9 +333,19 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 创建单据 ────────────────────────────────────────────
   app.post('/', auth(app), async (req: any, reply) => {
-    const { tenantId, userId, storeId } = req.user
+    const { tenantId, userId, role, storeId } = req.user
     const { type, title, amount, payload, storeId: bodyStoreId } = req.body as any
     if (!type || !title) return reply.status(400).send({ error: 'type 和 title 必填' })
+
+    const scopedStoreId = requireStoreBinding(role, storeId)
+    if (scopedStoreId && bodyStoreId && bodyStoreId !== scopedStoreId) {
+      return reply.status(403).send({ error: '只能为当前账号绑定的门店发起单据' })
+    }
+    const documentStoreId = scopedStoreId || bodyStoreId || storeId || null
+    if (documentStoreId) {
+      const store = await prisma.store.findFirst({ where: { id: documentStoreId, tenantId }, select: { id: true } })
+      if (!store) return reply.status(404).send({ error: '门店不存在或不属于当前租户' })
+    }
 
     const plan = routeFor(type as DocumentType, Number(amount || 0))
 
@@ -349,7 +359,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
           isOverThreshold: plan.isOverThreshold,
           thresholdRule: plan.thresholdRule || null,
           payload: payload || {},
-          storeId: bodyStoreId || storeId || null,
+          storeId: documentStoreId,
           initiatorId: userId,
           status: plan.autoApprove ? 'AUTO_APPROVED' : 'PENDING',
           finalizedAt: plan.autoApprove ? new Date() : null,

@@ -14,6 +14,7 @@ import { v2DashboardRoutes } from '../../src/routes/v2Dashboard'
 import { storeRoutes } from '../../src/routes/stores'
 import { revenueRoutes } from '../../src/routes/revenue'
 import { paymentRequestRoutes } from '../../src/routes/paymentRequests'
+import { documentRoutes } from '../../src/routes/documents'
 
 const suffix = `supplier-isolation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 let tenantId = ''
@@ -139,6 +140,7 @@ describe('supplier tenant scope (integration)', () => {
     await app.register(storeRoutes, { prefix: '/api/stores' })
     await app.register(revenueRoutes, { prefix: '/api/revenue' })
     await app.register(paymentRequestRoutes, { prefix: '/api/payment-requests' })
+    await app.register(documentRoutes, { prefix: '/api/documents' })
     await app.ready()
   })
 
@@ -927,6 +929,23 @@ describe('supplier tenant scope (integration)', () => {
     })
     expect(createPaymentRequest.statusCode).toBe(403)
     expect(await prisma.document.count({ where: { tenantId, type: 'PAYMENT_REQUEST' } })).toBe(paymentRequestCount)
+    const genericDocumentCount = await prisma.document.count({ where: { tenantId, type: 'REIMBURSEMENT' } })
+    const createGenericDocument = await app.inject({
+      method: 'POST', url: '/api/documents', headers,
+      payload: { type: 'REIMBURSEMENT', title: '未绑定门店测试报销', amount: 1, payload: {} },
+    })
+    expect(createGenericDocument.statusCode).toBe(403)
+    expect(await prisma.document.count({ where: { tenantId, type: 'REIMBURSEMENT' } })).toBe(genericDocumentCount)
+
+    const crossStoreDocument = await app.inject({
+      method: 'POST', url: '/api/documents', headers: { 'x-test-actor': 'chef' },
+      payload: {
+        type: 'REIMBURSEMENT', title: '跨门店测试报销', amount: 1,
+        payload: {}, storeId: 'another-store-id',
+      },
+    })
+    expect(crossStoreDocument.statusCode).toBe(403)
+    expect(await prisma.document.count({ where: { tenantId, type: 'REIMBURSEMENT' } })).toBe(genericDocumentCount)
     for (const url of ['/api/inventory', '/api/inventory/snapshot/latest', '/api/inventory/consumptions']) {
       const response = await app.inject({ method: 'GET', url, headers })
       expect(response.statusCode).toBe(400)

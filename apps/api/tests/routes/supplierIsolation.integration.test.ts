@@ -13,6 +13,7 @@ import { dashboardRoutes } from '../../src/routes/dashboard'
 import { v2DashboardRoutes } from '../../src/routes/v2Dashboard'
 import { storeRoutes } from '../../src/routes/stores'
 import { revenueRoutes } from '../../src/routes/revenue'
+import { paymentRequestRoutes } from '../../src/routes/paymentRequests'
 
 const suffix = `supplier-isolation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 let tenantId = ''
@@ -137,6 +138,7 @@ describe('supplier tenant scope (integration)', () => {
     await app.register(v2DashboardRoutes, { prefix: '/api/v2/dashboard' })
     await app.register(storeRoutes, { prefix: '/api/stores' })
     await app.register(revenueRoutes, { prefix: '/api/revenue' })
+    await app.register(paymentRequestRoutes, { prefix: '/api/payment-requests' })
     await app.ready()
   })
 
@@ -918,6 +920,13 @@ describe('supplier tenant scope (integration)', () => {
       payload: { date: '2026-07-22', amount: 1 },
     })
     expect(createRevenue.statusCode).toBe(403)
+    const paymentRequestCount = await prisma.document.count({ where: { tenantId, type: 'PAYMENT_REQUEST' } })
+    const createPaymentRequest = await app.inject({
+      method: 'POST', url: '/api/payment-requests', headers,
+      payload: { payeeName: '未绑定门店测试收款方', amount: 1, usage: 'repair' },
+    })
+    expect(createPaymentRequest.statusCode).toBe(403)
+    expect(await prisma.document.count({ where: { tenantId, type: 'PAYMENT_REQUEST' } })).toBe(paymentRequestCount)
     for (const url of ['/api/inventory', '/api/inventory/snapshot/latest', '/api/inventory/consumptions']) {
       const response = await app.inject({ method: 'GET', url, headers })
       expect(response.statusCode).toBe(400)

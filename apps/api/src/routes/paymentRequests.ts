@@ -16,6 +16,7 @@ import { routeFor } from '../services/documentRouting'
 import { nextDocumentNo } from '../services/documentNo'
 import { createVoucher } from '../services/voucher'
 import { writeCashTransaction } from '../services/cashbook'
+import { requireStoreBinding } from '../lib/auth-scope'
 
 const FINANCE_ROLES = ['FINANCE', 'ADMIN', 'SUPER_ADMIN']
 // BUG#1: 真实业务里店长 / 总厨 也要能发起付款申请 (店里有维修/水电/采购需要付款)
@@ -112,6 +113,7 @@ export const paymentRequestRoutes: FastifyPluginAsync = async (app) => {
     if (!CREATE_ROLES.includes(role)) {
       return reply.status(403).send({ error: '此角色不可发起付款申请' })
     }
+    const documentStoreId = requireStoreBinding(role, storeId) || storeId
     const parsed = createSchema.safeParse(req.body)
     if (!parsed.success) {
       return reply.status(400).send({ error: parsed.error.errors[0].message })
@@ -155,7 +157,7 @@ export const paymentRequestRoutes: FastifyPluginAsync = async (app) => {
             note: d.note, attachments: d.attachments,
             bankFrom: d.bankFrom || null,
           } as any,
-          storeId: storeId || null,
+          storeId: documentStoreId || null,
           initiatorId: userId,
           status: plan.autoApprove ? 'AUTO_APPROVED' : 'PENDING',
           finalizedAt: plan.autoApprove ? new Date() : null,

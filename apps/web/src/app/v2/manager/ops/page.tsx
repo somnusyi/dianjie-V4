@@ -1,6 +1,7 @@
 /**
  * 店长 App · 营业 Tab (P&L)  PDF: manager_operations  Tab 2/4
  * 接真数据: GET /api/profit/store/:storeId?month=YYYY-MM
+ * 历史月结: GET /api/profit/store/:storeId/closed-months (「上月」Tab 的月份选择器数据源)
  *
  * Hero 显示 GMV (顾客实际花费), P&L 区分:
  *   营业收入 (GMV)
@@ -70,25 +71,55 @@ function monthForPeriod(period: Period) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
+type ClosedMonth = {
+  month: string
+  confirmedAt: string | null
+  sourceFilename: string
+}
+
+// 'YYYY-MM' → '6月' / '26年1月' (跨年时分歧时带两位年份)
+function closedMonthLabel(month: string, latestYear: string) {
+  const [year, mm] = month.split('-')
+  const label = `${Number(mm)}月`
+  return year === latestYear ? label : `${year.slice(2)}年${label}`
+}
+
 export default function ManagerOpsPage() {
   const [period, setPeriod] = useState<Period>('month')
   const [data, setData] = useState<Profit | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [storeName, setStoreName] = useState('本店')
+  const [storeId, setStoreId] = useState<string | null>(null)
+  const [closedMonths, setClosedMonths] = useState<ClosedMonth[]>([])
+  const [historyMonth, setHistoryMonth] = useState<string | null>(null)
 
+  // 挂载: 解析门店并拉取已确认月结月份列表 (失败时降级为空列表, 不影响主流程)
   useEffect(() => {
-    let cancelled = false
     const u = getUser()
     const sid = u?.storeId || u?.store?.id || null
     setStoreName(u?.store?.name || '本店')
+    setStoreId(sid)
     if (!sid) { setError('未绑定门店'); return }
+    apiFetch<{ months: ClosedMonth[] }>(`/api/profit/store/${sid}/closed-months`)
+      .then(result => setClosedMonths(result.months || []))
+      .catch(() => setClosedMonths([]))
+  }, [])
+
+  // 「上月」Tab: 默认显示最近月结月份; 无月结记录时回退上一自然月 (旧行为)
+  const activeMonth = period === 'month'
+    ? monthForPeriod('month')
+    : historyMonth || closedMonths[0]?.month || monthForPeriod('prev')
+
+  useEffect(() => {
+    if (!storeId) return
+    let cancelled = false
     setData(null)
     setError(null)
-    apiFetch<Profit>(`/api/profit/store/${sid}?month=${monthForPeriod(period)}`)
+    apiFetch<Profit>(`/api/profit/store/${storeId}?month=${activeMonth}`)
       .then(result => { if (!cancelled) setData(result) })
       .catch(e => { if (!cancelled) setError(e.message) })
     return () => { cancelled = true }
-  }, [period])
+  }, [storeId, activeMonth])
 
   const r = data?.revenue
   const c = data?.cost
@@ -139,6 +170,33 @@ export default function ManagerOpsPage() {
           ]}
         />
       </div>
+
+      {period === 'prev' && closedMonths.length > 0 && (
+        <div className="px-4 mt-2 flex items-center gap-1.5 overflow-x-auto">
+          <span className="shrink-0 text-micro text-gray3">财务月结</span>
+          <div className="inline-flex bg-bg rounded-cta p-0.5">
+            {closedMonths.map(close => {
+              const value = historyMonth || closedMonths[0]?.month
+              const selected = close.month === value
+              return (
+                <button
+                  key={close.month}
+                  onClick={() => setHistoryMonth(close.month)}
+                  className={`px-3 py-1 text-button rounded-cta transition whitespace-nowrap ${
+                    selected ? 'bg-ink text-white' : 'text-gray2 hover:text-ink'
+                  }`}
+                >
+                  {closedMonthLabel(close.month, closedMonths[0]!.month.split('-')[0])}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {period === 'prev' && closedMonths.length === 0 && (
+        <p className="px-4 mt-2 text-micro text-gray3">暂无历史财务月结，显示上一自然月</p>
+      )}
 
       <OperatingOverview
         loading={!data && !error}

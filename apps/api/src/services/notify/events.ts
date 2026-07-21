@@ -79,6 +79,34 @@ export const EVENTS = {
     scopedBy: 'store',
     urgent: false,
   },
+  USER_APPLICATION_PENDING: {
+    label: '账号申请待审批',
+    desc: '公开入口提交账号申请 → 老板/管理员审批 (BOSS 是 ADMIN 的 v2 别名, 库枚举只有 ADMIN)',
+    defaultRoles: ['ADMIN', 'SUPER_ADMIN'],
+    scopedBy: 'tenant',
+    urgent: false,
+  },
+  BOM_TASK_PENDING: {
+    label: '日报缺 BOM 待办',
+    desc: '日报确认产生缺 BOM 暂缓菜品 → 总厨补齐 (一次日报聚合成一条)',
+    defaultRoles: ['CHEF_DIRECTOR'],
+    scopedBy: 'tenant',
+    urgent: false,
+  },
+  COUNT_PENDING_CONFIRM: {
+    label: '盘点待确认',
+    desc: '门店盘点单提交待确认 → 厨师长/店长核对确认',
+    defaultRoles: ['KITCHEN_LEAD', 'MANAGER'],
+    scopedBy: 'store',
+    urgent: false,
+  },
+  DAILY_REPORT_MISSING: {
+    label: '日报未上传提醒',
+    desc: '每天 11:00 检查前一营业日已确认日报, 缺失 → 提醒店长/厨师长 (每店每天最多一条)',
+    defaultRoles: ['MANAGER', 'KITCHEN_LEAD'],
+    scopedBy: 'store',
+    urgent: false,
+  },
 } as const
 
 export type EventKey = keyof typeof EVENTS
@@ -181,6 +209,46 @@ export function renderTemplate(event: EventKey, payload: Record<string, any>): R
           description: `该订单送达 24h 内未验收,系统已自动确认收货。如有短量请及时报损。`,
           url: `${baseUrl()}/v2/chef/purchase/${payload.orderId}`,
           btntxt: '查看',
+        },
+      }
+    case 'USER_APPLICATION_PENDING':
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: `👤 新账号申请待审批`,
+          description: `${payload.name || '申请人'} (${payload.phone || '-'}) 申请${payload.roleLabel || payload.requestedRole || '账号'}${payload.storeName ? ` · ${payload.storeName}` : ''}${payload.supplierName ? ` · ${payload.supplierName}` : ''},请审批。`,
+          url: `${baseUrl()}/v2/me/applications`,
+          btntxt: '去审批',
+        },
+      }
+    case 'BOM_TASK_PENDING':
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: `🧾 日报缺 BOM ${payload.count || 0} 项待补`,
+          description: `${payload.storeName || '门店'} ${payload.bizDate || ''} 日报:${payload.dishNames || ''}。补齐 BOM 后自动回补当日库存消耗。`,
+          url: `${baseUrl()}/v2/chef-director/bom`,
+          btntxt: '去补 BOM',
+        },
+      }
+    case 'COUNT_PENDING_CONFIRM':
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: `📋 盘点待确认 ${payload.no || ''}`,
+          description: `${payload.storeName || '门店'} ${payload.submittedByName || ''} 提交了盘点单,共 ${payload.itemCount ?? '-'} 项,请核对差异后确认。`,
+          url: `${baseUrl()}/v2/inventory-counts/${payload.countId}`,
+          btntxt: '去确认',
+        },
+      }
+    case 'DAILY_REPORT_MISSING':
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: `📅 ${payload.bizDate || '昨日'} 日报未确认`,
+          description: `${payload.storeName || '门店'} 前一营业日双表日报还未确认上传,请尽快补传并确认,否则当日消耗与营收无数据。`,
+          url: `${baseUrl()}/v2/manager/upload-platform`,
+          btntxt: '去上传',
         },
       }
     default:

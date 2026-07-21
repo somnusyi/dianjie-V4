@@ -2,6 +2,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import bcrypt from 'bcryptjs'
 import { prisma } from '@dianjie/db'
+import { fireAndForget as notify } from '../services/notify'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
@@ -16,6 +17,17 @@ const APPLICABLE_ROLES = [
 // 跟 documents.ts / capital.ts 保持一致
 const APPROVE_ROLES = new Set(['ADMIN', 'SUPER_ADMIN', 'BOSS'])
 const PHONE_RE = /^1[3-9]\d{9}$/
+
+// 通知文案用的角色中文名 (与前端 role-labels 保持一致口径)
+const ROLE_LABELS: Record<string, string> = {
+  MANAGER: '店长',
+  KITCHEN_LEAD: '厨师长',
+  CHEF_DIRECTOR: '总厨',
+  FINANCE: '财务',
+  ENGINEERING: '工程部',
+  SUPPLIER_OWNER: '供应商负责人',
+  SUPPLIER_STAFF: '供应商员工',
+}
 
 const entityIdSchema = z.string().trim().min(1).max(64)
 const tenantSlugSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9-]+$/i, '租户标识格式不正确')
@@ -70,6 +82,7 @@ export const publicApplyRoute: FastifyPluginAsync = async (app) => {
     }
 
     const passwordHash = await bcrypt.hash(d.password, 10)
+    let requestedStoreName = ''
     const result = await prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`public-application:${tenant.id}:${d.phone}`}))::text AS locked`
       const existingUser = await tx.user.findUnique({
@@ -90,12 +103,13 @@ export const publicApplyRoute: FastifyPluginAsync = async (app) => {
       }
       if (['MANAGER', 'KITCHEN_LEAD'].includes(d.requestedRole) && d.requestedStoreId) {
         const store = await tx.store.findFirst({
-          where: { id: d.requestedStoreId, tenantId: tenant.id, status: 'ENABLED' }, select: { id: true },
+          where: { id: d.requestedStoreId, tenantId: tenant.id, status: 'ENABLED' }, select: { id: true, name: true },
         })
         if (!store) return { error: '所选门店不存在或已停用' }
+        requestedStoreName = store.name
       }
 
-      await tx.userApplication.create({
+      const application = await tx.userApplication.create({
         data: {
           tenantId: tenant.id,
           name: d.name, phone: d.phone, passwordHash,
@@ -106,9 +120,23 @@ export const publicApplyRoute: FastifyPluginAsync = async (app) => {
           requestedStoreId: d.requestedStoreId || null,
         },
       })
-      return { ok: true }
+      return { ok: true, applicationId: application.id }
     })
     if ('error' in result) return reply.status(400).send({ error: result.error })
+
+    // 通知老板/管理员审批 (失败不影响申请提交)
+    notify({
+      tenantId: tenant.id,
+      event: 'USER_APPLICATION_PENDING',
+      eventKey: `USER_APPLICATION:${result.applicationId}:PENDING`,
+      payload: {
+        name: d.name, phone: d.phone,
+        requestedRole: d.requestedRole,
+        roleLabel: ROLE_LABELS[d.requestedRole] || d.requestedRole,
+        storeName: requestedStoreName || undefined,
+        supplierName: d.supplierName || undefined,
+      },
+    })
     return reply.status(201).send({ ok: true, message: '申请已提交, 等待老板审批' })
   })
 

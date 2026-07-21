@@ -5,6 +5,7 @@ import { isStoreScoped } from '../lib/auth-scope'
 import { businessNoFloor, nextBusinessNo } from '../services/purchaseOrderIntegrity'
 import { estimatedStoreInventory } from '../services/storeInventory'
 import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
+import { fireAndForget as notify } from '../services/notify'
 import { signOssKey } from './upload'
 
 const VIEW_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN', 'BOSS'])
@@ -423,7 +424,22 @@ export const inventoryCountRoutes: FastifyPluginAsync = async app => {
       data: { status: 'REVIEWING', submittedById: req.user.userId, submittedAt: new Date(), rowVersion: { increment: 1 } },
     })
     if (updated.count !== 1) return reply.status(409).send({ error: '盘点单已被其他人更新，请刷新' })
-    return publicCount((await loadCount(row.id, req.user.tenantId))!, true)
+    const fresh = (await loadCount(row.id, req.user.tenantId))!
+    // 通知厨师长/店长确认 (提交人也会收到, 作为提交回执; 失败不阻塞提交)
+    notify({
+      tenantId: req.user.tenantId,
+      event: 'COUNT_PENDING_CONFIRM',
+      eventKey: `INVENTORY_COUNT:${row.id}:SUBMITTED`,
+      payload: {
+        countId: row.id,
+        no: row.no,
+        storeName: fresh.store.name,
+        submittedByName: fresh.submittedBy?.name || '',
+        itemCount: fresh.itemCount || fresh.items.length,
+      },
+      toStoreIds: [row.storeId],
+    })
+    return publicCount(fresh, true)
   })
 
   app.post('/:id/confirm', auth, async (req: any, reply: any) => {

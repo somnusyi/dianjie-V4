@@ -20,6 +20,17 @@ import {
 } from '../services/bomLifecycle'
 import { convertQuantityToInventoryUnit } from '../services/inventoryUnits'
 import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
+import { fireAndForget as notify } from '../services/notify'
+
+/** 一次日报缺 BOM 的菜品聚合成一条通知文案 (去重 + 截断, 防刷屏) */
+export function bomTaskDishNames(rows: Array<{ rawDishName: string; spec?: string | null }>, max = 8): string {
+  const seen = new Set<string>()
+  for (const row of rows) {
+    seen.add(row.spec ? `${row.rawDishName}(${row.spec})` : row.rawDishName)
+  }
+  const names = [...seen]
+  return names.length > max ? `${names.slice(0, max).join('、')} 等 ${names.length} 项` : names.join('、')
+}
 
 const ALLOWED_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN', 'BOSS'])
 const SOURCE = 'daily_pos_upload'
@@ -1299,6 +1310,20 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
       await revalueStoreConsumptionCosts(record.tenantId, record.storeId).catch(error => {
         req.log.error({ error, storeId: record.storeId }, 'consumption cost snapshot refresh failed after daily import')
       })
+      // 缺 BOM 暂缓菜品聚合成一条通知给总厨 (同一 import 幂等, 重放确认不重复推送)
+      if (preview.deferredBomRows.length > 0) {
+        notify({
+          tenantId: record.tenantId,
+          event: 'BOM_TASK_PENDING',
+          eventKey: `DAILY_IMPORT:${record.id}:BOM_TASK`,
+          payload: {
+            storeName: store.name,
+            bizDate: record.businessDate.toISOString().slice(0, 10),
+            count: preview.deferredBomRows.length,
+            dishNames: bomTaskDishNames(preview.deferredBomRows),
+          },
+        })
+      }
       const confirmed = await prisma.dailyBusinessImport.findUniqueOrThrow({ where: { id: record.id } })
       return reply.send(publicImport(confirmed))
     } catch (error: any) {

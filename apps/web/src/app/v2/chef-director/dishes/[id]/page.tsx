@@ -89,7 +89,9 @@ export default function DishDetailPage() {
   const targetSpec = searchParams.get('spec') || ''
   const taskId = searchParams.get('task') || ''
   const hasSuggestedEffectiveFrom = Boolean(searchParams.get('effectiveFrom'))
-  const suggestedDate = searchParams.get('effectiveFrom') || tomorrow()
+  // 业务要求: 变更默认当天生效 (总厨改完配方希望当天日报就按新 BOM 扣);
+  // 需要次日或追溯时仍可在表单里手改日期或选「历史更正」类型。
+  const suggestedDate = searchParams.get('effectiveFrom') || today()
   const suggestedType = searchParams.get('changeType') === 'HISTORICAL_CORRECTION' ? 'HISTORICAL_CORRECTION' : 'BUSINESS_CHANGE'
 
   const [dish, setDish] = useState<Dish | null>(null)

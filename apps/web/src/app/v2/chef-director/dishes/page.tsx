@@ -35,12 +35,18 @@ export default function DishesPage() {
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string>('ACTIVE')
   const [category, setCategory] = useState<string>('all')
+  // 分类 chips 必须来自「全部」快照。若从已过滤列表推导, 点一次分类后
+  // 其他 chip 会消失且布局左移, 下一次点击落在错误的 chip 上。
+  const [categories, setCategories] = useState<string[]>(['all'])
 
   async function reload(showLoading = true) {
     if (showLoading) setDishes(null)
     try {
       const d = await apiFetch<Dish[]>(`/api/dishes?status=${status}&category=${category}&withCost=1`)
       setDishes(d)
+      if (category === 'all') {
+        setCategories(['all', ...Array.from(new Set(d.map(x => x.category || '未分类')))])
+      }
     } catch (e: any) { setError(e.message) }
   }
   useEffect(() => {
@@ -62,7 +68,6 @@ export default function DishesPage() {
   if (error) return <ErrorScreen message={error} />
 
   const list = dishes || []
-  const categories = ['all', ...Array.from(new Set(list.map(d => d.category || '未分类')))]
   const totalDishes = list.length
   const noBOM = list.filter(d => d.inventoryPolicy === 'BOM' && !d.hasAnyEffectiveBom).length
 
@@ -79,7 +84,7 @@ export default function DishesPage() {
       {/* 状态筛选 */}
       <div className="px-4 mt-3 flex gap-1.5 overflow-x-auto">
         {['ACTIVE', 'UPCOMING', 'DISABLED'].map(s => (
-          <button key={s} onClick={() => setStatus(s)}
+          <button key={s} onClick={() => { setStatus(s); setCategory('all') }}
                   className={`shrink-0 px-3 py-1.5 rounded-cta text-button ${status === s ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
             {STATUS_LABEL[s]}
           </button>

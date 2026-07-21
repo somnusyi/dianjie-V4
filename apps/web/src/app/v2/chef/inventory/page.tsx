@@ -8,6 +8,7 @@ import { BottomNav, Chip } from '@/components/v2'
 import { GlanceStrip } from '@/components/v2/glance-strip'
 import { EmptyState, SkeletonCard, FriendlyError } from '@/components/v2/skeleton'
 import { apiFetch } from '@/lib/v2-auth'
+import ChefConsumptionView from './consumption-view'
 
 type InventoryRow = {
   id: string
@@ -56,6 +57,7 @@ type SnapshotResponse = {
 
 export default function ChefInventoryPage() {
   const [tab, setTab] = useState('inventory')
+  const [view, setView] = useState<'stock' | 'consumption'>('stock')
   const [inv, setInv] = useState<InventoryRow[] | null>(null)
   const [orders, setOrders] = useState<OrderRow[] | null>(null)
   const [snapshot, setSnapshot] = useState<SnapshotResponse | null>(null)
@@ -106,6 +108,27 @@ export default function ChefInventoryPage() {
           <button className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">⋮</button>
         </div>
       </header>
+
+      <div className="px-4 mt-2">
+        <div className="inline-flex bg-bg rounded-cta p-0.5">
+          {([{ key: 'stock', label: '库存' }, { key: 'consumption', label: '每日消耗' }] as const).map(option => (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => setView(option.key)}
+              className={`px-3 py-1 text-button rounded-cta transition ${
+                view === option.key ? 'bg-ink text-white' : 'text-gray2 hover:text-ink'
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {view === 'consumption' && <ChefConsumptionView />}
+
+      {view === 'stock' && (<>
 
       <div className="mx-4 mt-2">
         <a href="/v2/inventory-counts" className="flex items-center gap-3 rounded-card border border-amber/30 bg-amber/10 px-3 py-3">
@@ -237,6 +260,8 @@ export default function ChefInventoryPage() {
       )}
 
       {/* "进行中采购" 段移除 — 已在工作台 (/v2/chef/home) 显示, 避免与库存页重复 */}
+
+      </>)}
 
       <BottomNav
         tabs={[

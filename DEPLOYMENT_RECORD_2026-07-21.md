@@ -60,3 +60,9 @@
 - 修复：apiFetch 过期判断未覆盖「未授权，请先登录」导致 30d refresh 从未生效（用户每 2h 被踢回登录）；旧 axios 封装 refresh 地址兜底 localhost:4000 改默认同源
 - 验证：Web tsc + 16/16 单测；标准部署全部通过；`.deployed-commit` 已更新，三进程 online，`/v2/login` 200
 - 该 bug 自初始导入即存在，与当日供应链加固发布无关
+
+## 7. 追加发布：门店食材消耗视图 + 月份选择器改版（2026-07-21 14:50）
+
+- 提交：`d1904b031843cf4aa408f13071bbf54ae6ac8a11`（feature/store-consumption-view 合入 main）
+- 内容：① 营业页月份选择器改单行横滑（单选中态，月结月份绿点）② 厨师长库存页新增「每日消耗」Tab（日消耗/7日环比/菜品明细）③ 营业页新增「食材成本」卡（消耗金额/成本率/Top5）④ 新增 /api/stores/:id/consumption 三个聚合接口（门店角色限定）
+- 验证：API 单测 127/127、集成 76/76、Web tsc + 16/16、干净 worktree 构建；生产备份核验 7-16~19 消耗成本快照金额正常；部署后 .deployed-commit 已更新、三进程 online、新接口 401（鉴权前置正常）

@@ -45,9 +45,23 @@ function ProductsPage() {
   const submit = async () => {
     if (!form.code || !form.name) return show('请填写商品编码和名称', 'error')
     try {
-      const payload = { ...form, price: Number(form.price), stock: Number(form.stock), minStock: Number(form.minStock), shelfDays: Number(form.shelfDays) }
-      if (editing) await api.patch(`/api/products/${editing.id}`, payload)
-      else await api.post('/api/products', payload)
+      if (editing) {
+        await api.patch(`/api/products/${editing.id}`, {
+          name: form.name,
+          category: form.category,
+          unit: form.unit,
+          price: Number(form.price),
+          shelfDays: Number(form.shelfDays),
+        })
+      } else {
+        await api.post('/api/products', {
+          ...form,
+          price: Number(form.price),
+          stock: Number(form.stock),
+          minStock: Number(form.minStock),
+          shelfDays: Number(form.shelfDays),
+        })
+      }
       show(editing ? '已更新' : '商品已创建'); setModalOpen(false); load(editing ? page : 1)
     } catch (e: any) { show(e.response?.data?.error || '操作失败', 'error') }
   }
@@ -84,14 +98,15 @@ function ProductsPage() {
             <Select value={form.unit} onChange={v => setForm({ ...form, unit: v })} options={['kg','g','斤','个','箱','瓶'].map(v => ({ value: v, label: v }))} />
           </Field>
           <Field label="参考单价"><Input {...f('price')} type="number" placeholder="0.00" /></Field>
-          <Field label="当前库存"><Input {...f('stock')} type="number" placeholder="0" /></Field>
-          <Field label="安全库存"><Input {...f('minStock')} type="number" placeholder="低于此值预警" /></Field>
+          {!editing && <Field label="当前库存"><Input {...f('stock')} type="number" placeholder="0" /></Field>}
+          {!editing && <Field label="安全库存"><Input {...f('minStock')} type="number" placeholder="低于此值预警" /></Field>}
           <Field label="保质期(天)"><Input {...f('shelfDays')} type="number" placeholder="7" /></Field>
-          <Field label="默认供应商">
+          {!editing && <Field label="默认供应商">
             <Select value={form.supplierId} onChange={v => setForm({ ...form, supplierId: v })}
               options={suppliers.map(s => ({ value: s.id, label: s.name }))} placeholder="选择供应商" />
-          </Field>
+          </Field>}
         </div>
+        {editing && <div style={{ marginTop: 12, fontSize: 12, color: '#6b7280' }}>库存数量与安全库存请在供应商库存模块调整，商品编辑不会静默修改库存。</div>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20, paddingTop: 16, borderTop: '1px solid #e5e7eb' }}>
           <Btn onClick={() => setModalOpen(false)}>取消</Btn>
           <Btn variant="primary" onClick={submit}>保存</Btn>

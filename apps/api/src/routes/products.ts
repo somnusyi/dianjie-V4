@@ -1168,14 +1168,19 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       if (!supplierId) return reply.status(403).send({ error: '账号未绑定供应商' })
       where.supplierId = supplierId
     }
-    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as any : {}
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return reply.status(400).send({ error: '商品修改内容必须是对象' })
+    }
+    const body = req.body as Record<string, unknown>
     // P1: 非供应商角色也必须白名单字段, 防 mass assignment (改 tenantId / supplierId / id)
     const SUPPLIER_ALLOW = ['price', 'spec', 'category', 'imageKey', 'minOrderQty', 'stepQty', 'shelfDays', 'status', 'shipUpperPct', 'shipUpperBuffer']
     const STAFF_ALLOW = [...SUPPLIER_ALLOW, 'name', 'unit', 'category', 'code']  // 内部员工额外可改名/类
     const allow = isSupplierRole(role) ? SUPPLIER_ALLOW : STAFF_ALLOW
-    const parsedPatch = productPatchSchema.safeParse(
-      Object.fromEntries(Object.entries(body).filter(([k]) => allow.includes(k))),
-    )
+    const forbiddenFields = Object.keys(body).filter(key => !allow.includes(key))
+    if (forbiddenFields.length > 0) {
+      return reply.status(400).send({ error: `不允许修改字段：${forbiddenFields.join('、')}` })
+    }
+    const parsedPatch = productPatchSchema.safeParse(body)
     if (!parsedPatch.success) return reply.status(400).send({ error: parsedPatch.error.issues[0].message })
     const data: any = parsedPatch.data
     if (data.imageKey && !String(data.imageKey).startsWith(`products/${tenantId}/`)) {

@@ -132,6 +132,23 @@ async function main() {
     assert.equal(categories.status, 200, JSON.stringify(categories.body))
     assert.ok(categories.body.some((item: any) => item.name === '验证分类A'))
 
+    const beforeInvalidPatches = await prisma.product.findUniqueOrThrow({ where: { id: product.id } })
+    for (const invalidBody of [
+      { stock: 999 },
+      { name: '供应商不可静默改名' },
+      { unexpected: true },
+    ]) {
+      const invalidPatch = await api(`/api/products/${product.id}`, token, {
+        method: 'PATCH', body: JSON.stringify(invalidBody),
+      })
+      assert.equal(invalidPatch.status, 400, JSON.stringify(invalidPatch.body))
+    }
+    assert.deepEqual(
+      await prisma.product.findUniqueOrThrow({ where: { id: product.id } }),
+      beforeInvalidPatches,
+      '不允许字段必须整体拒绝且零写入',
+    )
+
     const patch = await api(`/api/products/${product.id}`, token, {
       method: 'PATCH',
       body: JSON.stringify({ category: '验证分类B', imageKey: `products/${tenant.id}/verify.jpg` }),
@@ -422,6 +439,11 @@ async function main() {
       body: JSON.stringify({ identifier: adminEmail, password: adminPassword, tenantSlug: TENANT_SLUG }),
     })
     assert.equal(adminLogin.status, 200, JSON.stringify(adminLogin.body))
+    const adminScopePatch = await api(`/api/products/${product.id}`, adminLogin.body.token, {
+      method: 'PATCH', body: JSON.stringify({ supplierId: temporarySupplier.id }),
+    })
+    assert.equal(adminScopePatch.status, 400, JSON.stringify(adminScopePatch.body))
+    assert.equal((await prisma.product.findUniqueOrThrow({ where: { id: product.id } })).supplierId, supplierId)
     const foreignProduct = await prisma.product.create({
       data: {
         tenantId: temporaryTenant.id, supplierId: temporarySupplier.id,
@@ -516,6 +538,7 @@ async function main() {
       ok: true,
       categoryFilter: true,
       imageKey: true,
+      strictPatchFields: true,
       concurrentImportCategoryOrder: true,
       batchCategory: true,
       batchDisableApproval: true,

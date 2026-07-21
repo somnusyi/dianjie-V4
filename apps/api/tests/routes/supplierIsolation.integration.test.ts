@@ -110,9 +110,12 @@ describe('supplier tenant scope (integration)', () => {
 
     app = Fastify()
     app.decorate('authenticate', async (request: any) => {
-      request.user = String(request.headers['x-test-actor'] || 'supplier') === 'chef'
+      const actor = String(request.headers['x-test-actor'] || 'supplier')
+      request.user = actor === 'chef'
         ? { tenantId, storeId, storeIds: [storeId], userId: chefUserId, role: 'KITCHEN_LEAD' }
-        : { tenantId, supplierId: supplierAId, userId: userAId, role: 'SUPPLIER_OWNER' }
+        : actor === 'admin'
+          ? { tenantId, userId: chefUserId, role: 'ADMIN' }
+          : { tenantId, supplierId: supplierAId, userId: userAId, role: 'SUPPLIER_OWNER' }
     })
     await app.register(productRoutes, { prefix: '/api/products' })
     await app.register(supplierStockRoutes, { prefix: '/api/supplier/stock' })
@@ -433,6 +436,35 @@ describe('supplier tenant scope (integration)', () => {
     expect(batchEnable.statusCode).toBe(400)
     expect(await prisma.product.findUniqueOrThrow({ where: { id: pending.id } })).toMatchObject({
       status: 'PENDING_APPROVAL',
+    })
+  })
+
+  it('rejects silently ignored or scope-changing product patch fields before writes', async () => {
+    const before = await prisma.product.findUniqueOrThrow({ where: { id: productAId } })
+    for (const request of [
+      { payload: { stock: 999 }, headers: {} },
+      { payload: { name: '供应商不可改名' }, headers: {} },
+      { payload: { unexpected: true }, headers: {} },
+      { payload: { supplierId: supplierBId }, headers: { 'x-test-actor': 'admin' } },
+    ]) {
+      const response = await app.inject({
+        method: 'PATCH', url: `/api/products/${productAId}`,
+        payload: request.payload, headers: request.headers,
+      })
+      expect(response.statusCode).toBe(400)
+    }
+    expect(await prisma.product.findUniqueOrThrow({ where: { id: productAId } })).toMatchObject({
+      name: before.name,
+      supplierId: before.supplierId,
+      stock: before.stock,
+    })
+
+    const valid = await app.inject({
+      method: 'PATCH', url: `/api/products/${productAId}`, payload: { spec: '严格字段回归' },
+    })
+    expect(valid.statusCode).toBe(200)
+    expect(await prisma.product.findUniqueOrThrow({ where: { id: productAId } })).toMatchObject({
+      spec: '严格字段回归',
     })
   })
 

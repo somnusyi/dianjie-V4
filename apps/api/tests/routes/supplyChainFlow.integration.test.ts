@@ -571,6 +571,64 @@ describe('supplier order to receipt flow (integration)', () => {
     }
   })
 
+  it('rejects malformed cancellation and supplier rejection reasons before writes', async () => {
+    const createOrder = async (marker: string) => {
+      const response = await app.inject({
+        method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' },
+        payload: {
+          supplierId, storeId, expectedDate: '2026-07-20', idempotencyKey: `order-reason-${marker}-${suffix}`,
+          items: [{ productId, quantity: 1, unitPrice: 10 }],
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      return response.json()
+    }
+    const cancelOrder = await createOrder('cancel')
+    const rejectOrder = await createOrder('reject')
+
+    for (const payload of [
+      {},
+      { reason: { invalid: true } },
+      { reason: 'x'.repeat(201) },
+      { reason: '正常原因', unexpected: true },
+    ]) {
+      const response = await app.inject({
+        method: 'PATCH', url: `/api/orders/${cancelOrder.id}/cancel`,
+        headers: { 'x-test-actor': 'chef' }, payload,
+      })
+      expect(response.statusCode).toBe(400)
+    }
+    for (const payload of [
+      {},
+      { reason: { invalid: true } },
+      { reason: 'x'.repeat(101) },
+      { reason: '正常原因', unexpected: true },
+    ]) {
+      const response = await app.inject({
+        method: 'PATCH', url: `/api/orders/${rejectOrder.id}/reject`,
+        headers: { 'x-test-actor': 'supplier' }, payload,
+      })
+      expect(response.statusCode).toBe(400)
+    }
+
+    for (const order of [cancelOrder, rejectOrder]) {
+      expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })).status).toBe('SUBMITTED')
+      expect(await prisma.purchaseOrderEvent.count({
+        where: { purchaseOrderId: order.id, eventType: 'CANCELLED' },
+      })).toBe(0)
+    }
+    const cancelled = await app.inject({
+      method: 'PATCH', url: `/api/orders/${cancelOrder.id}/cancel`,
+      headers: { 'x-test-actor': 'chef' }, payload: { reason: '门店正常撤回' },
+    })
+    const rejected = await app.inject({
+      method: 'PATCH', url: `/api/orders/${rejectOrder.id}/reject`,
+      headers: { 'x-test-actor': 'supplier' }, payload: { reason: '供应商正常拒单' },
+    })
+    expect(cancelled.statusCode).toBe(200)
+    expect(rejected.statusCode).toBe(200)
+  })
+
   it('rejects a stale chef acknowledgement after supplier delivery wins the race', async () => {
     const sqlSuffix = Date.now().toString()
     const delaySequence = `test_chef_ack_delay_seq_${sqlSuffix}`

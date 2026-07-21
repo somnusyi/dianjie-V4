@@ -83,8 +83,44 @@ async function main() {
   const idempotencyKey = `verify-${Date.now()}`
   let orderId: string | null = null
   let orderNo: string | null = null
+  const cleanupOrders: Array<{ id: string; no: string | null }> = []
 
   try {
+    for (const transition of [
+      { marker: 'cancel', endpoint: 'cancel', token: managerToken, maxLength: 200, validReason: '门店正常撤回' },
+      { marker: 'reject', endpoint: 'reject', token: supplierToken, maxLength: 100, validReason: '供应商正常拒单' },
+    ]) {
+      const reasonOrder = await api('/api/orders', managerToken, {
+        method: 'POST',
+        body: JSON.stringify({
+          supplierId: supplier.id,
+          expectedDate: '2026-07-16',
+          idempotencyKey: `verify-reason-${transition.marker}-${Date.now()}`,
+          items: [{ productId: productA.id, quantity: 1, unitPrice: 0 }],
+        }),
+      })
+      assert.equal(reasonOrder.status, 200, JSON.stringify(reasonOrder.body))
+      cleanupOrders.push({ id: reasonOrder.body.id, no: reasonOrder.body.no || null })
+      for (const invalidPayload of [
+        { reason: { invalid: true } },
+        { reason: 'x'.repeat(transition.maxLength + 1) },
+        { reason: '正常原因', unexpected: true },
+      ]) {
+        const invalid = await api(`/api/orders/${reasonOrder.body.id}/${transition.endpoint}`, transition.token, {
+          method: 'PATCH', body: JSON.stringify(invalidPayload),
+        })
+        assert.equal(invalid.status, 400, `${transition.endpoint} 必须拒绝畸形原因: ${JSON.stringify(invalid.body)}`)
+      }
+      const unchanged = await api(`/api/orders/${reasonOrder.body.id}`, managerToken)
+      assert.equal(unchanged.status, 200)
+      assert.equal(unchanged.body.status, 'SUBMITTED')
+      assert.equal(unchanged.body.timeline.filter((event: any) => event.eventType === 'CANCELLED').length, 0)
+      const valid = await api(`/api/orders/${reasonOrder.body.id}/${transition.endpoint}`, transition.token, {
+        method: 'PATCH', body: JSON.stringify({ reason: transition.validReason }),
+      })
+      assert.equal(valid.status, 200, JSON.stringify(valid.body))
+    }
+
     const createBody = {
       supplierId: supplier.id,
       expectedDate: '2026-07-16',
@@ -96,6 +132,7 @@ async function main() {
     assert.equal(created.status, 200)
     orderId = created.body.id
     orderNo = created.body.no
+    cleanupOrders.push({ id: orderId, no: orderNo })
     assert.ok(created.body.submittedSnapshotHash, `创建响应缺少快照哈希: ${JSON.stringify(created.body)}`)
     assert.equal(Number(created.body.originalTotalAmount), 16.65)
 
@@ -167,18 +204,20 @@ async function main() {
 
     console.log(JSON.stringify({ ok: true, orderNo: finalDetail.body.no, originalAmount: 16.65, currentAmount: 26.82, events: finalDetail.body.timeline.length }))
   } finally {
-    if (orderId && !KEEP_TEST_ORDER) {
-      await prisma.$transaction(async tx => {
-        await tx.notification.deleteMany({ where: { refType: 'PurchaseOrder', refId: orderId! } })
-        await tx.opLog.deleteMany({
-          where: { OR: [{ targetId: orderId! }, ...(orderNo ? [{ target: orderNo }] : [])] },
+    if (!KEEP_TEST_ORDER) {
+      for (const cleanupOrder of cleanupOrders.reverse()) {
+        await prisma.$transaction(async tx => {
+          await tx.notification.deleteMany({ where: { refType: 'PurchaseOrder', refId: cleanupOrder.id } })
+          await tx.opLog.deleteMany({
+            where: { OR: [{ targetId: cleanupOrder.id }, ...(cleanupOrder.no ? [{ target: cleanupOrder.no }] : [])] },
+          })
+          await tx.purchaseOrderEvent.deleteMany({ where: { purchaseOrderId: cleanupOrder.id } })
+          await tx.supplierStockReservation.deleteMany({ where: { purchaseOrderId: cleanupOrder.id } })
+          await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: cleanupOrder.id } })
+          await tx.purchaseOrderRevision.deleteMany({ where: { purchaseOrderId: cleanupOrder.id } })
+          await tx.purchaseOrder.deleteMany({ where: { id: cleanupOrder.id } })
         })
-        await tx.purchaseOrderEvent.deleteMany({ where: { purchaseOrderId: orderId! } })
-        await tx.supplierStockReservation.deleteMany({ where: { purchaseOrderId: orderId! } })
-        await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: orderId! } })
-        await tx.purchaseOrderRevision.deleteMany({ where: { purchaseOrderId: orderId! } })
-        await tx.purchaseOrder.delete({ where: { id: orderId! } })
-      })
+      }
     }
     if (!KEEP_TEST_ORDER) {
       await prisma.$transaction(async tx => {

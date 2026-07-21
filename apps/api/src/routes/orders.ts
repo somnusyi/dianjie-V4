@@ -73,6 +73,14 @@ const revisionReviewSchema = z.object({
   note: z.string().trim().max(200).optional(),
 }).strict()
 
+const orderCancelSchema = z.object({
+  reason: z.string().trim().min(1, '请填写撤回原因').max(200, '撤回原因最长 200 字'),
+}).strict()
+
+const orderRejectSchema = z.object({
+  reason: z.string().trim().min(1, '请说明拒单原因').max(100, '拒单原因最长 100 字'),
+}).strict()
+
 const deliveryShipSchema = z.object({
   note: z.string().trim().max(200).optional(),
   idempotencyKey: z.string().trim().min(8).max(80),
@@ -572,9 +580,9 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   app.patch('/:id/cancel', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
     const { tenantId, userId, role, storeId } = req.user
     const { id } = req.params as any
-    const { reason } = (req.body || {}) as any
-    const cancelReason = typeof reason === 'string' ? reason.trim().slice(0, 200) : ''
-    if (!cancelReason) return reply.status(400).send({ error: '请填写撤回原因' })
+    const parsed = orderCancelSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const cancelReason = parsed.data.reason
     // 仅下单方角色可取消 (店长/厨师长/老板/超管/采购/总厨代下)
     if (!['MANAGER', 'KITCHEN_LEAD', 'PURCHASER', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
       return reply.status(403).send({ error: '无权撤回订单' })
@@ -1060,12 +1068,12 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // ── 供应商拒单 ────────────────────────────────
-  app.patch('/:id/reject', { preHandler: [(app as any).authenticate] }, async (req: any) => {
+  app.patch('/:id/reject', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
     const { tenantId, userId, role } = req.user
     const { id } = req.params as any
-    const { reason } = (req.body || {}) as any
+    const parsed = orderRejectSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     if (!isSupplierRole(role) && !['ADMIN', 'SUPER_ADMIN'].includes(role)) throw { statusCode: 403, message: '无权限' }
-    if (!reason || !String(reason).trim()) throw { statusCode: 400, message: '请说明拒单原因' }
     const where: any = { id, tenantId, status: { in: ['SUBMITTED', 'CONFIRMED'] } }
     const scopedSupplierId = requireSupplierBinding(role, req.user.supplierId)
     if (scopedSupplierId) where.supplierId = scopedSupplierId
@@ -1075,7 +1083,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     })
     if (!order) throw { statusCode: 400, message: '订单不存在或当前状态不可拒单' }
     if (order.revisions.length > 0) throw { statusCode: 409, message: '订单有待门店确认的修改，请等待门店处理后再拒单' }
-    const rejectReason = String(reason).trim().slice(0, 100)
+    const rejectReason = parsed.data.reason
     await prisma.$transaction(async (tx) => {
       const lockedOrder = await tx.$queryRaw<Array<{ id: string }>>`
         SELECT "id"

@@ -813,6 +813,16 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const after = revision.afterSnapshot as unknown as OrderSnapshot
     const desired = new Map(after.items.map(item => [item.productId, item]))
     await prisma.$transaction(async (tx) => {
+      const reviewedAt = new Date()
+      const claimed = await tx.purchaseOrderRevision.updateMany({
+        where: { id: revision.id, status: 'PENDING' },
+        data: {
+          status: 'APPROVED', reviewedById: userId, reviewedAt,
+          reviewNote: parsed.data.note || null,
+        },
+      })
+      if (claimed.count === 0) throw { statusCode: 409, message: '改单已被其他人处理' }
+
       const locked = await tx.purchaseOrder.updateMany({
         where: { id, status: 'SUBMITTED', rowVersion: revision.baseRowVersion },
         data: {
@@ -849,10 +859,6 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           },
         })
       }
-      await tx.purchaseOrderRevision.update({
-        where: { id: revision.id },
-        data: { status: 'APPROVED', reviewedById: userId, reviewedAt: new Date(), reviewNote: parsed.data.note || null },
-      })
       await tx.purchaseOrderEvent.create({
         data: {
           tenantId, purchaseOrderId: id, eventType: 'REVISION_APPROVED', actorId: userId, actorRole: role,

@@ -388,6 +388,102 @@ describe('supplier order to receipt flow (integration)', () => {
     }
   })
 
+  it('serializes concurrent approval and rejection of the same order revision', async () => {
+    const sqlSuffix = Date.now().toString()
+    const delaySequence = `test_revision_review_delay_seq_${sqlSuffix}`
+    const delayFunction = `test_revision_review_delay_fn_${sqlSuffix}`
+    const delayTrigger = `test_revision_review_delay_trg_${sqlSuffix}`
+    const create = await app.inject({
+      method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' },
+      payload: {
+        supplierId, storeId, expectedDate: '2026-07-20', idempotencyKey: `revision-review-${suffix}`,
+        items: [{ productId, quantity: 2, unitPrice: 10 }],
+      },
+    })
+    expect(create.statusCode).toBe(200)
+    const order = create.json()
+    const request = await app.inject({
+      method: 'POST', url: `/api/orders/${order.id}/revisions`, headers: { 'x-test-actor': 'supplier' },
+      payload: {
+        reason: '并发审核回归', baseRowVersion: order.rowVersion, requestKey: `revision-review-request-${suffix}`,
+        items: [{ productId, quantity: 3 }],
+      },
+    })
+    expect(request.statusCode).toBe(201)
+    const revisionId = request.json().id
+
+    await prisma.$executeRawUnsafe(`CREATE SEQUENCE "${delaySequence}"`)
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION "${delayFunction}"() RETURNS trigger AS $$
+      BEGIN
+        IF NEW."id" = '${order.id}' AND NEW."currentRevisionNo" = 1 THEN
+          PERFORM nextval('${delaySequence}');
+          PERFORM pg_sleep(0.75);
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `)
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER "${delayTrigger}"
+      BEFORE UPDATE OF "currentRevisionNo" ON "purchase_orders"
+      FOR EACH ROW EXECUTE FUNCTION "${delayFunction}"()
+    `)
+
+    const sequenceValue = async () => {
+      const [row] = await prisma.$queryRawUnsafe<Array<{ value: bigint; is_called: boolean }>>(
+        `SELECT last_value::bigint AS value, is_called FROM "${delaySequence}"`,
+      )
+      return row.is_called ? row.value : 0n
+    }
+    const waitForApprovalUpdate = async () => {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (await sequenceValue() > 0n) return
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      throw new Error('未观察到改单批准进入并发延迟触发器')
+    }
+
+    try {
+      const approvePromise = app.inject({
+        method: 'PATCH', url: `/api/orders/${order.id}/revisions/${revisionId}/approve`,
+        headers: { 'x-test-actor': 'chef' }, payload: { note: '批准改单' },
+      })
+      await waitForApprovalUpdate()
+      const rejectPromise = app.inject({
+        method: 'PATCH', url: `/api/orders/${order.id}/revisions/${revisionId}/reject`,
+        headers: { 'x-test-actor': 'chef' }, payload: { note: '并发驳回不应越过批准' },
+      })
+      const [approved, rejected] = await Promise.all([approvePromise, rejectPromise])
+      expect(approved.statusCode).toBe(200)
+      expect(rejected.statusCode).toBe(409)
+      expect(await prisma.purchaseOrderRevision.findUniqueOrThrow({ where: { id: revisionId } })).toMatchObject({
+        status: 'APPROVED', reviewedById: chefUserId, reviewNote: '批准改单',
+      })
+      expect(await prisma.purchaseOrderEvent.count({
+        where: { purchaseOrderId: order.id, eventType: 'REVISION_APPROVED' },
+      })).toBe(1)
+      expect(await prisma.purchaseOrderEvent.count({
+        where: { purchaseOrderId: order.id, eventType: 'REVISION_REJECTED' },
+      })).toBe(0)
+      expect(await prisma.opLog.count({
+        where: { tenantId, targetId: revisionId, action: { startsWith: '确认订货单修改' } },
+      })).toBe(1)
+      expect(await prisma.opLog.count({
+        where: { tenantId, targetId: revisionId, action: { startsWith: '驳回订货单修改' } },
+      })).toBe(0)
+      const finalOrder = await prisma.purchaseOrder.findUniqueOrThrow({
+        where: { id: order.id }, include: { items: { where: { isActive: true } } },
+      })
+      expect(finalOrder.currentRevisionNo).toBe(1)
+      expect(Number(finalOrder.items[0].quantity)).toBe(3)
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${delayTrigger}" ON "purchase_orders"`)
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${delayFunction}"()`)
+      await prisma.$executeRawUnsafe(`DROP SEQUENCE IF EXISTS "${delaySequence}"`)
+    }
+  })
+
   it('rejects a stale chef acknowledgement after supplier delivery wins the race', async () => {
     const sqlSuffix = Date.now().toString()
     const delaySequence = `test_chef_ack_delay_seq_${sqlSuffix}`

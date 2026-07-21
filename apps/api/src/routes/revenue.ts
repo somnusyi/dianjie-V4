@@ -1,15 +1,57 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
+import { z } from 'zod'
 import { requireStoreBinding } from '../lib/auth-scope'
+import { calendarDateSchema } from '../lib/calendar-date'
 import { monthRangeForDateCol } from '../lib/dateRange'
+
+const MAX_REVENUE_AMOUNT = 9_999_999_999.99
+
+const monthSchema = z.string()
+  .regex(/^\d{4}-(0[1-9]|1[0-2])$/, '月份格式 YYYY-MM')
+
+export const revenueQuerySchema = z.object({
+  month: monthSchema.optional(),
+}).strict()
+
+const revenueAmountSchema = z.preprocess(value => {
+  if (typeof value === 'string' && value.trim() !== '') return Number(value)
+  return value
+}, z.number()
+  .nonnegative('金额不能为负')
+  .max(MAX_REVENUE_AMOUNT, '金额超过营业额字段上限')
+  .refine(value => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8, '金额最多保留 2 位小数'))
+
+const channelAmountSchema = z.preprocess(value => {
+  if (value === '') return 0
+  if (typeof value === 'string' && value.trim() !== '') return Number(value)
+  return value
+}, revenueAmountSchema)
+
+export const revenueCreateSchema = z.object({
+  storeId: z.string().trim().min(1).max(128).optional(),
+  date: calendarDateSchema,
+  amount: revenueAmountSchema.optional(),
+  source: z.string().trim().min(1).max(40).optional(),
+  channels: z.record(
+    z.string().trim().min(1).max(40),
+    channelAmountSchema,
+  ).refine(channels => Object.keys(channels).length <= 20, '渠道数量不能超过 20 个').optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.amount === undefined && value.channels === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['amount'], message: '请填写营业额或渠道明细' })
+  }
+})
 
 export const revenueRoutes: FastifyPluginAsync = async (app) => {
   const auth = { preHandler: [(app as any).authenticate] }
 
   // 获取营业额列表
-  app.get('/', auth, async (req: any) => {
-    const { month } = req.query as any
+  app.get('/', auth, async (req: any, reply: any) => {
+    const parsed = revenueQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const { month } = parsed.data
     const { tenantId, storeId, role } = req.user
     const scopedStoreId = requireStoreBinding(role, storeId)
     const where: any = { store: { tenantId } }
@@ -38,22 +80,25 @@ export const revenueRoutes: FastifyPluginAsync = async (app) => {
     if (!REVENUE_WRITE_ROLES.has(role)) {
       return reply.status(403).send({ error: '无权录入营业额' })
     }
-    const { storeId, date, amount, source, channels } = req.body as any
+    const parsed = revenueCreateSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const { storeId, date, amount, source, channels } = parsed.data
 
     const finalStoreId = requireStoreBinding(role, userStoreId) || storeId
     if (!finalStoreId) return reply.status(400).send({ error: '请指定门店' })
-    if (!date) return reply.status(400).send({ error: '请填写日期' })
 
     // 如果传了渠道明细，从渠道合计算总额；否则用 amount
-    let finalAmount = amount
+    let finalAmount: number
     let rawData: any = {}
-    if (channels && typeof channels === 'object') {
-      const total = Object.values(channels).reduce((s: number, v: any) => s + (Number(v) || 0), 0)
+    if (channels) {
+      const total = Object.values(channels).reduce((cents, value) => cents + Math.round(value * 100), 0) / 100
       if (total <= 0) return reply.status(400).send({ error: '请至少填写一个渠道金额' })
+      if (total > MAX_REVENUE_AMOUNT) return reply.status(400).send({ error: '渠道合计超过营业额字段上限' })
       finalAmount = total
       rawData = { channels }
     } else {
-      if (!amount || Number(amount) <= 0) return reply.status(400).send({ error: '请填写营业额' })
+      if (!amount || amount <= 0) return reply.status(400).send({ error: '请填写营业额' })
+      finalAmount = amount
     }
 
     const store = await prisma.store.findFirst({ where: { id: finalStoreId, tenantId } })
@@ -103,7 +148,7 @@ export const revenueRoutes: FastifyPluginAsync = async (app) => {
         if (!isUpdate || amountChanged) {
           // sourceId 后缀加时间戳避免新建撞老幂等
           const stamp = amountChanged ? `:r${Date.now().toString(36)}` : ''
-          if (channels && typeof channels === 'object') {
+          if (channels) {
             for (const [ch, amt] of Object.entries(channels)) {
               const v = Number(amt || 0)
               if (v <= 0) continue
@@ -141,8 +186,10 @@ export const revenueRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // 获取月度汇总
-  app.get('/summary', auth, async (req: any) => {
-    const { month } = req.query as any
+  app.get('/summary', auth, async (req: any, reply: any) => {
+    const parsed = revenueQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const { month } = parsed.data
     const { tenantId, storeId, role } = req.user
     const scopedStoreId = requireStoreBinding(role, storeId)
     // RevenueRecord.date 是 PG DATE 列, 用 UTC 边界

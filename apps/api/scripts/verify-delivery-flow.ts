@@ -266,6 +266,34 @@ async function main() {
 
   try {
     const localDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())
+    const revenueCountBefore = await prisma.revenueRecord.count({
+      where: { storeId: store.id, date: new Date(`${localDate}T00:00:00.000Z`) },
+    })
+    for (const path of [
+      '/api/revenue?month=2026-13',
+      '/api/revenue/summary?month=2026-00',
+      '/api/revenue?unexpected=true',
+    ]) {
+      const invalidQuery = await api(path, managerToken)
+      assert.equal(invalidQuery.status, 400, `${path}: ${JSON.stringify(invalidQuery.body)}`)
+    }
+    for (const payload of [
+      { date: '2026-02-30', amount: 1 },
+      { date: localDate, amount: 10_000_000_000 },
+      { date: localDate, amount: '1.234' },
+      { date: localDate, amount: 1, unexpected: true },
+      { date: localDate, channels: { cash: -1 } },
+      { date: localDate, channels: { cash: 6_000_000_000, wechat: 6_000_000_000 } },
+    ]) {
+      const invalidRevenue = await api('/api/revenue', managerToken, {
+        method: 'POST', body: JSON.stringify(payload),
+      })
+      assert.equal(invalidRevenue.status, 400, JSON.stringify(invalidRevenue.body))
+    }
+    assert.equal(await prisma.revenueRecord.count({
+      where: { storeId: store.id, date: new Date(`${localDate}T00:00:00.000Z`) },
+    }), revenueCountBefore, '非法营业额请求不得写入或覆盖本店当天记录')
+
     const oversizedManualReceipt = await api('/api/receipts', managerToken, {
       method: 'POST',
       body: JSON.stringify({
@@ -528,7 +556,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, numericBounds: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, orderCreateAuditRollback: true, orderCreateConcurrentReplay: true, orderCreateReplayConflict: true, revisionConcurrentReplay: true, revisionReplayConflict: true, revisionActorsRecorded: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, unboundStoreFailsClosed: true, unboundDashboardFailsClosed: true, unboundRevenueFailsClosed: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, numericBounds: true, revenueValidation: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, orderCreateAuditRollback: true, orderCreateConcurrentReplay: true, orderCreateReplayConflict: true, revisionConcurrentReplay: true, revisionReplayConflict: true, revisionActorsRecorded: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, unboundStoreFailsClosed: true, unboundDashboardFailsClosed: true, unboundRevenueFailsClosed: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))

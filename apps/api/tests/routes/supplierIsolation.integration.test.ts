@@ -927,6 +927,41 @@ describe('supplier tenant scope (integration)', () => {
     expect(stores.json()).toEqual([])
   })
 
+  it('rejects malformed revenue queries and commands before writes', async () => {
+    const headers = { 'x-test-actor': 'admin' }
+    const beforeCount = await prisma.revenueRecord.count({ where: { store: { tenantId } } })
+
+    for (const url of [
+      '/api/revenue?month=2026-13',
+      '/api/revenue/summary?month=2026-00',
+      '/api/revenue?unexpected=true',
+      '/api/revenue/summary?unexpected=true',
+    ]) {
+      const response = await app.inject({ method: 'GET', url, headers })
+      expect(response.statusCode).toBe(400)
+    }
+
+    for (const payload of [
+      { storeId, date: '2026-02-30', amount: 1 },
+      { storeId, date: '2026-07-22', amount: 10_000_000_000 },
+      { storeId, date: '2026-07-22', amount: '1.234' },
+      { storeId, date: '2026-07-22', amount: 1, unexpected: true },
+      { storeId, date: '2026-07-22', channels: { cash: -1 } },
+      { storeId, date: '2026-07-22', channels: { cash: 'not-a-number' } },
+      { storeId, date: '2026-07-22', channels: { cash: 6_000_000_000, wechat: 6_000_000_000 } },
+      {
+        storeId,
+        date: '2026-07-22',
+        channels: Object.fromEntries(Array.from({ length: 21 }, (_, index) => [`channel${index}`, 1])),
+      },
+    ]) {
+      const response = await app.inject({ method: 'POST', url: '/api/revenue', headers, payload })
+      expect(response.statusCode).toBe(400)
+    }
+
+    expect(await prisma.revenueRecord.count({ where: { store: { tenantId } } })).toBe(beforeCount)
+  })
+
   it('keeps legacy and v2 dashboards scoped for every store role', async () => {
     const marker = suffix.slice(-8)
     const otherStore = await prisma.store.create({

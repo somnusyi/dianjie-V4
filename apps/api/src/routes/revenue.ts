@@ -1,7 +1,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
-import { isStoreScoped } from '../lib/auth-scope'
+import { requireStoreBinding } from '../lib/auth-scope'
 import { monthRangeForDateCol } from '../lib/dateRange'
 
 export const revenueRoutes: FastifyPluginAsync = async (app) => {
@@ -11,11 +11,9 @@ export const revenueRoutes: FastifyPluginAsync = async (app) => {
   app.get('/', auth, async (req: any) => {
     const { month } = req.query as any
     const { tenantId, storeId, role } = req.user
+    const scopedStoreId = requireStoreBinding(role, storeId)
     const where: any = { store: { tenantId } }
-    if (isStoreScoped(role)) {
-      if (!storeId) return []
-      where.storeId = storeId
-    }
+    if (scopedStoreId) where.storeId = scopedStoreId
     if (month) {
       // RevenueRecord.date 是 PG DATE 列 (无时间), 需 UTC 边界防 timezone 跨日 bug
       const { start, end } = monthRangeForDateCol(month)
@@ -42,7 +40,7 @@ export const revenueRoutes: FastifyPluginAsync = async (app) => {
     }
     const { storeId, date, amount, source, channels } = req.body as any
 
-    const finalStoreId = isStoreScoped(role) ? userStoreId : storeId
+    const finalStoreId = requireStoreBinding(role, userStoreId) || storeId
     if (!finalStoreId) return reply.status(400).send({ error: '请指定门店' })
     if (!date) return reply.status(400).send({ error: '请填写日期' })
 
@@ -146,13 +144,11 @@ export const revenueRoutes: FastifyPluginAsync = async (app) => {
   app.get('/summary', auth, async (req: any) => {
     const { month } = req.query as any
     const { tenantId, storeId, role } = req.user
+    const scopedStoreId = requireStoreBinding(role, storeId)
     // RevenueRecord.date 是 PG DATE 列, 用 UTC 边界
     const { start, end } = monthRangeForDateCol(month || dayjs().format('YYYY-MM'))
     const where: any = { store: { tenantId }, date: { gte: start, lte: end } }
-    if (role === 'MANAGER') {
-      if (!storeId) return { month: month || dayjs().format('YYYY-MM'), total: 0, stores: [] }
-      where.storeId = storeId
-    }
+    if (scopedStoreId) where.storeId = scopedStoreId
     try {
       const records = await prisma.revenueRecord.findMany({
         where,

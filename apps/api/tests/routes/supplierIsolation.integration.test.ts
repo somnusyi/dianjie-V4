@@ -12,6 +12,7 @@ import { inventoryRoutes } from '../../src/routes/inventory'
 import { dashboardRoutes } from '../../src/routes/dashboard'
 import { v2DashboardRoutes } from '../../src/routes/v2Dashboard'
 import { storeRoutes } from '../../src/routes/stores'
+import { revenueRoutes } from '../../src/routes/revenue'
 
 const suffix = `supplier-isolation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 let tenantId = ''
@@ -135,6 +136,7 @@ describe('supplier tenant scope (integration)', () => {
     await app.register(dashboardRoutes, { prefix: '/api/dashboard' })
     await app.register(v2DashboardRoutes, { prefix: '/api/v2/dashboard' })
     await app.register(storeRoutes, { prefix: '/api/stores' })
+    await app.register(revenueRoutes, { prefix: '/api/revenue' })
     await app.ready()
   })
 
@@ -907,6 +909,15 @@ describe('supplier tenant scope (integration)', () => {
       const response = await app.inject({ method: 'GET', url, headers })
       expect(response.statusCode).toBe(403)
     }
+    for (const url of ['/api/revenue', '/api/revenue/summary']) {
+      const response = await app.inject({ method: 'GET', url, headers })
+      expect(response.statusCode).toBe(403)
+    }
+    const createRevenue = await app.inject({
+      method: 'POST', url: '/api/revenue', headers,
+      payload: { date: '2026-07-22', amount: 1 },
+    })
+    expect(createRevenue.statusCode).toBe(403)
     for (const url of ['/api/inventory', '/api/inventory/snapshot/latest', '/api/inventory/consumptions']) {
       const response = await app.inject({ method: 'GET', url, headers })
       expect(response.statusCode).toBe(400)
@@ -982,6 +993,19 @@ describe('supplier tenant scope (integration)', () => {
       expect(purchaserDashboard.statusCode).toBe(200)
       expect(purchaserDashboard.json().hero).toMatchObject({
         value: '¥11', stats: [{ label: '月营收', value: '¥11' }],
+      })
+
+      const purchaserRevenue = await app.inject({
+        method: 'GET', url: '/api/revenue', headers: { 'x-test-actor': 'purchaser' },
+      })
+      expect(purchaserRevenue.statusCode).toBe(200)
+      expect(purchaserRevenue.json().map((record: any) => record.storeId)).toEqual([storeId])
+      const purchaserSummary = await app.inject({
+        method: 'GET', url: '/api/revenue/summary', headers: { 'x-test-actor': 'purchaser' },
+      })
+      expect(purchaserSummary.statusCode).toBe(200)
+      expect(purchaserSummary.json()).toMatchObject({
+        total: 11, stores: [{ storeId, total: 11, days: 1 }],
       })
     } finally {
       if (otherReceiptId) await prisma.paymentSchedule.deleteMany({ where: { receiptId: otherReceiptId } })

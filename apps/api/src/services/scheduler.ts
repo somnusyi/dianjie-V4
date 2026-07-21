@@ -9,6 +9,7 @@ import { nextBusinessNo } from './purchaseOrderIntegrity'
 import { ensureReceiptDerivatives, repairReceiptDerivatives } from './receiptDerivatives'
 import { ensureReceiptInventoryUnitSnapshots } from './receiptInventoryUnits'
 import { revalueStoreConsumptionCosts } from './inventoryCosting'
+import { runDailyReportReminder } from './dailyReportReminder'
 
 /**
  * 对一张已经送达、超时未确认的订货单执行自动收货。
@@ -451,6 +452,17 @@ export function startScheduler() {
   }, msUntilNext)
   
   console.log('⏰ 账期调度器已启动（每天 01:00 扫描）')
+  
+  // ── 日报未上传提醒: 每天 11:00 (Asia/Shanghai, 业务要求 11:00 前传前一营业日双表) ──
+  // 沿用美团 cron 的 setInterval + 时间窗模式, 不引入 cron 库;
+  // 每分钟检查一次, 命中 11:00-11:05 窗口即扫; eventKey + NotificationLog 持久去重保每店每天一条。
+  setInterval(() => {
+    const shanghaiNow = new Date(Date.now() + 8 * 60 * 60 * 1000)
+    if (shanghaiNow.getUTCHours() === 11 && shanghaiNow.getUTCMinutes() < 5) {
+      runDailyReportReminder().catch(err => console.error('[daily-report-reminder] failed:', err))
+    }
+  }, 60 * 1000)
+  console.log('📅 日报未上传提醒已启动（每天 11:00 Asia/Shanghai）')
 
   // ── 美团智能版 API 同步 (spec: 2026-05-27) ──
   if (process.env.MEITUAN_ENABLED === 'true') {

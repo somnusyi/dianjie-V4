@@ -1,7 +1,9 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000',
+  // 默认同源: /api/* 开发走 Next 代理, 生产走 Nginx 转发. localhost:4000 兜底会让
+  // 生产浏览器把请求打到用户自己电脑上, 等于 refresh 永远失败 → 每 2h 被踢回登录.
+  baseURL: process.env.NEXT_PUBLIC_API_URL || '',
   timeout: 10000,
 })
 
@@ -38,7 +40,7 @@ api.interceptors.response.use(
         isRefreshing = true
         try {
           const r = await axios.post(
-            `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/api/auth/refresh`,
+            `${process.env.NEXT_PUBLIC_API_URL || ''}/api/auth/refresh`,
             { token: refresh }
           )
           const newToken = r.data.token

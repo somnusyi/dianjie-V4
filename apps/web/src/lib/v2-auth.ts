@@ -154,7 +154,7 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
       msg = bodyClone.message || bodyClone.error || msg
       const lc = String(msg).toLowerCase()
       isAuthExpired = !token
-        || (/expired|invalid token|jwt|未登录|token/i.test(msg) && !/权限|不能|无权/.test(msg))
+        || (/expired|invalid token|jwt|未登录|未授权|请先登录|token/i.test(msg) && !/权限|不能|无权/.test(msg))
     } catch {
       isAuthExpired = !token
     }

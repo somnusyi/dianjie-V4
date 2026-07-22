@@ -11,6 +11,7 @@ import { mergeSupplierCategory } from '../services/supplierCategory'
 import { createId } from '@paralleldrive/cuid2'
 import { getSupplierReservedStock, stockAvailability } from '../services/supplierStockReservation'
 import { createSupplierStockBatchIncrease } from '../services/supplierStockBatch'
+import { fireAndForget } from '../services/notify'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
@@ -861,6 +862,18 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         return created
       })
       void invalidatePattern(`products:full:${tenantId}:*`)
+      if (isSupplierRole(role)) {
+        // 供应商上新已生成 SUPPLIER_OFFER_CREATE 审批单 → 企微通知总厨
+        fireAndForget({
+          tenantId,
+          event: 'APPROVAL_PENDING',
+          eventKey: `APPROVAL:PRODUCT:${(product as any).id}`,
+          payload: {
+            docTitle: `新品上架: ${(product as any).name}${(product as any).spec ? ' (' + (product as any).spec + ')' : ''} ¥${Number((product as any).price)}`,
+            summary: `${supplierName || '供应商'} 提交新品,待审批上架`,
+          },
+        })
+      }
       return reply.status(201).send(product)
     } catch (e: any) {
       if (e.code === 'P2002') {
@@ -1358,6 +1371,16 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           return created
         })
         void invalidatePattern(`products:full:${tenantId}:*`)
+        // 涨价审批单已生成 → 企微通知总厨
+        fireAndForget({
+          tenantId,
+          event: 'APPROVAL_PENDING',
+          eventKey: `APPROVAL:PRICE:${doc.no}`,
+          payload: {
+            docTitle: title,
+            summary: `${cur.supplier?.name || '供应商'} 申请涨价,审批通过后自动生效`,
+          },
+        })
         return { count: 1, priceChangeStatus: 'PENDING_APPROVAL', documentNo: doc.no, message: '涨价已提交总厨审批, 通过后自动生效' }
       }
       // 价格不变 → 不写; 降价 / 首次定价 → 直接落库 (data.price 已是新价, 由下面 updateMany 应用)
@@ -1437,6 +1460,19 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       return updated
     })
     void invalidatePattern(`products:full:${tenantId}:*`)
+    // 供应商降价直接生效 → 企微知会总厨 (首次定价 oldPrice=0 不打扰)
+    if (isSupplierRole(role) && data.price != null) {
+      const oldP = Number(before.price)
+      const newP = Number((after as any).price)
+      if (oldP > 0 && newP < oldP) {
+        fireAndForget({
+          tenantId,
+          event: 'PRICE_REDUCED',
+          eventKey: `PRICE-DOWN:${before.id}:${newP}`,
+          payload: { productName: before.name, oldPrice: oldP, newPrice: newP },
+        })
+      }
+    }
     return { count: 1, product: { ...after, imageUrl: signOssKey(after.imageKey) } }
   })
 }

@@ -61,6 +61,34 @@ describe('notify events: 新增待办事件定义', () => {
     expect(msg.textcard!.description).toContain('合肥瑶海店')
     expect(msg.textcard!.url).toContain('/v2/manager/upload-platform')
   })
+
+  it('registers APPROVAL_PENDING / PRICE_REDUCED → CHEF_DIRECTOR tenant scope', () => {
+    expect(EVENTS.APPROVAL_PENDING).toMatchObject({
+      defaultRoles: ['CHEF_DIRECTOR'], scopedBy: 'tenant', urgent: false,
+    })
+    expect(EVENTS.PRICE_REDUCED).toMatchObject({
+      defaultRoles: ['CHEF_DIRECTOR'], scopedBy: 'tenant', urgent: false,
+    })
+  })
+
+  it('renders APPROVAL_PENDING card with doc title and approvals url', () => {
+    const msg = renderTemplate('APPROVAL_PENDING', {
+      docTitle: '新品上架: 鲜切牛吊龙 (500g/份) ¥68', summary: '某某供应商 提交新品,待审批上架',
+    })
+    expect(msg.kind).toBe('textcard')
+    expect(msg.textcard!.title).toContain('新品上架')
+    expect(msg.textcard!.description).toContain('某某供应商')
+    expect(msg.textcard!.url).toContain('/v2/chef-director/approvals')
+  })
+
+  it('renders PRICE_REDUCED text with old/new price', () => {
+    const msg = renderTemplate('PRICE_REDUCED', { productName: '清远鸡盒装', oldPrice: 26, newPrice: 22 })
+    expect(msg.kind).toBe('text')
+    expect(msg.text).toContain('清远鸡盒装')
+    expect(msg.text).toContain('26')
+    expect(msg.text).toContain('22')
+    expect(msg.text).toContain('无需审批')
+  })
 })
 
 describe('bomTaskDishNames 聚合', () => {

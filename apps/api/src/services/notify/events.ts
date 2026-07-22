@@ -114,6 +114,20 @@ export const EVENTS = {
     scopedBy: 'tenant',
     urgent: false,
   },
+  APPROVAL_PENDING: {
+    label: '审批待办',
+    desc: '供应商新品上架/涨价等审批单生成 → 总厨审批 (一张单一卡片)',
+    defaultRoles: ['CHEF_DIRECTOR'],
+    scopedBy: 'tenant',
+    urgent: false,
+  },
+  PRICE_REDUCED: {
+    label: '商品降价知会',
+    desc: '供应商降价直接生效 → 知会总厨 (无需审批)',
+    defaultRoles: ['CHEF_DIRECTOR'],
+    scopedBy: 'tenant',
+    urgent: false,
+  },
 } as const
 
 export type EventKey = keyof typeof EVENTS
@@ -247,6 +261,21 @@ export function renderTemplate(event: EventKey, payload: Record<string, any>): R
           url: `${baseUrl()}/v2/inventory-counts/${payload.countId}`,
           btntxt: '去确认',
         },
+      }
+    case 'APPROVAL_PENDING':
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: `📝 审批待办:${payload.docTitle || '新审批单'}`,
+          description: `${payload.summary || ''}。请在审批页处理,通过后自动生效。`,
+          url: payload.url || `${baseUrl()}/v2/chef-director/approvals`,
+          btntxt: '去审批',
+        },
+      }
+    case 'PRICE_REDUCED':
+      return {
+        kind: 'text',
+        text: `💲 降价知会:${payload.productName || '商品'} ¥${payload.oldPrice ?? '-'} → ¥${payload.newPrice ?? '-'}${payload.supplierName ? ` (${payload.supplierName})` : ''},已直接生效,无需审批。`,
       }
     case 'DATA_QUALITY_TASK':
       return {

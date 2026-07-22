@@ -175,7 +175,7 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
       if (idempotencyKey) {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`inventory-consume:${operationId}`}))`
         const existing = await tx.stockConsumption.findMany({
-          where: { tenantId, storeId, createdById: userId, sourceType: 'manual', sourceId: operationId },
+          where: { tenantId, storeId, createdById: userId, sourceType: 'manual', sourceId: operationId, voidedAt: null },
           select: { productId: true, quantity: true, inventoryQuantity: true, date: true, note: true },
         })
         if (existing.length > 0) {
@@ -251,7 +251,7 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
     const since = dayjs().subtract(query.data.days, 'day').toDate()
 
     return prisma.stockConsumption.findMany({
-      where: { tenantId, date: { gte: since }, ...(storeId ? { storeId } : {}) },
+      where: { tenantId, date: { gte: since }, voidedAt: null, ...(storeId ? { storeId } : {}) },
       include: {
         product: { select: { name: true, unit: true, spec: true, code: true } },
         createdBy: { select: { name: true } },

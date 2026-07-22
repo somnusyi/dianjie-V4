@@ -16,6 +16,7 @@ import { useEffect, useState } from 'react'
 import { BottomNav, Chip } from '@/components/v2'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 import { formatQuantity } from '@/lib/format'
+import ConsumptionRevenueChart, { type DailySeriesPoint } from './consumption-revenue-chart'
 
 type Profit = {
   store: { name: string }
@@ -92,6 +93,7 @@ export default function ManagerOpsPage() {
   const [storeId, setStoreId] = useState<string | null>(null)
   const [closedMonths, setClosedMonths] = useState<ClosedMonth[]>([])
   const [consumption, setConsumption] = useState<ConsumptionSummary | null>(null)
+  const [dailySeries, setDailySeries] = useState<DailySeriesPoint[] | null>(null)
 
   // 挂载: 解析门店并拉取已确认月结月份列表 (失败时降级为空列表, 不影响主流程)
   useEffect(() => {
@@ -113,12 +115,17 @@ export default function ManagerOpsPage() {
     setData(null)
     setError(null)
     setConsumption(null)
+    setDailySeries(null)
     apiFetch<Profit>(`/api/profit/store/${storeId}?month=${activeMonth}`)
       .then(result => { if (!cancelled) setData(result) })
       .catch(e => { if (!cancelled) setError(e.message) })
     apiFetch<ConsumptionSummary>(`/api/stores/${storeId}/consumption/summary?month=${activeMonth}`)
       .then(result => { if (!cancelled) setConsumption(result) })
       .catch(() => { if (!cancelled) setConsumption(null) })
+    // 食材消耗 × 营业额 日线 (共振折线图; 失败时保留加载态以外的静默降级)
+    apiFetch<{ series: DailySeriesPoint[] }>(`/api/consumption/daily-series?storeId=${storeId}&month=${activeMonth}`)
+      .then(result => { if (!cancelled) setDailySeries(result.series || []) })
+      .catch(() => { if (!cancelled) setDailySeries([]) })
     return () => { cancelled = true }
   }, [storeId, activeMonth])
 
@@ -195,6 +202,14 @@ export default function ManagerOpsPage() {
         operatingRevenue={operatingRevenue}
         monthLabel={`${Number(activeMonth.split('-')[1])}月`}
       />
+
+      {/* 食材消耗 × 营业额 共振折线图 */}
+      <Section title="消耗 × 营业额" right={`${Number(activeMonth.split('-')[1])}月 · 按天`}>
+        <ConsumptionRevenueChart
+          series={dailySeries}
+          monthLabel={`${Number(activeMonth.split('-')[1])}月`}
+        />
+      </Section>
 
       {data?.accountingClose && (
         <div className="mx-4 mt-3 bg-green-bg border border-green-fg/20 rounded-card p-3 text-caption">

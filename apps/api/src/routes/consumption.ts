@@ -16,8 +16,11 @@ import { monthRangeForDateCol } from '../lib/dateRange'
 import {
   aggregateByProduct, dailyQtyByProduct, groupDetailRows, summarizeMonth, trailingAvgQty,
 } from '../services/storeConsumption'
+import { VoidConsumptionError, voidConsumptionWithCorrection } from '../services/consumptionCorrection'
 
 const CONSUMPTION_VIEW_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'])
+// 冲销/补记是修正性写操作, 仅集团厨房/管理员角色可用
+const CONSUMPTION_VOID_ROLES = new Set(['CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'])
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 const MONTH_RE = /^\d{4}-\d{2}$/
@@ -77,12 +80,12 @@ export const consumptionRoutes: FastifyPluginAsync = async app => {
 
     const [dayRows, historyRows] = await Promise.all([
       prisma.stockConsumption.findMany({
-        where: { tenantId, storeId, date },
+        where: { tenantId, storeId, date, voidedAt: null },
         select: rowSelect,
       }),
       // 回看 30 天窗口足够覆盖"前 7 个有数据自然日"的常见断档 (日报未确认期间)
       prisma.stockConsumption.findMany({
-        where: { tenantId, storeId, date: { gte: dayjs(date).subtract(30, 'day').toDate(), lt: date } },
+        where: { tenantId, storeId, date: { gte: dayjs(date).subtract(30, 'day').toDate(), lt: date }, voidedAt: null },
         select: rowSelect,
       }),
     ])
@@ -143,7 +146,7 @@ export const consumptionRoutes: FastifyPluginAsync = async app => {
     if (!product) return reply.status(404).send({ error: '食材不存在或不属于当前租户' })
 
     const rows = await prisma.stockConsumption.findMany({
-      where: { tenantId, storeId, productId, date },
+      where: { tenantId, storeId, productId, date, voidedAt: null },
       select: rowSelect,
     })
     const groups = groupDetailRows(rows)
@@ -182,7 +185,7 @@ export const consumptionRoutes: FastifyPluginAsync = async app => {
     const { start, end } = monthRangeForDateCol(month)
 
     const rows = await prisma.stockConsumption.findMany({
-      where: { tenantId, storeId, date: { gte: start, lte: end } },
+      where: { tenantId, storeId, date: { gte: start, lte: end }, voidedAt: null },
       select: rowSelect,
     })
     const summary = summarizeMonth(rows)
@@ -214,5 +217,126 @@ export const consumptionRoutes: FastifyPluginAsync = async app => {
         }
       }),
     }
+  })
+}
+
+/**
+ * 消耗修正与日线序列 (挂在 /api/consumption 前缀下)
+ *
+ *   POST /api/consumption/:id/void           冲销 (+可选补记), CHEF_DIRECTOR/ADMIN/SUPER_ADMIN
+ *   GET  /api/consumption/daily-series       食材消耗 × 营业额 日线, 权限同消耗查看
+ */
+export const consumptionAdminRoutes: FastifyPluginAsync = async app => {
+  const auth = { preHandler: [(app as any).authenticate] }
+
+  // 冲销一行消耗; 传修正值时同事务插入补记行。重复冲销返回 409 (幂等报错)。
+  app.post('/:id/void', auth, async (req: any, reply: any) => {
+    const { tenantId, role, userId } = req.user
+    if (!CONSUMPTION_VOID_ROLES.has(role)) {
+      return reply.status(403).send({ error: '无权冲销消耗记录' })
+    }
+    const body = (req.body || {}) as Record<string, unknown>
+    const reason = String(body.reason || '').trim()
+    if (!reason) return reply.status(400).send({ error: '请填写作废原因' })
+    const numericField = (key: string): number | null | undefined => {
+      const value = body[key]
+      if (value === undefined || value === null) return null
+      const parsed = Number(value)
+      if (!Number.isFinite(parsed) || parsed < 0) return undefined
+      return parsed
+    }
+    const correctedQuantity = numericField('correctedQuantity')
+    const correctedInventoryQuantity = numericField('correctedInventoryQuantity')
+    const correctedCostAmount = numericField('correctedCostAmount')
+    if (correctedQuantity === undefined || correctedInventoryQuantity === undefined || correctedCostAmount === undefined) {
+      return reply.status(400).send({ error: '修正值必须是不小于 0 的数字' })
+    }
+
+    try {
+      const result = await prisma.$transaction(async tx => {
+        const voided = await voidConsumptionWithCorrection(tx, {
+          consumptionId: String(req.params.id),
+          tenantId,
+          reason,
+          voidedById: userId,
+          correctedQuantity,
+          correctedInventoryQuantity,
+          correctedCostAmount,
+        })
+        await tx.opLog.create({
+          data: {
+            tenantId, userId,
+            action: `冲销消耗记录${voided.correctionId ? '并补记修正行' : ''}`,
+            entityType: 'StockConsumption',
+            targetId: voided.voidedId,
+            metadata: { reason, correctionId: voided.correctionId },
+          },
+        })
+        return voided
+      })
+      return { success: true, ...result }
+    } catch (error) {
+      if (error instanceof VoidConsumptionError) {
+        return reply.status(error.statusCode).send({ error: error.message })
+      }
+      throw error
+    }
+  })
+
+  // 食材消耗 × 营业额 日线 (店长营业页共振折线图)
+  // consumptionCost: 当日 stock_consumptions (排除作废) costAmountSnapshot 合计
+  // revenue: 当日 RevenueRecord.amount; costRate = consumptionCost/revenue×100 (revenue=0 时 null)
+  app.get('/daily-series', auth, async (req: any, reply: any) => {
+    const { tenantId, role, storeId: userStoreId } = req.user
+    if (!CONSUMPTION_VIEW_ROLES.has(role)) {
+      return reply.status(403).send({ error: '无权查看门店消耗' })
+    }
+    const storeId = String(req.query?.storeId || '')
+    if (!storeId) return reply.status(400).send({ error: '请指定门店' })
+    if (isStoreScoped(role) && userStoreId !== storeId) {
+      return reply.status(403).send({ error: '无权查看该门店' })
+    }
+    const month = String(req.query?.month || '')
+    if (!MONTH_RE.test(month)) return reply.status(400).send({ error: '月份格式应为 YYYY-MM' })
+    const store = await prisma.store.findFirst({ where: { id: storeId, tenantId }, select: { id: true } })
+    if (!store) return reply.status(404).send({ error: '门店不存在或不属于当前租户' })
+
+    const { start, end } = monthRangeForDateCol(month)
+    const [consumptionRows, revenueRows] = await Promise.all([
+      prisma.stockConsumption.findMany({
+        where: { tenantId, storeId, date: { gte: start, lte: end }, voidedAt: null },
+        select: { date: true, costAmountSnapshot: true },
+      }),
+      prisma.revenueRecord.findMany({
+        where: { storeId, date: { gte: start, lte: end } },
+        select: { date: true, amount: true },
+      }),
+    ])
+
+    const costByDate = new Map<string, Prisma.Decimal>()
+    for (const row of consumptionRows) {
+      const key = row.date.toISOString().slice(0, 10)
+      costByDate.set(key, (costByDate.get(key) ?? new Prisma.Decimal(0)).plus(row.costAmountSnapshot ?? 0))
+    }
+    const revenueByDate = new Map<string, Prisma.Decimal>()
+    for (const row of revenueRows) {
+      const key = row.date.toISOString().slice(0, 10)
+      revenueByDate.set(key, (revenueByDate.get(key) ?? new Prisma.Decimal(0)).plus(row.amount))
+    }
+
+    const daysInMonth = end.getUTCDate()
+    const series = []
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      const key = `${month}-${String(day).padStart(2, '0')}`
+      const consumptionCost = Number((costByDate.get(key) ?? new Prisma.Decimal(0)).toFixed(2))
+      const revenue = Number((revenueByDate.get(key) ?? new Prisma.Decimal(0)).toFixed(2))
+      series.push({
+        date: key,
+        consumptionCost,
+        revenue,
+        costRate: revenue > 0 ? Number((consumptionCost / revenue * 100).toFixed(2)) : null,
+      })
+    }
+    return { storeId, month, series }
   })
 }

@@ -96,7 +96,8 @@ model User {
   supplier                      Supplier?               @relation("SupplierUsers", fields: [supplierId], references: [id])
   receipts                      Receipt[]
   opLogs                        OpLog[]
-  consumptions                  StockConsumption[]
+  consumptions                  StockConsumption[]        @relation("ConsumptionCreatedBy")
+  voidedConsumptions            StockConsumption[]        @relation("ConsumptionVoidedBy")
   createdPOs                    PurchaseOrder[]         @relation("POCreatedBy")
   shippedPOs                    PurchaseOrder[]         @relation("POShippedBy")
   requestedPORevisions          PurchaseOrderRevision[] @relation("PORevisionRequestedBy")
@@ -2258,10 +2259,19 @@ model StockConsumption {
   costAmountSnapshot    Decimal?        @db.Decimal(18, 4)
   createdById           String
   createdAt             DateTime        @default(now())
+  // 冲销/补记 (审计保留): 原行只标记作废不删除; 补记行 correctionOfId 指回原行,
+  // sourceType='correction' + sourceId=原行 id。所有读路径必须过滤 voidedAt: null。
+  voidedAt              DateTime?
+  voidedReason          String?         @db.VarChar(200)
+  voidedById            String?
+  correctionOfId        String?
   tenant                Tenant          @relation(fields: [tenantId], references: [id])
   store                 Store           @relation(fields: [storeId], references: [id])
   product               Product         @relation(fields: [productId], references: [id])
-  createdBy             User            @relation(fields: [createdById], references: [id])
+  createdBy             User            @relation("ConsumptionCreatedBy", fields: [createdById], references: [id])
+  voidedBy              User?           @relation("ConsumptionVoidedBy", fields: [voidedById], references: [id], onDelete: SetNull)
+  correctionOf          StockConsumption?  @relation("ConsumptionCorrection", fields: [correctionOfId], references: [id], onDelete: SetNull)
+  corrections           StockConsumption[] @relation("ConsumptionCorrection")
   dish                  Dish?           @relation(fields: [dishId], references: [id], onDelete: SetNull)
   bomVersion            DishBomVersion? @relation(fields: [bomVersionId], references: [id], onDelete: SetNull)
 

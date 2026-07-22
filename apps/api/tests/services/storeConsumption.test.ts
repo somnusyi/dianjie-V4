@@ -4,6 +4,7 @@ import {
   aggregateByProduct, dailyQtyByProduct, groupDetailRows, summarizeMonth, trailingAvgQty,
   type ConsumptionSourceRow,
 } from '../../src/services/storeConsumption'
+import { voidConsumptionWithCorrection } from '../../src/services/consumptionCorrection'
 
 const D = (value: number | string) => new Prisma.Decimal(value)
 const utcDate = (day: string) => new Date(`${day}T00:00:00.000Z`)
@@ -92,5 +93,106 @@ describe('storeConsumption aggregation', () => {
     expect(summary.totalCost.toFixed(3)).toBe('35.555')
     expect(summary.daysWithData).toBe(2)
     expect(summary.byProduct.get('p1')!.cost.toFixed(3)).toBe('15.555')
+  })
+
+  it('correction rows (sourceType=correction) are normal rows for aggregation', () => {
+    // 作废行的剔除发生在查询层 (voidedAt: null); 聚合函数把传入的补记行当普通行计入
+    const rows = [
+      row({ productId: 'p1', dishId: 'd1', sourceType: 'correction', inventoryQuantity: D('0.018333'), costAmountSnapshot: D('0.6967') }),
+      row({ productId: 'p1', dishId: 'd1', inventoryQuantity: D('1'), costAmountSnapshot: D('2') }),
+    ]
+    const agg = aggregateByProduct(rows).get('p1')!
+    expect(agg.qty.toFixed(6)).toBe('1.018333')
+    expect(agg.cost.toFixed(4)).toBe('2.6967')
+    const groups = groupDetailRows(rows)
+    expect(groups).toHaveLength(1)
+    expect(groups[0].dishId).toBe('d1')
+  })
+})
+
+// ── 冲销/补记 service (stubbed tx) ─────────────────────────
+describe('voidConsumptionWithCorrection', () => {
+  const originalRow = {
+    id: 'row-1', tenantId: 't1', storeId: 's1', productId: 'p1',
+    date: utcDate('2026-07-18'),
+    quantity: D('18.333333'), inventoryQuantity: D('54999.999'),
+    unitSnapshot: '桶', inventoryUnitSnapshot: 'g',
+    unitCostSnapshot: D('0.012667'), costAmountSnapshot: D('696.6667'),
+    note: '每日销量×BOM；轻颜羽衣甘蓝 1份', dishId: 'd1', variantKey: '', bomVersionId: 'bom-1',
+    voidedAt: null,
+  }
+
+  function stubTx(row: typeof originalRow | null) {
+    const calls = { update: [] as any[], create: [] as any[] }
+    const tx = {
+      stockConsumption: {
+        findFirst: async () => row,
+        update: async (args: any) => { calls.update.push(args); return { ...row, ...args.data } },
+        create: async (args: any) => { calls.create.push(args); return { id: 'correction-1', ...args.data } },
+      },
+    }
+    return { tx: tx as any, calls }
+  }
+
+  it('voids the original row and inserts a correction row with scaled values', async () => {
+    const { tx, calls } = stubTx(originalRow)
+    const result = await voidConsumptionWithCorrection(tx, {
+      consumptionId: 'row-1', tenantId: 't1', reason: '单位换算 bug', voidedById: 'admin-1',
+      correctedQuantity: D('0.018333'), correctedInventoryQuantity: D('55'),
+    })
+    expect(result).toEqual({ voidedId: 'row-1', correctionId: 'correction-1' })
+
+    const update = calls.update[0]
+    expect(update.where).toEqual({ id: 'row-1' })
+    expect(update.data.voidedAt).toBeInstanceOf(Date)
+    expect(update.data.voidedReason).toBe('单位换算 bug')
+    expect(update.data.voidedById).toBe('admin-1')
+
+    const data = calls.create[0].data
+    expect(data).toMatchObject({
+      tenantId: 't1', storeId: 's1', productId: 'p1', dishId: 'd1', bomVersionId: 'bom-1',
+      sourceType: 'correction', sourceId: 'row-1', sourceLineKey: 'correction',
+      correctionOfId: 'row-1', createdById: 'admin-1',
+      unitSnapshot: '桶', inventoryUnitSnapshot: 'g',
+    })
+    expect(data.quantity.toFixed(6)).toBe('0.018333')
+    expect(data.inventoryQuantity.toFixed(6)).toBe('55.000000')
+    // 未显式传修正金额时按 修正库存量 × 原 unitCostSnapshot 计算
+    expect(data.costAmountSnapshot.toFixed(4)).toBe('0.6967')
+    expect(data.calculationSnapshot).toMatchObject({
+      correctionOf: 'row-1', originalInventoryQuantity: '54999.999', reason: '单位换算 bug',
+    })
+  })
+
+  it('voids without correction when no corrected values are given', async () => {
+    const { tx, calls } = stubTx(originalRow)
+    const result = await voidConsumptionWithCorrection(tx, {
+      consumptionId: 'row-1', tenantId: 't1', reason: 'BOM 配方错误，待确认', voidedById: 'admin-1',
+    })
+    expect(result).toEqual({ voidedId: 'row-1', correctionId: null })
+    expect(calls.update).toHaveLength(1)
+    expect(calls.create).toHaveLength(0)
+  })
+
+  it('rejects a second void with 409 (idempotent error)', async () => {
+    const { tx } = stubTx({ ...originalRow, voidedAt: new Date() })
+    await expect(voidConsumptionWithCorrection(tx, {
+      consumptionId: 'row-1', tenantId: 't1', reason: '重复冲销', voidedById: 'admin-1',
+    })).rejects.toMatchObject({ statusCode: 409 })
+  })
+
+  it('returns 404 when the row does not exist in the tenant', async () => {
+    const { tx } = stubTx(null)
+    await expect(voidConsumptionWithCorrection(tx, {
+      consumptionId: 'missing', tenantId: 't1', reason: 'x', voidedById: 'admin-1',
+    })).rejects.toMatchObject({ statusCode: 404 })
+  })
+
+  it('rejects negative corrected values with 400', async () => {
+    const { tx } = stubTx(originalRow)
+    await expect(voidConsumptionWithCorrection(tx, {
+      consumptionId: 'row-1', tenantId: 't1', reason: 'x', voidedById: 'admin-1',
+      correctedInventoryQuantity: D('-1'),
+    })).rejects.toMatchObject({ statusCode: 400 })
   })
 })

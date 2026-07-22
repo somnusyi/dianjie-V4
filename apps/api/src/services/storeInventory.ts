@@ -193,7 +193,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
       },
     }),
     prisma.stockConsumption.findMany({
-      where: { tenantId, storeId, date: { gte: openingDate, ...(asOfDay ? { lte: asOfDay } : {}) } },
+      where: { tenantId, storeId, date: { gte: openingDate, ...(asOfDay ? { lte: asOfDay } : {}) }, voidedAt: null },
       select: { productId: true, quantity: true, inventoryQuantity: true, date: true },
     }),
     prisma.lossClaimItem.findMany({

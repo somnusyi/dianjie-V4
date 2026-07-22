@@ -31,6 +31,9 @@ const inflateReason = (times: string) =>
   `单位换算 bug 导致扣减数量虚高（×${times}），冲销后按正确数量补记`
 
 // 清单已与本地生产副本 dianjie_prod_copy_20260721 逐行核对 (2026-07-22)。
+// 覆盖范围: 初版清单 (7-17~7-19) + 7-16/7-17 同产品同倍率特征行;
+// 倍率特征按「每份扣减 vs 2026-07-19 修正版 BOM / 7-19 正确行」逐行判定
+// (凤梨果酱 7-16/7-17 傣味柠檬虾 140g = 1×BOM 属正常, 不在清单内)。
 const TARGETS: Target[] = [
   // ── 奇异果果酱 (1桶=3000g, BOM 把 55g/份 录成 55kg 量级, ×1000) ──
   { productId: 'cmp2dyld2007ndjcn53exbto1', productName: '奇异果果酱', date: '2026-07-17',
@@ -39,6 +42,10 @@ const TARGETS: Target[] = [
     matchInventoryQuantity: '329999.994', correctedInventoryQuantity: '330', reason: inflateReason('1000') },
 
   // ── SevenQ茉莉绿茶 (1袋=15000g, ×30) ──
+  { productId: 'cmp2dylbv006fdjcngop1z2x6', productName: 'SevenQ茉莉绿茶', date: '2026-07-16',
+    matchInventoryQuantity: '200.1', correctedInventoryQuantity: '6.67', reason: inflateReason('30') },
+  { productId: 'cmp2dylbv006fdjcngop1z2x6', productName: 'SevenQ茉莉绿茶', date: '2026-07-17',
+    matchInventoryQuantity: '500.4', correctedInventoryQuantity: '16.68', reason: inflateReason('30') },
   { productId: 'cmp2dylbv006fdjcngop1z2x6', productName: 'SevenQ茉莉绿茶', date: '2026-07-18',
     matchInventoryQuantity: '900', correctedInventoryQuantity: '30', reason: inflateReason('30') },
   { productId: 'cmp2dylbv006fdjcngop1z2x6', productName: 'SevenQ茉莉绿茶', date: '2026-07-18',
@@ -63,16 +70,32 @@ const TARGETS: Target[] = [
     matchInventoryQuantity: '580', correctedInventoryQuantity: '58', reason: inflateReason('10') },
 
   // ── 斤/kg 混淆 (×2) ──
+  // 注: 凤梨果酱 7-16/7-17 (傣味柠檬虾 140.001g) 已核对为正常行 —— 当前 BOM
+  //     (2026-07-19 修正版) 该菜品用量确为 140g, 行值 = 1×BOM, 不符合 ×2 特征, 不冲销。
   { productId: 'cmp2dylby006jdjcnt8dd9lxc', productName: '凤梨果酱', date: '2026-07-18',
     matchInventoryQuantity: '83.001', correctedInventoryQuantity: '41.5005', reason: inflateReason('2') },
+  { productId: 'cmp2dylaz005jdjcngyj2nnr1', productName: '特级丘北辣椒', date: '2026-07-16',
+    matchInventoryQuantity: '40', correctedInventoryQuantity: '20', reason: inflateReason('2') },
+  { productId: 'cmp2dylaz005jdjcngyj2nnr1', productName: '特级丘北辣椒', date: '2026-07-17',
+    matchInventoryQuantity: '20', correctedInventoryQuantity: '10', reason: inflateReason('2') },
   { productId: 'cmp2dylaz005jdjcngyj2nnr1', productName: '特级丘北辣椒', date: '2026-07-18',
     matchInventoryQuantity: '40', correctedInventoryQuantity: '20', reason: inflateReason('2') },
   { productId: 'cmp2dylaz005jdjcngyj2nnr1', productName: '特级丘北辣椒', date: '2026-07-18',
     matchInventoryQuantity: '24', correctedInventoryQuantity: '12', reason: inflateReason('2') },
+  { productId: 'cmp2dylb3005ndjcn3q2n950y', productName: '特级子弹头', date: '2026-07-16',
+    matchInventoryQuantity: '20', correctedInventoryQuantity: '10', reason: inflateReason('2') },
+  { productId: 'cmp2dylb3005ndjcn3q2n950y', productName: '特级子弹头', date: '2026-07-17',
+    matchInventoryQuantity: '10', correctedInventoryQuantity: '5', reason: inflateReason('2') },
   { productId: 'cmp2dylb3005ndjcn3q2n950y', productName: '特级子弹头', date: '2026-07-18',
     matchInventoryQuantity: '20', correctedInventoryQuantity: '10', reason: inflateReason('2') },
+  { productId: 'cmp2dylax005hdjcnxxskh795', productName: '特级灯笼椒', date: '2026-07-16',
+    matchInventoryQuantity: '20', correctedInventoryQuantity: '10', reason: inflateReason('2') },
+  { productId: 'cmp2dylax005hdjcnxxskh795', productName: '特级灯笼椒', date: '2026-07-17',
+    matchInventoryQuantity: '10', correctedInventoryQuantity: '5', reason: inflateReason('2') },
   { productId: 'cmp2dylax005hdjcnxxskh795', productName: '特级灯笼椒', date: '2026-07-18',
     matchInventoryQuantity: '20', correctedInventoryQuantity: '10', reason: inflateReason('2') },
+  { productId: 'cmp2dyle0008hdjcncb1gkyw1', productName: '马蹄爆爆珠', date: '2026-07-17',
+    matchInventoryQuantity: '79.9992', correctedInventoryQuantity: '39.9996', reason: inflateReason('2') },
   { productId: 'cmp2dyle0008hdjcncb1gkyw1', productName: '马蹄爆爆珠', date: '2026-07-18',
     matchInventoryQuantity: '19.9998', correctedInventoryQuantity: '9.9999', reason: inflateReason('2') },
   { productId: 'cmp2dyle0008hdjcncb1gkyw1', productName: '马蹄爆爆珠', date: '2026-07-18',

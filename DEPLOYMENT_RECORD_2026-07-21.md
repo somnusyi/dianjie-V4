@@ -94,3 +94,9 @@
 ## 第 8 次：数据质量待办通知事件（690d63d）
 - 内容：新增 DATA_QUALITY_TASK 企微通知事件（主数据/规格待确认 → 总厨，聚合成一条卡片）；附一次性触发脚本 scripts/notify-chef-data-tasks.ts
 - 部署：DEPLOY_EXIT_CODE=0，.deployed-commit=690d63d9dd3c…，pm2 全部 online
+
+## 第 9 次：消耗冲销/补记机制 + 消耗×营业额共振折线图（e8957d6，2026-07-22 上午发布）
+- 机制：stock_consumptions 增加 voidedAt/voidedReason/voidedById/correctionOfId（迁移 20260722014111）；所有读路径排除作废行；新增 POST /api/consumption/:id/void（总厨/管理员，冲销+可选补记，opLog 审计）
+- 图表：GET /api/consumption/daily-series + 店长营业页「食材成本」卡下新增 SVG 双折线（营业额/食材成本）+ 成本率虚线右轴，点按看当日明细
+- 生产修正：scripts/correct-anomalous-consumptions.ts --apply 执行，28 行作废 + 27 行补记；7 月有效消耗成本 ¥36,383.57 → ¥19,929.78（净降 ¥16,453.79）；鲜花饼行仅冲销，待总厨确认配方后补记
+- 测试：单元 142/142、集成 90/90，两端 tsc 通过；部署 DEPLOY_EXIT_CODE=0，.deployed-commit=e8957d674e92…，pm2 全部 online

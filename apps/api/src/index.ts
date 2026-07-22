@@ -79,7 +79,7 @@ import { meituanAdminRoutes } from './routes/meituanAdmin'
 import { meituanDataRoutes } from './routes/meituanData'
 import { dailyBusinessImportRoutes } from './routes/dailyBusinessImports'
 import { inventoryCountRoutes } from './routes/inventoryCounts'
-import { consumptionRoutes } from './routes/consumption'
+import { consumptionAdminRoutes, consumptionRoutes } from './routes/consumption'
 import { isSupplierRole } from './lib/auth-scope'
 
 function resolveJwtSecret() {
@@ -261,6 +261,7 @@ async function bootstrap() {
   app.register(dailyBusinessImportRoutes, { prefix: '/api/daily-business-imports' })
   app.register(inventoryCountRoutes, { prefix: '/api/inventory-counts' })
   app.register(consumptionRoutes, { prefix: '/api/stores' })
+  app.register(consumptionAdminRoutes, { prefix: '/api/consumption' })
 
   // ── 健康检查（含数据库连接验证）──────
   // /api/health is the public path behind app.dianjie.cc's nginx proxy;

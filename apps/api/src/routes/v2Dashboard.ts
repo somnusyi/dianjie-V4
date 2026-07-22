@@ -282,7 +282,7 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
         }).catch(() => ({ _sum: { totalAmount: 0 } as any })),
         // 实际消耗成本使用落账时的移动平均成本快照，避免包装价直接乘基础用量。
         prisma.stockConsumption.aggregate({
-          where: { tenantId, storeId: storeId!, date: { gte: monthStart, lte: monthEnd } },
+          where: { tenantId, storeId: storeId!, date: { gte: monthStart, lte: monthEnd }, voidedAt: null },
           _sum: { costAmountSnapshot: true },
         }).then(result => Number(result._sum.costAmountSnapshot || 0))
           .catch(() => 0),

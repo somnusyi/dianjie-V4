@@ -70,7 +70,7 @@ export async function revalueStoreConsumptionCosts(tenantId: string, storeId: st
       include: { product: true, receipt: { select: { deliveryDate: true } } },
     }),
     prisma.stockConsumption.findMany({
-      where: { tenantId, storeId, date: { gte: openingDate } },
+      where: { tenantId, storeId, date: { gte: openingDate }, voidedAt: null },
       include: { product: true },
     }),
     prisma.lossClaimItem.findMany({

@@ -797,7 +797,8 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
         where: {
           tenantId, dishId: { in: dishIds }, date: { gte: start, lte: end },
           ...(where.storeId ? { storeId: where.storeId } : {}),
-          sourceType: { in: ['daily_pos', 'daily_bom_backfill', 'dish_sale'] },
+          sourceType: { in: ['daily_pos', 'daily_bom_backfill', 'dish_sale', 'correction'] },
+          voidedAt: null,
         },
         select: { dishId: true, costAmountSnapshot: true },
       }),
@@ -856,7 +857,8 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
         tenantId,
         ...(where.date ? { date: where.date } : {}),
         ...(where.storeId ? { storeId: where.storeId } : {}),
-        sourceType: { in: ['daily_pos', 'daily_bom_backfill', 'dish_sale'] },
+        sourceType: { in: ['daily_pos', 'daily_bom_backfill', 'dish_sale', 'correction'] },
+        voidedAt: null,
       },
       include: { product: { select: { id: true, name: true, unit: true, inventoryUnit: true, spec: true } } },
     })

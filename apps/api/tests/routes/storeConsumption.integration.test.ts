@@ -1,7 +1,7 @@
 import Fastify from 'fastify'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { prisma } from '@dianjie/db'
-import { consumptionRoutes } from '../../src/routes/consumption'
+import { consumptionAdminRoutes, consumptionRoutes } from '../../src/routes/consumption'
 
 const suffix = `consumption-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 const DAY = '2026-07-10'
@@ -18,6 +18,9 @@ let productAId = ''
 let productBId = ''
 
 type TestUser = { tenantId: string; storeId: string | null; userId: string; role: string }
+
+// 提升作用域: 后面的 void/daily-series describe 需要追加 chefDirector 用户
+const users: Record<string, TestUser> = {}
 
 async function seedConsumption(data: {
   tenantId: string; storeId: string; productId: string; dishId?: string; date: string
@@ -92,12 +95,12 @@ describe('store consumption view (integration)', () => {
     // 同租户另一门店同日的数据不应混入
     await seedConsumption({ ...base, storeId: otherStoreId, productId: productAId, dishId: dish1.id, date: DAY, invQty: '99', cost: '1980', sourceId: 'sale-other-store' })
 
-    const users: Record<string, TestUser> = {
+    Object.assign(users, {
       manager: { tenantId, storeId, userId: managerId, role: 'MANAGER' },
       chef: { tenantId, storeId: otherStoreId, userId: chef.id, role: 'KITCHEN_LEAD' },
       admin: { tenantId, storeId: null, userId: admin.id, role: 'ADMIN' },
       waiter: { tenantId, storeId, userId: managerId, role: 'WAITER' },
-    }
+    })
 
     app = Fastify()
     app.decorate('authenticate', async (request: any) => {
@@ -105,12 +108,15 @@ describe('store consumption view (integration)', () => {
       request.user = users[key]
     })
     await app.register(consumptionRoutes, { prefix: '/api/stores' })
+    await app.register(consumptionAdminRoutes, { prefix: '/api/consumption' })
     await app.ready()
   })
 
   afterAll(async () => {
     if (app) await app.close()
     if (!tenantId) return
+    await prisma.opLog.deleteMany({ where: { tenantId: { in: [tenantId, otherTenantId] } } })
+    await prisma.revenueRecord.deleteMany({ where: { storeId: { in: [storeId, otherStoreId, otherTenantStoreId] } } })
     await prisma.stockConsumption.deleteMany({ where: { tenantId: { in: [tenantId, otherTenantId] } } })
     await prisma.dish.deleteMany({ where: { tenantId } })
     await prisma.product.deleteMany({ where: { tenantId } })
@@ -224,4 +230,229 @@ describe('store consumption view (integration)', () => {
     })
     expect(cross.statusCode).toBe(403)
   })
+// ── 冲销/补记 + 日线序列 (integration) ─────────────────────
+// 嵌套在外层 describe 内, 共享其种子数据与 afterAll 清理;
+// 使用独立日期 (07-18/07-19) 与独立食材, 不影响上面已有用例的聚合断言。
+describe('consumption void / correction / daily-series (integration)', () => {
+  const VOID_DAY = '2026-07-18'
+  const VOID_ONLY_DAY = '2026-07-19'
+  let productCId = ''
+  let rowToCorrectId = ''
+  let rowVoidOnlyId = ''
+  let otherTenantRowId = ''
+  let chefDirectorId = ''
+  let adminUserId = ''
+
+  beforeAll(async () => {
+    const director = await prisma.user.create({
+      data: { tenantId, name: '总厨', email: `${suffix}-cd@local.test`, password: 'test', role: 'CHEF_DIRECTOR' },
+    })
+    chefDirectorId = director.id
+    users.chefDirector = { tenantId, storeId: null, userId: director.id, role: 'CHEF_DIRECTOR' }
+    const admin = await prisma.user.findFirstOrThrow({ where: { tenantId, role: 'ADMIN' } })
+    adminUserId = admin.id
+
+    const productC = await prisma.product.create({
+      data: { tenantId, code: 'MR003', name: '奇异果果酱', category: '酱料', unit: '桶', inventoryUnit: 'g', price: 38 },
+    })
+    productCId = productC.id
+
+    // 待冲销+补记行: 100g × ¥4/g = ¥200
+    const rowToCorrect = await prisma.stockConsumption.create({
+      data: {
+        tenantId, storeId, productId: productCId,
+        date: new Date(`${VOID_DAY}T00:00:00.000Z`),
+        quantity: '4', inventoryQuantity: '100', unitSnapshot: '桶', inventoryUnitSnapshot: 'g',
+        unitCostSnapshot: '4', costAmountSnapshot: '200',
+        sourceType: 'daily_pos', sourceId: 'anomalous-1', createdById: managerId,
+      },
+    })
+    rowToCorrectId = rowToCorrect.id
+    // 同日正常行 ¥50
+    await prisma.stockConsumption.create({
+      data: {
+        tenantId, storeId, productId: productCId,
+        date: new Date(`${VOID_DAY}T00:00:00.000Z`),
+        quantity: '1', inventoryQuantity: '25', unitSnapshot: '桶', inventoryUnitSnapshot: 'g',
+        unitCostSnapshot: '2', costAmountSnapshot: '50',
+        sourceType: 'daily_pos', sourceId: 'normal-1', createdById: managerId,
+      },
+    })
+    // 只冲销不补记的行 ¥30
+    const rowVoidOnly = await prisma.stockConsumption.create({
+      data: {
+        tenantId, storeId, productId: productCId,
+        date: new Date(`${VOID_ONLY_DAY}T00:00:00.000Z`),
+        quantity: '1', inventoryQuantity: '10', unitSnapshot: '桶', inventoryUnitSnapshot: 'g',
+        unitCostSnapshot: '3', costAmountSnapshot: '30',
+        sourceType: 'daily_pos', sourceId: 'anomalous-2', createdById: managerId,
+      },
+    })
+    rowVoidOnlyId = rowVoidOnly.id
+    // 异租户行 (越权冲销应 404)
+    const otherTenantRow = await prisma.stockConsumption.create({
+      data: {
+        tenantId: otherTenantId, storeId: otherTenantStoreId, productId: productCId,
+        date: new Date(`${VOID_DAY}T00:00:00.000Z`),
+        quantity: '1', inventoryQuantity: '1', costAmountSnapshot: '1',
+        sourceType: 'daily_pos', sourceId: 'other-tenant-row', createdById: managerId,
+      },
+    })
+    otherTenantRowId = otherTenantRow.id
+
+    // 营业额: VOID_DAY ¥4000; VOID_ONLY_DAY 无记录 (revenue=0 → costRate null)
+    await prisma.revenueRecord.create({
+      data: { storeId, date: new Date(`${DAY}T00:00:00.000Z`), amount: '1000' },
+    })
+    await prisma.revenueRecord.create({
+      data: { storeId, date: new Date(`${VOID_DAY}T00:00:00.000Z`), amount: '4000' },
+    })
+  })
+
+  it('rejects roles without void permission (MANAGER / KITCHEN_LEAD / WAITER)', async () => {
+    for (const key of ['manager', 'chef', 'waiter']) {
+      const response = await app.inject({
+        method: 'POST', url: `/api/consumption/${rowToCorrectId}/void`,
+        headers: { 'x-test-user': key },
+        payload: { reason: '无权限测试' },
+      })
+      expect(response.statusCode).toBe(403)
+    }
+  })
+
+  it('requires a void reason', async () => {
+    const response = await app.inject({
+      method: 'POST', url: `/api/consumption/${rowToCorrectId}/void`,
+      headers: { 'x-test-user': 'admin' },
+      payload: {},
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
+  it('hides other-tenant rows behind 404', async () => {
+    const response = await app.inject({
+      method: 'POST', url: `/api/consumption/${otherTenantRowId}/void`,
+      headers: { 'x-test-user': 'admin' },
+      payload: { reason: '跨租户冲销' },
+    })
+    expect(response.statusCode).toBe(404)
+  })
+
+  it('voids the original row and inserts a correction row (CHEF_DIRECTOR)', async () => {
+    const response = await app.inject({
+      method: 'POST', url: `/api/consumption/${rowToCorrectId}/void`,
+      headers: { 'x-test-user': 'chefDirector' },
+      payload: { reason: '单位换算 bug（×1000）', correctedQuantity: 0.018333, correctedInventoryQuantity: 25 },
+    })
+    expect(response.statusCode).toBe(200)
+    const body = response.json()
+    expect(body.success).toBe(true)
+    expect(body.voidedId).toBe(rowToCorrectId)
+    expect(body.correctionId).toBeTruthy()
+
+    const original = await prisma.stockConsumption.findUniqueOrThrow({ where: { id: rowToCorrectId } })
+    expect(original.voidedAt).toBeTruthy()
+    expect(original.voidedReason).toBe('单位换算 bug（×1000）')
+    expect(original.voidedById).toBe(chefDirectorId)
+
+    const correction = await prisma.stockConsumption.findUniqueOrThrow({ where: { id: body.correctionId } })
+    expect(correction).toMatchObject({
+      tenantId, storeId, productId: productCId,
+      sourceType: 'correction', sourceId: rowToCorrectId, sourceLineKey: 'correction',
+      correctionOfId: rowToCorrectId, createdById: chefDirectorId,
+    })
+    expect(correction.date.toISOString().slice(0, 10)).toBe(VOID_DAY)
+    expect(Number(correction.quantity)).toBeCloseTo(0.018333, 6)
+    expect(Number(correction.inventoryQuantity)).toBe(25)
+    // 未传修正金额 → 修正库存量 × 原 unitCostSnapshot (25 × 4)
+    expect(Number(correction.costAmountSnapshot)).toBe(100)
+    expect(correction.calculationSnapshot).toMatchObject({
+      correctionOf: rowToCorrectId, originalInventoryQuantity: '100', reason: '单位换算 bug（×1000）',
+    })
+  })
+
+  it('rejects a repeated void with 409 (idempotent error)', async () => {
+    const response = await app.inject({
+      method: 'POST', url: `/api/consumption/${rowToCorrectId}/void`,
+      headers: { 'x-test-user': 'admin' },
+      payload: { reason: '重复冲销' },
+    })
+    expect(response.statusCode).toBe(409)
+  })
+
+  it('excludes the voided row and counts the correction row in daily aggregates', async () => {
+    const response = await app.inject({ method: 'GET', url: `/api/stores/${storeId}/consumption/daily?date=${VOID_DAY}` })
+    expect(response.statusCode).toBe(200)
+    const body = response.json()
+    // 原 ¥200 作废, 补记 ¥100 + 正常行 ¥50 = ¥150
+    expect(body.totalCost).toBe(150)
+    expect(body.items).toHaveLength(1)
+    expect(body.items[0]).toMatchObject({ productId: productCId, qty: 50, cost: 150 })
+  })
+
+  it('voids a row without correction so it disappears entirely', async () => {
+    const response = await app.inject({
+      method: 'POST', url: `/api/consumption/${rowVoidOnlyId}/void`,
+      headers: { 'x-test-user': 'admin' },
+      payload: { reason: 'BOM 配方录入错误，待总厨确认真实配方后补记' },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.json().correctionId).toBeNull()
+
+    const daily = await app.inject({ method: 'GET', url: `/api/stores/${storeId}/consumption/daily?date=${VOID_ONLY_DAY}` })
+    expect(daily.statusCode).toBe(200)
+    expect(daily.json()).toMatchObject({ date: VOID_ONLY_DAY, totalCost: 0, items: [] })
+  })
+
+  it('returns the daily consumption × revenue series for the month', async () => {
+    const response = await app.inject({
+      method: 'GET', url: `/api/consumption/daily-series?storeId=${storeId}&month=${MONTH}`,
+    })
+    expect(response.statusCode).toBe(200)
+    const body = response.json()
+    expect(body).toMatchObject({ storeId, month: MONTH })
+    expect(body.series).toHaveLength(31)
+
+    const byDate = new Map(body.series.map((d: any) => [d.date, d]))
+    // 07-10: 消耗 ¥95 (已有种子数据), 营业额 ¥1000
+    expect(byDate.get(DAY)).toEqual({ date: DAY, consumptionCost: 95, revenue: 1000, costRate: 9.5 })
+    // 07-18: 作废行被排除, 补记行被计入 (100+50=150), 营业额 ¥4000
+    expect(byDate.get(VOID_DAY)).toEqual({ date: VOID_DAY, consumptionCost: 150, revenue: 4000, costRate: 3.75 })
+    // 07-19: 只冲销行已消失; 无营业额记录 → revenue=0, costRate=null
+    expect(byDate.get(VOID_ONLY_DAY)).toEqual({ date: VOID_ONLY_DAY, consumptionCost: 0, revenue: 0, costRate: null })
+    // 无数据日补 0
+    expect(byDate.get('2026-07-25')).toEqual({ date: '2026-07-25', consumptionCost: 0, revenue: 0, costRate: null })
+  })
+
+  it('enforces daily-series permissions and scoping', async () => {
+    const waiter = await app.inject({
+      method: 'GET', url: `/api/consumption/daily-series?storeId=${storeId}&month=${MONTH}`,
+      headers: { 'x-test-user': 'waiter' },
+    })
+    expect(waiter.statusCode).toBe(403)
+
+    const crossStoreChef = await app.inject({
+      method: 'GET', url: `/api/consumption/daily-series?storeId=${storeId}&month=${MONTH}`,
+      headers: { 'x-test-user': 'chef' },
+    })
+    expect(crossStoreChef.statusCode).toBe(403)
+
+    const otherTenantStore = await app.inject({
+      method: 'GET', url: `/api/consumption/daily-series?storeId=${otherTenantStoreId}&month=${MONTH}`,
+      headers: { 'x-test-user': 'admin' },
+    })
+    expect(otherTenantStore.statusCode).toBe(404)
+
+    const badMonth = await app.inject({
+      method: 'GET', url: `/api/consumption/daily-series?storeId=${storeId}&month=2026-7`,
+    })
+    expect(badMonth.statusCode).toBe(400)
+
+    const admin = await app.inject({
+      method: 'GET', url: `/api/consumption/daily-series?storeId=${storeId}&month=${MONTH}`,
+      headers: { 'x-test-user': 'admin' },
+    })
+    expect(admin.statusCode).toBe(200)
+  })
+})
 })

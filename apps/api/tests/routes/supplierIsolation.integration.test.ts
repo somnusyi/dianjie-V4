@@ -209,9 +209,23 @@ describe('supplier tenant scope (integration)', () => {
       'status=UNKNOWN',
       `q=${'x'.repeat(81)}`,
       `category=${'x'.repeat(41)}`,
+      'all=2',
+      'unexpected=true',
     ]
     for (const query of invalidQueries) {
       const response = await app.inject({ method: 'GET', url: `/api/products?${query}&page=1` })
+      expect(response.statusCode).toBe(400)
+    }
+
+    const legacyAll = await app.inject({ method: 'GET', url: '/api/products?all=1' })
+    expect(legacyAll.statusCode).toBe(200)
+    expect(legacyAll.json().map((item: any) => item.id)).toEqual([productAId])
+
+    for (const url of [
+      '/api/products/categories?unexpected=true',
+      '/api/products/history?unexpected=true',
+    ]) {
+      const response = await app.inject({ method: 'GET', url })
       expect(response.statusCode).toBe(400)
     }
   })

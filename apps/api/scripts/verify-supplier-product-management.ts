@@ -234,6 +234,18 @@ async function main() {
     const history = await api('/api/products/history?limit=100', token)
     assert.equal(history.status, 200, JSON.stringify(history.body))
     assert.ok(history.body.some((row: any) => row.targetId === product.id || row.action.includes('批量')))
+    for (const path of [
+      '/api/products?unexpected=true',
+      '/api/products?all=2',
+      '/api/products/categories?unexpected=true',
+      '/api/products/history?unexpected=true',
+    ]) {
+      const invalidReadQuery = await api(path, token)
+      assert.equal(invalidReadQuery.status, 400, `非法商品读取参数必须被拒绝：${path}`)
+    }
+    const legacyAll = await api('/api/products?all=1', token)
+    assert.equal(legacyAll.status, 200, JSON.stringify(legacyAll.body))
+    assert.ok(Array.isArray(legacyAll.body))
 
     const decimalBoundaryMarker = Date.now()
     const invalidSingle = await api('/api/products', token, {
@@ -570,6 +582,7 @@ async function main() {
       ok: true,
       categoryFilter: true,
       imageKey: true,
+      strictProductReadQueries: true,
       strictPatchFields: true,
       strictCommandFields: true,
       concurrentImportCategoryOrder: true,

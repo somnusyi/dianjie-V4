@@ -65,7 +65,16 @@ const productListFilterSchema = z.object({
     z.enum(['PENDING_APPROVAL', 'PENDING_DISABLE', 'ENABLED', 'DISABLED']).optional(),
   ),
   q: z.string().trim().max(80).optional(),
-}).passthrough()
+  page: z.string().optional(),
+  pageSize: z.string().optional(),
+  // 兼容厨务商品选择页；不传 page 本就返回全量。
+  all: z.literal('1').optional(),
+}).strict()
+
+const emptyProductReadQuerySchema = z.object({}).strict()
+const productHistoryQuerySchema = z.object({
+  limit: z.string().optional(),
+}).strict()
 
 const productPatchSchema = z.object({
   code: z.string().trim().min(1).max(40).optional(),
@@ -214,6 +223,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
 
   /** 当前租户/供应商实际使用的分类主数据，供筛选和下拉选择。 */
   app.get('/categories', auth(app), async (req: any, reply: any) => {
+    const parsed = emptyProductReadQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { tenantId, role, supplierId } = req.user
     const where: any = { tenantId }
     if (isSupplierRole(role)) {
@@ -448,7 +459,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   /** 商品关键操作记录；供应商只能查看自家商品相关日志。 */
   app.get('/history', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, supplierId } = req.user
-    const limit = parseBoundedInteger((req.query as any)?.limit, { defaultValue: 50, max: 200 })
+    const parsed = productHistoryQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const limit = parseBoundedInteger(parsed.data.limit, { defaultValue: 50, max: 200 })
     if (limit === null) return reply.status(400).send({ error: 'limit 必须是 1 至 200 的整数' })
     let productIds: string[] | undefined
     if (isSupplierRole(role)) {

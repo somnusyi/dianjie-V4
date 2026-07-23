@@ -153,10 +153,13 @@ export const supplierInsightRoutes: FastifyPluginAsync = async (app) => {
       byProduct.set(item.productId, current)
     }
     const list = [...byProduct.entries()].map(([productId, value]) => ({ productId, ...value }))
-    const top = [...list].sort((a, b) => b.amount - a.amount).slice(0, limit)
+    const top = [...list]
+      .sort((a, b) => b.amount - a.amount || a.productId.localeCompare(b.productId))
+      .slice(0, limit)
     const activeProducts = await prisma.product.findMany({
       where: { tenantId, supplierId, status: 'ENABLED' },
       select: { id: true, name: true, unit: true, price: true },
+      orderBy: { id: 'asc' },
     })
     const soldIds = new Set(list.map(item => item.productId))
     const bottom = activeProducts.filter(product => !soldIds.has(product.id)).slice(0, limit).map(product => ({

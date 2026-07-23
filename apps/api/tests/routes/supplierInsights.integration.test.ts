@@ -93,6 +93,26 @@ describe('supplier insights receipt facts (integration)', () => {
     expect(response.json().top[0]).toMatchObject({ name: '入库时鲜菌', unit: '斤', qty: 6, amount: 60 })
   })
 
+  it('keeps unsold SKU ranking stable before applying the limit', async () => {
+    const unsoldIds = [`insight-unsold-b-${suffix}`, `insight-unsold-a-${suffix}`]
+    await prisma.product.createMany({
+      data: unsoldIds.map((id, index) => ({
+        id, tenantId, supplierId, code: `${suffix}-UNSOLD-${index}`,
+        name: `未售商品 ${index}`, unit: '件', price: 10, stock: 1,
+      })),
+    })
+
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const response = await app.inject({ method: 'GET', url: '/api/supplier/insights/sku-rank?days=30&limit=3' })
+        expect(response.statusCode).toBe(200)
+        expect(response.json().bottom.map((item: any) => item.productId)).toEqual([...unsoldIds].sort())
+      }
+    } finally {
+      await prisma.product.deleteMany({ where: { id: { in: unsoldIds } } })
+    }
+  })
+
   it('builds monthly trend from confirmed receipts', async () => {
     const response = await app.inject({ method: 'GET', url: '/api/supplier/insights/sales-trend?months=3' })
     expect(response.statusCode).toBe(200)

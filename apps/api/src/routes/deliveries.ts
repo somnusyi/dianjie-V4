@@ -16,7 +16,7 @@ const listQuerySchema = z.object({
   dateTo: calendarDateSchema.optional(),
   page: z.coerce.number().int().positive().max(100_000).default(1),
   pageSize: z.coerce.number().int().positive().max(100).default(20),
-}).refine(q => !q.dateFrom || !q.dateTo || q.dateFrom <= q.dateTo, {
+}).strict().refine(q => !q.dateFrom || !q.dateTo || q.dateFrom <= q.dateTo, {
   message: '开始日期不能晚于结束日期',
   path: ['dateFrom'],
 })

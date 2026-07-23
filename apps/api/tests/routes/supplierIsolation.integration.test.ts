@@ -882,6 +882,18 @@ describe('supplier tenant scope (integration)', () => {
     expect(invalidReceiptStatus.statusCode).toBe(400)
   })
 
+  it('rejects unknown order and delivery query fields instead of returning unfiltered data', async () => {
+    for (const url of [
+      '/api/orders?productName=A',
+      '/api/orders?dateStart=2026-07-01',
+      '/api/deliveries?productCode=A',
+      '/api/deliveries?dateEnd=2026-07-31',
+    ]) {
+      const response = await app.inject({ method: 'GET', url })
+      expect(response.statusCode).toBe(400)
+    }
+  })
+
   it('fails closed when a store-scoped role has no store binding', async () => {
     const headers = { 'x-test-actor': 'unbound-store' }
     for (const url of ['/api/orders?page=1&pageSize=100', '/api/deliveries?page=1&pageSize=100', '/api/receipts?page=1&pageSize=100']) {

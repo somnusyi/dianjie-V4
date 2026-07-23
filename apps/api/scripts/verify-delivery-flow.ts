@@ -589,6 +589,7 @@ async function main() {
     assert.equal(orderByProductCode.body.items.some((item: any) => item.id === orderId), true, '订货单应支持按商品编码检索')
     assert.equal((await api('/api/orders?dateFrom=2026-07-16&dateTo=2026-07-15', supplierToken)).status, 400, '订货单应拒绝反向日期范围')
     assert.equal((await api('/api/orders?productName=未声明字段', supplierToken)).status, 400, '订货单应拒绝未知查询字段')
+    assert.equal((await api('/api/receipts?dateStart=2026-07-01', managerToken)).status, 400, '入库单应拒绝未知查询字段')
     const deliveryList = await api(`/api/deliveries?keyword=${encodeURIComponent(orderNo!)}`, managerToken)
     assert.equal(deliveryList.status, 200)
     assert.equal(deliveryList.body.total, 2)
@@ -603,7 +604,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, strictOrderDeliveryQueries: true, strictStoreInventoryQueries: true, strictSupplierInsightQueries: true, numericBounds: true, revenueValidation: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, orderCreateAuditRollback: true, orderCreateConcurrentReplay: true, orderCreateReplayConflict: true, revisionConcurrentReplay: true, revisionReplayConflict: true, revisionActorsRecorded: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, unboundStoreFailsClosed: true, unboundDashboardFailsClosed: true, unboundRevenueFailsClosed: true, unboundPaymentRequestFailsClosed: true, genericDocumentStoreScope: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, strictOrderDeliveryQueries: true, strictReceiptQueries: true, strictStoreInventoryQueries: true, strictSupplierInsightQueries: true, numericBounds: true, revenueValidation: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, orderCreateAuditRollback: true, orderCreateConcurrentReplay: true, orderCreateReplayConflict: true, revisionConcurrentReplay: true, revisionReplayConflict: true, revisionActorsRecorded: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, unboundStoreFailsClosed: true, unboundDashboardFailsClosed: true, unboundRevenueFailsClosed: true, unboundPaymentRequestFailsClosed: true, genericDocumentStoreScope: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))

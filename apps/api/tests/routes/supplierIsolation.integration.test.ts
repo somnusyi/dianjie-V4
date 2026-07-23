@@ -939,6 +939,8 @@ describe('supplier tenant scope (integration)', () => {
     expect(receipt.statusCode).toBe(404)
     const invalidReceiptStatus = await app.inject({ method: 'GET', url: '/api/receipts?status=UNKNOWN' })
     expect(invalidReceiptStatus.statusCode).toBe(400)
+    const unknownReceiptFilter = await app.inject({ method: 'GET', url: '/api/receipts?dateStart=2026-07-01' })
+    expect(unknownReceiptFilter.statusCode).toBe(400)
   })
 
   it('rejects unknown order and delivery query fields instead of returning unfiltered data', async () => {

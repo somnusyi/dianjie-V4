@@ -20,7 +20,9 @@ const receiptListFilterSchema = z.object({
   ),
   supplierId: z.string().trim().min(1).max(100).optional(),
   storeId: z.string().trim().min(1).max(100).optional(),
-}).passthrough()
+  page: z.string().optional(),
+  pageSize: z.string().optional(),
+}).strict()
 
 function canOperateReceipt(role: string | undefined) {
   return Boolean(role && RECEIPT_OPERATOR_ROLES.has(role))

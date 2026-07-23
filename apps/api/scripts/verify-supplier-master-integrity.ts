@@ -88,6 +88,18 @@ async function main() {
     assert.equal(ownerList.status, 200)
     assert.deepEqual(ownerList.body.map((item: any) => item.id), [ownSupplier.id])
     assert.equal(ownerList.body[0].bankAccount, ownSupplier.bankAccount)
+    const firstPage = await request('/api/suppliers?pageSize=1', adminToken)
+    const secondPage = await request('/api/suppliers?page=2&pageSize=1', adminToken)
+    assert.equal(firstPage.status, 200, JSON.stringify(firstPage.body))
+    assert.equal(secondPage.status, 200, JSON.stringify(secondPage.body))
+    assert.deepEqual(
+      { total: firstPage.body.total, page: firstPage.body.page, pageSize: firstPage.body.pageSize },
+      { total: 2, page: 1, pageSize: 1 },
+    )
+    assert.deepEqual(
+      new Set([firstPage.body.items[0].id, secondPage.body.items[0].id]),
+      new Set([ownSupplier.id, otherSupplier.id]),
+    )
     assert.equal((await request('/api/suppliers?status=FORGED', adminToken)).status, 400)
     assert.equal((await request('/api/suppliers?forged=1', adminToken)).status, 400)
     assert.equal((await request(`/api/suppliers/${ownSupplier.id}`, ownerToken, {
@@ -141,6 +153,8 @@ async function main() {
       ok: true,
       roleScopedSensitiveProjection: true,
       roleSeparatedCache: true,
+      stableSupplierPagination: true,
+      pageSizeOnlyPaginates: true,
       creditTypeCompatibility: true,
       createUpdateToggleAuditAtomic: true,
       bankValuesExcludedFromAudit: true,

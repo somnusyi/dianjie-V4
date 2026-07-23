@@ -42,10 +42,13 @@ export const supplierRoutes: FastifyPluginAsync = async (app) => {
     const parsed = listQuerySchema.safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { role, supplierId } = req.user
-    const { status, page, pageSize = 20 } = parsed.data
+    const { status, page, pageSize: requestedPageSize } = parsed.data
+    const paginated = page !== undefined || requestedPageSize !== undefined
+    const effectivePage = page ?? 1
+    const pageSize = requestedPageSize ?? 20
     const where: any = { tenantId: req.user.tenantId }
     if (SUPPLIER_ROLES.has(role)) {
-      if (!supplierId) return page ? { items: [], total: 0, page, pageSize } : []
+      if (!supplierId) return paginated ? { items: [], total: 0, page: effectivePage, pageSize } : []
       where.id = supplierId
     } else if (!FINANCE_ROLES.has(role)) {
       // 订货岗位只需要启用供应商候选，不得看到银行、联系人和账期等敏感主数据。
@@ -54,21 +57,21 @@ export const supplierRoutes: FastifyPluginAsync = async (app) => {
 
     const select = FINANCE_ROLES.has(role) || SUPPLIER_ROLES.has(role) ? undefined : SAFE_SELECT
 
-    // 不传 page 时返回全量（兼容下拉框），缓存 10 分钟
-    if (!page) {
+    // 不传 page/pageSize 时返回全量（兼容下拉框），缓存 10 分钟
+    if (!paginated) {
       // 角色与 supplierId 必须进入缓存键，防止管理员完整数据被其他角色命中同一缓存。
       return cached(`suppliers:full:${req.user.tenantId}:${role}:${supplierId || 'none'}:${status || 'all'}`, 600, () =>
-        prisma.supplier.findMany({ where, ...(select ? { select } : {}), orderBy: { createdAt: 'asc' } })
+        prisma.supplier.findMany({ where, ...(select ? { select } : {}), orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] })
       )
     }
     const [items, total] = await Promise.all([
       prisma.supplier.findMany({
-        where, ...(select ? { select } : {}), orderBy: { createdAt: 'asc' },
-        skip: (page - 1) * pageSize, take: pageSize,
+        where, ...(select ? { select } : {}), orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        skip: (effectivePage - 1) * pageSize, take: pageSize,
       }),
       prisma.supplier.count({ where }),
     ])
-    return { items, total, page, pageSize }
+    return { items, total, page: effectivePage, pageSize }
   })
 
   app.post('/', auth(app), async (req: any, reply: any) => {

@@ -16,6 +16,7 @@ import { revenueRoutes } from '../../src/routes/revenue'
 import { paymentRequestRoutes } from '../../src/routes/paymentRequests'
 import { documentRoutes } from '../../src/routes/documents'
 import { uploadRoutes } from '../../src/routes/upload'
+import { supplierRoutes } from '../../src/routes/suppliers'
 
 const suffix = `supplier-isolation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 let tenantId = ''
@@ -143,6 +144,7 @@ describe('supplier tenant scope (integration)', () => {
     await app.register(paymentRequestRoutes, { prefix: '/api/payment-requests' })
     await app.register(documentRoutes, { prefix: '/api/documents' })
     await app.register(uploadRoutes, { prefix: '/api' })
+    await app.register(supplierRoutes, { prefix: '/api/suppliers' })
     await app.ready()
   })
 
@@ -192,6 +194,25 @@ describe('supplier tenant scope (integration)', () => {
     expect(stock.statusCode).toBe(200)
     expect(stock.json().map((item: any) => item.id)).toEqual([productAId])
     expect(stock.json().some((item: any) => item.id === productBId)).toBe(false)
+  })
+
+  it('treats supplier pageSize as pagination and keeps tied pages stable', async () => {
+    const headers = { 'x-test-actor': 'admin' }
+    const first = await app.inject({
+      method: 'GET', url: '/api/suppliers?pageSize=1', headers,
+    })
+    expect(first.statusCode).toBe(200)
+    expect(first.json()).toMatchObject({ total: 2, page: 1, pageSize: 1 })
+    expect(first.json().items).toHaveLength(1)
+
+    const second = await app.inject({
+      method: 'GET', url: '/api/suppliers?page=2&pageSize=1', headers,
+    })
+    expect(second.statusCode).toBe(200)
+    expect(second.json()).toMatchObject({ total: 2, page: 2, pageSize: 1 })
+    expect(second.json().items).toHaveLength(1)
+    expect(new Set([first.json().items[0].id, second.json().items[0].id]))
+      .toEqual(new Set([supplierAId, supplierBId]))
   })
 
   it('validates upload queries and exact tenant object-key scope before OSS access', async () => {

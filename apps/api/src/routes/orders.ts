@@ -199,10 +199,35 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const and: any[] = []
     if (q.productId) and.push({ items: { some: { productId: q.productId, isActive: true } } })
     if (q.keyword) {
+      const snapshotScope = [Prisma.sql`po."tenantId" = ${tenantId}`]
+      const effectiveStoreId = isStoreScoped(role) ? storeId || '__NONE__' : q.storeId
+      const effectiveSupplierId = scopedSupplierId || (!isSupplierRole(role) ? q.supplierId : undefined)
+      if (effectiveStoreId) snapshotScope.push(Prisma.sql`po."storeId" = ${effectiveStoreId}`)
+      if (effectiveSupplierId) snapshotScope.push(Prisma.sql`po."supplierId" = ${effectiveSupplierId}`)
+      const snapshotPattern = `%${q.keyword}%`
+      const snapshotMatches = await prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT po."id"
+        FROM "purchase_orders" po
+        WHERE ${Prisma.join(snapshotScope, ' AND ')}
+          AND EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(
+              CASE
+                WHEN jsonb_typeof(po."submittedSnapshot" -> 'items') = 'array'
+                  THEN po."submittedSnapshot" -> 'items'
+                ELSE '[]'::jsonb
+              END
+            ) AS snapshot_item
+            WHERE COALESCE(snapshot_item ->> 'name', '') ILIKE ${snapshotPattern}
+               OR COALESCE(snapshot_item ->> 'code', '') ILIKE ${snapshotPattern}
+               OR COALESCE(snapshot_item ->> 'spec', '') ILIKE ${snapshotPattern}
+          )
+      `
       and.push({
         OR: [
           { no: { contains: q.keyword, mode: 'insensitive' } },
           { store: { name: { contains: q.keyword, mode: 'insensitive' } } },
+          { id: { in: snapshotMatches.map(item => item.id) } },
           {
             items: {
               some: {

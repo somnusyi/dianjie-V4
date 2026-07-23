@@ -968,6 +968,35 @@ describe('supplier tenant scope (integration)', () => {
     expect(unknownReceiptFilter.statusCode).toBe(400)
   })
 
+  it('searches supplier orders by the immutable submitted product snapshot', async () => {
+    const snapshotName = `原始订货名称-${suffix}`
+    const snapshotCode = `ORIGINAL-${suffix}`
+    const order = await prisma.purchaseOrder.create({
+      data: {
+        tenantId, no: `PO-SNAPSHOT-${suffix}`, storeId, supplierId: supplierAId,
+        expectedDate: new Date(), totalAmount: 10, originalTotalAmount: 10, currentOrderAmount: 10,
+        status: 'SUBMITTED', createdById: chefUserId,
+        submittedSnapshot: {
+          items: [{ productId: productAId, name: snapshotName, code: snapshotCode, spec: '旧规格' }],
+        },
+        items: {
+          create: {
+            productId: productAId, quantity: 1, originalQuantity: 1,
+            unitPrice: 10, originalUnitPrice: 10, amount: 10, originalAmount: 10,
+          },
+        },
+      },
+    })
+
+    for (const keyword of [snapshotName, snapshotCode]) {
+      const response = await app.inject({
+        method: 'GET', url: `/api/orders?keyword=${encodeURIComponent(keyword)}&page=1&pageSize=20`,
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().items.map((item: any) => item.id)).toContain(order.id)
+    }
+  })
+
   it('rejects unknown order and delivery query fields instead of returning unfiltered data', async () => {
     for (const url of [
       '/api/orders?productName=A',

@@ -246,6 +246,24 @@ async function main() {
     const legacyAll = await api('/api/products?all=1', token)
     assert.equal(legacyAll.status, 200, JSON.stringify(legacyAll.body))
     assert.ok(Array.isArray(legacyAll.body))
+    for (const [path, method] of [
+      ['/api/upload?category=products&unexpected=true', 'POST'],
+      ['/api/upload?category=UNKNOWN', 'POST'],
+      [`/api/upload/signed-url?key=${encodeURIComponent(`products/${tenant.id}/verify.jpg`)}&expires=60seconds`, 'GET'],
+      [`/api/upload/signed-url?key=${encodeURIComponent(`products/${tenant.id}/verify.jpg`)}&expires=59`, 'GET'],
+      [`/api/upload/signed-url?key=${encodeURIComponent(`products/${tenant.id}/verify.jpg`)}&unexpected=true`, 'GET'],
+    ] as const) {
+      const invalidUploadQuery = await api(path, token, { method })
+      assert.equal(invalidUploadQuery.status, 400, `非法上传参数必须被拒绝：${path}`)
+    }
+    for (const key of [
+      `unknown/${tenant.id}/verify.jpg`,
+      'products/foreign-tenant/verify.jpg',
+      `products/${tenant.id}`,
+    ]) {
+      const forbiddenKey = await api(`/api/upload/signed-url?key=${encodeURIComponent(key)}`, token)
+      assert.equal(forbiddenKey.status, 403, `越权对象键必须被拒绝：${key}`)
+    }
 
     const decimalBoundaryMarker = Date.now()
     const invalidSingle = await api('/api/products', token, {
@@ -583,6 +601,8 @@ async function main() {
       categoryFilter: true,
       imageKey: true,
       strictProductReadQueries: true,
+      strictUploadQueries: true,
+      exactUploadTenantScope: true,
       strictPatchFields: true,
       strictCommandFields: true,
       concurrentImportCategoryOrder: true,

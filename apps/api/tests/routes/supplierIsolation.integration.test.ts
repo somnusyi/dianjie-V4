@@ -15,6 +15,7 @@ import { storeRoutes } from '../../src/routes/stores'
 import { revenueRoutes } from '../../src/routes/revenue'
 import { paymentRequestRoutes } from '../../src/routes/paymentRequests'
 import { documentRoutes } from '../../src/routes/documents'
+import { uploadRoutes } from '../../src/routes/upload'
 
 const suffix = `supplier-isolation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 let tenantId = ''
@@ -141,6 +142,7 @@ describe('supplier tenant scope (integration)', () => {
     await app.register(revenueRoutes, { prefix: '/api/revenue' })
     await app.register(paymentRequestRoutes, { prefix: '/api/payment-requests' })
     await app.register(documentRoutes, { prefix: '/api/documents' })
+    await app.register(uploadRoutes, { prefix: '/api' })
     await app.ready()
   })
 
@@ -190,6 +192,29 @@ describe('supplier tenant scope (integration)', () => {
     expect(stock.statusCode).toBe(200)
     expect(stock.json().map((item: any) => item.id)).toEqual([productAId])
     expect(stock.json().some((item: any) => item.id === productBId)).toBe(false)
+  })
+
+  it('validates upload queries and exact tenant object-key scope before OSS access', async () => {
+    for (const request of [
+      { method: 'POST', url: '/api/upload?category=products&unexpected=true' },
+      { method: 'POST', url: '/api/upload?category=UNKNOWN' },
+      { method: 'GET', url: `/api/upload/signed-url?key=products/${tenantId}/image.jpg&expires=60seconds` },
+      { method: 'GET', url: `/api/upload/signed-url?key=products/${tenantId}/image.jpg&expires=59` },
+      { method: 'GET', url: `/api/upload/signed-url?key=products/${tenantId}/image.jpg&unexpected=true` },
+    ]) {
+      const response = await app.inject(request as any)
+      expect(response.statusCode).toBe(400)
+    }
+    for (const key of [
+      `unknown/${tenantId}/image.jpg`,
+      `products/foreign-tenant/image.jpg`,
+      `products/${tenantId}`,
+    ]) {
+      const response = await app.inject({
+        method: 'GET', url: `/api/upload/signed-url?key=${encodeURIComponent(key)}`,
+      })
+      expect(response.statusCode).toBe(403)
+    }
   })
 
   it('filters supplier products by code and category while rejecting invalid filters', async () => {

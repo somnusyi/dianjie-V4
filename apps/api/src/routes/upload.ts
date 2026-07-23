@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import OSS from 'ali-oss'
 import path from 'path'
+import { z } from 'zod'
 
 const uuidv4 = () => Math.random().toString(36).slice(2) + Date.now().toString(36)
 
@@ -15,7 +16,19 @@ const MEDIA_MIMES = [...IMAGE_MIMES, ...VIDEO_MIMES]
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024
 
-const ALLOWED_CATEGORIES = new Set(['loss-claims', 'invoices', 'capital', 'documents', 'reimbursements', 'misc', 'chef-ack', 'products'])
+const ALLOWED_CATEGORY_VALUES = [
+  'loss-claims', 'invoices', 'capital', 'documents',
+  'reimbursements', 'misc', 'chef-ack', 'products',
+] as const
+const ALLOWED_CATEGORIES = new Set<string>(ALLOWED_CATEGORY_VALUES)
+const uploadQuerySchema = z.object({
+  category: z.enum(ALLOWED_CATEGORY_VALUES).default('misc'),
+}).strict()
+const signedUrlQuerySchema = z.object({
+  key: z.string().trim().min(1).max(1024),
+  expires: z.string().regex(/^\d+$/).optional().default('3600')
+    .transform(Number).refine(value => value >= 60 && value <= 86_400, 'expires 必须是 60 至 86400 的整数秒'),
+}).strict()
 
 function ossClient() {
   return new OSS({
@@ -80,7 +93,7 @@ async function uploadOne(req: any, reply: any, opts: { allowedMimes: string[]; c
       return reply.status(400).send({ error: `不支持的文件类型: ${data.mimetype}` })
     }
 
-    // 按 mime 分级限大小: 视频 30MB, 图片/PDF 10MB
+    // 按 mime 分级限大小: 视频 50MB, 图片/PDF 10MB
     const isVideo = data.mimetype.startsWith('video/')
     const maxBytes = isVideo ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES
     const maxMb = Math.floor(maxBytes / 1024 / 1024)
@@ -132,7 +145,9 @@ export async function uploadRoutes(app: FastifyInstance) {
   //   - category=loss-claims 允许图片+视频 (供应商客户要求加视频证据), 不接 PDF
   //   - category=chef-ack    只接图片 (验收单就是拍照, PDF/视频没意义)
   app.post('/upload', { preHandler: [(app as any).authenticate] }, (req: any, reply: any) => {
-    const category = (req.query?.category || 'misc') as string
+    const parsed = uploadQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const category = parsed.data.category
     const allowedMimes =
       category === 'loss-claims' ? MEDIA_MIMES
         : category === 'chef-ack' || category === 'products' ? IMAGE_MIMES
@@ -143,11 +158,15 @@ export async function uploadRoutes(app: FastifyInstance) {
   // 重新签名: GET /api/upload/signed-url?key=xxx&expires=3600
   // 上传时返回的签名 URL 1h 过期, 后续要再访问需重新签
   app.get('/upload/signed-url', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
-    const { key, expires } = req.query as any
-    if (!key || !key.startsWith) return reply.status(400).send({ error: 'key 必填' })
-    // 防越权: 只能签自己 tenant 的对象 (路径里包含 tenantId)
-    if (!String(key).includes(`/${req.user.tenantId}/`)) return reply.status(403).send({ error: '无权访问' })
-    const url = toHttps(ossClient().signatureUrl(String(key), { expires: Math.min(86400, Math.max(60, parseInt(expires as string) || 3600)) }))
+    const parsed = signedUrlQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const { key, expires } = parsed.data
+    const [category, tenantId, ...objectPath] = key.split('/')
+    // 防越权: 只签“允许类别/当前租户/对象名”结构的对象。
+    if (!ALLOWED_CATEGORIES.has(category) || tenantId !== req.user.tenantId || objectPath.length === 0 || objectPath.some(part => !part)) {
+      return reply.status(403).send({ error: '无权访问' })
+    }
+    const url = toHttps(ossClient().signatureUrl(key, { expires }))
     return reply.send({ url })
   })
 }

@@ -916,6 +916,10 @@ describe('supplier tenant scope (integration)', () => {
       expect(batches.statusCode).toBe(200)
       expect(batches.json().map((row: any) => row.id)).toEqual([...supplierABatchIds].sort().reverse())
     }
+    const unknownBatchFilter = await app.inject({
+      method: 'GET', url: '/api/products/batches?unexpected=true',
+    })
+    expect(unknownBatchFilter.statusCode).toBe(400)
     const chefList = await app.inject({
       method: 'GET', url: '/api/products/batches', headers: { 'x-test-actor': 'chef' },
     })

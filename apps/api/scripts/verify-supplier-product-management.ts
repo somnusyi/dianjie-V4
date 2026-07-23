@@ -84,6 +84,9 @@ async function main() {
     assert.equal(login.status, 200, JSON.stringify(login.body))
     const token = login.body.token as string
 
+    const invalidBatchList = await api('/api/products/batches?unexpected=true', token)
+    assert.equal(invalidBatchList.status, 400, JSON.stringify(invalidBatchList.body))
+
     const invalidBatchEnvelopeFilename = `verify-strict-envelope-${Date.now()}.xlsx`
     const invalidBatchEnvelope = await api('/api/products/batch', token, {
       method: 'POST',
@@ -601,6 +604,7 @@ async function main() {
       categoryFilter: true,
       imageKey: true,
       strictProductReadQueries: true,
+      strictProductBatchQueries: true,
       strictUploadQueries: true,
       exactUploadTenantScope: true,
       strictPatchFields: true,

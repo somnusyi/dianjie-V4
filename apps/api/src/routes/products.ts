@@ -1073,6 +1073,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
 
   // ─── 上传历史列表 ─────────────────────────────────
   app.get('/batches', auth(app), async (req: any, reply: any) => {
+    const parsedQuery = emptyProductReadQuerySchema.safeParse(req.query || {})
+    if (!parsedQuery.success) return reply.status(400).send({ error: parsedQuery.error.issues[0].message })
     const { tenantId, role, supplierId } = req.user
     if (!PRODUCT_WRITE_ROLES.has(role)) return reply.status(403).send({ error: '无权查看商品上传历史' })
     const where: any = { tenantId }

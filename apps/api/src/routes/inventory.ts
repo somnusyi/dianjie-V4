@@ -10,6 +10,12 @@ import { estimatedStoreInventory, latestStoreInventorySnapshot } from '../servic
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const INVENTORY_VIEW_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'])
 const INVENTORY_WRITE_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF'])
+const inventoryReadQuerySchema = z.object({
+  storeId: z.string().trim().min(1).max(100).optional(),
+}).strict()
+const consumptionListQuerySchema = inventoryReadQuerySchema.extend({
+  days: z.coerce.number().int().min(1).max(365).default(30),
+}).strict()
 
 const consumeSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(80).optional(),
@@ -52,8 +58,10 @@ async function resolveInventoryStore(user: any, requestedStoreId?: string | null
 export const inventoryRoutes: FastifyPluginAsync = async app => {
   app.get('/snapshot/latest', auth(app), async (req: any, reply) => {
     if (!INVENTORY_VIEW_ROLES.has(req.user.role)) return reply.status(403).send({ error: '无权查看门店库存' })
+    const query = inventoryReadQuerySchema.safeParse(req.query || {})
+    if (!query.success) return reply.status(400).send({ error: query.error.issues[0].message })
     try {
-      const storeId = await resolveInventoryStore(req.user, req.query?.storeId)
+      const storeId = await resolveInventoryStore(req.user, query.data.storeId)
       return latestStoreInventorySnapshot(req.user.tenantId, storeId, true)
     } catch (error: any) {
       return reply.status(error.statusCode || 400).send({ error: error.message })
@@ -64,8 +72,10 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
   // Product.stock 属于供应商库存，绝不能在这里作为门店库存使用。
   app.get('/', auth(app), async (req: any, reply) => {
     if (!INVENTORY_VIEW_ROLES.has(req.user.role)) return reply.status(403).send({ error: '无权查看门店库存' })
+    const query = inventoryReadQuerySchema.safeParse(req.query || {})
+    if (!query.success) return reply.status(400).send({ error: query.error.issues[0].message })
     try {
-      const storeId = await resolveInventoryStore(req.user, req.query?.storeId)
+      const storeId = await resolveInventoryStore(req.user, query.data.storeId)
       const estimate = await estimatedStoreInventory(req.user.tenantId, storeId)
       return estimate.items
     } catch (error: any) {
@@ -154,10 +164,7 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
   app.get('/consumptions', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, storeId: boundStoreId } = req.user
     if (!INVENTORY_VIEW_ROLES.has(role)) return reply.status(403).send({ error: '无权查看门店消耗' })
-    const query = z.object({
-      days: z.coerce.number().int().min(1).max(365).default(30),
-      storeId: z.string().optional(),
-    }).safeParse(req.query || {})
+    const query = consumptionListQuerySchema.safeParse(req.query || {})
     if (!query.success) return reply.status(400).send({ error: query.error.issues[0].message })
 
     let storeId: string | undefined

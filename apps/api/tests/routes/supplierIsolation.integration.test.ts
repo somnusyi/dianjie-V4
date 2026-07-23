@@ -1147,6 +1147,21 @@ describe('supplier tenant scope (integration)', () => {
     })
   })
 
+  it('rejects unknown and empty store inventory query fields', async () => {
+    const headers = { 'x-test-actor': 'chef' }
+    for (const url of [
+      '/api/inventory?unexpected=true',
+      '/api/inventory/snapshot/latest?unexpected=true',
+      '/api/inventory/consumptions?days=30&unexpected=true',
+      '/api/inventory?storeId=',
+      '/api/inventory/snapshot/latest?storeId=',
+      '/api/inventory/consumptions?storeId=',
+    ]) {
+      const response = await app.inject({ method: 'GET', url, headers })
+      expect(response.statusCode).toBe(400)
+    }
+  })
+
   it('keeps store consumption history scoped, validated and stably ordered', async () => {
     const otherStore = await prisma.store.create({
       data: { tenantId, no: `S-OTHER-${suffix}`, name: '另一隔离测试门店' },

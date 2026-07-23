@@ -134,10 +134,15 @@ export const supplierInsightRoutes: FastifyPluginAsync = async (app) => {
           deliveryDate: { gte: since },
         },
       },
-      include: { product: { select: { name: true, unit: true, spec: true } } },
+      include: {
+        product: { select: { name: true, unit: true, spec: true } },
+        receipt: { select: { id: true, purchaseOrderId: true } },
+      },
     })
 
-    const byProduct = new Map<string, { name: string; unit: string; qty: number; amount: number; orders: number }>()
+    const byProduct = new Map<string, {
+      name: string; unit: string; qty: number; amount: number; orderKeys: Set<string>
+    }>()
     for (const raw of items) {
       const item = withDocumentProductSnapshot(raw)
       const current = byProduct.get(item.productId) || {
@@ -145,14 +150,21 @@ export const supplierInsightRoutes: FastifyPluginAsync = async (app) => {
         unit: String(item.product.unit || ''),
         qty: 0,
         amount: 0,
-        orders: 0,
+        orderKeys: new Set<string>(),
       }
       current.qty += Number(item.quantity)
       current.amount += Number(item.amount)
-      current.orders += 1
+      current.orderKeys.add(raw.receipt.purchaseOrderId || `receipt:${raw.receipt.id}`)
       byProduct.set(item.productId, current)
     }
-    const list = [...byProduct.entries()].map(([productId, value]) => ({ productId, ...value }))
+    const list = [...byProduct.entries()].map(([productId, value]) => ({
+      productId,
+      name: value.name,
+      unit: value.unit,
+      qty: value.qty,
+      amount: value.amount,
+      orders: value.orderKeys.size,
+    }))
     const top = [...list]
       .sort((a, b) => b.amount - a.amount || a.productId.localeCompare(b.productId))
       .slice(0, limit)

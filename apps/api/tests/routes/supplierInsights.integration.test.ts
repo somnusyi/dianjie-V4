@@ -90,7 +90,35 @@ describe('supplier insights receipt facts (integration)', () => {
   it('ranks the frozen receipt item name and actual received quantity', async () => {
     const response = await app.inject({ method: 'GET', url: '/api/supplier/insights/sku-rank?days=30&limit=10' })
     expect(response.statusCode).toBe(200)
-    expect(response.json().top[0]).toMatchObject({ name: '入库时鲜菌', unit: '斤', qty: 6, amount: 60 })
+    expect(response.json().top[0]).toMatchObject({ name: '入库时鲜菌', unit: '斤', qty: 6, amount: 60, orders: 1 })
+  })
+
+  it('deduplicates one order fulfilled through multiple receipts in SKU ranking', async () => {
+    const product = await prisma.product.findFirstOrThrow({ where: { tenantId, supplierId } })
+    const order = await prisma.purchaseOrder.findFirstOrThrow({ where: { tenantId, supplierId } })
+    const receipt = await prisma.receipt.create({
+      data: {
+        tenantId, no: `RK-SPLIT-${suffix}`, storeId, supplierId, purchaseOrderId: order.id,
+        deliveryDate: new Date(), totalAmount: 10, status: 'CONFIRMED',
+        confirmedAt: new Date(), createdById: userId,
+        items: {
+          create: {
+            productId: product.id, quantity: 1, unitPrice: 10, amount: 10,
+            productNameSnapshot: '入库时鲜菌', productUnitSnapshot: '斤',
+          },
+        },
+      },
+    })
+
+    try {
+      const response = await app.inject({ method: 'GET', url: '/api/supplier/insights/sku-rank?days=30&limit=10' })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().top.find((item: any) => item.productId === product.id))
+        .toMatchObject({ qty: 7, amount: 70, orders: 1 })
+    } finally {
+      await prisma.receiptItem.deleteMany({ where: { receiptId: receipt.id } })
+      await prisma.receipt.delete({ where: { id: receipt.id } })
+    }
   })
 
   it('keeps unsold SKU ranking stable before applying the limit', async () => {

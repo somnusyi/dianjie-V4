@@ -16,6 +16,8 @@ export default function LoginPage() {
   const [tenantSlug, setTenantSlug] = useState('dianjie')
   // 已登录用户信息: 给"继续 / 换号"选择, 不再自动跳走 (同事的 UX 升级)
   const [existingUser, setExistingUser] = useState<{ name?: string; role: string } | null>(null)
+  // 有效会话自动进入中的过渡态
+  const [autoEntering, setAutoEntering] = useState(false)
 
   useEffect(() => {
     const url = new URL(window.location.href)
@@ -40,7 +42,21 @@ export default function LoginPage() {
 
     const token = getToken()
     const u = getUser()
-    if (token && u) setExistingUser(u as any)
+    if (token && u) {
+      // 会话仍有效(含静默续期) → 直接进工作台, 不再每天停在"继续/换号"页;
+      // 校验失败(撤销/停用/30天未用) → 落回选择器, 可换号
+      setAutoEntering(true)
+      import('@/lib/v2-auth').then(({ apiFetch }) =>
+        apiFetch('/api/auth/me')
+          .then(() => {
+            const isWide = window.innerWidth >= 1024
+            const pc = isWide ? pcRouteForRole((u as any).role) : null
+            location.replace(pc || routeForRole((u as any).role))
+          })
+          .catch(() => { setAutoEntering(false); setExistingUser(u as any) }),
+      )
+      return
+    }
   }, [])
 
   function continueAsExisting() {
@@ -93,6 +109,9 @@ export default function LoginPage() {
       </header>
 
       <main className="flex-1 px-6 max-w-md w-full mx-auto">
+        {autoEntering && (
+          <div className="py-16 text-center text-caption text-gray3">正在进入工作台…</div>
+        )}
         {/* 已登录提示 — 给"继续 / 换号"选项 */}
         {existingUser && (
           <section className="bg-amber/10 border border-amber/40 rounded-card p-4 mb-4">

@@ -82,6 +82,23 @@ const lossSchema = z.object({
   reason:    z.string().trim().min(1, '请说明报损原因').max(120),
 }).strict()
 
+const emptyStockReadQuerySchema = z.object({}).strict()
+const stockProductFilterSchema = z.string().trim().min(1).max(100).optional()
+const reservationQuerySchema = z.object({
+  productId: stockProductFilterSchema,
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+}).strict()
+const batchQuerySchema = z.object({
+  productId: stockProductFilterSchema,
+  includeDepleted: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+  limit: z.coerce.number().int().min(1).max(500).default(200),
+}).strict()
+const movementQuerySchema = z.object({
+  productId: stockProductFilterSchema,
+  type: z.enum(['INITIAL', 'INBOUND_MANUAL', 'INBOUND_EXCEL', 'OUTBOUND_PO', 'ADJUSTMENT', 'LOSS']).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+}).strict()
+
 type SupplierContext = { tenantId: string; userId: string; supplierId: string }
 
 /**
@@ -140,6 +157,8 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
   /** GET /api/supplier/stock — 列表 + 摘要 */
   app.get('/', auth(app), async (req: any, reply: any) => {
     const ctx = ensureSupplier(req, reply, 'inventory.read'); if (!ctx) return
+    const parsed = emptyStockReadQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
 
     const products = await prisma.product.findMany({
       where: { tenantId: ctx.tenantId, supplierId: ctx.supplierId, status: 'ENABLED' },
@@ -214,6 +233,8 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
   /** GET /api/supplier/stock/summary — 顶部 KPI */
   app.get('/summary', auth(app), async (req: any, reply: any) => {
     const ctx = ensureSupplier(req, reply, 'inventory.read'); if (!ctx) return
+    const parsed = emptyStockReadQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const ps = await prisma.product.findMany({
       where: { tenantId: ctx.tenantId, supplierId: ctx.supplierId, status: 'ENABLED' },
       select: { id: true, stock: true, minStock: true, price: true },
@@ -245,10 +266,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
   /** GET /api/supplier/stock/reservations?productId= — 当前有效预占来源 */
   app.get('/reservations', auth(app), async (req: any, reply: any) => {
     const ctx = ensureSupplier(req, reply, 'inventory.read'); if (!ctx) return
-    const parsed = z.object({
-      productId: z.string().trim().min(1).optional(),
-      limit: z.coerce.number().int().min(1).max(200).default(100),
-    }).safeParse(req.query || {})
+    const parsed = reservationQuerySchema.safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const rows = await prisma.supplierStockReservation.findMany({
       where: {
@@ -282,11 +300,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
   /** GET /api/supplier/stock/batches — 当前批次余额与来源 */
   app.get('/batches', auth(app), async (req: any, reply: any) => {
     const ctx = ensureSupplier(req, reply, 'inventory.read'); if (!ctx) return
-    const parsed = z.object({
-      productId: z.string().trim().min(1).optional(),
-      includeDepleted: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
-      limit: z.coerce.number().int().min(1).max(500).default(200),
-    }).safeParse(req.query || {})
+    const parsed = batchQuerySchema.safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
 
     const rows = await prisma.supplierStockBatch.findMany({
@@ -618,11 +632,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
   /** GET /api/supplier/stock/movements?productId=&limit=&type= — 流水 */
   app.get('/movements', auth(app), async (req: any, reply: any) => {
     const ctx = ensureSupplier(req, reply, 'inventory.read'); if (!ctx) return
-    const parsed = z.object({
-      productId: z.string().trim().min(1).optional(),
-      type: z.enum(['INITIAL', 'INBOUND_MANUAL', 'INBOUND_EXCEL', 'OUTBOUND_PO', 'ADJUSTMENT', 'LOSS']).optional(),
-      limit: z.coerce.number().int().min(1).max(500).default(100),
-    }).safeParse(req.query)
+    const parsed = movementQuerySchema.safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { productId, type, limit } = parsed.data
     const where: any = { tenantId: ctx.tenantId, supplierId: ctx.supplierId }

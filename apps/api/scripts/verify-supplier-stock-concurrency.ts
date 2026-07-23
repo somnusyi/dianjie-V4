@@ -192,6 +192,19 @@ async function main() {
     assert.equal(invalidMovementLimit.status, 400, '非法流水分页参数不得变成 500')
     const invalidMovementType = await api('/api/supplier/stock/movements?type=UNKNOWN', token)
     assert.equal(invalidMovementType.status, 400, '非法流水类型不得传给 Prisma')
+    for (const path of [
+      '/api/supplier/stock?unexpected=true',
+      '/api/supplier/stock/summary?unexpected=true',
+      '/api/supplier/stock/reservations?unexpected=true',
+      '/api/supplier/stock/batches?unexpected=true',
+      '/api/supplier/stock/movements?unexpected=true',
+      '/api/supplier/stock/reservations?productId=',
+      '/api/supplier/stock/batches?productId=',
+      '/api/supplier/stock/movements?productId=',
+    ]) {
+      const invalidReadQuery = await api(path, token)
+      assert.equal(invalidReadQuery.status, 400, `非法库存读取参数必须被拒绝：${path}`)
+    }
 
     await reset()
     const excessiveLoss = await api('/api/supplier/stock/loss', token, {
@@ -342,6 +355,7 @@ async function main() {
       ok: true,
       crossTenantIsolation: true,
       strictCommandFields: true,
+      strictStockReadQueries: true,
       strictQuantityAndDateValidation: true,
       excessiveLossRejected: true,
       snapshotDuplicateAndUnknownSkuRejected: true,

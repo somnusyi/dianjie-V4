@@ -284,6 +284,26 @@ describe('supplier tenant scope (integration)', () => {
     expect(await prisma.supplierStockBatch.count({ where: { tenantId, productId: productAId } })).toBe(beforeBatches)
   })
 
+  it('validates supplier stock read query contracts before database reads', async () => {
+    const invalidQueries = [
+      '/api/supplier/stock?unexpected=true',
+      '/api/supplier/stock/summary?unexpected=true',
+      '/api/supplier/stock/reservations?unexpected=true',
+      '/api/supplier/stock/batches?unexpected=true',
+      '/api/supplier/stock/movements?unexpected=true',
+      '/api/supplier/stock/reservations?productId=',
+      '/api/supplier/stock/batches?productId=',
+      '/api/supplier/stock/movements?productId=',
+      `/api/supplier/stock/reservations?productId=${'x'.repeat(101)}`,
+      `/api/supplier/stock/batches?productId=${'x'.repeat(101)}`,
+      `/api/supplier/stock/movements?productId=${'x'.repeat(101)}`,
+    ]
+    for (const url of invalidQueries) {
+      const response = await app.inject({ method: 'GET', url })
+      expect(response.statusCode).toBe(400)
+    }
+  })
+
   it('serializes custom inbound batch numbers without partial stock writes', async () => {
     const beforeStock = Number((await prisma.product.findUniqueOrThrow({ where: { id: productAId } })).stock)
     const duplicateInRequest = await app.inject({

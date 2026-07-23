@@ -519,46 +519,59 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(403).send({ error: '财务核对仅财务/老板可执行' })
     }
 
-    const receiptWhere: any = { id: req.params.id, tenantId }
-    if (actor === 'supplier' && isSupplierRole(role)) receiptWhere.supplierId = supplierId || '__NONE__'
-    const receipt = await prisma.receipt.findFirst({
-      where: receiptWhere,
-      include: { supplier: { select: { name: true } } },
-    })
-    if (!receipt) return reply.status(404).send({ error: '入库单不存在' })
-
-    // 财务核对要求: 门店已建 + 厨师长已 confirm + 供应商已核对
-    // BUG#4: B2B/HEADQ supplier 不需要外部核对, 直接放行
-    if (actor === 'finance') {
-      if (!receipt.confirmedAt) return reply.status(400).send({ error: '厨师长尚未确认, 无法财务核对' })
-      const srcType = (receipt as any).supplier?.sourceType
-        ?? (await prisma.supplier.findUnique({ where: { id: receipt.supplierId }, select: { sourceType: true } }))?.sourceType
-      const autoSupplier = srcType === 'B2B_PLATFORM' || srcType === 'HEADQ_WAREHOUSE'
-      if (!receipt.supplierVerifiedAt && !autoSupplier) {
-        return reply.status(400).send({ error: '供应商尚未核对, 无法财务核对' })
+    return prisma.$transaction(async tx => {
+      const locked = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT "id"
+        FROM "receipts"
+        WHERE "id" = ${req.params.id} AND "tenantId" = ${tenantId}
+        FOR UPDATE
+      `)
+      if (locked.length !== 1) {
+        throw Object.assign(new Error('入库单不存在'), { statusCode: 404 })
       }
-    }
 
-    const now = new Date()
-    const updateData: any = {}
-    if (actor === 'supplier') {
-      updateData.supplierVerifiedAt = now
-      updateData.supplierVerifiedById = userId
-      if (note != null) updateData.supplierVerifyNote = note
-    } else {
-      updateData.financeVerifiedAt = now
-      updateData.financeVerifiedById = userId
-      if (note != null) updateData.financeVerifyNote = note
-    }
-    await prisma.receipt.update({ where: { id: receipt.id }, data: updateData })
-    await prisma.opLog.create({
-      data: {
-        tenantId, userId,
-        action: `${actor === 'supplier' ? '供应商' : '财务'}核对入库单 ${receipt.no} (${receipt.supplier?.name || ''})`,
-        target: receipt.no, entityType: 'Receipt', targetId: receipt.id,
-      },
+      const receiptWhere: any = { id: req.params.id, tenantId }
+      if (actor === 'supplier' && isSupplierRole(role)) receiptWhere.supplierId = supplierId || '__NONE__'
+      const receipt = await tx.receipt.findFirst({
+        where: receiptWhere,
+        include: { supplier: { select: { name: true, sourceType: true } } },
+      })
+      if (!receipt) throw Object.assign(new Error('入库单不存在'), { statusCode: 404 })
+
+      // 财务核对要求: 门店已建 + 厨师长已 confirm + 供应商已核对。
+      // 所有核对/撤销先锁定同一入库单，避免财务核对越过并发供应商撤销。
+      if (actor === 'finance') {
+        if (!receipt.confirmedAt) {
+          throw Object.assign(new Error('厨师长尚未确认, 无法财务核对'), { statusCode: 400 })
+        }
+        const srcType = receipt.supplier.sourceType
+        const autoSupplier = srcType === 'B2B_PLATFORM' || srcType === 'HEADQ_WAREHOUSE'
+        if (!receipt.supplierVerifiedAt && !autoSupplier) {
+          throw Object.assign(new Error('供应商尚未核对, 无法财务核对'), { statusCode: 400 })
+        }
+      }
+
+      const now = new Date()
+      const updateData: any = {}
+      if (actor === 'supplier') {
+        updateData.supplierVerifiedAt = now
+        updateData.supplierVerifiedById = userId
+        if (note != null) updateData.supplierVerifyNote = note
+      } else {
+        updateData.financeVerifiedAt = now
+        updateData.financeVerifiedById = userId
+        if (note != null) updateData.financeVerifyNote = note
+      }
+      await tx.receipt.update({ where: { id: receipt.id }, data: updateData })
+      await tx.opLog.create({
+        data: {
+          tenantId, userId,
+          action: `${actor === 'supplier' ? '供应商' : '财务'}核对入库单 ${receipt.no} (${receipt.supplier.name})`,
+          target: receipt.no, entityType: 'Receipt', targetId: receipt.id,
+        },
+      })
+      return { ok: true, actor, at: now }
     })
-    return { ok: true, actor, at: now }
   })
 
   // 撤销核对 (改错了可以撤)
@@ -570,18 +583,36 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     const parsed = receiptVerifyRevokeSchema.safeParse(req.body || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { actor } = parsed.data
-    const r = await prisma.receipt.findFirst({ where: { id: req.params.id, tenantId } })
-    if (!r) return reply.status(404).send({ error: '入库单不存在' })
+    return prisma.$transaction(async tx => {
+      const locked = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT "id"
+        FROM "receipts"
+        WHERE "id" = ${req.params.id} AND "tenantId" = ${tenantId}
+        FOR UPDATE
+      `)
+      if (locked.length !== 1) {
+        throw Object.assign(new Error('入库单不存在'), { statusCode: 404 })
+      }
+      const receipt = await tx.receipt.findFirst({ where: { id: req.params.id, tenantId } })
+      if (!receipt) throw Object.assign(new Error('入库单不存在'), { statusCode: 404 })
 
-    const updateData: any = {}
-    if (actor === 'supplier') {
-      updateData.supplierVerifiedAt = null; updateData.supplierVerifiedById = null; updateData.supplierVerifyNote = null
-      // 撤销供应商核对自动级联撤销财务核对
-      updateData.financeVerifiedAt = null; updateData.financeVerifiedById = null; updateData.financeVerifyNote = null
-    } else {
-      updateData.financeVerifiedAt = null; updateData.financeVerifiedById = null; updateData.financeVerifyNote = null
-    }
-    await prisma.receipt.update({ where: { id: r.id }, data: updateData })
-    return { ok: true }
+      const updateData: any = {}
+      if (actor === 'supplier') {
+        updateData.supplierVerifiedAt = null; updateData.supplierVerifiedById = null; updateData.supplierVerifyNote = null
+        // 撤销供应商核对自动级联撤销财务核对
+        updateData.financeVerifiedAt = null; updateData.financeVerifiedById = null; updateData.financeVerifyNote = null
+      } else {
+        updateData.financeVerifiedAt = null; updateData.financeVerifiedById = null; updateData.financeVerifyNote = null
+      }
+      await tx.receipt.update({ where: { id: receipt.id }, data: updateData })
+      await tx.opLog.create({
+        data: {
+          tenantId, userId,
+          action: `${actor === 'supplier' ? '供应商' : '财务'}撤销核对入库单 ${receipt.no}`,
+          target: receipt.no, entityType: 'Receipt', targetId: receipt.id,
+        },
+      })
+      return { ok: true }
+    })
   })
 }

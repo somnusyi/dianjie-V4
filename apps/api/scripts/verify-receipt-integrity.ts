@@ -50,6 +50,13 @@ async function main() {
   const stateFunction = `local_receipt_state_fn_${suffix}`
   const stateTrigger = `local_receipt_state_trigger_${suffix}`
   let stateArtifactsCreated = false
+  const verificationAuditFunction = `local_receipt_verify_audit_fn_${suffix}`
+  const verificationAuditTrigger = `local_receipt_verify_audit_trg_${suffix}`
+  let verificationAuditArtifactsCreated = false
+  const verificationSequence = `local_receipt_verify_seq_${suffix}`
+  const verificationFunction = `local_receipt_verify_fn_${suffix}`
+  const verificationTrigger = `local_receipt_verify_trg_${suffix}`
+  let verificationRaceArtifactsCreated = false
   const createdStoreIds: string[] = []
   const createdSupplierIds: string[] = []
   const createdUserIds: string[] = []
@@ -202,6 +209,94 @@ async function main() {
     })).status, 200)
     assert.equal((await prisma.receipt.findUniqueOrThrow({ where: { id: receiptId } })).financeVerifiedAt, null)
 
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION "${verificationAuditFunction}"() RETURNS trigger AS $$
+      BEGIN
+        IF NEW."targetId" = '${receiptId}' AND NEW."action" LIKE '财务核对入库单%' THEN
+          RAISE EXCEPTION 'local receipt verification audit failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `)
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER "${verificationAuditTrigger}"
+      BEFORE INSERT ON "op_logs"
+      FOR EACH ROW EXECUTE FUNCTION "${verificationAuditFunction}"()
+    `)
+    verificationAuditArtifactsCreated = true
+    const failedFinanceVerification = await api(`/api/receipts/${receiptId}/verify`, financeToken, {
+      method: 'PATCH', body: JSON.stringify({ actor: 'finance', note: '审计故障必须整体回滚' }),
+    })
+    assert.equal(failedFinanceVerification.status, 500, JSON.stringify(failedFinanceVerification.body))
+    const afterFailedFinanceVerification = await prisma.receipt.findUniqueOrThrow({ where: { id: receiptId } })
+    assert.equal(afterFailedFinanceVerification.financeVerifiedAt, null)
+    assert.equal(afterFailedFinanceVerification.financeVerifiedById, null)
+    assert.equal(afterFailedFinanceVerification.financeVerifyNote, null)
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${verificationAuditTrigger}" ON "op_logs"`)
+    await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${verificationAuditFunction}"()`)
+    verificationAuditArtifactsCreated = false
+
+    assert.equal((await api(`/api/receipts/${receiptId}/verify`, financeToken, {
+      method: 'PATCH', body: JSON.stringify({ actor: 'finance', note: '并发前财务核对' }),
+    })).status, 200)
+    assert.equal((await api(`/api/receipts/${receiptId}/verify/revoke`, financeToken, {
+      method: 'PATCH', body: JSON.stringify({ actor: 'finance' }),
+    })).status, 200)
+
+    await prisma.$executeRawUnsafe(`CREATE SEQUENCE "${verificationSequence}"`)
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION "${verificationFunction}"() RETURNS trigger AS $$
+      BEGIN
+        IF (
+          NEW."id" = '${receiptId}'
+          AND OLD."supplierVerifiedAt" IS NOT NULL
+          AND NEW."supplierVerifiedAt" IS NULL
+        ) THEN
+          PERFORM nextval('${verificationSequence}');
+          PERFORM pg_sleep(0.75);
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `)
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER "${verificationTrigger}"
+      BEFORE UPDATE OF "supplierVerifiedAt" ON "receipts"
+      FOR EACH ROW EXECUTE FUNCTION "${verificationFunction}"()
+    `)
+    verificationRaceArtifactsCreated = true
+    const verificationSequenceValue = async () => {
+      const [row] = await prisma.$queryRawUnsafe<Array<{ value: bigint; is_called: boolean }>>(
+        `SELECT last_value::bigint AS value, is_called FROM "${verificationSequence}"`,
+      )
+      return row.is_called ? row.value : 0n
+    }
+    const previousVerification = await verificationSequenceValue()
+    const supplierRevokePromise = api(`/api/receipts/${receiptId}/verify/revoke`, financeToken, {
+      method: 'PATCH', body: JSON.stringify({ actor: 'supplier' }),
+    })
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (await verificationSequenceValue() > previousVerification) break
+      if (attempt === 99) throw new Error('未观察到真实 API 供应商核对撤销进入并发延迟触发器')
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    const racingFinanceVerification = api(`/api/receipts/${receiptId}/verify`, financeToken, {
+      method: 'PATCH', body: JSON.stringify({ actor: 'finance', note: '不得越过并发撤销' }),
+    })
+    const [supplierRevoke, financeRace] = await Promise.all([supplierRevokePromise, racingFinanceVerification])
+    assert.equal(supplierRevoke.status, 200, JSON.stringify({ supplierRevoke, financeRace }))
+    assert.equal(financeRace.status, 400, JSON.stringify({ supplierRevoke, financeRace }))
+    const verificationRaceResult = await prisma.receipt.findUniqueOrThrow({ where: { id: receiptId } })
+    assert.equal(verificationRaceResult.supplierVerifiedAt, null)
+    assert.equal(verificationRaceResult.supplierVerifiedById, null)
+    assert.equal(verificationRaceResult.financeVerifiedAt, null)
+    assert.equal(verificationRaceResult.financeVerifiedById, null)
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${verificationTrigger}" ON "receipts"`)
+    await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${verificationFunction}"()`)
+    await prisma.$executeRawUnsafe(`DROP SEQUENCE IF EXISTS "${verificationSequence}"`)
+    verificationRaceArtifactsCreated = false
+
     const [rejectRaceCreated, voidRaceCreated, deliveryRaceCreated] = await Promise.all([
       api('/api/receipts', managerTokenA, {
         method: 'POST', body: JSON.stringify({ ...baseBody, note: '并发拒收验证' }),
@@ -333,6 +428,8 @@ async function main() {
       supplierIsolation: true,
       atomicLossConfirmation: true,
       serializedReceiptTransitions: true,
+      atomicReceiptVerificationAudit: true,
+      serializedReceiptVerificationRevocation: true,
       financeFailureRecovery: true,
       actualAmount: 14.43,
       lossAmount: 4.44,
@@ -347,6 +444,15 @@ async function main() {
       await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${stateTrigger}" ON "receipts"`)
       await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${stateFunction}"()`)
       await prisma.$executeRawUnsafe(`DROP SEQUENCE IF EXISTS "${stateSequence}"`)
+    }
+    if (verificationAuditArtifactsCreated) {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${verificationAuditTrigger}" ON "op_logs"`)
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${verificationAuditFunction}"()`)
+    }
+    if (verificationRaceArtifactsCreated) {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${verificationTrigger}" ON "receipts"`)
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${verificationFunction}"()`)
+      await prisma.$executeRawUnsafe(`DROP SEQUENCE IF EXISTS "${verificationSequence}"`)
     }
     const discoveredReceipts = await prisma.receipt.findMany({
       where: {

@@ -388,6 +388,166 @@ describe('supplier order to receipt flow (integration)', () => {
     }
   })
 
+  it('keeps receipt verification audit atomic and serializes supplier revocation with finance verification', async () => {
+    const sqlSuffix = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const auditFunction = `test_receipt_verify_audit_fn_${sqlSuffix}`
+    const auditTrigger = `test_receipt_verify_audit_trg_${sqlSuffix}`
+    const delaySequence = `test_receipt_verify_delay_seq_${sqlSuffix}`
+    const delayFunction = `test_receipt_verify_delay_fn_${sqlSuffix}`
+    const delayTrigger = `test_receipt_verify_delay_trg_${sqlSuffix}`
+    const receipt = await prisma.receipt.create({
+      data: {
+        tenantId,
+        no: `VERIFY-RACE-${sqlSuffix}`,
+        storeId,
+        supplierId,
+        deliveryDate: new Date('2026-07-20T00:00:00.000Z'),
+        totalAmount: 10,
+        status: 'ACCOUNTED',
+        confirmedAt: new Date('2026-07-20T01:00:00.000Z'),
+        createdById: chefUserId,
+      },
+    })
+    let auditArtifactsCreated = false
+    let delayArtifactsCreated = false
+
+    try {
+      await prisma.$executeRawUnsafe(`
+        CREATE FUNCTION "${auditFunction}"() RETURNS trigger AS $$
+        BEGIN
+          IF NEW."targetId" = '${receipt.id}' AND NEW."action" LIKE '供应商核对入库单%' THEN
+            RAISE EXCEPTION 'test receipt verification audit failure';
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+      `)
+      await prisma.$executeRawUnsafe(`
+        CREATE TRIGGER "${auditTrigger}"
+        BEFORE INSERT ON "op_logs"
+        FOR EACH ROW EXECUTE FUNCTION "${auditFunction}"()
+      `)
+      auditArtifactsCreated = true
+
+      const failedVerification = await app.inject({
+        method: 'PATCH',
+        url: `/api/receipts/${receipt.id}/verify`,
+        headers: { 'x-test-actor': 'supplier' },
+        payload: { actor: 'supplier', note: '审计故障必须整体回滚' },
+      })
+      expect(failedVerification.statusCode).toBe(500)
+      expect(await prisma.receipt.findUniqueOrThrow({ where: { id: receipt.id } })).toMatchObject({
+        supplierVerifiedAt: null,
+        supplierVerifiedById: null,
+        supplierVerifyNote: null,
+      })
+      expect(await prisma.opLog.count({
+        where: { tenantId, targetId: receipt.id, action: { startsWith: '供应商核对入库单' } },
+      })).toBe(0)
+
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${auditTrigger}" ON "op_logs"`)
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${auditFunction}"()`)
+      auditArtifactsCreated = false
+
+      const supplierVerification = await app.inject({
+        method: 'PATCH',
+        url: `/api/receipts/${receipt.id}/verify`,
+        headers: { 'x-test-actor': 'supplier' },
+        payload: { actor: 'supplier', note: '供应商已核对' },
+      })
+      expect(supplierVerification.statusCode).toBe(200)
+      const financeVerification = await app.inject({
+        method: 'PATCH',
+        url: `/api/receipts/${receipt.id}/verify`,
+        headers: { 'x-test-actor': 'admin' },
+        payload: { actor: 'finance', note: '财务已核对' },
+      })
+      expect(financeVerification.statusCode).toBe(200)
+      const financeRevoke = await app.inject({
+        method: 'PATCH',
+        url: `/api/receipts/${receipt.id}/verify/revoke`,
+        headers: { 'x-test-actor': 'admin' },
+        payload: { actor: 'finance' },
+      })
+      expect(financeRevoke.statusCode).toBe(200)
+
+      await prisma.$executeRawUnsafe(`CREATE SEQUENCE "${delaySequence}"`)
+      await prisma.$executeRawUnsafe(`
+        CREATE FUNCTION "${delayFunction}"() RETURNS trigger AS $$
+        BEGIN
+          IF (
+            NEW."id" = '${receipt.id}'
+            AND OLD."supplierVerifiedAt" IS NOT NULL
+            AND NEW."supplierVerifiedAt" IS NULL
+          ) THEN
+            PERFORM nextval('${delaySequence}');
+            PERFORM pg_sleep(0.75);
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+      `)
+      await prisma.$executeRawUnsafe(`
+        CREATE TRIGGER "${delayTrigger}"
+        BEFORE UPDATE OF "supplierVerifiedAt" ON "receipts"
+        FOR EACH ROW EXECUTE FUNCTION "${delayFunction}"()
+      `)
+      delayArtifactsCreated = true
+
+      const sequenceValue = async () => {
+        const [row] = await prisma.$queryRawUnsafe<Array<{ value: bigint; is_called: boolean }>>(
+          `SELECT last_value::bigint AS value, is_called FROM "${delaySequence}"`,
+        )
+        return row.is_called ? row.value : 0n
+      }
+      const previous = await sequenceValue()
+      const supplierRevokePromise = app.inject({
+        method: 'PATCH',
+        url: `/api/receipts/${receipt.id}/verify/revoke`,
+        headers: { 'x-test-actor': 'admin' },
+        payload: { actor: 'supplier' },
+      })
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (await sequenceValue() > previous) break
+        if (attempt === 99) throw new Error('未观察到供应商核对撤销进入并发延迟触发器')
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      const racingFinanceVerification = app.inject({
+        method: 'PATCH',
+        url: `/api/receipts/${receipt.id}/verify`,
+        headers: { 'x-test-actor': 'admin' },
+        payload: { actor: 'finance', note: '不得越过并发撤销' },
+      })
+      const [supplierRevoke, financeRace] = await Promise.all([
+        supplierRevokePromise,
+        racingFinanceVerification,
+      ])
+      expect(supplierRevoke.statusCode).toBe(200)
+      expect(financeRace.statusCode).toBe(400)
+      expect(await prisma.receipt.findUniqueOrThrow({ where: { id: receipt.id } })).toMatchObject({
+        supplierVerifiedAt: null,
+        supplierVerifiedById: null,
+        financeVerifiedAt: null,
+        financeVerifiedById: null,
+      })
+      expect(await prisma.opLog.count({
+        where: { tenantId, targetId: receipt.id, action: { contains: '核对入库单' } },
+      })).toBe(4)
+    } finally {
+      if (auditArtifactsCreated) {
+        await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${auditTrigger}" ON "op_logs"`)
+        await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${auditFunction}"()`)
+      }
+      if (delayArtifactsCreated) {
+        await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${delayTrigger}" ON "receipts"`)
+        await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${delayFunction}"()`)
+        await prisma.$executeRawUnsafe(`DROP SEQUENCE IF EXISTS "${delaySequence}"`)
+      }
+      await prisma.opLog.deleteMany({ where: { tenantId, targetId: receipt.id } })
+      await prisma.receipt.deleteMany({ where: { id: receipt.id } })
+    }
+  })
+
   it('serializes concurrent approval and rejection of the same order revision', async () => {
     const sqlSuffix = Date.now().toString()
     const delaySequence = `test_revision_review_delay_seq_${sqlSuffix}`

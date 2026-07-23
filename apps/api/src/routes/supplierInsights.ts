@@ -7,6 +7,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
+import { z } from 'zod'
 import { isSupplierRole } from '../lib/auth-scope'
 import { requireSupplierCapability } from '../lib/supplier-access'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
@@ -14,29 +15,48 @@ import { auditSupplierSupplyChain } from '../services/supplyChainAudit'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const RECEIVED_STATUSES = ['CONFIRMED', 'ACCOUNTED'] as const
+const supplierSelectionSchema = {
+  supplierId: z.string().trim().min(1).max(100).optional(),
+}
+const insightDaysQuerySchema = z.object({
+  ...supplierSelectionSchema,
+  days: z.coerce.number().int().min(7).max(365).default(90),
+}).strict()
+const skuRankQuerySchema = z.object({
+  ...supplierSelectionSchema,
+  days: z.coerce.number().int().min(7).max(365).default(30),
+  limit: z.coerce.number().int().min(3).max(50).default(10),
+}).strict()
+const salesTrendQuerySchema = z.object({
+  ...supplierSelectionSchema,
+  months: z.coerce.number().int().min(3).max(12).default(6),
+}).strict()
 
-function insightSupplierId(req: any) {
+function insightSupplierId(req: any, requestedSupplierId?: string) {
   const { role, supplierId } = req.user
   if (isSupplierRole(role)) return requireSupplierCapability(role, supplierId, 'analytics.read')
   if (['ADMIN', 'SUPER_ADMIN'].includes(role)) {
-    const requested = String((req.query as any)?.supplierId || '').trim()
-    if (!requested) throw Object.assign(new Error('管理员查看供应商洞察时必须指定 supplierId'), { statusCode: 400 })
-    return requested
+    if (!requestedSupplierId) throw Object.assign(new Error('管理员查看供应商洞察时必须指定 supplierId'), { statusCode: 400 })
+    return requestedSupplierId
   }
   throw Object.assign(new Error('无权查看供应商洞察'), { statusCode: 403 })
 }
 
 export const supplierInsightRoutes: FastifyPluginAsync = async (app) => {
-  app.get('/audit', auth(app), async (req: any) => {
-    const supplierId = insightSupplierId(req)
-    const days = Math.min(365, Math.max(7, Number.parseInt((req.query as any).days, 10) || 90))
+  app.get('/audit', auth(app), async (req: any, reply: any) => {
+    const query = insightDaysQuerySchema.safeParse(req.query || {})
+    if (!query.success) return reply.status(400).send({ error: query.error.issues[0].message })
+    const supplierId = insightSupplierId(req, query.data.supplierId)
+    const { days } = query.data
     return auditSupplierSupplyChain({ tenantId: req.user.tenantId, supplierId, days })
   })
 
-  app.get('/customers', auth(app), async (req: any) => {
+  app.get('/customers', auth(app), async (req: any, reply: any) => {
+    const query = insightDaysQuerySchema.safeParse(req.query || {})
+    if (!query.success) return reply.status(400).send({ error: query.error.issues[0].message })
     const { tenantId } = req.user
-    const supplierId = insightSupplierId(req)
-    const days = Math.min(365, Math.max(7, Number.parseInt((req.query as any).days, 10) || 90))
+    const supplierId = insightSupplierId(req, query.data.supplierId)
+    const { days } = query.data
     const since = dayjs().subtract(days, 'day').startOf('day').toDate()
     const monthStart = dayjs().startOf('month').toDate()
     const receipts = await prisma.receipt.findMany({
@@ -99,11 +119,12 @@ export const supplierInsightRoutes: FastifyPluginAsync = async (app) => {
     }).sort((a, b) => b.totalAmount - a.totalAmount)
   })
 
-  app.get('/sku-rank', auth(app), async (req: any) => {
+  app.get('/sku-rank', auth(app), async (req: any, reply: any) => {
+    const query = skuRankQuerySchema.safeParse(req.query || {})
+    if (!query.success) return reply.status(400).send({ error: query.error.issues[0].message })
     const { tenantId } = req.user
-    const supplierId = insightSupplierId(req)
-    const days = Math.min(365, Math.max(7, Number.parseInt((req.query as any).days, 10) || 30))
-    const limit = Math.min(50, Math.max(3, Number.parseInt((req.query as any).limit, 10) || 10))
+    const supplierId = insightSupplierId(req, query.data.supplierId)
+    const { days, limit } = query.data
     const since = dayjs().subtract(days, 'day').startOf('day').toDate()
     const items = await prisma.receiptItem.findMany({
       where: {
@@ -150,10 +171,12 @@ export const supplierInsightRoutes: FastifyPluginAsync = async (app) => {
     return { top, bottom, periodDays: days, amountBasis: 'RECEIPT_PAYABLE' }
   })
 
-  app.get('/sales-trend', auth(app), async (req: any) => {
+  app.get('/sales-trend', auth(app), async (req: any, reply: any) => {
+    const query = salesTrendQuerySchema.safeParse(req.query || {})
+    if (!query.success) return reply.status(400).send({ error: query.error.issues[0].message })
     const { tenantId } = req.user
-    const supplierId = insightSupplierId(req)
-    const months = Math.min(12, Math.max(3, Number.parseInt((req.query as any).months, 10) || 6))
+    const supplierId = insightSupplierId(req, query.data.supplierId)
+    const { months } = query.data
     const start = dayjs().subtract(months - 1, 'month').startOf('month').toDate()
     const receipts = await prisma.receipt.findMany({
       where: {

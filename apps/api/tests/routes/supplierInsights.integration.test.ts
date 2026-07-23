@@ -100,6 +100,24 @@ describe('supplier insights receipt facts (integration)', () => {
     expect(current).toMatchObject({ revenue: 60, receivedAmount: 60, orders: 1, amountBasis: 'RECEIPT_PAYABLE' })
   })
 
+  it('rejects malformed, out-of-range and unknown insight query fields', async () => {
+    for (const url of [
+      '/api/supplier/insights/customers?days=90days',
+      '/api/supplier/insights/audit?days=6',
+      '/api/supplier/insights/sku-rank?days=366',
+      '/api/supplier/insights/sku-rank?limit=51',
+      '/api/supplier/insights/sales-trend?months=2',
+      '/api/supplier/insights/sales-trend?unexpected=true',
+    ]) {
+      const response = await app.inject({ method: 'GET', url })
+      expect(response.statusCode).toBe(400)
+    }
+
+    expect((await app.inject({ method: 'GET', url: '/api/supplier/insights/customers?days=7' })).statusCode).toBe(200)
+    expect((await app.inject({ method: 'GET', url: '/api/supplier/insights/sku-rank?days=365&limit=50' })).statusCode).toBe(200)
+    expect((await app.inject({ method: 'GET', url: '/api/supplier/insights/sales-trend?months=12' })).statusCode).toBe(200)
+  })
+
   it('reports missing payable without inventing an amount error', async () => {
     const response = await app.inject({ method: 'GET', url: '/api/supplier/insights/audit?days=90' })
     expect(response.statusCode).toBe(200)

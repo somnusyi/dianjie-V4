@@ -1711,3 +1711,24 @@
 - 当前源码和新构建产物不再携带该快捷口令，但历史提交或外部旧构建仍可能保存旧值；是否轮换及如何清理历史由有权限的发布维护者另行评估，本轮严格不处理凭证。
 - 生产构建继续输出既有 Sentry/OpenTelemetry 动态依赖 warning，但编译、静态页面生成和 standalone 校验成功；本轮未升级依赖。
 - 补送、已确认入库单更正、报损后供应商物理库存口径和完整在线盘点流程继续保持待业务确认。
+
+## 2026-07-24 06:01 第八十一轮（PWA 壳层资源与安全返回）
+
+### 检查范围与修改
+
+- 每轮前确认 `release/20260715-p0`、夜间报告和工作树；本轮起点与 GitHub 远端均为 `916d4e0`，跟踪文件干净，仅保留用户未跟踪文件。
+- 开发服务器复核确认根布局声明的 `/manifest.webmanifest`、`/icons/icon-192.webp` 和 `/icons/icon-512.webp` 均无仓内文件或路由，浏览器会持续请求不存在的 PWA 资源；自定义 404 的“返回上一页”同时使用 `javascript:` 链接并触发 React 安全 warning。
+- 新增 Next 原生 `manifest.ts` 和仓内 SVG 应用图标，manifest 以普通、maskable 两种用途引用同一资源；移除根布局的失效 WebP 声明，让 Next 文件约定生成实际图标 metadata。404 返回动作改为 `useRouter().back()` 的语义化按钮，不再生成 `javascript:` URL。
+
+### 自动化、构建与浏览器验证
+
+- 新增 manifest 单测锁定起始路径、独立应用显示模式及两条仓内图标声明；Web 测试由 13 增至 14 项并 14/14 通过，Web `tsc --noEmit` 通过。首次类型检查指出 Next 类型不接受组合用途字符串，拆为 `any`/`maskable` 两条合法声明后复验通过。
+- 修改前停止 Web dev；安全生产入口完成 140/140 页面构建并验证 standalone 产物，构建路由明确包含 `/manifest.webmanifest` 和 `/icon.svg`。随后开发态在 3200 干净恢复，`.next/BUILD_ID` 不存在。
+- 真实 HTTP 验证登录页 200、manifest 200 且为 `application/manifest+json`、图标 200 且为 `image/svg+xml`，manifest 两条图标均指向仓内 `/icon.svg`。API 单元测试 110/110 和 API TypeScript build 通过。
+- 390×844 浏览器打开未知路径：自定义 404 正常呈现，文档宽度 390px，manifest 与带构建哈希的仓内图标 metadata 均存在，“返回上一页”为唯一按钮且页面无 `javascript:` 链接，控制台无 warning/error。临时视口和标签已清理。
+
+### 风险与待确认
+
+- 当前 PWA 图标采用可缩放 SVG，Chromium/现代浏览器可通过 manifest 与 metadata 使用；若后续明确要求旧版 iOS 专用位图触控图标，应由品牌方提供正式 PNG 资产后独立补入，夜间不臆造业务品牌物料。
+- 生产构建继续输出既有 Sentry/OpenTelemetry 动态依赖 warning，但编译、静态页面生成和 standalone 校验成功；本轮未升级依赖。
+- 补送、已确认入库单更正、报损后供应商物理库存口径和完整在线盘点流程继续保持待业务确认。

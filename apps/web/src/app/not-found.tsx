@@ -1,9 +1,11 @@
 // 显式自定义 404 — 按当前登录角色跳对应工作台, 避免被甩到登录页(造成"退出"错觉)
 'use client'
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 export const dynamic = 'force-dynamic'
 
 export default function NotFound() {
+  const router = useRouter()
   const [homeHref, setHomeHref] = useState('/')
   useEffect(() => {
     try {
@@ -31,7 +33,7 @@ export default function NotFound() {
         <p style={{ fontSize: 13, color: '#5F5E5A', marginTop: 4 }}>请检查地址或返回工作台</p>
         <a href={homeHref} style={{ display: 'inline-block', marginTop: 16, padding: '8px 20px', background: '#1A1815', color: '#fff', borderRadius: 12, textDecoration: 'none', fontSize: 14 }}>返回工作台</a>
         <div style={{ marginTop: 12 }}>
-          <a href="javascript:history.back()" style={{ fontSize: 13, color: '#5F5E5A' }}>‹ 返回上一页</a>
+          <button type="button" onClick={() => router.back()} style={{ border: 0, padding: 0, background: 'transparent', cursor: 'pointer', fontSize: 13, color: '#5F5E5A' }}>‹ 返回上一页</button>
         </div>
       </div>
     </div>

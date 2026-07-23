@@ -11,14 +11,6 @@ export const metadata: Metadata = {
     title: '滇界',
     statusBarStyle: 'default',
   },
-  icons: {
-    icon: [
-      { url: '/icons/icon-192.webp', sizes: '192x192', type: 'image/webp' },
-      { url: '/icons/icon-512.webp', sizes: '512x512', type: 'image/webp' },
-    ],
-    apple: '/icons/icon-512.webp',
-    shortcut: '/icons/icon-192.webp',
-  },
 }
 
 export const viewport: Viewport = {

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="滇界">
+  <rect width="512" height="512" rx="112" fill="#0C1A12"/>
+  <circle cx="384" cy="128" r="48" fill="#E07A3C"/>
+  <path d="M72 368 202 168l74 112 47-68 117 156H72Z" fill="#F1EFE8"/>
+  <path d="m72 368 130-200 74 112-58 88H72Z" fill="#E07A3C"/>
+</svg>

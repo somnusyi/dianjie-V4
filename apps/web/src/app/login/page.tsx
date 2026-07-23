@@ -27,12 +27,6 @@ export default function LoginPage() {
     } finally { setLoading(false) }
   }
 
-  const quick = [
-    { label: '🛡️ 管理员', email: 'admin@dianjie.com', pw: 'admin123' },
-    { label: '💰 财务', email: 'finance@dianjie.com', pw: 'fin123' },
-    { label: '🏪 店长', email: 'manager1@dianjie.com', pw: 'mgr123' },
-  ]
-
   return (
     <div className={styles.page} style={{ minHeight: '100vh', display: 'flex', background: '#f4f6f9' }}>
       <div className={styles.brand} style={{ width: 420, background: '#0c1a12', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 48 }}>
@@ -50,18 +44,6 @@ export default function LoginPage() {
         <div className={styles.formCard} style={{ width: 380 }}>
           <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>欢迎回来</div>
           <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 28 }}>登录滇界云管管理平台</div>
-
-          <div style={{ fontSize: 10.5, color: '#9ca3af', marginBottom: 10, fontWeight: 700, letterSpacing: 1.5 }}>快速选择角色</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 22 }}>
-            {quick.map(u => (
-              <div key={u.label} onClick={() => { setEmail(u.email); setPassword(u.pw) }}
-                style={{ border: '1.5px solid #e5e7eb', borderRadius: 8, padding: '10px 8px', textAlign: 'center', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#374151', background: '#fff' }}>
-                {u.label}
-              </div>
-            ))}
-          </div>
-
-          <div style={{ height: 1, background: '#e5e7eb', marginBottom: 22 }} />
 
           <div style={{ marginBottom: 14 }}>
             <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 5 }}>邮箱</label>

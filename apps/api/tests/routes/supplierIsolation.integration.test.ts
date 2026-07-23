@@ -1156,6 +1156,20 @@ describe('supplier tenant scope (integration)', () => {
     const claims = await app.inject({ method: 'GET', url: '/api/loss-claims?page=1&pageSize=100' })
     expect(claims.statusCode).toBe(200)
     expect(claims.json()).toMatchObject({ total: 0, items: [] })
+    const limitedClaims = await app.inject({ method: 'GET', url: '/api/loss-claims?limit=10' })
+    expect(limitedClaims.statusCode).toBe(200)
+    expect(limitedClaims.json()).toEqual([])
+    for (const url of [
+      '/api/loss-claims?limit=0',
+      '/api/loss-claims?limit=101',
+      '/api/loss-claims?page=0',
+      '/api/loss-claims?pageSize=101',
+      '/api/loss-claims?limit=10&page=1',
+      '/api/loss-claims/export?limit=10',
+    ]) {
+      const response = await app.inject({ method: 'GET', url })
+      expect(response.statusCode).toBe(400)
+    }
   })
 
   it('rejects manual loss amounts beyond database bounds before writes', async () => {

@@ -122,6 +122,19 @@ async function main() {
     }
 
     const approveScenario = await createScenario(1)
+    const limitedClaims = await api('/api/loss-claims?limit=1', tokenA)
+    assert.equal(limitedClaims.status, 200, JSON.stringify(limitedClaims.body))
+    assert.ok(Array.isArray(limitedClaims.body) && limitedClaims.body.length <= 1)
+    for (const path of [
+      '/api/loss-claims?limit=0',
+      '/api/loss-claims?limit=101',
+      '/api/loss-claims?page=0',
+      '/api/loss-claims?pageSize=101',
+      '/api/loss-claims?limit=1&page=1',
+      '/api/loss-claims/export?limit=1',
+    ]) {
+      assert.equal((await api(path, tokenA)).status, 400, `非法报损读取参数必须被拒绝：${path}`)
+    }
     const unboundList = await api('/api/loss-claims?page=1&pageSize=20', unboundToken)
     assert.equal(unboundList.status, 401, '未绑定 supplierId 的供应商账号必须由全局认证关闭')
     assert.equal((await api(`/api/loss-claims/${approveScenario.claim.id}/handle`, unboundToken, {
@@ -199,6 +212,8 @@ async function main() {
     console.log(JSON.stringify({
       ok: true,
       supplierIsolation: true,
+      strictLossClaimQueries: true,
+      legacyLimitSupported: true,
       approveIdempotent: true,
       rejectIdempotent: true,
       schedulerSupplierRaceConsistent: true,

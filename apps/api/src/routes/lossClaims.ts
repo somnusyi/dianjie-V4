@@ -13,6 +13,7 @@ import { lossClaimResolutionSchema } from '../services/lossClaimResolution'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 import { setReceiptSettlementAmountInTransaction } from '../services/receiptSettlement'
 import { arrivalDifferencesToCsv } from '../services/arrivalDifferenceExport'
+import { parseBoundedInteger, parsePagination } from '../lib/pagination'
 
 const LOSS_AMOUNT_MAX = new Prisma.Decimal('9999999999.99')
 
@@ -50,6 +51,7 @@ const lossClaimListQuerySchema = z.object({
   kind: z.enum(['ARRIVAL_SHORTAGE', 'ARRIVAL_DAMAGE', 'INTERNAL_WASTE', 'LEGACY_UNRESOLVED']).optional(),
   page: z.string().regex(/^\d+$/).optional(),
   pageSize: z.string().regex(/^\d+$/).optional(),
+  limit: z.string().regex(/^\d+$/).optional(),
   isManual: z.enum(['true', 'false']).optional(),
   createdAfter: z.string().max(40).optional(),
   createdBefore: z.string().max(40).optional(),
@@ -217,7 +219,10 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, storeId, role, supplierId: userSupplierId } = req.user
     const parsed = lossClaimListQuerySchema.safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
-    const { page, pageSize } = parsed.data
+    const { page, pageSize, limit } = parsed.data
+    if (limit !== undefined && (page !== undefined || pageSize !== undefined)) {
+      return reply.status(400).send({ error: 'limit 不能与 page/pageSize 同时使用' })
+    }
     let where: any
     try {
       where = buildLossClaimWhere({ tenantId, storeId, role, supplierId: userSupplierId }, parsed.data)
@@ -228,13 +233,24 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     // Keep the legacy array response when no pagination was requested. Newer
     // clients opt in with page/pageSize and receive the standard list envelope.
     const paginated = page !== undefined || pageSize !== undefined
-    const p = Math.max(1, Number.parseInt(String(page || '1'), 10) || 1)
-    const ps = Math.min(100, Math.max(1, Number.parseInt(String(pageSize || '20'), 10) || 20))
+    const pagination = paginated
+      ? parsePagination({ page, pageSize }, { defaultPageSize: 20, maxPageSize: 100 })
+      : { page: 1, pageSize: 20 }
+    if (!pagination) return reply.status(400).send({ error: '分页参数格式不正确' })
+    const legacyLimit = limit === undefined
+      ? undefined
+      : parseBoundedInteger(limit, { defaultValue: 20, max: 100 })
+    if (limit !== undefined && legacyLimit === null) {
+      return reply.status(400).send({ error: 'limit 必须是 1 至 100 的整数' })
+    }
+    const { page: p, pageSize: ps } = pagination
     const total = paginated ? await prisma.lossClaim.count({ where }) : 0
 
     const claims = await prisma.lossClaim.findMany({
-      where, orderBy: { createdAt: 'desc' },
-      ...(paginated ? { skip: (p - 1) * ps, take: ps } : {}),
+      where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      ...(paginated
+        ? { skip: (p - 1) * ps, take: ps }
+        : legacyLimit !== undefined ? { take: legacyLimit } : {}),
       include: {
         store: { select: { name: true } },
         supplier: { select: { name: true } },
@@ -257,7 +273,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/export', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
     const { tenantId, userId, storeId, role, supplierId } = req.user
-    const parsed = lossClaimListQuerySchema.omit({ page: true, pageSize: true }).safeParse(req.query || {})
+    const parsed = lossClaimListQuerySchema.omit({ page: true, pageSize: true, limit: true }).safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
     let where: any
     try {

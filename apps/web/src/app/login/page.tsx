@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
+import styles from './page.module.css'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -33,8 +34,8 @@ export default function LoginPage() {
   ]
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', background: '#f4f6f9' }}>
-      <div style={{ width: 420, background: '#0c1a12', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 48 }}>
+    <div className={styles.page} style={{ minHeight: '100vh', display: 'flex', background: '#f4f6f9' }}>
+      <div className={styles.brand} style={{ width: 420, background: '#0c1a12', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 48 }}>
         <div style={{ fontSize: 48, marginBottom: 16 }}>🍄</div>
         <div style={{ fontSize: 26, fontWeight: 700, color: '#fff', letterSpacing: 4, marginBottom: 6 }}>滇界云管</div>
         <div style={{ fontSize: 13, color: '#4a7a5e', marginBottom: 48 }}>连锁餐饮数字化管理平台</div>
@@ -45,8 +46,8 @@ export default function LoginPage() {
         ))}
       </div>
 
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ width: 380 }}>
+      <div className={styles.formShell} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className={styles.formCard} style={{ width: 380 }}>
           <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>欢迎回来</div>
           <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 28 }}>登录滇界云管管理平台</div>
 

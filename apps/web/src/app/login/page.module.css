@@ -1,0 +1,31 @@
+.page {
+  min-width: 0;
+}
+
+.brand {
+  flex: 0 0 420px;
+}
+
+.formShell {
+  min-width: 0;
+  padding: 32px;
+}
+
+.formCard {
+  max-width: 100%;
+}
+
+@media (max-width: 899px) {
+  .brand {
+    display: none !important;
+  }
+
+  .formShell {
+    width: 100%;
+    padding: 24px 20px;
+  }
+
+  .formCard {
+    width: 100% !important;
+  }
+}

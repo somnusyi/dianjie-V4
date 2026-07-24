@@ -55,14 +55,18 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
   app.get('/me', auth, async (req: any, reply) => {
     const { userId, tenantId, role, storeId, supplierId } = req.user
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
+    const user = await prisma.user.findFirst({
+      where: { id: userId, tenantId, status: 'ACTIVE' },
       include: {
         store: { select: { id: true, name: true, no: true } },
         supplier: { select: { id: true, name: true } },
       },
     })
     if (!user) return reply.status(404).send({ error: '用户不存在' })
+    const isSupplierDashboard = role === 'SUPPLIER_OWNER' || role === 'SUPPLIER_STAFF' || role === 'SUPPLIER_SUB'
+    if (isSupplierDashboard && (!supplierId || user.supplierId !== supplierId)) {
+      return reply.status(403).send({ error: '供应商账号绑定不一致' })
+    }
 
     const todayLocal = dayjs()
     const today = utcDateForLocal(todayLocal)
@@ -357,7 +361,7 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    if (role === 'SUPPLIER_OWNER' || role === 'SUPPLIER_STAFF' || role === 'SUPPLIER_SUB') {
+    if (isSupplierDashboard) {
       // 供应商核心指标: 应收 / 在途 / 临期 / 低库存
       if (!supplierId) {
         hero = { label: '账号未绑供应商', value: '—', meta: '请联系运营', stats: [] }

@@ -154,6 +154,8 @@ describe('supplier tenant scope (integration)', () => {
           ? { tenantId, userId: chefUserId, role: 'MANAGER' }
         : actor === 'admin'
           ? { tenantId, userId: chefUserId, role: 'ADMIN' }
+          : actor === 'supplier-mismatch'
+            ? { tenantId, supplierId: supplierBId, userId: userAId, role: 'SUPPLIER_OWNER' }
           : actor === 'supplier-b'
             ? { tenantId, supplierId: supplierBId, userId: userBId, role: 'SUPPLIER_OWNER' }
           : { tenantId, supplierId: supplierAId, userId: userAId, role: 'SUPPLIER_OWNER' }
@@ -224,6 +226,14 @@ describe('supplier tenant scope (integration)', () => {
     expect(stock.statusCode).toBe(200)
     expect(stock.json().map((item: any) => item.id)).toEqual([productAId])
     expect(stock.json().some((item: any) => item.id === productBId)).toBe(false)
+  })
+
+  it('rejects a dashboard supplier claim that disagrees with the database binding', async () => {
+    const response = await app.inject({
+      method: 'GET', url: '/api/v2/dashboard/me', headers: { 'x-test-actor': 'supplier-mismatch' },
+    })
+    expect(response.statusCode).toBe(403)
+    expect(response.json().error).toContain('绑定不一致')
   })
 
   it('counts delivering orders in the supplier-scoped dashboard transit total', async () => {

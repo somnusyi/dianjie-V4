@@ -1802,15 +1802,6 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       if (!result.voucher.ok || !result.finance.ok) {
         req.log.error({ receiptId: receipt.id, result }, '收货后财务派生记录未完整生成，等待幂等补偿')
       }
-      if (hasLoss && result.finance.ok) {
-        await prisma.paymentSchedule.updateMany({
-          where: {
-            receiptId: receipt.id,
-            status: { in: ['PENDING', 'NOTIFIED', 'PENDING_APPROVAL', 'APPROVED', 'OVERDUE'] },
-          },
-          data: { status: 'ON_HOLD' },
-        })
-      }
     } catch (error) {
       // 收货主事务已经成功，不把派生财务流程的临时故障伪装成收货失败。
       // 客户端重试会进入上方幂等分支，再次补偿对账单和账期。

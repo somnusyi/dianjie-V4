@@ -75,9 +75,21 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
       where: { receiptId: receipt.id },
       include: { reconciliation: true },
     })
+    const unresolvedLoss = await tx.lossClaim.findFirst({
+      where: {
+        tenantId,
+        receiptId: receipt.id,
+        status: { in: ['PENDING', 'NEGOTIATING'] },
+      },
+      select: { id: true },
+    })
+    const initialScheduleStatus = unresolvedLoss
+      ? 'ON_HOLD'
+      : needApproval ? 'PENDING_APPROVAL' : 'PENDING'
 
     let schedule = existingSchedule
     let scheduleCreated = false
+    let scheduleHeld = false
     if (!schedule) {
       schedule = await tx.paymentSchedule.create({
         data: {
@@ -90,10 +102,17 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
           confirmedAt,
           dueAt,
           needApproval,
-          status: needApproval ? 'PENDING_APPROVAL' : 'PENDING',
+          status: initialScheduleStatus,
         },
       })
       scheduleCreated = true
+      scheduleHeld = Boolean(unresolvedLoss)
+    } else if (unresolvedLoss && ['PENDING', 'NOTIFIED', 'PENDING_APPROVAL', 'APPROVED', 'OVERDUE'].includes(schedule.status)) {
+      schedule = await tx.paymentSchedule.update({
+        where: { id: schedule.id },
+        data: { status: 'ON_HOLD' },
+      })
+      scheduleHeld = true
     }
 
     let recon = existingReconItem?.reconciliation
@@ -129,7 +148,7 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
       data: { status: 'ACCOUNTED' },
     })
 
-    if (scheduleCreated || reconciliationCreated) {
+    if (scheduleCreated || reconciliationCreated || scheduleHeld) {
       await tx.opLog.create({
         data: {
           tenantId,
@@ -143,6 +162,8 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
             reconciliationId: recon.id,
             scheduleCreated,
             reconciliationCreated,
+            scheduleHeld,
+            unresolvedLossClaimId: unresolvedLoss?.id || null,
           },
         },
       })
@@ -155,6 +176,7 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
       duplicated: Boolean(existingSchedule && existingReconItem),
       scheduleCreated,
       reconciliationCreated,
+      scheduleHeld,
     }
   })
 

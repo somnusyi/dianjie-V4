@@ -107,6 +107,37 @@ async function main() {
     assert.equal(await prisma.paymentSchedule.count({ where: { receiptId: headqReceipt.id } }), 0)
     assert.equal(await prisma.reconciliationItem.count({ where: { receiptId: headqReceipt.id } }), 0)
 
+    const lossReceipt = await createSource('LOSS', 55.55)
+    await prisma.lossClaim.create({
+      data: {
+        tenantId: tenant.id,
+        no: `LC-RDR-${suffix}`,
+        kind: 'ARRIVAL_SHORTAGE',
+        payableBasis: 'NET_AT_RECEIPT',
+        purchaseOrderId: lossReceipt.purchaseOrderId,
+        receiptId: lossReceipt.id,
+        storeId: store.id,
+        supplierId: supplier.id,
+        totalLossAmount: 5.55,
+        description: '派生恢复冻结验证',
+        status: 'PENDING',
+        createdById: actor.id,
+      },
+    })
+    const lossResult = await ensureReceiptDerivatives(lossReceipt.id)
+    assert.equal(lossResult.finance.ok, true)
+    assert.equal((await prisma.paymentSchedule.findUniqueOrThrow({
+      where: { receiptId: lossReceipt.id },
+    })).status, 'ON_HOLD', '新建争议入库账期必须在财务事务内直接冻结')
+    await prisma.paymentSchedule.update({
+      where: { receiptId: lossReceipt.id },
+      data: { status: 'PENDING' },
+    })
+    await ensureReceiptDerivatives(lossReceipt.id)
+    assert.equal((await prisma.paymentSchedule.findUniqueOrThrow({
+      where: { receiptId: lossReceipt.id },
+    })).status, 'ON_HOLD', '重复补偿必须恢复遗漏的争议账期冻结')
+
     const voucherReceipt = await createSource('VOUCHER', 67.89)
     await prisma.$executeRawUnsafe(`
       CREATE FUNCTION "${voucherFunction}"() RETURNS trigger AS $$
@@ -156,6 +187,8 @@ async function main() {
       dailyRepairRecoversVoucherAndResolvesFailure: true,
       concurrentRetryIdempotent: true,
       headqInternalTransferSkipped: true,
+      lossScheduleHeldOnCreate: true,
+      lossScheduleHoldRecovered: true,
     }))
   } finally {
     await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${financeTrigger}" ON "op_logs"`).catch(() => {})
@@ -178,6 +211,7 @@ async function main() {
       await tx.paymentSchedule.deleteMany({ where: { receiptId: { in: receiptIds } } })
       await tx.reconciliationItem.deleteMany({ where: { receiptId: { in: receiptIds } } })
       await tx.reconciliation.deleteMany({ where: { id: { in: reconIds } } })
+      await tx.lossClaim.deleteMany({ where: { receiptId: { in: receiptIds } } })
       await tx.purchaseOrder.updateMany({ where: { id: { in: orderIds } }, data: { receiptId: null } })
       await tx.receipt.deleteMany({ where: { id: { in: receiptIds } } })
       await tx.purchaseOrder.deleteMany({ where: { id: { in: orderIds } } })

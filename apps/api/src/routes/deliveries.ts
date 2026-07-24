@@ -5,6 +5,10 @@ import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 import { requireSupplierCapability } from '../lib/supplier-access'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 import { calendarDateSchema } from '../lib/calendar-date'
+import {
+  supplyDocumentStoreSelect,
+  supplyDocumentSupplierSelect,
+} from '../lib/supply-document-party-projection'
 
 const listQuerySchema = z.object({
   status: z.enum(['DRAFT', 'SHIPPED', 'DELIVERED', 'RECEIVED', 'CANCELLED']).optional(),
@@ -103,7 +107,8 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
       where,
       include: {
         purchaseOrder: { include: { items: { where: { isActive: true }, include: { product: true } } } },
-        store: true, supplier: true,
+        store: { select: supplyDocumentStoreSelect },
+        supplier: { select: supplyDocumentSupplierSelect },
         createdBy: { select: { id: true, name: true, role: true } },
         shippedBy: { select: { id: true, name: true } },
         deliveredBy: { select: { id: true, name: true } },

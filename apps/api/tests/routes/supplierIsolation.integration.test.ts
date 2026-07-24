@@ -23,6 +23,7 @@ let tenantId = ''
 let supplierAId = ''
 let supplierBId = ''
 let userAId = ''
+let userBId = ''
 let chefUserId = ''
 let storeId = ''
 let productAId = ''
@@ -38,8 +39,26 @@ describe('supplier tenant scope (integration)', () => {
     tenantId = tenant.id
     const [supplierA, supplierB, store] = await Promise.all([
       prisma.supplier.create({ data: { tenantId, no: `A-${suffix}`, name: '隔离供应商 A' } }),
-      prisma.supplier.create({ data: { tenantId, no: `B-${suffix}`, name: '隔离供应商 B' } }),
-      prisma.store.create({ data: { tenantId, no: `S-${suffix}`, name: '隔离测试门店' } }),
+      prisma.supplier.create({
+        data: {
+          tenantId, no: `B-${suffix}`, name: '隔离供应商 B',
+          bankName: '测试银行', bankAccount: 'sensitive-supplier-account',
+          bankAccountName: '隔离供应商 B', bankCode: 'sensitive-bank-code',
+          autoPay: true, autoPayLimit: 999,
+        },
+      }),
+      prisma.store.create({
+        data: {
+          tenantId, no: `S-${suffix}`, name: '隔离测试门店',
+          address: '测试配送地址', phone: '13800000000', managerName: '测试店长',
+          aggregatorApiKeyEnc: 'sensitive-aggregator-key',
+          aggregatorSecretEnc: 'sensitive-aggregator-secret',
+          wechatApiV3KeyEnc: 'sensitive-wechat-key',
+          alipayPrivateKeyEnc: 'sensitive-alipay-key',
+          bankAccountNo: 'sensitive-store-account',
+          invoiceTaxId: 'sensitive-tax-id',
+        },
+      }),
     ])
     supplierAId = supplierA.id
     supplierBId = supplierB.id
@@ -50,6 +69,7 @@ describe('supplier tenant scope (integration)', () => {
       prisma.user.create({ data: { tenantId, storeId: store.id, storeIds: [store.id], name: '隔离测试厨师长', email: `chef-${suffix}@local.test`, password: 'test-only', role: 'KITCHEN_LEAD' } }),
     ])
     userAId = userA.id
+    userBId = userB.id
     chefUserId = chef.id
     const [productA, productB] = await Promise.all([
       prisma.product.create({ data: { tenantId, supplierId: supplierA.id, code: `A-P-${suffix}`, name: 'A 商品', price: 10, stock: 11 } }),
@@ -127,6 +147,8 @@ describe('supplier tenant scope (integration)', () => {
           ? { tenantId, userId: chefUserId, role: 'MANAGER' }
         : actor === 'admin'
           ? { tenantId, userId: chefUserId, role: 'ADMIN' }
+          : actor === 'supplier-b'
+            ? { tenantId, supplierId: supplierBId, userId: userBId, role: 'SUPPLIER_OWNER' }
           : { tenantId, supplierId: supplierAId, userId: userAId, role: 'SUPPLIER_OWNER' }
     })
     await app.register(productRoutes, { prefix: '/api/products' })
@@ -966,6 +988,55 @@ describe('supplier tenant scope (integration)', () => {
     expect(invalidReceiptStatus.statusCode).toBe(400)
     const unknownReceiptFilter = await app.inject({ method: 'GET', url: '/api/receipts?dateStart=2026-07-01' })
     expect(unknownReceiptFilter.statusCode).toBe(400)
+  })
+
+  it('keeps payment and banking fields out of operational order details', async () => {
+    for (const headers of [
+      { 'x-test-actor': 'chef' },
+      { 'x-test-actor': 'supplier-b' },
+    ]) {
+      for (const url of [
+        `/api/orders/${orderBId}`,
+        `/api/deliveries/${deliveryBId}`,
+      ]) {
+        const response = await app.inject({ method: 'GET', url, headers })
+        expect(response.statusCode).toBe(200)
+        const body = response.json()
+        expect(body.store).toMatchObject({
+          id: storeId,
+          no: `S-${suffix}`,
+          name: '隔离测试门店',
+          address: '测试配送地址',
+          phone: '13800000000',
+          managerName: '测试店长',
+        })
+        expect(body.supplier).toMatchObject({
+          id: supplierBId,
+          no: `B-${suffix}`,
+          name: '隔离供应商 B',
+        })
+        for (const field of [
+          'aggregatorApiKeyEnc',
+          'aggregatorSecretEnc',
+          'wechatApiV3KeyEnc',
+          'alipayPrivateKeyEnc',
+          'bankAccountNo',
+          'invoiceTaxId',
+        ]) {
+          expect(body.store).not.toHaveProperty(field)
+        }
+        for (const field of [
+          'bankName',
+          'bankAccount',
+          'bankAccountName',
+          'bankCode',
+          'autoPay',
+          'autoPayLimit',
+        ]) {
+          expect(body.supplier).not.toHaveProperty(field)
+        }
+      }
+    }
   })
 
   it('searches supplier orders by the immutable submitted product snapshot', async () => {

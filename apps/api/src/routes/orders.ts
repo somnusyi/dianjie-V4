@@ -26,6 +26,10 @@ import {
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 import { calendarDateSchema } from '../lib/calendar-date'
 import { hashRequestBody } from '../lib/idempotency'
+import {
+  supplyDocumentStoreSelect,
+  supplyDocumentSupplierSelect,
+} from '../lib/supply-document-party-projection'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
 const PURCHASE_QUANTITY_MAX = 99_999_999.99
@@ -291,7 +295,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const order = await prisma.purchaseOrder.findFirst({
       where,
       include: {
-        store: true, supplier: true,
+        store: { select: supplyDocumentStoreSelect },
+        supplier: { select: supplyDocumentSupplierSelect },
         createdBy: { select: { id: true, name: true, role: true } },
         shippedBy: { select: { id: true, name: true } },
         items: { include: { product: true } },
@@ -394,8 +399,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (!finalStoreId) return reply.status(400).send({ error: '请指定门店 (storeId)' })
     const requestFingerprint = orderCreateRequestFingerprint({ storeId: finalStoreId, supplierId, expectedDate, note, items })
     const replayInclude = {
-      store: true,
-      supplier: true,
+      store: { select: supplyDocumentStoreSelect },
+      supplier: { select: supplyDocumentSupplierSelect },
       items: { where: { isActive: true }, include: { product: true } },
       events: {
         where: { eventType: 'CREATED' as const }, orderBy: { occurredAt: 'asc' as const }, take: 1,
@@ -537,8 +542,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             items: { create: itemsData },
           },
           include: {
-            store: true,
-            supplier: true,
+            store: { select: supplyDocumentStoreSelect },
+            supplier: { select: supplyDocumentSupplierSelect },
             createdBy: { select: { id: true, name: true, role: true } },
             items: { include: { product: true } },
           },
@@ -670,7 +675,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const order = await prisma.purchaseOrder.findFirst({
       where: { id, tenantId, status: 'SUBMITTED' },
       include: {
-        store: true, supplier: true,
+        store: { select: supplyDocumentStoreSelect },
+        supplier: { select: supplyDocumentSupplierSelect },
         createdBy: { select: { id: true, name: true, role: true } },
         items: { include: { product: true } },
       },

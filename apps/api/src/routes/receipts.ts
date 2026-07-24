@@ -8,10 +8,48 @@ import { notifyReceiptConfirmed } from '../services/notification'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 import { parsePagination } from '../lib/pagination'
 import { nextBusinessNo } from '../services/purchaseOrderIntegrity'
+import {
+  supplyDocumentStoreSelect,
+  supplyDocumentSupplierSelect,
+} from '../lib/supply-document-party-projection'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const RECEIPT_OPERATOR_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN'])
 const RECEIPT_AMOUNT_MAX = new Prisma.Decimal('9999999999.99')
+const receiptOperationalScalarSelect = {
+  id: true,
+  tenantId: true,
+  no: true,
+  storeId: true,
+  supplierId: true,
+  deliveryDate: true,
+  totalAmount: true,
+  status: true,
+  note: true,
+  createdById: true,
+  confirmedAt: true,
+  isManual: true,
+  tempSupplierName: true,
+  rejectReason: true,
+  rejectedAt: true,
+  purchaseOrderId: true,
+  deliveryOrderId: true,
+  invoiceId: true,
+  supplierVerifiedAt: true,
+  supplierVerifiedById: true,
+  supplierVerifyNote: true,
+  financeVerifiedAt: true,
+  financeVerifiedById: true,
+  financeVerifyNote: true,
+  createdAt: true,
+  updatedAt: true,
+} as const
+const receiptPaymentScheduleSelect = {
+  id: true,
+  status: true,
+  dueAt: true,
+  amount: true,
+} as const
 
 const receiptListFilterSchema = z.object({
   status: z.preprocess(
@@ -117,12 +155,13 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       prisma.receipt.findMany({
         where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip, take: ps,
-        include: {
+        select: {
+          ...receiptOperationalScalarSelect,
           store: { select: { id: true, name: true } },
           supplier: { select: { id: true, name: true } },
           createdBy: { select: { id: true, name: true } },
           items: { include: { product: { select: { id: true, name: true, unit: true } } } },
-          paymentSchedule: { select: { id: true, status: true, dueAt: true, amount: true } },
+          paymentSchedule: { select: receiptPaymentScheduleSelect },
         },
       }),
       prisma.receipt.count({ where }),
@@ -138,11 +177,19 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     if (isStoreScoped(role)) detailWhere.storeId = storeId || '__NONE__'
     const receipt = await prisma.receipt.findFirst({
       where: detailWhere,
-      include: {
-        store: true, supplier: true,
+      select: {
+        ...receiptOperationalScalarSelect,
+        store: { select: supplyDocumentStoreSelect },
+        supplier: { select: supplyDocumentSupplierSelect },
         createdBy: { select: { id: true, name: true } },
-        items: { include: { product: true } },
-        paymentSchedule: true,
+        items: {
+          include: {
+            product: {
+              select: { id: true, code: true, name: true, spec: true, category: true, unit: true },
+            },
+          },
+        },
+        paymentSchedule: { select: receiptPaymentScheduleSelect },
       },
     })
     if (!receipt) return reply.status(404).send({ error: '入库单不存在' })

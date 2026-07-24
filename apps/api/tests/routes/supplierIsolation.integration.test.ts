@@ -117,6 +117,9 @@ describe('supplier tenant scope (integration)', () => {
         tenantId, no: `RK-B-${suffix}`, storeId: store.id, supplierId: supplierB.id,
         deliveryDate: new Date(), totalAmount: 40, status: 'ACCOUNTED', createdById: chef.id,
         confirmedAt: new Date(), purchaseOrderId: orderB.id, deliveryOrderId: deliveryB.id,
+        tempSupplierName: '供应商 B 临时名称',
+        tempBankAccount: 'sensitive-receipt-account',
+        tempBankName: '敏感测试开户行',
       },
     })
     receiptBId = receiptB.id
@@ -125,6 +128,9 @@ describe('supplier tenant scope (integration)', () => {
         tenantId, receiptId: receiptB.id, supplierId: supplierB.id, storeId: store.id,
         amount: 40, creditDays: 30, confirmedAt: new Date(),
         dueAt: new Date(Date.now() + 30 * 86_400_000), status: 'PENDING',
+        bankTxNo: 'sensitive-bank-transaction',
+        bankRawResponse: { privatePayload: 'sensitive-bank-response' },
+        retryCount: 2, failReason: 'sensitive-payment-failure',
       },
     })
     await prisma.lossClaim.create({
@@ -1036,6 +1042,50 @@ describe('supplier tenant scope (integration)', () => {
           expect(body.supplier).not.toHaveProperty(field)
         }
       }
+    }
+  })
+
+  it('keeps receipt bank fields and raw payment results out of operational reads', async () => {
+    for (const headers of [
+      { 'x-test-actor': 'chef' },
+      { 'x-test-actor': 'supplier-b' },
+    ]) {
+      const list = await app.inject({
+        method: 'GET', url: '/api/receipts?page=1&pageSize=100', headers,
+      })
+      expect(list.statusCode).toBe(200)
+      const listedReceipt = list.json().items.find((item: any) => item.id === receiptBId)
+      expect(listedReceipt).toBeDefined()
+      expect(listedReceipt).toMatchObject({
+        tempSupplierName: '供应商 B 临时名称',
+        paymentSchedule: { status: 'PENDING', amount: '40' },
+      })
+      expect(listedReceipt).not.toHaveProperty('tempBankAccount')
+      expect(listedReceipt).not.toHaveProperty('tempBankName')
+      expect(listedReceipt.paymentSchedule).not.toHaveProperty('bankTxNo')
+      expect(listedReceipt.paymentSchedule).not.toHaveProperty('bankRawResponse')
+      expect(listedReceipt.paymentSchedule).not.toHaveProperty('failReason')
+      expect(listedReceipt.paymentSchedule).not.toHaveProperty('retryCount')
+
+      const detail = await app.inject({
+        method: 'GET', url: `/api/receipts/${receiptBId}`, headers,
+      })
+      expect(detail.statusCode).toBe(200)
+      const body = detail.json()
+      expect(body.store).toMatchObject({ id: storeId, name: '隔离测试门店' })
+      expect(body.supplier).toMatchObject({ id: supplierBId, name: '隔离供应商 B' })
+      expect(body).not.toHaveProperty('tempBankAccount')
+      expect(body).not.toHaveProperty('tempBankName')
+      expect(body.store).not.toHaveProperty('aggregatorApiKeyEnc')
+      expect(body.store).not.toHaveProperty('bankAccountNo')
+      expect(body.supplier).not.toHaveProperty('bankAccount')
+      expect(body.supplier).not.toHaveProperty('autoPay')
+      expect(body.paymentSchedule).toEqual({
+        id: expect.any(String),
+        status: 'PENDING',
+        dueAt: expect.any(String),
+        amount: '40',
+      })
     }
   })
 

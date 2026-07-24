@@ -334,6 +334,7 @@ describe('supplier tenant scope (integration)', () => {
       const response = await app.inject({ method: 'GET', url: '/api/v2/dashboard/me' })
       expect(response.statusCode).toBe(200)
       expect(response.json().hero.supplierExt.arTotal).toBe(11)
+      expect(response.json().hero.meta).toBe('暂无 7 天内到期')
       expect(response.json().hero.stats.find((stat: any) => stat.label === '回款率')).toMatchObject({
         value: '100%',
       })

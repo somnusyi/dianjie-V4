@@ -467,7 +467,7 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
           value: fmtMoney(arTotal),
           meta: arOver > 0
             ? `⚠ 逾期 ¥${arOver.toLocaleString()} · 7天内到 ¥${ar7.toLocaleString()}`
-            : ar7 > 0 ? `7天内到账 ¥${ar7.toLocaleString()}` : '✓ 暂无应收',
+            : ar7 > 0 ? `7天内到账 ¥${ar7.toLocaleString()}` : arTotal > 0 ? '暂无 7 天内到期' : '✓ 暂无应收',
           stats: [
             { label: '在途订单', value: String(totalActive), tone: submittedCnt > 0 ? 'orange' as const : 'default' as const, delta: submittedCnt > 0 ? `${submittedCnt} 待接` : undefined },
             { label: '本月已交付', value: fmtMoney(Number(monthDelivered._sum.totalAmount || 0)), tone: 'default' as const },

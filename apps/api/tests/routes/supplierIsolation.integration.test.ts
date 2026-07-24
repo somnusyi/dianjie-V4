@@ -396,6 +396,42 @@ describe('supplier tenant scope (integration)', () => {
     }
   })
 
+  it('uses available stock after reservations for the supplier low-stock metric', async () => {
+    const before = await prisma.product.findUniqueOrThrow({
+      where: { id: productAId },
+      select: { minStock: true },
+    })
+    await prisma.product.update({ where: { id: productAId }, data: { minStock: 10 } })
+    const order = await prisma.purchaseOrder.create({
+      data: {
+        tenantId, no: `PO-LOW-STOCK-${suffix}`, storeId, supplierId: supplierAId,
+        expectedDate: new Date(), totalAmount: 20, status: 'CONFIRMED', createdById: chefUserId,
+        items: {
+          create: {
+            productId: productAId, quantity: 2, unitPrice: 10, amount: 20,
+          },
+        },
+      },
+      include: { items: true },
+    })
+    const reservation = await prisma.supplierStockReservation.create({
+      data: {
+        tenantId, supplierId: supplierAId, productId: productAId,
+        purchaseOrderId: order.id, purchaseOrderItemId: order.items[0].id,
+        quantity: 2,
+      },
+    })
+    try {
+      const response = await app.inject({ method: 'GET', url: '/api/v2/dashboard/me' })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().hero.supplierExt.lowStockCnt).toBe(1)
+    } finally {
+      await prisma.supplierStockReservation.delete({ where: { id: reservation.id } })
+      await prisma.purchaseOrder.delete({ where: { id: order.id } })
+      await prisma.product.update({ where: { id: productAId }, data: { minStock: before.minStock } })
+    }
+  })
+
   it('treats supplier pageSize as pagination and keeps tied pages stable', async () => {
     const headers = { 'x-test-actor': 'admin' }
     const first = await app.inject({

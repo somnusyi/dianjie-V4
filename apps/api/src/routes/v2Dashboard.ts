@@ -12,6 +12,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { latestStoreInventorySnapshot, type StoreInventorySummary } from '../services/storeInventory'
+import { getSupplierReservedStock } from '../services/supplierStockReservation'
 import { requireStoreBinding } from '../lib/auth-scope'
 
 const fmtMoney = (n: number) => '¥' + Math.round(n).toLocaleString()
@@ -426,13 +427,20 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
           }).catch(() => ({ _sum: { amount: 0 } as any })),
           // 库存预警
           (async () => {
-            // 用原生 SQL 算 stock < minStock (Prisma 不支持字段比字段)
             try {
-              const r = await prisma.$queryRawUnsafe<Array<{ c: number }>>(
-                `SELECT COUNT(*)::int AS c FROM products WHERE "tenantId"=$1 AND "supplierId"=$2 AND status='ENABLED' AND stock < "minStock"`,
-                tenantId, supplierId
-              )
-              return Array.isArray(r) && r[0] ? Number(r[0].c) : 0
+              const products = await prisma.product.findMany({
+                where: { tenantId, supplierId, status: 'ENABLED' },
+                select: { id: true, stock: true, minStock: true },
+              })
+              const reserved = await getSupplierReservedStock({
+                tenantId,
+                supplierId,
+                productIds: products.map(product => product.id),
+              })
+              return products.filter(product => {
+                const available = Math.max(0, Number(product.stock) - (reserved.get(product.id) || 0))
+                return available <= 0 || available < Number(product.minStock)
+              }).length
             } catch { return 0 }
           })(),
           // 临期预警 — 只统计仍有余额的当前批次，历史流水不重复告警

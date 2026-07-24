@@ -573,6 +573,27 @@ async function main() {
     assert.equal(await prisma.reconciliationItem.count({ where: { receiptId: secondAutoReceive.receipt.id } }), 1)
     receiptIds.push(secondAutoReceive.receipt.id)
 
+    const supplierSchedules = await api('/api/schedules', supplierToken)
+    assert.equal(supplierSchedules.status, 200, JSON.stringify(supplierSchedules.body))
+    const runSchedules = supplierSchedules.body.filter((schedule: any) => receiptIds.includes(schedule.receiptId))
+    assert.equal(runSchedules.length, 2, '供应商应能查看本轮两笔到账计划')
+    for (const schedule of runSchedules) {
+      for (const field of [
+        'bankRawResponse',
+        'retryCount',
+        'paymentId',
+        'notified3Days',
+        'notified1Day',
+        'approvedById',
+        'approvedAt',
+        'approvalNote',
+        'rejectedAt',
+        'rejectionNote',
+      ]) {
+        assert.equal(Object.hasOwn(schedule, field), false, `供应商账期列表不应返回 ${field}`)
+      }
+    }
+
     const detail = await api(`/api/orders/${orderId}`, managerToken)
     assert.equal(detail.status, 200)
     assert.equal(detail.body.submittedSnapshotHash, originalHash)
@@ -629,7 +650,7 @@ async function main() {
     const movements = await prisma.supplierStockMovement.findMany({ where: { sourceType: 'DeliveryOrder', sourceId: { in: deliveryIds } } })
     assert.equal(movements.length, 2)
     assert.equal(movements.reduce((sum, movement) => sum + Number(movement.delta), 0), -5)
-    console.log(JSON.stringify({ ok: true, strictOrderDeliveryQueries: true, immutableOrderSnapshotSearch: true, strictReceiptQueries: true, strictStoreInventoryQueries: true, strictSupplierInsightQueries: true, stableSupplierSkuRanking: true, deduplicatedSupplierSkuOrders: true, numericBounds: true, revenueValidation: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, orderCreateAuditRollback: true, orderCreateConcurrentReplay: true, orderCreateReplayConflict: true, revisionConcurrentReplay: true, revisionReplayConflict: true, revisionActorsRecorded: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, unboundStoreFailsClosed: true, unboundDashboardFailsClosed: true, unboundRevenueFailsClosed: true, unboundPaymentRequestFailsClosed: true, genericDocumentStoreScope: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
+    console.log(JSON.stringify({ ok: true, strictOrderDeliveryQueries: true, immutableOrderSnapshotSearch: true, strictReceiptQueries: true, strictScheduleFields: true, strictStoreInventoryQueries: true, strictSupplierInsightQueries: true, stableSupplierSkuRanking: true, deduplicatedSupplierSkuOrders: true, numericBounds: true, revenueValidation: true, manualReceiptAmountBounds: true, statusPayloadValidation: true, orderCreateAuditRollback: true, orderCreateConcurrentReplay: true, orderCreateReplayConflict: true, revisionConcurrentReplay: true, revisionReplayConflict: true, revisionActorsRecorded: true, shipmentAuditRollback: true, shipmentConcurrentReplay: true, shipmentReplayConflict: true, deliveryAuditRollback: true, chefAckDeliveryRace: true, unboundStoreFailsClosed: true, unboundDashboardFailsClosed: true, unboundRevenueFailsClosed: true, unboundPaymentRequestFailsClosed: true, genericDocumentStoreScope: true, receiveValidation: true, orderNo, deliveries: 2, receipts: 2, shipped: 5, received: 5 }))
   } finally {
     if (orderId && !KEEP_TEST_ORDER) {
       await new Promise(resolve => setTimeout(resolve, 150))

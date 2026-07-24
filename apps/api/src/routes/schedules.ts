@@ -6,6 +6,39 @@ import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const GROUP_READ_ROLES = new Set(['ADMIN', 'FINANCE', 'SUPER_ADMIN'])
+const scheduleRelations = {
+  supplier: { select: { id: true, name: true, creditType: true, creditDays: true } },
+  receipt: {
+    select: {
+      id: true, no: true, deliveryDate: true, storeId: true,
+      purchaseOrderId: true,
+      store: { select: { name: true } },
+      invoice: { select: { id: true, invoiceNo: true, status: true } },
+    },
+  },
+} as const
+
+// 供应商和门店账期页只需要业务状态与到账凭据；银行原始响应、审批人和内部重试字段
+// 仅保留给总部/财务角色，避免通用列表成为付款执行详情的旁路。
+const operationalScheduleSelect = {
+  id: true,
+  receiptId: true,
+  supplierId: true,
+  storeId: true,
+  amount: true,
+  creditDays: true,
+  confirmedAt: true,
+  dueAt: true,
+  status: true,
+  paidAt: true,
+  needApproval: true,
+  bankTxNo: true,
+  failReason: true,
+  createdAt: true,
+  updatedAt: true,
+  ...scheduleRelations,
+} as const
+
 const scheduleStatusSchema = z.enum([
   'PENDING', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'NOTIFIED',
   'PROCESSING', 'PAID', 'OVERDUE', 'CANCELLED', 'ON_HOLD',
@@ -47,19 +80,17 @@ export const scheduleRoutes: FastifyPluginAsync = async (app) => {
       d.setDate(d.getDate() + days)
       where.dueAt = { lte: d }
     }
+    const orderBy = { dueAt: 'asc' } as const
+    if (!GROUP_READ_ROLES.has(role)) {
+      return prisma.paymentSchedule.findMany({
+        where,
+        select: operationalScheduleSelect,
+        orderBy,
+      })
+    }
     return prisma.paymentSchedule.findMany({
       where,
-      include: {
-        supplier: { select: { id: true, name: true, creditType: true, creditDays: true } },
-        receipt: {
-          select: {
-            id: true, no: true, deliveryDate: true, storeId: true,
-            purchaseOrderId: true,  // supplier/billing 卡片点击跳 PO 详情用 (2026-06-02)
-            store: { select: { name: true } },
-            invoice: { select: { id: true, invoiceNo: true, status: true } },
-          },
-        },
-      },
+      include: scheduleRelations,
       orderBy: { dueAt: 'asc' },
     })
   })

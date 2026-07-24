@@ -17,6 +17,7 @@ import { paymentRequestRoutes } from '../../src/routes/paymentRequests'
 import { documentRoutes } from '../../src/routes/documents'
 import { uploadRoutes } from '../../src/routes/upload'
 import { supplierRoutes } from '../../src/routes/suppliers'
+import { scheduleRoutes } from '../../src/routes/schedules'
 
 const suffix = `supplier-isolation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 let tenantId = ''
@@ -173,6 +174,7 @@ describe('supplier tenant scope (integration)', () => {
     await app.register(documentRoutes, { prefix: '/api/documents' })
     await app.register(uploadRoutes, { prefix: '/api' })
     await app.register(supplierRoutes, { prefix: '/api/suppliers' })
+    await app.register(scheduleRoutes, { prefix: '/api/schedules' })
     await app.ready()
   })
 
@@ -1095,6 +1097,52 @@ describe('supplier tenant scope (integration)', () => {
         amount: '40',
       })
     }
+  })
+
+  it('keeps payment execution internals out of supplier and store schedule lists', async () => {
+    const supplierAList = await app.inject({ method: 'GET', url: '/api/schedules' })
+    expect(supplierAList.statusCode).toBe(200)
+    expect(supplierAList.json()).toEqual([])
+
+    for (const headers of [
+      { 'x-test-actor': 'supplier-b' },
+      { 'x-test-actor': 'chef' },
+    ]) {
+      const response = await app.inject({ method: 'GET', url: '/api/schedules', headers })
+      expect(response.statusCode).toBe(200)
+      const schedule = response.json().find((item: any) => item.receiptId === receiptBId)
+      expect(schedule).toMatchObject({
+        amount: '40',
+        status: 'PENDING',
+        bankTxNo: 'sensitive-bank-transaction',
+        failReason: 'sensitive-payment-failure',
+        receipt: { id: receiptBId, no: `RK-B-${suffix}` },
+        supplier: { id: supplierBId, name: '隔离供应商 B' },
+      })
+      for (const field of [
+        'bankRawResponse',
+        'retryCount',
+        'paymentId',
+        'notified3Days',
+        'notified1Day',
+        'approvedById',
+        'approvedAt',
+        'approvalNote',
+        'rejectedAt',
+        'rejectionNote',
+      ]) {
+        expect(schedule).not.toHaveProperty(field)
+      }
+    }
+
+    const financeList = await app.inject({
+      method: 'GET', url: '/api/schedules', headers: { 'x-test-actor': 'admin' },
+    })
+    expect(financeList.statusCode).toBe(200)
+    expect(financeList.json().find((item: any) => item.receiptId === receiptBId)).toMatchObject({
+      bankRawResponse: { privatePayload: 'sensitive-bank-response' },
+      retryCount: 2,
+    })
   })
 
   it('searches supplier orders by the immutable submitted product snapshot', async () => {

@@ -359,6 +359,33 @@ describe('supplier tenant scope (integration)', () => {
     }
   })
 
+  it('counts only non-depleted expiring batches in the supplier dashboard', async () => {
+    const expiryDate = new Date(Date.now() + 2 * 86_400_000)
+    const batches = await Promise.all([
+      prisma.supplierStockBatch.create({
+        data: {
+          tenantId, supplierId: supplierAId, productId: productAId,
+          batchNo: `EXPIRING-ACTIVE-${suffix}`, kind: 'INBOUND',
+          initialQty: 2, remainingQty: 1, expiryDate, createdById: userAId,
+        },
+      }),
+      prisma.supplierStockBatch.create({
+        data: {
+          tenantId, supplierId: supplierAId, productId: productAId,
+          batchNo: `EXPIRING-DEPLETED-${suffix}`, kind: 'INBOUND',
+          initialQty: 2, remainingQty: 0, expiryDate, depletedAt: new Date(), createdById: userAId,
+        },
+      }),
+    ])
+    try {
+      const response = await app.inject({ method: 'GET', url: '/api/v2/dashboard/me' })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().hero.supplierExt.expiringCnt).toBe(1)
+    } finally {
+      await prisma.supplierStockBatch.deleteMany({ where: { id: { in: batches.map(batch => batch.id) } } })
+    }
+  })
+
   it('treats supplier pageSize as pagination and keeps tied pages stable', async () => {
     const headers = { 'x-test-actor': 'admin' }
     const first = await app.inject({

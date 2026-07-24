@@ -431,9 +431,14 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
               return Array.isArray(r) && r[0] ? Number(r[0].c) : 0
             } catch { return 0 }
           })(),
-          // 临期预警 — 用 supplier_stock_movements.expiryDate (如果有)
-          prisma.supplierStockMovement.count({
-            where: { tenantId, supplierId, expiryDate: { gte: now, lte: in7d } },
+          // 临期预警 — 只统计仍有余额的当前批次，历史流水不重复告警
+          prisma.supplierStockBatch.count({
+            where: {
+              tenantId,
+              supplierId,
+              remainingQty: { gt: 0 },
+              expiryDate: { gte: now, lte: in7d },
+            },
           }).catch(() => 0),
         ])
         const arTotal = Number(arAll._sum.amount || 0)

@@ -383,7 +383,11 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
           // 应收 (PaymentSchedule)
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
-            where: { tenantId, supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED', 'OVERDUE', 'ON_HOLD'] as any } },
+            where: {
+              tenantId,
+              supplierId,
+              status: { in: ['PENDING', 'PENDING_APPROVAL', 'APPROVED', 'NOTIFIED', 'PROCESSING', 'OVERDUE', 'ON_HOLD'] as any },
+            },
           }).catch(() => ({ _sum: { amount: 0 } as any })),
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
@@ -404,7 +408,12 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
           }).catch(() => ({ _sum: { amount: 0 } as any })),
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
-            where: { tenantId, supplierId, dueAt: { gte: monthStart, lte: monthEnd } },
+            where: {
+              tenantId,
+              supplierId,
+              status: { notIn: ['REJECTED', 'CANCELLED'] as any },
+              dueAt: { gte: monthStart, lte: monthEnd },
+            },
           }).catch(() => ({ _sum: { amount: 0 } as any })),
           // 库存预警
           (async () => {

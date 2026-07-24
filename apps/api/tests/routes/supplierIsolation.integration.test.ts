@@ -278,6 +278,61 @@ describe('supplier tenant scope (integration)', () => {
     }
   })
 
+  it('keeps approval and processing receivables while excluding cancelled dues from recovery', async () => {
+    const amounts = [5, 6, 100, 20]
+    const receipts = await Promise.all(amounts.map((amount, index) => prisma.receipt.create({
+      data: {
+        tenantId, no: `RK-AR-${index}-${suffix}`, storeId, supplierId: supplierAId,
+        deliveryDate: new Date(), totalAmount: amount, status: 'ACCOUNTED',
+        createdById: chefUserId, confirmedAt: new Date(),
+      },
+    })))
+    const futureDueAt = new Date(Date.now() + 40 * 86_400_000)
+    const currentDueAt = new Date()
+    await Promise.all([
+      prisma.paymentSchedule.create({
+        data: {
+          tenantId, receiptId: receipts[0].id, supplierId: supplierAId, storeId,
+          amount: amounts[0], creditDays: 40, confirmedAt: new Date(),
+          dueAt: futureDueAt, status: 'PENDING_APPROVAL', needApproval: true,
+        },
+      }),
+      prisma.paymentSchedule.create({
+        data: {
+          tenantId, receiptId: receipts[1].id, supplierId: supplierAId, storeId,
+          amount: amounts[1], creditDays: 40, confirmedAt: new Date(),
+          dueAt: futureDueAt, status: 'PROCESSING',
+        },
+      }),
+      prisma.paymentSchedule.create({
+        data: {
+          tenantId, receiptId: receipts[2].id, supplierId: supplierAId, storeId,
+          amount: amounts[2], creditDays: 0, confirmedAt: new Date(),
+          dueAt: currentDueAt, status: 'CANCELLED',
+        },
+      }),
+      prisma.paymentSchedule.create({
+        data: {
+          tenantId, receiptId: receipts[3].id, supplierId: supplierAId, storeId,
+          amount: amounts[3], creditDays: 0, confirmedAt: new Date(),
+          dueAt: currentDueAt, status: 'PAID', paidAt: currentDueAt,
+        },
+      }),
+    ])
+    const receiptIds = receipts.map(receipt => receipt.id)
+    try {
+      const response = await app.inject({ method: 'GET', url: '/api/v2/dashboard/me' })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().hero.supplierExt.arTotal).toBe(11)
+      expect(response.json().hero.stats.find((stat: any) => stat.label === '回款率')).toMatchObject({
+        value: '100%',
+      })
+    } finally {
+      await prisma.paymentSchedule.deleteMany({ where: { receiptId: { in: receiptIds } } })
+      await prisma.receipt.deleteMany({ where: { id: { in: receiptIds } } })
+    }
+  })
+
   it('treats supplier pageSize as pagination and keeps tied pages stable', async () => {
     const headers = { 'x-test-actor': 'admin' }
     const first = await app.inject({

@@ -12,44 +12,14 @@ import {
   supplyDocumentStoreSelect,
   supplyDocumentSupplierSelect,
 } from '../lib/supply-document-party-projection'
+import {
+  receiptOperationalScalarSelect,
+  receiptPaymentScheduleSelect,
+} from '../lib/receipt-read-projection'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const RECEIPT_OPERATOR_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN'])
 const RECEIPT_AMOUNT_MAX = new Prisma.Decimal('9999999999.99')
-const receiptOperationalScalarSelect = {
-  id: true,
-  tenantId: true,
-  no: true,
-  storeId: true,
-  supplierId: true,
-  deliveryDate: true,
-  totalAmount: true,
-  status: true,
-  note: true,
-  createdById: true,
-  confirmedAt: true,
-  isManual: true,
-  tempSupplierName: true,
-  rejectReason: true,
-  rejectedAt: true,
-  purchaseOrderId: true,
-  deliveryOrderId: true,
-  invoiceId: true,
-  supplierVerifiedAt: true,
-  supplierVerifiedById: true,
-  supplierVerifyNote: true,
-  financeVerifiedAt: true,
-  financeVerifiedById: true,
-  financeVerifyNote: true,
-  createdAt: true,
-  updatedAt: true,
-} as const
-const receiptPaymentScheduleSelect = {
-  id: true,
-  status: true,
-  dueAt: true,
-  amount: true,
-} as const
 
 const receiptListFilterSchema = z.object({
   status: z.preprocess(

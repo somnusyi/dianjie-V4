@@ -9,6 +9,7 @@ import {
   supplyDocumentStoreSelect,
   supplyDocumentSupplierSelect,
 } from '../lib/supply-document-party-projection'
+import { receiptOperationalScalarSelect } from '../lib/receipt-read-projection'
 
 const listQuerySchema = z.object({
   status: z.enum(['DRAFT', 'SHIPPED', 'DELIVERED', 'RECEIVED', 'CANCELLED']).optional(),
@@ -115,7 +116,18 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
         receivedBy: { select: { id: true, name: true } },
         items: { include: { product: true } },
         events: { orderBy: { occurredAt: 'asc' }, include: { actor: { select: { id: true, name: true, role: true } } } },
-        receipt: { include: { items: { include: { product: true } } } },
+        receipt: {
+          select: {
+            ...receiptOperationalScalarSelect,
+            items: {
+              include: {
+                product: {
+                  select: { id: true, code: true, name: true, spec: true, category: true, unit: true },
+                },
+              },
+            },
+          },
+        },
       },
     })
     if (!delivery) throw { statusCode: 404, message: '配送单不存在' }

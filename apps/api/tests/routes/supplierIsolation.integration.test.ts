@@ -1021,6 +1021,14 @@ describe('supplier tenant scope (integration)', () => {
           no: `B-${suffix}`,
           name: '隔离供应商 B',
         })
+        if (url.includes('/deliveries/')) {
+          expect(body.receipt).toMatchObject({
+            id: receiptBId,
+            tempSupplierName: '供应商 B 临时名称',
+          })
+          expect(body.receipt).not.toHaveProperty('tempBankAccount')
+          expect(body.receipt).not.toHaveProperty('tempBankName')
+        }
         for (const field of [
           'aggregatorApiKeyEnc',
           'aggregatorSecretEnc',

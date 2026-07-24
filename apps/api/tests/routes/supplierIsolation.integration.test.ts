@@ -249,6 +249,35 @@ describe('supplier tenant scope (integration)', () => {
     }
   })
 
+  it('keeps schedules already marked overdue in the supplier overdue bucket', async () => {
+    const receipt = await prisma.receipt.create({
+      data: {
+        tenantId, no: `RK-OVERDUE-${suffix}`, storeId, supplierId: supplierAId,
+        deliveryDate: new Date(), totalAmount: 17, status: 'ACCOUNTED', createdById: chefUserId,
+        confirmedAt: new Date(),
+      },
+    })
+    const schedule = await prisma.paymentSchedule.create({
+      data: {
+        tenantId, receiptId: receipt.id, supplierId: supplierAId, storeId,
+        amount: 17, creditDays: 0, confirmedAt: new Date(Date.now() - 2 * 86_400_000),
+        dueAt: new Date(Date.now() - 86_400_000), status: 'OVERDUE',
+      },
+    })
+    try {
+      const response = await app.inject({ method: 'GET', url: '/api/v2/dashboard/me' })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().hero.supplierExt).toMatchObject({
+        arTotal: 17,
+        arOverdue: 17,
+      })
+      expect(response.json().hero.meta).toContain('逾期 ¥17')
+    } finally {
+      await prisma.paymentSchedule.delete({ where: { id: schedule.id } })
+      await prisma.receipt.delete({ where: { id: receipt.id } })
+    }
+  })
+
   it('treats supplier pageSize as pagination and keeps tied pages stable', async () => {
     const headers = { 'x-test-actor': 'admin' }
     const first = await app.inject({

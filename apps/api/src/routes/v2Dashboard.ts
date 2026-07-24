@@ -387,7 +387,7 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
           }).catch(() => ({ _sum: { amount: 0 } as any })),
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
-            where: { tenantId, supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED'] as any }, dueAt: { lt: now } },
+            where: { tenantId, supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED', 'OVERDUE'] as any }, dueAt: { lt: now } },
           }).catch(() => ({ _sum: { amount: 0 } as any })),
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },

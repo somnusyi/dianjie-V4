@@ -12,6 +12,10 @@ type ScheduleStatus =
   | 'CANCELLED'
   | 'ON_HOLD'
 
+export function scheduleStatusAfterDispute(schedule: { needApproval: boolean }): 'PENDING' | 'PENDING_APPROVAL' {
+  return schedule.needApproval ? 'PENDING_APPROVAL' : 'PENDING'
+}
+
 /**
  * Keep every mutable settlement projection of one confirmed receipt aligned.
  * Receipt.totalAmount remains the immutable confirmed-receipt fact; accepted

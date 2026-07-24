@@ -11,7 +11,10 @@ import { estimatedStoreInventory } from '../services/storeInventory'
 import { lossClaimScope } from '../lib/loss-claim-scope'
 import { lossClaimResolutionSchema } from '../services/lossClaimResolution'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
-import { setReceiptSettlementAmountInTransaction } from '../services/receiptSettlement'
+import {
+  scheduleStatusAfterDispute,
+  setReceiptSettlementAmountInTransaction,
+} from '../services/receiptSettlement'
 import { arrivalDifferencesToCsv } from '../services/arrivalDifferenceExport'
 import { parseBoundedInteger, parsePagination } from '../lib/pagination'
 
@@ -143,7 +146,7 @@ export async function approveLossClaimAtomically(params: {
       await setReceiptSettlementAmountInTransaction(tx, {
         receiptId,
         amount: nextAmount,
-        scheduleStatus: 'PENDING',
+        scheduleStatus: scheduleStatusAfterDispute(schedule),
       })
       payableAdjustment = `应付 ${schedule.amount.toFixed(2)} → ${nextAmount.toFixed(2)}`
     } else if (claim.payableBasis === 'NET_AT_RECEIPT' && claim.receiptId) {
@@ -152,7 +155,7 @@ export async function approveLossClaimAtomically(params: {
         await setReceiptSettlementAmountInTransaction(tx, {
           receiptId: claim.receiptId,
           amount: schedule.amount,
-          scheduleStatus: 'PENDING',
+          scheduleStatus: scheduleStatusAfterDispute(schedule),
         })
       }
     }
@@ -694,7 +697,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       await setReceiptSettlementAmountInTransaction(tx, {
         receiptId,
         amount: nextAmount,
-        scheduleStatus: 'PENDING',
+        scheduleStatus: scheduleStatusAfterDispute(schedule),
       })
       await tx.lossClaim.update({
         where: { id: claim.id },

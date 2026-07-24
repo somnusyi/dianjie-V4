@@ -1346,12 +1346,21 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(Number(disputedRecon.amount)).toBe(60)
     expect(Number(disputedRecon.reconciliation.totalAmount)).toBe(60)
 
+    await prisma.paymentSchedule.update({
+      where: { receiptId: receipt.id },
+      data: { needApproval: true },
+    })
     const resolve = await app.inject({
       method: 'PATCH', url: `/api/loss-claims/${claim.id}/resolve`,
       headers: { 'x-test-actor': 'admin' }, payload: { finalDeductAmount: 5, note: '最终确认部分差异' },
     })
     expect(resolve.statusCode).toBe(200)
-    expect(Number((await prisma.paymentSchedule.findUniqueOrThrow({ where: { receiptId: receipt.id } })).amount)).toBe(55)
+    const resolvedSchedule = await prisma.paymentSchedule.findUniqueOrThrow({ where: { receiptId: receipt.id } })
+    expect(Number(resolvedSchedule.amount)).toBe(55)
+    expect(resolvedSchedule).toMatchObject({
+      status: 'PENDING_APPROVAL',
+      needApproval: true,
+    })
     expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).stock)).toBe(4)
     expect(await prisma.supplierStockMovement.count({ where: { tenantId, sourceType: 'LossClaim' } })).toBe(0)
 

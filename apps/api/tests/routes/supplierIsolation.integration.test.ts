@@ -226,6 +226,29 @@ describe('supplier tenant scope (integration)', () => {
     expect(stock.json().some((item: any) => item.id === productBId)).toBe(false)
   })
 
+  it('counts delivering orders in the supplier-scoped dashboard transit total', async () => {
+    const delivering = await prisma.purchaseOrder.create({
+      data: {
+        tenantId, no: `PO-DELIVERING-${suffix}`, storeId, supplierId: supplierAId,
+        expectedDate: new Date(), totalAmount: 10, status: 'DELIVERING', createdById: chefUserId,
+      },
+    })
+    try {
+      const response = await app.inject({ method: 'GET', url: '/api/v2/dashboard/me' })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().hero.supplierExt).toMatchObject({
+        submittedCnt: 0,
+        confirmedCnt: 0,
+        shippedCnt: 1,
+      })
+      expect(response.json().hero.stats.find((stat: any) => stat.label === '在途订单')).toMatchObject({
+        value: '1',
+      })
+    } finally {
+      await prisma.purchaseOrder.delete({ where: { id: delivering.id } })
+    }
+  })
+
   it('treats supplier pageSize as pagination and keeps tied pages stable', async () => {
     const headers = { 'x-test-actor': 'admin' }
     const first = await app.inject({

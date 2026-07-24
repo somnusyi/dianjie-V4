@@ -371,53 +371,55 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
           monthPaid, monthDue,
           lowStockCnt, expiringCnt
         ] = await Promise.all([
-          prisma.purchaseOrder.count({ where: { supplierId, status: 'SUBMITTED' } }).catch(() => 0),
-          prisma.purchaseOrder.count({ where: { supplierId, status: 'CONFIRMED' } }).catch(() => 0),
-          prisma.purchaseOrder.count({ where: { supplierId, status: 'PENDING_CONFIRM' } }).catch(() => 0),
+          prisma.purchaseOrder.count({ where: { tenantId, supplierId, status: 'SUBMITTED' } }).catch(() => 0),
+          prisma.purchaseOrder.count({ where: { tenantId, supplierId, status: 'CONFIRMED' } }).catch(() => 0),
+          prisma.purchaseOrder.count({
+            where: { tenantId, supplierId, status: { in: ['DELIVERING', 'PENDING_CONFIRM'] } },
+          }).catch(() => 0),
           prisma.purchaseOrder.aggregate({
             _sum: { totalAmount: true },
-            where: { supplierId, status: { in: ['RECEIVED', 'COMPLETED'] }, updatedAt: { gte: monthStart, lte: monthEnd } },
+            where: { tenantId, supplierId, status: { in: ['RECEIVED', 'COMPLETED'] }, updatedAt: { gte: monthStart, lte: monthEnd } },
           }).catch(() => ({ _sum: { totalAmount: 0 } as any })),
           // 应收 (PaymentSchedule)
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
-            where: { supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED', 'OVERDUE', 'ON_HOLD'] as any } },
+            where: { tenantId, supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED', 'OVERDUE', 'ON_HOLD'] as any } },
           }).catch(() => ({ _sum: { amount: 0 } as any })),
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
-            where: { supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED'] as any }, dueAt: { lt: now } },
+            where: { tenantId, supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED'] as any }, dueAt: { lt: now } },
           }).catch(() => ({ _sum: { amount: 0 } as any })),
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
-            where: { supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED'] as any }, dueAt: { gte: now, lte: in7d } },
+            where: { tenantId, supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED'] as any }, dueAt: { gte: now, lte: in7d } },
           }).catch(() => ({ _sum: { amount: 0 } as any })),
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
-            where: { supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED'] as any }, dueAt: { gt: in7d, lte: new Date(Date.now() + 30 * 86400_000) } },
+            where: { tenantId, supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED'] as any }, dueAt: { gt: in7d, lte: new Date(Date.now() + 30 * 86400_000) } },
           }).catch(() => ({ _sum: { amount: 0 } as any })),
           // 本月回款率
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
-            where: { supplierId, status: 'PAID' as any, paidAt: { gte: monthStart, lte: monthEnd } },
+            where: { tenantId, supplierId, status: 'PAID' as any, paidAt: { gte: monthStart, lte: monthEnd } },
           }).catch(() => ({ _sum: { amount: 0 } as any })),
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
-            where: { supplierId, dueAt: { gte: monthStart, lte: monthEnd } },
+            where: { tenantId, supplierId, dueAt: { gte: monthStart, lte: monthEnd } },
           }).catch(() => ({ _sum: { amount: 0 } as any })),
           // 库存预警
           (async () => {
             // 用原生 SQL 算 stock < minStock (Prisma 不支持字段比字段)
             try {
               const r = await prisma.$queryRawUnsafe<Array<{ c: number }>>(
-                `SELECT COUNT(*)::int AS c FROM products WHERE "supplierId"=$1 AND status='ENABLED' AND stock < "minStock"`,
-                supplierId
+                `SELECT COUNT(*)::int AS c FROM products WHERE "tenantId"=$1 AND "supplierId"=$2 AND status='ENABLED' AND stock < "minStock"`,
+                tenantId, supplierId
               )
               return Array.isArray(r) && r[0] ? Number(r[0].c) : 0
             } catch { return 0 }
           })(),
           // 临期预警 — 用 supplier_stock_movements.expiryDate (如果有)
           prisma.supplierStockMovement.count({
-            where: { supplierId, expiryDate: { gte: now, lte: in7d } },
+            where: { tenantId, supplierId, expiryDate: { gte: now, lte: in7d } },
           }).catch(() => 0),
         ])
         const arTotal = Number(arAll._sum.amount || 0)

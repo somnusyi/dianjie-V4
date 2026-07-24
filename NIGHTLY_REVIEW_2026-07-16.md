@@ -2201,3 +2201,27 @@
 - 供应商仍可看到自己的到账流水号和失败说明，这是现有供应商账单页面的明确业务字段；完整银行响应只保留给总部/财务。
 - 本轮不改变账期状态、审批、付款或报损规则，只收紧非财务角色的响应字段。
 - 补送、已确认入库单更正、报损后供应商物理库存口径和完整在线盘点流程继续保持待业务确认。
+
+## 2026-07-25 06:27 第一百零四轮（发布迁移链空库复验）
+
+### 检查范围与修改
+
+- 每轮前确认 detached 隔离工作树和 GitHub release 均为已推送的 `03e550d`，跟踪文件干净且远端 0/0；再次读取夜间报告后按发布优先级复验数据库迁移链。
+- 连接守卫确认既有目标仅为本机 `127.0.0.1:5434/dianjie_v4_local` 且 `PREVIEW_MODE=true`；仅运行 `migrate deploy/status/schema diff`，未执行 `db reset` 或 `prisma db push`。
+- 既有本地库的 56 个 release 迁移无待执行项、状态最新；schema diff 仍为非零，内容与前夜证据一致：库中保留 main 分支的盘点、BOM 版本、库存单位/换算、月结和供应商库存模式等额外枚举、表及字段。本轮未修改或删除这些结构。
+- 使用仓内安全脚本创建精确命名一次性空库，从零部署全部 56 个 release 迁移；退出陷阱终止临时连接并精确删除该库，最终 `dianjie_v4_migration_e2e_*` 残留为 0。
+- 只读角色一致性审计另确认：前端和部分 API 仍保留 `SUPPLIER_SUB` 文案/分支，但当前 Prisma `Role` 枚举、用户管理、申请与邀请流程均未提供该角色。因启用该角色会扩大到迁移和完整权限面审计，本轮未把不可达分支当成独立功能发布，列为后续产品决策。
+
+### 自动化与发布验证
+
+- 临时空库 `migrate deploy` 56/56 成功，`migrate status` 为最新，datasource 到当前 datamodel 的 `migrate diff --exit-code` 输出 `No difference detected`。
+- 既有库 `migrate deploy` 明确输出 `No pending migrations to apply`，`migrate status` 为最新；schema diff 以预期退出码 2 报告上述 main 专属额外结构。
+- API 单元测试 124/124、API TypeScript build、Web 测试 14/14 和 Web `tsc --noEmit` 全部通过。
+- 本轮端到端对象为完整数据库发布链；未连接生产、未运行银行/OSS 等外部写操作，临时 API 4445 保持关闭。
+
+### 风险与待确认
+
+- 正式发布前仍必须对生产执行只读 `migrate status/schema diff` 并人工审核，今晚严格未连接生产。
+- `dianjie_v4_local` 不是纯 release 空库，不能把其 main 专属额外结构误判为 release migration 产物；release 迁移链应以本轮一次性空库的零 diff 结果为准。
+- 是否正式提供“供应商子账号”需先确认角色职责，再补 Prisma 枚举迁移、用户创建/邀请、权限矩阵与端到端测试；本轮不擅自开启。
+- 补送、已确认入库单更正、报损后供应商物理库存口径和完整在线盘点流程继续保持待业务确认。

@@ -333,6 +333,32 @@ describe('supplier tenant scope (integration)', () => {
     }
   })
 
+  it('uses confirmed receipt value for the supplier monthly delivered metric', async () => {
+    const order = await prisma.purchaseOrder.create({
+      data: {
+        tenantId, no: `PO-MONTH-DELIVERED-${suffix}`, storeId, supplierId: supplierAId,
+        expectedDate: new Date(), totalAmount: 100, status: 'RECEIVED', createdById: chefUserId,
+      },
+    })
+    const receipt = await prisma.receipt.create({
+      data: {
+        tenantId, no: `RK-MONTH-DELIVERED-${suffix}`, storeId, supplierId: supplierAId,
+        purchaseOrderId: order.id, deliveryDate: new Date(), totalAmount: 40,
+        status: 'CONFIRMED', createdById: chefUserId, confirmedAt: new Date(),
+      },
+    })
+    try {
+      const response = await app.inject({ method: 'GET', url: '/api/v2/dashboard/me' })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().hero.stats.find((stat: any) => stat.label === '本月已交付')).toMatchObject({
+        value: '¥40',
+      })
+    } finally {
+      await prisma.receipt.delete({ where: { id: receipt.id } })
+      await prisma.purchaseOrder.delete({ where: { id: order.id } })
+    }
+  })
+
   it('treats supplier pageSize as pagination and keeps tied pages stable', async () => {
     const headers = { 'x-test-actor': 'admin' }
     const first = await app.inject({

@@ -376,9 +376,14 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
           prisma.purchaseOrder.count({
             where: { tenantId, supplierId, status: { in: ['DELIVERING', 'PENDING_CONFIRM'] } },
           }).catch(() => 0),
-          prisma.purchaseOrder.aggregate({
+          prisma.receipt.aggregate({
             _sum: { totalAmount: true },
-            where: { tenantId, supplierId, status: { in: ['RECEIVED', 'COMPLETED'] }, updatedAt: { gte: monthStart, lte: monthEnd } },
+            where: {
+              tenantId,
+              supplierId,
+              status: { in: ['CONFIRMED', 'ACCOUNTED'] },
+              confirmedAt: { gte: monthStart, lte: monthEnd },
+            },
           }).catch(() => ({ _sum: { totalAmount: 0 } as any })),
           // 应收 (PaymentSchedule)
           prisma.paymentSchedule.aggregate({

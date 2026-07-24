@@ -6,6 +6,7 @@ import { purchaseOrderRoutes } from '../../src/routes/orders'
 import { lossClaimRoutes } from '../../src/routes/lossClaims'
 import { receiptRoutes } from '../../src/routes/receipts'
 import { auditSupplierSupplyChain } from '../../src/services/supplyChainAudit'
+import { claimPaymentScheduleForExecution } from '../../src/services/paymentSchedule'
 
 const suffix = `supply-flow-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 let tenantId = ''
@@ -1361,6 +1362,21 @@ describe('supplier order to receipt flow (integration)', () => {
       status: 'PENDING_APPROVAL',
       needApproval: true,
     })
+    await expect(claimPaymentScheduleForExecution(resolvedSchedule.id)).rejects.toThrow('不可执行付款')
+    expect((await prisma.paymentSchedule.findUniqueOrThrow({ where: { id: resolvedSchedule.id } })).status)
+      .toBe('PENDING_APPROVAL')
+    await prisma.paymentSchedule.update({
+      where: { id: resolvedSchedule.id },
+      data: { status: 'APPROVED', dueAt: new Date('2026-07-01T00:00:00.000Z') },
+    })
+    const paymentClaims = await Promise.allSettled([
+      claimPaymentScheduleForExecution(resolvedSchedule.id),
+      claimPaymentScheduleForExecution(resolvedSchedule.id),
+    ])
+    expect(paymentClaims.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    expect(paymentClaims.filter(result => result.status === 'rejected')).toHaveLength(1)
+    expect((await prisma.paymentSchedule.findUniqueOrThrow({ where: { id: resolvedSchedule.id } })).status)
+      .toBe('PROCESSING')
     expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).stock)).toBe(4)
     expect(await prisma.supplierStockMovement.count({ where: { tenantId, sourceType: 'LossClaim' } })).toBe(0)
 

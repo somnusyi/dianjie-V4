@@ -205,6 +205,48 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
   return { recon, schedule, needApproval: processed.needApproval, duplicated: processed.duplicated }
 }
 
+type PaymentExecutionCandidate = {
+  status: string
+  needApproval: boolean
+  dueAt: Date
+  retryCount: number
+}
+
+export function isPaymentScheduleExecutable(
+  schedule: PaymentExecutionCandidate,
+  now = new Date(),
+): boolean {
+  if (schedule.dueAt > dayjs(now).endOf('day').toDate()) return false
+  if (schedule.status === 'APPROVED') return true
+  if (schedule.needApproval) return false
+  if (schedule.status === 'PENDING') return true
+  return schedule.status === 'OVERDUE' && schedule.retryCount < 5
+}
+
+export async function claimPaymentScheduleForExecution(scheduleId: string, now = new Date()) {
+  const claimed = await prisma.paymentSchedule.updateMany({
+    where: {
+      id: scheduleId,
+      dueAt: { lte: dayjs(now).endOf('day').toDate() },
+      OR: [
+        { status: 'APPROVED' },
+        { status: 'PENDING', needApproval: false },
+        { status: 'OVERDUE', needApproval: false, retryCount: { lt: 5 } },
+      ],
+    },
+    data: { status: 'PROCESSING' },
+  })
+  if (claimed.count !== 1) {
+    const current = await prisma.paymentSchedule.findUnique({
+      where: { id: scheduleId },
+      select: { status: true },
+    })
+    if (!current) throw new Error('账期记录不存在')
+    throw new Error(`账期当前状态 ${current.status} 不可执行付款`)
+  }
+  return prisma.paymentSchedule.findUniqueOrThrow({ where: { id: scheduleId } })
+}
+
 /**
  * 招行免前置自动付款
  * 到期时由 scheduler 自动触发，从招行对公账户向供应商打款
@@ -225,6 +267,9 @@ export async function executeBankPayment(scheduleId: string) {
     },
   })
   if (!schedule) throw new Error('账期记录不存在')
+  if (!isPaymentScheduleExecutable(schedule)) {
+    throw new Error(`账期当前状态 ${schedule.status} 不可执行付款`)
+  }
 
   const supplier = schedule.supplier
   const store    = schedule.receipt.store
@@ -265,11 +310,9 @@ export async function executeBankPayment(scheduleId: string) {
     throw new Error('招行微服务不可用，请检查 dianjie-cmb 进程是否正常运行')
   }
 
-  // ── 标记支付中 ────────────────────────────────────────
-  await prisma.paymentSchedule.update({
-    where: { id: scheduleId },
-    data: { status: 'PROCESSING' },
-  })
+  // ── 原子抢占支付权 ────────────────────────────────────
+  // 调度器可能多实例运行；最终状态 CAS 同时也是冻结/待审批门禁。
+  await claimPaymentScheduleForExecution(scheduleId)
 
   try {
     // ── 调用招行免前置接口（含 yurRef 防重发协议）────────

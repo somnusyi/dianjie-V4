@@ -328,8 +328,7 @@ export async function runDailyCheck() {
   let overdueOk = 0
   for (const s of overduePending) {
     try {
-      // 先恢复 PENDING (executeBankPayment 会走 status=PROCESSING → PAID/OVERDUE)
-      // 但 executeBankPayment 没校验 status, 直接调即可
+      // executeBankPayment 允许未达重试上限的免审批 OVERDUE，并原子抢占为 PROCESSING。
       await executeBankPayment(s.id)
       overdueOk++
     } catch (e: any) {

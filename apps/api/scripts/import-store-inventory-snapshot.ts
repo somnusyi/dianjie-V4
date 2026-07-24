@@ -4,27 +4,43 @@
  *
  * Usage:
  *   pnpm --filter @dianjie/api exec tsx scripts/import-store-inventory-snapshot.ts \
- *     /path/to/盘点.xlsx --date=2026-07-13 --store=瑶海
+ *     /path/to/盘点.xlsx --date=2026-07-13 --tenant=dianjie --store-no=DJ001
  */
 import fs from 'node:fs/promises'
 import crypto from 'node:crypto'
 import path from 'node:path'
 import ExcelJS from 'exceljs'
 import { prisma } from '@dianjie/db'
-import { normalizeInventoryQuantity, type InventoryUnitNormalization } from '../src/services/inventoryUnits'
+import { z } from 'zod'
+import {
+  buildInventorySnapshotImportPlan,
+  type ReviewedInventorySnapshotBinding,
+  type InventorySnapshotSourceItem,
+} from '../src/services/inventorySnapshotImport'
 
-type ParsedItem = {
-  section: string | null
-  name: string
-  spec: string | null
-  unit: string
-  quantity: number
-  unitPrice: number
-  amount: number
-  sortOrder: number
-  productId?: string
-  normalization?: InventoryUnitNormalization
+type ParsedItem = InventorySnapshotSourceItem
+type ReviewedBindingsPayload = {
+  tenantSlug: string
+  targetStoreNo: string
+  snapshotDate: string
+  sourceHash: string
+  bindings: ReviewedInventorySnapshotBinding[]
 }
+
+const reviewedBindingsSchema = z.object({
+  tenantSlug: z.string().min(1),
+  targetStoreNo: z.string().min(1),
+  snapshotDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  sourceHash: z.string().regex(/^[a-f0-9]{64}$/i),
+  bindings: z.array(z.object({
+    sortOrder: z.number().int().positive(),
+    rawName: z.string().min(1),
+    productCode: z.string().min(1),
+    normalizedUnit: z.string().min(1).optional(),
+    factorOverride: z.number().positive().optional(),
+    note: z.string().min(1),
+  })).default([]),
+})
 
 function numeric(value: ExcelJS.CellValue): number {
   if (value == null || value === '') return 0
@@ -39,12 +55,11 @@ function text(value: ExcelJS.CellValue): string {
   if (typeof value === 'object') {
     if ('text' in value) return String(value.text || '').trim()
     if ('result' in value) return text(value.result as ExcelJS.CellValue)
+    if ('richText' in value) {
+      return value.richText.map(part => part.text).join('').trim()
+    }
   }
   return String(value).trim()
-}
-
-function normalizeName(value: string) {
-  return value.normalize('NFKC').replace(/[\s·・]/g, '').replace(/[（）]/g, (c) => c === '（' ? '(' : ')').toLowerCase()
 }
 
 function dateOnly(value: string) {
@@ -52,20 +67,26 @@ function dateOnly(value: string) {
   return new Date(`${value}T00:00:00.000Z`)
 }
 
-async function main() {
-  const args = process.argv.slice(2)
+export async function runInventorySnapshotImport(args = process.argv.slice(2)) {
   const sourcePath = args.find((arg) => !arg.startsWith('--'))
   const commit = args.includes('--commit')
   const replace = args.includes('--replace')
   const offline = args.includes('--offline')
   const date = args.find((arg) => arg.startsWith('--date='))?.slice('--date='.length) || '2026-07-13'
-  const storeKeyword = args.find((arg) => arg.startsWith('--store='))?.slice('--store='.length) || '瑶海'
+  const storeNo = args.find((arg) => arg.startsWith('--store-no='))?.slice('--store-no='.length)
   const tenantSlug = args.find((arg) => arg.startsWith('--tenant='))?.slice('--tenant='.length) || 'dianjie'
+  const confirm = args.find((arg) => arg.startsWith('--confirm='))?.slice('--confirm='.length)
+  const reviewedBindingsPath = args.find((arg) => arg.startsWith('--reviewed-bindings='))?.slice('--reviewed-bindings='.length)
   if (!sourcePath) throw new Error('请传入盘点 Excel 文件路径')
-  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL 未设置')
+  if (!offline && !process.env.DATABASE_URL) throw new Error('DATABASE_URL 未设置')
+  if (!offline && !storeNo) throw new Error('必须显式传入 --store-no，禁止按门店名称模糊匹配库存')
+  if (commit && confirm !== 'import-reviewed-inventory-snapshot') {
+    throw new Error('写入需增加 --confirm=import-reviewed-inventory-snapshot')
+  }
 
   const bytes = await fs.readFile(sourcePath)
   const sourceHash = crypto.createHash('sha256').update(bytes).digest('hex')
+  const snapshotDate = dateOnly(date)
   const workbook = new ExcelJS.Workbook()
   await workbook.xlsx.load(bytes as unknown as ExcelJS.Buffer)
   const sheet = workbook.getWorksheet('Sheet1') || workbook.worksheets[0]
@@ -78,7 +99,10 @@ async function main() {
     const sectionText = text(sheet.getCell(rowNo, 1).value)
     const name = text(sheet.getCell(rowNo, 2).value)
     if (sectionText === '合计金额') {
-      sourceTotal = numeric(sheet.getCell(rowNo, 7).value)
+      const totalCell = sheet.getCell(rowNo, 7).value
+      sourceTotal = text(totalCell)
+        ? numeric(totalCell)
+        : numeric(sheet.getCell(rowNo - 1, 7).value)
       break
     }
     if (sectionText) currentSection = sectionText
@@ -117,55 +141,97 @@ async function main() {
   }
   if (offline) {
     console.log(JSON.stringify({ ...sourceReport, note: '离线模式未连接数据库，未执行门店和采购 SKU 匹配' }, null, 2))
-    return
+    return { ...sourceReport, canCommit: false }
   }
 
-  const stores = await prisma.store.findMany({
-    where: { tenant: { slug: tenantSlug }, name: { contains: storeKeyword } },
+  const tenant = await prisma.tenant.findUniqueOrThrow({
+    where: { slug: tenantSlug },
+    select: { id: true, slug: true },
+  })
+  const store = await prisma.store.findUniqueOrThrow({
+    where: { tenantId_no: { tenantId: tenant.id, no: storeNo! } },
     select: { id: true, tenantId: true, no: true, name: true },
   })
-  if (stores.length !== 1) throw new Error(`期望唯一门店，实际 ${stores.length} 家: ${stores.map((s) => s.name).join(', ')}`)
-  const store = stores[0]
 
   const products = await prisma.product.findMany({
     where: { tenantId: store.tenantId },
-    select: { id: true, code: true, name: true, spec: true, unit: true },
+    select: {
+      id: true, tenantId: true, code: true, name: true, spec: true, unit: true,
+      inventoryUnit: true, inventoryUnitsPerPurchaseUnit: true, unitConversionStatus: true,
+      status: true,
+    },
   })
-  const productByName = new Map<string, typeof products>()
-  for (const product of products) {
-    const key = normalizeName(product.name)
-    productByName.set(key, [...(productByName.get(key) || []), product])
-  }
-  const ambiguous: Array<{ name: string; candidates: string[] }> = []
-  for (const item of items) {
-    const candidates = productByName.get(normalizeName(item.name)) || []
-    if (candidates.length === 1) {
-      item.productId = candidates[0].id
-      item.normalization = normalizeInventoryQuantity({
-        quantity: item.quantity,
-        rawUnit: item.unit,
-        rawSpec: item.spec,
-        productUnit: candidates[0].unit,
-        productSpec: candidates[0].spec,
-      })
+  const previousSnapshot = await prisma.inventorySnapshot.findFirst({
+    where: { tenantId: store.tenantId, storeId: store.id, snapshotDate: { lt: snapshotDate } },
+    orderBy: [{ snapshotDate: 'desc' }, { createdAt: 'desc' }],
+    select: {
+      snapshotDate: true,
+      items: {
+        orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+        select: {
+          sortOrder: true, rawName: true, rawSpec: true, unit: true, productId: true,
+          normalizedUnit: true, normalizationFactor: true,
+        },
+      },
+    },
+  })
+
+  let reviewedBindings: ReviewedBindingsPayload | null = null
+  if (reviewedBindingsPath) {
+    reviewedBindings = reviewedBindingsSchema.parse(
+      JSON.parse(await fs.readFile(reviewedBindingsPath, 'utf8'))
+    ) as ReviewedBindingsPayload
+    const metadataIssues = [
+      reviewedBindings.tenantSlug !== tenantSlug ? `tenantSlug 应为 ${tenantSlug}` : null,
+      reviewedBindings.targetStoreNo !== store.no ? `targetStoreNo 应为 ${store.no}` : null,
+      reviewedBindings.snapshotDate !== date ? `snapshotDate 应为 ${date}` : null,
+      reviewedBindings.sourceHash.toLowerCase() !== sourceHash.toLowerCase() ? 'sourceHash 与盘点文件不一致' : null,
+    ].filter((issue): issue is string => Boolean(issue))
+    if (metadataIssues.length > 0) {
+      throw new Error(`复核绑定元数据不匹配: ${metadataIssues.join('；')}`)
     }
-    else if (candidates.length > 1) ambiguous.push({ name: item.name, candidates: candidates.map((p) => `${p.code}:${p.name}`) })
   }
 
-  const matchedCount = items.filter((item) => item.productId).length
+  const plan = buildInventorySnapshotImportPlan({
+    tenantId: store.tenantId,
+    items,
+    products,
+    previousItems: previousSnapshot?.items,
+    reviewedBindings: reviewedBindings?.bindings,
+  })
+  const blockingRows = plan.items.filter(item => item.blockingIssue).map(item => ({
+    sortOrder: item.sortOrder,
+    name: item.name,
+    raw: `${item.quantity} ${item.unit} / ${item.spec || '-'}`,
+    matchSource: item.matchSource,
+    product: item.productCode ? `${item.productCode}:${item.productName}` : null,
+    candidates: item.candidates,
+    issue: item.blockingIssue,
+  }))
   const report = {
     ...sourceReport,
     store,
-    matchedCount,
-    unmatchedCount: items.length - matchedCount,
-    ambiguousCount: ambiguous.length,
-    normalizationPendingCount: items.filter(item => item.normalization?.status === 'PENDING').length,
-    ambiguous: ambiguous.slice(0, 20),
+    previousSnapshotDate: previousSnapshot?.snapshotDate.toISOString().slice(0, 10) || null,
+    matchedCount: plan.matchedCount,
+    unmatchedCount: plan.unmatchedCount,
+    ambiguousCount: plan.ambiguousCount,
+    normalizationPendingCount: plan.normalizationPendingCount,
+    reviewedCount: plan.reviewedCount,
+    previousSnapshotCount: plan.previousSnapshotCount,
+    exactNameCount: plan.exactNameCount,
+    configurationIssues: plan.configurationIssues,
+    blockingRows,
+    canCommit: plan.canCommit,
   }
   console.log(JSON.stringify(report, null, 2))
-  if (!commit) return
+  if (!commit) return report
+  if (!plan.canCommit) {
+    throw new Error(
+      `盘点导入被门禁阻止: unmatched=${plan.unmatchedCount}, ambiguous=${plan.ambiguousCount}, `
+      + `pending=${plan.normalizationPendingCount}, configuration=${plan.configurationIssues.length}`
+    )
+  }
 
-  const snapshotDate = dateOnly(date)
   const existing = await prisma.inventorySnapshot.findUnique({
     where: { storeId_snapshotDate: { storeId: store.id, snapshotDate } },
     select: { id: true, sourceHash: true },
@@ -187,9 +253,9 @@ async function main() {
         itemCount: items.length,
         nonzeroCount,
         zeroCount: items.length - nonzeroCount,
-        matchedCount,
+        matchedCount: plan.matchedCount,
         items: {
-          create: items.map((item) => ({
+          create: plan.items.map((item) => ({
             productId: item.productId,
             section: item.section,
             rawName: item.name,
@@ -202,7 +268,7 @@ async function main() {
             normalizedUnit: item.normalization?.normalizedUnit,
             normalizationFactor: item.normalization?.factor,
             normalizationStatus: item.normalization?.status,
-            normalizationNote: item.normalization?.note,
+            normalizationNote: item.normalizationNote,
             sortOrder: item.sortOrder,
           })),
         },
@@ -210,13 +276,16 @@ async function main() {
     })
   }, { timeout: 60_000 })
   console.log(`导入完成：${store.name} ${date} 实物盘点 ${items.length} 项，金额 ¥${calculatedTotal.toFixed(3)}`)
+  return { ...report, committed: true }
 }
 
-main()
-  .catch((error) => {
-    console.error(error)
-    process.exitCode = 1
-  })
-  .finally(async () => {
-    await prisma.$disconnect()
-  })
+if (require.main === module) {
+  runInventorySnapshotImport()
+    .catch((error) => {
+      console.error(error)
+      process.exitCode = 1
+    })
+    .finally(async () => {
+      await prisma.$disconnect()
+    })
+}

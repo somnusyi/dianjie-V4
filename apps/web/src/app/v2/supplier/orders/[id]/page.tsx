@@ -19,6 +19,13 @@ import { Chip, ProgressDots } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import dayjs from 'dayjs'
 import { clientRequestId } from '@/lib/client-id'
+import {
+  buildPartialShipmentLines,
+  buildShipmentConfirmBody,
+  computeShipmentNewTotal,
+  hasAnyPositiveShipment,
+  mapFulfillmentToCloseSummary,
+} from '@/lib/partial-shipment-ui'
 
 type Order = {
   id: string; no: string; status: string
@@ -72,6 +79,7 @@ export default function SupplierOrderDetailPage() {
   const id = params.id as string
   const [order, setOrder] = useState<Order | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [shipmentNotice, setShipmentNotice] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [shipNote, setShipNote] = useState('')
   // 发货时可调整每行的实际发货量 (称重 / 缺货). key=itemId, value=shippedQty
@@ -98,15 +106,9 @@ export default function SupplierOrderDetailPage() {
 
   function ship() {
     if (!order) return
-    // 计算实际发货金额 + 找出有调整的行
-    const lines = order.items.map(it => {
-      const ordered = Number(it.quantity)
-      const previous = Number(it.shippedQty || 0)
-      const remaining = Math.max(0, ordered - previous)
-      const sq = shipQty[it.id] != null ? shipQty[it.id] : remaining
-      return { it, ordered, previous, remaining, sq, changed: Math.abs(sq - remaining) > 0.0001 }
-    })
-    const newTotal = lines.reduce((s, l) => s + l.sq * Number(l.it.unitPrice), 0)
+    setShipmentNotice(null)
+    const lines = buildPartialShipmentLines(order.items, shipQty)
+    const newTotal = computeShipmentNewTotal(lines)
     const changed = lines.filter(l => l.changed)
     // 实发上限 per-product: max(下单 × shipUpperPct, 下单 + shipUpperBuffer)
     // 阈值在 Product 上 (2026-05-28 戊方案), 供应商可在商品页自调; 默认 1.10 / 5.00
@@ -123,18 +125,19 @@ export default function SupplierOrderDetailPage() {
       setError(`${overLimit.it.product?.name || ''} 实发超上限 ${shipUpper(overLimit.it).toFixed(2)} (下单 ${overLimit.it.quantity}, 该商品阈值: ≤ ${pct}×下单 或 ≤ 下单+${buf} 取大). 在商品页可调阈值.`)
       return
     }
-    const itemsBody = changed.length > 0 ? lines.map(l => ({ itemId: l.it.id, shippedQty: l.sq })) : undefined
-
-    let body = `${order.items.length} 件商品`
-    if (changed.length > 0) {
-      body += `\n⚠ 已调整 ${changed.length} 项: ${changed.slice(0, 3).map(l => `${l.it.product?.name || ''} 剩余${l.remaining}→本次${l.sq}`).join(', ')}${changed.length > 3 ? ' …' : ''}`
-      body += `\n本次配送金额 ¥${newTotal.toLocaleString()}`
-    } else {
-      body += ` · 共 ¥${Number(order.totalAmount).toLocaleString()}`
+    if (!hasAnyPositiveShipment(lines)) {
+      setError('本次发货数量必须大于 0，零实发不会关闭订单或释放预占。如不发货请不要提交。')
+      return
     }
-    body += order.supplier.inventoryMode === 'STRICT'
-      ? `\n发货后会自动扣减供应商库存，门店收货后再更新门店库存。`
-      : `\n当前未核算供应商仓库库存，本次发货不会扣供应商库存；门店收货后仍会正常更新门店库存。`
+
+    const itemsBody = changed.length > 0 ? lines.map(l => ({ itemId: l.it.id, shippedQty: l.sq })) : undefined
+    const body = buildShipmentConfirmBody({
+      itemCount: order.items.length,
+      lines,
+      newTotal,
+      oldTotal: Number(order.totalAmount),
+      inventoryMode: order.supplier.inventoryMode,
+    })
 
     openConfirm({
       title: `确认发货 ${order.no}?`,
@@ -144,10 +147,15 @@ export default function SupplierOrderDetailPage() {
       onConfirm: async () => {
         setSubmitting(true)
         try {
-          await apiFetch(`/api/orders/${order.id}/ship`, {
+          const res = await apiFetch<any>(`/api/orders/${order.id}/ship`, {
             method: 'PATCH',
             body: JSON.stringify({ note: shipNote.trim() || undefined, items: itemsBody, idempotencyKey: clientRequestId() }),
           })
+          const fulfillment = mapFulfillmentToCloseSummary(res?.fulfillment)
+          if (fulfillment?.hasClosedRemainder) {
+            const closedNames = fulfillment.lines.filter(l => l.closedQty > 0).map(l => `${l.productName || '商品'} ${l.closedQty}`).join('、')
+            setShipmentNotice(`发货成功。未发余量已关闭: ${closedNames}。不会补送，如仍需须门店重新下单。`)
+          }
           load()
         } catch (e: any) { setError(e.message || '发货失败'); throw e }
         finally { setSubmitting(false) }
@@ -280,6 +288,8 @@ export default function SupplierOrderDetailPage() {
     .filter(delivery => delivery.status !== 'CANCELLED')
     .reduce((sum, delivery) => sum + Number(delivery.actualTotalAmount || 0), 0)
   const receivedAmount = (order.receipts || []).reduce((sum, receipt) => sum + Number(receipt.totalAmount || 0), 0)
+  const shipLinesForButton = order.status === 'CONFIRMED' ? buildPartialShipmentLines(order.items, shipQty) : null
+  const shipAllZero = shipLinesForButton ? !hasAnyPositiveShipment(shipLinesForButton) : false
 
   return (
     <div className="min-h-screen bg-bg pb-32">
@@ -293,6 +303,11 @@ export default function SupplierOrderDetailPage() {
         >🖨 送货单</button>
         <Chip tone={tone}>{status.detailLabel}</Chip>
       </header>
+      {shipmentNotice && (
+        <div className="mx-4 mt-2 rounded-card border border-green-fg/20 bg-green-bg p-3 text-caption text-green-fg">
+          {shipmentNotice}
+        </div>
+      )}
 
       {/* 主信息 */}
       <div className="mx-4 mt-2 bg-white rounded-card border border-border p-4">
@@ -526,16 +541,11 @@ export default function SupplierOrderDetailPage() {
 
       {/* CONFIRMED 状态: 让供应商调整发货量 + 填发货备注 */}
       {order.status === 'CONFIRMED' && (() => {
-        const lines = order.items.map(it => {
-          const orig = Number(it.quantity)
-          const previous = Number(it.shippedQty || 0)
-          const remaining = Math.max(0, orig - previous)
-          const sq = shipQty[it.id] != null ? shipQty[it.id] : remaining
-          return { it, orig, previous, remaining, sq, changed: Math.abs(sq - remaining) > 0.0001 }
-        })
-        const newTotal = lines.reduce((s, l) => s + l.sq * Number(l.it.unitPrice), 0)
+        const lines = buildPartialShipmentLines(order.items, shipQty)
+        const newTotal = computeShipmentNewTotal(lines)
         const oldTotal = Number(order.totalAmount)
         const totalDiffer = Math.abs(newTotal - oldTotal) > 0.01
+        const allZero = !hasAnyPositiveShipment(lines)
         return (
           <>
             <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
@@ -581,7 +591,8 @@ export default function SupplierOrderDetailPage() {
                   <span className="font-num text-amber-fg">¥{newTotal.toLocaleString()} <span className="text-gray3 line-through ml-1">¥{oldTotal.toLocaleString()}</span></span>
                 </div>
               )}
-              <p className="text-micro text-gray3 mt-2">默认按剩余未配送数量发完；数量改为 0 表示本次不发，可在本次收货完成后继续补送。价格继承已确认订货单，配送不可改价。</p>
+              <p className="text-micro text-gray3 mt-2">默认按剩余未配送数量发完。首次发货后，所有未发余量将永久关闭，不会补送；如仍需须门店重新下单。价格继承已确认订货单，配送不可改价。</p>
+              {allZero && <p className="text-micro text-red-fg mt-1">⚠ 所有商品发货数量为 0，无法提交。请至少填写一项正数发货量。</p>}
             </div>
             <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
               <label className="text-micro text-gray3 block mb-1">发货备注 (选填)</label>
@@ -617,9 +628,9 @@ export default function SupplierOrderDetailPage() {
              style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom))' }}>
           <button onClick={rejectOrder} disabled={submitting}
             className="py-3 bg-white border border-red text-red-fg rounded-cta text-button disabled:opacity-40">拒单</button>
-          <button onClick={ship} disabled={submitting}
+          <button onClick={ship} disabled={submitting || shipAllZero}
             className="py-3 bg-ink text-white rounded-cta text-button disabled:opacity-40">
-            {submitting ? '提交中…' : '确认发货 (出发)'}
+            {submitting ? '提交中…' : shipAllZero ? '发货数量不能为 0' : '确认发货 (出发)'}
           </button>
         </div>
       )}

@@ -127,6 +127,23 @@ describe('validateFourUnitForm', () => {
       validateFourUnitForm({ ...DEFAULT_FOUR_UNIT_FORM, orderUnit: '24瓶' }),
     ).toBe('订货单位不能以数字开头')
   })
+
+  it('rejects different factors for the same named unit', () => {
+    expect(validateFourUnitForm({
+      purchaseUnit: '箱',
+      inventoryUnit: '罐',
+      orderUnit: '箱',
+      costUnit: '罐',
+      inventoryUnitsPerPurchaseUnit: '24',
+      inventoryUnitsPerOrderUnit: '6',
+      inventoryUnitsPerCostUnit: '1',
+    })).toBe('同名单位「箱」必须使用相同的库存换算因子')
+
+    expect(validateFourUnitForm({
+      ...DEFAULT_FOUR_UNIT_FORM,
+      inventoryUnitsPerCostUnit: '2',
+    })).toBe('同名单位「件」必须使用相同的库存换算因子')
+  })
 })
 
 describe('buildFourUnitValues', () => {
@@ -240,15 +257,15 @@ describe('formatConversionSummary', () => {
       buildFourUnitValues({
         purchaseUnit: '箱',
         inventoryUnit: '罐',
-        orderUnit: '箱',
-        costUnit: '箱',
+        orderUnit: '托',
+        costUnit: '罐',
         inventoryUnitsPerPurchaseUnit: '24',
         inventoryUnitsPerOrderUnit: '6',
         inventoryUnitsPerCostUnit: '1',
       }),
     )
     expect(summary).toContain('1 箱 = 24 罐')
-    expect(summary).toContain('1 箱 = 6 罐')
+    expect(summary).toContain('1 托 = 6 罐')
   })
 })
 
@@ -258,14 +275,14 @@ describe('formatCompactUnitSummary', () => {
       buildFourUnitValues({
         purchaseUnit: '箱',
         inventoryUnit: '罐',
-        orderUnit: '箱',
-        costUnit: '箱',
+        orderUnit: '托',
+        costUnit: '罐',
         inventoryUnitsPerPurchaseUnit: '24',
         inventoryUnitsPerOrderUnit: '6',
         inventoryUnitsPerCostUnit: '1',
       }),
     )
-    expect(summary).toBe('订货：箱，库存：罐（1 箱 = 6 罐）')
+    expect(summary).toBe('订货：托，库存：罐（1 托 = 6 罐）')
   })
 })
 

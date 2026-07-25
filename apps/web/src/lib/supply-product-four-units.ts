@@ -117,7 +117,24 @@ export function validateFourUnitForm(form: FourUnitForm): string | null {
     validateConversionFactor(form.inventoryUnitsPerOrderUnit),
     validateConversionFactor(form.inventoryUnitsPerCostUnit),
   ].filter(Boolean)
-  return (errors[0] as string | null) || null
+  const factorError = (errors[0] as string | null) || null
+  if (factorError) return factorError
+
+  const factorsByUnit = new Map<string, number>()
+  const unitFactors: Array<[string, number]> = [
+    [normalizeUnit(form.purchaseUnit), Number(form.inventoryUnitsPerPurchaseUnit)],
+    [normalizeUnit(form.inventoryUnit), 1],
+    [normalizeUnit(form.orderUnit), Number(form.inventoryUnitsPerOrderUnit)],
+    [normalizeUnit(form.costUnit), Number(form.inventoryUnitsPerCostUnit)],
+  ]
+  for (const [unit, factor] of unitFactors) {
+    const existing = factorsByUnit.get(unit)
+    if (existing !== undefined && existing !== factor) {
+      return `同名单位「${unit}」必须使用相同的库存换算因子`
+    }
+    factorsByUnit.set(unit, factor)
+  }
+  return null
 }
 
 /** 把表单字符串归一化为可计算/可提交的值。 */

@@ -150,11 +150,13 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
 
     const parsed = z.object({
       productId: z.string().trim().min(1).optional(),
+      q:         z.string().trim().max(100).optional(),
+      category:  z.string().trim().max(40).optional(),
       page:     z.coerce.number().int().min(1).optional(),
       pageSize: z.coerce.number().int().min(1).max(200).optional(),
     }).safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-    const { productId } = parsed.data
+    const { productId, q, category } = parsed.data
     const hasPage = parsed.data.page !== undefined
     const hasPageSize = parsed.data.pageSize !== undefined
     if (hasPage !== hasPageSize) {
@@ -163,10 +165,21 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
     const paginated = hasPage && hasPageSize
     const p  = parsed.data.page ?? 1
     const ps = Math.min(parsed.data.pageSize ?? 20, 200)
+    const searchTerms = q?.toLowerCase().split(/\s+/).filter(Boolean) || []
 
     const baseWhere: Prisma.ProductWhereInput = {
       tenantId: ctx.tenantId, supplierId: ctx.supplierId, status: 'ENABLED',
       ...(productId ? { id: productId } : {}),
+      ...(category ? { category } : {}),
+      ...(searchTerms.length > 0 ? {
+        AND: searchTerms.map(term => ({
+          OR: [
+            { name: { contains: term, mode: 'insensitive' as const } },
+            { code: { contains: term, mode: 'insensitive' as const } },
+            { spec: { contains: term, mode: 'insensitive' as const } },
+          ],
+        })),
+      } : {}),
     }
     const orderBy: Prisma.ProductOrderByWithRelationInput[] =
       [{ stock: 'asc' }, { name: 'asc' }, { id: 'asc' }]

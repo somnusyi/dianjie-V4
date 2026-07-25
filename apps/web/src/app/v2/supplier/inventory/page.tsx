@@ -6,7 +6,7 @@
  * 操作: + 入库 / 单 SKU 进详情看流水 + 盘点 / 报损
  */
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import { BottomNav, Chip } from '@/components/v2'
 
@@ -39,25 +39,57 @@ export default function InventoryPage() {
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [loadingMore, setLoadingMore] = useState(false)
+  const inventoryRequestId = useRef(0)
 
-  function load() {
+  function stockUrl(pageNumber: number) {
+    const params = new URLSearchParams({ page: String(pageNumber), pageSize: String(PAGE_SIZE) })
+    if (searchQ.trim()) params.set('q', searchQ.trim())
+    if (categoryFilter) params.set('category', categoryFilter)
+    return `/api/supplier/stock?${params}`
+  }
+
+  function loadInventory() {
+    const requestId = ++inventoryRequestId.current
     setPage(1)
     setItems(null)
-    apiFetch<Page>(`/api/supplier/stock?page=1&pageSize=${PAGE_SIZE}`)
-      .then(res => { setItems(res.items); setTotal(res.total) })
-      .catch(e => setError(e.message))
+    setLoadingMore(false)
+    setError(null)
+    apiFetch<Page>(stockUrl(1))
+      .then(res => {
+        if (requestId !== inventoryRequestId.current) return
+        setItems(res.items)
+        setTotal(res.total)
+      })
+      .catch(e => {
+        if (requestId === inventoryRequestId.current) setError(e.message)
+      })
+  }
+
+  function loadReferenceData() {
     apiFetch<Summary>('/api/supplier/stock/summary').then(setSummary).catch(() => {})
     apiFetch<Category[]>('/api/products/categories').then(rows => setCategories(Array.isArray(rows) ? rows : [])).catch(() => {})
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => { loadReferenceData() }, [])
+  useEffect(() => {
+    const timer = window.setTimeout(loadInventory, 250)
+    return () => window.clearTimeout(timer)
+  }, [searchQ, categoryFilter])
 
   function loadMore() {
     if (loadingMore || !items || items.length >= total) return
     setLoadingMore(true)
     const next = page + 1
-    apiFetch<Page>(`/api/supplier/stock?page=${next}&pageSize=${PAGE_SIZE}`)
-      .then(res => { setItems(prev => prev ? [...prev, ...res.items] : res.items); setPage(next); setLoadingMore(false) })
-      .catch(() => setLoadingMore(false))
+    const requestId = inventoryRequestId.current
+    apiFetch<Page>(stockUrl(next))
+      .then(res => {
+        if (requestId !== inventoryRequestId.current) return
+        setItems(prev => prev ? [...prev, ...res.items] : res.items)
+        setPage(next)
+        setLoadingMore(false)
+      })
+      .catch(() => {
+        if (requestId === inventoryRequestId.current) setLoadingMore(false)
+      })
   }
 
   // 模糊匹配: name + spec + code, 多关键字 AND (跟选品抽屉一致风格)
@@ -127,7 +159,10 @@ export default function InventoryPage() {
           <input
             type="search"
             value={searchQ}
-            onChange={e => setSearchQ(e.target.value)}
+            onChange={e => {
+              inventoryRequestId.current += 1
+              setSearchQ(e.target.value)
+            }}
             placeholder="搜索 名称 / 规格 / 编码"
             className="w-full bg-white border border-border rounded-card pl-9 pr-9 py-2 text-body outline-none focus:border-amber"
           />
@@ -135,7 +170,10 @@ export default function InventoryPage() {
           {searchQ && (
             <button
               type="button"
-              onClick={() => setSearchQ('')}
+              onClick={() => {
+                inventoryRequestId.current += 1
+                setSearchQ('')
+              }}
               className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-gray5 text-gray2 text-caption flex items-center justify-center"
               aria-label="清除搜索"
             >×</button>
@@ -147,7 +185,10 @@ export default function InventoryPage() {
       <div className="px-4 mt-2 flex items-center gap-2">
         <select
           value={categoryFilter}
-          onChange={event => setCategoryFilter(event.target.value)}
+          onChange={event => {
+            inventoryRequestId.current += 1
+            setCategoryFilter(event.target.value)
+          }}
           className="flex-1 bg-white border border-border rounded-cta px-3 py-2 text-body outline-none focus:border-amber"
           aria-label="库存分类"
         >
@@ -159,7 +200,10 @@ export default function InventoryPage() {
           ))}
         </select>
         {categoryFilter && (
-          <button onClick={() => setCategoryFilter('')} className="px-3 py-2 text-caption text-gray2">清除</button>
+          <button onClick={() => {
+            inventoryRequestId.current += 1
+            setCategoryFilter('')
+          }} className="px-3 py-2 text-caption text-gray2">清除</button>
         )}
       </div>
 

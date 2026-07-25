@@ -237,6 +237,32 @@ describe('supplier stock routes — isolation & pagination (integration)', () =>
     expect(body.items.length).toBe(0)
   })
 
+  it('paginates search and category filters across the full supplier catalog', async () => {
+    const search = await app.inject({
+      method: 'GET',
+      url: `/api/supplier/stock?page=1&pageSize=1&q=${encodeURIComponent(`供应商 A2-${suffix}`)}`,
+      headers: actorHeaders('ownerA'),
+    })
+    expect(search.statusCode).toBe(200)
+    expect(search.json()).toMatchObject({
+      total: 1,
+      totalPages: 1,
+      items: [{ id: productA2 }],
+    })
+
+    const category = await app.inject({
+      method: 'GET',
+      url: `/api/supplier/stock?page=1&pageSize=1&category=${encodeURIComponent('蔬菜')}`,
+      headers: actorHeaders('ownerA'),
+    })
+    expect(category.statusCode).toBe(200)
+    expect(category.json()).toMatchObject({
+      total: 1,
+      totalPages: 1,
+      items: [{ id: productA2 }],
+    })
+  })
+
   it('rejects invalid pagination params', async () => {
     const bad = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=0&pageSize=10', headers: actorHeaders('ownerA') })
     expect(bad.statusCode).toBe(400)

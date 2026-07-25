@@ -5,6 +5,7 @@ import AppLayout from '@/components/AppLayout'
 import { Table, Btn, Modal, Field, Input, Select, fmt, fmtDate, useToast, Pagination } from '@/components/ui'
 import api from '@/lib/api'
 import { clientRequestId } from '@/lib/client-id'
+import { canCancelLegacyOrder, validateCancelReason } from './cancel-order'
 import dayjs from 'dayjs'
 import { z } from 'zod'
 
@@ -189,10 +190,21 @@ export default function OrdersPage() {
           </Btn>
         )}
         {/* 取消 */}
-        {!['RECEIVED','COMPLETED','CANCELLED','PENDING_CONFIRM'].includes(row.status) && ['MANAGER','ADMIN'].includes(user?.role) && (
+        {canCancelLegacyOrder(row.status, user?.role) && (
           <Btn size="sm" variant="danger" onClick={async () => {
-            if (!window.confirm('确认取消？')) return
-            try { await api.patch(`/api/orders/${row.id}/cancel`); load() } catch {}
+            const result = validateCancelReason(window.prompt('撤回原因 (必填, 供应商可见, 最长 200 字):'))
+            if (!result.success) {
+              show(result.error, 'error')
+              return
+            }
+            if (!window.confirm('确认撤回？撤回后无法恢复，需要重新下单')) return
+            try {
+              await api.patch(`/api/orders/${row.id}/cancel`, { reason: result.reason })
+              show('订单已撤回')
+              load()
+            } catch (e: any) {
+              show(e.response?.data?.error || '撤回失败', 'error')
+            }
           }}>取消</Btn>
         )}
         {row.lossClaims?.length > 0 && (

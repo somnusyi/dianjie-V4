@@ -74,6 +74,7 @@ const productCreateSchema = z.object({
 
 export const productListFilterSchema = z.object({
   category: z.string().trim().max(40).optional(),
+  categoryId: z.string().trim().optional(),
   status: z.preprocess(
     value => value === '' ? undefined : value,
     z.enum(['PENDING_APPROVAL', 'PENDING_DISABLE', 'ENABLED', 'DISABLED']).optional(),
@@ -146,19 +147,26 @@ export async function buildProductListWhere(req: any): Promise<{ where?: any; fi
   if (!parsedFilters.success) {
     return { error: { statusCode: 400, message: parsedFilters.error.issues[0].message } }
   }
-  const { category, status, q } = parsedFilters.data as any
+  const { category, categoryId, status, q } = parsedFilters.data as any
   const { tenantId, role, supplierId } = req.user
   const where: any = { tenantId }
-  if (category) where.category = category
   if (status) where.status = status
-  if (q?.trim()) {
-    const keyword = String(q).trim()
-    where.OR = [
-      { name: { contains: keyword, mode: 'insensitive' } },
-      { code: { contains: keyword, mode: 'insensitive' } },
-      { spec: { contains: keyword, mode: 'insensitive' } },
-    ]
+
+  // categoryId 显式解析为分类名；未找到则报错，不能静默忽略
+  if (categoryId) {
+    const categoryWhere: any = { id: categoryId, tenantId }
+    if (isSupplierRole(role) && supplierId) categoryWhere.supplierId = supplierId
+    const categoryRecord = await prisma.supplierProductCategory.findFirst({ where: categoryWhere })
+    if (!categoryRecord) return { error: { statusCode: 400, message: '商品分类不存在' } }
+    where.category = categoryRecord.name
+  } else if (category) {
+    where.category = category
   }
+
+  const tokens = parseProductQueryTokens(q)
+  const keywordWhere = buildProductKeywordWhere(tokens)
+  if (keywordWhere) where.AND = [keywordWhere]
+
   // 供应商账号只能看自己的商品
   if (isSupplierRole(role)) {
     try {
@@ -183,6 +191,43 @@ export function escapeCsv(value: unknown): string {
   return str
 }
 
+/** 前缀匹配 CSV/Excel 公式注入风险字符（= + - @、tab、CR/LF）或前导空白后的危险字符。 */
+const CSV_FORMULA_PREFIX_RE = /^[\s]*[\t\r\n=+\-@]/
+
+/** 在 RFC4180 转义前对文本单元格做公式注入防护；Excel 中前导单引号会强制按文本显示。 */
+export function sanitizeCsvCell(value: unknown): string {
+  let str = value == null ? '' : String(value)
+  if (CSV_FORMULA_PREFIX_RE.test(str)) str = "'" + str
+  return escapeCsv(str)
+}
+
+/** 商品 PC 页搜索框：空格分词，每个 token 命中名称/规格/编码，全部 token 必须命中。 */
+export function parseProductQueryTokens(q: string | undefined | null): string[] {
+  return (q || '').trim().toLowerCase().split(/\s+/).filter(Boolean)
+}
+
+export function buildProductKeywordWhere(tokens: string[]): { OR: any[] } | { AND: any[] } | undefined {
+  if (tokens.length === 0) return undefined
+  const tokenClause = (token: string) => ({
+    OR: [
+      { name: { contains: token, mode: 'insensitive' } },
+      { code: { contains: token, mode: 'insensitive' } },
+      { spec: { contains: token, mode: 'insensitive' } },
+    ],
+  })
+  if (tokens.length === 1) return tokenClause(tokens[0])
+  return { AND: tokens.map(tokenClause) }
+}
+
+/** 允许导出商品报价表的角色 allowlist。 */
+const PRODUCT_EXPORT_ROLES = new Set(['SUPPLY_CHAIN', 'SUPPLIER_OWNER', 'SUPPLIER_STAFF', 'SUPPLIER_SUB'])
+export function canExportProductCatalog(role: string | undefined | null): boolean {
+  return !!role && PRODUCT_EXPORT_ROLES.has(role)
+}
+
+/** 单次导出的硬上限；超过后必须提示用户缩小筛选范围。 */
+export const PRODUCT_EXPORT_MAX_ROWS = 10_000
+
 export function formatProductStatus(status: string): string {
   const map: Record<string, string> = {
     ENABLED: '供应中',
@@ -193,8 +238,14 @@ export function formatProductStatus(status: string): string {
   return map[status] || status
 }
 
-export function productExportFilename(): string {
-  return `商品报价表_${new Date().toISOString().slice(0, 10)}.csv`
+export function productExportFilename(date = new Date()): string {
+  const china = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date)
+  return `商品报价表_${china.replace(/\//g, '-')}.csv`
 }
 
 export type ExportableProduct = {
@@ -221,7 +272,7 @@ export function buildProductExportCsv(rows: ExportableProduct[]): string {
       row.inventoryUnit || row.unit || '',
       Number(row.price).toFixed(2),
       formatProductStatus(row.status),
-    ].map(escapeCsv).join(',')),
+    ].map(sanitizeCsvCell).join(',')),
   ]
   return lines.join('\r\n')
 }
@@ -289,19 +340,26 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   })
 
   app.get('/export.csv', auth(app), async (req: any, reply: any) => {
+    if (!canExportProductCatalog(req.user.role)) {
+      return reply.status(403).send({ error: '当前角色无权导出商品报价表' })
+    }
     const exportResult = await buildProductListWhere(req)
     if (exportResult.error) return reply.status(exportResult.error.statusCode).send({ error: exportResult.error.message })
 
-    const rows = await prisma.product.findMany({
+    const cappedRows = await prisma.product.findMany({
       where: exportResult.where,
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: PRODUCT_EXPORT_MAX_ROWS + 1,
       select: {
         code: true, name: true, category: true, spec: true,
         unit: true, inventoryUnit: true, price: true, status: true,
       },
     })
+    if (cappedRows.length > PRODUCT_EXPORT_MAX_ROWS) {
+      return reply.status(400).send({ error: `导出结果超过 ${PRODUCT_EXPORT_MAX_ROWS} 行上限，请缩小筛选范围后重试` })
+    }
 
-    const csv = buildProductExportCsv(rows as ExportableProduct[])
+    const csv = buildProductExportCsv(cappedRows as ExportableProduct[])
     const filename = productExportFilename()
     return reply
       .status(200)

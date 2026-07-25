@@ -13,7 +13,7 @@ import { EmptyState, SkeletonCard, FriendlyError } from '@/components/v2/skeleto
 import { ProductFilterSidebar } from '@/components/v2/product-filter-sidebar'
 import { ProductImagePreview } from '@/components/v2/product-image-preview'
 import { apiDownload, apiFetch } from '@/lib/v2-auth'
-import { downloadProductExport } from './export-products'
+import { downloadProductExport, saveBlob } from './export-products'
 
 type Product = {
   id: string; code: string; name: string; category: string; unit: string
@@ -113,17 +113,6 @@ export default function SupplierProductsPage() {
       .catch(() => setOperations([]))
   }
   useEffect(() => { load() }, [])
-
-  function saveBlob(blob: Blob, filename: string) {
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = filename
-    document.body.appendChild(anchor)
-    anchor.click()
-    anchor.remove()
-    URL.revokeObjectURL(url)
-  }
 
   async function handleExport() {
     if (exporting) return

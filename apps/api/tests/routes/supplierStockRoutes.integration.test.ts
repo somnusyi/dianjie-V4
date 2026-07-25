@@ -115,10 +115,11 @@ describe('supplier stock routes — isolation & pagination (integration)', () =>
     expect(ids.has(productA1)).toBe(true)
     expect(ids.has(productA2)).toBe(true)
     expect(ids.has(productB1)).toBe(false)
+    expect(items.every((item: any) => item.warehouseId === 'default')).toBe(true)
   })
 
   it('supplier B sees only their own products, not supplier A', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/supplier/stock', headers: actorHeaders('ownerB') })
+    const res = await app.inject({ method: 'GET', url: '/api/supplier/stock?warehouseId=default', headers: actorHeaders('ownerB') })
     expect(res.statusCode).toBe(200)
     const items = res.json()
     expect(items.length).toBe(1)
@@ -143,6 +144,7 @@ describe('supplier stock routes — isolation & pagination (integration)', () =>
     const sumA = resA.json()
     expect(sumA.totalSku).toBe(2)
     expect(sumA.outOfStock).toBe(1)
+    expect(sumA.warehouse).toEqual({ id: 'default', name: '默认仓' })
 
     const resB = await app.inject({ method: 'GET', url: '/api/supplier/stock/summary', headers: actorHeaders('ownerB') })
     expect(resB.statusCode).toBe(200)
@@ -168,6 +170,7 @@ describe('supplier stock routes — isolation & pagination (integration)', () =>
     expect(body.pageSize).toBe(10)
     expect(body.totalPages).toBe(1)
     expect(body.items.length).toBe(2)
+    expect(body.warehouse).toEqual({ id: 'default', name: '默认仓' })
   })
 
   it('paginated mode: page beyond data returns empty items but correct total', async () => {

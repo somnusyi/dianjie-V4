@@ -20,8 +20,14 @@ import {
   createSupplierStockBatchIncrease,
 } from '../services/supplierStockBatch'
 import { calendarDateSchema } from '../lib/calendar-date'
+import {
+  DEFAULT_WAREHOUSE_META,
+  requireDefaultWarehouse,
+} from '../services/defaultWarehouse'
 
-const auth = (app: any) => ({ preHandler: [app.authenticate] })
+const auth = (app: any) => ({
+  preHandler: [app.authenticate, requireDefaultWarehouse],
+})
 
 function ensureSupplier(
   req: any,
@@ -257,11 +263,12 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
         in30d: stat.in30, out30d: stat.out30,
         nearestExpiry: exp ? exp.toISOString().slice(0, 10) : null,
         daysToExpiry,
+        warehouseId: DEFAULT_WAREHOUSE_META.id,
       }
     })
 
     return paginated
-      ? { items, total, page: p, pageSize: ps, totalPages: Math.ceil(total / ps) }
+      ? { items, total, page: p, pageSize: ps, totalPages: Math.ceil(total / ps), warehouse: DEFAULT_WAREHOUSE_META }
       : items
   })
 
@@ -301,6 +308,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       totalValue: Math.round(totalValue * 100) / 100,
       availableValue: Math.round(availableValue * 100) / 100,
       reservedValue: Math.round(reservedValue * 100) / 100,
+      warehouse: DEFAULT_WAREHOUSE_META,
     }
   })
 
@@ -338,6 +346,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       createdAt: row.createdAt,
       product: row.product,
       order: row.purchaseOrder,
+      warehouseId: DEFAULT_WAREHOUSE_META.id,
     }))
   })
 
@@ -382,6 +391,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       createdAt: row.createdAt,
       product: row.product,
       source: row.sourceMovement,
+      warehouseId: DEFAULT_WAREHOUSE_META.id,
     }))
   })
 
@@ -462,7 +472,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
       throw error
     }
-    return { ok: true, count: created.length, items: created }
+    return { ok: true, count: created.length, items: created, warehouse: DEFAULT_WAREHOUSE_META }
   })
 
   /** POST /api/supplier/stock/adjust — 盘点直接设置库存 */
@@ -505,8 +515,8 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       })
       result = { delta: Number(delta), balanceAfter: newQty }
     })
-    if (result!.unchanged) return { ok: true, message: '库存无变化', balanceAfter: newQty }
-    return { ok: true, delta: result!.delta, balanceAfter: result!.balanceAfter }
+    if (result!.unchanged) return { ok: true, message: '库存无变化', balanceAfter: newQty, warehouse: DEFAULT_WAREHOUSE_META }
+    return { ok: true, delta: result!.delta, balanceAfter: result!.balanceAfter, warehouse: DEFAULT_WAREHOUSE_META }
   })
 
   /** POST /api/supplier/stock/loss — 报损 */
@@ -553,7 +563,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
       throw error
     }
-    return { ok: true, balanceAfter }
+    return { ok: true, balanceAfter, warehouse: DEFAULT_WAREHOUSE_META }
   })
 
   /** POST /api/supplier/stock/import-snapshot — 全量库存清单导入
@@ -674,6 +684,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
         failed: failed.length,
       },
       details: { created: [], adjusted, skipped, failed },
+      warehouse: DEFAULT_WAREHOUSE_META,
     }
   })
 
@@ -707,6 +718,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       createdAt: m.createdAt,
       product: m.product,
       operator: m.createdBy?.name || null,
+      warehouseId: DEFAULT_WAREHOUSE_META.id,
     }))
   })
 }

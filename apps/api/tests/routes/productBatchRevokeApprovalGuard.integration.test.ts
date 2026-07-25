@@ -9,8 +9,10 @@ let supplierId = ''
 let userId = ''
 let enabledProductId = ''
 let pendingProductId = ''
+let concurrencyProductId = ''
 let enabledBatchId = ''
 let pendingBatchId = ''
+let concurrencyBatchId = ''
 let app: ReturnType<typeof Fastify>
 
 describe('product batch revoke approval guard (integration)', () => {
@@ -32,14 +34,16 @@ describe('product batch revoke approval guard (integration)', () => {
 
     enabledBatchId = `batch-enabled-${suffix}`
     pendingBatchId = `batch-pending-${suffix}`
+    concurrencyBatchId = `batch-concurrency-${suffix}`
     await prisma.productBatch.createMany({
       data: [
         { id: enabledBatchId, tenantId, supplierId, uploadedById: userId, filename: 'enabled.xlsx', totalRows: 1, createdCount: 1, failedCount: 0 },
         { id: pendingBatchId, tenantId, supplierId, uploadedById: userId, filename: 'pending.xlsx', totalRows: 1, createdCount: 1, failedCount: 0 },
+        { id: concurrencyBatchId, tenantId, supplierId, uploadedById: userId, filename: 'concurrency.xlsx', totalRows: 1, createdCount: 1, failedCount: 0 },
       ],
     })
 
-    const [enabledProduct, pendingProduct] = await Promise.all([
+    const [enabledProduct, pendingProduct, concurrencyProduct] = await Promise.all([
       prisma.product.create({
         data: {
           tenantId, supplierId, batchId: enabledBatchId,
@@ -52,9 +56,16 @@ describe('product batch revoke approval guard (integration)', () => {
           code: `PENDING-${suffix}`, name: '待审批批次商品', unit: '件', price: 10, status: 'PENDING_APPROVAL',
         },
       }),
+      prisma.product.create({
+        data: {
+          tenantId, supplierId, batchId: concurrencyBatchId,
+          code: `CONC-${suffix}`, name: '并发测试批次商品', unit: '件', price: 10, status: 'PENDING_APPROVAL',
+        },
+      }),
     ])
     enabledProductId = enabledProduct.id
     pendingProductId = pendingProduct.id
+    concurrencyProductId = concurrencyProduct.id
 
     app = Fastify()
     app.decorate('authenticate', async (request: any) => {
@@ -107,5 +118,34 @@ describe('product batch revoke approval guard (integration)', () => {
     const pending = list.find((b: any) => b.id === pendingBatchId)
     expect(enabled.canRevoke).toBe(false)
     expect(pending.canRevoke).toBe(false)
+  })
+
+  it('blocks revoke when a product becomes enabled after the revoke transaction starts', async () => {
+    // 模拟并发：测试事务先按 id 顺序锁定批次商品，延迟期间把商品审为 ENABLED，
+    // 然后提交。撤销请求在同一行锁释放后才能继续，必须重新读到 ENABLED 并拒绝。
+    const enableAfterLock = prisma.$transaction(async tx => {
+      await tx.$queryRaw`
+        SELECT id, status FROM "products"
+        WHERE "batchId" = ${concurrencyBatchId} AND "tenantId" = ${tenantId}
+        ORDER BY id ASC
+        FOR UPDATE
+      `
+      await new Promise(resolve => setTimeout(resolve, 300))
+      await tx.product.update({ where: { id: concurrencyProductId }, data: { status: 'ENABLED' } })
+    }, { maxWait: 5000, timeout: 10000 })
+
+    const revoke = app.inject({
+      method: 'PATCH', url: `/api/products/batches/${concurrencyBatchId}/revoke`,
+    })
+
+    const [_, revokeResponse] = await Promise.all([enableAfterLock, revoke])
+
+    expect(revokeResponse.statusCode).toBe(400)
+    expect(revokeResponse.json()).toMatchObject({ error: expect.stringContaining('已上架商品') })
+
+    const batch = await prisma.productBatch.findUniqueOrThrow({ where: { id: concurrencyBatchId } })
+    expect(batch.revokedAt).toBeNull()
+    const product = await prisma.product.findUniqueOrThrow({ where: { id: concurrencyProductId } })
+    expect(product.status).toBe('ENABLED')
   })
 })

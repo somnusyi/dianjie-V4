@@ -70,7 +70,18 @@ function buildBody(payload: {
   if (action === 'CREATE' && after.category) {
     lines.push(`分类: ${after.category}`)
   }
-  if (action === 'UPDATE' && (before.spec || after.spec)) {
+  if (
+    action === 'UPDATE'
+    && (Object.prototype.hasOwnProperty.call(before, 'category') || Object.prototype.hasOwnProperty.call(after, 'category'))
+    && before.category !== after.category
+  ) {
+    lines.push(`分类: ${before.category ?? '-'} → ${after.category ?? '-'}`)
+  }
+  if (
+    action === 'UPDATE'
+    && (Object.prototype.hasOwnProperty.call(before, 'spec') || Object.prototype.hasOwnProperty.call(after, 'spec'))
+    && before.spec !== after.spec
+  ) {
     lines.push(`规格: ${before.spec ?? '-'} → ${after.spec ?? '-'}`)
   }
 
@@ -154,6 +165,10 @@ export async function notifyProductChange(
       newPrice: after.price,
       oldStatus: before.status,
       newStatus: after.status,
+      oldCategory: before.category,
+      newCategory: after.category,
+      oldSpec: before.spec,
+      newSpec: after.spec,
       supplierName: after.supplierName || before.supplierName,
     },
     toUsers: chefIds,

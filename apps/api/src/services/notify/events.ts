@@ -371,6 +371,12 @@ function buildProductChangedDescription(payload: Record<string, any>): string {
   if (payload.oldStatus || payload.newStatus) {
     parts.push(`状态: ${payload.oldStatus || '-'} → ${payload.newStatus || '-'}`)
   }
+  if (payload.oldCategory !== undefined || payload.newCategory !== undefined) {
+    parts.push(`分类: ${payload.oldCategory ?? '-'} → ${payload.newCategory ?? '-'}`)
+  }
+  if (payload.oldSpec !== undefined || payload.newSpec !== undefined) {
+    parts.push(`规格: ${payload.oldSpec ?? '-'} → ${payload.newSpec ?? '-'}`)
+  }
   if (payload.supplierName) {
     parts.push(`供应商: ${payload.supplierName}`)
   }

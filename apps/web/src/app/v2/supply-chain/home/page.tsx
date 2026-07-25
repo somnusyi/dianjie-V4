@@ -132,6 +132,7 @@ export default function InternalSupplyChainHomePage() {
               {stores.map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}
             </select>
           </label>
+          <a href="/v2/supply-chain/receipts" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">收货查询</a>
           <a href="/v2/supply-chain/products" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">商品管理</a>
           <a href="/v2/me" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">账户</a>
         </div>

@@ -3,9 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "packageManager": "pnpm@10.32.1",
+  "engines": {
+    "node": "20.x",
+    "pnpm": "10.32.1"
+  },
   "scripts": {
     "dev": "pnpm --parallel -r dev",
     "build": "pnpm --filter @dianjie/db generate && pnpm -r build",
+    "env:check": "node scripts/verify-runtime-contract.mjs",
     "db:push": "pnpm --filter @dianjie/db db:push",
     "db:migrate": "pnpm --filter @dianjie/db db:migrate",
     "db:studio": "pnpm --filter @dianjie/db db:studio",

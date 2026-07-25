@@ -28,7 +28,7 @@
     "@fastify/multipart": "8.3.1",
     "@fastify/rate-limit": "^9.1.0",
     "@paralleldrive/cuid2": "^2.3.1",
-    "@prisma/client": "^5.9.1",
+    "@prisma/client": "5.22.0",
     "@sentry/node": "^10.48.0",
     "ali-oss": "^6.23.0",
     "axios": "^1.6.0",

@@ -21,16 +21,23 @@ scripts        测试、部署、备份、回滚和迁移核验
 
 ## 本地启动
 
+项目运行时契约为 Node.js 20.x、pnpm 10.32.1 和 Prisma 5.22.0。使用 nvm 时执行：
+
 ```bash
+nvm use
+corepack enable pnpm
+pnpm env:check
 pnpm install --frozen-lockfile
 cp .env.example .env
 docker-compose up -d
 pnpm --filter @dianjie/db exec prisma generate
-pnpm --filter @dianjie/db exec prisma migrate dev
+pnpm --filter @dianjie/db exec prisma migrate deploy --schema prisma/schema.prisma
 pnpm dev
 ```
 
-本地环境必须使用隔离数据库，不能指向生产 RDS。测试账号由 seed 或项目负责人提供，不在 README 中保存生产凭证。
+没有 nvm 时也必须使用 Node.js 20.x，并通过 Corepack 激活仓库 `packageManager` 指定的
+pnpm 版本。本地环境必须使用隔离数据库，不能指向生产 RDS。测试账号由 seed 或项目负责人
+提供，不在 README 中保存生产凭证。
 
 ## 提交前验证
 
@@ -40,7 +47,7 @@ pnpm --filter @dianjie/api build
 pnpm --filter @dianjie/web test
 pnpm --filter @dianjie/web exec tsc --noEmit
 WEB_PORT=3299 pnpm --filter @dianjie/web build
-bash scripts/verify-local-migration-chain.sh
+PREVIEW_MODE=true DATABASE_URL="<本地 dianjie_v4_local URL>" bash scripts/verify-local-migration-chain.sh
 ```
 
 生产只允许发布负责人从独立 worktree 执行 `scripts/deploy-worktree.sh`。禁止直接修改生产目录、手工同步半套产物或用 `prisma db push` 替代迁移。

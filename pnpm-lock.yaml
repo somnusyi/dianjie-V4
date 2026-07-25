@@ -42,7 +42,7 @@ importers:
         specifier: ^2.3.1
         version: 2.3.1
       '@prisma/client':
-        specifier: ^5.9.1
+        specifier: 5.22.0
         version: 5.22.0(prisma@5.22.0)
       '@sentry/node':
         specifier: ^10.48.0
@@ -284,7 +284,7 @@ importers:
   packages/db:
     dependencies:
       '@prisma/client':
-        specifier: ^5.9.1
+        specifier: 5.22.0
         version: 5.22.0(prisma@5.22.0)
       bcryptjs:
         specifier: ^2.4.3
@@ -294,7 +294,7 @@ importers:
         specifier: ^2.4.6
         version: 2.4.6
       prisma:
-        specifier: ^5.9.1
+        specifier: 5.22.0
         version: 5.22.0
       tsx:
         specifier: ^4.7.0

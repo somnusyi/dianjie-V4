@@ -1360,3 +1360,36 @@
   实际 Vitest 结果和源文件均为 11 个。
 - 上传路由最终对象 key 的 OSS mock 集成断言作为非阻塞后续增强；本轮代码和现有
   PostgreSQL 隔离测试结论不变。
+
+## 2026-07-25 13:50 环境基线对齐（生产只读、本地写入）
+
+### 检查范围与修改
+
+- 用户授权连接生产后，仅通过 SSH/数据库执行只读事实采集；未部署、未重启服务、未修改
+  生产文件、配置、迁移账本或业务数据。
+- 确认生产实际 deployed commit 为 `a6d64c9`，Node 20.20.1、pnpm 10.32.1、
+  Prisma 5.22.0、PostgreSQL 15.16；API、Web、CMB 在线且健康检查通过。
+- 生产63条迁移全部完成、0失败、schema diff 为零。发现一条历史 migration checksum
+  与当前文件不同，但生产字段和 datamodel 一致；保留审计，不修改或重跑旧 migration。
+- 生产只读数据库证据确认 7月21/24 三个手工通知 eventKey 均各 sent 1，BOM单位纠错
+  操作日志 1 条，7月22消耗作废/补记各30行；相关一次性脚本全部标为已执行、不得重跑。
+- 本地既有 `dianjie_v4_local` 原缺最后一条迁移；先生成并验证权限600的 custom-format
+  备份，再通过 `migrate deploy` 补齐。对齐后本地、CI和临时空库均为63/63和零 diff。
+- 固化 Node 20.x、pnpm 10.32.1、Prisma 5.22.0；新增运行时契约检查，补环境变量模板和
+  README，移除模板注释中的测试银行标识。
+
+### 自动化验证
+
+- Node 20.20.2 / pnpm 10.32.1 下 `pnpm env:check`、冻结 lockfile 离线安装通过。
+- API 单元 163/163、API build、Web 22/22、Web tsc、Web production build 142页通过。
+- PostgreSQL 全量集成 93/93；本地既有库、CI库、临时空库 migrate/status/diff 全部通过，
+  临时迁移库残留为0。
+- 完整事实、配置开关、脚本执行证据、备份和剩余风险见
+  `ENVIRONMENT_BASELINE_2026-07-25.md`。
+
+### 风险与后续
+
+- 生产仍运行 `a6d64c9`，统一 RC 不因此自动获准部署；生产 gate 继续 LOCKED。
+- 下一次生产变更前必须生成新备份；7月23备份只证明最近一次部署备份可读取。
+- 迁移 checksum 差异不得通过改旧 migration、resolve 或 db push 掩盖。
+- Web 日志存在旧客户端请求旧 Server Action 的记录，但当前 HTML/CSS 和服务健康；继续监控。

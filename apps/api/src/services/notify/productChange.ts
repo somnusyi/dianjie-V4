@@ -43,6 +43,29 @@ const ACTION_LABELS: Record<ProductChangeAction, string> = {
   ENABLE: '恢复',
 }
 
+const FOUR_UNIT_LABELS: Array<[string, string]> = [
+  ['purchaseUnit', '采购单位'],
+  ['inventoryUnit', '库存单位'],
+  ['orderUnit', '订货单位'],
+  ['costUnit', '成本单位'],
+  ['inventoryUnitsPerPurchaseUnit', '采购换算'],
+  ['inventoryUnitsPerOrderUnit', '订货换算'],
+  ['inventoryUnitsPerCostUnit', '成本换算'],
+]
+
+function buildFourUnitChangeLines(
+  before: Record<string, any>,
+  after: Record<string, any>,
+): string[] {
+  return FOUR_UNIT_LABELS.flatMap(([field, label]) => {
+    const hasBefore = Object.prototype.hasOwnProperty.call(before, field)
+    const hasAfter = Object.prototype.hasOwnProperty.call(after, field)
+    if ((!hasBefore && !hasAfter) || before[field] === after[field]) return []
+    if (!hasBefore) return [`${label}: ${after[field] ?? '-'}`]
+    return [`${label}: ${before[field] ?? '-'} → ${after[field] ?? '-'}`]
+  })
+}
+
 function actionLabel(action: ProductChangeAction): string {
   return ACTION_LABELS[action]
 }
@@ -84,6 +107,7 @@ function buildBody(payload: {
   ) {
     lines.push(`规格: ${before.spec ?? '-'} → ${after.spec ?? '-'}`)
   }
+  lines.push(...buildFourUnitChangeLines(before, after))
 
   lines.push('请核对商品主数据。')
   return lines.join('；')
@@ -128,6 +152,7 @@ export async function notifyProductChange(
   const productName = after.name || before.name
   const title = buildTitle(action, productName)
   const body = buildBody({ action, operatorName: operator?.name, before, after })
+  const fourUnitChanges = buildFourUnitChangeLines(before, after).join('；')
 
   // 1. 系统内 Notification: 逐人创建, dedupeKey 包含 recipientId 保证每人一条
   await Promise.all(
@@ -169,6 +194,7 @@ export async function notifyProductChange(
       newCategory: after.category,
       oldSpec: before.spec,
       newSpec: after.spec,
+      fourUnitChanges: fourUnitChanges || undefined,
       supplierName: after.supplierName || before.supplierName,
     },
     toUsers: chefIds,

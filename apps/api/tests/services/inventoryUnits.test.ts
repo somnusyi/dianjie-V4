@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   convertBomUsageToProductUnit,
+  convertQuantityBetweenProductUnits,
   convertQuantityToInventoryUnit,
+  isValidProductUnitFactor,
   normalizeInventoryQuantity,
+  normalizeProductUnitName,
   physicalAmountPerPackage,
   purchasePriceToInventoryUnitCost,
+  resolveProductFourUnits,
   resolveProductInventoryUnit,
 } from '../../src/services/inventoryUnits'
 
@@ -133,5 +137,64 @@ describe('inventory unit normalization', () => {
       purchaseUnit: '袋', inventoryUnit: '袋', inventoryUnitsPerPurchaseUnit: 1,
       status: 'PENDING', structured: false,
     })
+  })
+
+  it('resolves and converts all four units through the inventory basis', () => {
+    const product = {
+      unit: '箱',
+      purchaseUnit: '箱',
+      inventoryUnit: '瓶',
+      orderUnit: '托',
+      costUnit: '打',
+      inventoryUnitsPerPurchaseUnit: 12,
+      inventoryUnitsPerOrderUnit: 144,
+      inventoryUnitsPerCostUnit: 6,
+      unitConversionStatus: 'VERIFIED',
+    }
+    expect(resolveProductFourUnits(product)).toMatchObject({
+      purchaseUnit: '箱',
+      inventoryUnit: '瓶',
+      orderUnit: '托',
+      costUnit: '打',
+      inventoryUnitsPerPurchaseUnit: 12,
+      inventoryUnitsPerOrderUnit: 144,
+      inventoryUnitsPerCostUnit: 6,
+    })
+    expect(convertQuantityBetweenProductUnits({
+      quantity: 2,
+      source: 'order',
+      target: 'cost',
+      product,
+    })).toMatchObject({
+      status: 'CONVERTED',
+      normalizedQuantity: 48,
+      normalizedUnit: '打',
+      factor: 24,
+    })
+  })
+
+  it('uses deterministic legacy factor compatibility without reading the specification', () => {
+    expect(resolveProductFourUnits({
+      unit: '箱',
+      inventoryUnit: '瓶',
+      inventoryUnitsPerPurchaseUnit: 12,
+    })).toMatchObject({
+      purchaseUnit: '箱',
+      orderUnit: '箱',
+      costUnit: '箱',
+      inventoryUnitsPerPurchaseUnit: 12,
+      inventoryUnitsPerOrderUnit: 12,
+      inventoryUnitsPerCostUnit: 12,
+    })
+  })
+
+  it('validates unit names and finite positive six-decimal factors', () => {
+    expect(normalizeProductUnitName('  瓶  ')).toBe('瓶')
+    expect(() => normalizeProductUnitName('   ')).toThrow('单位名不能为空')
+    expect(() => normalizeProductUnitName('12345678901234567')).toThrow('不能超过 16 个字符')
+    expect(isValidProductUnitFactor(0.000001)).toBe(true)
+    expect(isValidProductUnitFactor(0.0000001)).toBe(false)
+    expect(isValidProductUnitFactor(0)).toBe(false)
+    expect(isValidProductUnitFactor(Number.POSITIVE_INFINITY)).toBe(false)
   })
 })

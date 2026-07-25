@@ -8,9 +8,29 @@ export type InventoryUnitNormalization = {
 
 export type ProductInventoryUnitLike = {
   unit: string
+  purchaseUnit?: string | null
   inventoryUnit?: string | null
+  orderUnit?: string | null
+  costUnit?: string | null
   inventoryUnitsPerPurchaseUnit?: number | string | { toString(): string } | null
+  inventoryUnitsPerOrderUnit?: number | string | { toString(): string } | null
+  inventoryUnitsPerCostUnit?: number | string | { toString(): string } | null
   unitConversionStatus?: 'PENDING' | 'INFERRED' | 'VERIFIED' | string | null
+}
+
+export type ProductUnitRole = 'purchase' | 'inventory' | 'order' | 'cost'
+
+export type ResolvedProductFourUnits = {
+  legacyUnit: string
+  purchaseUnit: string
+  inventoryUnit: string
+  orderUnit: string
+  costUnit: string
+  inventoryUnitsPerPurchaseUnit: number
+  inventoryUnitsPerOrderUnit: number
+  inventoryUnitsPerCostUnit: number
+  status: 'PENDING' | 'INFERRED' | 'VERIFIED'
+  structured: Record<Exclude<ProductUnitRole, 'inventory'>, boolean>
 }
 
 export type ResolvedProductInventoryUnit = {
@@ -20,6 +40,10 @@ export type ResolvedProductInventoryUnit = {
   status: 'PENDING' | 'INFERRED' | 'VERIFIED'
   structured: boolean
 }
+
+export const PRODUCT_UNIT_NAME_MAX_LENGTH = 16
+export const PRODUCT_UNIT_FACTOR_MAX_DECIMAL_PLACES = 6
+export const PRODUCT_UNIT_FACTOR_MAX = 999_999_999_999.999999
 
 const MASS_TO_GRAMS: Record<string, number> = {
   g: 1,
@@ -74,9 +98,114 @@ function amountToBase(value: number, unit: string) {
   return null
 }
 
-function positiveNumber(value: unknown) {
+function hasAtMostSixDecimalPlaces(value: unknown) {
+  const match = String(value).trim().match(/^[+-]?\d+(?:\.(\d+))?(?:e([+-]?\d+))?$/i)
+  if (!match) return false
+  const fractionLength = match[1]?.length || 0
+  const exponent = Number(match[2] || 0)
+  return Math.max(0, fractionLength - exponent) <= PRODUCT_UNIT_FACTOR_MAX_DECIMAL_PLACES
+}
+
+export function isValidProductUnitFactor(value: unknown): boolean {
   const number = Number(value)
-  return Number.isFinite(number) && number > 0 ? number : null
+  return Number.isFinite(number)
+    && number > 0
+    && number <= PRODUCT_UNIT_FACTOR_MAX
+    && hasAtMostSixDecimalPlaces(value)
+}
+
+function positiveNumber(value: unknown) {
+  return isValidProductUnitFactor(value) ? Number(value) : null
+}
+
+export function normalizeProductUnitName(value: unknown): string {
+  const unit = String(value ?? '').trim()
+  if (!unit) throw new Error('单位名不能为空')
+  if (unit.length > PRODUCT_UNIT_NAME_MAX_LENGTH) {
+    throw new Error(`单位名不能超过 ${PRODUCT_UNIT_NAME_MAX_LENGTH} 个字符`)
+  }
+  return unit
+}
+
+function optionalValidUnit(value: unknown): string | null {
+  const unit = String(value ?? '').trim()
+  return unit && unit.length <= PRODUCT_UNIT_NAME_MAX_LENGTH ? unit : null
+}
+
+function conversionStatus(value: unknown): ResolvedProductFourUnits['status'] {
+  const rawStatus = String(value || 'PENDING')
+  return rawStatus === 'VERIFIED' ? 'VERIFIED' : rawStatus === 'INFERRED' ? 'INFERRED' : 'PENDING'
+}
+
+/**
+ * Resolve all four master-data units. Every factor means:
+ * `1 corresponding unit = factor inventory units`.
+ *
+ * Missing V5 fields use only deterministic legacy compatibility values. No
+ * specification text or historical document is inspected or guessed.
+ */
+export function resolveProductFourUnits(product: ProductInventoryUnitLike): ResolvedProductFourUnits {
+  const legacyUnit = optionalValidUnit(product.unit) || ''
+  const purchaseUnit = optionalValidUnit(product.purchaseUnit) || legacyUnit
+  const inventoryUnit = optionalValidUnit(product.inventoryUnit) || legacyUnit
+  const orderUnit = optionalValidUnit(product.orderUnit) || legacyUnit
+  const costUnit = optionalValidUnit(product.costUnit) || legacyUnit
+  const purchaseFactor = positiveNumber(product.inventoryUnitsPerPurchaseUnit)
+  const orderFactor = positiveNumber(product.inventoryUnitsPerOrderUnit)
+  const costFactor = positiveNumber(product.inventoryUnitsPerCostUnit)
+
+  return {
+    legacyUnit,
+    purchaseUnit,
+    inventoryUnit,
+    orderUnit,
+    costUnit,
+    inventoryUnitsPerPurchaseUnit: purchaseFactor || 1,
+    inventoryUnitsPerOrderUnit: orderFactor || purchaseFactor || 1,
+    inventoryUnitsPerCostUnit: costFactor || purchaseFactor || 1,
+    status: conversionStatus(product.unitConversionStatus),
+    structured: {
+      purchase: Boolean(optionalValidUnit(product.inventoryUnit) && purchaseFactor),
+      order: Boolean(optionalValidUnit(product.inventoryUnit) && orderFactor),
+      cost: Boolean(optionalValidUnit(product.inventoryUnit) && costFactor),
+    },
+  }
+}
+
+function factorForRole(contract: ResolvedProductFourUnits, role: ProductUnitRole): number {
+  if (role === 'purchase') return contract.inventoryUnitsPerPurchaseUnit
+  if (role === 'order') return contract.inventoryUnitsPerOrderUnit
+  if (role === 'cost') return contract.inventoryUnitsPerCostUnit
+  return 1
+}
+
+function unitForRole(contract: ResolvedProductFourUnits, role: ProductUnitRole): string {
+  if (role === 'purchase') return contract.purchaseUnit
+  if (role === 'order') return contract.orderUnit
+  if (role === 'cost') return contract.costUnit
+  return contract.inventoryUnit
+}
+
+/** Convert a quantity between named roles through the inventory-unit basis. */
+export function convertQuantityBetweenProductUnits(input: {
+  quantity: number
+  source: ProductUnitRole
+  target: ProductUnitRole
+  product: ProductInventoryUnitLike
+}): InventoryUnitNormalization {
+  const contract = resolveProductFourUnits(input.product)
+  const normalizedUnit = unitForRole(contract, input.target)
+  if (!Number.isFinite(input.quantity)) {
+    return { status: 'PENDING', normalizedQuantity: null, normalizedUnit, factor: null, note: '数量无效' }
+  }
+  const factor = factorForRole(contract, input.source) / factorForRole(contract, input.target)
+  return {
+    status: factor === 1 ? 'EXACT' : 'CONVERTED',
+    normalizedQuantity: input.quantity * factor,
+    normalizedUnit,
+    factor,
+    note: `按四单位主数据 ${unitForRole(contract, input.source)} → ${normalizedUnit} 换算`,
+  }
 }
 
 /**
@@ -87,27 +216,19 @@ function positiveNumber(value: unknown) {
  * master data has been verified.
  */
 export function resolveProductInventoryUnit(product: ProductInventoryUnitLike): ResolvedProductInventoryUnit {
-  const purchaseUnit = String(product.unit || '').trim()
-  const configuredUnit = String(product.inventoryUnit || '').trim()
-  const configuredFactor = positiveNumber(product.inventoryUnitsPerPurchaseUnit)
-  const rawStatus = String(product.unitConversionStatus || 'PENDING')
-  const status: ResolvedProductInventoryUnit['status'] = rawStatus === 'VERIFIED'
-    ? 'VERIFIED'
-    : rawStatus === 'INFERRED'
-      ? 'INFERRED'
-      : 'PENDING'
-  if (configuredUnit && configuredFactor) {
+  const contract = resolveProductFourUnits(product)
+  if (contract.structured.purchase) {
     return {
-      purchaseUnit,
-      inventoryUnit: configuredUnit,
-      inventoryUnitsPerPurchaseUnit: configuredFactor,
-      status,
+      purchaseUnit: contract.purchaseUnit,
+      inventoryUnit: contract.inventoryUnit,
+      inventoryUnitsPerPurchaseUnit: contract.inventoryUnitsPerPurchaseUnit,
+      status: contract.status,
       structured: true,
     }
   }
   return {
-    purchaseUnit,
-    inventoryUnit: purchaseUnit,
+    purchaseUnit: contract.purchaseUnit,
+    inventoryUnit: contract.purchaseUnit,
     inventoryUnitsPerPurchaseUnit: 1,
     status: 'PENDING',
     structured: false,
@@ -122,6 +243,7 @@ export function convertQuantityToInventoryUnit(input: {
   productSpec?: string | null
 }): InventoryUnitNormalization {
   const contract = resolveProductInventoryUnit(input.product)
+  const fourUnits = resolveProductFourUnits(input.product)
   const sourceUnit = cleanUnit(input.sourceUnit)
   const inventoryUnit = cleanUnit(contract.inventoryUnit)
   const purchaseUnit = cleanUnit(contract.purchaseUnit)
@@ -144,6 +266,24 @@ export function convertQuantityToInventoryUnit(input: {
       normalizedUnit: contract.inventoryUnit,
       factor: contract.inventoryUnitsPerPurchaseUnit,
       note: `按主数据 1${contract.purchaseUnit}=${contract.inventoryUnitsPerPurchaseUnit}${contract.inventoryUnit} 换算`,
+    }
+  }
+  if (sourceUnit === cleanUnit(fourUnits.orderUnit) && fourUnits.structured.order) {
+    return {
+      status: 'CONVERTED',
+      normalizedQuantity: input.quantity * fourUnits.inventoryUnitsPerOrderUnit,
+      normalizedUnit: fourUnits.inventoryUnit,
+      factor: fourUnits.inventoryUnitsPerOrderUnit,
+      note: `按主数据 1${fourUnits.orderUnit}=${fourUnits.inventoryUnitsPerOrderUnit}${fourUnits.inventoryUnit} 换算`,
+    }
+  }
+  if (sourceUnit === cleanUnit(fourUnits.costUnit) && fourUnits.structured.cost) {
+    return {
+      status: 'CONVERTED',
+      normalizedQuantity: input.quantity * fourUnits.inventoryUnitsPerCostUnit,
+      normalizedUnit: fourUnits.inventoryUnit,
+      factor: fourUnits.inventoryUnitsPerCostUnit,
+      note: `按主数据 1${fourUnits.costUnit}=${fourUnits.inventoryUnitsPerCostUnit}${fourUnits.inventoryUnit} 换算`,
     }
   }
 

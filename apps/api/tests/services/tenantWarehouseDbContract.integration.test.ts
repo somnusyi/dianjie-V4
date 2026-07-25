@@ -266,4 +266,55 @@ describe('tenant warehouse database contract (integration)', () => {
     )
     expect(constraints.every(row => row.convalidated)).toBe(true)
   })
+
+  it('serializes concurrent legacy stock writes without diverging the bridge balance', async () => {
+    const before = await prisma.warehouseStock.findFirstOrThrow({
+      where: {
+        tenantId: tenantAId,
+        warehouseId: warehouseAId,
+        productId: productAId,
+      },
+    })
+
+    await Promise.all([
+      prisma.product.update({
+        where: { id: productAId },
+        data: { stock: new Prisma.Decimal('10.25') },
+      }),
+      prisma.product.update({
+        where: { id: productAId },
+        data: { stock: new Prisma.Decimal('11.75') },
+      }),
+    ])
+
+    const [product, stock] = await Promise.all([
+      prisma.product.findUniqueOrThrow({ where: { id: productAId } }),
+      prisma.warehouseStock.findUniqueOrThrow({ where: { id: before.id } }),
+    ])
+    expect(stock.physicalQty.equals(product.stock)).toBe(true)
+    expect(stock.rowVersion).toBe(before.rowVersion + 2)
+  })
+
+  it('retains future multi-warehouse balances at three-decimal precision', async () => {
+    const futureWarehouse = await prisma.warehouse.create({
+      data: {
+        tenantId: tenantAId,
+        code: 'future-secondary',
+        name: '未来扩展仓',
+      },
+    })
+    const balance = await prisma.warehouseStock.create({
+      data: {
+        tenantId: tenantAId,
+        warehouseId: futureWarehouse.id,
+        productId: productAId,
+        physicalQty: new Prisma.Decimal('1.234'),
+      },
+    })
+
+    expect(balance.physicalQty.toFixed(3)).toBe('1.234')
+    expect(await prisma.warehouse.count({
+      where: { tenantId: tenantAId, isDefault: true },
+    })).toBe(1)
+  })
 })

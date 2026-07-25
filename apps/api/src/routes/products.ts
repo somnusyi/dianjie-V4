@@ -14,7 +14,7 @@ import { createSupplierStockBatchIncrease } from '../services/supplierStockBatch
 import { fireAndForget } from '../services/notify'
 import {
   fireAndForgetNotifyProductChange,
-  ProductChangeAction,
+  type ProductChangeAction,
 } from '../services/notify/productChange'
 import crypto from 'crypto'
 
@@ -80,6 +80,7 @@ const productCreateSchema = z.object({
 export const productListFilterSchema = z.object({
   category: z.string().trim().max(40).optional(),
   categoryId: z.string().trim().optional(),
+  supplierId: z.string().trim().min(1).max(64).optional(),
   status: z.preprocess(
     value => value === '' ? undefined : value,
     z.enum(['PENDING_APPROVAL', 'PENDING_DISABLE', 'ENABLED', 'DISABLED']).optional(),
@@ -137,6 +138,20 @@ function buildProductChangeSummary(record: any, fields: string[]): Record<string
   return summary
 }
 
+function productFieldEquals(current: unknown, requested: unknown): boolean {
+  if (current === requested) return true
+  if (current == null || requested == null) return current == null && requested == null
+  if (current instanceof Date || requested instanceof Date) {
+    const currentTime = current instanceof Date ? current.getTime() : new Date(String(current)).getTime()
+    const requestedTime = requested instanceof Date ? requested.getTime() : new Date(String(requested)).getTime()
+    return Number.isFinite(currentTime) && currentTime === requestedTime
+  }
+  if (typeof current === 'object' && current !== null && 'toString' in current) {
+    return String(current) === String(requested)
+  }
+  return false
+}
+
 function resolveProductChangeAction(data: any): ProductChangeAction {
   if (data.status === 'DISABLED') return 'DISABLE'
   if (data.status === 'ENABLED') return 'ENABLE'
@@ -177,10 +192,13 @@ export async function buildProductListWhere(req: any): Promise<{ where?: any; fi
   if (!parsedFilters.success) {
     return { error: { statusCode: 400, message: parsedFilters.error.issues[0].message } }
   }
-  const { category, categoryId, status, q } = parsedFilters.data as any
+  const { category, categoryId, supplierId: requestedSupplierId, status, q } = parsedFilters.data as any
   const { tenantId, role, supplierId } = req.user
   const where: any = { tenantId }
   if (status) where.status = status
+  if (requestedSupplierId && !isSupplierRole(role) && !isStoreScoped(role)) {
+    where.supplierId = requestedSupplierId
+  }
 
   // categoryId 显式解析为分类名；未找到则报错，不能静默忽略
   if (categoryId) {
@@ -402,11 +420,10 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   // 集团方写权限 + 供应商所有角色都可改/建自己 SKU
   const PRODUCT_WRITE_ROLES = new Set([
     'ADMIN', 'SUPER_ADMIN', 'PURCHASER',
-    'CHEF_DIRECTOR',                       // BUG#10: 总厨是 SKU 主管理人
     'SUPPLY_CHAIN', // 内部供应链直接维护商品
     'SUPPLIER_OWNER', 'SUPPLIER_STAFF', 'SUPPLIER_SUB',
   ])
-  const UNIT_GOVERNANCE_ROLES = new Set(['ADMIN', 'SUPER_ADMIN', 'CHEF_DIRECTOR', 'SUPPLY_CHAIN'])
+  const UNIT_GOVERNANCE_ROLES = new Set(['ADMIN', 'SUPER_ADMIN', 'SUPPLY_CHAIN'])
 
   /** 当前租户/供应商实际使用的分类主数据，供筛选和下拉选择。 */
   app.get('/categories', auth(app), async (req: any, reply: any) => {
@@ -938,8 +955,10 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     }
     if (!data.code) data.code = autoCode(data.supplierId)
     if (!data.category) data.category = '其他'
-    // 内部供应链直接生效：未指定状态时默认上架
-    if (role === 'SUPPLY_CHAIN' && !data.status) data.status = 'ENABLED'
+    // 内部供应链不进入任何待审批状态；新增商品默认直接上架，也允许明确建为停用。
+    if (role === 'SUPPLY_CHAIN') {
+      data.status = data.status === 'DISABLED' ? 'DISABLED' : 'ENABLED'
+    }
     if (isSupplierRole(role)) {
       const existingCategory = await prisma.supplierProductCategory.findUnique({
         where: { tenantId_supplierId_name: { tenantId, supplierId: userSupplierId!, name: data.category } },
@@ -978,6 +997,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           if (!activeCategory?.isActive) {
             throw Object.assign(new Error('商品分类状态已变化，请刷新后重试'), { statusCode: 409 })
           }
+        } else if (role === 'SUPPLY_CHAIN' && data.supplierId) {
+          await lockActiveSupplierCategory(tx, tenantId, data.supplierId, data.category)
         }
         const created = await tx.product.create({
           data: { tenantId, ...data } as any,
@@ -1469,6 +1490,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     if (isSupplierRole(role) && data.status && !['ENABLED', 'DISABLED'].includes(data.status)) {
       return reply.status(400).send({ error: '供应商不能直接设置待审批状态' })
     }
+    if (role === 'SUPPLY_CHAIN' && data.status && !['ENABLED', 'DISABLED'].includes(data.status)) {
+      return reply.status(400).send({ error: '内部供应链商品维护必须直接写入启用或停用状态' })
+    }
     if (isSupplierRole(role) && data.status === 'ENABLED') {
       const current = await prisma.product.findFirst({ where, select: { status: true } })
       if (!current) return reply.status(404).send({ error: '商品不存在或无权修改' })
@@ -1659,9 +1683,17 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         data.unitConversionVerifiedAt = data.unitConversionStatus === 'VERIFIED' ? new Date() : null
       }
     }
+    if (role === 'SUPPLY_CHAIN') {
+      for (const field of Object.keys(data)) {
+        if (productFieldEquals((before as any)[field], data[field])) delete data[field]
+      }
+      if (Object.keys(data).length === 0) return { count: 0, message: '商品已是目标状态' }
+    }
     const after = await prisma.$transaction(async tx => {
       if (isSupplierRole(role) && data.category) {
         await lockActiveSupplierCategory(tx, tenantId, supplierId!, data.category)
+      } else if (role === 'SUPPLY_CHAIN' && data.category && before.supplierId) {
+        await lockActiveSupplierCategory(tx, tenantId, before.supplierId, data.category)
       }
       let updated
       if (isSupplierRole(role) && data.status === 'ENABLED') {

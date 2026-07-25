@@ -9,6 +9,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import { BottomNav, Chip } from '@/components/v2'
+import {
+  DEFAULT_WAREHOUSE_NAME,
+  resolveWarehouseDisplayName,
+  withWarehouseParam,
+} from '@/lib/supplier-default-warehouse'
 
 type Item = {
   id: string; code: string; name: string; spec: string | null; unit: string
@@ -20,7 +25,7 @@ type Item = {
   nearestExpiry: string | null; daysToExpiry: number | null
 }
 type Page = { items: Item[]; total: number; page: number; pageSize: number; totalPages: number }
-type Summary = { inventoryMode: 'NOT_TRACKED' | 'STRICT'; inventoryActivatedAt?: string | null; totalSku: number; lowStock: number; outOfStock: number; totalValue: number; availableValue: number; reservedValue: number }
+type Summary = { inventoryMode: 'NOT_TRACKED' | 'STRICT'; inventoryActivatedAt?: string | null; totalSku: number; lowStock: number; outOfStock: number; totalValue: number; availableValue: number; reservedValue: number; warehouse?: { id: string; name: string } }
 type Category = { id?: string | null; name: string; count: number; sortOrder?: number; isActive?: boolean }
 
 const PAGE_SIZE = 50
@@ -45,7 +50,7 @@ export default function InventoryPage() {
     const params = new URLSearchParams({ page: String(pageNumber), pageSize: String(PAGE_SIZE) })
     if (searchQ.trim()) params.set('q', searchQ.trim())
     if (categoryFilter) params.set('category', categoryFilter)
-    return `/api/supplier/stock?${params}`
+    return withWarehouseParam(`/api/supplier/stock?${params}`)
   }
 
   function loadInventory() {
@@ -66,7 +71,7 @@ export default function InventoryPage() {
   }
 
   function loadReferenceData() {
-    apiFetch<Summary>('/api/supplier/stock/summary').then(setSummary).catch(() => {})
+    apiFetch<Summary>(withWarehouseParam('/api/supplier/stock/summary')).then(setSummary).catch(() => {})
     apiFetch<Category[]>('/api/products/categories').then(rows => setCategories(Array.isArray(rows) ? rows : [])).catch(() => {})
   }
   useEffect(() => { loadReferenceData() }, [])
@@ -117,7 +122,7 @@ export default function InventoryPage() {
   return (
     <div className="min-h-screen bg-bg pb-24">
       <header className="px-4 pt-4 pb-2 flex items-center gap-2 flex-wrap">
-        <h1 className="text-h1 flex-1">库存</h1>
+        <h1 className="text-h1 flex-1">库存 · {resolveWarehouseDisplayName(summary?.warehouse) || DEFAULT_WAREHOUSE_NAME}</h1>
         <a href="/v2/supplier/categories" className="px-3 py-2 bg-white border border-border rounded-cta text-button text-gray2">分类管理</a>
         <a href="/v2/supplier/inventory/import" className="px-3 py-2 bg-white border border-border rounded-cta text-button text-gray2">↥ 导入清单</a>
         <a href="/v2/supplier/inventory/inbound" className="px-3 py-2 bg-amber text-white rounded-cta text-button">↓ 入库</a>

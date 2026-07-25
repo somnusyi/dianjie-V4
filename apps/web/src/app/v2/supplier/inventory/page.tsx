@@ -19,7 +19,7 @@ type Item = {
   in7d: number; out7d: number; in30d: number; out30d: number
   nearestExpiry: string | null; daysToExpiry: number | null
 }
-type Page = { items: Item[]; total: number; page: number; pageSize: number }
+type Page = { items: Item[]; total: number; page: number; pageSize: number; totalPages: number }
 type Summary = { inventoryMode: 'NOT_TRACKED' | 'STRICT'; inventoryActivatedAt?: string | null; totalSku: number; lowStock: number; outOfStock: number; totalValue: number; availableValue: number; reservedValue: number }
 type Category = { id?: string | null; name: string; count: number; sortOrder?: number; isActive?: boolean }
 

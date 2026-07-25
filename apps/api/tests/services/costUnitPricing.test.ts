@@ -1,6 +1,10 @@
 import { Prisma } from '@dianjie/db'
 import { describe, expect, it } from 'vitest'
-import { costUnitPricedOrderLine } from '../../src/services/costUnitPricing'
+import {
+  costUnitPriceToOrderUnitPrice,
+  costUnitPricedOrderLine,
+  tryCostUnitPriceToOrderUnitPrice,
+} from '../../src/services/costUnitPricing'
 
 const product = (overrides: Record<string, unknown> = {}) => ({
   unit: '件',
@@ -164,5 +168,39 @@ describe('cost-unit purchase order pricing', () => {
       }),
       quantity: '101',
     })).toThrow('单行金额超过系统上限')
+  })
+})
+
+describe('cost-unit inventory valuation', () => {
+  it('converts the cost-unit price before valuing order-unit stock', () => {
+    const converted = costUnitPriceToOrderUnitPrice(product({
+      unit: '斤',
+      purchaseUnit: '箱',
+      inventoryUnit: 'g',
+      orderUnit: '斤',
+      costUnit: 'g',
+      inventoryUnitsPerPurchaseUnit: '10000',
+      inventoryUnitsPerOrderUnit: '500',
+      inventoryUnitsPerCostUnit: '1',
+      unitConversionStatus: 'VERIFIED',
+      price: '0.02',
+    }))
+
+    expect(converted.toFixed(2)).toBe('10.00')
+  })
+
+  it('returns null instead of silently misvaluing an explicit pending contract', () => {
+    expect(tryCostUnitPriceToOrderUnitPrice(product({
+      unit: '斤',
+      purchaseUnit: '箱',
+      inventoryUnit: 'g',
+      orderUnit: '斤',
+      costUnit: 'g',
+      inventoryUnitsPerPurchaseUnit: '10000',
+      inventoryUnitsPerOrderUnit: '500',
+      inventoryUnitsPerCostUnit: '1',
+      unitConversionStatus: 'PENDING',
+      price: '0.02',
+    }))).toBeNull()
   })
 })

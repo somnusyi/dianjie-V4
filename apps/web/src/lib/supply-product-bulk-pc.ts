@@ -23,6 +23,7 @@ export type BatchStatusPreview = {
   recent28DayOrders: number
   recent28DayOrderLines: number
   physicalStockValue: number
+  valuationPendingSku?: number
   sample: Array<{ id: string; name: string; stock: number; reserved: number }>
 }
 
@@ -111,6 +112,9 @@ export function formatBatchStatusPreviewSummary(impact: BatchStatusPreview): str
       : '当前没有有效订单预占。',
     `近 28 天涉及 ${impact.recent28DayOrders} 张订货单。`,
   ]
+  if ((impact.valuationPendingSku || 0) > 0) {
+    lines.push(`${impact.valuationPendingSku} 个四单位待核验 SKU 暂未计入货值。`)
+  }
   return lines.join('\n')
 }
 

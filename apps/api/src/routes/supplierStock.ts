@@ -24,6 +24,7 @@ import {
   DEFAULT_WAREHOUSE_META,
   requireDefaultWarehouse,
 } from '../services/defaultWarehouse'
+import { tryCostUnitPriceToOrderUnitPrice } from '../services/costUnitPricing'
 
 const auth = (app: any) => ({
   preHandler: [app.authenticate, requireDefaultWarehouse],
@@ -203,6 +204,9 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
         select: {
           id: true, code: true, name: true, spec: true, unit: true, category: true,
           stock: true, minStock: true, price: true, shelfDays: true,
+          purchaseUnit: true, inventoryUnit: true, orderUnit: true, costUnit: true,
+          inventoryUnitsPerPurchaseUnit: true, inventoryUnitsPerOrderUnit: true,
+          inventoryUnitsPerCostUnit: true, unitConversionStatus: true,
         },
       }),
     ])
@@ -252,12 +256,15 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       const status = availability.availableStock <= 0 ? 'OUT' : availability.availableStock < minStock ? 'LOW' : 'OK'
       const exp = nearestExpiry.get(p.id) || null
       const daysToExpiry = exp ? Math.ceil((exp.getTime() - Date.now()) / 86400_000) : null
+      const orderUnitPrice = tryCostUnitPriceToOrderUnitPrice(p)
       return {
         ...p,
         stock,
         ...availability,
         minStock,
         price: Number(p.price),
+        orderUnitPrice: orderUnitPrice === null ? null : Number(orderUnitPrice),
+        valuationStatus: orderUnitPrice === null ? 'PENDING' : 'VALUED',
         statusFlag: status,
         in7d: stat.in7, out7d: stat.out7,
         in30d: stat.in30, out30d: stat.out30,
@@ -282,7 +289,12 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       }),
       prisma.product.findMany({
         where: { tenantId: ctx.tenantId, supplierId: ctx.supplierId, status: 'ENABLED' },
-        select: { id: true, stock: true, minStock: true, price: true },
+        select: {
+          id: true, name: true, unit: true, stock: true, minStock: true, price: true,
+          purchaseUnit: true, inventoryUnit: true, orderUnit: true, costUnit: true,
+          inventoryUnitsPerPurchaseUnit: true, inventoryUnitsPerOrderUnit: true,
+          inventoryUnitsPerCostUnit: true, unitConversionStatus: true,
+        },
       }),
     ])
     const reservedByProduct = await getSupplierReservedStock({
@@ -291,12 +303,19 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       productIds: ps.map(product => product.id),
     })
     let totalSku = ps.length, lowStock = 0, outOfStock = 0, totalValue = 0, availableValue = 0, reservedValue = 0
+    let valuationPendingSku = 0
     for (const p of ps) {
-      const s = Number(p.stock), m = Number(p.minStock), v = Number(p.price)
+      const s = Number(p.stock), m = Number(p.minStock)
       const reserved = reservedByProduct.get(p.id) || 0
       const available = Math.max(0, s - reserved)
       if (available <= 0) outOfStock++
       else if (available < m) lowStock++
+      const orderUnitPrice = tryCostUnitPriceToOrderUnitPrice(p)
+      if (orderUnitPrice === null) {
+        valuationPendingSku++
+        continue
+      }
+      const v = Number(orderUnitPrice)
       totalValue += s * v
       availableValue += available * v
       reservedValue += reserved * v
@@ -305,6 +324,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       inventoryMode: supplier.inventoryMode,
       inventoryActivatedAt: supplier.inventoryActivatedAt,
       totalSku, lowStock, outOfStock,
+      valuationPendingSku,
       totalValue: Math.round(totalValue * 100) / 100,
       availableValue: Math.round(availableValue * 100) / 100,
       reservedValue: Math.round(reservedValue * 100) / 100,

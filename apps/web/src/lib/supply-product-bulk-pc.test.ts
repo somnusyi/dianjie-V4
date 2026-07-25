@@ -164,6 +164,24 @@ describe('batch status preview summary', () => {
     expect(summary).toContain('当前没有有效订单预占')
     expect(summary).not.toContain('已被订单占用')
   })
+
+  it('warns when pending unit contracts are excluded from valuation', () => {
+    const impact: BatchStatusPreview = {
+      requested: 2,
+      impacted: 2,
+      alreadyInTargetStatus: 0,
+      activeReservationSku: 0,
+      activeReservationQty: 0,
+      recent28DayOrders: 0,
+      recent28DayOrderLines: 0,
+      physicalStockValue: 20,
+      valuationPendingSku: 1,
+      sample: [],
+    }
+    expect(formatBatchStatusPreviewSummary(impact)).toContain(
+      '1 个四单位待核验 SKU 暂未计入货值',
+    )
+  })
 })
 
 describe('batch success notice', () => {

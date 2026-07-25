@@ -20,6 +20,7 @@ import {
   isValidProductUnitFactor,
   PRODUCT_UNIT_NAME_MAX_LENGTH,
 } from '../services/inventoryUnits'
+import { tryCostUnitPriceToOrderUnitPrice } from '../services/costUnitPricing'
 import crypto from 'crypto'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
@@ -779,7 +780,12 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     }
     const products = await prisma.product.findMany({
       where,
-      select: { id: true, name: true, status: true, stock: true, price: true },
+      select: {
+        id: true, name: true, status: true, unit: true, stock: true, price: true,
+        purchaseUnit: true, inventoryUnit: true, orderUnit: true, costUnit: true,
+        inventoryUnitsPerPurchaseUnit: true, inventoryUnitsPerOrderUnit: true,
+        inventoryUnitsPerCostUnit: true, unitConversionStatus: true,
+      },
       orderBy: { name: 'asc' },
     })
     if (products.length !== uniqueIds.length) {
@@ -806,7 +812,16 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     ])
     const reservedByProduct = new Map(reservations.map(row => [row.productId, Number(row._sum.quantity || 0)]))
     const activeReservations = [...reservedByProduct.values()].reduce((sum, quantity) => sum + quantity, 0)
-    const physicalStockValue = products.reduce((sum, product) => sum + Number(product.stock) * Number(product.price), 0)
+    let physicalStockValue = 0
+    let valuationPendingSku = 0
+    for (const product of products) {
+      const orderUnitPrice = tryCostUnitPriceToOrderUnitPrice(product)
+      if (orderUnitPrice === null) {
+        valuationPendingSku++
+        continue
+      }
+      physicalStockValue += Number(product.stock) * Number(orderUnitPrice)
+    }
     const impacted = products.filter(product =>
       parsed.data.status === 'DISABLED' ? product.status === 'ENABLED' : product.status === 'DISABLED'
     )
@@ -819,6 +834,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       recent28DayOrders: new Set(recentOrderLines.map(line => line.purchaseOrderId)).size,
       recent28DayOrderLines: recentOrderLines.length,
       physicalStockValue: Number(physicalStockValue.toFixed(2)),
+      valuationPendingSku,
       sample: impacted.slice(0, 10).map(product => ({
         id: product.id,
         name: product.name,

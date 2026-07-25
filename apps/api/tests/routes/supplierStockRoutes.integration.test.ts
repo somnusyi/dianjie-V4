@@ -61,7 +61,15 @@ describe('supplier stock routes — isolation & pagination (integration)', () =>
     userB = uB.id
 
     const [pA1, pA2, pB1] = await Promise.all([
-      prisma.product.create({ data: { tenantId: tenantA, supplierId: supplierA, code: `A1-${suffix}`, name: '供应商 A 鲜菌', category: '菌菇', price: 10, stock: 5 } }),
+      prisma.product.create({
+        data: {
+          tenantId: tenantA, supplierId: supplierA, code: `A1-${suffix}`,
+          name: '供应商 A 鲜菌', category: '菌菇', price: 0.02, stock: 5, unit: '斤',
+          purchaseUnit: '箱', inventoryUnit: 'g', orderUnit: '斤', costUnit: 'g',
+          inventoryUnitsPerPurchaseUnit: 10000, inventoryUnitsPerOrderUnit: 500,
+          inventoryUnitsPerCostUnit: 1, unitConversionStatus: 'VERIFIED',
+        },
+      }),
       prisma.product.create({ data: { tenantId: tenantA, supplierId: supplierA, code: `A2-${suffix}`, name: '供应商 A 蔬菜', category: '蔬菜', price: 5, stock: 0 } }),
       prisma.product.create({ data: { tenantId: tenantB, supplierId: supplierB, code: `B1-${suffix}`, name: '供应商 B 鲜菌', category: '菌菇', price: 12, stock: 20 } }),
     ])
@@ -116,6 +124,11 @@ describe('supplier stock routes — isolation & pagination (integration)', () =>
     expect(ids.has(productA2)).toBe(true)
     expect(ids.has(productB1)).toBe(false)
     expect(items.every((item: any) => item.warehouseId === 'default')).toBe(true)
+    expect(items.find((item: any) => item.id === productA1)).toMatchObject({
+      price: 0.02,
+      orderUnitPrice: 10,
+      valuationStatus: 'VALUED',
+    })
   })
 
   it('supplier B sees only their own products, not supplier A', async () => {
@@ -144,6 +157,8 @@ describe('supplier stock routes — isolation & pagination (integration)', () =>
     const sumA = resA.json()
     expect(sumA.totalSku).toBe(2)
     expect(sumA.outOfStock).toBe(1)
+    expect(sumA.totalValue).toBe(50)
+    expect(sumA.valuationPendingSku).toBe(0)
     expect(sumA.warehouse).toEqual({ id: 'default', name: '默认仓' })
 
     const resB = await app.inject({ method: 'GET', url: '/api/supplier/stock/summary', headers: actorHeaders('ownerB') })

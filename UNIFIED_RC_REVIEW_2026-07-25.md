@@ -1,6 +1,6 @@
 # 滇界 V4 统一发布候选审计
 
-更新时间：2026-07-26 06:57 CST
+更新时间：2026-07-26 07:23 CST
 
 ## 结论
 
@@ -516,3 +516,50 @@ Qwen 工作区自己生成的 451 MiB 未跟踪 pnpm store 和 Kimi 工作区本
   `Product.stock` 兼容期双写/核对开始；供应链手工入库更正与门店收货更正必须拆成两条
   独立状态机。任何 schema 仍需隔离空库 deploy/status/diff 和历史样本复验。
 - 生产 gate 保持 `LOCKED`；未合并 main、未建 PR、未部署、未写生产或运行生产脚本。
+
+## V5 内部供应链第十三条审计列车（2026-07-26 07:23）
+
+本列纠正上一列两个高风险草稿，并把仓库 schema 与兼容写路径分成独立门禁。两份设计
+报告经语义修正后进入统一 RC；真实 schema 形成远端 feature 候选，但因没有隔离
+PostgreSQL，明确不集成。
+
+### 已集成的审计合同
+
+| 合同 | feature 精确提交 | 统一 RC 提交 | 结论 |
+| --- | --- | --- | --- |
+| 入库/收货更正拆分 | `a9ac63467b73036343744d6c46907a1d3cf62285`、`426ba0fc60f6fb29509067dfb389dfb69e65d22c` | `b637b186`、`c75edb64` | 供应链手工入库更正与门店实收更正独立；门店修正不恢复供应链仓存；SUPPLY_CHAIN 管仓，总厨无更正写权限 |
+| 仓库兼容写路径审计 | `0e0d3eb84c55087f376a28c70f539593365e7a68`、`95680d5a10e97d1281947aecb7460a63311fcc5a` | `54950bbb`、`bad38970` | 枚举期初、入库、调整、报损、快照、预占、释放、发货和读取路径，冻结 tenant 默认仓切换门禁与测试矩阵 |
+
+Kimi 原 runner 产物把两个更正流程重新耦合且授予了错误角色；总管修正角色和库存边界，
+并把 rollback 限定为 migration deploy/status/diff 与人工 SQL，不允许 `db push/reset`。
+Qwen 原报告 494 行并把 API 别名 `default` 错当真实仓主键，还只回填有 supplier 的商品；
+最终压缩为 140 行，以真实 tenant 仓 ID、所有 Product、同 tenant 复合外键和逐 writer
+门禁为准。两个原 FAILED run 均保留，控制面只在修正提交通过报告合同后人工验收。
+
+### 未集成的 schema 候选
+
+- `1f606d9db5d950b999199f1fd6955b8afe3923eb` 在
+  `feature/20260726-tenant-warehouse-codex` 新增 tenant 级 `Warehouse`、
+  `WarehouseStock`、五类配送/库存事实的真实 warehouse 关系、确定性历史回填、同 tenant
+  复合外键、单默认仓与同仓商品余额唯一约束。
+- 兼容期只允许 `Product.stock → WarehouseStock.physicalQty` 单向触发器；新 tenant
+  自动建立默认仓，旧 writer 只在 warehouseId 为 NULL 时补默认仓，显式跨 tenant 值由
+  外键拒绝。rollback 会移除所有兼容触发器、约束、索引和新表。
+- 静态合同 4/4、Prisma validate/generate、API build、两个测试文件 TypeScript 编译、
+  `git diff --check` 和高置信敏感信息检查通过，feature 已推送且工作树干净。
+- 本机 Docker CLI 存在但守护进程不可用，也没有可用 `_test/_ci` PostgreSQL；因此
+  `tenantWarehouseDbContract.integration.test.ts`、空库/历史样本
+  `migrate deploy/status/diff` 和 rollback 演练均未执行。按 schema 门禁，该提交保持
+  `BLOCKED` 且不进入统一 RC。
+
+### 当前门禁
+
+- 第十二列运行时代码在当前 RC 上继续保持 API 单元 42 文件、358/358 与 API build
+  通过；本列集成内容仅为报告，不改变 API/Web/schema。
+- 原按 supplier 建仓的脏工作区、错误更正报告提交和两个 runner FAILED 状态均保留为
+  证据，没有删除或覆盖。
+- 下一步必须先提供隔离 PostgreSQL，执行仓库 migration 的空库、历史样本、约束、
+  并发、rollback 和 migrations-to-schema diff；通过后才重新审查
+  `1f606d9d`，不得以静态编译代替数据库验收。
+- 生产 gate 保持 `LOCKED`；未合并或直推 main、未创建 PR、未部署、未写生产、未执行
+  一次性数据脚本，也未读取或修改凭证与业务 xlsx。

@@ -1694,3 +1694,36 @@
 - 仓库改为 tenant 级唯一默认仓，先设计兼容期双写/核对，再做 schema 与隔离空库复验。
 - 手工入库更正与门店收货更正拆成两条状态机；门店实收修正不能自动恢复供应链仓库存。
 - 生产 gate 继续 LOCKED，不合并 main、不建 PR、不部署、不写生产。
+
+## 2026-07-26 07:23 V5 第十三条审计列车
+
+### 已集成
+
+- `b637b186`、`c75edb64`（feature 最终 `426ba0fc`）：把供应链手工入库更正与门店
+  收货更正拆成独立状态机。门店实收修正只影响门店库存、配送差异和后续应付，不恢复
+  供应链仓库存；SUPPLY_CHAIN 管仓，总厨不获得更正写权限。
+- `54950bbb`、`bad38970`（feature 最终 `95680d5a`）：逐文件冻结 Product.stock、
+  批次、预占、流水、发货与读取路径的默认仓兼容门禁和测试矩阵；真实仓按 tenant 建模，
+  API `default` 仅为别名，不是跨 tenant 共用主键。
+- 两个 runner 的原始错误报告与 FAILED 状态保留；总管纠正语义、通过报告合同、
+  `git diff --check` 和敏感信息检查后才集成。
+
+### 已推送但未集成
+
+- `1f606d9d`：tenant 级 `Warehouse` / `WarehouseStock` schema 与单一 migration 候选，
+  包含所有 Product 的确定性余额初始化、五类事实 warehouseId、同 tenant 复合外键、
+  单默认仓约束、Product → WarehouseStock 单向兼容桥和完整 rollback。
+- 静态合同 4/4、Prisma validate/generate、API build、测试 TypeScript 编译、diff 和
+  敏感信息检查通过；feature 远端 SHA 已核对，工作树干净。
+- 本机无可用隔离 PostgreSQL，Docker 守护进程不可用，所以数据库 integration、
+  空库/历史样本 migrate deploy/status/diff、并发约束及 rollback 均未执行。schema
+  任务保持 BLOCKED，提交不得进入统一 RC。
+
+### 后续门禁
+
+- 恢复隔离 `_test/_ci` PostgreSQL 后，先验收 `1f606d9d` 的迁移链、触发器、跨 tenant
+  外键、历史回填、回滚与 schema diff，再决定是否逐提交集成。
+- 仓库 schema 通过后，按审计顺序改造 writer；供应链入库更正与门店收货更正继续独立
+  实现，不运行真实数据修正脚本。
+- 生产 gate 保持 LOCKED；不合并 main、不建 PR、不部署、不写生产、不触碰凭证或业务
+  xlsx。

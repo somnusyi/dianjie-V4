@@ -285,7 +285,10 @@ export default function ChefPONewPage() {
                       {p?.name || it.productId}
                       {p?.spec && <span className="text-micro text-gray3 ml-1">· {p.spec}</span>}
                     </div>
-                    <div className="text-micro text-gray3">¥{it.unitPrice.toFixed(2)} / {p?.unit || '件'}{p && Number(p.minOrderQty || 1) > 1 && <span className="text-amber-fg ml-1">· 起订 {moq(p)}</span>}</div>
+                    <div className="text-micro text-gray3">
+                      {p?.code && <span className="mr-1">#{p.code}</span>}
+                      ¥{it.unitPrice.toFixed(2)} / {p?.unit || '件'}{p && Number(p.minOrderQty || 1) > 1 && <span className="text-amber-fg ml-1">· 起订 {moq(p)}</span>}
+                    </div>
                   </div>
                   <input
                     type="number"
@@ -406,6 +409,7 @@ export default function ChefPONewPage() {
                     <div className="flex-1 min-w-0">
                       <div className="text-body truncate flex items-center gap-1 flex-wrap">
                         <span>{p.name}</span>
+                        {p.code && <span className="text-micro text-gray3">#{p.code}</span>}
                         {p.spec && <span className="text-micro text-gray3">· {p.spec}</span>}
                         {statusChip && (
                           <span className={`text-micro px-1.5 py-0.5 rounded-chip whitespace-nowrap ${statusChip.cls}`}>{statusChip.label}</span>

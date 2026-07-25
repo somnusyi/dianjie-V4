@@ -198,12 +198,12 @@ export function Field({ label, children, required, error }: { label: string; chi
   )
 }
 
-export function Input({ value, onChange, placeholder, type = 'text', disabled, error }: {
-  value: string | number; onChange: (v: string) => void; placeholder?: string; type?: string; disabled?: boolean; error?: boolean
+export function Input({ value, onChange, placeholder, type = 'text', disabled, readOnly, error }: {
+  value: string | number; onChange: (v: string) => void; placeholder?: string; type?: string; disabled?: boolean; readOnly?: boolean; error?: boolean
 }) {
   return (
-    <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} type={type} disabled={disabled}
-      style={{ width: '100%', border: `1.5px solid ${error ? '#dc2626' : '#e5e7eb'}`, borderRadius: 7, padding: '8px 10px', fontSize: 13, outline: 'none', boxSizing: 'border-box', background: disabled ? '#f9fafb' : '#fff' }} />
+    <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} type={type} disabled={disabled} readOnly={readOnly}
+      style={{ width: '100%', border: `1.5px solid ${error ? '#dc2626' : '#e5e7eb'}`, borderRadius: 7, padding: '8px 10px', fontSize: 13, outline: 'none', boxSizing: 'border-box', background: disabled || readOnly ? '#f9fafb' : '#fff' }} />
   )
 }
 

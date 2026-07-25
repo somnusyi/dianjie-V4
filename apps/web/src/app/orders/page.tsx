@@ -5,6 +5,11 @@ import AppLayout from '@/components/AppLayout'
 import { Table, Btn, Modal, Field, Input, Select, fmt, fmtDate, useToast, Pagination } from '@/components/ui'
 import api from '@/lib/api'
 import { clientRequestId } from '@/lib/client-id'
+import {
+  calculateOrderEntryLineAmount,
+  resolveOrderEntryCostPricing,
+  sumOrderEntryLineAmounts,
+} from '@/lib/order-entry-cost-pricing'
 import { canCancelLegacyOrder, validateCancelReason } from './cancel-order'
 import dayjs from 'dayjs'
 import { z } from 'zod'
@@ -21,7 +26,6 @@ const orderSchema = z.object({
 const itemSchema = z.object({
   productId: z.string().min(1, '请选择商品'),
   quantity: z.string().refine(v => Number(v) > 0, '数量必须大于 0'),
-  unitPrice: z.string().refine(v => Number(v) > 0, '单价必须大于 0'),
 })
 
 const STATUS_FLOW: Record<string, { label: string; color: string; bg: string }> = {
@@ -105,9 +109,28 @@ export default function OrdersPage() {
     }
     // 明细验证
     const itemErrors: string[] = []
+    const submitItems: Array<{ productId: string; quantity: number; unitPrice: number }> = []
     items.forEach((item, i) => {
       const r = itemSchema.safeParse(item)
       if (!r.success) itemErrors.push(`第 ${i + 1} 行：${r.error.errors[0].message}`)
+      if (!item.productId) return
+
+      const product = products.find(product => product.id === item.productId)
+      if (!product) {
+        itemErrors.push(`第 ${i + 1} 行：商品已失效，请重新选择`)
+        return
+      }
+      const pricing = resolveOrderEntryCostPricing(product)
+      if (pricing.status === 'PENDING') {
+        itemErrors.push(`第 ${i + 1} 行：${pricing.message}`)
+        return
+      }
+      submitItems.push({
+        productId: item.productId,
+        quantity: Number(item.quantity),
+        // API 会权威重算；兼容字段也必须来自同一成本价折算 helper。
+        unitPrice: Number(pricing.orderUnitPrice),
+      })
     })
     if (items.length === 0) itemErrors.push('请至少添加一条采购明细')
     if (itemErrors.length) newErrors['items'] = itemErrors[0]
@@ -117,7 +140,7 @@ export default function OrdersPage() {
     try {
       await api.post('/api/orders', {
         ...form,
-        items: items.map(i => ({ productId: i.productId, quantity: Number(i.quantity), unitPrice: Number(i.unitPrice) }))
+        items: submitItems,
       })
       show('采购订单已提交给供应商')
       setCreateOpen(false)
@@ -128,7 +151,18 @@ export default function OrdersPage() {
     } catch (e: any) { show(e.response?.data?.error || '创建失败', 'error') }
   }
 
-  const totalAmt = items.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.unitPrice) || 0), 0)
+  const selectedPricing = items.map(item => {
+    const product = products.find(product => product.id === item.productId)
+    return product ? resolveOrderEntryCostPricing(product) : null
+  })
+  const hasPendingPrice = selectedPricing.some(pricing => pricing?.status === 'PENDING')
+  const lineAmounts = items.map((item, index) => {
+    const pricing = selectedPricing[index]
+    if (pricing?.status === 'PENDING') return null
+    if (!pricing || pricing.status !== 'READY') return '0.00'
+    return calculateOrderEntryLineAmount(item.quantity, pricing.orderUnitPrice) ?? '0.00'
+  })
+  const totalAmt = hasPendingPrice ? null : sumOrderEntryLineAmounts(lineAmounts)
   const isOverdue = (order: any) => dayjs().isAfter(dayjs(order.expectedDate).add(1, 'day'))
   const summary = useMemo(() => {
     const active = orders.filter(o => !['COMPLETED', 'CANCELLED'].includes(o.status))
@@ -360,15 +394,50 @@ export default function OrdersPage() {
               <Select value={item.productId} onChange={v => {
                 const next = [...items]; next[i] = { ...next[i], productId: v }
                 const p = products.find(p => p.id === v)
-                if (p) next[i].unitPrice = String(p.price)
+                if (p) {
+                  const pricing = resolveOrderEntryCostPricing(p)
+                  next[i].unitPrice = pricing.status === 'READY' ? pricing.orderUnitPrice : ''
+                  if (pricing.status === 'PENDING') show(pricing.message, 'error')
+                } else {
+                  next[i].unitPrice = ''
+                }
                 setItems(next)
-              }} options={products.map(p => ({ value: p.id, label: `${p.name} (${p.unit})` }))} placeholder="选择商品" />
+                setErrors(errors => ({ ...errors, items: '' }))
+              }} options={products.map(p => {
+                const pricing = resolveOrderEntryCostPricing(p)
+                const orderUnit = pricing.status === 'READY' ? pricing.orderUnit : (p.orderUnit || p.unit || '单位待核验')
+                return {
+                  value: p.id,
+                  label: `${p.name} (${orderUnit})${pricing.status === 'PENDING' ? ' · 价格待核验' : ''}`,
+                }
+              })} placeholder="选择商品" />
               <Input value={item.quantity} onChange={v => { const n=[...items]; n[i]={...n[i],quantity:v}; setItems(n) }} placeholder="数量" type="number" />
-              <Input value={item.unitPrice} onChange={v => { const n=[...items]; n[i]={...n[i],unitPrice:v}; setItems(n) }} placeholder="单价" type="number" />
+              <div style={{ minWidth: 170 }}>
+                <Input value={item.unitPrice} onChange={() => {}} placeholder="订货单位单价" type="number" readOnly />
+                {selectedPricing[i]?.status === 'READY' && (
+                  <>
+                    <div style={{ fontSize: 10, color: '#156b43', marginTop: 3 }}>
+                      {selectedPricing[i].unitLabel} · {selectedPricing[i].costPriceSource}
+                    </div>
+                    <div style={{ fontSize: 10, color: '#6b7280', marginTop: 2 }}>
+                      行金额：{fmt(lineAmounts[i] || '0.00')}
+                    </div>
+                  </>
+                )}
+                {selectedPricing[i]?.status === 'PENDING' && (
+                  <div style={{ fontSize: 10, color: '#dc2626', marginTop: 3 }}>
+                    {selectedPricing[i].message}
+                  </div>
+                )}
+              </div>
               <Btn size="sm" variant="danger" onClick={() => setItems(items.filter((_, idx) => idx !== i))}>删</Btn>
             </div>
           ))}
-          <div className="order-total">合计：{fmt(totalAmt)}</div>
+          <div className="order-total">
+            {hasPendingPrice
+              ? '合计：存在价格待核验商品，暂不计算'
+              : `合计：${fmt(totalAmt || '0.00')}`}
+          </div>
         </div>
         <div className="finance-modal-actions">
           <Btn onClick={() => setCreateOpen(false)}>取消</Btn>

@@ -10,12 +10,23 @@ import { useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { OrderProductImage } from '@/components/v2/order-product-image'
+import {
+  calculateOrderEntryLineAmount,
+  resolveOrderEntryCostPricing,
+  sumOrderEntryLineAmounts,
+} from '@/lib/order-entry-cost-pricing'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 
 type Supplier = { id: string; name: string; category: string | null; bankAccount: string | null }
 type Product  = { id: string; name: string; unit: string; price: string; supplierId: string | null
                   spec?: string | null; category?: string | null; code?: string
                   imageUrl?: string | null
+                  purchaseUnit?: string | null; inventoryUnit?: string | null
+                  orderUnit?: string | null; costUnit?: string | null
+                  inventoryUnitsPerPurchaseUnit?: string | number | null
+                  inventoryUnitsPerOrderUnit?: string | number | null
+                  inventoryUnitsPerCostUnit?: string | number | null
+                  unitConversionStatus?: string | null
                   minOrderQty?: string | number; stepQty?: string | number
                   stock?: string | number | null
                   physicalStock?: number; reservedStock?: number; availableStock?: number
@@ -106,6 +117,26 @@ export default function ChefPONewPage() {
     return () => clearTimeout(t)
   }, [supplierId, expectedDate, note, items])
 
+  // 商品数据到达后，把旧草稿里的兼容价格字段同步为当前订货单位价。
+  // 待核验商品保留在草稿中供用户识别和移除，但绝不改写或用于预览/提交。
+  useEffect(() => {
+    if (products.length === 0) return
+    setItems(current => {
+      let changed = false
+      const next = current.map(item => {
+        const product = products.find(product => product.id === item.productId)
+        if (!product) return item
+        const pricing = resolveOrderEntryCostPricing(product)
+        if (pricing.status === 'PENDING') return item
+        const unitPrice = Number(pricing.orderUnitPrice)
+        if (item.unitPrice === unitPrice) return item
+        changed = true
+        return { ...item, unitPrice }
+      })
+      return changed ? next : current
+    })
+  }, [products])
+
   const supplierProducts = supplierId
     ? products.filter(p => p.supplierId === supplierId)
     : products
@@ -116,7 +147,18 @@ export default function ChefPONewPage() {
     if (catFilter !== '全部' && (p.category || '其他') !== catFilter) return false
     return matchesQuery(p, searchQ)
   })
-  const total = items.reduce((s, i) => s + i.quantity * i.unitPrice, 0)
+  const itemPricing = items.map(item => {
+    const product = products.find(product => product.id === item.productId)
+    return product ? resolveOrderEntryCostPricing(product) : null
+  })
+  const lineAmounts = items.map((item, index) => {
+    const pricing = itemPricing[index]
+    if (!pricing || pricing.status === 'PENDING') return null
+    return calculateOrderEntryLineAmount(item.quantity, pricing.orderUnitPrice)
+  })
+  const total = itemPricing.every(pricing => pricing?.status === 'READY')
+    ? sumOrderEntryLineAmounts(lineAmounts)
+    : null
 
   // 起订量/步长 helper
   function moq(p: Product) { return Math.max(0.01, Number(p.minOrderQty || 1)) }
@@ -130,7 +172,17 @@ export default function ChefPONewPage() {
   }
   function addItem(p: Product) {
     if (items.some(i => i.productId === p.id)) return
-    setItems(prev => [...prev, { productId: p.id, quantity: moq(p), unitPrice: Number(p.price) }])
+    const pricing = resolveOrderEntryCostPricing(p)
+    if (pricing.status === 'PENDING') {
+      setError(`${pricing.message}，请联系采购核验单位换算后再加入`)
+      return
+    }
+    setError(null)
+    setItems(prev => [...prev, {
+      productId: p.id,
+      quantity: moq(p),
+      unitPrice: Number(pricing.orderUnitPrice),
+    }])
   }
   function updateItem(idx: number, patch: Partial<LineItem>) {
     setItems(items.map((it, i) => i === idx ? { ...it, ...patch } : it))
@@ -140,12 +192,22 @@ export default function ChefPONewPage() {
   }
   // 抽屉内统一调数量 (按 productId)
   function setQtyByProduct(p: Product, qty: number) {
+    if (qty <= 0) {
+      setItems(prev => prev.filter(i => i.productId !== p.id))
+      return
+    }
+    const pricing = resolveOrderEntryCostPricing(p)
+    if (pricing.status === 'PENDING') {
+      setError(`${pricing.message}，请联系采购核验单位换算后再加入`)
+      return
+    }
+    setError(null)
     setItems(prev => {
       const existing = prev.find(i => i.productId === p.id)
-      if (qty <= 0) return prev.filter(i => i.productId !== p.id)
       const snapped = snap(p, qty)
-      if (existing) return prev.map(i => i.productId === p.id ? { ...i, quantity: snapped } : i)
-      return [...prev, { productId: p.id, quantity: snapped, unitPrice: Number(p.price) }]
+      const unitPrice = Number(pricing.orderUnitPrice)
+      if (existing) return prev.map(i => i.productId === p.id ? { ...i, quantity: snapped, unitPrice } : i)
+      return [...prev, { productId: p.id, quantity: snapped, unitPrice }]
     })
   }
 
@@ -161,6 +223,29 @@ export default function ChefPONewPage() {
       setError(`以下商品已停售/待审, 请先移除: ${blocked.map(p => p.name).join('、')}`)
       return
     }
+    const submitItems: LineItem[] = []
+    const pricingProblems: string[] = []
+    for (const item of items) {
+      const product = products.find(product => product.id === item.productId)
+      if (!product) {
+        pricingProblems.push(`${item.productId}（商品信息已失效）`)
+        continue
+      }
+      const pricing = resolveOrderEntryCostPricing(product)
+      if (pricing.status === 'PENDING') {
+        pricingProblems.push(product.name)
+        continue
+      }
+      submitItems.push({
+        ...item,
+        // API 会权威重算；兼容字段也必须来自同一成本价折算 helper。
+        unitPrice: Number(pricing.orderUnitPrice),
+      })
+    }
+    if (pricingProblems.length > 0) {
+      setError(`以下草稿商品无法计算订货价，请先移除或联系采购核验单位换算：${pricingProblems.join('、')}`)
+      return
+    }
     setError(null); setSubmitting(true)
     try {
       // 兜底: 显式传 storeId (后端旧版只对 MANAGER 用 token storeId, KITCHEN_LEAD 漏接)
@@ -168,7 +253,7 @@ export default function ChefPONewPage() {
       const myStoreId = u?.storeId || u?.store?.id
       const order = await apiFetch<{ id: string; no: string }>('/api/orders', {
         method: 'POST',
-        body: JSON.stringify({ supplierId, expectedDate, note, items, storeId: myStoreId, idempotencyKey }),
+        body: JSON.stringify({ supplierId, expectedDate, note, items: submitItems, storeId: myStoreId, idempotencyKey }),
       })
       // 提交成功 → 草稿清掉, 下次进页面是空白态
       localStorage.removeItem(DRAFT_KEY)
@@ -275,6 +360,7 @@ export default function ChefPONewPage() {
           <ul className="space-y-2 mt-2">
             {items.map((it, i) => {
               const p = products.find(pr => pr.id === it.productId)
+              const pricing = itemPricing[i]
               return (
                 <li key={it.productId} className="flex items-center gap-2 py-1.5 border-b border-border last:border-b-0">
                   <OrderProductImage src={p?.imageUrl} name={p?.name || it.productId} code={p?.code} size="compact" />
@@ -285,8 +371,15 @@ export default function ChefPONewPage() {
                     </div>
                     <div className="text-micro text-gray3">
                       {p?.code && <span className="mr-1">#{p.code}</span>}
-                      ¥{it.unitPrice.toFixed(2)} / {p?.unit || '件'}{p && Number(p.minOrderQty || 1) > 1 && <span className="text-amber-fg ml-1">· 起订 {moq(p)}</span>}
+                      {pricing?.status === 'READY' ? (
+                        <>¥{pricing.orderUnitPrice} · {pricing.unitLabel}{p && Number(p.minOrderQty || 1) > 1 && <span className="text-amber-fg ml-1">· 起订 {moq(p)}</span>}</>
+                      ) : (
+                        <span className="text-red-fg">{pricing?.message || '商品信息已失效，请移除后重新选择'}</span>
+                      )}
                     </div>
+                    {pricing?.status === 'READY' && (
+                      <div className="text-micro text-gray3">{pricing.costPriceSource}</div>
+                    )}
                   </div>
                   <input
                     type="number"
@@ -297,7 +390,7 @@ export default function ChefPONewPage() {
                     onBlur={(e) => p && updateItem(i, { quantity: snap(p, Number(e.target.value) || moq(p)) })}
                     className="w-16 text-right font-num bg-bg rounded-chip px-2 py-1"
                   />
-                  <span className="font-num text-body w-20 text-right">¥{(it.quantity * it.unitPrice).toFixed(2)}</span>
+                  <span className="font-num text-body w-20 text-right">{lineAmounts[i] === null ? '—' : `¥${lineAmounts[i]}`}</span>
                   <button type="button" onClick={() => removeItem(i)} className="text-gray3 px-1">×</button>
                 </li>
               )
@@ -306,13 +399,15 @@ export default function ChefPONewPage() {
           {items.length > 0 && (
             <div className="mt-2 pt-2 border-t border-border flex items-center justify-between">
               <span className="text-h2">合计</span>
-              <span className="font-num text-h2">¥{total.toFixed(2)}</span>
+              <span className={`text-right ${total === null ? 'text-caption text-red-fg' : 'font-num text-h2'}`}>
+                {total === null ? '存在价格待核验商品，暂不计算' : `¥${total}`}
+              </span>
             </div>
           )}
         </div>
 
         {/* 提交后直发供应商, 不再阈值审批 */}
-        {total > 0 && (
+        {total !== null && Number(total) > 0 && (
           <div className="flex items-center gap-2">
             <Chip tone="green">提交后直发供应商</Chip>
           </div>
@@ -390,6 +485,8 @@ export default function ChefPONewPage() {
               {filteredProducts.map(p => {
                 const picked = items.find(i => i.productId === p.id)
                 const qty = picked?.quantity || 0
+                const pricing = resolveOrderEntryCostPricing(p)
+                const pricePending = pricing.status === 'PENDING'
                 const stockNum = Number(p.availableStock ?? p.stock ?? 0)
                 const outOfStock = stockNum <= 0
                 // 商品状态: 供应商下架 / 待审批的 SKU 不可加入采购单 (server 端 orders.ts:298 兜底拦)
@@ -399,7 +496,7 @@ export default function ChefPONewPage() {
                                  : p.status === 'PENDING_APPROVAL' ? { label: '待上架', cls: 'bg-orange-50 text-orange-fg' }
                                  : null
                 return (
-                  <li key={p.id} className={`flex items-center px-4 py-3 ${notOrderable ? 'opacity-60' : picked ? 'bg-amber/5' : ''}`}>
+                  <li key={p.id} className={`flex items-center px-4 py-3 ${notOrderable || pricePending ? 'opacity-60' : picked ? 'bg-amber/5' : ''}`}>
                     <OrderProductImage src={p.imageUrl} name={p.name} code={p.code} size="picker" />
                     <div className="flex-1 min-w-0 ml-3">
                       <div className="text-body truncate flex items-center gap-1 flex-wrap">
@@ -416,11 +513,18 @@ export default function ChefPONewPage() {
                           <span className="text-micro px-1.5 py-0.5 bg-red-50 text-red-600 rounded-chip whitespace-nowrap">⚠ 供应商断货</span>
                         )}
                       </div>
-                      <div className="text-micro text-gray3 font-num">
-                        ¥{Number(p.price).toFixed(2)} / {p.unit} · 可用 {stockNum}
-                        {(p.reservedStock || 0) > 0 && <span className="text-amber-fg">（已占 {p.reservedStock}）</span>}
-                        {qty > 0 && <span className="text-amber-fg ml-2">小计 ¥{(qty * Number(p.price)).toFixed(2)}</span>}
-                      </div>
+                      {pricing.status === 'READY' ? (
+                        <>
+                          <div className="text-micro text-gray3 font-num">
+                            ¥{pricing.orderUnitPrice} · {pricing.unitLabel} · 可用 {stockNum}
+                            {(p.reservedStock || 0) > 0 && <span className="text-amber-fg">（已占 {p.reservedStock}）</span>}
+                            {qty > 0 && <span className="text-amber-fg ml-2">小计 ¥{calculateOrderEntryLineAmount(qty, pricing.orderUnitPrice) || '0.00'}</span>}
+                          </div>
+                          <div className="text-micro text-gray3">{pricing.costPriceSource}</div>
+                        </>
+                      ) : (
+                        <div className="text-micro text-red-fg">{pricing.message} · 请联系采购核验单位换算</div>
+                      )}
                     </div>
                     {notOrderable ? (
                       qty > 0 ? (
@@ -437,6 +541,22 @@ export default function ChefPONewPage() {
                           disabled
                           className="px-3 py-1.5 rounded-cta text-button bg-gray5 text-gray3 cursor-not-allowed"
                           aria-label="该商品已停售"
+                        >不可加入</button>
+                      )
+                    ) : pricePending ? (
+                      qty > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => setQtyByProduct(p, 0)}
+                          className="px-3 py-1.5 rounded-cta text-button bg-red-50 text-red-600"
+                          aria-label="移除价格待核验商品"
+                        >移除</button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled
+                          className="px-3 py-1.5 rounded-cta text-button bg-gray5 text-gray3 cursor-not-allowed"
+                          aria-label="该商品价格待核验"
                         >不可加入</button>
                       )
                     ) : qty === 0 ? (
@@ -488,7 +608,9 @@ export default function ChefPONewPage() {
             <div className="border-t border-border p-3 flex items-center gap-3">
               <div className="flex-1">
                 <div className="text-micro text-gray3">已选 {items.length} 项</div>
-                <div className="font-num text-h2">¥{total.toFixed(2)}</div>
+                <div className={total === null ? 'text-caption text-red-fg' : 'font-num text-h2'}>
+                  {total === null ? '价格待核验' : `¥${total}`}
+                </div>
               </div>
               <button
                 onClick={() => setPickerOpen(false)}
@@ -503,10 +625,10 @@ export default function ChefPONewPage() {
         <button type="button" onClick={() => router.back()} className="px-4 py-3 bg-white border border-border rounded-cta text-button text-gray2">取消</button>
         <button
           onClick={submit}
-          disabled={submitting || !supplierId || items.length === 0}
+          disabled={submitting || !supplierId || items.length === 0 || total === null}
           className="flex-1 py-3 bg-ink text-white rounded-cta text-button disabled:opacity-40"
         >
-          {submitting ? '提交中…' : `提交采购单${total > 0 ? ` · ¥${total.toFixed(2)}` : ''}`}
+          {submitting ? '提交中…' : `提交采购单${total !== null && Number(total) > 0 ? ` · ¥${total}` : ''}`}
         </button>
       </div>
       <ConfirmSheet {...confirm} />

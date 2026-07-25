@@ -22,16 +22,20 @@ const supplierBId = `supplier-b-export-test`
 const mockFindMany = vi.fn()
 const mockCategoryFindFirst = vi.fn()
 
-vi.mock('@dianjie/db', () => ({
-  prisma: {
+vi.mock('@dianjie/db', async importOriginal => {
+  const actual = await importOriginal<typeof import('@dianjie/db')>()
+  return {
+    ...actual,
+    prisma: {
     product: {
       findMany: (...args: any[]) => mockFindMany(...args),
     },
     supplierProductCategory: {
       findFirst: (...args: any[]) => mockCategoryFindFirst(...args),
     },
-  },
-}))
+    },
+  }
+})
 
 describe('product export helpers', () => {
   it('escapeCsv quotes fields containing comma, quote or newline', () => {

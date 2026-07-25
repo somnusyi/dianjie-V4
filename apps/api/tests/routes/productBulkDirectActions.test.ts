@@ -19,7 +19,8 @@ const mocks = vi.hoisted(() => ({
   executeRaw: vi.fn(),
 }))
 
-vi.mock('@dianjie/db', () => {
+vi.mock('@dianjie/db', async importOriginal => {
+  const actual = await importOriginal<typeof import('@dianjie/db')>()
   const prismaMock: any = {
     $transaction: (...args: any[]) => mocks.transaction(...args),
     $executeRaw: mocks.executeRaw,
@@ -43,7 +44,7 @@ vi.mock('@dianjie/db', () => {
     },
   }
   mocks.transaction.mockImplementation(async (fn: any) => fn(prismaMock))
-  return { prisma: prismaMock }
+  return { ...actual, prisma: prismaMock }
 })
 
 vi.mock('../../src/services/notify/productChange', () => ({

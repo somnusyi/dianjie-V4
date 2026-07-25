@@ -1469,3 +1469,34 @@
   加载。本列车未改变库存口径或供应商库存启用规则。
 - 补送、报损后的供应商物理库存、已确认入库单更正和盘点状态机继续等待业务确认。
 - 生产仍为 `a6d64c9`；统一候选未合并 main、未部署或写生产，发布门禁继续 LOCKED。
+
+## 2026-07-25 22:15 V5 内部供应链第三条功能集成列车
+
+### 已集成
+
+- `546591f`：商品目录按当前筛选导出 CSV；统一多词搜索语义、分类过滤、10,000 行上限、
+  CSV 公式注入防护与 SUPPLIER_OWNER 精确权限。
+- `116b6b3`：新增内部 `SUPPLY_CHAIN` 角色、租户内跨店订单/配送/收货/库存/纯消耗只读
+  工作台；拒绝营业额、成本率、收货财务对象、供应商写页面和订单/收货/库存写操作。
+- `4f7e893`：收货关键字、业务到货日期和后端分页；订单关键字同时匹配首次提交快照与当前
+  商品主数据。`orders.ts` / `receipts.ts` 的重叠改动经人工逐行合并。
+- `44ab080`：商品变更逐人系统消息与 exact `toUsers` 企微基础服务；稳定 dedupeKey、
+  NotificationLog 失败证据和 fire-and-forget 边界。
+
+### 门禁结果
+
+- 导出 API 41/41、Web 14/14；权限 API 15 项、Web 9 项、PostgreSQL 36 项；查询组合
+  API 33 项、PostgreSQL 45 项；通知单元 17 项、PostgreSQL 5 项。
+- API build、Web tsc、两次 1440×900 PC 浏览器复核通过，控制台零错误。
+- 新角色 schema 在全新空库完成 64 条 migrate deploy，status up to date，
+  migrations-to-schema diff 为零；隔离临时数据库和 Web 缓存均已清理。
+- 精准通知首个 runner 因指定测试文件缺失失败，证据保留；补齐无网络测试、tenant 操作者
+  限定和禁止角色广播退化后才集成。
+
+### 继续执行
+
+- Codex `SC-PARTIAL-CLOSE-CODEX-003`：部分发货关闭未发余量并释放预占。
+- Kimi `SC-PRODUCT-DIRECT-KIMI-005`：内部供应链五类商品维护直接生效并接精准通知。
+- Qwen `SC-PRODUCT-PC-QWEN-002`：内部供应链专用商品 PC 管理页。
+- 三项均从统一 RC `44ab080` 独立分支启动，尚未审查或集成；生产 gate 继续 LOCKED，
+  不合并 main、不创建 PR、不部署或写生产。

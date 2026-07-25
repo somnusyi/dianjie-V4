@@ -11,6 +11,7 @@ import { isSupplierRole } from '../lib/auth-scope'
 import { requireSupplierCapability } from '../lib/supplier-access'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 import { auditSupplierSupplyChain } from '../services/supplyChainAudit'
+import { tryCostUnitPriceToOrderUnitPrice } from '../services/costUnitPricing'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const RECEIVED_STATUSES = ['CONFIRMED', 'ACCOUNTED'] as const
@@ -135,18 +136,29 @@ export const supplierInsightRoutes: FastifyPluginAsync = async (app) => {
     const top = [...list].sort((a, b) => b.amount - a.amount).slice(0, limit)
     const activeProducts = await prisma.product.findMany({
       where: { tenantId, supplierId, status: 'ENABLED' },
-      select: { id: true, name: true, unit: true, price: true },
+      select: {
+        id: true, name: true, unit: true, price: true,
+        purchaseUnit: true, inventoryUnit: true, orderUnit: true, costUnit: true,
+        inventoryUnitsPerPurchaseUnit: true, inventoryUnitsPerOrderUnit: true,
+        inventoryUnitsPerCostUnit: true, unitConversionStatus: true,
+      },
     })
     const soldIds = new Set(list.map(item => item.productId))
-    const bottom = activeProducts.filter(product => !soldIds.has(product.id)).slice(0, limit).map(product => ({
-      productId: product.id,
-      name: product.name,
-      unit: product.unit,
-      qty: 0,
-      amount: 0,
-      orders: 0,
-      price: Number(product.price),
-    }))
+    const bottom = activeProducts.filter(product => !soldIds.has(product.id)).slice(0, limit).map(product => {
+      const orderUnitPrice = tryCostUnitPriceToOrderUnitPrice(product)
+      return {
+        productId: product.id,
+        name: product.name,
+        unit: product.unit,
+        qty: 0,
+        amount: 0,
+        orders: 0,
+        orderUnitPrice: orderUnitPrice === null ? null : Number(orderUnitPrice),
+        valuationStatus: orderUnitPrice === null ? 'PENDING' : 'VALUED',
+        orderUnit: product.orderUnit,
+        costUnit: product.costUnit,
+      }
+    })
     return { top, bottom, periodDays: days, amountBasis: 'RECEIPT_PAYABLE' }
   })
 

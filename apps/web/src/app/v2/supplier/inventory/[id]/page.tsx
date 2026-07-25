@@ -14,6 +14,10 @@ import {
   withWarehouseBody,
   withWarehouseParam,
 } from '@/lib/supplier-default-warehouse'
+import {
+  formatOrderUnitPriceLabel,
+  isValuationPending,
+} from '@/lib/supplier-stock-valuation'
 
 type Movement = {
   id: string; type: string; delta: number; balanceAfter: number
@@ -27,6 +31,7 @@ type StockItem = {
   id: string; code: string; name: string; spec: string | null; unit: string
   stock: number; minStock: number; price: number; shelfDays: number | null
   physicalStock: number; reservedStock: number; availableStock: number
+  orderUnitPrice: number | null; valuationStatus: 'PENDING' | 'VALUED'; orderUnit: string | null
   statusFlag: 'OUT'|'LOW'|'OK'
   in7d: number; out7d: number; in30d: number; out30d: number
   nearestExpiry: string | null; daysToExpiry: number | null
@@ -125,7 +130,7 @@ export default function SkuDetailPage() {
         <div className="flex items-end gap-2 mt-2">
           <span className={`text-h1 font-num text-3xl ${item.statusFlag==='OUT'?'text-red-fg':item.statusFlag==='LOW'?'text-amber-fg':'text-ink'}`}>{item.availableStock}</span>
           <span className="text-body text-gray3 mb-0.5">{item.unit}</span>
-          <span className="ml-auto text-caption text-gray2">单价 ¥{item.price}</span>
+          <span className={`ml-auto text-caption ${isValuationPending(item) ? 'text-amber-fg' : 'text-gray2'}`}>{formatOrderUnitPriceLabel(item)}</span>
         </div>
         <div className="text-caption text-gray2 mt-2">
           可用库存 · 物理 {item.physicalStock} - 已占 {item.reservedStock} · 安全库存 {item.minStock} {item.unit} ·

@@ -12,6 +12,11 @@ import { createId } from '@paralleldrive/cuid2'
 import { getSupplierReservedStock, stockAvailability } from '../services/supplierStockReservation'
 import { createSupplierStockBatchIncrease } from '../services/supplierStockBatch'
 import { fireAndForget } from '../services/notify'
+import {
+  fireAndForgetNotifyProductChange,
+  ProductChangeAction,
+} from '../services/notify/productChange'
+import crypto from 'crypto'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
@@ -112,6 +117,31 @@ function autoCode(supplierId: string | undefined): string {
 
 function jsonSafe(value: unknown): any {
   return JSON.parse(JSON.stringify(value))
+}
+
+function hashEventPayload(payload: unknown): string {
+  const serialized = JSON.stringify(payload)
+  return crypto.createHash('sha256').update(serialized).digest('hex').slice(0, 16)
+}
+
+function buildProductChangeSummary(record: any, fields: string[]): Record<string, any> {
+  const summary: Record<string, any> = { name: record?.name }
+  for (const field of fields) {
+    if (record && Object.prototype.hasOwnProperty.call(record, field)) {
+      const value = record[field]
+      summary[field] = typeof value === 'object' && value !== null && 'toJSON' in value
+        ? Number(value)
+        : value
+    }
+  }
+  return summary
+}
+
+function resolveProductChangeAction(data: any): ProductChangeAction {
+  if (data.status === 'DISABLED') return 'DISABLE'
+  if (data.status === 'ENABLED') return 'ENABLE'
+  if (data.price != null) return 'PRICE_CHANGE'
+  return 'UPDATE'
 }
 
 const categoryNameSchema = z.string().trim().min(1, '分类名称必填').max(40)
@@ -373,9 +403,10 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   const PRODUCT_WRITE_ROLES = new Set([
     'ADMIN', 'SUPER_ADMIN', 'PURCHASER',
     'CHEF_DIRECTOR',                       // BUG#10: 总厨是 SKU 主管理人
+    'SUPPLY_CHAIN', // 内部供应链直接维护商品
     'SUPPLIER_OWNER', 'SUPPLIER_STAFF', 'SUPPLIER_SUB',
   ])
-  const UNIT_GOVERNANCE_ROLES = new Set(['ADMIN', 'SUPER_ADMIN', 'CHEF_DIRECTOR'])
+  const UNIT_GOVERNANCE_ROLES = new Set(['ADMIN', 'SUPER_ADMIN', 'CHEF_DIRECTOR', 'SUPPLY_CHAIN'])
 
   /** 当前租户/供应商实际使用的分类主数据，供筛选和下拉选择。 */
   app.get('/categories', auth(app), async (req: any, reply: any) => {
@@ -863,12 +894,14 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     }
     // 供应商角色：忽略 body.supplierId，强制用当前账号绑定的 supplierId
     let data: any = { ...parsed.data }
+    let supplierName: string | null = null
     if (isSupplierRole(role)) {
       if (!userSupplierId) return reply.status(403).send({ error: '账号未绑定供应商' })
       data.supplierId = userSupplierId
       const scopedSupplier = await prisma.supplier.findFirst({
-        where: { id: userSupplierId, tenantId }, select: { id: true },
+        where: { id: userSupplierId, tenantId }, select: { id: true, name: true },
       })
+      supplierName = scopedSupplier?.name || null
       if (!scopedSupplier) return reply.status(403).send({ error: '账号绑定的供应商不属于当前租户' })
       // 供应商新建 SKU 默认进入"待总厨审批"状态, 通过后才上架
       data.status = 'PENDING_APPROVAL'
@@ -881,9 +914,20 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       delete data.unitConversionNote
     } else if (data.supplierId) {
       const scopedSupplier = await prisma.supplier.findFirst({
-        where: { id: data.supplierId, tenantId }, select: { id: true },
+        where: { id: data.supplierId, tenantId }, select: { id: true, name: true },
       })
       if (!scopedSupplier) return reply.status(400).send({ error: '供应商不存在或不属于当前租户' })
+      supplierName = scopedSupplier.name
+      // 内部供应链：当指定供应商时，分类必须属于该供应商且启用，禁止跨租户/越权引用
+      if (role === 'SUPPLY_CHAIN' && data.category) {
+        const category = await prisma.supplierProductCategory.findUnique({
+          where: { tenantId_supplierId_name: { tenantId, supplierId: data.supplierId, name: data.category } },
+          select: { isActive: true },
+        })
+        if (!category?.isActive) {
+          return reply.status(400).send({ error: `分类「${data.category}」不存在或已停用` })
+        }
+      }
     }
     if (requestedUnitMapping) {
       data.unitConversionStatus = data.unitConversionStatus === 'INFERRED' ? 'INFERRED' : 'VERIFIED'
@@ -894,6 +938,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     }
     if (!data.code) data.code = autoCode(data.supplierId)
     if (!data.category) data.category = '其他'
+    // 内部供应链直接生效：未指定状态时默认上架
+    if (role === 'SUPPLY_CHAIN' && !data.status) data.status = 'ENABLED'
     if (isSupplierRole(role)) {
       const existingCategory = await prisma.supplierProductCategory.findUnique({
         where: { tenantId_supplierId_name: { tenantId, supplierId: userSupplierId!, name: data.category } },
@@ -904,12 +950,6 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       }
     }
     try {
-      const supplierName = isSupplierRole(role)
-        ? (await prisma.supplier.findFirst({ where: { id: userSupplierId!, tenantId }, select: { name: true } }))?.name || null
-        : null
-      if (isSupplierRole(role) && !supplierName) {
-        return reply.status(403).send({ error: '账号绑定的供应商不属于当前租户' })
-      }
       const product = await prisma.$transaction(async tx => {
         if (isSupplierRole(role)) {
           await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`supplier-categories:${tenantId}:${userSupplierId}`}))`
@@ -1017,6 +1057,28 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
             docTitle: `新品上架: ${(product as any).name}${(product as any).spec ? ' (' + (product as any).spec + ')' : ''} ¥${Number((product as any).price)}`,
             summary: `${supplierName || '供应商'} 提交新品,待审批上架`,
           },
+        })
+      } else if (role === 'SUPPLY_CHAIN') {
+        // 内部供应链直接生效 → 系统消息 + 企微通知总厨
+        const created = product as any
+        const afterSummary = {
+          name: created.name,
+          code: created.code,
+          spec: created.spec,
+          category: created.category,
+          unit: created.unit,
+          price: Number(created.price),
+          status: created.status,
+          supplierName: supplierName || undefined,
+        }
+        fireAndForgetNotifyProductChange({
+          tenantId,
+          productId: created.id,
+          action: 'CREATE',
+          operatorId: userId,
+          eventKey: `PRODUCT:${created.id}:CREATE:${userId}:${hashEventPayload({ code: afterSummary.code, name: afterSummary.name, supplierId: created.supplierId })}`,
+          before: {},
+          after: afterSummary,
         })
       }
       return reply.status(201).send(product)
@@ -1639,6 +1701,30 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           payload: { productName: before.name, oldPrice: oldP, newPrice: newP },
         })
       }
+    }
+    if (role === 'SUPPLY_CHAIN') {
+      const action = resolveProductChangeAction(data)
+      const changedFields = Object.keys(data)
+      const beforeSummary = buildProductChangeSummary(before, changedFields)
+      const afterSummary = buildProductChangeSummary(after, changedFields)
+      if (action === 'PRICE_CHANGE') {
+        beforeSummary.price = Number(before.price)
+        afterSummary.price = Number((after as any).price)
+      }
+      if (action === 'DISABLE' || action === 'ENABLE') {
+        beforeSummary.status = before.status
+        afterSummary.status = (after as any).status
+      }
+      const eventKey = `PRODUCT:${before.id}:${action}:${userId}:${hashEventPayload({ before: beforeSummary, after: afterSummary })}`
+      fireAndForgetNotifyProductChange({
+        tenantId,
+        productId: before.id,
+        action,
+        operatorId: userId,
+        eventKey,
+        before: beforeSummary,
+        after: afterSummary,
+      })
     }
     return { count: 1, product: { ...after, imageUrl: signOssKey(after.imageKey) } }
   })

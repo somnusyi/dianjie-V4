@@ -13,6 +13,11 @@
 'use client'
 import { useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import {
+  DEFAULT_WAREHOUSE_NAME,
+  withWarehouseBody,
+  withWarehouseParam,
+} from '@/lib/supplier-default-warehouse'
 
 type Row = {
   __row: number; name: string; spec?: string; category?: string; unit?: string; qty: number
@@ -79,9 +84,9 @@ export default function ImportSnapshotPage() {
     if (valid.length === 0) { setError('没有有效行'); return }
     setSubmitting(true); setError(null)
     try {
-      const res = await apiFetch<any>('/api/supplier/stock/import-snapshot', {
+      const res = await apiFetch<any>(withWarehouseParam('/api/supplier/stock/import-snapshot'), {
         method: 'POST',
-        body: JSON.stringify({
+        body: JSON.stringify(withWarehouseBody({
           items: valid.map(r => ({
             name: r.name.trim(),
             spec: r.spec?.toString().trim() || undefined,
@@ -90,7 +95,7 @@ export default function ImportSnapshotPage() {
             qty: r.qty,
           })),
           reason: reason.trim() || `导入 ${filename || '库存清单'}`,
-        }),
+        })),
       })
       setResult(res)
     } catch (e: any) {
@@ -107,7 +112,7 @@ export default function ImportSnapshotPage() {
     <div className="min-h-screen bg-bg pb-32">
       <header className="px-4 pt-4 pb-2 flex items-center gap-3">
         <a href="/v2/supplier/inventory" className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</a>
-        <h1 className="text-h1 flex-1">导入库存清单</h1>
+        <h1 className="text-h1 flex-1">导入库存清单 · {DEFAULT_WAREHOUSE_NAME}</h1>
       </header>
 
       <div className="mx-4 mt-2 bg-bg-warm border border-border rounded-card p-3 text-caption text-gray2">

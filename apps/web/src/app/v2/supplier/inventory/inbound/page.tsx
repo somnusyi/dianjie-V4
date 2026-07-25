@@ -12,6 +12,11 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import {
+  DEFAULT_WAREHOUSE_NAME,
+  withWarehouseBody,
+  withWarehouseParam,
+} from '@/lib/supplier-default-warehouse'
 
 type Sku = { id: string; code: string; name: string; spec: string | null; unit: string; stock: number; shelfDays?: number }
 type Row = {
@@ -159,9 +164,9 @@ export default function InboundPage() {
         }
         return item
       })
-      const res = await apiFetch<any>('/api/supplier/stock/inbound', {
+      const res = await apiFetch<any>(withWarehouseParam('/api/supplier/stock/inbound'), {
         method: 'POST',
-        body: JSON.stringify({ source: mode === 'excel' ? 'EXCEL' : 'MANUAL', reason: batchReason.trim() || undefined, items }),
+        body: JSON.stringify(withWarehouseBody({ source: mode === 'excel' ? 'EXCEL' : 'MANUAL', reason: batchReason.trim() || undefined, items })),
       })
       setResult(`✓ 入库成功 ${res.count} 条`)
       setRows([{ __row: 1, productId: '', name: '', qty: '', manufactureDate: todayStr() }])
@@ -180,7 +185,7 @@ export default function InboundPage() {
     <div className="min-h-screen bg-bg pb-32">
       <header className="px-4 pt-4 pb-2 flex items-center gap-3">
         <a href="/v2/supplier/inventory" className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</a>
-        <h1 className="text-h1 flex-1">入库</h1>
+        <h1 className="text-h1 flex-1">入库 · {DEFAULT_WAREHOUSE_NAME}</h1>
       </header>
 
       {skus.length === 0 && (

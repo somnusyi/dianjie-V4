@@ -9,6 +9,11 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { apiFetch } from '@/lib/v2-auth'
 import { Chip } from '@/components/v2'
+import {
+  DEFAULT_WAREHOUSE_NAME,
+  withWarehouseBody,
+  withWarehouseParam,
+} from '@/lib/supplier-default-warehouse'
 
 type Movement = {
   id: string; type: string; delta: number; balanceAfter: number
@@ -64,14 +69,14 @@ export default function SkuDetailPage() {
   const [adjustReason, setAdjustReason] = useState('')
 
   function load() {
-    apiFetch<{ items: StockItem[]; total: number }>(`/api/supplier/stock?productId=${encodeURIComponent(productId)}&page=1&pageSize=1`)
+    apiFetch<{ items: StockItem[]; total: number }>(withWarehouseParam(`/api/supplier/stock?productId=${encodeURIComponent(productId)}&page=1&pageSize=1`))
       .then(res => setItem(res.items[0] || null))
       .catch(e => setError(e.message))
-    apiFetch<Movement[]>(`/api/supplier/stock/movements?productId=${productId}`)
+    apiFetch<Movement[]>(withWarehouseParam(`/api/supplier/stock/movements?productId=${productId}`))
       .then(setMovements).catch(() => {})
-    apiFetch<Reservation[]>(`/api/supplier/stock/reservations?productId=${productId}`)
+    apiFetch<Reservation[]>(withWarehouseParam(`/api/supplier/stock/reservations?productId=${productId}`))
       .then(setReservations).catch(() => {})
-    apiFetch<StockBatch[]>(`/api/supplier/stock/batches?productId=${encodeURIComponent(productId)}`)
+    apiFetch<StockBatch[]>(withWarehouseParam(`/api/supplier/stock/batches?productId=${encodeURIComponent(productId)}`))
       .then(setBatches).catch(() => {})
   }
   useEffect(() => { load() }, [productId])
@@ -82,12 +87,12 @@ export default function SkuDetailPage() {
     if (!Number.isFinite(n) || n < 0) { setError('请输入有效数字'); return }
     if (!adjustReason.trim()) { setError('请填写理由'); return }
     try {
-      await apiFetch(`/api/supplier/stock/${sheet}`, {
+      await apiFetch(withWarehouseParam(`/api/supplier/stock/${sheet}`), {
         method: 'POST',
-        body: JSON.stringify(sheet === 'adjust'
+        body: JSON.stringify(withWarehouseBody(sheet === 'adjust'
           ? { productId, newQty: n, reason: adjustReason.trim() }
           : { productId, qty: n, reason: adjustReason.trim() }
-        ),
+        )),
       })
       setSheet(null); setAdjustQty(''); setAdjustReason('')
       load()
@@ -108,6 +113,7 @@ export default function SkuDetailPage() {
       <header className="px-4 pt-4 pb-2 flex items-center gap-3">
         <a href="/v2/supplier/inventory" className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</a>
         <h1 className="text-h1 flex-1 truncate">{item.name}</h1>
+        <span className="text-caption text-gray3">{DEFAULT_WAREHOUSE_NAME}</span>
       </header>
 
       {/* 主卡 */}

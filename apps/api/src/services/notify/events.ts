@@ -131,7 +131,9 @@ export const EVENTS = {
   PRODUCT_CHANGED: {
     label: '商品主数据变更',
     desc: '商品新建/编辑/调价/停售/恢复后直接生效 → 知会总厨',
-    defaultRoles: ['CHEF_DIRECTOR', 'CHEF'],
+    // 必须由商品变更服务解析同租户有效总厨并显式传入 toUsers，
+    // 不允许调用方退化为角色广播。
+    defaultRoles: [],
     scopedBy: 'tenant',
     urgent: false,
   },

@@ -1,9 +1,17 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { prisma } from '@dianjie/db'
 import {
   fireAndForgetNotifyProductChange,
   notifyProductChange,
 } from '../../src/services/notify/productChange'
+
+vi.mock('../../src/services/notify/channels/wecom', () => ({
+  sendViaWeCom: vi.fn().mockRejectedValue(new Error('test-only provider failure')),
+}))
+
+vi.mock('../../src/services/notify/frequency-control', () => ({
+  isSilentHours: () => false,
+}))
 
 const suffix = `product-change-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 

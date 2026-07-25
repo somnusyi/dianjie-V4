@@ -109,8 +109,8 @@ export async function notifyProductChange(
     return { notifiedUserIds: [], skipped: { noRecipients: true } }
   }
 
-  const operator = await prisma.user.findUnique({
-    where: { id: operatorId },
+  const operator = await prisma.user.findFirst({
+    where: { id: operatorId, tenantId },
     select: { name: true },
   })
 

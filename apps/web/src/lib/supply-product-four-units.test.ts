@@ -86,6 +86,12 @@ describe('validateConversionFactor', () => {
 
   it('rejects more than 6 decimal places', () => {
     expect(validateConversionFactor('1.2345678')).toBe('换算因子最多 6 位小数')
+    expect(validateConversionFactor('1e-7')).toBe('换算因子最多 6 位小数')
+  })
+
+  it('rejects factors above the API limit', () => {
+    expect(validateConversionFactor('1000000000')).toBeNull()
+    expect(validateConversionFactor('1000000000.000001')).toBe('换算因子超过系统上限')
   })
 })
 
@@ -111,6 +117,15 @@ describe('validateFourUnitForm', () => {
     expect(
       validateFourUnitForm({ ...DEFAULT_FOUR_UNIT_FORM, inventoryUnitsPerCostUnit: '1.2345678' }),
     ).toBe('换算因子最多 6 位小数')
+  })
+
+  it('matches API unit name length and format boundaries', () => {
+    expect(
+      validateFourUnitForm({ ...DEFAULT_FOUR_UNIT_FORM, purchaseUnit: '超长单位名称超过十六个字符的限制值' }),
+    ).toBe('采购单位不能超过 16 个字符')
+    expect(
+      validateFourUnitForm({ ...DEFAULT_FOUR_UNIT_FORM, orderUnit: '24瓶' }),
+    ).toBe('订货单位不能以数字开头')
   })
 })
 
@@ -168,7 +183,7 @@ describe('fallbackFourUnitsFromLegacy', () => {
       costUnit: '箱',
       inventoryUnitsPerPurchaseUnit: '6',
       inventoryUnitsPerOrderUnit: '6',
-      inventoryUnitsPerCostUnit: '1',
+      inventoryUnitsPerCostUnit: '6',
     })
   })
 

@@ -920,7 +920,7 @@ function FormDialog({
                       type="text"
                       value={form.purchaseUnit}
                       onChange={e => onFieldChange('purchaseUnit', e.target.value)}
-                      maxLength={10}
+                      maxLength={16}
                       placeholder="kg / 件 / 瓶"
                       className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
                     />
@@ -940,7 +940,7 @@ function FormDialog({
                       type="text"
                       value={form.orderUnit}
                       onChange={e => onFieldChange('orderUnit', e.target.value)}
-                      maxLength={10}
+                      maxLength={16}
                       placeholder="kg / 件 / 瓶"
                       className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
                     />
@@ -960,7 +960,7 @@ function FormDialog({
                       type="text"
                       value={form.inventoryUnit}
                       onChange={e => onFieldChange('inventoryUnit', e.target.value)}
-                      maxLength={10}
+                      maxLength={16}
                       placeholder="kg / 件 / 瓶"
                       className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
                     />
@@ -970,7 +970,7 @@ function FormDialog({
                       type="text"
                       value={form.costUnit}
                       onChange={e => onFieldChange('costUnit', e.target.value)}
-                      maxLength={10}
+                      maxLength={16}
                       placeholder="kg / 件 / 瓶"
                       className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
                     />

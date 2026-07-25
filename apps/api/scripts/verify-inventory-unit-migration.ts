@@ -30,7 +30,12 @@ async function main() {
       || row.inventoryUnitsPerPurchaseUnitSnapshot == null || row.inventoryUnitCostSnapshot == null) {
       return [{ id: row.id, reason: 'missing snapshot' }]
     }
-    const expectedQuantity = number(row.quantity) * number(row.inventoryUnitsPerPurchaseUnitSnapshot)
+    // Linked supply-chain receipts hold quantity in the order unit and freeze
+    // all three factors. Historical/manual rows predate that snapshot and keep
+    // the original purchase-factor invariant.
+    const quantityFactor = row.inventoryUnitsPerOrderUnitSnapshot
+      ?? row.inventoryUnitsPerPurchaseUnitSnapshot
+    const expectedQuantity = number(row.quantity) * number(quantityFactor)
     const quantityDrift = Math.abs(number(row.inventoryQuantity) - expectedQuantity)
     const valueDrift = Math.abs(number(row.amount) - number(row.inventoryQuantity) * number(row.inventoryUnitCostSnapshot))
     return quantityDrift > 0.000001 || valueDrift > 0.011

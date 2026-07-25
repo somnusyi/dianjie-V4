@@ -43,7 +43,9 @@ describe('supplier order to receipt flow (integration)', () => {
     const product = await prisma.product.create({
       data: {
         tenantId, supplierId, code: `${suffix}-P`, name: '流程鲜菌', category: '菌菇', unit: '斤',
-        inventoryUnit: 'g', inventoryUnitsPerPurchaseUnit: 500, unitConversionStatus: 'VERIFIED',
+        purchaseUnit: '箱', inventoryUnit: 'g', orderUnit: '斤', costUnit: 'g',
+        inventoryUnitsPerPurchaseUnit: 10000, inventoryUnitsPerOrderUnit: 500,
+        inventoryUnitsPerCostUnit: 1, unitConversionStatus: 'VERIFIED',
         price: 10, stock: 10, minOrderQty: 1, stepQty: 1, shelfDays: 7,
       },
     })
@@ -920,6 +922,29 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(create.statusCode).toBe(200)
     const order = create.json()
     expect(Number(order.totalAmount)).toBe(60)
+    expect(order.items[0]).toMatchObject({
+      purchaseUnitSnapshot: '箱',
+      inventoryUnitSnapshot: 'g',
+      orderUnitSnapshot: '斤',
+      costUnitSnapshot: 'g',
+      unitConversionStatusSnapshot: 'VERIFIED',
+    })
+    expect(Number(order.items[0].inventoryUnitsPerPurchaseUnitSnapshot)).toBe(10000)
+    expect(Number(order.items[0].inventoryUnitsPerOrderUnitSnapshot)).toBe(500)
+    expect(Number(order.items[0].inventoryUnitsPerCostUnitSnapshot)).toBe(1)
+    expect(order.submittedSnapshot).toMatchObject({
+      schemaVersion: 2,
+      items: [{
+        purchaseUnitSnapshot: '箱',
+        inventoryUnitSnapshot: 'g',
+        orderUnitSnapshot: '斤',
+        costUnitSnapshot: 'g',
+        unitConversionStatusSnapshot: 'VERIFIED',
+        inventoryUnitsPerPurchaseUnitSnapshot: '10000.000000',
+        inventoryUnitsPerOrderUnitSnapshot: '500.000000',
+        inventoryUnitsPerCostUnitSnapshot: '1.000000',
+      }],
+    })
 
     const invalidRevision = await app.inject({
       method: 'POST', url: `/api/orders/${order.id}/revisions`, headers: { 'x-test-actor': 'chef' },
@@ -976,6 +1001,21 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(await prisma.supplierStockReservation.count({
       where: { purchaseOrderId: order.id, status: 'ACTIVE' },
     })).toBe(1)
+    // Product master data changes after submission must not alter later
+    // delivery/receipt unit relationships.
+    await prisma.product.update({
+      where: { id: productId },
+      data: {
+        unit: '瓶',
+        purchaseUnit: '件',
+        inventoryUnit: 'ml',
+        orderUnit: '瓶',
+        costUnit: 'ml',
+        inventoryUnitsPerPurchaseUnit: 24000,
+        inventoryUnitsPerOrderUnit: 250,
+        inventoryUnitsPerCostUnit: 1,
+      },
+    })
 
     const shipmentFailureSuffix = Date.now().toString()
     const shipmentFailureFunction = `test_shipment_log_failure_fn_${shipmentFailureSuffix}`
@@ -1058,6 +1098,20 @@ describe('supplier order to receipt flow (integration)', () => {
     })
     expect(conflictingDuplicateShip.statusCode).toBe(409)
     expect(await prisma.deliveryOrder.count({ where: { purchaseOrderId: order.id } })).toBe(1)
+    const frozenDeliveryItem = await prisma.deliveryOrderItem.findFirstOrThrow({
+      where: { deliveryOrder: { purchaseOrderId: order.id } },
+    })
+    expect(frozenDeliveryItem).toMatchObject({
+      productUnitSnapshot: '斤',
+      purchaseUnitSnapshot: '箱',
+      inventoryUnitSnapshot: 'g',
+      orderUnitSnapshot: '斤',
+      costUnitSnapshot: 'g',
+      unitConversionStatusSnapshot: 'VERIFIED',
+    })
+    expect(Number(frozenDeliveryItem.inventoryUnitsPerPurchaseUnitSnapshot)).toBe(10000)
+    expect(Number(frozenDeliveryItem.inventoryUnitsPerOrderUnitSnapshot)).toBe(500)
+    expect(Number(frozenDeliveryItem.inventoryUnitsPerCostUnitSnapshot)).toBe(1)
     expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).stock)).toBe(4)
     expect(await prisma.supplierStockMovement.count({ where: { tenantId, productId, type: 'OUTBOUND_PO' } })).toBe(1)
     expect(Number((await prisma.supplierStockBatch.findFirstOrThrow({ where: { tenantId, productId } })).remainingQty)).toBe(4)
@@ -1135,9 +1189,18 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(Number(receipt.paymentSchedule?.amount)).toBe(50)
     expect(receipt.paymentSchedule?.status).toBe('ON_HOLD')
     expect(receipt.items[0]).toMatchObject({ productNameSnapshot: '流程鲜菌', productUnitSnapshot: '斤' })
+    expect(receipt.items[0]).toMatchObject({
+      purchaseUnitSnapshot: '箱',
+      inventoryUnitSnapshot: 'g',
+      orderUnitSnapshot: '斤',
+      costUnitSnapshot: 'g',
+      unitConversionStatusSnapshot: 'VERIFIED',
+    })
     expect(Number(receipt.items[0].inventoryQuantity)).toBe(2500)
     expect(receipt.items[0].inventoryUnitSnapshot).toBe('g')
-    expect(Number(receipt.items[0].inventoryUnitsPerPurchaseUnitSnapshot)).toBe(500)
+    expect(Number(receipt.items[0].inventoryUnitsPerPurchaseUnitSnapshot)).toBe(10000)
+    expect(Number(receipt.items[0].inventoryUnitsPerOrderUnitSnapshot)).toBe(500)
+    expect(Number(receipt.items[0].inventoryUnitsPerCostUnitSnapshot)).toBe(1)
     expect(Number(receipt.items[0].inventoryUnitCostSnapshot)).toBeCloseTo(0.02)
     const verificationAt = new Date('2026-07-20T00:00:00.000Z')
     await prisma.receipt.update({

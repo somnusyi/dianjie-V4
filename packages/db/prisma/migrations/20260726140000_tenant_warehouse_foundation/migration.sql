@@ -39,7 +39,9 @@ CREATE TABLE "warehouse_stocks" (
     "tenantId" TEXT NOT NULL,
     "warehouseId" VARCHAR(64) NOT NULL,
     "productId" TEXT NOT NULL,
-    "physicalQty" DECIMAL(18,6) NOT NULL DEFAULT 0,
+    -- Warehouse ledger quantities follow the confirmed three-decimal stock
+    -- contract and the existing movement/batch precision.
+    "physicalQty" DECIMAL(12,3) NOT NULL DEFAULT 0,
     "rowVersion" INTEGER NOT NULL DEFAULT 0,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,

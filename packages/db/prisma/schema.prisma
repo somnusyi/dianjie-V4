@@ -108,7 +108,7 @@ model WarehouseStock {
   tenantId    String
   warehouseId String   @db.VarChar(64)
   productId   String
-  physicalQty Decimal  @default(0) @db.Decimal(18, 6)
+  physicalQty Decimal  @default(0) @db.Decimal(12, 3)
   rowVersion  Int      @default(0)
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())

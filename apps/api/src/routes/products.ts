@@ -141,6 +141,91 @@ async function lockActiveSupplierCategory(
   }
 }
 
+export async function buildProductListWhere(req: any): Promise<{ where?: any; filters?: any; error?: { statusCode: number; message: string } }> {
+  const parsedFilters = productListFilterSchema.safeParse(req.query || {})
+  if (!parsedFilters.success) {
+    return { error: { statusCode: 400, message: parsedFilters.error.issues[0].message } }
+  }
+  const { category, status, q } = parsedFilters.data as any
+  const { tenantId, role, supplierId } = req.user
+  const where: any = { tenantId }
+  if (category) where.category = category
+  if (status) where.status = status
+  if (q?.trim()) {
+    const keyword = String(q).trim()
+    where.OR = [
+      { name: { contains: keyword, mode: 'insensitive' } },
+      { code: { contains: keyword, mode: 'insensitive' } },
+      { spec: { contains: keyword, mode: 'insensitive' } },
+    ]
+  }
+  // 供应商账号只能看自己的商品
+  if (isSupplierRole(role)) {
+    try {
+      requireSupplierCapability(role, supplierId, 'catalog.read')
+    } catch (error: any) {
+      return { error: { statusCode: error?.statusCode || 403, message: error?.message || '无权限' } }
+    }
+    if (!supplierId) return { error: { statusCode: 403, message: '账号未绑定供应商' } }
+    where.supplierId = supplierId
+  } else if (isStoreScoped(role)) {
+    // Approved offers are tenant-wide for every store. Pending/disabled
+    // supplier catalog data is governance-only and must not leak to stores.
+    where.status = 'ENABLED'
+  }
+  return { where, filters: parsedFilters.data }
+}
+
+export function escapeCsv(value: unknown): string {
+  const str = value == null ? '' : String(value)
+  // RFC 4180: quote fields containing comma, quote, or line break
+  if (/[",\n\r]/.test(str)) return `"${str.replace(/"/g, '""')}"`
+  return str
+}
+
+export function formatProductStatus(status: string): string {
+  const map: Record<string, string> = {
+    ENABLED: '供应中',
+    DISABLED: '已停售',
+    PENDING_APPROVAL: '上架待审',
+    PENDING_DISABLE: '停售待审',
+  }
+  return map[status] || status
+}
+
+export function productExportFilename(): string {
+  return `商品报价表_${new Date().toISOString().slice(0, 10)}.csv`
+}
+
+export type ExportableProduct = {
+  code: string
+  name: string
+  category: string | null
+  spec: string | null
+  unit: string | null
+  inventoryUnit: string | null
+  price: number | string | unknown
+  status: string
+}
+
+export function buildProductExportCsv(rows: ExportableProduct[]): string {
+  const headers = ['商品编码', '名称', '分类', '规格', '采购单位', '库存单位', '采购价', '状态']
+  const lines = [
+    headers.map(escapeCsv).join(','),
+    ...rows.map(row => [
+      row.code,
+      row.name,
+      row.category || '',
+      row.spec || '',
+      row.unit || '',
+      row.inventoryUnit || row.unit || '',
+      Number(row.price).toFixed(2),
+      formatProductStatus(row.status),
+    ].map(escapeCsv).join(',')),
+  ]
+  return lines.join('\r\n')
+}
+
 export const productRoutes: FastifyPluginAsync = async (app) => {
   async function withAvailability<T extends { id: string; stock: unknown }>(tenantId: string, rows: T[]) {
     const reserved = await getSupplierReservedStock({ tenantId, productIds: rows.map(row => row.id) })
@@ -152,31 +237,11 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   }
 
   app.get('/', auth(app), async (req: any, reply: any) => {
-    const parsedFilters = productListFilterSchema.safeParse(req.query || {})
-    if (!parsedFilters.success) return reply.status(400).send({ error: parsedFilters.error.issues[0].message })
-    const { category, status, q, page, pageSize = '20' } = parsedFilters.data as any
+    const listResult = await buildProductListWhere(req)
+    if (listResult.error) return reply.status(listResult.error.statusCode).send({ error: listResult.error.message })
+    const { where, filters } = listResult
+    const { category, q, page, pageSize = '20' } = filters as any
     const { tenantId, role, supplierId } = req.user
-    const where: any = { tenantId }
-    if (category) where.category = category
-    if (status) where.status = status
-    if (q?.trim()) {
-      const keyword = String(q).trim()
-      where.OR = [
-        { name: { contains: keyword, mode: 'insensitive' } },
-        { code: { contains: keyword, mode: 'insensitive' } },
-        { spec: { contains: keyword, mode: 'insensitive' } },
-      ]
-    }
-    // 供应商账号只能看自己的商品
-    if (isSupplierRole(role)) {
-      if (!supplierScopeOrReply(req, reply, 'catalog.read')) return
-      if (!supplierId) return reply.status(403).send({ error: '账号未绑定供应商' })
-      where.supplierId = supplierId
-    } else if (isStoreScoped(role)) {
-      // Approved offers are tenant-wide for every store. Pending/disabled
-      // supplier catalog data is governance-only and must not leak to stores.
-      where.status = 'ENABLED'
-    }
 
     // 不传 page 时返回全量（兼容下拉框），缓存 10 分钟
     // 注意 cache key 加上 supplier scope，避免供应商之间互相污染
@@ -221,6 +286,28 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       items: await withAvailability(tenantId, items),
       total, page: p, pageSize: ps,
     }
+  })
+
+  app.get('/export.csv', auth(app), async (req: any, reply: any) => {
+    const exportResult = await buildProductListWhere(req)
+    if (exportResult.error) return reply.status(exportResult.error.statusCode).send({ error: exportResult.error.message })
+
+    const rows = await prisma.product.findMany({
+      where: exportResult.where,
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: {
+        code: true, name: true, category: true, spec: true,
+        unit: true, inventoryUnit: true, price: true, status: true,
+      },
+    })
+
+    const csv = buildProductExportCsv(rows as ExportableProduct[])
+    const filename = productExportFilename()
+    return reply
+      .status(200)
+      .header('Content-Type', 'text/csv; charset=utf-8')
+      .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`)
+      .send(Buffer.from('\uFEFF' + csv, 'utf-8'))
   })
 
   // 建/改商品仅限总部管理员

@@ -2,6 +2,7 @@
  * 内部供应链 · 商品管理（桌面端）
  *
  * 沿用 GET /api/products 分页列表 + PATCH /api/products/:id 直接生效。
+ * 支持：当前页行选择、导出当前筛选、批量分类/停售/恢复。
  * 不显示审批按钮或"待总厨审批"语义；不复用外部供应商身份。
  */
 'use client'
@@ -10,7 +11,21 @@ import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { EmptyState, FriendlyError, SkeletonCard } from '@/components/v2/skeleton'
 import { ProductImagePreview } from '@/components/v2/product-image-preview'
-import { apiFetch } from '@/lib/v2-auth'
+import { apiDownload, apiFetch } from '@/lib/v2-auth'
+import {
+  buildBatchCategoryBody,
+  buildBatchStatusBody,
+  buildBatchStatusPreviewBody,
+  buildBatchSuccessNotice,
+  buildSupplyProductExportPath,
+  bulkCategoryBlockedReason,
+  canBulkCategory,
+  clearRowSelection,
+  formatBatchStatusPreviewSummary,
+  productExportFilename,
+  selectPageRows,
+  toggleRowSelection,
+} from '@/lib/supply-product-bulk-pc'
 import {
   buildCreateBody,
   buildEditBody,
@@ -89,10 +104,16 @@ export default function InternalSupplyChainProductsPage() {
   const imageInputRef = useRef<HTMLInputElement>(null)
   const requestSequence = useRef(0)
 
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkCategory, setBulkCategory] = useState('')
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
+
   function load() {
     const sequence = ++requestSequence.current
     setLoading(true)
     setError(null)
+    setSelectedIds(clearRowSelection())
     apiFetch<{ items: ProductRow[]; total: number; page: number; pageSize: number }>(
       `/api/products${buildProductQuery(filters)}`,
     )
@@ -281,6 +302,105 @@ export default function InternalSupplyChainProductsPage() {
     })
   }
 
+  const pageProductIds = (products || []).map(p => p.id)
+  const currentPageSelected = pageProductIds.length > 0 && pageProductIds.every(id => selectedIds.has(id))
+  const selectedCount = selectedIds.size
+
+  function toggleSelected(id: string) {
+    setSelectedIds(current => toggleRowSelection(current, id))
+  }
+
+  function selectCurrentPage(checked: boolean) {
+    setSelectedIds(current => selectPageRows(current, pageProductIds, checked))
+  }
+
+  async function handleExport() {
+    if (exporting) return
+    setExporting(true)
+    setExportError(null)
+    try {
+      const path = buildSupplyProductExportPath(filters)
+      const { blob, filename } = await apiDownload(path, productExportFilename())
+      const { saveBlob } = await import('@/app/v2/supplier/products/export-products')
+      saveBlob(blob, filename)
+    } catch (reason: any) {
+      setExportError(reason?.message || '导出失败')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  function submitBulkCategory() {
+    if (selectedCount === 0 || !bulkCategory.trim()) return
+    const blocked = bulkCategoryBlockedReason(filters)
+    if (blocked) {
+      alert(blocked)
+      return
+    }
+    openConfirm({
+      title: `批量分类 ${selectedCount} 个商品`,
+      body: `统一改为「${bulkCategory.trim()}」。\n\n直接生效并通知总厨。`,
+      confirmLabel: '确认分类',
+      tone: 'primary',
+      onConfirm: async () => {
+        setSubmitting(true)
+        try {
+          const res: any = await apiFetch('/api/products/batch-category', {
+            method: 'PATCH',
+            body: JSON.stringify(buildBatchCategoryBody([...selectedIds], bulkCategory)),
+          })
+          setSelectedIds(clearRowSelection())
+          setBulkCategory('')
+          setNotice(buildBatchSuccessNotice('category', res?.count ?? selectedCount))
+          load()
+        } catch (reason: any) {
+          alert(reason?.message || '批量分类失败')
+          throw reason
+        } finally { setSubmitting(false) }
+      },
+    })
+  }
+
+  async function submitBulkStatus(status: 'ENABLED' | 'DISABLED') {
+    if (selectedCount === 0) return
+    setSubmitting(true)
+    let impact: any
+    try {
+      impact = await apiFetch('/api/products/batch-status/preview', {
+        method: 'POST',
+        body: JSON.stringify(buildBatchStatusPreviewBody([...selectedIds], status)),
+      })
+    } catch (reason: any) {
+      setSubmitting(false)
+      alert(reason?.message || '影响范围预览失败')
+      return
+    }
+    setSubmitting(false)
+    const isDisable = status === 'DISABLED'
+    openConfirm({
+      title: `${isDisable ? '批量停售' : '批量恢复'} ${selectedCount} 个商品`,
+      body: `${formatBatchStatusPreviewSummary(impact)}\n\n直接生效并通知总厨。`,
+      confirmLabel: isDisable ? '确认停售' : '确认恢复',
+      tone: isDisable ? 'danger' : 'primary',
+      onConfirm: async () => {
+        setSubmitting(true)
+        try {
+          const res: any = await apiFetch('/api/products/batch-status', {
+            method: 'PATCH',
+            body: JSON.stringify(buildBatchStatusBody([...selectedIds], status)),
+          })
+          setSelectedIds(clearRowSelection())
+          setBulkCategory('')
+          setNotice(buildBatchSuccessNotice(isDisable ? 'disable' : 'restore', res?.count ?? selectedCount))
+          load()
+        } catch (reason: any) {
+          alert(reason?.message || '批量状态变更失败')
+          throw reason
+        } finally { setSubmitting(false) }
+      },
+    })
+  }
+
   const filterActive = hasActiveFilters(filters)
 
   return (
@@ -322,7 +442,18 @@ export default function InternalSupplyChainProductsPage() {
             disabled={!filterActive}
             className="rounded-cta border border-border bg-white px-3 py-2 text-button text-gray2 disabled:opacity-40"
           >清空</button>
+          <button
+            onClick={handleExport}
+            disabled={exporting || loading}
+            className="rounded-cta border border-border bg-white px-3 py-2 text-button text-gray2 disabled:opacity-40"
+          >{exporting ? '导出中…' : '⤓ 导出当前筛选'}</button>
         </div>
+
+        {exportError && (
+          <div className="mb-4 rounded-card border border-red-fg/20 bg-red-bg px-4 py-3 text-caption text-red-fg">
+            导出失败：{exportError}
+          </div>
+        )}
 
         {notice && (
           <div className="mb-4 flex items-center justify-between rounded-card border border-green-fg/20 bg-green-bg px-4 py-3 text-caption text-green-fg">
@@ -341,10 +472,31 @@ export default function InternalSupplyChainProductsPage() {
 
         {products && products.length > 0 && (
           <div className="overflow-hidden rounded-card border border-border bg-white">
+            <div className="flex items-center justify-between gap-3 border-b border-border bg-bg px-4 py-3">
+              <label className="flex items-center gap-2 text-caption text-gray2">
+                <input
+                  type="checkbox"
+                  checked={currentPageSelected}
+                  onChange={e => selectCurrentPage(e.target.checked)}
+                  aria-label="选择当前页全部商品"
+                />
+                全选当前页 {products.length} 项
+              </label>
+              <span className="text-caption text-accent">已选 {selectedCount} 项</span>
+            </div>
+
             <div className="overflow-x-auto">
               <table className="w-full text-left text-caption">
                 <thead className="bg-bg text-gray3">
                   <tr>
+                    <th className="w-10 px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={currentPageSelected}
+                        onChange={e => selectCurrentPage(e.target.checked)}
+                        aria-label="选择当前页全部商品"
+                      />
+                    </th>
                     <th className="px-4 py-3">图片</th>
                     <th className="px-4 py-3">编码</th>
                     <th className="px-4 py-3">名称</th>
@@ -359,8 +511,17 @@ export default function InternalSupplyChainProductsPage() {
                 <tbody className="divide-y divide-border">
                   {products.map(product => {
                     const imageUrl = resolveProductImageUrl(product.imageUrl)
+                    const selected = selectedIds.has(product.id)
                     return (
-                      <tr key={product.id} className="hover:bg-bg/50">
+                      <tr key={product.id} className={`hover:bg-bg/50 ${selected ? 'bg-accent/5' : ''}`}>
+                        <td className="px-4 py-3">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleSelected(product.id)}
+                            aria-label={`选择 ${product.name}`}
+                          />
+                        </td>
                         <td className="px-4 py-3">
                           {imageUrl ? (
                             <button onClick={() => setPreview({ url: imageUrl, name: product.name })} className="block">
@@ -399,6 +560,32 @@ export default function InternalSupplyChainProductsPage() {
                 </tbody>
               </table>
             </div>
+
+            {selectedCount > 0 && (
+              <div className="flex flex-wrap items-center gap-3 border-t border-border bg-bg px-4 py-3">
+                <span className="text-caption text-gray2">批量操作：</span>
+                <FilterSelect label="" value={bulkCategory} onChange={value => setBulkCategory(value)}>
+                  <option value="">选择新分类</option>
+                  {categories.map(cat => <option key={cat.name} value={cat.name}>{cat.name}</option>)}
+                </FilterSelect>
+                <button
+                  onClick={submitBulkCategory}
+                  disabled={!bulkCategory || !canBulkCategory(filters)}
+                  className="rounded-cta border border-border bg-white px-3 py-2 text-button text-gray2 disabled:opacity-40"
+                >批量分类</button>
+                <button
+                  onClick={() => submitBulkStatus('DISABLED')}
+                  className="rounded-cta bg-red-bg px-3 py-2 text-button text-red-fg"
+                >批量停售</button>
+                <button
+                  onClick={() => submitBulkStatus('ENABLED')}
+                  className="rounded-cta bg-green-bg px-3 py-2 text-button text-green-fg"
+                >批量恢复</button>
+                {!canBulkCategory(filters) && (
+                  <span className="text-caption text-amber-fg">{bulkCategoryBlockedReason(filters)}</span>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -486,8 +673,8 @@ function FilterSelect({ label, value, onChange, children }: {
   label: string; value: string; onChange: (v: string) => void; children: React.ReactNode
 }) {
   return (
-    <label className="flex flex-col gap-1">
-      <span className="text-micro text-gray3">{label}</span>
+    <label className={`flex flex-col gap-1 ${label ? '' : 'justify-end'}`}>
+      {label && <span className="text-micro text-gray3">{label}</span>}
       <select
         value={value}
         onChange={e => onChange(e.target.value)}

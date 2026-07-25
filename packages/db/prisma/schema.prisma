@@ -1755,6 +1755,7 @@ enum Role {
   KITCHEN_LEAD // 厨师长（单店级）
   CHEF_DIRECTOR // 总厨（集团级）
   SUPPLIER_OWNER // 供应商负责人
+  SUPPLY_CHAIN // 内部供应链（租户内跨店只读）
   ENGINEERING // 工程部（开店前: 选址 / 装修 / 物料 / 证照）
   SUPERVISOR // 主管(本店有限事务, 比店长低半级)
   STAFF // 一线员工(暂不开滇界账号, 留口位)

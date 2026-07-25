@@ -1,5 +1,5 @@
 const MANAGER_ROLES = ['MANAGER', 'PURCHASER'] as const
-const SUPPLIER_ROLES = ['SUPPLIER_OWNER', 'SUPPLIER_STAFF', 'SUPPLIER_SUB'] as const
+const SUPPLIER_ROLES = ['SUPPLY_CHAIN', 'SUPPLIER_OWNER', 'SUPPLIER_STAFF', 'SUPPLIER_SUB'] as const
 
 /**
  * 返回需要限制角色的 v2 业务区。

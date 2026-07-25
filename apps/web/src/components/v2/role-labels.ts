@@ -9,6 +9,7 @@ export const ROLE_LABELS: Record<string, string> = {
   KITCHEN_LEAD:   '厨师长',
   CHEF_DIRECTOR:  '总厨',
   CHEF:           '总厨',
+  SUPPLY_CHAIN:   '内部供应链',
   SUPPLIER_OWNER: '供应商主账号',
   SUPPLIER_STAFF: '供应商主账号',
   SUPPLIER_SUB:   '供应商子账号',

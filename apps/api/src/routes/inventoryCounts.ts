@@ -2,6 +2,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { isStoreScoped } from '../lib/auth-scope'
+import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
 import { businessNoFloor, nextBusinessNo } from '../services/purchaseOrderIntegrity'
 import { estimatedStoreInventory } from '../services/storeInventory'
 import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
@@ -13,6 +14,13 @@ const WRITE_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF', 'CHEF_DIRECTOR',
 const ACTIVE_STATUSES = ['DRAFT', 'COUNTING', 'REVIEWING'] as const
 const EVIDENCE_RATE_THRESHOLD = new Prisma.Decimal('0.05')
 const EVIDENCE_AMOUNT_THRESHOLD = new Prisma.Decimal('200')
+
+function canViewInventoryCounts(role: string | undefined | null) {
+  return Boolean(role && (
+    VIEW_ROLES.has(role)
+    || hasInternalSupplyChainCapability(role, 'inventory.read')
+  ))
+}
 
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式应为 YYYY-MM-DD')
 const createSchema = z.object({
@@ -136,7 +144,7 @@ export const inventoryCountRoutes: FastifyPluginAsync = async app => {
   const auth = { preHandler: [(app as any).authenticate] }
 
   app.get('/', auth, async (req: any, reply: any) => {
-    if (!VIEW_ROLES.has(req.user.role)) return reply.status(403).send({ error: '无权查看盘点单' })
+    if (!canViewInventoryCounts(req.user.role)) return reply.status(403).send({ error: '无权查看盘点单' })
     const query = z.object({
       storeId: z.string().optional(),
       status: z.enum(['DRAFT', 'COUNTING', 'REVIEWING', 'CONFIRMED', 'CANCELLED', 'REVERSED']).optional(),
@@ -300,7 +308,7 @@ export const inventoryCountRoutes: FastifyPluginAsync = async app => {
   })
 
   app.get('/:id', auth, async (req: any, reply: any) => {
-    if (!VIEW_ROLES.has(req.user.role)) return reply.status(403).send({ error: '无权查看盘点单' })
+    if (!canViewInventoryCounts(req.user.role)) return reply.status(403).send({ error: '无权查看盘点单' })
     const row = await loadCount(req.params.id, req.user.tenantId)
     if (!row) return reply.status(404).send({ error: '盘点单不存在' })
     try {

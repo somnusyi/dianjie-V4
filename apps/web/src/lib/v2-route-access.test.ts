@@ -9,11 +9,13 @@ describe('rolesForV2Path', () => {
 
   it('protects every supplier page from store sessions', () => {
     expect(rolesForV2Path('/v2/supplier/home')).toEqual([
+      'SUPPLY_CHAIN',
       'SUPPLIER_OWNER',
       'SUPPLIER_STAFF',
       'SUPPLIER_SUB',
     ])
     expect(rolesForV2Path('/v2/supplier/inventory/inbound')).toEqual([
+      'SUPPLY_CHAIN',
       'SUPPLIER_OWNER',
       'SUPPLIER_STAFF',
       'SUPPLIER_SUB',

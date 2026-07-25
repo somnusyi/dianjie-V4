@@ -5,6 +5,7 @@ import dayjs from 'dayjs'
 import { invalidatePattern } from '../lib/cache'
 import { notifyOrderSubmitted, notifyOrderShipped, notifyOrderConfirmed, notifyOrderRejected, sendNotification } from '../services/notification'
 import { isStoreScoped, isSupplierRole, requireSupplierBinding } from '../lib/auth-scope'
+import { allowsSupplyDataRead, supplyDataReadScope } from '../lib/internal-supply-chain-access'
 import { resignOssUrls } from './upload'
 import { fireAndForget as notify } from '../services/notify'
 import {
@@ -169,16 +170,12 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   app.get('/', { preHandler: [(app as any).authenticate] }, async (req: any, reply) => {
     const parsed = orderListQuerySchema.safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-    const { tenantId, storeId, role, supplierId: userSupplierId } = req.user
+    const { role } = req.user
+    if (!allowsSupplyDataRead(role, 'order.read')) {
+      return reply.status(403).send({ error: '无权查看采购订单' })
+    }
     const q = parsed.data
-    const where: any = { tenantId }
-
-    const scopedSupplierId = requireSupplierBinding(role, userSupplierId)
-
-    // 门店级角色（店长/总厨/采购）只看自己门店
-    if (isStoreScoped(role) && storeId) where.storeId = storeId
-    // 供应商只看发给自己的
-    if (scopedSupplierId) where.supplierId = scopedSupplierId
+    const where: any = supplyDataReadScope(req.user)
 
     if (q.status) where.status = q.status
     if (q.storeId && !isStoreScoped(role)) where.storeId = q.storeId
@@ -243,13 +240,13 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 详情 ──────────────────────────────────────────
   app.get('/:id', { preHandler: [(app as any).authenticate] }, async (req: any) => {
-    const { tenantId, storeId, role, supplierId: userSupplierId } = req.user
+    const { role } = req.user
     const { id } = req.params as any
+    if (!allowsSupplyDataRead(role, 'order.read')) {
+      throw { statusCode: 403, message: '无权查看采购订单' }
+    }
     // 按角色 scope 过滤，避免店长/供应商越权读到别家单据
-    const where: any = { id, tenantId }
-    const scopedSupplierId = requireSupplierBinding(role, userSupplierId)
-    if (isStoreScoped(role) && storeId) where.storeId = storeId
-    if (scopedSupplierId) where.supplierId = scopedSupplierId
+    const where: any = { id, ...supplyDataReadScope(req.user) }
     const order = await prisma.purchaseOrder.findFirst({
       where,
       include: {
@@ -775,12 +772,12 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   })
 
   app.get('/:id/revisions', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
-    const { tenantId, role, supplierId, storeId } = req.user
+    const { role } = req.user
     const { id } = req.params as any
-    const where: any = { id, tenantId }
-    const scopedSupplierId = requireSupplierBinding(role, supplierId)
-    if (scopedSupplierId) where.supplierId = scopedSupplierId
-    if (isStoreScoped(role)) where.storeId = storeId
+    if (!allowsSupplyDataRead(role, 'order.read')) {
+      return reply.status(403).send({ error: '无权查看采购订单' })
+    }
+    const where: any = { id, ...supplyDataReadScope(req.user) }
     const exists = await prisma.purchaseOrder.findFirst({ where, select: { id: true } })
     if (!exists) return reply.status(404).send({ error: '订单不存在' })
     return prisma.purchaseOrderRevision.findMany({

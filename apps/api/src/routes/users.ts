@@ -7,12 +7,12 @@ const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
 const ROLE_LABEL: Record<string, string> = {
   SUPER_ADMIN: '超管', ADMIN: '管理员', FINANCE: '财务',
-  MANAGER: '店长', PURCHASER: '采购', SUPPLIER_STAFF: '供应商',
+  MANAGER: '店长', PURCHASER: '采购', SUPPLY_CHAIN: '内部供应链', SUPPLIER_STAFF: '供应商',
 }
 
 const USER_ROLES = [
   'SUPER_ADMIN', 'ADMIN', 'FINANCE', 'MANAGER', 'PURCHASER', 'SUPPLIER_STAFF',
-  'CHEF', 'KITCHEN_LEAD', 'CHEF_DIRECTOR', 'SUPPLIER_OWNER', 'ENGINEERING',
+  'CHEF', 'KITCHEN_LEAD', 'CHEF_DIRECTOR', 'SUPPLIER_OWNER', 'SUPPLY_CHAIN', 'ENGINEERING',
   'SUPERVISOR', 'STAFF',
 ] as const
 const PHONE_RE = /^1[3-9]\d{9}$/

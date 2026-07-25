@@ -6,6 +6,7 @@ import { ensureReceiptDerivatives } from '../services/receiptDerivatives'
 import { invalidatePattern } from '../lib/cache'
 import { notifyReceiptConfirmed } from '../services/notification'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
+import { allowsSupplyDataRead, supplyDataReadScope } from '../lib/internal-supply-chain-access'
 import { parsePagination } from '../lib/pagination'
 import { nextBusinessNo } from '../services/purchaseOrderIntegrity'
 import { ensureReceiptInventoryUnitSnapshots } from '../services/receiptInventoryUnits'
@@ -96,17 +97,17 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 列表 ──────────────────────────────────────────
   app.get('/', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role, storeId } = req.user
+    const { role } = req.user
+    if (!allowsSupplyDataRead(role, 'receipt.read')) {
+      return reply.status(403).send({ error: '无权查看入库单' })
+    }
     const parsedFilters = receiptListFilterSchema.safeParse(req.query || {})
     if (!parsedFilters.success) return reply.status(400).send({ error: parsedFilters.error.issues[0].message })
     const { status, supplierId, storeId: qStore, page = '1', pageSize = '20' } = parsedFilters.data as any
-    const where: any = { tenantId }
+    const where: any = supplyDataReadScope(req.user)
     if (status) where.status = status
-    // 供应商: 强制按自家 supplierId 过滤
-    if (isSupplierRole(role)) where.supplierId = req.user.supplierId || '__NONE__'
-    else if (supplierId) where.supplierId = supplierId
-    if (isStoreScoped(role)) where.storeId = storeId
-    else if (qStore) where.storeId = qStore
+    if (supplierId && !isSupplierRole(role)) where.supplierId = supplierId
+    if (qStore && !isStoreScoped(role)) where.storeId = qStore
 
     const pagination = parsePagination({ page, pageSize }, { defaultPageSize: 20, maxPageSize: 100 })
     if (!pagination) return reply.status(400).send({ error: '分页参数格式不正确' })
@@ -132,10 +133,11 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 详情 ──────────────────────────────────────────
   app.get('/:id', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role, storeId } = req.user
-    const detailWhere: any = { id: req.params.id, tenantId }
-    if (isSupplierRole(role)) detailWhere.supplierId = req.user.supplierId || '__NONE__'
-    if (isStoreScoped(role)) detailWhere.storeId = storeId
+    const { role } = req.user
+    if (!allowsSupplyDataRead(role, 'receipt.read')) {
+      return reply.status(403).send({ error: '无权查看入库单' })
+    }
+    const detailWhere: any = { id: req.params.id, ...supplyDataReadScope(req.user) }
     const receipt = await prisma.receipt.findFirst({
       where: detailWhere,
       include: {

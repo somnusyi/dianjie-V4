@@ -13,6 +13,7 @@ const ROLE_OPTIONS = [
   { value: 'CHEF_DIRECTOR',  label: '总厨' },
   { value: 'FINANCE',        label: '财务' },
   { value: 'PURCHASER',      label: '采购' },
+  { value: 'SUPPLY_CHAIN',   label: '内部供应链' },
   { value: 'ENGINEERING',    label: '工程部' },
 ]
 const ROLE_LABEL: Record<string, string> = Object.fromEntries(ROLE_OPTIONS.map(r => [r.value, r.label]))

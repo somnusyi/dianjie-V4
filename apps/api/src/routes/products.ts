@@ -1121,10 +1121,22 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 50,
       include: {
-        _count: { select: { products: true } },     // 当前还存在的 product 数 (撤回 / 单删后会变少)
+        _count: { select: { products: true } },
       },
     })
-    return list
+    const batchIds = list.map(batch => batch.id)
+    const enabledCounts = batchIds.length > 0
+      ? await prisma.product.groupBy({
+          by: ['batchId'],
+          where: { batchId: { in: batchIds }, tenantId, status: 'ENABLED' },
+          _count: { _all: true },
+        })
+      : []
+    const enabledMap = new Map(enabledCounts.map(row => [row.batchId, row._count._all]))
+    return list.map(batch => ({
+      ...batch,
+      canRevoke: !batch.revokedAt && (!isSupplierRole(role) || (enabledMap.get(batch.id) || 0) === 0),
+    }))
   })
 
   // ─── 撤回上传：只停售并留存历史，禁止物理删除商品/库存流水 ──────
@@ -1141,6 +1153,12 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const b = await prisma.productBatch.findFirst({ where })
     if (!b) return reply.status(404).send({ error: '批次不存在' })
     if (b.revokedAt) return reply.status(400).send({ error: '已撤回, 不可重复操作' })
+    if (isSupplierRole(role)) {
+      const enabledCount = await prisma.product.count({ where: { batchId: b.id, tenantId, status: 'ENABLED' } })
+      if (enabledCount > 0) {
+        return reply.status(400).send({ error: '该批次包含已上架商品，请先通过批量停售流程提交审批后停售' })
+      }
+    }
     try {
       const result = await prisma.$transaction(async tx => {
         const pendingDocuments = await tx.document.findMany({

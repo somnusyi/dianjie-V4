@@ -84,6 +84,7 @@ export default function InternalSupplyChainProductsPage() {
   const [error, setError] = useState<string | null>(null)
   const [filters, setFilters] = useState<SupplyProductFilters>(DEFAULT_SUPPLY_PRODUCT_FILTERS)
   const [categories, setCategories] = useState<CategoryOption[]>([])
+  const [bulkCategories, setBulkCategories] = useState<CategoryOption[]>([])
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -113,7 +114,6 @@ export default function InternalSupplyChainProductsPage() {
     const sequence = ++requestSequence.current
     setLoading(true)
     setError(null)
-    setSelectedIds(clearRowSelection())
     apiFetch<{ items: ProductRow[]; total: number; page: number; pageSize: number }>(
       `/api/products${buildProductQuery(filters)}`,
     )
@@ -130,6 +130,10 @@ export default function InternalSupplyChainProductsPage() {
       })
   }
   useEffect(() => { load() }, [filters])
+  useEffect(() => {
+    setSelectedIds(clearRowSelection())
+    setBulkCategory('')
+  }, [filters.q, filters.category, filters.status, filters.supplierId, filters.pageSize])
 
   useEffect(() => {
     apiFetch<CategoryOption[]>('/api/products/categories')
@@ -142,6 +146,28 @@ export default function InternalSupplyChainProductsPage() {
       })
       .catch(() => {})
   }, [])
+
+  useEffect(() => {
+    setBulkCategory('')
+    if (!filters.supplierId) {
+      setBulkCategories([])
+      return
+    }
+    let active = true
+    apiFetch<Array<CategoryOption & { isActive?: boolean }>>(
+      `/api/products/categories?supplierId=${encodeURIComponent(filters.supplierId)}`,
+    )
+      .then(data => {
+        if (!active) return
+        setBulkCategories(
+          (Array.isArray(data) ? data : []).filter(category => category.isActive !== false),
+        )
+      })
+      .catch(() => {
+        if (active) setBulkCategories([])
+      })
+    return () => { active = false }
+  }, [filters.supplierId])
 
   const totalPages = Math.max(1, Math.ceil(total / filters.pageSize))
 
@@ -494,7 +520,7 @@ export default function InternalSupplyChainProductsPage() {
                         type="checkbox"
                         checked={currentPageSelected}
                         onChange={e => selectCurrentPage(e.target.checked)}
-                        aria-label="选择当前页全部商品"
+                        aria-label="从表头选择当前页全部商品"
                       />
                     </th>
                     <th className="px-4 py-3">图片</th>
@@ -566,7 +592,7 @@ export default function InternalSupplyChainProductsPage() {
                 <span className="text-caption text-gray2">批量操作：</span>
                 <FilterSelect label="" value={bulkCategory} onChange={value => setBulkCategory(value)}>
                   <option value="">选择新分类</option>
-                  {categories.map(cat => <option key={cat.name} value={cat.name}>{cat.name}</option>)}
+                  {bulkCategories.map(cat => <option key={cat.name} value={cat.name}>{cat.name}</option>)}
                 </FilterSelect>
                 <button
                   onClick={submitBulkCategory}

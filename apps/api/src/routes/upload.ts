@@ -1,6 +1,5 @@
 import { FastifyInstance } from 'fastify'
 import OSS from 'ali-oss'
-import path from 'path'
 import { z } from 'zod'
 
 const uuidv4 = () => Math.random().toString(36).slice(2) + Date.now().toString(36)
@@ -11,6 +10,18 @@ const IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
 const VIDEO_MIMES = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-m4v', 'video/3gpp']
 const DOC_MIMES = ['application/pdf', ...IMAGE_MIMES]
 const MEDIA_MIMES = [...IMAGE_MIMES, ...VIDEO_MIMES]
+const OBJECT_EXTENSION_BY_MIME: Record<string, string> = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+  'video/mp4': '.mp4',
+  'video/quicktime': '.mov',
+  'video/webm': '.webm',
+  'video/x-m4v': '.m4v',
+  'video/3gpp': '.3gp',
+  'application/pdf': '.pdf',
+}
 
 // 文件大小上限 (byte). image/pdf 10MB; video 50MB (2026-06 客户: 手机视频常 >30MB)
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -80,6 +91,10 @@ export function signOssKey(key: string | null | undefined): string | null {
   }
 }
 
+export function objectExtensionForMime(mime: string): string {
+  return OBJECT_EXTENSION_BY_MIME[mime] || '.bin'
+}
+
 async function uploadOne(req: any, reply: any, opts: { allowedMimes: string[]; category: string }) {
   const user = req.user
   if (!user) return reply.status(401).send({ error: '未登录' })
@@ -112,11 +127,8 @@ async function uploadOne(req: any, reply: any, opts: { allowedMimes: string[]; c
       return reply.status(400).send({ error: `文件过大被截断, 请压缩到 ${maxMb}MB 内重试` })
     }
     const buffer = Buffer.concat(chunks)
-    const ext = path.extname(data.filename) || (
-      data.mimetype === 'application/pdf' ? '.pdf' :
-      isVideo ? (data.mimetype === 'video/quicktime' ? '.mov' : '.mp4') :
-      '.jpg'
-    )
+    // 只使用已经通过白名单的 MIME 决定对象后缀；不信任用户文件名中的扩展名。
+    const ext = objectExtensionForMime(data.mimetype)
     const key = `${opts.category}/${user.tenantId}/${uuidv4()}${ext}`
     const client = ossClient()
     await client.put(key, buffer, {

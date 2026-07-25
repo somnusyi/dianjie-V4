@@ -109,6 +109,20 @@ describe('supplier order and delivery list query (integration)', () => {
     orderA = orderACreated
     orderAId = orderACreated.id
     orderBId = orderB.id
+    await prisma.purchaseOrder.update({
+      where: { id: orderAId },
+      data: {
+        submittedSnapshot: {
+          items: [{
+            productId: productAId,
+            name: `A商品-${suffix}`,
+            code: `A-CODE-${suffix}`,
+            quantity: '10.00',
+            unitPrice: '10.00',
+          }],
+        },
+      },
+    })
 
     const delivery = await prisma.deliveryOrder.create({
       data: {
@@ -215,6 +229,31 @@ describe('supplier order and delivery list query (integration)', () => {
     })
     expect(noMatch.statusCode).toBe(200)
     expect(noMatch.json().items).toHaveLength(0)
+  })
+
+  it('keeps purchase orders searchable by the first-submission snapshot after product rename', async () => {
+    await prisma.product.update({
+      where: { id: productAId },
+      data: { name: `A商品-已改名-${suffix}`, code: `A-CODE-NEW-${suffix}` },
+    })
+
+    for (const keyword of [`A商品-${suffix}`, `A-CODE-${suffix}`]) {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/orders?keyword=${encodeURIComponent(keyword)}&page=1&pageSize=20`,
+        headers: { 'x-test-actor': 'supplierA' },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().items.map((order: any) => order.id)).toEqual([orderAId])
+    }
+
+    const currentName = await app.inject({
+      method: 'GET',
+      url: `/api/orders?keyword=${encodeURIComponent(`A商品-已改名-${suffix}`)}&page=1&pageSize=20`,
+      headers: { 'x-test-actor': 'supplierA' },
+    })
+    expect(currentName.statusCode).toBe(200)
+    expect(currentName.json().items.map((order: any) => order.id)).toEqual([orderAId])
   })
 
   it('paginates purchase orders server-side', async () => {

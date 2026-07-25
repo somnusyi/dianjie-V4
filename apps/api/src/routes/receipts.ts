@@ -6,7 +6,8 @@ import { ensureReceiptDerivatives } from '../services/receiptDerivatives'
 import { invalidatePattern } from '../lib/cache'
 import { notifyReceiptConfirmed } from '../services/notification'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
-import { parsePagination } from '../lib/pagination'
+import { calendarDateSchema } from '../lib/calendar-date'
+import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 import { nextBusinessNo } from '../services/purchaseOrderIntegrity'
 import { ensureReceiptInventoryUnitSnapshots } from '../services/receiptInventoryUnits'
 import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
@@ -15,14 +16,76 @@ const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const RECEIPT_OPERATOR_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN'])
 const RECEIPT_AMOUNT_MAX = new Prisma.Decimal('9999999999.99')
 
-const receiptListFilterSchema = z.object({
+export const receiptListFilterSchema = z.object({
   status: z.preprocess(
     value => value === '' ? undefined : value,
     z.enum(['DRAFT', 'PENDING', 'PENDING_CONFIRM', 'CONFIRMED', 'ACCOUNTED', 'VOID', 'REJECTED']).optional(),
   ),
   supplierId: z.string().trim().min(1).max(100).optional(),
   storeId: z.string().trim().min(1).max(100).optional(),
-}).passthrough()
+  keyword: z.string().trim().max(80).optional(),
+  dateFrom: calendarDateSchema.optional(),
+  dateTo: calendarDateSchema.optional(),
+  page: z.coerce.number().int().positive().max(100_000).default(1),
+  pageSize: z.coerce.number().int().positive().max(100).default(20),
+}).refine(q => !q.dateFrom || !q.dateTo || q.dateFrom <= q.dateTo, {
+  message: '开始日期不能晚于结束日期',
+  path: ['dateFrom'],
+})
+
+type ReceiptListContext = {
+  tenantId: string
+  role: string
+  storeId?: string | null
+  supplierId?: string | null
+}
+
+export function buildReceiptListWhere(q: z.infer<typeof receiptListFilterSchema>, user: ReceiptListContext) {
+  const { tenantId, role, storeId: actorStoreId, supplierId: actorSupplierId } = user
+  const where: any = { tenantId }
+  if (q.status) where.status = q.status
+  if (isSupplierRole(role)) where.supplierId = actorSupplierId || '__NONE__'
+  else if (q.supplierId) where.supplierId = q.supplierId
+  if (isStoreScoped(role)) where.storeId = actorStoreId || '__NONE__'
+  else if (q.storeId) where.storeId = q.storeId
+  const and: any[] = []
+  if (q.keyword) {
+    and.push({
+      OR: [
+        { no: { contains: q.keyword, mode: 'insensitive' } },
+        { store: { name: { contains: q.keyword, mode: 'insensitive' } } },
+        {
+          items: {
+            some: {
+              OR: [
+                { productNameSnapshot: { contains: q.keyword, mode: 'insensitive' } },
+                { productCodeSnapshot: { contains: q.keyword, mode: 'insensitive' } },
+                { productSpecSnapshot: { contains: q.keyword, mode: 'insensitive' } },
+                {
+                  product: {
+                    OR: [
+                      { name: { contains: q.keyword, mode: 'insensitive' } },
+                      { code: { contains: q.keyword, mode: 'insensitive' } },
+                      { spec: { contains: q.keyword, mode: 'insensitive' } },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      ],
+    })
+  }
+  if (and.length) where.AND = and
+  if (q.dateFrom || q.dateTo) {
+    where.deliveryDate = {
+      ...(q.dateFrom ? { gte: new Date(`${q.dateFrom}T00:00:00.000Z`) } : {}),
+      ...(q.dateTo ? { lte: new Date(`${q.dateTo}T00:00:00.000Z`) } : {}),
+    }
+  }
+  return where
+}
 
 function canOperateReceipt(role: string | undefined) {
   return Boolean(role && RECEIPT_OPERATOR_ROLES.has(role))
@@ -96,24 +159,17 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 列表 ──────────────────────────────────────────
   app.get('/', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role, storeId } = req.user
-    const parsedFilters = receiptListFilterSchema.safeParse(req.query || {})
-    if (!parsedFilters.success) return reply.status(400).send({ error: parsedFilters.error.issues[0].message })
-    const { status, supplierId, storeId: qStore, page = '1', pageSize = '20' } = parsedFilters.data as any
-    const where: any = { tenantId }
-    if (status) where.status = status
-    // 供应商: 强制按自家 supplierId 过滤
-    if (isSupplierRole(role)) where.supplierId = req.user.supplierId || '__NONE__'
-    else if (supplierId) where.supplierId = supplierId
-    if (isStoreScoped(role)) where.storeId = storeId
-    else if (qStore) where.storeId = qStore
+    const parsed = receiptListFilterSchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const q = parsed.data
+    const { tenantId, role, storeId, supplierId } = req.user
+    const where = buildReceiptListWhere(q, { tenantId, role, storeId, supplierId })
 
-    const pagination = parsePagination({ page, pageSize }, { defaultPageSize: 20, maxPageSize: 100 })
-    if (!pagination) return reply.status(400).send({ error: '分页参数格式不正确' })
-    const { page: p, pageSize: ps } = pagination
+    const p = q.page
+    const ps = q.pageSize
     const skip = (p - 1) * ps
 
-    const [items, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       prisma.receipt.findMany({
         where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip, take: ps,
@@ -121,12 +177,16 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
           store: { select: { id: true, name: true } },
           supplier: { select: { id: true, name: true } },
           createdBy: { select: { id: true, name: true } },
-          items: { include: { product: { select: { id: true, name: true, unit: true } } } },
+          items: { include: { product: { select: { id: true, name: true, unit: true, code: true, spec: true } } } },
           paymentSchedule: { select: { id: true, status: true, dueAt: true, amount: true } },
         },
       }),
       prisma.receipt.count({ where }),
     ])
+    const items = rows.map(receipt => ({
+      ...receipt,
+      items: receipt.items.map(withDocumentProductSnapshot),
+    }))
     return { items, total, page: p, pageSize: ps }
   })
 

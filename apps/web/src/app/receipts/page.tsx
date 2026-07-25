@@ -47,6 +47,8 @@ export default function ReceiptsPage() {
   const [filterStatus, setFilterStatus] = useState('')
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
+  const [searchDraft, setSearchDraft] = useState({ keyword: '', dateFrom: '', dateTo: '' })
+  const [appliedSearch, setAppliedSearch] = useState({ keyword: '', dateFrom: '', dateTo: '' })
   const PAGE_SIZE = 20
 
   // 弹窗状态
@@ -75,11 +77,14 @@ export default function ReceiptsPage() {
     load(1)
   }, [filterStatus])
 
-  const load = async (p = page) => {
+  const load = async (p = page, search = appliedSearch) => {
     setLoading(true)
     try {
       const params = new URLSearchParams({ page: String(p), pageSize: String(PAGE_SIZE) })
       if (filterStatus) params.set('status', filterStatus)
+      if (search.keyword.trim()) params.set('keyword', search.keyword.trim())
+      if (search.dateFrom) params.set('dateFrom', search.dateFrom)
+      if (search.dateTo) params.set('dateTo', search.dateTo)
       const [r, s, st, pr] = await Promise.all([
         api.get(`/api/receipts?${params}`),
         api.get('/api/suppliers?status=ENABLED'),
@@ -93,6 +98,22 @@ export default function ReceiptsPage() {
       setSuppliers(s.data); setStores(st.data); setProducts(pr.data)
     } catch { show('入库数据读取失败', 'error') }
     setLoading(false)
+  }
+
+  function applySearch() {
+    if (searchDraft.dateFrom && searchDraft.dateTo && searchDraft.dateFrom > searchDraft.dateTo) {
+      show('开始日期不能晚于结束日期', 'error')
+      return
+    }
+    const next = { ...searchDraft, keyword: searchDraft.keyword.trim() }
+    setAppliedSearch(next)
+    load(1, next)
+  }
+
+  function clearSearch() {
+    setSearchDraft({ keyword: '', dateFrom: '', dateTo: '' })
+    setAppliedSearch({ keyword: '', dateFrom: '', dateTo: '' })
+    load(1, { keyword: '', dateFrom: '', dateTo: '' })
   }
 
   const openAction = (row: any, type: 'confirm' | 'loss' | 'reject') => {
@@ -304,6 +325,29 @@ export default function ReceiptsPage() {
               {statusTabs.map(t => (
                 <button key={t.v} className={filterStatus === t.v ? 'active' : ''} onClick={() => setFilterStatus(t.v)}>{t.label}</button>
               ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8, padding: '10px 0', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <input
+                value={searchDraft.keyword}
+                onChange={e => setSearchDraft(s => ({ ...s, keyword: e.target.value }))}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); applySearch() } }}
+                placeholder="搜索商品名称 / 编码 / 单号"
+                style={{ flex: '1 1 200px', minWidth: 160, padding: '7px 10px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: 13, outline: 'none' }}
+              />
+              <label style={{ display: 'flex', flexDirection: 'column', fontSize: 11, color: '#6b7280', gap: 2 }}>
+                开始日期
+                <input type="date" value={searchDraft.dateFrom}
+                  onChange={e => setSearchDraft(s => ({ ...s, dateFrom: e.target.value }))}
+                  style={{ padding: '6px 8px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: 13 }} />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', fontSize: 11, color: '#6b7280', gap: 2 }}>
+                结束日期
+                <input type="date" value={searchDraft.dateTo}
+                  onChange={e => setSearchDraft(s => ({ ...s, dateTo: e.target.value }))}
+                  style={{ padding: '6px 8px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: 13 }} />
+              </label>
+              <Btn size="sm" variant="primary" onClick={applySearch}>查询</Btn>
+              <Btn size="sm" onClick={clearSearch}>清空</Btn>
             </div>
             <div className="dj-card finance-table-card">
               <Table columns={cols} data={receipts} loading={loading} />

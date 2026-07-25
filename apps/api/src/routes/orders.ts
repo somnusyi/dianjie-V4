@@ -151,6 +151,30 @@ class ReceiptAlreadyProcessedError extends Error {
   }
 }
 
+export async function findOrderIdsBySubmittedSnapshot(
+  tenantId: string,
+  keyword: string,
+): Promise<string[]> {
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT po.id
+    FROM purchase_orders po
+    WHERE po."tenantId" = ${tenantId}
+      AND EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements(
+          CASE
+            WHEN jsonb_typeof(po."submittedSnapshot"->'items') = 'array'
+              THEN po."submittedSnapshot"->'items'
+            ELSE '[]'::jsonb
+          END
+        ) AS snapshot_item
+        WHERE POSITION(LOWER(${keyword}) IN LOWER(COALESCE(snapshot_item->>'name', ''))) > 0
+           OR POSITION(LOWER(${keyword}) IN LOWER(COALESCE(snapshot_item->>'code', ''))) > 0
+      )
+  `)
+  return rows.map(row => row.id)
+}
+
 // 内存级幂等缓存 (60s TTL) — 防止厨师长双击 / 网络重试创双单
 const idempotencyCache = new Map<string, { orderId: string; orderNo: string; expiresAt: number }>()
 function getIdempotent(key: string) {
@@ -186,6 +210,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const and: any[] = []
     if (q.productId) and.push({ items: { some: { productId: q.productId, isActive: true } } })
     if (q.keyword) {
+      const snapshotOrderIds = await findOrderIdsBySubmittedSnapshot(tenantId, q.keyword)
       and.push({
         OR: [
           { no: { contains: q.keyword, mode: 'insensitive' } },
@@ -204,6 +229,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
               },
             },
           },
+          ...(snapshotOrderIds.length > 0 ? [{ id: { in: snapshotOrderIds } }] : []),
         ],
       })
     }
@@ -248,7 +274,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     // 按角色 scope 过滤，避免店长/供应商越权读到别家单据
     const where: any = { id, tenantId }
     const scopedSupplierId = requireSupplierBinding(role, userSupplierId)
-    if (isStoreScoped(role) && storeId) where.storeId = storeId
+    if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
     if (scopedSupplierId) where.supplierId = scopedSupplierId
     const order = await prisma.purchaseOrder.findFirst({
       where,

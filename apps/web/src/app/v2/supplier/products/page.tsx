@@ -48,6 +48,7 @@ type Batch = {
   totalRows: number; createdCount: number; failedCount: number
   revokedAt: string | null
   createdAt: string
+  canRevoke?: boolean
   _count?: { products: number }
 }
 
@@ -511,7 +512,7 @@ export default function SupplierProductsPage() {
                       {b.failedCount > 0 && <span className="text-red-fg">✗ {b.failedCount} 失败</span>}
                       <span className="ml-auto">现存 {b._count?.products ?? '?'} SKU</span>
                     </div>
-                    {!revoked && (b._count?.products ?? 0) > 0 && (
+                    {!revoked && b.canRevoke !== false && (b._count?.products ?? 0) > 0 && (
                       <button
                         onClick={() => revokeBatch(b)}
                         className="mt-2 text-caption text-red-fg"

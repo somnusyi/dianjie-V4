@@ -11,6 +11,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
+import { isInternalSupplyChainRole } from '../lib/internal-supply-chain-access'
 import { estimatedStoreInventory, type StoreInventorySummary } from '../services/storeInventory'
 
 const fmtMoney = (n: number) => '¥' + Math.round(n).toLocaleString()
@@ -62,6 +63,48 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
       },
     })
     if (!user) return reply.status(404).send({ error: '用户不存在' })
+
+    // 内部供应链只允许看到租户内供应履约概览。必须在任何 RevenueRecord
+    // 查询之前返回，避免未来共享 dashboard 聚合扩展时重新带出营业额。
+    if (isInternalSupplyChainRole(role)) {
+      const [stores, orderCount, deliveryCount, receiptCount] = await Promise.all([
+        prisma.store.findMany({
+          where: { tenantId, status: 'ENABLED' },
+          select: { id: true, no: true, name: true },
+          orderBy: { no: 'asc' },
+        }),
+        prisma.purchaseOrder.count({
+          where: { tenantId, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
+        }),
+        prisma.deliveryOrder.count({
+          where: { tenantId, status: { in: ['SHIPPED', 'DELIVERED'] } },
+        }),
+        prisma.receipt.count({
+          where: { tenantId, status: { notIn: ['VOID', 'REJECTED'] } },
+        }),
+      ])
+      return reply.send({
+        role,
+        user: { id: user.id, name: user.name, role: user.role, store: null, supplier: null },
+        store: null,
+        supplier: null,
+        hero: {
+          label: '内部供应链只读工作台',
+          value: `${stores.length} 家门店`,
+          meta: '跨店查看订单、配送、收货、库存与消耗',
+          stats: [
+            { label: '进行中订单', value: String(orderCount), tone: 'default' as const },
+            { label: '在途配送', value: String(deliveryCount), tone: deliveryCount > 0 ? 'orange' as const : 'default' as const },
+            { label: '有效收货', value: String(receiptCount), tone: 'default' as const },
+          ],
+        },
+        supplyChain: {
+          readOnly: true,
+          stores,
+          counts: { orders: orderCount, deliveries: deliveryCount, receipts: receiptCount },
+        },
+      })
+    }
 
     const todayLocal = dayjs()
     const today = utcDateForLocal(todayLocal)

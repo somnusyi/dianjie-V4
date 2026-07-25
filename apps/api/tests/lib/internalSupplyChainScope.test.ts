@@ -35,6 +35,31 @@ describe('internal supply-chain scope', () => {
     })
   })
 
+  it('fails closed when a store or external supplier binding is absent', () => {
+    expect(supplyDataReadScope({
+      tenantId: 'tenant-a',
+      role: 'MANAGER',
+      storeId: null,
+    })).toEqual({ tenantId: 'tenant-a', storeId: '__NONE__' })
+
+    expect(() => supplyDataReadScope({
+      tenantId: 'tenant-a',
+      role: 'SUPPLIER_OWNER',
+      supplierId: null,
+    })).toThrow()
+  })
+
+  it('never accepts a caller-supplied tenant override', () => {
+    const scope = supplyDataReadScope({
+      tenantId: 'tenant-a',
+      role: 'SUPPLY_CHAIN',
+      storeId: 'store-in-tenant-b',
+      supplierId: 'supplier-in-tenant-b',
+    })
+    expect(scope).toEqual({ tenantId: 'tenant-a' })
+    expect(scope).not.toHaveProperty('tenantId', 'tenant-b')
+  })
+
   it('grants only the five explicit read capabilities', () => {
     for (const capability of INTERNAL_SUPPLY_CHAIN_READ_CAPABILITIES) {
       expect(hasInternalSupplyChainCapability('SUPPLY_CHAIN', capability)).toBe(true)

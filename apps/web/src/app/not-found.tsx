@@ -17,6 +17,7 @@ export default function NotFound() {
         KITCHEN_LEAD: '/v2/chef/home',
         CHEF_DIRECTOR: '/v2/chef-director/home', CHEF: '/v2/chef-director/home',
         FINANCE: '/v2/finance/home',
+        SUPPLY_CHAIN: '/v2/supply-chain/home',
         SUPPLIER_OWNER: '/v2/supplier/home', SUPPLIER_STAFF: '/v2/supplier/home', SUPPLIER_SUB: '/v2/supplier/home',
         ENGINEERING: '/v2/engineer/home',
       }

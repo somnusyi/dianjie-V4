@@ -12,7 +12,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { Prisma, prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { isStoreScoped } from '../lib/auth-scope'
-import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
+import { hasInternalSupplyChainCapability, isInternalSupplyChainRole } from '../lib/internal-supply-chain-access'
 import { monthRangeForDateCol } from '../lib/dateRange'
 import {
   aggregateByProduct, dailyQtyByProduct, groupDetailRows, summarizeMonth, trailingAvgQty,
@@ -296,8 +296,13 @@ export const consumptionAdminRoutes: FastifyPluginAsync = async app => {
   // revenue: 当日 RevenueRecord.amount; costRate = consumptionCost/revenue×100 (revenue=0 时 null)
   app.get('/daily-series', auth, async (req: any, reply: any) => {
     const { tenantId, role, storeId: userStoreId } = req.user
-    if (!canViewConsumption(role)) {
-      return reply.status(403).send({ error: '无权查看门店消耗' })
+    // 此端点把 RevenueRecord 与消耗成本率一起返回，不属于纯消耗读取能力。
+    // 内部供应链必须在任何门店或 RevenueRecord 查询之前拒绝。
+    if (isInternalSupplyChainRole(role)) {
+      return reply.status(403).send({ error: '内部供应链无权查看营业额与成本率' })
+    }
+    if (!CONSUMPTION_VIEW_ROLES.has(role)) {
+      return reply.status(403).send({ error: '无权查看营业额与成本率' })
     }
     const storeId = String(req.query?.storeId || '')
     if (!storeId) return reply.status(400).send({ error: '请指定门店' })

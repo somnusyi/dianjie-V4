@@ -1,5 +1,6 @@
 const MANAGER_ROLES = ['MANAGER', 'PURCHASER'] as const
-const SUPPLIER_ROLES = ['SUPPLY_CHAIN', 'SUPPLIER_OWNER', 'SUPPLIER_STAFF', 'SUPPLIER_SUB'] as const
+const SUPPLIER_ROLES = ['SUPPLIER_OWNER', 'SUPPLIER_STAFF', 'SUPPLIER_SUB'] as const
+const INTERNAL_SUPPLY_CHAIN_ROLES = ['SUPPLY_CHAIN'] as const
 
 /**
  * 返回需要限制角色的 v2 业务区。
@@ -9,6 +10,9 @@ const SUPPLIER_ROLES = ['SUPPLY_CHAIN', 'SUPPLIER_OWNER', 'SUPPLIER_STAFF', 'SUP
  * 登录校验，由各自现有守卫处理。
  */
 export function rolesForV2Path(pathname: string): readonly string[] | undefined {
+  if (pathname === '/v2/supply-chain' || pathname.startsWith('/v2/supply-chain/')) {
+    return INTERNAL_SUPPLY_CHAIN_ROLES
+  }
   if (pathname === '/v2/manager' || pathname.startsWith('/v2/manager/')) {
     return MANAGER_ROLES
   }
@@ -16,4 +20,14 @@ export function rolesForV2Path(pathname: string): readonly string[] | undefined 
     return SUPPLIER_ROLES
   }
   return undefined
+}
+
+/**
+ * 内部供应链使用独立的只读工作区。即使某个业务页忘记声明 requireRole，
+ * 这里仍按路径白名单拒绝供应商、财务、销售分析和所有写操作页面。
+ */
+export function isV2PathAllowedForRole(pathname: string, role: string): boolean {
+  if (role !== 'SUPPLY_CHAIN') return true
+  if (pathname === '/v2/me' || pathname === '/v2/me/password') return true
+  return pathname === '/v2/supply-chain' || pathname.startsWith('/v2/supply-chain/')
 }

@@ -73,7 +73,7 @@ export function routeForRole(role: string): string {
     CHEF_DIRECTOR:  '/v2/chef-director/home',
     CHEF:           '/v2/chef-director/home', // legacy（旧 CHEF=总厨）
     FINANCE:        '/v2/finance/home',
-    SUPPLY_CHAIN:   '/v2/supplier/home',
+    SUPPLY_CHAIN:   '/v2/supply-chain/home',
     SUPPLIER_OWNER: '/v2/supplier/home',
     SUPPLIER_STAFF: '/v2/supplier/home',      // legacy
     SUPPLIER_SUB:   '/v2/supplier/home',
@@ -89,7 +89,7 @@ export function routeForRole(role: string): string {
  * 返回 null 让调用方走 routeForRole() 的移动端真实页面
  */
 export function pcRouteForRole(role: string): string | null {
-  if (role === 'SUPPLY_CHAIN') return '/v2/supplier/home'
+  if (role === 'SUPPLY_CHAIN') return '/v2/supply-chain/home'
   return null
 }
 

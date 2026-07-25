@@ -2,10 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apiDownload, apiFetch, pcRouteForRole, routeForRole } from './v2-auth'
 
 describe('supply-chain role routes', () => {
-  it('uses the existing supply-chain portal instead of the manager portal', () => {
-    expect(routeForRole('SUPPLY_CHAIN')).toBe('/v2/supplier/home')
-    expect(pcRouteForRole('SUPPLY_CHAIN')).toBe('/v2/supplier/home')
+  it('uses the dedicated read-only landing instead of supplier or manager portals', () => {
+    expect(routeForRole('SUPPLY_CHAIN')).toBe('/v2/supply-chain/home')
+    expect(pcRouteForRole('SUPPLY_CHAIN')).toBe('/v2/supply-chain/home')
     expect(routeForRole('SUPPLY_CHAIN')).not.toBe('/v2/manager/home')
+    expect(routeForRole('SUPPLY_CHAIN')).not.toBe('/v2/supplier/home')
   })
 })
 

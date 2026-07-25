@@ -71,13 +71,15 @@ export default function MePage() {
 
         {/* 入口 */}
         <ul className="bg-white rounded-card border border-border divide-y divide-border">
-          <li>
-            <a href="/v2/notifications" className="flex items-center px-3 py-3">
-              <span className="w-8 h-8 rounded-md bg-bg flex items-center justify-center mr-3">⌬</span>
-              <span className="flex-1 text-body">消息中心</span>
-              <span className="text-gray3">›</span>
-            </a>
-          </li>
+          {u.role !== 'SUPPLY_CHAIN' && (
+            <li>
+              <a href="/v2/notifications" className="flex items-center px-3 py-3">
+                <span className="w-8 h-8 rounded-md bg-bg flex items-center justify-center mr-3">⌬</span>
+                <span className="flex-1 text-body">消息中心</span>
+                <span className="text-gray3">›</span>
+              </a>
+            </li>
+          )}
           {(u.role === 'BOSS' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN' || u.role === 'FINANCE') && (
             <>
               <li>

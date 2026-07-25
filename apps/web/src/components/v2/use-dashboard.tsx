@@ -34,6 +34,11 @@ export type DashboardData = {
   }
   pendingReviewCount?: number
   pendingApprovalCount?: number
+  supplyChain?: {
+    readOnly: true
+    stores: { id: string; no: string; name: string }[]
+    counts: { orders: number; deliveries: number; receipts: number }
+  }
 }
 
 export function useDashboard() {

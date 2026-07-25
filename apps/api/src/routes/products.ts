@@ -20,7 +20,10 @@ import {
   isValidProductUnitFactor,
   PRODUCT_UNIT_NAME_MAX_LENGTH,
 } from '../services/inventoryUnits'
-import { tryCostUnitPriceToOrderUnitPrice } from '../services/costUnitPricing'
+import {
+  tryCostUnitPriceToOrderUnitPrice,
+  type CostUnitPricedProduct,
+} from '../services/costUnitPricing'
 import crypto from 'crypto'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
@@ -349,31 +352,64 @@ export function productExportFilename(date = new Date()): string {
   return `商品报价表_${china.replace(/\//g, '-')}.csv`
 }
 
-export type ExportableProduct = {
+export type ExportableProduct = CostUnitPricedProduct & {
   code: string
   name: string
   category: string | null
   spec: string | null
-  unit: string | null
-  inventoryUnit: string | null
-  price: number | string | unknown
   status: string
 }
 
 export function buildProductExportCsv(rows: ExportableProduct[]): string {
-  const headers = ['商品编码', '名称', '分类', '规格', '采购单位', '库存单位', '采购价', '状态']
+  const headers = [
+    '商品编码', '名称', '分类', '规格',
+    '采购单位', '库存单位', '订货单位', '成本单位',
+    '每采购单位=多少库存单位', '每订货单位=多少库存单位', '每成本单位=多少库存单位',
+    '成本单位单价', '订货单位折算价', '换算状态', '状态',
+  ]
   const lines = [
-    headers.map(escapeCsv).join(','),
-    ...rows.map(row => [
-      row.code,
-      row.name,
-      row.category || '',
-      row.spec || '',
-      row.unit || '',
-      row.inventoryUnit || row.unit || '',
-      Number(row.price).toFixed(2),
-      formatProductStatus(row.status),
-    ].map(sanitizeCsvCell).join(',')),
+    headers.map(sanitizeCsvCell).join(','),
+    ...rows.map(row => {
+      const structurelessLegacy = [
+        row.purchaseUnit,
+        row.inventoryUnit,
+        row.orderUnit,
+        row.costUnit,
+        row.inventoryUnitsPerPurchaseUnit,
+        row.inventoryUnitsPerOrderUnit,
+        row.inventoryUnitsPerCostUnit,
+      ].every(value => value === null || value === undefined || String(value).trim() === '')
+      const legacyFallback = structurelessLegacy ? row.unit : ''
+      const factorFallback = structurelessLegacy ? 1 : ''
+      const orderUnitPrice = tryCostUnitPriceToOrderUnitPrice(row)
+      const conversionStatus = structurelessLegacy
+        ? '兼容 1:1'
+        : orderUnitPrice === null && row.unitConversionStatus !== 'PENDING'
+          ? '合同不完整'
+          : ({
+              PENDING: '待核验',
+              INFERRED: '已推断',
+              VERIFIED: '已核验',
+            }[String(row.unitConversionStatus || '')] || String(row.unitConversionStatus || ''))
+
+      return [
+        row.code,
+        row.name,
+        row.category || '',
+        row.spec || '',
+        row.purchaseUnit || legacyFallback,
+        row.inventoryUnit || legacyFallback,
+        row.orderUnit || legacyFallback,
+        row.costUnit || legacyFallback,
+        row.inventoryUnitsPerPurchaseUnit ?? factorFallback,
+        row.inventoryUnitsPerOrderUnit ?? factorFallback,
+        row.inventoryUnitsPerCostUnit ?? factorFallback,
+        Number(row.price).toFixed(2),
+        orderUnitPrice?.toFixed(2) || '',
+        conversionStatus,
+        formatProductStatus(row.status),
+      ].map(sanitizeCsvCell).join(',')
+    }),
   ]
   return lines.join('\r\n')
 }
@@ -453,7 +489,13 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       take: PRODUCT_EXPORT_MAX_ROWS + 1,
       select: {
         code: true, name: true, category: true, spec: true,
-        unit: true, inventoryUnit: true, price: true, status: true,
+        unit: true, purchaseUnit: true, inventoryUnit: true,
+        orderUnit: true, costUnit: true,
+        inventoryUnitsPerPurchaseUnit: true,
+        inventoryUnitsPerOrderUnit: true,
+        inventoryUnitsPerCostUnit: true,
+        unitConversionStatus: true,
+        price: true, status: true,
       },
     })
     if (cappedRows.length > PRODUCT_EXPORT_MAX_ROWS) {

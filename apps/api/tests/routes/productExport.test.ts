@@ -81,17 +81,25 @@ describe('product export helpers', () => {
     const rows: ExportableProduct[] = [
       {
         code: 'P-001', name: '白菜', category: '蔬菜', spec: '500g',
-        unit: '件', inventoryUnit: 'kg', price: 12.5, status: 'ENABLED',
+        unit: '件', purchaseUnit: '件', inventoryUnit: 'kg',
+        orderUnit: '件', costUnit: '件',
+        inventoryUnitsPerPurchaseUnit: 1, inventoryUnitsPerOrderUnit: 1,
+        inventoryUnitsPerCostUnit: 1, unitConversionStatus: 'VERIFIED',
+        price: 12.5, status: 'ENABLED',
       },
       {
         code: 'P-002', name: '带逗号, 引号"商品', category: '蔬菜', spec: '1kg',
-        unit: '件', inventoryUnit: null, price: 0, status: 'PENDING_APPROVAL',
+        unit: '件', purchaseUnit: null, inventoryUnit: null,
+        orderUnit: null, costUnit: null,
+        inventoryUnitsPerPurchaseUnit: null, inventoryUnitsPerOrderUnit: null,
+        inventoryUnitsPerCostUnit: null, unitConversionStatus: null,
+        price: 0, status: 'PENDING_APPROVAL',
       },
     ]
     const csv = buildProductExportCsv(rows)
     const lines = csv.split('\r\n')
-    expect(lines[0]).toBe('商品编码,名称,分类,规格,采购单位,库存单位,采购价,状态')
-    expect(lines[1]).toBe('P-001,白菜,蔬菜,500g,件,kg,12.50,供应中')
+    expect(lines[0]).toBe('商品编码,名称,分类,规格,采购单位,库存单位,订货单位,成本单位,每采购单位=多少库存单位,每订货单位=多少库存单位,每成本单位=多少库存单位,成本单位单价,订货单位折算价,换算状态,状态')
+    expect(lines[1]).toBe('P-001,白菜,蔬菜,500g,件,kg,件,件,1,1,1,12.50,12.50,已核验,供应中')
     expect(lines[2]).toContain('"带逗号, 引号""商品"')
   })
 
@@ -102,7 +110,14 @@ describe('product export helpers', () => {
       category: '蔬菜',
       spec: '\t=1+1',
       unit: '  +件',
+      purchaseUnit: '  +件',
       inventoryUnit: 'kg',
+      orderUnit: '件',
+      costUnit: '件',
+      inventoryUnitsPerPurchaseUnit: 1,
+      inventoryUnitsPerOrderUnit: 1,
+      inventoryUnitsPerCostUnit: 1,
+      unitConversionStatus: 'VERIFIED',
       price: 1,
       status: 'ENABLED',
     }])
@@ -111,6 +126,90 @@ describe('product export helpers', () => {
     expect(line).toContain("'@sum(A1)")
     expect(line).toContain("'\t=1+1")
     expect(line).toContain("'  +件")
+  })
+
+  it('buildProductExportCsv computes order-unit price with g→斤 conversion factors', () => {
+    const rows: ExportableProduct[] = [{
+      code: 'P-GJ', name: '五花肉', category: '肉类', spec: '500g',
+      unit: 'g', purchaseUnit: 'g', inventoryUnit: 'g',
+      orderUnit: '斤', costUnit: 'g',
+      inventoryUnitsPerPurchaseUnit: 1,
+      inventoryUnitsPerOrderUnit: 500,
+      inventoryUnitsPerCostUnit: 1,
+      unitConversionStatus: 'VERIFIED',
+      price: 5, status: 'ENABLED',
+    }]
+    const csv = buildProductExportCsv(rows)
+    const lines = csv.split('\r\n')
+    expect(lines[1]).toBe('P-GJ,五花肉,肉类,500g,g,g,斤,g,1,500,1,5.00,2500.00,已核验,供应中')
+  })
+
+  it('buildProductExportCsv leaves order-unit price blank for PENDING non-legacy product', () => {
+    const rows: ExportableProduct[] = [{
+      code: 'P-PEND', name: '待核验商品', category: '蔬菜', spec: '1kg',
+      unit: 'kg', purchaseUnit: 'kg', inventoryUnit: 'kg',
+      orderUnit: '箱', costUnit: 'kg',
+      inventoryUnitsPerPurchaseUnit: 1,
+      inventoryUnitsPerOrderUnit: 10,
+      inventoryUnitsPerCostUnit: 1,
+      unitConversionStatus: 'PENDING',
+      price: 8, status: 'ENABLED',
+    }]
+    const csv = buildProductExportCsv(rows)
+    const lines = csv.split('\r\n')
+    const cols = lines[1].split(',')
+    expect(cols[12]).toBe('')
+    expect(cols[13]).toBe('待核验')
+  })
+
+  it('buildProductExportCsv exports legacy 1:1 identity contract with computed price', () => {
+    const rows: ExportableProduct[] = [{
+      code: 'P-LEG', name: '老商品', category: '其他', spec: '',
+      unit: '件', purchaseUnit: null, inventoryUnit: null,
+      orderUnit: null, costUnit: null,
+      inventoryUnitsPerPurchaseUnit: null,
+      inventoryUnitsPerOrderUnit: null,
+      inventoryUnitsPerCostUnit: null,
+      unitConversionStatus: 'PENDING',
+      price: 15, status: 'ENABLED',
+    }]
+    const csv = buildProductExportCsv(rows)
+    const lines = csv.split('\r\n')
+    expect(lines[1]).toBe('P-LEG,老商品,其他,,件,件,件,件,1,1,1,15.00,15.00,兼容 1:1,供应中')
+  })
+
+  it('buildProductExportCsv handles commas, quotes and newlines in new columns', () => {
+    const rows: ExportableProduct[] = [{
+      code: 'P-ESC', name: '商品"含,换行\n', category: '蔬菜', spec: '1kg',
+      unit: 'kg', purchaseUnit: '袋', inventoryUnit: 'kg',
+      orderUnit: '箱', costUnit: 'g',
+      inventoryUnitsPerPurchaseUnit: 0.5,
+      inventoryUnitsPerOrderUnit: 10,
+      inventoryUnitsPerCostUnit: 0.001,
+      unitConversionStatus: 'INFERRED',
+      price: 3.14, status: 'ENABLED',
+    }]
+    const csv = buildProductExportCsv(rows)
+    const dataLine = csv.split('\r\n')[1]
+    expect(dataLine).toContain('"商品""含,换行\n"')
+    expect(dataLine).toContain('已推断')
+  })
+
+  it('buildProductExportCsv leaves order-unit price blank for incomplete non-legacy contract', () => {
+    const rows: ExportableProduct[] = [{
+      code: 'P-INCOMP', name: '不完整合同', category: '蔬菜', spec: '',
+      unit: 'kg', purchaseUnit: 'kg', inventoryUnit: 'kg',
+      orderUnit: '', costUnit: 'kg',
+      inventoryUnitsPerPurchaseUnit: 1,
+      inventoryUnitsPerOrderUnit: null,
+      inventoryUnitsPerCostUnit: 1,
+      unitConversionStatus: 'VERIFIED',
+      price: 10, status: 'ENABLED',
+    }]
+    const csv = buildProductExportCsv(rows)
+    const lines = csv.split('\r\n')
+    const cols = lines[1].split(',')
+    expect(cols[12]).toBe('')
   })
 
   it('parseProductQueryTokens splits on whitespace and lowercases', () => {
@@ -334,7 +433,7 @@ describe('GET /api/products/export.csv', () => {
     expect(response.statusCode).toBe(200)
     expect(response.headers['content-type']).toContain('text/csv')
     expect(response.body.charCodeAt(0)).toBe(0xFEFF)
-    expect(csvBody(response)).toContain('商品编码,名称,分类,规格,采购单位,库存单位,采购价,状态')
+    expect(csvBody(response)).toContain('商品编码,名称,分类,规格,采购单位,库存单位,订货单位,成本单位,每采购单位=多少库存单位,每订货单位=多少库存单位,每成本单位=多少库存单位,成本单位单价,订货单位折算价,换算状态,状态')
   })
 
   it('passes where clause built from filters to prisma', async () => {

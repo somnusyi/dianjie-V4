@@ -141,9 +141,16 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
   app.get('/', auth(app), async (req: any, reply: any) => {
     const ctx = ensureSupplier(req, reply, 'inventory.read'); if (!ctx) return
 
+    const parsed = z.object({
+      limit: z.coerce.number().int().min(1).max(2000).default(1000),
+    }).safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const limit = parsed.data.limit
+
     const products = await prisma.product.findMany({
       where: { tenantId: ctx.tenantId, supplierId: ctx.supplierId, status: 'ENABLED' },
       orderBy: [{ stock: 'asc' }, { name: 'asc' }, { id: 'asc' }],   // 库存少的排前面
+      take: limit,
       select: {
         id: true, code: true, name: true, spec: true, unit: true, category: true,
         stock: true, minStock: true, price: true, shelfDays: true,

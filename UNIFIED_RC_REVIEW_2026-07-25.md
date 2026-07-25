@@ -1,6 +1,6 @@
 # 滇界 V4 统一发布候选审计
 
-更新时间：2026-07-26 07:23 CST
+更新时间：2026-07-26 07:32 CST
 
 ## 结论
 
@@ -538,7 +538,8 @@ Qwen 原报告 494 行并把 API 别名 `default` 错当真实仓主键，还只
 
 ### 未集成的 schema 候选
 
-- `1f606d9db5d950b999199f1fd6955b8afe3923eb` 在
+- `1f606d9db5d950b999199f1fd6955b8afe3923eb` 与精度修正
+  `bff1503a4b960c24d9a5aac6a2d812c731fa2e66` 在
   `feature/20260726-tenant-warehouse-codex` 新增 tenant 级 `Warehouse`、
   `WarehouseStock`、五类配送/库存事实的真实 warehouse 关系、确定性历史回填、同 tenant
   复合外键、单默认仓与同仓商品余额唯一约束。
@@ -546,7 +547,8 @@ Qwen 原报告 494 行并把 API 别名 `default` 错当真实仓主键，还只
   自动建立默认仓，旧 writer 只在 warehouseId 为 NULL 时补默认仓，显式跨 tenant 值由
   外键拒绝。rollback 会移除所有兼容触发器、约束、索引和新表。
 - 静态合同 4/4、Prisma validate/generate、API build、两个测试文件 TypeScript 编译、
-  `git diff --check` 和高置信敏感信息检查通过，feature 已推送且工作树干净。
+  `git diff --check` 和高置信敏感信息检查通过；物理余额精度已与现有库存事实统一为
+  `Decimal(12,3)`，feature 已推送且工作树干净。
 - 本机 Docker CLI 存在但守护进程不可用，也没有可用 `_test/_ci` PostgreSQL；因此
   `tenantWarehouseDbContract.integration.test.ts`、空库/历史样本
   `migrate deploy/status/diff` 和 rollback 演练均未执行。按 schema 门禁，该提交保持
@@ -560,6 +562,6 @@ Qwen 原报告 494 行并把 API 别名 `default` 错当真实仓主键，还只
   证据，没有删除或覆盖。
 - 下一步必须先提供隔离 PostgreSQL，执行仓库 migration 的空库、历史样本、约束、
   并发、rollback 和 migrations-to-schema diff；通过后才重新审查
-  `1f606d9d`，不得以静态编译代替数据库验收。
+  `bff1503a`，不得以静态编译代替数据库验收。
 - 生产 gate 保持 `LOCKED`；未合并或直推 main、未创建 PR、未部署、未写生产、未执行
   一次性数据脚本，也未读取或修改凭证与业务 xlsx。

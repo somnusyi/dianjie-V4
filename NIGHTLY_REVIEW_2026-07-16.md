@@ -1710,7 +1710,8 @@
 
 ### 已推送但未集成
 
-- `1f606d9d`：tenant 级 `Warehouse` / `WarehouseStock` schema 与单一 migration 候选，
+- `1f606d9d`、`bff1503a`：tenant 级 `Warehouse` / `WarehouseStock` schema 与单一
+  migration 候选，后者把物理余额精度与现有库存事实统一为 `Decimal(12,3)`；
   包含所有 Product 的确定性余额初始化、五类事实 warehouseId、同 tenant 复合外键、
   单默认仓约束、Product → WarehouseStock 单向兼容桥和完整 rollback。
 - 静态合同 4/4、Prisma validate/generate、API build、测试 TypeScript 编译、diff 和
@@ -1721,7 +1722,7 @@
 
 ### 后续门禁
 
-- 恢复隔离 `_test/_ci` PostgreSQL 后，先验收 `1f606d9d` 的迁移链、触发器、跨 tenant
+- 恢复隔离 `_test/_ci` PostgreSQL 后，先验收 `bff1503a` 的迁移链、触发器、跨 tenant
   外键、历史回填、回滚与 schema diff，再决定是否逐提交集成。
 - 仓库 schema 通过后，按审计顺序改造 writer；供应链入库更正与门店收货更正继续独立
   实现，不运行真实数据修正脚本。

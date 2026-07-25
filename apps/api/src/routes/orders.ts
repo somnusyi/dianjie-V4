@@ -1437,7 +1437,13 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const adjustSummary = changedLines.length > 0
       ? `, 因 ${changedLines.slice(0, 2).map(l => `${l.it.product?.name || ''}${Number(l.it.quantity)}→${l.shipped}`).join(' / ')}${changedLines.length > 2 ? ` 等 ${changedLines.length} 项` : ''} 调整, 现 ¥${newTotal.toFixed(2)} (原 ¥${oldTotal.toFixed(2)})`
       : ''
-    void notifyOrderShipped(tenantId, order.no, (supplier?.name || '') + adjustSummary, order.storeId)
+    void notifyOrderShipped(
+      tenantId,
+      order.no,
+      (supplier?.name || '') + adjustSummary,
+      order.createdById,
+      order.id,
+    ).catch(error => req.log.error({ err: error, orderId: order.id }, 'shipment system notification failed'))
     void notify({
       tenantId, event: 'PO_DELIVERING',
       eventKey: `PO:${order.id}:DELIVERING`,

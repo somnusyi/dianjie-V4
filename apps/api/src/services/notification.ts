@@ -130,14 +130,24 @@ export async function notifyOrderRejected(tenantId: string, orderNo: string, sup
   }
 }
 
-export function notifyOrderShipped(tenantId: string, orderNo: string, supplierName: string, storeId: string) {
+export function notifyOrderShipped(
+  tenantId: string,
+  orderNo: string,
+  supplierName: string,
+  recipientId: string,
+  orderId: string,
+) {
   return sendNotification({
     tenantId,
-    recipientRole: 'MANAGER',
+    recipientRole: 'ORDER_CREATOR',
+    recipientId,
     type: 'ORDER_SHIPPED',
     title: '供应商已发货',
     body: `${supplierName} 已发货 ${orderNo}，请安排收货`,
     refType: 'PurchaseOrder',
+    refId: orderId,
+    dedupeKey: `PO:${orderId}:ORDER_SHIPPED:${recipientId}`,
+    skipExternal: true,
   })
 }
 

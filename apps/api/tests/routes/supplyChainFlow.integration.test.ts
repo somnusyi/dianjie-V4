@@ -806,6 +806,9 @@ describe('supplier order to receipt flow (integration)', () => {
       method: 'PATCH', url: `/api/orders/${created.id}/confirm`, headers: { 'x-test-actor': 'supplier' },
     })
     expect(confirm.statusCode).toBe(200)
+    const broadShippedNotificationCount = await prisma.notification.count({
+      where: { tenantId, type: 'ORDER_SHIPPED', recipientId: null },
+    })
     const ship = await app.inject({
       method: 'PATCH', url: `/api/orders/${created.id}/ship`, headers: { 'x-test-actor': 'supplier' },
       payload: {
@@ -862,7 +865,22 @@ describe('supplier order to receipt flow (integration)', () => {
         refType: 'PurchaseOrder',
       })
       expect(exactNotification?.body).toContain('不会补送')
+      const exactShippedNotification = await prisma.notification.findFirst({
+        where: {
+          tenantId,
+          recipientId: chefUserId,
+          type: 'ORDER_SHIPPED',
+          refId: created.id,
+        },
+      })
+      expect(exactShippedNotification).toMatchObject({
+        recipientRole: 'ORDER_CREATOR',
+        refType: 'PurchaseOrder',
+      })
     })
+    expect(await prisma.notification.count({
+      where: { tenantId, type: 'ORDER_SHIPPED', recipientId: null },
+    })).toBe(broadShippedNotificationCount)
 
     const secondShipment = await app.inject({
       method: 'PATCH', url: `/api/orders/${created.id}/ship`, headers: { 'x-test-actor': 'supplier' },

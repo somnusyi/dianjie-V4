@@ -128,6 +128,15 @@ export const EVENTS = {
     scopedBy: 'tenant',
     urgent: false,
   },
+  PRODUCT_CHANGED: {
+    label: '商品主数据变更',
+    desc: '商品新建/编辑/调价/停售/恢复后直接生效 → 知会总厨',
+    // 必须由商品变更服务解析同租户有效总厨并显式传入 toUsers，
+    // 不允许调用方退化为角色广播。
+    defaultRoles: [],
+    scopedBy: 'tenant',
+    urgent: false,
+  },
 } as const
 
 export type EventKey = keyof typeof EVENTS
@@ -277,6 +286,16 @@ export function renderTemplate(event: EventKey, payload: Record<string, any>): R
         kind: 'text',
         text: `💲 降价知会:${payload.productName || '商品'} ¥${payload.oldPrice ?? '-'} → ¥${payload.newPrice ?? '-'}${payload.supplierName ? ` (${payload.supplierName})` : ''},已直接生效,无需审批。`,
       }
+    case 'PRODUCT_CHANGED':
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: `📝 商品${payload.actionLabel || actionLabel(payload.action)}:${payload.productName || '商品'}`,
+          description: buildProductChangedDescription(payload),
+          url: `${baseUrl()}/v2/chef-director/home`,
+          btntxt: '查看详情',
+        },
+      }
     case 'DATA_QUALITY_TASK':
       return {
         kind: 'textcard',
@@ -314,6 +333,32 @@ function fmt(n: any): string {
 
 function baseUrl(): string {
   return process.env.WECOM_REDIRECT_BASE || 'https://www.njdianjie.com'
+}
+
+function actionLabel(action: string): string {
+  const map: Record<string, string> = {
+    CREATE: '新增',
+    UPDATE: '更新',
+    PRICE_CHANGE: '调价',
+    DISABLE: '停售',
+    ENABLE: '恢复',
+  }
+  return map[action] || '变更'
+}
+
+function buildProductChangedDescription(payload: Record<string, any>): string {
+  const parts = [`${payload.operatorName || '系统'} 对商品信息进行${actionLabel(payload.action)}`]
+  if (payload.oldPrice !== undefined || payload.newPrice !== undefined) {
+    parts.push(`价格: ¥${fmt(payload.oldPrice)} → ¥${fmt(payload.newPrice)}`)
+  }
+  if (payload.oldStatus || payload.newStatus) {
+    parts.push(`状态: ${payload.oldStatus || '-'} → ${payload.newStatus || '-'}`)
+  }
+  if (payload.supplierName) {
+    parts.push(`供应商: ${payload.supplierName}`)
+  }
+  parts.push('请核对后直接生效的商品主数据。')
+  return parts.join('；')
 }
 
 /**

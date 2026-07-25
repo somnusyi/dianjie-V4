@@ -415,7 +415,7 @@ export default function SupplierProductsPage() {
         <div className="min-w-0">
           {/* 搜索框 */}
       {products && products.length > 0 && (
-        <div className="px-4 mt-2 lg:hidden">
+        <div className="px-4 mt-2">
           <div className="relative">
             <input
               type="search"
@@ -437,7 +437,7 @@ export default function SupplierProductsPage() {
           {searchQ && (
             <p className="text-micro text-gray3 mt-1">{filtered.length} / {products.length} 命中</p>
           )}
-          <div className="grid grid-cols-2 gap-2 mt-2">
+          <div className="grid grid-cols-2 gap-2 mt-2 lg:hidden">
             <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} className={INPUT_CLS}>
               <option value="">全部分类</option>
               {categories.map(category => <option key={category.name} value={category.name}>{category.name} ({category.count})</option>)}

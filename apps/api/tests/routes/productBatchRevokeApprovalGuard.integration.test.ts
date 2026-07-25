@@ -121,8 +121,12 @@ describe('product batch revoke approval guard (integration)', () => {
   })
 
   it('blocks revoke when a product becomes enabled after the revoke transaction starts', async () => {
-    // 模拟并发：测试事务先按 id 顺序锁定批次商品，延迟期间把商品审为 ENABLED，
+    // 模拟并发：测试事务先按 id 顺序锁定批次商品，再把商品审为 ENABLED，
     // 然后提交。撤销请求在同一行锁释放后才能继续，必须重新读到 ENABLED 并拒绝。
+    let markLocked!: () => void
+    const locked = new Promise<void>(resolve => { markLocked = resolve })
+    let allowEnable!: () => void
+    const enableAllowed = new Promise<void>(resolve => { allowEnable = resolve })
     const enableAfterLock = prisma.$transaction(async tx => {
       await tx.$queryRaw`
         SELECT id, status FROM "products"
@@ -130,13 +134,16 @@ describe('product batch revoke approval guard (integration)', () => {
         ORDER BY id ASC
         FOR UPDATE
       `
-      await new Promise(resolve => setTimeout(resolve, 300))
+      markLocked()
+      await enableAllowed
       await tx.product.update({ where: { id: concurrencyProductId }, data: { status: 'ENABLED' } })
     }, { maxWait: 5000, timeout: 10000 })
 
+    await locked
     const revoke = app.inject({
       method: 'PATCH', url: `/api/products/batches/${concurrencyBatchId}/revoke`,
     })
+    allowEnable()
 
     const [_, revokeResponse] = await Promise.all([enableAfterLock, revoke])
 

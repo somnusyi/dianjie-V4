@@ -23,13 +23,16 @@
 
 | 角色 | 可写领域 | 禁止事项 |
 |------|----------|----------|
-| `SUPPLIER_OWNER` / `SUPPLIER_STAFF` | 供应商库存（`inventory.manage`） | 不能操作门店收货、账期、付款 |
-| `ADMIN` / `SUPER_ADMIN` | 租户级所有业务 | 除非经审批，否则不直接写供应链仓入库流水 |
-| `MANAGER` / `KITCHEN_LEAD` | 本店入库单确认/报损/拒收/作废草稿 | 不能更正已确认 Receipt，不能发起仓库入库更正 |
+| `SUPPLY_CHAIN` | 商品主数据、供应链仓库存与跨店供应链只读 | 可发起供应链仓入库更正；不得改门店实收、应付或报损裁决 |
+| `ADMIN` / `SUPER_ADMIN` | 系统治理与租户级排障 | 除非后续业务政策明确，不代替业务角色直接写更正流水 |
+| `MANAGER` / `KITCHEN_LEAD` | 本店既有收货确认/报损/拒收/作废草稿 | 已确认 Receipt 更正的发起权仍待确认，默认阻断；不能发起仓库入库更正 |
 | `CHEF` / `CHEF_DIRECTOR` | BOM、店内报损审核、跨店库存/消耗只读 | **不得发起仓库或收货更正** |
 | `FINANCE` | 付款、对账、凭证 | 不能发起收货更正，只能审批/付款 |
-| `SUPPLY_CHAIN` | 跨店供应链只读（`order/delivery/receipt/inventory/consumption.read`） | **无任何写权限**（`apps/api/src/lib/internal-supply-chain-access.ts:28-29`） |
-| 外部 `supplier` 角色 | 仅限自家供应商数据 | 未来外部供应商小程序不进入当前实现，不新增写权限 |
+| `SUPPLIER_OWNER` / `SUPPLIER_STAFF` | 现有供应商域的既有能力 | 不把当前 `inventory.manage` 复用成内部仓更正权限；未来外部供应商小程序不进入本实现 |
+
+当前 `apps/api/src/lib/internal-supply-chain-access.ts` 只列出内部角色已经落地的五项只读
+capability，这是实现缺口，不是最终业务权限定义。后续内部仓更正必须新增窄权限并只授予
+`SUPPLY_CHAIN`，不能借用供应商域的 `inventory.manage`。
 
 ## 3. 当前链路逐文件审计
 
@@ -102,7 +105,7 @@ DRAFT ──► PENDING / PENDING_CONFIRM ──► CONFIRMED ──► ACCOUNTE
 | 负向修正导致库存 < ACTIVE 预占 | 阻断，提示先释放预占 |
 | 重复提交同一 correction | 应返回 `duplicated: true` 或幂等键冲突，不重复记账 |
 | 并发修正同一 SKU | `FOR UPDATE` 串行，后提交收到 409 |
-| `SUPPLY_CHAIN` / 门店角色尝试发起 | 403 |
+| `SUPPLY_CHAIN` 发起、供应商/门店角色尝试发起 | 内部角色按 tenant+warehouse 写入；供应商/门店角色 403 |
 | 已关账月份 | 默认阻断，需财务 reopen 或挂下月调整 |
 
 ### 5.2 门店收货更正
@@ -113,10 +116,10 @@ DRAFT ──► PENDING / PENDING_CONFIRM ──► CONFIRMED ──► ACCOUNTE
 | Receipt `ACCOUNTED` 且 `PaymentSchedule` 已 `PAID`/`PROCESSING` | 默认阻断 |
 | 原收货含 `LossClaim`（`PENDING`） | 撤销或重建差异；不得改原 claim |
 | 原收货含 `LossClaim`（`APPROVED/RESOLVED`）且已调应付 | 需反向调回 `PaymentSchedule`/`Reconciliation`，已付款则阻断 |
-| 门店已消耗该商品批次 | 默认阻断（已消耗批次），或仅允许金额更正 |
+| 更正日期后已有该商品消耗 | 门店没有收货批次可恢复；需重放门店库存/成本派生，不能触碰供应链仓批次 |
 | 重复提交同一 correction | 幂等返回已有 correction |
 | 并发同一 Receipt | `receipt-finance` advisory lock 串行 |
-| `CHEF` / `SUPPLY_CHAIN` / 供应商尝试发起 | 403 |
+| `CHEF` / `SUPPLY_CHAIN` / 供应商尝试发起 | 403；门店发起角色未确认前也默认阻断 |
 | 已关账月份 | 默认阻断 |
 
 ## 6. 业务阻断清单（默认阻断，待产品/财务确认）
@@ -125,9 +128,17 @@ DRAFT ──► PENDING / PENDING_CONFIRM ──► CONFIRMED ──► ACCOUNTE
 2. **已关账**：`AccountingPeriod.status = CLOSED`（`apps/api/src/services/accountingPeriod.ts:22-29`）。
 3. **真实历史修正**：跨月、跨年、已出具报表/发票的原始单据。
 4. **负库存**：修正后 `Product.stock` 或门店估算库存 < 0。
-5. **已消耗批次**：`SupplierStockBatch` 已被 `allocation` 消耗，或门店 `StockConsumption` 已基于该收货计算成本。
+5. **已消耗供应链仓批次**：只阻断供应链仓入库更正；门店后续消费则要求重放门店库存与成本派生，不恢复或改写供应链仓批次。
 
-## 7. Schema / 部署约束
+## 7. 幂等与并发
+
+- 供应链仓入库更正使用 tenant+warehouse+原 movement+请求键的业务唯一约束，并在同仓
+  同商品上持有行锁；同键同内容返回原结果，同键异内容 409。
+- 门店收货更正使用 tenant+receipt+请求键唯一约束，并与 `receipt-finance` 锁保持固定
+  顺序；任何一次更正只新增更正事实，不更新原 `Receipt` / `ReceiptItem`。
+- 两条状态机的锁、幂等键和 sourceType 均不得复用，防止一条重放触发另一条库存链。
+
+## 8. Schema / 部署约束
 
 - 当前 Schema 无独立 Warehouse / WarehouseStock / WarehouseMovement / WarehouseBatch 表；只有 `Supplier` / `Product` / `SupplierStockMovement` / `SupplierStockBatch`。
 - 已有关键唯一约束：`Receipt.deliveryOrderId @unique`、`PaymentSchedule.receiptId @unique`、`ReconciliationItem.receiptId @unique`、`Voucher @@unique([tenantId, sourceType, sourceId])`。
@@ -135,9 +146,8 @@ DRAFT ──► PENDING / PENDING_CONFIRM ──► CONFIRMED ──► ACCOUNTE
 - 后续如需改 schema，只允许：
   - `prisma migrate deploy` / `prisma migrate status` / `prisma migrate diff`
   - 手工 rollback SQL（与 migration 同目录 `rollback.sql`）
-- **禁止** `prisma db push/reset`。
 
-## 8. 提交检查记录
+## 9. 提交检查记录
 
 - 仅新增 `reports/V5_INBOUND_RECEIPT_CORRECTION_SPLIT_2026-07-26.md`。
 - 行数：≤ 280（见 `wc -l` 结果）。

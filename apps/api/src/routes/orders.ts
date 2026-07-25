@@ -7,7 +7,7 @@ import { notifyOrderSubmitted, notifyOrderShipped, notifyOrderConfirmed, notifyO
 import { isStoreScoped, isSupplierRole, requireSupplierBinding } from '../lib/auth-scope'
 import { allowsSupplyDataRead, supplyDataReadScope } from '../lib/internal-supply-chain-access'
 import { resignOssUrls } from './upload'
-import { fireAndForget as notify } from '../services/notify'
+import { fireAndForget as notify, notify as notifyExact } from '../services/notify'
 import {
   businessNoFloor,
   buildOrderSnapshot,
@@ -29,6 +29,13 @@ import { calendarDateSchema } from '../lib/calendar-date'
 import { ensureReceiptInventoryUnitSnapshots } from '../services/receiptInventoryUnits'
 import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
 import { hashRequestBody } from '../lib/idempotency'
+import {
+  assertPositiveShipment,
+  buildShipmentCloseSummary,
+  shipmentReplayMatches,
+  shipmentRequestFingerprint,
+  type ShipmentCloseSummary,
+} from '../services/partialShipmentClose'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
 const PURCHASE_QUANTITY_MAX = 99_999_999.99
@@ -83,15 +90,6 @@ const deliveryShipSchema = z.object({
 const deliveryDeliverSchema = z.object({
   note: z.string().trim().max(500, '送达备注最长 500 字').optional(),
 }).strict()
-
-function shipmentRequestFingerprint(note: string | undefined, items: Array<{ itemId: string; shippedQty: number }> | undefined) {
-  const normalizedItems = items
-    ? [...new Map(items.map(item => [item.itemId, item.shippedQty])).entries()]
-      .map(([itemId, shippedQty]) => ({ itemId, shippedQty }))
-      .sort((a, b) => a.itemId.localeCompare(b.itemId))
-    : null
-  return hashRequestBody({ note: note || null, items: normalizedItems }, 'supplier-shipment')
-}
 
 function normalizeOrderCreateItems(items: Array<{ productId: string; quantity: number | string }>) {
   return items
@@ -341,13 +339,31 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       ;(order as any).consignee = { name: (order as any).store?.managerName ?? null, phone: (order as any).store?.phone ?? null }
     }
     const allItems = (order as any).items || []
+    const activeItems = allItems.filter((item: any) => item.isActive !== false)
+    const fulfillment = (order as any).shippedAt
+      ? buildShipmentCloseSummary(activeItems.map((item: any) => ({
+        itemId: item.id,
+        productId: item.productId,
+        productName: item.product?.name,
+        orderedQty: item.quantity,
+        shippedQty: item.shippedQty ?? 0,
+      })))
+      : null
+    const fulfillmentByItem = new Map(fulfillment?.lines.map(line => [line.itemId, line]) || [])
     const original = ((order as any).submittedSnapshot || buildOrderSnapshot(order as any, 'original')) as OrderSnapshot
     const current = buildOrderSnapshot(order as any, 'current')
     return {
       ...order,
-      items: allItems.filter((item: any) => item.isActive !== false),
+      items: activeItems.map((item: any) => ({
+        ...item,
+        orderedQty: Number(item.quantity),
+        actualShippedQty: item.shippedQty === null ? null : Number(item.shippedQty),
+        closedQty: fulfillmentByItem.get(item.id)?.closedQty ?? null,
+        fulfillmentClosed: Boolean(fulfillment),
+      })),
       original,
       current,
+      fulfillment,
       timeline: (order as any).events || [],
       totals: {
         ordered: String((order as any).originalTotalAmount ?? original.totalAmount),
@@ -1100,22 +1116,76 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const duplicateWhere: any = { purchaseOrderId: id, idempotencyKey, tenantId }
     if (scopedSupplierId) duplicateWhere.supplierId = scopedSupplierId
     const duplicateInclude = {
-      items: { select: { purchaseOrderItemId: true, shippedQty: true } },
+      items: {
+        select: {
+          purchaseOrderItemId: true,
+          productId: true,
+          orderedQtySnapshot: true,
+          shippedQty: true,
+          productNameSnapshot: true,
+        },
+      },
       events: {
         where: { eventType: 'CREATED' as const }, orderBy: { occurredAt: 'asc' as const }, take: 1,
         select: { metadata: true },
       },
+      purchaseOrder: {
+        select: { currentOrderAmount: true, originalTotalAmount: true },
+      },
     }
-    const replayMatches = (candidate: {
+    type ReplayDelivery = {
+      id: string
+      no: string
       note: string | null
-      items: Array<{ purchaseOrderItemId: string | null; shippedQty: Prisma.Decimal }>
+      actualTotalAmount: Prisma.Decimal
+      purchaseOrder: {
+        currentOrderAmount: Prisma.Decimal | null
+        originalTotalAmount: Prisma.Decimal | null
+      }
+      items: Array<{
+        purchaseOrderItemId: string | null
+        productId: string
+        orderedQtySnapshot: Prisma.Decimal
+        shippedQty: Prisma.Decimal
+        productNameSnapshot: string | null
+      }>
       events: Array<{ metadata: Prisma.JsonValue }>
-    }) => {
-      const storedFingerprint = (candidate.events[0]?.metadata as Record<string, unknown> | null)?.requestFingerprint
-      if (typeof storedFingerprint === 'string') return storedFingerprint === requestFingerprint
-      const legacyItemQty = new Map(candidate.items.map(item => [item.purchaseOrderItemId, Number(item.shippedQty)]))
-      return (candidate.note || null) === (note || null)
-        && (!shippedItems || shippedItems.every(item => Math.abs((legacyItemQty.get(item.itemId) ?? Number.NaN) - item.shippedQty) < 0.0001))
+    }
+    const replayMatches = (candidate: ReplayDelivery) => shipmentReplayMatches(candidate, {
+      note,
+      items: shippedItems,
+      fingerprint: requestFingerprint,
+    })
+    const replayFulfillment = (candidate: ReplayDelivery): ShipmentCloseSummary => {
+      const stored = (candidate.events[0]?.metadata as Record<string, unknown> | null)?.fulfillment
+      if (stored && typeof stored === 'object') return stored as ShipmentCloseSummary
+      return buildShipmentCloseSummary(candidate.items.map(item => ({
+        itemId: item.purchaseOrderItemId || item.productId,
+        productId: item.productId,
+        productName: item.productNameSnapshot,
+        orderedQty: item.orderedQtySnapshot,
+        shippedQty: item.shippedQty,
+      })))
+    }
+    const replayResponse = (candidate: ReplayDelivery) => {
+      const fulfillment = replayFulfillment(candidate)
+      const actualTotal = Number(candidate.actualTotalAmount)
+      const orderedTotal = Number(
+        candidate.purchaseOrder.currentOrderAmount
+        ?? candidate.purchaseOrder.originalTotalAmount
+        ?? candidate.actualTotalAmount,
+      )
+      return {
+        success: true,
+        deliveryId: candidate.id,
+        deliveryNo: candidate.no,
+        duplicated: true,
+        newTotal: actualTotal,
+        cumulativeTotal: actualTotal,
+        oldTotal: orderedTotal,
+        changedLines: fulfillment.lines.filter(line => line.orderedQty !== line.shippedQty).length,
+        fulfillment,
+      }
     }
     const duplicate = await prisma.deliveryOrder.findFirst({
       where: duplicateWhere,
@@ -1125,7 +1195,27 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       if (!replayMatches(duplicate)) {
         return reply.status(409).send({ error: '同一幂等键不能用于不同的发货请求' })
       }
-      return { success: true, deliveryId: duplicate.id, deliveryNo: duplicate.no, duplicated: true }
+      return replayResponse(duplicate)
+    }
+
+    const existingDeliveryWhere: any = {
+      purchaseOrderId: id,
+      tenantId,
+      OR: [
+        { status: { in: ['SHIPPED', 'DELIVERED', 'RECEIVED'] } },
+        { events: { some: { eventType: 'SHIPPED' } } },
+      ],
+    }
+    if (scopedSupplierId) existingDeliveryWhere.supplierId = scopedSupplierId
+    const existingDelivery = await prisma.deliveryOrder.findFirst({
+      where: existingDeliveryWhere,
+      select: { id: true },
+    })
+    if (existingDelivery) {
+      return reply.status(409).send({
+        error: '订单首次有效发货后履约已关闭，不得创建第二张有效配送单',
+        deliveryId: existingDelivery.id,
+      })
     }
 
     // P0: 加 supplier scope, 防供应商 A 替供应商 B 发货
@@ -1137,22 +1227,16 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       include: {
         supplier: { select: { inventoryMode: true } },
         items: { where: { isActive: true }, include: { product: { select: { name: true, unit: true, spec: true, code: true, category: true, shipUpperPct: true, shipUpperBuffer: true } } } },
-        deliveries: { where: { status: { not: 'CANCELLED' } }, include: { items: true } },
       },
     })
     if (!order) throw { statusCode: 400, message: '订单不存在或状态不可发货' }
-    if (order.deliveries.some(d => d.status === 'SHIPPED' || d.status === 'DELIVERED')) {
-      throw { statusCode: 409, message: '已有配送单在途或待收货，请完成本次收货后再创建补送' }
-    }
-    const priorShipped = new Map<string, number>()
-    for (const delivery of order.deliveries) {
-      if (delivery.status === 'DRAFT') continue
-      for (const item of delivery.items) priorShipped.set(item.productId, (priorShipped.get(item.productId) || 0) + Number(item.shippedQty))
-    }
 
     // 校验 + 构建 itemId → shippedQty 映射 (没传的按 quantity 全发)
     const shippedMap = new Map<string, number>()
     if (Array.isArray(shippedItems)) {
+      if (new Set(shippedItems.map(item => item.itemId)).size !== shippedItems.length) {
+        throw { statusCode: 400, message: '同一订单明细不能重复提交实发数量' }
+      }
       for (const s of shippedItems) {
         const orig = order.items.find(o => o.id === s.itemId)
         if (!orig) throw { statusCode: 400, message: `行 ${s.itemId} 不属于本订单` }
@@ -1162,12 +1246,11 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         // 字段在 Product 上 (2026-05-28 戊方案), 默认 1.10 / 5.00 跟之前全局阈值一致
         // 供应商可在 supplier/products 编辑 (price/spec/stock 同款 SUPPLIER_ALLOW 白名单)
         const ordered = Number(orig.quantity)
-        const cumulative = (priorShipped.get(orig.productId) || 0) + sq
         const pct    = Number((orig.product as any)?.shipUpperPct    ?? 1.10)
         const buffer = Number((orig.product as any)?.shipUpperBuffer ?? 5.00)
         const upper  = Math.max(ordered * pct, ordered + buffer)
-        if (cumulative > upper + 0.0001) {
-          throw { statusCode: 400, message: `${orig.product?.name || s.itemId} 累计实发 ${cumulative} 超过上限 ${upper.toFixed(2)} (下单 ${ordered}), 请先走订货单修订` }
+        if (sq > upper + 0.0001) {
+          throw { statusCode: 400, message: `${orig.product?.name || s.itemId} 实发 ${sq} 超过上限 ${upper.toFixed(2)} (下单 ${ordered}), 请先走订货单修订` }
         }
         shippedMap.set(s.itemId, sq)
       }
@@ -1175,29 +1258,31 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     // 计算每行实发 (默认 = quantity)
     const lineShipped = order.items.map(it => ({
       it,
-      previous: priorShipped.get(it.productId) || 0,
-      shipped: shippedMap.has(it.id) ? shippedMap.get(it.id)! : Math.max(0, Number(it.quantity) - (priorShipped.get(it.productId) || 0)),
+      shipped: shippedMap.has(it.id) ? shippedMap.get(it.id)! : Number(it.quantity),
     }))
-    if (!lineShipped.some(line => line.shipped > 0)) throw { statusCode: 400, message: '本次配送数量必须大于 0' }
+    const fulfillment = buildShipmentCloseSummary(lineShipped.map(line => ({
+      itemId: line.it.id,
+      productId: line.it.productId,
+      productName: line.it.product?.name,
+      orderedQty: line.it.quantity,
+      shippedQty: line.shipped,
+    })))
+    assertPositiveShipment(fulfillment)
     const quantityOverflow = lineShipped.some(line =>
-      new Prisma.Decimal(line.previous).add(line.shipped).gt(PURCHASE_QUANTITY_MAX)
+      new Prisma.Decimal(line.shipped).gt(PURCHASE_QUANTITY_MAX)
     )
-    if (quantityOverflow) throw { statusCode: 400, message: '累计实发数量超过系统上限' }
+    if (quantityOverflow) throw { statusCode: 400, message: '实发数量超过系统上限' }
     const newLineAmounts = lineShipped.map(line =>
       new Prisma.Decimal(line.shipped).mul(line.it.unitPrice).toDecimalPlaces(2)
     )
-    const cumulativeLineAmounts = lineShipped.map(line =>
-      new Prisma.Decimal(line.previous).add(line.shipped).mul(line.it.unitPrice).toDecimalPlaces(2)
-    )
     const newTotalAmount = newLineAmounts.reduce((sum, amount) => sum.add(amount), new Prisma.Decimal(0)).toDecimalPlaces(2)
-    const cumulativeTotalAmount = cumulativeLineAmounts.reduce((sum, amount) => sum.add(amount), new Prisma.Decimal(0)).toDecimalPlaces(2)
     const amountError = orderAmountBoundError(
-      [...newLineAmounts, ...cumulativeLineAmounts],
-      Prisma.Decimal.max(newTotalAmount, cumulativeTotalAmount),
+      newLineAmounts,
+      newTotalAmount,
     )
     if (amountError) throw { statusCode: 400, message: amountError }
     const newTotal = Number(newTotalAmount)
-    const cumulativeTotal = Number(cumulativeTotalAmount)
+    const cumulativeTotal = newTotal
     const oldTotal = Number(order.totalAmount)
     const changedLines = lineShipped.filter(l => Math.abs(l.shipped - Number(l.it.quantity)) > 0.0001)
     const adjustNote = changedLines.length > 0
@@ -1206,11 +1291,14 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
 
     // 注:发货后只是 DELIVERING (在途), 不启动倒计时. 待供应商点「送达」改 PENDING_CONFIRM 才计时
 
-    // 事务: 更新 PO 状态 + 行 shippedQty + 总金额 + 自动扣减供应商库存
+    // 事务: 首次发货终结本单履约；订单、配送、实发库存、余量释放、事件和审计原子提交。
     let deliveryResult: { id: string; no: string }
     let duplicatedShipment = false
+    let concurrentReplayResult: ReturnType<typeof replayResponse> | null = null
+    const shippedAt = new Date()
     await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`shipment:${tenantId}:${id}:${idempotencyKey}`}))::text AS locked`
+      // 订单级锁同时串行化相同幂等键重试和不同幂等键的冲突请求。
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`shipment:${tenantId}:${id}`}))::text AS locked`
       const concurrentDuplicate = await tx.deliveryOrder.findFirst({
         where: duplicateWhere,
         include: duplicateInclude,
@@ -1221,7 +1309,19 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         }
         deliveryResult = { id: concurrentDuplicate.id, no: concurrentDuplicate.no }
         duplicatedShipment = true
+        concurrentReplayResult = replayResponse(concurrentDuplicate)
         return
+      }
+      const concurrentExisting = await tx.deliveryOrder.findFirst({
+        where: existingDeliveryWhere,
+        select: { id: true },
+      })
+      if (concurrentExisting) {
+        throw {
+          statusCode: 409,
+          message: '订单首次有效发货后履约已关闭，不得创建第二张有效配送单',
+          deliveryId: concurrentExisting.id,
+        }
       }
       const claimed = await tx.purchaseOrder.updateMany({
         where: {
@@ -1233,15 +1333,15 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         },
         data: {
           status: 'DELIVERING' as any,
-          shippedAt: new Date(),
+          shippedAt,
           shippedNote: note,
           shippedById: userId,
-          totalAmount: cumulativeTotalAmount,
+          totalAmount: newTotalAmount,
           rowVersion: { increment: 1 },
         },
       })
       if (claimed.count === 0) {
-        throw { statusCode: 409, message: '订单已被其他人处理，请刷新后重试' }
+        throw { statusCode: 409, message: '订单首次有效发货已完成，未发余量已关闭，不得再次发货' }
       }
 
       const ym = dayjs().format('YYYYMM')
@@ -1250,7 +1350,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         data: {
           tenantId, no: deliveryNo, purchaseOrderId: order.id, storeId: order.storeId, supplierId: order.supplierId,
           status: 'SHIPPED', actualTotalAmount: newTotalAmount, note: note || null,
-          idempotencyKey, createdById: userId, shippedById: userId, shippedAt: new Date(),
+          idempotencyKey, createdById: userId, shippedById: userId, shippedAt,
           items: {
             create: lineShipped.filter(line => line.shipped > 0).map(line => ({
               purchaseOrderItemId: line.it.id, productId: line.it.productId,
@@ -1270,18 +1370,23 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         data: [
           {
             tenantId, deliveryOrderId: delivery.id, eventType: 'CREATED', actorId: userId, actorRole: role,
-            toStatus: 'DRAFT', requestId: req.id, ip: req.ip, metadata: { requestFingerprint },
+            toStatus: 'DRAFT', requestId: req.id, ip: req.ip,
+            metadata: { requestFingerprint, fulfillment, fulfillmentClosedAt: shippedAt.toISOString() },
           },
-          { tenantId, deliveryOrderId: delivery.id, eventType: 'SHIPPED', actorId: userId, actorRole: role, fromStatus: 'DRAFT', toStatus: 'SHIPPED', requestId: req.id, ip: req.ip },
+          {
+            tenantId, deliveryOrderId: delivery.id, eventType: 'SHIPPED', actorId: userId, actorRole: role,
+            fromStatus: 'DRAFT', toStatus: 'SHIPPED', requestId: req.id, ip: req.ip,
+            metadata: { fulfillment, fulfillmentClosedAt: shippedAt.toISOString() },
+          },
         ],
       })
-      // 写入每行 shippedQty + 重算行 amount (不动 unitPrice)
+      // shippedQty 是最终实发事实；quantity 保留订购事实，二者差额由 fulfillment 明确关闭。
       for (const l of lineShipped) {
         await tx.purchaseOrderItem.update({
           where: { id: l.it.id },
           data: {
-            shippedQty: new Prisma.Decimal(l.previous).add(l.shipped),
-            amount: new Prisma.Decimal(l.previous).add(l.shipped).mul(l.it.unitPrice).toDecimalPlaces(2),
+            shippedQty: new Prisma.Decimal(l.shipped),
+            amount: new Prisma.Decimal(l.shipped).mul(l.it.unitPrice).toDecimalPlaces(2),
           },
         })
       }
@@ -1293,6 +1398,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           deliveryOrderId: delivery.id,
           orderNo: order.no,
           userId,
+          closedAt: shippedAt,
           lines: lineShipped.map(line => ({
             purchaseOrderItemId: line.it.id,
             productId: line.it.productId,
@@ -1311,13 +1417,19 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           tenantId, userId, isAi: false,
           action: `供应商确认发货${adjustNote ? ' (' + adjustNote + ')' : ''}, 金额 ¥${newTotal.toFixed(2)}${Math.abs(newTotal - oldTotal) > 0.01 ? ` (原 ¥${oldTotal.toFixed(2)})` : ''}`,
           target: order.no, entityType: 'PurchaseOrder', targetId: id,
-          metadata: { oldTotal, newTotal, changedLines: changedLines.map(l => ({ name: l.it.product?.name, ordered: Number(l.it.quantity), shipped: l.shipped })) },
+          metadata: {
+            oldTotal,
+            newTotal,
+            fulfillment,
+            fulfillmentClosedAt: shippedAt.toISOString(),
+            changedLines: changedLines.map(l => ({ name: l.it.product?.name, ordered: Number(l.it.quantity), shipped: l.shipped })),
+          },
         },
       })
     })
 
     if (duplicatedShipment) {
-      return { success: true, deliveryId: deliveryResult!.id, deliveryNo: deliveryResult!.no, duplicated: true }
+      return concurrentReplayResult!
     }
 
     // 通知 — 调整时高亮告知店长 / 厨师长
@@ -1326,13 +1438,60 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       ? `, 因 ${changedLines.slice(0, 2).map(l => `${l.it.product?.name || ''}${Number(l.it.quantity)}→${l.shipped}`).join(' / ')}${changedLines.length > 2 ? ` 等 ${changedLines.length} 项` : ''} 调整, 现 ¥${newTotal.toFixed(2)} (原 ¥${oldTotal.toFixed(2)})`
       : ''
     void notifyOrderShipped(tenantId, order.no, (supplier?.name || '') + adjustSummary, order.storeId)
-    notify({
+    void notify({
       tenantId, event: 'PO_DELIVERING',
       eventKey: `PO:${order.id}:DELIVERING`,
       payload: { orderId: order.id, no: order.no, supplierName: supplier?.name || '', total: newTotal },
       toStoreIds: [order.storeId],
     })
-    return { success: true, deliveryId: deliveryResult!.id, deliveryNo: deliveryResult!.no, newTotal, cumulativeTotal, oldTotal, changedLines: changedLines.length }
+    if (fulfillment.hasClosedRemainder) {
+      const shippedSummary = fulfillment.lines
+        .filter(line => line.shippedQty > 0)
+        .slice(0, 3)
+        .map(line => `${line.productName || line.productId} ${line.shippedQty}`)
+        .join('、')
+      const closedSummary = fulfillment.lines
+        .filter(line => line.closedQty > 0)
+        .slice(0, 3)
+        .map(line => `${line.productName || line.productId} ${line.closedQty}`)
+        .join('、')
+      const eventKey = `PO:${order.id}:PARTIAL_CLOSED`
+      void sendNotification({
+        tenantId,
+        recipientRole: 'ORDER_CREATOR',
+        recipientId: order.createdById,
+        type: 'ORDER_PARTIAL_CLOSED',
+        title: `部分发货：${order.no}`,
+        body: `本次实发 ${shippedSummary || '部分商品'}；未发 ${closedSummary || '余量'} 已关闭，不会补送。如仍需请重新下单。`,
+        refType: 'PurchaseOrder',
+        refId: order.id,
+        dedupeKey: `${eventKey}:${order.createdById}`,
+        skipExternal: true,
+      }).catch(error => req.log.error({ err: error, orderId: order.id }, 'partial shipment system notification failed'))
+      void notifyExact({
+        tenantId,
+        event: 'PO_PARTIAL_CLOSED',
+        eventKey,
+        payload: {
+          orderId: order.id,
+          no: order.no,
+          supplierName: supplier?.name || '',
+          shippedSummary,
+          closedSummary,
+        },
+        toUsers: [order.createdById],
+      }).catch(error => req.log.error({ err: error, orderId: order.id }, 'partial shipment wecom notification failed'))
+    }
+    return {
+      success: true,
+      deliveryId: deliveryResult!.id,
+      deliveryNo: deliveryResult!.no,
+      newTotal,
+      cumulativeTotal,
+      oldTotal,
+      changedLines: changedLines.length,
+      fulfillment,
+    }
   })
 
   // ── 供应商/司机点「已送达」 ─ DELIVERING → PENDING_CONFIRM, 启动 24h 自动收货 ──
@@ -1483,15 +1642,18 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       }
       const currentOrder = await prisma.purchaseOrder.findFirst({
         where: { id, tenantId, ...(isStoreScoped(role) ? { storeId } : {}) },
-        select: { status: true },
+        select: { items: { where: { isActive: true }, select: { quantity: true, shippedQty: true } } },
       })
-      const fullyShipped = currentOrder?.status !== 'CONFIRMED'
+      const fullyShipped = currentOrder?.items.every(item =>
+        Number(item.shippedQty || 0) + 0.0001 >= Number(item.quantity)
+      ) ?? false
       return {
         success: true,
         receipt: existingReceipt,
         deliveryId: existingReceipt.deliveryOrderId,
         fullyShipped,
-        remainingDelivery: !fullyShipped,
+        fulfillmentClosed: true,
+        remainingDelivery: false,
         duplicated: true,
       }
     }
@@ -1584,6 +1746,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const hasLoss = lossLines.length > 0
 
     // 证据改为可选 (2026-06 客户要求): 不再强制上传. 无证据时供应商更易拒赔, UI 已给软提示.
+    // fullyShipped 只描述数量是否全发；无论其值如何，首次发货都已关闭履约余量。
     const fullyShipped = order.items.every(item => Number(item.shippedQty || 0) + 0.0001 >= Number(item.quantity))
     const receivedAt = new Date()
     const ym = dayjs(receivedAt).format('YYYYMM')
@@ -1700,8 +1863,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         await tx.purchaseOrder.update({
           where: { id },
           data: {
-            status: fullyShipped ? (hasLoss ? 'RECEIVED' : 'COMPLETED') : 'CONFIRMED',
-            receivedAt: fullyShipped ? receivedAt : null,
+            status: hasLoss ? 'RECEIVED' : 'COMPLETED',
+            receivedAt,
             receiptId: receipt.id,
           },
         })
@@ -1764,7 +1927,14 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       payload: { orderId: order.id, no: order.no, total: Number(actualReceivedTotal), hasLoss },
       toSupplierIds: order.supplierId ? [order.supplierId] : undefined,
     })
-    return { success: true, receipt, deliveryId: delivery.id, fullyShipped, remainingDelivery: !fullyShipped }
+    return {
+      success: true,
+      receipt,
+      deliveryId: delivery.id,
+      fullyShipped,
+      fulfillmentClosed: true,
+      remainingDelivery: false,
+    }
   })
 
   // (旧的宽松 /cancel 已删除, 取代为顶部带角色校验 + SUBMITTED 限制的版本)

@@ -1,5 +1,6 @@
 import { Prisma, prisma } from '@dianjie/db'
 import { consumeSupplierStockBatches } from './supplierStockBatch'
+import { reservationCloseState } from './partialShipmentClose'
 
 type ReservationLine = {
   purchaseOrderItemId: string
@@ -125,7 +126,7 @@ export async function releaseSupplierStockForOrder(
 }
 
 /**
- * 发货时核销本单预占并扣减物理库存。
+ * 首次发货时按实发量核销本单预占并扣减物理库存，同时释放所有未发余量。
  * 当前订单可以使用自己的预占和未预占余量，但绝不能挤占其他已确认订单。
  */
 export async function consumeSupplierStockForShipment(
@@ -134,6 +135,7 @@ export async function consumeSupplierStockForShipment(
     deliveryOrderId: string
     orderNo: string
     userId: string
+    closedAt?: Date
     lines: ShipmentReservationLine[]
   },
 ) {
@@ -188,14 +190,18 @@ export async function consumeSupplierStockForShipment(
     })
   }
 
-  const consumedAt = new Date()
+  const closedAt = input.closedAt || new Date()
   for (const line of input.lines) {
+    const closure = reservationCloseState(line.quantity, line.shippedQty)
     await tx.supplierStockReservation.updateMany({
       where: { purchaseOrderItemId: line.purchaseOrderItemId, purchaseOrderId: input.purchaseOrderId, status: 'ACTIVE' },
       data: {
-        status: 'CONSUMED',
-        fulfilledQty: new Prisma.Decimal(line.shippedQty),
-        consumedAt,
+        status: closure.status,
+        fulfilledQty: closure.fulfilledQty,
+        consumedAt: closure.markConsumedAt ? closedAt : null,
+        // A partial line records both the consumed quantity and the instant its
+        // unshipped reservation was released. A zero-shipped line is RELEASED.
+        releasedAt: closure.markReleasedAt ? closedAt : null,
       },
     })
   }

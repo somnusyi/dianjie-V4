@@ -14,18 +14,26 @@ import {
   resolveWarehouseDisplayName,
   withWarehouseParam,
 } from '@/lib/supplier-default-warehouse'
+import {
+  formatOrderUnitPriceLabel,
+  formatValuationPendingWarning,
+  isValuationPending,
+} from '@/lib/supplier-stock-valuation'
 
 type Item = {
   id: string; code: string; name: string; spec: string | null; unit: string
+  orderUnit: string | null
   category: string; stock: number; minStock: number; price: number
   physicalStock: number; reservedStock: number; availableStock: number
   shelfDays: number | null
+  orderUnitPrice: number | null
+  valuationStatus: 'PENDING' | 'VALUED'
   statusFlag: 'OUT' | 'LOW' | 'OK'
   in7d: number; out7d: number; in30d: number; out30d: number
   nearestExpiry: string | null; daysToExpiry: number | null
 }
 type Page = { items: Item[]; total: number; page: number; pageSize: number; totalPages: number }
-type Summary = { inventoryMode: 'NOT_TRACKED' | 'STRICT'; inventoryActivatedAt?: string | null; totalSku: number; lowStock: number; outOfStock: number; totalValue: number; availableValue: number; reservedValue: number; warehouse?: { id: string; name: string } }
+type Summary = { inventoryMode: 'NOT_TRACKED' | 'STRICT'; inventoryActivatedAt?: string | null; totalSku: number; lowStock: number; outOfStock: number; totalValue: number; availableValue: number; reservedValue: number; valuationPendingSku: number; warehouse?: { id: string; name: string } }
 type Category = { id?: string | null; name: string; count: number; sortOrder?: number; isActive?: boolean }
 
 const PAGE_SIZE = 50
@@ -158,6 +166,14 @@ export default function InventoryPage() {
         </div>
       )}
 
+      {summary && formatValuationPendingWarning(summary.valuationPendingSku) && (
+        <div className="mx-4 mt-2 rounded-card border border-amber/30 bg-amber/10 p-3">
+          <div className="text-caption text-amber-fg">
+            {formatValuationPendingWarning(summary.valuationPendingSku)}
+          </div>
+        </div>
+      )}
+
       {/* 搜索栏 — 客户反馈: 库存 SKU 多, 直接翻不方便 */}
       <div className="px-4 mt-3">
         <div className="relative">
@@ -241,7 +257,9 @@ export default function InventoryPage() {
                 <h2 className="text-h2">{category}</h2>
                 <span className="text-caption text-gray3 ml-2">{categoryItems.length} 项</span>
                 <span className="text-micro text-gray3 ml-auto">
-                  可用价值 ¥{categoryItems.reduce((sum, item) => sum + item.availableStock * item.price, 0).toLocaleString()}
+                  可用价值 ¥{categoryItems
+                    .reduce((sum, item) => sum + (isValuationPending(item) ? 0 : item.availableStock * (item.orderUnitPrice ?? 0)), 0)
+                    .toLocaleString()}
                 </span>
               </div>
               <ul className="space-y-2">
@@ -256,6 +274,9 @@ export default function InventoryPage() {
                   <div className="text-micro text-gray3 mt-0.5">
                     {i.spec ? `${i.spec} · ` : ''}#{i.code}
                     {i.shelfDays != null && <span className="ml-1.5">· 保质 {i.shelfDays}d</span>}
+                  </div>
+                  <div className={`text-micro mt-0.5 ${isValuationPending(i) ? 'text-amber-fg' : 'text-gray3'}`}>
+                    {formatOrderUnitPriceLabel(i)}
                   </div>
                   <div className="text-caption text-gray2 mt-1.5 flex flex-wrap gap-x-3 gap-y-1 font-num">
                     <span>近 7 日 <span className="text-green-fg">+{i.in7d}</span> / <span className="text-red-fg">-{i.out7d}</span></span>

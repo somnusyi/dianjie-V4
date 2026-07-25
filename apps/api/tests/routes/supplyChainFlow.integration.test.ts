@@ -737,6 +737,95 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(await prisma.supplierStockMovement.count({ where: { tenantId, productId: replayProduct.id, type: 'OUTBOUND_PO' } })).toBe(1)
   })
 
+  it('keeps the first-submission snapshot immutable after store approval and ships actual quantity', async () => {
+    const integrityProduct = await prisma.product.create({
+      data: {
+        tenantId, supplierId, code: `${suffix}-INTEGRITY`, name: '改单快照商品', category: '菌菇', unit: '斤',
+        price: 10, stock: 10, minOrderQty: 1, stepQty: 1,
+      },
+    })
+    await prisma.supplierStockBatch.create({
+      data: {
+        tenantId, supplierId, productId: integrityProduct.id, batchNo: `INTEGRITY-${suffix}`, kind: 'OPENING',
+        initialQty: 10, remainingQty: 10, createdById: supplierUserId,
+      },
+    })
+    const create = await app.inject({
+      method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' },
+      payload: {
+        supplierId, storeId, expectedDate: '2026-07-20', note: '首次提交',
+        idempotencyKey: `integrity-create-${suffix}`,
+        items: [{ productId: integrityProduct.id, quantity: 4, unitPrice: 999 }],
+      },
+    })
+    expect(create.statusCode).toBe(200)
+    const created = create.json()
+    const originalSnapshot = structuredClone(created.submittedSnapshot)
+    const originalSnapshotHash = created.submittedSnapshotHash
+
+    const requestRevision = await app.inject({
+      method: 'POST', url: `/api/orders/${created.id}/revisions`, headers: { 'x-test-actor': 'supplier' },
+      payload: {
+        reason: '实际可发数量调整', baseRowVersion: created.rowVersion,
+        requestKey: `integrity-revision-${suffix}`,
+        items: [{ productId: integrityProduct.id, quantity: 7 }],
+      },
+    })
+    expect(requestRevision.statusCode).toBe(201)
+    const revisionId = requestRevision.json().id
+
+    const supplierSelfApproval = await app.inject({
+      method: 'PATCH', url: `/api/orders/${created.id}/revisions/${revisionId}/approve`,
+      headers: { 'x-test-actor': 'supplier' }, payload: { note: '供应商不能自批' },
+    })
+    expect(supplierSelfApproval.statusCode).toBe(403)
+
+    const approve = await app.inject({
+      method: 'PATCH', url: `/api/orders/${created.id}/revisions/${revisionId}/approve`,
+      headers: { 'x-test-actor': 'chef' }, payload: { note: '门店确认改单' },
+    })
+    expect(approve.statusCode).toBe(200)
+
+    const approvedOrder = await prisma.purchaseOrder.findUniqueOrThrow({
+      where: { id: created.id },
+      include: { items: { orderBy: { id: 'asc' } } },
+    })
+    expect(approvedOrder.submittedSnapshot).toEqual(originalSnapshot)
+    expect(approvedOrder.submittedSnapshotHash).toBe(originalSnapshotHash)
+    expect(Number(approvedOrder.originalTotalAmount)).toBe(40)
+    expect(Number(approvedOrder.currentOrderAmount)).toBe(70)
+    expect(Number(approvedOrder.items[0].originalQuantity)).toBe(4)
+    expect(Number(approvedOrder.items[0].quantity)).toBe(7)
+    const approvedRevision = await prisma.purchaseOrderRevision.findUniqueOrThrow({ where: { id: revisionId } })
+    expect(approvedRevision.requestedById).toBe(supplierUserId)
+    expect(approvedRevision.reviewedById).toBe(chefUserId)
+    expect(approvedRevision.requestedAt).toBeInstanceOf(Date)
+    expect(approvedRevision.reviewedAt).toBeInstanceOf(Date)
+
+    const confirm = await app.inject({
+      method: 'PATCH', url: `/api/orders/${created.id}/confirm`, headers: { 'x-test-actor': 'supplier' },
+    })
+    expect(confirm.statusCode).toBe(200)
+    const ship = await app.inject({
+      method: 'PATCH', url: `/api/orders/${created.id}/ship`, headers: { 'x-test-actor': 'supplier' },
+      payload: {
+        idempotencyKey: `integrity-ship-${suffix}`,
+        items: [{ itemId: approvedOrder.items[0].id, shippedQty: 3 }],
+      },
+    })
+    expect(ship.statusCode).toBe(200)
+    const delivery = await prisma.deliveryOrder.findUniqueOrThrow({
+      where: { id: ship.json().deliveryId },
+      include: { items: true },
+    })
+    expect(Number(delivery.actualTotalAmount)).toBe(30)
+    expect(delivery.items).toHaveLength(1)
+    expect(Number(delivery.items[0].shippedQty)).toBe(3)
+    expect(Number(delivery.items[0].amount)).toBe(30)
+    expect(delivery.items[0].productNameSnapshot).toBe('改单快照商品')
+    expect(delivery.items[0].productCodeSnapshot).toBe(`${suffix}-INTEGRITY`)
+  })
+
   it('orders, reserves, ships once, receives actual quantity and creates payable facts', async () => {
     const create = await app.inject({
       method: 'POST',

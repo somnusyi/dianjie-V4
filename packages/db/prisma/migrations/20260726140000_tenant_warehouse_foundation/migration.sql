@@ -73,24 +73,30 @@ ON "warehouse_stocks"("tenantId", "productId");
 ALTER TABLE "warehouses"
 ADD CONSTRAINT "warehouses_tenantId_fkey"
 FOREIGN KEY ("tenantId") REFERENCES "tenants"("id")
-ON DELETE RESTRICT ON UPDATE CASCADE;
+ON DELETE CASCADE ON UPDATE CASCADE;
 
 ALTER TABLE "warehouse_stocks"
 ADD CONSTRAINT "warehouse_stocks_tenantId_fkey"
 FOREIGN KEY ("tenantId") REFERENCES "tenants"("id")
-ON DELETE RESTRICT ON UPDATE CASCADE;
+ON DELETE CASCADE ON UPDATE CASCADE;
 
 ALTER TABLE "warehouse_stocks"
 ADD CONSTRAINT "warehouse_stocks_tenantId_warehouseId_fkey"
 FOREIGN KEY ("tenantId", "warehouseId")
 REFERENCES "warehouses"("tenantId", "id")
-ON DELETE RESTRICT ON UPDATE CASCADE;
+ON DELETE CASCADE ON UPDATE CASCADE;
 
 ALTER TABLE "warehouse_stocks"
 ADD CONSTRAINT "warehouse_stocks_tenantId_productId_fkey"
 FOREIGN KEY ("tenantId", "productId")
 REFERENCES "products"("tenantId", "id")
-ON DELETE RESTRICT ON UPDATE CASCADE;
+ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- Warehouse and WarehouseStock are tenant-owned foundation rows, while a
+-- WarehouseStock is a derived balance for its warehouse/product. Cascades keep
+-- existing tenant/product hard-delete cleanup compatible. Warehouse-bound
+-- delivery and inventory facts below remain RESTRICT so audit data cannot be
+-- removed by deleting a warehouse.
 
 -- One deterministic, enabled tenant default warehouse for every historical
 -- tenant. The id does not depend on supplier data and is stable across retries.

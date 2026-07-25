@@ -48,11 +48,28 @@ import {
   type SupplyProduct,
   type SupplyProductFilters,
 } from '@/lib/supply-product-pc'
+import {
+  buildFourUnitCreateBody,
+  buildFourUnitEditBody,
+  buildFourUnitValues,
+  DEFAULT_FOUR_UNIT_FORM,
+  formatCompactUnitSummary,
+  formatConversionSummary,
+  fourUnitFormFromProduct,
+  type FourUnitForm,
+  validateFourUnitForm,
+} from '@/lib/supply-product-four-units'
 
 type ProductRow = SupplyProduct & {
   spec?: string | null
   inventoryUnit?: string | null
   shelfDays?: number | null
+  purchaseUnit?: string | null
+  orderUnit?: string | null
+  costUnit?: string | null
+  inventoryUnitsPerPurchaseUnit?: number | string | null
+  inventoryUnitsPerOrderUnit?: number | string | null
+  inventoryUnitsPerCostUnit?: number | string | null
 }
 
 type FormState = {
@@ -64,7 +81,7 @@ type FormState = {
   spec: string
   shelfDays: string
   supplierId: string
-}
+} & FourUnitForm
 
 const EMPTY_FORM: FormState = {
   name: '',
@@ -75,6 +92,7 @@ const EMPTY_FORM: FormState = {
   spec: '',
   shelfDays: '7',
   supplierId: '',
+  ...DEFAULT_FOUR_UNIT_FORM,
 }
 
 export default function InternalSupplyChainProductsPage() {
@@ -199,6 +217,7 @@ export default function InternalSupplyChainProductsPage() {
       spec: product.spec || '',
       shelfDays: String(product.shelfDays ?? 7),
       supplierId: product.supplier?.id || '',
+      ...fourUnitFormFromProduct(product),
     })
     setFormError(null)
     setPendingImageFile(null)
@@ -232,20 +251,32 @@ export default function InternalSupplyChainProductsPage() {
   }
 
   async function submitForm() {
-    const validationError = validateNewProductForm(form)
+    const validationError = validateNewProductForm(form) || validateFourUnitForm(form)
     if (validationError) { setFormError(validationError); return }
     setFormError(null)
     setSubmitting(true)
     try {
+      const fourUnitForm: FourUnitForm = {
+        purchaseUnit: form.purchaseUnit,
+        inventoryUnit: form.inventoryUnit,
+        orderUnit: form.orderUnit,
+        costUnit: form.costUnit,
+        inventoryUnitsPerPurchaseUnit: form.inventoryUnitsPerPurchaseUnit,
+        inventoryUnitsPerOrderUnit: form.inventoryUnitsPerOrderUnit,
+        inventoryUnitsPerCostUnit: form.inventoryUnitsPerCostUnit,
+      }
       if (editing) {
-        const body = buildEditBody(form, {
-          name: editing.name,
-          code: editing.code || '',
-          category: editing.category || '',
-          unit: editing.unit || '',
-          spec: editing.spec || '',
-          shelfDays: Number(editing.shelfDays ?? 7),
-        })
+        const body = {
+          ...buildEditBody(form, {
+            name: editing.name,
+            code: editing.code || '',
+            category: editing.category || '',
+            unit: editing.unit || '',
+            spec: editing.spec || '',
+            shelfDays: Number(editing.shelfDays ?? 7),
+          }),
+          ...buildFourUnitEditBody(fourUnitForm, fourUnitFormFromProduct(editing)),
+        }
         let imageKey: string | null = null
         if (pendingImageFile) imageKey = await uploadPendingImage()
         if (imageKey) (body as any).imageKey = imageKey
@@ -256,7 +287,10 @@ export default function InternalSupplyChainProductsPage() {
       } else {
         let imageKey: string | null = null
         if (pendingImageFile) imageKey = await uploadPendingImage()
-        const body = buildCreateBody({ ...form, imageKey })
+        const body = {
+          ...buildCreateBody({ ...form, imageKey }),
+          ...buildFourUnitCreateBody(fourUnitForm),
+        }
         await apiFetch('/api/products', { method: 'POST', body: JSON.stringify(body) })
       }
       setFormOpen(false)
@@ -561,8 +595,13 @@ export default function InternalSupplyChainProductsPage() {
                         <td className="px-4 py-3"><b>{product.name}</b></td>
                         <td className="px-4 py-3 text-gray2">{product.spec || '—'}</td>
                         <td className="px-4 py-3 text-gray2">{product.category || '—'}</td>
-                        <td className="px-4 py-3 text-right font-num">{formatMoney(product.price)}/{product.unit}</td>
-                        <td className="px-4 py-3 text-gray2">{product.supplier?.name || '—'}</td>
+                        <td className="px-4 py-3 text-right font-num">
+                      {formatMoney(product.price)}
+                      <span className="block text-micro text-gray2">
+                        {formatCompactUnitSummary(buildFourUnitValues(fourUnitFormFromProduct(product)))}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-gray2">{product.supplier?.name || '—'}</td>
                         <td className="px-4 py-3"><Chip tone={productStatusTone(product.status)}>{formatProductStatusLabel(product.status)}</Chip></td>
                         <td className="px-4 py-3">
                           <div className="flex items-center justify-end gap-2">
@@ -872,16 +911,86 @@ function FormDialog({
                 {categories.map(cat => <option key={cat.name} value={cat.name} />)}
               </datalist>
             </FormField>
-            <FormField label="采购单位">
-              <input
-                type="text"
-                value={form.unit}
-                onChange={e => onFieldChange('unit', e.target.value)}
-                maxLength={10}
-                placeholder="kg / 件 / 瓶"
-                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
-              />
-            </FormField>
+            <div className="col-span-2">
+              <div className="rounded-lg bg-bg p-3">
+                <p className="mb-2 text-micro font-medium text-ink">单位换算（四单位可相同）</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField label="采购单位">
+                    <input
+                      type="text"
+                      value={form.purchaseUnit}
+                      onChange={e => onFieldChange('purchaseUnit', e.target.value)}
+                      maxLength={10}
+                      placeholder="kg / 件 / 瓶"
+                      className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                    />
+                  </FormField>
+                  <FormField label="1 采购单位 = ？库存单位">
+                    <input
+                      type="number"
+                      min="0.000001"
+                      step="0.000001"
+                      value={form.inventoryUnitsPerPurchaseUnit}
+                      onChange={e => onFieldChange('inventoryUnitsPerPurchaseUnit', e.target.value)}
+                      className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                    />
+                  </FormField>
+                  <FormField label="订货单位">
+                    <input
+                      type="text"
+                      value={form.orderUnit}
+                      onChange={e => onFieldChange('orderUnit', e.target.value)}
+                      maxLength={10}
+                      placeholder="kg / 件 / 瓶"
+                      className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                    />
+                  </FormField>
+                  <FormField label="1 订货单位 = ？库存单位">
+                    <input
+                      type="number"
+                      min="0.000001"
+                      step="0.000001"
+                      value={form.inventoryUnitsPerOrderUnit}
+                      onChange={e => onFieldChange('inventoryUnitsPerOrderUnit', e.target.value)}
+                      className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                    />
+                  </FormField>
+                  <FormField label="库存单位">
+                    <input
+                      type="text"
+                      value={form.inventoryUnit}
+                      onChange={e => onFieldChange('inventoryUnit', e.target.value)}
+                      maxLength={10}
+                      placeholder="kg / 件 / 瓶"
+                      className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                    />
+                  </FormField>
+                  <FormField label="成本单位">
+                    <input
+                      type="text"
+                      value={form.costUnit}
+                      onChange={e => onFieldChange('costUnit', e.target.value)}
+                      maxLength={10}
+                      placeholder="kg / 件 / 瓶"
+                      className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                    />
+                  </FormField>
+                  <FormField label="1 成本单位 = ？库存单位" full>
+                    <input
+                      type="number"
+                      min="0.000001"
+                      step="0.000001"
+                      value={form.inventoryUnitsPerCostUnit}
+                      onChange={e => onFieldChange('inventoryUnitsPerCostUnit', e.target.value)}
+                      className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                    />
+                  </FormField>
+                </div>
+                <p className="mt-2 text-micro text-gray2">
+                  {formatConversionSummary(buildFourUnitValues(form))}
+                </p>
+              </div>
+            </div>
             <FormField label="单价（元）" required>
               <input
                 type="number"

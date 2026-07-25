@@ -56,6 +56,7 @@ export type ProductUnitSnapshot = LegacyProductUnit & {
   costUnit?: string | null
   inventoryUnitsPerOrderUnit?: number | string | null
   inventoryUnitsPerCostUnit?: number | string | null
+  unitConversionStatus?: string | null
 }
 
 /** 四单位合同的核验状态。 */
@@ -242,6 +243,9 @@ export function formatCompactUnitSummary(values: FourUnitValues): string {
 
 /** 从商品快照推断四单位合同状态。 */
 export function inferUnitContractStatus(product: ProductUnitSnapshot): UnitContractStatus {
+  const persistedStatus = String(product.unitConversionStatus || '').trim()
+  if (persistedStatus === 'PENDING') return 'PENDING'
+  if (persistedStatus && !['INFERRED', 'VERIFIED'].includes(persistedStatus)) return 'PENDING'
   if (!hasFourUnitFields(product)) return 'INFERRED'
 
   const units = [
@@ -259,7 +263,7 @@ export function inferUnitContractStatus(product: ProductUnitSnapshot): UnitContr
   ]
   if (factors.some(f => f === null)) return 'PENDING'
 
-  return 'VERIFIED'
+  return persistedStatus === 'INFERRED' ? 'INFERRED' : 'VERIFIED'
 }
 
 /** 只读折算：订货单位价格 = costUnit 价格 × orderFactor / costFactor。 */

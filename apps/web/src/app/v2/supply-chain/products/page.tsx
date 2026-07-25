@@ -73,6 +73,7 @@ type ProductRow = SupplyProduct & {
   inventoryUnitsPerPurchaseUnit?: number | string | null
   inventoryUnitsPerOrderUnit?: number | string | null
   inventoryUnitsPerCostUnit?: number | string | null
+  unitConversionStatus?: string | null
 }
 
 type FormState = {

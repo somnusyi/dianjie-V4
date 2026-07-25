@@ -39,6 +39,7 @@ describe('tenant warehouse migration contract', () => {
     expect(warehouseModel).toContain('tenantId')
     expect(warehouseModel).not.toContain('supplierId')
     expect(stockModel).toContain('physicalQty')
+    expect(stockModel).toContain('@db.Decimal(12, 3)')
     expect(stockModel).toContain('rowVersion')
     expect(stockModel).toContain('isActive')
     expect(stockModel).toContain('@@unique([tenantId, warehouseId, productId])')

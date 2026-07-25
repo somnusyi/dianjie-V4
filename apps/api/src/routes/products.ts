@@ -1153,12 +1153,6 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const b = await prisma.productBatch.findFirst({ where })
     if (!b) return reply.status(404).send({ error: '批次不存在' })
     if (b.revokedAt) return reply.status(400).send({ error: '已撤回, 不可重复操作' })
-    if (isSupplierRole(role)) {
-      const enabledCount = await prisma.product.count({ where: { batchId: b.id, tenantId, status: 'ENABLED' } })
-      if (enabledCount > 0) {
-        return reply.status(400).send({ error: '该批次包含已上架商品，请先通过批量停售流程提交审批后停售' })
-      }
-    }
     try {
       const result = await prisma.$transaction(async tx => {
         const pendingDocuments = await tx.document.findMany({
@@ -1172,6 +1166,19 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         for (const document of pendingDocuments) {
           await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`document:${document.id}`}))`
         }
+        // 供应商角色：在事务内按稳定 id 顺序锁定批次商品，防止并发审批上架后绕过停售审批。
+        const products = await tx.$queryRaw<[{ id: string; status: string }]>`
+          SELECT id, status FROM "products"
+          WHERE "batchId" = ${b.id} AND "tenantId" = ${tenantId}
+          ORDER BY id ASC
+          FOR UPDATE
+        `
+        if (isSupplierRole(role)) {
+          const enabledCount = products.filter(p => p.status === 'ENABLED').length
+          if (enabledCount > 0) {
+            throw Object.assign(new Error('该批次包含已上架商品，请先通过批量停售流程提交审批后停售'), { statusCode: 400 })
+          }
+        }
         const claimed = await tx.productBatch.updateMany({
           where: { id: b.id, tenantId, revokedAt: null },
           data: { revokedAt: new Date(), revokedById: userId },
@@ -1179,9 +1186,6 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         if (claimed.count !== 1) {
           throw Object.assign(new Error('批次状态已变化，请刷新后重试'), { statusCode: 409 })
         }
-        const products = await tx.product.findMany({
-          where: { batchId: b.id, tenantId }, select: { id: true },
-        })
         await tx.product.updateMany({
           where: { batchId: b.id, tenantId }, data: { status: 'DISABLED' },
         })

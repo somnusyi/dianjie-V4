@@ -10,6 +10,8 @@ import { Fragment, useEffect, useState } from 'react'
 import { BottomNav, Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { EmptyState, SkeletonCard, FriendlyError } from '@/components/v2/skeleton'
+import { ProductFilterSidebar } from '@/components/v2/product-filter-sidebar'
+import { ProductImagePreview } from '@/components/v2/product-image-preview'
 import { apiFetch } from '@/lib/v2-auth'
 
 type Product = {
@@ -91,6 +93,7 @@ export default function SupplierProductsPage() {
   const [operations, setOperations] = useState<HistoryRow[]>([])
   const [operationsOpen, setOperationsOpen] = useState(false)
   const [uploadingId, setUploadingId] = useState<string | null>(null)
+  const [previewImage, setPreviewImage] = useState<{ url: string; name: string } | null>(null)
 
   function load() {
     apiFetch<Product[]>('/api/products')
@@ -399,9 +402,20 @@ export default function SupplierProductsPage() {
 
       <p className="px-4 mt-1 text-micro text-gray3">点商品行可改单价 / 规格 / 起订量 · 涨价走总厨审批 · 库存请去「库存」页</p>
 
-      {/* 搜索框 */}
+      <div className="lg:grid lg:grid-cols-[14rem_1fr] lg:gap-5">
+        <ProductFilterSidebar
+          products={products || []}
+          categories={categories}
+          categoryFilter={categoryFilter}
+          statusFilter={statusFilter}
+          onCategoryChange={setCategoryFilter}
+          onStatusChange={setStatusFilter}
+          onClear={() => { setCategoryFilter(''); setStatusFilter('') }}
+        />
+        <div className="min-w-0">
+          {/* 搜索框 */}
       {products && products.length > 0 && (
-        <div className="px-4 mt-2">
+        <div className="px-4 mt-2 lg:hidden">
           <div className="relative">
             <input
               type="search"
@@ -573,7 +587,16 @@ export default function SupplierProductsPage() {
                         <td className="px-3 py-3 align-middle">
                           <div className="flex min-w-0 items-center gap-3">
                             {product.imageUrl
-                              ? <img src={product.imageUrl} alt="" className="h-10 w-10 shrink-0 rounded-chip border border-border object-cover" />
+                              ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setPreviewImage({ url: product.imageUrl!, name: product.name })}
+                                  className="shrink-0 p-0 border-0 bg-transparent"
+                                  aria-label={`查看 ${product.name} 大图`}
+                                >
+                                  <img src={product.imageUrl} alt="" className="h-10 w-10 shrink-0 rounded-chip border border-border object-cover" />
+                                </button>
+                              )
                               : <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-chip border border-border bg-bg text-gray3">图</div>}
                             <div className="min-w-0">
                               <div className="truncate font-medium text-ink">{product.name}</div>
@@ -645,7 +668,14 @@ export default function SupplierProductsPage() {
                       aria-label={`选择 ${p.name}`}
                     />
                     {p.imageUrl ? (
-                      <img src={p.imageUrl} alt="" className="w-10 h-10 rounded-chip object-cover border border-border" />
+                      <button
+                        type="button"
+                        onClick={e => { e.stopPropagation(); setPreviewImage({ url: p.imageUrl!, name: p.name }) }}
+                        className="shrink-0 p-0 border-0 bg-transparent"
+                        aria-label={`查看 ${p.name} 大图`}
+                      >
+                        <img src={p.imageUrl} alt="" className="w-10 h-10 rounded-chip object-cover border border-border" />
+                      </button>
                     ) : (
                       <div className="w-10 h-10 rounded-chip bg-bg border border-border flex items-center justify-center text-gray3">图</div>
                     )}
@@ -753,6 +783,8 @@ export default function SupplierProductsPage() {
         </section>
       ))}
       </div>
+        </div>
+      </div>
 
       <BottomNav
         tabs={[
@@ -771,6 +803,12 @@ export default function SupplierProductsPage() {
         }}
       />
       <ConfirmSheet {...confirmState} />
+      <ProductImagePreview
+        src={previewImage?.url ?? null}
+        alt={previewImage?.name ?? ''}
+        isOpen={!!previewImage}
+        onClose={() => setPreviewImage(null)}
+      />
 
       {/* 新建 SKU sheet */}
       {createOpen && (

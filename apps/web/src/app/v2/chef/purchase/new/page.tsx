@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
+import { OrderProductImage } from '@/components/v2/order-product-image'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 
 type Supplier = { id: string; name: string; category: string | null; bankAccount: string | null }
@@ -276,10 +277,7 @@ export default function ChefPONewPage() {
               const p = products.find(pr => pr.id === it.productId)
               return (
                 <li key={it.productId} className="flex items-center gap-2 py-1.5 border-b border-border last:border-b-0">
-                  {p?.imageUrl && (
-                    <img src={p.imageUrl} alt={`${p.name} 商品图`} loading="lazy"
-                      className="h-10 w-10 shrink-0 rounded-chip border border-border object-cover" />
-                  )}
+                  <OrderProductImage src={p?.imageUrl} name={p?.name || it.productId} code={p?.code} size="compact" />
                   <div className="flex-1 min-w-0">
                     <div className="text-body truncate">
                       {p?.name || it.productId}
@@ -402,11 +400,8 @@ export default function ChefPONewPage() {
                                  : null
                 return (
                   <li key={p.id} className={`flex items-center px-4 py-3 ${notOrderable ? 'opacity-60' : picked ? 'bg-amber/5' : ''}`}>
-                    {p.imageUrl && (
-                      <img src={p.imageUrl} alt={`${p.name} 商品图`} loading="lazy"
-                        className="mr-3 h-12 w-12 shrink-0 rounded-chip border border-border object-cover" />
-                    )}
-                    <div className="flex-1 min-w-0">
+                    <OrderProductImage src={p.imageUrl} name={p.name} code={p.code} size="picker" />
+                    <div className="flex-1 min-w-0 ml-3">
                       <div className="text-body truncate flex items-center gap-1 flex-wrap">
                         <span>{p.name}</span>
                         {p.code && <span className="text-micro text-gray3">#{p.code}</span>}

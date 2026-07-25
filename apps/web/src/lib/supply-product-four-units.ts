@@ -41,6 +41,9 @@ export const DEFAULT_FOUR_UNIT_FORM: FourUnitForm = {
   inventoryUnitsPerCostUnit: '1',
 }
 
+export const FOUR_UNIT_NAME_MAX_LENGTH = 16
+export const FOUR_UNIT_FACTOR_MAX = 1_000_000_000
+
 export type LegacyProductUnit = {
   unit?: string | null
   inventoryUnit?: string | null
@@ -72,10 +75,10 @@ export function parseConversionFactor(value: string): number | null {
 /** 计算有限正数的小数位数，用于“最多 6 位小数”校验。 */
 export function countDecimals(n: number): number {
   if (!Number.isFinite(n)) return 0
-  const s = n.toString()
-  const dot = s.indexOf('.')
-  if (dot === -1) return 0
-  return s.length - dot - 1
+  const [coefficient, exponentText] = Math.abs(n).toString().toLowerCase().split('e')
+  const fractionLength = coefficient.split('.')[1]?.length ?? 0
+  const exponent = Number(exponentText ?? 0)
+  return Math.max(0, fractionLength - exponent)
 }
 
 /** 校验单个换算因子；返回错误文案或 null。 */
@@ -89,16 +92,26 @@ export function validateConversionFactor(value: string): string | null {
     if (!Number.isFinite(asNumber)) return '换算因子必须是有限数字'
     return '换算因子必须是正数'
   }
+  if (n > FOUR_UNIT_FACTOR_MAX) return '换算因子超过系统上限'
   if (countDecimals(n) > 6) return '换算因子最多 6 位小数'
   return null
 }
 
 /** 校验四单位表单；返回第一条错误文案或 null。 */
 export function validateFourUnitForm(form: FourUnitForm): string | null {
-  if (!normalizeUnit(form.purchaseUnit)) return '采购单位必填'
-  if (!normalizeUnit(form.inventoryUnit)) return '库存单位必填'
-  if (!normalizeUnit(form.orderUnit)) return '订货单位必填'
-  if (!normalizeUnit(form.costUnit)) return '成本单位必填'
+  const units = [
+    ['采购单位', normalizeUnit(form.purchaseUnit)],
+    ['库存单位', normalizeUnit(form.inventoryUnit)],
+    ['订货单位', normalizeUnit(form.orderUnit)],
+    ['成本单位', normalizeUnit(form.costUnit)],
+  ] as const
+  for (const [label, unit] of units) {
+    if (!unit) return `${label}必填`
+    if (unit.length > FOUR_UNIT_NAME_MAX_LENGTH) {
+      return `${label}不能超过 ${FOUR_UNIT_NAME_MAX_LENGTH} 个字符`
+    }
+    if (/^\d/.test(unit)) return `${label}不能以数字开头`
+  }
   const errors = [
     validateConversionFactor(form.inventoryUnitsPerPurchaseUnit),
     validateConversionFactor(form.inventoryUnitsPerOrderUnit),
@@ -133,7 +146,7 @@ export function fallbackFourUnitsFromLegacy(product: LegacyProductUnit): FourUni
     costUnit: purchaseUnit,
     inventoryUnitsPerPurchaseUnit: purchaseFactorStr,
     inventoryUnitsPerOrderUnit: purchaseFactorStr,
-    inventoryUnitsPerCostUnit: '1',
+    inventoryUnitsPerCostUnit: purchaseFactorStr,
   }
 }
 

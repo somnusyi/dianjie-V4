@@ -23,8 +23,9 @@ export function rolesForV2Path(pathname: string): readonly string[] | undefined 
 }
 
 /**
- * 内部供应链使用独立的只读工作区。即使某个业务页忘记声明 requireRole，
- * 这里仍按路径白名单拒绝供应商、财务、销售分析和所有写操作页面。
+ * 内部供应链使用独立工作区。跨店履约数据保持只读，商品主数据写操作只在
+ * `/v2/supply-chain` 域内开放；即使页面忘记声明 requireRole，这里仍拒绝
+ * 供应商、财务、销售分析和门店写操作页面。
  */
 export function isV2PathAllowedForRole(pathname: string, role: string): boolean {
   if (role !== 'SUPPLY_CHAIN') return true

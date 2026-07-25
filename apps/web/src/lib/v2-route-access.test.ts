@@ -22,7 +22,9 @@ describe('rolesForV2Path', () => {
 
   it('allows only the dedicated internal supply-chain workspace', () => {
     expect(rolesForV2Path('/v2/supply-chain/home')).toEqual(['SUPPLY_CHAIN'])
+    expect(rolesForV2Path('/v2/supply-chain/products')).toEqual(['SUPPLY_CHAIN'])
     expect(isV2PathAllowedForRole('/v2/supply-chain/home', 'SUPPLY_CHAIN')).toBe(true)
+    expect(isV2PathAllowedForRole('/v2/supply-chain/products', 'SUPPLY_CHAIN')).toBe(true)
     expect(isV2PathAllowedForRole('/v2/me', 'SUPPLY_CHAIN')).toBe(true)
     expect(isV2PathAllowedForRole('/v2/me/password', 'SUPPLY_CHAIN')).toBe(true)
   })

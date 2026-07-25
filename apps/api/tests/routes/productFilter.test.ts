@@ -66,7 +66,7 @@ describe('product list filter schema', () => {
     }
   })
 
-  it('ignores unknown filter fields (passthrough)', () => {
+  it('ignores unknown filter fields', () => {
     const result = productListFilterSchema.safeParse({ category: '蔬菜', page: '1', pageSize: '20' })
     expect(result.success).toBe(true)
   })

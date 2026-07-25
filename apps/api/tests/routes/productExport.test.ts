@@ -257,6 +257,14 @@ describe('buildProductListWhere', () => {
     expect(result.where).toEqual({ tenantId, supplierId: supplierAId })
   })
 
+  it('lets internal supply chain filter the tenant catalog by supplierId', async () => {
+    const result = await buildProductListWhere(
+      req({ supplierId: supplierBId }, { role: 'SUPPLY_CHAIN' }),
+    )
+    expect(result.error).toBeUndefined()
+    expect(result.where).toEqual({ tenantId, supplierId: supplierBId })
+  })
+
   it('rejects supplier without binding', async () => {
     const result = await buildProductListWhere(req({}, { role: 'SUPPLIER_OWNER', supplierId: null }))
     expect(result.error).toBeDefined()

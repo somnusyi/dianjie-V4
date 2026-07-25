@@ -225,6 +225,43 @@ describe('product direct actions (SUPPLY_CHAIN)', () => {
       })
     })
 
+    it('SUPPLY_CHAIN cannot force a new product back into a pending approval state', async () => {
+      mocks.supplierFindFirst.mockResolvedValue({ id: supplierId, name: '测试供应商' })
+      mocks.supplierProductCategoryFindUnique.mockResolvedValue({ isActive: true })
+      mocks.productCreate.mockResolvedValue(createdProduct({ supplierId, status: 'ENABLED' }))
+      mocks.opLogCreate.mockResolvedValue({})
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/products',
+        headers: { 'x-test-actor': 'supply-chain' },
+        payload: {
+          code: 'SC-PENDING',
+          name: '白菜',
+          unit: '斤',
+          supplierId,
+          category: '蔬菜',
+          status: 'PENDING_APPROVAL',
+        },
+      })
+
+      expect(response.statusCode).toBe(201)
+      expect(mocks.productCreate.mock.calls[0][0].data.status).toBe('ENABLED')
+      expect(mocks.documentCreate).not.toHaveBeenCalled()
+    })
+
+    it('CHEF_DIRECTOR can no longer create product master data', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/products',
+        headers: { 'x-test-actor': 'chef' },
+        payload: { code: 'CHEF-001', name: '不应创建', unit: '斤' },
+      })
+
+      expect(response.statusCode).toBe(403)
+      expect(mocks.productCreate).not.toHaveBeenCalled()
+    })
+
     it('SUPPLY_CHAIN cannot create product with supplier from another tenant', async () => {
       mocks.supplierFindFirst.mockResolvedValue(null)
 
@@ -385,8 +422,10 @@ describe('product direct actions (SUPPLY_CHAIN)', () => {
       expect(notification.after.status).toBe('ENABLED')
     })
 
-    it('repeated PATCH with same body produces the same eventKey', async () => {
-      mocks.productFindFirst.mockResolvedValue(beforeProduct())
+    it('treats an immediate repeated PATCH as a no-op without a duplicate notification', async () => {
+      mocks.productFindFirst
+        .mockResolvedValueOnce(beforeProduct())
+        .mockResolvedValueOnce(beforeProduct({ price: 12 }))
       mocks.productUpdate.mockResolvedValue({ ...beforeProduct(), price: 12 })
       mocks.opLogCreate.mockResolvedValue({})
 
@@ -404,9 +443,33 @@ describe('product direct actions (SUPPLY_CHAIN)', () => {
         payload,
       })
 
-      expect(mocks.notifyProductChange).toHaveBeenCalledTimes(2)
-      expect(mocks.notifyProductChange.mock.calls[0][0].eventKey)
-        .toBe(mocks.notifyProductChange.mock.calls[1][0].eventKey)
+      expect(mocks.productUpdate).toHaveBeenCalledTimes(1)
+      expect(mocks.notifyProductChange).toHaveBeenCalledTimes(1)
+    })
+
+    it('SUPPLY_CHAIN cannot write a pending status through PATCH', async () => {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/api/products/${productId}`,
+        headers: { 'x-test-actor': 'supply-chain' },
+        payload: { status: 'PENDING_DISABLE' },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(mocks.productUpdate).not.toHaveBeenCalled()
+      expect(mocks.notifyProductChange).not.toHaveBeenCalled()
+    })
+
+    it('CHEF_DIRECTOR can no longer edit product master data', async () => {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/api/products/${productId}`,
+        headers: { 'x-test-actor': 'chef' },
+        payload: { price: 12 },
+      })
+
+      expect(response.statusCode).toBe(403)
+      expect(mocks.productUpdate).not.toHaveBeenCalled()
     })
 
     it('SUPPLIER_OWNER disable still creates an approval document', async () => {

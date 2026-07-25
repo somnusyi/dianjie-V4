@@ -553,6 +553,147 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(await prisma.opLog.count({ where: { targetId: order.id, action: { startsWith: '供应商标记送达' } } })).toBe(1)
   })
 
+  it('rolls back receipt, loss claim and document states as one transaction', async () => {
+    const sqlSuffix = Date.now().toString()
+    const failureFunction = `test_receive_loss_failure_fn_${sqlSuffix}`
+    const failureTrigger = `test_receive_loss_failure_trg_${sqlSuffix}`
+    const rollbackProduct = await prisma.product.create({
+      data: {
+        tenantId,
+        supplierId,
+        code: `${suffix}-ROLLBACK`,
+        name: '收货事务回滚商品',
+        category: '事务测试',
+        unit: '斤',
+        inventoryUnit: 'g',
+        inventoryUnitsPerPurchaseUnit: 500,
+        unitConversionStatus: 'VERIFIED',
+        price: 10,
+        stock: 0,
+      },
+    })
+    const order = await prisma.purchaseOrder.create({
+      data: {
+        tenantId,
+        no: `RECEIVE-ROLLBACK-${suffix}`,
+        storeId,
+        supplierId,
+        expectedDate: new Date('2026-07-20T00:00:00.000Z'),
+        totalAmount: 20,
+        status: 'PENDING_CONFIRM',
+        createdById: chefUserId,
+        items: {
+          create: {
+            productId: rollbackProduct.id,
+            quantity: 2,
+            originalQuantity: 2,
+            shippedQty: 2,
+            unitPrice: 10,
+            originalUnitPrice: 10,
+            amount: 20,
+            originalAmount: 20,
+          },
+        },
+      },
+      include: { items: true },
+    })
+    const delivery = await prisma.deliveryOrder.create({
+      data: {
+        tenantId,
+        no: `DO-RECEIVE-ROLLBACK-${suffix}`,
+        purchaseOrderId: order.id,
+        storeId,
+        supplierId,
+        status: 'DELIVERED',
+        actualTotalAmount: 20,
+        createdById: supplierUserId,
+        shippedById: supplierUserId,
+        deliveredById: supplierUserId,
+        shippedAt: new Date(),
+        deliveredAt: new Date(),
+        items: {
+          create: {
+            purchaseOrderItemId: order.items[0].id,
+            productId: rollbackProduct.id,
+            orderedQtySnapshot: 2,
+            shippedQty: 2,
+            unitPriceSnapshot: 10,
+            amount: 20,
+            productCodeSnapshot: rollbackProduct.code,
+            productNameSnapshot: rollbackProduct.name,
+            productUnitSnapshot: '斤',
+            productCategorySnapshot: '菌菇',
+          },
+        },
+      },
+    })
+
+    try {
+      await prisma.$executeRawUnsafe(`
+        CREATE FUNCTION "${failureFunction}"() RETURNS trigger AS $$
+        BEGIN
+          IF NEW."purchaseOrderId" = '${order.id}' THEN
+            RAISE EXCEPTION 'test receive loss claim failure';
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql
+      `)
+      await prisma.$executeRawUnsafe(`
+        CREATE TRIGGER "${failureTrigger}"
+        BEFORE INSERT ON "loss_claims"
+        FOR EACH ROW EXECUTE FUNCTION "${failureFunction}"()
+      `)
+      const failedReceive = await app.inject({
+        method: 'PATCH',
+        url: `/api/orders/${order.id}/receive`,
+        headers: { 'x-test-actor': 'chef' },
+        payload: { items: [{ productId: rollbackProduct.id, receivedQty: 1 }], reason: '故障注入短量' },
+      })
+      expect(failedReceive.statusCode).toBe(500)
+      expect(await prisma.receipt.count({ where: { purchaseOrderId: order.id } })).toBe(0)
+      expect(await prisma.lossClaim.count({ where: { purchaseOrderId: order.id } })).toBe(0)
+      expect(await prisma.deliveryOrder.findUniqueOrThrow({ where: { id: delivery.id } })).toMatchObject({
+        status: 'DELIVERED',
+        receivedAt: null,
+        receivedById: null,
+        rowVersion: 0,
+      })
+      expect(await prisma.deliveryOrderItem.findFirstOrThrow({
+        where: { deliveryOrderId: delivery.id, productId: rollbackProduct.id },
+      })).toMatchObject({ receivedQty: null })
+      expect(await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })).toMatchObject({
+        status: 'PENDING_CONFIRM',
+        receivedAt: null,
+        receiptId: null,
+      })
+      expect(await prisma.purchaseOrderItem.findFirstOrThrow({
+        where: { purchaseOrderId: order.id, productId: rollbackProduct.id },
+      })).toMatchObject({ receivedQty: null })
+      expect(await prisma.deliveryOrderEvent.count({
+        where: { deliveryOrderId: delivery.id, eventType: 'RECEIVED' },
+      })).toBe(0)
+      expect(await prisma.opLog.count({
+        where: { tenantId, targetId: order.id, action: { startsWith: '确认收货' } },
+      })).toBe(0)
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${failureTrigger}" ON "loss_claims"`)
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${failureFunction}"()`)
+    }
+
+    const retry = await app.inject({
+      method: 'PATCH',
+      url: `/api/orders/${order.id}/receive`,
+      headers: { 'x-test-actor': 'chef' },
+      payload: { items: [{ productId: rollbackProduct.id, receivedQty: 1 }], reason: '清除故障后重试' },
+    })
+    expect(retry.statusCode).toBe(200)
+    expect(await prisma.receipt.count({ where: { purchaseOrderId: order.id } })).toBe(1)
+    expect(await prisma.lossClaim.count({ where: { purchaseOrderId: order.id } })).toBe(1)
+    expect((await prisma.deliveryOrder.findUniqueOrThrow({ where: { id: delivery.id } })).status).toBe('RECEIVED')
+    expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })).status).toBe('RECEIVED')
+  })
+
   it('returns the same delivery for concurrent identical shipment retries', async () => {
     const replayProduct = await prisma.product.create({
       data: {

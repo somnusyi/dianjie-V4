@@ -3,12 +3,15 @@ import {
   buildFourUnitCreateBody,
   buildFourUnitEditBody,
   buildFourUnitValues,
+  computeOrderUnitPrice,
   countDecimals,
   DEFAULT_FOUR_UNIT_FORM,
   fallbackFourUnitsFromLegacy,
   formatCompactUnitSummary,
   formatConversionSummary,
+  formatOrderUnitPriceHint,
   fourUnitFormFromProduct,
+  inferUnitContractStatus,
   normalizeUnit,
   parseConversionFactor,
   validateConversionFactor,
@@ -371,5 +374,167 @@ describe('buildFourUnitEditBody', () => {
     const originalForm = fallbackFourUnitsFromLegacy(product)
     const body = buildFourUnitEditBody(originalForm, originalForm)
     expect(body).toEqual({})
+  })
+})
+
+describe('inferUnitContractStatus', () => {
+  it('returns INFERRED for legacy products without new fields', () => {
+    expect(inferUnitContractStatus({ unit: '斤', inventoryUnitsPerPurchaseUnit: 1 })).toBe('INFERRED')
+  })
+
+  it('returns VERIFIED for complete and valid four-unit contract', () => {
+    expect(inferUnitContractStatus({
+      purchaseUnit: '箱',
+      inventoryUnit: '斤',
+      orderUnit: '500g',
+      costUnit: '斤',
+      inventoryUnitsPerPurchaseUnit: 10,
+      inventoryUnitsPerOrderUnit: 0.5,
+      inventoryUnitsPerCostUnit: 1,
+    })).toBe('VERIFIED')
+  })
+
+  it('returns PENDING when a unit is missing', () => {
+    expect(inferUnitContractStatus({
+      purchaseUnit: '箱',
+      inventoryUnit: '斤',
+      orderUnit: '',
+      costUnit: '斤',
+      inventoryUnitsPerOrderUnit: 0.5,
+      inventoryUnitsPerCostUnit: 1,
+    })).toBe('PENDING')
+  })
+
+  it('returns PENDING when a factor is non-positive', () => {
+    expect(inferUnitContractStatus({
+      purchaseUnit: '箱',
+      inventoryUnit: '斤',
+      orderUnit: '500g',
+      costUnit: '斤',
+      inventoryUnitsPerOrderUnit: 0,
+      inventoryUnitsPerCostUnit: 1,
+    })).toBe('PENDING')
+  })
+
+  it('returns PENDING when a factor is not finite', () => {
+    expect(inferUnitContractStatus({
+      purchaseUnit: '箱',
+      inventoryUnit: '斤',
+      orderUnit: '500g',
+      costUnit: '斤',
+      inventoryUnitsPerOrderUnit: NaN,
+      inventoryUnitsPerCostUnit: 1,
+    })).toBe('PENDING')
+  })
+})
+
+describe('computeOrderUnitPrice', () => {
+  it('converts 500g price from 斤 cost', () => {
+    // 1 斤 = 1 库存单位，1 500g = 0.5 库存单位，价格 10 元/斤
+    const values = buildFourUnitValues({
+      purchaseUnit: '箱',
+      inventoryUnit: '斤',
+      orderUnit: '500g',
+      costUnit: '斤',
+      inventoryUnitsPerPurchaseUnit: '10',
+      inventoryUnitsPerOrderUnit: '0.5',
+      inventoryUnitsPerCostUnit: '1',
+    })
+    expect(computeOrderUnitPrice(10, values)).toBe(5)
+  })
+
+  it('keeps same price for same unit 1:1', () => {
+    const values = buildFourUnitValues(DEFAULT_FOUR_UNIT_FORM)
+    expect(computeOrderUnitPrice(12.5, values)).toBe(12.5)
+  })
+
+  it('handles six-decimal factors', () => {
+    const values = buildFourUnitValues({
+      purchaseUnit: '箱',
+      inventoryUnit: 'kg',
+      orderUnit: 'g',
+      costUnit: 'kg',
+      inventoryUnitsPerPurchaseUnit: '1',
+      inventoryUnitsPerOrderUnit: '0.001234',
+      inventoryUnitsPerCostUnit: '1',
+    })
+    expect(computeOrderUnitPrice(1000, values)).toBeCloseTo(1.234, 6)
+  })
+
+  it('returns null for negative cost unit price', () => {
+    const values = buildFourUnitValues(DEFAULT_FOUR_UNIT_FORM)
+    expect(computeOrderUnitPrice(-1, values)).toBeNull()
+  })
+
+  it('returns null for non-finite price', () => {
+    const values = buildFourUnitValues(DEFAULT_FOUR_UNIT_FORM)
+    expect(computeOrderUnitPrice(NaN, values)).toBeNull()
+    expect(computeOrderUnitPrice(Infinity, values)).toBeNull()
+  })
+
+  it('returns null when order factor is not positive finite', () => {
+    const values: import('./supply-product-four-units').FourUnitValues = {
+      purchaseUnit: '件',
+      inventoryUnit: '件',
+      orderUnit: '件',
+      costUnit: '件',
+      inventoryUnitsPerPurchaseUnit: 1,
+      inventoryUnitsPerOrderUnit: 0,
+      inventoryUnitsPerCostUnit: 1,
+    }
+    expect(computeOrderUnitPrice(10, values)).toBeNull()
+  })
+})
+
+describe('formatOrderUnitPriceHint', () => {
+  it('shows 约 ¥x / orderUnit for different units', () => {
+    expect(formatOrderUnitPriceHint(10, {
+      purchaseUnit: '箱',
+      inventoryUnit: '斤',
+      orderUnit: '500g',
+      costUnit: '斤',
+      inventoryUnitsPerPurchaseUnit: '10',
+      inventoryUnitsPerOrderUnit: '0.5',
+      inventoryUnitsPerCostUnit: '1',
+    })).toBe('约 ¥5.00 / 500g')
+  })
+
+  it('returns null for same unit to avoid noise', () => {
+    expect(formatOrderUnitPriceHint(10, DEFAULT_FOUR_UNIT_FORM)).toBeNull()
+  })
+
+  it('shows 待核验 for invalid factors when units differ', () => {
+    expect(formatOrderUnitPriceHint(10, {
+      purchaseUnit: '箱',
+      inventoryUnit: '斤',
+      orderUnit: '500g',
+      costUnit: '斤',
+      inventoryUnitsPerPurchaseUnit: '1',
+      inventoryUnitsPerOrderUnit: '0',
+      inventoryUnitsPerCostUnit: '1',
+    })).toBe('待核验')
+  })
+
+  it('shows 待核验 for non-finite factors when units differ', () => {
+    expect(formatOrderUnitPriceHint(10, {
+      purchaseUnit: '箱',
+      inventoryUnit: '斤',
+      orderUnit: '500g',
+      costUnit: '斤',
+      inventoryUnitsPerOrderUnit: NaN,
+      inventoryUnitsPerCostUnit: 1,
+    })).toBe('待核验')
+  })
+
+  it('rounds to 2 decimal places in zh-CN format', () => {
+    expect(formatOrderUnitPriceHint(10, {
+      purchaseUnit: '箱',
+      inventoryUnit: '斤',
+      orderUnit: '500g',
+      costUnit: '斤',
+      inventoryUnitsPerPurchaseUnit: '1',
+      inventoryUnitsPerOrderUnit: '0.333333',
+      inventoryUnitsPerCostUnit: '1',
+    })).toBe('约 ¥3.33 / 500g')
   })
 })

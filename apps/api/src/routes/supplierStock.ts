@@ -139,9 +139,11 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
 
   /** GET /api/supplier/stock — 列表
    *
-   * 分页模式: 传 page/pageSize 返回 { items, total, page, pageSize }
+   * 分页模式: 同时传 page/pageSize 返回 { items, total, page, pageSize, totalPages }
    * 兼容模式: 不传分页参数时返回旧版纯数组 (limit 上限 2000)
    * 单 SKU:  传 productId 只返回该商品 (分页模式下 total ≤ 1)
+   *
+   * 注意: page 和 pageSize 必须同时提供, 只传其中一个会返回 400
    */
   app.get('/', auth(app), async (req: any, reply: any) => {
     const ctx = ensureSupplier(req, reply, 'inventory.read'); if (!ctx) return
@@ -153,7 +155,12 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
     }).safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { productId } = parsed.data
-    const paginated = parsed.data.page !== undefined || parsed.data.pageSize !== undefined
+    const hasPage = parsed.data.page !== undefined
+    const hasPageSize = parsed.data.pageSize !== undefined
+    if (hasPage !== hasPageSize) {
+      return reply.status(400).send({ error: 'page 和 pageSize 必须同时提供' })
+    }
+    const paginated = hasPage && hasPageSize
     const p  = parsed.data.page ?? 1
     const ps = Math.min(parsed.data.pageSize ?? 20, 200)
 
@@ -240,7 +247,9 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       }
     })
 
-    return paginated ? { items, total, page: p, pageSize: ps } : items
+    return paginated
+      ? { items, total, page: p, pageSize: ps, totalPages: Math.ceil(total / ps) }
+      : items
   })
 
   /** GET /api/supplier/stock/summary — 顶部 KPI */

@@ -157,7 +157,7 @@ describe('supplier stock routes — isolation & pagination (integration)', () =>
     expect(items.length).toBe(2)
   })
 
-  it('paginated mode: returns envelope with items/total/page/pageSize', async () => {
+  it('paginated mode: returns envelope with items/total/page/pageSize/totalPages', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=1&pageSize=10', headers: actorHeaders('ownerA') })
     expect(res.statusCode).toBe(200)
     const body = res.json()
@@ -166,6 +166,7 @@ describe('supplier stock routes — isolation & pagination (integration)', () =>
     expect(body.total).toBe(2)
     expect(body.page).toBe(1)
     expect(body.pageSize).toBe(10)
+    expect(body.totalPages).toBe(1)
     expect(body.items.length).toBe(2)
   })
 
@@ -237,11 +238,57 @@ describe('supplier stock routes — isolation & pagination (integration)', () =>
   })
 
   it('rejects invalid pagination params', async () => {
-    const bad = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=0', headers: actorHeaders('ownerA') })
+    const bad = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=0&pageSize=10', headers: actorHeaders('ownerA') })
     expect(bad.statusCode).toBe(400)
 
-    const over = await app.inject({ method: 'GET', url: '/api/supplier/stock?pageSize=999', headers: actorHeaders('ownerA') })
+    const over = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=1&pageSize=999', headers: actorHeaders('ownerA') })
     expect(over.statusCode).toBe(400)
+  })
+
+  it('rejects incomplete pagination params (page without pageSize or vice versa)', async () => {
+    const onlyPage = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=1', headers: actorHeaders('ownerA') })
+    expect(onlyPage.statusCode).toBe(400)
+    expect(onlyPage.json().error).toContain('同时提供')
+
+    const onlyPageSize = await app.inject({ method: 'GET', url: '/api/supplier/stock?pageSize=10', headers: actorHeaders('ownerA') })
+    expect(onlyPageSize.statusCode).toBe(400)
+    expect(onlyPageSize.json().error).toContain('同时提供')
+  })
+
+  it('paginated mode: totalPages metadata is correct', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=1&pageSize=1', headers: actorHeaders('ownerA') })
+    expect(res.statusCode).toBe(200)
+    const body = res.json()
+    expect(body.total).toBe(2)
+    expect(body.totalPages).toBe(2)
+    expect(body.pageSize).toBe(1)
+
+    const res2 = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=1&pageSize=10', headers: actorHeaders('ownerA') })
+    const body2 = res2.json()
+    expect(body2.totalPages).toBe(1)
+
+    const res3 = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=1&pageSize=3', headers: actorHeaders('ownerA') })
+    const body3 = res3.json()
+    expect(body3.total).toBe(2)
+    expect(body3.totalPages).toBe(1)
+  })
+
+  it('paginated mode: two pages have stable, non-overlapping items', async () => {
+    const page1Res = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=1&pageSize=1', headers: actorHeaders('ownerA') })
+    const page1 = page1Res.json()
+    const page2Res = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=2&pageSize=1', headers: actorHeaders('ownerA') })
+    const page2 = page2Res.json()
+
+    expect(page1.items.length).toBe(1)
+    expect(page2.items.length).toBe(1)
+    const page1Ids = new Set(page1.items.map((i: any) => i.id))
+    const page2Ids = new Set(page2.items.map((i: any) => i.id))
+    for (const id of page1Ids) expect(page2Ids.has(id)).toBe(false)
+
+    const combined = [...page1.items, ...page2.items].map((i: any) => i.id)
+    const fullRes = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=1&pageSize=100', headers: actorHeaders('ownerA') })
+    const fullIds = fullRes.json().items.map((i: any) => i.id)
+    expect(combined).toEqual(fullIds)
   })
 
   it('movements endpoint is supplier-scoped', async () => {

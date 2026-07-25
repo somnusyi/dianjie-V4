@@ -72,7 +72,7 @@ const productCreateSchema = z.object({
   }
 })
 
-const productListFilterSchema = z.object({
+export const productListFilterSchema = z.object({
   category: z.string().trim().max(40).optional(),
   status: z.preprocess(
     value => value === '' ? undefined : value,

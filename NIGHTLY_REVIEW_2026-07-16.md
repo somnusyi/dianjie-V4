@@ -1619,3 +1619,27 @@
 - Qwen `SC-COST-EXPORT-QWEN-017`：商品 CSV 输出成本单位价格与完整四单位合同。
 - Kimi `SC-STOCK-VALUE-PC-KIMI-018`：库存 PC 明示待核验 SKU 未计入货值。
 - 生产 gate 保持 LOCKED，不合并 main、不建 PR、不部署或写生产。
+
+## 2026-07-26 05:38 V5 第十条功能集成列车
+
+### 已集成
+
+- `c76f02db`（feature `f15a3f7e`）：库存列表使用后端订货单位折算价，PENDING 行和汇总
+  明示暂未计入货值，分类可用货值不再回退到成本单位 `price`。
+- `85c05a09`（feature `440d8bec`）：商品 CSV 增加四单位、三因子、成本单位价、订货
+  折算价和换算状态；待核验/非法合同留空，legacy 1:1 明示兼容。
+- `2b1e7444`（feature `b654d208`）：旧 PC 下单页按成本单位价格折成订货单位只读价，
+  非 1:1 PENDING 禁止提交，API 继续权威重算。
+
+### 验收
+
+- 三个 runner 均受 ENOSPC 或完成上报失败影响；没有直接接入 runner 草稿。总管剥离
+  Qwen 的近四千行行尾噪声和 451 MiB 未跟踪 store、清理 Kimi 的安装噪声，重跑专项、
+  build/tsc、核对父提交和远端精确 SHA 后才逐项集成。
+- 组合门禁：API 346/346、API build、Web 396/396、Web tsc、`git diff --check`。
+  本列无 schema/数据库写路径变化；PostgreSQL 153/153 沿用第九列同一候选证据。
+- 当前明确未完成：两个 V2 门店采购新建页和供应商订单追加商品预览仍把成本单位价当
+  订货单位价；库存详情/analytics 的部分价格标签仍含混；真实 Warehouse/按仓账本及
+  已确认入库/收货更正单仍待开发。
+- production Web build 继续受工作盘 ENOSPC 阻断；生产 gate 保持 LOCKED，不合并
+  main、不建 PR、不部署、不写生产、不运行真实数据修正脚本。

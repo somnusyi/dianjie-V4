@@ -399,3 +399,41 @@ diff 和敏感信息检查全部通过。候选 HEAD 为 `f672d66`；生产 gate
 - 已确认但仍未实现的是已确认收货/入库的运行时更正；该状态机会改变库存、差异与应付
   事实，继续作为业务待确认项，不对真实历史数据运行修正脚本。
 - 生产 gate 继续 `LOCKED`；未合并 main、未创建 PR、未部署或写生产。
+
+## V5 内部供应链第十条集成列车（2026-07-26 05:38）
+
+第十列从 `c40002f0` 同时派发三个互不冲突的小批。三个 runner 都因工作盘耗尽或完成上报
+前停住，没有可信提交可直接接入；总管保留 run 失败证据，终止仍在运行的进程，仅删除
+Qwen 工作区自己生成的 451 MiB 未跟踪 pnpm store 和 Kimi 工作区本批生成的
+`node_modules`，未触碰用户服务、其他工作区或业务数据。
+
+| 能力 | 验收后 feature 精确提交 | 统一 RC 提交 | 结果 |
+| --- | --- | --- | --- |
+| 库存货值 PC | `f15a3f7e6df1605aad5a76fd3bd4cbd0a92cac11` | `c76f02db` | 汇总提示待核验 SKU 未计价；行级展示订货单位价格；分类可用货值排除 PENDING |
+| 商品四单位 CSV | `440d8bec657c16cecc48e1db64ab4b9c3af91b03` | `85c05a09` | 稳定导出四单位、三因子、成本单位价、订货折算价和状态；非法/PENDING 折算价留空 |
+| 旧 PC 下单计价 | `b654d208a176bb80652a17cb1dc9357622b4d2e4` | `2b1e7444` | 只读展示订货单位价格与行金额；显式非 1:1 PENDING 禁止提交；API 仍权威重算 |
+
+### 验收和组合门禁
+
+- Kimi 草稿清理安装噪声后，专项 15/15 与 Web tsc 通过；Qwen 草稿剥离整文件行尾改写、
+  workspace 配置和本地 store 后，商品导出专项 47/47、API build、Web tsc 通过。
+- Codex 草稿在 runner 停止后由总管重跑 14/14 精确 Decimal/legacy/PENDING 金额合同和
+  Web tsc，形成并推送干净 feature；三个远端 SHA、父提交 `c40002f0` 和 diff 均核对。
+- 集成后 API 单元 41 文件、346/346，API build 通过；Web 21 文件、396/396，Web tsc
+  通过；`git diff --check` 通过。第十列没有 schema 或数据库写路径变化，数据库证据继续
+  使用第九列同一 RC 上已通过的 PostgreSQL 22 文件、153/153。
+- 新增 CSV 列仍逐单元格执行公式注入中和与 RFC4180 转义，不输出租户/供应商内部 ID；
+  原有角色、筛选、租户/供应商 scope、行数上限和 Content-Disposition 保持。
+
+### 未完成与明确风险
+
+- `apps/web/src/app/v2/chef/purchase/new/page.tsx` 与
+  `apps/web/src/app/v2/chef-director/purchase/new/page.tsx` 仍直接把
+  `Product.price` 当订货单位价；供应商订单详情的追加商品预览也仍直接使用主数据价格。
+  API 会权威重算，但这些 V2 预览在非 1:1 商品上会误导，必须作为下一批确定性修复。
+- 供应商库存详情与 analytics 的部分价格/货值标签仍沿用含混 `price / unit`；列表和
+  summary 已正确，但不可把本列描述为所有库存 PC 页面已完成。
+- 当前“默认仓”是稳定 API/UI 合同，真实 `Warehouse` 模型、按仓账本和已确认入库/收货
+  更正单仍未实现；真实历史单据更正继续只记录问题，不执行脚本。
+- production Web build 仍受工作盘空间不足影响；本轮不再生成 `.next`。生产 gate 保持
+  `LOCKED`，未合并 main、未建 PR、未部署或写生产。

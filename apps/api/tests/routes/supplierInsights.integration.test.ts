@@ -126,4 +126,83 @@ describe('supplier insights receipt facts (integration)', () => {
     ]))
     await prisma.supplierStockMovement.delete({ where: { id: movement.id } })
   })
+
+  it('returns orderUnitPrice with g-to-斤 conversion for bottom SKUs', async () => {
+    const converted = await prisma.product.create({
+      data: {
+        tenantId, supplierId, code: `${suffix}-CONV`, name: '鲜菌克',
+        unit: '斤', price: 0.02, stock: 100,
+        purchaseUnit: '箱', inventoryUnit: 'g', orderUnit: '斤', costUnit: 'g',
+        inventoryUnitsPerPurchaseUnit: 10000, inventoryUnitsPerOrderUnit: 500,
+        inventoryUnitsPerCostUnit: 1, unitConversionStatus: 'VERIFIED',
+      },
+    })
+    const response = await app.inject({ method: 'GET', url: '/api/supplier/insights/sku-rank?days=30&limit=10' })
+    expect(response.statusCode).toBe(200)
+    const bottom = response.json().bottom as any[]
+    const hit = bottom.find(item => item.productId === converted.id)
+    expect(hit).toBeTruthy()
+    expect(hit.orderUnitPrice).toBe(10)
+    expect(hit.valuationStatus).toBe('VALUED')
+    expect(hit.orderUnit).toBe('斤')
+    expect(hit.costUnit).toBe('g')
+    expect(hit).not.toHaveProperty('price')
+    await prisma.product.delete({ where: { id: converted.id } })
+  })
+
+  it('returns PENDING valuation for bottom SKUs with unverified four units', async () => {
+    const pending = await prisma.product.create({
+      data: {
+        tenantId, supplierId, code: `${suffix}-PEND`, name: '待核验菌',
+        unit: '斤', price: 0.02, stock: 50,
+        purchaseUnit: '箱', inventoryUnit: 'g', orderUnit: '斤', costUnit: 'g',
+        inventoryUnitsPerPurchaseUnit: 10000, inventoryUnitsPerOrderUnit: 500,
+        inventoryUnitsPerCostUnit: 1, unitConversionStatus: 'PENDING',
+      },
+    })
+    const response = await app.inject({ method: 'GET', url: '/api/supplier/insights/sku-rank?days=30&limit=10' })
+    expect(response.statusCode).toBe(200)
+    const bottom = response.json().bottom as any[]
+    const hit = bottom.find(item => item.productId === pending.id)
+    expect(hit).toBeTruthy()
+    expect(hit.orderUnitPrice).toBeNull()
+    expect(hit.valuationStatus).toBe('PENDING')
+    await prisma.product.delete({ where: { id: pending.id } })
+  })
+
+  it('does not leak bottom SKUs from another tenant or supplier', async () => {
+    const otherTenant = await prisma.tenant.create({ data: { name: `隔离租户-${suffix}`, slug: `iso-${suffix}` } })
+    const otherSupplier = await prisma.supplier.create({
+      data: { tenantId: otherTenant.id, no: `SUP-ISO-${suffix}`, name: '隔离供应商', inventoryMode: 'STRICT' },
+    })
+    const otherProduct = await prisma.product.create({
+      data: {
+        tenantId: otherTenant.id, supplierId: otherSupplier.id,
+        code: `${suffix}-ISO`, name: '隔离商品', unit: '斤', price: 5, stock: 10,
+      },
+    })
+    const response = await app.inject({ method: 'GET', url: '/api/supplier/insights/sku-rank?days=30&limit=50' })
+    expect(response.statusCode).toBe(200)
+    const allProductIds = [
+      ...response.json().top.map((item: any) => item.productId),
+      ...response.json().bottom.map((item: any) => item.productId),
+    ]
+    expect(allProductIds).not.toContain(otherProduct.id)
+    await prisma.product.delete({ where: { id: otherProduct.id } })
+    await prisma.supplier.delete({ where: { id: otherSupplier.id } })
+    await prisma.tenant.delete({ where: { id: otherTenant.id } })
+  })
+
+  it('keeps top SKU amounts from receipt history regardless of current product price', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/supplier/insights/sku-rank?days=30&limit=10' })
+    expect(response.statusCode).toBe(200)
+    const top = response.json().top as any[]
+    expect(top.length).toBeGreaterThan(0)
+    const first = top[0]
+    expect(first.name).toBe('入库时鲜菌')
+    expect(first.qty).toBe(6)
+    expect(first.amount).toBe(60)
+    expect(first).not.toHaveProperty('orderUnitPrice')
+    expect(first).not.toHaveProperty('valuationStatus')
+  })
 })

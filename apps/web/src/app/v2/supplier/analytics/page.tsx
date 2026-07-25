@@ -10,10 +10,18 @@ import { useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { Sparkline } from '@/components/v2/sparkline'
 import { apiFetch } from '@/lib/v2-auth'
+import {
+  formatSkuRankPriceLabel,
+  isSkuRankValuationPending,
+} from '@/lib/supplier-insight-pricing'
 
 type SkuRank = {
   productId: string; name: string; unit: string
   qty: number; amount: number; orders: number
+  orderUnitPrice?: number | null
+  valuationStatus?: 'PENDING' | 'VALUED' | null
+  orderUnit?: string | null
+  costUnit?: string | null
   price?: number
 }
 type Trend = { month: string; revenue: number; orders: number }
@@ -165,7 +173,7 @@ export default function SupplierAnalyticsPage() {
                 <li key={s.productId} className="flex items-center px-3 py-2.5 gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="text-body truncate">{s.name}</div>
-                    <div className="text-micro text-gray3 font-num">¥{Number(s.price || 0).toFixed(2)} / {s.unit}</div>
+                    <div className={`text-micro font-num ${isSkuRankValuationPending(s) ? 'text-amber-fg' : 'text-gray3'}`}>{formatSkuRankPriceLabel(s)}</div>
                   </div>
                   <Chip tone="gray">0 单</Chip>
                 </li>

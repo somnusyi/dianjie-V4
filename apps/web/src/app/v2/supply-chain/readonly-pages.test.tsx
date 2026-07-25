@@ -294,10 +294,12 @@ describe('内部供应链只读 PC 页面回归', () => {
     it('延迟旧响应返回后不会覆盖最新筛选结果', async () => {
       let firstResolve: (value: any) => void
       const firstPromise = new Promise<any>(resolve => { firstResolve = resolve })
+      let receiptRequestCount = 0
 
       mockApi(path => {
         if (!path.startsWith('/api/receipts')) return Promise.resolve({ items: [], total: 0 })
-        if (resourceCalls('/api/receipts').length === 0) return firstPromise
+        receiptRequestCount += 1
+        if (receiptRequestCount === 1) return firstPromise
         return Promise.resolve({ items: [{ ...receiptRaw, id: 'r2', no: 'R-NEW' }], total: 1 })
       })
 

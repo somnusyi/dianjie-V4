@@ -10,7 +10,4 @@ export default defineConfig({
   esbuild: {
     jsx: 'automatic',
   },
-  test: {
-    environment: 'jsdom',
-  },
 })

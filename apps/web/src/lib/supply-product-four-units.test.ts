@@ -426,6 +426,19 @@ describe('inferUnitContractStatus', () => {
       inventoryUnitsPerCostUnit: 1,
     })).toBe('PENDING')
   })
+
+  it('keeps the persisted PENDING status even when all fields look complete', () => {
+    expect(inferUnitContractStatus({
+      purchaseUnit: '箱',
+      inventoryUnit: '斤',
+      orderUnit: '500g',
+      costUnit: '斤',
+      inventoryUnitsPerPurchaseUnit: 10,
+      inventoryUnitsPerOrderUnit: 0.5,
+      inventoryUnitsPerCostUnit: 1,
+      unitConversionStatus: 'PENDING',
+    })).toBe('PENDING')
+  })
 })
 
 describe('computeOrderUnitPrice', () => {
@@ -512,6 +525,19 @@ describe('formatOrderUnitPriceHint', () => {
       inventoryUnitsPerPurchaseUnit: '1',
       inventoryUnitsPerOrderUnit: '0',
       inventoryUnitsPerCostUnit: '1',
+    })).toBe('待核验')
+  })
+
+  it('shows 待核验 for a persisted PENDING contract', () => {
+    expect(formatOrderUnitPriceHint(10, {
+      purchaseUnit: '箱',
+      inventoryUnit: '斤',
+      orderUnit: '500g',
+      costUnit: '斤',
+      inventoryUnitsPerPurchaseUnit: '10',
+      inventoryUnitsPerOrderUnit: '0.5',
+      inventoryUnitsPerCostUnit: '1',
+      unitConversionStatus: 'PENDING',
     })).toBe('待核验')
   })
 

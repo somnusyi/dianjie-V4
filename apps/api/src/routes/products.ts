@@ -16,6 +16,10 @@ import {
   fireAndForgetNotifyProductChange,
   type ProductChangeAction,
 } from '../services/notify/productChange'
+import {
+  isValidProductUnitFactor,
+  PRODUCT_UNIT_NAME_MAX_LENGTH,
+} from '../services/inventoryUnits'
 import crypto from 'crypto'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
@@ -31,6 +35,25 @@ export function productCatalogCacheScope(role: string, supplierId?: string | nul
 // 用户报价 Excel 里数字列经常出现 "—"/"无"/空格, 前端 Number() 转 NaN, JSON 序列化为 null.
 // 不加这层 zod 直接 reject "Expected number, received null".
 const PRODUCT_DECIMAL_MAX = 99_999_999.99
+const PRODUCT_UNIT_FACTOR_API_MAX = 1_000_000_000
+const FOUR_UNIT_FIELDS = [
+  'purchaseUnit',
+  'inventoryUnit',
+  'orderUnit',
+  'costUnit',
+  'inventoryUnitsPerPurchaseUnit',
+  'inventoryUnitsPerOrderUnit',
+  'inventoryUnitsPerCostUnit',
+] as const
+
+const productUnitNameSchema = (label: string) => z.string().trim().min(1, `${label}不能为空`)
+  .max(PRODUCT_UNIT_NAME_MAX_LENGTH, `${label}不能超过 ${PRODUCT_UNIT_NAME_MAX_LENGTH} 个字符`)
+  .refine(value => !/^\d/.test(value), `${label}不能以数字开头`)
+
+const productUnitFactorSchema = (label: string) => z.number()
+  .positive(`${label}必须大于 0`)
+  .max(PRODUCT_UNIT_FACTOR_API_MAX, `${label}超过商品单位换算上限`)
+  .refine(isValidProductUnitFactor, `${label}最多支持 6 位小数`)
 
 const numNullable = (def: number) =>
   z.preprocess(v => (v === null || v === '' || (typeof v === 'number' && !Number.isFinite(v))) ? undefined : v,
@@ -44,12 +67,16 @@ const productCreateSchema = z.object({
   category:  z.string().trim().max(40).optional(),
   imageKey:  z.string().trim().max(500).optional().nullable(),
   // unit 必须是干净计量单位 (kg/件/瓶...), 不能含数字 ("5kg" / "2包起订" 是数据脏的常见来源)
-  unit:      z.string().trim().max(10)
+  unit:      z.string().trim().max(PRODUCT_UNIT_NAME_MAX_LENGTH)
                 .refine(v => !/^\d/.test(v), { message: '单位不能以数字开头, 数字应记到 spec / 起订量字段' })
                 .optional().default('件'),
-  inventoryUnit: z.string().trim().min(1).max(16)
-    .refine(v => !/^\d/.test(v), { message: '库存基础单位不能以数字开头' }).optional(),
-  inventoryUnitsPerPurchaseUnit: z.number().positive().max(1_000_000_000).optional(),
+  purchaseUnit: productUnitNameSchema('采购单位').optional(),
+  inventoryUnit: productUnitNameSchema('库存基础单位').optional(),
+  orderUnit: productUnitNameSchema('订货单位').optional(),
+  costUnit: productUnitNameSchema('成本单位').optional(),
+  inventoryUnitsPerPurchaseUnit: productUnitFactorSchema('每采购单位库存数量').optional(),
+  inventoryUnitsPerOrderUnit: productUnitFactorSchema('每订货单位库存数量').optional(),
+  inventoryUnitsPerCostUnit: productUnitFactorSchema('每成本单位库存数量').optional(),
   unitConversionStatus: z.enum(['PENDING', 'INFERRED', 'VERIFIED']).optional(),
   unitConversionNote: z.string().trim().max(500).optional().nullable(),
   // 价格可选, 缺省 0. 仓库库存初始化场景常常没价格 (供应商内部物品), 先建 SKU 后续单条改价
@@ -94,11 +121,15 @@ const productPatchSchema = z.object({
   spec: z.string().trim().max(80).nullable().optional(),
   category: z.string().trim().min(1).max(40).optional(),
   imageKey: z.string().trim().max(500).nullable().optional(),
-  unit: z.string().trim().min(1).max(10)
+  unit: z.string().trim().min(1).max(PRODUCT_UNIT_NAME_MAX_LENGTH)
     .refine(value => !/^\d/.test(value), '单位不能以数字开头').optional(),
-  inventoryUnit: z.string().trim().min(1).max(16)
-    .refine(value => !/^\d/.test(value), '库存基础单位不能以数字开头').nullable().optional(),
-  inventoryUnitsPerPurchaseUnit: z.number().positive().max(1_000_000_000).nullable().optional(),
+  purchaseUnit: productUnitNameSchema('采购单位').optional(),
+  inventoryUnit: productUnitNameSchema('库存基础单位').nullable().optional(),
+  orderUnit: productUnitNameSchema('订货单位').optional(),
+  costUnit: productUnitNameSchema('成本单位').optional(),
+  inventoryUnitsPerPurchaseUnit: productUnitFactorSchema('每采购单位库存数量').nullable().optional(),
+  inventoryUnitsPerOrderUnit: productUnitFactorSchema('每订货单位库存数量').optional(),
+  inventoryUnitsPerCostUnit: productUnitFactorSchema('每成本单位库存数量').optional(),
   unitConversionStatus: z.enum(['PENDING', 'INFERRED', 'VERIFIED']).optional(),
   unitConversionNote: z.string().trim().max(500).nullable().optional(),
   price: z.number().nonnegative().max(PRODUCT_DECIMAL_MAX).optional(),
@@ -150,6 +181,27 @@ function productFieldEquals(current: unknown, requested: unknown): boolean {
     return String(current) === String(requested)
   }
   return false
+}
+
+function fourUnitIdentityError(record: Record<string, any>): string | null {
+  const roles: Array<[string, unknown]> = [
+    [String(record.purchaseUnit || '').trim(), record.inventoryUnitsPerPurchaseUnit],
+    [String(record.inventoryUnit || '').trim(), record.inventoryUnit ? 1 : null],
+    [String(record.orderUnit || '').trim(), record.inventoryUnitsPerOrderUnit],
+    [String(record.costUnit || '').trim(), record.inventoryUnitsPerCostUnit],
+  ]
+  const factorByUnit = new Map<string, number>()
+  for (const [unit, rawFactor] of roles) {
+    if (!unit || rawFactor == null) continue
+    const factor = Number(rawFactor)
+    if (!Number.isFinite(factor)) continue
+    const existing = factorByUnit.get(unit)
+    if (existing !== undefined && existing !== factor) {
+      return `同名单位「${unit}」必须使用相同的库存换算因子`
+    }
+    factorByUnit.set(unit, factor)
+  }
+  return null
 }
 
 function resolveProductChangeAction(data: any): ProductChangeAction {
@@ -1052,14 +1104,15 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(403).send({ error: '无权创建商品' })
     }
     if (isSupplierRole(role) && !supplierScopeOrReply(req, reply, 'catalog.manage')) return
-    const parsed = productCreateSchema.safeParse(req.body)
+    const requestBody = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as any : {}
+    const parsed = productCreateSchema.safeParse(requestBody)
     if (!parsed.success) {
       const first = parsed.error.errors[0]
       return reply.status(400).send({ error: `${first.path.join('.')}: ${first.message}` })
     }
-    const requestedUnitMapping = Boolean(parsed.data.inventoryUnit || parsed.data.inventoryUnitsPerPurchaseUnit)
+    const requestedUnitMapping = FOUR_UNIT_FIELDS.some(field => Object.prototype.hasOwnProperty.call(requestBody, field))
     if (requestedUnitMapping && !UNIT_GOVERNANCE_ROLES.has(role)) {
-      return reply.status(403).send({ error: '只有总厨或品牌管理员可以确认库存基础单位换算' })
+      return reply.status(403).send({ error: '只有内部单位治理角色可以确认四单位换算' })
     }
     // 供应商角色：忽略 body.supplierId，强制用当前账号绑定的 supplierId
     let data: any = { ...parsed.data }
@@ -1079,6 +1132,11 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       delete data.minStock
       delete data.inventoryUnit
       delete data.inventoryUnitsPerPurchaseUnit
+      delete data.purchaseUnit
+      delete data.orderUnit
+      delete data.costUnit
+      delete data.inventoryUnitsPerOrderUnit
+      delete data.inventoryUnitsPerCostUnit
       delete data.unitConversionStatus
       delete data.unitConversionNote
     } else if (data.supplierId) {
@@ -1098,9 +1156,25 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         }
       }
     }
+    // Legacy callers only send `unit`. Persist a deterministic four-unit
+    // compatibility contract without guessing specification text or history.
+    const compatibilityFactor = data.inventoryUnitsPerPurchaseUnit ?? 1
+    data.purchaseUnit = data.purchaseUnit ?? data.unit
+    data.inventoryUnit = data.inventoryUnit ?? data.unit
+    data.orderUnit = data.orderUnit ?? data.unit
+    data.costUnit = data.costUnit ?? data.unit
+    data.inventoryUnitsPerPurchaseUnit = compatibilityFactor
+    data.inventoryUnitsPerOrderUnit = data.inventoryUnitsPerOrderUnit ?? compatibilityFactor
+    data.inventoryUnitsPerCostUnit = data.inventoryUnitsPerCostUnit ?? compatibilityFactor
+    // V5 以订货单位作为 legacy unit 的兼容读写口径，避免新旧客户端看到不同单位。
+    data.unit = data.orderUnit
+    const unitIdentityError = fourUnitIdentityError(data)
+    if (unitIdentityError) return reply.status(400).send({ error: unitIdentityError })
     if (requestedUnitMapping) {
       data.unitConversionStatus = data.unitConversionStatus === 'INFERRED' ? 'INFERRED' : 'VERIFIED'
       data.unitConversionVerifiedAt = data.unitConversionStatus === 'VERIFIED' ? new Date() : null
+    } else {
+      data.unitConversionStatus = 'PENDING'
     }
     if (data.imageKey && !String(data.imageKey).startsWith(`products/${tenantId}/`)) {
       return reply.status(400).send({ error: '商品图片不属于当前租户' })
@@ -1212,6 +1286,11 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
               after: {
                 code: created.code, name: created.name, spec: created.spec,
                 category: created.category, unit: created.unit, price: Number(created.price),
+                purchaseUnit: created.purchaseUnit, inventoryUnit: created.inventoryUnit,
+                orderUnit: created.orderUnit, costUnit: created.costUnit,
+                inventoryUnitsPerPurchaseUnit: Number(created.inventoryUnitsPerPurchaseUnit),
+                inventoryUnitsPerOrderUnit: Number(created.inventoryUnitsPerOrderUnit),
+                inventoryUnitsPerCostUnit: Number(created.inventoryUnitsPerCostUnit),
                 status: created.status, imageKey: created.imageKey,
               },
             },
@@ -1240,6 +1319,13 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           spec: created.spec,
           category: created.category,
           unit: created.unit,
+          purchaseUnit: created.purchaseUnit,
+          inventoryUnit: created.inventoryUnit,
+          orderUnit: created.orderUnit,
+          costUnit: created.costUnit,
+          inventoryUnitsPerPurchaseUnit: Number(created.inventoryUnitsPerPurchaseUnit),
+          inventoryUnitsPerOrderUnit: Number(created.inventoryUnitsPerOrderUnit),
+          inventoryUnitsPerCostUnit: Number(created.inventoryUnitsPerCostUnit),
           price: Number(created.price),
           status: created.status,
           supplierName: supplierName || undefined,
@@ -1298,6 +1384,13 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         continue
       }
       let data: any = { ...parsed.data }
+      const requestedUnitMapping = FOUR_UNIT_FIELDS.some(field =>
+        raw && typeof raw === 'object' && Object.prototype.hasOwnProperty.call(raw, field),
+      )
+      if (requestedUnitMapping && !UNIT_GOVERNANCE_ROLES.has(role)) {
+        failed.push({ row: i + 1, code: data.code, error: '只有内部单位治理角色可以确认四单位换算' })
+        continue
+      }
       if (isSupplierRole(role)) {
         if (!userSupplierId) {
           failed.push({ row: i + 1, code: data.code, error: '账号未绑定供应商' })
@@ -1312,6 +1405,24 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       // 解耦: 报价表 (products) 不再接受 stock/minStock, 库存只走库存模块
       delete data.stock
       delete data.minStock
+      const compatibilityFactor = data.inventoryUnitsPerPurchaseUnit ?? 1
+      data.purchaseUnit = data.purchaseUnit ?? data.unit
+      data.inventoryUnit = data.inventoryUnit ?? data.unit
+      data.orderUnit = data.orderUnit ?? data.unit
+      data.costUnit = data.costUnit ?? data.unit
+      data.inventoryUnitsPerPurchaseUnit = compatibilityFactor
+      data.inventoryUnitsPerOrderUnit = data.inventoryUnitsPerOrderUnit ?? compatibilityFactor
+      data.inventoryUnitsPerCostUnit = data.inventoryUnitsPerCostUnit ?? compatibilityFactor
+      data.unit = data.orderUnit
+      const unitIdentityError = fourUnitIdentityError(data)
+      if (unitIdentityError) {
+        failed.push({ row: i + 1, code: data.code, error: unitIdentityError })
+        continue
+      }
+      data.unitConversionStatus = requestedUnitMapping
+        ? data.unitConversionStatus === 'INFERRED' ? 'INFERRED' : 'VERIFIED'
+        : 'PENDING'
+      data.unitConversionVerifiedAt = data.unitConversionStatus === 'VERIFIED' ? new Date() : null
       // 供应商批量上传 → 默认 PENDING_APPROVAL, 一会儿一并起一个审批单
       if (isSupplierRole(role)) data.status = 'PENDING_APPROVAL'
       candidates.push({ row: i + 1, id: createId(), data })
@@ -1618,7 +1729,11 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     // P1: 非供应商角色也必须白名单字段, 防 mass assignment (改 tenantId / supplierId / id)
     const SUPPLIER_ALLOW = ['price', 'spec', 'category', 'imageKey', 'minOrderQty', 'stepQty', 'shelfDays', 'status', 'shipUpperPct', 'shipUpperBuffer']
     const STAFF_ALLOW = [...SUPPLIER_ALLOW, 'name', 'unit', 'category', 'code']  // 内部员工额外可改名/类
-    const UNIT_ALLOW = ['inventoryUnit', 'inventoryUnitsPerPurchaseUnit', 'unitConversionStatus', 'unitConversionNote']
+    const UNIT_ALLOW = [
+      'purchaseUnit', 'inventoryUnit', 'orderUnit', 'costUnit',
+      'inventoryUnitsPerPurchaseUnit', 'inventoryUnitsPerOrderUnit', 'inventoryUnitsPerCostUnit',
+      'unitConversionStatus', 'unitConversionNote',
+    ]
     const allow = isSupplierRole(role)
       ? SUPPLIER_ALLOW
       : UNIT_GOVERNANCE_ROLES.has(role)
@@ -1799,20 +1914,37 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         id: true, code: true, name: true, supplierId: true, price: true, spec: true,
         category: true, imageKey: true, minOrderQty: true, stepQty: true,
         shelfDays: true, status: true, shipUpperPct: true, shipUpperBuffer: true,
-        unit: true, inventoryUnit: true, inventoryUnitsPerPurchaseUnit: true,
+        unit: true, purchaseUnit: true, inventoryUnit: true, orderUnit: true, costUnit: true,
+        inventoryUnitsPerPurchaseUnit: true,
+        inventoryUnitsPerOrderUnit: true, inventoryUnitsPerCostUnit: true,
         unitConversionStatus: true, unitConversionNote: true, unitConversionVerifiedAt: true,
       },
     })
     if (!before) return reply.status(404).send({ error: '商品不存在或无权修改' })
     const mappingTouched = UNIT_ALLOW.some(field => Object.prototype.hasOwnProperty.call(data, field))
     if (Object.prototype.hasOwnProperty.call(data, 'unit') && !mappingTouched) {
-      // 改采购单位会使原换算失效，必须重新复核，不能沿用旧系数。
+      // Legacy unit edits keep legacy clients deterministic. The old verified
+      // purchase mapping is still invalidated exactly as before.
+      data.purchaseUnit = data.unit
+      data.orderUnit = data.unit
+      data.costUnit = data.unit
       data.inventoryUnit = null
       data.inventoryUnitsPerPurchaseUnit = null
+      data.inventoryUnitsPerOrderUnit = 1
+      data.inventoryUnitsPerCostUnit = 1
       data.unitConversionStatus = 'PENDING'
-      data.unitConversionNote = '采购单位已变更，待重新配置库存基础单位换算'
+      data.unitConversionNote = '兼容单位已变更，待重新配置四单位换算'
       data.unitConversionVerifiedAt = null
     } else if (mappingTouched) {
+      if (Object.prototype.hasOwnProperty.call(data, 'orderUnit')) {
+        data.unit = data.orderUnit
+      } else if (Object.prototype.hasOwnProperty.call(data, 'unit')) {
+        data.orderUnit = data.unit
+      }
+      const materialMappingChanged = FOUR_UNIT_FIELDS.some(field =>
+        Object.prototype.hasOwnProperty.call(data, field)
+        && !productFieldEquals((before as any)[field], data[field]),
+      )
       const nextUnit = Object.prototype.hasOwnProperty.call(data, 'inventoryUnit')
         ? data.inventoryUnit
         : before.inventoryUnit
@@ -1822,6 +1954,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       if (Boolean(nextUnit) !== Boolean(nextFactor)) {
         return reply.status(400).send({ error: '库存基础单位与每采购单位换算数量必须同时填写' })
       }
+      const unitIdentityError = fourUnitIdentityError({ ...before, ...data })
+      if (unitIdentityError) return reply.status(400).send({ error: unitIdentityError })
       if (!nextUnit || !nextFactor) {
         data.inventoryUnit = null
         data.inventoryUnitsPerPurchaseUnit = null
@@ -1832,7 +1966,11 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           // 总厨/管理员在界面明确保存即视为人工复核。
           data.unitConversionStatus = 'VERIFIED'
         }
-        data.unitConversionVerifiedAt = data.unitConversionStatus === 'VERIFIED' ? new Date() : null
+        const becomesVerified = data.unitConversionStatus === 'VERIFIED'
+          && before.unitConversionStatus !== 'VERIFIED'
+        if (materialMappingChanged || becomesVerified) {
+          data.unitConversionVerifiedAt = data.unitConversionStatus === 'VERIFIED' ? new Date() : null
+        }
       }
     }
     if (role === 'SUPPLY_CHAIN') {

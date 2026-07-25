@@ -159,6 +159,38 @@ describe('product change notification', () => {
     expect(rendered.textcard?.description).toContain('分类: 叶菜 → 生鲜')
   })
 
+  it('renders exact four-unit changes in system and exact-user WeCom notifications', async () => {
+    await notifyProductChange({
+      ...input,
+      action: 'UPDATE',
+      eventKey: 'PRODUCT:product-a:UPDATE:four-units-v1',
+      before: {
+        name: '饮料',
+        orderUnit: '箱',
+        inventoryUnitsPerOrderUnit: 12,
+      },
+      after: {
+        name: '饮料',
+        orderUnit: '托',
+        inventoryUnitsPerOrderUnit: 144,
+      },
+    })
+
+    expect(mocks.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({
+        body: expect.stringContaining('订货单位: 箱 → 托'),
+      }),
+    }))
+    const payload = mocks.notify.mock.calls[0][0].payload
+    expect(payload.fourUnitChanges).toContain('订货单位: 箱 → 托')
+    expect(payload.fourUnitChanges).toContain('订货换算: 12 → 144')
+    expect(mocks.notify.mock.calls[0][0].toUsers).toEqual(['chef-a', 'legacy-chef-a'])
+
+    const rendered = renderTemplate('PRODUCT_CHANGED', payload)
+    expect(rendered.textcard?.description).toContain('订货单位: 箱 → 托')
+    expect(rendered.textcard?.description).toContain('订货换算: 12 → 144')
+  })
+
   it('returns immediately and contains a downstream rejection', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     mocks.notify.mockRejectedValue(new Error('test-only downstream failure'))

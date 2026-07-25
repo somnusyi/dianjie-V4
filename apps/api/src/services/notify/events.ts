@@ -377,6 +377,9 @@ function buildProductChangedDescription(payload: Record<string, any>): string {
   if (payload.oldSpec !== undefined || payload.newSpec !== undefined) {
     parts.push(`规格: ${payload.oldSpec ?? '-'} → ${payload.newSpec ?? '-'}`)
   }
+  if (payload.fourUnitChanges) {
+    parts.push(String(payload.fourUnitChanges))
+  }
   if (payload.supplierName) {
     parts.push(`供应商: ${payload.supplierName}`)
   }

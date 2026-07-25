@@ -12,6 +12,7 @@
  */
 
 const { chromium } = require('playwright')
+const fs = require('node:fs')
 
 const BASE = process.argv.includes('--base') ? process.argv[process.argv.indexOf('--base') + 1] : 'http://116.62.32.162:8080'
 const HEADED = process.argv.includes('--headed')
@@ -20,6 +21,14 @@ const LOCAL_TARGET = /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/)/.test(BASE)
 const PASSWORD = process.env.E2E_PASSWORD || (LOCAL_TARGET ? 'test1234' : '')
 const ROLE_COOLDOWN_SECONDS = Number(process.env.UI_ROLE_COOLDOWN_SECONDS ?? (LOCAL_TARGET ? 65 : 0))
 const ROLE_FILTER = new Set((process.env.UI_ROLES || '').split(',').map(value => value.trim()).filter(Boolean))
+const VIEWPORT_WIDTH = Number(process.env.UI_VIEWPORT_WIDTH || 1440)
+const VIEWPORT_HEIGHT = Number(process.env.UI_VIEWPORT_HEIGHT || 900)
+const CHROMIUM_EXECUTABLE = [
+  process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE,
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+  '/Applications/Chromium.app/Contents/MacOS/Chromium',
+].find(candidate => candidate && fs.existsSync(candidate))
 
 if (!PASSWORD) {
   console.error('E2E_PASSWORD is required for non-local targets')
@@ -38,6 +47,18 @@ const ACCOUNTS = {
 
 const pagesToVisit = {
   manager: [
+    {
+      path: '/v2/chef/purchase/new',
+      mustContain: ['发起采购单', '供应商', '采购商品'],
+      mustNotContain: ['页面不存在', '404', '加载失败'],
+      noPageOverflow: true,
+    },
+    {
+      path: '/v2/manager/inventory',
+      mustContain: ['门店实时预估库存'],
+      mustNotContain: ['页面不存在', '404', '库存读取失败'],
+      noPageOverflow: true,
+    },
     { path: '/v2/manager/petty-cash', mustNotContain: ['页面不存在', '404', '备用金加载失败'] },
     { path: '/v2/manager/initiate?type=PETTY_CASH', mustNotContain: ['页面不存在', '未知申请类型'] },
   ],
@@ -57,9 +78,27 @@ const pagesToVisit = {
     { path: '/payments', mustNotContain: ['页面不存在', '404', '付款数据加载失败'] },
   ],
   supplier: [
-    { path: '/v2/supplier/orders', mustNotContain: ['页面不存在', '404'] },
-    { path: '/v2/supplier/products', mustNotContain: ['页面不存在', 'undefined'] },
-    { path: '/v2/supplier/inventory', mustNotContain: ['页面不存在'] },
+    {
+      path: '/v2/supplier/orders',
+      mustContain: ['门店订货单', '配送单', '开始日期', '结束日期'],
+      mustNotContain: ['页面不存在', '404', '配送单加载失败'],
+      visibleSelector: 'input[placeholder*="搜索商品名称"]',
+      noPageOverflow: true,
+      supplyDocumentSwitch: true,
+    },
+    {
+      path: '/v2/supplier/products',
+      mustContain: ['商品报价表', '分类管理', '操作记录', '批量上传'],
+      mustNotContain: ['页面不存在', 'undefined'],
+      visibleSelector: 'a[href="/v2/supplier/products/upload"]',
+      noPageOverflow: true,
+    },
+    {
+      path: '/v2/supplier/inventory',
+      mustContain: ['库存', '分类管理', '导入清单'],
+      mustNotContain: ['页面不存在', '库存读取失败'],
+      noPageOverflow: true,
+    },
     { path: '/v2/supplier/invoices', mustNotContain: ['页面不存在', '加载失败'] },
   ],
   chef: [
@@ -95,8 +134,17 @@ async function loginAs(page, account) {
 
 async function run() {
   console.log('================ UI Smoke ================')
-  console.log('BASE:', BASE, '· TENANT:', TENANT_SLUG, '· HEADED:', HEADED)
-  const browser = await chromium.launch({ headless: !HEADED })
+  console.log(
+    'BASE:', BASE,
+    '· TENANT:', TENANT_SLUG,
+    '· HEADED:', HEADED,
+    '· VIEWPORT:', `${VIEWPORT_WIDTH}x${VIEWPORT_HEIGHT}`,
+    '· BROWSER:', CHROMIUM_EXECUTABLE || 'Playwright bundled Chromium',
+  )
+  const browser = await chromium.launch({
+    headless: !HEADED,
+    executablePath: CHROMIUM_EXECUTABLE,
+  })
   const consoleErrors = []
 
   for (const [key, account] of Object.entries(ACCOUNTS)) {
@@ -107,7 +155,9 @@ async function run() {
       console.log(`\n[rate-limit] 冷却 ${ROLE_COOLDOWN_SECONDS}s 后继续供应商流程`)
       await new Promise(resolve => setTimeout(resolve, ROLE_COOLDOWN_SECONDS * 1000))
     }
-    const ctx = await browser.newContext()
+    const ctx = await browser.newContext({
+      viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+    })
     const page = await ctx.newPage()
     const pageLocation = () => page.url().replace(BASE, '') || '/'
     page.on('pageerror', err => consoleErrors.push(`[${key} ${pageLocation()}] ${err.message}`))
@@ -137,8 +187,34 @@ async function run() {
           await page.waitForLoadState('networkidle', { timeout: 10000 })
           const h = await page.locator('body').innerText().catch(() => '')
           let allClear = true
+          for (const must of (visit.mustContain || [])) {
+            if (!h.includes(must)) { bad(`${visit.path} 缺 "${must}"`); allClear = false }
+          }
           for (const must of (visit.mustNotContain || [])) {
             if (h.includes(must)) { bad(`${visit.path} 含 "${must}"`); allClear = false }
+          }
+          if (visit.visibleSelector) {
+            const visible = await page.locator(visit.visibleSelector).first().isVisible().catch(() => false)
+            if (!visible) { bad(`${visit.path} 桌面关键区域不可见: ${visit.visibleSelector}`); allClear = false }
+          }
+          if (visit.noPageOverflow) {
+            const overflow = await page.evaluate(() => ({
+              scrollWidth: document.documentElement.scrollWidth,
+              clientWidth: document.documentElement.clientWidth,
+            }))
+            if (overflow.scrollWidth > overflow.clientWidth + 1) {
+              bad(`${visit.path} 页面横向溢出 ${overflow.scrollWidth}px > ${overflow.clientWidth}px`)
+              allClear = false
+            }
+          }
+          if (visit.supplyDocumentSwitch) {
+            await page.getByRole('button', { name: '配送单', exact: true }).click()
+            const deliveryHeading = await page.getByRole('button', { name: '配送单', exact: true }).isVisible()
+            const orderHeading = await page.getByRole('button', { name: '门店订货单', exact: true }).isVisible()
+            if (!deliveryHeading || !orderHeading) {
+              bad(`${visit.path} 订货单/配送单切换不可用`)
+              allClear = false
+            }
           }
           if (allClear) ok(`${visit.path} 渲染 OK`)
         } catch (e) {

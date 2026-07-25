@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="滇界">
+  <rect width="64" height="64" rx="16" fill="#E07A3C"/>
+  <path d="M17 18h18c8.3 0 15 6.7 15 15S43.3 48 35 48H17V18Zm10 8v14h8a7 7 0 1 0 0-14h-8Z" fill="#fff"/>
+  <circle cx="18" cy="14" r="4" fill="#F6C453"/>
+</svg>

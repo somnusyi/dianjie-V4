@@ -51,8 +51,8 @@ export default function ChefDirectorHomePage() {
     apiFetch<InboxItem[]>('/api/documents/inbox')
       .then(d => setInbox(Array.isArray(d) ? d : []))
       .catch(() => setInbox([]))
-    apiFetch<LossClaim[]>('/api/loss-claims?limit=50')
-      .then(d => setLosses(Array.isArray(d) ? d : []))
+    apiFetch<{ items: LossClaim[] }>('/api/loss-claims?page=1&pageSize=50')
+      .then(d => setLosses(Array.isArray(d.items) ? d.items : []))
       .catch(() => setLosses([]))
   }, [])
   if (error) return <ErrorScreen message={error} />

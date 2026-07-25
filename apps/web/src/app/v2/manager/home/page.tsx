@@ -35,8 +35,8 @@ export default function ManagerHomePage() {
       .then(result => setDailyReportState(result.state))
       .catch(() => setDailyReportState(null))
     // 本店报损待处理 (店长视角看自己店的报损)
-    apiFetch<LossClaim[]>('/api/loss-claims?limit=10')
-      .then(rows => setPendingLoss((rows || []).filter(r => r.status === 'PENDING' || r.status === 'NEGOTIATING')))
+    apiFetch<{ items: LossClaim[] }>('/api/loss-claims?page=1&pageSize=10')
+      .then(result => setPendingLoss((result.items || []).filter(r => r.status === 'PENDING' || r.status === 'NEGOTIATING')))
       .catch(() => setPendingLoss([]))
     // 待验收 PO
     apiFetch<any>('/api/orders?pageSize=20')

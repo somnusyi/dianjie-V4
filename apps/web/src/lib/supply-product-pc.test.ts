@@ -6,7 +6,9 @@ import {
   buildProductQuery,
   buildStatusChangeBody,
   DEFAULT_SUPPLY_PRODUCT_FILTERS,
+  formatCostUnitPriceLabel,
   formatMoney,
+  formatPriceChangeConfirmBody,
   formatProductStatusLabel,
   hasActiveFilters,
   keepFiltersForPage,
@@ -314,5 +316,38 @@ describe('role path', () => {
   it('supply-chain products path is under /v2/supply-chain/', () => {
     const productsPath = '/v2/supply-chain/products'
     expect(productsPath.startsWith('/v2/supply-chain/')).toBe(true)
+  })
+})
+
+describe('formatCostUnitPriceLabel', () => {
+  it('includes the exact cost unit', () => {
+    expect(formatCostUnitPriceLabel('斤')).toBe('单价（元 / 斤）')
+    expect(formatCostUnitPriceLabel('500g')).toBe('单价（元 / 500g）')
+  })
+
+  it('falls back to generic term when cost unit is empty', () => {
+    expect(formatCostUnitPriceLabel('')).toBe('单价（元 / 成本单位）')
+  })
+})
+
+describe('formatPriceChangeConfirmBody', () => {
+  it('states the exact cost unit and price change', () => {
+    const body = formatPriceChangeConfirmBody(8, 9.5, '斤')
+    expect(body).toContain('单价（元 / 斤）')
+    expect(body).toContain('¥8.00')
+    expect(body).toContain('¥9.50')
+    expect(body).toContain('直接生效并通知总厨')
+  })
+
+  it('includes order unit hint when provided', () => {
+    const body = formatPriceChangeConfirmBody(10, 12, '斤', '约 ¥5.00 / 500g')
+    expect(body).toContain('单价（元 / 斤）')
+    expect(body).toContain('约 ¥5.00 / 500g')
+  })
+
+  it('omits hint line when no order unit hint', () => {
+    const body = formatPriceChangeConfirmBody(10, 12, '斤')
+    expect(body.split('\n').length).toBe(3)
+    expect(body).not.toContain('约 ¥')
   })
 })

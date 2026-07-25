@@ -58,6 +58,9 @@ export type ProductUnitSnapshot = LegacyProductUnit & {
   inventoryUnitsPerCostUnit?: number | string | null
 }
 
+/** 四单位合同的核验状态。 */
+export type UnitContractStatus = 'INFERRED' | 'VERIFIED' | 'PENDING'
+
 /** 去除单位前后空白；空字符串保持空，由调用方决定是否回退。 */
 export function normalizeUnit(value: string): string {
   return value.trim()
@@ -235,6 +238,67 @@ export function formatConversionSummary(values: FourUnitValues): string {
 /** 列表/摘要用紧凑换算文案，至少展示订货单位、库存单位及换算。 */
 export function formatCompactUnitSummary(values: FourUnitValues): string {
   return `订货：${values.orderUnit}，库存：${values.inventoryUnit}（1 ${values.orderUnit} = ${values.inventoryUnitsPerOrderUnit} ${values.inventoryUnit}）`
+}
+
+/** 从商品快照推断四单位合同状态。 */
+export function inferUnitContractStatus(product: ProductUnitSnapshot): UnitContractStatus {
+  if (!hasFourUnitFields(product)) return 'INFERRED'
+
+  const units = [
+    normalizeUnit(product.purchaseUnit || ''),
+    normalizeUnit(product.inventoryUnit || ''),
+    normalizeUnit(product.orderUnit || ''),
+    normalizeUnit(product.costUnit || ''),
+  ]
+  if (units.some(unit => !unit)) return 'PENDING'
+
+  const factors = [
+    parseConversionFactor(String(product.inventoryUnitsPerPurchaseUnit ?? '')),
+    parseConversionFactor(String(product.inventoryUnitsPerOrderUnit ?? '')),
+    parseConversionFactor(String(product.inventoryUnitsPerCostUnit ?? '')),
+  ]
+  if (factors.some(f => f === null)) return 'PENDING'
+
+  return 'VERIFIED'
+}
+
+/** 只读折算：订货单位价格 = costUnit 价格 × orderFactor / costFactor。 */
+export function computeOrderUnitPrice(
+  costUnitPrice: number,
+  values: FourUnitValues,
+): number | null {
+  if (!Number.isFinite(costUnitPrice) || costUnitPrice < 0) return null
+  const orderFactor = values.inventoryUnitsPerOrderUnit
+  const costFactor = values.inventoryUnitsPerCostUnit
+  if (!Number.isFinite(orderFactor) || orderFactor <= 0) return null
+  if (!Number.isFinite(costFactor) || costFactor <= 0) return null
+  return (costUnitPrice * orderFactor) / costFactor
+}
+
+/** 格式化订货单位价格辅助信息；待核验或非法值返回“待核验”。 */
+export function formatOrderUnitPriceHint(
+  costUnitPrice: number,
+  snapshot: ProductUnitSnapshot,
+): string | null {
+  const orderUnit = normalizeUnit(snapshot.orderUnit || '')
+  const costUnit = normalizeUnit(snapshot.costUnit || '')
+  if (!orderUnit || !costUnit) return null
+  // 同单位 1:1 保持简洁，不重复噪音
+  if (orderUnit === costUnit) return null
+
+  const status = inferUnitContractStatus(snapshot)
+  if (status === 'PENDING') return '待核验'
+
+  const orderFactor = parseConversionFactor(String(snapshot.inventoryUnitsPerOrderUnit ?? ''))
+  const costFactor = parseConversionFactor(String(snapshot.inventoryUnitsPerCostUnit ?? ''))
+  if (orderFactor === null || costFactor === null) return '待核验'
+  if (!Number.isFinite(costUnitPrice) || costUnitPrice < 0) return '待核验'
+
+  const converted = (costUnitPrice * orderFactor) / costFactor
+  if (!Number.isFinite(converted) || converted < 0) return '待核验'
+
+  const amount = Number(converted.toFixed(6))
+  return `约 ¥${amount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / ${orderUnit}`
 }
 
 /** 新增商品：返回完整四单位合同字段 + legacy unit。 */

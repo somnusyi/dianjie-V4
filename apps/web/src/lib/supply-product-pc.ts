@@ -197,3 +197,22 @@ export function formatMoney(value: unknown): string {
 export function productImageAlt(name: string, code?: string | null): string {
   return code ? `${name} (${code})` : name
 }
+
+/** 成本单位价格标签：单价（元 / costUnit）。 */
+export function formatCostUnitPriceLabel(costUnit: string): string {
+  return `单价（元 / ${costUnit || '成本单位'}）`
+}
+
+/** 调价确认文案：包含精确成本单位，可选订货单位折算提示。 */
+export function formatPriceChangeConfirmBody(
+  oldPrice: number,
+  newPrice: number,
+  costUnit: string,
+  orderUnitHint?: string | null,
+): string {
+  const lines = [`${formatCostUnitPriceLabel(costUnit)} ${formatMoney(oldPrice)} → ${formatMoney(newPrice)}`]
+  if (orderUnitHint) lines.push(orderUnitHint)
+  lines.push('')
+  lines.push('直接生效并通知总厨。')
+  return lines.join('\n')
+}

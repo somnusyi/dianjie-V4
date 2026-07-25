@@ -33,7 +33,9 @@ import {
   buildProductQuery,
   buildStatusChangeBody,
   DEFAULT_SUPPLY_PRODUCT_FILTERS,
+  formatCostUnitPriceLabel,
   formatMoney,
+  formatPriceChangeConfirmBody,
   formatProductStatusLabel,
   hasActiveFilters,
   keepFiltersForPage,
@@ -55,6 +57,7 @@ import {
   DEFAULT_FOUR_UNIT_FORM,
   formatCompactUnitSummary,
   formatConversionSummary,
+  formatOrderUnitPriceHint,
   fourUnitFormFromProduct,
   type FourUnitForm,
   validateFourUnitForm,
@@ -314,9 +317,10 @@ export default function InternalSupplyChainProductsPage() {
     if (!Number.isFinite(price) || price < 0) return
     const oldPrice = Number(priceTarget.price)
     if (Math.abs(price - oldPrice) < 0.001) { setPriceTarget(null); return }
+    const orderUnitHint = formatOrderUnitPriceHint(price, priceTarget)
     openConfirm({
       title: `调价「${priceTarget.name}」`,
-      body: `单价 ${formatMoney(oldPrice)} → ${formatMoney(price)}\n\n直接生效并通知总厨。`,
+      body: formatPriceChangeConfirmBody(oldPrice, price, priceTarget.costUnit || '', orderUnitHint),
       confirmLabel: '确认调价',
       tone: 'primary',
       onConfirm: async () => {
@@ -562,7 +566,7 @@ export default function InternalSupplyChainProductsPage() {
                     <th className="px-4 py-3">名称</th>
                     <th className="px-4 py-3">规格</th>
                     <th className="px-4 py-3">分类</th>
-                    <th className="px-4 py-3 text-right">单价</th>
+                    <th className="px-4 py-3 text-right">单价（元 / 成本单位）</th>
                     <th className="px-4 py-3">供应商</th>
                     <th className="px-4 py-3">状态</th>
                     <th className="px-4 py-3 text-right">操作</th>
@@ -596,10 +600,21 @@ export default function InternalSupplyChainProductsPage() {
                         <td className="px-4 py-3 text-gray2">{product.spec || '—'}</td>
                         <td className="px-4 py-3 text-gray2">{product.category || '—'}</td>
                         <td className="px-4 py-3 text-right font-num">
-                      {formatMoney(product.price)}
-                      <span className="block text-micro text-gray2">
-                        {formatCompactUnitSummary(buildFourUnitValues(fourUnitFormFromProduct(product)))}
-                      </span>
+                      {(() => {
+                        const unitValues = buildFourUnitValues(fourUnitFormFromProduct(product))
+                        const orderUnitHint = formatOrderUnitPriceHint(Number(product.price), product)
+                        return (
+                          <>
+                            {formatMoney(product.price)}
+                            <span className="block text-micro text-gray2">
+                              元 / {unitValues.costUnit}
+                            </span>
+                            {orderUnitHint && (
+                              <span className="block text-micro text-gray2">{orderUnitHint}</span>
+                            )}
+                          </>
+                        )
+                      })()}
                     </td>
                     <td className="px-4 py-3 text-gray2">{product.supplier?.name || '—'}</td>
                         <td className="px-4 py-3"><Chip tone={productStatusTone(product.status)}>{formatProductStatusLabel(product.status)}</Chip></td>
@@ -813,7 +828,7 @@ function FormDialog({
 
         {priceOnly ? (
           <div className="space-y-3">
-            <FormField label="新单价（元）">
+            <FormField label={formatCostUnitPriceLabel(fourUnitFormFromProduct(editing ?? {}).costUnit)}>
               <input
                 type="number"
                 min="0"
@@ -991,7 +1006,7 @@ function FormDialog({
                 </p>
               </div>
             </div>
-            <FormField label="单价（元）" required>
+            <FormField label={formatCostUnitPriceLabel(form.costUnit)} required>
               <input
                 type="number"
                 min="0"

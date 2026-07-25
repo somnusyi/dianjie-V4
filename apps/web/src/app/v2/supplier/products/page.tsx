@@ -12,7 +12,8 @@ import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { EmptyState, SkeletonCard, FriendlyError } from '@/components/v2/skeleton'
 import { ProductFilterSidebar } from '@/components/v2/product-filter-sidebar'
 import { ProductImagePreview } from '@/components/v2/product-image-preview'
-import { apiFetch } from '@/lib/v2-auth'
+import { apiDownload, apiFetch } from '@/lib/v2-auth'
+import { downloadProductExport, saveBlob } from './export-products'
 
 type Product = {
   id: string; code: string; name: string; category: string; unit: string
@@ -78,6 +79,8 @@ export default function SupplierProductsPage() {
   // 编辑草稿: 单价 + 规格 + 起订量 + 步长 (库存请到库存页)
   const [draft, setDraft] = useState<{ price: string; spec: string; moq: string; step: string; shipPct: string; shipBuf: string }>({ price: '', spec: '', moq: '', step: '', shipPct: '', shipBuf: '' })
   const [searchQ, setSearchQ] = useState('')
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [confirmState, openConfirm] = useConfirmSheet()
   const [createOpen, setCreateOpen] = useState(false)
@@ -110,6 +113,19 @@ export default function SupplierProductsPage() {
       .catch(() => setOperations([]))
   }
   useEffect(() => { load() }, [])
+
+  async function handleExport() {
+    if (exporting) return
+    setExporting(true)
+    setExportError(null)
+    try {
+      await downloadProductExport(apiDownload, saveBlob, searchQ, categoryFilter, statusFilter)
+    } catch (reason: any) {
+      setExportError(reason?.message || '导出失败')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   function revokeBatch(b: Batch) {
     openConfirm({
@@ -389,6 +405,12 @@ export default function SupplierProductsPage() {
             onClick={() => setOperationsOpen(v => !v)}
             className="px-2 py-2 bg-white border border-border rounded-cta text-caption text-gray2"
           >操作记录</button>
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={exporting}
+            className="px-3 py-2 bg-white border border-border rounded-cta text-button text-gray2 disabled:opacity-50"
+          >{exporting ? '导出中…' : '⤓ 导出当前结果'}</button>
           <a
             href="/v2/supplier/products/upload"
             className="px-3 py-2 bg-white border border-border rounded-cta text-button text-gray2"
@@ -399,6 +421,12 @@ export default function SupplierProductsPage() {
           >+ 新建 SKU</button>
         </div>
       </header>
+
+      {exportError && (
+        <div className="px-4 mt-2">
+          <p className="text-caption text-red-fg">导出失败：{exportError}</p>
+        </div>
+      )}
 
       <p className="px-4 mt-1 text-micro text-gray3">点商品行可改单价 / 规格 / 起订量 · 涨价走总厨审批 · 库存请去「库存」页</p>
 

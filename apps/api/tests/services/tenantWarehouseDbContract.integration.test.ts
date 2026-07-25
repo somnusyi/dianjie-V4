@@ -317,4 +317,35 @@ describe('tenant warehouse database contract (integration)', () => {
       where: { tenantId: tenantAId, isDefault: true },
     })).toBe(1)
   })
+
+  it('keeps legacy product and tenant hard-delete cleanup compatible', async () => {
+    const tenant = await prisma.tenant.create({
+      data: {
+        name: `仓库级联合同 ${suffix}`,
+        slug: `${suffix}-cascade`,
+      },
+    })
+    const warehouse = await prisma.warehouse.findFirstOrThrow({
+      where: { tenantId: tenant.id, isDefault: true },
+    })
+    const product = await prisma.product.create({
+      data: {
+        tenantId: tenant.id,
+        code: `P-CASCADE-${suffix}`,
+        name: '仓库级联合同商品',
+        price: 1,
+        stock: 2,
+      },
+    })
+
+    await prisma.product.delete({ where: { id: product.id } })
+    expect(await prisma.warehouseStock.count({
+      where: { productId: product.id },
+    })).toBe(0)
+
+    await prisma.tenant.delete({ where: { id: tenant.id } })
+    expect(await prisma.warehouse.count({
+      where: { id: warehouse.id },
+    })).toBe(0)
+  })
 })

@@ -86,7 +86,7 @@ model Warehouse {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  tenant                        Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  tenant                        Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   stocks                        WarehouseStock[]
   deliveryOrders                DeliveryOrder[]
   supplierStockMovements        SupplierStockMovement[]
@@ -114,9 +114,9 @@ model WarehouseStock {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  warehouse Warehouse @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
-  product   Product   @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse Warehouse @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Cascade)
+  product   Product   @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Cascade)
 
   @@unique([tenantId, warehouseId, productId])
   @@index([tenantId, productId])

@@ -46,7 +46,7 @@ describe('supplier order to receipt flow (integration)', () => {
         purchaseUnit: '箱', inventoryUnit: 'g', orderUnit: '斤', costUnit: 'g',
         inventoryUnitsPerPurchaseUnit: 10000, inventoryUnitsPerOrderUnit: 500,
         inventoryUnitsPerCostUnit: 1, unitConversionStatus: 'VERIFIED',
-        price: 10, stock: 10, minOrderQty: 1, stepQty: 1, shelfDays: 7,
+        price: 0.02, stock: 10, minOrderQty: 1, stepQty: 1, shelfDays: 7,
       },
     })
     productId = product.id
@@ -196,7 +196,7 @@ describe('supplier order to receipt flow (integration)', () => {
       expect(manualTotalOverflow.statusCode).toBe(400)
       expect(await prisma.receipt.count({ where: { tenantId } })).toBe(manualReceiptCount)
     } finally {
-      await prisma.product.update({ where: { id: productId }, data: { price: 10 } })
+      await prisma.product.update({ where: { id: productId }, data: { price: 0.02 } })
       await prisma.product.delete({ where: { id: highPriceProduct.id } })
     }
     expect(await prisma.purchaseOrder.count({ where: { tenantId } })).toBe(beforeOrderCount)
@@ -764,6 +764,7 @@ describe('supplier order to receipt flow (integration)', () => {
     const created = create.json()
     const originalSnapshot = structuredClone(created.submittedSnapshot)
     const originalSnapshotHash = created.submittedSnapshotHash
+    await prisma.product.update({ where: { id: integrityProduct.id }, data: { price: 12 } })
 
     const requestRevision = await app.inject({
       method: 'POST', url: `/api/orders/${created.id}/revisions`, headers: { 'x-test-actor': 'supplier' },
@@ -798,6 +799,7 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(Number(approvedOrder.currentOrderAmount)).toBe(70)
     expect(Number(approvedOrder.items[0].originalQuantity)).toBe(4)
     expect(Number(approvedOrder.items[0].quantity)).toBe(7)
+    expect(Number(approvedOrder.items[0].unitPrice)).toBe(10)
     const approvedRevision = await prisma.purchaseOrderRevision.findUniqueOrThrow({ where: { id: revisionId } })
     expect(approvedRevision.requestedById).toBe(supplierUserId)
     expect(approvedRevision.reviewedById).toBe(chefUserId)

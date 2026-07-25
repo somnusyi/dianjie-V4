@@ -40,14 +40,17 @@ import {
   copyFrozenSupplyDocumentFourUnits,
   freezeProductFourUnitsForSupplyDocument,
 } from '../services/supplyDocumentUnitSnapshots'
+import {
+  costUnitPricedOrderLine,
+  PURCHASE_ORDER_AMOUNT_MAX,
+} from '../services/costUnitPricing'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
 const PURCHASE_QUANTITY_MAX = 99_999_999.99
-const PURCHASE_AMOUNT_MAX = new Prisma.Decimal('9999999999.99')
 
 function orderAmountBoundError(lineAmounts: Prisma.Decimal[], total: Prisma.Decimal): string | null {
-  if (lineAmounts.some(amount => amount.gt(PURCHASE_AMOUNT_MAX))) return '单行金额超过系统上限'
-  if (total.gt(PURCHASE_AMOUNT_MAX)) return '订货单总金额超过系统上限'
+  if (lineAmounts.some(amount => amount.gt(PURCHASE_ORDER_AMOUNT_MAX))) return '单行金额超过系统上限'
+  if (total.gt(PURCHASE_ORDER_AMOUNT_MAX)) return '订货单总金额超过系统上限'
   return null
 }
 
@@ -488,25 +491,23 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    // P1: 单价以 DB Product.price 为权威, 忽略客户端传的 unitPrice
-    // 防内部串通低报单价 / 客户端 bug
-    const priceMap = new Map(productsMoq.map(p => [p.id, p.price]))
+    // P1: DB Product.price 是成本单位单价；按商品四单位合同换成订货单位单价。
+    // 忽略客户端 unitPrice，防内部串通低报单价 / 客户端 bug。
     const itemsData = items.map((i: any) => {
-      const dbPrice = priceMap.get(i.productId)
       const product = moqMap.get(i.productId)
-      if (dbPrice === undefined) {
-        throw { statusCode: 400, message: `商品不存在: ${i.productId}` }
-      }
       if (!product) {
         throw { statusCode: 400, message: `商品不存在: ${i.productId}` }
       }
-      const amount = lineAmount(i.quantity, dbPrice)
+      const { unitPrice, amount } = costUnitPricedOrderLine({
+        product,
+        quantity: i.quantity,
+      })
       return {
         productId: i.productId,
         quantity: i.quantity,
         originalQuantity: i.quantity,
-        unitPrice: dbPrice,
-        originalUnitPrice: dbPrice,
+        unitPrice,
+        originalUnitPrice: unitPrice,
         amount,
         originalAmount: amount,
         lineOrigin: 'ORIGINAL' as const,
@@ -728,7 +729,13 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       if (step > 0 && Math.abs(((item.quantity - moq) / step) - Math.round((item.quantity - moq) / step)) > 0.0001) {
         throw { statusCode: 400, message: `${product.name} 需以 ${step} ${product.unit} 为步长` }
       }
-      const unitPrice = previous?.unitPrice ?? new Prisma.Decimal(product.price).toFixed(2)
+      const pricedLine = previous
+        ? {
+            unitPrice: new Prisma.Decimal(previous.unitPrice),
+            amount: lineAmount(item.quantity, previous.unitPrice),
+          }
+        : costUnitPricedOrderLine({ product, quantity: item.quantity })
+      const unitPrice = pricedLine.unitPrice.toFixed(2)
       const frozenUnits = previous
         ? copyFrozenSupplyDocumentFourUnits(previous)
         : freezeProductFourUnitsForSupplyDocument(product)
@@ -741,7 +748,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         unit: product.unit,
         quantity: new Prisma.Decimal(item.quantity).toFixed(2),
         unitPrice,
-        amount: lineAmount(item.quantity, unitPrice).toFixed(2),
+        amount: pricedLine.amount.toFixed(2),
         lineOrigin: previous?.lineOrigin ?? 'APPROVED_REVISION' as const,
         purchaseUnitSnapshot: String(frozenUnits.purchaseUnitSnapshot),
         inventoryUnitSnapshot: String(frozenUnits.inventoryUnitSnapshot),

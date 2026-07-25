@@ -10,6 +10,7 @@ import { ensureReceiptDerivatives, repairReceiptDerivatives } from './receiptDer
 import { ensureReceiptInventoryUnitSnapshots } from './receiptInventoryUnits'
 import { revalueStoreConsumptionCosts } from './inventoryCosting'
 import { runDailyReportReminder } from './dailyReportReminder'
+import { copyFrozenSupplyDocumentFourUnits } from './supplyDocumentUnitSnapshots'
 
 /**
  * 对一张已经送达、超时未确认的订货单执行自动收货。
@@ -105,6 +106,7 @@ export async function autoReceivePurchaseOrder(orderId: string) {
             productSpecSnapshot: item.productSpecSnapshot,
             productUnitSnapshot: item.productUnitSnapshot,
             productCategorySnapshot: item.productCategorySnapshot,
+            ...copyFrozenSupplyDocumentFourUnits(item),
             productionDate: item.manufactureDate || receivedAt,
             expiryDate: item.expiryDate || dayjs(receivedAt).add(item.product.shelfDays, 'day').toDate(),
           })),

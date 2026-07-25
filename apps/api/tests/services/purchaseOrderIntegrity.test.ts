@@ -28,7 +28,16 @@ const baseOrder = () => ({
       id: 'line-1', productId: 'product-1', quantity: '10.00', unitPrice: '3.33', amount: '33.30',
       originalQuantity: '10.00', originalUnitPrice: '3.33', originalAmount: '33.30',
       lineOrigin: 'ORIGINAL' as const, isActive: true,
-      product: { code: 'SKU-1', name: '土豆', spec: '一级', unit: 'kg' },
+      purchaseUnitSnapshot: '箱', inventoryUnitSnapshot: 'kg', orderUnitSnapshot: '袋', costUnitSnapshot: 'kg',
+      unitConversionStatusSnapshot: 'VERIFIED',
+      inventoryUnitsPerPurchaseUnitSnapshot: '10.000000',
+      inventoryUnitsPerOrderUnitSnapshot: '2.000000',
+      inventoryUnitsPerCostUnitSnapshot: '1.000000',
+      product: {
+        code: 'SKU-1', name: '土豆', spec: '一级', unit: '袋',
+        purchaseUnit: '箱', inventoryUnit: 'kg', orderUnit: '袋', costUnit: 'kg',
+        inventoryUnitsPerPurchaseUnit: 10, inventoryUnitsPerOrderUnit: 2, inventoryUnitsPerCostUnit: 1,
+      },
     },
   ],
 })
@@ -52,6 +61,29 @@ describe('purchase order integrity', () => {
     expect(snapshotHash(after)).toBe(snapshotHash(before))
   })
 
+  it('uses frozen line units after Product master data changes', () => {
+    const order = baseOrder()
+    const before = buildOrderSnapshot(order, 'original')
+    Object.assign(order.items[0].product, {
+      unit: '瓶',
+      purchaseUnit: '件',
+      inventoryUnit: 'ml',
+      orderUnit: '瓶',
+      costUnit: 'ml',
+      inventoryUnitsPerPurchaseUnit: 24000,
+      inventoryUnitsPerOrderUnit: 500,
+      inventoryUnitsPerCostUnit: 1,
+    })
+    const after = buildOrderSnapshot(order, 'original')
+
+    expect(after).toEqual(before)
+    expect(after.items[0]).toMatchObject({
+      orderUnitSnapshot: '袋',
+      inventoryUnitSnapshot: 'kg',
+      inventoryUnitsPerOrderUnitSnapshot: '2.000000',
+    })
+  })
+
   it('hashes canonical snapshot objects deterministically', () => {
     const snapshot = buildOrderSnapshot(baseOrder(), 'original')
     const reordered = JSON.parse(JSON.stringify(snapshot))
@@ -70,6 +102,11 @@ describe('purchase order integrity', () => {
         {
           lineId: 'revision:product-2', productId: 'product-2', code: 'SKU-2', name: '青椒', spec: null,
           unit: 'kg', quantity: '2.00', unitPrice: '4.00', amount: '8.00', lineOrigin: 'APPROVED_REVISION' as const,
+          purchaseUnitSnapshot: 'kg', inventoryUnitSnapshot: 'kg', orderUnitSnapshot: 'kg', costUnitSnapshot: 'kg',
+          unitConversionStatusSnapshot: 'VERIFIED',
+          inventoryUnitsPerPurchaseUnitSnapshot: '1.000000',
+          inventoryUnitsPerOrderUnitSnapshot: '1.000000',
+          inventoryUnitsPerCostUnitSnapshot: '1.000000',
         },
       ],
       totalAmount: '34.64',
@@ -88,6 +125,11 @@ describe('purchase order integrity', () => {
       id: 'line-2', productId: 'product-2', quantity: '2.00', unitPrice: '4.00', amount: '8.00',
       originalQuantity: null as any, originalUnitPrice: null as any, originalAmount: null as any,
       lineOrigin: 'APPROVED_REVISION' as const, isActive: true,
+      purchaseUnitSnapshot: 'kg', inventoryUnitSnapshot: 'kg', orderUnitSnapshot: 'kg', costUnitSnapshot: 'kg',
+      unitConversionStatusSnapshot: 'VERIFIED',
+      inventoryUnitsPerPurchaseUnitSnapshot: '1.000000',
+      inventoryUnitsPerOrderUnitSnapshot: '1.000000',
+      inventoryUnitsPerCostUnitSnapshot: '1.000000',
       product: { code: 'SKU-2', name: '青椒', spec: '', unit: 'kg' },
     })
     expect(buildOrderSnapshot(order, 'original').items).toHaveLength(1)

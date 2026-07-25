@@ -1,5 +1,11 @@
 import crypto from 'node:crypto'
 import { Prisma } from '@dianjie/db'
+import {
+  frozenSupplyDocumentFourUnitsOrProductFallback,
+  type FrozenSupplyDocumentFourUnits,
+  type FrozenUnitConversionStatus,
+} from './supplyDocumentUnitSnapshots'
+import type { ProductInventoryUnitLike } from './inventoryUnits'
 
 type Decimalish = Prisma.Decimal | string | number
 
@@ -14,10 +20,18 @@ export type OrderSnapshotItem = {
   unitPrice: string
   amount: string
   lineOrigin: 'ORIGINAL' | 'APPROVED_REVISION' | 'LEGACY_UNKNOWN'
+  purchaseUnitSnapshot: string
+  inventoryUnitSnapshot: string
+  orderUnitSnapshot: string
+  costUnitSnapshot: string
+  unitConversionStatusSnapshot: FrozenUnitConversionStatus
+  inventoryUnitsPerPurchaseUnitSnapshot: string
+  inventoryUnitsPerOrderUnitSnapshot: string
+  inventoryUnitsPerCostUnitSnapshot: string
 }
 
 export type OrderSnapshot = {
-  schemaVersion: 1
+  schemaVersion: 1 | 2
   orderNo: string
   tenantId: string
   store: { id: string; name: string }
@@ -81,7 +95,7 @@ type OrderForSnapshot = {
   store: { id: string; name: string }
   supplier: { id: string; name: string }
   createdBy: { id: string; name: string; role?: string | null }
-  items: Array<{
+  items: Array<Partial<FrozenSupplyDocumentFourUnits> & {
     id: string
     productId: string
     quantity: Decimalish
@@ -92,7 +106,7 @@ type OrderForSnapshot = {
     originalAmount?: Decimalish | null
     lineOrigin?: 'ORIGINAL' | 'APPROVED_REVISION' | 'LEGACY_UNKNOWN'
     isActive?: boolean
-    product: { code?: string | null; name: string; spec?: string | null; unit: string }
+    product: ProductInventoryUnitLike & { code?: string | null; name: string; spec?: string | null }
   }>
 }
 
@@ -108,17 +122,26 @@ export function buildOrderSnapshot(
     const quantity = mode === 'original' ? item.originalQuantity ?? item.quantity : item.quantity
     const unitPrice = mode === 'original' ? item.originalUnitPrice ?? item.unitPrice : item.unitPrice
     const amount = mode === 'original' ? item.originalAmount ?? lineAmount(quantity, unitPrice) : lineAmount(quantity, unitPrice)
+    const frozenUnits = frozenSupplyDocumentFourUnitsOrProductFallback(item, item.product)
     return {
       lineId: item.id,
       productId: item.productId,
       code: item.product.code ?? null,
       name: item.product.name,
       spec: item.product.spec ?? null,
-      unit: item.product.unit,
+      unit: frozenUnits.orderUnitSnapshot!,
       quantity: decimalString(quantity, 2),
       unitPrice: decimalString(unitPrice, 2),
       amount: decimalString(amount, 2),
       lineOrigin: item.lineOrigin ?? 'ORIGINAL',
+      purchaseUnitSnapshot: frozenUnits.purchaseUnitSnapshot!,
+      inventoryUnitSnapshot: frozenUnits.inventoryUnitSnapshot!,
+      orderUnitSnapshot: frozenUnits.orderUnitSnapshot!,
+      costUnitSnapshot: frozenUnits.costUnitSnapshot!,
+      unitConversionStatusSnapshot: frozenUnits.unitConversionStatusSnapshot!,
+      inventoryUnitsPerPurchaseUnitSnapshot: decimalString(frozenUnits.inventoryUnitsPerPurchaseUnitSnapshot!, 6),
+      inventoryUnitsPerOrderUnitSnapshot: decimalString(frozenUnits.inventoryUnitsPerOrderUnitSnapshot!, 6),
+      inventoryUnitsPerCostUnitSnapshot: decimalString(frozenUnits.inventoryUnitsPerCostUnitSnapshot!, 6),
     }
   }).sort((a, b) => a.lineId.localeCompare(b.lineId))
 
@@ -126,7 +149,7 @@ export function buildOrderSnapshot(
   const submittedAt = order.submittedAt ?? order.createdAt
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     orderNo: order.no,
     tenantId: order.tenantId,
     store: { id: order.store.id, name: order.store.name },

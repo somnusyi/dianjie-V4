@@ -36,6 +36,10 @@ import {
   shipmentRequestFingerprint,
   type ShipmentCloseSummary,
 } from '../services/partialShipmentClose'
+import {
+  copyFrozenSupplyDocumentFourUnits,
+  freezeProductFourUnitsForSupplyDocument,
+} from '../services/supplyDocumentUnitSnapshots'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
 const PURCHASE_QUANTITY_MAX = 99_999_999.99
@@ -458,7 +462,12 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     }
     const productsMoq = await prisma.product.findMany({
       where: { id: { in: productIds }, tenantId, supplierId, status: 'ENABLED' },
-      select: { id: true, name: true, unit: true, minOrderQty: true, stepQty: true, price: true },
+      select: {
+        id: true, name: true, unit: true, minOrderQty: true, stepQty: true, price: true,
+        purchaseUnit: true, inventoryUnit: true, orderUnit: true, costUnit: true,
+        inventoryUnitsPerPurchaseUnit: true, inventoryUnitsPerOrderUnit: true,
+        inventoryUnitsPerCostUnit: true, unitConversionStatus: true,
+      },
     })
     if (productsMoq.length !== productIds.length) {
       return reply.status(400).send({ error: '存在无效、已停售或不属于该供应商的商品' })
@@ -484,7 +493,11 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const priceMap = new Map(productsMoq.map(p => [p.id, p.price]))
     const itemsData = items.map((i: any) => {
       const dbPrice = priceMap.get(i.productId)
+      const product = moqMap.get(i.productId)
       if (dbPrice === undefined) {
+        throw { statusCode: 400, message: `商品不存在: ${i.productId}` }
+      }
+      if (!product) {
         throw { statusCode: 400, message: `商品不存在: ${i.productId}` }
       }
       const amount = lineAmount(i.quantity, dbPrice)
@@ -497,6 +510,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         amount,
         originalAmount: amount,
         lineOrigin: 'ORIGINAL' as const,
+        ...freezeProductFourUnitsForSupplyDocument(product),
       }
     })
     const totalAmount = sumOrderAmount(itemsData)
@@ -693,7 +707,13 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const productIds = requestedItems.map(item => item.productId)
     const products = await prisma.product.findMany({
       where: { id: { in: productIds }, tenantId, supplierId: order.supplierId },
-      select: { id: true, code: true, name: true, spec: true, unit: true, price: true, status: true, minOrderQty: true, stepQty: true },
+      select: {
+        id: true, code: true, name: true, spec: true, unit: true, price: true, status: true,
+        minOrderQty: true, stepQty: true,
+        purchaseUnit: true, inventoryUnit: true, orderUnit: true, costUnit: true,
+        inventoryUnitsPerPurchaseUnit: true, inventoryUnitsPerOrderUnit: true,
+        inventoryUnitsPerCostUnit: true, unitConversionStatus: true,
+      },
     })
     if (products.length !== productIds.length) return reply.status(400).send({ error: '存在不属于该供应商的商品' })
     const productMap = new Map(products.map(product => [product.id, product]))
@@ -709,6 +729,9 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         throw { statusCode: 400, message: `${product.name} 需以 ${step} ${product.unit} 为步长` }
       }
       const unitPrice = previous?.unitPrice ?? new Prisma.Decimal(product.price).toFixed(2)
+      const frozenUnits = previous
+        ? copyFrozenSupplyDocumentFourUnits(previous)
+        : freezeProductFourUnitsForSupplyDocument(product)
       return {
         lineId: previous?.lineId ?? `revision:${item.productId}`,
         productId: item.productId,
@@ -720,6 +743,14 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         unitPrice,
         amount: lineAmount(item.quantity, unitPrice).toFixed(2),
         lineOrigin: previous?.lineOrigin ?? 'APPROVED_REVISION' as const,
+        purchaseUnitSnapshot: String(frozenUnits.purchaseUnitSnapshot),
+        inventoryUnitSnapshot: String(frozenUnits.inventoryUnitSnapshot),
+        orderUnitSnapshot: String(frozenUnits.orderUnitSnapshot),
+        costUnitSnapshot: String(frozenUnits.costUnitSnapshot),
+        unitConversionStatusSnapshot: frozenUnits.unitConversionStatusSnapshot!,
+        inventoryUnitsPerPurchaseUnitSnapshot: new Prisma.Decimal(frozenUnits.inventoryUnitsPerPurchaseUnitSnapshot!).toFixed(6),
+        inventoryUnitsPerOrderUnitSnapshot: new Prisma.Decimal(frozenUnits.inventoryUnitsPerOrderUnitSnapshot!).toFixed(6),
+        inventoryUnitsPerCostUnitSnapshot: new Prisma.Decimal(frozenUnits.inventoryUnitsPerCostUnitSnapshot!).toFixed(6),
       }
     }).sort((a, b) => a.productId.localeCompare(b.productId))
     const afterTotal = afterItems.reduce((sum, item) => sum.add(item.amount), new Prisma.Decimal(0)).toDecimalPlaces(2)
@@ -887,6 +918,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             purchaseOrderId: id, productId: next.productId,
             quantity: new Prisma.Decimal(next.quantity), unitPrice: new Prisma.Decimal(next.unitPrice), amount: new Prisma.Decimal(next.amount),
             lineOrigin: 'APPROVED_REVISION', isActive: true, lastRevisionId: revision.id,
+            ...copyFrozenSupplyDocumentFourUnits(next),
           },
         })
       }
@@ -1359,8 +1391,9 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
               productCodeSnapshot: line.it.product?.code || null,
               productNameSnapshot: line.it.product?.name || null,
               productSpecSnapshot: line.it.product?.spec || null,
-              productUnitSnapshot: line.it.product?.unit || null,
+              productUnitSnapshot: line.it.orderUnitSnapshot || line.it.product?.unit || null,
               productCategorySnapshot: line.it.product?.category || null,
+              ...copyFrozenSupplyDocumentFourUnits(line.it),
             })),
           },
         },
@@ -1795,6 +1828,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
                 productSpecSnapshot: item.productSpecSnapshot,
                 productUnitSnapshot: item.productUnitSnapshot,
                 productCategorySnapshot: item.productCategorySnapshot,
+                ...copyFrozenSupplyDocumentFourUnits(item),
                 productionDate: item.manufactureDate || receivedAt,
                 expiryDate: item.expiryDate || dayjs(receivedAt).add(item.product.shelfDays, 'day').toDate(),
               })),

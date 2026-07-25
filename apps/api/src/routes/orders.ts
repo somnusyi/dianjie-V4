@@ -1691,8 +1691,16 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         })
         return { receipt, no }
       })
-    } catch (error) {
-      if (error instanceof ReceiptAlreadyProcessedError) {
+    } catch (error: any) {
+      // rowVersion 是正常并发的第一道门禁；deliveryOrderId 唯一约束是最终兜底。
+      // 若另一个事务恰好先提交了同一配送单的入库单，Prisma 会抛 P2002
+      // （高隔离级别下也可能是 P2034）。此时应读取并返回已提交的原入库单，
+      // 不能把成功的重复收货表现成 500。
+      if (
+        error instanceof ReceiptAlreadyProcessedError
+        || error?.code === 'P2002'
+        || error?.code === 'P2034'
+      ) {
         const duplicate = await findDuplicateReceiptResponse(delivery.id)
         if (duplicate) return duplicate
       }

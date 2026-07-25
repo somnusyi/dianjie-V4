@@ -53,6 +53,10 @@ const SLIDES: Record<string, Slide[]> = {
   SUPPLIER_OWNER: SUPPLIER_SLIDES,
   SUPPLIER_STAFF: SUPPLIER_SLIDES,
   SUPPLIER_SUB: SUPPLIER_SLIDES,
+  SUPPLY_CHAIN: [
+    { icon: '▦', title: '跨店供应履约总览', body: '按门店查看采购订单、配送、收货、库存和近 30 天食材消耗。' },
+    { icon: '◉', title: '全程只读', body: '工作台不提供接单、发货、盘点录入、库存调整、账单或销售分析操作。' },
+  ],
   // 工程部 (筹建)
   ENGINEERING: [
     { icon: '◰', title: '筹建看板', body: '我负责的所有筹建中门店一屏看 — 阶段 / 任务进度 / 阻塞', tip: '点店卡 → 进单店进度详情' },

@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 const ROLE_LABEL: Record<string, string> = {
   MANAGER: '店长', KITCHEN_LEAD: '厨师长', CHEF_DIRECTOR: '总厨',
   FINANCE: '财务', PURCHASER: '采购', ENGINEERING: '工程部',
+  SUPPLY_CHAIN: '内部供应链',
   SUPPLIER_OWNER: '供应商负责人', SUPPLIER_STAFF: '供应商员工',
 }
 

@@ -7,7 +7,7 @@ import { prisma } from '@dianjie/db'
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
 const INVITER_ROLES = new Set(['ADMIN', 'SUPER_ADMIN'])
-const INVITABLE_ROLES = ['MANAGER','KITCHEN_LEAD','CHEF_DIRECTOR','FINANCE','PURCHASER','ENGINEERING','SUPPLIER_OWNER','SUPPLIER_STAFF'] as const
+const INVITABLE_ROLES = ['MANAGER','KITCHEN_LEAD','CHEF_DIRECTOR','FINANCE','PURCHASER','ENGINEERING','SUPPLY_CHAIN','SUPPLIER_OWNER','SUPPLIER_STAFF'] as const
 const STORE_BOUND_ROLES = new Set(['MANAGER','KITCHEN_LEAD'])
 const SUPPLIER_BOUND_ROLES = new Set(['SUPPLIER_OWNER','SUPPLIER_STAFF'])
 const PHONE_RE = /^1[3-9]\d{9}$/

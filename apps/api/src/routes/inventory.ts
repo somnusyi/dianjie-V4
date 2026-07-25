@@ -4,6 +4,7 @@ import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import dayjs from 'dayjs'
 import { isStoreScoped } from '../lib/auth-scope'
+import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
 import { buildIdempotencyKey } from '../lib/idempotency'
 import { estimatedStoreInventory, latestStoreInventorySnapshot } from '../services/storeInventory'
 import { resolveProductInventoryUnit } from '../services/inventoryUnits'
@@ -13,6 +14,13 @@ const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const INVENTORY_VIEW_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'])
 const INVENTORY_WRITE_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF'])
 const INVENTORY_POLICY_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'])
+
+function canViewInventory(role: string | undefined | null) {
+  return Boolean(role && (
+    INVENTORY_VIEW_ROLES.has(role)
+    || hasInternalSupplyChainCapability(role, 'inventory.read')
+  ))
+}
 
 const consumeSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(80).optional(),
@@ -64,7 +72,7 @@ async function resolveInventoryStore(user: any, requestedStoreId?: string | null
 
 export const inventoryRoutes: FastifyPluginAsync = async app => {
   app.get('/snapshot/latest', auth(app), async (req: any, reply) => {
-    if (!INVENTORY_VIEW_ROLES.has(req.user.role)) return reply.status(403).send({ error: '无权查看门店库存' })
+    if (!canViewInventory(req.user.role)) return reply.status(403).send({ error: '无权查看门店库存' })
     try {
       const storeId = await resolveInventoryStore(req.user, req.query?.storeId)
       return latestStoreInventorySnapshot(req.user.tenantId, storeId, true)
@@ -76,7 +84,7 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
   // 门店预计库存：最近实物盘点 + 后续实收入库 - BOM/人工消耗 - 店内报损。
   // Product.stock 属于供应商库存，绝不能在这里作为门店库存使用。
   app.get('/', auth(app), async (req: any, reply) => {
-    if (!INVENTORY_VIEW_ROLES.has(req.user.role)) return reply.status(403).send({ error: '无权查看门店库存' })
+    if (!canViewInventory(req.user.role)) return reply.status(403).send({ error: '无权查看门店库存' })
     try {
       const storeId = await resolveInventoryStore(req.user, req.query?.storeId)
       const estimate = await estimatedStoreInventory(req.user.tenantId, storeId)
@@ -232,7 +240,7 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
 
   app.get('/consumptions', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, storeId: boundStoreId } = req.user
-    if (!INVENTORY_VIEW_ROLES.has(role)) return reply.status(403).send({ error: '无权查看门店消耗' })
+    if (!canViewInventory(role)) return reply.status(403).send({ error: '无权查看门店消耗' })
     const query = z.object({
       days: z.coerce.number().int().min(1).max(365).default(30),
       storeId: z.string().optional(),

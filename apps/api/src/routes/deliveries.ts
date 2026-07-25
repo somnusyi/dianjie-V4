@@ -3,6 +3,7 @@ import { prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 import { requireSupplierCapability } from '../lib/supplier-access'
+import { allowsSupplyDataRead, supplyDataReadScope } from '../lib/internal-supply-chain-access'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 import { calendarDateSchema } from '../lib/calendar-date'
 
@@ -25,11 +26,13 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
   app.get('/', { preHandler: [(app as any).authenticate] }, async (req: any, reply) => {
     const parsed = listQuerySchema.safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-    const { tenantId, role, storeId: actorStoreId, supplierId: actorSupplierId } = req.user
+    const { role, supplierId: actorSupplierId } = req.user
+    if (!allowsSupplyDataRead(role, 'delivery.read')) {
+      return reply.status(403).send({ error: '无权查看配送单' })
+    }
     const q = parsed.data
-    const where: any = { tenantId }
-    if (isStoreScoped(role)) where.storeId = actorStoreId
-    else if (q.storeId) where.storeId = q.storeId
+    const where: any = supplyDataReadScope(req.user)
+    if (q.storeId && !isStoreScoped(role)) where.storeId = q.storeId
     if (isSupplierRole(role)) where.supplierId = requireSupplierCapability(role, actorSupplierId, 'order.read')
     else if (q.supplierId) where.supplierId = q.supplierId
     if (q.status) where.status = q.status
@@ -95,9 +98,11 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
   })
 
   app.get('/:id', { preHandler: [(app as any).authenticate] }, async (req: any) => {
-    const { tenantId, role, storeId, supplierId } = req.user
-    const where: any = { id: req.params.id, tenantId }
-    if (isStoreScoped(role)) where.storeId = storeId
+    const { role, supplierId } = req.user
+    if (!allowsSupplyDataRead(role, 'delivery.read')) {
+      throw { statusCode: 403, message: '无权查看配送单' }
+    }
+    const where: any = { id: req.params.id, ...supplyDataReadScope(req.user) }
     if (isSupplierRole(role)) where.supplierId = requireSupplierCapability(role, supplierId, 'order.read')
     const delivery = await prisma.deliveryOrder.findFirst({
       where,

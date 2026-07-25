@@ -6,6 +6,11 @@ import { ensureReceiptDerivatives } from '../services/receiptDerivatives'
 import { invalidatePattern } from '../lib/cache'
 import { notifyReceiptConfirmed } from '../services/notification'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
+import {
+  allowsSupplyDataRead,
+  isInternalSupplyChainRole,
+  supplyDataReadScope,
+} from '../lib/internal-supply-chain-access'
 import { parsePagination } from '../lib/pagination'
 import { nextBusinessNo } from '../services/purchaseOrderIntegrity'
 import { ensureReceiptInventoryUnitSnapshots } from '../services/receiptInventoryUnits'
@@ -26,6 +31,40 @@ const receiptListFilterSchema = z.object({
 
 function canOperateReceipt(role: string | undefined) {
   return Boolean(role && RECEIPT_OPERATOR_ROLES.has(role))
+}
+
+/**
+ * 内部供应链收货 DTO：只保留履约与实收明细。
+ * 明确排除 paymentSchedule、invoice、银行临时信息和财务核对字段。
+ */
+export function toInternalSupplyChainReceipt(row: any) {
+  return {
+    id: row.id,
+    no: row.no,
+    storeId: row.storeId,
+    supplierId: row.supplierId,
+    deliveryDate: row.deliveryDate,
+    totalAmount: row.totalAmount,
+    status: row.status,
+    note: row.note,
+    createdById: row.createdById,
+    confirmedAt: row.confirmedAt,
+    isManual: row.isManual,
+    tempSupplierName: row.tempSupplierName,
+    rejectReason: row.rejectReason,
+    rejectedAt: row.rejectedAt,
+    purchaseOrderId: row.purchaseOrderId,
+    deliveryOrderId: row.deliveryOrderId,
+    supplierVerifiedAt: row.supplierVerifiedAt,
+    supplierVerifiedById: row.supplierVerifiedById,
+    supplierVerifyNote: row.supplierVerifyNote,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    store: row.store,
+    supplier: row.supplier,
+    createdBy: row.createdBy,
+    items: row.items,
+  }
 }
 
 function money(value: Prisma.Decimal.Value) {
@@ -96,57 +135,84 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 列表 ──────────────────────────────────────────
   app.get('/', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role, storeId } = req.user
+    const { role } = req.user
+    if (!allowsSupplyDataRead(role, 'receipt.read')) {
+      return reply.status(403).send({ error: '无权查看入库单' })
+    }
     const parsedFilters = receiptListFilterSchema.safeParse(req.query || {})
     if (!parsedFilters.success) return reply.status(400).send({ error: parsedFilters.error.issues[0].message })
     const { status, supplierId, storeId: qStore, page = '1', pageSize = '20' } = parsedFilters.data as any
-    const where: any = { tenantId }
+    const where: any = supplyDataReadScope(req.user)
     if (status) where.status = status
-    // 供应商: 强制按自家 supplierId 过滤
-    if (isSupplierRole(role)) where.supplierId = req.user.supplierId || '__NONE__'
-    else if (supplierId) where.supplierId = supplierId
-    if (isStoreScoped(role)) where.storeId = storeId
-    else if (qStore) where.storeId = qStore
+    if (supplierId && !isSupplierRole(role)) where.supplierId = supplierId
+    if (qStore && !isStoreScoped(role)) where.storeId = qStore
 
     const pagination = parsePagination({ page, pageSize }, { defaultPageSize: 20, maxPageSize: 100 })
     if (!pagination) return reply.status(400).send({ error: '分页参数格式不正确' })
     const { page: p, pageSize: ps } = pagination
     const skip = (p - 1) * ps
 
-    const [items, total] = await Promise.all([
+    const internalRead = isInternalSupplyChainRole(role)
+    const [rows, total] = await Promise.all([
       prisma.receipt.findMany({
         where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip, take: ps,
         include: {
-          store: { select: { id: true, name: true } },
-          supplier: { select: { id: true, name: true } },
+          store: { select: { id: true, no: true, name: true } },
+          supplier: { select: { id: true, no: true, name: true } },
           createdBy: { select: { id: true, name: true } },
-          items: { include: { product: { select: { id: true, name: true, unit: true } } } },
-          paymentSchedule: { select: { id: true, status: true, dueAt: true, amount: true } },
+          items: {
+            include: {
+              product: {
+                select: {
+                  id: true, code: true, name: true, spec: true, unit: true,
+                  category: true, inventoryUnit: true,
+                },
+              },
+            },
+          },
+          ...(!internalRead
+            ? { paymentSchedule: { select: { id: true, status: true, dueAt: true, amount: true } } }
+            : {}),
         },
       }),
       prisma.receipt.count({ where }),
     ])
+    const items = internalRead ? rows.map(toInternalSupplyChainReceipt) : rows
     return { items, total, page: p, pageSize: ps }
   })
 
   // ── 详情 ──────────────────────────────────────────
   app.get('/:id', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role, storeId } = req.user
-    const detailWhere: any = { id: req.params.id, tenantId }
-    if (isSupplierRole(role)) detailWhere.supplierId = req.user.supplierId || '__NONE__'
-    if (isStoreScoped(role)) detailWhere.storeId = storeId
+    const { role } = req.user
+    if (!allowsSupplyDataRead(role, 'receipt.read')) {
+      return reply.status(403).send({ error: '无权查看入库单' })
+    }
+    const detailWhere: any = { id: req.params.id, ...supplyDataReadScope(req.user) }
+    const internalRead = isInternalSupplyChainRole(role)
     const receipt = await prisma.receipt.findFirst({
       where: detailWhere,
       include: {
-        store: true, supplier: true,
+        store: internalRead ? { select: { id: true, no: true, name: true } } : true,
+        supplier: internalRead ? { select: { id: true, no: true, name: true } } : true,
         createdBy: { select: { id: true, name: true } },
-        items: { include: { product: true } },
-        paymentSchedule: true,
+        items: {
+          include: {
+            product: internalRead
+              ? {
+                  select: {
+                    id: true, code: true, name: true, spec: true, unit: true,
+                    category: true, inventoryUnit: true,
+                  },
+                }
+              : true,
+          },
+        },
+        ...(!internalRead ? { paymentSchedule: true } : {}),
       },
     })
     if (!receipt) return reply.status(404).send({ error: '入库单不存在' })
-    return receipt
+    return internalRead ? toInternalSupplyChainReceipt(receipt) : receipt
   })
 
   // ── 补录入库单（非采购单流程，手动录入）────────────

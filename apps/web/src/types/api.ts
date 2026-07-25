@@ -11,7 +11,8 @@ export type ScheduleStatus =
   | 'PROCESSING' | 'PAID' | 'OVERDUE' | 'CANCELLED' | 'REJECTED'
 
 export type UserRole =
-  | 'SUPER_ADMIN' | 'ADMIN' | 'FINANCE' | 'MANAGER' | 'PURCHASER' | 'SUPPLIER_STAFF'
+  | 'SUPER_ADMIN' | 'ADMIN' | 'FINANCE' | 'MANAGER' | 'PURCHASER'
+  | 'SUPPLY_CHAIN' | 'SUPPLIER_STAFF'
 
 // ── 基础实体 ──────────────────────────────────────────
 export interface Store {

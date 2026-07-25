@@ -12,6 +12,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { Prisma, prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { isStoreScoped } from '../lib/auth-scope'
+import { hasInternalSupplyChainCapability, isInternalSupplyChainRole } from '../lib/internal-supply-chain-access'
 import { monthRangeForDateCol } from '../lib/dateRange'
 import {
   aggregateByProduct, dailyQtyByProduct, groupDetailRows, summarizeMonth, trailingAvgQty,
@@ -21,6 +22,13 @@ import { VoidConsumptionError, voidConsumptionWithCorrection } from '../services
 const CONSUMPTION_VIEW_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'])
 // 冲销/补记是修正性写操作, 仅集团厨房/管理员角色可用
 const CONSUMPTION_VOID_ROLES = new Set(['CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'])
+
+function canViewConsumption(role: string | undefined | null) {
+  return Boolean(role && (
+    CONSUMPTION_VIEW_ROLES.has(role)
+    || hasInternalSupplyChainCapability(role, 'consumption.read')
+  ))
+}
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 const MONTH_RE = /^\d{4}-\d{2}$/
@@ -42,7 +50,7 @@ export const consumptionRoutes: FastifyPluginAsync = async app => {
   // 权限 + 门店归属校验; 失败时已写响应并返回 null
   async function resolveStore(req: any, reply: any): Promise<string | null> {
     const { tenantId, role, storeId: userStoreId } = req.user
-    if (!CONSUMPTION_VIEW_ROLES.has(role)) {
+    if (!canViewConsumption(role)) {
       await reply.status(403).send({ error: '无权查看门店消耗' })
       return null
     }
@@ -288,8 +296,13 @@ export const consumptionAdminRoutes: FastifyPluginAsync = async app => {
   // revenue: 当日 RevenueRecord.amount; costRate = consumptionCost/revenue×100 (revenue=0 时 null)
   app.get('/daily-series', auth, async (req: any, reply: any) => {
     const { tenantId, role, storeId: userStoreId } = req.user
+    // 此端点把 RevenueRecord 与消耗成本率一起返回，不属于纯消耗读取能力。
+    // 内部供应链必须在任何门店或 RevenueRecord 查询之前拒绝。
+    if (isInternalSupplyChainRole(role)) {
+      return reply.status(403).send({ error: '内部供应链无权查看营业额与成本率' })
+    }
     if (!CONSUMPTION_VIEW_ROLES.has(role)) {
-      return reply.status(403).send({ error: '无权查看门店消耗' })
+      return reply.status(403).send({ error: '无权查看营业额与成本率' })
     }
     const storeId = String(req.query?.storeId || '')
     if (!storeId) return reply.status(400).send({ error: '请指定门店' })

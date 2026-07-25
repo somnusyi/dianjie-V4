@@ -1,0 +1,725 @@
+/**
+ * 内部供应链 · 商品管理（桌面端）
+ *
+ * 沿用 GET /api/products 分页列表 + PATCH /api/products/:id 直接生效。
+ * 不显示审批按钮或"待总厨审批"语义；不复用外部供应商身份。
+ */
+'use client'
+import { useEffect, useRef, useState } from 'react'
+import { Chip } from '@/components/v2'
+import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
+import { EmptyState, FriendlyError, SkeletonCard } from '@/components/v2/skeleton'
+import { ProductImagePreview } from '@/components/v2/product-image-preview'
+import { apiFetch } from '@/lib/v2-auth'
+import {
+  buildCreateBody,
+  buildEditBody,
+  buildPriceChangeBody,
+  buildProductQuery,
+  buildStatusChangeBody,
+  DEFAULT_SUPPLY_PRODUCT_FILTERS,
+  formatMoney,
+  formatProductStatusLabel,
+  hasActiveFilters,
+  keepFiltersForPage,
+  productImageAlt,
+  productStatusTone,
+  resetPageFilters,
+  resolveProductImageUrl,
+  SUPPLY_PRODUCT_STATUS_OPTIONS,
+  validateNewProductForm,
+  type CategoryOption,
+  type SupplierOption,
+  type SupplyProduct,
+  type SupplyProductFilters,
+} from '@/lib/supply-product-pc'
+
+type ProductRow = SupplyProduct & {
+  spec?: string | null
+  inventoryUnit?: string | null
+  shelfDays?: number | null
+}
+
+type FormState = {
+  name: string
+  code: string
+  category: string
+  unit: string
+  price: string
+  spec: string
+  shelfDays: string
+  supplierId: string
+}
+
+const EMPTY_FORM: FormState = {
+  name: '',
+  code: '',
+  category: '',
+  unit: '件',
+  price: '',
+  spec: '',
+  shelfDays: '7',
+  supplierId: '',
+}
+
+export default function InternalSupplyChainProductsPage() {
+  const [products, setProducts] = useState<ProductRow[] | null>(null)
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [filters, setFilters] = useState<SupplyProductFilters>(DEFAULT_SUPPLY_PRODUCT_FILTERS)
+  const [categories, setCategories] = useState<CategoryOption[]>([])
+  const [suppliers, setSuppliers] = useState<SupplierOption[]>([])
+  const [submitting, setSubmitting] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const [formOpen, setFormOpen] = useState(false)
+  const [editing, setEditing] = useState<ProductRow | null>(null)
+  const [form, setForm] = useState<FormState>(EMPTY_FORM)
+  const [formError, setFormError] = useState<string | null>(null)
+  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null)
+  const [pendingImagePreview, setPendingImagePreview] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
+
+  const [priceTarget, setPriceTarget] = useState<ProductRow | null>(null)
+  const [newPrice, setNewPrice] = useState('')
+
+  const [preview, setPreview] = useState<{ url: string; name: string } | null>(null)
+  const [confirmState, openConfirm] = useConfirmSheet()
+  const imageInputRef = useRef<HTMLInputElement>(null)
+  const requestSequence = useRef(0)
+
+  function load() {
+    const sequence = ++requestSequence.current
+    setLoading(true)
+    setError(null)
+    apiFetch<{ items: ProductRow[]; total: number; page: number; pageSize: number }>(
+      `/api/products${buildProductQuery(filters)}`,
+    )
+      .then(data => {
+        if (sequence !== requestSequence.current) return
+        setProducts(data.items || [])
+        setTotal(data.total || 0)
+      })
+      .catch(reason => {
+        if (sequence === requestSequence.current) setError(String(reason?.message || reason))
+      })
+      .finally(() => {
+        if (sequence === requestSequence.current) setLoading(false)
+      })
+  }
+  useEffect(() => { load() }, [filters])
+
+  useEffect(() => {
+    apiFetch<CategoryOption[]>('/api/products/categories')
+      .then(data => setCategories(Array.isArray(data) ? data : []))
+      .catch(() => {})
+    apiFetch<SupplierOption[]>('/api/suppliers?status=ENABLED')
+      .then(data => {
+        const list = Array.isArray(data) ? data : []
+        setSuppliers(list.map((s: any) => ({ id: s.id, name: s.name })))
+      })
+      .catch(() => {})
+  }, [])
+
+  const totalPages = Math.max(1, Math.ceil(total / filters.pageSize))
+
+  function updateFilters(changes: Partial<SupplyProductFilters>) {
+    setFilters(current => resetPageFilters(current, changes))
+  }
+
+  function clearFilters() {
+    setFilters({ ...DEFAULT_SUPPLY_PRODUCT_FILTERS })
+  }
+
+  function openCreate() {
+    setEditing(null)
+    setForm({ ...EMPTY_FORM, supplierId: filters.supplierId })
+    setFormError(null)
+    setPendingImageFile(null)
+    setPendingImagePreview(null)
+    setFormOpen(true)
+  }
+
+  function openEdit(product: ProductRow) {
+    setEditing(product)
+    setForm({
+      name: product.name,
+      code: product.code || '',
+      category: product.category || '',
+      unit: product.unit || '件',
+      price: String(product.price),
+      spec: product.spec || '',
+      shelfDays: String(product.shelfDays ?? 7),
+      supplierId: product.supplier?.id || '',
+    })
+    setFormError(null)
+    setPendingImageFile(null)
+    setPendingImagePreview(null)
+    setFormOpen(true)
+  }
+
+  async function handleImageSelect(file: File) {
+    if (file.size > 10 * 1024 * 1024) {
+      setFormError('图片不能超过 10MB')
+      return
+    }
+    setPendingImageFile(file)
+    setPendingImagePreview(URL.createObjectURL(file))
+  }
+
+  async function uploadPendingImage(): Promise<string | null> {
+    if (!pendingImageFile) return null
+    setUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', pendingImageFile)
+      const result: any = await apiFetch('/api/upload?category=products', { method: 'POST', body: formData })
+      return result?.key || null
+    } catch (reason: any) {
+      setFormError(reason?.message || '图片上传失败')
+      throw reason
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  async function submitForm() {
+    const validationError = validateNewProductForm(form)
+    if (validationError) { setFormError(validationError); return }
+    setFormError(null)
+    setSubmitting(true)
+    try {
+      if (editing) {
+        const body = buildEditBody(form, {
+          name: editing.name,
+          code: editing.code || '',
+          category: editing.category || '',
+          unit: editing.unit || '',
+          spec: editing.spec || '',
+          shelfDays: Number(editing.shelfDays ?? 7),
+        })
+        let imageKey: string | null = null
+        if (pendingImageFile) imageKey = await uploadPendingImage()
+        if (imageKey) (body as any).imageKey = imageKey
+        if (Object.keys(body).length === 0) { setFormOpen(false); return }
+        await apiFetch(`/api/products/${editing.id}`, {
+          method: 'PATCH', body: JSON.stringify(body),
+        })
+      } else {
+        let imageKey: string | null = null
+        if (pendingImageFile) imageKey = await uploadPendingImage()
+        const body = buildCreateBody({ ...form, imageKey })
+        await apiFetch('/api/products', { method: 'POST', body: JSON.stringify(body) })
+      }
+      setFormOpen(false)
+      setNotice(editing ? '商品修改已直接生效，并已通知总厨。' : '商品已创建并直接生效，已通知总厨。')
+      load()
+    } catch (reason: any) {
+      setFormError(reason?.message || '操作失败')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  function openPriceChange(product: ProductRow) {
+    setPriceTarget(product)
+    setNewPrice(String(product.price))
+  }
+
+  function submitPriceChange() {
+    if (!priceTarget) return
+    const price = Number(newPrice)
+    if (!Number.isFinite(price) || price < 0) return
+    const oldPrice = Number(priceTarget.price)
+    if (Math.abs(price - oldPrice) < 0.001) { setPriceTarget(null); return }
+    openConfirm({
+      title: `调价「${priceTarget.name}」`,
+      body: `单价 ${formatMoney(oldPrice)} → ${formatMoney(price)}\n\n直接生效并通知总厨。`,
+      confirmLabel: '确认调价',
+      tone: 'primary',
+      onConfirm: async () => {
+        setSubmitting(true)
+        try {
+          await apiFetch(`/api/products/${priceTarget.id}`, {
+            method: 'PATCH', body: JSON.stringify(buildPriceChangeBody(price)),
+          })
+          setPriceTarget(null)
+          setNotice('调价已直接生效，并已通知总厨。')
+          load()
+        } catch (reason: any) {
+          alert(reason?.message || '调价失败')
+          throw reason
+        } finally { setSubmitting(false) }
+      },
+    })
+  }
+
+  function toggleStatus(product: ProductRow) {
+    const next = product.status === 'ENABLED' ? 'DISABLED' : 'ENABLED'
+    const isDisable = next === 'DISABLED'
+    openConfirm({
+      title: isDisable ? `停售「${product.name}」？` : `恢复供应「${product.name}」？`,
+      body: isDisable
+        ? '停售后餐厅下单时将不再显示此商品。\n\n直接生效并通知总厨。'
+        : '恢复后餐厅可重新下单此商品。\n\n直接生效并通知总厨。',
+      confirmLabel: isDisable ? '确认停售' : '确认恢复',
+      tone: isDisable ? 'danger' : 'primary',
+      onConfirm: async () => {
+        setSubmitting(true)
+        try {
+          await apiFetch(`/api/products/${product.id}`, {
+            method: 'PATCH', body: JSON.stringify(buildStatusChangeBody(next)),
+          })
+          setNotice(`${isDisable ? '停售' : '恢复'}已直接生效，并已通知总厨。`)
+          load()
+        } catch (reason: any) {
+          alert(reason?.message || '操作失败')
+          throw reason
+        } finally { setSubmitting(false) }
+      },
+    })
+  }
+
+  const filterActive = hasActiveFilters(filters)
+
+  return (
+    <div className="min-h-screen bg-bg px-4 py-5 lg:px-8 lg:py-7">
+      <header className="mx-auto flex max-w-[1440px] flex-col gap-3 border-b border-border pb-5 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <div className="mb-2 flex items-center gap-2">
+            <Chip tone="green">内部管理</Chip>
+            <span className="text-caption text-gray3">商品 · 直接生效并通知总厨</span>
+          </div>
+          <h1 className="text-h1">商品管理</h1>
+          <p className="mt-1 text-caption text-gray2">
+            {products ? `${total} 个商品` : '加载中…'}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <a href="/v2/supply-chain/home" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button text-gray2">← 返回工作台</a>
+          <button onClick={openCreate} className="rounded-cta bg-accent px-4 py-2.5 text-button text-white">＋ 新增商品</button>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-[1440px]">
+        <div className="flex flex-wrap items-end gap-3 py-4">
+          <FilterInput label="关键字" value={filters.q} onChange={value => updateFilters({ q: value })} placeholder="名称 / 编码 / 规格" />
+          <FilterSelect label="分类" value={filters.category} onChange={value => updateFilters({ category: value })}>
+            <option value="">全部分类</option>
+            {categories.map(cat => <option key={cat.name} value={cat.name}>{cat.name} ({cat.count})</option>)}
+          </FilterSelect>
+          <FilterSelect label="状态" value={filters.status} onChange={value => updateFilters({ status: value })}>
+            <option value="">全部状态</option>
+            {SUPPLY_PRODUCT_STATUS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+          </FilterSelect>
+          <FilterSelect label="供应商" value={filters.supplierId} onChange={value => updateFilters({ supplierId: value })}>
+            <option value="">全部供应商</option>
+            {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </FilterSelect>
+          <button
+            onClick={clearFilters}
+            disabled={!filterActive}
+            className="rounded-cta border border-border bg-white px-3 py-2 text-button text-gray2 disabled:opacity-40"
+          >清空</button>
+        </div>
+
+        {notice && (
+          <div className="mb-4 flex items-center justify-between rounded-card border border-green-fg/20 bg-green-bg px-4 py-3 text-caption text-green-fg">
+            <span>{notice}</span>
+            <button onClick={() => setNotice(null)} className="text-button">关闭</button>
+          </div>
+        )}
+
+        {error && <div className="mb-4"><FriendlyError message={error} onRetry={load} /></div>}
+
+        {!products && !error && <div className="space-y-2">{[1, 2, 3].map(i => <SkeletonCard key={i} />)}</div>}
+
+        {products && products.length === 0 && !loading && (
+          <EmptyState icon="📋" title={filterActive ? '没有匹配的商品' : '暂无商品'} hint={filterActive ? '尝试调整筛选条件' : '点击「新增商品」开始建档'} />
+        )}
+
+        {products && products.length > 0 && (
+          <div className="overflow-hidden rounded-card border border-border bg-white">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-caption">
+                <thead className="bg-bg text-gray3">
+                  <tr>
+                    <th className="px-4 py-3">图片</th>
+                    <th className="px-4 py-3">编码</th>
+                    <th className="px-4 py-3">名称</th>
+                    <th className="px-4 py-3">规格</th>
+                    <th className="px-4 py-3">分类</th>
+                    <th className="px-4 py-3 text-right">单价</th>
+                    <th className="px-4 py-3">供应商</th>
+                    <th className="px-4 py-3">状态</th>
+                    <th className="px-4 py-3 text-right">操作</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {products.map(product => {
+                    const imageUrl = resolveProductImageUrl(product.imageUrl)
+                    return (
+                      <tr key={product.id} className="hover:bg-bg/50">
+                        <td className="px-4 py-3">
+                          {imageUrl ? (
+                            <button onClick={() => setPreview({ url: imageUrl, name: product.name })} className="block">
+                              <img src={imageUrl} alt={productImageAlt(product.name, product.code)} className="h-10 w-10 rounded object-cover" />
+                            </button>
+                          ) : (
+                            <span className="flex h-10 w-10 items-center justify-center rounded bg-bg text-micro text-gray3">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 font-num text-gray2">{product.code || '—'}</td>
+                        <td className="px-4 py-3"><b>{product.name}</b></td>
+                        <td className="px-4 py-3 text-gray2">{product.spec || '—'}</td>
+                        <td className="px-4 py-3 text-gray2">{product.category || '—'}</td>
+                        <td className="px-4 py-3 text-right font-num">{formatMoney(product.price)}/{product.unit}</td>
+                        <td className="px-4 py-3 text-gray2">{product.supplier?.name || '—'}</td>
+                        <td className="px-4 py-3"><Chip tone={productStatusTone(product.status)}>{formatProductStatusLabel(product.status)}</Chip></td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center justify-end gap-2">
+                            <button onClick={() => openEdit(product)} className="text-button text-accent">编辑</button>
+                            <button onClick={() => openPriceChange(product)} className="text-button text-accent">调价</button>
+                            <button
+                              onClick={() => toggleStatus(product)}
+                              className={`text-button ${product.status === 'ENABLED' ? 'text-red-fg' : 'text-green-fg'}`}
+                            >
+                              {product.status === 'ENABLED'
+                                ? '停售'
+                                : product.status === 'DISABLED'
+                                  ? '恢复'
+                                  : '按新流程启用'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {total > 0 && (
+          <PaginationBar
+            page={filters.page}
+            totalPages={totalPages}
+            pageSize={filters.pageSize}
+            total={total}
+            onPage={page => setFilters(current => keepFiltersForPage(current, page))}
+          />
+        )}
+      </main>
+
+      {formOpen && (
+        <FormDialog
+          editing={editing}
+          form={form}
+          formError={formError}
+          submitting={submitting || uploading}
+          pendingImagePreview={pendingImagePreview}
+          categories={categories}
+          suppliers={suppliers}
+          priceOnly={false}
+          onFieldChange={(key, value) => setForm(current => ({ ...current, [key]: value }))}
+          onImageSelect={handleImageSelect}
+          onImageClear={() => { setPendingImageFile(null); setPendingImagePreview(null) }}
+          onSubmit={submitForm}
+          onClose={() => setFormOpen(false)}
+          imageInputRef={imageInputRef}
+        />
+      )}
+
+      {priceTarget && (
+        <FormDialog
+          editing={priceTarget}
+          form={{ ...EMPTY_FORM, price: newPrice }}
+          formError={null}
+          submitting={submitting}
+          pendingImagePreview={null}
+          categories={[]}
+          suppliers={[]}
+          priceOnly
+          onFieldChange={(_key, value) => setNewPrice(value)}
+          onImageSelect={() => {}}
+          onImageClear={() => {}}
+          onSubmit={submitPriceChange}
+          onClose={() => setPriceTarget(null)}
+          imageInputRef={null}
+        />
+      )}
+
+      <ConfirmSheet {...confirmState} />
+
+      {preview && (
+        <ProductImagePreview
+          src={preview.url}
+          alt={preview.name}
+          isOpen
+          onClose={() => setPreview(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+function FilterInput({ label, value, onChange, placeholder }: {
+  label: string; value: string; onChange: (v: string) => void; placeholder?: string
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-micro text-gray3">{label}</span>
+      <input
+        type="search"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="h-10 min-w-44 rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+      />
+    </label>
+  )
+}
+
+function FilterSelect({ label, value, onChange, children }: {
+  label: string; value: string; onChange: (v: string) => void; children: React.ReactNode
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-micro text-gray3">{label}</span>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className="h-10 min-w-36 rounded-cta border border-border bg-white px-3 text-body"
+      >
+        {children}
+      </select>
+    </label>
+  )
+}
+
+function PaginationBar({ page, totalPages, total, pageSize, onPage }: {
+  page: number; totalPages: number; total: number; pageSize: number; onPage: (p: number) => void
+}) {
+  const start = (page - 1) * pageSize + 1
+  const end = Math.min(page * pageSize, total)
+  return (
+    <div className="flex items-center justify-between py-4 text-caption text-gray2">
+      <span>第 {start}–{end} 项，共 {total} 项</span>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => onPage(page - 1)}
+          disabled={page <= 1}
+          className="rounded-cta border border-border bg-white px-3 py-1.5 text-button disabled:opacity-40"
+        >上一页</button>
+        <span className="font-num">{page} / {totalPages}</span>
+        <button
+          onClick={() => onPage(page + 1)}
+          disabled={page >= totalPages}
+          className="rounded-cta border border-border bg-white px-3 py-1.5 text-button disabled:opacity-40"
+        >下一页</button>
+      </div>
+    </div>
+  )
+}
+
+function FormDialog({
+  editing, form, formError, submitting, pendingImagePreview, categories, suppliers, priceOnly,
+  onFieldChange, onImageSelect, onImageClear, onSubmit, onClose, imageInputRef,
+}: {
+  editing: ProductRow | null
+  form: FormState
+  formError: string | null
+  submitting: boolean
+  pendingImagePreview: string | null
+  categories: CategoryOption[]
+  suppliers: SupplierOption[]
+  priceOnly: boolean
+  onFieldChange: (key: string, value: string) => void
+  onImageSelect: (file: File) => void
+  onImageClear: () => void
+  onSubmit: () => void
+  onClose: () => void
+  imageInputRef: React.RefObject<HTMLInputElement> | null
+}) {
+  const title = priceOnly
+    ? `调价「${editing?.name || ''}」`
+    : editing ? `编辑「${editing.name}」` : '新增商品'
+  const confirmLabel = priceOnly ? '确认调价' : editing ? '保存修改' : '新增'
+  const bodyNote = '直接生效并通知总厨'
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4" onClick={onClose}>
+      <div className="w-full max-w-lg rounded-card bg-white p-5 shadow-lg" onClick={e => e.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-h2">{title}</h2>
+          <button onClick={onClose} className="text-gray3 text-h2 hover:text-ink">×</button>
+        </div>
+
+        <p className="mb-4 text-micro text-gray3">{bodyNote}</p>
+
+        {priceOnly ? (
+          <div className="space-y-3">
+            <FormField label="新单价（元）">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.price}
+                onChange={e => onFieldChange('price', e.target.value)}
+                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                autoFocus
+              />
+            </FormField>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            <FormField label="供应商">
+              <select
+                value={form.supplierId}
+                onChange={e => onFieldChange('supplierId', e.target.value)}
+                disabled={Boolean(editing)}
+                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body disabled:bg-bg disabled:text-gray3"
+              >
+                <option value="">未关联供应商</option>
+                {suppliers.map(supplier => (
+                  <option key={supplier.id} value={supplier.id}>{supplier.name}</option>
+                ))}
+              </select>
+            </FormField>
+            <div className="col-span-2">
+              <FormField label="商品图片">
+                <div className="flex items-center gap-3">
+                  {pendingImagePreview ? (
+                    <img src={pendingImagePreview} alt="待上传" className="h-16 w-16 rounded object-cover" />
+                  ) : editing?.imageUrl ? (
+                    <img src={resolveProductImageUrl(editing.imageUrl) || ''} alt={editing.name} className="h-16 w-16 rounded object-cover" />
+                  ) : (
+                    <span className="flex h-16 w-16 items-center justify-center rounded bg-bg text-micro text-gray3">无图</span>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => imageInputRef?.current?.click()}
+                      className="rounded-cta border border-border bg-white px-3 py-1.5 text-button text-gray2"
+                    >选择图片</button>
+                    {pendingImagePreview && (
+                      <button type="button" onClick={onImageClear} className="rounded-cta border border-border bg-white px-3 py-1.5 text-button text-gray2">移除</button>
+                    )}
+                  </div>
+                  {imageInputRef && (
+                    <input
+                      ref={imageInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={e => {
+                        const file = e.target.files?.[0]
+                        if (file) onImageSelect(file)
+                        e.target.value = ''
+                      }}
+                    />
+                  )}
+                </div>
+              </FormField>
+            </div>
+            <FormField label="名称" required>
+              <input
+                type="text"
+                value={form.name}
+                onChange={e => onFieldChange('name', e.target.value)}
+                maxLength={80}
+                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                autoFocus
+              />
+            </FormField>
+            <FormField label="编码">
+              <input
+                type="text"
+                value={form.code}
+                onChange={e => onFieldChange('code', e.target.value)}
+                maxLength={40}
+                disabled={Boolean(editing)}
+                placeholder="留空自动生成"
+                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent disabled:bg-bg disabled:text-gray3"
+              />
+            </FormField>
+            <FormField label="分类">
+              <input
+                type="text"
+                value={form.category}
+                onChange={e => onFieldChange('category', e.target.value)}
+                maxLength={40}
+                list="supply-product-categories"
+                placeholder="如：蔬菜 / 冻品"
+                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+              />
+              <datalist id="supply-product-categories">
+                {categories.map(cat => <option key={cat.name} value={cat.name} />)}
+              </datalist>
+            </FormField>
+            <FormField label="采购单位">
+              <input
+                type="text"
+                value={form.unit}
+                onChange={e => onFieldChange('unit', e.target.value)}
+                maxLength={10}
+                placeholder="kg / 件 / 瓶"
+                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+              />
+            </FormField>
+            <FormField label="单价（元）" required>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.price}
+                onChange={e => onFieldChange('price', e.target.value)}
+                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+              />
+            </FormField>
+            <FormField label="保质期（天）">
+              <input
+                type="number"
+                min="0"
+                max="3650"
+                value={form.shelfDays}
+                onChange={e => onFieldChange('shelfDays', e.target.value)}
+                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+              />
+            </FormField>
+            <FormField label="规格" full>
+              <input
+                type="text"
+                value={form.spec}
+                onChange={e => onFieldChange('spec', e.target.value)}
+                maxLength={80}
+                placeholder="如 500g/袋"
+                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+              />
+            </FormField>
+          </div>
+        )}
+
+        {formError && <p className="mt-3 text-caption text-red-fg">{formError}</p>}
+
+        <div className="mt-5 flex justify-end gap-2 border-t border-border pt-4">
+          <button onClick={onClose} disabled={submitting} className="rounded-cta border border-border bg-white px-4 py-2 text-button text-gray2 disabled:opacity-50">取消</button>
+          <button onClick={onSubmit} disabled={submitting} className="rounded-cta bg-accent px-4 py-2 text-button text-white disabled:opacity-50">{submitting ? '处理中…' : confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function FormField({ label, required, full, children }: {
+  label: string; required?: boolean; full?: boolean; children: React.ReactNode
+}) {
+  return (
+    <label className={`flex flex-col gap-1 ${full ? 'col-span-2' : ''}`}>
+      <span className="text-micro text-gray3">{label}{required && <span className="text-red-fg"> *</span>}</span>
+      {children}
+    </label>
+  )
+}

@@ -117,7 +117,7 @@ export default function InternalSupplyChainHomePage() {
             <span className="text-caption text-gray3">供应履约 · 租户内跨店</span>
           </div>
           <h1 className="text-h1">内部供应链工作台</h1>
-          <p className="mt-1 text-caption text-gray2">仅展示订单、配送、收货、门店库存和纯消耗；不提供账单、销售分析或写操作。</p>
+          <p className="mt-1 text-caption text-gray2">供应履约与商品管理；不提供账单或销售分析。</p>
         </div>
         <div className="flex items-center gap-3">
           <label className="text-caption text-gray2">
@@ -132,6 +132,7 @@ export default function InternalSupplyChainHomePage() {
               {stores.map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}
             </select>
           </label>
+          <a href="/v2/supply-chain/products" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">商品管理</a>
           <a href="/v2/me" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">账户</a>
         </div>
       </header>

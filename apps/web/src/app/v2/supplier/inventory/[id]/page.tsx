@@ -64,8 +64,8 @@ export default function SkuDetailPage() {
   const [adjustReason, setAdjustReason] = useState('')
 
   function load() {
-    apiFetch<StockItem[]>('/api/supplier/stock')
-      .then(arr => setItem(arr.find(x => x.id === productId) || null))
+    apiFetch<{ items: StockItem[]; total: number }>(`/api/supplier/stock?productId=${encodeURIComponent(productId)}&page=1&pageSize=1`)
+      .then(res => setItem(res.items[0] || null))
       .catch(e => setError(e.message))
     apiFetch<Movement[]>(`/api/supplier/stock/movements?productId=${productId}`)
       .then(setMovements).catch(() => {})

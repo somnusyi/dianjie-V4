@@ -19,8 +19,11 @@ type Item = {
   in7d: number; out7d: number; in30d: number; out30d: number
   nearestExpiry: string | null; daysToExpiry: number | null
 }
+type Page = { items: Item[]; total: number; page: number; pageSize: number }
 type Summary = { inventoryMode: 'NOT_TRACKED' | 'STRICT'; inventoryActivatedAt?: string | null; totalSku: number; lowStock: number; outOfStock: number; totalValue: number; availableValue: number; reservedValue: number }
 type Category = { id?: string | null; name: string; count: number; sortOrder?: number; isActive?: boolean }
+
+const PAGE_SIZE = 50
 
 const STATUS_LABEL: Record<string, string> = { OUT: '已断货', LOW: '低于警戒', OK: '充足' }
 const STATUS_TONE: Record<string, 'red'|'orange'|'green'|'gray'> = { OUT: 'red', LOW: 'orange', OK: 'green' }
@@ -33,13 +36,29 @@ export default function InventoryPage() {
   const [categories, setCategories] = useState<Category[]>([])
   const [categoryFilter, setCategoryFilter] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
+  const [loadingMore, setLoadingMore] = useState(false)
 
   function load() {
-    apiFetch<Item[]>('/api/supplier/stock').then(setItems).catch(e => setError(e.message))
+    setPage(1)
+    setItems(null)
+    apiFetch<Page>(`/api/supplier/stock?page=1&pageSize=${PAGE_SIZE}`)
+      .then(res => { setItems(res.items); setTotal(res.total) })
+      .catch(e => setError(e.message))
     apiFetch<Summary>('/api/supplier/stock/summary').then(setSummary).catch(() => {})
     apiFetch<Category[]>('/api/products/categories').then(rows => setCategories(Array.isArray(rows) ? rows : [])).catch(() => {})
   }
   useEffect(() => { load() }, [])
+
+  function loadMore() {
+    if (loadingMore || !items || items.length >= total) return
+    setLoadingMore(true)
+    const next = page + 1
+    apiFetch<Page>(`/api/supplier/stock?page=${next}&pageSize=${PAGE_SIZE}`)
+      .then(res => { setItems(prev => prev ? [...prev, ...res.items] : res.items); setPage(next); setLoadingMore(false) })
+      .catch(() => setLoadingMore(false))
+  }
 
   // 模糊匹配: name + spec + code, 多关键字 AND (跟选品抽屉一致风格)
   function matchesQuery(i: Item, q: string) {
@@ -222,6 +241,14 @@ export default function InventoryPage() {
             </section>
           ))}
         </div>
+        {items !== null && items.length < total && (
+          <div className="text-center py-4">
+            <button onClick={loadMore} disabled={loadingMore}
+              className="px-6 py-2 bg-white border border-border rounded-cta text-caption text-gray2 disabled:opacity-50">
+              {loadingMore ? '加载中…' : `加载更多 (${items.length}/${total})`}
+            </button>
+          </div>
+        )}
       </div>
 
       <BottomNav

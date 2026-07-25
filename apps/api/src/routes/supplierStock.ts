@@ -137,32 +137,56 @@ async function activeReservedForProduct(
 
 export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
 
-  /** GET /api/supplier/stock — 列表 + 摘要 */
+  /** GET /api/supplier/stock — 列表
+   *
+   * 分页模式: 传 page/pageSize 返回 { items, total, page, pageSize }
+   * 兼容模式: 不传分页参数时返回旧版纯数组 (limit 上限 2000)
+   * 单 SKU:  传 productId 只返回该商品 (分页模式下 total ≤ 1)
+   */
   app.get('/', auth(app), async (req: any, reply: any) => {
     const ctx = ensureSupplier(req, reply, 'inventory.read'); if (!ctx) return
 
     const parsed = z.object({
-      limit: z.coerce.number().int().min(1).max(2000).default(1000),
+      productId: z.string().trim().min(1).optional(),
+      page:     z.coerce.number().int().min(1).optional(),
+      pageSize: z.coerce.number().int().min(1).max(200).optional(),
     }).safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-    const limit = parsed.data.limit
+    const { productId } = parsed.data
+    const paginated = parsed.data.page !== undefined || parsed.data.pageSize !== undefined
+    const p  = parsed.data.page ?? 1
+    const ps = Math.min(parsed.data.pageSize ?? 20, 200)
 
-    const products = await prisma.product.findMany({
-      where: { tenantId: ctx.tenantId, supplierId: ctx.supplierId, status: 'ENABLED' },
-      orderBy: [{ stock: 'asc' }, { name: 'asc' }, { id: 'asc' }],   // 库存少的排前面
-      take: limit,
-      select: {
-        id: true, code: true, name: true, spec: true, unit: true, category: true,
-        stock: true, minStock: true, price: true, shelfDays: true,
-      },
-    })
+    const baseWhere: Prisma.ProductWhereInput = {
+      tenantId: ctx.tenantId, supplierId: ctx.supplierId, status: 'ENABLED',
+      ...(productId ? { id: productId } : {}),
+    }
+    const orderBy: Prisma.ProductOrderByWithRelationInput[] =
+      [{ stock: 'asc' }, { name: 'asc' }, { id: 'asc' }]
+
+    const skip = paginated ? (p - 1) * ps : 0
+    const take = paginated ? ps : 2000
+
+    const [total, products] = await Promise.all([
+      paginated ? prisma.product.count({ where: baseWhere }) : Promise.resolve(0),
+      prisma.product.findMany({
+        where: baseWhere,
+        orderBy,
+        skip,
+        take,
+        select: {
+          id: true, code: true, name: true, spec: true, unit: true, category: true,
+          stock: true, minStock: true, price: true, shelfDays: true,
+        },
+      }),
+    ])
+
     const reservedByProduct = await getSupplierReservedStock({
       tenantId: ctx.tenantId,
       supplierId: ctx.supplierId,
       productIds: products.map(product => product.id),
     })
 
-    // 统计每个 SKU 近 7 天 / 30 天的入库/出库总量
     const since7  = new Date(Date.now() - 7  * 86400_000)
     const since30 = new Date(Date.now() - 30 * 86400_000)
     const movs = await prisma.supplierStockMovement.findMany({
@@ -179,7 +203,6 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       byProd.set(m.productId, slot)
     }
 
-    // 只看仍有余额的批次，避免已耗尽批次继续触发临期告警。
     const expRows = await prisma.supplierStockBatch.findMany({
       where: {
         tenantId: ctx.tenantId,
@@ -195,7 +218,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       if (!nearestExpiry.has(r.productId)) nearestExpiry.set(r.productId, r.expiryDate!)
     }
 
-    return products.map(p => {
+    const items = products.map(p => {
       const stat = byProd.get(p.id) || { in7: 0, out7: 0, in30: 0, out30: 0 }
       const stock = Number(p.stock)
       const availability = stockAvailability(stock, reservedByProduct.get(p.id) || 0)
@@ -212,10 +235,12 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
         statusFlag: status,
         in7d: stat.in7, out7d: stat.out7,
         in30d: stat.in30, out30d: stat.out30,
-        nearestExpiry: exp ? exp.toISOString().slice(0, 10) : null,  // YYYY-MM-DD
-        daysToExpiry,                                                  // 距今天数 (负数=已过期)
+        nearestExpiry: exp ? exp.toISOString().slice(0, 10) : null,
+        daysToExpiry,
       }
     })
+
+    return paginated ? { items, total, page: p, pageSize: ps } : items
   })
 
   /** GET /api/supplier/stock/summary — 顶部 KPI */

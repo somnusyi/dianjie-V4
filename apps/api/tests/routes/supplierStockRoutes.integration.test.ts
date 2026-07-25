@@ -149,15 +149,98 @@ describe('supplier stock routes — isolation & pagination (integration)', () =>
     expect(resB.json().totalSku).toBe(1)
   })
 
-  it('respects the limit parameter and rejects invalid values', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/supplier/stock?limit=1', headers: actorHeaders('ownerA') })
+  it('legacy mode: returns plain array when no pagination params', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/supplier/stock', headers: actorHeaders('ownerA') })
     expect(res.statusCode).toBe(200)
-    expect(res.json().length).toBe(1)
+    const items = res.json()
+    expect(Array.isArray(items)).toBe(true)
+    expect(items.length).toBe(2)
+  })
 
-    const bad = await app.inject({ method: 'GET', url: '/api/supplier/stock?limit=0', headers: actorHeaders('ownerA') })
+  it('paginated mode: returns envelope with items/total/page/pageSize', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=1&pageSize=10', headers: actorHeaders('ownerA') })
+    expect(res.statusCode).toBe(200)
+    const body = res.json()
+    expect(body.items).toBeDefined()
+    expect(Array.isArray(body.items)).toBe(true)
+    expect(body.total).toBe(2)
+    expect(body.page).toBe(1)
+    expect(body.pageSize).toBe(10)
+    expect(body.items.length).toBe(2)
+  })
+
+  it('paginated mode: page beyond data returns empty items but correct total', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=99&pageSize=10', headers: actorHeaders('ownerA') })
+    expect(res.statusCode).toBe(200)
+    const body = res.json()
+    expect(body.items).toEqual([])
+    expect(body.total).toBe(2)
+    expect(body.page).toBe(99)
+  })
+
+  it('paginated mode: deterministic order is stable across pages', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=1&pageSize=1', headers: actorHeaders('ownerA') })
+    expect(res.statusCode).toBe(200)
+    const page1 = res.json()
+    expect(page1.items.length).toBe(1)
+
+    const res2 = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=2&pageSize=1', headers: actorHeaders('ownerA') })
+    const page2 = res2.json()
+    expect(page2.items.length).toBe(1)
+    expect(page1.items[0].id).not.toBe(page2.items[0].id)
+
+    const full = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=1&pageSize=100', headers: actorHeaders('ownerA') })
+    const all = full.json().items
+    expect(all.length).toBe(2)
+    expect(all[0].id).toBe(page1.items[0].id)
+    expect(all[1].id).toBe(page2.items[0].id)
+  })
+
+  it('paginated mode: tenant/supplier isolation with pagination', async () => {
+    const resA = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=1&pageSize=10', headers: actorHeaders('ownerA') })
+    expect(resA.statusCode).toBe(200)
+    const bodyA = resA.json()
+    expect(bodyA.total).toBe(2)
+    expect(bodyA.items.length).toBe(2)
+
+    const resB = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=1&pageSize=10', headers: actorHeaders('ownerB') })
+    expect(resB.statusCode).toBe(200)
+    const bodyB = resB.json()
+    expect(bodyB.total).toBe(1)
+    expect(bodyB.items.length).toBe(1)
+    expect(bodyB.items[0].id).toBe(productB1)
+    const idsA = new Set(bodyA.items.map((i: any) => i.id))
+    expect(idsA.has(productB1)).toBe(false)
+  })
+
+  it('productId filter returns single item in paginated mode', async () => {
+    const res = await app.inject({
+      method: 'GET', url: `/api/supplier/stock?productId=${productA1}&page=1&pageSize=1`,
+      headers: actorHeaders('ownerA'),
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json()
+    expect(body.total).toBe(1)
+    expect(body.items.length).toBe(1)
+    expect(body.items[0].id).toBe(productA1)
+  })
+
+  it('productId filter: supplier cannot query another supplier product', async () => {
+    const res = await app.inject({
+      method: 'GET', url: `/api/supplier/stock?productId=${productB1}&page=1&pageSize=1`,
+      headers: actorHeaders('ownerA'),
+    })
+    expect(res.statusCode).toBe(200)
+    const body = res.json()
+    expect(body.total).toBe(0)
+    expect(body.items.length).toBe(0)
+  })
+
+  it('rejects invalid pagination params', async () => {
+    const bad = await app.inject({ method: 'GET', url: '/api/supplier/stock?page=0', headers: actorHeaders('ownerA') })
     expect(bad.statusCode).toBe(400)
 
-    const over = await app.inject({ method: 'GET', url: '/api/supplier/stock?limit=9999', headers: actorHeaders('ownerA') })
+    const over = await app.inject({ method: 'GET', url: '/api/supplier/stock?pageSize=999', headers: actorHeaders('ownerA') })
     expect(over.statusCode).toBe(400)
   })
 

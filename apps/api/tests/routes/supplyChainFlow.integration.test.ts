@@ -1,5 +1,5 @@
 import Fastify from 'fastify'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { prisma } from '@dianjie/db'
 import { deliveryRoutes } from '../../src/routes/deliveries'
 import { purchaseOrderRoutes } from '../../src/routes/orders'
@@ -824,6 +824,66 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(Number(delivery.items[0].amount)).toBe(30)
     expect(delivery.items[0].productNameSnapshot).toBe('改单快照商品')
     expect(delivery.items[0].productCodeSnapshot).toBe(`${suffix}-INTEGRITY`)
+    expect(ship.json().fulfillment).toMatchObject({
+      policy: 'CLOSE_UNSHIPPED_REMAINDER',
+      remainderClosed: true,
+      hasClosedRemainder: true,
+      lines: [{ orderedQty: 7, shippedQty: 3, closedQty: 4 }],
+    })
+    const closedReservation = await prisma.supplierStockReservation.findUniqueOrThrow({
+      where: { purchaseOrderItemId: approvedOrder.items[0].id },
+    })
+    expect(closedReservation.status).toBe('CONSUMED')
+    expect(Number(closedReservation.quantity)).toBe(7)
+    expect(Number(closedReservation.fulfilledQty)).toBe(3)
+    expect(closedReservation.consumedAt).toBeInstanceOf(Date)
+    expect(closedReservation.releasedAt).toBeInstanceOf(Date)
+    expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: integrityProduct.id } })).stock)).toBe(7)
+    const closureEvent = await prisma.deliveryOrderEvent.findFirstOrThrow({
+      where: { deliveryOrderId: delivery.id, eventType: 'SHIPPED' },
+    })
+    expect(closureEvent.metadata).toMatchObject({
+      fulfillment: {
+        policy: 'CLOSE_UNSHIPPED_REMAINDER',
+        lines: [{ orderedQty: 7, shippedQty: 3, closedQty: 4 }],
+      },
+    })
+    await vi.waitFor(async () => {
+      const exactNotification = await prisma.notification.findFirst({
+        where: {
+          tenantId,
+          recipientId: chefUserId,
+          type: 'ORDER_PARTIAL_CLOSED',
+          refId: created.id,
+        },
+      })
+      expect(exactNotification).toMatchObject({
+        recipientRole: 'ORDER_CREATOR',
+        refType: 'PurchaseOrder',
+      })
+      expect(exactNotification?.body).toContain('不会补送')
+    })
+
+    const secondShipment = await app.inject({
+      method: 'PATCH', url: `/api/orders/${created.id}/ship`, headers: { 'x-test-actor': 'supplier' },
+      payload: {
+        idempotencyKey: `integrity-second-ship-${suffix}`,
+        items: [{ itemId: approvedOrder.items[0].id, shippedQty: 4 }],
+      },
+    })
+    expect(secondShipment.statusCode).toBe(409)
+    expect(secondShipment.json().error).toContain('不得创建第二张有效配送单')
+    expect(await prisma.deliveryOrder.count({
+      where: { purchaseOrderId: created.id, status: { not: 'CANCELLED' } },
+    })).toBe(1)
+    expect(await prisma.notification.count({
+      where: {
+        tenantId,
+        recipientId: chefUserId,
+        type: 'ORDER_PARTIAL_CLOSED',
+        refId: created.id,
+      },
+    })).toBe(1)
   })
 
   it('orders, reserves, ships once, receives actual quantity and creates payable facts', async () => {
@@ -930,6 +990,15 @@ describe('supplier order to receipt flow (integration)', () => {
       expect(Number((await prisma.supplierStockBatch.findFirstOrThrow({ where: { tenantId, productId } })).remainingQty)).toBe(10)
       expect(await prisma.supplierStockMovement.count({ where: { tenantId, productId, type: 'OUTBOUND_PO' } })).toBe(0)
       expect(await prisma.opLog.count({ where: { targetId: order.id, action: { startsWith: '供应商确认发货' } } })).toBe(0)
+      const activeReservation = await prisma.supplierStockReservation.findUniqueOrThrow({
+        where: { purchaseOrderItemId: order.items[0].id },
+      })
+      expect(activeReservation).toMatchObject({
+        status: 'ACTIVE',
+        releasedAt: null,
+        consumedAt: null,
+      })
+      expect(Number(activeReservation.fulfilledQty)).toBe(0)
     } finally {
       await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${shipmentFailureTrigger}" ON "op_logs"`)
       await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS "${shipmentFailureFunction}"()`)

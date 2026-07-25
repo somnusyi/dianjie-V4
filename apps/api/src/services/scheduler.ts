@@ -49,7 +49,6 @@ export async function autoReceivePurchaseOrder(orderId: string) {
   }
 
   const receivedAt = new Date()
-  const fullyShipped = order.items.every(item => Number(item.shippedQty || 0) + 0.0001 >= Number(item.quantity))
   const totalAmount = delivery.items.reduce(
     (sum, item) => sum + Number(item.shippedQty) * Number(item.unitPriceSnapshot),
     0,
@@ -145,8 +144,9 @@ export async function autoReceivePurchaseOrder(orderId: string) {
     await tx.purchaseOrder.update({
       where: { id: order.id },
       data: {
-        status: fullyShipped ? 'COMPLETED' : 'CONFIRMED',
-        receivedAt: fullyShipped ? receivedAt : null,
+        // 首次有效发货已关闭未发余量，自动收货后同样不得回到待发货状态。
+        status: 'COMPLETED',
+        receivedAt,
         receiptId: created.id,
         autoConfirmed: true,
       },

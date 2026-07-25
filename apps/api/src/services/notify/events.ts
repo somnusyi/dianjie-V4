@@ -23,6 +23,13 @@ export const EVENTS = {
     scopedBy: 'store',
     urgent: false,
   },
+  PO_PARTIAL_CLOSED: {
+    label: '部分发货余量关闭',
+    desc: '供应链部分发货并关闭未发余量 → 精准通知原下单人重新下单',
+    defaultRoles: [],
+    scopedBy: 'tenant',
+    urgent: false,
+  },
   PO_PENDING_CONFIRM: {
     label: '订单到店',
     desc: '供应商点击送达 → 厨师长验收 24h 倒计时',
@@ -160,6 +167,16 @@ export function renderTemplate(event: EventKey, payload: Record<string, any>): R
       return {
         kind: 'text',
         text: `🚚 ${payload.supplierName || '供应商'} 已发货:订单 #${payload.no},预计今天到店,请准备验收。`,
+      }
+    case 'PO_PARTIAL_CLOSED':
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: `⚠️ 部分发货 #${payload.no || ''}`,
+          description: `${payload.supplierName || '供应商'} 本次实发 ${payload.shippedSummary || '部分商品'}；未发 ${payload.closedSummary || '余量'} 已关闭，不会补送。如仍需请重新下单。`,
+          url: `${baseUrl()}/v2/chef/purchase/${payload.orderId}`,
+          btntxt: '查看订单',
+        },
       }
     case 'PO_PENDING_CONFIRM':
       return {

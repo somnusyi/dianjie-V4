@@ -89,6 +89,23 @@ describe('notify events: 新增待办事件定义', () => {
     expect(msg.text).toContain('22')
     expect(msg.text).toContain('无需审批')
   })
+
+  it('routes partial shipment closure to an explicit user and explains no replenishment', () => {
+    expect(EVENTS.PO_PARTIAL_CLOSED).toMatchObject({
+      defaultRoles: [], scopedBy: 'tenant', urgent: false,
+    })
+    const msg = renderTemplate('PO_PARTIAL_CLOSED', {
+      orderId: 'po-1',
+      no: 'PO202607000001',
+      supplierName: '内部供应链',
+      shippedSummary: '白菜 3',
+      closedSummary: '白菜 4',
+    })
+    expect(msg.kind).toBe('textcard')
+    expect(msg.textcard!.description).toContain('未发 白菜 4 已关闭')
+    expect(msg.textcard!.description).toContain('不会补送')
+    expect(msg.textcard!.url).toContain('/v2/chef/purchase/po-1')
+  })
 })
 
 describe('bomTaskDishNames 聚合', () => {

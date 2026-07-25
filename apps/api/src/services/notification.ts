@@ -10,6 +10,7 @@ interface NotifyPayload {
   refType?: string               // 关联实体类型
   refId?: string                 // 关联实体 ID
   dedupeKey?: string             // 同租户业务幂等键（可选）
+  skipExternal?: boolean         // 仅写系统消息，外部触达由精准通知层负责
   // 兼容旧调用
   supplierName?: string
   amount?: number
@@ -24,7 +25,9 @@ interface NotifyPayload {
  * 3. 企业微信 Webhook（配置后生效）
  */
 export async function sendNotification(payload: NotifyPayload) {
-  const { tenantId, recipientRole, recipientId, type, title, body, refType, refId, dedupeKey } = payload
+  const {
+    tenantId, recipientRole, recipientId, type, title, body, refType, refId, dedupeKey, skipExternal,
+  } = payload
 
   // 1. 写入 DB
   let created = false
@@ -47,7 +50,7 @@ export async function sendNotification(payload: NotifyPayload) {
 
   // 3. 企业微信 Webhook
   const webhookUrl = process.env.WECHAT_WEBHOOK_URL
-  if (webhookUrl) {
+  if (webhookUrl && !skipExternal) {
     try {
       await fetch(webhookUrl, {
         method: 'POST',

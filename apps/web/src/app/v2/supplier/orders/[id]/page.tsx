@@ -26,6 +26,12 @@ import {
   hasAnyPositiveShipment,
   mapFulfillmentToCloseSummary,
 } from '@/lib/partial-shipment-ui'
+import {
+  calculateRevisionLineAmount,
+  RevisionCatalogProduct,
+  resolveRevisionCatalogPricing,
+  sumRevisionLineAmounts,
+} from '@/lib/supplier-revision-cost-pricing'
 
 type Order = {
   id: string; no: string; status: string
@@ -46,7 +52,7 @@ type Order = {
   supplier: { id: string; name: string; contactName?: string | null; contactPhone?: string | null; inventoryMode?: 'NOT_TRACKED' | 'STRICT' }
   createdBy: { id: string; name: string }
   shippedBy: { id: string; name: string } | null
-  items: { id: string; productId: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string; receivedQty: string | null; product?: { name: string; spec: string | null; unit: string; code: string; shipUpperPct?: string | number; shipUpperBuffer?: string | number } }[]
+  items: { id: string; productId: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string; receivedQty: string | null; orderUnitSnapshot?: string | null; productUnitSnapshot?: string | null; product?: { name: string; spec: string | null; unit: string; code: string; shipUpperPct?: string | number; shipUpperBuffer?: string | number } }[]
   revisions?: {
     id: string; revisionNo: number; status: string; reason: string; requestedAt: string
     changeSet: { kind: string; productId?: string; before?: any; after?: any }[]
@@ -93,7 +99,7 @@ export default function SupplierOrderDetailPage() {
   const [zoomImg, setZoomImg] = useState<string | null>(null)
   // 接单前改单申请: 当前订货数量 + 可追加商品, 全部须门店确认
   const [addOpen, setAddOpen] = useState(false)
-  const [catalog, setCatalog] = useState<{ id: string; name: string; unit: string; price: string; spec?: string | null; category?: string; status: string }[]>([])
+  const [catalog, setCatalog] = useState<RevisionCatalogProduct[]>([])
   const [addQty, setAddQty] = useState<Record<string, number>>({})
   const [addSearch, setAddSearch] = useState('')
   const [adjustReason, setAdjustReason] = useState('')
@@ -190,7 +196,7 @@ export default function SupplierOrderDetailPage() {
       const data = await apiFetch<any>('/api/products')
       const list = Array.isArray(data) ? data : (data?.items || [])
       const existingIds = new Set((order?.items || []).map(it => it.productId))
-      setCatalog(list.filter((p: any) => p.status === 'ENABLED' || existingIds.has(p.id)))
+      setCatalog((list as RevisionCatalogProduct[]).filter((p: RevisionCatalogProduct) => p.status === 'ENABLED' || existingIds.has(p.id)))
     } catch (e: any) {
       setError(e.message || '加载 catalog 失败')
       setAddOpen(false)
@@ -209,13 +215,38 @@ export default function SupplierOrderDetailPage() {
     const items = Object.entries(addQty).filter(([, q]) => q > 0).map(([productId, quantity]) => ({ productId, quantity }))
     if (items.length === 0) { setError('订货单至少保留一个商品'); return }
     if (!adjustReason.trim()) { setError('请填写改单原因'); return }
-    const total = items.reduce((s, i) => {
-      const p = catalog.find(c => c.id === i.productId)
-      return s + (p ? Number(p.price) * i.quantity : 0)
-    }, 0)
+
+    const amounts = items.map(({ productId, quantity }) => {
+      const existing = order.items.find(it => it.productId === productId)
+      if (existing) {
+        const p = catalog.find(c => c.id === productId)
+        const unit = existing.orderUnitSnapshot || existing.productUnitSnapshot || existing.product?.unit || p?.unit || '订货单位'
+        return calculateRevisionLineAmount(quantity, {
+          status: 'READY',
+          orderUnitPrice: existing.unitPrice,
+          orderUnit: unit,
+          unitLabel: `元 / ${unit}`,
+          costPriceSource: '历史冻结订货价',
+        })
+      }
+      const p = catalog.find(c => c.id === productId)
+      if (!p) {
+        setError('商品目录已变化，请刷新后重新申请调整')
+        return null
+      }
+      const pricing = resolveRevisionCatalogPricing(p)
+      if (pricing.status === 'PENDING') {
+        setError(pricing.message)
+        return null
+      }
+      return calculateRevisionLineAmount(quantity, pricing)
+    })
+    const total = sumRevisionLineAmounts(amounts)
+    if (total === null) return
+
     openConfirm({
       title: `申请调整订货单?`,
-      body: `调整后 ${items.length} 项 · ¥${total.toLocaleString()}\n提交后须门店确认，确认前不能接单。\n原因: ${adjustReason.trim()}`,
+      body: `调整后 ${items.length} 项 · ¥${Number(total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n提交后须门店确认，确认前不能接单。\n原因: ${adjustReason.trim()}`,
       confirmLabel: '提交申请',
       tone: 'primary',
       onConfirm: async () => {
@@ -722,11 +753,32 @@ export default function SupplierOrderDetailPage() {
           const hay = `${p.name} ${p.spec || ''}`.toLowerCase()
           return addSearch.toLowerCase().split(/\s+/).filter(Boolean).every(t => hay.includes(t))
         })
-        const selectedTotal = Object.entries(addQty).reduce((s, [pid, q]) => {
+        const selectedDetails = Object.entries(addQty).filter(([, q]) => q > 0)
+        const selectedCount = selectedDetails.length
+        const hasPendingSelected = selectedDetails.some(([pid]) => {
+          const existing = order.items.find(it => it.productId === pid)
+          if (existing) return false
           const p = catalog.find(c => c.id === pid)
-          return s + (p ? Number(p.price) * q : 0)
-        }, 0)
-        const selectedCount = Object.values(addQty).filter(q => q > 0).length
+          return !p || resolveRevisionCatalogPricing(p).status === 'PENDING'
+        })
+        const selectedAmounts = selectedDetails.map(([pid, q]) => {
+          const existing = order.items.find(it => it.productId === pid)
+          if (existing) {
+            const p = catalog.find(c => c.id === pid)
+            const unit = existing.orderUnitSnapshot || existing.productUnitSnapshot || existing.product?.unit || p?.unit || '订货单位'
+            return calculateRevisionLineAmount(q, {
+              status: 'READY',
+              orderUnitPrice: existing.unitPrice,
+              orderUnit: unit,
+              unitLabel: `元 / ${unit}`,
+              costPriceSource: '历史冻结订货价',
+            })
+          }
+          const p = catalog.find(c => c.id === pid)
+          if (!p) return null
+          return calculateRevisionLineAmount(q, resolveRevisionCatalogPricing(p))
+        })
+        const selectedTotal = sumRevisionLineAmounts(selectedAmounts)
         return (
           <div className="fixed inset-0 z-50" onClick={() => setAddOpen(false)}>
             <div className="absolute inset-0 bg-ink/60" />
@@ -737,7 +789,7 @@ export default function SupplierOrderDetailPage() {
                 <h3 className="text-h2">申请调整订货单</h3>
                 <span className="text-caption text-gray3">{filtered.length}/{catalog.length} 商品</span>
               </div>
-              <p className="px-4 pb-2 text-micro text-gray3">可调整数量、移除或增加商品；价格不可修改。提交后须门店确认才能接单。</p>
+              <p className="px-4 pb-2 text-micro text-gray3">可调整数量、移除或增加商品；已有行保持冻结订货价，新增商品按当前四单位合同换算订货价，待核验或非 1:1 合同缺失商品不可加入。提交后须门店确认才能接单。</p>
               <div className="px-4 pb-2">
                 <label className="text-micro text-gray3 block mb-1">改单原因 *</label>
                 <textarea value={adjustReason} onChange={e => setAdjustReason(e.target.value)} maxLength={200} rows={2}
@@ -757,24 +809,46 @@ export default function SupplierOrderDetailPage() {
                 {filtered.length === 0 && <li className="px-4 py-8 text-center text-caption text-gray3">无匹配商品</li>}
                 {filtered.map(p => {
                   const q = addQty[p.id] || 0
+                  const existing = order.items.find(it => it.productId === p.id)
+                  const pricing = existing ? null : resolveRevisionCatalogPricing(p)
+                  const canSelect = !!existing || pricing?.status === 'READY'
                   return (
                     <li key={p.id} className={`flex items-center px-4 py-3 ${q > 0 ? 'bg-amber/5' : ''}`}>
                       <div className="flex-1 min-w-0">
                         <div className="text-body truncate">{p.name}</div>
-                        <div className="text-micro text-gray3 font-num">¥{Number(p.price).toFixed(2)} / {p.unit}{p.spec ? ' · ' + p.spec : ''}</div>
+                        <div className="text-micro text-gray3 font-num">
+                          {(() => {
+                            if (existing) {
+                              const unit = existing.orderUnitSnapshot || existing.productUnitSnapshot || existing.product?.unit || p.unit || '订货单位'
+                              return `¥${Number(existing.unitPrice).toFixed(2)} / ${unit} · 历史冻结价`
+                            }
+                            if (pricing?.status === 'READY') {
+                              return `¥${pricing.orderUnitPrice} · ${pricing.unitLabel} · ${pricing.costPriceSource}`
+                            }
+                            if (pricing?.status === 'PENDING') {
+                              return <span className="text-red-fg">{pricing.message}</span>
+                            }
+                            return '无法计算订货价'
+                          })()}
+                        </div>
                       </div>
                       {q === 0 ? (
                         <button onClick={() => setAddQtyFor(p.id, 1)}
-                                className="px-3 py-1.5 rounded-cta bg-amber/10 text-amber-fg text-button">+ 加入</button>
+                                disabled={!canSelect}
+                                className="px-3 py-1.5 rounded-cta bg-amber/10 text-amber-fg text-button disabled:opacity-40 disabled:bg-gray5">
+                          {canSelect ? '+ 加入' : '不可加入'}
+                        </button>
                       ) : (
                         <div className="flex items-center gap-2">
                           <button onClick={() => setAddQtyFor(p.id, q - 1)}
                                   className="w-8 h-8 rounded-full bg-bg text-h2 flex items-center justify-center">−</button>
                           <input type="number" inputMode="decimal" min="0" step="0.5" value={q}
                                  onChange={e => setAddQtyFor(p.id, Math.max(0, Number(e.target.value) || 0))}
-                                 className="w-14 text-center font-num text-body bg-bg rounded-chip py-1 outline-none" />
+                                 disabled={!canSelect}
+                                 className="w-14 text-center font-num text-body bg-bg rounded-chip py-1 outline-none disabled:opacity-50" />
                           <button onClick={() => setAddQtyFor(p.id, q + 1)}
-                                  className="w-8 h-8 rounded-full bg-amber text-white text-h2 flex items-center justify-center">+</button>
+                                  disabled={!canSelect}
+                                  className="w-8 h-8 rounded-full bg-amber text-white text-h2 flex items-center justify-center disabled:opacity-40">+</button>
                         </div>
                       )}
                     </li>
@@ -784,11 +858,15 @@ export default function SupplierOrderDetailPage() {
               <div className="border-t border-border p-3 flex items-center gap-3">
                 <div className="flex-1">
                   <div className="text-micro text-gray3">已选 {selectedCount} 项</div>
-                  <div className="font-num text-h2">调整后 ¥{selectedTotal.toFixed(2)}</div>
+                  <div className={selectedTotal === null ? 'text-caption text-red-fg' : 'font-num text-h2'}>
+                    {selectedTotal === null
+                      ? '调整后金额待核验'
+                      : `调整后 ¥${Number(selectedTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                  </div>
                 </div>
                 <button onClick={() => setAddOpen(false)}
                         className="px-4 py-3 rounded-cta border border-border text-button text-gray2">取消</button>
-                <button onClick={submitAdd} disabled={submitting || selectedCount === 0 || !adjustReason.trim()}
+                <button onClick={submitAdd} disabled={submitting || selectedCount === 0 || !adjustReason.trim() || hasPendingSelected}
                         className="px-6 py-3 bg-amber text-white rounded-cta text-button disabled:opacity-40">提交申请</button>
               </div>
             </div>

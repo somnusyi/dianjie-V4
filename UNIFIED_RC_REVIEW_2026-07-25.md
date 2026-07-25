@@ -565,3 +565,60 @@ Qwen 原报告 494 行并把 API 别名 `default` 错当真实仓主键，还只
   `bff1503a`，不得以静态编译代替数据库验收。
 - 生产 gate 保持 `LOCKED`；未合并或直推 main、未创建 PR、未部署、未写生产、未执行
   一次性数据脚本，也未读取或修改凭证与业务 xlsx。
+
+## V5 内部供应链第十四条仓库集成列车（2026-07-26 07:51）
+
+本列恢复 Docker Desktop 后，只在本机隔离 `_ci` PostgreSQL 中验收第十三列的 schema
+候选。npm 可下载缓存清理使工作盘可用空间从约 2.8 GiB 恢复到约 5.1 GiB；旧脏
+worktree、Docker 镜像/卷和用户文件均未删除。Docker 僵死后台由官方 CLI 强制停止后
+重启，未连接普通本地库或生产库。
+
+### 已集成
+
+| 能力 | feature 精确提交 | 统一 RC 提交 |
+| --- | --- | --- |
+| tenant 默认仓与按仓余额基础 | `1f606d9db5d950b999199f1fd6955b8afe3923eb` | `1c23b0f5` |
+| 仓库余额三位小数 | `bff1503a4b960c24d9a5aac6a2d812c731fa2e66` | `e40266db` |
+| 并发、跨租户与多仓数据库合同 | `563ad70443b4f95b4a165b178140e133c10b73b1` | `8bde07c7` |
+| 保留商品/租户硬删除兼容 | `50f5d9626a551130d1801046e13a403546f03fbe` | `a55bba0f` |
+
+- `Warehouse` 归 tenant 内部供应链团队所有，不归 supplier；每 tenant 当前只有一个启用
+  默认仓，模型和复合键保留未来多仓。
+- 所有历史 Product 都从 `Product.stock` 确定性初始化默认仓余额；新 tenant 自动建仓。
+  五类配送/库存事实历史行绑定真实 tenant 仓 ID，旧 writer 仅在省略 warehouseId 时由
+  触发器补默认仓，显式跨 tenant 值由复合外键拒绝。
+- 兼容期保持 `Product.stock → WarehouseStock.physicalQty` 单向同步；不建立反向触发器。
+  仓库余额为 `Decimal(12,3)`，并发旧写后余额与 Product 最终值一致。
+
+### 数据库门禁与失败修复
+
+- 全新空库应用 67 条迁移，`migrate deploy`、重复 deploy、`status` 与
+  migrations-to-schema diff 全部通过。
+- 历史样本先应用旧 66 条迁移，再写入 tenant、无关 supplier 边界的 Product、流水、
+  批次和分配，最后只应用仓库迁移；默认仓、4.250 余额与三类历史事实全部绑定同一真实
+  tenant 仓 ID，约束均已验证。
+- 独立 rollback 库成功移除新表、四个新增列、函数、触发器、索引和约束，并把既有
+  DeliveryOrder 占位列恢复为空；未使用 `db push/reset`。
+- 首轮全量 PostgreSQL 套件暴露 `WarehouseStock` 的 RESTRICT 外键会阻断现有 Product
+  硬删除和测试清理，造成 19 个文件连锁失败。该证据保留；`50f5d962` 把 tenant 拥有的
+  Warehouse 及派生 WarehouseStock 对 tenant/warehouse/product 改为 CASCADE，而五类
+  审计事实对仓继续 RESTRICT。全新库重跑后 23 文件、165/165 通过。
+- 仓库专项数据库合同 8/8，覆盖确定性默认仓、单向桥、单默认仓/余额唯一性、显式跨
+  tenant 伪造、五类约束验证、并发旧写一致性、三位小数多仓余额及硬删除兼容。
+
+### 最终组合门禁
+
+- API 单元 43 文件、362/362；API PostgreSQL 集成 23 文件、165/165；API build 通过。
+- Web 未改运行时代码；全量 24 文件、426/426 证据继续有效，并在最终 schema 上重跑
+  `tsc --noEmit` 通过。
+- `git diff --check`、高置信敏感信息检查、feature 远端 exact SHA、干净 feature 与
+  integration 工作树均通过。
+- 生产 gate 继续 `LOCKED`；未合并 main、未建 PR、未部署、未写生产、未运行真实数据
+  修正脚本。
+
+### 下一步
+
+- schema 只是兼容基础；按仓真实运行时仍需按审计顺序逐 writer 切换余额、批次、预占、
+  流水、发货和查询，最终移除 Product.stock 单向桥与 NULL 补仓触发器。
+- 供应链手工入库更正与门店收货更正边界已冻结但尚未编码；两条状态机必须独立，门店
+  实收修正不得恢复供应链仓库存。

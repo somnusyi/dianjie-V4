@@ -1728,3 +1728,31 @@
   实现，不运行真实数据修正脚本。
 - 生产 gate 保持 LOCKED；不合并 main、不建 PR、不部署、不写生产、不触碰凭证或业务
   xlsx。
+
+## 2026-07-26 07:51 V5 第十四条仓库集成列车
+
+### 已集成
+
+- `1c23b0f5`（feature `1f606d9d`）：tenant 级 `Warehouse`、`WarehouseStock`、单默认仓
+  唯一约束、五类事实 warehouseId、确定性历史回填和 Product.stock 单向兼容桥。
+- `e40266db`（feature `bff1503a`）：仓库物理余额统一为 `Decimal(12,3)`。
+- `8bde07c7`（feature `563ad704`）：补跨 tenant、并发、约束验证和未来多仓精度合同。
+- `a55bba0f`（feature `50f5d962`）：修复首轮全量数据库套件发现的商品/租户硬删除
+  兼容；tenant 所有的仓及派生余额使用级联，五类审计事实对仓继续限制删除。
+
+### 门禁
+
+- 全新空库 67 条迁移、重复 deploy、status 与 schema diff 通过；旧 66 条迁移后的历史
+  tenant/Product/流水/批次/分配样本增量迁移正确；独立 rollback 演练通过。
+- 首轮 PostgreSQL 全量因新余额 RESTRICT 外键造成 19 个文件连锁失败，失败证据保留；
+  级联修复后在全新 `_ci` 库重跑 23 文件、165/165。
+- 仓库专项 8/8；API 单元 362/362、API build、Web tsc、`git diff --check` 和敏感信息
+  检查通过。Web 运行时代码未变，上一轮全量 426/426 继续有效。
+- 生产 gate 保持 LOCKED；不合并 main、不建 PR、不部署、不写生产、不运行真实数据
+  修正脚本。
+
+### 下一步
+
+- 逐 writer 把余额、批次、预占、流水、发货与查询切到真实 warehouseId，完成核对后再
+  移除 Product.stock 单向桥和旧写补仓触发器。
+- 分别实现供应链手工入库更正与门店实收更正；门店更正不得恢复供应链仓库存。

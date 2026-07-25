@@ -12,7 +12,8 @@ import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { EmptyState, SkeletonCard, FriendlyError } from '@/components/v2/skeleton'
 import { ProductFilterSidebar } from '@/components/v2/product-filter-sidebar'
 import { ProductImagePreview } from '@/components/v2/product-image-preview'
-import { apiFetch } from '@/lib/v2-auth'
+import { apiDownload, apiFetch } from '@/lib/v2-auth'
+import { downloadProductExport } from './export-products'
 
 type Product = {
   id: string; code: string; name: string; category: string; unit: string
@@ -88,6 +89,8 @@ export default function SupplierProductsPage() {
   const [categories, setCategories] = useState<CategoryOption[]>([])
   const [categoryFilter, setCategoryFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [bulkCategory, setBulkCategory] = useState('')
   const [operations, setOperations] = useState<HistoryRow[]>([])
@@ -110,6 +113,19 @@ export default function SupplierProductsPage() {
       .catch(() => setOperations([]))
   }
   useEffect(() => { load() }, [])
+
+  async function handleExport() {
+    if (exporting) return
+    setExporting(true)
+    setExportError(null)
+    try {
+      await downloadProductExport({ searchQ, categoryFilter, statusFilter }, apiDownload)
+    } catch (e: any) {
+      setExportError(e?.message || '导出失败，请稍后重试')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   function revokeBatch(b: Batch) {
     openConfirm({
@@ -450,6 +466,16 @@ export default function SupplierProductsPage() {
               <option value="DISABLED">已停售</option>
             </select>
           </div>
+          <div className="mt-2 flex justify-end">
+            <button
+              type="button"
+              onClick={handleExport}
+              disabled={exporting}
+              className="px-3 py-2 rounded-cta bg-white border border-border text-button text-gray2 disabled:opacity-50"
+            >
+              {exporting ? '导出中…' : '⤓ 导出当前结果'}
+            </button>
+          </div>
         </div>
       )}
 
@@ -541,7 +567,8 @@ export default function SupplierProductsPage() {
       )}
 
       {error && <div className="px-4 mt-3"><FriendlyError message={error} /></div>}
-      {!products && !error && (
+      {exportError && <div className="px-4 mt-3"><FriendlyError message={exportError} onRetry={handleExport} /></div>}
+      {!products && !error && !exportError && (
         <div className="px-4 mt-3 space-y-2">{[1,2,3].map(i => <SkeletonCard key={i} />)}</div>
       )}
       {products && products.length === 0 && (

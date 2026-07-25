@@ -429,10 +429,22 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   app.get('/categories', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, supplierId } = req.user
     const where: any = { tenantId }
+    let categorySupplierId: string | null = null
     if (isSupplierRole(role)) {
       const scopedSupplierId = supplierScopeOrReply(req, reply, 'catalog.read')
       if (!scopedSupplierId) return
       where.supplierId = scopedSupplierId
+      categorySupplierId = scopedSupplierId
+    } else if (role === 'SUPPLY_CHAIN' && req.query?.supplierId !== undefined) {
+      const parsedSupplierId = z.string().trim().min(1).max(64).safeParse(req.query.supplierId)
+      if (!parsedSupplierId.success) return reply.status(400).send({ error: '供应商筛选无效' })
+      const supplier = await prisma.supplier.findFirst({
+        where: { id: parsedSupplierId.data, tenantId },
+        select: { id: true },
+      })
+      if (!supplier) return reply.status(404).send({ error: '供应商不存在' })
+      categorySupplierId = supplier.id
+      where.supplierId = supplier.id
     } else if (isStoreScoped(role)) {
       where.status = 'ENABLED'
     }
@@ -442,12 +454,12 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       _count: { _all: true },
       orderBy: { category: 'asc' },
     })
-    if (!isSupplierRole(role)) {
+    if (!categorySupplierId) {
       return rows.map(row => ({ name: row.category || '其他', count: row._count._all }))
     }
 
     const masters = await prisma.supplierProductCategory.findMany({
-      where: { tenantId, supplierId },
+      where: { tenantId, supplierId: categorySupplierId },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     })
     const counts = new Map(rows.map(row => [row.category || '其他', row._count._all]))
@@ -769,7 +781,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     if (!PRODUCT_WRITE_ROLES.has(role)) return reply.status(403).send({ error: '无权批量修改商品' })
     const parsed = bulkIdsSchema.extend({ category: z.string().trim().min(1).max(40) }).safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-    const where: any = { id: { in: parsed.data.ids }, tenantId }
+    const uniqueIds = [...new Set(parsed.data.ids)]
+    const where: any = { id: { in: uniqueIds }, tenantId }
     if (isSupplierRole(role)) {
       if (!supplierScopeOrReply(req, reply, 'catalog.manage')) return
       if (!supplierId) return reply.status(403).send({ error: '账号未绑定供应商' })
@@ -779,8 +792,95 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       })
       if (!category?.isActive) return reply.status(400).send({ error: '请选择一个启用中的分类' })
     }
-    const matched = await prisma.product.findMany({ where, select: { id: true, category: true, code: true } })
-    if (matched.length !== new Set(parsed.data.ids).size) return reply.status(400).send({ error: '包含不存在或无权限的商品' })
+    const matched = await prisma.product.findMany({
+      where,
+      select: { id: true, category: true, code: true, name: true, supplierId: true },
+    })
+    if (matched.length !== uniqueIds.length) return reply.status(400).send({ error: '包含不存在或无权限的商品' })
+
+    if (role === 'SUPPLY_CHAIN') {
+      const supplierIds = [...new Set(matched.map(item => item.supplierId).filter((id): id is string => Boolean(id)))].sort()
+      if (supplierIds.length !== new Set(matched.map(item => item.supplierId)).size) {
+        return reply.status(400).send({ error: '所选商品包含未绑定供应商的商品，无法校验分类归属' })
+      }
+      const activeCategories = await prisma.supplierProductCategory.findMany({
+        where: {
+          tenantId,
+          supplierId: { in: supplierIds },
+          name: parsed.data.category,
+          isActive: true,
+        },
+        select: { supplierId: true },
+      })
+      if (new Set(activeCategories.map(category => category.supplierId)).size !== supplierIds.length) {
+        return reply.status(400).send({ error: `分类「${parsed.data.category}」必须在每个商品所属供应商下启用` })
+      }
+
+      const changed = matched.filter(item => item.category !== parsed.data.category)
+      if (changed.length === 0) {
+        return { ok: true, count: 0, category: parsed.data.category, message: '商品已是目标分类' }
+      }
+      await prisma.$transaction(async tx => {
+        for (const scopedSupplierId of supplierIds) {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`supplier-categories:${tenantId}:${scopedSupplierId}`}))`
+        }
+        const lockedCategories = await tx.supplierProductCategory.findMany({
+          where: {
+            tenantId,
+            supplierId: { in: supplierIds },
+            name: parsed.data.category,
+            isActive: true,
+          },
+          select: { supplierId: true },
+        })
+        if (new Set(lockedCategories.map((category: any) => category.supplierId)).size !== supplierIds.length) {
+          throw Object.assign(new Error('商品分类状态已变化，请刷新后重试'), { statusCode: 409 })
+        }
+        for (const item of changed) {
+          const updated = await tx.product.updateMany({
+            where: {
+              id: item.id,
+              tenantId,
+              supplierId: item.supplierId,
+              category: item.category,
+            },
+            data: { category: parsed.data.category },
+          })
+          if (updated.count !== 1) {
+            throw Object.assign(new Error('商品状态已变化，请刷新后重试'), { statusCode: 409 })
+          }
+          await tx.opLog.create({
+            data: {
+              tenantId, userId, role,
+              action: `批量修改商品分类 ${item.name} (#${item.code})：${item.category} → ${parsed.data.category}`,
+              entityType: 'Product', target: item.code, targetId: item.id,
+              metadata: {
+                supplierId: item.supplierId,
+                fields: ['category'],
+                before: { name: item.name, category: item.category },
+                after: { name: item.name, category: parsed.data.category },
+              },
+            },
+          })
+        }
+      })
+      void invalidatePattern(`products:full:${tenantId}:*`)
+      for (const item of changed) {
+        const before = { name: item.name, category: item.category }
+        const after = { name: item.name, category: parsed.data.category }
+        fireAndForgetNotifyProductChange({
+          tenantId,
+          productId: item.id,
+          action: 'UPDATE',
+          operatorId: userId,
+          eventKey: `PRODUCT:${item.id}:UPDATE:${userId}:${hashEventPayload({ before, after })}`,
+          before,
+          after,
+        })
+      }
+      return { ok: true, count: changed.length, category: parsed.data.category }
+    }
+
     await prisma.$transaction(async tx => {
       if (isSupplierRole(role)) {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`supplier-categories:${tenantId}:${supplierId}`}))`
@@ -815,14 +915,66 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     if (!PRODUCT_WRITE_ROLES.has(role)) return reply.status(403).send({ error: '无权批量修改商品' })
     const parsed = bulkIdsSchema.extend({ status: z.enum(['ENABLED', 'DISABLED']) }).safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-    const where: any = { id: { in: parsed.data.ids }, tenantId }
+    const uniqueIds = [...new Set(parsed.data.ids)]
+    const where: any = { id: { in: uniqueIds }, tenantId }
     if (isSupplierRole(role)) {
       if (!supplierScopeOrReply(req, reply, 'catalog.manage')) return
       if (!supplierId) return reply.status(403).send({ error: '账号未绑定供应商' })
       where.supplierId = supplierId
     }
-    const matched = await prisma.product.findMany({ where, select: { id: true, code: true, name: true, status: true } })
-    if (matched.length !== new Set(parsed.data.ids).size) return reply.status(400).send({ error: '包含不存在或无权限的商品' })
+    const matched = await prisma.product.findMany({
+      where,
+      select: { id: true, code: true, name: true, status: true, supplierId: true },
+    })
+    if (matched.length !== uniqueIds.length) return reply.status(400).send({ error: '包含不存在或无权限的商品' })
+
+    if (role === 'SUPPLY_CHAIN') {
+      const targetStatus = parsed.data.status
+      const changed = matched.filter(item => item.status !== targetStatus)
+      if (changed.length === 0) {
+        return { ok: true, count: 0, status: targetStatus, message: '商品已是目标状态' }
+      }
+      await prisma.$transaction(async tx => {
+        for (const item of changed) {
+          const updated = await tx.product.updateMany({
+            where: { id: item.id, tenantId, status: item.status },
+            data: { status: targetStatus },
+          })
+          if (updated.count !== 1) {
+            throw Object.assign(new Error('商品状态已变化，请刷新后重试'), { statusCode: 409 })
+          }
+          await tx.opLog.create({
+            data: {
+              tenantId, userId, role,
+              action: `批量${targetStatus === 'ENABLED' ? '恢复供应' : '停售'} ${item.name} (#${item.code})`,
+              entityType: 'Product', target: item.code, targetId: item.id,
+              metadata: {
+                supplierId: item.supplierId,
+                fields: ['status'],
+                before: { name: item.name, status: item.status },
+                after: { name: item.name, status: targetStatus },
+              },
+            },
+          })
+        }
+      })
+      void invalidatePattern(`products:full:${tenantId}:*`)
+      const action: ProductChangeAction = targetStatus === 'ENABLED' ? 'ENABLE' : 'DISABLE'
+      for (const item of changed) {
+        const before = { name: item.name, status: item.status }
+        const after = { name: item.name, status: targetStatus }
+        fireAndForgetNotifyProductChange({
+          tenantId,
+          productId: item.id,
+          action,
+          operatorId: userId,
+          eventKey: `PRODUCT:${item.id}:${action}:${userId}:${hashEventPayload({ before, after })}`,
+          before,
+          after,
+        })
+      }
+      return { ok: true, count: changed.length, status: targetStatus }
+    }
 
     if (isSupplierRole(role) && parsed.data.status === 'DISABLED') {
       const eligible = matched.filter(item => item.status === 'ENABLED')

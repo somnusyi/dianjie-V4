@@ -19,17 +19,11 @@ SET
   "inventoryUnitsPerOrderUnit" = COALESCE("inventoryUnitsPerPurchaseUnit", 1),
   "inventoryUnitsPerCostUnit" = COALESCE("inventoryUnitsPerPurchaseUnit", 1);
 
-ALTER TABLE "products"
-  ALTER COLUMN "purchaseUnit" SET DEFAULT 'kg',
-  ALTER COLUMN "purchaseUnit" SET NOT NULL,
-  ALTER COLUMN "orderUnit" SET DEFAULT 'kg',
-  ALTER COLUMN "orderUnit" SET NOT NULL,
-  ALTER COLUMN "costUnit" SET DEFAULT 'kg',
-  ALTER COLUMN "costUnit" SET NOT NULL,
-  ALTER COLUMN "inventoryUnitsPerOrderUnit" SET DEFAULT 1,
-  ALTER COLUMN "inventoryUnitsPerOrderUnit" SET NOT NULL,
-  ALTER COLUMN "inventoryUnitsPerCostUnit" SET DEFAULT 1,
-  ALTER COLUMN "inventoryUnitsPerCostUnit" SET NOT NULL;
+-- Keep the new columns nullable for old services and one-off test fixtures that
+-- still create products directly through Prisma with only the legacy unit and
+-- purchase-to-inventory mapping. The V5 API always writes all four fields;
+-- readers use deterministic legacy fallback when a direct legacy write leaves
+-- the new fields null.
 
 ALTER TABLE "products"
   ADD CONSTRAINT "products_four_unit_names_ck"

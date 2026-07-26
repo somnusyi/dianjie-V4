@@ -7,7 +7,7 @@ export function buildAnalysisPrompt(input: {
   messages: Array<{ role: string; content: string }>
   sources: SourceFile[]
 }): string {
-  return `你是滇界系统的只读故障定位助手。只分析，不生成命令，不修改数据库。
+  return `你是滇界系统的只读反馈定位助手。反馈已经由管理员批准。只分析，不生成命令，不修改数据库。
 
 反馈标题: ${input.title || '未命名'}
 反馈摘要: ${input.summary || '无'}
@@ -19,9 +19,9 @@ ${input.messages.map((message) => `[${message.role}] ${message.content}`).join('
 ${input.sources.map((source) => `--- ${source.path}\n${source.content}`).join('\n\n')}
 
 只输出一个 JSON 对象，不要 Markdown:
-{"rootCause":"明确定位结论","candidateFiles":["仓库相对路径"],"inWhitelist":true,"confidence":0.0}
+{"rootCause":"明确定位结论或实现方案","candidateFiles":["仓库相对路径"],"inWhitelist":true,"confidence":0.0}
 
-如果无法确定或需要认证、权限、资金、库存写入、数据库、依赖、通知或部署配置变更，
+如果需求不明确、无法确定，或需要认证、权限、资金、库存写入、数据库、依赖、通知或部署配置变更，
 inWhitelist 必须为 false。`
 }
 

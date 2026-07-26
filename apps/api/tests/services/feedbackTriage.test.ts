@@ -66,9 +66,9 @@ describe('parseTriageBlock: triage 标记解析', () => {
 })
 
 describe('decideTriageAction: 分诊路由决策', () => {
-  it('BUG_BLOCKING → 保持 CLARIFYING + 紧急企微通知 (P0 人工处理, 不进审批流)', () => {
+  it('BUG_BLOCKING → AWAITING_APPROVAL + 紧急企微审批', () => {
     const action = decideTriageAction({ category: 'BUG_BLOCKING', sufficient: true })
-    expect(action.status).toBe('CLARIFYING')
+    expect(action.status).toBe('AWAITING_APPROVAL')
     expect(action.notifyEvent).toBe('FEEDBACK_URGENT_BUG')
     expect(action.systemNote).toBeTruthy()
   })

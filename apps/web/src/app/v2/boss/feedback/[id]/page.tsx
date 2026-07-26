@@ -9,6 +9,7 @@ import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { categoryBadge, statusBadge } from '@/app/v2/feedback/feedback-shared'
 
 type Msg = { id: string; role: 'user' | 'assistant' | 'system'; content: string; createdAt: string }
+type DecisionResult = { ok: boolean; autoRunId: string | null; automationStatus: string }
 type Detail = {
   id: string
   status: string
@@ -41,11 +42,13 @@ export default function BossFeedbackDetailPage() {
   async function decide(action: 'approve' | 'reject', note?: string) {
     setActing(true)
     try {
-      await apiFetch(`/api/feedback/${id}/decision`, {
+      const result = await apiFetch<DecisionResult>(`/api/feedback/${id}/decision`, {
         method: 'POST',
         body: JSON.stringify(note ? { action, note } : { action }),
       })
-      location.href = '/v2/boss/feedback'
+      location.href = action === 'approve' && result.autoRunId
+        ? `/v2/boss/autofix/${result.autoRunId}`
+        : '/v2/boss/feedback'
     } catch (e: any) {
       setError(e.message || '操作失败，请重试')
       setActing(false)
@@ -77,9 +80,9 @@ export default function BossFeedbackDetailPage() {
 
   function onApprove() {
     openConfirm({
-      title: '批准该方案?',
-      body: '批准后反馈进入「开发中」状态，提报人会在消息中心收到通知。',
-      confirmLabel: '批准',
+      title: '批准并启动自动开发?',
+      body: '这是唯一一次业务授权。系统会自动定位、开发、测试并在安全门禁通过后发布生产；失败自动回滚，超出安全范围转人工。',
+      confirmLabel: '批准并开始',
       onConfirm: () => decide('approve'),
     })
   }

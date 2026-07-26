@@ -3,7 +3,13 @@ import { promisify } from 'node:util'
 import { prisma } from '@dianjie/db'
 import { fireAndForget as notify } from '../notify'
 import { qwenChat, QWEN_BUSY_FALLBACK, QWEN_NOT_CONFIGURED } from '../qwenChat'
-import { inspectUnifiedDiff, isAutoFixModeEnabled } from './policy'
+import { executeApprovedRun } from './deployment'
+import {
+  inspectUnifiedDiff,
+  isApprovedAutoMode,
+  isAutoDeploymentEnabled,
+  isAutoFixModeEnabled,
+} from './policy'
 import {
   buildAnalysisPrompt,
   buildPatchPrompt,
@@ -19,6 +25,7 @@ let draining = false
 export interface EnqueueAutoFixInput {
   tenantId: string
   feedbackId: string
+  approvedById?: string
 }
 
 function dailyCap(): number {
@@ -28,6 +35,11 @@ function dailyCap(): number {
 
 function repoDir(): string {
   return process.env.AUTO_FIX_REPO_DIR || '/app/dianjie-src'
+}
+
+function staleMinutes(): number {
+  const parsed = Number(process.env.AUTO_FIX_STALE_MINUTES || '60')
+  return Number.isFinite(parsed) && parsed >= 15 ? Math.min(parsed, 24 * 60) : 60
 }
 
 async function audit(run: { id: string; tenantId: string }, status: string, detail?: string) {
@@ -147,8 +159,12 @@ async function processRun(run: { id: string; tenantId: string; feedbackId: strin
         },
       },
     })
-    if (!feedback || feedback.category !== 'BUG_BLOCKING') {
-      throw new Error('反馈不存在或不再属于阻断故障')
+    if (
+      !feedback
+      || feedback.status !== 'IN_DEV'
+      || !['BUG_BLOCKING', 'IMPROVEMENT', 'NEW_FEATURE'].includes(String(feedback.category))
+    ) {
+      throw new Error('反馈不存在、尚未批准或不属于可开发类型')
     }
     const contextPath = String((feedback.context as any)?.path || '')
     if (!contextPath) throw new Error('反馈缺少 context.path，无法安全定位')
@@ -232,6 +248,14 @@ async function processRun(run: { id: string; tenantId: string; feedbackId: strin
       deployLog: verificationLog,
       error: null,
     })
+    if (isApprovedAutoMode()) {
+      if (!isAutoDeploymentEnabled()) {
+        throw new Error('一次审批自动部署模式已启用，但部署安全锁未开启')
+      }
+      await transition(run, 'DEPLOYING', {}, '隔离验证通过，按反馈审批授权自动部署')
+      await executeApprovedRun(run.id)
+      return
+    }
     await transition(run, 'AWAITING_APPROVAL')
     notify({
       tenantId: run.tenantId,
@@ -269,12 +293,17 @@ async function drainQueue() {
 
 export async function enqueueAutoFix(input: EnqueueAutoFixInput): Promise<string | null> {
   if (!isAutoFixModeEnabled()) return null
+  if (isApprovedAutoMode() && !isAutoDeploymentEnabled()) {
+    throw new Error('一次审批自动开发已配置，但自动部署安全锁未启用')
+  }
   try {
     const run = await prisma.autoFixRun.create({
       data: {
         tenantId: input.tenantId,
         feedbackId: input.feedbackId,
         status: 'RECEIVED' as any,
+        decidedById: input.approvedById,
+        decidedAt: input.approvedById ? new Date() : undefined,
       },
       select: { id: true },
     })
@@ -293,6 +322,25 @@ export async function enqueueAutoFix(input: EnqueueAutoFixInput): Promise<string
   }
 }
 
+async function recoverStaleRuns() {
+  const cutoff = new Date(Date.now() - staleMinutes() * 60_000)
+  const stale = await prisma.autoFixRun.findMany({
+    where: {
+      status: { in: [...ACTIVE_STATUSES] as any },
+      updatedAt: { lt: cutoff },
+    },
+    select: { id: true, tenantId: true, feedbackId: true },
+  })
+  for (const run of stale) {
+    await escalate(run, `服务重启后发现任务已停滞超过 ${staleMinutes()} 分钟，已转人工`)
+  }
+}
+
 export function startAutoFixWorker() {
-  if (isAutoFixModeEnabled()) setImmediate(() => void drainQueue())
+  if (!isAutoFixModeEnabled()) return
+  setImmediate(() => {
+    void recoverStaleRuns()
+      .catch((error) => console.error('[autofix] 恢复停滞任务失败:', error))
+      .finally(() => void drainQueue())
+  })
 }

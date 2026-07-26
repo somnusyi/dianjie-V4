@@ -51,7 +51,7 @@ export default function AutoFixRunsPage() {
         </button>
         <div>
           <h1 className="text-h1">AI 自动修复</h1>
-          <p className="text-caption text-gray3">AI 先验证补丁，批准后才允许部署</p>
+          <p className="text-caption text-gray3">手机批准反馈后，自动开发、验证和安全发布</p>
         </div>
       </header>
 

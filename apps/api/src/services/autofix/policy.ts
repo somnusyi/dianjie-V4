@@ -129,5 +129,13 @@ export function inspectUnifiedDiff(diff: string): DiffInspection {
 }
 
 export function isAutoFixModeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.AUTO_FIX_MODE === 'suggest'
+  return env.AUTO_FIX_MODE === 'suggest' || env.AUTO_FIX_MODE === 'approved_auto'
+}
+
+export function isApprovedAutoMode(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.AUTO_FIX_MODE === 'approved_auto'
+}
+
+export function isAutoDeploymentEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isAutoFixModeEnabled(env) && env.AUTO_FIX_DEPLOY_ENABLED === 'true'
 }

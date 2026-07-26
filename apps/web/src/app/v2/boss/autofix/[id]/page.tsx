@@ -42,7 +42,10 @@ export default function AutoFixDetailPage() {
 
   useEffect(() => { load() }, [load])
   useEffect(() => {
-    if (!run || !['DEPLOYING', 'VERIFY_PROD'].includes(run.status)) return
+    if (!run || ![
+      'RECEIVED', 'ANALYZING', 'PATCHING', 'VERIFYING',
+      'PLAN_READY', 'DEPLOYING', 'VERIFY_PROD',
+    ].includes(run.status)) return
     const timer = window.setInterval(load, 4000)
     return () => window.clearInterval(timer)
   }, [run, load])
@@ -75,7 +78,7 @@ export default function AutoFixDetailPage() {
     try { return JSON.parse(run.analysis || '{}') }
     catch { return { rootCause: run.analysis } }
   })()
-  const awaiting = run.status === 'AWAITING_APPROVAL'
+  const awaiting = run.status === 'AWAITING_APPROVAL' && run.mode === 'suggest'
   const rollbackable = run.status === 'RESOLVED' && !!run.commitSha
 
   return (
@@ -96,7 +99,12 @@ export default function AutoFixDetailPage() {
       <div className="px-4 mt-3 space-y-3">
         {!run.deploymentReady && (
           <div className="rounded-card border border-amber-200 bg-amber-50 p-3 text-caption text-amber-800">
-            当前为安全关闭状态（{run.mode}）。服务器源码副本和部署开关完成前不能批准部署。
+            当前自动发布未就绪（{run.mode}）。任务会转人工，不会在半配置状态修改生产。
+          </div>
+        )}
+        {run.mode === 'approved_auto' && run.deploymentReady && (
+          <div className="rounded-card border border-green-200 bg-green-50 p-3 text-caption text-green-800">
+            本任务已在反馈审批时获得授权；隔离验证通过后会自动发布，失败自动回滚。
           </div>
         )}
         {error && <div className="text-caption text-red-fg">{error}</div>}

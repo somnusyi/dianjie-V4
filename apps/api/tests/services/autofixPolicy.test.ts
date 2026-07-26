@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { inspectUnifiedDiff, isAutoFixModeEnabled } from '../../src/services/autofix/policy'
+import {
+  inspectUnifiedDiff,
+  isApprovedAutoMode,
+  isAutoDeploymentEnabled,
+  isAutoFixModeEnabled,
+} from '../../src/services/autofix/policy'
 
 const safeDiff = `diff --git a/apps/web/src/app/v2/supply-chain/home/page.tsx b/apps/web/src/app/v2/supply-chain/home/page.tsx
 index 1111111..2222222 100644
@@ -72,10 +77,24 @@ describe('auto-fix patch policy', () => {
 })
 
 describe('auto-fix mode', () => {
-  it('is fail-closed and only enables suggest', () => {
+  it('is fail-closed and only enables explicit supported modes', () => {
     expect(isAutoFixModeEnabled({})).toBe(false)
     expect(isAutoFixModeEnabled({ AUTO_FIX_MODE: 'off' })).toBe(false)
     expect(isAutoFixModeEnabled({ AUTO_FIX_MODE: 'auto' })).toBe(false)
     expect(isAutoFixModeEnabled({ AUTO_FIX_MODE: 'suggest' })).toBe(true)
+    expect(isAutoFixModeEnabled({ AUTO_FIX_MODE: 'approved_auto' })).toBe(true)
+  })
+
+  it('requires both approved_auto and the deployment lock for unattended deployment', () => {
+    expect(isApprovedAutoMode({ AUTO_FIX_MODE: 'approved_auto' })).toBe(true)
+    expect(isApprovedAutoMode({ AUTO_FIX_MODE: 'suggest' })).toBe(false)
+    expect(isAutoDeploymentEnabled({
+      AUTO_FIX_MODE: 'approved_auto',
+      AUTO_FIX_DEPLOY_ENABLED: 'false',
+    })).toBe(false)
+    expect(isAutoDeploymentEnabled({
+      AUTO_FIX_MODE: 'approved_auto',
+      AUTO_FIX_DEPLOY_ENABLED: 'true',
+    })).toBe(true)
   })
 })

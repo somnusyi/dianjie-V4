@@ -2,7 +2,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '@dianjie/db'
 import { executeApprovedRun, executeManualRollback } from '../services/autofix/deployment'
-import { isAutoFixModeEnabled } from '../services/autofix/policy'
+import { isAutoDeploymentEnabled } from '../services/autofix/policy'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const STATUSES = [
@@ -29,7 +29,7 @@ function isSuperAdmin(actor: any): boolean {
 }
 
 function deploymentReady(): boolean {
-  return isAutoFixModeEnabled() && process.env.AUTO_FIX_DEPLOY_ENABLED === 'true'
+  return isAutoDeploymentEnabled()
 }
 
 export const autoFixRoutes: FastifyPluginAsync = async (app) => {

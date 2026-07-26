@@ -15,6 +15,8 @@ let app: ReturnType<typeof Fastify>
 // Qwen mock: 每次 chat/completions 调用按队列顺序返回内容
 const qwenQueue: string[] = []
 let oldKey: string | undefined
+let oldMode: string | undefined
+let oldRepoDir: string | undefined
 
 function qwenResponse(content: string) {
   return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
@@ -40,7 +42,10 @@ function inject(actor: keyof typeof ACTORS, method: 'GET' | 'POST', url: string,
 describe('feedback system flow (integration)', () => {
   beforeAll(async () => {
     oldKey = process.env.QWEN_API_KEY
+    oldMode = process.env.AUTO_FIX_MODE
+    oldRepoDir = process.env.AUTO_FIX_REPO_DIR
     process.env.QWEN_API_KEY = 'integration-test-placeholder'
+    process.env.AUTO_FIX_MODE = 'off'
     vi.stubGlobal('fetch', vi.fn(async () => {
       const next = qwenQueue.shift()
       if (!next) throw new Error('qwenQueue exhausted')
@@ -97,9 +102,14 @@ describe('feedback system flow (integration)', () => {
     vi.unstubAllGlobals()
     if (oldKey === undefined) delete process.env.QWEN_API_KEY
     else process.env.QWEN_API_KEY = oldKey
+    if (oldMode === undefined) delete process.env.AUTO_FIX_MODE
+    else process.env.AUTO_FIX_MODE = oldMode
+    if (oldRepoDir === undefined) delete process.env.AUTO_FIX_REPO_DIR
+    else process.env.AUTO_FIX_REPO_DIR = oldRepoDir
     if (app) await app.close()
     await new Promise((resolve) => setTimeout(resolve, 300))
     for (const tid of [tenantA, tenantB].filter(Boolean)) {
+      await prisma.autoFixRun.deleteMany({ where: { tenantId: tid } })
       await prisma.feedbackMessage.deleteMany({ where: { tenantId: tid } })
       await prisma.feedback.deleteMany({ where: { tenantId: tid } })
       await prisma.notificationLog.deleteMany({ where: { tenantId: tid } })
@@ -170,6 +180,11 @@ describe('feedback system flow (integration)', () => {
     // 5. 批准 → IN_DEV + OpLog + 消息中心通知
     const approved = await inject('admin', 'POST', `/api/feedback/${id}/decision`, { action: 'approve' })
     expect(approved.statusCode).toBe(200)
+    expect(approved.json()).toMatchObject({
+      ok: true,
+      autoRunId: null,
+      automationStatus: 'disabled',
+    })
     fb = await prisma.feedback.findUnique({ where: { id } })
     expect(fb!.status).toBe('IN_DEV')
     expect(fb!.decisionById).toBe(adminId)
@@ -190,6 +205,49 @@ describe('feedback system flow (integration)', () => {
     // 已决策后不能重复审批
     const again = await inject('admin', 'POST', `/api/feedback/${id}/decision`, { action: 'approve' })
     expect(again.statusCode).toBe(400)
+  })
+
+  it('管理员批准是唯一授权点，启用 suggest 时才创建带审批人的自动开发任务', async () => {
+    const feedback = await prisma.feedback.create({
+      data: {
+        tenantId: tenantA,
+        reporterId,
+        category: 'IMPROVEMENT',
+        status: 'AWAITING_APPROVAL',
+        title: '自动开发入队验证',
+        summary: '批准后才允许系统读取源码并生成补丁',
+        context: { path: '/route-that-does-not-exist' },
+      },
+    })
+
+    process.env.AUTO_FIX_MODE = 'suggest'
+    process.env.AUTO_FIX_REPO_DIR = '/definitely-missing-autofix-repo'
+    try {
+      const response = await inject('admin', 'POST', `/api/feedback/${feedback.id}/decision`, {
+        action: 'approve',
+      })
+      expect(response.statusCode).toBe(200)
+      const body = response.json()
+      expect(body.automationStatus).toBe('queued')
+      expect(body.autoRunId).toBeTruthy()
+
+      const run = await prisma.autoFixRun.findUnique({ where: { id: body.autoRunId } })
+      expect(run?.feedbackId).toBe(feedback.id)
+      expect(run?.decidedById).toBe(adminId)
+      expect(run?.decidedAt).toBeTruthy()
+
+      for (let attempt = 0; attempt < 30; attempt++) {
+        const current = await prisma.autoFixRun.findUnique({ where: { id: body.autoRunId } })
+        if (current?.status === 'ESCALATED') break
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      expect((await prisma.autoFixRun.findUnique({ where: { id: body.autoRunId } }))?.status)
+        .toBe('ESCALATED')
+    } finally {
+      process.env.AUTO_FIX_MODE = 'off'
+      if (oldRepoDir === undefined) delete process.env.AUTO_FIX_REPO_DIR
+      else process.env.AUTO_FIX_REPO_DIR = oldRepoDir
+    }
   })
 
   it('QUESTION 分诊 → CLOSED 闭环', async () => {

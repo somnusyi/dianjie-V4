@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 import { prisma } from '@dianjie/db'
 import { sendNotification } from '../notification'
 import { fireAndForget as notify } from '../notify'
-import { inspectUnifiedDiff, isAutoFixModeEnabled } from './policy'
+import { inspectUnifiedDiff, isAutoDeploymentEnabled } from './policy'
 
 const execFileAsync = promisify(execFile)
 const MAX_LOG_CHARS = 40_000
@@ -16,7 +16,7 @@ interface RunCommandResult {
 }
 
 function deploymentEnabled(): boolean {
-  return isAutoFixModeEnabled() && process.env.AUTO_FIX_DEPLOY_ENABLED === 'true'
+  return isAutoDeploymentEnabled()
 }
 
 function sourceDir(): string {
@@ -133,7 +133,7 @@ async function resolveFeedback(runId: string, commitSha: string, health: string,
         tenantId: run.tenantId,
         feedbackId: run.feedbackId,
         role: 'assistant',
-        content: 'AI 修复方案已由管理员批准并完成生产验证，问题已标记为解决。如仍有异常请继续留言。',
+        content: '该反馈已由管理员批准，系统完成自动修复和生产验证，问题已标记为解决。如仍有异常请继续留言。',
       },
     })
     await tx.opLog.create({
@@ -160,7 +160,7 @@ async function resolveFeedback(runId: string, commitSha: string, health: string,
     recipientId: result.feedback.reporterId,
     type: 'FEEDBACK_RESULT',
     title: `反馈已自动修复: ${result.feedback.title || ''}`,
-    body: '管理员已批准 AI 修复方案，生产验证通过。',
+    body: '管理员批准后系统已自动完成开发、测试和生产验证。',
     refType: 'Feedback',
     refId: result.feedbackId,
     dedupeKey: `AUTOFIX_RESULT:${result.id}:resolved`,

@@ -10,7 +10,7 @@
  * - POST   /api/feedback/:id/resolve  标记已解决 (仅 SUPER_ADMIN, 闭环 + 通知提报人)
  *
  * 分诊: AI 回复末尾的 triage 标记块由 feedbackTriage 解析 strip;
- *   BUG_BLOCKING → 紧急企微通知 (P0 人工处理) | IMPROVEMENT/NEW_FEATURE → AWAITING_APPROVAL+审批卡片
+ *   BUG_BLOCKING → AWAITING_APPROVAL+紧急企微 | IMPROVEMENT/NEW_FEATURE → AWAITING_APPROVAL+审批卡片
  *   QUESTION → CLOSED 闭环
  */
 import { FastifyPluginAsync } from 'fastify'
@@ -104,13 +104,6 @@ async function applyTriage(actor: Actor, feedback: { id: string; reporterId: str
         reporterName, storeName: ctx.storeName,
       },
     })
-    // P1a is fail-closed: AUTO_FIX_MODE defaults to off. In suggest mode the
-    // durable run is created immediately, while AI analysis stays off the
-    // feedback request's critical path.
-    void enqueueAutoFix({
-      tenantId: actor.tenantId,
-      feedbackId: feedback.id,
-    }).catch((error) => console.error('[autofix] 入队失败:', error))
   } else if (action.notifyEvent === 'FEEDBACK_APPROVAL_PENDING') {
     notify({
       tenantId: actor.tenantId,
@@ -345,13 +338,61 @@ export const feedbackRoutes: FastifyPluginAsync = async (app) => {
         data: {
           tenantId: actor.tenantId, feedbackId: feedback.id, role: 'system',
           content: action === 'approve'
-            ? '管理员已批准该方案，即将安排开发，进展会在消息中心通知你。'
+            ? '管理员已批准该方案，正在创建开发任务，进展会在消息中心通知你。'
             : `管理员驳回了该反馈${note ? `：${note}` : '。'}如有疑问可重新提交补充说明。`,
         },
       })
       return { status: 200, ok: true, feedback }
     })
     if ('error' in result) return reply.status(result.status).send({ error: result.error })
+
+    let autoRunId: string | null = null
+    let automationStatus = action === 'approve' ? 'disabled' : 'not_requested'
+    if (action === 'approve') {
+      try {
+        autoRunId = await enqueueAutoFix({
+          tenantId: actor.tenantId,
+          feedbackId: result.feedback.id,
+          approvedById: actor.userId,
+        })
+        automationStatus = autoRunId ? 'queued' : 'disabled'
+        await prisma.feedbackMessage.create({
+          data: {
+            tenantId: actor.tenantId,
+            feedbackId: result.feedback.id,
+            role: 'system',
+            content: autoRunId
+              ? `自动开发任务已排队（${autoRunId}）。系统将依次完成定位、补丁、测试和安全发布；超出安全范围会转人工。`
+              : '当前自动开发开关未启用，反馈已保留在开发中并转为人工跟进。',
+          },
+        })
+      } catch (error: any) {
+        automationStatus = 'queue_failed'
+        const message = error?.message || String(error)
+        console.error('[autofix] 批准后入队失败:', error)
+        await prisma.$transaction([
+          prisma.feedbackMessage.create({
+            data: {
+              tenantId: actor.tenantId,
+              feedbackId: result.feedback.id,
+              role: 'system',
+              content: '自动开发任务创建失败，已保留审批结果并转人工处理，管理员会收到异常记录。',
+            },
+          }),
+          prisma.opLog.create({
+            data: {
+              tenantId: actor.tenantId,
+              userId: actor.userId,
+              role: actor.role,
+              action: `反馈批准后自动开发入队失败: ${message}`.slice(0, 500),
+              entityType: 'Feedback',
+              targetId: result.feedback.id,
+              metadata: { automationStatus: 'queue_failed' } as any,
+            },
+          }),
+        ])
+      }
+    }
 
     // App 内消息中心通知提报人 (企微决策通知 P1 再接)
     try {
@@ -364,7 +405,7 @@ export const feedbackRoutes: FastifyPluginAsync = async (app) => {
         type: 'FEEDBACK_RESULT',
         title: action === 'approve' ? `反馈已批准: ${feedback.title || ''}` : `反馈已驳回: ${feedback.title || ''}`,
         body: action === 'approve'
-          ? '方案已批准，即将安排开发。'
+          ? (autoRunId ? '方案已批准，系统已开始自动开发和测试。' : '方案已批准，当前转人工开发跟进。')
           : `驳回理由: ${note || '无'}`,
         refType: 'Feedback',
         refId: feedback.id,
@@ -373,7 +414,7 @@ export const feedbackRoutes: FastifyPluginAsync = async (app) => {
     } catch (e) {
       console.error('[feedback] 决策通知写入失败:', e)
     }
-    return { ok: true }
+    return { ok: true, autoRunId, automationStatus }
   })
 
   // ── 标记已解决 (仅 SUPER_ADMIN, 闭环 + 通知提报人) ─────

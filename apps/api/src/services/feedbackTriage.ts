@@ -87,7 +87,7 @@ export interface TriageAction {
 
 /**
  * 分诊 → 状态流转 + 通知决策 (纯函数, 路由负责落库/发通知)
- * - BUG_BLOCKING: P0 只发紧急企微通知人工处理, 不进审批流, 状态保持 CLARIFYING (人工跟进)
+ * - BUG_BLOCKING: → AWAITING_APPROVAL, 走紧急企微审批通道
  * - IMPROVEMENT / NEW_FEATURE: → AWAITING_APPROVAL, 推审批卡片
  * - QUESTION: AI 已直接回答 → CLOSED 闭环
  */
@@ -95,9 +95,9 @@ export function decideTriageAction(triage: TriageResult): TriageAction {
   switch (triage.category) {
     case 'BUG_BLOCKING':
       return {
-        status: 'CLARIFYING',
+        status: 'AWAITING_APPROVAL',
         notifyEvent: 'FEEDBACK_URGENT_BUG',
-        systemNote: '该问题已标记为紧急故障并通知管理员，会尽快人工处理，请留意消息中心进展。',
+        systemNote: '该问题已标记为紧急故障并提交管理员审批；批准后系统会自动开发、测试并按安全门禁发布。',
       }
     case 'IMPROVEMENT':
       return {

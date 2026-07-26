@@ -13,11 +13,14 @@
  *   单位 → 缺省"件"
  */
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
+import { ProductToolTabs } from '@/components/v2/product-tool-tabs'
 import { apiFetch, getUser } from '@/lib/v2-auth'
+
+type SupplierOption = { id: string; no: string; name: string }
 
 type Row = {
   __row: number          // 原表 Excel 行号
@@ -46,10 +49,10 @@ const HEADER_MAP: Record<string, keyof Row> = {
 }
 
 /** 下载模板 — 兼容 webview 的 Blob+a 下载, 自动预填供应商名 */
-async function downloadTemplate() {
+async function downloadTemplate(supplierNameOverride?: string) {
   const XLSX = await import('xlsx')
   const u = getUser()
-  const supplierName = u?.supplier?.name || ''
+  const supplierName = supplierNameOverride || u?.supplier?.name || ''
   const today = new Date().toISOString().slice(0, 10)
   const aoa: any[][] = [
     [`供应商：${supplierName}`, '', '', '', '', '', ''],
@@ -158,11 +161,26 @@ function validate(rows: Row[]): Row[] {
 
 export default function BatchUploadPage() {
   const router = useRouter()
+  const internalSupplyChain = getUser()?.role === 'SUPPLY_CHAIN'
+  const [suppliers, setSuppliers] = useState<SupplierOption[]>([])
+  const [selectedSupplierId, setSelectedSupplierId] = useState('')
   const [rows, setRows] = useState<Row[] | null>(null)
   const [filename, setFilename] = useState<string>('')
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState<any | null>(null)
   const [confirmState, openConfirm] = useConfirmSheet()
+  const selectedSupplier = suppliers.find(supplier => supplier.id === selectedSupplierId)
+
+  useEffect(() => {
+    if (!internalSupplyChain) return
+    apiFetch<SupplierOption[]>('/api/suppliers?status=ENABLED')
+      .then(rows => {
+        const list = Array.isArray(rows) ? rows : []
+        setSuppliers(list)
+        if (list[0]) setSelectedSupplierId(list[0].id)
+      })
+      .catch(error => alert(error?.message || '供应商加载失败'))
+  }, [internalSupplyChain])
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]
@@ -185,6 +203,10 @@ export default function BatchUploadPage() {
 
   function submit() {
     if (!rows || valid === 0 || submitting) return
+    if (internalSupplyChain && !selectedSupplierId) {
+      alert('请先选择供应商')
+      return
+    }
     openConfirm({
       title: `上传 ${valid} 个商品?`,
       body: invalid > 0
@@ -227,6 +249,7 @@ export default function BatchUploadPage() {
               stepQty: moq,
               price: numOr(r.price, 0),
               shelfDays: numOr(r.shelfDays, 7),
+              ...(internalSupplyChain ? { supplierId: selectedSupplierId } : {}),
             }
           })
           const res = await apiFetch<any>('/api/products/batch', {
@@ -263,12 +286,32 @@ export default function BatchUploadPage() {
 
   return (
     <div className="min-h-screen bg-bg pb-32">
-      <header className="px-4 pt-4 pb-2 flex items-center gap-2">
-        <button onClick={() => router.back()} className="text-gray2 text-h2">‹</button>
-        <h1 className="text-h1">批量上传商品</h1>
+      <header className="px-4 pt-4 pb-2 lg:px-8 lg:pt-6">
+        <div className="flex items-center gap-2">
+          <button onClick={() => router.back()} className="text-gray2 text-h2">‹</button>
+          <div>
+            <h1 className="text-h1">批量上传商品</h1>
+            <p className="text-caption text-gray3">{internalSupplyChain ? '按供应商批量建立商品档案，成功后直接生效并保留操作记录' : '上传报价表并提交商品档案'}</p>
+          </div>
+        </div>
       </header>
 
-      <div className="mx-4 mt-2 bg-bg-card rounded-card border border-border p-3">
+      {internalSupplyChain && <ProductToolTabs />}
+
+      <div className="mx-4 mt-2 bg-bg-card rounded-card border border-border p-3 lg:mx-8">
+        {internalSupplyChain && (
+          <label className="mb-4 block">
+            <span className="mb-1 block text-micro text-gray3">归属供应商</span>
+            <select
+              value={selectedSupplierId}
+              onChange={event => setSelectedSupplierId(event.target.value)}
+              className="h-11 w-full max-w-xl rounded-cta border border-border bg-white px-3 text-body"
+            >
+              <option value="">请选择供应商</option>
+              {suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}
+            </select>
+          </label>
+        )}
         <ol className="text-caption text-gray2 space-y-1.5 pl-4 list-decimal">
           <li>下载 Excel 模板 → 填好你的报价表</li>
           <li>上传文件 → 自动解析 (跳过表头说明, 仅留有效行)</li>
@@ -276,12 +319,13 @@ export default function BatchUploadPage() {
         </ol>
         <p className="text-micro text-gray3 mt-2">必填字段：<strong>品项名称</strong> + <strong>金额</strong>。其他列留空也可，编码后端自动生成。</p>
         <button
-          onClick={downloadTemplate}
+          onClick={() => downloadTemplate(selectedSupplier?.name)}
+          disabled={internalSupplyChain && !selectedSupplierId}
           className="mt-3 px-3 py-2 bg-accent-bg border border-accent/30 rounded-cta text-button text-accent-fg w-full"
         >⤓ 下载 Excel 模板</button>
       </div>
 
-      <div className="mx-4 mt-3">
+      <div className="mx-4 mt-3 lg:mx-8">
         <label className="block bg-bg-card rounded-card border-2 border-dashed border-border p-6 text-center cursor-pointer active:bg-accent-bg/50 transition">
           <input type="file" accept=".xlsx,.xls,.csv" onChange={onFile} className="hidden" />
           <div className="text-h2">📄 选择文件</div>
@@ -290,7 +334,7 @@ export default function BatchUploadPage() {
       </div>
 
       {rows && (
-        <div className="mx-4 mt-3 bg-bg-card rounded-card border border-border p-3">
+        <div className="mx-4 mt-3 bg-bg-card rounded-card border border-border p-3 lg:mx-8">
           <div className="flex items-center gap-2 mb-2 flex-wrap">
             <span className="text-h2">解析结果</span>
             <Chip tone="green">{valid} 行可上传</Chip>
@@ -322,13 +366,13 @@ export default function BatchUploadPage() {
       )}
 
       {result && (
-        <div className="mx-4 mt-3 bg-green-bg border border-green/30 rounded-card p-3">
+        <div className="mx-4 mt-3 bg-green-bg border border-green/30 rounded-card p-3 lg:mx-8">
           <div className="text-h2 text-green-fg">上传完成</div>
           <p className="text-caption text-gray2 mt-1">
             ✓ {result.createdCount} 行成功 · ✗ {result.failedCount} 行失败
           </p>
-          <a href="/v2/supplier/products" className="text-caption text-accent inline-block mt-2">
-            ‹ 回到商品报价表
+          <a href={internalSupplyChain ? '/v2/supply-chain/products' : '/v2/supplier/products'} className="text-caption text-accent inline-block mt-2">
+            ‹ 回到商品档案
           </a>
         </div>
       )}

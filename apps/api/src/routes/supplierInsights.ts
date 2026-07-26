@@ -8,6 +8,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { isSupplierRole } from '../lib/auth-scope'
+import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
 import { requireSupplierCapability } from '../lib/supplier-access'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 import { auditSupplierSupplyChain } from '../services/supplyChainAudit'
@@ -19,9 +20,9 @@ const RECEIVED_STATUSES = ['CONFIRMED', 'ACCOUNTED'] as const
 function insightSupplierId(req: any) {
   const { role, supplierId } = req.user
   if (isSupplierRole(role)) return requireSupplierCapability(role, supplierId, 'analytics.read')
-  if (['ADMIN', 'SUPER_ADMIN'].includes(role)) {
+  if (['ADMIN', 'SUPER_ADMIN'].includes(role) || hasInternalSupplyChainCapability(role, 'analytics.read')) {
     const requested = String((req.query as any)?.supplierId || '').trim()
-    if (!requested) throw Object.assign(new Error('管理员查看供应商洞察时必须指定 supplierId'), { statusCode: 400 })
+    if (!requested) throw Object.assign(new Error('查看供应商洞察时必须指定 supplierId'), { statusCode: 400 })
     return requested
   }
   throw Object.assign(new Error('无权查看供应商洞察'), { statusCode: 403 })

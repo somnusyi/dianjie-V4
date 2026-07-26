@@ -8,6 +8,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
+import { OrderCenterTabs } from '@/components/v2/order-center-tabs'
 import { EmptyState, FriendlyError, SkeletonCard } from '@/components/v2/skeleton'
 import { apiFetch } from '@/lib/v2-auth'
 import {
@@ -129,12 +130,10 @@ export default function InternalSupplyChainOrdersPage() {
             {orders ? `${total} 条订货记录` : '加载中…'}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <a href="/v2/supply-chain/home" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button text-gray2">← 返回工作台</a>
-        </div>
       </header>
 
       <main className="mx-auto max-w-[1440px]">
+        <OrderCenterTabs />
         <div className="flex flex-wrap items-end gap-3 py-4">
           <FilterInput
             label="关键字"
@@ -226,6 +225,7 @@ export default function InternalSupplyChainOrdersPage() {
                     <th className="px-4 py-3">期望到货日</th>
                     <th className="px-4 py-3">状态</th>
                     <th className="px-4 py-3">商品摘要</th>
+                    <th className="px-4 py-3 text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -238,6 +238,9 @@ export default function InternalSupplyChainOrdersPage() {
                       <td className="px-4 py-3 font-num text-gray2">{orderDeliveryDateText(order.expectedDeliveryDate)}</td>
                       <td className="px-4 py-3"><Chip tone={orderStatusTone(order.status)}>{formatOrderStatusLabel(order.status)}</Chip></td>
                       <td className="px-4 py-3 text-gray2">{orderItemSummary(order)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <a href={`/v2/supply-chain/fulfillment/${order.id}`} className="text-button text-amber-fg">查看履约 ›</a>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

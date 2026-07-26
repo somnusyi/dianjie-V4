@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
 import { BottomNav, Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
-import { apiDownload, apiFetch } from '@/lib/v2-auth'
+import { apiDownload, apiFetch, getUser } from '@/lib/v2-auth'
 import {
   supplierLossClaimKindMeta,
   supplierLossClaimResponsibility,
@@ -44,6 +44,7 @@ function tone(status: string): 'red' | 'orange' | 'green' | 'blue' | 'gray' {
 }
 
 export default function SupplierDifferencesPage() {
+  const internalSupplyChain = getUser()?.role === 'SUPPLY_CHAIN'
   const [month, setMonth] = useState(dayjs().format('YYYY-MM'))
   const [status, setStatus] = useState('')
   const [kind, setKind] = useState('')
@@ -147,14 +148,21 @@ export default function SupplierDifferencesPage() {
   }
 
   return (
-    <div className="min-h-screen bg-bg pb-20">
+    <div className={`min-h-screen bg-bg ${internalSupplyChain ? 'px-4 py-5 lg:px-8 lg:py-7' : 'pb-20'}`}>
       <header className="px-4 pt-4 lg:px-0 lg:pt-0">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="text-h1">到货差异</h1>
-            <p className="text-caption text-gray3">数量短缺、破损与品质争议的独立处理工作台</p>
+            <p className="text-caption text-gray3">
+              {internalSupplyChain
+                ? '跨门店查看数量短缺、破损和品质异常；裁决仍由总厨执行'
+                : '数量短缺、破损与品质争议的独立处理工作台'}
+            </p>
           </div>
-          <button type="button" onClick={exportCsv} disabled={exporting} className="rounded-cta border border-border bg-white px-3 py-2 text-button text-gray2 disabled:opacity-40">{exporting ? '导出中…' : '导出全部结果'}</button>
+          <div className="flex gap-2">
+            {internalSupplyChain && <a href="/v2/supply-chain/receipts" className="rounded-cta border border-border bg-white px-3 py-2 text-button text-gray2">查看收货记录</a>}
+            <button type="button" onClick={exportCsv} disabled={exporting} className="rounded-cta border border-border bg-white px-3 py-2 text-button text-gray2 disabled:opacity-40">{exporting ? '导出中…' : '导出全部结果'}</button>
+          </div>
         </div>
       </header>
 
@@ -201,8 +209,8 @@ export default function SupplierDifferencesPage() {
                 </div>
                 <div className="flex gap-2">
                   <a href={`/v2/loss-claims/${claim.id}/print`} className="rounded-cta border border-border px-3 py-2 text-caption text-gray2">打印</a>
-                  {claim.purchaseOrder && <a href={`/v2/supplier/orders/${claim.purchaseOrder.id}`} className="rounded-cta border border-border px-3 py-2 text-caption text-gray2">订单</a>}
-                  {claim.status === 'PENDING' && <>
+                  {claim.purchaseOrder && <a href={internalSupplyChain ? `/v2/supply-chain/fulfillment/${claim.purchaseOrder.id}` : `/v2/supplier/orders/${claim.purchaseOrder.id}`} className="rounded-cta border border-border px-3 py-2 text-caption text-gray2">订单</a>}
+                  {!internalSupplyChain && claim.status === 'PENDING' && <>
                     <button type="button" disabled={submitting === claim.id} onClick={() => handle(claim, 'reject')} className="rounded-cta border border-red px-3 py-2 text-caption text-red-fg disabled:opacity-40">异议</button>
                     <button type="button" disabled={submitting === claim.id} onClick={() => handle(claim, 'approve')} className="rounded-cta bg-ink px-3 py-2 text-button text-white disabled:opacity-40">确认</button>
                   </>}
@@ -213,23 +221,25 @@ export default function SupplierDifferencesPage() {
         })}
       </ul>
 
-      <BottomNav
-        tabs={[
-          { key: 'home', label: '首页', icon: '⌂' },
-          { key: 'orders', label: '订单', icon: '☷' },
-          { key: 'inventory', label: '库存', icon: '▦' },
-          { key: 'billing', label: '账单', icon: '⛁' },
-          { key: 'me', label: '我的', icon: '◐' },
-        ]}
-        activeKey="orders"
-        onChange={key => {
-          if (key === 'home') location.href = '/v2/supplier/home'
-          if (key === 'orders') location.href = '/v2/supplier/orders'
-          if (key === 'inventory') location.href = '/v2/supplier/inventory'
-          if (key === 'billing') location.href = '/v2/supplier/billing'
-          if (key === 'me') location.href = '/v2/supplier/history'
-        }}
-      />
+      {!internalSupplyChain && (
+        <BottomNav
+          tabs={[
+            { key: 'home', label: '首页', icon: '⌂' },
+            { key: 'orders', label: '订单', icon: '☷' },
+            { key: 'inventory', label: '库存', icon: '▦' },
+            { key: 'billing', label: '账单', icon: '⛁' },
+            { key: 'me', label: '我的', icon: '◐' },
+          ]}
+          activeKey="orders"
+          onChange={key => {
+            if (key === 'home') location.href = '/v2/supplier/home'
+            if (key === 'orders') location.href = '/v2/supplier/orders'
+            if (key === 'inventory') location.href = '/v2/supplier/inventory'
+            if (key === 'billing') location.href = '/v2/supplier/billing'
+            if (key === 'me') location.href = '/v2/supplier/history'
+          }}
+        />
+      )}
 
       <ConfirmSheet {...confirmState} />
     </div>

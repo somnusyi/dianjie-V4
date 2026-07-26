@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { BottomNav, Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
+import { ProductToolTabs } from '@/components/v2/product-tool-tabs'
 import { clientRequestId } from '@/lib/client-id'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 
@@ -251,6 +252,8 @@ export default function SupplierCategoriesPage() {
         )}
         <a href={internalSupplyChain ? '/v2/supply-chain/inventory' : '/v2/supplier/inventory'} className="rounded-cta border border-border bg-white px-3 py-2 text-button text-gray2">查看库存</a>
       </header>
+
+      {internalSupplyChain && <ProductToolTabs />}
 
       {error && <div className="mx-4 mt-3 rounded-cta bg-red-bg p-3 text-caption text-red-fg lg:mx-6">{error}</div>}
 

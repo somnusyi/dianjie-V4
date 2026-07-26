@@ -39,6 +39,7 @@ function buildApp(user: Record<string, any>) {
 
 const supplierUser = { tenantId: TENANT, supplierId: SUPPLIER, userId: 'u-sup', role: 'SUPPLIER_OWNER' }
 const adminUser = { tenantId: TENANT, userId: 'u-admin', role: 'ADMIN' }
+const supplyChainUser = { tenantId: TENANT, userId: 'u-supply', role: 'SUPPLY_CHAIN' }
 
 function verifiedProduct(overrides: Record<string, any> = {}) {
   return {
@@ -98,6 +99,24 @@ describe('supplierInsights routes (unit)', () => {
 
       const args = mocks.receiptItemFindMany.mock.calls[0][0]
       expect(args.where.receipt.supplierId).toBe('sup-target')
+    })
+
+    it('SUPPLY_CHAIN requires an explicit supplier scope', async () => {
+      const app = buildApp(supplyChainUser)
+      await app.ready()
+      const missing = await app.inject({ method: 'GET', url: '/api/insights/sku-rank' })
+      const scoped = await app.inject({
+        method: 'GET',
+        url: '/api/insights/sku-rank?supplierId=sup-target',
+      })
+      await app.close()
+
+      expect(missing.statusCode).toBe(400)
+      expect(scoped.statusCode).toBe(200)
+      expect(mocks.receiptItemFindMany.mock.calls[0][0].where.receipt).toMatchObject({
+        tenantId: TENANT,
+        supplierId: 'sup-target',
+      })
     })
 
     it('unknown role → 403', async () => {

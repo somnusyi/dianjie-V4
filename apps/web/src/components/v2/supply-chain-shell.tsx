@@ -14,27 +14,40 @@ type NavItem = {
 
 const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
   {
-    title: '履约作业',
+    title: '日常作业',
     items: [
-      { href: '/v2/supply-chain/home', label: '供应链总览', description: '待办、跨店与异常', icon: '⌂' },
+      { href: '/v2/supply-chain/home', label: '工作台', description: '今日待办、异常与健康', icon: '⌂' },
       {
         href: '/v2/supply-chain/fulfillment',
-        label: '订单履约',
-        description: '接单、改单、实发、送达',
+        label: '订单中心',
+        description: '待处理、订货与配送',
         icon: '☷',
-        match: ['/v2/supply-chain/fulfillment'],
+        match: [
+          '/v2/supply-chain/fulfillment',
+          '/v2/supply-chain/orders',
+          '/v2/supply-chain/deliveries',
+        ],
       },
-      { href: '/v2/supply-chain/orders', label: '订货单查询', description: '跨店分页与筛选', icon: '订' },
-      { href: '/v2/supply-chain/deliveries', label: '配送单查询', description: '独立配送记录', icon: '配' },
-      { href: '/v2/supply-chain/receipts', label: '收货与差异', description: '实收、短量与报损', icon: '收' },
+      {
+        href: '/v2/supply-chain/differences',
+        label: '到货差异',
+        description: '短量、破损与报损',
+        icon: '!',
+        match: ['/v2/supply-chain/differences', '/v2/supply-chain/receipts'],
+      },
     ],
   },
   {
-    title: '商品与仓库',
+    title: '货品与仓库',
     items: [
-      { href: '/v2/supply-chain/products', label: '商品管理', description: '价格、单位与状态', icon: '品' },
-      { href: '/v2/supply-chain/categories', label: '分类管理', description: '分类、排序与合并', icon: '类' },
-      { href: '/v2/supply-chain/inventory', label: '仓库库存', description: '默认仓、入库与流水', icon: '仓' },
+      {
+        href: '/v2/supply-chain/products',
+        label: '商品管理',
+        description: '商品、分类、导入与记录',
+        icon: '品',
+        match: ['/v2/supply-chain/products', '/v2/supply-chain/categories'],
+      },
+      { href: '/v2/supply-chain/inventory', label: '仓库库存', description: '库存、入库、批次与流水', icon: '仓' },
       { href: '/v2/supply-chain/suppliers', label: '供应商管理', description: '档案、账期与状态', icon: '供' },
     ],
   },
@@ -42,8 +55,7 @@ const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
     title: '核算与分析',
     items: [
       { href: '/v2/supply-chain/billing', label: '账务查询', description: '账期、对账与发票', icon: '¥' },
-      { href: '/v2/supply-chain/analytics', label: '经营分析', description: '采购趋势与门店分布', icon: '↗' },
-      { href: '/v2/me', label: '我的账户', description: '账号与密码', icon: '我' },
+      { href: '/v2/supply-chain/analytics', label: '经营分析', description: '门店、SKU、趋势与健康', icon: '↗' },
     ],
   },
 ]
@@ -103,6 +115,7 @@ export function SupplyChainShell({ children }: { children: ReactNode }) {
           <div className="rounded-xl bg-bg px-3 py-2">
             <div className="text-button">当前：默认仓</div>
             <p className="mt-0.5 text-micro text-gray3">保留多仓接口 · 当前单仓执行</p>
+            <Link href="/v2/me" className="mt-2 block text-micro text-amber-fg">账户与密码设置 ›</Link>
           </div>
         </div>
       </aside>

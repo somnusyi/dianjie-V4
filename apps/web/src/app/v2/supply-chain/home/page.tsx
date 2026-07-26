@@ -6,6 +6,7 @@ import { ErrorScreen, LoadingScreen, useDashboard } from '@/components/v2/use-da
 import { apiFetch } from '@/lib/v2-auth'
 
 type Store = { id: string; no: string; name: string }
+type Supplier = { id: string; no: string; name: string }
 type DocumentRow = {
   id: string
   no: string
@@ -35,6 +36,11 @@ type ConsumptionRow = {
   unitSnapshot?: string | null
   product?: { code?: string; name: string; unit?: string }
 }
+type Audit = {
+  checkedAt: string
+  summary: { errors: number; warnings: number }
+  issues: Array<{ code: string; severity: 'ERROR' | 'WARNING'; label: string; detail: string }>
+}
 
 function queryForStore(storeId: string) {
   return storeId ? `&storeId=${encodeURIComponent(storeId)}` : ''
@@ -53,8 +59,9 @@ export default function InternalSupplyChainHomePage() {
   const { data, error } = useDashboard()
   const [storeId, setStoreId] = useState('')
   const [orders, setOrders] = useState<DocumentRow[]>([])
-  const [deliveries, setDeliveries] = useState<DocumentRow[]>([])
-  const [receipts, setReceipts] = useState<DocumentRow[]>([])
+  const [suppliers, setSuppliers] = useState<Supplier[]>([])
+  const [supplierId, setSupplierId] = useState('')
+  const [audit, setAudit] = useState<Audit | null>(null)
   const [inventory, setInventory] = useState<InventoryRow[]>([])
   const [consumptions, setConsumptions] = useState<ConsumptionRow[]>([])
   const [loadingRows, setLoadingRows] = useState(true)
@@ -69,14 +76,14 @@ export default function InternalSupplyChainHomePage() {
     setRowError('')
     const storeQuery = queryForStore(storeId)
     Promise.all([
-      apiFetch<{ items: DocumentRow[] }>(`/api/orders?pageSize=8${storeQuery}`),
-      apiFetch<{ items: DocumentRow[] }>(`/api/deliveries?pageSize=8${storeQuery}`),
-      apiFetch<{ items: DocumentRow[] }>(`/api/receipts?pageSize=8${storeQuery}`),
-    ]).then(([orderData, deliveryData, receiptData]) => {
+      apiFetch<{ items: DocumentRow[] }>(`/api/orders?pageSize=100${storeQuery}`),
+      apiFetch<Supplier[]>('/api/suppliers?status=ENABLED'),
+    ]).then(([orderData, supplierRows]) => {
       if (!alive) return
-      setOrders(orderData.items || [])
-      setDeliveries(deliveryData.items || [])
-      setReceipts(receiptData.items || [])
+      setOrders((orderData.items || []).filter(row => ['SUBMITTED', 'CONFIRMED', 'DELIVERING'].includes(row.status)))
+      const list = Array.isArray(supplierRows) ? supplierRows : []
+      setSuppliers(list)
+      setSupplierId(current => current || list[0]?.id || '')
     }).catch(reason => {
       if (alive) setRowError(String(reason?.message || reason))
     }).finally(() => {
@@ -84,6 +91,15 @@ export default function InternalSupplyChainHomePage() {
     })
     return () => { alive = false }
   }, [storeId])
+
+  useEffect(() => {
+    if (!supplierId) return
+    let alive = true
+    apiFetch<Audit>(`/api/supplier/insights/audit?days=90&supplierId=${encodeURIComponent(supplierId)}`)
+      .then(result => { if (alive) setAudit(result) })
+      .catch(reason => { if (alive) setRowError(String(reason?.message || reason)) })
+    return () => { alive = false }
+  }, [supplierId])
 
   useEffect(() => {
     let alive = true
@@ -132,7 +148,7 @@ export default function InternalSupplyChainHomePage() {
               {stores.map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}
             </select>
           </label>
-          <a href="/v2/supply-chain/fulfillment" className="rounded-cta bg-accent px-4 py-2.5 text-button text-white">去履约</a>
+          <a href="/v2/supply-chain/fulfillment" className="rounded-cta bg-accent px-4 py-2.5 text-button text-white">去订单中心</a>
           <a href="/v2/supply-chain/products" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">商品管理</a>
           <a href="/v2/supply-chain/inventory" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">仓库库存</a>
           <a href="/v2/supply-chain/billing" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">账务查询</a>
@@ -149,10 +165,29 @@ export default function InternalSupplyChainHomePage() {
 
         {rowError && <div className="mb-4 rounded-card border border-red/30 bg-red-bg p-3 text-caption text-red-fg">{rowError}</div>}
 
-        <section className="grid gap-4 xl:grid-cols-3">
-          <DocumentTable title="采购订单" rows={orders} amountKey="totalAmount" loading={loadingRows} />
-          <DocumentTable title="配送单" rows={deliveries} amountKey="actualTotalAmount" loading={loadingRows} />
-          <DocumentTable title="收货单" rows={receipts} amountKey="totalAmount" loading={loadingRows} dateKey="deliveryDate" />
+        <section className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(360px,1fr)]">
+          <div className="overflow-hidden rounded-card border border-border bg-white">
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <div><h2 className="text-h2">今日待处理</h2><p className="text-micro text-gray3">待接单、待发货和配送中订单；订货单与配送单仍为独立单据</p></div>
+              <a href="/v2/supply-chain/fulfillment" className="text-caption text-accent">进入订单中心 ›</a>
+            </div>
+            <table className="w-full text-left text-caption">
+              <thead className="bg-bg text-gray3"><tr><th className="px-4 py-2">订单 / 门店</th><th className="px-4 py-2">供应商</th><th className="px-4 py-2">状态</th><th className="px-4 py-2 text-right">金额</th><th className="px-4 py-2"></th></tr></thead>
+              <tbody className="divide-y divide-border">
+                {orders.slice(0, 12).map(row => <tr key={row.id}><td className="px-4 py-3"><b className="font-num">{row.no}</b><div className="text-micro text-gray3">{row.store?.name || '—'} · {dateText(row.createdAt)}</div></td><td className="px-4 py-3">{row.supplier?.name || '—'}</td><td className="px-4 py-3"><Chip tone={row.status === 'SUBMITTED' ? 'orange' : 'gray'}>{row.status}</Chip></td><td className="px-4 py-3 text-right font-num">{money(row.totalAmount)}</td><td className="px-4 py-3 text-right"><a className="text-accent" href={`/v2/supply-chain/fulfillment/${row.id}`}>处理 ›</a></td></tr>)}
+              </tbody>
+            </table>
+            {!loadingRows && orders.length === 0 && <Empty text="当前没有待处理订单" />}
+            {loadingRows && <Empty text="加载中…" />}
+          </div>
+
+          <div className="rounded-card border border-border bg-white p-4">
+            <div className="flex items-start justify-between gap-2"><div><h2 className="text-h2">数据健康待办</h2><p className="text-micro text-gray3">按单一供应商核查，避免跨供应商混淆</p></div><a href="/v2/supply-chain/analytics" className="text-caption text-accent">完整分析 ›</a></div>
+            <select value={supplierId} onChange={event => setSupplierId(event.target.value)} className="mt-3 h-10 w-full rounded-cta border border-border bg-bg px-3 text-body">{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}</select>
+            <div className="mt-3 grid grid-cols-2 gap-2"><Metric label="错误" value={String(audit?.summary.errors ?? '—')} /><Metric label="警告" value={String(audit?.summary.warnings ?? '—')} /></div>
+            <ul className="mt-3 max-h-56 divide-y divide-border overflow-auto">{(audit?.issues || []).slice(0, 6).map((issue, index) => <li key={`${issue.code}-${index}`} className="py-2"><div className="flex gap-2"><Chip tone={issue.severity === 'ERROR' ? 'red' : 'orange'}>{issue.severity === 'ERROR' ? '错误' : '警告'}</Chip><b className="truncate text-caption">{issue.label}</b></div><p className="mt-1 text-micro text-gray2">{issue.detail}</p></li>)}</ul>
+            {audit?.issues.length === 0 && <div className="py-8 text-center text-caption text-green-fg">✓ 未发现台账异常</div>}
+          </div>
         </section>
 
         <section className="mt-4 grid gap-4 xl:grid-cols-2">

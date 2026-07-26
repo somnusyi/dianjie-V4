@@ -173,6 +173,11 @@ export default function InternalSupplyChainInventoryPage() {
             disabled={!supplierId || summary?.inventoryMode === 'NOT_TRACKED'}
             className="h-10 rounded-cta bg-accent px-4 text-button text-white disabled:opacity-40"
           >+ 手工入库</button>
+          <a
+            href={supplierId ? `/v2/supply-chain/inventory/import?supplierId=${encodeURIComponent(supplierId)}` : '#'}
+            aria-disabled={!supplierId || summary?.inventoryMode === 'NOT_TRACKED'}
+            className={`flex h-10 items-center rounded-cta border border-border bg-white px-4 text-button ${!supplierId || summary?.inventoryMode === 'NOT_TRACKED' ? 'pointer-events-none opacity-40' : ''}`}
+          >Excel 批量入库</a>
         </div>
       </header>
 
@@ -205,7 +210,7 @@ export default function InternalSupplyChainInventoryPage() {
                 <tr>
                   <th className="px-4 py-3">商品</th><th className="px-4 py-3">分类</th>
                   <th className="px-4 py-3 text-right">物理库存</th><th className="px-4 py-3 text-right">已占用</th>
-                  <th className="px-4 py-3 text-right">可用</th><th className="px-4 py-3">状态</th>
+                  <th className="px-4 py-3 text-right">可用</th><th className="px-4 py-3">状态</th><th className="px-4 py-3">详情</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -221,6 +226,7 @@ export default function InternalSupplyChainInventoryPage() {
                         {item.statusFlag === 'OUT' ? '缺货' : item.statusFlag === 'LOW' ? '偏低' : '正常'}
                       </Chip>
                     </td>
+                    <td className="px-4 py-3"><a className="text-accent" href={`/v2/supply-chain/inventory/${item.id}?supplierId=${encodeURIComponent(supplierId)}`}>批次与流水 ›</a></td>
                   </tr>
                 ))}
               </tbody>

@@ -8,6 +8,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
+import { OrderCenterTabs } from '@/components/v2/order-center-tabs'
 import { EmptyState, FriendlyError, SkeletonCard } from '@/components/v2/skeleton'
 import { apiFetch } from '@/lib/v2-auth'
 import {
@@ -129,12 +130,10 @@ export default function InternalSupplyChainDeliveriesPage() {
             {deliveries ? `${total} 条配送记录` : '加载中…'}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <a href="/v2/supply-chain/home" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button text-gray2">← 返回工作台</a>
-        </div>
       </header>
 
       <main className="mx-auto max-w-[1440px]">
+        <OrderCenterTabs />
         <div className="flex flex-wrap items-end gap-3 py-4">
           <FilterInput
             label="关键字"
@@ -227,6 +226,7 @@ export default function InternalSupplyChainDeliveriesPage() {
                     <th className="px-4 py-3">发货时间</th>
                     <th className="px-4 py-3">状态</th>
                     <th className="px-4 py-3">商品摘要</th>
+                    <th className="px-4 py-3 text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -240,6 +240,11 @@ export default function InternalSupplyChainDeliveriesPage() {
                       <td className="px-4 py-3 font-num text-gray2">{orderDeliveryDateText(delivery.shippedAt)}</td>
                       <td className="px-4 py-3"><Chip tone={deliveryStatusTone(delivery.status)}>{formatDeliveryStatusLabel(delivery.status)}</Chip></td>
                       <td className="px-4 py-3 text-gray2">{deliveryItemSummary(delivery)}</td>
+                      <td className="px-4 py-3 text-right">
+                        {delivery.purchaseOrder?.id
+                          ? <a href={`/v2/supply-chain/fulfillment/${delivery.purchaseOrder.id}`} className="text-button text-amber-fg">查看订单 ›</a>
+                          : <span className="text-gray3">—</span>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

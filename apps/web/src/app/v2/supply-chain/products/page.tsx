@@ -8,6 +8,7 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
+import { ProductToolTabs } from '@/components/v2/product-tool-tabs'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { EmptyState, FriendlyError, SkeletonCard } from '@/components/v2/skeleton'
 import { ProductImagePreview } from '@/components/v2/product-image-preview'
@@ -509,6 +510,7 @@ export default function InternalSupplyChainProductsPage() {
       </header>
 
       <main className="mx-auto max-w-[1440px]">
+        <ProductToolTabs />
         <div className="flex flex-wrap items-end gap-3 py-4">
           <FilterInput label="关键字" value={filters.q} onChange={value => updateFilters({ q: value })} placeholder="名称 / 编码 / 规格" />
           <FilterSelect label="分类" value={filters.category} onChange={value => updateFilters({ category: value })}>

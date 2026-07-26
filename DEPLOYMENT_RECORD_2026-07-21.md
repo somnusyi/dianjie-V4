@@ -140,4 +140,4 @@
 - 热修：qwen3.8-max-preview 强制思考模式、真实 prompt 首响 30~60s，qwenChat 超时 30s→90s（env QWEN_TIMEOUT_MS 可调），否则稳定撞线兜底
 - 测试：单测 172/172（新增 27）、集成 5/5、双端 tsc+build；生产真实 Qwen 冒烟通过（33.4s 首响，IMPROVEMENT 分诊+解析正确）
 - 部署：分段执行标准流程（300s 限制），DEPLOY 备份 dianjie_v4-deploy-bak-20260726-1345-20192881.dump，md5 一致、api/cmb/web 健康、.deployed-commit=201928815de8…
-- 注意：部署 rsync --delete 清理了服务器独有的 notify-chef-data-tasks.ts，已按原内容补回并提交进仓库
+- 注：notify-chef-data-tasks.ts 早于 92bdf2b 已入库，本次部署未受影响

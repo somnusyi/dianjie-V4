@@ -444,8 +444,8 @@ describe('validateProductQuantities', () => {
     expect(validateProductQuantities({ ...base, stock: '-1' })).toContain('库存')
     expect(validateProductQuantities({ ...base, minStock: '1.2345' })).toContain('安全库存')
     expect(validateProductQuantities({ ...base, minOrderQty: '0' })).toContain('起订量')
-    expect(validateProductQuantities({ ...base, stepQty: '0' })).toContain('步长')
-    expect(validateProductQuantities({ ...base, stepQty: 'abc' })).toContain('步长')
+    expect(validateProductQuantities({ ...base, stepQty: '0' })).toContain('下单增量')
+    expect(validateProductQuantities({ ...base, stepQty: 'abc' })).toContain('下单增量')
   })
 
   it('accepts 0.001 across all non-positive fields', () => {

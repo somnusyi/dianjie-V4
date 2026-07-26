@@ -574,10 +574,10 @@ export default function InternalSupplyChainProductsPage() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-caption">
+              <table className="w-full table-fixed text-left text-caption">
                 <thead className="bg-bg text-gray3">
                   <tr>
-                    <th className="w-10 px-4 py-3">
+                    <th className="w-9 px-3 py-3">
                       <input
                         type="checkbox"
                         checked={currentPageSelected}
@@ -585,28 +585,24 @@ export default function InternalSupplyChainProductsPage() {
                         aria-label="从表头选择当前页全部商品"
                       />
                     </th>
-                    <th className="px-4 py-3">图片</th>
-                    <th className="px-4 py-3">编码</th>
-                    <th className="px-4 py-3">名称</th>
-                    <th className="px-4 py-3">规格</th>
-                    <th className="px-4 py-3">分类</th>
-                    <th className="px-4 py-3 text-right">库存</th>
-                    <th className="px-4 py-3 text-right">安全库存</th>
-                    <th className="px-4 py-3 text-right">起订量</th>
-                    <th className="px-4 py-3 text-right">步长</th>
-                    <th className="px-4 py-3 text-right">单价（元 / 成本单位）</th>
-                    <th className="px-4 py-3">供应商</th>
-                    <th className="px-4 py-3">状态</th>
-                    <th className="px-4 py-3 text-right">操作</th>
+                    <th className="w-[260px] px-3 py-3">商品 / 供应商</th>
+                    <th className="w-[76px] px-3 py-3">分类</th>
+                    <th className="w-[110px] px-3 py-3 text-right">库存 / 安全线</th>
+                    <th className="w-[96px] px-3 py-3 text-right">最小下单量</th>
+                    <th className="w-[120px] px-3 py-3 text-right">采购价</th>
+                    <th className="w-[94px] px-3 py-3">状态</th>
+                    <th className="w-[132px] px-3 py-3 text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {products.map(product => {
                     const imageUrl = resolveProductImageUrl(product.imageUrl)
                     const selected = selectedIds.has(product.id)
+                    const unitValues = buildFourUnitValues(fourUnitFormFromProduct(product))
+                    const orderUnitHint = formatOrderUnitPriceHint(Number(product.price), product)
                     return (
                       <tr key={product.id} className={`hover:bg-bg/50 ${selected ? 'bg-accent/5' : ''}`}>
-                        <td className="px-4 py-3">
+                        <td className="px-3 py-3">
                           <input
                             type="checkbox"
                             checked={selected}
@@ -614,28 +610,38 @@ export default function InternalSupplyChainProductsPage() {
                             aria-label={`选择 ${product.name}`}
                           />
                         </td>
-                        <td className="px-4 py-3">
-                          {imageUrl ? (
-                            <button onClick={() => setPreview({ url: imageUrl, name: product.name })} className="block">
-                              <img src={imageUrl} alt={productImageAlt(product.name, product.code)} className="h-10 w-10 rounded object-cover" />
-                            </button>
-                          ) : (
-                            <span className="flex h-10 w-10 items-center justify-center rounded bg-bg text-micro text-gray3">—</span>
-                          )}
+                        <td className="px-3 py-3">
+                          <div className="flex min-w-0 items-center gap-3">
+                            {imageUrl ? (
+                              <button onClick={() => setPreview({ url: imageUrl, name: product.name })} className="shrink-0">
+                                <img src={imageUrl} alt={productImageAlt(product.name, product.code)} className="h-10 w-10 rounded object-cover" />
+                              </button>
+                            ) : (
+                              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded bg-bg text-micro text-gray3">—</span>
+                            )}
+                            <div className="min-w-0">
+                              <b className="block truncate" title={product.name}>{product.name}</b>
+                              <div className="mt-0.5 truncate font-num text-micro text-gray3" title={`${product.code || '无编码'} · ${product.spec || '无规格'}`}>
+                                {product.code || '无编码'} · {product.spec || '无规格'}
+                              </div>
+                              <div className="mt-0.5 truncate text-micro text-gray3" title={product.supplier?.name || '未关联供应商'}>
+                                {product.supplier?.name || '未关联供应商'}
+                              </div>
+                            </div>
+                          </div>
                         </td>
-                        <td className="px-4 py-3 font-num text-gray2">{product.code || '—'}</td>
-                        <td className="px-4 py-3"><b>{product.name}</b></td>
-                        <td className="px-4 py-3 text-gray2">{product.spec || '—'}</td>
-                        <td className="px-4 py-3 text-gray2">{product.category || '—'}</td>
-                        <td className="px-4 py-3 text-right font-num">{formatProductQuantity(product.stock)}</td>
-                        <td className="px-4 py-3 text-right font-num">{formatProductQuantity(product.minStock)}</td>
-                        <td className="px-4 py-3 text-right font-num">{formatProductQuantity(product.minOrderQty)}</td>
-                        <td className="px-4 py-3 text-right font-num">{formatProductQuantity(product.stepQty)}</td>
-                        <td className="px-4 py-3 text-right font-num">
-                      {(() => {
-                        const unitValues = buildFourUnitValues(fourUnitFormFromProduct(product))
-                        const orderUnitHint = formatOrderUnitPriceHint(Number(product.price), product)
-                        return (
+                        <td className="px-3 py-3 text-gray2">
+                          <span className="block truncate" title={product.category || '未分类'}>{product.category || '未分类'}</span>
+                        </td>
+                        <td className="px-3 py-3 text-right font-num">
+                          <b>{formatProductQuantity(product.stock)}</b>
+                          <span className="mt-0.5 block text-micro text-gray3">安全 {formatProductQuantity(product.minStock)}</span>
+                        </td>
+                        <td className="px-3 py-3 text-right font-num">
+                          <b>{formatProductQuantity(product.minOrderQty)}</b>
+                          <span className="mt-0.5 block text-micro text-gray3">{unitValues.orderUnit}</span>
+                        </td>
+                        <td className="px-3 py-3 text-right font-num">
                           <>
                             {formatMoney(product.price)}
                             <span className="block text-micro text-gray2">
@@ -645,13 +651,10 @@ export default function InternalSupplyChainProductsPage() {
                               <span className="block text-micro text-gray2">{orderUnitHint}</span>
                             )}
                           </>
-                        )
-                      })()}
-                    </td>
-                    <td className="px-4 py-3 text-gray2">{product.supplier?.name || '—'}</td>
-                        <td className="px-4 py-3"><Chip tone={productStatusTone(product.status)}>{formatProductStatusLabel(product.status)}</Chip></td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center justify-end gap-2">
+                        </td>
+                        <td className="px-3 py-3"><span className="whitespace-nowrap"><Chip tone={productStatusTone(product.status)}>{formatProductStatusLabel(product.status)}</Chip></span></td>
+                        <td className="px-3 py-3">
+                          <div className="flex items-center justify-end gap-2 whitespace-nowrap">
                             <button onClick={() => openEdit(product)} className="text-button text-accent">编辑</button>
                             <button onClick={() => openPriceChange(product)} className="text-button text-accent">调价</button>
                             <button
@@ -662,7 +665,7 @@ export default function InternalSupplyChainProductsPage() {
                                 ? '停售'
                                 : product.status === 'DISABLED'
                                   ? '恢复'
-                                  : '按新流程启用'}
+                                  : '启用'}
                             </button>
                           </div>
                         </td>
@@ -1083,7 +1086,7 @@ function FormDialog({
                 className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent disabled:bg-bg disabled:text-gray2"
               />
             </FormField>
-            <FormField label="起订量">
+            <FormField label="最小下单量">
               <input
                 type="number"
                 min="0.001"
@@ -1093,16 +1096,24 @@ function FormDialog({
                 className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
               />
             </FormField>
-            <FormField label="步长">
-              <input
-                type="number"
-                min="0.001"
-                step="0.001"
-                value={form.stepQty}
-                onChange={e => onFieldChange('stepQty', e.target.value)}
-                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
-              />
-            </FormField>
+            <details className="col-span-2 rounded-cta border border-border bg-bg px-3 py-2">
+              <summary className="cursor-pointer text-caption text-gray2">高级订货规则</summary>
+              <div className="mt-3 grid grid-cols-2 items-end gap-3">
+                <FormField label="下单增量">
+                  <input
+                    type="number"
+                    min="0.001"
+                    step="0.001"
+                    value={form.stepQty}
+                    onChange={e => onFieldChange('stepQty', e.target.value)}
+                    className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                  />
+                </FormField>
+                <p className="pb-2 text-micro leading-5 text-gray3">
+                  超过最小下单量后，每次可以增加的数量。例如最小 2、增量 0.5，可下单 2、2.5、3。
+                </p>
+              </div>
+            </details>
             <FormField label="规格" full>
               <input
                 type="text"

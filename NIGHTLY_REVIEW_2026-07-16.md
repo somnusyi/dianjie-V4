@@ -2642,6 +2642,37 @@
 - `git diff --check`、业务文件门禁和高置信敏感信息扫描通过；production build 仅有既有
   OpenTelemetry warning。本批只改集成测试，无 schema、运行时代码或业务数据变化；
   测试提交为 `5a9a69f1e138564e9eb5cbe965b5fb8bfbd45cea`。
-- 第 11 批最终记录 `b3ee07c0`、本批测试与本节报告将在发布前一起以非强制纯快进推进
-  main；发布前将最后一次核对三方 SHA、队列、源码、并行草稿和部署锁，再仅执行一次
-  标准发布与全套生产复核。
+- 第 11 批最终记录 `b3ee07c0`、本批测试与报告 `17cb16c8` 已一起以非强制纯快进进入
+  main；发布前最后确认 main/deployed/source exact `92c5321f`、AutoFix/反馈
+  actionable 均为 0、源码干净且无锁，mutation 4 项和 watchdog 2 项草稿保持原样。
+- 唯一标准脚本发布成功，生产备份
+  `dianjie_v4-deploy-bak-20260727-002416-17cb16c8.dump` 与
+  `v4-build-bak-20260727-002416-17cb16c8.tar.gz` 已校验；70 migration 无 pending，
+  Prisma Client 重建、API/Web/CMB 重启和 HTML/CSS 健康检查全部通过。
+- 发布后使用 exact-SHA bundle 把源码从 `92c5321f` 纯快进到 `17cb16c8`；bundle 仅含
+  夜审与反馈集成测试，父链、文件清单、SHA-256 与敏感信息检查通过，两端临时包已删除。
+- 本批运行时代码验收时，GitHub main、生产 `.deployed-commit` 与 `/app/dianjie-src` 均为 exact
+  `17cb16c83891808a3bcb0a93f682245e18093854`，源码干净、锁释放。API/Web/CMB
+  online，重启计数 54/55/45 在双快照中稳定；本机 API/Web/CMB 与主公网 API/login/
+  AutoFix 页面均为 200。70 migration 成功/0 失败，AutoFixRun 总数/actionable 与
+  反馈 actionable 均为 0。
+- `api.dianjie.cc` 严格 TLS 仍失败，服务器侧跳过校验 health 为 200；证书 `notAfter`
+  仍为 2026-07-21 23:59:59 UTC，按边界未轮换证书或私钥。
+
+## 十二批维护汇总
+
+- 12 个可独立验收批次全部以非强制纯快进进入 main 并经标准脚本发布：补丁目标完整性、
+  源码基线竞态、发布锁所有权、生产 exact 基线、失败/回滚真实性、批准与人工回滚候选
+  隔离、批准/驳回/回滚权限与并发、查询分页稳定性、反馈授权与解决闭环。
+- AutoFix 生产写入路径现在要求完整白名单目标、冻结源码与生产 exact SHA、可验证且不
+  污染长期源码的 detached candidate、所有者感知部署锁，以及与真实生产恢复结果一致的
+  状态；人工高风险动作均有同租户超级管理员、advisory lock、单审计/单调度数据库证据。
+- 最终门禁为 API 单元 59 文件 556/556、API 集成 25 文件 185/185、API build、Web
+  28 文件 506/506、Web tsc、166 页 production build、diff/业务文件/高置信敏感信息
+  检查全部通过；所有 `_ci` PostgreSQL 15 容器均删除，未触碰生产业务数据。
+- 用户主仓、业务文件、其他 AI worktree 与未提交草稿均未覆盖；特别保留
+  `maintenance-v4-autofix-mutation-boundary` 的 4 项和 watchdog 的 2 项改动，未把
+  未审批草稿混入 main。标准发布现有可选环境项缺失仍仅 warn-only，没有读取或输出值。
+- 待外部处理仅剩 `api.dianjie.cc` 过期 TLS；另需持续观察 ECS 到 GitHub 的 HTTPS
+  间歇性 HTTP/2/连接超时。其间源码收口只能继续使用本报告所述 exact bundle 校验流程，
+  不得改协议、重写历史或跳过父链/文件清单检查。

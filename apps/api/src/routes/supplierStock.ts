@@ -791,6 +791,14 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       })
     }
 
+    const rawWarehouseId = (req.query as Record<string, unknown> | null)?.warehouseId
+    let realWarehouseId: string
+    try {
+      realWarehouseId = await resolveTenantWarehouseId(prisma, ctx.tenantId, rawWarehouseId)
+    } catch (error: any) {
+      return reply.status(error?.statusCode || 400).send({ error: error?.message || '仓库解析失败' })
+    }
+
     const adjusted: any[] = []
     const skipped: any[] = []
     const failed: any[] = []
@@ -799,7 +807,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       const it = items[i]
       try {
         await prisma.$transaction(async (tx) => {
-          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`supplier-stock-snapshot:${ctx.tenantId}:${ctx.supplierId}:${it.name}`}))`
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`supplier-stock-snapshot:${ctx.tenantId}:${ctx.supplierId}:${realWarehouseId}:${it.name}`}))`
           const matches = await tx.product.findMany({
             where: { tenantId: ctx.tenantId, supplierId: ctx.supplierId, name: it.name },
             orderBy: { id: 'asc' },
@@ -808,22 +816,40 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
           if (matches.length > 1) throw new Error('同名 SKU 不唯一，请先整理商品主数据后再导入')
           const prod = matches[0]
           if (!prod) throw new Error('商品未建档，请刷新后重新预览')
-          const balances = await lockSupplierProducts(tx, ctx, [prod.id])
-          const oldStock = balances.get(prod.id)!
-          const reserved = await activeReservedForProduct(tx, ctx, undefined, prod.id)
+
+          const productBalances = await lockSupplierProducts(tx, ctx, [prod.id])
+          const wsBalances = await lockSupplierWarehouseStock(tx, ctx, realWarehouseId, [prod.id])
+
+          const productStock = productBalances.get(prod.id)!
+          const physicalQty = wsBalances.get(prod.id)!
+          if (!productStock.equals(physicalQty)) {
+            throw Object.assign(
+              new Error(`商品 ${prod.id} Product.stock(${productStock.toFixed(3)}) 与 WarehouseStock.physicalQty(${physicalQty.toFixed(3)}) 不一致`),
+              { statusCode: 409 },
+            )
+          }
+
+          const reserved = await activeReservedForProduct(tx, ctx, realWarehouseId, prod.id)
           if (new Prisma.Decimal(it.qty).lessThan(reserved)) {
             throw new Error(`目标库存不能低于已接订单预占 ${reserved.toFixed(2)}`)
           }
-          if (oldStock.equals(it.qty)) {
-            skipped.push({ row: i + 1, name: it.name, stock: Number(oldStock) })
+          if (physicalQty.equals(it.qty)) {
+            skipped.push({ row: i + 1, name: it.name, stock: Number(physicalQty) })
             return
           }
-          await tx.product.update({ where: { id: prod.id }, data: { stock: it.qty } })
+          const newQty = new Prisma.Decimal(it.qty)
+          const delta = newQty.minus(physicalQty)
+          await tx.warehouseStock.update({
+            where: { tenantId_warehouseId_productId: { tenantId: ctx.tenantId, warehouseId: realWarehouseId, productId: prod.id } },
+            data: { physicalQty: newQty },
+          })
+          await tx.product.update({ where: { id: prod.id }, data: { stock: newQty } })
           const movement = await tx.supplierStockMovement.create({
             data: {
-              tenantId: ctx.tenantId, supplierId: ctx.supplierId, productId: prod.id,
-              delta: new Prisma.Decimal(it.qty).minus(oldStock),
-              balanceAfter: it.qty,
+              tenantId: ctx.tenantId, warehouseId: realWarehouseId,
+              supplierId: ctx.supplierId, productId: prod.id,
+              delta,
+              balanceAfter: newQty,
               type: 'ADJUSTMENT' as any,
               reason,
               sourceType: 'Snapshot', sourceId: null,
@@ -832,13 +858,14 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
           })
           await applySupplierStockBatchDelta(tx, {
             tenantId: ctx.tenantId,
+            warehouseId: realWarehouseId,
             supplierId: ctx.supplierId,
             productId: prod.id,
-            delta: new Prisma.Decimal(it.qty).minus(oldStock),
+            delta,
             movementId: movement.id,
             createdById: ctx.userId,
           })
-          adjusted.push({ row: i + 1, name: it.name, oldStock: Number(oldStock), newStock: it.qty })
+          adjusted.push({ row: i + 1, name: it.name, oldStock: Number(physicalQty), newStock: it.qty })
         })
       } catch (e: any) {
         failed.push({ row: i + 1, name: it.name, error: e.message || 'unknown' })
@@ -855,7 +882,8 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
         failed: failed.length,
       },
       details: { created: [], adjusted, skipped, failed },
-      warehouse: DEFAULT_WAREHOUSE_META,
+      warehouseId: realWarehouseId,
+      warehouse: { id: realWarehouseId, name: DEFAULT_WAREHOUSE_META.name },
     }
   })
 

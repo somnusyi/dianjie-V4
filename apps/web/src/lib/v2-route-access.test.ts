@@ -35,6 +35,8 @@ describe('rolesForV2Path', () => {
     expect(isV2PathAllowedForRole('/v2/supply-chain/stores', 'SUPPLY_CHAIN')).toBe(true)
     expect(isV2PathAllowedForRole('/v2/me', 'SUPPLY_CHAIN')).toBe(true)
     expect(isV2PathAllowedForRole('/v2/me/password', 'SUPPLY_CHAIN')).toBe(true)
+    expect(isV2PathAllowedForRole('/v2/feedback/new', 'SUPPLY_CHAIN')).toBe(true)
+    expect(isV2PathAllowedForRole('/v2/feedback/mine', 'SUPPLY_CHAIN')).toBe(true)
   })
 
   it('rejects supplier, finance, sales, identity and write paths for internal supply-chain', () => {

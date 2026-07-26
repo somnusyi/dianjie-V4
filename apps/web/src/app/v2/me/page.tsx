@@ -80,6 +80,24 @@ export default function MePage() {
               </a>
             </li>
           )}
+          <li>
+            <a href="/v2/feedback/mine" className="flex items-center px-3 py-3">
+              <span className="w-8 h-8 rounded-md bg-bg flex items-center justify-center mr-3">✉</span>
+              <span className="flex-1 text-body">我的反馈</span>
+              <span className="text-micro text-gray3 mr-1">问题/建议/新需求</span>
+              <span className="text-gray3">›</span>
+            </a>
+          </li>
+          {(u.role === 'SUPER_ADMIN') && (
+            <li>
+              <a href="/v2/boss/feedback" className="flex items-center px-3 py-3">
+                <span className="w-8 h-8 rounded-md bg-amber/10 text-amber-fg flex items-center justify-center mr-3">✓</span>
+                <span className="flex-1 text-body">反馈审批</span>
+                <span className="text-micro text-gray3 mr-1">改进/需求方案</span>
+                <span className="text-gray3">›</span>
+              </a>
+            </li>
+          )}
           {(u.role === 'BOSS' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN' || u.role === 'FINANCE') && (
             <>
               <li>

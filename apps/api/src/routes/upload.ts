@@ -29,7 +29,7 @@ const MAX_VIDEO_BYTES = 50 * 1024 * 1024
 
 const ALLOWED_CATEGORY_VALUES = [
   'loss-claims', 'invoices', 'capital', 'documents',
-  'reimbursements', 'misc', 'chef-ack', 'products', 'inventory-counts',
+  'reimbursements', 'misc', 'chef-ack', 'products', 'inventory-counts', 'feedback',
 ] as const
 const ALLOWED_CATEGORIES = new Set<string>(ALLOWED_CATEGORY_VALUES)
 const uploadQuerySchema = z.object({
@@ -162,7 +162,7 @@ export async function uploadRoutes(app: FastifyInstance) {
     const category = parsed.data.category
     const allowedMimes =
       category === 'loss-claims' ? MEDIA_MIMES
-        : category === 'chef-ack' || category === 'products' || category === 'inventory-counts' ? IMAGE_MIMES
+        : category === 'chef-ack' || category === 'products' || category === 'inventory-counts' || category === 'feedback' ? IMAGE_MIMES
           : DOC_MIMES
     return uploadOne(req, reply, { allowedMimes, category })
   })

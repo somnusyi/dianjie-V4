@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react'
 import { getToken, getUser, routeForRole } from '@/lib/v2-auth'
 import { isV2PathAllowedForRole } from '@/lib/v2-route-access'
+import { FeedbackFab } from '@/components/v2/feedback-fab'
 
 // 有独立 sub-login 页的路径前缀 (PWA scope 内, 防止桌面 PWA 跳出 scope)
 // 访问 /v2/finance-pc/* 未登录 → 跳 /v2/finance-pc/login (留在 PWA 窗口里)
@@ -61,5 +62,5 @@ export function AuthGate({ children, requireRole }: { children: React.ReactNode;
       </div>
     )
   }
-  return <>{children}</>
+  return <>{children}<FeedbackFab /></>
 }

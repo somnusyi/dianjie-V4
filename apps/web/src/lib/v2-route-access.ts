@@ -30,5 +30,7 @@ export function rolesForV2Path(pathname: string): readonly string[] | undefined 
 export function isV2PathAllowedForRole(pathname: string, role: string): boolean {
   if (role !== 'SUPPLY_CHAIN') return true
   if (pathname === '/v2/me' || pathname === '/v2/me/password') return true
+  // 反馈是所有已登录员工的共享能力；否则全局反馈按钮对供应链角色会形成死链接。
+  if (pathname === '/v2/feedback' || pathname.startsWith('/v2/feedback/')) return true
   return pathname === '/v2/supply-chain' || pathname.startsWith('/v2/supply-chain/')
 }

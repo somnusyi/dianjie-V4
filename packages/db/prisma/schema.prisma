@@ -68,6 +68,8 @@ model Tenant {
   dishBomVersions               DishBomVersion[]
   monthlyCloses                 StoreMonthlyClose[]
   storeInventoryPolicies        StoreInventoryPolicy[]
+  feedbacks                     Feedback[]
+  feedbackMessages              FeedbackMessage[]
 
   @@map("tenants")
 }
@@ -180,6 +182,8 @@ model User {
   confirmedInventoryCounts      InventoryCount[]        @relation("InventoryCountConfirmedBy")
   reversedInventoryCounts       InventoryCount[]        @relation("InventoryCountReversedBy")
   confirmedMonthlyCloses        StoreMonthlyClose[]     @relation("StoreMonthlyCloseConfirmedBy")
+  feedbacks                     Feedback[]              @relation("FeedbackReporter")
+  decidedFeedbacks              Feedback[]              @relation("FeedbackDecisionBy")
 
   @@unique([tenantId, email])
   @@unique([tenantId, phone])
@@ -3243,4 +3247,68 @@ model PayrollItem {
 
   @@index([payrollId])
   @@map("payroll_items")
+}
+
+// ══════════════════════════════════════════════════════
+//   反馈系统 (P0): 用户反馈 → AI 澄清分诊 → 管理员审批
+// ══════════════════════════════════════════════════════
+
+model Feedback {
+  id          String           @id @default(cuid())
+  tenantId    String
+  reporterId  String
+  storeId     String? // 提报人当时所在门店
+  category    FeedbackCategory? // AI 分诊结果, 澄清完成前为 null
+  status      FeedbackStatus   @default(CLARIFYING)
+  title       String? // AI 澄清后生成的一句话标题
+  summary     String? // AI 整理的方案/问题摘要
+  proposal    Json? // NEW_FEATURE 结构化方案 { scenario, expectation, estimatedDays }
+  context     Json // 提报时上下文快照 { path, role, storeName, userAgent, clientTime }
+  attachments Json? // 图片 URL 数组
+  decisionById String?
+  decisionAt   DateTime?
+  decisionNote String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  tenant    Tenant  @relation(fields: [tenantId], references: [id])
+  reporter  User    @relation("FeedbackReporter", fields: [reporterId], references: [id])
+  decisionBy User?  @relation("FeedbackDecisionBy", fields: [decisionById], references: [id])
+  messages  FeedbackMessage[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, reporterId])
+  @@map("feedbacks")
+}
+
+model FeedbackMessage {
+  id         String   @id @default(cuid())
+  tenantId   String
+  feedbackId String
+  role       String // user / assistant / system
+  content    String   @db.Text
+  createdAt  DateTime @default(now())
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  feedback Feedback @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+
+  @@index([feedbackId, createdAt])
+  @@map("feedback_messages")
+}
+
+enum FeedbackCategory {
+  BUG_BLOCKING // 致命 bug (无法下单等阻断业务) → 紧急通知人工处理
+  IMPROVEMENT // 现有功能体验优化 → 审批后进开发
+  NEW_FEATURE // 全新需求 → AI 生成方案 → 老板决策
+  QUESTION // 操作咨询 → AI 直接回答闭环
+}
+
+enum FeedbackStatus {
+  CLARIFYING // AI 澄清中
+  AWAITING_APPROVAL // 待管理员审批
+  APPROVED // 已批准 (IN_DEV 前置态, 保留)
+  REJECTED // 已驳回
+  IN_DEV // 已立项开发
+  RESOLVED // 已解决
+  CLOSED // 已闭环 (问答/无效)
 }

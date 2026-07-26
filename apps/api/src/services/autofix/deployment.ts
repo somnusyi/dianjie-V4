@@ -1,6 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import os from 'node:os'
+import { writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { prisma } from '@dianjie/db'
@@ -10,6 +9,11 @@ import {
   classifyDeploymentFailure,
   type DeploymentRecoveryState,
 } from './deploymentFailure'
+import {
+  preparePatchedDeploymentCandidate,
+  removeDeploymentCandidate,
+  type DeploymentCandidate,
+} from './deploymentCandidate'
 import { acquireDeployLock } from './deploymentLock'
 import { inspectUnifiedDiff, isAutoDeploymentEnabled } from './policy'
 import { requireProductionBaseline } from './productionBaseline'
@@ -215,8 +219,8 @@ export async function executeApprovedRun(runId: string) {
   const target = productionDir()
   let commitSha = ''
   let log = ''
-  let tempDir = ''
-  let modifiedFiles: string[] = []
+  let candidate: DeploymentCandidate | null = null
+  let deploymentStarted = false
   let recovery: DeploymentRecoveryState = 'NOT_REQUIRED'
   let recoveryError = ''
   let releaseLock: (() => Promise<void>) | null = null
@@ -232,25 +236,21 @@ export async function executeApprovedRun(runId: string) {
     }
     const inspection = inspectUnifiedDiff(runRecord.diffPatch)
     if (!inspection.ok) throw new Error(inspection.errors.join('；'))
-    modifiedFiles = inspection.files.map((file) => file.path)
     await requireProductionBaseline(target, runRecord.baseCommitSha)
     await requireCleanPinnedRepo(repo, runRecord.baseCommitSha)
 
-    tempDir = await mkdtemp(path.join(os.tmpdir(), 'dianjie-autofix-deploy-'))
-    const patchFile = path.join(tempDir, 'approved.patch')
-    await writeFile(patchFile, runRecord.diffPatch, { mode: 0o600 })
-    await run(repo, 'git', ['apply', '--check', patchFile], 30_000)
-    await run(repo, 'git', ['apply', '--whitespace=error-all', patchFile], 30_000)
-    await run(repo, 'git', ['add', '--', ...inspection.files.map((file) => file.path)], 30_000)
-    await run(repo, 'git', [
-      '-c', 'user.name=Dianjie AutoFix',
-      '-c', 'user.email=autofix@localhost',
-      'commit', '-m', `fix(autofix): approved run ${runRecord.id}`,
-    ], 30_000)
-    commitSha = await gitOutput(repo, ['rev-parse', 'HEAD'])
+    candidate = await preparePatchedDeploymentCandidate({
+      repo,
+      baseCommitSha: runRecord.baseCommitSha,
+      diffPatch: runRecord.diffPatch,
+      files: inspection.files.map((file) => file.path),
+      runId: runRecord.id,
+    })
+    commitSha = candidate.commitSha
     await run(repo, 'git', ['tag', `autofix-${runRecord.id}`, commitSha], 30_000)
 
-    log = await buildAndSyncWeb(repo, target, runRecord.id)
+    deploymentStarted = true
+    log = await buildAndSyncWeb(candidate.worktreeDir, target, runRecord.id)
     await prisma.autoFixRun.update({
       where: { id: runRecord.id },
       data: { status: 'VERIFY_PROD' as any, commitSha, deployLog: log },
@@ -259,20 +259,24 @@ export async function executeApprovedRun(runId: string) {
     const health = await verifyProduction(contextPath)
     await writeFile(path.join(target, '.deployed-commit'), `${commitSha}\n`, { mode: 0o600 })
     await resolveFeedback(runRecord.id, commitSha, health, log)
+    try {
+      await requireCleanPinnedRepo(repo, runRecord.baseCommitSha)
+      await run(repo, 'git', ['merge', '--ff-only', commitSha], 30_000)
+    } catch (sourceSyncError) {
+      console.error('[autofix] 生产已验证，但源码分支快进待维护:', sourceSyncError)
+    }
   } catch (error) {
     try {
-      if (commitSha) {
+      if (deploymentStarted) {
         recovery = 'FAILED'
-        await run(repo, 'git', ['revert', '--no-edit', commitSha], 30_000)
+        const baseCommitSha = candidate
+          ? await gitOutput(candidate.worktreeDir, ['rev-parse', 'HEAD^'])
+          : ''
+        await requireCleanPinnedRepo(repo, baseCommitSha)
         log = `${log}\n${(await buildAndSyncWeb(repo, target, `${runId}-rollback`)).slice(-20_000)}`
         await verifyProduction('/v2/login')
-        const rollbackSha = await gitOutput(repo, ['rev-parse', 'HEAD'])
-        await writeFile(path.join(target, '.deployed-commit'), `${rollbackSha}\n`, { mode: 0o600 })
+        await writeFile(path.join(target, '.deployed-commit'), `${baseCommitSha}\n`, { mode: 0o600 })
         recovery = 'COMPLETED'
-      } else if (modifiedFiles.length > 0) {
-        recovery = 'FAILED'
-        await run(repo, 'git', ['restore', '--staged', '--worktree', '--', ...modifiedFiles], 30_000)
-        recovery = 'NOT_REQUIRED'
       }
     } catch (rollbackError: any) {
       recoveryError = rollbackError.message || String(rollbackError)
@@ -280,7 +284,11 @@ export async function executeApprovedRun(runId: string) {
     }
     await markDeploymentFailure(runId, error, log, recovery, recoveryError)
   } finally {
-    if (tempDir) await rm(tempDir, { recursive: true, force: true }).catch(() => undefined)
+    if (candidate) {
+      await removeDeploymentCandidate(repo, candidate).catch((error) => {
+        console.error('[autofix] 清理部署 worktree 失败:', error)
+      })
+    }
     if (releaseLock) await releaseLock().catch((error) => console.error('[autofix] 释放部署锁失败:', error))
   }
 }

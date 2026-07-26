@@ -9,14 +9,18 @@ import {
   formatCostUnitPriceLabel,
   formatMoney,
   formatPriceChangeConfirmBody,
+  formatProductQuantity,
   formatProductStatusLabel,
   hasActiveFilters,
   keepFiltersForPage,
+  parseProductQuantity,
   productImageAlt,
   productStatusTone,
   resetPageFilters,
   resolveProductImageUrl,
   validateNewProductForm,
+  validateProductQuantities,
+  validateProductQuantity,
 } from './supply-product-pc'
 
 describe('buildProductQuery', () => {
@@ -349,5 +353,181 @@ describe('formatPriceChangeConfirmBody', () => {
     const body = formatPriceChangeConfirmBody(10, 12, '斤')
     expect(body.split('\n').length).toBe(3)
     expect(body).not.toContain('约 ¥')
+  })
+})
+
+describe('parseProductQuantity', () => {
+  it('accepts integer, two decimals and three decimals', () => {
+    expect(parseProductQuantity('0')).toBe(0)
+    expect(parseProductQuantity('12')).toBe(12)
+    expect(parseProductQuantity('12.34')).toBe(12.34)
+    expect(parseProductQuantity('0.001')).toBe(0.001)
+    expect(parseProductQuantity('123.456')).toBe(123.456)
+  })
+
+  it('rejects empty and whitespace-only input', () => {
+    expect(parseProductQuantity('')).toBeNull()
+    expect(parseProductQuantity('   ')).toBeNull()
+  })
+
+  it('rejects negative numbers', () => {
+    expect(parseProductQuantity('-1')).toBeNull()
+    expect(parseProductQuantity('-0.001')).toBeNull()
+  })
+
+  it('rejects four or more decimals', () => {
+    expect(parseProductQuantity('1.0001')).toBeNull()
+    expect(parseProductQuantity('0.1234')).toBeNull()
+  })
+
+  it('rejects NaN, Infinity and scientific notation', () => {
+    expect(parseProductQuantity('abc')).toBeNull()
+    expect(parseProductQuantity('NaN')).toBeNull()
+    expect(parseProductQuantity('Infinity')).toBeNull()
+    expect(parseProductQuantity('1e-3')).toBeNull()
+    expect(parseProductQuantity('2E2')).toBeNull()
+  })
+
+  it('rejects values above the database quantity limit', () => {
+    expect(parseProductQuantity('999999999.999')).toBe(999999999.999)
+    expect(parseProductQuantity('1000000000')).toBeNull()
+  })
+
+  it('trims surrounding whitespace', () => {
+    expect(parseProductQuantity('  5.5  ')).toBe(5.5)
+  })
+})
+
+describe('validateProductQuantity', () => {
+  it('returns null for valid non-negative values', () => {
+    expect(validateProductQuantity('0', '库存')).toBeNull()
+    expect(validateProductQuantity('0.001', '库存')).toBeNull()
+    expect(validateProductQuantity('100.999', '库存')).toBeNull()
+  })
+
+  it('rejects empty values', () => {
+    expect(validateProductQuantity('', '库存')).toBe('库存必填')
+  })
+
+  it('rejects negatives with explicit wording', () => {
+    expect(validateProductQuantity('-1', '安全库存')).toBe('安全库存不能为负数')
+  })
+
+  it('rejects four decimals with explicit wording', () => {
+    expect(validateProductQuantity('1.2345', '步长')).toBe('步长最多三位小数')
+  })
+
+  it('rejects scientific notation', () => {
+    expect(validateProductQuantity('1e-3', '库存')).toBe('库存不能使用科学计数法')
+  })
+
+  it('enforces positive rule for min order quantity', () => {
+    expect(validateProductQuantity('0.001', '起订量', { positive: true })).toBeNull()
+    expect(validateProductQuantity('0', '起订量', { positive: true })).toBe('起订量必须大于 0')
+    expect(validateProductQuantity('0.000', '起订量', { positive: true })).toBe('起订量必须大于 0')
+  })
+
+  it('rejects values above the database quantity limit', () => {
+    expect(validateProductQuantity('999999999.999', '库存')).toBeNull()
+    expect(validateProductQuantity('1000000000', '库存')).toBe('库存超过商品数量上限')
+  })
+})
+
+describe('validateProductQuantities', () => {
+  const base = { stock: '0', minStock: '0', minOrderQty: '1', stepQty: '1' }
+
+  it('returns null for valid defaults', () => {
+    expect(validateProductQuantities(base)).toBeNull()
+  })
+
+  it('rejects the first invalid field', () => {
+    expect(validateProductQuantities({ ...base, stock: '-1' })).toContain('库存')
+    expect(validateProductQuantities({ ...base, minStock: '1.2345' })).toContain('安全库存')
+    expect(validateProductQuantities({ ...base, minOrderQty: '0' })).toContain('起订量')
+    expect(validateProductQuantities({ ...base, stepQty: '0' })).toContain('步长')
+    expect(validateProductQuantities({ ...base, stepQty: 'abc' })).toContain('步长')
+  })
+
+  it('accepts 0.001 across all non-positive fields', () => {
+    expect(
+      validateProductQuantities({
+        stock: '0.001',
+        minStock: '0.001',
+        minOrderQty: '0.001',
+        stepQty: '0.001',
+      }),
+    ).toBeNull()
+  })
+})
+
+describe('formatProductQuantity', () => {
+  it('preserves valid string values as returned by server', () => {
+    expect(formatProductQuantity('1.200')).toBe('1.200')
+    expect(formatProductQuantity('0.001')).toBe('0.001')
+    expect(formatProductQuantity('42')).toBe('42')
+  })
+
+  it('formats numbers up to three decimals', () => {
+    expect(formatProductQuantity(1.2)).toBe('1.2')
+    expect(formatProductQuantity(0.001)).toBe('0.001')
+    expect(formatProductQuantity(1234.567)).toBe('1,234.567')
+  })
+
+  it('returns placeholder for null/undefined/empty', () => {
+    expect(formatProductQuantity(null)).toBe('—')
+    expect(formatProductQuantity(undefined)).toBe('—')
+    expect(formatProductQuantity('')).toBe('—')
+  })
+})
+
+describe('buildCreateBody with quantities', () => {
+  it('includes parsed quantity fields when provided', () => {
+    const body = buildCreateBody({
+      name: '白菜', code: '', category: '', unit: 'kg', price: '3',
+      spec: '', shelfDays: '7', stock: '1.234', minStock: '0.500',
+      minOrderQty: '0.001', stepQty: '0.010',
+    })
+    expect(body.stock).toBe(1.234)
+    expect(body.minStock).toBe(0.5)
+    expect(body.minOrderQty).toBe(0.001)
+    expect(body.stepQty).toBe(0.01)
+  })
+
+  it('omits quantity fields when not provided', () => {
+    const body = buildCreateBody({
+      name: '盐', code: '', category: '', unit: '', price: '3', spec: '', shelfDays: '',
+    })
+    expect(body).not.toHaveProperty('stock')
+    expect(body).not.toHaveProperty('minStock')
+    expect(body).not.toHaveProperty('minOrderQty')
+    expect(body).not.toHaveProperty('stepQty')
+  })
+})
+
+describe('buildEditBody with quantities', () => {
+  it('only includes changed editable quantity fields', () => {
+    const form = {
+      name: '白菜', code: 'v1', category: '蔬菜', unit: 'kg', spec: '', shelfDays: '7',
+      stock: '10', minStock: '2', minOrderQty: '1', stepQty: '1',
+    }
+    const original = {
+      name: '白菜', code: 'v1', category: '蔬菜', unit: 'kg', spec: '', shelfDays: 7,
+      stock: 5, minStock: 2, minOrderQty: 0.5, stepQty: 1,
+    }
+    const body = buildEditBody(form, original)
+    expect(body).toEqual({ minOrderQty: 1 })
+  })
+
+  it('never sends physical or safety stock through the product edit endpoint', () => {
+    const form = {
+      name: '白菜', code: 'v1', category: '蔬菜', unit: 'kg', spec: '', shelfDays: '7',
+      stock: '0', minStock: '0', minOrderQty: '1', stepQty: '1',
+    }
+    const original = {
+      name: '白菜', code: 'v1', category: '蔬菜', unit: 'kg', spec: '', shelfDays: 7,
+      stock: 1, minStock: 0, minOrderQty: 1, stepQty: 1,
+    }
+    const body = buildEditBody(form, original)
+    expect(body).toEqual({})
   })
 })

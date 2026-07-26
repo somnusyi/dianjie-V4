@@ -273,6 +273,37 @@ describe('supplyChainAudit — warehouse stock dual-source check', () => {
   })
 
   describe('tenant + warehouse + product scope', () => {
+    it('scopes reservations, movements and batches to the same resolved default warehouse', async () => {
+      const seen: Record<string, any> = {}
+      const db = baseDb()
+      for (const modelName of ['supplierStockReservation', 'supplierStockMovement', 'supplierStockBatch'] as const) {
+        const original = db[modelName].findMany
+        db[modelName].findMany = (args: any) => {
+          seen[modelName] = args.where
+          return original(args)
+        }
+      }
+
+      await auditSupplierSupplyChain({ tenantId: 'tenant-a', supplierId: 'sup-1' }, db)
+
+      expect(seen.supplierStockReservation).toMatchObject({
+        tenantId: 'tenant-a',
+        supplierId: 'sup-1',
+        warehouseId: WH_ID,
+        status: 'ACTIVE',
+      })
+      expect(seen.supplierStockMovement).toEqual({
+        tenantId: 'tenant-a',
+        supplierId: 'sup-1',
+        warehouseId: WH_ID,
+      })
+      expect(seen.supplierStockBatch).toEqual({
+        tenantId: 'tenant-a',
+        supplierId: 'sup-1',
+        warehouseId: WH_ID,
+      })
+    })
+
     it('only queries WarehouseStock scoped to the resolved warehouseId and supplier products', async () => {
       const wsFindManyArgs: any[] = []
       const db = baseDb()
@@ -342,7 +373,7 @@ describe('supplyChainAudit — warehouse stock dual-source check', () => {
           { id: 'ws-2', tenantId: 'tenant-a', warehouseId: WH_ID, productId: 'prod-2', physicalQty: 5.500, isActive: true },
         ],
         batches: [
-          { id: 'batch-1', tenantId: 'tenant-a', supplierId: 'sup-1', productId: 'prod-1', batchNo: 'B001', initialQty: 10, remainingQty: -1 },
+          { id: 'batch-1', tenantId: 'tenant-a', warehouseId: WH_ID, supplierId: 'sup-1', productId: 'prod-1', batchNo: 'B001', initialQty: 10, remainingQty: -1 },
         ],
       })
       const result = await auditSupplierSupplyChain({ tenantId: 'tenant-a', supplierId: 'sup-1' }, db)
@@ -352,7 +383,7 @@ describe('supplyChainAudit — warehouse stock dual-source check', () => {
     it('still reports STOCK_BATCH_BALANCE_MISMATCH in STRICT mode', async () => {
       const db = baseDb({
         batches: [
-          { id: 'batch-1', tenantId: 'tenant-a', supplierId: 'sup-1', productId: 'prod-1', batchNo: 'B001', initialQty: 10, remainingQty: 8 },
+          { id: 'batch-1', tenantId: 'tenant-a', warehouseId: WH_ID, supplierId: 'sup-1', productId: 'prod-1', batchNo: 'B001', initialQty: 10, remainingQty: 8 },
         ],
       })
       const result = await auditSupplierSupplyChain({ tenantId: 'tenant-a', supplierId: 'sup-1' }, db)

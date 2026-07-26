@@ -22,30 +22,57 @@ export async function auditSupplierSupplyChain(input: {
 }, db: AuditDb = prisma) {
   const days = Math.max(7, Math.min(input.days ?? 90, 365))
   const since = new Date(Date.now() - days * 86_400_000)
-  const [supplier, products, reservations, stockMovements, stockBatches, deliveries, receipts, arrivalDiscrepancies] = await Promise.all([
-    db.supplier.findFirst({
-      where: { id: input.supplierId, tenantId: input.tenantId },
-      select: { id: true, sourceType: true, inventoryMode: true },
-    }),
+  const supplier = await db.supplier.findFirst({
+    where: { id: input.supplierId, tenantId: input.tenantId },
+    select: { id: true, sourceType: true, inventoryMode: true },
+  })
+  if (!supplier) throw Object.assign(new Error('供应商不存在或不属于当前租户'), { statusCode: 404 })
+
+  const inventoryTracked = supplier.inventoryMode === 'STRICT'
+  const defaultWarehouse = inventoryTracked
+    ? await db.warehouse.findFirst({
+        where: { tenantId: input.tenantId, isDefault: true, isActive: true },
+        select: { id: true },
+      })
+    : null
+  if (inventoryTracked && !defaultWarehouse) {
+    throw Object.assign(new Error('当前租户不存在启用的默认仓'), { statusCode: 404 })
+  }
+  const warehouseId = defaultWarehouse?.id
+
+  const [products, reservations, stockMovements, stockBatches, deliveries, receipts, arrivalDiscrepancies] = await Promise.all([
     db.product.findMany({
       where: { tenantId: input.tenantId, supplierId: input.supplierId },
       select: { id: true, code: true, name: true, stock: true },
     }),
     db.supplierStockReservation.findMany({
-      where: { tenantId: input.tenantId, supplierId: input.supplierId, status: 'ACTIVE' },
+      where: {
+        tenantId: input.tenantId,
+        supplierId: input.supplierId,
+        ...(warehouseId ? { warehouseId } : {}),
+        status: 'ACTIVE',
+      },
       include: {
         product: { select: { name: true } },
         purchaseOrder: { select: { no: true, status: true } },
       },
     }),
     db.supplierStockMovement.findMany({
-      where: { tenantId: input.tenantId, supplierId: input.supplierId },
+      where: {
+        tenantId: input.tenantId,
+        supplierId: input.supplierId,
+        ...(warehouseId ? { warehouseId } : {}),
+      },
       select: { id: true, productId: true, delta: true, balanceAfter: true, createdAt: true },
       orderBy: [{ productId: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
       take: 20_000,
     }),
     db.supplierStockBatch.findMany({
-      where: { tenantId: input.tenantId, supplierId: input.supplierId },
+      where: {
+        tenantId: input.tenantId,
+        supplierId: input.supplierId,
+        ...(warehouseId ? { warehouseId } : {}),
+      },
       select: { id: true, productId: true, batchNo: true, initialQty: true, remainingQty: true },
       orderBy: [{ productId: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
       take: 20_000,
@@ -91,10 +118,8 @@ export async function auditSupplierSupplyChain(input: {
       take: 1000,
     }),
   ])
-  if (!supplier) throw Object.assign(new Error('供应商不存在或不属于当前租户'), { statusCode: 404 })
 
   const issues: SupplyChainAuditIssue[] = []
-  const inventoryTracked = supplier.inventoryMode === 'STRICT'
   const movementsByProduct = new Map<string, typeof stockMovements>()
   for (const movement of stockMovements) {
     const rows = movementsByProduct.get(movement.productId) || []
@@ -277,19 +302,9 @@ export async function auditSupplierSupplyChain(input: {
     }
   }
 
-  let warehouseId: string | undefined
   let warehouseStockRowsChecked = 0
 
   if (inventoryTracked) {
-    const defaultWarehouse = await db.warehouse.findFirst({
-      where: { tenantId: input.tenantId, isDefault: true, isActive: true },
-      select: { id: true },
-    })
-    if (!defaultWarehouse) {
-      throw Object.assign(new Error('当前租户不存在启用的默认仓'), { statusCode: 404 })
-    }
-    warehouseId = defaultWarehouse.id
-
     const productIds = products.map(p => p.id)
     const warehouseStocks = productIds.length > 0
       ? await db.warehouseStock.findMany({

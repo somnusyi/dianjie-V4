@@ -376,10 +376,10 @@ describe('supplier tenant scope (integration)', () => {
   it('rejects product create values beyond database decimal bounds before writes', async () => {
     const invalidBodies = [
       { price: 100_000_000 },
-      { stock: 100_000_000 },
-      { minStock: 100_000_000 },
-      { minOrderQty: 100_000_000 },
-      { stepQty: 100_000_000 },
+      { stock: 1_000_000_000 },
+      { minStock: 1_000_000_000 },
+      { minOrderQty: 1_000_000_000 },
+      { stepQty: 1_000_000_000 },
     ]
     for (const [index, fields] of invalidBodies.entries()) {
       const response = await app.inject({

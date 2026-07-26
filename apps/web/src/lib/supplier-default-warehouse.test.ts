@@ -3,6 +3,7 @@ import {
   DEFAULT_WAREHOUSE_ID,
   DEFAULT_WAREHOUSE_NAME,
   assertInboundWarehouseResponse,
+  assertRealWarehouseResponse,
   resolveWarehouseDisplayName,
   withSupplierWarehouseParams,
   withWarehouseBody,
@@ -232,6 +233,47 @@ describe('assertInboundWarehouseResponse', () => {
         warehouse: { id: 'wh-real-001', name: ' 主仓 ' },
       }),
     ).toEqual({ warehouseId: 'wh-real-001', warehouseName: '主仓' })
+  })
+})
+
+describe('assertRealWarehouseResponse', () => {
+  it('returns warehouseId and warehouseName for a valid real-warehouse response', () => {
+    const result = assertRealWarehouseResponse({
+      warehouseId: 'wh-real-001',
+      warehouse: { id: 'wh-real-001', name: '默认总仓' },
+    })
+    expect(result).toEqual({ warehouseId: 'wh-real-001', warehouseName: '默认总仓' })
+  })
+
+  it('rejects the default alias', () => {
+    expect(() =>
+      assertRealWarehouseResponse({
+        warehouseId: 'default',
+        warehouse: { id: 'default', name: '默认仓' },
+      }),
+    ).toThrow('响应未返回真实仓库 ID')
+  })
+
+  it('rejects mismatched warehouse.id', () => {
+    expect(() =>
+      assertRealWarehouseResponse({
+        warehouseId: 'wh-real-001',
+        warehouse: { id: 'wh-other', name: '默认总仓' },
+      }),
+    ).toThrow('响应仓库 ID 不一致')
+  })
+
+  it('rejects empty warehouse name', () => {
+    expect(() =>
+      assertRealWarehouseResponse({
+        warehouseId: 'wh-real-001',
+        warehouse: { id: 'wh-real-001', name: '' },
+      }),
+    ).toThrow('响应缺少仓库名称')
+  })
+
+  it('rejects non-object response', () => {
+    expect(() => assertRealWarehouseResponse(null)).toThrow('响应格式异常')
   })
 })
 

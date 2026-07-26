@@ -100,10 +100,11 @@ export function validateProductQuantity(
 /** 校验库存、安全库存、起订量、步长；返回第一条错误文案或 null。 */
 export function validateProductQuantities(
   form: SupplyProductQuantityForm,
+  { editableOnly = false }: { editableOnly?: boolean } = {},
 ): string | null {
   return (
-    validateProductQuantity(form.stock, '库存') ||
-    validateProductQuantity(form.minStock, '安全库存') ||
+    (!editableOnly && validateProductQuantity(form.stock, '库存')) ||
+    (!editableOnly && validateProductQuantity(form.minStock, '安全库存')) ||
     validateProductQuantity(form.minOrderQty, '起订量', { positive: true }) ||
     validateProductQuantity(form.stepQty, '步长', { positive: true }) ||
     null

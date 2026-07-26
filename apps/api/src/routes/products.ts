@@ -11,6 +11,7 @@ import { mergeSupplierCategory } from '../services/supplierCategory'
 import { createId } from '@paralleldrive/cuid2'
 import { getSupplierReservedStock, stockAvailability } from '../services/supplierStockReservation'
 import { createSupplierStockBatchIncrease } from '../services/supplierStockBatch'
+import { resolveTenantWarehouseId } from '../services/defaultWarehouse'
 import { fireAndForget } from '../services/notify'
 import {
   fireAndForgetNotifyProductChange,
@@ -1286,13 +1287,19 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         } else if (role === 'SUPPLY_CHAIN' && data.supplierId) {
           await lockActiveSupplierCategory(tx, tenantId, data.supplierId, data.category)
         }
+        const openingWarehouseId = !isSupplierRole(role)
+          && data.supplierId
+          && Number(data.stock) > 0
+          ? await resolveTenantWarehouseId(tx, tenantId, undefined)
+          : undefined
         const created = await tx.product.create({
           data: { tenantId, ...data } as any,
         })
-        if (created.supplierId && Number(created.stock) > 0) {
+        if (openingWarehouseId && created.supplierId && Number(created.stock) > 0) {
           const movement = await tx.supplierStockMovement.create({
             data: {
               tenantId,
+              warehouseId: openingWarehouseId,
               supplierId: created.supplierId,
               productId: created.id,
               delta: created.stock,
@@ -1306,6 +1313,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           })
           await createSupplierStockBatchIncrease(tx, {
             tenantId,
+            warehouseId: openingWarehouseId,
             supplierId: created.supplierId,
             productId: created.id,
             quantity: created.stock,
@@ -1405,7 +1413,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       if (e.code === 'P2002') {
         return reply.status(409).send({ error: '商品编码已存在（请换一个 code）' })
       }
-      if (e.statusCode === 409) return reply.status(409).send({ error: e.message })
+      if (e.statusCode === 404 || e.statusCode === 409) {
+        return reply.status(e.statusCode).send({ error: e.message })
+      }
       req.log.error({ err: e }, 'product create failed')
       return reply.status(500).send({ error: '创建失败（请检查日志）' })
     }

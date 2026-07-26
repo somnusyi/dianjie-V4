@@ -2,6 +2,7 @@ import { Prisma } from '@dianjie/db'
 
 type BatchIncreaseInput = {
   tenantId: string
+  warehouseId?: string
   supplierId: string
   productId: string
   quantity: number | Prisma.Decimal
@@ -15,6 +16,7 @@ type BatchIncreaseInput = {
 
 type BatchConsumptionInput = {
   tenantId: string
+  warehouseId?: string
   supplierId: string
   productId: string
   quantity: number | Prisma.Decimal
@@ -46,6 +48,7 @@ export async function createSupplierStockBatchIncrease(
   return tx.supplierStockBatch.create({
     data: {
       tenantId: input.tenantId,
+      ...(input.warehouseId === undefined ? {} : { warehouseId: input.warehouseId }),
       supplierId: input.supplierId,
       productId: input.productId,
       batchNo: input.batchNo?.trim() || generatedBatchNo(input.kind, input.movementId),
@@ -71,6 +74,9 @@ export async function consumeSupplierStockBatches(
 ) {
   const requested = new Prisma.Decimal(input.quantity)
   if (requested.lessThanOrEqualTo(0)) throw businessError('批次扣减数量必须大于 0', 400)
+  const warehouseFilter = input.warehouseId === undefined
+    ? Prisma.empty
+    : Prisma.sql`AND "warehouseId" = ${input.warehouseId}`
 
   const batches = await tx.$queryRaw<Array<{
     id: string
@@ -81,6 +87,7 @@ export async function consumeSupplierStockBatches(
     WHERE "tenantId" = ${input.tenantId}
       AND "supplierId" = ${input.supplierId}
       AND "productId" = ${input.productId}
+      ${warehouseFilter}
       AND "remainingQty" > 0
     ORDER BY
       CASE WHEN "kind" = 'OPENING' THEN 0 ELSE 1 END,
@@ -116,6 +123,7 @@ export async function consumeSupplierStockBatches(
     await tx.supplierStockBatchAllocation.create({
       data: {
         tenantId: input.tenantId,
+        ...(input.warehouseId === undefined ? {} : { warehouseId: input.warehouseId }),
         supplierId: input.supplierId,
         productId: input.productId,
         batchId: batch.id,
@@ -146,6 +154,7 @@ export async function applySupplierStockBatchDelta(
   }
   return consumeSupplierStockBatches(tx, {
     tenantId: input.tenantId,
+    warehouseId: input.warehouseId,
     supplierId: input.supplierId,
     productId: input.productId,
     movementId: input.movementId,

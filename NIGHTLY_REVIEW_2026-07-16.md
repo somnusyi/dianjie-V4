@@ -2190,3 +2190,44 @@
   `scripts/deploy-worktree.sh` 发布；最终部署提交、备份、PM2、health、AutoFix 状态和
   锁释放结果写入本 automation memory。公网 `dianjie.cc` 证书问题继续只报告，不轮换
   证书或私钥。
+
+## 2026-07-26 21:27 第 3 小时 AutoFix 发布锁所有权加固
+
+### 开始基线与生产只读证据
+
+- 已读取 automation memory、本夜审记录，fetch `origin/main` 并核对全部相关 worktree。
+  主工作树原有 7 个未跟踪文件和其他既有脏 worktree 均保持原样；其中
+  `maintenance-v4-autofix-watchdog` 留有一组未提交的 stale watchdog 改动，本批没有
+  接管、覆盖或重复修改该分支，只在新的干净隔离 worktree
+  `maintenance-v4-autofix-lock-owner` 开发。
+- 开始时 GitHub main、生产 `.deployed-commit` 与 `/app/dianjie-src` 均为
+  `0aaa78efa63f2f9e57d1cb7adbbe33c970fe6c78`，源码干净、发布锁不存在。API、Web、
+  CMB 三个 PM2 进程在线，本机健康分别为 200、200、200，CMB relay 未认证返回 401
+  符合预期；70 条 migration 成功、0 条 pending。
+- 生产 AutoFixRun 为 0，没有 `RECEIVED`、活动、`ESCALATED` 或
+  `FAILED_ROLLBACK`。反馈为 `CLARIFYING` 1 条、`REJECTED` 1 条、`RESOLVED` 2 条，
+  没有待审批、已批准或 `IN_DEV` 项，因此本批没有待回收的 AutoFix 本地提交。
+
+### 确定性缺陷与修改
+
+- 旧 AutoFix 部署锁只用 `mkdir` 获取，释放函数却无条件递归删除 `.deploy-lock`。
+  如果旧自动任务停顿期间锁被人工接管或由标准发布重新建立，旧任务恢复进入 `finally`
+  后会误删新发布者的锁，使第三个发布在第二个发布尚未完成时获得锁。
+- 部署锁现写入每次获取时生成的不可预测所有者令牌；释放前必须逐字核对 owner。锁目录
+  已被接管、owner 缺失或内容变化时一律 fail closed，保留现场并输出明确错误，不再删除
+  非本任务持有的锁；正常持有者和既有单持有者互斥语义不变。
+- 新增真实临时目录回归，覆盖单持有者正常释放、第二持有者被拒、暂停期间锁被接管后旧
+  持有者不得删除，以及 owner 缺失时目录继续阻断新发布。实现提交为
+  `47ff3d0f23e75098929117f57178bc89572e0ec6`。
+
+### 验收与发布门禁
+
+- Node `20.20.2`；锁专项 3/3、API 全量 56 文件 544/544、API build、Web 全量
+  28 文件 506/506、Web tsc、166 页 production build 全部通过。production build
+  仅保留既有 OpenTelemetry 动态依赖 warning。
+- `git diff --check` 与改动文件高置信敏感信息扫描通过。本批不涉及 schema、业务页面或
+  API 业务数据路径，因此不执行迁移、数据库写入集成或浏览器业务 E2E。
+- 本节与实现通过后将以非强制纯快进进入 main，并只使用标准
+  `/Users/somnusyi/Desktop/dianjie-V4/dianjie-V4-deploy/scripts/deploy-worktree.sh`
+  发布；最终备份、PM2、health、deployed commit、源码副本、AutoFix 状态和锁释放结果
+  写入 automation memory。公网过期证书继续只报告，不轮换证书或私钥。

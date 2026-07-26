@@ -1,12 +1,39 @@
 import Fastify from 'fastify'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_WAREHOUSE_ID,
   DEFAULT_WAREHOUSE_META,
   DEFAULT_WAREHOUSE_NAME,
   resolveWarehouseId,
+  resolveTenantWarehouseId,
 } from '../../src/services/defaultWarehouse'
 import { supplierStockRoutes } from '../../src/routes/supplierStock'
+
+type WarehouseRow = {
+  id: string
+  tenantId: string
+  isDefault: boolean
+  isActive: boolean
+}
+
+function warehouseDb(rows: WarehouseRow[]) {
+  const findFirst = vi.fn(async (args: {
+    where: Partial<WarehouseRow>
+    select: { id: true }
+  }) => {
+    const row = rows.find(candidate => (
+      Object.entries(args.where).every(([key, value]) => (
+        candidate[key as keyof WarehouseRow] === value
+      ))
+    ))
+    return row ? { id: row.id } : null
+  })
+
+  return {
+    db: { warehouse: { findFirst } } as unknown as Parameters<typeof resolveTenantWarehouseId>[0],
+    findFirst,
+  }
+}
 
 describe('defaultWarehouse helper', () => {
   it('exports stable default warehouse constants', () => {
@@ -67,6 +94,123 @@ describe('defaultWarehouse helper', () => {
     it('throws 400 for boolean value', () => {
       expect(() => resolveWarehouseId(true)).toThrow('未知仓库')
     })
+  })
+})
+
+describe('resolveTenantWarehouseId', () => {
+  const rows: WarehouseRow[] = [
+    { id: 'wh-tenant-a-default', tenantId: 'tenant-a', isDefault: true, isActive: true },
+    { id: 'wh-tenant-a-secondary', tenantId: 'tenant-a', isDefault: false, isActive: true },
+    { id: 'wh-tenant-a-disabled', tenantId: 'tenant-a', isDefault: false, isActive: false },
+    { id: 'wh-tenant-b-default', tenantId: 'tenant-b', isDefault: true, isActive: true },
+  ]
+
+  it.each([undefined, null, '', '   ', 'default', '  default  '])(
+    'resolves the API default alias %j to the authenticated tenant default',
+    async rawWarehouseId => {
+      const { db, findFirst } = warehouseDb(rows)
+
+      await expect(resolveTenantWarehouseId(db, 'tenant-a', rawWarehouseId))
+        .resolves.toBe('wh-tenant-a-default')
+      expect(findFirst).toHaveBeenCalledWith({
+        where: { tenantId: 'tenant-a', isDefault: true, isActive: true },
+        select: { id: true },
+      })
+    },
+  )
+
+  it('resolves an enabled real warehouse ID in the authenticated tenant', async () => {
+    const { db, findFirst } = warehouseDb(rows)
+
+    await expect(resolveTenantWarehouseId(db, 'tenant-a', '  wh-tenant-a-secondary  '))
+      .resolves.toBe('wh-tenant-a-secondary')
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        tenantId: 'tenant-a',
+        id: 'wh-tenant-a-secondary',
+        isActive: true,
+      },
+      select: { id: true },
+    })
+  })
+
+  it('fails closed for a warehouse in another tenant', async () => {
+    const { db, findFirst } = warehouseDb(rows)
+
+    await expect(resolveTenantWarehouseId(db, 'tenant-a', 'wh-tenant-b-default'))
+      .rejects.toMatchObject({ statusCode: 404 })
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        tenantId: 'tenant-a',
+        id: 'wh-tenant-b-default',
+        isActive: true,
+      },
+      select: { id: true },
+    })
+  })
+
+  it('fails closed for a disabled warehouse', async () => {
+    const { db, findFirst } = warehouseDb(rows)
+
+    await expect(resolveTenantWarehouseId(db, 'tenant-a', 'wh-tenant-a-disabled'))
+      .rejects.toMatchObject({ statusCode: 404 })
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        tenantId: 'tenant-a',
+        id: 'wh-tenant-a-disabled',
+        isActive: true,
+      },
+      select: { id: true },
+    })
+  })
+
+  it('fails closed for an unknown real warehouse ID', async () => {
+    const { db } = warehouseDb(rows)
+
+    await expect(resolveTenantWarehouseId(db, 'tenant-a', 'wh-missing'))
+      .rejects.toMatchObject({ statusCode: 404 })
+  })
+
+  it('fails closed when the authenticated tenant has no enabled default', async () => {
+    const { db, findFirst } = warehouseDb(rows.filter(row => row.tenantId === 'tenant-b'))
+
+    await expect(resolveTenantWarehouseId(db, 'tenant-a', 'default'))
+      .rejects.toMatchObject({
+        statusCode: 404,
+        message: '当前租户不存在启用的默认仓',
+      })
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { tenantId: 'tenant-a', isDefault: true, isActive: true },
+      select: { id: true },
+    })
+  })
+
+  it('uses only the authenticated tenantId even when raw input carries another tenant', async () => {
+    const { db, findFirst } = warehouseDb(rows)
+    const forgedInput = {
+      tenantId: 'tenant-b',
+      warehouseId: 'wh-tenant-b-default',
+      toString: () => 'wh-tenant-b-default',
+    }
+
+    await expect(resolveTenantWarehouseId(db, 'tenant-a', forgedInput))
+      .rejects.toMatchObject({ statusCode: 404 })
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        tenantId: 'tenant-a',
+        id: 'wh-tenant-b-default',
+        isActive: true,
+      },
+      select: { id: true },
+    })
+  })
+
+  it('accepts a transaction-shaped Prisma client without using global Prisma', async () => {
+    const { db, findFirst } = warehouseDb(rows)
+
+    await expect(resolveTenantWarehouseId(db, 'tenant-a', 'wh-tenant-a-secondary'))
+      .resolves.toBe('wh-tenant-a-secondary')
+    expect(findFirst).toHaveBeenCalledTimes(1)
   })
 })
 

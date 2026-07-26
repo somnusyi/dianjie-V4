@@ -35,6 +35,12 @@ const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
         icon: '!',
         match: ['/v2/supply-chain/differences', '/v2/supply-chain/receipts'],
       },
+      {
+        href: '/v2/supply-chain/stores',
+        label: '门店运营',
+        description: '订货、收货、库存与消耗',
+        icon: '店',
+      },
     ],
   },
   {

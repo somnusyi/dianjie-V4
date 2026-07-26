@@ -1,49 +1,24 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { ErrorScreen, LoadingScreen, useDashboard } from '@/components/v2/use-dashboard'
 import { apiFetch } from '@/lib/v2-auth'
 
-type Store = { id: string; no: string; name: string }
-type Supplier = { id: string; no: string; name: string }
 type DocumentRow = {
   id: string
   no: string
   status: string
   totalAmount?: number | string
-  actualTotalAmount?: number | string
   store?: { id: string; name: string }
   supplier?: { id: string; name: string }
   createdAt?: string
-  deliveryDate?: string
-}
-type InventoryRow = {
-  id: string
-  code?: string
-  name: string
-  inventoryUnit?: string
-  unit?: string
-  stock?: number
-  minStock?: number
-}
-type ConsumptionRow = {
-  id: string
-  date: string
-  inventoryQuantity?: number | string | null
-  quantity: number | string
-  inventoryUnitSnapshot?: string | null
-  unitSnapshot?: string | null
-  product?: { code?: string; name: string; unit?: string }
-}
-type Audit = {
-  checkedAt: string
-  summary: { errors: number; warnings: number }
-  issues: Array<{ code: string; severity: 'ERROR' | 'WARNING'; label: string; detail: string }>
 }
 
-function queryForStore(storeId: string) {
-  return storeId ? `&storeId=${encodeURIComponent(storeId)}` : ''
+const STATUS_LABELS: Record<string, string> = {
+  SUBMITTED: '待接单',
+  CONFIRMED: '待发货',
+  DELIVERING: '配送中',
 }
 
 function money(value: unknown) {
@@ -57,72 +32,32 @@ function dateText(value?: string) {
 
 export default function InternalSupplyChainHomePage() {
   const { data, error } = useDashboard()
-  const [storeId, setStoreId] = useState('')
   const [orders, setOrders] = useState<DocumentRow[]>([])
-  const [suppliers, setSuppliers] = useState<Supplier[]>([])
-  const [supplierId, setSupplierId] = useState('')
-  const [audit, setAudit] = useState<Audit | null>(null)
-  const [inventory, setInventory] = useState<InventoryRow[]>([])
-  const [consumptions, setConsumptions] = useState<ConsumptionRow[]>([])
   const [loadingRows, setLoadingRows] = useState(true)
   const [rowError, setRowError] = useState('')
-
-  const stores = useMemo<Store[]>(() => data?.supplyChain?.stores || [], [data])
-  const selectedStore = stores.find(store => store.id === storeId)
 
   useEffect(() => {
     let alive = true
     setLoadingRows(true)
     setRowError('')
-    const storeQuery = queryForStore(storeId)
-    Promise.all([
-      apiFetch<{ items: DocumentRow[] }>(`/api/orders?pageSize=100${storeQuery}`),
-      apiFetch<Supplier[]>('/api/suppliers?status=ENABLED'),
-    ]).then(([orderData, supplierRows]) => {
-      if (!alive) return
-      setOrders((orderData.items || []).filter(row => ['SUBMITTED', 'CONFIRMED', 'DELIVERING'].includes(row.status)))
-      const list = Array.isArray(supplierRows) ? supplierRows : []
-      setSuppliers(list)
-      setSupplierId(current => current || list[0]?.id || '')
-    }).catch(reason => {
-      if (alive) setRowError(String(reason?.message || reason))
-    }).finally(() => {
-      if (alive) setLoadingRows(false)
-    })
+    apiFetch<{ items: DocumentRow[] }>('/api/orders?page=1&pageSize=100')
+      .then(orderData => {
+        if (!alive) return
+        setOrders((orderData.items || []).filter(row => ['SUBMITTED', 'CONFIRMED', 'DELIVERING'].includes(row.status)))
+      })
+      .catch(reason => {
+        if (alive) setRowError(String(reason?.message || reason))
+      })
+      .finally(() => {
+        if (alive) setLoadingRows(false)
+      })
     return () => { alive = false }
-  }, [storeId])
-
-  useEffect(() => {
-    if (!supplierId) return
-    let alive = true
-    apiFetch<Audit>(`/api/supplier/insights/audit?days=90&supplierId=${encodeURIComponent(supplierId)}`)
-      .then(result => { if (alive) setAudit(result) })
-      .catch(reason => { if (alive) setRowError(String(reason?.message || reason)) })
-    return () => { alive = false }
-  }, [supplierId])
-
-  useEffect(() => {
-    let alive = true
-    if (!storeId) {
-      setInventory([])
-      setConsumptions([])
-      return
-    }
-    Promise.all([
-      apiFetch<InventoryRow[]>(`/api/inventory?storeId=${encodeURIComponent(storeId)}`),
-      apiFetch<ConsumptionRow[]>(`/api/inventory/consumptions?days=30&storeId=${encodeURIComponent(storeId)}`),
-    ]).then(([inventoryRows, consumptionRows]) => {
-      if (!alive) return
-      setInventory(inventoryRows || [])
-      setConsumptions(consumptionRows || [])
-    }).catch(reason => {
-      if (alive) setRowError(String(reason?.message || reason))
-    })
-    return () => { alive = false }
-  }, [storeId])
+  }, [])
 
   if (error) return <ErrorScreen message={error} />
   if (!data) return <LoadingScreen />
+
+  const stores = data.supplyChain?.stores || []
 
   return (
     <div className="min-h-screen bg-bg px-4 py-5 lg:px-8 lg:py-7">
@@ -133,31 +68,18 @@ export default function InternalSupplyChainHomePage() {
             <span className="text-caption text-gray3">统一采购 · 仓库 · 跨店履约</span>
           </div>
           <h1 className="text-h1">内部供应链工作台</h1>
-          <p className="mt-1 text-caption text-gray2">原供应商作业能力已并入；履约、商品、仓库与供应商管理可操作，跨店收货/消耗和账务保持只读。</p>
+          <p className="mt-1 text-caption text-gray2">只保留当前需要行动的任务；门店订货、收货、库存和消耗已归入门店运营。</p>
         </div>
-        <div className="flex items-center gap-3">
-          <label className="text-caption text-gray2">
-            门店
-            <select
-              aria-label="筛选门店"
-              value={storeId}
-              onChange={event => setStoreId(event.target.value)}
-              className="ml-2 h-10 min-w-52 rounded-cta border border-border bg-white px-3 text-body"
-            >
-              <option value="">全部门店（履约单据）</option>
-              {stores.map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}
-            </select>
-          </label>
+        <div className="flex flex-wrap items-center gap-2">
           <a href="/v2/supply-chain/fulfillment" className="rounded-cta bg-accent px-4 py-2.5 text-button text-white">去订单中心</a>
-          <a href="/v2/supply-chain/products" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">商品管理</a>
+          <a href="/v2/supply-chain/stores" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">门店运营</a>
           <a href="/v2/supply-chain/inventory" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">仓库库存</a>
-          <a href="/v2/supply-chain/billing" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">账务查询</a>
         </div>
       </header>
 
       <main className="mx-auto max-w-[1440px]">
         <section className="grid gap-3 py-5 sm:grid-cols-2 lg:grid-cols-4">
-          <Metric label="门店范围" value={`${stores.length} 家`} />
+          <Metric label="服务门店" value={`${stores.length} 家`} />
           <Metric label="进行中订单" value={String(data.supplyChain?.counts.orders || 0)} />
           <Metric label="在途配送" value={String(data.supplyChain?.counts.deliveries || 0)} />
           <Metric label="有效收货" value={String(data.supplyChain?.counts.receipts || 0)} />
@@ -165,76 +87,57 @@ export default function InternalSupplyChainHomePage() {
 
         {rowError && <div className="mb-4 rounded-card border border-red/30 bg-red-bg p-3 text-caption text-red-fg">{rowError}</div>}
 
-        <section className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(360px,1fr)]">
+        <section className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(340px,1fr)]">
           <div className="overflow-hidden rounded-card border border-border bg-white">
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
-              <div><h2 className="text-h2">今日待处理</h2><p className="text-micro text-gray3">待接单、待发货和配送中订单；订货单与配送单仍为独立单据</p></div>
+              <div>
+                <h2 className="text-h2">今日待处理</h2>
+                <p className="text-micro text-gray3">跨门店汇总待接单、待发货和配送中订单</p>
+              </div>
               <a href="/v2/supply-chain/fulfillment" className="text-caption text-accent">进入订单中心 ›</a>
             </div>
-            <table className="w-full text-left text-caption">
-              <thead className="bg-bg text-gray3"><tr><th className="px-4 py-2">订单 / 门店</th><th className="px-4 py-2">供应商</th><th className="px-4 py-2">状态</th><th className="px-4 py-2 text-right">金额</th><th className="px-4 py-2"></th></tr></thead>
-              <tbody className="divide-y divide-border">
-                {orders.slice(0, 12).map(row => <tr key={row.id}><td className="px-4 py-3"><b className="font-num">{row.no}</b><div className="text-micro text-gray3">{row.store?.name || '—'} · {dateText(row.createdAt)}</div></td><td className="px-4 py-3">{row.supplier?.name || '—'}</td><td className="px-4 py-3"><Chip tone={row.status === 'SUBMITTED' ? 'orange' : 'gray'}>{row.status}</Chip></td><td className="px-4 py-3 text-right font-num">{money(row.totalAmount)}</td><td className="px-4 py-3 text-right"><a className="text-accent" href={`/v2/supply-chain/fulfillment/${row.id}`}>处理 ›</a></td></tr>)}
-              </tbody>
-            </table>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-caption">
+                <thead className="bg-bg text-gray3"><tr><th className="px-4 py-2">订单 / 门店</th><th className="px-4 py-2">供应商</th><th className="px-4 py-2">状态</th><th className="px-4 py-2 text-right">金额</th><th className="px-4 py-2"></th></tr></thead>
+                <tbody className="divide-y divide-border">
+                  {orders.slice(0, 12).map(row => (
+                    <tr key={row.id}>
+                      <td className="px-4 py-3"><b className="font-num">{row.no}</b><div className="text-micro text-gray3">{row.store?.name || '—'} · {dateText(row.createdAt)}</div></td>
+                      <td className="px-4 py-3">{row.supplier?.name || '—'}</td>
+                      <td className="px-4 py-3"><Chip tone={row.status === 'SUBMITTED' ? 'orange' : 'gray'}>{STATUS_LABELS[row.status] || row.status}</Chip></td>
+                      <td className="px-4 py-3 text-right font-num">{money(row.totalAmount)}</td>
+                      <td className="px-4 py-3 text-right"><a className="text-accent" href={`/v2/supply-chain/fulfillment/${row.id}`}>处理 ›</a></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
             {!loadingRows && orders.length === 0 && <Empty text="当前没有待处理订单" />}
             {loadingRows && <Empty text="加载中…" />}
           </div>
 
-          <div className="rounded-card border border-border bg-white p-4">
-            <div className="flex items-start justify-between gap-2"><div><h2 className="text-h2">数据健康待办</h2><p className="text-micro text-gray3">按单一供应商核查，避免跨供应商混淆</p></div><a href="/v2/supply-chain/analytics" className="text-caption text-accent">完整分析 ›</a></div>
-            <select value={supplierId} onChange={event => setSupplierId(event.target.value)} className="mt-3 h-10 w-full rounded-cta border border-border bg-bg px-3 text-body">{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}</select>
-            <div className="mt-3 grid grid-cols-2 gap-2"><Metric label="错误" value={String(audit?.summary.errors ?? '—')} /><Metric label="警告" value={String(audit?.summary.warnings ?? '—')} /></div>
-            <ul className="mt-3 max-h-56 divide-y divide-border overflow-auto">{(audit?.issues || []).slice(0, 6).map((issue, index) => <li key={`${issue.code}-${index}`} className="py-2"><div className="flex gap-2"><Chip tone={issue.severity === 'ERROR' ? 'red' : 'orange'}>{issue.severity === 'ERROR' ? '错误' : '警告'}</Chip><b className="truncate text-caption">{issue.label}</b></div><p className="mt-1 text-micro text-gray2">{issue.detail}</p></li>)}</ul>
-            {audit?.issues.length === 0 && <div className="py-8 text-center text-caption text-green-fg">✓ 未发现台账异常</div>}
-          </div>
-        </section>
-
-        <section className="mt-4 grid gap-4 xl:grid-cols-2">
-          <div className="rounded-card border border-border bg-white">
-            <SectionHeader title="门店库存" subtitle={selectedStore ? selectedStore.name : '请选择具体门店'} />
-            {!selectedStore ? (
-              <Empty text="选择门店后查看预计库存" />
-            ) : (
-              <div className="max-h-[420px] overflow-auto">
-                <table className="w-full text-left text-caption">
-                  <thead className="sticky top-0 bg-bg text-gray3"><tr><th className="px-4 py-2">食材</th><th className="px-4 py-2">预计库存</th><th className="px-4 py-2">安全线</th></tr></thead>
-                  <tbody className="divide-y divide-border">
-                    {inventory.map(row => (
-                      <tr key={row.id}>
-                        <td className="px-4 py-3"><b>{row.name}</b><span className="ml-2 text-micro text-gray3">{row.code}</span></td>
-                        <td className="px-4 py-3 font-num">{Number(row.stock || 0).toLocaleString()} {row.inventoryUnit || row.unit}</td>
-                        <td className="px-4 py-3 font-num text-gray2">{Number(row.minStock || 0).toLocaleString()}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {inventory.length === 0 && <Empty text="暂无库存数据" />}
+          <div className="space-y-4">
+            <section className="rounded-card border border-border bg-white p-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-caption text-gray3">门店运营</div>
+                  <div className="mt-1 font-num text-h1">{stores.length} 家</div>
+                </div>
+                <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-amber/10 text-xl font-bold text-amber-fg">店</span>
               </div>
-            )}
-          </div>
+              <p className="mt-3 text-caption leading-6 text-gray2">按门店查看订货、收货、当前库存和近30天消耗，数据保持只读。</p>
+              <a href="/v2/supply-chain/stores" className="mt-4 block rounded-cta bg-ink px-4 py-2.5 text-center text-button text-white">进入门店运营</a>
+            </section>
 
-          <div className="rounded-card border border-border bg-white">
-            <SectionHeader title="近 30 天纯消耗" subtitle={selectedStore ? selectedStore.name : '请选择具体门店'} />
-            {!selectedStore ? (
-              <Empty text="选择门店后查看消耗，不含营业额与成本率" />
-            ) : (
-              <div className="max-h-[420px] overflow-auto">
-                <table className="w-full text-left text-caption">
-                  <thead className="sticky top-0 bg-bg text-gray3"><tr><th className="px-4 py-2">日期</th><th className="px-4 py-2">食材</th><th className="px-4 py-2">消耗量</th></tr></thead>
-                  <tbody className="divide-y divide-border">
-                    {consumptions.map(row => (
-                      <tr key={row.id}>
-                        <td className="px-4 py-3 font-num text-gray2">{dateText(row.date)}</td>
-                        <td className="px-4 py-3"><b>{row.product?.name || '未知食材'}</b><span className="ml-2 text-micro text-gray3">{row.product?.code}</span></td>
-                        <td className="px-4 py-3 font-num">{Number(row.inventoryQuantity ?? row.quantity).toLocaleString()} {row.inventoryUnitSnapshot || row.unitSnapshot || row.product?.unit}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {consumptions.length === 0 && <Empty text="近 30 天暂无消耗记录" />}
+            <section className="rounded-card border border-border bg-white p-5">
+              <h2 className="text-h2">快捷入口</h2>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-center text-button">
+                <a href="/v2/supply-chain/differences" className="rounded-cta border border-border bg-bg px-3 py-3">到货差异</a>
+                <a href="/v2/supply-chain/products" className="rounded-cta border border-border bg-bg px-3 py-3">商品管理</a>
+                <a href="/v2/supply-chain/inventory" className="rounded-cta border border-border bg-bg px-3 py-3">仓库库存</a>
+                <a href="/v2/supply-chain/analytics" className="rounded-cta border border-border bg-bg px-3 py-3">经营分析</a>
               </div>
-            )}
+            </section>
           </div>
         </section>
       </main>
@@ -246,46 +149,6 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="rounded-card border border-border bg-white p-4"><div className="text-caption text-gray3">{label}</div><div className="mt-1 font-num text-h1">{value}</div></div>
 }
 
-function SectionHeader({ title, subtitle }: { title: string; subtitle: string }) {
-  return <div className="flex items-baseline justify-between border-b border-border px-4 py-3"><h2 className="text-h2">{title}</h2><span className="text-micro text-gray3">{subtitle}</span></div>
-}
-
 function Empty({ text }: { text: string }) {
   return <div className="px-4 py-10 text-center text-caption text-gray3">{text}</div>
-}
-
-function DocumentTable({
-  title,
-  rows,
-  amountKey,
-  dateKey = 'createdAt',
-  loading,
-}: {
-  title: string
-  rows: DocumentRow[]
-  amountKey: 'totalAmount' | 'actualTotalAmount'
-  dateKey?: 'createdAt' | 'deliveryDate'
-  loading: boolean
-}) {
-  return (
-    <div className="rounded-card border border-border bg-white">
-      <SectionHeader title={title} subtitle="最近 8 条 · 只读" />
-      <div className="max-h-[360px] overflow-auto">
-        <table className="w-full text-left text-caption">
-          <thead className="sticky top-0 bg-bg text-gray3"><tr><th className="px-4 py-2">单号 / 门店</th><th className="px-4 py-2">状态</th><th className="px-4 py-2 text-right">金额</th></tr></thead>
-          <tbody className="divide-y divide-border">
-            {rows.map(row => (
-              <tr key={row.id}>
-                <td className="px-4 py-3"><b className="font-num">{row.no}</b><div className="mt-0.5 text-micro text-gray3">{row.store?.name || '—'} · {dateText(row[dateKey])}</div></td>
-                <td className="px-4 py-3"><Chip tone="gray">{row.status}</Chip></td>
-                <td className="px-4 py-3 text-right font-num">{money(row[amountKey])}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {!loading && rows.length === 0 && <Empty text="暂无记录" />}
-        {loading && <Empty text="加载中…" />}
-      </div>
-    </div>
-  )
 }

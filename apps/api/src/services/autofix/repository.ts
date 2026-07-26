@@ -85,16 +85,33 @@ async function run(repoDir: string, command: string, args: string[], timeout = 1
   return `${stdout || ''}${stderr || ''}`.slice(-20_000)
 }
 
+export async function requireCleanRepoHead(
+  repoDir: string,
+  expectedHead?: string,
+): Promise<string> {
+  const status = await run(repoDir, 'git', ['status', '--porcelain'], 30_000)
+  if (status.trim()) throw new Error('自动修复源码副本不是干净状态')
+
+  const head = (await run(repoDir, 'git', ['rev-parse', 'HEAD'], 30_000)).trim()
+  if (expectedHead && head !== expectedHead) {
+    throw new Error(`源码基线已变化，预期 ${expectedHead}，实际 ${head}`)
+  }
+  return head
+}
+
 /**
  * Applies the AI diff only in a disposable git worktree. The production source
  * and application directory remain untouched before a human approval.
  */
-export async function verifyPatch(repoDir: string, diffPatch: string): Promise<string> {
+export async function verifyPatch(
+  repoDir: string,
+  diffPatch: string,
+  expectedBaseSha: string,
+): Promise<string> {
   const inspection = inspectUnifiedDiff(diffPatch)
   if (!inspection.ok) throw new Error(inspection.errors.join('；'))
 
-  const status = await run(repoDir, 'git', ['status', '--porcelain'], 30_000)
-  if (status.trim()) throw new Error('自动修复源码副本不是干净状态')
+  await requireCleanRepoHead(repoDir, expectedBaseSha)
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'dianjie-autofix-'))
   const patchFile = path.join(tempRoot, 'candidate.patch')
   const worktreeDir = path.join(tempRoot, 'worktree')
@@ -102,7 +119,7 @@ export async function verifyPatch(repoDir: string, diffPatch: string): Promise<s
 
   try {
     await run(repoDir, 'git', ['apply', '--check', patchFile], 30_000)
-    await run(repoDir, 'git', ['worktree', 'add', '--detach', worktreeDir, 'HEAD'], 30_000)
+    await run(repoDir, 'git', ['worktree', 'add', '--detach', worktreeDir, expectedBaseSha], 30_000)
     await symlink(path.join(repoDir, 'node_modules'), path.join(worktreeDir, 'node_modules'), 'dir').catch(() => undefined)
     await run(worktreeDir, 'git', ['apply', '--whitespace=error-all', patchFile], 30_000)
     const testLog = await run(worktreeDir, 'pnpm', ['--filter', '@dianjie/web', 'test'], 180_000)
@@ -112,6 +129,7 @@ export async function verifyPatch(repoDir: string, diffPatch: string): Promise<s
       ['exec', 'tsc', '-p', 'apps/web/tsconfig.json', '--noEmit'],
       180_000,
     )
+    await requireCleanRepoHead(repoDir, expectedBaseSha)
     return `${testLog}\n${typeLog}`.slice(-20_000)
   } finally {
     await run(repoDir, 'git', ['worktree', 'remove', '--force', worktreeDir], 30_000).catch(() => undefined)

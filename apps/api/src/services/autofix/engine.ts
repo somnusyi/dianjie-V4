@@ -1,5 +1,3 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import { prisma } from '@dianjie/db'
 import { fireAndForget as notify } from '../notify'
 import { qwenChat, QWEN_BUSY_FALLBACK, QWEN_NOT_CONFIGURED } from '../qwenChat'
@@ -16,9 +14,7 @@ import {
   extractUnifiedDiff,
   parseAnalysisResult,
 } from './prompts'
-import { collectCandidateSources, verifyPatch } from './repository'
-
-const execFileAsync = promisify(execFile)
+import { collectCandidateSources, requireCleanRepoHead, verifyPatch } from './repository'
 const ACTIVE_STATUSES = ['ANALYZING', 'PATCHING', 'VERIFYING', 'DEPLOYING', 'VERIFY_PROD'] as const
 let draining = false
 
@@ -138,14 +134,6 @@ async function claimNextRun(): Promise<ClaimResult | null> {
   })
 }
 
-async function currentRepoHead(sourceDir: string): Promise<string> {
-  const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
-    cwd: sourceDir,
-    timeout: 15_000,
-  })
-  return stdout.trim()
-}
-
 async function processRun(run: { id: string; tenantId: string; feedbackId: string }) {
   try {
     if (!isAutoFixModeEnabled()) throw new Error('AUTO_FIX_MODE 已关闭')
@@ -170,7 +158,9 @@ async function processRun(run: { id: string; tenantId: string; feedbackId: strin
     if (!contextPath) throw new Error('反馈缺少 context.path，无法安全定位')
 
     const sourceDir = repoDir()
+    const baseCommitSha = await requireCleanRepoHead(sourceDir)
     const sources = await collectCandidateSources(sourceDir, contextPath)
+    await requireCleanRepoHead(sourceDir, baseCommitSha)
     const analysisRaw = await qwenChat([
       {
         role: 'system',
@@ -238,8 +228,7 @@ async function processRun(run: { id: string; tenantId: string; feedbackId: strin
       diffPatch,
       diffFiles: inspection.files as any,
     })
-    const verificationLog = await verifyPatch(sourceDir, diffPatch)
-    const baseCommitSha = await currentRepoHead(sourceDir)
+    const verificationLog = await verifyPatch(sourceDir, diffPatch, baseCommitSha)
     const planSummary = `${analysis.rootCause}\n修改 ${inspection.files.length} 个文件、${inspection.changedLines} 行；Web 测试与类型检查通过。`
 
     await transition(run, 'PLAN_READY', {

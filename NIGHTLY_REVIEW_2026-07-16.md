@@ -2069,3 +2069,20 @@
   `AUTO_FIX_MODE=off`、`AUTO_FIX_DEPLOY_ENABLED=false`；因此现有反馈链路零行为变化，
   不会调用第二轮 Qwen、创建自动修复任务或触发自动部署。服务器源码副本、Linux 构建、
   失败回滚演练通过后再单独开启 suggest 灰度。
+
+### 16:37 P1a 生产发布与公网证书异常
+
+- 唯一候选 `a7e047bfb094c981061389e87386ebd6dfbdf764` 已快进进入远端 `main`，标准
+  worktree 发布脚本完成生产数据库和构建快照、产物同步、第 70 个迁移、Prisma Client
+  重生成、PM2 硬重启及 HTML/CSS 健康检查；线上 `.deployed-commit` 与候选完全一致，
+  发布锁已释放。
+- 生产复核显示 `auto_fix_runs` 表存在、70 个迁移全部完成，API/Web/CMB 三个 PM2
+  进程均在线；本机访问 API 健康检查和自动修复页面均为 200，未登录访问自动修复 API
+  为 401。生产未配置两个自动修复开关，因此按代码默认保持 `off + false`。
+- 独立公网复核发现 `app.dianjie.cc`、`api.dianjie.cc`、`dianjie.cc` 和
+  `www.dianjie.cc` 当前使用的 DigiCert 证书均已于 2026-07-21 23:59:59 UTC 到期。
+  DNS、Nginx 和上游应用正常，跳过证书校验后公网健康接口和新页面均为 200；正常 TLS
+  客户端会拒绝过期证书。
+- 证书续期会生成或更换 TLS 私钥，属于凭证轮换，本轮未越权执行。服务器已有 Certbot
+  与定时器，但现有四张证书不在 Certbot 管理目录中；需取得明确授权后，用现有域名
+  校验链路签发新证书、备份 Nginx 配置、`nginx -t` 后 reload，并再次验证四个域名。

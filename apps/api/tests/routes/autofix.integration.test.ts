@@ -2,7 +2,10 @@ import Fastify from 'fastify'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { prisma } from '@dianjie/db'
 import { autoFixRoutes } from '../../src/routes/autofix'
-import { executeManualRollback } from '../../src/services/autofix/deployment'
+import {
+  executeApprovedRun,
+  executeManualRollback,
+} from '../../src/services/autofix/deployment'
 import { enqueueAutoFix } from '../../src/services/autofix/engine'
 
 vi.mock('../../src/services/autofix/deployment', () => ({
@@ -23,6 +26,10 @@ let runB = ''
 let rollbackRunA = ''
 let rollbackRunB = ''
 let concurrentRollbackRunA = ''
+let approvalRunA = ''
+let approvalRunB = ''
+let incompleteApprovalRunA = ''
+let concurrentApprovalRunA = ''
 let app: ReturnType<typeof Fastify>
 let oldMode: string | undefined
 let oldDeploy: string | undefined
@@ -79,7 +86,17 @@ describe('auto-fix approval API (integration)', () => {
     managerA = ma.id
     adminB = ab.id
 
-    const [fa, fb, rollbackFa, rollbackFb, concurrentRollbackFa] = await Promise.all([
+    const [
+      fa,
+      fb,
+      rollbackFa,
+      rollbackFb,
+      concurrentRollbackFa,
+      approvalFa,
+      approvalFb,
+      incompleteApprovalFa,
+      concurrentApprovalFa,
+    ] = await Promise.all([
       prisma.feedback.create({
         data: {
           tenantId: tenantA, reporterId: managerA, category: 'BUG_BLOCKING',
@@ -110,10 +127,44 @@ describe('auto-fix approval API (integration)', () => {
           status: 'RESOLVED', title: 'A 并发回滚故障', context: { path: '/v2/manager/home' },
         },
       }),
+      prisma.feedback.create({
+        data: {
+          tenantId: tenantA, reporterId: managerA, category: 'BUG_BLOCKING',
+          status: 'AWAITING_APPROVAL', title: 'A 待批准故障', context: { path: '/v2/manager/home' },
+        },
+      }),
+      prisma.feedback.create({
+        data: {
+          tenantId: tenantB, reporterId: adminB, category: 'BUG_BLOCKING',
+          status: 'AWAITING_APPROVAL', title: 'B 待批准故障', context: { path: '/v2/boss/home' },
+        },
+      }),
+      prisma.feedback.create({
+        data: {
+          tenantId: tenantA, reporterId: managerA, category: 'BUG_BLOCKING',
+          status: 'AWAITING_APPROVAL', title: 'A 补丁不完整故障', context: { path: '/v2/manager/home' },
+        },
+      }),
+      prisma.feedback.create({
+        data: {
+          tenantId: tenantA, reporterId: managerA, category: 'BUG_BLOCKING',
+          status: 'AWAITING_APPROVAL', title: 'A 并发批准故障', context: { path: '/v2/manager/home' },
+        },
+      }),
     ])
     feedbackA = fa.id
     feedbackB = fb.id
-    const [ra, rb, rollbackRa, rollbackRb, concurrentRollbackRa] = await Promise.all([
+    const [
+      ra,
+      rb,
+      rollbackRa,
+      rollbackRb,
+      concurrentRollbackRa,
+      approvalRa,
+      approvalRb,
+      incompleteApprovalRa,
+      concurrentApprovalRa,
+    ] = await Promise.all([
       prisma.autoFixRun.create({
         data: {
           tenantId: tenantA,
@@ -158,12 +209,52 @@ describe('auto-fix approval API (integration)', () => {
           commitSha: 'c'.repeat(40),
         },
       }),
+      prisma.autoFixRun.create({
+        data: {
+          tenantId: tenantA,
+          feedbackId: approvalFa.id,
+          status: 'AWAITING_APPROVAL',
+          diffPatch: 'diff --git a/apps/web/src/app/a.tsx b/apps/web/src/app/a.tsx\n',
+          baseCommitSha: 'd'.repeat(40),
+          error: '旧错误应在批准时清除',
+        },
+      }),
+      prisma.autoFixRun.create({
+        data: {
+          tenantId: tenantB,
+          feedbackId: approvalFb.id,
+          status: 'AWAITING_APPROVAL',
+          diffPatch: 'diff --git a/apps/web/src/app/b.tsx b/apps/web/src/app/b.tsx\n',
+          baseCommitSha: 'e'.repeat(40),
+        },
+      }),
+      prisma.autoFixRun.create({
+        data: {
+          tenantId: tenantA,
+          feedbackId: incompleteApprovalFa.id,
+          status: 'AWAITING_APPROVAL',
+          baseCommitSha: 'f'.repeat(40),
+        },
+      }),
+      prisma.autoFixRun.create({
+        data: {
+          tenantId: tenantA,
+          feedbackId: concurrentApprovalFa.id,
+          status: 'AWAITING_APPROVAL',
+          diffPatch: 'diff --git a/apps/web/src/app/c.tsx b/apps/web/src/app/c.tsx\n',
+          baseCommitSha: '1'.repeat(40),
+        },
+      }),
     ])
     runA = ra.id
     runB = rb.id
     rollbackRunA = rollbackRa.id
     rollbackRunB = rollbackRb.id
     concurrentRollbackRunA = concurrentRollbackRa.id
+    approvalRunA = approvalRa.id
+    approvalRunB = approvalRb.id
+    incompleteApprovalRunA = incompleteApprovalRa.id
+    concurrentApprovalRunA = concurrentApprovalRa.id
 
     app = Fastify()
     app.decorate('authenticate', async (request: any) => {
@@ -237,6 +328,85 @@ describe('auto-fix approval API (integration)', () => {
       where: { tenantId: tenantA, entityType: 'AutoFixRun', targetId: runA },
     })
     expect(log?.action).toContain('定位证据不足')
+  })
+
+  it('allows only the same-tenant SUPER_ADMIN to approve a complete patch', async () => {
+    process.env.AUTO_FIX_DEPLOY_ENABLED = 'true'
+    try {
+      expect((await inject(
+        'managerA',
+        'POST',
+        `/api/autofix/runs/${approvalRunA}/approve`,
+        {},
+      )).statusCode).toBe(403)
+      expect((await inject(
+        'adminA',
+        'POST',
+        `/api/autofix/runs/${approvalRunB}/approve`,
+        {},
+      )).statusCode).toBe(404)
+      expect((await prisma.autoFixRun.findUnique({ where: { id: approvalRunB } }))?.status)
+        .toBe('AWAITING_APPROVAL')
+
+      const incomplete = await inject(
+        'adminA',
+        'POST',
+        `/api/autofix/runs/${incompleteApprovalRunA}/approve`,
+        {},
+      )
+      expect(incomplete.statusCode).toBe(400)
+      expect(incomplete.json().error).toContain('补丁或源码基线不完整')
+
+      const response = await inject(
+        'adminA',
+        'POST',
+        `/api/autofix/runs/${approvalRunA}/approve`,
+        {},
+      )
+      expect(response.statusCode).toBe(202)
+      expect(response.json()).toEqual({ ok: true, status: 'DEPLOYING' })
+      const run = await prisma.autoFixRun.findUnique({ where: { id: approvalRunA } })
+      expect(run?.status).toBe('DEPLOYING')
+      expect(run?.decidedById).toBe(adminA)
+      expect(run?.error).toBeNull()
+      expect(await prisma.opLog.count({
+        where: {
+          tenantId: tenantA,
+          entityType: 'AutoFixRun',
+          targetId: approvalRunA,
+          action: { contains: '批准 AI 自动修复' },
+        },
+      })).toBe(1)
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(vi.mocked(executeApprovedRun)).toHaveBeenCalledOnce()
+      expect(vi.mocked(executeApprovedRun)).toHaveBeenCalledWith(approvalRunA)
+    } finally {
+      process.env.AUTO_FIX_DEPLOY_ENABLED = 'false'
+    }
+  })
+
+  it('serializes duplicate approvals and schedules exactly one deployment', async () => {
+    process.env.AUTO_FIX_DEPLOY_ENABLED = 'true'
+    try {
+      const responses = await Promise.all([
+        inject('adminA', 'POST', `/api/autofix/runs/${concurrentApprovalRunA}/approve`, {}),
+        inject('adminA', 'POST', `/api/autofix/runs/${concurrentApprovalRunA}/approve`, {}),
+      ])
+      expect(responses.map((response) => response.statusCode).sort()).toEqual([202, 400])
+      expect(await prisma.opLog.count({
+        where: {
+          tenantId: tenantA,
+          entityType: 'AutoFixRun',
+          targetId: concurrentApprovalRunA,
+          action: { contains: '批准 AI 自动修复' },
+        },
+      })).toBe(1)
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(vi.mocked(executeApprovedRun)).toHaveBeenCalledOnce()
+      expect(vi.mocked(executeApprovedRun)).toHaveBeenCalledWith(concurrentApprovalRunA)
+    } finally {
+      process.env.AUTO_FIX_DEPLOY_ENABLED = 'false'
+    }
   })
 
   it('allows only the same-tenant SUPER_ADMIN to start a rollback', async () => {

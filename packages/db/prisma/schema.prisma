@@ -858,10 +858,10 @@ model Product {
   unitConversionNote            String?                     @db.VarChar(500)
   unitConversionVerifiedAt      DateTime?
   price                         Decimal                     @db.Decimal(10, 2) // 参考单价
-  stock                         Decimal                     @default(0) @db.Decimal(10, 2)
-  minStock                      Decimal                     @default(0) @db.Decimal(10, 2) // 安全库存
-  minOrderQty                   Decimal                     @default(1) @db.Decimal(10, 2) // 起订量 (≥1)
-  stepQty                       Decimal                     @default(1) @db.Decimal(10, 2) // 整倍数步长 (1=随便; 10=必须 10/20/30...)
+  stock                         Decimal                     @default(0) @db.Decimal(12, 3)
+  minStock                      Decimal                     @default(0) @db.Decimal(12, 3) // 安全库存
+  minOrderQty                   Decimal                     @default(1) @db.Decimal(12, 3) // 起订量 (≥1)
+  stepQty                       Decimal                     @default(1) @db.Decimal(12, 3) // 整倍数步长 (1=随便; 10=必须 10/20/30...)
   shelfDays                     Int                         @default(7) // 保质期天数
   // 实发量上限 (供应商发货时允许调整的弹性, 2026-05-28 客户反馈 per-product 可配)
   // 校验公式: upper = max(下单 × shipUpperPct, 下单 + shipUpperBuffer)

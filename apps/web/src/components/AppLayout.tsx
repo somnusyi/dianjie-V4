@@ -7,6 +7,7 @@ import NotificationPanel from './NotificationPanel'
 
 const NAV: any[] = [
   { type: 'item', key: 'dashboard', label: '经营看板', desc: '老板 / 店长工作台', icon: '▦', path: '/dashboard' },
+  { type: 'item', key: 'feedback', label: '问题反馈', desc: '提报问题 / 建议 / 需求', icon: '✉', path: '/feedback' },
 
   { type: 'divider', label: '运营链路' },
   { type: 'item', key: 'orders',      label: '采购订单', desc: '发起 / 供应商确认', icon: '购', path: '/orders' },
@@ -27,10 +28,11 @@ const NAV: any[] = [
   { type: 'item', key: 'stores',    label: '门店管理', desc: '门店档案', icon: '店', path: '/stores',    roles: ['ADMIN','SUPER_ADMIN'] },
   { type: 'item', key: 'users',     label: '用户管理', desc: '账号 / 权限', icon: '人', path: '/users',     roles: ['ADMIN','SUPER_ADMIN'] },
   { type: 'item', key: 'logs',      label: '操作日志', desc: '审计留痕', icon: '记', path: '/logs',      roles: ['ADMIN','SUPER_ADMIN'] },
+  { type: 'item', key: 'feedback-admin', label: '反馈管理', desc: '分诊审批 / 闭环', icon: '理', path: '/feedback/admin', roles: ['SUPER_ADMIN'] },
 ]
 
-const SUPPLIER_KEYS = ['orders', 'loss-claims']
-const MANAGER_HIDDEN = ['suppliers', 'products', 'stores', 'logs', 'finance', 'approval']
+const SUPPLIER_KEYS = ['orders', 'loss-claims', 'feedback']
+const MANAGER_HIDDEN = ['suppliers', 'products', 'stores', 'logs', 'finance', 'approval', 'feedback-admin']
 const ROLE_LABEL: Record<string, string> = {
   ADMIN: '老板 / 管理员',
   FINANCE: '财务',
@@ -124,7 +126,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   const activeItem = useMemo(() => {
-    return NAV.find(item => item.type === 'item' && (pathname === item.path || pathname.startsWith(item.path + '/')))
+    const matched = NAV.filter(item => item.type === 'item' && (pathname === item.path || pathname.startsWith(item.path + '/')))
+    return matched.sort((a, b) => b.path.length - a.path.length)[0]
   }, [pathname])
 
   const logout = () => storeLogout()
@@ -154,7 +157,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               return <div className="dj-nav-divider" key={`div-${idx}`}>{item.label}</div>
             }
 
-            const active = pathname === item.path || pathname.startsWith(item.path + '/')
+            const active = activeItem?.key === item.key
             const badge = badges[item.key] || 0
 
             return (

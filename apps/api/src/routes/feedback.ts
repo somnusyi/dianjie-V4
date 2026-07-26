@@ -7,6 +7,7 @@
  * - GET    /api/feedback/admin/inbox  待批列表 (仅 SUPER_ADMIN)
  * - GET    /api/feedback/:id          详情含 messages (本人或 SUPER_ADMIN)
  * - POST   /api/feedback/:id/decision 批准/驳回 (仅 SUPER_ADMIN, 写 OpLog + 消息中心)
+ * - POST   /api/feedback/:id/resolve  标记已解决 (仅 SUPER_ADMIN, 闭环 + 通知提报人)
  *
  * 分诊: AI 回复末尾的 triage 标记块由 feedbackTriage 解析 strip;
  *   BUG_BLOCKING → 紧急企微通知 (P0 人工处理) | IMPROVEMENT/NEW_FEATURE → AWAITING_APPROVAL+审批卡片
@@ -48,6 +49,10 @@ const decisionSchema = z.object({
   (d) => d.action !== 'reject' || !!d.note,
   { message: '驳回时请填写理由', path: ['note'] },
 )
+
+const resolveSchema = z.object({
+  note: z.string().trim().max(300).optional(),
+}).strict()
 
 const inboxQuerySchema = z.object({
   status: z.enum(['CLARIFYING', 'AWAITING_APPROVAL', 'APPROVED', 'REJECTED', 'IN_DEV', 'RESOLVED', 'CLOSED'])
@@ -359,6 +364,62 @@ export const feedbackRoutes: FastifyPluginAsync = async (app) => {
       })
     } catch (e) {
       console.error('[feedback] 决策通知写入失败:', e)
+    }
+    return { ok: true }
+  })
+
+  // ── 标记已解决 (仅 SUPER_ADMIN, 闭环 + 通知提报人) ─────
+  app.post('/:id/resolve', auth(app), async (req: any, reply: any) => {
+    const actor: Actor = req.user
+    if (!ADMIN_ROLES.has(actor.role)) return reply.status(403).send({ error: '无权限' })
+    const parsed = resolveSchema.safeParse(req.body ?? {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const { note } = parsed.data
+
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`feedback:${String(req.params.id)}`}))::text AS locked`
+      const feedback = await tx.feedback.findFirst({
+        where: { id: String(req.params.id), tenantId: actor.tenantId },
+      })
+      if (!feedback) return { status: 404, error: '反馈不存在' }
+      if (!['CLARIFYING', 'AWAITING_APPROVAL', 'APPROVED', 'IN_DEV'].includes(feedback.status)) {
+        return { status: 400, error: '该反馈当前状态无法标记已解决' }
+      }
+      await tx.feedback.update({ where: { id: feedback.id }, data: { status: 'RESOLVED' } })
+      await tx.feedbackMessage.create({
+        data: {
+          tenantId: actor.tenantId, feedbackId: feedback.id, role: 'assistant',
+          content: note?.trim() || '该问题已处理完成，标记为已解决。如仍有问题请继续留言或重新提交。',
+        },
+      })
+      await tx.opLog.create({
+        data: {
+          tenantId: actor.tenantId, userId: actor.userId, role: actor.role,
+          action: `标记反馈「${feedback.title || feedback.id}」已解决${note ? `: ${note}` : ''}`,
+          entityType: 'Feedback', targetId: feedback.id,
+          metadata: { resolve: true, category: feedback.category } as any,
+        },
+      })
+      return { status: 200, ok: true, feedback }
+    })
+    if ('error' in result) return reply.status(result.status).send({ error: result.error })
+
+    try {
+      const feedback = result.feedback
+      const reporter = await prisma.user.findUnique({ where: { id: feedback.reporterId }, select: { role: true } })
+      await sendNotification({
+        tenantId: actor.tenantId,
+        recipientRole: reporter?.role || 'MANAGER',
+        recipientId: feedback.reporterId,
+        type: 'FEEDBACK_RESULT',
+        title: `反馈已解决: ${feedback.title || ''}`,
+        body: note?.trim() || '问题已处理完成，如仍有问题可继续留言。',
+        refType: 'Feedback',
+        refId: feedback.id,
+        dedupeKey: `FEEDBACK_RESULT:${feedback.id}:resolved`,
+      })
+    } catch (e) {
+      console.error('[feedback] 解决通知写入失败:', e)
     }
     return { ok: true }
   })

@@ -21,9 +21,10 @@ type Item = {
 
 const TABS = [
   { key: 'AWAITING_APPROVAL', label: '待审批' },
-  { key: 'IN_DEV', label: '开发中' },
-  { key: 'REJECTED', label: '已驳回' },
   { key: 'CLARIFYING', label: '沟通中' },
+  { key: 'IN_DEV', label: '开发中' },
+  { key: 'RESOLVED', label: '已解决' },
+  { key: 'REJECTED', label: '已驳回' },
 ] as const
 
 export default function BossFeedbackPage() {

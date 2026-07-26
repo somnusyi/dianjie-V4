@@ -28,6 +28,7 @@ export default function BossFeedbackDetailPage() {
   const [fb, setFb] = useState<Detail | null>(null)
   const [error, setError] = useState('')
   const [rejectNote, setRejectNote] = useState('')
+  const [resolveNote, setResolveNote] = useState('')
   const [acting, setActing] = useState(false)
   const [confirmState, openConfirm] = useConfirmSheet()
 
@@ -49,6 +50,29 @@ export default function BossFeedbackDetailPage() {
       setError(e.message || '操作失败，请重试')
       setActing(false)
     }
+  }
+
+  async function resolveFb(note?: string) {
+    setActing(true)
+    try {
+      await apiFetch(`/api/feedback/${id}/resolve`, {
+        method: 'POST',
+        body: JSON.stringify(note ? { note } : {}),
+      })
+      location.href = '/v2/boss/feedback'
+    } catch (e: any) {
+      setError(e.message || '操作失败，请重试')
+      setActing(false)
+    }
+  }
+
+  function onResolve() {
+    openConfirm({
+      title: '标记该反馈已解决?',
+      body: '标记后反馈闭环，提报人会在消息中心收到「已解决」通知。',
+      confirmLabel: '标记已解决',
+      onConfirm: () => resolveFb(resolveNote.trim() || undefined),
+    })
   }
 
   function onApprove() {
@@ -84,6 +108,7 @@ export default function BossFeedbackDetailPage() {
   const cat = categoryBadge(fb.category)
   const st = statusBadge(fb.status)
   const pending = fb.status === 'AWAITING_APPROVAL'
+  const resolvable = ['CLARIFYING', 'IN_DEV'].includes(fb.status)
 
   return (
     <div className="min-h-screen bg-bg pb-12">
@@ -188,6 +213,27 @@ export default function BossFeedbackDetailPage() {
                 驳回
               </button>
             </div>
+          </div>
+        )}
+        {/* 标记已解决 (BUG 沟通中 / 开发中 → 闭环) */}
+        {resolvable && (
+          <div className="bg-white rounded-card border border-border p-3 space-y-2">
+            <textarea
+              value={resolveNote}
+              onChange={(e) => setResolveNote(e.target.value)}
+              rows={2}
+              maxLength={300}
+              placeholder="给提报人的解决说明（选填）"
+              className="w-full text-body bg-bg rounded-cta px-3 py-2 outline-none resize-none placeholder:text-gray3"
+            />
+            {error && <div className="text-caption text-red-fg">{error}</div>}
+            <button
+              onClick={onResolve}
+              disabled={acting}
+              className="w-full py-3 rounded-cta bg-ink text-white text-button disabled:opacity-50"
+            >
+              标记已解决
+            </button>
           </div>
         )}
       </div>

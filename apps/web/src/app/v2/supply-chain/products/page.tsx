@@ -849,7 +849,12 @@ function FormDialog({
     ? `调价「${editing?.name || ''}」`
     : editing ? `编辑「${editing.name}」` : '新增商品'
   const confirmLabel = priceOnly ? '确认调价' : editing ? '保存修改' : '新增'
-  const bodyNote = '直接生效并通知总厨'
+  const bodyNote = editing && !priceOnly
+    ? '只修改商品档案；价格使用列表「调价」，库存使用「仓库库存」。保存后直接生效并通知总厨。'
+    : '直接生效并通知总厨'
+  const unitSummary = formatConversionSummary(buildFourUnitValues(form))
+  const simpleUnitContract = unitSummary.startsWith('四单位均为')
+  const [unitDetailsOpen, setUnitDetailsOpen] = useState(!editing || !simpleUnitContract)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4" onClick={onClose}>
@@ -880,19 +885,20 @@ function FormDialog({
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-3">
-            <FormField label="供应商">
-              <select
-                value={form.supplierId}
-                onChange={e => onFieldChange('supplierId', e.target.value)}
-                disabled={Boolean(editing)}
-                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body disabled:bg-bg disabled:text-gray3"
-              >
-                <option value="">未关联供应商</option>
-                {suppliers.map(supplier => (
-                  <option key={supplier.id} value={supplier.id}>{supplier.name}</option>
-                ))}
-              </select>
-            </FormField>
+            {!editing && (
+              <FormField label="供应商">
+                <select
+                  value={form.supplierId}
+                  onChange={e => onFieldChange('supplierId', e.target.value)}
+                  className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body"
+                >
+                  <option value="">未关联供应商</option>
+                  {suppliers.map(supplier => (
+                    <option key={supplier.id} value={supplier.id}>{supplier.name}</option>
+                  ))}
+                </select>
+              </FormField>
+            )}
             <div className="col-span-2">
               <FormField label="商品图片">
                 <div className="flex items-center gap-3">
@@ -929,7 +935,7 @@ function FormDialog({
                 </div>
               </FormField>
             </div>
-            <FormField label="名称" required>
+            <FormField label="名称" required full={Boolean(editing)}>
               <input
                 type="text"
                 value={form.name}
@@ -939,18 +945,19 @@ function FormDialog({
                 autoFocus
               />
             </FormField>
-            <FormField label="编码">
-              <input
-                type="text"
-                value={form.code}
-                onChange={e => onFieldChange('code', e.target.value)}
-                maxLength={40}
-                disabled={Boolean(editing)}
-                placeholder="留空自动生成"
-                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent disabled:bg-bg disabled:text-gray3"
-              />
-            </FormField>
-            <FormField label="分类">
+            {!editing && (
+              <FormField label="编码">
+                <input
+                  type="text"
+                  value={form.code}
+                  onChange={e => onFieldChange('code', e.target.value)}
+                  maxLength={40}
+                  placeholder="留空自动生成"
+                  className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                />
+              </FormField>
+            )}
+            <FormField label="分类" full={Boolean(editing)}>
               <input
                 type="text"
                 value={form.category}
@@ -964,9 +971,26 @@ function FormDialog({
                 {categories.map(cat => <option key={cat.name} value={cat.name} />)}
               </datalist>
             </FormField>
-            <div className="col-span-2">
-              <div className="rounded-lg bg-bg p-3">
-                <p className="mb-2 text-micro font-medium text-ink">单位换算（四单位可相同）</p>
+            <FormField label="规格" full>
+              <input
+                type="text"
+                value={form.spec}
+                onChange={e => onFieldChange('spec', e.target.value)}
+                maxLength={80}
+                placeholder="如 500g/袋"
+                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+              />
+            </FormField>
+            <details
+              className="col-span-2 rounded-cta border border-border bg-bg px-3 py-2"
+              open={unitDetailsOpen}
+              onToggle={event => setUnitDetailsOpen(event.currentTarget.open)}
+            >
+              <summary className="cursor-pointer text-caption text-gray2">
+                单位换算
+                <span className="ml-2 text-micro text-gray3">{unitSummary}</span>
+              </summary>
+              <div className="mt-3 rounded-lg bg-white p-3">
                 <div className="grid grid-cols-2 gap-3">
                   <FormField label="采购单位">
                     <input
@@ -1043,49 +1067,31 @@ function FormDialog({
                   {formatConversionSummary(buildFourUnitValues(form))}
                 </p>
               </div>
-            </div>
-            <FormField label={formatCostUnitPriceLabel(form.costUnit)} required>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={form.price}
-                onChange={e => onFieldChange('price', e.target.value)}
-                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
-              />
-            </FormField>
-            <FormField label="保质期（天）">
-              <input
-                type="number"
-                min="0"
-                max="3650"
-                value={form.shelfDays}
-                onChange={e => onFieldChange('shelfDays', e.target.value)}
-                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
-              />
-            </FormField>
-            <FormField label="库存（请在库存模块调整）">
-              <input
-                type="number"
-                min="0"
-                step="0.001"
-                value={form.stock}
-                onChange={e => onFieldChange('stock', e.target.value)}
-                disabled
-                className="h-10 w-full rounded-cta border border-border bg-bg px-3 text-body text-gray2 outline-none"
-              />
-            </FormField>
-            <FormField label={editing ? '安全库存（编辑暂不开放）' : '安全库存'}>
-              <input
-                type="number"
-                min="0"
-                step="0.001"
-                value={form.minStock}
-                onChange={e => onFieldChange('minStock', e.target.value)}
-                disabled={Boolean(editing)}
-                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent disabled:bg-bg disabled:text-gray2"
-              />
-            </FormField>
+            </details>
+            {!editing && (
+              <>
+                <FormField label={formatCostUnitPriceLabel(form.costUnit)} required>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.price}
+                    onChange={e => onFieldChange('price', e.target.value)}
+                    className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                  />
+                </FormField>
+                <FormField label="保质期（天）">
+                  <input
+                    type="number"
+                    min="0"
+                    max="3650"
+                    value={form.shelfDays}
+                    onChange={e => onFieldChange('shelfDays', e.target.value)}
+                    className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                  />
+                </FormField>
+              </>
+            )}
             <FormField label="最小下单量">
               <input
                 type="number"
@@ -1097,8 +1103,20 @@ function FormDialog({
               />
             </FormField>
             <details className="col-span-2 rounded-cta border border-border bg-bg px-3 py-2">
-              <summary className="cursor-pointer text-caption text-gray2">高级订货规则</summary>
+              <summary className="cursor-pointer text-caption text-gray2">更多设置</summary>
               <div className="mt-3 grid grid-cols-2 items-end gap-3">
+                {editing && (
+                  <FormField label="保质期（天）">
+                    <input
+                      type="number"
+                      min="0"
+                      max="3650"
+                      value={form.shelfDays}
+                      onChange={e => onFieldChange('shelfDays', e.target.value)}
+                      className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                    />
+                  </FormField>
+                )}
                 <FormField label="下单增量">
                   <input
                     type="number"
@@ -1109,21 +1127,11 @@ function FormDialog({
                     className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
                   />
                 </FormField>
-                <p className="pb-2 text-micro leading-5 text-gray3">
+                <p className="col-span-2 text-micro leading-5 text-gray3">
                   超过最小下单量后，每次可以增加的数量。例如最小 2、增量 0.5，可下单 2、2.5、3。
                 </p>
               </div>
             </details>
-            <FormField label="规格" full>
-              <input
-                type="text"
-                value={form.spec}
-                onChange={e => onFieldChange('spec', e.target.value)}
-                maxLength={80}
-                placeholder="如 500g/袋"
-                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
-              />
-            </FormField>
           </div>
         )}
 

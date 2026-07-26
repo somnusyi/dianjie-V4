@@ -45,10 +45,13 @@ import {
   resolveProductImageUrl,
   SUPPLY_PRODUCT_STATUS_OPTIONS,
   validateNewProductForm,
+  validateProductQuantities,
+  formatProductQuantity,
   type CategoryOption,
   type SupplierOption,
   type SupplyProduct,
   type SupplyProductFilters,
+  type SupplyProductQuantityForm,
 } from '@/lib/supply-product-pc'
 import {
   buildFourUnitCreateBody,
@@ -74,6 +77,10 @@ type ProductRow = SupplyProduct & {
   inventoryUnitsPerOrderUnit?: number | string | null
   inventoryUnitsPerCostUnit?: number | string | null
   unitConversionStatus?: string | null
+  stock?: number | string | null
+  minStock?: number | string | null
+  minOrderQty?: number | string | null
+  stepQty?: number | string | null
 }
 
 type FormState = {
@@ -85,7 +92,7 @@ type FormState = {
   spec: string
   shelfDays: string
   supplierId: string
-} & FourUnitForm
+} & FourUnitForm & SupplyProductQuantityForm
 
 const EMPTY_FORM: FormState = {
   name: '',
@@ -97,6 +104,10 @@ const EMPTY_FORM: FormState = {
   shelfDays: '7',
   supplierId: '',
   ...DEFAULT_FOUR_UNIT_FORM,
+  stock: '0',
+  minStock: '0',
+  minOrderQty: '1',
+  stepQty: '1',
 }
 
 export default function InternalSupplyChainProductsPage() {
@@ -222,6 +233,10 @@ export default function InternalSupplyChainProductsPage() {
       shelfDays: String(product.shelfDays ?? 7),
       supplierId: product.supplier?.id || '',
       ...fourUnitFormFromProduct(product),
+      stock: String(product.stock ?? 0),
+      minStock: String(product.minStock ?? 0),
+      minOrderQty: String(product.minOrderQty ?? 1),
+      stepQty: String(product.stepQty ?? 1),
     })
     setFormError(null)
     setPendingImageFile(null)
@@ -255,7 +270,7 @@ export default function InternalSupplyChainProductsPage() {
   }
 
   async function submitForm() {
-    const validationError = validateNewProductForm(form) || validateFourUnitForm(form)
+    const validationError = validateNewProductForm(form) || validateFourUnitForm(form) || validateProductQuantities(form)
     if (validationError) { setFormError(validationError); return }
     setFormError(null)
     setSubmitting(true)
@@ -278,6 +293,10 @@ export default function InternalSupplyChainProductsPage() {
             unit: editing.unit || '',
             spec: editing.spec || '',
             shelfDays: Number(editing.shelfDays ?? 7),
+            stock: editing.stock,
+            minStock: editing.minStock,
+            minOrderQty: editing.minOrderQty,
+            stepQty: editing.stepQty,
           }),
           ...buildFourUnitEditBody(fourUnitForm, fourUnitFormFromProduct(editing)),
         }
@@ -567,6 +586,10 @@ export default function InternalSupplyChainProductsPage() {
                     <th className="px-4 py-3">名称</th>
                     <th className="px-4 py-3">规格</th>
                     <th className="px-4 py-3">分类</th>
+                    <th className="px-4 py-3 text-right">库存</th>
+                    <th className="px-4 py-3 text-right">安全库存</th>
+                    <th className="px-4 py-3 text-right">起订量</th>
+                    <th className="px-4 py-3 text-right">步长</th>
                     <th className="px-4 py-3 text-right">单价（元 / 成本单位）</th>
                     <th className="px-4 py-3">供应商</th>
                     <th className="px-4 py-3">状态</th>
@@ -600,6 +623,10 @@ export default function InternalSupplyChainProductsPage() {
                         <td className="px-4 py-3"><b>{product.name}</b></td>
                         <td className="px-4 py-3 text-gray2">{product.spec || '—'}</td>
                         <td className="px-4 py-3 text-gray2">{product.category || '—'}</td>
+                        <td className="px-4 py-3 text-right font-num">{formatProductQuantity(product.stock)}</td>
+                        <td className="px-4 py-3 text-right font-num">{formatProductQuantity(product.minStock)}</td>
+                        <td className="px-4 py-3 text-right font-num">{formatProductQuantity(product.minOrderQty)}</td>
+                        <td className="px-4 py-3 text-right font-num">{formatProductQuantity(product.stepQty)}</td>
                         <td className="px-4 py-3 text-right font-num">
                       {(() => {
                         const unitValues = buildFourUnitValues(fourUnitFormFromProduct(product))
@@ -1024,6 +1051,48 @@ function FormDialog({
                 max="3650"
                 value={form.shelfDays}
                 onChange={e => onFieldChange('shelfDays', e.target.value)}
+                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+              />
+            </FormField>
+            <FormField label="库存（请在库存模块调整）">
+              <input
+                type="number"
+                min="0"
+                step="0.001"
+                value={form.stock}
+                onChange={e => onFieldChange('stock', e.target.value)}
+                disabled
+                className="h-10 w-full rounded-cta border border-border bg-bg px-3 text-body text-gray2 outline-none"
+              />
+            </FormField>
+            <FormField label={editing ? '安全库存（编辑暂不开放）' : '安全库存'}>
+              <input
+                type="number"
+                min="0"
+                step="0.001"
+                value={form.minStock}
+                onChange={e => onFieldChange('minStock', e.target.value)}
+                disabled={Boolean(editing)}
+                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent disabled:bg-bg disabled:text-gray2"
+              />
+            </FormField>
+            <FormField label="起订量">
+              <input
+                type="number"
+                min="0.001"
+                step="0.001"
+                value={form.minOrderQty}
+                onChange={e => onFieldChange('minOrderQty', e.target.value)}
+                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+              />
+            </FormField>
+            <FormField label="步长">
+              <input
+                type="number"
+                min="0.001"
+                step="0.001"
+                value={form.stepQty}
+                onChange={e => onFieldChange('stepQty', e.target.value)}
                 className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
               />
             </FormField>

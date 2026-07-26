@@ -2144,3 +2144,49 @@
   并仅通过标准发布脚本完成生产备份、构建、PM2/健康核验和锁释放；未写生产业务数据。
 - 四个 `dianjie.cc` 公网域名的既有过期证书仍只记录不轮换；本批没有读取、输出或修改
   凭证，也没有触碰其他 worktree 的未提交内容。
+
+## 2026-07-26 19:29 第 2 小时 AutoFix 源码基线竞态加固
+
+### 开始基线与生产只读证据
+
+- 已先读取 automation memory、本夜审记录，fetch 最新 `origin/main` 并核对全部相关
+  worktree 的分支、HEAD、upstream 与脏状态。主工作树原有 7 个未跟踪文件，另有 7 个
+  既有脏 worktree；均未修改、清理或暂存。本批只在新建的干净隔离 worktree
+  `maintenance-v4-autofix-baseline` 开发。
+- 开始时 `origin/main` 与生产 `.deployed-commit` 均为
+  `7edae99a92707cea544cfa5feab6259d77470b05`，发布锁不存在；API、Web、CMB 本机健康为
+  200，CMB relay 未认证返回 401 符合预期，主 PM2 进程在线。
+- 生产 70 条 migration 全部成功、失败为 0；AutoFixRun 总数和
+  `RECEIVED`/活动/`ESCALATED`/`FAILED_ROLLBACK` 均为 0。反馈仅有
+  `CLARIFYING` 1 条、`REJECTED` 1 条、`RESOLVED` 2 条，没有待审批、已批准或
+  `IN_DEV` 项。
+- `/app/dianjie-src` 起初干净但停在 `3df7e6c0`。确认其为当前 main 祖先且没有本地
+  AutoFix 提交后，只执行一次 fetch 和 `--ff-only`，现已精确对齐 `7edae99a` 且保持
+  干净；未改运行目录、未重启服务或写业务数据。
+
+### 确定性缺陷与修改
+
+- 旧流程先从源码副本读取候选文件并完成隔离测试，最后才读取 HEAD 写入
+  `baseCommitSha`。若常规维护在验证期间快进 `/app/dianjie-src`，补丁会在旧代码上
+  测试，却被错误绑定到新基线，随后可能直接部署未按该组合验证的结果。
+- 现在在读取候选源码前即要求仓库干净并固定 40 位 HEAD；读取后再次核对。隔离
+  worktree 明确从该 exact SHA 创建，不再使用可移动的 `HEAD`；Web 测试与 tsc 完成后
+  再检查生产源码副本仍干净且 HEAD 未变。部署层原有的 exact base 检查继续保留，任一
+  阶段出现脏状态或 SHA 变化都会转人工。
+- 新增真实临时 Git 仓回归：隔离验证执行途中主动推进源码分支并提交，验证结束必须以
+  “源码基线已变化”失败；同时覆盖固定基线正常、脏仓拒绝和 clean fast-forward 拒绝。
+  实现提交为 `ff1b9a2304f7c90f1d771574d3e18812649bb3dd`。
+
+### 验收与发布门禁
+
+- Node `20.20.2`；API 55 文件 541/541、API build、Web 28 文件 506/506、Web tsc、
+  166 页 production build 全部通过。production build 仅保留既有 OpenTelemetry
+  动态依赖 warning。
+- 使用一份无害 Web 文案补丁真实跑通新的 exact-SHA 一次性 worktree 验证，Web 全量
+  测试和 tsc 通过，补丁只存在于临时 worktree 并已清理。
+- `git diff --check` 与高置信敏感信息扫描通过。本批无 schema、迁移或业务页面运行时
+  改动，因此没有执行数据库迁移或业务浏览器写入 E2E；生产数据库检查全程为只读事务。
+- 本节与实现通过后将以非强制纯快进进入 main，并仅通过标准
+  `scripts/deploy-worktree.sh` 发布；最终部署提交、备份、PM2、health、AutoFix 状态和
+  锁释放结果写入本 automation memory。公网 `dianjie.cc` 证书问题继续只报告，不轮换
+  证书或私钥。

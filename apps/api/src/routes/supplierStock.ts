@@ -159,6 +159,34 @@ async function lockSupplierProducts(
   return new Map(rows.map(row => [row.id, row.stock]))
 }
 
+async function lockSupplierWarehouseStock(
+  tx: Prisma.TransactionClient,
+  ctx: SupplierContext,
+  warehouseId: string,
+  productIds: string[],
+) {
+  const ids = [...new Set(productIds)].sort()
+  if (ids.length === 0) return new Map<string, Prisma.Decimal>()
+
+  const rows = await tx.$queryRaw<Array<{ productId: string; physicalQty: Prisma.Decimal }>>(Prisma.sql`
+    SELECT "productId", "physicalQty"
+    FROM "warehouse_stocks"
+    WHERE "tenantId" = ${ctx.tenantId}
+      AND "warehouseId" = ${warehouseId}
+      AND "productId" IN (${Prisma.join(ids)})
+      AND "isActive" = TRUE
+    ORDER BY "productId"
+    FOR UPDATE
+  `)
+  if (rows.length !== ids.length) {
+    throw Object.assign(
+      new Error('仓库库存记录缺失或不属于当前租户'),
+      { statusCode: 409 },
+    )
+  }
+  return new Map(rows.map(row => [row.productId, row.physicalQty]))
+}
+
 async function activeReservedForProduct(
   tx: Prisma.TransactionClient,
   ctx: SupplierContext,
@@ -465,7 +493,8 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { items, source, reason: batchReason } = parsed.data
 
-    // 校验所有 productId 都属于本 supplier
+    const rawWarehouseId = (req.query as Record<string, unknown> | null)?.warehouseId
+
     const productIds = [...new Set(items.map(i => i.productId))]
     const products = await prisma.product.findMany({
       where: { id: { in: productIds }, supplierId: ctx.supplierId, tenantId: ctx.tenantId },
@@ -479,16 +508,33 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
 
     const movType = source === 'EXCEL' ? 'INBOUND_EXCEL' : 'INBOUND_MANUAL'
     const created: any[] = []
+    let realWarehouseId: string
 
     try {
+      realWarehouseId = await resolveTenantWarehouseId(prisma, ctx.tenantId, rawWarehouseId)
+
       await prisma.$transaction(async (tx) => {
-        const balances = await lockSupplierProducts(tx, ctx, productIds)
+        const productBalances = await lockSupplierProducts(tx, ctx, productIds)
+        const wsBalances = await lockSupplierWarehouseStock(tx, ctx, realWarehouseId, productIds)
+
+        for (const pid of productIds) {
+          const productStock = productBalances.get(pid)!
+          const physicalQty = wsBalances.get(pid)!
+          if (!productStock.equals(physicalQty)) {
+            throw Object.assign(
+              new Error(`商品 ${pid} Product.stock(${productStock.toFixed(3)}) 与 WarehouseStock.physicalQty(${physicalQty.toFixed(3)}) 不一致`),
+              { statusCode: 409 },
+            )
+          }
+        }
+
         const customBatches = items.filter((item): item is typeof item & { batchNo: string } => Boolean(item.batchNo))
         if (customBatches.length > 0) {
           const existingBatch = await tx.supplierStockBatch.findFirst({
             where: {
               tenantId: ctx.tenantId,
               supplierId: ctx.supplierId,
+              warehouseId: realWarehouseId,
               OR: customBatches.map(item => ({ productId: item.productId, batchNo: item.batchNo })),
             },
             select: { batchNo: true },
@@ -498,16 +544,22 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
           }
         }
         for (const it of items) {
-          const newStock = balances.get(it.productId)!.plus(it.qty)
-          if (newStock.greaterThan(99_999_999.99)) {
+          const physicalQty = wsBalances.get(it.productId)!
+          const newQty = physicalQty.plus(it.qty)
+          if (newQty.greaterThan(99_999_999.99)) {
             throw Object.assign(new Error('入库后库存超过字段上限'), { statusCode: 400 })
           }
-          await tx.product.update({ where: { id: it.productId }, data: { stock: newStock } })
-          balances.set(it.productId, newStock)
+          await tx.warehouseStock.update({
+            where: { tenantId_warehouseId_productId: { tenantId: ctx.tenantId, warehouseId: realWarehouseId, productId: it.productId } },
+            data: { physicalQty: newQty },
+          })
+          await tx.product.update({ where: { id: it.productId }, data: { stock: newQty } })
+          wsBalances.set(it.productId, newQty)
           const m = await tx.supplierStockMovement.create({
             data: {
-              tenantId: ctx.tenantId, supplierId: ctx.supplierId, productId: it.productId,
-              delta: it.qty, balanceAfter: newStock,
+              tenantId: ctx.tenantId, warehouseId: realWarehouseId,
+              supplierId: ctx.supplierId, productId: it.productId,
+              delta: it.qty, balanceAfter: newQty,
               type: movType as any,
               reason: it.reason || batchReason || null,
               sourceType: 'Manual', sourceId: null,
@@ -518,6 +570,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
           })
           await createSupplierStockBatchIncrease(tx, {
             tenantId: ctx.tenantId,
+            warehouseId: realWarehouseId,
             supplierId: ctx.supplierId,
             productId: it.productId,
             quantity: it.qty,
@@ -528,14 +581,20 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
             manufactureDate: it.manufactureDate ? new Date(it.manufactureDate) : null,
             expiryDate: it.expiryDate ? new Date(it.expiryDate) : null,
           })
-          created.push({ id: m.id, productId: it.productId, qty: it.qty, balanceAfter: Number(newStock) })
+          created.push({ id: m.id, productId: it.productId, qty: it.qty, balanceAfter: Number(newQty), warehouseId: realWarehouseId })
         }
       })
     } catch (error: any) {
       if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
       throw error
     }
-    return { ok: true, count: created.length, items: created, warehouse: DEFAULT_WAREHOUSE_META }
+    return {
+      ok: true,
+      count: created.length,
+      items: created,
+      warehouseId: realWarehouseId,
+      warehouse: { id: realWarehouseId, name: DEFAULT_WAREHOUSE_META.name },
+    }
   })
 
   /** POST /api/supplier/stock/adjust — 盘点直接设置库存 */

@@ -2278,3 +2278,40 @@
 - `api.dianjie.cc` 严格 TLS 仍因证书于 2026-07-21 23:59:59 UTC 过期而失败，跳过
   校验的 health 为 200；未轮换证书或私钥。下一批继续先复核新反馈、AutoFix 本地提交
   和生产健康，再避开既有 watchdog 草稿审计部署失败/回滚状态语义。
+
+## 2026-07-26 22:37 第 5 小时 AutoFix 回滚结果真实性
+
+### 开始基线与生产只读证据
+
+- 已重新读取 automation memory 与本夜审记录，fetch `origin/main` 并压缩核对全部
+  worktree 的分支、HEAD 和脏状态；所有用户/其他 AI 改动保持原样，既有 watchdog 草稿
+  继续未接管。本批延续使用上一批干净隔离 worktree，上一批夜审已独立提交但暂未推进
+  main，避免仅文档提交造成 GitHub、生产和 AutoFix 源码基线短暂分叉。
+- 开始时 GitHub main、生产 `.deployed-commit` 与 `/app/dianjie-src` 均为 exact
+  `4fb417c6`，源码干净且无发布锁。API/Web/CMB online 并健康 200，PM2 重启计数稳定；
+  70 条 migration 成功、0 失败，AutoFixRun 为 0，反馈无待审批、已批准或 `IN_DEV`。
+
+### 确定性缺陷与修改
+
+- 手机端把 `FAILED_ROLLBACK` 明确显示为“失败已回滚”，但旧部署代码对所有异常都写该
+  状态：包括部署前基线/锁检查失败、补丁尚未影响生产，以及 `git revert`、回滚构建、
+  回滚健康检查或生产标记写入本身失败。这会在生产可能仍异常时向老板显示已恢复。
+- 新增明确的恢复结果分类：只有 revert、基线 Web 重建同步、生产健康检查和
+  `.deployed-commit` 写入全部成功才写 `FAILED_ROLLBACK/rollback_completed`。
+  部署前尚未修改生产的异常写 `ESCALATED/pre_deploy_failure`；任何回滚步骤失败写
+  `ESCALATED/rollback_failed`。
+- 原始部署错误和回滚异常现在同时保留在任务错误、部署日志和 OpLog metadata；通知事件
+  key 与最终真实状态一致。人工一键回滚失败也统一转人工，不再错误显示“失败已回滚”。
+- 新增 3 个纯状态回归，分别锁定完整回滚、回滚失败和生产未改变三种结果。实现提交为
+  `f37245f5b3334f34868b640fa1a55319c65e157b`，无 schema 或业务规则变化。
+
+### 验收与发布门禁
+
+- Node `20.20.2`；状态专项 3/3、连同上一批基线专项 8/8，API 全量 58 文件 552/552、
+  API build、Web 全量 28 文件 506/506、Web tsc、166 页 production build 全部通过。
+  production build 仅保留既有 OpenTelemetry 动态依赖 warning。
+- `git diff --check` 与高置信敏感信息扫描通过。本批没有 schema、业务页面或业务数据
+  路径变化，因此不执行数据库写入 E2E。
+- 上一批夜审、本批实现和本节报告将作为连续纯快进提交一起推进 main，并只通过标准
+  `deploy-worktree.sh` 发布；发布前再次核对队列、生产提交、源码和锁，最终备份、迁移、
+  PM2、health 与源码对齐结果写入 automation memory。

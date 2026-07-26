@@ -11,10 +11,22 @@ const listQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).optional(),
 }).strict()
 const FINANCE_ROLES = new Set(['ADMIN', 'FINANCE', 'SUPER_ADMIN'])
+const SUPPLIER_MANAGEMENT_ROLES = new Set(['ADMIN', 'FINANCE', 'SUPER_ADMIN', 'SUPPLY_CHAIN'])
 const SUPPLIER_ROLES = new Set(['SUPPLIER_OWNER', 'SUPPLIER_STAFF'])
 const SAFE_SELECT = {
   id: true, no: true, name: true, category: true, status: true,
 } as const
+const SUPPLY_CHAIN_SELECT = {
+  ...SAFE_SELECT,
+  contactName: true,
+  contactPhone: true,
+  creditType: true,
+  creditDays: true,
+  createdAt: true,
+  updatedAt: true,
+} as const
+export const toSupplyChainSupplierView = (supplier: any) =>
+  Object.fromEntries(Object.keys(SUPPLY_CHAIN_SELECT).map(key => [key, supplier[key]]))
 
 // Round 7 QA：原 POST 用 `data: { tenantId, ...req.body }` 会被 body 里的 tenantId
 // 覆盖（tenant 隔离风险）+ 缺输入校验（和 products 同类风险）。加 strict zod。
@@ -33,9 +45,31 @@ const supplierCreateSchema = z.object({
   bankAccountName: z.string().trim().max(80).optional().default(''),
   bankCode:      z.string().trim().max(40).optional().default(''),
 }).strict()
+const supplierOperationalCreateSchema = supplierCreateSchema.omit({
+  autoPay: true,
+  autoPayLimit: true,
+  bankName: true,
+  bankAccount: true,
+  bankAccountName: true,
+  bankCode: true,
+})
 
 // PATCH 可改字段(白名单): 排除 tenantId/status/id 等敏感/系统字段
 const supplierUpdateSchema = supplierCreateSchema.partial()
+const supplierOperationalUpdateSchema = supplierOperationalCreateSchema.partial()
+
+export const supplierCreateInputSchemaForRole = (role: string) =>
+  role === 'SUPPLY_CHAIN' ? supplierOperationalCreateSchema : supplierCreateSchema
+
+export const supplierUpdateInputSchemaForRole = (role: string) =>
+  role === 'SUPPLY_CHAIN' ? supplierOperationalUpdateSchema : supplierUpdateSchema
+
+export const supplierReadSelectForRole = (role: string) =>
+  FINANCE_ROLES.has(role) || SUPPLIER_ROLES.has(role)
+    ? undefined
+    : role === 'SUPPLY_CHAIN'
+      ? SUPPLY_CHAIN_SELECT
+      : SAFE_SELECT
 
 export const supplierRoutes: FastifyPluginAsync = async (app) => {
   app.get('/', auth(app), async (req: any, reply: any) => {
@@ -47,12 +81,14 @@ export const supplierRoutes: FastifyPluginAsync = async (app) => {
     if (SUPPLIER_ROLES.has(role)) {
       if (!supplierId) return page ? { items: [], total: 0, page, pageSize } : []
       where.id = supplierId
+    } else if (role === 'SUPPLY_CHAIN') {
+      if (status) where.status = status
     } else if (!FINANCE_ROLES.has(role)) {
       // 订货岗位只需要启用供应商候选，不得看到银行、联系人和账期等敏感主数据。
       where.status = 'ENABLED'
     } else if (status) where.status = status
 
-    const select = FINANCE_ROLES.has(role) || SUPPLIER_ROLES.has(role) ? undefined : SAFE_SELECT
+    const select = supplierReadSelectForRole(role)
 
     // 不传 page 时返回全量（兼容下拉框），缓存 10 分钟
     if (!page) {
@@ -73,9 +109,9 @@ export const supplierRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
-    if (!['ADMIN', 'FINANCE', 'SUPER_ADMIN'].includes(role))
+    if (!SUPPLIER_MANAGEMENT_ROLES.has(role))
       return reply.status(403).send({ error: '无权限' })
-    const parsed = supplierCreateSchema.safeParse(req.body)
+    const parsed = supplierCreateInputSchemaForRole(role).safeParse(req.body)
     if (!parsed.success) {
       const first = parsed.error.errors[0]
       return reply.status(400).send({ error: `${first.path.join('.')}: ${first.message}` })
@@ -94,7 +130,7 @@ export const supplierRoutes: FastifyPluginAsync = async (app) => {
         return created
       })
       void invalidatePattern(`suppliers:full:${tenantId}:*`)
-      return reply.status(201).send(supplier)
+      return reply.status(201).send(role === 'SUPPLY_CHAIN' ? toSupplyChainSupplierView(supplier) : supplier)
     } catch (e: any) {
       if (e.code === 'P2002') return reply.status(409).send({ error: '供应商编号已存在' })
       req.log.error({ err: e }, 'supplier create failed')
@@ -105,9 +141,9 @@ export const supplierRoutes: FastifyPluginAsync = async (app) => {
   app.patch('/:id', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
     // P0: 仅管理岗位可改供应商资料 (含银行账号), 否则供应商账号能改别家公司收款行户
-    if (!['ADMIN', 'FINANCE', 'SUPER_ADMIN'].includes(role))
+    if (!SUPPLIER_MANAGEMENT_ROLES.has(role))
       return reply.status(403).send({ error: '无权修改供应商资料' })
-    const parsed = supplierUpdateSchema.safeParse(req.body)
+    const parsed = supplierUpdateInputSchemaForRole(role).safeParse(req.body)
     if (!parsed.success) {
       const first = parsed.error.errors[0]
       return reply.status(400).send({ error: `${first.path.join('.')}: ${first.message}` })
@@ -132,12 +168,12 @@ export const supplierRoutes: FastifyPluginAsync = async (app) => {
       return saved
     })
     void invalidatePattern(`suppliers:full:${tenantId}:*`)
-    return updated
+    return role === 'SUPPLY_CHAIN' ? toSupplyChainSupplierView(updated) : updated
   })
 
   app.patch('/:id/toggle', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
-    if (!['ADMIN', 'FINANCE', 'SUPER_ADMIN'].includes(role))
+    if (!SUPPLIER_MANAGEMENT_ROLES.has(role))
       return reply.status(403).send({ error: '无权启用/停用供应商' })
     const idParsed = entityIdSchema.safeParse(req.params.id)
     if (!idParsed.success) return reply.status(400).send({ error: '供应商 ID 格式不正确' })
@@ -160,6 +196,6 @@ export const supplierRoutes: FastifyPluginAsync = async (app) => {
       return saved
     })
     void invalidatePattern(`suppliers:full:${tenantId}:*`)
-    return updated
+    return role === 'SUPPLY_CHAIN' ? toSupplyChainSupplierView(updated) : updated
   })
 }

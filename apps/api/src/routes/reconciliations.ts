@@ -3,6 +3,7 @@ import dayjs from 'dayjs'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { isSupplierRole } from '../lib/auth-scope'
+import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
 import { nextBusinessNo } from '../services/purchaseOrderIntegrity'
 import { buildSupplierStatement, supplierStatementToCsv } from '../services/supplierStatement'
 
@@ -99,7 +100,9 @@ async function loadSupplierStatement(params: {
 export const reconciliationRoutes: FastifyPluginAsync = async (app) => {
   app.get('/supplier-statement', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, supplierId: actorSupplierId } = req.user
-    if (!FINANCE_ROLES.has(role) && !isSupplierRole(role)) {
+    if (!FINANCE_ROLES.has(role)
+        && !isSupplierRole(role)
+        && !hasInternalSupplyChainCapability(role, 'finance.read')) {
       return reply.status(403).send({ error: '无权查看供应商月度对账' })
     }
     const parsed = supplierStatementQuerySchema.safeParse(req.query || {})
@@ -114,7 +117,9 @@ export const reconciliationRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/supplier-statement/export', auth(app), async (req: any, reply: any) => {
     const { tenantId, userId, role, supplierId: actorSupplierId } = req.user
-    if (!FINANCE_ROLES.has(role) && !isSupplierRole(role)) {
+    if (!FINANCE_ROLES.has(role)
+        && !isSupplierRole(role)
+        && !hasInternalSupplyChainCapability(role, 'finance.read')) {
       return reply.status(403).send({ error: '无权导出供应商月度对账' })
     }
     const parsed = supplierStatementQuerySchema.safeParse(req.query || {})
@@ -143,7 +148,9 @@ export const reconciliationRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, supplierId } = req.user
-    if (!FINANCE_ROLES.has(role) && !isSupplierRole(role)) {
+    if (!FINANCE_ROLES.has(role)
+        && !isSupplierRole(role)
+        && !hasInternalSupplyChainCapability(role, 'finance.read')) {
       return reply.status(403).send({ error: '无权查看对账单' })
     }
     if (isSupplierRole(role) && !supplierId) {

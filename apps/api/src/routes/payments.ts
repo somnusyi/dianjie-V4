@@ -3,6 +3,7 @@ import dayjs from 'dayjs'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { isSupplierRole } from '../lib/auth-scope'
+import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
 import { cashLedgerAccount, writeCashTransaction } from '../services/cashbook'
 import { nextBusinessNo } from '../services/purchaseOrderIntegrity'
 import { createVoucher } from '../services/voucher'
@@ -65,7 +66,9 @@ function paidNote(paymentNo: string, supplierName: string, note: string | null) 
 export const paymentRoutes: FastifyPluginAsync = async (app) => {
   app.get('/', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, supplierId } = req.user
-    if (!FINANCE_ROLES.has(role) && !isSupplierRole(role)) {
+    if (!FINANCE_ROLES.has(role)
+        && !isSupplierRole(role)
+        && !hasInternalSupplyChainCapability(role, 'finance.read')) {
       return reply.status(403).send({ error: '无权查看付款单' })
     }
     if (isSupplierRole(role) && !supplierId) {

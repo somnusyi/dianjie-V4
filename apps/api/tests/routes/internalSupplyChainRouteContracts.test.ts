@@ -55,9 +55,10 @@ describe('internal supply-chain route contracts', () => {
     const body = response.json()
     expect(body).toMatchObject({
       role: 'SUPPLY_CHAIN',
-      hero: { label: '内部供应链只读工作台', value: '2 家门店' },
+      hero: { label: '内部供应链统一工作台', value: '2 家门店' },
       supplyChain: {
-        readOnly: true,
+        readOnly: false,
+        writableDomains: ['order-fulfillment', 'catalog', 'warehouse-inbound', 'supplier-master'],
         counts: { orders: 4, deliveries: 2, receipts: 3 },
       },
     })

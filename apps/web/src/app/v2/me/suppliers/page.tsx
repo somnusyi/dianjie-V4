@@ -4,7 +4,7 @@
  */
 'use client'
 import { useEffect, useState } from 'react'
-import { getToken } from '@/lib/v2-auth'
+import { getToken, getUser } from '@/lib/v2-auth'
 
 type Supplier = {
   id: string; no: string; name: string
@@ -15,6 +15,7 @@ type Supplier = {
 }
 
 export default function SuppliersPage() {
+  const internalSupplyChain = getUser()?.role === 'SUPPLY_CHAIN'
   const [list, setList] = useState<Supplier[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -109,7 +110,7 @@ export default function SuppliersPage() {
   return (
     <div className="min-h-screen bg-bg pb-24">
       <header className="px-4 pt-4 pb-2 flex items-center gap-3">
-        <a href="/v2/me" className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</a>
+        <a href={internalSupplyChain ? '/v2/supply-chain/home' : '/v2/me'} className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</a>
         <h1 className="text-h1 flex-1">供应商</h1>
         <button onClick={startCreate}
           className="px-3 py-2 bg-amber text-white rounded-cta text-button">
@@ -142,12 +143,14 @@ export default function SuppliersPage() {
                   {s.contactPhone && <span className="font-num"> {s.contactPhone}</span>}
                   {s.creditDays != null && <span> · 账期 {s.creditDays} 天</span>}
                 </div>
-                <div className="flex gap-2 mt-3 pt-3 border-t border-border">
-                  <button onClick={() => generateInvite(s)}
-                    className="flex-1 py-1.5 bg-amber text-white rounded text-caption">
-                    生成邀请链接
-                  </button>
-                </div>
+                {!internalSupplyChain && (
+                  <div className="flex gap-2 mt-3 pt-3 border-t border-border">
+                    <button onClick={() => generateInvite(s)}
+                      className="flex-1 py-1.5 bg-amber text-white rounded text-caption">
+                      生成邀请链接
+                    </button>
+                  </div>
+                )}
               </li>
             ))}
           </ul>

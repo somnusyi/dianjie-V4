@@ -4,6 +4,10 @@ import { prisma } from '@dianjie/db'
 import { cached, invalidatePattern } from '../lib/cache'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 import { requireSupplierCapability, SupplierCapability } from '../lib/supplier-access'
+import {
+  hasInternalSupplyChainCapability,
+  isInternalSupplyChainRole,
+} from '../lib/internal-supply-chain-access'
 import { parseBoundedInteger, parsePagination } from '../lib/pagination'
 import { signOssKey } from './upload'
 import { nextDocumentNo } from '../services/documentNo'
@@ -223,6 +227,17 @@ const categoryNameSchema = z.string().trim().min(1, '分类名称必填').max(40
 function supplierScopeOrReply(req: any, reply: any, capability: SupplierCapability): string | null {
   const { role, supplierId } = req.user
   try {
+    if (isInternalSupplyChainRole(role)) {
+      const required = capability === 'catalog.read' ? 'inventory.read' : 'product.write'
+      if (!hasInternalSupplyChainCapability(role, required)) {
+        throw { statusCode: 403, message: '当前内部供应链岗位无此商品权限' }
+      }
+      const requestedSupplierId = String(req.query?.supplierId || '').trim()
+      if (!requestedSupplierId) {
+        throw { statusCode: 400, message: '内部供应链管理分类时必须选择供应商' }
+      }
+      return requestedSupplierId
+    }
     return requireSupplierCapability(role, supplierId, capability)
   } catch (error: any) {
     reply.status(error?.statusCode || 403).send({ error: error?.message || '无权限' })

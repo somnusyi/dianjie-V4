@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { BottomNav, Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { clientRequestId } from '@/lib/client-id'
-import { apiFetch } from '@/lib/v2-auth'
+import { apiFetch, getUser } from '@/lib/v2-auth'
+
+type SupplierOption = { id: string; no: string; name: string }
 
 type Category = {
   id: string | null
@@ -18,6 +20,9 @@ type Category = {
 type ViewFilter = 'all' | 'active' | 'inactive'
 
 export default function SupplierCategoriesPage() {
+  const internalSupplyChain = getUser()?.role === 'SUPPLY_CHAIN'
+  const [suppliers, setSuppliers] = useState<SupplierOption[]>([])
+  const [selectedSupplierId, setSelectedSupplierId] = useState('')
   const [categories, setCategories] = useState<Category[] | null>(null)
   const [newName, setNewName] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -31,9 +36,15 @@ export default function SupplierCategoriesPage() {
   const [error, setError] = useState<string | null>(null)
   const [confirmState, openConfirm] = useConfirmSheet()
 
+  function scopedPath(path: string) {
+    if (!internalSupplyChain || !selectedSupplierId) return path
+    return `${path}${path.includes('?') ? '&' : '?'}supplierId=${encodeURIComponent(selectedSupplierId)}`
+  }
+
   async function load() {
+    if (internalSupplyChain && !selectedSupplierId) return
     try {
-      const rows = await apiFetch<Category[]>('/api/products/categories')
+      const rows = await apiFetch<Category[]>(scopedPath('/api/products/categories'))
       setCategories(Array.isArray(rows) ? rows : [])
       setOrderDirty(false)
       setError(null)
@@ -42,7 +53,17 @@ export default function SupplierCategoriesPage() {
     }
   }
 
-  useEffect(() => { void load() }, [])
+  useEffect(() => {
+    if (!internalSupplyChain) return
+    apiFetch<SupplierOption[]>('/api/suppliers?status=ENABLED')
+      .then(rows => {
+        const list = Array.isArray(rows) ? rows : []
+        setSuppliers(list)
+        if (list[0]) setSelectedSupplierId(list[0].id)
+      })
+      .catch(e => setError(e.message || '供应商加载失败'))
+  }, [internalSupplyChain])
+  useEffect(() => { void load() }, [internalSupplyChain, selectedSupplierId])
 
   const activeCount = categories?.filter(category => category.isActive).length || 0
   const inactiveCount = categories?.filter(category => !category.isActive).length || 0
@@ -66,7 +87,7 @@ export default function SupplierCategoriesPage() {
     if (!name || busy) return
     setBusy(true); setError(null)
     try {
-      await apiFetch('/api/products/categories', {
+      await apiFetch(scopedPath('/api/products/categories'), {
         method: 'POST', body: JSON.stringify({ name }),
         headers: { 'Idempotency-Key': clientRequestId() },
       })
@@ -82,7 +103,7 @@ export default function SupplierCategoriesPage() {
   async function renameCategory(category: Category, name: string) {
     setBusy(true); setError(null)
     try {
-      await apiFetch(`/api/products/categories/${category.id}`, {
+      await apiFetch(scopedPath(`/api/products/categories/${category.id}`), {
         method: 'PATCH', body: JSON.stringify({ name }),
         headers: { 'Idempotency-Key': clientRequestId() },
       })
@@ -116,7 +137,7 @@ export default function SupplierCategoriesPage() {
   async function setCategoryActive(category: Category, isActive: boolean) {
     setBusy(true); setError(null)
     try {
-      await apiFetch(`/api/products/categories/${category.id}`, {
+      await apiFetch(scopedPath(`/api/products/categories/${category.id}`), {
         method: 'PATCH', body: JSON.stringify({ isActive }),
         headers: { 'Idempotency-Key': clientRequestId() },
       })
@@ -162,7 +183,7 @@ export default function SupplierCategoriesPage() {
     }
     setBusy(true); setError(null)
     try {
-      await apiFetch('/api/products/categories-order', {
+      await apiFetch(scopedPath('/api/products/categories-order'), {
         method: 'PATCH', body: JSON.stringify({ ids }),
         headers: { 'Idempotency-Key': clientRequestId() },
       })
@@ -194,7 +215,7 @@ export default function SupplierCategoriesPage() {
       onConfirm: async () => {
         setBusy(true); setError(null)
         try {
-          await apiFetch(`/api/products/categories/${sourceCategory.id}/merge`, {
+          await apiFetch(scopedPath(`/api/products/categories/${sourceCategory.id}/merge`), {
             method: 'POST', body: JSON.stringify({ targetId: mergeTargetId }),
             headers: { 'Idempotency-Key': clientRequestId() },
           })
@@ -214,12 +235,21 @@ export default function SupplierCategoriesPage() {
   return (
     <div className="min-h-screen bg-bg pb-24 lg:pb-6">
       <header className="flex flex-wrap items-center gap-3 px-4 pb-2 pt-4 lg:px-6 lg:pt-5">
-        <a href="/v2/supplier/products" className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-white">‹</a>
+        <a href={internalSupplyChain ? '/v2/supply-chain/products' : '/v2/supplier/products'} className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-white">‹</a>
         <div className="min-w-0 flex-1">
           <h1 className="text-h1">分类管理</h1>
           <p className="text-caption text-gray3">商品报价与默认仓库存共用同一分类口径</p>
         </div>
-        <a href="/v2/supplier/inventory" className="rounded-cta border border-border bg-white px-3 py-2 text-button text-gray2">查看库存</a>
+        {internalSupplyChain && (
+          <select
+            value={selectedSupplierId}
+            onChange={event => setSelectedSupplierId(event.target.value)}
+            className="h-10 min-w-64 rounded-cta border border-border bg-white px-3 text-body"
+          >
+            {suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}
+          </select>
+        )}
+        <a href={internalSupplyChain ? '/v2/supply-chain/inventory' : '/v2/supplier/inventory'} className="rounded-cta border border-border bg-white px-3 py-2 text-button text-gray2">查看库存</a>
       </header>
 
       {error && <div className="mx-4 mt-3 rounded-cta bg-red-bg p-3 text-caption text-red-fg lg:mx-6">{error}</div>}
@@ -376,11 +406,11 @@ export default function SupplierCategoriesPage() {
         ]}
         activeKey="inventory"
         onChange={key => {
-          if (key === 'home') location.href = '/v2/supplier/home'
-          if (key === 'orders') location.href = '/v2/supplier/orders'
-          if (key === 'inventory') location.href = '/v2/supplier/inventory'
-          if (key === 'billing') location.href = '/v2/supplier/billing'
-          if (key === 'me') location.href = '/v2/supplier/history'
+          if (key === 'home') location.href = internalSupplyChain ? '/v2/supply-chain/home' : '/v2/supplier/home'
+          if (key === 'orders') location.href = internalSupplyChain ? '/v2/supply-chain/fulfillment' : '/v2/supplier/orders'
+          if (key === 'inventory') location.href = internalSupplyChain ? '/v2/supply-chain/inventory' : '/v2/supplier/inventory'
+          if (key === 'billing') location.href = internalSupplyChain ? '/v2/supply-chain/billing' : '/v2/supplier/billing'
+          if (key === 'me') location.href = internalSupplyChain ? '/v2/me' : '/v2/supplier/history'
         }}
       />
       <ConfirmSheet {...confirmState} />

@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react'
 import { BottomNav, Chip, ProgressDots } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
-import { apiFetch } from '@/lib/v2-auth'
+import { apiFetch, getUser } from '@/lib/v2-auth'
 import {
   SUPPLIER_MONEY_TERMS,
   supplierDeliveryStatusMeta,
@@ -61,6 +61,11 @@ type LossClaim = {
 }
 
 export default function SupplierOrdersPage() {
+  const internalSupplyChain = getUser()?.role === 'SUPPLY_CHAIN'
+  const orderBase = internalSupplyChain ? '/v2/supply-chain/fulfillment' : '/v2/supplier/orders'
+  const workspaceHome = internalSupplyChain ? '/v2/supply-chain/home' : '/v2/supplier/home'
+  const inventoryHome = internalSupplyChain ? '/v2/supply-chain/inventory' : '/v2/supplier/inventory'
+  const billingHome = internalSupplyChain ? '/v2/supply-chain/billing' : '/v2/supplier/billing'
   const [tab, setTab] = useState('orders')
   const [documentView, setDocumentView] = useState<'orders' | 'deliveries'>('orders')
   const [orders, setOrders] = useState<Order[] | null>(null)
@@ -307,7 +312,11 @@ export default function SupplierOrdersPage() {
       {/* 到货差异待处理 banner（仅 PENDING 数量 > 0 时显示，强制提醒）*/}
       {documentView === 'orders' && pendingClaims.length > 0 && filter !== '到货差异' && (
         <button
-          onClick={() => { location.href = '/v2/supplier/differences' }}
+          onClick={() => {
+            location.href = internalSupplyChain
+              ? '/v2/supply-chain/receipts'
+              : '/v2/supplier/differences'
+          }}
           className="mx-4 mt-2 w-[calc(100%-32px)] bg-red-bg border border-red/30 rounded-card p-3 flex items-center gap-3 text-left"
         >
           <span className="w-9 h-9 rounded-md bg-red text-white flex items-center justify-center text-h2">⚠</span>
@@ -326,7 +335,9 @@ export default function SupplierOrdersPage() {
             : (orders || []).filter(o => statusInTab(o.status, f)).length
           const isUrgent = (f === '待接单' || f === '到货差异') && cnt > 0
           return (
-            <button key={f} onClick={() => f === '到货差异' ? location.href = '/v2/supplier/differences' : setFilter(f)}
+            <button key={f} onClick={() => f === '到货差异'
+              ? location.href = internalSupplyChain ? '/v2/supply-chain/receipts' : '/v2/supplier/differences'
+              : setFilter(f)}
               className={`shrink-0 px-3 py-1.5 rounded-cta text-button relative ${filter === f ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
               <span>{f}</span>
               {cnt > 0 && <span className={`font-num ml-1 ${filter === f ? '' : isUrgent ? 'text-red-fg' : 'text-gray3'}`}>{cnt}</span>}
@@ -364,7 +375,7 @@ export default function SupplierOrdersPage() {
               const kind = supplierLossClaimKindMeta(c.kind)
               return (
                 <li key={c.id} className={`relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full ${meta.barClass}`}>
-                  <a href={`/v2/supplier/orders/${c.purchaseOrder.id || c.purchaseOrderId}`} className="block">
+                  <a href={`${orderBase}/${c.purchaseOrder.id || c.purchaseOrderId}`} className="block">
                     <div className="flex items-center gap-2 mb-1">
                       <Chip tone={meta.tone}>{meta.label}</Chip>
                       <Chip tone="blue">{kind.label}</Chip>
@@ -450,7 +461,7 @@ export default function SupplierOrdersPage() {
             : shippedAmount > 0 ? SUPPLIER_MONEY_TERMS.shipmentAmount : SUPPLIER_MONEY_TERMS.orderedAmount
           return (
             <li key={o.id}
-                onClick={() => location.href = `/v2/supplier/orders/${o.id}`}
+                onClick={() => location.href = `${orderBase}/${o.id}`}
                 className={`relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full ${tone === 'red' ? 'before:bg-red' : tone === 'orange' ? 'before:bg-orange' : 'before:bg-gray4'} cursor-pointer hover:bg-bg-warm transition-colors`}>
               <div className="flex items-center gap-2 mb-1 flex-wrap">
                 <Chip tone={tone}>{status.label}</Chip>
@@ -482,13 +493,13 @@ export default function SupplierOrdersPage() {
               {/* SUBMITTED 状态: 整卡已可点跳详情, 这里只放紧急快捷按钮 (接/拒) */}
               {o.status === 'SUBMITTED' && (
                 <div className="grid grid-cols-2 gap-2 mt-3" onClick={e => e.stopPropagation()}>
-                  <a href={`/v2/supplier/orders/${o.id}`} className="py-2 bg-white border border-red text-caption text-red-fg rounded-cta text-center">拒单</a>
-                  <a href={`/v2/supplier/orders/${o.id}`} className="py-2 bg-ink text-white rounded-cta text-caption text-center">接单</a>
+                  <a href={`${orderBase}/${o.id}`} className="py-2 bg-white border border-red text-caption text-red-fg rounded-cta text-center">拒单</a>
+                  <a href={`${orderBase}/${o.id}`} className="py-2 bg-ink text-white rounded-cta text-caption text-center">接单</a>
                 </div>
               )}
               {o.status === 'CONFIRMED' && (
                 <div className="mt-3" onClick={e => e.stopPropagation()}>
-                  <a href={`/v2/supplier/orders/${o.id}`}
+                  <a href={`${orderBase}/${o.id}`}
                     className="block w-full py-2 bg-ink text-white rounded-cta text-button text-center">
                     核对实发数量并发货
                   </a>
@@ -521,7 +532,7 @@ export default function SupplierOrdersPage() {
             const tone = delivery.status === 'RECEIVED' ? 'green' : delivery.status === 'CANCELLED' ? 'gray' : 'orange'
             return (
               <li key={delivery.id}
-                onClick={() => { location.href = `/v2/supplier/orders/${delivery.purchaseOrder.id}` }}
+                onClick={() => { location.href = `${orderBase}/${delivery.purchaseOrder.id}` }}
                 className="relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full before:bg-amber cursor-pointer hover:bg-bg-warm transition-colors">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
                   <Chip tone={tone}>{supplierDeliveryStatusMeta(delivery.status).label}</Chip>
@@ -561,9 +572,9 @@ export default function SupplierOrdersPage() {
         ]}
         activeKey={tab}
         onChange={(k) => {
-          if (k === 'home')      location.href = '/v2/supplier/home'
-          if (k === 'inventory') location.href = '/v2/supplier/inventory'
-          if (k === 'billing')   location.href = '/v2/supplier/billing'
+          if (k === 'home')      location.href = workspaceHome
+          if (k === 'inventory') location.href = inventoryHome
+          if (k === 'billing')   location.href = billingHome
           if (k === 'me')        location.href = '/v2/supplier/history'
         }}
       />

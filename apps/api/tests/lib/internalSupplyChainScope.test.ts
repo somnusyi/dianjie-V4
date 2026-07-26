@@ -8,6 +8,7 @@ import {
   supplyDataReadScope,
   type InternalSupplyChainCapability,
 } from '../../src/lib/internal-supply-chain-access'
+import { canOperateSupplyOrder } from '../../src/routes/orders'
 
 describe('internal supply-chain scope', () => {
   it('is neither store-scoped nor supplier-bound', () => {
@@ -60,20 +61,26 @@ describe('internal supply-chain scope', () => {
     expect(scope).not.toHaveProperty('tenantId', 'tenant-b')
   })
 
-  it('grants only the five explicit read capabilities', () => {
+  it('grants explicit reads plus the confirmed internal operation domains', () => {
     for (const capability of INTERNAL_SUPPLY_CHAIN_READ_CAPABILITIES) {
       expect(hasInternalSupplyChainCapability('SUPPLY_CHAIN', capability)).toBe(true)
       expect(allowsSupplyDataRead('SUPPLY_CHAIN', capability)).toBe(true)
     }
 
-    const forbiddenWrites: InternalSupplyChainCapability[] = [
+    const confirmedWrites: InternalSupplyChainCapability[] = [
       'order.write',
       'delivery.write',
-      'receipt.write',
       'inventory.write',
+      'product.write',
+    ]
+    for (const capability of confirmedWrites) {
+      expect(hasInternalSupplyChainCapability('SUPPLY_CHAIN', capability)).toBe(true)
+    }
+
+    const forbiddenWrites: InternalSupplyChainCapability[] = [
+      'receipt.write',
       'consumption.write',
       'product.approve',
-      'product.write',
       'finance.write',
       'store.write',
     ]
@@ -87,5 +94,12 @@ describe('internal supply-chain scope', () => {
     for (const privilegedRole of ['MANAGER', 'CHEF_DIRECTOR', 'ADMIN', 'FINANCE']) {
       expect(isInternalSupplyChainRole(privilegedRole)).toBe(false)
     }
+  })
+
+  it('allows internal fulfillment without treating the role as an external supplier', () => {
+    expect(canOperateSupplyOrder('SUPPLY_CHAIN')).toBe(true)
+    expect(canOperateSupplyOrder('SUPPLIER_OWNER')).toBe(true)
+    expect(canOperateSupplyOrder('MANAGER')).toBe(false)
+    expect(canOperateSupplyOrder('FINANCE')).toBe(false)
   })
 })

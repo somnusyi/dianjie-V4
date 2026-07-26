@@ -3,6 +3,7 @@ import { prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { notifyApprovalDone } from '../services/notification'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
+import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const GROUP_READ_ROLES = new Set(['ADMIN', 'FINANCE', 'SUPER_ADMIN'])
@@ -29,7 +30,10 @@ export const scheduleRoutes: FastifyPluginAsync = async (app) => {
   // 列表
   app.get('/', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, supplierId, storeId } = req.user
-    if (!GROUP_READ_ROLES.has(role) && !isSupplierRole(role) && !isStoreScoped(role)) {
+    if (!GROUP_READ_ROLES.has(role)
+        && !isSupplierRole(role)
+        && !isStoreScoped(role)
+        && !hasInternalSupplyChainCapability(role, 'finance.read')) {
       return reply.status(403).send({ error: '无权查看付款计划' })
     }
     const parsed = z.object({

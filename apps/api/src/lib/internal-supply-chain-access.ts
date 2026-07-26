@@ -8,6 +8,8 @@ export const INTERNAL_SUPPLY_CHAIN_READ_CAPABILITIES = [
   'receipt.read',
   'inventory.read',
   'consumption.read',
+  'finance.read',
+  'analytics.read',
 ] as const
 
 export type InternalSupplyChainReadCapability =
@@ -26,7 +28,13 @@ export type InternalSupplyChainCapability =
   | 'store.write'
 
 const INTERNAL_ROLE_CAPABILITIES: Record<string, ReadonlySet<InternalSupplyChainCapability>> = {
-  [INTERNAL_SUPPLY_CHAIN_ROLE]: new Set(INTERNAL_SUPPLY_CHAIN_READ_CAPABILITIES),
+  [INTERNAL_SUPPLY_CHAIN_ROLE]: new Set([
+    ...INTERNAL_SUPPLY_CHAIN_READ_CAPABILITIES,
+    'order.write',
+    'delivery.write',
+    'inventory.write',
+    'product.write',
+  ]),
 }
 
 export function isInternalSupplyChainRole(role: string | undefined | null): boolean {

@@ -6,6 +6,7 @@ import dayjs from 'dayjs'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { isSupplierRole } from '../lib/auth-scope'
+import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
 import { resignOssUrl } from './upload'
 import { createSupplierInvoice, reviewInvoice } from '../services/invoiceIntegrity'
 
@@ -110,7 +111,9 @@ export const invoiceRoutes: FastifyPluginAsync = async app => {
 
   app.get('/', auth, async (req: any, reply: any) => {
     const { tenantId, role, supplierId } = req.user
-    if (!INVOICE_READ_ROLES.has(role) && !isSupplierRole(role)) {
+    if (!INVOICE_READ_ROLES.has(role)
+        && !isSupplierRole(role)
+        && !hasInternalSupplyChainCapability(role, 'finance.read')) {
       return reply.status(403).send({ error: '无权查看发票' })
     }
     if (isSupplierRole(role) && !supplierId) {
@@ -210,7 +213,9 @@ export const invoiceRoutes: FastifyPluginAsync = async app => {
 
   app.get('/:id', auth, async (req: any, reply: any) => {
     const { tenantId, role, supplierId } = req.user
-    if (!INVOICE_READ_ROLES.has(role) && !isSupplierRole(role)) {
+    if (!INVOICE_READ_ROLES.has(role)
+        && !isSupplierRole(role)
+        && !hasInternalSupplyChainCapability(role, 'finance.read')) {
       return reply.status(403).send({ error: '无权查看发票' })
     }
     if (isSupplierRole(role) && !supplierId) {

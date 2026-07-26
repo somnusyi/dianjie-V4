@@ -7,7 +7,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { apiFetch } from '@/lib/v2-auth'
+import { apiFetch, getUser } from '@/lib/v2-auth'
 import {
   SUPPLIER_MONEY_TERMS,
   supplierLossClaimKindMeta,
@@ -80,6 +80,9 @@ type Order = {
 }
 
 export default function SupplierOrderDetailPage() {
+  const orderBase = getUser()?.role === 'SUPPLY_CHAIN'
+    ? '/v2/supply-chain/fulfillment'
+    : '/v2/supplier/orders'
   const params = useParams() as any
   const router = useRouter()
   const id = params.id as string
@@ -328,7 +331,7 @@ export default function SupplierOrderDetailPage() {
         <button onClick={() => router.back()} className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</button>
         <h1 className="text-h1 flex-1 truncate">订单详情</h1>
         <button
-          onClick={() => router.push(`/v2/supplier/orders/${order.id}/delivery-note`)}
+          onClick={() => router.push(`${orderBase}/${order.id}/delivery-note`)}
           className="px-3 py-1.5 rounded-cta border border-border bg-white text-button text-gray2 whitespace-nowrap"
           title="打开打印 / 导出 PDF 页面"
         >🖨 送货单</button>

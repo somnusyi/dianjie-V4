@@ -5,7 +5,11 @@ import dayjs from 'dayjs'
 import { invalidatePattern } from '../lib/cache'
 import { notifyOrderSubmitted, notifyOrderShipped, notifyOrderConfirmed, notifyOrderRejected, sendNotification } from '../services/notification'
 import { isStoreScoped, isSupplierRole, requireSupplierBinding } from '../lib/auth-scope'
-import { allowsSupplyDataRead, supplyDataReadScope } from '../lib/internal-supply-chain-access'
+import {
+  allowsSupplyDataRead,
+  hasInternalSupplyChainCapability,
+  supplyDataReadScope,
+} from '../lib/internal-supply-chain-access'
 import { resignOssUrls } from './upload'
 import { fireAndForget as notify, notify as notifyExact } from '../services/notify'
 import {
@@ -47,6 +51,12 @@ import {
 
 // CLAUDE.md 约定：所有写入用 zod 校验
 const PURCHASE_QUANTITY_MAX = 99_999_999.99
+
+export function canOperateSupplyOrder(role: string | undefined | null): boolean {
+  return isSupplierRole(role)
+    || hasInternalSupplyChainCapability(role, 'order.write')
+    || ['ADMIN', 'SUPER_ADMIN'].includes(role || '')
+}
 
 function orderAmountBoundError(lineAmounts: Prisma.Decimal[], total: Prisma.Decimal): string | null {
   if (lineAmounts.some(amount => amount.gt(PURCHASE_ORDER_AMOUNT_MAX))) return '单行金额超过系统上限'
@@ -680,7 +690,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, userId, role, supplierId: actorSupplierId, storeId: actorStoreId } = req.user
     const { id } = req.params as any
     const input = parsed.data
-    const requesterAllowed = isSupplierRole(role) || ['MANAGER', 'KITCHEN_LEAD', 'PURCHASER', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'].includes(role)
+    const requesterAllowed = canOperateSupplyOrder(role)
+      || ['MANAGER', 'KITCHEN_LEAD', 'PURCHASER', 'CHEF_DIRECTOR'].includes(role)
     if (!requesterAllowed) return reply.status(403).send({ error: '无权申请修改订货单' })
 
     const order = await prisma.purchaseOrder.findFirst({
@@ -696,7 +707,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (isStoreScoped(role) && order.storeId !== actorStoreId) return reply.status(404).send({ error: '订单不存在' })
     if (role === 'CHEF_DIRECTOR' && order.createdById !== userId) return reply.status(403).send({ error: '只能修改自己代下的订单' })
     if (input.baseRowVersion !== order.rowVersion) return reply.status(409).send({ error: '订单已更新，请刷新后重新提交' })
-    if (isSupplierRole(role) && (input.expectedDate !== undefined || input.note !== undefined)) {
+    if ((isSupplierRole(role) || hasInternalSupplyChainCapability(role, 'order.write'))
+        && (input.expectedDate !== undefined || input.note !== undefined)) {
       return reply.status(400).send({ error: '供应商只能申请调整商品或数量' })
     }
 
@@ -1022,7 +1034,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   app.patch('/:id/confirm', { preHandler: [(app as any).authenticate] }, async (req: any) => {
     const { tenantId, userId, role } = req.user
     const { id } = req.params as any
-    if (!isSupplierRole(role) && !['ADMIN', 'SUPER_ADMIN'].includes(role)) throw { statusCode: 403, message: '无权限' }
+    if (!canOperateSupplyOrder(role)) throw { statusCode: 403, message: '无权限' }
 
     const where: any = { id, tenantId, status: 'SUBMITTED' }
     const scopedSupplierId = requireSupplierBinding(role, req.user.supplierId)
@@ -1083,7 +1095,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   // ── 旧版代加入口已封口: 禁止接单后直接篡改原始订货单 ───────────────────────
   app.post('/:id/add-items', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
     const { role } = req.user
-    if (!isSupplierRole(role) && !['ADMIN', 'SUPER_ADMIN'].includes(role)) {
+    if (!canOperateSupplyOrder(role)) {
       return reply.status(403).send({ error: '仅供应商 / 管理员可代加' })
     }
     return reply.status(409).send({
@@ -1097,7 +1109,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, userId, role } = req.user
     const { id } = req.params as any
     const { reason } = (req.body || {}) as any
-    if (!isSupplierRole(role) && !['ADMIN', 'SUPER_ADMIN'].includes(role)) throw { statusCode: 403, message: '无权限' }
+    if (!canOperateSupplyOrder(role)) throw { statusCode: 403, message: '无权限' }
     if (!reason || !String(reason).trim()) throw { statusCode: 400, message: '请说明拒单原因' }
     const where: any = { id, tenantId, status: { in: ['SUBMITTED', 'CONFIRMED'] } }
     const scopedSupplierId = requireSupplierBinding(role, req.user.supplierId)
@@ -1148,7 +1160,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const { note, items: shippedItems, idempotencyKey } = parsedShip.data
     const requestFingerprint = shipmentRequestFingerprint(note, shippedItems)
 
-    if (!isSupplierRole(role) && !['ADMIN', 'SUPER_ADMIN'].includes(role)) throw { statusCode: 403, message: '无权限' }
+    if (!canOperateSupplyOrder(role)) throw { statusCode: 403, message: '无权限' }
     const scopedSupplierId = requireSupplierBinding(role, req.user.supplierId)
 
     // 网络重试必须在检查订货单当前状态前命中，否则首次发货已把 PO 改为 DELIVERING，重试会误报不可发货。
@@ -1544,7 +1556,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   app.patch('/:id/deliver', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
     const { tenantId, userId, role } = req.user
     const { id } = req.params as any
-    if (!isSupplierRole(role) && !['ADMIN', 'SUPER_ADMIN'].includes(role)) {
+    if (!canOperateSupplyOrder(role)) {
       return reply.status(403).send({ error: '仅供应商 / 管理员可标记送达' })
     }
     const parsedDeliver = deliveryDeliverSchema.safeParse(req.body || {})

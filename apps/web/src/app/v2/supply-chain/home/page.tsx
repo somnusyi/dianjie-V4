@@ -113,11 +113,11 @@ export default function InternalSupplyChainHomePage() {
       <header className="mx-auto flex max-w-[1440px] flex-col gap-4 border-b border-border pb-5 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="mb-2 flex items-center gap-2">
-            <Chip tone="green">内部只读</Chip>
-            <span className="text-caption text-gray3">供应履约 · 租户内跨店</span>
+            <Chip tone="green">内部供应链</Chip>
+            <span className="text-caption text-gray3">统一采购 · 仓库 · 跨店履约</span>
           </div>
           <h1 className="text-h1">内部供应链工作台</h1>
-          <p className="mt-1 text-caption text-gray2">供应履约与商品管理；不提供账单或销售分析。</p>
+          <p className="mt-1 text-caption text-gray2">原供应商作业能力已并入；履约、商品、仓库与供应商管理可操作，跨店收货/消耗和账务保持只读。</p>
         </div>
         <div className="flex items-center gap-3">
           <label className="text-caption text-gray2">
@@ -132,11 +132,10 @@ export default function InternalSupplyChainHomePage() {
               {stores.map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}
             </select>
           </label>
-          <a href="/v2/supply-chain/orders" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">订单查询</a>
-          <a href="/v2/supply-chain/deliveries" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">配送查询</a>
-          <a href="/v2/supply-chain/receipts" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">收货查询</a>
+          <a href="/v2/supply-chain/fulfillment" className="rounded-cta bg-accent px-4 py-2.5 text-button text-white">去履约</a>
           <a href="/v2/supply-chain/products" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">商品管理</a>
-          <a href="/v2/me" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">账户</a>
+          <a href="/v2/supply-chain/inventory" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">仓库库存</a>
+          <a href="/v2/supply-chain/billing" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button">账务查询</a>
         </div>
       </header>
 

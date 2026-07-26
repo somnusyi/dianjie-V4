@@ -89,9 +89,9 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
         store: null,
         supplier: null,
         hero: {
-          label: '内部供应链只读工作台',
+          label: '内部供应链统一工作台',
           value: `${stores.length} 家门店`,
-          meta: '跨店查看订单、配送、收货、库存与消耗',
+          meta: '履约与仓库可操作，跨店收货、库存、消耗和账务只读',
           stats: [
             { label: '进行中订单', value: String(orderCount), tone: 'default' as const },
             { label: '在途配送', value: String(deliveryCount), tone: deliveryCount > 0 ? 'orange' as const : 'default' as const },
@@ -99,7 +99,9 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
           ],
         },
         supplyChain: {
-          readOnly: true,
+          readOnly: false,
+          writableDomains: ['order-fulfillment', 'catalog', 'warehouse-inbound', 'supplier-master'],
+          readOnlyDomains: ['store-receipt', 'store-inventory', 'consumption', 'finance'],
           stores,
           counts: { orders: orderCount, deliveries: deliveryCount, receipts: receiptCount },
         },

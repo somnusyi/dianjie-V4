@@ -54,8 +54,8 @@ const SLIDES: Record<string, Slide[]> = {
   SUPPLIER_STAFF: SUPPLIER_SLIDES,
   SUPPLIER_SUB: SUPPLIER_SLIDES,
   SUPPLY_CHAIN: [
-    { icon: '▦', title: '跨店供应履约总览', body: '按门店查看采购订单、配送、收货、库存和近 30 天食材消耗。' },
-    { icon: '◉', title: '全程只读', body: '工作台不提供接单、发货、盘点录入、库存调整、账单或销售分析操作。' },
+    { icon: '▦', title: '统一供应链工作台', body: '接单、改单、按实发货、送达，以及商品、分类、供应商和默认仓库存集中处理。' },
+    { icon: '◉', title: '跨店数据边界', body: '可查看全部门店的订货、配送、收货、库存与消耗；收货、门店库存和账务数据只读。' },
   ],
   // 工程部 (筹建)
   ENGINEERING: [

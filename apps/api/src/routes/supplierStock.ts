@@ -13,6 +13,10 @@ import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { Prisma, prisma } from '@dianjie/db'
 import { requireSupplierCapability, SupplierCapability } from '../lib/supplier-access'
+import {
+  hasInternalSupplyChainCapability,
+  isInternalSupplyChainRole,
+} from '../lib/internal-supply-chain-access'
 import { getSupplierReservedStock, stockAvailability } from '../services/supplierStockReservation'
 import {
   applySupplierStockBatchDelta,
@@ -41,6 +45,19 @@ function ensureSupplier(
 ): { tenantId: string; userId: string; supplierId: string } | null {
   const { tenantId, role, userId, supplierId } = req.user
   try {
+    if (isInternalSupplyChainRole(role)) {
+      const internalCapability = capability === 'inventory.manage'
+        ? 'inventory.write'
+        : 'inventory.read'
+      if (!hasInternalSupplyChainCapability(role, internalCapability)) {
+        throw { statusCode: 403, message: '当前内部供应链岗位无此库存权限' }
+      }
+      const requestedSupplierId = String(req.query?.supplierId || '').trim()
+      if (!requestedSupplierId) {
+        throw { statusCode: 400, message: '内部供应链操作库存时必须选择供应商' }
+      }
+      return { tenantId, userId, supplierId: requestedSupplierId }
+    }
     const scopedSupplierId = requireSupplierCapability(role, supplierId, capability)
     return { tenantId, userId, supplierId: scopedSupplierId }
   } catch (error: any) {
@@ -300,7 +317,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
   app.get('/summary', auth(app), async (req: any, reply: any) => {
     const ctx = ensureSupplier(req, reply, 'inventory.read'); if (!ctx) return
     const [supplier, ps] = await Promise.all([
-      prisma.supplier.findFirstOrThrow({
+      prisma.supplier.findFirst({
         where: { id: ctx.supplierId, tenantId: ctx.tenantId },
         select: { inventoryMode: true, inventoryActivatedAt: true },
       }),
@@ -314,6 +331,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
         },
       }),
     ])
+    if (!supplier) return reply.status(404).send({ error: '供应商不存在或不属于当前租户' })
     const reservedByProduct = await getSupplierReservedStock({
       tenantId: ctx.tenantId,
       supplierId: ctx.supplierId,

@@ -802,3 +802,97 @@ worktree、Docker 镜像/卷和用户文件均未删除。Docker 僵死后台由
   门店实收更正不得恢复供应链仓库存。
 - 生产 gate 保持 `LOCKED`；未合并或直推 main、未建 PR、未部署、未写生产、未运行
   一次性生产脚本，也未读取或修改凭证与业务 xlsx。
+
+## V5 默认仓全生命周期列车（2026-07-26 17:30）
+
+### 精确提交
+
+| 能力 | feature SHA | integration SHA |
+| --- | --- | --- |
+| 调整与报损真实仓 | `354c4e8648d61866c1a5d1ab0aa88e93a152e056` | `ee4a8896` |
+| 入库响应 PC 仓契约 | `1067dec0520b4fc17df61dd28e3fa7d3330dd248` | `4fad1617` |
+| 库存快照真实仓 | `92598ba4f8fce40bc59259e1402e8d8a49bfb610` | `f53a00db` |
+| 调整/报损 PC | `12e7d15773e57019828f0e60f9596721c5f0a3ad` | `a213d2e6` |
+| 预占与发货真实仓 | `fde4fc62aa74fe2ecc5183731e3fe68271c0f349` | `ed6ca411` |
+| 库存列表与汇总真实仓 | `1c153e2b92eafe412cd30fef5ea5c750f1cb366e` | `c99c9eb6` |
+| 全量盘点 PC | `bd88c00def471380946d2d4c8442802c1b0984bb` | `2a4e6f19` |
+| 生命周期守恒回归 | `8dd3cc2fccb2ff01e201ec3e6a601757e3c18a30` | `6ec9f370` |
+
+- 写路径统一以认证 tenant 的真实默认 `WarehouseStock.physicalQty` 为物理余额，并在同一
+  事务维护 `Product.stock` 兼容镜像；双源漂移、缺仓、停用仓和跨 tenant/supplier
+  均 fail closed。
+- 预占、部分发货、流水、批次、分配、库存列表与汇总均限定同一真实 warehouseId；
+  未发余量关闭并释放，不进入补送状态。第二仓预置余额和事实不被默认仓流程读取或改写。
+- 全量盘点 PC 与 Excel 增量入库明确分离；逐行预览、汇总守恒、真实仓响应、部分失败和
+  409 保留输入均有自动化覆盖。
+
+### 验收与停止点
+
+- API 555/555、Web 593/593、API build、Web tsc、68 条 migration
+  deploy/status/diff、生命周期 PostgreSQL 15/15、PC 浏览器、diff check 与高置信敏感
+  信息检查全部通过。
+- Kimi/Qwen 原 runner 的 FAILED 证据保留，只有干净、已推送且人工复核通过的 exact
+  feature SHA 进入 RC。两个控制面任务均已为 DONE。
+- `Product.stock` 兼容桥继续保留，待剩余旧查询/报表和生产迁移守恒审计完成后再拆；
+  供应链入库更正与门店收货更正仍未实现。本批未碰 main、PR 或生产。
+
+## V5 默认仓全链路与盘点 PC 收口（2026-07-26 17:26）
+
+### 已审查并逐提交集成
+
+| 能力 | feature 精确提交 | 统一 RC 提交 |
+| --- | --- | --- |
+| 调整/报损写入真实默认仓 | `354c4e8648d61866c1a5d1ab0aa88e93a152e056` | `ee4a8896` |
+| 增量入库 PC 响应契约 | `1067dec0520b4fc17df61dd28e3fa7d3330dd248` | `4fad1617` |
+| 盘点快照写入真实默认仓 | `92598ba4f8fce40bc59259e1402e8d8a49bfb610` | `f53a00db` |
+| 调整/报损 PC 操作 | `12e7d15773e57019828f0e60f9596721c5f0a3ad` | `a213d2e6` |
+| 接单预占与实际发货真实仓 | `fde4fc62aa74fe2ecc5183731e3fe68271c0f349` | `ed6ca411` |
+| 库存列表/汇总真实仓读取 | `1c153e2b92eafe412cd30fef5ea5c750f1cb366e` | `c99c9eb6` |
+| 全量盘点快照 PC | `bd88c00def471380946d2d4c8442802c1b0984bb` | `2a4e6f19` |
+| 默认仓生命周期守恒集成测试 | `8dd3cc2fccb2ff01e201ec3e6a601757e3c18a30` | `6ec9f370` |
+
+- 调整、报损和快照均按 Product → WarehouseStock 稳定顺序锁定，以真实默认仓
+  `physicalQty` 为余额；缺行、停用、跨 tenant 或与 Product.stock 漂移时 fail closed，
+  流水、批次和分配只使用同一真实 warehouseId，同时保留 Product.stock 兼容镜像。
+- 严格库存接单预占改为真实默认仓可用量；实际发货扣同仓 WarehouseStock、维护兼容
+  镜像并关闭本单同仓未发余量。部分发货仍按已确认规则不补送，其他仓事实不参与计算。
+- 库存列表与汇总返回真实仓 ID/名称，以同仓物理余额、ACTIVE 预占、流水和批次计算
+  可用量、预警、效期和四单位估值；未知、停用、跨 tenant 仓和双源漂移均返回 4xx，
+  读路径零写入。
+- PC 补齐盘点调整、报损登记和全量目标库存导入。所有写请求显式携带 supplierId 与
+  `warehouseId=default`；只有返回真实仓且汇总守恒才显示成功。快照部分失败保留文件、
+  说明和完整预览，把服务端请求序号映射回 Excel 行，并提示成功行可能已经落账，避免
+  用户误以为整批回滚后盲目重试。没有提交任何 xlsx。
+
+### runner 接管与门禁
+
+- Codex 首次因 supervisor PATH 缺失退出 127；控制面改用桌面 Codex 绝对路径后重试。
+  重试、Kimi 和 Qwen 均以 exit 2 留下脏工作树且没有可信 checks。总管保留失败 run，
+  逐文件审查并修复测试路径、锁顺序、默认仓解析、响应契约、Excel 零数量空名与 `_ci`
+  数据库硬门禁后，才形成、推送 exact feature 并在控制面人工验收为 DONE。
+- 最终组合 API 单元 54 文件 555/555、Web 32 文件 593/593、PostgreSQL 集成
+  24 文件 180/180、API build、Web tsc 均通过。
+- 全新 `dianjie_v5_lifecycle_ci` 从零应用 68 条 migration；deploy/status 通过，
+  migrations-to-schema diff 为零。默认仓生命周期测试两次 15/15，通过入库、预占、
+  部分发货、调整、报损、快照、第二仓隔离及漂移零写入。临时容器已删除。
+- detached 临时 worktree 的 Web production build 生成 161 页并包含
+  `/v2/supply-chain/inventory/snapshot`；只保留既有 OpenTelemetry 动态依赖 warning，
+  临时 worktree 已删除，未污染统一 RC 的 `.next` 或停止用户预览进程。
+- 新盘点页的只读浏览器复核因 Browser 标签会话绑定异常未能完成；重连和标签清理后仍
+  返回旧 tab ID。未切换到其他浏览器绕过登录态，也未提交任何库存写操作。此前同一轮的
+  仓库/门店消耗只读浏览器证据继续有效，本页以 12 个组件测试和 production build 兜底。
+- `git diff --check`、高置信敏感信息检查、feature 远端 exact SHA、统一 RC 远端 exact
+  SHA 和所有本轮接管 worktree 的干净状态通过。
+
+### 剩余风险与业务阻断
+
+- Product.stock 兼容镜像继续保留；本轮已经覆盖现有默认仓库存 writer/readers，但在
+  未来多仓 writer、监控和迁移退出方案明确前不得删除兼容桥。
+- 库存列表为保证物理余额排序并对全部筛选结果检查缺行/漂移，会先载入完整匹配商品集再
+  内存分页。正确性已验证；超大供应商目录仍需基准测试和数据库 join 分页优化，不能把
+  当前页数响应误当作数据库级分页证据。
+- 手工入库更正/撤销与已确认门店实收更正仍被业务规则阻断：发起角色、已付款/关账、
+  已消耗批次及跨期口径未确认。旧更正设计仍写着“没有 Warehouse/WarehouseStock”，
+  实现前必须基于当前 68 条迁移重新审计；门店实收更正不得恢复供应链仓库存。
+- 生产 gate 继续 `LOCKED`。未合并或直推 main、未建/合并 PR、未部署、未写生产、
+  未运行一次性生产脚本、未读取或轮换凭证。

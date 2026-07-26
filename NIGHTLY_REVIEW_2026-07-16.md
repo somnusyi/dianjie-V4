@@ -2041,3 +2041,74 @@
   筛选、50 条页大小和跨店空态均正确，控制台无 error。未执行任何业务写操作。
 - 下一批继续按同一 `supplierStock.ts` 冲突域顺序切换调整、报损和库存快照，再处理订单
   预占与实际发货。更正状态机和 Product.stock 兼容桥继续冻结；生产 gate 保持 LOCKED。
+
+## 2026-07-26 17:30 默认仓全生命周期与全量盘点 PC
+
+### 已验收并集成
+
+- 调整/报损写入真实默认仓：feature `354c4e8648d61866c1a5d1ab0aa88e93a152e056`，
+  集成 `ee4a8896`；库存详情 PC 的调整/报损入口为 feature
+  `12e7d15773e57019828f0e60f9596721c5f0a3ad`，集成 `a213d2e6`。
+- 库存快照写入真实默认仓：feature `92598ba4f8fce40bc59259e1402e8d8a49bfb610`，
+  集成 `f53a00db`；全量盘点 PC 为 feature
+  `bd88c00def471380946d2d4c8442802c1b0984bb`，集成 `2a4e6f19`。
+- 订单预占和实际发货写入同一真实默认仓：feature
+  `fde4fc62aa74fe2ecc5183731e3fe68271c0f349`，集成 `ed6ca411`。
+- 库存列表、汇总、预占、批次和流水读取真实仓事实：feature
+  `1c153e2b92eafe412cd30fef5ea5c750f1cb366e`，集成 `c99c9eb6`。
+- 新增真实 PostgreSQL 生命周期守恒回归：feature
+  `8dd3cc2fccb2ff01e201ec3e6a601757e3c18a30`，集成 `6ec9f370`。测试使用内部
+  `SUPPLY_CHAIN` 身份、显式 supplierId 和默认仓 alias，覆盖入库、预占、部分发货、
+  调整、报损、快照、双源漂移原子拒绝及第二仓隔离。
+
+### 门禁
+
+- Node 20 下 API 全量 54 文件、555/555，Web 全量 32 文件、593/593，API build、
+  Web tsc、`git diff --check` 与高置信敏感信息检查通过。
+- 一次性 PostgreSQL `_ci` 空库从零应用 68 条 migration，deploy/status 通过，
+  migrations-to-schema diff 为零；生命周期真实数据库 15/15。临时 review 容器已自动
+  删除，未连接普通本地库或生产。
+- 1280×720 PC 浏览器确认仓库库存页存在独立“Excel 批量入库”和“全量盘点导入”入口；
+  盘点页明确“设置目标库存、替换当前物理余额”，供应商范围、文件规则、预览和禁用提交
+  状态正常，无横向溢出或 console warning/error。未上传文件、未提交库存写入。
+
+### 失败证据与边界
+
+- `SC-WAREHOUSE-SNAPSHOT-PC-KIMI-048` 与
+  `SC-WAREHOUSE-LIFECYCLE-QWEN-049` 的可信 runner 均在提交前退出 2，原 FAILED
+  run 保留；总管只在审查、修正、真实数据库/全量门禁和远端 exact SHA 全部通过后，将
+  两项人工验收为 DONE。
+- `Product.stock` 继续作为单向兼容镜像；在剩余旧查询/报表审计与生产数据守恒迁移完成
+  前不得移除。供应链手工入库更正和门店实收更正仍是两条未实现的独立状态机。
+- 本批未合并或直推 main、未建 PR、未部署或写生产、未执行一次性生产脚本，也未读取、
+  输出或轮换凭证。
+
+### 17:26 默认仓运行时全链路与盘点 PC 收口
+
+- 调整/报损、盘点快照、严格库存预占、实际发货及库存列表/汇总均已切换到认证 tenant
+  内的真实启用仓。feature exact SHA 依次为 `354c4e8648d61866c1a5d1ab0aa88e93a152e056`、
+  `92598ba4f8fce40bc59259e1402e8d8a49bfb610`、
+  `fde4fc62aa74fe2ecc5183731e3fe68271c0f349` 和
+  `1c153e2b92eafe412cd30fef5ea5c750f1cb366e`；统一 RC 对应为 `ee4a8896`、
+  `f53a00db`、`ed6ca411`、`c99c9eb6`。
+- 增量入库、调整/报损和全量盘点 PC 分别以 feature
+  `1067dec0520b4fc17df61dd28e3fa7d3330dd248`、
+  `12e7d15773e57019828f0e60f9596721c5f0a3ad`、
+  `bd88c00def471380946d2d4c8442802c1b0984bb` 集成。所有写请求显式选择 supplier/default
+  alias，只有真实仓响应和守恒汇总才显示成功；409、契约错误与部分失败均保留输入。
+- Qwen 守恒测试 feature `8dd3cc2fccb2ff01e201ec3e6a601757e3c18a30` 集成为
+  `6ec9f370`。总管在执行前补上仅允许 `_ci` 数据库的硬门禁，并修复触发器会自动同步
+  Product.stock 导致无法制造漂移的测试方法。
+- Codex 初次启动 exit 127；重试及 Kimi/Qwen runner 均 exit 2/dirty、checks 为空。
+  原失败证据保留。总管逐项修复、运行门禁、提交推送 exact feature 后，控制面任务才
+  人工验收为 DONE。
+- 最终 RC 运行代码/测试 HEAD 为 `6ec9f370d85cce76c9bfc949bbcee75cfec6dbfb`：
+  API 555/555、Web 593/593、PostgreSQL 集成 180/180、API build、Web tsc、161 页
+  隔离 production build、68 migration deploy/status/diff、diff check 和敏感信息检查
+  均通过。临时 `_ci` 容器与 build worktree 已删除。
+- 新盘点页只读浏览器复核因 Browser 新标签被错误绑定到旧 tab ID 而未完成；未绕过
+  登录态或执行写操作，页面由 12 个组件测试和 production build 验收。库存列表目前为
+  全匹配集物理余额校验后内存分页，超大目录仍需数据库 join 分页基准和优化。
+- 入库更正/撤销与已确认实收更正继续冻结；旧设计需按当前 Warehouse/WarehouseStock
+  schema 重做，门店实收更正不得恢复供应链仓。生产 gate 保持 LOCKED，不合并 main、
+  不建 PR、不部署、不写生产、不执行一次性生产脚本。

@@ -6,28 +6,7 @@ import { ErrorScreen, LoadingScreen, useDashboard } from '@/components/v2/use-da
 import { apiFetch } from '@/lib/v2-auth'
 
 type DocumentRow = {
-  id: string
-  no: string
   status: string
-  totalAmount?: number | string
-  store?: { id: string; name: string }
-  supplier?: { id: string; name: string }
-  createdAt?: string
-}
-
-const STATUS_LABELS: Record<string, string> = {
-  SUBMITTED: '待接单',
-  CONFIRMED: '待发货',
-  DELIVERING: '配送中',
-}
-
-function money(value: unknown) {
-  const amount = Number(value || 0)
-  return Number.isFinite(amount) ? `¥${amount.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}` : '—'
-}
-
-function dateText(value?: string) {
-  return value ? value.slice(0, 10) : '—'
 }
 
 export default function InternalSupplyChainHomePage() {
@@ -58,6 +37,11 @@ export default function InternalSupplyChainHomePage() {
   if (!data) return <LoadingScreen />
 
   const stores = data.supplyChain?.stores || []
+  const actionCounts = {
+    submitted: orders.filter(row => row.status === 'SUBMITTED').length,
+    confirmed: orders.filter(row => row.status === 'CONFIRMED').length,
+    delivering: orders.filter(row => row.status === 'DELIVERING').length,
+  }
 
   return (
     <div className="min-h-screen bg-bg px-4 py-5 lg:px-8 lg:py-7">
@@ -80,7 +64,7 @@ export default function InternalSupplyChainHomePage() {
       <main className="mx-auto max-w-[1440px]">
         <section className="grid gap-3 py-5 sm:grid-cols-2 lg:grid-cols-4">
           <Metric label="服务门店" value={`${stores.length} 家`} />
-          <Metric label="进行中订单" value={String(data.supplyChain?.counts.orders || 0)} />
+          <Metric label="未结订货单" value={String(data.supplyChain?.counts.orders || 0)} />
           <Metric label="在途配送" value={String(data.supplyChain?.counts.deliveries || 0)} />
           <Metric label="有效收货" value={String(data.supplyChain?.counts.receipts || 0)} />
         </section>
@@ -91,29 +75,24 @@ export default function InternalSupplyChainHomePage() {
           <div className="overflow-hidden rounded-card border border-border bg-white">
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
               <div>
-                <h2 className="text-h2">今日待处理</h2>
-                <p className="text-micro text-gray3">跨门店汇总待接单、待发货和配送中订单</p>
+                <h2 className="text-h2">订单动作概览</h2>
+                <p className="text-micro text-gray3">工作台只提示数量，单据与操作统一进入订单中心</p>
               </div>
               <a href="/v2/supply-chain/fulfillment" className="text-caption text-accent">进入订单中心 ›</a>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-caption">
-                <thead className="bg-bg text-gray3"><tr><th className="px-4 py-2">订单 / 门店</th><th className="px-4 py-2">供应商</th><th className="px-4 py-2">状态</th><th className="px-4 py-2 text-right">金额</th><th className="px-4 py-2"></th></tr></thead>
-                <tbody className="divide-y divide-border">
-                  {orders.slice(0, 12).map(row => (
-                    <tr key={row.id}>
-                      <td className="px-4 py-3"><b className="font-num">{row.no}</b><div className="text-micro text-gray3">{row.store?.name || '—'} · {dateText(row.createdAt)}</div></td>
-                      <td className="px-4 py-3">{row.supplier?.name || '—'}</td>
-                      <td className="px-4 py-3"><Chip tone={row.status === 'SUBMITTED' ? 'orange' : 'gray'}>{STATUS_LABELS[row.status] || row.status}</Chip></td>
-                      <td className="px-4 py-3 text-right font-num">{money(row.totalAmount)}</td>
-                      <td className="px-4 py-3 text-right"><a className="text-accent" href={`/v2/supply-chain/fulfillment/${row.id}`}>处理 ›</a></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="grid gap-3 p-4 sm:grid-cols-3">
+              <ActionCount label="待接单" value={actionCounts.submitted} tone="orange" loading={loadingRows} />
+              <ActionCount label="待发货" value={actionCounts.confirmed} tone="gray" loading={loadingRows} />
+              <ActionCount label="配送中" value={actionCounts.delivering} tone="green" loading={loadingRows} />
             </div>
-            {!loadingRows && orders.length === 0 && <Empty text="当前没有待处理订单" />}
-            {loadingRows && <Empty text="加载中…" />}
+            <div className="border-t border-border bg-bg px-4 py-4">
+              <p className="text-caption text-gray2">
+                {loadingRows ? '正在汇总订单动作…' : orders.length > 0 ? `当前共有 ${orders.length} 单需要跟进。` : '当前没有待处理订单。'}
+              </p>
+              <a href="/v2/supply-chain/fulfillment" className="mt-3 inline-flex rounded-cta bg-accent px-4 py-2.5 text-button text-white">
+                打开订单中心处理
+              </a>
+            </div>
           </div>
 
           <div className="space-y-4">
@@ -149,6 +128,12 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="rounded-card border border-border bg-white p-4"><div className="text-caption text-gray3">{label}</div><div className="mt-1 font-num text-h1">{value}</div></div>
 }
 
-function Empty({ text }: { text: string }) {
-  return <div className="px-4 py-10 text-center text-caption text-gray3">{text}</div>
+function ActionCount({ label, value, tone, loading }: { label: string; value: number; tone: 'orange' | 'gray' | 'green'; loading: boolean }) {
+  return (
+    <div className="rounded-card border border-border bg-bg p-4">
+      <Chip tone={tone}>{label}</Chip>
+      <div className="mt-3 font-num text-h1">{loading ? '—' : value}</div>
+      <div className="mt-1 text-micro text-gray3">仅提示，不在工作台展开单据</div>
+    </div>
+  )
 }

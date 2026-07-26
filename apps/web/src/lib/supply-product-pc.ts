@@ -5,6 +5,10 @@
  * 只依赖现有 /api/products 与 /api/suppliers 端点，不引入新接口。
  */
 
+/** 商品数量字段统一使用非负、最多三位小数；起订量必须大于 0。 */
+const QUANTITY_INPUT_REGEX = /^\d+(\.\d{1,3})?$/
+const PRODUCT_QUANTITY_MAX = 999_999_999.999
+
 export const SUPPLY_PRODUCT_STATUS_OPTIONS = [
   { value: 'ENABLED', label: '供应中' },
   { value: 'DISABLED', label: '已停售' },
@@ -47,6 +51,76 @@ export type SupplyProduct = {
 export type CategoryOption = { name: string; count: number }
 
 export type SupplierOption = { id: string; name: string }
+
+/** 四位商品数量字段的表单类型（库存、安全库存、起订量、步长）。 */
+export type SupplyProductQuantityForm = {
+  stock: string
+  minStock: string
+  minOrderQty: string
+  stepQty: string
+}
+
+/**
+ * 将用户输入解析为非负有限数，最多三位小数。
+ * 拒绝空值、负数、NaN/Infinity、科学计数法及超过三位小数。
+ */
+export function parseProductQuantity(value: string): number | null {
+  const trimmed = value.trim()
+  if (trimmed === '') return null
+  if (!QUANTITY_INPUT_REGEX.test(trimmed)) return null
+  const n = Number(trimmed)
+  if (!Number.isFinite(n) || n > PRODUCT_QUANTITY_MAX) return null
+  return n
+}
+
+/**
+ * 校验单个数量字段；返回错误文案或 null。
+ * positive=true 时要求必须大于 0（用于起订量）。
+ */
+export function validateProductQuantity(
+  value: string,
+  label: string,
+  { positive }: { positive?: boolean } = {},
+): string | null {
+  const trimmed = value.trim()
+  if (trimmed === '') return `${label}必填`
+  if (/e/i.test(trimmed)) return `${label}不能使用科学计数法`
+  if (trimmed.startsWith('-')) return `${label}不能为负数`
+  if (!QUANTITY_INPUT_REGEX.test(trimmed)) {
+    if (/\.\d{4,}/.test(trimmed)) return `${label}最多三位小数`
+    return `${label}必须是非负数字，最多三位小数`
+  }
+  const n = Number(trimmed)
+  if (!Number.isFinite(n)) return `${label}必须是有限数字`
+  if (n > PRODUCT_QUANTITY_MAX) return `${label}超过商品数量上限`
+  if (positive && n <= 0) return `${label}必须大于 0`
+  return null
+}
+
+/** 校验库存、安全库存、起订量、步长；返回第一条错误文案或 null。 */
+export function validateProductQuantities(
+  form: SupplyProductQuantityForm,
+): string | null {
+  return (
+    validateProductQuantity(form.stock, '库存') ||
+    validateProductQuantity(form.minStock, '安全库存') ||
+    validateProductQuantity(form.minOrderQty, '起订量', { positive: true }) ||
+    validateProductQuantity(form.stepQty, '步长', { positive: true }) ||
+    null
+  )
+}
+
+/** 列表/回填展示：保留服务端返回的有效数字字符串，否则按最多三位小数格式化。 */
+export function formatProductQuantity(value: unknown): string {
+  if (value == null || value === '') return '—'
+  const s = typeof value === 'string' ? value.trim() : String(value)
+  if (s === '') return '—'
+  if (typeof value === 'string' && QUANTITY_INPUT_REGEX.test(s)) return s
+  const n = Number(s)
+  return Number.isFinite(n)
+    ? n.toLocaleString('zh-CN', { maximumFractionDigits: 3 })
+    : '—'
+}
 
 /**
  * 将筛选条件 + 分页序列化为 /api/products 查询字符串。
@@ -91,17 +165,19 @@ export function keepFiltersForPage(
  * 新增商品请求体映射。
  * 过滤空字符串，将数值字段转为 number。
  */
-export function buildCreateBody(form: {
-  name: string
-  code: string
-  category: string
-  unit: string
-  price: string
-  spec: string
-  shelfDays: string
-  supplierId?: string
-  imageKey?: string | null
-}): Record<string, unknown> {
+export function buildCreateBody(
+  form: {
+    name: string
+    code: string
+    category: string
+    unit: string
+    price: string
+    spec: string
+    shelfDays: string
+    supplierId?: string
+    imageKey?: string | null
+  } & Partial<SupplyProductQuantityForm>,
+): Record<string, unknown> {
   const shelfDays = form.shelfDays.trim() === '' ? 7 : Number(form.shelfDays)
   const body: Record<string, unknown> = {
     name: form.name.trim(),
@@ -114,15 +190,51 @@ export function buildCreateBody(form: {
   if (form.spec.trim()) body.spec = form.spec.trim()
   if (form.supplierId?.trim()) body.supplierId = form.supplierId.trim()
   if (form.imageKey) body.imageKey = form.imageKey
+
+  const stock = parseProductQuantity(form.stock ?? '')
+  const minStock = parseProductQuantity(form.minStock ?? '')
+  const minOrderQty = parseProductQuantity(form.minOrderQty ?? '')
+  const stepQty = parseProductQuantity(form.stepQty ?? '')
+  if (stock != null) body.stock = stock
+  if (minStock != null) body.minStock = minStock
+  if (minOrderQty != null) body.minOrderQty = minOrderQty
+  if (stepQty != null) body.stepQty = stepQty
+
   return body
 }
 
 /**
  * 编辑商品请求体映射。只包含实际变更的字段。
  */
+function quantityChanged(formValue: string | undefined, originalValue: unknown): boolean {
+  if (formValue == null) return false
+  const parsed = parseProductQuantity(formValue)
+  if (parsed == null) return false
+  const original = Number(originalValue ?? 0)
+  return parsed !== original
+}
+
 export function buildEditBody(
-  form: { name: string; code: string; category: string; unit: string; spec: string; shelfDays: string },
-  original: { name: string; code: string; category: string; unit: string; spec: string; shelfDays: number },
+  form: {
+    name: string
+    code: string
+    category: string
+    unit: string
+    spec: string
+    shelfDays: string
+  } & Partial<SupplyProductQuantityForm>,
+  original: {
+    name: string
+    code: string
+    category: string
+    unit: string
+    spec: string
+    shelfDays: number
+    stock?: number | string | null
+    minStock?: number | string | null
+    minOrderQty?: number | string | null
+    stepQty?: number | string | null
+  },
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {}
   if (form.name.trim() !== original.name) body.name = form.name.trim()
@@ -132,6 +244,12 @@ export function buildEditBody(
   if (form.spec.trim() !== (original.spec || '')) body.spec = form.spec.trim() || null
   const shelfDays = form.shelfDays.trim() === '' ? 7 : Number(form.shelfDays)
   if (shelfDays !== original.shelfDays) body.shelfDays = shelfDays
+
+  if (quantityChanged(form.minOrderQty, original.minOrderQty)) {
+    body.minOrderQty = parseProductQuantity(form.minOrderQty ?? '')
+  }
+  if (quantityChanged(form.stepQty, original.stepQty)) body.stepQty = parseProductQuantity(form.stepQty ?? '')
+
   return body
 }
 

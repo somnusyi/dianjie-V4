@@ -8,6 +8,7 @@ import { sendNotification } from '../notification'
 import { fireAndForget as notify } from '../notify'
 import { acquireDeployLock } from './deploymentLock'
 import { inspectUnifiedDiff, isAutoDeploymentEnabled } from './policy'
+import { requireProductionBaseline } from './productionBaseline'
 
 const execFileAsync = promisify(execFile)
 const MAX_LOG_CHARS = 40_000
@@ -212,6 +213,7 @@ export async function executeApprovedRun(runId: string) {
     const inspection = inspectUnifiedDiff(runRecord.diffPatch)
     if (!inspection.ok) throw new Error(inspection.errors.join('；'))
     modifiedFiles = inspection.files.map((file) => file.path)
+    await requireProductionBaseline(target, runRecord.baseCommitSha)
     await requireCleanPinnedRepo(repo, runRecord.baseCommitSha)
 
     tempDir = await mkdtemp(path.join(os.tmpdir(), 'dianjie-autofix-deploy-'))
@@ -270,6 +272,7 @@ export async function executeManualRollback(runId: string) {
     if (!runRecord?.commitSha || runRecord.status !== ('DEPLOYING' as any)) {
       throw new Error('当前记录不可回滚')
     }
+    await requireProductionBaseline(target, runRecord.commitSha)
     await run(repo, 'git', ['revert', '--no-edit', runRecord.commitSha], 30_000)
     log = await buildAndSyncWeb(repo, target, `${runId}-manual-rollback`)
     const health = await verifyProduction('/v2/login')

@@ -272,33 +272,33 @@ export default function InternalSupplyChainStoresPage() {
             {loading ? <Empty text="正在加载门店数据…" /> : (
               <>
                 {view === 'overview' && (
-                  <section className="grid gap-4 xl:grid-cols-2">
-                    <Panel title="库存提醒" subtitle={selectedStore?.name || '—'}>
-                      {lowStock.length > 0 ? (
-                        <InventoryTable rows={lowStock.slice(0, 8)} />
-                      ) : <Empty text="当前没有低于安全线的商品" />}
-                      <PanelLink onClick={() => setView('inventory')}>查看全部库存 ›</PanelLink>
-                    </Panel>
-                    <Panel title="近期订货" subtitle={`${inProgressCount} 单进行中`}>
-                      {orders.length > 0 ? <OrderTable rows={orders.slice(0, 8)} compact /> : <Empty text="当前门店暂无订货记录" />}
-                      <PanelLink onClick={() => setView('orders')}>查看全部订货 ›</PanelLink>
-                    </Panel>
-                    <Panel title="近期收货" subtitle={`${receiptTotal} 单`}>
-                      {receipts.length > 0 ? <ReceiptTable rows={receipts.slice(0, 8)} /> : <Empty text="当前门店暂无收货记录" />}
-                      <PanelLink onClick={() => setView('receipts')}>查看全部收货 ›</PanelLink>
-                    </Panel>
-                    <div className="xl:col-span-2">
-                      <ConsumptionRankingChart
-                        data={consumptionRanking}
-                        loading={rankingLoading}
-                        error={rankingError}
-                        days={rankingDays}
-                        dimension={rankingDimension}
-                        onDaysChange={setRankingDays}
-                        onDimensionChange={setRankingDimension}
-                        onOpenDetails={() => setView('consumption')}
-                      />
+                  <section className="grid items-start gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+                    <div className="space-y-4">
+                      <Panel title="库存提醒" subtitle={selectedStore?.name || '—'}>
+                        {lowStock.length > 0 ? (
+                          <InventoryTable rows={lowStock.slice(0, 5)} />
+                        ) : <Empty text="当前没有低于安全线的商品" compact />}
+                        <PanelLink onClick={() => setView('inventory')}>查看全部库存 ›</PanelLink>
+                      </Panel>
+                      <Panel title="近期订货" subtitle={`${inProgressCount} 单进行中`}>
+                        {orders.length > 0 ? <OrderTable rows={orders.slice(0, 4)} compact /> : <Empty text="当前门店暂无订货记录" compact />}
+                        <PanelLink onClick={() => setView('orders')}>查看全部订货 ›</PanelLink>
+                      </Panel>
+                      <Panel title="近期收货" subtitle={`${receiptTotal} 单`}>
+                        {receipts.length > 0 ? <ReceiptTable rows={receipts.slice(0, 4)} compact /> : <Empty text="当前门店暂无收货记录" compact />}
+                        <PanelLink onClick={() => setView('receipts')}>查看全部收货 ›</PanelLink>
+                      </Panel>
                     </div>
+                    <ConsumptionRankingChart
+                      data={consumptionRanking}
+                      loading={rankingLoading}
+                      error={rankingError}
+                      days={rankingDays}
+                      dimension={rankingDimension}
+                      onDaysChange={setRankingDays}
+                      onDimensionChange={setRankingDimension}
+                      onOpenDetails={() => setView('consumption')}
+                    />
                   </section>
                 )}
 
@@ -390,7 +390,7 @@ function ConsumptionRankingChart({
 
   return (
     <section className="overflow-hidden rounded-card border border-border bg-white" aria-label="消耗金额排行">
-      <header className="flex flex-col gap-3 border-b border-border px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
+      <header className="flex flex-col gap-3 border-b border-border px-4 py-4">
         <div>
           <h2 className="text-h2">消耗金额 Top 10</h2>
           <p className="mt-1 text-micro text-gray3">
@@ -461,7 +461,7 @@ function ConsumptionRankingChart({
           {data.items.length === 0 ? (
             <Empty text="当前记录尚无可用于金额排行的冻结成本" />
           ) : (
-            <ol className="space-y-4 p-4 lg:p-5">
+            <ol className="space-y-3.5 p-4 lg:p-5">
               {data.items.map((item, index) => {
                 const barWidth = Math.max(2, (item.amount / maxAmount) * 100)
                 return (
@@ -514,12 +514,12 @@ function OrderTable({ rows, compact = false }: { rows: OrderRow[]; compact?: boo
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-caption">
-        <thead className="bg-bg text-gray3"><tr><th className="px-4 py-2">订货单</th><th className="px-4 py-2">供应商</th><th className="px-4 py-2">日期</th><th className="px-4 py-2">状态</th>{!compact && <th className="px-4 py-2 text-right">金额</th>}</tr></thead>
+        <thead className="bg-bg text-gray3"><tr><th className="px-4 py-2">订货单</th>{!compact && <th className="px-4 py-2">供应商</th>}<th className="px-4 py-2">日期</th><th className="px-4 py-2">状态</th>{!compact && <th className="px-4 py-2 text-right">金额</th>}</tr></thead>
         <tbody className="divide-y divide-border">
           {rows.map(row => (
             <tr key={row.id}>
               <td className="px-4 py-3 font-num"><a className="text-accent" href={`/v2/supply-chain/fulfillment/${row.id}`}>{row.no}</a></td>
-              <td className="px-4 py-3 text-gray2">{row.supplier?.name || '—'}</td>
+              {!compact && <td className="px-4 py-3 text-gray2">{row.supplier?.name || '—'}</td>}
               <td className="px-4 py-3 font-num text-gray2">{dateText(row.createdAt)}</td>
               <td className="px-4 py-3"><Chip tone={statusTone(row.status)}>{ORDER_STATUS[row.status] || row.status}</Chip></td>
               {!compact && <td className="px-4 py-3 text-right font-num">{money(row.totalAmount)}</td>}
@@ -531,16 +531,16 @@ function OrderTable({ rows, compact = false }: { rows: OrderRow[]; compact?: boo
   )
 }
 
-function ReceiptTable({ rows }: { rows: ReceiptRow[] }) {
+function ReceiptTable({ rows, compact = false }: { rows: ReceiptRow[]; compact?: boolean }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-caption">
-        <thead className="bg-bg text-gray3"><tr><th className="px-4 py-2">收货单</th><th className="px-4 py-2">供应商</th><th className="px-4 py-2">到货日</th><th className="px-4 py-2">状态</th></tr></thead>
+        <thead className="bg-bg text-gray3"><tr><th className="px-4 py-2">收货单</th>{!compact && <th className="px-4 py-2">供应商</th>}<th className="px-4 py-2">到货日</th><th className="px-4 py-2">状态</th></tr></thead>
         <tbody className="divide-y divide-border">
           {rows.map(row => (
             <tr key={row.id}>
               <td className="px-4 py-3 font-num"><b>{row.no}</b></td>
-              <td className="px-4 py-3 text-gray2">{row.supplier?.name || '—'}</td>
+              {!compact && <td className="px-4 py-3 text-gray2">{row.supplier?.name || '—'}</td>}
               <td className="px-4 py-3 font-num text-gray2">{dateText(row.deliveryDate || row.confirmedAt)}</td>
               <td className="px-4 py-3"><Chip tone={statusTone(row.status)}>{RECEIPT_STATUS[row.status] || row.status}</Chip></td>
             </tr>
@@ -593,6 +593,6 @@ function ConsumptionTable({ rows }: { rows: ConsumptionRow[] }) {
   )
 }
 
-function Empty({ text }: { text: string }) {
-  return <div className="px-4 py-10 text-center text-caption text-gray3">{text}</div>
+function Empty({ text, compact = false }: { text: string; compact?: boolean }) {
+  return <div className={`px-4 text-center text-caption text-gray3 ${compact ? 'py-6' : 'py-10'}`}>{text}</div>
 }

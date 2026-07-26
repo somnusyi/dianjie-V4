@@ -2406,6 +2406,20 @@
 - Web 全量 28 文件 506/506、`pnpm exec tsc --noEmit` 和 166 页 production build
   通过；仅有既有 OpenTelemetry warning。`git diff --check`、业务文件门禁和高置信
   敏感信息扫描通过。本批无 schema、业务页面或业务数据路径变化，不执行数据库写入 E2E。
-- 实现提交为 `512c13a54bd8a25e9d6d2ad4867131fd2cdadd2a`。本批报告与实现通过后
-  将非强制纯快进进入 main；发布前再次核对反馈、AutoFix、本地提交和锁，再按唯一标准
-  脚本发布并记录备份、迁移、PM2、health 与源码对齐。
+- 第 6 批最终记录 `0a86d231`、实现
+  `512c13a54bd8a25e9d6d2ad4867131fd2cdadd2a` 与本批报告 `a9826f43` 已一起以
+  非强制纯快进进入 main；发布前再次确认 AutoFix/反馈 actionable 均为 0、源码干净且
+  无部署锁。
+- 唯一标准脚本发布成功，生产备份
+  `dianjie_v4-deploy-bak-20260726-231130-a9826f43.dump` 与
+  `v4-build-bak-20260726-231130-a9826f43.tar.gz` 已校验；70 migration 无 pending，
+  Prisma Client 重建、API/Web/CMB 重启和 HTML/CSS 健康检查全部通过。
+- 最终 GitHub main 与生产 `.deployed-commit` exact `a9826f43`，锁释放；API/Web/CMB
+  online，重启计数 49/50/40 在独立复核中稳定，本机与主公网 health/login 为 200。
+  AutoFixRun 总数/actionable 与反馈 actionable 仍为 0。
+- `/app/dianjie-src` 在发布后仍为干净 `570e6f3a`；唯一一次 GitHub fetch 因 HTTP/2
+  framing 错误在变更前失败，按门禁未连续重试或改用非标准传输。当前空队列下 AutoFix
+  会因生产/源码 exact 基线门禁 fail closed，不会覆盖新生产；下一小时必须在任何开发前
+  重新核对队列、本地提交和父提交，再只做一次安全 `--ff-only` 对齐。
+- `api.dianjie.cc` 严格 TLS 继续因证书过期失败，服务器侧跳过校验 health 为 200，
+  `notAfter` 仍为 2026-07-21 23:59:59 UTC；未轮换证书或私钥。

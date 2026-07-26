@@ -1,6 +1,10 @@
 import { Prisma, prisma } from '@dianjie/db'
 import { consumeSupplierStockBatches } from './supplierStockBatch'
 import { reservationCloseState } from './partialShipmentClose'
+import {
+  resolveTenantWarehouseId,
+  type WarehouseResolverDb,
+} from './defaultWarehouse'
 
 type ReservationLine = {
   purchaseOrderItemId: string
@@ -13,6 +17,7 @@ type ReservationScope = {
   tenantId: string
   supplierId: string
   purchaseOrderId: string
+  warehouseId?: string
 }
 
 type ShipmentReservationLine = ReservationLine & {
@@ -32,6 +37,14 @@ function aggregateByProduct<T extends { productId: string }>(
     result.set(line.productId, (result.get(line.productId) || new Prisma.Decimal(0)).plus(value(line)))
   }
   return result
+}
+
+export async function resolveWarehouseForReservation(
+  db: WarehouseResolverDb,
+  tenantId: string,
+  warehouseId?: string,
+): Promise<string> {
+  return resolveTenantWarehouseId(db, tenantId, warehouseId)
 }
 
 async function lockPhysicalStock(
@@ -58,15 +71,47 @@ async function lockPhysicalStock(
   return new Map(rows.map(row => [row.id, row.stock]))
 }
 
-async function activeReservedByProduct(
+async function lockWarehouseStock(
   tx: Prisma.TransactionClient,
-  scope: { tenantId: string; supplierId: string; productIds: string[]; excludeOrderId?: string },
+  tenantId: string,
+  warehouseId: string,
+  productIds: string[],
+) {
+  const ids = [...new Set(productIds)].sort()
+  if (ids.length === 0) return new Map<string, Prisma.Decimal>()
+
+  const rows = await tx.$queryRaw<Array<{ productId: string; physicalQty: Prisma.Decimal }>>(Prisma.sql`
+    SELECT "productId", "physicalQty"
+    FROM "warehouse_stocks"
+    WHERE "tenantId" = ${tenantId}
+      AND "warehouseId" = ${warehouseId}
+      AND "productId" IN (${Prisma.join(ids)})
+      AND "isActive" = true
+    ORDER BY "productId"
+    FOR UPDATE
+  `)
+  if (rows.length !== ids.length) {
+    throw businessError('商品在指定仓库中不存在库存记录，请先完成入库', 409)
+  }
+  return new Map(rows.map(row => [row.productId, row.physicalQty]))
+}
+
+async function activeReservedByProductInWarehouse(
+  tx: Prisma.TransactionClient,
+  scope: {
+    tenantId: string
+    supplierId: string
+    warehouseId: string
+    productIds: string[]
+    excludeOrderId?: string
+  },
 ) {
   const rows = await tx.supplierStockReservation.groupBy({
     by: ['productId'],
     where: {
       tenantId: scope.tenantId,
       supplierId: scope.supplierId,
+      warehouseId: scope.warehouseId,
       productId: { in: scope.productIds },
       status: 'ACTIVE',
       ...(scope.excludeOrderId ? { purchaseOrderId: { not: scope.excludeOrderId } } : {}),
@@ -81,17 +126,32 @@ export async function reserveSupplierStockForOrder(
   tx: Prisma.TransactionClient,
   input: ReservationScope & { lines: ReservationLine[] },
 ) {
+  const warehouseId = await resolveWarehouseForReservation(tx, input.tenantId, input.warehouseId)
   const productIds = [...new Set(input.lines.map(line => line.productId))]
+
   const physical = await lockPhysicalStock(tx, input.tenantId, input.supplierId, productIds)
-  const reserved = await activeReservedByProduct(tx, {
+  const warehouseStock = await lockWarehouseStock(tx, input.tenantId, warehouseId, productIds)
+
+  for (const productId of productIds) {
+    const productStock = physical.get(productId)!
+    const wsQty = warehouseStock.get(productId)!
+    if (!productStock.equals(wsQty)) {
+      throw businessError(
+        `商品 Product.stock 与 WarehouseStock.physicalQty 不一致（${productStock.toFixed(3)} vs ${wsQty.toFixed(3)}），请先校正库存`,
+      )
+    }
+  }
+
+  const reserved = await activeReservedByProductInWarehouse(tx, {
     tenantId: input.tenantId,
     supplierId: input.supplierId,
+    warehouseId,
     productIds,
   })
   const requested = aggregateByProduct(input.lines, line => new Prisma.Decimal(line.quantity))
 
   for (const productId of productIds) {
-    const available = physical.get(productId)!.minus(reserved.get(productId) || 0)
+    const available = warehouseStock.get(productId)!.minus(reserved.get(productId) || 0)
     const needed = requested.get(productId) || new Prisma.Decimal(0)
     if (available.lessThan(needed)) {
       const line = input.lines.find(item => item.productId === productId)
@@ -105,6 +165,7 @@ export async function reserveSupplierStockForOrder(
     data: input.lines.map(line => ({
       tenantId: input.tenantId,
       supplierId: input.supplierId,
+      warehouseId,
       productId: line.productId,
       purchaseOrderId: input.purchaseOrderId,
       purchaseOrderItemId: line.purchaseOrderItemId,
@@ -118,9 +179,14 @@ export async function releaseSupplierStockForOrder(
   tx: Prisma.TransactionClient,
   purchaseOrderId: string,
   at = new Date(),
+  warehouseId?: string,
 ) {
   return tx.supplierStockReservation.updateMany({
-    where: { purchaseOrderId, status: 'ACTIVE' },
+    where: {
+      purchaseOrderId,
+      status: 'ACTIVE',
+      ...(warehouseId ? { warehouseId } : {}),
+    },
     data: { status: 'RELEASED', releasedAt: at },
   })
 }
@@ -139,18 +205,33 @@ export async function consumeSupplierStockForShipment(
     lines: ShipmentReservationLine[]
   },
 ) {
+  const warehouseId = await resolveWarehouseForReservation(tx, input.tenantId, input.warehouseId)
   const productIds = [...new Set(input.lines.map(line => line.productId))]
+
   const physical = await lockPhysicalStock(tx, input.tenantId, input.supplierId, productIds)
-  const reservedByOthers = await activeReservedByProduct(tx, {
+  const warehouseStock = await lockWarehouseStock(tx, input.tenantId, warehouseId, productIds)
+
+  for (const productId of productIds) {
+    const productStock = physical.get(productId)!
+    const wsQty = warehouseStock.get(productId)!
+    if (!productStock.equals(wsQty)) {
+      throw businessError(
+        `商品 Product.stock 与 WarehouseStock.physicalQty 不一致（${productStock.toFixed(3)} vs ${wsQty.toFixed(3)}），请先校正库存`,
+      )
+    }
+  }
+
+  const reservedByOthers = await activeReservedByProductInWarehouse(tx, {
     tenantId: input.tenantId,
     supplierId: input.supplierId,
+    warehouseId,
     productIds,
     excludeOrderId: input.purchaseOrderId,
   })
   const shippedByProduct = aggregateByProduct(input.lines, line => new Prisma.Decimal(line.shippedQty))
 
   for (const productId of productIds) {
-    const protectedAvailable = physical.get(productId)!.minus(reservedByOthers.get(productId) || 0)
+    const protectedAvailable = warehouseStock.get(productId)!.minus(reservedByOthers.get(productId) || 0)
     const shipped = shippedByProduct.get(productId) || new Prisma.Decimal(0)
     if (protectedAvailable.lessThan(shipped)) {
       const line = input.lines.find(item => item.productId === productId)
@@ -162,18 +243,24 @@ export async function consumeSupplierStockForShipment(
 
   for (const [productId, shipped] of shippedByProduct) {
     if (shipped.lessThanOrEqualTo(0)) continue
-    const updated = await tx.product.update({
+
+    const wsUpdated = await tx.warehouseStock.update({
+      where: { tenantId_warehouseId_productId: { tenantId: input.tenantId, warehouseId, productId } },
+      data: { physicalQty: { decrement: shipped } },
+      select: { physicalQty: true },
+    })
+    await tx.product.update({
       where: { id: productId },
       data: { stock: { decrement: shipped } },
-      select: { stock: true },
     })
     const movement = await tx.supplierStockMovement.create({
       data: {
         tenantId: input.tenantId,
+        warehouseId,
         supplierId: input.supplierId,
         productId,
         delta: shipped.negated(),
-        balanceAfter: updated.stock,
+        balanceAfter: wsUpdated.physicalQty,
         type: 'OUTBOUND_PO',
         reason: `发货 ${input.orderNo}`,
         sourceType: 'DeliveryOrder',
@@ -183,6 +270,7 @@ export async function consumeSupplierStockForShipment(
     })
     await consumeSupplierStockBatches(tx, {
       tenantId: input.tenantId,
+      warehouseId,
       supplierId: input.supplierId,
       productId,
       quantity: shipped,
@@ -194,13 +282,16 @@ export async function consumeSupplierStockForShipment(
   for (const line of input.lines) {
     const closure = reservationCloseState(line.quantity, line.shippedQty)
     await tx.supplierStockReservation.updateMany({
-      where: { purchaseOrderItemId: line.purchaseOrderItemId, purchaseOrderId: input.purchaseOrderId, status: 'ACTIVE' },
+      where: {
+        purchaseOrderItemId: line.purchaseOrderItemId,
+        purchaseOrderId: input.purchaseOrderId,
+        warehouseId,
+        status: 'ACTIVE',
+      },
       data: {
         status: closure.status,
         fulfilledQty: closure.fulfilledQty,
         consumedAt: closure.markConsumedAt ? closedAt : null,
-        // A partial line records both the consumed quantity and the instant its
-        // unshipped reservation was released. A zero-shipped line is RELEASED.
         releasedAt: closure.markReleasedAt ? closedAt : null,
       },
     })
@@ -211,12 +302,14 @@ export async function getSupplierReservedStock(input: {
   tenantId: string
   supplierId?: string
   productIds?: string[]
+  warehouseId?: string
 }) {
   const rows = await prisma.supplierStockReservation.groupBy({
     by: ['productId'],
     where: {
       tenantId: input.tenantId,
       ...(input.supplierId ? { supplierId: input.supplierId } : {}),
+      ...(input.warehouseId ? { warehouseId: input.warehouseId } : {}),
       status: 'ACTIVE',
       ...(input.productIds ? { productId: { in: input.productIds } } : {}),
     },

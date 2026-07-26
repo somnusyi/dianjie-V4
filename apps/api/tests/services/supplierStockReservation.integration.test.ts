@@ -14,6 +14,7 @@ let supplierId = ''
 let storeId = ''
 let userId = ''
 let productId = ''
+let warehouseId = ''
 const orders: Array<{ id: string; itemId: string }> = []
 
 describe('supplier stock reservation (integration)', () => {
@@ -39,6 +40,10 @@ describe('supplier stock reservation (integration)', () => {
       data: { tenantId, supplierId, code: `${suffix}-P`, name: '测试鲜菌', category: '菌菇', price: 10, stock: 10 },
     })
     productId = product.id
+    warehouseId = (await prisma.warehouse.findFirstOrThrow({
+      where: { tenantId, isDefault: true, isActive: true },
+      select: { id: true },
+    })).id
     await prisma.supplierStockBatch.create({
       data: {
         tenantId, supplierId, productId, batchNo: `OPENING-${suffix}`, kind: 'OPENING',
@@ -102,6 +107,7 @@ describe('supplier stock reservation (integration)', () => {
     const active = await prisma.supplierStockReservation.findMany({ where: { tenantId, status: 'ACTIVE' } })
     expect(active).toHaveLength(1)
     expect(Number(active[0].quantity)).toBe(6)
+    expect(active[0].warehouseId).toBe(warehouseId)
     const reserved = await getSupplierReservedStock({ tenantId, supplierId, productIds: [productId] })
     expect(stockAvailability(10, reserved.get(productId) || 0)).toEqual({
       physicalStock: 10,
@@ -152,6 +158,9 @@ describe('supplier stock reservation (integration)', () => {
     }))
 
     expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).stock)).toBe(4)
+    expect(Number((await prisma.warehouseStock.findUniqueOrThrow({
+      where: { tenantId_warehouseId_productId: { tenantId, warehouseId, productId } },
+    })).physicalQty)).toBe(4)
     const reservations = await prisma.supplierStockReservation.findMany({
       where: { purchaseOrderId: { in: [orders[0].id, orders[1].id] } },
       orderBy: { purchaseOrderId: 'asc' },
@@ -159,12 +168,15 @@ describe('supplier stock reservation (integration)', () => {
     expect(reservations.find(row => row.purchaseOrderId === orders[0].id)).toMatchObject({ status: 'CONSUMED' })
     expect(Number(reservations.find(row => row.purchaseOrderId === orders[0].id)?.fulfilledQty)).toBe(6)
     expect(reservations.find(row => row.purchaseOrderId === orders[1].id)).toMatchObject({ status: 'ACTIVE' })
-    expect(await prisma.supplierStockMovement.count({
+    const movement = await prisma.supplierStockMovement.findFirstOrThrow({
       where: { tenantId, sourceId: `delivery-success-${suffix}`, type: 'OUTBOUND_PO' },
-    })).toBe(1)
+    })
+    expect(movement.warehouseId).toBe(warehouseId)
     const batch = await prisma.supplierStockBatch.findFirstOrThrow({ where: { tenantId, productId } })
+    expect(batch.warehouseId).toBe(warehouseId)
     expect(Number(batch.remainingQty)).toBe(4)
-    expect(await prisma.supplierStockBatchAllocation.count({ where: { tenantId, productId } })).toBe(1)
+    const allocation = await prisma.supplierStockBatchAllocation.findFirstOrThrow({ where: { tenantId, productId } })
+    expect(allocation.warehouseId).toBe(warehouseId)
 
     await prisma.$transaction(tx => releaseSupplierStockForOrder(tx, orders[1].id))
   })

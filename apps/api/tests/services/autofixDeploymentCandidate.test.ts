@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   preparePatchedDeploymentCandidate,
+  prepareRevertedDeploymentCandidate,
   removeDeploymentCandidate,
   type DeploymentCandidate,
 } from '../../src/services/autofix/deploymentCandidate'
@@ -75,6 +76,47 @@ index 6a7c58d..3d5f2aa 100644
     })).rejects.toThrow()
 
     expect(await git(['rev-parse', 'HEAD'])).toBe(baseCommitSha)
+    expect(await git(['status', '--porcelain'])).toBe('')
+    expect((await git(['worktree', 'list', '--porcelain'])).match(/^worktree /gm)).toHaveLength(1)
+  })
+})
+
+describe('AutoFix isolated rollback candidate', () => {
+  it('reverts the deployed commit without advancing or dirtying the source branch', async () => {
+    const baseCommitSha = await makeRepo()
+    await writeFile(path.join(repo, 'page.tsx'), 'export const label = "after"\n')
+    await git(['add', 'page.tsx'])
+    await git([
+      '-c', 'user.name=Test',
+      '-c', 'user.email=test@localhost',
+      'commit', '-qm', 'deployed autofix',
+    ])
+    const deployedCommitSha = await git(['rev-parse', 'HEAD'])
+
+    candidate = await prepareRevertedDeploymentCandidate({
+      repo,
+      deployedCommitSha,
+      runId: 'run-rollback-isolated',
+    })
+
+    expect(await git(['rev-parse', 'HEAD'])).toBe(deployedCommitSha)
+    expect(await git(['status', '--porcelain'])).toBe('')
+    expect(await readFile(path.join(repo, 'page.tsx'), 'utf8')).toContain('"after"')
+    expect(await git(['rev-parse', 'HEAD^'], candidate.worktreeDir)).toBe(deployedCommitSha)
+    expect(await readFile(path.join(candidate.worktreeDir, 'page.tsx'), 'utf8')).toContain('"before"')
+    expect(await git(['diff', '--name-only', baseCommitSha, candidate.commitSha], candidate.worktreeDir))
+      .toBe('')
+  })
+
+  it('cleans a rejected rollback candidate without changing the source branch', async () => {
+    const rootCommitSha = await makeRepo()
+    await expect(prepareRevertedDeploymentCandidate({
+      repo,
+      deployedCommitSha: rootCommitSha,
+      runId: 'run-rollback-invalid',
+    })).rejects.toThrow()
+
+    expect(await git(['rev-parse', 'HEAD'])).toBe(rootCommitSha)
     expect(await git(['status', '--porcelain'])).toBe('')
     expect((await git(['worktree', 'list', '--porcelain'])).match(/^worktree /gm)).toHaveLength(1)
   })

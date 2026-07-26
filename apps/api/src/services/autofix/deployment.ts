@@ -11,6 +11,7 @@ import {
 } from './deploymentFailure'
 import {
   preparePatchedDeploymentCandidate,
+  prepareRevertedDeploymentCandidate,
   removeDeploymentCandidate,
   type DeploymentCandidate,
 } from './deploymentCandidate'
@@ -298,6 +299,9 @@ export async function executeManualRollback(runId: string) {
   const target = productionDir()
   let log = ''
   let recovery: DeploymentRecoveryState = 'NOT_REQUIRED'
+  let recoveryError = ''
+  let candidate: DeploymentCandidate | null = null
+  let deploymentStarted = false
   let releaseLock: (() => Promise<void>) | null = null
   try {
     if (!deploymentEnabled()) throw new Error('自动修复部署开关未启用')
@@ -307,11 +311,18 @@ export async function executeManualRollback(runId: string) {
       throw new Error('当前记录不可回滚')
     }
     await requireProductionBaseline(target, runRecord.commitSha)
-    recovery = 'FAILED'
-    await run(repo, 'git', ['revert', '--no-edit', runRecord.commitSha], 30_000)
-    log = await buildAndSyncWeb(repo, target, `${runId}-manual-rollback`)
+    await requireCleanPinnedRepo(repo, runRecord.commitSha)
+    candidate = await prepareRevertedDeploymentCandidate({
+      repo,
+      deployedCommitSha: runRecord.commitSha,
+      runId: runRecord.id,
+    })
+    const rollbackSha = candidate.commitSha
+    await run(repo, 'git', ['tag', `autofix-rollback-${runRecord.id}`, rollbackSha], 30_000)
+
+    deploymentStarted = true
+    log = await buildAndSyncWeb(candidate.worktreeDir, target, `${runId}-manual-rollback`)
     const health = await verifyProduction('/v2/login')
-    const rollbackSha = await gitOutput(repo, ['rev-parse', 'HEAD'])
     await writeFile(path.join(target, '.deployed-commit'), `${rollbackSha}\n`, { mode: 0o600 })
     const runRecordUpdated = await prisma.autoFixRun.update({
       where: { id: runId },
@@ -336,9 +347,40 @@ export async function executeManualRollback(runId: string) {
       bypassFrequency: true,
       bypassSilent: true,
     })
+    try {
+      await requireCleanPinnedRepo(repo, runRecord.commitSha)
+      await run(repo, 'git', ['merge', '--ff-only', rollbackSha], 30_000)
+    } catch (sourceSyncError) {
+      console.error('[autofix] 生产回滚已验证，但源码分支快进待维护:', sourceSyncError)
+    }
   } catch (error) {
-    await markDeploymentFailure(runId, error, log, recovery)
+    try {
+      if (deploymentStarted) {
+        recovery = 'FAILED'
+        const deployedCommitSha = candidate
+          ? await gitOutput(candidate.worktreeDir, ['rev-parse', 'HEAD^'])
+          : ''
+        await requireCleanPinnedRepo(repo, deployedCommitSha)
+        log = `${log}\n${(await buildAndSyncWeb(
+          repo,
+          target,
+          `${runId}-manual-rollback-restore`,
+        )).slice(-20_000)}`
+        await verifyProduction('/v2/login')
+        await writeFile(path.join(target, '.deployed-commit'), `${deployedCommitSha}\n`, { mode: 0o600 })
+        recovery = 'COMPLETED'
+      }
+    } catch (restoreError: any) {
+      recoveryError = restoreError.message || String(restoreError)
+      log = `${log}\nROLLBACK_ERROR=${recoveryError}`
+    }
+    await markDeploymentFailure(runId, error, log, recovery, recoveryError)
   } finally {
+    if (candidate) {
+      await removeDeploymentCandidate(repo, candidate).catch((error) => {
+        console.error('[autofix] 清理回滚 worktree 失败:', error)
+      })
+    }
     if (releaseLock) await releaseLock().catch((error) => console.error('[autofix] 释放部署锁失败:', error))
   }
 }

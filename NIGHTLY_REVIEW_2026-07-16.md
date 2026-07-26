@@ -2560,3 +2560,39 @@
   基线门禁 fail closed；下一小时必须先复核队列和父链，再只做一次安全 ff-only 收口。
 - `api.dianjie.cc` 严格 TLS 仍失败，服务器侧跳过校验 health 为 200；证书 `notAfter`
   仍为 2026-07-21 23:59:59 UTC，未轮换证书或私钥。
+
+## 2026-07-27 00:08 第 11 小时 AutoFix 查询分页稳定性
+
+### 开始基线与源码收口
+
+- 已重新读取最新 memory/夜审、fetch `origin/main`，并核对全部 worktree 的分支、HEAD
+  和脏状态；所有用户/其他 AI 改动保持原样，独立 mutation 草稿仍为原有 4 项。本批开始
+  时 main/deployed exact `43774627`，源码干净但仍为 `0241a8a3`，无锁、服务健康，
+  70 migration 成功/0 失败，AutoFixRun/反馈 actionable 均为 0。
+- 本小时唯一一次服务器 GitHub fetch 在 130 秒后连接超时，未发生 merge 或生产变更。
+  随后使用本地 `origin/main` 创建只含 `0241a8a3..43774627` 的 exact Git bundle，验证
+  父链、bundle 结构、SHA-256、高置信敏感信息与唯一两类文件清单后经现有 SSH 传递。
+  服务器再次核对 deployed/source/锁后只执行 `--ff-only`；源码成功对齐 `43774627`、
+  保持干净，临时包在两端删除，API/Web/CMB 仍为 200。未重试部署、改配置或业务数据。
+
+### 确定性缺陷与修改
+
+- AutoFix 列表虽然按 `createdAt desc` 分页，但同一时间戳下没有唯一排序键；并发创建或
+  数据库时间精度相同时，不同页可能重复或漏掉 run。列表现改为 `createdAt desc,
+  id desc`，在保留现有索引前缀与用户看到的新到旧顺序的同时提供确定性分页。
+- 新增真实数据库查询契约：同租户两个同时间戳 `RESOLVED` run 分两页返回时顺序稳定且
+  不重叠；状态过滤、页码/页大小上限和未知参数严格 400。详情接口验证经理 403、跨租户
+  404、diff offset/limit 精确切片与耗尽行为、模式/部署就绪元数据，以及负数、零、超限
+  和未知参数严格 400。
+
+### 验收与发布门禁
+
+- 临时 PostgreSQL 15 `_ci` 空库从零应用 70 migration；AutoFix 专项 12/12、完整 API
+  集成 25 文件 183/183 通过，容器和监听自动删除。API 单元 59 文件 556/556、API build、
+  Web 28 文件 506/506、tsc 与 166 页 production build 全部通过。
+- `git diff --check`、业务文件门禁和高置信敏感信息扫描通过；production build 仅有既有
+  OpenTelemetry warning。本批无 schema、通知、资金、库存或业务数据写入语义变化；
+  实现提交为 `7e42309dc89621e831c0f471dd2d321c3a4952b8`。
+- 第 10 批最终记录 `076f8362`、本批实现与本节报告将在发布前一起以非强制纯快进推进
+  main；发布前将再次确认 main/deployed/source、队列、源码、草稿和部署锁，再仅执行
+  一次标准发布。

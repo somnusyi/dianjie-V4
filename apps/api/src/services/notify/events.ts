@@ -137,8 +137,8 @@ export const EVENTS = {
   },
   FEEDBACK_URGENT_BUG: {
     label: '紧急故障反馈',
-    desc: '用户反馈阻断业务 (无法下单等) → 紧急通知超管+管理员人工处理',
-    defaultRoles: ['SUPER_ADMIN', 'ADMIN'],
+    desc: '用户反馈阻断业务 (无法下单等) → 紧急通知超管人工处理',
+    defaultRoles: ['SUPER_ADMIN'],
     scopedBy: 'tenant',
     urgent: true,
   },

@@ -86,7 +86,7 @@ export default function MePage() {
               <span className="text-gray3">›</span>
             </a>
           </li>
-          {(u.role === 'BOSS' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN') && (
+          {(u.role === 'SUPER_ADMIN') && (
             <li>
               <a href="/v2/boss/feedback" className="flex items-center px-3 py-3">
                 <span className="w-8 h-8 rounded-md bg-amber/10 text-amber-fg flex items-center justify-center mr-3">✓</span>

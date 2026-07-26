@@ -4,9 +4,9 @@
  * - POST   /api/feedback              创建反馈 (上下文快照+附件), 自动生成 AI 首轮澄清回复
  * - POST   /api/feedback/:id/messages 用户发言 → 同步调 Qwen → 存 AI 回复 → 返回
  * - GET    /api/feedback/mine         我提的列表
- * - GET    /api/feedback/admin/inbox  待批列表 (SUPER_ADMIN/ADMIN)
- * - GET    /api/feedback/:id          详情含 messages (本人或 SUPER_ADMIN/ADMIN)
- * - POST   /api/feedback/:id/decision 批准/驳回 (SUPER_ADMIN/ADMIN, 写 OpLog + 消息中心)
+ * - GET    /api/feedback/admin/inbox  待批列表 (仅 SUPER_ADMIN)
+ * - GET    /api/feedback/:id          详情含 messages (本人或 SUPER_ADMIN)
+ * - POST   /api/feedback/:id/decision 批准/驳回 (仅 SUPER_ADMIN, 写 OpLog + 消息中心)
  *
  * 分诊: AI 回复末尾的 triage 标记块由 feedbackTriage 解析 strip;
  *   BUG_BLOCKING → 紧急企微通知 (P0 人工处理) | IMPROVEMENT/NEW_FEATURE → AWAITING_APPROVAL+审批卡片
@@ -21,7 +21,7 @@ import { qwenChat, buildFeedbackSystemPrompt, QWEN_NOT_CONFIGURED } from '../ser
 import { parseTriageBlock, decideTriageAction, TriageResult } from '../services/feedbackTriage'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
-const ADMIN_ROLES = new Set(['SUPER_ADMIN', 'ADMIN'])
+const ADMIN_ROLES = new Set(['SUPER_ADMIN'])
 
 const contextSchema = z.object({
   path: z.string().trim().max(200).optional(),

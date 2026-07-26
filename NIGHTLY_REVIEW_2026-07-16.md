@@ -2231,3 +2231,50 @@
   `/Users/somnusyi/Desktop/dianjie-V4/dianjie-V4-deploy/scripts/deploy-worktree.sh`
   发布；最终备份、PM2、health、deployed commit、源码副本、AutoFix 状态和锁释放结果
   写入 automation memory。公网过期证书继续只报告，不轮换证书或私钥。
+
+## 2026-07-26 22:31 第 4 小时 AutoFix 生产基线精确门禁
+
+### 开始基线与生产只读证据
+
+- 已先读取 automation memory、本夜审记录，fetch `origin/main` 并核对全部相关
+  worktree 的分支、HEAD、upstream 与脏状态。主工作树原有 7 个未跟踪文件及其他既有脏
+  worktree 均未改动；`maintenance-v4-autofix-watchdog` 的未提交 engine/集成测试改动
+  继续保留且未接管。本批只在新建的干净隔离 worktree
+  `maintenance-v4-autofix-prod-baseline` 开发。
+- 开始时 GitHub main 和生产 `.deployed-commit` 为 `f277e2cf`，生产源码副本干净但仍在
+  `0aaa78ef`。生产 API/Web/CMB 与主公网健康正常、无发布锁，70 条 migration 成功且
+  失败为 0；AutoFixRun 为 0，反馈没有待审批、已批准或 `IN_DEV`。
+- 在源码干净、队列为空、部署提交未变化且 Git 保持快进的门禁下，先将
+  `/app/dianjie-src` 一次性 `fetch + --ff-only` 到 `f277e2cf`；未发现本地 AutoFix
+  提交，没有执行回收、重写历史或普通开发覆盖。
+
+### 确定性缺陷与修改
+
+- 旧 AutoFix 在批准部署时只校验源码仍等于隔离测试绑定的 `baseCommitSha`，没有校验
+  生产 `.deployed-commit` 仍是同一 SHA。常规发布若已推进生产而源码副本仍落后，旧任务
+  仍可从旧源码重建并覆盖整个 Web，回退与该反馈无关的新生产改动。
+- 新增生产基线读取门禁：任务记录和生产标记都必须是完整 40 位 SHA，且逐字相同；标记
+  缺失、损坏或生产已被其他发布推进时，在应用补丁、创建提交或同步 Web 产物前 fail
+  closed，并提示重新分析审批。
+- 人工一键回滚使用同一精确门禁；只有生产仍精确运行该 AutoFix 提交时才能自动 revert，
+  后续常规发布已经推进时转人工，避免旧回滚跨版本修改当前生产。
+- 新增 5 个临时目录回归，覆盖 exact SHA 放行、生产已推进、标记缺失、标记损坏和任务
+  仅存短 SHA。实现提交为 `4fb417c60d836501553aff8df27c6db4a0283af9`。
+
+### 验收、发布与生产状态
+
+- Node `20.20.2`；专项 5/5、API 57 文件 549/549、API build、Web 28 文件 506/506、
+  Web tsc、166 页 production build、`git diff --check` 与高置信敏感信息扫描通过。
+  production build 仅保留既有 OpenTelemetry 动态依赖 warning。本批无 schema 或业务
+  数据路径变化，因此没有数据库写入 E2E。
+- 实现提交以非强制纯快进进入 GitHub main。唯一标准发布脚本重新跑完整代码门禁，创建并
+  校验 `dianjie_v4-deploy-bak-20260726-222549-4fb417c6.dump` 和
+  `v4-build-bak-20260726-222549-4fb417c6.tar.gz`；70 条 migration 无 pending，
+  Prisma Client 重建，API/Web/CMB 重启和 HTML/CSS 健康检查通过。
+- 最终 GitHub main、生产 `.deployed-commit` 和 `/app/dianjie-src` 均为 exact
+  `4fb417c6`，两个工作树干净且发布锁释放。API/Web/CMB 均 online，本机和主公网
+  health/login 为 200，PM2 重启计数在独立复核中稳定；AutoFixRun 和反馈 actionable
+  仍为 0。
+- `api.dianjie.cc` 严格 TLS 仍因证书于 2026-07-21 23:59:59 UTC 过期而失败，跳过
+  校验的 health 为 200；未轮换证书或私钥。下一批继续先复核新反馈、AutoFix 本地提交
+  和生产健康，再避开既有 watchdog 草稿审计部署失败/回滚状态语义。

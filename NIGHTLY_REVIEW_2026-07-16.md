@@ -2016,3 +2016,28 @@
 - 浏览器用生产只读副本复核“羊肚菌”编辑弹窗，一屏完整显示，无滚动即可保存；没有提交
   任何商品修改。完整回归通过：API 50 文件 478/478、API build、Web 27 文件 503/503、
   Web tsc、160 页 production build、diff check 和敏感信息扫描。未写生产或部署。
+
+### 15:54 默认仓增量入库与门店消耗完整分页
+
+- Qwen 的增量入库 feature `32f6e5b550275ecc71cfc717793c22754b81822b` 经接管后
+  集成为 `2f0187a8`：请求仓在认证 tenant 内解析为真实启用默认仓，Product 与
+  WarehouseStock 按稳定商品顺序加锁，以 physicalQty 计算结果并维护 Product.stock
+  兼容镜像；事前漂移、缺仓、停用仓、跨 tenant/供应商或批量任一失败均整批零写入。
+  流水、批次、自定义批次号查重和响应使用同一真实 warehouseId。
+- Kimi 的门店消耗 PC feature `bc9cb54cf39136eb6198a63378b0d4aa127cdcc2`
+  经总管修正懒加载与测试断言后集成为 `e6d894c1`：进入标签后才发起分页请求，支持
+  20/50/100 页大小、总数和范围、日期及商品名称/编码筛选；筛选、页大小和门店变化回到
+  第 1 页，切换期间取消或忽略旧请求，错误保留筛选并提供重试。概览 Top 10 继续走独立
+  聚合，不用逐笔分页重算。
+- 两个 runner 均因沙箱不能写共享 Git 元数据被 supervisor 留为 BLOCKED，原证据没有
+  删除；总管重新审阅、测试、提交并推送 exact feature 后，控制面任务
+  `SC-WAREHOUSE-INBOUND-QWEN-041` 与 `SC-STORE-CONSUMPTION-PC-KIMI-040R`
+  才标记 DONE。首个 Kimi 启动失败任务 `040` 继续保留。
+- 门禁通过：入库专项 67/67、API 全量 490/490、消耗专项 37/37、Web 全量 537/537、
+  API build、Web tsc、160 页隔离 production build、diff check 和敏感信息扫描。
+  全新 `_ci` PostgreSQL 应用 68 条 migration，status 最新、schema diff 为零，真实
+  集成 48/48；临时容器与 build worktree 均已清理。
+- 1440×1000 浏览器在生产只读副本确认瑶海店 2180 条分页、21–40 翻页、黄粉皮 14 条
+  筛选、50 条页大小和跨店空态均正确，控制台无 error。未执行任何业务写操作。
+- 下一批继续按同一 `supplierStock.ts` 冲突域顺序切换调整、报损和库存快照，再处理订单
+  预占与实际发货。更正状态机和 Product.stock 兼容桥继续冻结；生产 gate 保持 LOCKED。

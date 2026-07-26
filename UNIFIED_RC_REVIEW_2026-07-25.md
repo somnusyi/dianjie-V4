@@ -756,3 +756,49 @@ worktree、Docker 镜像/卷和用户文件均未删除。Docker 僵死后台由
   既有库与全新空库 68 条 migrate deploy/status/diff、`git diff --check`、敏感信息扫描
   和 14 页只读浏览器复核全部通过。
 - 本批次未连接生产、未做业务写 E2E、未定义入库更正/实收更正，也未放宽财务写权限。
+
+## V5 默认仓入库与门店消耗 PC 列车（2026-07-26 15:54）
+
+### 已集成
+
+| 能力 | feature 精确提交 | 统一 RC 提交 |
+| --- | --- | --- |
+| 增量入库写入真实默认仓 | `32f6e5b550275ecc71cfc717793c22754b81822b` | `2f0187a8` |
+| 门店消耗后端分页与筛选 PC | `bc9cb54cf39136eb6198a63378b0d4aa127cdcc2` | `e6d894c1` |
+
+- `POST /api/supplier/stock/inbound` 先在认证 tenant 内把 `default` 或显式仓解析为启用的
+  真实仓 ID，再按稳定商品顺序锁定 Product 与 WarehouseStock。入库余额以
+  `WarehouseStock.physicalQty` 为准，同时维护 `Product.stock` 兼容镜像；两者事前漂移、
+  缺仓、停用仓或跨 tenant 仓均 fail closed，返回 4xx 且整批零写入。
+- 入库流水、批次、自定义批次号查重及响应全部使用同一真实 warehouseId；商品继续限定
+  tenant 和 supplier，未借本批放宽外部供应商或内部角色范围。
+- 门店“消耗记录”只在进入对应标签后按后端分页读取，提供 20/50/100 页大小、总量与
+  当前范围、前后翻页、日期和商品名称/编码筛选。筛选、页大小和门店变化重置页码；旧
+  请求通过 AbortController 取消或忽略，失败时保留筛选并可重试。Top 10 仍使用独立
+  历史冻结成本聚合接口。
+- Kimi/Qwen runner 均因沙箱不能写共享 Git 元数据而由 supervisor 留为 BLOCKED；
+  原失败证据保留。总管只接管 worktree 中的代码，修正消耗标签懒加载及测试 pathname
+  断言后，重新执行完整门禁、形成干净 feature 提交并推送，再由控制面人工验收为 DONE。
+
+### 验收
+
+- 默认仓入库专项 67/67、API 全量 51 文件 490/490、门店消耗专项 37/37、Web 全量
+  28 文件 537/537、API build、Web tsc、`git diff --check` 和高置信敏感信息扫描通过。
+- 全新一次性 PostgreSQL `_ci` 空库从零应用 68 条 migration；deploy/status 通过、
+  migrations-to-schema diff 为零，供应商隔离与库存路由真实数据库测试 48/48。临时
+  容器已删除，没有连接现有普通本地库或生产。
+- Web production build 在 detached 临时 worktree 成功生成 160 个页面并验证 standalone；
+  只保留既有 OpenTelemetry 动态依赖 warning。构建 worktree 已删除，正在运行的统一
+  RC 预览进程和 `.next` 未被停止或污染。
+- 1440×1000 PC 浏览器在生产只读副本复核：瑶海店 2180 条消耗首屏 20 条，翻页正确
+  显示 21–40；“黄粉皮”筛选重置为第 1 页并返回 14 条；页大小切到 50 后切换包河店，
+  筛选仍保留且显示 0 条稳定空态。控制台无 error，页面无截断或横向溢出。
+
+### 继续冻结
+
+- 默认仓 writer 只完成商品期初和本次增量入库；调整、报损、库存快照、订单预占、
+  实际发货等仍需逐项切换并做守恒验证，完成前不得移除 Product.stock 单向兼容桥。
+- 手工入库更正/撤销和已确认门店实收更正仍只有冻结边界，没有在本批自行定义状态机；
+  门店实收更正不得恢复供应链仓库存。
+- 生产 gate 保持 `LOCKED`；未合并或直推 main、未建 PR、未部署、未写生产、未运行
+  一次性生产脚本，也未读取或修改凭证与业务 xlsx。

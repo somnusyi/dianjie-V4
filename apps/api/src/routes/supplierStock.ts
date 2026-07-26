@@ -17,7 +17,7 @@ import {
   hasInternalSupplyChainCapability,
   isInternalSupplyChainRole,
 } from '../lib/internal-supply-chain-access'
-import { getSupplierReservedStock, stockAvailability } from '../services/supplierStockReservation'
+import { stockAvailability } from '../services/supplierStockReservation'
 import {
   applySupplierStockBatchDelta,
   consumeSupplierStockBatches,
@@ -77,6 +77,94 @@ async function resolveReadWarehouse(
     reply.status(error?.statusCode || 400).send({ error: error?.message || '仓库解析失败' })
     return null
   }
+}
+
+async function resolveReadWarehouseMeta(
+  tenantId: string,
+  rawWarehouseId: unknown,
+  reply: any,
+): Promise<{ id: string; name: string } | null> {
+  const warehouseId = await resolveReadWarehouse(tenantId, rawWarehouseId, reply)
+  if (!warehouseId) return null
+
+  const warehouse = await prisma.warehouse.findFirst({
+    where: { tenantId, id: warehouseId, isActive: true },
+    select: { id: true, name: true },
+  })
+  if (!warehouse) {
+    reply.status(404).send({ error: '仓库不存在、已停用或不属于当前租户' })
+    return null
+  }
+  return warehouse
+}
+
+type StockMirrorProduct = {
+  id: string
+  name: string
+  stock: Prisma.Decimal
+}
+
+async function loadCheckedPhysicalStock(
+  ctx: SupplierContext,
+  warehouseId: string,
+  products: StockMirrorProduct[],
+): Promise<Map<string, Prisma.Decimal>> {
+  if (products.length === 0) return new Map()
+
+  const rows = await prisma.warehouseStock.findMany({
+    where: {
+      tenantId: ctx.tenantId,
+      warehouseId,
+      productId: { in: products.map(product => product.id) },
+    },
+    select: { productId: true, physicalQty: true, isActive: true },
+  })
+  const rowsByProduct = new Map(rows.map(row => [row.productId, row]))
+
+  for (const product of products) {
+    const row = rowsByProduct.get(product.id)
+    if (!row) {
+      throw Object.assign(
+        new Error(`商品「${product.name}」缺少当前仓库库存记录`),
+        { statusCode: 409 },
+      )
+    }
+    if (!row.isActive) {
+      throw Object.assign(
+        new Error(`商品「${product.name}」的当前仓库库存记录已停用`),
+        { statusCode: 409 },
+      )
+    }
+    if (!new Prisma.Decimal(row.physicalQty).equals(product.stock)) {
+      throw Object.assign(
+        new Error(`商品「${product.name}」的仓库库存与兼容库存不一致`),
+        { statusCode: 409 },
+      )
+    }
+  }
+
+  return new Map(rows.map(row => [row.productId, new Prisma.Decimal(row.physicalQty)]))
+}
+
+async function activeReservedByWarehouse(input: {
+  tenantId: string
+  supplierId: string
+  warehouseId: string
+  productIds: string[]
+}): Promise<Map<string, number>> {
+  if (input.productIds.length === 0) return new Map()
+  const rows = await prisma.supplierStockReservation.groupBy({
+    by: ['productId'],
+    where: {
+      tenantId: input.tenantId,
+      supplierId: input.supplierId,
+      warehouseId: input.warehouseId,
+      productId: { in: input.productIds },
+      status: 'ACTIVE',
+    },
+    _sum: { quantity: true },
+  })
+  return new Map(rows.map(row => [row.productId, Number(row._sum.quantity || 0)]))
 }
 
 const dateSchema = calendarDateSchema.optional().nullable()
@@ -216,13 +304,14 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
    *
    * 注意: page 和 pageSize 必须同时提供, 只传其中一个会返回 400
    */
-  app.get('/', auth(app), async (req: any, reply: any) => {
+  app.get('/', authenticateOnly(app), async (req: any, reply: any) => {
     const ctx = ensureSupplier(req, reply, 'inventory.read'); if (!ctx) return
 
     const parsed = z.object({
       productId: z.string().trim().min(1).optional(),
       q:         z.string().trim().max(100).optional(),
       category:  z.string().trim().max(40).optional(),
+      warehouseId: z.string().trim().min(1).optional(),
       page:     z.coerce.number().int().min(1).optional(),
       pageSize: z.coerce.number().int().min(1).max(200).optional(),
     }).safeParse(req.query || {})
@@ -237,6 +326,12 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
     const p  = parsed.data.page ?? 1
     const ps = Math.min(parsed.data.pageSize ?? 20, 200)
     const searchTerms = q?.toLowerCase().split(/\s+/).filter(Boolean) || []
+    const warehouse = await resolveReadWarehouseMeta(
+      ctx.tenantId,
+      parsed.data.warehouseId,
+      reply,
+    )
+    if (!warehouse) return
 
     const baseWhere: Prisma.ProductWhereInput = {
       tenantId: ctx.tenantId, supplierId: ctx.supplierId, status: 'ENABLED',
@@ -252,41 +347,66 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
         })),
       } : {}),
     }
-    const orderBy: Prisma.ProductOrderByWithRelationInput[] =
-      [{ stock: 'asc' }, { name: 'asc' }, { id: 'asc' }]
 
+    const allProducts = await prisma.product.findMany({
+      where: baseWhere,
+      select: {
+        id: true, code: true, name: true, spec: true, unit: true, category: true,
+        stock: true, minStock: true, price: true, shelfDays: true,
+        purchaseUnit: true, inventoryUnit: true, orderUnit: true, costUnit: true,
+        inventoryUnitsPerPurchaseUnit: true, inventoryUnitsPerOrderUnit: true,
+        inventoryUnitsPerCostUnit: true, unitConversionStatus: true,
+      },
+    })
+    const physicalByProduct = await loadCheckedPhysicalStock(ctx, warehouse.id, allProducts)
+    allProducts.sort((left, right) => {
+      const qtyOrder = physicalByProduct.get(left.id)!.comparedTo(physicalByProduct.get(right.id)!)
+      if (qtyOrder !== 0) return qtyOrder
+      const nameOrder = left.name.localeCompare(right.name, 'zh-CN')
+      return nameOrder !== 0 ? nameOrder : left.id.localeCompare(right.id)
+    })
+
+    const total = allProducts.length
     const skip = paginated ? (p - 1) * ps : 0
     const take = paginated ? ps : 2000
+    const products = allProducts.slice(skip, skip + take)
+    const productIds = products.map(product => product.id)
 
-    const [total, products] = await Promise.all([
-      paginated ? prisma.product.count({ where: baseWhere }) : Promise.resolve(0),
-      prisma.product.findMany({
-        where: baseWhere,
-        orderBy,
-        skip,
-        take,
-        select: {
-          id: true, code: true, name: true, spec: true, unit: true, category: true,
-          stock: true, minStock: true, price: true, shelfDays: true,
-          purchaseUnit: true, inventoryUnit: true, orderUnit: true, costUnit: true,
-          inventoryUnitsPerPurchaseUnit: true, inventoryUnitsPerOrderUnit: true,
-          inventoryUnitsPerCostUnit: true, unitConversionStatus: true,
-        },
-      }),
-    ])
-
-    const reservedByProduct = await getSupplierReservedStock({
+    const reservedByProduct = await activeReservedByWarehouse({
       tenantId: ctx.tenantId,
       supplierId: ctx.supplierId,
-      productIds: products.map(product => product.id),
+      warehouseId: warehouse.id,
+      productIds,
     })
 
     const since7  = new Date(Date.now() - 7  * 86400_000)
     const since30 = new Date(Date.now() - 30 * 86400_000)
-    const movs = await prisma.supplierStockMovement.findMany({
-      where: { tenantId: ctx.tenantId, supplierId: ctx.supplierId, createdAt: { gte: since30 } },
-      select: { productId: true, delta: true, createdAt: true, type: true },
-    })
+    const [movs, expRows] = productIds.length > 0
+      ? await Promise.all([
+        prisma.supplierStockMovement.findMany({
+          where: {
+            tenantId: ctx.tenantId,
+            supplierId: ctx.supplierId,
+            warehouseId: warehouse.id,
+            productId: { in: productIds },
+            createdAt: { gte: since30 },
+          },
+          select: { productId: true, delta: true, createdAt: true, type: true },
+        }),
+        prisma.supplierStockBatch.findMany({
+          where: {
+            tenantId: ctx.tenantId,
+            supplierId: ctx.supplierId,
+            warehouseId: warehouse.id,
+            productId: { in: productIds },
+            remainingQty: { gt: 0 },
+            expiryDate: { not: null },
+          },
+          select: { productId: true, expiryDate: true },
+          orderBy: [{ expiryDate: 'asc' }, { id: 'asc' }],
+        }),
+      ])
+      : [[], []]
     const byProd = new Map<string, { in7: number; out7: number; in30: number; out30: number }>()
     for (const m of movs) {
       const slot = byProd.get(m.productId) || { in7: 0, out7: 0, in30: 0, out30: 0 }
@@ -297,16 +417,6 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       byProd.set(m.productId, slot)
     }
 
-    const expRows = await prisma.supplierStockBatch.findMany({
-      where: {
-        tenantId: ctx.tenantId,
-        supplierId: ctx.supplierId,
-        remainingQty: { gt: 0 },
-        expiryDate: { not: null },
-      },
-      select: { productId: true, expiryDate: true },
-      orderBy: [{ expiryDate: 'asc' }, { id: 'asc' }],
-    })
     const nearestExpiry = new Map<string, Date>()
     for (const r of expRows) {
       if (!nearestExpiry.has(r.productId)) nearestExpiry.set(r.productId, r.expiryDate!)
@@ -314,7 +424,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
 
     const items = products.map(p => {
       const stat = byProd.get(p.id) || { in7: 0, out7: 0, in30: 0, out30: 0 }
-      const stock = Number(p.stock)
+      const stock = Number(physicalByProduct.get(p.id)!)
       const availability = stockAvailability(stock, reservedByProduct.get(p.id) || 0)
       const minStock = Number(p.minStock)
       const status = availability.availableStock <= 0 ? 'OUT' : availability.availableStock < minStock ? 'LOW' : 'OK'
@@ -334,18 +444,29 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
         in30d: stat.in30, out30d: stat.out30,
         nearestExpiry: exp ? exp.toISOString().slice(0, 10) : null,
         daysToExpiry,
-        warehouseId: DEFAULT_WAREHOUSE_META.id,
+        warehouseId: warehouse.id,
       }
     })
 
     return paginated
-      ? { items, total, page: p, pageSize: ps, totalPages: Math.ceil(total / ps), warehouse: DEFAULT_WAREHOUSE_META }
+      ? { items, total, page: p, pageSize: ps, totalPages: Math.ceil(total / ps), warehouse }
       : items
   })
 
   /** GET /api/supplier/stock/summary — 顶部 KPI */
-  app.get('/summary', auth(app), async (req: any, reply: any) => {
+  app.get('/summary', authenticateOnly(app), async (req: any, reply: any) => {
     const ctx = ensureSupplier(req, reply, 'inventory.read'); if (!ctx) return
+    const parsed = z.object({
+      warehouseId: z.string().trim().min(1).optional(),
+    }).safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const warehouse = await resolveReadWarehouseMeta(
+      ctx.tenantId,
+      parsed.data.warehouseId,
+      reply,
+    )
+    if (!warehouse) return
+
     const [supplier, ps] = await Promise.all([
       prisma.supplier.findFirst({
         where: { id: ctx.supplierId, tenantId: ctx.tenantId },
@@ -362,15 +483,17 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       }),
     ])
     if (!supplier) return reply.status(404).send({ error: '供应商不存在或不属于当前租户' })
-    const reservedByProduct = await getSupplierReservedStock({
+    const physicalByProduct = await loadCheckedPhysicalStock(ctx, warehouse.id, ps)
+    const reservedByProduct = await activeReservedByWarehouse({
       tenantId: ctx.tenantId,
       supplierId: ctx.supplierId,
+      warehouseId: warehouse.id,
       productIds: ps.map(product => product.id),
     })
     let totalSku = ps.length, lowStock = 0, outOfStock = 0, totalValue = 0, availableValue = 0, reservedValue = 0
     let valuationPendingSku = 0
     for (const p of ps) {
-      const s = Number(p.stock), m = Number(p.minStock)
+      const s = Number(physicalByProduct.get(p.id)!), m = Number(p.minStock)
       const reserved = reservedByProduct.get(p.id) || 0
       const available = Math.max(0, s - reserved)
       if (available <= 0) outOfStock++
@@ -393,7 +516,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       totalValue: Math.round(totalValue * 100) / 100,
       availableValue: Math.round(availableValue * 100) / 100,
       reservedValue: Math.round(reservedValue * 100) / 100,
-      warehouse: DEFAULT_WAREHOUSE_META,
+      warehouse,
     }
   })
 

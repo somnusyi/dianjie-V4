@@ -45,6 +45,19 @@ type ConsumptionRow = {
   unitSnapshot?: string | null
   product?: { code?: string; name: string; unit?: string }
 }
+type StoreOverview = {
+  orderCount: number
+  orderStatusBreakdown: {
+    SUBMITTED: number
+    CONFIRMED: number
+    DELIVERING: number
+    inProgress: number
+  }
+  validReceiptCount: number
+  inventoryProductCount: number
+  lowStockCount: number
+  consumptionCount30d: number
+}
 
 const VIEWS: Array<{ id: StoreView; label: string }> = [
   { id: 'overview', label: '概览' },
@@ -109,6 +122,7 @@ export default function InternalSupplyChainStoresPage() {
   const [receiptTotal, setReceiptTotal] = useState(0)
   const [inventory, setInventory] = useState<InventoryRow[]>([])
   const [consumptions, setConsumptions] = useState<ConsumptionRow[]>([])
+  const [overview, setOverview] = useState<StoreOverview | null>(null)
   const [loading, setLoading] = useState(false)
   const [rowError, setRowError] = useState('')
   const requestSequence = useRef(0)
@@ -128,7 +142,8 @@ export default function InternalSupplyChainStoresPage() {
       apiFetch<{ items: ReceiptRow[]; total: number }>(`/api/receipts?storeId=${encodedStoreId}&page=1&pageSize=50`),
       apiFetch<InventoryRow[]>(`/api/inventory?storeId=${encodedStoreId}`),
       apiFetch<ConsumptionRow[]>(`/api/inventory/consumptions?days=30&storeId=${encodedStoreId}`),
-    ]).then(([orderData, receiptData, inventoryRows, consumptionRows]) => {
+      apiFetch<StoreOverview>(`/api/stores/${encodedStoreId}/overview`),
+    ]).then(([orderData, receiptData, inventoryRows, consumptionRows, overviewData]) => {
       if (sequence !== requestSequence.current) return
       setOrders(orderData.items || [])
       setOrderTotal(orderData.total || 0)
@@ -136,6 +151,7 @@ export default function InternalSupplyChainStoresPage() {
       setReceiptTotal(receiptData.total || 0)
       setInventory(inventoryRows || [])
       setConsumptions(consumptionRows || [])
+      setOverview(overviewData)
     }).catch(reason => {
       if (sequence === requestSequence.current) setRowError(String(reason?.message || reason))
     }).finally(() => {
@@ -149,6 +165,8 @@ export default function InternalSupplyChainStoresPage() {
   const selectedStore = stores.find(store => store.id === storeId)
   const lowStock = inventory.filter(row => Number(row.minStock || 0) > 0 && Number(row.stock || 0) < Number(row.minStock || 0))
   const activeOrders = orders.filter(row => !['RECEIVED', 'COMPLETED', 'CANCELLED'].includes(row.status))
+  const inProgressCount = overview?.orderStatusBreakdown.inProgress ?? activeOrders.length
+  const lowStockCount = overview?.lowStockCount ?? lowStock.length
 
   return (
     <div className="min-h-screen bg-bg px-4 py-5 lg:px-8 lg:py-7">
@@ -181,9 +199,9 @@ export default function InternalSupplyChainStoresPage() {
           <>
             <section className="grid gap-3 py-5 sm:grid-cols-2 xl:grid-cols-4">
               <Metric label="订货记录" value={`${orderTotal} 单`} hint="当前门店全部历史" />
-              <Metric label="近期进行中" value={`${activeOrders.length} 单`} hint="最近50条中的待接单、待发货或配送中" tone={activeOrders.length > 0 ? 'orange' : undefined} />
-              <Metric label="收货记录" value={`${receiptTotal} 单`} hint="当前门店全部历史" />
-              <Metric label="低于安全线" value={`${lowStock.length} 项`} hint="按门店库存策略判断" tone={lowStock.length > 0 ? 'red' : 'green'} />
+              <Metric label="进行中订货" value={`${inProgressCount} 单`} hint="待接单、待发货与配送中" tone={inProgressCount > 0 ? 'orange' : undefined} />
+              <Metric label="有效收货" value={`${overview?.validReceiptCount ?? receiptTotal} 单`} hint="不含作废与拒收" />
+              <Metric label="低于安全线" value={`${lowStockCount} 项`} hint="按当前预计库存与门店策略判断" tone={lowStockCount > 0 ? 'red' : 'green'} />
             </section>
 
             {rowError && <div className="mb-4 rounded-card border border-red/30 bg-red-bg p-3 text-caption text-red-fg">{rowError}</div>}
@@ -214,7 +232,7 @@ export default function InternalSupplyChainStoresPage() {
                       ) : <Empty text="当前没有低于安全线的商品" />}
                       <PanelLink onClick={() => setView('inventory')}>查看全部库存 ›</PanelLink>
                     </Panel>
-                    <Panel title="近期订货" subtitle={`近期 ${activeOrders.length} 单进行中`}>
+                    <Panel title="近期订货" subtitle={`${inProgressCount} 单进行中`}>
                       {orders.length > 0 ? <OrderTable rows={orders.slice(0, 8)} compact /> : <Empty text="当前门店暂无订货记录" />}
                       <PanelLink onClick={() => setView('orders')}>查看全部订货 ›</PanelLink>
                     </Panel>
@@ -222,7 +240,7 @@ export default function InternalSupplyChainStoresPage() {
                       {receipts.length > 0 ? <ReceiptTable rows={receipts.slice(0, 8)} /> : <Empty text="当前门店暂无收货记录" />}
                       <PanelLink onClick={() => setView('receipts')}>查看全部收货 ›</PanelLink>
                     </Panel>
-                    <Panel title="近30天消耗" subtitle={`${consumptions.length} 条记录`}>
+                    <Panel title="近30天消耗" subtitle={`${overview?.consumptionCount30d ?? consumptions.length} 条记录`}>
                       {consumptions.length > 0 ? <ConsumptionTable rows={consumptions.slice(0, 8)} /> : <Empty text="当前门店近30天暂无消耗记录" />}
                       <PanelLink onClick={() => setView('consumption')}>查看全部消耗 ›</PanelLink>
                     </Panel>

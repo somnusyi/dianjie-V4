@@ -107,11 +107,26 @@ describe('内部供应链门店运营', () => {
           product: { code: 'SKU-001', name: '土豆', unit: 'kg' },
         }]
       }
+      if (/^\/api\/stores\/[^/]+\/overview$/.test(url.pathname)) {
+        return {
+          orderCount: 6,
+          orderStatusBreakdown: {
+            SUBMITTED: 3,
+            CONFIRMED: 2,
+            DELIVERING: 1,
+            inProgress: 6,
+          },
+          validReceiptCount: 10,
+          inventoryProductCount: 25,
+          lowStockCount: 1,
+          consumptionCount30d: 42,
+        }
+      }
       throw new Error(`unexpected path: ${path}`)
     })
   })
 
-  it('默认按第一家门店加载四类只读数据，并可切换视图', async () => {
+  it('默认按第一家门店加载四类只读数据与精确概览，并可切换视图', async () => {
     const { container, root } = render(<StoresPage />)
     await waitFor(() => container.textContent?.includes('PO-S01') ?? false)
 
@@ -120,8 +135,11 @@ describe('内部供应链门店运营', () => {
     expect(urls).toContain('/api/receipts?storeId=store-1&page=1&pageSize=50')
     expect(urls).toContain('/api/inventory?storeId=store-1')
     expect(urls).toContain('/api/inventory/consumptions?days=30&storeId=store-1')
+    expect(urls).toContain('/api/stores/store-1/overview')
     expect(container.textContent).toContain('门店运营')
     expect(container.textContent).toContain('低于安全线')
+    expect(container.textContent).toContain('6 单')
+    expect(container.textContent).toContain('10 单')
     expect(container.textContent).toContain('瑶海店土豆')
 
     const inventoryTab = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.trim() === '当前库存')!

@@ -220,6 +220,19 @@ describe('仓库库存页 · 手工入库', () => {
     cleanup(container, root)
   })
 
+  it('提供指向全量盘点导入页的清晰入口，URL 携带当前 supplierId', async () => {
+    mockWithInboundResponse({ ok: true, count: 1, warehouseId: 'wh-real-001', warehouse: { id: 'wh-real-001', name: '默认总仓' } })
+
+    const { container, root } = render(<InternalSupplyChainInventoryPage />)
+    await waitFor(() => container.textContent?.includes('苹果') ?? false)
+
+    const link = Array.from(container.querySelectorAll('a')).find(a => a.textContent?.trim() === '全量盘点导入')
+    expect(link).toBeTruthy()
+    expect(link?.getAttribute('href')).toBe('/v2/supply-chain/inventory/snapshot?supplierId=sup-1')
+
+    cleanup(container, root)
+  })
+
   it('切换供应商后提交使用新的 supplierId', async () => {
     mockWithInboundResponse({ ok: true, count: 1, warehouseId: 'wh-real-001', warehouse: { id: 'wh-real-001', name: '默认总仓' } })
 

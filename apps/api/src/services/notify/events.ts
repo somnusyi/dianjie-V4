@@ -158,6 +158,34 @@ export const EVENTS = {
     scopedBy: 'tenant',
     urgent: true,
   },
+  AUTOFIX_PLAN_READY: {
+    label: 'AI 修复方案待审批',
+    desc: 'AI 已完成定位、补丁和隔离验证 → 超管审批是否部署',
+    defaultRoles: ['SUPER_ADMIN'],
+    scopedBy: 'tenant',
+    urgent: true,
+  },
+  AUTOFIX_ESCALATED: {
+    label: 'AI 修复转人工',
+    desc: 'AI 修复越红线、验证失败或回滚异常 → 超管人工处理',
+    defaultRoles: ['SUPER_ADMIN'],
+    scopedBy: 'tenant',
+    urgent: true,
+  },
+  AUTOFIX_RESOLVED: {
+    label: 'AI 修复部署完成',
+    desc: '管理员批准后部署并通过生产健康检查',
+    defaultRoles: ['SUPER_ADMIN'],
+    scopedBy: 'tenant',
+    urgent: false,
+  },
+  AUTOFIX_ROLLED_BACK: {
+    label: 'AI 修复已回滚',
+    desc: '管理员一键回滚已部署的 AI 修复',
+    defaultRoles: ['SUPER_ADMIN'],
+    scopedBy: 'tenant',
+    urgent: true,
+  },
 } as const
 
 export type EventKey = keyof typeof EVENTS
@@ -347,6 +375,46 @@ export function renderTemplate(event: EventKey, payload: Record<string, any>): R
           description: `${payload.reporterName || '同事'}${payload.storeName ? ` (${payload.storeName})` : ''} 反馈:${payload.summary || ''}。请立即人工处理。`,
           url: `${baseUrl()}/v2/boss/feedback/${payload.feedbackId}`,
           btntxt: '去处理',
+        },
+      }
+    case 'AUTOFIX_PLAN_READY':
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: `🧪 AI 修复方案待审批:${payload.title || '阻断故障'}`,
+          description: `${payload.summary || '已完成隔离验证'}。修改 ${payload.fileCount || 0} 个文件、${payload.changedLines || 0} 行。`,
+          url: `${baseUrl()}/v2/boss/autofix/${payload.runId}`,
+          btntxt: '查看并审批',
+        },
+      }
+    case 'AUTOFIX_ESCALATED':
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: '🚨 AI 修复已转人工',
+          description: `${payload.error || '自动修复未通过安全门禁'}。生产未自动变更或已执行回滚。`,
+          url: `${baseUrl()}/v2/boss/autofix/${payload.runId}`,
+          btntxt: '查看详情',
+        },
+      }
+    case 'AUTOFIX_RESOLVED':
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: '✅ AI 修复已部署并验证',
+          description: `提交 ${String(payload.commitSha || '').slice(0, 8)}，${payload.health || '生产健康检查通过'}。`,
+          url: `${baseUrl()}/v2/boss/autofix/${payload.runId}`,
+          btntxt: '查看记录',
+        },
+      }
+    case 'AUTOFIX_ROLLED_BACK':
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: '↩️ AI 修复已回滚',
+          description: `${payload.health || '生产健康检查通过'}。请继续人工排查原问题。`,
+          url: `${baseUrl()}/v2/boss/autofix/${payload.runId}`,
+          btntxt: '查看记录',
         },
       }
     case 'DATA_QUALITY_TASK':

@@ -82,6 +82,8 @@ import { inventoryCountRoutes } from './routes/inventoryCounts'
 import { consumptionAdminRoutes, consumptionRoutes } from './routes/consumption'
 import { storeOverviewRoutes } from './routes/storeOverview'
 import { feedbackRoutes } from './routes/feedback'
+import { autoFixRoutes } from './routes/autofix'
+import { startAutoFixWorker } from './services/autofix/engine'
 import { isSupplierRole } from './lib/auth-scope'
 
 function resolveJwtSecret() {
@@ -266,6 +268,7 @@ async function bootstrap() {
   app.register(consumptionAdminRoutes, { prefix: '/api/consumption' })
   app.register(storeOverviewRoutes, { prefix: '/api/stores' })
   app.register(feedbackRoutes, { prefix: '/api/feedback' })
+  app.register(autoFixRoutes, { prefix: '/api/autofix' })
 
   // ── 健康检查（含数据库连接验证）──────
   // /api/health is the public path behind app.dianjie.cc's nginx proxy;
@@ -323,6 +326,7 @@ async function bootstrap() {
   } else {
     await startScheduler()
   }
+  startAutoFixWorker()
 
   // ── 监听 ──────────────────────────────
   const port = parseInt(process.env.API_PORT || '4000')

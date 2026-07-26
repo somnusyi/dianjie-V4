@@ -20,6 +20,7 @@ import { fireAndForget as notify } from '../services/notify'
 import { sendNotification } from '../services/notification'
 import { qwenChat, buildFeedbackSystemPrompt, QWEN_NOT_CONFIGURED } from '../services/qwenChat'
 import { parseTriageBlock, decideTriageAction, TriageResult } from '../services/feedbackTriage'
+import { enqueueAutoFix } from '../services/autofix/engine'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const ADMIN_ROLES = new Set(['SUPER_ADMIN'])
@@ -103,6 +104,13 @@ async function applyTriage(actor: Actor, feedback: { id: string; reporterId: str
         reporterName, storeName: ctx.storeName,
       },
     })
+    // P1a is fail-closed: AUTO_FIX_MODE defaults to off. In suggest mode the
+    // durable run is created immediately, while AI analysis stays off the
+    // feedback request's critical path.
+    void enqueueAutoFix({
+      tenantId: actor.tenantId,
+      feedbackId: feedback.id,
+    }).catch((error) => console.error('[autofix] 入队失败:', error))
   } else if (action.notifyEvent === 'FEEDBACK_APPROVAL_PENDING') {
     notify({
       tenantId: actor.tenantId,

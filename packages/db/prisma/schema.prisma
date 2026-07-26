@@ -70,6 +70,7 @@ model Tenant {
   storeInventoryPolicies        StoreInventoryPolicy[]
   feedbacks                     Feedback[]
   feedbackMessages              FeedbackMessage[]
+  autoFixRuns                   AutoFixRun[]
 
   @@map("tenants")
 }
@@ -184,6 +185,7 @@ model User {
   confirmedMonthlyCloses        StoreMonthlyClose[]     @relation("StoreMonthlyCloseConfirmedBy")
   feedbacks                     Feedback[]              @relation("FeedbackReporter")
   decidedFeedbacks              Feedback[]              @relation("FeedbackDecisionBy")
+  decidedAutoFixRuns            AutoFixRun[]             @relation("AutoFixDecisionBy")
 
   @@unique([tenantId, email])
   @@unique([tenantId, phone])
@@ -3275,6 +3277,7 @@ model Feedback {
   reporter  User    @relation("FeedbackReporter", fields: [reporterId], references: [id])
   decisionBy User?  @relation("FeedbackDecisionBy", fields: [decisionById], references: [id])
   messages  FeedbackMessage[]
+  autoFixRun AutoFixRun?
 
   @@index([tenantId, status])
   @@index([tenantId, reporterId])
@@ -3311,4 +3314,47 @@ enum FeedbackStatus {
   IN_DEV // 已立项开发
   RESOLVED // 已解决
   CLOSED // 已闭环 (问答/无效)
+}
+
+// P1a: 阻断反馈的 AI 建议修复记录。默认 AUTO_FIX_MODE=off，不改变现有反馈链路。
+model AutoFixRun {
+  id            String       @id @default(cuid())
+  tenantId      String
+  feedbackId    String       @unique
+  status        AutoFixStatus @default(RECEIVED)
+  analysis      String?      @db.Text
+  planSummary   String?      @db.Text
+  diffPatch     String?      @db.Text
+  diffFiles     Json?
+  error         String?      @db.Text
+  baseCommitSha String?
+  commitSha     String?
+  deployLog     String?      @db.Text
+  decidedById   String?
+  decidedAt     DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  feedback  Feedback @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+  decidedBy User?    @relation("AutoFixDecisionBy", fields: [decidedById], references: [id])
+
+  @@index([tenantId, status, createdAt])
+  @@map("auto_fix_runs")
+}
+
+enum AutoFixStatus {
+  RECEIVED
+  ANALYZING
+  PLAN_READY
+  AWAITING_APPROVAL
+  PATCHING
+  VERIFYING
+  DEPLOYING
+  VERIFY_PROD
+  RESOLVED
+  FAILED_ROLLBACK
+  ROLLED_BACK
+  ESCALATED
+  REJECTED
 }

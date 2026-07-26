@@ -45,7 +45,15 @@ export default function BossFeedbackPage() {
   return (
     <div className="min-h-screen bg-bg pb-20">
       <header className="px-4 pt-4 pb-2">
-        <h1 className="text-h1">反馈审批</h1>
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-h1">反馈审批</h1>
+          <a
+            href="/v2/boss/autofix"
+            className="shrink-0 px-3 py-2 rounded-cta bg-white border border-border text-button"
+          >
+            AI 自动修复
+          </a>
+        </div>
         <p className="text-caption text-gray3 mt-0.5">
           {loading ? '加载中…' : `${items.length} 条${TABS.find((t) => t.key === status)?.label || ''}反馈`}
         </p>

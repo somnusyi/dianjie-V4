@@ -128,4 +128,25 @@ describe('notify events: 反馈系统事件定义', () => {
     expect(msg.textcard!.description).toContain('瑶海店')
     expect(msg.textcard!.url).toContain('/v2/boss/feedback/fb3')
   })
+
+  it('AI 修复方案只通知 SUPER_ADMIN 并指向专用审批页', () => {
+    expect(EVENTS.AUTOFIX_PLAN_READY).toMatchObject({
+      defaultRoles: ['SUPER_ADMIN'], scopedBy: 'tenant', urgent: true,
+    })
+    const msg = renderTemplate('AUTOFIX_PLAN_READY', {
+      runId: 'run1',
+      title: '商品页空白',
+      summary: '空值兜底，隔离验证通过',
+      fileCount: 1,
+      changedLines: 2,
+    })
+    expect(msg.textcard!.url).toBe('https://www.njdianjie.com/v2/boss/autofix/run1')
+    expect(msg.textcard!.description).toContain('1 个文件、2 行')
+  })
+
+  it('AI 修复失败和回滚事件保持紧急通道', () => {
+    expect(EVENTS.AUTOFIX_ESCALATED.urgent).toBe(true)
+    expect(EVENTS.AUTOFIX_ROLLED_BACK.urgent).toBe(true)
+    expect(EVENTS.AUTOFIX_RESOLVED.urgent).toBe(false)
+  })
 })

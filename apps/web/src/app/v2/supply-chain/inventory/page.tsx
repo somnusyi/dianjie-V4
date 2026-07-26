@@ -183,6 +183,11 @@ export default function InternalSupplyChainInventoryPage() {
             aria-disabled={!supplierId || summary?.inventoryMode === 'NOT_TRACKED'}
             className={`flex h-10 items-center rounded-cta border border-border bg-white px-4 text-button ${!supplierId || summary?.inventoryMode === 'NOT_TRACKED' ? 'pointer-events-none opacity-40' : ''}`}
           >Excel 批量入库</a>
+          <a
+            href={supplierId ? `/v2/supply-chain/inventory/snapshot?supplierId=${encodeURIComponent(supplierId)}` : '#'}
+            aria-disabled={!supplierId || summary?.inventoryMode === 'NOT_TRACKED'}
+            className={`flex h-10 items-center rounded-cta border border-amber/40 bg-amber/10 px-4 text-button text-amber-fg ${!supplierId || summary?.inventoryMode === 'NOT_TRACKED' ? 'pointer-events-none opacity-40' : ''}`}
+          >全量盘点导入</a>
         </div>
       </header>
 

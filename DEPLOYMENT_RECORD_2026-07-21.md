@@ -132,3 +132,12 @@
   4. 羽衣甘蓝叶子 → 并入「羽衣甘蓝汁（果汁包）」；存续方库存单位 箱→袋（1箱=100袋、1袋=150g），账面 stock 49箱→4900袋，配方 15.5g→0.103333袋/杯
 - 收尾修复：两个存续档案（冷冻香橙胡萝卜汁、竹荪）合并前即为 DISABLED 状态，已重新 ENABLED
 - 验证：停用档案主数据残留全 0；受影响菜品配方唯一（超A醒目胡萝卜橙 1包、轻颜羽衣甘蓝 0.103333袋）；BOM 版本项同步
+
+## 第 12 次：反馈系统 P0（20192881，2026-07-26 下午发布）
+- 功能：App 内反馈入口（全局悬浮按钮+自动上下文快照+图片附件）→ Qwen(qwen3.8-max-preview) App 内多轮澄清对话 → 三类分诊（BUG_BLOCKING 紧急企微通报 / IMPROVEMENT+NEW_FEATURE 待审推送 / QUESTION 直接答闭环）→ 超管+老板手机审批中心 /v2/boss/feedback（批准/驳回+理由+OpLog+消息中心）
+- 新增：Feedback/FeedbackMessage 模型（迁移 20260726131036_feedback_system，只增不改）；FEEDBACK_APPROVAL_PENDING/FEEDBACK_URGENT_BUG 企微事件；上传白名单加 feedback；routes/feedback.ts 6 端点（限流 10/hour + 30/5min）
+- 配套：魏（17328852591）升级 SUPER_ADMIN 并绑定企微 ZuoYouDeZuo（从 592 供应商账号解绑迁移）；生产 .env 写入 QWEN_*（chmod 600，Key 不进 git）
+- 热修：qwen3.8-max-preview 强制思考模式、真实 prompt 首响 30~60s，qwenChat 超时 30s→90s（env QWEN_TIMEOUT_MS 可调），否则稳定撞线兜底
+- 测试：单测 172/172（新增 27）、集成 5/5、双端 tsc+build；生产真实 Qwen 冒烟通过（33.4s 首响，IMPROVEMENT 分诊+解析正确）
+- 部署：分段执行标准流程（300s 限制），DEPLOY 备份 dianjie_v4-deploy-bak-20260726-1345-20192881.dump，md5 一致、api/cmb/web 健康、.deployed-commit=201928815de8…
+- 注意：部署 rsync --delete 清理了服务器独有的 notify-chef-data-tasks.ts，已按原内容补回并提交进仓库

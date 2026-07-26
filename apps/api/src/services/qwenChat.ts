@@ -17,7 +17,8 @@ export const QWEN_NOT_CONFIGURED = 'AI 助手暂未配置，你的反馈已记�
 
 const DEFAULT_BASE_URL = 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1'
 const DEFAULT_MODEL = 'qwen3.8-max-preview'
-const TIMEOUT_MS = 30_000
+// qwen3.8-max-preview 强制思考模式, 真实 prompt 首响 30~60s; 默认 30s 会稳定撞线
+const TIMEOUT_MS = Number(process.env.QWEN_TIMEOUT_MS) || 90_000
 
 export interface QwenChatOptions {
   /** 测试注入用; 默认 globalThis.fetch */

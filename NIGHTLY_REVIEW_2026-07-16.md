@@ -2320,3 +2320,42 @@
 - 最终 GitHub main、生产 `.deployed-commit` 和 `/app/dianjie-src` 三者 exact
   `db505448`，源码干净且发布锁释放。API/Web/CMB online，本机和主公网 health/login
   为 200，重启计数在独立复核中稳定；AutoFixRun 和反馈 actionable 仍为 0。
+
+## 2026-07-26 22:53 第 6 小时 AutoFix 候选提交隔离
+
+### 开始基线与生产只读证据
+
+- 已读取最新 memory/夜审、fetch `origin/main`，并核对主仓、标准发布 worktree 与全部
+  AutoFix 维护 worktree 的分支、HEAD 和脏状态；主仓用户文件及既有 watchdog 草稿保持
+  原样。本批继续在干净隔离 worktree 开发，第 5 批最终生产记录先独立提交、与本批一起
+  推进，避免 report-only main 与生产/源码分叉。
+- 开始时 GitHub main、生产 `.deployed-commit` 和 `/app/dianjie-src` 均为 exact
+  `db505448`，源码干净、无发布锁，API/Web/CMB 健康 200。70 条 migration 成功且
+  失败为 0；AutoFixRun 和反馈 actionable 均为 0。
+
+### 确定性缺陷与修改
+
+- 旧批准部署会直接在长期 `/app/dianjie-src` 分支应用补丁并提交，再构建生产。若构建、
+  同步或健康检查失败，恢复流程又在同一分支创建 revert 提交，并把生产标记写到该
+  两提交链顶端。虽然文件内容可恢复，deployed exact commit 的父提交却不是当前
+  `origin/main`，违反自动回收门禁并可能阻断后续标准发布。
+- 候选补丁现在只在一次性 detached Git worktree 中应用和提交，明确校验父提交是冻结的
+  base、提交后工作树干净且目标文件存在；长期源码分支在生产最终验证和任务闭环前保持
+  原 SHA。候选 commit 以 run tag 保留可追溯性。
+- 候选部署失败时，从仍未改变的长期 base 源码重建生产、验证登录/API 并把
+  `.deployed-commit` 写回原 base，不再创建 failed+revert 历史。生产成功并完成数据库
+  闭环后才尝试把源码分支 `--ff-only` 到候选；快进失败只留维护证据，生产 commit 仍是
+  当前 main 的直接子提交，可按既定 exact-SHA 规则回收。
+- 首轮测试仓没有依赖目录时暴露悬空 `node_modules` symlink，干净门禁按设计拒绝；现仅
+  在真实依赖目录存在时建立链接，没有放宽工作树检查。
+
+### 验收与发布门禁
+
+- 真实临时 Git 仓专项 2/2，覆盖合法候选不推进/不弄脏源分支，以及非法补丁自动清理
+  注册 worktree。连同基线/状态专项共 10/10；API 全量 59 文件 554/554、API build、
+  Web 全量 28 文件 506/506、Web tsc、166 页 production build 全部通过。
+- `git diff --check` 与高置信敏感信息扫描通过；production build 仅有既有
+  OpenTelemetry warning。本批无 schema、业务页面或业务数据路径变化，不执行数据库
+  写入 E2E。实现提交为 `b1cb0cd05d464dffa5e13930f1ae98557e9d4d9f`。
+- 本批报告与实现通过后将纯快进进入 main，并按唯一标准脚本发布；发布前再次核对反馈、
+  AutoFix、本地提交和锁，最终备份/迁移/PM2/health/源码对齐写入 memory。

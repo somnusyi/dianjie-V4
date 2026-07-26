@@ -3,11 +3,13 @@ import { prisma } from '@dianjie/db'
 export type SupplyChainAuditIssue = {
   code: string
   severity: 'ERROR' | 'WARNING'
-  entityType: 'Product' | 'StockReservation' | 'StockMovement' | 'StockBatch' | 'DeliveryOrder' | 'Receipt' | 'LossClaim'
+  entityType: 'Product' | 'StockReservation' | 'StockMovement' | 'StockBatch' | 'DeliveryOrder' | 'Receipt' | 'LossClaim' | 'WarehouseStock'
   entityId: string
   label: string
   detail: string
 }
+
+type AuditDb = typeof prisma
 
 function differs(left: number, right: number, tolerance = 0.01) {
   return Math.abs(left - right) > tolerance
@@ -17,38 +19,38 @@ export async function auditSupplierSupplyChain(input: {
   tenantId: string
   supplierId: string
   days?: number
-}) {
+}, db: AuditDb = prisma) {
   const days = Math.max(7, Math.min(input.days ?? 90, 365))
   const since = new Date(Date.now() - days * 86_400_000)
   const [supplier, products, reservations, stockMovements, stockBatches, deliveries, receipts, arrivalDiscrepancies] = await Promise.all([
-    prisma.supplier.findFirst({
+    db.supplier.findFirst({
       where: { id: input.supplierId, tenantId: input.tenantId },
       select: { id: true, sourceType: true, inventoryMode: true },
     }),
-    prisma.product.findMany({
+    db.product.findMany({
       where: { tenantId: input.tenantId, supplierId: input.supplierId },
       select: { id: true, code: true, name: true, stock: true },
     }),
-    prisma.supplierStockReservation.findMany({
+    db.supplierStockReservation.findMany({
       where: { tenantId: input.tenantId, supplierId: input.supplierId, status: 'ACTIVE' },
       include: {
         product: { select: { name: true } },
         purchaseOrder: { select: { no: true, status: true } },
       },
     }),
-    prisma.supplierStockMovement.findMany({
+    db.supplierStockMovement.findMany({
       where: { tenantId: input.tenantId, supplierId: input.supplierId },
       select: { id: true, productId: true, delta: true, balanceAfter: true, createdAt: true },
       orderBy: [{ productId: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
       take: 20_000,
     }),
-    prisma.supplierStockBatch.findMany({
+    db.supplierStockBatch.findMany({
       where: { tenantId: input.tenantId, supplierId: input.supplierId },
       select: { id: true, productId: true, batchNo: true, initialQty: true, remainingQty: true },
       orderBy: [{ productId: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
       take: 20_000,
     }),
-    prisma.deliveryOrder.findMany({
+    db.deliveryOrder.findMany({
       where: {
         tenantId: input.tenantId, supplierId: input.supplierId,
         status: { not: 'CANCELLED' }, createdAt: { gte: since },
@@ -57,7 +59,7 @@ export async function auditSupplierSupplyChain(input: {
       orderBy: { createdAt: 'desc' },
       take: 1000,
     }),
-    prisma.receipt.findMany({
+    db.receipt.findMany({
       where: {
         tenantId: input.tenantId, supplierId: input.supplierId,
         status: { in: ['CONFIRMED', 'ACCOUNTED'] }, createdAt: { gte: since },
@@ -73,7 +75,7 @@ export async function auditSupplierSupplyChain(input: {
       orderBy: { createdAt: 'desc' },
       take: 1000,
     }),
-    prisma.lossClaim.findMany({
+    db.lossClaim.findMany({
       where: {
         tenantId: input.tenantId,
         supplierId: input.supplierId,
@@ -275,6 +277,64 @@ export async function auditSupplierSupplyChain(input: {
     }
   }
 
+  let warehouseId: string | undefined
+  let warehouseStockRowsChecked = 0
+
+  if (inventoryTracked) {
+    const defaultWarehouse = await db.warehouse.findFirst({
+      where: { tenantId: input.tenantId, isDefault: true, isActive: true },
+      select: { id: true },
+    })
+    if (!defaultWarehouse) {
+      throw Object.assign(new Error('当前租户不存在启用的默认仓'), { statusCode: 404 })
+    }
+    warehouseId = defaultWarehouse.id
+
+    const productIds = products.map(p => p.id)
+    const warehouseStocks = productIds.length > 0
+      ? await db.warehouseStock.findMany({
+          where: { tenantId: input.tenantId, warehouseId, productId: { in: productIds } },
+        })
+      : []
+    warehouseStockRowsChecked = warehouseStocks.length
+
+    const wsByProduct = new Map<string, { id: string; isActive: boolean; physicalQty: number }>()
+    for (const ws of warehouseStocks) {
+      wsByProduct.set(ws.productId, { id: ws.id, isActive: ws.isActive, physicalQty: Number(ws.physicalQty) })
+    }
+
+    for (const product of products) {
+      const ws = wsByProduct.get(product.id)
+      if (!ws) {
+        issues.push({
+          code: 'WAREHOUSE_STOCK_MISSING', severity: 'ERROR', entityType: 'WarehouseStock',
+          entityId: product.id,
+          label: `${product.name} · ${product.code}`,
+          detail: `仓库 ${warehouseId} 不存在该商品的库存行`,
+        })
+        continue
+      }
+      if (!ws.isActive) {
+        issues.push({
+          code: 'WAREHOUSE_STOCK_INACTIVE', severity: 'ERROR', entityType: 'WarehouseStock',
+          entityId: ws.id,
+          label: `${product.name} · ${product.code}`,
+          detail: `仓库 ${warehouseId} 库存行已停用`,
+        })
+        continue
+      }
+      const productStock = Number(product.stock)
+      if (differs(ws.physicalQty, productStock, 0.001)) {
+        issues.push({
+          code: 'WAREHOUSE_STOCK_PRODUCT_MISMATCH', severity: 'ERROR', entityType: 'WarehouseStock',
+          entityId: ws.id,
+          label: `${product.name} · ${product.code}`,
+          detail: `仓库 ${warehouseId} 物理库存 ${ws.physicalQty.toFixed(3)}，商品库存 ${productStock.toFixed(3)}`,
+        })
+      }
+    }
+  }
+
   return {
     checkedAt: new Date(),
     periodDays: days,
@@ -290,6 +350,7 @@ export async function auditSupplierSupplyChain(input: {
       receipts: receipts.length,
       arrivalShortages: arrivalDiscrepancies.filter(claim => claim.kind === 'ARRIVAL_SHORTAGE').length,
       arrivalDiscrepancies: arrivalDiscrepancies.length,
+      ...(warehouseId !== undefined && { warehouseId, warehouseStockRowsChecked }),
     },
     issues,
   }

@@ -6,6 +6,10 @@ import { promisify } from 'node:util'
 import { prisma } from '@dianjie/db'
 import { sendNotification } from '../notification'
 import { fireAndForget as notify } from '../notify'
+import {
+  classifyDeploymentFailure,
+  type DeploymentRecoveryState,
+} from './deploymentFailure'
 import { acquireDeployLock } from './deploymentLock'
 import { inspectUnifiedDiff, isAutoDeploymentEnabled } from './policy'
 import { requireProductionBaseline } from './productionBaseline'
@@ -161,12 +165,22 @@ async function resolveFeedback(runId: string, commitSha: string, health: string,
   })
 }
 
-async function markFailedRollback(runId: string, error: unknown, log: string) {
-  const message = error instanceof Error ? error.message : String(error)
+async function markDeploymentFailure(
+  runId: string,
+  error: unknown,
+  log: string,
+  recovery: DeploymentRecoveryState,
+  recoveryError = '',
+) {
+  const outcome = classifyDeploymentFailure(recovery)
+  const primaryMessage = error instanceof Error ? error.message : String(error)
+  const message = recoveryError
+    ? `${primaryMessage}\n自动回滚异常: ${recoveryError}`
+    : primaryMessage
   const run = await prisma.autoFixRun.update({
     where: { id: runId },
     data: {
-      status: 'FAILED_ROLLBACK' as any,
+      status: outcome.status as any,
       error: message.slice(0, 20_000),
       deployLog: log.slice(-MAX_LOG_CHARS),
     },
@@ -175,17 +189,21 @@ async function markFailedRollback(runId: string, error: unknown, log: string) {
     data: {
       tenantId: run.tenantId,
       role: 'AI',
-      action: `AI 自动修复 ${run.id} 部署失败并执行回滚`,
+      action: `AI 自动修复 ${run.id} ${outcome.action}`,
       entityType: 'AutoFixRun',
       targetId: run.id,
       isAi: true,
-      metadata: { status: 'FAILED_ROLLBACK', error: message.slice(0, 500) } as any,
+      metadata: {
+        status: outcome.status,
+        reason: outcome.reason,
+        error: message.slice(0, 500),
+      } as any,
     },
   })
   notify({
     tenantId: run.tenantId,
     event: 'AUTOFIX_ESCALATED',
-    eventKey: `AUTOFIX:${run.id}:FAILED_ROLLBACK`,
+    eventKey: `AUTOFIX:${run.id}:${outcome.status}`,
     payload: { runId: run.id, feedbackId: run.feedbackId, error: message.slice(0, 500) },
     bypassFrequency: true,
     bypassSilent: true,
@@ -199,6 +217,8 @@ export async function executeApprovedRun(runId: string) {
   let log = ''
   let tempDir = ''
   let modifiedFiles: string[] = []
+  let recovery: DeploymentRecoveryState = 'NOT_REQUIRED'
+  let recoveryError = ''
   let releaseLock: (() => Promise<void>) | null = null
   try {
     if (!deploymentEnabled()) throw new Error('自动修复部署开关未启用')
@@ -242,18 +262,23 @@ export async function executeApprovedRun(runId: string) {
   } catch (error) {
     try {
       if (commitSha) {
+        recovery = 'FAILED'
         await run(repo, 'git', ['revert', '--no-edit', commitSha], 30_000)
         log = `${log}\n${(await buildAndSyncWeb(repo, target, `${runId}-rollback`)).slice(-20_000)}`
         await verifyProduction('/v2/login')
         const rollbackSha = await gitOutput(repo, ['rev-parse', 'HEAD'])
         await writeFile(path.join(target, '.deployed-commit'), `${rollbackSha}\n`, { mode: 0o600 })
+        recovery = 'COMPLETED'
       } else if (modifiedFiles.length > 0) {
+        recovery = 'FAILED'
         await run(repo, 'git', ['restore', '--staged', '--worktree', '--', ...modifiedFiles], 30_000)
+        recovery = 'NOT_REQUIRED'
       }
     } catch (rollbackError: any) {
-      log = `${log}\nROLLBACK_ERROR=${rollbackError.message || String(rollbackError)}`
+      recoveryError = rollbackError.message || String(rollbackError)
+      log = `${log}\nROLLBACK_ERROR=${recoveryError}`
     }
-    await markFailedRollback(runId, error, log)
+    await markDeploymentFailure(runId, error, log, recovery, recoveryError)
   } finally {
     if (tempDir) await rm(tempDir, { recursive: true, force: true }).catch(() => undefined)
     if (releaseLock) await releaseLock().catch((error) => console.error('[autofix] 释放部署锁失败:', error))
@@ -264,6 +289,7 @@ export async function executeManualRollback(runId: string) {
   const repo = sourceDir()
   const target = productionDir()
   let log = ''
+  let recovery: DeploymentRecoveryState = 'NOT_REQUIRED'
   let releaseLock: (() => Promise<void>) | null = null
   try {
     if (!deploymentEnabled()) throw new Error('自动修复部署开关未启用')
@@ -273,6 +299,7 @@ export async function executeManualRollback(runId: string) {
       throw new Error('当前记录不可回滚')
     }
     await requireProductionBaseline(target, runRecord.commitSha)
+    recovery = 'FAILED'
     await run(repo, 'git', ['revert', '--no-edit', runRecord.commitSha], 30_000)
     log = await buildAndSyncWeb(repo, target, `${runId}-manual-rollback`)
     const health = await verifyProduction('/v2/login')
@@ -302,7 +329,7 @@ export async function executeManualRollback(runId: string) {
       bypassSilent: true,
     })
   } catch (error) {
-    await markFailedRollback(runId, error, log)
+    await markDeploymentFailure(runId, error, log, recovery)
   } finally {
     if (releaseLock) await releaseLock().catch((error) => console.error('[autofix] 释放部署锁失败:', error))
   }

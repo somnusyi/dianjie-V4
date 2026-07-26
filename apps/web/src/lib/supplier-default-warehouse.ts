@@ -57,14 +57,17 @@ export function withSupplierWarehouseParams(url: string, supplierId: string): st
   return `${base}?${params.toString()}`
 }
 
-/** 入库响应中仓库字段的合法形状 */
-export interface InboundWarehouseResult {
+/** 写入类接口响应中仓库字段的合法形状 */
+export interface RealWarehouseResult {
   warehouseId: string
   warehouseName: string
 }
 
+/** 兼容旧名的别名 */
+export type InboundWarehouseResult = RealWarehouseResult
+
 /**
- * 校验入库接口成功响应必须包含真实仓库信息.
+ * 校验写入类接口成功响应必须包含真实仓库信息.
  *
  * 要求:
  *   - response.warehouseId 为非空字符串且不能仍是别名 'default'
@@ -73,37 +76,58 @@ export interface InboundWarehouseResult {
  *
  * 校验失败时抛出 Error, 调用方应视为写入失败, 不展示成功文案、不清空表单/预览.
  */
-export function assertInboundWarehouseResponse(response: unknown): InboundWarehouseResult {
+export function assertRealWarehouseResponse(response: unknown): RealWarehouseResult {
   if (response == null || typeof response !== 'object' || Array.isArray(response)) {
-    throw new Error('入库响应格式异常：缺少仓库信息')
+    throw new Error('响应格式异常：缺少仓库信息')
   }
   const res = response as Record<string, unknown>
 
   const rawWarehouseId = res.warehouseId
   const warehouseId = typeof rawWarehouseId === 'string' ? rawWarehouseId.trim() : ''
   if (!warehouseId || warehouseId === DEFAULT_WAREHOUSE_ID) {
-    throw new Error('入库响应未返回真实仓库 ID')
+    throw new Error('响应未返回真实仓库 ID')
   }
 
   const warehouse = res.warehouse
   if (warehouse == null || typeof warehouse !== 'object' || Array.isArray(warehouse)) {
-    throw new Error('入库响应缺少仓库元数据')
+    throw new Error('响应缺少仓库元数据')
   }
   const wh = warehouse as Record<string, unknown>
 
   const rawId = wh.id
   const id = typeof rawId === 'string' ? rawId.trim() : ''
   if (!id || id !== warehouseId) {
-    throw new Error('入库响应仓库 ID 不一致')
+    throw new Error('响应仓库 ID 不一致')
   }
 
   const rawName = wh.name
   const name = typeof rawName === 'string' ? rawName.trim() : ''
   if (!name) {
-    throw new Error('入库响应缺少仓库名称')
+    throw new Error('响应缺少仓库名称')
   }
 
   return { warehouseId: id, warehouseName: name }
+}
+
+/**
+ * 校验入库接口成功响应必须包含真实仓库信息.
+ *
+ * @deprecated 新代码优先使用 assertRealWarehouseResponse; 本函数仅为兼容旧调用保留.
+ */
+export function assertInboundWarehouseResponse(response: unknown): InboundWarehouseResult {
+  try {
+    return assertRealWarehouseResponse(response)
+  } catch (e) {
+    // 保持原有错误文案, 避免上游测试/页面出现不期望的变化
+    const msg = e instanceof Error ? e.message : String(e)
+    const legacy = msg
+      .replace('响应格式异常', '入库响应格式异常')
+      .replace('响应未返回真实仓库 ID', '入库响应未返回真实仓库 ID')
+      .replace('响应缺少仓库元数据', '入库响应缺少仓库元数据')
+      .replace('响应仓库 ID 不一致', '入库响应仓库 ID 不一致')
+      .replace('响应缺少仓库名称', '入库响应缺少仓库名称')
+    throw new Error(legacy)
+  }
 }
 
 /**

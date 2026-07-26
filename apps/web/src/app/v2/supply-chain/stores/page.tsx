@@ -4,6 +4,19 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { ErrorScreen, LoadingScreen, useDashboard } from '@/components/v2/use-dashboard'
 import { apiFetch } from '@/lib/v2-auth'
+import {
+  buildConsumptionQuery,
+  consumptionPaginationRange,
+  consumptionTotalPages,
+  CONSUMPTION_PAGE_SIZE_OPTIONS,
+  DEFAULT_CONSUMPTION_FILTERS,
+  hasActiveConsumptionFilters,
+  keepConsumptionFiltersForPage,
+  resetConsumptionFilterPage,
+  validateConsumptionDateRange,
+  type ConsumptionFilters,
+  type ConsumptionPaginatedResponse,
+} from '@/lib/supply-store-consumption-pc'
 
 type Store = { id: string; no: string; name: string }
 type StoreView = 'overview' | 'orders' | 'receipts' | 'inventory' | 'consumption'
@@ -145,6 +158,11 @@ export default function InternalSupplyChainStoresPage() {
   const [receiptTotal, setReceiptTotal] = useState(0)
   const [inventory, setInventory] = useState<InventoryRow[]>([])
   const [consumptions, setConsumptions] = useState<ConsumptionRow[]>([])
+  const [consumptionTotal, setConsumptionTotal] = useState(0)
+  const [consumptionLoading, setConsumptionLoading] = useState(false)
+  const [consumptionError, setConsumptionError] = useState('')
+  const [consumptionFilters, setConsumptionFilters] = useState<ConsumptionFilters>(DEFAULT_CONSUMPTION_FILTERS)
+  const consumptionAbortRef = useRef<AbortController | null>(null)
   const [overview, setOverview] = useState<StoreOverview | null>(null)
   const [rankingDays, setRankingDays] = useState<7 | 30 | 90>(30)
   const [rankingDimension, setRankingDimension] = useState<ConsumptionRankingDimension>('PRODUCT')
@@ -157,7 +175,11 @@ export default function InternalSupplyChainStoresPage() {
   const rankingSequence = useRef(0)
 
   useEffect(() => {
-    if (!storeId && stores.length > 0) setStoreId(stores[0].id)
+    if (!storeId && stores.length > 0) {
+      const firstStoreId = stores[0].id
+      setStoreId(firstStoreId)
+      setConsumptionFilters(prev => ({ ...prev, storeId: firstStoreId, page: 1 }))
+    }
   }, [storeId, stores])
 
   useEffect(() => {
@@ -170,16 +192,14 @@ export default function InternalSupplyChainStoresPage() {
       apiFetch<{ items: OrderRow[]; total: number }>(`/api/orders?storeId=${encodedStoreId}&page=1&pageSize=50`),
       apiFetch<{ items: ReceiptRow[]; total: number }>(`/api/receipts?storeId=${encodedStoreId}&page=1&pageSize=50`),
       apiFetch<InventoryRow[]>(`/api/inventory?storeId=${encodedStoreId}`),
-      apiFetch<ConsumptionRow[]>(`/api/inventory/consumptions?days=30&storeId=${encodedStoreId}`),
       apiFetch<StoreOverview>(`/api/stores/${encodedStoreId}/overview`),
-    ]).then(([orderData, receiptData, inventoryRows, consumptionRows, overviewData]) => {
+    ]).then(([orderData, receiptData, inventoryRows, overviewData]) => {
       if (sequence !== requestSequence.current) return
       setOrders(orderData.items || [])
       setOrderTotal(orderData.total || 0)
       setReceipts(receiptData.items || [])
       setReceiptTotal(receiptData.total || 0)
       setInventory(inventoryRows || [])
-      setConsumptions(consumptionRows || [])
       setOverview(overviewData)
     }).catch(reason => {
       if (sequence === requestSequence.current) setRowError(String(reason?.message || reason))
@@ -206,6 +226,29 @@ export default function InternalSupplyChainStoresPage() {
     })
   }, [storeId, rankingDays, rankingDimension])
 
+  useEffect(() => {
+    if (view !== 'consumption' || !consumptionFilters.storeId) return
+    consumptionAbortRef.current?.abort()
+    const controller = new AbortController()
+    consumptionAbortRef.current = controller
+    setConsumptionLoading(true)
+    setConsumptionError('')
+    const query = buildConsumptionQuery(consumptionFilters)
+    apiFetch<ConsumptionPaginatedResponse<ConsumptionRow>>(`/api/inventory/consumptions${query}`, {
+      signal: controller.signal,
+    }).then(result => {
+      if (controller.signal.aborted) return
+      setConsumptions(result.items || [])
+      setConsumptionTotal(result.total || 0)
+    }).catch(reason => {
+      if (controller.signal.aborted) return
+      setConsumptionError(String(reason?.message || reason))
+    }).finally(() => {
+      if (!controller.signal.aborted) setConsumptionLoading(false)
+    })
+    return () => { controller.abort() }
+  }, [view, consumptionFilters])
+
   if (dashboardError) return <ErrorScreen message={dashboardError} />
   if (!data) return <LoadingScreen />
 
@@ -231,7 +274,11 @@ export default function InternalSupplyChainStoresPage() {
           <select
             aria-label="选择门店"
             value={storeId}
-            onChange={event => setStoreId(event.target.value)}
+            onChange={event => {
+              const nextStoreId = event.target.value
+              setStoreId(nextStoreId)
+              setConsumptionFilters(prev => ({ ...prev, storeId: nextStoreId, page: 1 }))
+            }}
             className="ml-2 h-10 min-w-60 rounded-cta border border-border bg-white px-3 text-body"
           >
             {stores.map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}
@@ -321,9 +368,15 @@ export default function InternalSupplyChainStoresPage() {
                 )}
 
                 {view === 'consumption' && (
-                  <Panel title="近30天消耗" subtitle={`${selectedStore?.name || '—'} · 不含营业额与成本率`}>
-                    {consumptions.length > 0 ? <ConsumptionTable rows={consumptions} /> : <Empty text="当前门店近30天暂无消耗记录" />}
-                  </Panel>
+                  <ConsumptionPanel
+                    storeName={selectedStore?.name || '—'}
+                    rows={consumptions}
+                    total={consumptionTotal}
+                    loading={consumptionLoading}
+                    error={consumptionError}
+                    filters={consumptionFilters}
+                    onFiltersChange={setConsumptionFilters}
+                  />
                 )}
               </>
             )}
@@ -590,6 +643,158 @@ function ConsumptionTable({ rows }: { rows: ConsumptionRow[] }) {
         </tbody>
       </table>
     </div>
+  )
+}
+
+function ConsumptionPanel({
+  storeName,
+  rows,
+  total,
+  loading,
+  error,
+  filters,
+  onFiltersChange,
+}: {
+  storeName: string
+  rows: ConsumptionRow[]
+  total: number
+  loading: boolean
+  error: string
+  filters: ConsumptionFilters
+  onFiltersChange: (filters: ConsumptionFilters) => void
+}) {
+  const [retryTick, setRetryTick] = useState(0)
+  const dateError = validateConsumptionDateRange(filters.startDate, filters.endDate)
+  const { start, end } = consumptionPaginationRange(filters.page, filters.pageSize, total)
+  const totalPages = consumptionTotalPages(total, filters.pageSize)
+  const canGoPrev = filters.page > 1
+  const canGoNext = filters.page < totalPages && total > 0
+
+  useEffect(() => {
+    if (retryTick === 0) return
+    onFiltersChange({ ...filters })
+  }, [retryTick])
+
+  const updateFilters = (changes: Partial<ConsumptionFilters>) => {
+    onFiltersChange(resetConsumptionFilterPage(filters, changes))
+  }
+
+  const goToPage = (page: number) => {
+    onFiltersChange(keepConsumptionFiltersForPage(filters, page))
+  }
+
+  const clearFilters = () => {
+    onFiltersChange(resetConsumptionFilterPage(filters, {
+      q: '',
+      startDate: '',
+      endDate: '',
+    }))
+  }
+
+  return (
+    <Panel title="消耗记录" subtitle={`${storeName} · 不含营业额与成本率`}>
+      <div className="border-b border-border bg-bg/60 p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+          <label className="text-caption text-gray2">
+            开始日期
+            <input
+              type="date"
+              aria-label="开始日期"
+              value={filters.startDate}
+              onChange={e => updateFilters({ startDate: e.target.value })}
+              className="mt-1 block h-9 w-full rounded-cta border border-border bg-white px-3 text-body sm:w-40"
+            />
+          </label>
+          <label className="text-caption text-gray2">
+            结束日期
+            <input
+              type="date"
+              aria-label="结束日期"
+              value={filters.endDate}
+              onChange={e => updateFilters({ endDate: e.target.value })}
+              className="mt-1 block h-9 w-full rounded-cta border border-border bg-white px-3 text-body sm:w-40"
+            />
+          </label>
+          <label className="text-caption text-gray2">
+            商品名称 / 编码
+            <input
+              type="text"
+              aria-label="商品名称或编码"
+              value={filters.q}
+              placeholder="输入名称或编码"
+              onChange={e => updateFilters({ q: e.target.value })}
+              className="mt-1 block h-9 w-full rounded-cta border border-border bg-white px-3 text-body sm:w-56"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={clearFilters}
+            disabled={!hasActiveConsumptionFilters(filters)}
+            className="h-9 rounded-cta border border-border bg-white px-4 text-caption text-gray2 disabled:opacity-40"
+          >
+            清空筛选
+          </button>
+        </div>
+        {dateError && <p className="mt-2 text-micro text-red-fg">{dateError}</p>}
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="flex items-center gap-2 text-caption text-gray2">
+          <span>每页</span>
+          <select
+            aria-label="每页条数"
+            value={filters.pageSize}
+            onChange={e => onFiltersChange(resetConsumptionFilterPage(filters, { pageSize: Number(e.target.value) as ConsumptionFilters['pageSize'] }))}
+            className="h-8 rounded-cta border border-border bg-white px-2 text-body"
+          >
+            {CONSUMPTION_PAGE_SIZE_OPTIONS.map(size => <option key={size} value={size}>{size}</option>)}
+          </select>
+          <span>条</span>
+        </div>
+        <div className="flex items-center gap-3 text-caption text-gray2">
+          <span className="font-num">{total > 0 ? `${start}-${end} 项，共 ${total} 项` : `共 ${total} 项`}</span>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              aria-label="上一页"
+              disabled={loading || !canGoPrev}
+              onClick={() => goToPage(filters.page - 1)}
+              className="h-8 rounded-cta border border-border bg-white px-3 text-body disabled:opacity-40"
+            >‹</button>
+            <button
+              type="button"
+              aria-label="下一页"
+              disabled={loading || !canGoNext}
+              onClick={() => goToPage(filters.page + 1)}
+              className="h-8 rounded-cta border border-border bg-white px-3 text-body disabled:opacity-40"
+            >›</button>
+          </div>
+        </div>
+      </div>
+
+      {error && (
+        <div className="border-b border-red/30 bg-red-bg px-4 py-3 text-caption text-red-fg">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <span>{error}</span>
+            <button
+              type="button"
+              onClick={() => setRetryTick(t => t + 1)}
+              className="h-8 rounded-cta border border-red/30 bg-white px-3 text-caption text-red-fg"
+            >
+              重试
+            </button>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <Empty text="正在加载消耗记录…" />
+      ) : rows.length > 0 ? (
+        <ConsumptionTable rows={rows} />
+      ) : (
+        <Empty text="当前门店暂无消耗记录" />
+      )}
+    </Panel>
   )
 }
 

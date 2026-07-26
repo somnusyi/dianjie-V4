@@ -2544,6 +2544,19 @@
 - `git diff --check`、业务文件门禁和高置信敏感信息扫描通过；production build 仅有既有
   OpenTelemetry warning。本批只改集成测试，无 schema、运行时代码或业务语义变化；
   测试提交为 `99278af60c9b50cde6457ab5b494d6b325f74c9b`。
-- 第 9 批最终记录 `76c05146`、本批测试与本节报告将在发布前一起以非强制纯快进推进
-  main；发布前将再次确认三基线、队列、源码和部署锁，随后仅使用标准脚本发布并复核
-  备份、migration、PM2、健康、部署标记与锁释放。
+- 第 9 批最终记录 `76c05146`、本批测试与报告 `43774627` 已一起以非强制纯快进进入
+  main；发布前再次确认 main/deployed/source exact `0241a8a3`、AutoFix/反馈
+  actionable 均为 0、源码干净且无锁，独立 mutation 草稿仍保持 4 项未提交改动。
+- 唯一标准脚本发布成功，生产备份
+  `dianjie_v4-deploy-bak-20260726-235418-43774627.dump` 与
+  `v4-build-bak-20260726-235418-43774627.tar.gz` 已校验；70 migration 无 pending，
+  Prisma Client 重建、API/Web/CMB 重启和 HTML/CSS 健康检查全部通过。
+- 最终 GitHub main 与生产 `.deployed-commit` exact
+  `43774627055dcfe7b83aee6c789fc955142c4281`，锁释放；API/Web/CMB online，重启
+  计数 52/53/43 稳定，本机与主公网 health/login 为 200。AutoFixRun 总数/actionable
+  与反馈 actionable 均为 0。
+- `/app/dianjie-src` 干净但仍为 `0241a8a3`：发布后唯一一次 GitHub fetch 因 HTTP/2
+  framing 错误在任何源码修改前失败，未连续重试或绕过。空队列下 AutoFix 继续按 exact
+  基线门禁 fail closed；下一小时必须先复核队列和父链，再只做一次安全 ff-only 收口。
+- `api.dianjie.cc` 严格 TLS 仍失败，服务器侧跳过校验 health 为 200；证书 `notAfter`
+  仍为 2026-07-21 23:59:59 UTC，未轮换证书或私钥。

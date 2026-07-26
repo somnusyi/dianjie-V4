@@ -58,6 +58,29 @@ type StoreOverview = {
   lowStockCount: number
   consumptionCount30d: number
 }
+type ConsumptionRankingDimension = 'PRODUCT' | 'CATEGORY'
+type ConsumptionRanking = {
+  dimension: ConsumptionRankingDimension
+  days: 7 | 30 | 90
+  startDate: string
+  endDate: string
+  totalAmount: number
+  top10Amount: number
+  top10Coverage: number
+  recordCount: number
+  pricedRecordCount: number
+  unpricedRecordCount: number
+  items: Array<{
+    id: string
+    name: string
+    code?: string | null
+    category: string
+    amount: number
+    share: number
+    recordCount: number
+    pricedRecordCount: number
+  }>
+}
 
 const VIEWS: Array<{ id: StoreView; label: string }> = [
   { id: 'overview', label: '概览' },
@@ -123,9 +146,15 @@ export default function InternalSupplyChainStoresPage() {
   const [inventory, setInventory] = useState<InventoryRow[]>([])
   const [consumptions, setConsumptions] = useState<ConsumptionRow[]>([])
   const [overview, setOverview] = useState<StoreOverview | null>(null)
+  const [rankingDays, setRankingDays] = useState<7 | 30 | 90>(30)
+  const [rankingDimension, setRankingDimension] = useState<ConsumptionRankingDimension>('PRODUCT')
+  const [consumptionRanking, setConsumptionRanking] = useState<ConsumptionRanking | null>(null)
+  const [rankingLoading, setRankingLoading] = useState(false)
+  const [rankingError, setRankingError] = useState('')
   const [loading, setLoading] = useState(false)
   const [rowError, setRowError] = useState('')
   const requestSequence = useRef(0)
+  const rankingSequence = useRef(0)
 
   useEffect(() => {
     if (!storeId && stores.length > 0) setStoreId(stores[0].id)
@@ -158,6 +187,24 @@ export default function InternalSupplyChainStoresPage() {
       if (sequence === requestSequence.current) setLoading(false)
     })
   }, [storeId])
+
+  useEffect(() => {
+    if (!storeId) return
+    const sequence = ++rankingSequence.current
+    setRankingLoading(true)
+    setRankingError('')
+    setConsumptionRanking(null)
+    const encodedStoreId = encodeURIComponent(storeId)
+    apiFetch<ConsumptionRanking>(
+      `/api/stores/${encodedStoreId}/consumption-ranking?days=${rankingDays}&dimension=${rankingDimension}`,
+    ).then(result => {
+      if (sequence === rankingSequence.current) setConsumptionRanking(result)
+    }).catch(reason => {
+      if (sequence === rankingSequence.current) setRankingError(String(reason?.message || reason))
+    }).finally(() => {
+      if (sequence === rankingSequence.current) setRankingLoading(false)
+    })
+  }, [storeId, rankingDays, rankingDimension])
 
   if (dashboardError) return <ErrorScreen message={dashboardError} />
   if (!data) return <LoadingScreen />
@@ -240,10 +287,18 @@ export default function InternalSupplyChainStoresPage() {
                       {receipts.length > 0 ? <ReceiptTable rows={receipts.slice(0, 8)} /> : <Empty text="当前门店暂无收货记录" />}
                       <PanelLink onClick={() => setView('receipts')}>查看全部收货 ›</PanelLink>
                     </Panel>
-                    <Panel title="近30天消耗" subtitle={`${overview?.consumptionCount30d ?? consumptions.length} 条记录`}>
-                      {consumptions.length > 0 ? <ConsumptionTable rows={consumptions.slice(0, 8)} /> : <Empty text="当前门店近30天暂无消耗记录" />}
-                      <PanelLink onClick={() => setView('consumption')}>查看全部消耗 ›</PanelLink>
-                    </Panel>
+                    <div className="xl:col-span-2">
+                      <ConsumptionRankingChart
+                        data={consumptionRanking}
+                        loading={rankingLoading}
+                        error={rankingError}
+                        days={rankingDays}
+                        dimension={rankingDimension}
+                        onDaysChange={setRankingDays}
+                        onDimensionChange={setRankingDimension}
+                        onOpenDetails={() => setView('consumption')}
+                      />
+                    </div>
                   </section>
                 )}
 
@@ -309,6 +364,150 @@ function Panel({ title, subtitle, children }: { title: string; subtitle: string;
 
 function PanelLink({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
   return <button type="button" onClick={onClick} className="w-full border-t border-border px-4 py-3 text-right text-caption text-accent">{children}</button>
+}
+
+function ConsumptionRankingChart({
+  data,
+  loading,
+  error,
+  days,
+  dimension,
+  onDaysChange,
+  onDimensionChange,
+  onOpenDetails,
+}: {
+  data: ConsumptionRanking | null
+  loading: boolean
+  error: string
+  days: 7 | 30 | 90
+  dimension: ConsumptionRankingDimension
+  onDaysChange: (days: 7 | 30 | 90) => void
+  onDimensionChange: (dimension: ConsumptionRankingDimension) => void
+  onOpenDetails: () => void
+}) {
+  const maxAmount = Math.max(1, ...(data?.items.map(item => item.amount) || []))
+  const dimensionLabel = dimension === 'PRODUCT' ? '商品' : '分类'
+
+  return (
+    <section className="overflow-hidden rounded-card border border-border bg-white" aria-label="消耗金额排行">
+      <header className="flex flex-col gap-3 border-b border-border px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h2 className="text-h2">消耗金额 Top 10</h2>
+          <p className="mt-1 text-micro text-gray3">
+            按历史冻结成本汇总 · {data ? `${data.startDate} 至 ${data.endDate}` : `近 ${days} 天`}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <div className="flex rounded-cta border border-border bg-bg p-1" aria-label="排行维度">
+            {([
+              ['PRODUCT', '按商品'],
+              ['CATEGORY', '按分类'],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={dimension === value}
+                onClick={() => onDimensionChange(value)}
+                className={`rounded px-3 py-1.5 text-button ${
+                  dimension === value ? 'bg-white text-amber-fg shadow-sm' : 'text-gray2'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="flex rounded-cta border border-border bg-bg p-1" aria-label="时间范围">
+            {([7, 30, 90] as const).map(value => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={days === value}
+                onClick={() => onDaysChange(value)}
+                className={`rounded px-3 py-1.5 text-button ${
+                  days === value ? 'bg-white text-amber-fg shadow-sm' : 'text-gray2'
+                }`}
+              >
+                {value}天
+              </button>
+            ))}
+          </div>
+        </div>
+      </header>
+
+      {loading ? (
+        <Empty text="正在统计消耗金额…" />
+      ) : error ? (
+        <div className="px-4 py-10 text-center text-caption text-red-fg">{error}</div>
+      ) : !data || data.recordCount === 0 ? (
+        <Empty text={`当前门店近 ${days} 天暂无消耗记录`} />
+      ) : (
+        <>
+          <div className="grid gap-3 border-b border-border bg-bg/60 p-4 sm:grid-cols-3">
+            <RankingMetric label="已计价消耗" value={money(data.totalAmount)} />
+            <RankingMetric label="Top 10 覆盖率" value={`${(data.top10Coverage * 100).toFixed(1)}%`} />
+            <RankingMetric
+              label="未计价记录"
+              value={`${data.unpricedRecordCount} 条`}
+              warning={data.unpricedRecordCount > 0}
+            />
+          </div>
+
+          {data.unpricedRecordCount > 0 && (
+            <div className="border-b border-orange/20 bg-orange/5 px-4 py-2 text-micro text-orange">
+              {data.unpricedRecordCount} 条历史消耗缺少冻结成本，未计入金额排行。
+            </div>
+          )}
+
+          {data.items.length === 0 ? (
+            <Empty text="当前记录尚无可用于金额排行的冻结成本" />
+          ) : (
+            <ol className="space-y-4 p-4 lg:p-5">
+              {data.items.map((item, index) => {
+                const barWidth = Math.max(2, (item.amount / maxAmount) * 100)
+                return (
+                  <li key={item.id} data-ranking-item={item.id}>
+                    <div className="mb-1.5 flex items-start justify-between gap-4 text-caption">
+                      <div className="min-w-0">
+                        <span className="mr-2 inline-block w-5 text-right font-num text-gray3">{index + 1}</span>
+                        <b>{item.name}</b>
+                        {dimension === 'PRODUCT' && item.code && (
+                          <span className="ml-2 text-micro text-gray3">{item.code}</span>
+                        )}
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <b className="font-num">{money(item.amount)}</b>
+                        <span className="ml-2 font-num text-micro text-gray3">{(item.share * 100).toFixed(1)}%</span>
+                      </div>
+                    </div>
+                    <div
+                      className="ml-7 h-2.5 overflow-hidden rounded-full bg-bg"
+                      role="img"
+                      aria-label={`第 ${index + 1} 名 ${dimensionLabel}${item.name}，消耗金额 ${money(item.amount)}`}
+                    >
+                      <div
+                        className="h-full rounded-full bg-accent transition-[width] duration-300"
+                        style={{ width: `${barWidth}%` }}
+                      />
+                    </div>
+                  </li>
+                )
+              })}
+            </ol>
+          )}
+          <PanelLink onClick={onOpenDetails}>查看全部消耗流水 ›</PanelLink>
+        </>
+      )}
+    </section>
+  )
+}
+
+function RankingMetric({ label, value, warning = false }: { label: string; value: string; warning?: boolean }) {
+  return (
+    <div className="rounded-card border border-border bg-white px-4 py-3">
+      <div className="text-micro text-gray3">{label}</div>
+      <div className={`mt-1 font-num text-h2 ${warning ? 'text-orange' : ''}`}>{value}</div>
+    </div>
+  )
 }
 
 function OrderTable({ rows, compact = false }: { rows: OrderRow[]; compact?: boolean }) {

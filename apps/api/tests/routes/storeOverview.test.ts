@@ -256,4 +256,127 @@ describe('store overview API', () => {
     expect(body.lowStockCount).toBe(3)
     expect(mockEstimatedStoreInventory).toHaveBeenCalledWith('tenant-a', 'store-1')
   })
+
+  it('returns product consumption Top 10 from frozen historical cost amounts', async () => {
+    const actor = makeActor()
+    const app = buildApp(actor)
+    await app.ready()
+
+    mockStoreExists(true)
+    vi.spyOn(prisma, '$queryRaw')
+      .mockResolvedValueOnce([{
+        totalAmount: 1000,
+        recordCount: 120,
+        pricedRecordCount: 110,
+      }] as any)
+      .mockResolvedValueOnce([
+        {
+          id: 'product-1',
+          name: '牛肝菌',
+          code: 'SKU-001',
+          category: '菌菇',
+          amount: 400,
+          recordCount: 20,
+          pricedRecordCount: 20,
+        },
+        {
+          id: 'product-2',
+          name: '土豆',
+          code: 'SKU-002',
+          category: '蔬菜',
+          amount: 250,
+          recordCount: 30,
+          pricedRecordCount: 25,
+        },
+      ] as any)
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/stores/store-1/consumption-ranking?days=30&dimension=PRODUCT',
+    })
+    await app.close()
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({
+      dimension: 'PRODUCT',
+      days: 30,
+      totalAmount: 1000,
+      top10Amount: 650,
+      top10Coverage: 0.65,
+      recordCount: 120,
+      pricedRecordCount: 110,
+      unpricedRecordCount: 10,
+      items: [
+        { id: 'product-1', name: '牛肝菌', amount: 400, share: 0.4 },
+        { id: 'product-2', name: '土豆', amount: 250, share: 0.25 },
+      ],
+    })
+  })
+
+  it('supports category ranking and rejects unsupported ranges', async () => {
+    const actor = makeActor()
+    const app = buildApp(actor)
+    await app.ready()
+
+    mockStoreExists(true)
+    vi.spyOn(prisma, '$queryRaw')
+      .mockResolvedValueOnce([{
+        totalAmount: 500,
+        recordCount: 30,
+        pricedRecordCount: 30,
+      }] as any)
+      .mockResolvedValueOnce([{
+        id: '蔬菜',
+        name: '蔬菜',
+        code: null,
+        category: '蔬菜',
+        amount: 300,
+        recordCount: 18,
+        pricedRecordCount: 18,
+      }] as any)
+
+    const category = await app.inject({
+      method: 'GET',
+      url: '/api/stores/store-1/consumption-ranking?days=7&dimension=CATEGORY',
+    })
+    const invalid = await app.inject({
+      method: 'GET',
+      url: '/api/stores/store-1/consumption-ranking?days=31&dimension=PRODUCT',
+    })
+    await app.close()
+
+    expect(category.statusCode).toBe(200)
+    expect(category.json()).toMatchObject({
+      dimension: 'CATEGORY',
+      days: 7,
+      items: [{ id: '蔬菜', name: '蔬菜', amount: 300 }],
+    })
+    expect(invalid.statusCode).toBe(400)
+    expect(invalid.json().error).toContain('7、30 或 90 天')
+  })
+
+  it('keeps ranking tenant-scoped and rejects external supplier roles', async () => {
+    const crossTenantApp = buildApp(makeActor({ tenantId: 'tenant-a' }))
+    await crossTenantApp.ready()
+    mockStoreExists(false)
+
+    const missing = await crossTenantApp.inject({
+      method: 'GET',
+      url: '/api/stores/store-other/consumption-ranking',
+    })
+    await crossTenantApp.close()
+    expect(missing.statusCode).toBe(404)
+
+    vi.restoreAllMocks()
+    const supplierApp = buildApp(makeActor({ role: 'SUPPLIER_OWNER', supplierId: 'supplier-1' }))
+    await supplierApp.ready()
+    const forbidden = await supplierApp.inject({
+      method: 'GET',
+      url: '/api/stores/store-1/consumption-ranking',
+    })
+    await supplierApp.close()
+
+    expect(forbidden.statusCode).toBe(403)
+    expect(forbidden.json().error).toBe('无权访问门店消耗排行')
+  })
 })

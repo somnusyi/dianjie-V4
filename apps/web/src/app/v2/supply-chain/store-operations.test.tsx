@@ -122,6 +122,33 @@ describe('内部供应链门店运营', () => {
           consumptionCount30d: 42,
         }
       }
+      if (/^\/api\/stores\/[^/]+\/consumption-ranking$/.test(url.pathname)) {
+        const dimension = url.searchParams.get('dimension') || 'PRODUCT'
+        const days = Number(url.searchParams.get('days') || 30)
+        const category = dimension === 'CATEGORY'
+        return {
+          dimension,
+          days,
+          startDate: '2026-06-27',
+          endDate: '2026-07-26',
+          totalAmount: 1000,
+          top10Amount: 800,
+          top10Coverage: 0.8,
+          recordCount: 42,
+          pricedRecordCount: 40,
+          unpricedRecordCount: 2,
+          items: [{
+            id: category ? '蔬菜' : 'product-1',
+            name: category ? '蔬菜' : '土豆',
+            code: category ? null : 'SKU-001',
+            category: '蔬菜',
+            amount: category ? 600 : 400,
+            share: category ? 0.6 : 0.4,
+            recordCount: 20,
+            pricedRecordCount: 20,
+          }],
+        }
+      }
       throw new Error(`unexpected path: ${path}`)
     })
   })
@@ -136,17 +163,53 @@ describe('内部供应链门店运营', () => {
     expect(urls).toContain('/api/inventory?storeId=store-1')
     expect(urls).toContain('/api/inventory/consumptions?days=30&storeId=store-1')
     expect(urls).toContain('/api/stores/store-1/overview')
+    expect(urls).toContain('/api/stores/store-1/consumption-ranking?days=30&dimension=PRODUCT')
     expect(container.textContent).toContain('门店运营')
     expect(container.textContent).toContain('低于安全线')
     expect(container.textContent).toContain('6 单')
     expect(container.textContent).toContain('10 单')
     expect(container.textContent).toContain('瑶海店土豆')
+    expect(container.textContent).toContain('消耗金额 Top 10')
+    expect(container.textContent).toContain('¥1,000')
+    expect(container.textContent).toContain('80.0%')
+    expect(container.textContent).toContain('2 条历史消耗缺少冻结成本')
+    expect(container.textContent).toContain('SKU-001')
 
     const inventoryTab = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.trim() === '当前库存')!
     act(() => inventoryTab.click())
     expect(container.textContent).toContain('最近盘点 + 后续实收 − 消耗 − 报损')
     expect(container.textContent).not.toContain('调整库存')
     expect(container.textContent).not.toContain('确认收货')
+
+    cleanup(container, root)
+  })
+
+  it('可切换商品/分类维度和 7/30/90 天范围', async () => {
+    const { container, root } = render(<StoresPage />)
+    await waitFor(() => container.textContent?.includes('SKU-001') ?? false)
+
+    const categoryButton = Array.from(container.querySelectorAll('button')).find(
+      button => button.textContent?.trim() === '按分类',
+    )!
+    act(() => categoryButton.click())
+    await waitFor(() => mockFetch.mock.calls.some(([path]) =>
+      String(path) === '/api/stores/store-1/consumption-ranking?days=30&dimension=CATEGORY',
+    ))
+    await waitFor(() => container.querySelectorAll('[data-ranking-item]').length === 1
+      && (container.textContent?.includes('¥600') ?? false))
+
+    const sevenDaysButton = Array.from(container.querySelectorAll('button')).find(
+      button => button.textContent?.trim() === '7天',
+    )!
+    act(() => sevenDaysButton.click())
+    await waitFor(() => mockFetch.mock.calls.some(([path]) =>
+      String(path) === '/api/stores/store-1/consumption-ranking?days=7&dimension=CATEGORY',
+    ))
+    await waitFor(() => container.querySelectorAll('[data-ranking-item]').length === 1
+      && (container.textContent?.includes('¥600') ?? false))
+
+    expect(container.querySelectorAll('[data-ranking-item]').length).toBe(1)
+    expect(container.textContent).toContain('¥600')
 
     cleanup(container, root)
   })

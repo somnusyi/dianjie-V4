@@ -2312,6 +2312,11 @@
   production build 仅保留既有 OpenTelemetry 动态依赖 warning。
 - `git diff --check` 与高置信敏感信息扫描通过。本批没有 schema、业务页面或业务数据
   路径变化，因此不执行数据库写入 E2E。
-- 上一批夜审、本批实现和本节报告将作为连续纯快进提交一起推进 main，并只通过标准
-  `deploy-worktree.sh` 发布；发布前再次核对队列、生产提交、源码和锁，最终备份、迁移、
-  PM2、health 与源码对齐结果写入 automation memory。
+- 上一批夜审、本批实现和本节报告已作为连续纯快进提交进入 main，最终候选为
+  `db505448d0b4cb333a68e091860797d37490e15d`。唯一标准脚本创建并校验
+  `dianjie_v4-deploy-bak-20260726-224041-db505448.dump` 与
+  `v4-build-bak-20260726-224041-db505448.tar.gz`；70 条 migration 无 pending，
+  Prisma Client 重建及 API/Web/CMB 重启、HTML/CSS 健康检查通过。
+- 最终 GitHub main、生产 `.deployed-commit` 和 `/app/dianjie-src` 三者 exact
+  `db505448`，源码干净且发布锁释放。API/Web/CMB online，本机和主公网 health/login
+  为 200，重启计数在独立复核中稳定；AutoFixRun 和反馈 actionable 仍为 0。

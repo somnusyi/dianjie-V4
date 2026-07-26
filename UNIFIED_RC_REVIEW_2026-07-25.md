@@ -678,60 +678,50 @@ worktree、Docker 镜像/卷和用户文件均未删除。Docker 僵死后台由
 - 生产 gate 保持 `LOCKED`；未合并或直推 main、未建 PR、未部署、未写生产、未运行
   真实数据修正脚本，也未读取或修改凭证与业务 xlsx。
 
-## 十二小时持续开发最终收口（2026-07-26 09:06）
+## 十二小时持续开发最终收口（2026-07-26 09:19，竞态纠正）
 
-- 统一 RC 最终为 `0b94cf77d5edd450efded3d46614098e84d6ec22`，相对启动基线
-  `383f94d` 共 70 个提交；GitHub exact SHA 一致，integration 工作树干净。
-- 最后一项 `0b94cf77` 只修复商品编辑对只读历史负库存字段的误校验。提交后 Web
-  24 文件 451/451、Web tsc、组合 API 目标测试 87/87、API build、diff check 和
-  高置信新增敏感信息检查通过；第十五列的 API 394/394、PostgreSQL 165/165、68 条
-  migration 空库/历史样本/回滚证据继续适用。
-- 到持续窗口边界后停止第十六列。三个以 `83bf4d19` 为基线的独立工作区分别保留商品
-  期初显式仓、库存事实真实仓读取和双源审计草稿；均无提交、未推远端、未集成。
-- 控制面 active run 为 0，隔离 Web/API/PostgreSQL 与 Next 缓存已收口；用户 3200
-  服务和其他脏工作区未触碰。生产 gate 保持 `LOCKED`，未触碰 main/PR/生产。
-- 下一轮先逐文件完成 Warehouse caller 切换和守恒回归，再分别实现供应链手工入库更正
-  与门店实收更正；盘点 31 项业务确认继续独立阻塞，不占执行槽。
-
-## 第十六列最终集成修正（2026-07-26 09:16）
-
-09:06 的收口段落是三个 runner 停止时的现场快照。唯一最终集成总管随后只验收已有
-提交，没有再派新任务，并把通过门禁的第十六列候选逐项接入统一 RC。
-
-### 逐项验收与集成
-
-| 能力 | feature 精确提交 | 统一 RC 精确提交 | 验收结论 |
-| --- | --- | --- | --- |
-| 商品期初库存绑定真实默认仓 | `fb9c34e82194bb1cd99f9854516155d33b8870aa` | `5184b1803ceda28aa19af5a18c421d667421604a` | 商品创建事务解析 tenant 启用默认仓，期初流水和 OPENING 批次写真实 warehouseId；批次消费只在显式传仓时按仓限定，旧 caller 兼容不变 |
-| 库存事实按真实仓只读 | `e2a1f053811cce97dbc27c0fa96fd8e0b864bbb0` | `0c21eb781a48fd4ecb188c2bd946a011f9bf73ba` | 预占、批次、流水 GET 先认证再解析 tenant 仓，查询同时限定 tenant、supplier、warehouse；写路径和旧 list/summary 未借机切换 |
-| 默认仓双源库存审计 | `e90f969bbf790f49b6bcdd4ef3373940ff3ede77`、`286439a5879436e210bba80e19d2eb3051729256` | `0579253cfab135b18b7cb6326d5626d92bf1e38f`、`65fea51a9ef640303011f78923765eba4ac40f71` | 审计先解析 tenant 启用默认仓，再把余额、预占、流水、批次限定到同一真实仓；缺默认仓 fail-close，只报告不自动修复 |
-
+- 统一 RC 运行时代码最终为 `65fea51a9ef640303011f78923765eba4ac40f71`。收口期间两个
+  总管曾并发读取第十六列：较早报告误记为“无提交、未集成”，但远端 feature 和统一
+  RC 随后已经形成提交。现已按 Git patch-id、远端 exact SHA、完整 diff 和独立门禁
+  重新验收，以下结果覆盖 09:06 的陈旧描述。
+- 商品期初显式仓：feature `fb9c34e82194bb1cd99f9854516155d33b8870aa`，统一
+  `5184b1803ceda28aa19af5a18c421d667421604a`。内部供应链/管理员新增有供应商且正期初
+  库存的商品时，先在同一事务按认证 tenant 解析启用默认仓，再让期初流水、批次和后续
+  显式带仓批次分配使用同一真实 warehouseId；解析失败时商品及库存事实均不落库。
+- 库存事实真实仓读取：feature `e2a1f053811cce97dbc27c0fa96fd8e0b864bbb0`，统一
+  `0c21eb781a48fd4ecb188c2bd946a011f9bf73ba`。预占、批次和流水 GET 将 default/显式仓
+  解析为本 tenant 启用真实仓，并同时保留 tenant、supplier、warehouse 三重 scope；
+  列表、summary 和写端点仍保持旧默认仓门禁。
+- 默认仓双源审计：feature 初稿 `e90f969bbf790f49b6bcdd4ef3373940ff3ede77`、修正
+  `286439a5879436e210bba80e19d2eb3051729256`，统一为 `0579253c`、`65fea51a`。
+  修正将默认仓解析提前到库存事实查询之前，避免 STRICT 审计混入其他仓预占、流水和
+  批次；WarehouseStock 缺行、停用和超过 0.001 的 Product.stock 差异只报错，不自动
+  修复。
 - Codex/Kimi 原 runner 均以 SIGTERM 退出，Qwen supervisor 曾停在 STOPPING 并由可信
-  reaper 回收；这些状态继续保留为失败证据，不伪报 runner 成功。只接入了 feature
-  远端 exact SHA、干净工作树、完整 diff 和相关测试均通过的提交。
-- `0b94cf77d5edd450efded3d46614098e84d6ec22` 的商品 PC 兼容修复也纳入最终组合：
-  编辑只校验可写的起订量和步长，新建仍校验四个数量字段。
+  reaper 回收；原状态保留，不伪报 runner 成功。只接入 exact SHA、远端、语义 diff、
+  相关测试和安全边界均通过的 feature 提交。
 
 ### 最终门禁
 
-- 第十六列组合目标测试首轮 4 文件、79/79；最终运行时代码复验 4 文件、80/80，
-  Qwen 真实默认仓 follow-up 目标测试 21/21。
-- API 全量 47 文件、437/437，Node 20.20.2 下 API build 通过；Web 全量 24 文件、
-  451/451，Web `tsc --noEmit` 通过。
-- 在两套全新临时 PostgreSQL 中应用 68 条迁移，`migrate deploy`、`status` 与
-  migrations-to-schema diff 均通过且 diff 为零；最终 PostgreSQL 集成 23 文件、
-  165/165。
-- `git diff --check` 与第十五列候选以来的高置信敏感信息扫描通过。隔离 Web/API、
-  3215/3299/4444/4447 端口和第十六列临时 PostgreSQL 容器均已停止；用户 3200 服务
-  未触碰。
+- Node `20.20.2`、pnpm `10.32.1`、Prisma `5.22.0`；第十六列专项 4 文件 80/80，
+  API 全量 47 文件 437/437、API build、Web 全量 24 文件 451/451、Web tsc、
+  `git diff --check` 和高置信敏感信息检查通过。三组 feature 与统一提交的 patch-id
+  均精确对应，feature 远端 SHA 已核对。
+- 两套全新临时 PostgreSQL 均从零应用 68 条 migration，deploy/status 通过且
+  migrations-to-schema diff 为零；最终完整数据库集成 23 文件 165/165。临时容器
+  已删除，未连接现有本地库或生产。
+- 第十六列没有 Web 运行时代码变更；商品 PC 的 1440×900 三位小数、长表单和旧负库存
+  编辑复核来自同一最终组合中的 `0b94cf77`，未把浏览器证据扩大为真实数据写入 E2E。
 
-### 剩余边界
+### 停止点与风险
 
-- 商品期初、三类事实 GET 和双源审计已切真实仓；供应链入库/调整/报损/快照、
-  预占创建/释放、实际发货等 writer 及其余读取仍需按审计 G2 顺序逐项切换。
-- Kimi feature 工作区另保留两处未提交的空 `warehouseId` 别名兼容草稿，未审查、
-  未集成、未清理，不属于本候选。
-- `Product.stock` 单向兼容桥和旧写补默认仓触发器必须保留到所有 caller 完成守恒核对。
-  供应链手工入库更正与门店实收更正仍未实现，且必须保持两条独立状态机。
-- 生产 gate 继续 `LOCKED`；未合并或直推 main、未建 PR、未部署或写生产、未运行
-  生产一次性脚本，也未读取、输出或轮换凭证。
+- 第十六列只切了商品期初 writer、三类库存事实读取和只读双源审计。供应链入库、调整、
+  报损、快照、订单预占、实际发货等 writer 尚未逐项切到真实 warehouseId；守恒核对
+  完成前不得移除 Product.stock 单向兼容桥。
+- Kimi feature worktree 在已推送 `e2a1f053811cce97dbc27c0fa96fd8e0b864bbb0` 之后
+  另有两处未提交的空 warehouseId 别名兼容草稿；未审查、未集成、未清理，不属于候选。
+- 供应链手工入库更正与门店实收更正仍只有冻结边界，运行时状态机未完成；门店实收更正
+  不得恢复供应链仓库存。瑶海 7.22 盘点仍等待 31 项业务确认。
+- 最终 active runner 为 0；隔离 Web/API/PostgreSQL 与 Next 缓存已收口，用户 3200
+  服务和其他脏工作区未触碰。生产 gate 保持 `LOCKED`；未合并/直推 main、未建 PR、
+  未部署或写生产、未运行一次性生产脚本。

@@ -15,7 +15,7 @@ const MEDIA_MIMES = [...IMAGE_MIMES, ...VIDEO_MIMES]
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const MAX_VIDEO_BYTES = 50 * 1024 * 1024
 
-const ALLOWED_CATEGORIES = new Set(['loss-claims', 'invoices', 'capital', 'documents', 'reimbursements', 'misc', 'chef-ack', 'products', 'inventory-counts'])
+const ALLOWED_CATEGORIES = new Set(['loss-claims', 'invoices', 'capital', 'documents', 'reimbursements', 'misc', 'chef-ack', 'products', 'inventory-counts', 'feedback'])
 
 function ossClient() {
   return new OSS({
@@ -135,7 +135,7 @@ export async function uploadRoutes(app: FastifyInstance) {
     const category = (req.query?.category || 'misc') as string
     const allowedMimes =
       category === 'loss-claims' ? MEDIA_MIMES
-        : category === 'chef-ack' || category === 'products' || category === 'inventory-counts' ? IMAGE_MIMES
+        : category === 'chef-ack' || category === 'products' || category === 'inventory-counts' || category === 'feedback' ? IMAGE_MIMES
           : DOC_MIMES
     return uploadOne(req, reply, { allowedMimes, category })
   })

@@ -128,6 +128,20 @@ export const EVENTS = {
     scopedBy: 'tenant',
     urgent: false,
   },
+  FEEDBACK_APPROVAL_PENDING: {
+    label: '反馈待审批',
+    desc: 'AI 整理好改进/需求方案 → 超管手机审批 (批准后立项)',
+    defaultRoles: ['SUPER_ADMIN'],
+    scopedBy: 'tenant',
+    urgent: false,
+  },
+  FEEDBACK_URGENT_BUG: {
+    label: '紧急故障反馈',
+    desc: '用户反馈阻断业务 (无法下单等) → 紧急通知超管+管理员人工处理',
+    defaultRoles: ['SUPER_ADMIN', 'ADMIN'],
+    scopedBy: 'tenant',
+    urgent: true,
+  },
 } as const
 
 export type EventKey = keyof typeof EVENTS
@@ -276,6 +290,28 @@ export function renderTemplate(event: EventKey, payload: Record<string, any>): R
       return {
         kind: 'text',
         text: `💲 降价知会:${payload.productName || '商品'} ¥${payload.oldPrice ?? '-'} → ¥${payload.newPrice ?? '-'}${payload.supplierName ? ` (${payload.supplierName})` : ''},已直接生效,无需审批。`,
+      }
+    case 'FEEDBACK_APPROVAL_PENDING': {
+      const catLabel = payload.category === 'NEW_FEATURE' ? '新需求' : '体验改进'
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: `💡 ${catLabel}反馈待审批:${payload.title || '新反馈'}`,
+          description: `${payload.reporterName || '同事'}${payload.storeName ? ` (${payload.storeName})` : ''} 反馈:${payload.summary || ''}。请审批是否立项。`,
+          url: `${baseUrl()}/v2/boss/feedback/${payload.feedbackId}`,
+          btntxt: '去审批',
+        },
+      }
+    }
+    case 'FEEDBACK_URGENT_BUG':
+      return {
+        kind: 'textcard',
+        textcard: {
+          title: `🚨 紧急故障:${payload.title || '阻断业务'}`,
+          description: `${payload.reporterName || '同事'}${payload.storeName ? ` (${payload.storeName})` : ''} 反馈:${payload.summary || ''}。请立即人工处理。`,
+          url: `${baseUrl()}/v2/boss/feedback/${payload.feedbackId}`,
+          btntxt: '去处理',
+        },
       }
     case 'DATA_QUALITY_TASK':
       return {

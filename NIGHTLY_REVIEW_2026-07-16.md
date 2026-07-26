@@ -2357,5 +2357,18 @@
 - `git diff --check` 与高置信敏感信息扫描通过；production build 仅有既有
   OpenTelemetry warning。本批无 schema、业务页面或业务数据路径变化，不执行数据库
   写入 E2E。实现提交为 `b1cb0cd05d464dffa5e13930f1ae98557e9d4d9f`。
-- 本批报告与实现通过后将纯快进进入 main，并按唯一标准脚本发布；发布前再次核对反馈、
-  AutoFix、本地提交和锁，最终备份/迁移/PM2/health/源码对齐写入 memory。
+- 上一批最终记录 `4de3cd5f`、实现 `b1cb0cd0` 与本批报告 `570e6f3a` 已一起以非强制
+  纯快进进入 main，避免 report-only 分叉。发布前再次确认 AutoFix/反馈 actionable
+  均为 0、长期源码干净且无部署锁。
+- 唯一标准脚本发布成功，生产备份
+  `dianjie_v4-deploy-bak-20260726-225608-570e6f3a.dump` 与
+  `v4-build-bak-20260726-225608-570e6f3a.tar.gz` 已校验；70 migration 无 pending，
+  Prisma Client 重建、API/Web/CMB 重启及 HTML/CSS 健康检查全部通过。
+- 最终 GitHub main、生产 `.deployed-commit` 和 `/app/dianjie-src` 均为 exact
+  `570e6f3aa2214a624e81db46cef2988d996d3f8e`，源码干净、锁释放。API/Web/CMB
+  online，重启计数 48/49/39 在独立复核中稳定，本机与主公网 health/login 为 200；
+  AutoFixRun 总数/actionable 和反馈 actionable 均为 0。
+- `api.dianjie.cc` 严格 TLS 继续失败，服务器侧跳过校验 health 为 200，证书
+  `notAfter` 仍为 2026-07-21 23:59:59 UTC；未轮换证书或私钥。下一小时先复核新反馈
+  和 AutoFix 本地提交，再把人工回滚也迁入隔离候选工作树，避免其失败时污染长期源码
+  历史。

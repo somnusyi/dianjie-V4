@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { prisma } from '@dianjie/db'
 import { sendNotification } from '../notification'
 import { fireAndForget as notify } from '../notify'
+import { acquireDeployLock } from './deploymentLock'
 import { inspectUnifiedDiff, isAutoDeploymentEnabled } from './policy'
 
 const execFileAsync = promisify(execFile)
@@ -25,22 +26,6 @@ function sourceDir(): string {
 
 function productionDir(): string {
   return process.env.AUTO_FIX_PRODUCTION_DIR || '/app/dianjie-v4'
-}
-
-async function acquireDeployLock(target: string, runId: string): Promise<() => Promise<void>> {
-  const lockDir = path.join(target, '.deploy-lock')
-  let created = false
-  try {
-    await mkdir(lockDir)
-    created = true
-    await writeFile(path.join(lockDir, 'owner'), `autofix:${runId} ${new Date().toISOString()}\n`, { mode: 0o600 })
-  } catch {
-    if (created) await rm(lockDir, { recursive: true, force: true }).catch(() => undefined)
-    throw new Error('生产部署锁已被其他发布占用')
-  }
-  return async () => {
-    await rm(lockDir, { recursive: true, force: true })
-  }
 }
 
 async function run(

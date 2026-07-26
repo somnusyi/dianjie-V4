@@ -1,16 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import {
   applySupplierFilters,
+  buildSupplierCreatePayload,
+  buildSupplierUpdatePayload,
+  EMPTY_SUPPLIER_FORM_VALUES,
   formatCreditDays,
+  formatSupplierCreditTypeLabel,
   formatSupplierStatusLabel,
   getSupplierDetailStats,
   hasActiveFilters,
   hasSensitiveSupplierFields,
+  initializeSupplierFormValues,
   keepFiltersForPage,
   paginateSuppliers,
   resetPageFilters,
   sortSuppliersByCreatedAt,
   supplierStatusTone,
+  validateSupplierForm,
   type SupplySupplier,
 } from './supply-supplier-pc'
 
@@ -158,6 +164,168 @@ describe('供应商管理桌面端纯函数', () => {
 
     it('默认无筛选时返回 false', () => {
       expect(hasActiveFilters({ q: '', status: '', page: 1, pageSize: 20 })).toBe(false)
+    })
+  })
+})
+
+describe('供应商表单', () => {
+  describe('初始化', () => {
+    it('空值初始化返回默认值', () => {
+      expect(initializeSupplierFormValues(null)).toEqual(EMPTY_SUPPLIER_FORM_VALUES)
+      expect(initializeSupplierFormValues(undefined)).toEqual(EMPTY_SUPPLIER_FORM_VALUES)
+    })
+
+    it('用供应商数据填充表单（缺失账期天数时使用默认值）', () => {
+      const supplier = makeSupplier({
+        no: 'SUP002',
+        name: '大理水产',
+        category: '水产',
+        creditType: 'MONTHLY',
+        creditDays: null,
+      })
+      expect(initializeSupplierFormValues(supplier)).toEqual({
+        no: 'SUP002',
+        name: '大理水产',
+        contactName: '张三',
+        contactPhone: '13800138000',
+        category: '水产',
+        creditType: 'MONTHLY',
+        creditDays: '30',
+      })
+    })
+  })
+
+  describe('校验', () => {
+    it('必填字段缺失返回对应错误', () => {
+      const errors = validateSupplierForm({
+        ...EMPTY_SUPPLIER_FORM_VALUES,
+        no: '',
+        name: '',
+        creditDays: '',
+      })
+      expect(errors.no).toBe('请输入供应商编号')
+      expect(errors.name).toBe('请输入供应商名称')
+      expect(errors.creditDays).toBe('请输入账期天数')
+    })
+
+    it('长度超限时返回对应错误', () => {
+      const errors = validateSupplierForm({
+        ...EMPTY_SUPPLIER_FORM_VALUES,
+        no: 'A'.repeat(41),
+        name: 'B'.repeat(81),
+        contactName: 'C'.repeat(41),
+        contactPhone: 'D'.repeat(21),
+        category: 'E'.repeat(41),
+      })
+      expect(errors.no).toBe('编号最多 40 个字符')
+      expect(errors.name).toBe('名称最多 80 个字符')
+      expect(errors.contactName).toBe('联系人最多 40 个字符')
+      expect(errors.contactPhone).toBe('联系电话最多 20 个字符')
+      expect(errors.category).toBe('类目最多 40 个字符')
+    })
+
+    it('账期天数边界与格式错误返回对应提示', () => {
+      expect(
+        validateSupplierForm({ ...EMPTY_SUPPLIER_FORM_VALUES, creditDays: '366' }).creditDays,
+      ).toBe('账期天数必须在 0–365 之间')
+      expect(
+        validateSupplierForm({ ...EMPTY_SUPPLIER_FORM_VALUES, creditDays: '-1' }).creditDays,
+      ).toBe('账期天数必须是整数')
+      expect(
+        validateSupplierForm({ ...EMPTY_SUPPLIER_FORM_VALUES, creditDays: 'abc' }).creditDays,
+      ).toBe('账期天数必须是整数')
+    })
+
+    it('非固定账期类型不校验账期天数', () => {
+      const errors = validateSupplierForm({
+        ...EMPTY_SUPPLIER_FORM_VALUES,
+        creditType: 'MONTHLY',
+        creditDays: '',
+      })
+      expect(errors.creditDays).toBeUndefined()
+    })
+
+    it('合法表单返回空错误对象', () => {
+      const errors = validateSupplierForm({
+        ...EMPTY_SUPPLIER_FORM_VALUES,
+        no: 'SUP001',
+        name: '测试供应商',
+      })
+      expect(errors).toEqual({})
+    })
+  })
+
+  describe('请求体构建', () => {
+    it('新增请求体包含编号与全部允许字段', () => {
+      const payload = buildSupplierCreatePayload({
+        ...EMPTY_SUPPLIER_FORM_VALUES,
+        no: 'SUP001',
+        name: '测试供应商',
+        contactName: '张三',
+        category: '蔬菜',
+        creditDays: '45',
+      })
+      expect(payload).toEqual({
+        no: 'SUP001',
+        name: '测试供应商',
+        contactName: '张三',
+        contactPhone: '',
+        category: '蔬菜',
+        creditType: 'FIXED_DAYS',
+        creditDays: 45,
+      })
+    })
+
+    it('编辑请求体不包含编号', () => {
+      const payload = buildSupplierUpdatePayload({
+        ...EMPTY_SUPPLIER_FORM_VALUES,
+        no: 'SUP001',
+        name: '测试供应商（新名）',
+        creditType: 'MONTHLY',
+        creditDays: '60',
+      })
+      expect(payload).not.toHaveProperty('no')
+      expect(payload.name).toBe('测试供应商（新名）')
+      expect(payload.creditType).toBe('MONTHLY')
+      expect(payload).not.toHaveProperty('creditDays')
+    })
+
+    it('请求体不包含银行账号、自动付款等敏感字段', () => {
+      const createPayload = buildSupplierCreatePayload({
+        ...EMPTY_SUPPLIER_FORM_VALUES,
+        no: 'SUP001',
+        name: '测试供应商',
+      })
+      const updatePayload = buildSupplierUpdatePayload({
+        ...EMPTY_SUPPLIER_FORM_VALUES,
+        no: 'SUP001',
+        name: '测试供应商',
+      })
+      expect(hasSensitiveSupplierFields(createPayload)).toBe(false)
+      expect(hasSensitiveSupplierFields(updatePayload)).toBe(false)
+      expect(updatePayload).not.toHaveProperty('bankAccount')
+    })
+
+    it('非固定账期类型不提交账期天数', () => {
+      const payload = buildSupplierCreatePayload({
+        ...EMPTY_SUPPLIER_FORM_VALUES,
+        no: 'SUP001',
+        name: '测试供应商',
+        creditType: 'ON_DELIVERY',
+        creditDays: '30',
+      })
+      expect(payload).not.toHaveProperty('creditDays')
+    })
+  })
+
+  describe('账期类型文案', () => {
+    it('已知类型返回中文标签', () => {
+      expect(formatSupplierCreditTypeLabel('FIXED_DAYS')).toBe('固定天数')
+      expect(formatSupplierCreditTypeLabel('MONTHLY')).toBe('月结')
+    })
+
+    it('空值返回占位符', () => {
+      expect(formatSupplierCreditTypeLabel(null)).toBe('—')
     })
   })
 })

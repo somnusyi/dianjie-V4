@@ -176,3 +176,134 @@ export function getSupplierDetailStats(_supplier: SupplySupplier | null): {
 export function hasSensitiveSupplierFields(supplier: Record<string, unknown>): boolean {
   return SENSITIVE_SUPPLIER_FIELDS.some(field => field in supplier)
 }
+
+export const SUPPLIER_CREDIT_TYPE_OPTIONS = [
+  { value: 'FIXED_DAYS', label: '固定天数' },
+  { value: 'MONTHLY', label: '月结' },
+  { value: 'WEEKLY', label: '周结' },
+  { value: 'ON_DELIVERY', label: '货到付款' },
+] as const
+
+export type SupplierCreditType = (typeof SUPPLIER_CREDIT_TYPE_OPTIONS)[number]['value']
+
+/**
+ * 供应商新增 / 编辑抽屉的表单值。
+ *
+ * 只包含编号、名称、联系人、联系电话、类目、账期类型、账期天数。
+ * 不收集银行账号、自动付款、付款审批、邀请外部供应商等字段。
+ */
+export type SupplierFormValues = {
+  no: string
+  name: string
+  contactName: string
+  contactPhone: string
+  category: string
+  creditType: SupplierCreditType
+  creditDays: string
+}
+
+export const EMPTY_SUPPLIER_FORM_VALUES: SupplierFormValues = {
+  no: '',
+  name: '',
+  contactName: '',
+  contactPhone: '',
+  category: '',
+  creditType: 'FIXED_DAYS',
+  creditDays: '30',
+}
+
+/**
+ * 用现有供应商数据初始化表单（编辑场景）。
+ */
+export function initializeSupplierFormValues(supplier?: SupplySupplier | null): SupplierFormValues {
+  if (!supplier) return EMPTY_SUPPLIER_FORM_VALUES
+  return {
+    no: supplier.no ?? '',
+    name: supplier.name ?? '',
+    contactName: supplier.contactName ?? '',
+    contactPhone: supplier.contactPhone ?? '',
+    category: supplier.category ?? '',
+    creditType: (supplier.creditType as SupplierCreditType) || 'FIXED_DAYS',
+    creditDays: supplier.creditDays != null ? String(supplier.creditDays) : '30',
+  }
+}
+
+/**
+ * 账期类型 → 展示文案。
+ */
+export function formatSupplierCreditTypeLabel(creditType?: string | null): string {
+  return SUPPLIER_CREDIT_TYPE_OPTIONS.find(opt => opt.value === creditType)?.label ?? (creditType || '—')
+}
+
+export type SupplierFormErrors = Partial<Record<keyof SupplierFormValues, string>>
+
+/**
+ * 表单校验。规则严格对齐 API 输入边界：
+ *
+ * - 编号 / 名称必填
+ * - 编号 ≤ 40，名称 ≤ 80，联系人 ≤ 40，电话 ≤ 20，类目 ≤ 40
+ * - 账期类型必填
+ * - 固定天数账期：必填，整数，0–365
+ */
+export function validateSupplierForm(values: SupplierFormValues): SupplierFormErrors {
+  const errors: SupplierFormErrors = {}
+
+  const no = values.no.trim()
+  if (!no) errors.no = '请输入供应商编号'
+  else if (no.length > 40) errors.no = '编号最多 40 个字符'
+
+  const name = values.name.trim()
+  if (!name) errors.name = '请输入供应商名称'
+  else if (name.length > 80) errors.name = '名称最多 80 个字符'
+
+  if (values.contactName.trim().length > 40) errors.contactName = '联系人最多 40 个字符'
+  if (values.contactPhone.trim().length > 20) errors.contactPhone = '联系电话最多 20 个字符'
+  if (values.category.trim().length > 40) errors.category = '类目最多 40 个字符'
+
+  if (!SUPPLIER_CREDIT_TYPE_OPTIONS.some(opt => opt.value === values.creditType)) {
+    errors.creditType = '请选择账期类型'
+  }
+
+  if (values.creditType === 'FIXED_DAYS') {
+    const rawDays = values.creditDays.trim()
+    if (rawDays === '') {
+      errors.creditDays = '请输入账期天数'
+    } else if (!/^\d+$/.test(rawDays)) {
+      errors.creditDays = '账期天数必须是整数'
+    } else {
+      const days = Number(rawDays)
+      if (days < 0 || days > 365) errors.creditDays = '账期天数必须在 0–365 之间'
+    }
+  }
+
+  return errors
+}
+
+/**
+ * 构建 POST /api/suppliers 请求体。
+ * 输出字段仅限允许范围，不会带入银行账号、自动付款等敏感字段。
+ */
+export function buildSupplierCreatePayload(values: SupplierFormValues): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    no: values.no.trim(),
+    name: values.name.trim(),
+    contactName: values.contactName.trim(),
+    contactPhone: values.contactPhone.trim(),
+    category: values.category.trim(),
+    creditType: values.creditType,
+  }
+  if (values.creditType === 'FIXED_DAYS') {
+    payload.creditDays = Number(values.creditDays.trim())
+  }
+  return payload
+}
+
+/**
+ * 构建 PATCH /api/suppliers/:id 请求体。
+ * 编辑场景编号只读，不提交；其余字段与新增一致。
+ */
+export function buildSupplierUpdatePayload(values: SupplierFormValues): Record<string, unknown> {
+  const payload = buildSupplierCreatePayload(values)
+  delete payload.no
+  return payload
+}

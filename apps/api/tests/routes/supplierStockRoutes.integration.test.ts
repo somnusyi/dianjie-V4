@@ -9,6 +9,10 @@ let tenantA = ''
 let tenantB = ''
 let supplierA = ''
 let supplierB = ''
+let warehouseA = ''
+let warehouseB = ''
+let warehouseNameA = ''
+let warehouseNameB = ''
 let userA = ''
 let userB = ''
 let productA1 = ''
@@ -35,6 +39,15 @@ describe('supplier stock routes — isolation & pagination (integration)', () =>
     ])
     tenantA = tA.id
     tenantB = tB.id
+
+    const [wA, wB] = await Promise.all([
+      prisma.warehouse.findFirstOrThrow({ where: { tenantId: tenantA, isDefault: true, isActive: true } }),
+      prisma.warehouse.findFirstOrThrow({ where: { tenantId: tenantB, isDefault: true, isActive: true } }),
+    ])
+    warehouseA = wA.id
+    warehouseB = wB.id
+    warehouseNameA = wA.name
+    warehouseNameB = wB.name
 
     const [sA, sB] = await Promise.all([
       prisma.supplier.create({ data: { tenantId: tenantA, no: `SUP-A-${suffix}`, name: '隔离供应商 A' } }),
@@ -123,7 +136,7 @@ describe('supplier stock routes — isolation & pagination (integration)', () =>
     expect(ids.has(productA1)).toBe(true)
     expect(ids.has(productA2)).toBe(true)
     expect(ids.has(productB1)).toBe(false)
-    expect(items.every((item: any) => item.warehouseId === 'default')).toBe(true)
+    expect(items.every((item: any) => item.warehouseId === warehouseA)).toBe(true)
     expect(items.find((item: any) => item.id === productA1)).toMatchObject({
       price: 0.02,
       orderUnitPrice: 10,
@@ -137,6 +150,7 @@ describe('supplier stock routes — isolation & pagination (integration)', () =>
     const items = res.json()
     expect(items.length).toBe(1)
     expect(items[0].id).toBe(productB1)
+    expect(items[0].warehouseId).toBe(warehouseB)
   })
 
   it('rejects non-supplier roles (MANAGER) from supplier stock endpoints', async () => {
@@ -159,11 +173,12 @@ describe('supplier stock routes — isolation & pagination (integration)', () =>
     expect(sumA.outOfStock).toBe(1)
     expect(sumA.totalValue).toBe(50)
     expect(sumA.valuationPendingSku).toBe(0)
-    expect(sumA.warehouse).toEqual({ id: 'default', name: '默认仓' })
+    expect(sumA.warehouse).toEqual({ id: warehouseA, name: warehouseNameA })
 
     const resB = await app.inject({ method: 'GET', url: '/api/supplier/stock/summary', headers: actorHeaders('ownerB') })
     expect(resB.statusCode).toBe(200)
     expect(resB.json().totalSku).toBe(1)
+    expect(resB.json().warehouse).toEqual({ id: warehouseB, name: warehouseNameB })
   })
 
   it('legacy mode: returns plain array when no pagination params', async () => {
@@ -185,7 +200,7 @@ describe('supplier stock routes — isolation & pagination (integration)', () =>
     expect(body.pageSize).toBe(10)
     expect(body.totalPages).toBe(1)
     expect(body.items.length).toBe(2)
-    expect(body.warehouse).toEqual({ id: 'default', name: '默认仓' })
+    expect(body.warehouse).toEqual({ id: warehouseA, name: warehouseNameA })
   })
 
   it('paginated mode: page beyond data returns empty items but correct total', async () => {

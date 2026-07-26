@@ -458,6 +458,21 @@ describe('validateProductQuantities', () => {
       }),
     ).toBeNull()
   })
+
+  it('does not block editing because of read-only legacy stock values', () => {
+    expect(
+      validateProductQuantities(
+        { ...base, stock: '-1', minStock: '-2' },
+        { editableOnly: true },
+      ),
+    ).toBeNull()
+    expect(
+      validateProductQuantities(
+        { ...base, stock: '-1', minOrderQty: '0' },
+        { editableOnly: true },
+      ),
+    ).toContain('起订量')
+  })
 })
 
 describe('formatProductQuantity', () => {

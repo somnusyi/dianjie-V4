@@ -270,7 +270,9 @@ export default function InternalSupplyChainProductsPage() {
   }
 
   async function submitForm() {
-    const validationError = validateNewProductForm(form) || validateFourUnitForm(form) || validateProductQuantities(form)
+    const validationError = validateNewProductForm(form)
+      || validateFourUnitForm(form)
+      || validateProductQuantities(form, { editableOnly: Boolean(editing) })
     if (validationError) { setFormError(validationError); return }
     setFormError(null)
     setSubmitting(true)

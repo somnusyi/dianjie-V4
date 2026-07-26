@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
+import {
+  assertInboundWarehouseResponse,
+  withSupplierWarehouseParams,
+} from '@/lib/supplier-default-warehouse'
 
 type Supplier = { id: string; no: string; name: string }
 type StockItem = {
@@ -115,7 +119,7 @@ export default function InternalSupplyChainInventoryPage() {
     setSubmitting(true)
     setError('')
     try {
-      await apiFetch(`/api/supplier/stock/inbound?supplierId=${encodeURIComponent(supplierId)}`, {
+      const res = await apiFetch<any>(withSupplierWarehouseParams('/api/supplier/stock/inbound', supplierId), {
         method: 'POST',
         body: JSON.stringify({
           source: 'MANUAL',
@@ -123,10 +127,11 @@ export default function InternalSupplyChainInventoryPage() {
           items: [{ productId, qty: amount }],
         }),
       })
+      const { warehouseName } = assertInboundWarehouseResponse(res)
       setInboundOpen(false)
       setProductId('')
       setQty('')
-      setNotice('入库成功，库存与流水已同步更新')
+      setNotice(`入库成功（${warehouseName}），库存与流水已同步更新`)
       load()
     } catch (reasonValue: any) {
       setError(String(reasonValue?.message || reasonValue))

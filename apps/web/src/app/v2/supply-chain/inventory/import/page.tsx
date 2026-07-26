@@ -3,6 +3,10 @@
 import { useEffect, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
+import {
+  assertInboundWarehouseResponse,
+  withSupplierWarehouseParams,
+} from '@/lib/supplier-default-warehouse'
 
 type Supplier = { id: string; no: string; name: string }
 type Product = { id: string; code: string; name: string; inventoryUnit?: string | null; unit: string }
@@ -127,7 +131,7 @@ export default function InternalInventoryImportPage() {
     setSubmitting(true)
     setError('')
     try {
-      const result = await apiFetch<{ count: number }>(`/api/supplier/stock/inbound?supplierId=${encodeURIComponent(supplierId)}`, {
+      const res = await apiFetch<any>(withSupplierWarehouseParams('/api/supplier/stock/inbound', supplierId), {
         method: 'POST',
         body: JSON.stringify({
           source: 'EXCEL',
@@ -141,7 +145,8 @@ export default function InternalInventoryImportPage() {
           })),
         }),
       })
-      setDone(`已增量入库 ${result.count} 个商品；库存和批次流水已同步记录`)
+      const { warehouseName } = assertInboundWarehouseResponse(res)
+      setDone(`已增量入库 ${res.count} 个商品（${warehouseName}）；库存和批次流水已同步记录`)
       setRows([])
     } catch (reasonValue: any) {
       setError(String(reasonValue?.message || reasonValue))

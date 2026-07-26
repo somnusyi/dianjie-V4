@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_WAREHOUSE_ID,
   DEFAULT_WAREHOUSE_NAME,
+  assertInboundWarehouseResponse,
   resolveWarehouseDisplayName,
+  withSupplierWarehouseParams,
   withWarehouseBody,
   withWarehouseParam,
 } from './supplier-default-warehouse'
@@ -92,6 +94,144 @@ describe('withWarehouseBody', () => {
     expect(result.source).toBe('EXCEL')
     expect(result.reason).toBe('test')
     expect(result.warehouseId).toBe('default')
+  })
+})
+
+describe('withSupplierWarehouseParams', () => {
+  it('appends supplierId and warehouseId=default to a bare path', () => {
+    const result = withSupplierWarehouseParams('/api/supplier/stock/inbound', 'sup-1')
+    expect(result).toContain('supplierId=sup-1')
+    expect(result).toContain('warehouseId=default')
+    expect(result.startsWith('/api/supplier/stock/inbound?')).toBe(true)
+  })
+
+  it('preserves existing query params while overriding supplierId and warehouseId', () => {
+    const result = withSupplierWarehouseParams('/api/supplier/stock/inbound?page=1', 'sup-1')
+    expect(result).toContain('supplierId=sup-1')
+    expect(result).toContain('warehouseId=default')
+    expect(result).toContain('page=1')
+  })
+
+  it('overrides an existing supplierId', () => {
+    const result = withSupplierWarehouseParams('/api/supplier/stock/inbound?supplierId=old', 'sup-1')
+    expect(result).toContain('supplierId=sup-1')
+    expect(result).not.toContain('supplierId=old')
+  })
+
+  it('overrides an existing warehouseId with default', () => {
+    const result = withSupplierWarehouseParams('/api/supplier/stock/inbound?warehouseId=other', 'sup-1')
+    expect(result).toContain('warehouseId=default')
+    expect(result).not.toContain('warehouseId=other')
+  })
+
+  it('url-encodes supplierId', () => {
+    const result = withSupplierWarehouseParams('/api/supplier/stock/inbound', 'sup 测试')
+    expect(result).toContain('supplierId=sup+%E6%B5%8B%E8%AF%95')
+  })
+
+  it('trims supplierId and rejects an empty selection', () => {
+    const result = withSupplierWarehouseParams('/api/supplier/stock/inbound', '  sup-1  ')
+    expect(new URL(result, 'http://localhost').searchParams.get('supplierId')).toBe('sup-1')
+    expect(() => withSupplierWarehouseParams('/api/supplier/stock/inbound', '   ')).toThrow(
+      '入库前必须选择供应商',
+    )
+  })
+
+  it('does not mutate the original string', () => {
+    const original = '/api/supplier/stock/inbound'
+    const copy = original
+    withSupplierWarehouseParams(original, 'sup-1')
+    expect(original).toBe(copy)
+  })
+})
+
+describe('assertInboundWarehouseResponse', () => {
+  it('returns warehouseId and warehouseName for a valid real-warehouse response', () => {
+    const result = assertInboundWarehouseResponse({
+      ok: true,
+      count: 1,
+      warehouseId: 'wh-real-001',
+      warehouse: { id: 'wh-real-001', name: '主仓' },
+    })
+    expect(result).toEqual({ warehouseId: 'wh-real-001', warehouseName: '主仓' })
+  })
+
+  it('throws when warehouseId is missing', () => {
+    expect(() =>
+      assertInboundWarehouseResponse({ ok: true, warehouse: { id: 'wh-real', name: '主仓' } }),
+    ).toThrow('入库响应未返回真实仓库 ID')
+  })
+
+  it('throws when warehouseId is still the default alias', () => {
+    expect(() =>
+      assertInboundWarehouseResponse({
+        ok: true,
+        warehouseId: 'default',
+        warehouse: { id: 'default', name: '默认仓' },
+      }),
+    ).toThrow('入库响应未返回真实仓库 ID')
+  })
+
+  it('trims IDs before rejecting a whitespace-padded default alias', () => {
+    expect(() =>
+      assertInboundWarehouseResponse({
+        ok: true,
+        warehouseId: ' default ',
+        warehouse: { id: ' default ', name: '默认仓' },
+      }),
+    ).toThrow('入库响应未返回真实仓库 ID')
+  })
+
+  it('throws when warehouse is missing', () => {
+    expect(() =>
+      assertInboundWarehouseResponse({ ok: true, warehouseId: 'wh-real-001' }),
+    ).toThrow('入库响应缺少仓库元数据')
+  })
+
+  it('throws when warehouse.id differs from warehouseId', () => {
+    expect(() =>
+      assertInboundWarehouseResponse({
+        ok: true,
+        warehouseId: 'wh-real-001',
+        warehouse: { id: 'wh-other', name: '主仓' },
+      }),
+    ).toThrow('入库响应仓库 ID 不一致')
+  })
+
+  it('throws when warehouse.name is empty', () => {
+    expect(() =>
+      assertInboundWarehouseResponse({
+        ok: true,
+        warehouseId: 'wh-real-001',
+        warehouse: { id: 'wh-real-001', name: '' },
+      }),
+    ).toThrow('入库响应缺少仓库名称')
+  })
+
+  it('throws when warehouse.name is whitespace-only', () => {
+    expect(() =>
+      assertInboundWarehouseResponse({
+        ok: true,
+        warehouseId: 'wh-real-001',
+        warehouse: { id: 'wh-real-001', name: '   ' },
+      }),
+    ).toThrow('入库响应缺少仓库名称')
+  })
+
+  it('throws when response is not an object', () => {
+    expect(() => assertInboundWarehouseResponse(null)).toThrow('入库响应格式异常')
+    expect(() => assertInboundWarehouseResponse('ok')).toThrow('入库响应格式异常')
+    expect(() => assertInboundWarehouseResponse([])).toThrow('入库响应格式异常')
+  })
+
+  it('returns normalized warehouse values', () => {
+    expect(
+      assertInboundWarehouseResponse({
+        ok: true,
+        warehouseId: ' wh-real-001 ',
+        warehouse: { id: 'wh-real-001', name: ' 主仓 ' },
+      }),
+    ).toEqual({ warehouseId: 'wh-real-001', warehouseName: '主仓' })
   })
 })
 

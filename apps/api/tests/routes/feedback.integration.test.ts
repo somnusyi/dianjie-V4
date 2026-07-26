@@ -250,6 +250,158 @@ describe('feedback system flow (integration)', () => {
     }
   })
 
+  it('并发批准只创建一个自动开发任务、决策审计和结果通知', async () => {
+    const feedback = await prisma.feedback.create({
+      data: {
+        tenantId: tenantA,
+        reporterId,
+        category: 'BUG_BLOCKING',
+        status: 'AWAITING_APPROVAL',
+        title: '并发批准自动开发验证',
+        summary: '双击批准时只能创建一个自动开发任务',
+        context: { path: '/route-that-does-not-exist-concurrently' },
+      },
+    })
+
+    expect((await inject(
+      'adminB',
+      'POST',
+      `/api/feedback/${feedback.id}/decision`,
+      { action: 'approve' },
+    )).statusCode).toBe(404)
+
+    process.env.AUTO_FIX_MODE = 'suggest'
+    process.env.AUTO_FIX_REPO_DIR = '/definitely-missing-autofix-repo'
+    try {
+      const responses = await Promise.all([
+        inject('admin', 'POST', `/api/feedback/${feedback.id}/decision`, { action: 'approve' }),
+        inject('admin', 'POST', `/api/feedback/${feedback.id}/decision`, { action: 'approve' }),
+      ])
+      expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 400])
+      const accepted = responses.find((response) => response.statusCode === 200)!
+      expect(accepted.json()).toMatchObject({
+        automationStatus: 'queued',
+      })
+      expect(accepted.json().autoRunId).toBeTruthy()
+
+      const runs = await prisma.autoFixRun.findMany({
+        where: { feedbackId: feedback.id },
+      })
+      expect(runs).toHaveLength(1)
+      expect(runs[0].id).toBe(accepted.json().autoRunId)
+      expect(runs[0].decidedById).toBe(adminId)
+
+      for (let attempt = 0; attempt < 30; attempt++) {
+        const current = await prisma.autoFixRun.findUnique({ where: { id: runs[0].id } })
+        if (current?.status === 'ESCALATED') break
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      expect((await prisma.autoFixRun.findUnique({ where: { id: runs[0].id } }))?.status)
+        .toBe('ESCALATED')
+      expect((await prisma.feedback.findUnique({ where: { id: feedback.id } }))?.status)
+        .toBe('IN_DEV')
+      expect(await prisma.opLog.count({
+        where: {
+          tenantId: tenantA,
+          entityType: 'Feedback',
+          targetId: feedback.id,
+        },
+      })).toBe(1)
+      expect(await prisma.feedbackMessage.count({
+        where: {
+          tenantId: tenantA,
+          feedbackId: feedback.id,
+          role: 'system',
+          content: { contains: '管理员已批准该方案' },
+        },
+      })).toBe(1)
+      expect(await prisma.feedbackMessage.count({
+        where: {
+          tenantId: tenantA,
+          feedbackId: feedback.id,
+          role: 'system',
+          content: { contains: '自动开发任务已排队' },
+        },
+      })).toBe(1)
+      expect(await prisma.notification.count({
+        where: {
+          tenantId: tenantA,
+          recipientId: reporterId,
+          type: 'FEEDBACK_RESULT',
+          refId: feedback.id,
+        },
+      })).toBe(1)
+    } finally {
+      process.env.AUTO_FIX_MODE = 'off'
+      if (oldRepoDir === undefined) delete process.env.AUTO_FIX_REPO_DIR
+      else process.env.AUTO_FIX_REPO_DIR = oldRepoDir
+    }
+  })
+
+  it('并发解决只闭环一次，并保持权限与租户隔离', async () => {
+    const feedback = await prisma.feedback.create({
+      data: {
+        tenantId: tenantA,
+        reporterId,
+        category: 'BUG_BLOCKING',
+        status: 'IN_DEV',
+        title: '并发解决闭环验证',
+        summary: '同一反馈只能被解决一次',
+        context: { path: '/v2/manager/home' },
+      },
+    })
+
+    expect((await inject(
+      'reporter',
+      'POST',
+      `/api/feedback/${feedback.id}/resolve`,
+      { note: '经理不能代替超管闭环' },
+    )).statusCode).toBe(403)
+    expect((await inject(
+      'adminB',
+      'POST',
+      `/api/feedback/${feedback.id}/resolve`,
+      { note: '跨租户不得闭环' },
+    )).statusCode).toBe(404)
+    expect((await prisma.feedback.findUnique({ where: { id: feedback.id } }))?.status)
+      .toBe('IN_DEV')
+
+    const notes = ['并发解决 A', '并发解决 B']
+    const responses = await Promise.all(notes.map((note) => inject(
+      'admin',
+      'POST',
+      `/api/feedback/${feedback.id}/resolve`,
+      { note },
+    )))
+    expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 400])
+    expect((await prisma.feedback.findUnique({ where: { id: feedback.id } }))?.status)
+      .toBe('RESOLVED')
+    expect(await prisma.opLog.count({
+      where: {
+        tenantId: tenantA,
+        entityType: 'Feedback',
+        targetId: feedback.id,
+      },
+    })).toBe(1)
+    const messages = await prisma.feedbackMessage.findMany({
+      where: {
+        tenantId: tenantA,
+        feedbackId: feedback.id,
+        role: 'assistant',
+      },
+    })
+    expect(messages).toHaveLength(1)
+    expect(notes).toContain(messages[0].content)
+    expect(await prisma.notification.count({
+      where: {
+        tenantId: tenantA,
+        recipientId: reporterId,
+        type: 'FEEDBACK_RESULT',
+        refId: feedback.id,
+      },
+    })).toBe(1)
+  })
+
   it('QUESTION 分诊 → CLOSED 闭环', async () => {
     qwenQueue.push('改价这样操作：打开「我的 → 供应商管理」，选择供应商后点「调价」。\n```json\n{"triage":{"category":"QUESTION","title":"如何修改供应商报价","summary":"询问改价入口","sufficient":true}}\n```')
     const created = await inject('reporter', 'POST', '/api/feedback', {

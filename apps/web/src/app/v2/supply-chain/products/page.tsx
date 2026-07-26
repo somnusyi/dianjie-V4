@@ -846,7 +846,10 @@ function FormDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4" onClick={onClose}>
-      <div className="w-full max-w-lg rounded-card bg-white p-5 shadow-lg" onClick={e => e.stopPropagation()}>
+      <div
+        className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-card bg-white p-5 shadow-lg"
+        onClick={e => e.stopPropagation()}
+      >
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-h2">{title}</h2>
           <button onClick={onClose} className="text-gray3 text-h2 hover:text-ink">×</button>

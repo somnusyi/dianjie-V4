@@ -2593,6 +2593,20 @@
 - `git diff --check`、业务文件门禁和高置信敏感信息扫描通过；production build 仅有既有
   OpenTelemetry warning。本批无 schema、通知、资金、库存或业务数据写入语义变化；
   实现提交为 `7e42309dc89621e831c0f471dd2d321c3a4952b8`。
-- 第 10 批最终记录 `076f8362`、本批实现与本节报告将在发布前一起以非强制纯快进推进
-  main；发布前将再次确认 main/deployed/source、队列、源码、草稿和部署锁，再仅执行
-  一次标准发布。
+- 第 10 批最终记录 `076f8362`、本批实现与报告 `92c5321f` 已一起以非强制纯快进进入
+  main；发布前再次确认 main/deployed/source exact `43774627`、AutoFix/反馈
+  actionable 均为 0、源码干净且无锁，独立 mutation 草稿仍保持 4 项未提交改动。
+- 唯一标准脚本发布成功，生产备份
+  `dianjie_v4-deploy-bak-20260727-001119-92c5321f.dump` 与
+  `v4-build-bak-20260727-001119-92c5321f.tar.gz` 已校验；70 migration 无 pending，
+  Prisma Client 重建、API/Web/CMB 重启和 HTML/CSS 健康检查全部通过。
+- 因本小时服务器直连 GitHub 已确认超时，发布后没有再次请求 GitHub；使用同样的
+  exact-SHA bundle 门禁把源码从 `43774627` 纯快进到 `92c5321f`。bundle 仅含夜审、
+  AutoFix route 和集成测试，父链、文件清单、SHA-256 与敏感信息检查通过，临时文件删除。
+- 最终 GitHub main、生产 `.deployed-commit` 与 `/app/dianjie-src` 均为 exact
+  `92c5321fd962de9c0d55c4501f4a67ce226eee8b`，源码干净、锁释放。API/Web/CMB
+  online，重启计数 53/54/44 稳定，本机与主公网 health/login 为 200；70 migration
+  成功/0 失败，AutoFixRun 总数/actionable 与反馈 actionable 均为 0。
+- `api.dianjie.cc` 严格 TLS 仍失败，服务器侧跳过校验 health 为 200；证书 `notAfter`
+  仍为 2026-07-21 23:59:59 UTC，未轮换证书或私钥。最后一小时继续先复核反馈、AutoFix
+  与所有并行草稿，再补任务触发/反馈闭环的幂等数据库契约并完成全程收尾。

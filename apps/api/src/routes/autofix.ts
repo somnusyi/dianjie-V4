@@ -44,7 +44,10 @@ export const autoFixRoutes: FastifyPluginAsync = async (app) => {
       prisma.autoFixRun.count({ where }),
       prisma.autoFixRun.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy: [
+          { createdAt: 'desc' },
+          { id: 'desc' },
+        ],
         skip: (page - 1) * pageSize,
         take: pageSize,
         select: {

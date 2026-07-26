@@ -307,6 +307,11 @@ describe('auto-fix approval API (integration)', () => {
     rejectRunB = rejectRb.id
     concurrentRejectRunA = concurrentRejectRa.id
 
+    await prisma.autoFixRun.updateMany({
+      where: { id: { in: [rollbackRunA, concurrentRollbackRunA] } },
+      data: { createdAt: new Date('2026-07-26T12:00:00.000Z') },
+    })
+
     app = Fastify()
     app.decorate('authenticate', async (request: any) => {
       request.user = actors[String(request.headers['x-test-actor'] || 'managerA')]()
@@ -351,6 +356,110 @@ describe('auto-fix approval API (integration)', () => {
 
     expect((await inject('adminA', 'GET', `/api/autofix/runs/${runB}`)).statusCode).toBe(404)
     expect((await inject('adminB', 'GET', `/api/autofix/runs/${runA}`)).statusCode).toBe(404)
+  })
+
+  it('keeps filtered list pagination stable and rejects unbounded queries', async () => {
+    const expectedIds = [rollbackRunA, concurrentRollbackRunA].sort().reverse()
+    const first = await inject(
+      'adminA',
+      'GET',
+      '/api/autofix/runs?status=RESOLVED&page=1&pageSize=1',
+    )
+    const second = await inject(
+      'adminA',
+      'GET',
+      '/api/autofix/runs?status=RESOLVED&page=2&pageSize=1',
+    )
+    expect(first.statusCode).toBe(200)
+    expect(second.statusCode).toBe(200)
+    expect(first.json()).toMatchObject({
+      total: 2,
+      page: 1,
+      pageSize: 1,
+      items: [{ id: expectedIds[0], status: 'RESOLVED' }],
+    })
+    expect(second.json()).toMatchObject({
+      total: 2,
+      page: 2,
+      pageSize: 1,
+      items: [{ id: expectedIds[1], status: 'RESOLVED' }],
+    })
+    expect(new Set([
+      ...first.json().items.map((item: any) => item.id),
+      ...second.json().items.map((item: any) => item.id),
+    ])).toEqual(new Set(expectedIds))
+
+    for (const query of [
+      'status=UNKNOWN',
+      'page=0',
+      'page=10001',
+      'pageSize=101',
+      'unexpected=true',
+    ]) {
+      expect((await inject('adminA', 'GET', `/api/autofix/runs?${query}`)).statusCode)
+        .toBe(400)
+    }
+  })
+
+  it('bounds detail diff slices without leaking another tenant', async () => {
+    const fullPatch = 'diff --git a/apps/web/src/app/a.tsx b/apps/web/src/app/a.tsx\n'
+    expect((await inject(
+      'managerA',
+      'GET',
+      `/api/autofix/runs/${runA}?diffOffset=5&diffLimit=12`,
+    )).statusCode).toBe(403)
+
+    const detail = await inject(
+      'adminA',
+      'GET',
+      `/api/autofix/runs/${runA}?diffOffset=5&diffLimit=12`,
+    )
+    expect(detail.statusCode).toBe(200)
+    expect(detail.json()).toMatchObject({
+      id: runA,
+      tenantId: tenantA,
+      diffPatch: fullPatch.slice(5, 17),
+      diffOffset: 5,
+      diffLimit: 12,
+      diffTotal: fullPatch.length,
+      mode: 'suggest',
+      deploymentReady: false,
+      feedback: {
+        id: feedbackA,
+        title: 'A 故障',
+      },
+    })
+
+    const exhausted = await inject(
+      'adminA',
+      'GET',
+      `/api/autofix/runs/${runA}?diffOffset=${fullPatch.length + 10}&diffLimit=1`,
+    )
+    expect(exhausted.statusCode).toBe(200)
+    expect(exhausted.json()).toMatchObject({
+      diffPatch: '',
+      diffOffset: fullPatch.length + 10,
+      diffLimit: 1,
+      diffTotal: fullPatch.length,
+    })
+    expect((await inject(
+      'adminA',
+      'GET',
+      `/api/autofix/runs/${runB}?diffOffset=0&diffLimit=1`,
+    )).statusCode).toBe(404)
+
+    for (const query of [
+      'diffOffset=-1',
+      'diffLimit=0',
+      'diffLimit=50001',
+      'unexpected=true',
+    ]) {
+      expect((await inject(
+        'adminA',
+        'GET',
+        `/api/autofix/runs/${runA}?${query}`,
+      )).statusCode).toBe(400)
+    }
   })
 
   it('does nothing when AUTO_FIX_MODE is off', async () => {

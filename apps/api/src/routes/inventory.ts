@@ -6,6 +6,7 @@ import dayjs from 'dayjs'
 import { isStoreScoped } from '../lib/auth-scope'
 import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
 import { buildIdempotencyKey } from '../lib/idempotency'
+import { calendarDateSchema } from '../lib/calendar-date'
 import { estimatedStoreInventory, latestStoreInventorySnapshot } from '../services/storeInventory'
 import { resolveProductInventoryUnit } from '../services/inventoryUnits'
 import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
@@ -241,11 +242,28 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
   app.get('/consumptions', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, storeId: boundStoreId } = req.user
     if (!canViewInventory(role)) return reply.status(403).send({ error: '无权查看门店消耗' })
+
     const query = z.object({
-      days: z.coerce.number().int().min(1).max(365).default(30),
+      days: z.coerce.number().int().min(1).max(365).optional(),
+      page: z.coerce.number().int().min(1).max(1_000_000).optional(),
+      pageSize: z.coerce.number().int().min(1).max(100).optional(),
       storeId: z.string().optional(),
+      startDate: calendarDateSchema.optional(),
+      endDate: calendarDateSchema.optional(),
+      q: z.string().trim().max(100).optional(),
+    }).refine(v => !v.startDate || !v.endDate || v.startDate <= v.endDate, {
+      message: '开始日期不得晚于结束日期',
+      path: ['startDate'],
     }).safeParse(req.query || {})
     if (!query.success) return reply.status(400).send({ error: query.error.issues[0].message })
+
+    const { page, pageSize, startDate, endDate, q } = query.data
+    const hasPage = page !== undefined
+    const hasPageSize = pageSize !== undefined
+    if (hasPage !== hasPageSize) {
+      return reply.status(400).send({ error: 'page 和 pageSize 必须同时提供' })
+    }
+    const paginated = hasPage && hasPageSize
 
     let storeId: string | undefined
     if (isStoreScoped(role)) {
@@ -256,16 +274,57 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
       if (!store) return reply.status(404).send({ error: '门店不存在或不属于当前租户' })
       storeId = store.id
     }
-    const since = dayjs().subtract(query.data.days, 'day').toDate()
+
+    const where: Prisma.StockConsumptionWhereInput = {
+      tenantId,
+      voidedAt: null,
+      ...(storeId ? { storeId } : {}),
+    }
+
+    if (paginated) {
+      if (startDate || endDate) {
+        const dateFilter: Record<string, Date> = {}
+        if (startDate) dateFilter.gte = new Date(`${startDate}T00:00:00.000Z`)
+        if (endDate) dateFilter.lte = new Date(`${endDate}T00:00:00.000Z`)
+        where.date = dateFilter
+      }
+      if (q) {
+        const terms = q.split(/\s+/).filter(Boolean)
+        if (terms.length > 0) {
+          where.AND = terms.map(term => ({
+            product: {
+              OR: [
+                { name: { contains: term, mode: 'insensitive' as const } },
+                { code: { contains: term, mode: 'insensitive' as const } },
+              ],
+            },
+          }))
+        }
+      }
+    } else {
+      const days = query.data.days ?? 30
+      where.date = { gte: dayjs().subtract(days, 'day').toDate() }
+    }
+
+    const include = {
+      product: { select: { name: true, unit: true, spec: true, code: true } },
+      createdBy: { select: { name: true } },
+    }
+    const orderBy: Prisma.StockConsumptionOrderByWithRelationInput[] = [
+      { date: 'desc' }, { createdAt: 'desc' }, { id: 'desc' },
+    ]
+
+    if (paginated) {
+      const skip = (page! - 1) * pageSize!
+      const [items, total] = await Promise.all([
+        prisma.stockConsumption.findMany({ where, include, orderBy, skip, take: pageSize! }),
+        prisma.stockConsumption.count({ where }),
+      ])
+      return { items, total, page, pageSize }
+    }
 
     return prisma.stockConsumption.findMany({
-      where: { tenantId, date: { gte: since }, voidedAt: null, ...(storeId ? { storeId } : {}) },
-      include: {
-        product: { select: { name: true, unit: true, spec: true, code: true } },
-        createdBy: { select: { name: true } },
-      },
-      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
-      take: 100,
+      where, include, orderBy, take: 100,
     })
   })
 }

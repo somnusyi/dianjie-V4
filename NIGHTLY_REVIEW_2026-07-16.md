@@ -2515,3 +2515,35 @@
 - `api.dianjie.cc` 严格 TLS 仍因过期证书失败，服务器侧跳过校验 health 为 200，
   `notAfter` 仍为 2026-07-21 23:59:59 UTC；未轮换证书或私钥。下一小时先重新复核所有
   AutoFix 草稿和队列，再补驳回端点的租户/并发审计回归。
+
+## 2026-07-26 23:50 第 10 小时 AutoFix 驳回权限与并发回归
+
+### 开始基线与并行边界
+
+- 已重新读取最新 memory/夜审、fetch `origin/main`，核对主仓、标准发布 worktree 与全部
+  AutoFix 维护 worktree；开始时 main/deployed/source 三者 exact `0241a8a3`，源码干净、
+  无锁，API/Web/CMB 健康 200，AutoFixRun/反馈 actionable 均为 0。
+- 独立 `maintenance-v4-autofix-mutation-boundary` worktree 仍在 `a9826f43` 保持原有
+  4 项未提交部署失败状态草稿，修改时间和范围未变化。本批没有接管或触碰，仅修改现有
+  AutoFix 集成测试。
+
+### 独立测试批次
+
+- 新增真实数据库驳回回归：门店经理始终 403，另一租户超管只能得到 404 且记录保持
+  `AWAITING_APPROVAL`；只有同租户超管可把记录原子推进到 `REJECTED`，保留决定人和
+  完整原因并写一条租户内审计，且绝不调度部署或回滚执行器。
+- 新增并发双击驳回回归：同一 run 两条不同驳回原因同时到达时，advisory transaction
+  lock 下必须一个 200、一个 400；最终只接受其中一条原因、只写一条决定审计，后台
+  部署/回滚调用均为零。
+
+### 验收与发布门禁
+
+- 临时 PostgreSQL 15 `_ci` 空库从零应用 70 migration；AutoFix 专项 10/10、完整 API
+  集成 25 文件 181/181 通过，容器和监听自动删除。API 单元 59 文件 556/556、API build、
+  Web 28 文件 506/506、tsc 与 166 页 production build 全部通过。
+- `git diff --check`、业务文件门禁和高置信敏感信息扫描通过；production build 仅有既有
+  OpenTelemetry warning。本批只改集成测试，无 schema、运行时代码或业务语义变化；
+  测试提交为 `99278af60c9b50cde6457ab5b494d6b325f74c9b`。
+- 第 9 批最终记录 `76c05146`、本批测试与本节报告将在发布前一起以非强制纯快进推进
+  main；发布前将再次确认三基线、队列、源码和部署锁，随后仅使用标准脚本发布并复核
+  备份、migration、PM2、健康、部署标记与锁释放。

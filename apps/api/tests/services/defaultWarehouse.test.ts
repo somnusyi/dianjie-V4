@@ -230,19 +230,20 @@ describe('defaultWarehouse route integration — pre-rejection without DB', () =
     return app
   }
 
-  const endpoints: Array<{ method: 'GET' | 'POST'; url: string; label: string }> = [
+  // Endpoints that still pre-reject any non-default warehouseId before touching the DB.
+  const preRejectEndpoints: Array<{ method: 'GET' | 'POST'; url: string; label: string }> = [
     { method: 'GET', url: '/api/supplier/stock', label: 'list' },
     { method: 'GET', url: '/api/supplier/stock/summary', label: 'summary' },
-    { method: 'GET', url: '/api/supplier/stock/reservations', label: 'reservations' },
-    { method: 'GET', url: '/api/supplier/stock/batches', label: 'batches' },
-    { method: 'GET', url: '/api/supplier/stock/movements', label: 'movements' },
     { method: 'POST', url: '/api/supplier/stock/inbound', label: 'inbound' },
     { method: 'POST', url: '/api/supplier/stock/adjust', label: 'adjust' },
     { method: 'POST', url: '/api/supplier/stock/loss', label: 'loss' },
     { method: 'POST', url: '/api/supplier/stock/import-snapshot', label: 'import-snapshot' },
   ]
 
-  it.each(endpoints)('rejects unknown warehouseId in query with 400 on $label', async ({ method, url }) => {
+  // GET /reservations, /batches and /movements now resolve warehouseId against the
+  // authenticated tenant and are covered in supplierStockWarehouseRead.test.ts.
+
+  it.each(preRejectEndpoints)('rejects unknown warehouseId in query with 400 on $label', async ({ method, url }) => {
     const app = await buildApp()
     try {
       const separator = url.includes('?') ? '&' : '?'
@@ -258,7 +259,7 @@ describe('defaultWarehouse route integration — pre-rejection without DB', () =
     }
   })
 
-  it.each(endpoints.filter(e => e.method === 'POST'))(
+  it.each(preRejectEndpoints.filter(e => e.method === 'POST'))(
     'rejects unknown warehouseId in body with 400 on $label',
     async ({ url }) => {
       const app = await buildApp()

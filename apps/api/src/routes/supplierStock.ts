@@ -23,11 +23,15 @@ import { calendarDateSchema } from '../lib/calendar-date'
 import {
   DEFAULT_WAREHOUSE_META,
   requireDefaultWarehouse,
+  resolveTenantWarehouseId,
 } from '../services/defaultWarehouse'
 import { tryCostUnitPriceToOrderUnitPrice } from '../services/costUnitPricing'
 
 const auth = (app: any) => ({
   preHandler: [app.authenticate, requireDefaultWarehouse],
+})
+const authenticateOnly = (app: any) => ({
+  preHandler: [app.authenticate],
 })
 
 function ensureSupplier(
@@ -41,6 +45,19 @@ function ensureSupplier(
     return { tenantId, userId, supplierId: scopedSupplierId }
   } catch (error: any) {
     reply.status(error?.statusCode || 403).send({ error: error?.message || '无权限' })
+    return null
+  }
+}
+
+async function resolveReadWarehouse(
+  tenantId: string,
+  rawWarehouseId: unknown,
+  reply: any,
+): Promise<string | null> {
+  try {
+    return await resolveTenantWarehouseId(prisma, tenantId, rawWarehouseId)
+  } catch (error: any) {
+    reply.status(error?.statusCode || 400).send({ error: error?.message || '仓库解析失败' })
     return null
   }
 }
@@ -333,17 +350,21 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
   })
 
   /** GET /api/supplier/stock/reservations?productId= — 当前有效预占来源 */
-  app.get('/reservations', auth(app), async (req: any, reply: any) => {
+  app.get('/reservations', authenticateOnly(app), async (req: any, reply: any) => {
     const ctx = ensureSupplier(req, reply, 'inventory.read'); if (!ctx) return
     const parsed = z.object({
       productId: z.string().trim().min(1).optional(),
+      warehouseId: z.string().trim().min(1).optional(),
       limit: z.coerce.number().int().min(1).max(200).default(100),
     }).safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const warehouseId = await resolveReadWarehouse(ctx.tenantId, parsed.data.warehouseId, reply)
+    if (!warehouseId) return
     const rows = await prisma.supplierStockReservation.findMany({
       where: {
         tenantId: ctx.tenantId,
         supplierId: ctx.supplierId,
+        warehouseId,
         status: 'ACTIVE',
         ...(parsed.data.productId ? { productId: parsed.data.productId } : {}),
       },
@@ -366,24 +387,28 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       createdAt: row.createdAt,
       product: row.product,
       order: row.purchaseOrder,
-      warehouseId: DEFAULT_WAREHOUSE_META.id,
+      warehouseId,
     }))
   })
 
   /** GET /api/supplier/stock/batches — 当前批次余额与来源 */
-  app.get('/batches', auth(app), async (req: any, reply: any) => {
+  app.get('/batches', authenticateOnly(app), async (req: any, reply: any) => {
     const ctx = ensureSupplier(req, reply, 'inventory.read'); if (!ctx) return
     const parsed = z.object({
       productId: z.string().trim().min(1).optional(),
+      warehouseId: z.string().trim().min(1).optional(),
       includeDepleted: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
       limit: z.coerce.number().int().min(1).max(500).default(200),
     }).safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const warehouseId = await resolveReadWarehouse(ctx.tenantId, parsed.data.warehouseId, reply)
+    if (!warehouseId) return
 
     const rows = await prisma.supplierStockBatch.findMany({
       where: {
         tenantId: ctx.tenantId,
         supplierId: ctx.supplierId,
+        warehouseId,
         ...(parsed.data.productId ? { productId: parsed.data.productId } : {}),
         ...(parsed.data.includeDepleted ? {} : { remainingQty: { gt: 0 } }),
       },
@@ -411,7 +436,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       createdAt: row.createdAt,
       product: row.product,
       source: row.sourceMovement,
-      warehouseId: DEFAULT_WAREHOUSE_META.id,
+      warehouseId,
     }))
   })
 
@@ -709,16 +734,19 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
   })
 
   /** GET /api/supplier/stock/movements?productId=&limit=&type= — 流水 */
-  app.get('/movements', auth(app), async (req: any, reply: any) => {
+  app.get('/movements', authenticateOnly(app), async (req: any, reply: any) => {
     const ctx = ensureSupplier(req, reply, 'inventory.read'); if (!ctx) return
     const parsed = z.object({
       productId: z.string().trim().min(1).optional(),
+      warehouseId: z.string().trim().min(1).optional(),
       type: z.enum(['INITIAL', 'INBOUND_MANUAL', 'INBOUND_EXCEL', 'OUTBOUND_PO', 'ADJUSTMENT', 'LOSS']).optional(),
       limit: z.coerce.number().int().min(1).max(500).default(100),
     }).safeParse(req.query)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const warehouseId = await resolveReadWarehouse(ctx.tenantId, parsed.data.warehouseId, reply)
+    if (!warehouseId) return
     const { productId, type, limit } = parsed.data
-    const where: any = { tenantId: ctx.tenantId, supplierId: ctx.supplierId }
+    const where: any = { tenantId: ctx.tenantId, supplierId: ctx.supplierId, warehouseId }
     if (productId) where.productId = productId
     if (type) where.type = type
     const ms = await prisma.supplierStockMovement.findMany({
@@ -738,7 +766,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       createdAt: m.createdAt,
       product: m.product,
       operator: m.createdBy?.name || null,
-      warehouseId: DEFAULT_WAREHOUSE_META.id,
+      warehouseId,
     }))
   })
 }

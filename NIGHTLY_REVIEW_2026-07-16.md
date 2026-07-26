@@ -2423,3 +2423,40 @@
   重新核对队列、本地提交和父提交，再只做一次安全 `--ff-only` 对齐。
 - `api.dianjie.cc` 严格 TLS 继续因证书过期失败，服务器侧跳过校验 health 为 200，
   `notAfter` 仍为 2026-07-21 23:59:59 UTC；未轮换证书或私钥。
+
+## 2026-07-26 23:26 第 8 小时 AutoFix 回滚权限与并发回归
+
+### 开始基线与源码收口
+
+- 已重新读取最新 memory/夜审、fetch `origin/main`，并核对主仓、标准发布 worktree 与
+  全部 AutoFix 维护 worktree；所有用户/其他 AI 脏改动和 watchdog 草稿保持原样。本批
+  继续在干净维护 worktree 开发，第 7 批最终生产记录 `c8ea4103` 与本批一起推进。
+- 开始时 GitHub main 与生产 `.deployed-commit` exact `a9826f43`，长期源码干净但仍为
+  `570e6f3a`；无部署锁，API/Web/CMB 健康 200，AutoFixRun/反馈 actionable 均为 0。
+- 确认源码没有本地 AutoFix 提交且已部署提交父链确定后，只执行一次 GitHub fetch 和
+  `--ff-only`，成功把 `/app/dianjie-src` 安全对齐 `a9826f43`；当前 main/deployed/source
+  三者 exact、源码干净。
+
+### 独立测试批次
+
+- 既有 AutoFix 集成测试只覆盖列表的超级管理员门禁、租户隔离与部署关闭时 fail closed，
+  没有覆盖高风险人工回滚端点。新增真实数据库回归，验证门店经理始终 403、另一租户超管
+  只能得到 404 且不能改变记录、同租户超管才可把已解决记录原子推进到 `DEPLOYING` 并
+  写一条精确审计。
+- 新增并发双击回滚回归：两条同 run 请求在 PostgreSQL advisory transaction lock 下
+  必须得到一个 202 和一个 400，数据库只写一条审计且后台执行器只调度一次。测试 mock
+  后台部署函数，不访问文件系统、生产或通知。
+- 第一次完整集成运行中，新增同租户夹具使旧“列表只有 1 条”断言过时，表现为 176 通过、
+  1 失败；租户过滤本身正确。断言改为包含全部本租户记录且明确排除另一租户后，在新的
+  空库先通过 AutoFix 专项 6/6，再通过完整 API 集成 25 文件 177/177。
+
+### 验收与发布门禁
+
+- 两次临时 PostgreSQL 15 `_ci` 空库均从零应用 70 migration 并随容器自动删除，无本地
+  数据或监听残留；未接触生产数据。API 单元 59 文件 556/556、API build、Web 28 文件
+  506/506、Web `tsc --noEmit` 与 166 页 production build 全部通过。
+- `git diff --check`、业务文件门禁和高置信敏感信息扫描通过；production build 仅有既有
+  OpenTelemetry warning。本批只改集成测试，不改 schema、运行时代码或业务语义。
+- 测试提交为 `97bc4298782fd38574cebd0ffdd83ca9e1e36e0b`。本批报告与实现通过后
+  将非强制纯快进进入 main；发布前再次核对反馈、AutoFix、本地提交与锁，再按唯一标准
+  脚本发布并记录最终备份、迁移、PM2、health 和源码对齐。

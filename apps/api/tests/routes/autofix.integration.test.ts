@@ -1,8 +1,14 @@
 import Fastify from 'fastify'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { prisma } from '@dianjie/db'
 import { autoFixRoutes } from '../../src/routes/autofix'
+import { executeManualRollback } from '../../src/services/autofix/deployment'
 import { enqueueAutoFix } from '../../src/services/autofix/engine'
+
+vi.mock('../../src/services/autofix/deployment', () => ({
+  executeApprovedRun: vi.fn(),
+  executeManualRollback: vi.fn(),
+}))
 
 const suffix = `autofix-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 let tenantA = ''
@@ -14,6 +20,9 @@ let feedbackA = ''
 let feedbackB = ''
 let runA = ''
 let runB = ''
+let rollbackRunA = ''
+let rollbackRunB = ''
+let concurrentRollbackRunA = ''
 let app: ReturnType<typeof Fastify>
 let oldMode: string | undefined
 let oldDeploy: string | undefined
@@ -70,7 +79,7 @@ describe('auto-fix approval API (integration)', () => {
     managerA = ma.id
     adminB = ab.id
 
-    const [fa, fb] = await Promise.all([
+    const [fa, fb, rollbackFa, rollbackFb, concurrentRollbackFa] = await Promise.all([
       prisma.feedback.create({
         data: {
           tenantId: tenantA, reporterId: managerA, category: 'BUG_BLOCKING',
@@ -83,10 +92,28 @@ describe('auto-fix approval API (integration)', () => {
           status: 'CLARIFYING', title: 'B 故障', context: { path: '/v2/boss/home' },
         },
       }),
+      prisma.feedback.create({
+        data: {
+          tenantId: tenantA, reporterId: managerA, category: 'BUG_BLOCKING',
+          status: 'RESOLVED', title: 'A 已修复故障', context: { path: '/v2/manager/home' },
+        },
+      }),
+      prisma.feedback.create({
+        data: {
+          tenantId: tenantB, reporterId: adminB, category: 'BUG_BLOCKING',
+          status: 'RESOLVED', title: 'B 已修复故障', context: { path: '/v2/boss/home' },
+        },
+      }),
+      prisma.feedback.create({
+        data: {
+          tenantId: tenantA, reporterId: managerA, category: 'BUG_BLOCKING',
+          status: 'RESOLVED', title: 'A 并发回滚故障', context: { path: '/v2/manager/home' },
+        },
+      }),
     ])
     feedbackA = fa.id
     feedbackB = fb.id
-    const [ra, rb] = await Promise.all([
+    const [ra, rb, rollbackRa, rollbackRb, concurrentRollbackRa] = await Promise.all([
       prisma.autoFixRun.create({
         data: {
           tenantId: tenantA,
@@ -107,9 +134,36 @@ describe('auto-fix approval API (integration)', () => {
           error: '转人工',
         },
       }),
+      prisma.autoFixRun.create({
+        data: {
+          tenantId: tenantA,
+          feedbackId: rollbackFa.id,
+          status: 'RESOLVED',
+          commitSha: 'a'.repeat(40),
+        },
+      }),
+      prisma.autoFixRun.create({
+        data: {
+          tenantId: tenantB,
+          feedbackId: rollbackFb.id,
+          status: 'RESOLVED',
+          commitSha: 'b'.repeat(40),
+        },
+      }),
+      prisma.autoFixRun.create({
+        data: {
+          tenantId: tenantA,
+          feedbackId: concurrentRollbackFa.id,
+          status: 'RESOLVED',
+          commitSha: 'c'.repeat(40),
+        },
+      }),
     ])
     runA = ra.id
     runB = rb.id
+    rollbackRunA = rollbackRa.id
+    rollbackRunB = rollbackRb.id
+    concurrentRollbackRunA = concurrentRollbackRa.id
 
     app = Fastify()
     app.decorate('authenticate', async (request: any) => {
@@ -117,6 +171,10 @@ describe('auto-fix approval API (integration)', () => {
     })
     await app.register(autoFixRoutes, { prefix: '/api/autofix' })
     await app.ready()
+  })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
   })
 
   afterAll(async () => {
@@ -140,7 +198,14 @@ describe('auto-fix approval API (integration)', () => {
 
     const list = await inject('adminA', 'GET', '/api/autofix/runs')
     expect(list.statusCode).toBe(200)
-    expect(list.json().items.map((item: any) => item.id)).toEqual([runA])
+    const tenantARunIds = list.json().items.map((item: any) => item.id)
+    expect(tenantARunIds).toEqual(expect.arrayContaining([
+      runA,
+      rollbackRunA,
+      concurrentRollbackRunA,
+    ]))
+    expect(tenantARunIds).not.toContain(runB)
+    expect(tenantARunIds).not.toContain(rollbackRunB)
 
     expect((await inject('adminA', 'GET', `/api/autofix/runs/${runB}`)).statusCode).toBe(404)
     expect((await inject('adminB', 'GET', `/api/autofix/runs/${runA}`)).statusCode).toBe(404)
@@ -172,5 +237,74 @@ describe('auto-fix approval API (integration)', () => {
       where: { tenantId: tenantA, entityType: 'AutoFixRun', targetId: runA },
     })
     expect(log?.action).toContain('定位证据不足')
+  })
+
+  it('allows only the same-tenant SUPER_ADMIN to start a rollback', async () => {
+    process.env.AUTO_FIX_DEPLOY_ENABLED = 'true'
+    try {
+      expect((await inject(
+        'managerA',
+        'POST',
+        `/api/autofix/runs/${rollbackRunA}/rollback`,
+        {},
+      )).statusCode).toBe(403)
+      expect((await inject(
+        'adminA',
+        'POST',
+        `/api/autofix/runs/${rollbackRunB}/rollback`,
+        {},
+      )).statusCode).toBe(404)
+      expect((await prisma.autoFixRun.findUnique({ where: { id: rollbackRunB } }))?.status)
+        .toBe('RESOLVED')
+
+      const response = await inject(
+        'adminA',
+        'POST',
+        `/api/autofix/runs/${rollbackRunA}/rollback`,
+        {},
+      )
+      expect(response.statusCode).toBe(202)
+      expect(response.json()).toEqual({ ok: true, status: 'DEPLOYING' })
+      const run = await prisma.autoFixRun.findUnique({ where: { id: rollbackRunA } })
+      expect(run?.status).toBe('DEPLOYING')
+      expect(run?.decidedById).toBe(adminA)
+      expect(await prisma.opLog.count({
+        where: {
+          tenantId: tenantA,
+          entityType: 'AutoFixRun',
+          targetId: rollbackRunA,
+          action: { contains: '发起 AI 自动修复回滚' },
+        },
+      })).toBe(1)
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(vi.mocked(executeManualRollback)).toHaveBeenCalledOnce()
+      expect(vi.mocked(executeManualRollback)).toHaveBeenCalledWith(rollbackRunA)
+    } finally {
+      process.env.AUTO_FIX_DEPLOY_ENABLED = 'false'
+    }
+  })
+
+  it('serializes duplicate rollback requests and schedules exactly one execution', async () => {
+    process.env.AUTO_FIX_DEPLOY_ENABLED = 'true'
+    try {
+      const responses = await Promise.all([
+        inject('adminA', 'POST', `/api/autofix/runs/${concurrentRollbackRunA}/rollback`, {}),
+        inject('adminA', 'POST', `/api/autofix/runs/${concurrentRollbackRunA}/rollback`, {}),
+      ])
+      expect(responses.map((response) => response.statusCode).sort()).toEqual([202, 400])
+      expect(await prisma.opLog.count({
+        where: {
+          tenantId: tenantA,
+          entityType: 'AutoFixRun',
+          targetId: concurrentRollbackRunA,
+          action: { contains: '发起 AI 自动修复回滚' },
+        },
+      })).toBe(1)
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(vi.mocked(executeManualRollback)).toHaveBeenCalledOnce()
+      expect(vi.mocked(executeManualRollback)).toHaveBeenCalledWith(concurrentRollbackRunA)
+    } finally {
+      process.env.AUTO_FIX_DEPLOY_ENABLED = 'false'
+    }
   })
 })

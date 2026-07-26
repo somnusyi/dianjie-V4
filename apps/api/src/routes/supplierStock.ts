@@ -190,12 +190,14 @@ async function lockSupplierWarehouseStock(
 async function activeReservedForProduct(
   tx: Prisma.TransactionClient,
   ctx: SupplierContext,
+  warehouseId: string | undefined,
   productId: string,
 ) {
   const aggregate = await tx.supplierStockReservation.aggregate({
     where: {
       tenantId: ctx.tenantId,
       supplierId: ctx.supplierId,
+      ...(warehouseId ? { warehouseId } : {}),
       productId,
       status: 'ACTIVE',
     },
@@ -604,41 +606,68 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { productId, newQty, reason } = parsed.data
 
+    const rawWarehouseId = (req.query as Record<string, unknown> | null)?.warehouseId
+
+    let realWarehouseId: string
     let result: { delta: number; balanceAfter: number; unchanged?: boolean }
-    await prisma.$transaction(async (tx) => {
-      const balances = await lockSupplierProducts(tx, ctx, [productId], { statusCode: 404, message: '商品不存在' })
-      const nextStock = new Prisma.Decimal(newQty)
-      const reserved = await activeReservedForProduct(tx, ctx, productId)
-      if (nextStock.lessThan(reserved)) {
-        throw Object.assign(new Error(`盘点库存不能低于已接订单预占 ${reserved.toFixed(2)}`), { statusCode: 409 })
-      }
-      const delta = nextStock.minus(balances.get(productId)!)
-      if (delta.isZero()) {
-        result = { delta: 0, balanceAfter: newQty, unchanged: true }
-        return
-      }
-      await tx.product.update({ where: { id: productId }, data: { stock: nextStock } })
-      const movement = await tx.supplierStockMovement.create({
-        data: {
-          tenantId: ctx.tenantId, supplierId: ctx.supplierId, productId,
-          delta, balanceAfter: nextStock,
-          type: 'ADJUSTMENT' as any,
-          reason, sourceType: 'Manual', sourceId: null,
+    try {
+      realWarehouseId = await resolveTenantWarehouseId(prisma, ctx.tenantId, rawWarehouseId)
+
+      await prisma.$transaction(async (tx) => {
+        const productBalances = await lockSupplierProducts(tx, ctx, [productId], { statusCode: 404, message: '商品不存在' })
+        const wsBalances = await lockSupplierWarehouseStock(tx, ctx, realWarehouseId, [productId])
+
+        const productStock = productBalances.get(productId)!
+        const physicalQty = wsBalances.get(productId)!
+        if (!productStock.equals(physicalQty)) {
+          throw Object.assign(
+            new Error(`商品 ${productId} Product.stock(${productStock.toFixed(3)}) 与 WarehouseStock.physicalQty(${physicalQty.toFixed(3)}) 不一致`),
+            { statusCode: 409 },
+          )
+        }
+
+        const nextStock = new Prisma.Decimal(newQty)
+        const reserved = await activeReservedForProduct(tx, ctx, realWarehouseId, productId)
+        if (nextStock.lessThan(reserved)) {
+          throw Object.assign(new Error(`盘点库存不能低于已接订单预占 ${reserved.toFixed(2)}`), { statusCode: 409 })
+        }
+        const delta = nextStock.minus(physicalQty)
+        if (delta.isZero()) {
+          result = { delta: 0, balanceAfter: newQty, unchanged: true }
+          return
+        }
+        await tx.warehouseStock.update({
+          where: { tenantId_warehouseId_productId: { tenantId: ctx.tenantId, warehouseId: realWarehouseId, productId } },
+          data: { physicalQty: nextStock },
+        })
+        await tx.product.update({ where: { id: productId }, data: { stock: nextStock } })
+        const movement = await tx.supplierStockMovement.create({
+          data: {
+            tenantId: ctx.tenantId, warehouseId: realWarehouseId,
+            supplierId: ctx.supplierId, productId,
+            delta, balanceAfter: nextStock,
+            type: 'ADJUSTMENT' as any,
+            reason, sourceType: 'Manual', sourceId: null,
+            createdById: ctx.userId,
+          },
+        })
+        await applySupplierStockBatchDelta(tx, {
+          tenantId: ctx.tenantId,
+          warehouseId: realWarehouseId,
+          supplierId: ctx.supplierId,
+          productId,
+          delta,
+          movementId: movement.id,
           createdById: ctx.userId,
-        },
+        })
+        result = { delta: Number(delta), balanceAfter: newQty }
       })
-      await applySupplierStockBatchDelta(tx, {
-        tenantId: ctx.tenantId,
-        supplierId: ctx.supplierId,
-        productId,
-        delta,
-        movementId: movement.id,
-        createdById: ctx.userId,
-      })
-      result = { delta: Number(delta), balanceAfter: newQty }
-    })
-    if (result!.unchanged) return { ok: true, message: '库存无变化', balanceAfter: newQty, warehouse: DEFAULT_WAREHOUSE_META }
-    return { ok: true, delta: result!.delta, balanceAfter: result!.balanceAfter, warehouse: DEFAULT_WAREHOUSE_META }
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      throw error
+    }
+    if (result!.unchanged) return { ok: true, message: '库存无变化', balanceAfter: newQty, warehouseId: realWarehouseId!, warehouse: { id: realWarehouseId!, name: DEFAULT_WAREHOUSE_META.name } }
+    return { ok: true, delta: result!.delta, balanceAfter: result!.balanceAfter, warehouseId: realWarehouseId!, warehouse: { id: realWarehouseId!, name: DEFAULT_WAREHOUSE_META.name } }
   })
 
   /** POST /api/supplier/stock/loss — 报损 */
@@ -648,25 +677,44 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { productId, qty, reason } = parsed.data
 
+    const rawWarehouseId = (req.query as Record<string, unknown> | null)?.warehouseId
+
+    let realWarehouseId: string
     let balanceAfter = 0
     try {
+      realWarehouseId = await resolveTenantWarehouseId(prisma, ctx.tenantId, rawWarehouseId)
+
       await prisma.$transaction(async (tx) => {
-        const balances = await lockSupplierProducts(tx, ctx, [productId], { statusCode: 404, message: '商品不存在' })
-        const currentStock = balances.get(productId)!
-        if (new Prisma.Decimal(qty).greaterThan(currentStock)) {
-          throw Object.assign(new Error(`报损数量超过当前库存 ${currentStock.toFixed(2)}`), { statusCode: 409 })
+        const productBalances = await lockSupplierProducts(tx, ctx, [productId], { statusCode: 404, message: '商品不存在' })
+        const wsBalances = await lockSupplierWarehouseStock(tx, ctx, realWarehouseId, [productId])
+
+        const productStock = productBalances.get(productId)!
+        const physicalQty = wsBalances.get(productId)!
+        if (!productStock.equals(physicalQty)) {
+          throw Object.assign(
+            new Error(`商品 ${productId} Product.stock(${productStock.toFixed(3)}) 与 WarehouseStock.physicalQty(${physicalQty.toFixed(3)}) 不一致`),
+            { statusCode: 409 },
+          )
         }
-        const newStock = currentStock.minus(qty)
-        const reserved = await activeReservedForProduct(tx, ctx, productId)
+
+        if (new Prisma.Decimal(qty).greaterThan(physicalQty)) {
+          throw Object.assign(new Error(`报损数量超过当前库存 ${physicalQty.toFixed(2)}`), { statusCode: 409 })
+        }
+        const newStock = physicalQty.minus(qty)
+        const reserved = await activeReservedForProduct(tx, ctx, realWarehouseId, productId)
         if (newStock.lessThan(reserved)) {
           throw Object.assign(new Error(`可报损库存不足：已有 ${reserved.toFixed(2)} 被已接订单占用`), { statusCode: 409 })
         }
-        const actualDelta = newStock.minus(currentStock)
+        await tx.warehouseStock.update({
+          where: { tenantId_warehouseId_productId: { tenantId: ctx.tenantId, warehouseId: realWarehouseId, productId } },
+          data: { physicalQty: newStock },
+        })
         await tx.product.update({ where: { id: productId }, data: { stock: newStock } })
         const movement = await tx.supplierStockMovement.create({
           data: {
-            tenantId: ctx.tenantId, supplierId: ctx.supplierId, productId,
-            delta: actualDelta, balanceAfter: newStock,
+            tenantId: ctx.tenantId, warehouseId: realWarehouseId,
+            supplierId: ctx.supplierId, productId,
+            delta: newStock.minus(physicalQty), balanceAfter: newStock,
             type: 'LOSS' as any,
             reason, sourceType: 'Manual', sourceId: null,
             createdById: ctx.userId,
@@ -674,6 +722,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
         })
         await consumeSupplierStockBatches(tx, {
           tenantId: ctx.tenantId,
+          warehouseId: realWarehouseId,
           supplierId: ctx.supplierId,
           productId,
           quantity: qty,
@@ -685,7 +734,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
       if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
       throw error
     }
-    return { ok: true, balanceAfter, warehouse: DEFAULT_WAREHOUSE_META }
+    return { ok: true, balanceAfter, warehouseId: realWarehouseId!, warehouse: { id: realWarehouseId!, name: DEFAULT_WAREHOUSE_META.name } }
   })
 
   /** POST /api/supplier/stock/import-snapshot — 全量库存清单导入
@@ -761,7 +810,7 @@ export const supplierStockRoutes: FastifyPluginAsync = async (app) => {
           if (!prod) throw new Error('商品未建档，请刷新后重新预览')
           const balances = await lockSupplierProducts(tx, ctx, [prod.id])
           const oldStock = balances.get(prod.id)!
-          const reserved = await activeReservedForProduct(tx, ctx, prod.id)
+          const reserved = await activeReservedForProduct(tx, ctx, undefined, prod.id)
           if (new Prisma.Decimal(it.qty).lessThan(reserved)) {
             throw new Error(`目标库存不能低于已接订单预占 ${reserved.toFixed(2)}`)
           }

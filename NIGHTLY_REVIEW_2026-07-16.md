@@ -2372,3 +2372,40 @@
   `notAfter` 仍为 2026-07-21 23:59:59 UTC；未轮换证书或私钥。下一小时先复核新反馈
   和 AutoFix 本地提交，再把人工回滚也迁入隔离候选工作树，避免其失败时污染长期源码
   历史。
+
+## 2026-07-26 23:08 第 7 小时 AutoFix 人工回滚候选隔离
+
+### 开始基线与生产只读证据
+
+- 已重新读取最新 memory/夜审、fetch `origin/main`，并压缩核对全部 worktree 的分支、
+  HEAD 与脏状态；用户主仓、既有 watchdog 草稿和其他 AI 脏工作树全部保留。本批继续在
+  干净维护 worktree 开发，第 6 批最终生产记录 `0a86d231` 与本批一起推进。
+- 开始时 GitHub main、生产 `.deployed-commit` 与 `/app/dianjie-src` 均为 exact
+  `570e6f3a`，源码干净、无锁；70 migration 成功、0 失败，API/Web/CMB 与主公网
+  health/login 为 200。AutoFixRun 总数/actionable 与反馈 actionable 均为 0，没有
+  待回收的已部署 AutoFix 本地提交。
+
+### 确定性缺陷与修改
+
+- 人工一键回滚旧流程仍直接在长期源码分支执行 `git revert`，随后才构建和验证。若构建、
+  同步或生产健康失败，即使生产仍运行原版本，长期源码已经被回滚提交推进，后续 AutoFix
+  基线和标准发布会被不真实的源码历史阻断。
+- 回滚现在从生产精确标记的 AutoFix 提交创建一次性 detached candidate，并要求长期源码
+  exact、干净；candidate 的父提交必须精确等于已部署提交，candidate 文件树必须精确等于
+  该提交的父版本，任一条件不满足即在修改生产前 fail closed。
+- 生产回滚完成、健康通过、部署标记和数据库闭环成功后，才 best-effort 将长期源码
+  `--ff-only` 到回滚候选。回滚操作本身失败时从仍未改变的长期源码重建原已部署版本，
+  验证健康并把标记恢复到原 SHA；恢复失败继续如实转人工。候选以独立 tag 保留证据并在
+  finally 清理 worktree。
+
+### 验收与发布门禁
+
+- 真实临时 Git 仓新增 2 条回滚候选回归：合法回滚不推进/不弄脏长期源码且文件树精确
+  还原，根提交等非法候选必须拒绝并清理 worktree。连同补丁候选、生产基线与失败状态
+  专项共 12/12；API 全量 59 文件 556/556、API build 通过。
+- Web 全量 28 文件 506/506、`pnpm exec tsc --noEmit` 和 166 页 production build
+  通过；仅有既有 OpenTelemetry warning。`git diff --check`、业务文件门禁和高置信
+  敏感信息扫描通过。本批无 schema、业务页面或业务数据路径变化，不执行数据库写入 E2E。
+- 实现提交为 `512c13a54bd8a25e9d6d2ad4867131fd2cdadd2a`。本批报告与实现通过后
+  将非强制纯快进进入 main；发布前再次核对反馈、AutoFix、本地提交和锁，再按唯一标准
+  脚本发布并记录备份、迁移、PM2、health 与源码对齐。

@@ -28,6 +28,12 @@ const HARD_DENY_PATTERNS: RegExp[] = [
   /^apps\/api\/src\/services\/(?:payments|finance|cashbook|reconciliations|approval)\//i,
   /^apps\/api\/src\/services\/notify\//i,
   /(^|\/)(?:storeInventory|receiptSettlement|receiptDerivatives|inventoryCosting)\.ts$/i,
+  /^apps\/web\/src\/app\/(?:.+\/)?layout\.(?:ts|tsx)$/i,
+  /^apps\/web\/src\/app\/globals\.css$/i,
+  /^apps\/web\/src\/components\/AppLayout\.tsx$/i,
+  /^apps\/web\/src\/components\/.+-shell\.(?:ts|tsx)$/i,
+  /^apps\/web\/src\/components\/v2\/feedback-fab\.tsx$/i,
+  /(^|\/)(?:auth[^/]*|[^/]*permission[^/]*|[^/]*guard[^/]*)\.(?:ts|tsx)$/i,
 ]
 
 function normalizeDiffPath(raw: string): string | null {
@@ -68,13 +74,41 @@ export function inspectUnifiedDiff(diff: string): DiffInspection {
   if (/\nGIT binary patch(?:\n|$)/.test(`\n${diff}`) || /\nBinary files .+ differ(?:\n|$)/.test(`\n${diff}`)) {
     errors.push('禁止二进制补丁')
   }
-  if (/^deleted file mode /m.test(diff) || /^rename (?:from|to) /m.test(diff)) {
-    errors.push('禁止删除或重命名文件')
+  if (/^(?:new file mode|deleted file mode|old mode|new mode|rename (?:from|to)|copy (?:from|to)) /m.test(diff)) {
+    errors.push('禁止新增、删除、重命名、复制或修改文件模式')
   }
 
-  let current: DiffFileSummary | null = null
+  let current: {
+    summary: DiffFileSummary
+    oldHeaderSeen: boolean
+    newHeaderSeen: boolean
+    inHunk: boolean
+  } | null = null
+
+  const finishCurrent = () => {
+    if (!current) return
+    if (!current.oldHeaderSeen || !current.newHeaderSeen) {
+      errors.push(`补丁文件头不完整: ${current.summary.path}`)
+    }
+  }
+
+  const validatePatchPath = (raw: string, prefix: 'a' | 'b', label: '旧' | '新') => {
+    if (!current) {
+      errors.push(`补丁${label}路径缺少对应 diff --git 声明`)
+      return
+    }
+    const declared = raw.trim().split('\t')[0]
+    const expected = `${prefix}/${current.summary.path}`
+    if (declared !== expected) {
+      errors.push(`补丁${label}路径与 diff 声明不一致: ${declared}`)
+    }
+    if (label === '旧') current.oldHeaderSeen = true
+    else current.newHeaderSeen = true
+  }
+
   for (const line of lines) {
     if (line.startsWith('diff --git ')) {
+      finishCurrent()
       const match = /^diff --git a\/(.+) b\/(.+)$/.exec(line)
       if (!match || match[1] !== match[2]) {
         errors.push(`不支持的 diff 头: ${line.slice(0, 160)}`)
@@ -88,22 +122,37 @@ export function inspectUnifiedDiff(diff: string): DiffInspection {
           current = null
           continue
         }
-        current = files.get(file) ?? { path: file, added: 0, deleted: 0 }
-        files.set(file, current)
+        const summary = files.get(file) ?? { path: file, added: 0, deleted: 0 }
+        files.set(file, summary)
+        current = {
+          summary,
+          oldHeaderSeen: false,
+          newHeaderSeen: false,
+          inHunk: false,
+        }
       } catch (error: any) {
         errors.push(error.message)
         current = null
       }
       continue
     }
-    if (line.startsWith('+++ /dev/null')) {
-      errors.push('禁止删除文件')
+    if (line.startsWith('@@ ')) {
+      if (current) current.inHunk = true
       continue
     }
-    if (!current || line.startsWith('+++ ') || line.startsWith('--- ')) continue
-    if (line.startsWith('+')) current.added += 1
-    if (line.startsWith('-')) current.deleted += 1
+    if (!current?.inHunk && line.startsWith('--- ')) {
+      validatePatchPath(line.slice(4), 'a', '旧')
+      continue
+    }
+    if (!current?.inHunk && line.startsWith('+++ ')) {
+      validatePatchPath(line.slice(4), 'b', '新')
+      continue
+    }
+    if (!current?.inHunk) continue
+    if (line.startsWith('+')) current.summary.added += 1
+    if (line.startsWith('-')) current.summary.deleted += 1
   }
+  finishCurrent()
 
   const summaries = [...files.values()]
   if (summaries.length === 0) errors.push('未识别到标准 unified diff 文件')

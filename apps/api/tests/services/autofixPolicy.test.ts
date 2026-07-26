@@ -35,6 +35,11 @@ describe('auto-fix patch policy', () => {
     'package.json',
     '.env.production',
     'apps/web/src/components/AppLayout.tsx',
+    'apps/web/src/app/v2/layout.tsx',
+    'apps/web/src/app/globals.css',
+    'apps/web/src/components/v2/supply-chain-shell.tsx',
+    'apps/web/src/components/v2/feedback-fab.tsx',
+    'apps/web/src/components/v2/auth-gate.tsx',
   ])('rejects hard redline or protected path %s', (file) => {
     const diff = safeDiff.replaceAll(
       'apps/web/src/app/v2/supply-chain/home/page.tsx',
@@ -68,6 +73,53 @@ describe('auto-fix patch policy', () => {
     )
     expect(inspectUnifiedDiff(traversal).ok).toBe(false)
   })
+
+  it('rejects a patch whose actual target is disguised by an allowed diff header', () => {
+    const disguised = safeDiff
+      .replace(
+        '--- a/apps/web/src/app/v2/supply-chain/home/page.tsx',
+        '--- a/.env.example',
+      )
+      .replace(
+        '+++ b/apps/web/src/app/v2/supply-chain/home/page.tsx',
+        '+++ b/.env.example',
+      )
+    const result = inspectUnifiedDiff(disguised)
+    expect(result.ok).toBe(false)
+    expect(result.errors).toContain('补丁旧路径与 diff 声明不一致: a/.env.example')
+    expect(result.errors).toContain('补丁新路径与 diff 声明不一致: b/.env.example')
+  })
+
+  it('requires complete standard git patch headers', () => {
+    const missingTarget = safeDiff.replace(
+      '+++ b/apps/web/src/app/v2/supply-chain/home/page.tsx\n',
+      '',
+    )
+    const result = inspectUnifiedDiff(missingTarget)
+    expect(result.ok).toBe(false)
+    expect(result.errors).toContain(
+      '补丁文件头不完整: apps/web/src/app/v2/supply-chain/home/page.tsx',
+    )
+  })
+
+  it('treats --- and +++ prefixes inside a hunk as changed content', () => {
+    const prefixedContent = safeDiff
+      .replace('-const label = value', '--- old display marker')
+      .replace("+const label = value ?? '—'", '+++ new display marker')
+    expect(inspectUnifiedDiff(prefixedContent)).toMatchObject({
+      ok: true,
+      changedLines: 2,
+    })
+  })
+
+  it.each(['new file mode 100644', 'old mode 100644\nnew mode 100755', 'copy from safe.tsx'])(
+    'rejects file identity or mode metadata: %s',
+    (metadata) => {
+      const result = inspectUnifiedDiff(safeDiff.replace('index 1111111..2222222 100644', metadata))
+      expect(result.ok).toBe(false)
+      expect(result.errors).toContain('禁止新增、删除、重命名、复制或修改文件模式')
+    },
+  )
 
   it('rejects patches above the line cap', () => {
     const body = Array.from({ length: 201 }, (_, i) => `+line ${i}`).join('\n')

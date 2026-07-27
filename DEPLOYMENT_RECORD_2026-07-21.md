@@ -156,4 +156,4 @@
 - 点火用例：e2d1221b 在消息中心「全部已读」按钮埋入错别字「全部已渎」；模拟李欢提交反馈，Qwen 分诊 IMPROVEMENT，超管批准后自动入队
 - 最终结果：AutoFixRun `cms2qefvk0007yrsll166z9bq` → RESOLVED；AI 自动提交 `10de6f935f1b86e5f25db69a27b8c140d62a7edb`（1 文件 2 行）；生产健康检查 api=200、page=200；反馈自动 RESOLVED 并通知提报人
 - 过程中补齐 4 个管线短板：c8f29e99 校正 AI diff hunk 行数并在生成阶段试应用；c94043af 隔离验证固定 NODE_ENV=test；80649051 node_modules 链接延后到候选提交干净校验之后；89897ccf Web 重启不再 --update-env，避免 API PORT=4004 污染 Web 3204
-- 收尾：/app/dianjie-src、生产 .deployed-commit、GitHub main 均为 `10de6f935f1b86e5f25db69a27b8c140d62a7edb`；dianjie-v4-api / dianjie-v4-web online，`/v2/notifications` 200
+- 收尾：/app/dianjie-src 与生产 .deployed-commit 均为 `10de6f935f1b86e5f25db69a27b8c140d62a7edb`；该修复已同步 GitHub main（本记录提交后 main 为 2268c14d）；dianjie-v4-api / dianjie-v4-web online，`/v2/notifications` 200

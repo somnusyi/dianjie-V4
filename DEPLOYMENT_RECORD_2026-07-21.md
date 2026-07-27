@@ -207,3 +207,10 @@
 - 处置：QWEN_TIMEOUT_MS 90s→240s（env，共享于反馈对话），第三次重试补丁生成约 10 分钟成功 → 验证 → 自动部署 → RESOLVED。改动 +41 行（左侧分类管理面板），products 页 200
 - 提交 0119d16c 已手动同步 GitHub（部署密钥仍只读，引擎自动 push 失败仅记 OpLog；待老板给 deploy key 开写权限后此手工步骤消失）
 - 经验：档1 大页面补丁生成需 4~10 分钟，属正常；QWEN_BUSY_FALLBACK 不应再误判为模型故障
+
+## 第 21 次：统一 agent 管线上线（03e41a49，2026-07-27 傍晚）
+- 老板定稿流程：员工提需求 → 老板手机点「同意」→ Qwen Code agent 自主读码/设计/开发/跑全测 → 改动内容+测试结果推手机 → 老板点「同意部署」→ 安全发布+通知提报人
+- 改造：废除档1单轮 diff 生成（超时/hunk 两大病根），决策端点批准一律 enqueueAgentDev；runTier2Dev 无档1分析时由反馈直接构建简报（buildAgentBrief，含禁区 REJECT 出口）；agent 输出 REJECT 明确转人工
+- 不变的安全墙：部署机（备份/健康检查/自动回滚）独立于 agent；白名单核查+独立复跑测试+老板终审才上线
+- 全量 571 测试通过；部署仅重启 API，.deployed-commit=03e41a49…，api/web 健康
+- 注：档1代码保留未删（engine/processRun 仍在，但不再有新任务流入）；TASKBOOK_READY 双审批路径被统一流程取代

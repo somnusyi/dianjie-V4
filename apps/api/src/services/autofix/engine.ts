@@ -14,7 +14,12 @@ import {
   extractUnifiedDiff,
   parseAnalysisResult,
 } from './prompts'
-import { collectCandidateSources, requireCleanRepoHead, verifyPatch } from './repository'
+import {
+  collectCandidateSources,
+  requireCleanRepoHead,
+  validatePatchApplicable,
+  verifyPatch,
+} from './repository'
 const ACTIVE_STATUSES = ['ANALYZING', 'PATCHING', 'VERIFYING', 'DEPLOYING', 'VERIFY_PROD'] as const
 const STALE_WATCHDOG_INTERVAL_MS = 60_000
 let draining = false
@@ -221,6 +226,7 @@ async function processRun(run: { id: string; tenantId: string; feedbackId: strin
         const candidatePaths = new Set(sources.map((source) => source.path))
         const unexpected = inspection.files.find((file) => !candidatePaths.has(file.path))
         if (unexpected) throw new Error(`补丁触碰未提供给 AI 的文件: ${unexpected.path}`)
+        await validatePatchApplicable(sourceDir, diffPatch, baseCommitSha)
         lastPatchError = ''
         break
       } catch (error: any) {

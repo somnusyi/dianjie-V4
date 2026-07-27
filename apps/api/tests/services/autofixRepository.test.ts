@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import {
   collectCandidateSources,
   requireCleanRepoHead,
+  validatePatchApplicable,
   verifyPatch,
 } from '../../src/services/autofix/repository'
 
@@ -114,6 +115,37 @@ index 1111111..2222222 100644
       delete process.env.AUTOFIX_TEST_ADVANCE_MARKER
       delete process.env.AUTOFIX_TEST_SOURCE_REPO
       await rm(tempRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('checks that an AI patch really applies before accepting it', async () => {
+    const tempRepo = await mkdtemp(path.join(os.tmpdir(), 'dianjie-autofix-apply-check-'))
+    try {
+      await mkdir(path.join(tempRepo, 'apps/web/src/app/example'), { recursive: true })
+      await execFileAsync('git', ['init', '-q'], { cwd: tempRepo })
+      await execFileAsync('git', ['config', 'user.name', 'AutoFix Test'], { cwd: tempRepo })
+      await execFileAsync('git', ['config', 'user.email', 'autofix-test@localhost'], { cwd: tempRepo })
+      await writeFile(
+        path.join(tempRepo, 'apps/web/src/app/example/page.tsx'),
+        'export const label = "before"\n',
+      )
+      await execFileAsync('git', ['add', '.'], { cwd: tempRepo })
+      await execFileAsync('git', ['commit', '-qm', 'first'], { cwd: tempRepo })
+      const pinned = await requireCleanRepoHead(tempRepo)
+
+      const validDiff = `diff --git a/apps/web/src/app/example/page.tsx b/apps/web/src/app/example/page.tsx
+--- a/apps/web/src/app/example/page.tsx
++++ b/apps/web/src/app/example/page.tsx
+@@ -1 +1 @@
+-export const label = "before"
++export const label = "after"
+`
+      await expect(validatePatchApplicable(tempRepo, validDiff, pinned)).resolves.toBeUndefined()
+
+      const mismatchedDiff = validDiff.replace('export const label = "before"', 'export const label = "missing"')
+      await expect(validatePatchApplicable(tempRepo, mismatchedDiff, pinned)).rejects.toThrow('git apply')
+    } finally {
+      await rm(tempRepo, { recursive: true, force: true })
     }
   })
 })

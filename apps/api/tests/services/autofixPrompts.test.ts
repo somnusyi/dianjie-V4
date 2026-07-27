@@ -21,4 +21,19 @@ describe('auto-fix AI output parsing', () => {
     expect(diff.startsWith('diff --git')).toBe(true)
     expect(diff.endsWith('\n')).toBe(true)
   })
+
+  it('normalizes incorrect hunk line counts from AI output', () => {
+    const diff = extractUnifiedDiff(`diff --git a/apps/web/src/app/v2/notifications/page.tsx b/apps/web/src/app/v2/notifications/page.tsx
+--- a/apps/web/src/app/v2/notifications/page.tsx
++++ b/apps/web/src/app/v2/notifications/page.tsx
+@@ -105,7 +105,7 @@
+ <p>加载中…</p>
+ {unreadCount > 0 && (
+-<button>全部已渎</button>
++<button>全部已读</button>
+ )}
+ </header>
+`)
+    expect(diff).toContain('@@ -105,5 +105,5 @@')
+  })
 })

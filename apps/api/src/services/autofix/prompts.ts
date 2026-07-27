@@ -76,10 +76,56 @@ export function parseAnalysisResult(raw: string): AnalysisResult {
   }
 }
 
+function normalizeUnifiedDiffHunks(diff: string): string {
+  const lines = diff.replace(/\r\n/g, '\n').split('\n')
+  const output: string[] = []
+  let index = 0
+
+  while (index < lines.length) {
+    const line = lines[index]
+    const header = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/.exec(line)
+    if (!header) {
+      output.push(line)
+      index += 1
+      continue
+    }
+
+    const body: string[] = []
+    let oldCount = 0
+    let newCount = 0
+    index += 1
+    while (index < lines.length) {
+      const bodyLine = lines[index]
+      if (bodyLine.startsWith('diff --git ') || bodyLine.startsWith('@@ ')) break
+      if (bodyLine === '' && index === lines.length - 1) {
+        index += 1
+        continue
+      }
+      body.push(bodyLine)
+      if (bodyLine.startsWith('\\')) {
+        // "\ No newline at end of file" is metadata, not file content.
+      } else if (bodyLine.startsWith('+')) {
+        newCount += 1
+      } else if (bodyLine.startsWith('-')) {
+        oldCount += 1
+      } else {
+        oldCount += 1
+        newCount += 1
+      }
+      index += 1
+    }
+
+    output.push(`@@ -${header[1]},${oldCount} +${header[2]},${newCount} @@${header[3] ?? ''}`)
+    output.push(...body)
+  }
+
+  return output.join('\n')
+}
+
 export function extractUnifiedDiff(raw: string): string {
   const fenced = /```(?:diff|patch)?\s*\n([\s\S]*?)```/i.exec(raw)?.[1]
   const candidate = (fenced || raw).trim()
   const start = candidate.indexOf('diff --git ')
   if (start < 0) throw new Error('AI 未返回 unified diff')
-  return `${candidate.slice(start).trim()}\n`
+  return `${normalizeUnifiedDiffHunks(`${candidate.slice(start).trim()}\n`).replace(/\n+$/, '')}\n`
 }

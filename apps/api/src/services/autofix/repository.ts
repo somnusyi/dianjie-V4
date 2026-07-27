@@ -99,6 +99,25 @@ export async function requireCleanRepoHead(
   return head
 }
 
+export async function validatePatchApplicable(
+  repoDir: string,
+  diffPatch: string,
+  expectedBaseSha: string,
+): Promise<void> {
+  const inspection = inspectUnifiedDiff(diffPatch)
+  if (!inspection.ok) throw new Error(inspection.errors.join('；'))
+
+  await requireCleanRepoHead(repoDir, expectedBaseSha)
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'dianjie-autofix-check-'))
+  const patchFile = path.join(tempRoot, 'candidate.patch')
+  await writeFile(patchFile, diffPatch, { mode: 0o600 })
+  try {
+    await run(repoDir, 'git', ['apply', '--check', patchFile], 30_000)
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+  }
+}
+
 /**
  * Applies the AI diff only in a disposable git worktree. The production source
  * and application directory remain untouched before a human approval.

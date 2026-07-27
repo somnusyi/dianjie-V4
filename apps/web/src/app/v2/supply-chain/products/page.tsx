@@ -557,6 +557,45 @@ export default function InternalSupplyChainProductsPage() {
 
       <main className="mx-auto max-w-[1440px]">
         <ProductToolTabs />
+        <div className="flex items-start gap-4">
+          <aside className="mt-4 hidden w-56 shrink-0 overflow-hidden rounded-card border border-border bg-white lg:block">
+            <div className="flex items-center justify-between border-b border-border bg-bg px-4 py-3">
+              <b className="text-button">分类管理</b>
+              <span className="font-num text-micro text-gray3">{categories.length} 个</span>
+            </div>
+            <nav className="flex flex-col gap-1 p-2" aria-label="按分类筛选商品">
+              <button
+                onClick={() => updateFilters({ category: '' })}
+                aria-pressed={!filters.category}
+                className={`flex items-center justify-between gap-2 rounded-cta px-3 py-2 text-left text-caption transition-colors ${filters.category ? 'text-gray2 hover:bg-bg' : 'bg-accent/10 font-bold text-accent'}`}
+              >
+                <span>全部分类</span>
+                <span className={`font-num text-micro ${filters.category ? 'text-gray3' : 'text-accent'}`}>
+                  {categories.reduce((sum, cat) => sum + Number(cat.count ?? 0), 0)}
+                </span>
+              </button>
+              {categories.map(cat => {
+                const active = filters.category === cat.name
+                return (
+                  <button
+                    key={cat.name}
+                    onClick={() => updateFilters({ category: active ? '' : cat.name })}
+                    aria-pressed={active}
+                    title={cat.name}
+                    className={`flex items-center justify-between gap-2 rounded-cta px-3 py-2 text-left text-caption transition-colors ${active ? 'bg-accent/10 font-bold text-accent' : 'text-gray2 hover:bg-bg'}`}
+                  >
+                    <span className="truncate">{cat.name}</span>
+                    <span className={`font-num text-micro ${active ? 'text-accent' : 'text-gray3'}`}>{cat.count ?? 0}</span>
+                  </button>
+                )
+              })}
+              {categories.length === 0 && (
+                <p className="px-3 py-4 text-center text-micro text-gray3">暂无分类，可在新增商品时创建</p>
+              )}
+            </nav>
+            <p className="border-t border-border px-4 py-2.5 text-micro text-gray3">内联新建分类入口在「新增商品」弹窗中</p>
+          </aside>
+          <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-end gap-3 py-4">
           <FilterInput label="关键字" value={filters.q} onChange={value => updateFilters({ q: value })} placeholder="名称 / 编码 / 规格" />
           <FilterSelect label="分类" value={filters.category} onChange={value => updateFilters({ category: value })}>
@@ -759,6 +798,8 @@ export default function InternalSupplyChainProductsPage() {
             onPage={page => setFilters(current => keepFiltersForPage(current, page))}
           />
         )}
+          </div>
+        </div>
       </main>
 
       {formOpen && (

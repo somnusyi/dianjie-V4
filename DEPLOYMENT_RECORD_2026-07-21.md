@@ -157,3 +157,10 @@
 - 最终结果：AutoFixRun `cms2qefvk0007yrsll166z9bq` → RESOLVED；AI 自动提交 `10de6f935f1b86e5f25db69a27b8c140d62a7edb`（1 文件 2 行）；生产健康检查 api=200、page=200；反馈自动 RESOLVED 并通知提报人
 - 过程中补齐 4 个管线短板：c8f29e99 校正 AI diff hunk 行数并在生成阶段试应用；c94043af 隔离验证固定 NODE_ENV=test；80649051 node_modules 链接延后到候选提交干净校验之后；89897ccf Web 重启不再 --update-env，避免 API PORT=4004 污染 Web 3204
 - 收尾：/app/dianjie-src 与生产 .deployed-commit 均为 `10de6f935f1b86e5f25db69a27b8c140d62a7edb`；该修复已同步 GitHub main（本记录提交后 main 为 2268c14d）；dianjie-v4-api / dianjie-v4-web online，`/v2/notifications` 200
+
+## 第 15 次：反馈附件过期打不开修复（4f3c691d，2026-07-27 下午）
+- 问题：反馈详情里历史截图打开报 OSS `AccessDenied / Request has expired`——上传时存的是 1 小时临时签名 URL，反馈模块读取时未像 lossClaims/orders/invoices 一样重签
+- 改动：routes/feedback.ts 管理端列表 `/admin/inbox` 与详情 `/:id` 返回前统一 `resignOssUrls()`；不改上传逻辑、不迁移数据库，旧附件读取时动态重签即可恢复
+- 验证：双端 tsc 通过、feedbackTriage 19/19；生产用两条已过期反馈（cms2o6jke…「分类管理移至最左侧」、cms2o1e7z…「修改分类支持其他类目」）实测：API 返回新签名 URL（Expires=当前+3600s），图片 GET 200 image/png
+- 部署：git bundle（main ^10de6f93）→ /app/dianjie-src reset --hard 4f3c691d，rsync api/dist，仅重启 dianjie-v4-api（未动 Web），.deployed-commit=4f3c691ddf7f…；health db=ok、/v2/login 200
+- 注意：已打开的旧反馈页面需刷新一次才能拿到新 URL；长期可考虑反馈附件改存 OSS key 再 signOssKey，本次不动数据结构

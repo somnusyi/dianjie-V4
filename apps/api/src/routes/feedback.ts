@@ -21,6 +21,7 @@ import { sendNotification } from '../services/notification'
 import { qwenChat, buildFeedbackSystemPrompt, QWEN_NOT_CONFIGURED } from '../services/qwenChat'
 import { parseTriageBlock, decideTriageAction, TriageResult } from '../services/feedbackTriage'
 import { enqueueAutoFix } from '../services/autofix/engine'
+import { resignOssUrls } from './upload'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const ADMIN_ROLES = new Set(['SUPER_ADMIN'])
@@ -278,7 +279,7 @@ export const feedbackRoutes: FastifyPluginAsync = async (app) => {
     })
     return list.map((f) => ({
       id: f.id, category: f.category, status: f.status, title: f.title,
-      summary: f.summary, proposal: f.proposal, attachments: f.attachments,
+      summary: f.summary, proposal: f.proposal, attachments: resignOssUrls(f.attachments),
       createdAt: f.createdAt, updatedAt: f.updatedAt,
       reporter: f.reporter,
       storeName: (f.context as any)?.storeName || null,
@@ -297,7 +298,7 @@ export const feedbackRoutes: FastifyPluginAsync = async (app) => {
     })
     if (!feedback) return reply.status(404).send({ error: '反馈不存在' })
     if (!canAccess(actor, feedback.reporterId)) return reply.status(403).send({ error: '无权访问该反馈' })
-    return feedback
+    return { ...feedback, attachments: resignOssUrls(feedback.attachments) }
   })
 
   // ── 批准 / 驳回 ─────────────────────────────────────

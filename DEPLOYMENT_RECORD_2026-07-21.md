@@ -214,3 +214,20 @@
 - 不变的安全墙：部署机（备份/健康检查/自动回滚）独立于 agent；白名单核查+独立复跑测试+老板终审才上线
 - 全量 571 测试通过；部署仅重启 API，.deployed-commit=03e41a49…，api/web 健康
 - 注：档1代码保留未删（engine/processRun 仍在，但不再有新任务流入）；TASKBOOK_READY 双审批路径被统一流程取代
+
+## 第 22 次：超管 AI 助手聊天上线 + 自动开发限制放开（5467cc43，2026-07-27 傍晚）
+- 老板定稿：手机上像和 Kimi 对话一样直接指挥 AI 改系统——超管聊天页发指令 → Qwen Code 自主读码/设计/开发/跑全测 → 改动+测试结果回写聊天 → 聊天内点「批准部署上线」→ 安全发布
+- 新增：/v2/boss/assistant 聊天页（消息流+批准部署按钮+10s 轮询，反馈审批页有入口）；BossChatMessage 模型；auto_fix_runs.feedbackId 可空（迁移 20260727180000）；/api/boss-chat 三端点（仅 SUPER_ADMIN，发指令限流 10/hour）
+- tier2 支持无反馈聊天任务：buildChatBrief/enqueueBossChatDev；完成/失败均回写聊天并通知；部署结果也回写聊天
+- 限制放开（老板要求"跟我对话也没限制改东西"）：补丁行数/文件数上限默认取消（AUTO_FIX_MAX_FILES/AUTO_FIX_MAX_LINES 可恢复）；允许 apps/web/src 内新建文件（git add -N intent-to-add 进 diff）；diff 白名单与档2硬约束对齐为 apps/web/src/**；删除/重命名/复制/禁区（认证/权限/资金/库存/schema/依赖/部署）仍硬禁
+- 测试：API 573 + Web 512 全过、双端 tsc 干净
+- 部署：迁移+【三处】prisma 客户端刷新（/app/dianjie-src/packages/db、/app/dianjie-v4/packages/db、/app/dianjie-v4/apps/api 的 .prisma 副本——脚本从 apps/api 解析到的是这份，不刷会报枚举校验错）；rsync api/dist 重启 API；服务器构建 Web，standalone/apps/web 内容 rsync 到生产根（server.js 与 node_modules 同级，嵌套 apps 目录是错的，踩了一次 MODULE_NOT_FOUND 已修）；static→根/.next/static、public→根/public；.deployed-commit=5467cc43…
+- 冒烟：铸 17328852591 token 实测 GET/POST /api/boss-chat/messages 200/201；首条真实指令（改聊天页副标题文案）已进入 QWEN_DEV
+
+## 第 22 次附记：聊天链路实弹冒烟修掉 3 个潜伏 bug（2026-07-27 傍晚，Kimi 执行）
+- 背景：档2/统一 agent 管线的「QWEN_DEV 实弹」此前从未完整跑通过（第 19 次记录明确标注未验证）。本次用超管聊天首单实弹，连续暴露并修复 3 个问题，第 4 轮全链路 RESOLVED
+- bug1「pps/... 误判越界」：parseChangedPaths 按 porcelain 三字符前缀 slice(3)，实战出现 `? ` 单问号前缀把 apps/... 啃成 pps/...。修复：改用 `git diff --name-only -z HEAD`（NUL 分隔无格式歧义），e3544938
+- bug2「node_modules 白名单误杀」：worktree 里 node_modules 是符号链接，.gitignore 的 `node_modules/` 只匹配目录不匹配 symlink，`git add -N .` 把它收进 diff。修复：三处 git 调用统一加 pathspec `':!node_modules'`，9f3f7028
+- bug3「corrupt patch at line 13」：git() 助手的 .trim() 吃掉 diff 末尾空白上下文行（单个空格），hunk 声明 7 行实际 6 行，部署机 git apply --check 拦下（防线有效）。修复：补丁捕获改用不 trim 的 gitRaw；inspectUnifiedDiff 新增 hunk 声明/实际行数校验，此类损坏以后在 DEPLOY_REVIEW 阶段即拦截，8392f7bd
+- 全链路验证：聊天发指令 → QWEN_DEV（Qwen Code 改 1 文件 2 行）→ 独立复验 → DEPLOY_REVIEW → 聊天内批准部署 → 安全发布 → 生产健康检查 → RESOLVED → 结果回写聊天。自动提交 fc22d56c 已同步 GitHub，三方基线一致
+- 测试：API 575（+2 新用例：hunk 行数不符拒绝、末尾空白上下文行接受）

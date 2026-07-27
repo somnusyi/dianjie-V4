@@ -164,3 +164,9 @@
 - 验证：双端 tsc 通过、feedbackTriage 19/19；生产用两条已过期反馈（cms2o6jke…「分类管理移至最左侧」、cms2o1e7z…「修改分类支持其他类目」）实测：API 返回新签名 URL（Expires=当前+3600s），图片 GET 200 image/png
 - 部署：git bundle（main ^10de6f93）→ /app/dianjie-src reset --hard 4f3c691d，rsync api/dist，仅重启 dianjie-v4-api（未动 Web），.deployed-commit=4f3c691ddf7f…；health db=ok、/v2/login 200
 - 注意：已打开的旧反馈页面需刷新一次才能拿到新 URL；长期可考虑反馈附件改存 OSS key 再 signOssKey，本次不动数据结构
+
+## 第 16 次：自动修复第二单真实跑通（caec9f4f，2026-07-27 下午）
+- 反馈：张怡「商品管理默认只显示供应中」（cms2pb3x7…），超管 04:52 批准 → AutoFixRun cms2r3ote… 全程约 12 分钟：PATCHING→DEPLOYING→RESOLVED，无人工介入
+- AI 修复内容：供应链商品页 filters 默认值与 clearFilters 均加 `status: 'ENABLED'`（products/page.tsx 2 行），提交 caec9f4f 已部署生产，.deployed-commit 一致，api/web 健康
+- 闭环：反馈自动 RESOLVED 并通知提报人
+- 发现短板：AutoFix 引擎只提交到服务器本地 main，不会自动推 GitHub——本次已手动 merge 同步（41960476）；后续每单自动修复后都需回同步，或给引擎加 push 步骤

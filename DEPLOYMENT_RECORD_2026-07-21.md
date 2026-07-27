@@ -170,3 +170,9 @@
 - AI 修复内容：供应链商品页 filters 默认值与 clearFilters 均加 `status: 'ENABLED'`（products/page.tsx 2 行），提交 caec9f4f 已部署生产，.deployed-commit 一致，api/web 健康
 - 闭环：反馈自动 RESOLVED 并通知提报人
 - 发现短板：AutoFix 引擎只提交到服务器本地 main，不会自动推 GitHub——本次已手动 merge 同步（41960476）；后续每单自动修复后都需回同步，或给引擎加 push 步骤
+
+## 第 17 次：自动修复门槛文案校正 + GitHub 自动同步（7cf4084a，2026-07-27 下午）
+- 背景：「修改分类支持其他类目」批准后 ESCALATED，报错笼统写「置信度门槛 (0.80)」——实际置信度 0.80 达标，真正拦截原因是 inWhitelist=false（需后端分类持久化，AI 判断正确）；张怡反馈线程已手动补发转人工说明
+- 改动：engine.ts 白名单拒绝与置信度不足分开报错，白名单拒绝时自动在反馈对话留言说明；deployment.ts 部署/回滚成功后 git push 服务器 main 回 GitHub（仅快进，分叉记 OpLog 待人工对齐，绝不影响部署；默认 remote=git@github-dianjie 别名，env AUTO_FIX_GIT_REMOTE 可覆盖）
+- 待办（老板 30 秒操作）：GitHub 仓库 Settings → Deploy keys，把 server-deploy@dianjie 公钥（/root/.ssh/dianjie_github_deploy.pub，ed25519 ...Ce80Y）删了重加并勾选 Allow write access——当前只读，push 会失败但仅记日志不伤部署；服务器走 HTTPS 推 GitHub 不通（HTTP2 被拦），SSH 22 端口正常
+- 部署：bundle（main ^caec9f4f）→ reset --hard 7cf4084a，rsync api/dist，仅重启 API，.deployed-commit=7cf4084a…，三方（GitHub/服务器源/生产基线）对齐，health db=ok、web=200

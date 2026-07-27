@@ -195,8 +195,19 @@ async function processRun(run: { id: string; tenantId: string; feedbackId: strin
       where: { id: run.id },
       data: { analysis: JSON.stringify(analysis) },
     })
-    if (!analysis.inWhitelist || analysis.confidence < 0.65) {
-      throw new Error(`AI 定位未通过白名单/置信度门槛 (${analysis.confidence.toFixed(2)})`)
+    if (!analysis.inWhitelist) {
+      await prisma.feedbackMessage.create({
+        data: {
+          tenantId: run.tenantId,
+          feedbackId: run.feedbackId,
+          role: 'assistant',
+          content: '该需求涉及后端数据、权限或部署等变更，超出前端自动修复的安全范围，已转人工评估处理，请留意后续进展通知。',
+        },
+      })
+      throw new Error(`需求超出前端自动修复白名单范围（涉及后端/数据/权限等变更），已转人工评估 (置信度 ${analysis.confidence.toFixed(2)})`)
+    }
+    if (analysis.confidence < 0.65) {
+      throw new Error(`AI 定位置信度不足 (${analysis.confidence.toFixed(2)} < 0.65)，已转人工确认`)
     }
 
     await transition(run, 'PATCHING')

@@ -171,6 +171,50 @@ async function resolveFeedback(runId: string, commitSha: string, health: string,
   })
 }
 
+function githubRemote(): string {
+  return process.env.AUTO_FIX_GIT_REMOTE || 'git@github-dianjie:somnusyi/dianjie-V4.git'
+}
+
+/**
+ * 部署成功后把服务器 main 推回 GitHub。只做快进推送：
+ * 若 GitHub 出现未部署的分叉提交，绝不自动合并（避免源码基线领先生产基线，
+ * 导致下一单 requireProductionBaseline 失败），改为记 OpLog 待人工对齐。
+ * 任何失败都不能影响已完成的部署。
+ */
+async function syncGithubMain(repo: string, runId: string, tenantId: string): Promise<void> {
+  const remote = githubRemote()
+  try {
+    await run(repo, 'git', ['push', remote, 'main'], 60_000)
+    await prisma.opLog.create({
+      data: {
+        tenantId,
+        role: 'AI',
+        action: `AI 自动修复 ${runId} 已同步 GitHub main`,
+        entityType: 'AutoFixRun',
+        targetId: runId,
+        isAi: true,
+        metadata: { reason: 'github_synced' } as any,
+      },
+    })
+  } catch (pushError: any) {
+    console.error('[autofix] GitHub 同步失败（生产不受影响，待人工对齐）:', pushError)
+    await prisma.opLog.create({
+      data: {
+        tenantId,
+        role: 'AI',
+        action: `AI 自动修复 ${runId} GitHub 同步失败，以生产为准，待人工 git 对齐`.slice(0, 500),
+        entityType: 'AutoFixRun',
+        targetId: runId,
+        isAi: true,
+        metadata: {
+          reason: 'github_sync_failed',
+          error: (pushError?.message || String(pushError)).slice(0, 500),
+        } as any,
+      },
+    }).catch((error) => console.error('[autofix] 记录 GitHub 同步失败日志出错:', error))
+  }
+}
+
 async function markDeploymentFailure(
   runId: string,
   error: unknown,
@@ -264,6 +308,7 @@ export async function executeApprovedRun(runId: string) {
     try {
       await requireCleanPinnedRepo(repo, runRecord.baseCommitSha)
       await run(repo, 'git', ['merge', '--ff-only', commitSha], 30_000)
+      await syncGithubMain(repo, runRecord.id, runRecord.tenantId)
     } catch (sourceSyncError) {
       console.error('[autofix] 生产已验证，但源码分支快进待维护:', sourceSyncError)
     }
@@ -351,6 +396,7 @@ export async function executeManualRollback(runId: string) {
     try {
       await requireCleanPinnedRepo(repo, runRecord.commitSha)
       await run(repo, 'git', ['merge', '--ff-only', rollbackSha], 30_000)
+      await syncGithubMain(repo, runRecord.id, runRecord.tenantId)
     } catch (sourceSyncError) {
       console.error('[autofix] 生产回滚已验证，但源码分支快进待维护:', sourceSyncError)
     }

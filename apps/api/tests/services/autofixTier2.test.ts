@@ -102,7 +102,7 @@ describe('buildAgentBrief', () => {
   it('写死 agent 工作方式与安全约束', () => {
     expect(brief).toContain('pnpm --filter @dianjie/web test')
     expect(brief).toContain('tsc -p apps/web/tsconfig.json --noEmit')
-    expect(brief).toContain('不得新建、删除、重命名文件')
+    expect(brief).toContain('不得删除、重命名文件')
     expect(brief).toContain('REJECT:')
     expect(brief).toContain('apps/web')
   })

@@ -112,19 +112,47 @@ describe('auto-fix patch policy', () => {
     })
   })
 
-  it.each(['new file mode 100644', 'old mode 100644\nnew mode 100755', 'copy from safe.tsx'])(
+  it.each(['old mode 100644\nnew mode 100755', 'copy from safe.tsx', 'deleted file mode 100644'])(
     'rejects file identity or mode metadata: %s',
     (metadata) => {
       const result = inspectUnifiedDiff(safeDiff.replace('index 1111111..2222222 100644', metadata))
       expect(result.ok).toBe(false)
-      expect(result.errors).toContain('禁止新增、删除、重命名、复制或修改文件模式')
+      expect(result.errors).toContain('禁止删除、重命名、复制或修改文件模式')
     },
   )
 
-  it('rejects patches above the line cap', () => {
-    const body = Array.from({ length: 201 }, (_, i) => `+line ${i}`).join('\n')
+  it('allows new files under apps/web/src', () => {
+    const newFileDiff = [
+      'diff --git a/apps/web/src/lib/new-util.ts b/apps/web/src/lib/new-util.ts',
+      'new file mode 100644',
+      'index 0000000..1111111',
+      '--- /dev/null',
+      '+++ b/apps/web/src/lib/new-util.ts',
+      '@@ -0,0 +1,2 @@',
+      '+export const hello = 1',
+      '+export const world = 2',
+      '',
+    ].join('\n')
+    const result = inspectUnifiedDiff(newFileDiff)
+    expect(result.ok).toBe(true)
+    expect(result.files[0]).toMatchObject({ path: 'apps/web/src/lib/new-util.ts', added: 2 })
+  })
+
+  it('rejects patches above the line cap when env cap is set', () => {
+    process.env.AUTO_FIX_MAX_LINES = '200'
+    try {
+      const body = Array.from({ length: 201 }, (_, i) => `+line ${i}`).join('\n')
+      const diff = safeDiff.replace("+const label = value ?? '—'", body)
+      expect(inspectUnifiedDiff(diff).errors).toContain('补丁变更行数超过 200')
+    } finally {
+      delete process.env.AUTO_FIX_MAX_LINES
+    }
+  })
+
+  it('has no line cap by default', () => {
+    const body = Array.from({ length: 1200 }, (_, i) => `+line ${i}`).join('\n')
     const diff = safeDiff.replace("+const label = value ?? '—'", body)
-    expect(inspectUnifiedDiff(diff).errors).toContain('补丁变更行数超过 200')
+    expect(inspectUnifiedDiff(diff).ok).toBe(true)
   })
 })
 

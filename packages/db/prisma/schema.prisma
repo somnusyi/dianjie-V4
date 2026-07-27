@@ -71,6 +71,7 @@ model Tenant {
   feedbacks                     Feedback[]
   feedbackMessages              FeedbackMessage[]
   autoFixRuns                   AutoFixRun[]
+  bossChatMessages              BossChatMessage[]
 
   @@map("tenants")
 }
@@ -186,6 +187,7 @@ model User {
   feedbacks                     Feedback[]              @relation("FeedbackReporter")
   decidedFeedbacks              Feedback[]              @relation("FeedbackDecisionBy")
   decidedAutoFixRuns            AutoFixRun[]             @relation("AutoFixDecisionBy")
+  bossChatMessages              BossChatMessage[]
 
   @@unique([tenantId, email])
   @@unique([tenantId, phone])
@@ -3320,7 +3322,7 @@ enum FeedbackStatus {
 model AutoFixRun {
   id            String       @id @default(cuid())
   tenantId      String
-  feedbackId    String       @unique
+  feedbackId    String?      @unique
   status        AutoFixStatus @default(RECEIVED)
   analysis      String?      @db.Text
   planSummary   String?      @db.Text
@@ -3336,7 +3338,7 @@ model AutoFixRun {
   updatedAt     DateTime     @updatedAt
 
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  feedback  Feedback @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+  feedback  Feedback? @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
   decidedBy User?    @relation("AutoFixDecisionBy", fields: [decidedById], references: [id])
 
   @@index([tenantId, status, createdAt])
@@ -3360,4 +3362,22 @@ enum AutoFixStatus {
   TASKBOOK_READY
   QWEN_DEV
   DEPLOY_REVIEW
+}
+
+// 超管 AI 助手聊天记录：老板在手机上直接指挥 AI 开发的一问一答。
+// assistant 消息可关联一次 AutoFixRun（feedbackId 为空的聊天任务）。
+model BossChatMessage {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  role      String // user / assistant / system
+  content   String   @db.Text
+  runId     String?
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, userId, createdAt])
+  @@map("boss_chat_messages")
 }

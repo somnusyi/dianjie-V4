@@ -123,15 +123,17 @@ async function resolveFeedback(runId: string, commitSha: string, health: string,
         error: null,
       },
     })
-    await tx.feedback.update({ where: { id: run.feedbackId }, data: { status: 'RESOLVED' } })
-    await tx.feedbackMessage.create({
-      data: {
-        tenantId: run.tenantId,
-        feedbackId: run.feedbackId,
-        role: 'assistant',
-        content: '该反馈已由管理员批准，系统完成自动修复和生产验证，问题已标记为解决。如仍有异常请继续留言。',
-      },
-    })
+    if (run.feedback) {
+      await tx.feedback.update({ where: { id: run.feedback.id }, data: { status: 'RESOLVED' } })
+      await tx.feedbackMessage.create({
+        data: {
+          tenantId: run.tenantId,
+          feedbackId: run.feedback.id,
+          role: 'assistant',
+          content: '该反馈已由管理员批准，系统完成自动修复和生产验证，问题已标记为解决。如仍有异常请继续留言。',
+        },
+      })
+    }
     await tx.opLog.create({
       data: {
         tenantId: run.tenantId,
@@ -146,27 +148,40 @@ async function resolveFeedback(runId: string, commitSha: string, health: string,
     return run
   })
 
-  const reporter = await prisma.user.findUnique({
-    where: { id: result.feedback.reporterId },
-    select: { role: true },
-  })
-  await sendNotification({
-    tenantId: result.tenantId,
-    recipientRole: reporter?.role || 'MANAGER',
-    recipientId: result.feedback.reporterId,
-    type: 'FEEDBACK_RESULT',
-    title: `反馈已自动修复: ${result.feedback.title || ''}`,
-    body: '管理员批准后系统已自动完成开发、测试和生产验证。',
-    refType: 'Feedback',
-    refId: result.feedbackId,
-    dedupeKey: `AUTOFIX_RESULT:${result.id}:resolved`,
-  }).catch((error) => console.error('[autofix] 提报人通知失败:', error))
+  if (result.feedback) {
+    const reporter = await prisma.user.findUnique({
+      where: { id: result.feedback.reporterId },
+      select: { role: true },
+    })
+    await sendNotification({
+      tenantId: result.tenantId,
+      recipientRole: reporter?.role || 'MANAGER',
+      recipientId: result.feedback.reporterId,
+      type: 'FEEDBACK_RESULT',
+      title: `反馈已自动修复: ${result.feedback.title || ''}`,
+      body: '管理员批准后系统已自动完成开发、测试和生产验证。',
+      refType: 'Feedback',
+      refId: result.feedback.id,
+      dedupeKey: `AUTOFIX_RESULT:${result.id}:resolved`,
+    }).catch((error) => console.error('[autofix] 提报人通知失败:', error))
+  } else if (result.decidedById) {
+    // 超管聊天任务: 部署结果回写到聊天记录
+    await prisma.bossChatMessage.create({
+      data: {
+        tenantId: result.tenantId,
+        userId: result.decidedById,
+        role: 'assistant',
+        runId: result.id,
+        content: '已部署上线并通过生产健康检查。',
+      },
+    }).catch((error) => console.error('[boss-chat] 部署结果回写失败:', error))
+  }
 
   notify({
     tenantId: result.tenantId,
     event: 'AUTOFIX_RESOLVED',
     eventKey: `AUTOFIX:${result.id}:RESOLVED`,
-    payload: { runId: result.id, feedbackId: result.feedbackId, commitSha, health },
+    payload: { runId: result.id, feedbackId: result.feedbackId ?? undefined, commitSha, health },
     bypassFrequency: true,
   })
 }
@@ -301,7 +316,7 @@ export async function executeApprovedRun(runId: string) {
       where: { id: runRecord.id },
       data: { status: 'VERIFY_PROD' as any, commitSha, deployLog: log },
     })
-    const contextPath = String((runRecord.feedback.context as any)?.path || '/v2/login')
+    const contextPath = String((runRecord.feedback?.context as any)?.path || '/v2/login')
     const health = await verifyProduction(contextPath)
     await writeFile(path.join(target, '.deployed-commit'), `${commitSha}\n`, { mode: 0o600 })
     await resolveFeedback(runRecord.id, commitSha, health, log)

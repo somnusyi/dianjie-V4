@@ -13,8 +13,13 @@ export interface DiffInspection {
   errors: string[]
 }
 
-const MAX_FILES = 5
-const MAX_CHANGED_LINES = 200
+// 防失控刹车已按老板要求放开：默认不限文件数与行数（env AUTO_FIX_MAX_FILES / AUTO_FIX_MAX_LINES 可重新启用）。
+function maxFiles(): number {
+  return Math.max(1, Number(process.env.AUTO_FIX_MAX_FILES) || Number.MAX_SAFE_INTEGER)
+}
+function maxChangedLines(): number {
+  return Math.max(50, Number(process.env.AUTO_FIX_MAX_LINES) || Number.MAX_SAFE_INTEGER)
+}
 
 const HARD_DENY_PATTERNS: RegExp[] = [
   /(^|\/)\.env(?:\.|$)/i,
@@ -54,10 +59,9 @@ function normalizeDiffPath(raw: string): string | null {
 
 function isAllowedP1aPath(file: string): boolean {
   if (file === 'apps/web/src/components/AppLayout.tsx') return false
-  if (/^apps\/web\/src\/app\/.+\.(?:ts|tsx|css)$/.test(file)) return true
-  if (/^apps\/web\/src\/components\/.+\.(?:ts|tsx|css)$/.test(file)) return true
-  if (/^apps\/web\/src\/.+\.(?:test|spec)\.(?:ts|tsx)$/.test(file)) return true
-  return false
+  // 与档2/超管助手硬约束一致: apps/web/src 下的源码与样式文件全部放行,
+  // 删除/重命名/禁区路径由上方元信息禁令与 HARD_DENY_PATTERNS 把关。
+  return /^apps\/web\/src\/.+\.(?:ts|tsx|css)$/.test(file)
 }
 
 /**
@@ -74,8 +78,9 @@ export function inspectUnifiedDiff(diff: string): DiffInspection {
   if (/\nGIT binary patch(?:\n|$)/.test(`\n${diff}`) || /\nBinary files .+ differ(?:\n|$)/.test(`\n${diff}`)) {
     errors.push('禁止二进制补丁')
   }
-  if (/^(?:new file mode|deleted file mode|old mode|new mode|rename (?:from|to)|copy (?:from|to)) /m.test(diff)) {
-    errors.push('禁止新增、删除、重命名、复制或修改文件模式')
+  // 新建文件允许（限 apps/web/src 下，见下方路径校验）；删除/重命名/复制/改模式仍禁止。
+  if (/^(?:deleted file mode|old mode|new mode|rename (?:from|to)|copy (?:from|to)) /m.test(diff)) {
+    errors.push('禁止删除、重命名、复制或修改文件模式')
   }
 
   let current: {
@@ -98,6 +103,11 @@ export function inspectUnifiedDiff(diff: string): DiffInspection {
       return
     }
     const declared = raw.trim().split('\t')[0]
+    // 新建文件的旧端恒为 /dev/null，合法
+    if (label === '旧' && declared === '/dev/null') {
+      current.oldHeaderSeen = true
+      return
+    }
     const expected = `${prefix}/${current.summary.path}`
     if (declared !== expected) {
       errors.push(`补丁${label}路径与 diff 声明不一致: ${declared}`)
@@ -156,7 +166,8 @@ export function inspectUnifiedDiff(diff: string): DiffInspection {
 
   const summaries = [...files.values()]
   if (summaries.length === 0) errors.push('未识别到标准 unified diff 文件')
-  if (summaries.length > MAX_FILES) errors.push(`补丁文件数超过 ${MAX_FILES}`)
+  const fileCap = maxFiles()
+  if (summaries.length > fileCap) errors.push(`补丁文件数超过 ${fileCap}`)
 
   for (const file of summaries) {
     if (HARD_DENY_PATTERNS.some((pattern) => pattern.test(file.path))) {
@@ -167,7 +178,8 @@ export function inspectUnifiedDiff(diff: string): DiffInspection {
   }
 
   const changedLines = summaries.reduce((sum, file) => sum + file.added + file.deleted, 0)
-  if (changedLines > MAX_CHANGED_LINES) errors.push(`补丁变更行数超过 ${MAX_CHANGED_LINES}`)
+  const lineCap = maxChangedLines()
+  if (changedLines > lineCap) errors.push(`补丁变更行数超过 ${lineCap}`)
 
   return {
     ok: errors.length === 0,

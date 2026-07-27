@@ -82,6 +82,7 @@ import { inventoryCountRoutes } from './routes/inventoryCounts'
 import { consumptionAdminRoutes, consumptionRoutes } from './routes/consumption'
 import { storeOverviewRoutes } from './routes/storeOverview'
 import { feedbackRoutes } from './routes/feedback'
+import { bossChatRoutes } from './routes/bossChat'
 import { autoFixRoutes } from './routes/autofix'
 import { startAutoFixWorker } from './services/autofix/engine'
 import { isSupplierRole } from './lib/auth-scope'
@@ -268,6 +269,7 @@ async function bootstrap() {
   app.register(consumptionAdminRoutes, { prefix: '/api/consumption' })
   app.register(storeOverviewRoutes, { prefix: '/api/stores' })
   app.register(feedbackRoutes, { prefix: '/api/feedback' })
+  app.register(bossChatRoutes, { prefix: '/api/boss-chat' })
   app.register(autoFixRoutes, { prefix: '/api/autofix' })
 
   // ── 健康检查（含数据库连接验证）──────

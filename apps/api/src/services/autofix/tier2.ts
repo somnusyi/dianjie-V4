@@ -140,8 +140,7 @@ ${input.messages.map((m) => `[${m.role}] ${m.content}`).join('\n')}
 2. 修改代码，然后运行 \`pnpm --filter @dianjie/web test\` 和 \`pnpm exec tsc -p apps/web/tsconfig.json --noEmit\`，有失败就修到全部通过
 
 ## 硬约束（违反将被拒绝发布）
-- 只允许修改 apps/web 内的**现有**文件；不得新建、删除、重命名文件
-- 总改动不超过 5 个文件、200 行
+- 只允许修改或新建 apps/web 内的文件；不得删除、重命名文件
 - 不得修改认证、权限、资金、库存、数据库 schema、依赖、部署配置
 - 若需求必须触碰以上禁区: 不要改任何代码，直接回复 REJECT: <原因> 并停止
 
@@ -191,12 +190,73 @@ export async function enqueueAgentDev(input: {
   }
 }
 
+/** 超管聊天简报：老板在手机上直接下达的开发指令，约束与反馈任务一致。 */
+export function buildChatBrief(content: string): string {
+  return `# 任务: 处理一条超级管理员直接下达的开发指令
+
+## 指令内容
+${content}
+
+## 工作方式（你是 agent，自己动手）
+1. 先阅读相关路由组件与代码，自行定位并设计最小方案；指令不明确时选择最保守、最贴近字面的实现
+2. 修改代码，然后运行 \`pnpm --filter @dianjie/web test\` 和 \`pnpm exec tsc -p apps/web/tsconfig.json --noEmit\`，有失败就修到全部通过
+
+## 硬约束（违反将被拒绝发布）
+- 只允许修改或新建 apps/web 内的文件；不得删除、重命名文件
+- 不得修改认证、权限、资金、库存、数据库 schema、依赖、部署配置
+- 若需求必须触碰以上禁区或指令无法安全执行: 不要改任何代码，直接回复 REJECT: <原因> 并停止
+
+## 交付
+最后输出: 修改文件清单（相对路径）、每个文件的改动说明、两条验证命令的结果。`
+}
+
+/** 超管聊天入口: 创建无反馈的 agent 开发任务并立即开工。 */
+export async function enqueueBossChatDev(input: {
+  tenantId: string
+  userId: string
+  content: string
+}): Promise<string> {
+  const brief = buildChatBrief(input.content)
+  const run = await prisma.autoFixRun.create({
+    data: {
+      tenantId: input.tenantId,
+      feedbackId: null,
+      status: 'QWEN_DEV' as any,
+      analysis: JSON.stringify({
+        rootCause: 'boss_chat',
+        candidateFiles: [],
+        inWhitelist: true,
+        confidence: 1,
+        chatPrompt: brief,
+      } satisfies Tier2Analysis),
+      decidedById: input.userId,
+      decidedAt: new Date(),
+    },
+    select: { id: true },
+  })
+  await prisma.opLog.create({
+    data: {
+      tenantId: input.tenantId,
+      role: 'AI',
+      action: `AI 助手聊天任务 ${run.id} → QWEN_DEV（超管指令直接开工）`.slice(0, 500),
+      entityType: 'AutoFixRun',
+      targetId: run.id,
+      isAi: true,
+      metadata: { status: 'QWEN_DEV', mode: 'boss_chat', userId: input.userId } as any,
+    },
+  })
+  setImmediate(() => void runTier2Dev(run.id).catch((e) => console.error('[boss-chat] 开发执行异常:', e)))
+  return run.id
+}
+
 interface Tier2Analysis {
   rootCause: string
   candidateFiles: string[]
   inWhitelist: boolean
   confidence: number
   taskBook?: string
+  /** 超管聊天任务：老板消息原文构建的开发简报（此时 run.feedbackId 为空） */
+  chatPrompt?: string
 }
 
 async function transitionRun(
@@ -219,14 +279,14 @@ async function transitionRun(
   })
 }
 
-async function escalateTier2(run: { id: string; tenantId: string; feedbackId: string }, error: unknown) {
+async function escalateTier2(run: { id: string; tenantId: string; feedbackId: string | null }, error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
   await transitionRun(run, 'ESCALATED', { error: message.slice(0, 20_000) }, message.slice(0, 300))
   notify({
     tenantId: run.tenantId,
     event: 'AUTOFIX_ESCALATED',
     eventKey: `AUTOFIX:${run.id}:ESCALATED:TIER2`,
-    payload: { runId: run.id, feedbackId: run.feedbackId, error: message.slice(0, 500) },
+    payload: { runId: run.id, feedbackId: run.feedbackId ?? undefined, error: message.slice(0, 500) },
     bypassFrequency: true,
     bypassSilent: true,
   })
@@ -323,12 +383,12 @@ export async function runTier2Dev(runId: string): Promise<void> {
   const worktreeDir = `/tmp/qwen-tier2-${run.id}`
   try {
     const analysis = JSON.parse(run.analysis || '{}') as Tier2Analysis
-    // 统一 agent 模式没有档1分析，直接由反馈内容构建简报
-    const brief = analysis.taskBook || buildAgentBrief({
-      title: run.feedback.title,
-      summary: run.feedback.summary,
-      contextPath: String((run.feedback.context as any)?.path || ''),
-      messages: run.feedback.messages,
+    // 简报优先级: 超管聊天指令 > 档2任务书 > 反馈内容直接构建
+    const brief = analysis.chatPrompt || analysis.taskBook || buildAgentBrief({
+      title: run.feedback?.title,
+      summary: run.feedback?.summary,
+      contextPath: String((run.feedback?.context as any)?.path || ''),
+      messages: run.feedback?.messages ?? [],
     })
     const baseCommitSha = await requireCleanRepoHead(repo)
 
@@ -355,13 +415,9 @@ export async function runTier2Dev(runId: string): Promise<void> {
       throw new Error(`Qwen Code 开发失败或超时: ${error?.message || error}${partial ? `\n${partial}` : ''}`)
     }
 
-    // 核定改动范围：新建文件走不进 diff 补丁（部署会丢），显式拒绝；
-    // 同时 policy 层也禁止 new file mode，双保险。
+    // intent-to-add 让新建文件也进入 diff；范围与白名单由下方核查把关
+    await git(worktreeDir, ['add', '-N', '.'])
     const porcelain = await git(worktreeDir, ['status', '--porcelain'])
-    const untracked = findUntrackedFiles(porcelain)
-    if (untracked.length > 0) {
-      throw new Error(`档2禁止新建文件（补丁会丢失）: ${untracked.join(', ')}`)
-    }
     const changed = parseChangedPaths(porcelain)
     if (changed.length === 0) {
       const rejectMatch = /REJECT[:：]\s*(.+)/.exec(qwenLog)
@@ -370,7 +426,7 @@ export async function runTier2Dev(runId: string): Promise<void> {
     }
     const outOfScope = findOutOfScopeFiles(changed)
     if (outOfScope.length > 0) {
-      throw new Error(`档2改动越出 apps/web 白名单: ${outOfScope.join(', ')}`)
+      throw new Error(`改动越出 apps/web 白名单: ${outOfScope.join(', ')}`)
     }
 
     // 独立复验：不信 AI 自报
@@ -395,41 +451,68 @@ export async function runTier2Dev(runId: string): Promise<void> {
       deployLog: qwenLog,
       error: null,
     })
-    await prisma.feedback.update({
-      where: { id: run.feedbackId },
-      data: {
-        status: 'AWAITING_APPROVAL' as any,
-        proposal: `【开发完成·待批准上线】\n修改 ${inspection.files.length} 个文件、${inspection.changedLines} 行:\n${inspection.files.map((f) => `- ${f.path} (+${f.added}/-${f.deleted})`).join('\n')}\n\nWeb 测试与类型检查已独立复验通过。批准后自动安全发布（含回滚兜底）。`,
-      },
-    })
-    await prisma.feedbackMessage.create({
-      data: {
-        tenantId: run.tenantId,
-        feedbackId: run.feedbackId,
-        role: 'assistant',
-        content: `自动开发完成并通过测试（${inspection.files.length} 个文件、${inspection.changedLines} 行），已提交管理员做上线审批。`,
-      },
-    })
+    const summaryText = `修改 ${inspection.files.length} 个文件、${inspection.changedLines} 行:\n${inspection.files.map((f) => `- ${f.path} (+${f.added}/-${f.deleted})`).join('\n')}\n\nWeb 测试与类型检查已独立复验通过。`
+    if (run.feedback) {
+      await prisma.feedback.update({
+        where: { id: run.feedback.id },
+        data: {
+          status: 'AWAITING_APPROVAL' as any,
+          proposal: `【开发完成·待批准上线】\n${summaryText}\n批准后自动安全发布（含回滚兜底）。`,
+        },
+      })
+      await prisma.feedbackMessage.create({
+        data: {
+          tenantId: run.tenantId,
+          feedbackId: run.feedback.id,
+          role: 'assistant',
+          content: `自动开发完成并通过测试（${inspection.files.length} 个文件、${inspection.changedLines} 行），已提交管理员做上线审批。`,
+        },
+      })
+    } else if (run.decidedById) {
+      // 超管聊天任务: 结果回写到聊天记录，附 runId 供「批准部署」按钮使用
+      await prisma.bossChatMessage.create({
+        data: {
+          tenantId: run.tenantId,
+          userId: run.decidedById,
+          role: 'assistant',
+          runId: run.id,
+          content: `开发完成，待你批准上线。\n${summaryText}`,
+        },
+      })
+    }
     notify({
       tenantId: run.tenantId,
       event: 'FEEDBACK_APPROVAL_PENDING',
-      eventKey: `FEEDBACK:${run.feedbackId}:TIER2_DEPLOY`,
+      eventKey: `AUTOFIX:${run.id}:TIER2_DEPLOY`,
       payload: {
-        feedbackId: run.feedbackId,
+        feedbackId: run.feedback?.id ?? run.id,
         category: 'IMPROVEMENT',
-        title: run.feedback.title || '开发完成·待批准上线',
+        title: run.feedback?.title || 'AI 助手开发完成·待批准上线',
         summary: `Qwen Code 开发完成并复验通过，待批准上线: ${inspection.files.length} 文件 ${inspection.changedLines} 行`,
       },
     })
   } catch (error) {
-    await prisma.feedbackMessage.create({
-      data: {
-        tenantId: run.tenantId,
-        feedbackId: run.feedbackId,
-        role: 'assistant',
-        content: '自动开发未能完成（详见管理端记录），已转人工评估处理。',
-      },
-    }).catch(() => undefined)
+    const errText = error instanceof Error ? error.message : String(error)
+    if (run.feedback) {
+      await prisma.feedbackMessage.create({
+        data: {
+          tenantId: run.tenantId,
+          feedbackId: run.feedback.id,
+          role: 'assistant',
+          content: '自动开发未能完成（详见管理端记录），已转人工评估处理。',
+        },
+      }).catch(() => undefined)
+    } else if (run.decidedById) {
+      await prisma.bossChatMessage.create({
+        data: {
+          tenantId: run.tenantId,
+          userId: run.decidedById,
+          role: 'assistant',
+          runId: run.id,
+          content: `这次任务没能自动完成，已转人工处理。\n原因: ${errText.slice(0, 500)}`,
+        },
+      }).catch(() => undefined)
+    }
     await escalateTier2(run, error)
   } finally {
     await git(repo, ['worktree', 'remove', '--force', worktreeDir]).catch(() => undefined)

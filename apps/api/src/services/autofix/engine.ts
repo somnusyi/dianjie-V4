@@ -102,11 +102,11 @@ async function claimNextRun(): Promise<ClaimResult | null> {
     if (active > 0) return null
 
     const run = await tx.autoFixRun.findFirst({
-      where: { status: 'RECEIVED' as any },
+      where: { status: 'RECEIVED' as any, feedbackId: { not: null } },
       orderBy: { createdAt: 'asc' },
       select: { id: true, tenantId: true, feedbackId: true, createdAt: true },
     })
-    if (!run) return null
+    if (!run || !run.feedbackId) return null
 
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000)
     const recent = await tx.autoFixRun.count({ where: { createdAt: { gte: since } } })
@@ -336,7 +336,7 @@ export async function enqueueAutoFix(input: EnqueueAutoFixInput): Promise<string
 }
 
 async function escalateIfStillStale(
-  run: { id: string; tenantId: string; feedbackId: string },
+  run: { id: string; tenantId: string; feedbackId: string | null },
   cutoff: Date,
   thresholdMinutes: number,
 ): Promise<boolean> {
@@ -378,7 +378,7 @@ async function escalateIfStillStale(
     tenantId: run.tenantId,
     event: 'AUTOFIX_ESCALATED',
     eventKey: `AUTOFIX:${run.id}:ESCALATED`,
-    payload: { runId: run.id, feedbackId: run.feedbackId, error: message },
+    payload: { runId: run.id, feedbackId: run.feedbackId ?? undefined, error: message },
     bypassFrequency: true,
     bypassSilent: true,
   })

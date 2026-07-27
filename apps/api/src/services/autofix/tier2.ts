@@ -415,9 +415,11 @@ export async function runTier2Dev(runId: string): Promise<void> {
       throw new Error(`Qwen Code 开发失败或超时: ${error?.message || error}${partial ? `\n${partial}` : ''}`)
     }
 
-    // intent-to-add 让新建文件也进入 diff；范围与白名单由下方核查把关
-    await git(worktreeDir, ['add', '-N', '.'])
-    const nameOnlyZ = await git(worktreeDir, ['diff', '--name-only', '-z', 'HEAD'])
+    // intent-to-add 让新建文件也进入 diff；范围与白名单由下方核查把关。
+    // 必须排除 node_modules：worktree 里它是符号链接，.gitignore 的 "node_modules/"
+    // 只匹配目录不匹配 symlink，不加排除会被 add -N 收进 diff 触发白名单误杀。
+    await git(worktreeDir, ['add', '-N', '--', '.', ':!node_modules'])
+    const nameOnlyZ = await git(worktreeDir, ['diff', '--name-only', '-z', 'HEAD', '--', '.', ':!node_modules'])
     const changed = parseChangedPaths(nameOnlyZ)
     if (changed.length === 0) {
       const rejectMatch = /REJECT[:：]\s*(.+)/.exec(qwenLog)
@@ -439,7 +441,7 @@ export async function runTier2Dev(runId: string): Promise<void> {
       env: { ...process.env, CI: '1', NODE_ENV: 'test' },
     })
 
-    const diffPatch = await git(worktreeDir, ['diff'])
+    const diffPatch = await git(worktreeDir, ['diff', '--', '.', ':!node_modules'])
     const inspection = inspectUnifiedDiff(`${diffPatch}\n`)
     if (!inspection.ok) throw new Error(inspection.errors.join('；'))
 

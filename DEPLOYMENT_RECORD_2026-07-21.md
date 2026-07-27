@@ -183,3 +183,12 @@
 - 端点坑：官方 coding.dashscope 端点对 token-plan key 报 401；订阅实际端点 = https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1（与生产 QWEN_* 一致）；该订阅无 qwen3-coder 系列，可用模型 qwen3.8-max-preview / qwen3.7-max / qwen3.7-plus / qwen3.6-flash / glm-5.2 / deepseek-v4-pro，当前配 qwen3.8-max-preview
 - 验证：沙盒修 bug 实测（/tmp/qwen-trial，已清理）——定位 calc.js 加法/减法错误、自动改文件、自动跑 node check.js 验证 PASS，--yolo 无人值守全程约 1 分钟
 - 注意：正式接入管线时绝不裸用 --yolo，必须限定隔离 worktree + 白名单目录 + 测试门槛 + 手机二次批准
+
+## 第 18 次：Qwen Code 首单真实试点「创建并选用新类目」（d97c845b，2026-07-27 下午）
+- 模式：Kimi 写任务书（根因+约束+验收命令）→ 服务器隔离 worktree 跑 qwen --yolo → Kimi 独立审查 diff+复验 → 老板批准 → Kimi 部署。全程无人碰生产，开发约 10 分钟
+- 根因澄清：张怡真实卡点是编辑商品输入不存在的分类名时被 lockActiveSupplierCategory 拒 409 且报错含糊；后端 POST /categories 早已存在，缺的只是弹窗入口——比当初预估的「需后端开发」简单
+- 交付：page.tsx 弹窗「创建并选用」入口（调既有 POST /categories，409 幂等选用、防连点、错误透传）+ isNewCategoryName 纯函数入 supply-product-pc.ts + 6 个新测试；3 文件 123 行，API/schema 零改动
+- 审查：Kimi 逐一核对类型/错误结构/接口返回，复跑 web 512 测试+tsc 全过；补丁备份 /app/backups/qwen-pilot-category-create-20260727.patch
+- 新增 QWEN.md（5a858473）：仓库根的项目上下文（结构/命令/约定/禁区/生产常识），Qwen Code 每次运行自动加载，作为 AI 协作者长期记忆
+- 部署：bundle → reset --hard d97c845b，服务器本地 build web（standalone 已验证）→ rsync 三件套 → 仅重启 dianjie-v4-web（未 --update-env），.deployed-commit=d97c845b…，api/web 健康、商品页 200；反馈 cms2o1e7z 已 RESOLVED 并通知张怡
+- 流程结论：档 2「服务器 AI 开发 + 手机审批」首单跑通；待自动化环节 = 任务书生成、worktree 编排、审批卡片推送（当前由 Kimi 人工编排）

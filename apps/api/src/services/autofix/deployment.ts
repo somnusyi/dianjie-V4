@@ -83,7 +83,8 @@ async function buildAndSyncWeb(repo: string, target: string, runId: string): Pro
   logs.push((await run(repo, 'rsync', ['-az', '--delete', standalone, `${target}/apps/web/apps/web/`], 120_000)).output)
   logs.push((await run(repo, 'rsync', ['-az', '--delete', staticDir, `${target}/apps/web/apps/web/.next/static/`], 120_000)).output)
   logs.push((await run(repo, 'rsync', ['-az', '--delete', publicDir, `${target}/apps/web/apps/web/public/`], 120_000)).output)
-  logs.push((await run(repo, 'pm2', ['restart', 'dianjie-v4-web', '--update-env'], 60_000)).output)
+  // 不带 --update-env：API 进程自身的 PORT=4004 不能污染 Web 的 3204 配置。
+  logs.push((await run(repo, 'pm2', ['restart', 'dianjie-v4-web'], 60_000)).output)
   return `${logs.join('\n')}\nbackup=${backupPath}`.slice(-MAX_LOG_CHARS)
 }
 

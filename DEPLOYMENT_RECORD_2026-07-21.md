@@ -192,3 +192,11 @@
 - 新增 QWEN.md（5a858473）：仓库根的项目上下文（结构/命令/约定/禁区/生产常识），Qwen Code 每次运行自动加载，作为 AI 协作者长期记忆
 - 部署：bundle → reset --hard d97c845b，服务器本地 build web（standalone 已验证）→ rsync 三件套 → 仅重启 dianjie-v4-web（未 --update-env），.deployed-commit=d97c845b…，api/web 健康、商品页 200；反馈 cms2o1e7z 已 RESOLVED 并通知张怡
 - 流程结论：档 2「服务器 AI 开发 + 手机审批」首单跑通；待自动化环节 = 任务书生成、worktree 编排、审批卡片推送（当前由 Kimi 人工编排）
+
+## 第 19 次：档2自动化管线上线（f1eb86e6，2026-07-27 下午）
+- 功能：档1白名单拒绝不再直接转人工——qwenChat 自动生成开发任务书（仅 apps/web 现有文件、≤5文件200行、涉核心数据直接 REJECT）→ 反馈回待审批推老板手机；批准 → 隔离 worktree 跑 Qwen Code（--yolo 20min 超时）→ 白名单/新建文件核查 + 独立复跑 web 测试+tsc → DEPLOY_REVIEW；二次批准 → 复用 executeApprovedRun 安全发布。驳回联动终结档2任务；QWEN_DEV 纳入看门狗活跃状态
+- AutoFixStatus 新增 TASKBOOK_READY/QWEN_DEV/DEPLOY_REVIEW（迁移 20260727153000_autofix_tier2_statuses）；单测 10 个新增、全量 569 通过
+- 生产事故（已修）：迁移+generate 只在 /app/dianjie-src 做，运行中的 /app/dianjie-v4/packages/db 客户端仍是旧枚举 → claimNextRun 校验报错、队列卡死约 10 分钟；处置 = rsync schema 到生产目录 + 生产内 prisma generate + 重启。**教训：以后 schema 变更部署必须同时 regenerate 两个目录的客户端（apps/api 下还有一份副本，运行时实际用 packages/db 那份）**
+- 点火测试（安全版）：提交明显涉库存写入的需求 → 档1 白名单拒绝 → 档2 任务书 → Qwen 正确拒写（"涉及后端定时任务、库存写入与数据库变更，超出 apps/web 范围"）→ ESCALATED 文案清晰。首次因测试反馈 context.path 编造 /v2/stock 无法定位源码（教训：context.path 必须真实路由）
+- 善后：2 条测试反馈已 REJECTED 闭环；AUTO_FIX_DAILY_CAP 临时 10 → 定为 5（今日已耗 5 单额度，明日中午重置）；api 健康、web 未动
+- 未实弹验证环节：QWEN_DEV 自动开发 + DEPLOY_REVIEW 二次批准（与手动试点同构，部署机复用档1）；首个真实白名单拒绝单将是完整验证

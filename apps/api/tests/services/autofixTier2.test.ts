@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildAgentBrief,
   buildTaskBookPrompt,
   findOutOfScopeFiles,
   findUntrackedFiles,
@@ -81,5 +82,28 @@ describe('buildTaskBookPrompt', () => {
     expect(prompt).toContain('不得新建、删除、重命名')
     expect(prompt).toContain('pnpm --filter @dianjie/web test')
     expect(prompt).toContain('tsc -p apps/web/tsconfig.json --noEmit')
+  })
+})
+
+describe('buildAgentBrief', () => {
+  const brief = buildAgentBrief({
+    title: '按钮点不动',
+    summary: '提交无反应',
+    contextPath: '/v2/orders',
+    messages: [{ role: 'user', content: '提交按钮没反应' }],
+  })
+
+  it('包含反馈全文与页面路径', () => {
+    expect(brief).toContain('按钮点不动')
+    expect(brief).toContain('/v2/orders')
+    expect(brief).toContain('[user] 提交按钮没反应')
+  })
+
+  it('写死 agent 工作方式与安全约束', () => {
+    expect(brief).toContain('pnpm --filter @dianjie/web test')
+    expect(brief).toContain('tsc -p apps/web/tsconfig.json --noEmit')
+    expect(brief).toContain('不得新建、删除、重命名文件')
+    expect(brief).toContain('REJECT:')
+    expect(brief).toContain('apps/web')
   })
 })

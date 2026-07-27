@@ -20,9 +20,8 @@ import { fireAndForget as notify } from '../services/notify'
 import { sendNotification } from '../services/notification'
 import { qwenChat, buildFeedbackSystemPrompt, QWEN_NOT_CONFIGURED } from '../services/qwenChat'
 import { parseTriageBlock, decideTriageAction, TriageResult } from '../services/feedbackTriage'
-import { enqueueAutoFix } from '../services/autofix/engine'
 import { executeApprovedRun } from '../services/autofix/deployment'
-import { runTier2Dev } from '../services/autofix/tier2'
+import { enqueueAgentDev, runTier2Dev } from '../services/autofix/tier2'
 import { resignOssUrls } from './upload'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
@@ -391,19 +390,20 @@ export const feedbackRoutes: FastifyPluginAsync = async (app) => {
         automationStatus = 'tier2_deploy'
       } else {
         try {
-          autoRunId = await enqueueAutoFix({
+          // 统一 agent 管线：Qwen Code 自己定位/设计/开发/自测，完成后请管理员终审上线
+          autoRunId = await enqueueAgentDev({
             tenantId: actor.tenantId,
             feedbackId: result.feedback.id,
             approvedById: actor.userId,
           })
-          automationStatus = autoRunId ? 'queued' : 'disabled'
+          automationStatus = autoRunId ? 'agent_dev' : 'disabled'
           await prisma.feedbackMessage.create({
             data: {
               tenantId: actor.tenantId,
               feedbackId: result.feedback.id,
               role: 'system',
               content: autoRunId
-                ? `自动开发任务已排队（${autoRunId}）。系统将依次完成定位、补丁、测试和安全发布；超出安全范围会转人工。`
+                ? '管理员已批准，AI 开始自动设计方案、开发并运行全部测试；完成后会把改动内容和测试结果发给管理员终审，通过后自动上线。'
                 : '当前自动开发开关未启用，反馈已保留在开发中并转为人工跟进。',
             },
           })

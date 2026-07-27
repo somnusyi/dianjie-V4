@@ -116,6 +116,81 @@ ${input.messages.map((m) => `[${m.role}] ${m.content}`).join('\n')}
 - 全文不超过 2000 字，直接输出任务书正文，不要解释`
 }
 
+/**
+ * 统一 agent 简报：老板批准后直接交给 Qwen Code，自己定位/设计/开发/自测。
+ * 取代档1的单轮 diff 生成（大页面必超时、hunk 脆弱）。
+ */
+export function buildAgentBrief(input: {
+  title?: string | null
+  summary?: string | null
+  contextPath: string
+  messages: Array<{ role: string; content: string }>
+}): string {
+  return `# 任务: 处理一条已获管理员批准的用户反馈
+
+## 反馈内容
+标题: ${input.title || '未命名'}
+摘要: ${input.summary || '无'}
+页面路径: ${input.contextPath}
+对话记录:
+${input.messages.map((m) => `[${m.role}] ${m.content}`).join('\n')}
+
+## 工作方式（你是 agent，自己动手）
+1. 先阅读页面路径对应的路由组件与相关代码，定位问题/需求点，自行设计最小方案
+2. 修改代码，然后运行 \`pnpm --filter @dianjie/web test\` 和 \`pnpm exec tsc -p apps/web/tsconfig.json --noEmit\`，有失败就修到全部通过
+
+## 硬约束（违反将被拒绝发布）
+- 只允许修改 apps/web 内的**现有**文件；不得新建、删除、重命名文件
+- 总改动不超过 5 个文件、200 行
+- 不得修改认证、权限、资金、库存、数据库 schema、依赖、部署配置
+- 若需求必须触碰以上禁区: 不要改任何代码，直接回复 REJECT: <原因> 并停止
+
+## 交付
+最后输出: 修改文件清单（相对路径）、每个文件的改动说明、两条验证命令的结果。`
+}
+
+/** 老板批准后统一入口: 直接创建 agent 开发任务并立即开工。 */
+export async function enqueueAgentDev(input: {
+  tenantId: string
+  feedbackId: string
+  approvedById?: string
+}): Promise<string | null> {
+  try {
+    const run = await prisma.autoFixRun.create({
+      data: {
+        tenantId: input.tenantId,
+        feedbackId: input.feedbackId,
+        status: 'QWEN_DEV' as any,
+        decidedById: input.approvedById,
+        decidedAt: input.approvedById ? new Date() : undefined,
+      },
+      select: { id: true },
+    })
+    await prisma.opLog.create({
+      data: {
+        tenantId: input.tenantId,
+        role: 'AI',
+        action: `AI agent 开发 ${run.id} → QWEN_DEV（批准后直接开工）`.slice(0, 500),
+        entityType: 'AutoFixRun',
+        targetId: run.id,
+        isAi: true,
+        metadata: { status: 'QWEN_DEV', mode: 'unified_agent' } as any,
+      },
+    })
+    setImmediate(() => void runTier2Dev(run.id).catch((e) => console.error('[agent] 开发执行异常:', e)))
+    return run.id
+  } catch (error: any) {
+    if (error?.code === 'P2002') {
+      const existing = await prisma.autoFixRun.findUnique({
+        where: { feedbackId: input.feedbackId },
+        select: { id: true },
+      })
+      return existing?.id ?? null
+    }
+    throw error
+  }
+}
+
 interface Tier2Analysis {
   rootCause: string
   candidateFiles: string[]
@@ -248,7 +323,13 @@ export async function runTier2Dev(runId: string): Promise<void> {
   const worktreeDir = `/tmp/qwen-tier2-${run.id}`
   try {
     const analysis = JSON.parse(run.analysis || '{}') as Tier2Analysis
-    if (!analysis.taskBook) throw new Error('缺少开发任务书')
+    // 统一 agent 模式没有档1分析，直接由反馈内容构建简报
+    const brief = analysis.taskBook || buildAgentBrief({
+      title: run.feedback.title,
+      summary: run.feedback.summary,
+      contextPath: String((run.feedback.context as any)?.path || ''),
+      messages: run.feedback.messages,
+    })
     const baseCommitSha = await requireCleanRepoHead(repo)
 
     await git(repo, ['worktree', 'remove', '--force', worktreeDir]).catch(() => undefined)
@@ -260,7 +341,7 @@ export async function runTier2Dev(runId: string): Promise<void> {
     try {
       const { stdout, stderr } = await execFileAsync(
         qwenBin(),
-        ['-p', analysis.taskBook, '--yolo'],
+        ['-p', brief, '--yolo'],
         {
           cwd: worktreeDir,
           timeout: QWEN_DEV_TIMEOUT_MS,
@@ -282,7 +363,11 @@ export async function runTier2Dev(runId: string): Promise<void> {
       throw new Error(`档2禁止新建文件（补丁会丢失）: ${untracked.join(', ')}`)
     }
     const changed = parseChangedPaths(porcelain)
-    if (changed.length === 0) throw new Error(`Qwen Code 未产生任何改动\n${qwenLog.slice(-2_000)}`)
+    if (changed.length === 0) {
+      const rejectMatch = /REJECT[:：]\s*(.+)/.exec(qwenLog)
+      if (rejectMatch) throw new Error(`agent 评估拒绝开发: ${rejectMatch[1].slice(0, 300)}`)
+      throw new Error(`Qwen Code 未产生任何改动\n${qwenLog.slice(-2_000)}`)
+    }
     const outOfScope = findOutOfScopeFiles(changed)
     if (outOfScope.length > 0) {
       throw new Error(`档2改动越出 apps/web 白名单: ${outOfScope.join(', ')}`)

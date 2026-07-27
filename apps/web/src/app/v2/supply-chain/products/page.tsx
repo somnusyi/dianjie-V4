@@ -116,7 +116,7 @@ export default function InternalSupplyChainProductsPage() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [filters, setFilters] = useState<SupplyProductFilters>(DEFAULT_SUPPLY_PRODUCT_FILTERS)
+  const [filters, setFilters] = useState<SupplyProductFilters>({ ...DEFAULT_SUPPLY_PRODUCT_FILTERS, status: 'ENABLED' })
   const [categories, setCategories] = useState<CategoryOption[]>([])
   const [bulkCategories, setBulkCategories] = useState<CategoryOption[]>([])
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([])
@@ -210,7 +210,7 @@ export default function InternalSupplyChainProductsPage() {
   }
 
   function clearFilters() {
-    setFilters({ ...DEFAULT_SUPPLY_PRODUCT_FILTERS })
+    setFilters({ ...DEFAULT_SUPPLY_PRODUCT_FILTERS, status: 'ENABLED' })
   }
 
   function openCreate() {

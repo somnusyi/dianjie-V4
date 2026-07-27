@@ -8,24 +8,24 @@ import {
 } from '../../src/services/autofix/tier2'
 
 describe('parseChangedPaths', () => {
-  it('提取修改与删除的路径并过滤 node_modules', () => {
-    const porcelain = [
-      ' M apps/web/src/app/v2/page.tsx',
-      'D  apps/web/src/lib/a.ts',
-      '?? node_modules',
-      ' M apps/api/src/routes/x.ts',
+  it('提取变更路径并过滤 node_modules（diff --name-only -z 格式）', () => {
+    const nameOnlyZ = [
+      'apps/web/src/app/v2/page.tsx',
+      'apps/web/src/lib/a.ts',
+      'node_modules',
+      'apps/api/src/routes/x.ts',
       '',
-    ].join('\n')
-    expect(parseChangedPaths(porcelain)).toEqual([
+    ].join('\0')
+    expect(parseChangedPaths(nameOnlyZ)).toEqual([
       'apps/web/src/app/v2/page.tsx',
       'apps/web/src/lib/a.ts',
       'apps/api/src/routes/x.ts',
     ])
   })
 
-  it('处理重命名与引号路径，并去重', () => {
-    const porcelain = 'R  apps/web/a.ts -> apps/web/b.ts\n M "apps/web/src/空格 file.ts"\n M apps/web/b.ts\n'
-    expect(parseChangedPaths(porcelain)).toEqual(['apps/web/b.ts', 'apps/web/src/空格 file.ts'])
+  it('处理带引号路径并去重', () => {
+    const nameOnlyZ = '"apps/web/src/空格 file.ts"\0apps/web/b.ts\0apps/web/b.ts\0'
+    expect(parseChangedPaths(nameOnlyZ)).toEqual(['apps/web/src/空格 file.ts', 'apps/web/b.ts'])
   })
 
   it('空输出返回空数组', () => {

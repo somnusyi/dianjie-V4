@@ -48,16 +48,16 @@ async function loadQwenEnv(): Promise<Record<string, string>> {
   }
 }
 
-/** 从 git status --porcelain 输出提取变更路径（过滤 node_modules 链接）。 */
-export function parseChangedPaths(porcelain: string): string[] {
-  const paths: string[] = []
-  for (const line of porcelain.split('\n')) {
-    if (!line.trim()) continue
-    const raw = line.slice(3).trim()
-    const renamed = raw.includes(' -> ') ? raw.split(' -> ')[1] : raw
-    const p = renamed.replace(/^"|"$/g, '')
-    if (p && p !== 'node_modules' && !p.startsWith('node_modules/')) paths.push(p)
-  }
+/**
+ * 从 `git diff --name-only -z HEAD` 输出提取变更路径（过滤 node_modules 链接）。
+ * 用 NUL 分隔的 diff 输出而非 porcelain：porcelain 的 3 字符前缀格式不契约化，
+ * 曾出现 `? ` 单问号前缀导致 slice(3) 把 apps/... 啃成 pps/... 误判越界。
+ */
+export function parseChangedPaths(nameOnlyZ: string): string[] {
+  const paths = nameOnlyZ
+    .split('\0')
+    .map((p) => p.replace(/^"|"$/g, ''))
+    .filter((p) => p && p !== 'node_modules' && !p.startsWith('node_modules/'))
   return [...new Set(paths)]
 }
 
@@ -417,8 +417,8 @@ export async function runTier2Dev(runId: string): Promise<void> {
 
     // intent-to-add 让新建文件也进入 diff；范围与白名单由下方核查把关
     await git(worktreeDir, ['add', '-N', '.'])
-    const porcelain = await git(worktreeDir, ['status', '--porcelain'])
-    const changed = parseChangedPaths(porcelain)
+    const nameOnlyZ = await git(worktreeDir, ['diff', '--name-only', '-z', 'HEAD'])
+    const changed = parseChangedPaths(nameOnlyZ)
     if (changed.length === 0) {
       const rejectMatch = /REJECT[:：]\s*(.+)/.exec(qwenLog)
       if (rejectMatch) throw new Error(`agent 评估拒绝开发: ${rejectMatch[1].slice(0, 300)}`)

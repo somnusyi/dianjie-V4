@@ -151,3 +151,9 @@
 - 代码外待人工确认：① CMB 招行商户后台支付回调地址配的域名（如为 dianjie.cc 需改）；② 企微后台可信域名/应用主页核对
 - 风险备忘：未备案域名（dianjie.cc）443 存在被阿里云 SNI 阻断扩大的政策风险，只当备用不依赖
 - acme.sh 装于 /root/.acme.sh（Gitee 镜像安装），cron 每日 15:38 检查；nginx 80 块已加 /.well-known/acme-challenge/ 直通 location（备案若补齐可回切 HTTP-01）
+
+## 第 14 次：反馈自动修复点火测试全链路打通（10de6f93，2026-07-27 中午）
+- 点火用例：e2d1221b 在消息中心「全部已读」按钮埋入错别字「全部已渎」；模拟李欢提交反馈，Qwen 分诊 IMPROVEMENT，超管批准后自动入队
+- 最终结果：AutoFixRun `cms2qefvk0007yrsll166z9bq` → RESOLVED；AI 自动提交 `10de6f935f1b86e5f25db69a27b8c140d62a7edb`（1 文件 2 行）；生产健康检查 api=200、page=200；反馈自动 RESOLVED 并通知提报人
+- 过程中补齐 4 个管线短板：c8f29e99 校正 AI diff hunk 行数并在生成阶段试应用；c94043af 隔离验证固定 NODE_ENV=test；80649051 node_modules 链接延后到候选提交干净校验之后；89897ccf Web 重启不再 --update-env，避免 API PORT=4004 污染 Web 3204
+- 收尾：/app/dianjie-src、生产 .deployed-commit、GitHub main 均为 `10de6f935f1b86e5f25db69a27b8c140d62a7edb`；dianjie-v4-api / dianjie-v4-web online，`/v2/notifications` 200

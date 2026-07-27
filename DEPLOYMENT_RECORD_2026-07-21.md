@@ -176,3 +176,10 @@
 - 改动：engine.ts 白名单拒绝与置信度不足分开报错，白名单拒绝时自动在反馈对话留言说明；deployment.ts 部署/回滚成功后 git push 服务器 main 回 GitHub（仅快进，分叉记 OpLog 待人工对齐，绝不影响部署；默认 remote=git@github-dianjie 别名，env AUTO_FIX_GIT_REMOTE 可覆盖）
 - 待办（老板 30 秒操作）：GitHub 仓库 Settings → Deploy keys，把 server-deploy@dianjie 公钥（/root/.ssh/dianjie_github_deploy.pub，ed25519 ...Ce80Y）删了重加并勾选 Allow write access——当前只读，push 会失败但仅记日志不伤部署；服务器走 HTTPS 推 GitHub 不通（HTTP2 被拦），SSH 22 端口正常
 - 部署：bundle（main ^caec9f4f）→ reset --hard 7cf4084a，rsync api/dist，仅重启 API，.deployed-commit=7cf4084a…，三方（GitHub/服务器源/生产基线）对齐，health db=ok、web=200
+
+## 服务器侧 AI 开发能力试点：Qwen Code CLI（2026-07-27 下午安装）
+- 目的：为「档 2」后端需求自动开发探路，目标是手机审批、服务器自动干，脱离 Mac
+- 安装：npm 全局 @qwen-code/qwen-code 0.15.10（npmmirror 源）；凭据 /root/.qwen/.env（chmod 600，Key 不进 git）
+- 端点坑：官方 coding.dashscope 端点对 token-plan key 报 401；订阅实际端点 = https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1（与生产 QWEN_* 一致）；该订阅无 qwen3-coder 系列，可用模型 qwen3.8-max-preview / qwen3.7-max / qwen3.7-plus / qwen3.6-flash / glm-5.2 / deepseek-v4-pro，当前配 qwen3.8-max-preview
+- 验证：沙盒修 bug 实测（/tmp/qwen-trial，已清理）——定位 calc.js 加法/减法错误、自动改文件、自动跑 node check.js 验证 PASS，--yolo 无人值守全程约 1 分钟
+- 注意：正式接入管线时绝不裸用 --yolo，必须限定隔离 worktree + 白名单目录 + 测试门槛 + 手机二次批准

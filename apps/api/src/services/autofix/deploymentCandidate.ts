@@ -30,6 +30,13 @@ export async function removeDeploymentCandidate(
   await rm(candidate.tempRoot, { recursive: true, force: true })
 }
 
+async function linkNodeModules(repo: string, worktreeDir: string): Promise<void> {
+  const sourceNodeModules = path.join(repo, 'node_modules')
+  await access(sourceNodeModules)
+    .then(() => symlink(sourceNodeModules, path.join(worktreeDir, 'node_modules'), 'dir'))
+    .catch(() => undefined)
+}
+
 export async function preparePatchedDeploymentCandidate(input: {
   repo: string
   baseCommitSha: string
@@ -45,10 +52,6 @@ export async function preparePatchedDeploymentCandidate(input: {
   try {
     await writeFile(patchFile, input.diffPatch, { mode: 0o600 })
     await git(input.repo, ['worktree', 'add', '--detach', worktreeDir, input.baseCommitSha])
-    const sourceNodeModules = path.join(input.repo, 'node_modules')
-    await access(sourceNodeModules)
-      .then(() => symlink(sourceNodeModules, path.join(worktreeDir, 'node_modules'), 'dir'))
-      .catch(() => undefined)
     await git(worktreeDir, ['apply', '--check', patchFile])
     await git(worktreeDir, ['apply', '--whitespace=error-all', patchFile])
     await git(worktreeDir, ['add', '--', ...input.files])
@@ -69,6 +72,7 @@ export async function preparePatchedDeploymentCandidate(input: {
     for (const file of input.files) {
       await readFile(path.join(worktreeDir, file))
     }
+    await linkNodeModules(input.repo, worktreeDir)
     return { ...partial, commitSha }
   } catch (error) {
     await removeDeploymentCandidate(input.repo, partial)
@@ -87,10 +91,6 @@ export async function prepareRevertedDeploymentCandidate(input: {
 
   try {
     await git(input.repo, ['worktree', 'add', '--detach', worktreeDir, input.deployedCommitSha])
-    const sourceNodeModules = path.join(input.repo, 'node_modules')
-    await access(sourceNodeModules)
-      .then(() => symlink(sourceNodeModules, path.join(worktreeDir, 'node_modules'), 'dir'))
-      .catch(() => undefined)
     await git(worktreeDir, [
       '-c', 'user.name=Dianjie AutoFix',
       '-c', 'user.email=autofix@localhost',
@@ -108,6 +108,7 @@ export async function prepareRevertedDeploymentCandidate(input: {
     await git(worktreeDir, [
       'diff', '--exit-code', `${input.deployedCommitSha}^`, commitSha, '--',
     ])
+    await linkNodeModules(input.repo, worktreeDir)
     return { ...partial, commitSha }
   } catch (error) {
     await removeDeploymentCandidate(input.repo, partial)

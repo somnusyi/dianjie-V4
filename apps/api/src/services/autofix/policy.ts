@@ -88,10 +88,24 @@ export function inspectUnifiedDiff(diff: string): DiffInspection {
     oldHeaderSeen: boolean
     newHeaderSeen: boolean
     inHunk: boolean
+    expectedOld: number
+    expectedNew: number
+    actualOld: number
+    actualNew: number
   } | null = null
+
+  const verifyHunkCounts = () => {
+    if (!current?.inHunk) return
+    if (current.actualOld !== current.expectedOld || current.actualNew !== current.expectedNew) {
+      errors.push(
+        `hunk 行数与声明不符: ${current.summary.path}（声明 -${current.expectedOld}/+${current.expectedNew}，实际 -${current.actualOld}/+${current.actualNew}）`,
+      )
+    }
+  }
 
   const finishCurrent = () => {
     if (!current) return
+    verifyHunkCounts()
     if (!current.oldHeaderSeen || !current.newHeaderSeen) {
       errors.push(`补丁文件头不完整: ${current.summary.path}`)
     }
@@ -116,7 +130,8 @@ export function inspectUnifiedDiff(diff: string): DiffInspection {
     else current.newHeaderSeen = true
   }
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
     if (line.startsWith('diff --git ')) {
       finishCurrent()
       const match = /^diff --git a\/(.+) b\/(.+)$/.exec(line)
@@ -139,6 +154,10 @@ export function inspectUnifiedDiff(diff: string): DiffInspection {
           oldHeaderSeen: false,
           newHeaderSeen: false,
           inHunk: false,
+          expectedOld: 0,
+          expectedNew: 0,
+          actualOld: 0,
+          actualNew: 0,
         }
       } catch (error: any) {
         errors.push(error.message)
@@ -147,7 +166,20 @@ export function inspectUnifiedDiff(diff: string): DiffInspection {
       continue
     }
     if (line.startsWith('@@ ')) {
-      if (current) current.inHunk = true
+      if (current) {
+        verifyHunkCounts()
+        const hunk = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(line)
+        if (!hunk) {
+          errors.push(`无法解析 hunk 头: ${line.slice(0, 80)}`)
+          current.inHunk = false
+          continue
+        }
+        current.expectedOld = hunk[1] === undefined ? 1 : Number(hunk[1])
+        current.expectedNew = hunk[2] === undefined ? 1 : Number(hunk[2])
+        current.actualOld = 0
+        current.actualNew = 0
+        current.inHunk = true
+      }
       continue
     }
     if (!current?.inHunk && line.startsWith('--- ')) {
@@ -159,8 +191,19 @@ export function inspectUnifiedDiff(diff: string): DiffInspection {
       continue
     }
     if (!current?.inHunk) continue
-    if (line.startsWith('+')) current.summary.added += 1
-    if (line.startsWith('-')) current.summary.deleted += 1
+    // 末尾换行符产生的空串元素不是真实行；"\ No newline" 标记行不计数
+    if (line === '' && i === lines.length - 1) continue
+    if (line.startsWith('\\')) continue
+    if (line.startsWith('+')) {
+      current.summary.added += 1
+      current.actualNew += 1
+    } else if (line.startsWith('-')) {
+      current.summary.deleted += 1
+      current.actualOld += 1
+    } else {
+      current.actualOld += 1
+      current.actualNew += 1
+    }
   }
   finishCurrent()
 

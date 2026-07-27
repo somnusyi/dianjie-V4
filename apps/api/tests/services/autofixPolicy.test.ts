@@ -10,7 +10,7 @@ const safeDiff = `diff --git a/apps/web/src/app/v2/supply-chain/home/page.tsx b/
 index 1111111..2222222 100644
 --- a/apps/web/src/app/v2/supply-chain/home/page.tsx
 +++ b/apps/web/src/app/v2/supply-chain/home/page.tsx
-@@ -1,3 +1,3 @@
+@@ -1,2 +1,2 @@
 -const label = value
 +const label = value ?? '—'
  export default label
@@ -142,7 +142,9 @@ describe('auto-fix patch policy', () => {
     process.env.AUTO_FIX_MAX_LINES = '200'
     try {
       const body = Array.from({ length: 201 }, (_, i) => `+line ${i}`).join('\n')
-      const diff = safeDiff.replace("+const label = value ?? '—'", body)
+      const diff = safeDiff
+        .replace("+const label = value ?? '—'", body)
+        .replace('@@ -1,2 +1,2 @@', '@@ -1,2 +1,202 @@')
       expect(inspectUnifiedDiff(diff).errors).toContain('补丁变更行数超过 200')
     } finally {
       delete process.env.AUTO_FIX_MAX_LINES
@@ -151,8 +153,53 @@ describe('auto-fix patch policy', () => {
 
   it('has no line cap by default', () => {
     const body = Array.from({ length: 1200 }, (_, i) => `+line ${i}`).join('\n')
-    const diff = safeDiff.replace("+const label = value ?? '—'", body)
+    const diff = safeDiff
+      .replace("+const label = value ?? '—'", body)
+      .replace('@@ -1,2 +1,2 @@', '@@ -1,2 +1,1201 @@')
     expect(inspectUnifiedDiff(diff).ok).toBe(true)
+  })
+
+  it('rejects a hunk whose line counts do not match the header', () => {
+    // 复现 trim 吃掉末尾空白上下文行的事故：声明 7 行实际只有 6 行
+    const corrupted = [
+      'diff --git a/apps/web/src/app/v2/boss/assistant/page.tsx b/apps/web/src/app/v2/boss/assistant/page.tsx',
+      'index 679da1f..aef26c7 100644',
+      '--- a/apps/web/src/app/v2/boss/assistant/page.tsx',
+      '+++ b/apps/web/src/app/v2/boss/assistant/page.tsx',
+      '@@ -86,7 +86,7 @@ export default function BossAssistantPage() {',
+      '           </a>',
+      '         </div>',
+      '         <p className="text-caption text-gray3 mt-0.5">',
+      '-          旧文案',
+      '+          新文案',
+      '         </p>',
+      '       </header>',
+      '',
+    ].join('\n')
+    const result = inspectUnifiedDiff(corrupted)
+    expect(result.ok).toBe(false)
+    expect(result.errors.join(' ')).toMatch(/hunk 行数与声明不符/)
+  })
+
+  it('accepts a hunk with a trailing blank context line', () => {
+    const withBlankContext = [
+      'diff --git a/apps/web/src/app/v2/boss/assistant/page.tsx b/apps/web/src/app/v2/boss/assistant/page.tsx',
+      'index 679da1f..aef26c7 100644',
+      '--- a/apps/web/src/app/v2/boss/assistant/page.tsx',
+      '+++ b/apps/web/src/app/v2/boss/assistant/page.tsx',
+      '@@ -86,7 +86,7 @@ export default function BossAssistantPage() {',
+      '           </a>',
+      '         </div>',
+      '         <p className="text-caption text-gray3 mt-0.5">',
+      '-          旧文案',
+      '+          新文案',
+      '         </p>',
+      '       </header>',
+      ' ',
+      '',
+    ].join('\n')
+    const result = inspectUnifiedDiff(withBlankContext)
+    expect(result.ok).toBe(true)
   })
 })
 

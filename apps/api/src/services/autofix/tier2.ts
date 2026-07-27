@@ -441,12 +441,12 @@ export async function runTier2Dev(runId: string): Promise<void> {
       env: { ...process.env, CI: '1', NODE_ENV: 'test' },
     })
 
-    const diffPatch = await git(worktreeDir, ['diff', '--', '.', ':!node_modules'])
-    const inspection = inspectUnifiedDiff(`${diffPatch}\n`)
+    const diffPatch = await gitRaw(worktreeDir, ['diff', '--', '.', ':!node_modules'])
+    const inspection = inspectUnifiedDiff(diffPatch)
     if (!inspection.ok) throw new Error(inspection.errors.join('；'))
 
     await transitionRun(run, 'DEPLOY_REVIEW', {
-      diffPatch: `${diffPatch}\n`,
+      diffPatch,
       diffFiles: inspection.files as any,
       baseCommitSha,
       planSummary: `Qwen Code 开发完成: 修改 ${inspection.files.length} 个文件、${inspection.changedLines} 行；Web 测试与类型检查独立复验通过。`,
@@ -524,4 +524,13 @@ export async function runTier2Dev(runId: string): Promise<void> {
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout, stderr } = await execFileAsync('git', args, { cwd, timeout: 60_000, maxBuffer: 4 * 1024 * 1024 })
   return `${stdout || ''}${stderr || ''}`.trim()
+}
+
+/**
+ * 捕获补丁专用：绝不能 trim。diff 最后一行若是空白上下文行（单个空格），
+ * trim 会把它吃掉，hunk 声明行数与实际不符，部署时 git apply --check 报 corrupt patch。
+ */
+async function gitRaw(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, { cwd, timeout: 60_000, maxBuffer: 4 * 1024 * 1024 })
+  return stdout || ''
 }

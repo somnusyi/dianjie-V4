@@ -2676,3 +2676,48 @@
 - 待外部处理仅剩 `api.dianjie.cc` 过期 TLS；另需持续观察 ECS 到 GitHub 的 HTTPS
   间歇性 HTTP/2/连接超时。其间源码收口只能继续使用本报告所述 exact bundle 校验流程，
   不得改协议、重写历史或跳过父链/文件清单检查。
+
+## 2026-07-27 09:52 AutoFix 停滞任务持续恢复补充批次
+
+### 开始基线与反馈核实
+
+- 本批先读取 automation memory、夜审记录，fetch `origin/main` 并核对全部相关
+  worktree；最初基于 `0aaa78ef` 的 watchdog 草稿在测试期间遇到另一条维护序列推进
+  main。该序列明确保留草稿且未接管，本批也未覆盖其发布锁、生产基线、候选隔离和
+  审批并发成果，而是从最新干净 `origin/main@6fc1d547` 新建独立 worktree 重新移植。
+- 最新生产只读基线为 main、`.deployed-commit`、`/app/dianjie-src` 三者 exact
+  `6fc1d54799cd1cb9d5fe0789cf069a81fc2e7b47`，源码干净、无发布锁；API/Web/CMB
+  online 且本机健康均为 200，70 条 migration 成功、0 失败，AutoFixRun 总数和
+  actionable 均为 0。
+- 新出现 1 条 `NEW_FEATURE/AWAITING_APPROVAL` 反馈“供应商商品支持修改商品名称和分类”，
+  尚无 AutoFixRun。它仍等待管理员业务审批，本批没有提前创建任务、修改商品权限或替
+  用户决定业务语义。
+
+### 确定性缺陷与修改
+
+- 原 worker 只在 API 启动时扫描一次停滞任务。若服务在任务尚未达到 60 分钟阈值时
+  重启，首次扫描不会处理；之后没有定时复查，该活动状态会永久阻断全局串行队列。
+- 现在 worker 每 60 秒重新扫描超过配置阈值的活动记录；状态抢占与 OpLog 在同一事务
+  完成，并以 `status + updatedAt` 条件更新保证并发看门狗只有一个成功转
+  `ESCALATED`、写一条审计和发送一次去重告警。
+- 本进程正在执行的 run 记录在内存集合中并从扫描排除，避免看门狗与仍在正常运行的
+  Qwen、隔离测试或部署步骤竞争；服务重启后集合为空，只有已失去进程所有权且超过阈值
+  的 durable 状态会被收敛。生产阶段既有部署锁继续保留，不擅自删除不确定锁现场。
+- 实现提交为 `08da4c9a87c57e00afb0f2d85a65adaecdb52c45`，只修改 AutoFix engine
+  与数据库集成回归，无 schema、业务页面、认证权限、资金、库存或通知配置变化。
+
+### 验收与发布门禁
+
+- Node `20.20.2`；最新 main 基线上的 AutoFix 专项 13/13、完整 API 集成 25 文件
+  186/186、API 单元 59 文件 556/556、API build、Web 28 文件 506/506、Web tsc 和
+  166 页 production build全部通过；临时 `_ci` PostgreSQL 从零应用 70 migration，
+  status 最新，容器和监听均已删除。
+- 并发恢复回归同时调用两次扫描：过期 `ANALYZING` 记录仅一次转人工并仅有一条
+  `stale_watchdog` 审计，新鲜 `PATCHING` 记录保持不变。首次专项在生成 Prisma Client
+  前被测试加载器拒绝且未执行用例；按仓库标准生成 Client 后同一专项及完整套件通过。
+- `git diff --check` 与高置信敏感信息扫描通过。该批没有可视页面变化，相关端到端证据
+  由真实 PostgreSQL 状态并发测试覆盖，不执行无意义浏览器交互或生产业务写入。
+- 本节与实现将作为连续非强制快进提交进入 main，并仅通过标准
+  `/Users/somnusyi/Desktop/dianjie-V4/dianjie-V4-deploy/scripts/deploy-worktree.sh`
+  发布；最终备份、PM2、health、deployed commit、源码副本、队列和锁状态写入
+  automation memory。过期 `dianjie.cc` 证书继续只报告，不轮换证书或私钥。

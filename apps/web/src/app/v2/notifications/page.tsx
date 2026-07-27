@@ -105,7 +105,7 @@ export default function NotificationsPage() {
           <p className="text-caption text-gray3">{items === null ? '加载中…' : `${items.length} 条 · 未读 ${unreadCount}`}</p>
         </div>
         {unreadCount > 0 && (
-          <button onClick={readAll} className="px-3 h-9 rounded-cta bg-white border border-border text-button text-gray2">全部已渎</button>
+          <button onClick={readAll} className="px-3 h-9 rounded-cta bg-white border border-border text-button text-gray2">全部已读</button>
         )}
       </header>
 

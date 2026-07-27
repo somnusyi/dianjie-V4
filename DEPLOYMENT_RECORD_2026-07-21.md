@@ -141,3 +141,13 @@
 - 测试：单测 172/172（新增 27）、集成 5/5、双端 tsc+build；生产真实 Qwen 冒烟通过（33.4s 首响，IMPROVEMENT 分诊+解析正确）
 - 部署：分段执行标准流程（300s 限制），DEPLOY 备份 dianjie_v4-deploy-bak-20260726-1345-20192881.dump，md5 一致、api/cmb/web 健康、.deployed-commit=201928815de8…
 - 注：notify-chef-data-tasks.ts 早于 92bdf2b 已入库，本次部署未受影响
+
+## 第 13 次附记：域名与证书现状定案（2026-07-27 上午，Kimi 执行）
+- **正式入口定案：`https://www.njdianjie.com`**（企微 OAuth 跳转 WECOM_REDIRECT_BASE、企微通知卡片链接均指向它；反代 v4 web 3204 + api 4004）
+- njdianjie.com 资质：ICP 备案 2026-05-22 通过 + 公安备案（江苏公网安备 32010202012330号）；证书 Let's Encrypt（certbot 管理，webroot /var/www/letsencrypt 自动续期，当前到 2026-08-13）
+- **dianjie.cc 系列（app/api/www/主域）冷处理**：同一套 v4 的备用入口，无 ICP 备案（80 端口被阿里云 ICP 拦截劫持，443 暂通），日常无人使用；不再投入维护、不出现在对外物料
+- dianjie.cc 证书事故处置：DigiCert 四张证书 2026-07-21 过期（6 天无人察觉，佐证无人使用）；因 ICP 拦截走不了 HTTP-01，改用 acme.sh TLS-ALPN-01（停 nginx ~20s）签发 LE ECC SAN 证书（覆盖四域，2026-07-27→10-25），nginx 四对 server 块统一指向 /etc/ssl/dianjie/le/；自动续期=acme.sh cron + pre-hook 停 nginx + ReloadCmd 兜底拉起，全链路实测通过；旧证书与 nginx 配置备份 /root/cert-backup-20260727-094437
+- 残留依赖清理：生产 .env/pm2 零引用；CORS 白名单保留兼容；部署/回滚/冒烟脚本健康检查 app.dianjie.cc → www.njdianjie.com（33bfeebe）
+- 代码外待人工确认：① CMB 招行商户后台支付回调地址配的域名（如为 dianjie.cc 需改）；② 企微后台可信域名/应用主页核对
+- 风险备忘：未备案域名（dianjie.cc）443 存在被阿里云 SNI 阻断扩大的政策风险，只当备用不依赖
+- acme.sh 装于 /root/.acme.sh（Gitee 镜像安装），cron 每日 15:38 检查；nginx 80 块已加 /.well-known/acme-challenge/ 直通 location（备案若补齐可回切 HTTP-01）

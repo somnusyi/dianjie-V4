@@ -6,7 +6,10 @@ import {
   executeApprovedRun,
   executeManualRollback,
 } from '../../src/services/autofix/deployment'
-import { enqueueAutoFix } from '../../src/services/autofix/engine'
+import {
+  enqueueAutoFix,
+  recoverStaleAutoFixRuns,
+} from '../../src/services/autofix/engine'
 
 vi.mock('../../src/services/autofix/deployment', () => ({
   executeApprovedRun: vi.fn(),
@@ -36,6 +39,7 @@ let concurrentRejectRunA = ''
 let app: ReturnType<typeof Fastify>
 let oldMode: string | undefined
 let oldDeploy: string | undefined
+let oldStaleMinutes: string | undefined
 
 const actors: Record<string, () => any> = {
   adminA: () => ({ tenantId: tenantA, userId: adminA, role: 'SUPER_ADMIN' }),
@@ -56,8 +60,10 @@ describe('auto-fix approval API (integration)', () => {
   beforeAll(async () => {
     oldMode = process.env.AUTO_FIX_MODE
     oldDeploy = process.env.AUTO_FIX_DEPLOY_ENABLED
+    oldStaleMinutes = process.env.AUTO_FIX_STALE_MINUTES
     process.env.AUTO_FIX_MODE = 'suggest'
     process.env.AUTO_FIX_DEPLOY_ENABLED = 'false'
+    process.env.AUTO_FIX_STALE_MINUTES = '15'
 
     const [ta, tb] = await Promise.all([
       prisma.tenant.create({ data: { name: `AutoFix A ${suffix}`, slug: `${suffix}-a` } }),
@@ -330,6 +336,8 @@ describe('auto-fix approval API (integration)', () => {
     else process.env.AUTO_FIX_MODE = oldMode
     if (oldDeploy === undefined) delete process.env.AUTO_FIX_DEPLOY_ENABLED
     else process.env.AUTO_FIX_DEPLOY_ENABLED = oldDeploy
+    if (oldStaleMinutes === undefined) delete process.env.AUTO_FIX_STALE_MINUTES
+    else process.env.AUTO_FIX_STALE_MINUTES = oldStaleMinutes
     await prisma.autoFixRun.deleteMany({ where: { tenantId: { in: [tenantA, tenantB] } } })
     await prisma.feedback.deleteMany({ where: { tenantId: { in: [tenantA, tenantB] } } })
     await prisma.opLog.deleteMany({ where: { tenantId: { in: [tenantA, tenantB] } } })
@@ -475,6 +483,61 @@ describe('auto-fix approval API (integration)', () => {
     expect(response.json().error).toContain('部署环境未启用')
     expect((await prisma.autoFixRun.findUnique({ where: { id: runA } }))?.status)
       .toBe('AWAITING_APPROVAL')
+  })
+
+  it('recovers orphaned stale runs exactly once without touching fresh work', async () => {
+    const [staleFeedback, freshFeedback] = await Promise.all([
+      prisma.feedback.create({
+        data: {
+          tenantId: tenantA, reporterId: managerA, category: 'IMPROVEMENT',
+          status: 'IN_DEV', title: '停滞任务', context: { path: '/v2/manager/home' },
+        },
+      }),
+      prisma.feedback.create({
+        data: {
+          tenantId: tenantA, reporterId: managerA, category: 'IMPROVEMENT',
+          status: 'IN_DEV', title: '正常任务', context: { path: '/v2/manager/home' },
+        },
+      }),
+    ])
+    const staleAt = new Date(Date.now() - 16 * 60_000)
+    const [staleRun, freshRun] = await Promise.all([
+      prisma.autoFixRun.create({
+        data: {
+          tenantId: tenantA,
+          feedbackId: staleFeedback.id,
+          status: 'ANALYZING',
+          updatedAt: staleAt,
+        },
+      }),
+      prisma.autoFixRun.create({
+        data: {
+          tenantId: tenantA,
+          feedbackId: freshFeedback.id,
+          status: 'PATCHING',
+        },
+      }),
+    ])
+
+    const recovered = await Promise.all([
+      recoverStaleAutoFixRuns(),
+      recoverStaleAutoFixRuns(),
+    ])
+    expect(recovered.reduce((total, count) => total + count, 0)).toBe(1)
+
+    const [staleAfter, freshAfter, audits] = await Promise.all([
+      prisma.autoFixRun.findUnique({ where: { id: staleRun.id } }),
+      prisma.autoFixRun.findUnique({ where: { id: freshRun.id } }),
+      prisma.opLog.findMany({
+        where: { tenantId: tenantA, entityType: 'AutoFixRun', targetId: staleRun.id },
+        select: { metadata: true },
+      }),
+    ])
+    expect(staleAfter?.status).toBe('ESCALATED')
+    expect(staleAfter?.error).toContain('看门狗已转人工')
+    expect(freshAfter?.status).toBe('PATCHING')
+    expect(audits).toHaveLength(1)
+    expect((audits[0].metadata as any)?.reason).toBe('stale_watchdog')
   })
 
   it('rejects atomically with a reason and audit log', async () => {

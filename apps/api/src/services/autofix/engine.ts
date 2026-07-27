@@ -16,7 +16,12 @@ import {
 } from './prompts'
 import { collectCandidateSources, requireCleanRepoHead, verifyPatch } from './repository'
 const ACTIVE_STATUSES = ['ANALYZING', 'PATCHING', 'VERIFYING', 'DEPLOYING', 'VERIFY_PROD'] as const
+const STALE_WATCHDOG_INTERVAL_MS = 60_000
 let draining = false
+let staleWatchdog: NodeJS.Timeout | null = null
+// Live work is owned by this process. After a restart the set is empty, so the
+// watchdog can distinguish orphaned durable state from a legitimately long step.
+const locallyExecutingRunIds = new Set<string>()
 
 export interface EnqueueAutoFixInput {
   tenantId: string
@@ -273,7 +278,12 @@ async function drainQueue() {
       const run = await claimNextRun()
       if (!run) break
       if (run.kind === 'skipped') continue
-      await processRun(run)
+      locallyExecutingRunIds.add(run.id)
+      try {
+        await processRun(run)
+      } finally {
+        locallyExecutingRunIds.delete(run.id)
+      }
     }
   } finally {
     draining = false
@@ -311,25 +321,86 @@ export async function enqueueAutoFix(input: EnqueueAutoFixInput): Promise<string
   }
 }
 
-async function recoverStaleRuns() {
-  const cutoff = new Date(Date.now() - staleMinutes() * 60_000)
+async function escalateIfStillStale(
+  run: { id: string; tenantId: string; feedbackId: string },
+  cutoff: Date,
+  thresholdMinutes: number,
+): Promise<boolean> {
+  const message = `任务停滞超过 ${thresholdMinutes} 分钟，看门狗已转人工`
+  const claimed = await prisma.$transaction(async (tx) => {
+    const updated = await tx.autoFixRun.updateMany({
+      where: {
+        id: run.id,
+        status: { in: [...ACTIVE_STATUSES] as any },
+        updatedAt: { lt: cutoff },
+      },
+      data: {
+        status: 'ESCALATED' as any,
+        error: message,
+      },
+    })
+    if (updated.count !== 1) return false
+
+    await tx.opLog.create({
+      data: {
+        tenantId: run.tenantId,
+        role: 'AI',
+        action: `AI 自动修复 ${run.id} → ESCALATED: ${message}`.slice(0, 500),
+        entityType: 'AutoFixRun',
+        targetId: run.id,
+        isAi: true,
+        metadata: {
+          status: 'ESCALATED',
+          reason: 'stale_watchdog',
+          thresholdMinutes,
+        } as any,
+      },
+    })
+    return true
+  })
+  if (!claimed) return false
+
+  notify({
+    tenantId: run.tenantId,
+    event: 'AUTOFIX_ESCALATED',
+    eventKey: `AUTOFIX:${run.id}:ESCALATED`,
+    payload: { runId: run.id, feedbackId: run.feedbackId, error: message },
+    bypassFrequency: true,
+    bypassSilent: true,
+  })
+  return true
+}
+
+export async function recoverStaleAutoFixRuns(): Promise<number> {
+  const thresholdMinutes = staleMinutes()
+  const cutoff = new Date(Date.now() - thresholdMinutes * 60_000)
+  const localRunIds = [...locallyExecutingRunIds]
   const stale = await prisma.autoFixRun.findMany({
     where: {
       status: { in: [...ACTIVE_STATUSES] as any },
       updatedAt: { lt: cutoff },
+      ...(localRunIds.length > 0 ? { id: { notIn: localRunIds } } : {}),
     },
     select: { id: true, tenantId: true, feedbackId: true },
   })
+  let recovered = 0
   for (const run of stale) {
-    await escalate(run, `服务重启后发现任务已停滞超过 ${staleMinutes()} 分钟，已转人工`)
+    if (await escalateIfStillStale(run, cutoff, thresholdMinutes)) recovered += 1
   }
+  return recovered
+}
+
+function runAutoFixMaintenance() {
+  void recoverStaleAutoFixRuns()
+    .catch((error) => console.error('[autofix] 恢复停滞任务失败:', error))
+    .finally(() => void drainQueue())
 }
 
 export function startAutoFixWorker() {
   if (!isAutoFixModeEnabled()) return
-  setImmediate(() => {
-    void recoverStaleRuns()
-      .catch((error) => console.error('[autofix] 恢复停滞任务失败:', error))
-      .finally(() => void drainQueue())
-  })
+  if (!staleWatchdog) {
+    staleWatchdog = setInterval(runAutoFixMaintenance, STALE_WATCHDOG_INTERVAL_MS)
+    staleWatchdog.unref()
+  }
+  setImmediate(runAutoFixMaintenance)
 }

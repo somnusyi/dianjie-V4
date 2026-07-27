@@ -80,6 +80,7 @@ async function run(repoDir: string, command: string, args: string[], timeout = 1
       ...process.env,
       PATH: process.env.PATH,
       CI: '1',
+      NODE_ENV: 'test',
     },
   })
   return `${stdout || ''}${stderr || ''}`.slice(-20_000)

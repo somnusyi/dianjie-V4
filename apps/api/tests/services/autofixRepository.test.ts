@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -146,6 +146,56 @@ index 1111111..2222222 100644
       await expect(validatePatchApplicable(tempRepo, mismatchedDiff, pinned)).rejects.toThrow('git apply')
     } finally {
       await rm(tempRepo, { recursive: true, force: true })
+    }
+  })
+
+  it('runs isolated verification with NODE_ENV=test even under a production API process', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'dianjie-autofix-env-'))
+    const tempRepo = path.join(tempRoot, 'repo')
+    const fakeBin = path.join(tempRoot, 'bin')
+    const marker = path.join(tempRoot, 'node-envs')
+    const originalPath = process.env.PATH
+    const originalNodeEnv = process.env.NODE_ENV
+    try {
+      await mkdir(path.join(tempRepo, 'apps/web/src/app/example'), { recursive: true })
+      await mkdir(fakeBin)
+      await execFileAsync('git', ['init', '-q'], { cwd: tempRepo })
+      await execFileAsync('git', ['config', 'user.name', 'AutoFix Test'], { cwd: tempRepo })
+      await execFileAsync('git', ['config', 'user.email', 'autofix-test@localhost'], { cwd: tempRepo })
+      await writeFile(
+        path.join(tempRepo, 'apps/web/src/app/example/page.tsx'),
+        'export const label = "before"\n',
+      )
+      await execFileAsync('git', ['add', '.'], { cwd: tempRepo })
+      await execFileAsync('git', ['commit', '-qm', 'first'], { cwd: tempRepo })
+      const pinned = await requireCleanRepoHead(tempRepo)
+      await writeFile(
+        path.join(fakeBin, 'pnpm'),
+        `#!/bin/sh
+set -eu
+printf '%s\\n' "$NODE_ENV" >> "$AUTOFIX_TEST_NODE_ENV_MARKER"
+`,
+        { mode: 0o755 },
+      )
+      process.env.PATH = `${fakeBin}:${originalPath || ''}`
+      process.env.NODE_ENV = 'production'
+      process.env.AUTOFIX_TEST_NODE_ENV_MARKER = marker
+
+      const diff = `diff --git a/apps/web/src/app/example/page.tsx b/apps/web/src/app/example/page.tsx
+--- a/apps/web/src/app/example/page.tsx
++++ b/apps/web/src/app/example/page.tsx
+@@ -1 +1 @@
+-export const label = "before"
++export const label = "after"
+`
+      await verifyPatch(tempRepo, diff, pinned)
+      await expect(readFile(marker, 'utf8')).resolves.toBe('test\ntest\n')
+    } finally {
+      process.env.PATH = originalPath
+      if (originalNodeEnv === undefined) delete process.env.NODE_ENV
+      else process.env.NODE_ENV = originalNodeEnv
+      delete process.env.AUTOFIX_TEST_NODE_ENV_MARKER
+      await rm(tempRoot, { recursive: true, force: true })
     }
   })
 })

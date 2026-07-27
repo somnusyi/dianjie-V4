@@ -1,0 +1,5 @@
+-- 档2（Qwen Code 服务器侧开发）新增自动修复状态:
+-- TASKBOOK_READY 方案待批 → QWEN_DEV 开发中 → DEPLOY_REVIEW 上线待批
+ALTER TYPE "AutoFixStatus" ADD VALUE 'TASKBOOK_READY';
+ALTER TYPE "AutoFixStatus" ADD VALUE 'QWEN_DEV';
+ALTER TYPE "AutoFixStatus" ADD VALUE 'DEPLOY_REVIEW';

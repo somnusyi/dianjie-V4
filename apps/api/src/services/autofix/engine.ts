@@ -2,6 +2,7 @@ import { prisma } from '@dianjie/db'
 import { fireAndForget as notify } from '../notify'
 import { qwenChat, QWEN_BUSY_FALLBACK, QWEN_NOT_CONFIGURED } from '../qwenChat'
 import { executeApprovedRun } from './deployment'
+import { prepareTier2TaskBook } from './tier2'
 import {
   inspectUnifiedDiff,
   isApprovedAutoMode,
@@ -20,7 +21,7 @@ import {
   validatePatchApplicable,
   verifyPatch,
 } from './repository'
-const ACTIVE_STATUSES = ['ANALYZING', 'PATCHING', 'VERIFYING', 'DEPLOYING', 'VERIFY_PROD'] as const
+const ACTIVE_STATUSES = ['ANALYZING', 'PATCHING', 'VERIFYING', 'DEPLOYING', 'VERIFY_PROD', 'QWEN_DEV'] as const
 const STALE_WATCHDOG_INTERVAL_MS = 60_000
 let draining = false
 let staleWatchdog: NodeJS.Timeout | null = null
@@ -196,15 +197,11 @@ async function processRun(run: { id: string; tenantId: string; feedbackId: strin
       data: { analysis: JSON.stringify(analysis) },
     })
     if (!analysis.inWhitelist) {
-      await prisma.feedbackMessage.create({
-        data: {
-          tenantId: run.tenantId,
-          feedbackId: run.feedbackId,
-          role: 'assistant',
-          content: '该需求涉及后端数据、权限或部署等变更，超出前端自动修复的安全范围，已转人工评估处理，请留意后续进展通知。',
-        },
-      })
-      throw new Error(`需求超出前端自动修复白名单范围（涉及后端/数据/权限等变更），已转人工评估 (置信度 ${analysis.confidence.toFixed(2)})`)
+      // 档2升级通道: 生成开发任务书送回老板手机审批, 批准后由 Qwen Code 隔离开发。
+      // 任务书评估拒绝（涉核心数据等）会在这里抛错 → 外层 catch 转人工。
+      const outcome = await prepareTier2TaskBook({ run, feedback, analysis })
+      if (outcome === 'prepared') return
+      throw new Error('档2任务书未生成')
     }
     if (analysis.confidence < 0.65) {
       throw new Error(`AI 定位置信度不足 (${analysis.confidence.toFixed(2)} < 0.65)，已转人工确认`)

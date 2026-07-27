@@ -21,6 +21,8 @@ import { sendNotification } from '../services/notification'
 import { qwenChat, buildFeedbackSystemPrompt, QWEN_NOT_CONFIGURED } from '../services/qwenChat'
 import { parseTriageBlock, decideTriageAction, TriageResult } from '../services/feedbackTriage'
 import { enqueueAutoFix } from '../services/autofix/engine'
+import { executeApprovedRun } from '../services/autofix/deployment'
+import { runTier2Dev } from '../services/autofix/tier2'
 import { resignOssUrls } from './upload'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
@@ -350,49 +352,97 @@ export const feedbackRoutes: FastifyPluginAsync = async (app) => {
     let autoRunId: string | null = null
     let automationStatus = action === 'approve' ? 'disabled' : 'not_requested'
     if (action === 'approve') {
-      try {
-        autoRunId = await enqueueAutoFix({
-          tenantId: actor.tenantId,
-          feedbackId: result.feedback.id,
-          approvedById: actor.userId,
+      // 档2分支：该反馈已有自动修复任务且停在审批节点 → 按阶段推进，而不是重新入队
+      const existingRun = await prisma.autoFixRun.findUnique({
+        where: { feedbackId: result.feedback.id },
+        select: { id: true, status: true },
+      })
+      if (existingRun && String(existingRun.status) === 'TASKBOOK_READY') {
+        await prisma.autoFixRun.update({
+          where: { id: existingRun.id },
+          data: { status: 'QWEN_DEV' as any, decidedById: actor.userId, decidedAt: new Date(), error: null },
         })
-        automationStatus = autoRunId ? 'queued' : 'disabled'
         await prisma.feedbackMessage.create({
           data: {
             tenantId: actor.tenantId,
             feedbackId: result.feedback.id,
             role: 'system',
-            content: autoRunId
-              ? `自动开发任务已排队（${autoRunId}）。系统将依次完成定位、补丁、测试和安全发布；超出安全范围会转人工。`
-              : '当前自动开发开关未启用，反馈已保留在开发中并转为人工跟进。',
+            content: '管理员已批准开发方案，服务器 AI 开始在隔离环境开发；完成并通过测试后会再请你批准上线。',
           },
         })
-      } catch (error: any) {
-        automationStatus = 'queue_failed'
-        const message = error?.message || String(error)
-        console.error('[autofix] 批准后入队失败:', error)
-        await prisma.$transaction([
-          prisma.feedbackMessage.create({
+        setImmediate(() => void runTier2Dev(existingRun.id).catch((e) => console.error('[tier2] 开发执行异常:', e)))
+        autoRunId = existingRun.id
+        automationStatus = 'tier2_dev'
+      } else if (existingRun && String(existingRun.status) === 'DEPLOY_REVIEW') {
+        await prisma.autoFixRun.update({
+          where: { id: existingRun.id },
+          data: { status: 'DEPLOYING' as any, decidedById: actor.userId, decidedAt: new Date(), error: null },
+        })
+        await prisma.feedbackMessage.create({
+          data: {
+            tenantId: actor.tenantId,
+            feedbackId: result.feedback.id,
+            role: 'system',
+            content: '管理员已批准上线，系统开始安全发布（含生产验证与自动回滚兜底）。',
+          },
+        })
+        setImmediate(() => void executeApprovedRun(existingRun.id).catch((e) => console.error('[tier2] 发布执行异常:', e)))
+        autoRunId = existingRun.id
+        automationStatus = 'tier2_deploy'
+      } else {
+        try {
+          autoRunId = await enqueueAutoFix({
+            tenantId: actor.tenantId,
+            feedbackId: result.feedback.id,
+            approvedById: actor.userId,
+          })
+          automationStatus = autoRunId ? 'queued' : 'disabled'
+          await prisma.feedbackMessage.create({
             data: {
               tenantId: actor.tenantId,
               feedbackId: result.feedback.id,
               role: 'system',
-              content: '自动开发任务创建失败，已保留审批结果并转人工处理，管理员会收到异常记录。',
+              content: autoRunId
+                ? `自动开发任务已排队（${autoRunId}）。系统将依次完成定位、补丁、测试和安全发布；超出安全范围会转人工。`
+                : '当前自动开发开关未启用，反馈已保留在开发中并转为人工跟进。',
             },
-          }),
-          prisma.opLog.create({
-            data: {
-              tenantId: actor.tenantId,
-              userId: actor.userId,
-              role: actor.role,
-              action: `反馈批准后自动开发入队失败: ${message}`.slice(0, 500),
-              entityType: 'Feedback',
-              targetId: result.feedback.id,
-              metadata: { automationStatus: 'queue_failed' } as any,
-            },
-          }),
-        ])
+          })
+        } catch (error: any) {
+          automationStatus = 'queue_failed'
+          const message = error?.message || String(error)
+          console.error('[autofix] 批准后入队失败:', error)
+          await prisma.$transaction([
+            prisma.feedbackMessage.create({
+              data: {
+                tenantId: actor.tenantId,
+                feedbackId: result.feedback.id,
+                role: 'system',
+                content: '自动开发任务创建失败，已保留审批结果并转人工处理，管理员会收到异常记录。',
+              },
+            }),
+            prisma.opLog.create({
+              data: {
+                tenantId: actor.tenantId,
+                userId: actor.userId,
+                role: actor.role,
+                action: `反馈批准后自动开发入队失败: ${message}`.slice(0, 500),
+                entityType: 'Feedback',
+                targetId: result.feedback.id,
+                metadata: { automationStatus: 'queue_failed' } as any,
+              },
+            }),
+          ])
+        }
       }
+    } else {
+      // 驳回时同步终结停在审批节点的档2任务
+      await prisma.autoFixRun.updateMany({
+        where: {
+          feedbackId: result.feedback.id,
+          status: { in: ['TASKBOOK_READY', 'DEPLOY_REVIEW'] as any },
+        },
+        data: { status: 'REJECTED' as any, decidedById: actor.userId, decidedAt: new Date(), error: note || '管理员驳回' },
+      })
     }
 
     // App 内消息中心通知提报人 (企微决策通知 P1 再接)

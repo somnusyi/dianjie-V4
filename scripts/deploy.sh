@@ -202,7 +202,7 @@ echo "==> [7/7] 验收"
 sleep 5  # 给进程 warm-up
 
 # 最低限度: health check
-HEALTH=$(curl -sf https://app.dianjie.cc/api/health || echo "FAIL")
+HEALTH=$(curl -sf https://www.njdianjie.com/api/health || echo "FAIL")
 if [[ "$HEALTH" == FAIL* ]]; then
   echo "❌ /api/health 失败 — 立即回滚！"
   echo "   ./scripts/rollback.sh"
@@ -211,7 +211,7 @@ fi
 echo "   /api/health: $HEALTH"
 
 if [ $SKIP_TESTS -eq 0 ]; then
-  bash "$SCRIPT_DIR/smoke-test.sh" "https://app.dianjie.cc" || {
+  bash "$SCRIPT_DIR/smoke-test.sh" "https://www.njdianjie.com" || {
     echo "❌ Smoke test 失败，发布不记为成功。请立即评估回滚:"
     echo "   ./scripts/rollback.sh"
     exit 1

@@ -2,13 +2,13 @@
 # ══════════════════════════════════════════════════════
 # 滇界 V4 · 烟雾测试（复用现有 e2e + ui-smoke）
 # 用法:
-#   ./scripts/smoke-test.sh                          # 测生产 https://app.dianjie.cc
+#   ./scripts/smoke-test.sh                          # 测生产 https://www.njdianjie.com
 #   ./scripts/smoke-test.sh http://localhost:4444 http://localhost:3200
 #                                                   # 测本地 API + Web
 # ══════════════════════════════════════════════════════
 set -euo pipefail
 
-API_BASE="${1:-https://app.dianjie.cc}"
+API_BASE="${1:-https://www.njdianjie.com}"
 WEB_BASE="${2:-$API_BASE}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"

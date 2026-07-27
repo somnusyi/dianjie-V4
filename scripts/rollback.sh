@@ -111,7 +111,7 @@ sshpass -p "$V4_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no "$SERVER" '
 # ── 验收 ────────────────────────────────────────
 echo ""
 sleep 5
-HEALTH=$(curl -sf https://app.dianjie.cc/api/health || echo "FAIL")
+HEALTH=$(curl -sf https://www.njdianjie.com/api/health || echo "FAIL")
 if [[ "$HEALTH" == FAIL* ]]; then
   echo "❌ 回滚后 /api/health 仍失败 — 手工 ssh 上去看 pm2 log"
   exit 1

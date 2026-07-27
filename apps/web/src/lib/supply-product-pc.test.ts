@@ -12,6 +12,7 @@ import {
   formatProductQuantity,
   formatProductStatusLabel,
   hasActiveFilters,
+  isNewCategoryName,
   keepFiltersForPage,
   parseProductQuantity,
   productImageAlt,
@@ -257,6 +258,44 @@ describe('hasActiveFilters', () => {
 
   it('returns false for whitespace-only keyword', () => {
     expect(hasActiveFilters({ ...DEFAULT_SUPPLY_PRODUCT_FILTERS, q: '   ' })).toBe(false)
+  })
+})
+
+describe('isNewCategoryName', () => {
+  const existing = [
+    { name: '蔬菜', count: 3 },
+    { name: '冻品', count: 1 },
+    { name: 'Vegetables', count: 0 },
+  ]
+
+  it('returns true for a name not in the existing list', () => {
+    expect(isNewCategoryName('干货', existing)).toBe(true)
+  })
+
+  it('returns false for an exact existing name', () => {
+    expect(isNewCategoryName('蔬菜', existing)).toBe(false)
+    expect(isNewCategoryName('冻品', existing)).toBe(false)
+  })
+
+  it('returns false for empty or whitespace-only input', () => {
+    expect(isNewCategoryName('', existing)).toBe(false)
+    expect(isNewCategoryName('   ', existing)).toBe(false)
+  })
+
+  it('trims surrounding whitespace before comparing', () => {
+    expect(isNewCategoryName('  蔬菜  ', existing)).toBe(false)
+    expect(isNewCategoryName('  干货  ', existing)).toBe(true)
+  })
+
+  it('compares case-sensitively (keeps names as-is)', () => {
+    expect(isNewCategoryName('vegetables', existing)).toBe(true)
+    expect(isNewCategoryName('VEGETABLES', existing)).toBe(true)
+    expect(isNewCategoryName('Vegetables', existing)).toBe(false)
+  })
+
+  it('treats any non-empty input as new when the list is empty', () => {
+    expect(isNewCategoryName('蔬菜', [])).toBe(true)
+    expect(isNewCategoryName('   ', [])).toBe(false)
   })
 })
 

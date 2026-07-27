@@ -295,6 +295,16 @@ export function hasActiveFilters(filters: SupplyProductFilters): boolean {
   return Boolean(filters.q.trim() || filters.category || filters.status || filters.supplierId)
 }
 
+/**
+ * 判断输入的分类名是否为「新分类」：trim 后非空，且（大小写敏感）不在现有分类列表中。
+ * 商品编辑弹窗据此决定是否显示「创建并选用」入口。
+ */
+export function isNewCategoryName(input: string, existing: CategoryOption[]): boolean {
+  const name = input.trim()
+  if (!name) return false
+  return !existing.some(category => category.name === name)
+}
+
 /** 校验新增商品表单；返回错误文案或 null。 */
 export function validateNewProductForm(form: { name: string; price: string }): string | null {
   if (!form.name.trim()) return '商品名称必填'

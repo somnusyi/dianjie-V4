@@ -39,6 +39,7 @@ import {
   formatPriceChangeConfirmBody,
   formatProductStatusLabel,
   hasActiveFilters,
+  isNewCategoryName,
   keepFiltersForPage,
   productImageAlt,
   productStatusTone,
@@ -127,6 +128,8 @@ export default function InternalSupplyChainProductsPage() {
   const [editing, setEditing] = useState<ProductRow | null>(null)
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const [formError, setFormError] = useState<string | null>(null)
+  const [creatingCategory, setCreatingCategory] = useState(false)
+  const [categoryNotice, setCategoryNotice] = useState<string | null>(null)
   const [pendingImageFile, setPendingImageFile] = useState<File | null>(null)
   const [pendingImagePreview, setPendingImagePreview] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -217,6 +220,7 @@ export default function InternalSupplyChainProductsPage() {
     setEditing(null)
     setForm({ ...EMPTY_FORM, supplierId: filters.supplierId })
     setFormError(null)
+    setCategoryNotice(null)
     setPendingImageFile(null)
     setPendingImagePreview(null)
     setFormOpen(true)
@@ -240,6 +244,7 @@ export default function InternalSupplyChainProductsPage() {
       stepQty: String(product.stepQty ?? 1),
     })
     setFormError(null)
+    setCategoryNotice(null)
     setPendingImageFile(null)
     setPendingImagePreview(null)
     setFormOpen(true)
@@ -326,6 +331,47 @@ export default function InternalSupplyChainProductsPage() {
       setFormError(reason?.message || '操作失败')
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  function handleFieldChange(key: string, value: string) {
+    setForm(current => ({ ...current, [key]: value }))
+    if (key === 'category') setCategoryNotice(null)
+  }
+
+  async function createCategory() {
+    const name = form.category.trim()
+    const supplierId = editing ? (editing.supplier?.id || '') : form.supplierId
+    if (!name || !supplierId || creatingCategory) return
+    setCreatingCategory(true)
+    setFormError(null)
+    try {
+      const created = await apiFetch<CategoryOption>(
+        `/api/products/categories?supplierId=${encodeURIComponent(supplierId)}`,
+        { method: 'POST', body: JSON.stringify({ name }) },
+      )
+      const createdName = created?.name?.trim() || name
+      setCategories(current =>
+        current.some(category => category.name === createdName)
+          ? current
+          : [...current, { name: createdName, count: created?.count ?? 0 }],
+      )
+      setForm(current => ({ ...current, category: createdName }))
+      setCategoryNotice(null)
+    } catch (reason: any) {
+      if (reason?.status === 409) {
+        setCategories(current =>
+          current.some(category => category.name === name)
+            ? current
+            : [...current, { name, count: 0 }],
+        )
+        setForm(current => ({ ...current, category: name }))
+        setCategoryNotice('分类已存在，已为你选用')
+      } else {
+        setFormError(reason?.message || '创建分类失败')
+      }
+    } finally {
+      setCreatingCategory(false)
     }
   }
 
@@ -725,7 +771,11 @@ export default function InternalSupplyChainProductsPage() {
           categories={categories}
           suppliers={suppliers}
           priceOnly={false}
-          onFieldChange={(key, value) => setForm(current => ({ ...current, [key]: value }))}
+          creatingCategory={creatingCategory}
+          categoryNotice={categoryNotice}
+          canCreateCategory={editing ? Boolean(editing.supplier?.id) : Boolean(form.supplierId)}
+          onFieldChange={handleFieldChange}
+          onCreateCategory={createCategory}
           onImageSelect={handleImageSelect}
           onImageClear={() => { setPendingImageFile(null); setPendingImagePreview(null) }}
           onSubmit={submitForm}
@@ -744,7 +794,11 @@ export default function InternalSupplyChainProductsPage() {
           categories={[]}
           suppliers={[]}
           priceOnly
+          creatingCategory={false}
+          categoryNotice={null}
+          canCreateCategory={false}
           onFieldChange={(_key, value) => setNewPrice(value)}
+          onCreateCategory={() => {}}
           onImageSelect={() => {}}
           onImageClear={() => {}}
           onSubmit={submitPriceChange}
@@ -828,7 +882,8 @@ function PaginationBar({ page, totalPages, total, pageSize, onPage }: {
 
 function FormDialog({
   editing, form, formError, submitting, pendingImagePreview, categories, suppliers, priceOnly,
-  onFieldChange, onImageSelect, onImageClear, onSubmit, onClose, imageInputRef,
+  creatingCategory, categoryNotice, canCreateCategory,
+  onFieldChange, onCreateCategory, onImageSelect, onImageClear, onSubmit, onClose, imageInputRef,
 }: {
   editing: ProductRow | null
   form: FormState
@@ -838,7 +893,11 @@ function FormDialog({
   categories: CategoryOption[]
   suppliers: SupplierOption[]
   priceOnly: boolean
+  creatingCategory: boolean
+  categoryNotice: string | null
+  canCreateCategory: boolean
   onFieldChange: (key: string, value: string) => void
+  onCreateCategory: () => void
   onImageSelect: (file: File) => void
   onImageClear: () => void
   onSubmit: () => void
@@ -970,6 +1029,19 @@ function FormDialog({
               <datalist id="supply-product-categories">
                 {categories.map(cat => <option key={cat.name} value={cat.name} />)}
               </datalist>
+              {canCreateCategory && isNewCategoryName(form.category, categories) && (
+                <button
+                  type="button"
+                  onClick={onCreateCategory}
+                  disabled={creatingCategory || submitting}
+                  className="mt-1 self-start rounded-cta border border-accent/30 bg-accent/5 px-3 py-1.5 text-button text-accent disabled:opacity-40"
+                >
+                  {creatingCategory ? '创建中…' : `创建并选用「${form.category.trim()}」`}
+                </button>
+              )}
+              {categoryNotice && (
+                <span className="mt-1 text-micro text-green-fg">{categoryNotice}</span>
+              )}
             </FormField>
             <FormField label="规格" full>
               <input

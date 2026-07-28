@@ -142,6 +142,36 @@ export function buildProductQuery(filters: Partial<SupplyProductFilters>): strin
 }
 
 /**
+ * 构建「按当前筛选统计各分类数量」的查询串。
+ * 只保留状态 / 供应商 / 关键字（与列表口径一致），刻意去掉分类与分页：
+ * 不带 page 时 GET /api/products 返回全量匹配列表，供前端按分类聚合计数，
+ * 让左侧分类计数与顶部分类(N)跟随右侧筛选联动，而不是恒按全部状态统计。
+ */
+export function buildProductCountQuery(filters: Partial<SupplyProductFilters>): string {
+  const params = new URLSearchParams()
+  if (filters.q?.trim()) params.set('q', filters.q.trim())
+  if (filters.status) params.set('status', filters.status)
+  if (filters.supplierId) params.set('supplierId', filters.supplierId)
+  const result = params.toString()
+  return result ? `?${result}` : ''
+}
+
+/**
+ * 按分类聚合商品数量。空分类归入「其他」，与后端 /api/products/categories 的
+ * `category || '其他'` 口径保持一致，确保聚合结果能与分类主数据名称对上。
+ */
+export function countProductsByCategory(
+  products: Array<{ category?: string | null }>,
+): Record<string, number> {
+  const counts: Record<string, number> = {}
+  for (const product of products) {
+    const name = product.category || '其他'
+    counts[name] = (counts[name] ?? 0) + 1
+  }
+  return counts
+}
+
+/**
  * 筛选条件变化时重置到第 1 页，保留其余筛选。
  * 翻页操作不应调用此函数（否则永远停在第 1 页）。
  */

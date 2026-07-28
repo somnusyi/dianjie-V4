@@ -118,10 +118,23 @@ function mockRoutes() {
     if (url.startsWith('/api/products/categories')) return Promise.resolve(CATEGORIES)
     if (url.startsWith('/api/suppliers')) return Promise.resolve(SUPPLIERS)
     if (url.startsWith('/api/products')) {
+      // 不带 page 的调用是「按筛选统计分类数量」的全量请求，返回数组而非分页对象
+      if (!url.includes('page=')) return Promise.resolve([PRODUCT])
       return Promise.resolve({ items: [PRODUCT], total: 1, page: 1, pageSize: 20 })
     }
     return Promise.resolve([])
   })
+}
+
+/** 读取左侧分类侧栏中某个分类名右侧显示的计数。 */
+function getSidebarCategoryCount(container: HTMLElement, name: string): string | null {
+  const button = Array.from(container.querySelectorAll('aside button')).find(btn => {
+    const spans = btn.querySelectorAll('span')
+    return spans.length > 0 && spans[0].textContent?.trim() === name
+  })
+  if (!button) return null
+  const spans = button.querySelectorAll('span')
+  return spans[spans.length - 1].textContent?.trim() ?? null
 }
 
 describe('商品管理 PC 页面 · 编辑弹窗分类组合框', () => {
@@ -218,6 +231,75 @@ describe('商品管理 PC 页面 · 编辑弹窗分类组合框', () => {
 
     await waitFor(() => (label.querySelector('input') as HTMLInputElement).value === '冻品')
     expect((label.querySelector('input') as HTMLInputElement).value).toBe('冻品')
+
+    cleanup(container, root)
+  })
+})
+
+describe('商品管理 PC 页面 · 分类计数与列表筛选口径对齐', () => {
+  beforeEach(() => {
+    mockFetch.mockReset()
+  })
+
+  // 服务端分类计数恒按「全部状态」统计；列表默认带「状态=供应中」。
+  // 模拟一个已停售的菌类商品：分类主数据计数为 1，但供应中筛选下列表为空。
+  const ALL_PRODUCTS = [
+    { ...PRODUCT, id: 'p1', name: '土豆', category: '蔬菜', status: 'ENABLED' },
+    { id: 'p2', name: '香菇', code: 'P002', category: '菌类', unit: 'kg', price: 8, status: 'DISABLED', spec: null, shelfDays: 7, stock: 0, minStock: 0, minOrderQty: 1, stepQty: 1, imageUrl: null, supplier: { id: 'sup-1', name: '昆明蔬菜批发' } },
+  ]
+
+  function mockFilterAwareRoutes() {
+    mockFetch.mockImplementation(path => {
+      const url = String(path)
+      if (url.startsWith('/api/products/categories')) {
+        // 主数据计数按全部状态：蔬菜 1、菌类 1
+        return Promise.resolve([
+          { name: '蔬菜', count: 1 },
+          { name: '菌类', count: 1 },
+        ])
+      }
+      if (url.startsWith('/api/suppliers')) return Promise.resolve(SUPPLIERS)
+      if (url.startsWith('/api/products')) {
+        const status = new URL(url, 'http://localhost').searchParams.get('status')
+        const matched = status ? ALL_PRODUCTS.filter(p => p.status === status) : ALL_PRODUCTS
+        if (!url.includes('page=')) return Promise.resolve(matched)
+        return Promise.resolve({ items: matched, total: matched.length, page: 1, pageSize: 20 })
+      }
+      return Promise.resolve([])
+    })
+  }
+
+  function findSelectByOptionText(container: HTMLElement, optionText: string): HTMLSelectElement {
+    const select = Array.from(container.querySelectorAll('select')).find(sel =>
+      Array.from(sel.querySelectorAll('option')).some(o => o.textContent?.trim() === optionText),
+    )
+    if (!select) throw new Error(`Select with option "${optionText}" not found`)
+    return select as HTMLSelectElement
+  }
+
+  it('左侧分类计数与顶部分类(N)跟随状态筛选联动，不再显示有商品却列表为空', async () => {
+    mockFilterAwareRoutes()
+
+    const { container, root } = render(<InternalSupplyChainProductsPage />)
+
+    // 默认「状态=供应中」：菌类商品已停售，分类计数应联动为 0（而非服务端全状态的 1）
+    await waitFor(() => getSidebarCategoryCount(container, '菌类') === '0')
+    expect(getSidebarCategoryCount(container, '菌类')).toBe('0')
+    expect(getSidebarCategoryCount(container, '蔬菜')).toBe('1')
+
+    // 顶部分类下拉的 (N) 同样对齐到当前筛选
+    const categorySelect = findSelectByOptionText(container, '全部分类')
+    const junOption = Array.from(categorySelect.querySelectorAll('option')).find(o =>
+      o.textContent?.trim().startsWith('菌类'),
+    )
+    expect(junOption?.textContent?.trim()).toBe('菌类 (0)')
+
+    // 清空状态筛选后，停售商品重新计入，分类计数恢复为 1
+    const statusSelect = findSelectByOptionText(container, '供应中')
+    act(() => { Simulate.change(statusSelect, { target: { value: '' } as any }) })
+    await waitFor(() => getSidebarCategoryCount(container, '菌类') === '1')
+    expect(getSidebarCategoryCount(container, '菌类')).toBe('1')
+    expect(getSidebarCategoryCount(container, '蔬菜')).toBe('1')
 
     cleanup(container, root)
   })

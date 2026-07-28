@@ -3,8 +3,10 @@ import {
   buildCreateBody,
   buildEditBody,
   buildPriceChangeBody,
+  buildProductCountQuery,
   buildProductQuery,
   buildStatusChangeBody,
+  countProductsByCategory,
   DEFAULT_SUPPLY_PRODUCT_FILTERS,
   formatCostUnitPriceLabel,
   formatMoney,
@@ -67,6 +69,58 @@ describe('buildProductQuery', () => {
     expect(query).toContain('status=DISABLED')
     expect(query).toContain('page=2')
     expect(query).toContain('pageSize=10')
+  })
+})
+
+describe('buildProductCountQuery', () => {
+  it('returns empty string when no count-relevant filter is active', () => {
+    expect(buildProductCountQuery({})).toBe('')
+  })
+
+  it('keeps status / supplier / keyword so counts share the list scope', () => {
+    const query = buildProductCountQuery({ q: '虾', status: 'ENABLED', supplierId: 'sup-1' })
+    expect(query).toContain('q=%E8%99%BE')
+    expect(query).toContain('status=ENABLED')
+    expect(query).toContain('supplierId=sup-1')
+  })
+
+  it('drops category and pagination so every category can be counted', () => {
+    const query = buildProductCountQuery({
+      category: '冻品',
+      page: 3,
+      pageSize: 50,
+      status: 'DISABLED',
+    })
+    expect(query).not.toContain('category=')
+    expect(query).not.toContain('page=')
+    expect(query).not.toContain('pageSize=')
+    expect(query).toContain('status=DISABLED')
+  })
+
+  it('skips whitespace-only keyword', () => {
+    expect(buildProductCountQuery({ q: '   ' })).toBe('')
+  })
+})
+
+describe('countProductsByCategory', () => {
+  it('groups products by category', () => {
+    expect(
+      countProductsByCategory([
+        { category: '蔬菜' },
+        { category: '蔬菜' },
+        { category: '菌类' },
+      ]),
+    ).toEqual({ 蔬菜: 2, 菌类: 1 })
+  })
+
+  it('buckets empty / null categories into 其他 to match backend', () => {
+    expect(
+      countProductsByCategory([{ category: null }, { category: '' }, { category: '蔬菜' }]),
+    ).toEqual({ 其他: 2, 蔬菜: 1 })
+  })
+
+  it('returns empty object for empty list', () => {
+    expect(countProductsByCategory([])).toEqual({})
   })
 })
 

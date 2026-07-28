@@ -31,8 +31,10 @@ import {
   buildCreateBody,
   buildEditBody,
   buildPriceChangeBody,
+  buildProductCountQuery,
   buildProductQuery,
   buildStatusChangeBody,
+  countProductsByCategory,
   DEFAULT_SUPPLY_PRODUCT_FILTERS,
   formatCostUnitPriceLabel,
   formatMoney,
@@ -119,6 +121,9 @@ export default function InternalSupplyChainProductsPage() {
   const [error, setError] = useState<string | null>(null)
   const [filters, setFilters] = useState<SupplyProductFilters>({ ...DEFAULT_SUPPLY_PRODUCT_FILTERS, status: 'ENABLED' })
   const [categories, setCategories] = useState<CategoryOption[]>([])
+  // 按当前筛选（状态/供应商/关键字）聚合出的分类计数，用于让左侧计数与列表口径一致；
+  // null 表示尚未算出，先回退到服务端分类主数据自带的全状态计数。
+  const [categoryCounts, setCategoryCounts] = useState<Record<string, number> | null>(null)
   const [bulkCategories, setBulkCategories] = useState<CategoryOption[]>([])
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([])
   const [submitting, setSubmitting] = useState(false)
@@ -141,6 +146,7 @@ export default function InternalSupplyChainProductsPage() {
   const [confirmState, openConfirm] = useConfirmSheet()
   const imageInputRef = useRef<HTMLInputElement>(null)
   const requestSequence = useRef(0)
+  const countSequence = useRef(0)
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkCategory, setBulkCategory] = useState('')
@@ -167,6 +173,19 @@ export default function InternalSupplyChainProductsPage() {
       })
   }
   useEffect(() => { load() }, [filters])
+  // 分类计数与列表共用同一批筛选（状态/供应商/关键字），但不带分类与分页：
+  // 请求全量匹配列表后在前端按分类聚合，使左侧计数与顶部分类(N)随右侧筛选联动。
+  useEffect(() => {
+    const sequence = ++countSequence.current
+    apiFetch<Array<{ category: string | null }>>(`/api/products${buildProductCountQuery(filters)}`)
+      .then(data => {
+        if (sequence !== countSequence.current) return
+        setCategoryCounts(countProductsByCategory(Array.isArray(data) ? data : []))
+      })
+      .catch(() => {
+        // 统计失败不阻断主列表；保留服务端全状态计数作为兜底。
+      })
+  }, [filters.q, filters.status, filters.supplierId])
   useEffect(() => {
     setSelectedIds(clearRowSelection())
     setBulkCategory('')
@@ -536,6 +555,13 @@ export default function InternalSupplyChainProductsPage() {
 
   const filterActive = hasActiveFilters(filters)
 
+  // 分类名仍取服务端主数据（保证下拉/侧栏选项完整），计数替换为随筛选联动的聚合值；
+  // categoryCounts 尚未算出时回退到服务端全状态计数。
+  const displayCategories = categoryCounts
+    ? categories.map(cat => ({ ...cat, count: categoryCounts[cat.name] ?? 0 }))
+    : categories
+  const totalCategoryCount = displayCategories.reduce((sum, cat) => sum + Number(cat.count ?? 0), 0)
+
   return (
     <div className="min-h-screen bg-bg px-4 py-5 lg:px-8 lg:py-7">
       <header className="mx-auto flex max-w-[1440px] flex-col gap-3 border-b border-border pb-5 lg:flex-row lg:items-center lg:justify-between">
@@ -571,10 +597,10 @@ export default function InternalSupplyChainProductsPage() {
               >
                 <span>全部分类</span>
                 <span className={`font-num text-micro ${filters.category ? 'text-gray3' : 'text-accent'}`}>
-                  {categories.reduce((sum, cat) => sum + Number(cat.count ?? 0), 0)}
+                  {totalCategoryCount}
                 </span>
               </button>
-              {categories.map(cat => {
+              {displayCategories.map(cat => {
                 const active = filters.category === cat.name
                 return (
                   <button
@@ -600,7 +626,7 @@ export default function InternalSupplyChainProductsPage() {
           <FilterInput label="关键字" value={filters.q} onChange={value => updateFilters({ q: value })} placeholder="名称 / 编码 / 规格" />
           <FilterSelect label="分类" value={filters.category} onChange={value => updateFilters({ category: value })}>
             <option value="">全部分类</option>
-            {categories.map(cat => <option key={cat.name} value={cat.name}>{cat.name} ({cat.count})</option>)}
+            {displayCategories.map(cat => <option key={cat.name} value={cat.name}>{cat.name} ({cat.count})</option>)}
           </FilterSelect>
           <FilterSelect label="状态" value={filters.status} onChange={value => updateFilters({ status: value })}>
             <option value="">全部状态</option>

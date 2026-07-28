@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
-import { writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { prisma } from '@dianjie/db'
@@ -17,7 +18,7 @@ import {
 } from './deploymentCandidate'
 import { acquireDeployLock } from './deploymentLock'
 import { inspectUnifiedDiff, isAutoDeploymentEnabled } from './policy'
-import { requireProductionBaseline } from './productionBaseline'
+import { planBaselineResolution, readProductionBaseline, requireProductionBaseline } from './productionBaseline'
 
 const execFileAsync = promisify(execFile)
 const MAX_LOG_CHARS = 40_000
@@ -62,6 +63,69 @@ async function requireCleanPinnedRepo(repo: string, expectedBase: string) {
   if (status) throw new Error('自动修复源码副本不是干净状态')
   const head = await gitOutput(repo, ['rev-parse', 'HEAD'])
   if (head !== expectedBase) throw new Error(`源码基线已变化，预期 ${expectedBase}，实际 ${head}`)
+}
+
+/**
+ * 解析部署基线：生产基线与开发基线不一致时，若基线只是前移且补丁能干净应用，
+ * 自动把任务重基线到当前生产基线放行（避免每次人工部署与 AI 部署撞车都要老板重新批准）。
+ * 分叉/回退或补丁冲突仍拒绝，需重新开发。
+ */
+async function resolveDeployBaseline(input: {
+  repo: string
+  target: string
+  runId: string
+  tenantId: string
+  baseCommitSha: string
+  diffPatch: string
+}): Promise<string> {
+  const { repo, target, runId, tenantId, baseCommitSha, diffPatch } = input
+  const deployed = await readProductionBaseline(target)
+  if (deployed === baseCommitSha) return baseCommitSha
+
+  const isAncestor = await gitOutput(repo, ['merge-base', '--is-ancestor', baseCommitSha, deployed])
+    .then(() => true)
+    .catch(() => false)
+
+  let appliesClean = false
+  if (isAncestor) {
+    let patchDir = ''
+    try {
+      await requireCleanPinnedRepo(repo, deployed)
+      patchDir = await mkdtemp(path.join(os.tmpdir(), 'autofix-rebase-'))
+      const patchFile = path.join(patchDir, 'approved.patch')
+      await writeFile(patchFile, diffPatch, 'utf8')
+      await run(repo, 'git', ['apply', '--check', patchFile], 30_000)
+      appliesClean = true
+    } catch {
+      appliesClean = false
+    } finally {
+      if (patchDir) await rm(patchDir, { recursive: true, force: true }).catch(() => undefined)
+    }
+  }
+
+  const plan = planBaselineResolution({ base: baseCommitSha, deployed, isAncestor, appliesClean })
+  if (plan === 'rebase') {
+    await prisma.autoFixRun.update({
+      where: { id: runId },
+      data: { baseCommitSha: deployed },
+    })
+    await prisma.opLog.create({
+      data: {
+        tenantId,
+        role: 'AI',
+        action: `AI 自动修复 ${runId} 自动重基线: ${baseCommitSha.slice(0, 8)} → ${deployed.slice(0, 8)}（基线前移且补丁可干净应用）`.slice(0, 500),
+        entityType: 'AutoFixRun',
+        targetId: runId,
+        isAi: true,
+        metadata: { reason: 'auto_rebase_forward', from: baseCommitSha, to: deployed } as any,
+      },
+    })
+    return deployed
+  }
+  if (plan === 'reject_diverged') {
+    throw new Error(`生产基线与开发基线分叉或回退（开发基线 ${baseCommitSha}，生产 ${deployed}），需重新开发`)
+  }
+  throw new Error(`生产基线前移但补丁无法干净应用到新基线 ${deployed}，需重新开发`)
 }
 
 async function buildAndSyncWeb(repo: string, target: string, runId: string): Promise<string> {
@@ -297,12 +361,19 @@ export async function executeApprovedRun(runId: string) {
     }
     const inspection = inspectUnifiedDiff(runRecord.diffPatch)
     if (!inspection.ok) throw new Error(inspection.errors.join('；'))
-    await requireProductionBaseline(target, runRecord.baseCommitSha)
-    await requireCleanPinnedRepo(repo, runRecord.baseCommitSha)
+    const effectiveBase = await resolveDeployBaseline({
+      repo,
+      target,
+      runId: runRecord.id,
+      tenantId: runRecord.tenantId,
+      baseCommitSha: runRecord.baseCommitSha,
+      diffPatch: runRecord.diffPatch,
+    })
+    await requireCleanPinnedRepo(repo, effectiveBase)
 
     candidate = await preparePatchedDeploymentCandidate({
       repo,
-      baseCommitSha: runRecord.baseCommitSha,
+      baseCommitSha: effectiveBase,
       diffPatch: runRecord.diffPatch,
       files: inspection.files.map((file) => file.path),
       runId: runRecord.id,
@@ -321,7 +392,7 @@ export async function executeApprovedRun(runId: string) {
     await writeFile(path.join(target, '.deployed-commit'), `${commitSha}\n`, { mode: 0o600 })
     await resolveFeedback(runRecord.id, commitSha, health, log)
     try {
-      await requireCleanPinnedRepo(repo, runRecord.baseCommitSha)
+      await requireCleanPinnedRepo(repo, effectiveBase)
       await run(repo, 'git', ['merge', '--ff-only', commitSha], 30_000)
       await syncGithubMain(repo, runRecord.id, runRecord.tenantId)
     } catch (sourceSyncError) {

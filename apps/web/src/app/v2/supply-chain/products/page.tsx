@@ -1058,18 +1058,22 @@ function FormDialog({
               </FormField>
             )}
             <FormField label="分类" full={Boolean(editing)}>
+              <select
+                value={categories.some(cat => cat.name === form.category) ? form.category : ''}
+                onChange={e => onFieldChange('category', e.target.value)}
+                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body"
+              >
+                <option value="">选择已有分类</option>
+                {categories.map(cat => <option key={cat.name} value={cat.name}>{cat.name}</option>)}
+              </select>
               <input
                 type="text"
                 value={form.category}
                 onChange={e => onFieldChange('category', e.target.value)}
                 maxLength={40}
-                list="supply-product-categories"
-                placeholder="如：蔬菜 / 冻品"
-                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                placeholder="或输入新分类名"
+                className="mt-2 h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
               />
-              <datalist id="supply-product-categories">
-                {categories.map(cat => <option key={cat.name} value={cat.name} />)}
-              </datalist>
               {canCreateCategory && isNewCategoryName(form.category, categories) && (
                 <button
                   type="button"

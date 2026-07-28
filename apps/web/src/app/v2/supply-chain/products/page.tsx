@@ -955,6 +955,8 @@ function FormDialog({
   const unitSummary = formatConversionSummary(buildFourUnitValues(form))
   const simpleUnitContract = unitSummary.startsWith('四单位均为')
   const [unitDetailsOpen, setUnitDetailsOpen] = useState(!editing || !simpleUnitContract)
+  // datalist 的原生下拉箭头在部分浏览器点击无响应，这里提供一个可点击的候选列表作为可靠入口
+  const [categoryListOpen, setCategoryListOpen] = useState(false)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4" onClick={onClose}>
@@ -1058,15 +1060,46 @@ function FormDialog({
               </FormField>
             )}
             <FormField label="分类" full={Boolean(editing)}>
-              <input
-                type="text"
-                value={form.category}
-                onChange={e => onFieldChange('category', e.target.value)}
-                maxLength={40}
-                list="supply-product-category-options"
-                placeholder="选择已有分类或输入新分类名"
-                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
-              />
+              <div className="relative">
+                <input
+                  type="text"
+                  value={form.category}
+                  onChange={e => { onFieldChange('category', e.target.value); setCategoryListOpen(false) }}
+                  maxLength={40}
+                  list="supply-product-category-options"
+                  placeholder="选择已有分类或输入新分类名"
+                  className="h-10 w-full rounded-cta border border-border bg-white pl-3 pr-9 text-body outline-none focus:border-accent"
+                />
+                <button
+                  type="button"
+                  aria-label="展开分类列表"
+                  aria-expanded={categoryListOpen}
+                  onClick={() => setCategoryListOpen(open => !open)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 px-1 text-gray3 hover:text-ink"
+                >▾</button>
+                {categoryListOpen && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setCategoryListOpen(false)} />
+                    <div className="absolute z-20 mt-1 max-h-48 w-full overflow-y-auto rounded-cta border border-border bg-white shadow-lg">
+                      {categories.length === 0 ? (
+                        <p className="px-3 py-2 text-micro text-gray3">暂无分类，可输入新分类名</p>
+                      ) : (
+                        categories.map(cat => (
+                          <button
+                            key={cat.name}
+                            type="button"
+                            onClick={() => { onFieldChange('category', cat.name); setCategoryListOpen(false) }}
+                            className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-caption hover:bg-bg ${form.category === cat.name ? 'font-bold text-accent' : 'text-gray2'}`}
+                          >
+                            <span className="truncate">{cat.name}</span>
+                            <span className="font-num text-micro text-gray3">{cat.count ?? 0}</span>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
               <datalist id="supply-product-category-options">
                 {categories.map(cat => <option key={cat.name} value={cat.name} />)}
               </datalist>

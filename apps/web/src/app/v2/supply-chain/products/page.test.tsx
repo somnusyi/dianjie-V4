@@ -194,4 +194,31 @@ describe('商品管理 PC 页面 · 编辑弹窗分类组合框', () => {
 
     cleanup(container, root)
   })
+
+  it('点击分类字段右侧箭头可弹出候选列表，点选后同步到表单（修复下拉点击无响应）', async () => {
+    mockRoutes()
+
+    const { container, root } = render(<InternalSupplyChainProductsPage />)
+    await waitFor(() => container.textContent?.includes('土豆') ?? false)
+
+    act(() => findButton(container, '编辑')?.click())
+    await waitFor(() => container.textContent?.includes('编辑「土豆」') ?? false)
+
+    const label = getCategoryLabel(container)
+    const toggle = label.querySelector('button[aria-label="展开分类列表"]') as HTMLButtonElement
+    expect(toggle).not.toBeNull()
+
+    // 点击箭头弹出候选列表（不依赖原生 datalist）
+    act(() => toggle.click())
+    await waitFor(() => label.textContent?.includes('冻品') ?? false)
+
+    const option = Array.from(label.querySelectorAll('button')).find(b => b.textContent?.includes('冻品'))
+    expect(option).toBeTruthy()
+    act(() => option!.click())
+
+    await waitFor(() => (label.querySelector('input') as HTMLInputElement).value === '冻品')
+    expect((label.querySelector('input') as HTMLInputElement).value).toBe('冻品')
+
+    cleanup(container, root)
+  })
 })

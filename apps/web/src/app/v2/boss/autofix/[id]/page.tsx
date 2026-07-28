@@ -22,7 +22,7 @@ type RunDetail = {
     title: string | null
     summary: string | null
     reporter: { id: string; name: string }
-  }
+  } | null
 }
 
 export default function AutoFixDetailPage() {
@@ -91,8 +91,8 @@ export default function AutoFixDetailPage() {
           ‹
         </button>
         <div className="min-w-0">
-          <h1 className="text-h2 truncate">{run.feedback.title || 'AI 自动修复详情'}</h1>
-          <p className="text-caption text-gray3">{run.feedback.reporter.name} 提出 · {run.status}</p>
+          <h1 className="text-h2 truncate">{run.feedback?.title || 'AI 助手任务'}</h1>
+          <p className="text-caption text-gray3">{run.feedback?.reporter.name ?? '超管指令'} 提出 · {run.status}</p>
         </div>
       </header>
 

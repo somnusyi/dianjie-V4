@@ -9,7 +9,7 @@ type Run = {
   diffFiles: Array<{ path: string; added: number; deleted: number }> | null
   error: string | null
   createdAt: string
-  feedback: { id: string; title: string | null; summary: string | null; status: string }
+  feedback: { id: string; title: string | null; summary: string | null; status: string } | null
 }
 
 const STATUS: Record<string, { label: string; cls: string }> = {
@@ -19,6 +19,9 @@ const STATUS: Record<string, { label: string; cls: string }> = {
   VERIFYING: { label: '隔离验证', cls: 'bg-blue-50 text-blue-700' },
   PLAN_READY: { label: '方案完成', cls: 'bg-amber-50 text-amber-700' },
   AWAITING_APPROVAL: { label: '待审批', cls: 'bg-amber-50 text-amber-700' },
+  TASKBOOK_READY: { label: '方案待批', cls: 'bg-amber-50 text-amber-700' },
+  QWEN_DEV: { label: '开发中', cls: 'bg-blue-50 text-blue-700' },
+  DEPLOY_REVIEW: { label: '待批准上线', cls: 'bg-amber-50 text-amber-700' },
   DEPLOYING: { label: '部署中', cls: 'bg-blue-50 text-blue-700' },
   VERIFY_PROD: { label: '生产验证', cls: 'bg-blue-50 text-blue-700' },
   RESOLVED: { label: '已解决', cls: 'bg-green-50 text-green-700' },
@@ -75,9 +78,9 @@ export default function AutoFixRunsPage() {
                     {new Date(run.createdAt).toLocaleString('zh-CN')}
                   </span>
                 </div>
-                <div className="text-h2 mt-2">{run.feedback.title || '阻断故障'}</div>
+                <div className="text-h2 mt-2">{run.feedback?.title || 'AI 助手任务'}</div>
                 <div className="text-caption text-gray2 mt-1 line-clamp-2">
-                  {run.planSummary || run.error || run.feedback.summary || '等待 AI 分析'}
+                  {run.planSummary || run.error || run.feedback?.summary || '等待 AI 分析'}
                 </div>
                 {files.length > 0 && (
                   <div className="text-micro text-gray3 mt-2">

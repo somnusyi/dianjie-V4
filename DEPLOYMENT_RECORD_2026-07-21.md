@@ -231,3 +231,18 @@
 - bug3「corrupt patch at line 13」：git() 助手的 .trim() 吃掉 diff 末尾空白上下文行（单个空格），hunk 声明 7 行实际 6 行，部署机 git apply --check 拦下（防线有效）。修复：补丁捕获改用不 trim 的 gitRaw；inspectUnifiedDiff 新增 hunk 声明/实际行数校验，此类损坏以后在 DEPLOY_REVIEW 阶段即拦截，8392f7bd
 - 全链路验证：聊天发指令 → QWEN_DEV（Qwen Code 改 1 文件 2 行）→ 独立复验 → DEPLOY_REVIEW → 聊天内批准部署 → 安全发布 → 生产健康检查 → RESOLVED → 结果回写聊天。自动提交 fc22d56c 已同步 GitHub，三方基线一致
 - 测试：API 575（+2 新用例：hunk 行数不符拒绝、末尾空白上下文行接受）
+
+## 第 23 次：AI 自动修复页空指针修复 + 部署机自动重基线（479b48a0 / 3195cbef，2026-07-28 上午）
+- 「AI 自动修复页系统出错」根因：聊天任务 feedback 为 null，列表页 run.feedback.title、详情页 run.feedback.reporter.name 抛 TypeError。两个 page.tsx 兼容 null + 补 QWEN_DEV/DEPLOY_REVIEW/TASKBOOK_READY 状态标签
+- 部署机自动重基线：productionBaseline 新增 readProductionBaseline + 纯函数 planBaselineResolution（same/rebase/reject_diverged/reject_conflict）；deployment.resolveDeployBaseline——生产基线是开发基线后代且补丁 git apply --check 通过 → 自动改 run.baseCommitSha 放行并记 OpLog；分叉/冲突仍拒绝
+- 当日下午实弹验证：「编辑商品分类下拉框无反应」(run cms408zdm) 撞基线（API 部署把 /app/dianjie-src HEAD 推到 3195cbef 而 .deployed-commit 停在 479b48a0），.deployed-commit 对齐 + 送回 DEPLOY_REVIEW + 老板 token 批准 → 部署成功，OpLog 记「自动重基线: 479b48a0 → 3195cbef」
+- 供应链测试账号：19900000001 / ScTest2026（SUPPLY_CHAIN 角色，登录接口实测通过）
+- 教训：凡手动动 /app/dianjie-src HEAD 必须同步 .deployed-commit，二者不一致必触发基线拒绝
+
+## 第 24 次：反馈 AI 视觉能力上线（fd8ab4bd + e8719db8，2026-07-28 上午）
+- 老板发现：AI 助手反问用户「方便的话发一张截图」——实际两级 AI（澄清对话/Qwen Code）都只收文本，附件图片从未进模型
+- 端点实测：token-plan qwen3.8-max-preview 支持 vision，base64 data URI 正常（image_tokens 计费），外链 URL 下载失败（"Failed to download multimodal content"）→ 确定服务器端取图转 base64 路线
+- 实现：upload.resignOssUrlForAI（OSS 签名附带图片处理 resize 1024/jpg/q75，几 MB 照片压到 ~100KB，处理参数一并签名）；services/feedbackImages（取图转 data URI，单张失败静默跳过，上限 6 张/2MB）；askAssistant 每轮把附件图挂首条用户消息（历史从 DB 重建为纯文本，每轮重挂保持视觉上下文）；系统提示词分有无附件两版（有图：告知 AI 直接看图禁索截图；无图：禁止索要截图改请文字描述）
+- 同步欠账清理：服务器独占的 382ab79（下拉框修复）bundle 拉回本地 cherry-pick 为 e8719db8，GitHub/本地/服务器三方一致，.deployed-commit=e8719db8…
+- 测试：API 588 全过（+9 新用例：多模态序列化、提示词双版本、feedbackImages 六场景）；Web 合入测试 3 过
+- 生产实弹：上传红色 DIANJIE 测试图带附件提反馈，AI 回复「图里的字是 DIAN JIE，底色是红色」——全链路视觉识别确认；测试反馈已标记已解决

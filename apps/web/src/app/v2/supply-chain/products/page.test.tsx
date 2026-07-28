@@ -103,12 +103,10 @@ function findButton(root: ParentNode, text: string) {
   return Array.from(root.querySelectorAll('button')).find(b => b.textContent?.trim() === text)
 }
 
-/** 定位编辑弹窗里的「分类」字段：其 select 含「选择已有分类」占位项。 */
+/** 定位编辑弹窗里的「分类」字段：单一组合框（input[list] + datalist）。 */
 function getCategoryLabel(container: HTMLElement): HTMLLabelElement {
   const label = Array.from(container.querySelectorAll('label')).find(l =>
-    Array.from(l.querySelectorAll('select option')).some(
-      opt => opt.textContent?.trim() === '选择已有分类',
-    ),
+    l.querySelector('input[list]') !== null && l.querySelector('datalist') !== null,
   )
   if (!label) throw new Error('Category field not found')
   return label as HTMLLabelElement
@@ -126,12 +124,12 @@ function mockRoutes() {
   })
 }
 
-describe('商品管理 PC 页面 · 编辑弹窗分类下拉', () => {
+describe('商品管理 PC 页面 · 编辑弹窗分类组合框', () => {
   beforeEach(() => {
     mockFetch.mockReset()
   })
 
-  it('编辑商品时分类字段渲染为可选下拉，列出已有分类并预选当前分类', async () => {
+  it('编辑商品时分类字段渲染为单一组合框，预填当前分类且不再重复渲染下拉', async () => {
     mockRoutes()
 
     const { container, root } = render(<InternalSupplyChainProductsPage />)
@@ -141,19 +139,25 @@ describe('商品管理 PC 页面 · 编辑弹窗分类下拉', () => {
     await waitFor(() => container.textContent?.includes('编辑「土豆」') ?? false)
 
     const label = getCategoryLabel(container)
-    const select = label.querySelector('select') as HTMLSelectElement
-    expect(select).not.toBeNull()
+    // 组合框只有一个可编辑输入框，不再叠加重复的 select
+    expect(label.querySelector('select')).toBeNull()
+    expect(label.querySelectorAll('input').length).toBe(1)
 
-    const optionTexts = Array.from(select.querySelectorAll('option')).map(o => o.textContent?.trim())
-    expect(optionTexts).toContain('蔬菜')
-    expect(optionTexts).toContain('冻品')
-    // 编辑时预选商品当前分类
-    expect(select.value).toBe('蔬菜')
+    const input = label.querySelector('input') as HTMLInputElement
+    // 编辑时预填商品当前分类
+    expect(input.value).toBe('蔬菜')
+
+    // 下拉候选列出已有分类
+    const optionValues = Array.from(label.querySelectorAll('datalist option')).map(
+      o => (o as HTMLOptionElement).value,
+    )
+    expect(optionValues).toContain('蔬菜')
+    expect(optionValues).toContain('冻品')
 
     cleanup(container, root)
   })
 
-  it('从下拉选择其他分类后同步到表单，可正常保存', async () => {
+  it('在组合框中选择/输入其他分类后同步到表单，可正常保存', async () => {
     mockRoutes()
 
     const { container, root } = render(<InternalSupplyChainProductsPage />)
@@ -163,8 +167,8 @@ describe('商品管理 PC 页面 · 编辑弹窗分类下拉', () => {
     await waitFor(() => container.textContent?.includes('编辑「土豆」') ?? false)
 
     const label = getCategoryLabel(container)
-    const select = label.querySelector('select') as HTMLSelectElement
-    act(() => { Simulate.change(select, { target: { value: '冻品' } as any }) })
+    const input = label.querySelector('input') as HTMLInputElement
+    act(() => { Simulate.change(input, { target: { value: '冻品' } as any }) })
 
     await waitFor(() => (label.querySelector('input') as HTMLInputElement).value === '冻品')
     expect((label.querySelector('input') as HTMLInputElement).value).toBe('冻品')

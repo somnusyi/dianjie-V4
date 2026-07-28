@@ -78,6 +78,20 @@ describe('qwenChat (mock fetch)', () => {
     const out = await qwenChat([{ role: 'user', content: 'x' }], { apiKey: KEY, fetchImpl })
     expect(out).toBe(QWEN_BUSY_FALLBACK)
   })
+
+  it('多模态 content parts 原样序列化进请求体', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okResponse('看到图了'))
+    const parts = [
+      { type: 'text', text: '这张图什么问题' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,aGVsbG8=' } },
+    ]
+    const out = await qwenChat([{ role: 'user', content: parts as any }], { apiKey: KEY, fetchImpl })
+    expect(out).toBe('看到图了')
+    const body = JSON.parse((fetchImpl.mock.calls[0] as any)[1].body)
+    expect(body.messages[0].content).toHaveLength(2)
+    expect(body.messages[0].content[1].type).toBe('image_url')
+    expect(body.messages[0].content[1].image_url.url).toContain('data:image/png;base64,')
+  })
 })
 
 describe('buildFeedbackSystemPrompt', () => {
@@ -99,5 +113,19 @@ describe('buildFeedbackSystemPrompt', () => {
   it('无上下文时也能生成', () => {
     const prompt = buildFeedbackSystemPrompt({})
     expect(prompt).toContain('反馈助手')
+  })
+
+  it('有附件时告知 AI 能看图且禁止再索要截图', () => {
+    const prompt = buildFeedbackSystemPrompt({ attachmentCount: 2 })
+    expect(prompt).toContain('2 张截图')
+    expect(prompt).toContain('你能直接看到图片内容')
+    expect(prompt).toContain('不要再向用户索要截图')
+  })
+
+  it('无附件时禁止索要截图, 改为请用户文字描述', () => {
+    const prompt = buildFeedbackSystemPrompt({})
+    expect(prompt).toContain('无法补传图片')
+    expect(prompt).toContain('不要要求用户发截图')
+    expect(prompt).toContain('文字描述')
   })
 })

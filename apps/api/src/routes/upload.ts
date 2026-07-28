@@ -81,6 +81,28 @@ export function resignOssUrls(urls: any): string[] {
   return urls.map((u) => resignOssUrl(u))
 }
 
+/**
+ * 重新签名一个给 AI 视觉识别用的 OSS URL: 附带图片处理参数 (缩放到 1024 内/转 jpg/压缩),
+ * 把几 MB 的手机照片压到 ~100KB 再喂多模态模型, 控制请求体积与 image token 成本。
+ * 处理参数必须一并签名, 否则 OSS 会拒绝。签名失败时退回普通签名 URL。
+ */
+export function resignOssUrlForAI(url: string | null | undefined): string {
+  if (!url || typeof url !== 'string') return url as any
+  try {
+    const u = new URL(url)
+    const bucket = process.env.OSS_BUCKET || 'dianjie-upload'
+    if (!u.hostname.startsWith(bucket + '.') || !u.hostname.includes('.aliyuncs.com')) return url
+    const key = decodeURIComponent(u.pathname.replace(/^\//, ''))
+    if (!key) return url
+    return toHttps(ossClient().signatureUrl(key, {
+      expires: 1800,
+      process: 'image/resize,m_lfit,w_1024,h_1024/format,jpg/quality,q_75',
+    }))
+  } catch {
+    try { return resignOssUrl(url) } catch { return url }
+  }
+}
+
 /** 用持久化对象 key 生成短期可访问 URL；数据库不保存会过期的签名 URL。 */
 export function signOssKey(key: string | null | undefined): string | null {
   if (!key) return null

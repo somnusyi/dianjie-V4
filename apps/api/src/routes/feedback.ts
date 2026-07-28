@@ -18,7 +18,8 @@ import { z } from 'zod'
 import { prisma } from '@dianjie/db'
 import { fireAndForget as notify } from '../services/notify'
 import { sendNotification } from '../services/notification'
-import { qwenChat, buildFeedbackSystemPrompt, QWEN_NOT_CONFIGURED } from '../services/qwenChat'
+import { qwenChat, buildFeedbackSystemPrompt, QWEN_NOT_CONFIGURED, QwenChatMessage } from '../services/qwenChat'
+import { fetchFeedbackImageParts } from '../services/feedbackImages'
 import { parseTriageBlock, decideTriageAction, TriageResult } from '../services/feedbackTriage'
 import { executeApprovedRun } from '../services/autofix/deployment'
 import { enqueueAgentDev, runTier2Dev } from '../services/autofix/tier2'
@@ -142,14 +143,27 @@ async function applyTriage(actor: Actor, feedback: { id: string; reporterId: str
   return updated
 }
 
-/** 调 Qwen 并落库 AI 回复; 返回展示文本与分诊结果 */
-async function askAssistant(tenantId: string, feedbackId: string, ctx: FeedbackCtx, history: Array<{ role: string; content: string }>) {
-  const messages = [
-    { role: 'system' as const, content: buildFeedbackSystemPrompt(ctx) },
-    ...history
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .slice(-18)
-      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+/** 调 Qwen 并落库 AI 回复; 返回展示文本与分诊结果。attachments 有图时以多模态消息带图 */
+async function askAssistant(
+  tenantId: string,
+  feedbackId: string,
+  ctx: FeedbackCtx,
+  history: Array<{ role: string; content: string }>,
+  attachments?: unknown,
+) {
+  const imageParts = await fetchFeedbackImageParts(attachments)
+  const historyMsgs: QwenChatMessage[] = history
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .slice(-18)
+    .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
+  // 历史每轮从 DB 重建(纯文本), 图片每轮重新挂到首条用户消息, 保持多轮对话中视觉上下文不丢失
+  const firstUser = historyMsgs.find((m) => m.role === 'user')
+  if (imageParts.length && firstUser) {
+    firstUser.content = [{ type: 'text', text: firstUser.content as string }, ...imageParts]
+  }
+  const messages: QwenChatMessage[] = [
+    { role: 'system' as const, content: buildFeedbackSystemPrompt({ ...ctx, attachmentCount: imageParts.length || undefined }) },
+    ...historyMsgs,
   ]
   const raw = await qwenChat(messages)
   const { clean, triage } = parseTriageBlock(raw)
@@ -190,6 +204,7 @@ export const feedbackRoutes: FastifyPluginAsync = async (app) => {
     const { assistantMsg, triage } = await askAssistant(
       actor.tenantId, feedback.id, ctx,
       [{ role: 'user', content: d.content }],
+      d.attachments,
     )
     let current = feedback
     if (triage) current = await applyTriage(actor, feedback, triage, ctx)
@@ -236,7 +251,7 @@ export const feedbackRoutes: FastifyPluginAsync = async (app) => {
       select: { role: true, content: true },
     })
     const ctx = { ...(feedback.context as any as FeedbackCtx), role: actor.role }
-    const { assistantMsg, triage } = await askAssistant(actor.tenantId, feedback.id, ctx, history)
+    const { assistantMsg, triage } = await askAssistant(actor.tenantId, feedback.id, ctx, history, feedback.attachments)
 
     let current = feedback
     if (triage && feedback.status === 'CLARIFYING') {

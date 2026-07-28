@@ -7,9 +7,15 @@
  * - ⚠ 严禁把 key 写进代码 / 测试 / 文档, 只从 env 读
  */
 
+/** OpenAI 兼容多模态消息段: 文本或图片 (base64 data URI / 可下载 URL) */
+export type QwenContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } }
+
 export interface QwenChatMessage {
   role: 'system' | 'user' | 'assistant'
-  content: string
+  /** 纯文本直接传 string; 带图消息传 content parts 数组 */
+  content: string | QwenContentPart[]
 }
 
 export const QWEN_BUSY_FALLBACK = 'AI 助手暂时繁忙，你的反馈已记录，管理员会尽快处理'
@@ -82,6 +88,8 @@ export function buildFeedbackSystemPrompt(context: {
   storeName?: string
   userAgent?: string
   clientTime?: string
+  /** 本轮实际带入对话的截图张数 (已成功加载的附件图), 0 或无附件时不传 */
+  attachmentCount?: number
 }): string {
   const known: string[] = []
   if (context.path) known.push(`提交页面: ${context.path}`)
@@ -89,19 +97,24 @@ export function buildFeedbackSystemPrompt(context: {
   if (context.storeName) known.push(`所在门店: ${context.storeName}`)
   if (context.clientTime) known.push(`提交时间: ${context.clientTime}`)
 
+  const imageRule = context.attachmentCount
+    ? `2. 用户随反馈附了 ${context.attachmentCount} 张截图, 你能直接看到图片内容。先仔细看图再结合文字分析, 不要再向用户索要截图。`
+    : `2. 对话中用户无法补传图片, 所以不要要求用户发截图; 需要更多信息时, 请用户用文字描述出问题页面上的具体文字、按钮名称或数字。`
+
   return `你是「滇界」餐饮供应链系统的反馈助手。用户是门店店长、厨师长、供应商等非技术人员, 请用大白话交流, 不要技术黑话。
 
 你的目标: 用最少的问题把反馈澄清到可处理粒度。
 规则:
 1. 已知上下文如下, 这些信息不要再问:
 ${known.length ? known.map(k => `   - ${k}`).join('\n') : '   (无)'}
-2. 一次最多问 2 个问题, 能不问就不问。
-3. 分类判断:
+${imageRule}
+3. 一次最多问 2 个问题, 能不问就不问。
+4. 分类判断:
    - 阻断正常业务 (如无法下单、无法验收、页面打不开) → BUG_BLOCKING
    - 对现有功能的体验改进 (如图片不能放大、按钮不明显) → IMPROVEMENT
    - 系统目前没有的能力 → NEW_FEATURE
    - 询问怎么操作 → QUESTION (直接给出操作步骤回答)
-4. 信息足够分类和处理时, 在正常回复用户之后, 另起一行输出如下标记块 (用户看不到):
+5. 信息足够分类和处理时, 在正常回复用户之后, 另起一行输出如下标记块 (用户看不到):
 \`\`\`json
 {"triage":{"category":"BUG_BLOCKING|IMPROVEMENT|NEW_FEATURE|QUESTION","title":"一句话标题","summary":"问题或方案摘要","proposal":{"scenario":"使用场景","expectation":"期望效果","estimatedDays":"初估人天"},"sufficient":true}}
 \`\`\`

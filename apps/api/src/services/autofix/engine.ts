@@ -404,9 +404,49 @@ export async function recoverStaleAutoFixRuns(): Promise<number> {
   return recovered
 }
 
+/**
+ * 部署锁冲突恢复：扫描到期的等待重试任务，原子认领后重新执行部署。
+ * 配合 deployment.ts 的 scheduleLockRetry——锁被占用时任务保持 DEPLOYING 并记录 nextRetryAt，
+ * 每 5 分钟重试一次，最多 12 次仍冲突才真正转人工。
+ */
+async function resumeLockWaitingRuns(): Promise<number> {
+  const now = new Date()
+  const due = await prisma.autoFixRun.findMany({
+    where: {
+      status: 'DEPLOYING' as any,
+      nextRetryAt: { lte: now },
+    },
+    select: { id: true },
+    take: 5,
+  })
+  let resumed = 0
+  for (const run of due) {
+    if (locallyExecutingRunIds.has(run.id)) continue
+    const claimed = await prisma.autoFixRun.updateMany({
+      where: { id: run.id, status: 'DEPLOYING' as any, nextRetryAt: { lte: now } },
+      data: { nextRetryAt: null },
+    })
+    if (claimed.count !== 1) continue
+    locallyExecutingRunIds.add(run.id)
+    resumed += 1
+    setImmediate(() =>
+      void executeApprovedRun(run.id)
+        .catch((error) => console.error('[autofix] 锁冲突重试执行失败:', error))
+        .finally(() => locallyExecutingRunIds.delete(run.id)),
+    )
+  }
+  return resumed
+}
+
 function runAutoFixMaintenance() {
   void recoverStaleAutoFixRuns()
     .catch((error) => console.error('[autofix] 恢复停滞任务失败:', error))
+    .then(() =>
+      resumeLockWaitingRuns().catch((error) => {
+        console.error('[autofix] 恢复锁冲突等待任务失败:', error)
+        return 0
+      }),
+    )
     .finally(() => void drainQueue())
 }
 

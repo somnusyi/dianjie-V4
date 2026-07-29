@@ -3332,6 +3332,8 @@ model AutoFixRun {
   baseCommitSha String?
   commitSha     String?
   deployLog     String?      @db.Text
+  retryCount    Int          @default(0)
+  nextRetryAt   DateTime?
   decidedById   String?
   decidedAt     DateTime?
   createdAt     DateTime     @default(now())

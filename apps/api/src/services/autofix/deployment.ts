@@ -16,12 +16,51 @@ import {
   removeDeploymentCandidate,
   type DeploymentCandidate,
 } from './deploymentCandidate'
-import { acquireDeployLock } from './deploymentLock'
+import { acquireDeployLock, isDeployLockBusyError } from './deploymentLock'
 import { inspectUnifiedDiff, isAutoDeploymentEnabled } from './policy'
 import { planBaselineResolution, readProductionBaseline, requireProductionBaseline } from './productionBaseline'
 
 const execFileAsync = promisify(execFile)
 const MAX_LOG_CHARS = 40_000
+
+/** 部署锁冲突重试策略：每 5 分钟一次，最多 12 次（1 小时窗口，与停滞看门狗阈值对齐） */
+export const LOCK_RETRY_INTERVAL_MS = 5 * 60_000
+export const LOCK_RETRY_MAX = 12
+
+/**
+ * 部署锁被占用时不直接转人工：保持 DEPLOYING，记录下次重试时间，由 worker 每分钟扫描恢复。
+ * 返回 true 表示已成功排队等待重试。
+ */
+async function scheduleLockRetry(runId: string): Promise<boolean> {
+  const run = await prisma.autoFixRun.findUnique({
+    where: { id: runId },
+    select: { tenantId: true, retryCount: true, status: true },
+  })
+  if (!run || run.status !== ('DEPLOYING' as any)) return false
+  const attempt = run.retryCount + 1
+  if (attempt > LOCK_RETRY_MAX) return false
+  const nextRetryAt = new Date(Date.now() + LOCK_RETRY_INTERVAL_MS)
+  await prisma.autoFixRun.update({
+    where: { id: runId },
+    data: {
+      retryCount: attempt,
+      nextRetryAt,
+      error: `部署冲突中：其他发布正在执行，将于约 5 分钟后自动重试（第 ${attempt}/${LOCK_RETRY_MAX} 次）`,
+    },
+  })
+  await prisma.opLog.create({
+    data: {
+      tenantId: run.tenantId,
+      role: 'AI',
+      action: `AI 自动修复 ${runId} 部署锁冲突，排队等待第 ${attempt}/${LOCK_RETRY_MAX} 次重试`,
+      entityType: 'AutoFixRun',
+      targetId: runId,
+      isAi: true,
+      metadata: { reason: 'deploy_lock_busy', attempt, nextRetryAt: nextRetryAt.toISOString() } as any,
+    },
+  })
+  return true
+}
 
 interface RunCommandResult {
   output: string
@@ -385,7 +424,7 @@ export async function executeApprovedRun(runId: string) {
     log = await buildAndSyncWeb(candidate.worktreeDir, target, runRecord.id)
     await prisma.autoFixRun.update({
       where: { id: runRecord.id },
-      data: { status: 'VERIFY_PROD' as any, commitSha, deployLog: log },
+      data: { status: 'VERIFY_PROD' as any, commitSha, deployLog: log, nextRetryAt: null },
     })
     const contextPath = String((runRecord.feedback?.context as any)?.path || '/v2/login')
     const health = await verifyProduction(contextPath)
@@ -399,6 +438,22 @@ export async function executeApprovedRun(runId: string) {
       console.error('[autofix] 生产已验证，但源码分支快进待维护:', sourceSyncError)
     }
   } catch (error) {
+    // 部署锁冲突且尚未开始部署：排队等待自动重试（每 5 分钟），不转人工、无需回滚
+    if (isDeployLockBusyError(error) && !deploymentStarted) {
+      const scheduled = await scheduleLockRetry(runId).catch((retryError) => {
+        console.error('[autofix] 部署锁重试排队失败:', retryError)
+        return false
+      })
+      if (scheduled) return
+      await markDeploymentFailure(
+        runId,
+        new Error(`部署锁冲突重试 ${LOCK_RETRY_MAX} 次后仍被占用，转人工处理`),
+        log,
+        'NOT_REQUIRED',
+        '',
+      )
+      return
+    }
     try {
       if (deploymentStarted) {
         recovery = 'FAILED'

@@ -4,6 +4,12 @@ import path from 'node:path'
 
 export type ReleaseDeployLock = () => Promise<void>
 
+export const DEPLOY_LOCK_BUSY_MESSAGE = '生产部署锁已被其他发布占用'
+
+export function isDeployLockBusyError(error: unknown): boolean {
+  return error instanceof Error && error.message === DEPLOY_LOCK_BUSY_MESSAGE
+}
+
 function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException)?.code === 'ENOENT'
 }
@@ -20,7 +26,7 @@ export async function acquireDeployLock(target: string, runId: string): Promise<
     await writeFile(ownerPath, owner, { mode: 0o600 })
   } catch {
     if (created) await rm(lockDir, { recursive: true, force: true }).catch(() => undefined)
-    throw new Error('生产部署锁已被其他发布占用')
+    throw new Error(DEPLOY_LOCK_BUSY_MESSAGE)
   }
 
   return async () => {

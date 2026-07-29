@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { planChanges } from './changePlan'
 
 export interface DiffFileSummary {
   path: string
@@ -57,17 +58,52 @@ function normalizeDiffPath(raw: string): string | null {
   return normalized
 }
 
-function isAllowedP1aPath(file: string): boolean {
-  if (file === 'apps/web/src/components/AppLayout.tsx') return false
-  // 与档2/超管助手硬约束一致: apps/web/src 下的源码与样式文件全部放行,
-  // 删除/重命名/禁区路径由上方元信息禁令与 HARD_DENY_PATTERNS 把关。
-  return /^apps\/web\/src\/.+\.(?:ts|tsx|css)$/.test(file)
+/**
+ * 自动修复白名单（正向清单）：
+ * - apps/web/src 下的源码与样式；
+ * - apps/api/src 下的非核心源码（核心库存写入/资金/认证等由 planChanges 风险闸与 HARD_DENY 先行拦截）；
+ * - apps/api/tests 下的测试。
+ * 删除/重命名/禁区路径由 diff 元信息禁令与 HARD_DENY_PATTERNS 把关。
+ */
+function isAllowedAutofixPath(file: string): boolean {
+  if (/^apps\/web\/src\/.+\.(?:ts|tsx|css)$/.test(file)) return true
+  if (/^apps\/api\/src\/.+\.(?:ts|tsx)$/.test(file)) return true
+  if (/^apps\/api\/tests\/.+\.(?:ts|tsx)$/.test(file)) return true
+  return false
 }
 
 /**
- * P1a intentionally limits automatic patches to Web presentation code.
- * Read-only API changes remain a later rollout because path-only validation
- * cannot prove that a route is GET-only or that its SQL semantics are intact.
+ * 单文件准入闸门（policy 与 tier2 范围检查共用，保证两处判定一致）。
+ * 返回拒绝原因（含"红线"/"白名单"关键字）或 null（放行）。
+ * 判定顺序: 硬红线 > planChanges 风险/类别闸（risk high/blocked 或 unknown/database/workspace 一律拒绝）> 正向白名单。
+ */
+export function denyPatchFile(filePath: string): string | null {
+  const plan = planChanges([filePath])
+  const file = plan.files[0]
+  const normalized = file?.path ?? filePath
+  if (HARD_DENY_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return `触碰硬红线路径: ${filePath}`
+  }
+  if (
+    !file
+    || file.risk === 'blocked'
+    || file.risk === 'high'
+    || file.category === 'unknown'
+    || file.category === 'database'
+    || file.category === 'workspace'
+  ) {
+    const reason = file?.redline ? `（${file.redline}）` : ''
+    return `触碰硬红线路径: ${filePath}${reason}`
+  }
+  if (!isAllowedAutofixPath(normalized)) {
+    return `P1a 白名单外路径: ${filePath}`
+  }
+  return null
+}
+
+/**
+ * 自动修复补丁准入：结构校验（二进制/删除/重命名/模式/hunk 一致性/路径穿越）+ 逐文件闸门。
+ * 允许 Web 源码与非核心 API 源码/测试；核心库存写入、资金、认证、数据库、依赖等一律拒绝。
  */
 export function inspectUnifiedDiff(diff: string): DiffInspection {
   const errors: string[] = []
@@ -213,11 +249,8 @@ export function inspectUnifiedDiff(diff: string): DiffInspection {
   if (summaries.length > fileCap) errors.push(`补丁文件数超过 ${fileCap}`)
 
   for (const file of summaries) {
-    if (HARD_DENY_PATTERNS.some((pattern) => pattern.test(file.path))) {
-      errors.push(`触碰硬红线路径: ${file.path}`)
-    } else if (!isAllowedP1aPath(file.path)) {
-      errors.push(`P1a 白名单外路径: ${file.path}`)
-    }
+    const denial = denyPatchFile(file.path)
+    if (denial) errors.push(denial)
   }
 
   const changedLines = summaries.reduce((sum, file) => sum + file.added + file.deleted, 0)

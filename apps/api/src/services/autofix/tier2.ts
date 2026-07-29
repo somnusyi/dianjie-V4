@@ -6,8 +6,10 @@
  *   老板手机批准 → runTier2Dev  隔离 worktree 里跑 Qwen Code → 独立复验 → DEPLOY_REVIEW
  *   老板二次批准 → 既有 executeApprovedRun(diffPatch) 安全发布
  *
- * v1 范围: 只允许 apps/web 改动（部署机只构建 Web）。需要 API/schema 的任务书
- * 生成阶段就会被要求拒绝, 落在 DEPLOY_REVIEW 前还有 diff 白名单二次把关。
+ * 范围: 允许 apps/web/src 前端源码，以及 apps/api/src、apps/api/tests 的非核心 TypeScript。
+ * 核心库存写入、资金、认证/权限、数据库 schema、依赖、部署配置在任务书生成与 diff 白名单
+ * 两道关卡都会被拒绝（见 policy.denyPatchFile / changePlan.planChanges）。
+ * 独立复验按实际改动范围执行: Web 测试+类型检查；API 测试+generate+类型检查+构建；混合两套都跑。
  */
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
@@ -15,7 +17,8 @@ import { promisify } from 'node:util'
 import { prisma } from '@dianjie/db'
 import { fireAndForget as notify } from '../notify'
 import { qwenChat, QWEN_BUSY_FALLBACK, QWEN_NOT_CONFIGURED } from '../qwenChat'
-import { inspectUnifiedDiff, isAutoFixModeEnabled } from './policy'
+import { planChanges, planVerificationSteps, runVerificationSteps } from './changePlan'
+import { denyPatchFile, inspectUnifiedDiff, isAutoFixModeEnabled } from './policy'
 import { requireCleanRepoHead } from './repository'
 
 const execFileAsync = promisify(execFile)
@@ -61,9 +64,12 @@ export function parseChangedPaths(nameOnlyZ: string): string[] {
   return [...new Set(paths)]
 }
 
-/** 档2 v1 白名单: 只允许 apps/web 内的改动。返回越界文件列表（空数组=通过）。 */
+/**
+ * 档2 范围检查: 与 policy.denyPatchFile 共用同一闸门，允许 Web 源码与非核心 API 源码/测试，
+ * 拒绝核心库存写入/资金/认证/数据库/未知。返回越界文件列表（空数组=通过）。
+ */
 export function findOutOfScopeFiles(paths: string[]): string[] {
-  return paths.filter((p) => !p.startsWith('apps/web/'))
+  return paths.filter((p) => denyPatchFile(p) !== null)
 }
 
 /** 从 porcelain 输出提取未跟踪文件（新建文件走不进 diff 补丁，必须显式拒绝）。 */
@@ -75,6 +81,15 @@ export function findUntrackedFiles(porcelain: string): string[] {
     if (p && p !== 'node_modules' && !p.startsWith('node_modules/')) paths.push(p)
   }
   return paths
+}
+
+/** 按实际改动范围生成"已独立复验"的可读描述，供方案卡片/总结准确展示验证范围。 */
+export function verificationSummary(paths: string[]): string {
+  const plan = planChanges(paths)
+  const parts: string[] = []
+  if (plan.verification.web) parts.push('Web 测试与类型检查')
+  if (plan.verification.api) parts.push('API 测试、类型检查与构建')
+  return parts.join('、') || '无可验证改动'
 }
 
 export function buildTaskBookPrompt(input: {
@@ -105,11 +120,11 @@ ${input.messages.map((m) => `[${m.role}] ${m.content}`).join('\n')}
 ## 禁区
 <列出不得修改的文件/机制>
 ## 验收
-<必须运行通过的命令，统一为: pnpm --filter @dianjie/web test 和 pnpm exec tsc -p apps/web/tsconfig.json --noEmit>
+<必须运行通过的命令。改 Web 跑: pnpm --filter @dianjie/web test 和 pnpm exec tsc -p apps/web/tsconfig.json --noEmit；改 API 跑: pnpm --filter @dianjie/api test、pnpm --filter @dianjie/db generate、pnpm exec tsc -p apps/api/tsconfig.json --noEmit、pnpm --filter @dianjie/api build；两者都改则两套都跑>
 
 硬约束:
-- 只允许修改 apps/web 内的**现有**文件；不得新建、删除、重命名任何文件（部署以 diff 补丁发布，新文件会丢失）
-- 凡需要改 API、数据库 schema、库存/资金/权限 的需求，不要写任务书，直接输出一行: REJECT: <原因>
+- 只允许修改或新建 apps/web/src 的前端源码，以及 apps/api/src、apps/api/tests 下的**非核心** TypeScript；不得删除、重命名文件
+- 凡需要改 数据库 schema/迁移、核心库存写入（订货/接单实发/验收入库/库存/盘点报损/BOM 消耗/结算）、资金、认证/权限、依赖、部署配置 的需求，不要写任务书，直接输出一行: REJECT: <原因>
 - 优先复用既有 API 端点与纯函数，任务书中要点名可复用的接口路径和函数名
 - 要求必须具体到可验收，禁止"优化一下""完善体验"这类模糊表述
 - 改动总量控制在 5 个文件、200 行以内，超出就说明拆分建议
@@ -137,15 +152,15 @@ ${input.messages.map((m) => `[${m.role}] ${m.content}`).join('\n')}
 
 ## 工作方式（你是 agent，自己动手）
 1. 先阅读页面路径对应的路由组件与相关代码，定位问题/需求点，自行设计最小方案
-2. 修改代码，然后运行 \`pnpm --filter @dianjie/web test\` 和 \`pnpm exec tsc -p apps/web/tsconfig.json --noEmit\`，有失败就修到全部通过
+2. 修改代码，然后按改动范围独立自测: 改 Web 跑 \`pnpm --filter @dianjie/web test\` 和 \`pnpm exec tsc -p apps/web/tsconfig.json --noEmit\`；改 API 跑 \`pnpm --filter @dianjie/api test\`、\`pnpm --filter @dianjie/db generate\`、\`pnpm exec tsc -p apps/api/tsconfig.json --noEmit\`、\`pnpm --filter @dianjie/api build\`；两者都改则两套都跑。有失败就修到全部通过
 
 ## 硬约束（违反将被拒绝发布）
-- 只允许修改或新建 apps/web 内的文件；不得删除、重命名文件
-- 不得修改认证、权限、资金、库存、数据库 schema、依赖、部署配置
+- 只允许修改或新建 apps/web/src 的前端源码，以及 apps/api/src、apps/api/tests 下的非核心 TypeScript；不得删除、重命名文件
+- 不得修改认证、权限、资金、核心库存写入（订货/接单/验收/库存/盘点报损/BOM 消耗/结算）、数据库 schema、依赖、部署配置
 - 若需求必须触碰以上禁区: 不要改任何代码，直接回复 REJECT: <原因> 并停止
 
 ## 交付
-最后输出: 修改文件清单（相对路径）、每个文件的改动说明、两条验证命令的结果。`
+最后输出: 修改文件清单（相对路径）、每个文件的改动说明、所跑验证命令的结果。`
 }
 
 /** 老板批准后统一入口: 直接创建 agent 开发任务并立即开工。 */
@@ -200,15 +215,15 @@ ${content}
 
 ## 工作方式（你是 agent，自己动手）
 1. 先阅读相关路由组件与代码，自行定位并设计最小方案；指令不明确时选择最保守、最贴近字面的实现
-2. 修改代码，然后运行 \`pnpm --filter @dianjie/web test\` 和 \`pnpm exec tsc -p apps/web/tsconfig.json --noEmit\`，有失败就修到全部通过
+2. 修改代码，然后按改动范围独立自测: 改 Web 跑 \`pnpm --filter @dianjie/web test\` 和 \`pnpm exec tsc -p apps/web/tsconfig.json --noEmit\`；改 API 跑 \`pnpm --filter @dianjie/api test\`、\`pnpm --filter @dianjie/db generate\`、\`pnpm exec tsc -p apps/api/tsconfig.json --noEmit\`、\`pnpm --filter @dianjie/api build\`；两者都改则两套都跑。有失败就修到全部通过
 
 ## 硬约束（违反将被拒绝发布）
-- 只允许修改或新建 apps/web 内的文件；不得删除、重命名文件
-- 不得修改认证、权限、资金、库存、数据库 schema、依赖、部署配置
+- 只允许修改或新建 apps/web/src 的前端源码，以及 apps/api/src、apps/api/tests 下的非核心 TypeScript；不得删除、重命名文件
+- 不得修改认证、权限、资金、核心库存写入（订货/接单/验收/库存/盘点报损/BOM 消耗/结算）、数据库 schema、依赖、部署配置
 - 若需求必须触碰以上禁区或指令无法安全执行: 不要改任何代码，直接回复 REJECT: <原因> 并停止
 
 ## 交付
-最后输出: 修改文件清单（相对路径）、每个文件的改动说明、两条验证命令的结果。`
+最后输出: 修改文件清单（相对路径）、每个文件的改动说明、所跑验证命令的结果。`
 }
 
 /** 超管聊天入口: 创建无反馈的 agent 开发任务并立即开工。 */
@@ -429,18 +444,12 @@ export async function runTier2Dev(runId: string): Promise<void> {
     }
     const outOfScope = findOutOfScopeFiles(changed)
     if (outOfScope.length > 0) {
-      throw new Error(`改动越出 apps/web 白名单: ${outOfScope.join(', ')}`)
+      throw new Error(`改动越出自动修复白名单（Web 源码/非核心 API）: ${outOfScope.join(', ')}`)
     }
 
-    // 独立复验：不信 AI 自报
-    await execFileAsync('pnpm', ['--filter', '@dianjie/web', 'test'], {
-      cwd: worktreeDir, timeout: 300_000, maxBuffer: 4 * 1024 * 1024,
-      env: { ...process.env, CI: '1', NODE_ENV: 'test' },
-    })
-    await execFileAsync('pnpm', ['exec', 'tsc', '-p', 'apps/web/tsconfig.json', '--noEmit'], {
-      cwd: worktreeDir, timeout: 300_000, maxBuffer: 4 * 1024 * 1024,
-      env: { ...process.env, CI: '1', NODE_ENV: 'test' },
-    })
+    // 独立复验：不信 AI 自报。按实际改动范围执行（Web/API/混合），命令一律 command+args 数组。
+    const verificationLog = await runVerificationSteps(planVerificationSteps(changed), { cwd: worktreeDir })
+    const verifiedScope = verificationSummary(changed)
 
     const diffPatch = await gitRaw(worktreeDir, ['diff', '--', '.', ':!node_modules'])
     const inspection = inspectUnifiedDiff(diffPatch)
@@ -450,11 +459,11 @@ export async function runTier2Dev(runId: string): Promise<void> {
       diffPatch,
       diffFiles: inspection.files as any,
       baseCommitSha,
-      planSummary: `Qwen Code 开发完成: 修改 ${inspection.files.length} 个文件、${inspection.changedLines} 行；Web 测试与类型检查独立复验通过。`,
-      deployLog: qwenLog,
+      planSummary: `Qwen Code 开发完成: 修改 ${inspection.files.length} 个文件、${inspection.changedLines} 行；${verifiedScope}独立复验通过。`,
+      deployLog: `${qwenLog}\n\n--- 独立复验 ---\n${verificationLog}`.slice(-30_000),
       error: null,
     })
-    const summaryText = `修改 ${inspection.files.length} 个文件、${inspection.changedLines} 行:\n${inspection.files.map((f) => `- ${f.path} (+${f.added}/-${f.deleted})`).join('\n')}\n\nWeb 测试与类型检查已独立复验通过。`
+    const summaryText = `修改 ${inspection.files.length} 个文件、${inspection.changedLines} 行:\n${inspection.files.map((f) => `- ${f.path} (+${f.added}/-${f.deleted})`).join('\n')}\n\n${verifiedScope}已独立复验通过。`
     if (run.feedback) {
       await prisma.feedback.update({
         where: { id: run.feedback.id },

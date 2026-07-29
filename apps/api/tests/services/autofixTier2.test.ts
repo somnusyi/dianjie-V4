@@ -5,6 +5,7 @@ import {
   findOutOfScopeFiles,
   findUntrackedFiles,
   parseChangedPaths,
+  verificationSummary,
 } from '../../src/services/autofix/tier2'
 
 describe('parseChangedPaths', () => {
@@ -34,18 +35,56 @@ describe('parseChangedPaths', () => {
 })
 
 describe('findOutOfScopeFiles', () => {
-  it('apps/web 内全部通过', () => {
-    expect(findOutOfScopeFiles(['apps/web/a.ts', 'apps/web/src/lib/b.ts'])).toEqual([])
+  it('Web 源码、非核心 API 源码与 API 测试全通过', () => {
+    expect(
+      findOutOfScopeFiles([
+        'apps/web/src/app/v2/page.tsx',
+        'apps/web/src/lib/b.ts',
+        'apps/api/src/routes/stores.ts',
+        'apps/api/tests/services/stores.test.ts',
+      ]),
+    ).toEqual([])
   })
 
-  it('揪出 API / db / 根目录改动', () => {
+  it('揪出核心库存写入/成本 API 改动（含命中硬红线的 inventoryCosting）', () => {
     expect(
-      findOutOfScopeFiles(['apps/web/a.ts', 'apps/api/src/routes/products.ts', 'packages/db/prisma/schema.prisma', 'README.md']),
-    ).toEqual(['apps/api/src/routes/products.ts', 'packages/db/prisma/schema.prisma', 'README.md'])
+      findOutOfScopeFiles([
+        'apps/web/src/lib/b.ts',
+        'apps/api/src/routes/orders.ts',
+        'apps/api/src/services/inventoryCosting.ts',
+      ]),
+    ).toEqual(['apps/api/src/routes/orders.ts', 'apps/api/src/services/inventoryCosting.ts'])
+  })
+
+  it('揪出 db / 未知 / 非 src 前端 / 受保护前端改动', () => {
+    expect(
+      findOutOfScopeFiles([
+        'apps/web/a.ts',
+        'apps/web/src/app/v2/layout.tsx',
+        'packages/db/prisma/schema.prisma',
+        'README.md',
+      ]),
+    ).toEqual(['apps/web/a.ts', 'apps/web/src/app/v2/layout.tsx', 'packages/db/prisma/schema.prisma', 'README.md'])
   })
 
   it('拒绝伪装前缀', () => {
     expect(findOutOfScopeFiles(['apps/webhook/x.ts'])).toEqual(['apps/webhook/x.ts'])
+  })
+})
+
+describe('verificationSummary', () => {
+  it('按实际改动范围描述独立复验（Web/API/混合）', () => {
+    expect(verificationSummary(['apps/web/src/lib/a.ts'])).toBe('Web 测试与类型检查')
+    expect(verificationSummary(['apps/api/src/routes/stores.ts'])).toBe('API 测试、类型检查与构建')
+    expect(verificationSummary(['apps/web/src/lib/a.ts', 'apps/api/src/routes/stores.ts'])).toBe(
+      'Web 测试与类型检查、API 测试、类型检查与构建',
+    )
+  })
+
+  it('无可验证改动（空/数据库/未知）返回兜底文案', () => {
+    expect(verificationSummary([])).toBe('无可验证改动')
+    expect(verificationSummary(['packages/db/prisma/schema.prisma'])).toBe('无可验证改动')
+    expect(verificationSummary(['README.md'])).toBe('无可验证改动')
   })
 })
 
@@ -77,11 +116,18 @@ describe('buildTaskBookPrompt', () => {
     expect(prompt).toContain('[user] 分类需要调整')
   })
 
-  it('写死安全约束：web限定/禁新文件/REJECT出口/验收命令', () => {
+  it('写死安全约束：白名单/禁删改/REJECT出口/按范围验收命令', () => {
     expect(prompt).toContain('REJECT:')
-    expect(prompt).toContain('不得新建、删除、重命名')
+    expect(prompt).toContain('不得删除、重命名文件')
+    expect(prompt).toContain('apps/api/src、apps/api/tests 下的**非核心** TypeScript')
+    // Web 与 API 两套验收命令都要点名
     expect(prompt).toContain('pnpm --filter @dianjie/web test')
     expect(prompt).toContain('tsc -p apps/web/tsconfig.json --noEmit')
+    expect(prompt).toContain('pnpm --filter @dianjie/api test')
+    expect(prompt).toContain('pnpm --filter @dianjie/db generate')
+    expect(prompt).toContain('pnpm --filter @dianjie/api build')
+    // 核心库存写入仍被列为禁区
+    expect(prompt).toContain('核心库存写入')
   })
 })
 
@@ -105,5 +151,11 @@ describe('buildAgentBrief', () => {
     expect(brief).toContain('不得删除、重命名文件')
     expect(brief).toContain('REJECT:')
     expect(brief).toContain('apps/web')
+    // 放开非核心 API：点名 API 验收命令与白名单，同时保留核心库存写入禁区
+    expect(brief).toContain('apps/api/src、apps/api/tests 下的非核心 TypeScript')
+    expect(brief).toContain('pnpm --filter @dianjie/api test')
+    expect(brief).toContain('pnpm --filter @dianjie/db generate')
+    expect(brief).toContain('pnpm --filter @dianjie/api build')
+    expect(brief).toContain('核心库存写入')
   })
 })

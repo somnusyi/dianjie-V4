@@ -6,12 +6,18 @@
  * - 确定性: 相同输入恒得相同输出（去重 + 稳定排序，不依赖 Map/Set 迭代顺序之外的东西）。
  * - 红线定义与 policy.ts 的 HARD_DENY_PATTERNS 对齐（认证/权限/资金/库存成本/部署/schema/迁移），
  *   但本模块自包含、不 import policy，避免规划逻辑与补丁白名单逻辑互相耦合。
+ * - runVerificationSteps 是唯一例外: 它只执行 test/tsc/build 这类"非部署"独立复验命令
+ *   （command+args 数组，绝不拼 shell），任何部署/迁移仍由专门模块在人工批准后执行。
  *
  * 两个正交维度:
  * - category: 变更落在哪个工程区域（web/api/database/workspace/unknown）
  * - risk:     变更有多危险（low < medium < high < blocked），混合改动取最高
  */
+import { execFile } from 'node:child_process'
 import path from 'node:path'
+import { promisify } from 'node:util'
+
+const execFileAsync = promisify(execFile)
 
 export type ChangeCategory = 'web' | 'api' | 'database' | 'workspace' | 'unknown'
 export type ChangeRisk = 'low' | 'medium' | 'high' | 'blocked'
@@ -81,6 +87,9 @@ const BLOCK_RULES: Array<{ test: RegExp; reason: string }> = [
   { test: /^apps\/api\/src\/routes\/(?:payments|finance|cashbook|reconciliations|approval)[^/]*\.ts$/i, reason: '资金路由' },
   { test: /^apps\/api\/src\/services\/(?:payments|finance|cashbook|reconciliations|approval)\//i, reason: '资金服务' },
   { test: /(^|\/)(?:storeInventory|receiptSettlement|receiptDerivatives|inventoryCosting)\.ts$/i, reason: '库存成本' },
+  // 库存写入/成本核心路径：订货/接单实发/验收入库/库存/盘点报损/BOM 消耗/结算/成本 等领域文件，
+  // 无论关键字落在目录还是文件名都拦截。仅作用于 apps/api，避免误伤前端同名页面（如 v2/orders）。
+  { test: /^apps\/api\/(?:src|tests)\/.*(?:inventory|receipt|purchase|order|stock|loss|settlement|consumption|deliver|shipment|cost).*\.(?:ts|tsx)$/i, reason: '库存写入/成本核心路径' },
   { test: /(^|\/)scripts\/deploy-[^/]*$/i, reason: '部署脚本' },
   { test: /(^|\/)(?:ecosystem|pm2|nginx)[^/]*$/i, reason: '部署配置' },
 ]
@@ -254,4 +263,99 @@ export function planChanges(paths: string[]): ChangePlan {
     redlines,
     verification,
   }
+}
+
+export type DeployComponent = 'web' | 'api'
+
+export interface DeploymentComponentPlan {
+  /** 需要部署的运行时组件，固定顺序 web → api，保证确定性 */
+  components: DeployComponent[]
+  web: boolean
+  api: boolean
+}
+
+/**
+ * 由变更文件路径推导需要部署的运行时组件（纯函数，供部署与回滚共用，保证一致性）。
+ * - 只有 apps/web/src 的源码改动触发 Web 部署；
+ * - 只有 apps/api/src 的源码改动触发 API 部署；
+ * - apps/api/tests、web 构建配置等不进入运行产物，不触发部署（避免无谓重启生产进程）。
+ */
+export function planDeploymentComponents(paths: string[]): DeploymentComponentPlan {
+  let web = false
+  let api = false
+  for (const raw of paths) {
+    const normalized = normalizePath(raw)
+    if (normalized.kind !== 'ok') continue
+    if (normalized.path.startsWith('apps/web/src/')) web = true
+    if (normalized.path.startsWith('apps/api/src/')) api = true
+  }
+  const components: DeployComponent[] = []
+  if (web) components.push('web')
+  if (api) components.push('api')
+  return { components, web, api }
+}
+
+export interface VerificationStep {
+  label: string
+  command: string
+  args: string[]
+  timeoutMs: number
+}
+
+/**
+ * 由变更文件路径推导需要执行的独立验证步骤（命令 + 参数数组，绝不拼 shell 字符串）。
+ * - Web 改动: 单测 + 类型检查；
+ * - API 改动: 单测 + Prisma generate + 类型检查 + 构建；
+ * - 混合: 两套都跑（Web 在前，API 在后）。
+ * database / 未知 / 红线变更不在此放行，应由上层范围检查先行拒绝。
+ */
+export function planVerificationSteps(paths: string[]): VerificationStep[] {
+  const plan = planChanges(paths)
+  const steps: VerificationStep[] = []
+  if (plan.verification.web) {
+    steps.push({ label: 'Web 单测', command: 'pnpm', args: ['--filter', '@dianjie/web', 'test'], timeoutMs: 300_000 })
+    steps.push({ label: 'Web 类型检查', command: 'pnpm', args: ['exec', 'tsc', '-p', 'apps/web/tsconfig.json', '--noEmit'], timeoutMs: 300_000 })
+  }
+  if (plan.verification.api) {
+    steps.push({ label: 'API 单测', command: 'pnpm', args: ['--filter', '@dianjie/api', 'test'], timeoutMs: 600_000 })
+    steps.push({ label: 'Prisma 客户端生成', command: 'pnpm', args: ['--filter', '@dianjie/db', 'generate'], timeoutMs: 300_000 })
+    steps.push({ label: 'API 类型检查', command: 'pnpm', args: ['exec', 'tsc', '-p', 'apps/api/tsconfig.json', '--noEmit'], timeoutMs: 300_000 })
+    steps.push({ label: 'API 构建', command: 'pnpm', args: ['--filter', '@dianjie/api', 'build'], timeoutMs: 600_000 })
+  }
+  return steps
+}
+
+export interface VerificationRunOptions {
+  cwd: string
+  /** 额外环境变量；CI=1 与 NODE_ENV=test 由运行器强制注入，调用方无需关心 */
+  env?: NodeJS.ProcessEnv
+}
+
+/**
+ * 顺序执行验证步骤（command + args 数组，绝不拼 shell 字符串），返回合并后的尾部日志。
+ * tier2 与 repository 共用此运行器，保证"按范围独立复验"的口径一致。
+ * 只执行 test/tsc/build 这类非部署验证；任一步骤失败即带上其 stdout/stderr 向上抛出，
+ * 由调用方统一升级处理（转人工/ESCALATED）。
+ */
+export async function runVerificationSteps(
+  steps: VerificationStep[],
+  options: VerificationRunOptions,
+): Promise<string> {
+  const logs: string[] = []
+  for (const step of steps) {
+    try {
+      const { stdout, stderr } = await execFileAsync(step.command, step.args, {
+        cwd: options.cwd,
+        timeout: step.timeoutMs,
+        maxBuffer: 4 * 1024 * 1024,
+        env: { ...process.env, ...options.env, CI: '1', NODE_ENV: 'test' },
+      })
+      logs.push(`$ ${step.label}\n${`${stdout || ''}${stderr || ''}`.slice(-8_000)}`)
+    } catch (error: any) {
+      const partial = `${error?.stdout || ''}${error?.stderr || ''}`.slice(-8_000)
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(`独立复验失败（${step.label}）: ${message}${partial ? `\n${partial}` : ''}`)
+    }
+  }
+  return logs.join('\n').slice(-20_000)
 }

@@ -3,6 +3,7 @@ import { mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'no
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { planVerificationSteps, runVerificationSteps } from './changePlan'
 import { inspectUnifiedDiff } from './policy'
 
 const execFileAsync = promisify(execFile)
@@ -142,15 +143,11 @@ export async function verifyPatch(
     await run(repoDir, 'git', ['worktree', 'add', '--detach', worktreeDir, expectedBaseSha], 30_000)
     await symlink(path.join(repoDir, 'node_modules'), path.join(worktreeDir, 'node_modules'), 'dir').catch(() => undefined)
     await run(worktreeDir, 'git', ['apply', '--whitespace=error-all', patchFile], 30_000)
-    const testLog = await run(worktreeDir, 'pnpm', ['--filter', '@dianjie/web', 'test'], 180_000)
-    const typeLog = await run(
-      worktreeDir,
-      'pnpm',
-      ['exec', 'tsc', '-p', 'apps/web/tsconfig.json', '--noEmit'],
-      180_000,
-    )
+    // 独立复验按补丁实际改动范围执行（Web/API/混合），命令一律 command+args 数组。
+    const changedPaths = inspection.files.map((file) => file.path)
+    const verificationLog = await runVerificationSteps(planVerificationSteps(changedPaths), { cwd: worktreeDir })
     await requireCleanRepoHead(repoDir, expectedBaseSha)
-    return `${testLog}\n${typeLog}`.slice(-20_000)
+    return verificationLog
   } finally {
     await run(repoDir, 'git', ['worktree', 'remove', '--force', worktreeDir], 30_000).catch(() => undefined)
     await rm(tempRoot, { recursive: true, force: true })

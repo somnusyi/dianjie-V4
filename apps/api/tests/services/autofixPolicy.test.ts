@@ -50,15 +50,47 @@ describe('auto-fix patch policy', () => {
     expect(result.errors.join(' ')).toMatch(/红线|白名单/)
   })
 
-  it('rejects API changes in P1a even when the route might be read-only', () => {
-    const result = inspectUnifiedDiff(
-      safeDiff.replaceAll(
-        'apps/web/src/app/v2/supply-chain/home/page.tsx',
-        'apps/api/src/routes/stores.ts',
-      ),
-    )
+  const diffFor = (file: string) =>
+    safeDiff.replaceAll('apps/web/src/app/v2/supply-chain/home/page.tsx', file)
+
+  it('accepts a normal (non-core) API source patch', () => {
+    const result = inspectUnifiedDiff(diffFor('apps/api/src/routes/stores.ts'))
+    expect(result.ok).toBe(true)
+    expect(result.files[0]).toMatchObject({ path: 'apps/api/src/routes/stores.ts', added: 1, deleted: 1 })
+  })
+
+  it('accepts apps/api/tests patches', () => {
+    const result = inspectUnifiedDiff(diffFor('apps/api/tests/services/stores.test.ts'))
+    expect(result.ok).toBe(true)
+    expect(result.files[0].path).toBe('apps/api/tests/services/stores.test.ts')
+  })
+
+  it('accepts same-name Web pages that share a core keyword (orders/inventory/settlement)', () => {
+    expect(inspectUnifiedDiff(diffFor('apps/web/src/app/v2/orders/page.tsx')).ok).toBe(true)
+    expect(inspectUnifiedDiff(diffFor('apps/web/src/app/v2/inventory/page.tsx')).ok).toBe(true)
+    expect(inspectUnifiedDiff(diffFor('apps/web/src/lib/settlement-format.ts')).ok).toBe(true)
+  })
+
+  it.each([
+    'apps/api/src/routes/inventory.ts',
+    'apps/api/src/routes/orders.ts',
+    'apps/api/src/routes/receipts.ts',
+    'apps/api/src/routes/purchases.ts',
+    'apps/api/src/services/stock/adjust.ts',
+    'apps/api/src/routes/loss.ts',
+    'apps/api/src/services/settlement/run.ts',
+    'apps/api/tests/inventory.test.ts',
+  ])('rejects core inventory/cost API path %s', (file) => {
+    const result = inspectUnifiedDiff(diffFor(file))
     expect(result.ok).toBe(false)
-    expect(result.errors).toContain('P1a 白名单外路径: apps/api/src/routes/stores.ts')
+    expect(result.errors.join(' ')).toMatch(/红线/)
+    expect(result.errors.join(' ')).toContain('库存写入/成本核心路径')
+  })
+
+  it('rejects non-whitelisted API paths that are not core either (e.g. api root config)', () => {
+    const result = inspectUnifiedDiff(diffFor('apps/api/vitest.config.ts'))
+    expect(result.ok).toBe(false)
+    expect(result.errors.join(' ')).toMatch(/红线|白名单/)
   })
 
   it('rejects deletion and traversal', () => {

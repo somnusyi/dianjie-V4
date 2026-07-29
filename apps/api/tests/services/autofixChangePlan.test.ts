@@ -4,6 +4,9 @@ import {
   DATABASE_MIGRATE_COMMAND,
   WEB_VERIFICATION,
   planChanges,
+  planDeploymentComponents,
+  planVerificationSteps,
+  runVerificationSteps,
 } from '../../src/services/autofix/changePlan'
 
 describe('autofix changePlan', () => {
@@ -122,6 +125,46 @@ describe('autofix changePlan', () => {
     })
   })
 
+  describe('核心库存写入/成本路径（apps/api 专属红线）', () => {
+    it.each([
+      'apps/api/src/routes/inventory.ts',
+      'apps/api/src/routes/orders.ts',
+      'apps/api/src/routes/receipts.ts',
+      'apps/api/src/routes/purchases.ts',
+      'apps/api/src/services/stock/adjust.ts',
+      'apps/api/src/routes/loss.ts',
+      'apps/api/src/services/settlement/run.ts',
+      'apps/api/src/services/bom/consumption.ts',
+      // 关键字落在 apps/api/tests 同样拦截，避免用测试文件绕过红线
+      'apps/api/tests/inventory.test.ts',
+    ])('%s 判为 blocked（库存写入/成本核心路径）', (file) => {
+      const plan = planChanges([file])
+      expect(plan.risk).toBe('blocked')
+      expect(plan.blocked).toBe(true)
+      expect(plan.redlines).toEqual([`${file}: 库存写入/成本核心路径`])
+    })
+
+    it.each([
+      'apps/web/src/app/v2/orders/page.tsx',
+      'apps/web/src/app/v2/inventory/page.tsx',
+      'apps/web/src/lib/settlement-format.ts',
+    ])('同名前端页面 %s 不误伤（仍为 web/low）', (file) => {
+      const plan = planChanges([file])
+      expect(plan.risk).toBe('low')
+      expect(plan.blocked).toBe(false)
+      expect(plan.categories).toEqual(['web'])
+      expect(plan.redlines).toEqual([])
+      expect(plan.files[0]).toMatchObject({ category: 'web', risk: 'low' })
+    })
+
+    it('普通 API 路径（stores/supplierCategory）不命中核心红线', () => {
+      const plan = planChanges(['apps/api/src/routes/stores.ts', 'apps/api/src/services/supplierCategory.ts'])
+      expect(plan.risk).toBe('medium')
+      expect(plan.blocked).toBe(false)
+      expect(plan.redlines).toEqual([])
+    })
+  })
+
   describe('混合范围取最高风险', () => {
     it('low + medium → medium', () => {
       const plan = planChanges([
@@ -230,5 +273,134 @@ describe('autofix changePlan', () => {
       expect(plan.files).toHaveLength(1)
       expect(plan.risk).toBe('low')
     })
+  })
+})
+
+describe('planVerificationSteps', () => {
+  it('纯 Web 改动只组成单测 + 类型检查两步', () => {
+    const steps = planVerificationSteps(['apps/web/src/lib/a.ts'])
+    expect(steps.map((s) => s.label)).toEqual(['Web 单测', 'Web 类型检查'])
+    expect(steps.every((s) => s.command === 'pnpm' && Array.isArray(s.args))).toBe(true)
+  })
+
+  it('纯 API 改动按 单测 → generate → 类型检查 → 构建 顺序组成', () => {
+    const steps = planVerificationSteps(['apps/api/src/routes/stores.ts'])
+    expect(steps.map((s) => s.label)).toEqual(['API 单测', 'Prisma 客户端生成', 'API 类型检查', 'API 构建'])
+    // generate 与类型检查是各自独立的 command+args，绝不拼成 shell 串
+    expect(steps[1]).toMatchObject({ command: 'pnpm', args: ['--filter', '@dianjie/db', 'generate'] })
+    expect(steps[2]).toMatchObject({ command: 'pnpm', args: ['exec', 'tsc', '-p', 'apps/api/tsconfig.json', '--noEmit'] })
+  })
+
+  it('混合改动两套都跑，且 Web 恒在 API 之前（与输入顺序无关）', () => {
+    const forward = planVerificationSteps(['apps/api/src/routes/stores.ts', 'apps/web/src/lib/a.ts'])
+    const backward = planVerificationSteps(['apps/web/src/lib/a.ts', 'apps/api/src/routes/stores.ts'])
+    expect(forward).toEqual(backward)
+    expect(forward.map((s) => s.label)).toEqual([
+      'Web 单测',
+      'Web 类型检查',
+      'API 单测',
+      'Prisma 客户端生成',
+      'API 类型检查',
+      'API 构建',
+    ])
+  })
+
+  it('任何步骤都不含 shell 拼接（无 && / ; / |）', () => {
+    const steps = planVerificationSteps(['apps/web/src/lib/a.ts', 'apps/api/src/routes/stores.ts'])
+    for (const step of steps) {
+      expect(step.command).toBe('pnpm')
+      for (const arg of step.args) {
+        expect(arg).not.toMatch(/&&|;|\|/)
+      }
+    }
+  })
+
+  it('数据库 / 未知改动不组成任何可执行步骤（由上层范围检查先行拒绝）', () => {
+    expect(planVerificationSteps(['packages/db/prisma/schema.prisma'])).toEqual([])
+    expect(planVerificationSteps(['README.md'])).toEqual([])
+    expect(planVerificationSteps([])).toEqual([])
+  })
+
+  it('核心 API 路径本身仍按 api 类别组成步骤——拦截由上层范围检查负责，而非本函数', () => {
+    // planVerificationSteps 只做"按类别规划"，不做红线判定；上层 denyPatchFile/findOutOfScopeFiles 先行拒绝。
+    expect(planVerificationSteps(['apps/api/src/routes/orders.ts']).map((s) => s.label)).toEqual([
+      'API 单测',
+      'Prisma 客户端生成',
+      'API 类型检查',
+      'API 构建',
+    ])
+  })
+})
+
+describe('planDeploymentComponents', () => {
+  it('只有 apps/web/src 源码触发 Web 部署', () => {
+    expect(planDeploymentComponents(['apps/web/src/lib/a.ts'])).toEqual({
+      components: ['web'],
+      web: true,
+      api: false,
+    })
+  })
+
+  it('只有 apps/api/src 源码触发 API 部署', () => {
+    expect(planDeploymentComponents(['apps/api/src/routes/stores.ts'])).toEqual({
+      components: ['api'],
+      web: false,
+      api: true,
+    })
+  })
+
+  it('混合改动按 web → api 固定顺序部署', () => {
+    expect(planDeploymentComponents(['apps/api/src/routes/stores.ts', 'apps/web/src/lib/a.ts'])).toEqual({
+      components: ['web', 'api'],
+      web: true,
+      api: true,
+    })
+  })
+
+  it('测试与构建配置不进入运行产物，不触发部署', () => {
+    expect(planDeploymentComponents(['apps/api/tests/services/foo.test.ts'])).toEqual({
+      components: [],
+      web: false,
+      api: false,
+    })
+    expect(planDeploymentComponents(['apps/web/next.config.js'])).toEqual({
+      components: [],
+      web: false,
+      api: false,
+    })
+    expect(planDeploymentComponents([])).toEqual({ components: [], web: false, api: false })
+  })
+})
+
+describe('runVerificationSteps', () => {
+  it('顺序执行并合并尾部日志', async () => {
+    const log = await runVerificationSteps(
+      [
+        { label: '步骤A', command: 'node', args: ['-e', 'console.log("hello-a")'], timeoutMs: 10_000 },
+        { label: '步骤B', command: 'node', args: ['-e', 'console.log("hello-b")'], timeoutMs: 10_000 },
+      ],
+      { cwd: process.cwd() },
+    )
+    expect(log).toContain('$ 步骤A')
+    expect(log).toContain('hello-a')
+    expect(log).toContain('$ 步骤B')
+    expect(log).toContain('hello-b')
+  })
+
+  it('强制注入 NODE_ENV=test 与 CI=1', async () => {
+    const log = await runVerificationSteps(
+      [{ label: 'env', command: 'node', args: ['-e', 'console.log(process.env.NODE_ENV + "/" + process.env.CI)'], timeoutMs: 10_000 }],
+      { cwd: process.cwd(), env: { NODE_ENV: 'production' } },
+    )
+    expect(log).toContain('test/1')
+  })
+
+  it('任一步骤失败即带上标签向上抛出', async () => {
+    await expect(
+      runVerificationSteps(
+        [{ label: '坏步骤', command: 'node', args: ['-e', 'console.error("boom"); process.exit(1)'], timeoutMs: 10_000 }],
+        { cwd: process.cwd() },
+      ),
+    ).rejects.toThrow('独立复验失败（坏步骤）')
   })
 })

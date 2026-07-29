@@ -5,6 +5,7 @@ import { BottomNav, Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { ProductToolTabs } from '@/components/v2/product-tool-tabs'
 import { clientRequestId } from '@/lib/client-id'
+import { filterSupplierCategories } from '@/lib/supplier-category-filter'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 
 type SupplierOption = { id: string; no: string; name: string }
@@ -46,7 +47,7 @@ export default function SupplierCategoriesPage() {
     if (internalSupplyChain && !selectedSupplierId) return
     try {
       const rows = await apiFetch<Category[]>(scopedPath('/api/products/categories'))
-      setCategories(Array.isArray(rows) ? rows : [])
+      setCategories(filterSupplierCategories(Array.isArray(rows) ? rows : []))
       setOrderDirty(false)
       setError(null)
     } catch (e: any) {

@@ -8,6 +8,7 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import { filterSupplierCategories } from '@/lib/supplier-category-filter'
 import { BottomNav, Chip } from '@/components/v2'
 import {
   DEFAULT_WAREHOUSE_NAME,
@@ -80,7 +81,7 @@ export default function InventoryPage() {
 
   function loadReferenceData() {
     apiFetch<Summary>(withWarehouseParam('/api/supplier/stock/summary')).then(setSummary).catch(() => {})
-    apiFetch<Category[]>('/api/products/categories').then(rows => setCategories(Array.isArray(rows) ? rows : [])).catch(() => {})
+    apiFetch<Category[]>('/api/products/categories').then(rows => setCategories(filterSupplierCategories(Array.isArray(rows) ? rows : []))).catch(() => {})
   }
   useEffect(() => { loadReferenceData() }, [])
   useEffect(() => {

@@ -13,6 +13,7 @@ import { EmptyState, SkeletonCard, FriendlyError } from '@/components/v2/skeleto
 import { ProductFilterSidebar } from '@/components/v2/product-filter-sidebar'
 import { ProductImagePreview } from '@/components/v2/product-image-preview'
 import { apiDownload, apiFetch } from '@/lib/v2-auth'
+import { filterSupplierCategories } from '@/lib/supplier-category-filter'
 import { downloadProductExport, saveBlob } from './export-products'
 
 type Product = {
@@ -106,7 +107,7 @@ export default function SupplierProductsPage() {
       .then(d => setBatches(Array.isArray(d) ? d : []))
       .catch(() => setBatches([]))
     apiFetch<CategoryOption[]>('/api/products/categories')
-      .then(d => setCategories(Array.isArray(d) ? d : []))
+      .then(d => setCategories(filterSupplierCategories(Array.isArray(d) ? d : [])))
       .catch(() => setCategories([]))
     apiFetch<HistoryRow[]>('/api/products/history?limit=50')
       .then(d => setOperations(Array.isArray(d) ? d : []))

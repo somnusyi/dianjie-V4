@@ -17,6 +17,7 @@ import {
   type DeploymentCandidate,
 } from './deploymentCandidate'
 import { acquireDeployLock, isDeployLockBusyError } from './deploymentLock'
+import { planDeploymentComponents, type DeployComponent } from './changePlan'
 import { inspectUnifiedDiff, isAutoDeploymentEnabled } from './policy'
 import { planBaselineResolution, readProductionBaseline, requireProductionBaseline } from './productionBaseline'
 
@@ -167,28 +168,197 @@ async function resolveDeployBaseline(input: {
   throw new Error(`生产基线前移但补丁无法干净应用到新基线 ${deployed}，需重新开发`)
 }
 
-async function buildAndSyncWeb(repo: string, target: string, runId: string): Promise<string> {
-  const logs: string[] = []
-  const backupDir = '/app/backups'
-  const backupPath = `${backupDir}/autofix-web-${runId}-${Date.now()}.tar.gz`
-  logs.push((await run(target, 'mkdir', ['-p', backupDir], 30_000)).output)
-  logs.push((await run(
-    target,
-    'tar',
-    ['-czf', backupPath, '-C', target, 'apps/web/apps/web'],
-    120_000,
-  )).output)
-  logs.push((await run(repo, 'pnpm', ['--filter', '@dianjie/web', 'build'], 600_000)).output)
+/** 单条部署命令：command + args 数组，绝不拼 shell 字符串。 */
+export interface DeployCommand {
+  label: string
+  command: string
+  args: string[]
+  cwd: string
+  timeoutMs: number
+}
 
-  const standalone = path.join(repo, 'apps/web/.next/standalone/apps/web/')
-  const staticDir = path.join(repo, 'apps/web/.next/static/')
-  const publicDir = path.join(repo, 'apps/web/public/')
-  logs.push((await run(repo, 'rsync', ['-az', '--delete', standalone, `${target}/apps/web/apps/web/`], 120_000)).output)
-  logs.push((await run(repo, 'rsync', ['-az', '--delete', staticDir, `${target}/apps/web/apps/web/.next/static/`], 120_000)).output)
-  logs.push((await run(repo, 'rsync', ['-az', '--delete', publicDir, `${target}/apps/web/apps/web/public/`], 120_000)).output)
-  // 不带 --update-env：API 进程自身的 PORT=4004 不能污染 Web 的 3204 配置。
-  logs.push((await run(repo, 'pm2', ['restart', 'dianjie-v4-web'], 60_000)).output)
-  return `${logs.join('\n')}\nbackup=${backupPath}`.slice(-MAX_LOG_CHARS)
+/**
+ * 不触碰生产的纯部署计划：由变更文件路径推导需要发布的运行时组件，
+ * 并按「先全部构建 → 统一备份受影响生产目录 → 再同步/重启」的阶段排好命令。
+ * 正常发布与失败恢复/人工回滚共用同一份 changedPaths，保证恢复相同组件，绝不退化为只恢复 Web。
+ */
+export interface DeploymentPlan {
+  components: DeployComponent[]
+  web: boolean
+  api: boolean
+  /** 无运行组件（如仅测试改动）：不构建、不备份、不同步、不重启 */
+  noRuntime: boolean
+  /** 阶段一：所有组件的构建命令（先于备份与同步全部完成） */
+  builds: DeployCommand[]
+  /** 阶段二：备份受影响生产目录（mkdir + 单个 tar，混合时一个包含两目录） */
+  backups: DeployCommand[]
+  /** 阶段三：把候选产物同步到生产 */
+  syncs: DeployCommand[]
+  /** 阶段四：重启对应 pm2 进程 */
+  restarts: DeployCommand[]
+  /** 备份归档绝对路径；noRuntime 时为 null */
+  backupArchivePath: string | null
+  /** 受影响的生产目录（相对 target），用于日志与校验 */
+  backupDirs: string[]
+}
+
+export interface PlanDeploymentInput {
+  /** 候选 worktree（正常发布）或源码副本（恢复）目录，构建与同步的来源 */
+  repo: string
+  /** 生产目录 */
+  target: string
+  runId: string
+  /** 原始变更文件路径（正常/恢复/回滚必须一致） */
+  changedPaths: string[]
+  /** 备份目录，默认 /app/backups */
+  backupDir?: string
+  /** 备份归档时间戳，默认 Date.now()；测试可注入以保证确定性 */
+  timestamp?: number
+}
+
+export function planDeployment(input: PlanDeploymentInput): DeploymentPlan {
+  const { repo, target, runId, changedPaths } = input
+  const backupDir = input.backupDir ?? '/app/backups'
+  const timestamp = input.timestamp ?? Date.now()
+  const { components, web, api } = planDeploymentComponents(changedPaths)
+  const noRuntime = components.length === 0
+
+  const builds: DeployCommand[] = []
+  const syncs: DeployCommand[] = []
+  const restarts: DeployCommand[] = []
+  const backupDirs: string[] = []
+
+  if (web) {
+    builds.push({
+      label: 'Web 构建',
+      command: 'pnpm',
+      args: ['--filter', '@dianjie/web', 'build'],
+      cwd: repo,
+      timeoutMs: 600_000,
+    })
+    backupDirs.push('apps/web/apps/web')
+    const standalone = path.join(repo, 'apps/web/.next/standalone/apps/web/')
+    const staticDir = path.join(repo, 'apps/web/.next/static/')
+    const publicDir = path.join(repo, 'apps/web/public/')
+    syncs.push(
+      {
+        label: 'Web 同步 standalone',
+        command: 'rsync',
+        args: ['-az', '--delete', standalone, `${target}/apps/web/apps/web/`],
+        cwd: repo,
+        timeoutMs: 120_000,
+      },
+      {
+        label: 'Web 同步 static',
+        command: 'rsync',
+        args: ['-az', '--delete', staticDir, `${target}/apps/web/apps/web/.next/static/`],
+        cwd: repo,
+        timeoutMs: 120_000,
+      },
+      {
+        label: 'Web 同步 public',
+        command: 'rsync',
+        args: ['-az', '--delete', publicDir, `${target}/apps/web/apps/web/public/`],
+        cwd: repo,
+        timeoutMs: 120_000,
+      },
+    )
+    // 不带 --update-env：API 进程自身的 PORT=4004 不能污染 Web 的 3204 配置。
+    restarts.push({
+      label: 'Web 重启',
+      command: 'pm2',
+      args: ['restart', 'dianjie-v4-web'],
+      cwd: repo,
+      timeoutMs: 60_000,
+    })
+  }
+
+  if (api) {
+    builds.push({
+      label: 'API 构建',
+      command: 'pnpm',
+      args: ['--filter', '@dianjie/api', 'build'],
+      cwd: repo,
+      timeoutMs: 600_000,
+    })
+    // 只同步编译产物 dist：绝不触碰 package/schema/migration/依赖/环境变量。
+    backupDirs.push('apps/api/dist')
+    const distDir = path.join(repo, 'apps/api/dist/')
+    syncs.push({
+      label: 'API 同步 dist',
+      command: 'rsync',
+      args: ['-az', '--delete', distDir, `${target}/apps/api/dist/`],
+      cwd: repo,
+      timeoutMs: 120_000,
+    })
+    // 不带 --update-env，避免污染 Web 的 3204 配置。
+    restarts.push({
+      label: 'API 重启',
+      command: 'pm2',
+      args: ['restart', 'dianjie-v4-api'],
+      cwd: repo,
+      timeoutMs: 60_000,
+    })
+  }
+
+  const backups: DeployCommand[] = []
+  let backupArchivePath: string | null = null
+  if (!noRuntime) {
+    backupArchivePath = `${backupDir}/autofix-${components.join('-')}-${runId}-${timestamp}.tar.gz`
+    backups.push(
+      { label: '创建备份目录', command: 'mkdir', args: ['-p', backupDir], cwd: target, timeoutMs: 30_000 },
+      {
+        label: `备份生产目录(${backupDirs.join(',')})`,
+        command: 'tar',
+        args: ['-czf', backupArchivePath, '-C', target, ...backupDirs],
+        cwd: target,
+        timeoutMs: 120_000,
+      },
+    )
+  }
+
+  return {
+    components,
+    web,
+    api,
+    noRuntime,
+    builds,
+    backups,
+    syncs,
+    restarts,
+    backupArchivePath,
+    backupDirs,
+  }
+}
+
+async function runCommand(cmd: DeployCommand): Promise<RunCommandResult> {
+  return run(cmd.cwd, cmd.command, cmd.args, cmd.timeoutMs)
+}
+
+/**
+ * 按计划执行生产发布：先全部构建，再统一备份，最后同步并重启。
+ * noRuntime（仅测试改动）时不触碰生产，仅记录跳过日志。
+ */
+async function executeDeploymentPlan(plan: DeploymentPlan): Promise<string> {
+  const logs: string[] = []
+  if (plan.noRuntime) {
+    logs.push('[deploy] 无运行组件变更（仅测试/非运行产物），跳过构建/备份/同步/重启')
+    return logs.join('\n').slice(-MAX_LOG_CHARS)
+  }
+  logs.push(`[deploy] 组件=${plan.components.join('+')} 备份=${plan.backupArchivePath}`)
+  for (const cmd of plan.builds) logs.push((await runCommand(cmd)).output)
+  for (const cmd of plan.backups) logs.push((await runCommand(cmd)).output)
+  for (const cmd of plan.syncs) logs.push((await runCommand(cmd)).output)
+  for (const cmd of plan.restarts) logs.push((await runCommand(cmd)).output)
+  return `${logs.join('\n')}\nbackup=${plan.backupArchivePath}`.slice(-MAX_LOG_CHARS)
+}
+
+/** 从补丁推导原始变更文件路径；解析失败返回空数组。 */
+function changedPathsFromDiff(diffPatch: string | null | undefined): string[] {
+  if (!diffPatch) return []
+  const inspection = inspectUnifiedDiff(diffPatch)
+  if (!inspection.ok) return []
+  return inspection.files.map((file) => file.path)
 }
 
 async function verifyProduction(contextPath: string) {
@@ -435,6 +605,7 @@ export async function executeApprovedRun(runId: string) {
   const target = productionDir()
   let commitSha = ''
   let log = ''
+  let changedPaths: string[] = []
   let candidate: DeploymentCandidate | null = null
   let deploymentStarted = false
   let recovery: DeploymentRecoveryState = 'NOT_REQUIRED'
@@ -453,6 +624,8 @@ export async function executeApprovedRun(runId: string) {
     }
     const inspection = inspectUnifiedDiff(runRecord.diffPatch)
     if (!inspection.ok) throw new Error(inspection.errors.join('；'))
+    // 原始变更路径：正常发布与失败恢复共用，保证恢复相同组件。
+    changedPaths = inspection.files.map((file) => file.path)
     const effectiveBase = await resolveDeployBaseline({
       repo,
       target,
@@ -467,7 +640,7 @@ export async function executeApprovedRun(runId: string) {
       repo,
       baseCommitSha: effectiveBase,
       diffPatch: runRecord.diffPatch,
-      files: inspection.files.map((file) => file.path),
+      files: changedPaths,
       runId: runRecord.id,
     })
     commitSha = candidate.commitSha
@@ -475,7 +648,13 @@ export async function executeApprovedRun(runId: string) {
     await persistCandidateSource(repo, runRecord.id, runRecord.tenantId, commitSha)
 
     deploymentStarted = true
-    log = await buildAndSyncWeb(candidate.worktreeDir, target, runRecord.id)
+    const deployPlan = planDeployment({
+      repo: candidate.worktreeDir,
+      target,
+      runId: runRecord.id,
+      changedPaths,
+    })
+    log = await executeDeploymentPlan(deployPlan)
     await prisma.autoFixRun.update({
       where: { id: runRecord.id },
       data: { status: 'VERIFY_PROD' as any, commitSha, deployLog: log, nextRetryAt: null },
@@ -522,7 +701,14 @@ export async function executeApprovedRun(runId: string) {
           ? await gitOutput(candidate.worktreeDir, ['rev-parse', 'HEAD^'])
           : ''
         await requireCleanPinnedRepo(repo, baseCommitSha)
-        log = `${log}\n${(await buildAndSyncWeb(repo, target, `${runId}-rollback`)).slice(-20_000)}`
+        // 恢复使用与正常发布相同的 changedPaths，保证回滚相同组件，不退化为只恢复 Web。
+        const recoveryPlan = planDeployment({
+          repo,
+          target,
+          runId: `${runId}-rollback`,
+          changedPaths,
+        })
+        log = `${log}\n${(await executeDeploymentPlan(recoveryPlan)).slice(-20_000)}`
         await verifyProduction('/v2/login')
         await writeFile(path.join(target, '.deployed-commit'), `${baseCommitSha}\n`, { mode: 0o600 })
         recovery = 'COMPLETED'
@@ -546,6 +732,7 @@ export async function executeManualRollback(runId: string) {
   const repo = sourceDir()
   const target = productionDir()
   let log = ''
+  let changedPaths: string[] = []
   let recovery: DeploymentRecoveryState = 'NOT_REQUIRED'
   let recoveryError = ''
   let candidate: DeploymentCandidate | null = null
@@ -559,6 +746,15 @@ export async function executeManualRollback(runId: string) {
     if (!runRecord?.commitSha || runRecord.status !== ('DEPLOYING' as any)) {
       throw new Error('当前记录不可回滚')
     }
+    // 原始变更路径：与原部署一致，保证回滚相同组件，不退化为只恢复 Web。
+    changedPaths = changedPathsFromDiff(runRecord.diffPatch)
+    if (changedPaths.length === 0) {
+      // 兜底：补丁不可用时从已部署提交反推改动文件。
+      const names = await gitOutput(repo, [
+        'diff-tree', '--no-commit-id', '--name-only', '-r', runRecord.commitSha,
+      ])
+      changedPaths = names.split('\n').map((line) => line.trim()).filter(Boolean)
+    }
     await requireProductionBaseline(target, runRecord.commitSha)
     await requireCleanPinnedRepo(repo, runRecord.commitSha)
     candidate = await prepareRevertedDeploymentCandidate({
@@ -571,7 +767,13 @@ export async function executeManualRollback(runId: string) {
     await persistCandidateSource(repo, `${runRecord.id}-rollback`, runRecord.tenantId, rollbackSha)
 
     deploymentStarted = true
-    log = await buildAndSyncWeb(candidate.worktreeDir, target, `${runId}-manual-rollback`)
+    const rollbackPlan = planDeployment({
+      repo: candidate.worktreeDir,
+      target,
+      runId: `${runId}-manual-rollback`,
+      changedPaths,
+    })
+    log = await executeDeploymentPlan(rollbackPlan)
     const health = await verifyProduction('/v2/login')
     await writeFile(path.join(target, '.deployed-commit'), `${rollbackSha}\n`, { mode: 0o600 })
     await promoteCandidateMain(
@@ -619,11 +821,14 @@ export async function executeManualRollback(runId: string) {
           ? await gitOutput(candidate.worktreeDir, ['rev-parse', 'HEAD^'])
           : ''
         await requireCleanPinnedRepo(repo, deployedCommitSha)
-        log = `${log}\n${(await buildAndSyncWeb(
+        // 恢复使用与回滚相同的 changedPaths，保证恢复相同组件。
+        const restorePlan = planDeployment({
           repo,
           target,
-          `${runId}-manual-rollback-restore`,
-        )).slice(-20_000)}`
+          runId: `${runId}-manual-rollback-restore`,
+          changedPaths,
+        })
+        log = `${log}\n${(await executeDeploymentPlan(restorePlan)).slice(-20_000)}`
         await verifyProduction('/v2/login')
         await writeFile(path.join(target, '.deployed-commit'), `${deployedCommitSha}\n`, { mode: 0o600 })
         recovery = 'COMPLETED'

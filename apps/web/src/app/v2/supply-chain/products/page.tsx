@@ -125,6 +125,9 @@ export default function InternalSupplyChainProductsPage() {
   // null 表示尚未算出，先回退到服务端分类主数据自带的全状态计数。
   const [categoryCounts, setCategoryCounts] = useState<Record<string, number> | null>(null)
   const [bulkCategories, setBulkCategories] = useState<CategoryOption[]>([])
+  // 编辑/新增弹窗按表单所选供应商单独取分类，沿用分类管理页同一接口与 sortOrder 顺序，
+  // 使下拉顺序与分类管理页一致；null 表示尚未取到，先回退到全局分类列表。
+  const [formCategories, setFormCategories] = useState<CategoryOption[] | null>(null)
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -224,6 +227,29 @@ export default function InternalSupplyChainProductsPage() {
       })
     return () => { active = false }
   }, [filters.supplierId])
+
+  // 弹窗打开且选定供应商时，按该供应商取分类（与分类管理页同接口、同 sortOrder 顺序），
+  // 仅保留启用项，供编辑/新增时下拉选择；未选供应商则回退到全局列表。
+  useEffect(() => {
+    if (!formOpen || !form.supplierId) {
+      setFormCategories(null)
+      return
+    }
+    let active = true
+    apiFetch<Array<CategoryOption & { isActive?: boolean }>>(
+      `/api/products/categories?supplierId=${encodeURIComponent(form.supplierId)}`,
+    )
+      .then(data => {
+        if (!active) return
+        setFormCategories(
+          (Array.isArray(data) ? data : []).filter(category => category.isActive !== false),
+        )
+      })
+      .catch(() => {
+        if (active) setFormCategories(null)
+      })
+    return () => { active = false }
+  }, [formOpen, form.supplierId])
 
   const totalPages = Math.max(1, Math.ceil(total / filters.pageSize))
 
@@ -375,12 +401,22 @@ export default function InternalSupplyChainProductsPage() {
           ? current
           : [...current, { name: createdName, count: created?.count ?? 0 }],
       )
+      setFormCategories(current =>
+        current === null || current.some(category => category.name === createdName)
+          ? current
+          : [...current, { name: createdName, count: created?.count ?? 0 }],
+      )
       setForm(current => ({ ...current, category: createdName }))
       setCategoryNotice(null)
     } catch (reason: any) {
       if (reason?.status === 409) {
         setCategories(current =>
           current.some(category => category.name === name)
+            ? current
+            : [...current, { name, count: 0 }],
+        )
+        setFormCategories(current =>
+          current === null || current.some(category => category.name === name)
             ? current
             : [...current, { name, count: 0 }],
         )
@@ -835,7 +871,7 @@ export default function InternalSupplyChainProductsPage() {
           formError={formError}
           submitting={submitting || uploading}
           pendingImagePreview={pendingImagePreview}
-          categories={categories}
+          categories={formCategories ?? categories}
           suppliers={suppliers}
           priceOnly={false}
           creatingCategory={creatingCategory}

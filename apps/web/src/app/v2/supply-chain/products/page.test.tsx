@@ -148,7 +148,7 @@ describe('商品管理 PC 页面 · 编辑弹窗分类组合框', () => {
     const { container, root } = render(<InternalSupplyChainProductsPage />)
     await waitFor(() => container.textContent?.includes('土豆') ?? false)
 
-    act(() => findButton(container, '编辑')?.click())
+    await act(async () => { findButton(container, '编辑')?.click() })
     await waitFor(() => container.textContent?.includes('编辑「土豆」') ?? false)
 
     const label = getCategoryLabel(container)
@@ -176,7 +176,7 @@ describe('商品管理 PC 页面 · 编辑弹窗分类组合框', () => {
     const { container, root } = render(<InternalSupplyChainProductsPage />)
     await waitFor(() => container.textContent?.includes('土豆') ?? false)
 
-    act(() => findButton(container, '编辑')?.click())
+    await act(async () => { findButton(container, '编辑')?.click() })
     await waitFor(() => container.textContent?.includes('编辑「土豆」') ?? false)
 
     const label = getCategoryLabel(container)
@@ -195,7 +195,7 @@ describe('商品管理 PC 页面 · 编辑弹窗分类组合框', () => {
     const { container, root } = render(<InternalSupplyChainProductsPage />)
     await waitFor(() => container.textContent?.includes('土豆') ?? false)
 
-    act(() => findButton(container, '编辑')?.click())
+    await act(async () => { findButton(container, '编辑')?.click() })
     await waitFor(() => container.textContent?.includes('编辑「土豆」') ?? false)
 
     const label = getCategoryLabel(container)
@@ -214,7 +214,7 @@ describe('商品管理 PC 页面 · 编辑弹窗分类组合框', () => {
     const { container, root } = render(<InternalSupplyChainProductsPage />)
     await waitFor(() => container.textContent?.includes('土豆') ?? false)
 
-    act(() => findButton(container, '编辑')?.click())
+    await act(async () => { findButton(container, '编辑')?.click() })
     await waitFor(() => container.textContent?.includes('编辑「土豆」') ?? false)
 
     const label = getCategoryLabel(container)

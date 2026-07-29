@@ -16,6 +16,7 @@ import {
   hasActiveFilters,
   isNewCategoryName,
   keepFiltersForPage,
+  mergeCategoryOptions,
   parseProductQuantity,
   productImageAlt,
   productStatusTone,
@@ -121,6 +122,51 @@ describe('countProductsByCategory', () => {
 
   it('returns empty object for empty list', () => {
     expect(countProductsByCategory([])).toEqual({})
+  })
+})
+
+describe('mergeCategoryOptions', () => {
+  it('appends master-only categories (e.g. newly created 0-SKU) after base, keeping base order', () => {
+    const base = [{ name: '蔬菜', count: 3 }]
+    const merged = mergeCategoryOptions(base, [
+      [{ name: '蔬菜', count: 3, isActive: true }, { name: '禽类', count: 0, isActive: true }],
+      [{ name: '火锅食材·素菜', count: 0, isActive: true }],
+    ])
+    expect(merged).toEqual([
+      { name: '蔬菜', count: 3 },
+      { name: '禽类', count: 0 },
+      { name: '火锅食材·素菜', count: 0 },
+    ])
+  })
+
+  it('dedupes by name across base and multiple master lists', () => {
+    const merged = mergeCategoryOptions(
+      [{ name: '蔬菜', count: 2 }],
+      [
+        [{ name: '禽类', count: 0, isActive: true }],
+        [{ name: '禽类', count: 0, isActive: true }, { name: '菌类', count: 1, isActive: true }],
+      ],
+    )
+    expect(merged.map(c => c.name)).toEqual(['蔬菜', '禽类', '菌类'])
+  })
+
+  it('skips inactive master categories', () => {
+    const merged = mergeCategoryOptions([], [
+      [{ name: '已停用', count: 0, isActive: false }, { name: '禽类', count: 0, isActive: true }],
+    ])
+    expect(merged).toEqual([{ name: '禽类', count: 0 }])
+  })
+
+  it('treats missing isActive as active and defaults count to 0', () => {
+    const merged = mergeCategoryOptions([], [[{ name: '禽类' } as { name: string; count: number }]])
+    expect(merged).toEqual([{ name: '禽类', count: 0 }])
+  })
+
+  it('returns a copy of base when there are no master lists', () => {
+    const base = [{ name: '蔬菜', count: 1 }]
+    const merged = mergeCategoryOptions(base, [])
+    expect(merged).toEqual([{ name: '蔬菜', count: 1 }])
+    expect(merged).not.toBe(base)
   })
 })
 

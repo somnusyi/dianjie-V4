@@ -50,6 +50,9 @@ export type SupplyProduct = {
 
 export type CategoryOption = { name: string; count: number }
 
+/** 供应商分类主数据项（GET /api/products/categories?supplierId=… 的返回形态）。 */
+export type MasterCategoryOption = CategoryOption & { isActive?: boolean }
+
 export type SupplierOption = { id: string; name: string }
 
 /** 四位商品数量字段的表单类型（库存、安全库存、起订量、步长）。 */
@@ -169,6 +172,33 @@ export function countProductsByCategory(
     counts[name] = (counts[name] ?? 0) + 1
   }
   return counts
+}
+
+/**
+ * 合并分类选项：以 base（不带供应商的聚合接口返回，仅含有商品的分类）为基础，
+ * 追加各供应商分类主数据中尚未出现、且未停用（isActive !== false）的分类，
+ * 按 name 去重并保留 base 原有顺序。
+ *
+ * 供内部供应链商品管理页使用：左侧分类树/筛选下拉走的聚合接口不会返回新建但
+ * 0 SKU 的分类，导致分类管理页新建的分类在这里看不见；逐供应商补取主数据并合并后，
+ * 新建分类即可显示。计数仍由页面按当前筛选聚合替换，此处仅补全选项名。
+ */
+export function mergeCategoryOptions(
+  base: CategoryOption[],
+  masterLists: MasterCategoryOption[][],
+): CategoryOption[] {
+  const result: CategoryOption[] = base.map(category => ({ ...category }))
+  const seen = new Set(result.map(category => category.name))
+  for (const list of masterLists) {
+    for (const category of list) {
+      if (category.isActive === false) continue
+      const name = category.name
+      if (!name || seen.has(name)) continue
+      seen.add(name)
+      result.push({ name, count: category.count ?? 0 })
+    }
+  }
+  return result
 }
 
 /**

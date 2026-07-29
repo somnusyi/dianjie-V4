@@ -46,7 +46,18 @@ describe('feedback system flow (integration)', () => {
     oldRepoDir = process.env.AUTO_FIX_REPO_DIR
     process.env.QWEN_API_KEY = 'integration-test-placeholder'
     process.env.AUTO_FIX_MODE = 'off'
-    vi.stubGlobal('fetch', vi.fn(async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+      if (url.startsWith('https://example.com/')) {
+        return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
+          status: 200,
+          headers: { 'Content-Type': 'image/jpeg' },
+        })
+      }
       const next = qwenQueue.shift()
       if (!next) throw new Error('qwenQueue exhausted')
       return qwenResponse(next)
@@ -228,7 +239,7 @@ describe('feedback system flow (integration)', () => {
       })
       expect(response.statusCode).toBe(200)
       const body = response.json()
-      expect(body.automationStatus).toBe('queued')
+      expect(body.automationStatus).toBe('agent_dev')
       expect(body.autoRunId).toBeTruthy()
 
       const run = await prisma.autoFixRun.findUnique({ where: { id: body.autoRunId } })
@@ -280,7 +291,7 @@ describe('feedback system flow (integration)', () => {
       expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 400])
       const accepted = responses.find((response) => response.statusCode === 200)!
       expect(accepted.json()).toMatchObject({
-        automationStatus: 'queued',
+        automationStatus: 'agent_dev',
       })
       expect(accepted.json().autoRunId).toBeTruthy()
 
@@ -320,7 +331,7 @@ describe('feedback system flow (integration)', () => {
           tenantId: tenantA,
           feedbackId: feedback.id,
           role: 'system',
-          content: { contains: '自动开发任务已排队' },
+          content: { contains: 'AI 开始自动设计方案' },
         },
       })).toBe(1)
       expect(await prisma.notification.count({

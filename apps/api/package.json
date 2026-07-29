@@ -11,7 +11,7 @@
     "start": "node dist/index.js",
     "pretest": "pnpm run prisma:generate",
     "test": "vitest run --reporter=verbose",
-    "pretest:integration": "pnpm run prisma:generate",
+    "pretest:integration": "pnpm run prisma:generate && node scripts/prepare-integration-db.mjs",
     "test:integration": "vitest run --config vitest.integration.config.ts --reporter=verbose",
     "pretest:watch": "pnpm run prisma:generate",
     "test:watch": "vitest --reporter=verbose",

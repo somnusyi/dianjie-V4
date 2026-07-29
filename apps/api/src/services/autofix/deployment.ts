@@ -289,48 +289,73 @@ async function resolveFeedback(runId: string, commitSha: string, health: string,
   })
 }
 
-function githubRemote(): string {
+function sourceRemote(): string {
   return process.env.AUTO_FIX_GIT_REMOTE || 'git@github-dianjie:somnusyi/dianjie-V4.git'
 }
 
+export function autoFixCandidateRef(runId: string): string {
+  if (!/^[A-Za-z0-9._-]+$/.test(runId)) throw new Error('自动修复任务 ID 不能用于远程引用')
+  return `refs/heads/autofix/candidates/${runId}`
+}
+
 /**
- * 部署成功后把服务器 main 推回 GitHub。只做快进推送：
- * 若 GitHub 出现未部署的分叉提交，绝不自动合并（避免源码基线领先生产基线，
- * 导致下一单 requireProductionBaseline 失败），改为记 OpLog 待人工对齐。
- * 任何失败都不能影响已完成的部署。
+ * 在触碰生产前把不可变候选提交持久化到远程专用分支。
+ * 远程不可写时直接失败，生产不会开始部署。
  */
-async function syncGithubMain(repo: string, runId: string, tenantId: string): Promise<void> {
-  const remote = githubRemote()
-  try {
-    await run(repo, 'git', ['push', remote, 'main'], 60_000)
-    await prisma.opLog.create({
-      data: {
-        tenantId,
-        role: 'AI',
-        action: `AI 自动修复 ${runId} 已同步 GitHub main`,
-        entityType: 'AutoFixRun',
-        targetId: runId,
-        isAi: true,
-        metadata: { reason: 'github_synced' } as any,
-      },
-    })
-  } catch (pushError: any) {
-    console.error('[autofix] GitHub 同步失败（生产不受影响，待人工对齐）:', pushError)
-    await prisma.opLog.create({
-      data: {
-        tenantId,
-        role: 'AI',
-        action: `AI 自动修复 ${runId} GitHub 同步失败，以生产为准，待人工 git 对齐`.slice(0, 500),
-        entityType: 'AutoFixRun',
-        targetId: runId,
-        isAi: true,
-        metadata: {
-          reason: 'github_sync_failed',
-          error: (pushError?.message || String(pushError)).slice(0, 500),
-        } as any,
-      },
-    }).catch((error) => console.error('[autofix] 记录 GitHub 同步失败日志出错:', error))
-  }
+async function persistCandidateSource(
+  repo: string,
+  runId: string,
+  tenantId: string,
+  commitSha: string,
+): Promise<void> {
+  const remote = sourceRemote()
+  const ref = autoFixCandidateRef(runId)
+  await run(repo, 'git', ['push', remote, `${commitSha}:${ref}`], 60_000)
+  await prisma.opLog.create({
+    data: {
+      tenantId,
+      role: 'AI',
+      action: `AI 自动修复 ${runId} 候选源码已持久化，允许进入生产发布`,
+      entityType: 'AutoFixRun',
+      targetId: runId,
+      isAi: true,
+      metadata: { reason: 'remote_candidate_persisted', commitSha, ref } as any,
+    },
+  })
+}
+
+/**
+ * 生产验证通过后，以显式 lease 把候选提交晋升为远程 main。
+ * 若 main 已被其他发布推进，晋升失败并触发生产回滚，避免生产领先源码主线。
+ */
+async function promoteCandidateMain(
+  repo: string,
+  runId: string,
+  tenantId: string,
+  expectedBase: string,
+  commitSha: string,
+): Promise<void> {
+  const remote = sourceRemote()
+  const ref = autoFixCandidateRef(runId)
+  await run(repo, 'git', [
+    'push',
+    `--force-with-lease=refs/heads/main:${expectedBase}`,
+    remote,
+    `${commitSha}:refs/heads/main`,
+  ], 60_000)
+  await prisma.opLog.create({
+    data: {
+      tenantId,
+      role: 'AI',
+      action: `AI 自动修复 ${runId} 已晋升远程 main`,
+      entityType: 'AutoFixRun',
+      targetId: runId,
+      isAi: true,
+      metadata: { reason: 'remote_main_promoted', commitSha, expectedBase } as any,
+    },
+  })
+  await run(repo, 'git', ['push', remote, '--delete', ref], 60_000)
+    .catch((error) => console.error('[autofix] 清理远程候选分支失败:', error))
 }
 
 async function markDeploymentFailure(
@@ -378,6 +403,33 @@ async function markDeploymentFailure(
   })
 }
 
+async function markPostPromotionFailure(runId: string, error: unknown, log: string) {
+  const message = error instanceof Error ? error.message : String(error)
+  const run = await prisma.autoFixRun.update({
+    where: { id: runId },
+    data: {
+      status: 'ESCALATED' as any,
+      error: `生产与远程源码已更新，但发布收尾失败：${message}`.slice(0, 20_000),
+      deployLog: log.slice(-MAX_LOG_CHARS),
+    },
+  })
+  await prisma.opLog.create({
+    data: {
+      tenantId: run.tenantId,
+      role: 'AI',
+      action: `AI 自动修复 ${run.id} 生产与远程源码已更新，但发布收尾失败，已转人工`,
+      entityType: 'AutoFixRun',
+      targetId: run.id,
+      isAi: true,
+      metadata: {
+        status: 'ESCALATED',
+        reason: 'post_promotion_finalize_failed',
+        error: message.slice(0, 500),
+      } as any,
+    },
+  })
+}
+
 export async function executeApprovedRun(runId: string) {
   const repo = sourceDir()
   const target = productionDir()
@@ -387,6 +439,7 @@ export async function executeApprovedRun(runId: string) {
   let deploymentStarted = false
   let recovery: DeploymentRecoveryState = 'NOT_REQUIRED'
   let recoveryError = ''
+  let remotePromoted = false
   let releaseLock: (() => Promise<void>) | null = null
   try {
     if (!deploymentEnabled()) throw new Error('自动修复部署开关未启用')
@@ -419,6 +472,7 @@ export async function executeApprovedRun(runId: string) {
     })
     commitSha = candidate.commitSha
     await run(repo, 'git', ['tag', `autofix-${runRecord.id}`, commitSha], 30_000)
+    await persistCandidateSource(repo, runRecord.id, runRecord.tenantId, commitSha)
 
     deploymentStarted = true
     log = await buildAndSyncWeb(candidate.worktreeDir, target, runRecord.id)
@@ -429,15 +483,22 @@ export async function executeApprovedRun(runId: string) {
     const contextPath = String((runRecord.feedback?.context as any)?.path || '/v2/login')
     const health = await verifyProduction(contextPath)
     await writeFile(path.join(target, '.deployed-commit'), `${commitSha}\n`, { mode: 0o600 })
+    await promoteCandidateMain(
+      repo,
+      runRecord.id,
+      runRecord.tenantId,
+      effectiveBase,
+      commitSha,
+    )
+    remotePromoted = true
+    await requireCleanPinnedRepo(repo, effectiveBase)
+    await run(repo, 'git', ['merge', '--ff-only', commitSha], 30_000)
     await resolveFeedback(runRecord.id, commitSha, health, log)
-    try {
-      await requireCleanPinnedRepo(repo, effectiveBase)
-      await run(repo, 'git', ['merge', '--ff-only', commitSha], 30_000)
-      await syncGithubMain(repo, runRecord.id, runRecord.tenantId)
-    } catch (sourceSyncError) {
-      console.error('[autofix] 生产已验证，但源码分支快进待维护:', sourceSyncError)
-    }
   } catch (error) {
+    if (remotePromoted) {
+      await markPostPromotionFailure(runId, error, log)
+      return
+    }
     // 部署锁冲突且尚未开始部署：排队等待自动重试（每 5 分钟），不转人工、无需回滚
     if (isDeployLockBusyError(error) && !deploymentStarted) {
       const scheduled = await scheduleLockRetry(runId).catch((retryError) => {
@@ -489,6 +550,7 @@ export async function executeManualRollback(runId: string) {
   let recoveryError = ''
   let candidate: DeploymentCandidate | null = null
   let deploymentStarted = false
+  let remotePromoted = false
   let releaseLock: (() => Promise<void>) | null = null
   try {
     if (!deploymentEnabled()) throw new Error('自动修复部署开关未启用')
@@ -506,11 +568,22 @@ export async function executeManualRollback(runId: string) {
     })
     const rollbackSha = candidate.commitSha
     await run(repo, 'git', ['tag', `autofix-rollback-${runRecord.id}`, rollbackSha], 30_000)
+    await persistCandidateSource(repo, `${runRecord.id}-rollback`, runRecord.tenantId, rollbackSha)
 
     deploymentStarted = true
     log = await buildAndSyncWeb(candidate.worktreeDir, target, `${runId}-manual-rollback`)
     const health = await verifyProduction('/v2/login')
     await writeFile(path.join(target, '.deployed-commit'), `${rollbackSha}\n`, { mode: 0o600 })
+    await promoteCandidateMain(
+      repo,
+      `${runRecord.id}-rollback`,
+      runRecord.tenantId,
+      runRecord.commitSha,
+      rollbackSha,
+    )
+    remotePromoted = true
+    await requireCleanPinnedRepo(repo, runRecord.commitSha)
+    await run(repo, 'git', ['merge', '--ff-only', rollbackSha], 30_000)
     const runRecordUpdated = await prisma.autoFixRun.update({
       where: { id: runId },
       data: { status: 'ROLLED_BACK' as any, deployLog: `${log}\n${health}`.slice(-MAX_LOG_CHARS) },
@@ -534,14 +607,11 @@ export async function executeManualRollback(runId: string) {
       bypassFrequency: true,
       bypassSilent: true,
     })
-    try {
-      await requireCleanPinnedRepo(repo, runRecord.commitSha)
-      await run(repo, 'git', ['merge', '--ff-only', rollbackSha], 30_000)
-      await syncGithubMain(repo, runRecord.id, runRecord.tenantId)
-    } catch (sourceSyncError) {
-      console.error('[autofix] 生产回滚已验证，但源码分支快进待维护:', sourceSyncError)
-    }
   } catch (error) {
+    if (remotePromoted) {
+      await markPostPromotionFailure(runId, error, log)
+      return
+    }
     try {
       if (deploymentStarted) {
         recovery = 'FAILED'

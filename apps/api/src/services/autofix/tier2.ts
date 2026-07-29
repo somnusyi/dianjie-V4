@@ -15,7 +15,7 @@ import { promisify } from 'node:util'
 import { prisma } from '@dianjie/db'
 import { fireAndForget as notify } from '../notify'
 import { qwenChat, QWEN_BUSY_FALLBACK, QWEN_NOT_CONFIGURED } from '../qwenChat'
-import { inspectUnifiedDiff } from './policy'
+import { inspectUnifiedDiff, isAutoFixModeEnabled } from './policy'
 import { requireCleanRepoHead } from './repository'
 
 const execFileAsync = promisify(execFile)
@@ -154,6 +154,7 @@ export async function enqueueAgentDev(input: {
   feedbackId: string
   approvedById?: string
 }): Promise<string | null> {
+  if (!isAutoFixModeEnabled()) return null
   try {
     const run = await prisma.autoFixRun.create({
       data: {

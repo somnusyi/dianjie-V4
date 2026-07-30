@@ -17,8 +17,8 @@ import { promisify } from 'node:util'
 import { prisma } from '@dianjie/db'
 import { fireAndForget as notify } from '../notify'
 import { qwenChat, QWEN_BUSY_FALLBACK, QWEN_NOT_CONFIGURED } from '../qwenChat'
-import { planChanges, planVerificationSteps, runVerificationSteps } from './changePlan'
-import { denyPatchFile, inspectUnifiedDiff, isAutoFixModeEnabled } from './policy'
+import { planChanges, planVerificationSteps, resolveIntegrationTestEnv, runVerificationSteps } from './changePlan'
+import { denyPatchFile, inspectUnifiedDiff, isAutoFixModeEnabled, isCoreApiEnabled, type PolicyOptions } from './policy'
 import { requireCleanRepoHead } from './repository'
 
 const execFileAsync = promisify(execFile)
@@ -67,9 +67,10 @@ export function parseChangedPaths(nameOnlyZ: string): string[] {
 /**
  * 档2 范围检查: 与 policy.denyPatchFile 共用同一闸门，允许 Web 源码与非核心 API 源码/测试，
  * 拒绝核心库存写入/资金/认证/数据库/未知。返回越界文件列表（空数组=通过）。
+ * options.allowCoreBusinessApi=true 时，核心经营 API 文件放行（仍受永久红线约束）。
  */
-export function findOutOfScopeFiles(paths: string[]): string[] {
-  return paths.filter((p) => denyPatchFile(p) !== null)
+export function findOutOfScopeFiles(paths: string[], options: PolicyOptions = {}): string[] {
+  return paths.filter((p) => denyPatchFile(p, options) !== null)
 }
 
 /** 从 porcelain 输出提取未跟踪文件（新建文件走不进 diff 补丁，必须显式拒绝）。 */
@@ -84,11 +85,12 @@ export function findUntrackedFiles(porcelain: string): string[] {
 }
 
 /** 按实际改动范围生成"已独立复验"的可读描述，供方案卡片/总结准确展示验证范围。 */
-export function verificationSummary(paths: string[]): string {
-  const plan = planChanges(paths)
+export function verificationSummary(paths: string[], options: PolicyOptions = {}): string {
+  const plan = planChanges(paths, options)
   const parts: string[] = []
   if (plan.verification.web) parts.push('Web 测试与类型检查')
   if (plan.verification.api) parts.push('API 测试、类型检查与构建')
+  if (plan.files.some((f) => f.risk === 'core_business')) parts.push('隔离数据库集成测试')
   return parts.join('、') || '无可验证改动'
 }
 
@@ -99,7 +101,11 @@ export function buildTaskBookPrompt(input: {
   messages: Array<{ role: string; content: string }>
   rootCause: string
   candidateFiles: string[]
+  allowCoreBusinessApi?: boolean
 }): string {
+  const coreApiConstraint = input.allowCoreBusinessApi
+    ? `- 本次已开启核心经营 API 准入（AUTO_FIX_CORE_API_ENABLED=true）：允许修改 apps/api/src 与 apps/api/tests 下的核心经营 TypeScript（库存、订单、采购、收货、实发、盘点、报损、BOM 消耗、结算、成本）；认证、权限、资金/支付/财务、环境变量、依赖、部署配置、Prisma schema 与 migrations 仍为永久禁区，不得触碰`
+    : `- 凡需要改 数据库 schema/迁移、核心库存写入（订货/接单实发/验收入库/库存/盘点报损/BOM 消耗/结算）、资金、认证/权限、依赖、部署配置 的需求，不要写任务书，直接输出一行: REJECT: <原因>`
   return `你是滇界系统的开发任务书撰写员。一个用户反馈已被管理员批准，但档1自动修复判定它超出前端小修复白名单。现在要把需求整理成一份给服务器端 AI 编程代理（Qwen Code）执行的开发任务书。
 
 反馈标题: ${input.title || '未命名'}
@@ -123,8 +129,8 @@ ${input.messages.map((m) => `[${m.role}] ${m.content}`).join('\n')}
 <必须运行通过的命令。改 Web 跑: pnpm --filter @dianjie/web test 和 pnpm exec tsc -p apps/web/tsconfig.json --noEmit；改 API 跑: pnpm --filter @dianjie/api test、pnpm --filter @dianjie/db generate、pnpm exec tsc -p apps/api/tsconfig.json --noEmit、pnpm --filter @dianjie/api build；两者都改则两套都跑>
 
 硬约束:
-- 只允许修改或新建 apps/web/src 的前端源码，以及 apps/api/src、apps/api/tests 下的**非核心** TypeScript；不得删除、重命名文件
-- 凡需要改 数据库 schema/迁移、核心库存写入（订货/接单实发/验收入库/库存/盘点报损/BOM 消耗/结算）、资金、认证/权限、依赖、部署配置 的需求，不要写任务书，直接输出一行: REJECT: <原因>
+- 只允许修改或新建 apps/web/src 的前端源码，以及 apps/api/src、apps/api/tests 下的 TypeScript；不得删除、重命名文件
+${coreApiConstraint}
 - 优先复用既有 API 端点与纯函数，任务书中要点名可复用的接口路径和函数名
 - 要求必须具体到可验收，禁止"优化一下""完善体验"这类模糊表述
 - 改动总量控制在 5 个文件、200 行以内，超出就说明拆分建议
@@ -140,7 +146,11 @@ export function buildAgentBrief(input: {
   summary?: string | null
   contextPath: string
   messages: Array<{ role: string; content: string }>
+  allowCoreBusinessApi?: boolean
 }): string {
+  const coreApiConstraint = input.allowCoreBusinessApi
+    ? `- 本次已开启核心经营 API 准入（AUTO_FIX_CORE_API_ENABLED=true）：允许修改 apps/api/src 与 apps/api/tests 下的核心经营 TypeScript（库存、订单、采购、收货、实发、盘点、报损、BOM 消耗、结算、成本）；认证、权限、资金/支付/财务、环境变量、依赖、部署配置、Prisma schema 与 migrations 仍为永久禁区，不得触碰`
+    : `- 不得修改认证、权限、资金、核心库存写入（订货/接单/验收/库存/盘点报损/BOM 消耗/结算）、数据库 schema、依赖、部署配置`
   return `# 任务: 处理一条已获管理员批准的用户反馈
 
 ## 反馈内容
@@ -155,8 +165,8 @@ ${input.messages.map((m) => `[${m.role}] ${m.content}`).join('\n')}
 2. 修改代码，然后按改动范围独立自测: 改 Web 跑 \`pnpm --filter @dianjie/web test\` 和 \`pnpm exec tsc -p apps/web/tsconfig.json --noEmit\`；改 API 跑 \`pnpm --filter @dianjie/api test\`、\`pnpm --filter @dianjie/db generate\`、\`pnpm exec tsc -p apps/api/tsconfig.json --noEmit\`、\`pnpm --filter @dianjie/api build\`；两者都改则两套都跑。有失败就修到全部通过
 
 ## 硬约束（违反将被拒绝发布）
-- 只允许修改或新建 apps/web/src 的前端源码，以及 apps/api/src、apps/api/tests 下的非核心 TypeScript；不得删除、重命名文件
-- 不得修改认证、权限、资金、核心库存写入（订货/接单/验收/库存/盘点报损/BOM 消耗/结算）、数据库 schema、依赖、部署配置
+- 只允许修改或新建 apps/web/src 的前端源码，以及 apps/api/src、apps/api/tests 下的 TypeScript；不得删除、重命名文件
+${coreApiConstraint}
 - 若需求必须触碰以上禁区: 不要改任何代码，直接回复 REJECT: <原因> 并停止
 
 ## 交付
@@ -207,7 +217,10 @@ export async function enqueueAgentDev(input: {
 }
 
 /** 超管聊天简报：老板在手机上直接下达的开发指令，约束与反馈任务一致。 */
-export function buildChatBrief(content: string): string {
+export function buildChatBrief(content: string, allowCoreBusinessApi = false): string {
+  const coreApiConstraint = allowCoreBusinessApi
+    ? `- 本次已开启核心经营 API 准入（AUTO_FIX_CORE_API_ENABLED=true）：允许修改 apps/api/src 与 apps/api/tests 下的核心经营 TypeScript（库存、订单、采购、收货、实发、盘点、报损、BOM 消耗、结算、成本）；认证、权限、资金/支付/财务、环境变量、依赖、部署配置、Prisma schema 与 migrations 仍为永久禁区，不得触碰`
+    : `- 不得修改认证、权限、资金、核心库存写入（订货/接单/验收/库存/盘点报损/BOM 消耗/结算）、数据库 schema、依赖、部署配置`
   return `# 任务: 处理一条超级管理员直接下达的开发指令
 
 ## 指令内容
@@ -218,8 +231,8 @@ ${content}
 2. 修改代码，然后按改动范围独立自测: 改 Web 跑 \`pnpm --filter @dianjie/web test\` 和 \`pnpm exec tsc -p apps/web/tsconfig.json --noEmit\`；改 API 跑 \`pnpm --filter @dianjie/api test\`、\`pnpm --filter @dianjie/db generate\`、\`pnpm exec tsc -p apps/api/tsconfig.json --noEmit\`、\`pnpm --filter @dianjie/api build\`；两者都改则两套都跑。有失败就修到全部通过
 
 ## 硬约束（违反将被拒绝发布）
-- 只允许修改或新建 apps/web/src 的前端源码，以及 apps/api/src、apps/api/tests 下的非核心 TypeScript；不得删除、重命名文件
-- 不得修改认证、权限、资金、核心库存写入（订货/接单/验收/库存/盘点报损/BOM 消耗/结算）、数据库 schema、依赖、部署配置
+- 只允许修改或新建 apps/web/src 的前端源码，以及 apps/api/src、apps/api/tests 下的 TypeScript；不得删除、重命名文件
+${coreApiConstraint}
 - 若需求必须触碰以上禁区或指令无法安全执行: 不要改任何代码，直接回复 REJECT: <原因> 并停止
 
 ## 交付
@@ -232,7 +245,8 @@ export async function enqueueBossChatDev(input: {
   userId: string
   content: string
 }): Promise<string> {
-  const brief = buildChatBrief(input.content)
+  const allowCore = isCoreApiEnabled()
+  const brief = buildChatBrief(input.content, allowCore)
   const run = await prisma.autoFixRun.create({
     data: {
       tenantId: input.tenantId,
@@ -322,6 +336,7 @@ export async function prepareTier2TaskBook(input: {
 }): Promise<'prepared' | 'rejected'> {
   const { run, feedback, analysis } = input
   const contextPath = String((feedback.context as any)?.path || '')
+  const allowCore = isCoreApiEnabled()
   const raw = await qwenChat([
     { role: 'system', content: '你是开发任务书撰写员，只做文档，不改代码。拿不准范围就选拒绝。' },
     {
@@ -333,6 +348,7 @@ export async function prepareTier2TaskBook(input: {
         messages: feedback.messages,
         rootCause: analysis.rootCause,
         candidateFiles: analysis.candidateFiles,
+        allowCoreBusinessApi: allowCore,
       }),
     },
   ])
@@ -397,6 +413,8 @@ export async function runTier2Dev(runId: string): Promise<void> {
   if (!run || run.status !== ('QWEN_DEV' as any)) return
   const repo = repoDir()
   const worktreeDir = `/tmp/qwen-tier2-${run.id}`
+  const allowCore = isCoreApiEnabled()
+  const policyOptions: PolicyOptions = { allowCoreBusinessApi: allowCore }
   try {
     const analysis = JSON.parse(run.analysis || '{}') as Tier2Analysis
     // 简报优先级: 超管聊天指令 > 档2任务书 > 反馈内容直接构建
@@ -405,6 +423,7 @@ export async function runTier2Dev(runId: string): Promise<void> {
       summary: run.feedback?.summary,
       contextPath: String((run.feedback?.context as any)?.path || ''),
       messages: run.feedback?.messages ?? [],
+      allowCoreBusinessApi: allowCore,
     })
     const baseCommitSha = await requireCleanRepoHead(repo)
 
@@ -442,17 +461,24 @@ export async function runTier2Dev(runId: string): Promise<void> {
       if (rejectMatch) throw new Error(`agent 评估拒绝开发: ${rejectMatch[1].slice(0, 300)}`)
       throw new Error(`Qwen Code 未产生任何改动\n${qwenLog.slice(-2_000)}`)
     }
-    const outOfScope = findOutOfScopeFiles(changed)
+    const outOfScope = findOutOfScopeFiles(changed, policyOptions)
     if (outOfScope.length > 0) {
       throw new Error(`改动越出自动修复白名单（Web 源码/非核心 API）: ${outOfScope.join(', ')}`)
     }
 
     // 独立复验：不信 AI 自报。按实际改动范围执行（Web/API/混合），命令一律 command+args 数组。
-    const verificationLog = await runVerificationSteps(planVerificationSteps(changed), { cwd: worktreeDir })
-    const verifiedScope = verificationSummary(changed)
+    // 核心经营 API 改动时额外跑集成测试，且只能使用隔离 DATABASE_URL（在碰数据库前校验）。
+    const changePlan = planChanges(changed, policyOptions)
+    const hasCoreBusiness = changePlan.files.some((f) => f.risk === 'core_business')
+    const integrationTestEnv = hasCoreBusiness ? resolveIntegrationTestEnv() : undefined
+    const verificationLog = await runVerificationSteps(
+      planVerificationSteps(changed, { ...policyOptions, integrationTestEnv }),
+      { cwd: worktreeDir },
+    )
+    const verifiedScope = verificationSummary(changed, policyOptions)
 
     const diffPatch = await gitRaw(worktreeDir, ['diff', '--', '.', ':!node_modules'])
-    const inspection = inspectUnifiedDiff(diffPatch)
+    const inspection = inspectUnifiedDiff(diffPatch, policyOptions)
     if (!inspection.ok) throw new Error(inspection.errors.join('；'))
 
     await transitionRun(run, 'DEPLOY_REVIEW', {

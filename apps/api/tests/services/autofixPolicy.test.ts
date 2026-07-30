@@ -4,6 +4,8 @@ import {
   isApprovedAutoMode,
   isAutoDeploymentEnabled,
   isAutoFixModeEnabled,
+  isCoreApiEnabled,
+  reviewDeploymentPatch,
 } from '../../src/services/autofix/policy'
 
 const safeDiff = `diff --git a/apps/web/src/app/v2/supply-chain/home/page.tsx b/apps/web/src/app/v2/supply-chain/home/page.tsx
@@ -255,5 +257,122 @@ describe('auto-fix mode', () => {
       AUTO_FIX_MODE: 'approved_auto',
       AUTO_FIX_DEPLOY_ENABLED: 'true',
     })).toBe(true)
+  })
+
+  it('isCoreApiEnabled is fail-closed and only enables explicit true', () => {
+    expect(isCoreApiEnabled({})).toBe(false)
+    expect(isCoreApiEnabled({ AUTO_FIX_CORE_API_ENABLED: 'false' })).toBe(false)
+    expect(isCoreApiEnabled({ AUTO_FIX_CORE_API_ENABLED: '1' })).toBe(false)
+    expect(isCoreApiEnabled({ AUTO_FIX_CORE_API_ENABLED: 'true' })).toBe(true)
+  })
+})
+
+describe('core API gate (allowCoreBusinessApi option)', () => {
+  const diffFor = (file: string) =>
+    safeDiff.replaceAll('apps/web/src/app/v2/supply-chain/home/page.tsx', file)
+
+  it('default: rejects core business API paths', () => {
+    const result = inspectUnifiedDiff(diffFor('apps/api/src/routes/orders.ts'))
+    expect(result.ok).toBe(false)
+    expect(result.errors.join(' ')).toContain('库存写入/成本核心路径')
+  })
+
+  it('allowCoreBusinessApi=true: accepts core business API src paths', () => {
+    const result = inspectUnifiedDiff(diffFor('apps/api/src/routes/orders.ts'), { allowCoreBusinessApi: true })
+    expect(result.ok).toBe(true)
+    expect(result.files[0].path).toBe('apps/api/src/routes/orders.ts')
+  })
+
+  it.each([
+    'apps/api/src/services/storeInventory.ts',
+    'apps/api/src/services/receiptSettlement.ts',
+    'apps/api/src/services/receiptDerivatives.ts',
+    'apps/api/src/services/inventoryCosting.ts',
+  ])('allowCoreBusinessApi=true: accepts core business API file %s', (file) => {
+    const result = inspectUnifiedDiff(diffFor(file), { allowCoreBusinessApi: true })
+    expect(result.ok).toBe(true)
+    expect(result.files[0].path).toBe(file)
+  })
+
+  it('allowCoreBusinessApi=true: accepts core business API test paths', () => {
+    const result = inspectUnifiedDiff(diffFor('apps/api/tests/inventory.test.ts'), { allowCoreBusinessApi: true })
+    expect(result.ok).toBe(true)
+  })
+
+  it.each([
+    'apps/api/src/routes/auth.ts',
+    'apps/api/src/routes/payments.ts',
+    'apps/api/src/routes/paymentRequests.ts',
+    'apps/api/src/routes/paymentRules.ts',
+    'apps/api/src/routes/pettyCash.ts',
+    'apps/api/src/routes/invoices.ts',
+    'apps/api/src/routes/capital.ts',
+    'apps/api/src/routes/payroll.ts',
+    'apps/api/src/routes/cmb.ts',
+    'apps/api/src/services/finance/report.ts',
+    'apps/api/src/services/capital/sync.ts',
+    'apps/api/src/services/cmb/sync.ts',
+    'apps/api/tests/services/payments.test.ts',
+    'packages/db/prisma/schema.prisma',
+    'packages/db/prisma/migrations/20990101000000_x/migration.sql',
+    '.env.production',
+    'package.json',
+  ])('allowCoreBusinessApi=true: still rejects permanent redline %s', (file) => {
+    const result = inspectUnifiedDiff(diffFor(file), { allowCoreBusinessApi: true })
+    expect(result.ok).toBe(false)
+    expect(result.errors.join(' ')).toMatch(/红线|白名单/)
+  })
+
+  it('non-core API and Web behavior is unchanged with allowCoreBusinessApi=true', () => {
+    expect(inspectUnifiedDiff(diffFor('apps/api/src/routes/stores.ts'), { allowCoreBusinessApi: true }).ok).toBe(true)
+    expect(inspectUnifiedDiff(safeDiff, { allowCoreBusinessApi: true }).ok).toBe(true)
+  })
+})
+
+describe('reviewDeploymentPatch（部署策略回归）', () => {
+  const coreDiff = safeDiff.replaceAll(
+    'apps/web/src/app/v2/supply-chain/home/page.tsx',
+    'apps/api/src/routes/orders.ts',
+  )
+  const financialDiff = safeDiff.replaceAll(
+    'apps/web/src/app/v2/supply-chain/home/page.tsx',
+    'apps/api/src/routes/payments.ts',
+  )
+
+  it('AUTO_FIX_CORE_API_ENABLED 未设置时拒绝核心经营补丁', () => {
+    const result = reviewDeploymentPatch(coreDiff, {})
+    expect(result.ok).toBe(false)
+    expect(result.errors.join(' ')).toContain('库存写入/成本核心路径')
+  })
+
+  it('AUTO_FIX_CORE_API_ENABLED=false 时拒绝核心经营补丁', () => {
+    const result = reviewDeploymentPatch(coreDiff, { AUTO_FIX_CORE_API_ENABLED: 'false' })
+    expect(result.ok).toBe(false)
+  })
+
+  it('AUTO_FIX_CORE_API_ENABLED=1（非精确 true）时拒绝核心经营补丁', () => {
+    const result = reviewDeploymentPatch(coreDiff, { AUTO_FIX_CORE_API_ENABLED: '1' })
+    expect(result.ok).toBe(false)
+  })
+
+  it('AUTO_FIX_CORE_API_ENABLED=true（精确值）时放行核心经营补丁', () => {
+    const result = reviewDeploymentPatch(coreDiff, { AUTO_FIX_CORE_API_ENABLED: 'true' })
+    expect(result.ok).toBe(true)
+    expect(result.files[0].path).toBe('apps/api/src/routes/orders.ts')
+  })
+
+  it('永久资金红线：即使 AUTO_FIX_CORE_API_ENABLED=true 也始终拒绝', () => {
+    const result = reviewDeploymentPatch(financialDiff, { AUTO_FIX_CORE_API_ENABLED: 'true' })
+    expect(result.ok).toBe(false)
+    expect(result.errors.join(' ')).toMatch(/红线/)
+  })
+
+  it('非核心 API 补丁不受开关影响，始终放行', () => {
+    const normalDiff = safeDiff.replaceAll(
+      'apps/web/src/app/v2/supply-chain/home/page.tsx',
+      'apps/api/src/routes/stores.ts',
+    )
+    expect(reviewDeploymentPatch(normalDiff, {}).ok).toBe(true)
+    expect(reviewDeploymentPatch(normalDiff, { AUTO_FIX_CORE_API_ENABLED: 'true' }).ok).toBe(true)
   })
 })

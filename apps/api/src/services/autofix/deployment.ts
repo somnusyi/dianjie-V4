@@ -18,7 +18,7 @@ import {
 } from './deploymentCandidate'
 import { acquireDeployLock, isDeployLockBusyError } from './deploymentLock'
 import { planDeploymentComponents, type DeployComponent } from './changePlan'
-import { inspectUnifiedDiff, isAutoDeploymentEnabled } from './policy'
+import { inspectUnifiedDiff, isAutoDeploymentEnabled, isCoreApiEnabled } from './policy'
 import { planBaselineResolution, readProductionBaseline, requireProductionBaseline } from './productionBaseline'
 
 const execFileAsync = promisify(execFile)
@@ -622,7 +622,10 @@ export async function executeApprovedRun(runId: string) {
     if (!runRecord || runRecord.status !== ('DEPLOYING' as any) || !runRecord.diffPatch || !runRecord.baseCommitSha) {
       throw new Error('自动修复记录状态或补丁不完整')
     }
-    const inspection = inspectUnifiedDiff(runRecord.diffPatch)
+    // 部署前重新检查同一开关：开关关闭时，即使补丁此前已生成也必须拒绝部署。
+    // 永久红线（认证/权限/资金/schema/迁移等）不受开关影响，始终拒绝。
+    const allowCore = isCoreApiEnabled()
+    const inspection = inspectUnifiedDiff(runRecord.diffPatch, { allowCoreBusinessApi: allowCore })
     if (!inspection.ok) throw new Error(inspection.errors.join('；'))
     // 原始变更路径：正常发布与失败恢复共用，保证恢复相同组件。
     changedPaths = inspection.files.map((file) => file.path)

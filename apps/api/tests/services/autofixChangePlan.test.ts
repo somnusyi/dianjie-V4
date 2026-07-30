@@ -6,6 +6,7 @@ import {
   planChanges,
   planDeploymentComponents,
   planVerificationSteps,
+  resolveIntegrationTestEnv,
   runVerificationSteps,
 } from '../../src/services/autofix/changePlan'
 
@@ -104,8 +105,6 @@ describe('autofix changePlan', () => {
       ['apps/api/src/lib/some-permission.ts', '权限'],
       ['apps/api/src/routes/payments.ts', '资金路由'],
       ['apps/api/src/services/finance/report.ts', '资金服务'],
-      ['apps/api/src/services/inventoryCosting.ts', '库存成本'],
-      ['apps/api/src/services/storeInventory.ts', '库存成本'],
       ['scripts/deploy-worktree.sh', '部署脚本'],
       ['ecosystem.config.js', '部署配置'],
       ['.env.production', '环境变量文件'],
@@ -123,6 +122,42 @@ describe('autofix changePlan', () => {
       expect(plan.files.every((f) => f.risk === 'high')).toBe(true)
       expect(plan.redlines.every((r) => r.includes('依赖与锁文件'))).toBe(true)
     })
+
+    it.each([
+      ['apps/api/src/routes/paymentRequests.ts', '资金路由'],
+      ['apps/api/src/routes/paymentRules.ts', '资金路由'],
+      ['apps/api/src/routes/financeReports.ts', '资金路由'],
+      ['apps/api/src/routes/financeReconcile.ts', '资金路由'],
+      ['apps/api/src/routes/pettyCash.ts', '资金路由'],
+      ['apps/api/src/routes/invoices.ts', '资金路由'],
+      ['apps/api/src/routes/capital.ts', '资金路由'],
+      ['apps/api/src/routes/payroll.ts', '资金路由'],
+      ['apps/api/src/routes/cmb.ts', '资金路由'],
+      ['apps/api/src/services/paymentRequests/create.ts', '资金服务'],
+      ['apps/api/src/services/pettyCash/adjust.ts', '资金服务'],
+      ['apps/api/src/services/invoices/generate.ts', '资金服务'],
+      ['apps/api/src/services/capital/sync.ts', '资金服务'],
+      ['apps/api/src/services/payroll/run.ts', '资金服务'],
+      ['apps/api/src/services/cmb/sync.ts', '资金服务'],
+      ['apps/api/tests/services/payments.test.ts', '资金测试'],
+      ['apps/api/tests/services/cashbook.test.ts', '资金测试'],
+      ['apps/api/tests/services/capital.test.ts', '资金测试'],
+    ])('资金域 %s 始终判为 blocked（%s），不受核心开关影响', (file, reason) => {
+      const planDefault = planChanges([file])
+      expect(planDefault.risk).toBe('blocked')
+      expect(planDefault.redlines).toEqual([`${file}: ${reason}`])
+      // 即使开启核心经营 API 开关，资金域仍为永久红线
+      const planCore = planChanges([file], { allowCoreBusinessApi: true })
+      expect(planCore.risk).toBe('blocked')
+      expect(planCore.blocked).toBe(true)
+    })
+
+    it('普通库存 settlement 路径不误伤为资金域（归 core_business）', () => {
+      const plan = planChanges(['apps/api/src/services/settlement/run.ts'], { allowCoreBusinessApi: true })
+      expect(plan.risk).toBe('core_business')
+      expect(plan.blocked).toBe(false)
+      expect(plan.redlines).toEqual(['apps/api/src/services/settlement/run.ts: 库存写入/成本核心路径'])
+    })
   })
 
   describe('核心库存写入/成本路径（apps/api 专属红线）', () => {
@@ -135,13 +170,48 @@ describe('autofix changePlan', () => {
       'apps/api/src/routes/loss.ts',
       'apps/api/src/services/settlement/run.ts',
       'apps/api/src/services/bom/consumption.ts',
+      // 本阶段允许的核心经营 API（归 core_business，默认拒绝，开关开启才放行）
+      'apps/api/src/services/storeInventory.ts',
+      'apps/api/src/services/receiptSettlement.ts',
+      'apps/api/src/services/receiptDerivatives.ts',
+      'apps/api/src/services/inventoryCosting.ts',
       // 关键字落在 apps/api/tests 同样拦截，避免用测试文件绕过红线
       'apps/api/tests/inventory.test.ts',
-    ])('%s 判为 blocked（库存写入/成本核心路径）', (file) => {
+    ])('%s 默认判为 blocked（库存写入/成本核心路径）', (file) => {
       const plan = planChanges([file])
       expect(plan.risk).toBe('blocked')
       expect(plan.blocked).toBe(true)
       expect(plan.redlines).toEqual([`${file}: 库存写入/成本核心路径`])
+    })
+
+    it.each([
+      'apps/api/src/routes/inventory.ts',
+      'apps/api/src/routes/orders.ts',
+      'apps/api/src/services/stock/adjust.ts',
+      'apps/api/src/services/storeInventory.ts',
+      'apps/api/src/services/receiptSettlement.ts',
+      'apps/api/src/services/receiptDerivatives.ts',
+      'apps/api/src/services/inventoryCosting.ts',
+      'apps/api/tests/inventory.test.ts',
+    ])('%s 开关开启后判为 core_business（可放行）', (file) => {
+      const plan = planChanges([file], { allowCoreBusinessApi: true })
+      expect(plan.risk).toBe('core_business')
+      expect(plan.blocked).toBe(false)
+      expect(plan.redlines).toEqual([`${file}: 库存写入/成本核心路径`])
+    })
+
+    it('开关开启后永久红线仍为 blocked（认证/权限/资金/schema/迁移）', () => {
+      const plan = planChanges(
+        [
+          'apps/api/src/routes/auth.ts',
+          'apps/api/src/routes/payments.ts',
+          'packages/db/prisma/schema.prisma',
+          'packages/db/prisma/migrations/20990101000000_x/migration.sql',
+        ],
+        { allowCoreBusinessApi: true },
+      )
+      expect(plan.risk).toBe('blocked')
+      expect(plan.blocked).toBe(true)
     })
 
     it.each([
@@ -329,6 +399,102 @@ describe('planVerificationSteps', () => {
       'API 类型检查',
       'API 构建',
     ])
+  })
+
+  it('核心经营 API 改动（allowCoreBusinessApi=true）额外规划集成测试步骤', () => {
+    const testEnv = { DATABASE_URL: 'postgresql://user:pass@localhost:5432/dianjie_test' }
+    const steps = planVerificationSteps(['apps/api/src/routes/orders.ts'], {
+      allowCoreBusinessApi: true,
+      integrationTestEnv: testEnv,
+    })
+    expect(steps.map((s) => s.label)).toEqual([
+      'API 单测',
+      'Prisma 客户端生成',
+      'API 类型检查',
+      'API 构建',
+      'API 集成测试（隔离数据库）',
+    ])
+    const integrationStep = steps[steps.length - 1]
+    expect(integrationStep.command).toBe('pnpm')
+    expect(integrationStep.args).toEqual(['--filter', '@dianjie/api', 'test:integration'])
+    expect(integrationStep.env).toEqual(testEnv)
+  })
+
+  it('核心经营 API 改动缺少 integrationTestEnv 时明确失败（不碰数据库）', () => {
+    expect(() =>
+      planVerificationSteps(['apps/api/src/routes/orders.ts'], { allowCoreBusinessApi: true }),
+    ).toThrow('AUTO_FIX_TEST_DATABASE_URL')
+  })
+
+  it('非核心 API 改动不规划集成测试步骤（即使传了 integrationTestEnv）', () => {
+    const steps = planVerificationSteps(['apps/api/src/routes/stores.ts'], {
+      integrationTestEnv: { DATABASE_URL: 'postgresql://x@localhost/db_test' },
+    })
+    expect(steps.map((s) => s.label)).not.toContain('API 集成测试（隔离数据库）')
+  })
+})
+
+describe('resolveIntegrationTestEnv', () => {
+  it('变量缺失时明确失败（绝不继承生产 DATABASE_URL）', () => {
+    expect(() => resolveIntegrationTestEnv({})).toThrow('AUTO_FIX_TEST_DATABASE_URL')
+    expect(() => resolveIntegrationTestEnv({ DATABASE_URL: 'postgresql://x@localhost/prod' })).toThrow(
+      'AUTO_FIX_TEST_DATABASE_URL',
+    )
+  })
+
+  it('数据库名不以 _test/_ci 结尾时拒绝（不安全）', () => {
+    expect(() =>
+      resolveIntegrationTestEnv({ AUTO_FIX_TEST_DATABASE_URL: 'postgresql://user:pass@localhost:5432/dianjie_prod' }),
+    ).toThrow('_test 或 _ci')
+    expect(() =>
+      resolveIntegrationTestEnv({ AUTO_FIX_TEST_DATABASE_URL: 'postgresql://user:pass@localhost:5432/dianjie' }),
+    ).toThrow('_test 或 _ci')
+  })
+
+  it('合法 _test 后缀通过校验', () => {
+    const env = resolveIntegrationTestEnv({
+      AUTO_FIX_TEST_DATABASE_URL: 'postgresql://user:pass@localhost:5432/dianjie_test',
+    })
+    expect(env).toEqual({ DATABASE_URL: 'postgresql://user:pass@localhost:5432/dianjie_test' })
+  })
+
+  it('合法 _ci 后缀通过校验', () => {
+    const env = resolveIntegrationTestEnv({
+      AUTO_FIX_TEST_DATABASE_URL: 'postgresql://user:pass@localhost:5432/dianjie_ci?schema=public',
+    })
+    expect(env).toEqual({ DATABASE_URL: 'postgresql://user:pass@localhost:5432/dianjie_ci?schema=public' })
+  })
+
+  it('postgres:// 短协议同样通过校验', () => {
+    const env = resolveIntegrationTestEnv({
+      AUTO_FIX_TEST_DATABASE_URL: 'postgres://user:pass@localhost:5432/dianjie_test',
+    })
+    expect(env).toEqual({ DATABASE_URL: 'postgres://user:pass@localhost:5432/dianjie_test' })
+  })
+
+  it('数据库名后缀大小写不敏感（_TEST/_CI 均通过）', () => {
+    expect(resolveIntegrationTestEnv({ AUTO_FIX_TEST_DATABASE_URL: 'postgresql://u@h:5432/dianjie_TEST' }))
+      .toEqual({ DATABASE_URL: 'postgresql://u@h:5432/dianjie_TEST' })
+    expect(resolveIntegrationTestEnv({ AUTO_FIX_TEST_DATABASE_URL: 'postgresql://u@h:5432/dianjie_CI' }))
+      .toEqual({ DATABASE_URL: 'postgresql://u@h:5432/dianjie_CI' })
+  })
+
+  it('非 PostgreSQL 协议拒绝（mysql/http 等）', () => {
+    expect(() =>
+      resolveIntegrationTestEnv({ AUTO_FIX_TEST_DATABASE_URL: 'mysql://user:pass@localhost:3306/dianjie_test' }),
+    ).toThrow('PostgreSQL')
+    expect(() =>
+      resolveIntegrationTestEnv({ AUTO_FIX_TEST_DATABASE_URL: 'http://localhost:5432/dianjie_test' }),
+    ).toThrow('PostgreSQL')
+  })
+
+  it('无法解析的 URL 拒绝', () => {
+    expect(() =>
+      resolveIntegrationTestEnv({ AUTO_FIX_TEST_DATABASE_URL: 'not-a-valid-url' }),
+    ).toThrow('无法解析')
+    expect(() =>
+      resolveIntegrationTestEnv({ AUTO_FIX_TEST_DATABASE_URL: '://missing-protocol' }),
+    ).toThrow('无法解析')
   })
 })
 

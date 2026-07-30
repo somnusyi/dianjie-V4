@@ -46,14 +46,42 @@ describe('findOutOfScopeFiles', () => {
     ).toEqual([])
   })
 
-  it('揪出核心库存写入/成本 API 改动（含命中硬红线的 inventoryCosting）', () => {
+  it('揪出核心库存写入/成本 API 改动（含 core_business 的 inventoryCosting/storeInventory 等）', () => {
     expect(
       findOutOfScopeFiles([
         'apps/web/src/lib/b.ts',
         'apps/api/src/routes/orders.ts',
         'apps/api/src/services/inventoryCosting.ts',
+        'apps/api/src/services/storeInventory.ts',
+        'apps/api/src/services/receiptSettlement.ts',
+        'apps/api/src/services/receiptDerivatives.ts',
       ]),
-    ).toEqual(['apps/api/src/routes/orders.ts', 'apps/api/src/services/inventoryCosting.ts'])
+    ).toEqual([
+      'apps/api/src/routes/orders.ts',
+      'apps/api/src/services/inventoryCosting.ts',
+      'apps/api/src/services/storeInventory.ts',
+      'apps/api/src/services/receiptSettlement.ts',
+      'apps/api/src/services/receiptDerivatives.ts',
+    ])
+  })
+
+  it('allowCoreBusinessApi=true 时放行核心经营 API src/test，仍拒绝永久红线', () => {
+    const opts = { allowCoreBusinessApi: true }
+    // 核心经营 API 放行（含本阶段允许的 4 个文件）
+    expect(findOutOfScopeFiles(['apps/api/src/routes/orders.ts'], opts)).toEqual([])
+    expect(findOutOfScopeFiles(['apps/api/tests/inventory.test.ts'], opts)).toEqual([])
+    expect(findOutOfScopeFiles(['apps/api/src/services/storeInventory.ts'], opts)).toEqual([])
+    expect(findOutOfScopeFiles(['apps/api/src/services/receiptSettlement.ts'], opts)).toEqual([])
+    expect(findOutOfScopeFiles(['apps/api/src/services/receiptDerivatives.ts'], opts)).toEqual([])
+    expect(findOutOfScopeFiles(['apps/api/src/services/inventoryCosting.ts'], opts)).toEqual([])
+    // 永久红线仍拒绝
+    expect(findOutOfScopeFiles(['apps/api/src/routes/auth.ts'], opts)).toEqual(['apps/api/src/routes/auth.ts'])
+    expect(findOutOfScopeFiles(['apps/api/src/routes/payments.ts'], opts)).toEqual(['apps/api/src/routes/payments.ts'])
+    expect(findOutOfScopeFiles(['apps/api/src/routes/paymentRequests.ts'], opts)).toEqual(['apps/api/src/routes/paymentRequests.ts'])
+    expect(findOutOfScopeFiles(['apps/api/src/routes/capital.ts'], opts)).toEqual(['apps/api/src/routes/capital.ts'])
+    expect(findOutOfScopeFiles(['packages/db/prisma/schema.prisma'], opts)).toEqual(['packages/db/prisma/schema.prisma'])
+    // 非核心 API 与 Web 行为不变
+    expect(findOutOfScopeFiles(['apps/api/src/routes/stores.ts', 'apps/web/src/lib/a.ts'], opts)).toEqual([])
   })
 
   it('揪出 db / 未知 / 非 src 前端 / 受保护前端改动', () => {
@@ -79,6 +107,17 @@ describe('verificationSummary', () => {
     expect(verificationSummary(['apps/web/src/lib/a.ts', 'apps/api/src/routes/stores.ts'])).toBe(
       'Web 测试与类型检查、API 测试、类型检查与构建',
     )
+  })
+
+  it('核心经营 API 改动（allowCoreBusinessApi=true）摘要包含隔离数据库集成测试', () => {
+    const summary = verificationSummary(['apps/api/src/routes/orders.ts'], { allowCoreBusinessApi: true })
+    expect(summary).toContain('API 测试、类型检查与构建')
+    expect(summary).toContain('隔离数据库集成测试')
+  })
+
+  it('核心经营 API 改动默认（未开启开关）摘要不含集成测试（risk=blocked，不进入复验）', () => {
+    const summary = verificationSummary(['apps/api/src/routes/orders.ts'])
+    expect(summary).not.toContain('隔离数据库集成测试')
   })
 
   it('无可验证改动（空/数据库/未知）返回兜底文案', () => {
@@ -119,15 +158,31 @@ describe('buildTaskBookPrompt', () => {
   it('写死安全约束：白名单/禁删改/REJECT出口/按范围验收命令', () => {
     expect(prompt).toContain('REJECT:')
     expect(prompt).toContain('不得删除、重命名文件')
-    expect(prompt).toContain('apps/api/src、apps/api/tests 下的**非核心** TypeScript')
+    expect(prompt).toContain('apps/api/src、apps/api/tests 下的 TypeScript')
     // Web 与 API 两套验收命令都要点名
     expect(prompt).toContain('pnpm --filter @dianjie/web test')
     expect(prompt).toContain('tsc -p apps/web/tsconfig.json --noEmit')
     expect(prompt).toContain('pnpm --filter @dianjie/api test')
     expect(prompt).toContain('pnpm --filter @dianjie/db generate')
     expect(prompt).toContain('pnpm --filter @dianjie/api build')
-    // 核心库存写入仍被列为禁区
+    // 默认（未开启核心 API）：核心库存写入仍被列为禁区
     expect(prompt).toContain('核心库存写入')
+  })
+
+  it('allowCoreBusinessApi=true 时任务书文案说明核心经营 API 已开启', () => {
+    const corePrompt = buildTaskBookPrompt({
+      title: '库存调整',
+      summary: '需要修改库存逻辑',
+      contextPath: '/v2/inventory',
+      messages: [{ role: 'user', content: '库存不对' }],
+      rootCause: '库存计算错误',
+      candidateFiles: ['apps/api/src/routes/inventory.ts'],
+      allowCoreBusinessApi: true,
+    })
+    expect(corePrompt).toContain('AUTO_FIX_CORE_API_ENABLED=true')
+    expect(corePrompt).toContain('核心经营')
+    // 永久红线仍在
+    expect(corePrompt).toContain('认证、权限、资金')
   })
 })
 
@@ -152,10 +207,24 @@ describe('buildAgentBrief', () => {
     expect(brief).toContain('REJECT:')
     expect(brief).toContain('apps/web')
     // 放开非核心 API：点名 API 验收命令与白名单，同时保留核心库存写入禁区
-    expect(brief).toContain('apps/api/src、apps/api/tests 下的非核心 TypeScript')
+    expect(brief).toContain('apps/api/src、apps/api/tests 下的 TypeScript')
     expect(brief).toContain('pnpm --filter @dianjie/api test')
     expect(brief).toContain('pnpm --filter @dianjie/db generate')
     expect(brief).toContain('pnpm --filter @dianjie/api build')
     expect(brief).toContain('核心库存写入')
+  })
+
+  it('allowCoreBusinessApi=true 时简报说明核心经营 API 已开启', () => {
+    const coreBrief = buildAgentBrief({
+      title: '库存调整',
+      summary: '需要修改库存逻辑',
+      contextPath: '/v2/inventory',
+      messages: [{ role: 'user', content: '库存不对' }],
+      allowCoreBusinessApi: true,
+    })
+    expect(coreBrief).toContain('AUTO_FIX_CORE_API_ENABLED=true')
+    expect(coreBrief).toContain('核心经营')
+    // 永久红线仍在
+    expect(coreBrief).toContain('认证、权限、资金')
   })
 })

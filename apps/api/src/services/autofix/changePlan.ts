@@ -20,7 +20,12 @@ import { promisify } from 'node:util'
 const execFileAsync = promisify(execFile)
 
 export type ChangeCategory = 'web' | 'api' | 'database' | 'workspace' | 'unknown'
-export type ChangeRisk = 'low' | 'medium' | 'high' | 'blocked'
+/**
+ * core_business: 核心经营 API（库存/订单/采购/收货/实发/盘点/报损/BOM 消耗/结算/成本）。
+ * 默认与 blocked 等效；仅当 AUTO_FIX_CORE_API_ENABLED=true 时由调用方显式放行。
+ * 永久红线（认证/权限/资金/schema/迁移等）始终为 blocked，不受任何开关影响。
+ */
+export type ChangeRisk = 'low' | 'medium' | 'high' | 'core_business' | 'blocked'
 
 export interface FileClassification {
   /** 规范化后的相对路径；非法路径保留原始输入以便排查 */
@@ -74,7 +79,7 @@ export interface ChangePlan {
 /** 规范类别顺序：决定 categories 输出顺序，保证确定性。 */
 const CATEGORY_ORDER: ChangeCategory[] = ['web', 'api', 'database', 'workspace', 'unknown']
 
-const RISK_RANK: Record<ChangeRisk, number> = { low: 0, medium: 1, high: 2, blocked: 3 }
+const RISK_RANK: Record<ChangeRisk, number> = { low: 0, medium: 1, high: 2, core_business: 3, blocked: 4 }
 
 /** 与 policy.ts HARD_DENY 对齐的硬红线（blocked）。顺序即优先级，命中即返回。 */
 const BLOCK_RULES: Array<{ test: RegExp; reason: string }> = [
@@ -84,14 +89,23 @@ const BLOCK_RULES: Array<{ test: RegExp; reason: string }> = [
   { test: /(^|\/)(?:auth[^/]*|authTokens|auth-scope)\.(?:ts|tsx)$/i, reason: '认证' },
   { test: /(^|\/)[^/]*permission[^/]*\.(?:ts|tsx)$/i, reason: '权限' },
   { test: /(^|\/)[^/]*guard[^/]*\.(?:ts|tsx)$/i, reason: '权限守卫' },
-  { test: /^apps\/api\/src\/routes\/(?:payments|finance|cashbook|reconciliations|approval)[^/]*\.ts$/i, reason: '资金路由' },
-  { test: /^apps\/api\/src\/services\/(?:payments|finance|cashbook|reconciliations|approval)\//i, reason: '资金服务' },
-  { test: /(^|\/)(?:storeInventory|receiptSettlement|receiptDerivatives|inventoryCosting)\.ts$/i, reason: '库存成本' },
+  // 永久资金红线：精确枚举资金域路由/服务/测试，避免误伤普通库存 settlement（后者归 core_business）。
+  { test: /^apps\/api\/src\/routes\/(?:payments|paymentRequests|paymentRules|finance|financeReports|financeReconcile|cashbook|pettyCash|reconciliations|invoices|capital|payroll|cmb|approval)[^/]*\.ts$/i, reason: '资金路由' },
+  { test: /^apps\/api\/src\/services\/(?:payments|paymentRequests|paymentRules|finance|financeReports|financeReconcile|cashbook|pettyCash|reconciliations|invoices|capital|payroll|cmb|approval)\//i, reason: '资金服务' },
+  { test: /^apps\/api\/tests\/.*(?:payments|paymentRequest|paymentRule|finance|cashbook|pettyCash|reconciliation|invoices|capital|payroll|cmb).*\.(?:ts|tsx)$/i, reason: '资金测试' },
+  { test: /(^|\/)scripts\/deploy-[^/]*$/i, reason: '部署脚本' },
+  { test: /(^|\/)(?:ecosystem|pm2|nginx)[^/]*$/i, reason: '部署配置' },
+]
+
+/**
+ * 核心经营 API（core_business）：库存/订单/采购/收货/实发/盘点/报损/BOM 消耗/结算/成本。
+ * 默认与 blocked 等效；仅当调用方显式传入 allowCoreBusinessApi=true 时放行（risk 保持 core_business）。
+ * 永久红线（BLOCK_RULES）不受此开关影响，始终 blocked。
+ */
+const CORE_BUSINESS_RULES: Array<{ test: RegExp; reason: string }> = [
   // 库存写入/成本核心路径：订货/接单实发/验收入库/库存/盘点报损/BOM 消耗/结算/成本 等领域文件，
   // 无论关键字落在目录还是文件名都拦截。仅作用于 apps/api，避免误伤前端同名页面（如 v2/orders）。
   { test: /^apps\/api\/(?:src|tests)\/.*(?:inventory|receipt|purchase|order|stock|loss|settlement|consumption|deliver|shipment|cost).*\.(?:ts|tsx)$/i, reason: '库存写入/成本核心路径' },
-  { test: /(^|\/)scripts\/deploy-[^/]*$/i, reason: '部署脚本' },
-  { test: /(^|\/)(?:ecosystem|pm2|nginx)[^/]*$/i, reason: '部署配置' },
 ]
 
 /**
@@ -168,10 +182,13 @@ function isWorkspacePath(p: string): boolean {
   return false
 }
 
-/** 逐文件风险判定：红线 > 高危 > 类别默认。 */
+/** 逐文件风险判定：红线 > 核心经营 > 高危 > 类别默认。 */
 function riskOf(p: string, category: ChangeCategory): { risk: ChangeRisk; redline?: string } {
   for (const rule of BLOCK_RULES) {
     if (rule.test.test(p)) return { risk: 'blocked', redline: rule.reason }
+  }
+  for (const rule of CORE_BUSINESS_RULES) {
+    if (rule.test.test(p)) return { risk: 'core_business', redline: rule.reason }
   }
   for (const rule of HIGH_RULES) {
     if (rule.test.test(p)) return { risk: 'high', redline: rule.reason }
@@ -196,8 +213,10 @@ function riskOf(p: string, category: ChangeCategory): { risk: ChangeRisk; redlin
   }
 }
 
-function classifyFile(p: string, category: ChangeCategory): FileClassification {
-  const { risk, redline } = riskOf(p, category)
+function classifyFile(p: string, category: ChangeCategory, allowCoreBusinessApi: boolean): FileClassification {
+  const { risk: rawRisk, redline } = riskOf(p, category)
+  // core_business 默认等效 blocked；仅当显式允许时保持 core_business（可放行）
+  const risk = rawRisk === 'core_business' && !allowCoreBusinessApi ? 'blocked' : rawRisk
   const file: FileClassification = { path: p, category, risk }
   if (redline) file.redline = redline
   return file
@@ -207,6 +226,15 @@ function maxRisk(a: ChangeRisk, b: ChangeRisk): ChangeRisk {
   return RISK_RANK[a] >= RISK_RANK[b] ? a : b
 }
 
+export interface PlanChangesOptions {
+  /**
+   * 仅当 AUTO_FIX_CORE_API_ENABLED=true 时由 tier2/deployment 显式传入。
+   * 默认 false：核心经营 API（core_business）与 blocked 等效，拒绝修改。
+   * 永久红线（认证/权限/资金/schema/迁移等）不受此开关影响，始终 blocked。
+   */
+  allowCoreBusinessApi?: boolean
+}
+
 /**
  * 由变更文件路径数组生成确定性变更分类与验证计划。
  *
@@ -214,7 +242,8 @@ function maxRisk(a: ChangeRisk, b: ChangeRisk): ChangeRisk {
  * - 稳定排序: files 与 redlines 均按路径升序（字节序比较，不依赖 locale）。
  * - 验证命令按类别独立组成；database 仅给出隔离 CI 标志，绝不含执行生产迁移的代码。
  */
-export function planChanges(paths: string[]): ChangePlan {
+export function planChanges(paths: string[], options: PlanChangesOptions = {}): ChangePlan {
+  const allowCore = options.allowCoreBusinessApi ?? false
   const seen = new Map<string, FileClassification>()
 
   for (const raw of paths) {
@@ -231,7 +260,7 @@ export function planChanges(paths: string[]): ChangePlan {
 
     const key = normalized.path
     if (seen.has(key)) continue
-    seen.set(key, classifyFile(normalized.path, categoryOf(normalized.path)))
+    seen.set(key, classifyFile(normalized.path, categoryOf(normalized.path), allowCore))
   }
 
   const files = [...seen.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
@@ -300,17 +329,32 @@ export interface VerificationStep {
   command: string
   args: string[]
   timeoutMs: number
+  /**
+   * 仅注入到本步骤的额外环境变量（如隔离测试数据库 URL）。
+   * 绝不拼入 shell；由 runVerificationSteps 在 execFile env 中合并。
+   */
+  env?: Record<string, string>
 }
 
 /**
  * 由变更文件路径推导需要执行的独立验证步骤（命令 + 参数数组，绝不拼 shell 字符串）。
  * - Web 改动: 单测 + 类型检查；
  * - API 改动: 单测 + Prisma generate + 类型检查 + 构建；
+ * - 核心经营 API 改动（allowCoreBusinessApi=true）: 额外追加集成测试步骤，
+ *   且必须提供已校验的 integrationTestEnv（隔离 DATABASE_URL）；
  * - 混合: 两套都跑（Web 在前，API 在后）。
  * database / 未知 / 红线变更不在此放行，应由上层范围检查先行拒绝。
  */
-export function planVerificationSteps(paths: string[]): VerificationStep[] {
-  const plan = planChanges(paths)
+export interface PlanVerificationStepsOptions extends PlanChangesOptions {
+  /**
+   * 已校验的隔离测试数据库环境变量（{ DATABASE_URL: ... }）。
+   * 核心经营 API 改动时必填；由调用方通过 resolveIntegrationTestEnv() 预先校验。
+   */
+  integrationTestEnv?: Record<string, string>
+}
+
+export function planVerificationSteps(paths: string[], options: PlanVerificationStepsOptions = {}): VerificationStep[] {
+  const plan = planChanges(paths, options)
   const steps: VerificationStep[] = []
   if (plan.verification.web) {
     steps.push({ label: 'Web 单测', command: 'pnpm', args: ['--filter', '@dianjie/web', 'test'], timeoutMs: 300_000 })
@@ -321,6 +365,21 @@ export function planVerificationSteps(paths: string[]): VerificationStep[] {
     steps.push({ label: 'Prisma 客户端生成', command: 'pnpm', args: ['--filter', '@dianjie/db', 'generate'], timeoutMs: 300_000 })
     steps.push({ label: 'API 类型检查', command: 'pnpm', args: ['exec', 'tsc', '-p', 'apps/api/tsconfig.json', '--noEmit'], timeoutMs: 300_000 })
     steps.push({ label: 'API 构建', command: 'pnpm', args: ['--filter', '@dianjie/api', 'build'], timeoutMs: 600_000 })
+  }
+  // 核心经营 API 改动（allowCoreBusinessApi=true 且 risk=core_business）：额外跑集成测试，
+  // 且只能使用调用方预先校验的隔离 DATABASE_URL，绝不继承生产 DATABASE_URL。
+  const hasCoreBusiness = plan.files.some((f) => f.risk === 'core_business')
+  if (hasCoreBusiness) {
+    if (!options.integrationTestEnv) {
+      throw new Error('核心经营 API 改动需要隔离测试数据库（AUTO_FIX_TEST_DATABASE_URL），但未提供 integrationTestEnv')
+    }
+    steps.push({
+      label: 'API 集成测试（隔离数据库）',
+      command: 'pnpm',
+      args: ['--filter', '@dianjie/api', 'test:integration'],
+      timeoutMs: 600_000,
+      env: options.integrationTestEnv,
+    })
   }
   return steps
 }
@@ -348,7 +407,7 @@ export async function runVerificationSteps(
         cwd: options.cwd,
         timeout: step.timeoutMs,
         maxBuffer: 4 * 1024 * 1024,
-        env: { ...process.env, ...options.env, CI: '1', NODE_ENV: 'test' },
+        env: { ...process.env, ...options.env, ...step.env, CI: '1', NODE_ENV: 'test' },
       })
       logs.push(`$ ${step.label}\n${`${stdout || ''}${stderr || ''}`.slice(-8_000)}`)
     } catch (error: any) {
@@ -358,4 +417,39 @@ export async function runVerificationSteps(
     }
   }
   return logs.join('\n').slice(-20_000)
+}
+
+/**
+ * 校验并返回隔离测试数据库环境变量（{ DATABASE_URL: url }）。
+ * 在碰数据库之前明确失败：变量缺失、非 PostgreSQL 协议、URL 无法解析、
+ * 数据库名不以 _test/_ci 结尾（大小写不敏感）均抛错。
+ * 绝不继承生产 DATABASE_URL；集成测试步骤只能通过此函数获取隔离 URL。
+ */
+export function resolveIntegrationTestEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const url = env.AUTO_FIX_TEST_DATABASE_URL
+  if (!url) {
+    throw new Error('核心经营 API 改动需要 AUTO_FIX_TEST_DATABASE_URL，但变量未设置；绝不能继承生产 DATABASE_URL')
+  }
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    throw new Error(
+      `AUTO_FIX_TEST_DATABASE_URL 无法解析为合法 URL，拒绝使用不安全的测试数据库`,
+    )
+  }
+  if (parsed.protocol !== 'postgresql:' && parsed.protocol !== 'postgres:') {
+    throw new Error(
+      `AUTO_FIX_TEST_DATABASE_URL 必须是 PostgreSQL 连接串（postgresql:// 或 postgres://），实际协议: ${parsed.protocol}；拒绝使用不安全的测试数据库`,
+    )
+  }
+  // pathname 形如 /dianjie_test 或 /dianjie_ci?schema=public；取第一段作为数据库名
+  const dbName = parsed.pathname.replace(/^\//, '').split('/')[0]
+  const suffix = dbName.toLowerCase()
+  if (!dbName || !(suffix.endsWith('_test') || suffix.endsWith('_ci'))) {
+    throw new Error(
+      `AUTO_FIX_TEST_DATABASE_URL 数据库名必须以 _test 或 _ci 结尾（大小写不敏感），实际: ${dbName || '(无法解析)'}；拒绝使用不安全的测试数据库`,
+    )
+  }
+  return { DATABASE_URL: url }
 }

@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { planChanges } from './changePlan'
+import { planChanges, type PlanChangesOptions } from './changePlan'
 
 export interface DiffFileSummary {
   path: string
@@ -13,6 +13,13 @@ export interface DiffInspection {
   changedLines: number
   errors: string[]
 }
+
+/**
+ * 准入策略选项：由 tier2/deployment 根据 AUTO_FIX_CORE_API_ENABLED 显式传入。
+ * 默认 allowCoreBusinessApi=false：核心经营 API 与 blocked 等效，拒绝修改。
+ * 永久红线（认证/权限/资金/schema/迁移等）不受此选项影响，始终拒绝。
+ */
+export type PolicyOptions = PlanChangesOptions
 
 // 防失控刹车已按老板要求放开：默认不限文件数与行数（env AUTO_FIX_MAX_FILES / AUTO_FIX_MAX_LINES 可重新启用）。
 function maxFiles(): number {
@@ -30,10 +37,11 @@ const HARD_DENY_PATTERNS: RegExp[] = [
   /(^|\/)(?:ecosystem|pm2|nginx)[^/]*$/i,
   /(^|\/)scripts\/deploy-[^/]*$/i,
   /(^|\/)(?:auth[^/]*|authTokens|auth-scope)\.ts$/i,
-  /^apps\/api\/src\/routes\/(?:payments|finance|cashbook|reconciliations|approval)[^/]*\.ts$/i,
-  /^apps\/api\/src\/services\/(?:payments|finance|cashbook|reconciliations|approval)\//i,
+  // 永久资金红线：精确枚举资金域路由/服务/测试，避免误伤普通库存 settlement（后者归 core_business）。
+  /^apps\/api\/src\/routes\/(?:payments|paymentRequests|paymentRules|finance|financeReports|financeReconcile|cashbook|pettyCash|reconciliations|invoices|capital|payroll|cmb|approval)[^/]*\.ts$/i,
+  /^apps\/api\/src\/services\/(?:payments|paymentRequests|paymentRules|finance|financeReports|financeReconcile|cashbook|pettyCash|reconciliations|invoices|capital|payroll|cmb|approval)\//i,
+  /^apps\/api\/tests\/.*(?:payments|paymentRequest|paymentRule|finance|cashbook|pettyCash|reconciliation|invoices|capital|payroll|cmb).*\.(?:ts|tsx)$/i,
   /^apps\/api\/src\/services\/notify\//i,
-  /(^|\/)(?:storeInventory|receiptSettlement|receiptDerivatives|inventoryCosting)\.ts$/i,
   /^apps\/web\/src\/app\/(?:.+\/)?layout\.(?:ts|tsx)$/i,
   /^apps\/web\/src\/app\/globals\.css$/i,
   /^apps\/web\/src\/components\/AppLayout\.tsx$/i,
@@ -76,9 +84,10 @@ function isAllowedAutofixPath(file: string): boolean {
  * 单文件准入闸门（policy 与 tier2 范围检查共用，保证两处判定一致）。
  * 返回拒绝原因（含"红线"/"白名单"关键字）或 null（放行）。
  * 判定顺序: 硬红线 > planChanges 风险/类别闸（risk high/blocked 或 unknown/database/workspace 一律拒绝）> 正向白名单。
+ * options.allowCoreBusinessApi=true 时，core_business 风险文件放行（仍受硬红线约束）。
  */
-export function denyPatchFile(filePath: string): string | null {
-  const plan = planChanges([filePath])
+export function denyPatchFile(filePath: string, options: PolicyOptions = {}): string | null {
+  const plan = planChanges([filePath], options)
   const file = plan.files[0]
   const normalized = file?.path ?? filePath
   if (HARD_DENY_PATTERNS.some((pattern) => pattern.test(normalized))) {
@@ -104,8 +113,9 @@ export function denyPatchFile(filePath: string): string | null {
 /**
  * 自动修复补丁准入：结构校验（二进制/删除/重命名/模式/hunk 一致性/路径穿越）+ 逐文件闸门。
  * 允许 Web 源码与非核心 API 源码/测试；核心库存写入、资金、认证、数据库、依赖等一律拒绝。
+ * options.allowCoreBusinessApi=true 时，核心经营 API（库存/订单/采购等）放行；永久红线不受影响。
  */
-export function inspectUnifiedDiff(diff: string): DiffInspection {
+export function inspectUnifiedDiff(diff: string, options: PolicyOptions = {}): DiffInspection {
   const errors: string[] = []
   const files = new Map<string, DiffFileSummary>()
   const lines = diff.replace(/\r\n/g, '\n').split('\n')
@@ -249,7 +259,7 @@ export function inspectUnifiedDiff(diff: string): DiffInspection {
   if (summaries.length > fileCap) errors.push(`补丁文件数超过 ${fileCap}`)
 
   for (const file of summaries) {
-    const denial = denyPatchFile(file.path)
+    const denial = denyPatchFile(file.path, options)
     if (denial) errors.push(denial)
   }
 
@@ -275,4 +285,25 @@ export function isApprovedAutoMode(env: NodeJS.ProcessEnv = process.env): boolea
 
 export function isAutoDeploymentEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return isAutoFixModeEnabled(env) && env.AUTO_FIX_DEPLOY_ENABLED === 'true'
+}
+
+/**
+ * 核心经营 API 准入开关：仅当 AUTO_FIX_CORE_API_ENABLED=true 时返回 true。
+ * tier2 与 deployment 共用此函数，保证"开发时允许"与"部署前复核"使用同一开关。
+ * 永久红线（认证/权限/资金/schema/迁移等）不受此开关影响。
+ */
+export function isCoreApiEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.AUTO_FIX_CORE_API_ENABLED === 'true'
+}
+
+/**
+ * 部署前补丁复核（纯函数，可独立测试）：
+ * 由 AUTO_FIX_CORE_API_ENABLED 决定是否放行核心经营 API；永久红线始终拒绝。
+ * deployment.executeApprovedRun 在触碰生产前调用此函数做最后一道关卡。
+ */
+export function reviewDeploymentPatch(
+  diffPatch: string,
+  env: NodeJS.ProcessEnv = process.env,
+): DiffInspection {
+  return inspectUnifiedDiff(diffPatch, { allowCoreBusinessApi: isCoreApiEnabled(env) })
 }

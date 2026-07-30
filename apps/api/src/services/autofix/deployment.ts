@@ -18,7 +18,7 @@ import {
 } from './deploymentCandidate'
 import { acquireDeployLock, isDeployLockBusyError } from './deploymentLock'
 import { planDeploymentComponents, type DeployComponent } from './changePlan'
-import { inspectUnifiedDiff, isAutoDeploymentEnabled, isCoreApiEnabled } from './policy'
+import { inspectUnifiedDiff, isAutoDeploymentEnabled, reviewDeploymentPatch } from './policy'
 import { planBaselineResolution, readProductionBaseline, requireProductionBaseline } from './productionBaseline'
 
 const execFileAsync = promisify(execFile)
@@ -353,10 +353,17 @@ async function executeDeploymentPlan(plan: DeploymentPlan): Promise<string> {
   return `${logs.join('\n')}\nbackup=${plan.backupArchivePath}`.slice(-MAX_LOG_CHARS)
 }
 
-/** 从补丁推导原始变更文件路径；解析失败返回空数组。 */
-function changedPathsFromDiff(diffPatch: string | null | undefined): string[] {
+/**
+ * 从已部署补丁推导回滚文件路径；解析失败返回空数组。
+ *
+ * 回滚不受当前 core API 准入开关影响，否则开关关闭后会失去恢复既有发布的能力。
+ * 认证、资金、数据库等永久红线仍由 inspectUnifiedDiff 拒绝。
+ */
+export function changedPathsForRollback(diffPatch: string | null | undefined): string[] {
   if (!diffPatch) return []
-  const inspection = inspectUnifiedDiff(diffPatch)
+  // 回滚必须能恢复此前已获批准并部署的核心 API，即使准入开关后来已关闭。
+  // 这里仅放宽 core_business 路径解析；认证、资金、数据库等永久红线仍会被拒绝。
+  const inspection = inspectUnifiedDiff(diffPatch, { allowCoreBusinessApi: true })
   if (!inspection.ok) return []
   return inspection.files.map((file) => file.path)
 }
@@ -624,8 +631,7 @@ export async function executeApprovedRun(runId: string) {
     }
     // 部署前重新检查同一开关：开关关闭时，即使补丁此前已生成也必须拒绝部署。
     // 永久红线（认证/权限/资金/schema/迁移等）不受开关影响，始终拒绝。
-    const allowCore = isCoreApiEnabled()
-    const inspection = inspectUnifiedDiff(runRecord.diffPatch, { allowCoreBusinessApi: allowCore })
+    const inspection = reviewDeploymentPatch(runRecord.diffPatch)
     if (!inspection.ok) throw new Error(inspection.errors.join('；'))
     // 原始变更路径：正常发布与失败恢复共用，保证恢复相同组件。
     changedPaths = inspection.files.map((file) => file.path)
@@ -750,7 +756,7 @@ export async function executeManualRollback(runId: string) {
       throw new Error('当前记录不可回滚')
     }
     // 原始变更路径：与原部署一致，保证回滚相同组件，不退化为只恢复 Web。
-    changedPaths = changedPathsFromDiff(runRecord.diffPatch)
+    changedPaths = changedPathsForRollback(runRecord.diffPatch)
     if (changedPaths.length === 0) {
       // 兜底：补丁不可用时从已部署提交反推改动文件。
       const names = await gitOutput(repo, [

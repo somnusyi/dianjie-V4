@@ -90,8 +90,8 @@ const BLOCK_RULES: Array<{ test: RegExp; reason: string }> = [
   { test: /(^|\/)[^/]*permission[^/]*\.(?:ts|tsx)$/i, reason: '权限' },
   { test: /(^|\/)[^/]*guard[^/]*\.(?:ts|tsx)$/i, reason: '权限守卫' },
   // 永久资金红线：精确枚举资金域路由/服务/测试，避免误伤普通库存 settlement（后者归 core_business）。
-  { test: /^apps\/api\/src\/routes\/(?:payments|paymentRequests|paymentRules|finance|financeReports|financeReconcile|cashbook|pettyCash|reconciliations|invoices|capital|payroll|cmb|approval)[^/]*\.ts$/i, reason: '资金路由' },
-  { test: /^apps\/api\/src\/services\/(?:payments|paymentRequests|paymentRules|finance|financeReports|financeReconcile|cashbook|pettyCash|reconciliations|invoices|capital|payroll|cmb|approval)\//i, reason: '资金服务' },
+  { test: /^apps\/api\/src\/routes\/(?:payments?|payment[^/]*|finance[^/]*|cashbook|pettyCash|reconciliations?|invoice[^/]*|capital|payroll|cmb[^/]*|voucher[^/]*|bank[^/]*|approval[^/]*)\.(?:ts|tsx)$/i, reason: '资金路由' },
+  { test: /^apps\/api\/src\/services\/(?:payments?|payment[^/]*|finance[^/]*|cashbook|pettyCash|reconciliations?|invoice[^/]*|capital|payroll|cmb[^/]*|voucher[^/]*|bank[^/]*|approval[^/]*)(?:\.(?:ts|tsx)|\/)/i, reason: '资金服务' },
   { test: /^apps\/api\/tests\/.*(?:payments|paymentRequest|paymentRule|finance|cashbook|pettyCash|reconciliation|invoices|capital|payroll|cmb).*\.(?:ts|tsx)$/i, reason: '资金测试' },
   { test: /(^|\/)scripts\/deploy-[^/]*$/i, reason: '部署脚本' },
   { test: /(^|\/)(?:ecosystem|pm2|nginx)[^/]*$/i, reason: '部署配置' },

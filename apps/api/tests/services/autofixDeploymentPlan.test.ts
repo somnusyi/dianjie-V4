@@ -14,6 +14,7 @@ vi.mock('../../src/services/notification', () => ({ sendNotification: vi.fn() })
 vi.mock('../../src/services/notify', () => ({ fireAndForget: vi.fn() }))
 
 import {
+  changedPathsForRollback,
   planDeployment,
   type DeploymentPlan,
 } from '../../src/services/autofix/deployment'
@@ -31,6 +32,41 @@ function allCommands(p: DeploymentPlan) {
 }
 
 describe('planDeployment（不触碰生产的纯计划）', () => {
+  describe('回滚补丁路径解析', () => {
+    it('核心业务 API 在准入开关关闭后仍可推导完整回滚路径', () => {
+      const diff = [
+        'diff --git a/apps/api/src/routes/orders.ts b/apps/api/src/routes/orders.ts',
+        'index 1111111..2222222 100644',
+        '--- a/apps/api/src/routes/orders.ts',
+        '+++ b/apps/api/src/routes/orders.ts',
+        '@@ -1 +1 @@',
+        '-const oldValue = 1',
+        '+const newValue = 2',
+      ].join('\n')
+
+      expect(changedPathsForRollback(diff)).toEqual(['apps/api/src/routes/orders.ts'])
+    })
+
+    it('永久资金红线不会被回滚解析放行', () => {
+      const diff = [
+        'diff --git a/apps/api/src/services/paymentMutex.ts b/apps/api/src/services/paymentMutex.ts',
+        'index 1111111..2222222 100644',
+        '--- a/apps/api/src/services/paymentMutex.ts',
+        '+++ b/apps/api/src/services/paymentMutex.ts',
+        '@@ -1 +1 @@',
+        '-const oldValue = 1',
+        '+const newValue = 2',
+      ].join('\n')
+
+      expect(changedPathsForRollback(diff)).toEqual([])
+    })
+
+    it('空补丁或无法解析的补丁安全返回空路径', () => {
+      expect(changedPathsForRollback(null)).toEqual([])
+      expect(changedPathsForRollback('not a unified diff')).toEqual([])
+    })
+  })
+
   describe('Web-only', () => {
     it('只构建/备份/同步/重启 Web，沿用 standalone/static/public 三段同步', () => {
       const p = plan(['apps/web/src/app/v2/supply-chain/home/page.tsx'])

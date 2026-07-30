@@ -79,6 +79,8 @@ describe('findOutOfScopeFiles', () => {
     expect(findOutOfScopeFiles(['apps/api/src/routes/payments.ts'], opts)).toEqual(['apps/api/src/routes/payments.ts'])
     expect(findOutOfScopeFiles(['apps/api/src/routes/paymentRequests.ts'], opts)).toEqual(['apps/api/src/routes/paymentRequests.ts'])
     expect(findOutOfScopeFiles(['apps/api/src/routes/capital.ts'], opts)).toEqual(['apps/api/src/routes/capital.ts'])
+    expect(findOutOfScopeFiles(['apps/api/src/services/paymentMutex.ts'], opts)).toEqual(['apps/api/src/services/paymentMutex.ts'])
+    expect(findOutOfScopeFiles(['apps/api/src/services/cmbAutoSync.ts'], opts)).toEqual(['apps/api/src/services/cmbAutoSync.ts'])
     expect(findOutOfScopeFiles(['packages/db/prisma/schema.prisma'], opts)).toEqual(['packages/db/prisma/schema.prisma'])
     // 非核心 API 与 Web 行为不变
     expect(findOutOfScopeFiles(['apps/api/src/routes/stores.ts', 'apps/web/src/lib/a.ts'], opts)).toEqual([])

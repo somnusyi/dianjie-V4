@@ -38,8 +38,8 @@ const HARD_DENY_PATTERNS: RegExp[] = [
   /(^|\/)scripts\/deploy-[^/]*$/i,
   /(^|\/)(?:auth[^/]*|authTokens|auth-scope)\.ts$/i,
   // 永久资金红线：精确枚举资金域路由/服务/测试，避免误伤普通库存 settlement（后者归 core_business）。
-  /^apps\/api\/src\/routes\/(?:payments|paymentRequests|paymentRules|finance|financeReports|financeReconcile|cashbook|pettyCash|reconciliations|invoices|capital|payroll|cmb|approval)[^/]*\.ts$/i,
-  /^apps\/api\/src\/services\/(?:payments|paymentRequests|paymentRules|finance|financeReports|financeReconcile|cashbook|pettyCash|reconciliations|invoices|capital|payroll|cmb|approval)\//i,
+  /^apps\/api\/src\/routes\/(?:payments?|payment[^/]*|finance[^/]*|cashbook|pettyCash|reconciliations?|invoice[^/]*|capital|payroll|cmb[^/]*|voucher[^/]*|bank[^/]*|approval[^/]*)\.(?:ts|tsx)$/i,
+  /^apps\/api\/src\/services\/(?:payments?|payment[^/]*|finance[^/]*|cashbook|pettyCash|reconciliations?|invoice[^/]*|capital|payroll|cmb[^/]*|voucher[^/]*|bank[^/]*|approval[^/]*)(?:\.(?:ts|tsx)|\/)/i,
   /^apps\/api\/tests\/.*(?:payments|paymentRequest|paymentRule|finance|cashbook|pettyCash|reconciliation|invoices|capital|payroll|cmb).*\.(?:ts|tsx)$/i,
   /^apps\/api\/src\/services\/notify\//i,
   /^apps\/web\/src\/app\/(?:.+\/)?layout\.(?:ts|tsx)$/i,

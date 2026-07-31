@@ -304,3 +304,71 @@ describe('商品管理 PC 页面 · 分类计数与列表筛选口径对齐', ()
     cleanup(container, root)
   })
 })
+
+describe('商品管理 PC 页面 · 门店端分类隔离', () => {
+  beforeEach(() => {
+    mockFetch.mockReset()
+  })
+
+  const STORE_CATEGORIES = [
+    { name: '蔬菜', count: 3 },
+    { name: '冻品', count: 2 },
+    { name: '前厅调料', count: 1 },
+    { name: '水吧', count: 1 },
+    { name: '素菜岗', count: 4 },
+    { name: '菌菇岗', count: 2 },
+    { name: 'BOM待采购映射', count: 5 },
+  ]
+
+  function mockStoreCategoryRoutes() {
+    mockFetch.mockImplementation(path => {
+      const url = String(path)
+      if (url.startsWith('/api/products/categories')) return Promise.resolve(STORE_CATEGORIES)
+      if (url.startsWith('/api/suppliers')) return Promise.resolve(SUPPLIERS)
+      if (url.startsWith('/api/products')) {
+        if (!url.includes('page=')) return Promise.resolve([PRODUCT])
+        return Promise.resolve({ items: [PRODUCT], total: 1, page: 1, pageSize: 20 })
+      }
+      return Promise.resolve([])
+    })
+  }
+
+  it('左侧分类栏不展示门店端分类（前厅调料/水吧/xx岗/BOM待采购映射）', async () => {
+    mockStoreCategoryRoutes()
+
+    const { container, root } = render(<InternalSupplyChainProductsPage />)
+    await waitFor(() => container.textContent?.includes('土豆') ?? false)
+    await waitFor(() => getSidebarCategoryCount(container, '蔬菜') !== null)
+
+    expect(getSidebarCategoryCount(container, '蔬菜')).not.toBeNull()
+    expect(getSidebarCategoryCount(container, '冻品')).not.toBeNull()
+
+    expect(getSidebarCategoryCount(container, '前厅调料')).toBeNull()
+    expect(getSidebarCategoryCount(container, '水吧')).toBeNull()
+    expect(getSidebarCategoryCount(container, '素菜岗')).toBeNull()
+    expect(getSidebarCategoryCount(container, '菌菇岗')).toBeNull()
+    expect(getSidebarCategoryCount(container, 'BOM待采购映射')).toBeNull()
+
+    cleanup(container, root)
+  })
+
+  it('顶部分类下拉同样不展示门店端分类', async () => {
+    mockStoreCategoryRoutes()
+
+    const { container, root } = render(<InternalSupplyChainProductsPage />)
+    await waitFor(() => container.textContent?.includes('土豆') ?? false)
+    await waitFor(() => getSidebarCategoryCount(container, '蔬菜') !== null)
+
+    const categorySelect = Array.from(container.querySelectorAll('select')).find(sel =>
+      Array.from(sel.querySelectorAll('option')).some(o => o.textContent?.trim() === '全部分类'),
+    )
+    expect(categorySelect).toBeTruthy()
+    const optionTexts = Array.from(categorySelect!.querySelectorAll('option')).map(o => o.textContent?.trim() ?? '')
+    expect(optionTexts.some(t => t.startsWith('蔬菜'))).toBe(true)
+    expect(optionTexts.some(t => t.startsWith('前厅调料'))).toBe(false)
+    expect(optionTexts.some(t => t.startsWith('素菜岗'))).toBe(false)
+    expect(optionTexts.some(t => t.startsWith('BOM待采购映射'))).toBe(false)
+
+    cleanup(container, root)
+  })
+})

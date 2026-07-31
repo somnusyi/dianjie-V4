@@ -13,6 +13,7 @@ import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { EmptyState, FriendlyError, SkeletonCard } from '@/components/v2/skeleton'
 import { ProductImagePreview } from '@/components/v2/product-image-preview'
 import { apiDownload, apiFetch } from '@/lib/v2-auth'
+import { filterSupplierCategories } from '@/lib/supplier-category-filter'
 import {
   buildBatchCategoryBody,
   buildBatchStatusBody,
@@ -208,7 +209,7 @@ export default function InternalSupplyChainProductsPage() {
         if (!active) return
         setSuppliers(supplierOptions)
         // 先按聚合接口快速渲染左侧分类树，随后用主数据补全。
-        setCategories(base)
+        setCategories(filterSupplierCategories(base))
         // 聚合接口（不带 supplierId）只返回已有商品的分类，分类管理页新建的 0 SKU 分类
         // 不会出现；逐供应商补取分类主数据（同分类管理页接口）并合并后新建分类才可见。
         const masterLists = await Promise.all(
@@ -219,7 +220,7 @@ export default function InternalSupplyChainProductsPage() {
           ),
         )
         if (!active) return
-        setCategories(mergeCategoryOptions(base, masterLists))
+        setCategories(filterSupplierCategories(mergeCategoryOptions(base, masterLists)))
       })
       .catch(() => {})
     return () => { active = false }
@@ -238,7 +239,9 @@ export default function InternalSupplyChainProductsPage() {
       .then(data => {
         if (!active) return
         setBulkCategories(
-          (Array.isArray(data) ? data : []).filter(category => category.isActive !== false),
+          filterSupplierCategories(
+            (Array.isArray(data) ? data : []).filter(category => category.isActive !== false),
+          ),
         )
       })
       .catch(() => {
@@ -261,7 +264,9 @@ export default function InternalSupplyChainProductsPage() {
       .then(data => {
         if (!active) return
         setFormCategories(
-          (Array.isArray(data) ? data : []).filter(category => category.isActive !== false),
+          filterSupplierCategories(
+            (Array.isArray(data) ? data : []).filter(category => category.isActive !== false),
+          ),
         )
       })
       .catch(() => {

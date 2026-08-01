@@ -69,6 +69,7 @@ import {
   formatOrderUnitPriceHint,
   fourUnitFormFromProduct,
   type FourUnitForm,
+  lockCostUnitToMinimum,
   validateFourUnitForm,
 } from '@/lib/supply-product-four-units'
 
@@ -306,7 +307,8 @@ export default function InternalSupplyChainProductsPage() {
       spec: product.spec || '',
       shelfDays: String(product.shelfDays ?? 7),
       supplierId: product.supplier?.id || '',
-      ...fourUnitFormFromProduct(product),
+      // 成本单位锁定为最小单位：编辑时把历史录错的成本单位归一到库存单位，保存即纠正。
+      ...lockCostUnitToMinimum(fourUnitFormFromProduct(product)),
       stock: String(product.stock ?? 0),
       minStock: String(product.minStock ?? 0),
       minOrderQty: String(product.minOrderQty ?? 1),
@@ -404,7 +406,15 @@ export default function InternalSupplyChainProductsPage() {
   }
 
   function handleFieldChange(key: string, value: string) {
-    setForm(current => ({ ...current, [key]: value }))
+    setForm(current => {
+      const next = { ...current, [key]: value }
+      // 成本单位锁定为最小单位：库存单位变化时同步成本单位并固定换算因子为 1。
+      if (key === 'inventoryUnit') {
+        next.costUnit = value
+        next.inventoryUnitsPerCostUnit = '1'
+      }
+      return next
+    })
     if (key === 'category') setCategoryNotice(null)
   }
 
@@ -1274,26 +1284,25 @@ function FormDialog({
                       className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
                     />
                   </FormField>
-                  <FormField label="成本单位">
+                  <FormField label="成本单位（=库存单位）">
                     <input
                       type="text"
                       value={form.costUnit}
-                      onChange={e => onFieldChange('costUnit', e.target.value)}
-                      maxLength={16}
-                      placeholder="kg / 件 / 瓶"
-                      className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                      readOnly
+                      className="h-10 w-full cursor-not-allowed rounded-cta border border-border bg-bg px-3 text-body text-gray3 outline-none"
                     />
                   </FormField>
                   <FormField label="1 成本单位 = ？库存单位" full>
                     <input
                       type="number"
-                      min="0.000001"
-                      step="0.000001"
                       value={form.inventoryUnitsPerCostUnit}
-                      onChange={e => onFieldChange('inventoryUnitsPerCostUnit', e.target.value)}
-                      className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                      readOnly
+                      className="h-10 w-full cursor-not-allowed rounded-cta border border-border bg-bg px-3 text-body text-gray3 outline-none"
                     />
                   </FormField>
+                  <p className="col-span-2 text-micro leading-5 text-gray3">
+                    成本单位固定为库存单位（最小单位），换算因子为 1，与美团口径一致；如需调整请改库存单位。
+                  </p>
                 </div>
                 <p className="mt-2 text-micro text-gray2">
                   {formatConversionSummary(buildFourUnitValues(form))}

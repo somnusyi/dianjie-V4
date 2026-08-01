@@ -12,6 +12,7 @@ import {
   formatOrderUnitPriceHint,
   fourUnitFormFromProduct,
   inferUnitContractStatus,
+  lockCostUnitToMinimum,
   normalizeUnit,
   parseConversionFactor,
   validateConversionFactor,
@@ -146,6 +147,62 @@ describe('validateFourUnitForm', () => {
       ...DEFAULT_FOUR_UNIT_FORM,
       inventoryUnitsPerCostUnit: '2',
     })).toBe('同名单位「件」必须使用相同的库存换算因子')
+  })
+
+  it('rejects a cost unit coarser than the inventory unit', () => {
+    // 人工见手青场景：库存 g，成本单位填成件（1件=1000g），比库存更粗，应被禁止。
+    expect(validateFourUnitForm({
+      purchaseUnit: '件',
+      inventoryUnit: 'g',
+      orderUnit: '件',
+      costUnit: '件',
+      inventoryUnitsPerPurchaseUnit: '1000',
+      inventoryUnitsPerOrderUnit: '1000',
+      inventoryUnitsPerCostUnit: '1000',
+    })).toBe('成本单位必须与库存单位一致（成本单位需为最小单位）')
+  })
+
+  it('accepts cost unit equal to the inventory unit', () => {
+    expect(validateFourUnitForm({
+      purchaseUnit: '件',
+      inventoryUnit: 'g',
+      orderUnit: '件',
+      costUnit: 'g',
+      inventoryUnitsPerPurchaseUnit: '1000',
+      inventoryUnitsPerOrderUnit: '1000',
+      inventoryUnitsPerCostUnit: '1',
+    })).toBeNull()
+  })
+})
+
+describe('lockCostUnitToMinimum', () => {
+  it('mirrors the inventory unit and pins the cost factor to 1', () => {
+    const locked = lockCostUnitToMinimum({
+      purchaseUnit: '件',
+      inventoryUnit: 'g',
+      orderUnit: '件',
+      costUnit: '件',
+      inventoryUnitsPerPurchaseUnit: '1000',
+      inventoryUnitsPerOrderUnit: '1000',
+      inventoryUnitsPerCostUnit: '1000',
+    })
+    expect(locked.costUnit).toBe('g')
+    expect(locked.inventoryUnitsPerCostUnit).toBe('1')
+    expect(locked.inventoryUnit).toBe('g')
+    expect(locked.purchaseUnit).toBe('件')
+  })
+
+  it('produces a form that passes four-unit validation', () => {
+    const locked = lockCostUnitToMinimum({
+      purchaseUnit: '件',
+      inventoryUnit: 'g',
+      orderUnit: '件',
+      costUnit: '件',
+      inventoryUnitsPerPurchaseUnit: '1000',
+      inventoryUnitsPerOrderUnit: '1000',
+      inventoryUnitsPerCostUnit: '1000',
+    })
+    expect(validateFourUnitForm(locked)).toBeNull()
   })
 })
 

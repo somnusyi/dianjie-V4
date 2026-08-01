@@ -138,6 +138,11 @@ export function validateFourUnitForm(form: FourUnitForm): string | null {
     }
     factorsByUnit.set(unit, factor)
   }
+  // 成本单位必须是最小单位：与库存单位一致（库存单位即基准最小单位，换算因子为 1），
+  // 否则成本会按更粗的单位计算，与美团口径不符、对账出现倍数差异。
+  if (normalizeUnit(form.costUnit) !== normalizeUnit(form.inventoryUnit)) {
+    return '成本单位必须与库存单位一致（成本单位需为最小单位）'
+  }
   return null
 }
 
@@ -151,6 +156,15 @@ export function buildFourUnitValues(form: FourUnitForm): FourUnitValues {
     inventoryUnitsPerPurchaseUnit: parseConversionFactor(form.inventoryUnitsPerPurchaseUnit) ?? 1,
     inventoryUnitsPerOrderUnit: parseConversionFactor(form.inventoryUnitsPerOrderUnit) ?? 1,
     inventoryUnitsPerCostUnit: parseConversionFactor(form.inventoryUnitsPerCostUnit) ?? 1,
+  }
+}
+
+/** 成本单位锁定为最小单位：与库存单位保持一致，换算因子固定为 1。 */
+export function lockCostUnitToMinimum(form: FourUnitForm): FourUnitForm {
+  return {
+    ...form,
+    costUnit: form.inventoryUnit,
+    inventoryUnitsPerCostUnit: '1',
   }
 }
 

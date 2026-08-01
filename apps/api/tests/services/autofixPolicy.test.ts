@@ -39,7 +39,6 @@ describe('auto-fix patch policy', () => {
     'apps/web/src/components/AppLayout.tsx',
     'apps/web/src/app/v2/layout.tsx',
     'apps/web/src/app/globals.css',
-    'apps/web/src/components/v2/supply-chain-shell.tsx',
     'apps/web/src/components/v2/feedback-fab.tsx',
     'apps/web/src/components/v2/auth-gate.tsx',
   ])('rejects hard redline or protected path %s', (file) => {
@@ -50,6 +49,13 @@ describe('auto-fix patch policy', () => {
     const result = inspectUnifiedDiff(diff)
     expect(result.ok).toBe(false)
     expect(result.errors.join(' ')).toMatch(/红线|白名单/)
+  })
+
+  it.each([
+    'apps/web/src/components/v2/supply-chain-shell.tsx',
+    'apps/web/src/components/v2/supplier-shell.tsx',
+  ])('allows role-specific business navigation shell %s', (file) => {
+    expect(inspectUnifiedDiff(diffFor(file)).ok).toBe(true)
   })
 
   const diffFor = (file: string) =>

@@ -44,13 +44,13 @@ export default function AutoFixDetailPage() {
   useEffect(() => {
     if (!run || ![
       'RECEIVED', 'ANALYZING', 'PATCHING', 'VERIFYING',
-      'PLAN_READY', 'DEPLOYING', 'VERIFY_PROD',
+      'PLAN_READY', 'QWEN_DEV', 'DEPLOYING', 'VERIFY_PROD',
     ].includes(run.status)) return
     const timer = window.setInterval(load, 4000)
     return () => window.clearInterval(timer)
   }, [run, load])
 
-  async function action(kind: 'approve' | 'reject' | 'rollback') {
+  async function action(kind: 'approve' | 'reject' | 'rollback' | 'retry') {
     setActing(true)
     try {
       await apiFetch(`/api/autofix/runs/${id}/${kind}`, {
@@ -80,6 +80,7 @@ export default function AutoFixDetailPage() {
   })()
   const awaiting = run.status === 'AWAITING_APPROVAL' && run.mode === 'suggest'
   const rollbackable = run.status === 'RESOLVED' && !!run.commitSha
+  const retryable = run.status === 'ESCALATED'
 
   return (
     <div className="min-h-screen bg-bg pb-12">
@@ -208,6 +209,21 @@ export default function AutoFixDetailPage() {
             className="w-full py-3 rounded-cta bg-white border border-red-200 text-red-fg text-button disabled:opacity-40"
           >
             一键回滚
+          </button>
+        )}
+
+        {retryable && (
+          <button
+            disabled={acting}
+            onClick={() => openConfirm({
+              title: '重新自动处理这个任务?',
+              body: 'AI 会基于最新生产代码重新定位、开发和运行独立测试；已批准自动模式下，测试通过后会直接安全上线。',
+              confirmLabel: '重新自动处理',
+              onConfirm: () => action('retry'),
+            })}
+            className="w-full py-3 rounded-cta bg-ink text-white text-button disabled:opacity-40"
+          >
+            重新自动处理
           </button>
         )}
       </div>

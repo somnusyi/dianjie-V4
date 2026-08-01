@@ -3,8 +3,8 @@
  *
  * 档1 引擎判定需求超出前端白名单（需后端/数据等变更）时, 不再直接转人工:
  *   prepareTier2TaskBook  生成开发任务书 → 反馈回到待审批(方案卡片)
- *   老板手机批准 → runTier2Dev  隔离 worktree 里跑 Qwen Code → 独立复验 → DEPLOY_REVIEW
- *   老板二次批准 → 既有 executeApprovedRun(diffPatch) 安全发布
+ *   老板手机批准 → runTier2Dev 隔离 worktree 里跑 Qwen Code → 独立复验
+ *   approved_auto 模式直接安全发布；suggest 模式进入 DEPLOY_REVIEW 等待二次批准
  *
  * 范围: 允许 apps/web/src 前端源码，以及 apps/api/src、apps/api/tests 的非核心 TypeScript。
  * 核心库存写入、资金、认证/权限、数据库 schema、依赖、部署配置在任务书生成与 diff 白名单
@@ -18,11 +18,21 @@ import { prisma } from '@dianjie/db'
 import { fireAndForget as notify } from '../notify'
 import { qwenChat, QWEN_BUSY_FALLBACK, QWEN_NOT_CONFIGURED } from '../qwenChat'
 import { planChanges, planVerificationSteps, resolveIntegrationTestEnv, runVerificationSteps } from './changePlan'
-import { denyPatchFile, inspectUnifiedDiff, isAutoFixModeEnabled, isCoreApiEnabled, type PolicyOptions } from './policy'
+import { executeApprovedRun } from './deployment'
+import {
+  denyPatchFile,
+  inspectUnifiedDiff,
+  isApprovedAutoMode,
+  isAutoDeploymentEnabled,
+  isAutoFixModeEnabled,
+  isCoreApiEnabled,
+  type PolicyOptions,
+} from './policy'
 import { requireCleanRepoHead } from './repository'
 
 const execFileAsync = promisify(execFile)
 const QWEN_DEV_TIMEOUT_MS = Number(process.env.TIER2_QWEN_TIMEOUT_MS || 20 * 60_000)
+const QWEN_TRANSIENT_RETRY_DELAY_MS = Number(process.env.TIER2_QWEN_RETRY_DELAY_MS || 5_000)
 const MAX_TASKBOOK_CHARS = 12_000
 
 function repoDir(): string {
@@ -62,6 +72,22 @@ export function parseChangedPaths(nameOnlyZ: string): string[] {
     .map((p) => p.replace(/^"|"$/g, ''))
     .filter((p) => p && p !== 'node_modules' && !p.startsWith('node_modules/'))
   return [...new Set(paths)]
+}
+
+/**
+ * agent 明确判断“当前代码已满足/只是咨询”时，不应把零 diff 当成失败。
+ * 必须有显式 NO_CHANGE 或明确的中英文结论；空日志和含糊输出仍按异常处理。
+ */
+export function isVerifiedNoChangeOutput(output: string): boolean {
+  return /(?:^|\n)\s*NO_CHANGE[:：]/i.test(output)
+    || /(?:无需|不需要|不必)(?:再)?(?:修改|改动|变更)(?:代码)?/i.test(output)
+    || /(?:已经|当前)(?:完整)?(?:实现|修复|满足)(?:了|该需求|要求)/i.test(output)
+    || /(?:already (?:implemented|fixed|satisfied)|no (?:code )?changes? (?:needed|required|necessary))/i.test(output)
+}
+
+export function isTransientAgentError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /TRANSIENT_QWEN|ETIMEDOUT|EAI_AGAIN|ECONNRESET|ECONNREFUSED|socket hang up|\b429\b|rate limit|temporarily unavailable/i.test(message)
 }
 
 /**
@@ -168,6 +194,7 @@ ${input.messages.map((m) => `[${m.role}] ${m.content}`).join('\n')}
 - 只允许修改或新建 apps/web/src 的前端源码，以及 apps/api/src、apps/api/tests 下的 TypeScript；不得删除、重命名文件
 ${coreApiConstraint}
 - 若需求必须触碰以上禁区: 不要改任何代码，直接回复 REJECT: <原因> 并停止
+- 若检查确认当前代码已经满足需求、不需要修改: 不要制造无意义改动，回复 NO_CHANGE: <核验依据>
 
 ## 交付
 最后输出: 修改文件清单（相对路径）、每个文件的改动说明、所跑验证命令的结果。`
@@ -234,6 +261,7 @@ ${content}
 - 只允许修改或新建 apps/web/src 的前端源码，以及 apps/api/src、apps/api/tests 下的 TypeScript；不得删除、重命名文件
 ${coreApiConstraint}
 - 若需求必须触碰以上禁区或指令无法安全执行: 不要改任何代码，直接回复 REJECT: <原因> 并停止
+- 若这是咨询问题，或检查确认当前代码已经满足需求、不需要修改: 不要制造无意义改动，回复 NO_CHANGE: <答复或核验依据>
 
 ## 交付
 最后输出: 修改文件清单（相对路径）、每个文件的改动说明、所跑验证命令的结果。`
@@ -319,6 +347,58 @@ async function escalateTier2(run: { id: string; tenantId: string; feedbackId: st
     payload: { runId: run.id, feedbackId: run.feedbackId ?? undefined, error: message.slice(0, 500) },
     bypassFrequency: true,
     bypassSilent: true,
+  })
+}
+
+async function resolveNoChange(
+  run: {
+    id: string
+    tenantId: string
+    feedbackId: string | null
+    decidedById: string | null
+  },
+  qwenLog: string,
+  verificationLog: string,
+) {
+  const marker = qwenLog.match(/NO_CHANGE[:：]\s*([^\n]+)/i)?.[1]?.trim()
+  const summary = marker || 'AI 检查确认当前版本已满足需求，无需产生代码改动'
+  await transitionRun(run, 'RESOLVED', {
+    planSummary: `无需代码修改：${summary}`.slice(0, 2_000),
+    diffPatch: null,
+    diffFiles: [] as any,
+    baseCommitSha: null,
+    commitSha: null,
+    deployLog: `${qwenLog}\n\n--- 独立复验 ---\n${verificationLog}`.slice(-30_000),
+    nextRetryAt: null,
+    error: null,
+  })
+  if (run.feedbackId) {
+    await prisma.feedback.update({ where: { id: run.feedbackId }, data: { status: 'RESOLVED' as any } })
+    await prisma.feedbackMessage.create({
+      data: {
+        tenantId: run.tenantId,
+        feedbackId: run.feedbackId,
+        role: 'assistant',
+        content: `AI 已基于最新代码复核并通过独立测试：${summary}。该反馈已直接标记为解决。`,
+      },
+    })
+  } else if (run.decidedById) {
+    await prisma.bossChatMessage.create({
+      data: {
+        tenantId: run.tenantId,
+        userId: run.decidedById,
+        role: 'assistant',
+        runId: run.id,
+        content: `${summary}\n已完成独立验证，无需发布代码。`,
+      },
+    })
+  }
+  notify({
+    tenantId: run.tenantId,
+    event: 'AUTOFIX_RESOLVED',
+    eventKey: `AUTOFIX:${run.id}:RESOLVED:NO_CHANGE`,
+    payload: { runId: run.id, feedbackId: run.feedbackId ?? undefined, noChange: true },
+    bypassFrequency: true,
   })
 }
 
@@ -447,7 +527,10 @@ export async function runTier2Dev(runId: string): Promise<void> {
       qwenLog = `${stdout || ''}${stderr || ''}`.slice(-20_000)
     } catch (error: any) {
       const partial = `${error?.stdout || ''}${error?.stderr || ''}`.slice(-4_000)
-      throw new Error(`Qwen Code 开发失败或超时: ${error?.message || error}${partial ? `\n${partial}` : ''}`)
+      const transient = error?.killed === true
+        || Boolean(error?.signal)
+        || isTransientAgentError(`${error?.message || error}\n${partial}`)
+      throw new Error(`${transient ? 'TRANSIENT_QWEN: ' : ''}Qwen Code 开发失败或超时: ${error?.message || error}${partial ? `\n${partial}` : ''}`)
     }
 
     // intent-to-add 让新建文件也进入 diff；范围与白名单由下方核查把关。
@@ -459,6 +542,24 @@ export async function runTier2Dev(runId: string): Promise<void> {
     if (changed.length === 0) {
       const rejectMatch = /REJECT[:：]\s*(.+)/.exec(qwenLog)
       if (rejectMatch) throw new Error(`agent 评估拒绝开发: ${rejectMatch[1].slice(0, 300)}`)
+      if (isVerifiedNoChangeOutput(qwenLog)) {
+        // 零 diff 也要独立复验。没有候选文件时同时跑 Web/API 基线，避免只相信 agent 自报。
+        const analysisPaths = Array.isArray(analysis.candidateFiles)
+          ? analysis.candidateFiles.filter((file) => denyPatchFile(file, policyOptions) === null)
+          : []
+        const verificationPaths = analysisPaths.length > 0
+          ? analysisPaths
+          : [
+              'apps/web/src/app/v2/boss/autofix/page.tsx',
+              'apps/api/src/routes/autofix.ts',
+            ]
+        const verificationLog = await runVerificationSteps(
+          planVerificationSteps(verificationPaths, policyOptions),
+          { cwd: worktreeDir },
+        )
+        await resolveNoChange(run, qwenLog, verificationLog)
+        return
+      }
       throw new Error(`Qwen Code 未产生任何改动\n${qwenLog.slice(-2_000)}`)
     }
     const outOfScope = findOutOfScopeFiles(changed, policyOptions)
@@ -481,12 +582,14 @@ export async function runTier2Dev(runId: string): Promise<void> {
     const inspection = inspectUnifiedDiff(diffPatch, policyOptions)
     if (!inspection.ok) throw new Error(inspection.errors.join('；'))
 
-    await transitionRun(run, 'DEPLOY_REVIEW', {
+    const autoDeploy = isApprovedAutoMode() && isAutoDeploymentEnabled()
+    await transitionRun(run, autoDeploy ? 'DEPLOYING' : 'DEPLOY_REVIEW', {
       diffPatch,
       diffFiles: inspection.files as any,
       baseCommitSha,
       planSummary: `Qwen Code 开发完成: 修改 ${inspection.files.length} 个文件、${inspection.changedLines} 行；${verifiedScope}独立复验通过。`,
       deployLog: `${qwenLog}\n\n--- 独立复验 ---\n${verificationLog}`.slice(-30_000),
+      nextRetryAt: null,
       error: null,
     })
     const summaryText = `修改 ${inspection.files.length} 个文件、${inspection.changedLines} 行:\n${inspection.files.map((f) => `- ${f.path} (+${f.added}/-${f.deleted})`).join('\n')}\n\n${verifiedScope}已独立复验通过。`
@@ -494,8 +597,10 @@ export async function runTier2Dev(runId: string): Promise<void> {
       await prisma.feedback.update({
         where: { id: run.feedback.id },
         data: {
-          status: 'AWAITING_APPROVAL' as any,
-          proposal: `【开发完成·待批准上线】\n${summaryText}\n批准后自动安全发布（含回滚兜底）。`,
+          status: (autoDeploy ? 'IN_DEV' : 'AWAITING_APPROVAL') as any,
+          proposal: autoDeploy
+            ? `【开发完成·自动上线中】\n${summaryText}\n系统正在安全发布（含生产验证与回滚兜底）。`
+            : `【开发完成·待批准上线】\n${summaryText}\n批准后自动安全发布（含回滚兜底）。`,
         },
       })
       await prisma.feedbackMessage.create({
@@ -503,7 +608,9 @@ export async function runTier2Dev(runId: string): Promise<void> {
           tenantId: run.tenantId,
           feedbackId: run.feedback.id,
           role: 'assistant',
-          content: `自动开发完成并通过测试（${inspection.files.length} 个文件、${inspection.changedLines} 行），已提交管理员做上线审批。`,
+          content: autoDeploy
+            ? `自动开发完成并通过测试（${inspection.files.length} 个文件、${inspection.changedLines} 行），正在自动安全发布。`
+            : `自动开发完成并通过测试（${inspection.files.length} 个文件、${inspection.changedLines} 行），已提交管理员做上线审批。`,
         },
       })
     } else if (run.decidedById) {
@@ -514,23 +621,41 @@ export async function runTier2Dev(runId: string): Promise<void> {
           userId: run.decidedById,
           role: 'assistant',
           runId: run.id,
-          content: `开发完成，待你批准上线。\n${summaryText}`,
+          content: autoDeploy
+            ? `开发和独立测试已完成，正在自动安全发布。\n${summaryText}`
+            : `开发完成，待你批准上线。\n${summaryText}`,
         },
       })
     }
-    notify({
-      tenantId: run.tenantId,
-      event: 'FEEDBACK_APPROVAL_PENDING',
-      eventKey: `AUTOFIX:${run.id}:TIER2_DEPLOY`,
-      payload: {
-        feedbackId: run.feedback?.id ?? run.id,
-        category: 'IMPROVEMENT',
-        title: run.feedback?.title || 'AI 助手开发完成·待批准上线',
-        summary: `Qwen Code 开发完成并复验通过，待批准上线: ${inspection.files.length} 文件 ${inspection.changedLines} 行`,
-      },
-    })
+    if (autoDeploy) {
+      setImmediate(() => void executeApprovedRun(run.id).catch((error) => console.error('[tier2] 自动发布异常:', error)))
+    } else {
+      notify({
+        tenantId: run.tenantId,
+        event: 'FEEDBACK_APPROVAL_PENDING',
+        eventKey: `AUTOFIX:${run.id}:TIER2_DEPLOY`,
+        payload: {
+          feedbackId: run.feedback?.id ?? run.id,
+          category: 'IMPROVEMENT',
+          title: run.feedback?.title || 'AI 助手开发完成·待批准上线',
+          summary: `Qwen Code 开发完成并复验通过，待批准上线: ${inspection.files.length} 文件 ${inspection.changedLines} 行`,
+        },
+      })
+    }
   } catch (error) {
     const errText = error instanceof Error ? error.message : String(error)
+    if (isTransientAgentError(error) && run.retryCount < 1) {
+      await transitionRun(run, 'QWEN_DEV', {
+        retryCount: { increment: 1 },
+        nextRetryAt: new Date(Date.now() + QWEN_TRANSIENT_RETRY_DELAY_MS),
+        error: `临时故障，系统正在自动重试：${errText}`.slice(0, 20_000),
+      }, '临时故障自动重试')
+      setTimeout(
+        () => void runTier2Dev(run.id).catch((retryError) => console.error('[tier2] 临时故障重试异常:', retryError)),
+        QWEN_TRANSIENT_RETRY_DELAY_MS,
+      )
+      return
+    }
     if (run.feedback) {
       await prisma.feedbackMessage.create({
         data: {

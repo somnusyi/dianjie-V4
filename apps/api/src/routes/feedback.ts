@@ -405,7 +405,7 @@ export const feedbackRoutes: FastifyPluginAsync = async (app) => {
         automationStatus = 'tier2_deploy'
       } else {
         try {
-          // 统一 agent 管线：Qwen Code 自己定位/设计/开发/自测，完成后请管理员终审上线
+          // 统一 agent 管线：Qwen Code 自己定位/设计/开发/自测；approved_auto 下测试通过即自动上线。
           autoRunId = await enqueueAgentDev({
             tenantId: actor.tenantId,
             feedbackId: result.feedback.id,
@@ -418,7 +418,7 @@ export const feedbackRoutes: FastifyPluginAsync = async (app) => {
               feedbackId: result.feedback.id,
               role: 'system',
               content: autoRunId
-                ? '管理员已批准，AI 开始自动设计方案、开发并运行全部测试；完成后会把改动内容和测试结果发给管理员终审，通过后自动上线。'
+                ? '管理员已批准，AI 开始自动设计方案、开发并运行全部测试；低风险改动测试通过后会自动安全上线，涉及安全红线的改动仍会转人工。'
                 : '当前自动开发开关未启用，反馈已保留在开发中并转为人工跟进。',
             },
           })

@@ -4,6 +4,8 @@ import {
   buildTaskBookPrompt,
   findOutOfScopeFiles,
   findUntrackedFiles,
+  isTransientAgentError,
+  isVerifiedNoChangeOutput,
   parseChangedPaths,
   verificationSummary,
 } from '../../src/services/autofix/tier2'
@@ -31,6 +33,38 @@ describe('parseChangedPaths', () => {
 
   it('空输出返回空数组', () => {
     expect(parseChangedPaths('')).toEqual([])
+  })
+})
+
+describe('isVerifiedNoChangeOutput', () => {
+  it.each([
+    'NO_CHANGE: 当前代码已处理该场景',
+    '检查后确认当前代码已经实现了该需求，无需修改代码。',
+    'No code changes required because the fix is already implemented.',
+  ])('识别 agent 明确的零改动结论: %s', (output) => {
+    expect(isVerifiedNoChangeOutput(output)).toBe(true)
+  })
+
+  it.each(['', '我检查了相关代码。', '测试通过。'])('含糊或空输出不误判为已解决: %s', (output) => {
+    expect(isVerifiedNoChangeOutput(output)).toBe(false)
+  })
+})
+
+describe('isTransientAgentError', () => {
+  it.each([
+    new Error('TRANSIENT_QWEN: process killed'),
+    new Error('request failed with ECONNRESET'),
+    new Error('429 rate limit'),
+  ])('识别可自动重试的临时故障', (error) => {
+    expect(isTransientAgentError(error)).toBe(true)
+  })
+
+  it.each([
+    new Error('触碰硬红线路径'),
+    new Error('独立复验失败'),
+    new Error('Qwen Code 未产生任何改动'),
+  ])('策略/测试/业务失败不盲目自动重试', (error) => {
+    expect(isTransientAgentError(error)).toBe(false)
   })
 })
 
@@ -207,6 +241,7 @@ describe('buildAgentBrief', () => {
     expect(brief).toContain('tsc -p apps/web/tsconfig.json --noEmit')
     expect(brief).toContain('不得删除、重命名文件')
     expect(brief).toContain('REJECT:')
+    expect(brief).toContain('NO_CHANGE:')
     expect(brief).toContain('apps/web')
     // 放开非核心 API：点名 API 验收命令与白名单，同时保留核心库存写入禁区
     expect(brief).toContain('apps/api/src、apps/api/tests 下的 TypeScript')

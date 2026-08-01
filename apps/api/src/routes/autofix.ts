@@ -3,12 +3,14 @@ import { z } from 'zod'
 import { prisma } from '@dianjie/db'
 import { executeApprovedRun, executeManualRollback } from '../services/autofix/deployment'
 import { isAutoDeploymentEnabled } from '../services/autofix/policy'
+import { runTier2Dev } from '../services/autofix/tier2'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const STATUSES = [
   'RECEIVED', 'ANALYZING', 'PLAN_READY', 'AWAITING_APPROVAL', 'PATCHING',
   'VERIFYING', 'DEPLOYING', 'VERIFY_PROD', 'RESOLVED', 'FAILED_ROLLBACK',
-  'ROLLED_BACK', 'ESCALATED', 'REJECTED',
+  'ROLLED_BACK', 'ESCALATED', 'REJECTED', 'TASKBOOK_READY', 'QWEN_DEV',
+  'DEPLOY_REVIEW',
 ] as const
 const statusSchema = z.enum(STATUSES)
 const listQuerySchema = z.object({
@@ -176,6 +178,72 @@ export const autoFixRoutes: FastifyPluginAsync = async (app) => {
     })
     if ('error' in result) return reply.status(result.status).send({ error: result.error })
     return { ok: true, status: 'REJECTED' }
+  })
+
+  app.post('/runs/:id/retry', auth(app), async (req: any, reply: any) => {
+    const actor = req.user
+    if (!isSuperAdmin(actor)) return reply.status(403).send({ error: '无权限' })
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`autofix:${String(req.params.id)}`}))::text AS locked`
+      const run = await tx.autoFixRun.findFirst({
+        where: { id: String(req.params.id), tenantId: actor.tenantId },
+      })
+      if (!run) return { status: 404, error: '自动修复记录不存在' }
+      if (run.status !== ('ESCALATED' as any)) return { status: 409, error: '只有已转人工的任务可以重新自动处理' }
+      await tx.autoFixRun.update({
+        where: { id: run.id },
+        data: {
+          status: 'QWEN_DEV' as any,
+          error: null,
+          diffPatch: null,
+          diffFiles: [] as any,
+          baseCommitSha: null,
+          commitSha: null,
+          deployLog: null,
+          nextRetryAt: null,
+          // 新一轮人工触发重试重新获得一次“临时故障自动重试”额度；历史次数保留在 OpLog。
+          retryCount: 0,
+          decidedById: actor.userId,
+          decidedAt: new Date(),
+        },
+      })
+      if (run.feedbackId) {
+        await tx.feedback.update({ where: { id: run.feedbackId }, data: { status: 'IN_DEV' as any } })
+        await tx.feedbackMessage.create({
+          data: {
+            tenantId: actor.tenantId,
+            feedbackId: run.feedbackId,
+            role: 'system',
+            content: '管理员已重新发起自动处理，AI 正在基于最新生产代码重新定位、开发和测试。',
+          },
+        })
+      } else {
+        await tx.bossChatMessage.create({
+          data: {
+            tenantId: actor.tenantId,
+            userId: actor.userId,
+            role: 'system',
+            runId: run.id,
+            content: '已重新发起自动处理，AI 正在基于最新生产代码重新定位、开发和测试。',
+          },
+        })
+      }
+      await tx.opLog.create({
+        data: {
+          tenantId: actor.tenantId,
+          userId: actor.userId,
+          role: actor.role,
+          action: `重新执行 AI 自动修复 ${run.id}`,
+          entityType: 'AutoFixRun',
+          targetId: run.id,
+          metadata: { decision: 'retry' } as any,
+        },
+      })
+      return { status: 202, id: run.id }
+    })
+    if ('error' in result) return reply.status(result.status).send({ error: result.error })
+    setImmediate(() => void runTier2Dev(result.id).catch((error) => console.error('[autofix] 重试执行异常:', error)))
+    return reply.status(202).send({ ok: true, status: 'QWEN_DEV' })
   })
 
   app.post('/runs/:id/rollback', auth(app), async (req: any, reply: any) => {

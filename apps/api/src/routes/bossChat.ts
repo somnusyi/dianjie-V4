@@ -12,6 +12,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '@dianjie/db'
 import { executeApprovedRun } from '../services/autofix/deployment'
+import { isApprovedAutoMode, isAutoDeploymentEnabled } from '../services/autofix/policy'
 import { enqueueBossChatDev } from '../services/autofix/tier2'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
@@ -80,12 +81,15 @@ export const bossChatRoutes: FastifyPluginAsync = async (app) => {
         content: parsed.data.content,
       },
     })
+    const autoDeploy = isApprovedAutoMode() && isAutoDeploymentEnabled()
     const ack = await prisma.bossChatMessage.create({
       data: {
         tenantId: actor.tenantId,
         userId: actor.userId,
         role: 'system',
-        content: '收到，AI 已开始定位和开发，完成并通过测试后会回复你审批上线。',
+        content: autoDeploy
+          ? '收到，AI 已开始定位和开发；独立测试通过后会自动安全上线，失败会自动回滚。'
+          : '收到，AI 已开始定位和开发，完成并通过测试后会回复你审批上线。',
       },
     })
     const runId = await enqueueBossChatDev({

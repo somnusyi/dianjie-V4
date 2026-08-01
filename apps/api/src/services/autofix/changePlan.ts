@@ -407,7 +407,17 @@ export async function runVerificationSteps(
         cwd: options.cwd,
         timeout: step.timeoutMs,
         maxBuffer: 4 * 1024 * 1024,
-        env: { ...process.env, ...options.env, ...step.env, CI: '1', NODE_ENV: 'test' },
+        // 验证进程需要 PATH/HOME 等基础运行环境，但不能让生产域名等业务配置
+        // 污染单元测试。调用方/步骤仍可显式覆盖这些测试默认值。
+        env: {
+          ...process.env,
+          FRONTEND_URL: 'http://localhost:3000',
+          WECOM_REDIRECT_BASE: '',
+          ...options.env,
+          ...step.env,
+          CI: '1',
+          NODE_ENV: 'test',
+        },
       })
       logs.push(`$ ${step.label}\n${`${stdout || ''}${stderr || ''}`.slice(-8_000)}`)
     } catch (error: any) {

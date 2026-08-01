@@ -45,7 +45,8 @@ const HARD_DENY_PATTERNS: RegExp[] = [
   /^apps\/web\/src\/app\/(?:.+\/)?layout\.(?:ts|tsx)$/i,
   /^apps\/web\/src\/app\/globals\.css$/i,
   /^apps\/web\/src\/components\/AppLayout\.tsx$/i,
-  /^apps\/web\/src\/components\/.+-shell\.(?:ts|tsx)$/i,
+  // 角色自己的导航壳（supplier/supply-chain shell）属于普通业务 UI，可在独立
+  // Web 验证后自动修改；全局 layout、AppLayout 与认证/权限组件仍由相邻规则保护。
   /^apps\/web\/src\/components\/v2\/feedback-fab\.tsx$/i,
   /(^|\/)(?:auth[^/]*|[^/]*permission[^/]*|[^/]*guard[^/]*)\.(?:ts|tsx)$/i,
 ]

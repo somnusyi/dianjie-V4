@@ -86,7 +86,7 @@ export default function BossAssistantPage() {
           </a>
         </div>
         <p className="text-caption text-gray3 mt-0.5">
-          告诉我需求，我来开发测试，你审批上线
+          告诉我需求，我来开发、测试并安全上线
         </p>
       </header>
 

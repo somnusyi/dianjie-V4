@@ -567,6 +567,32 @@ describe('runVerificationSteps', () => {
     expect(log).toContain('test/1')
   })
 
+  it('隔离生产域名环境，避免无关配置污染单元测试', async () => {
+    const previousRedirect = process.env.WECOM_REDIRECT_BASE
+    const previousFrontend = process.env.FRONTEND_URL
+    process.env.WECOM_REDIRECT_BASE = 'https://production.example'
+    process.env.FRONTEND_URL = 'https://production-frontend.example'
+    try {
+      const log = await runVerificationSteps(
+        [{
+          label: 'isolated-env',
+          command: 'node',
+          args: ['-e', 'console.log(JSON.stringify({ redirect: process.env.WECOM_REDIRECT_BASE, frontend: process.env.FRONTEND_URL }))'],
+          timeoutMs: 10_000,
+        }],
+        { cwd: process.cwd() },
+      )
+      expect(log).toContain('"redirect":""')
+      expect(log).toContain('"frontend":"http://localhost:3000"')
+      expect(log).not.toContain('production.example')
+    } finally {
+      if (previousRedirect === undefined) delete process.env.WECOM_REDIRECT_BASE
+      else process.env.WECOM_REDIRECT_BASE = previousRedirect
+      if (previousFrontend === undefined) delete process.env.FRONTEND_URL
+      else process.env.FRONTEND_URL = previousFrontend
+    }
+  })
+
   it('任一步骤失败即带上标签向上抛出', async () => {
     await expect(
       runVerificationSteps(

@@ -79,9 +79,11 @@ export function parseChangedPaths(nameOnlyZ: string): string[] {
  * 必须有显式 NO_CHANGE 或明确的中英文结论；空日志和含糊输出仍按异常处理。
  */
 export function isVerifiedNoChangeOutput(output: string): boolean {
-  return /(?:^|\n)\s*NO_CHANGE[:：]/i.test(output)
+  return /\bNO_CHANGE\b/i.test(output)
+    || /无(?:需|须|必要)?(?:源码|代码)?(?:改动|修改|变更)/i.test(output)
     || /(?:无需|不需要|不必)(?:再)?(?:修改|改动|变更)(?:代码)?/i.test(output)
-    || /(?:已经|当前)(?:完整)?(?:实现|修复|满足)(?:了|该需求|要求)/i.test(output)
+    || /(?:当前|现有)(?:代码|版本|实现)?已(?:经)?(?:完整)?(?:实现|修复|满足)/i.test(output)
+    || /已经(?:完整)?(?:实现|修复|满足)(?:了|该需求|要求)/i.test(output)
     || /(?:already (?:implemented|fixed|satisfied)|no (?:code )?changes? (?:needed|required|necessary))/i.test(output)
 }
 

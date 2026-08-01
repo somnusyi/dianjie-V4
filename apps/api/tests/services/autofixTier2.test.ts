@@ -39,6 +39,8 @@ describe('parseChangedPaths', () => {
 describe('isVerifiedNoChangeOutput', () => {
   it.each([
     'NO_CHANGE: 当前代码已处理该场景',
+    '进一步佐证 **NO_CHANGE** 判定：当前代码已满足本次需求。',
+    '最终交付维持不变：无源码改动。',
     '检查后确认当前代码已经实现了该需求，无需修改代码。',
     'No code changes required because the fix is already implemented.',
   ])('识别 agent 明确的零改动结论: %s', (output) => {

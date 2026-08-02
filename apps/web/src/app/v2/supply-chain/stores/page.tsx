@@ -4,9 +4,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { ErrorScreen, LoadingScreen, useDashboard } from '@/components/v2/use-dashboard'
 import { apiFetch } from '@/lib/v2-auth'
+import { StoreOrderSimulation } from '../order-simulation'
 
 type Store = { id: string; no: string; name: string }
-type StoreView = 'overview' | 'orders' | 'receipts' | 'inventory' | 'consumption'
+type StoreView = 'simulation' | 'monitor' | 'orders' | 'receipts' | 'inventory' | 'consumption'
 type OrderRow = {
   id: string
   no: string
@@ -81,9 +82,37 @@ type ConsumptionRanking = {
     pricedRecordCount: number
   }>
 }
+type RunboardStatusBreakdown = {
+  SUBMITTED: number
+  CONFIRMED: number
+  DELIVERING: number
+  PENDING_CONFIRM: number
+  RECEIVED: number
+  COMPLETED: number
+  CANCELLED: number
+  inProgress: number
+}
+type RunboardOverdueOrder = {
+  id: string
+  no: string
+  status: string
+  createdAt: string
+  expectedDate: string
+  itemCount: number
+  totalAmount: string
+  overdueDays: number
+}
+type StoreOrderRunboard = {
+  date: string
+  todayOrders: { count: number; itemCount: number; totalAmount: string }
+  latestOrder: { id: string; no: string; status: string; createdAt: string } | null
+  statusBreakdown: RunboardStatusBreakdown
+  overdue: { count: number; orders: RunboardOverdueOrder[] }
+}
 
 const VIEWS: Array<{ id: StoreView; label: string }> = [
-  { id: 'overview', label: '概览' },
+  { id: 'simulation', label: '模拟下单' },
+  { id: 'monitor', label: '运行监控' },
   { id: 'orders', label: '订货记录' },
   { id: 'receipts', label: '收货记录' },
   { id: 'inventory', label: '当前库存' },
@@ -122,6 +151,20 @@ function money(value: unknown) {
     : '—'
 }
 
+function dateTimeText(value?: string) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
 function quantity(value: unknown) {
   const amount = Number(value || 0)
   return Number.isFinite(amount) ? amount.toLocaleString('zh-CN', { maximumFractionDigits: 3 }) : '—'
@@ -138,7 +181,7 @@ export default function InternalSupplyChainStoresPage() {
   const { data, error: dashboardError } = useDashboard()
   const stores = useMemo<Store[]>(() => data?.supplyChain?.stores || [], [data])
   const [storeId, setStoreId] = useState('')
-  const [view, setView] = useState<StoreView>('overview')
+  const [view, setView] = useState<StoreView>('simulation')
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [orderTotal, setOrderTotal] = useState(0)
   const [receipts, setReceipts] = useState<ReceiptRow[]>([])
@@ -153,8 +196,12 @@ export default function InternalSupplyChainStoresPage() {
   const [rankingError, setRankingError] = useState('')
   const [loading, setLoading] = useState(false)
   const [rowError, setRowError] = useState('')
+  const [runboard, setRunboard] = useState<StoreOrderRunboard | null>(null)
+  const [runboardLoading, setRunboardLoading] = useState(false)
+  const [runboardError, setRunboardError] = useState('')
   const requestSequence = useRef(0)
   const rankingSequence = useRef(0)
+  const runboardSequence = useRef(0)
 
   useEffect(() => {
     if (!storeId && stores.length > 0) setStoreId(stores[0].id)
@@ -206,6 +253,25 @@ export default function InternalSupplyChainStoresPage() {
     })
   }, [storeId, rankingDays, rankingDimension])
 
+  useEffect(() => {
+    if (!storeId) return
+    const sequence = ++runboardSequence.current
+    setRunboardLoading(true)
+    setRunboardError('')
+    setRunboard(null)
+    const encodedStoreId = encodeURIComponent(storeId)
+    apiFetch<StoreOrderRunboard>(`/api/stores/${encodedStoreId}/order-runboard`)
+      .then(result => {
+        if (sequence === runboardSequence.current) setRunboard(result)
+      })
+      .catch(reason => {
+        if (sequence === runboardSequence.current) setRunboardError(String(reason?.message || reason))
+      })
+      .finally(() => {
+        if (sequence === runboardSequence.current) setRunboardLoading(false)
+      })
+  }, [storeId])
+
   if (dashboardError) return <ErrorScreen message={dashboardError} />
   if (!data) return <LoadingScreen />
 
@@ -220,11 +286,11 @@ export default function InternalSupplyChainStoresPage() {
       <header className="mx-auto flex max-w-[1440px] flex-col gap-4 border-b border-border pb-5 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="mb-2 flex items-center gap-2">
-            <Chip tone="green">内部只读</Chip>
-            <span className="text-caption text-gray3">门店订货 · 收货 · 库存 · 消耗</span>
+            <Chip tone="green">供应链验证</Chip>
+            <span className="text-caption text-gray3">模拟门店订货 · 运行监控 · 收货 · 库存 · 消耗</span>
           </div>
           <h1 className="text-h1">门店运营</h1>
-          <p className="mt-1 text-caption text-gray2">以门店为中心查看供应链业务，不在这里修改门店库存或收货结果。</p>
+          <p className="mt-1 text-caption text-gray2">先模拟门店真实订货体验，再查看运行记录；模拟不会产生任何业务单据。</p>
         </div>
         <label className="text-caption text-gray2">
           当前门店
@@ -244,13 +310,6 @@ export default function InternalSupplyChainStoresPage() {
           <Empty text="当前租户没有启用中的门店" />
         ) : (
           <>
-            <section className="grid gap-3 py-5 sm:grid-cols-2 xl:grid-cols-4">
-              <Metric label="订货记录" value={`${orderTotal} 单`} hint="当前门店全部历史" />
-              <Metric label="进行中订货" value={`${inProgressCount} 单`} hint="待接单、待发货与配送中" tone={inProgressCount > 0 ? 'orange' : undefined} />
-              <Metric label="有效收货" value={`${overview?.validReceiptCount ?? receiptTotal} 单`} hint="不含作废与拒收" />
-              <Metric label="低于安全线" value={`${lowStockCount} 项`} hint="按当前预计库存与门店策略判断" tone={lowStockCount > 0 ? 'red' : 'green'} />
-            </section>
-
             {rowError && <div className="mb-4 rounded-card border border-red/30 bg-red-bg p-3 text-caption text-red-fg">{rowError}</div>}
 
             <nav aria-label="门店运营视图" className="mb-4 flex flex-wrap gap-2 border-b border-border">
@@ -271,35 +330,97 @@ export default function InternalSupplyChainStoresPage() {
 
             {loading ? <Empty text="正在加载门店数据…" /> : (
               <>
-                {view === 'overview' && (
-                  <section className="grid items-start gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-                    <div className="space-y-4">
-                      <Panel title="库存提醒" subtitle={selectedStore?.name || '—'}>
-                        {lowStock.length > 0 ? (
-                          <InventoryTable rows={lowStock.slice(0, 5)} />
-                        ) : <Empty text="当前没有低于安全线的商品" compact />}
-                        <PanelLink onClick={() => setView('inventory')}>查看全部库存 ›</PanelLink>
-                      </Panel>
-                      <Panel title="近期订货" subtitle={`${inProgressCount} 单进行中`}>
-                        {orders.length > 0 ? <OrderTable rows={orders.slice(0, 4)} compact /> : <Empty text="当前门店暂无订货记录" compact />}
-                        <PanelLink onClick={() => setView('orders')}>查看全部订货 ›</PanelLink>
-                      </Panel>
-                      <Panel title="近期收货" subtitle={`${receiptTotal} 单`}>
-                        {receipts.length > 0 ? <ReceiptTable rows={receipts.slice(0, 4)} compact /> : <Empty text="当前门店暂无收货记录" compact />}
-                        <PanelLink onClick={() => setView('receipts')}>查看全部收货 ›</PanelLink>
-                      </Panel>
-                    </div>
-                    <ConsumptionRankingChart
-                      data={consumptionRanking}
-                      loading={rankingLoading}
-                      error={rankingError}
-                      days={rankingDays}
-                      dimension={rankingDimension}
-                      onDaysChange={setRankingDays}
-                      onDimensionChange={setRankingDimension}
-                      onOpenDetails={() => setView('consumption')}
-                    />
-                  </section>
+                {view === 'simulation' && (
+                  <StoreOrderSimulation storeId={storeId} storeName={selectedStore?.name || '当前门店'} />
+                )}
+
+                {view === 'monitor' && (
+                  <div className="space-y-4">
+                    {runboardError && (
+                      <div className="rounded-card border border-red/30 bg-red-bg p-3 text-caption text-red-fg">
+                        订货运行数据加载失败：{runboardError}
+                      </div>
+                    )}
+
+                    <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      <Metric
+                        label="今日订货"
+                        value={runboard ? `${runboard.todayOrders.count} 单` : '—'}
+                        hint={runboard
+                          ? (runboard.todayOrders.count > 0
+                              ? `品项 ${runboard.todayOrders.itemCount} · 订货金额 ${money(runboard.todayOrders.totalAmount)}`
+                              : '今日暂无订货')
+                          : runboardLoading ? '正在加载…' : '暂无数据'}
+                        tone={runboard && runboard.todayOrders.count > 0 ? 'green' : undefined}
+                      />
+                      <Metric
+                        label="进行中"
+                        value={runboard ? `${runboard.statusBreakdown.inProgress} 单` : '—'}
+                        hint="待接单 · 待发货 · 配送中 · 待门店确认"
+                        tone={runboard && runboard.statusBreakdown.inProgress > 0 ? 'orange' : undefined}
+                      />
+                      <Metric
+                        label="逾期"
+                        value={runboard ? `${runboard.overdue.count} 单` : '—'}
+                        hint="超过预计到货日仍未完成"
+                        tone={runboard ? (runboard.overdue.count > 0 ? 'red' : 'green') : undefined}
+                      />
+                      <Metric
+                        label="最近一单"
+                        value={runboard?.latestOrder ? dateTimeText(runboard.latestOrder.createdAt) : '—'}
+                        hint={runboard?.latestOrder
+                          ? `#${runboard.latestOrder.no} · ${ORDER_STATUS[runboard.latestOrder.status] || runboard.latestOrder.status}`
+                          : runboardLoading ? '正在加载…' : '暂无订货记录'}
+                      />
+                    </section>
+
+                    <OrderStatusTrack breakdown={runboard?.statusBreakdown} loading={runboardLoading} />
+
+                    <Panel
+                      title="需处理订单"
+                      subtitle={runboard ? (runboard.overdue.count > 0 ? `${runboard.overdue.count} 单超过预计到货日` : '运行正常') : '—'}
+                    >
+                      {runboardLoading ? (
+                        <Empty text="正在加载订货运行数据…" compact />
+                      ) : runboard && runboard.overdue.orders.length > 0 ? (
+                        <OverdueOrderTable rows={runboard.overdue.orders} />
+                      ) : (
+                        <div className="px-4 py-8 text-center">
+                          <div className="text-h2">✓ 运行正常</div>
+                          <p className="mt-1 text-caption text-gray3">当前没有超过预计到货日仍未完成的订单。</p>
+                        </div>
+                      )}
+                    </Panel>
+
+                    <section className="grid items-start gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+                      <div className="space-y-4">
+                        <Panel title="库存提醒" subtitle={`${selectedStore?.name || '—'} · 低于安全线 ${lowStockCount} 项`}>
+                          {lowStock.length > 0 ? (
+                            <InventoryTable rows={lowStock.slice(0, 5)} />
+                          ) : <Empty text="当前没有低于安全线的商品" compact />}
+                          <PanelLink onClick={() => setView('inventory')}>查看全部库存 ›</PanelLink>
+                        </Panel>
+                        <Panel title="近期订货" subtitle={`${runboard?.statusBreakdown.inProgress ?? inProgressCount} 单进行中`}>
+                          {orders.length > 0 ? <OrderTable rows={orders.slice(0, 4)} compact /> : <Empty text="当前门店暂无订货记录" compact />}
+                          <PanelLink onClick={() => setView('orders')}>查看全部订货 ›</PanelLink>
+                        </Panel>
+                        <Panel title="近期收货" subtitle={`${receiptTotal} 单`}>
+                          {receipts.length > 0 ? <ReceiptTable rows={receipts.slice(0, 4)} compact /> : <Empty text="当前门店暂无收货记录" compact />}
+                          <PanelLink onClick={() => setView('receipts')}>查看全部收货 ›</PanelLink>
+                        </Panel>
+                      </div>
+                      <ConsumptionRankingChart
+                        data={consumptionRanking}
+                        loading={rankingLoading}
+                        error={rankingError}
+                        days={rankingDays}
+                        dimension={rankingDimension}
+                        onDaysChange={setRankingDays}
+                        onDimensionChange={setRankingDimension}
+                        onOpenDetails={() => setView('consumption')}
+                      />
+                    </section>
+                  </div>
                 )}
 
                 {view === 'orders' && (
@@ -595,4 +716,77 @@ function ConsumptionTable({ rows }: { rows: ConsumptionRow[] }) {
 
 function Empty({ text, compact = false }: { text: string; compact?: boolean }) {
   return <div className={`px-4 text-center text-caption text-gray3 ${compact ? 'py-6' : 'py-10'}`}>{text}</div>
+}
+
+function OrderStatusTrack({ breakdown, loading }: { breakdown?: RunboardStatusBreakdown; loading: boolean }) {
+  const groups: Array<{ key: keyof RunboardStatusBreakdown | 'DONE'; label: string; tone: 'red' | 'orange' | 'green' }> = [
+    { key: 'SUBMITTED', label: '待接单', tone: 'orange' },
+    { key: 'CONFIRMED', label: '待发货', tone: 'orange' },
+    { key: 'DELIVERING', label: '配送中', tone: 'orange' },
+    { key: 'PENDING_CONFIRM', label: '待门店确认', tone: 'orange' },
+    { key: 'DONE', label: '已完成', tone: 'green' },
+    { key: 'CANCELLED', label: '已取消', tone: 'red' },
+  ]
+  const countFor = (key: string) => {
+    if (!breakdown) return 0
+    if (key === 'DONE') return breakdown.RECEIVED + breakdown.COMPLETED
+    return breakdown[key as keyof RunboardStatusBreakdown] ?? 0
+  }
+  const toneClass = (tone: 'red' | 'orange' | 'green') =>
+    tone === 'red' ? 'text-red-fg' : tone === 'green' ? 'text-green-fg' : 'text-orange'
+  return (
+    <section className="overflow-hidden rounded-card border border-border bg-white" aria-label="订单状态分布">
+      <header className="flex items-baseline justify-between gap-3 border-b border-border px-4 py-3">
+        <h2 className="text-h2">状态分布</h2>
+        <span className="text-micro text-gray3">按系统当前订货单状态统计</span>
+      </header>
+      <div className="flex flex-wrap gap-2 px-4 py-4">
+        {loading && !breakdown ? (
+          <span className="text-caption text-gray3">正在加载…</span>
+        ) : (
+          groups.map(group => (
+            <span key={group.key} className="flex items-center gap-1.5 rounded-cta border border-border bg-bg px-3 py-2 text-caption">
+              <b className={`font-num ${toneClass(group.tone)}`}>{countFor(group.key)}</b>
+              <span className="text-gray2">{group.label}</span>
+            </span>
+          ))
+        )}
+      </div>
+    </section>
+  )
+}
+
+function OverdueOrderTable({ rows }: { rows: RunboardOverdueOrder[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-left text-caption">
+        <thead className="bg-bg text-gray3">
+          <tr>
+            <th className="px-4 py-2">订货单</th>
+            <th className="px-4 py-2">创建时间</th>
+            <th className="px-4 py-2">预计到货日</th>
+            <th className="px-4 py-2">状态</th>
+            <th className="px-4 py-2 text-right">品项</th>
+            <th className="px-4 py-2 text-right">订货金额</th>
+            <th className="px-4 py-2">异常</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {rows.map(row => (
+            <tr key={row.id}>
+              <td className="px-4 py-3 font-num">
+                <a className="text-accent" href={`/v2/supply-chain/fulfillment/${row.id}`}>{row.no}</a>
+              </td>
+              <td className="px-4 py-3 font-num text-gray2">{dateTimeText(row.createdAt)}</td>
+              <td className="px-4 py-3 font-num text-gray2">{dateText(row.expectedDate)}</td>
+              <td className="px-4 py-3"><Chip tone={statusTone(row.status)}>{ORDER_STATUS[row.status] || row.status}</Chip></td>
+              <td className="px-4 py-3 text-right font-num">{row.itemCount}</td>
+              <td className="px-4 py-3 text-right font-num">{money(row.totalAmount)}</td>
+              <td className="px-4 py-3"><Chip tone="red">超期 {row.overdueDays} 天</Chip></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }

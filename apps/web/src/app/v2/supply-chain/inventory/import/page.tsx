@@ -142,6 +142,9 @@ export default function WarehouseSnapshotImportPage() {
     return items
   }, [current, view])
   const nameSuggestionCount = current?.items?.filter(item => item.matchSource === 'NAME_SUGGESTION').length || 0
+  const canApplyBaseline = current?.status === 'STAGED'
+    && current.blockingCount === 0
+    && current.matchedCount > 0
 
   async function preview() {
     if (!file) return setError('请选择美团导出的 .xlsx 库存文件')
@@ -156,7 +159,7 @@ export default function WarehouseSnapshotImportPage() {
       const record = await apiFetch<InventoryImport>('/api/warehouse-inventory-imports/preview', { method: 'POST', body })
       setCurrent(record)
       setView(record.blockingCount > 0 ? 'blocking' : 'all')
-      setNotice('预检完成：当前没有改动库存。本轮只保留历史文件核对，不允许写入库存。')
+      setNotice('预检完成：当前没有改动库存。完成商品映射并解决阻断项后，可申请建立期初基线。')
       await loadHistory(record.id)
     } catch (reason: any) {
       setError(String(reason?.message || reason))
@@ -202,18 +205,17 @@ export default function WarehouseSnapshotImportPage() {
     }
   }
 
-  async function confirmImport() {
-    if (!current || current.status !== 'STAGED') return
-    if (!window.confirm(`确认把 ${current.snapshotDate}「供应链总仓」${current.itemCount} 条明细设为期末库存余额？系统会记录每个商品的调整差额和审计流水。`)) return
-    setBusy('confirm')
+  async function applyBaseline() {
+    if (!current || !canApplyBaseline) return
+    if (!window.confirm(`确认将 ${current.snapshotDate}「供应链总仓」${current.matchedCount} 个已映射商品建立为期初基线？系统会按上海时区取该日截止时点，写入余额、流水和批次；已映射的零库存商品会清零旧余额。`)) return
+    setBusy('baseline')
     setError('')
     try {
-      const record = await apiFetch<InventoryImport>(`/api/warehouse-inventory-imports/${current.id}/confirm`, {
+      await apiFetch(`/api/warehouse-inventory-imports/${current.id}/baseline`, {
         method: 'POST', body: JSON.stringify({ rowVersion: current.rowVersion }),
       })
-      setCurrent(record)
-      setNotice('库存快照已生效；商品余额、批次和调整流水已同步记录。')
-      await loadHistory(record.id)
+      setNotice('期初基线已生效；商品余额、批次、调整流水和审计记录已在同一事务中完成。')
+      await loadHistory(current.id)
     } catch (reason: any) {
       setError(String(reason?.message || reason))
     } finally {
@@ -266,9 +268,9 @@ export default function WarehouseSnapshotImportPage() {
       <header className="flex flex-col gap-4 border-b border-border pb-5 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <a href="/v2/supply-chain/inventory" className="text-caption text-gray2">‹ 返回仓库库存</a>
-          <div className="mt-2 flex items-center gap-2"><Chip tone="blue">美团库存快照</Chip><span className="text-caption text-gray3">供应链总仓 · 先预检，后整单确认</span></div>
+          <div className="mt-2 flex items-center gap-2"><Chip tone="blue">美团库存快照</Chip><span className="text-caption text-gray3">供应链总仓 · 先预检，后整单建立期初基线</span></div>
           <h1 className="mt-2 text-h1">历史库存文件预检</h1>
-          <p className="mt-1 text-caption text-gray2">7月31日后缺少连续流水，本页只做解析、映射和单位核对，不允许确认写库存。</p>
+          <p className="mt-1 text-caption text-gray2">先完成解析、商品映射和单位核对；无阻断项后，可将快照安全建立为可追溯的期初库存基线。</p>
         </div>
         <div className="flex flex-wrap items-end gap-2">
           <label className="flex flex-col gap-1"><span className="text-micro text-gray3">结算完成日</span><input type="date" value={snapshotDate} onChange={event => setSnapshotDate(event.target.value)} className="h-10 rounded-cta border border-border bg-white px-3" /></label>
@@ -289,7 +291,7 @@ export default function WarehouseSnapshotImportPage() {
 
       <section className="mt-4 grid gap-4 2xl:grid-cols-[280px_minmax(0,1fr)]">
         <aside className="overflow-hidden rounded-card border border-border bg-white">
-          <div className="border-b border-border px-4 py-3"><h2 className="text-h2">导入单历史</h2><p className="text-micro text-gray3">借鉴美团单据层：有状态、可追溯、可撤销</p></div>
+          <div className="border-b border-border px-4 py-3"><h2 className="text-h2">导入单历史</h2><p className="text-micro text-gray3">有状态、可追溯、保留完整审计</p></div>
           <div className="max-h-[720px] overflow-auto divide-y divide-border">
             {imports.map(record => <button key={record.id} onClick={() => loadImport(record.id).catch(reason => setError(String(reason?.message || reason)))} className={`w-full px-4 py-3 text-left ${current?.id === record.id ? 'bg-amber/10' : 'hover:bg-bg'}`}><div className="flex items-center justify-between gap-2"><b className="font-num text-caption">{record.snapshotDate}</b><Chip tone={STATUS[record.status].tone}>{STATUS[record.status].label}</Chip></div><div className="mt-1 truncate text-micro text-gray3">{record.no}</div><div className="mt-1 text-micro text-gray2">{record.itemCount} SKU · 阻断 {record.blockingCount}</div></button>)}
             {imports.length === 0 && <div className="px-4 py-10 text-center text-caption text-gray3">还没有导入单</div>}
@@ -304,7 +306,8 @@ export default function WarehouseSnapshotImportPage() {
               <div className="flex flex-wrap gap-2">
                 {current.status === 'STAGED' && <button onClick={refresh} disabled={busy !== ''} className="h-9 rounded-cta border border-border px-3 text-button disabled:opacity-40">{busy === 'refresh' ? '匹配中…' : '重新匹配'}</button>}
                 {current.status === 'STAGED' && nameSuggestionCount > 0 && <button onClick={confirmNameSuggestions} disabled={busy !== ''} className="h-9 rounded-cta border border-amber/40 bg-amber/10 px-3 text-button text-amber-fg disabled:opacity-40">{busy === 'bulk-map' ? '确认中…' : `批量确认同名候选 ${nameSuggestionCount}`}</button>}
-                <span className="flex h-9 items-center rounded-cta border border-amber/30 bg-amber/10 px-3 text-micro text-amber-fg">仅预检 · 正式确认已关闭</span>
+                {canApplyBaseline && <button onClick={applyBaseline} disabled={busy !== ''} className="h-9 rounded-cta bg-accent px-4 text-button text-white disabled:opacity-40">{busy === 'baseline' ? '建立中…' : '建立期初基线'}</button>}
+                {current.status === 'STAGED' && !canApplyBaseline && <span className="flex h-9 items-center rounded-cta border border-amber/30 bg-amber/10 px-3 text-micro text-amber-fg">先解决阻断项并完成商品映射</span>}
               </div>
             </div>
 

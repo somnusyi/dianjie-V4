@@ -57,6 +57,10 @@ import {
   costUnitPricedOrderLine,
   PURCHASE_ORDER_AMOUNT_MAX,
 } from '../services/costUnitPricing'
+import {
+  loadOrderDraftProducts,
+  validateOrderDraftLines,
+} from '../services/orderDraftValidation'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
 const PURCHASE_QUANTITY_MAX = 99_999_999.99
@@ -530,65 +534,16 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    // 起订量 / 步长 校验 — 防止厨师长漏看 picker 提示直接 POST
+    // 与供应链“模拟下单”共用同一套权威只读校验，避免两套规则漂移。
     const productIds = items.map((i: any) => i.productId)
-    if (new Set(productIds).size !== productIds.length) {
-      return reply.status(400).send({ error: '同一商品不能重复提交多行' })
+    const productsMoq = await loadOrderDraftProducts({ tenantId, supplierId, productIds })
+    const draftValidation = validateOrderDraftLines(productsMoq, items)
+    if (!draftValidation.ok) {
+      return reply.status(400).send({ error: draftValidation.issues[0]?.message || '订货内容校验失败' })
     }
-    const productsMoq = await prisma.product.findMany({
-      where: { id: { in: productIds }, tenantId, supplierId, status: 'ENABLED' },
-      select: {
-        id: true, name: true, unit: true, minOrderQty: true, stepQty: true, price: true,
-        purchaseUnit: true, inventoryUnit: true, orderUnit: true, costUnit: true,
-        inventoryUnitsPerPurchaseUnit: true, inventoryUnitsPerOrderUnit: true,
-        inventoryUnitsPerCostUnit: true, unitConversionStatus: true,
-      },
-    })
-    if (productsMoq.length !== productIds.length) {
-      return reply.status(400).send({ error: '存在无效、已停售或不属于该供应商的商品' })
-    }
-    const moqMap = new Map(productsMoq.map(p => [p.id, p]))
-    for (const i of items) {
-      const p = moqMap.get(i.productId)
-      if (!p) continue
-      const moq = Number(p.minOrderQty || 1)
-      const step = Number(p.stepQty || 1)
-      const q = Number(i.quantity)
-      if (q < moq - 0.0001) {
-        return reply.status(400).send({ error: `${p.name} 起订量为 ${moq} ${p.unit}, 当前 ${q}` })
-      }
-      // 浮点容差 1e-4
-      if (step > 0 && Math.abs(((q - moq) / step) - Math.round((q - moq) / step)) > 0.0001) {
-        return reply.status(400).send({ error: `${p.name} 需以 ${step} ${p.unit} 为步长 (起 ${moq})` })
-      }
-    }
-
-    // P1: DB Product.price 是成本单位单价；按商品四单位合同换成订货单位单价。
-    // 忽略客户端 unitPrice，防内部串通低报单价 / 客户端 bug。
-    const itemsData = items.map((i: any) => {
-      const product = moqMap.get(i.productId)
-      if (!product) {
-        throw { statusCode: 400, message: `商品不存在: ${i.productId}` }
-      }
-      const { unitPrice, amount } = costUnitPricedOrderLine({
-        product,
-        quantity: i.quantity,
-      })
-      return {
-        productId: i.productId,
-        quantity: i.quantity,
-        originalQuantity: i.quantity,
-        unitPrice,
-        originalUnitPrice: unitPrice,
-        amount,
-        originalAmount: amount,
-        lineOrigin: 'ORIGINAL' as const,
-        ...freezeProductFourUnitsForSupplyDocument(product),
-      }
-    })
-    const totalAmount = sumOrderAmount(itemsData)
-    const amountError = orderAmountBoundError(itemsData.map(item => item.amount), totalAmount)
-    if (amountError) return reply.status(400).send({ error: amountError })
+    // 忽略客户端 unitPrice；共享校验已按四单位合同权威重算每一行。
+    const itemsData = draftValidation.lines
+    const totalAmount = draftValidation.totalAmount!
     const submittedAt = new Date()
     const ym = dayjs().format('YYYYMM')
     const actionPrefix = role === 'CHEF_DIRECTOR' ? `总厨代下单` : `创建采购订单`

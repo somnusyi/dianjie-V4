@@ -22,6 +22,7 @@ import {
   type ParsedWarehouseInventoryRow,
   type WarehouseInventoryIssue,
 } from '../services/warehouseInventoryImport'
+import { recordWarehouseBaselineSnapshot } from '../services/warehouseLedgerBaselineImport'
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024
 const SOURCE = 'MEITUAN' as const
@@ -984,6 +985,45 @@ export const warehouseInventoryImportRoutes: FastifyPluginAsync = async app => {
     } catch (error: any) {
       req.log.error({ error, importId }, 'warehouse inventory import reversal failed')
       return reply.status(error.statusCode || 500).send({ error: error.message || '撤销失败，所有数据均未改动' })
+    }
+  })
+
+  app.post('/:id/baseline', auth(app), async (req: any, reply: any) => {
+    if (!requireInternalInventoryWrite(req, reply)) return
+    const body = z.object({
+      rowVersion: z.number().int().nonnegative(),
+    }).safeParse(req.body)
+    if (!body.success) return reply.status(400).send({ error: body.error.issues[0].message })
+    const importId = String(req.params.id)
+    try {
+      const result = await recordWarehouseBaselineSnapshot({
+        tenantId: req.user.tenantId,
+        userId: req.user.userId,
+        role: req.user.role,
+        importId,
+        rowVersion: body.data.rowVersion,
+      })
+
+      if (result.blocked) {
+        return reply.status(409).send({
+          error: '基线建账被阻断：存在未解决的商品映射或数据问题',
+          blockingIssues: result.blockingIssues,
+        })
+      }
+
+      return {
+        ok: true,
+        importId: result.importId,
+        importNo: result.importNo,
+        warehouseId: result.warehouseId,
+        snapshotAt: result.snapshotAt,
+        createdCount: result.createdCount,
+        adjustedCount: result.adjustedCount,
+        items: result.items,
+      }
+    } catch (error: any) {
+      req.log.error({ error, importId }, 'warehouse baseline import failed')
+      return reply.status(error.statusCode || 500).send({ error: error.message || '基线建账失败，所有数据均未改动' })
     }
   })
 }

@@ -54,10 +54,14 @@ async function waitFor(predicate: () => boolean, timeout = 1000) {
   }
 }
 
-describe('美团期末库存导入页面', () => {
+describe('美团期初库存基线导入页面', () => {
   beforeEach(() => {
     mockFetch.mockReset()
-    vi.stubGlobal('confirm', vi.fn(() => true))
+    Object.defineProperty(window, 'confirm', {
+      configurable: true,
+      writable: true,
+      value: vi.fn(() => true),
+    })
     let current = importRecord(false)
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
@@ -98,6 +102,52 @@ describe('美团期末库存导入页面', () => {
     const call = mockFetch.mock.calls.find(([path]) => String(path).endsWith('/resolve-name-suggestions'))
     expect(call?.[1]?.method).toBe('POST')
     expect(JSON.parse(String(call?.[1]?.body))).toEqual({ rowVersion: 0 })
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('applies an eligible staged import through the baseline endpoint and reloads durable state', async () => {
+    let current: any = importRecord(true)
+    mockFetch.mockImplementation((path, init) => {
+      const url = String(path)
+      if (url === '/api/products') return Promise.resolve([product])
+      if (url === '/api/warehouse-inventory-imports') return Promise.resolve({ items: [current] })
+      if (url === '/api/warehouse-inventory-imports/import-1') return Promise.resolve(current)
+      if (url === '/api/warehouse-inventory-imports/import-1/baseline' && init?.method === 'POST') {
+        current = { ...current, status: 'CONFIRMED', rowVersion: 2, confirmedAt: '2026-08-02T10:00:00.000Z' }
+        return Promise.resolve({
+          ok: true,
+          importId: current.id,
+          importNo: current.no,
+          warehouseId: 'warehouse-1',
+          snapshotAt: '2026-07-31T15:59:59.999Z',
+          createdCount: 1,
+          adjustedCount: 0,
+          items: [],
+        })
+      }
+      return Promise.reject(new Error(`unexpected API: ${url}`))
+    })
+
+    const { container, root } = renderPage()
+    let button: HTMLButtonElement | undefined
+    await waitFor(() => {
+      button = Array.from(container.querySelectorAll('button'))
+        .find(item => item.textContent?.includes('建立期初基线'))
+      return Boolean(button && !button.disabled)
+    })
+
+    await act(async () => { button!.click() })
+    expect(vi.mocked(window.confirm)).toHaveBeenCalledWith(expect.stringContaining('期初基线'))
+    await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path).endsWith('/baseline')))
+    await waitFor(() => container.textContent?.includes('期初基线已生效') ?? false)
+
+    const call = mockFetch.mock.calls.find(([path]) => String(path).endsWith('/baseline'))
+    expect(call?.[1]?.method).toBe('POST')
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ rowVersion: 1 })
+    expect(mockFetch.mock.calls.some(([path]) => String(path).endsWith('/confirm'))).toBe(false)
+    expect(container.textContent).toContain('已生效')
 
     act(() => root.unmount())
     container.remove()

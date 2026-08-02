@@ -1,8 +1,9 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import type { ReactNode } from 'react'
+import { BottomNav } from '@/components/v2'
 
 type NavItem = {
   href: string
@@ -66,17 +67,62 @@ const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
   },
 ]
 
+/** 移动端底部导航 4 Tab */
+const MOBILE_TABS = [
+  { key: 'home', label: '工作台', icon: '⌂', href: '/v2/supply-chain/home' },
+  { key: 'orders', label: '订单', icon: '☷', href: '/v2/supply-chain/fulfillment' },
+  { key: 'inventory', label: '库存', icon: '▦', href: '/v2/supply-chain/inventory' },
+  { key: 'more', label: '更多', icon: '◐', href: '/v2/supply-chain/analytics' },
+]
+
 function active(pathname: string, item: NavItem) {
   return (item.match || [item.href]).some(
     path => pathname === path || pathname.startsWith(`${path}/`),
   )
 }
 
+function mobileActiveKey(pathname: string): string {
+  // 优先精确匹配，否则按前缀
+  for (const t of MOBILE_TABS) {
+    if (pathname === t.href || pathname.startsWith(`${t.href}/`)) return t.key
+  }
+  // 订单相关子页归到 orders
+  if (
+    pathname.startsWith('/v2/supply-chain/orders') ||
+    pathname.startsWith('/v2/supply-chain/deliveries') ||
+    pathname.startsWith('/v2/supply-chain/fulfillment')
+  ) {
+    return 'orders'
+  }
+  // 库存相关子页归到 inventory
+  if (
+    pathname.startsWith('/v2/supply-chain/inventory') ||
+    pathname.startsWith('/v2/supply-chain/products') ||
+    pathname.startsWith('/v2/supply-chain/categories') ||
+    pathname.startsWith('/v2/supply-chain/suppliers')
+  ) {
+    return 'inventory'
+  }
+  // 分析/账务/差异/收货等归到 more
+  if (
+    pathname.startsWith('/v2/supply-chain/analytics') ||
+    pathname.startsWith('/v2/supply-chain/billing') ||
+    pathname.startsWith('/v2/supply-chain/differences') ||
+    pathname.startsWith('/v2/supply-chain/receipts') ||
+    pathname.startsWith('/v2/supply-chain/stores')
+  ) {
+    return 'more'
+  }
+  return 'home'
+}
+
 export function SupplyChainShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() || ''
+  const router = useRouter()
 
   return (
     <div className="min-h-screen bg-bg">
+      {/* PC 侧边栏 — lg 以上显示 */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-border bg-white lg:flex">
         <div className="border-b border-border px-5 py-5">
           <Link href="/v2/supply-chain/home" className="flex items-center gap-3">
@@ -125,9 +171,23 @@ export function SupplyChainShell({ children }: { children: ReactNode }) {
           </div>
         </div>
       </aside>
+
+      {/* 主内容区 — 移动端无左侧内边距，PC 有 lg:pl-64 */}
       <main className="min-h-screen lg:pl-64">
         <div className="mx-auto min-h-screen w-full max-w-[1600px]">{children}</div>
       </main>
+
+      {/* 移动端底部导航 — lg 以下显示 */}
+      <div className="lg:hidden">
+        <BottomNav
+          tabs={MOBILE_TABS.map(t => ({ key: t.key, label: t.label, icon: t.icon }))}
+          activeKey={mobileActiveKey(pathname)}
+          onChange={(k) => {
+            const t = MOBILE_TABS.find(tab => tab.key === k)
+            if (t && t.href !== pathname) router.push(t.href)
+          }}
+        />
+      </div>
     </div>
   )
 }

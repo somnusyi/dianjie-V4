@@ -90,7 +90,13 @@ async function serializableWithRetry<T>(work: (tx: Prisma.TransactionClient) => 
         timeout: 15_000,
       })
     } catch (error: any) {
-      if (error?.code !== 'P2034' || attempt === 4) throw error
+      // P2034 covers serializable write conflicts/deadlocks. P2002 is also
+      // retryable inside this ledger because two first writes can race while
+      // creating the same tenant/warehouse/product balance row. On retry the
+      // committed balance or idempotent movement is visible and the request
+      // deterministically continues or replays. Business duplicates such as
+      // a reused batch number are detected explicitly after the retry.
+      if (!['P2034', 'P2002'].includes(error?.code) || attempt === 4) throw error
     }
   }
   throw new Error('总仓库存事务重试失败')

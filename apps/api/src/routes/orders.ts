@@ -28,6 +28,15 @@ import {
   releaseSupplierStockForOrder,
   reserveSupplierStockForOrder,
 } from '../services/supplierStockReservation'
+import {
+  consumeWarehouseLedgerForShipment,
+  getWarehouseLedgerMode,
+  postWarehouseReleaseForOrder,
+  postWarehouseReservationForOrder,
+  postWarehouseShipment,
+  releaseWarehouseLedgerForOrder,
+  reserveWarehouseLedgerForOrder,
+} from '../services/warehouseLedger'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 import { calendarDateSchema } from '../lib/calendar-date'
 import { ensureReceiptInventoryUnitSnapshots } from '../services/receiptInventoryUnits'
@@ -56,6 +65,59 @@ export function canOperateSupplyOrder(role: string | undefined | null): boolean 
   return isSupplierRole(role)
     || hasInternalSupplyChainCapability(role, 'order.write')
     || ['ADMIN', 'SUPER_ADMIN'].includes(role || '')
+}
+
+const shadowPostingQueues = new Map<string, Promise<void>>()
+
+async function postShadowWarehouseLedger(input: {
+  tenantId: string
+  userId: string
+  sourceId: string
+  orderingKey: string
+  eventType: string
+  payload: Record<string, unknown>
+  work: () => Promise<unknown>
+  log: { error: (value: unknown, message?: string) => void }
+}) {
+  const predecessor = shadowPostingQueues.get(input.orderingKey) || Promise.resolve()
+  const current = predecessor.catch(() => undefined).then(async () => {
+    try {
+      await input.work()
+    } catch (error: any) {
+      input.log.error({ err: error, sourceId: input.sourceId, eventType: input.eventType }, 'warehouse shadow posting failed')
+      try {
+        await prisma.opLog.create({
+          data: {
+            tenantId: input.tenantId,
+            userId: input.userId,
+            action: `总仓影子账补记失败：${input.eventType}`,
+            target: input.sourceId,
+            targetId: input.sourceId,
+            entityType: 'WarehouseLedgerShadowFailure',
+            metadata: {
+              eventType: input.eventType,
+              error: String(error?.message || error).slice(0, 500),
+              payload: input.payload as Prisma.InputJsonValue,
+            },
+          },
+        })
+      } catch (logError) {
+        input.log.error({ err: logError, sourceId: input.sourceId }, 'warehouse shadow failure audit log failed')
+      }
+    }
+  })
+  shadowPostingQueues.set(input.orderingKey, current)
+  await current
+  if (shadowPostingQueues.get(input.orderingKey) === current) shadowPostingQueues.delete(input.orderingKey)
+}
+
+async function safeWarehouseLedgerMode(tenantId: string, log: { error: (value: unknown, message?: string) => void }) {
+  try {
+    return await getWarehouseLedgerMode(tenantId)
+  } catch (error) {
+    log.error({ err: error, tenantId }, 'warehouse inventory mode lookup failed; bypassing ledger as OFF')
+    return { warehouseId: null, inventoryMode: 'OFF' as const }
+  }
 }
 
 function orderAmountBoundError(lineAmounts: Prisma.Decimal[], total: Prisma.Decimal): string | null {
@@ -646,10 +708,15 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (isStoreScoped(role) && storeId) where.storeId = storeId
     // 总厨只能撤自己下的单 (代下), 不能撤厨师长/店长下的单
     if (role === 'CHEF_DIRECTOR') where.createdById = userId
-    const order = await prisma.purchaseOrder.findFirst({ where })
+    const order = await prisma.purchaseOrder.findFirst({
+      where,
+      include: { supplier: { select: { sourceType: true } } },
+    })
     if (!order) return reply.status(400).send({ error: '订单不存在 / 供应商已发货 / 状态不可撤回' })
 
     const wasConfirmed = order.status === 'CONFIRMED'
+    const isWarehouseOrder = order.supplier.sourceType === 'HEADQ_WAREHOUSE'
+    const ledgerMode = wasConfirmed && isWarehouseOrder ? await safeWarehouseLedgerMode(tenantId, req.log) : null
     await prisma.$transaction(async (tx) => {
       const updated = await tx.purchaseOrder.updateMany({
         where: { id, status: order.status, rowVersion: order.rowVersion },
@@ -659,7 +726,12 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         },
       })
       if (updated.count === 0) throw { statusCode: 409, message: '订单状态已变化，请刷新后重试' }
-      if (wasConfirmed) await releaseSupplierStockForOrder(tx, id)
+      if (wasConfirmed) {
+        if (!isWarehouseOrder) await releaseSupplierStockForOrder(tx, id)
+        if (isWarehouseOrder && ledgerMode?.inventoryMode === 'STRICT') {
+          await releaseWarehouseLedgerForOrder(tx, { tenantId, purchaseOrderId: id, userId })
+        }
+      }
       await tx.purchaseOrderEvent.create({
         data: {
           tenantId, purchaseOrderId: id, eventType: 'CANCELLED', actorId: userId, actorRole: role,
@@ -671,6 +743,18 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         data: { tenantId, userId, action: `下单方撤回订单 (原状态: ${order.status}): ${cancelReason.slice(0,80)}`, target: order.no, entityType: 'PurchaseOrder', targetId: id },
       })
     })
+    if (wasConfirmed && isWarehouseOrder && ledgerMode?.inventoryMode === 'SHADOW') {
+      void postShadowWarehouseLedger({
+        tenantId,
+        userId,
+        sourceId: id,
+        orderingKey: id,
+        eventType: 'ORDER_RELEASED',
+        payload: { purchaseOrderId: id, reason: cancelReason },
+        log: req.log,
+        work: () => postWarehouseReleaseForOrder({ tenantId, purchaseOrderId: id, userId }),
+      })
+    }
     // 通知供应商 (避免他正在准备发货)
     const sup = await prisma.supplier.findUnique({ where: { id: order.supplierId }, select: { name: true } })
     void sendNotification({
@@ -1042,23 +1126,35 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const order = await prisma.purchaseOrder.findFirst({
       where,
       include: {
-        supplier: { select: { inventoryMode: true } },
+        supplier: { select: { inventoryMode: true, sourceType: true } },
         revisions: { where: { status: 'PENDING' }, select: { id: true } },
         items: {
           where: { isActive: true },
-          include: { product: { select: { name: true } } },
+          include: { product: { select: { name: true, unit: true } } },
         },
       },
     })
     if (!order) throw { statusCode: 400, message: '订单不存在或当前状态不可接单' }
     if (order.revisions.length > 0) throw { statusCode: 409, message: '订单有待门店确认的修改，确认完成后才能接单' }
+    const isWarehouseOrder = order.supplier.sourceType === 'HEADQ_WAREHOUSE'
+    const ledgerMode = isWarehouseOrder ? await safeWarehouseLedgerMode(tenantId, req.log) : null
+    const warehouseLines = order.items.map(item => ({
+      purchaseOrderItemId: item.id,
+      productId: item.productId,
+      quantity: item.quantity,
+      productName: item.product?.name,
+      productUnit: item.product?.unit,
+      orderUnitSnapshot: item.orderUnitSnapshot,
+      inventoryUnitSnapshot: item.inventoryUnitSnapshot,
+      inventoryUnitsPerOrderUnitSnapshot: item.inventoryUnitsPerOrderUnitSnapshot,
+    }))
     await prisma.$transaction(async (tx) => {
       const updated = await tx.purchaseOrder.updateMany({
         where: { id, status: 'SUBMITTED', rowVersion: order.rowVersion },
         data: { status: 'CONFIRMED', rowVersion: { increment: 1 } },
       })
       if (updated.count === 0) throw { statusCode: 409, message: '订单状态已变化，请刷新后重试' }
-      if (order.supplier.inventoryMode === 'STRICT') {
+      if (!isWarehouseOrder && order.supplier.inventoryMode === 'STRICT') {
         await reserveSupplierStockForOrder(tx, {
           tenantId,
           supplierId: order.supplierId,
@@ -1071,6 +1167,14 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           })),
         })
       }
+      if (isWarehouseOrder && ledgerMode?.inventoryMode === 'STRICT') {
+        await reserveWarehouseLedgerForOrder(tx, {
+          tenantId,
+          purchaseOrderId: order.id,
+          userId,
+          lines: warehouseLines,
+        })
+      }
       await tx.purchaseOrderEvent.create({
         data: {
           tenantId, purchaseOrderId: id, eventType: 'ACCEPTED', actorId: userId, actorRole: role,
@@ -1081,6 +1185,23 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         data: { tenantId, userId, action: '供应商接单', target: order.no, entityType: 'PurchaseOrder', targetId: id },
       })
     })
+    if (isWarehouseOrder && ledgerMode?.inventoryMode === 'SHADOW') {
+      void postShadowWarehouseLedger({
+        tenantId,
+        userId,
+        sourceId: order.id,
+        orderingKey: order.id,
+        eventType: 'ORDER_RESERVED',
+        payload: { purchaseOrderId: order.id },
+        log: req.log,
+        work: () => postWarehouseReservationForOrder({
+          tenantId,
+          purchaseOrderId: order.id,
+          userId,
+          lines: warehouseLines,
+        }),
+      })
+    }
     const sup = await prisma.supplier.findUnique({ where: { id: order.supplierId }, select: { name: true } })
     void notifyOrderConfirmed(tenantId, order.no, sup?.name || '', order.storeId)
     notify({
@@ -1116,11 +1237,16 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (scopedSupplierId) where.supplierId = scopedSupplierId
     const order = await prisma.purchaseOrder.findFirst({
       where,
-      include: { revisions: { where: { status: 'PENDING' }, select: { id: true } } },
+      include: {
+        supplier: { select: { sourceType: true } },
+        revisions: { where: { status: 'PENDING' }, select: { id: true } },
+      },
     })
     if (!order) throw { statusCode: 400, message: '订单不存在或当前状态不可拒单' }
     if (order.revisions.length > 0) throw { statusCode: 409, message: '订单有待门店确认的修改，请等待门店处理后再拒单' }
     const rejectReason = String(reason).trim().slice(0, 100)
+    const isWarehouseOrder = order.supplier.sourceType === 'HEADQ_WAREHOUSE'
+    const ledgerMode = order.status === 'CONFIRMED' && isWarehouseOrder ? await safeWarehouseLedgerMode(tenantId, req.log) : null
     await prisma.$transaction(async (tx) => {
       const updated = await tx.purchaseOrder.updateMany({
         where: { id, status: order.status, rowVersion: order.rowVersion },
@@ -1130,7 +1256,12 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         },
       })
       if (updated.count === 0) throw { statusCode: 409, message: '订单状态已变化，请刷新后重试' }
-      if (order.status === 'CONFIRMED') await releaseSupplierStockForOrder(tx, id)
+      if (order.status === 'CONFIRMED') {
+        if (!isWarehouseOrder) await releaseSupplierStockForOrder(tx, id)
+        if (isWarehouseOrder && ledgerMode?.inventoryMode === 'STRICT') {
+          await releaseWarehouseLedgerForOrder(tx, { tenantId, purchaseOrderId: id, userId })
+        }
+      }
       await tx.purchaseOrderEvent.create({
         data: {
           tenantId, purchaseOrderId: id, eventType: 'CANCELLED', actorId: userId, actorRole: role,
@@ -1145,6 +1276,18 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         },
       })
     })
+    if (order.status === 'CONFIRMED' && isWarehouseOrder && ledgerMode?.inventoryMode === 'SHADOW') {
+      void postShadowWarehouseLedger({
+        tenantId,
+        userId,
+        sourceId: id,
+        orderingKey: id,
+        eventType: 'ORDER_RELEASED',
+        payload: { purchaseOrderId: id, reason: rejectReason },
+        log: req.log,
+        work: () => postWarehouseReleaseForOrder({ tenantId, purchaseOrderId: id, userId }),
+      })
+    }
     const sup = await prisma.supplier.findUnique({ where: { id: order.supplierId }, select: { name: true } })
     void notifyOrderRejected(tenantId, order.no, sup?.name || '', rejectReason, order.storeId)
     return { success: true }
@@ -1276,11 +1419,13 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       where: shipWhere,
       // 实发上限是 per-product 配置 (shipUpperPct + shipUpperBuffer), 同时拉出来用于 ship 校验
       include: {
-        supplier: { select: { inventoryMode: true } },
+        supplier: { select: { inventoryMode: true, sourceType: true } },
         items: { where: { isActive: true }, include: { product: { select: { name: true, unit: true, spec: true, code: true, category: true, shipUpperPct: true, shipUpperBuffer: true } } } },
       },
     })
     if (!order) throw { statusCode: 400, message: '订单不存在或状态不可发货' }
+    const isWarehouseOrder = order.supplier.sourceType === 'HEADQ_WAREHOUSE'
+    const ledgerMode = isWarehouseOrder ? await safeWarehouseLedgerMode(tenantId, req.log) : null
 
     // 校验 + 构建 itemId → shippedQty 映射 (没传的按 quantity 全发)
     const shippedMap = new Map<string, number>()
@@ -1310,6 +1455,17 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const lineShipped = order.items.map(it => ({
       it,
       shipped: shippedMap.has(it.id) ? shippedMap.get(it.id)! : Number(it.quantity),
+    }))
+    const warehouseShipmentLines = lineShipped.map(line => ({
+      purchaseOrderItemId: line.it.id,
+      productId: line.it.productId,
+      quantity: line.it.quantity,
+      shippedQty: line.shipped,
+      productName: line.it.product?.name,
+      productUnit: line.it.product?.unit,
+      orderUnitSnapshot: line.it.orderUnitSnapshot,
+      inventoryUnitSnapshot: line.it.inventoryUnitSnapshot,
+      inventoryUnitsPerOrderUnitSnapshot: line.it.inventoryUnitsPerOrderUnitSnapshot,
     }))
     const fulfillment = buildShipmentCloseSummary(lineShipped.map(line => ({
       itemId: line.it.id,
@@ -1442,7 +1598,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           },
         })
       }
-      if (order.supplier.inventoryMode === 'STRICT') {
+      if (!isWarehouseOrder && order.supplier.inventoryMode === 'STRICT') {
         await consumeSupplierStockForShipment(tx, {
           tenantId,
           supplierId: order.supplierId,
@@ -1459,10 +1615,21 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             productName: line.it.product?.name,
           })),
         })
-      } else {
+      } else if (!isWarehouseOrder) {
         // 供应商在试运行期可能从 STRICT 切回 NOT_TRACKED；释放历史预占，
         // 但不改 Product.stock，也不制造无法审计的负库存/空批次扣减。
         await releaseSupplierStockForOrder(tx, order.id)
+      }
+      if (isWarehouseOrder && ledgerMode?.inventoryMode === 'STRICT') {
+        await consumeWarehouseLedgerForShipment(tx, {
+          tenantId,
+          purchaseOrderId: order.id,
+          deliveryOrderId: delivery.id,
+          orderNo: order.no,
+          userId,
+          effectiveAt: shippedAt,
+          lines: warehouseShipmentLines,
+        })
       }
       await tx.opLog.create({
         data: {
@@ -1479,6 +1646,27 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         },
       })
     })
+
+    if (isWarehouseOrder && ledgerMode?.inventoryMode === 'SHADOW') {
+      void postShadowWarehouseLedger({
+        tenantId,
+        userId,
+        sourceId: deliveryResult!.id,
+        orderingKey: order.id,
+        eventType: 'ORDER_OUTBOUND',
+        payload: { purchaseOrderId: order.id, deliveryOrderId: deliveryResult!.id },
+        log: req.log,
+        work: () => postWarehouseShipment({
+          tenantId,
+          purchaseOrderId: order.id,
+          deliveryOrderId: deliveryResult!.id,
+          orderNo: order.no,
+          userId,
+          effectiveAt: shippedAt,
+          lines: warehouseShipmentLines,
+        }),
+      })
+    }
 
     if (duplicatedShipment) {
       return concurrentReplayResult!

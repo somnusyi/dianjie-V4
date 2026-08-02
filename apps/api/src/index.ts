@@ -79,6 +79,8 @@ import { meituanAdminRoutes } from './routes/meituanAdmin'
 import { meituanDataRoutes } from './routes/meituanData'
 import { dailyBusinessImportRoutes } from './routes/dailyBusinessImports'
 import { inventoryCountRoutes } from './routes/inventoryCounts'
+import { warehouseInventoryImportRoutes } from './routes/warehouseInventoryImports'
+import { warehouseInventoryRoutes } from './routes/warehouseInventory'
 import { consumptionAdminRoutes, consumptionRoutes } from './routes/consumption'
 import { storeOverviewRoutes } from './routes/storeOverview'
 import { feedbackRoutes } from './routes/feedback'
@@ -255,6 +257,8 @@ async function bootstrap() {
   // 护栏须 > 视频上限, 否则 50MB 视频会被 multipart 先截断成坏文件
   app.register(multipart, { limits: { fileSize: 55 * 1024 * 1024 } })
   app.register(uploadRoutes, { prefix: '/api' })
+  app.register(warehouseInventoryImportRoutes, { prefix: '/api/warehouse-inventory-imports' })
+  app.register(warehouseInventoryRoutes, { prefix: '/api/warehouse-inventory' })
   app.register(invoiceRoutes, { prefix: '/api/invoices' })
   app.register(invoicePaymentRoutes, { prefix: '/api/invoice-payments' })
   app.register(capitalRoutes, { prefix: '/api/capital' })

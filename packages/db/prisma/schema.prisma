@@ -29,6 +29,14 @@ model Tenant {
   products                      Product[]
   warehouses                    Warehouse[]
   warehouseStocks               WarehouseStock[]
+  warehouseInventoryImports     WarehouseInventoryImport[]
+  warehouseInventoryImportItems WarehouseInventoryImportItem[]
+  productExternalCodes          ProductExternalCode[]
+  warehouseLedgerBalances       WarehouseLedgerBalance[]
+  warehouseLedgerMovements      WarehouseLedgerMovement[]
+  warehouseLedgerReservations   WarehouseLedgerReservation[]
+  warehouseLedgerLots           WarehouseLedgerLot[]
+  warehouseLedgerLotAllocations WarehouseLedgerLotAllocation[]
   supplierProductCategories     SupplierProductCategory[]
   receipts                      Receipt[]
   reconciliations               Reconciliation[]
@@ -80,15 +88,18 @@ model Tenant {
 // 当前每个 tenant 只启用一个 code=default 的默认仓；数据库 partial unique
 // index 保证单默认仓，模型保留未来同 tenant 多仓能力。
 model Warehouse {
-  id         String   @id @default(cuid()) @db.VarChar(64)
-  tenantId   String
-  code       String   @db.VarChar(64)
-  name       String   @db.VarChar(100)
-  isDefault  Boolean  @default(false)
-  isActive   Boolean  @default(true)
-  rowVersion Int      @default(0)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id                   String                 @id @default(cuid()) @db.VarChar(64)
+  tenantId             String
+  code                 String                 @db.VarChar(64)
+  name                 String                 @db.VarChar(100)
+  isDefault            Boolean                @default(false)
+  isActive             Boolean                @default(true)
+  rowVersion           Int                    @default(0)
+  // OFF 默认不投影；SHADOW 只记账与告警且不阻断现有履约；完成新实盘期初和切换评审后才可改为 STRICT。
+  inventoryMode        WarehouseInventoryMode @default(OFF)
+  inventoryActivatedAt DateTime?
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
 
   tenant                        Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   stocks                        WarehouseStock[]
@@ -97,11 +108,23 @@ model Warehouse {
   supplierStockBatches          SupplierStockBatch[]
   supplierStockBatchAllocations SupplierStockBatchAllocation[]
   supplierStockReservations     SupplierStockReservation[]
+  inventoryImports              WarehouseInventoryImport[]
+  ledgerBalances                WarehouseLedgerBalance[]
+  ledgerMovements               WarehouseLedgerMovement[]
+  ledgerReservations            WarehouseLedgerReservation[]
+  ledgerLots                    WarehouseLedgerLot[]
+  ledgerLotAllocations          WarehouseLedgerLotAllocation[]
 
   @@unique([tenantId, code])
   @@unique([tenantId, id])
   @@index([tenantId, isActive])
   @@map("warehouses")
+}
+
+enum WarehouseInventoryMode {
+  OFF
+  SHADOW
+  STRICT
 }
 
 // ── 仓库商品物理余额 ──────────────────────────────────
@@ -125,6 +148,308 @@ model WarehouseStock {
   @@unique([tenantId, warehouseId, productId])
   @@index([tenantId, productId])
   @@map("warehouse_stocks")
+}
+
+// ── 总仓真实库存影子账 ───────────────────────────────
+// 与迁移期 Product.stock / WarehouseStock 的 legacy orderUnit 语义完全隔离。
+// 余额、预占、流水、批次一律使用 Product.inventoryUnit；供应商不是余额维度。
+model WarehouseLedgerBalance {
+  id              String   @id @default(cuid()) @db.VarChar(64)
+  tenantId        String
+  warehouseId     String   @db.VarChar(64)
+  productId       String
+  inventoryUnit   String   @db.VarChar(16)
+  physicalQty     Decimal  @default(0) @db.Decimal(18, 6)
+  reservedQty     Decimal  @default(0) @db.Decimal(18, 6)
+  inventoryValue  Decimal  @default(0) @db.Decimal(20, 4)
+  averageUnitCost Decimal  @default(0) @db.Decimal(18, 6)
+  rowVersion      Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse Warehouse @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  product   Product   @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, warehouseId, productId])
+  @@index([tenantId, productId])
+  @@map("warehouse_ledger_balances")
+}
+
+enum WarehouseLedgerMovementType {
+  OPENING_BALANCE
+  MANUAL_INBOUND
+  ORDER_RESERVED
+  ORDER_RELEASED
+  ORDER_OUTBOUND
+  ADJUSTMENT
+  LOSS
+  REVERSAL
+}
+
+model WarehouseLedgerMovement {
+  id                   String                      @id @default(cuid()) @db.VarChar(64)
+  tenantId             String
+  warehouseId          String                      @db.VarChar(64)
+  productId            String
+  type                 WarehouseLedgerMovementType
+  physicalDelta        Decimal                     @default(0) @db.Decimal(18, 6)
+  reservedDelta        Decimal                     @default(0) @db.Decimal(18, 6)
+  valueDelta           Decimal                     @default(0) @db.Decimal(20, 4)
+  physicalAfter        Decimal                     @db.Decimal(18, 6)
+  reservedAfter        Decimal                     @db.Decimal(18, 6)
+  valueAfter           Decimal                     @db.Decimal(20, 4)
+  averageUnitCostAfter Decimal                     @db.Decimal(18, 6)
+  originalQuantity     Decimal                     @db.Decimal(18, 6)
+  originalUnit         String                      @db.VarChar(16)
+  conversionFactor     Decimal                     @db.Decimal(18, 6)
+  inventoryQuantity    Decimal                     @db.Decimal(18, 6)
+  inventoryUnit        String                      @db.VarChar(16)
+  inventoryUnitCost    Decimal                     @default(0) @db.Decimal(18, 6)
+  sourceType           String                      @db.VarChar(50)
+  sourceId             String                      @db.VarChar(80)
+  sourceLineId         String                      @default("") @db.VarChar(80)
+  idempotencyKey       String                      @db.VarChar(160)
+  requestFingerprint   String?                     @db.Char(64)
+  effectiveAt          DateTime
+  note                 String?                     @db.VarChar(240)
+  sourceName           String?                     @db.VarChar(120)
+  createdById          String?
+  reversalOfId         String?                     @unique @db.VarChar(64)
+  recordedAt           DateTime                    @default(now())
+
+  tenant         Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse      Warehouse                      @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  product        Product                        @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  reversalOf     WarehouseLedgerMovement?       @relation("WarehouseLedgerMovementReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversal       WarehouseLedgerMovement?       @relation("WarehouseLedgerMovementReversal")
+  createdLot     WarehouseLedgerLot?            @relation("WarehouseLedgerLotSource")
+  lotAllocations WarehouseLedgerLotAllocation[]
+
+  @@unique([tenantId, warehouseId, idempotencyKey])
+  @@index([tenantId, warehouseId, productId, effectiveAt])
+  @@index([tenantId, sourceType, sourceId])
+  @@map("warehouse_ledger_movements")
+}
+
+enum WarehouseLedgerReservationStatus {
+  ACTIVE
+  RELEASED
+  CONSUMED
+}
+
+model WarehouseLedgerReservation {
+  id                    String                           @id @default(cuid()) @db.VarChar(64)
+  tenantId              String
+  warehouseId           String                           @db.VarChar(64)
+  productId             String
+  purchaseOrderId       String
+  purchaseOrderItemId   String                           @unique
+  originalQuantity      Decimal                          @db.Decimal(18, 6)
+  originalUnit          String                           @db.VarChar(16)
+  conversionFactor      Decimal                          @db.Decimal(18, 6)
+  inventoryQuantity     Decimal                          @db.Decimal(18, 6)
+  fulfilledInventoryQty Decimal                          @default(0) @db.Decimal(18, 6)
+  inventoryUnit         String                           @db.VarChar(16)
+  status                WarehouseLedgerReservationStatus @default(ACTIVE)
+  releasedAt            DateTime?
+  consumedAt            DateTime?
+  createdAt             DateTime                         @default(now())
+  updatedAt             DateTime                         @updatedAt
+
+  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse         Warehouse         @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  product           Product           @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  purchaseOrder     PurchaseOrder     @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  purchaseOrderItem PurchaseOrderItem @relation(fields: [purchaseOrderItemId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, warehouseId, productId, status])
+  @@index([purchaseOrderId, status])
+  @@map("warehouse_ledger_reservations")
+}
+
+enum WarehouseLedgerLotKind {
+  OPENING
+  MANUAL_INBOUND
+  ADJUSTMENT
+}
+
+model WarehouseLedgerLot {
+  id                String                 @id @default(cuid()) @db.VarChar(64)
+  tenantId          String
+  warehouseId       String                 @db.VarChar(64)
+  productId         String
+  kind              WarehouseLedgerLotKind
+  batchNo           String                 @db.VarChar(80)
+  initialQty        Decimal                @db.Decimal(18, 6)
+  remainingQty      Decimal                @db.Decimal(18, 6)
+  inventoryUnit     String                 @db.VarChar(16)
+  inventoryUnitCost Decimal                @db.Decimal(18, 6)
+  sourceName        String?                @db.VarChar(120)
+  manufactureDate   DateTime?              @db.Date
+  expiryDate        DateTime?              @db.Date
+  sourceMovementId  String                 @unique @db.VarChar(64)
+  depletedAt        DateTime?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  tenant         Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse      Warehouse                      @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  product        Product                        @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  sourceMovement WarehouseLedgerMovement        @relation("WarehouseLedgerLotSource", fields: [sourceMovementId], references: [id], onDelete: Restrict)
+  allocations    WarehouseLedgerLotAllocation[]
+
+  @@unique([tenantId, warehouseId, productId, batchNo])
+  @@index([tenantId, warehouseId, productId, remainingQty])
+  @@index([tenantId, warehouseId, expiryDate])
+  @@map("warehouse_ledger_lots")
+}
+
+model WarehouseLedgerLotAllocation {
+  id          String   @id @default(cuid()) @db.VarChar(64)
+  tenantId    String
+  warehouseId String   @db.VarChar(64)
+  productId   String
+  lotId       String   @db.VarChar(64)
+  movementId  String   @db.VarChar(64)
+  quantity    Decimal  @db.Decimal(18, 6)
+  unitCost    Decimal  @db.Decimal(18, 6)
+  value       Decimal  @db.Decimal(20, 4)
+  createdAt   DateTime @default(now())
+
+  tenant    Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse Warehouse               @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  product   Product                 @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  lot       WarehouseLedgerLot      @relation(fields: [lotId], references: [id], onDelete: Restrict)
+  movement  WarehouseLedgerMovement @relation(fields: [movementId], references: [id], onDelete: Restrict)
+
+  @@unique([lotId, movementId])
+  @@index([movementId])
+  @@index([tenantId, warehouseId, productId])
+  @@map("warehouse_ledger_lot_allocations")
+}
+
+// ── 外部商品编码映射 ──────────────────────────────────
+// 第三方系统编码必须经过精确匹配或人工复核后才能写库存；名称只允许
+// 作为候选提示，不能直接成为库存写入依据。
+model ProductExternalCode {
+  id           String                         @id @default(cuid())
+  tenantId     String
+  productId    String
+  source       WarehouseInventoryImportSource
+  externalCode String                         @db.VarChar(80)
+  externalName String?                        @db.VarChar(120)
+  verifiedById String?
+  verifiedAt   DateTime?
+  createdAt    DateTime                       @default(now())
+  updatedAt    DateTime                       @updatedAt
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, source, externalCode])
+  @@index([tenantId, productId, source])
+  @@map("product_external_codes")
+}
+
+enum WarehouseInventoryImportSource {
+  MEITUAN
+}
+
+enum WarehouseInventoryImportStatus {
+  STAGED
+  CONFIRMED
+  REVERSED
+}
+
+// ── 供应链仓库库存快照导入单 ──────────────────────────
+// 这是独立库存事实，不伪装成采购入库单。确认时仅按目标余额生成差额
+// 流水；撤销时追加反向流水，原始文件和历史记录始终保留。
+model WarehouseInventoryImport {
+  id                  String                         @id @default(cuid())
+  tenantId            String
+  warehouseId         String                         @db.VarChar(64)
+  no                  String                         @db.VarChar(50)
+  source              WarehouseInventoryImportSource
+  sourceFilename      String                         @db.VarChar(255)
+  fileHash            String                         @db.Char(64)
+  sourceWarehouseName String                         @db.VarChar(100)
+  snapshotDate        DateTime                       @db.Date
+  status              WarehouseInventoryImportStatus @default(STAGED)
+  sourceRowCount      Int
+  itemCount           Int
+  ignoredRowCount     Int                            @default(0)
+  matchedCount        Int                            @default(0)
+  blockingCount       Int                            @default(0)
+  warningCount        Int                            @default(0)
+  detailTotalAmount   Decimal                        @default(0) @db.Decimal(14, 2)
+  sourceTotalAmount   Decimal?                       @db.Decimal(14, 2)
+  metadata            Json
+  createdById         String
+  confirmedById       String?
+  reversedById        String?
+  confirmedAt         DateTime?
+  reversedAt          DateTime?
+  reversalReason      String?                        @db.VarChar(240)
+  rowVersion          Int                            @default(0)
+  createdAt           DateTime                       @default(now())
+  updatedAt           DateTime                       @updatedAt
+
+  tenant    Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse Warehouse                      @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  items     WarehouseInventoryImportItem[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, no])
+  @@unique([tenantId, warehouseId, source, fileHash], map: "warehouse_inventory_imports_idempotency_key")
+  @@index([tenantId, warehouseId, snapshotDate, status], map: "warehouse_inventory_imports_scope_date_status_idx")
+  @@map("warehouse_inventory_imports")
+}
+
+model WarehouseInventoryImportItem {
+  id                          String   @id @default(cuid())
+  tenantId                    String
+  importId                    String
+  rowNumber                   Int
+  externalCode                String   @db.VarChar(80)
+  externalName                String   @db.VarChar(120)
+  sourceSpec                  String?  @db.VarChar(160)
+  sourceCategory              String?  @db.VarChar(80)
+  sourceWarehouseName         String   @db.VarChar(100)
+  purchaseUnit                String   @db.VarChar(16)
+  conversionText              String?  @db.VarChar(80)
+  sourceQuantity              Decimal  @db.Decimal(18, 6)
+  inventoryAmount             Decimal  @default(0) @db.Decimal(14, 2)
+  inventoryAmountExcludingTax Decimal  @default(0) @db.Decimal(14, 2)
+  inventoryTax                Decimal  @default(0) @db.Decimal(14, 2)
+  averageCostExcludingTax     Decimal  @default(0) @db.Decimal(14, 6)
+  expectedInboundQuantity     Decimal  @default(0) @db.Decimal(18, 6)
+  expectedOutboundQuantity    Decimal  @default(0) @db.Decimal(18, 6)
+  theoreticalQuantity         Decimal  @default(0) @db.Decimal(18, 6)
+  theoreticalAmount           Decimal  @default(0) @db.Decimal(14, 2)
+  productId                   String?
+  matchSource                 String?  @db.VarChar(40)
+  inventoryUnit               String?  @db.VarChar(16)
+  conversionFactor            Decimal? @db.Decimal(18, 6)
+  normalizedQuantity          Decimal? @db.Decimal(12, 3)
+  issues                      Json
+  warnings                    Json
+  rawData                     Json
+  oldQuantity                 Decimal? @db.Decimal(12, 3)
+  delta                       Decimal? @db.Decimal(12, 3)
+  movementId                  String?
+  reversalMovementId          String?
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  tenant  Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  import  WarehouseInventoryImport @relation(fields: [tenantId, importId], references: [tenantId, id], onDelete: Cascade)
+  product Product?                 @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([importId, rowNumber])
+  @@index([tenantId, productId])
+  @@index([tenantId, importId])
+  @@map("warehouse_inventory_import_items")
 }
 
 // ── 用户 ──────────────────────────────────────────────
@@ -153,8 +478,8 @@ model User {
   supplier                      Supplier?               @relation("SupplierUsers", fields: [supplierId], references: [id])
   receipts                      Receipt[]
   opLogs                        OpLog[]
-  consumptions                  StockConsumption[]        @relation("ConsumptionCreatedBy")
-  voidedConsumptions            StockConsumption[]        @relation("ConsumptionVoidedBy")
+  consumptions                  StockConsumption[]      @relation("ConsumptionCreatedBy")
+  voidedConsumptions            StockConsumption[]      @relation("ConsumptionVoidedBy")
   createdPOs                    PurchaseOrder[]         @relation("POCreatedBy")
   shippedPOs                    PurchaseOrder[]         @relation("POShippedBy")
   requestedPORevisions          PurchaseOrderRevision[] @relation("PORevisionRequestedBy")
@@ -186,7 +511,7 @@ model User {
   confirmedMonthlyCloses        StoreMonthlyClose[]     @relation("StoreMonthlyCloseConfirmedBy")
   feedbacks                     Feedback[]              @relation("FeedbackReporter")
   decidedFeedbacks              Feedback[]              @relation("FeedbackDecisionBy")
-  decidedAutoFixRuns            AutoFixRun[]             @relation("AutoFixDecisionBy")
+  decidedAutoFixRuns            AutoFixRun[]            @relation("AutoFixDecisionBy")
   bossChatMessages              BossChatMessage[]
 
   @@unique([tenantId, email])
@@ -885,23 +1210,30 @@ model Product {
   batchId String?
   batch   ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
 
-  tenant                 Tenant                         @relation(fields: [tenantId], references: [id])
-  supplier               Supplier?                      @relation(fields: [supplierId], references: [id])
-  receiptItems           ReceiptItem[]
-  purchaseOrderItems     PurchaseOrderItem[]
-  deliveryOrderItems     DeliveryOrderItem[]
-  lossClaimItems         LossClaimItem[]
-  consumptions           StockConsumption[]
-  stockMovements         SupplierStockMovement[]
-  stockBatches           SupplierStockBatch[]
-  stockBatchAllocations  SupplierStockBatchAllocation[]
-  stockReservations      SupplierStockReservation[]
-  warehouseStocks        WarehouseStock[]
-  dishRecipes            DishRecipe[]
-  dishBomItems           DishBomItem[]
-  inventorySnapshotItems InventorySnapshotItem[]
-  inventoryCountItems    InventoryCountItem[]
-  storeInventoryPolicies StoreInventoryPolicy[]
+  tenant                        Tenant                         @relation(fields: [tenantId], references: [id])
+  supplier                      Supplier?                      @relation(fields: [supplierId], references: [id])
+  receiptItems                  ReceiptItem[]
+  purchaseOrderItems            PurchaseOrderItem[]
+  deliveryOrderItems            DeliveryOrderItem[]
+  lossClaimItems                LossClaimItem[]
+  consumptions                  StockConsumption[]
+  stockMovements                SupplierStockMovement[]
+  stockBatches                  SupplierStockBatch[]
+  stockBatchAllocations         SupplierStockBatchAllocation[]
+  stockReservations             SupplierStockReservation[]
+  warehouseStocks               WarehouseStock[]
+  externalCodes                 ProductExternalCode[]
+  warehouseImportItems          WarehouseInventoryImportItem[]
+  warehouseLedgerBalances       WarehouseLedgerBalance[]
+  warehouseLedgerMovements      WarehouseLedgerMovement[]
+  warehouseLedgerReservations   WarehouseLedgerReservation[]
+  warehouseLedgerLots           WarehouseLedgerLot[]
+  warehouseLedgerLotAllocations WarehouseLedgerLotAllocation[]
+  dishRecipes                   DishRecipe[]
+  dishBomItems                  DishBomItem[]
+  inventorySnapshotItems        InventorySnapshotItem[]
+  inventoryCountItems           InventoryCountItem[]
+  storeInventoryPolicies        StoreInventoryPolicy[]
 
   @@unique([tenantId, code])
   @@unique([tenantId, id])
@@ -1020,12 +1352,12 @@ model Receipt {
 }
 
 model ReceiptItem {
-  id                                    String   @id @default(cuid())
+  id                                    String                       @id @default(cuid())
   receiptId                             String
   productId                             String
-  quantity                              Decimal  @db.Decimal(10, 2)
-  unitPrice                             Decimal  @db.Decimal(10, 2)
-  amount                                Decimal  @db.Decimal(12, 2) // quantity * unitPrice
+  quantity                              Decimal                      @db.Decimal(10, 2)
+  unitPrice                             Decimal                      @db.Decimal(10, 2)
+  amount                                Decimal                      @db.Decimal(12, 2) // quantity * unitPrice
   productCodeSnapshot                   String?
   productNameSnapshot                   String?
   productSpecSnapshot                   String?
@@ -1033,16 +1365,16 @@ model ReceiptItem {
   productCategorySnapshot               String?
   // 四单位字段冻结自上游配送行；历史行保持 nullable 并走既有安全回退。
   // quantity 始终是订货单位口径，金额继续沿用既有 unitPrice 业务口径。
-  purchaseUnitSnapshot                  String?  @db.VarChar(16)
-  inventoryQuantity                     Decimal? @db.Decimal(18, 6)
-  inventoryUnitSnapshot                 String?  @db.VarChar(16)
-  orderUnitSnapshot                     String?  @db.VarChar(16)
-  costUnitSnapshot                      String?  @db.VarChar(16)
+  purchaseUnitSnapshot                  String?                      @db.VarChar(16)
+  inventoryQuantity                     Decimal?                     @db.Decimal(18, 6)
+  inventoryUnitSnapshot                 String?                      @db.VarChar(16)
+  orderUnitSnapshot                     String?                      @db.VarChar(16)
+  costUnitSnapshot                      String?                      @db.VarChar(16)
   unitConversionStatusSnapshot          ProductUnitConversionStatus?
-  inventoryUnitsPerPurchaseUnitSnapshot Decimal? @db.Decimal(18, 6)
-  inventoryUnitsPerOrderUnitSnapshot    Decimal? @db.Decimal(18, 6)
-  inventoryUnitsPerCostUnitSnapshot     Decimal? @db.Decimal(18, 6)
-  inventoryUnitCostSnapshot             Decimal? @db.Decimal(18, 6)
+  inventoryUnitsPerPurchaseUnitSnapshot Decimal?                     @db.Decimal(18, 6)
+  inventoryUnitsPerOrderUnitSnapshot    Decimal?                     @db.Decimal(18, 6)
+  inventoryUnitsPerCostUnitSnapshot     Decimal?                     @db.Decimal(18, 6)
+  inventoryUnitCostSnapshot             Decimal?                     @db.Decimal(18, 6)
 
   productionDate DateTime? @map("production_date") @db.Date
   expiryDate     DateTime? @map("expiry_date") @db.Date
@@ -1454,19 +1786,20 @@ model PurchaseOrder {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  tenant            Tenant                     @relation(fields: [tenantId], references: [id])
-  store             Store                      @relation(fields: [storeId], references: [id])
-  supplier          Supplier                   @relation(fields: [supplierId], references: [id])
-  createdBy         User                       @relation("POCreatedBy", fields: [createdById], references: [id])
-  shippedBy         User?                      @relation("POShippedBy", fields: [shippedById], references: [id])
-  items             PurchaseOrderItem[]
-  revisions         PurchaseOrderRevision[]
-  events            PurchaseOrderEvent[]
-  deliveries        DeliveryOrder[]
-  lossClaims        LossClaim[]
-  receipt           Receipt?                   @relation("PurchaseOrderPrimaryReceipt", fields: [receiptId], references: [id])
-  receipts          Receipt[]                  @relation("PurchaseOrderReceipts")
-  stockReservations SupplierStockReservation[]
+  tenant                      Tenant                       @relation(fields: [tenantId], references: [id])
+  store                       Store                        @relation(fields: [storeId], references: [id])
+  supplier                    Supplier                     @relation(fields: [supplierId], references: [id])
+  createdBy                   User                         @relation("POCreatedBy", fields: [createdById], references: [id])
+  shippedBy                   User?                        @relation("POShippedBy", fields: [shippedById], references: [id])
+  items                       PurchaseOrderItem[]
+  revisions                   PurchaseOrderRevision[]
+  events                      PurchaseOrderEvent[]
+  deliveries                  DeliveryOrder[]
+  lossClaims                  LossClaim[]
+  receipt                     Receipt?                     @relation("PurchaseOrderPrimaryReceipt", fields: [receiptId], references: [id])
+  receipts                    Receipt[]                    @relation("PurchaseOrderReceipts")
+  stockReservations           SupplierStockReservation[]
+  warehouseLedgerReservations WarehouseLedgerReservation[]
 
   @@unique([tenantId, no])
   @@unique([tenantId, createdById, idempotencyKey])
@@ -1475,35 +1808,36 @@ model PurchaseOrder {
 }
 
 model PurchaseOrderItem {
-  id                                    String                  @id @default(cuid())
+  id                                    String                       @id @default(cuid())
   purchaseOrderId                       String
   productId                             String
-  quantity                              Decimal                 @db.Decimal(10, 2) // 订货单位数量; 首次提交值由 originalQuantity 保存
-  originalQuantity                      Decimal?                @db.Decimal(10, 2) // 首次提交数量; 修订新增行为空
-  shippedQty                            Decimal?                @db.Decimal(10, 2) // 实际发货数量 (供应商确认发货时填; null = 全发)
-  unitPrice                             Decimal                 @db.Decimal(10, 2)
-  originalUnitPrice                     Decimal?                @db.Decimal(10, 2)
-  amount                                Decimal                 @db.Decimal(12, 2)
-  originalAmount                        Decimal?                @db.Decimal(12, 2)
-  receivedQty                           Decimal?                @db.Decimal(10, 2) // 实际收到数量（确认时填写）
+  quantity                              Decimal                      @db.Decimal(10, 2) // 订货单位数量; 首次提交值由 originalQuantity 保存
+  originalQuantity                      Decimal?                     @db.Decimal(10, 2) // 首次提交数量; 修订新增行为空
+  shippedQty                            Decimal?                     @db.Decimal(10, 2) // 实际发货数量 (供应商确认发货时填; null = 全发)
+  unitPrice                             Decimal                      @db.Decimal(10, 2)
+  originalUnitPrice                     Decimal?                     @db.Decimal(10, 2)
+  amount                                Decimal                      @db.Decimal(12, 2)
+  originalAmount                        Decimal?                     @db.Decimal(12, 2)
+  receivedQty                           Decimal?                     @db.Decimal(10, 2) // 实际收到数量（确认时填写）
   // 首次提交冻结值；历史行 nullable，不从 spec、金额或当前商品猜测回填。
-  purchaseUnitSnapshot                  String?                 @db.VarChar(16)
-  inventoryUnitSnapshot                 String?                 @db.VarChar(16)
-  orderUnitSnapshot                     String?                 @db.VarChar(16)
-  costUnitSnapshot                      String?                 @db.VarChar(16)
+  purchaseUnitSnapshot                  String?                      @db.VarChar(16)
+  inventoryUnitSnapshot                 String?                      @db.VarChar(16)
+  orderUnitSnapshot                     String?                      @db.VarChar(16)
+  costUnitSnapshot                      String?                      @db.VarChar(16)
   unitConversionStatusSnapshot          ProductUnitConversionStatus?
-  inventoryUnitsPerPurchaseUnitSnapshot Decimal?                @db.Decimal(18, 6)
-  inventoryUnitsPerOrderUnitSnapshot    Decimal?                @db.Decimal(18, 6)
-  inventoryUnitsPerCostUnitSnapshot     Decimal?                @db.Decimal(18, 6)
-  lineOrigin                            PurchaseOrderItemOrigin @default(ORIGINAL)
-  isActive                              Boolean                 @default(true)
+  inventoryUnitsPerPurchaseUnitSnapshot Decimal?                     @db.Decimal(18, 6)
+  inventoryUnitsPerOrderUnitSnapshot    Decimal?                     @db.Decimal(18, 6)
+  inventoryUnitsPerCostUnitSnapshot     Decimal?                     @db.Decimal(18, 6)
+  lineOrigin                            PurchaseOrderItemOrigin      @default(ORIGINAL)
+  isActive                              Boolean                      @default(true)
   lastRevisionId                        String?
 
-  purchaseOrder    PurchaseOrder             @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
-  product          Product                   @relation(fields: [productId], references: [id])
-  lastRevision     PurchaseOrderRevision?    @relation("POItemLastRevision", fields: [lastRevisionId], references: [id])
-  deliveryItems    DeliveryOrderItem[]
-  stockReservation SupplierStockReservation?
+  purchaseOrder              PurchaseOrder               @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product                    Product                     @relation(fields: [productId], references: [id])
+  lastRevision               PurchaseOrderRevision?      @relation("POItemLastRevision", fields: [lastRevisionId], references: [id])
+  deliveryItems              DeliveryOrderItem[]
+  stockReservation           SupplierStockReservation?
+  warehouseLedgerReservation WarehouseLedgerReservation?
 
   @@index([purchaseOrderId, isActive])
   @@map("purchase_order_items")
@@ -1616,32 +1950,32 @@ model DeliveryOrder {
 }
 
 model DeliveryOrderItem {
-  id                                    String    @id @default(cuid())
+  id                                    String                       @id @default(cuid())
   deliveryOrderId                       String
   purchaseOrderItemId                   String?
   productId                             String
-  orderedQtySnapshot                    Decimal   @db.Decimal(10, 2)
-  shippedQty                            Decimal   @db.Decimal(10, 2)
-  receivedQty                           Decimal?  @db.Decimal(10, 2)
-  unitPriceSnapshot                     Decimal   @db.Decimal(10, 2)
-  amount                                Decimal   @db.Decimal(12, 2)
+  orderedQtySnapshot                    Decimal                      @db.Decimal(10, 2)
+  shippedQty                            Decimal                      @db.Decimal(10, 2)
+  receivedQty                           Decimal?                     @db.Decimal(10, 2)
+  unitPriceSnapshot                     Decimal                      @db.Decimal(10, 2)
+  amount                                Decimal                      @db.Decimal(12, 2)
   productCodeSnapshot                   String?
   productNameSnapshot                   String?
   productSpecSnapshot                   String?
   productUnitSnapshot                   String?
   productCategorySnapshot               String?
   // 逐字段复制订货行冻结值；不得在发货时用 Product 重算。
-  purchaseUnitSnapshot                  String?   @db.VarChar(16)
-  inventoryUnitSnapshot                 String?   @db.VarChar(16)
-  orderUnitSnapshot                     String?   @db.VarChar(16)
-  costUnitSnapshot                      String?   @db.VarChar(16)
+  purchaseUnitSnapshot                  String?                      @db.VarChar(16)
+  inventoryUnitSnapshot                 String?                      @db.VarChar(16)
+  orderUnitSnapshot                     String?                      @db.VarChar(16)
+  costUnitSnapshot                      String?                      @db.VarChar(16)
   unitConversionStatusSnapshot          ProductUnitConversionStatus?
-  inventoryUnitsPerPurchaseUnitSnapshot Decimal?  @db.Decimal(18, 6)
-  inventoryUnitsPerOrderUnitSnapshot    Decimal?  @db.Decimal(18, 6)
-  inventoryUnitsPerCostUnitSnapshot     Decimal?  @db.Decimal(18, 6)
-  manufactureDate                       DateTime? @db.Date
-  expiryDate                            DateTime? @db.Date
-  createdAt                             DateTime  @default(now())
+  inventoryUnitsPerPurchaseUnitSnapshot Decimal?                     @db.Decimal(18, 6)
+  inventoryUnitsPerOrderUnitSnapshot    Decimal?                     @db.Decimal(18, 6)
+  inventoryUnitsPerCostUnitSnapshot     Decimal?                     @db.Decimal(18, 6)
+  manufactureDate                       DateTime?                    @db.Date
+  expiryDate                            DateTime?                    @db.Date
+  createdAt                             DateTime                     @default(now())
 
   deliveryOrder     DeliveryOrder      @relation(fields: [deliveryOrderId], references: [id], onDelete: Cascade)
   purchaseOrderItem PurchaseOrderItem? @relation(fields: [purchaseOrderItemId], references: [id], onDelete: SetNull)
@@ -2350,45 +2684,45 @@ enum SupplierStockReservationStatus {
 
 // ── 库存消耗记录（总厨每日录入）──────────────────────
 model StockConsumption {
-  id                    String          @id @default(cuid())
+  id                    String             @id @default(cuid())
   tenantId              String
   storeId               String
   productId             String
-  date                  DateTime        @db.Date
-  quantity              Decimal         @db.Decimal(14, 6) // BOM 小包装换算需 6 位精度
+  date                  DateTime           @db.Date
+  quantity              Decimal            @db.Decimal(14, 6) // BOM 小包装换算需 6 位精度
   note                  String?
   // 来源(用于幂等 + 审计): manual / dish_sale:<saleId> / meituan_ingest:<orderId>
-  sourceType            String?         @db.VarChar(20)
-  sourceId              String?         @db.VarChar(64)
-  sourceLineKey         String          @default("") @db.VarChar(80)
+  sourceType            String?            @db.VarChar(20)
+  sourceId              String?            @db.VarChar(64)
+  sourceLineKey         String             @default("") @db.VarChar(80)
   dishId                String?
-  variantKey            String          @default("") @db.VarChar(80)
+  variantKey            String             @default("") @db.VarChar(80)
   bomVersionId          String?
   calculationSnapshot   Json?
   // quantity 保留 BOM 行原始口径以兼容历史；门店库存和成本以 inventoryQuantity
   // 为准。历史数据为空时由 unitSnapshot + 商品换算规则安全回放。
-  inventoryQuantity     Decimal?        @db.Decimal(18, 6)
-  unitSnapshot          String?         @db.VarChar(16)
-  inventoryUnitSnapshot String?         @db.VarChar(16)
-  unitCostSnapshot      Decimal?        @db.Decimal(18, 6)
-  costAmountSnapshot    Decimal?        @db.Decimal(18, 4)
+  inventoryQuantity     Decimal?           @db.Decimal(18, 6)
+  unitSnapshot          String?            @db.VarChar(16)
+  inventoryUnitSnapshot String?            @db.VarChar(16)
+  unitCostSnapshot      Decimal?           @db.Decimal(18, 6)
+  costAmountSnapshot    Decimal?           @db.Decimal(18, 4)
   createdById           String
-  createdAt             DateTime        @default(now())
+  createdAt             DateTime           @default(now())
   // 冲销/补记 (审计保留): 原行只标记作废不删除; 补记行 correctionOfId 指回原行,
   // sourceType='correction' + sourceId=原行 id。所有读路径必须过滤 voidedAt: null。
   voidedAt              DateTime?
-  voidedReason          String?         @db.VarChar(200)
+  voidedReason          String?            @db.VarChar(200)
   voidedById            String?
   correctionOfId        String?
-  tenant                Tenant          @relation(fields: [tenantId], references: [id])
-  store                 Store           @relation(fields: [storeId], references: [id])
-  product               Product         @relation(fields: [productId], references: [id])
-  createdBy             User            @relation("ConsumptionCreatedBy", fields: [createdById], references: [id])
-  voidedBy              User?           @relation("ConsumptionVoidedBy", fields: [voidedById], references: [id], onDelete: SetNull)
+  tenant                Tenant             @relation(fields: [tenantId], references: [id])
+  store                 Store              @relation(fields: [storeId], references: [id])
+  product               Product            @relation(fields: [productId], references: [id])
+  createdBy             User               @relation("ConsumptionCreatedBy", fields: [createdById], references: [id])
+  voidedBy              User?              @relation("ConsumptionVoidedBy", fields: [voidedById], references: [id], onDelete: SetNull)
   correctionOf          StockConsumption?  @relation("ConsumptionCorrection", fields: [correctionOfId], references: [id], onDelete: SetNull)
   corrections           StockConsumption[] @relation("ConsumptionCorrection")
-  dish                  Dish?           @relation(fields: [dishId], references: [id], onDelete: SetNull)
-  bomVersion            DishBomVersion? @relation(fields: [bomVersionId], references: [id], onDelete: SetNull)
+  dish                  Dish?              @relation(fields: [dishId], references: [id], onDelete: SetNull)
+  bomVersion            DishBomVersion?    @relation(fields: [bomVersionId], references: [id], onDelete: SetNull)
 
   @@unique([sourceType, sourceId, sourceLineKey, productId], map: "stock_consumption_source_line_uk")
   @@index([tenantId, date])
@@ -3258,27 +3592,27 @@ model PayrollItem {
 // ══════════════════════════════════════════════════════
 
 model Feedback {
-  id          String           @id @default(cuid())
-  tenantId    String
-  reporterId  String
-  storeId     String? // 提报人当时所在门店
-  category    FeedbackCategory? // AI 分诊结果, 澄清完成前为 null
-  status      FeedbackStatus   @default(CLARIFYING)
-  title       String? // AI 澄清后生成的一句话标题
-  summary     String? // AI 整理的方案/问题摘要
-  proposal    Json? // NEW_FEATURE 结构化方案 { scenario, expectation, estimatedDays }
-  context     Json // 提报时上下文快照 { path, role, storeName, userAgent, clientTime }
-  attachments Json? // 图片 URL 数组
+  id           String            @id @default(cuid())
+  tenantId     String
+  reporterId   String
+  storeId      String? // 提报人当时所在门店
+  category     FeedbackCategory? // AI 分诊结果, 澄清完成前为 null
+  status       FeedbackStatus    @default(CLARIFYING)
+  title        String? // AI 澄清后生成的一句话标题
+  summary      String? // AI 整理的方案/问题摘要
+  proposal     Json? // NEW_FEATURE 结构化方案 { scenario, expectation, estimatedDays }
+  context      Json // 提报时上下文快照 { path, role, storeName, userAgent, clientTime }
+  attachments  Json? // 图片 URL 数组
   decisionById String?
   decisionAt   DateTime?
   decisionNote String?
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
 
-  tenant    Tenant  @relation(fields: [tenantId], references: [id])
-  reporter  User    @relation("FeedbackReporter", fields: [reporterId], references: [id])
-  decisionBy User?  @relation("FeedbackDecisionBy", fields: [decisionById], references: [id])
-  messages  FeedbackMessage[]
+  tenant     Tenant            @relation(fields: [tenantId], references: [id])
+  reporter   User              @relation("FeedbackReporter", fields: [reporterId], references: [id])
+  decisionBy User?             @relation("FeedbackDecisionBy", fields: [decisionById], references: [id])
+  messages   FeedbackMessage[]
   autoFixRun AutoFixRun?
 
   @@index([tenantId, status])
@@ -3320,28 +3654,28 @@ enum FeedbackStatus {
 
 // P1a: 阻断反馈的 AI 建议修复记录。默认 AUTO_FIX_MODE=off，不改变现有反馈链路。
 model AutoFixRun {
-  id            String       @id @default(cuid())
+  id            String        @id @default(cuid())
   tenantId      String
-  feedbackId    String?      @unique
+  feedbackId    String?       @unique
   status        AutoFixStatus @default(RECEIVED)
-  analysis      String?      @db.Text
-  planSummary   String?      @db.Text
-  diffPatch     String?      @db.Text
+  analysis      String?       @db.Text
+  planSummary   String?       @db.Text
+  diffPatch     String?       @db.Text
   diffFiles     Json?
-  error         String?      @db.Text
+  error         String?       @db.Text
   baseCommitSha String?
   commitSha     String?
-  deployLog     String?      @db.Text
-  retryCount    Int          @default(0)
+  deployLog     String?       @db.Text
+  retryCount    Int           @default(0)
   nextRetryAt   DateTime?
   decidedById   String?
   decidedAt     DateTime?
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   feedback  Feedback? @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
-  decidedBy User?    @relation("AutoFixDecisionBy", fields: [decidedById], references: [id])
+  decidedBy User?     @relation("AutoFixDecisionBy", fields: [decidedById], references: [id])
 
   @@index([tenantId, status, createdAt])
   @@map("auto_fix_runs")

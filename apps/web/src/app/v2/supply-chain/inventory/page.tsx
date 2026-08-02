@@ -170,13 +170,13 @@ export default function InternalSupplyChainInventoryPage() {
           </label>
           <button
             onClick={() => setInboundOpen(true)}
-            disabled={!supplierId || summary?.inventoryMode === 'NOT_TRACKED'}
+            disabled={!supplierId}
             className="h-10 rounded-cta bg-accent px-4 text-button text-white disabled:opacity-40"
           >+ 手工入库</button>
           <a
             href={supplierId ? `/v2/supply-chain/inventory/import?supplierId=${encodeURIComponent(supplierId)}` : '#'}
-            aria-disabled={!supplierId || summary?.inventoryMode === 'NOT_TRACKED'}
-            className={`flex h-10 items-center rounded-cta border border-border bg-white px-4 text-button ${!supplierId || summary?.inventoryMode === 'NOT_TRACKED' ? 'pointer-events-none opacity-40' : ''}`}
+            aria-disabled={!supplierId}
+            className={`flex h-10 items-center rounded-cta border border-border bg-white px-4 text-button ${!supplierId ? 'pointer-events-none opacity-40' : ''}`}
           >Excel 批量入库</a>
         </div>
       </header>
@@ -194,7 +194,7 @@ export default function InternalSupplyChainInventoryPage() {
 
       {summary?.inventoryMode === 'NOT_TRACKED' && (
         <div className="mb-4 rounded-card border border-amber/30 bg-amber/10 p-4 text-caption text-gray2">
-          该供应商库存模式尚未启用；订单履约不扣减其库存，需先完成库存启用与期初导入。
+          当前处于库存建账阶段：可先手工或 Excel 入库并核对期初库存；启用严格库存前，订单履约暂不强制扣减库存。
         </div>
       )}
 

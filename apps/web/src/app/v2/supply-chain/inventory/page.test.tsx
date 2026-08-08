@@ -63,6 +63,7 @@ describe('总仓库存页面', () => {
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
+      if (url === '/api/warehouse-inventory/inbound-candidates?limit=500') return Promise.resolve({ items: inventory.items })
       if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
       if (url === '/api/warehouse-inventory/audit') return Promise.resolve({
         readyForStrict: false,
@@ -73,6 +74,9 @@ describe('总仓库存页面', () => {
       })
       if (url === '/api/warehouse-inventory/manual-inbound' && init?.method === 'POST') {
         return Promise.resolve({ replayed: false })
+      }
+      if (url === '/api/warehouse-inventory/batch-manual-inbound' && init?.method === 'POST') {
+        return Promise.resolve({ replayed: false, count: 1, totalAmount: 160 })
       }
       return Promise.reject(new Error(`unexpected API: ${url}`))
     })
@@ -99,7 +103,7 @@ describe('总仓库存页面', () => {
   it('previews purchase-unit conversion and posts a valued manual inbound', async () => {
     const { container, root } = renderPage()
     await waitFor(() => container.textContent?.includes('菌菇酱') ?? false)
-    const open = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('单条手工入库'))
+    const open = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '单条入库')
     act(() => open?.click())
 
     const select = container.querySelector('select') as HTMLSelectElement
@@ -118,6 +122,38 @@ describe('总仓库存页面', () => {
     const call = mockFetch.mock.calls.find(([path]) => String(path) === '/api/warehouse-inventory/manual-inbound')
     expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
       productId: 'product-1', purchaseQuantity: 2, totalAmount: 160,
+    })
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('adds multiple products to one atomic batch inbound document', async () => {
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('菌菇酱') ?? false)
+    const open = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('批量入库'))
+    await act(async () => { open?.click() })
+    await waitFor(() => container.textContent?.includes('总仓批量入库') ?? false)
+
+    const select = container.querySelector('select') as HTMLSelectElement
+    change(select, 'product-1')
+    const add = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '添加商品')
+    act(() => add?.click())
+
+    const quantityInput = container.querySelector('input[aria-label="菌菇酱采购数量"]') as HTMLInputElement
+    const priceInput = container.querySelector('input[aria-label="菌菇酱采购单价"]') as HTMLInputElement
+    change(quantityInput, '2')
+    change(priceInput, '80')
+
+    expect(container.textContent).toContain('2 箱 = 16 袋')
+    expect(container.textContent).toContain('¥160.00')
+    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('确认批量入库'))
+    await act(async () => { submit?.click() })
+    await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/batch-manual-inbound'))
+
+    const call = mockFetch.mock.calls.find(([path]) => String(path) === '/api/warehouse-inventory/batch-manual-inbound')
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+      items: [{ productId: 'product-1', purchaseQuantity: 2, unitPrice: 80 }],
     })
 
     act(() => root.unmount())

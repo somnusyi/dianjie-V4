@@ -22,6 +22,16 @@ type InventoryItem = {
   statusFlag: 'OK' | 'LOW' | 'OUT' | 'SHADOW_GAP'
 }
 
+type InboundCandidate = Pick<InventoryItem,
+  'id' | 'code' | 'name' | 'spec' | 'category' | 'purchaseUnit' | 'inventoryUnit' | 'purchaseToInventoryFactor'
+>
+
+type BatchInboundRow = {
+  productId: string
+  purchaseQuantity: string
+  unitPrice: string
+}
+
 type InventoryResponse = {
   warehouse: {
     id: string
@@ -132,6 +142,16 @@ export default function InternalSupplyChainInventoryPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [inboundOpen, setInboundOpen] = useState(false)
+  const [batchOpen, setBatchOpen] = useState(false)
+  const [batchCandidates, setBatchCandidates] = useState<InboundCandidate[]>([])
+  const [batchCandidateId, setBatchCandidateId] = useState('')
+  const [batchSearch, setBatchSearch] = useState('')
+  const [batchRows, setBatchRows] = useState<BatchInboundRow[]>([])
+  const [batchEffectiveAt, setBatchEffectiveAt] = useState(defaultEffectiveAt)
+  const [batchSourceName, setBatchSourceName] = useState('')
+  const [batchNote, setBatchNote] = useState('采购到货批量入库')
+  const [batchKey, setBatchKey] = useState(newIdempotencyKey)
+  const [batchLoading, setBatchLoading] = useState(false)
   const [productId, setProductId] = useState('')
   const [purchaseQuantity, setPurchaseQuantity] = useState('')
   const [totalAmount, setTotalAmount] = useState('')
@@ -188,6 +208,18 @@ export default function InternalSupplyChainInventoryPage() {
     return items.filter(item => [item.code, item.name, item.spec, item.category]
       .some(value => String(value || '').toLowerCase().includes(term)))
   }, [items, q])
+  const filteredBatchCandidates = useMemo(() => {
+    const term = batchSearch.trim().toLowerCase()
+    const rows = term
+      ? batchCandidates.filter(item => [item.code, item.name, item.spec, item.category]
+        .some(value => String(value || '').toLowerCase().includes(term)))
+      : batchCandidates
+    return rows.filter(item => !batchRows.some(row => row.productId === item.id))
+  }, [batchCandidates, batchRows, batchSearch])
+  const batchTotal = batchRows.reduce((sum, row) => {
+    const lineAmount = Number(row.purchaseQuantity) * Number(row.unitPrice)
+    return sum + (Number.isFinite(lineAmount) ? lineAmount : 0)
+  }, 0)
 
   function openInbound() {
     setInboundOpen(true)
@@ -202,6 +234,81 @@ export default function InternalSupplyChainInventoryPage() {
     setExpiryDate('')
     setIdempotencyKey(newIdempotencyKey())
     setError('')
+  }
+
+  async function openBatchInbound() {
+    setBatchOpen(true)
+    setBatchCandidates([])
+    setBatchCandidateId('')
+    setBatchSearch('')
+    setBatchRows([])
+    setBatchEffectiveAt(defaultEffectiveAt())
+    setBatchSourceName('')
+    setBatchNote('采购到货批量入库')
+    setBatchKey(newIdempotencyKey())
+    setBatchLoading(true)
+    setError('')
+    try {
+      const result = await apiFetch<{ items: InboundCandidate[] }>('/api/warehouse-inventory/inbound-candidates?limit=500')
+      setBatchCandidates(result.items || [])
+    } catch (reason: any) {
+      setError(String(reason?.message || reason))
+      setBatchOpen(false)
+    } finally {
+      setBatchLoading(false)
+    }
+  }
+
+  function addBatchRow() {
+    const candidate = batchCandidates.find(item => item.id === batchCandidateId)
+    if (!candidate || batchRows.some(row => row.productId === candidate.id)) return
+    setBatchRows(rows => [...rows, { productId: candidate.id, purchaseQuantity: '', unitPrice: '' }])
+    setBatchCandidateId('')
+    setBatchSearch('')
+  }
+
+  function updateBatchRow(productId: string, field: 'purchaseQuantity' | 'unitPrice', value: string) {
+    setBatchRows(rows => rows.map(row => row.productId === productId ? { ...row, [field]: value } : row))
+  }
+
+  async function submitBatchInbound() {
+    if (batchRows.length === 0) {
+      setError('请至少添加一个入库商品')
+      return
+    }
+    const invalid = batchRows.find(row => Number(row.purchaseQuantity) <= 0 || Number(row.unitPrice) <= 0)
+    if (invalid) {
+      const product = batchCandidates.find(item => item.id === invalid.productId)
+      setError(`${product?.name || '入库商品'}的数量和采购单价必须大于0`)
+      return
+    }
+    setSubmitting(true)
+    setError('')
+    try {
+      const result = await apiFetch<{ replayed: boolean; count: number; totalAmount: number }>('/api/warehouse-inventory/batch-manual-inbound', {
+        method: 'POST',
+        body: JSON.stringify({
+          items: batchRows.map(row => ({
+            productId: row.productId,
+            purchaseQuantity: Number(row.purchaseQuantity),
+            unitPrice: Number(row.unitPrice),
+          })),
+          effectiveAt: new Date(batchEffectiveAt).toISOString(),
+          idempotencyKey: batchKey,
+          sourceName: batchSourceName.trim() || null,
+          note: batchNote.trim() || null,
+        }),
+      })
+      setBatchOpen(false)
+      setNotice(result.replayed
+        ? '该批量入库单已经处理，本次未重复入账'
+        : `批量入库成功：${result.count} 种商品，合计 ${money(result.totalAmount)}，已整单原子记账`)
+      await load('stock')
+    } catch (reason: any) {
+      setError(String(reason?.message || reason))
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   async function inbound() {
@@ -358,7 +465,8 @@ export default function InternalSupplyChainInventoryPage() {
           {scope === 'stock' && <>
             <button onClick={openCount} className="h-10 rounded-cta border border-accent bg-white px-4 text-button text-accent">单SKU实盘校准</button>
             {data?.summary.inventoryMode === 'SHADOW' && <button onClick={reconcileShadow} disabled={submitting} className="h-10 rounded-cta border border-border bg-white px-4 text-button text-gray2 disabled:opacity-40">补记影子差异</button>}
-            <button onClick={openInbound} className="h-10 rounded-cta bg-accent px-4 text-button text-white">+ 单条手工入库</button>
+            <button onClick={openInbound} className="h-10 rounded-cta border border-accent bg-white px-4 text-button text-accent">单条入库</button>
+            <button onClick={openBatchInbound} className="h-10 rounded-cta bg-accent px-4 text-button text-white">+ 批量入库</button>
           </>}
         </div>
       </header>
@@ -446,6 +554,49 @@ export default function InternalSupplyChainInventoryPage() {
           </ul>
         </div>
       </section>
+
+      {batchOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setBatchOpen(false)}>
+        <div className="max-h-[94vh] w-full max-w-6xl overflow-auto rounded-card bg-white p-5 shadow-xl" onClick={event => event.stopPropagation()}>
+          <div className="flex items-start justify-between gap-4"><div><h2 className="text-h2">总仓批量入库</h2><p className="mt-1 text-micro text-gray3">一张入库单可添加多种商品；整单原子提交，任意一行失败都不会部分入账。</p></div><button onClick={() => setBatchOpen(false)} className="px-2 text-h2 text-gray3">×</button></div>
+          <div className="mt-4 grid gap-3 rounded-card border border-border bg-bg p-4 lg:grid-cols-[minmax(220px,1fr)_minmax(320px,2fr)_auto] lg:items-end">
+            <label><span className="mb-1 block text-micro text-gray3">搜索商品</span><input value={batchSearch} onChange={event => setBatchSearch(event.target.value)} placeholder="名称 / 编码 / 规格" className="h-11 w-full rounded-cta border border-border bg-white px-3" /></label>
+            <label><span className="mb-1 block text-micro text-gray3">选择已核验采购商品</span><select value={batchCandidateId} onChange={event => setBatchCandidateId(event.target.value)} disabled={batchLoading} className="h-11 w-full rounded-cta border border-border bg-white px-3"><option value="">{batchLoading ? '正在加载…' : filteredBatchCandidates.length ? '请选择商品' : '没有可添加的已核验商品'}</option>{filteredBatchCandidates.map(item => <option key={item.id} value={item.id}>{item.code} · {item.name} · {item.spec || '无规格'} · {item.purchaseUnit}</option>)}</select></label>
+            <button onClick={addBatchRow} disabled={!batchCandidateId} className="h-11 rounded-cta bg-ink px-5 text-button text-white disabled:opacity-40">添加商品</button>
+          </div>
+
+          <div className="mt-4 overflow-auto rounded-card border border-border">
+            <table className="w-full min-w-[920px] text-left text-caption">
+              <thead className="bg-bg text-gray3"><tr><th className="px-3 py-3">序号</th><th className="px-3 py-3">商品</th><th className="px-3 py-3">采购单位</th><th className="px-3 py-3 text-right">数量</th><th className="px-3 py-3 text-right">采购单价</th><th className="px-3 py-3 text-right">金额</th><th className="px-3 py-3">换算预览</th><th className="px-3 py-3"></th></tr></thead>
+              <tbody className="divide-y divide-border">
+                {batchRows.map((row, index) => {
+                  const product = batchCandidates.find(item => item.id === row.productId)!
+                  const purchaseQuantity = Number(row.purchaseQuantity) || 0
+                  const lineAmount = purchaseQuantity * (Number(row.unitPrice) || 0)
+                  return <tr key={row.productId}>
+                    <td className="px-3 py-3 font-num text-gray3">{index + 1}</td>
+                    <td className="px-3 py-3"><b>{product.name}</b><div className="text-micro text-gray3">{product.code} · {product.spec || '无规格'}</div></td>
+                    <td className="px-3 py-3"><b>{product.purchaseUnit}</b></td>
+                    <td className="px-3 py-3"><input aria-label={`${product.name}采购数量`} type="number" min="0.000001" step="0.001" value={row.purchaseQuantity} onChange={event => updateBatchRow(row.productId, 'purchaseQuantity', event.target.value)} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></td>
+                    <td className="px-3 py-3"><div className="flex items-center justify-end gap-1"><span>¥</span><input aria-label={`${product.name}采购单价`} type="number" min="0.0001" step="0.01" value={row.unitPrice} onChange={event => updateBatchRow(row.productId, 'unitPrice', event.target.value)} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></div></td>
+                    <td className="px-3 py-3 text-right font-num"><b>{money(lineAmount)}</b></td>
+                    <td className="px-3 py-3"><b>{qty(purchaseQuantity)} {product.purchaseUnit} = {qty(purchaseQuantity * product.purchaseToInventoryFactor, 6)} {product.inventoryUnit}</b><div className="text-micro text-green-fg">已核验换算</div></td>
+                    <td className="px-3 py-3"><button onClick={() => setBatchRows(rows => rows.filter(item => item.productId !== row.productId))} className="text-button text-red-fg">移除</button></td>
+                  </tr>
+                })}
+              </tbody>
+              <tfoot className="border-t border-border bg-bg"><tr><td colSpan={4} className="px-3 py-3 text-right text-gray2">合计 {batchRows.length} 种商品</td><td className="px-3 py-3 text-right text-gray2">总金额</td><td className="px-3 py-3 text-right font-num text-h2">{money(batchTotal)}</td><td colSpan={2}></td></tr></tfoot>
+            </table>
+            {!batchRows.length && <div className="py-10 text-center text-caption text-gray3">请从上方搜索并添加本次入库商品</div>}
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <label><span className="mb-1 block text-micro text-gray3">实际入库时间 *</span><input type="datetime-local" value={batchEffectiveAt} onChange={event => setBatchEffectiveAt(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
+            <label><span className="mb-1 block text-micro text-gray3">供货来源</span><input value={batchSourceName} maxLength={120} onChange={event => setBatchSourceName(event.target.value)} placeholder="例如：某上游供应商 / 临时采购" className="h-11 w-full rounded-cta border border-border px-3" /></label>
+            <label><span className="mb-1 block text-micro text-gray3">整单备注</span><input value={batchNote} maxLength={240} onChange={event => setBatchNote(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
+          </div>
+          <div className="mt-4 flex items-center justify-between gap-4"><p className="text-micro text-gray3">只显示四单位已经核验的商品，避免箱、件、kg 等错误换算进入正式库存。</p><button onClick={submitBatchInbound} disabled={submitting || batchRows.length === 0} className="h-11 min-w-52 rounded-cta bg-accent px-6 text-button text-white disabled:opacity-40">{submitting ? '正在整单记账…' : `确认批量入库 · ${money(batchTotal)}`}</button></div>
+        </div>
+      </div>}
 
       {inboundOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setInboundOpen(false)}>
         <div className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-card bg-white p-5 shadow-xl" onClick={event => event.stopPropagation()}>

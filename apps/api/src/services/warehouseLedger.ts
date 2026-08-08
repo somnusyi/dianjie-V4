@@ -297,6 +297,23 @@ export type ManualWarehouseInboundInput = {
   expiryDate?: Date | null
 }
 
+export type BatchManualWarehouseInboundInput = {
+  tenantId: string
+  userId: string
+  items: Array<{
+    productId: string
+    purchaseQuantity: Decimalish
+    unitPrice: Decimalish
+    batchNo?: string | null
+    manufactureDate?: Date | null
+    expiryDate?: Date | null
+  }>
+  effectiveAt: Date
+  idempotencyKey: string
+  sourceName?: string | null
+  note?: string | null
+}
+
 /** Single-line manual inbound. It never writes Product.stock. */
 export async function recordManualWarehouseInbound(input: ManualWarehouseInboundInput) {
   const warehouseId = await resolveTenantWarehouseId(prisma, input.tenantId, undefined)
@@ -473,6 +490,217 @@ export async function recordManualWarehouseInbound(input: ManualWarehouseInbound
       },
     })
     return { replayed: false, movement: { ...movement, createdLot: lot }, warehouseId }
+  })
+}
+
+/**
+ * Multi-line warehouse inbound. Every line is validated before the transaction
+ * starts and the whole document commits atomically. One invalid line therefore
+ * cannot leave a partially posted warehouse receipt.
+ */
+export async function recordBatchManualWarehouseInbound(input: BatchManualWarehouseInboundInput) {
+  const warehouseId = await resolveTenantWarehouseId(prisma, input.tenantId, undefined)
+  if (!input.effectiveAt || Number.isNaN(input.effectiveAt.getTime())) throw businessError('入库时间无效', 400)
+  if (!Array.isArray(input.items) || input.items.length === 0 || input.items.length > 200) {
+    throw businessError('批量入库必须包含 1–200 行商品', 400)
+  }
+  const productIds = input.items.map(item => String(item.productId || '').trim())
+  if (productIds.some(id => !id)) throw businessError('批量入库存在无效商品', 400)
+  if (new Set(productIds).size !== productIds.length) throw businessError('同一商品不能在一张批量入库单中重复', 400)
+
+  const products = await prisma.product.findMany({
+    where: { id: { in: productIds }, tenantId: input.tenantId, status: 'ENABLED' },
+    select: {
+      id: true,
+      name: true,
+      unit: true,
+      purchaseUnit: true,
+      inventoryUnit: true,
+      orderUnit: true,
+      costUnit: true,
+      inventoryUnitsPerPurchaseUnit: true,
+      inventoryUnitsPerOrderUnit: true,
+      inventoryUnitsPerCostUnit: true,
+      unitConversionStatus: true,
+    },
+  })
+  const productById = new Map(products.map(product => [product.id, product]))
+  const lines = input.items.map((item, index) => {
+    const product = productById.get(productIds[index])
+    if (!product) throw businessError(`第 ${index + 1} 行商品不存在或已停用`, 404)
+    const contract = resolveProductFourUnits(product as ProductInventoryUnitLike)
+    if (contract.status !== 'VERIFIED') throw businessError(`${product.name} 的四单位换算尚未核验，不能记真实入库`, 409)
+    if (!contract.structured.purchase) throw businessError(`${product.name} 缺少采购单位到库存单位换算`, 409)
+    if (item.expiryDate && item.manufactureDate && item.expiryDate < item.manufactureDate) {
+      throw businessError(`${product.name} 的到期日期不能早于生产日期`, 400)
+    }
+    const purchaseQuantity = quantity(item.purchaseQuantity, `${product.name}入库数量`)
+    const unitPrice = decimal(item.unitPrice, `${product.name}采购单价`).toDecimalPlaces(VALUE_DP)
+    if (unitPrice.lte(0)) throw businessError(`${product.name}采购单价必须大于0`, 400)
+    const totalAmount = purchaseQuantity.mul(unitPrice).toDecimalPlaces(VALUE_DP)
+    if (totalAmount.gt('999999999.99')) throw businessError(`${product.name}入库金额超过系统上限`, 400)
+    const conversionFactor = new Prisma.Decimal(contract.inventoryUnitsPerPurchaseUnit).toDecimalPlaces(QTY_DP)
+    const inventoryQuantity = purchaseQuantity.mul(conversionFactor).toDecimalPlaces(QTY_DP)
+    const inventoryUnitCost = totalAmount.div(inventoryQuantity).toDecimalPlaces(COST_DP)
+    return {
+      index,
+      product,
+      contract,
+      purchaseQuantity,
+      unitPrice,
+      totalAmount,
+      conversionFactor,
+      inventoryQuantity,
+      inventoryUnitCost,
+      batchNo: String(item.batchNo || '').trim() || null,
+      manufactureDate: item.manufactureDate || null,
+      expiryDate: item.expiryDate || null,
+    }
+  })
+
+  const sourceRequestId = String(input.idempotencyKey || '').trim()
+  if (!sourceRequestId || sourceRequestId.length > 80) throw businessError('批量入库幂等键无效', 400)
+  const requestFingerprint = fingerprint({
+    items: lines.map(line => ({
+      productId: line.product.id,
+      purchaseQuantity: line.purchaseQuantity.toFixed(QTY_DP),
+      unitPrice: line.unitPrice.toFixed(VALUE_DP),
+      batchNo: line.batchNo,
+      manufactureDate: line.manufactureDate?.toISOString().slice(0, 10) || null,
+      expiryDate: line.expiryDate?.toISOString().slice(0, 10) || null,
+    })),
+    effectiveAt: input.effectiveAt.toISOString(),
+    sourceName: input.sourceName || null,
+    note: input.note || null,
+  })
+  const movementKey = (index: number) => `manual-inbound-batch:${sourceRequestId}:${index + 1}`
+  if (movementKey(lines.length - 1).length > 160) throw businessError('批量入库幂等键过长', 400)
+
+  return serializableWithRetry(async tx => {
+    const findReplay = () => tx.warehouseLedgerMovement.findMany({
+      where: {
+        tenantId: input.tenantId,
+        warehouseId,
+        sourceType: 'WarehouseBatchManualInbound',
+        sourceId: sourceRequestId,
+      },
+      orderBy: { sourceLineId: 'asc' },
+      include: { createdLot: true },
+    })
+    const validateReplay = (rows: Awaited<ReturnType<typeof findReplay>>) => {
+      if (rows.length === 0) return null
+      if (rows.length !== lines.length || rows.some(row => row.requestFingerprint !== requestFingerprint)) {
+        throw businessError('同一幂等键不能用于不同的批量入库请求', 409)
+      }
+      return { replayed: true, movements: rows, warehouseId }
+    }
+    const earlyReplay = validateReplay(await findReplay())
+    if (earlyReplay) return earlyReplay
+
+    const balances = await lockBalances(tx, {
+      tenantId: input.tenantId,
+      warehouseId,
+      products: lines.map(line => ({ productId: line.product.id, inventoryUnit: line.contract.inventoryUnit })),
+    })
+    const concurrentReplay = validateReplay(await findReplay())
+    if (concurrentReplay) return concurrentReplay
+
+    const customBatches = lines.filter(line => line.batchNo)
+    if (customBatches.length) {
+      const duplicate = await tx.warehouseLedgerLot.findFirst({
+        where: {
+          tenantId: input.tenantId,
+          warehouseId,
+          OR: customBatches.map(line => ({ productId: line.product.id, batchNo: line.batchNo! })),
+        },
+        select: { batchNo: true },
+      })
+      if (duplicate) throw businessError(`批次号已存在：${duplicate.batchNo}`, 409)
+    }
+
+    const movements = []
+    for (const line of lines) {
+      const balance = balances.get(line.product.id)!
+      const nextPhysical = balance.physicalQty.plus(line.inventoryQuantity)
+      const nextValue = balance.inventoryValue.plus(line.totalAmount).toDecimalPlaces(VALUE_DP)
+      const nextAverage = nextAverageCost(nextValue, nextPhysical, balance.averageUnitCost)
+      const movement = await tx.warehouseLedgerMovement.create({
+        data: {
+          tenantId: input.tenantId,
+          warehouseId,
+          productId: line.product.id,
+          type: 'MANUAL_INBOUND',
+          physicalDelta: line.inventoryQuantity,
+          reservedDelta: ZERO,
+          valueDelta: line.totalAmount,
+          physicalAfter: nextPhysical,
+          reservedAfter: balance.reservedQty,
+          valueAfter: nextValue,
+          averageUnitCostAfter: nextAverage,
+          originalQuantity: line.purchaseQuantity,
+          originalUnit: line.contract.purchaseUnit,
+          conversionFactor: line.conversionFactor,
+          inventoryQuantity: line.inventoryQuantity,
+          inventoryUnit: line.contract.inventoryUnit,
+          inventoryUnitCost: line.inventoryUnitCost,
+          sourceType: 'WarehouseBatchManualInbound',
+          sourceId: sourceRequestId,
+          sourceLineId: `${String(line.index + 1).padStart(3, '0')}:${line.product.id}`,
+          idempotencyKey: movementKey(line.index),
+          requestFingerprint,
+          effectiveAt: input.effectiveAt,
+          note: input.note || null,
+          sourceName: input.sourceName || null,
+          createdById: input.userId,
+        },
+      })
+      await persistBalance(tx, balance, {
+        physicalQty: nextPhysical,
+        reservedQty: balance.reservedQty,
+        inventoryValue: nextValue,
+        averageUnitCost: nextAverage,
+      })
+      const batchNo = line.batchNo || `MB-${input.effectiveAt.toISOString().slice(0, 10).replaceAll('-', '')}-${movement.id.slice(-8)}`
+      const lot = await tx.warehouseLedgerLot.create({
+        data: {
+          tenantId: input.tenantId,
+          warehouseId,
+          productId: line.product.id,
+          kind: 'MANUAL_INBOUND',
+          batchNo,
+          initialQty: line.inventoryQuantity,
+          remainingQty: line.inventoryQuantity,
+          inventoryUnit: line.contract.inventoryUnit,
+          inventoryUnitCost: line.inventoryUnitCost,
+          sourceName: input.sourceName || null,
+          manufactureDate: line.manufactureDate,
+          expiryDate: line.expiryDate,
+          sourceMovementId: movement.id,
+        },
+      })
+      await tx.opLog.create({
+        data: {
+          tenantId: input.tenantId,
+          userId: input.userId,
+          action: `总仓批量入库 ${line.product.name} ${line.purchaseQuantity.toFixed()} ${line.contract.purchaseUnit}`,
+          target: sourceRequestId,
+          entityType: 'WarehouseLedgerMovement',
+          targetId: movement.id,
+          metadata: {
+            warehouseId,
+            productId: line.product.id,
+            inventoryQuantity: line.inventoryQuantity.toFixed(QTY_DP),
+            inventoryUnit: line.contract.inventoryUnit,
+            unitPrice: line.unitPrice.toFixed(4),
+            totalAmount: line.totalAmount.toFixed(2),
+            batchNo,
+            documentLine: line.index + 1,
+          },
+        },
+      })
+      movements.push({ ...movement, createdLot: lot })
+    }
+    return { replayed: false, movements, warehouseId }
   })
 }
 

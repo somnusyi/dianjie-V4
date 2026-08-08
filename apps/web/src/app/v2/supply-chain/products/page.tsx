@@ -88,6 +88,36 @@ type ProductRow = SupplyProduct & {
   minStock?: number | string | null
   minOrderQty?: number | string | null
   stepQty?: number | string | null
+  upstreamSources?: ProductUpstreamSource[]
+}
+
+type UpstreamSupplierOption = SupplierOption & { no?: string }
+
+type ProductUpstreamSource = {
+  id?: string
+  supplierId: string
+  isPrimary: boolean
+  isActive?: boolean
+  supplierSku?: string | null
+  purchaseUnit: string
+  inventoryUnitsPerPurchaseUnit: number | string
+  quotedUnitPrice?: number | string | null
+  minOrderQty: number | string
+  leadTimeDays: number
+  note?: string | null
+  supplier: UpstreamSupplierOption
+}
+
+type SourceFormRow = {
+  supplierId: string
+  isPrimary: boolean
+  supplierSku: string
+  purchaseUnit: string
+  inventoryUnitsPerPurchaseUnit: string
+  quotedUnitPrice: string
+  minOrderQty: string
+  leadTimeDays: string
+  note: string
 }
 
 type FormState = {
@@ -120,6 +150,7 @@ const EMPTY_FORM: FormState = {
 export default function InternalSupplyChainProductsPage() {
   const [products, setProducts] = useState<ProductRow[] | null>(null)
   const [total, setTotal] = useState(0)
+  const [catalogTotal, setCatalogTotal] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filters, setFilters] = useState<SupplyProductFilters>({ ...DEFAULT_SUPPLY_PRODUCT_FILTERS, status: 'ENABLED' })
@@ -132,6 +163,7 @@ export default function InternalSupplyChainProductsPage() {
   // 使下拉顺序与分类管理页一致；null 表示尚未取到，先回退到全局分类列表。
   const [formCategories, setFormCategories] = useState<CategoryOption[] | null>(null)
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([])
+  const [upstreamSuppliers, setUpstreamSuppliers] = useState<UpstreamSupplierOption[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -147,6 +179,12 @@ export default function InternalSupplyChainProductsPage() {
 
   const [priceTarget, setPriceTarget] = useState<ProductRow | null>(null)
   const [newPrice, setNewPrice] = useState('')
+
+  const [sourceProduct, setSourceProduct] = useState<ProductRow | null>(null)
+  const [sourceRows, setSourceRows] = useState<SourceFormRow[]>([])
+  const [sourceLoading, setSourceLoading] = useState(false)
+  const [sourceSaving, setSourceSaving] = useState(false)
+  const [sourceError, setSourceError] = useState<string | null>(null)
 
   const [preview, setPreview] = useState<{ url: string; name: string } | null>(null)
   const [confirmState, openConfirm] = useConfirmSheet()
@@ -204,13 +242,19 @@ export default function InternalSupplyChainProductsPage() {
       // 商品 supplierId 表示面向门店的履约主体，不是总仓采购来源。
       // 显式限定业务范围，避免把“上游供应商管理”中的采购合作方混入商品筛选。
       apiFetch<SupplierOption[]>('/api/suppliers?status=ENABLED&businessScope=STORE_FULFILLER').catch(() => [] as SupplierOption[]),
+      apiFetch<UpstreamSupplierOption[]>('/api/suppliers?status=ENABLED&businessScope=WAREHOUSE_UPSTREAM').catch(() => [] as UpstreamSupplierOption[]),
+      apiFetch<{ total?: number }>('/api/products?page=1&pageSize=1').catch(() => ({ total: undefined })),
     ])
-      .then(async ([baseCategories, supplierList]) => {
+      .then(async ([baseCategories, supplierList, upstreamSupplierList, catalog]) => {
         const base = Array.isArray(baseCategories) ? baseCategories : []
         const list = Array.isArray(supplierList) ? supplierList : []
         const supplierOptions = list.map((s: any) => ({ id: s.id, name: s.name }))
         if (!active) return
         setSuppliers(supplierOptions)
+        setUpstreamSuppliers(Array.isArray(upstreamSupplierList)
+          ? upstreamSupplierList.map((supplier: any) => ({ id: supplier.id, name: supplier.name, no: supplier.no }))
+          : [])
+        setCatalogTotal(typeof catalog?.total === 'number' ? catalog.total : null)
         // 先按聚合接口快速渲染左侧分类树，随后用主数据补全。
         setCategories(filterSupplierCategories(base))
         // 聚合接口（不带 supplierId）只返回已有商品的分类，分类管理页新建的 0 SKU 分类
@@ -290,12 +334,127 @@ export default function InternalSupplyChainProductsPage() {
 
   function openCreate() {
     setEditing(null)
-    setForm({ ...EMPTY_FORM, supplierId: filters.supplierId })
+    setForm({ ...EMPTY_FORM, supplierId: filters.supplierId || (suppliers.length === 1 ? suppliers[0].id : '') })
     setFormError(null)
     setCategoryNotice(null)
     setPendingImageFile(null)
     setPendingImagePreview(null)
     setFormOpen(true)
+  }
+
+  function sourceFormFromRecord(source: ProductUpstreamSource): SourceFormRow {
+    return {
+      supplierId: source.supplierId,
+      isPrimary: Boolean(source.isPrimary),
+      supplierSku: source.supplierSku || '',
+      purchaseUnit: source.purchaseUnit || '',
+      inventoryUnitsPerPurchaseUnit: String(source.inventoryUnitsPerPurchaseUnit ?? 1),
+      quotedUnitPrice: source.quotedUnitPrice == null ? '' : String(source.quotedUnitPrice),
+      minOrderQty: String(source.minOrderQty ?? 1),
+      leadTimeDays: String(source.leadTimeDays ?? 0),
+      note: source.note || '',
+    }
+  }
+
+  async function openSources(product: ProductRow) {
+    setSourceProduct(product)
+    setSourceRows((product.upstreamSources || []).map(sourceFormFromRecord))
+    setSourceError(null)
+    setSourceLoading(true)
+    try {
+      const data = await apiFetch<{ sources?: ProductUpstreamSource[] }>(`/api/product-upstream-sources/${product.id}`)
+      setSourceRows((data.sources || []).map(sourceFormFromRecord))
+    } catch (reason: any) {
+      setSourceError(reason?.message || '采购来源读取失败')
+    } finally {
+      setSourceLoading(false)
+    }
+  }
+
+  function addSourceRow() {
+    if (!sourceProduct) return
+    const used = new Set(sourceRows.map(row => row.supplierId))
+    const supplier = upstreamSuppliers.find(option => !used.has(option.id))
+    if (!supplier) {
+      setSourceError(upstreamSuppliers.length === 0 ? '请先在「上游供应商管理」建立供应商档案' : '全部上游供应商均已添加')
+      return
+    }
+    setSourceError(null)
+    setSourceRows(current => [...current, {
+      supplierId: supplier.id,
+      isPrimary: current.length === 0,
+      supplierSku: '',
+      purchaseUnit: sourceProduct.purchaseUnit || sourceProduct.inventoryUnit || sourceProduct.unit || '件',
+      inventoryUnitsPerPurchaseUnit: String(sourceProduct.inventoryUnitsPerPurchaseUnit ?? 1),
+      quotedUnitPrice: '',
+      minOrderQty: String(sourceProduct.minOrderQty ?? 1),
+      leadTimeDays: '0',
+      note: '',
+    }])
+  }
+
+  function updateSourceRow(index: number, changes: Partial<SourceFormRow>) {
+    setSourceRows(current => current.map((row, rowIndex) => {
+      if (rowIndex !== index) return changes.isPrimary ? { ...row, isPrimary: false } : row
+      return { ...row, ...changes }
+    }))
+    setSourceError(null)
+  }
+
+  function removeSourceRow(index: number) {
+    setSourceRows(current => {
+      const removedPrimary = current[index]?.isPrimary
+      const next = current.filter((_, rowIndex) => rowIndex !== index)
+      if (removedPrimary && next.length > 0) next[0] = { ...next[0], isPrimary: true }
+      return next
+    })
+    setSourceError(null)
+  }
+
+  async function saveSources() {
+    if (!sourceProduct) return
+    if (sourceRows.length > 0 && sourceRows.filter(row => row.isPrimary).length !== 1) {
+      setSourceError('请且仅请选择一个主供应商')
+      return
+    }
+    const invalid = sourceRows.find(row => (
+      !row.supplierId || !row.purchaseUnit.trim()
+      || !Number.isFinite(Number(row.inventoryUnitsPerPurchaseUnit)) || Number(row.inventoryUnitsPerPurchaseUnit) <= 0
+      || !Number.isFinite(Number(row.minOrderQty)) || Number(row.minOrderQty) <= 0
+      || !Number.isInteger(Number(row.leadTimeDays)) || Number(row.leadTimeDays) < 0
+      || (row.quotedUnitPrice !== '' && (!Number.isFinite(Number(row.quotedUnitPrice)) || Number(row.quotedUnitPrice) < 0))
+    ))
+    if (invalid) {
+      setSourceError('请检查采购单位、换算、报价、起订量和交期')
+      return
+    }
+    setSourceSaving(true)
+    setSourceError(null)
+    try {
+      await apiFetch(`/api/product-upstream-sources/${sourceProduct.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          sources: sourceRows.map(row => ({
+            supplierId: row.supplierId,
+            isPrimary: row.isPrimary,
+            supplierSku: row.supplierSku.trim() || null,
+            purchaseUnit: row.purchaseUnit.trim(),
+            inventoryUnitsPerPurchaseUnit: Number(row.inventoryUnitsPerPurchaseUnit),
+            quotedUnitPrice: row.quotedUnitPrice === '' ? null : Number(row.quotedUnitPrice),
+            minOrderQty: Number(row.minOrderQty),
+            leadTimeDays: Number(row.leadTimeDays),
+            note: row.note.trim() || null,
+          })),
+        }),
+      })
+      setSourceProduct(null)
+      setNotice(`「${sourceProduct.name}」采购来源已更新`)
+      load()
+    } catch (reason: any) {
+      setSourceError(reason?.message || '采购来源保存失败')
+    } finally {
+      setSourceSaving(false)
+    }
   }
 
   function openEdit(product: ProductRow) {
@@ -644,7 +803,9 @@ export default function InternalSupplyChainProductsPage() {
           </div>
           <h1 className="text-h1">商品管理</h1>
           <p className="mt-1 text-caption text-gray2">
-            {products ? `${total} 个商品` : '加载中…'}
+            {products
+              ? `商品档案 ${catalogTotal ?? total} 个 · 当前筛选 ${total} 个`
+              : '加载中…'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -703,10 +864,6 @@ export default function InternalSupplyChainProductsPage() {
           <FilterSelect label="状态" value={filters.status} onChange={value => updateFilters({ status: value })}>
             <option value="">全部状态</option>
             {SUPPLY_PRODUCT_STATUS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-          </FilterSelect>
-          <FilterSelect label="门店供货主体" value={filters.supplierId} onChange={value => updateFilters({ supplierId: value })}>
-            <option value="">全部供货主体</option>
-            {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </FilterSelect>
           <button
             onClick={clearFilters}
@@ -768,8 +925,9 @@ export default function InternalSupplyChainProductsPage() {
                         aria-label="从表头选择当前页全部商品"
                       />
                     </th>
-                    <th className="w-[260px] px-3 py-3">商品 / 供应商</th>
+                    <th className="w-[245px] px-3 py-3">商品</th>
                     <th className="w-[76px] px-3 py-3">分类</th>
+                    <th className="w-[190px] px-3 py-3">采购来源</th>
                     <th className="w-[110px] px-3 py-3 text-right">库存 / 安全线</th>
                     <th className="w-[96px] px-3 py-3 text-right">最小下单量</th>
                     <th className="w-[120px] px-3 py-3 text-right">采购价</th>
@@ -807,14 +965,30 @@ export default function InternalSupplyChainProductsPage() {
                               <div className="mt-0.5 truncate font-num text-micro text-gray3" title={`${product.code || '无编码'} · ${product.spec || '无规格'}`}>
                                 {product.code || '无编码'} · {product.spec || '无规格'}
                               </div>
-                              <div className="mt-0.5 truncate text-micro text-gray3" title={product.supplier?.name || '未关联供应商'}>
-                                {product.supplier?.name || '未关联供应商'}
-                              </div>
                             </div>
                           </div>
                         </td>
                         <td className="px-3 py-3 text-gray2">
                           <span className="block truncate" title={product.category || '未分类'}>{product.category || '未分类'}</span>
+                        </td>
+                        <td className="px-3 py-3">
+                          {product.upstreamSources?.length ? (
+                            <>
+                              <span className="block truncate text-gray2" title={product.upstreamSources.find(source => source.isPrimary)?.supplier.name || product.upstreamSources[0].supplier.name}>
+                                {product.upstreamSources.find(source => source.isPrimary)?.supplier.name || product.upstreamSources[0].supplier.name}
+                                {product.upstreamSources.some(source => source.isPrimary) ? '（主供）' : ''}
+                              </span>
+                              <span className="mt-0.5 block text-micro text-gray3">
+                                {product.upstreamSources.length > 1 ? `共 ${product.upstreamSources.length} 家 · ` : ''}
+                                <button onClick={() => openSources(product)} className="text-accent">维护</button>
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="block text-micro text-amber-fg">尚未维护</span>
+                              <button onClick={() => openSources(product)} className="mt-0.5 text-button text-accent">添加来源</button>
+                            </>
+                          )}
                         </td>
                         <td className="px-3 py-3 text-right font-num">
                           <b>{formatProductQuantity(product.stock)}</b>
@@ -946,6 +1120,22 @@ export default function InternalSupplyChainProductsPage() {
         />
       )}
 
+      {sourceProduct && (
+        <SourceDialog
+          product={sourceProduct}
+          rows={sourceRows}
+          suppliers={upstreamSuppliers}
+          loading={sourceLoading}
+          saving={sourceSaving}
+          error={sourceError}
+          onAdd={addSourceRow}
+          onChange={updateSourceRow}
+          onRemove={removeSourceRow}
+          onSave={saveSources}
+          onClose={() => setSourceProduct(null)}
+        />
+      )}
+
       <ConfirmSheet {...confirmState} />
 
       {preview && (
@@ -1019,6 +1209,187 @@ function PaginationBar({ page, totalPages, total, pageSize, onPage }: {
   )
 }
 
+function SourceDialog({
+  product, rows, suppliers, loading, saving, error,
+  onAdd, onChange, onRemove, onSave, onClose,
+}: {
+  product: ProductRow
+  rows: SourceFormRow[]
+  suppliers: UpstreamSupplierOption[]
+  loading: boolean
+  saving: boolean
+  error: string | null
+  onAdd: () => void
+  onChange: (index: number, changes: Partial<SourceFormRow>) => void
+  onRemove: (index: number) => void
+  onSave: () => void
+  onClose: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4" onClick={onClose}>
+      <div
+        className="max-h-[calc(100vh-2rem)] w-full max-w-5xl overflow-y-auto rounded-card bg-white p-5 shadow-lg"
+        onClick={event => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-border pb-4">
+          <div>
+            <h2 className="text-h2">采购来源 · {product.name}</h2>
+            <p className="mt-1 text-caption text-gray3">
+              维护总仓向谁采购；这里不改变该商品面向门店的内部履约关系。
+            </p>
+          </div>
+          <button onClick={onClose} className="text-h2 text-gray3 hover:text-ink">×</button>
+        </div>
+
+        {loading ? (
+          <div className="py-10 text-center text-caption text-gray3">正在读取采购来源…</div>
+        ) : (
+          <div className="mt-4 space-y-3">
+            {rows.map((row, index) => (
+              <div key={`${row.supplierId}-${index}`} className="rounded-card border border-border bg-bg p-4">
+                <div className="grid gap-3 md:grid-cols-12">
+                  <label className="flex flex-col gap-1 md:col-span-4">
+                    <span className="text-micro text-gray3">上游供应商 *</span>
+                    <select
+                      value={row.supplierId}
+                      onChange={event => onChange(index, { supplierId: event.target.value })}
+                      className="h-10 rounded-cta border border-border bg-white px-3 text-body"
+                    >
+                      {suppliers.map(supplier => (
+                        <option
+                          key={supplier.id}
+                          value={supplier.id}
+                          disabled={rows.some((item, rowIndex) => rowIndex !== index && item.supplierId === supplier.id)}
+                        >
+                          {supplier.no ? `${supplier.no} · ` : ''}{supplier.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1 md:col-span-3">
+                    <span className="text-micro text-gray3">供应商商品编码</span>
+                    <input
+                      value={row.supplierSku}
+                      onChange={event => onChange(index, { supplierSku: event.target.value })}
+                      className="h-10 rounded-cta border border-border bg-white px-3 text-body"
+                      placeholder="可选"
+                    />
+                  </label>
+                  <label className="flex items-center gap-2 self-end pb-2 text-caption text-gray2 md:col-span-3">
+                    <input
+                      type="radio"
+                      name="primary-upstream-source"
+                      checked={row.isPrimary}
+                      onChange={() => onChange(index, { isPrimary: true })}
+                    />
+                    主供应商
+                  </label>
+                  <div className="flex items-end justify-end md:col-span-2">
+                    <button onClick={() => onRemove(index)} className="h-10 px-2 text-button text-red-fg">移除</button>
+                  </div>
+
+                  <label className="flex flex-col gap-1 md:col-span-2">
+                    <span className="text-micro text-gray3">采购单位 *</span>
+                    <input
+                      value={row.purchaseUnit}
+                      onChange={event => onChange(index, { purchaseUnit: event.target.value })}
+                      className="h-10 rounded-cta border border-border bg-white px-3 text-body"
+                      placeholder="箱 / 件 / kg"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 md:col-span-3">
+                    <span className="text-micro text-gray3">1 采购单位 = 库存单位 *</span>
+                    <input
+                      type="number"
+                      min="0.000001"
+                      step="0.000001"
+                      value={row.inventoryUnitsPerPurchaseUnit}
+                      onChange={event => onChange(index, { inventoryUnitsPerPurchaseUnit: event.target.value })}
+                      className="h-10 rounded-cta border border-border bg-white px-3 font-num text-body"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 md:col-span-2">
+                    <span className="text-micro text-gray3">最新含税报价</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={row.quotedUnitPrice}
+                      onChange={event => onChange(index, { quotedUnitPrice: event.target.value })}
+                      className="h-10 rounded-cta border border-border bg-white px-3 font-num text-body"
+                      placeholder="可选"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 md:col-span-2">
+                    <span className="text-micro text-gray3">起订量 *</span>
+                    <input
+                      type="number"
+                      min="0.000001"
+                      step="0.001"
+                      value={row.minOrderQty}
+                      onChange={event => onChange(index, { minOrderQty: event.target.value })}
+                      className="h-10 rounded-cta border border-border bg-white px-3 font-num text-body"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 md:col-span-2">
+                    <span className="text-micro text-gray3">交期（天）*</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={row.leadTimeDays}
+                      onChange={event => onChange(index, { leadTimeDays: event.target.value })}
+                      className="h-10 rounded-cta border border-border bg-white px-3 font-num text-body"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 md:col-span-1">
+                    <span className="text-micro text-gray3">库存单位</span>
+                    <span className="flex h-10 items-center text-caption text-gray2">{product.inventoryUnit || product.unit || '件'}</span>
+                  </label>
+                  <label className="flex flex-col gap-1 md:col-span-12">
+                    <span className="text-micro text-gray3">备注</span>
+                    <input
+                      value={row.note}
+                      onChange={event => onChange(index, { note: event.target.value })}
+                      className="h-10 rounded-cta border border-border bg-white px-3 text-body"
+                      placeholder="账期、联系人、特殊约定等，可选"
+                    />
+                  </label>
+                </div>
+              </div>
+            ))}
+
+            {rows.length === 0 && (
+              <div className="rounded-card border border-dashed border-border px-4 py-8 text-center">
+                <p className="text-caption text-gray2">尚未维护采购来源</p>
+                <p className="mt-1 text-micro text-gray3">请从“上游供应商管理”中选择真实供货方。</p>
+              </div>
+            )}
+
+            <button
+              onClick={onAdd}
+              disabled={rows.length >= suppliers.length}
+              className="rounded-cta border border-accent/30 bg-accent/5 px-4 py-2 text-button text-accent disabled:opacity-40"
+            >＋ 添加采购来源</button>
+          </div>
+        )}
+
+        {error && <p className="mt-3 rounded-cta bg-red-bg px-3 py-2 text-caption text-red-fg">{error}</p>}
+
+        <div className="mt-5 flex items-center justify-between gap-3 border-t border-border pt-4">
+          <p className="text-micro text-gray3">同一商品可有多家来源，但只能有一家主供应商。</p>
+          <div className="flex gap-2">
+            <button onClick={onClose} disabled={saving} className="rounded-cta border border-border bg-white px-4 py-2 text-button text-gray2 disabled:opacity-40">取消</button>
+            <button onClick={onSave} disabled={loading || saving} className="rounded-cta bg-accent px-4 py-2 text-button text-white disabled:opacity-40">
+              {saving ? '保存中…' : '保存采购来源'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function FormDialog({
   editing, form, formError, submitting, pendingImagePreview, categories, suppliers, priceOnly,
   creatingCategory, categoryNotice, canCreateCategory,
@@ -1085,14 +1456,14 @@ function FormDialog({
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-3">
-            {!editing && (
-              <FormField label="供应商">
+            {!editing && suppliers.length > 1 && (
+              <FormField label="内部履约主体">
                 <select
                   value={form.supplierId}
                   onChange={e => onFieldChange('supplierId', e.target.value)}
                   className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body"
                 >
-                  <option value="">未关联供应商</option>
+                  <option value="">请选择内部履约主体</option>
                   {suppliers.map(supplier => (
                     <option key={supplier.id} value={supplier.id}>{supplier.name}</option>
                   ))}

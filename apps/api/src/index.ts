@@ -35,6 +35,7 @@ import { budgetRoutes } from './routes/budgets'
 import { storeRoutes } from './routes/stores'
 import { supplierRoutes } from './routes/suppliers'
 import { productRoutes } from './routes/products'
+import { productUpstreamSourceRoutes } from './routes/productUpstreamSources'
 import { supplierStockRoutes } from './routes/supplierStock'
 import { supplierInsightRoutes } from './routes/supplierInsights'
 import { financeReconcileRoutes } from './routes/financeReconcile'
@@ -224,6 +225,7 @@ async function bootstrap() {
   await app.register(storeRoutes,          { prefix: '/api/stores' })
   await app.register(supplierRoutes,       { prefix: '/api/suppliers' })
   await app.register(productRoutes,        { prefix: '/api/products' })
+  await app.register(productUpstreamSourceRoutes, { prefix: '/api/product-upstream-sources' })
   await app.register(supplierStockRoutes,  { prefix: '/api/supplier/stock' })
   await app.register(supplierInsightRoutes, { prefix: '/api/supplier/insights' })
   await app.register(financeReconcileRoutes, { prefix: '/api/finance' })

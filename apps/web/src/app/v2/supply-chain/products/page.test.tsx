@@ -117,6 +117,7 @@ function mockRoutes() {
     const url = String(path)
     if (url.startsWith('/api/products/categories')) return Promise.resolve(CATEGORIES)
     if (url.startsWith('/api/suppliers')) return Promise.resolve(SUPPLIERS)
+    if (url.startsWith('/api/product-upstream-sources')) return Promise.resolve({ productId: 'p1', sources: [] })
     if (url.startsWith('/api/products')) {
       // 不带 page 的调用是「按筛选统计分类数量」的全量请求，返回数组而非分页对象
       if (!url.includes('page=')) return Promise.resolve([PRODUCT])
@@ -241,7 +242,7 @@ describe('商品管理 PC 页面 · 供应商业务口径', () => {
     mockFetch.mockReset()
   })
 
-  it('只加载门店履约主体，并使用不会与上游供应商混淆的文案', async () => {
+  it('区分后台履约主体和页面采购来源，不再把履约主体当商品供应商展示', async () => {
     mockRoutes()
 
     const { container, root } = render(<InternalSupplyChainProductsPage />)
@@ -251,8 +252,39 @@ describe('商品管理 PC 页面 · 供应商业务口径', () => {
       .map(call => String(call[0]))
       .filter(url => url.startsWith('/api/suppliers'))
     expect(supplierCalls).toContain('/api/suppliers?status=ENABLED&businessScope=STORE_FULFILLER')
-    expect(container.textContent).toContain('门店供货主体')
-    expect(container.textContent).toContain('全部供货主体')
+    expect(supplierCalls).toContain('/api/suppliers?status=ENABLED&businessScope=WAREHOUSE_UPSTREAM')
+    expect(container.textContent).not.toContain('门店供货主体')
+    expect(container.textContent).not.toContain('全部供货主体')
+    expect(container.textContent).toContain('采购来源')
+    expect(container.textContent).toContain('尚未维护')
+
+    cleanup(container, root)
+  })
+
+  it('可为商品添加上游采购来源并提交独立关联', async () => {
+    mockRoutes()
+
+    const { container, root } = render(<InternalSupplyChainProductsPage />)
+    await waitFor(() => container.textContent?.includes('添加来源') ?? false)
+
+    act(() => findButton(container, '添加来源')!.click())
+    await waitFor(() => container.textContent?.includes('采购来源 · 土豆') ?? false)
+    await waitFor(() => Boolean(findButton(container, '＋ 添加采购来源')))
+    act(() => findButton(container, '＋ 添加采购来源')!.click())
+    await waitFor(() => container.textContent?.includes('主供应商') ?? false)
+    act(() => findButton(container, '保存采购来源')!.click())
+
+    await waitFor(() => mockFetch.mock.calls.some(call => (
+      String(call[0]) === '/api/product-upstream-sources/p1'
+      && (call[1] as RequestInit | undefined)?.method === 'PUT'
+    )))
+    const putCall = mockFetch.mock.calls.find(call => (
+      String(call[0]) === '/api/product-upstream-sources/p1'
+      && (call[1] as RequestInit | undefined)?.method === 'PUT'
+    ))
+    expect(JSON.parse(String((putCall?.[1] as RequestInit).body))).toMatchObject({
+      sources: [{ supplierId: 'sup-1', isPrimary: true, purchaseUnit: 'kg' }],
+    })
 
     cleanup(container, root)
   })

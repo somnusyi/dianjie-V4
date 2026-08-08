@@ -448,6 +448,21 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const { where, filters } = listResult
     const { category, q, page, pageSize = '20' } = filters as any
     const { tenantId, role, supplierId } = req.user
+    const listInclude: any = role === 'SUPPLY_CHAIN'
+      ? {
+          supplier: { select: { id: true, name: true } },
+          upstreamSources: {
+            where: { isActive: true },
+            select: {
+              id: true, supplierId: true, isPrimary: true, supplierSku: true,
+              purchaseUnit: true, inventoryUnitsPerPurchaseUnit: true,
+              quotedUnitPrice: true, minOrderQty: true, leadTimeDays: true, note: true,
+              supplier: { select: { id: true, no: true, name: true, status: true } },
+            },
+            orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
+          },
+        }
+      : { supplier: { select: { id: true, name: true } } }
 
     // 不传 page 时返回全量（兼容下拉框），缓存 10 分钟
     // 注意 cache key 加上 supplier scope，避免供应商之间互相污染
@@ -461,7 +476,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       const rows = await cached(`products:full:${tenantId}:${scopeKey}:${category || 'all'}:${effectiveStatus}`, 600, () =>
         prisma.product.findMany({
           where,
-          include: { supplier: { select: { id: true, name: true } } },
+          include: listInclude,
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         })
       )
@@ -470,7 +485,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     if (!page) {
       const rows = await prisma.product.findMany({
         where,
-        include: { supplier: { select: { id: true, name: true } } },
+        include: listInclude,
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       })
       return withAvailability(tenantId, rows)
@@ -481,7 +496,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const [items, total] = await Promise.all([
       prisma.product.findMany({
         where,
-        include: { supplier: { select: { id: true, name: true } } },
+        include: listInclude,
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         skip: (p - 1) * ps,
         take: ps,

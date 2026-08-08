@@ -38,6 +38,7 @@ model Tenant {
   warehouseLedgerLots           WarehouseLedgerLot[]
   warehouseLedgerLotAllocations WarehouseLedgerLotAllocation[]
   supplierProductCategories     SupplierProductCategory[]
+  productUpstreamSources        ProductUpstreamSource[]
   receipts                      Receipt[]
   reconciliations               Reconciliation[]
   payments                      Payment[]
@@ -1164,6 +1165,7 @@ model Supplier {
   stockBatchAllocations SupplierStockBatchAllocation[]
   stockReservations     SupplierStockReservation[]
   productCategories     SupplierProductCategory[]
+  upstreamProductSources ProductUpstreamSource[]
 
   @@unique([tenantId, no])
   @@index([businessScopes], type: Gin, map: "suppliers_business_scopes_idx")
@@ -1238,12 +1240,43 @@ model Product {
   inventorySnapshotItems        InventorySnapshotItem[]
   inventoryCountItems           InventoryCountItem[]
   storeInventoryPolicies        StoreInventoryPolicy[]
+  upstreamSources                ProductUpstreamSource[]
 
   @@unique([tenantId, code])
   @@unique([tenantId, id])
   @@index([batchId])
   @@index([tenantId, supplierId, category, status])
   @@map("products")
+}
+
+// ── 商品上游采购来源 ─────────────────────────────────
+// Product.supplierId 继续表示向门店履约的供货主体；本表专门描述总仓从哪些
+// 上游合作方采购一个 SKU。一个商品可有多个来源，但同一时刻只能有一个主供。
+model ProductUpstreamSource {
+  id                            String   @id @default(cuid())
+  tenantId                      String
+  productId                     String
+  supplierId                    String
+  isPrimary                     Boolean  @default(false)
+  isActive                      Boolean  @default(true)
+  supplierSku                   String?  @db.VarChar(80)
+  purchaseUnit                  String   @db.VarChar(16)
+  inventoryUnitsPerPurchaseUnit Decimal  @db.Decimal(18, 6)
+  quotedUnitPrice               Decimal? @db.Decimal(14, 4)
+  minOrderQty                   Decimal  @default(1) @db.Decimal(18, 6)
+  leadTimeDays                  Int      @default(0)
+  note                          String?  @db.VarChar(240)
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product  Product  @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Cascade)
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, productId, supplierId])
+  @@index([tenantId, supplierId, isActive])
+  @@index([tenantId, productId, isPrimary])
+  @@map("product_upstream_sources")
 }
 
 // ── 供应商商品/库存分类主数据 ─────────────────────────

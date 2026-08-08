@@ -20,7 +20,7 @@ import {
 } from '../../src/services/warehouseLedger'
 import { auditWarehouseLedger } from '../../src/services/warehouseLedgerAudit'
 import { reconcileWarehouseShadowLedger } from '../../src/services/warehouseLedgerReconciliation'
-import { warehouseInventoryRoutes } from '../../src/routes/warehouseInventory'
+import { buildWarehouseInventoryScopeWhere, warehouseInventoryRoutes } from '../../src/routes/warehouseInventory'
 
 const recordInbound = vi.mocked(recordManualWarehouseInbound)
 const reverseInbound = vi.mocked(reverseManualWarehouseInbound)
@@ -74,6 +74,21 @@ describe('warehouse inventory routes', () => {
     } as any)
     reconcileLedger.mockReset()
     reconcileLedger.mockResolvedValue({ scanned: 2, reserved: 1, released: 0, shipped: 1, failures: [], nextCursor: null })
+  })
+
+  it('separates real warehouse stock from BOM placeholders and unit-governance queues', () => {
+    expect(buildWarehouseInventoryScopeWhere({ tenantId: 'tenant-1', warehouseId: 'warehouse-1', scope: 'stock' }))
+      .toMatchObject({
+        tenantId: 'tenant-1', status: 'ENABLED',
+        warehouseLedgerBalances: { some: { tenantId: 'tenant-1', warehouseId: 'warehouse-1' } },
+      })
+    expect(buildWarehouseInventoryScopeWhere({ tenantId: 'tenant-1', warehouseId: 'warehouse-1', scope: 'bom-mapping' }))
+      .toMatchObject({ tenantId: 'tenant-1', status: 'ENABLED', category: 'BOM待采购映射' })
+    expect(buildWarehouseInventoryScopeWhere({ tenantId: 'tenant-1', warehouseId: 'warehouse-1', scope: 'unit-review' }))
+      .toMatchObject({
+        tenantId: 'tenant-1', status: 'ENABLED', unitConversionStatus: { not: 'VERIFIED' },
+        NOT: { category: 'BOM待采购映射' },
+      })
   })
 
   it('allows internal supply chain to record a supplier-independent manual inbound', async () => {

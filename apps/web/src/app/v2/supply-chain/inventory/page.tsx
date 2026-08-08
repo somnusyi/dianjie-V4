@@ -40,8 +40,16 @@ type InventoryResponse = {
     movementCount: number
     strictActivated: boolean
   }
+  scope: InventoryScope
+  scopeCounts: {
+    stockSku: number
+    bomMappingSku: number
+    unitReviewSku: number
+  }
   items: InventoryItem[]
 }
+
+type InventoryScope = 'stock' | 'bom-mapping' | 'unit-review'
 
 type Movement = {
   id: string
@@ -102,12 +110,25 @@ function qty(value: number, digits = 3) {
   return Number(value || 0).toLocaleString('zh-CN', { maximumFractionDigits: digits })
 }
 
+function conversionText(item: InventoryItem) {
+  if (item.unitConversionStatus === 'PENDING') return '尚未配置'
+  if (item.purchaseUnit === item.inventoryUnit && item.purchaseToInventoryFactor === 1) return '同单位计存'
+  return `1 ${item.purchaseUnit} = ${qty(item.purchaseToInventoryFactor, 6)} ${item.inventoryUnit}`
+}
+
+function conversionNote(item: InventoryItem) {
+  if (item.unitConversionStatus === 'VERIFIED') return '已核验'
+  if (item.unitConversionStatus === 'INFERRED') return '系统推定，待人工确认'
+  return '不能用于真实入库和成本计算'
+}
+
 export default function InternalSupplyChainInventoryPage() {
   const [data, setData] = useState<InventoryResponse | null>(null)
   const [movements, setMovements] = useState<Movement[]>([])
   const [audit, setAudit] = useState<LedgerAudit | null>(null)
   const [q, setQ] = useState('')
   const [loading, setLoading] = useState(true)
+  const [scope, setScope] = useState<InventoryScope>('stock')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [inboundOpen, setInboundOpen] = useState(false)
@@ -130,12 +151,13 @@ export default function InternalSupplyChainInventoryPage() {
   const [countNote, setCountNote] = useState('总仓现场实盘校准')
   const [countKey, setCountKey] = useState(newIdempotencyKey)
 
-  async function load() {
+  async function load(requestedScope: InventoryScope = scope) {
     setLoading(true)
     setError('')
+    setData(current => current ? { ...current, scope: requestedScope, items: [] } : current)
     try {
       const [inventory, recent, ledgerAudit] = await Promise.all([
-        apiFetch<InventoryResponse>('/api/warehouse-inventory?page=1&pageSize=200'),
+        apiFetch<InventoryResponse>(`/api/warehouse-inventory?scope=${requestedScope}&page=1&pageSize=500`),
         apiFetch<Movement[]>('/api/warehouse-inventory/movements?limit=50'),
         apiFetch<LedgerAudit>('/api/warehouse-inventory/audit'),
       ])
@@ -149,7 +171,7 @@ export default function InternalSupplyChainInventoryPage() {
     }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load(scope) }, [scope])
 
   const items = data?.items || []
   const selectedProduct = items.find(item => item.id === productId)
@@ -333,9 +355,11 @@ export default function InternalSupplyChainInventoryPage() {
             <span className="text-micro text-gray3">商品搜索</span>
             <input value={q} onChange={event => setQ(event.target.value)} placeholder="名称 / 编码 / 分类 / 规格" className="h-10 min-w-64 rounded-cta border border-border bg-white px-3 text-body" />
           </label>
-          <button onClick={openCount} className="h-10 rounded-cta border border-accent bg-white px-4 text-button text-accent">单SKU实盘校准</button>
-          {data?.summary.inventoryMode === 'SHADOW' && <button onClick={reconcileShadow} disabled={submitting} className="h-10 rounded-cta border border-border bg-white px-4 text-button text-gray2 disabled:opacity-40">补记影子差异</button>}
-          <button onClick={openInbound} className="h-10 rounded-cta bg-accent px-4 text-button text-white">+ 单条手工入库</button>
+          {scope === 'stock' && <>
+            <button onClick={openCount} className="h-10 rounded-cta border border-accent bg-white px-4 text-button text-accent">单SKU实盘校准</button>
+            {data?.summary.inventoryMode === 'SHADOW' && <button onClick={reconcileShadow} disabled={submitting} className="h-10 rounded-cta border border-border bg-white px-4 text-button text-gray2 disabled:opacity-40">补记影子差异</button>}
+            <button onClick={openInbound} className="h-10 rounded-cta bg-accent px-4 text-button text-white">+ 单条手工入库</button>
+          </>}
         </div>
       </header>
 
@@ -370,14 +394,24 @@ export default function InternalSupplyChainInventoryPage() {
 
       <section className="grid gap-4 2xl:grid-cols-[minmax(0,2fr)_minmax(380px,1fr)]">
         <div className="overflow-hidden rounded-card border border-border bg-white">
-          <div className="border-b border-border px-4 py-3"><h2 className="text-h2">库存明细</h2><p className="text-micro text-gray3">{loading ? '加载中…' : `${visible.length} 个商品`}</p></div>
+          <div className="border-b border-border px-4 py-3">
+            <h2 className="text-h2">{scope === 'stock' ? '库存明细' : scope === 'bom-mapping' ? '待采购映射' : '单位待核验'}</h2>
+            <p className="text-micro text-gray3">{loading ? '加载中…' : `${visible.length} 个商品`}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button onClick={() => setScope('stock')} className={`rounded-full px-3 py-1.5 text-button ${scope === 'stock' ? 'bg-ink text-white' : 'bg-bg text-gray2'}`}>库存商品 {data?.scopeCounts.stockSku ?? '—'}</button>
+              <button onClick={() => setScope('bom-mapping')} className={`rounded-full px-3 py-1.5 text-button ${scope === 'bom-mapping' ? 'bg-ink text-white' : 'bg-bg text-gray2'}`}>待采购映射 {data?.scopeCounts.bomMappingSku ?? '—'}</button>
+              <button onClick={() => setScope('unit-review')} className={`rounded-full px-3 py-1.5 text-button ${scope === 'unit-review' ? 'bg-ink text-white' : 'bg-bg text-gray2'}`}>单位待核验 {data?.scopeCounts.unitReviewSku ?? '—'}</button>
+            </div>
+          </div>
           <div className="max-h-[680px] overflow-auto">
-            <table className="w-full min-w-[980px] text-left text-caption">
-              <thead className="sticky top-0 bg-bg text-gray3"><tr><th className="px-4 py-3">商品</th><th className="px-4 py-3">采购→库存单位</th><th className="px-4 py-3 text-right">物理</th><th className="px-4 py-3 text-right">预占</th><th className="px-4 py-3 text-right">可用</th><th className="px-4 py-3 text-right">金额</th><th className="px-4 py-3">状态</th></tr></thead>
+            {scope === 'stock' ? <table className="w-full min-w-[1180px] text-left text-caption">
+              <thead className="sticky top-0 bg-bg text-gray3"><tr><th className="px-4 py-3">商品</th><th className="px-4 py-3">采购规格</th><th className="px-4 py-3">库存单位</th><th className="px-4 py-3">换算关系</th><th className="px-4 py-3 text-right">物理</th><th className="px-4 py-3 text-right">预占</th><th className="px-4 py-3 text-right">可用</th><th className="px-4 py-3 text-right">金额</th><th className="px-4 py-3">状态</th></tr></thead>
               <tbody className="divide-y divide-border">
                 {visible.map(item => <tr key={item.id}>
                   <td className="px-4 py-3"><b>{item.name}</b><div className="text-micro text-gray3">{item.code} · {item.category || '未分类'} · {item.spec || '—'}</div></td>
-                  <td className="px-4 py-3"><b>1 {item.purchaseUnit} = {qty(item.purchaseToInventoryFactor, 6)} {item.inventoryUnit}</b><div className="text-micro text-gray3">{item.unitConversionStatus === 'VERIFIED' ? '已核验' : item.unitConversionStatus === 'INFERRED' ? '系统推定' : '同单位兼容/待核验'}</div></td>
+                  <td className="px-4 py-3"><b>{item.purchaseUnit}</b><div className="text-micro text-gray3">{item.spec || '无包装规格'}</div></td>
+                  <td className="px-4 py-3"><b>{item.inventoryUnit}</b><div className="text-micro text-gray3">库存、预占与成本计量</div></td>
+                  <td className="px-4 py-3"><b>{conversionText(item)}</b><div className={`text-micro ${item.unitConversionStatus === 'VERIFIED' ? 'text-green-fg' : 'text-red-fg'}`}>{conversionNote(item)}</div></td>
                   <td className="px-4 py-3 text-right font-num">{qty(item.physicalQty)} {item.inventoryUnit}</td>
                   <td className="px-4 py-3 text-right font-num text-gray2">{qty(item.reservedQty)}</td>
                   <td className="px-4 py-3 text-right font-num">{qty(item.availableQty)}</td>
@@ -385,7 +419,17 @@ export default function InternalSupplyChainInventoryPage() {
                   <td className="px-4 py-3"><Chip tone={item.statusFlag === 'SHADOW_GAP' || item.statusFlag === 'OUT' ? 'red' : item.statusFlag === 'LOW' ? 'orange' : 'green'}>{item.statusFlag === 'SHADOW_GAP' ? '待实盘缺口' : item.statusFlag === 'OUT' ? '缺货' : item.statusFlag === 'LOW' ? '偏低' : '正常'}</Chip></td>
                 </tr>)}
               </tbody>
-            </table>
+            </table> : <table className="w-full min-w-[820px] text-left text-caption">
+              <thead className="sticky top-0 bg-bg text-gray3"><tr><th className="px-4 py-3">商品</th><th className="px-4 py-3">当前临时单位</th><th className="px-4 py-3">待处理事项</th><th className="px-4 py-3">处理入口</th></tr></thead>
+              <tbody className="divide-y divide-border">
+                {visible.map(item => <tr key={item.id}>
+                  <td className="px-4 py-3"><b>{item.name}</b><div className="text-micro text-gray3">{item.code} · {item.category || '未分类'}</div></td>
+                  <td className="px-4 py-3"><b>采购：{item.purchaseUnit}</b><div className="text-micro text-gray3">库存：{item.inventoryUnit} · 当前仅为占位单位</div></td>
+                  <td className="px-4 py-3"><b>{scope === 'bom-mapping' ? '关联真实采购 SKU' : '确认采购、库存及换算关系'}</b><div className="text-micro text-red-fg">完成前不进入库存账</div></td>
+                  <td className="px-4 py-3"><a href="/v2/supply-chain/products" className="text-button text-accent underline">前往商品管理</a></td>
+                </tr>)}
+              </tbody>
+            </table>}
             {!loading && visible.length === 0 && <div className="py-12 text-center text-caption text-gray3">暂无匹配商品</div>}
           </div>
         </div>

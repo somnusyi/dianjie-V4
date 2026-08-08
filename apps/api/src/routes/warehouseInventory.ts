@@ -14,6 +14,27 @@ import { resolveProductFourUnits } from '../services/inventoryUnits'
 
 const READ_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'FINANCE', 'PURCHASER'])
 const WRITE_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'PURCHASER'])
+export type WarehouseInventoryScope = 'stock' | 'bom-mapping' | 'unit-review'
+
+export function buildWarehouseInventoryScopeWhere(input: {
+  tenantId: string
+  warehouseId: string
+  scope: WarehouseInventoryScope
+}): Prisma.ProductWhereInput {
+  const common = { tenantId: input.tenantId, status: 'ENABLED' as const }
+  if (input.scope === 'bom-mapping') return { ...common, category: 'BOM待采购映射' }
+  if (input.scope === 'unit-review') {
+    return {
+      ...common,
+      unitConversionStatus: { not: 'VERIFIED' },
+      NOT: { category: 'BOM待采购映射' },
+    }
+  }
+  return {
+    ...common,
+    warehouseLedgerBalances: { some: { tenantId: input.tenantId, warehouseId: input.warehouseId } },
+  }
+}
 
 function hasCapability(role: string, capability: 'inventory.read' | 'inventory.write') {
   if (isInternalSupplyChainRole(role)) return hasInternalSupplyChainCapability(role, capability)
@@ -61,16 +82,20 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
   app.get('/', authRead, async (req: any, reply: any) => {
     const parsed = z.object({
       q: z.string().trim().max(100).optional(),
+      scope: z.enum(['stock', 'bom-mapping', 'unit-review']).default('stock'),
       page: z.coerce.number().int().min(1).default(1),
-      pageSize: z.coerce.number().int().min(1).max(200).default(100),
+      pageSize: z.coerce.number().int().min(1).max(500).default(100),
     }).safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { tenantId } = req.user
     const warehouseId = await resolveTenantWarehouseId(prisma, tenantId, undefined)
     const terms = parsed.data.q?.toLowerCase().split(/\s+/).filter(Boolean) || []
+    const stockWhere = buildWarehouseInventoryScopeWhere({ tenantId, warehouseId, scope: 'stock' })
+    const bomMappingWhere = buildWarehouseInventoryScopeWhere({ tenantId, warehouseId, scope: 'bom-mapping' })
+    const unitReviewWhere = buildWarehouseInventoryScopeWhere({ tenantId, warehouseId, scope: 'unit-review' })
+    const scopeWhere = buildWarehouseInventoryScopeWhere({ tenantId, warehouseId, scope: parsed.data.scope })
     const where: Prisma.ProductWhereInput = {
-      tenantId,
-      status: 'ENABLED',
+      ...scopeWhere,
       ...(terms.length ? {
         AND: terms.map(term => ({
           OR: [
@@ -82,7 +107,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         })),
       } : {}),
     }
-    const [warehouse, products, total, allBalances, activeReservations, movementCount] = await Promise.all([
+    const [warehouse, products, total, stockSku, bomMappingSku, unitReviewSku, allBalances, activeReservations, movementCount] = await Promise.all([
       prisma.warehouse.findFirstOrThrow({
         where: { id: warehouseId, tenantId },
         select: { id: true, code: true, name: true, inventoryMode: true, inventoryActivatedAt: true },
@@ -100,6 +125,9 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         },
       }),
       prisma.product.count({ where }),
+      prisma.product.count({ where: stockWhere }),
+      prisma.product.count({ where: bomMappingWhere }),
+      prisma.product.count({ where: unitReviewWhere }),
       prisma.warehouseLedgerBalance.findMany({ where: { tenantId, warehouseId } }),
       prisma.warehouseLedgerReservation.count({ where: { tenantId, warehouseId, status: 'ACTIVE' } }),
       prisma.warehouseLedgerMovement.count({ where: { tenantId, warehouseId } }),
@@ -138,7 +166,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
       warehouse,
       summary: {
         inventoryMode: warehouse.inventoryMode,
-        totalSku: total,
+        totalSku: stockSku,
         physicalSku,
         negativeSku,
         totalValue: Number(totalValue),
@@ -146,6 +174,8 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         movementCount,
         strictActivated: warehouse.inventoryMode === 'STRICT' && Boolean(warehouse.inventoryActivatedAt),
       },
+      scope: parsed.data.scope,
+      scopeCounts: { stockSku, bomMappingSku, unitReviewSku },
       items,
       total,
       page: parsed.data.page,

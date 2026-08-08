@@ -20,6 +20,8 @@ const inventory = {
     inventoryMode: 'SHADOW', totalSku: 1, physicalSku: 0, negativeSku: 0,
     totalValue: 0, activeReservations: 0, movementCount: 0, strictActivated: false,
   },
+  scope: 'stock',
+  scopeCounts: { stockSku: 1, bomMappingSku: 79, unitReviewSku: 3 },
   items: [{
     id: 'product-1', code: 'DJ001', name: '菌菇酱', category: '酱料', spec: '8袋/箱',
     purchaseUnit: '箱', inventoryUnit: '袋', purchaseToInventoryFactor: 8,
@@ -60,7 +62,7 @@ describe('总仓库存页面', () => {
     mockFetch.mockReset()
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
-      if (url.startsWith('/api/warehouse-inventory?page=')) return Promise.resolve(inventory)
+      if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
       if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
       if (url === '/api/warehouse-inventory/audit') return Promise.resolve({
         readyForStrict: false,
@@ -83,6 +85,10 @@ describe('总仓库存页面', () => {
     expect(container.textContent).toContain('影子账观察期')
     expect(container.textContent).toContain('总仓维度 · 不按供应商拆库存')
     expect(container.textContent).toContain('1 箱 = 8 袋')
+    expect(container.textContent).toContain('采购规格')
+    expect(container.textContent).toContain('库存单位')
+    expect(container.textContent).toContain('待采购映射 79')
+    expect(container.textContent).not.toContain('采购→库存单位')
     expect(container.textContent).toContain('库存四账审计：1 项待处理')
     expect(container.textContent).not.toContain('选择供应商')
 

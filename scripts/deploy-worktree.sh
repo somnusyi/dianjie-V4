@@ -120,6 +120,40 @@ if [ "$SERVER_COMMIT" != "NONE" ] && [ "$SERVER_COMMIT" != "$ORIGIN_HEAD" ]; the
   fi
 fi
 
+# Decide whether production dependency installation is actually necessary.
+# The ECS host is intentionally not guaranteed to have outbound npm/PyPI
+# access. Running an unconditional install after rsync can therefore leave a
+# half-uploaded release on disk while the old process is still in memory.
+API_DEPENDENCIES_CHANGED=1
+CMB_DEPENDENCIES_CHANGED=1
+if [ "$SERVER_COMMIT" != "NONE" ] && git cat-file -e "$SERVER_COMMIT" 2>/dev/null; then
+  if git diff --quiet "$SERVER_COMMIT" "$ORIGIN_HEAD" -- \
+    package.json pnpm-lock.yaml apps/api/package.json packages/db/package.json; then
+    API_DEPENDENCIES_CHANGED=0
+  fi
+  if git diff --quiet "$SERVER_COMMIT" "$ORIGIN_HEAD" -- apps/cmb/requirements.txt; then
+    CMB_DEPENDENCIES_CHANGED=0
+  fi
+fi
+
+# When dependencies changed, verify the required package channel before any
+# build artifact or schema is uploaded. A hard timeout prevents orphaned SSH
+# and package-manager processes from outliving the deployment lock.
+if [ "$API_DEPENDENCIES_CHANGED" = "1" ]; then
+  echo "   检测到 API 依赖变更，预检 ECS npm 通道..."
+  ssh_run "timeout 20 npm ping --silent >/dev/null 2>&1" || {
+    echo "❌ ECS 无法在 20 秒内访问 npm registry；尚未上传产物，安全停止。"
+    exit 1
+  }
+fi
+if [ "$CMB_DEPENDENCIES_CHANGED" = "1" ]; then
+  echo "   检测到 CMB 依赖变更，预检 ECS PyPI 通道..."
+  ssh_run "timeout 20 python3 -m pip index versions flask >/dev/null 2>&1" || {
+    echo "❌ ECS 无法在 20 秒内访问 PyPI；尚未上传产物，安全停止。"
+    exit 1
+  }
+fi
+
 # ── 4. 依赖 + 构建 ───────────────────────────────────
 echo ""
 echo "==> [4/8] pnpm install + build (worktree, 主仓库 dev 不受影响)"
@@ -217,12 +251,16 @@ rsync_run --exclude='node_modules' --exclude='.env' \
 # fail-fast 抓得到但用户看到的是"部署失败", 不知是缺包.
 echo ""
 echo "==> [5.1/8] ECS cmb Python 依赖 (pip install)"
-ssh_run "
-  set -e
-  cd $REMOTE/apps/cmb
-  pip3 install -q --disable-pip-version-check -r requirements.txt 2>&1 | tail -3 || true
-  echo '   ✓ cmb 依赖同步完成'
-"
+if [ "$CMB_DEPENDENCIES_CHANGED" = "0" ]; then
+  echo "   ✓ requirements.txt 未变化，跳过联网安装"
+else
+  ssh_run "
+    set -e
+    cd $REMOTE/apps/cmb
+    timeout 300 pip3 install -q --disable-pip-version-check -r requirements.txt 2>&1 | tail -3
+    echo '   ✓ cmb 依赖同步完成'
+  "
+fi
 
 # ── 5.2 ECS api Node 依赖 (用 /tmp 干净环境避开 workspace:* 协议) ───
 # pnpm workspace:* 协议在生产端解析不动 (生产没 workspace 配置), npm 也不认.
@@ -230,23 +268,28 @@ ssh_run "
 # apps/api/node_modules, 保留 @dianjie/db symlink. 全套耗时 ~30s.
 echo ""
 echo "==> [5.2/8] ECS 装/补 apps/api 依赖 (axios / cuid2 / 任何 package.json 新加的)"
-ssh_run "
-  set -e
-  rm -rf /tmp/api-rebuild
-  mkdir -p /tmp/api-rebuild
-  cd /tmp/api-rebuild
-  cp $REMOTE/apps/api/package.json ./
-  sed -i '/workspace:/d' package.json   # npm 不支持 workspace: 协议, 临时删
-  npm install --no-audit --no-fund --silent 2>&1 | tail -2
-  # cp 缺失的包 (--no-clobber 不覆盖已有), 保留 @dianjie/db symlink
-  cp -rn node_modules/* $REMOTE/apps/api/node_modules/ 2>/dev/null || true
-  # 确保 @dianjie/db symlink 完好
-  if [ ! -L $REMOTE/apps/api/node_modules/@dianjie/db ]; then
-    mkdir -p $REMOTE/apps/api/node_modules/@dianjie
-    ln -sf $REMOTE/packages/db $REMOTE/apps/api/node_modules/@dianjie/db
-  fi
-  echo '   ✓ apps/api 依赖同步完成'
-"
+if [ "$API_DEPENDENCIES_CHANGED" = "0" ]; then
+  echo "   ✓ API/package lock 未变化，复用已验证的生产依赖"
+else
+  ssh_run "
+    set -e
+    rm -rf /tmp/api-rebuild
+    mkdir -p /tmp/api-rebuild
+    cd /tmp/api-rebuild
+    cp $REMOTE/apps/api/package.json ./
+    sed -i '/workspace:/d' package.json   # npm 不支持 workspace: 协议, 临时删
+    timeout 300 npm install --no-audit --no-fund --silent 2>&1 | tail -2
+    # cp 缺失的包 (--no-clobber 不覆盖已有), 保留 @dianjie/db symlink
+    cp -rn node_modules/* $REMOTE/apps/api/node_modules/ 2>/dev/null || true
+    # 确保 @dianjie/db symlink 完好
+    if [ ! -L $REMOTE/apps/api/node_modules/@dianjie/db ]; then
+      mkdir -p $REMOTE/apps/api/node_modules/@dianjie
+      ln -sf $REMOTE/packages/db $REMOTE/apps/api/node_modules/@dianjie/db
+    fi
+    rm -rf /tmp/api-rebuild
+    echo '   ✓ apps/api 依赖同步完成'
+  "
+fi
 
 # ── 5.3 prisma migrate deploy (DB schema 跟代码对齐) ───
 # 旧 deploy.sh line 160-165 有这步, 新 deploy-worktree.sh 之前漏了.
@@ -274,7 +317,8 @@ ssh_run "
   set -e
   cd $REMOTE/packages/db
   export \$(grep -E '^DATABASE_URL=' $REMOTE/.env | xargs)
-  npx -y prisma@5.22.0 migrate deploy --schema=./prisma/schema.prisma 2>&1 | tail -5
+  test -x ./node_modules/.bin/prisma || { echo '❌ ECS 缺少本地 Prisma CLI，禁止临时联网安装'; exit 1; }
+  ./node_modules/.bin/prisma migrate deploy --schema=./prisma/schema.prisma 2>&1 | tail -5
   echo '   ✓ migration 应用完成 (idempotent, 无 pending 时不操作)'
 "
 
@@ -290,7 +334,8 @@ ssh_run "
   set -e
   cd $REMOTE/packages/db
   export \$(grep -E '^DATABASE_URL=' $REMOTE/.env | xargs)
-  npx -y prisma@5.22.0 generate --schema=./prisma/schema.prisma 2>&1 | tail -3
+  test -x ./node_modules/.bin/prisma || { echo '❌ ECS 缺少本地 Prisma CLI，禁止临时联网安装'; exit 1; }
+  ./node_modules/.bin/prisma generate --schema=./prisma/schema.prisma 2>&1 | tail -3
   # 校验 generate 真的产出了 client (npx 网络挂掉会静默)
   test -d $REMOTE/packages/db/node_modules/.prisma/client || { echo '❌ prisma generate 没产出 client'; exit 1; }
   # 把新 generated client 同步到 apps/api 的 node_modules (运行时实际用的位置)

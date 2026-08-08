@@ -76,6 +76,26 @@ export function warehouseSnapshotCutoffShanghai(snapshotDate: Date) {
   return new Date(new Date(`${nextDate.toISOString().slice(0, 10)}T00:00:00.000+08:00`).getTime() - 1)
 }
 
+export function warehouseSnapshotEffectiveAt(
+  snapshotDate: Date,
+  metadata: Record<string, unknown>,
+) {
+  const sourceSnapshotAt = metadata.sourceSnapshotAt
+  if (sourceSnapshotAt == null) return warehouseSnapshotCutoffShanghai(snapshotDate)
+  if (typeof sourceSnapshotAt !== 'string') {
+    throw Object.assign(new Error('库存快照时间格式无效'), { statusCode: 400 })
+  }
+  const parsed = new Date(sourceSnapshotAt)
+  if (Number.isNaN(parsed.getTime())) {
+    throw Object.assign(new Error('库存快照时间格式无效'), { statusCode: 400 })
+  }
+  const snapshotDateText = snapshotDate.toISOString().slice(0, 10)
+  if (shanghaiDateText(parsed) !== snapshotDateText) {
+    throw Object.assign(new Error('库存快照时间与快照日期不一致'), { statusCode: 400 })
+  }
+  return parsed
+}
+
 function fingerprint(value: unknown) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
 }
@@ -279,9 +299,9 @@ async function writeOneBaseline(
       requestFingerprint,
       effectiveAt: input.snapshotAt,
       note: previousCount
-        ? '供应链总仓历史基线复盘调整'
-        : `供应链总仓历史基线期初建账 snapshot=${input.snapshotAt.toISOString().slice(0, 10)}${input.allowZeroValue && countedValue.isZero() ? ' cost=pending' : ''}`,
-      sourceName: '供应链总仓历史基线快照',
+        ? '供应链总仓库存基线校准'
+        : `供应链总仓库存基线期初建账 snapshot=${input.snapshotAt.toISOString().slice(0, 10)}${input.allowZeroValue && countedValue.isZero() ? ' cost=pending' : ''}`,
+      sourceName: '供应链总仓库存基线快照',
       createdById: input.userId,
     },
   })
@@ -336,7 +356,7 @@ async function writeOneBaseline(
         remainingQty: countedQuantity,
         inventoryUnit: contract.inventoryUnit,
         inventoryUnitCost: averageUnitCost,
-        sourceName: '供应链总仓历史基线快照',
+        sourceName: '供应链总仓库存基线快照',
         sourceMovementId: movement.id,
       },
     })
@@ -346,7 +366,7 @@ async function writeOneBaseline(
     data: {
       tenantId: input.tenantId,
       userId: input.userId,
-      action: `${previousCount ? '总仓历史基线复盘' : '总仓历史基线建账'} ${product.name} ${countedQuantity.toFixed()} ${contract.inventoryUnit}`,
+      action: `${previousCount ? '总仓库存基线校准' : '总仓库存基线建账'} ${product.name} ${countedQuantity.toFixed()} ${contract.inventoryUnit}`,
       target: movement.id,
       entityType: 'WarehouseLedgerMovement',
       targetId: movement.id,
@@ -405,6 +425,7 @@ export async function recordWarehouseBaselineSnapshot(input: {
     }
     const metadata = metadataObject(record.metadata)
     const allowZeroValue = metadata.costSemantics === 'UNAVAILABLE'
+      || metadata.costSemantics === 'SOURCE_INVENTORY_AMOUNT_PARTIAL'
     if (metadata.baselineApplied === true) {
       throw Object.assign(new Error('该导入单已应用过基线，不能重复'), { statusCode: 409 })
     }
@@ -413,7 +434,10 @@ export async function recordWarehouseBaselineSnapshot(input: {
     if (snapshotDate > shanghaiToday) {
       throw Object.assign(new Error('库存快照日期不能晚于今天'), { statusCode: 400 })
     }
-    const snapshotAt = warehouseSnapshotCutoffShanghai(record.snapshotDate)
+    const snapshotAt = warehouseSnapshotEffectiveAt(record.snapshotDate, metadata)
+    if (snapshotAt.getTime() > Date.now()) {
+      throw Object.assign(new Error('库存快照时间不能晚于当前时间'), { statusCode: 400 })
+    }
     const warehouse = await tx.warehouse.findFirst({
       where: { id: record.warehouseId, tenantId: input.tenantId, isActive: true },
       select: { id: true },
@@ -567,7 +591,7 @@ export async function recordWarehouseBaselineSnapshot(input: {
         tenantId: input.tenantId,
         userId: input.userId,
         role: input.role as any,
-        action: `应用供应链历史基线 ${record.no} snapshot=${snapshotDate}`,
+        action: `应用供应链库存基线 ${record.no} snapshot=${snapshotDate}`,
         entityType: 'WarehouseInventoryImport',
         target: record.no,
         targetId: record.id,

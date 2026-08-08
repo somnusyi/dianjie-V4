@@ -47,6 +47,20 @@ export type ParsedWarehouseInventoryWorkbook = {
   warnings: WarehouseInventoryIssue[]
 }
 
+export type WarehouseInventoryCostSemantics =
+  | 'UNAVAILABLE'
+  | 'SOURCE_INVENTORY_AMOUNT_PARTIAL'
+  | 'SOURCE_INVENTORY_AMOUNT'
+
+export function warehouseInventoryCostSemantics(
+  parsed: Pick<ParsedWarehouseInventoryWorkbook, 'costColumnsPresent' | 'rows'>,
+): WarehouseInventoryCostSemantics {
+  if (!parsed.costColumnsPresent) return 'UNAVAILABLE'
+  return parsed.rows.some(row => row.sourceQuantity > 0 && row.inventoryAmount === 0)
+    ? 'SOURCE_INVENTORY_AMOUNT_PARTIAL'
+    : 'SOURCE_INVENTORY_AMOUNT'
+}
+
 export type InventoryImportProduct = ProductInventoryUnitLike & {
   id: string
   code: string
@@ -510,9 +524,11 @@ export function resolveWarehouseInventoryRow(
   if (product.status && product.status !== 'ENABLED') {
     issues.push({ code: 'PRODUCT_NOT_ENABLED', message: '匹配商品未启用' })
   }
-  if (!product.supplierId) {
-    issues.push({ code: 'SUPPLIER_BINDING_MISSING', message: '匹配商品未绑定供应商，无法生成库存流水' })
-  }
+  // The internal warehouse ledger belongs to the tenant/warehouse/product
+  // scope. An upstream purchasing supplier is optional master data and must
+  // not block a physical stock baseline. The retired Product.stock writer did
+  // require supplierId because it emitted supplier-stock movements; the
+  // independent warehouse ledger does not.
   if (normalizeExternalProductCode(product.name) !== normalizeExternalProductCode(row.externalName)) {
     warnings.push({
       code: 'SOURCE_NAME_DIFFERS',

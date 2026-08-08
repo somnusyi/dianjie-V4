@@ -8,6 +8,7 @@ import {
   parseMeituanUnitConversion,
   parseMeituanWarehouseInventoryWorkbook,
   resolveWarehouseInventoryRow,
+  warehouseInventoryCostSemantics,
   warehouseInventoryFileHash,
   type InventoryImportProduct,
 } from '../src/services/warehouseInventoryImport'
@@ -104,22 +105,44 @@ function sourceContract(row: Awaited<ReturnType<typeof parseMeituanWarehouseInve
   return { inventoryUnit, factor }
 }
 
+function preferredNameCandidate(products: any[], row: Awaited<ReturnType<typeof parseMeituanWarehouseInventoryWorkbook>>['rows'][number]) {
+  if (products.length === 0) return null
+  const normalizedSpec = String(row.sourceSpec || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase()
+  const scored = products.map(product => {
+    const category = String(product.category || '')
+    const productSpec = String(product.spec || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase()
+    const operationalMaster = !['BOM待采购映射', '本地配方镜像'].includes(category)
+    const score = (product.status === 'ENABLED' ? 100 : 0)
+      + (operationalMaster ? 40 : 0)
+      + (String(product.code).startsWith('YH001-INV-') ? 30 : 0)
+      + (normalizedSpec && productSpec === normalizedSpec ? 20 : 0)
+      + (!String(product.code).startsWith('DJ-BOM-') ? 10 : 0)
+    return { product, score }
+  }).sort((left, right) => right.score - left.score || String(left.product.code).localeCompare(String(right.product.code)))
+  if (scored.length > 1 && scored[0].score === scored[1].score) return null
+  return scored[0].product
+}
+
 async function main() {
-  const [sourcePath, snapshotDate, mode = '--plan'] = process.argv.slice(2)
+  const args = process.argv.slice(2)
+  const [sourcePath, snapshotDate] = args
+  const mode = args.includes('--apply') ? '--apply' : '--plan'
+  const tenantSlug = args.find(argument => argument.startsWith('--tenant='))?.slice('--tenant='.length) || 'dianjie'
+  const sourceSnapshotAtText = args.find(argument => argument.startsWith('--snapshot-at='))?.slice('--snapshot-at='.length)
   if (!sourcePath || !snapshotDate || !/^\d{4}-\d{2}-\d{2}$/.test(snapshotDate)) {
-    throw new Error('Usage: tsx scripts/import-warehouse-baseline-snapshot.ts <file.xlsx> <YYYY-MM-DD> [--apply]')
+    throw new Error('Usage: tsx scripts/import-warehouse-baseline-snapshot.ts <file.xlsx> <YYYY-MM-DD> [--apply] [--tenant=dianjie] [--snapshot-at=ISO-8601]')
   }
-  if (!['--plan', '--apply'].includes(mode)) throw new Error('Mode must be --plan or --apply')
+  const sourceSnapshotAt = sourceSnapshotAtText ? new Date(sourceSnapshotAtText) : null
+  if (sourceSnapshotAtText && Number.isNaN(sourceSnapshotAt!.getTime())) throw new Error('--snapshot-at must be a valid ISO-8601 timestamp')
+  if (sourceSnapshotAt && new Date(sourceSnapshotAt.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10) !== snapshotDate) {
+    throw new Error('--snapshot-at must fall on snapshotDate in Asia/Shanghai')
+  }
   const buffer = fs.readFileSync(sourcePath)
   const parsed = await parseMeituanWarehouseInventoryWorkbook(buffer, SOURCE_WAREHOUSE)
   const fileHash = warehouseInventoryFileHash(buffer)
 
-  const tenant = await prisma.tenant.findFirst({ where: { slug: 'dianjie' } })
-  if (!tenant) throw new Error('tenant dianjie not found')
-  const supplier = await prisma.supplier.findUnique({
-    where: { tenantId_no: { tenantId: tenant.id, no: 'SUP001' } },
-  })
-  if (!supplier) throw new Error('supplier SUP001 not found')
+  const tenant = await prisma.tenant.findFirst({ where: { slug: tenantSlug } })
+  if (!tenant) throw new Error(`tenant ${tenantSlug} not found`)
   const warehouse = await prisma.warehouse.findFirst({
     where: { tenantId: tenant.id, isDefault: true, isActive: true },
   })
@@ -145,10 +168,17 @@ async function main() {
   if (existingImport) throw new Error(`existing non-confirmed import ${existingImport.no}; resolve it before retry`)
 
   const allProducts = await prisma.product.findMany({ where: { tenantId: tenant.id } })
-  const supplierProducts = allProducts.filter(product => product.supplierId === supplier.id)
-  const byCode = new Map(supplierProducts.map(product => [product.code, product]))
-  const byName = new Map<string, typeof supplierProducts>()
-  for (const product of supplierProducts) {
+  const externalMappings = await prisma.productExternalCode.findMany({
+    where: { tenantId: tenant.id, source: SOURCE },
+  })
+  const byId = new Map(allProducts.map(product => [product.id, product]))
+  const byCode = new Map(allProducts.map(product => [product.code.toUpperCase(), product]))
+  const byExternalCode = new Map(externalMappings.flatMap(mapping => {
+    const product = byId.get(mapping.productId)
+    return product ? [[mapping.externalCode.toUpperCase(), product] as const] : []
+  }))
+  const byName = new Map<string, typeof allProducts>()
+  for (const product of allProducts) {
     const key = normalizeWarehouseProductName(product.name)
     byName.set(key, [...(byName.get(key) || []), product])
   }
@@ -163,12 +193,36 @@ async function main() {
   }
   const plan: Planned[] = parsed.rows.map(row => {
     const candidates = byName.get(normalizeWarehouseProductName(row.externalName)) || []
-    const enabled = candidates.filter(product => product.status === 'ENABLED')
-    const alias = CURATED_ALIASES[row.externalName] ? byCode.get(CURATED_ALIASES[row.externalName]) : null
-    const existing = alias || (enabled.length === 1 ? enabled[0] : candidates.length === 1 ? candidates[0] : null)
+    const mapped = byExternalCode.get(row.externalCode.toUpperCase())
+    const exactCode = byCode.get(row.externalCode.toUpperCase())
+    const alias = CURATED_ALIASES[row.externalName] ? byCode.get(CURATED_ALIASES[row.externalName].toUpperCase()) : null
+    const preferredName = preferredNameCandidate(candidates, row)
+    const proposed = mapped || exactCode || preferredName || alias
+    const proposedMethod = mapped ? 'EXTERNAL_MAPPING'
+      : exactCode ? 'EXACT_CODE'
+        : preferredName ? 'EXACT_NORMALIZED_NAME'
+          : alias ? 'CURATED_ALIAS'
+            : null
+    const proposedResolution = proposed
+      ? resolveWarehouseInventoryRow(row, productView(proposed), 'EXTERNAL_MAPPING')
+      : null
+    const nameMatchHasUnsafeUnits = proposedMethod && ['EXACT_NORMALIZED_NAME', 'CURATED_ALIAS'].includes(proposedMethod)
+      && proposedResolution?.issues.some(issue => [
+        'UNIT_CONVERSION_NOT_VERIFIED',
+        'PURCHASE_UNIT_MISMATCH',
+        'SOURCE_CONVERSION_UNIT_MISMATCH',
+        'NORMALIZED_QUANTITY_TOO_LARGE',
+        'NORMALIZED_PRECISION_EXCEEDED',
+      ].includes(issue.code))
+    // A same-name BOM placeholder or old store archive may describe a
+    // different package. Never force the warehouse snapshot into that SKU;
+    // create a source-coded warehouse SKU and leave the old BOM untouched.
+    const existing = nameMatchHasUnsafeUnits ? null : proposed
     if (existing) {
       return {
-        row, product: existing, method: alias ? 'CURATED_ALIAS' : 'EXACT_NORMALIZED_NAME',
+        row,
+        product: existing,
+        method: proposedMethod!,
         reactivate: row.sourceQuantity > 0 && existing.status === 'DISABLED',
         correction: MASTER_CORRECTIONS[existing.code],
       }
@@ -183,8 +237,10 @@ async function main() {
 
   const planSummary = {
     mode,
+    tenantSlug,
     fileHash,
     snapshotDate,
+    sourceSnapshotAt: sourceSnapshotAt?.toISOString() || null,
     warehouseId: warehouse.id,
     warehouseMode: warehouse.inventoryMode,
     sourceRows: parsed.rows.length,
@@ -237,7 +293,7 @@ async function main() {
       if (!item.create) continue
       const created = await tx.product.create({
         data: {
-          tenantId: tenant.id, supplierId: supplier.id, code: item.create.code,
+          tenantId: tenant.id, code: item.create.code,
           name: item.row.externalName, spec: item.row.sourceSpec, category: item.row.sourceCategory || '其他',
           unit: item.row.purchaseUnit, purchaseUnit: item.row.purchaseUnit, orderUnit: item.row.purchaseUnit,
           costUnit: item.row.purchaseUnit, inventoryUnit: item.create.inventoryUnit,
@@ -245,7 +301,7 @@ async function main() {
           inventoryUnitsPerOrderUnit: item.create.factor,
           inventoryUnitsPerCostUnit: item.create.factor,
           unitConversionStatus: 'VERIFIED', unitConversionVerifiedAt: new Date(),
-          unitConversionNote: `2026-08-03 供应链总仓实盘表新建；${item.row.conversionText || '默认 1:1'}；价格待补`,
+          unitConversionNote: `${snapshotDate} 供应链总仓库存快照新建；${item.row.conversionText || '默认 1:1'}；后续盘点校准`,
           price: 0, status: 'ENABLED',
         },
       })
@@ -299,12 +355,14 @@ async function main() {
         snapshotDate: new Date(`${snapshotDate}T00:00:00.000Z`), sourceRowCount: parsed.sourceRowCount,
         itemCount: parsed.rows.length, ignoredRowCount: parsed.ignoredRowCount,
         matchedCount: resolved.filter(({ resolution }) => resolution.productId).length,
-        blockingCount: 0, warningCount, detailTotalAmount: 0, sourceTotalAmount: null,
+        blockingCount: 0, warningCount, detailTotalAmount: parsed.detailTotalAmount, sourceTotalAmount: parsed.sourceTotalAmount,
         metadata: json({
           sheetName: parsed.sheetName, title: parsed.title, filterDescription: parsed.filterDescription,
           ignoredWarehouses: parsed.ignoredWarehouses, fileWarnings: parsed.warnings,
           quantitySemantics: 'TARGET_CLOSING_BALANCE', sourceQuantityUnit: 'PURCHASE_UNIT',
-          costSemantics: 'UNAVAILABLE', sourceFormat: 'COMPACT_NAME_ONLY',
+          costSemantics: warehouseInventoryCostSemantics(parsed),
+          sourceFormat: 'MEITUAN_WAREHOUSE_DIMENSION',
+          sourceSnapshotAt: sourceSnapshotAt?.toISOString() || undefined,
           originalSha256: fileHash, unmatchedZeroCount: planSummary.unmatchedZero,
           createdProductCount: planSummary.creates, reactivatedProductCount: planSummary.reactivations,
           masterCorrectionCount: planSummary.masterCorrections,
@@ -319,9 +377,14 @@ async function main() {
         sourceSpec: item.row.sourceSpec, sourceCategory: item.row.sourceCategory,
         sourceWarehouseName: item.row.sourceWarehouseName, purchaseUnit: item.row.purchaseUnit,
         conversionText: item.row.conversionText, sourceQuantity: item.row.sourceQuantity,
-        inventoryAmount: 0, inventoryAmountExcludingTax: 0, inventoryTax: 0,
-        averageCostExcludingTax: 0, expectedInboundQuantity: 0, expectedOutboundQuantity: 0,
-        theoreticalQuantity: item.row.sourceQuantity, theoreticalAmount: 0,
+        inventoryAmount: item.row.inventoryAmount,
+        inventoryAmountExcludingTax: item.row.inventoryAmountExcludingTax,
+        inventoryTax: item.row.inventoryTax,
+        averageCostExcludingTax: item.row.averageCostExcludingTax,
+        expectedInboundQuantity: item.row.expectedInboundQuantity,
+        expectedOutboundQuantity: item.row.expectedOutboundQuantity,
+        theoreticalQuantity: item.row.theoreticalQuantity,
+        theoreticalAmount: item.row.theoreticalAmount,
         productId: resolution.productId, matchSource: resolution.matchSource,
         inventoryUnit: resolution.inventoryUnit, conversionFactor: resolution.conversionFactor,
         normalizedQuantity: resolution.normalizedQuantity, issues: json(resolution.issues),
@@ -331,7 +394,7 @@ async function main() {
     await tx.opLog.create({
       data: {
         tenantId: tenant.id, userId: actor.id, role: actor.role,
-        action: `预检并暂存总仓历史基准 ${no}`,
+        action: `预检并暂存总仓库存基线 ${no}`,
         entityType: 'WarehouseInventoryImport', target: no, targetId: record.id,
         metadata: json({ ...planSummary, actorId: actor.id }),
       },

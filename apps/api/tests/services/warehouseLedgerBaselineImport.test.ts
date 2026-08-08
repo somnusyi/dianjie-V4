@@ -6,11 +6,15 @@ import {
   parseMeituanUnitConversion,
   parseMeituanWarehouseInventoryWorkbook,
   resolveWarehouseInventoryRow,
+  warehouseInventoryCostSemantics,
   warehouseInventoryFileHash,
   type InventoryImportProduct,
   type ParsedWarehouseInventoryRow,
 } from '../../src/services/warehouseInventoryImport'
-import { warehouseSnapshotCutoffShanghai } from '../../src/services/warehouseLedgerBaselineImport'
+import {
+  warehouseSnapshotCutoffShanghai,
+  warehouseSnapshotEffectiveAt,
+} from '../../src/services/warehouseLedgerBaselineImport'
 
 const REAL_FILE_PATH = '/Users/somnusyi/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_hata3ao0ldvj22_1a9d/temp/drag/供应链7.31日库存(1).xlsx'
 
@@ -18,6 +22,20 @@ describe('warehouse ledger baseline import – Shanghai cutoff', () => {
   it('derives the end of the imported calendar day without client timezone input', () => {
     expect(warehouseSnapshotCutoffShanghai(new Date('2026-07-31T00:00:00.000Z')).toISOString())
       .toBe('2026-07-31T15:59:59.999Z')
+  })
+
+  it('uses an exact source query time when the workbook provides one', () => {
+    expect(warehouseSnapshotEffectiveAt(
+      new Date('2026-08-08T00:00:00.000Z'),
+      { sourceSnapshotAt: '2026-08-08T17:39:00+08:00' },
+    ).toISOString()).toBe('2026-08-08T09:39:00.000Z')
+  })
+
+  it('rejects an exact query time from a different Shanghai calendar day', () => {
+    expect(() => warehouseSnapshotEffectiveAt(
+      new Date('2026-08-08T00:00:00.000Z'),
+      { sourceSnapshotAt: '2026-08-09T00:01:00+08:00' },
+    )).toThrow('库存快照时间与快照日期不一致')
   })
 })
 
@@ -246,6 +264,7 @@ describe('warehouse ledger baseline import – unit conversion', () => {
     ])
     const parsed = await parseMeituanWarehouseInventoryWorkbook(buffer)
     expect(parsed.rows[0].warnings).toContainEqual(expect.objectContaining({ code: 'COST_PENDING' }))
+    expect(warehouseInventoryCostSemantics(parsed)).toBe('SOURCE_INVENTORY_AMOUNT_PARTIAL')
   })
 })
 
@@ -266,9 +285,10 @@ describe('warehouse ledger baseline import – blocking and resolution', () => {
     expect(resolved.issues).toContainEqual(expect.objectContaining({ code: 'PRODUCT_NOT_ENABLED' }))
   })
 
-  it('blocks products without supplier binding', () => {
+  it('allows warehouse baselines without an upstream supplier binding', () => {
     const resolved = resolveWarehouseInventoryRow(sourceRow(), product({ supplierId: null }), 'EXACT_CODE')
-    expect(resolved.issues).toContainEqual(expect.objectContaining({ code: 'SUPPLIER_BINDING_MISSING' }))
+    expect(resolved.issues).not.toContainEqual(expect.objectContaining({ code: 'SUPPLIER_BINDING_MISSING' }))
+    expect(resolved.productId).toBe('product-1')
   })
 
   it('warns when source name differs from system product name', () => {

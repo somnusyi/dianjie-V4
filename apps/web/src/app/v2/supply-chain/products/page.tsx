@@ -201,7 +201,9 @@ export default function InternalSupplyChainProductsPage() {
     let active = true
     Promise.all([
       apiFetch<CategoryOption[]>('/api/products/categories').catch(() => [] as CategoryOption[]),
-      apiFetch<SupplierOption[]>('/api/suppliers?status=ENABLED').catch(() => [] as SupplierOption[]),
+      // 商品 supplierId 表示面向门店的履约主体，不是总仓采购来源。
+      // 显式限定业务范围，避免把“上游供应商管理”中的采购合作方混入商品筛选。
+      apiFetch<SupplierOption[]>('/api/suppliers?status=ENABLED&businessScope=STORE_FULFILLER').catch(() => [] as SupplierOption[]),
     ])
       .then(async ([baseCategories, supplierList]) => {
         const base = Array.isArray(baseCategories) ? baseCategories : []
@@ -702,8 +704,8 @@ export default function InternalSupplyChainProductsPage() {
             <option value="">全部状态</option>
             {SUPPLY_PRODUCT_STATUS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
           </FilterSelect>
-          <FilterSelect label="供应商" value={filters.supplierId} onChange={value => updateFilters({ supplierId: value })}>
-            <option value="">全部供应商</option>
+          <FilterSelect label="门店供货主体" value={filters.supplierId} onChange={value => updateFilters({ supplierId: value })}>
+            <option value="">全部供货主体</option>
             {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </FilterSelect>
           <button

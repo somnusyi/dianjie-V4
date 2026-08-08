@@ -236,6 +236,28 @@ describe('商品管理 PC 页面 · 编辑弹窗分类组合框', () => {
   })
 })
 
+describe('商品管理 PC 页面 · 供应商业务口径', () => {
+  beforeEach(() => {
+    mockFetch.mockReset()
+  })
+
+  it('只加载门店履约主体，并使用不会与上游供应商混淆的文案', async () => {
+    mockRoutes()
+
+    const { container, root } = render(<InternalSupplyChainProductsPage />)
+    await waitFor(() => container.textContent?.includes('土豆') ?? false)
+
+    const supplierCalls = mockFetch.mock.calls
+      .map(call => String(call[0]))
+      .filter(url => url.startsWith('/api/suppliers'))
+    expect(supplierCalls).toContain('/api/suppliers?status=ENABLED&businessScope=STORE_FULFILLER')
+    expect(container.textContent).toContain('门店供货主体')
+    expect(container.textContent).toContain('全部供货主体')
+
+    cleanup(container, root)
+  })
+})
+
 describe('商品管理 PC 页面 · 分类计数与列表筛选口径对齐', () => {
   beforeEach(() => {
     mockFetch.mockReset()

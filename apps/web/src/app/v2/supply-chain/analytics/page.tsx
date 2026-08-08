@@ -49,7 +49,8 @@ export default function InternalSupplyChainAnalyticsPage() {
     Promise.all([
       apiFetch<Stats>('/api/dashboard/stats'),
       apiFetch<WeeklyTrend[]>('/api/dashboard/purchase-trend?days=30'),
-      apiFetch<Supplier[]>('/api/suppliers?status=ENABLED'),
+      // 本页分析的是门店订货、配送和收货履约，不是总仓向上游的采购关系。
+      apiFetch<Supplier[]>('/api/suppliers?status=ENABLED&businessScope=STORE_FULFILLER'),
     ])
       .then(([statsData, trendData, supplierRows]) => {
         setStats(statsData)
@@ -101,7 +102,7 @@ export default function InternalSupplyChainAnalyticsPage() {
           <p className="mt-1 text-caption text-gray2">集团采购概览与单一供应商的履约、商品和台账健康统一查看。</p>
         </div>
         <label className="flex flex-col gap-1">
-          <span className="text-micro text-gray3">供应商洞察范围</span>
+          <span className="text-micro text-gray3">门店供货主体范围</span>
           <select value={supplierId} onChange={event => setSupplierId(event.target.value)} className="h-10 min-w-72 rounded-cta border border-border bg-white px-3 text-body">
             {suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}
           </select>

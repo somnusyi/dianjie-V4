@@ -194,6 +194,7 @@ async function writeOneBaseline(
     userId: string
     importId: string
     snapshotAt: Date
+    allowZeroValue: boolean
     item: WarehouseBaselineItemInput
   },
 ) {
@@ -215,7 +216,7 @@ async function writeOneBaseline(
   if (countedQuantity.isZero() && !countedValue.isZero()) {
     throw Object.assign(new Error('基线数量为0时金额必须为0'), { statusCode: 400 })
   }
-  if (countedQuantity.gt(0) && countedValue.lte(0)) {
+  if (countedQuantity.gt(0) && countedValue.lte(0) && !input.allowZeroValue) {
     throw Object.assign(new Error('有基线库存时金额必须大于0'), { statusCode: 400 })
   }
 
@@ -279,7 +280,7 @@ async function writeOneBaseline(
       effectiveAt: input.snapshotAt,
       note: previousCount
         ? '供应链总仓历史基线复盘调整'
-        : `供应链7月31日历史基线期初建账 snapshot=${input.snapshotAt.toISOString().slice(0, 10)}`,
+        : `供应链总仓历史基线期初建账 snapshot=${input.snapshotAt.toISOString().slice(0, 10)}${input.allowZeroValue && countedValue.isZero() ? ' cost=pending' : ''}`,
       sourceName: '供应链总仓历史基线快照',
       createdById: input.userId,
     },
@@ -359,6 +360,7 @@ async function writeOneBaseline(
         countedQuantity: countedQuantity.toFixed(QTY_DP),
         physicalDelta: physicalDelta.toFixed(QTY_DP),
         countedValue: countedValue.toFixed(VALUE_DP),
+        costPending: input.allowZeroValue && countedQuantity.gt(0) && countedValue.isZero(),
         inventoryUnit: contract.inventoryUnit,
         movementType,
         externalCode: input.item.sourceExternalCode || null,
@@ -402,6 +404,7 @@ export async function recordWarehouseBaselineSnapshot(input: {
       throw Object.assign(new Error('导入单状态已变化，请刷新后重试'), { statusCode: 409 })
     }
     const metadata = metadataObject(record.metadata)
+    const allowZeroValue = metadata.costSemantics === 'UNAVAILABLE'
     if (metadata.baselineApplied === true) {
       throw Object.assign(new Error('该导入单已应用过基线，不能重复'), { statusCode: 409 })
     }
@@ -513,6 +516,7 @@ export async function recordWarehouseBaselineSnapshot(input: {
         userId: input.userId,
         importId: input.importId,
         snapshotAt,
+        allowZeroValue,
         item,
       })
       const movement = await tx.warehouseLedgerMovement.findUnique({ where: { id: movementId } })

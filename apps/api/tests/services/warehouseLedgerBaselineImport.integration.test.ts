@@ -39,6 +39,7 @@ async function createImport(input: {
   label: string
   snapshotAt: Date
   items: Array<{ productId: string | null; quantity: number; amount: number; code?: string }>
+  costUnavailable?: boolean
 }) {
   const record = await prisma.warehouseInventoryImport.create({
     data: {
@@ -57,7 +58,7 @@ async function createImport(input: {
       warningCount: 0,
       detailTotalAmount: input.items.reduce((sum, item) => sum + item.amount, 0),
       sourceTotalAmount: input.items.reduce((sum, item) => sum + item.amount, 0),
-      metadata: { baselineApplied: false },
+      metadata: { baselineApplied: false, ...(input.costUnavailable ? { costSemantics: 'UNAVAILABLE' } : {}) },
       createdById: userId,
     },
   })
@@ -188,6 +189,29 @@ describe('warehouse ledger baseline import transaction (integration)', () => {
     expect(applied.status).toBe('CONFIRMED')
     expect(applied.rowVersion).toBe(1)
     expect(applied.metadata).toMatchObject({ baselineApplied: true })
+  })
+
+  it('allows an explicitly quantity-only baseline and marks zero-value stock as cost pending', async () => {
+    const product = await createProduct('quantity-only')
+    const snapshotAt = new Date('2026-07-31T23:59:59+08:00')
+    const record = await createImport({
+      label: 'quantity-only',
+      snapshotAt,
+      costUnavailable: true,
+      items: [{ productId: product.id, quantity: 6, amount: 0 }],
+    })
+
+    const result = await applyImport(record.id)
+    expect(result.blocked).toBe(false)
+    expect(result.items[0]).toMatchObject({ productId: product.id, physicalAfter: '6', valueAfter: '0' })
+    const movement = await prisma.warehouseLedgerMovement.findFirstOrThrow({
+      where: { tenantId, sourceId: record.id, productId: product.id },
+    })
+    expect(movement.note).toContain('cost=pending')
+    const log = await prisma.opLog.findFirstOrThrow({
+      where: { tenantId, entityType: 'WarehouseLedgerMovement', targetId: movement.id },
+    })
+    expect(log.metadata).toMatchObject({ costPending: true })
   })
 
   it('applies mapped zero rows and clears stale balance and positive lots', async () => {

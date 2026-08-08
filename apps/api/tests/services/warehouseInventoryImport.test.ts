@@ -27,6 +27,18 @@ async function workbookBuffer() {
   return Buffer.from(await workbook.xlsx.writeBuffer())
 }
 
+async function compactWorkbookBuffer() {
+  const workbook = new ExcelJS.Workbook()
+  const sheet = workbook.addWorksheet('实时库存查询表-到仓库维度')
+  sheet.addRow([])
+  sheet.addRow([])
+  sheet.addRow(['物品名称', '规格型号', '物品类别', '单位', '基准单位换算率', '仓库', '库存量'])
+  sheet.addRow(['X-测试袋装品', '8袋/箱', '干货', '箱', '1箱=8袋', '供应链总仓', 2.5])
+  sheet.addRow(['X-零库存品', null, '干货', '袋', '1袋=1袋', '供应链总仓', 0])
+  sheet.addRow(['合计', null, null, null, null, null, 2.5])
+  return Buffer.from(await workbook.xlsx.writeBuffer())
+}
+
 function sourceRow(overrides: Partial<ParsedWarehouseInventoryRow> = {}): ParsedWarehouseInventoryRow {
   return {
     rowNumber: 4,
@@ -88,6 +100,24 @@ describe('Meituan warehouse inventory snapshot', () => {
     expect(parsed.warnings).toContainEqual(expect.objectContaining({ code: 'SOURCE_TOTAL_MISMATCH' }))
   })
 
+  it('parses a compact quantity-only snapshot without product codes or cost columns', async () => {
+    const parsed = await parseMeituanWarehouseInventoryWorkbook(await compactWorkbookBuffer())
+    expect(parsed.rows).toHaveLength(2)
+    expect(parsed.costColumnsPresent).toBe(false)
+    expect(parsed.rows[0]).toMatchObject({
+      externalName: 'X-测试袋装品',
+      sourceQuantity: 2.5,
+      inventoryAmount: 0,
+      theoreticalQuantity: 2.5,
+    })
+    expect(parsed.rows[0].externalCode).toMatch(/^NAME-[A-F0-9]{24}$/)
+    expect(parsed.rows[0].rawData).toMatchObject({ sourceCodeMissing: true })
+    expect(parsed.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'SOURCE_CODE_COLUMN_MISSING' }),
+      expect.objectContaining({ code: 'SOURCE_COST_COLUMNS_MISSING' }),
+    ]))
+  })
+
   it('treats the source unit as the purchase/receiving unit and normalizes into the verified inventory unit', () => {
     expect(parseMeituanUnitConversion('1箱 = 8袋')).toEqual({
       leftQuantity: 1, leftUnit: '箱', rightQuantity: 8, rightUnit: '袋',
@@ -107,11 +137,33 @@ describe('Meituan warehouse inventory snapshot', () => {
     expect(resolved.issues).toContainEqual(expect.objectContaining({ code: 'EXTERNAL_CODE_REVIEW_REQUIRED' }))
   })
 
-  it('blocks unverified or contradictory unit contracts instead of silently guessing', () => {
+  it('uses an explicit source conversion for an unverified contract and audits contradictory verified factors', () => {
     const pending = resolveWarehouseInventoryRow(sourceRow(), product({ unitConversionStatus: 'PENDING' }), 'EXACT_CODE')
-    expect(pending.issues).toContainEqual(expect.objectContaining({ code: 'UNIT_CONVERSION_NOT_VERIFIED' }))
+    expect(pending.issues).toEqual([])
+    expect(pending.warnings).toContainEqual(expect.objectContaining({ code: 'UNIT_CONFIRMED_BY_SOURCE_SNAPSHOT' }))
 
     const mismatch = resolveWarehouseInventoryRow(sourceRow(), product({ inventoryUnitsPerPurchaseUnit: 12 }), 'EXACT_CODE')
-    expect(mismatch.issues).toContainEqual(expect.objectContaining({ code: 'UNIT_CONVERSION_MISMATCH' }))
+    expect(mismatch.issues).toEqual([])
+    expect(mismatch.warnings).toContainEqual(expect.objectContaining({ code: 'UNIT_CONVERSION_MISMATCH' }))
+    expect(mismatch.normalizedQuantity).toBe(439)
+  })
+
+  it('uses the source quantity directly when source and inventory units already match', () => {
+    const row = sourceRow({ purchaseUnit: '箱', conversionText: '1箱=30袋', sourceQuantity: 13 })
+    const resolved = resolveWarehouseInventoryRow(row, product({
+      purchaseUnit: '箱', inventoryUnit: '箱', inventoryUnitsPerPurchaseUnit: 1, unitConversionStatus: 'PENDING',
+    }), 'EXACT_CODE')
+    expect(resolved).toMatchObject({ conversionFactor: 1, normalizedQuantity: 13, issues: [] })
+  })
+
+  it('derives package mass from the source specification when the compact conversion omits it', () => {
+    const row = sourceRow({
+      sourceSpec: '箱/2.5kg*8袋', purchaseUnit: '袋', conversionText: '1袋=1袋', sourceQuantity: 60,
+    })
+    const resolved = resolveWarehouseInventoryRow(row, product({
+      purchaseUnit: '包', inventoryUnit: 'g', inventoryUnitsPerPurchaseUnit: 2500,
+    }), 'EXACT_CODE')
+    expect(resolved).toMatchObject({ conversionFactor: 2500, normalizedQuantity: 150000, issues: [] })
+    expect(resolved.warnings).toContainEqual(expect.objectContaining({ code: 'UNIT_CONFIRMED_BY_SOURCE_SPEC' }))
   })
 })

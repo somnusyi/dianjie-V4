@@ -42,6 +42,7 @@ export type ParsedWarehouseInventoryWorkbook = {
   sourceWarehouseName: string
   detailTotalAmount: number
   sourceTotalAmount: number | null
+  costColumnsPresent: boolean
   rows: ParsedWarehouseInventoryRow[]
   warnings: WarehouseInventoryIssue[]
 }
@@ -112,7 +113,7 @@ function worksheetRowValues(row: ExcelJS.Row) {
 function findHeader(worksheet: ExcelJS.Worksheet) {
   for (let rowNumber = 1; rowNumber <= Math.min(20, worksheet.rowCount); rowNumber += 1) {
     const headers = worksheetRowValues(worksheet.getRow(rowNumber)).map(value => normalizeHeader(cellText(value)))
-    if (headers.includes(normalizeHeader('物品编码')) && headers.includes(normalizeHeader('库存量'))) {
+    if (headers.includes(normalizeHeader('物品名称')) && headers.includes(normalizeHeader('库存量'))) {
       const indexes = new Map<string, number>()
       headers.forEach((header, index) => header && indexes.set(header, index + 1))
       return { rowNumber, indexes }
@@ -129,6 +130,14 @@ function column(indexes: Map<string, number>, label: string, ...aliases: string[
   throw new Error(`美团库存表缺少列：${label}`)
 }
 
+function optionalColumn(indexes: Map<string, number>, label: string, ...aliases: string[]) {
+  for (const candidate of [label, ...aliases]) {
+    const found = indexes.get(normalizeHeader(candidate))
+    if (found) return found
+  }
+  return null
+}
+
 function round(value: number, digits: number) {
   const factor = 10 ** digits
   return Math.round((value + Number.EPSILON) * factor) / factor
@@ -142,6 +151,17 @@ export function normalizeExternalProductCode(value: unknown) {
   return String(value || '').normalize('NFKC').trim().toUpperCase()
 }
 
+export function normalizeWarehouseProductName(value: unknown) {
+  return String(value || '')
+    .normalize('NFKC')
+    .trim()
+    .toLowerCase()
+    .replace(/^[xｘ][\-－—_\s]+/i, '')
+    .replaceAll('（', '(')
+    .replaceAll('）', ')')
+    .replace(/\s+/g, '')
+}
+
 export async function parseMeituanWarehouseInventoryWorkbook(
   buffer: Buffer,
   sourceWarehouseName = '供应链总仓',
@@ -152,7 +172,7 @@ export async function parseMeituanWarehouseInventoryWorkbook(
   if (!worksheet) throw new Error('无法识别美团实时库存查询表表头')
   const found = findHeader(worksheet)!
 
-  const codeColumn = column(found.indexes, '物品编码', '商品编码')
+  const codeColumn = optionalColumn(found.indexes, '物品编码', '商品编码')
   const nameColumn = column(found.indexes, '物品名称', '商品名称')
   const specColumn = column(found.indexes, '规格型号', '规格')
   const categoryColumn = column(found.indexes, '物品类别', '商品类别')
@@ -160,14 +180,15 @@ export async function parseMeituanWarehouseInventoryWorkbook(
   const conversionColumn = column(found.indexes, '基准单位换算率', '单位换算率')
   const warehouseColumn = column(found.indexes, '仓库')
   const quantityColumn = column(found.indexes, '库存量')
-  const amountColumn = column(found.indexes, '库存金额')
-  const amountExTaxColumn = column(found.indexes, '库存金额(不含税)')
-  const taxColumn = column(found.indexes, '库存税额')
-  const averageCostColumn = column(found.indexes, '库存均价(不含税)')
-  const expectedInboundColumn = column(found.indexes, '预计入库量')
-  const expectedOutboundColumn = column(found.indexes, '预计出库量')
-  const theoreticalQuantityColumn = column(found.indexes, '理论库存量')
-  const theoreticalAmountColumn = column(found.indexes, '理论库存金额')
+  const amountColumn = optionalColumn(found.indexes, '库存金额')
+  const amountExTaxColumn = optionalColumn(found.indexes, '库存金额(不含税)')
+  const taxColumn = optionalColumn(found.indexes, '库存税额')
+  const averageCostColumn = optionalColumn(found.indexes, '库存均价(不含税)')
+  const expectedInboundColumn = optionalColumn(found.indexes, '预计入库量')
+  const expectedOutboundColumn = optionalColumn(found.indexes, '预计出库量')
+  const theoreticalQuantityColumn = optionalColumn(found.indexes, '理论库存量')
+  const theoreticalAmountColumn = optionalColumn(found.indexes, '理论库存金额')
+  const costColumnsPresent = amountColumn != null
 
   const rows: ParsedWarehouseInventoryRow[] = []
   const ignoredWarehouses = new Set<string>()
@@ -177,10 +198,20 @@ export async function parseMeituanWarehouseInventoryWorkbook(
 
   for (let rowNumber = found.rowNumber + 1; rowNumber <= worksheet.rowCount; rowNumber += 1) {
     const row = worksheet.getRow(rowNumber)
-    const externalCode = normalizeExternalProductCode(cellText(row.getCell(codeColumn).value))
-    if (!externalCode) continue
-    if (externalCode === '合计') {
-      sourceTotalAmount = numericCell(row.getCell(amountColumn).value)
+    const externalName = cellText(row.getCell(nameColumn).value)
+    const sourceSpec = cellText(row.getCell(specColumn).value)
+    const sourceCategory = cellText(row.getCell(categoryColumn).value)
+    const purchaseUnit = cellText(row.getCell(unitColumn).value)
+    const sourceCode = codeColumn == null ? '' : cellText(row.getCell(codeColumn).value)
+    const externalCode = normalizeExternalProductCode(sourceCode) || `NAME-${crypto
+      .createHash('sha256')
+      .update(`${normalizeExternalProductCode(externalName)}|${normalizeExternalProductCode(sourceSpec)}|${normalizeExternalProductCode(purchaseUnit)}`)
+      .digest('hex')
+      .slice(0, 24)
+      .toUpperCase()}`
+    if (!externalName && !sourceCode) continue
+    if (normalizeExternalProductCode(sourceCode || externalName) === '合计') {
+      sourceTotalAmount = amountColumn == null ? null : numericCell(row.getCell(amountColumn).value)
       continue
     }
     sourceRowCount += 1
@@ -198,10 +229,6 @@ export async function parseMeituanWarehouseInventoryWorkbook(
     if (sourceQuantity < 0) throw new Error(`第 ${rowNumber} 行库存量不能为负数`)
     if (decimalPlaces(sourceQuantity) > 6) throw new Error(`第 ${rowNumber} 行库存量最多支持 6 位小数`)
 
-    const externalName = cellText(row.getCell(nameColumn).value)
-    const purchaseUnit = cellText(row.getCell(unitColumn).value)
-    const sourceSpec = cellText(row.getCell(specColumn).value)
-    const sourceCategory = cellText(row.getCell(categoryColumn).value)
     const conversionText = cellText(row.getCell(conversionColumn).value)
     if (externalCode.length > 80) throw new Error(`第 ${rowNumber} 行物品编码超过 80 个字符`)
     if (externalName.length > 120) throw new Error(`第 ${rowNumber} 行物品名称超过 120 个字符`)
@@ -214,18 +241,21 @@ export async function parseMeituanWarehouseInventoryWorkbook(
     if (!externalName) issues.push({ code: 'SOURCE_NAME_MISSING', message: '物品名称为空' })
     if (!purchaseUnit) issues.push({ code: 'SOURCE_UNIT_MISSING', message: '采购单位为空' })
 
-    const inventoryAmount = round(optionalNumber(row.getCell(amountColumn).value), 2)
-    const averageCostExcludingTax = round(optionalNumber(row.getCell(averageCostColumn).value), 6)
-    const expectedInboundQuantity = optionalNumber(row.getCell(expectedInboundColumn).value)
-    const expectedOutboundQuantity = optionalNumber(row.getCell(expectedOutboundColumn).value)
-    const theoreticalQuantity = optionalNumber(row.getCell(theoreticalQuantityColumn).value)
+    const inventoryAmount = round(amountColumn == null ? 0 : optionalNumber(row.getCell(amountColumn).value), 2)
+    const averageCostExcludingTax = round(averageCostColumn == null ? 0 : optionalNumber(row.getCell(averageCostColumn).value), 6)
+    const expectedInboundQuantity = expectedInboundColumn == null ? 0 : optionalNumber(row.getCell(expectedInboundColumn).value)
+    const expectedOutboundQuantity = expectedOutboundColumn == null ? 0 : optionalNumber(row.getCell(expectedOutboundColumn).value)
+    const theoreticalQuantity = theoreticalQuantityColumn == null
+      ? sourceQuantity
+      : optionalNumber(row.getCell(theoreticalQuantityColumn).value)
     if (sourceQuantity > 0 && inventoryAmount === 0) {
       warnings.push({ code: 'COST_PENDING', message: '有库存数量但库存金额为 0，成本待补' })
     }
     if (theoreticalQuantity < 0) {
       warnings.push({ code: 'THEORETICAL_STOCK_NEGATIVE', message: '理论库存为负，仅作审计参考' })
     }
-    if (Math.abs(theoreticalQuantity - (sourceQuantity + expectedInboundQuantity - expectedOutboundQuantity)) > 0.001) {
+    if (theoreticalQuantityColumn != null
+      && Math.abs(theoreticalQuantity - (sourceQuantity + expectedInboundQuantity - expectedOutboundQuantity)) > 0.001) {
       warnings.push({ code: 'THEORETICAL_EQUATION_MISMATCH', message: '理论库存不等于库存量＋预计入库－预计出库' })
     }
 
@@ -240,13 +270,13 @@ export async function parseMeituanWarehouseInventoryWorkbook(
       conversionText: conversionText || null,
       sourceQuantity,
       inventoryAmount,
-      inventoryAmountExcludingTax: round(optionalNumber(row.getCell(amountExTaxColumn).value), 2),
-      inventoryTax: round(optionalNumber(row.getCell(taxColumn).value), 2),
+      inventoryAmountExcludingTax: round(amountExTaxColumn == null ? 0 : optionalNumber(row.getCell(amountExTaxColumn).value), 2),
+      inventoryTax: round(taxColumn == null ? 0 : optionalNumber(row.getCell(taxColumn).value), 2),
       averageCostExcludingTax,
       expectedInboundQuantity,
       expectedOutboundQuantity,
       theoreticalQuantity,
-      theoreticalAmount: round(optionalNumber(row.getCell(theoreticalAmountColumn).value), 2),
+      theoreticalAmount: round(theoreticalAmountColumn == null ? 0 : optionalNumber(row.getCell(theoreticalAmountColumn).value), 2),
       issues,
       warnings,
       rawData: {},
@@ -270,6 +300,7 @@ export async function parseMeituanWarehouseInventoryWorkbook(
       theoreticalAmount: parsedRow.theoreticalAmount,
       sourceIssues: parsedRow.issues,
       sourceWarnings: parsedRow.warnings,
+      sourceCodeMissing: !sourceCode,
     }
     rows.push(parsedRow)
   }
@@ -291,6 +322,12 @@ export async function parseMeituanWarehouseInventoryWorkbook(
 
   const detailTotalAmount = round(rows.reduce((sum, row) => sum + row.inventoryAmount, 0), 2)
   const warnings: WarehouseInventoryIssue[] = []
+  if (!codeColumn) {
+    warnings.push({ code: 'SOURCE_CODE_COLUMN_MISSING', message: '源文件没有物品编码列，使用名称、规格和单位生成稳定临时编码，映射必须人工确认' })
+  }
+  if (!costColumnsPresent) {
+    warnings.push({ code: 'SOURCE_COST_COLUMNS_MISSING', message: '源文件没有库存金额列，本次只建立数量基准，成本标记待补' })
+  }
   if (sourceTotalAmount != null && Math.abs(sourceTotalAmount - detailTotalAmount) > 0.01) {
     warnings.push({
       code: 'SOURCE_TOTAL_MISMATCH',
@@ -314,6 +351,7 @@ export async function parseMeituanWarehouseInventoryWorkbook(
     sourceWarehouseName,
     detailTotalAmount,
     sourceTotalAmount,
+    costColumnsPresent,
     rows,
     warnings,
   }
@@ -329,6 +367,16 @@ const UNIT_ALIASES: Record<string, string> = {
 
 const MASS_TO_GRAMS: Record<string, number> = { g: 1, kg: 1000, 斤: 500 }
 const VOLUME_TO_ML: Record<string, number> = { ml: 1, l: 1000 }
+const INDIVIDUAL_UNIT_GROUPS = [
+  new Set(['个', '枚']),
+  new Set(['袋', '包']),
+  new Set(['盒', '瓶', '罐']),
+]
+const OUTER_PACKAGE_UNIT_GROUPS = [
+  new Set(['箱', '件']),
+  new Set(['个', '件', '台', '块', '张']),
+  new Set(['袋', '包', '件']),
+]
 
 export function normalizeWarehouseUnit(value: unknown) {
   const unit = String(value || '').normalize('NFKC').trim().toLowerCase()
@@ -359,15 +407,77 @@ function physicalUnitFactor(sourceUnit: string, targetUnit: string) {
   return null
 }
 
+function groupedUnitFactor(sourceUnit: string, targetUnit: string, groups: Array<Set<string>>) {
+  const source = normalizeWarehouseUnit(sourceUnit)
+  const target = normalizeWarehouseUnit(targetUnit)
+  return groups.some(group => group.has(source) && group.has(target)) ? 1 : null
+}
+
+function directSnapshotUnitFactor(sourceUnit: string, targetUnit: string) {
+  return physicalUnitFactor(sourceUnit, targetUnit)
+    ?? groupedUnitFactor(sourceUnit, targetUnit, OUTER_PACKAGE_UNIT_GROUPS)
+}
+
 function sourceConversionFactorInInventoryUnit(conversionText: string | null, inventoryUnit: string) {
   const parsed = parseMeituanUnitConversion(conversionText)
   if (!parsed) return null
   const rightToInventory = physicalUnitFactor(parsed.rightUnit, inventoryUnit)
+    ?? groupedUnitFactor(parsed.rightUnit, inventoryUnit, INDIVIDUAL_UNIT_GROUPS)
   if (rightToInventory == null) return null
   return {
     factor: (parsed.rightQuantity * rightToInventory) / parsed.leftQuantity,
     leftUnit: parsed.leftUnit,
   }
+}
+
+/**
+ * Some compact Meituan exports keep the stock unit at an inner package while
+ * the system product uses a physical base unit.  In that case the explicit
+ * `1袋=1袋` conversion is not enough, but the adjacent specification still
+ * carries the auditable package weight, for example:
+ *
+ * - source unit `袋`, spec `箱/2.5kg*8袋` => 2500 g per source unit
+ * - source unit `箱`, spec `箱/1.5kg*6盒` => 9000 g per source unit
+ * - source unit `件`, spec `件/2500g` => 2500 g per source unit
+ *
+ * Keep the parser intentionally narrow.  Ambiguous or non-mass patterns must
+ * remain blocked instead of being guessed.
+ */
+function sourceSpecMassFactor(sourceSpec: string | null, sourceUnit: string, inventoryUnit: string) {
+  const target = normalizeWarehouseUnit(inventoryUnit)
+  const source = normalizeWarehouseUnit(sourceUnit)
+  const text = String(sourceSpec || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase()
+  if (!text) return null
+
+  const outerMatch = text.match(/^([^/]+)\/(\d+(?:\.\d+)?)(kg|g|斤)(?:\*(\d+(?:\.\d+)?)([^/*]+))?$/)
+  if (!outerMatch) return null
+  const outerUnit = normalizeWarehouseUnit(outerMatch[1])
+  const massQuantity = Number(outerMatch[2])
+  const massUnit = normalizeWarehouseUnit(outerMatch[3])
+  const innerCount = outerMatch[4] ? Number(outerMatch[4]) : 1
+  const innerUnit = outerMatch[5] ? normalizeWarehouseUnit(outerMatch[5]) : null
+  if (!(massQuantity > 0) || !(innerCount > 0) || !MASS_TO_GRAMS[massUnit]) return null
+
+  let massPerSourceInGrams: number | null = null
+  if (source === outerUnit) {
+    massPerSourceInGrams = massQuantity * MASS_TO_GRAMS[massUnit] * innerCount
+  } else if (innerUnit && (source === innerUnit || groupedUnitFactor(source, innerUnit, INDIVIDUAL_UNIT_GROUPS) === 1)) {
+    massPerSourceInGrams = massQuantity * MASS_TO_GRAMS[massUnit]
+  }
+  if (massPerSourceInGrams != null && MASS_TO_GRAMS[target]) {
+    return massPerSourceInGrams / MASS_TO_GRAMS[target]
+  }
+
+  // The source may already be a physical mass while the existing product
+  // contract stores one outer package (for example 1 件竹荪 = 1 kg).
+  // Convert only when the specification names that exact outer package.
+  if (MASS_TO_GRAMS[source]
+    && groupedUnitFactor(outerUnit, target, OUTER_PACKAGE_UNIT_GROUPS) === 1) {
+    const gramsPerOuter = massQuantity * MASS_TO_GRAMS[massUnit] * innerCount
+    const gramsPerSource = MASS_TO_GRAMS[source]
+    return gramsPerSource / gramsPerOuter
+  }
+  return null
 }
 
 function quantitiesEqual(left: number, right: number, tolerance = 0.000001) {
@@ -412,18 +522,32 @@ export function resolveWarehouseInventoryRow(
   }
 
   const unit = resolveProductInventoryUnit(product)
-  if (!unit.structured || unit.status !== 'VERIFIED') {
+  const sourceConversion = sourceConversionFactorInInventoryUnit(row.conversionText, unit.inventoryUnit)
+  const sourcePurchaseMatches = normalizeWarehouseUnit(row.purchaseUnit) === normalizeWarehouseUnit(unit.purchaseUnit)
+  const sourceConversionUsable = sourceConversion
+    && normalizeWarehouseUnit(sourceConversion.leftUnit) === normalizeWarehouseUnit(row.purchaseUnit)
+  const directSnapshotFactor = directSnapshotUnitFactor(row.purchaseUnit, unit.inventoryUnit)
+  const sourceSpecFactor = sourceSpecMassFactor(row.sourceSpec, row.purchaseUnit, unit.inventoryUnit)
+  const snapshotFactor = sourceConversionUsable
+    ? sourceConversion.factor
+    : directSnapshotFactor ?? sourceSpecFactor
+  const snapshotEvidenceUsable = snapshotFactor != null
+
+  if (!unit.structured && !snapshotEvidenceUsable) {
     issues.push({ code: 'UNIT_CONVERSION_NOT_VERIFIED', message: '商品采购单位到库存单位的换算尚未验证' })
+  } else if (unit.status !== 'VERIFIED' && !snapshotEvidenceUsable) {
+    issues.push({ code: 'UNIT_CONVERSION_NOT_VERIFIED', message: '商品采购单位到库存单位的换算尚未验证' })
+  } else if (unit.status !== 'VERIFIED' && snapshotEvidenceUsable) {
+    warnings.push({ code: 'UNIT_CONFIRMED_BY_SOURCE_SNAPSHOT', message: '本次基准按源文件换算率折算，商品主数据仍待正式核验' })
   }
-  if (normalizeWarehouseUnit(row.purchaseUnit) !== normalizeWarehouseUnit(unit.purchaseUnit)) {
+  if (!sourcePurchaseMatches && !snapshotEvidenceUsable) {
     issues.push({
       code: 'PURCHASE_UNIT_MISMATCH',
-      message: '美团采购单位与系统采购单位不一致',
+      message: '美团采购单位与系统采购单位不一致，且源换算率无法折算到系统库存单位',
       detail: `${row.purchaseUnit} ≠ ${unit.purchaseUnit}`,
     })
   }
 
-  const sourceConversion = sourceConversionFactorInInventoryUnit(row.conversionText, unit.inventoryUnit)
   if (row.conversionText && !sourceConversion) {
     warnings.push({
       code: 'SOURCE_CONVERSION_NOT_COMPARABLE',
@@ -433,17 +557,32 @@ export function resolveWarehouseInventoryRow(
   } else if (sourceConversion) {
     if (normalizeWarehouseUnit(sourceConversion.leftUnit) !== normalizeWarehouseUnit(row.purchaseUnit)) {
       issues.push({ code: 'SOURCE_CONVERSION_UNIT_MISMATCH', message: '美团换算率左侧单位与采购单位不一致' })
-    } else if (!quantitiesEqual(sourceConversion.factor, unit.inventoryUnitsPerPurchaseUnit)) {
-      issues.push({
+    } else if (sourcePurchaseMatches && !quantitiesEqual(sourceConversion.factor, unit.inventoryUnitsPerPurchaseUnit)) {
+      warnings.push({
         code: 'UNIT_CONVERSION_MISMATCH',
-        message: '美团换算率与系统已验证换算率不一致',
-        detail: `美团 ${sourceConversion.factor}，系统 ${unit.inventoryUnitsPerPurchaseUnit}`,
+        message: '本次快照换算率与系统商品主数据不一致，基准按源文件折算并保留差异',
+        detail: `源文件 ${sourceConversion.factor}，系统 ${unit.inventoryUnitsPerPurchaseUnit}`,
       })
     }
   }
 
+  if (!sourceConversionUsable && sourceSpecFactor != null) {
+    warnings.push({
+      code: 'UNIT_CONFIRMED_BY_SOURCE_SPEC',
+      message: '本次基准按源文件规格中的包装重量折算',
+      detail: row.sourceSpec || undefined,
+    })
+  } else if (!sourceConversionUsable && directSnapshotFactor != null && !sourcePurchaseMatches) {
+    warnings.push({
+      code: 'SOURCE_UNIT_ALIAS_USED',
+      message: '源文件与系统的包装单位名称不同，本次基准按 1:1 容器/件数折算',
+      detail: `${row.purchaseUnit} → ${unit.inventoryUnit}`,
+    })
+  }
+
+  const conversionFactor = snapshotFactor ?? unit.inventoryUnitsPerPurchaseUnit
   const normalized = new Prisma.Decimal(row.sourceQuantity)
-    .mul(unit.inventoryUnitsPerPurchaseUnit)
+    .mul(conversionFactor)
   let normalizedQuantity: number | null = Number(normalized)
   if (normalized.greaterThan(MAX_STOCK_QUANTITY)) {
     issues.push({ code: 'NORMALIZED_QUANTITY_TOO_LARGE', message: '换算后库存量超过系统上限' })
@@ -461,7 +600,7 @@ export function resolveWarehouseInventoryRow(
     productId: product.id,
     matchSource,
     inventoryUnit: unit.inventoryUnit,
-    conversionFactor: unit.inventoryUnitsPerPurchaseUnit,
+    conversionFactor,
     normalizedQuantity,
     issues,
     warnings,

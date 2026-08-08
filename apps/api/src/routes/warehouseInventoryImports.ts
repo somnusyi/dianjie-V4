@@ -15,6 +15,7 @@ import {
 } from '../services/supplierStockBatch'
 import {
   normalizeExternalProductCode,
+  normalizeWarehouseProductName,
   parseMeituanWarehouseInventoryWorkbook,
   resolveWarehouseInventoryRow,
   warehouseInventoryFileHash,
@@ -117,10 +118,6 @@ async function readPreviewUpload(req: any) {
   return { ...parsed.data, ...file }
 }
 
-function normalizedName(value: unknown) {
-  return String(value || '').normalize('NFKC').trim().toLowerCase()
-}
-
 function productView(product: any): InventoryImportProduct {
   return {
     id: product.id,
@@ -143,7 +140,11 @@ function productView(product: any): InventoryImportProduct {
 
 async function resolveRows(db: ImportDb, tenantId: string, rows: ParsedWarehouseInventoryRow[]) {
   const codes = [...new Set(rows.map(row => row.externalCode))]
-  const names = [...new Set(rows.map(row => row.externalName).filter(Boolean))]
+  const names = [...new Set(rows.flatMap(row => {
+    const original = row.externalName
+    const withoutPrefix = original.replace(/^[xｘ][\-－—_\s]+/i, '')
+    return [original, withoutPrefix].filter(Boolean)
+  }))]
   const [mappings, codeProducts, nameProducts] = await Promise.all([
     db.productExternalCode.findMany({
       where: { tenantId, source: SOURCE, externalCode: { in: codes } },
@@ -170,14 +171,14 @@ async function resolveRows(db: ImportDb, tenantId: string, rows: ParsedWarehouse
   }
   const productsByName = new Map<string, any[]>()
   for (const product of nameProducts) {
-    const key = normalizedName(product.name)
+    const key = normalizeWarehouseProductName(product.name)
     productsByName.set(key, [...(productsByName.get(key) || []), product])
   }
 
   const resolved = rows.map(row => {
     const mapped = mappingByCode.get(row.externalCode)
     const codeMatches = productsByCode.get(row.externalCode) || []
-    const nameMatches = productsByName.get(normalizedName(row.externalName)) || []
+    const nameMatches = productsByName.get(normalizeWarehouseProductName(row.externalName)) || []
     const product = mapped || (codeMatches.length === 1 ? codeMatches[0] : null)
       || (nameMatches.length === 1 ? nameMatches[0] : null)
     const matchSource = mapped
@@ -465,6 +466,7 @@ export const warehouseInventoryImportRoutes: FastifyPluginAsync = async app => {
               fileWarnings: parsedFile.warnings,
               quantitySemantics: 'TARGET_CLOSING_BALANCE',
               sourceQuantityUnit: 'PURCHASE_UNIT',
+              costSemantics: parsedFile.costColumnsPresent ? 'SOURCE_INVENTORY_AMOUNT' : 'UNAVAILABLE',
             }),
             createdById: req.user.userId,
           },

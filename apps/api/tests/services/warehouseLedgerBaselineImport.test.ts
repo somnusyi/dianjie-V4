@@ -206,7 +206,7 @@ describe('warehouse ledger baseline import – unit conversion', () => {
     expect(resolved.issues).toEqual([])
   })
 
-  it('blocks resolution when unit conversion is not verified', () => {
+  it('accepts a parseable source conversion while leaving the product master pending', () => {
     const row = sourceRow({ purchaseUnit: '箱', conversionText: '1箱=8袋', sourceQuantity: 10 })
     const prod = product({
       purchaseUnit: '箱',
@@ -215,7 +215,8 @@ describe('warehouse ledger baseline import – unit conversion', () => {
       unitConversionStatus: 'PENDING',
     })
     const resolved = resolveWarehouseInventoryRow(row, prod, 'EXACT_CODE')
-    expect(resolved.issues).toContainEqual(expect.objectContaining({ code: 'UNIT_CONVERSION_NOT_VERIFIED' }))
+    expect(resolved.issues).toEqual([])
+    expect(resolved.warnings).toContainEqual(expect.objectContaining({ code: 'UNIT_CONFIRMED_BY_SOURCE_SNAPSHOT' }))
   })
 
   it('blocks when source purchase unit does not match system purchase unit', () => {
@@ -225,7 +226,7 @@ describe('warehouse ledger baseline import – unit conversion', () => {
     expect(resolved.issues).toContainEqual(expect.objectContaining({ code: 'PURCHASE_UNIT_MISMATCH' }))
   })
 
-  it('blocks when source conversion factor contradicts system verified factor', () => {
+  it('uses the dated source factor and audits a contradiction with the current verified factor', () => {
     const row = sourceRow({ purchaseUnit: '箱', conversionText: '1箱=10袋', sourceQuantity: 5 })
     const prod = product({
       purchaseUnit: '箱',
@@ -234,7 +235,9 @@ describe('warehouse ledger baseline import – unit conversion', () => {
       unitConversionStatus: 'VERIFIED',
     })
     const resolved = resolveWarehouseInventoryRow(row, prod, 'EXACT_CODE')
-    expect(resolved.issues).toContainEqual(expect.objectContaining({ code: 'UNIT_CONVERSION_MISMATCH' }))
+    expect(resolved.issues).toEqual([])
+    expect(resolved.warnings).toContainEqual(expect.objectContaining({ code: 'UNIT_CONVERSION_MISMATCH' }))
+    expect(resolved.normalizedQuantity).toBe(50)
   })
 
   it('flags items with quantity>0 but zero amount as cost-pending warnings', async () => {

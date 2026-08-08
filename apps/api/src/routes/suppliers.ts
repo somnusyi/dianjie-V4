@@ -5,8 +5,11 @@ import { cached, invalidatePattern } from '../lib/cache'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const entityIdSchema = z.string().trim().min(1).max(64)
-const listQuerySchema = z.object({
+export const SUPPLIER_BUSINESS_SCOPES = ['WAREHOUSE_UPSTREAM', 'STORE_FULFILLER', 'DIRECT_STORE_VENDOR'] as const
+export const WAREHOUSE_UPSTREAM_SCOPE = 'WAREHOUSE_UPSTREAM' as const
+export const supplierListQuerySchema = z.object({
   status: z.enum(['ENABLED', 'DISABLED']).optional(),
+  businessScope: z.enum(SUPPLIER_BUSINESS_SCOPES).optional(),
   page: z.coerce.number().int().min(1).max(1_000_000).optional(),
   pageSize: z.coerce.number().int().min(1).max(100).optional(),
 }).strict()
@@ -14,7 +17,7 @@ const FINANCE_ROLES = new Set(['ADMIN', 'FINANCE', 'SUPER_ADMIN'])
 const SUPPLIER_MANAGEMENT_ROLES = new Set(['ADMIN', 'FINANCE', 'SUPER_ADMIN', 'SUPPLY_CHAIN'])
 const SUPPLIER_ROLES = new Set(['SUPPLIER_OWNER', 'SUPPLIER_STAFF'])
 const SAFE_SELECT = {
-  id: true, no: true, name: true, category: true, status: true,
+  id: true, no: true, name: true, category: true, status: true, businessScopes: true,
 } as const
 const SUPPLY_CHAIN_SELECT = {
   ...SAFE_SELECT,
@@ -44,6 +47,7 @@ const supplierCreateSchema = z.object({
   bankAccount:   z.string().trim().max(40).optional().default(''),
   bankAccountName: z.string().trim().max(80).optional().default(''),
   bankCode:      z.string().trim().max(40).optional().default(''),
+  businessScopes: z.array(z.enum(SUPPLIER_BUSINESS_SCOPES)).min(1).max(3).optional(),
 }).strict()
 const supplierOperationalCreateSchema = supplierCreateSchema.omit({
   autoPay: true,
@@ -52,6 +56,7 @@ const supplierOperationalCreateSchema = supplierCreateSchema.omit({
   bankAccount: true,
   bankAccountName: true,
   bankCode: true,
+  businessScopes: true,
 })
 
 // PATCH 可改字段(白名单): 排除 tenantId/status/id 等敏感/系统字段
@@ -64,6 +69,11 @@ export const supplierCreateInputSchemaForRole = (role: string) =>
 export const supplierUpdateInputSchemaForRole = (role: string) =>
   role === 'SUPPLY_CHAIN' ? supplierOperationalUpdateSchema : supplierUpdateSchema
 
+export const supplierCreateDataForRole = (role: string, data: Record<string, unknown>) =>
+  role === 'SUPPLY_CHAIN'
+    ? { ...data, businessScopes: [WAREHOUSE_UPSTREAM_SCOPE] }
+    : data
+
 export const supplierReadSelectForRole = (role: string) =>
   FINANCE_ROLES.has(role) || SUPPLIER_ROLES.has(role)
     ? undefined
@@ -73,10 +83,10 @@ export const supplierReadSelectForRole = (role: string) =>
 
 export const supplierRoutes: FastifyPluginAsync = async (app) => {
   app.get('/', auth(app), async (req: any, reply: any) => {
-    const parsed = listQuerySchema.safeParse(req.query || {})
+    const parsed = supplierListQuerySchema.safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { role, supplierId } = req.user
-    const { status, page, pageSize = 20 } = parsed.data
+    const { status, businessScope, page, pageSize = 20 } = parsed.data
     const where: any = { tenantId: req.user.tenantId }
     if (SUPPLIER_ROLES.has(role)) {
       if (!supplierId) return page ? { items: [], total: 0, page, pageSize } : []
@@ -87,13 +97,14 @@ export const supplierRoutes: FastifyPluginAsync = async (app) => {
       // 订货岗位只需要启用供应商候选，不得看到银行、联系人和账期等敏感主数据。
       where.status = 'ENABLED'
     } else if (status) where.status = status
+    if (businessScope) where.businessScopes = { has: businessScope }
 
     const select = supplierReadSelectForRole(role)
 
     // 不传 page 时返回全量（兼容下拉框），缓存 10 分钟
     if (!page) {
       // 角色与 supplierId 必须进入缓存键，防止管理员完整数据被其他角色命中同一缓存。
-      return cached(`suppliers:full:${req.user.tenantId}:${role}:${supplierId || 'none'}:${status || 'all'}`, 600, () =>
+      return cached(`suppliers:full:${req.user.tenantId}:${role}:${supplierId || 'none'}:${status || 'all'}:${businessScope || 'all-scopes'}`, 600, () =>
         prisma.supplier.findMany({ where, ...(select ? { select } : {}), orderBy: { createdAt: 'asc' } })
       )
     }
@@ -118,13 +129,14 @@ export const supplierRoutes: FastifyPluginAsync = async (app) => {
     }
     try {
       const supplier = await prisma.$transaction(async tx => {
-        const created = await tx.supplier.create({ data: { tenantId, ...parsed.data } as any })
+        const createData = supplierCreateDataForRole(role, parsed.data)
+        const created = await tx.supplier.create({ data: { tenantId, ...createData } as any })
         await tx.opLog.create({
           data: {
             tenantId, userId: req.user.userId, role,
             action: `创建供应商：${created.name}`,
             entityType: 'Supplier', targetId: created.id,
-            metadata: { no: created.no, changedFields: Object.keys(parsed.data) },
+            metadata: { no: created.no, changedFields: Object.keys(createData) },
           },
         })
         return created
@@ -155,6 +167,9 @@ export const supplierRoutes: FastifyPluginAsync = async (app) => {
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`supplier:${idParsed.data}`}))::text AS locked`
       const current = await tx.supplier.findFirst({ where: { id: idParsed.data, tenantId } })
       if (!current) throw { statusCode: 404, message: '供应商不存在' }
+      if (role === 'SUPPLY_CHAIN' && !current.businessScopes.includes(WAREHOUSE_UPSTREAM_SCOPE)) {
+        throw { statusCode: 403, message: '只能维护总仓上游供应商' }
+      }
       const saved = await tx.supplier.update({ where: { id: current.id }, data: parsed.data as any })
       await tx.opLog.create({
         data: {
@@ -181,6 +196,9 @@ export const supplierRoutes: FastifyPluginAsync = async (app) => {
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`supplier:${idParsed.data}`}))::text AS locked`
       const current = await tx.supplier.findFirst({ where: { id: idParsed.data, tenantId } })
       if (!current) throw { statusCode: 404, message: '供应商不存在' }
+      if (role === 'SUPPLY_CHAIN' && !current.businessScopes.includes(WAREHOUSE_UPSTREAM_SCOPE)) {
+        throw { statusCode: 403, message: '只能维护总仓上游供应商' }
+      }
       const saved = await tx.supplier.update({
         where: { id: current.id },
         data: { status: current.status === 'ENABLED' ? 'DISABLED' : 'ENABLED' },

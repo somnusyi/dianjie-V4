@@ -223,7 +223,7 @@ export default function InternalSupplyChainHomePage() {
       <Section title="更多">
         <div className="grid gap-2 lg:grid-cols-2">
           <MoreItem href="/v2/supply-chain/differences" label="到货差异" desc="短量、破损与报损" />
-          <MoreItem href="/v2/supply-chain/suppliers" label="供应商管理" desc="档案、账期与状态" />
+          <MoreItem href="/v2/supply-chain/suppliers" label="上游供应商" desc="总仓采购合作方" />
           <MoreItem href="/v2/supply-chain/billing" label="账务查询" desc="账期、对账与发票" />
           <MoreItem href="/v2/supply-chain/analytics" label="经营分析" desc="门店、SKU、趋势与健康" />
           <MoreItem href="/v2/supply-chain/receipts" label="收货查询" desc="历史收货记录" />

@@ -55,7 +55,7 @@ const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
         match: ['/v2/supply-chain/products', '/v2/supply-chain/categories'],
       },
       { href: '/v2/supply-chain/inventory', label: '仓库库存', description: '库存、入库、批次与流水', icon: '仓' },
-      { href: '/v2/supply-chain/suppliers', label: '供应商管理', description: '档案、账期与状态', icon: '供' },
+      { href: '/v2/supply-chain/suppliers', label: '上游供应商', description: '总仓采购合作方', icon: '供' },
     ],
   },
   {

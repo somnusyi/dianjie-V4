@@ -1,9 +1,9 @@
 /**
- * 内部供应链 · 供应商管理（桌面端）
+ * 内部供应链 · 总仓上游供应商管理（桌面端）
  *
  * 服务供应链员工，替代面向老板/管理员的通用账号维护页。
- * 读取能力复用 GET /api/suppliers；状态启停用复用 PATCH /api/suppliers/:id/toggle。
- * 不展示银行账号、密钥等敏感字段；不实现外部小程序、上游采购、付款审批。
+ * 只读取 businessScope=WAREHOUSE_UPSTREAM，避免把门店履约方和测试供应商
+ * 混入供应链采购档案。不展示银行账号、密钥等敏感字段。
  */
 'use client'
 
@@ -67,7 +67,7 @@ export default function InternalSupplyChainSuppliersPage() {
     abortRef.current = controller
     setLoading(true)
     setError(null)
-    apiFetch<SupplySupplier[]>('/api/suppliers', { signal: controller.signal })
+    apiFetch<SupplySupplier[]>('/api/suppliers?businessScope=WAREHOUSE_UPSTREAM', { signal: controller.signal })
       .then(data => {
         if (sequence !== requestSequence.current) return
         const list = Array.isArray(data) ? data : []
@@ -106,8 +106,8 @@ export default function InternalSupplyChainSuppliersPage() {
     openConfirm({
       title: isDisable ? `停用供应商「${supplier.name}」？` : `启用供应商「${supplier.name}」？`,
       body: isDisable
-        ? '停用后餐厅订货、商品关联等场景将不再显示该供应商。'
-        : '启用后该供应商将重新出现在业务候选中。',
+        ? '停用后总仓采购、入库来源和商品关联等场景将不再显示该供应商。'
+        : '启用后该供应商将重新出现在总仓采购候选中。',
       confirmLabel: isDisable ? '确认停用' : '确认启用',
       tone: isDisable ? 'danger' : 'primary',
       onConfirm: async () => {
@@ -170,7 +170,7 @@ export default function InternalSupplyChainSuppliersPage() {
           method: 'POST',
           body: JSON.stringify(buildSupplierCreatePayload(formValues)),
         })
-        setNotice('供应商新增成功')
+        setNotice('上游供应商新增成功')
         closeDrawer()
         load(created.id)
       } else if (drawerMode === 'edit' && selected) {
@@ -197,11 +197,11 @@ export default function InternalSupplyChainSuppliersPage() {
         <div>
           <div className="mb-2 flex items-center gap-2">
             <Chip tone="green">内部管理</Chip>
-            <span className="text-caption text-gray3">供应商档案 · 账期与状态</span>
+            <span className="text-caption text-gray3">总仓采购供货商 · 账期与状态</span>
           </div>
-          <h1 className="text-h1">供应商管理</h1>
+          <h1 className="text-h1">上游供应商管理</h1>
           <p className="mt-1 text-caption text-gray2">
-            {allSuppliers ? `${allSuppliers.length} 家供应商` : '加载中…'}
+            {allSuppliers ? `${allSuppliers.length} 家上游供应商` : '加载中…'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -209,7 +209,7 @@ export default function InternalSupplyChainSuppliersPage() {
             onClick={openCreateDrawer}
             className="rounded-cta bg-accent px-4 py-2.5 text-button text-white"
           >
-            新增供应商
+            新增上游供应商
           </button>
           <a href="/v2/supply-chain/home" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button text-gray2">← 返回工作台</a>
         </div>
@@ -255,8 +255,8 @@ export default function InternalSupplyChainSuppliersPage() {
           {!loading && allSuppliers && filtered.length === 0 && (
             <EmptyState
               icon="🏭"
-              title={filterActive ? '没有匹配的供应商' : '暂无供应商'}
-              hint={filterActive ? '尝试调整筛选条件' : '供应商档案由管理岗维护后可见'}
+              title={filterActive ? '没有匹配的上游供应商' : '暂无总仓上游供应商'}
+              hint={filterActive ? '尝试调整筛选条件' : '请录入实际向总仓供货的合作方；门店履约方不会显示在这里'}
             />
           )}
 
@@ -324,7 +324,7 @@ export default function InternalSupplyChainSuppliersPage() {
         <aside className="lg:pt-4">
           <div className="rounded-card border border-border bg-white p-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-h2">供应商档案</h2>
+              <h2 className="text-h2">上游供应商档案</h2>
               {selected && (
                 <button
                   onClick={openEditDrawer}
@@ -427,7 +427,7 @@ function SupplierEditorDrawer({
 
   if (!mode || !mounted) return null
 
-  const title = mode === 'create' ? '新增供应商' : '编辑供应商档案'
+  const title = mode === 'create' ? '新增上游供应商' : '编辑上游供应商档案'
   const noReadOnly = mode === 'edit'
 
   const sheet = (

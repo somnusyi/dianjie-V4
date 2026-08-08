@@ -150,12 +150,12 @@ const SUPPLIERS = [
 
 const SENSITIVE_SUBSTRINGS = ['银行', '账号', '密钥', 'autoPay', '付款', '对账']
 
-describe('供应商管理 PC 页面', () => {
+describe('上游供应商管理 PC 页面', () => {
   beforeEach(() => {
     mockFetch.mockReset()
   })
 
-  it('首次加载请求 /api/suppliers 并渲染编号、名称、状态、联系人、电话、账期', async () => {
+  it('首次加载只请求上游供应商并渲染编号、名称、状态、联系人、电话、账期', async () => {
     mockFetch.mockResolvedValue(SUPPLIERS)
 
     const { container, root } = render(<SuppliersPage />)
@@ -163,7 +163,7 @@ describe('供应商管理 PC 页面', () => {
 
     const calls = resourceCalls('/api/suppliers')
     expect(calls.length).toBe(1)
-    expect(String(calls[0][0])).toBe('/api/suppliers')
+    expect(String(calls[0][0])).toBe('/api/suppliers?businessScope=WAREHOUSE_UPSTREAM')
 
     expect(container.textContent).toContain('SUP001')
     expect(container.textContent).toContain('昆明蔬菜批发')
@@ -275,7 +275,7 @@ describe('供应商管理 PC 页面', () => {
 
     const { container, root } = render(<SuppliersPage />)
     await waitFor(() => container.querySelector('[data-empty-title]') !== null)
-    expect(container.querySelector('[data-empty-title]')?.textContent).toContain('暂无供应商')
+    expect(container.querySelector('[data-empty-title]')?.textContent).toContain('暂无总仓上游供应商')
 
     cleanup(container, root)
   })
@@ -290,7 +290,7 @@ describe('供应商管理 PC 页面', () => {
     act(() => { setInputValue(keywordInput, '不存在') })
 
     await waitFor(() => container.querySelector('[data-empty-title]') !== null)
-    expect(container.querySelector('[data-empty-title]')?.textContent).toContain('没有匹配的供应商')
+    expect(container.querySelector('[data-empty-title]')?.textContent).toContain('没有匹配的上游供应商')
     expect(container.querySelector('[data-empty-hint]')?.textContent).toContain('调整筛选条件')
 
     cleanup(container, root)
@@ -339,7 +339,7 @@ describe('供应商管理 PC 页面', () => {
     expect(abortReason).toBeDefined()
   })
 
-  it('点击新增供应商打开抽屉，保存后发起 POST 并刷新列表', async () => {
+  it('点击新增上游供应商打开抽屉，保存后发起 POST 并刷新列表', async () => {
     const created = {
       id: 'sup-3',
       no: 'SUP003',
@@ -365,8 +365,8 @@ describe('供应商管理 PC 页面', () => {
     const { container, root } = render(<SuppliersPage />)
     await waitFor(() => container.textContent?.includes('昆明蔬菜批发') ?? false)
 
-    act(() => findButton(container, '新增供应商')?.click())
-    await waitFor(() => document.body.textContent?.includes('新增供应商') ?? false)
+    act(() => findButton(container, '新增上游供应商')?.click())
+    await waitFor(() => document.body.textContent?.includes('新增上游供应商') ?? false)
 
     act(() => setInputValue(getInputByLabel(container, '编号'), 'SUP003'))
     act(() => setInputValue(getInputByLabel(container, '名称'), '曲靖肉禽'))
@@ -390,7 +390,7 @@ describe('供应商管理 PC 页面', () => {
     })
     expect(SENSITIVE_SUPPLIER_FIELDS.some(field => field in body)).toBe(false)
 
-    await waitFor(() => container.textContent?.includes('供应商新增成功') ?? false)
+    await waitFor(() => container.textContent?.includes('上游供应商新增成功') ?? false)
     expect(methodCalls('GET', '/api/suppliers').length).toBeGreaterThanOrEqual(2)
     await waitFor(() =>
       Array.from(container.querySelectorAll('tr')).some(
@@ -419,7 +419,7 @@ describe('供应商管理 PC 页面', () => {
     await waitFor(() => container.textContent?.includes('供应商档案') ?? false)
 
     act(() => findButton(container, '编辑档案')?.click())
-    await waitFor(() => document.body.textContent?.includes('编辑供应商档案') ?? false)
+    await waitFor(() => document.body.textContent?.includes('编辑上游供应商档案') ?? false)
 
     const nameInput = getInputByLabel(container, '名称') as HTMLInputElement
     expect(nameInput.value).toBe('昆明蔬菜批发')
@@ -448,8 +448,8 @@ describe('供应商管理 PC 页面', () => {
     const { container, root } = render(<SuppliersPage />)
     await waitFor(() => container.textContent?.includes('昆明蔬菜批发') ?? false)
 
-    act(() => findButton(container, '新增供应商')?.click())
-    await waitFor(() => document.body.textContent?.includes('新增供应商') ?? false)
+    act(() => findButton(container, '新增上游供应商')?.click())
+    await waitFor(() => document.body.textContent?.includes('新增上游供应商') ?? false)
 
     // 清空默认账期天数，触发必填
     act(() => setInputValue(getInputByLabel(container, '账期天数'), ''))
@@ -476,8 +476,8 @@ describe('供应商管理 PC 页面', () => {
     const { container, root } = render(<SuppliersPage />)
     await waitFor(() => container.textContent?.includes('昆明蔬菜批发') ?? false)
 
-    act(() => findButton(container, '新增供应商')?.click())
-    await waitFor(() => document.body.textContent?.includes('新增供应商') ?? false)
+    act(() => findButton(container, '新增上游供应商')?.click())
+    await waitFor(() => document.body.textContent?.includes('新增上游供应商') ?? false)
 
     act(() => setInputValue(getInputByLabel(container, '编号'), 'SUP003'))
     act(() => setInputValue(getInputByLabel(container, '名称'), '失败供应商'))
@@ -498,8 +498,8 @@ describe('供应商管理 PC 页面', () => {
     const { container, root } = render(<SuppliersPage />)
     await waitFor(() => container.textContent?.includes('昆明蔬菜批发') ?? false)
 
-    act(() => findButton(container, '新增供应商')?.click())
-    await waitFor(() => document.body.textContent?.includes('新增供应商') ?? false)
+    act(() => findButton(container, '新增上游供应商')?.click())
+    await waitFor(() => document.body.textContent?.includes('新增上游供应商') ?? false)
 
     act(() => setInputValue(getInputByLabel(container, '编号'), 'SUP003'))
     act(() => setInputValue(getInputByLabel(container, '名称'), '未保存供应商'))

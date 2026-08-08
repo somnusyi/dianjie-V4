@@ -1105,14 +1105,17 @@ model RevenueRecord {
 
 // ── 供应商 ────────────────────────────────────────────
 model Supplier {
-  id           String         @id @default(cuid())
-  tenantId     String
-  no           String // SUP001
-  name         String
-  contactName  String?
-  contactPhone String?
-  category     String? // 菌类 / 蔬菜 / 水产
-  status       SupplierStatus @default(ENABLED)
+  id             String                  @id @default(cuid())
+  tenantId       String
+  no             String // SUP001
+  name           String
+  contactName    String?
+  contactPhone   String?
+  category       String? // 菌类 / 蔬菜 / 水产
+  status         SupplierStatus          @default(ENABLED)
+  // 一个合作方可能既给总仓供货，也可能直接履约门店。业务范围用于把
+  // “供应链的上游供应商”和“门店订货的履约方”从同一档案中清晰分流。
+  businessScopes SupplierBusinessScope[] @default([STORE_FULFILLER])
 
   // 供应商仓库库存策略。试运行阶段未完成期初盘点时不应阻断履约；
   // 完成库存初始化并持续维护入库后，再显式切换为 STRICT。
@@ -1163,6 +1166,7 @@ model Supplier {
   productCategories     SupplierProductCategory[]
 
   @@unique([tenantId, no])
+  @@index([businessScopes], type: Gin, map: "suppliers_business_scopes_idx")
   @@map("suppliers")
 }
 
@@ -2347,6 +2351,12 @@ enum BudgetCategory {
 enum SupplierStatus {
   ENABLED
   DISABLED
+}
+
+enum SupplierBusinessScope {
+  WAREHOUSE_UPSTREAM // 向供应链总仓供货；显示在供应链的上游供应商管理中
+  STORE_FULFILLER // 承接门店订货与配送；历史供应商默认归入此范围
+  DIRECT_STORE_VENDOR // 绕过总仓直接向门店供货（预留）
 }
 
 enum SupplierInventoryMode {

@@ -11,6 +11,7 @@ export const SUPPLY_SUPPLIER_STATUS_OPTIONS = [
 ] as const
 
 export type SupplySupplierStatus = 'ENABLED' | 'DISABLED'
+export type SupplierBusinessScope = 'WAREHOUSE_UPSTREAM' | 'STORE_FULFILLER' | 'DIRECT_STORE_VENDOR'
 
 export type SupplySupplier = {
   id: string
@@ -18,6 +19,7 @@ export type SupplySupplier = {
   name: string
   category?: string | null
   status: SupplySupplierStatus
+  businessScopes?: SupplierBusinessScope[]
   contactName?: string | null
   contactPhone?: string | null
   creditType?: string | null

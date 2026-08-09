@@ -133,7 +133,7 @@ export default function DailyBusinessUploadPage() {
     openConfirmSheet({
       title: hasDeferred ? `暂缓 ${deferred.length} 项并确认导入？` : '确认导入？',
       body: hasDeferred
-        ? `营业日：${shortDate(target.businessDate)}\n已能计算的 ${target.previewData?.consumptions?.length || 0} 个食材 SKU 将立即扣减。\n${deferred.length} 项将转交总厨，补齐 BOM 后自动回补本日消耗。`
+        ? `营业日：${shortDate(target.businessDate)}\n已能计算的 ${target.previewData?.consumptions?.length || 0} 个食材 SKU 将立即扣减。\n${deferred.length} 项将转入待办，补齐菜品、BOM 或单位后回补本日消耗。`
         : `确认导入 ${shortDate(target.businessDate)} 的营业与销量数据，并按 BOM 扣减库存？`,
       confirmLabel: hasDeferred ? '暂缓并确认' : '确认导入',
       tone: 'primary',
@@ -243,8 +243,8 @@ export default function DailyBusinessUploadPage() {
             <IssueBox
               tone="amber"
               title={preview.status === 'CONFIRMED'
-                ? `${issueGroups.deferred.length} 项已转交总厨处理`
-                : `${issueGroups.deferred.length} 项可暂缓，确认后转交总厨`}
+                ? `${issueGroups.deferred.length} 项已转入主数据待办`
+                : `${issueGroups.deferred.length} 项可暂缓，确认后转入待办`}
               issues={issueGroups.deferred as Issue[]}
             />
           )}

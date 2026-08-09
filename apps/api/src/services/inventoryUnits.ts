@@ -300,9 +300,28 @@ export function convertQuantityToInventoryUnit(input: {
     }
   }
 
-  // A structured contract is authoritative.  Do not let a later spec typo
-  // silently override it with heuristic parsing.
+  // A structured contract is authoritative.  A VERIFIED purchasing SKU may
+  // still use a BOM unit below the four commercial units (for example g or an
+  // inner bag while inventory is kept by bottle/case).  In that specific case
+  // the reviewed package specification is the missing bridge.  PENDING and
+  // INFERRED contracts remain fail-closed so an unreviewed spec typo can never
+  // change inventory silently.
   if (contract.structured) {
+    if (contract.status === 'VERIFIED' && input.productSpec) {
+      const verifiedSpecConversion = normalizeInventoryQuantity({
+        quantity: input.quantity,
+        rawUnit: input.sourceUnit,
+        rawSpec: null,
+        productUnit: contract.inventoryUnit,
+        productSpec: input.productSpec,
+      })
+      if (verifiedSpecConversion.normalizedQuantity != null) {
+        return {
+          ...verifiedSpecConversion,
+          note: `按已核验采购规格 ${input.productSpec} 换算`,
+        }
+      }
+    }
     return {
       status: 'PENDING', normalizedQuantity: null, normalizedUnit: contract.inventoryUnit,
       factor: null,

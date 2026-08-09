@@ -12,11 +12,12 @@ type BomTask = {
   rawDishName: string
   spec: string
   variantKey: string
-  reasonCode: 'DISH_UNMATCHED' | 'BOM_MISSING'
+  reasonCode: 'DISH_UNMATCHED' | 'BOM_MISSING' | 'INVENTORY_UNIT_PENDING'
   quantity: number
   grossAmount: number
   netIncome: number
   recipeReady: boolean
+  unitIssues: Array<{ productId: string; productName: string; sourceUnit: string; inventoryUnit: string }>
   status: 'PENDING' | 'BACKFILLED' | 'SUPERSEDED'
   store: { id: string; name: string; no: string }
   dish: { id: string; name: string; recipes: Recipe[] } | null
@@ -125,7 +126,7 @@ export default function ChefDirectorBomPage() {
       </div>
 
       <div className="mx-4 mt-3 bg-amber/10 border border-amber/30 rounded-card p-3 text-caption text-amber-fg">
-        流程：关联菜品 → 补齐对应规格 BOM → 返回本页核对 → 完成并回补。回补使用独立审计来源，同一待办只会扣减一次。
+        流程：关联菜品 → 补齐对应规格 BOM 与原材料单位 → 返回本页核对 → 完成并回补。回补使用独立审计来源，同一待办只会扣减一次。
       </div>
 
       {error && <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}
@@ -142,7 +143,7 @@ export default function ChefDirectorBomPage() {
                   <div className="text-micro text-gray3 mt-1">{task.store.name} · {shortDate(task.businessDate)} · 销售 {task.quantity} 份</div>
                 </div>
                 <span className={`text-micro px-2 py-1 rounded-chip ${task.recipeReady ? 'bg-green-bg text-green-fg' : 'bg-orange-bg text-orange-fg'}`}>
-                  {task.recipeReady ? '可回补' : task.dish ? '待补配方' : '待关联菜品'}
+                  {task.recipeReady ? '可回补' : task.unitIssues?.length ? '待补单位' : task.dish ? '待补配方' : '待关联菜品'}
                 </span>
               </div>
 
@@ -170,12 +171,19 @@ export default function ChefDirectorBomPage() {
                   }).toString()}`} className="inline-block mt-2 text-caption text-amber-fg">没有对应菜品？新建菜品 ›</a>
                 </div>
               ) : (
-                <div className="mt-3 flex items-center justify-between gap-2 bg-bg rounded-card p-3">
-                  <div className="min-w-0">
-                    <div className="text-caption">已关联：{task.dish.name}</div>
-                    <div className="text-micro text-gray3 mt-0.5">{task.spec ? `需要“${task.spec}”规格或默认配方` : '需要默认配方'}</div>
+                <div className="mt-3 bg-bg rounded-card p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-caption">已关联：{task.dish.name}</div>
+                      <div className="text-micro text-gray3 mt-0.5">{task.spec ? `需要“${task.spec}”规格或默认配方` : '需要默认配方'}</div>
+                    </div>
+                    <a href={recipeUrl(task)} className="whitespace-nowrap px-3 py-2 bg-white border border-border rounded-cta text-button">维护 BOM</a>
                   </div>
-                  <a href={recipeUrl(task)} className="whitespace-nowrap px-3 py-2 bg-white border border-border rounded-cta text-button">维护 BOM</a>
+                  {task.unitIssues?.length > 0 && (
+                    <div className="mt-2 text-micro text-red-fg">
+                      原材料单位待核验：{task.unitIssues.map(item => `${item.productName}（${item.sourceUnit} → ${item.inventoryUnit}）`).join('、')}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -186,7 +194,7 @@ export default function ChefDirectorBomPage() {
                   onClick={() => backfill(task)}
                   disabled={!task.recipeReady || busyId === task.id}
                   className="w-full py-3 rounded-cta bg-amber text-white text-button disabled:opacity-35"
-                >{busyId === task.id ? '处理中…' : task.recipeReady ? '完成并回补历史库存消耗' : '请先补齐 BOM'}</button>
+                >{busyId === task.id ? '处理中…' : task.recipeReady ? '完成并回补历史库存消耗' : task.unitIssues?.length ? '请先补齐原材料单位' : '请先补齐 BOM'}</button>
               </div>
             )}
           </article>

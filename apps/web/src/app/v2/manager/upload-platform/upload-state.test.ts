@@ -6,17 +6,19 @@ describe('daily business import presentation', () => {
     expect(canConfirmDailyImport('PREVIEWED', [])).toBe(true)
     expect(canConfirmDailyImport('PREVIEWED', [{ code: 'BOM_MISSING' }])).toBe(true)
     expect(canConfirmDailyImport('PREVIEWED', [{ code: 'DISH_UNMATCHED' }])).toBe(true)
+    expect(canConfirmDailyImport('PREVIEWED', [{ code: 'INVENTORY_UNIT_PENDING' }])).toBe(true)
     expect(canConfirmDailyImport('PREVIEWED', [{ code: 'TARGET_STORE_MISMATCH' }])).toBe(false)
     expect(canConfirmDailyImport('CONFIRMING', [])).toBe(false)
     expect(canConfirmDailyImport('CONFIRMED', [])).toBe(false)
     expect(canConfirmDailyImport('SUPERSEDED', [])).toBe(false)
   })
 
-  it('only classifies missing dish and BOM as deferrable', () => {
+  it('classifies incomplete dish, BOM and unit governance as deferrable', () => {
     const result = splitDailyImportIssues([
-      { code: 'BOM_MISSING' }, { code: 'DISH_UNMATCHED' }, { code: 'DISH_AMBIGUOUS' },
+      { code: 'BOM_MISSING' }, { code: 'DISH_UNMATCHED' },
+      { code: 'INVENTORY_UNIT_PENDING' }, { code: 'DISH_AMBIGUOUS' },
     ])
-    expect(result.deferred).toHaveLength(2)
+    expect(result.deferred).toHaveLength(3)
     expect(result.hard).toEqual([{ code: 'DISH_AMBIGUOUS' }])
   })
 

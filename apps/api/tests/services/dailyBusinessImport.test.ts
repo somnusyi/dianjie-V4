@@ -133,14 +133,15 @@ describe('daily business import parser', () => {
     expect(storeNameMatches('合肥瑶海店', '滇界·云南山珍菌汤锅（万象汇店）')).toBe(false)
   })
 
-  it('only allows missing dish and BOM issues to be explicitly deferred', () => {
+  it('defers missing dish, BOM and unit-governance issues without allowing identity errors', () => {
     const result = partitionImportIssues([
       { code: 'DISH_UNMATCHED', message: '菜品未建档' },
       { code: 'BOM_MISSING', message: '缺少 BOM' },
+      { code: 'INVENTORY_UNIT_PENDING', message: '原材料单位换算待核验' },
       { code: 'DISH_AMBIGUOUS', message: '菜品匹配不唯一' },
       { code: 'TARGET_STORE_MISMATCH', message: '门店不一致' },
     ])
-    expect(result.deferrable.map(issue => issue.code)).toEqual(['DISH_UNMATCHED', 'BOM_MISSING'])
+    expect(result.deferrable.map(issue => issue.code)).toEqual(['DISH_UNMATCHED', 'BOM_MISSING', 'INVENTORY_UNIT_PENDING'])
     expect(result.hard.map(issue => issue.code)).toEqual(['DISH_AMBIGUOUS', 'TARGET_STORE_MISMATCH'])
   })
 

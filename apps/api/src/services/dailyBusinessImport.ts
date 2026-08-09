@@ -7,7 +7,7 @@ export type ImportIssue = {
   detail?: string
 }
 
-const DEFERRABLE_BOM_ISSUES = new Set(['DISH_UNMATCHED', 'BOM_MISSING'])
+const DEFERRABLE_BOM_ISSUES = new Set(['DISH_UNMATCHED', 'BOM_MISSING', 'INVENTORY_UNIT_PENDING'])
 
 export function partitionImportIssues(issues: ImportIssue[]) {
   return {

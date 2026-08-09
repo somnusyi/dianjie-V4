@@ -73,7 +73,7 @@ type DeferredBomRow = {
   rawDishName: string
   spec: string
   variantKey: string
-  reasonCode: 'DISH_UNMATCHED' | 'BOM_MISSING'
+  reasonCode: 'DISH_UNMATCHED' | 'BOM_MISSING' | 'INVENTORY_UNIT_PENDING'
   dishId: string | null
   dishName: string | null
   quantity: number
@@ -376,24 +376,38 @@ async function buildPreview(store: { id: string; tenantId: string }, parsed: Par
       version: bomVersion,
     })
     const sourceLineKey = sha256(Buffer.from(`${dish.id}\u0000${variantKey}\u0000${bomVersion.id}`)).slice(0, 32)
-    for (const recipe of bomVersion.items) {
+    const normalizedRecipes = bomVersion.items.map(recipe => {
       const sourceQuantity = row.quantity * Number(recipe.quantity) * (1 + Number(recipe.lossRate))
-      if (sourceQuantity <= 0) continue
+      if (sourceQuantity <= 0) return null
       const normalized = convertQuantityToInventoryUnit({
         quantity: sourceQuantity,
         sourceUnit: recipe.unit,
         product: recipe.product,
         productSpec: recipe.product.spec,
       })
+      return { recipe, sourceQuantity, normalized }
+    }).filter((item): item is NonNullable<typeof item> => Boolean(item))
+
+    const pendingRecipes = normalizedRecipes.filter(item => item.normalized.normalizedQuantity == null)
+    if (pendingRecipes.length > 0) {
+      // Defer the complete dish/variant, not only the broken ingredient.  The
+      // backfill task recalculates the complete BOM after unit governance is
+      // fixed; keeping any good ingredient now would deduct it twice later.
+      addDeferredRow(deferredByDishVariant, row, dish, 'INVENTORY_UNIT_PENDING', true)
+      for (const { recipe, sourceQuantity } of pendingRecipes) {
+        if (pendingUnitProducts.has(recipe.productId)) continue
+        pendingUnitProducts.add(recipe.productId)
+        blockingIssues.push({
+          code: 'INVENTORY_UNIT_PENDING',
+          message: `原材料单位换算待核验：${recipe.product.name}`,
+          detail: `${sourceQuantity}${recipe.unit} 暂无法换算；本菜品消耗可先暂缓，单位补齐后再回补`,
+        })
+      }
+      continue
+    }
+
+    for (const { recipe, sourceQuantity, normalized } of normalizedRecipes) {
       if (normalized.normalizedQuantity == null) {
-        if (!pendingUnitProducts.has(recipe.productId)) {
-          pendingUnitProducts.add(recipe.productId)
-          blockingIssues.push({
-            code: 'INVENTORY_UNIT_PENDING',
-            message: `原材料单位换算待核验：${recipe.product.name}`,
-            detail: `${sourceQuantity}${recipe.unit} 无法换算为库存基础单位，请先维护商品单位后重新预览`,
-          })
-        }
         continue
       }
       const quantity = normalized.normalizedQuantity
@@ -484,12 +498,28 @@ function publicDeferredTask(row: any) {
   const bomVersion = row.dish
     ? selectEffectiveBomVersion(row.dish.bomVersions || [], row.businessDate, row.variantKey)
     : null
+  const unitIssues = (bomVersion?.items || []).flatMap((item: any) => {
+    const sourceQuantity = Number(row.quantity) * Number(item.quantity) * (1 + Number(item.lossRate))
+    const normalized = convertQuantityToInventoryUnit({
+      quantity: sourceQuantity,
+      sourceUnit: item.unit,
+      product: item.product,
+      productSpec: item.product.spec,
+    })
+    return normalized.normalizedQuantity == null ? [{
+      productId: item.productId,
+      productName: item.product.name,
+      sourceUnit: item.unit,
+      inventoryUnit: normalized.normalizedUnit,
+    }] : []
+  })
   return {
     ...row,
     quantity: Number(row.quantity),
     grossAmount: Number(row.grossAmount),
     netIncome: Number(row.netIncome),
-    recipeReady: Boolean(bomVersion?.items?.length),
+    recipeReady: Boolean(bomVersion?.items?.length) && unitIssues.length === 0,
+    unitIssues,
     bomVersion: bomVersion ? {
       id: bomVersion.id,
       versionNo: bomVersion.versionNo,
@@ -793,7 +823,12 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
                 items: {
                   select: {
                     productId: true, quantity: true, unit: true, lossRate: true,
-                    product: { select: { id: true, name: true, code: true, unit: true } },
+                    product: { select: {
+                      id: true, name: true, code: true, spec: true, unit: true,
+                      purchaseUnit: true, inventoryUnit: true, orderUnit: true, costUnit: true,
+                      inventoryUnitsPerPurchaseUnit: true, inventoryUnitsPerOrderUnit: true,
+                      inventoryUnitsPerCostUnit: true, unitConversionStatus: true,
+                    } },
                   },
                 },
               },

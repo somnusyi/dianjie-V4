@@ -9,7 +9,7 @@ export const IMPORT_STATUS: Record<DailyImportStatus, { label: string; badge: st
 
 export type DailyImportIssue = { code: string }
 
-const DEFERRABLE_CODES = new Set(['DISH_UNMATCHED', 'BOM_MISSING'])
+const DEFERRABLE_CODES = new Set(['DISH_UNMATCHED', 'BOM_MISSING', 'INVENTORY_UNIT_PENDING'])
 
 export function splitDailyImportIssues(issues: DailyImportIssue[]) {
   return {

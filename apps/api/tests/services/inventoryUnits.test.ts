@@ -114,6 +114,47 @@ describe('inventory unit normalization', () => {
     })
   })
 
+  it('uses a verified package specification for BOM units below the commercial units', () => {
+    const product = (spec: string, unit: string) => ({
+      unit,
+      purchaseUnit: unit,
+      inventoryUnit: unit,
+      inventoryUnitsPerPurchaseUnit: 1,
+      unitConversionStatus: 'VERIFIED',
+      spec,
+    })
+    expect(convertQuantityToInventoryUnit({
+      quantity: 4,
+      sourceUnit: '袋',
+      product: product('箱/150g*40袋', '箱'),
+      productSpec: '箱/150g*40袋',
+    })).toMatchObject({ status: 'CONVERTED', normalizedQuantity: 0.1, normalizedUnit: '箱' })
+    expect(convertQuantityToInventoryUnit({
+      quantity: 818.1,
+      sourceUnit: 'g',
+      product: product('箱/12.5kg', '箱'),
+      productSpec: '箱/12.5kg',
+    })).toMatchObject({ status: 'CONVERTED', normalizedUnit: '箱' })
+    expect(convertQuantityToInventoryUnit({
+      quantity: 62,
+      sourceUnit: 'g',
+      product: product('瓶/1.2kg', '瓶'),
+      productSpec: '瓶/1.2kg',
+    })).toMatchObject({ status: 'CONVERTED', normalizedUnit: '瓶' })
+  })
+
+  it('does not trust an unverified package specification for a structured contract', () => {
+    expect(convertQuantityToInventoryUnit({
+      quantity: 4,
+      sourceUnit: '袋',
+      product: {
+        unit: '箱', purchaseUnit: '箱', inventoryUnit: '箱',
+        inventoryUnitsPerPurchaseUnit: 1, unitConversionStatus: 'PENDING',
+      },
+      productSpec: '箱/150g*40袋',
+    })).toMatchObject({ status: 'PENDING', normalizedQuantity: null, normalizedUnit: '箱' })
+  })
+
   it('converts purchase price into moving-average inventory-unit cost', () => {
     const product = {
       unit: '箱', inventoryUnit: '罐', inventoryUnitsPerPurchaseUnit: '6',

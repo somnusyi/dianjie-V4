@@ -48,12 +48,8 @@ export default function ChefPurchasePage() {
   const monthStart = dayjs().startOf('month').toDate()
   const monthOrders = allOrders.filter(o => new Date(o.createdAt) >= monthStart)
   const monthTotal = monthOrders.reduce((s, o) => s + Number(o.totalAmount || 0), 0)
-  const completed = monthOrders.filter(o => o.status === 'COMPLETED' || o.status === 'RECEIVED')
-  const onTimeRate = monthOrders.length > 0
-    ? Math.round((completed.length / monthOrders.length) * 100)
-    : 0
-
   const toReceive = allOrders.filter(o => o.status === 'PENDING_CONFIRM')
+  const pendingRevisionOrders = allOrders.filter(o => o.revisions?.some((revision: any) => revision.status === 'PENDING'))
   const inProgress = allOrders.filter(o => ['SUBMITTED','CONFIRMED','DELIVERING'].includes(o.status))
   const inTransitTotal = inProgress.reduce((s, o) => s + Number(o.totalAmount || 0), 0)
   const history = allOrders
@@ -78,11 +74,40 @@ export default function ChefPurchasePage() {
           rightSlot={dayjs().format('MM 月')}
           stats={[
             { label: '在途金额', value: `¥${(inTransitTotal/1000).toFixed(1)}K`, tone: 'default' },
+            { label: '改单待确认', value: `${pendingRevisionOrders.length} 单`, tone: pendingRevisionOrders.length > 0 ? 'red' : 'default' },
             { label: '待验收',   value: `${toReceive.length} 单`, tone: toReceive.length > 0 ? 'red' : 'default' },
-            { label: '完成率',   value: `${onTimeRate}%`, tone: onTimeRate >= 95 ? 'green' : 'orange' },
           ]}
         />
       </div>
+
+      {/* 待确认改单：供应商在接单前提出修改，必须由门店明确确认 */}
+      {pendingRevisionOrders.length > 0 && (
+        <Section title="改单待确认" right={`${pendingRevisionOrders.length} 单阻塞接单`} rightTone="red">
+          <ul className="space-y-2">
+            {pendingRevisionOrders.map(o => {
+              const revision = o.revisions.find((item: any) => item.status === 'PENDING')
+              return (
+                <li key={`revision-${o.id}`} className="relative bg-red-bg/40 rounded-card p-3 pl-4 border border-red/40 before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full before:bg-red">
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1 flex-wrap">
+                        <Chip tone="red">待确认</Chip>
+                        <span className="text-h2 truncate">{o.supplier?.name}</span>
+                      </div>
+                      <p className="text-micro text-gray3 mt-1">#{o.no} · 第 {revision?.revisionNo} 次改单</p>
+                    </div>
+                    <span className="font-num text-h2 shrink-0">¥{Number(o.totalAmount).toLocaleString()}</span>
+                  </div>
+                  <p className="text-caption text-gray2 mb-2 line-clamp-2">
+                    {revision?.requestedBy?.name || '供应商'}：{revision?.reason || '申请调整订单'}
+                  </p>
+                  <a href={`/v2/chef/purchase/po-success/${o.id}`} className="block w-full py-2 bg-ink text-white rounded-cta text-button text-center">立即核对改单</a>
+                </li>
+              )
+            })}
+          </ul>
+        </Section>
+      )}
 
       {/* 待验收 */}
       {toReceive.length > 0 && (
@@ -126,8 +151,9 @@ export default function ChefPurchasePage() {
           {inProgress.map((o) => {
             const stepIdx = STATUS_TO_STEP[o.status] ?? 1
             const showAckBtn = o.status === 'DELIVERING'
+            const pendingRevision = o.revisions?.find((revision: any) => revision.status === 'PENDING')
             return (
-              <li key={o.id} className="bg-white rounded-card border border-border p-3">
+              <li key={o.id} className={`bg-white rounded-card border p-3 ${pendingRevision ? 'border-red/50 ring-1 ring-red/10' : 'border-border'}`}>
                 <a href={`/v2/chef/purchase/po-success/${o.id}`} className="block">
                   <div className="flex items-center justify-between mb-1 gap-2">
                     <span className="text-h2 flex items-center gap-1 min-w-0 flex-wrap">
@@ -135,12 +161,13 @@ export default function ChefPurchasePage() {
                       {o.createdBy?.role === 'CHEF_DIRECTOR' && (
                         <Chip tone="amber">总厨代下</Chip>
                       )}
+                      {pendingRevision && <Chip tone="red">改单待确认</Chip>}
                       <span className="text-micro text-gray3 font-num ml-1">#{o.no}</span>
                     </span>
                     <span className="font-num text-h2 shrink-0">¥{Number(o.totalAmount).toLocaleString()}</span>
                   </div>
                   <p className="text-micro text-gray3 mb-2">
-                    {STATUS_LABEL[o.status]} · {o.items?.length ?? 0} 项
+                    {pendingRevision ? '等待你确认改单' : STATUS_LABEL[o.status]} · {o.items?.length ?? 0} 项
                     · 期望 {dayjs(o.expectedDate).format('MM/DD')}
                   </p>
                   <ProgressDots
@@ -215,7 +242,7 @@ export default function ChefPurchasePage() {
         tabs={[
           { key: 'home', label: '工作台', icon: '⌂' },
           { key: 'inventory', label: '库存', icon: '⛁' },
-          { key: 'purchase', label: '采购', icon: '☰' },
+          { key: 'purchase', label: '采购', icon: '☰', badge: pendingRevisionOrders.length },
           { key: 'check', label: '盘点', icon: '◐' },
         ]}
         activeKey={tab}

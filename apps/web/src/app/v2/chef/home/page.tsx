@@ -29,7 +29,7 @@ export default function ChefHomePage() {
   const [orders, setOrders] = useState<any[] | null>(null)
   const [inv, setInv] = useState<any[] | null>(null)
   useEffect(() => {
-    apiFetch<any>('/api/orders?pageSize=20')
+    apiFetch<any>('/api/orders?pageSize=50')
       .then((d: any) => setOrders((d.items || d || []).filter((o: any) => ['SUBMITTED','CONFIRMED','DELIVERING','PENDING_CONFIRM'].includes(o.status))))
       .catch(() => setOrders([]))
     apiFetch<any[]>('/api/inventory')
@@ -41,11 +41,13 @@ export default function ChefHomePage() {
   const { greeting, today } = greetingFor(data.user?.name)
   const inProgress = orders || []
 
-  // 真待办：低库存(缺货) + 临期 + 待验收
+  // 真待办：待确认改单 + 低库存(缺货) + 临期 + 待验收
+  const pendingRevisionOrders = inProgress.filter(o => o.revisions?.some((revision: any) => revision.status === 'PENDING'))
+  const pendingRevisions = pendingRevisionOrders.slice(0, 3)
   const lowStock = (inv || []).filter(p => p.isLowStock).slice(0, 2)
   const expiring = (inv || []).filter(p => p.isExpiringSoon && !p.isExpired).slice(0, 2)
   const toReceive = inProgress.filter(o => o.status === 'PENDING_CONFIRM').slice(0, 2)
-  const todoCount = lowStock.length + expiring.length + toReceive.length
+  const todoCount = pendingRevisionOrders.length + lowStock.length + expiring.length + toReceive.length
   return (
     <div className="min-h-screen bg-bg pb-20">
       <header className="px-4 pt-4 pb-2 flex items-center justify-between">
@@ -72,8 +74,21 @@ export default function ChefHomePage() {
       <Section title="待办" right={todoCount > 0 ? `${todoCount} 项加急` : '无加急'} rightTone={todoCount > 0 ? 'red' : undefined}>
         <div className="space-y-2">
           {todoCount === 0 && (
-            <p className="text-caption text-gray3 text-center py-4">今日无加急 · 库存健康 + 无临期 + 无待验收</p>
+            <p className="text-caption text-gray3 text-center py-4">今日无加急 · 无待确认改单 + 库存健康 + 无临期 + 无待验收</p>
           )}
+          {pendingRevisions.map(o => {
+            const revision = o.revisions.find((item: any) => item.status === 'PENDING')
+            return (
+              <TodoCard
+                key={`revision-${o.id}`}
+                tone="immediate"
+                chips={[{ label: '改单待确认', tone: 'red' }, { label: `#${o.no}`, tone: 'gray' }]}
+                title={`${o.supplier?.name || '供应商'} · 第 ${revision?.revisionNo} 次改单`}
+                sub={`${revision?.requestedBy?.name || '供应商'}：${revision?.reason || '申请调整订单'} · 未确认前无法接单`}
+                primary={{ label: '立即核对', onClick: () => location.href = `/v2/chef/purchase/po-success/${o.id}` }}
+              />
+            )
+          })}
           {lowStock.map(p => (
             <TodoCard
               key={`low-${p.id}`}
@@ -117,12 +132,14 @@ export default function ChefHomePage() {
             //   PENDING_CONFIRM (送达) → 签收页 (含报损)
             //   其它 → 订单详情
             const canReceive = o.status === 'PENDING_CONFIRM'
+            const pendingRevision = o.revisions?.find((revision: any) => revision.status === 'PENDING')
             const needAck = o.status === 'DELIVERING' && !o.chefAckAt
             const ackedDelivering = o.status === 'DELIVERING' && o.chefAckAt
             const target = canReceive
               ? `/v2/chef/purchase/${o.id}/receive`
               : `/v2/chef/purchase/po-success/${o.id}`
-            const chipCls = canReceive ? 'text-red-fg bg-red-bg'
+            const chipCls = pendingRevision ? 'text-red-fg bg-red-bg'
+                          : canReceive ? 'text-red-fg bg-red-bg'
                           : needAck    ? 'text-amber-fg bg-amber/10'
                                        : 'text-orange-fg bg-orange-bg'
             return (
@@ -132,7 +149,7 @@ export default function ChefHomePage() {
                     <div className="flex items-center gap-1 flex-wrap">
                       <span className="text-micro text-gray3 font-num">#{o.no}</span>
                       <span className={`text-micro px-1.5 rounded-chip ${chipCls}`}>
-                        {STATUS_LABEL[o.status]}
+                        {pendingRevision ? '改单待确认' : STATUS_LABEL[o.status]}
                       </span>
                       {canReceive && (
                         <span className="text-micro text-amber-fg bg-amber/10 px-1.5 rounded-chip">点击去签收 / 报损</span>
@@ -168,7 +185,7 @@ export default function ChefHomePage() {
         tabs={[
           { key: 'home', label: '工作台', icon: '⌂' },
           { key: 'inventory', label: '库存', icon: '⛁' },
-          { key: 'purchase', label: '采购', icon: '☰' },
+          { key: 'purchase', label: '采购', icon: '☰', badge: pendingRevisionOrders.length },
           { key: 'check', label: '盘点', icon: '◐' },
         ]}
         activeKey={tab}

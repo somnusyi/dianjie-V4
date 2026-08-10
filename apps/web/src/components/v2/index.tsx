@@ -231,7 +231,7 @@ export function ApprovalRouting({ steps }: {
 // 8. BOTTOM NAV ─ 4-5 Tab，店长 5 Tab 中央 ⊕ FAB
 // ════════════════════════════════════════════════════
 export function BottomNav({ tabs, activeKey, onChange, fabKey, onFab }: {
-  tabs: { key: string; label: string; icon?: ReactNode }[]
+  tabs: { key: string; label: string; icon?: ReactNode; badge?: number | string }[]
   activeKey: string
   onChange: (k: string) => void
   fabKey?: string                  // 中央 FAB 的 key（出现在 tabs 中间）
@@ -262,7 +262,14 @@ export function BottomNav({ tabs, activeKey, onChange, fabKey, onFab }: {
             onClick={() => onChange(t.key)}
             className={`flex-1 flex flex-col items-center justify-center gap-0.5 ${active ? 'text-ink' : 'text-gray3'}`}
           >
-            <span className="text-lg">{t.icon ?? '·'}</span>
+            <span className="relative text-lg">
+              {t.icon ?? '·'}
+              {t.badge !== undefined && t.badge !== 0 && t.badge !== '0' && (
+                <span className="absolute -top-2 -right-3 min-w-4 h-4 px-1 rounded-full bg-red text-white text-[10px] leading-4 text-center font-num">
+                  {typeof t.badge === 'number' && t.badge > 99 ? '99+' : t.badge}
+                </span>
+              )}
+            </span>
             <span className="text-micro">{t.label}</span>
           </button>
         )

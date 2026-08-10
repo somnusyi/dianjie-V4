@@ -46,6 +46,27 @@ const manualLossSchema = z.object({
   }
 })
 
+const postReceiptLossSchema = z.object({
+  purchaseOrderId: z.string().min(1),
+  receiptId: z.string().min(1),
+  kind: z.enum(['ARRIVAL_SHORTAGE', 'ARRIVAL_DAMAGE']).default('ARRIVAL_DAMAGE'),
+  items: z.array(z.object({
+    productId: z.string().min(1),
+    lossQty: z.number().positive().max(1_000_000).refine(
+      value => new Prisma.Decimal(value).decimalPlaces() <= 2,
+      '报损数量最多保留 2 位小数',
+    ),
+  }).strict()).min(1, '请填写报损明细').max(100),
+  reason: z.string().trim().min(1, '请填写异常原因').max(100),
+  description: z.string().trim().min(1, '请填写异常说明').max(500),
+  evidenceImages: z.array(z.string().max(2048)).min(1, '请至少上传 1 份现场证据').max(9),
+}).strict().superRefine((value, ctx) => {
+  const productIds = value.items.map(item => item.productId)
+  if (new Set(productIds).size !== productIds.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['items'], message: '同一商品不能重复报损' })
+  }
+})
+
 const lossClaimListQuerySchema = z.object({
   status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'NEGOTIATING', 'RESOLVED', 'AUTO_APPROVED']).optional(),
   kind: z.enum(['ARRIVAL_SHORTAGE', 'ARRIVAL_DAMAGE', 'INTERNAL_WASTE', 'LEGACY_UNRESOLVED']).optional(),
@@ -139,19 +160,33 @@ export async function approveLossClaimAtomically(params: {
       }
       const nextAmount = schedule.amount.sub(claim.totalLossAmount)
       if (nextAmount.lt(0)) throw new Error(`补报差异 ${claim.no} 超过收货单应付金额`)
+      const otherOpenClaims = await tx.lossClaim.count({
+        where: {
+          receiptId,
+          id: { not: claim.id },
+          status: { in: ['PENDING', 'REJECTED', 'NEGOTIATING'] },
+        },
+      })
       await setReceiptSettlementAmountInTransaction(tx, {
         receiptId,
         amount: nextAmount,
-        scheduleStatus: 'PENDING',
+        scheduleStatus: otherOpenClaims > 0 ? 'ON_HOLD' : 'PENDING',
       })
       payableAdjustment = `应付 ${schedule.amount.toFixed(2)} → ${nextAmount.toFixed(2)}`
     } else if (claim.payableBasis === 'NET_AT_RECEIPT' && claim.receiptId) {
       const schedule = await tx.paymentSchedule.findUnique({ where: { receiptId: claim.receiptId } })
       if (schedule?.status === 'ON_HOLD') {
+        const otherOpenClaims = await tx.lossClaim.count({
+          where: {
+            receiptId: claim.receiptId,
+            id: { not: claim.id },
+            status: { in: ['PENDING', 'REJECTED', 'NEGOTIATING'] },
+          },
+        })
         await setReceiptSettlementAmountInTransaction(tx, {
           receiptId: claim.receiptId,
           amount: schedule.amount,
-          scheduleStatus: 'PENDING',
+          scheduleStatus: otherOpenClaims > 0 ? 'ON_HOLD' : 'PENDING',
         })
       }
     }
@@ -191,7 +226,7 @@ async function tryCompleteOrder(purchaseOrderId: string, tenantId: string) {
     where: {
       purchaseOrderId,
       tenantId,
-      status: { in: ['PENDING', 'NEGOTIATING'] },
+      status: { in: ['PENDING', 'REJECTED', 'NEGOTIATING'] },
     },
   })
   if (pendingClaims === 0) {
@@ -337,13 +372,172 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     }
   })
 
-  // ── 历史验收后补报兼容入口 ──────────────────────────
-  // 收货确认是供应商责任截止点；旧客户端请求必须明确失败，不能静默写入。
-  app.post('/', { preHandler: [(app as any).authenticate] }, async (_req: any, reply: any) => {
-    return reply.status(409).send({
-      code: 'ARRIVAL_CLAIM_WINDOW_CLOSED',
-      error: '到货差异只能在收货确认时提交；确认后发现的损耗请走门店内部报损或盘点差异',
-    })
+  // ── 验收后 48 小时补报到货异常 ────────────────────────
+  // 隐蔽破损/品质异常可能在拆包后才发现。创建时立即把实物移出可用库存，
+  // 同时冻结未付账期；供应商是否认可只决定结算，不恢复已确认异常的实物。
+  app.post('/', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
+    const { tenantId, userId, storeId: userStoreId, role } = req.user
+    if (!['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {
+      return reply.status(403).send({ error: '仅店长或厨师长可补报到货异常' })
+    }
+    const parsed = postReceiptLossSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const input = parsed.data
+    const now = new Date()
+
+    try {
+      const claim = await prisma.$transaction(async tx => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`post-receipt-loss:${input.receiptId}`}))::text AS locked`
+        const receipt = await tx.receipt.findFirst({
+          where: {
+            id: input.receiptId,
+            tenantId,
+            purchaseOrderId: input.purchaseOrderId,
+            status: { in: ['CONFIRMED', 'ACCOUNTED'] },
+            ...(userStoreId ? { storeId: userStoreId } : {}),
+          },
+          include: {
+            items: { include: { product: true } },
+            paymentSchedule: true,
+            purchaseOrder: { select: { id: true, no: true, status: true, supplierId: true } },
+            deliveryOrder: { select: { id: true, no: true } },
+          },
+        })
+        if (!receipt || !receipt.purchaseOrder) throw { statusCode: 404, message: '未找到对应的已确认收货单' }
+        if (!receipt.confirmedAt) throw { statusCode: 409, message: '收货单缺少确认时间，暂不能补报，请联系管理员核对' }
+        const deadline = dayjs(receipt.confirmedAt).add(48, 'hour')
+        if (dayjs(now).isAfter(deadline)) {
+          throw {
+            statusCode: 409,
+            code: 'POST_RECEIPT_CLAIM_WINDOW_EXPIRED',
+            message: `该收货单已超过 48 小时补报期限（截止 ${deadline.format('YYYY-MM-DD HH:mm')}）`,
+          }
+        }
+        const schedule = receipt.paymentSchedule
+        if (!schedule) throw { statusCode: 409, message: '该收货单账期尚未生成，请稍后重试' }
+        if (['PROCESSING', 'PAID', 'CANCELLED'].includes(schedule.status)) {
+          throw { statusCode: 409, message: '该收货单已进入付款或已结清，请联系财务登记后续抵扣' }
+        }
+
+        const priorClaims = await tx.lossClaim.findMany({
+          where: {
+            tenantId,
+            receiptId: receipt.id,
+            isManual: false,
+            payableBasis: 'GROSS_PENDING_CLAIM',
+          },
+          select: { items: { select: { productId: true, lossQty: true } } },
+        })
+        const priorByProduct = new Map<string, Prisma.Decimal>()
+        for (const prior of priorClaims) {
+          for (const item of prior.items) {
+            priorByProduct.set(item.productId, (priorByProduct.get(item.productId) || new Prisma.Decimal(0)).add(item.lossQty))
+          }
+        }
+
+        const receiptByProduct = new Map<string, typeof receipt.items>()
+        for (const item of receipt.items) {
+          const rows = receiptByProduct.get(item.productId) || []
+          rows.push(item)
+          receiptByProduct.set(item.productId, rows)
+        }
+        let totalLossAmount = new Prisma.Decimal(0)
+        const itemsData = input.items.map(requested => {
+          const rows = receiptByProduct.get(requested.productId) || []
+          if (!rows.length) throw { statusCode: 400, message: '补报商品不在该收货单中' }
+          const receivedQty = rows.reduce((sum, row) => sum.add(row.quantity), new Prisma.Decimal(0))
+          const lossQty = new Prisma.Decimal(requested.lossQty)
+          const priorQty = priorByProduct.get(requested.productId) || new Prisma.Decimal(0)
+          const availableQty = receivedQty.sub(priorQty)
+          if (lossQty.gt(availableQty)) {
+            throw { statusCode: 409, message: `${rows[0].product.name} 最多还可补报 ${availableQty.toFixed(2)} ${rows[0].productUnitSnapshot || rows[0].product.unit}` }
+          }
+          const receivedAmount = rows.reduce((sum, row) => sum.add(row.amount), new Prisma.Decimal(0))
+          const unitPrice = receivedQty.gt(0) ? receivedAmount.div(receivedQty).toDecimalPlaces(2) : new Prisma.Decimal(0)
+          const lossAmount = lossQty.mul(unitPrice).toDecimalPlaces(2)
+          const inventoryReceived = rows.reduce(
+            (sum, row) => sum.add(row.inventoryQuantity ?? row.quantity),
+            new Prisma.Decimal(0),
+          )
+          const inventoryQuantity = receivedQty.gt(0)
+            ? inventoryReceived.mul(lossQty).div(receivedQty).toDecimalPlaces(6)
+            : lossQty
+          const inventoryUnitCost = inventoryReceived.gt(0)
+            ? receivedAmount.div(inventoryReceived).toDecimalPlaces(6)
+            : null
+          totalLossAmount = totalLossAmount.add(lossAmount)
+          const first = rows[0]
+          return {
+            productId: requested.productId,
+            deliveryOrderItemId: null,
+            orderedQty: receivedQty,
+            receivedQty,
+            lossQty,
+            unitPrice,
+            lossAmount,
+            inventoryQuantity,
+            inventoryUnitSnapshot: first.inventoryUnitSnapshot || first.product.inventoryUnit || first.product.unit,
+            inventoryUnitCostSnapshot: inventoryUnitCost,
+            productCodeSnapshot: first.productCodeSnapshot || first.product.code,
+            productNameSnapshot: first.productNameSnapshot || first.product.name,
+            productSpecSnapshot: first.productSpecSnapshot || first.product.spec,
+            productUnitSnapshot: first.productUnitSnapshot || first.product.unit,
+            productCategorySnapshot: first.productCategorySnapshot || first.product.category,
+          }
+        })
+        if (totalLossAmount.gt(LOSS_AMOUNT_MAX)) throw { statusCode: 400, message: '报损单总金额超过系统上限' }
+
+        const no = await nextLossClaimNo(tx, tenantId, dayjs(now).format('YYYYMM'))
+        const created = await tx.lossClaim.create({
+          data: {
+            tenantId,
+            no,
+            purchaseOrderId: receipt.purchaseOrder.id,
+            storeId: receipt.storeId,
+            supplierId: receipt.supplierId,
+            kind: input.kind,
+            payableBasis: 'GROSS_PENDING_CLAIM',
+            deliveryOrderId: receipt.deliveryOrderId,
+            receiptId: receipt.id,
+            reason: input.reason,
+            isManual: false,
+            totalLossAmount: totalLossAmount.toDecimalPlaces(2),
+            description: input.description,
+            evidenceImages: input.evidenceImages,
+            status: 'PENDING',
+            createdById: userId,
+            items: { create: itemsData },
+          },
+          include: { items: { include: { product: true } } },
+        })
+        await tx.paymentSchedule.update({ where: { receiptId: receipt.id }, data: { status: 'ON_HOLD' } })
+        if (receipt.purchaseOrder.status === 'COMPLETED') {
+          await tx.purchaseOrder.update({ where: { id: receipt.purchaseOrder.id }, data: { status: 'RECEIVED' } })
+        }
+        await tx.opLog.create({
+          data: {
+            tenantId,
+            userId,
+            action: `验收后补报到货异常 ${no} ¥${totalLossAmount.toFixed(2)}；异常实物立即移出可用库存，账期冻结待供应商确认`,
+            target: no,
+            entityType: 'LossClaim',
+            targetId: created.id,
+            metadata: { receiptId: receipt.id, deadline: deadline.toISOString() },
+          },
+        })
+        return created
+      })
+
+      notify({
+        tenantId,
+        event: 'LOSS_PENDING',
+        eventKey: `LOSS:${claim.id}:CREATED`,
+        payload: { lossNo: claim.no, amount: Number(claim.totalLossAmount), orderId: input.purchaseOrderId },
+      })
+      return reply.status(201).send({ ...claim, evidenceImages: resignOssUrls(claim.evidenceImages) })
+    } catch (error: any) {
+      return reply.status(error?.statusCode || 500).send({ code: error?.code, error: error?.message || '补报失败' })
+    }
   })
 
   // ── 店内自有报损（盘点路径）─────────────────────────
@@ -696,10 +890,18 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       const nextAmount = schedule.amount.minus(deduct)
       if (nextAmount.lt(0)) throw { statusCode: 409, message: '仲裁后应付金额异常，请联系财务核对' }
 
+      const otherOpenClaims = await tx.lossClaim.count({
+        where: {
+          receiptId,
+          id: { not: claim.id },
+          status: { in: ['PENDING', 'REJECTED', 'NEGOTIATING'] },
+        },
+      })
+
       await setReceiptSettlementAmountInTransaction(tx, {
         receiptId,
         amount: nextAmount,
-        scheduleStatus: 'PENDING',
+        scheduleStatus: otherOpenClaims > 0 ? 'ON_HOLD' : 'PENDING',
       })
       await tx.lossClaim.update({
         where: { id: claim.id },

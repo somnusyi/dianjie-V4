@@ -37,6 +37,11 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
   const total = Number(po.currentOrderAmount ?? po.originalTotalAmount ?? po.totalAmount ?? 0)
   const originalTotal = Number(po.originalTotalAmount ?? po.totalAmount ?? 0)
   const pendingRevision = po.revisions?.find((revision: any) => revision.status === 'PENDING')
+  const postReceiptClaimOpen = (po.receipts || []).some((receipt: any) =>
+    receipt.confirmedAt
+    && ['CONFIRMED', 'ACCOUNTED'].includes(receipt.status)
+    && new Date(receipt.confirmedAt).getTime() + 48 * 60 * 60 * 1000 >= Date.now()
+  )
 
   async function reviewRevision(action: 'approve' | 'reject') {
     if (!pendingRevision || reviewing) return
@@ -271,7 +276,12 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
             {po.chefAckAt ? '重发验收单' : '📷 发验收单'}
           </button>
         )}
-        {!isPendingConfirm && po.status !== 'CANCELLED' && po.status !== 'SUBMITTED' && po.status !== 'DELIVERING' && (
+        {postReceiptClaimOpen && (
+          <button onClick={() => router.push(`/v2/chef/purchase/${po.id}/report-loss`)} className="flex-1 py-3 bg-white border border-red text-red-fg rounded-cta text-button">
+            补报到货异常
+          </button>
+        )}
+        {!postReceiptClaimOpen && !isPendingConfirm && po.status !== 'CANCELLED' && po.status !== 'SUBMITTED' && po.status !== 'DELIVERING' && (
           <button onClick={() => router.push('/v2/chef/purchase/new')} className="flex-1 py-3 bg-ink text-white rounded-cta text-button">
             再发一单
           </button>

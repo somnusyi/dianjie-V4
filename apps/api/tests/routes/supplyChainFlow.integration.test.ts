@@ -777,6 +777,15 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(requestRevision.statusCode).toBe(201)
     const revisionId = requestRevision.json().id
 
+    const chefOrderList = await app.inject({
+      method: 'GET', url: '/api/orders?pageSize=50', headers: { 'x-test-actor': 'chef' },
+    })
+    expect(chefOrderList.statusCode).toBe(200)
+    const listedPendingOrder = chefOrderList.json().items.find((item: any) => item.id === created.id)
+    expect(listedPendingOrder.revisions).toEqual([
+      expect.objectContaining({ id: revisionId, revisionNo: 1, status: 'PENDING', reason: '实际可发数量调整' }),
+    ])
+
     const supplierSelfApproval = await app.inject({
       method: 'PATCH', url: `/api/orders/${created.id}/revisions/${revisionId}/approve`,
       headers: { 'x-test-actor': 'supplier' }, payload: { note: '供应商不能自批' },
@@ -1300,7 +1309,7 @@ describe('supplier order to receipt flow (integration)', () => {
     expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productId } })).stock)).toBe(4)
     expect(await prisma.supplierStockMovement.count({ where: { tenantId, sourceType: 'LossClaim' } })).toBe(0)
 
-    const lateClaimResponse = await app.inject({
+    const postReceiptClaimResponse = await app.inject({
       method: 'POST', url: '/api/loss-claims', headers: { 'x-test-actor': 'chef' },
       payload: {
         purchaseOrderId: order.id,
@@ -1308,12 +1317,17 @@ describe('supplier order to receipt flow (integration)', () => {
         kind: 'ARRIVAL_DAMAGE',
         reason: '开箱后发现品质异常',
         description: '验收后复核发现 2 斤不可用',
-        items: [{ productId, receivedQty: 4 }],
+        evidenceImages: ['https://example.test/evidence/late-claim.jpg'],
+        items: [{ productId, lossQty: 2 }],
       },
     })
-    expect(lateClaimResponse.statusCode).toBe(409)
-    expect(lateClaimResponse.json()).toMatchObject({ code: 'ARRIVAL_CLAIM_WINDOW_CLOSED' })
-    expect(Number((await prisma.paymentSchedule.findUniqueOrThrow({ where: { receiptId: receipt.id } })).amount)).toBe(55)
+    expect(postReceiptClaimResponse.statusCode).toBe(201)
+    expect(postReceiptClaimResponse.json()).toMatchObject({
+      status: 'PENDING', payableBasis: 'GROSS_PENDING_CLAIM', receiptId: receipt.id,
+    })
+    const postReceiptClaimSchedule = await prisma.paymentSchedule.findUniqueOrThrow({ where: { receiptId: receipt.id } })
+    expect(Number(postReceiptClaimSchedule.amount)).toBe(55)
+    expect(postReceiptClaimSchedule.status).toBe('ON_HOLD')
     const adjustedAudit = await auditSupplierSupplyChain({ tenantId, supplierId, days: 30 })
     expect(adjustedAudit.issues.filter(issue => [
       'PAYABLE_RECEIPT_AMOUNT_MISMATCH',

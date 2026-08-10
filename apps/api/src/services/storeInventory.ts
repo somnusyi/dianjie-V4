@@ -177,7 +177,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
   const openingDate = new Date(`${openingDateText}T00:00:00.000Z`)
   const monthStart = dayjs(asOfDate || undefined).startOf('month').toDate()
   const validReceiptStatuses = ['CONFIRMED', 'ACCOUNTED'] as const
-  const [receiptItems, consumptions, manualLossItems] = await Promise.all([
+  const [receiptItems, consumptions, manualLossItems, postReceiptLossItems] = await Promise.all([
     prisma.receiptItem.findMany({
       where: {
         receipt: {
@@ -201,6 +201,16 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
         lossClaim: {
           tenantId, storeId, isManual: true,
           status: { in: ['APPROVED', 'AUTO_APPROVED', 'RESOLVED'] },
+          createdAt: { gte: openingDate, ...(asOfEnd ? { lte: asOfEnd } : {}) },
+        },
+      },
+      select: { productId: true, lossQty: true, inventoryQuantity: true, lossClaim: { select: { createdAt: true } } },
+    }),
+    prisma.lossClaimItem.findMany({
+      where: {
+        lossClaim: {
+          tenantId, storeId, isManual: false, payableBasis: 'GROSS_PENDING_CLAIM',
+          status: { in: ['PENDING', 'APPROVED', 'AUTO_APPROVED', 'REJECTED', 'NEGOTIATING', 'RESOLVED'] },
           createdAt: { gte: openingDate, ...(asOfEnd ? { lte: asOfEnd } : {}) },
         },
       },
@@ -250,6 +260,13 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
       monthBucket: item.date >= monthStart,
     })),
     ...manualLossItems.map(item => ({
+      occurredAt: item.lossClaim.createdAt,
+      productId: item.productId,
+      direction: 'OUT' as const,
+      quantity: Number(item.inventoryQuantity ?? item.lossQty),
+      monthBucket: item.lossClaim.createdAt >= monthStart,
+    })),
+    ...postReceiptLossItems.map(item => ({
       occurredAt: item.lossClaim.createdAt,
       productId: item.productId,
       direction: 'OUT' as const,

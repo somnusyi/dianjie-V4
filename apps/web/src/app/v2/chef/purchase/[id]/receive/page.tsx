@@ -235,7 +235,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
       <Section title="收货说明">
         <div className="bg-white rounded-card border border-border p-3">
           <p className="text-caption text-amber-fg mb-2">
-            请在提交前核对数量、破损、品质和现场证据。确认收货后不再接受向供应商补报差异。
+            请在提交前核对数量、破损、品质和现场证据。拆包后才发现的隐蔽异常，可在确认收货后 48 小时内补报。
           </p>
           <p className="text-caption text-gray2">
             实收金额：<span className="font-num text-h2 text-ink">¥{total.toFixed(2)}</span>

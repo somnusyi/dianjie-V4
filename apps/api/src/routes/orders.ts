@@ -332,6 +332,16 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           supplier: { select: { id: true, name: true } },
           createdBy: { select: { id: true, name: true, role: true } },
           items: { where: { isActive: true }, include: { product: { select: { name: true, unit: true, spec: true, code: true } } } },
+          revisions: {
+            where: { status: 'PENDING' },
+            orderBy: { revisionNo: 'desc' },
+            take: 1,
+            select: {
+              id: true, revisionNo: true, status: true, reason: true,
+              createdAt: true,
+              requestedBy: { select: { id: true, name: true, role: true } },
+            },
+          },
           lossClaims: { select: { id: true, status: true, totalLossAmount: true } },
           deliveries: {
             where: { status: { not: 'CANCELLED' } },
@@ -386,8 +396,11 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             items: { include: { product: true } },
           },
         },
-        receipt: true,
-        receipts: { orderBy: { deliveryDate: 'asc' } },
+        receipt: { include: { items: { include: { product: true } } } },
+        receipts: {
+          orderBy: { deliveryDate: 'asc' },
+          include: { items: { include: { product: true } } },
+        },
       },
     })
     if (!order) throw { statusCode: 404, message: '采购订单不存在' }

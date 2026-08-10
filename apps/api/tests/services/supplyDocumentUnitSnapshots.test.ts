@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   copyFrozenSupplyDocumentFourUnits,
   freezeProductFourUnitsForSupplyDocument,
   hasCompleteFrozenSupplyDocumentFourUnits,
 } from '../../src/services/supplyDocumentUnitSnapshots'
 import { resolveReceiptInventoryBasis } from '../../src/services/receiptInventoryUnits'
+import { ensureReceiptInventoryUnitSnapshots } from '../../src/services/receiptInventoryUnits'
 
 const frozen = {
   purchaseUnitSnapshot: '箱',
@@ -122,5 +123,38 @@ describe('supply document four-unit snapshots', () => {
         unitConversionStatus: 'VERIFIED',
       },
     })).toBeNull()
+  })
+
+  it('does not block receipt confirmation when one product unit is still pending', async () => {
+    const update = vi.fn()
+    const tx = {
+      receiptItem: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'pending-line',
+            ...frozen,
+            unitConversionStatusSnapshot: 'PENDING',
+            quantity: '2',
+            unitPrice: '30',
+            amount: '60',
+            product: {
+              name: '待核验商品',
+              unit: '箱',
+              inventoryUnit: 'g',
+              inventoryUnitsPerPurchaseUnit: null,
+              unitConversionStatus: 'PENDING',
+            },
+          },
+        ]),
+        update,
+      },
+    }
+
+    await expect(ensureReceiptInventoryUnitSnapshots(tx, 'receipt-1')).resolves.toEqual({
+      totalCount: 1,
+      normalizedCount: 0,
+      pendingCount: 1,
+    })
+    expect(update).not.toHaveBeenCalled()
   })
 })

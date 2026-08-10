@@ -242,13 +242,18 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
     slots.set(item.productId, current)
   }
 
+  // 已确认收货但单位尚未核验的行是真实业务单据，不应阻塞收货；同时也不能
+  // 把“箱/件”等采购数量误当作 g/kg 等库存数量。先从预计库存滚动中排除，
+  // 并计入待核验数量，主数据补齐后由补偿任务回填库存快照。
+  normalizationPendingCount += receiptItems.filter(item => item.inventoryQuantity == null).length
+
   const events: EstimatedEvent[] = [
-    ...receiptItems.map(item => ({
+    ...receiptItems.filter(item => item.inventoryQuantity != null).map(item => ({
       // Receipt.deliveryDate 与 BOM 消耗都是 DATE；同日先入库、后按闭店销量扣理论消耗。
       occurredAt: item.receipt.deliveryDate,
       productId: item.productId,
       direction: 'IN' as const,
-      quantity: Number(item.inventoryQuantity ?? item.quantity),
+      quantity: Number(item.inventoryQuantity),
       unitCost: Number(item.inventoryUnitCostSnapshot ?? item.unitPrice),
       monthBucket: item.receipt.deliveryDate >= monthStart,
     })),

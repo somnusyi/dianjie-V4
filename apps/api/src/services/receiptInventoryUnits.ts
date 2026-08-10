@@ -68,13 +68,15 @@ export async function ensureReceiptInventoryUnitSnapshots(tx: any, receiptId: st
       },
     },
   })
+  let normalizedCount = 0
+  let pendingCount = 0
   for (const item of items) {
     const basis = resolveReceiptInventoryBasis(item)
     if (!basis) {
-      throw Object.assign(
-        new Error(`原材料“${item.product.name}”尚未核验采购单位与库存单位换算，不能确认入库`),
-        { statusCode: 409 },
-      )
+      // 收货确认是门店现场的事实，不能因为后台主数据尚未核验而整单回滚。
+      // 此行暂不参与库存数量和移动平均成本，待单位核验后由补偿任务回填。
+      pendingCount += 1
+      continue
     }
     const legacyFallbackUnitCost = purchasePriceToInventoryUnitCost({
       purchaseUnitPrice: Number(item.unitPrice),
@@ -86,7 +88,8 @@ export async function ensureReceiptInventoryUnitSnapshots(tx: any, receiptId: st
       ? lineAmount / Number(inventoryQuantity)
       : legacyFallbackUnitCost
     if (unitCost == null) {
-      throw Object.assign(new Error(`原材料“${item.product.name}”库存单位成本无法计算`), { statusCode: 409 })
+      pendingCount += 1
+      continue
     }
     await tx.receiptItem.update({
       where: { id: item.id },
@@ -97,6 +100,7 @@ export async function ensureReceiptInventoryUnitSnapshots(tx: any, receiptId: st
         inventoryUnitCostSnapshot: unitCost,
       },
     })
+    normalizedCount += 1
   }
-  return items.length
+  return { totalCount: items.length, normalizedCount, pendingCount }
 }

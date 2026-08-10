@@ -24,6 +24,9 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
   const [po, setPo] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
   const [reviewing, setReviewing] = useState(false)
+  const [reviewAction, setReviewAction] = useState<'approve' | 'reject' | null>(null)
+  const [reviewNote, setReviewNote] = useState('')
+  const [reviewError, setReviewError] = useState<string | null>(null)
   // 图片放大: target="_blank" 在 WebView 不工作, 用全屏 lightbox
   const [zoomImg, setZoomImg] = useState<string | null>(null)
   useEffect(() => {
@@ -43,22 +46,32 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
     && new Date(receipt.confirmedAt).getTime() + 48 * 60 * 60 * 1000 >= Date.now()
   )
 
-  async function reviewRevision(action: 'approve' | 'reject') {
+  function openRevisionReview(action: 'approve' | 'reject') {
     if (!pendingRevision || reviewing) return
-    let note = ''
-    if (action === 'reject') {
-      note = window.prompt('请填写驳回原因（供应商可见）:')?.trim() || ''
-      if (!note) return
-    } else if (!confirm(`确认第 ${pendingRevision.revisionNo} 次改单？确认后供应商才能接单。`)) return
+    setReviewAction(action)
+    setReviewNote('')
+    setReviewError(null)
+  }
+
+  async function submitRevisionReview() {
+    if (!pendingRevision || !reviewAction || reviewing) return
+    const note = reviewNote.trim()
+    if (reviewAction === 'reject' && !note) {
+      setReviewError('请填写驳回原因，供应商将看到该说明')
+      return
+    }
+    setReviewError(null)
     setReviewing(true)
     try {
-      await apiFetch(`/api/orders/${po.id}/revisions/${pendingRevision.id}/${action}`, {
+      await apiFetch(`/api/orders/${po.id}/revisions/${pendingRevision.id}/${reviewAction}`, {
         method: 'PATCH', body: JSON.stringify(note ? { note } : {}),
       })
       const refreshed = await apiFetch(`/api/orders/${params.id}`)
       setPo(refreshed)
+      setReviewAction(null)
+      setReviewNote('')
     } catch (e: any) {
-      setError(e.message || '处理失败')
+      setReviewError(e.message || '处理失败，请稍后重试')
     } finally {
       setReviewing(false)
     }
@@ -105,11 +118,45 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
               申请人 {pendingRevision.requestedBy?.name || '供应商'} · 确认后供应商才能接单 · 价格不可修改
             </div>
             <div className="grid grid-cols-2 gap-2 mt-3">
-              <button disabled={reviewing} onClick={() => reviewRevision('reject')}
+              <button type="button" disabled={reviewing} onClick={() => openRevisionReview('reject')}
                 className="py-2.5 bg-white border border-red text-red-fg rounded-cta text-button disabled:opacity-50">驳回</button>
-              <button disabled={reviewing} onClick={() => reviewRevision('approve')}
+              <button type="button" disabled={reviewing} onClick={() => openRevisionReview('approve')}
                 className="py-2.5 bg-ink text-white rounded-cta text-button disabled:opacity-50">{reviewing ? '处理中…' : '确认改单'}</button>
             </div>
+            {reviewAction && (
+              <div className="mt-3 rounded-cta border border-border bg-white p-3">
+                <p className="text-button">
+                  {reviewAction === 'approve'
+                    ? `确定接受第 ${pendingRevision.revisionNo} 次改单吗？确认后供应商才能接单。`
+                    : `确定驳回第 ${pendingRevision.revisionNo} 次改单吗？`}
+                </p>
+                {reviewAction === 'reject' && (
+                  <textarea
+                    value={reviewNote}
+                    onChange={event => setReviewNote(event.target.value)}
+                    placeholder="填写驳回原因（供应商可见）"
+                    maxLength={200}
+                    rows={3}
+                    className="mt-2 w-full rounded-cta border border-border bg-bg px-3 py-2 text-body outline-none focus:border-ink"
+                  />
+                )}
+                {reviewError && <p className="mt-2 text-caption text-red-fg">{reviewError}</p>}
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={reviewing}
+                    onClick={() => { setReviewAction(null); setReviewError(null) }}
+                    className="py-2.5 rounded-cta border border-border bg-white text-button disabled:opacity-50"
+                  >取消</button>
+                  <button
+                    type="button"
+                    disabled={reviewing}
+                    onClick={submitRevisionReview}
+                    className="py-2.5 rounded-cta bg-ink text-white text-button disabled:opacity-50"
+                  >{reviewing ? '处理中…' : reviewAction === 'approve' ? '确定确认' : '确定驳回'}</button>
+                </div>
+              </div>
+            )}
           </div>
         </Section>
       )}

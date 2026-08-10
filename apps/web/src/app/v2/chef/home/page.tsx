@@ -41,13 +41,12 @@ export default function ChefHomePage() {
   const { greeting, today } = greetingFor(data.user?.name)
   const inProgress = orders || []
 
-  // 真待办：待确认改单 + 低库存(缺货) + 临期 + 待验收
+  // 真待办：待确认改单 + 低库存(缺货) + 待验收。临期规则后续另行设计，当前不提醒。
   const pendingRevisionOrders = inProgress.filter(o => o.revisions?.some((revision: any) => revision.status === 'PENDING'))
   const pendingRevisions = pendingRevisionOrders.slice(0, 3)
   const lowStock = (inv || []).filter(p => p.isLowStock).slice(0, 2)
-  const expiring = (inv || []).filter(p => p.isExpiringSoon && !p.isExpired).slice(0, 2)
   const toReceive = inProgress.filter(o => o.status === 'PENDING_CONFIRM').slice(0, 2)
-  const todoCount = pendingRevisionOrders.length + lowStock.length + expiring.length + toReceive.length
+  const todoCount = pendingRevisionOrders.length + lowStock.length + toReceive.length
   return (
     <div className="min-h-screen bg-bg pb-20">
       <header className="px-4 pt-4 pb-2 flex items-center justify-between">
@@ -74,7 +73,7 @@ export default function ChefHomePage() {
       <Section title="待办" right={todoCount > 0 ? `${todoCount} 项加急` : '无加急'} rightTone={todoCount > 0 ? 'red' : undefined}>
         <div className="space-y-2">
           {todoCount === 0 && (
-            <p className="text-caption text-gray3 text-center py-4">今日无加急 · 无待确认改单 + 库存健康 + 无临期 + 无待验收</p>
+            <p className="text-caption text-gray3 text-center py-4">今日无加急 · 无待确认改单 + 库存健康 + 无待验收</p>
           )}
           {pendingRevisions.map(o => {
             const revision = o.revisions.find((item: any) => item.status === 'PENDING')
@@ -97,16 +96,6 @@ export default function ChefHomePage() {
               title={`${p.name} · 仅剩 ${Number(p.stock)} ${p.unit}`}
               sub={`安全库存 ${Number(p.minStock)} ${p.unit} · 立即补货`}
               primary={{ label: '去下单', onClick: () => location.href = '/v2/chef/purchase/new' }}
-            />
-          ))}
-          {expiring.map(p => (
-            <TodoCard
-              key={`exp-${p.id}`}
-              tone="today"
-              chips={[{ label: '临期', tone: 'orange' }, { label: `${p.daysToExpiry ?? '?'} 天内到期`, tone: 'gray' }]}
-              title={`${p.name} · ${Number(p.stock)} ${p.unit}`}
-              sub="优先用于今晚特价 / 报损"
-              primary={{ label: '报损', onClick: () => location.href = '/v2/chef/check/new' }}
             />
           ))}
           {toReceive.map(o => (

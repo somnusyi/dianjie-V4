@@ -75,7 +75,6 @@ export default function ChefInventoryPage() {
   }, [])
 
   const lowStock = (inv || []).filter(p => p.isLowStock)
-  const expiring = (inv || []).filter(p => p.isExpiringSoon && !p.isExpired)
   const totalValue = (inv || []).reduce((s, p) => s + Number(p.inventoryValue || 0), 0)
   const totalSku = (inv || []).length
   const openingDate = inv?.[0]?.openingDate || snapshot?.summary.openingDate || null
@@ -145,7 +144,6 @@ export default function ChefInventoryPage() {
           meta={`${openingDate ? `${openingDate.slice(5).replace('-', '/')} 盘点后滚动` : '等待盘点基准'} · SKU ${totalSku} 项`}
           stats={[
             { label: '紧急补货', value: `${lowStock.length} 项`, tone: lowStock.length > 0 ? 'red' : 'default' },
-            { label: '临期预警', value: `${expiring.length} 项`, tone: expiring.length > 0 ? 'orange' : 'default' },
             { label: '在途采购', value: `¥${Math.round(inProgressAmount / 1000)}K`, tone: 'default' },
           ]}
         />
@@ -179,25 +177,6 @@ export default function ChefInventoryPage() {
                   <p className="text-caption text-gray3">安全库存 {Number(p.minStock)} {p.unit}</p>
                 </div>
                 <a href="/v2/chef/purchase/new" className="px-3 py-1.5 bg-ink text-white rounded-cta text-button shrink-0">立即下单</a>
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
-
-      {inv && expiring.length > 0 && (
-        <Section title="临期预警" right={`7 日内到期 ${expiring.length} 项`} rightTone="orange">
-          <ul className="space-y-2">
-            {expiring.map(p => (
-              <li key={p.id} className="relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full before:bg-orange flex items-center justify-between gap-3">
-                <div className="flex-1 min-w-0">
-                  <div className="text-h2">{p.name} · {Number(p.stock)} {p.unit}</div>
-                  <p className="text-caption text-gray3">{p.daysToExpiry != null ? `${p.daysToExpiry} 天后到期` : '到期日待录入'}</p>
-                </div>
-                <div className="flex gap-1 shrink-0">
-                  {/* "优先用"标记功能待开发, 暂只链到报损 */}
-                  <a href="/v2/chef/check/new" className="px-3 py-1.5 border border-red text-red rounded-cta text-button">报损</a>
-                </div>
               </li>
             ))}
           </ul>

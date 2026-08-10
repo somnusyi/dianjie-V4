@@ -390,7 +390,17 @@ sleep 2  # 给 pm2 拉起新进程的最小窗口, 验证步骤自己会 retry
 # ── 7. 验证 (静态产物 + 服务健康 + web E2E) ─────────────
 echo ""
 echo "==> [7/8] 部署后验证"
-LOCAL_API_MD5=$(md5 -q apps/api/dist/index.js 2>/dev/null || md5sum apps/api/dist/index.js | awk '{print $1}')
+if command -v md5 >/dev/null 2>&1; then
+  LOCAL_API_MD5=$(md5 -q apps/api/dist/index.js)
+elif [ -x /sbin/md5 ]; then
+  # macOS places md5 in /sbin, which may be absent from a CI/deploy PATH.
+  LOCAL_API_MD5=$(/sbin/md5 -q apps/api/dist/index.js)
+elif command -v md5sum >/dev/null 2>&1; then
+  LOCAL_API_MD5=$(md5sum apps/api/dist/index.js | awk '{print $1}')
+else
+  echo "❌ 本机缺少 md5 或 md5sum，无法校验上传产物"
+  exit 1
+fi
 
 # 静态产物校验立刻可做 (md5/文件存在), 不依赖进程起好
 ssh_run "

@@ -39,6 +39,23 @@ function inject(actor: keyof typeof ACTORS, method: 'GET' | 'POST', url: string,
   })
 }
 
+async function waitForFeedback(
+  id: string,
+  predicate: (feedback: any) => boolean,
+  timeoutMs = 3_000,
+) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const feedback = await prisma.feedback.findUnique({
+      where: { id },
+      include: { messages: { orderBy: { createdAt: 'asc' } } },
+    })
+    if (feedback && predicate(feedback)) return feedback
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  throw new Error(`Timed out waiting for feedback ${id}`)
+}
+
 describe('feedback system flow (integration)', () => {
   beforeAll(async () => {
     oldKey = process.env.QWEN_API_KEY
@@ -143,31 +160,35 @@ describe('feedback system flow (integration)', () => {
     expect(created.statusCode).toBe(201)
     const { id, status, reply } = created.json()
     expect(status).toBe('CLARIFYING')
-    expect(reply).toContain('哪个页面')
+    expect(reply).toContain('正在后台整理')
+    expect(created.json().processing).toBe(true)
 
-    let fb = await prisma.feedback.findUnique({ where: { id }, include: { messages: true } })
+    let fb = await waitForFeedback(id, (item) => item.messages.some((m: any) => m.role === 'assistant'))
     expect(fb!.tenantId).toBe(tenantA)
     expect(fb!.reporterId).toBe(reporterId)
     expect((fb!.context as any).path).toBe('/v2/chef/purchase')
     expect(fb!.messages).toHaveLength(2) // user + assistant
+    expect(fb!.messages.find((m: any) => m.role === 'assistant')?.content).toContain('哪个页面')
 
     // 2. 用户回复 → AI 分诊 IMPROVEMENT
     qwenQueue.push('明白了，验收图片需要能放大看细节。已为你整理好方案提交管理员审批。\n```json\n{"triage":{"category":"IMPROVEMENT","title":"验收图片支持放大查看","summary":"验收照片无法放大,细节看不清,希望点击可全屏放大","sufficient":true}}\n```')
     const replied = await inject('reporter', 'POST', `/api/feedback/${id}/messages`, {
       content: '在验收页面，点图片没反应，不能放大',
     })
-    expect(replied.statusCode).toBe(200)
+    expect(replied.statusCode).toBe(202)
     const body = replied.json()
-    expect(body.status).toBe('AWAITING_APPROVAL')
-    expect(body.category).toBe('IMPROVEMENT')
-    expect(body.title).toBe('验收图片支持放大查看')
-    expect(body.reply).not.toContain('```')
-    expect(body.reply).toContain('提交管理员审批')
+    expect(body.status).toBe('CLARIFYING')
+    expect(body.processing).toBe(true)
+    expect(body.reply).toContain('正在后台整理')
 
-    fb = await prisma.feedback.findUnique({ where: { id }, include: { messages: true } })
+    fb = await waitForFeedback(id, (item) => item.status === 'AWAITING_APPROVAL')
     expect(fb!.status).toBe('AWAITING_APPROVAL')
     expect(fb!.category).toBe('IMPROVEMENT')
+    expect(fb!.title).toBe('验收图片支持放大查看')
     expect(fb!.summary).toContain('放大')
+    const latestAssistant = [...fb!.messages].reverse().find((m: any) => m.role === 'assistant')
+    expect(latestAssistant?.content).not.toContain('```')
+    expect(latestAssistant?.content).toContain('提交管理员审批')
     // system 进度提示消息已写入
     expect(fb!.messages.some((m) => m.role === 'system' && m.content.includes('提交给管理员审批'))).toBe(true)
 
@@ -421,8 +442,8 @@ describe('feedback system flow (integration)', () => {
     })
     expect(created.statusCode).toBe(201)
     const { id, status } = created.json()
-    expect(status).toBe('CLOSED')
-    const fb = await prisma.feedback.findUnique({ where: { id } })
+    expect(status).toBe('CLARIFYING')
+    const fb = await waitForFeedback(id, (item) => item.status === 'CLOSED')
     expect(fb!.category).toBe('QUESTION')
   })
 
@@ -432,6 +453,7 @@ describe('feedback system flow (integration)', () => {
       content: '越权测试反馈', context: { path: '/v2/manager/home' },
     })
     const { id } = created.json()
+    await waitForFeedback(id, (item) => item.messages.some((m: any) => m.role === 'assistant'))
 
     // B 租户超管: tenant 隔离 → 404
     const crossTenant = await inject('adminB', 'GET', `/api/feedback/${id}`)
@@ -463,14 +485,16 @@ describe('feedback system flow (integration)', () => {
   })
 
   it('Qwen 故障兜底: 反馈仍落库, 返回兜底文案', async () => {
-    qwenQueue.length = 0 // 队列耗尽 → mock fetch 抛错 → 重试后兜底
+    qwenQueue.length = 0 // 队列耗尽 → mock fetch 抛错 → 单次尝试后兜底
     const created = await inject('reporter', 'POST', '/api/feedback', {
       content: '网络故障兜底测试', context: { path: '/v2/chef/home' },
     })
     expect(created.statusCode).toBe(201)
     const { id, reply } = created.json()
-    expect(reply).toContain('暂时繁忙')
-    const fb = await prisma.feedback.findUnique({ where: { id } })
+    expect(reply).toContain('正在后台整理')
+    const fb = await waitForFeedback(id, (item) => item.messages.some(
+      (m: any) => m.role === 'assistant' && m.content.includes('暂时繁忙'),
+    ))
     expect(fb!.status).toBe('CLARIFYING')
   })
 })

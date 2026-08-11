@@ -1,6 +1,6 @@
 /**
  * 反馈对话页: 消息气泡 (用户右/AI 左) + 底部输入栏 + 状态 badge
- * 发送后同步拿到 AI 回复; 每 5s 轮询刷新 (拿 system 进度消息)
+ * 发送后立即落库; 每 5s 轮询刷新后台 AI 回复和 system 进度消息
  */
 'use client'
 import { useEffect, useRef, useState } from 'react'
@@ -72,6 +72,9 @@ export default function FeedbackChatPage() {
 
   const badge = fb ? statusBadge(fb.status) : null
   const closed = fb ? ['REJECTED', 'RESOLVED'].includes(fb.status) : false
+  const aiProcessing = fb?.status === 'CLARIFYING'
+    && fb.messages.length > 0
+    && fb.messages[fb.messages.length - 1]?.role === 'user'
 
   return (
     <div className="min-h-screen bg-bg flex flex-col">
@@ -109,6 +112,14 @@ export default function FeedbackChatPage() {
             </div>
           )
         })}
+        {aiProcessing && (
+          <div className="flex justify-start">
+            <div className="max-w-[80%] px-3 py-2 rounded-card text-body bg-white border border-border text-gray2">
+              <div className="text-micro text-gray3 mb-0.5">AI 助手</div>
+              正在整理，请稍候…
+            </div>
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
 

@@ -1,8 +1,8 @@
 /**
  * 反馈系统 P0: 用户反馈 → AI (Qwen) 澄清分诊 → 管理员审批
  *
- * - POST   /api/feedback              创建反馈 (上下文快照+附件), 自动生成 AI 首轮澄清回复
- * - POST   /api/feedback/:id/messages 用户发言 → 同步调 Qwen → 存 AI 回复 → 返回
+ * - POST   /api/feedback              创建反馈后立即返回, 后台生成 AI 首轮澄清回复
+ * - POST   /api/feedback/:id/messages 用户发言落库后立即返回, 后台生成 AI 回复
  * - GET    /api/feedback/mine         我提的列表
  * - GET    /api/feedback/admin/inbox  待批列表 (仅 SUPER_ADMIN)
  * - GET    /api/feedback/:id          详情含 messages (本人或 SUPER_ADMIN)
@@ -165,7 +165,12 @@ async function askAssistant(
     { role: 'system' as const, content: buildFeedbackSystemPrompt({ ...ctx, attachmentCount: imageParts.length || undefined }) },
     ...historyMsgs,
   ]
-  const raw = await qwenChat(messages)
+  // Feedback is an interactive path. One bounded attempt is enough; the user
+  // has already received an acceptance response and must never wait behind AI.
+  const raw = await qwenChat(messages, {
+    timeoutMs: Number(process.env.FEEDBACK_AI_TIMEOUT_MS) || 75_000,
+    maxAttempts: 1,
+  })
   const { clean, triage } = parseTriageBlock(raw)
   // 回复只有标记块 / 配置缺失时给一句人话兜底
   const display = clean || (raw === QWEN_NOT_CONFIGURED ? QWEN_NOT_CONFIGURED : '收到，你的反馈已记录。')
@@ -173,6 +178,59 @@ async function askAssistant(
     data: { tenantId, feedbackId, role: 'assistant', content: display },
   })
   return { assistantMsg, triage }
+}
+
+const assistantJobs = new Map<string, Promise<void>>()
+
+async function processAssistantJob(actor: Actor, feedbackId: string) {
+  const feedback = await prisma.feedback.findFirst({
+    where: { id: feedbackId, tenantId: actor.tenantId },
+  })
+  if (!feedback || ['REJECTED', 'RESOLVED'].includes(feedback.status)) return
+
+  const history = await prisma.feedbackMessage.findMany({
+    where: { feedbackId },
+    orderBy: { createdAt: 'asc' },
+    take: 40,
+    select: { role: true, content: true },
+  })
+  const ctx = { ...(feedback.context as any as FeedbackCtx), role: actor.role }
+  const { triage } = await askAssistant(actor.tenantId, feedbackId, ctx, history, feedback.attachments)
+
+  const latest = await prisma.feedback.findUnique({
+    where: { id: feedbackId },
+    select: { status: true, reporterId: true },
+  })
+  if (triage && latest?.status === 'CLARIFYING') {
+    await applyTriage(actor, { id: feedbackId, reporterId: latest.reporterId }, triage, ctx)
+  }
+}
+
+/**
+ * Serialize AI work per feedback without holding the HTTP request open.
+ * The database write is the durable acceptance point; if AI is unavailable,
+ * users still see the feedback and can continue the conversation.
+ */
+function enqueueAssistant(actor: Actor, feedbackId: string) {
+  const previous = assistantJobs.get(feedbackId) ?? Promise.resolve()
+  const job = previous
+    .catch(() => undefined)
+    .then(() => processAssistantJob(actor, feedbackId))
+    .catch(async (error) => {
+      console.error('[feedback] 后台 AI 整理失败:', error)
+      await prisma.feedbackMessage.create({
+        data: {
+          tenantId: actor.tenantId,
+          feedbackId,
+          role: 'assistant',
+          content: '你的反馈已记录。AI 整理暂时失败，管理员仍可直接查看和处理，无需重复提交。',
+        },
+      }).catch(() => undefined)
+    })
+  assistantJobs.set(feedbackId, job)
+  void job.finally(() => {
+    if (assistantJobs.get(feedbackId) === job) assistantJobs.delete(feedbackId)
+  })
 }
 
 export const feedbackRoutes: FastifyPluginAsync = async (app) => {
@@ -201,23 +259,18 @@ export const feedbackRoutes: FastifyPluginAsync = async (app) => {
       },
     })
 
-    const { assistantMsg, triage } = await askAssistant(
-      actor.tenantId, feedback.id, ctx,
-      [{ role: 'user', content: d.content }],
-      d.attachments,
-    )
-    let current = feedback
-    if (triage) current = await applyTriage(actor, feedback, triage, ctx)
+    setImmediate(() => enqueueAssistant(actor, feedback.id))
 
     return reply.status(201).send({
       id: feedback.id,
-      status: current.status,
-      category: current.category,
-      reply: assistantMsg.content,
+      status: feedback.status,
+      category: feedback.category,
+      reply: '反馈已收到，AI 助手正在后台整理。',
+      processing: true,
     })
   })
 
-  // ── 用户发言 → 同步 AI 回复 ──────────────────────────
+  // ── 用户发言落库 → 后台 AI 回复 ──────────────────────
   app.post('/:id/messages', {
     ...auth(app),
     config: { rateLimit: { max: 30, timeWindow: '5 minutes' } },
@@ -244,25 +297,14 @@ export const feedbackRoutes: FastifyPluginAsync = async (app) => {
       feedback.status = 'CLARIFYING'
     }
 
-    const history = await prisma.feedbackMessage.findMany({
-      where: { feedbackId: feedback.id },
-      orderBy: { createdAt: 'asc' },
-      take: 40,
-      select: { role: true, content: true },
+    setImmediate(() => enqueueAssistant(actor, feedback.id))
+    return reply.status(202).send({
+      reply: '补充内容已收到，AI 助手正在后台整理。',
+      status: feedback.status,
+      category: feedback.category,
+      title: feedback.title,
+      processing: true,
     })
-    const ctx = { ...(feedback.context as any as FeedbackCtx), role: actor.role }
-    const { assistantMsg, triage } = await askAssistant(actor.tenantId, feedback.id, ctx, history, feedback.attachments)
-
-    let current = feedback
-    if (triage && feedback.status === 'CLARIFYING') {
-      current = await applyTriage(actor, feedback, triage, ctx)
-    }
-    return {
-      reply: assistantMsg.content,
-      status: current.status,
-      category: current.category,
-      title: current.title,
-    }
   })
 
   // ── 我提的列表 ───────────────────────────────────────

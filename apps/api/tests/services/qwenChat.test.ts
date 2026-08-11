@@ -56,6 +56,17 @@ describe('qwenChat (mock fetch)', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
+  it('延迟敏感调用可限制为单次尝试', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 502 } as any)
+    const out = await qwenChat([{ role: 'user', content: 'x' }], {
+      apiKey: KEY,
+      fetchImpl,
+      maxAttempts: 1,
+    })
+    expect(out).toBe(QWEN_BUSY_FALLBACK)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
   it('4xx 不重试直接兜底', async () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 401 } as any)
     const out = await qwenChat([{ role: 'user', content: 'x' }], { apiKey: KEY, fetchImpl })

@@ -2,7 +2,7 @@
  * Qwen (OpenAI 兼容协议) 反馈 AI 对话服务
  *
  * - 直接 fetch `${QWEN_BASE_URL}/chat/completions`, model = QWEN_MODEL
- * - 30s AbortController 超时, 失败重试 1 次, 再失败返回兜底文案
+ * - 可配置 AbortController 超时和尝试次数, 全部失败后返回兜底文案
  * - QWEN_API_KEY 缺失 → 优雅降级 (返回明确文案, 不抛错, 反馈仍落库)
  * - ⚠ 严禁把 key 写进代码 / 测试 / 文档, 只从 env 读
  */
@@ -33,6 +33,8 @@ export interface QwenChatOptions {
   baseUrl?: string
   model?: string
   timeoutMs?: number
+  /** Maximum attempts for latency-sensitive callers. Defaults to the legacy 2 attempts. */
+  maxAttempts?: number
 }
 
 /**
@@ -47,10 +49,11 @@ export async function qwenChat(messages: QwenChatMessage[], opts: QwenChatOption
   const baseUrl = (opts.baseUrl ?? process.env.QWEN_BASE_URL) || DEFAULT_BASE_URL
   const model = (opts.model ?? process.env.QWEN_MODEL) || DEFAULT_MODEL
   const timeoutMs = opts.timeoutMs ?? TIMEOUT_MS
+  const maxAttempts = Math.max(1, Math.min(2, Math.trunc(opts.maxAttempts ?? 2)))
   const fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis)
 
-  // 失败后重试 1 次, 共 2 次尝试
-  for (let attempt = 0; attempt < 2; attempt++) {
+  // 默认兼容旧行为: 失败后重试 1 次; 延迟敏感调用可设为单次尝试
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     try {

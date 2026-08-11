@@ -457,7 +457,7 @@ function sourceConversionFactorInInventoryUnit(conversionText: string | null, in
  * Keep the parser intentionally narrow.  Ambiguous or non-mass patterns must
  * remain blocked instead of being guessed.
  */
-function sourceSpecMassFactor(sourceSpec: string | null, sourceUnit: string, inventoryUnit: string) {
+export function sourceSpecMassFactor(sourceSpec: string | null, sourceUnit: string, inventoryUnit: string) {
   const target = normalizeWarehouseUnit(inventoryUnit)
   const source = normalizeWarehouseUnit(sourceUnit)
   const text = String(sourceSpec || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase()

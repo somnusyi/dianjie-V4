@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { Prisma, prisma } from '@dianjie/db'
 import { resolveProductFourUnits, type ProductInventoryUnitLike } from './inventoryUnits'
 import { resolveTenantWarehouseId } from './defaultWarehouse'
+import { sourceSpecMassFactor } from './warehouseInventoryImport'
 
 const ZERO = new Prisma.Decimal(0)
 const QTY_DP = 6
@@ -1356,6 +1357,7 @@ type DailyPackageInboundLine = {
   externalCode: string
   externalName: string
   sourceUnit: string
+  sourceSpec?: string | null
   quantity: number
   amount: number
   suppliers?: string[]
@@ -1366,6 +1368,7 @@ type DailyPackageOutboundLine = {
   externalName: string
   sourceUnit: string
   baseUnit: string
+  sourceSpec?: string | null
   quantity: number
   baseQuantity: number
   costAmount: number
@@ -1522,10 +1525,14 @@ export async function recordWarehouseDailyPackageLedger(input: {
       const purchaseFactor = item?.conversionFactor || product.inventoryUnitsPerPurchaseUnit
       let conversionFactor = new Prisma.Decimal(1)
       if (normalizedLedgerUnit(line.sourceUnit) !== normalizedLedgerUnit(inventoryUnit)) {
-        if (normalizedLedgerUnit(line.sourceUnit) !== normalizedLedgerUnit(purchaseUnit) || !purchaseFactor) {
+        const specificationFactor = sourceSpecMassFactor(line.sourceSpec || null, line.sourceUnit, inventoryUnit)
+        if (specificationFactor != null) {
+          conversionFactor = new Prisma.Decimal(specificationFactor).toDecimalPlaces(QTY_DP)
+        } else if (normalizedLedgerUnit(line.sourceUnit) === normalizedLedgerUnit(purchaseUnit) && purchaseFactor) {
+          conversionFactor = new Prisma.Decimal(purchaseFactor).toDecimalPlaces(QTY_DP)
+        } else {
           throw businessError(`${line.externalName} 无法从 ${line.sourceUnit} 换算为库存单位 ${inventoryUnit}`, 409)
         }
-        conversionFactor = new Prisma.Decimal(purchaseFactor).toDecimalPlaces(QTY_DP)
       }
       return {
         code,
@@ -1566,6 +1573,14 @@ export async function recordWarehouseDailyPackageLedger(input: {
         && normalizedLedgerUnit(line.sourceUnit) === normalizedLedgerUnit(purchaseUnit)
         && purchaseFactor) {
         conversionFactor = new Prisma.Decimal(purchaseFactor).toDecimalPlaces(QTY_DP)
+        inventoryQuantity = originalQuantity.mul(conversionFactor).toDecimalPlaces(QTY_DP)
+        originalUnit = line.sourceUnit
+      } else if (originalQuantity.gt(0)) {
+        const specificationFactor = sourceSpecMassFactor(line.sourceSpec || null, line.sourceUnit, inventoryUnit)
+        if (specificationFactor == null) {
+          throw businessError(`${line.externalName} 配送数量无法换算为库存单位 ${inventoryUnit}`, 409)
+        }
+        conversionFactor = new Prisma.Decimal(specificationFactor).toDecimalPlaces(QTY_DP)
         inventoryQuantity = originalQuantity.mul(conversionFactor).toDecimalPlaces(QTY_DP)
         originalUnit = line.sourceUnit
       } else {

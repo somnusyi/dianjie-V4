@@ -14,8 +14,15 @@ import { lossClaimResolutionSchema } from '../services/lossClaimResolution'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 import { setReceiptSettlementAmountInTransaction } from '../services/receiptSettlement'
 import { arrivalDifferencesToCsv } from '../services/arrivalDifferenceExport'
+import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
 
 const LOSS_AMOUNT_MAX = new Prisma.Decimal('9999999999.99')
+
+export function canHandleArrivalDifference(role: string): boolean {
+  return isSupplierRole(role)
+    || ['ADMIN', 'SUPER_ADMIN'].includes(role)
+    || hasInternalSupplyChainCapability(role, 'order.write')
+}
 
 const lossClaimReviewSchema = z.object({
   action: z.enum(['approve', 'reject']),
@@ -678,7 +685,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, userId, role } = req.user
     const { id } = req.params as any
 
-    if (!['SUPPLIER_OWNER', 'SUPPLIER_STAFF', 'SUPPLIER_SUB', 'ADMIN', 'SUPER_ADMIN'].includes(role)) throw { statusCode: 403, message: '无权限' }
+    if (!canHandleArrivalDifference(role)) throw { statusCode: 403, message: '无权限' }
     const parsed = lossClaimReviewSchema.safeParse(req.body || {})
     if (!parsed.success) throw { statusCode: 400, message: parsed.error.issues[0].message }
     const { action, note } = parsed.data

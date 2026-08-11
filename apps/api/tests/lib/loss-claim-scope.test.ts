@@ -1,11 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import { lossClaimScope } from '../../src/lib/loss-claim-scope'
+import { canHandleArrivalDifference } from '../../src/routes/lossClaims'
 
 describe('lossClaimScope', () => {
   it('集团角色只限定租户', () => {
     expect(lossClaimScope({ tenantId: 'tenant-a', role: 'CHEF_DIRECTOR' })).toEqual({
       tenantId: 'tenant-a',
     })
+  })
+
+  it('内部供应链可处理本租户到货差异，门店和财务角色不可代替供应链确认', () => {
+    expect(lossClaimScope({ tenantId: 'tenant-a', role: 'SUPPLY_CHAIN' })).toEqual({
+      tenantId: 'tenant-a',
+    })
+    expect(canHandleArrivalDifference('SUPPLY_CHAIN')).toBe(true)
+    expect(canHandleArrivalDifference('SUPPLIER_OWNER')).toBe(true)
+    expect(canHandleArrivalDifference('ADMIN')).toBe(true)
+    expect(canHandleArrivalDifference('KITCHEN_LEAD')).toBe(false)
+    expect(canHandleArrivalDifference('FINANCE')).toBe(false)
   })
 
   it('门店角色限定租户和门店', () => {

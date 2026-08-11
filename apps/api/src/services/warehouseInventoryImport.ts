@@ -496,6 +496,31 @@ export function sourceSpecMassFactor(sourceSpec: string | null, sourceUnit: stri
   return null
 }
 
+/**
+ * Resolve an explicit inner/outer package relationship from Meituan specs,
+ * for example `箱/12瓶*500g`. This is intentionally exact-unit only: it must
+ * never infer that different count nouns are interchangeable.
+ */
+export function sourceSpecPackageFactor(sourceSpec: string | null, sourceUnit: string, inventoryUnit: string) {
+  const source = normalizeWarehouseUnit(sourceUnit)
+  const target = normalizeWarehouseUnit(inventoryUnit)
+  if (source === target) return 1
+  const text = String(sourceSpec || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase()
+  const separatorIndex = text.indexOf('/')
+  if (separatorIndex <= 0) return null
+  const outerUnit = normalizeWarehouseUnit(text.slice(0, separatorIndex))
+  const detail = text.slice(separatorIndex + 1)
+  const physicalUnits = new Set(['kg', 'g', '斤', 'ml', 'l', '升', '毫升', '克', '千克', '公斤'])
+  const parts = [...detail.matchAll(/(\d+(?:\.\d+)?)([^\d/*]+)/g)]
+    .map(match => ({ count: Number(match[1]), unit: normalizeWarehouseUnit(match[2]) }))
+    .filter(part => part.count > 0 && part.unit && !physicalUnits.has(part.unit))
+  if (parts.length !== 1) return null
+  const inner = parts[0]
+  if (source === inner.unit && target === outerUnit) return 1 / inner.count
+  if (source === outerUnit && target === inner.unit) return inner.count
+  return null
+}
+
 function quantitiesEqual(left: number, right: number, tolerance = 0.000001) {
   return Math.abs(left - right) <= tolerance
 }

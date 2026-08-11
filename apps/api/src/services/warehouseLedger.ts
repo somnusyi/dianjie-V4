@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { Prisma, prisma } from '@dianjie/db'
 import { resolveProductFourUnits, type ProductInventoryUnitLike } from './inventoryUnits'
 import { resolveTenantWarehouseId } from './defaultWarehouse'
-import { sourceSpecMassFactor } from './warehouseInventoryImport'
+import { sourceSpecMassFactor, sourceSpecPackageFactor } from './warehouseInventoryImport'
 
 const ZERO = new Prisma.Decimal(0)
 const QTY_DP = 6
@@ -1526,6 +1526,7 @@ export async function recordWarehouseDailyPackageLedger(input: {
       let conversionFactor = new Prisma.Decimal(1)
       if (normalizedLedgerUnit(line.sourceUnit) !== normalizedLedgerUnit(inventoryUnit)) {
         const specificationFactor = sourceSpecMassFactor(line.sourceSpec || null, line.sourceUnit, inventoryUnit)
+          ?? sourceSpecPackageFactor(line.sourceSpec || null, line.sourceUnit, inventoryUnit)
         if (specificationFactor != null) {
           conversionFactor = new Prisma.Decimal(specificationFactor).toDecimalPlaces(QTY_DP)
         } else if (normalizedLedgerUnit(line.sourceUnit) === normalizedLedgerUnit(purchaseUnit) && purchaseFactor) {
@@ -1577,6 +1578,7 @@ export async function recordWarehouseDailyPackageLedger(input: {
         originalUnit = line.sourceUnit
       } else if (originalQuantity.gt(0)) {
         const specificationFactor = sourceSpecMassFactor(line.sourceSpec || null, line.sourceUnit, inventoryUnit)
+          ?? sourceSpecPackageFactor(line.sourceSpec || null, line.sourceUnit, inventoryUnit)
         if (specificationFactor == null) {
           throw businessError(`${line.externalName} 配送数量无法换算为库存单位 ${inventoryUnit}`, 409)
         }

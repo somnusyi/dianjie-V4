@@ -5,6 +5,7 @@ import {
   parseMeituanWarehouseInventoryWorkbook,
   resolveWarehouseInventoryRow,
   sourceSpecMassFactor,
+  sourceSpecPackageFactor,
   type InventoryImportProduct,
   type ParsedWarehouseInventoryRow,
 } from '../../src/services/warehouseInventoryImport'
@@ -170,5 +171,11 @@ describe('Meituan warehouse inventory snapshot', () => {
 
   it('converts a physical ledger unit directly before consulting package text', () => {
     expect(sourceSpecMassFactor('箱/1kg', 'kg', 'g')).toBe(1000)
+  })
+
+  it('converts an explicit inner package count without guessing count-unit synonyms', () => {
+    expect(sourceSpecPackageFactor('箱/12瓶*500g', '瓶', '箱')).toBeCloseTo(1 / 12)
+    expect(sourceSpecPackageFactor('箱/12瓶*500g', '箱', '瓶')).toBe(12)
+    expect(sourceSpecPackageFactor('箱/12瓶*500g', '袋', '箱')).toBeNull()
   })
 })

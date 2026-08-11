@@ -25,8 +25,12 @@ import {
   type WarehouseInventoryIssue,
 } from '../services/warehouseInventoryImport'
 import { recordWarehouseBaselineSnapshot } from '../services/warehouseLedgerBaselineImport'
+import {
+  extractSupplyChainDailyPackage,
+  type SupplyChainDailyPackageSummary,
+} from '../services/supplyChainDailyPackage'
 
-const MAX_FILE_BYTES = 5 * 1024 * 1024
+const MAX_FILE_BYTES = 10 * 1024 * 1024
 const SOURCE = 'MEITUAN' as const
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
@@ -61,6 +65,12 @@ function issueArray(value: unknown): WarehouseInventoryIssue[] {
   return Array.isArray(value) ? value.filter(item => item && typeof item === 'object') as WarehouseInventoryIssue[] : []
 }
 
+function metadataObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
 function requireInternalInventoryWrite(req: any, reply: any) {
   if (!isInternalSupplyChainRole(req.user?.role)
     || !hasInternalSupplyChainCapability(req.user?.role, 'inventory.write')) {
@@ -85,9 +95,9 @@ async function readPreviewUpload(req: any) {
       continue
     }
     const filename = path.basename(String(part.filename || ''))
-    if (!filename.toLowerCase().endsWith('.xlsx')) {
+    if (!/\.(xlsx|7z)$/i.test(filename)) {
       part.file.resume()
-      throw Object.assign(new Error('只支持美团导出的 .xlsx 库存文件'), { statusCode: 400 })
+      throw Object.assign(new Error('只支持每日供应链 .7z 数据包或美团 .xlsx 库存文件'), { statusCode: 400 })
     }
     if (filename.length > 255) {
       part.file.resume()
@@ -97,15 +107,24 @@ async function readPreviewUpload(req: any) {
     let size = 0
     for await (const chunk of part.file) {
       size += chunk.length
-      if (size > MAX_FILE_BYTES) throw Object.assign(new Error('库存文件不能超过 5MB'), { statusCode: 400 })
+      if (size > MAX_FILE_BYTES) throw Object.assign(new Error('供应链数据文件不能超过 10MB'), { statusCode: 400 })
       chunks.push(chunk)
     }
     if (part.file.truncated) throw Object.assign(new Error('文件过大，上传已被截断'), { statusCode: 400 })
     file = { filename, buffer: Buffer.concat(chunks) }
   }
-  if (!file) throw Object.assign(new Error('请选择美团库存 Excel 文件'), { statusCode: 400 })
+  if (!file) throw Object.assign(new Error('请选择每日供应链数据包或美团库存 Excel 文件'), { statusCode: 400 })
+  let inventoryFilename = file.filename
+  let inventoryBuffer = file.buffer
+  let packageSummary: SupplyChainDailyPackageSummary | null = null
+  if (file.filename.toLowerCase().endsWith('.7z')) {
+    const extracted = await extractSupplyChainDailyPackage(file.buffer)
+    inventoryFilename = extracted.inventoryFilename
+    inventoryBuffer = extracted.inventoryBuffer
+    packageSummary = extracted.summary
+  }
   const parsed = z.object({
-    snapshotDate: calendarDateSchema,
+    snapshotDate: calendarDateSchema.optional(),
     sourceWarehouseName: z.string().trim().min(1).max(100).default('供应链总仓'),
   }).safeParse({
     snapshotDate: fields.get('snapshotDate'),
@@ -113,10 +132,50 @@ async function readPreviewUpload(req: any) {
   })
   if (!parsed.success) throw Object.assign(new Error(parsed.error.issues[0].message), { statusCode: 400 })
   const shanghaiToday = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
-  if (parsed.data.snapshotDate > shanghaiToday) {
+  const snapshotDate = packageSummary?.packageDate || parsed.data.snapshotDate
+  if (!snapshotDate) throw Object.assign(new Error('请选择库存快照日期'), { statusCode: 400 })
+  if (packageSummary && parsed.data.snapshotDate && parsed.data.snapshotDate !== packageSummary.packageDate) {
+    throw Object.assign(new Error(`所选日期与压缩包日期不一致：压缩包为 ${packageSummary.packageDate}`), { statusCode: 400 })
+  }
+  if (snapshotDate > shanghaiToday) {
     throw Object.assign(new Error('库存快照日期不能晚于今天'), { statusCode: 400 })
   }
-  return { ...parsed.data, ...file }
+  return {
+    snapshotDate,
+    sourceWarehouseName: parsed.data.sourceWarehouseName,
+    filename: file.filename,
+    buffer: inventoryBuffer,
+    inventoryFilename,
+    packageSummary,
+  }
+}
+
+async function attachDailyPackageMetadata(
+  db: ImportDb,
+  record: { id: string; metadata: unknown },
+  upload: Awaited<ReturnType<typeof readPreviewUpload>>,
+) {
+  if (!upload.packageSummary) return record
+  const metadata = metadataObject(record.metadata)
+  if (metadata.dailyPackage) return record
+  const existingWarnings = issueArray(metadata.fileWarnings)
+  return db.warehouseInventoryImport.update({
+    where: { id: record.id },
+    data: {
+      sourceFilename: upload.filename,
+      warningCount: { increment: upload.packageSummary.issues.length },
+      metadata: json({
+        ...metadata,
+        fileWarnings: [...existingWarnings, ...upload.packageSummary.issues],
+        sourceSnapshotAt: upload.packageSummary.sourceSnapshotAt || undefined,
+        inventorySourceFilename: upload.inventoryFilename,
+        dailyPackage: upload.packageSummary,
+        movementSemantics: 'RECONCILIATION_ONLY_ALREADY_INCLUDED_IN_CLOSING_SNAPSHOT',
+        purchasingSemantics: 'RECONCILIATION_ONLY_NO_RECEIPT_DOCUMENT_IDS',
+      }),
+      rowVersion: { increment: 1 },
+    },
+  })
 }
 
 function productView(product: any): InventoryImportProduct {
@@ -415,6 +474,7 @@ export const warehouseInventoryImportRoutes: FastifyPluginAsync = async app => {
           || existing.sourceWarehouseName !== upload.sourceWarehouseName) {
           throw Object.assign(new Error(`该文件已用于 ${dateText(existing.snapshotDate)} ${existing.sourceWarehouseName}，不能换日期或仓库重复导入`), { statusCode: 409 })
         }
+        await attachDailyPackageMetadata(prisma, existing, upload)
         const loaded = await loadImport(tenantId, existing.id)
         return reply.send(publicImport(loaded))
       }
@@ -423,7 +483,9 @@ export const warehouseInventoryImportRoutes: FastifyPluginAsync = async app => {
       const resolved = await resolveRows(prisma, tenantId, parsedFile.rows)
       const matchedCount = resolved.filter(item => item.resolution.productId && item.resolution.matchSource !== 'NAME_SUGGESTION').length
       const blockingCount = resolved.filter(item => item.resolution.issues.length > 0).length
-      const warningCount = resolved.reduce((sum, item) => sum + item.resolution.warnings.length, 0) + parsedFile.warnings.length
+      const packageWarnings = upload.packageSummary?.issues || []
+      const warningCount = resolved.reduce((sum, item) => sum + item.resolution.warnings.length, 0)
+        + parsedFile.warnings.length + packageWarnings.length
       const no = `WSI-${upload.snapshotDate.replaceAll('-', '')}-${fileHash.slice(0, 8).toUpperCase()}`
       const created = await prisma.$transaction(async tx => {
         await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`warehouse-import-preview:${tenantId}:${warehouseId}:${fileHash}`}))`)
@@ -439,7 +501,7 @@ export const warehouseInventoryImportRoutes: FastifyPluginAsync = async app => {
             || duplicate.sourceWarehouseName !== upload.sourceWarehouseName) {
             throw Object.assign(new Error(`该文件已用于 ${dateText(duplicate.snapshotDate)} ${duplicate.sourceWarehouseName}，不能换日期或仓库重复导入`), { statusCode: 409 })
           }
-          return duplicate
+          return attachDailyPackageMetadata(tx, duplicate, upload)
         }
         const record = await tx.warehouseInventoryImport.create({
           data: {
@@ -464,10 +526,19 @@ export const warehouseInventoryImportRoutes: FastifyPluginAsync = async app => {
               title: parsedFile.title,
               filterDescription: parsedFile.filterDescription,
               ignoredWarehouses: parsedFile.ignoredWarehouses,
-              fileWarnings: parsedFile.warnings,
+              fileWarnings: [...parsedFile.warnings, ...packageWarnings],
               quantitySemantics: 'TARGET_CLOSING_BALANCE',
               sourceQuantityUnit: 'PURCHASE_UNIT',
               costSemantics: warehouseInventoryCostSemantics(parsedFile),
+              sourceSnapshotAt: upload.packageSummary?.sourceSnapshotAt || undefined,
+              inventorySourceFilename: upload.inventoryFilename,
+              dailyPackage: upload.packageSummary || undefined,
+              movementSemantics: upload.packageSummary
+                ? 'RECONCILIATION_ONLY_ALREADY_INCLUDED_IN_CLOSING_SNAPSHOT'
+                : undefined,
+              purchasingSemantics: upload.packageSummary
+                ? 'RECONCILIATION_ONLY_NO_RECEIPT_DOCUMENT_IDS'
+                : undefined,
             }),
             createdById: req.user.userId,
           },
@@ -512,7 +583,14 @@ export const warehouseInventoryImportRoutes: FastifyPluginAsync = async app => {
             entityType: 'WarehouseInventoryImport',
             target: no,
             targetId: record.id,
-            metadata: json({ fileHash, snapshotDate: upload.snapshotDate, itemCount: parsedFile.rows.length, blockingCount, warningCount }),
+            metadata: json({
+              fileHash,
+              snapshotDate: upload.snapshotDate,
+              itemCount: parsedFile.rows.length,
+              blockingCount,
+              warningCount,
+              dailyPackage: Boolean(upload.packageSummary),
+            }),
           },
         })
         return record

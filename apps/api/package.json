@@ -21,6 +21,7 @@
     "test:remote": "vitest run --reporter=verbose"
   },
   "dependencies": {
+    "7z-wasm": "1.2.0",
     "@dianjie/db": "workspace:*",
     "@fastify/cors": "^9.0.1",
     "@fastify/helmet": "^11.1.1",

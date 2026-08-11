@@ -55,7 +55,22 @@ type InventoryImport = {
   detailTotalAmount: number
   sourceTotalAmount?: number | null
   rowVersion: number
-  metadata?: { fileWarnings?: Issue[]; ignoredWarehouses?: string[] }
+  metadata?: {
+    fileWarnings?: Issue[]
+    ignoredWarehouses?: string[]
+    sourceSnapshotAt?: string
+    movementSemantics?: string
+    purchasingSemantics?: string
+    dailyPackage?: {
+      packageDate: string
+      sourceSnapshotAt?: string | null
+      sourceFiles: { inventory: string; movements: string; purchasing: string }
+      inventory: { rowCount: number; positiveCount: number; zeroCount: number; theoreticalNegativeCount: number; amount: number; theoreticalAmount: number }
+      movements: { rowCount: number; documentCount: number; storeCount: number; skuCount: number; outboundQuantity: number; costAmount: number; settlementAmount: number; grossProfit: number; grossMargin?: number | null; zeroCostLineCount: number; splitDocumentSkuCount: number }
+      purchasing: { rowCount: number; supplierCount: number; skuCount: number; receivedQuantity: number; receivedAmount: number; returnedQuantity: number; returnedAmount: number; receivedWithoutPurchaseCount: number }
+      issues: Issue[]
+    }
+  }
   warehouse?: { id: string; name: string; code: string }
   items?: ImportItem[]
   confirmedAt?: string | null
@@ -147,7 +162,7 @@ export default function WarehouseSnapshotImportPage() {
     && current.matchedCount > 0
 
   async function preview() {
-    if (!file) return setError('请选择美团导出的 .xlsx 库存文件')
+    if (!file) return setError('请选择每日供应链 .7z 数据包或美团 .xlsx 库存文件')
     setBusy('preview')
     setError('')
     setNotice('')
@@ -159,7 +174,9 @@ export default function WarehouseSnapshotImportPage() {
       const record = await apiFetch<InventoryImport>('/api/warehouse-inventory-imports/preview', { method: 'POST', body })
       setCurrent(record)
       setView(record.blockingCount > 0 ? 'blocking' : 'all')
-      setNotice('预检完成：当前没有改动库存。完成商品映射并解决阻断项后，可申请建立期初基线。')
+      setNotice(record.metadata?.dailyPackage
+        ? '每日数据包预检完成：库存、配送出库和采购汇总已交叉核对，当前尚未改动库存。'
+        : '库存文件预检完成：当前尚未改动库存。')
       await loadHistory(record.id)
     } catch (reason: any) {
       setError(String(reason?.message || reason))
@@ -207,14 +224,14 @@ export default function WarehouseSnapshotImportPage() {
 
   async function applyBaseline() {
     if (!current || !canApplyBaseline) return
-    if (!window.confirm(`确认将 ${current.snapshotDate}「供应链总仓」${current.matchedCount} 个已映射商品建立为期初基线？系统会按上海时区取该日截止时点，写入余额、流水和批次；已映射的零库存商品会清零旧余额。`)) return
+    if (!window.confirm(`确认将 ${current.snapshotDate}「供应链总仓」${current.matchedCount} 个已映射商品校准到本次库存快照？系统只写入与当前账面余额的差额；配送出库和采购汇总仅用于对账，不会重复扣减或重复入库。`)) return
     setBusy('baseline')
     setError('')
     try {
       await apiFetch(`/api/warehouse-inventory-imports/${current.id}/baseline`, {
         method: 'POST', body: JSON.stringify({ rowVersion: current.rowVersion }),
       })
-      setNotice('期初基线已生效；商品余额、批次、调整流水和审计记录已在同一事务中完成。')
+      setNotice('库存快照已生效；余额、批次、差额调整流水和审计记录已在同一事务中完成。')
       await loadHistory(current.id)
     } catch (reason: any) {
       setError(String(reason?.message || reason))
@@ -268,13 +285,13 @@ export default function WarehouseSnapshotImportPage() {
       <header className="flex flex-col gap-4 border-b border-border pb-5 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <a href="/v2/supply-chain/inventory" className="text-caption text-gray2">‹ 返回仓库库存</a>
-          <div className="mt-2 flex items-center gap-2"><Chip tone="blue">美团库存快照</Chip><span className="text-caption text-gray3">供应链总仓 · 先预检，后整单建立期初基线</span></div>
-          <h1 className="mt-2 text-h1">历史库存文件预检</h1>
-          <p className="mt-1 text-caption text-gray2">先完成解析、商品映射和单位核对；无阻断项后，可将快照安全建立为可追溯的期初库存基线。</p>
+          <div className="mt-2 flex items-center gap-2"><Chip tone="blue">每日供应链数据包</Chip><span className="text-caption text-gray3">库存校准 · 配送对账 · 采购对账</span></div>
+          <h1 className="mt-2 text-h1">每日数据上传与预检</h1>
+          <p className="mt-1 text-caption text-gray2">每天上传同类 .7z 文件；系统自动识别三张表、校验日期和异常，并按期末快照差额校准库存。</p>
         </div>
         <div className="flex flex-wrap items-end gap-2">
-          <label className="flex flex-col gap-1"><span className="text-micro text-gray3">结算完成日</span><input type="date" value={snapshotDate} onChange={event => setSnapshotDate(event.target.value)} className="h-10 rounded-cta border border-border bg-white px-3" /></label>
-          <label className="flex h-10 cursor-pointer items-center rounded-cta border border-border bg-white px-4 text-button"><input type="file" accept=".xlsx" onChange={event => setFile(event.target.files?.[0] || null)} className="hidden" />{file?.name || '选择美团 .xlsx'}</label>
+          <label className="flex flex-col gap-1"><span className="text-micro text-gray3">业务日期（压缩包会自动核对）</span><input type="date" value={snapshotDate} onChange={event => setSnapshotDate(event.target.value)} className="h-10 rounded-cta border border-border bg-white px-3" /></label>
+          <label className="flex h-10 cursor-pointer items-center rounded-cta border border-border bg-white px-4 text-button"><input type="file" accept=".7z,.xlsx" onChange={event => setFile(event.target.files?.[0] || null)} className="hidden" />{file?.name || '选择每日 .7z 数据包'}</label>
           <button onClick={preview} disabled={!file || busy !== ''} className="h-10 rounded-cta bg-accent px-4 text-button text-white disabled:opacity-40">{busy === 'preview' ? '预检中…' : '上传并预检'}</button>
         </div>
       </header>
@@ -299,14 +316,14 @@ export default function WarehouseSnapshotImportPage() {
         </aside>
 
         <main className="min-w-0 space-y-4">
-          {!current && <div className="rounded-card border border-dashed border-border bg-white py-20 text-center text-caption text-gray3">上传 7·31 文件后，这里会显示逐行预检结果；预检不会改库存。</div>}
+          {!current && <div className="rounded-card border border-dashed border-border bg-white py-20 text-center text-caption text-gray3">上传每日 .7z 数据包后，这里会显示三表摘要和逐行库存预检；预检不会改库存。</div>}
           {current && <>
             <div className="flex flex-col gap-3 rounded-card border border-border bg-white p-4 xl:flex-row xl:items-center xl:justify-between">
               <div><div className="flex flex-wrap items-center gap-2"><Chip tone={STATUS[current.status].tone}>{STATUS[current.status].label}</Chip><b className="font-num">{current.no}</b><span className="text-micro text-gray3">{current.sourceFilename}</span></div><p className="mt-1 text-caption text-gray2">{current.snapshotDate} 结算完成 · {current.sourceWarehouseName} · 系统仓库 {current.warehouse?.name || '默认仓'}</p></div>
               <div className="flex flex-wrap gap-2">
                 {current.status === 'STAGED' && <button onClick={refresh} disabled={busy !== ''} className="h-9 rounded-cta border border-border px-3 text-button disabled:opacity-40">{busy === 'refresh' ? '匹配中…' : '重新匹配'}</button>}
                 {current.status === 'STAGED' && nameSuggestionCount > 0 && <button onClick={confirmNameSuggestions} disabled={busy !== ''} className="h-9 rounded-cta border border-amber/40 bg-amber/10 px-3 text-button text-amber-fg disabled:opacity-40">{busy === 'bulk-map' ? '确认中…' : `批量确认同名候选 ${nameSuggestionCount}`}</button>}
-                {canApplyBaseline && <button onClick={applyBaseline} disabled={busy !== ''} className="h-9 rounded-cta bg-accent px-4 text-button text-white disabled:opacity-40">{busy === 'baseline' ? '建立中…' : '建立期初基线'}</button>}
+                {canApplyBaseline && <button onClick={applyBaseline} disabled={busy !== ''} className="h-9 rounded-cta bg-accent px-4 text-button text-white disabled:opacity-40">{busy === 'baseline' ? '校准中…' : '确认并校准库存'}</button>}
                 {current.status === 'STAGED' && !canApplyBaseline && <span className="flex h-9 items-center rounded-cta border border-amber/30 bg-amber/10 px-3 text-micro text-amber-fg">先解决阻断项并完成商品映射</span>}
               </div>
             </div>
@@ -318,6 +335,16 @@ export default function WarehouseSnapshotImportPage() {
               <Metric label="提醒项" value={String(current.warningCount)} tone={current.warningCount ? 'text-orange-fg' : ''} />
               <Metric label="目标仓明细金额" value={money(current.detailTotalAmount)} />
             </div>
+
+            {current.metadata?.dailyPackage && <div className="space-y-3 rounded-card border border-border bg-white p-4">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-h2">三表交叉核对</h2><p className="text-micro text-gray3">配送和采购数据只用于核对；期末库存快照已包含当日业务，不会再次扣减或入库。</p></div><Chip tone="blue">{current.metadata.dailyPackage.packageDate}</Chip></div>
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="rounded-cta bg-bg p-3"><b>期末库存</b><div className="mt-2 font-num text-h2">{current.metadata.dailyPackage.inventory.rowCount} SKU · {money(current.metadata.dailyPackage.inventory.amount)}</div><div className="mt-1 text-micro text-gray3">正库存 {current.metadata.dailyPackage.inventory.positiveCount} · 零库存 {current.metadata.dailyPackage.inventory.zeroCount} · 理论负库存 {current.metadata.dailyPackage.inventory.theoreticalNegativeCount}</div></div>
+                <div className="rounded-cta bg-bg p-3"><b>配送出库</b><div className="mt-2 font-num text-h2">{current.metadata.dailyPackage.movements.documentCount} 单 · {money(current.metadata.dailyPackage.movements.settlementAmount)}</div><div className="mt-1 text-micro text-gray3">{current.metadata.dailyPackage.movements.storeCount} 家门店 · 成本 {money(current.metadata.dailyPackage.movements.costAmount)} · 毛利率 {quantity(current.metadata.dailyPackage.movements.grossMargin, 2)}%</div></div>
+                <div className="rounded-cta bg-bg p-3"><b>采购收货</b><div className="mt-2 font-num text-h2">{current.metadata.dailyPackage.purchasing.skuCount} SKU · {money(current.metadata.dailyPackage.purchasing.receivedAmount)}</div><div className="mt-1 text-micro text-gray3">{current.metadata.dailyPackage.purchasing.supplierCount} 家上游供应商 · 退货 {money(current.metadata.dailyPackage.purchasing.returnedAmount)}</div></div>
+              </div>
+              {current.metadata.dailyPackage.issues.length > 0 && <div className="rounded-cta border border-amber/30 bg-amber/10 p-3 text-caption"><b className="text-amber-fg">需要跟进 {current.metadata.dailyPackage.issues.length} 项</b><div className="mt-2 space-y-1 text-gray2">{current.metadata.dailyPackage.issues.map(issue => <div key={issue.code}>• {issue.message}{issue.detail ? `：${issue.detail}` : ''}</div>)}</div></div>}
+            </div>}
 
             {current.sourceTotalAmount != null && Math.abs(current.sourceTotalAmount - current.detailTotalAmount) > 0.01 && <div className="rounded-card border border-amber/30 bg-amber/10 p-3 text-caption text-gray2">美团合计行 {money(current.sourceTotalAmount)} 包含其他筛选范围；本次只采用“供应链总仓”明细重算的 {money(current.detailTotalAmount)}，不会把合计行写入库存。</div>}
 

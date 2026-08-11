@@ -255,7 +255,7 @@ if [ "$CMB_DEPENDENCIES_CHANGED" = "0" ]; then
   echo "   ✓ requirements.txt 未变化，跳过联网安装"
 else
   ssh_run "
-    set -e
+    set -eo pipefail
     cd $REMOTE/apps/cmb
     timeout 300 pip3 install -q --disable-pip-version-check -r requirements.txt 2>&1 | tail -3
     echo '   ✓ cmb 依赖同步完成'
@@ -272,7 +272,7 @@ if [ "$API_DEPENDENCIES_CHANGED" = "0" ]; then
   echo "   ✓ API/package lock 未变化，复用已验证的生产依赖"
 else
   ssh_run "
-    set -e
+    set -eo pipefail
     rm -rf /tmp/api-rebuild
     mkdir -p /tmp/api-rebuild
     cd /tmp/api-rebuild
@@ -286,6 +286,19 @@ else
       mkdir -p $REMOTE/apps/api/node_modules/@dianjie
       ln -sf $REMOTE/packages/db $REMOTE/apps/api/node_modules/@dianjie/db
     fi
+    # 部署前逐项解析运行时依赖。npm install 超时或下载失败时不能只因 tail 成功而继续重启。
+    cd $REMOTE/apps/api
+    node - <<'NODE'
+const dependencies = Object.keys(require('./package.json').dependencies || {})
+  .filter((name) => name !== '@dianjie/db')
+const missing = dependencies.filter((name) => {
+  try { require.resolve(name); return false } catch { return true }
+})
+if (missing.length) {
+  console.error('❌ ECS 缺少 API 运行时依赖: ' + missing.join(', '))
+  process.exit(1)
+}
+NODE
     rm -rf /tmp/api-rebuild
     echo '   ✓ apps/api 依赖同步完成'
   "

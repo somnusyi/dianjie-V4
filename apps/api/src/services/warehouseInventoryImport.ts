@@ -460,6 +460,8 @@ function sourceConversionFactorInInventoryUnit(conversionText: string | null, in
 export function sourceSpecMassFactor(sourceSpec: string | null, sourceUnit: string, inventoryUnit: string) {
   const target = normalizeWarehouseUnit(inventoryUnit)
   const source = normalizeWarehouseUnit(sourceUnit)
+  const directPhysicalFactor = physicalUnitFactor(source, target)
+  if (directPhysicalFactor != null) return directPhysicalFactor
   const text = String(sourceSpec || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase()
   if (!text) return null
 

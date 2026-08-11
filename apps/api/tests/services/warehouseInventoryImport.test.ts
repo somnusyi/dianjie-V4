@@ -4,6 +4,7 @@ import {
   parseMeituanUnitConversion,
   parseMeituanWarehouseInventoryWorkbook,
   resolveWarehouseInventoryRow,
+  sourceSpecMassFactor,
   type InventoryImportProduct,
   type ParsedWarehouseInventoryRow,
 } from '../../src/services/warehouseInventoryImport'
@@ -165,5 +166,9 @@ describe('Meituan warehouse inventory snapshot', () => {
     }), 'EXACT_CODE')
     expect(resolved).toMatchObject({ conversionFactor: 2500, normalizedQuantity: 150000, issues: [] })
     expect(resolved.warnings).toContainEqual(expect.objectContaining({ code: 'UNIT_CONFIRMED_BY_SOURCE_SPEC' }))
+  })
+
+  it('converts a physical ledger unit directly before consulting package text', () => {
+    expect(sourceSpecMassFactor('箱/1kg', 'kg', 'g')).toBe(1000)
   })
 })

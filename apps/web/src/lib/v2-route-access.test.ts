@@ -37,6 +37,8 @@ describe('rolesForV2Path', () => {
     expect(isV2PathAllowedForRole('/v2/me/password', 'SUPPLY_CHAIN')).toBe(true)
     expect(isV2PathAllowedForRole('/v2/feedback/new', 'SUPPLY_CHAIN')).toBe(true)
     expect(isV2PathAllowedForRole('/v2/feedback/mine', 'SUPPLY_CHAIN')).toBe(true)
+    expect(isV2PathAllowedForRole('/v2/loss-claims/claim-1/print', 'SUPPLY_CHAIN')).toBe(true)
+    expect(isV2PathAllowedForRole('/v2/loss-claims/claim-1/print/', 'SUPPLY_CHAIN')).toBe(true)
   })
 
   it('rejects supplier, finance, sales, identity and write paths for internal supply-chain', () => {
@@ -52,6 +54,9 @@ describe('rolesForV2Path', () => {
       '/v2/inventory-counts',
       '/v2/me/team',
       '/v2/me/suppliers',
+      '/v2/loss-claims/claim-1',
+      '/v2/loss-claims/claim-1/resolve',
+      '/v2/loss-claims/claim-1/print/extra',
     ]) {
       expect(isV2PathAllowedForRole(path, 'SUPPLY_CHAIN')).toBe(false)
     }

@@ -2,6 +2,13 @@ const MANAGER_ROLES = ['MANAGER', 'PURCHASER'] as const
 const SUPPLIER_ROLES = ['SUPPLIER_OWNER', 'SUPPLIER_STAFF', 'SUPPLIER_SUB'] as const
 const INTERNAL_SUPPLY_CHAIN_ROLES = ['SUPPLY_CHAIN'] as const
 
+function isInternalSupplyChainSharedReadPath(pathname: string): boolean {
+  // 到货差异打印页由门店、供应商和内部供应链共用。页面只读取详情，后端仍会
+  // 通过 lossClaimScope 按 tenant / store / supplier 做数据隔离，不能由此进入
+  // 报损管理的其他页面或获得额外写权限。
+  return /^\/v2\/loss-claims\/[^/]+\/print\/?$/.test(pathname)
+}
+
 /**
  * 返回需要限制角色的 v2 业务区。
  *
@@ -32,5 +39,6 @@ export function isV2PathAllowedForRole(pathname: string, role: string): boolean 
   if (pathname === '/v2/me' || pathname === '/v2/me/password') return true
   // 反馈是所有已登录员工的共享能力；否则全局反馈按钮对供应链角色会形成死链接。
   if (pathname === '/v2/feedback' || pathname.startsWith('/v2/feedback/')) return true
+  if (isInternalSupplyChainSharedReadPath(pathname)) return true
   return pathname === '/v2/supply-chain' || pathname.startsWith('/v2/supply-chain/')
 }

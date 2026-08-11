@@ -46,7 +46,36 @@ export type SupplyChainDailyPackageSummary = {
     returnedAmount: number
     receivedWithoutPurchaseCount: number
   }
+  ledger: {
+    inbound: SupplyChainDailyInboundLine[]
+    outbound: SupplyChainDailyOutboundLine[]
+  }
   issues: SupplyChainPackageIssue[]
+}
+
+export type SupplyChainDailyInboundLine = {
+  externalCode: string
+  externalName: string
+  sourceUnit: string
+  sourceSpec: string | null
+  quantity: number
+  amount: number
+  suppliers: string[]
+}
+
+export type SupplyChainDailyOutboundLine = {
+  externalCode: string
+  externalName: string
+  sourceUnit: string
+  baseUnit: string
+  sourceSpec: string | null
+  quantity: number
+  baseQuantity: number
+  costAmount: number
+  settlementAmount: number
+  documents: string[]
+  stores: string[]
+  effectiveAt: string | null
 }
 
 export type ExtractedSupplyChainDailyPackage = {
@@ -219,6 +248,20 @@ async function summarizeMovements(buffer: Buffer) {
   let settlementAmount = 0
   let grossProfit = 0
   let zeroCostLineCount = 0
+  const ledger = new Map<string, {
+    externalCode: string
+    externalName: string
+    sourceUnit: string
+    baseUnit: string
+    sourceSpec: string | null
+    quantity: number
+    baseQuantity: number
+    costAmount: number
+    settlementAmount: number
+    documents: Set<string>
+    stores: Set<string>
+    effectiveAt: string | null
+  }>()
   for (let rowNumber = detailHeaderRow + 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
     const row = sheet.getRow(rowNumber)
     const code = cellText(row.getCell(1).value)
@@ -237,25 +280,64 @@ async function summarizeMovements(buffer: Buffer) {
     documentSkus.set(documentSku, (documentSkus.get(documentSku) || 0) + 1)
     outboundQuantity += quantity
     const lineCost = numberCell(row.getCell(45).value)
+    const lineSettlement = numberCell(row.getCell(49).value)
     costAmount += lineCost
-    settlementAmount += numberCell(row.getCell(49).value)
+    settlementAmount += lineSettlement
     grossProfit += numberCell(row.getCell(55).value)
     if (quantity > 0 && lineCost === 0) zeroCostLineCount += 1
+
+    const sourceUnit = cellText(row.getCell(8).value)
+    const baseUnit = cellText(row.getCell(7).value)
+    const ledgerKey = `${code.toUpperCase()}|${sourceUnit}|${baseUnit}`
+    const existing = ledger.get(ledgerKey) || {
+      externalCode: code.toUpperCase(),
+      externalName: name,
+      sourceUnit,
+      baseUnit,
+      sourceSpec: cellText(row.getCell(3).value) || null,
+      quantity: 0,
+      baseQuantity: 0,
+      costAmount: 0,
+      settlementAmount: 0,
+      documents: new Set<string>(),
+      stores: new Set<string>(),
+      effectiveAt: null,
+    }
+    existing.quantity += numberCell(row.getCell(42).value)
+    existing.baseQuantity += numberCell(row.getCell(41).value)
+    existing.costAmount += lineCost
+    existing.settlementAmount += lineSettlement
+    if (documentNo) existing.documents.add(documentNo)
+    if (store) existing.stores.add(store)
+    const rowEffectiveAt = cellText(row.getCell(26).value) || cellText(row.getCell(23).value)
+    if (rowEffectiveAt && (!existing.effectiveAt || rowEffectiveAt > existing.effectiveAt)) existing.effectiveAt = rowEffectiveAt
+    ledger.set(ledgerKey, existing)
   }
   const roundedCost = round(costAmount)
   const roundedSettlement = round(settlementAmount)
   return {
-    rowCount,
-    documentCount: documents.size,
-    storeCount: stores.size,
-    skuCount: skus.size,
-    outboundQuantity: round(outboundQuantity, 3),
-    costAmount: roundedCost,
-    settlementAmount: roundedSettlement,
-    grossProfit: round(grossProfit),
-    grossMargin: roundedSettlement > 0 ? round(grossProfit / roundedSettlement * 100, 2) : null,
-    zeroCostLineCount,
-    splitDocumentSkuCount: [...documentSkus.values()].filter(count => count > 1).length,
+    summary: {
+      rowCount,
+      documentCount: documents.size,
+      storeCount: stores.size,
+      skuCount: skus.size,
+      outboundQuantity: round(outboundQuantity, 3),
+      costAmount: roundedCost,
+      settlementAmount: roundedSettlement,
+      grossProfit: round(grossProfit),
+      grossMargin: roundedSettlement > 0 ? round(grossProfit / roundedSettlement * 100, 2) : null,
+      zeroCostLineCount,
+      splitDocumentSkuCount: [...documentSkus.values()].filter(count => count > 1).length,
+    },
+    ledger: [...ledger.values()].map(item => ({
+      ...item,
+      quantity: round(item.quantity, 6),
+      baseQuantity: round(item.baseQuantity, 6),
+      costAmount: round(item.costAmount),
+      settlementAmount: round(item.settlementAmount),
+      documents: [...item.documents].sort(),
+      stores: [...item.stores].sort(),
+    })),
   }
 }
 
@@ -274,6 +356,15 @@ async function summarizePurchasing(buffer: Buffer) {
   let returnedQuantity = 0
   let returnedAmount = 0
   let receivedWithoutPurchaseCount = 0
+  const ledger = new Map<string, {
+    externalCode: string
+    externalName: string
+    sourceUnit: string
+    sourceSpec: string | null
+    quantity: number
+    amount: number
+    suppliers: Set<string>
+  }>()
   for (let rowNumber = headerRow + 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
     const row = sheet.getRow(rowNumber)
     const code = cellText(row.getCell(index('物品编码')).value)
@@ -290,6 +381,23 @@ async function summarizePurchasing(buffer: Buffer) {
     returnedQuantity += numberCell(row.getCell(index('退货数量')).value)
     returnedAmount += numberCell(row.getCell(index('退货金额（含税）')).value)
     if (purchaseQuantity === 0 && lineReceived > 0) receivedWithoutPurchaseCount += 1
+
+    const sourceUnit = cellText(row.getCell(index('单位')).value)
+    const key = `${code.toUpperCase()}|${sourceUnit}`
+    const existing = ledger.get(key) || {
+      externalCode: code.toUpperCase(),
+      externalName: name,
+      sourceUnit,
+      sourceSpec: cellText(row.getCell(index('规格型号')).value) || null,
+      quantity: 0,
+      amount: 0,
+      suppliers: new Set<string>(),
+    }
+    existing.quantity += lineReceived - numberCell(row.getCell(index('退货数量')).value)
+    existing.amount += numberCell(row.getCell(index('收货金额（含税）')).value)
+      - numberCell(row.getCell(index('退货金额（含税）')).value)
+    if (supplier) existing.suppliers.add(supplier)
+    ledger.set(key, existing)
   }
   return {
     summary: {
@@ -303,6 +411,12 @@ async function summarizePurchasing(buffer: Buffer) {
       receivedWithoutPurchaseCount,
     },
     skus,
+    ledger: [...ledger.values()].filter(item => item.quantity !== 0 || item.amount !== 0).map(item => ({
+      ...item,
+      quantity: round(item.quantity, 6),
+      amount: round(item.amount),
+      suppliers: [...item.suppliers].sort(),
+    })),
   }
 }
 
@@ -328,7 +442,7 @@ export async function extractSupplyChainDailyPackage(buffer: Buffer): Promise<Ex
   if (dates.size !== 1) throw Object.assign(new Error('每日数据包内三份表的日期不一致'), { statusCode: 400 })
   const packageDate = fileDates[0].date!
   const sourceSnapshotAt = fileDates[0].timestamp
-  const [inventoryResult, movementSummary, purchasingResult] = await Promise.all([
+  const [inventoryResult, movementResult, purchasingResult] = await Promise.all([
     summarizeInventory(inventory.buffer),
     summarizeMovements(movements.buffer),
     summarizePurchasing(purchasing.buffer),
@@ -338,14 +452,14 @@ export async function extractSupplyChainDailyPackage(buffer: Buffer): Promise<Ex
   if (inventoryResult.summary.theoreticalNegativeCount > 0) {
     issues.push({ code: 'THEORETICAL_NEGATIVE_STOCK', message: `${inventoryResult.summary.theoreticalNegativeCount} 个商品理论库存为负`, detail: '不阻断快照校准，但需核对待入库、待出库或历史流水。' })
   }
-  if (movementSummary.zeroCostLineCount > 0) {
-    issues.push({ code: 'ZERO_COST_OUTBOUND', message: `${movementSummary.zeroCostLineCount} 条配送出库成本为 0`, detail: '会造成配送毛利偏高，请补齐商品成本档案。' })
+  if (movementResult.summary.zeroCostLineCount > 0) {
+    issues.push({ code: 'ZERO_COST_OUTBOUND', message: `${movementResult.summary.zeroCostLineCount} 条配送出库成本为 0`, detail: '会造成配送毛利偏高，请补齐商品成本档案。' })
   }
-  if (movementSummary.splitDocumentSkuCount > 0) {
-    issues.push({ code: 'SPLIT_DOCUMENT_SKU', message: `${movementSummary.splitDocumentSkuCount} 个“单据+商品”存在拆分行`, detail: '系统按行汇总核对，不会误判为重复单据。' })
+  if (movementResult.summary.splitDocumentSkuCount > 0) {
+    issues.push({ code: 'SPLIT_DOCUMENT_SKU', message: `${movementResult.summary.splitDocumentSkuCount} 个“单据+商品”存在拆分行`, detail: '系统按行汇总核对，不会误判为重复单据。' })
   }
   if (purchasingResult.summary.receivedWithoutPurchaseCount > 0) {
-    issues.push({ code: 'RECEIPT_WITHOUT_PERIOD_PURCHASE', message: `${purchasingResult.summary.receivedWithoutPurchaseCount} 行本期采购数量为 0 但有收货`, detail: '采购汇总表不含收货单号，仅用于对账，不直接生成入库流水。' })
+    issues.push({ code: 'RECEIPT_WITHOUT_PERIOD_PURCHASE', message: `${purchasingResult.summary.receivedWithoutPurchaseCount} 行本期采购数量为 0 但有收货`, detail: '系统按“日期+数据包+商品”汇总为幂等净入库流水，不依赖收货单号。' })
   }
   if (missingPurchaseSkus.length > 0) {
     issues.push({ code: 'PURCHASE_SKU_MISSING_FROM_SNAPSHOT', message: `${missingPurchaseSkus.length} 个当日收货商品未出现在期末库存表`, detail: `编码：${missingPurchaseSkus.slice(0, 8).join('、')}${missingPurchaseSkus.length > 8 ? '…' : ''}` })
@@ -359,8 +473,12 @@ export async function extractSupplyChainDailyPackage(buffer: Buffer): Promise<Ex
       sourceSnapshotAt,
       sourceFiles: { inventory: inventory.filename, movements: movements.filename, purchasing: purchasing.filename },
       inventory: inventoryResult.summary,
-      movements: movementSummary,
+      movements: movementResult.summary,
       purchasing: purchasingResult.summary,
+      ledger: {
+        inbound: purchasingResult.ledger,
+        outbound: movementResult.ledger,
+      },
       issues,
     },
   }

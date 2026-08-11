@@ -134,14 +134,14 @@ describe('美团期初库存基线导入页面', () => {
     let button: HTMLButtonElement | undefined
     await waitFor(() => {
       button = Array.from(container.querySelectorAll('button'))
-        .find(item => item.textContent?.includes('建立期初基线'))
+        .find(item => item.textContent?.includes('设为库存基准'))
       return Boolean(button && !button.disabled)
     })
 
     await act(async () => { button!.click() })
-    expect(vi.mocked(window.confirm)).toHaveBeenCalledWith(expect.stringContaining('期初基线'))
+    expect(vi.mocked(window.confirm)).toHaveBeenCalledWith(expect.stringContaining('设为基准'))
     await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path).endsWith('/baseline')))
-    await waitFor(() => container.textContent?.includes('期初基线已生效') ?? false)
+    await waitFor(() => container.textContent?.includes('连续记账基准') ?? false)
 
     const call = mockFetch.mock.calls.find(([path]) => String(path).endsWith('/baseline'))
     expect(call?.[1]?.method).toBe('POST')

@@ -61,6 +61,25 @@ type InventoryImport = {
     sourceSnapshotAt?: string
     movementSemantics?: string
     purchasingSemantics?: string
+    baselineApplied?: boolean
+    dailyLedgerApplied?: boolean
+    dailyLedgerAppliedAt?: string
+    dailyLedgerReconciliation?: {
+      packageDate: string
+      priorBaselineDate: string
+      comparedCount: number
+      matchedCount: number
+      differenceCount: number
+      totalAbsoluteQuantityDifference: string
+      topDifferences?: Array<{
+        externalCode: string
+        externalName: string
+        inventoryUnit?: string | null
+        theoreticalQty: string
+        snapshotQty: string
+        quantityDifference: string
+      }>
+    }
     dailyPackage?: {
       packageDate: string
       sourceSnapshotAt?: string | null
@@ -160,6 +179,9 @@ export default function WarehouseSnapshotImportPage() {
   const canApplyBaseline = current?.status === 'STAGED'
     && current.blockingCount === 0
     && current.matchedCount > 0
+    && !current.metadata?.dailyLedgerApplied
+  const canApplyDailyLedger = canApplyBaseline
+    && Boolean(current?.metadata?.dailyPackage)
 
   async function preview() {
     if (!file) return setError('请选择每日供应链 .7z 数据包或美团 .xlsx 库存文件')
@@ -175,7 +197,7 @@ export default function WarehouseSnapshotImportPage() {
       setCurrent(record)
       setView(record.blockingCount > 0 ? 'blocking' : 'all')
       setNotice(record.metadata?.dailyPackage
-        ? '每日数据包预检完成：库存、配送出库和采购汇总已交叉核对，当前尚未改动库存。'
+        ? '每日数据包预检完成：当前尚未改动库存。首日可设为基准；后续日期按前一日基准写入当日出入库，再与期末快照核对。'
         : '库存文件预检完成：当前尚未改动库存。')
       await loadHistory(record.id)
     } catch (reason: any) {
@@ -224,14 +246,32 @@ export default function WarehouseSnapshotImportPage() {
 
   async function applyBaseline() {
     if (!current || !canApplyBaseline) return
-    if (!window.confirm(`确认将 ${current.snapshotDate}「供应链总仓」${current.matchedCount} 个已映射商品校准到本次库存快照？系统只写入与当前账面余额的差额；配送出库和采购汇总仅用于对账，不会重复扣减或重复入库。`)) return
+    if (!window.confirm(`仅当 ${current.snapshotDate} 是连续记账的首日时使用：确认将该日期期末库存设为基准？后续日期必须写入每日出入库，不能再用快照覆盖。`)) return
     setBusy('baseline')
     setError('')
     try {
       await apiFetch(`/api/warehouse-inventory-imports/${current.id}/baseline`, {
         method: 'POST', body: JSON.stringify({ rowVersion: current.rowVersion }),
       })
-      setNotice('库存快照已生效；余额、批次、差额调整流水和审计记录已在同一事务中完成。')
+      setNotice(`${current.snapshotDate} 期末库存已设为连续记账基准；下一日请使用“写入当日流水并核对”。`)
+      await loadHistory(current.id)
+    } catch (reason: any) {
+      setError(String(reason?.message || reason))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function applyDailyLedger() {
+    if (!current || !canApplyDailyLedger) return
+    if (!window.confirm(`确认以 ${current.snapshotDate} 的前一日期末库存为基准，写入 ${current.snapshotDate} 的净采购入库和配送出库，再与本日期末库存快照核对？快照不会直接覆盖账面库存。`)) return
+    setBusy('daily-ledger')
+    setError('')
+    try {
+      const result = await apiFetch<{ reconciliation?: { matchedCount: number; differenceCount: number } }>(`/api/warehouse-inventory-imports/${current.id}/apply-daily-ledger`, {
+        method: 'POST', body: JSON.stringify({ rowVersion: current.rowVersion }),
+      })
+      setNotice(`当日出入库已幂等写入；与期末快照核对：${result.reconciliation?.matchedCount || 0} 项一致，${result.reconciliation?.differenceCount || 0} 项有差异。差异不会自动覆盖库存。`)
       await loadHistory(current.id)
     } catch (reason: any) {
       setError(String(reason?.message || reason))
@@ -323,8 +363,9 @@ export default function WarehouseSnapshotImportPage() {
               <div className="flex flex-wrap gap-2">
                 {current.status === 'STAGED' && <button onClick={refresh} disabled={busy !== ''} className="h-9 rounded-cta border border-border px-3 text-button disabled:opacity-40">{busy === 'refresh' ? '匹配中…' : '重新匹配'}</button>}
                 {current.status === 'STAGED' && nameSuggestionCount > 0 && <button onClick={confirmNameSuggestions} disabled={busy !== ''} className="h-9 rounded-cta border border-amber/40 bg-amber/10 px-3 text-button text-amber-fg disabled:opacity-40">{busy === 'bulk-map' ? '确认中…' : `批量确认同名候选 ${nameSuggestionCount}`}</button>}
-                {canApplyBaseline && <button onClick={applyBaseline} disabled={busy !== ''} className="h-9 rounded-cta bg-accent px-4 text-button text-white disabled:opacity-40">{busy === 'baseline' ? '校准中…' : '确认并校准库存'}</button>}
-                {current.status === 'STAGED' && !canApplyBaseline && <span className="flex h-9 items-center rounded-cta border border-amber/30 bg-amber/10 px-3 text-micro text-amber-fg">先解决阻断项并完成商品映射</span>}
+                {canApplyDailyLedger && <button onClick={applyDailyLedger} disabled={busy !== ''} className="h-9 rounded-cta bg-accent px-4 text-button text-white disabled:opacity-40">{busy === 'daily-ledger' ? '记账核对中…' : '写入当日流水并核对'}</button>}
+                {canApplyBaseline && <button onClick={applyBaseline} disabled={busy !== ''} className="h-9 rounded-cta border border-border bg-white px-4 text-button disabled:opacity-40">{busy === 'baseline' ? '设定中…' : '仅首日：设为库存基准'}</button>}
+                {current.status === 'STAGED' && !canApplyBaseline && !current.metadata?.dailyLedgerApplied && <span className="flex h-9 items-center rounded-cta border border-amber/30 bg-amber/10 px-3 text-micro text-amber-fg">先解决阻断项并完成商品映射</span>}
               </div>
             </div>
 
@@ -337,13 +378,14 @@ export default function WarehouseSnapshotImportPage() {
             </div>
 
             {current.metadata?.dailyPackage && <div className="space-y-3 rounded-card border border-border bg-white p-4">
-              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-h2">三表交叉核对</h2><p className="text-micro text-gray3">配送和采购数据只用于核对；期末库存快照已包含当日业务，不会再次扣减或入库。</p></div><Chip tone="blue">{current.metadata.dailyPackage.packageDate}</Chip></div>
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="text-h2">三表连续记账与核对</h2><p className="text-micro text-gray3">前一日期末为基准 + 当日采购净入库 − 当日配送出库 = 当日理论期末；再与当日库存快照核对，不用快照覆盖差异。</p></div><Chip tone="blue">{current.metadata.dailyPackage.packageDate}</Chip></div>
               <div className="grid gap-3 md:grid-cols-3">
                 <div className="rounded-cta bg-bg p-3"><b>期末库存</b><div className="mt-2 font-num text-h2">{current.metadata.dailyPackage.inventory.rowCount} SKU · {money(current.metadata.dailyPackage.inventory.amount)}</div><div className="mt-1 text-micro text-gray3">正库存 {current.metadata.dailyPackage.inventory.positiveCount} · 零库存 {current.metadata.dailyPackage.inventory.zeroCount} · 理论负库存 {current.metadata.dailyPackage.inventory.theoreticalNegativeCount}</div></div>
                 <div className="rounded-cta bg-bg p-3"><b>配送出库</b><div className="mt-2 font-num text-h2">{current.metadata.dailyPackage.movements.documentCount} 单 · {money(current.metadata.dailyPackage.movements.settlementAmount)}</div><div className="mt-1 text-micro text-gray3">{current.metadata.dailyPackage.movements.storeCount} 家门店 · 成本 {money(current.metadata.dailyPackage.movements.costAmount)} · 毛利率 {quantity(current.metadata.dailyPackage.movements.grossMargin, 2)}%</div></div>
                 <div className="rounded-cta bg-bg p-3"><b>采购收货</b><div className="mt-2 font-num text-h2">{current.metadata.dailyPackage.purchasing.skuCount} SKU · {money(current.metadata.dailyPackage.purchasing.receivedAmount)}</div><div className="mt-1 text-micro text-gray3">{current.metadata.dailyPackage.purchasing.supplierCount} 家上游供应商 · 退货 {money(current.metadata.dailyPackage.purchasing.returnedAmount)}</div></div>
               </div>
               {current.metadata.dailyPackage.issues.length > 0 && <div className="rounded-cta border border-amber/30 bg-amber/10 p-3 text-caption"><b className="text-amber-fg">需要跟进 {current.metadata.dailyPackage.issues.length} 项</b><div className="mt-2 space-y-1 text-gray2">{current.metadata.dailyPackage.issues.map(issue => <div key={issue.code}>• {issue.message}{issue.detail ? `：${issue.detail}` : ''}</div>)}</div></div>}
+              {current.metadata.dailyLedgerApplied && current.metadata.dailyLedgerReconciliation && <div className="rounded-cta border border-green/30 bg-green/10 p-3 text-caption"><b className="text-green-fg">当日流水已写入</b><div className="mt-1 text-gray2">基准 {current.metadata.dailyLedgerReconciliation.priorBaselineDate} · 核对 {current.metadata.dailyLedgerReconciliation.comparedCount} 项 · 一致 {current.metadata.dailyLedgerReconciliation.matchedCount} 项 · 差异 {current.metadata.dailyLedgerReconciliation.differenceCount} 项</div>{(current.metadata.dailyLedgerReconciliation.topDifferences || []).length > 0 && <details className="mt-2"><summary className="cursor-pointer">查看前 {Math.min(50, current.metadata.dailyLedgerReconciliation.topDifferences!.length)} 项差异</summary><div className="mt-2 space-y-1">{current.metadata.dailyLedgerReconciliation.topDifferences!.map(item => <div key={item.externalCode}>{item.externalName}：理论 {quantity(Number(item.theoreticalQty))} / 快照 {quantity(Number(item.snapshotQty))} {item.inventoryUnit || ''}（差 {quantity(Number(item.quantityDifference))}）</div>)}</div></details>}</div>}
             </div>}
 
             {current.sourceTotalAmount != null && Math.abs(current.sourceTotalAmount - current.detailTotalAmount) > 0.01 && <div className="rounded-card border border-amber/30 bg-amber/10 p-3 text-caption text-gray2">美团合计行 {money(current.sourceTotalAmount)} 包含其他筛选范围；本次只采用“供应链总仓”明细重算的 {money(current.detailTotalAmount)}，不会把合计行写入库存。</div>}

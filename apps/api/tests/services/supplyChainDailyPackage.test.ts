@@ -24,7 +24,7 @@ async function dailyArchive() {
   const detail = Array(58).fill('')
   detail[0] = '物品编码'; detail[1] = '物品名称'; detail[14] = '出入库单号'; detail[16] = '出入库类型'
   const movement = Array(58).fill('')
-  movement[0] = 'SKU-1'; movement[1] = '测试商品'; movement[14] = 'PFCK-1'; movement[16] = '配送发货出库'; movement[19] = '测试门店'; movement[40] = 2; movement[44] = 12; movement[48] = 20; movement[54] = 8
+  movement[0] = 'SKU-1'; movement[1] = '测试商品'; movement[2] = '箱/10袋'; movement[6] = '袋'; movement[7] = '箱'; movement[14] = 'PFCK-1'; movement[16] = '配送发货出库'; movement[19] = '测试门店'; movement[25] = '2026-08-10 18:00:00'; movement[40] = 2; movement[41] = 0.2; movement[44] = 12; movement[48] = 20; movement[54] = 8
   const movements = await xlsx([['出入库明细表'], ['日期：【2026/08/10 至 2026/08/10】'], group, detail, movement], '出入库明细表')
 
   const purchasing = await xlsx([
@@ -54,6 +54,8 @@ describe('supply chain daily package', () => {
     expect(parsed.summary.inventory).toMatchObject({ rowCount: 2, positiveCount: 1, zeroCount: 1, theoreticalNegativeCount: 1, amount: 80 })
     expect(parsed.summary.movements).toMatchObject({ rowCount: 1, documentCount: 1, storeCount: 1, skuCount: 1, costAmount: 12, settlementAmount: 20, grossProfit: 8, grossMargin: 40 })
     expect(parsed.summary.purchasing).toMatchObject({ rowCount: 1, supplierCount: 1, skuCount: 1, receivedAmount: 10, receivedWithoutPurchaseCount: 1 })
+    expect(parsed.summary.ledger.inbound).toEqual([expect.objectContaining({ externalCode: 'SKU-1', sourceUnit: '箱', quantity: 1, amount: 10 })])
+    expect(parsed.summary.ledger.outbound).toEqual([expect.objectContaining({ externalCode: 'SKU-1', sourceUnit: '箱', baseUnit: '袋', quantity: 0.2, baseQuantity: 2, costAmount: 12 })])
     expect(parsed.summary.issues.map(issue => issue.code)).toContain('THEORETICAL_NEGATIVE_STOCK')
     expect(parsed.summary.issues.map(issue => issue.code)).toContain('RECEIPT_WITHOUT_PERIOD_PURCHASE')
     expect(parsed.inventoryBuffer.byteLength).toBeGreaterThan(100)

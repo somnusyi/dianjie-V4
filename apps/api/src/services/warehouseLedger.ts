@@ -1348,3 +1348,354 @@ export async function postWarehouseShipment(input: {
 }) {
   return serializableWithRetry(tx => consumeWarehouseLedgerForShipment(tx, input))
 }
+
+type DailyPackageInboundLine = {
+  externalCode: string
+  externalName: string
+  sourceUnit: string
+  quantity: number
+  amount: number
+  suppliers?: string[]
+}
+
+type DailyPackageOutboundLine = {
+  externalCode: string
+  externalName: string
+  sourceUnit: string
+  baseUnit: string
+  quantity: number
+  baseQuantity: number
+  costAmount: number
+  documents?: string[]
+  stores?: string[]
+}
+
+type DailyPackageMetadata = {
+  packageDate?: string
+  sourceSnapshotAt?: string | null
+  ledger?: {
+    inbound?: DailyPackageInboundLine[]
+    outbound?: DailyPackageOutboundLine[]
+  }
+}
+
+function metadataRecord(value: unknown): Record<string, any> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, any>
+    : {}
+}
+
+function normalizedExternalCode(value: unknown) {
+  return String(value || '').trim().toUpperCase()
+}
+
+function normalizedLedgerUnit(value: unknown) {
+  const unit = String(value || '').trim().toLowerCase().replaceAll(' ', '')
+  if (['千克', '公斤', 'kg', 'kgs'].includes(unit)) return 'kg'
+  if (['克', 'g'].includes(unit)) return 'g'
+  if (['升', 'l'].includes(unit)) return 'l'
+  if (['毫升', 'ml'].includes(unit)) return 'ml'
+  return unit
+}
+
+/**
+ * Post a daily Meituan supply-chain package after a prior closing baseline.
+ * The purchasing report becomes net inbound, the delivery report becomes
+ * outbound, and the same day's inventory workbook remains a comparison fact.
+ * No snapshot quantity is copied into the balance by this operation.
+ */
+export async function recordWarehouseDailyPackageLedger(input: {
+  tenantId: string
+  userId: string
+  role: string
+  importId: string
+  rowVersion: number
+}) {
+  return serializableWithRetry(async tx => {
+    await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`warehouse-daily-package:${input.tenantId}:${input.importId}`}))`)
+    const record = await tx.warehouseInventoryImport.findFirst({
+      where: { id: input.importId, tenantId: input.tenantId },
+      include: { items: { orderBy: { rowNumber: 'asc' } } },
+    })
+    if (!record) throw businessError('每日供应链导入单不存在', 404)
+    if (record.status !== 'STAGED' || record.rowVersion !== input.rowVersion) {
+      throw businessError('导入单状态已变化，请刷新后重试', 409)
+    }
+    const metadata = metadataRecord(record.metadata)
+    if (metadata.dailyLedgerApplied === true) {
+      return { replayed: true, importId: record.id, reconciliation: metadata.dailyLedgerReconciliation || null }
+    }
+    const dailyPackage = metadataRecord(metadata.dailyPackage) as DailyPackageMetadata
+    const packageDate = String(dailyPackage.packageDate || '').trim()
+    const inboundSource = Array.isArray(dailyPackage.ledger?.inbound) ? dailyPackage.ledger!.inbound! : []
+    const outboundSource = Array.isArray(dailyPackage.ledger?.outbound) ? dailyPackage.ledger!.outbound! : []
+    if (!/^20\d{2}-\d{2}-\d{2}$/.test(packageDate) || (inboundSource.length === 0 && outboundSource.length === 0)) {
+      throw businessError('该数据包缺少可记账的当日出入库明细，请重新上传原始 .7z 文件', 409)
+    }
+
+    const earlierImports = await tx.warehouseInventoryImport.findMany({
+      where: {
+        tenantId: input.tenantId,
+        warehouseId: record.warehouseId,
+        snapshotDate: { lt: record.snapshotDate },
+        status: 'CONFIRMED',
+      },
+      orderBy: { snapshotDate: 'desc' },
+      select: { id: true, no: true, snapshotDate: true, metadata: true },
+    })
+    const baseline = earlierImports.find(candidate => metadataRecord(candidate.metadata).baselineApplied === true)
+    if (!baseline) throw businessError('请先把前一日（10 日）期末库存确认为库存基准，再写入 11 日流水', 409)
+    const baselineDate = baseline.snapshotDate.toISOString().slice(0, 10)
+    const expectedPrevious = new Date(`${packageDate}T00:00:00.000Z`)
+    expectedPrevious.setUTCDate(expectedPrevious.getUTCDate() - 1)
+    const expectedPreviousDate = expectedPrevious.toISOString().slice(0, 10)
+    if (baselineDate !== expectedPreviousDate) {
+      throw businessError(`当前最近基准为 ${baselineDate}，但 ${packageDate} 日流水要求 ${expectedPreviousDate} 日基准`, 409)
+    }
+
+    const itemByCode = new Map(record.items.map(item => [normalizedExternalCode(item.externalCode), item]))
+    const requiredCodes = new Set([
+      ...inboundSource.filter(line => Number(line.quantity) !== 0).map(line => normalizedExternalCode(line.externalCode)),
+      ...outboundSource.filter(line => Number(line.baseQuantity || line.quantity) > 0).map(line => normalizedExternalCode(line.externalCode)),
+    ])
+    const blocked: Array<{ code: string; message: string }> = []
+    for (const code of requiredCodes) {
+      const item = itemByCode.get(code)
+      if (!item?.productId) blocked.push({ code, message: `${item?.externalName || code} 尚未绑定系统商品` })
+      else if (!item.inventoryUnit) blocked.push({ code, message: `${item.externalName} 缺少库存单位` })
+    }
+    if (blocked.length) throw Object.assign(businessError(`有 ${blocked.length} 个当日流水商品未完成映射`, 409), { blockingIssues: blocked })
+
+    const productIds = [...new Set([...requiredCodes].map(code => itemByCode.get(code)!.productId!))]
+    const products = await tx.product.findMany({
+      where: { tenantId: input.tenantId, id: { in: productIds }, status: 'ENABLED' },
+      select: { id: true, name: true, inventoryUnit: true },
+    })
+    const productById = new Map(products.map(product => [product.id, product]))
+    if (products.length !== productIds.length) throw businessError('当日流水包含已停用或不存在的系统商品', 409)
+
+    type ResolvedLine = {
+      code: string
+      productId: string
+      productName: string
+      inventoryUnit: string
+      inventoryQuantity: Prisma.Decimal
+      originalQuantity: Prisma.Decimal
+      originalUnit: string
+      conversionFactor: Prisma.Decimal
+      amount: Prisma.Decimal
+      sourceName: string | null
+      note: string
+    }
+    const resolveInbound = (line: DailyPackageInboundLine): ResolvedLine | null => {
+      const originalQuantity = decimal(line.quantity || 0, `${line.externalName}净收货数量`).toDecimalPlaces(QTY_DP)
+      if (originalQuantity.isZero()) return null
+      const code = normalizedExternalCode(line.externalCode)
+      const item = itemByCode.get(code)!
+      const product = productById.get(item.productId!)!
+      const inventoryUnit = String(item.inventoryUnit || product.inventoryUnit || '').trim()
+      let conversionFactor = new Prisma.Decimal(1)
+      if (normalizedLedgerUnit(line.sourceUnit) !== normalizedLedgerUnit(inventoryUnit)) {
+        if (normalizedLedgerUnit(line.sourceUnit) !== normalizedLedgerUnit(item.purchaseUnit) || !item.conversionFactor) {
+          throw businessError(`${line.externalName} 无法从 ${line.sourceUnit} 换算为库存单位 ${inventoryUnit}`, 409)
+        }
+        conversionFactor = item.conversionFactor.toDecimalPlaces(QTY_DP)
+      }
+      return {
+        code,
+        productId: item.productId!,
+        productName: product.name,
+        inventoryUnit,
+        inventoryQuantity: originalQuantity.abs().mul(conversionFactor).toDecimalPlaces(QTY_DP),
+        originalQuantity: originalQuantity.abs(),
+        originalUnit: line.sourceUnit,
+        conversionFactor,
+        amount: new Prisma.Decimal(line.amount || 0).abs().toDecimalPlaces(VALUE_DP),
+        sourceName: Array.isArray(line.suppliers) ? line.suppliers.filter(Boolean).join('、').slice(0, 120) || null : null,
+        note: originalQuantity.gt(0) ? `美团 ${packageDate} 采购净入库` : `美团 ${packageDate} 采购退货`,
+      }
+    }
+    const resolveOutbound = (line: DailyPackageOutboundLine): ResolvedLine | null => {
+      const code = normalizedExternalCode(line.externalCode)
+      const item = itemByCode.get(code)!
+      const product = productById.get(item.productId!)!
+      const inventoryUnit = String(item.inventoryUnit || product.inventoryUnit || '').trim()
+      const baseQuantity = new Prisma.Decimal(line.baseQuantity || 0).toDecimalPlaces(QTY_DP)
+      const originalQuantity = new Prisma.Decimal(line.quantity || 0).toDecimalPlaces(QTY_DP)
+      let inventoryQuantity: Prisma.Decimal
+      let conversionFactor: Prisma.Decimal
+      let originalUnit: string
+      if (baseQuantity.gt(0) && normalizedLedgerUnit(line.baseUnit) === normalizedLedgerUnit(inventoryUnit)) {
+        inventoryQuantity = baseQuantity
+        originalUnit = line.baseUnit
+        conversionFactor = new Prisma.Decimal(1)
+      } else if (originalQuantity.gt(0) && normalizedLedgerUnit(line.sourceUnit) === normalizedLedgerUnit(inventoryUnit)) {
+        inventoryQuantity = originalQuantity
+        originalUnit = line.sourceUnit
+        conversionFactor = new Prisma.Decimal(1)
+      } else if (originalQuantity.gt(0)
+        && normalizedLedgerUnit(line.sourceUnit) === normalizedLedgerUnit(item.purchaseUnit)
+        && item.conversionFactor) {
+        conversionFactor = item.conversionFactor.toDecimalPlaces(QTY_DP)
+        inventoryQuantity = originalQuantity.mul(conversionFactor).toDecimalPlaces(QTY_DP)
+        originalUnit = line.sourceUnit
+      } else {
+        throw businessError(`${line.externalName} 配送数量无法换算为库存单位 ${inventoryUnit}`, 409)
+      }
+      if (inventoryQuantity.lte(0)) return null
+      return {
+        code,
+        productId: item.productId!,
+        productName: product.name,
+        inventoryUnit,
+        inventoryQuantity,
+        originalQuantity: originalUnit === line.baseUnit ? baseQuantity : originalQuantity,
+        originalUnit,
+        conversionFactor,
+        amount: new Prisma.Decimal(line.costAmount || 0).abs().toDecimalPlaces(VALUE_DP),
+        sourceName: Array.isArray(line.stores) ? line.stores.filter(Boolean).join('、').slice(0, 120) || null : null,
+        note: `美团 ${packageDate} 配送出库${Array.isArray(line.documents) ? `（${line.documents.length} 单）` : ''}`,
+      }
+    }
+
+    const resolvedInbound = inboundSource
+      .map(source => ({ source, line: resolveInbound(source) }))
+      .filter((item): item is { source: DailyPackageInboundLine; line: ResolvedLine } => Boolean(item.line))
+    const purchaseReturns = resolvedInbound.filter(item => Number(item.source.quantity) < 0).map(item => item.line)
+    const positiveInbound = resolvedInbound.filter(item => Number(item.source.quantity) > 0).map(item => item.line)
+    const outboundLines = [...outboundSource.map(resolveOutbound).filter((line): line is ResolvedLine => Boolean(line)), ...purchaseReturns]
+    const allLines = [...positiveInbound, ...outboundLines]
+    const balances = await lockBalances(tx, {
+      tenantId: input.tenantId,
+      warehouseId: record.warehouseId,
+      products: allLines.map(line => ({ productId: line.productId, inventoryUnit: line.inventoryUnit })),
+    })
+    const mode = await warehouseMode(tx, input.tenantId, record.warehouseId)
+    const effectiveAt = new Date(`${packageDate}T23:59:00+08:00`)
+    const movementIds: string[] = []
+
+    for (const [index, line] of positiveInbound.entries()) {
+      const idempotencyKey = `daily-package:${record.id}:in:${line.productId}`
+      const existing = await tx.warehouseLedgerMovement.findUnique({
+        where: { tenantId_warehouseId_idempotencyKey: { tenantId: input.tenantId, warehouseId: record.warehouseId, idempotencyKey } },
+      })
+      if (existing) { movementIds.push(existing.id); continue }
+      const balance = balances.get(line.productId)!
+      const valueIn = line.amount
+      const unitCost = line.inventoryQuantity.gt(0) ? valueIn.div(line.inventoryQuantity).toDecimalPlaces(COST_DP) : ZERO
+      const nextPhysical = balance.physicalQty.plus(line.inventoryQuantity)
+      const nextValue = balance.inventoryValue.plus(valueIn).toDecimalPlaces(VALUE_DP)
+      const nextAverage = nextAverageCost(nextValue, nextPhysical, balance.averageUnitCost)
+      const movement = await tx.warehouseLedgerMovement.create({ data: {
+        tenantId: input.tenantId, warehouseId: record.warehouseId, productId: line.productId,
+        type: 'MANUAL_INBOUND', physicalDelta: line.inventoryQuantity, reservedDelta: ZERO, valueDelta: valueIn,
+        physicalAfter: nextPhysical, reservedAfter: balance.reservedQty, valueAfter: nextValue, averageUnitCostAfter: nextAverage,
+        originalQuantity: line.originalQuantity, originalUnit: line.originalUnit, conversionFactor: line.conversionFactor,
+        inventoryQuantity: line.inventoryQuantity, inventoryUnit: line.inventoryUnit, inventoryUnitCost: unitCost,
+        sourceType: 'MeituanDailyPackage', sourceId: record.id, sourceLineId: `IN:${line.code}`,
+        idempotencyKey, requestFingerprint: fingerprint({ packageDate, line, direction: 'IN' }), effectiveAt,
+        note: line.note, sourceName: line.sourceName, createdById: input.userId,
+      } })
+      await persistBalance(tx, balance, { physicalQty: nextPhysical, reservedQty: balance.reservedQty, inventoryValue: nextValue, averageUnitCost: nextAverage })
+      await tx.warehouseLedgerLot.create({ data: {
+        tenantId: input.tenantId, warehouseId: record.warehouseId, productId: line.productId, kind: 'MANUAL_INBOUND',
+        batchNo: `DP-${packageDate.replaceAll('-', '')}-${record.id.slice(-6)}-${line.productId.slice(-6)}`,
+        initialQty: line.inventoryQuantity, remainingQty: line.inventoryQuantity, inventoryUnit: line.inventoryUnit,
+        inventoryUnitCost: unitCost, sourceName: line.sourceName, sourceMovementId: movement.id,
+      } })
+      movementIds.push(movement.id)
+    }
+
+    for (const line of outboundLines) {
+      const direction = purchaseReturns.includes(line) ? 'RETURN' : 'OUT'
+      const idempotencyKey = `daily-package:${record.id}:${direction.toLowerCase()}:${line.productId}`
+      const existing = await tx.warehouseLedgerMovement.findUnique({
+        where: { tenantId_warehouseId_idempotencyKey: { tenantId: input.tenantId, warehouseId: record.warehouseId, idempotencyKey } },
+      })
+      if (existing) { movementIds.push(existing.id); continue }
+      const balance = balances.get(line.productId)!
+      if (mode === 'STRICT' && balance.physicalQty.lt(line.inventoryQuantity)) {
+        throw businessError(`${line.productName} 可用总仓库存不足，不能写入 ${packageDate} 日出库`, 409)
+      }
+      let costOut = line.amount.gt(0) ? line.amount : line.inventoryQuantity.mul(balance.averageUnitCost).toDecimalPlaces(VALUE_DP)
+      const nextPhysical = balance.physicalQty.minus(line.inventoryQuantity)
+      let nextValue = balance.inventoryValue.minus(costOut).toDecimalPlaces(VALUE_DP)
+      if (nextPhysical.isZero()) { costOut = balance.inventoryValue; nextValue = ZERO }
+      const nextAverage = nextAverageCost(nextValue, nextPhysical, balance.averageUnitCost)
+      const movement = await tx.warehouseLedgerMovement.create({ data: {
+        tenantId: input.tenantId, warehouseId: record.warehouseId, productId: line.productId,
+        type: 'ORDER_OUTBOUND', physicalDelta: line.inventoryQuantity.negated(), reservedDelta: ZERO, valueDelta: costOut.negated(),
+        physicalAfter: nextPhysical, reservedAfter: balance.reservedQty, valueAfter: nextValue, averageUnitCostAfter: nextAverage,
+        originalQuantity: line.originalQuantity, originalUnit: line.originalUnit, conversionFactor: line.conversionFactor,
+        inventoryQuantity: line.inventoryQuantity, inventoryUnit: line.inventoryUnit,
+        inventoryUnitCost: line.inventoryQuantity.gt(0) ? costOut.div(line.inventoryQuantity).toDecimalPlaces(COST_DP) : ZERO,
+        sourceType: 'MeituanDailyPackage', sourceId: record.id, sourceLineId: `${direction}:${line.code}`,
+        idempotencyKey, requestFingerprint: fingerprint({ packageDate, line, direction }), effectiveAt,
+        note: line.note, sourceName: line.sourceName, createdById: input.userId,
+      } })
+      await persistBalance(tx, balance, { physicalQty: nextPhysical, reservedQty: balance.reservedQty, inventoryValue: nextValue, averageUnitCost: nextAverage })
+      await allocateLotsFefo(tx, { tenantId: input.tenantId, warehouseId: record.warehouseId, productId: line.productId, movementId: movement.id, quantity: line.inventoryQuantity })
+      movementIds.push(movement.id)
+    }
+
+    const reconciliationItems = record.items.filter(item => item.productId && item.normalizedQuantity !== null).map(item => {
+      const balance = balances.get(item.productId!)
+      const theoreticalQty = balance?.physicalQty || ZERO
+      const snapshotQty = item.normalizedQuantity || ZERO
+      const quantityDifference = theoreticalQty.minus(snapshotQty).toDecimalPlaces(QTY_DP)
+      const theoreticalValue = balance?.inventoryValue || ZERO
+      const valueDifference = theoreticalValue.minus(item.inventoryAmount).toDecimalPlaces(VALUE_DP)
+      return {
+        productId: item.productId!, externalCode: item.externalCode, externalName: item.externalName,
+        inventoryUnit: item.inventoryUnit, theoreticalQty: theoreticalQty.toFixed(QTY_DP), snapshotQty: snapshotQty.toFixed(QTY_DP),
+        quantityDifference: quantityDifference.toFixed(QTY_DP), theoreticalValue: theoreticalValue.toFixed(2),
+        snapshotValue: item.inventoryAmount.toFixed(2), valueDifference: valueDifference.toFixed(2),
+      }
+    })
+    const different = reconciliationItems.filter(item => new Prisma.Decimal(item.quantityDifference).abs().gt('0.001'))
+    const reconciliation = {
+      packageDate,
+      priorBaselineImportId: baseline.id,
+      priorBaselineDate: baselineDate,
+      comparedCount: reconciliationItems.length,
+      matchedCount: reconciliationItems.length - different.length,
+      differenceCount: different.length,
+      totalAbsoluteQuantityDifference: different.reduce((sum, item) => sum.plus(new Prisma.Decimal(item.quantityDifference).abs()), ZERO).toFixed(QTY_DP),
+      topDifferences: different.sort((a, b) => new Prisma.Decimal(b.quantityDifference).abs().cmp(new Prisma.Decimal(a.quantityDifference).abs())).slice(0, 50),
+    }
+    const updated = await tx.warehouseInventoryImport.updateMany({
+      where: { id: record.id, tenantId: input.tenantId, status: 'STAGED', rowVersion: input.rowVersion },
+      data: {
+        metadata: {
+          ...metadata,
+          dailyLedgerApplied: true,
+          dailyLedgerAppliedAt: new Date().toISOString(),
+          dailyLedgerAppliedById: input.userId,
+          dailyLedgerMovementIds: movementIds,
+          dailyLedgerReconciliation: reconciliation,
+          movementSemantics: 'DAILY_OUTBOUND_LEDGER_AFTER_PRIOR_CLOSING_BASELINE',
+          purchasingSemantics: 'DAILY_NET_RECEIPT_LEDGER_AGGREGATED_BY_SKU',
+        },
+        rowVersion: { increment: 1 },
+      },
+    })
+    if (updated.count !== 1) throw businessError('导入单状态已变化，请刷新后重试', 409)
+    await tx.opLog.create({ data: {
+      tenantId: input.tenantId, userId: input.userId, role: input.role,
+      action: `写入美团 ${packageDate} 供应链当日流水并核对期末库存`, entityType: 'WarehouseInventoryImport',
+      target: record.no, targetId: record.id, metadata: {
+        baselineDate, inboundCount: positiveInbound.length, outboundCount: outboundLines.length,
+        movementCount: movementIds.length, reconciliation,
+      },
+    } })
+    return {
+      replayed: false,
+      importId: record.id,
+      priorBaselineDate: baselineDate,
+      inboundCount: positiveInbound.length,
+      outboundCount: outboundLines.length,
+      movementCount: movementIds.length,
+      reconciliation,
+    }
+  })
+}

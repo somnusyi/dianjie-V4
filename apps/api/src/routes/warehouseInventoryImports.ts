@@ -25,6 +25,7 @@ import {
   type WarehouseInventoryIssue,
 } from '../services/warehouseInventoryImport'
 import { recordWarehouseBaselineSnapshot } from '../services/warehouseLedgerBaselineImport'
+import { recordWarehouseDailyPackageLedger } from '../services/warehouseLedger'
 import {
   extractSupplyChainDailyPackage,
   type SupplyChainDailyPackageSummary,
@@ -157,7 +158,8 @@ async function attachDailyPackageMetadata(
 ) {
   if (!upload.packageSummary) return record
   const metadata = metadataObject(record.metadata)
-  if (metadata.dailyPackage) return record
+  const existingPackage = metadataObject(metadata.dailyPackage)
+  if (existingPackage.ledger && metadata.dailyPackage) return record
   const existingWarnings = issueArray(metadata.fileWarnings)
   return db.warehouseInventoryImport.update({
     where: { id: record.id },
@@ -170,8 +172,8 @@ async function attachDailyPackageMetadata(
         sourceSnapshotAt: upload.packageSummary.sourceSnapshotAt || undefined,
         inventorySourceFilename: upload.inventoryFilename,
         dailyPackage: upload.packageSummary,
-        movementSemantics: 'RECONCILIATION_ONLY_ALREADY_INCLUDED_IN_CLOSING_SNAPSHOT',
-        purchasingSemantics: 'RECONCILIATION_ONLY_NO_RECEIPT_DOCUMENT_IDS',
+        movementSemantics: 'DAILY_OUTBOUND_LEDGER_AFTER_PRIOR_CLOSING_BASELINE',
+        purchasingSemantics: 'DAILY_NET_RECEIPT_LEDGER_AGGREGATED_BY_SKU',
       }),
       rowVersion: { increment: 1 },
     },
@@ -534,10 +536,10 @@ export const warehouseInventoryImportRoutes: FastifyPluginAsync = async app => {
               inventorySourceFilename: upload.inventoryFilename,
               dailyPackage: upload.packageSummary || undefined,
               movementSemantics: upload.packageSummary
-                ? 'RECONCILIATION_ONLY_ALREADY_INCLUDED_IN_CLOSING_SNAPSHOT'
+                ? 'DAILY_OUTBOUND_LEDGER_AFTER_PRIOR_CLOSING_BASELINE'
                 : undefined,
               purchasingSemantics: upload.packageSummary
-                ? 'RECONCILIATION_ONLY_NO_RECEIPT_DOCUMENT_IDS'
+                ? 'DAILY_NET_RECEIPT_LEDGER_AGGREGATED_BY_SKU'
                 : undefined,
             }),
             createdById: req.user.userId,
@@ -1105,6 +1107,30 @@ export const warehouseInventoryImportRoutes: FastifyPluginAsync = async app => {
     } catch (error: any) {
       req.log.error({ error, importId }, 'warehouse baseline import failed')
       return reply.status(error.statusCode || 500).send({ error: error.message || '基线建账失败，所有数据均未改动' })
+    }
+  })
+
+  app.post('/:id/apply-daily-ledger', auth(app), async (req: any, reply: any) => {
+    if (!requireInternalInventoryWrite(req, reply)) return
+    const body = z.object({ rowVersion: z.number().int().nonnegative() }).safeParse(req.body)
+    if (!body.success) return reply.status(400).send({ error: body.error.issues[0].message })
+    const importId = String(req.params.id)
+    try {
+      const result = await recordWarehouseDailyPackageLedger({
+        tenantId: req.user.tenantId,
+        userId: req.user.userId,
+        role: req.user.role,
+        importId,
+        rowVersion: body.data.rowVersion,
+      })
+      void invalidatePattern(`products:full:${req.user.tenantId}:*`)
+      return { ok: true, ...result }
+    } catch (error: any) {
+      req.log.error({ error, importId }, 'warehouse daily package ledger failed')
+      return reply.status(error.statusCode || 500).send({
+        error: error.message || '当日出入库写入失败，所有数据均未改动',
+        blockingIssues: error.blockingIssues,
+      })
     }
   })
 }

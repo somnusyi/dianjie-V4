@@ -82,12 +82,15 @@ function nextAverageCost(value: Prisma.Decimal, physical: Prisma.Decimal, fallba
   return value.div(physical).toDecimalPlaces(COST_DP)
 }
 
-async function serializableWithRetry<T>(work: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+async function serializableWithRetry<T>(
+  work: (tx: Prisma.TransactionClient) => Promise<T>,
+  timeout = 15_000,
+): Promise<T> {
   for (let attempt = 1; attempt <= 4; attempt += 1) {
     try {
       return await prisma.$transaction(work, {
         isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-        timeout: 15_000,
+        timeout,
       })
     } catch (error: any) {
       // P2034 covers serializable write conflicts/deadlocks. P2002 is also
@@ -1458,18 +1461,38 @@ export async function recordWarehouseDailyPackageLedger(input: {
       ...inboundSource.filter(line => Number(line.quantity) !== 0).map(line => normalizedExternalCode(line.externalCode)),
       ...outboundSource.filter(line => Number(line.baseQuantity || line.quantity) > 0).map(line => normalizedExternalCode(line.externalCode)),
     ])
+    const externalMappings = await tx.productExternalCode.findMany({
+      where: { tenantId: input.tenantId, source: 'MEITUAN', externalCode: { in: [...requiredCodes] } },
+      select: { externalCode: true, productId: true },
+    })
+    const exactCodeProducts = await tx.product.findMany({
+      where: { tenantId: input.tenantId, code: { in: [...requiredCodes] }, status: 'ENABLED' },
+      select: { id: true, code: true },
+    })
+    const mappedProductIdByCode = new Map(externalMappings.map(mapping => [normalizedExternalCode(mapping.externalCode), mapping.productId]))
+    const exactProductIdByCode = new Map(exactCodeProducts.map(product => [normalizedExternalCode(product.code), product.id]))
+    const productIdByCode = new Map([...requiredCodes].map(code => [
+      code,
+      itemByCode.get(code)?.productId || mappedProductIdByCode.get(code) || exactProductIdByCode.get(code) || null,
+    ]))
     const blocked: Array<{ code: string; message: string }> = []
     for (const code of requiredCodes) {
       const item = itemByCode.get(code)
-      if (!item?.productId) blocked.push({ code, message: `${item?.externalName || code} 尚未绑定系统商品` })
-      else if (!item.inventoryUnit) blocked.push({ code, message: `${item.externalName} 缺少库存单位` })
+      if (!productIdByCode.get(code)) blocked.push({ code, message: `${item?.externalName || code} 尚未绑定系统商品` })
     }
     if (blocked.length) throw Object.assign(businessError(`有 ${blocked.length} 个当日流水商品未完成映射`, 409), { blockingIssues: blocked })
 
-    const productIds = [...new Set([...requiredCodes].map(code => itemByCode.get(code)!.productId!))]
+    const productIds = [...new Set([...requiredCodes].map(code => productIdByCode.get(code)!))]
     const products = await tx.product.findMany({
       where: { tenantId: input.tenantId, id: { in: productIds }, status: 'ENABLED' },
-      select: { id: true, name: true, inventoryUnit: true },
+      select: {
+        id: true,
+        name: true,
+        unit: true,
+        purchaseUnit: true,
+        inventoryUnit: true,
+        inventoryUnitsPerPurchaseUnit: true,
+      },
     })
     const productById = new Map(products.map(product => [product.id, product]))
     if (products.length !== productIds.length) throw businessError('当日流水包含已停用或不存在的系统商品', 409)
@@ -1491,19 +1514,22 @@ export async function recordWarehouseDailyPackageLedger(input: {
       const originalQuantity = decimal(line.quantity || 0, `${line.externalName}净收货数量`).toDecimalPlaces(QTY_DP)
       if (originalQuantity.isZero()) return null
       const code = normalizedExternalCode(line.externalCode)
-      const item = itemByCode.get(code)!
-      const product = productById.get(item.productId!)!
-      const inventoryUnit = String(item.inventoryUnit || product.inventoryUnit || '').trim()
+      const item = itemByCode.get(code)
+      const productId = productIdByCode.get(code)!
+      const product = productById.get(productId)!
+      const inventoryUnit = String(item?.inventoryUnit || product.inventoryUnit || product.unit || '').trim()
+      const purchaseUnit = String(item?.purchaseUnit || product.purchaseUnit || product.unit || '').trim()
+      const purchaseFactor = item?.conversionFactor || product.inventoryUnitsPerPurchaseUnit
       let conversionFactor = new Prisma.Decimal(1)
       if (normalizedLedgerUnit(line.sourceUnit) !== normalizedLedgerUnit(inventoryUnit)) {
-        if (normalizedLedgerUnit(line.sourceUnit) !== normalizedLedgerUnit(item.purchaseUnit) || !item.conversionFactor) {
+        if (normalizedLedgerUnit(line.sourceUnit) !== normalizedLedgerUnit(purchaseUnit) || !purchaseFactor) {
           throw businessError(`${line.externalName} 无法从 ${line.sourceUnit} 换算为库存单位 ${inventoryUnit}`, 409)
         }
-        conversionFactor = item.conversionFactor.toDecimalPlaces(QTY_DP)
+        conversionFactor = new Prisma.Decimal(purchaseFactor).toDecimalPlaces(QTY_DP)
       }
       return {
         code,
-        productId: item.productId!,
+        productId,
         productName: product.name,
         inventoryUnit,
         inventoryQuantity: originalQuantity.abs().mul(conversionFactor).toDecimalPlaces(QTY_DP),
@@ -1517,9 +1543,12 @@ export async function recordWarehouseDailyPackageLedger(input: {
     }
     const resolveOutbound = (line: DailyPackageOutboundLine): ResolvedLine | null => {
       const code = normalizedExternalCode(line.externalCode)
-      const item = itemByCode.get(code)!
-      const product = productById.get(item.productId!)!
-      const inventoryUnit = String(item.inventoryUnit || product.inventoryUnit || '').trim()
+      const item = itemByCode.get(code)
+      const productId = productIdByCode.get(code)!
+      const product = productById.get(productId)!
+      const inventoryUnit = String(item?.inventoryUnit || product.inventoryUnit || product.unit || '').trim()
+      const purchaseUnit = String(item?.purchaseUnit || product.purchaseUnit || product.unit || '').trim()
+      const purchaseFactor = item?.conversionFactor || product.inventoryUnitsPerPurchaseUnit
       const baseQuantity = new Prisma.Decimal(line.baseQuantity || 0).toDecimalPlaces(QTY_DP)
       const originalQuantity = new Prisma.Decimal(line.quantity || 0).toDecimalPlaces(QTY_DP)
       let inventoryQuantity: Prisma.Decimal
@@ -1534,9 +1563,9 @@ export async function recordWarehouseDailyPackageLedger(input: {
         originalUnit = line.sourceUnit
         conversionFactor = new Prisma.Decimal(1)
       } else if (originalQuantity.gt(0)
-        && normalizedLedgerUnit(line.sourceUnit) === normalizedLedgerUnit(item.purchaseUnit)
-        && item.conversionFactor) {
-        conversionFactor = item.conversionFactor.toDecimalPlaces(QTY_DP)
+        && normalizedLedgerUnit(line.sourceUnit) === normalizedLedgerUnit(purchaseUnit)
+        && purchaseFactor) {
+        conversionFactor = new Prisma.Decimal(purchaseFactor).toDecimalPlaces(QTY_DP)
         inventoryQuantity = originalQuantity.mul(conversionFactor).toDecimalPlaces(QTY_DP)
         originalUnit = line.sourceUnit
       } else {
@@ -1545,7 +1574,7 @@ export async function recordWarehouseDailyPackageLedger(input: {
       if (inventoryQuantity.lte(0)) return null
       return {
         code,
-        productId: item.productId!,
+        productId,
         productName: product.name,
         inventoryUnit,
         inventoryQuantity,
@@ -1565,10 +1594,16 @@ export async function recordWarehouseDailyPackageLedger(input: {
     const positiveInbound = resolvedInbound.filter(item => Number(item.source.quantity) > 0).map(item => item.line)
     const outboundLines = [...outboundSource.map(resolveOutbound).filter((line): line is ResolvedLine => Boolean(line)), ...purchaseReturns]
     const allLines = [...positiveInbound, ...outboundLines]
+    const snapshotBalanceProducts = record.items
+      .filter((item): item is typeof item & { productId: string; inventoryUnit: string } => Boolean(item.productId && item.inventoryUnit))
+      .map(item => ({ productId: item.productId, inventoryUnit: item.inventoryUnit }))
     const balances = await lockBalances(tx, {
       tenantId: input.tenantId,
       warehouseId: record.warehouseId,
-      products: allLines.map(line => ({ productId: line.productId, inventoryUnit: line.inventoryUnit })),
+      products: [
+        ...allLines.map(line => ({ productId: line.productId, inventoryUnit: line.inventoryUnit })),
+        ...snapshotBalanceProducts,
+      ],
     })
     const mode = await warehouseMode(tx, input.tenantId, record.warehouseId)
     const effectiveAt = new Date(`${packageDate}T23:59:00+08:00`)
@@ -1697,5 +1732,5 @@ export async function recordWarehouseDailyPackageLedger(input: {
       movementCount: movementIds.length,
       reconciliation,
     }
-  })
+  }, 60_000)
 }

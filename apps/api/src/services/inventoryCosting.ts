@@ -1,6 +1,7 @@
 import dayjs from 'dayjs'
 import { Prisma, prisma } from '@dianjie/db'
 import { convertQuantityToInventoryUnit, purchasePriceToInventoryUnitCost } from './inventoryUnits'
+import { productInventoryUnitCost } from './unitContractGuard'
 
 type CostSlot = { quantity: number; averageCost: number }
 
@@ -119,7 +120,8 @@ export async function revalueStoreConsumptionCosts(tenantId: string, storeId: st
         quantity = normalized.normalizedQuantity
       }
       if (quantity == null) continue
-      const fallbackCost = purchasePriceToInventoryUnitCost({ purchaseUnitPrice: Number(product.price), product }) || 0
+      // product.price 是每成本单位价，不能当成每采购单位价来折算。
+      const fallbackCost = productInventoryUnitCost(product) || 0
       const unitCost = current.averageCost || fallbackCost
       updates.push({ id: event.item.id, unitCost, amount: quantity * unitCost })
       current.quantity -= quantity

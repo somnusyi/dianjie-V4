@@ -8,6 +8,7 @@ import { estimatedStoreInventory } from '../services/storeInventory'
 import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
 import { fireAndForget as notify } from '../services/notify'
 import { signOssKey } from './upload'
+import { productInventoryUnitCost } from '../services/unitContractGuard'
 
 const VIEW_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN', 'BOSS'])
 const WRITE_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'])
@@ -275,13 +276,13 @@ export const inventoryCountRoutes: FastifyPluginAsync = async app => {
             itemCount: products.length, note: body.data.note || null, createdById: req.user.userId,
             totalBookValue: products.reduce((sum, product) => {
               const estimateRow: any = estimatedByProduct.get(product.id)
-              const fallbackCost = Number(product.price) / Number(product.inventoryUnitsPerPurchaseUnit || 1)
+              const fallbackCost = productInventoryUnitCost(product) || 0
               return sum.add(new Prisma.Decimal(estimateRow?.stock || 0).mul(estimateRow?.avgUnitCost || fallbackCost))
             }, new Prisma.Decimal(0)),
             items: {
               create: products.map((product, index) => {
                 const estimateRow: any = estimatedByProduct.get(product.id)
-                const fallbackCost = Number(product.price) / Number(product.inventoryUnitsPerPurchaseUnit || 1)
+                const fallbackCost = productInventoryUnitCost(product) || 0
                 return {
                   productId: product.id, productCodeSnapshot: product.code,
                   productNameSnapshot: product.name, productSpecSnapshot: product.spec,

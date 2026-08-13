@@ -1,6 +1,7 @@
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { applyReceiptToCostSlot } from './inventoryCosting'
+import { productInventoryUnitCost } from './unitContractGuard'
 
 export type StoreInventorySummary = {
   status: 'AVAILABLE' | 'NO_BASELINE'
@@ -327,8 +328,8 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
     const expiry = nearestExpiry.get(product.id) || null
     const daysToExpiry = expiry ? dayjs(expiry).startOf('day').diff(today, 'day') : null
     const stock = slot.quantity
-    const purchaseFactor = Number(product.inventoryUnitsPerPurchaseUnit || 1)
-    const avgUnitCost = slot.avgUnitCost || Number(product.price) / purchaseFactor
+    // price 的单位含义由 costUnit 决定，分母只能是 inventoryUnitsPerCostUnit。
+    const avgUnitCost = slot.avgUnitCost || productInventoryUnitCost(product) || 0
     const policy = policyByProduct.get(product.id)
     const minStock = Number(policy?.minStock || 0)
     return {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  productInventoryUnitCost,
   costContractRepricingError,
   costOutlierError,
   inventoryUnitCost,
@@ -15,6 +16,23 @@ describe('inventoryUnitCost', () => {
     expect(inventoryUnitCost({ price: 122, inventoryUnitsPerCostUnit: null })).toBeNull()
     expect(inventoryUnitCost({ price: null, inventoryUnitsPerCostUnit: 1000 })).toBeNull()
     expect(inventoryUnitCost({ price: 122, inventoryUnitsPerCostUnit: 0 })).toBeNull()
+  })
+})
+
+describe('productInventoryUnitCost 成本兜底口径', () => {
+  it('分母是每成本单位库存量，不是每采购单位库存量', () => {
+    // 当两个换算率相等时(今天全部商品都是这样)，两种读法结果相同，
+    // 所以历史上那几处写错的兜底一直没暴露。
+    expect(productInventoryUnitCost({ price: 122, inventoryUnitsPerCostUnit: 1000 })).toBeCloseTo(0.122, 6)
+
+    // 一旦成本单位与采购单位不同——项目规则「成本单位=最小库存单位」正是要求这么做——
+    // 用每采购单位换算(1000)会算出 0.0244，真实值是 24.4，差 1000 倍。
+    expect(productInventoryUnitCost({ price: 24.4, inventoryUnitsPerCostUnit: 1 })).toBeCloseTo(24.4, 6)
+  })
+
+  it('契约不完整时返回 null，交给调用方兜底为 0 而不是算出错数', () => {
+    expect(productInventoryUnitCost({ price: 122, inventoryUnitsPerCostUnit: null })).toBeNull()
+    expect(productInventoryUnitCost({ price: null, inventoryUnitsPerCostUnit: 1 })).toBeNull()
   })
 })
 

@@ -49,6 +49,19 @@ export function inventoryUnitCost(pricing: UnitContractPricing): Prisma.Decimal 
   return price.div(perCost)
 }
 
+/**
+ * Product.price 折算成每最小库存单位成本的数值版本，供成本兜底路径使用。
+ *
+ * price 的单位含义由 costUnit 决定，所以分母只能是 inventoryUnitsPerCostUnit。
+ * 历史上有几处兜底写成 price ÷ inventoryUnitsPerPurchaseUnit——今天全部商品的
+ * 这两个换算率恰好相等所以结果一致，但只要有人把成本单位设成与采购单位不同
+ * (项目规则「成本单位=最小库存单位」正是要求这么做)，两者立刻差出几个数量级。
+ */
+export function productInventoryUnitCost(product: UnitContractPricing): number | null {
+  const cost = inventoryUnitCost(product)
+  return cost ? Number(cost) : null
+}
+
 function formatCost(value: Prisma.Decimal) {
   const fixed = value.gte(1) ? value.toFixed(2) : value.toSignificantDigits(4).toString()
   return fixed.replace(/\B(?=(\d{3})+(?!\d))/g, ',')

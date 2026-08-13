@@ -32,6 +32,8 @@ vi.mock('@dianjie/db', async importOriginal => {
       findUniqueOrThrow: (...args: any[]) => mocks.productFindUniqueOrThrow(...args),
     },
     supplier: { findFirst: (...args: any[]) => mocks.supplierFindFirst(...args) },
+    // 单位契约护栏会查近 90 天成交价来判断折算结果是否离谱；无历史即不拦。
+    receiptItem: { aggregate: vi.fn().mockResolvedValue({ _avg: { inventoryUnitCostSnapshot: null }, _count: { _all: 0 } }) },
     supplierProductCategory: {
       findUnique: (...args: any[]) => mocks.categoryFindUnique(...args),
       aggregate: vi.fn(),

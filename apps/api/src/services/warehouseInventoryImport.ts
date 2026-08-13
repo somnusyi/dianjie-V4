@@ -412,7 +412,11 @@ export function parseMeituanUnitConversion(value: string | null | undefined) {
   }
 }
 
-function physicalUnitFactor(sourceUnit: string, targetUnit: string) {
+/**
+ * 同量纲单位之间的直接换算(kg↔g↔斤、l↔ml)。仓库记账也要用，所以导出:
+ * 记账侧此前只会去猜规格字符串，一个 kg→g 这么直白的换算反而会卡住报错。
+ */
+export function physicalUnitFactor(sourceUnit: string, targetUnit: string) {
   const source = normalizeWarehouseUnit(sourceUnit)
   const target = normalizeWarehouseUnit(targetUnit)
   if (source === target) return 1

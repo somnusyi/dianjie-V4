@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   parseMeituanUnitConversion,
   parseMeituanWarehouseInventoryWorkbook,
+  physicalUnitFactor,
   resolveWarehouseInventoryRow,
   sourceSpecMassFactor,
   sourceSpecPackageFactor,
@@ -177,5 +178,20 @@ describe('Meituan warehouse inventory snapshot', () => {
     expect(sourceSpecPackageFactor('箱/12瓶*500g', '瓶', '箱')).toBeCloseTo(1 / 12)
     expect(sourceSpecPackageFactor('箱/12瓶*500g', '箱', '瓶')).toBe(12)
     expect(sourceSpecPackageFactor('箱/12瓶*500g', '袋', '箱')).toBeNull()
+  })
+
+  // 仓库记账也要用它:同量纲换算唯一且确定，不该退化成猜规格字符串。
+  it('converts same-dimension units without any specification text', () => {
+    expect(physicalUnitFactor('kg', 'g')).toBe(1000)
+    expect(physicalUnitFactor('公斤', 'g')).toBe(1000)
+    expect(physicalUnitFactor('斤', 'g')).toBe(500)
+    expect(physicalUnitFactor('g', 'kg')).toBeCloseTo(0.001)
+    expect(physicalUnitFactor('l', 'ml')).toBe(1000)
+    expect(physicalUnitFactor('毫升', 'ml')).toBe(1)
+  })
+
+  it('refuses to invent a factor across dimensions or for counted packages', () => {
+    expect(physicalUnitFactor('kg', 'ml')).toBeNull()
+    expect(physicalUnitFactor('箱', 'g')).toBeNull()
   })
 })

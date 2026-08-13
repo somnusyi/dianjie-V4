@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { Prisma, prisma } from '@dianjie/db'
 import { resolveProductFourUnits, type ProductInventoryUnitLike } from './inventoryUnits'
 import { resolveTenantWarehouseId } from './defaultWarehouse'
-import { sourceSpecMassFactor, sourceSpecPackageFactor } from './warehouseInventoryImport'
+import { physicalUnitFactor, sourceSpecMassFactor, sourceSpecPackageFactor } from './warehouseInventoryImport'
 
 const ZERO = new Prisma.Decimal(0)
 const QTY_DP = 6
@@ -1525,7 +1525,10 @@ export async function recordWarehouseDailyPackageLedger(input: {
       const purchaseFactor = item?.conversionFactor || product.inventoryUnitsPerPurchaseUnit
       let conversionFactor = new Prisma.Decimal(1)
       if (normalizedLedgerUnit(line.sourceUnit) !== normalizedLedgerUnit(inventoryUnit)) {
-        const specificationFactor = sourceSpecMassFactor(line.sourceSpec || null, line.sourceUnit, inventoryUnit)
+        // 同量纲单位(kg→g、斤→g、l→ml)直接换算，换算率唯一且确定，优先于
+        // 从规格字符串里猜。规格串缺失或写得不规范时不该卡住整批记账。
+        const specificationFactor = physicalUnitFactor(line.sourceUnit, inventoryUnit)
+          ?? sourceSpecMassFactor(line.sourceSpec || null, line.sourceUnit, inventoryUnit)
           ?? sourceSpecPackageFactor(line.sourceSpec || null, line.sourceUnit, inventoryUnit)
         if (specificationFactor != null) {
           conversionFactor = new Prisma.Decimal(specificationFactor).toDecimalPlaces(QTY_DP)
@@ -1577,7 +1580,10 @@ export async function recordWarehouseDailyPackageLedger(input: {
         inventoryQuantity = originalQuantity.mul(conversionFactor).toDecimalPlaces(QTY_DP)
         originalUnit = line.sourceUnit
       } else if (originalQuantity.gt(0)) {
-        const specificationFactor = sourceSpecMassFactor(line.sourceSpec || null, line.sourceUnit, inventoryUnit)
+        // 同量纲单位(kg→g、斤→g、l→ml)直接换算，换算率唯一且确定，优先于
+        // 从规格字符串里猜。规格串缺失或写得不规范时不该卡住整批记账。
+        const specificationFactor = physicalUnitFactor(line.sourceUnit, inventoryUnit)
+          ?? sourceSpecMassFactor(line.sourceSpec || null, line.sourceUnit, inventoryUnit)
           ?? sourceSpecPackageFactor(line.sourceSpec || null, line.sourceUnit, inventoryUnit)
         if (specificationFactor == null) {
           throw businessError(`${line.externalName} 配送数量无法换算为库存单位 ${inventoryUnit}`, 409)

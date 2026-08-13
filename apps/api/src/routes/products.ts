@@ -30,6 +30,11 @@ import {
   type CostUnitPricedProduct,
 } from '../services/costUnitPricing'
 import {
+  costContractRepricingError,
+  costOutlierError,
+  inventoryUnitCost,
+} from '../services/unitContractGuard'
+import {
   productMinOrderQuantityCreateSchema,
   productMinOrderQuantityPatchSchema,
   productMinStockCreateSchema,
@@ -2071,6 +2076,56 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         if (materialMappingChanged || becomesVerified) {
           data.unitConversionVerifiedAt = data.unitConversionStatus === 'VERIFIED' ? new Date() : null
         }
+      }
+    }
+
+    // 单位契约护栏。判定基准是「每最小库存单位成本」= 采购价 ÷ 每成本单位库存量，
+    // 它不受包装规格调整影响:订货单位从箱换成托，每托单价翻 12 倍是对的算术；
+    // 而每克成本从 ¥0.122 跳到 ¥122，任何包装变更都解释不了。
+    // 历史事故:成本单位 件→g 但 price 没折算，保乐肩 ¥122/件 变成 ¥122,000/件。
+    const pricingFieldTouched = ['price', 'inventoryUnitsPerCostUnit']
+      .some(field => Object.prototype.hasOwnProperty.call(data, field))
+    if (pricingFieldTouched) {
+      const pick = (field: 'price' | 'inventoryUnitsPerCostUnit') =>
+        (Object.prototype.hasOwnProperty.call(data, field) ? data[field] : (before as any)[field])
+      const nextPricing = { price: pick('price'), inventoryUnitsPerCostUnit: pick('inventoryUnitsPerCostUnit') }
+      const nextInventoryUnitCost = inventoryUnitCost(nextPricing)
+      const inventoryUnitLabel = Object.prototype.hasOwnProperty.call(data, 'inventoryUnit')
+        ? data.inventoryUnit
+        : before.inventoryUnit
+
+      const repricingError = costContractRepricingError({
+        before,
+        next: nextPricing,
+        priceExplicitlyProvided: Object.prototype.hasOwnProperty.call(data, 'price'),
+        productName: before.name,
+        inventoryUnit: inventoryUnitLabel,
+      })
+      if (repricingError) return reply.status(400).send({ error: repricingError })
+
+      if (nextInventoryUnitCost) {
+        // 收货单冻结的 inventoryUnitCostSnapshot 同样是每最小库存单位，可直接比。
+        const history = await prisma.receiptItem.aggregate({
+          where: {
+            productId: before.id,
+            inventoryUnitCostSnapshot: { gt: 0 },
+            receipt: {
+              tenantId,
+              status: { in: ['CONFIRMED', 'ACCOUNTED'] },
+              deliveryDate: { gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) },
+            },
+          },
+          _avg: { inventoryUnitCostSnapshot: true },
+          _count: { _all: true },
+        })
+        const outlier = costOutlierError({
+          nextInventoryUnitCost,
+          historicalAverageCost: history?._avg?.inventoryUnitCostSnapshot,
+          sampleCount: history?._count?._all ?? 0,
+          productName: before.name,
+          inventoryUnit: inventoryUnitLabel,
+        })
+        if (outlier) return reply.status(400).send({ error: outlier })
       }
     }
     if (role === 'SUPPLY_CHAIN') {

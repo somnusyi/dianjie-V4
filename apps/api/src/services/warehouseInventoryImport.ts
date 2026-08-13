@@ -80,7 +80,11 @@ export type ResolvedWarehouseInventoryRow = {
   warnings: WarehouseInventoryIssue[]
 }
 
-const MAX_SOURCE_ROWS = 1000
+// 上限只对「属于目标仓库的明细」生效。源文件常常含多个仓库(总部配送中心下
+// 一份导出就有好几个仓)，489 个商品 × 3 个仓 = 1467 行，按整表计数会在过滤前
+// 就抛错，而真正要导的只有 489 行。另设一个大得多的扫描上限防御异常大的文件。
+const MAX_SOURCE_ROWS = 20000
+const MAX_SCANNED_ROWS = 100000
 const MAX_STOCK_QUANTITY = 99_999_999.999
 const QUANTITY_SCALE = 3
 
@@ -207,6 +211,7 @@ export async function parseMeituanWarehouseInventoryWorkbook(
   const rows: ParsedWarehouseInventoryRow[] = []
   const ignoredWarehouses = new Set<string>()
   let sourceRowCount = 0
+  let matchedRowCount = 0
   let ignoredRowCount = 0
   let sourceTotalAmount: number | null = null
 
@@ -228,14 +233,23 @@ export async function parseMeituanWarehouseInventoryWorkbook(
       sourceTotalAmount = amountColumn == null ? null : numericCell(row.getCell(amountColumn).value)
       continue
     }
+    // sourceRowCount 是对外报的「源文件明细行数」，含其他仓库的行，语义不变。
     sourceRowCount += 1
-    if (sourceRowCount > MAX_SOURCE_ROWS) throw new Error(`库存表超过 ${MAX_SOURCE_ROWS} 条明细，不能导入`)
+    if (sourceRowCount > MAX_SCANNED_ROWS) {
+      throw new Error(`库存表明细超过 ${MAX_SCANNED_ROWS} 行，请先在美团按仓库筛选后再导出`)
+    }
 
     const warehouse = cellText(row.getCell(warehouseColumn).value)
     if (warehouse !== sourceWarehouseName) {
       ignoredRowCount += 1
       if (warehouse) ignoredWarehouses.add(warehouse)
       continue
+    }
+
+    // 真正的导入上限只看属于目标仓库的行。
+    matchedRowCount += 1
+    if (matchedRowCount > MAX_SOURCE_ROWS) {
+      throw new Error(`仓库「${sourceWarehouseName}」的明细超过 ${MAX_SOURCE_ROWS} 行，不能导入`)
     }
 
     const sourceQuantity = numericCell(row.getCell(quantityColumn).value)

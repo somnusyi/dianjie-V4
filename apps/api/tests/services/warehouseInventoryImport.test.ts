@@ -92,9 +92,12 @@ describe('Meituan warehouse inventory snapshot', () => {
   it('keeps the target warehouse, zero balances and source precision while ignoring the total row', async () => {
     const parsed = await parseMeituanWarehouseInventoryWorkbook(await workbookBuffer())
 
+    // sourceRowCount 是源文件的明细行数(含其他仓库)，导入上限只看属于目标仓库的行:
+    // 源文件常含多个仓库，489 个商品 × 3 个仓 = 1467 行，按整表计数会在过滤前就抛错。
     expect(parsed.sourceRowCount).toBe(3)
     expect(parsed.ignoredRowCount).toBe(1)
     expect(parsed.ignoredWarehouses).toEqual(['测试仓'])
+    expect(parsed.rows).toHaveLength(parsed.sourceRowCount - parsed.ignoredRowCount)
     expect(parsed.rows).toHaveLength(2)
     expect(parsed.rows[0]).toMatchObject({ externalCode: 'ZBWP0950', sourceQuantity: 54.875, purchaseUnit: '箱' })
     expect(parsed.rows[1]).toMatchObject({ externalCode: 'ZBWP0000', sourceQuantity: 0 })

@@ -1020,23 +1020,23 @@ model WeComSyncLog {
 
 // ── 门店 ──────────────────────────────────────────────
 model Store {
-  id            String      @id @default(cuid())
-  tenantId      String
-  no            String // DJ001
-  name          String
-  address       String?
-  phone         String?
-  managerName   String?
-  consigneeId   String? // 指定收货人 (User.id, 一般是厨师长) — 供应商送货单显示此人姓名+电话; 空则回退店长 managerName/phone
-  status        StoreStatus @default(ENABLED)
+  id              String      @id @default(cuid())
+  tenantId        String
+  no              String // DJ001
+  name            String
+  address         String?
+  phone           String?
+  managerName     String?
+  consigneeId     String? // 指定收货人 (User.id, 一般是厨师长) — 供应商送货单显示此人姓名+电话; 空则回退店长 managerName/phone
+  status          StoreStatus @default(ENABLED)
   // 平台券核销
-  meituanShopId String? // 美团门店ID (导对账 CSV 用)
+  meituanShopId   String? // 美团门店ID (导对账 CSV 用)
   // POS/美团导出的门店名称可能与系统门店名不同，且会随模板变化(瑶海店历史上出现过
   // 「合肥瑶海店」和「滇界·云南山珍菌汤锅（瑶海万达店）」两种)。日报上传的门店校验
   // 只做精确匹配——主名或任一别名——不再用子串猜，否则「合肥瑶海店」与「合肥包河万达店」
   // 会因为共有「合肥」被判为同一家店，别人店的营业额和销量会被写进自己的账。
-  posStoreAliases String[] @default([])
-  douyinShopId  String? // 抖音门店ID (导对账 CSV 用)
+  posStoreAliases String[]    @default([])
+  douyinShopId    String? // 抖音门店ID (导对账 CSV 用)
 
   // 主收款通道(线下扫码 / 桌签码) — 一等公民
   // 推荐用聚合平台, 多店分账 + 接入快
@@ -1154,22 +1154,22 @@ model Supplier {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant                Tenant                         @relation(fields: [tenantId], references: [id])
-  users                 User[]                         @relation("SupplierUsers")
-  products              Product[]
-  receipts              Receipt[]
-  reconciliations       Reconciliation[]
-  payments              Payment[]
-  paymentSchedules      PaymentSchedule[]
-  purchaseOrders        PurchaseOrder[]
-  deliveryOrders        DeliveryOrder[]
-  lossClaims            LossClaim[]
-  invoices              Invoice[]
-  stockMovements        SupplierStockMovement[]
-  stockBatches          SupplierStockBatch[]
-  stockBatchAllocations SupplierStockBatchAllocation[]
-  stockReservations     SupplierStockReservation[]
-  productCategories     SupplierProductCategory[]
+  tenant                 Tenant                         @relation(fields: [tenantId], references: [id])
+  users                  User[]                         @relation("SupplierUsers")
+  products               Product[]
+  receipts               Receipt[]
+  reconciliations        Reconciliation[]
+  payments               Payment[]
+  paymentSchedules       PaymentSchedule[]
+  purchaseOrders         PurchaseOrder[]
+  deliveryOrders         DeliveryOrder[]
+  lossClaims             LossClaim[]
+  invoices               Invoice[]
+  stockMovements         SupplierStockMovement[]
+  stockBatches           SupplierStockBatch[]
+  stockBatchAllocations  SupplierStockBatchAllocation[]
+  stockReservations      SupplierStockReservation[]
+  productCategories      SupplierProductCategory[]
   upstreamProductSources ProductUpstreamSource[]
 
   @@unique([tenantId, no])
@@ -1245,7 +1245,7 @@ model Product {
   inventorySnapshotItems        InventorySnapshotItem[]
   inventoryCountItems           InventoryCountItem[]
   storeInventoryPolicies        StoreInventoryPolicy[]
-  upstreamSources                ProductUpstreamSource[]
+  upstreamSources               ProductUpstreamSource[]
 
   @@unique([tenantId, code])
   @@unique([tenantId, id])
@@ -1390,6 +1390,7 @@ model Receipt {
 
   @@unique([tenantId, no])
   @@index([purchaseOrderId, deliveryDate])
+  @@index([tenantId, storeId, deliveryDate, status])
   @@map("receipts")
 }
 
@@ -1424,6 +1425,8 @@ model ReceiptItem {
   receipt Receipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id])
 
+  @@index([receiptId])
+  @@index([productId])
   @@map("receipt_items")
 }
 
@@ -2776,6 +2779,7 @@ model StockConsumption {
   @@index([tenantId, date])
   @@index([dishId, date])
   @@index([bomVersionId])
+  @@index([tenantId, storeId, date])
   @@map("stock_consumptions")
 }
 

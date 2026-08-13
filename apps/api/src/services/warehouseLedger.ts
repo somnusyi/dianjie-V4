@@ -1209,6 +1209,40 @@ export async function postWarehouseReleaseForOrder(input: {
   return serializableWithRetry(tx => releaseWarehouseLedgerForOrder(tx, input))
 }
 
+/**
+ * 总仓的出库账只能有一个来源。
+ *
+ * 系统订货→发货链路(sourceType='DeliveryOrder')和美团每日数据包
+ * (sourceType='MeituanDailyPackage')都会写 ORDER_OUTBOUND 并扣减物理库存，
+ * 而同一批货在两边都会出现——美团那笔「配送发货出库」正是系统这笔发货。
+ * 两条路同时开就是双重扣减，且没有任何地方会报错。
+ *
+ * 当前生产是美团数据包驱动(inventoryMode=OFF，系统发货链路未接总仓)，
+ * 但那是「碰巧没触发」而不是「设计上不会」。这里让它失败得响亮:先落地的
+ * 那条路径独占该仓库的出库账，另一条被明确拒绝并说明原因。
+ */
+async function assertSingleOutboundLedgerSource(
+  tx: Prisma.TransactionClient,
+  input: { tenantId: string; warehouseId: string; incoming: 'DeliveryOrder' | 'MeituanDailyPackage' },
+) {
+  const conflicting = input.incoming === 'DeliveryOrder' ? 'MeituanDailyPackage' : 'DeliveryOrder'
+  const existing = await tx.warehouseLedgerMovement.findFirst({
+    where: { tenantId: input.tenantId, warehouseId: input.warehouseId, sourceType: conflicting },
+    select: { id: true, effectiveAt: true },
+  })
+  if (!existing) return
+  const label = {
+    DeliveryOrder: '系统订货发货链路',
+    MeituanDailyPackage: '美团每日数据包',
+  }
+  throw businessError(
+    `该总仓的出库账已由「${label[conflicting]}」记录（最近一笔 ${existing.effectiveAt.toISOString().slice(0, 10)}），`
+    + `不能同时用「${label[input.incoming]}」再记一次——同一批货会被扣减两次。`
+    + '要切换记账来源，请先冲销另一条路径已写入的流水。',
+    409,
+  )
+}
+
 export async function consumeWarehouseLedgerForShipment(
   tx: Prisma.TransactionClient,
   input: {
@@ -1229,6 +1263,7 @@ export async function consumeWarehouseLedgerForShipment(
     throw businessError('该订单不是总仓履约订单，不能记总仓出库', 409)
   }
   const warehouseId = await resolveTenantWarehouseId(tx, input.tenantId, undefined)
+  await assertSingleOutboundLedgerSource(tx, { tenantId: input.tenantId, warehouseId, incoming: 'DeliveryOrder' })
   const mode = await warehouseMode(tx, input.tenantId, warehouseId)
   const lines = input.lines.map(line => {
     const resolved = resolveFrozenOrderInventoryLine(line)
@@ -1627,6 +1662,9 @@ export async function recordWarehouseDailyPackageLedger(input: {
         ...allLines.map(line => ({ productId: line.productId, inventoryUnit: line.inventoryUnit })),
         ...snapshotBalanceProducts,
       ],
+    })
+    await assertSingleOutboundLedgerSource(tx, {
+      tenantId: input.tenantId, warehouseId: record.warehouseId, incoming: 'MeituanDailyPackage',
     })
     const mode = await warehouseMode(tx, input.tenantId, record.warehouseId)
     const effectiveAt = new Date(`${packageDate}T23:59:00+08:00`)

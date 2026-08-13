@@ -282,6 +282,25 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    // 总厨要看到具体改了哪几行、原值是多少，光有标题里的总额批不下去。
+    if (doc.type === 'RECEIPT_CORRECTION' && p.receiptId) {
+      const receipt = await prisma.receipt.findFirst({
+        where: { id: p.receiptId, tenantId },
+        select: {
+          id: true, no: true, status: true, totalAmount: true, deliveryDate: true,
+          store: { select: { name: true } },
+          supplier: { select: { name: true } },
+        },
+      })
+      return {
+        kind: 'RECEIPT_CORRECTION',
+        receipt,
+        reason: p.reason || null,
+        lines: Array.isArray(p.lines) ? p.lines : [],
+        totalBefore: p.totalBefore, totalAfter: p.totalAfter, totalDelta: p.totalDelta,
+      }
+    }
+
     if (SUPPLIER_OFFER_DOCUMENT_TYPES.has(doc.type)) {
       if (p.action === 'CREATE' && p.productId) {
         const pr = await prisma.product.findFirst({

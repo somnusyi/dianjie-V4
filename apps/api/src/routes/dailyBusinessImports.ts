@@ -284,13 +284,15 @@ async function buildPreview(store: { id: string; tenantId: string }, parsed: Par
   const warningIssues: ImportIssue[] = [...parsed.warningIssues]
   const storeRecord = await prisma.store.findFirst({
     where: { id: store.id, tenantId: store.tenantId },
-    select: { name: true },
+    select: { name: true, posStoreAliases: true },
   })
-  if (!storeRecord || !storeNameMatches(storeRecord.name, parsed.business.storeName)) {
+  if (!storeRecord || !storeNameMatches(storeRecord, parsed.business.storeName)) {
     blockingIssues.push({
       code: 'TARGET_STORE_MISMATCH',
       message: '报表门店与当前操作门店不一致',
-      detail: `当前门店：${storeRecord?.name || '未知'}；报表门店：${parsed.business.storeName}`,
+      detail: `当前门店：${storeRecord?.name || '未知'}；报表门店：${parsed.business.storeName}。`
+        + '若这确实是本店的 POS 名称，请管理员在门店设置里把它加入门店别名后重新上传；'
+        + '不要为了通过校验而改门店名。',
     })
   }
   const businessDate = dateOnly(parsed.business.date)

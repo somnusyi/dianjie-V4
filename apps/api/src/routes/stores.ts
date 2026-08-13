@@ -323,6 +323,26 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
     for (const k of ['name','address','phone','managerName']) if (body[k] !== undefined) data[k] = body[k]
     if (body.expectedOpenAt !== undefined) data.expectedOpenAt = body.expectedOpenAt ? new Date(body.expectedOpenAt) : null
 
+    // POS 导出的门店名与系统门店名可以不同(瑶海店历史上出现过两种写法)。日报上传
+    // 的门店校验只认主名或这里登记的别名——精确匹配，不再用子串猜，所以门店可以
+    // 任意命名而不会互相串账。只有老板能维护，避免店长为了让上传通过而随手加别名。
+    if (body.posStoreAliases !== undefined) {
+      if (!isAdmin) return reply.status(403).send({ error: '只有老板能维护门店 POS 别名' })
+      const parsed = z.array(z.string().trim().min(1).max(80)).max(10).safeParse(body.posStoreAliases)
+      if (!parsed.success) {
+        return reply.status(400).send({ error: 'posStoreAliases 必须是 1-10 个非空门店名' })
+      }
+      const aliases = [...new Set(parsed.data)]
+      const clash = await prisma.store.findFirst({
+        where: { tenantId, id: { not: req.params.id }, posStoreAliases: { hasSome: aliases } },
+        select: { no: true, name: true },
+      })
+      if (clash) {
+        return reply.status(400).send({ error: `别名与门店 ${clash.no} ${clash.name} 冲突，同一个 POS 名称不能属于两家店` })
+      }
+      data.posStoreAliases = aliases
+    }
+
     // status / lifecyclePhase / engineerId 改动权限
     if (body.status !== undefined && !isAdmin) {
       return reply.status(403).send({ error: '只有老板能改启用/禁用' })

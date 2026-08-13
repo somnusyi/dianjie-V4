@@ -104,20 +104,28 @@ function storeIdentity(value: string) {
     .replaceAll('店', '')
 }
 
-export function storeNameMatches(targetStoreName: string, sourceStoreName: string) {
-  const target = storeIdentity(targetStoreName)
+/**
+ * 校验上传的日报是否属于当前门店。
+ *
+ * 只做精确匹配——门店主名或任一 POS 别名。此前用「最长公共子串 >= 2」猜，
+ * 「合肥瑶海店」与「合肥包河万达店」共有「合肥」就会被判为同一家店：店长传错
+ * 文件时校验照样通过，别人店的营业额、菜品销量和 BOM 理论消耗一起写进自己的账，
+ * 而且不报错。门店数量一多，同城同品牌的名字几乎必然撞字。
+ *
+ * POS 导出的门店名与系统门店名不一定相同，也会随模板变化(瑶海店历史上出现过
+ * 「合肥瑶海店」和「滇界·云南山珍菌汤锅（瑶海万达店）」两种)，所以别名是一个
+ * 列表，由管理员维护。匹配不上时应当阻断并提示补别名，而不是放宽匹配。
+ */
+export function storeNameMatches(
+  store: { name: string; posStoreAliases?: string[] | null },
+  sourceStoreName: string,
+) {
   const source = storeIdentity(sourceStoreName)
-  if (!target || !source) return false
-  if (target.includes(source) || source.includes(target)) return true
-  let longest = 0
-  for (let left = 0; left < target.length; left += 1) {
-    for (let right = 0; right < source.length; right += 1) {
-      let length = 0
-      while (target[left + length] && target[left + length] === source[right + length]) length += 1
-      longest = Math.max(longest, length)
-    }
-  }
-  return longest >= 2
+  if (!source) return false
+  const candidates = [store.name, ...(store.posStoreAliases || [])]
+    .map(name => storeIdentity(String(name || '')))
+    .filter(Boolean)
+  return candidates.includes(source)
 }
 
 function round(value: number, digits: number) {

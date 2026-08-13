@@ -129,8 +129,24 @@ describe('daily business import parser', () => {
     expect(normalizeDishName('10 秒·脆毛肚')).toBe(normalizeDishName('10秒脆毛肚'))
     expect(normalizeVariantKey('（大 份）')).toBe('大份')
     expect(normalizeVariantKey('')).toBe('')
-    expect(storeNameMatches('合肥瑶海店', '滇界·云南山珍菌汤锅（瑶海万达店）')).toBe(true)
-    expect(storeNameMatches('合肥瑶海店', '滇界·云南山珍菌汤锅（万象汇店）')).toBe(false)
+  })
+
+  it('matches the uploading store by exact name or POS alias, never by shared characters', () => {
+    const yaohai = { name: '合肥瑶海店', posStoreAliases: ['滇界·云南山珍菌汤锅（瑶海万达店）'] }
+
+    expect(storeNameMatches(yaohai, '合肥瑶海店')).toBe(true)
+    // POS 全称与系统门店名不同，靠管理员维护的别名对上，而不是靠猜
+    expect(storeNameMatches(yaohai, '滇界·云南山珍菌汤锅（瑶海万达店）')).toBe(true)
+
+    // 真实事故形态：同城同品牌门店共有「合肥」两个字。旧的最长公共子串 >= 2 会判为
+    // 同一家店，店长传错文件时别人店的营业额与销量会被写进自己的账。
+    expect(storeNameMatches(yaohai, '合肥包河万达店')).toBe(false)
+    expect(storeNameMatches({ name: '合肥包河万达店' }, '合肥瑶海店')).toBe(false)
+
+    // 没登记别名就不认，宁可阻断让管理员补别名，也不放宽匹配
+    expect(storeNameMatches({ name: '合肥瑶海店' }, '滇界·云南山珍菌汤锅（瑶海万达店）')).toBe(false)
+    expect(storeNameMatches(yaohai, '滇界·云南山珍菌汤锅（万象汇店）')).toBe(false)
+    expect(storeNameMatches(yaohai, '')).toBe(false)
   })
 
   it('defers missing dish, BOM and unit-governance issues without allowing identity errors', () => {

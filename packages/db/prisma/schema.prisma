@@ -1031,6 +1031,11 @@ model Store {
   status        StoreStatus @default(ENABLED)
   // 平台券核销
   meituanShopId String? // 美团门店ID (导对账 CSV 用)
+  // POS/美团导出的门店名称可能与系统门店名不同，且会随模板变化(瑶海店历史上出现过
+  // 「合肥瑶海店」和「滇界·云南山珍菌汤锅（瑶海万达店）」两种)。日报上传的门店校验
+  // 只做精确匹配——主名或任一别名——不再用子串猜，否则「合肥瑶海店」与「合肥包河万达店」
+  // 会因为共有「合肥」被判为同一家店，别人店的营业额和销量会被写进自己的账。
+  posStoreAliases String[] @default([])
   douyinShopId  String? // 抖音门店ID (导对账 CSV 用)
 
   // 主收款通道(线下扫码 / 桌签码) — 一等公民

@@ -2,12 +2,21 @@ import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { cached } from '../lib/cache'
-import { isStoreScoped } from '../lib/auth-scope'
+import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 
 export const dashboardRoutes: FastifyPluginAsync = async (app) => {
 
+  // 集团经营数据(营业额、利润、采购总额、应付排期)对外部供应商一律不可见。
+  // 历史 bug: 这三条老路由只用 isStoreScoped 兜，而供应商不是门店范围角色，
+  // 过滤器为空 → 供应商 token 能读到全租户的营收、利润表和付给别家的应付明细。
+  const denySupplier = async (req: any, reply: any) => {
+    if (isSupplierRole(req.user?.role)) {
+      return reply.status(403).send({ error: '无权访问集团经营数据' })
+    }
+  }
+
   // ── 总部看板数据 ──────────────────────────────────
-  app.get('/stats', { preHandler: [(app as any).authenticate] }, async (req: any) => {
+  app.get('/stats', { preHandler: [(app as any).authenticate, denySupplier] }, async (req: any) => {
     const { tenantId, role, storeId } = req.user
     const cacheKey = `dashboard:stats:${tenantId}:${role}:${storeId || 'all'}`
     return cached(cacheKey, 300, async () => {
@@ -135,7 +144,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // ── 采购趋势（近30天）────────────────────────────
-  app.get('/purchase-trend', { preHandler: [(app as any).authenticate] }, async (req: any) => {
+  app.get('/purchase-trend', { preHandler: [(app as any).authenticate, denySupplier] }, async (req: any) => {
     const { tenantId, role, storeId } = req.user
     const { days = 30 } = req.query as any
     const since = dayjs().subtract(Number(days), 'day').startOf('day').toDate()

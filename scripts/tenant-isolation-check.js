@@ -55,6 +55,13 @@ const FORBIDDEN_ENDPOINTS = [
   { path: '/api/budgets',               forbid: ['supOwn', 'manager', 'kitchen', 'chef'] },
   { path: '/api/capital/projects',      forbid: ['supOwn', 'chef'] },
   { path: '/api/cmb/balance',           forbid: ['supOwn', 'manager', 'kitchen', 'chef'] },
+  // 2026-08 发现: 这三条老路由只用 isStoreScoped 兜，而供应商不是门店范围角色，
+  // 过滤器为空 → 供应商 token 能读到全租户营业额、利润表和付给别家供应商的应付明细。
+  { path: '/api/dashboard/stats',         forbid: ['supOwn'] },
+  { path: '/api/dashboard/purchase-trend', forbid: ['supOwn'] },
+  { path: '/api/revenue',                 forbid: ['supOwn'] },
+  { path: '/api/revenue/summary',         forbid: ['supOwn'] },
+  { path: '/api/profit/group/snapshot',   forbid: ['supOwn'] },
 ]
 
 const tokens = {}

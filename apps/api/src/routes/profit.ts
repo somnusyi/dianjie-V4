@@ -1,7 +1,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
-import { isStoreScoped } from '../lib/auth-scope'
+import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 import { monthRangeForDateCol, monthRangeForTimestampCol } from '../lib/dateRange'
 
 // 费用项配置
@@ -23,7 +23,16 @@ export const EXPENSE_ITEMS = {
 }
 
 export const profitRoutes: FastifyPluginAsync = async (app) => {
-  const auth = { preHandler: [(app as any).authenticate] }
+
+  // 集团经营数据(营业额、利润、采购总额、应付排期)对外部供应商一律不可见。
+  // 历史 bug: 这三条老路由只用 isStoreScoped 兜，而供应商不是门店范围角色，
+  // 过滤器为空 → 供应商 token 能读到全租户的营收、利润表和付给别家的应付明细。
+  const denySupplier = async (req: any, reply: any) => {
+    if (isSupplierRole(req.user?.role)) {
+      return reply.status(403).send({ error: '无权访问集团经营数据' })
+    }
+  }
+  const auth = { preHandler: [(app as any).authenticate, denySupplier] }
 
   // 获取单店利润表数据
   app.get('/store/:storeId', auth, async (req: any, reply: any) => {

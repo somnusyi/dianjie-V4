@@ -217,13 +217,11 @@ export default function ChefDirectorHomePage() {
         tabs={[
           { key: 'home',     label: '工作台', icon: '⌂' },
           { key: 'review',   label: '审批',   icon: '✓' },
-          { key: 'material', label: '物料',   icon: '⛁' },
           { key: 'loss',     label: '报损',   icon: '△' },
         ]}
         activeKey={tab}
         onChange={(k) => {
           if (k === 'review')   location.href = '/v2/chef-director/approvals'
-          if (k === 'material') location.href = '/v2/chef-director/inventory'
           if (k === 'loss')     location.href = '/v2/chef-director/loss'
         }}
       />

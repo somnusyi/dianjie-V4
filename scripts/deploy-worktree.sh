@@ -161,6 +161,11 @@ echo "==> [4/8] pnpm install + build (worktree, 主仓库 dev 不受影响)"
 # A forced NODE_ENV=development makes Next load both dev and production React
 # runtimes during prerender and can fail every static page with useContext null.
 unset NODE_ENV
+# 业务口径、生产服务器和单据期号全部按 Asia/Shanghai 走。发布机不一定在这个
+# 时区(2026-08-12 一台 America/Los_Angeles 的 Mac 上,documentNo 的月度期号
+# 用例假失败,把整次发布拦在测试关卡)。这里显式对齐生产时区,让验证结果不
+# 取决于谁在哪台机器上发布。
+export TZ=Asia/Shanghai
 pnpm install --frozen-lockfile
 pnpm --filter @dianjie/db exec prisma generate >/dev/null 2>&1
 pnpm --filter @dianjie/api test

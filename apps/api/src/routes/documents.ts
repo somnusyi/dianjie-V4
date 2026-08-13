@@ -10,6 +10,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import { routeFor, DocumentType, Role } from '../services/documentRouting'
+import { applyReceiptCorrection } from '../services/receiptCorrection'
 import { nextDocumentNo } from '../services/documentNo'
 import { invalidatePattern } from '../lib/cache'
 import { isSupplierRole } from '../lib/auth-scope'
@@ -444,6 +445,16 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
           touchedProducts = await applyProductDecision(tx, doc, tenantId, 'REJECT')
         } else if (isLast) {
           touchedProducts = await applyProductDecision(tx, doc, tenantId, 'APPROVE')
+          // 入库单更正只在终审批准时落地；驳回则原单分毫不动，天然可逆。
+          if (doc.type === 'RECEIPT_CORRECTION') {
+            const plan = (doc.payload as any) || {}
+            if (!plan.receiptId || !Array.isArray(plan.lines)) {
+              throw Object.assign(new Error('更正单缺少可执行的更正明细'), { statusCode: 409 })
+            }
+            await applyReceiptCorrection(tx, {
+              tenantId, plan, userId, role, documentNo: doc.no,
+            })
+          }
           await tx.document.update({
             where: { id: doc.id }, data: { status: 'APPROVED', finalizedAt: new Date() },
           })

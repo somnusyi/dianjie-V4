@@ -16,9 +16,23 @@ import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 import { nextBusinessNo } from '../services/purchaseOrderIntegrity'
 import { ensureReceiptInventoryUnitSnapshots } from '../services/receiptInventoryUnits'
 import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
+import { nextDocumentNo } from '../services/documentNo'
+import { routeFor } from '../services/documentRouting'
+import {
+  planReceiptCorrection,
+  ReceiptCorrectionError,
+} from '../services/receiptCorrection'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const RECEIPT_OPERATOR_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN'])
+const RECEIPT_CORRECTION_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN', 'SUPPLY_CHAIN', 'FINANCE'])
+const receiptCorrectionSchema = z.object({
+  reason: z.string().trim().min(4, '请写明更正原因').max(500),
+  lines: z.array(z.object({
+    receiptItemId: z.string().min(1),
+    newUnitPrice: z.number().min(0, '更正单价不能为负'),
+  })).min(1, '至少要更正一行').max(50),
+})
 const RECEIPT_AMOUNT_MAX = new Prisma.Decimal('9999999999.99')
 
 export const receiptListFilterSchema = z.object({
@@ -621,6 +635,102 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
   })
 
   // ── 作废（草稿/补录单）───────────────────────────
+  // ── 已入账入库单的金额更正 ──────────────────────────
+  // void 明确拒绝 ACCOUNTED/CONFIRMED，入账后发现错价此前没有合规出口。
+  // 这里只更正价格:数量属于实物到货事实，错了走退货或报损。
+  // 原值留在审批单 payload 里，总厨批准后才落到单据上，拒绝则单据分毫不动。
+  app.post('/:id/corrections', auth(app), async (req: any, reply: any) => {
+    const { tenantId, userId, role, storeId } = req.user
+    if (!RECEIPT_CORRECTION_ROLES.has(role)) {
+      return reply.status(403).send({ error: '仅门店店长、厨师长、供应链或管理员可发起入库单更正' })
+    }
+    const parsed = receiptCorrectionSchema.safeParse(req.body)
+    if (!parsed.success) {
+      const first = parsed.error.errors[0]
+      return reply.status(400).send({ error: `${first.path.join('.')}: ${first.message}` })
+    }
+    const where: any = { id: req.params.id, tenantId }
+    if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
+    const receipt = await prisma.receipt.findFirst({
+      where,
+      select: {
+        id: true, no: true, status: true, totalAmount: true,
+        items: {
+          select: {
+            id: true, productId: true, productNameSnapshot: true, productUnitSnapshot: true,
+            quantity: true, unitPrice: true, amount: true,
+            inventoryQuantity: true, inventoryUnitCostSnapshot: true,
+          },
+        },
+      },
+    })
+    if (!receipt) return reply.status(404).send({ error: '入库单不存在' })
+
+    let plan
+    try {
+      plan = planReceiptCorrection({ receipt: receipt as any, corrections: parsed.data.lines })
+    } catch (error: any) {
+      if (error instanceof ReceiptCorrectionError) {
+        return reply.status(error.statusCode).send({ error: error.message })
+      }
+      throw error
+    }
+
+    const pending = await prisma.document.findFirst({
+      where: {
+        tenantId, type: 'RECEIPT_CORRECTION', status: 'PENDING',
+        payload: { path: ['receiptId'], equals: receipt.id },
+      },
+      select: { no: true },
+    })
+    if (pending) return reply.status(400).send({ error: `该入库单已有待审批的更正单 ${pending.no}` })
+
+    const routePlan = routeFor('RECEIPT_CORRECTION' as any, Math.abs(Number(plan.totalDelta)))
+    const title = `入库单更正: ${receipt.no} ¥${plan.totalBefore} → ¥${plan.totalAfter}`
+    const doc = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`receipt-correction:${receipt.id}`}))::text AS locked`
+      const concurrent = await tx.document.findFirst({
+        where: {
+          tenantId, type: 'RECEIPT_CORRECTION', status: 'PENDING',
+          payload: { path: ['receiptId'], equals: receipt.id },
+        },
+        select: { no: true },
+      })
+      if (concurrent) {
+        throw Object.assign(new Error(`该入库单已有待审批的更正单 ${concurrent.no}`), { statusCode: 409 })
+      }
+      const no = await nextDocumentNo(tx, tenantId)
+      const created = await tx.document.create({
+        data: {
+          tenantId, no, type: 'RECEIPT_CORRECTION', title,
+          amount: new Prisma.Decimal(plan.totalAfter),
+          isOverThreshold: routePlan.isOverThreshold,
+          thresholdRule: routePlan.thresholdRule || null,
+          payload: { ...plan, reason: parsed.data.reason } as any,
+          storeId: storeId || null,
+          initiatorId: userId,
+          status: 'PENDING',
+          steps: {
+            create: routePlan.steps.map((approverRole: any, index: number) => ({
+              seq: index + 1, approverRole, status: 'PENDING' as const,
+            })),
+          },
+        },
+        include: { steps: true },
+      })
+      await tx.opLog.create({
+        data: {
+          tenantId, userId, role,
+          action: `提交入库单更正 ${no}:${receipt.no} ¥${plan.totalBefore} → ¥${plan.totalAfter}`,
+          entityType: 'Document', target: no, targetId: created.id,
+          metadata: { receiptNo: receipt.no, plan, reason: parsed.data.reason },
+        },
+      })
+      return created
+    })
+    return reply.status(201).send({ documentNo: doc.no, plan, message: '更正单已提交总厨审批，批准后生效' })
+  })
+
   app.patch('/:id/void', auth(app), async (req: any, reply: any) => {
     const { tenantId, userId, role, storeId } = req.user
     if (!canOperateReceipt(role)) return reply.status(403).send({ error: '仅门店店长、厨师长或品牌管理员可作废入库单' })

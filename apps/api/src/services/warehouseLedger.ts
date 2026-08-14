@@ -1409,6 +1409,8 @@ type DailyPackageOutboundLine = {
   costAmount: number
   documents?: string[]
   stores?: string[]
+  /** 本组内最晚的单据审核时间，用作记账时点；缺失时回退到当天最后一刻。 */
+  effectiveAt?: string | null
 }
 
 type DailyPackageMetadata = {
@@ -1651,6 +1653,10 @@ export async function recordWarehouseDailyPackageLedger(input: {
     const purchaseReturns = resolvedInbound.filter(item => Number(item.source.quantity) < 0).map(item => item.line)
     const positiveInbound = resolvedInbound.filter(item => Number(item.source.quantity) > 0).map(item => item.line)
     const outboundLines = [...outboundSource.map(resolveOutbound).filter((line): line is ResolvedLine => Boolean(line)), ...purchaseReturns]
+    // 出库行携带了本组内最晚的单据审核时间，用它做记账时点。
+    const outboundEffectiveAtByCode = new Map(
+      outboundSource.map(line => [normalizedExternalCode(line.externalCode), line.effectiveAt]),
+    )
     const allLines = [...positiveInbound, ...outboundLines]
     const snapshotBalanceProducts = record.items
       .filter((item): item is typeof item & { productId: string; inventoryUnit: string } => Boolean(item.productId && item.inventoryUnit))
@@ -1667,7 +1673,15 @@ export async function recordWarehouseDailyPackageLedger(input: {
       tenantId: input.tenantId, warehouseId: record.warehouseId, incoming: 'MeituanDailyPackage',
     })
     const mode = await warehouseMode(tx, input.tenantId, record.warehouseId)
-    const effectiveAt = new Date(`${packageDate}T23:59:00+08:00`)
+    // 归属时点用行级的单据审核时间，写死当天 23:59 会让当晚审核的流水错位。
+    // 取不到审核时间的行才回退到当天最后一刻。
+    const packageFallbackAt = new Date(`${packageDate}T23:59:00+08:00`)
+    const lineEffectiveAt = (raw: string | null | undefined) => {
+      if (!raw) return packageFallbackAt
+      const parsed = new Date(String(raw).includes('T') ? String(raw) : `${String(raw).replace(' ', 'T')}+08:00`)
+      return Number.isNaN(parsed.getTime()) ? packageFallbackAt : parsed
+    }
+    const effectiveAt = packageFallbackAt
     const movementIds: string[] = []
 
     for (const [index, line] of positiveInbound.entries()) {
@@ -1726,7 +1740,8 @@ export async function recordWarehouseDailyPackageLedger(input: {
         inventoryQuantity: line.inventoryQuantity, inventoryUnit: line.inventoryUnit,
         inventoryUnitCost: line.inventoryQuantity.gt(0) ? costOut.div(line.inventoryQuantity).toDecimalPlaces(COST_DP) : ZERO,
         sourceType: 'MeituanDailyPackage', sourceId: record.id, sourceLineId: `${direction}:${line.code}`,
-        idempotencyKey, requestFingerprint: fingerprint({ packageDate, line, direction }), effectiveAt,
+        idempotencyKey, requestFingerprint: fingerprint({ packageDate, line, direction }),
+        effectiveAt: lineEffectiveAt(outboundEffectiveAtByCode.get(line.code)),
         note: line.note, sourceName: line.sourceName, createdById: input.userId,
       } })
       await persistBalance(tx, balance, { physicalQty: nextPhysical, reservedQty: balance.reservedQty, inventoryValue: nextValue, averageUnitCost: nextAverage })

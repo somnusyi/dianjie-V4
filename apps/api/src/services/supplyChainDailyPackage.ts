@@ -121,6 +121,63 @@ function dateAndTimeFromFilename(filename: string) {
   return { date, timestamp }
 }
 
+/**
+ * 出入库明细表的列位置不固定。
+ *
+ * 实测:同一个报表，导出条件选「出入库类型=全部」时是 58 列(入库组 + 出库组 +
+ * 成本/结算/毛利)，选「配送发货出库」时只有 27 列，出库数量从第 41/42 列挪到
+ * 第 26/27 列。此前代码写死列号，喂窄版文件进去会把出库数量全部读成 0——
+ * 而类型判断仍然通过，于是静默算出「今天没有出库」。
+ *
+ * 表头是两行:上面一行是分组(入库/出库)，下面一行是列名。「数量（基准单位）」
+ * 在两个分组下各出现一次，所以映射必须带分组，不能只按列名。
+ */
+function movementColumns(sheet: ExcelJS.Worksheet, groupHeaderRow: number, detailHeaderRow: number) {
+  const byKey = new Map<string, number>()
+  let currentGroup = ''
+  for (let index = 1; index <= sheet.columnCount; index += 1) {
+    const group = cellText(sheet.getRow(groupHeaderRow).getCell(index).value)
+    const label = cellText(sheet.getRow(detailHeaderRow).getCell(index).value)
+    // 合并单元格只在首列有值，向右沿用上一个分组名。
+    if (group) currentGroup = group
+    if (!label) continue
+    // 未分组的列在两行里写的是同一个名字。
+    const key = currentGroup && currentGroup !== label ? `${currentGroup}:${label}` : label
+    if (!byKey.has(key)) byKey.set(key, index)
+  }
+  const required = (key: string) => {
+    const found = byKey.get(key)
+    if (!found) throw Object.assign(new Error(`出入库明细表缺少列：${key}`), { statusCode: 400 })
+    return found
+  }
+  return {
+    code: required('物品编码'),
+    name: required('物品名称'),
+    spec: byKey.get('规格型号') ?? null,
+    baseUnit: required('基准单位'),
+    sourceUnit: required('单位'),
+    documentNo: required('出入库单号'),
+    type: required('出入库类型'),
+    counterparty: byKey.get('对方机构') ?? null,
+    documentDate: byKey.get('出入库单据日期') ?? null,
+    auditedAt: byKey.get('出入库单据审核时间') ?? byKey.get('审核时间') ?? null,
+    outboundBaseQuantity: required('出库:数量（基准单位）'),
+    outboundQuantity: required('出库:数量'),
+    // 成本/结算/毛利只在宽版导出里有；窄版取不到就按 0 计，不再按列号猜。
+    outboundCost: byKey.get('出库:成本金额(含税)') ?? byKey.get('出库:成本金额（含税）') ?? null,
+    outboundSettlement: byKey.get('出库:结算金额(含税)') ?? byKey.get('出库:结算金额（含税）') ?? null,
+    outboundGrossProfit: byKey.get('出库:毛利') ?? byKey.get('出库:毛利额') ?? null,
+  }
+}
+
+/**
+ * 只有「配送发货出库」计入出库台账。入库走采购汇总表，其余类型(库存调整、
+ * 调拨等)不参与记账但要报出来，而完全没见过的类型必须阻断整批——静默忽略
+ * 一个新类型，等于让总仓账面凭空少掉一批货。
+ */
+const OUTBOUND_MOVEMENT_TYPES = new Set(['配送发货出库'])
+const KNOWN_NON_OUTBOUND_TYPES = new Set(['采购入库', '其他入库', '采购退货出库', '调拨入库', '调拨出库'])
+
 function classifyWorkbook(filename: string) {
   if (filename.includes('实时库存查询表')) return 'inventory' as const
   if (filename.includes('出入库明细表')) return 'movements' as const
@@ -238,6 +295,9 @@ async function summarizeMovements(buffer: Buffer) {
   if (!sheet) throw Object.assign(new Error('出入库文件缺少可识别的明细表'), { statusCode: 400 })
   const groupHeaderRow = findRow(sheet, ['物品编码', '出入库单号', '出入库类型'])!
   const detailHeaderRow = groupHeaderRow + 1
+  const columns = movementColumns(sheet, groupHeaderRow, detailHeaderRow)
+  const skippedTypes = new Map<string, number>()
+  const unknownTypes = new Map<string, number>()
   const documents = new Set<string>()
   const stores = new Set<string>()
   const skus = new Set<string>()
@@ -264,37 +324,42 @@ async function summarizeMovements(buffer: Buffer) {
   }>()
   for (let rowNumber = detailHeaderRow + 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
     const row = sheet.getRow(rowNumber)
-    const code = cellText(row.getCell(1).value)
-    const name = cellText(row.getCell(2).value)
+    const code = cellText(row.getCell(columns.code).value)
+    const name = cellText(row.getCell(columns.name).value)
     if ((!code && !name) || code === '合计' || name === '合计') continue
-    const type = cellText(row.getCell(17).value)
-    const quantity = numberCell(row.getCell(41).value)
-    if (!type.includes('出库') && quantity === 0) continue
+    const type = cellText(row.getCell(columns.type).value)
+    // 只有配送发货出库进出库台账。其余已知类型记数报出，未登记的类型阻断整批。
+    if (!OUTBOUND_MOVEMENT_TYPES.has(type)) {
+      if (KNOWN_NON_OUTBOUND_TYPES.has(type)) skippedTypes.set(type, (skippedTypes.get(type) || 0) + 1)
+      else if (type) unknownTypes.set(type, (unknownTypes.get(type) || 0) + 1)
+      continue
+    }
+    const quantity = numberCell(row.getCell(columns.outboundBaseQuantity).value)
     rowCount += 1
-    const documentNo = cellText(row.getCell(15).value)
-    const store = cellText(row.getCell(20).value)
+    const documentNo = cellText(row.getCell(columns.documentNo).value)
+    const store = columns.counterparty ? cellText(row.getCell(columns.counterparty).value) : ''
     if (documentNo) documents.add(documentNo)
     if (store) stores.add(store)
     if (code) skus.add(code.toUpperCase())
     const documentSku = `${documentNo}|${code}`
     documentSkus.set(documentSku, (documentSkus.get(documentSku) || 0) + 1)
     outboundQuantity += quantity
-    const lineCost = numberCell(row.getCell(45).value)
-    const lineSettlement = numberCell(row.getCell(49).value)
+    const lineCost = columns.outboundCost ? numberCell(row.getCell(columns.outboundCost).value) : 0
+    const lineSettlement = columns.outboundSettlement ? numberCell(row.getCell(columns.outboundSettlement).value) : 0
     costAmount += lineCost
     settlementAmount += lineSettlement
-    grossProfit += numberCell(row.getCell(55).value)
-    if (quantity > 0 && lineCost === 0) zeroCostLineCount += 1
+    grossProfit += columns.outboundGrossProfit ? numberCell(row.getCell(columns.outboundGrossProfit).value) : 0
+    if (quantity > 0 && columns.outboundCost && lineCost === 0) zeroCostLineCount += 1
 
-    const sourceUnit = cellText(row.getCell(8).value)
-    const baseUnit = cellText(row.getCell(7).value)
+    const sourceUnit = cellText(row.getCell(columns.sourceUnit).value)
+    const baseUnit = cellText(row.getCell(columns.baseUnit).value)
     const ledgerKey = `${code.toUpperCase()}|${sourceUnit}|${baseUnit}`
     const existing = ledger.get(ledgerKey) || {
       externalCode: code.toUpperCase(),
       externalName: name,
       sourceUnit,
       baseUnit,
-      sourceSpec: cellText(row.getCell(3).value) || null,
+      sourceSpec: (columns.spec ? cellText(row.getCell(columns.spec).value) : '') || null,
       quantity: 0,
       baseQuantity: 0,
       costAmount: 0,
@@ -303,19 +368,32 @@ async function summarizeMovements(buffer: Buffer) {
       stores: new Set<string>(),
       effectiveAt: null,
     }
-    existing.quantity += numberCell(row.getCell(42).value)
-    existing.baseQuantity += numberCell(row.getCell(41).value)
+    existing.quantity += numberCell(row.getCell(columns.outboundQuantity).value)
+    existing.baseQuantity += numberCell(row.getCell(columns.outboundBaseQuantity).value)
     existing.costAmount += lineCost
     existing.settlementAmount += lineSettlement
     if (documentNo) existing.documents.add(documentNo)
     if (store) existing.stores.add(store)
-    const rowEffectiveAt = cellText(row.getCell(26).value) || cellText(row.getCell(23).value)
+    // 归属时点用单据审核时间:库存快照是某个时刻导出的，而单据审核散布全天，
+    // 按「单据日期」归属会让当晚审核的流水错位到前一天(实测 8-11 快照 18:10，
+    // 而当天 20:25~22:32 才审核的几笔全部落在了错误的一侧)。
+    const rowEffectiveAt = (columns.auditedAt ? cellText(row.getCell(columns.auditedAt).value) : '')
+      || (columns.documentDate ? cellText(row.getCell(columns.documentDate).value) : '')
     if (rowEffectiveAt && (!existing.effectiveAt || rowEffectiveAt > existing.effectiveAt)) existing.effectiveAt = rowEffectiveAt
     ledger.set(ledgerKey, existing)
+  }
+  if (unknownTypes.size > 0) {
+    const detail = [...unknownTypes].map(([type, count]) => `${type}×${count}`).join('、')
+    throw Object.assign(
+      new Error(`出入库明细表出现未登记的出入库类型：${detail}。`
+        + '请先确认这些类型该不该进出库台账，再重新上传——静默忽略会让总仓账面凭空少掉一批货。'),
+      { statusCode: 400 },
+    )
   }
   const roundedCost = round(costAmount)
   const roundedSettlement = round(settlementAmount)
   return {
+    skippedTypes: [...skippedTypes].map(([type, count]) => ({ type, count })),
     summary: {
       rowCount,
       documentCount: documents.size,
@@ -451,6 +529,14 @@ export async function extractSupplyChainDailyPackage(buffer: Buffer): Promise<Ex
   const issues: SupplyChainPackageIssue[] = []
   if (inventoryResult.summary.theoreticalNegativeCount > 0) {
     issues.push({ code: 'THEORETICAL_NEGATIVE_STOCK', message: `${inventoryResult.summary.theoreticalNegativeCount} 个商品理论库存为负`, detail: '不阻断快照校准，但需核对待入库、待出库或历史流水。' })
+  }
+  if (movementResult.skippedTypes.length > 0) {
+    const detail = movementResult.skippedTypes.map(item => `${item.type}×${item.count}`).join('、')
+    issues.push({
+      code: 'NON_OUTBOUND_MOVEMENT_SKIPPED',
+      message: `${movementResult.skippedTypes.reduce((sum, item) => sum + item.count, 0)} 行非配送出库明细未计入出库台账`,
+      detail: `${detail}。入库以采购汇总表为准，这些行只作提示。`,
+    })
   }
   if (movementResult.summary.zeroCostLineCount > 0) {
     issues.push({ code: 'ZERO_COST_OUTBOUND', message: `${movementResult.summary.zeroCostLineCount} 条配送出库成本为 0`, detail: '会造成配送毛利偏高，请补齐商品成本档案。' })

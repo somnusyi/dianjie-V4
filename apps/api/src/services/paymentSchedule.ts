@@ -3,6 +3,7 @@
 // apps/api/src/services/paymentSchedule.ts (更新版)
 // ══════════════════════════════════════════════════════
 import { notifyApprovalPending } from './notification'
+import { businessMonthKey } from '../lib/businessTime'
 
 import { prisma, Supplier, Receipt } from '@dianjie/db'
 import dayjs from 'dayjs'
@@ -99,7 +100,7 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
     let recon = existingReconItem?.reconciliation
     let reconciliationCreated = false
     if (!recon) {
-      const ym = dayjs(confirmedAt).format('YYYYMM')
+      const ym = businessMonthKey(confirmedAt)
       const latestRecon = await tx.reconciliation.findFirst({
         where: { tenantId, no: { startsWith: `DC${ym}` } },
         orderBy: { no: 'desc' },

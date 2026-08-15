@@ -1,4 +1,5 @@
 import { FastifyPluginAsync } from 'fastify'
+import { businessMonthKey } from '../lib/businessTime'
 import { Prisma, prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { z } from 'zod'
@@ -494,7 +495,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
         })
         if (totalLossAmount.gt(LOSS_AMOUNT_MAX)) throw { statusCode: 400, message: '报损单总金额超过系统上限' }
 
-        const no = await nextLossClaimNo(tx, tenantId, dayjs(now).format('YYYYMM'))
+        const no = await nextLossClaimNo(tx, tenantId, businessMonthKey(now))
         const created = await tx.lossClaim.create({
           data: {
             tenantId,
@@ -619,7 +620,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     const NEED_REVIEW_THRESHOLD = 500
     const needsReview = totalLossAmount.gte(NEED_REVIEW_THRESHOLD)
     const initialStatus = needsReview ? 'PENDING' : 'AUTO_APPROVED'
-    const ym = dayjs().format('YYYYMM')
+    const ym = businessMonthKey()
     const claim = await prisma.$transaction(async tx => {
       const no = await nextLossClaimNo(tx, tenantId, ym)
       const created = await tx.lossClaim.create({

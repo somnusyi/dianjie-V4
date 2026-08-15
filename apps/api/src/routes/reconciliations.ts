@@ -1,4 +1,5 @@
 import { FastifyPluginAsync } from 'fastify'
+import { businessMonthKey } from '../lib/businessTime'
 import dayjs from 'dayjs'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
@@ -199,7 +200,7 @@ export const reconciliationRoutes: FastifyPluginAsync = async (app) => {
         ).toDecimalPlaces(2)
         if (totalAmount.lte(0)) throw httpError('对账金额必须大于 0', 409)
 
-        const ym = dayjs().format('YYYYMM')
+        const ym = businessMonthKey()
         const prefix = `DC${ym}`
         const latest = await tx.reconciliation.findFirst({
           where: { tenantId, no: { startsWith: prefix } }, orderBy: { no: 'desc' }, select: { no: true },

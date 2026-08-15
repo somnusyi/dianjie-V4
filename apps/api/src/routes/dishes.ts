@@ -698,15 +698,23 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     } catch (error: any) {
       return reply.status(error.statusCode || 403).send({ error: error.message })
     }
-    const [store, dish] = await Promise.all([
+    const [store, dish, confirmedImport] = await Promise.all([
       prisma.store.findFirst({ where: { id: d.storeId, tenantId }, select: { id: true } }),
       prisma.dish.findFirst({
         where: { id: d.dishId, tenantId },
         include: { bomVersions: { where: { status: 'PUBLISHED' }, include: { items: { include: { product: true } } } } },
       }),
+      // 双扣闸门：该营业日已有确认的日报时，日报已按自己的明细扣过库存，手工再录会重复扣减
+      prisma.dailyBusinessImport.findFirst({
+        where: { tenantId, storeId: d.storeId, businessDate: saleDate, status: 'CONFIRMED' },
+        select: { id: true },
+      }),
     ])
     if (!store) return reply.status(404).send({ error: '门店不存在' })
     if (!dish) return reply.status(404).send({ error: '菜品不存在' })
+    if (confirmedImport) {
+      return reply.status(409).send({ error: '该营业日期已有确认的日报，销量与库存消耗以日报为准；如需调整请通过日报更正' })
+    }
     const bomVersion = dish.inventoryPolicy === 'BOM'
       ? selectEffectiveBomVersion(dish.bomVersions, saleDate, '')
       : null
@@ -763,6 +771,35 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
       req.log.error({ error, storeId: d.storeId }, 'manual dish sale cost snapshot refresh failed')
     })
     return sale
+  })
+
+  // ── 删除手工销量（解除"手工销量 vs 日报确认"双扣冲突的唯一入口）──
+  app.delete('/sales/:id', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!SALE_WRITE_ROLES.includes(role)) {
+      return reply.status(403).send({ error: '无权删除销量' })
+    }
+    const sale = await prisma.dishSale.findFirst({
+      where: { id: req.params.id, tenantId },
+      select: { id: true, storeId: true, source: true, date: true, dish: { select: { name: true } } },
+    })
+    if (!sale) return reply.status(404).send({ error: '销量记录不存在' })
+    if (sale.source === 'daily_pos_upload') {
+      return reply.status(409).send({ error: '日报生成的销量不能直接删除，请通过日报更正流程调整' })
+    }
+    try {
+      scopedStoreId(req.user, sale.storeId)
+    } catch (error: any) {
+      return reply.status(error.statusCode || 403).send({ error: error.message })
+    }
+    await prisma.$transaction(async tx => {
+      await tx.stockConsumption.deleteMany({ where: { tenantId, sourceType: 'dish_sale', sourceId: sale.id } })
+      await tx.dishSale.delete({ where: { id: sale.id } })
+    })
+    await revalueStoreConsumptionCosts(tenantId, sale.storeId).catch(error => {
+      req.log.error({ error, storeId: sale.storeId }, 'manual dish sale removal cost refresh failed')
+    })
+    return { ok: true, deleted: { id: sale.id, dish: sale.dish.name, date: sale.date } }
   })
 
   // ── 销量榜 (单月/单店或集团) ───────────────────────

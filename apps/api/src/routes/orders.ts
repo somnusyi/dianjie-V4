@@ -1,4 +1,5 @@
 import { FastifyPluginAsync } from 'fastify'
+import { businessMonthKey } from '../lib/businessTime'
 import { z } from 'zod'
 import { Prisma, prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
@@ -558,7 +559,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const itemsData = draftValidation.lines
     const totalAmount = draftValidation.totalAmount!
     const submittedAt = new Date()
-    const ym = dayjs().format('YYYYMM')
+    const ym = businessMonthKey()
     const actionPrefix = role === 'CHEF_DIRECTOR' ? `总厨代下单` : `创建采购订单`
 
     let order: any
@@ -1519,7 +1520,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         throw { statusCode: 409, message: '订单首次有效发货已完成，未发余量已关闭，不得再次发货' }
       }
 
-      const ym = dayjs().format('YYYYMM')
+      const ym = businessMonthKey()
       const deliveryNo = await nextBusinessNo(tx, tenantId, 'DO', ym, 'DO')
       const delivery = await tx.deliveryOrder.create({
         data: {
@@ -1963,7 +1964,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     // fullyShipped 只描述数量是否全发；无论其值如何，首次发货都已关闭履约余量。
     const fullyShipped = order.items.every(item => Number(item.shippedQty || 0) + 0.0001 >= Number(item.quantity))
     const receivedAt = new Date()
-    const ym = dayjs(receivedAt).format('YYYYMM')
+    const ym = businessMonthKey(receivedAt)
     let committed: { receipt: any; no: string }
     try {
       committed = await prisma.$transaction(async tx => {

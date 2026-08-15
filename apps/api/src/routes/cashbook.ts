@@ -1,4 +1,5 @@
 import { FastifyPluginAsync } from 'fastify'
+import { businessCompactTimestampKey } from '../lib/businessTime'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { cmbTransfer, reportCmbError } from '../services/cmbPayment'
@@ -259,7 +260,7 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // 生成 bizNo: int-<14位时间戳>-<6 字符随机> (≤ 30 字符, 符合招行 yurRef 规则)
-    const ts = dayjs().format('YYYYMMDDHHmmss')
+    const ts = businessCompactTimestampKey()
     const rand = crypto.randomBytes(3).toString('hex')
     const bizNo = `int-${ts}-${rand}`
 

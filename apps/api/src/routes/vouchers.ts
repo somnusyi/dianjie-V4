@@ -6,6 +6,7 @@
  * 权限: 仅 FINANCE / ADMIN / SUPER_ADMIN
  */
 import { FastifyPluginAsync } from 'fastify'
+import { businessTimestampKey } from '../lib/businessTime'
 import { prisma } from '@dianjie/db'
 import { z } from 'zod'
 import dayjs from 'dayjs'
@@ -354,7 +355,7 @@ export const voucherRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: 'voucherIds 必填' })
     }
     const { buf, voucherIds: exportedIds } = await exportVouchersExcel({ tenantId, voucherIds })
-    const fname = `凭证_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`
+    const fname = `凭证_${businessTimestampKey()}.xlsx`
     reply.raw.on('finish', () => { void markVouchersExported(exportedIds).catch(e => console.error('[voucher] markExported 失败', e)) })
     reply
       .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')

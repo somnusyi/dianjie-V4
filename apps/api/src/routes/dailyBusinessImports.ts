@@ -22,6 +22,33 @@ import { convertQuantityToInventoryUnit } from '../services/inventoryUnits'
 import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
 import { fireAndForget as notify } from '../services/notify'
 
+/**
+ * 双扣闸门（confirm 事务内调用）：手工来源的销量与日报销量并存时，
+ * 同一菜品会被扣两次库存、销量榜双计。不静默删除手工数据 —— 明确阻断
+ * 并要求先处理（删除入口：DELETE /api/dishes/sales/:id）。
+ */
+export async function assertNoManualDishSales(
+  tx: { dishSale: { findMany: Function } },
+  tenantId: string,
+  storeId: string,
+  businessDate: Date,
+): Promise<void> {
+  const manualSales = await tx.dishSale.findMany({
+    where: { tenantId, storeId, date: businessDate, source: { not: SOURCE } },
+    select: { source: true, quantity: true, dish: { select: { name: true } } },
+    take: 51,
+  })
+  if (manualSales.length > 0) {
+    const sources = [...new Set(manualSales.map(s => s.source))].join('、')
+    const sample = manualSales.slice(0, 5).map(s => `${s.dish.name}×${Number(s.quantity)}`).join('、')
+    const more = manualSales.length > 5 ? ` 等 ${manualSales.length} 条` : ''
+    throw Object.assign(
+      new Error(`该营业日期存在手工录入的销量（来源：${sources}，如 ${sample}${more}）。确认日报会导致同一菜品重复扣减库存，请先在菜品销量中删除这些手工记录后再确认`),
+      { statusCode: 409 },
+    )
+  }
+}
+
 /** 一次日报缺 BOM 的菜品聚合成一条通知文案 (去重 + 截断, 防刷屏) */
 export function bomTaskDishNames(rows: Array<{ rawDishName: string; spec?: string | null }>, max = 8): string {
   const seen = new Set<string>()
@@ -1209,6 +1236,7 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
           data: { status: 'CONFIRMING' },
         })
         if (locked.count !== 1) throw Object.assign(new Error('该预览已被其他操作处理，请刷新'), { statusCode: 409 })
+        await assertNoManualDishSales(tx, record.tenantId, record.storeId, record.businessDate)
         const previous = await tx.dailyBusinessImport.findMany({
           where: { storeId: record.storeId, businessDate: record.businessDate, status: 'CONFIRMED' },
           select: { id: true },

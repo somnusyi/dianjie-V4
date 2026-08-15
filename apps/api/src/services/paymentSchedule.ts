@@ -99,7 +99,7 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
     let recon = existingReconItem?.reconciliation
     let reconciliationCreated = false
     if (!recon) {
-      const ym = dayjs(confirmedAt).format('YYYYMM')
+      const ym = businessMonthKey(confirmedAt)
       const latestRecon = await tx.reconciliation.findFirst({
         where: { tenantId, no: { startsWith: `DC${ym}` } },
         orderBy: { no: 'desc' },

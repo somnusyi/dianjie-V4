@@ -1,5 +1,5 @@
 import { prisma } from '@dianjie/db'
-import dayjs from 'dayjs'
+import { businessMonthKey } from '../lib/businessTime'
 
 const TABLE_MAP: Record<string, any> = {
   RK: 'receipt',
@@ -10,7 +10,7 @@ const TABLE_MAP: Record<string, any> = {
 }
 
 export async function generateNo(prefix: string, tenantId: string): Promise<string> {
-  const ym = dayjs().format('YYYYMM')
+  const ym = businessMonthKey()
   const startNo = `${prefix}${ym}`
 
   const model = TABLE_MAP[prefix]

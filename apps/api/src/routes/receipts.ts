@@ -1,4 +1,5 @@
 import { FastifyPluginAsync } from 'fastify'
+import { businessMonthKey } from '../lib/businessTime'
 import { z } from 'zod'
 import { Prisma, prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
@@ -337,7 +338,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     if (totalAmount.gt(RECEIPT_AMOUNT_MAX)) {
       return reply.status(400).send({ error: '入库单总金额超过系统上限' })
     }
-    const ym = dayjs().format('YYYYMM')
+    const ym = businessMonthKey()
     const receipt = await prisma.$transaction(async tx => {
       const latest = await tx.receipt.findFirst({
         where: { tenantId, no: { startsWith: `RK${ym}` } }, orderBy: { no: 'desc' }, select: { no: true },
@@ -523,7 +524,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     }))
     const totalLossAmount = lossItemsData.reduce((sum, item) => sum.add(item.lossAmount), new Prisma.Decimal(0)).toDecimalPlaces(2)
     const confirmedAt = new Date()
-    const ym = dayjs(confirmedAt).format('YYYYMM')
+    const ym = businessMonthKey(confirmedAt)
 
     await prisma.$transaction(async tx => {
       const claimed = await tx.receipt.updateMany({

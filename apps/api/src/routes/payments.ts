@@ -1,4 +1,5 @@
 import { FastifyPluginAsync } from 'fastify'
+import { businessMonthKey } from '../lib/businessTime'
 import dayjs from 'dayjs'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
@@ -129,7 +130,7 @@ export const paymentRoutes: FastifyPluginAsync = async (app) => {
           throw httpError(`金额与对账单不符 (¥${recon.totalAmount.toFixed(2)})`, 400)
         }
 
-        const ym = dayjs().format('YYYYMM')
+        const ym = businessMonthKey()
         const prefix = `PY${ym}`
         const latest = await tx.payment.findFirst({
           where: { tenantId, no: { startsWith: prefix } }, orderBy: { no: 'desc' }, select: { no: true },

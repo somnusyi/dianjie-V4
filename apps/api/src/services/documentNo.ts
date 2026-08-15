@@ -1,5 +1,5 @@
-import dayjs from 'dayjs'
 import { Prisma } from '@dianjie/db'
+import { businessMonthKey } from '../lib/businessTime'
 import { nextBusinessNo } from './purchaseOrderIntegrity'
 
 /** Generate a tenant-scoped document number without count + 1 races. */
@@ -8,7 +8,7 @@ export async function nextDocumentNo(
   tenantId: string,
   at: Date = new Date(),
 ) {
-  const period = dayjs(at).format('YYYYMM')
+  const period = businessMonthKey(at)
   const prefix = `DOC${period}`
   const latest = await tx.document.findFirst({
     where: { tenantId, no: { startsWith: prefix } },

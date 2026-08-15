@@ -1,4 +1,5 @@
 import { prisma } from '@dianjie/db'
+import { businessMonthKey } from '../lib/businessTime'
 import dayjs from 'dayjs'
 import { executeBankPayment } from './paymentSchedule'
 import { sendNotification as notify } from './notification'
@@ -54,7 +55,7 @@ export async function autoReceivePurchaseOrder(orderId: string) {
     (sum, item) => sum + Number(item.shippedQty) * Number(item.unitPriceSnapshot),
     0,
   )
-  const ym = dayjs(receivedAt).format('YYYYMM')
+  const ym = businessMonthKey(receivedAt)
 
   const receipt = await prisma.$transaction(async tx => {
     const claimed = await tx.deliveryOrder.updateMany({

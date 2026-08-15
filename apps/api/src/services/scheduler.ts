@@ -49,6 +49,11 @@ export async function autoReceivePurchaseOrder(orderId: string) {
     console.error(`自动收货跳过 ${order.no}: 未找到待收货配送单`)
     return null
   }
+  // 系统自动送达的单不自动收货：自动送达只解锁状态，收货事实以门店人手确认为准。
+  if (delivery.autoDelivered) {
+    console.log(`自动收货跳过 ${order.no}: 配送单为系统自动送达，等待门店人工验收`)
+    return null
+  }
 
   const receivedAt = new Date()
   const totalAmount = delivery.items.reduce(
@@ -192,6 +197,73 @@ export async function autoReceivePurchaseOrder(orderId: string) {
 }
 
 export type PaymentReminderKind = '3DAY' | '1DAY'
+
+/**
+ * 送达兜底（2026-08-15 与供应链确认）：发货后 24h 内必达，但"点送达"目前由
+ * 负责人/会计代点、经常遗忘，导致配送单永久停在 SHIPPED、门店无法收货。
+ * 超 24h 未人工送达的配送单由系统自动推进到 DELIVERED（标记 autoDelivered）。
+ *
+ * 安全约束：autoDelivered 的配送单跳过 24h 自动收货——自动送达只解锁状态，
+ * 收货事实仍以门店人工确认为准，防止"货未到 → 自动送达 → 自动收货 → 幽灵入账"。
+ */
+export async function autoDeliverStaleShipments() {
+  const cutoff = dayjs().subtract(24, 'hour').toDate()
+  const stale = await prisma.deliveryOrder.findMany({
+    where: { status: 'SHIPPED', shippedAt: { lt: cutoff } },
+    select: {
+      id: true, tenantId: true, rowVersion: true, purchaseOrderId: true,
+      purchaseOrder: { select: { no: true, status: true, storeId: true, supplierId: true } },
+    },
+    take: 100,
+  })
+  let delivered = 0
+  for (const d of stale) {
+    if (d.purchaseOrder.status !== 'DELIVERING') continue
+    const deliveredAt = new Date()
+    try {
+      const advanced = await prisma.$transaction(async tx => {
+        const upd = await tx.deliveryOrder.updateMany({
+          where: { id: d.id, status: 'SHIPPED', rowVersion: d.rowVersion },
+          data: { status: 'DELIVERED', deliveredAt, autoDelivered: true, rowVersion: { increment: 1 } },
+        })
+        if (upd.count === 0) return false // 并发竞争：已被人点过，跳过
+        const orderUpd = await tx.purchaseOrder.updateMany({
+          where: { id: d.purchaseOrderId, status: 'DELIVERING' },
+          data: { status: 'PENDING_CONFIRM', deliveredAt },
+        })
+        if (orderUpd.count === 0) return false // 订单侧已被并发推进，配送单状态保留实际事实
+        await tx.deliveryOrderEvent.create({
+          data: {
+            tenantId: d.tenantId, deliveryOrderId: d.id, eventType: 'DELIVERED',
+            fromStatus: 'SHIPPED', toStatus: 'DELIVERED',
+            metadata: { autoDelivered: true },
+          },
+        })
+        await tx.opLog.create({
+          data: {
+            tenantId: d.tenantId,
+            action: `[自动] 发货超 24h 未点送达，系统自动送达 ${d.purchaseOrder.no}；等待门店人工验收（不自动收货）`,
+            target: d.purchaseOrder.no, entityType: 'PurchaseOrder', targetId: d.purchaseOrderId,
+          },
+        })
+        return true
+      })
+      if (!advanced) continue
+      delivered++
+      notify({
+        tenantId: d.tenantId, recipientRole: 'MANAGER',
+        type: 'ORDER_DELIVERED',
+        title: `订单已自动送达, 请验收 ${d.purchaseOrder.no}`,
+        body: `发货超 24 小时未确认送达，系统已自动推进。请门店尽快人工验收；如有异常请立即联系供应链。`,
+        refType: 'PurchaseOrder', refId: d.purchaseOrderId,
+      } as Parameters<typeof notify>[0]).catch(() => undefined)
+    } catch (e: any) {
+      console.error(`自动送达失败 ${d.purchaseOrder.no}:`, e?.message || e)
+    }
+  }
+  if (delivered > 0) console.log(`📦 送达兜底: ${delivered}/${stale.length} 单自动送达（跳过自动收货）`)
+  return { scanned: stale.length, delivered }
+}
 
 /**
  * Persist a due reminder once and then advance the schedule marker. The durable
@@ -466,6 +538,17 @@ export function startScheduler() {
     }
   }, 60 * 1000)
   console.log('📅 日报未上传提醒已启动（每天 11:00 Asia/Shanghai）')
+
+  // ── 送达兜底: 每小时扫描发货超 24h 未点送达的配送单, 系统自动送达 ──
+  // 送达目前由负责人/会计代点、经常遗忘 → 门店卡在收不了货。业务已确认
+  // 发货 24h 内必达；自动送达的单跳过 24h 自动收货（防幽灵入账），收货只认门店人工确认。
+  setTimeout(() => {
+    autoDeliverStaleShipments().catch(err => console.error('[auto-deliver-first] failed:', err))
+  }, 90_000)
+  setInterval(() => {
+    autoDeliverStaleShipments().catch(err => console.error('[auto-deliver] failed:', err))
+  }, 60 * 60 * 1000)
+  console.log('📦 送达兜底已启动（启动后 90s 首跑, 之后每小时一次）')
 
   // ── 美团智能版 API 同步 (spec: 2026-05-27) ──
   if (process.env.MEITUAN_ENABLED === 'true') {

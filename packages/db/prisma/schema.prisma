@@ -1969,6 +1969,9 @@ model DeliveryOrder {
   shippedAt         DateTime?
   deliveredAt       DateTime?
   receivedAt        DateTime?
+  // 发货超 24h 未人工点送达时系统自动推进的标记；此类单跳过 24h 自动收货，
+  // 收货事实仍以门店人工确认为准（防"货未到→自动送达→自动收货→幽灵入账"）。
+  autoDelivered     Boolean             @default(false)
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
@@ -2567,6 +2570,7 @@ enum LossClaimStatus {
 enum LossClaimKind {
   ARRIVAL_SHORTAGE // 到货数量短缺，必须尽量关联配送与收货明细
   ARRIVAL_DAMAGE // 到货破损/品质异常，由门店提交供应商处理
+  WRONG_ITEM // 错发：实际送达 SKU 与订单行不符，需品项级更正与退回
   INTERNAL_WASTE // 门店经营过程中的内部报损，不追责供应商
   LEGACY_UNRESOLVED // 历史数据或无法安全确认来源的数据
 }

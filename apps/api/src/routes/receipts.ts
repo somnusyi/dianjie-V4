@@ -18,6 +18,7 @@ import { nextBusinessNo } from '../services/purchaseOrderIntegrity'
 import { ensureReceiptInventoryUnitSnapshots } from '../services/receiptInventoryUnits'
 import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
 import { nextDocumentNo } from '../services/documentNo'
+import { reverseDeliveryOutboundInTransaction } from '../services/warehouseLedger'
 import { routeFor } from '../services/documentRouting'
 import {
   planReceiptCorrection,
@@ -627,8 +628,46 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
         data: { status: 'REJECTED', rejectReason: reason, rejectedAt: new Date() },
       })
       if (claimed.count !== 1) throw { statusCode: 409, message: '入库单已被处理，请刷新后查看' }
+      // 拒收 = 货整单退回。总仓订单的出库流水按原量全额冲回，否则仓库账虚少（履约方案 1.1）。
+      let reversalNote = '非总仓订单或无出库流水，仓库账不变'
+      if (receipt.deliveryOrderId) {
+        const order = receipt.purchaseOrderId
+          ? await tx.purchaseOrder.findFirst({
+              where: { id: receipt.purchaseOrderId, tenantId },
+              select: { no: true, supplier: { select: { sourceType: true } } },
+            })
+          : null
+        if (order?.supplier.sourceType === 'HEADQ_WAREHOUSE') {
+          const outbounds = await tx.warehouseLedgerMovement.findMany({
+            where: {
+              tenantId,
+              type: 'ORDER_OUTBOUND',
+              sourceType: 'DeliveryOrder',
+              sourceId: receipt.deliveryOrderId,
+            },
+          })
+          let reversedCount = 0
+          for (const outbound of outbounds) {
+            try {
+              await reverseDeliveryOutboundInTransaction(tx, {
+                tenantId,
+                userId,
+                source: 'ReceiptRejection',
+                sourceId: receipt.id,
+                originalMovementId: outbound.id,
+                quantity: outbound.originalQuantity,
+                reason: `拒收入库单 ${receipt.no} 冲回出库：${reason}`.slice(0, 200),
+              })
+              reversedCount++
+            } catch (error: any) {
+              console.error(`拒收冲回失败 ${receipt.no} movement=${outbound.id}:`, error?.message || error)
+            }
+          }
+          if (reversedCount > 0) reversalNote = `总仓出库已全额冲回 ${reversedCount} 项`
+        }
+      }
       await tx.opLog.create({
-        data: { tenantId, userId, action: `拒收入库单 ${receipt.no}：${reason}`, target: receipt.no, entityType: 'Receipt', targetId: receipt.id },
+        data: { tenantId, userId, action: `拒收入库单 ${receipt.no}：${reason}；${reversalNote}`, target: receipt.no, entityType: 'Receipt', targetId: receipt.id },
       })
     })
 

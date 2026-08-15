@@ -33,11 +33,11 @@ export async function assertNoManualDishSales(
   storeId: string,
   businessDate: Date,
 ): Promise<void> {
-  const manualSales = await tx.dishSale.findMany({
+  const manualSales = (await tx.dishSale.findMany({
     where: { tenantId, storeId, date: businessDate, source: { not: SOURCE } },
     select: { source: true, quantity: true, dish: { select: { name: true } } },
     take: 51,
-  })
+  })) as Array<{ source: string; quantity: any; dish: { name: string } }>
   if (manualSales.length > 0) {
     const sources = [...new Set(manualSales.map(s => s.source))].join('、')
     const sample = manualSales.slice(0, 5).map(s => `${s.dish.name}×${Number(s.quantity)}`).join('、')

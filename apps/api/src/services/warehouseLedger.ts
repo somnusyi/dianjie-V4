@@ -1810,3 +1810,150 @@ export async function recordWarehouseDailyPackageLedger(input: {
     }
   }, 60_000)
 }
+
+/**
+ * 差异/拒收冲回：把总仓订单出库多记的部分加回仓库账（履约准确性方案 1.1）。
+ *
+ * 适用：ARRIVAL_SHORTAGE 差异单结案（出库按发货数记、门店实收更少，冲回差额）；
+ * 收货整单拒收（货已退回，冲回全部出库）。
+ * 不适用：ARRIVAL_DAMAGE——质量差异实物去向未定，冲回会掩盖真实损耗，留给人工/逆向流程。
+ *
+ * 约束：
+ * - 冲回量按原出库流水冻结的 conversionFactor 换算，历史不随主数据改写；
+ * - 批次按原 FEFO 消耗（lotAllocation）顺序加回 remainingQty，保持"批次合计=余额"审计不变；
+ * - 幂等：reversal:{source}:{sourceId}:{movementId} + 唯一约束，重复结案/重放安全；
+ * - 同一原流水累计冲回不得超过原出库量（多条差异单各冲一部分时可叠加）；
+ * - reversalOfId 刻意不占用（那是整笔冲销的专属约束），防重靠上述幂等键与累计上限。
+ */
+export async function reverseDeliveryOutboundInTransaction(
+  tx: Prisma.TransactionClient,
+  input: {
+    tenantId: string
+    userId: string | null
+    source: 'LossClaim' | 'ReceiptRejection'
+    sourceId: string
+    originalMovementId: string
+    quantity: Prisma.Decimal
+    reason: string
+  },
+): Promise<{ reversed: boolean; movementId: string | null; replayed: boolean }> {
+  const idempotencyKey = `reversal:${input.source.toLowerCase()}:${input.sourceId}:${input.originalMovementId}`
+  const replay = await tx.warehouseLedgerMovement.findFirst({
+    where: { tenantId: input.tenantId, idempotencyKey },
+    select: { id: true },
+  })
+  if (replay) return { reversed: false, movementId: replay.id, replayed: true }
+
+  const original = await tx.warehouseLedgerMovement.findFirst({
+    where: {
+      id: input.originalMovementId,
+      tenantId: input.tenantId,
+      type: 'ORDER_OUTBOUND',
+      sourceType: 'DeliveryOrder',
+    },
+  })
+  if (!original) throw businessError('待冲回的订单出库流水不存在', 404)
+
+  const reverseOriginal = decimal(input.quantity, '冲回数量').toDecimalPlaces(QTY_DP)
+  if (reverseOriginal.lte(0)) return { reversed: false, movementId: null, replayed: false }
+  if (reverseOriginal.gt(original.originalQuantity)) {
+    throw businessError(
+      `冲回数量 ${reverseOriginal} 超过原出库数量 ${original.originalQuantity}`,
+      409,
+    )
+  }
+  const priorReversals = await tx.warehouseLedgerMovement.aggregate({
+    where: {
+      tenantId: input.tenantId,
+      warehouseId: original.warehouseId,
+      productId: original.productId,
+      type: 'REVERSAL',
+      sourceLineId: original.id,
+    },
+    _sum: { inventoryQuantity: true },
+  })
+  const priorReversedQty = new Prisma.Decimal(priorReversals._sum.inventoryQuantity || 0)
+  const reverseInventoryQty = reverseOriginal.mul(original.conversionFactor).toDecimalPlaces(QTY_DP)
+  if (priorReversedQty.plus(reverseInventoryQty).gt(original.inventoryQuantity)) {
+    throw businessError(
+      `累计冲回将超过原出库量（已冲 ${priorReversedQty}，本次 ${reverseInventoryQty}，原出库 ${original.inventoryQuantity}）`,
+      409,
+    )
+  }
+
+  const balances = await lockBalances(tx, {
+    tenantId: input.tenantId,
+    warehouseId: original.warehouseId,
+    products: [{ productId: original.productId, inventoryUnit: original.inventoryUnit }],
+  })
+  const concurrentReplay = await tx.warehouseLedgerMovement.findFirst({
+    where: { tenantId: input.tenantId, idempotencyKey },
+    select: { id: true },
+  })
+  if (concurrentReplay) return { reversed: false, movementId: concurrentReplay.id, replayed: true }
+
+  const balance = balances.get(original.productId)!
+  const valueIn = reverseInventoryQty.mul(original.inventoryUnitCost).toDecimalPlaces(VALUE_DP)
+  const nextPhysical = balance.physicalQty.plus(reverseInventoryQty).toDecimalPlaces(QTY_DP)
+  const nextValue = balance.inventoryValue.plus(valueIn).toDecimalPlaces(VALUE_DP)
+  const nextAverage = nextAverageCost(nextValue, nextPhysical, balance.averageUnitCost)
+
+  // 批次按原 FEFO 消耗顺序加回，保持批次合计 = 余额（审计 BLOCKER 项）。
+  const allocations = await tx.warehouseLedgerLotAllocation.findMany({
+    where: { movementId: original.id },
+    orderBy: { createdAt: 'asc' },
+  })
+  let restore = reverseInventoryQty
+  for (const allocation of allocations) {
+    if (restore.lte(0)) break
+    const giveBack = Prisma.Decimal.min(restore, allocation.quantity).toDecimalPlaces(QTY_DP)
+    if (giveBack.lte(0)) continue
+    await tx.warehouseLedgerLot.update({
+      where: { id: allocation.lotId },
+      data: { remainingQty: { increment: giveBack }, depletedAt: null },
+    })
+    restore = restore.minus(giveBack).toDecimalPlaces(QTY_DP)
+  }
+  if (restore.gt(0)) {
+    // 批次不足通常意味着批次被实盘重置等操作清过；余额与流水仍正确，批次差异留给审计解释。
+    console.warn(
+      `[loss-reversal] 批次恢复不足 movement=${original.id} 缺 ${restore} ${original.inventoryUnit}`,
+    )
+  }
+
+  const movement = await tx.warehouseLedgerMovement.create({
+    data: {
+      tenantId: input.tenantId,
+      warehouseId: original.warehouseId,
+      productId: original.productId,
+      type: 'REVERSAL',
+      physicalDelta: reverseInventoryQty,
+      reservedDelta: ZERO,
+      valueDelta: valueIn,
+      physicalAfter: nextPhysical,
+      reservedAfter: balance.reservedQty,
+      valueAfter: nextValue,
+      averageUnitCostAfter: nextAverage,
+      originalQuantity: reverseOriginal,
+      originalUnit: original.originalUnit,
+      conversionFactor: original.conversionFactor,
+      inventoryQuantity: reverseInventoryQty,
+      inventoryUnit: original.inventoryUnit,
+      inventoryUnitCost: original.inventoryUnitCost,
+      sourceType: input.source === 'LossClaim' ? 'LossClaimReversal' : 'ReceiptRejectionReversal',
+      sourceId: input.sourceId,
+      sourceLineId: original.id,
+      idempotencyKey,
+      effectiveAt: new Date(),
+      note: input.reason.slice(0, 200),
+      createdById: input.userId,
+    },
+  })
+  await persistBalance(tx, balance, {
+    physicalQty: nextPhysical,
+    reservedQty: balance.reservedQty,
+    inventoryValue: nextValue,
+    averageUnitCost: nextAverage,
+  })
+  return { reversed: true, movementId: movement.id, replayed: false }
+}

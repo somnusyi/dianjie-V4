@@ -16,6 +16,7 @@ import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 import { setReceiptSettlementAmountInTransaction } from '../services/receiptSettlement'
 import { arrivalDifferencesToCsv } from '../services/arrivalDifferenceExport'
 import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
+import { reverseDeliveryOutboundInTransaction } from '../services/warehouseLedger'
 
 const LOSS_AMOUNT_MAX = new Prisma.Decimal('9999999999.99')
 
@@ -57,7 +58,7 @@ const manualLossSchema = z.object({
 const postReceiptLossSchema = z.object({
   purchaseOrderId: z.string().min(1),
   receiptId: z.string().min(1),
-  kind: z.enum(['ARRIVAL_SHORTAGE', 'ARRIVAL_DAMAGE']).default('ARRIVAL_DAMAGE'),
+  kind: z.enum(['ARRIVAL_SHORTAGE', 'ARRIVAL_DAMAGE', 'WRONG_ITEM']).default('ARRIVAL_DAMAGE'),
   items: z.array(z.object({
     productId: z.string().min(1),
     lossQty: z.number().positive().max(1_000_000).refine(
@@ -77,7 +78,7 @@ const postReceiptLossSchema = z.object({
 
 const lossClaimListQuerySchema = z.object({
   status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'NEGOTIATING', 'RESOLVED', 'AUTO_APPROVED']).optional(),
-  kind: z.enum(['ARRIVAL_SHORTAGE', 'ARRIVAL_DAMAGE', 'INTERNAL_WASTE', 'LEGACY_UNRESOLVED']).optional(),
+  kind: z.enum(['ARRIVAL_SHORTAGE', 'ARRIVAL_DAMAGE', 'WRONG_ITEM', 'INTERNAL_WASTE', 'LEGACY_UNRESOLVED']).optional(),
   page: z.string().regex(/^\d+$/).optional(),
   pageSize: z.string().regex(/^\d+$/).optional(),
   isManual: z.enum(['true', 'false']).optional(),
@@ -136,6 +137,48 @@ async function nextLossClaimNo(tx: Prisma.TransactionClient, tenantId: string, p
     'LC',
     businessNoFloor(latest?.no, 'LC', period),
   )
+}
+
+/**
+ * 差异结案冲回仓库账（履约准确性方案 1.1）：
+ * 总仓订单出库按发货数记账，门店实收更少时差额一直虚挂在仓库账上。
+ * ARRIVAL_SHORTAGE 结案（人工确认或 24h 自动同意）时，按行级 lossQty 冲回对应出库流水。
+ * 非总仓订单、无出库流水的商品直接跳过；ARRIVAL_DAMAGE 不冲回（实物去向未定）。
+ */
+async function reverseWarehouseOutboundForClaim(
+  tx: Prisma.TransactionClient,
+  claim: { id: string; no: string; tenantId: string; purchaseOrderId: string | null; deliveryOrderId: string | null },
+  items: Array<{ productId: string; lossQty: Prisma.Decimal; productNameSnapshot: string | null }>,
+) {
+  if (!claim.purchaseOrderId || !claim.deliveryOrderId) return
+  const order = await tx.purchaseOrder.findFirst({
+    where: { id: claim.purchaseOrderId, tenantId: claim.tenantId },
+    select: { supplier: { select: { sourceType: true } } },
+  })
+  if (!order || order.supplier.sourceType !== 'HEADQ_WAREHOUSE') return
+  for (const item of items) {
+    if (item.lossQty.lte(0)) continue
+    const outbound = await tx.warehouseLedgerMovement.findFirst({
+      where: {
+        tenantId: claim.tenantId,
+        type: 'ORDER_OUTBOUND',
+        sourceType: 'DeliveryOrder',
+        sourceId: claim.deliveryOrderId,
+        productId: item.productId,
+      },
+      orderBy: { recordedAt: 'desc' },
+    })
+    if (!outbound) continue
+    await reverseDeliveryOutboundInTransaction(tx, {
+      tenantId: claim.tenantId,
+      userId: null,
+      source: 'LossClaim',
+      sourceId: claim.id,
+      originalMovementId: outbound.id,
+      quantity: item.lossQty,
+      reason: `差异单 ${claim.no} 结案冲回：${item.productNameSnapshot || item.productId} 短少 ${item.lossQty}`,
+    })
+  }
 }
 
 export async function approveLossClaimAtomically(params: {
@@ -209,13 +252,29 @@ export async function approveLossClaimAtomically(params: {
         handlerNote: params.handlerNote || null,
       },
     })
+    let warehouseReversalNote = '非总仓订单，仓库账不变'
+    if (claim.kind === 'ARRIVAL_SHORTAGE') {
+      try {
+        await reverseWarehouseOutboundForClaim(tx, claim, claim.items)
+        const reversedItems = claim.items.filter(item => item.lossQty.gt(0)).length
+        warehouseReversalNote = reversedItems > 0
+          ? `总仓出库已按短少量冲回 ${reversedItems} 项（无对应出库流水的商品跳过）`
+          : '无短少明细，仓库账不变'
+      } catch (error: any) {
+        // 冲回失败不阻断结案（应付口径已闭合）；差异挂账由库存审计与回补脚本收口。
+        console.error(`差异单 ${claim.no} 仓库冲回失败:`, error?.message || error)
+        warehouseReversalNote = `仓库冲回失败：${String(error?.message || error).slice(0, 80)}`
+      }
+    } else {
+      warehouseReversalNote = '质量差异不自动冲回（实物去向由人工/逆向流程处理）'
+    }
     await tx.opLog.create({
       data: {
         tenantId: params.tenantId,
         userId: params.operatorId,
         action: params.automatic
-          ? `[自动] 到货差异 ${claim.no} 24h 自动确认；${payableAdjustment}；供应商库存不变`
-          : `供应商确认到货差异 ${claim.no}；${payableAdjustment}；供应商库存不变`,
+          ? `[自动] 到货差异 ${claim.no} 24h 自动确认；${payableAdjustment}；${warehouseReversalNote}`
+          : `供应商确认到货差异 ${claim.no}；${payableAdjustment}；${warehouseReversalNote}`,
         target: claim.no,
         entityType: 'LossClaim',
         targetId: claim.id,
@@ -344,6 +403,123 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(`到货差异_${suffix}.csv`)}`)
       .header('Cache-Control', 'private, no-store')
       .send(arrivalDifferencesToCsv(exportRows))
+  })
+
+  // ── 差异率基线报表：按月 × 类型聚合（履约准确性方案 P0）──────────
+  // 发货-收货一致率的管理抓手：短缺/破损/错发/内部报损各自的发生频次与金额。
+  app.get('/stats', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!['FINANCE', 'ADMIN', 'SUPER_ADMIN', 'BOSS'].includes(role)
+      && !hasInternalSupplyChainCapability(role, 'analytics.read')) {
+      return reply.status(403).send({ error: '无权查看差异统计' })
+    }
+    const parsed = z.object({
+      months: z.coerce.number().int().min(1).max(24).default(6),
+    }).strict().safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const since = dayjs().subtract(parsed.data.months, 'month').startOf('month').toDate()
+    const where: any = { tenantId, createdAt: { gte: since } }
+    const grouped = await prisma.lossClaim.groupBy({
+      by: ['kind', 'status'],
+      where,
+      _count: { _all: true },
+      _sum: { totalLossAmount: true },
+    })
+    const monthly = await prisma.$queryRaw<Array<{ month: string; kind: string; cnt: bigint; amount: Prisma.Decimal }>>`
+      SELECT to_char("createdAt", 'YYYY-MM') AS month, kind::text AS kind,
+             COUNT(*)::bigint AS cnt, COALESCE(SUM("totalLossAmount"), 0) AS amount
+      FROM loss_claims
+      WHERE "tenantId" = ${tenantId} AND "createdAt" >= ${since}
+      GROUP BY 1, 2 ORDER BY 1 DESC, 2
+    `
+    return {
+      since: since.toISOString(),
+      byKind: grouped.map(g => ({
+        kind: g.kind,
+        status: g.status,
+        count: g._count._all,
+        amount: Number(g._sum.totalLossAmount || 0),
+      })),
+      monthly: monthly.map(m => ({
+        month: m.month, kind: m.kind, count: Number(m.cnt), amount: Number(m.amount),
+      })),
+    }
+  })
+
+  // ── 历史差异单仓库冲回回补（履约准确性方案 1.1 历史存量）──────────
+  // 上线前已 APPROVED/AUTO_APPROVED 的 ARRIVAL_SHORTAGE 差异单从未冲回仓库账。
+  // 默认 dry-run 只报告将发生什么；apply=true 才真正落冲回流水。
+  // 幂等：与结案冲回共用 reversal:{source}:{sourceId}:{movementId} 键，重跑安全。
+  app.post('/backfill-reversals', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
+    const { tenantId, userId, role } = req.user
+    if (!['ADMIN', 'SUPER_ADMIN'].includes(role)) {
+      return reply.status(403).send({ error: '仅管理员可执行历史冲回回补' })
+    }
+    const parsed = z.object({ apply: z.boolean().default(false) }).strict().safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const apply = parsed.data.apply
+
+    const claims = await prisma.lossClaim.findMany({
+      where: {
+        tenantId,
+        status: { in: ['APPROVED', 'AUTO_APPROVED'] },
+        kind: 'ARRIVAL_SHORTAGE',
+        isManual: false,
+      },
+      include: { items: true, purchaseOrder: { select: { id: true, no: true, supplier: { select: { sourceType: true } } } } },
+      orderBy: { createdAt: 'asc' },
+      take: 500,
+    })
+
+    const report: Array<{ claimNo: string; action: string; detail: string }> = []
+    let reversedCount = 0
+    for (const claim of claims) {
+      const order = claim.purchaseOrderId ? claim.purchaseOrder : null
+      if (!order || order.supplier.sourceType !== 'HEADQ_WAREHOUSE') {
+        report.push({ claimNo: claim.no, action: 'skip', detail: '非总仓订单' })
+        continue
+      }
+      if (!claim.deliveryOrderId || claim.items.length === 0) {
+        report.push({ claimNo: claim.no, action: 'skip', detail: '无配送单或无行级明细' })
+        continue
+      }
+      if (apply) {
+        try {
+          await prisma.$transaction(async tx => {
+            await reverseWarehouseOutboundForClaim(
+              tx,
+              { id: claim.id, no: claim.no, tenantId: claim.tenantId, purchaseOrderId: claim.purchaseOrderId, deliveryOrderId: claim.deliveryOrderId },
+              claim.items.map(item => ({ productId: item.productId, lossQty: item.lossQty, productNameSnapshot: item.productNameSnapshot })),
+            )
+          })
+          reversedCount++
+          report.push({ claimNo: claim.no, action: 'reversed', detail: `${claim.items.length} 项已冲回/幂等跳过` })
+        } catch (error: any) {
+          report.push({ claimNo: claim.no, action: 'error', detail: String(error?.message || error).slice(0, 120) })
+        }
+      } else {
+        const outbounds = await prisma.warehouseLedgerMovement.findMany({
+          where: { tenantId, type: 'ORDER_OUTBOUND', sourceType: 'DeliveryOrder', sourceId: claim.deliveryOrderId },
+          select: { id: true, productId: true, originalQuantity: true },
+        })
+        const matched = claim.items.filter(item => item.lossQty.gt(0) && outbounds.some(o => o.productId === item.productId))
+        report.push({
+          claimNo: claim.no,
+          action: 'would-reverse',
+          detail: `${matched.length}/${claim.items.length} 项可冲回（无出库流水或零损项跳过）`,
+        })
+      }
+    }
+    await prisma.opLog.create({
+      data: {
+        tenantId, userId,
+        action: apply
+          ? `[回补] 历史差异单仓库冲回执行：扫描 ${claims.length} 单，成功 ${reversedCount} 单`
+          : `[回补] 历史差异单仓库冲回 dry-run：扫描 ${claims.length} 单`,
+        entityType: 'LossClaim',
+      },
+    })
+    return { mode: apply ? 'apply' : 'dry-run', scanned: claims.length, reversed: reversedCount, report }
   })
 
   // ── 单笔详情 / 打印数据 ─────────────────────────────

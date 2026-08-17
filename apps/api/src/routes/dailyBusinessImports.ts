@@ -12,6 +12,7 @@ import {
   type ParsedDailyFiles,
 } from '../services/dailyBusinessImport'
 import { isStoreScoped } from '../lib/auth-scope'
+import { effectiveDishStatus } from './dishes'
 import { estimatedStoreInventory } from '../services/storeInventory'
 import {
   bomCalculationSnapshot,
@@ -324,7 +325,7 @@ async function buildPreview(store: { id: string; tenantId: string }, parsed: Par
   }
   const businessDate = dateOnly(parsed.business.date)
   const names = [...new Set(parsed.sales.map(row => row.name))]
-  const dishes = await prisma.dish.findMany({
+  const allDishes = await prisma.dish.findMany({
     where: { tenantId: store.tenantId },
     include: {
       aliases: { where: { source: 'daily_pos', isActive: true } },
@@ -337,6 +338,11 @@ async function buildPreview(store: { id: string; tenantId: string }, parsed: Par
       },
     },
   })
+  // 菜名匹配只考虑营业日当天在售的菜品：还没上架（UPCOMING）或已下架的不参与，
+  // 否则"新菜与老菜别名撞名"会造成假性匹配不唯一（如 傣味鸡脚 vs 傣味舂鸡脚）。
+  // 当日新上（availableFrom <= 营业日）仍视为 ACTIVE，正常参与。
+  const businessDateText = parsed.business.date
+  const dishes = allDishes.filter(dish => effectiveDishStatus(dish, businessDateText) === 'ACTIVE')
   const normalizedDishes = new Map<string, typeof dishes>()
   for (const dish of dishes) {
     const keys = new Set([normalizeDishName(dish.name), ...dish.aliases.map(alias => alias.normalizedName)])

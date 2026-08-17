@@ -112,7 +112,7 @@ function chinaDateText(now = new Date()) {
   return new Date(now.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10)
 }
 
-function effectiveDishStatus(dish: { status: string; availableFrom: Date | null; availableTo: Date | null }, onDate = chinaDateText()) {
+export function effectiveDishStatus(dish: { status: string; availableFrom: Date | null; availableTo: Date | null }, onDate = chinaDateText()) {
   const from = dish.availableFrom ? dateText(dish.availableFrom) : null
   const to = dish.availableTo ? dateText(dish.availableTo) : null
   if (to && onDate >= to) return 'DISABLED'

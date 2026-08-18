@@ -29,7 +29,7 @@ export default function MePage() {
     location.href = routeForRole(u.role)
   }
   function resetOnboarding() {
-    Object.keys(sessionStorage).filter(k => k.startsWith('v2-onboarded:')).forEach(k => sessionStorage.removeItem(k))
+    Object.keys(localStorage).filter(k => k.startsWith('v2-onboarded:')).forEach(k => localStorage.removeItem(k))
     alert('引导已重置, 下次进入工作台会重新显示')
   }
   function logout() {

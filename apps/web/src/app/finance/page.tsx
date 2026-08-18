@@ -44,7 +44,7 @@ const CONDITION_LABEL: Record<string, string> = {
 function safeUser() {
   if (typeof window === 'undefined') return null
   try {
-    const raw = sessionStorage.getItem('dj_user')
+    const raw = localStorage.getItem('dj_user')
     return raw ? JSON.parse(raw) : null
   } catch {
     return null

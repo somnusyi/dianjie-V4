@@ -10,7 +10,7 @@ const api = axios.create({
 // 自动带上 token
 api.interceptors.request.use((config) => {
   if (typeof window !== 'undefined') {
-    const token = sessionStorage.getItem('token') || sessionStorage.getItem('dj_token')
+    const token = localStorage.getItem('token') || localStorage.getItem('dj_token')
     if (token) config.headers.Authorization = `Bearer ${token}`
   }
   return config
@@ -25,7 +25,7 @@ api.interceptors.response.use(
   async (err) => {
     const original = err.config
     if (err.response?.status === 401 && typeof window !== 'undefined' && !original._retry) {
-      const refresh = sessionStorage.getItem('refreshToken') || sessionStorage.getItem('dj_refresh')
+      const refresh = localStorage.getItem('refreshToken') || localStorage.getItem('dj_refresh')
       if (refresh) {
         original._retry = true
         if (isRefreshing) {
@@ -44,11 +44,11 @@ api.interceptors.response.use(
             { token: refresh }
           )
           const newToken = r.data.token
-          sessionStorage.setItem('dj_token', newToken)
-          sessionStorage.setItem('token', newToken)
+          localStorage.setItem('dj_token', newToken)
+          localStorage.setItem('token', newToken)
           if (r.data.refreshToken) {
-            sessionStorage.setItem('dj_refresh', r.data.refreshToken)
-            sessionStorage.setItem('refreshToken', r.data.refreshToken)
+            localStorage.setItem('dj_refresh', r.data.refreshToken)
+            localStorage.setItem('refreshToken', r.data.refreshToken)
           }
           refreshQueue.forEach(cb => cb(newToken))
           refreshQueue = []
@@ -57,19 +57,19 @@ api.interceptors.response.use(
         } catch {
           refreshQueue = []
           // 只清自己的 key, 不能 clear() 把 v2 的 token / user 也带走
-          sessionStorage.removeItem('dj_token')
-          sessionStorage.removeItem('dj_refresh')
-          sessionStorage.removeItem('token')
-          sessionStorage.removeItem('refreshToken')
+          localStorage.removeItem('dj_token')
+          localStorage.removeItem('dj_refresh')
+          localStorage.removeItem('token')
+          localStorage.removeItem('refreshToken')
           window.location.href = '/v2/login'
         } finally {
           isRefreshing = false
         }
       } else {
-        sessionStorage.removeItem('dj_token')
-        sessionStorage.removeItem('dj_refresh')
-        sessionStorage.removeItem('token')
-        sessionStorage.removeItem('refreshToken')
+        localStorage.removeItem('dj_token')
+        localStorage.removeItem('dj_refresh')
+        localStorage.removeItem('token')
+        localStorage.removeItem('refreshToken')
         window.location.href = '/v2/login'
       }
     }

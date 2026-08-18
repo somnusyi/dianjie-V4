@@ -42,7 +42,7 @@ const STATUS_FLOW: Record<string, { label: string; color: string; bg: string }> 
 function safeUser() {
   if (typeof window === 'undefined') return null
   try {
-    const raw = sessionStorage.getItem('dj_user')
+    const raw = localStorage.getItem('dj_user')
     return raw ? JSON.parse(raw) : null
   } catch {
     return null

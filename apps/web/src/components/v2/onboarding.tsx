@@ -1,6 +1,6 @@
 /**
  * 首次登录 onboarding · 按角色 2 屏教学
- * 触发: home 页挂载, sessionStorage 'v2-onboarded:<role>' 不存在则显示
+ * 触发: home 页挂载, localStorage 'v2-onboarded:<role>' 不存在则显示
  * 关闭: 「开始使用」按钮 / 右上叉
  */
 'use client'
@@ -74,7 +74,7 @@ export function Onboarding() {
     const u = getUser()
     if (!u) return
     const key = `v2-onboarded:${u.role}`
-    if (typeof sessionStorage !== 'undefined' && !sessionStorage.getItem(key)) {
+    if (typeof localStorage !== 'undefined' && !localStorage.getItem(key)) {
       setRole(u.role); setShow(true)
     }
   }, [])
@@ -85,7 +85,7 @@ export function Onboarding() {
   const last = idx === slides.length - 1
 
   function dismiss() {
-    if (role) sessionStorage.setItem(`v2-onboarded:${role}`, '1')
+    if (role) localStorage.setItem(`v2-onboarded:${role}`, '1')
     setShow(false)
   }
 

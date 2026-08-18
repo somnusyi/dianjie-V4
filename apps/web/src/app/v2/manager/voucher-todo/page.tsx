@@ -51,7 +51,7 @@ export default function VoucherTodoPage() {
     if (!sid) return
     // 今日已记录
     try {
-      const raw = sessionStorage.getItem(LS_KEY(sid, date))
+      const raw = localStorage.getItem(LS_KEY(sid, date))
       if (raw) {
         const d: DailyTrack = JSON.parse(raw)
         setTrack(d)
@@ -96,7 +96,7 @@ export default function VoucherTodoPage() {
       notedAt: new Date().toISOString(),
     }
     try {
-      sessionStorage.setItem(LS_KEY(storeId, date), JSON.stringify(next))
+      localStorage.setItem(LS_KEY(storeId, date), JSON.stringify(next))
       setTrack(next); setSavedOk(true)
     } catch (e: any) { setError(e.message) }
   }

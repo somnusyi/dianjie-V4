@@ -7,7 +7,7 @@ export default function NotFound() {
   const [homeHref, setHomeHref] = useState('/')
   useEffect(() => {
     try {
-      const raw = sessionStorage.getItem('user')
+      const raw = localStorage.getItem('user')
       if (!raw) { setHomeHref('/v2/login'); return }
       const u = JSON.parse(raw)
       const role = u?.role || ''

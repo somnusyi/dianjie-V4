@@ -83,7 +83,7 @@ export default function StoreSettingsPage() {
         Promise.all([
           apiFetch<any[]>('/api/stores').catch(() => []),
           Promise.resolve().then(() => {
-            try { return JSON.parse(sessionStorage.getItem(LS_KEY(id)) || '{}') } catch { return {} }
+            try { return JSON.parse(localStorage.getItem(LS_KEY(id)) || '{}') } catch { return {} }
           }),
         ]).then(([list, ls]) => {
           const s = (Array.isArray(list) ? list : []).find(x => x.id === id)
@@ -146,7 +146,7 @@ export default function StoreSettingsPage() {
       setSavedOk(true)
     } catch (e: any) {
       try {
-        sessionStorage.setItem(LS_KEY(id), JSON.stringify({
+        localStorage.setItem(LS_KEY(id), JSON.stringify({
           ...body,
           ...(vals.bankAccountNo ? { bankAccountNoMasked: `**** ${vals.bankAccountNo.slice(-4)}` } : {})
         }))

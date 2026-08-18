@@ -52,7 +52,7 @@ export default function BossApprovalsPage() {
   const [tab, setTab] = useState('approval')
 
   useEffect(() => {
-    const token = typeof window !== 'undefined' ? sessionStorage.getItem('token') : null
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null
     if (!token) { setError('未登录'); setLoading(false); return }
     // 账号申请待审批数量 (跟单据审批分开, 但都在审批 tab 里)
     fetch('/api/applications/pending-count', { headers: { Authorization: `Bearer ${token}` } })

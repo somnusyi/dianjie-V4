@@ -75,6 +75,9 @@ export type SupplyChainDailyOutboundLine = {
   settlementAmount: number
   documents: string[]
   stores: string[]
+  // 对方门店（单行单一门店）：已切入 V4 订货的门店由系统发货链路记出库，
+  // 美团包按此字段跳过这些行，防止同一批货双记。
+  store: string
   effectiveAt: string | null
 }
 
@@ -320,6 +323,7 @@ async function summarizeMovements(buffer: Buffer) {
     settlementAmount: number
     documents: Set<string>
     stores: Set<string>
+    store: string
     effectiveAt: string | null
   }>()
   for (let rowNumber = detailHeaderRow + 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
@@ -353,7 +357,7 @@ async function summarizeMovements(buffer: Buffer) {
 
     const sourceUnit = cellText(row.getCell(columns.sourceUnit).value)
     const baseUnit = cellText(row.getCell(columns.baseUnit).value)
-    const ledgerKey = `${code.toUpperCase()}|${sourceUnit}|${baseUnit}`
+    const ledgerKey = `${code.toUpperCase()}|${sourceUnit}|${baseUnit}|${store}`
     const existing = ledger.get(ledgerKey) || {
       externalCode: code.toUpperCase(),
       externalName: name,
@@ -366,6 +370,7 @@ async function summarizeMovements(buffer: Buffer) {
       settlementAmount: 0,
       documents: new Set<string>(),
       stores: new Set<string>(),
+      store,
       effectiveAt: null,
     }
     existing.quantity += numberCell(row.getCell(columns.outboundQuantity).value)

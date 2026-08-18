@@ -120,9 +120,9 @@ export function ErrorScreen({ message }: { message: string }) {
   if (typeof window !== 'undefined' && isAuth) {
     setTimeout(() => {
       try {
-        localStorage.removeItem('token')
-        localStorage.removeItem('user')
-        localStorage.removeItem('tenant')
+        sessionStorage.removeItem('token')
+        sessionStorage.removeItem('user')
+        sessionStorage.removeItem('tenant')
       } catch {}
       location.replace('/v2/login')
     }, 1200)
@@ -134,7 +134,7 @@ export function ErrorScreen({ message }: { message: string }) {
         <p className="text-body text-gray2">{friendly}</p>
         {!isAuth && <p className="text-micro text-gray4 mt-1 break-all">{message}</p>}
         {isAuth ? (
-          <button onClick={() => { try { localStorage.clear() } catch {}; location.replace('/v2/login') }}
+          <button onClick={() => { try { sessionStorage.clear() } catch {}; location.replace('/v2/login') }}
                   className="mt-4 px-4 py-2 bg-ink text-white rounded-cta text-button">
             去登录
           </button>

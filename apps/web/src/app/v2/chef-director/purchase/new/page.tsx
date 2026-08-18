@@ -84,15 +84,15 @@ export default function ChefDirectorPONewPage() {
     apiFetch<{items: Product[]}>('/api/products').then(d => setProducts(Array.isArray(d) ? d : (d?.items || []))).catch(() => {})
   }, [])
 
-  // mount: 检查 localStorage 草稿, 有效就自动恢复 (含 storeId)
+  // mount: 检查 sessionStorage 草稿, 有效就自动恢复 (含 storeId)
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(DRAFT_KEY)
+      const raw = sessionStorage.getItem(DRAFT_KEY)
       if (!raw) return
       const d = JSON.parse(raw)
       if (!d || typeof d !== 'object') return
       if (!d.savedAt || Date.now() - d.savedAt > DRAFT_TTL_MS) {
-        localStorage.removeItem(DRAFT_KEY)
+        sessionStorage.removeItem(DRAFT_KEY)
         return
       }
       if (!Array.isArray(d.items) || d.items.length === 0) return
@@ -106,15 +106,15 @@ export default function ChefDirectorPONewPage() {
     } catch { /* 草稿坏了直接当没有 */ }
   }, [])
 
-  // debounced 写: 任一字段变化 → 400ms 后写 localStorage
+  // debounced 写: 任一字段变化 → 400ms 后写 sessionStorage
   useEffect(() => {
     if (items.length === 0 && !storeId && !supplierId && !note) {
-      localStorage.removeItem(DRAFT_KEY)
+      sessionStorage.removeItem(DRAFT_KEY)
       return
     }
     const t = setTimeout(() => {
       try {
-        localStorage.setItem(DRAFT_KEY, JSON.stringify({
+        sessionStorage.setItem(DRAFT_KEY, JSON.stringify({
           storeId, supplierId, expectedDate, note, items, savedAt: Date.now(),
         }))
       } catch { /* quota / 序列化失败忽略 */ }
@@ -254,7 +254,7 @@ export default function ChefDirectorPONewPage() {
         body: JSON.stringify({ storeId, supplierId, expectedDate, note, items: submitItems, idempotencyKey }),
       })
       // 提交成功 → 草稿清掉
-      localStorage.removeItem(DRAFT_KEY)
+      sessionStorage.removeItem(DRAFT_KEY)
       router.push(`/v2/chef-director/home?ok=${order.no}`)
     } catch (e: any) {
       setError(e.message || '提交失败')
@@ -300,7 +300,7 @@ export default function ChefDirectorPONewPage() {
               setNote('')
               setRestoredFromDraft(false)
               setDraftSavedAt(null)
-              localStorage.removeItem(DRAFT_KEY)
+              sessionStorage.removeItem(DRAFT_KEY)
             }}
             className="text-caption px-3 py-1.5 bg-white border border-amber/40 text-amber-fg rounded-chip whitespace-nowrap"
           >清空</button>

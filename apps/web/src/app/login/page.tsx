@@ -20,7 +20,7 @@ export default function LoginPage() {
       const res = await api.post('/api/auth/login', { email, password })
       setToken(res.data.token)
       setUser(res.data.user)
-      if (res.data.refreshToken) localStorage.setItem('dj_refresh', res.data.refreshToken)
+      if (res.data.refreshToken) sessionStorage.setItem('dj_refresh', res.data.refreshToken)
       router.push('/dashboard')
     } catch (err: any) {
       setError(err.response?.data?.error || '登录失败，请重试')

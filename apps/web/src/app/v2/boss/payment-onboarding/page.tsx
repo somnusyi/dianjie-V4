@@ -2,7 +2,7 @@
  * 老板 · 收款方案上线追踪
  * 帮老板对接收钱吧 BD / 走完接入流程, 关键节点 checklist
  *
- * 状态存 localStorage (key: pay-onboarding:<tenantId>)
+ * 状态存 sessionStorage (key: pay-onboarding:<tenantId>)
  * 后续可改为后端 PaymentOnboarding 表
  */
 'use client'
@@ -55,10 +55,10 @@ export default function PayOnboardingPage() {
 
   useEffect(() => {
     const u = getUser()
-    const tid = (u as any)?.tenantId || JSON.parse(localStorage.getItem('tenant') || '{}').id || 'default'
+    const tid = (u as any)?.tenantId || JSON.parse(sessionStorage.getItem('tenant') || '{}').id || 'default'
     setTenantId(tid)
     try {
-      const raw = localStorage.getItem(LS_KEY(tid))
+      const raw = sessionStorage.getItem(LS_KEY(tid))
       if (raw) setDone(JSON.parse(raw))
     } catch {}
   }, [])
@@ -66,7 +66,7 @@ export default function PayOnboardingPage() {
   function toggle(id: string) {
     const next = { ...done, [id]: !done[id] }
     setDone(next)
-    if (tenantId) localStorage.setItem(LS_KEY(tenantId), JSON.stringify(next))
+    if (tenantId) sessionStorage.setItem(LS_KEY(tenantId), JSON.stringify(next))
   }
 
   const total = ITEMS.length

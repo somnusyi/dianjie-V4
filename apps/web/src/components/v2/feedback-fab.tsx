@@ -29,7 +29,7 @@ export function clampFeedbackPosition(
 
 function readSavedPosition(): Position | null {
   try {
-    const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')
+    const value = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || 'null')
     return Number.isFinite(value?.x) && Number.isFinite(value?.y)
       ? { x: Number(value.x), y: Number(value.y) }
       : null
@@ -40,7 +40,7 @@ function readSavedPosition(): Position | null {
 
 function savePosition(position: Position) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(position))
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(position))
   } catch {
     // Private browsing/storage denial must not hide the feedback entry.
   }

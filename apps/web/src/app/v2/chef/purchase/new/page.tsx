@@ -42,7 +42,7 @@ function matchesQuery(p: Product, q: string) {
 }
 
 // ── 草稿暂存 (客户反馈: 选品后未提交退出, 返回时已选商品丢失) ──
-// localStorage 单端持久化, 未跨设备同步; 7 天过期防陈旧
+// sessionStorage 单端持久化, 未跨设备同步; 7 天过期防陈旧
 const DRAFT_KEY = 'dj:po-new:draft:v1'
 const DRAFT_TTL_MS = 7 * 86400_000
 
@@ -79,16 +79,16 @@ export default function ChefPONewPage() {
     apiFetch<{items: Product[]}>('/api/products').then(d => setProducts(Array.isArray(d) ? d : (d?.items || []))).catch(() => {})
   }, [])
 
-  // mount 时检查 localStorage 是否有上次未提交的草稿, 有就自动恢复
+  // mount 时检查 sessionStorage 是否有上次未提交的草稿, 有就自动恢复
   // 客户原需求是"返回页面自动保留", 不再弹确认; 通过顶部 banner 提示并提供"清空"出口
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(DRAFT_KEY)
+      const raw = sessionStorage.getItem(DRAFT_KEY)
       if (!raw) return
       const d = JSON.parse(raw)
       if (!d || typeof d !== 'object') return
       if (!d.savedAt || Date.now() - d.savedAt > DRAFT_TTL_MS) {
-        localStorage.removeItem(DRAFT_KEY)
+        sessionStorage.removeItem(DRAFT_KEY)
         return
       }
       if (!Array.isArray(d.items) || d.items.length === 0) return
@@ -101,15 +101,15 @@ export default function ChefPONewPage() {
     } catch { /* 草稿坏了直接当没有, 不阻塞页面 */ }
   }, [])
 
-  // state 变化时 debounced 400ms 写 localStorage. 空状态时主动清, 避免下次空 banner
+  // state 变化时 debounced 400ms 写 sessionStorage. 空状态时主动清, 避免下次空 banner
   useEffect(() => {
     if (items.length === 0 && !supplierId && !note) {
-      localStorage.removeItem(DRAFT_KEY)
+      sessionStorage.removeItem(DRAFT_KEY)
       return
     }
     const t = setTimeout(() => {
       try {
-        localStorage.setItem(DRAFT_KEY, JSON.stringify({
+        sessionStorage.setItem(DRAFT_KEY, JSON.stringify({
           supplierId, expectedDate, note, items, savedAt: Date.now(),
         }))
       } catch { /* quota / 序列化失败忽略 */ }
@@ -256,7 +256,7 @@ export default function ChefPONewPage() {
         body: JSON.stringify({ supplierId, expectedDate, note, items: submitItems, storeId: myStoreId, idempotencyKey }),
       })
       // 提交成功 → 草稿清掉, 下次进页面是空白态
-      localStorage.removeItem(DRAFT_KEY)
+      sessionStorage.removeItem(DRAFT_KEY)
       router.push(`/v2/chef/purchase/po-success/${order.id}`)
     } catch (e: any) {
       setError(e.message || '提交失败')
@@ -299,7 +299,7 @@ export default function ChefPONewPage() {
               setNote('')
               setRestoredFromDraft(false)
               setDraftSavedAt(null)
-              localStorage.removeItem(DRAFT_KEY)
+              sessionStorage.removeItem(DRAFT_KEY)
             }}
             className="text-caption px-3 py-1.5 bg-white border border-amber/40 text-amber-fg rounded-chip whitespace-nowrap"
           >清空</button>

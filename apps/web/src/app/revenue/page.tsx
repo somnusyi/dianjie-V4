@@ -33,7 +33,7 @@ export default function RevenuePage() {
   const { show, ToastEl } = useToast()
 
   useEffect(() => {
-    const u = localStorage.getItem('dj_user')
+    const u = sessionStorage.getItem('dj_user')
     if (u) {
       const parsed = JSON.parse(u)
       setUser(parsed)

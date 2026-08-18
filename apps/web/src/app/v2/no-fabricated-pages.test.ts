@@ -20,7 +20,7 @@ const V2_ROOT = path.join(__dirname)
 /** 确实不需要取数的页面，每条都要写清楚理由。 */
 const STATIC_PAGE_ALLOWLIST: Record<string, string> = {
   'wecom-bridge/page.tsx': '企微 OAuth 跳转桥页，只做重定向',
-  'boss/payment-onboarding/page.tsx': '收款接入 checklist，状态存 localStorage，不展示经营数据',
+  'boss/payment-onboarding/page.tsx': '收款接入 checklist，状态存 sessionStorage，不展示经营数据',
 }
 
 function collectPages(dir: string, acc: string[] = []): string[] {

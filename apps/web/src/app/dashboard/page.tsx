@@ -333,12 +333,12 @@ export default function DashboardPage() {
     const fallback = window.setTimeout(() => {
       if (mounted) setLoading(false)
     }, 8000)
-    const raw = localStorage.getItem('dj_user')
+    const raw = sessionStorage.getItem('dj_user')
     if (raw) {
       try {
         if (mounted) setUser(JSON.parse(raw))
       } catch {
-        localStorage.removeItem('dj_user')
+        sessionStorage.removeItem('dj_user')
       }
     }
     load().finally(() => window.clearTimeout(fallback))

@@ -25,7 +25,7 @@ export default function StoresPage() {
   const { show, ToastEl } = useToast()
 
   useEffect(() => {
-    const u = localStorage.getItem('dj_user')
+    const u = sessionStorage.getItem('dj_user')
     if (u) setUser(JSON.parse(u))
     load()
   }, [])

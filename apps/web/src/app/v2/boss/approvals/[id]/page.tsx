@@ -55,7 +55,7 @@ export default function BossApprovalDetailPage({ params }: { params: { id: strin
   const [confirmState, openConfirm] = useConfirmSheet()
 
   useEffect(() => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null
+    const token = typeof window !== 'undefined' ? sessionStorage.getItem('token') : null
     if (!token) { setError('未登录'); return }
     fetch(`/api/documents/${params.id}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json())
@@ -74,7 +74,7 @@ export default function BossApprovalDetailPage({ params }: { params: { id: strin
     if (!doc || submitting) return
     const doDecision = async () => {
       setSubmitting(true)
-      const token = localStorage.getItem('token')
+      const token = sessionStorage.getItem('token')
       const res = await fetch(`/api/documents/${doc.id}/decisions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },

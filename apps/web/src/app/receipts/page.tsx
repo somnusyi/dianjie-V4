@@ -30,7 +30,7 @@ const STATUS_INFO: Record<string, { label: string; color: string; bg: string }> 
 function safeUser() {
   if (typeof window === 'undefined') return null
   try {
-    const raw = localStorage.getItem('dj_user')
+    const raw = sessionStorage.getItem('dj_user')
     return raw ? JSON.parse(raw) : null
   } catch {
     return null

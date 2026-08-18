@@ -1221,23 +1221,52 @@ export async function postWarehouseReleaseForOrder(input: {
  * 但那是「碰巧没触发」而不是「设计上不会」。这里让它失败得响亮:先落地的
  * 那条路径独占该仓库的出库账，另一条被明确拒绝并说明原因。
  */
+/**
+ * 出库来源互斥（商品级 + 纪元语义）：
+ * - 纪元：最近一次 baselineApplied 基准之前的历史出库不参与判定——新基准把账重置，
+ *   出库来源约定重新开始（否则 8.11 时代的美团包会永远拦住切换后的系统发货链路）。
+ * - 商品级：只拦"同一商品被两条链路都记出库"。按对方门店拆行 + 已切店跳过后，
+ *   两条链路记的是不同批货（未切店走美团包、已切店走系统发货），商品重叠是正常的；
+ *   只有同商品真的两路都记（如门店过滤 miss）才会在此响亮报错。
+ */
 async function assertSingleOutboundLedgerSource(
   tx: Prisma.TransactionClient,
-  input: { tenantId: string; warehouseId: string; incoming: 'DeliveryOrder' | 'MeituanDailyPackage' },
+  input: {
+    tenantId: string
+    warehouseId: string
+    incoming: 'DeliveryOrder' | 'MeituanDailyPackage'
+    products: string[]
+  },
 ) {
+  if (input.products.length === 0) return
   const conflicting = input.incoming === 'DeliveryOrder' ? 'MeituanDailyPackage' : 'DeliveryOrder'
-  const existing = await tx.warehouseLedgerMovement.findFirst({
-    where: { tenantId: input.tenantId, warehouseId: input.warehouseId, sourceType: conflicting },
-    select: { id: true, effectiveAt: true },
+  const baselines = await tx.warehouseInventoryImport.findMany({
+    where: { tenantId: input.tenantId, warehouseId: input.warehouseId, status: 'CONFIRMED' },
+    orderBy: { snapshotDate: 'desc' },
+    take: 5,
+    select: { snapshotDate: true, metadata: true },
   })
-  if (!existing) return
+  const latestBaseline = baselines.find(candidate => metadataRecord(candidate.metadata).baselineApplied === true)
+  const epochStart = latestBaseline?.snapshotDate ?? new Date(0)
+  const clash = await tx.warehouseLedgerMovement.findFirst({
+    where: {
+      tenantId: input.tenantId,
+      warehouseId: input.warehouseId,
+      sourceType: conflicting,
+      type: 'ORDER_OUTBOUND',
+      productId: { in: input.products },
+      effectiveAt: { gt: epochStart },
+    },
+    select: { productId: true, effectiveAt: true },
+  })
+  if (!clash) return
   const label = {
     DeliveryOrder: '系统订货发货链路',
     MeituanDailyPackage: '美团每日数据包',
   }
   throw businessError(
-    `该总仓的出库账已由「${label[conflicting]}」记录（最近一笔 ${existing.effectiveAt.toISOString().slice(0, 10)}），`
-    + `不能同时用「${label[input.incoming]}」再记一次——同一批货会被扣减两次。`
+    `商品出库账在本基准周期内已由「${label[conflicting]}」记录（最近一笔 ${clash.effectiveAt.toISOString().slice(0, 10)}），`
+    + `「${label[input.incoming]}」不能对同一商品再记一次——同一批货会被扣减两次。`
     + '要切换记账来源，请先冲销另一条路径已写入的流水。',
     409,
   )
@@ -1263,7 +1292,6 @@ export async function consumeWarehouseLedgerForShipment(
     throw businessError('该订单不是总仓履约订单，不能记总仓出库', 409)
   }
   const warehouseId = await resolveTenantWarehouseId(tx, input.tenantId, undefined)
-  await assertSingleOutboundLedgerSource(tx, { tenantId: input.tenantId, warehouseId, incoming: 'DeliveryOrder' })
   const mode = await warehouseMode(tx, input.tenantId, warehouseId)
   const lines = input.lines.map(line => {
     const resolved = resolveFrozenOrderInventoryLine(line)
@@ -1274,6 +1302,10 @@ export async function consumeWarehouseLedgerForShipment(
       shippedOriginalQuantity: shipped,
       shippedInventoryQuantity: shipped.mul(resolved.conversionFactor).toDecimalPlaces(QTY_DP),
     }
+  })
+  await assertSingleOutboundLedgerSource(tx, {
+    tenantId: input.tenantId, warehouseId, incoming: 'DeliveryOrder',
+    products: lines.map(line => line.productId),
   })
   const balances = await lockBalances(tx, {
     tenantId: input.tenantId,
@@ -1409,6 +1441,8 @@ type DailyPackageOutboundLine = {
   costAmount: number
   documents?: string[]
   stores?: string[]
+  /** 对方门店（单行单店）：已切 V4 订货的门店行在记账前跳过，防止双记。 */
+  store?: string
   /** 本组内最晚的单据审核时间，用作记账时点；缺失时回退到当天最后一刻。 */
   effectiveAt?: string | null
 }
@@ -1549,6 +1583,7 @@ export async function recordWarehouseDailyPackageLedger(input: {
       amount: Prisma.Decimal
       sourceName: string | null
       note: string
+      store?: string
     }
     const resolveInbound = (line: DailyPackageInboundLine): ResolvedLine | null => {
       const originalQuantity = decimal(line.quantity || 0, `${line.externalName}净收货数量`).toDecimalPlaces(QTY_DP)
@@ -1633,6 +1668,7 @@ export async function recordWarehouseDailyPackageLedger(input: {
       }
       if (inventoryQuantity.lte(0)) return null
       return {
+      store: line.store || '',
         code,
         productId,
         productName: product.name,
@@ -1652,7 +1688,30 @@ export async function recordWarehouseDailyPackageLedger(input: {
       .filter((item): item is { source: DailyPackageInboundLine; line: ResolvedLine } => Boolean(item.line))
     const purchaseReturns = resolvedInbound.filter(item => Number(item.source.quantity) < 0).map(item => item.line)
     const positiveInbound = resolvedInbound.filter(item => Number(item.source.quantity) > 0).map(item => item.line)
-    const outboundLines = [...outboundSource.map(resolveOutbound).filter((line): line is ResolvedLine => Boolean(line)), ...purchaseReturns]
+    const resolvedOutbound = outboundSource.map(resolveOutbound).filter((line): line is ResolvedLine => Boolean(line))
+    const purchaseReturnLines = purchaseReturns
+    // 已切店 = 在 V4 里下过采购单的门店：这些店的出库由系统发货链路记（SHADOW 自动），
+    // 美团包里它们的行跳过，防止同一批货双记。跳过明细写入 metadata 供审计。
+    const v4Stores = await tx.store.findMany({
+      where: { tenantId: input.tenantId, status: 'ENABLED', purchaseOrders: { some: {} } },
+      select: { name: true, posStoreAliases: true },
+    })
+    const v4StoreNames = new Set<string>()
+    for (const store of v4Stores) {
+      v4StoreNames.add(store.name.trim())
+      for (const alias of store.posStoreAliases || []) v4StoreNames.add(String(alias).trim())
+    }
+    const skippedStoreLines: Array<{ store: string; code: string; name: string; quantity: number }> = []
+    const outboundLines = [
+      ...resolvedOutbound.filter(line => {
+        if (line.store && v4StoreNames.has(line.store.trim())) {
+          skippedStoreLines.push({ store: line.store, code: line.code, name: line.productName, quantity: Number(line.originalQuantity) })
+          return false
+        }
+        return true
+      }),
+      ...purchaseReturnLines,
+    ]
     // 出库行携带了本组内最晚的单据审核时间，用它做记账时点。
     const outboundEffectiveAtByCode = new Map(
       outboundSource.map(line => [normalizedExternalCode(line.externalCode), line.effectiveAt]),
@@ -1671,6 +1730,7 @@ export async function recordWarehouseDailyPackageLedger(input: {
     })
     await assertSingleOutboundLedgerSource(tx, {
       tenantId: input.tenantId, warehouseId: record.warehouseId, incoming: 'MeituanDailyPackage',
+      products: outboundLines.map(line => line.productId),
     })
     const mode = await warehouseMode(tx, input.tenantId, record.warehouseId)
     // 归属时点用行级的单据审核时间，写死当天 23:59 会让当晚审核的流水错位。
@@ -1716,9 +1776,10 @@ export async function recordWarehouseDailyPackageLedger(input: {
       movementIds.push(movement.id)
     }
 
-    for (const line of outboundLines) {
+    for (const [outboundIndex, line] of outboundLines.entries()) {
       const direction = purchaseReturns.includes(line) ? 'RETURN' : 'OUT'
-      const idempotencyKey = `daily-package:${record.id}:${direction.toLowerCase()}:${line.productId}`
+      // 幂等键含行序号：出库行按 商品×对方门店 拆分后，同一商品可能有多行（发给不同门店）
+      const idempotencyKey = `daily-package:${record.id}:${direction.toLowerCase()}:${line.productId}:${outboundIndex}`
       const existing = await tx.warehouseLedgerMovement.findUnique({
         where: { tenantId_warehouseId_idempotencyKey: { tenantId: input.tenantId, warehouseId: record.warehouseId, idempotencyKey } },
       })

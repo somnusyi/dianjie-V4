@@ -173,6 +173,26 @@ describe('validateFourUnitForm', () => {
       inventoryUnitsPerCostUnit: '1',
     })).toBeNull()
   })
+
+  it('keeps rejecting a coarser cost unit by default, but allows it for untouched legacy edits', () => {
+    // 汤底调味粉场景（2026-08-18）：建档口径 costUnit=箱 / inventoryUnit=g。
+    // 编辑弹窗原样加载该口径时，任何字段（如分类）的保存都不应被单位规则锁死；
+    // 但一旦用户改动单位区（allowLegacyCostUnit 不再传入），严格规则恢复生效。
+    const legacyForm = {
+      purchaseUnit: '箱',
+      inventoryUnit: 'g',
+      orderUnit: '箱',
+      costUnit: '箱',
+      inventoryUnitsPerPurchaseUnit: '15000',
+      inventoryUnitsPerOrderUnit: '15000',
+      inventoryUnitsPerCostUnit: '15000',
+    }
+    expect(validateFourUnitForm(legacyForm))
+      .toBe('成本单位必须与库存单位一致（成本单位需为最小单位）')
+    expect(validateFourUnitForm(legacyForm, { allowLegacyCostUnit: true })).toBeNull()
+    expect(validateFourUnitForm(legacyForm, { allowLegacyCostUnit: false }))
+      .toBe('成本单位必须与库存单位一致（成本单位需为最小单位）')
+  })
 })
 
 describe('lockCostUnitToMinimum', () => {
@@ -430,6 +450,27 @@ describe('buildFourUnitEditBody', () => {
     }
     const originalForm = fallbackFourUnitsFromLegacy(product)
     const body = buildFourUnitEditBody(originalForm, originalForm)
+    expect(body).toEqual({})
+  })
+
+  it('submits nothing when a legacy cost-unit product is edited without touching units', () => {
+    // 回归（2026-08-18）：costUnit=箱 / inventoryUnit=g 的历史档案，
+    // 编辑弹窗必须原样加载——若被 lockCostUnitToMinimum 归一，
+    // 这里会产出 costUnit/inventoryUnitsPerCostUnit 变更并被后端护栏拦死。
+    const product = {
+      unit: '箱',
+      purchaseUnit: '箱',
+      inventoryUnit: 'g',
+      orderUnit: '箱',
+      costUnit: '箱',
+      inventoryUnitsPerPurchaseUnit: 15000,
+      inventoryUnitsPerOrderUnit: 15000,
+      inventoryUnitsPerCostUnit: 15000,
+    }
+    const loadedForm = fourUnitFormFromProduct(product)
+    expect(loadedForm.costUnit).toBe('箱')
+    expect(loadedForm.inventoryUnitsPerCostUnit).toBe('15000')
+    const body = buildFourUnitEditBody(loadedForm, fourUnitFormFromProduct(product))
     expect(body).toEqual({})
   })
 })

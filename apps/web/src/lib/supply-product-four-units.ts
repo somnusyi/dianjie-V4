@@ -102,7 +102,10 @@ export function validateConversionFactor(value: string): string | null {
 }
 
 /** 校验四单位表单；返回第一条错误文案或 null。 */
-export function validateFourUnitForm(form: FourUnitForm): string | null {
+export function validateFourUnitForm(
+  form: FourUnitForm,
+  opts?: { allowLegacyCostUnit?: boolean },
+): string | null {
   const units = [
     ['采购单位', normalizeUnit(form.purchaseUnit)],
     ['库存单位', normalizeUnit(form.inventoryUnit)],
@@ -140,7 +143,10 @@ export function validateFourUnitForm(form: FourUnitForm): string | null {
   }
   // 成本单位必须是最小单位：与库存单位一致（库存单位即基准最小单位，换算因子为 1），
   // 否则成本会按更粗的单位计算，与美团口径不符、对账出现倍数差异。
-  if (normalizeUnit(form.costUnit) !== normalizeUnit(form.inventoryUnit)) {
+  // 例外：编辑既有商品且四单位未做任何改动时（allowLegacyCostUnit），允许保留
+  // 建档时的历史口径（如 costUnit=箱）——96 个此类档案的价格精度（numeric(10,2)）
+  // 无法折算成每克价，强制归一只会把它们锁死在编辑弹窗里。
+  if (!opts?.allowLegacyCostUnit && normalizeUnit(form.costUnit) !== normalizeUnit(form.inventoryUnit)) {
     return '成本单位必须与库存单位一致（成本单位需为最小单位）'
   }
   return null

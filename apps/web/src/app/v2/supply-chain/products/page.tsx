@@ -69,7 +69,6 @@ import {
   formatOrderUnitPriceHint,
   fourUnitFormFromProduct,
   type FourUnitForm,
-  lockCostUnitToMinimum,
   validateFourUnitForm,
 } from '@/lib/supply-product-four-units'
 
@@ -468,8 +467,11 @@ export default function InternalSupplyChainProductsPage() {
       spec: product.spec || '',
       shelfDays: String(product.shelfDays ?? 7),
       supplierId: product.supplier?.id || '',
-      // 成本单位锁定为最小单位：编辑时把历史录错的成本单位归一到库存单位，保存即纠正。
-      ...lockCostUnitToMinimum(fourUnitFormFromProduct(product)),
+      // 编辑保留建档时的四单位口径（含 costUnit≠库存单位的历史档案）：
+      // 曾在此 lockCostUnitToMinimum「保存即纠正」，但编辑模式不提交价格，
+      // 归一后单位成本必然变化，被 unitContractGuard 全数拦下——96 个档案因此无法编辑。
+      // 现在原样加载；只有用户主动改动单位区时才走严格校验 + 护栏折算价格。
+      ...fourUnitFormFromProduct(product),
       stock: String(product.stock ?? 0),
       minStock: String(product.minStock ?? 0),
       minOrderQty: String(product.minOrderQty ?? 1),
@@ -508,8 +510,14 @@ export default function InternalSupplyChainProductsPage() {
   }
 
   async function submitForm() {
+    // 编辑且四单位区块完全未动：允许 costUnit≠库存单位的历史口径原样保留。
+    // 一旦用户改动单位区任一字段，回到严格规则（成本单位=库存单位），
+    // 由后端 unitContractGuard 继续兜底成本不变式。
+    const fourUnitsUnchanged = Boolean(editing)
+      && JSON.stringify(buildFourUnitValues(form))
+        === JSON.stringify(buildFourUnitValues(fourUnitFormFromProduct(editing ?? {})))
     const validationError = validateNewProductForm(form)
-      || validateFourUnitForm(form)
+      || validateFourUnitForm(form, { allowLegacyCostUnit: fourUnitsUnchanged })
       || validateProductQuantities(form, { editableOnly: Boolean(editing) })
     if (validationError) { setFormError(validationError); return }
     setFormError(null)
@@ -1657,7 +1665,7 @@ function FormDialog({
                       className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
                     />
                   </FormField>
-                  <FormField label="成本单位（=库存单位）">
+                  <FormField label={editing ? '成本单位（建档口径）' : '成本单位（=库存单位）'}>
                     <input
                       type="text"
                       value={form.costUnit}
@@ -1674,7 +1682,9 @@ function FormDialog({
                     />
                   </FormField>
                   <p className="col-span-2 text-micro leading-5 text-gray3">
-                    成本单位固定为库存单位（最小单位），换算因子为 1，与美团口径一致；如需调整请改库存单位。
+                    {editing
+                      ? '编辑保留建档时的单位口径与成本价；调价请用列表「调价」入口。如需调整成本单位本身，请联系管理员按折算价一并处理。'
+                      : '成本单位固定为库存单位（最小单位），换算因子为 1，与美团口径一致；如需调整请改库存单位。'}
                   </p>
                 </div>
                 <p className="mt-2 text-micro text-gray2">

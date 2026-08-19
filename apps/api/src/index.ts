@@ -91,6 +91,7 @@ import { bossChatRoutes } from './routes/bossChat'
 import { autoFixRoutes } from './routes/autofix'
 import { startAutoFixWorker } from './services/autofix/engine'
 import { isSupplierRole } from './lib/auth-scope'
+import { activeStoreInjectHook } from './lib/active-store-inject'
 
 function resolveJwtSecret() {
   const secret = process.env.JWT_SECRET || ''
@@ -170,17 +171,8 @@ async function bootstrap() {
     secret: resolveJwtSecret(),
   })
 
-  // ── 多店活动门店注入 ─────────────────────
-  // 前端门店切换器通过 X-Active-Store 头声明当前操作门店；
-  // 仅在 query 未显式带 storeId 时补入，等价于用户手动选店。
-  // 越权不在此拦截——由路由内 resolveActiveStore / storeScopeOf 统一校验。
-  app.addHook('onRequest', async (request) => {
-    const active = request.headers['x-active-store']
-    if (typeof active !== 'string' || !active) return
-    if (request.url.startsWith('/api/auth/')) return // 登录/申请等公开端点不注入
-    const q = request.query as Record<string, unknown> | undefined
-    if (q && typeof q === 'object' && q.storeId === undefined) q.storeId = active
-  })
+  // ── 多店活动门店注入（白名单实现见 lib/active-store-inject）────────
+  app.addHook('onRequest', activeStoreInjectHook)
 
   // ── 认证装饰器 ────────────────────────
   app.decorate('authenticate', async (request: any, reply: any) => {

@@ -129,16 +129,30 @@ describe('buildReceiptListWhere', () => {
     expect(where.supplierId).toBe('target-sup')
   })
 
-  it('forces store scope for store-scoped role', () => {
+  it('forces store scope for store-scoped role (multi-store set)', () => {
     const q = receiptListFilterSchema.parse({})
+    const where = buildReceiptListWhere(q, managerUser)
+    expect(where.storeId).toEqual({ in: ['store-1'] })
+  })
+
+  it('narrows to an in-scope query storeId for store-scoped role', () => {
+    const q = receiptListFilterSchema.parse({ storeId: 'store-1' })
     const where = buildReceiptListWhere(q, managerUser)
     expect(where.storeId).toBe('store-1')
   })
 
-  it('ignores query storeId for store-scoped role', () => {
+  it('rejects out-of-scope query storeId for store-scoped role', () => {
     const q = receiptListFilterSchema.parse({ storeId: 'other-store' })
-    const where = buildReceiptListWhere(q, managerUser)
-    expect(where.storeId).toBe('store-1')
+    expect(() => buildReceiptListWhere(q, managerUser)).toThrow()
+  })
+
+  it('supports multi-store scope via storeIds', () => {
+    const multiStoreManager = { tenantId: 'tenant-1', role: 'MANAGER', storeId: 'store-1', storeIds: ['store-1', 'store-2'] } as const
+    const q = receiptListFilterSchema.parse({})
+    const where = buildReceiptListWhere(q, multiStoreManager)
+    expect(where.storeId).toEqual({ in: ['store-1', 'store-2'] })
+    const q2 = receiptListFilterSchema.parse({ storeId: 'store-2' })
+    expect(buildReceiptListWhere(q2, multiStoreManager).storeId).toBe('store-2')
   })
 
   it('fails closed when a store-scoped role has no store binding', () => {

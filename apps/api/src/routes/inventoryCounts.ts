@@ -1,7 +1,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
-import { isStoreScoped } from '../lib/auth-scope'
+import { isStoreScoped, resolveActiveStore } from '../lib/auth-scope'
 import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
 import { businessNoFloor, nextBusinessNo } from '../services/purchaseOrderIntegrity'
 import { estimatedStoreInventory } from '../services/storeInventory'
@@ -62,10 +62,7 @@ function chinaToday() {
 }
 
 async function resolveStore(user: any, requestedStoreId?: string | null) {
-  const storeId = isStoreScoped(user.role) ? user.storeId : (requestedStoreId || user.storeId)
-  if (isStoreScoped(user.role) && requestedStoreId && requestedStoreId !== user.storeId) {
-    throw Object.assign(new Error('只能盘点当前账号绑定的门店'), { statusCode: 403 })
-  }
+  const storeId = resolveActiveStore(user, requestedStoreId) ?? user.storeId // 越权抛 403（多店集合校验）
   if (!storeId) throw Object.assign(new Error('当前账号未绑定或未选择门店'), { statusCode: 400 })
   const store = await prisma.store.findFirst({
     where: { id: storeId, tenantId: user.tenantId, status: 'ENABLED' },

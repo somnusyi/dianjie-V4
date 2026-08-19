@@ -7,8 +7,8 @@ import { prisma } from '@dianjie/db'
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
 const INVITER_ROLES = new Set(['ADMIN', 'SUPER_ADMIN'])
-const INVITABLE_ROLES = ['MANAGER','KITCHEN_LEAD','CHEF_DIRECTOR','FINANCE','PURCHASER','ENGINEERING','SUPPLY_CHAIN','SUPPLIER_OWNER','SUPPLIER_STAFF'] as const
-const STORE_BOUND_ROLES = new Set(['MANAGER','KITCHEN_LEAD'])
+const INVITABLE_ROLES = ['MANAGER','KITCHEN_LEAD','CHEF_DIRECTOR','FINANCE','PURCHASER','ENGINEERING','SUPPLY_CHAIN','SUPPLIER_OWNER','SUPPLIER_STAFF','REGIONAL_MANAGER'] as const
+const STORE_BOUND_ROLES = new Set(['MANAGER','KITCHEN_LEAD','REGIONAL_MANAGER'])
 const SUPPLIER_BOUND_ROLES = new Set(['SUPPLIER_OWNER','SUPPLIER_STAFF'])
 const PHONE_RE = /^1[3-9]\d{9}$/
 const entityIdSchema = z.string().trim().min(1).max(64)
@@ -17,6 +17,7 @@ const tokenSchema = z.string().min(32).max(64).regex(/^[A-Za-z0-9_-]+$/, '邀请
 const createSchema = z.object({
   role: z.enum(INVITABLE_ROLES, { errorMap: () => ({ message: '角色无效' }) }),
   storeId:    entityIdSchema.optional(),
+  storeIds:   z.array(entityIdSchema).max(50).optional(), // 多店：优先于 storeId
   supplierId: entityIdSchema.optional(),
   note:       z.string().trim().max(60).optional(),
   expiresHours: z.number().int().min(1).max(168).default(24),
@@ -44,10 +45,12 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const d = parsed.data
 
+    // 多店归一：storeIds 优先，回退单店字段；去重保序
+    const storeIds = [...new Set(d.storeIds?.length ? d.storeIds : (d.storeId ? [d.storeId] : []))]
     if (STORE_BOUND_ROLES.has(d.role)) {
-      if (!d.storeId) return reply.status(400).send({ error: '该角色必须绑定门店' })
-      const s = await prisma.store.findFirst({ where: { id: d.storeId, tenantId, status: 'ENABLED' } })
-      if (!s) return reply.status(400).send({ error: '门店不存在' })
+      if (storeIds.length === 0) return reply.status(400).send({ error: '该角色必须绑定门店' })
+      const stores = await prisma.store.findMany({ where: { id: { in: storeIds }, tenantId, status: 'ENABLED' }, select: { id: true } })
+      if (stores.length !== storeIds.length) return reply.status(400).send({ error: '门店不存在' })
     }
     if (SUPPLIER_BOUND_ROLES.has(d.role)) {
       if (!d.supplierId) return reply.status(400).send({ error: '该角色必须绑定供应商' })
@@ -59,7 +62,8 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
       const created = await tx.inviteToken.create({
         data: {
           tenantId, role: d.role as any,
-          storeId: d.storeId || null,
+          storeId: storeIds[0] ?? null,
+          storeIds,
           supplierId: d.supplierId || null,
           invitedById: userId,
           note: d.note || null,
@@ -72,7 +76,7 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
           tenantId, userId, role,
           action: `创建账号邀请 ${d.role}`,
           entityType: 'InviteToken', targetId: created.id,
-          metadata: { role: d.role, storeId: d.storeId || null, supplierId: d.supplierId || null },
+          metadata: { role: d.role, storeId: storeIds[0] ?? null, storeIds, supplierId: d.supplierId || null },
         },
       })
       return created
@@ -89,11 +93,11 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
       where: { tenantId, OR: [{ consumedAt: null, revokedAt: null }, { createdAt: { gte: cutoff } }] },
       orderBy: { createdAt: 'desc' },
     })
-    // 富化 store / supplier 名字
-    const storeIds = [...new Set(list.map(l => l.storeId).filter(Boolean) as string[])]
+    // 富化 store / supplier 名字（含多店数组）
+    const storeIdSet = [...new Set(list.flatMap(l => [...(l.storeId ? [l.storeId] : []), ...(l.storeIds ?? [])]))]
     const supIds   = [...new Set(list.map(l => l.supplierId).filter(Boolean) as string[])]
     const [stores, suppliers] = await Promise.all([
-      storeIds.length ? prisma.store.findMany({ where: { id: { in: storeIds } }, select: { id: true, name: true } }) : [],
+      storeIdSet.length ? prisma.store.findMany({ where: { id: { in: storeIdSet } }, select: { id: true, name: true } }) : [],
       supIds.length   ? prisma.supplier.findMany({ where: { id: { in: supIds } }, select: { id: true, name: true } })   : [],
     ])
     const sMap = Object.fromEntries(stores.map(s => [s.id, s.name]))
@@ -101,6 +105,7 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
     return list.map(l => ({
       ...l,
       storeName: l.storeId ? sMap[l.storeId] : null,
+      storeNames: (l.storeIds ?? []).map(id => sMap[id]).filter(Boolean),
       supplierName: l.supplierId ? supMap[l.supplierId] : null,
     }))
   })
@@ -145,12 +150,16 @@ export const inviteAcceptRoutes: FastifyPluginAsync = async (app) => {
     if (inv.expiresAt < new Date()) return reply.status(400).send({ error: '邀请已过期, 请联系老板重新发' })
 
     const tenant = await prisma.tenant.findUnique({ where: { id: inv.tenantId }, select: { name: true } })
-    const store = inv.storeId ? await prisma.store.findUnique({ where: { id: inv.storeId }, select: { name: true } }) : null
+    const invStoreIds = inv.storeIds?.length ? inv.storeIds : (inv.storeId ? [inv.storeId] : [])
+    const stores = invStoreIds.length
+      ? await prisma.store.findMany({ where: { id: { in: invStoreIds } }, select: { id: true, name: true } })
+      : []
     const supplier = inv.supplierId ? await prisma.supplier.findUnique({ where: { id: inv.supplierId }, select: { name: true } }) : null
     return {
       role: inv.role, note: inv.note, expiresAt: inv.expiresAt,
       tenantName: tenant?.name || '',
-      storeName: store?.name || null,
+      storeName: stores[0]?.name || null,
+      storeNames: stores.map(s => s.name),
       supplierName: supplier?.name || null,
     }
   })
@@ -181,9 +190,10 @@ export const inviteAcceptRoutes: FastifyPluginAsync = async (app) => {
 
         const tenant = await tx.tenant.findFirst({ where: { id: inv.tenantId, status: 'ACTIVE' }, select: { id: true } })
         if (!tenant) return { status: 400, error: '所属租户已停用' }
-        if (inv.storeId) {
-          const store = await tx.store.findFirst({ where: { id: inv.storeId, tenantId: inv.tenantId, status: 'ENABLED' }, select: { id: true } })
-          if (!store) return { status: 400, error: '邀请关联门店不存在或已停用' }
+        const invStoreIds = inv.storeIds?.length ? inv.storeIds : (inv.storeId ? [inv.storeId] : [])
+        if (invStoreIds.length > 0) {
+          const stores = await tx.store.findMany({ where: { id: { in: invStoreIds }, tenantId: inv.tenantId, status: 'ENABLED' }, select: { id: true } })
+          if (stores.length !== invStoreIds.length) return { status: 400, error: '邀请关联门店不存在或已停用' }
         }
         if (inv.supplierId) {
           const supplier = await tx.supplier.findFirst({ where: { id: inv.supplierId, tenantId: inv.tenantId, status: 'ENABLED' }, select: { id: true } })
@@ -202,8 +212,8 @@ export const inviteAcceptRoutes: FastifyPluginAsync = async (app) => {
             email: emailFinal,
             password: passwordHash,
             role: inv.role,
-            storeId: inv.storeId || null,
-            storeIds: inv.storeId ? [inv.storeId] : [],
+            storeId: invStoreIds[0] ?? null,
+            storeIds: invStoreIds,
             supplierId: inv.supplierId || null,
             status: 'ACTIVE',
           },

@@ -1,7 +1,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import { z } from 'zod'
-import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
+import { isStoreScoped, isSupplierRole, resolveActiveStore } from '../lib/auth-scope'
 import { requireSupplierCapability } from '../lib/supplier-access'
 import { allowsSupplyDataRead, supplyDataReadScope } from '../lib/internal-supply-chain-access'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
@@ -32,7 +32,11 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
     }
     const q = parsed.data
     const where: any = supplyDataReadScope(req.user)
-    if (q.storeId && !isStoreScoped(role)) where.storeId = q.storeId
+    if (q.storeId) {
+      // 门店级角色指定门店时必须在可访问集合内（越权抛 403），非门店级按传入过滤
+      if (isStoreScoped(role)) resolveActiveStore(req.user, q.storeId)
+      where.storeId = q.storeId
+    }
     if (isSupplierRole(role)) where.supplierId = requireSupplierCapability(role, actorSupplierId, 'order.read')
     else if (q.supplierId) where.supplierId = q.supplierId
     if (q.status) where.status = q.status

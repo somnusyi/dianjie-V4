@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 
 const ROLE_LABEL: Record<string, string> = {
   MANAGER: '店长', KITCHEN_LEAD: '厨师长', CHEF_DIRECTOR: '总厨',
+  SUPERVISOR: '主管', REGIONAL_MANAGER: '区域经理',
   FINANCE: '财务', PURCHASER: '采购', ENGINEERING: '工程部',
   SUPPLY_CHAIN: '内部供应链',
   SUPPLIER_OWNER: '供应商负责人', SUPPLIER_STAFF: '供应商员工',
@@ -106,7 +107,9 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
         <section className="bg-bg-warm rounded-card border border-border p-4 mb-4">
           <div className="text-caption text-gray2">将以以下身份激活账号</div>
           <div className="text-h2 mt-1">{ROLE_LABEL[info.role] || info.role}</div>
-          {info.storeName && <div className="text-caption text-gray2 mt-1">门店: {info.storeName}</div>}
+          {info.storeNames?.length > 0
+            ? <div className="text-caption text-gray2 mt-1">门店: {info.storeNames.join('、')}</div>
+            : info.storeName && <div className="text-caption text-gray2 mt-1">门店: {info.storeName}</div>}
           {info.supplierName && <div className="text-caption text-gray2 mt-1">供应商: {info.supplierName}</div>}
           {info.note && <div className="text-caption text-gray3 mt-2 bg-white rounded p-2">备注: {info.note}</div>}
           <div className="text-micro text-gray3 mt-2">链接 {expHrs} 小时后失效</div>

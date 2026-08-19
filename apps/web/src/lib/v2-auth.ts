@@ -14,7 +14,9 @@ export type StoredUser = {
   email: string
   role: string
   storeId?: string | null
+  storeIds?: string[]                                       // 多店数据范围（JWT 同步）
   store?: { id: string; name: string; no: string } | null
+  stores?: { id: string; name: string; no: string }[]       // 可访问门店列表（切换器数据源）
   supplierId?: string | null
   supplier?: { id: string; name: string } | null
 }
@@ -23,6 +25,26 @@ const TOKEN_KEY = 'token'
 const REFRESH_KEY = 'refreshToken'
 const USER_KEY  = 'user'
 const TENANT_KEY = 'tenant'
+const ACTIVE_STORE_KEY = 'activeStoreId'
+
+// ── 多店活动门店（门店切换器）────────────────────────────
+// 门店级角色登录后默认第一家店；切换后所有 apiFetch 自动带 X-Active-Store 头，
+// 后端 onRequest 钩子在 query 未显式指定 storeId 时补入（越权由后端统一 403）。
+export function getActiveStoreId(): string | null {
+  if (typeof window === 'undefined') return null
+  const v = localStorage.getItem(ACTIVE_STORE_KEY)
+  if (v) return v
+  const user = getUser()
+  return user?.storeIds?.[0] || user?.storeId || null
+}
+export function setActiveStoreId(storeId: string) {
+  if (typeof window === 'undefined') return
+  localStorage.setItem(ACTIVE_STORE_KEY, storeId)
+}
+export function clearActiveStoreId() {
+  if (typeof window === 'undefined') return
+  localStorage.removeItem(ACTIVE_STORE_KEY)
+}
 
 export function getToken(): string | null {
   if (typeof window === 'undefined') return null
@@ -55,6 +77,7 @@ export function clearSession() {
   localStorage.removeItem(REFRESH_KEY)
   localStorage.removeItem(USER_KEY)
   localStorage.removeItem(TENANT_KEY)
+  localStorage.removeItem(ACTIVE_STORE_KEY)
   localStorage.removeItem('dj_token')
   localStorage.removeItem('dj_refresh')
   localStorage.removeItem('dj_user')
@@ -69,6 +92,7 @@ export function routeForRole(role: string): string {
     SUPER_ADMIN:    '/v2/boss/home',
     MANAGER:        '/v2/manager/home',
     PURCHASER:      '/v2/manager/home',       // legacy
+    REGIONAL_MANAGER: '/v2/manager/home',     // 区域经理（多店店长视角）
     KITCHEN_LEAD:   '/v2/chef/home',
     CHEF_DIRECTOR:  '/v2/chef-director/home',
     CHEF:           '/v2/chef-director/home', // legacy（旧 CHEF=总厨）
@@ -140,6 +164,9 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
       headers.set('Content-Type', 'application/json')
     }
     if (token) headers.set('Authorization', `Bearer ${token}`)
+    // 多店门店切换器：声明当前活动门店（后端在 query 未指定 storeId 时补入）
+    const activeStore = getActiveStoreId()
+    if (activeStore && !headers.has('X-Active-Store')) headers.set('X-Active-Store', activeStore)
     return fetch(path, { ...init, headers })
   }
 
@@ -205,9 +232,13 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
 
 /** Download an authenticated non-JSON API response using the same refresh policy. */
 export async function apiDownload(path: string, fallbackFilename: string) {
-  const request = (token: string | null) => fetch(path, {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  })
+  const request = (token: string | null) => {
+    const headers: Record<string, string> = {}
+    if (token) headers.Authorization = `Bearer ${token}`
+    const activeStore = getActiveStoreId()
+    if (activeStore) headers['X-Active-Store'] = activeStore
+    return fetch(path, { headers })
+  }
   let res = await request(getToken())
   if (res.status === 401) {
     const refreshed = await refreshAccessOnce()

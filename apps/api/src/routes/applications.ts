@@ -10,6 +10,7 @@ const auth = (app: any) => ({ preHandler: [app.authenticate] })
 // 已从申请白名单移除, 防止供应商误申请→拿店长权限的安全漏洞.
 const APPLICABLE_ROLES = [
   'MANAGER', 'KITCHEN_LEAD', 'CHEF_DIRECTOR', 'FINANCE', 'ENGINEERING',
+  'REGIONAL_MANAGER', // 区域经理（指派门店集合）
   'SUPPLIER_OWNER',  // 注册新供应商公司 → 自动创建 Supplier 实体
   'SUPPLIER_STAFF',  // 加入已有供应商 → 绑定到指定 Supplier
 ] as const
@@ -25,9 +26,13 @@ const ROLE_LABELS: Record<string, string> = {
   CHEF_DIRECTOR: '总厨',
   FINANCE: '财务',
   ENGINEERING: '工程部',
+  REGIONAL_MANAGER: '区域经理',
   SUPPLIER_OWNER: '供应商负责人',
   SUPPLIER_STAFF: '供应商员工',
 }
+
+// 申请时必须指定门店的角色（可多店）
+const STORE_BOUND_APPLY_ROLES = ['MANAGER', 'KITCHEN_LEAD', 'REGIONAL_MANAGER']
 
 const entityIdSchema = z.string().trim().min(1).max(64)
 const tenantSlugSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9-]+$/i, '租户标识格式不正确')
@@ -42,8 +47,9 @@ const applySchema = z.object({
   // 供应商专用 (二选一):
   supplierId:   entityIdSchema.optional(),   // 加入已有供应商
   supplierName: z.string().trim().max(80).optional(),  // 注册新供应商公司名
-  // 店长/厨师长专用: 申请时必须指定门店
+  // 店长/厨师长/区域经理专用: 申请时必须指定门店（单店兼容字段 + 多店数组）
   requestedStoreId: entityIdSchema.optional(),
+  requestedStoreIds: z.array(entityIdSchema).max(50).optional(),
 }).strict().refine(
   (d) => d.requestedRole !== 'SUPPLIER_OWNER' || !!d.supplierName,
   { message: '注册新供应商需填写公司名称', path: ['supplierName'] },
@@ -51,18 +57,21 @@ const applySchema = z.object({
   (d) => d.requestedRole !== 'SUPPLIER_STAFF' || !!d.supplierId,
   { message: '加入已有供应商需选择公司', path: ['supplierId'] },
 ).refine(
-  (d) => !['MANAGER', 'KITCHEN_LEAD'].includes(d.requestedRole) || !!d.requestedStoreId,
-  { message: '店长 / 厨师长 申请时必须选择门店', path: ['requestedStoreId'] },
+  (d) => !STORE_BOUND_APPLY_ROLES.includes(d.requestedRole)
+    || !!d.requestedStoreId || (d.requestedStoreIds?.length ?? 0) > 0,
+  { message: '店长 / 厨师长 / 区域经理 申请时必须选择门店', path: ['requestedStoreId'] },
 )
 
 const approveSchema = z.object({
-  storeId: entityIdSchema.optional(),  // MANAGER/KITCHEN_LEAD 可选绑店
+  storeId: entityIdSchema.optional(),  // MANAGER/KITCHEN_LEAD 可选绑店（单店兼容）
+  storeIds: z.array(entityIdSchema).max(50).optional(), // 审批时可调整门店集合（优先于 storeId）
 }).strict()
 const rejectSchema = z.object({
   reason: z.string().trim().min(1, '请说明拒绝原因').max(200),
 }).strict()
 const listQuerySchema = z.object({
   status: z.enum(['PENDING', 'APPROVED', 'REJECTED']).optional(),
+  storeId: entityIdSchema.optional(), // 兼容门店切换器注入的 X-Active-Store；本端点不使用
 }).strict()
 
 /** 公开申请端点: POST /api/auth/apply (挂在 auth 路由 prefix 下) */
@@ -93,7 +102,7 @@ export const publicApplyRoute: FastifyPluginAsync = async (app) => {
       const pending = await tx.userApplication.findFirst({
         where: { tenantId: tenant.id, phone: d.phone, status: 'PENDING' }, select: { id: true },
       })
-      if (pending) return { error: '该手机号已有待审批的申请' }
+      if (pending) return { error: '该手机号已有待审批的申请；如已获批需增加门店，请联系管理员在「员工管理」中调整' }
 
       if (d.requestedRole === 'SUPPLIER_STAFF' && d.supplierId) {
         const supplier = await tx.supplier.findFirst({
@@ -101,12 +110,16 @@ export const publicApplyRoute: FastifyPluginAsync = async (app) => {
         })
         if (!supplier) return { error: '所选供应商不存在或已停用' }
       }
-      if (['MANAGER', 'KITCHEN_LEAD'].includes(d.requestedRole) && d.requestedStoreId) {
-        const store = await tx.store.findFirst({
-          where: { id: d.requestedStoreId, tenantId: tenant.id, status: 'ENABLED' }, select: { id: true, name: true },
+      // 多店归一：requestedStoreIds 优先，回退单店字段；去重保序
+      const reqStoreIds = [...new Set(
+        d.requestedStoreIds?.length ? d.requestedStoreIds : (d.requestedStoreId ? [d.requestedStoreId] : []),
+      )]
+      if (STORE_BOUND_APPLY_ROLES.includes(d.requestedRole) && reqStoreIds.length > 0) {
+        const stores = await tx.store.findMany({
+          where: { id: { in: reqStoreIds }, tenantId: tenant.id, status: 'ENABLED' }, select: { id: true, name: true },
         })
-        if (!store) return { error: '所选门店不存在或已停用' }
-        requestedStoreName = store.name
+        if (stores.length !== reqStoreIds.length) return { error: '所选门店不存在或已停用' }
+        requestedStoreName = stores.map(s => s.name).join('、')
       }
 
       const application = await tx.userApplication.create({
@@ -117,7 +130,8 @@ export const publicApplyRoute: FastifyPluginAsync = async (app) => {
           reason: d.reason || null,
           supplierId: d.supplierId || null,
           supplierName: d.supplierName || null,
-          requestedStoreId: d.requestedStoreId || null,
+          requestedStoreId: reqStoreIds[0] ?? null,
+          requestedStoreIds: reqStoreIds,
         },
       })
       return { ok: true, applicationId: application.id }
@@ -203,7 +217,10 @@ export const applicationRoutes: FastifyPluginAsync = async (app) => {
       where: { id: { in: supIds } }, select: { id: true, name: true, no: true },
     })
     const supMap = Object.fromEntries(sups.map(s => [s.id, s]))
-    const stIds = [...new Set(apps.filter(a => a.requestedStoreId).map(a => a.requestedStoreId!))]
+    const stIds = [...new Set(apps.flatMap(a => [
+      ...(a.requestedStoreId ? [a.requestedStoreId] : []),
+      ...(a.requestedStoreIds ?? []),
+    ]))]
     const stores = stIds.length === 0 ? [] : await prisma.store.findMany({
       where: { id: { in: stIds } }, select: { id: true, name: true, no: true },
     })
@@ -212,6 +229,7 @@ export const applicationRoutes: FastifyPluginAsync = async (app) => {
       ...a,
       joinedSupplier: a.supplierId ? supMap[a.supplierId] || null : null,
       requestedStore: a.requestedStoreId ? stMap[a.requestedStoreId] || null : null,
+      requestedStores: (a.requestedStoreIds ?? []).map(id => stMap[id]).filter(Boolean),
     }))
   })
 
@@ -240,13 +258,19 @@ export const applicationRoutes: FastifyPluginAsync = async (app) => {
         if (!appl) return { status: 404, error: '申请不存在' }
         if (appl.status !== 'PENDING') return { status: 400, error: '该申请已处理' }
 
-        const storeId = parsed.data.storeId || appl.requestedStoreId || null
-        if (['MANAGER', 'KITCHEN_LEAD'].includes(appl.requestedRole) && !storeId) {
-          return { status: 400, error: `${appl.requestedRole === 'MANAGER' ? '店长' : '厨师长'}角色必须绑定门店` }
+        // 多店归一：审批指定 storeIds > 审批指定 storeId > 申请 requestedStoreIds > 申请 requestedStoreId
+        const storeIds = [...new Set(
+          parsed.data.storeIds?.length ? parsed.data.storeIds
+            : parsed.data.storeId ? [parsed.data.storeId]
+            : appl.requestedStoreIds?.length ? appl.requestedStoreIds
+            : appl.requestedStoreId ? [appl.requestedStoreId] : [],
+        )]
+        if (STORE_BOUND_APPLY_ROLES.includes(appl.requestedRole) && storeIds.length === 0) {
+          return { status: 400, error: `${ROLE_LABELS[appl.requestedRole] || appl.requestedRole}角色必须绑定门店` }
         }
-        if (storeId) {
-          const store = await tx.store.findFirst({ where: { id: storeId, tenantId, status: 'ENABLED' }, select: { id: true } })
-          if (!store) return { status: 400, error: '门店不存在或已停用' }
+        if (storeIds.length > 0) {
+          const stores = await tx.store.findMany({ where: { id: { in: storeIds }, tenantId, status: 'ENABLED' }, select: { id: true } })
+          if (stores.length !== storeIds.length) return { status: 400, error: '门店不存在或已停用' }
         }
         const exists = await tx.user.findUnique({
           where: { tenantId_phone: { tenantId, phone: appl.phone } }, select: { id: true },
@@ -287,8 +311,8 @@ export const applicationRoutes: FastifyPluginAsync = async (app) => {
           data: {
             tenantId, name: appl.name, phone: appl.phone,
             email: `${appl.phone}@phone.dianjie`, password: appl.passwordHash,
-            role: appl.requestedRole, storeId,
-            storeIds: storeId ? [storeId] : [],
+            role: appl.requestedRole, storeId: storeIds[0] ?? null,
+            storeIds,
             supplierId: finalSupplierId, status: 'ACTIVE',
           },
         })

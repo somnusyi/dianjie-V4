@@ -8,6 +8,7 @@ import { BottomNav, ProgressDots, TodoCard } from '@/components/v2'
 import { GlanceStrip } from '@/components/v2/glance-strip'
 import { Sparkline } from '@/components/v2/sparkline'
 import { UserMenu } from '@/components/v2/user-menu'
+import { StoreSwitcher } from '@/components/v2/store-switcher'
 import { useDashboard, LoadingScreen, ErrorScreen, greetingFor } from '@/components/v2/use-dashboard'
 import { apiFetch } from '@/lib/v2-auth'
 // currentIndex = 已完成步骤数 (步 < currentIndex 显示 ✓, 步 = currentIndex 高亮当前)
@@ -53,7 +54,10 @@ export default function ChefHomePage() {
         <div>
           <p className="text-caption text-gray2">{greeting}</p>
           <h1 className="text-h1">厨师长工作台</h1>
-          <p className="text-caption text-gray3 mt-0.5">{data.store?.name || '门店'} · {today}</p>
+          <p className="text-caption text-gray3 mt-0.5 flex items-center gap-1.5">
+            <StoreSwitcher />
+            <span>{data.store?.name || '门店'} · {today}</span>
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <button className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center" aria-label="搜索">⌕</button>

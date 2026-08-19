@@ -5,7 +5,7 @@ import { Prisma, prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { invalidatePattern } from '../lib/cache'
 import { notifyOrderSubmitted, notifyOrderShipped, notifyOrderConfirmed, notifyOrderRejected, sendNotification } from '../services/notification'
-import { isStoreScoped, isSupplierRole, requireSupplierBinding } from '../lib/auth-scope'
+import { isStoreScoped, isSupplierRole, requireSupplierBinding, resolveActiveStore, storeScopeOf } from '../lib/auth-scope'
 import {
   allowsSupplyDataRead,
   hasInternalSupplyChainCapability,
@@ -284,7 +284,11 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const where: any = supplyDataReadScope(req.user)
 
     if (q.status) where.status = q.status
-    if (q.storeId && !isStoreScoped(role)) where.storeId = q.storeId
+    if (q.storeId) {
+      // 门店级角色指定门店时必须在可访问集合内（越权抛 403），并收窄到单店
+      if (isStoreScoped(role)) resolveActiveStore(req.user, q.storeId)
+      where.storeId = q.storeId
+    }
     if (q.supplierId && !isSupplierRole(role)) where.supplierId = q.supplierId
     const and: any[] = []
     if (q.productId) and.push({ items: { some: { productId: q.productId, isActive: true } } })
@@ -486,9 +490,9 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(403).send({ error: '无权创建采购订单' })
     }
 
-    // 单店级角色 (店长/厨师长/...) 强制用 token 里的 storeId, 防止跨店越权
-    // 集团级 (BOSS/FINANCE) 才允许传 storeId 指定门店
-    const finalStoreId = isStoreScoped(role) ? userStoreId : storeId
+    // 门店级角色 (店长/厨师长/...) 可在可访问集合内选店, 默认第一家, 越权抛 403
+    // 集团级 (BOSS/FINANCE) 才允许传任意 storeId 指定门店
+    const finalStoreId = isStoreScoped(role) ? resolveActiveStore(req.user, storeId) : storeId
     if (!finalStoreId) return reply.status(400).send({ error: '请指定门店 (storeId)' })
     const requestFingerprint = orderCreateRequestFingerprint({ storeId: finalStoreId, supplierId, expectedDate, note, items })
     const replayInclude = {
@@ -674,7 +678,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     // 2026-05-29 客户反馈: 撤回窗口放宽到"供应商发货前" (SUBMITTED 待接单 + CONFIRMED 已接单待发货)
     // DELIVERING 起就是已发货, 货已经在路上, 不让撤; 该报损/拒收走原流程
     const where: any = { id, tenantId, status: { in: ['SUBMITTED', 'CONFIRMED'] } as any }
-    if (isStoreScoped(role) && storeId) where.storeId = storeId
+    const storeScope = storeScopeOf(req.user) // 多店集合；null = 非门店级角色
+    if (storeScope) where.storeId = storeScope.length ? { in: storeScope } : '__NONE__'
     // 总厨只能撤自己下的单 (代下), 不能撤厨师长/店长下的单
     if (role === 'CHEF_DIRECTOR') where.createdById = userId
     const order = await prisma.purchaseOrder.findFirst({
@@ -757,7 +762,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     })
     if (!order) return reply.status(400).send({ error: '订单不存在或已接单，当前不可修改' })
     if (isSupplierRole(role) && order.supplierId !== actorSupplierId) return reply.status(404).send({ error: '订单不存在' })
-    if (isStoreScoped(role) && order.storeId !== actorStoreId) return reply.status(404).send({ error: '订单不存在' })
+    if (isStoreScoped(role) && !(storeScopeOf(req.user) ?? []).includes(order.storeId)) return reply.status(404).send({ error: '订单不存在' })
     if (role === 'CHEF_DIRECTOR' && order.createdById !== userId) return reply.status(403).send({ error: '只能修改自己代下的订单' })
     if (input.baseRowVersion !== order.rowVersion) return reply.status(409).send({ error: '订单已更新，请刷新后重新提交' })
     if ((isSupplierRole(role) || hasInternalSupplyChainCapability(role, 'order.write'))
@@ -950,7 +955,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (!revision) return reply.status(404).send({ error: '待确认改单不存在' })
     const order = revision.purchaseOrder
     if (order.status !== 'SUBMITTED') return reply.status(409).send({ error: '订单已接单或状态已变化，不能再批准' })
-    if (isStoreScoped(role) && order.storeId !== storeId) return reply.status(404).send({ error: '待确认改单不存在' })
+    if (isStoreScoped(role) && !(storeScopeOf(req.user) ?? []).includes(order.storeId)) return reply.status(404).send({ error: '待确认改单不存在' })
     if (role === 'CHEF_DIRECTOR' && order.createdById !== userId) return reply.status(403).send({ error: '只能确认自己代下的订单' })
     if (order.rowVersion !== revision.baseRowVersion) return reply.status(409).send({ error: '订单已更新，请刷新后重新处理' })
 
@@ -1042,7 +1047,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       include: { purchaseOrder: true },
     })
     if (!revision) return reply.status(404).send({ error: '待确认改单不存在' })
-    if (isStoreScoped(role) && revision.purchaseOrder.storeId !== storeId) return reply.status(404).send({ error: '待确认改单不存在' })
+    if (isStoreScoped(role) && !(storeScopeOf(req.user) ?? []).includes(revision.purchaseOrder.storeId)) return reply.status(404).send({ error: '待确认改单不存在' })
     if (role === 'CHEF_DIRECTOR' && revision.purchaseOrder.createdById !== userId) return reply.status(403).send({ error: '只能处理自己代下的订单' })
     await prisma.$transaction(async (tx) => {
       const updated = await tx.purchaseOrderRevision.updateMany({
@@ -1792,7 +1797,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const noteValue = note?.trim() || ''
     const where: any = { id, tenantId, status: 'DELIVERING' }
     // 厨师/店长只能给自己绑定门店的单发验收单
-    if (['KITCHEN_LEAD', 'MANAGER'].includes(role) && storeId) where.storeId = storeId
+    if (['KITCHEN_LEAD', 'MANAGER'].includes(role)) where.storeId = { in: storeScopeOf(req.user) ?? [] }
     const order = await prisma.purchaseOrder.findFirst({ where })
     if (!order) return reply.status(400).send({ error: '订单不存在 / 状态非"在途"不可发验收单' })
     const ackedAt = new Date()
@@ -1843,7 +1848,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         purchaseOrderId: id,
         deliveryOrderId: deliveryOrderId || { not: null },
       }
-      if (isStoreScoped(role)) duplicateWhere.storeId = storeId
+      if (isStoreScoped(role)) duplicateWhere.storeId = { in: storeScopeOf(req.user) ?? [] }
       const existingReceipt = await prisma.receipt.findFirst({
         where: duplicateWhere,
         orderBy: { createdAt: 'desc' },
@@ -1856,7 +1861,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         req.log.warn({ err: error, receiptId: existingReceipt.id }, '重复收货补偿财务派生记录失败')
       }
       const currentOrder = await prisma.purchaseOrder.findFirst({
-        where: { id, tenantId, ...(isStoreScoped(role) ? { storeId } : {}) },
+        where: { id, tenantId, ...(isStoreScoped(role) ? { storeId: { in: storeScopeOf(req.user) ?? [] } } : {}) },
         select: { items: { where: { isActive: true }, select: { quantity: true, shippedQty: true } } },
       })
       const fullyShipped = currentOrder?.items.every(item =>
@@ -1880,7 +1885,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
 
     // 加 store scope: 店长/厨师长 只能确认本店的单
     const orderWhere: any = { id, tenantId, status: 'PENDING_CONFIRM' }
-    if (isStoreScoped(role)) orderWhere.storeId = storeId
+    if (isStoreScoped(role)) orderWhere.storeId = { in: storeScopeOf(req.user) ?? [] }
     const order = await prisma.purchaseOrder.findFirst({
       where: orderWhere,
       include: {

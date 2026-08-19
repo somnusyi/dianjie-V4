@@ -4,7 +4,7 @@ import { Prisma, prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { z } from 'zod'
 import { notifyLossClaimResult } from '../services/notification'
-import { isSupplierRole } from '../lib/auth-scope'
+import { isSupplierRole, isStoreScoped, resolveActiveStore, storeScopeOf } from '../lib/auth-scope'
 import { resignOssUrls } from './upload'
 import { fireAndForget as notify } from '../services/notify'
 import { businessNoFloor, nextBusinessNo } from '../services/purchaseOrderIntegrity'
@@ -48,6 +48,8 @@ const manualLossSchema = z.object({
   reason: z.string().trim().min(1, '请选择报损原因').max(30),
   description: z.string().trim().max(500).optional(),
   evidenceImages: z.array(z.string().max(2048)).max(9).optional(),
+  // 多店角色指定目标门店（必须在可访问集合内）；缺省用默认店
+  storeId: z.string().min(1).optional(),
 }).strict().superRefine((value, ctx) => {
   const productIds = value.items.map(item => item.productId)
   if (new Set(productIds).size !== productIds.length) {
@@ -415,6 +417,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     }
     const parsed = z.object({
       months: z.coerce.number().int().min(1).max(24).default(6),
+      storeId: z.string().optional(), // 兼容门店切换器注入的 X-Active-Store；本端点按租户聚合不使用
     }).strict().safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const since = dayjs().subtract(parsed.data.months, 'month').startOf('month').toDate()
@@ -578,7 +581,8 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
             tenantId,
             purchaseOrderId: input.purchaseOrderId,
             status: { in: ['CONFIRMED', 'ACCOUNTED'] },
-            ...(userStoreId ? { storeId: userStoreId } : {}),
+            // 门店级角色限定可访问门店集合（多店 storeIds）；集团角色不过滤
+            ...(isStoreScoped(role) ? { storeId: { in: storeScopeOf(req.user) ?? [] } } : {}),
           },
           include: {
             items: { include: { product: true } },
@@ -733,9 +737,12 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     }
     const parsed = manualLossSchema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-    const { items, reason, description, evidenceImages } = parsed.data
+    const { items, reason, description, evidenceImages, storeId: requestedStoreId } = parsed.data
 
-    const storeId = userStoreId
+    // 门店级角色：可指定可访问集合内门店（默认第一家），越权抛 403
+    const storeId = ['MANAGER', 'KITCHEN_LEAD'].includes(role)
+      ? resolveActiveStore(req.user, requestedStoreId)
+      : (requestedStoreId || userStoreId)
     if (!storeId) return reply.status(400).send({ error: '当前账号未绑定门店' })
 
     const inventory = await estimatedStoreInventory(tenantId, storeId)

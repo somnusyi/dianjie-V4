@@ -8,10 +8,13 @@ import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 
 const ROLE_LABEL: Record<string, string> = {
   MANAGER: '店长', KITCHEN_LEAD: '厨师长', CHEF_DIRECTOR: '总厨',
+  SUPERVISOR: '主管', REGIONAL_MANAGER: '区域经理',
   FINANCE: '财务', PURCHASER: '采购', ENGINEERING: '工程部',
   ADMIN: '管理员', BOSS: '老板',
   SUPPLIER_OWNER: '供应商 · 公司负责人', SUPPLIER_STAFF: '供应商 · 员工',
 }
+// 需要绑定门店的角色 (多店: 区域经理=指派门店集合, 店长/厨师长一般单店)
+const STORE_BOUND_ROLES = ['MANAGER', 'KITCHEN_LEAD', 'REGIONAL_MANAGER']
 const STATUS_LABEL: Record<string, string> = { PENDING: '待审批', APPROVED: '已通过', REJECTED: '已拒绝' }
 const STATUS_COLOR: Record<string, string> = {
   PENDING: 'bg-amber/10 text-amber-fg',
@@ -31,6 +34,7 @@ type Application = {
   joinedSupplier: { id: string; name: string; no: string } | null
   requestedStoreId: string | null
   requestedStore: { id: string; name: string; no: string } | null
+  requestedStores?: { id: string; name: string; no: string }[]
 }
 type Store = { id: string; name: string; no: string }
 
@@ -40,7 +44,7 @@ export default function ApplicationsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [target, setTarget] = useState<Application | null>(null)
-  const [storeId, setStoreId] = useState('')
+  const [storeIds, setStoreIds] = useState<string[]>([])
   const [rejectReason, setRejectReason] = useState('')
   const [mode, setMode] = useState<'approve' | 'reject' | null>(null)
   const [confirmState, openConfirm] = useConfirmSheet()
@@ -67,8 +71,8 @@ export default function ApplicationsPage() {
 
   async function approve() {
     if (!target) return
-    if (['MANAGER', 'KITCHEN_LEAD'].includes(target.requestedRole) && !storeId) {
-      setError(`${target.requestedRole === 'MANAGER' ? '店长' : '厨师长'}必须选门店`)
+    if (STORE_BOUND_ROLES.includes(target.requestedRole) && storeIds.length === 0) {
+      setError(`${ROLE_LABEL[target.requestedRole] || target.requestedRole}必须至少选一家门店`)
       return
     }
     try {
@@ -76,11 +80,11 @@ export default function ApplicationsPage() {
       const res = await fetch(`/api/applications/${target.id}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${t}` },
-        body: JSON.stringify({ storeId: storeId || undefined }),
+        body: JSON.stringify({ storeIds: storeIds.length > 0 ? storeIds : undefined }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || '通过失败')
-      setTarget(null); setMode(null); setStoreId(''); setError(null)
+      setTarget(null); setMode(null); setStoreIds([]); setError(null)
       refresh()
     } catch (e: any) {
       setError(e.message || '通过失败')
@@ -133,7 +137,10 @@ export default function ApplicationsPage() {
                 <ul className="space-y-2 mb-4">
                   {pending.map(a => (
                     <ApplicationCard key={a.id} a={a}
-                      onApprove={() => { setTarget(a); setMode('approve'); setStoreId(a.requestedStoreId || ''); setError(null) }}
+                      onApprove={() => {
+                        setTarget(a); setMode('approve'); setError(null)
+                        setStoreIds(a.requestedStores?.map(s => s.id) ?? (a.requestedStoreId ? [a.requestedStoreId] : []))
+                      }}
                       onReject={() => { setTarget(a); setMode('reject'); setRejectReason(''); setError(null) }}
                     />
                   ))}
@@ -170,19 +177,30 @@ export default function ApplicationsPage() {
               )}
               {target.reason && <div className="mt-1 text-gray3">备注: {target.reason}</div>}
             </div>
-            {(target.requestedRole === 'MANAGER' || target.requestedRole === 'KITCHEN_LEAD') && (
+            {STORE_BOUND_ROLES.includes(target.requestedRole) && (
               <div className="mb-3">
-                <label className="text-micro text-gray3 block mb-1">绑定门店 (必选)</label>
-                {target.requestedStore && (
+                <label className="text-micro text-gray3 block mb-1">绑定门店 (可多选, 至少一家)</label>
+                {((target.requestedStores && target.requestedStores.length > 0) || target.requestedStore) && (
                   <p className="text-micro text-amber-fg mb-1">
-                    申请人选了: {target.requestedStore.no} · {target.requestedStore.name}
+                    申请人选了: {(target.requestedStores && target.requestedStores.length > 0
+                      ? target.requestedStores
+                      : target.requestedStore ? [target.requestedStore] : []
+                    ).map(s => `${s.no} · ${s.name}`).join('、')}
                   </p>
                 )}
-                <select value={storeId} onChange={e => setStoreId(e.target.value)}
-                  className="w-full bg-bg rounded p-2 outline-none text-body">
-                  <option value="">{stores.length === 0 ? '请先创建门店' : '请选择门店'}</option>
-                  {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
+                {stores.length === 0 ? (
+                  <div className="bg-bg rounded p-2 text-caption text-gray3">请先创建门店</div>
+                ) : (
+                  <div className="space-y-1 max-h-48 overflow-y-auto">
+                    {stores.map(s => (
+                      <label key={s.id} className="flex items-center gap-2 bg-bg rounded p-2 text-body">
+                        <input type="checkbox" checked={storeIds.includes(s.id)}
+                          onChange={e => setStoreIds(e.target.checked ? [...storeIds, s.id] : storeIds.filter(id => id !== s.id))} />
+                        {s.no} · {s.name}
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
             {error && <div className="bg-red-bg text-red-fg rounded p-2 text-caption mb-3">{error}</div>}
@@ -245,10 +263,13 @@ export default function ApplicationsPage() {
             <div className="text-micro text-gray3 mt-0.5">通过后将以员工 (Staff) 身份加入该公司</div>
           </div>
         )}
-        {['MANAGER', 'KITCHEN_LEAD'].includes(a.requestedRole) && a.requestedStore && (
+        {STORE_BOUND_ROLES.includes(a.requestedRole) && ((a.requestedStores && a.requestedStores.length > 0) || a.requestedStore) && (
           <div className="text-caption text-amber-fg mt-2 bg-amber/10 rounded p-2">
-            🏪 申请门店: <b>{a.requestedStore.no} · {a.requestedStore.name}</b>
-            <div className="text-micro text-gray3 mt-0.5">通过后只能看本店数据</div>
+            🏪 申请门店: <b>{(a.requestedStores && a.requestedStores.length > 0
+              ? a.requestedStores
+              : a.requestedStore ? [a.requestedStore] : []
+            ).map(s => `${s.no} · ${s.name}`).join('、')}</b>
+            <div className="text-micro text-gray3 mt-0.5">通过后只能看绑定门店的数据</div>
           </div>
         )}
         {a.reason && (

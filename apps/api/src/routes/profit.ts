@@ -1,7 +1,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
-import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
+import { isSupplierRole, resolveActiveStore } from '../lib/auth-scope'
 import { monthRangeForDateCol, monthRangeForTimestampCol } from '../lib/dateRange'
 
 // 费用项配置
@@ -36,12 +36,12 @@ export const profitRoutes: FastifyPluginAsync = async (app) => {
 
   // 获取单店利润表数据
   app.get('/store/:storeId', auth, async (req: any, reply: any) => {
-    const { tenantId, role, storeId: userStoreId } = req.user
+    const { tenantId, role } = req.user
     const { storeId } = req.params
     const { month } = req.query as any
 
-    // 权限校验：店长只能看自己门店
-    if (isStoreScoped(role) && userStoreId !== storeId) {
+    // 权限校验：门店级角色只能看可访问集合内的门店（多店集合校验）
+    try { resolveActiveStore(req.user, storeId) } catch {
       return reply.status(403).send({ error: '无权查看该门店' })
     }
 
@@ -241,11 +241,11 @@ export const profitRoutes: FastifyPluginAsync = async (app) => {
   // ── 已确认财务月结月份列表: 店长营业页「上月」历史月份选择器数据源 ──
   // 只读, 返回该门店全部 CONFIRMED 月结月份 (倒序), 不暴露金额明细
   app.get('/store/:storeId/closed-months', auth, async (req: any, reply: any) => {
-    const { tenantId, role, storeId: userStoreId } = req.user
+    const { tenantId, role } = req.user
     const { storeId } = req.params
 
-    // 权限校验：店长只能看自己门店 (与 /store/:storeId 同一规则)
-    if (isStoreScoped(role) && userStoreId !== storeId) {
+    // 权限校验：门店级角色只能看可访问集合内的门店 (与 /store/:storeId 同一规则)
+    try { resolveActiveStore(req.user, storeId) } catch {
       return reply.status(403).send({ error: '无权查看该门店' })
     }
     const store = await prisma.store.findFirst({ where: { id: storeId, tenantId } })
@@ -267,9 +267,9 @@ export const profitRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 净利快照: 4 口径一次返回 (月/季/年/累计含建店成本) ──
   app.get('/store/:storeId/snapshot', auth, async (req: any, reply: any) => {
-    const { tenantId, role, storeId: userStoreId } = req.user
+    const { tenantId, role } = req.user
     const { storeId } = req.params
-    if (isStoreScoped(role) && userStoreId !== storeId) {
+    try { resolveActiveStore(req.user, storeId) } catch {
       return reply.status(403).send({ error: '无权查看该门店' })
     }
     const store = await prisma.store.findFirst({ where: { id: storeId, tenantId } })
@@ -420,11 +420,11 @@ export const profitRoutes: FastifyPluginAsync = async (app) => {
 
   // 保存/更新费用项
   app.post('/store/:storeId/expenses', auth, async (req: any, reply: any) => {
-    const { tenantId, role, storeId: userStoreId } = req.user
+    const { tenantId, role } = req.user
     const { storeId } = req.params
     const { month, expenses } = req.body as any
 
-    if (isStoreScoped(role) && userStoreId !== storeId) {
+    try { resolveActiveStore(req.user, storeId) } catch {
       return reply.status(403).send({ error: '无权操作该门店' })
     }
     if (!['MANAGER', 'ADMIN', 'FINANCE'].includes(role)) {

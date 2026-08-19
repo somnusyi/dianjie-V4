@@ -8,12 +8,13 @@ const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const ROLE_LABEL: Record<string, string> = {
   SUPER_ADMIN: '超管', ADMIN: '管理员', FINANCE: '财务',
   MANAGER: '店长', PURCHASER: '采购', SUPPLY_CHAIN: '内部供应链', SUPPLIER_STAFF: '供应商',
+  REGIONAL_MANAGER: '区域经理',
 }
 
 const USER_ROLES = [
   'SUPER_ADMIN', 'ADMIN', 'FINANCE', 'MANAGER', 'PURCHASER', 'SUPPLIER_STAFF',
   'CHEF', 'KITCHEN_LEAD', 'CHEF_DIRECTOR', 'SUPPLIER_OWNER', 'SUPPLY_CHAIN', 'ENGINEERING',
-  'SUPERVISOR', 'STAFF',
+  'SUPERVISOR', 'STAFF', 'REGIONAL_MANAGER',
 ] as const
 const PHONE_RE = /^1[3-9]\d{9}$/
 const entityIdSchema = z.string().trim().min(1).max(64)
@@ -33,6 +34,7 @@ const createUserSchema = z.object({
   password: z.string().min(6, '密码至少 6 位').max(72),
   role: z.enum(USER_ROLES).default('MANAGER'),
   storeId: nullableEntityIdSchema,
+  storeIds: z.array(entityIdSchema).max(50).optional(), // 多店：优先于 storeId
   supplierId: nullableEntityIdSchema,
 }).strict().refine(data => Boolean(data.phone || data.email), { message: '手机号或邮箱至少填一项' })
 
@@ -42,19 +44,30 @@ const updateUserSchema = z.object({
   phone: nullablePhoneSchema,
   role: z.enum(USER_ROLES).optional(),
   storeId: nullableEntityIdSchema,
+  storeIds: z.array(entityIdSchema).max(50).optional(), // 多店：优先于 storeId
   supplierId: nullableEntityIdSchema,
   password: z.string().min(6, '密码至少 6 位').max(72).optional(),
 }).strict().refine(data => Object.keys(data).length > 0, { message: '没有可更新字段' })
+
+const updateUserStoresSchema = z.object({
+  storeIds: z.array(entityIdSchema).min(1, '至少保留一家门店').max(50),
+}).strict()
 
 const resetPasswordSchema = z.object({
   password: z.string().min(6, '密码至少 6 位').max(72),
 }).strict()
 
-const STORE_BOUND_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF', 'SUPERVISOR'])
+const STORE_BOUND_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF', 'SUPERVISOR', 'REGIONAL_MANAGER'])
 const SUPPLIER_BOUND_ROLES = new Set(['SUPPLIER_OWNER', 'SUPPLIER_STAFF'])
 
 function normalizedId(value: string | null | undefined) {
   return value || null
+}
+
+// 多店归一：storeIds 优先，空则回退 storeId 单元素；去重保序
+function normalizedStoreIds(storeIds: string[] | undefined, storeId: string | null): string[] {
+  const ids = storeIds && storeIds.length > 0 ? storeIds : (storeId ? [storeId] : [])
+  return [...new Set(ids)]
 }
 
 export const userRoutes: FastifyPluginAsync = async (app) => {
@@ -69,7 +82,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { storeId, roleFilter, status } = parsed.data
     const where: any = { tenantId }
-    if (storeId) where.storeId = storeId
+    if (storeId) where.OR = [{ storeId }, { storeIds: { has: storeId } }] // 兼容单店字段 + 多店数组
     if (roleFilter) where.role = roleFilter
     if (status) where.status = status
 
@@ -77,7 +90,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
       where,
       select: {
         id: true, name: true, email: true, phone: true,
-        role: true, status: true, storeId: true, lastLoginAt: true, createdAt: true,
+        role: true, status: true, storeId: true, storeIds: true, lastLoginAt: true, createdAt: true,
         store: { select: { id: true, name: true, no: true } },
       },
       orderBy: { createdAt: 'desc' },
@@ -95,6 +108,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { name, email, phone, password, role: newRole } = parsed.data
     const storeId = normalizedId(parsed.data.storeId)
+    const storeIds = normalizedStoreIds(parsed.data.storeIds, storeId)
     const supplierId = normalizedId(parsed.data.supplierId)
     if (newRole === 'SUPER_ADMIN' && role !== 'SUPER_ADMIN') {
       return reply.status(403).send({ error: '只有超级管理员可以创建超级管理员' })
@@ -112,11 +126,11 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
         }
         const emailExists = await tx.user.findUnique({ where: { tenantId_email: { tenantId, email: emailFinal } }, select: { id: true } })
         if (emailExists) return { status: 400, error: '该邮箱已被使用' }
-        if (STORE_BOUND_ROLES.has(newRole) && !storeId) return { status: 400, error: '该角色必须绑定门店' }
+        if (STORE_BOUND_ROLES.has(newRole) && storeIds.length === 0) return { status: 400, error: '该角色必须绑定门店' }
         if (SUPPLIER_BOUND_ROLES.has(newRole) && !supplierId) return { status: 400, error: '该角色必须绑定供应商' }
-        if (storeId) {
-          const store = await tx.store.findFirst({ where: { id: storeId, tenantId, status: 'ENABLED' }, select: { id: true } })
-          if (!store) return { status: 400, error: '门店不存在或已停用' }
+        if (storeIds.length > 0) {
+          const stores = await tx.store.findMany({ where: { id: { in: storeIds }, tenantId, status: 'ENABLED' }, select: { id: true } })
+          if (stores.length !== storeIds.length) return { status: 400, error: '门店不存在或已停用' }
         }
         if (supplierId) {
           const supplier = await tx.supplier.findFirst({ where: { id: supplierId, tenantId, status: 'ENABLED' }, select: { id: true } })
@@ -125,9 +139,9 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
         const user = await tx.user.create({
           data: {
             tenantId, name, email: emailFinal, phone: phone || null, password: hashed,
-            role: newRole, storeId, storeIds: storeId ? [storeId] : [], supplierId, status: 'ACTIVE',
+            role: newRole, storeId: storeIds[0] ?? null, storeIds, supplierId, status: 'ACTIVE',
           },
-          select: { id: true, name: true, email: true, phone: true, role: true, status: true, storeId: true, supplierId: true },
+          select: { id: true, name: true, email: true, phone: true, role: true, status: true, storeId: true, storeIds: true, supplierId: true },
         })
         await tx.opLog.create({
           data: {
@@ -171,7 +185,13 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
         const phone = parsed.data.phone === undefined ? target.phone : (parsed.data.phone || null)
         const email = parsed.data.email || target.email
         const newRole = parsed.data.role || target.role
-        const storeId = parsed.data.storeId === undefined ? target.storeId : normalizedId(parsed.data.storeId)
+        // 多店归一：storeIds 优先；只传 storeId 时包成单元素；都不传沿用现有集合
+        const storesTouched = parsed.data.storeIds !== undefined || parsed.data.storeId !== undefined
+        const storeIds = parsed.data.storeIds !== undefined
+          ? normalizedStoreIds(parsed.data.storeIds, null)
+          : (parsed.data.storeId !== undefined
+              ? normalizedStoreIds(undefined, normalizedId(parsed.data.storeId))
+              : (target.storeIds?.length ? target.storeIds : (target.storeId ? [target.storeId] : [])))
         const supplierId = parsed.data.supplierId === undefined ? target.supplierId : normalizedId(parsed.data.supplierId)
         if (phone) {
           const duplicate = await tx.user.findUnique({ where: { tenantId_phone: { tenantId, phone } }, select: { id: true } })
@@ -181,16 +201,19 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
           where: { tenantId_email: { tenantId, email } }, select: { id: true },
         })
         if (emailDuplicate && emailDuplicate.id !== target.id) return { status: 400, error: '该邮箱已被使用' }
-        if (STORE_BOUND_ROLES.has(newRole) && !storeId) return { status: 400, error: '该角色必须绑定门店' }
+        if (STORE_BOUND_ROLES.has(newRole) && storeIds.length === 0) return { status: 400, error: '该角色必须绑定门店' }
         if (SUPPLIER_BOUND_ROLES.has(newRole) && !supplierId) return { status: 400, error: '该角色必须绑定供应商' }
-        if (storeId) {
-          const store = await tx.store.findFirst({ where: { id: storeId, tenantId, status: 'ENABLED' }, select: { id: true } })
-          if (!store) return { status: 400, error: '门店不存在或已停用' }
+        if (storesTouched && storeIds.length > 0) {
+          const stores = await tx.store.findMany({ where: { id: { in: storeIds }, tenantId, status: 'ENABLED' }, select: { id: true } })
+          if (stores.length !== storeIds.length) return { status: 400, error: '门店不存在或已停用' }
         }
         if (supplierId) {
           const supplier = await tx.supplier.findFirst({ where: { id: supplierId, tenantId, status: 'ENABLED' }, select: { id: true } })
           if (!supplier) return { status: 400, error: '供应商不存在或已停用' }
         }
+        // 门店集合实际变化时递增 authVersion，让旧 token 立即失效（避免被移除门店仍有最长 2h 残余访问）
+        const oldStoreIds = target.storeIds?.length ? target.storeIds : (target.storeId ? [target.storeId] : [])
+        const storesChanged = storesTouched && JSON.stringify(oldStoreIds) !== JSON.stringify(storeIds)
         await tx.user.update({
           where: { id: target.id },
           data: {
@@ -198,9 +221,10 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
             ...(parsed.data.email !== undefined ? { email } : {}),
             ...(parsed.data.phone !== undefined ? { phone } : {}),
             ...(parsed.data.role !== undefined ? { role: newRole } : {}),
-            ...(parsed.data.storeId !== undefined ? { storeId, storeIds: storeId ? [storeId] : [] } : {}),
+            ...(storesTouched ? { storeId: storeIds[0] ?? null, storeIds } : {}),
             ...(parsed.data.supplierId !== undefined ? { supplierId } : {}),
             ...(hashed ? { password: hashed, authVersion: { increment: 1 } } : {}),
+            ...(storesChanged && !hashed ? { authVersion: { increment: 1 } } : {}),
           },
         })
         await tx.opLog.create({
@@ -214,6 +238,55 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
       throw error
     }
     return { message: '更新成功' }
+  })
+
+  // 调整用户门店集合（追加/移除门店；多店管理入口，朱成龙加江阴店走这里）
+  app.patch('/:id/stores', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role, userId: operatorId } = req.user
+    if (!['ADMIN', 'SUPER_ADMIN'].includes(role)) {
+      return reply.status(403).send({ error: '无权限' })
+    }
+    const idParsed = entityIdSchema.safeParse(req.params.id)
+    if (!idParsed.success) return reply.status(400).send({ error: '用户标识格式不正确' })
+    const parsed = updateUserStoresSchema.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const storeIds = normalizedStoreIds(parsed.data.storeIds, null)
+
+    const result = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`user:${idParsed.data}`}))::text AS locked`
+      const target = await tx.user.findFirst({ where: { id: idParsed.data, tenantId } })
+      if (!target) return { status: 404, error: '用户不存在' }
+      if (target.role === 'SUPER_ADMIN') return { status: 403, error: '不能修改超管账号' }
+      const stores = await tx.store.findMany({
+        where: { id: { in: storeIds }, tenantId },
+        select: { id: true, name: true, status: true },
+      })
+      if (stores.length !== storeIds.length) return { status: 400, error: '门店不存在或不属于当前租户' }
+      if (stores.some(s => s.status !== 'ENABLED')) return { status: 400, error: '存在已停用门店' }
+      const oldIds = target.storeIds?.length ? target.storeIds : (target.storeId ? [target.storeId] : [])
+      const added = storeIds.filter(id => !oldIds.includes(id))
+      const removed = oldIds.filter(id => !storeIds.includes(id))
+      if (added.length === 0 && removed.length === 0) return { status: 200, ok: true, unchanged: true }
+      await tx.user.update({
+        where: { id: target.id },
+        // 集合变化递增 authVersion：被移除门店的残余 token 立即失效
+        data: { storeId: storeIds[0] ?? null, storeIds, authVersion: { increment: 1 } },
+      })
+      const nameOf = (id: string) => stores.find(s => s.id === id)?.name || id
+      await tx.opLog.create({
+        data: {
+          tenantId, userId: operatorId, role,
+          action: `调整门店权限 ${target.name}（${ROLE_LABEL[target.role] || target.role}）`
+            + (added.length ? ` +${added.map(nameOf).join('、')}` : '')
+            + (removed.length ? ` -${removed.map(nameOf).join('、')}` : ''),
+          entityType: 'User', targetId: target.id,
+          metadata: { added, removed, storeIds },
+        },
+      })
+      return { status: 200, ok: true }
+    })
+    if ('error' in result) return reply.status(result.status).send({ error: result.error })
+    return { message: '门店权限已更新, 该用户需重新登录后生效' }
   })
 
   // 禁用/启用用户

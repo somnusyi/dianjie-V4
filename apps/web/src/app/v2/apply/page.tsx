@@ -10,6 +10,7 @@ import { useState, useEffect } from 'react'
 const ROLE_OPTIONS = [
   { value: 'MANAGER',         label: '店长' },
   { value: 'KITCHEN_LEAD',    label: '厨师长' },
+  { value: 'REGIONAL_MANAGER', label: '区域经理 (可管多家门店)' },
   { value: 'CHEF_DIRECTOR',   label: '总厨' },
   { value: 'FINANCE',         label: '财务' },
   { value: 'ENGINEERING',     label: '工程部' },
@@ -26,8 +27,9 @@ export default function ApplyPage() {
     requestedRole: 'MANAGER', reason: '',
     supplierId: '',     // SUPPLIER_STAFF 用
     supplierName: '',   // SUPPLIER_OWNER 用
-    requestedStoreId: '', // MANAGER / KITCHEN_LEAD 用
+    requestedStoreId: '', // MANAGER / KITCHEN_LEAD 用 (单店)
   })
+  const [requestedStoreIds, setRequestedStoreIds] = useState<string[]>([]) // REGIONAL_MANAGER 用 (多店)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState(false)
@@ -37,6 +39,7 @@ export default function ApplyPage() {
   const [loadingStores, setLoadingStores] = useState(false)
 
   const needsStore = ['MANAGER', 'KITCHEN_LEAD'].includes(form.requestedRole)
+  const needsMultiStore = form.requestedRole === 'REGIONAL_MANAGER'
 
   useEffect(() => {
     if (form.requestedRole !== 'SUPPLIER_STAFF' || suppliers.length > 0) return
@@ -48,16 +51,16 @@ export default function ApplyPage() {
       .finally(() => setLoadingSuppliers(false))
   }, [form.requestedRole, suppliers.length])
 
-  // 选择"店长/厨师长"时, 拉取门店列表
+  // 选择"店长/厨师长/区域经理"时, 拉取门店列表
   useEffect(() => {
-    if (!needsStore || stores.length > 0) return
+    if ((!needsStore && !needsMultiStore) || stores.length > 0) return
     setLoadingStores(true)
     fetch('/api/auth/store-list')
       .then(r => r.json())
       .then((d) => { if (Array.isArray(d)) setStores(d) })
       .catch(() => {})
       .finally(() => setLoadingStores(false))
-  }, [needsStore, stores.length])
+  }, [needsStore, needsMultiStore, stores.length])
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -75,6 +78,9 @@ export default function ApplyPage() {
     if (needsStore && !form.requestedStoreId) {
       return setError('请选择所属门店')
     }
+    if (needsMultiStore && requestedStoreIds.length === 0) {
+      return setError('区域经理请至少选择一家门店')
+    }
 
     setSubmitting(true)
     try {
@@ -88,6 +94,7 @@ export default function ApplyPage() {
       if (form.requestedRole === 'SUPPLIER_OWNER') body.supplierName = form.supplierName.trim()
       if (form.requestedRole === 'SUPPLIER_STAFF') body.supplierId = form.supplierId
       if (needsStore) body.requestedStoreId = form.requestedStoreId
+      if (needsMultiStore) body.requestedStoreIds = requestedStoreIds
       const res = await fetch('/api/auth/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -180,6 +187,31 @@ export default function ApplyPage() {
                 </select>
               )}
               <p className="text-micro text-gray3 mt-1">{form.requestedRole === 'MANAGER' ? '店长' : '厨师长'} 角色严格按本店数据隔离, 不能查看其它门店。</p>
+            </div>
+          )}
+
+          {/* 区域经理 → 多选门店 */}
+          {needsMultiStore && (
+            <div className="bg-white rounded-card border border-border p-3">
+              <label className="text-micro text-gray3 block mb-1">管辖门店 * (可多选)</label>
+              {loadingStores ? (
+                <div className="text-caption text-gray3">加载中…</div>
+              ) : stores.length === 0 ? (
+                <div className="text-caption text-gray3">暂无可选门店, 请联系老板创建</div>
+              ) : (
+                <div className="space-y-1 max-h-48 overflow-y-auto">
+                  {stores.map(s => (
+                    <label key={s.id} className="flex items-center gap-2 bg-bg rounded p-2 text-body">
+                      <input type="checkbox" checked={requestedStoreIds.includes(s.id)}
+                        onChange={e => setRequestedStoreIds(e.target.checked
+                          ? [...requestedStoreIds, s.id]
+                          : requestedStoreIds.filter(id => id !== s.id))} />
+                      {s.no ? `${s.no} · ${s.name}` : s.name}
+                    </label>
+                  ))}
+                </div>
+              )}
+              <p className="text-micro text-gray3 mt-1">区域经理可查看所选门店的数据, 审批时老板可再调整。</p>
             </div>
           )}
 

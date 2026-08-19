@@ -170,7 +170,8 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
       // 5. 把 token 通过 hash 传给前端, 前端 setSession 后跳目标页
       const base = process.env.WECOM_REDIRECT_BASE || 'https://www.njdianjie.com'
       const userJson = encodeURIComponent(JSON.stringify({
-        id: user.id, name: user.name, role: user.role, storeId: user.storeId, supplierId: user.supplierId,
+        id: user.id, name: user.name, role: user.role, storeId: user.storeId,
+        storeIds: user.storeIds, supplierId: user.supplierId,
       }))
       return reply.redirect(`${base}/v2/wecom-bridge#token=${token}&refreshToken=${refreshToken}&user=${userJson}&tenant=${tenantSlug}&redirect=${encodeURIComponent(redirect || '/')}`)
     } catch (e: any) {

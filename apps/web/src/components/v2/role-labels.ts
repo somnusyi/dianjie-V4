@@ -6,6 +6,7 @@ export const ROLE_LABELS: Record<string, string> = {
   FINANCE:        '财务',
   MANAGER:        '店长',
   PURCHASER:      '店长',
+  REGIONAL_MANAGER: '区域经理',
   KITCHEN_LEAD:   '厨师长',
   CHEF_DIRECTOR:  '总厨',
   CHEF:           '总厨',

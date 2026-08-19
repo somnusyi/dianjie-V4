@@ -11,7 +11,7 @@ import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import dayjs from 'dayjs'
 import { monthRangeForDateCol } from '../lib/dateRange'
-import { isStoreScoped } from '../lib/auth-scope'
+import { isStoreScoped, resolveActiveStore } from '../lib/auth-scope'
 import { parseBoundedInteger } from '../lib/pagination'
 import { normalizeDishName, normalizeVariantKey } from '../services/dailyBusinessImport'
 import { bomCalculationSnapshot, bomDateRangesOverlap, calculateBomConsumptions, isBomVersionEffective, selectEffectiveBomVersion } from '../services/bomLifecycle'
@@ -123,11 +123,9 @@ export function effectiveDishStatus(dish: { status: string; availableFrom: Date 
 
 function scopedStoreId(user: any, requestedStoreId?: string) {
   if (!isStoreScoped(user.role)) return requestedStoreId || null
-  if (!user.storeId) throw Object.assign(new Error('当前账号没有绑定门店'), { statusCode: 403 })
-  if (requestedStoreId && requestedStoreId !== user.storeId) {
-    throw Object.assign(new Error('只能操作当前账号绑定的门店'), { statusCode: 403 })
-  }
-  return user.storeId
+  const storeId = resolveActiveStore(user, requestedStoreId) // 越权抛 403（多店集合校验）
+  if (!storeId) throw Object.assign(new Error('当前账号没有绑定门店'), { statusCode: 403 })
+  return storeId
 }
 
 export const dishRoutes: FastifyPluginAsync = async (app) => {

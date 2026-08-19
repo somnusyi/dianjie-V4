@@ -21,6 +21,7 @@ import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { cashLedgerAccount, writeCashTransaction } from '../services/cashbook'
 import { createVoucher } from '../services/voucher'
+import { resolveActiveStore, storeScopeOf } from '../lib/auth-scope'
 
 const FINANCE_OR_BOSS = new Set(['ADMIN', 'SUPER_ADMIN', 'FINANCE'])
 const STORE_LEVEL = new Set(['MANAGER', 'KITCHEN_LEAD'])
@@ -59,10 +60,11 @@ export const capitalRoutes: FastifyPluginAsync = async (app) => {
     const { status, storeId: qStore } = req.query as any
     const where: any = { tenantId }
     if (status) where.status = status
-    // 店长只看自己店, 集团角色可查全部 / 按 store 过滤
+    // 门店级角色只看可访问集合（多店 storeIds）, 集团角色可查全部 / 按 store 过滤
     if (STORE_LEVEL.has(role)) {
-      if (!storeId) return []
-      where.storeId = storeId
+      const scope = storeScopeOf(req.user) ?? []
+      if (scope.length === 0) return []
+      where.storeId = { in: scope }
     } else if (qStore) {
       where.storeId = qStore
     }
@@ -124,8 +126,8 @@ export const capitalRoutes: FastifyPluginAsync = async (app) => {
     }
     const { name, type = 'NEW_STORE', storeId, budget, repaymentTerms, note } = req.body as any
     if (!name?.trim()) return reply.status(400).send({ error: '请填项目名称' })
-    // 店长立项必须绑自己门店
-    const finalStoreId = STORE_LEVEL.has(role) ? userStoreId : (storeId || null)
+    // 门店级角色立项必须绑可访问集合内门店（默认第一家，可指定，越权抛 403）
+    const finalStoreId = STORE_LEVEL.has(role) ? (resolveActiveStore(req.user, storeId) ?? null) : (storeId || null)
     if (STORE_LEVEL.has(role) && !finalStoreId) {
       return reply.status(400).send({ error: '当前账号未绑定门店, 不能立项' })
     }

@@ -2,7 +2,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { notifyApprovalDone } from '../services/notification'
-import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
+import { isStoreScoped, isSupplierRole, resolveActiveStore, storeScopeOf } from '../lib/auth-scope'
 import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
@@ -29,7 +29,7 @@ export const scheduleRoutes: FastifyPluginAsync = async (app) => {
 
   // 列表
   app.get('/', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role, supplierId, storeId } = req.user
+    const { tenantId, role, supplierId } = req.user
     if (!GROUP_READ_ROLES.has(role)
         && !isSupplierRole(role)
         && !isStoreScoped(role)
@@ -39,12 +39,24 @@ export const scheduleRoutes: FastifyPluginAsync = async (app) => {
     const parsed = z.object({
       status: scheduleStatusSchema.optional(),
       days: z.string().regex(/^\d+$/).transform(Number).refine(value => value <= 365, 'days 最大为 365').optional(),
+      storeId: z.string().optional(), // 门店切换器注入或手动指定；门店级角色收窄到单店
     }).strict().safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
-    const { status, days } = parsed.data
+    const { status, days, storeId: requestedStoreId } = parsed.data
     const where: any = { tenantId }
     if (isSupplierRole(role)) where.supplierId = supplierId || '__NONE__'
-    if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
+    if (isStoreScoped(role)) {
+      const scope = storeScopeOf(req.user) ?? []
+      if (requestedStoreId) {
+        // 门店切换器指定单店：必须在可访问集合内（越权抛 403）
+        resolveActiveStore(req.user, requestedStoreId)
+        where.storeId = requestedStoreId
+      } else {
+        where.storeId = scope.length ? { in: scope } : '__NONE__'
+      }
+    } else if (requestedStoreId) {
+      where.storeId = requestedStoreId
+    }
     if (status) where.status = status
     if (days !== undefined) {
       const d = new Date()

@@ -3,13 +3,14 @@ import { Prisma } from '@dianjie/db'
 import { prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { businessDateKey } from '../lib/businessTime'
+import { storeScopeOf } from '../lib/auth-scope'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
-// 美团数据按租户门店隔离：门店角色（MANAGER）只看本店；
+// 美团数据按租户门店隔离：门店角色只看可访问门店集合（多店 storeIds）；
 // 集团角色看租户内全部已映射门店；storeId 为 null 的未映射历史订单仅超管可见。
 // MtOrder 模型没有 tenantId 列，租户边界经由 storeId → Store.tenantId 收敛。
-const STORE_SCOPED_ROLES = ['MANAGER']
+const STORE_SCOPED_ROLES = ['MANAGER', 'SUPERVISOR', 'REGIONAL_MANAGER']
 const TENANT_ROLES = ['SUPER_ADMIN', 'ADMIN', 'BOSS', 'FINANCE']
 const UNMAPPED_ROLES = ['SUPER_ADMIN', 'ADMIN']
 const allowedRoles = [...STORE_SCOPED_ROLES, ...TENANT_ROLES]
@@ -31,10 +32,10 @@ async function resolveMeituanScope(req: any, reply: any): Promise<MeituanScope |
   })
   const tenantStoreIds = tenantStores.map(s => s.id)
   if (STORE_SCOPED_ROLES.includes(role)) {
-    const storeId = req.user.storeId
+    const scope = storeScopeOf(req.user) ?? []
     // fail-closed：门店角色未绑定门店、或绑定门店不在本租户时，看不到任何订单
     return {
-      storeIds: storeId && tenantStoreIds.includes(storeId) ? [storeId] : [],
+      storeIds: scope.filter(id => tenantStoreIds.includes(id)),
       includeUnmapped: false,
     }
   }

@@ -11,7 +11,7 @@ import {
   type ImportIssue,
   type ParsedDailyFiles,
 } from '../services/dailyBusinessImport'
-import { isStoreScoped } from '../lib/auth-scope'
+import { isStoreScoped, resolveActiveStore, storeScopeOf } from '../lib/auth-scope'
 import { effectiveDishStatus } from './dishes'
 import { estimatedStoreInventory } from '../services/storeInventory'
 import {
@@ -238,11 +238,7 @@ function countByStatus(rows: Array<{ status: string }>) {
 }
 
 async function targetStore(user: any, requestedStoreId?: string | null) {
-  const isStoreRole = isStoreScoped(user.role)
-  if (isStoreRole && requestedStoreId && requestedStoreId !== user.storeId) {
-    throw Object.assign(new Error('只能操作当前账号绑定的门店'), { statusCode: 403 })
-  }
-  const storeId = isStoreRole ? user.storeId : (requestedStoreId || user.storeId)
+  const storeId = resolveActiveStore(user, requestedStoreId) ?? user.storeId // 越权抛 403（多店集合校验）
   if (!storeId) throw Object.assign(new Error('当前账号没有绑定门店'), { statusCode: 400 })
   const store = await prisma.store.findFirst({ where: { id: storeId, tenantId: user.tenantId } })
   if (!store) throw Object.assign(new Error('门店不存在或不属于当前租户'), { statusCode: 404 })
@@ -627,8 +623,20 @@ export const dailyBusinessImportRoutes: FastifyPluginAsync = async app => {
 
       let stores: Array<{ id: string; name: string; no: string }>
       if (isStoreScoped(req.user.role)) {
-        const store = await targetStore(req.user, parsedQuery.data.storeId)
-        stores = [{ id: store.id, name: store.name, no: store.no }]
+        if (parsedQuery.data.storeId) {
+          const store = await targetStore(req.user, parsedQuery.data.storeId)
+          stores = [{ id: store.id, name: store.name, no: store.no }]
+        } else {
+          // 多店角色未指定门店时，展示可访问集合内全部营业门店
+          const scope = storeScopeOf(req.user) ?? []
+          stores = scope.length
+            ? await prisma.store.findMany({
+                where: { id: { in: scope }, status: 'ENABLED' },
+                select: { id: true, name: true, no: true },
+                orderBy: [{ no: 'asc' }, { id: 'asc' }],
+              })
+            : []
+        }
       } else if (parsedQuery.data.storeId) {
         const store = await targetStore(req.user, parsedQuery.data.storeId)
         stores = [{ id: store.id, name: store.name, no: store.no }]

@@ -1,7 +1,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
-import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
+import { isStoreScoped, isSupplierRole, resolveActiveStore, storeScopeOf } from '../lib/auth-scope'
 import { monthRangeForDateCol } from '../lib/dateRange'
 
 export const revenueRoutes: FastifyPluginAsync = async (app) => {
@@ -19,12 +19,11 @@ export const revenueRoutes: FastifyPluginAsync = async (app) => {
   // 获取营业额列表
   app.get('/', auth, async (req: any) => {
     const { month } = req.query as any
-    const { tenantId, storeId, role } = req.user
+    const { tenantId, role } = req.user
+    const scope = storeScopeOf(req.user) // 多店集合；null = 非门店级角色
+    if (scope && scope.length === 0) return [] // 未绑定门店 → fail-closed
     const where: any = { store: { tenantId } }
-    if (isStoreScoped(role)) {
-      if (!storeId) return []
-      where.storeId = storeId
-    }
+    if (scope) where.storeId = { in: scope }
     if (month) {
       // RevenueRecord.date 是 PG DATE 列 (无时间), 需 UTC 边界防 timezone 跨日 bug
       const { start, end } = monthRangeForDateCol(month)
@@ -45,13 +44,14 @@ export const revenueRoutes: FastifyPluginAsync = async (app) => {
   const REVENUE_WRITE_ROLES = new Set(['MANAGER', 'ADMIN', 'FINANCE', 'SUPER_ADMIN'])
 
   app.post('/', auth, async (req: any, reply: any) => {
-    const { tenantId, storeId: userStoreId, role } = req.user
+    const { tenantId, role } = req.user
     if (!REVENUE_WRITE_ROLES.has(role)) {
       return reply.status(403).send({ error: '无权录入营业额' })
     }
     const { storeId, date, amount, source, channels } = req.body as any
 
-    const finalStoreId = isStoreScoped(role) ? userStoreId : storeId
+    // 门店级角色：可在自己集合内选店录入（默认第一家），越权抛 403；非门店级按传入门店
+    const finalStoreId = isStoreScoped(role) ? resolveActiveStore(req.user, storeId) : storeId
     if (!finalStoreId) return reply.status(400).send({ error: '请指定门店' })
     if (!date) return reply.status(400).send({ error: '请填写日期' })
 
@@ -154,13 +154,14 @@ export const revenueRoutes: FastifyPluginAsync = async (app) => {
   // 获取月度汇总
   app.get('/summary', auth, async (req: any) => {
     const { month } = req.query as any
-    const { tenantId, storeId, role } = req.user
+    const { tenantId, role } = req.user
     // RevenueRecord.date 是 PG DATE 列, 用 UTC 边界
     const { start, end } = monthRangeForDateCol(month || dayjs().format('YYYY-MM'))
     const where: any = { store: { tenantId }, date: { gte: start, lte: end } }
-    if (role === 'MANAGER') {
-      if (!storeId) return { month: month || dayjs().format('YYYY-MM'), total: 0, stores: [] }
-      where.storeId = storeId
+    if (isStoreScoped(role)) {
+      const scope = storeScopeOf(req.user) ?? []
+      if (scope.length === 0) return { month: month || dayjs().format('YYYY-MM'), total: 0, stores: [] }
+      where.storeId = { in: scope }
     }
     try {
       const records = await prisma.revenueRecord.findMany({

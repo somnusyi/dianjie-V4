@@ -6,7 +6,7 @@ import dayjs from 'dayjs'
 import { ensureReceiptDerivatives } from '../services/receiptDerivatives'
 import { invalidatePattern } from '../lib/cache'
 import { notifyReceiptConfirmed } from '../services/notification'
-import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
+import { isStoreScoped, isSupplierRole, resolveActiveStore, storeScopeOf } from '../lib/auth-scope'
 import {
   allowsSupplyDataRead,
   isInternalSupplyChainRole,
@@ -58,6 +58,7 @@ type ReceiptListContext = {
   tenantId: string
   role: string
   storeId?: string | null
+  storeIds?: string[] | null
   supplierId?: string | null
 }
 
@@ -66,7 +67,11 @@ export function buildReceiptListWhere(q: z.infer<typeof receiptListFilterSchema>
   const where: any = supplyDataReadScope(user)
   if (q.status) where.status = q.status
   if (q.supplierId && !isSupplierRole(role)) where.supplierId = q.supplierId
-  if (q.storeId && !isStoreScoped(role)) where.storeId = q.storeId
+  if (q.storeId) {
+    // 门店级角色指定门店时必须在可访问集合内（越权抛 403），并覆盖集合过滤收窄到单店
+    if (isStoreScoped(role)) resolveActiveStore(user, q.storeId)
+    where.storeId = q.storeId
+  }
   const and: any[] = []
   if (q.keyword) {
     and.push({
@@ -300,14 +305,15 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 补录入库单（非采购单流程，手动录入）────────────
   app.post('/', auth(app), async (req: any, reply: any) => {
-    const { tenantId, userId, role, storeId: userStoreId } = req.user
+    const { tenantId, userId, role } = req.user
     if (!canOperateReceipt(role)) return reply.status(403).send({ error: '仅门店店长、厨师长或品牌管理员可补录入库单' })
     const body = manualReceiptSchema.safeParse(req.body)
 
     if (!body.success) return reply.status(400).send({ error: body.error.issues[0].message })
     const { storeId, supplierId, deliveryDate, note, items, tempSupplierName, tempBankAccount, tempBankName } = body.data
 
-    if (isStoreScoped(role) && (!userStoreId || storeId !== userStoreId)) {
+    // 门店级角色：目标门店必须在可访问集合内（多店集合校验）
+    try { resolveActiveStore(req.user, storeId) } catch {
       return reply.status(403).send({ error: '只能为自己门店创建入库单' })
     }
     const [store, supplier, products] = await Promise.all([
@@ -402,7 +408,8 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, userId, role, storeId } = req.user
     if (!canOperateReceipt(role)) return reply.status(403).send({ error: '仅门店店长、厨师长或品牌管理员可确认入库' })
     const scopeWhere: any = { id: req.params.id, tenantId }
-    if (isStoreScoped(role)) scopeWhere.storeId = storeId || '__NONE__'
+    const scope = storeScopeOf(req.user) // 多店集合；null = 非门店级角色
+    if (scope) scopeWhere.storeId = scope.length ? { in: scope } : '__NONE__'
     const pendingWhere = { ...scopeWhere, status: { in: ['DRAFT', 'PENDING', 'PENDING_CONFIRM'] as const } }
     let receipt = await prisma.receipt.findFirst({
       where: pendingWhere,
@@ -472,7 +479,8 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     if (!body.success) return reply.status(400).send({ error: body.error.issues[0].message })
 
     const where: any = { id: req.params.id, tenantId, status: { in: ['PENDING', 'PENDING_CONFIRM'] } }
-    if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
+    const scope = storeScopeOf(req.user) // 多店集合；null = 非门店级角色
+    if (scope) where.storeId = scope.length ? { in: scope } : '__NONE__'
     const receipt = await prisma.receipt.findFirst({
       where,
       include: {
@@ -616,7 +624,8 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     const { reason } = parsed.data
 
     const where: any = { id: req.params.id, tenantId, status: { in: ['PENDING', 'PENDING_CONFIRM'] } }
-    if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
+    const scope = storeScopeOf(req.user) // 多店集合；null = 非门店级角色
+    if (scope) where.storeId = scope.length ? { in: scope } : '__NONE__'
     const receipt = await prisma.receipt.findFirst({
       where,
     })
@@ -690,7 +699,8 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: `${first.path.join('.')}: ${first.message}` })
     }
     const where: any = { id: req.params.id, tenantId }
-    if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
+    const scope = storeScopeOf(req.user) // 多店集合；null = 非门店级角色
+    if (scope) where.storeId = scope.length ? { in: scope } : '__NONE__'
     const receipt = await prisma.receipt.findFirst({
       where,
       select: {
@@ -775,7 +785,8 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, userId, role, storeId } = req.user
     if (!canOperateReceipt(role)) return reply.status(403).send({ error: '仅门店店长、厨师长或品牌管理员可作废入库单' })
     const where: any = { id: req.params.id, tenantId }
-    if (isStoreScoped(role)) where.storeId = storeId || '__NONE__'
+    const scope = storeScopeOf(req.user) // 多店集合；null = 非门店级角色
+    if (scope) where.storeId = scope.length ? { in: scope } : '__NONE__'
     const receipt = await prisma.receipt.findFirst({ where })
     if (!receipt) return reply.status(404).send({ error: '入库单不存在' })
     if (['ACCOUNTED', 'VOID', 'CONFIRMED'].includes(receipt.status)) {

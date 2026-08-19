@@ -302,13 +302,10 @@ describe('GET /api/inventory/consumptions — store scoping & permissions', () =
     expect(res.statusCode).toBe(404)
   })
 
-  it('forces store-scoped MANAGER to their bound store', async () => {
+  it('rejects out-of-scope storeId for store-scoped MANAGER (403)', async () => {
     const user = makeUser({ role: 'MANAGER', storeId: 'my-store' })
     const app = buildApp(user)
     await app.ready()
-
-    vi.spyOn(prisma.stockConsumption, 'findMany').mockResolvedValue([])
-    vi.spyOn(prisma.stockConsumption, 'count').mockResolvedValue(0)
 
     const res = await app.inject({
       method: 'GET',
@@ -316,9 +313,35 @@ describe('GET /api/inventory/consumptions — store scoping & permissions', () =
     })
     await app.close()
 
-    expect(res.statusCode).toBe(200)
-    const callArgs = vi.mocked(prisma.stockConsumption.findMany).mock.calls[0]?.[0] as any
+    expect(res.statusCode).toBe(403)
+  })
+
+  it('defaults store-scoped MANAGER to their bound store; multi-store can pick in-scope store', async () => {
+    const user = makeUser({ role: 'MANAGER', storeId: 'my-store', storeIds: ['my-store', 'second-store'] })
+    const app = buildApp(user)
+    await app.ready()
+
+    vi.spyOn(prisma.stockConsumption, 'findMany').mockResolvedValue([])
+    vi.spyOn(prisma.stockConsumption, 'count').mockResolvedValue(0)
+
+    // 未指定门店 → 默认集合第一家
+    const res1 = await app.inject({
+      method: 'GET',
+      url: '/api/inventory/consumptions?page=1&pageSize=10',
+    })
+    expect(res1.statusCode).toBe(200)
+    let callArgs = vi.mocked(prisma.stockConsumption.findMany).mock.calls[0]?.[0] as any
     expect(callArgs.where.storeId).toBe('my-store')
+
+    // 指定集合内第二家店 → 放行并收窄
+    const res2 = await app.inject({
+      method: 'GET',
+      url: '/api/inventory/consumptions?page=1&pageSize=10&storeId=second-store',
+    })
+    await app.close()
+    expect(res2.statusCode).toBe(200)
+    callArgs = vi.mocked(prisma.stockConsumption.findMany).mock.calls[1]?.[0] as any
+    expect(callArgs.where.storeId).toBe('second-store')
   })
 
   it('returns 400 when store-scoped role has no bound store', async () => {

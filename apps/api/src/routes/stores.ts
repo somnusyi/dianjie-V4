@@ -3,7 +3,7 @@ import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { z } from 'zod'
 import { cached, invalidatePattern } from '../lib/cache'
-import { isStoreScoped } from '../lib/auth-scope'
+import { isStoreScoped, resolveActiveStore, storeScopeOf } from '../lib/auth-scope'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const SENSITIVE_STORE_ROLES = new Set(['ADMIN', 'SUPER_ADMIN', 'FINANCE'])
@@ -34,12 +34,13 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 门店列表（含运营概览数据）────────────────────
   app.get('/', auth(app), async (req: any) => {
-    const { tenantId, role, storeId, userId } = req.user
+    const { tenantId, role, userId } = req.user
+    const scope = storeScopeOf(req.user) // 多店集合；null = 非门店级角色
+    if (scope && scope.length === 0) return [] // 门店级角色未绑定门店 → fail-closed
     if (!SENSITIVE_STORE_ROLES.has(role)) {
       const safeWhere: any = { tenantId }
-      if (isStoreScoped(role)) {
-        if (!storeId) return []
-        safeWhere.id = storeId
+      if (scope) {
+        safeWhere.id = { in: scope }
       } else if (role === 'ENGINEERING') {
         safeWhere.engineerId = userId
       } else {
@@ -48,13 +49,13 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
       }
       return prisma.store.findMany({ where: safeWhere, select: SAFE_STORE_SELECT, orderBy: { no: 'asc' } })
     }
-    const cacheKey = `stores:list:${tenantId}:${role}:${storeId || 'all'}:${role === 'ENGINEERING' ? userId : 'x'}`
+    const cacheKey = `stores:list:${tenantId}:${role}:${scope ? scope.join(',') : 'all'}:${role === 'ENGINEERING' ? userId : 'x'}`
     return cached(cacheKey, 300, async () => {
     const monthStart = dayjs().startOf('month').toDate()
 
-    // 店长只能看自己门店
+    // 门店级角色只看自己可访问的门店集合
     const where: any = { tenantId }
-    if (isStoreScoped(role)) where.id = storeId
+    if (scope) where.id = { in: scope }
     // 工程部只看自己负责的筹建店
     if (role === 'ENGINEERING') where.engineerId = userId
 
@@ -148,11 +149,11 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 单门店详情（运营档案）────────────────────────
   app.get('/:id', auth(app), async (req: any) => {
-    const { tenantId, role, storeId: userStoreId } = req.user
+    const { tenantId, role } = req.user
     const { id } = req.params as any
 
-    // 店长只能看自己
-    if (isStoreScoped(role) && id !== userStoreId) throw { statusCode: 403, message: '无权限' }
+    // 门店级角色只能看自己可访问集合内的门店（多店集合校验，越权抛 403）
+    resolveActiveStore(req.user, isStoreScoped(role) ? id : null)
 
     if (!SENSITIVE_STORE_ROLES.has(role)) {
       const safeWhere: any = { id, tenantId }
@@ -380,8 +381,11 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
     if (!['ADMIN','SUPER_ADMIN','FINANCE','MANAGER'].includes(role)) {
       return reply.status(403).send({ error: '无权限' })
     }
-    if (role === 'MANAGER' && req.params.id !== req.user.storeId) {
-      return reply.status(403).send({ error: '只能查看本门店收款配置' })
+    if (role === 'MANAGER') {
+      // 多店店长：目标门店必须在可访问集合内（越权抛 403）
+      try { resolveActiveStore(req.user, req.params.id) } catch {
+        return reply.status(403).send({ error: '只能查看本门店收款配置' })
+      }
     }
     const s = await prisma.store.findFirst({
       where: { id: req.params.id, tenantId },

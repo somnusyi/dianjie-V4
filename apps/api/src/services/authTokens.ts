@@ -14,6 +14,7 @@ type SessionUser = {
   tenantId: string
   role: string
   storeId?: string | null
+  storeIds?: string[] | null
   supplierId?: string | null
   authVersion?: number
 }
@@ -24,6 +25,10 @@ export function issueAccessToken(jwt: JwtSigner, user: SessionUser) {
     tenantId: user.tenantId,
     role: user.role,
     storeId: user.storeId || null,
+    // 多店数据范围入 token；空数组回退单店，老 token 无此字段时由 auth-scope 回退 storeId
+    storeIds: (user.storeIds && user.storeIds.length > 0)
+      ? user.storeIds
+      : (user.storeId ? [user.storeId] : []),
     supplierId: user.supplierId || null,
     jti: crypto.randomUUID(),
     typ: 'access',

@@ -1,4 +1,4 @@
-import { isStoreScoped, requireSupplierBinding } from './auth-scope'
+import { storeScopeOf, requireSupplierBinding } from './auth-scope'
 
 export const INTERNAL_SUPPLY_CHAIN_ROLE = 'SUPPLY_CHAIN'
 
@@ -65,25 +65,29 @@ type SupplyDataReadUser = {
   tenantId: string
   role?: string | null
   storeId?: string | null
+  storeIds?: string[] | null
   supplierId?: string | null
 }
 
 /**
  * Base scope for tenant-owned supply documents.
  *
- * Internal supply-chain users are intentionally tenant-wide. Store roles and
- * external supplier roles remain fail-closed when their required binding is
- * absent, so neither can fall back to a tenant-wide query.
+ * Internal supply-chain users are intentionally tenant-wide. Store roles are
+ * limited to their accessible store set (multi-store via storeIds) and remain
+ * fail-closed when no store is bound; external supplier roles likewise fail
+ * closed when their binding is absent, so neither can fall back to a
+ * tenant-wide query.
  */
 export function supplyDataReadScope(user: SupplyDataReadUser): {
   tenantId: string
-  storeId?: string
+  storeId?: string | { in: string[] }
   supplierId?: string
 } {
-  const where: { tenantId: string; storeId?: string; supplierId?: string } = {
+  const where: { tenantId: string; storeId?: string | { in: string[] }; supplierId?: string } = {
     tenantId: user.tenantId,
   }
-  if (isStoreScoped(user.role)) where.storeId = user.storeId || '__NONE__'
+  const scope = storeScopeOf(user)
+  if (scope) where.storeId = scope.length ? { in: scope } : '__NONE__'
   const supplierId = requireSupplierBinding(user.role, user.supplierId)
   if (supplierId) where.supplierId = supplierId
   return where

@@ -2239,6 +2239,7 @@ enum Role {
   ENGINEERING // 工程部（开店前: 选址 / 装修 / 物料 / 证照）
   SUPERVISOR // 主管(本店有限事务, 比店长低半级)
   STAFF // 一线员工(暂不开滇界账号, 留口位)
+  REGIONAL_MANAGER // 区域经理（指派门店集合 storeIds，机制同店长）
 }
 
 enum UserStatus {
@@ -2263,6 +2264,8 @@ model UserApplication {
 
   // 门店绑定 (requestedRole 为 MANAGER / KITCHEN_LEAD 时必填; 老板审批时预填可改)
   requestedStoreId String?
+  // 多店申请：审批通过后写入 users.storeIds；为空时回退 requestedStoreId 单店
+  requestedStoreIds String[] @default([])
 
   status       ApplicationStatus @default(PENDING)
   decidedById  String?
@@ -2286,7 +2289,8 @@ model InviteToken {
   tenantId         String
   token            String    @unique // url-safe 32+ chars
   role             Role
-  storeId          String? // MANAGER/KITCHEN_LEAD 必填
+  storeId          String? // MANAGER/KITCHEN_LEAD 必填 (DEPRECATED 单店, 用 storeIds[]; 兼容期保留)
+  storeIds         String[]  @default([]) // 多店邀请：激活后写入 users.storeIds；为空回退 storeId
   supplierId       String? // SUPPLIER_OWNER/STAFF 必填
   invitedById      String // 谁发的
   note             String? // 备注: "翠湖店店长 张三"

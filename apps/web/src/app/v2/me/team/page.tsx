@@ -10,6 +10,8 @@ import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 const ROLE_OPTIONS = [
   { value: 'MANAGER',        label: '店长' },
   { value: 'KITCHEN_LEAD',   label: '厨师长' },
+  { value: 'REGIONAL_MANAGER', label: '区域经理 (多店)' },
+  { value: 'SUPERVISOR',     label: '主管' },
   { value: 'CHEF_DIRECTOR',  label: '总厨' },
   { value: 'FINANCE',        label: '财务' },
   { value: 'PURCHASER',      label: '采购' },
@@ -41,9 +43,11 @@ export default function TeamPage() {
   const [form, setForm] = useState({
     name: '', phone: '', password: '', role: 'MANAGER', storeId: '',
   })
+  const [formStoreIds, setFormStoreIds] = useState<string[]>([]) // REGIONAL_MANAGER 多店
   const [showInvite, setShowInvite] = useState(false)
   const [inviteRole, setInviteRole] = useState<string>('MANAGER')
   const [inviteStoreId, setInviteStoreId] = useState('')
+  const [inviteStoreIds, setInviteStoreIds] = useState<string[]>([]) // REGIONAL_MANAGER 多店
   const [inviteNote, setInviteNote] = useState('')
   const [inviteResult, setInviteResult] = useState<{ token: string; expiresAt: string } | null>(null)
 
@@ -85,6 +89,10 @@ export default function TeamPage() {
       setError('店长必须绑定门店')
       return
     }
+    if (form.role === 'REGIONAL_MANAGER' && formStoreIds.length === 0) {
+      setError('区域经理必须至少绑定一家门店')
+      return
+    }
     try {
       const t = getToken()
       const res = await fetch('/api/users', {
@@ -95,12 +103,14 @@ export default function TeamPage() {
           phone: form.phone.trim(),
           password: form.password,
           role: form.role,
-          storeId: form.storeId || undefined,
+          storeId: form.role === 'REGIONAL_MANAGER' ? undefined : (form.storeId || undefined),
+          storeIds: form.role === 'REGIONAL_MANAGER' ? formStoreIds : undefined,
         }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || '创建失败')
       setForm({ name: '', phone: '', password: '', role: 'MANAGER', storeId: '' })
+      setFormStoreIds([])
       setShowForm(false)
       refresh()
     } catch (e: any) {
@@ -130,6 +140,9 @@ export default function TeamPage() {
     if ((inviteRole === 'MANAGER') && !inviteStoreId) {
       return setError('店长必须选门店')
     }
+    if (inviteRole === 'REGIONAL_MANAGER' && inviteStoreIds.length === 0) {
+      return setError('区域经理必须至少选一家门店')
+    }
     try {
       const t = getToken()
       const res = await fetch('/api/invites', {
@@ -137,7 +150,8 @@ export default function TeamPage() {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${t}` },
         body: JSON.stringify({
           role: inviteRole,
-          storeId: inviteStoreId || undefined,
+          storeId: inviteRole === 'REGIONAL_MANAGER' ? undefined : (inviteStoreId || undefined),
+          storeIds: inviteRole === 'REGIONAL_MANAGER' ? inviteStoreIds : undefined,
           note: inviteNote.trim() || undefined,
           expiresHours: 24,
         }),
@@ -176,7 +190,7 @@ export default function TeamPage() {
         <a href="/v2/me" className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</a>
         <h1 className="text-h1 flex-1">团队成员</h1>
         <button
-          onClick={() => { setShowInvite(true); setInviteRole('MANAGER'); setInviteStoreId(''); setInviteNote(''); setInviteResult(null); setError(null) }}
+          onClick={() => { setShowInvite(true); setInviteRole('MANAGER'); setInviteStoreId(''); setInviteStoreIds([]); setInviteNote(''); setInviteResult(null); setError(null) }}
           className="px-3 py-2 bg-white border border-border text-button rounded-cta"
         >
           邀请链接
@@ -272,7 +286,7 @@ export default function TeamPage() {
               </div>
               <div>
                 <label className="text-micro text-gray3 block mb-1">角色</label>
-                <select value={form.role} onChange={e => setForm({...form, role: e.target.value, storeId: ''})}
+                <select value={form.role} onChange={e => { setForm({...form, role: e.target.value, storeId: ''}); setFormStoreIds([]) }}
                   className="w-full bg-bg rounded p-2 outline-none text-body">
                   {ROLE_OPTIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
                 </select>
@@ -285,6 +299,20 @@ export default function TeamPage() {
                     <option value="">{stores.length === 0 ? '请先去创建门店' : '请选择门店'}</option>
                     {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
+                </div>
+              )}
+              {form.role === 'REGIONAL_MANAGER' && (
+                <div>
+                  <label className="text-micro text-gray3 block mb-1">绑定门店 (可多选, 至少一家)</label>
+                  <div className="space-y-1 max-h-48 overflow-y-auto">
+                    {stores.map(s => (
+                      <label key={s.id} className="flex items-center gap-2 bg-bg rounded p-2 text-body">
+                        <input type="checkbox" checked={formStoreIds.includes(s.id)}
+                          onChange={e => setFormStoreIds(e.target.checked ? [...formStoreIds, s.id] : formStoreIds.filter(id => id !== s.id))} />
+                        {s.name}
+                      </label>
+                    ))}
+                  </div>
                 </div>
               )}
               {error && <div className="bg-red-bg text-red-fg rounded p-2 text-caption">{error}</div>}
@@ -308,7 +336,7 @@ export default function TeamPage() {
               <div className="space-y-3">
                 <div>
                   <label className="text-micro text-gray3 block mb-1">角色</label>
-                  <select value={inviteRole} onChange={e => { setInviteRole(e.target.value); setInviteStoreId('') }}
+                  <select value={inviteRole} onChange={e => { setInviteRole(e.target.value); setInviteStoreId(''); setInviteStoreIds([]) }}
                     className="w-full bg-bg rounded p-2 outline-none text-body">
                     {ROLE_OPTIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
                   </select>
@@ -321,6 +349,20 @@ export default function TeamPage() {
                       <option value="">{stores.length === 0 ? '请先创建门店' : '请选择门店'}</option>
                       {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                     </select>
+                  </div>
+                )}
+                {inviteRole === 'REGIONAL_MANAGER' && (
+                  <div>
+                    <label className="text-micro text-gray3 block mb-1">绑定门店 (可多选, 至少一家)</label>
+                    <div className="space-y-1 max-h-48 overflow-y-auto">
+                      {stores.map(s => (
+                        <label key={s.id} className="flex items-center gap-2 bg-bg rounded p-2 text-body">
+                          <input type="checkbox" checked={inviteStoreIds.includes(s.id)}
+                            onChange={e => setInviteStoreIds(e.target.checked ? [...inviteStoreIds, s.id] : inviteStoreIds.filter(id => id !== s.id))} />
+                          {s.name}
+                        </label>
+                      ))}
+                    </div>
                   </div>
                 )}
                 <div>

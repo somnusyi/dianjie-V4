@@ -2,7 +2,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { cached } from '../lib/cache'
-import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
+import { isSupplierRole, storeScopeOf } from '../lib/auth-scope'
 
 export const dashboardRoutes: FastifyPluginAsync = async (app) => {
 
@@ -17,18 +17,19 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 总部看板数据 ──────────────────────────────────
   app.get('/stats', { preHandler: [(app as any).authenticate, denySupplier] }, async (req: any) => {
-    const { tenantId, role, storeId } = req.user
-    const cacheKey = `dashboard:stats:${tenantId}:${role}:${storeId || 'all'}`
+    const { tenantId, role } = req.user
+    const scope = storeScopeOf(req.user) // 多店集合；null = 非门店级角色
+    const cacheKey = `dashboard:stats:${tenantId}:${role}:${scope ? scope.join(',') : 'all'}`
     return cached(cacheKey, 300, async () => {
     const now = dayjs()
     const monthStart = now.startOf('month').toDate()
     const lastMonthStart = now.subtract(1, 'month').startOf('month').toDate()
     const lastMonthEnd = now.subtract(1, 'month').endOf('month').toDate()
 
-    // 门店级角色（店长/总厨/采购）只看自己门店
-    const storeFilter = isStoreScoped(role) && storeId ? { storeId } : {}
-    const scheduleStoreFilter = isStoreScoped(role) && storeId
-      ? { receipt: { storeId } } : {}
+    // 门店级角色只看自己可访问的门店集合；空集合 fail-closed（in: [] 不命中任何行）
+    const storeFilter = scope ? { storeId: { in: scope } } : {}
+    const scheduleStoreFilter = scope
+      ? { receipt: { storeId: { in: scope } } } : {}
 
     const [
       monthPurchase, lastMonthPurchase,
@@ -145,10 +146,11 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 采购趋势（近30天）────────────────────────────
   app.get('/purchase-trend', { preHandler: [(app as any).authenticate, denySupplier] }, async (req: any) => {
-    const { tenantId, role, storeId } = req.user
+    const { tenantId, role } = req.user
     const { days = 30 } = req.query as any
     const since = dayjs().subtract(Number(days), 'day').startOf('day').toDate()
-    const storeFilter = isStoreScoped(role) && storeId ? { storeId } : {}
+    const scope = storeScopeOf(req.user) // 多店集合；null = 非门店级角色
+    const storeFilter = scope ? { storeId: { in: scope } } : {}
 
     const receipts = await prisma.receipt.findMany({
       where: { tenantId, status: { notIn: ['VOID','REJECTED'] }, createdAt: { gte: since }, ...storeFilter },

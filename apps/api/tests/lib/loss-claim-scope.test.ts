@@ -20,10 +20,14 @@ describe('lossClaimScope', () => {
     expect(canHandleArrivalDifference('FINANCE')).toBe(false)
   })
 
-  it('门店角色限定租户和门店', () => {
+  it('门店角色限定租户和门店（多店集合）', () => {
     expect(lossClaimScope({ tenantId: 'tenant-a', role: 'KITCHEN_LEAD', storeId: 'store-a' })).toEqual({
       tenantId: 'tenant-a',
-      storeId: 'store-a',
+      storeId: { in: ['store-a'] },
+    })
+    expect(lossClaimScope({ tenantId: 'tenant-a', role: 'MANAGER', storeId: 'store-a', storeIds: ['store-a', 'store-b'] })).toEqual({
+      tenantId: 'tenant-a',
+      storeId: { in: ['store-a', 'store-b'] },
     })
   })
 

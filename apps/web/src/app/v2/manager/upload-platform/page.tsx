@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
-import { apiFetch, getUser } from '@/lib/v2-auth'
+import { apiFetch, getUser, getActiveStoreId } from '@/lib/v2-auth'
 import { canConfirmDailyImport, formatUploadFileSize, IMPORT_STATUS, splitDailyImportIssues, type DailyImportStatus } from './upload-state'
 
 type Issue = { code: string; message: string; detail?: string }
@@ -97,7 +97,10 @@ export default function DailyBusinessUploadPage() {
       const form = new FormData()
       form.append('businessFile', businessFile)
       form.append('salesFile', salesFile)
-      if (user?.storeId) form.append('storeId', user.storeId)
+      // 多店：优先活动门店（切换器），回退账号默认店
+      const activeStore = getActiveStoreId()
+      if (activeStore) form.append('storeId', activeStore)
+      else if (user?.storeId) form.append('storeId', user.storeId)
       const result = await apiFetch<ImportRecord>('/api/daily-business-imports/preview', { method: 'POST', body: form })
       setPreview(result)
       await loadStatus(true)

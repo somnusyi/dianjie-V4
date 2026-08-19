@@ -11,7 +11,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { Prisma, prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
-import { isStoreScoped } from '../lib/auth-scope'
+import { resolveActiveStore } from '../lib/auth-scope'
 import { hasInternalSupplyChainCapability, isInternalSupplyChainRole } from '../lib/internal-supply-chain-access'
 import { monthRangeForDateCol } from '../lib/dateRange'
 import {
@@ -49,16 +49,13 @@ export const consumptionRoutes: FastifyPluginAsync = async app => {
 
   // 权限 + 门店归属校验; 失败时已写响应并返回 null
   async function resolveStore(req: any, reply: any): Promise<string | null> {
-    const { tenantId, role, storeId: userStoreId } = req.user
+    const { tenantId, role } = req.user
     if (!canViewConsumption(role)) {
       await reply.status(403).send({ error: '无权查看门店消耗' })
       return null
     }
     const { storeId } = req.params
-    if (isStoreScoped(role) && userStoreId !== storeId) {
-      await reply.status(403).send({ error: '无权查看该门店' })
-      return null
-    }
+    resolveActiveStore(req.user, storeId) // 越权抛 403（多店集合校验）
     const store = await prisma.store.findFirst({ where: { id: storeId, tenantId }, select: { id: true } })
     if (!store) {
       await reply.status(404).send({ error: '门店不存在或不属于当前租户' })
@@ -295,7 +292,7 @@ export const consumptionAdminRoutes: FastifyPluginAsync = async app => {
   // consumptionCost: 当日 stock_consumptions (排除作废) costAmountSnapshot 合计
   // revenue: 当日 RevenueRecord.amount; costRate = consumptionCost/revenue×100 (revenue=0 时 null)
   app.get('/daily-series', auth, async (req: any, reply: any) => {
-    const { tenantId, role, storeId: userStoreId } = req.user
+    const { tenantId, role } = req.user
     // 此端点把 RevenueRecord 与消耗成本率一起返回，不属于纯消耗读取能力。
     // 内部供应链必须在任何门店或 RevenueRecord 查询之前拒绝。
     if (isInternalSupplyChainRole(role)) {
@@ -306,9 +303,7 @@ export const consumptionAdminRoutes: FastifyPluginAsync = async app => {
     }
     const storeId = String(req.query?.storeId || '')
     if (!storeId) return reply.status(400).send({ error: '请指定门店' })
-    if (isStoreScoped(role) && userStoreId !== storeId) {
-      return reply.status(403).send({ error: '无权查看该门店' })
-    }
+    resolveActiveStore(req.user, storeId) // 越权抛 403（多店集合校验）
     const month = String(req.query?.month || '')
     if (!MONTH_RE.test(month)) return reply.status(400).send({ error: '月份格式应为 YYYY-MM' })
     const store = await prisma.store.findFirst({ where: { id: storeId, tenantId }, select: { id: true } })

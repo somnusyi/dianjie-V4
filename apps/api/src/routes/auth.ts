@@ -29,6 +29,18 @@ const changePasswordSchema = z.object({
 
 const PHONE_RE = /^1[3-9]\d{9}$/
 
+// 多店门店列表：按 storeIds 顺序回 id/name/no，供前端门店切换器渲染；空集合回退单店 store
+async function loadScopeStores(user: { storeId: string | null; storeIds: string[] }) {
+  const ids = user.storeIds?.length ? user.storeIds : (user.storeId ? [user.storeId] : [])
+  if (ids.length === 0) return []
+  const rows = await prisma.store.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, name: true, no: true },
+  })
+  const rank = new Map(ids.map((id, i) => [id, i]))
+  return rows.sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0))
+}
+
 export const authRoutes: FastifyPluginAsync = async (app) => {
 
   // POST /api/auth/login — 单独限流防密码爆破 (10 次/分钟/IP, 同事 c2a4470 引入, 保留)
@@ -100,6 +112,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         email: user.email,
         role: user.role,
         storeId: user.storeId,
+        storeIds: user.storeIds,
+        stores: await loadScopeStores(user),
         supplierId: user.supplierId,
         store: user.store,
         supplier: user.supplier,
@@ -153,7 +167,9 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       expiresInMs: ACCESS_TTL_MS,
       user: {
         id: user.id, name: user.name, email: user.email, role: user.role,
-        storeId: user.storeId, supplierId: user.supplierId,
+        storeId: user.storeId, storeIds: user.storeIds,
+        stores: await loadScopeStores(user),
+        supplierId: user.supplierId,
         store: user.store, supplier: user.supplier,
       },
     })
@@ -175,6 +191,9 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       name: user.name,
       email: user.email,
       role: user.role,
+      storeId: user.storeId,
+      storeIds: user.storeIds,
+      stores: await loadScopeStores(user),
       store: user.store,
       supplier: user.supplier,
       tenantId,

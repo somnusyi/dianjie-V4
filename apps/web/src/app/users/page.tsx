@@ -6,24 +6,36 @@ import api from '@/lib/api'
 import dayjs from 'dayjs'
 
 const ROLES = [
-  { value: 'MANAGER',       label: '店长' },
-  { value: 'CHEF',          label: '总厨' },
-  { value: 'FINANCE',       label: '财务' },
-
-  { value: 'ADMIN',         label: '管理员' },
-  { value: 'SUPPLIER_STAFF',label: '供应商' },
+  { value: 'MANAGER',          label: '店长' },
+  { value: 'KITCHEN_LEAD',     label: '厨师长' },
+  { value: 'SUPERVISOR',       label: '主管' },
+  { value: 'REGIONAL_MANAGER', label: '区域经理' },
+  { value: 'CHEF_DIRECTOR',    label: '总厨（集团）' },
+  { value: 'CHEF',             label: '总厨（旧）' },
+  { value: 'FINANCE',          label: '财务' },
+  { value: 'SUPPLY_CHAIN',     label: '内部供应链' },
+  { value: 'ENGINEERING',      label: '工程部' },
+  { value: 'ADMIN',            label: '管理员' },
+  { value: 'SUPPLIER_STAFF',   label: '供应商' },
 ]
 
 const ROLE_COLOR: Record<string, string> = {
   SUPER_ADMIN: '#7c3aed', ADMIN: '#2563eb', FINANCE: '#0891b2',
   MANAGER: '#156b43', PURCHASER: '#d97706', SUPPLIER_STAFF: '#9ca3af',
+  KITCHEN_LEAD: '#b45309', SUPERVISOR: '#65a30d', REGIONAL_MANAGER: '#0d9488',
+  CHEF_DIRECTOR: '#b45309', SUPPLY_CHAIN: '#475569', ENGINEERING: '#64748b',
 }
 const ROLE_LABEL: Record<string, string> = {
   SUPER_ADMIN: '超管', ADMIN: '管理员', FINANCE: '财务',
   MANAGER: '店长', PURCHASER: '采购', SUPPLIER_STAFF: '供应商',
+  KITCHEN_LEAD: '厨师长', SUPERVISOR: '主管', REGIONAL_MANAGER: '区域经理',
+  CHEF_DIRECTOR: '总厨', CHEF: '总厨', SUPPLY_CHAIN: '内部供应链', ENGINEERING: '工程部',
 }
 
-const emptyForm = { name: '', email: '', phone: '', password: '', role: 'MANAGER', storeId: '' }
+// 必须绑定门店的角色（可多店）
+const STORE_BOUND_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'CHEF', 'SUPERVISOR', 'REGIONAL_MANAGER'])
+
+const emptyForm = { name: '', email: '', phone: '', password: '', role: 'MANAGER', storeIds: [] as string[] }
 
 export default function UsersPage() {
   const [users, setUsers] = useState<any[]>([])
@@ -58,15 +70,19 @@ export default function UsersPage() {
 
   const openEdit = (u: any) => {
     setEditing(u)
-    setForm({ name: u.name, email: u.email, phone: u.phone || '', password: '', role: u.role, storeId: u.storeId || '' })
+    setForm({
+      name: u.name, email: u.email, phone: u.phone || '', password: '', role: u.role,
+      storeIds: u.storeIds?.length ? u.storeIds : (u.storeId ? [u.storeId] : []),
+    })
     setShowForm(true)
   }
 
   const submit = async () => {
     if (!form.name || !form.email) return show('姓名和邮箱必填', 'error')
     if (!editing && !form.password) return show('新建用户必须设置密码', 'error')
+    if (STORE_BOUND_ROLES.has(form.role) && form.storeIds.length === 0) return show('该角色必须绑定至少一家门店', 'error')
     try {
-      const payload: any = { name: form.name, email: form.email, phone: form.phone, role: form.role, storeId: form.storeId || null }
+      const payload: any = { name: form.name, email: form.email, phone: form.phone, role: form.role, storeIds: form.storeIds }
       if (form.password) payload.password = form.password
       if (editing) {
         await api.patch(`/api/users/${editing.id}`, payload)
@@ -76,6 +92,23 @@ export default function UsersPage() {
         show('创建成功')
       }
       setShowForm(false)
+      load()
+    } catch (e: any) { show(e.response?.data?.error || '操作失败', 'error') }
+  }
+
+  // ── 调整门店（多店权限快捷入口）─────────────────────
+  const [storeTarget, setStoreTarget] = useState<any>(null)
+  const [storePick, setStorePick] = useState<string[]>([])
+  const openStoreEditor = (u: any) => {
+    setStoreTarget(u)
+    setStorePick(u.storeIds?.length ? [...u.storeIds] : (u.storeId ? [u.storeId] : []))
+  }
+  const saveStores = async () => {
+    if (storePick.length === 0) return show('至少保留一家门店', 'error')
+    try {
+      const r = await api.patch(`/api/users/${storeTarget.id}/stores`, { storeIds: storePick })
+      show(r.data.message || '门店权限已更新')
+      setStoreTarget(null)
       load()
     } catch (e: any) { show(e.response?.data?.error || '操作失败', 'error') }
   }
@@ -103,6 +136,14 @@ export default function UsersPage() {
     if (filterStatus && u.status !== filterStatus) return false
     return true
   })
+
+  const storeNameOf = (id: string) => stores.find(s => s.id === id)?.name?.replace('滇界·', '') || id
+  const userStoreNames = (u: any): string[] => {
+    const ids: string[] = u.storeIds?.length ? u.storeIds : (u.storeId ? [u.storeId] : [])
+    return ids.map(storeNameOf)
+  }
+  const toggleStoreIn = (list: string[], id: string, setter: (v: string[]) => void) =>
+    setter(list.includes(id) ? list.filter(x => x !== id) : [...list, id])
 
   const inp = (label: string, key: string, props: any = {}) => (
     <div style={{ marginBottom: 14 }}>
@@ -181,7 +222,17 @@ export default function UsersPage() {
                     </span>
                   </td>
                   <td style={{ padding: '12px 16px', color: '#374151' }}>
-                    {u.store ? <span>{u.store.name?.replace('滇界·', '')} <span style={{ color: '#9ca3af', fontSize: 11 }}>{u.store.no}</span></span> : <span style={{ color: '#d1d5db' }}>—</span>}
+                    {(() => {
+                      const names = userStoreNames(u)
+                      if (names.length === 0) return <span style={{ color: '#d1d5db' }}>—</span>
+                      return (
+                        <span style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          {names.map((n, i) => (
+                            <span key={i} style={{ fontSize: 11, background: '#f3f4f6', borderRadius: 6, padding: '2px 8px' }}>{n}</span>
+                          ))}
+                        </span>
+                      )
+                    })()}
                   </td>
                   <td style={{ padding: '12px 16px' }}>
                     <span style={{ fontSize: 11, fontWeight: 600, color: u.status === 'ACTIVE' ? '#156b43' : '#dc2626', background: u.status === 'ACTIVE' ? '#edfaf3' : '#fef2f2', padding: '3px 8px', borderRadius: 6 }}>
@@ -194,6 +245,9 @@ export default function UsersPage() {
                   <td style={{ padding: '12px 16px' }}>
                     <div style={{ display: 'flex', gap: 6 }}>
                       <button onClick={() => openEdit(u)} style={{ fontSize: 11, padding: '4px 10px', border: '1px solid #e5e7eb', borderRadius: 6, cursor: 'pointer', background: '#fff', color: '#374151' }}>编辑</button>
+                      {u.role !== 'SUPER_ADMIN' && (
+                        <button onClick={() => openStoreEditor(u)} style={{ fontSize: 11, padding: '4px 10px', border: '1px solid #0d9488', borderRadius: 6, cursor: 'pointer', background: '#f0fdfa', color: '#0d9488', fontWeight: 600 }}>门店</button>
+                      )}
                       <button onClick={() => { setResetTarget(u); setNewPwd('') }} style={{ fontSize: 11, padding: '4px 10px', border: '1px solid #e5e7eb', borderRadius: 6, cursor: 'pointer', background: '#fff', color: '#374151' }}>改密</button>
                       {u.role !== 'SUPER_ADMIN' && (
                         <button onClick={() => toggle(u)} style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, cursor: 'pointer', border: 'none', background: u.status === 'ACTIVE' ? '#fef2f2' : '#edfaf3', color: u.status === 'ACTIVE' ? '#dc2626' : '#156b43', fontWeight: 600 }}>
@@ -229,18 +283,57 @@ export default function UsersPage() {
                 </select>
               </div>
               <div style={{ marginBottom: 20 }}>
-                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 5, fontWeight: 500 }}>绑定门店 {form.role === 'MANAGER' ? '*' : '（选填）'}</div>
-                <select value={form.storeId} onChange={e => setForm({ ...form, storeId: e.target.value })}
-                  style={{ width: '100%', padding: '10px 12px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 14, background: '#fff', outline: 'none' }}>
-                  <option value="">不绑定门店</option>
-                  {stores.map(s => <option key={s.id} value={s.id}>{s.name?.replace('滇界·', '')} ({s.no})</option>)}
-                </select>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 5, fontWeight: 500 }}>
+                  绑定门店（可多选）{STORE_BOUND_ROLES.has(form.role) ? ' *' : '（选填）'}
+                </div>
+                <div style={{ border: '1px solid #d1d5db', borderRadius: 8, padding: '8px 12px', maxHeight: 160, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {stores.map(s => (
+                    <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', color: '#374151' }}>
+                      <input
+                        type="checkbox"
+                        checked={form.storeIds.includes(s.id)}
+                        onChange={() => toggleStoreIn(form.storeIds, s.id, v => setForm({ ...form, storeIds: v }))}
+                      />
+                      {s.name?.replace('滇界·', '')} <span style={{ color: '#9ca3af', fontSize: 11 }}>{s.no}</span>
+                    </label>
+                  ))}
+                  {stores.length === 0 && <span style={{ fontSize: 12, color: '#9ca3af' }}>暂无门店</span>}
+                </div>
               </div>
               <div style={{ display: 'flex', gap: 10 }}>
                 <button onClick={() => setShowForm(false)} style={{ flex: 1, padding: 12, border: '1px solid #e5e7eb', borderRadius: 10, background: '#fff', cursor: 'pointer', fontSize: 14 }}>取消</button>
                 <button onClick={submit} style={{ flex: 2, padding: 12, background: '#156b43', color: '#fff', border: 'none', borderRadius: 10, cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>
                   {editing ? '保存修改' : '创建用户'}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 调整门店弹窗 */}
+        {storeTarget && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={e => e.target === e.currentTarget && setStoreTarget(null)}>
+            <div style={{ background: '#fff', borderRadius: 16, padding: 28, width: 400, boxShadow: '0 20px 60px rgba(0,0,0,.2)' }}>
+              <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>调整门店权限</h2>
+              <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>
+                <strong>{storeTarget.name}</strong>（{ROLE_LABEL[storeTarget.role] || storeTarget.role}）· 勾选可管理的门店
+              </p>
+              <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+                {stores.map(s => (
+                  <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', color: '#374151' }}>
+                    <input
+                      type="checkbox"
+                      checked={storePick.includes(s.id)}
+                      onChange={() => toggleStoreIn(storePick, s.id, setStorePick)}
+                    />
+                    {s.name?.replace('滇界·', '')} <span style={{ color: '#9ca3af', fontSize: 11 }}>{s.no}</span>
+                  </label>
+                ))}
+              </div>
+              <p style={{ fontSize: 11, color: '#9ca3af', marginBottom: 16 }}>保存后该用户需重新登录（或最长 2 小时）后生效</p>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button onClick={() => setStoreTarget(null)} style={{ flex: 1, padding: 12, border: '1px solid #e5e7eb', borderRadius: 10, background: '#fff', cursor: 'pointer', fontSize: 14 }}>取消</button>
+                <button onClick={saveStores} style={{ flex: 2, padding: 12, background: '#0d9488', color: '#fff', border: 'none', borderRadius: 10, cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>保存门店权限</button>
               </div>
             </div>
           </div>

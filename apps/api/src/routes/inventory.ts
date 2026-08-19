@@ -3,7 +3,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import dayjs from 'dayjs'
-import { isStoreScoped } from '../lib/auth-scope'
+import { isStoreScoped, resolveActiveStore } from '../lib/auth-scope'
 import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
 import { buildIdempotencyKey } from '../lib/idempotency'
 import { calendarDateSchema } from '../lib/calendar-date'
@@ -64,7 +64,7 @@ function chinaToday() {
 }
 
 async function resolveInventoryStore(user: any, requestedStoreId?: string | null) {
-  const storeId = isStoreScoped(user.role) ? user.storeId : (requestedStoreId || user.storeId)
+  const storeId = resolveActiveStore(user, requestedStoreId) ?? user.storeId // 越权抛 403（多店集合校验）
   if (!storeId) throw Object.assign(new Error('当前账号未绑定或未选择门店'), { statusCode: 400 })
   const store = await prisma.store.findFirst({ where: { id: storeId, tenantId: user.tenantId }, select: { id: true } })
   if (!store) throw Object.assign(new Error('门店不存在或不属于当前租户'), { statusCode: 404 })
@@ -240,7 +240,7 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
   })
 
   app.get('/consumptions', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role, storeId: boundStoreId } = req.user
+    const { tenantId, role } = req.user
     if (!canViewInventory(role)) return reply.status(403).send({ error: '无权查看门店消耗' })
 
     const query = z.object({
@@ -267,8 +267,8 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
 
     let storeId: string | undefined
     if (isStoreScoped(role)) {
-      if (!boundStoreId) return reply.status(400).send({ error: '当前账号未绑定门店' })
-      storeId = boundStoreId
+      storeId = resolveActiveStore(req.user, query.data.storeId) // 越权抛 403（多店集合校验）
+      if (!storeId) return reply.status(400).send({ error: '当前账号未绑定门店' })
     } else if (query.data.storeId) {
       const store = await prisma.store.findFirst({ where: { id: query.data.storeId, tenantId }, select: { id: true } })
       if (!store) return reply.status(404).send({ error: '门店不存在或不属于当前租户' })

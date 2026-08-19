@@ -20,6 +20,7 @@ import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { createVoucher } from '../services/voucher'
 import { cashLedgerAccount, writeCashTransaction } from '../services/cashbook'
+import { storeScopeOf } from '../lib/auth-scope'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const FINANCE_ROLES = new Set(['FINANCE', 'ADMIN', 'SUPER_ADMIN', 'BOSS'])
@@ -84,10 +85,11 @@ export const pettyCashRoutes: FastifyPluginAsync = async (app) => {
     const where: any = { tenantId }
     if (month) where.month = month
     if (status) where.status = status
-    // 店长仅看自己店
+    // 门店级角色仅看可访问集合（多店 storeIds）；CHEF_DIRECTOR 等非集合角色回退单店
     if (STORE_ROLES.has(role)) {
-      if (!storeId) return []
-      where.storeId = storeId
+      const scope = storeScopeOf(req.user) ?? (req.user.storeId ? [req.user.storeId] : [])
+      if (scope.length === 0) return []
+      where.storeId = { in: scope }
     } else if (queryStoreId) {
       where.storeId = queryStoreId
     }

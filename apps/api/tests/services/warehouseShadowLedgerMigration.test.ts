@@ -32,9 +32,15 @@ describe('warehouse shadow ledger migration contract', () => {
     for (const model of [balance, movement, reservation]) {
       expect(model).toContain('warehouseId')
       expect(model).toContain('productId')
+    }
+    for (const model of [balance, reservation]) {
       expect(model).toContain('inventoryUnit')
+      // 余额/预留保持供应商无关：库存归仓不归供应商
       expect(model).not.toContain('supplierId')
     }
+    // P2 起流水可挂供应商（可空，纯归属维度），库存口径不变
+    expect(movement).toContain('supplierId           String?')
+    expect(movement).toContain('inventoryUnit')
     expect(balance).toContain('@db.Decimal(18, 6)')
     expect(balance).toContain('reservedQty')
     expect(balance).toContain('inventoryValue')

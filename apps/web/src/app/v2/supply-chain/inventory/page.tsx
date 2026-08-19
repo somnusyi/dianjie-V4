@@ -32,6 +32,12 @@ type BatchInboundRow = {
   unitPrice: string
 }
 
+type UpstreamSupplier = {
+  id: string
+  no: string
+  name: string
+}
+
 type InventoryResponse = {
   warehouse: {
     id: string
@@ -148,7 +154,7 @@ export default function InternalSupplyChainInventoryPage() {
   const [batchSearch, setBatchSearch] = useState('')
   const [batchRows, setBatchRows] = useState<BatchInboundRow[]>([])
   const [batchEffectiveAt, setBatchEffectiveAt] = useState(defaultEffectiveAt)
-  const [batchSourceName, setBatchSourceName] = useState('')
+  const [batchSupplierId, setBatchSupplierId] = useState('')
   const [batchNote, setBatchNote] = useState('采购到货批量入库')
   const [batchKey, setBatchKey] = useState(newIdempotencyKey)
   const [batchLoading, setBatchLoading] = useState(false)
@@ -156,7 +162,7 @@ export default function InternalSupplyChainInventoryPage() {
   const [purchaseQuantity, setPurchaseQuantity] = useState('')
   const [totalAmount, setTotalAmount] = useState('')
   const [effectiveAt, setEffectiveAt] = useState(defaultEffectiveAt)
-  const [sourceName, setSourceName] = useState('')
+  const [supplierId, setSupplierId] = useState('')
   const [note, setNote] = useState('采购到货手工入库')
   const [batchNo, setBatchNo] = useState('')
   const [manufactureDate, setManufactureDate] = useState('')
@@ -170,6 +176,8 @@ export default function InternalSupplyChainInventoryPage() {
   const [countEffectiveAt, setCountEffectiveAt] = useState(defaultEffectiveAt)
   const [countNote, setCountNote] = useState('总仓现场实盘校准')
   const [countKey, setCountKey] = useState(newIdempotencyKey)
+  const [suppliers, setSuppliers] = useState<UpstreamSupplier[]>([])
+  const [gateWarnings, setGateWarnings] = useState<string[]>([])
 
   async function load(requestedScope: InventoryScope = scope) {
     setLoading(true)
@@ -192,6 +200,12 @@ export default function InternalSupplyChainInventoryPage() {
   }
 
   useEffect(() => { load(scope) }, [scope])
+
+  useEffect(() => {
+    apiFetch<UpstreamSupplier[]>('/api/suppliers?businessScope=WAREHOUSE_UPSTREAM')
+      .then(rows => setSuppliers(Array.isArray(rows) ? rows : []))
+      .catch(() => setSuppliers([]))
+  }, [])
 
   const items = data?.items || []
   const selectedProduct = items.find(item => item.id === productId)
@@ -227,7 +241,7 @@ export default function InternalSupplyChainInventoryPage() {
     setPurchaseQuantity('')
     setTotalAmount('')
     setEffectiveAt(defaultEffectiveAt())
-    setSourceName('')
+    setSupplierId('')
     setNote('采购到货手工入库')
     setBatchNo('')
     setManufactureDate('')
@@ -243,7 +257,7 @@ export default function InternalSupplyChainInventoryPage() {
     setBatchSearch('')
     setBatchRows([])
     setBatchEffectiveAt(defaultEffectiveAt())
-    setBatchSourceName('')
+    setBatchSupplierId('')
     setBatchNote('采购到货批量入库')
     setBatchKey(newIdempotencyKey())
     setBatchLoading(true)
@@ -276,6 +290,10 @@ export default function InternalSupplyChainInventoryPage() {
       setError('请至少添加一个入库商品')
       return
     }
+    if (!batchSupplierId) {
+      setError('请选择供货供应商；没有档案请先在供应商管理新建')
+      return
+    }
     const invalid = batchRows.find(row => Number(row.purchaseQuantity) <= 0 || Number(row.unitPrice) <= 0)
     if (invalid) {
       const product = batchCandidates.find(item => item.id === invalid.productId)
@@ -284,8 +302,9 @@ export default function InternalSupplyChainInventoryPage() {
     }
     setSubmitting(true)
     setError('')
+    setGateWarnings([])
     try {
-      const result = await apiFetch<{ replayed: boolean; count: number; totalAmount: number }>('/api/warehouse-inventory/batch-manual-inbound', {
+      const result = await apiFetch<{ replayed: boolean; count: number; totalAmount: number; gateWarnings?: string[] }>('/api/warehouse-inventory/batch-manual-inbound', {
         method: 'POST',
         body: JSON.stringify({
           items: batchRows.map(row => ({
@@ -295,11 +314,12 @@ export default function InternalSupplyChainInventoryPage() {
           })),
           effectiveAt: new Date(batchEffectiveAt).toISOString(),
           idempotencyKey: batchKey,
-          sourceName: batchSourceName.trim() || null,
+          supplierId: batchSupplierId,
           note: batchNote.trim() || null,
         }),
       })
       setBatchOpen(false)
+      setGateWarnings(result.gateWarnings || [])
       setNotice(result.replayed
         ? '该批量入库单已经处理，本次未重复入账'
         : `批量入库成功：${result.count} 种商品，合计 ${money(result.totalAmount)}，已整单原子记账`)
@@ -316,6 +336,10 @@ export default function InternalSupplyChainInventoryPage() {
       setError('请选择商品，并填写大于0的采购数量和入库总金额')
       return
     }
+    if (!supplierId) {
+      setError('请选择供货供应商；没有档案请先在供应商管理新建')
+      return
+    }
     if (selectedProduct.unitConversionStatus !== 'VERIFIED') {
       setError('该商品四单位换算尚未核验，不能记真实入库')
       return
@@ -326,8 +350,9 @@ export default function InternalSupplyChainInventoryPage() {
     }
     setSubmitting(true)
     setError('')
+    setGateWarnings([])
     try {
-      const result = await apiFetch<{ replayed: boolean }>('/api/warehouse-inventory/manual-inbound', {
+      const result = await apiFetch<{ replayed: boolean; gateWarnings?: string[] }>('/api/warehouse-inventory/manual-inbound', {
         method: 'POST',
         body: JSON.stringify({
           productId,
@@ -335,7 +360,7 @@ export default function InternalSupplyChainInventoryPage() {
           totalAmount: Number(totalAmount),
           effectiveAt: new Date(effectiveAt).toISOString(),
           idempotencyKey,
-          sourceName: sourceName.trim() || null,
+          supplierId,
           note: note.trim() || null,
           batchNo: batchNo.trim() || null,
           manufactureDate: manufactureDate || null,
@@ -343,6 +368,7 @@ export default function InternalSupplyChainInventoryPage() {
         }),
       })
       setInboundOpen(false)
+      setGateWarnings(result.gateWarnings || [])
       setNotice(result.replayed ? '该入库请求已处理，本次返回原结果，没有重复入账' : '手工入库成功：数量、成本、批次和流水已原子记入总仓影子账')
       await load()
     } catch (reason: any) {
@@ -473,6 +499,9 @@ export default function InternalSupplyChainInventoryPage() {
 
       {error && <div className="mt-4 rounded-card border border-red/30 bg-red-bg p-3 text-caption text-red-fg">{error}</div>}
       {notice && <div className="mt-4 rounded-card border border-green/30 bg-green/10 p-3 text-caption text-green-fg">{notice}</div>}
+      {gateWarnings.length > 0 && <div className="mt-4 rounded-card border border-amber/40 bg-amber/10 p-3 text-caption text-amber-fg">
+        <b>入库闸口警告（已放行）：</b>以下商品未绑定该供应商的供货关系，建议在「供货关系」页补齐——{gateWarnings.join('；')}
+      </div>}
       {data?.summary.inventoryMode === 'SHADOW' && (
         <div className="mt-4 rounded-card border border-amber/30 bg-amber/10 p-4 text-caption text-gray2">
           <b>当前处于影子账观察期。</b>系统记录真实单位的入库、预占和发货，但暂不因余额不足阻断原有履约。由于8月1日后的历史流水不完整，必须在下一次总仓实盘建立新期初并通过对账后，才能切换为严格库存。
@@ -591,7 +620,7 @@ export default function InternalSupplyChainInventoryPage() {
 
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <label><span className="mb-1 block text-micro text-gray3">实际入库时间 *</span><input type="datetime-local" value={batchEffectiveAt} onChange={event => setBatchEffectiveAt(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
-            <label><span className="mb-1 block text-micro text-gray3">供货来源</span><input value={batchSourceName} maxLength={120} onChange={event => setBatchSourceName(event.target.value)} placeholder="例如：某上游供应商 / 临时采购" className="h-11 w-full rounded-cta border border-border px-3" /></label>
+            <label><span className="mb-1 block text-micro text-gray3">供货供应商 *</span><select value={batchSupplierId} onChange={event => setBatchSupplierId(event.target.value)} className="h-11 w-full rounded-cta border border-border bg-white px-3"><option value="">请选择上游供应商</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}</select></label>
             <label><span className="mb-1 block text-micro text-gray3">整单备注</span><input value={batchNote} maxLength={240} onChange={event => setBatchNote(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
           </div>
           <div className="mt-4 flex items-center justify-between gap-4"><p className="text-micro text-gray3">只显示四单位已经核验的商品，避免箱、件、kg 等错误换算进入正式库存。</p><button onClick={submitBatchInbound} disabled={submitting || batchRows.length === 0} className="h-11 min-w-52 rounded-cta bg-accent px-6 text-button text-white disabled:opacity-40">{submitting ? '正在整单记账…' : `确认批量入库 · ${money(batchTotal)}`}</button></div>
@@ -600,14 +629,14 @@ export default function InternalSupplyChainInventoryPage() {
 
       {inboundOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setInboundOpen(false)}>
         <div className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-card bg-white p-5 shadow-xl" onClick={event => event.stopPropagation()}>
-          <div className="flex items-center justify-between"><div><h2 className="text-h2">总仓单条手工入库</h2><p className="mt-1 text-micro text-gray3">供应商暂不纳入管理；来源名称仅作可选审计备注。</p></div><button onClick={() => setInboundOpen(false)} className="px-2 text-h2 text-gray3">×</button></div>
+          <div className="flex items-center justify-between"><div><h2 className="text-h2">总仓单条手工入库</h2><p className="mt-1 text-micro text-gray3">必须选择上游供应商；未绑定供货关系的商品会给出警告但允许放行。</p></div><button onClick={() => setInboundOpen(false)} className="px-2 text-h2 text-gray3">×</button></div>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <label className="sm:col-span-2"><span className="mb-1 block text-micro text-gray3">商品 *</span><select value={productId} onChange={event => setProductId(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3"><option value="">请选择</option>{items.map(item => <option key={item.id} value={item.id}>{item.code} · {item.name} · 采购单位 {item.purchaseUnit}</option>)}</select></label>
             <label><span className="mb-1 block text-micro text-gray3">采购入库数量（{selectedProduct?.purchaseUnit || '采购单位'}）*</span><input type="number" min="0.000001" step="0.001" value={purchaseQuantity} onChange={event => setPurchaseQuantity(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
             <label><span className="mb-1 block text-micro text-gray3">入库总金额（元）*</span><input type="number" min="0.01" step="0.01" value={totalAmount} onChange={event => setTotalAmount(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
             {selectedProduct && <div className="sm:col-span-2 rounded-card border border-blue/20 bg-blue/5 p-3 text-caption text-gray2">入库单位指供应商交货/仓库收货时使用的采购单位。本次：<b>{qty(Number(purchaseQuantity))} {selectedProduct.purchaseUnit} × {qty(selectedProduct.purchaseToInventoryFactor, 6)} = {qty(normalizedQuantity, 6)} {selectedProduct.inventoryUnit}</b>{unitCost > 0 && <>，库存单位成本约 <b>{money(unitCost)}/{selectedProduct.inventoryUnit}</b></>}。</div>}
             <label><span className="mb-1 block text-micro text-gray3">实际入库时间 *</span><input type="datetime-local" value={effectiveAt} onChange={event => setEffectiveAt(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
-            <label><span className="mb-1 block text-micro text-gray3">供货来源（可选文本）</span><input value={sourceName} maxLength={120} onChange={event => setSourceName(event.target.value)} placeholder="例如：菜市场采购 / 某配送商" className="h-11 w-full rounded-cta border border-border px-3" /></label>
+            <label><span className="mb-1 block text-micro text-gray3">供货供应商 *</span><select value={supplierId} onChange={event => setSupplierId(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3"><option value="">请选择上游供应商</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}</select></label>
             <label><span className="mb-1 block text-micro text-gray3">批次号（可选）</span><input value={batchNo} maxLength={80} onChange={event => setBatchNo(event.target.value)} placeholder="留空自动生成" className="h-11 w-full rounded-cta border border-border px-3" /></label>
             <label><span className="mb-1 block text-micro text-gray3">入库说明</span><input value={note} maxLength={240} onChange={event => setNote(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
             <label><span className="mb-1 block text-micro text-gray3">生产日期（可选）</span><input type="date" value={manufactureDate} onChange={event => setManufactureDate(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>

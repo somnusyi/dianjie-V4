@@ -60,6 +60,7 @@ const manualInboundSchema = z.object({
   totalAmount: z.number().positive().max(999_999_999.99),
   effectiveAt: z.string().datetime({ offset: true }),
   idempotencyKey: z.string().trim().min(8).max(80),
+  supplierId: z.string({ required_error: '请选择供货供应商' }).trim().min(1, '请选择供货供应商'),
   sourceName: z.string().trim().max(120).optional().nullable(),
   note: z.string().trim().max(240).optional().nullable(),
   batchNo: z.string().trim().max(80).optional().nullable(),
@@ -78,6 +79,7 @@ const batchManualInboundSchema = z.object({
   })).min(1).max(200),
   effectiveAt: z.string().datetime({ offset: true }),
   idempotencyKey: z.string().trim().min(8).max(80),
+  supplierId: z.string({ required_error: '请选择供货供应商' }).trim().min(1, '请选择供货供应商'),
   sourceName: z.string().trim().max(120).optional().nullable(),
   note: z.string().trim().max(240).optional().nullable(),
 }).superRefine((value, context) => {
@@ -91,6 +93,38 @@ const batchManualInboundSchema = z.object({
     }
   })
 })
+
+// 入库供应商闸口（P2）：供应商必须是本租户启用中的上游供应商
+async function requireUpstreamSupplier(tenantId: string, supplierId: string) {
+  const supplier = await prisma.supplier.findFirst({
+    where: { id: supplierId, tenantId },
+    select: { id: true, name: true, status: true, businessScopes: true },
+  })
+  if (!supplier) throw Object.assign(new Error('供货供应商不存在'), { statusCode: 400 })
+  if (supplier.status !== 'ENABLED') throw Object.assign(new Error(`供应商「${supplier.name}」已停用，不能入库`), { statusCode: 409 })
+  if (!supplier.businessScopes.includes('WAREHOUSE_UPSTREAM')) {
+    throw Object.assign(new Error(`供应商「${supplier.name}」不是总仓上游供应商，不能作为入库来源`), { statusCode: 409 })
+  }
+  return supplier
+}
+
+// 软闸口：商品未绑定该供应商的供货关系 → 警告放行（数据补齐后可升硬阻断）
+async function inboundGateWarnings(tenantId: string, supplierId: string, productIds: string[]) {
+  const uniqueIds = [...new Set(productIds)]
+  const relations = await prisma.productUpstreamSource.findMany({
+    where: { tenantId, supplierId, productId: { in: uniqueIds }, isActive: true },
+    select: { productId: true },
+  })
+  const bound = new Set(relations.map(relation => relation.productId))
+  const missingIds = uniqueIds.filter(id => !bound.has(id))
+  if (missingIds.length === 0) return [] as string[]
+  const products = await prisma.product.findMany({
+    where: { tenantId, id: { in: missingIds } },
+    select: { code: true, name: true },
+    orderBy: { code: 'asc' },
+  })
+  return products.map(product => `${product.name}（${product.code}）未绑定该供应商的供货关系`)
+}
 
 const physicalCountSchema = z.object({
   productId: z.string().trim().min(1),
@@ -248,6 +282,87 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
     }))
   })
 
+  // 入库记录中心（P2）：总仓全部入库流水的统一查询视图
+  app.get('/inbound-records', authRead, async (req: any, reply: any) => {
+    const parsed = z.object({
+      from: z.string().date().optional(),
+      to: z.string().date().optional(),
+      supplierId: z.string().trim().min(1).optional(),
+      q: z.string().trim().max(100).optional(),
+      source: z.enum(['all', 'manual', 'batch', 'package', 'opening']).default('all'),
+      page: z.coerce.number().int().min(1).default(1),
+      pageSize: z.coerce.number().int().min(1).max(100).default(50),
+    }).safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const { tenantId } = req.user
+    const warehouseId = await resolveTenantWarehouseId(prisma, tenantId, undefined)
+    const sourceTypeMap: Record<string, string> = {
+      manual: 'WarehouseManualInbound',
+      batch: 'WarehouseBatchManualInbound',
+      package: 'MeituanDailyPackage',
+    }
+    const terms = parsed.data.q?.toLowerCase().split(/\s+/).filter(Boolean) || []
+    const where: Prisma.WarehouseLedgerMovementWhereInput = {
+      tenantId,
+      warehouseId,
+      ...(parsed.data.source === 'opening'
+        ? { type: 'OPENING_BALANCE' }
+        : parsed.data.source === 'all'
+          ? { type: { in: ['MANUAL_INBOUND', 'OPENING_BALANCE'] } }
+          : { type: 'MANUAL_INBOUND', sourceType: sourceTypeMap[parsed.data.source] }),
+      ...(parsed.data.supplierId ? { supplierId: parsed.data.supplierId } : {}),
+      ...(parsed.data.from ? { effectiveAt: { gte: new Date(`${parsed.data.from}T00:00:00+08:00`) } } : {}),
+      ...(parsed.data.to ? { effectiveAt: { lte: new Date(`${parsed.data.to}T23:59:59.999+08:00`) } } : {}),
+      ...(terms.length ? {
+        AND: terms.map(term => ({ OR: [
+          { product: { code: { contains: term, mode: 'insensitive' as const } } },
+          { product: { name: { contains: term, mode: 'insensitive' as const } } },
+        ] })),
+      } : {}),
+    }
+    const [total, rows] = await Promise.all([
+      prisma.warehouseLedgerMovement.count({ where }),
+      prisma.warehouseLedgerMovement.findMany({
+        where,
+        orderBy: [{ effectiveAt: 'desc' }, { recordedAt: 'desc' }, { id: 'desc' }],
+        skip: (parsed.data.page - 1) * parsed.data.pageSize,
+        take: parsed.data.pageSize,
+        include: {
+          product: { select: { id: true, code: true, name: true, category: true } },
+          supplier: { select: { id: true, no: true, name: true } },
+          createdLot: { select: { batchNo: true, expiryDate: true } },
+          reversal: { select: { id: true } },
+        },
+      }),
+    ])
+    return {
+      total,
+      page: parsed.data.page,
+      pageSize: parsed.data.pageSize,
+      items: rows.map(row => ({
+        id: row.id,
+        type: row.type,
+        sourceType: row.sourceType,
+        sourceId: row.sourceId,
+        effectiveAt: row.effectiveAt,
+        recordedAt: row.recordedAt,
+        product: row.product,
+        supplier: row.supplier,
+        sourceName: row.sourceName,
+        note: row.note,
+        originalQuantity: number(row.originalQuantity),
+        originalUnit: row.originalUnit,
+        inventoryQuantity: number(row.inventoryQuantity),
+        inventoryUnit: row.inventoryUnit,
+        inventoryUnitCost: number(row.inventoryUnitCost),
+        amount: number(row.valueDelta),
+        batchNo: row.createdLot?.batchNo || null,
+        expiryDate: row.createdLot?.expiryDate || null,
+        reversed: Boolean(row.reversal),
+      })),
+    }
+  })
+
   app.get('/lots', authRead, async (req: any, reply: any) => {
     const parsed = z.object({
       productId: z.string().trim().min(1).optional(),
@@ -339,6 +454,8 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
     const manufactureDate = parsed.data.manufactureDate ? new Date(`${parsed.data.manufactureDate}T00:00:00+08:00`) : null
     const expiryDate = parsed.data.expiryDate ? new Date(`${parsed.data.expiryDate}T00:00:00+08:00`) : null
     try {
+      const supplier = await requireUpstreamSupplier(req.user.tenantId, parsed.data.supplierId)
+      const gateWarnings = await inboundGateWarnings(req.user.tenantId, supplier.id, [parsed.data.productId])
       const result = await recordManualWarehouseInbound({
         tenantId: req.user.tenantId,
         userId: req.user.userId,
@@ -347,16 +464,31 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         totalAmount: parsed.data.totalAmount,
         effectiveAt: new Date(parsed.data.effectiveAt),
         idempotencyKey: parsed.data.idempotencyKey,
-        sourceName: parsed.data.sourceName,
+        supplierId: supplier.id,
+        sourceName: supplier.name,
         note: parsed.data.note,
         batchNo: parsed.data.batchNo,
         manufactureDate,
         expiryDate,
       })
+      if (gateWarnings.length > 0 && !result.replayed) {
+        await prisma.opLog.create({
+          data: {
+            tenantId: req.user.tenantId,
+            userId: req.user.userId,
+            action: `入库闸口警告：${gateWarnings.length} 个商品未绑定供应商「${supplier.name}」的供货关系`,
+            target: parsed.data.idempotencyKey,
+            entityType: 'WarehouseLedgerMovement',
+            targetId: result.movement.id,
+            metadata: { supplierId: supplier.id, supplierName: supplier.name, warnings: gateWarnings },
+          },
+        })
+      }
       return {
         ok: true,
         replayed: result.replayed,
         warehouseId: result.warehouseId,
+        gateWarnings,
         movement: {
           id: result.movement.id,
           productId: result.movement.productId,
@@ -379,6 +511,8 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
     const parsed = batchManualInboundSchema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     try {
+      const supplier = await requireUpstreamSupplier(req.user.tenantId, parsed.data.supplierId)
+      const gateWarnings = await inboundGateWarnings(req.user.tenantId, supplier.id, parsed.data.items.map(item => item.productId))
       const result = await recordBatchManualWarehouseInbound({
         tenantId: req.user.tenantId,
         userId: req.user.userId,
@@ -392,9 +526,23 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         })),
         effectiveAt: new Date(parsed.data.effectiveAt),
         idempotencyKey: parsed.data.idempotencyKey,
-        sourceName: parsed.data.sourceName,
+        supplierId: supplier.id,
+        sourceName: supplier.name,
         note: parsed.data.note,
       })
+      if (gateWarnings.length > 0 && !result.replayed) {
+        await prisma.opLog.create({
+          data: {
+            tenantId: req.user.tenantId,
+            userId: req.user.userId,
+            action: `入库闸口警告：${gateWarnings.length} 个商品未绑定供应商「${supplier.name}」的供货关系`,
+            target: parsed.data.idempotencyKey,
+            entityType: 'WarehouseLedgerMovement',
+            targetId: result.movements[0]?.id || '',
+            metadata: { supplierId: supplier.id, supplierName: supplier.name, warnings: gateWarnings },
+          },
+        })
+      }
       const totalAmount = result.movements.reduce((sum, movement) => sum + number(movement.valueDelta), 0)
       return {
         ok: true,
@@ -402,6 +550,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         warehouseId: result.warehouseId,
         count: result.movements.length,
         totalAmount,
+        gateWarnings,
         movements: result.movements.map(movement => ({
           id: movement.id,
           productId: movement.productId,

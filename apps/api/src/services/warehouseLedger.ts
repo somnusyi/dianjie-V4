@@ -3,6 +3,7 @@ import { Prisma, prisma } from '@dianjie/db'
 import { resolveProductFourUnits, type ProductInventoryUnitLike } from './inventoryUnits'
 import { resolveTenantWarehouseId } from './defaultWarehouse'
 import { physicalUnitFactor, sourceSpecMassFactor, sourceSpecPackageFactor } from './warehouseInventoryImport'
+import { resolveSupplierIdsByNames } from './supplierAliases'
 
 const ZERO = new Prisma.Decimal(0)
 const QTY_DP = 6
@@ -295,6 +296,7 @@ export type ManualWarehouseInboundInput = {
   effectiveAt: Date
   idempotencyKey: string
   sourceName?: string | null
+  supplierId?: string | null
   note?: string | null
   batchNo?: string | null
   manufactureDate?: Date | null
@@ -315,6 +317,7 @@ export type BatchManualWarehouseInboundInput = {
   effectiveAt: Date
   idempotencyKey: string
   sourceName?: string | null
+  supplierId?: string | null
   note?: string | null
 }
 
@@ -362,6 +365,7 @@ export async function recordManualWarehouseInbound(input: ManualWarehouseInbound
     totalAmount: totalAmount.toFixed(VALUE_DP),
     effectiveAt: input.effectiveAt.toISOString(),
     sourceName: input.sourceName || null,
+    supplierId: input.supplierId || null,
     note: input.note || null,
     batchNo: input.batchNo || null,
     manufactureDate: input.manufactureDate?.toISOString().slice(0, 10) || null,
@@ -441,6 +445,7 @@ export async function recordManualWarehouseInbound(input: ManualWarehouseInbound
         effectiveAt: input.effectiveAt,
         note: input.note || null,
         sourceName: input.sourceName || null,
+        supplierId: input.supplierId || null,
         createdById: input.userId,
       },
     })
@@ -575,6 +580,7 @@ export async function recordBatchManualWarehouseInbound(input: BatchManualWareho
     })),
     effectiveAt: input.effectiveAt.toISOString(),
     sourceName: input.sourceName || null,
+    supplierId: input.supplierId || null,
     note: input.note || null,
   })
   const movementKey = (index: number) => `manual-inbound-batch:${sourceRequestId}:${index + 1}`
@@ -655,6 +661,7 @@ export async function recordBatchManualWarehouseInbound(input: BatchManualWareho
           effectiveAt: input.effectiveAt,
           note: input.note || null,
           sourceName: input.sourceName || null,
+          supplierId: input.supplierId || null,
           createdById: input.userId,
         },
       })
@@ -992,6 +999,7 @@ export async function reverseManualWarehouseInbound(input: {
         effectiveAt: new Date(),
         note: reason,
         createdById: input.userId,
+        supplierId: original.supplierId,
         reversalOfId: original.id,
       },
     })
@@ -1582,6 +1590,7 @@ export async function recordWarehouseDailyPackageLedger(input: {
       conversionFactor: Prisma.Decimal
       amount: Prisma.Decimal
       sourceName: string | null
+      supplierId: string | null
       note: string
       store?: string
     }
@@ -1621,6 +1630,11 @@ export async function recordWarehouseDailyPackageLedger(input: {
         conversionFactor,
         amount: new Prisma.Decimal(line.amount || 0).abs().toDecimalPlaces(VALUE_DP),
         sourceName: Array.isArray(line.suppliers) ? line.suppliers.filter(Boolean).join('、').slice(0, 120) || null : null,
+        supplierId: (() => {
+          const names = Array.isArray(line.suppliers) ? line.suppliers.map(name => String(name || '').trim()).filter(Boolean) : []
+          // 数据包按 商品×天 聚合：恰好一个供应商才能归一；多供应商行保留文本不猜
+          return names.length === 1 ? supplierIdByName.get(names[0]) || null : null
+        })(),
         note: originalQuantity.gt(0) ? `美团 ${packageDate} 采购净入库` : `美团 ${packageDate} 采购退货`,
       }
     }
@@ -1679,9 +1693,15 @@ export async function recordWarehouseDailyPackageLedger(input: {
         conversionFactor,
         amount: new Prisma.Decimal(line.costAmount || 0).abs().toDecimalPlaces(VALUE_DP),
         sourceName: Array.isArray(line.stores) ? line.stores.filter(Boolean).join('、').slice(0, 120) || null : null,
+        supplierId: null,
         note: `美团 ${packageDate} 配送出库${Array.isArray(line.documents) ? `（${line.documents.length} 单）` : ''}`,
       }
     }
+
+    // 入库行供应商文本 → 主数据（精确名 + 别名表）；解析不了的保持 null 走"待认领"
+    const inboundSupplierNames = inboundSource.flatMap(line =>
+      Array.isArray(line.suppliers) ? line.suppliers.map(name => String(name || '').trim()).filter(Boolean) : [])
+    const supplierIdByName = await resolveSupplierIdsByNames(input.tenantId, inboundSupplierNames)
 
     const resolvedInbound = inboundSource
       .map(source => ({ source, line: resolveInbound(source) }))
@@ -1764,7 +1784,7 @@ export async function recordWarehouseDailyPackageLedger(input: {
         inventoryQuantity: line.inventoryQuantity, inventoryUnit: line.inventoryUnit, inventoryUnitCost: unitCost,
         sourceType: 'MeituanDailyPackage', sourceId: record.id, sourceLineId: `IN:${line.code}`,
         idempotencyKey, requestFingerprint: fingerprint({ packageDate, line, direction: 'IN' }), effectiveAt,
-        note: line.note, sourceName: line.sourceName, createdById: input.userId,
+        note: line.note, sourceName: line.sourceName, supplierId: line.supplierId, createdById: input.userId,
       } })
       await persistBalance(tx, balance, { physicalQty: nextPhysical, reservedQty: balance.reservedQty, inventoryValue: nextValue, averageUnitCost: nextAverage })
       await tx.warehouseLedgerLot.create({ data: {

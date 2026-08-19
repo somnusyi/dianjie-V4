@@ -14,6 +14,35 @@ vi.mock('../../src/services/warehouseLedgerReconciliation', () => ({
   reconcileWarehouseShadowLedger: vi.fn(),
 }))
 
+const mocks = vi.hoisted(() => ({
+  supplierFindFirst: vi.fn(),
+  sourceFindMany: vi.fn(),
+  productFindMany: vi.fn(),
+  opLogCreate: vi.fn(),
+  movementCount: vi.fn(),
+  movementFindMany: vi.fn(),
+  resolveWarehouseId: vi.fn(),
+}))
+
+vi.mock('@dianjie/db', async importOriginal => {
+  const actual = await importOriginal<typeof import('@dianjie/db')>()
+  const prismaMock: any = {
+    supplier: { findFirst: (...args: any[]) => mocks.supplierFindFirst(...args) },
+    product: { findMany: (...args: any[]) => mocks.productFindMany(...args) },
+    productUpstreamSource: { findMany: (...args: any[]) => mocks.sourceFindMany(...args) },
+    opLog: { create: (...args: any[]) => mocks.opLogCreate(...args) },
+    warehouseLedgerMovement: {
+      count: (...args: any[]) => mocks.movementCount(...args),
+      findMany: (...args: any[]) => mocks.movementFindMany(...args),
+    },
+  }
+  return { ...actual, prisma: prismaMock }
+})
+
+vi.mock('../../src/services/defaultWarehouse', () => ({
+  resolveTenantWarehouseId: (...args: any[]) => mocks.resolveWarehouseId(...args),
+}))
+
 import {
   recordBatchManualWarehouseInbound,
   recordManualWarehouseInbound,
@@ -38,13 +67,20 @@ function buildApp(actor: Record<string, unknown>) {
   return app
 }
 
+const upstreamSupplier = {
+  id: 'sup-1',
+  name: '井育苗菇',
+  status: 'ENABLED',
+  businessScopes: ['WAREHOUSE_UPSTREAM'],
+}
+
 const body = {
   productId: 'product-1',
   purchaseQuantity: 2,
   totalAmount: 160,
   effectiveAt: '2026-08-02T09:00:00+08:00',
   idempotencyKey: 'manual-request-0001',
-  sourceName: '线下采购',
+  supplierId: 'sup-1',
   note: '采购到货手工入库',
 }
 
@@ -86,6 +122,32 @@ describe('warehouse inventory routes', () => {
     } as any)
     reconcileLedger.mockReset()
     reconcileLedger.mockResolvedValue({ scanned: 2, reserved: 1, released: 0, shipped: 1, failures: [], nextCursor: null })
+    mocks.supplierFindFirst.mockReset()
+    mocks.supplierFindFirst.mockResolvedValue(upstreamSupplier)
+    mocks.sourceFindMany.mockReset()
+    mocks.sourceFindMany.mockResolvedValue([{ productId: 'product-1' }, { productId: 'product-2' }])
+    mocks.productFindMany.mockReset()
+    mocks.productFindMany.mockResolvedValue([])
+    mocks.opLogCreate.mockReset()
+    mocks.opLogCreate.mockResolvedValue({})
+    mocks.movementCount.mockReset()
+    mocks.movementCount.mockResolvedValue(1)
+    mocks.movementFindMany.mockReset()
+    mocks.movementFindMany.mockResolvedValue([
+      {
+        id: 'movement-1', type: 'MANUAL_INBOUND', sourceType: 'WarehouseManualInbound', sourceId: 'req-1',
+        effectiveAt: new Date('2026-08-02T01:00:00Z'), recordedAt: new Date('2026-08-02T01:01:00Z'),
+        product: { id: 'product-1', code: 'MR001', name: '水牛毛肚', category: '荤菜' },
+        supplier: { id: 'sup-1', no: 'SUP001', name: '井育苗菇' },
+        sourceName: '井育苗菇', note: '采购到货',
+        originalQuantity: 2, originalUnit: '件', inventoryQuantity: 16, inventoryUnit: '袋',
+        inventoryUnitCost: 10, valueDelta: 160,
+        createdLot: { batchNo: 'MI-20260802-abcd1234', expiryDate: null },
+        reversal: null,
+      },
+    ] as any)
+    mocks.resolveWarehouseId.mockReset()
+    mocks.resolveWarehouseId.mockResolvedValue('warehouse-1')
   })
 
   it('separates real warehouse stock from BOM placeholders and unit-governance queues', () => {
@@ -103,7 +165,7 @@ describe('warehouse inventory routes', () => {
       })
   })
 
-  it('allows internal supply chain to record a supplier-independent manual inbound', async () => {
+  it('records a manual inbound bound to an upstream supplier', async () => {
     const app = buildApp({ tenantId: 'tenant-1', userId: 'user-1', role: 'SUPPLY_CHAIN' })
     const response = await app.inject({ method: 'POST', url: '/manual-inbound', payload: body })
 
@@ -114,9 +176,46 @@ describe('warehouse inventory routes', () => {
       productId: 'product-1',
       purchaseQuantity: 2,
       totalAmount: 160,
-      sourceName: '线下采购',
+      supplierId: 'sup-1',
+      sourceName: '井育苗菇',
     }))
-    expect(response.json()).toMatchObject({ ok: true, replayed: false, movement: { physicalDelta: 16, inventoryUnit: '袋' } })
+    expect(response.json()).toMatchObject({ ok: true, replayed: false, gateWarnings: [], movement: { physicalDelta: 16, inventoryUnit: '袋' } })
+    await app.close()
+  })
+
+  it('rejects manual inbound without a supplier', async () => {
+    const app = buildApp({ tenantId: 'tenant-1', userId: 'user-1', role: 'SUPPLY_CHAIN' })
+    const { supplierId, ...noSupplier } = body
+    const response = await app.inject({ method: 'POST', url: '/manual-inbound', payload: noSupplier })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json().error).toContain('供应商')
+    expect(recordInbound).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it('rejects suppliers that are not enabled upstream partners', async () => {
+    mocks.supplierFindFirst.mockResolvedValue({ ...upstreamSupplier, businessScopes: ['STORE_FULFILLER'] })
+    const app = buildApp({ tenantId: 'tenant-1', userId: 'user-1', role: 'SUPPLY_CHAIN' })
+    const response = await app.inject({ method: 'POST', url: '/manual-inbound', payload: body })
+
+    expect(response.statusCode).toBe(409)
+    expect(recordInbound).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it('warns but allows inbound when the product has no active supply relation', async () => {
+    mocks.sourceFindMany.mockResolvedValue([])
+    mocks.productFindMany.mockResolvedValue([{ code: 'MR001', name: '水牛毛肚' }])
+    const app = buildApp({ tenantId: 'tenant-1', userId: 'user-1', role: 'SUPPLY_CHAIN' })
+    const response = await app.inject({ method: 'POST', url: '/manual-inbound', payload: body })
+
+    expect(response.statusCode).toBe(200)
+    expect(recordInbound).toHaveBeenCalled()
+    expect(response.json().gateWarnings).toEqual(['水牛毛肚（MR001）未绑定该供应商的供货关系'])
+    expect(mocks.opLogCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ entityType: 'WarehouseLedgerMovement' }),
+    }))
     await app.close()
   })
 
@@ -132,7 +231,7 @@ describe('warehouse inventory routes', () => {
         ],
         effectiveAt: '2026-08-08T17:00:00+08:00',
         idempotencyKey: 'batch-inbound-0001',
-        sourceName: '上游送货单',
+        supplierId: 'sup-1',
         note: '一张单多商品入库',
       },
     })
@@ -140,12 +239,14 @@ describe('warehouse inventory routes', () => {
     expect(response.statusCode).toBe(200)
     expect(recordBatchInbound).toHaveBeenCalledWith(expect.objectContaining({
       tenantId: 'tenant-1', userId: 'user-1',
+      supplierId: 'sup-1',
+      sourceName: '井育苗菇',
       items: [
         expect.objectContaining({ productId: 'product-1', purchaseQuantity: 2, unitPrice: 80 }),
         expect.objectContaining({ productId: 'product-2', purchaseQuantity: 5, unitPrice: 10 }),
       ],
     }))
-    expect(response.json()).toMatchObject({ ok: true, count: 2, totalAmount: 210 })
+    expect(response.json()).toMatchObject({ ok: true, count: 2, totalAmount: 210, gateWarnings: [] })
     await app.close()
   })
 
@@ -161,6 +262,7 @@ describe('warehouse inventory routes', () => {
         ],
         effectiveAt: '2026-08-08T17:00:00+08:00',
         idempotencyKey: 'batch-inbound-0002',
+        supplierId: 'sup-1',
       },
     })
 
@@ -184,6 +286,47 @@ describe('warehouse inventory routes', () => {
 
     expect(response.statusCode).toBe(400)
     expect(recordInbound).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it('lists inbound records with supplier and batch snapshot', async () => {
+    const app = buildApp({ tenantId: 'tenant-1', userId: 'user-1', role: 'FINANCE' })
+    const response = await app.inject({
+      method: 'GET',
+      url: '/inbound-records?from=2026-08-01&to=2026-08-31&supplierId=sup-1&source=manual&q=毛肚',
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(mocks.movementFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        tenantId: 'tenant-1',
+        warehouseId: 'warehouse-1',
+        type: 'MANUAL_INBOUND',
+        sourceType: 'WarehouseManualInbound',
+        supplierId: 'sup-1',
+      }),
+    }))
+    const payload = response.json()
+    expect(payload.total).toBe(1)
+    expect(payload.items[0]).toMatchObject({
+      id: 'movement-1',
+      amount: 160,
+      batchNo: 'MI-20260802-abcd1234',
+      supplier: { no: 'SUP001', name: '井育苗菇' },
+      product: { code: 'MR001', name: '水牛毛肚' },
+      reversed: false,
+    })
+    await app.close()
+  })
+
+  it('defaults inbound records to all inbound types without a supplier filter', async () => {
+    const app = buildApp({ tenantId: 'tenant-1', userId: 'user-1', role: 'FINANCE' })
+    const response = await app.inject({ method: 'GET', url: '/inbound-records' })
+
+    expect(response.statusCode).toBe(200)
+    expect(mocks.movementFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ type: { in: ['MANUAL_INBOUND', 'OPENING_BALANCE'] } }),
+    }))
     await app.close()
   })
 

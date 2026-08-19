@@ -39,6 +39,7 @@ model Tenant {
   warehouseLedgerLotAllocations WarehouseLedgerLotAllocation[]
   supplierProductCategories     SupplierProductCategory[]
   productUpstreamSources        ProductUpstreamSource[]
+  supplierNameAliases           SupplierNameAlias[]
   receipts                      Receipt[]
   reconciliations               Reconciliation[]
   payments                      Payment[]
@@ -215,6 +216,9 @@ model WarehouseLedgerMovement {
   effectiveAt          DateTime
   note                 String?                     @db.VarChar(240)
   sourceName           String?                     @db.VarChar(120)
+  // 结构化供应商（P2）：sourceName 保留作历史兼容与原文快照；
+  // 数据包多供应商聚合行无法归一时保持 null。
+  supplierId           String?
   createdById          String?
   reversalOfId         String?                     @unique @db.VarChar(64)
   recordedAt           DateTime                    @default(now())
@@ -222,6 +226,7 @@ model WarehouseLedgerMovement {
   tenant         Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   warehouse      Warehouse                      @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
   product        Product                        @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  supplier       Supplier?                      @relation(fields: [supplierId], references: [id], onDelete: Restrict)
   reversalOf     WarehouseLedgerMovement?       @relation("WarehouseLedgerMovementReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
   reversal       WarehouseLedgerMovement?       @relation("WarehouseLedgerMovementReversal")
   createdLot     WarehouseLedgerLot?            @relation("WarehouseLedgerLotSource")
@@ -230,7 +235,27 @@ model WarehouseLedgerMovement {
   @@unique([tenantId, warehouseId, idempotencyKey])
   @@index([tenantId, warehouseId, productId, effectiveAt])
   @@index([tenantId, sourceType, sourceId])
+  @@index([tenantId, supplierId, effectiveAt])
   @@map("warehouse_ledger_movements")
+}
+
+// 供应商名称别名（P2）：美团数据包/历史台账里的供应商文本 → 供应商主数据。
+// 人工认领一次后自动命中；台账 sourceName 精确匹配不上供应商名时按此表解析。
+model SupplierNameAlias {
+  id          String   @id @default(cuid())
+  tenantId    String
+  supplierId  String
+  alias       String   @db.VarChar(120)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, alias])
+  @@index([tenantId, supplierId])
+  @@map("supplier_name_aliases")
 }
 
 enum WarehouseLedgerReservationStatus {
@@ -1171,6 +1196,8 @@ model Supplier {
   stockReservations      SupplierStockReservation[]
   productCategories      SupplierProductCategory[]
   upstreamProductSources ProductUpstreamSource[]
+  warehouseLedgerMovements WarehouseLedgerMovement[]
+  nameAliases            SupplierNameAlias[]
 
   @@unique([tenantId, no])
   @@index([businessScopes], type: Gin, map: "suppliers_business_scopes_idx")

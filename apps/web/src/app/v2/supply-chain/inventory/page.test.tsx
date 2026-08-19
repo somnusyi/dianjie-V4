@@ -72,11 +72,14 @@ describe('总仓库存页面', () => {
         checkedSku: 1,
         issues: [{ code: 'LOT_BALANCE_MISMATCH', productId: 'product-1', message: '批次剩余数量与物理余额不一致' }],
       })
+      if (url === '/api/suppliers?businessScope=WAREHOUSE_UPSTREAM') {
+        return Promise.resolve([{ id: 'sup-1', no: 'SUP001', name: '井育苗菇' }])
+      }
       if (url === '/api/warehouse-inventory/manual-inbound' && init?.method === 'POST') {
-        return Promise.resolve({ replayed: false })
+        return Promise.resolve({ replayed: false, gateWarnings: [] })
       }
       if (url === '/api/warehouse-inventory/batch-manual-inbound' && init?.method === 'POST') {
-        return Promise.resolve({ replayed: false, count: 1, totalAmount: 160 })
+        return Promise.resolve({ replayed: false, count: 1, totalAmount: 160, gateWarnings: [] })
       }
       return Promise.reject(new Error(`unexpected API: ${url}`))
     })
@@ -106,22 +109,29 @@ describe('总仓库存页面', () => {
     const open = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '单条入库')
     act(() => open?.click())
 
-    const select = container.querySelector('select') as HTMLSelectElement
+    const selects = Array.from(container.querySelectorAll('select')) as HTMLSelectElement[]
     const numberInputs = Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[]
-    change(select, 'product-1')
+    change(selects[0], 'product-1')
     change(numberInputs[0], '2')
     change(numberInputs[1], '160')
 
+    // 未选供应商时前端拦截，不发请求
+    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('确认手工入库'))
+    await act(async () => { submit?.click() })
+    expect(container.textContent).toContain('请选择供货供应商')
+    expect(mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/manual-inbound')).toBe(false)
+
+    // 供应商下拉（商品 select 之后）选上游供应商
+    change(selects[1], 'sup-1')
     expect(container.textContent).toContain('2 箱 × 8 = 16 袋')
     expect(container.textContent).toContain('¥10.00/袋')
 
-    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('确认手工入库'))
     await act(async () => { submit?.click() })
     await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/manual-inbound'))
 
     const call = mockFetch.mock.calls.find(([path]) => String(path) === '/api/warehouse-inventory/manual-inbound')
     expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
-      productId: 'product-1', purchaseQuantity: 2, totalAmount: 160,
+      productId: 'product-1', purchaseQuantity: 2, totalAmount: 160, supplierId: 'sup-1',
     })
 
     act(() => root.unmount())
@@ -135,8 +145,8 @@ describe('总仓库存页面', () => {
     await act(async () => { open?.click() })
     await waitFor(() => container.textContent?.includes('总仓批量入库') ?? false)
 
-    const select = container.querySelector('select') as HTMLSelectElement
-    change(select, 'product-1')
+    const selects = Array.from(container.querySelectorAll('select')) as HTMLSelectElement[]
+    change(selects[0], 'product-1')
     const add = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '添加商品')
     act(() => add?.click())
 
@@ -145,6 +155,8 @@ describe('总仓库存页面', () => {
     change(quantityInput, '2')
     change(priceInput, '80')
 
+    // 底部供应商下拉
+    change(selects[1], 'sup-1')
     expect(container.textContent).toContain('2 箱 = 16 袋')
     expect(container.textContent).toContain('¥160.00')
     const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('确认批量入库'))
@@ -154,6 +166,7 @@ describe('总仓库存页面', () => {
     const call = mockFetch.mock.calls.find(([path]) => String(path) === '/api/warehouse-inventory/batch-manual-inbound')
     expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
       items: [{ productId: 'product-1', purchaseQuantity: 2, unitPrice: 80 }],
+      supplierId: 'sup-1',
     })
 
     act(() => root.unmount())

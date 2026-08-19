@@ -227,7 +227,7 @@ describe('上游供应商管理 PC 页面', () => {
     cleanup(container, root)
   })
 
-  it('点击列表行展示详情区，商品数量显示“待接入”', async () => {
+  it('点击列表行展示详情区，供货关系入口指向供货商品管理页', async () => {
     mockFetch.mockResolvedValue(SUPPLIERS)
 
     const { container, root } = render(<SuppliersPage />)
@@ -239,8 +239,11 @@ describe('上游供应商管理 PC 页面', () => {
     act(() => { Simulate.click(row) })
 
     await waitFor(() => container.textContent?.includes('供应商档案'))
-    expect(container.textContent).toContain('商品数量')
-    expect(container.textContent).toContain('待接入')
+    expect(container.textContent).toContain('供货关系')
+    const link = Array.from(container.querySelectorAll('a')).find(
+      a => a.textContent?.includes('管理供货商品'),
+    )
+    expect(link?.getAttribute('href')).toBe(`/v2/supply-chain/suppliers/${SUPPLIERS[0].id}/products`)
 
     cleanup(container, root)
   })

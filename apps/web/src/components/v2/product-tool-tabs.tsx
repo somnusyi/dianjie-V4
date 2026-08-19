@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation'
 const TABS = [
   { href: '/v2/supply-chain/products', label: '商品档案' },
   { href: '/v2/supply-chain/categories', label: '分类管理' },
+  { href: '/v2/supply-chain/relations', label: '供货关系' },
   { href: '/v2/supply-chain/products/import', label: '批量导入' },
   { href: '/v2/supply-chain/products/history', label: '操作记录' },
 ] as const

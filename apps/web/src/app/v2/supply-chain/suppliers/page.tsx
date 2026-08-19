@@ -294,6 +294,13 @@ export default function InternalSupplyChainSuppliersPage() {
                         <td className="px-4 py-3 font-num text-gray2">{supplier.contactPhone || '—'}</td>
                         <td className="px-4 py-3 text-gray2">{formatCreditDays(supplier)}</td>
                         <td className="px-4 py-3 text-right">
+                          <a
+                            href={`/v2/supply-chain/suppliers/${supplier.id}/products`}
+                            onClick={e => e.stopPropagation()}
+                            className="mr-3 text-button text-accent"
+                          >
+                            供货商品
+                          </a>
                           <button
                             onClick={e => { e.stopPropagation(); toggleStatus(supplier) }}
                             disabled={togglingId === supplier.id}
@@ -377,9 +384,12 @@ export default function InternalSupplyChainSuppliersPage() {
                   </div>
                 )}
                 <div className="border-t border-border pt-4">
-                  <div className="text-micro text-gray3">商品数量</div>
-                  <div className="mt-1 text-h2 text-amber">{getSupplierDetailStats(selected).productCountLabel}</div>
-                  <p className="mt-1 text-micro text-gray3">该统计需接入商品主数据后展示。</p>
+                  <div className="text-micro text-gray3">供货关系</div>
+                  <p className="mt-1 text-caption text-gray2">批量维护这家供应商可供的商品（对齐美团供货关系）。</p>
+                  <a
+                    href={`/v2/supply-chain/suppliers/${selected.id}/products`}
+                    className="mt-2 block rounded-cta bg-accent px-4 py-2.5 text-center text-button text-white"
+                  >管理供货商品 →</a>
                 </div>
               </div>
             )}

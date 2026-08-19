@@ -51,7 +51,7 @@ export type SupplyProduct = {
 export type CategoryOption = { name: string; count: number }
 
 /** 供应商分类主数据项（GET /api/products/categories?supplierId=… 的返回形态）。 */
-export type MasterCategoryOption = CategoryOption & { isActive?: boolean }
+export type MasterCategoryOption = CategoryOption & { isActive?: boolean; sortOrder?: number }
 
 export type SupplierOption = { id: string; name: string }
 
@@ -199,6 +199,38 @@ export function mergeCategoryOptions(
     }
   }
   return result
+}
+
+/**
+ * 按分类主数据的 sortOrder 重排分类列表（分类管理页「上下箭头调整顺序」保存的顺序）。
+ *
+ * 背景：左侧分类树的 base 来自聚合接口 /api/products/categories（不带 supplierId），
+ * 服务端只按 category 字符串升序返回，完全忽略主数据 sortOrder；mergeCategoryOptions
+ * 也仅追加不重排，导致商品页侧边栏顺序与分类管理页不一致。
+ *
+ * 规则：同一分类出现在多个供应商主数据时取最小 sortOrder；未出现在任何主数据的
+ * 分类排在最后，按名称字典序兜底。输入数组不被修改。
+ */
+export function orderCategoriesByMasterSort(
+  categories: CategoryOption[],
+  masterLists: MasterCategoryOption[][],
+): CategoryOption[] {
+  const orderMap = new Map<string, number>()
+  for (const list of masterLists) {
+    for (const category of list) {
+      if (typeof category.sortOrder !== 'number') continue
+      const existing = orderMap.get(category.name)
+      if (existing === undefined || category.sortOrder < existing) {
+        orderMap.set(category.name, category.sortOrder)
+      }
+    }
+  }
+  return [...categories].sort((a, b) => {
+    const orderA = orderMap.get(a.name) ?? Number.MAX_SAFE_INTEGER
+    const orderB = orderMap.get(b.name) ?? Number.MAX_SAFE_INTEGER
+    if (orderA !== orderB) return orderA - orderB
+    return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+  })
 }
 
 /**

@@ -17,6 +17,7 @@ import {
   isNewCategoryName,
   keepFiltersForPage,
   mergeCategoryOptions,
+  orderCategoriesByMasterSort,
   parseProductQuantity,
   productImageAlt,
   productStatusTone,
@@ -167,6 +168,44 @@ describe('mergeCategoryOptions', () => {
     const merged = mergeCategoryOptions(base, [])
     expect(merged).toEqual([{ name: '蔬菜', count: 1 }])
     expect(merged).not.toBe(base)
+  })
+})
+
+describe('orderCategoriesByMasterSort', () => {
+  it('reorders by master sortOrder so sidebar matches 分类管理 page order', () => {
+    // 聚合接口按名称字典序返回（如: 其他 < 牛肉类 < 菌类），主数据 sortOrder 才是用户调的顺序
+    const base = [{ name: '其他', count: 1 }, { name: '牛肉类', count: 6 }, { name: '常见菌类', count: 16 }]
+    const master = [
+      { name: '常见菌类', count: 16, sortOrder: 0, isActive: true },
+      { name: '牛肉类', count: 6, sortOrder: 1, isActive: true },
+      { name: '其他', count: 1, sortOrder: 2, isActive: true },
+    ]
+    const ordered = orderCategoriesByMasterSort(base, [master])
+    expect(ordered.map(c => c.name)).toEqual(['常见菌类', '牛肉类', '其他'])
+  })
+
+  it('takes the min sortOrder when a category appears in multiple supplier masters', () => {
+    const base = [{ name: '禽类', count: 4 }, { name: '牛肉类', count: 6 }]
+    const ordered = orderCategoriesByMasterSort(base, [
+      [{ name: '禽类', count: 4, sortOrder: 5 }],
+      [{ name: '牛肉类', count: 6, sortOrder: 2 }, { name: '禽类', count: 0, sortOrder: 9 }],
+    ])
+    expect(ordered.map(c => c.name)).toEqual(['牛肉类', '禽类'])
+  })
+
+  it('puts categories missing from all masters last, ordered by name', () => {
+    const base = [{ name: '蔬菜', count: 1 }, { name: '禽类', count: 4 }, { name: '牛肉类', count: 6 }]
+    const ordered = orderCategoriesByMasterSort(base, [
+      [{ name: '禽类', count: 4, sortOrder: 0 }],
+    ])
+    expect(ordered.map(c => c.name)).toEqual(['禽类', '牛肉类', '蔬菜'])
+  })
+
+  it('keeps original order when masters carry no sortOrder, and does not mutate input', () => {
+    const base = [{ name: '蔬菜', count: 1 }, { name: '禽类', count: 4 }]
+    const ordered = orderCategoriesByMasterSort(base, [[{ name: '禽类', count: 4 }]])
+    expect(ordered.map(c => c.name)).toEqual(['禽类', '蔬菜']) // 字典序兜底: 禽 < 蔬
+    expect(base.map(c => c.name)).toEqual(['蔬菜', '禽类'])
   })
 })
 

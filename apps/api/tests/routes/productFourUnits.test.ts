@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   invalidatePattern: vi.fn(),
   executeRaw: vi.fn(),
   queryRaw: vi.fn(),
+  receiptItemAggregate: vi.fn(),
 }))
 
 vi.mock('@dianjie/db', async importOriginal => {
@@ -33,7 +34,7 @@ vi.mock('@dianjie/db', async importOriginal => {
     },
     supplier: { findFirst: (...args: any[]) => mocks.supplierFindFirst(...args) },
     // 单位契约护栏会查近 90 天成交价来判断折算结果是否离谱；无历史即不拦。
-    receiptItem: { aggregate: vi.fn().mockResolvedValue({ _avg: { inventoryUnitCostSnapshot: null }, _count: { _all: 0 } }) },
+    receiptItem: { aggregate: (...args: any[]) => mocks.receiptItemAggregate(...args) },
     supplierProductCategory: {
       findUnique: (...args: any[]) => mocks.categoryFindUnique(...args),
       aggregate: vi.fn(),
@@ -125,6 +126,7 @@ describe('product four-unit master-data contract (document snapshots are next ph
     vi.clearAllMocks()
     mocks.executeRaw.mockResolvedValue([])
     mocks.queryRaw.mockResolvedValue([])
+    mocks.receiptItemAggregate.mockResolvedValue({ _avg: { inventoryUnitCostSnapshot: null }, _count: { _all: 0 } })
     mocks.opLogCreate.mockResolvedValue({})
     mocks.productCreate.mockImplementation(async ({ data }: any) => product({
       ...data,
@@ -335,6 +337,26 @@ describe('product four-unit master-data contract (document snapshots are next ph
     expect(mocks.notifyProductChange).toHaveBeenCalledWith(expect.objectContaining({
       before: expect.objectContaining({ orderUnit: '箱', inventoryUnitsPerOrderUnit: 12 }),
       after: expect.objectContaining({ orderUnit: '托', inventoryUnitsPerOrderUnit: 144 }),
+    }))
+  })
+
+  it('scopes the cost-outlier guard history to the product current inventory unit', async () => {
+    mocks.productFindFirst.mockResolvedValueOnce(product())
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/api/products/${productId}`,
+      payload: { price: 26 },
+    })
+
+    expect(response.statusCode).toBe(200)
+    // 历史快照可能冻结在旧单位（袋/箱口径并存），只统计同口径的行，
+    // 否则跨单位平均会把正常调价误判成数倍偏差 (2026-08-18 毛肚/黄喉误拦事故)。
+    expect(mocks.receiptItemAggregate).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        productId,
+        inventoryUnitSnapshot: '瓶',
+      }),
     }))
   })
 })

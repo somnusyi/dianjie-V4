@@ -45,6 +45,7 @@ import {
   isNewCategoryName,
   keepFiltersForPage,
   mergeCategoryOptions,
+  orderCategoriesByMasterSort,
   productImageAlt,
   productStatusTone,
   resetPageFilters,
@@ -260,13 +261,17 @@ export default function InternalSupplyChainProductsPage() {
         // 不会出现；逐供应商补取分类主数据（同分类管理页接口）并合并后新建分类才可见。
         const masterLists = await Promise.all(
           supplierOptions.map((supplier: SupplierOption) =>
-            apiFetch<Array<CategoryOption & { isActive?: boolean }>>(
+            apiFetch<Array<CategoryOption & { isActive?: boolean; sortOrder?: number }>>(
               `/api/products/categories?supplierId=${encodeURIComponent(supplier.id)}`,
-            ).catch(() => [] as Array<CategoryOption & { isActive?: boolean }>),
+            ).catch(() => [] as Array<CategoryOption & { isActive?: boolean; sortOrder?: number }>),
           ),
         )
         if (!active) return
-        setCategories(filterSupplierCategories(mergeCategoryOptions(base, masterLists)))
+        // 聚合接口只按名称排序；合并主数据后按分类管理页保存的 sortOrder 重排，
+        // 使侧边栏顺序与「分类管理」页调整的顺序一致。
+        setCategories(filterSupplierCategories(
+          orderCategoriesByMasterSort(mergeCategoryOptions(base, masterLists), masterLists),
+        ))
       })
       .catch(() => {})
     return () => { active = false }

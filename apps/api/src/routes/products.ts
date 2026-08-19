@@ -2105,10 +2105,14 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
 
       if (nextInventoryUnitCost) {
         // 收货单冻结的 inventoryUnitCostSnapshot 同样是每最小库存单位，可直接比。
+        // 只统计与商品当前库存单位同口径的快照：历史行可能冻结在旧单位
+        // (如库存单位从「袋」改成「箱」后, 旧行是 4 元/袋、新行是 400 元/箱),
+        // 跨单位平均会把正确数据误判成数倍偏差, 拦住正常调价 (2026-08-18 事故)。
         const history = await prisma.receiptItem.aggregate({
           where: {
             productId: before.id,
             inventoryUnitCostSnapshot: { gt: 0 },
+            ...(inventoryUnitLabel ? { inventoryUnitSnapshot: inventoryUnitLabel } : {}),
             receipt: {
               tenantId,
               status: { in: ['CONFIRMED', 'ACCOUNTED'] },

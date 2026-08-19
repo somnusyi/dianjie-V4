@@ -21,7 +21,9 @@ export const ACTIVE_STORE_INJECT_PREFIXES = [
   '/api/users',
 ]
 
-export function activeStoreInjectHook(request: FastifyRequest) {
+// 必须保持 async：Fastify 钩子的同步函数若不回调 done() 且不返回 Promise，
+// 请求链会永久挂起（2026-08-19 热修时改成同步函数导致全站请求超时）。
+export async function activeStoreInjectHook(request: FastifyRequest) {
   const active = request.headers['x-active-store']
   if (typeof active !== 'string' || !active) return
   if (request.url.startsWith('/api/auth/')) return // 登录/申请等公开端点不注入

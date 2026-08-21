@@ -79,6 +79,15 @@ function buildTx(options: {
       ]),
     },
     warehouseLedgerLot: { update: lotUpdate },
+    // 比例加价钩子：FIXED 商品直接安静跳过，不写价格与日志
+    product: {
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'prod-1', tenantId: 'tenant-1', name: '测试商品', status: 'ENABLED',
+        price: new Prisma.Decimal(25), pricingMode: 'FIXED', markupPercent: null,
+        supplierId: null, category: null, costUnit: 'kg', inventoryUnit: 'kg',
+        inventoryUnitsPerCostUnit: new Prisma.Decimal(1),
+      }),
+    },
   } as any
   return { tx, movementCreate, lotUpdate, balanceUpdate }
 }

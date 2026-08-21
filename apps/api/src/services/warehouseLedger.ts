@@ -4,6 +4,7 @@ import { resolveProductFourUnits, type ProductInventoryUnitLike } from './invent
 import { resolveTenantWarehouseId } from './defaultWarehouse'
 import { physicalUnitFactor, sourceSpecMassFactor, sourceSpecPackageFactor } from './warehouseInventoryImport'
 import { resolveSupplierIdsByNames } from './supplierAliases'
+import { applyMarkupReprice } from './markupPricing'
 
 const ZERO = new Prisma.Decimal(0)
 const QTY_DP = 6
@@ -455,6 +456,13 @@ export async function recordManualWarehouseInbound(input: ManualWarehouseInbound
       inventoryValue: nextValue,
       averageUnitCost: nextAverage,
     })
+    // 比例加价：均价变化后按规则自动重算卖价（未启用比例加价的商品安静跳过）
+    await applyMarkupReprice(tx, {
+      tenantId: input.tenantId,
+      productId: product.id,
+      averageUnitCost: nextAverage,
+      trigger: { type: 'WarehouseManualInbound', id: movement.id },
+    })
     const batchNo = String(input.batchNo || `MI-${input.effectiveAt.toISOString().slice(0, 10).replaceAll('-', '')}-${movement.id.slice(-8)}`)
     if (input.batchNo) {
       const duplicateBatch = await tx.warehouseLedgerLot.findFirst({
@@ -671,6 +679,13 @@ export async function recordBatchManualWarehouseInbound(input: BatchManualWareho
         inventoryValue: nextValue,
         averageUnitCost: nextAverage,
       })
+      // 比例加价：均价变化后按规则自动重算卖价
+      await applyMarkupReprice(tx, {
+        tenantId: input.tenantId,
+        productId: line.product.id,
+        averageUnitCost: nextAverage,
+        trigger: { type: 'WarehouseBatchManualInbound', id: movement.id },
+      })
       const batchNo = line.batchNo || `MB-${input.effectiveAt.toISOString().slice(0, 10).replaceAll('-', '')}-${movement.id.slice(-8)}`
       const lot = await tx.warehouseLedgerLot.create({
         data: {
@@ -847,6 +862,13 @@ export async function recordWarehousePhysicalCount(input: WarehousePhysicalCount
       inventoryValue: countedValue,
       averageUnitCost,
     })
+    // 比例加价：实盘重设均价后按规则自动重算卖价
+    await applyMarkupReprice(tx, {
+      tenantId: input.tenantId,
+      productId: product.id,
+      averageUnitCost,
+      trigger: { type: 'WarehousePhysicalCount', id: movement.id },
+    })
     for (const lot of oldLots) {
       await tx.warehouseLedgerLot.update({
         where: { id: lot.id },
@@ -1008,6 +1030,13 @@ export async function reverseManualWarehouseInbound(input: {
       reservedQty: balance.reservedQty,
       inventoryValue: normalizedValue,
       averageUnitCost: nextAverage,
+    })
+    // 比例加价：冲回入库改变均价后按规则自动重算卖价
+    await applyMarkupReprice(tx, {
+      tenantId: input.tenantId,
+      productId: original.productId,
+      averageUnitCost: nextAverage,
+      trigger: { type: 'WarehouseManualInboundReversal', id: movement.id },
     })
     await tx.warehouseLedgerLot.update({
       where: { id: original.createdLot.id },
@@ -1787,6 +1816,13 @@ export async function recordWarehouseDailyPackageLedger(input: {
         note: line.note, sourceName: line.sourceName, supplierId: line.supplierId, createdById: input.userId,
       } })
       await persistBalance(tx, balance, { physicalQty: nextPhysical, reservedQty: balance.reservedQty, inventoryValue: nextValue, averageUnitCost: nextAverage })
+      // 比例加价：美团每日包入库改变均价后按规则自动重算卖价
+      await applyMarkupReprice(tx, {
+        tenantId: input.tenantId,
+        productId: line.productId,
+        averageUnitCost: nextAverage,
+        trigger: { type: 'MeituanDailyPackage', id: movement.id },
+      })
       await tx.warehouseLedgerLot.create({ data: {
         tenantId: input.tenantId, warehouseId: record.warehouseId, productId: line.productId, kind: 'MANUAL_INBOUND',
         batchNo: `DP-${packageDate.replaceAll('-', '')}-${record.id.slice(-6)}-${line.productId.slice(-6)}`,
@@ -2035,6 +2071,13 @@ export async function reverseDeliveryOutboundInTransaction(
     reservedQty: balance.reservedQty,
     inventoryValue: nextValue,
     averageUnitCost: nextAverage,
+  })
+  // 比例加价：出库冲回（货退回仓）改变均价后按规则自动重算卖价
+  await applyMarkupReprice(tx, {
+    tenantId: input.tenantId,
+    productId: original.productId,
+    averageUnitCost: nextAverage,
+    trigger: { type: input.source === 'LossClaim' ? 'LossClaimReversal' : 'ReceiptRejectionReversal', id: movement.id },
   })
   return { reversed: true, movementId: movement.id, replayed: false }
 }

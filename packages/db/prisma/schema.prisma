@@ -1229,6 +1229,10 @@ model Product {
   unitConversionNote            String?                     @db.VarChar(500)
   unitConversionVerifiedAt      DateTime?
   price                         Decimal                     @db.Decimal(10, 2) // 参考单价
+  // 比例加价定价（2026-08-20）：MARKUP 时按总仓库存移动均价 ×(1+比例) 自动定卖价；
+  // null/FIXED 为固定价。markupPercent 为空时继承分类默认比例。
+  pricingMode                   String?                     @db.VarChar(16) // FIXED | MARKUP
+  markupPercent                 Decimal?                    @db.Decimal(7, 2) // 加价比例%，如 20 = +20%
   stock                         Decimal                     @default(0) @db.Decimal(12, 3)
   minStock                      Decimal                     @default(0) @db.Decimal(12, 3) // 安全库存
   minOrderQty                   Decimal                     @default(1) @db.Decimal(12, 3) // 起订量 (≥1)
@@ -1322,6 +1326,8 @@ model SupplierProductCategory {
   sortOrder  Int      @default(0)
   isActive   Boolean  @default(true)
   isSystem   Boolean  @default(false) // “其他”等系统兜底分类不可停用/改名
+  // 分类默认加价比例%（比例加价定价）：商品未自填比例时继承；为空则该分类商品固定价
+  defaultMarkupPercent Decimal? @db.Decimal(7, 2)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 

@@ -248,8 +248,8 @@ describe('product bulk direct actions', () => {
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     })
     expect(response.json()).toEqual([
-      { id: 'category-a', name: '生鲜', count: 3, sortOrder: 1, isActive: true, isSystem: false },
-      { id: 'category-b', name: '停用分类', count: 0, sortOrder: 2, isActive: false, isSystem: false },
+      { id: 'category-a', name: '生鲜', count: 3, sortOrder: 1, isActive: true, isSystem: false, defaultMarkupPercent: null },
+      { id: 'category-b', name: '停用分类', count: 0, sortOrder: 2, isActive: false, isSystem: false, defaultMarkupPercent: null },
     ])
   })
 

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { Prisma, prisma } from '@dianjie/db'
 import { resolveProductFourUnits, type ProductInventoryUnitLike } from './inventoryUnits'
+import { applyMarkupReprice } from './markupPricing'
 
 const ZERO = new Prisma.Decimal(0)
 const QTY_DP = 6
@@ -311,6 +312,14 @@ async function writeOneBaseline(
     reservedQty: balance.reservedQty,
     inventoryValue: countedValue,
     averageUnitCost,
+  })
+
+  // 比例加价：基线快照确立均价后按规则自动重算卖价
+  await applyMarkupReprice(tx, {
+    tenantId: input.tenantId,
+    productId: product.id,
+    averageUnitCost,
+    trigger: { type: 'WarehouseBaselineSnapshot', id: movement.id },
   })
 
   await tx.warehouseInventoryImportItem.update({

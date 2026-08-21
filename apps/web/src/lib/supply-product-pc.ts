@@ -254,6 +254,23 @@ export function keepFiltersForPage(
   return { ...current, page }
 }
 
+/** 解析加价比例输入：空串 = null（跟随分类默认比例）。 */
+export function parseMarkupPercent(value: string): number | null {
+  const trimmed = value.trim()
+  if (trimmed === '') return null
+  const n = Number(trimmed)
+  return Number.isFinite(n) ? n : null
+}
+
+/** 校验加价比例输入；空串合法（跟随分类），返回错误文案或 null。 */
+export function validateMarkupPercentInput(value: string): string | null {
+  const trimmed = value.trim()
+  if (trimmed === '') return null
+  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return '加价比例必须是非负数字，最多两位小数'
+  if (Number(trimmed) > 1000) return '加价比例不能超过 1000%'
+  return null
+}
+
 /**
  * 新增商品请求体映射。
  * 过滤空字符串，将数值字段转为 number。
@@ -269,6 +286,8 @@ export function buildCreateBody(
     shelfDays: string
     supplierId?: string
     imageKey?: string | null
+    pricingMode?: string
+    markupPercent?: string
   } & Partial<SupplyProductQuantityForm>,
 ): Record<string, unknown> {
   const shelfDays = form.shelfDays.trim() === '' ? 7 : Number(form.shelfDays)
@@ -293,6 +312,13 @@ export function buildCreateBody(
   if (minOrderQty != null) body.minOrderQty = minOrderQty
   if (stepQty != null) body.stepQty = stepQty
 
+  // 比例加价：只有显式选 MARKUP 才提交；比例留空 = 跟随分类默认比例。
+  if (form.pricingMode === 'MARKUP') {
+    body.pricingMode = 'MARKUP'
+    const markupPercent = parseMarkupPercent(form.markupPercent ?? '')
+    if (markupPercent != null) body.markupPercent = markupPercent
+  }
+
   return body
 }
 
@@ -315,6 +341,8 @@ export function buildEditBody(
     unit: string
     spec: string
     shelfDays: string
+    pricingMode?: string
+    markupPercent?: string
   } & Partial<SupplyProductQuantityForm>,
   original: {
     name: string
@@ -323,6 +351,8 @@ export function buildEditBody(
     unit: string
     spec: string
     shelfDays: number
+    pricingMode?: string | null
+    markupPercent?: number | string | null
     stock?: number | string | null
     minStock?: number | string | null
     minOrderQty?: number | string | null
@@ -342,6 +372,16 @@ export function buildEditBody(
     body.minOrderQty = parseProductQuantity(form.minOrderQty ?? '')
   }
   if (quantityChanged(form.stepQty, original.stepQty)) body.stepQty = parseProductQuantity(form.stepQty ?? '')
+
+  // 定价方式 / 加价比例：空比例 = null（清除自填，跟随分类默认）。
+  const formMode = form.pricingMode === 'MARKUP' ? 'MARKUP' : 'FIXED'
+  const originalMode = original.pricingMode === 'MARKUP' ? 'MARKUP' : 'FIXED'
+  if (formMode !== originalMode) body.pricingMode = formMode
+  const formMarkup = parseMarkupPercent(form.markupPercent ?? '')
+  const originalMarkup = original.markupPercent === null || original.markupPercent === undefined || original.markupPercent === ''
+    ? null
+    : Number(original.markupPercent)
+  if (formMarkup !== originalMarkup) body.markupPercent = formMarkup
 
   return body
 }

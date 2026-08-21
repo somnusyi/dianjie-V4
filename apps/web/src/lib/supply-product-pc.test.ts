@@ -23,6 +23,7 @@ import {
   productStatusTone,
   resetPageFilters,
   resolveProductImageUrl,
+  validateMarkupPercentInput,
   validateNewProductForm,
   validateProductQuantities,
   validateProductQuantity,
@@ -722,5 +723,57 @@ describe('buildEditBody with quantities', () => {
     }
     const body = buildEditBody(form, original)
     expect(body).toEqual({})
+  })
+})
+
+describe('markup pricing fields', () => {
+  const baseForm = {
+    name: '香菇', code: '', category: '菌菇', unit: '件', price: '10', spec: '', shelfDays: '7',
+  }
+  const baseOriginal = {
+    name: '香菇', code: '', category: '菌菇', unit: '件', spec: '', shelfDays: 7,
+  }
+
+  it('validateMarkupPercentInput accepts empty and two-decimal values', () => {
+    expect(validateMarkupPercentInput('')).toBeNull()
+    expect(validateMarkupPercentInput('20')).toBeNull()
+    expect(validateMarkupPercentInput('12.5')).toBeNull()
+    expect(validateMarkupPercentInput('-1')).not.toBeNull()
+    expect(validateMarkupPercentInput('abc')).not.toBeNull()
+    expect(validateMarkupPercentInput('1.234')).not.toBeNull()
+    expect(validateMarkupPercentInput('1001')).not.toBeNull()
+  })
+
+  it('buildCreateBody only sends markup fields when MARKUP selected', () => {
+    expect(buildCreateBody({ ...baseForm, pricingMode: 'FIXED', markupPercent: '20' })).not.toHaveProperty('pricingMode')
+    const body = buildCreateBody({ ...baseForm, pricingMode: 'MARKUP', markupPercent: '20' })
+    expect(body.pricingMode).toBe('MARKUP')
+    expect(body.markupPercent).toBe(20)
+    const followCategory = buildCreateBody({ ...baseForm, pricingMode: 'MARKUP', markupPercent: '' })
+    expect(followCategory.pricingMode).toBe('MARKUP')
+    expect(followCategory).not.toHaveProperty('markupPercent')
+  })
+
+  it('buildEditBody sends mode switch and percent clear', () => {
+    const switched = buildEditBody(
+      { ...baseForm, pricingMode: 'MARKUP', markupPercent: '' },
+      { ...baseOriginal, pricingMode: 'FIXED', markupPercent: null },
+    )
+    expect(switched).toEqual({ pricingMode: 'MARKUP' })
+    const cleared = buildEditBody(
+      { ...baseForm, pricingMode: 'MARKUP', markupPercent: '' },
+      { ...baseOriginal, pricingMode: 'MARKUP', markupPercent: 20 },
+    )
+    expect(cleared).toEqual({ markupPercent: null })
+    const unchanged = buildEditBody(
+      { ...baseForm, pricingMode: 'MARKUP', markupPercent: '20' },
+      { ...baseOriginal, pricingMode: 'MARKUP', markupPercent: 20 },
+    )
+    expect(unchanged).toEqual({})
+    const backToFixed = buildEditBody(
+      { ...baseForm, pricingMode: 'FIXED', markupPercent: '20' },
+      { ...baseOriginal, pricingMode: 'MARKUP', markupPercent: 20 },
+    )
+    expect(backToFixed).toEqual({ pricingMode: 'FIXED' })
   })
 })

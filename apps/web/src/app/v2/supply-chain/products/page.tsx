@@ -51,6 +51,7 @@ import {
   resetPageFilters,
   resolveProductImageUrl,
   SUPPLY_PRODUCT_STATUS_OPTIONS,
+  validateMarkupPercentInput,
   validateNewProductForm,
   validateProductQuantities,
   formatProductQuantity,
@@ -90,6 +91,8 @@ type ProductRow = SupplyProduct & {
   minStock?: number | string | null
   minOrderQty?: number | string | null
   stepQty?: number | string | null
+  pricingMode?: string | null
+  markupPercent?: number | string | null
   upstreamSources?: ProductUpstreamSource[]
 }
 
@@ -131,6 +134,8 @@ type FormState = {
   spec: string
   shelfDays: string
   supplierId: string
+  pricingMode: string
+  markupPercent: string
 } & FourUnitForm & SupplyProductQuantityForm
 
 const EMPTY_FORM: FormState = {
@@ -142,6 +147,8 @@ const EMPTY_FORM: FormState = {
   spec: '',
   shelfDays: '7',
   supplierId: '',
+  pricingMode: 'FIXED',
+  markupPercent: '',
   ...DEFAULT_FOUR_UNIT_FORM,
   stock: '0',
   minStock: '0',
@@ -474,6 +481,8 @@ export default function InternalSupplyChainProductsPage() {
       spec: product.spec || '',
       shelfDays: String(product.shelfDays ?? 7),
       supplierId: product.supplier?.id || '',
+      pricingMode: product.pricingMode === 'MARKUP' ? 'MARKUP' : 'FIXED',
+      markupPercent: product.markupPercent === null || product.markupPercent === undefined ? '' : String(product.markupPercent),
       // 编辑保留建档时的四单位口径（含 costUnit≠库存单位的历史档案）：
       // 曾在此 lockCostUnitToMinimum「保存即纠正」，但编辑模式不提交价格，
       // 归一后单位成本必然变化，被 unitContractGuard 全数拦下——96 个档案因此无法编辑。
@@ -526,6 +535,7 @@ export default function InternalSupplyChainProductsPage() {
     const validationError = validateNewProductForm(form)
       || validateFourUnitForm(form, { allowLegacyCostUnit: fourUnitsUnchanged })
       || validateProductQuantities(form, { editableOnly: Boolean(editing) })
+      || (form.pricingMode === 'MARKUP' ? validateMarkupPercentInput(form.markupPercent) : null)
     if (validationError) { setFormError(validationError); return }
     setFormError(null)
     setSubmitting(true)
@@ -548,6 +558,8 @@ export default function InternalSupplyChainProductsPage() {
             unit: editing.unit || '',
             spec: editing.spec || '',
             shelfDays: Number(editing.shelfDays ?? 7),
+            pricingMode: editing.pricingMode,
+            markupPercent: editing.markupPercent,
             stock: editing.stock,
             minStock: editing.minStock,
             minOrderQty: editing.minOrderQty,
@@ -1049,6 +1061,9 @@ export default function InternalSupplyChainProductsPage() {
                         <td className="px-3 py-3 text-right font-num">
                           <>
                             {formatMoney(product.price)}
+                            {product.pricingMode === 'MARKUP' && (
+                              <Chip tone="orange">比例加价</Chip>
+                            )}
                             <span className="block text-micro text-gray2">
                               元 / {unitValues.costUnit}
                             </span>
@@ -1143,6 +1158,7 @@ export default function InternalSupplyChainProductsPage() {
           onSubmit={submitForm}
           onClose={() => setFormOpen(false)}
           imageInputRef={imageInputRef}
+          onRepriced={message => { setNotice(message); load() }}
         />
       )}
 
@@ -1442,7 +1458,7 @@ function SourceDialog({
 function FormDialog({
   editing, form, formError, submitting, pendingImagePreview, categories, suppliers, priceOnly,
   creatingCategory, categoryNotice, canCreateCategory,
-  onFieldChange, onBatchFieldChange, onCreateCategory, onImageSelect, onImageClear, onSubmit, onClose, imageInputRef,
+  onFieldChange, onBatchFieldChange, onCreateCategory, onImageSelect, onImageClear, onSubmit, onClose, imageInputRef, onRepriced,
 }: {
   editing: ProductRow | null
   form: FormState
@@ -1463,6 +1479,7 @@ function FormDialog({
   onSubmit: () => void
   onClose: () => void
   imageInputRef: React.RefObject<HTMLInputElement> | null
+  onRepriced?: (message: string) => void
 }) {
   const title = priceOnly
     ? `调价「${editing?.name || ''}」`
@@ -1484,6 +1501,41 @@ function FormDialog({
       || specConversion!.factor !== Number(form.inventoryUnitsPerPurchaseUnit))
   // datalist 的原生下拉箭头在部分浏览器点击无响应，这里提供一个可点击的候选列表作为可靠入口
   const [categoryListOpen, setCategoryListOpen] = useState(false)
+  // 比例加价预览：编辑已有商品且选了比例加价时，拉取库存均价试算应售价。
+  const [markupPreview, setMarkupPreview] = useState<any | null>(null)
+  const [markupPreviewLoading, setMarkupPreviewLoading] = useState(false)
+  const [repricing, setRepricing] = useState(false)
+  const [pricingError, setPricingError] = useState<string | null>(null)
+  useEffect(() => {
+    setMarkupPreview(null)
+    setPricingError(null)
+    if (form.pricingMode !== 'MARKUP' || !editing || priceOnly) return
+    let cancelled = false
+    setMarkupPreviewLoading(true)
+    apiFetch(`/api/products/${editing.id}/markup-preview`)
+      .then(data => { if (!cancelled) setMarkupPreview(data) })
+      .catch(() => { if (!cancelled) setMarkupPreview(null) })
+      .finally(() => { if (!cancelled) setMarkupPreviewLoading(false) })
+    return () => { cancelled = true }
+  }, [editing?.id, form.pricingMode, priceOnly])
+
+  async function repriceMarkupNow() {
+    if (!editing || repricing) return
+    setRepricing(true)
+    setPricingError(null)
+    try {
+      const result: any = await apiFetch(`/api/products/${editing.id}/reprice-markup`, {
+        method: 'POST', body: JSON.stringify({}),
+      })
+      onRepriced?.(result?.message || '已按库存均价重算')
+      const data = await apiFetch(`/api/products/${editing.id}/markup-preview`)
+      setMarkupPreview(data)
+    } catch (reason: any) {
+      setPricingError(reason?.message || '重算失败')
+    } finally {
+      setRepricing(false)
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4" onClick={onClose}>
@@ -1832,6 +1884,70 @@ function FormDialog({
                 </FormField>
               </>
             )}
+            <div className="col-span-2 rounded-cta border border-border bg-bg px-3 py-2">
+              <div className="text-caption text-gray2">定价方式</div>
+              <div className="mt-2 grid grid-cols-2 gap-3">
+                <FormField label="方式">
+                  <select
+                    value={form.pricingMode}
+                    onChange={e => onFieldChange('pricingMode', e.target.value)}
+                    className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body"
+                  >
+                    <option value="FIXED">固定价（手动调价）</option>
+                    <option value="MARKUP">比例加价（按库存均价自动调）</option>
+                  </select>
+                </FormField>
+                {form.pricingMode === 'MARKUP' && (
+                  <FormField label="加价比例 %（留空跟随分类）">
+                    <input
+                      type="number"
+                      min="0"
+                      max="1000"
+                      step="0.1"
+                      value={form.markupPercent}
+                      onChange={e => onFieldChange('markupPercent', e.target.value)}
+                      placeholder="如 20"
+                      className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+                    />
+                  </FormField>
+                )}
+              </div>
+              {form.pricingMode === 'MARKUP' && (
+                <div className="mt-2 text-micro leading-5 text-gray3">
+                  {editing ? (
+                    markupPreviewLoading ? '正在按库存均价试算…' : markupPreview ? (
+                      <>
+                        当前库存均价 {markupPreview.averageUnitCost != null
+                          ? `¥${Number(markupPreview.averageUnitCost).toFixed(4)}/${markupPreview.inventoryUnit || '库存单位'}`
+                          : '暂无（从未入库）'}
+                        {markupPreview.effectiveMarkupPercent != null && markupPreview.computedPrice != null && (
+                          <>
+                            {' · '}按 {markupPreview.effectiveMarkupPercent}%
+                            （{markupPreview.markupSource === 'PRODUCT' ? '商品自填' : '分类默认'}）
+                            应售 <b className="text-ink">¥{Number(markupPreview.computedPrice).toFixed(2)}/{markupPreview.costUnit || '成本单位'}</b>
+                          </>
+                        )}
+                        {markupPreview.computedPrice != null && !markupPreview.priceMatches && (
+                          <button
+                            type="button"
+                            onClick={() => void repriceMarkupNow()}
+                            disabled={repricing}
+                            className="ml-2 text-accent underline disabled:opacity-40"
+                          >
+                            {repricing ? '重算中…' : `立即重算（当前 ¥${Number(markupPreview.currentPrice).toFixed(2)}）`}
+                          </button>
+                        )}
+                        {markupPreview.priceMatches && <span className="ml-1 text-green-fg">✓ 卖价已与规则一致</span>}
+                        {markupPreview.effectiveMarkupPercent == null && (
+                          <span className="text-red-fg">商品和分类都没设比例，保存后不会自动调价。</span>
+                        )}
+                      </>
+                    ) : '预览加载失败，不影响保存。'
+                  ) : '保存后，每次入库会按「库存均价 × (1+比例)」自动写回卖价；比例留空则跟随分类默认比例，商品自填优先。'}
+                </div>
+              )}
+              {pricingError && <p className="mt-1 text-micro text-red-fg">{pricingError}</p>}
+            </div>
             <FormField label="最小下单量">
               <input
                 type="number"

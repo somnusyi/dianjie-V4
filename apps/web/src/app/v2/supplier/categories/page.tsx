@@ -17,6 +17,7 @@ type Category = {
   sortOrder: number
   isActive: boolean
   isSystem: boolean
+  defaultMarkupPercent: number | null
 }
 
 type ViewFilter = 'all' | 'active' | 'inactive'
@@ -34,6 +35,8 @@ export default function SupplierCategoriesPage() {
   const [query, setQuery] = useState('')
   const [view, setView] = useState<ViewFilter>('all')
   const [orderDirty, setOrderDirty] = useState(false)
+  const [markupEditId, setMarkupEditId] = useState<string | null>(null)
+  const [markupEditValue, setMarkupEditValue] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmState, openConfirm] = useConfirmSheet()
@@ -164,6 +167,33 @@ export default function SupplierCategoriesPage() {
       tone: nextActive ? 'primary' : 'danger',
       onConfirm: () => setCategoryActive(category, nextActive),
     })
+  }
+
+  async function saveCategoryMarkup(category: Category) {
+    if (!category.id || busy) return
+    const trimmed = markupEditValue.trim()
+    if (trimmed !== '' && !/^\d+(\.\d{1,2})?$/.test(trimmed)) {
+      setError('加价比例必须是非负数字，最多两位小数；留空表示清除')
+      return
+    }
+    const next = trimmed === '' ? null : Number(trimmed)
+    if (next !== null && next > 1000) {
+      setError('加价比例不能超过 1000%')
+      return
+    }
+    setBusy(true); setError(null)
+    try {
+      await apiFetch(scopedPath(`/api/products/categories/${category.id}`), {
+        method: 'PATCH', body: JSON.stringify({ defaultMarkupPercent: next }),
+        headers: { 'Idempotency-Key': clientRequestId() },
+      })
+      setMarkupEditId(null)
+      await load()
+    } catch (e: any) {
+      setError(e.message || '加价比例保存失败')
+    } finally {
+      setBusy(false)
+    }
   }
 
   function move(index: number, direction: -1 | 1) {
@@ -378,14 +408,47 @@ export default function SupplierCategoriesPage() {
                           <span className="truncate text-h2">{category.name}</span>
                           {category.isSystem && <Chip tone="gray">系统</Chip>}
                           {!category.isActive && <Chip tone="gray">已停用</Chip>}
+                          {category.defaultMarkupPercent != null && (
+                            <Chip tone="orange">加价 {category.defaultMarkupPercent}%</Chip>
+                          )}
                         </div>
                       )}
                       <div className="mt-1 text-caption text-gray3">{category.count} 个 SKU · 商品和库存同步归类</div>
+                      {markupEditId === category.id && (
+                        <div className="mt-2">
+                          <div className="flex items-center gap-2">
+                            <input
+                              autoFocus type="number" min="0" max="1000" step="0.1"
+                              value={markupEditValue}
+                              onChange={event => setMarkupEditValue(event.target.value)}
+                              onKeyDown={event => {
+                                if (event.key === 'Enter') void saveCategoryMarkup(category)
+                                if (event.key === 'Escape') setMarkupEditId(null)
+                              }}
+                              placeholder="如 20；留空清除"
+                              className="w-36 rounded-cta border border-accent bg-bg px-2 py-1 text-body"
+                            />
+                            <span className="text-caption text-gray3">%</span>
+                            <button onClick={() => void saveCategoryMarkup(category)} disabled={busy} className="rounded-cta bg-accent px-3 py-1 text-button text-white disabled:opacity-40">保存</button>
+                            <button onClick={() => setMarkupEditId(null)} className="px-2 text-caption text-gray3">取消</button>
+                          </div>
+                          <p className="mt-1 text-micro text-gray3">启用「比例加价」的商品按 库存均价 × (1+比例) 自动调价；商品自填比例优先于分类。</p>
+                        </div>
+                      )}
                     </div>
 
                     {!category.isSystem && category.id && editingId !== category.id && (
                       <div className="flex flex-wrap justify-end gap-x-3 gap-y-1">
                         <button onClick={() => { setEditingId(category.id); setEditingName(category.name) }} className="text-caption text-accent">改名</button>
+                        {internalSupplyChain && (
+                          <button
+                            onClick={() => {
+                              setMarkupEditId(markupEditId === category.id ? null : category.id)
+                              setMarkupEditValue(category.defaultMarkupPercent != null ? String(category.defaultMarkupPercent) : '')
+                            }}
+                            className="text-caption text-accent"
+                          >比例</button>
+                        )}
                         {category.isActive && <button onClick={() => startMerge(category)} className="text-caption text-orange-fg">合并</button>}
                         <button onClick={() => requestToggle(category)} className={`text-caption ${category.isActive ? 'text-red-fg' : 'text-green-fg'}`}>
                           {category.isActive ? '停用' : '恢复'}

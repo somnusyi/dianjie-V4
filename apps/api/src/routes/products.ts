@@ -35,6 +35,11 @@ import {
   inventoryUnitCost,
 } from '../services/unitContractGuard'
 import {
+  applyMarkupReprice,
+  computeMarkupPrice,
+  resolveProductMarkup,
+} from '../services/markupPricing'
+import {
   productMinOrderQuantityCreateSchema,
   productMinOrderQuantityPatchSchema,
   productMinStockCreateSchema,
@@ -110,6 +115,9 @@ const productCreateSchema = z.object({
                           z.number().int().min(0).max(3650).optional().default(7)),
   supplierId: z.string().optional(),
   status:    z.enum(['PENDING_APPROVAL', 'PENDING_DISABLE', 'ENABLED', 'DISABLED']).optional(),
+  // 比例加价定价：MARKUP = 按总仓库存均价×(1+比例)自动定卖价；比例为空时继承分类默认
+  pricingMode: z.enum(['FIXED', 'MARKUP']).nullable().optional(),
+  markupPercent: z.number().min(0, '加价比例不能为负').max(1000, '加价比例超过上限').nullable().optional(),
 }).strict().superRefine((value, context) => {
   if (Boolean(value.inventoryUnit) !== Boolean(value.inventoryUnitsPerPurchaseUnit)) {
     context.addIssue({
@@ -155,6 +163,9 @@ const productPatchSchema = z.object({
   status: z.enum(['PENDING_APPROVAL', 'PENDING_DISABLE', 'ENABLED', 'DISABLED']).optional(),
   shipUpperPct: z.number().min(1).max(10).optional(),
   shipUpperBuffer: z.number().min(0).max(10_000).optional(),
+  // 比例加价定价：MARKUP = 按总仓库存均价×(1+比例)自动定卖价；比例为空时继承分类默认
+  pricingMode: z.enum(['FIXED', 'MARKUP']).nullable().optional(),
+  markupPercent: z.number().min(0, '加价比例不能为负').max(1000, '加价比例超过上限').nullable().optional(),
 }).strict()
 
 /** 自动生成商品 code: 供应商短码 + 随机短 ID，避免同毫秒批量导入互撞。 */
@@ -475,6 +486,10 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     // 设计决策 (2026-05-28): API 返回所有 status (含 DISABLED), 让前端透明展示「已停售」
     // 而不是把 DISABLED 商品悄悄藏掉. chef 下单选品页负责显示 chip + 禁用加入按钮,
     // orders.ts:298 做 server-side 兜底拦截.
+    // 加价比例是总部毛利政策，供应商角色的响应里剥掉定价字段。
+    const stripPricingForSupplier = (rows: any[]) => isSupplierRole(role)
+      ? rows.map(row => { const { pricingMode, markupPercent, ...rest } = row; return rest })
+      : rows
     if (!page && !q) {
       const scopeKey = productCatalogCacheScope(role, supplierId)
       const effectiveStatus = typeof where.status === 'string' ? where.status : 'all'
@@ -485,7 +500,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         })
       )
-      return withAvailability(tenantId, rows as any[])
+      return withAvailability(tenantId, stripPricingForSupplier(rows as any[]))
     }
     if (!page) {
       const rows = await prisma.product.findMany({
@@ -493,7 +508,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         include: listInclude,
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       })
-      return withAvailability(tenantId, rows)
+      return withAvailability(tenantId, stripPricingForSupplier(rows))
     }
     const pagination = parsePagination({ page, pageSize }, { defaultPageSize: 20, maxPageSize: 100 })
     if (!pagination) return reply.status(400).send({ error: '分页参数格式不正确' })
@@ -509,7 +524,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       prisma.product.count({ where }),
     ])
     return {
-      items: await withAvailability(tenantId, items),
+      items: await withAvailability(tenantId, stripPricingForSupplier(items)),
       total, page: p, pageSize: ps,
     }
   })
@@ -603,6 +618,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       sortOrder: category.sortOrder,
       isActive: category.isActive,
       isSystem: category.isSystem,
+      defaultMarkupPercent: category.defaultMarkupPercent === null ? null : Number(category.defaultMarkupPercent),
     }))
     // 兼容尚未执行迁移、或历史脏数据形成的孤立分类；管理页可见但不丢数据。
     for (const row of rows) {
@@ -611,6 +627,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         result.push({
           id: null as any, name, count: row._count._all,
           sortOrder: result.length, isActive: true, isSystem: name === '其他',
+          defaultMarkupPercent: null,
         })
       }
     }
@@ -669,9 +686,14 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const parsed = z.object({
       name: categoryNameSchema.optional(),
       isActive: z.boolean().optional(),
-    }).refine(value => value.name !== undefined || value.isActive !== undefined, '没有需要修改的字段').safeParse(req.body)
+      // 分类默认加价比例%（比例加价定价）；null 清除。毛利政策字段，供应商角色不可设
+      defaultMarkupPercent: z.number().min(0, '加价比例不能为负').max(1000, '加价比例超过上限').nullable().optional(),
+    }).refine(value => value.name !== undefined || value.isActive !== undefined || value.defaultMarkupPercent !== undefined, '没有需要修改的字段').safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-    let result: { id: string; name: string; isActive: boolean; productCount: number }
+    if (parsed.data.defaultMarkupPercent !== undefined && isSupplierRole(role)) {
+      return reply.status(403).send({ error: '加价比例由总部供应链设置' })
+    }
+    let result: { id: string; name: string; isActive: boolean; productCount: number; defaultMarkupPercent: number | null }
     try {
       result = await prisma.$transaction(async tx => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`supplier-categories:${tenantId}:${scopedSupplierId}`}))`
@@ -687,6 +709,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         }
         const nextName = parsed.data.name || current.name
         const nextActive = parsed.data.isActive ?? current.isActive
+        const nextMarkup = parsed.data.defaultMarkupPercent !== undefined
+          ? parsed.data.defaultMarkupPercent
+          : (current.defaultMarkupPercent === null ? null : Number(current.defaultMarkupPercent))
         if (nextName !== current.name) {
           const duplicate = await tx.supplierProductCategory.findUnique({
             where: { tenantId_supplierId_name: { tenantId, supplierId: scopedSupplierId, name: nextName } },
@@ -701,24 +726,26 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
             })
         await tx.supplierProductCategory.update({
           where: { id: current.id },
-          data: { name: nextName, isActive: nextActive },
+          data: { name: nextName, isActive: nextActive, defaultMarkupPercent: nextMarkup },
         })
         await tx.opLog.create({
           data: {
             tenantId, userId, role,
             action: nextName !== current.name
               ? `商品分类改名「${current.name}」→「${nextName}」，同步 ${updatedProducts.count} 个 SKU`
-              : `${nextActive ? '恢复' : '停用'}商品分类「${current.name}」`,
+              : parsed.data.defaultMarkupPercent !== undefined
+                ? `商品分类「${current.name}」默认加价比例 ${current.defaultMarkupPercent ?? '未设'}% → ${nextMarkup ?? '清除'}%`
+                : `${nextActive ? '恢复' : '停用'}商品分类「${current.name}」`,
             entityType: 'ProductCategory', target: nextName, targetId: current.id,
             metadata: {
               supplierId: scopedSupplierId,
-              before: { name: current.name, isActive: current.isActive },
-              after: { name: nextName, isActive: nextActive },
+              before: { name: current.name, isActive: current.isActive, defaultMarkupPercent: current.defaultMarkupPercent },
+              after: { name: nextName, isActive: nextActive, defaultMarkupPercent: nextMarkup },
               productCount: updatedProducts.count,
             },
           },
         })
-        return { id: current.id, name: nextName, isActive: nextActive, productCount: updatedProducts.count }
+        return { id: current.id, name: nextName, isActive: nextActive, productCount: updatedProducts.count, defaultMarkupPercent: nextMarkup }
       })
     } catch (error: any) {
       if (error?.code === 'P2002') return reply.status(409).send({ error: '分类名称已存在' })
@@ -1235,6 +1262,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       delete data.inventoryUnitsPerCostUnit
       delete data.unitConversionStatus
       delete data.unitConversionNote
+      delete data.pricingMode
+      delete data.markupPercent
     } else if (data.supplierId) {
       const scopedSupplier = await prisma.supplier.findFirst({
         where: { id: data.supplierId, tenantId }, select: { id: true, name: true },
@@ -1818,6 +1847,97 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     return reply.status(410).send({ error: '为保护订单和库存审计，清空全部 SKU 已永久停用。请使用批量停售。' })
   })
 
+  /**
+   * 比例加价预览：返回商品当前定价方式、生效比例（商品/分类）、总仓库存均价、
+   * 按规则算出的应售价格。供编辑弹窗实时预览，不写库。
+   */
+  app.get('/:id/markup-preview', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (isSupplierRole(role)) return reply.status(403).send({ error: '供应商无权查看定价规则' })
+    const product = await prisma.product.findFirst({
+      where: { id: req.params.id, tenantId },
+      select: {
+        id: true, name: true, price: true, status: true,
+        pricingMode: true, markupPercent: true, supplierId: true, category: true,
+        costUnit: true, inventoryUnit: true, inventoryUnitsPerCostUnit: true,
+      },
+    })
+    if (!product) return reply.status(404).send({ error: '商品不存在' })
+    const warehouseId = await resolveTenantWarehouseId(prisma, tenantId, undefined)
+    const balance = await prisma.warehouseLedgerBalance.findUnique({
+      where: { tenantId_warehouseId_productId: { tenantId, warehouseId, productId: product.id } },
+      select: { averageUnitCost: true, physicalQty: true },
+    })
+    const resolution = await resolveProductMarkup(prisma as any, tenantId, product)
+    const computedPrice = computeMarkupPrice({
+      averageUnitCost: balance?.averageUnitCost ?? null,
+      inventoryUnitsPerCostUnit: product.inventoryUnitsPerCostUnit,
+      markupPercent: resolution.markupPercent,
+    })
+    return {
+      productId: product.id,
+      name: product.name,
+      currentPrice: Number(product.price),
+      costUnit: product.costUnit || product.inventoryUnit || '',
+      inventoryUnit: product.inventoryUnit || '',
+      pricingMode: product.pricingMode,
+      markupPercent: product.markupPercent === null ? null : Number(product.markupPercent),
+      effectiveMode: resolution.effectiveMode,
+      effectiveMarkupPercent: resolution.markupPercent === null ? null : Number(resolution.markupPercent),
+      markupSource: resolution.markupSource,
+      averageUnitCost: balance ? Number(balance.averageUnitCost) : null,
+      physicalQty: balance ? Number(balance.physicalQty) : null,
+      computedPrice: computedPrice === null ? null : Number(computedPrice),
+      priceMatches: computedPrice !== null && computedPrice.equals(product.price as any),
+    }
+  })
+
+  /**
+   * 立即按库存均价重算卖价（比例加价商品）。
+   * 切换定价方式时默认不刷价，由负责人显式点这个入口，避免一批商品价格瞬间全变。
+   */
+  app.post('/:id/reprice-markup', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role, userId } = req.user
+    if (!UNIT_GOVERNANCE_ROLES.has(role)) return reply.status(403).send({ error: '只有供应链治理角色可以手动重算价格' })
+    const product = await prisma.product.findFirst({
+      where: { id: req.params.id, tenantId },
+      select: { id: true, name: true },
+    })
+    if (!product) return reply.status(404).send({ error: '商品不存在' })
+    const warehouseId = await resolveTenantWarehouseId(prisma, tenantId, undefined)
+    const result = await prisma.$transaction(async tx => {
+      const balance = await tx.warehouseLedgerBalance.findUnique({
+        where: { tenantId_warehouseId_productId: { tenantId, warehouseId, productId: product.id } },
+        select: { averageUnitCost: true },
+      })
+      if (!balance || balance.averageUnitCost.lte(0)) {
+        throw Object.assign(new Error('该商品暂无库存均价（从未入库），无法按比例重算'), { statusCode: 400 })
+      }
+      return applyMarkupReprice(tx, {
+        tenantId,
+        productId: product.id,
+        averageUnitCost: balance.averageUnitCost,
+        trigger: { type: 'ManualReprice', id: `manual:${userId}:${Date.now()}` },
+      })
+    }).catch((error: any) => error)
+    if (result instanceof Error) {
+      return reply.status((result as any).statusCode || 500).send({ error: result.message })
+    }
+    if (!result) {
+      return { ok: true, changed: false, message: '该商品未启用比例加价，或卖价已与规则一致' }
+    }
+    void invalidatePattern(`products:full:${tenantId}:*`)
+    return {
+      ok: true,
+      changed: true,
+      oldPrice: Number(result.oldPrice),
+      newPrice: Number(result.newPrice),
+      markupPercent: Number(result.markupPercent),
+      markupSource: result.markupSource,
+      message: `已按库存均价重算：¥${result.oldPrice.toFixed(2)} → ¥${result.newPrice.toFixed(2)}`,
+    }
+  })
+
   app.patch('/:id', auth(app), async (req: any, reply: any) => {
     const { role, tenantId, userId, supplierId } = req.user
     if (!PRODUCT_WRITE_ROLES.has(role)) {
@@ -1839,10 +1959,12 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       'inventoryUnitsPerPurchaseUnit', 'inventoryUnitsPerOrderUnit', 'inventoryUnitsPerCostUnit',
       'unitConversionStatus', 'unitConversionNote',
     ]
+    // 定价方式/加价比例属毛利政策，只有供应链治理角色可改；供应商永远不可见
+    const PRICING_ALLOW = ['pricingMode', 'markupPercent']
     const allow = isSupplierRole(role)
       ? SUPPLIER_ALLOW
       : UNIT_GOVERNANCE_ROLES.has(role)
-        ? [...STAFF_ALLOW, ...UNIT_ALLOW]
+        ? [...STAFF_ALLOW, ...UNIT_ALLOW, ...PRICING_ALLOW]
         : STAFF_ALLOW
     const parsedPatch = productPatchSchema.safeParse(
       Object.fromEntries(Object.entries(body).filter(([k]) => allow.includes(k))),

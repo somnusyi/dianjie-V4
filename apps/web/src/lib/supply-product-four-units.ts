@@ -325,6 +325,64 @@ export function formatOrderUnitPriceHint(
   return `约 ¥${amount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / ${orderUnit}`
 }
 
+/** 规格解析结果：从规格文本推出的最小库存单位与「1 采购单位 = ? 库存单位」。 */
+export type SpecConversion = {
+  inventoryUnit: 'g' | 'ml'
+  factor: number
+}
+
+const SPEC_UNIT_GRAMS: Record<string, { unit: 'g' | 'ml'; multiplier: number }> = {
+  g: { unit: 'g', multiplier: 1 },
+  克: { unit: 'g', multiplier: 1 },
+  kg: { unit: 'g', multiplier: 1000 },
+  千克: { unit: 'g', multiplier: 1000 },
+  公斤: { unit: 'g', multiplier: 1000 },
+  斤: { unit: 'g', multiplier: 500 },
+  ml: { unit: 'ml', multiplier: 1 },
+  毫升: { unit: 'ml', multiplier: 1 },
+  l: { unit: 'ml', multiplier: 1000 },
+  升: { unit: 'ml', multiplier: 1000 },
+}
+
+/**
+ * 从规格文本解析「1 采购单位 = ? 最小库存单位」。
+ *
+ * 支持美团/供应商常见写法：`箱/150g*50包`（7500 g）、`箱/2.5kg*8袋`（20000 g）、
+ * `件/1000g`（1000 g）、`箱/330ml*24瓶`（7920 ml）。斜杠后第一段必须是
+ * 「数值+重量/体积单位」，后续段视为件数（可带 包/袋/盒/瓶 等量词）。
+ * 解析不出（如 `箱/24瓶` 没有净含量）返回 null，绝不猜测。
+ */
+export function parseSpecConversion(spec: string | null | undefined): SpecConversion | null {
+  if (!spec) return null
+  const slash = spec.indexOf('/')
+  if (slash < 0) return null
+  const body = spec.slice(slash + 1).trim()
+  if (!body) return null
+  const segments = body.split(/[*×xX＊]/).map(s => s.trim()).filter(Boolean)
+  if (segments.length === 0) return null
+
+  const first = segments[0].match(/^(\d+(?:\.\d+)?)\s*(千克|公斤|kg|克|g|斤|毫升|ml|升|l|L)\s*(?:包|袋|盒|瓶|件|罐|桶)?$/i)
+  if (!first) return null
+  const unitInfo = SPEC_UNIT_GRAMS[first[2].toLowerCase()] || SPEC_UNIT_GRAMS[first[2]]
+  if (!unitInfo) return null
+  let factor = Number(first[1]) * unitInfo.multiplier
+  for (const segment of segments.slice(1)) {
+    const count = segment.match(/^(\d+(?:\.\d+)?)\s*(?:包|袋|盒|瓶|件|罐|桶)?$/)
+    if (!count) return null
+    factor *= Number(count[1])
+  }
+  if (!Number.isFinite(factor) || factor <= 0 || factor > FOUR_UNIT_FACTOR_MAX) return null
+  return { inventoryUnit: unitInfo.unit, factor }
+}
+
+/** 「简化口径」判定：订货跟随采购、成本跟随库存——90% 商品属于此类，界面只需两问。 */
+export function isSimpleFourUnitContract(values: FourUnitValues): boolean {
+  return values.orderUnit === values.purchaseUnit
+    && values.inventoryUnitsPerOrderUnit === values.inventoryUnitsPerPurchaseUnit
+    && values.costUnit === values.inventoryUnit
+    && values.inventoryUnitsPerCostUnit === 1
+}
+
 /** 新增商品：返回完整四单位合同字段 + legacy unit。 */
 export function buildFourUnitCreateBody(form: FourUnitForm): Record<string, unknown> {
   const values = buildFourUnitValues(form)

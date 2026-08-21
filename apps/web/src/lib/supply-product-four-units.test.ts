@@ -12,9 +12,11 @@ import {
   formatOrderUnitPriceHint,
   fourUnitFormFromProduct,
   inferUnitContractStatus,
+  isSimpleFourUnitContract,
   lockCostUnitToMinimum,
   normalizeUnit,
   parseConversionFactor,
+  parseSpecConversion,
   validateConversionFactor,
   validateFourUnitForm,
 } from './supply-product-four-units'
@@ -660,5 +662,69 @@ describe('formatOrderUnitPriceHint', () => {
       inventoryUnitsPerOrderUnit: '0.333333',
       inventoryUnitsPerCostUnit: '1',
     })).toBe('约 ¥3.33 / 500g')
+  })
+})
+
+describe('parseSpecConversion', () => {
+  it('parses 箱/150g*50包 (秘制底料真实规格)', () => {
+    expect(parseSpecConversion('箱/150g*50包')).toEqual({ inventoryUnit: 'g', factor: 7500 })
+  })
+
+  it('parses 箱/2.5kg*8袋 (水牛毛肚真实规格)', () => {
+    expect(parseSpecConversion('箱/2.5kg*8袋')).toEqual({ inventoryUnit: 'g', factor: 20000 })
+  })
+
+  it('parses 件/1000g', () => {
+    expect(parseSpecConversion('件/1000g')).toEqual({ inventoryUnit: 'g', factor: 1000 })
+  })
+
+  it('parses 箱/2kg*10袋 (汤底调味粉真实规格)', () => {
+    expect(parseSpecConversion('箱/2kg*10袋')).toEqual({ inventoryUnit: 'g', factor: 20000 })
+  })
+
+  it('parses volume specs', () => {
+    expect(parseSpecConversion('箱/330ml*24瓶')).toEqual({ inventoryUnit: 'ml', factor: 7920 })
+    expect(parseSpecConversion('桶/5L')).toEqual({ inventoryUnit: 'ml', factor: 5000 })
+  })
+
+  it('parses 斤 as 500g', () => {
+    expect(parseSpecConversion('件/10斤')).toEqual({ inventoryUnit: 'g', factor: 5000 })
+  })
+
+  it('returns null when spec has no net content', () => {
+    expect(parseSpecConversion('箱/24瓶')).toBeNull()
+    expect(parseSpecConversion('')).toBeNull()
+    expect(parseSpecConversion(null)).toBeNull()
+    expect(parseSpecConversion('箱')).toBeNull()
+  })
+})
+
+describe('isSimpleFourUnitContract', () => {
+  it('accepts uniform 箱 contract', () => {
+    expect(isSimpleFourUnitContract(buildFourUnitValues(DEFAULT_FOUR_UNIT_FORM))).toBe(true)
+  })
+
+  it('accepts 箱采购/克库存 contract (order follows purchase, cost follows inventory)', () => {
+    expect(isSimpleFourUnitContract(buildFourUnitValues({
+      purchaseUnit: '箱', orderUnit: '箱', inventoryUnit: 'g', costUnit: 'g',
+      inventoryUnitsPerPurchaseUnit: '7500', inventoryUnitsPerOrderUnit: '7500',
+      inventoryUnitsPerCostUnit: '1',
+    }))).toBe(true)
+  })
+
+  it('rejects legacy costUnit≠inventoryUnit archives', () => {
+    expect(isSimpleFourUnitContract(buildFourUnitValues({
+      purchaseUnit: '箱', orderUnit: '箱', inventoryUnit: 'g', costUnit: '箱',
+      inventoryUnitsPerPurchaseUnit: '15000', inventoryUnitsPerOrderUnit: '15000',
+      inventoryUnitsPerCostUnit: '15000',
+    }))).toBe(false)
+  })
+
+  it('rejects distinct order unit', () => {
+    expect(isSimpleFourUnitContract(buildFourUnitValues({
+      purchaseUnit: '箱', orderUnit: '袋', inventoryUnit: 'g', costUnit: 'g',
+      inventoryUnitsPerPurchaseUnit: '7500', inventoryUnitsPerOrderUnit: '150',
+      inventoryUnitsPerCostUnit: '1',
+    }))).toBe(false)
   })
 })

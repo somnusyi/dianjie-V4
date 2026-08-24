@@ -32,13 +32,13 @@
         "name": "release",
         "type": "HarmonyOS",
         "material": {
-          "storeFile": "/Users/somnusyi/Projects/dianjie-local/apps/harmony/signature/dianjie-release.p12",
-          "storePassword": "00000019B994091C5C967B2568D957577C7E6A1458BEC8857AF5ED658AFC42AA7A48C53E037BFC3FFC",
+          "storeFile": "/Users/somnusyi/Documents/Codex/dianjie-V4-rebuilt/apps/harmony/signature/dianjie-release.p12",
+          "storePassword": "00000019BA72AB5B883A6052A5207D0A5E3DE6D6DE02C260381F3C2D28BB318FFD0AE5E9CE8FFE0AAC",
           "keyAlias": "dianjie-release",
-          "keyPassword": "00000019B9ED87457F68E99C09C5CA02CD94E912A630365DD6658DDC89D6EB0747D1880311EF9955E3",
+          "keyPassword": "000000191104B702DBB960AD2B880A920F9B787A246DF79C1140F6739040FE7BF3FB4DC2A2844C9A53",
           "signAlg": "SHA256withECDSA",
-          "profile": "/Users/somnusyi/Projects/dianjie-local/apps/harmony/signature/dianjie-release.p7b",
-          "certpath": "/Users/somnusyi/Projects/dianjie-local/apps/harmony/signature/dianjie-release.cer"
+          "profile": "/Users/somnusyi/Documents/Codex/dianjie-V4-rebuilt/apps/harmony/signature/dianjie-release-20260809Release.p7b",
+          "certpath": "/Users/somnusyi/Documents/Codex/dianjie-V4-rebuilt/apps/harmony/signature/dianjie-V4.cer"
         }
       }
     ],
@@ -47,6 +47,7 @@
         "name": "default",
         "signingConfig": "release",
         "compatibleSdkVersion": "6.0.2(22)",
+        "targetSdkVersion": "6.0.2(22)",
         "runtimeOS": "HarmonyOS",
         "buildOption": {
           "strictMode": {

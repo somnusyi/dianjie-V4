@@ -13,6 +13,25 @@ import {
 import { auditWarehouseLedger } from '../services/warehouseLedgerAudit'
 import { reconcileWarehouseShadowLedger } from '../services/warehouseLedgerReconciliation'
 import { resolveProductFourUnits } from '../services/inventoryUnits'
+import { ensureWarehouseDoc, type WarehouseDocLineInput } from '../services/warehouseDocs'
+
+/** 过账后登记单据（find-or-create，幂等键与台账批次对齐）。登记失败抛错，前端可用同一幂等键安全重试。 */
+async function registerWarehouseDoc(input: {
+  tenantId: string
+  userId: string
+  type: 'MANUAL_INBOUND' | 'MANUAL_OUTBOUND'
+  warehouseId: string
+  effectiveAt: Date
+  idempotencyKey: string
+  supplierId?: string | null
+  supplierName?: string | null
+  reason?: string | null
+  note?: string | null
+  lines: WarehouseDocLineInput[]
+}) {
+  const { doc, created } = await ensureWarehouseDoc(input)
+  return { id: doc.id, docNo: doc.docNo, status: doc.status as string, created }
+}
 
 const READ_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'FINANCE', 'PURCHASER'])
 const WRITE_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'PURCHASER'])
@@ -74,6 +93,8 @@ const batchManualInboundSchema = z.object({
     productId: z.string().trim().min(1),
     purchaseQuantity: z.number().positive().max(99_999_999),
     unitPrice: z.number().positive().max(999_999_999.99),
+    // 行金额（凑整）：提供时作为权威金额入账，单价由后端按 金额/数量 反算
+    totalAmount: z.number().positive().max(999_999_999.99).optional().nullable(),
     batchNo: z.string().trim().max(80).optional().nullable(),
     manufactureDate: z.string().date().optional().nullable(),
     expiryDate: z.string().date().optional().nullable(),
@@ -505,11 +526,41 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
           },
         })
       }
+      const inboundProduct = await prisma.product.findFirst({
+        where: { tenantId: req.user.tenantId, id: parsed.data.productId },
+        select: { id: true, name: true, purchaseUnit: true, inventoryUnit: true },
+      })
+      const doc = await registerWarehouseDoc({
+        tenantId: req.user.tenantId,
+        userId: req.user.userId,
+        type: 'MANUAL_INBOUND',
+        warehouseId: result.warehouseId,
+        effectiveAt: new Date(parsed.data.effectiveAt),
+        idempotencyKey: `manual-inbound:${parsed.data.idempotencyKey}`,
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        note: parsed.data.note,
+        lines: [{
+          productId: parsed.data.productId,
+          productName: inboundProduct?.name || parsed.data.productId,
+          quantity: parsed.data.purchaseQuantity,
+          unit: inboundProduct?.purchaseUnit || String(result.movement.inventoryUnit || ''),
+          unitPrice: Math.round((parsed.data.totalAmount / parsed.data.purchaseQuantity) * 1_000_000) / 1_000_000,
+          amount: parsed.data.totalAmount,
+          inventoryQuantity: Math.abs(number(result.movement.physicalDelta)),
+          inventoryUnit: String(result.movement.inventoryUnit || inboundProduct?.inventoryUnit || ''),
+          batchNo: parsed.data.batchNo,
+          manufactureDate,
+          expiryDate,
+          movementId: result.movement.id,
+        }],
+      })
       return {
         ok: true,
         replayed: result.replayed,
         warehouseId: result.warehouseId,
         gateWarnings,
+        doc,
         movement: {
           id: result.movement.id,
           productId: result.movement.productId,
@@ -541,6 +592,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
           productId: item.productId,
           purchaseQuantity: item.purchaseQuantity,
           unitPrice: item.unitPrice,
+          totalAmount: item.totalAmount ?? null,
           batchNo: item.batchNo,
           manufactureDate: item.manufactureDate ? new Date(`${item.manufactureDate}T00:00:00+08:00`) : null,
           expiryDate: item.expiryDate ? new Date(`${item.expiryDate}T00:00:00+08:00`) : null,
@@ -565,6 +617,44 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         })
       }
       const totalAmount = result.movements.reduce((sum, movement) => sum + number(movement.valueDelta), 0)
+      const movementByProduct = new Map(result.movements.map(movement => [movement.productId, movement]))
+      const productRows = await prisma.product.findMany({
+        where: { tenantId: req.user.tenantId, id: { in: parsed.data.items.map(item => item.productId) } },
+        select: { id: true, name: true, purchaseUnit: true, inventoryUnit: true },
+      })
+      const productById = new Map(productRows.map(product => [product.id, product]))
+      const doc = await registerWarehouseDoc({
+        tenantId: req.user.tenantId,
+        userId: req.user.userId,
+        type: 'MANUAL_INBOUND',
+        warehouseId: result.warehouseId,
+        effectiveAt: new Date(parsed.data.effectiveAt),
+        idempotencyKey: `manual-inbound-batch:${parsed.data.idempotencyKey}`,
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        note: parsed.data.note,
+        lines: parsed.data.items.map(item => {
+          const movement = movementByProduct.get(item.productId)
+          const product = productById.get(item.productId)
+          // 金额以台账流水为准（凑整口径 totalAmount 可能 ≠ 数量×单价）
+          const movementAmount = movement ? Math.abs(number(movement.valueDelta)) : null
+          const lineAmount = movementAmount ?? Math.round(item.purchaseQuantity * item.unitPrice * 100) / 100
+          return {
+            productId: item.productId,
+            productName: product?.name || item.productId,
+            quantity: item.purchaseQuantity,
+            unit: product?.purchaseUnit || String(movement?.inventoryUnit || ''),
+            unitPrice: Math.round((lineAmount / item.purchaseQuantity) * 1_000_000) / 1_000_000,
+            amount: lineAmount,
+            inventoryQuantity: movement ? Math.abs(number(movement.physicalDelta)) : 0,
+            inventoryUnit: String(movement?.inventoryUnit || product?.inventoryUnit || ''),
+            batchNo: item.batchNo,
+            manufactureDate: item.manufactureDate ? new Date(`${item.manufactureDate}T00:00:00+08:00`) : null,
+            expiryDate: item.expiryDate ? new Date(`${item.expiryDate}T00:00:00+08:00`) : null,
+            movementId: movement?.id || null,
+          }
+        }),
+      })
       return {
         ok: true,
         replayed: result.replayed,
@@ -572,6 +662,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         count: result.movements.length,
         totalAmount,
         gateWarnings,
+        doc,
         movements: result.movements.map(movement => ({
           id: movement.id,
           productId: movement.productId,
@@ -605,12 +696,46 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         sourceName: parsed.data.sourceName,
       })
       const totalAmount = result.movements.reduce((sum, movement) => sum + Math.abs(number(movement.valueDelta)), 0)
+      const outProductRows = await prisma.product.findMany({
+        where: { tenantId: req.user.tenantId, id: { in: parsed.data.items.map(item => item.productId) } },
+        select: { id: true, name: true, inventoryUnit: true },
+      })
+      const outProductById = new Map(outProductRows.map(product => [product.id, product]))
+      const outDoc = await registerWarehouseDoc({
+        tenantId: req.user.tenantId,
+        userId: req.user.userId,
+        type: 'MANUAL_OUTBOUND',
+        warehouseId: result.warehouseId,
+        effectiveAt: new Date(parsed.data.effectiveAt),
+        idempotencyKey: `manual-outbound:${parsed.data.idempotencyKey}`,
+        reason: parsed.data.reason,
+        note: null,
+        lines: parsed.data.items.map(item => {
+          const movement = result.movements.find(row => row.productId === item.productId)
+          const product = outProductById.get(item.productId)
+          const quantity = movement ? Math.abs(number(movement.physicalDelta)) : item.inventoryQuantity
+          const amount = movement ? Math.abs(number(movement.valueDelta)) : (item.totalAmount ?? 0)
+          return {
+            productId: item.productId,
+            productName: product?.name || item.productId,
+            quantity,
+            unit: String(movement?.inventoryUnit || product?.inventoryUnit || ''),
+            unitPrice: quantity > 0 ? Math.round((amount / quantity) * 1_000_000) / 1_000_000 : null,
+            amount: Math.round(amount * 100) / 100,
+            inventoryQuantity: quantity,
+            inventoryUnit: String(movement?.inventoryUnit || product?.inventoryUnit || ''),
+            note: item.note,
+            movementId: movement?.id || null,
+          }
+        }),
+      })
       return {
         ok: true,
         replayed: result.replayed,
         warehouseId: result.warehouseId,
         count: result.movements.length,
         totalAmount,
+        doc: outDoc,
         movements: result.movements.map(movement => ({
           id: movement.id,
           productId: movement.productId,

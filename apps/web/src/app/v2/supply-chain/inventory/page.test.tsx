@@ -172,4 +172,46 @@ describe('总仓库存页面', () => {
     act(() => root.unmount())
     container.remove()
   })
+
+  it('derives unit price from edited line amount for round-off totals', async () => {
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('菌菇酱') ?? false)
+    const open = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('批量入库'))
+    await act(async () => { open?.click() })
+    await waitFor(() => container.textContent?.includes('总仓批量入库') ?? false)
+
+    const selects = Array.from(container.querySelectorAll('select')) as HTMLSelectElement[]
+    change(selects[0], 'product-1')
+    const add = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '添加商品')
+    act(() => add?.click())
+
+    const quantityInput = container.querySelector('input[aria-label="菌菇酱采购数量"]') as HTMLInputElement
+    const priceInput = container.querySelector('input[aria-label="菌菇酱采购单价"]') as HTMLInputElement
+    const amountInput = container.querySelector('input[aria-label="菌菇酱行金额"]') as HTMLInputElement
+    expect(amountInput).toBeTruthy()
+
+    // 数量 3 箱、单价 80 → 金额自动 240
+    change(quantityInput, '3')
+    change(priceInput, '80')
+    expect(amountInput.value).toBe('240.00')
+
+    // 凑整：直接把金额改成 250 → 单价反算 250/3
+    change(amountInput, '250')
+    expect(Number(priceInput.value)).toBeCloseTo(83.333333, 5)
+
+    change(selects[1], 'sup-1')
+    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('确认批量入库'))
+    await act(async () => { submit?.click() })
+    await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/batch-manual-inbound'))
+
+    const call = mockFetch.mock.calls.find(([path]) => String(path) === '/api/warehouse-inventory/batch-manual-inbound')
+    const body = JSON.parse(String(call?.[1]?.body))
+    // 提交以行金额为权威口径（totalAmount=250），单价为反算值
+    expect(body.items[0].totalAmount).toBe(250)
+    expect(body.items[0].purchaseQuantity).toBe(3)
+    expect(body.items[0].unitPrice).toBeCloseTo(83.333333, 5)
+
+    act(() => root.unmount())
+    container.remove()
+  })
 })

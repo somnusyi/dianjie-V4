@@ -30,6 +30,8 @@ type BatchInboundRow = {
   productId: string
   purchaseQuantity: string
   unitPrice: string
+  /** 行金额（价税合计）。可编辑凑整：改金额自动反算采购单价 */
+  amount: string
 }
 
 type UpstreamSupplier = {
@@ -231,7 +233,7 @@ export default function InternalSupplyChainInventoryPage() {
     return rows.filter(item => !batchRows.some(row => row.productId === item.id))
   }, [batchCandidates, batchRows, batchSearch])
   const batchTotal = batchRows.reduce((sum, row) => {
-    const lineAmount = Number(row.purchaseQuantity) * Number(row.unitPrice)
+    const lineAmount = Number(row.amount)
     return sum + (Number.isFinite(lineAmount) ? lineAmount : 0)
   }, 0)
 
@@ -276,13 +278,27 @@ export default function InternalSupplyChainInventoryPage() {
   function addBatchRow() {
     const candidate = batchCandidates.find(item => item.id === batchCandidateId)
     if (!candidate || batchRows.some(row => row.productId === candidate.id)) return
-    setBatchRows(rows => [...rows, { productId: candidate.id, purchaseQuantity: '', unitPrice: '' }])
+    setBatchRows(rows => [...rows, { productId: candidate.id, purchaseQuantity: '', unitPrice: '', amount: '' }])
     setBatchCandidateId('')
     setBatchSearch('')
   }
 
-  function updateBatchRow(productId: string, field: 'purchaseQuantity' | 'unitPrice', value: string) {
-    setBatchRows(rows => rows.map(row => row.productId === productId ? { ...row, [field]: value } : row))
+  // 数量/单价/金额三列联动：改数量或单价 → 重算金额；改金额（凑整）→ 反算单价。
+  // 提交时以后端认可的行金额（totalAmount）为准，保证台账金额与录入完全一致。
+  function updateBatchRow(productId: string, field: 'purchaseQuantity' | 'unitPrice' | 'amount', value: string) {
+    setBatchRows(rows => rows.map(row => {
+      if (row.productId !== productId) return row
+      const next = { ...row, [field]: value }
+      const qtyValue = Number(next.purchaseQuantity)
+      const priceValue = Number(next.unitPrice)
+      const amountValue = Number(next.amount)
+      if (field === 'purchaseQuantity' || field === 'unitPrice') {
+        next.amount = qtyValue > 0 && priceValue > 0 ? (qtyValue * priceValue).toFixed(2) : ''
+      } else if (field === 'amount') {
+        next.unitPrice = qtyValue > 0 && amountValue > 0 ? (amountValue / qtyValue).toFixed(6) : next.unitPrice
+      }
+      return next
+    }))
   }
 
   async function submitBatchInbound() {
@@ -294,10 +310,10 @@ export default function InternalSupplyChainInventoryPage() {
       setError('请选择供货供应商；没有档案请先在供应商管理新建')
       return
     }
-    const invalid = batchRows.find(row => Number(row.purchaseQuantity) <= 0 || Number(row.unitPrice) <= 0)
+    const invalid = batchRows.find(row => Number(row.purchaseQuantity) <= 0 || Number(row.amount) <= 0)
     if (invalid) {
       const product = batchCandidates.find(item => item.id === invalid.productId)
-      setError(`${product?.name || '入库商品'}的数量和采购单价必须大于0`)
+      setError(`${product?.name || '入库商品'}的数量和金额必须大于0（改金额会自动反算单价）`)
       return
     }
     setSubmitting(true)
@@ -311,6 +327,7 @@ export default function InternalSupplyChainInventoryPage() {
             productId: row.productId,
             purchaseQuantity: Number(row.purchaseQuantity),
             unitPrice: Number(row.unitPrice),
+            totalAmount: Number(row.amount),
           })),
           effectiveAt: new Date(batchEffectiveAt).toISOString(),
           idempotencyKey: batchKey,
@@ -600,14 +617,13 @@ export default function InternalSupplyChainInventoryPage() {
                 {batchRows.map((row, index) => {
                   const product = batchCandidates.find(item => item.id === row.productId)!
                   const purchaseQuantity = Number(row.purchaseQuantity) || 0
-                  const lineAmount = purchaseQuantity * (Number(row.unitPrice) || 0)
                   return <tr key={row.productId}>
                     <td className="px-3 py-3 font-num text-gray3">{index + 1}</td>
                     <td className="px-3 py-3"><b>{product.name}</b><div className="text-micro text-gray3">{product.code} · {product.spec || '无规格'}</div></td>
                     <td className="px-3 py-3"><b>{product.purchaseUnit}</b></td>
                     <td className="px-3 py-3"><input aria-label={`${product.name}采购数量`} type="number" min="0.000001" step="0.001" value={row.purchaseQuantity} onChange={event => updateBatchRow(row.productId, 'purchaseQuantity', event.target.value)} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></td>
                     <td className="px-3 py-3"><div className="flex items-center justify-end gap-1"><span>¥</span><input aria-label={`${product.name}采购单价`} type="number" min="0.0001" step="0.01" value={row.unitPrice} onChange={event => updateBatchRow(row.productId, 'unitPrice', event.target.value)} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></div></td>
-                    <td className="px-3 py-3 text-right font-num"><b>{money(lineAmount)}</b></td>
+                    <td className="px-3 py-3"><div className="flex items-center justify-end gap-1"><span>¥</span><input aria-label={`${product.name}行金额`} type="number" min="0.01" step="0.01" value={row.amount} onChange={event => updateBatchRow(row.productId, 'amount', event.target.value)} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></div></td>
                     <td className="px-3 py-3"><b>{qty(purchaseQuantity)} {product.purchaseUnit} = {qty(purchaseQuantity * product.purchaseToInventoryFactor, 6)} {product.inventoryUnit}</b><div className="text-micro text-green-fg">已核验换算</div></td>
                     <td className="px-3 py-3"><button onClick={() => setBatchRows(rows => rows.filter(item => item.productId !== row.productId))} className="text-button text-red-fg">移除</button></td>
                   </tr>

@@ -56,6 +56,7 @@ const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
       },
       { href: '/v2/supply-chain/inventory', label: '仓库库存', description: '库存、入库、批次与流水', icon: '仓' },
       { href: '/v2/supply-chain/inbound', label: '入库记录', description: '入库流水、供应商归属与来源认领', icon: '入' },
+      { href: '/v2/supply-chain/docs', label: '单据审核', description: '入库/出库单据、会计审核与改单留痕', icon: '单' },
       { href: '/v2/supply-chain/suppliers', label: '上游供应商', description: '总仓采购合作方', icon: '供' },
     ],
   },

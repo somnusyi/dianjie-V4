@@ -510,7 +510,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       })
       return withAvailability(tenantId, stripPricingForSupplier(rows))
     }
-    const pagination = parsePagination({ page, pageSize }, { defaultPageSize: 20, maxPageSize: 100 })
+    // 商品目录量级约数百条，允许大页（如整页显示全部）便于仓管核对；
+    // 上限 2000 防止误传超大 pageSize 拖垮列表接口。
+    const pagination = parsePagination({ page, pageSize }, { defaultPageSize: 20, maxPageSize: 2000 })
     if (!pagination) return reply.status(400).send({ error: '分页参数格式不正确' })
     const { page: p, pageSize: ps } = pagination
     const [items, total] = await Promise.all([

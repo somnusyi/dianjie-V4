@@ -311,6 +311,8 @@ export type BatchManualWarehouseInboundInput = {
     productId: string
     purchaseQuantity: Decimalish
     unitPrice: Decimalish
+    /** 行金额（价税合计）。提供时作为权威金额入账（凑整场景），单价按 金额/数量 反算 */
+    totalAmount?: Decimalish | null
     batchNo?: string | null
     manufactureDate?: Date | null
     expiryDate?: Date | null
@@ -552,9 +554,18 @@ export async function recordBatchManualWarehouseInbound(input: BatchManualWareho
       throw businessError(`${product.name} 的到期日期不能早于生产日期`, 400)
     }
     const purchaseQuantity = quantity(item.purchaseQuantity, `${product.name}入库数量`)
-    const unitPrice = decimal(item.unitPrice, `${product.name}采购单价`).toDecimalPlaces(VALUE_DP)
-    if (unitPrice.lte(0)) throw businessError(`${product.name}采购单价必须大于0`, 400)
-    const totalAmount = purchaseQuantity.mul(unitPrice).toDecimalPlaces(VALUE_DP)
+    let unitPrice: Prisma.Decimal
+    let totalAmount: Prisma.Decimal
+    if (item.totalAmount !== null && item.totalAmount !== undefined) {
+      // 凑整口径：录入行金额为权威值，单价反算（保留6位），保证与供应商账单分毫不差
+      totalAmount = decimal(item.totalAmount, `${product.name}入库金额`).toDecimalPlaces(VALUE_DP)
+      if (totalAmount.lte(0)) throw businessError(`${product.name}入库金额必须大于0`, 400)
+      unitPrice = totalAmount.div(purchaseQuantity).toDecimalPlaces(COST_DP)
+    } else {
+      unitPrice = decimal(item.unitPrice, `${product.name}采购单价`).toDecimalPlaces(VALUE_DP)
+      if (unitPrice.lte(0)) throw businessError(`${product.name}采购单价必须大于0`, 400)
+      totalAmount = purchaseQuantity.mul(unitPrice).toDecimalPlaces(VALUE_DP)
+    }
     if (totalAmount.gt('999999999.99')) throw businessError(`${product.name}入库金额超过系统上限`, 400)
     const conversionFactor = new Prisma.Decimal(contract.inventoryUnitsPerPurchaseUnit).toDecimalPlaces(QTY_DP)
     const inventoryQuantity = purchaseQuantity.mul(conversionFactor).toDecimalPlaces(QTY_DP)
@@ -2143,7 +2154,7 @@ export async function reverseDeliveryOutboundInTransaction(
   input: {
     tenantId: string
     userId: string | null
-    source: 'LossClaim' | 'ReceiptRejection'
+    source: 'LossClaim' | 'ReceiptRejection' | 'ShipCancel'
     sourceId: string
     originalMovementId: string
     quantity: Prisma.Decimal
@@ -2253,7 +2264,7 @@ export async function reverseDeliveryOutboundInTransaction(
       inventoryQuantity: reverseInventoryQty,
       inventoryUnit: original.inventoryUnit,
       inventoryUnitCost: original.inventoryUnitCost,
-      sourceType: input.source === 'LossClaim' ? 'LossClaimReversal' : 'ReceiptRejectionReversal',
+      sourceType: input.source === 'LossClaim' ? 'LossClaimReversal' : input.source === 'ShipCancel' ? 'DeliveryOrderShipCancel' : 'ReceiptRejectionReversal',
       sourceId: input.sourceId,
       sourceLineId: original.id,
       idempotencyKey,
@@ -2273,7 +2284,143 @@ export async function reverseDeliveryOutboundInTransaction(
     tenantId: input.tenantId,
     productId: original.productId,
     averageUnitCost: nextAverage,
-    trigger: { type: input.source === 'LossClaim' ? 'LossClaimReversal' : 'ReceiptRejectionReversal', id: movement.id },
+    trigger: { type: input.source === 'LossClaim' ? 'LossClaimReversal' : input.source === 'ShipCancel' ? 'DeliveryOrderShipCancel' : 'ReceiptRejectionReversal', id: movement.id },
   })
   return { reversed: true, movementId: movement.id, replayed: false }
+}
+
+// ── 单据审核流：金额/成本差额调整（2026-08-24）──────────────────────
+// 反审核后改单价/金额时调用：数量不动，只按差额写一条 ADJUSTMENT 流水。
+// 入库行（MANUAL_INBOUND）批次未被消耗时同步批次单位成本；
+// 出库行（WarehouseManualOutbound）仅调整账面金额（批次已按 FEFO 分摊，不回溯）。
+export async function adjustWarehouseMovementValue(input: {
+  tenantId: string
+  userId: string
+  movementId: string
+  /** 调整后的行金额（入库=价税合计；出库=成本额），正数 */
+  newAmount: Decimalish
+  reason: string
+  /** 幂等键（调用方按 单据+行+编辑序号 生成，保证同一编辑可安全重试） */
+  idempotencyKey: string
+  /** 单据上下文，写入调整流水的 sourceType/sourceId */
+  docId: string
+  docNo: string
+}) {
+  const warehouseId = await resolveTenantWarehouseId(prisma, input.tenantId, undefined)
+  const rawKey = String(input.idempotencyKey || '').trim()
+  const idempotencyKey = `doc-value-adjust:${rawKey}`
+  if (!rawKey || idempotencyKey.length > 160) throw businessError('调整幂等键无效', 400)
+  const newAmount = decimal(input.newAmount, '调整后金额').toDecimalPlaces(VALUE_DP)
+  if (newAmount.lte(0)) throw businessError('调整后金额必须大于0', 400)
+  const reason = String(input.reason || '').trim()
+  if (reason.length < 2 || reason.length > 240) throw businessError('调整原因需为2至240个字符', 400)
+
+  return serializableWithRetry(async tx => {
+    const replay = await tx.warehouseLedgerMovement.findUnique({
+      where: { tenantId_warehouseId_idempotencyKey: { tenantId: input.tenantId, warehouseId, idempotencyKey } },
+    })
+    if (replay) return { replayed: true, movement: replay, warehouseId, valueDiff: new Prisma.Decimal(0) }
+    const original = await tx.warehouseLedgerMovement.findFirst({
+      where: { id: input.movementId, tenantId: input.tenantId, warehouseId },
+      include: { createdLot: true, reversal: true, product: { select: { name: true } } },
+    })
+    if (!original) throw businessError('原流水不存在', 404)
+    const isInbound = original.type === 'MANUAL_INBOUND'
+    const isManualOutbound = original.type === 'ORDER_OUTBOUND' && original.sourceType === 'WarehouseManualOutbound'
+    if (!isInbound && !isManualOutbound) throw businessError('只能调整手工入库/手工出库流水', 409)
+    if (original.reversal) throw businessError('该流水已被冲销，不能再调整金额', 409)
+
+    const oldAmount = original.valueDelta.abs().toDecimalPlaces(VALUE_DP)
+    const valueDiff = newAmount.minus(oldAmount).toDecimalPlaces(VALUE_DP)
+    if (valueDiff.isZero()) return { replayed: false, movement: null, warehouseId, valueDiff }
+
+    const balances = await lockBalances(tx, {
+      tenantId: input.tenantId,
+      warehouseId,
+      products: [{ productId: original.productId, inventoryUnit: original.inventoryUnit }],
+    })
+    const balance = balances.get(original.productId)!
+    // 入库：差额加到账面；出库：成本调高要从账面再扣、调低要补回
+    const signedDiff = isInbound ? valueDiff : valueDiff.negated()
+    const nextValue = balance.inventoryValue.plus(signedDiff).toDecimalPlaces(VALUE_DP)
+    const mode = await warehouseMode(tx, input.tenantId, warehouseId)
+    if (mode === 'STRICT' && nextValue.lt(0)) {
+      throw businessError(`「${original.product.name}」调整后库存金额将为负，请先核对数量`, 409)
+    }
+    const normalizedValue = balance.physicalQty.isZero() ? ZERO : nextValue
+    const actualValueDelta = normalizedValue.minus(balance.inventoryValue).toDecimalPlaces(VALUE_DP)
+    const nextAverage = balance.physicalQty.isZero()
+      ? balance.averageUnitCost
+      : nextAverageCost(normalizedValue, balance.physicalQty, balance.averageUnitCost)
+
+    const movement = await tx.warehouseLedgerMovement.create({
+      data: {
+        tenantId: input.tenantId,
+        warehouseId,
+        productId: original.productId,
+        type: 'ADJUSTMENT',
+        physicalDelta: ZERO,
+        reservedDelta: ZERO,
+        valueDelta: actualValueDelta,
+        physicalAfter: balance.physicalQty,
+        reservedAfter: balance.reservedQty,
+        valueAfter: normalizedValue,
+        averageUnitCostAfter: nextAverage,
+        originalQuantity: new Prisma.Decimal(0),
+        originalUnit: original.inventoryUnit,
+        conversionFactor: new Prisma.Decimal(1),
+        inventoryQuantity: new Prisma.Decimal(0),
+        inventoryUnit: original.inventoryUnit,
+        inventoryUnitCost: nextAverage,
+        sourceType: 'WarehouseDocValueAdjust',
+        sourceId: input.docId,
+        sourceLineId: original.id,
+        idempotencyKey,
+        requestFingerprint: fingerprint({ movementId: original.id, newAmount: newAmount.toFixed(VALUE_DP), reason }),
+        effectiveAt: new Date(),
+        note: `单据 ${input.docNo} 改价：${reason}`.slice(0, 240),
+        createdById: input.userId,
+        supplierId: original.supplierId,
+      },
+    })
+    await persistBalance(tx, balance, {
+      physicalQty: balance.physicalQty,
+      reservedQty: balance.reservedQty,
+      inventoryValue: normalizedValue,
+      averageUnitCost: nextAverage,
+    })
+    // 入库批次完整未被消耗时，同步批次单位成本，使后续 FEFO 出库按新成本走
+    if (isInbound && original.createdLot && original.createdLot.remainingQty.equals(original.createdLot.initialQty) && original.physicalDelta.gt(0)) {
+      await tx.warehouseLedgerLot.update({
+        where: { id: original.createdLot.id },
+        data: { inventoryUnitCost: newAmount.div(original.physicalDelta).toDecimalPlaces(COST_DP) },
+      })
+    }
+    // 比例加价：成本变化后按规则自动重算卖价
+    await applyMarkupReprice(tx, {
+      tenantId: input.tenantId,
+      productId: original.productId,
+      averageUnitCost: nextAverage,
+      trigger: { type: 'WarehouseDocValueAdjust', id: movement.id },
+    })
+    await tx.opLog.create({
+      data: {
+        tenantId: input.tenantId,
+        userId: input.userId,
+        action: `单据改价 ${original.product.name}：${oldAmount.toFixed(2)} → ${newAmount.toFixed(2)}（${reason}）`,
+        target: input.docNo,
+        entityType: 'WarehouseLedgerMovement',
+        targetId: movement.id,
+        metadata: {
+          docId: input.docId,
+          docNo: input.docNo,
+          originalMovementId: original.id,
+          oldAmount: oldAmount.toFixed(VALUE_DP),
+          newAmount: newAmount.toFixed(VALUE_DP),
+          valueDiff: valueDiff.toFixed(VALUE_DP),
+        },
+      },
+    })
+    return { replayed: false, movement, warehouseId, valueDiff }
+  })
 }

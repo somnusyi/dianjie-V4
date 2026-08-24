@@ -84,6 +84,7 @@ import { dailyBusinessImportRoutes } from './routes/dailyBusinessImports'
 import { inventoryCountRoutes } from './routes/inventoryCounts'
 import { warehouseInventoryImportRoutes } from './routes/warehouseInventoryImports'
 import { warehouseInventoryRoutes } from './routes/warehouseInventory'
+import { warehouseDocsRoutes } from './routes/warehouseDocs'
 import { consumptionAdminRoutes, consumptionRoutes } from './routes/consumption'
 import { storeOverviewRoutes } from './routes/storeOverview'
 import { feedbackRoutes } from './routes/feedback'
@@ -270,6 +271,7 @@ async function bootstrap() {
   app.register(uploadRoutes, { prefix: '/api' })
   app.register(warehouseInventoryImportRoutes, { prefix: '/api/warehouse-inventory-imports' })
   app.register(warehouseInventoryRoutes, { prefix: '/api/warehouse-inventory' })
+  app.register(warehouseDocsRoutes, { prefix: '/api/warehouse-docs' })
   app.register(invoiceRoutes, { prefix: '/api/invoices' })
   app.register(invoicePaymentRoutes, { prefix: '/api/invoice-payments' })
   app.register(capitalRoutes, { prefix: '/api/capital' })

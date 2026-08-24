@@ -231,6 +231,7 @@ model WarehouseLedgerMovement {
   reversal       WarehouseLedgerMovement?       @relation("WarehouseLedgerMovementReversal")
   createdLot     WarehouseLedgerLot?            @relation("WarehouseLedgerLotSource")
   lotAllocations WarehouseLedgerLotAllocation[]
+  docLines       WarehouseDocLine[]
 
   @@unique([tenantId, warehouseId, idempotencyKey])
   @@index([tenantId, warehouseId, productId, effectiveAt])
@@ -353,6 +354,114 @@ model WarehouseLedgerLotAllocation {
   @@index([movementId])
   @@index([tenantId, warehouseId, productId])
   @@map("warehouse_ledger_lot_allocations")
+}
+
+// ── 仓库单据层（2026-08-24 审核流）──────────────────────
+// 台账（WarehouseLedgerMovement）只增不改；单据是台账之上的控制层：
+// 制单即过账（库存实时有效），会计审核后锁死；改单必须先反审核，
+// 金额类修改走 ADJUSTMENT 差额流水，数量类修改走入库冲销重记。
+// reviewStatus 为预留的复审层（财务主管），当前界面只启用审核层。
+
+enum WarehouseDocType {
+  MANUAL_INBOUND
+  MANUAL_OUTBOUND
+}
+
+enum WarehouseDocStatus {
+  POSTED // 未审核（已制单过账，仓库可改）
+  CONFIRMED // 已审核（会计锁定，改单需先反审核）
+}
+
+enum WarehouseDocReviewStatus {
+  UNREVIEWED
+  REVIEWED
+}
+
+enum WarehouseDocLogAction {
+  CREATE
+  CONFIRM
+  UNCONFIRM
+  EDIT
+}
+
+model WarehouseDoc {
+  id             String                   @id @default(cuid())
+  tenantId       String
+  docNo          String                   @db.VarChar(40)
+  type           WarehouseDocType
+  warehouseId    String                   @db.VarChar(64)
+  supplierId     String?
+  supplierName   String?                  @db.VarChar(120) // 快照，供应商改名不影响历史单据
+  reason         String?                  @db.VarChar(120) // 出库单：原因/去向
+  note           String?                  @db.VarChar(240)
+  effectiveAt    DateTime
+  status         WarehouseDocStatus       @default(POSTED)
+  reviewStatus   WarehouseDocReviewStatus @default(UNREVIEWED)
+  lineCount      Int                      @default(0)
+  totalAmount    Decimal                  @default(0) @db.Decimal(20, 4)
+  idempotencyKey String                   @db.VarChar(160) // 对应台账批次幂等键（manual-inbound:xxx）
+  createdById    String?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+  confirmedById  String?
+  confirmedAt    DateTime?
+  unauditedById  String?
+  unauditedAt    DateTime?
+  unauditReason  String?                  @db.VarChar(240)
+
+  lines WarehouseDocLine[]
+  logs  WarehouseDocLog[]
+
+  @@unique([tenantId, docNo])
+  @@unique([tenantId, type, idempotencyKey])
+  @@index([tenantId, type, status, effectiveAt])
+  @@index([tenantId, supplierId, effectiveAt])
+  @@map("warehouse_docs")
+}
+
+model WarehouseDocLine {
+  id                String    @id @default(cuid())
+  tenantId          String
+  docId             String
+  lineNo            Int
+  productId         String
+  productName       String    @db.VarChar(120) // 快照
+  quantity          Decimal   @db.Decimal(18, 6) // 录入数量：入库=采购单位，出库=库存单位
+  unit              String    @db.VarChar(16)
+  unitPrice         Decimal?  @db.Decimal(18, 6) // 入库：每录入单位单价；出库：每库存单位成本
+  amount            Decimal   @db.Decimal(20, 4) // 行金额（入库=价税合计；出库=成本额）
+  inventoryQuantity Decimal   @db.Decimal(18, 6) // 折算库存单位数量
+  inventoryUnit     String    @db.VarChar(16)
+  note              String?   @db.VarChar(240)
+  batchNo           String?   @db.VarChar(80)
+  manufactureDate   DateTime? @db.Date
+  expiryDate        DateTime? @db.Date
+  movementId        String?   @db.VarChar(64) // 当前生效台账流水（冲销重记后指向新流水）
+
+  doc      WarehouseDoc             @relation(fields: [docId], references: [id], onDelete: Cascade)
+  movement WarehouseLedgerMovement? @relation(fields: [movementId], references: [id], onDelete: SetNull)
+
+  @@unique([docId, lineNo])
+  @@index([tenantId, productId])
+  @@index([movementId])
+  @@map("warehouse_doc_lines")
+}
+
+model WarehouseDocLog {
+  id        String                @id @default(cuid())
+  tenantId  String
+  docId     String
+  action    WarehouseDocLogAction
+  actorId   String?
+  actorName String?               @db.VarChar(120)
+  reason    String?               @db.VarChar(240)
+  detail    Json? // EDIT：逐行改前/改后值
+  createdAt DateTime              @default(now())
+
+  doc WarehouseDoc @relation(fields: [docId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, docId, createdAt])
+  @@map("warehouse_doc_logs")
 }
 
 // ── 外部商品编码映射 ──────────────────────────────────

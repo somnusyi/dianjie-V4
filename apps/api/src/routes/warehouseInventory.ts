@@ -5,6 +5,7 @@ import { hasInternalSupplyChainCapability, isInternalSupplyChainRole } from '../
 import { resolveTenantWarehouseId } from '../services/defaultWarehouse'
 import {
   recordBatchManualWarehouseInbound,
+  recordBatchManualWarehouseOutbound,
   recordManualWarehouseInbound,
   recordWarehousePhysicalCount,
   reverseManualWarehouseInbound,
@@ -92,6 +93,26 @@ const batchManualInboundSchema = z.object({
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['items', index, 'expiryDate'], message: '到期日期不能早于生产日期' })
     }
   })
+})
+
+// 批量手工出库（2026-08-23）：订单体系之外的总仓出库——门店拨补/样品/报损/历史补录。
+// 数量按库存单位；成本缺省按移动均价带出，可指定权威成本（如美团口径）。
+const batchManualOutboundSchema = z.object({
+  items: z.array(z.object({
+    productId: z.string().trim().min(1),
+    inventoryQuantity: z.number().positive().max(99_999_999),
+    totalAmount: z.number().positive().max(999_999_999.99).optional().nullable(),
+    note: z.string().trim().max(240).optional().nullable(),
+  })).min(1).max(200),
+  effectiveAt: z.string().datetime({ offset: true }),
+  idempotencyKey: z.string().trim().min(8).max(80),
+  reason: z.string().trim().min(2, '请填写出库原因/去向').max(120),
+  sourceName: z.string().trim().max(120).optional().nullable(),
+}).superRefine((value, context) => {
+  const productIds = value.items.map(item => item.productId)
+  if (new Set(productIds).size !== productIds.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['items'], message: '同一商品不能重复添加' })
+  }
 })
 
 // 入库供应商闸口（P2）：供应商必须是本租户启用中的上游供应商
@@ -551,6 +572,45 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         count: result.movements.length,
         totalAmount,
         gateWarnings,
+        movements: result.movements.map(movement => ({
+          id: movement.id,
+          productId: movement.productId,
+          physicalDelta: number(movement.physicalDelta),
+          inventoryUnit: movement.inventoryUnit,
+          valueDelta: number(movement.valueDelta),
+        })),
+      }
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      throw error
+    }
+  })
+
+  app.post('/batch-manual-outbound', authWrite, async (req: any, reply: any) => {
+    const parsed = batchManualOutboundSchema.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    try {
+      const result = await recordBatchManualWarehouseOutbound({
+        tenantId: req.user.tenantId,
+        userId: req.user.userId,
+        items: parsed.data.items.map(item => ({
+          productId: item.productId,
+          inventoryQuantity: item.inventoryQuantity,
+          totalAmount: item.totalAmount ?? null,
+          note: item.note,
+        })),
+        effectiveAt: new Date(parsed.data.effectiveAt),
+        idempotencyKey: parsed.data.idempotencyKey,
+        reason: parsed.data.reason,
+        sourceName: parsed.data.sourceName,
+      })
+      const totalAmount = result.movements.reduce((sum, movement) => sum + Math.abs(number(movement.valueDelta)), 0)
+      return {
+        ok: true,
+        replayed: result.replayed,
+        warehouseId: result.warehouseId,
+        count: result.movements.length,
+        totalAmount,
         movements: result.movements.map(movement => ({
           id: movement.id,
           productId: movement.productId,

@@ -730,6 +730,202 @@ export async function recordBatchManualWarehouseInbound(input: BatchManualWareho
   })
 }
 
+export type BatchManualWarehouseOutboundInput = {
+  tenantId: string
+  userId: string
+  items: Array<{
+    productId: string
+    /** 出库数量，按库存单位计 */
+    inventoryQuantity: Decimalish
+    /** 指定出库成本（不含税总额）；缺省按库存移动均价带出没变 */
+    totalAmount?: Decimalish | null
+    note?: string | null
+  }>
+  effectiveAt: Date
+  idempotencyKey: string
+  /** 出库原因/去向，如「门店拨补（美团 8.22 配送）」「报损」 */
+  reason: string
+  sourceName?: string | null
+}
+
+/**
+ * 批量手工出库（2026-08-23，供应链切换期账目缺口补齐）。
+ *
+ * 背景：美团每日包记账依赖「前一日已确认基线」的导入单链条，该链条随
+ * 快照确认端点下线而断裂；但总仓客观存在订单体系之外的出库——门店拨补、
+ * 样品、报损、切换期历史补录。此函数提供有审计、有幂等、有 FEFO 批次
+ * 分摊的手工出库通道。
+ *
+ * 语义与每日包出库对齐：type=ORDER_OUTBOUND、sourceType='WarehouseManualOutbound'
+ * 区分来源；成本默认按移动均价带出，调用方可指定权威成本（如美团口径金额）；
+ * 清零行尾差全部带出；STRICT 模式库存不足即整批拒绝。不回写 Product.stock。
+ */
+export async function recordBatchManualWarehouseOutbound(input: BatchManualWarehouseOutboundInput) {
+  const { warehouseId, inventoryMode } = await getWarehouseLedgerMode(input.tenantId)
+  if (!input.items.length) throw businessError('出库明细不能为空', 400)
+  if (!input.effectiveAt || Number.isNaN(input.effectiveAt.getTime())) throw businessError('出库时间无效', 400)
+  const reason = String(input.reason || '').trim()
+  if (reason.length < 2) throw businessError('请填写出库原因/去向', 400)
+  const sourceRequestId = String(input.idempotencyKey || '').trim()
+  const normalizedIdempotencyKey = `manual-outbound:${sourceRequestId}`
+  if (!sourceRequestId || sourceRequestId.length > 80 || normalizedIdempotencyKey.length > 160 - 40) {
+    throw businessError('出库幂等键无效', 400)
+  }
+  const seen = new Set<string>()
+  for (const item of input.items) {
+    if (seen.has(item.productId)) throw businessError('同一商品不能重复添加', 400)
+    seen.add(item.productId)
+  }
+
+  const products = await prisma.product.findMany({
+    where: { tenantId: input.tenantId, id: { in: [...seen] }, status: 'ENABLED' },
+    select: {
+      id: true,
+      name: true,
+      unit: true,
+      purchaseUnit: true,
+      inventoryUnit: true,
+      orderUnit: true,
+      costUnit: true,
+      inventoryUnitsPerPurchaseUnit: true,
+      inventoryUnitsPerOrderUnit: true,
+      inventoryUnitsPerCostUnit: true,
+      unitConversionStatus: true,
+    },
+  })
+  if (products.length !== seen.size) throw businessError('出库明细包含已停用或不存在的商品', 404)
+  const productById = new Map(products.map(product => [product.id, product]))
+
+  const lines = input.items.map((item, index) => {
+    const product = productById.get(item.productId)!
+    const contract = resolveProductFourUnits(product as ProductInventoryUnitLike)
+    if (contract.status !== 'VERIFIED') throw businessError(`${product.name} 的四单位换算尚未核验，不能记真实出库`, 409)
+    const inventoryQuantity = quantity(item.inventoryQuantity, `${product.name}出库数量`)
+    const specifiedAmount = item.totalAmount === null || item.totalAmount === undefined
+      ? null
+      : decimal(item.totalAmount, `${product.name}出库成本`).toDecimalPlaces(VALUE_DP)
+    if (specifiedAmount !== null && specifiedAmount.lte(0)) throw businessError(`${product.name}出库成本必须大于0`, 400)
+    return { index, product, contract, inventoryQuantity, specifiedAmount, note: item.note || null }
+  })
+
+  return serializableWithRetry(async tx => {
+    const lineKeys = lines.map(line => `${normalizedIdempotencyKey}:${line.product.id}`)
+    const existing = await tx.warehouseLedgerMovement.findMany({
+      where: { tenantId: input.tenantId, warehouseId, idempotencyKey: { in: lineKeys } },
+      select: { id: true, idempotencyKey: true, productId: true, physicalDelta: true, valueDelta: true, inventoryUnit: true },
+    })
+    const existingByKey = new Map(existing.map(row => [row.idempotencyKey, row]))
+    if (existing.length === lineKeys.length) {
+      return {
+        replayed: true,
+        movements: existing.map(row => ({ id: row.id, productId: row.productId, physicalDelta: row.physicalDelta, valueDelta: row.valueDelta, inventoryUnit: row.inventoryUnit })),
+        warehouseId,
+      }
+    }
+
+    const balances = await lockBalances(tx, {
+      tenantId: input.tenantId,
+      warehouseId,
+      products: lines.map(line => ({ productId: line.product.id, inventoryUnit: line.contract.inventoryUnit })),
+    })
+
+    const movements: Array<{ id: string; productId: string; physicalDelta: Prisma.Decimal; valueDelta: Prisma.Decimal; inventoryUnit: string }> = []
+    for (const line of lines) {
+      const idempotencyKey = `${normalizedIdempotencyKey}:${line.product.id}`
+      const replay = existingByKey.get(idempotencyKey)
+      if (replay) { movements.push({ id: replay.id, productId: replay.productId, physicalDelta: replay.physicalDelta, valueDelta: replay.valueDelta, inventoryUnit: replay.inventoryUnit }); continue }
+      const balance = balances.get(line.product.id)!
+      if (inventoryMode === 'STRICT' && balance.physicalQty.lt(line.inventoryQuantity)) {
+        throw businessError(`${line.product.name} 可用总仓库存不足，不能出库`, 409)
+      }
+      let costOut = line.specifiedAmount !== null
+        ? line.specifiedAmount
+        : line.inventoryQuantity.mul(balance.averageUnitCost).toDecimalPlaces(VALUE_DP)
+      const nextPhysical = balance.physicalQty.minus(line.inventoryQuantity).toDecimalPlaces(QTY_DP)
+      let nextValue = balance.inventoryValue.minus(costOut).toDecimalPlaces(VALUE_DP)
+      if (nextPhysical.isZero()) { costOut = balance.inventoryValue; nextValue = ZERO }
+      const nextAverage = nextAverageCost(nextValue, nextPhysical, balance.averageUnitCost)
+      const movement = await tx.warehouseLedgerMovement.create({
+        data: {
+          tenantId: input.tenantId,
+          warehouseId,
+          productId: line.product.id,
+          type: 'ORDER_OUTBOUND',
+          physicalDelta: line.inventoryQuantity.negated(),
+          reservedDelta: ZERO,
+          valueDelta: costOut.negated(),
+          physicalAfter: nextPhysical,
+          reservedAfter: balance.reservedQty,
+          valueAfter: nextValue,
+          averageUnitCostAfter: nextAverage,
+          originalQuantity: line.inventoryQuantity,
+          originalUnit: line.contract.inventoryUnit,
+          conversionFactor: new Prisma.Decimal(1),
+          inventoryQuantity: line.inventoryQuantity,
+          inventoryUnit: line.contract.inventoryUnit,
+          inventoryUnitCost: line.inventoryQuantity.gt(0) ? costOut.div(line.inventoryQuantity).toDecimalPlaces(COST_DP) : ZERO,
+          sourceType: 'WarehouseManualOutbound',
+          sourceId: sourceRequestId,
+          sourceLineId: line.product.id,
+          idempotencyKey,
+          requestFingerprint: fingerprint({
+            productId: line.product.id,
+            inventoryQuantity: line.inventoryQuantity.toFixed(QTY_DP),
+            totalAmount: line.specifiedAmount?.toFixed(VALUE_DP) || null,
+            effectiveAt: input.effectiveAt.toISOString(),
+            reason,
+            note: line.note,
+          }),
+          effectiveAt: input.effectiveAt,
+          note: line.note ? `${reason}｜${line.note}` : reason,
+          sourceName: input.sourceName || null,
+          createdById: input.userId,
+        },
+      })
+      await persistBalance(tx, balance, {
+        physicalQty: nextPhysical,
+        reservedQty: balance.reservedQty,
+        inventoryValue: nextValue,
+        averageUnitCost: nextAverage,
+      })
+      await allocateLotsFefo(tx, {
+        tenantId: input.tenantId,
+        warehouseId,
+        productId: line.product.id,
+        movementId: movement.id,
+        quantity: line.inventoryQuantity,
+      })
+      await tx.opLog.create({
+        data: {
+          tenantId: input.tenantId,
+          userId: input.userId,
+          action: `总仓批量出库 ${line.product.name} ${line.inventoryQuantity.toFixed()} ${line.contract.inventoryUnit}（${reason}）`,
+          target: sourceRequestId,
+          entityType: 'WarehouseLedgerMovement',
+          targetId: movement.id,
+          metadata: {
+            warehouseId,
+            productId: line.product.id,
+            inventoryQuantity: line.inventoryQuantity.toFixed(QTY_DP),
+            inventoryUnit: line.contract.inventoryUnit,
+            costOut: costOut.toFixed(2),
+            reason,
+            documentLine: line.index + 1,
+          },
+        },
+      })
+      movements.push({
+        id: movement.id,
+        productId: line.product.id,
+        physicalDelta: movement.physicalDelta,
+        valueDelta: movement.valueDelta,
+        inventoryUnit: line.contract.inventoryUnit,
+      })
+    }
+    return { replayed: false, movements, warehouseId }
+  })
+}
+
 export type WarehousePhysicalCountInput = {
   tenantId: string
   userId: string

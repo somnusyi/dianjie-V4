@@ -187,6 +187,44 @@ describe('总仓库存页面', () => {
     container.remove()
   })
 
+  it('verifies an inferred unit conversion from the review queue', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    const inferred = { ...inventory, items: [{ ...inventory.items[0], unitConversionStatus: 'INFERRED' }] }
+    mockFetch.mockImplementation((path, init) => {
+      const url = String(path)
+      if (url.startsWith('/api/warehouse-inventory?scope=unit-review')) return Promise.resolve(inferred)
+      if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
+      if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
+      if (url === '/api/warehouse-inventory/audit') return Promise.resolve({
+        readyForStrict: false, blockerCount: 0, warningCount: 0, checkedSku: 1, issues: [],
+      })
+      if (url === '/api/suppliers?businessScope=WAREHOUSE_UPSTREAM') {
+        return Promise.resolve([{ id: 'sup-1', no: 'SUP001', name: '井育苗菇' }])
+      }
+      if (url === '/api/products/product-1' && init?.method === 'PATCH') return Promise.resolve({ count: 1 })
+      return Promise.reject(new Error(`unexpected API: ${url}`))
+    })
+
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('菌菇酱') ?? false)
+    const tab = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('单位待核验'))
+    await act(async () => { tab?.click() })
+    await waitFor(() => Array.from(container.querySelectorAll('button'))
+      .some(button => button.textContent?.includes('确认 1 箱 = 8 袋')))
+
+    const verify = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('确认 1 箱 = 8 袋'))
+    await act(async () => { verify?.click() })
+    await waitFor(() => mockFetch.mock.calls.some(([path, init]) => String(path) === '/api/products/product-1' && init?.method === 'PATCH'))
+
+    const call = mockFetch.mock.calls.find(([path, init]) => String(path) === '/api/products/product-1' && init?.method === 'PATCH')
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ unitConversionStatus: 'VERIFIED' })
+    expect(window.confirm).toHaveBeenCalled()
+
+    act(() => root.unmount())
+    container.remove()
+    vi.unstubAllGlobals()
+  })
+
   it('derives unit price from edited line amount for round-off totals', async () => {
     const { container, root } = renderPage()
     await waitFor(() => container.textContent?.includes('菌菇酱') ?? false)

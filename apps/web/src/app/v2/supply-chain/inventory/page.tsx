@@ -227,6 +227,27 @@ export default function InternalSupplyChainInventoryPage() {
   const [countKey, setCountKey] = useState(newIdempotencyKey)
   const [suppliers, setSuppliers] = useState<UpstreamSupplier[]>([])
   const [gateWarnings, setGateWarnings] = useState<string[]>([])
+  const [verifyingId, setVerifyingId] = useState('')
+
+  // 单位待核验：人工确认换算关系后放行入库（只提交状态，后端原样保留四单位口径）
+  async function verifyUnitConversion(item: InventoryItem) {
+    const mapping = conversionText(item)
+    if (!window.confirm(`确认「${item.name}」的换算关系：${mapping}？\n核验通过后该商品才能入库记账；换算不对请点「前往商品管理」改好再核验。`)) return
+    setVerifyingId(item.id)
+    setError('')
+    try {
+      await apiFetch(`/api/products/${item.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ unitConversionStatus: 'VERIFIED' }),
+      })
+      setNotice(`「${item.name}」换算已核验（${mapping}），现在可以入库了`)
+      await load(scope)
+    } catch (reason: any) {
+      setError(String(reason?.message || reason))
+    } finally {
+      setVerifyingId('')
+    }
+  }
 
   async function load(requestedScope: InventoryScope = scope) {
     setLoading(true)
@@ -627,7 +648,15 @@ export default function InternalSupplyChainInventoryPage() {
                   <td className="px-4 py-3"><b>{item.name}</b><div className="text-micro text-gray3">{item.code} · {item.category || '未分类'}</div></td>
                   <td className="px-4 py-3"><b>采购：{item.purchaseUnit}</b><div className="text-micro text-gray3">库存：{item.inventoryUnit} · 当前仅为占位单位</div></td>
                   <td className="px-4 py-3"><b>{scope === 'bom-mapping' ? '关联真实采购 SKU' : '确认采购、库存及换算关系'}</b><div className="text-micro text-red-fg">完成前不进入库存账</div></td>
-                  <td className="px-4 py-3"><a href="/v2/supply-chain/products" className="text-button text-accent underline">前往商品管理</a></td>
+                  <td className="px-4 py-3">
+                    {scope === 'unit-review' && item.unitConversionStatus !== 'VERIFIED' && (
+                      <button onClick={() => verifyUnitConversion(item)} disabled={verifyingId === item.id}
+                        className="mr-3 rounded-cta bg-accent px-3 py-1.5 text-button text-white disabled:opacity-40">
+                        {verifyingId === item.id ? '核验中…' : `确认 ${conversionText(item)}`}
+                      </button>
+                    )}
+                    <a href="/v2/supply-chain/products" className="text-button text-accent underline">前往商品管理</a>
+                  </td>
                 </tr>)}
               </tbody>
             </table>}

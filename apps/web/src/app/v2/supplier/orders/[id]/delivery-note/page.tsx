@@ -7,7 +7,7 @@
  * 内容: 抬头(供应商) + 收货方(门店地址) + 订单元数据 + 商品明细表 + 合计大写 + 签字栏
  */
 'use client'
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { apiFetch } from '@/lib/v2-auth'
 import dayjs from 'dayjs'
@@ -356,6 +356,16 @@ export default function DeliveryNotePrintPage() {
   const totalQty = order.items.reduce((s, i) => s + itemQty(i), 0)
   const hasAdjust = order.items.some(i => i.shippedQty != null && Math.abs(Number(i.shippedQty) - Number(i.quantity)) > 0.0001)
 
+  // 打印手工分页：首页要给抬头/元数据留空间所以行数少，续页多。
+  // 用多个 tbody + break-before 强制分页——不让浏览器自己在表格中间找断点（会截断/丢行导致漏货）
+  const PRINT_FIRST_PAGE_ROWS = 14
+  const PRINT_PAGE_ROWS = 20
+  const printChunks: Order['items'][] = []
+  order.items.forEach((item, idx) => {
+    const chunkIdx = idx < PRINT_FIRST_PAGE_ROWS ? 0 : 1 + Math.floor((idx - PRINT_FIRST_PAGE_ROWS) / PRINT_PAGE_ROWS)
+    ;(printChunks[chunkIdx] = printChunks[chunkIdx] || []).push(item)
+  })
+
   return (
     <>
       {/* 打印样式 — 纸张 + 隐藏顶栏 */}
@@ -364,7 +374,8 @@ export default function DeliveryNotePrintPage() {
         @media print {
           body { background: white !important; }
           .no-print { display: none !important; }
-          .print-page { box-shadow: none !important; margin: 0 !important; }
+          /* 宽度自适应打印区 — 210mm固定宽+24mm页边距会超出纸面，Chromium 溢出截断会在分页处丢行 */
+          .print-page { box-shadow: none !important; margin: 0 !important; width: auto !important; min-height: 0 !important; padding: 0 !important; }
           /* 行不可跨页截断 — 防止拣货单在分页处把一行切两半导致漏货 */
           tr { page-break-inside: avoid !important; break-inside: avoid !important; }
           thead { display: table-header-group !important; }
@@ -517,35 +528,50 @@ export default function DeliveryNotePrintPage() {
             </tr>
           </thead>
           <tbody>
-            {order.items.map((it, i) => {
-              const adj = it.shippedQty != null && Math.abs(Number(it.shippedQty) - Number(it.quantity)) > 0.0001
+            {printChunks.map((chunk, chunkIdx) => {
+              const startIdx = chunkIdx === 0 ? 0 : PRINT_FIRST_PAGE_ROWS + (chunkIdx - 1) * PRINT_PAGE_ROWS
+              const isLastChunk = chunkIdx === printChunks.length - 1
               return (
-                <tr key={it.id}>
-                  <td className="border border-gray3 px-2 py-1.5 text-center">{i + 1}</td>
-                  <td className="border border-gray3 px-2 py-1.5">{it.product?.name || '-'}</td>
-                  <td className="border border-gray3 px-2 py-1.5 text-xs">{it.product?.spec || '—'}</td>
-                  <td className="border border-gray3 px-2 py-1.5 text-center">{it.product?.unit || '—'}</td>
-                  <td className="border border-gray3 px-2 py-1.5 text-right font-mono">
-                    {itemQty(it)}
-                    {adj && <span className="text-xs text-gray3 ml-1">(下单 {it.quantity})</span>}
-                  </td>
-                  <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{Number(it.unitPrice).toFixed(2)}</td>
-                  <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{itemAmt(it).toFixed(2)}</td>
-                </tr>
+                <Fragment
+                  key={chunkIdx}
+                >
+                  {chunk.map((it, i) => {
+                    const globalIdx = startIdx + i
+                    const adj = it.shippedQty != null && Math.abs(Number(it.shippedQty) - Number(it.quantity)) > 0.0001
+                    return (
+                      <tr key={it.id} style={globalIdx === startIdx && chunkIdx > 0 ? { pageBreakBefore: 'always', breakBefore: 'page' } : undefined}>
+                        <td className="border border-gray3 px-2 py-1.5 text-center">{globalIdx + 1}</td>
+                        <td className="border border-gray3 px-2 py-1.5">{it.product?.name || '-'}</td>
+                        <td className="border border-gray3 px-2 py-1.5 text-xs">{it.product?.spec || '—'}</td>
+                        <td className="border border-gray3 px-2 py-1.5 text-center">{it.product?.unit || '—'}</td>
+                        <td className="border border-gray3 px-2 py-1.5 text-right font-mono">
+                          {itemQty(it)}
+                          {adj && <span className="text-xs text-gray3 ml-1">(下单 {it.quantity})</span>}
+                        </td>
+                        <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{Number(it.unitPrice).toFixed(2)}</td>
+                        <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{itemAmt(it).toFixed(2)}</td>
+                      </tr>
+                    )
+                  })}
+                  {isLastChunk && (
+                    <>
+                      {/* 合计 */}
+                      <tr className="bg-bg font-semibold">
+                        <td colSpan={4} className="border border-gray3 px-2 py-1.5 text-right">合计</td>
+                        <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{totalQty}</td>
+                        <td className="border border-gray3 px-2 py-1.5"></td>
+                        <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{total.toFixed(2)}</td>
+                      </tr>
+                      {/* 大写 */}
+                      <tr>
+                        <td className="border border-gray3 px-2 py-1.5 bg-bg">大写</td>
+                        <td colSpan={6} className="border border-gray3 px-2 py-1.5">人民币 {num2cn(total)}</td>
+                      </tr>
+                    </>
+                  )}
+                </Fragment>
               )
             })}
-            {/* 合计 */}
-            <tr className="bg-bg font-semibold">
-              <td colSpan={4} className="border border-gray3 px-2 py-1.5 text-right">合计</td>
-              <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{totalQty}</td>
-              <td className="border border-gray3 px-2 py-1.5"></td>
-              <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{total.toFixed(2)}</td>
-            </tr>
-            {/* 大写 */}
-            <tr>
-              <td className="border border-gray3 px-2 py-1.5 bg-bg">大写</td>
-              <td colSpan={6} className="border border-gray3 px-2 py-1.5">人民币 {num2cn(total)}</td>
-            </tr>
           </tbody>
         </table>
 

@@ -125,12 +125,25 @@ export default function DeliveryNotePrintPage() {
         // 单页 — 直接整张塞 (最常见)
         pdf.addImage(canvas.toDataURL('image/jpeg', 0.7), 'JPEG', margin, margin, imgW, imgH)
       } else {
-        // 多页分割 — 每页一片, JPEG 压缩
+        // 多页分割 — 切点必须落在行边界上, 避免把一行切两半 (拣货漏行重灾区)
+        // 行位置用屏幕坐标量 (CSS px), 再按比例换算到 PDF mm
+        const elRect = el.getBoundingClientRect()
+        const cssToMm = imgH / elRect.height
+        const rowBoundsMm = Array.from(el.querySelectorAll('tbody tr')).map(tr => {
+          const r = tr.getBoundingClientRect()
+          return { top: (r.top - elRect.top) * cssToMm, bottom: (r.bottom - elRect.top) * cssToMm }
+        }).sort((a, b) => a.top - b.top)
         let y = 0
         while (y < imgH) {
           if (y > 0) pdf.addPage()
+          let cut = Math.min(y + pageHContent, imgH)
+          if (cut < imgH) {
+            // 若有行被 cut 拦腰截断, 把 cut 收到该行的上沿
+            const cutRow = rowBoundsMm.find(r => r.top > y && r.top < cut && r.bottom > cut)
+            if (cutRow && cutRow.top > y + 10) cut = cutRow.top  // 至少留 10mm 内容, 防单行超高死循环
+          }
+          const remainImgH = cut - y
           const srcY = y / imgH * canvas.height
-          const remainImgH = Math.min(pageHContent, imgH - y)
           const srcH = remainImgH / imgH * canvas.height
           const pageCanvas = document.createElement('canvas')
           pageCanvas.width = canvas.width
@@ -139,7 +152,15 @@ export default function DeliveryNotePrintPage() {
           ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height)
           ctx.drawImage(canvas, 0, srcY, canvas.width, srcH, 0, 0, canvas.width, srcH)
           pdf.addImage(pageCanvas.toDataURL('image/jpeg', 0.7), 'JPEG', margin, margin, imgW, remainImgH)
-          y += pageHContent
+          y = cut
+        }
+        // 页脚: 第 X 页 / 共 Y 页 — 拣货时先对页数, 少一页立刻能发现
+        const pageCount = pdf.getNumberOfPages()
+        for (let p = 1; p <= pageCount; p++) {
+          pdf.setPage(p)
+          pdf.setFontSize(9)
+          pdf.setTextColor(120)
+          pdf.text(`${p} / ${pageCount}`, pageW - margin, pageH - 3, { align: 'right' })
         }
       }
       // 生成 blob → 同时存 blob 和 data URL
@@ -344,6 +365,9 @@ export default function DeliveryNotePrintPage() {
           body { background: white !important; }
           .no-print { display: none !important; }
           .print-page { box-shadow: none !important; margin: 0 !important; }
+          /* 行不可跨页截断 — 防止拣货单在分页处把一行切两半导致漏货 */
+          tr { page-break-inside: avoid !important; break-inside: avoid !important; }
+          thead { display: table-header-group !important; }
         }
       `}</style>
 

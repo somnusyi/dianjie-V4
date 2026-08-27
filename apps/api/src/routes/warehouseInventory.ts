@@ -362,8 +362,9 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         ] })),
       } : {}),
     }
-    const [total, rows] = await Promise.all([
+    const [total, sumAgg, rows] = await Promise.all([
       prisma.warehouseLedgerMovement.count({ where }),
+      prisma.warehouseLedgerMovement.aggregate({ where, _sum: { valueDelta: true } }),
       prisma.warehouseLedgerMovement.findMany({
         where,
         orderBy: [{ effectiveAt: 'desc' }, { recordedAt: 'desc' }, { id: 'desc' }],
@@ -379,6 +380,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
     ])
     return {
       total,
+      totalAmount: Math.round((sumAgg._sum.valueDelta ? number(sumAgg._sum.valueDelta) : 0) * 100) / 100,
       page: parsed.data.page,
       pageSize: parsed.data.pageSize,
       items: rows.map(row => ({

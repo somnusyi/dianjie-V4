@@ -34,6 +34,7 @@ type InboundRecord = {
 
 type InboundResponse = {
   total: number
+  totalAmount?: number
   page: number
   pageSize: number
   items: InboundRecord[]
@@ -269,7 +270,10 @@ export default function InboundRecordsPage() {
       <section className="mt-4 overflow-hidden rounded-card border border-border bg-white">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <h2 className="text-h2">入库流水{data ? `（共 ${data.total} 行）` : ''}</h2>
-          <span className="text-micro text-gray3">金额为含税入库金额 · 单价按库存单位</span>
+          <div className="flex items-center gap-3">
+            {data && data.totalAmount !== undefined && <span className="text-caption font-semibold text-accent">合计 ¥{data.totalAmount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
+            <span className="text-micro text-gray3">金额为含税入库金额 · 单价按库存单位</span>
+          </div>
         </div>
         <div className="overflow-auto">
           {items.length > 0 && <table className="w-full min-w-[1080px] text-left text-caption">

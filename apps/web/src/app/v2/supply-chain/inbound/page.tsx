@@ -85,6 +85,39 @@ function supplierCell(row: InboundRecord) {
   return { text, tone: 'muted' as const }
 }
 
+// 本地时区 yyyy-mm-dd（避免 toISOString 的 UTC 日期偏移）
+function fmtDate(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function datePresetRange(key: string): { from: string; to: string } {
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  switch (key) {
+    case 'today': return { from: fmtDate(today), to: fmtDate(today) }
+    case 'yesterday': {
+      const y = new Date(today); y.setDate(y.getDate() - 1)
+      return { from: fmtDate(y), to: fmtDate(y) }
+    }
+    case 'thisMonth': return { from: fmtDate(new Date(today.getFullYear(), today.getMonth(), 1)), to: fmtDate(today) }
+    case 'lastMonth': {
+      const first = new Date(today.getFullYear(), today.getMonth() - 1, 1)
+      const last = new Date(today.getFullYear(), today.getMonth(), 0)
+      return { from: fmtDate(first), to: fmtDate(last) }
+    }
+    case 'thisYear': return { from: fmtDate(new Date(today.getFullYear(), 0, 1)), to: fmtDate(today) }
+    default: return { from: '', to: '' }
+  }
+}
+
+const DATE_PRESETS = [
+  { key: 'today', label: '今天' },
+  { key: 'yesterday', label: '昨天' },
+  { key: 'thisMonth', label: '本月' },
+  { key: 'lastMonth', label: '上月' },
+  { key: 'thisYear', label: '今年' },
+]
+
 export default function InboundRecordsPage() {
   const [suppliers, setSuppliers] = useState<UpstreamSupplier[]>([])
   const [unclaimed, setUnclaimed] = useState<UnclaimedSource[]>([])
@@ -209,6 +242,21 @@ export default function InboundRecordsPage() {
       </section>}
 
       <section className="mt-4 rounded-card border border-border bg-white p-4">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span className="text-micro text-gray3">快捷日期</span>
+          {DATE_PRESETS.map(preset => {
+            const range = datePresetRange(preset.key)
+            const active = from === range.from && to === range.to
+            return (
+              <button
+                key={preset.key}
+                type="button"
+                onClick={() => { setFrom(range.from); setTo(range.to); setPage(1) }}
+                className={`h-8 rounded-full border px-3 text-micro ${active ? 'border-accent bg-accent text-white' : 'border-border bg-white text-gray3 hover:border-accent hover:text-accent'}`}
+              >{preset.label}</button>
+            )
+          })}
+        </div>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
           <label><span className="mb-1 block text-micro text-gray3">开始日期</span><input type="date" value={from} onChange={event => setFrom(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
           <label><span className="mb-1 block text-micro text-gray3">结束日期</span><input type="date" value={to} onChange={event => setTo(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>

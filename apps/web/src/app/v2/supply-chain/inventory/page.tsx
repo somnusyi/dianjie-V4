@@ -140,6 +140,53 @@ function conversionNote(item: InventoryItem) {
   return '不能用于真实入库和成本计算'
 }
 
+// 可搜索的供应商选择器 — 供应商多了以后下拉翻找容易选错，输入编号/名称即筛
+function SupplierCombobox({ suppliers, value, onChange }: {
+  suppliers: UpstreamSupplier[]
+  value: string
+  onChange: (id: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [kw, setKw] = useState('')
+  const selected = suppliers.find(s => s.id === value)
+  const keyword = kw.trim().toLowerCase()
+  const filtered = keyword
+    ? suppliers.filter(s => `${s.no} ${s.name}`.toLowerCase().includes(keyword))
+    : suppliers
+  return (
+    <div className="relative">
+      <input
+        value={open ? kw : (selected ? `${selected.no} · ${selected.name}` : '')}
+        placeholder="输入编号 / 名称搜索供应商"
+        onFocus={() => { setOpen(true); setKw('') }}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onChange={event => { setKw(event.target.value); setOpen(true) }}
+        onKeyDown={event => {
+          if (event.key === 'Escape') setOpen(false)
+          if (event.key === 'Enter' && open && filtered.length > 0) { event.preventDefault(); onChange(filtered[0].id); setOpen(false) }
+        }}
+        className="h-11 w-full rounded-cta border border-border bg-white px-3 pr-8"
+      />
+      {selected && !open && (
+        <button type="button" aria-label="清除供应商" onClick={() => onChange('')}
+          className="absolute right-2 top-1/2 -translate-y-1/2 px-1 text-h2 text-gray3 hover:text-ink">×</button>
+      )}
+      {open && (
+        <div className="absolute z-30 mt-1 max-h-56 w-full overflow-auto rounded-card border border-border bg-white shadow-lg">
+          {filtered.map(s => (
+            <button key={s.id} type="button" onMouseDown={event => event.preventDefault()}
+              onClick={() => { onChange(s.id); setOpen(false) }}
+              className={`block w-full px-3 py-2 text-left text-caption hover:bg-bg ${s.id === value ? 'bg-bg font-semibold' : ''}`}>
+              {s.no} · {s.name}
+            </button>
+          ))}
+          {filtered.length === 0 && <div className="px-3 py-3 text-caption text-gray3">没有匹配的供应商</div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function InternalSupplyChainInventoryPage() {
   const [data, setData] = useState<InventoryResponse | null>(null)
   const [movements, setMovements] = useState<Movement[]>([])
@@ -636,7 +683,7 @@ export default function InternalSupplyChainInventoryPage() {
 
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <label><span className="mb-1 block text-micro text-gray3">实际入库时间 *</span><input type="datetime-local" value={batchEffectiveAt} onChange={event => setBatchEffectiveAt(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
-            <label><span className="mb-1 block text-micro text-gray3">供货供应商 *</span><select value={batchSupplierId} onChange={event => setBatchSupplierId(event.target.value)} className="h-11 w-full rounded-cta border border-border bg-white px-3"><option value="">请选择上游供应商</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}</select></label>
+            <label><span className="mb-1 block text-micro text-gray3">供货供应商 *</span><SupplierCombobox suppliers={suppliers} value={batchSupplierId} onChange={setBatchSupplierId} /></label>
             <label><span className="mb-1 block text-micro text-gray3">整单备注</span><input value={batchNote} maxLength={240} onChange={event => setBatchNote(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
           </div>
           <div className="mt-4 flex items-center justify-between gap-4"><p className="text-micro text-gray3">只显示四单位已经核验的商品，避免箱、件、kg 等错误换算进入正式库存。</p><button onClick={submitBatchInbound} disabled={submitting || batchRows.length === 0} className="h-11 min-w-52 rounded-cta bg-accent px-6 text-button text-white disabled:opacity-40">{submitting ? '正在整单记账…' : `确认批量入库 · ${money(batchTotal)}`}</button></div>
@@ -652,7 +699,7 @@ export default function InternalSupplyChainInventoryPage() {
             <label><span className="mb-1 block text-micro text-gray3">入库总金额（元）*</span><input type="number" min="0.01" step="0.01" value={totalAmount} onChange={event => setTotalAmount(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
             {selectedProduct && <div className="sm:col-span-2 rounded-card border border-blue/20 bg-blue/5 p-3 text-caption text-gray2">入库单位指供应商交货/仓库收货时使用的采购单位。本次：<b>{qty(Number(purchaseQuantity))} {selectedProduct.purchaseUnit} × {qty(selectedProduct.purchaseToInventoryFactor, 6)} = {qty(normalizedQuantity, 6)} {selectedProduct.inventoryUnit}</b>{unitCost > 0 && <>，库存单位成本约 <b>{money(unitCost)}/{selectedProduct.inventoryUnit}</b></>}。</div>}
             <label><span className="mb-1 block text-micro text-gray3">实际入库时间 *</span><input type="datetime-local" value={effectiveAt} onChange={event => setEffectiveAt(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
-            <label><span className="mb-1 block text-micro text-gray3">供货供应商 *</span><select value={supplierId} onChange={event => setSupplierId(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3"><option value="">请选择上游供应商</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}</select></label>
+            <label><span className="mb-1 block text-micro text-gray3">供货供应商 *</span><SupplierCombobox suppliers={suppliers} value={supplierId} onChange={setSupplierId} /></label>
             <label><span className="mb-1 block text-micro text-gray3">批次号（可选）</span><input value={batchNo} maxLength={80} onChange={event => setBatchNo(event.target.value)} placeholder="留空自动生成" className="h-11 w-full rounded-cta border border-border px-3" /></label>
             <label><span className="mb-1 block text-micro text-gray3">入库说明</span><input value={note} maxLength={240} onChange={event => setNote(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
             <label><span className="mb-1 block text-micro text-gray3">生产日期（可选）</span><input type="date" value={manufactureDate} onChange={event => setManufactureDate(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>

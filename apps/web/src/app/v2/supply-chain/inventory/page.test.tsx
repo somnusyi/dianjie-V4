@@ -57,6 +57,20 @@ function change(element: HTMLInputElement | HTMLSelectElement, value: string) {
   })
 }
 
+// 供应商选择器是可搜索输入框：focus 展开列表后点选目标供应商
+function pickSupplier(container: HTMLElement, name = '井育苗菇') {
+  const input = Array.from(container.querySelectorAll('input')).find(
+    el => (el as HTMLInputElement).placeholder.includes('搜索供应商'),
+  ) as HTMLInputElement | undefined
+  expect(input).toBeTruthy()
+  act(() => {
+    input!.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+  })
+  const option = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes(name))
+  expect(option).toBeTruthy()
+  act(() => option?.click())
+}
+
 describe('总仓库存页面', () => {
   beforeEach(() => {
     mockFetch.mockReset()
@@ -121,8 +135,8 @@ describe('总仓库存页面', () => {
     expect(container.textContent).toContain('请选择供货供应商')
     expect(mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/manual-inbound')).toBe(false)
 
-    // 供应商下拉（商品 select 之后）选上游供应商
-    change(selects[1], 'sup-1')
+    // 供应商搜索框选上游供应商
+    pickSupplier(container)
     expect(container.textContent).toContain('2 箱 × 8 = 16 袋')
     expect(container.textContent).toContain('¥10.00/袋')
 
@@ -155,8 +169,8 @@ describe('总仓库存页面', () => {
     change(quantityInput, '2')
     change(priceInput, '80')
 
-    // 底部供应商下拉
-    change(selects[1], 'sup-1')
+    // 底部供应商搜索框
+    pickSupplier(container)
     expect(container.textContent).toContain('2 箱 = 16 袋')
     expect(container.textContent).toContain('¥160.00')
     const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('确认批量入库'))
@@ -199,7 +213,7 @@ describe('总仓库存页面', () => {
     change(amountInput, '250')
     expect(Number(priceInput.value)).toBeCloseTo(83.333333, 5)
 
-    change(selects[1], 'sup-1')
+    pickSupplier(container)
     const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('确认批量入库'))
     await act(async () => { submit?.click() })
     await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/batch-manual-inbound'))

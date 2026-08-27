@@ -111,6 +111,12 @@ export default function WarehouseDocsPage() {
 
   const [detailId, setDetailId] = useState<string | null>(null)
 
+  // 从入库记录页「改单」跳转进来时直接打开对应单据（?doc=<id>）
+  useEffect(() => {
+    const docIdFromUrl = new URLSearchParams(window.location.search).get('doc')
+    if (docIdFromUrl) setDetailId(docIdFromUrl)
+  }, [])
+
   const load = useCallback(() => {
     setLoading(true)
     setError(null)

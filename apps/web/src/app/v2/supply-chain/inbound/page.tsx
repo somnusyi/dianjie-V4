@@ -30,6 +30,7 @@ type InboundRecord = {
   batchNo: string | null
   expiryDate: string | null
   reversed: boolean
+  doc: { id: string; docNo: string; status: 'POSTED' | 'CONFIRMED' } | null
 }
 
 type InboundResponse = {
@@ -281,6 +282,7 @@ export default function InboundRecordsPage() {
               <th className="px-3 py-3">日期</th><th className="px-3 py-3">商品</th><th className="px-3 py-3 text-right">入库数量</th>
               <th className="px-3 py-3 text-right">单价</th><th className="px-3 py-3 text-right">金额</th>
               <th className="px-3 py-3">供应商</th><th className="px-3 py-3">来源</th><th className="px-3 py-3">批次/效期</th>
+              <th className="px-3 py-3">单据</th>
             </tr></thead>
             <tbody className="divide-y divide-border">
               {items.map(row => {
@@ -296,6 +298,17 @@ export default function InboundRecordsPage() {
                   <td className={`px-3 py-3 ${supplier.tone === 'warn' ? 'text-amber-fg' : supplier.tone === 'muted' ? 'text-gray3' : ''}`}>{supplier.text}</td>
                   <td className="whitespace-nowrap px-3 py-3 text-gray2">{recordSourceLabel(row)}</td>
                   <td className="px-3 py-3 text-micro text-gray3">{row.batchNo || '—'}{row.expiryDate ? <div>效期 {String(row.expiryDate).slice(0, 10)}</div> : null}</td>
+                  <td className="whitespace-nowrap px-3 py-3">
+                    {row.doc ? (
+                      <a
+                        href={`/v2/supply-chain/docs?doc=${row.doc.id}`}
+                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-micro ${row.doc.status === 'POSTED' ? 'border-amber bg-amber-50 text-amber-fg hover:bg-amber-100' : 'border-border bg-bg text-gray2 hover:border-accent'}`}
+                        title={row.doc.status === 'POSTED' ? '未审核，可点击改单' : '已审核，点击查看'}
+                      >
+                        {row.doc.status === 'POSTED' ? `✏️ 改单 ${row.doc.docNo}` : `✓ ${row.doc.docNo}`}
+                      </a>
+                    ) : <span className="text-gray3">—</span>}
+                  </td>
                 </tr>
               })}
             </tbody>

@@ -378,6 +378,14 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         },
       }),
     ])
+    // 关联仓库单据（审核流）：按流水ID找到所属单据，给前端"改单"入口用
+    const docLines = rows.length
+      ? await prisma.warehouseDocLine.findMany({
+          where: { tenantId, movementId: { in: rows.map(row => row.id) } },
+          select: { movementId: true, doc: { select: { id: true, docNo: true, status: true } } },
+        })
+      : []
+    const docByMovement = new Map(docLines.map(line => [line.movementId, line.doc]))
     return {
       total,
       totalAmount: Math.round((sumAgg._sum.valueDelta ? number(sumAgg._sum.valueDelta) : 0) * 100) / 100,
@@ -403,6 +411,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         batchNo: row.createdLot?.batchNo || null,
         expiryDate: row.createdLot?.expiryDate || null,
         reversed: Boolean(row.reversal),
+        doc: docByMovement.get(row.id) || null,
       })),
     }
   })

@@ -12,6 +12,11 @@ body {
 /* tabular-nums 让数字列宽度一致（HERO 大数字 / KPI / 表格） */
 .font-num { font-variant-numeric: tabular-nums; }
 
+/* 数字输入框去掉浏览器自带的上下步进箭头 — 仓库录单误触会改数量，全靠键盘输入 */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+
 /* 供应商以电脑端为主：宽屏使用统一侧边栏，手机端继续保留页面底部快捷导航。 */
 @media (min-width: 1024px) {
   .supplier-portal [data-bottom-nav='true'] { display: none; }

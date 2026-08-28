@@ -30,6 +30,14 @@ const inventory = {
   }],
 }
 
+// 第二个入库候选：验证勾选面板一次添加多种商品
+const secondCandidate = {
+  id: 'product-2', code: 'DJ002', name: '午餐肉', category: '肉制品', spec: '340g/罐',
+  purchaseUnit: '箱', inventoryUnit: '罐', purchaseToInventoryFactor: 24,
+  unitConversionStatus: 'VERIFIED', physicalQty: 0, reservedQty: 0, availableQty: 0,
+  inventoryValue: 0, averageUnitCost: 0, statusFlag: 'OUT',
+}
+
 function renderPage() {
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -71,13 +79,24 @@ function pickSupplier(container: HTMLElement, name = '井育苗菇') {
   act(() => option?.click())
 }
 
+// 勾选面板：勾选指定商品后点「添加选中商品」一次性加入入库单
+function checkAndAddCandidates(container: HTMLElement, names: string[]) {
+  for (const name of names) {
+    const checkbox = container.querySelector(`input[aria-label="选择${name}"]`) as HTMLInputElement | null
+    expect(checkbox, `候选勾选框：${name}`).toBeTruthy()
+    act(() => checkbox!.click())
+  }
+  const add = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('添加选中商品'))
+  act(() => add?.click())
+}
+
 describe('总仓库存页面', () => {
   beforeEach(() => {
     mockFetch.mockReset()
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
-      if (url === '/api/warehouse-inventory/inbound-candidates?limit=500') return Promise.resolve({ items: inventory.items })
+      if (url === '/api/warehouse-inventory/inbound-candidates?limit=500') return Promise.resolve({ items: [...inventory.items, secondCandidate] })
       if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
       if (url === '/api/warehouse-inventory/audit') return Promise.resolve({
         readyForStrict: false,
@@ -159,27 +178,33 @@ describe('总仓库存页面', () => {
     await act(async () => { open?.click() })
     await waitFor(() => container.textContent?.includes('总仓批量入库') ?? false)
 
-    const selects = Array.from(container.querySelectorAll('select')) as HTMLSelectElement[]
-    change(selects[0], 'product-1')
-    const add = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '添加商品')
-    act(() => add?.click())
+    // 勾选面板一次勾选两种商品，一次添加
+    checkAndAddCandidates(container, ['菌菇酱', '午餐肉'])
+    expect(container.textContent).toContain('合计 2 种商品')
 
     const quantityInput = container.querySelector('input[aria-label="菌菇酱采购数量"]') as HTMLInputElement
     const priceInput = container.querySelector('input[aria-label="菌菇酱采购单价"]') as HTMLInputElement
     change(quantityInput, '2')
     change(priceInput, '80')
+    const quantityInput2 = container.querySelector('input[aria-label="午餐肉采购数量"]') as HTMLInputElement
+    const priceInput2 = container.querySelector('input[aria-label="午餐肉采购单价"]') as HTMLInputElement
+    change(quantityInput2, '1')
+    change(priceInput2, '240')
 
     // 底部供应商搜索框
     pickSupplier(container)
     expect(container.textContent).toContain('2 箱 = 16 袋')
-    expect(container.textContent).toContain('¥160.00')
+    expect(container.textContent).toContain('¥400.00')
     const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('确认批量入库'))
     await act(async () => { submit?.click() })
     await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/batch-manual-inbound'))
 
     const call = mockFetch.mock.calls.find(([path]) => String(path) === '/api/warehouse-inventory/batch-manual-inbound')
     expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
-      items: [{ productId: 'product-1', purchaseQuantity: 2, unitPrice: 80 }],
+      items: [
+        { productId: 'product-1', purchaseQuantity: 2, unitPrice: 80 },
+        { productId: 'product-2', purchaseQuantity: 1, unitPrice: 240 },
+      ],
       supplierId: 'sup-1',
     })
 
@@ -232,10 +257,7 @@ describe('总仓库存页面', () => {
     await act(async () => { open?.click() })
     await waitFor(() => container.textContent?.includes('总仓批量入库') ?? false)
 
-    const selects = Array.from(container.querySelectorAll('select')) as HTMLSelectElement[]
-    change(selects[0], 'product-1')
-    const add = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '添加商品')
-    act(() => add?.click())
+    checkAndAddCandidates(container, ['菌菇酱'])
 
     const quantityInput = container.querySelector('input[aria-label="菌菇酱采购数量"]') as HTMLInputElement
     const priceInput = container.querySelector('input[aria-label="菌菇酱采购单价"]') as HTMLInputElement

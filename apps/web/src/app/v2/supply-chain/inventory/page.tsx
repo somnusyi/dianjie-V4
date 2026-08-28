@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 
@@ -199,8 +199,8 @@ export default function InternalSupplyChainInventoryPage() {
   const [inboundOpen, setInboundOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
   const [batchCandidates, setBatchCandidates] = useState<InboundCandidate[]>([])
-  const [batchCandidateId, setBatchCandidateId] = useState('')
   const [batchSearch, setBatchSearch] = useState('')
+  const [checkedCandidateIds, setCheckedCandidateIds] = useState<string[]>([])
   const [batchRows, setBatchRows] = useState<BatchInboundRow[]>([])
   const [batchEffectiveAt, setBatchEffectiveAt] = useState(defaultEffectiveAt)
   const [batchSupplierId, setBatchSupplierId] = useState('')
@@ -323,8 +323,8 @@ export default function InternalSupplyChainInventoryPage() {
   async function openBatchInbound() {
     setBatchOpen(true)
     setBatchCandidates([])
-    setBatchCandidateId('')
     setBatchSearch('')
+    setCheckedCandidateIds([])
     setBatchRows([])
     setBatchEffectiveAt(defaultEffectiveAt())
     setBatchSupplierId('')
@@ -343,12 +343,51 @@ export default function InternalSupplyChainInventoryPage() {
     }
   }
 
-  function addBatchRow() {
-    const candidate = batchCandidates.find(item => item.id === batchCandidateId)
-    if (!candidate || batchRows.some(row => row.productId === candidate.id)) return
-    setBatchRows(rows => [...rows, { productId: candidate.id, purchaseQuantity: '', unitPrice: '', amount: '' }])
-    setBatchCandidateId('')
+  // 勾选面板批量添加：一次把多个勾选项变成入库行，跳过已在单内的商品
+  function toggleCandidate(id: string) {
+    setCheckedCandidateIds(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id])
+  }
+
+  function toggleAllFilteredCandidates() {
+    const filteredIds = filteredBatchCandidates.map(item => item.id)
+    const allChecked = filteredIds.length > 0 && filteredIds.every(id => checkedCandidateIds.includes(id))
+    setCheckedCandidateIds(current => allChecked
+      ? current.filter(id => !filteredIds.includes(id))
+      : Array.from(new Set([...current, ...filteredIds])))
+  }
+
+  function addCheckedBatchRows() {
+    const checked = new Set(checkedCandidateIds)
+    const additions = batchCandidates.filter(item => checked.has(item.id) && !batchRows.some(row => row.productId === item.id))
+    if (additions.length === 0) return
+    setBatchRows(rows => [...rows, ...additions.map(item => ({ productId: item.id, purchaseQuantity: '', unitPrice: '', amount: '' }))])
+    setCheckedCandidateIds([])
     setBatchSearch('')
+  }
+
+  // 入库行内键盘导航：↑↓ 换行、Enter 下移、←→ 在光标到文本边缘时换格（中间位置保留正常光标移动）
+  function gridCellKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    const key = event.key
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter'].includes(key)) return
+    const cell = event.currentTarget
+    const row = Number(cell.dataset.gridR)
+    const col = Number(cell.dataset.gridC)
+    let nextRow = row
+    let nextCol = col
+    if (key === 'ArrowUp') nextRow = row - 1
+    else if (key === 'ArrowDown' || key === 'Enter') nextRow = row + 1
+    else if (key === 'ArrowLeft') {
+      if ((cell.selectionStart ?? 0) > 0) return
+      nextCol = col - 1
+    } else if (key === 'ArrowRight') {
+      if ((cell.selectionStart ?? 0) < cell.value.length) return
+      nextCol = col + 1
+    }
+    const next = cell.closest('table')?.querySelector(`input[data-grid-r="${nextRow}"][data-grid-c="${nextCol}"]`) as HTMLInputElement | null
+    if (!next) return
+    event.preventDefault()
+    next.focus()
+    next.select()
   }
 
   // 数量/单价/金额三列联动：改数量或单价 → 重算金额；改金额（凑整）→ 反算单价。
@@ -680,10 +719,36 @@ export default function InternalSupplyChainInventoryPage() {
       {batchOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setBatchOpen(false)}>
         <div className="max-h-[94vh] w-full max-w-6xl overflow-auto rounded-card bg-white p-5 shadow-xl" onClick={event => event.stopPropagation()}>
           <div className="flex items-start justify-between gap-4"><div><h2 className="text-h2">总仓批量入库</h2><p className="mt-1 text-micro text-gray3">一张入库单可添加多种商品；整单原子提交，任意一行失败都不会部分入账。</p></div><button onClick={() => setBatchOpen(false)} className="px-2 text-h2 text-gray3">×</button></div>
-          <div className="mt-4 grid gap-3 rounded-card border border-border bg-bg p-4 lg:grid-cols-[minmax(220px,1fr)_minmax(320px,2fr)_auto] lg:items-end">
-            <label><span className="mb-1 block text-micro text-gray3">搜索商品</span><input value={batchSearch} onChange={event => setBatchSearch(event.target.value)} placeholder="名称 / 编码 / 规格" className="h-11 w-full rounded-cta border border-border bg-white px-3" /></label>
-            <label><span className="mb-1 block text-micro text-gray3">选择已核验采购商品</span><select value={batchCandidateId} onChange={event => setBatchCandidateId(event.target.value)} disabled={batchLoading} className="h-11 w-full rounded-cta border border-border bg-white px-3"><option value="">{batchLoading ? '正在加载…' : filteredBatchCandidates.length ? '请选择商品' : '没有可添加的已核验商品'}</option>{filteredBatchCandidates.map(item => <option key={item.id} value={item.id}>{item.code} · {item.name} · {item.spec || '无规格'} · {item.purchaseUnit}</option>)}</select></label>
-            <button onClick={addBatchRow} disabled={!batchCandidateId} className="h-11 rounded-cta bg-ink px-5 text-button text-white disabled:opacity-40">添加商品</button>
+          <div className="mt-4 rounded-card border border-border bg-bg p-4">
+            <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_auto] lg:items-end">
+              <label><span className="mb-1 block text-micro text-gray3">搜索商品（勾选后批量添加）</span><input value={batchSearch} onChange={event => setBatchSearch(event.target.value)} placeholder="名称 / 编码 / 规格" className="h-11 w-full rounded-cta border border-border bg-white px-3" /></label>
+              <button onClick={addCheckedBatchRows} disabled={checkedCandidateIds.length === 0} className="h-11 rounded-cta bg-ink px-5 text-button text-white disabled:opacity-40">{checkedCandidateIds.length ? `添加选中商品 · ${checkedCandidateIds.length} 种` : '添加选中商品'}</button>
+            </div>
+            <div className="mt-3 max-h-60 overflow-auto rounded-cta border border-border bg-white">
+              {batchLoading ? <div className="px-3 py-4 text-center text-caption text-gray3">正在加载…</div>
+                : filteredBatchCandidates.length === 0 ? <div className="px-3 py-4 text-center text-caption text-gray3">没有可添加的已核验商品</div>
+                : <>
+                  <label className="sticky top-0 flex items-center gap-2 border-b border-border bg-white px-3 py-2 text-caption">
+                    <input type="checkbox" aria-label="全选当前筛选结果"
+                      checked={filteredBatchCandidates.length > 0 && filteredBatchCandidates.every(item => checkedCandidateIds.includes(item.id))}
+                      onChange={toggleAllFilteredCandidates} />
+                    <b>全选当前筛选</b><span className="text-micro text-gray3">{filteredBatchCandidates.length} 种可添加</span>
+                  </label>
+                  {filteredBatchCandidates.map((item, index) => {
+                    const prevCategory = index > 0 ? filteredBatchCandidates[index - 1].category : null
+                    return <Fragment key={item.id}>
+                      {item.category !== prevCategory && <div className="bg-bg px-3 py-1 text-micro text-gray3">{item.category || '未分类'}</div>}
+                      <label className="flex cursor-pointer items-center gap-2 px-3 py-2 text-caption hover:bg-bg">
+                        <input type="checkbox" aria-label={`选择${item.name}`}
+                          checked={checkedCandidateIds.includes(item.id)}
+                          onChange={() => toggleCandidate(item.id)} />
+                        <span className="min-w-0 flex-1 truncate"><b>{item.name}</b><span className="ml-2 text-micro text-gray3">{item.code} · {item.spec || '无规格'}</span></span>
+                        <span className="text-micro text-gray3">采购单位 {item.purchaseUnit}</span>
+                      </label>
+                    </Fragment>
+                  })}
+                </>}
+            </div>
           </div>
 
           <div className="mt-4 overflow-auto rounded-card border border-border">
@@ -697,9 +762,9 @@ export default function InternalSupplyChainInventoryPage() {
                     <td className="px-3 py-3 font-num text-gray3">{index + 1}</td>
                     <td className="px-3 py-3"><b>{product.name}</b><div className="text-micro text-gray3">{product.code} · {product.spec || '无规格'}</div></td>
                     <td className="px-3 py-3"><b>{product.purchaseUnit}</b></td>
-                    <td className="px-3 py-3"><input aria-label={`${product.name}采购数量`} type="number" min="0.000001" step="0.001" value={row.purchaseQuantity} onChange={event => updateBatchRow(row.productId, 'purchaseQuantity', event.target.value)} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></td>
-                    <td className="px-3 py-3"><div className="flex items-center justify-end gap-1"><span>¥</span><input aria-label={`${product.name}采购单价`} type="number" min="0.0001" step="0.01" value={row.unitPrice} onChange={event => updateBatchRow(row.productId, 'unitPrice', event.target.value)} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></div></td>
-                    <td className="px-3 py-3"><div className="flex items-center justify-end gap-1"><span>¥</span><input aria-label={`${product.name}行金额`} type="number" min="0.01" step="0.01" value={row.amount} onChange={event => updateBatchRow(row.productId, 'amount', event.target.value)} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></div></td>
+                    <td className="px-3 py-3"><input aria-label={`${product.name}采购数量`} type="number" min="0.000001" step="0.001" value={row.purchaseQuantity} onChange={event => updateBatchRow(row.productId, 'purchaseQuantity', event.target.value)} data-grid-r={index} data-grid-c={0} onKeyDown={gridCellKeyDown} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></td>
+                    <td className="px-3 py-3"><div className="flex items-center justify-end gap-1"><span>¥</span><input aria-label={`${product.name}采购单价`} type="number" min="0.0001" step="0.01" value={row.unitPrice} onChange={event => updateBatchRow(row.productId, 'unitPrice', event.target.value)} data-grid-r={index} data-grid-c={1} onKeyDown={gridCellKeyDown} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></div></td>
+                    <td className="px-3 py-3"><div className="flex items-center justify-end gap-1"><span>¥</span><input aria-label={`${product.name}行金额`} type="number" min="0.01" step="0.01" value={row.amount} onChange={event => updateBatchRow(row.productId, 'amount', event.target.value)} data-grid-r={index} data-grid-c={2} onKeyDown={gridCellKeyDown} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></div></td>
                     <td className="px-3 py-3"><b>{qty(purchaseQuantity)} {product.purchaseUnit} = {qty(purchaseQuantity * product.purchaseToInventoryFactor, 6)} {product.inventoryUnit}</b><div className="text-micro text-green-fg">已核验换算</div></td>
                     <td className="px-3 py-3"><button onClick={() => setBatchRows(rows => rows.filter(item => item.productId !== row.productId))} className="text-button text-red-fg">移除</button></td>
                   </tr>

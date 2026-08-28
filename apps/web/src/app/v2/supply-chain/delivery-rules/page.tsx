@@ -1,11 +1,12 @@
 /**
  * 供应链 · 配送班表
- * 门店订货→到货节奏自助维护：线路（名称/供货机构）+ 每周送货日 + 到货期 + 订货时段
+ * 门店订货→到货节奏自助维护：线路（名称/供货机构）+ 送货日规则 + 到货期 + 订货时段
  * + 适用门店 + 生效区间 + 强制开关，附月历视图看每天发哪条线。
  */
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import { deliveryScheduleText, isDeliveryScheduleDate, nextDeliveryScheduleDates } from '@/lib/delivery-rule-cycle'
 import dayjs from 'dayjs'
 
 type Store = { id: string; no: string; name: string }
@@ -14,7 +15,9 @@ type Rule = {
   id: string; no: string; name: string
   supplierId: string | null
   supplier?: Supplier | null
+  deliveryScheduleMode: 'WEEKLY' | 'INTERVAL'
   weekdays: number[]; leadDays: number
+  deliveryIntervalDays: number | null; deliveryIntervalStart: string | null
   orderWindowStart: string | null; orderWindowEnd: string | null
   enforce: boolean
   effectiveFrom: string | null; effectiveTo: string | null
@@ -37,13 +40,15 @@ function dateText(value: string | null) {
 }
 
 type Form = {
-  name: string; supplierId: string; weekdays: number[]; leadDays: string
+  name: string; supplierId: string; deliveryScheduleMode: 'WEEKLY' | 'INTERVAL'; weekdays: number[]; leadDays: string
+  deliveryIntervalDays: string; deliveryIntervalStart: string
   orderWindowStart: string; orderWindowEnd: string; enforce: boolean
   effectiveFrom: string; effectiveTo: string; note: string; storeIds: string[]
 }
 
 const emptyForm: Form = {
-  name: '', supplierId: '', weekdays: [], leadDays: '1',
+  name: '', supplierId: '', deliveryScheduleMode: 'INTERVAL', weekdays: [], leadDays: '1',
+  deliveryIntervalDays: '1', deliveryIntervalStart: dayjs().format('YYYY-MM-DD'),
   orderWindowStart: '', orderWindowEnd: '', enforce: false,
   effectiveFrom: '', effectiveTo: '', note: '', storeIds: [],
 }
@@ -95,8 +100,11 @@ export default function DeliveryRulesPage() {
     setForm({
       name: rule.name,
       supplierId: rule.supplierId || '',
+      deliveryScheduleMode: rule.deliveryScheduleMode || 'WEEKLY',
       weekdays: rule.weekdays,
       leadDays: String(rule.leadDays),
+      deliveryIntervalDays: rule.deliveryIntervalDays == null ? '' : String(rule.deliveryIntervalDays),
+      deliveryIntervalStart: rule.deliveryIntervalStart ? dayjs(rule.deliveryIntervalStart).format('YYYY-MM-DD') : '',
       orderWindowStart: rule.orderWindowStart || '',
       orderWindowEnd: rule.orderWindowEnd || '',
       enforce: rule.enforce,
@@ -129,7 +137,12 @@ export default function DeliveryRulesPage() {
 
   async function submitForm() {
     if (!form.name.trim()) { setFormError('请填写班表名称'); return }
-    if (form.weekdays.length === 0) { setFormError('请至少选择一个送货日'); return }
+    if (form.deliveryScheduleMode === 'WEEKLY' && form.weekdays.length === 0) { setFormError('请至少选择一个星期'); return }
+    const deliveryIntervalDays = form.deliveryScheduleMode === 'INTERVAL' ? Number(form.deliveryIntervalDays) : null
+    if (deliveryIntervalDays != null && (!Number.isInteger(deliveryIntervalDays) || deliveryIntervalDays < 1 || deliveryIntervalDays > 6)) {
+      setFormError('送货间隔必须在 1～6 天之间'); return
+    }
+    if (form.deliveryScheduleMode === 'INTERVAL' && !form.deliveryIntervalStart) { setFormError('请选择开始计算日期'); return }
     if (form.storeIds.length === 0) { setFormError('请至少选择一家适用门店'); return }
     if ((form.orderWindowStart && !form.orderWindowEnd) || (!form.orderWindowStart && form.orderWindowEnd)) {
       setFormError('订货时段起止要同时填写或同时留空'); return
@@ -139,8 +152,11 @@ export default function DeliveryRulesPage() {
     const body = {
       name: form.name.trim(),
       supplierId: form.supplierId || null,
-      weekdays: form.weekdays,
+      deliveryScheduleMode: form.deliveryScheduleMode,
+      weekdays: form.deliveryScheduleMode === 'WEEKLY' ? form.weekdays : [],
       leadDays: Number(form.leadDays) || 1,
+      deliveryIntervalDays,
+      deliveryIntervalStart: form.deliveryScheduleMode === 'INTERVAL' ? form.deliveryIntervalStart : null,
       orderWindowStart: form.orderWindowStart || null,
       orderWindowEnd: form.orderWindowEnd || null,
       enforce: form.enforce,
@@ -178,21 +194,20 @@ export default function DeliveryRulesPage() {
     }
   }
 
-  // 月历：当月每一天落在哪些启用班表的送货日上
+  // 月历：两种规则都统一计算为送货日。
   const calendar = useMemo(() => {
     const monthStart = dayjs(`${calendarMonth}-01`)
     const daysInMonth = monthStart.daysInMonth()
     const firstWeekday = (monthStart.day() + 6) % 7 // 周一开头
-    const cells: { key: string; day: number; rules: Rule[] }[] = []
-    for (let i = 0; i < firstWeekday; i += 1) cells.push({ key: `blank-${i}`, day: 0, rules: [] })
+    const cells: { key: string; day: number; deliveryRules: Rule[] }[] = []
+    for (let i = 0; i < firstWeekday; i += 1) cells.push({ key: `blank-${i}`, day: 0, deliveryRules: [] })
     for (let day = 1; day <= daysInMonth; day += 1) {
       const key = monthStart.date(day).format('YYYY-MM-DD')
-      const weekday = ((monthStart.date(day).day() + 6) % 7) + 1
       const dayRules = rules.filter(rule => rule.status === 'ENABLED'
-        && rule.weekdays.includes(weekday)
+        && isDeliveryScheduleDate(rule, key)
         && (!rule.effectiveFrom || key >= dayjs(rule.effectiveFrom).format('YYYY-MM-DD'))
         && (!rule.effectiveTo || key <= dayjs(rule.effectiveTo).format('YYYY-MM-DD')))
-      cells.push({ key, day, rules: dayRules })
+      cells.push({ key, day, deliveryRules: dayRules })
     }
     return cells
   }, [rules, calendarMonth])
@@ -202,7 +217,7 @@ export default function DeliveryRulesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-h1">配送班表</h1>
-          <p className="mt-1 text-micro text-gray3">门店订货→到货节奏：送货日、到货期、订货时段与适用门店。门店下单页自动按班表预填最快到货日；开启「强制」后非送货日不可下单。</p>
+          <p className="mt-1 text-micro text-gray3">送货日可选择“按间隔”或“按每周”设置，到货期与适用门店统一按班表执行。</p>
         </div>
         <button onClick={openCreate} className="h-11 rounded-cta bg-accent px-5 text-button text-white">+ 新建班表</button>
       </div>
@@ -211,9 +226,9 @@ export default function DeliveryRulesPage() {
       {notice && <div className="mt-3 rounded-card bg-green-bg px-4 py-2 text-caption text-green-fg">{notice}</div>}
 
       <div className="mt-4 overflow-hidden rounded-card border border-border bg-white">
-        <table className="w-full min-w-[960px] text-left text-caption">
+        <table className="w-full min-w-[980px] text-left text-caption">
           <thead className="bg-bg text-gray3"><tr>
-            <th className="px-4 py-3">班表</th><th className="px-4 py-3">供货机构</th><th className="px-4 py-3">送货日</th>
+            <th className="px-4 py-3">班表</th><th className="px-4 py-3">供货机构</th><th className="px-4 py-3">送货规则</th>
             <th className="px-4 py-3">到货期</th><th className="px-4 py-3">订货时段</th><th className="px-4 py-3">适用门店</th>
             <th className="px-4 py-3">生效区间</th><th className="px-4 py-3">状态</th><th className="px-4 py-3">操作</th>
           </tr></thead>
@@ -221,7 +236,7 @@ export default function DeliveryRulesPage() {
             {rules.map(rule => <tr key={rule.id} className={rule.status === 'DISABLED' ? 'opacity-50' : ''}>
               <td className="px-4 py-3"><b>{rule.name}</b><div className="text-micro text-gray3">{rule.no}{rule.enforce && <span className="ml-1 rounded bg-red-bg px-1 text-red-fg">强制</span>}</div></td>
               <td className="px-4 py-3">{rule.supplier?.name || '内部供应链总仓'}</td>
-              <td className="px-4 py-3"><b>{weekdayText(rule.weekdays)}</b></td>
+              <td className="px-4 py-3"><b>{deliveryScheduleText(rule)}</b>{rule.deliveryIntervalStart && <div className="text-micro text-gray3">从 {dateText(rule.deliveryIntervalStart)} 起算</div>}</td>
               <td className="px-4 py-3">第 {rule.leadDays} 个送货日</td>
               <td className="px-4 py-3">{rule.orderWindowStart ? `${rule.orderWindowStart}~${rule.orderWindowEnd}` : '全天'}</td>
               <td className="px-4 py-3"><b>{rule.stores.length} 家</b><div className="max-w-52 truncate text-micro text-gray3">{rule.stores.map(item => item.store.name).join('、')}</div></td>
@@ -239,14 +254,14 @@ export default function DeliveryRulesPage() {
 
       <div className="mt-4 rounded-card border border-border bg-white p-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-h2">送货月历</h2>
+          <div><h2 className="text-h2">送货月历</h2><p className="mt-0.5 text-micro text-gray3">按当前班表规则显示送货日期</p></div>
           <input type="month" value={calendarMonth} onChange={event => setCalendarMonth(event.target.value)} className="h-10 rounded-cta border border-border px-3" />
         </div>
         <div className="mt-3 grid grid-cols-7 gap-px overflow-hidden rounded-cta border border-border bg-border text-center text-micro">
           {WEEKDAYS.map(day => <div key={day.value} className="bg-bg py-2 text-gray3">周{day.label}</div>)}
           {calendar.map(cell => <div key={cell.key} className={`min-h-16 bg-white p-1.5 text-left ${cell.day === 0 ? 'invisible' : ''}`}>
             <div className="text-micro text-gray3">{cell.day || ''}</div>
-            {cell.rules.map(rule => <div key={rule.id} className="mt-1 truncate rounded bg-blue/10 px-1.5 py-0.5 text-micro text-accent" title={`${rule.name} · ${rule.stores.length} 家门店`}>{rule.name} · {rule.stores.length}店</div>)}
+            {cell.deliveryRules.map(rule => <div key={`delivery-${rule.id}`} className="mt-1 truncate rounded bg-orange-bg px-1.5 py-0.5 text-micro text-orange-fg" title={`${rule.name} · 送货日 · ${rule.stores.length} 家门店`}>{rule.name} · 送货</div>)}
           </div>)}
         </div>
       </div>
@@ -268,12 +283,21 @@ export default function DeliveryRulesPage() {
             </label>
           </div>
 
-          <div className="mt-3">
-            <span className="mb-1 block text-micro text-gray3">送货日（每周）*</span>
-            <div className="flex gap-2">
-              {WEEKDAYS.map(day => <button key={day.value} type="button" onClick={() => toggleWeekday(day.value)}
-                className={`h-10 flex-1 rounded-cta text-button ${form.weekdays.includes(day.value) ? 'bg-ink text-white' : 'bg-bg text-gray2'}`}>周{day.label}</button>)}
+          <div className="mt-3 rounded-card border border-border p-3">
+            <div className="grid grid-cols-2 gap-1 rounded-cta bg-bg p-1">
+              <button type="button" onClick={() => setForm(current => ({ ...current, deliveryScheduleMode: 'INTERVAL', weekdays: [], deliveryIntervalDays: current.deliveryIntervalDays || '1', deliveryIntervalStart: current.deliveryIntervalStart || dayjs().format('YYYY-MM-DD') }))} className={`h-11 rounded-cta text-button ${form.deliveryScheduleMode === 'INTERVAL' ? 'bg-white text-ink shadow-sm' : 'text-gray2'}`}>按间隔送货</button>
+              <button type="button" onClick={() => setForm(current => ({ ...current, deliveryScheduleMode: 'WEEKLY', deliveryIntervalDays: '', deliveryIntervalStart: '' }))} className={`h-11 rounded-cta text-button ${form.deliveryScheduleMode === 'WEEKLY' ? 'bg-white text-ink shadow-sm' : 'text-gray2'}`}>按每周送货</button>
             </div>
+            {form.deliveryScheduleMode === 'INTERVAL' ? <>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <label><span className="mb-1 block text-micro text-gray3">每隔几天</span><select value={form.deliveryIntervalDays} onChange={event => setForm({ ...form, deliveryIntervalDays: event.target.value })} className="h-11 w-full rounded-cta border border-border bg-white px-3">{Array.from({ length: 6 }, (_, index) => index + 1).map(days => <option key={days} value={days}>每隔 {days} 天</option>)}</select></label>
+                <label><span className="mb-1 block text-micro text-gray3">开始计算日期</span><input type="date" value={form.deliveryIntervalStart} onChange={event => setForm({ ...form, deliveryIntervalStart: event.target.value })} className="h-11 w-full rounded-cta border border-border px-3" /></label>
+              </div>
+              {form.deliveryIntervalDays && form.deliveryIntervalStart && <p className="mt-2 text-micro text-gray3">预计送货日：{nextDeliveryScheduleDates({ deliveryScheduleMode: 'INTERVAL', deliveryIntervalDays: Number(form.deliveryIntervalDays), deliveryIntervalStart: form.deliveryIntervalStart }, form.deliveryIntervalStart, 6).map(date => dayjs(date).format('M/D')).join('、')}</p>}
+            </> : <div className="mt-3">
+              <span className="mb-1 block text-micro text-gray3">每周送货日（可多选）</span>
+              <div className="flex gap-2">{WEEKDAYS.map(day => <button key={day.value} type="button" onClick={() => toggleWeekday(day.value)} className={`h-10 flex-1 rounded-cta text-button ${form.weekdays.includes(day.value) ? 'bg-ink text-white' : 'bg-bg text-gray2'}`}>周{day.label}</button>)}</div>
+            </div>}
           </div>
 
           <div className="mt-3 grid gap-3 sm:grid-cols-3">
@@ -305,7 +329,7 @@ export default function DeliveryRulesPage() {
 
           <label className="mt-3 flex cursor-pointer items-center gap-2 rounded-card bg-bg px-3 py-3 text-caption">
             <input type="checkbox" checked={form.enforce} onChange={event => setForm({ ...form, enforce: event.target.checked })} />
-            <span><b>强制管控</b>：开启后，适用门店不在订货时段下单、或到货日期不是送货日，将被直接拦截；关闭则只做提示和默认预填。</span>
+            <span><b>强制管控</b>：开启后，不在订货时段下单，或到货日期不符合当前送货规则，将被直接拦截；关闭则只做提示和默认预填。</span>
           </label>
 
           {formError && <div className="mt-3 rounded-card bg-red-bg px-4 py-2 text-caption text-red-fg">{formError}</div>}

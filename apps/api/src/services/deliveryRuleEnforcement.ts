@@ -37,8 +37,10 @@ export async function checkDeliveryRuleBlock(params: {
     return `当前不在「${rule.name}」允许订货时段（${rule.orderWindowStart}~${rule.orderWindowEnd}），请在时段内下单`
   }
   if (!isEffectiveOn(rule, expectedDate) || !isDeliveryDay(rule, expectedDate)) {
-    const days = rule.weekdays.map(day => `周${WEEKDAY_NAMES[day]}`).join('、')
-    return `「${rule.name}」的送货日为每${days}，到货日期请选择送货日`
+    const cadence = rule.deliveryScheduleMode === 'INTERVAL'
+      ? `从起算日开始每隔 ${rule.deliveryIntervalDays} 天`
+      : `每${rule.weekdays.map(day => `周${WEEKDAY_NAMES[day]}`).join('、')}`
+    return `「${rule.name}」的送货日为${cadence}，到货日期请选择送货日`
   }
   const earliest = earliestArrivalDate(rule, today)
   if (earliest && expectedDate < earliest) {

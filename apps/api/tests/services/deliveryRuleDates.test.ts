@@ -9,8 +9,11 @@ import {
 } from '../../src/services/deliveryRuleDates'
 
 const baseRule = {
+  deliveryScheduleMode: 'WEEKLY',
   weekdays: [1, 3, 5], // 周一三五送货
   leadDays: 1,
+  deliveryIntervalDays: null,
+  deliveryIntervalStart: null,
   orderWindowStart: null,
   orderWindowEnd: null,
   effectiveFrom: null,
@@ -66,5 +69,32 @@ describe('配送班表日期计算', () => {
 
   it('未来送货日预览按序排列且不含下单当天', () => {
     expect(nextDeliveryDates(baseRule, '2026-08-24', 3)).toEqual(['2026-08-26', '2026-08-28', '2026-08-31'])
+  })
+
+  it('按间隔送货从任意起算日期开始，每隔 1 天的步长为 2 天', () => {
+    const rule = {
+      ...baseRule,
+      deliveryScheduleMode: 'INTERVAL',
+      weekdays: [],
+      deliveryIntervalDays: 1,
+      deliveryIntervalStart: '2026-09-06',
+    }
+    expect(isDeliveryDay(rule, '2026-09-05')).toBe(false)
+    expect(isDeliveryDay(rule, '2026-09-06')).toBe(true)
+    expect(isDeliveryDay(rule, '2026-09-07')).toBe(false)
+    expect(isDeliveryDay(rule, '2026-09-08')).toBe(true)
+    expect(nextDeliveryDates(rule, '2026-09-07', 4)).toEqual(['2026-09-08', '2026-09-10', '2026-09-12', '2026-09-14'])
+  })
+
+  it('每隔 2 天步长为 3 天，最大间隔 6 天步长为 7 天', () => {
+    const everyTwoClearDays = { ...baseRule, deliveryScheduleMode: 'INTERVAL', weekdays: [], deliveryIntervalDays: 2, deliveryIntervalStart: '2026-09-07' }
+    expect(nextDeliveryDates(everyTwoClearDays, '2026-09-07', 3)).toEqual(['2026-09-10', '2026-09-13', '2026-09-16'])
+    const max = { ...baseRule, deliveryScheduleMode: 'INTERVAL', weekdays: [], deliveryIntervalDays: 6, deliveryIntervalStart: '2026-09-01' }
+    expect(nextDeliveryDates(max, '2026-09-02', 2)).toEqual(['2026-09-08', '2026-09-15'])
+  })
+
+  it('间隔送货缺少起算日期或超过 6 天时安全拒绝', () => {
+    expect(isDeliveryDay({ ...baseRule, deliveryScheduleMode: 'INTERVAL', weekdays: [], deliveryIntervalDays: 2 }, '2026-09-01')).toBe(false)
+    expect(isDeliveryDay({ ...baseRule, deliveryScheduleMode: 'INTERVAL', weekdays: [], deliveryIntervalDays: 7, deliveryIntervalStart: '2026-09-01' }, '2026-09-01')).toBe(false)
   })
 })

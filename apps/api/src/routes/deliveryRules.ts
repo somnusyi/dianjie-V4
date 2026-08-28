@@ -25,8 +25,11 @@ const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式为 YYYY
 const ruleBaseSchema = z.object({
   name: z.string().trim().min(1, '班表名称不能为空').max(80),
   supplierId: z.union([z.string().trim().min(1), z.null()]).optional(),
-  weekdays: z.array(z.number().int().min(1).max(7)).min(1, '至少选择一个送货日').max(7),
+  deliveryScheduleMode: z.enum(['WEEKLY', 'INTERVAL']),
+  weekdays: z.array(z.number().int().min(1).max(7)).max(7),
   leadDays: z.number().int().min(1, '到货期至少为第 1 个送货日').max(7),
+  deliveryIntervalDays: z.union([z.number().int().min(1, '送货间隔至少为 1 天').max(6, '送货间隔最多为 6 天'), z.null()]).optional(),
+  deliveryIntervalStart: z.union([dateSchema, z.null()]).optional(),
   orderWindowStart: z.union([timeSchema, z.null()]).optional(),
   orderWindowEnd: z.union([timeSchema, z.null()]).optional(),
   enforce: z.boolean().default(false),
@@ -36,7 +39,12 @@ const ruleBaseSchema = z.object({
   storeIds: z.array(z.string().trim().min(1)).min(1, '至少选择一家适用门店').max(200),
 }).strict()
 
-function ruleCrossChecks(value: { orderWindowStart?: string | null; orderWindowEnd?: string | null; effectiveFrom?: string | null; effectiveTo?: string | null }, ctx: z.RefinementCtx) {
+function ruleCrossChecks(value: {
+  orderWindowStart?: string | null
+  orderWindowEnd?: string | null
+  effectiveFrom?: string | null
+  effectiveTo?: string | null
+}, ctx: z.RefinementCtx) {
   if ((value.orderWindowStart && !value.orderWindowEnd) || (!value.orderWindowStart && value.orderWindowEnd)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['orderWindowStart'], message: '订货时段起止要同时填写或同时留空' })
   }
@@ -45,7 +53,13 @@ function ruleCrossChecks(value: { orderWindowStart?: string | null; orderWindowE
   }
 }
 
-const ruleBodySchema = ruleBaseSchema.superRefine(ruleCrossChecks)
+const ruleBodySchema = ruleBaseSchema.superRefine((value, ctx) => {
+  ruleCrossChecks(value, ctx)
+  const scheduleError = deliveryScheduleError(value)
+  if (scheduleError) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['deliveryScheduleMode'], message: scheduleError })
+  }
+})
 
 const rulePatchSchema = ruleBaseSchema.partial().extend({
   status: z.enum(['ENABLED', 'DISABLED']).optional(),
@@ -53,6 +67,35 @@ const rulePatchSchema = ruleBaseSchema.partial().extend({
 
 function firstIssue(parsed: { success: false; error: z.ZodError }) {
   return parsed.error.issues[0]?.message || '请求参数错误'
+}
+
+function deliveryScheduleError(value: {
+  deliveryScheduleMode?: string
+  weekdays?: number[]
+  deliveryIntervalDays?: number | null
+  deliveryIntervalStart?: string | Date | null
+}) {
+  if (value.deliveryScheduleMode === 'WEEKLY') {
+    if (!value.weekdays?.length) return '按每周送货时至少选择一个星期'
+    if (value.deliveryIntervalDays != null || value.deliveryIntervalStart) return '按每周送货和按间隔送货只能二选一'
+    return null
+  }
+  if (value.deliveryScheduleMode === 'INTERVAL') {
+    if (value.weekdays?.length) return '按间隔送货和按每周送货只能二选一'
+    if (value.deliveryIntervalDays == null || !value.deliveryIntervalStart) return '按间隔送货时必须选择间隔天数和开始计算日期'
+    return null
+  }
+  return '请选择一种送货日设置方式'
+}
+
+function deliveryScheduleText(rule: {
+  deliveryScheduleMode?: string
+  weekdays: number[]
+  deliveryIntervalDays?: number | null
+}) {
+  return rule.deliveryScheduleMode === 'INTERVAL'
+    ? `每隔 ${rule.deliveryIntervalDays} 天送货`
+    : `周${rule.weekdays.join('/')}送货`
 }
 
 async function generateRuleNo(tenantId: string) {
@@ -104,8 +147,10 @@ export const deliveryRuleRoutes: FastifyPluginAsync = async (app) => {
     if (!rule) return { rule: null }
     return {
       rule: {
-        id: rule.id, no: rule.no, name: rule.name, weekdays: rule.weekdays,
+        id: rule.id, no: rule.no, name: rule.name,
+        deliveryScheduleMode: rule.deliveryScheduleMode, weekdays: rule.weekdays,
         leadDays: rule.leadDays, orderWindowStart: rule.orderWindowStart, orderWindowEnd: rule.orderWindowEnd,
+        deliveryIntervalDays: rule.deliveryIntervalDays, deliveryIntervalStart: rule.deliveryIntervalStart,
         enforce: rule.enforce, supplier: rule.supplier,
         nextDeliveryDates: nextDeliveryDates(rule, today, 6),
         earliestArrival: earliestArrivalDate(rule, today),
@@ -133,8 +178,11 @@ export const deliveryRuleRoutes: FastifyPluginAsync = async (app) => {
         data: {
           tenantId, no: await generateRuleNo(tenantId), name: data.name,
           supplierId: data.supplierId ?? null,
+          deliveryScheduleMode: data.deliveryScheduleMode,
           weekdays: Array.from(new Set(data.weekdays)).sort((a, b) => a - b),
           leadDays: data.leadDays,
+          deliveryIntervalDays: data.deliveryIntervalDays ?? null,
+          deliveryIntervalStart: data.deliveryIntervalStart ? new Date(`${data.deliveryIntervalStart}T00:00:00+08:00`) : null,
           orderWindowStart: data.orderWindowStart ?? null,
           orderWindowEnd: data.orderWindowEnd ?? null,
           enforce: data.enforce,
@@ -148,7 +196,7 @@ export const deliveryRuleRoutes: FastifyPluginAsync = async (app) => {
       await tx.opLog.create({
         data: {
           tenantId, userId, role,
-          action: `新建配送班表 ${rule.name}（${rule.no}）：周${rule.weekdays.join('/')}送货，${rule.stores.length} 家门店`,
+          action: `新建配送班表 ${rule.name}（${rule.no}）：${deliveryScheduleText(rule)}，${rule.stores.length} 家门店`,
           entityType: 'DeliveryRule', target: rule.no, targetId: rule.id,
         },
       })
@@ -167,6 +215,13 @@ export const deliveryRuleRoutes: FastifyPluginAsync = async (app) => {
     const data = parsed.data
     const before = await prisma.deliveryRule.findFirst({ where: { id, tenantId }, include: storeInclude })
     if (!before) return reply.status(404).send({ error: '班表不存在或无权修改' })
+    const scheduleError = deliveryScheduleError({
+      deliveryScheduleMode: data.deliveryScheduleMode ?? before.deliveryScheduleMode,
+      weekdays: data.weekdays ?? before.weekdays,
+      deliveryIntervalDays: data.deliveryIntervalDays !== undefined ? data.deliveryIntervalDays : before.deliveryIntervalDays,
+      deliveryIntervalStart: data.deliveryIntervalStart !== undefined ? data.deliveryIntervalStart : before.deliveryIntervalStart,
+    })
+    if (scheduleError) return reply.status(400).send({ error: scheduleError })
 
     const updated = await prisma.$transaction(async (tx) => {
       if (data.storeIds) {
@@ -180,8 +235,11 @@ export const deliveryRuleRoutes: FastifyPluginAsync = async (app) => {
         data: {
           ...(data.name !== undefined ? { name: data.name } : {}),
           ...(data.supplierId !== undefined ? { supplierId: data.supplierId } : {}),
-          ...(data.weekdays ? { weekdays: Array.from(new Set(data.weekdays)).sort((a, b) => a - b) } : {}),
+          ...(data.deliveryScheduleMode !== undefined ? { deliveryScheduleMode: data.deliveryScheduleMode } : {}),
+          ...(data.weekdays !== undefined ? { weekdays: Array.from(new Set(data.weekdays)).sort((a, b) => a - b) } : {}),
           ...(data.leadDays !== undefined ? { leadDays: data.leadDays } : {}),
+          ...(data.deliveryIntervalDays !== undefined ? { deliveryIntervalDays: data.deliveryIntervalDays } : {}),
+          ...(data.deliveryIntervalStart !== undefined ? { deliveryIntervalStart: data.deliveryIntervalStart ? new Date(`${data.deliveryIntervalStart}T00:00:00+08:00`) : null } : {}),
           ...(data.orderWindowStart !== undefined ? { orderWindowStart: data.orderWindowStart } : {}),
           ...(data.orderWindowEnd !== undefined ? { orderWindowEnd: data.orderWindowEnd } : {}),
           ...(data.enforce !== undefined ? { enforce: data.enforce } : {}),

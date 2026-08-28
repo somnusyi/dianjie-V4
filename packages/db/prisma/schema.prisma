@@ -2335,22 +2335,25 @@ model PaymentRule {
 // enforce=false 只做软引导（下单页默认填最快到货日并提示），enforce=true 硬控制
 // （非送货日/不在订货时段直接拦截下单）。
 model DeliveryRule {
-  id               String    @id @default(cuid())
-  tenantId         String
-  no               String    @db.VarChar(32) // PS+日期+序号
-  name             String    @db.VarChar(80) // 线路名，如「南京线」
-  supplierId       String? // 供货机构；null = 内部供应链总仓
-  weekdays         Int[] // 送货日：1=周一 … 7=周日
-  leadDays         Int       @default(1) // 下单后第 N 个送货日到货
-  orderWindowStart String?   @db.VarChar(5) // 允许订货开始 "09:00"，空=不限
-  orderWindowEnd   String?   @db.VarChar(5) // 允许订货结束 "22:00"
-  enforce          Boolean   @default(false)
-  effectiveFrom    DateTime? @db.Date
-  effectiveTo      DateTime? @db.Date
-  status           String    @default("ENABLED") @db.VarChar(16) // ENABLED | DISABLED
-  note             String?   @db.VarChar(240)
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  id                 String    @id @default(cuid())
+  tenantId           String
+  no                 String    @db.VarChar(32) // PS+日期+序号
+  name               String    @db.VarChar(80) // 线路名，如「南京线」
+  supplierId         String? // 供货机构；null = 内部供应链总仓
+  deliveryScheduleMode String   @default("WEEKLY") @db.VarChar(16) // WEEKLY | INTERVAL，两种送货日规则二选一
+  weekdays             Int[] // WEEKLY：送货日，1=周一 … 7=周日；INTERVAL 时为空数组
+  leadDays             Int       @default(1) // 下单后第 N 个送货日到货
+  deliveryIntervalDays Int? // INTERVAL：每隔 N 天送货，1～6
+  deliveryIntervalStart DateTime? @db.Date // INTERVAL 起算日期
+  orderWindowStart   String?   @db.VarChar(5) // 允许订货开始 "09:00"，空=不限
+  orderWindowEnd     String?   @db.VarChar(5) // 允许订货结束 "22:00"
+  enforce            Boolean   @default(false)
+  effectiveFrom      DateTime? @db.Date
+  effectiveTo        DateTime? @db.Date
+  status             String    @default("ENABLED") @db.VarChar(16) // ENABLED | DISABLED
+  note               String?   @db.VarChar(240)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   tenant   Tenant              @relation(fields: [tenantId], references: [id])
   supplier Supplier?           @relation(fields: [supplierId], references: [id])

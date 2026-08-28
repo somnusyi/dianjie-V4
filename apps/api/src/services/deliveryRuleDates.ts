@@ -13,8 +13,11 @@ dayjs.extend(utc)
 dayjs.extend(timezone)
 
 export type DeliveryRuleShape = {
+  deliveryScheduleMode?: string
   weekdays: number[]
   leadDays: number
+  deliveryIntervalDays?: number | null
+  deliveryIntervalStart?: Date | string | null
   orderWindowStart: string | null
   orderWindowEnd: string | null
   effectiveFrom: Date | string | null
@@ -33,8 +36,20 @@ export function isEffectiveOn(rule: DeliveryRuleShape, dateKey: string): boolean
   return true
 }
 
-/** 该日期是否是送货日（只看星期，不看生效区间） */
+/** 该日期是否是送货日（按“每周”或“每隔 N 天”二选一，不看生效区间）。 */
 export function isDeliveryDay(rule: DeliveryRuleShape, dateKey: string): boolean {
+  if (rule.deliveryScheduleMode === 'INTERVAL') {
+    if (!Number.isInteger(rule.deliveryIntervalDays)
+      || !rule.deliveryIntervalDays
+      || rule.deliveryIntervalDays < 1
+      || rule.deliveryIntervalDays > 6
+      || !rule.deliveryIntervalStart) return false
+    const startKey = dayjs(rule.deliveryIntervalStart).tz(BUSINESS_TZ).format('YYYY-MM-DD')
+    if (dateKey < startKey) return false
+    const start = dayjs.tz(`${startKey}T12:00:00`, BUSINESS_TZ)
+    const current = dayjs.tz(`${dateKey}T12:00:00`, BUSINESS_TZ)
+    return current.diff(start, 'day') % (rule.deliveryIntervalDays + 1) === 0
+  }
   return rule.weekdays.includes(isoWeekday(dateKey))
 }
 

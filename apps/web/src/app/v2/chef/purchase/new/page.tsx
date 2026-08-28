@@ -15,6 +15,7 @@ import {
   resolveOrderEntryCostPricing,
   sumOrderEntryLineAmounts,
 } from '@/lib/order-entry-cost-pricing'
+import { deliveryScheduleText } from '@/lib/delivery-rule-cycle'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 
 type Supplier = { id: string; name: string; category: string | null; bankAccount: string | null }
@@ -75,7 +76,8 @@ export default function ChefPONewPage() {
   const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null)
   // 配送班表：选中供应商后拉取本店适用班表，预填最快到货日并展示送货节奏
   const [ruleHint, setRuleHint] = useState<{
-    name: string; weekdays: number[]; leadDays: number; enforce: boolean
+    name: string; deliveryScheduleMode: 'WEEKLY' | 'INTERVAL'; weekdays: number[]; leadDays: number; enforce: boolean
+    deliveryIntervalDays: number | null; deliveryIntervalStart: string | null
     orderWindowStart: string | null; orderWindowEnd: string | null; withinOrderWindow: boolean
     earliestArrival: string | null; nextDeliveryDates: string[]
   } | null>(null)
@@ -359,10 +361,10 @@ export default function ChefPONewPage() {
           />
           {ruleHint && (
             <div className="mt-2 rounded-cta bg-bg px-2 py-1.5 text-micro text-gray2">
-              班表「{ruleHint.name}」：每{ruleHint.weekdays.map(d => `周${['', '一', '二', '三', '四', '五', '六', '日'][d]}`).join('、')}送货
+              班表「{ruleHint.name}」：{deliveryScheduleText(ruleHint)}送货
               {ruleHint.earliestArrival && <>，今天下单最快 <b>{ruleHint.earliestArrival}</b> 到货</>}
               {ruleHint.orderWindowStart && <>，订货时段 {ruleHint.orderWindowStart}~{ruleHint.orderWindowEnd}</>}
-              {ruleHint.enforce && <span className="ml-1 text-red-fg">（强制：只能选送货日）</span>}
+              {ruleHint.enforce && <span className="ml-1 text-red-fg">（强制班表）</span>}
               {!ruleHint.withinOrderWindow && <span className="ml-1 text-red-fg">当前不在订货时段</span>}
             </div>
           )}

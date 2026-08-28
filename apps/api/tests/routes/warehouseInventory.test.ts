@@ -13,14 +13,20 @@ vi.mock('../../src/services/warehouseLedgerAudit', () => ({
 vi.mock('../../src/services/warehouseLedgerReconciliation', () => ({
   reconcileWarehouseShadowLedger: vi.fn(),
 }))
+vi.mock('../../src/services/warehouseDocs', () => ({
+  ensureWarehouseDoc: vi.fn(),
+}))
 
 const mocks = vi.hoisted(() => ({
   supplierFindFirst: vi.fn(),
   sourceFindMany: vi.fn(),
   productFindMany: vi.fn(),
+  productFindFirst: vi.fn(),
   opLogCreate: vi.fn(),
   movementCount: vi.fn(),
   movementFindMany: vi.fn(),
+  movementAggregate: vi.fn(),
+  docLineFindMany: vi.fn(),
   resolveWarehouseId: vi.fn(),
 }))
 
@@ -28,13 +34,18 @@ vi.mock('@dianjie/db', async importOriginal => {
   const actual = await importOriginal<typeof import('@dianjie/db')>()
   const prismaMock: any = {
     supplier: { findFirst: (...args: any[]) => mocks.supplierFindFirst(...args) },
-    product: { findMany: (...args: any[]) => mocks.productFindMany(...args) },
+    product: {
+      findMany: (...args: any[]) => mocks.productFindMany(...args),
+      findFirst: (...args: any[]) => mocks.productFindFirst(...args),
+    },
     productUpstreamSource: { findMany: (...args: any[]) => mocks.sourceFindMany(...args) },
     opLog: { create: (...args: any[]) => mocks.opLogCreate(...args) },
     warehouseLedgerMovement: {
       count: (...args: any[]) => mocks.movementCount(...args),
       findMany: (...args: any[]) => mocks.movementFindMany(...args),
+      aggregate: (...args: any[]) => mocks.movementAggregate(...args),
     },
+    warehouseDocLine: { findMany: (...args: any[]) => mocks.docLineFindMany(...args) },
   }
   return { ...actual, prisma: prismaMock }
 })
@@ -51,6 +62,7 @@ import {
 } from '../../src/services/warehouseLedger'
 import { auditWarehouseLedger } from '../../src/services/warehouseLedgerAudit'
 import { reconcileWarehouseShadowLedger } from '../../src/services/warehouseLedgerReconciliation'
+import { ensureWarehouseDoc } from '../../src/services/warehouseDocs'
 import { buildWarehouseInventoryScopeWhere, warehouseInventoryRoutes } from '../../src/routes/warehouseInventory'
 
 const recordInbound = vi.mocked(recordManualWarehouseInbound)
@@ -132,6 +144,14 @@ describe('warehouse inventory routes', () => {
     mocks.opLogCreate.mockResolvedValue({})
     mocks.movementCount.mockReset()
     mocks.movementCount.mockResolvedValue(1)
+    mocks.movementAggregate.mockReset()
+    mocks.movementAggregate.mockResolvedValue({ _sum: { valueDelta: 160 } })
+    mocks.docLineFindMany.mockReset()
+    mocks.docLineFindMany.mockResolvedValue([])
+    mocks.productFindFirst.mockReset()
+    mocks.productFindFirst.mockResolvedValue({ id: 'product-1', name: '水牛毛肚', purchaseUnit: '件', inventoryUnit: '袋' })
+    vi.mocked(ensureWarehouseDoc).mockReset()
+    vi.mocked(ensureWarehouseDoc).mockResolvedValue({ doc: { id: 'doc-1', docNo: 'RK20260802-001', status: 'CONFIRMED' }, created: true } as any)
     mocks.movementFindMany.mockReset()
     mocks.movementFindMany.mockResolvedValue([
       {

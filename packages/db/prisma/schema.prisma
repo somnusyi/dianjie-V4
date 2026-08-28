@@ -53,6 +53,7 @@ model Tenant {
   businessSequences             BusinessSequence[]
   lossClaims                    LossClaim[]
   paymentRules                  PaymentRule[]
+  deliveryRules                 DeliveryRule[]
   consumptions                  StockConsumption[]
   expenses                      StoreExpense[]
   cashAccounts                  CashAccount[]
@@ -1222,6 +1223,7 @@ model Store {
   deferredBomTasks     DeferredBomTask[]
   monthlyCloses        StoreMonthlyClose[]
   inventoryPolicies    StoreInventoryPolicy[]
+  deliveryRuleStores   DeliveryRuleStore[]
 
   @@unique([tenantId, no])
   @@map("stores")
@@ -1307,6 +1309,7 @@ model Supplier {
   upstreamProductSources ProductUpstreamSource[]
   warehouseLedgerMovements WarehouseLedgerMovement[]
   nameAliases            SupplierNameAlias[]
+  deliveryRules          DeliveryRule[]
 
   @@unique([tenantId, no])
   @@index([businessScopes], type: Gin, map: "suppliers_business_scopes_idx")
@@ -2325,6 +2328,48 @@ model PaymentRule {
 
   @@index([tenantId, enabled])
   @@map("payment_rules")
+}
+
+// ── 配送班表（门店订货→到货节奏，供应链自助维护）──────────────
+// 语义：门店下单后，到货日 = 下单日之后第 leadDays 个送货日（不含下单当天）。
+// enforce=false 只做软引导（下单页默认填最快到货日并提示），enforce=true 硬控制
+// （非送货日/不在订货时段直接拦截下单）。
+model DeliveryRule {
+  id               String    @id @default(cuid())
+  tenantId         String
+  no               String    @db.VarChar(32) // PS+日期+序号
+  name             String    @db.VarChar(80) // 线路名，如「南京线」
+  supplierId       String? // 供货机构；null = 内部供应链总仓
+  weekdays         Int[] // 送货日：1=周一 … 7=周日
+  leadDays         Int       @default(1) // 下单后第 N 个送货日到货
+  orderWindowStart String?   @db.VarChar(5) // 允许订货开始 "09:00"，空=不限
+  orderWindowEnd   String?   @db.VarChar(5) // 允许订货结束 "22:00"
+  enforce          Boolean   @default(false)
+  effectiveFrom    DateTime? @db.Date
+  effectiveTo      DateTime? @db.Date
+  status           String    @default("ENABLED") @db.VarChar(16) // ENABLED | DISABLED
+  note             String?   @db.VarChar(240)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  tenant   Tenant              @relation(fields: [tenantId], references: [id])
+  supplier Supplier?           @relation(fields: [supplierId], references: [id])
+  stores   DeliveryRuleStore[]
+
+  @@unique([tenantId, no])
+  @@index([tenantId, status])
+  @@map("delivery_rules")
+}
+
+model DeliveryRuleStore {
+  ruleId  String
+  storeId String
+
+  rule  DeliveryRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  store Store        @relation(fields: [storeId], references: [id])
+
+  @@id([ruleId, storeId])
+  @@map("delivery_rule_stores")
 }
 
 // ── 操作日志 ──────────────────────────────────────────

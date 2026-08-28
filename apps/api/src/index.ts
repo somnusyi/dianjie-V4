@@ -57,6 +57,7 @@ import { deliveryRoutes } from './routes/deliveries'
 import { registerIdempotency } from './lib/idempotency'
 import { lossClaimRoutes } from './routes/lossClaims'
 import { paymentRuleRoutes } from './routes/paymentRules'
+import { deliveryRuleRoutes } from './routes/deliveryRules'
 import { revenueRoutes } from './routes/revenue'
 import { userRoutes } from './routes/users'
 import { inventoryRoutes } from './routes/inventory'
@@ -252,6 +253,7 @@ async function bootstrap() {
   app.register(deliveryRoutes, { prefix: '/api/deliveries' })
   app.register(lossClaimRoutes, { prefix: '/api/loss-claims' })
   app.register(paymentRuleRoutes, { prefix: '/api/payment-rules' })
+  app.register(deliveryRuleRoutes, { prefix: '/api/delivery-rules' })
   app.register(revenueRoutes, { prefix: '/api/revenue' })
   app.register(userRoutes,    { prefix: '/api/users' })
   app.register(inventoryRoutes, { prefix: '/api/inventory' })

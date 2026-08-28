@@ -73,11 +73,34 @@ export default function ChefPONewPage() {
   // 草稿恢复 banner: 显示"已恢复 N 项草稿"提示, 用户可一键清空
   const [restoredFromDraft, setRestoredFromDraft] = useState(false)
   const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null)
+  // 配送班表：选中供应商后拉取本店适用班表，预填最快到货日并展示送货节奏
+  const [ruleHint, setRuleHint] = useState<{
+    name: string; weekdays: number[]; leadDays: number; enforce: boolean
+    orderWindowStart: string | null; orderWindowEnd: string | null; withinOrderWindow: boolean
+    earliestArrival: string | null; nextDeliveryDates: string[]
+  } | null>(null)
 
   useEffect(() => {
     apiFetch<Supplier[]>('/api/suppliers').then(setSuppliers).catch(e => setError(String(e?.message || e)))
     apiFetch<{items: Product[]}>('/api/products').then(d => setProducts(Array.isArray(d) ? d : (d?.items || []))).catch(() => {})
   }, [])
+
+  // 供应商变化 → 拉本店配送班表；软引导：到货日早于最快到货日时自动顺延；
+  // 强制班表：当前日期不是送货日时直接吸附到最快到货日（后端还会再拦一道）。
+  useEffect(() => {
+    if (!supplierId) { setRuleHint(null); return }
+    apiFetch<{ rule: any }>(`/api/delivery-rules/for-store?supplierId=${encodeURIComponent(supplierId)}`)
+      .then(d => {
+        const rule = d?.rule || null
+        setRuleHint(rule)
+        if (!rule?.earliestArrival) return
+        setExpectedDate(current => {
+          if (rule.enforce && !rule.nextDeliveryDates.includes(current)) return rule.earliestArrival
+          return current < rule.earliestArrival ? rule.earliestArrival : current
+        })
+      })
+      .catch(() => setRuleHint(null))
+  }, [supplierId])
 
   // mount 时检查 localStorage 是否有上次未提交的草稿, 有就自动恢复
   // 客户原需求是"返回页面自动保留", 不再弹确认; 通过顶部 banner 提示并提供"清空"出口
@@ -334,6 +357,15 @@ export default function ChefPONewPage() {
             min={new Date().toISOString().slice(0, 10)}
             className="w-full text-body bg-transparent outline-none"
           />
+          {ruleHint && (
+            <div className="mt-2 rounded-cta bg-bg px-2 py-1.5 text-micro text-gray2">
+              班表「{ruleHint.name}」：每{ruleHint.weekdays.map(d => `周${['', '一', '二', '三', '四', '五', '六', '日'][d]}`).join('、')}送货
+              {ruleHint.earliestArrival && <>，今天下单最快 <b>{ruleHint.earliestArrival}</b> 到货</>}
+              {ruleHint.orderWindowStart && <>，订货时段 {ruleHint.orderWindowStart}~{ruleHint.orderWindowEnd}</>}
+              {ruleHint.enforce && <span className="ml-1 text-red-fg">（强制：只能选送货日）</span>}
+              {!ruleHint.withinOrderWindow && <span className="ml-1 text-red-fg">当前不在订货时段</span>}
+            </div>
+          )}
         </div>
 
         {/* 商品列表 */}

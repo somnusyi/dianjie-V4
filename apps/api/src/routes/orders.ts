@@ -1,5 +1,6 @@
 import { FastifyPluginAsync } from 'fastify'
 import { businessMonthKey } from '../lib/businessTime'
+import { checkDeliveryRuleBlock } from '../services/deliveryRuleEnforcement'
 import { z } from 'zod'
 import { Prisma, prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
@@ -562,6 +563,9 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     // 忽略客户端 unitPrice；共享校验已按四单位合同权威重算每一行。
     const itemsData = draftValidation.lines
     const totalAmount = draftValidation.totalAmount!
+    // 配送班表硬控制（enforce=true 才拦截；软引导班表不拦，仅下单页默认填日期）
+    const deliveryBlock = await checkDeliveryRuleBlock({ tenantId, storeId: finalStoreId, supplierId, expectedDate })
+    if (deliveryBlock) return reply.status(400).send({ error: deliveryBlock })
     const submittedAt = new Date()
     const ym = businessMonthKey()
     const actionPrefix = role === 'CHEF_DIRECTOR' ? `总厨代下单` : `创建采购订单`

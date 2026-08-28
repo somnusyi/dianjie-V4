@@ -42,6 +42,12 @@ const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
         description: '订货、收货、库存与消耗',
         icon: '店',
       },
+      {
+        href: '/v2/supply-chain/delivery-rules',
+        label: '配送班表',
+        description: '送货日、到货期与适用门店',
+        icon: '班',
+      },
     ],
   },
   {

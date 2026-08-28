@@ -1401,7 +1401,7 @@ model Product {
 // Product.supplierId 继续表示向门店履约的供货主体；本表专门描述总仓从哪些
 // 上游合作方采购一个 SKU。一个商品可有多个来源，但同一时刻只能有一个主供。
 model ProductUpstreamSource {
-  id                            String   @id @default(cuid())
+  id                            String   @id @default(cuid()) @db.VarChar(64)
   tenantId                      String
   productId                     String
   supplierId                    String
@@ -2372,6 +2372,7 @@ model DeliveryRuleStore {
   store Store        @relation(fields: [storeId], references: [id])
 
   @@id([ruleId, storeId])
+  @@index([storeId])
   @@map("delivery_rule_stores")
 }
 

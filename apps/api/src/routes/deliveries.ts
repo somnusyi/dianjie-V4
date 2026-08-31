@@ -1,11 +1,12 @@
 import { FastifyPluginAsync } from 'fastify'
-import { prisma } from '@dianjie/db'
+import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { isStoreScoped, isSupplierRole, resolveActiveStore } from '../lib/auth-scope'
 import { requireSupplierCapability } from '../lib/supplier-access'
 import { allowsSupplyDataRead, supplyDataReadScope } from '../lib/internal-supply-chain-access'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 import { calendarDateSchema } from '../lib/calendar-date'
+import { removeDeliveryItemInTransaction } from '../services/deliveryItemRemoval'
 
 const listQuerySchema = z.object({
   status: z.enum(['DRAFT', 'SHIPPED', 'DELIVERED', 'RECEIVED', 'CANCELLED']).optional(),
@@ -86,7 +87,7 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
           purchaseOrder: { select: { id: true, no: true, status: true, originalTotalAmount: true, currentOrderAmount: true } },
           store: { select: { id: true, name: true } },
           supplier: { select: { id: true, name: true } },
-          items: { include: { product: { select: { id: true, code: true, name: true, unit: true, spec: true } } } },
+          items: { where: { shippedQty: { gt: 0 } }, include: { product: { select: { id: true, code: true, name: true, unit: true, spec: true } } } },
           receipt: { select: { id: true, no: true, totalAmount: true, status: true } },
         },
       }),
@@ -117,7 +118,7 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
         shippedBy: { select: { id: true, name: true } },
         deliveredBy: { select: { id: true, name: true } },
         receivedBy: { select: { id: true, name: true } },
-        items: { include: { product: true } },
+        items: { where: { shippedQty: { gt: 0 } }, include: { product: true } },
         events: { orderBy: { occurredAt: 'asc' }, include: { actor: { select: { id: true, name: true, role: true } } } },
         receipt: { include: { items: { include: { product: true } } } },
       },
@@ -130,6 +131,43 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
         ...delivery.receipt,
         items: delivery.receipt.items.map(withDocumentProductSnapshot),
       } : null,
+    }
+  })
+
+  // 仅供应商负责人/员工可在门店确认收货前移除配送中的单个商品。
+  // 这是软移除：保留原明细和审计流水，库存/订单金额在同一事务冲回。
+  app.patch('/:id/remove-item', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
+    const { tenantId, userId, role, supplierId } = req.user
+    if (!['SUPPLIER_OWNER', 'SUPPLIER_STAFF'].includes(role)) {
+      return reply.status(403).send({ error: '仅供应商负责人或供应商员工可移除商品' })
+    }
+    const scopedSupplierId = requireSupplierCapability(role, supplierId, 'delivery.item_remove')
+    const parsed = z.object({
+      itemId: z.string().trim().min(1, 'itemId 必填'),
+      rowVersion: z.coerce.number().int().nonnegative('rowVersion 无效'),
+      reason: z.string().trim().max(200, '原因不能超过 200 字').optional(),
+    }).safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+
+    try {
+      return await prisma.$transaction(tx => removeDeliveryItemInTransaction(tx, {
+        tenantId,
+        supplierId: scopedSupplierId,
+        deliveryOrderId: String(req.params.id),
+        itemId: parsed.data.itemId,
+        userId,
+        userRole: role,
+        rowVersion: parsed.data.rowVersion,
+        reason: parsed.data.reason,
+        requestId: req.id,
+        ip: req.ip,
+      }), {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        timeout: 20_000,
+      })
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      throw error
     }
   })
 }

@@ -5,6 +5,7 @@ export const SUPPLIER_CAPABILITIES = [
   'order.read',
   'order.accept',
   'order.ship',
+  'delivery.item_remove',
   'catalog.read',
   'catalog.manage',
   'inventory.read',

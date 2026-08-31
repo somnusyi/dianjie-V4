@@ -697,7 +697,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         deliveries: {
           orderBy: { createdAt: 'asc' },
           include: {
-            items: { include: { product: true } },
+            items: { where: { shippedQty: { gt: 0 } }, include: { product: true } },
             receipt: { select: { id: true, no: true, totalAmount: true, status: true } },
           },
         },
@@ -2225,7 +2225,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         items: { where: { isActive: true } }, supplier: true,
         deliveries: {
           where: { status: 'DELIVERED' }, orderBy: { deliveredAt: 'desc' }, take: 1,
-          include: { items: { include: { product: { select: { shelfDays: true } } } } },
+          include: { items: { where: { shippedQty: { gt: 0 } }, include: { product: { select: { shelfDays: true } } } } },
         },
       },
     })

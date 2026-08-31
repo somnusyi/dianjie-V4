@@ -59,7 +59,7 @@ type Order = {
     requestedBy?: { name: string }; reviewedBy?: { name: string } | null; reviewedAt?: string | null; reviewNote?: string | null
   }[]
   deliveries?: {
-    id: string; no: string; status: string; actualTotalAmount: string; shippedAt?: string | null; deliveredAt?: string | null; receivedAt?: string | null
+    id: string; no: string; status: string; actualTotalAmount: string; rowVersion: number; shippedAt?: string | null; deliveredAt?: string | null; receivedAt?: string | null
     items: { id: string; productId: string; shippedQty: string; receivedQty?: string | null; product?: { name: string; unit: string } }[]
     receipt?: { id: string; no: string; totalAmount: string; status: string } | null
   }[]
@@ -95,6 +95,8 @@ export default function SupplierOrderDetailPage() {
   const orderBase = getUser()?.role === 'SUPPLY_CHAIN'
     ? '/v2/supply-chain/fulfillment'
     : '/v2/supplier/orders'
+  const viewerRole = getUser()?.role || ''
+  const canRemoveDeliveryItem = viewerRole === 'SUPPLIER_OWNER' || viewerRole === 'SUPPLIER_STAFF'
   const params = useParams() as any
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -105,6 +107,7 @@ export default function SupplierOrderDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [shipmentNotice, setShipmentNotice] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [removingItemId, setRemovingItemId] = useState<string | null>(null)
   const [shipNote, setShipNote] = useState('')
   // 发货时可调整每行的实际发货量 (称重 / 缺货). key=itemId, value=shippedQty
   const [shipQty, setShipQty] = useState<Record<string, number>>({})
@@ -355,6 +358,28 @@ export default function SupplierOrderDetailPage() {
     })
   }
 
+  function removeDeliveryItem(delivery: NonNullable<Order['deliveries']>[number], item: NonNullable<Order['deliveries']>[number]['items'][number]) {
+    if (!order || !canRemoveDeliveryItem || delivery.receipt || !['SHIPPED', 'DELIVERED'].includes(delivery.status)) return
+    openConfirm({
+      title: `移除配送商品？`,
+      body: `${item.product?.name || '该商品'} · 实发 ${item.shippedQty}${item.product?.unit || ''}\n仅在门店确认收货前可操作。移除后会同步冲回供应商库存和配送金额，原订单历史仍保留。`,
+      confirmLabel: '确认移除',
+      tone: 'danger',
+      onConfirm: async () => {
+        setSubmitting(true)
+        setRemovingItemId(item.id)
+        try {
+          await apiFetch(`/api/deliveries/${delivery.id}/remove-item`, {
+            method: 'PATCH',
+            body: JSON.stringify({ itemId: item.id, rowVersion: delivery.rowVersion }),
+          })
+          load()
+        } catch (e: any) { setError(e.message || '移除商品失败'); throw e }
+        finally { setSubmitting(false); setRemovingItemId(null) }
+      },
+    })
+  }
+
   if (!order && !error) {
     return (
       <div className="min-h-screen bg-bg p-4">
@@ -483,9 +508,24 @@ export default function SupplierOrderDetailPage() {
                   <span className="ml-auto font-num text-caption">¥{Number(delivery.actualTotalAmount).toLocaleString()}</span>
                 </div>
                 <div className="text-micro text-gray3 mt-1">
-                  本次 {delivery.items.map(item => `${item.product?.name || ''} ${item.shippedQty}${item.product?.unit || ''}`).join('、')}
+                  本次 {delivery.items.length > 0 ? delivery.items.map(item => `${item.product?.name || ''} ${item.shippedQty}${item.product?.unit || ''}`).join('、') : '暂无可配送商品'}
                   {delivery.receipt && <> · 入库单 {delivery.receipt.no}</>}
                 </div>
+                {canRemoveDeliveryItem && !delivery.receipt && ['SHIPPED', 'DELIVERED'].includes(delivery.status) && delivery.items.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-border space-y-1">
+                    {delivery.items.map(item => (
+                      <div key={item.id} className="flex items-center gap-2 text-micro">
+                        <span className="flex-1 truncate">{item.product?.name || '商品'} · {item.shippedQty}{item.product?.unit || ''}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeDeliveryItem(delivery, item)}
+                          disabled={submitting || removingItemId === item.id}
+                          className="rounded-cta border border-red-fg/40 px-2 py-1 text-red-fg disabled:opacity-40"
+                        >{removingItemId === item.id ? '处理中…' : '移除'}</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </li>
             ))}
           </ul>

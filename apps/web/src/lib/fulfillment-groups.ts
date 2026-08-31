@@ -3,6 +3,7 @@ export type FulfillmentOrderLike = {
   no?: string
   status?: string
   createdAt: string
+  submittedAt?: string | null
   updatedAt?: string | null
   store?: { id?: string; name?: string } | null
   supplier?: { id?: string; name?: string } | null
@@ -28,6 +29,7 @@ export type OperationGroup = {
   idleSince?: string | null
   eligibleAt?: string | null
   isEligible?: boolean
+  blockedOrderIds?: string[]
   position?: number
 }
 
@@ -39,6 +41,29 @@ export type FulfillmentGroup = {
   isGrouped: boolean
   /** Group action is enabled only when the server explicitly says so. */
   canBatchConfirm: boolean
+}
+
+/**
+ * Return the id that owns a group-level add-product request.
+ *
+ * The server emits memberOrderIds in business-time order (submittedAt, then
+ * createdAt). Prefer that authoritative list even when pagination means the
+ * current page contains only part of the group; fall back to the visible rows
+ * for older API responses that do not expose membership ids.
+ */
+export function latestFulfillmentGroupOrderId(
+  group: Pick<FulfillmentGroup, 'orders' | 'metadata'>,
+): string | null {
+  const memberOrderIds = group.metadata?.memberOrderIds || []
+  if (memberOrderIds.length > 0) return memberOrderIds[memberOrderIds.length - 1] || null
+  const visible = [...group.orders]
+    .filter(order => Boolean(order.id))
+    .sort((a, b) => {
+      const aTime = Date.parse(a.submittedAt || a.createdAt)
+      const bTime = Date.parse(b.submittedAt || b.createdAt)
+      return bTime - aTime || b.id.localeCompare(a.id)
+    })
+  return visible[0]?.id || null
 }
 
 function orderStoreId(order: FulfillmentOrderLike): string {

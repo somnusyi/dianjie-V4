@@ -5,8 +5,8 @@
  * 操作: 接单 / 发货 (按状态显示)
  */
 'use client'
-import { useEffect, useState } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useEffect, useRef, useState } from 'react'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 import {
   SUPPLIER_MONEY_TERMS,
@@ -40,7 +40,7 @@ type Order = {
   currentOrderAmount?: string | null
   rowVersion: number
   currentRevisionNo?: number
-  expectedDate: string; createdAt: string
+  expectedDate: string; createdAt: string; submittedAt?: string | null
   shippedAt: string | null; receivedAt: string | null
   shippedNote: string | null
   note: string | null
@@ -79,13 +79,28 @@ type Order = {
   receipts?: { id: string; no: string; totalAmount: string; status: string }[]
 }
 
+type OperationGroupDetailResponse = {
+  source: 'pending' | 'accepted'
+  group: { id: string; memberCount: number }
+  orders: Array<{
+    id: string
+    no: string
+    createdAt: string
+    submittedAt?: string | null
+    status: string
+  }>
+}
+
 export default function SupplierOrderDetailPage() {
   const orderBase = getUser()?.role === 'SUPPLY_CHAIN'
     ? '/v2/supply-chain/fulfillment'
     : '/v2/supplier/orders'
   const params = useParams() as any
   const router = useRouter()
+  const searchParams = useSearchParams()
   const id = params.id as string
+  const operationGroupId = searchParams.get('operationGroup')
+  const groupAddRequested = searchParams.get('groupAdd') === '1'
   const [order, setOrder] = useState<Order | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [shipmentNotice, setShipmentNotice] = useState<string | null>(null)
@@ -106,6 +121,13 @@ export default function SupplierOrderDetailPage() {
   const [addQty, setAddQty] = useState<Record<string, number>>({})
   const [addSearch, setAddSearch] = useState('')
   const [adjustReason, setAdjustReason] = useState('')
+  const [groupAddContext, setGroupAddContext] = useState<{
+    groupId: string
+    targetNo: string
+    targetCreatedAt: string
+    memberCount: number
+  } | null>(null)
+  const groupAddAttemptedRef = useRef<string | null>(null)
   const [confirmState, openConfirm] = useConfirmSheet()
 
   function load() {
@@ -205,6 +227,44 @@ export default function SupplierOrderDetailPage() {
       setAddOpen(false)
     }
   }
+
+  // A group card routes to the latest source order, while the API rechecks
+  // that ownership.  Auto-open the existing revision picker so the group
+  // entry has the same interaction as the original single-order flow.
+  useEffect(() => {
+    if (!order || !operationGroupId || !groupAddRequested) return
+    if (groupAddAttemptedRef.current === operationGroupId) return
+    groupAddAttemptedRef.current = operationGroupId
+    let cancelled = false
+    void apiFetch<OperationGroupDetailResponse>(`/api/orders/operation-groups/${encodeURIComponent(operationGroupId)}`)
+      .then(detail => {
+        if (cancelled) return
+        const members = [...(detail.orders || [])].sort((a, b) => {
+          const aTime = Date.parse(a.submittedAt || a.createdAt)
+          const bTime = Date.parse(b.submittedAt || b.createdAt)
+          return aTime - bTime || a.id.localeCompare(b.id)
+        })
+        const latest = members[members.length - 1]
+        if (detail.source !== 'pending' || !latest || latest.id !== order.id) {
+          setError('集合新增商品只能加入集合内下单时间最晚的原订单，请从集合入口重新打开')
+          return
+        }
+        setGroupAddContext({
+          groupId: detail.group.id,
+          targetNo: latest.no,
+          targetCreatedAt: latest.createdAt,
+          memberCount: members.length,
+        })
+        if (order.status === 'SUBMITTED' && !order.revisions?.some(revision => revision.status === 'PENDING')) {
+          void openAddPicker()
+        }
+      })
+      .catch(error => {
+        if (!cancelled) setError(error?.message || '集合信息加载失败')
+      })
+    return () => { cancelled = true }
+  }, [order, operationGroupId, groupAddRequested])
+
   function setAddQtyFor(pid: string, q: number) {
     setAddQty(prev => {
       const next = { ...prev }
@@ -262,6 +322,7 @@ export default function SupplierOrderDetailPage() {
               reason: adjustReason.trim(),
               baseRowVersion: order.rowVersion,
               requestKey: clientRequestId(),
+              ...(operationGroupId ? { operationGroupId } : {}),
             }),
           })
           setAddOpen(false); load()
@@ -340,6 +401,12 @@ export default function SupplierOrderDetailPage() {
       {shipmentNotice && (
         <div className="mx-4 mt-2 rounded-card border border-green-fg/20 bg-green-bg p-3 text-caption text-green-fg">
           {shipmentNotice}
+        </div>
+      )}
+      {groupAddContext && (
+        <div className="mx-4 mt-2 rounded-card border border-amber/30 bg-amber/10 p-3 text-caption text-amber-fg">
+          集合新增商品默认加入下单时间最晚的原订单 <b>#{groupAddContext.targetNo}</b>（{dayjs(groupAddContext.targetCreatedAt).format('MM/DD HH:mm')}）。
+          集合内共 {groupAddContext.memberCount} 张原订单，其他订单不变。
         </div>
       )}
 
@@ -789,7 +856,7 @@ export default function SupplierOrderDetailPage() {
                  onClick={e => e.stopPropagation()}>
               <div className="w-12 h-1 bg-gray5 rounded-full mx-auto mt-2" />
               <div className="px-4 pt-3 pb-2 flex items-baseline justify-between">
-                <h3 className="text-h2">申请调整订货单</h3>
+                <h3 className="text-h2">{groupAddContext ? '申请调整订货单（加入最晚订单）' : '申请调整订货单'}</h3>
                 <span className="text-caption text-gray3">{filtered.length}/{catalog.length} 商品</span>
               </div>
               <p className="px-4 pb-2 text-micro text-gray3">可调整数量、移除或增加商品；已有行保持冻结订货价，新增商品按当前四单位合同换算订货价，待核验或非 1:1 合同缺失商品不可加入。提交后须门店确认才能接单。</p>

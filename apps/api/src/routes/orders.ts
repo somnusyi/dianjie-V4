@@ -64,7 +64,7 @@ import {
   validateOrderDraftLines,
 } from '../services/orderDraftValidation'
 import { buildOperationGroups, type OperationGroupCandidate } from '../services/orderOperationGroups'
-import { loadOperationGroupDetails } from '../services/orderOperationGroupDetails'
+import { latestOperationGroupOrderId, loadOperationGroupDetails } from '../services/orderOperationGroupDetails'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
 const PURCHASE_QUANTITY_MAX = 99_999_999.99
@@ -178,6 +178,8 @@ const revisionCreateSchema = z.object({
   note: z.string().max(500).nullable().optional(),
   baseRowVersion: z.number().int().nonnegative(),
   requestKey: z.string().trim().min(8).max(80).optional(),
+  // 集合入口只允许把新增商品归入集合内业务时间最晚的原订单。
+  operationGroupId: z.string().regex(/^og_[a-f0-9]{24}$/, '操作组标识无效').optional(),
 }).strict()
 
 const revisionReviewSchema = z.object({
@@ -1072,6 +1074,26 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (isSupplierRole(role) && order.supplierId !== actorSupplierId) return reply.status(404).send({ error: '订单不存在' })
     if (isStoreScoped(role) && !(storeScopeOf(req.user) ?? []).includes(order.storeId)) return reply.status(404).send({ error: '订单不存在' })
     if (role === 'CHEF_DIRECTOR' && order.createdById !== userId) return reply.status(403).send({ error: '只能修改自己代下的订单' })
+
+    // A group-level add-product request is still a normal revision on one of
+    // the original orders.  The group id is only a routing/audit hint: resolve
+    // it again inside the authenticated scope and require the latest pending
+    // member so a stale or tampered link cannot edit another source order.
+    if (input.operationGroupId) {
+      const detail = await loadOperationGroupDetails(req.user, input.operationGroupId)
+      const latestId = detail
+        ? latestOperationGroupOrderId(detail.orders.map((member: any) => ({
+            id: String(member.id || ''),
+            createdAt: member.createdAt,
+            submittedAt: member.submittedAt ?? null,
+          })))
+        : null
+      const allSubmitted = Boolean(detail?.orders?.length)
+        && detail!.orders.every((member: any) => String(member.status || '') === 'SUBMITTED')
+      if (!detail || detail.source !== 'pending' || !allSubmitted || latestId !== id) {
+        return reply.status(409).send({ error: '集合新增商品只能加入集合内下单时间最晚的原订单，请从集合入口重新打开' })
+      }
+    }
     if (input.baseRowVersion !== order.rowVersion) return reply.status(409).send({ error: '订单已更新，请刷新后重新提交' })
     if ((isSupplierRole(role) || hasInternalSupplyChainCapability(role, 'order.write'))
         && (input.expectedDate !== undefined || input.note !== undefined)) {
@@ -1187,14 +1209,17 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           data: {
             tenantId, purchaseOrderId: id, eventType: 'REVISION_REQUESTED', actorId: userId, actorRole: role,
             fromStatus: order.status, toStatus: order.status, requestId: req.id, ip: req.ip,
-            metadata: { revisionId: created.id, revisionNo, reason: input.reason, changes },
+            metadata: {
+              revisionId: created.id, revisionNo, reason: input.reason, changes,
+              operationGroupId: input.operationGroupId || null,
+            },
           },
         })
         await tx.opLog.create({
           data: {
             tenantId, userId, action: `申请修改订货单 ${order.no} (第 ${revisionNo} 次): ${input.reason}`,
             target: order.no, entityType: 'PurchaseOrderRevision', targetId: created.id,
-            metadata: { changes },
+            metadata: { changes, operationGroupId: input.operationGroupId || null },
           },
         })
         return created

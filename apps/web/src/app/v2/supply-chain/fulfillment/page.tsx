@@ -6,7 +6,7 @@ import { Chip } from '@/components/v2'
 import { OrderCenterTabs } from '@/components/v2/order-center-tabs'
 import { apiFetch } from '@/lib/v2-auth'
 import { clientRequestId } from '@/lib/client-id'
-import { buildFulfillmentGroups, type FulfillmentGroup, type OperationGroup } from '@/lib/fulfillment-groups'
+import { buildFulfillmentGroups, latestFulfillmentGroupOrderId, type FulfillmentGroup, type OperationGroup } from '@/lib/fulfillment-groups'
 import { formatOrderStatusLabel, orderStatusTone } from '@/lib/supply-order-delivery-pc'
 
 type Order = {
@@ -16,6 +16,7 @@ type Order = {
   expectedDate?: string | null
   totalAmount?: number | string
   createdAt: string
+  submittedAt?: string | null
   store?: { id: string; name: string }
   supplier?: { id: string; name: string }
   operationGroup?: OperationGroup | null
@@ -83,6 +84,17 @@ function InternalOperationGroupCard({
   const missingCount = Math.max(0, memberCount - group.orders.length)
   const window = operationGroupWindow(group)
   const isSubmitting = submitting === metadata.id
+  const latestOrderId = latestFulfillmentGroupOrderId(group)
+  const latestOrder = group.orders.find(order => order.id === latestOrderId)
+  const groupCanAdd = Boolean(
+    latestOrderId
+      && metadata.isEligible === true
+      && !metadata.blockedOrderIds?.includes(latestOrderId)
+      && (!latestOrder || latestOrder.status === 'SUBMITTED'),
+  )
+  const addProductHref = latestOrderId
+    ? `/v2/supply-chain/fulfillment/${encodeURIComponent(latestOrderId)}?operationGroup=${encodeURIComponent(metadata.id)}&groupAdd=1`
+    : null
 
   return (
     <li
@@ -135,6 +147,22 @@ function InternalOperationGroupCard({
       >
         🖨 打印集合送货单
       </a>
+      {addProductHref && groupCanAdd ? (
+        <a
+          href={addProductHref}
+          onClick={event => event.stopPropagation()}
+          className="mt-2 block w-full rounded-cta border border-amber/50 bg-amber/5 px-4 py-2.5 text-center text-button text-amber-fg hover:bg-amber/10"
+        >
+          ＋ 增加商品（默认加入最晚订单）
+        </a>
+      ) : (
+        <span
+          className="mt-2 block w-full rounded-cta border border-border bg-bg px-4 py-2.5 text-center text-button text-gray3"
+          title="集合当前不可申请调整"
+        >
+          ＋ 增加商品（暂不可用）
+        </span>
+      )}
     </li>
   )
 }

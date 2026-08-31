@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mergeOperationGroupItems } from '../../src/services/orderOperationGroupDetails'
+import { latestOperationGroupOrderId, mergeOperationGroupItems } from '../../src/services/orderOperationGroupDetails'
 
 describe('operation group printable item merge', () => {
   it('merges only identical product snapshots and preserves source order numbers', () => {
@@ -28,5 +28,22 @@ describe('operation group printable item merge', () => {
     expect(items.find(item => item.spec === '5kg')).toMatchObject({
       productId: 'p1', quantity: '1.00', amount: '6.00', sourceOrderNos: ['PO-02'],
     })
+  })
+})
+
+describe('operation group add-product owner', () => {
+  it('selects the latest business submission time, with a stable id tie-break', () => {
+    expect(latestOperationGroupOrderId([
+      { id: 'a01', createdAt: '2026-08-31T10:00:00.000Z', submittedAt: '2026-08-31T09:00:00.000Z' },
+      { id: 'a02', createdAt: '2026-08-31T10:01:00.000Z', submittedAt: '2026-08-31T11:15:00.000Z' },
+      { id: 'a03', createdAt: '2026-08-31T10:02:00.000Z', submittedAt: '2026-08-31T11:15:00.000Z' },
+    ])).toBe('a03')
+  })
+
+  it('falls back to createdAt for legacy rows without submittedAt', () => {
+    expect(latestOperationGroupOrderId([
+      { id: 'a01', createdAt: '2026-08-31T10:00:00.000Z' },
+      { id: 'a02', createdAt: '2026-08-31T10:30:00.000Z' },
+    ])).toBe('a02')
   })
 })

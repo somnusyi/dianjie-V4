@@ -47,6 +47,31 @@ export type OperationGroupDetail = {
   totals: { quantity: string; amount: string }
 }
 
+export type OperationGroupOrderTimeLike = {
+  id: string
+  createdAt: Date | string
+  submittedAt?: Date | string | null
+}
+
+function operationGroupBusinessTime(order: OperationGroupOrderTimeLike): number {
+  const value = order.submittedAt || order.createdAt
+  const time = value instanceof Date ? value.getTime() : Date.parse(String(value))
+  return Number.isFinite(time) ? time : Number.NEGATIVE_INFINITY
+}
+
+/**
+ * The default owner for a group-level add-product request is deterministic:
+ * the member with the latest business order time. This mirrors the grouping
+ * service's submittedAt-first ordering and uses the id as a stable tie-break.
+ */
+export function latestOperationGroupOrderId(
+  orders: OperationGroupOrderTimeLike[],
+): string | null {
+  return [...orders]
+    .filter(order => Boolean(order?.id))
+    .sort((a, b) => operationGroupBusinessTime(b) - operationGroupBusinessTime(a) || b.id.localeCompare(a.id))[0]?.id || null
+}
+
 function decimalString(value: unknown, fallback = '0.00'): string {
   if (value === null || value === undefined || value === '') return fallback
   return String(value)

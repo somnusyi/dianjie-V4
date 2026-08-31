@@ -34,6 +34,156 @@ type Order = {
       product?: { name: string; spec: string | null; unit: string; code: string } }[] }[]
 }
 
+/**
+ * 集合送货单接口只增加了集合元数据和聚合商品；单笔送货单仍走上面的
+ * 原始 Order 结构。这里把接口字段保持得稍微宽松一点，兼容金额/数量
+ * 由 API 以 number 或 decimal string 返回的两种情况。
+ */
+type OperationGroupMember = {
+  id: string
+  no: string
+  deliveryNo?: string | null
+  createdAt: string
+  submittedAt?: string | null
+  expectedDate?: string | null
+  status?: string | null
+  store?: Partial<Order['store']> | null
+  supplier?: Partial<Order['supplier']> | null
+  createdBy?: Partial<Order['createdBy']> | null
+  consignee?: Order['consignee'] | null
+  shippedAt?: string | null
+  shippedBy?: Order['shippedBy']
+  note?: string | null
+  shippedNote?: string | null
+}
+
+type OperationGroupItem = {
+  id?: string
+  productId?: string | null
+  name?: string | null
+  spec?: string | null
+  unit?: string | null
+  quantity?: number | string | null
+  shippedQty?: number | string | null
+  unitPrice?: number | string | null
+  amount?: number | string | null
+  product?: { id?: string; name?: string | null; spec?: string | null; unit?: string | null; code?: string | null } | null
+}
+
+type OperationGroupResponse = {
+  group: {
+    id: string
+    storeId: string
+    supplierId: string
+    expectedDate: string
+    memberOrderIds: string[]
+    memberOrderNos: string[]
+    memberCount: number
+  }
+  source?: 'pending' | 'accepted'
+  orders: OperationGroupMember[]
+  mergedItems: OperationGroupItem[]
+  totals?: { quantity?: number | string | null; amount?: number | string | null }
+}
+
+type NormalizedOperationGroup = {
+  order: Order
+  members: Array<Pick<OperationGroupMember, 'id' | 'no' | 'deliveryNo' | 'createdAt' | 'submittedAt'>>
+}
+
+function decimalText(value: number | string | null | undefined, fallback = '0') {
+  return value == null || value === '' ? fallback : String(value)
+}
+
+/** Convert the aggregate endpoint payload into the unchanged print renderer model. */
+function normalizeOperationGroup(data: OperationGroupResponse): NormalizedOperationGroup {
+  const sourceOrders = (Array.isArray(data.orders) ? data.orders : [])
+    .slice()
+    .sort((a, b) => Date.parse(a.submittedAt || a.createdAt) - Date.parse(b.submittedAt || b.createdAt) || a.id.localeCompare(b.id))
+  const first = sourceOrders[0]
+  if (!first) throw new Error('集合没有可打印的原订单')
+
+  const firstStore = first.store || {}
+  const firstSupplier = first.supplier || {}
+  const firstCreator = first.createdBy || {}
+  const mergedItems = (Array.isArray(data.mergedItems) ? data.mergedItems : []).map((item, index) => {
+    const product = item.product || {}
+    const quantity = Number(item.shippedQty ?? item.quantity ?? 0)
+    const unitPrice = Number(item.unitPrice ?? 0)
+    const amount = item.amount == null ? (quantity * unitPrice).toFixed(2) : decimalText(item.amount)
+    return {
+      id: item.id || `${data.group.id}:item:${index}`,
+      quantity: decimalText(item.quantity),
+      shippedQty: item.shippedQty == null ? null : decimalText(item.shippedQty),
+      unitPrice: decimalText(item.unitPrice),
+      amount,
+      product: {
+        name: item.name ?? product.name ?? '—',
+        spec: item.spec ?? product.spec ?? null,
+        unit: item.unit ?? product.unit ?? '—',
+        code: product.code ?? item.productId ?? '',
+      },
+    }
+  })
+
+  const computedAmount = mergedItems.reduce((sum, item) => sum + Number(item.amount || 0), 0)
+  const totalAmount = decimalText(data.totals?.amount, computedAmount.toFixed(2))
+  const expectedDate = first.expectedDate || data.group.expectedDate
+  const latestShippedAt = sourceOrders
+    .map(item => item.shippedAt)
+    .filter(Boolean)
+    .sort((a, b) => String(b).localeCompare(String(a)))[0] || null
+
+  const store = {
+    id: firstStore.id || data.group.storeId,
+    name: firstStore.name || '—',
+    no: firstStore.no || '',
+    address: firstStore.address || null,
+    managerName: firstStore.managerName || null,
+    phone: firstStore.phone || null,
+  }
+  const supplier = {
+    id: firstSupplier.id || data.group.supplierId,
+    name: firstSupplier.name || '—',
+    contactName: firstSupplier.contactName || null,
+    contactPhone: firstSupplier.contactPhone || null,
+  }
+  const createdBy = {
+    id: firstCreator.id || '',
+    name: firstCreator.name || '—',
+  }
+
+  return {
+    order: {
+      // This is a renderer-only sentinel. It is never shown as an order number;
+      // the source member numbers are rendered in the metadata rows below.
+      id: data.group.id,
+      no: '',
+      status: first.status || 'CONFIRMED',
+      totalAmount,
+      purchaseOrderTotalAmount: totalAmount,
+      expectedDate,
+      createdAt: first.createdAt,
+      shippedAt: latestShippedAt,
+      shippedNote: first.shippedNote || null,
+      note: first.note || null,
+      store,
+      consignee: first.consignee || undefined,
+      supplier,
+      createdBy,
+      shippedBy: first.shippedBy || null,
+      items: mergedItems,
+    },
+    members: sourceOrders.map(item => ({
+      id: item.id,
+      no: item.no,
+      deliveryNo: item.deliveryNo || null,
+      createdAt: item.createdAt,
+      submittedAt: item.submittedAt || null,
+    })),
+  }
+}
+
 // 阿拉伯数字 → 中文大写金额 (财务规范)
 function num2cn(n: number): string {
   if (!Number.isFinite(n)) return '零元整'
@@ -63,8 +213,10 @@ function num2cn(n: number): string {
 export default function DeliveryNotePrintPage() {
   const params = useParams() as any
   const router = useRouter()
-  const id = params.id as string
+  const id = String(params.id || '')
+  const isOperationGroup = id.startsWith('og_')
   const [order, setOrder] = useState<Order | null>(null)
+  const [groupMembers, setGroupMembers] = useState<NormalizedOperationGroup['members'] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [printedAt] = useState(() => new Date())
 
@@ -77,31 +229,55 @@ export default function DeliveryNotePrintPage() {
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
-    apiFetch<Order>(`/api/orders/${id}`).then(data => {
-      const latest = [...(data.deliveries || [])]
-        .filter(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
-        .sort((a, b) => String(b.shippedAt || '').localeCompare(String(a.shippedAt || '')))[0]
-      if (!latest) return setOrder(data)
-      setOrder({
-        ...data,
-        purchaseOrderNo: data.no,
-        purchaseOrderTotalAmount: data.totalAmount,
-        no: latest.no,
-        totalAmount: latest.actualTotalAmount,
-        shippedAt: latest.shippedAt || data.shippedAt,
-        shippedNote: latest.note || null,
-        items: latest.items.map(item => ({
-          id: item.id,
-          quantity: item.orderedQtySnapshot,
-          shippedQty: item.shippedQty,
-          unitPrice: item.unitPriceSnapshot,
-          amount: item.amount,
-          product: item.product,
-        })),
-      })
-    }).catch(e => setError(e.message || '加载失败'))
+    let cancelled = false
+    setError(null)
+    setOrder(null)
+    setGroupMembers(null)
+
+    const load = async () => {
+      try {
+        if (isOperationGroup) {
+          const data = await apiFetch<OperationGroupResponse>(`/api/orders/operation-groups/${encodeURIComponent(id)}`)
+          if (cancelled) return
+          const normalized = normalizeOperationGroup(data)
+          setGroupMembers(normalized.members)
+          setOrder(normalized.order)
+          return
+        }
+
+        // Keep the original single-order request and delivery snapshot behavior
+        // byte-for-byte in meaning; only og_ IDs use the aggregate branch above.
+        const data = await apiFetch<Order>(`/api/orders/${id}`)
+        if (cancelled) return
+        const latest = [...(data.deliveries || [])]
+          .filter(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
+          .sort((a, b) => String(b.shippedAt || '').localeCompare(String(a.shippedAt || '')))[0]
+        if (!latest) return setOrder(data)
+        setOrder({
+          ...data,
+          purchaseOrderNo: data.no,
+          purchaseOrderTotalAmount: data.totalAmount,
+          no: latest.no,
+          totalAmount: latest.actualTotalAmount,
+          shippedAt: latest.shippedAt || data.shippedAt,
+          shippedNote: latest.note || null,
+          items: latest.items.map(item => ({
+            id: item.id,
+            quantity: item.orderedQtySnapshot,
+            shippedQty: item.shippedQty,
+            unitPrice: item.unitPriceSnapshot,
+            amount: item.amount,
+            product: item.product,
+          })),
+        })
+      } catch (e: any) {
+        if (!cancelled) setError(e.message || '加载失败')
+      }
+    }
+    void load()
+
     return () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl) }
-  }, [id])
+  }, [id, isOperationGroup])
 
   // 真 PDF 下载 — 用 html2canvas + jspdf, 跨平台 (含 WebView / iOS Capacitor / 鸿蒙 ArkWeb)
   async function exportPDF() {
@@ -182,7 +358,7 @@ export default function DeliveryNotePrintPage() {
     setUploading(true)
     try {
       const fd = new FormData()
-      fd.append('file', blob, `delivery-note-${order.no}.pdf`)
+      fd.append('file', blob, `delivery-note-${isOperationGroup ? 'group' : order.no}.pdf`)
       const res = await apiFetch<{url: string}>('/api/upload?category=documents', { method: 'POST', body: fd as any })
       setOssUrl(res.url)
     } catch (e: any) {
@@ -210,12 +386,13 @@ export default function DeliveryNotePrintPage() {
   // Web Share API — 微信 / iOS Safari / 安卓 Chrome 都支持. 调起系统分享菜单 (存到文件 / 转发微信...)
   async function shareOrDownload() {
     if (!pdfBlob || !order) return
-    const file = new File([pdfBlob], `送货单-${order.no}.pdf`, { type: 'application/pdf' })
+    const documentLabel = isOperationGroup ? '集合送货单' : order.no
+    const file = new File([pdfBlob], `送货单-${documentLabel}.pdf`, { type: 'application/pdf' })
     // navigator.canShare 检查是否支持文件分享
     const nav = navigator as any
     if (nav.canShare && nav.canShare({ files: [file] })) {
       try {
-        await nav.share({ files: [file], title: `送货单 ${order.no}`, text: `送货单 ${order.no}` })
+        await nav.share({ files: [file], title: `送货单 ${documentLabel}`, text: `送货单 ${documentLabel}` })
         return
       } catch (e) { /* 用户取消, 走 fallback */ }
     }
@@ -223,7 +400,7 @@ export default function DeliveryNotePrintPage() {
     const link = document.createElement('a')
     const url = URL.createObjectURL(pdfBlob)
     link.href = url
-    link.download = `送货单-${order.no}.pdf`
+    link.download = `送货单-${documentLabel}.pdf`
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -242,18 +419,28 @@ export default function DeliveryNotePrintPage() {
     try {
       const XLSX = await import('xlsx')
       const itemQtyLocal = (i: Order['items'][number]) => i.shippedQty != null ? Number(i.shippedQty) : Number(i.quantity)
-      const itemAmtLocal = (i: Order['items'][number]) => itemQtyLocal(i) * Number(i.unitPrice)
+      // Aggregate lines carry the source-line amount. Use it for groups so
+      // different historical prices are not silently recomputed from one price;
+      // retain the original calculation for single orders.
+      const itemAmtLocal = (i: Order['items'][number]) => isOperationGroup && i.amount != null
+        ? Number(i.amount)
+        : itemQtyLocal(i) * Number(i.unitPrice)
+      const documentLabel = isOperationGroup ? '集合送货单' : order.no
       const totalLocal = order.items.reduce((s, i) => s + itemAmtLocal(i), 0)
       const totalQtyLocal = order.items.reduce((s, i) => s + itemQtyLocal(i), 0)
 
       // 构造表格 (aoa = array of arrays)
       const aoa: any[][] = [
-        [`送货单 · ${order.no}`, '', '', '', '', '', ''],
+        [`送货单 · ${documentLabel}`, '', '', '', '', '', ''],
         [],
         ['供应商', order.supplier.name, '', '', '收货方', order.store.name, ''],
         ['供应方联系人', `${order.supplier.contactName || '—'}${order.supplier.contactPhone ? ' · ' + order.supplier.contactPhone : ''}`, '', '', '收货人', `${(order.consignee?.name ?? order.store.managerName) || '—'}${(order.consignee?.phone ?? order.store.phone) ? ' · ' + (order.consignee?.phone ?? order.store.phone) : ''}`, ''],
         ['收货地址', order.store.address || '—', '', '', '', '', ''],
-        ['下单时间', dayjs(order.createdAt).format('YYYY-MM-DD HH:mm'), '', '', '下单人', order.createdBy?.name || '—', ''],
+        ...(isOperationGroup && groupMembers && groupMembers.length > 0
+          ? groupMembers.map(member => [
+            '送货单号', member.deliveryNo || member.no, '', '', '下单日期', dayjs(member.createdAt).format('YYYY-MM-DD HH:mm'), '',
+          ])
+          : [['下单时间', dayjs(order.createdAt).format('YYYY-MM-DD HH:mm'), '', '', '下单人', order.createdBy?.name || '—', '']]),
         ['期望到货', dayjs(order.expectedDate).format('YYYY-MM-DD'), '', '', '发货时间', order.shippedAt ? dayjs(order.shippedAt).format('YYYY-MM-DD HH:mm') : '—', ''],
         order.note ? ['订单备注', order.note, '', '', '', '', ''] : null,
         order.shippedNote ? ['发货备注', order.shippedNote, '', '', '', '', ''] : null,
@@ -313,14 +500,14 @@ export default function DeliveryNotePrintPage() {
       // 走 Blob 路线, 跨平台兼容 (Web Share API + a[download] 兜底)
       const arrayBuffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
       const blob = new Blob([arrayBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
-      const filename = `送货单-${order.no}.xlsx`
+      const filename = `送货单-${documentLabel}.xlsx`
       const file = new File([blob], filename, { type: blob.type })
       const nav = navigator as any
 
       // 移动端 / iOS / 安卓 Chrome — Web Share API
       if (nav.canShare && nav.canShare({ files: [file] })) {
         try {
-          await nav.share({ files: [file], title: `送货单 ${order.no}`, text: `送货单 Excel ${order.no}` })
+          await nav.share({ files: [file], title: `送货单 ${documentLabel}`, text: `送货单 Excel ${documentLabel}` })
           return
         } catch (e) { /* 用户取消, 走 fallback */ }
       }
@@ -348,9 +535,12 @@ export default function DeliveryNotePrintPage() {
   if (error) return <div className="p-8 text-center text-red-fg">{error}</div>
   if (!order) return <div className="p-8 text-center text-gray2">加载中…</div>
 
+  const documentLabel = isOperationGroup ? '集合送货单' : order.no
   // 送货单按实际发货量 (shippedQty) 显示, 没填则按 quantity. 合同金额已在 ship 时重算.
   const itemQty = (i: Order['items'][number]) => i.shippedQty != null ? Number(i.shippedQty) : Number(i.quantity)
-  const itemAmt = (i: Order['items'][number]) => itemQty(i) * Number(i.unitPrice)
+  const itemAmt = (i: Order['items'][number]) => isOperationGroup && i.amount != null
+    ? Number(i.amount)
+    : itemQty(i) * Number(i.unitPrice)
   const total = order.items.reduce((s, i) => s + itemAmt(i), 0)
   const itemsCount = order.items.length
   const totalQty = order.items.reduce((s, i) => s + itemQty(i), 0)
@@ -385,7 +575,7 @@ export default function DeliveryNotePrintPage() {
       {/* 操作栏 — 屏幕显示, 打印隐藏 */}
       <div className="no-print sticky top-0 bg-bg-warm border-b border-border px-4 py-3 flex items-center gap-2 z-10">
         <button onClick={() => router.back()} className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</button>
-        <span className="flex-1 text-h2 truncate">送货单 · {order.no}</span>
+        <span className="flex-1 text-h2 truncate">送货单 · {documentLabel}</span>
         <button onClick={exportPDF} disabled={exporting}
                 className="px-4 py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40">
           {exporting ? '生成中…' : '📄 生成 PDF'}
@@ -407,7 +597,7 @@ export default function DeliveryNotePrintPage() {
           <div className="bg-white rounded-card max-w-3xl w-full max-h-[90vh] flex flex-col"
                onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-3 border-b border-border">
-              <span className="text-h2">送货单 PDF · {order.no}</span>
+              <span className="text-h2">送货单 PDF · {documentLabel}</span>
               <button onClick={() => setPdfUrl(null)} className="text-gray3 px-2 text-h2">×</button>
             </div>
             <iframe src={pdfUrl} className="flex-1 w-full" title="PDF 预览" />
@@ -432,7 +622,7 @@ export default function DeliveryNotePrintPage() {
                        className="flex-1 text-center px-3 py-2 bg-ink text-white rounded-cta text-button">
                       📂 在新窗口打开 PDF
                     </a>
-                    <a href={ossUrl} download={`送货单-${order.no}.pdf`}
+                    <a href={ossUrl} download={`送货单-${documentLabel}.pdf`}
                        className="flex-1 text-center px-3 py-2 border border-border rounded-cta text-button text-gray2">
                       ⬇ 下载到本地
                     </a>
@@ -463,12 +653,23 @@ export default function DeliveryNotePrintPage() {
         {/* 顶部元数据 */}
         <table className="w-full text-sm mt-4 border-collapse">
           <tbody>
-            <tr>
-              <td className="border border-gray3 px-2 py-1.5 bg-bg w-24">送货单号</td>
-              <td className="border border-gray3 px-2 py-1.5 font-mono">{order.no}</td>
-              <td className="border border-gray3 px-2 py-1.5 bg-bg w-24">下单日期</td>
-              <td className="border border-gray3 px-2 py-1.5">{dayjs(order.createdAt).format('YYYY-MM-DD HH:mm')}</td>
-            </tr>
+            {isOperationGroup && groupMembers && groupMembers.length > 0
+              ? groupMembers.map(member => (
+                <tr key={member.id}>
+                  <td className="border border-gray3 px-2 py-1.5 bg-bg w-24">送货单号</td>
+                  <td className="border border-gray3 px-2 py-1.5 font-mono">{member.deliveryNo || member.no}</td>
+                  <td className="border border-gray3 px-2 py-1.5 bg-bg w-24">下单日期</td>
+                  <td className="border border-gray3 px-2 py-1.5">{dayjs(member.createdAt).format('YYYY-MM-DD HH:mm')}</td>
+                </tr>
+              ))
+              : (
+                <tr>
+                  <td className="border border-gray3 px-2 py-1.5 bg-bg w-24">送货单号</td>
+                  <td className="border border-gray3 px-2 py-1.5 font-mono">{order.no}</td>
+                  <td className="border border-gray3 px-2 py-1.5 bg-bg w-24">下单日期</td>
+                  <td className="border border-gray3 px-2 py-1.5">{dayjs(order.createdAt).format('YYYY-MM-DD HH:mm')}</td>
+                </tr>
+              )}
             {order.purchaseOrderNo && (
               <tr>
                 <td className="border border-gray3 px-2 py-1.5 bg-bg">来源订货单</td>

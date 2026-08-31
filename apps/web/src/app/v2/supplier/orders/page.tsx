@@ -159,6 +159,13 @@ function OperationGroupCard({
         >
           {groupSubmitting ? '批量接单中…' : `批量接单（${memberCount}）`}
         </button>
+        <a
+          href={`${orderBase}/${encodeURIComponent(metadata.id)}/delivery-note`}
+          onClick={event => event.stopPropagation()}
+          className="mt-2 block w-full rounded-cta border border-border bg-white py-2 text-center text-button text-gray2 hover:bg-bg-warm"
+        >
+          🖨 打印集合送货单
+        </a>
       </div>
     </li>
   )

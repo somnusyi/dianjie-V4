@@ -64,6 +64,7 @@ import {
   validateOrderDraftLines,
 } from '../services/orderDraftValidation'
 import { buildOperationGroups, type OperationGroupCandidate } from '../services/orderOperationGroups'
+import { loadOperationGroupDetails } from '../services/orderOperationGroupDetails'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
 const PURCHASE_QUANTITY_MAX = 99_999_999.99
@@ -649,6 +650,19 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     }
     if (cacheKey) setOperationGroupReplay(cacheKey, response)
     return response
+  })
+
+  // ── 集合送货单只读详情（不创建合并订单） ────────────────
+  // 必须放在 /:id 之前，否则 Fastify 会把 operation-groups 当作订单 id。
+  app.get('/operation-groups/:groupId', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
+    const { role } = req.user
+    if (!allowsSupplyDataRead(role, 'order.read')) {
+      return reply.status(403).send({ error: '无权查看采购订单' })
+    }
+    const groupId = String((req.params as any).groupId || '')
+    const detail = await loadOperationGroupDetails(req.user, groupId)
+    if (!detail) return reply.status(404).send({ error: '操作组不存在、已被处理或已失效' })
+    return detail
   })
 
   // ── 详情 ──────────────────────────────────────────

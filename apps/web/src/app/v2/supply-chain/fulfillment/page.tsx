@@ -128,6 +128,13 @@ function InternalOperationGroupCard({
       >
         {isSubmitting ? '批量接单中…' : `批量接单（${memberCount}）`}
       </button>
+      <a
+        href={`/v2/supply-chain/fulfillment/${encodeURIComponent(metadata.id)}/delivery-note`}
+        onClick={event => event.stopPropagation()}
+        className="mt-2 block w-full rounded-cta border border-border bg-white px-4 py-2.5 text-center text-button text-gray2 hover:bg-bg-warm"
+      >
+        🖨 打印集合送货单
+      </a>
     </li>
   )
 }

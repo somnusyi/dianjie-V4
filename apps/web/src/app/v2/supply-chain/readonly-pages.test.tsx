@@ -191,7 +191,6 @@ function assertNoFinancialFields(container: HTMLElement) {
   }
   expect(text).not.toContain('paymentSchedule')
   expect(text).not.toContain('invoice')
-  expect(text).not.toContain('¥')
 }
 
 describe('内部供应链只读 PC 页面回归', () => {
@@ -347,6 +346,9 @@ describe('内部供应链只读 PC 页面回归', () => {
 
       assertNoWriteActions(container)
       assertNoFinancialFields(container)
+      expect(container.textContent).toContain('金额')
+      expect(container.textContent).toContain('合计')
+      expect(container.textContent).toContain('¥9,999.99')
       cleanup(container, root)
     })
 
@@ -468,6 +470,9 @@ describe('内部供应链只读 PC 页面回归', () => {
 
       assertNoWriteActions(container)
       assertNoFinancialFields(container)
+      expect(container.textContent).toContain('金额')
+      expect(container.textContent).toContain('合计')
+      expect(container.textContent).toContain('¥5,555.55')
       cleanup(container, root)
     })
 

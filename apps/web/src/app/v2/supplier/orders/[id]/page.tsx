@@ -672,15 +672,25 @@ export default function SupplierOrderDetailPage() {
                         const buf = Number(l.it.product?.shipUpperBuffer ?? 5)
                         const upper = Math.max(0, Math.max(l.orig * pct, l.orig + buf) - l.previous)
                         return (
-                          <input
-                            type="number" inputMode="decimal" step="0.01" min="0" max={upper}
-                            value={l.sq}
-                            onChange={e => setShipQty(prev => ({ ...prev, [l.it.id]: Math.max(0, Math.min(upper, Number(e.target.value) || 0)) }))}
-                            className={`w-20 text-right font-num bg-bg rounded-chip px-2 py-1 outline-none ${l.changed ? (l.sq > l.orig ? 'border border-red text-red-fg' : 'border border-amber text-amber-fg') : ''}`}
-                          />
+                          <>
+                            <input
+                              type="number" inputMode="decimal" step="0.01" min="0" max={upper}
+                              value={l.sq}
+                              onChange={e => setShipQty(prev => ({ ...prev, [l.it.id]: Math.max(0, Math.min(upper, Number(e.target.value) || 0)) }))}
+                              className={`w-20 text-right font-num bg-bg rounded-chip px-2 py-1 outline-none ${l.changed ? (l.sq > l.orig ? 'border border-red text-red-fg' : 'border border-amber text-amber-fg') : ''}`}
+                            />
+                            <span className="text-micro text-gray3">{l.it.product?.unit}</span>
+                            <button
+                              type="button"
+                              onClick={() => setShipQty(prev => ({ ...prev, [l.it.id]: 0 }))}
+                              disabled={l.sq === 0}
+                              title={`将${l.it.product?.name || '该商品'}本次实发设为 0`}
+                              aria-label={`移除${l.it.product?.name || '该商品'}（实发设为 0）`}
+                              className="ml-1 rounded-cta border border-red-fg/40 px-2 py-1 text-micro text-red-fg disabled:opacity-40"
+                            >移除</button>
+                          </>
                         )
                       })()}
-                      <span className="text-micro text-gray3">{l.it.product?.unit}</span>
                     </div>
                     <span className="font-num text-caption w-20 text-right">¥{(l.sq * Number(l.it.unitPrice)).toFixed(2)}</span>
                   </li>
@@ -692,7 +702,7 @@ export default function SupplierOrderDetailPage() {
                   <span className="font-num text-amber-fg">¥{newTotal.toLocaleString()} <span className="text-gray3 line-through ml-1">¥{oldTotal.toLocaleString()}</span></span>
                 </div>
               )}
-              <p className="text-micro text-gray3 mt-2">默认按剩余未配送数量发完。首次发货后，所有未发余量将永久关闭，不会补送；如仍需须门店重新下单。价格继承已确认订货单，配送不可改价。</p>
+              <p className="text-micro text-gray3 mt-2">默认按剩余未配送数量发完。可直接修改实发数量（称重 / 缺货）；点击行内“移除”会将该行本次实发设为 0。首次发货后，所有未发余量将永久关闭，不会补送；如仍需须门店重新下单。价格继承已确认订货单，配送不可改价。</p>
               {allZero && <p className="text-micro text-red-fg mt-1">⚠ 所有商品发货数量为 0，无法提交。请至少填写一项正数发货量。</p>}
             </div>
             <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">

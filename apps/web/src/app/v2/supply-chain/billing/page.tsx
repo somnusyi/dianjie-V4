@@ -43,6 +43,9 @@ export default function InternalSupplyChainBillingPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [tab, setTab] = useState<'schedule' | 'reconciliation' | 'invoice'>('schedule')
+  const [storeFilter, setStoreFilter] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
 
   useEffect(() => {
     Promise.all([
@@ -73,6 +76,22 @@ export default function InternalSupplyChainBillingPage() {
     }
   }, [schedules, invoices])
 
+  const filteredSchedules = useMemo(() => schedules.filter(item => {
+    const storeName = item.receipt?.store?.name || ''
+    const date = item.dueAt?.slice(0, 10) || ''
+    return (!storeFilter || storeName === storeFilter)
+      && (!dateFrom || date >= dateFrom)
+      && (!dateTo || date <= dateTo)
+  }), [schedules, storeFilter, dateFrom, dateTo])
+  const filteredScheduleTotal = useMemo(
+    () => filteredSchedules.reduce((sum, item) => sum + Number(item.amount || 0), 0),
+    [filteredSchedules],
+  )
+  const storeOptions = useMemo(
+    () => Array.from(new Set(schedules.map(item => item.receipt?.store?.name).filter(Boolean) as string[])).sort(),
+    [schedules],
+  )
+
   return (
     <div className="min-h-screen bg-bg px-4 py-5 lg:px-8 lg:py-7">
       <header className="border-b border-border pb-5">
@@ -98,13 +117,23 @@ export default function InternalSupplyChainBillingPage() {
         <Tab active={tab === 'invoice'} onClick={() => setTab('invoice')}>发票 {invoices.length}</Tab>
       </div>
 
+      {tab === 'schedule' && (
+        <div className="mb-4 flex flex-wrap items-end gap-3 rounded-card border border-border bg-white p-3">
+          <label className="flex flex-col gap-1"><span className="text-micro text-gray3">筛选门店</span><select value={storeFilter} onChange={event => setStoreFilter(event.target.value)} className="h-10 min-w-44 rounded-cta border border-border bg-white px-3 text-caption"><option value="">全部门店</option>{storeOptions.map(name => <option key={name} value={name}>{name}</option>)}</select></label>
+          <label className="flex flex-col gap-1"><span className="text-micro text-gray3">开始日期</span><input type="date" value={dateFrom} onChange={event => setDateFrom(event.target.value)} className="h-10 rounded-cta border border-border px-3 text-caption" /></label>
+          <label className="flex flex-col gap-1"><span className="text-micro text-gray3">结束日期</span><input type="date" value={dateTo} onChange={event => setDateTo(event.target.value)} className="h-10 rounded-cta border border-border px-3 text-caption" /></label>
+          <button type="button" onClick={() => { setStoreFilter(''); setDateFrom(''); setDateTo('') }} className="h-10 rounded-cta border border-border px-3 text-button text-gray2">清空筛选</button>
+          <span className="ml-auto h-10 rounded-cta bg-bg px-3 py-2 text-button text-gray2">筛选后 {filteredSchedules.length} 笔 · 合计 <b className="font-num text-ink">{money(filteredScheduleTotal)}</b></span>
+        </div>
+      )}
+
       <div className="overflow-hidden rounded-card border border-border bg-white">
         {loading && <div className="py-16 text-center text-caption text-gray3">加载中…</div>}
         {!loading && tab === 'schedule' && (
           <table className="w-full text-left text-caption">
             <thead className="bg-bg text-gray3"><tr><th className="px-4 py-3">供应商 / 入库单</th><th className="px-4 py-3">门店</th><th className="px-4 py-3">到期日</th><th className="px-4 py-3">状态</th><th className="px-4 py-3 text-right">金额</th></tr></thead>
             <tbody className="divide-y divide-border">
-              {schedules.map(item => (
+              {filteredSchedules.map(item => (
                 <tr key={item.id}>
                   <td className="px-4 py-3"><b>{item.supplier?.name || '—'}</b><div className="font-num text-micro text-gray3">{item.receipt?.no || '—'}</div></td>
                   <td className="px-4 py-3 text-gray2">{item.receipt?.store?.name || '—'}</td>
@@ -149,7 +178,7 @@ export default function InternalSupplyChainBillingPage() {
             </tbody>
           </table>
         )}
-        {!loading && ((tab === 'schedule' && schedules.length === 0)
+        {!loading && ((tab === 'schedule' && filteredSchedules.length === 0)
           || (tab === 'reconciliation' && reconciliations.length === 0)
           || (tab === 'invoice' && invoices.length === 0)) && (
           <div className="py-16 text-center text-caption text-gray3">暂无记录</div>

@@ -302,6 +302,7 @@ export function projectOrderRow(row: any) {
     storeId: row.storeId,
     supplierId: row.supplierId,
     status: row.status,
+    totalAmount: row.currentOrderAmount ?? row.originalTotalAmount ?? row.totalAmount ?? 0,
     createdAt: row.createdAt,
     expectedDeliveryDate: row.expectedDeliveryDate,
     store: row.store ? { id: row.store.id, name: row.store.name, no: row.store.no } : null,
@@ -324,6 +325,7 @@ export function projectDeliveryRow(row: any) {
     storeId: row.storeId,
     supplierId: row.supplierId,
     status: row.status,
+    actualTotalAmount: row.actualTotalAmount ?? row.totalAmount ?? 0,
     createdAt: row.createdAt,
     shippedAt: row.shippedAt,
     purchaseOrder: row.purchaseOrder

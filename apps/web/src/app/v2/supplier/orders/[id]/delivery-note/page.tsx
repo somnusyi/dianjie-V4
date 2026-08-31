@@ -95,6 +95,12 @@ function decimalText(value: number | string | null | undefined, fallback = '0') 
   return value == null || value === '' ? fallback : String(value)
 }
 
+function deliveryPdfFilename(order: Pick<Order, 'store' | 'expectedDate' | 'createdAt'>) {
+  const storeName = (order.store?.name || '门店').replace(/[\\/:*?"<>|]/g, '_').trim() || '门店'
+  const date = dayjs(order.expectedDate || order.createdAt).format('YYYYMMDD')
+  return `${storeName}-${date}-配送单.pdf`
+}
+
 /** Convert the aggregate endpoint payload into the unchanged print renderer model. */
 function normalizeOperationGroup(data: OperationGroupResponse): NormalizedOperationGroup {
   const sourceOrders = (Array.isArray(data.orders) ? data.orders : [])
@@ -289,8 +295,8 @@ export default function DeliveryNotePrintPage() {
       ])
       const el = document.getElementById('print-area')
       if (!el) throw new Error('未找到打印区域')
-      // scale=1.5 + JPEG 0.7 — 比原来 PNG×2 小 8-10 倍, 仍然清晰可读
-      const canvas = await html2canvas(el, { scale: 1.5, backgroundColor: '#fff', useCORS: true })
+      // 3x 采样 + PNG，避免文字在导出的 PDF 中发糊或出现 JPEG 压缩块。
+      const canvas = await html2canvas(el, { scale: 3, backgroundColor: '#fff', useCORS: true })
       const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
       const pageW = 210, pageH = 297, margin = 8
       const imgW = pageW - margin * 2
@@ -299,7 +305,7 @@ export default function DeliveryNotePrintPage() {
 
       if (imgH <= pageHContent) {
         // 单页 — 直接整张塞 (最常见)
-        pdf.addImage(canvas.toDataURL('image/jpeg', 0.7), 'JPEG', margin, margin, imgW, imgH)
+        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, margin, imgW, imgH)
       } else {
         // 多页分割 — 切点必须落在行边界上, 避免把一行切两半 (拣货漏行重灾区)
         // 行位置用屏幕坐标量 (CSS px), 再按比例换算到 PDF mm
@@ -327,7 +333,7 @@ export default function DeliveryNotePrintPage() {
           const ctx = pageCanvas.getContext('2d')!
           ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height)
           ctx.drawImage(canvas, 0, srcY, canvas.width, srcH, 0, 0, canvas.width, srcH)
-          pdf.addImage(pageCanvas.toDataURL('image/jpeg', 0.7), 'JPEG', margin, margin, imgW, remainImgH)
+          pdf.addImage(pageCanvas.toDataURL('image/png'), 'PNG', margin, margin, imgW, remainImgH)
           y = cut
         }
         // 页脚: 第 X 页 / 共 Y 页 — 拣货时先对页数, 少一页立刻能发现
@@ -358,7 +364,7 @@ export default function DeliveryNotePrintPage() {
     setUploading(true)
     try {
       const fd = new FormData()
-      fd.append('file', blob, `delivery-note-${isOperationGroup ? 'group' : order.no}.pdf`)
+      fd.append('file', blob, deliveryPdfFilename(order))
       const res = await apiFetch<{url: string}>('/api/upload?category=documents', { method: 'POST', body: fd as any })
       setOssUrl(res.url)
     } catch (e: any) {
@@ -387,7 +393,8 @@ export default function DeliveryNotePrintPage() {
   async function shareOrDownload() {
     if (!pdfBlob || !order) return
     const documentLabel = isOperationGroup ? '集合送货单' : order.no
-    const file = new File([pdfBlob], `送货单-${documentLabel}.pdf`, { type: 'application/pdf' })
+    const filename = deliveryPdfFilename(order)
+    const file = new File([pdfBlob], filename, { type: 'application/pdf' })
     // navigator.canShare 检查是否支持文件分享
     const nav = navigator as any
     if (nav.canShare && nav.canShare({ files: [file] })) {
@@ -400,7 +407,7 @@ export default function DeliveryNotePrintPage() {
     const link = document.createElement('a')
     const url = URL.createObjectURL(pdfBlob)
     link.href = url
-    link.download = `送货单-${documentLabel}.pdf`
+    link.download = filename
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -622,7 +629,7 @@ export default function DeliveryNotePrintPage() {
                        className="flex-1 text-center px-3 py-2 bg-ink text-white rounded-cta text-button">
                       📂 在新窗口打开 PDF
                     </a>
-                    <a href={ossUrl} download={`送货单-${documentLabel}.pdf`}
+                    <a href={ossUrl} download={deliveryPdfFilename(order)}
                        className="flex-1 text-center px-3 py-2 border border-border rounded-cta text-button text-gray2">
                       ⬇ 下载到本地
                     </a>

@@ -39,6 +39,12 @@ function dateText(value: string | null) {
   return value ? dayjs(value).format('YYYY/M/D') : '不限'
 }
 
+function arrivalDateText(day: number) {
+  if (day === 1) return '下单后次日送达'
+  if (day === 2) return '下单后隔日送达'
+  return `下单后第${day}日送达`
+}
+
 type Form = {
   name: string; supplierId: string; deliveryScheduleMode: 'WEEKLY' | 'INTERVAL'; weekdays: number[]; leadDays: string
   deliveryIntervalDays: string; deliveryIntervalStart: string
@@ -217,7 +223,7 @@ export default function DeliveryRulesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-h1">配送班表</h1>
-          <p className="mt-1 text-micro text-gray3">送货日可选择“按间隔”或“按每周”设置，到货期与适用门店统一按班表执行。</p>
+          <p className="mt-1 text-micro text-gray3">送货日可选择“按间隔”或“按每周”设置；第一个送货日按下单后次日送达，到货期与适用门店统一按班表执行。</p>
         </div>
         <button onClick={openCreate} className="h-11 rounded-cta bg-accent px-5 text-button text-white">+ 新建班表</button>
       </div>
@@ -237,7 +243,7 @@ export default function DeliveryRulesPage() {
               <td className="px-4 py-3"><b>{rule.name}</b><div className="text-micro text-gray3">{rule.no}{rule.enforce && <span className="ml-1 rounded bg-red-bg px-1 text-red-fg">强制</span>}</div></td>
               <td className="px-4 py-3">{rule.supplier?.name || '内部供应链总仓'}</td>
               <td className="px-4 py-3"><b>{deliveryScheduleText(rule)}</b>{rule.deliveryIntervalStart && <div className="text-micro text-gray3">从 {dateText(rule.deliveryIntervalStart)} 起算</div>}</td>
-              <td className="px-4 py-3">第 {rule.leadDays} 个送货日</td>
+              <td className="px-4 py-3">{arrivalDateText(rule.leadDays)}</td>
               <td className="px-4 py-3">{rule.orderWindowStart ? `${rule.orderWindowStart}~${rule.orderWindowEnd}` : '全天'}</td>
               <td className="px-4 py-3"><b>{rule.stores.length} 家</b><div className="max-w-52 truncate text-micro text-gray3">{rule.stores.map(item => item.store.name).join('、')}</div></td>
               <td className="px-4 py-3 text-micro">{dateText(rule.effectiveFrom)} ~ {dateText(rule.effectiveTo)}</td>
@@ -301,9 +307,9 @@ export default function DeliveryRulesPage() {
           </div>
 
           <div className="mt-3 grid gap-3 sm:grid-cols-3">
-            <label><span className="mb-1 block text-micro text-gray3">到货期 *</span>
+            <label><span className="mb-1 block text-micro text-gray3">到货日期 *</span>
               <select value={form.leadDays} onChange={event => setForm({ ...form, leadDays: event.target.value })} className="h-11 w-full rounded-cta border border-border bg-white px-3">
-                {[1, 2, 3, 4, 5, 6, 7].map(day => <option key={day} value={day}>下单后第 {day} 个送货日</option>)}
+                {[1, 2, 3, 4, 5, 6, 7].map(day => <option key={day} value={day}>{arrivalDateText(day)}</option>)}
               </select>
             </label>
             <label><span className="mb-1 block text-micro text-gray3">订货开始（可空）</span><input type="time" value={form.orderWindowStart} onChange={event => setForm({ ...form, orderWindowStart: event.target.value })} className="h-11 w-full rounded-cta border border-border px-3" /></label>

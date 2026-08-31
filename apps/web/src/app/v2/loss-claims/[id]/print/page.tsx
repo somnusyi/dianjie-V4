@@ -76,6 +76,7 @@ export default function LossClaimPrintPage() {
   const [claim, setClaim] = useState<LossClaimDetail | null>(null)
   const [error, setError] = useState('')
   const [completedImages, setCompletedImages] = useState(0)
+  const [saving, setSaving] = useState(false)
   const printedAt = useMemo(() => new Date(), [])
 
   useEffect(() => {
@@ -91,6 +92,31 @@ export default function LossClaimPrintPage() {
 
   const printableImages = (claim?.evidenceImages || []).filter(url => !isVideo(url))
   const imageLoading = completedImages < printableImages.length
+
+  async function savePdf() {
+    if (!claim || imageLoading || saving) return
+    setSaving(true)
+    try {
+      const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+        import('html2canvas'), import('jspdf'),
+      ])
+      const element = document.getElementById('loss-claim-print-area')
+      if (!element) throw new Error('未找到报损单内容')
+      const canvas = await html2canvas(element, { scale: 3, backgroundColor: '#fff', useCORS: true })
+      const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
+      const margin = 8
+      const width = 210 - margin * 2
+      const height = canvas.height * width / canvas.width
+      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, margin, width, height)
+      const storeName = (claim.store.name || '门店').replace(/[\\/:*?"<>|]/g, '_')
+      const date = dayjs(claim.createdAt).format('YYYYMMDD')
+      pdf.save(`${storeName}-${date}-报损单.pdf`)
+    } catch (reason: any) {
+      alert(`保存 PDF 失败：${reason?.message || reason}`)
+    } finally {
+      setSaving(false)
+    }
+  }
 
   if (error) {
     return (
@@ -118,12 +144,20 @@ export default function LossClaimPrintPage() {
           disabled={imageLoading}
           className="px-4 py-2 rounded-cta bg-ink text-white text-button disabled:opacity-50"
         >
-          {imageLoading ? `图片加载中 ${completedImages}/${printableImages.length}` : '打印 / 保存 PDF'}
+          {imageLoading ? `图片加载中 ${completedImages}/${printableImages.length}` : '打印'}
         </button>
-        <span className="text-micro text-gray2">建议使用 A4 纵向；手机端可在系统打印中选择“保存为 PDF”</span>
+        <button
+          type="button"
+          onClick={savePdf}
+          disabled={imageLoading || saving}
+          className="px-4 py-2 rounded-cta bg-white border border-border text-button disabled:opacity-50"
+        >
+          {saving ? '生成中…' : '保存 PDF'}
+        </button>
+        <span className="text-micro text-gray2">打印和保存 PDF 已分开</span>
       </div>
 
-      <article className="paper mx-auto bg-white shadow-sm">
+      <article id="loss-claim-print-area" className="paper mx-auto bg-white shadow-sm">
         <header className="doc-header">
           <p className="brand">{claim.tenant.name}</p>
           <h1>{claim.store.name} · {claim.isManual ? '内部报损单' : '到货差异单'}</h1>

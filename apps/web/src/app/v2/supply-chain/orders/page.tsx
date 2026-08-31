@@ -225,6 +225,7 @@ export default function InternalSupplyChainOrdersPage() {
                     <th className="px-4 py-3">期望到货日</th>
                     <th className="px-4 py-3">状态</th>
                     <th className="px-4 py-3">商品摘要</th>
+                    <th className="px-4 py-3 text-right">金额</th>
                     <th className="px-4 py-3 text-right">操作</th>
                   </tr>
                 </thead>
@@ -238,12 +239,14 @@ export default function InternalSupplyChainOrdersPage() {
                       <td className="px-4 py-3 font-num text-gray2">{orderDeliveryDateText(order.expectedDeliveryDate)}</td>
                       <td className="px-4 py-3"><Chip tone={orderStatusTone(order.status)}>{formatOrderStatusLabel(order.status)}</Chip></td>
                       <td className="px-4 py-3 text-gray2">{orderItemSummary(order)}</td>
+                      <td className="px-4 py-3 text-right font-num">¥{Number(order.totalAmount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       <td className="px-4 py-3 text-right">
                         <a href={`/v2/supply-chain/fulfillment/${order.id}`} className="text-button text-amber-fg">查看履约 ›</a>
                       </td>
                     </tr>
                   ))}
                 </tbody>
+                <tfoot className="border-t border-border bg-bg"><tr><td colSpan={7} className="px-4 py-3 text-right font-semibold">合计</td><td className="px-4 py-3 text-right font-num font-semibold">¥{orders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td /></tr></tfoot>
               </table>
             </div>
           </div>

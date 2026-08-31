@@ -464,10 +464,10 @@ describe('projectDeliveryRow', () => {
     expect(projected.items[0].productNameSnapshot).toBe('白菜')
   })
 
-  it('excludes financial and write-operation fields', () => {
+  it('excludes write-operation fields while exposing delivery amount', () => {
     const projected = projectDeliveryRow(fullRow)
     expect((projected as any).receipt).toBeUndefined()
-    expect((projected as any).actualTotalAmount).toBeUndefined()
+    expect(projected.actualTotalAmount).toBe(980)
   })
 
   it('falls back to product relation when snapshot is missing', () => {

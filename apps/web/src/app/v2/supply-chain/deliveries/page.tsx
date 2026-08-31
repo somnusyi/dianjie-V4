@@ -226,6 +226,7 @@ export default function InternalSupplyChainDeliveriesPage() {
                     <th className="px-4 py-3">发货时间</th>
                     <th className="px-4 py-3">状态</th>
                     <th className="px-4 py-3">商品摘要</th>
+                    <th className="px-4 py-3 text-right">金额</th>
                     <th className="px-4 py-3 text-right">操作</th>
                   </tr>
                 </thead>
@@ -240,6 +241,7 @@ export default function InternalSupplyChainDeliveriesPage() {
                       <td className="px-4 py-3 font-num text-gray2">{orderDeliveryDateText(delivery.shippedAt)}</td>
                       <td className="px-4 py-3"><Chip tone={deliveryStatusTone(delivery.status)}>{formatDeliveryStatusLabel(delivery.status)}</Chip></td>
                       <td className="px-4 py-3 text-gray2">{deliveryItemSummary(delivery)}</td>
+                      <td className="px-4 py-3 text-right font-num">¥{Number(delivery.actualTotalAmount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       <td className="px-4 py-3 text-right">
                         {delivery.purchaseOrder?.id
                           ? <a href={`/v2/supply-chain/fulfillment/${delivery.purchaseOrder.id}`} className="text-button text-amber-fg">查看订单 ›</a>
@@ -248,6 +250,7 @@ export default function InternalSupplyChainDeliveriesPage() {
                     </tr>
                   ))}
                 </tbody>
+                <tfoot className="border-t border-border bg-bg"><tr><td colSpan={8} className="px-4 py-3 text-right font-semibold">合计</td><td className="px-4 py-3 text-right font-num font-semibold">¥{deliveries.reduce((sum, delivery) => sum + Number(delivery.actualTotalAmount || 0), 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td /></tr></tfoot>
               </table>
             </div>
           </div>

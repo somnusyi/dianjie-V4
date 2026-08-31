@@ -214,7 +214,7 @@ export default function DeliveryNotePrintPage() {
   const params = useParams() as any
   const router = useRouter()
   const id = String(params.id || '')
-  const isOperationGroup = id.startsWith('og_')
+  const isOperationGroup = /^og_[a-f0-9]{24}$/.test(id)
   const [order, setOrder] = useState<Order | null>(null)
   const [groupMembers, setGroupMembers] = useState<NormalizedOperationGroup['members'] | null>(null)
   const [error, setError] = useState<string | null>(null)

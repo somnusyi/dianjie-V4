@@ -271,9 +271,10 @@ export async function loadOperationGroupDetails(
     source = 'accepted'
   } else {
     const candidateRows = await prisma.purchaseOrder.findMany({
-      // buildOperationGroups only considers untouched submitted orders; keep
-      // historical rows out of this read path.
-      where: { ...scope, status: 'SUBMITTED' },
+      // Keep the same boundary rows used by the list and confirm endpoints.
+      // A processed order in the same bucket must prevent a pending window
+      // from reaching across it.
+      where: scope,
       select: {
         id: true, no: true, storeId: true, supplierId: true, expectedDate: true,
         status: true, createdAt: true, updatedAt: true, submittedAt: true,

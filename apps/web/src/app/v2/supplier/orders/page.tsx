@@ -8,6 +8,8 @@ import { useEffect, useState } from 'react'
 import { BottomNav, Chip, ProgressDots } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch, getUser } from '@/lib/v2-auth'
+import { clientRequestId } from '@/lib/client-id'
+import { buildFulfillmentGroups, type FulfillmentGroup, type OperationGroup } from '@/lib/fulfillment-groups'
 import {
   SUPPLIER_MONEY_TERMS,
   supplierDeliveryStatusMeta,
@@ -25,6 +27,9 @@ type Order = {
   expectedDate: string; createdAt: string
   shippedAt: string | null
   store: { id: string; name: string }
+  supplier?: { id: string; name: string }
+  operationGroup?: OperationGroup | null
+  operationGroupPosition?: number | null
   items: { id: string; quantity: string; unitPrice: string; product?: { name: string; unit: string } }[]
   lossClaims?: { id: string; status: string; totalLossAmount: string }[]
   deliveries?: { id: string; status: string; actualTotalAmount: string }[]
@@ -58,6 +63,105 @@ type LossClaim = {
   deliveryOrder?: { id: string; no: string } | null
   receipt?: { id: string; no: string } | null
   items: { product: { name: string; unit: string; spec?: string | null }; orderedQty: string; receivedQty: string; lossQty: string; lossAmount: string }[]
+}
+
+
+type ProductionFulfillmentGroup = Omit<FulfillmentGroup, 'orders'> & { orders: Order[] }
+
+function operationGroupWindow(group: ProductionFulfillmentGroup) {
+  const times = group.orders
+    .map(order => Date.parse(order.createdAt))
+    .filter(value => Number.isFinite(value))
+  if (times.length === 0) return null
+  const format = (value: number) => new Date(value).toLocaleString('zh-CN', {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  })
+  const first = Math.min(...times)
+  const last = Math.max(...times)
+  return first === last ? format(first) : `${format(first)}—${format(last)}`
+}
+
+function OperationGroupCard({
+  group,
+  orderBase,
+  submitting,
+  onBatchConfirm,
+}: {
+  group: ProductionFulfillmentGroup
+  orderBase: string
+  submitting: string | null
+  onBatchConfirm: (group: ProductionFulfillmentGroup) => void
+}) {
+  const first = group.orders[0]
+  const metadata = group.metadata
+  if (!first || !metadata) return null
+  const memberCount = Math.max(metadata.memberCount || 0, group.orders.length)
+  const window = operationGroupWindow(group)
+  const groupSubmitting = submitting === `group:${metadata.id}`
+  const memberNos = metadata.memberOrderNos || group.orders.map(order => order.no)
+  const missingCount = Math.max(0, memberCount - group.orders.length)
+
+  return (
+    <li
+      onClick={() => { location.href = `${orderBase}/${first.id}` }}
+      className="relative overflow-hidden rounded-card border border-border bg-white cursor-pointer hover:bg-bg-warm transition-colors"
+    >
+      <div className="border-b border-border bg-bg/40 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Chip tone="orange">同店两小时集合</Chip>
+          <span className="text-caption text-gray2">{memberCount} 张待接单订单</span>
+          {window && <span className="text-micro text-gray3 ml-auto">下单时间 {window}</span>}
+        </div>
+        <div className="mt-1 text-caption text-gray2">
+          {first.store?.name || '未知门店'}{first.supplier?.name ? ` · 供应商：${first.supplier.name}` : ''} · 期望到货：{first.expectedDate ? dayjs(first.expectedDate).format('MM/DD') : '—'}
+        </div>
+      </div>
+
+      <div className="divide-y divide-border/70 px-4">
+        {memberNos.map((no, index) => {
+          const order = group.orders.find(row => row.no === no) || group.orders[index]
+          if (!order) {
+            return (
+              <div key={`${metadata.id}:${no}:${index}`} className="py-3 text-caption text-gray3">
+                订单号：{no} · 下单日期：—
+              </div>
+            )
+          }
+          const status = supplierOrderStatusMeta(order.status)
+          const amount = Number(order.currentOrderAmount ?? order.originalTotalAmount ?? order.totalAmount ?? 0)
+          const itemNames = (order.items || []).map(item => item.product?.name).filter(Boolean) as string[]
+          return (
+            <div key={`${metadata.id}:${order.id}`} className="py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Chip tone={status.tone}>{status.label}</Chip>
+                <span className="font-num text-micro text-gray3">#{order.no}</span>
+                <span className="text-micro text-gray3 ml-auto">{timeAgo(order.createdAt)}</span>
+              </div>
+              <div className="mt-1 flex items-center justify-between gap-2">
+                <span className="text-h2">{order.store?.name || first.store?.name || '未知门店'}</span>
+                <span className="font-num text-h2">¥{amount.toLocaleString()}</span>
+              </div>
+              <p className="text-caption text-gray2 mt-0.5">
+                {itemNames.length > 0 ? `${itemNames.slice(0, 3).join('、')}${itemNames.length > 3 ? ` 等 ${itemNames.length} 项` : ''}` : `${order.items?.length || 0} 项商品`} · 下单日期 {new Date(order.createdAt).toLocaleString('zh-CN', { hour12: false })}
+              </p>
+            </div>
+          )
+        })}
+        {missingCount > 0 && <div className="py-2 text-micro text-gray3">还有 {missingCount} 张订单将在批量操作时一并处理</div>}
+      </div>
+
+      <div className="border-t border-border px-4 py-3" onClick={event => event.stopPropagation()}>
+        <button
+          type="button"
+          disabled={groupSubmitting || !group.canBatchConfirm}
+          onClick={() => onBatchConfirm(group)}
+          className="block w-full rounded-cta bg-ink py-2.5 text-center text-button text-white disabled:opacity-50"
+        >
+          {groupSubmitting ? '批量接单中…' : `批量接单（${memberCount}）`}
+        </button>
+      </div>
+    </li>
+  )
 }
 
 export default function SupplierOrdersPage() {
@@ -111,6 +215,38 @@ export default function SupplierOrdersPage() {
       setOrdersTotal(Number((o as any).total ?? (o as any).items?.length ?? 0))
       setClaimsTotal(Number((c as any).total ?? (c as any).items?.length ?? 0))
     } catch (e: any) { setError(e.message || '加载失败') }
+  }
+
+  function confirmOperationGroup(group: ProductionFulfillmentGroup) {
+    const metadata = group.metadata
+    if (!metadata || !group.canBatchConfirm || submitting) return
+    const memberIds = metadata.memberOrderIds?.length
+      ? metadata.memberOrderIds
+      : group.orders.map(order => order.id)
+    const memberCount = metadata.memberCount || memberIds.length
+    const storeName = group.orders[0]?.store?.name || '该门店'
+    openConfirm({
+      title: `批量接单 ${memberCount} 张订单?`,
+      body: `${storeName} 的同店两小时订单将按原订单逐笔接单。\n不会创建新的订单号，也不会合并或改写原订单。`,
+      confirmLabel: '确认批量接单',
+      tone: 'primary',
+      onConfirm: async () => {
+        setSubmitting(`group:${metadata.id}`)
+        setError(null)
+        try {
+          await apiFetch(`/api/orders/operation-groups/${encodeURIComponent(metadata.id)}/confirm`, {
+            method: 'POST',
+            body: JSON.stringify({ orderIds: memberIds, idempotencyKey: clientRequestId() }),
+          })
+          await load()
+        } catch (e: any) {
+          setError(e.message || '批量接单失败')
+          throw e
+        } finally {
+          setSubmitting(null)
+        }
+      },
+    })
   }
 
   async function loadDeliveries(criteria = appliedSearch) {
@@ -256,6 +392,16 @@ export default function SupplierOrdersPage() {
     return false
   }
   const visible = (orders || []).filter(o => statusInTab(o.status, filter))
+  // Only server-authored operationGroup metadata changes the production list.
+  // Local fallback grouping is intentionally flattened so an older API cannot
+  // silently change the established single-order workflow.
+  const operationGroups = buildFulfillmentGroups<Order>(visible) as ProductionFulfillmentGroup[]
+  const displayGroups: Array<{ group: ProductionFulfillmentGroup | null; order: Order | null }> = []
+  for (const group of operationGroups) {
+    const hasServerGroup = Boolean(group.metadata?.id && (group.metadata.memberCount || group.orders.length) > 1)
+    if (hasServerGroup) displayGroups.push({ group, order: null })
+    else group.orders.forEach(order => displayGroups.push({ group: null, order }))
+  }
   const hasMoreOrders = orders !== null && orders.length < ordersTotal
   const hasMoreDeliveries = deliveries !== null && deliveries.length < deliveriesTotal
   const hasMoreClaims = claims !== null && claims.length < claimsTotal
@@ -447,7 +593,19 @@ export default function SupplierOrdersPage() {
         {visible.length === 0 && orders !== null && (
           <li className="text-caption text-gray3 text-center py-12">暂无{filter}订单</li>
         )}
-        {visible.map(o => {
+        {displayGroups.map(entry => {
+          if (entry.group) {
+            return (
+              <OperationGroupCard
+                key={`group:${entry.group.id}`}
+                group={entry.group}
+                orderBase={orderBase}
+                submitting={submitting}
+                onBatchConfirm={confirmOperationGroup}
+              />
+            )
+          }
+          const o = entry.order!
           const status = supplierOrderStatusMeta(o.status)
           const tone = status.tone
           const stepIdx = Math.max(0, status.progressStep - 1)

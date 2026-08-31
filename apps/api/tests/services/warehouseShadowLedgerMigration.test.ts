@@ -72,7 +72,9 @@ describe('warehouse shadow ledger migration contract', () => {
     expect(orderRoute).toContain('await reserveWarehouseLedgerForOrder(tx')
     expect(orderRoute.match(/await releaseWarehouseLedgerForOrder\(tx/g)).toHaveLength(2)
     expect(orderRoute).toContain('await consumeWarehouseLedgerForShipment(tx')
-    expect(orderRoute.match(/void postShadowWarehouseLedger\(\{/g)).toHaveLength(4)
+    // The existing single-order path remains wired, plus the new batch path
+    // posts one shadow reservation per member order.
+    expect(orderRoute.match(/void postShadowWarehouseLedger\(\{/g)).toHaveLength(5)
     expect(orderRoute).toContain("ledgerMode?.inventoryMode === 'SHADOW'")
     expect(orderRoute).toContain("return { warehouseId: null, inventoryMode: 'OFF' as const }")
     expect(orderRoute).toContain('const shadowPostingQueues = new Map<string, Promise<void>>()')

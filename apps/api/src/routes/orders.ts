@@ -63,6 +63,7 @@ import {
   loadOrderDraftProducts,
   validateOrderDraftLines,
 } from '../services/orderDraftValidation'
+import { buildOperationGroups, type OperationGroupCandidate } from '../services/orderOperationGroups'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
 const PURCHASE_QUANTITY_MAX = 99_999_999.99
@@ -74,6 +75,25 @@ export function canOperateSupplyOrder(role: string | undefined | null): boolean 
 }
 
 const shadowPostingQueues = new Map<string, Promise<void>>()
+
+const operationGroupIdempotencyCache = new Map<string, {
+  response: Record<string, unknown>
+  expiresAt: number
+}>()
+
+function getOperationGroupReplay(key: string) {
+  const cached = operationGroupIdempotencyCache.get(key)
+  if (!cached) return null
+  if (cached.expiresAt <= Date.now()) {
+    operationGroupIdempotencyCache.delete(key)
+    return null
+  }
+  return cached.response
+}
+
+function setOperationGroupReplay(key: string, response: Record<string, unknown>) {
+  operationGroupIdempotencyCache.set(key, { response, expiresAt: Date.now() + 10 * 60_000 })
+}
 
 async function postShadowWarehouseLedger(input: {
   tenantId: string
@@ -201,6 +221,13 @@ function orderCreateRequestFingerprint(input: {
 const chefAckSchema = z.object({
   images: z.array(z.string().trim().min(1, '验收照片地址不能为空')).min(1, '请至少上传 1 张验收照片').max(5, '验收单最多 5 张照片'),
   note: z.string().max(500, '备注最长 500 字').optional(),
+}).strict()
+
+const operationGroupConfirmSchema = z.object({
+  // Optional subset allows the UI to retry only visible rows; when omitted,
+  // the server confirms every current member of the computed group.
+  orderIds: z.array(z.string().min(1)).min(1).max(100).optional(),
+  idempotencyKey: z.string().trim().min(8).max(80).optional(),
 }).strict()
 
 const deliveryReceiveSchema = z.object({
@@ -358,7 +385,270 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       }),
       prisma.purchaseOrder.count({ where }),
     ])
-    return { items, total, page: p, pageSize: ps }
+
+    // Operation groups are read-time metadata only. Query a lightweight
+    // tenant-scoped set so pagination/keyword filters cannot split a group.
+    // Only pending orders can become members; no new order number is created.
+    let operationMemberships = new Map<string, { operationGroup: any; operationGroupPosition: number | null }>()
+    if (canOperateSupplyOrder(role)) {
+      const groupWhere: any = { ...supplyDataReadScope(req.user) }
+      if (q.storeId) groupWhere.storeId = q.storeId
+      if (q.supplierId && !isSupplierRole(role)) groupWhere.supplierId = q.supplierId
+      const groupCandidates = await prisma.purchaseOrder.findMany({
+        where: groupWhere,
+        select: {
+          id: true, no: true, storeId: true, supplierId: true, expectedDate: true,
+          status: true, createdAt: true, updatedAt: true, submittedAt: true,
+          revisions: { where: { status: 'PENDING' }, select: { id: true } },
+          events: { orderBy: { occurredAt: 'desc' }, take: 1, select: { occurredAt: true } },
+        },
+      })
+      operationMemberships = buildOperationGroups(groupCandidates.map(candidate => ({
+        id: candidate.id, no: candidate.no, storeId: candidate.storeId,
+        supplierId: candidate.supplierId, expectedDate: candidate.expectedDate,
+        status: candidate.status, createdAt: candidate.createdAt, updatedAt: candidate.updatedAt,
+        submittedAt: candidate.submittedAt,
+        lastOperationAt: candidate.events[0]?.occurredAt || null,
+        hasPendingRevision: candidate.revisions.length > 0,
+      } as OperationGroupCandidate)))
+    }
+    const decoratedItems = items.map((item: any) => {
+      const membership = operationMemberships.get(item.id)
+      return {
+        ...item,
+        operationGroup: membership?.operationGroup || null,
+        operationGroupPosition: membership?.operationGroupPosition ?? null,
+      }
+    })
+    return { items: decoratedItems, total, page: p, pageSize: ps }
+  })
+
+  // ── 同店两小时窗口批量接单（只建立操作视图，不合并/改写原单） ─────────────
+  app.post('/operation-groups/:groupId/confirm', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
+    const parsed = operationGroupConfirmSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const { tenantId, userId, role } = req.user
+    if (!canOperateSupplyOrder(role)) return reply.status(403).send({ error: '无权限批量接单' })
+
+    const groupIdParam = String((req.params as any).groupId || '')
+    if (!/^og_[a-f0-9]{24}$/.test(groupIdParam)) {
+      return reply.status(400).send({ error: '操作组标识无效' })
+    }
+    const idempotencyKey = parsed.data.idempotencyKey
+    const cacheKey = idempotencyKey ? `${tenantId}:${groupIdParam}:${idempotencyKey}` : null
+    const requestedFromBody = parsed.data.orderIds ? [...new Set(parsed.data.orderIds)] : null
+    if (parsed.data.orderIds && requestedFromBody!.length !== parsed.data.orderIds.length) {
+      return reply.status(400).send({ error: '同一订单不能在批量接单请求中重复出现' })
+    }
+    if (cacheKey) {
+      const replay = getOperationGroupReplay(cacheKey)
+      if (replay) {
+        const replayIds = Array.isArray(replay.confirmedOrderIds) ? replay.confirmedOrderIds : []
+        if (requestedFromBody && JSON.stringify([...requestedFromBody].sort()) !== JSON.stringify([...replayIds].sort())) {
+          return reply.status(409).send({ error: '同一幂等键不能用于不同的操作组成员' })
+        }
+        return replay
+      }
+    }
+
+    // Recompute the group from current database state.  This makes the opaque
+    // id unforgeable for practical purposes and ensures an accepted order is
+    // removed from the group before any write is attempted.
+    const groupScope: any = { ...supplyDataReadScope(req.user) }
+    const candidateRows = await prisma.purchaseOrder.findMany({
+      where: groupScope,
+      select: {
+        id: true, no: true, storeId: true, supplierId: true, expectedDate: true,
+        status: true, createdAt: true, updatedAt: true, submittedAt: true,
+        revisions: { where: { status: 'PENDING' }, select: { id: true } },
+        events: { orderBy: { occurredAt: 'desc' }, take: 1, select: { occurredAt: true } },
+      },
+    })
+    const memberships = buildOperationGroups(candidateRows.map(candidate => ({
+      id: candidate.id, no: candidate.no, storeId: candidate.storeId,
+      supplierId: candidate.supplierId, expectedDate: candidate.expectedDate,
+      status: candidate.status, createdAt: candidate.createdAt, updatedAt: candidate.updatedAt,
+      submittedAt: candidate.submittedAt,
+      lastOperationAt: candidate.events[0]?.occurredAt || null,
+      hasPendingRevision: candidate.revisions.length > 0,
+    } as OperationGroupCandidate)))
+    const group = [...memberships.values()]
+      .map(membership => membership.operationGroup)
+      .find(candidate => candidate?.id === groupIdParam) || null
+
+    // A durable replay survives a process restart when the caller supplies the
+    // same member ids and key.  Events are immutable and no order is changed.
+    if (!group && idempotencyKey && requestedFromBody) {
+      const acceptedEvents = await prisma.purchaseOrderEvent.findMany({
+        where: { tenantId, purchaseOrderId: { in: requestedFromBody }, eventType: 'ACCEPTED' },
+        select: { purchaseOrderId: true, metadata: true },
+      })
+      const replayedIds = acceptedEvents
+        .filter(event => {
+          const metadata = event.metadata as Record<string, unknown> | null
+          return metadata?.operationGroupId === groupIdParam
+            && metadata?.operationGroupRequestKey === idempotencyKey
+        })
+        .map(event => event.purchaseOrderId)
+      if (replayedIds.length === requestedFromBody.length
+        && requestedFromBody.every(id => replayedIds.includes(id))) {
+        const replay = { success: true, groupId: groupIdParam, confirmedOrderIds: requestedFromBody, alreadyProcessed: true }
+        setOperationGroupReplay(cacheKey!, replay)
+        return replay
+      }
+    }
+    if (!group) return reply.status(404).send({ error: '操作组不存在、已被处理或已失效' })
+
+    const requestedIds = requestedFromBody || [...group.memberOrderIds]
+    const unknownIds = requestedIds.filter(id => !group.memberOrderIds.includes(id))
+    if (unknownIds.length > 0) {
+      return reply.status(409).send({ error: '请求包含不属于当前操作组的订单', unknownOrderIds: unknownIds, operationGroup: group })
+    }
+    // A collection is one atomic warehouse action.  Do not allow a caller to
+    // confirm only part of it and leave the remaining members looking like a
+    // still-actionable group in another browser tab.
+    if (requestedFromBody) {
+      const expectedIds = [...group.memberOrderIds].sort()
+      const actualIds = [...requestedIds].sort()
+      if (expectedIds.length !== actualIds.length || expectedIds.some((id, index) => id !== actualIds[index])) {
+        return reply.status(409).send({ error: '集合必须整组接单', operationGroup: group })
+      }
+    }
+    if (requestedIds.length === 0) return reply.status(400).send({ error: '至少选择一张订单' })
+    // The group is available as soon as it is formed. The two-hour rule is a
+    // look-back window, not a waiting/idle requirement.
+    const blocked = requestedIds.filter(id => group.blockedOrderIds.includes(id))
+    if (blocked.length > 0) {
+      return reply.status(409).send({
+        error: '操作组中有待门店确认的改单，暂不能批量接单',
+        blockedOrderIds: blocked,
+        operationGroup: group,
+      })
+    }
+
+    const scopedSupplierId = requireSupplierBinding(role, req.user.supplierId)
+    const orderRows = await prisma.purchaseOrder.findMany({
+      where: {
+        tenantId, id: { in: requestedIds }, status: 'SUBMITTED',
+        ...(scopedSupplierId ? { supplierId: scopedSupplierId } : {}),
+      },
+      include: {
+        supplier: { select: { id: true, name: true, inventoryMode: true, sourceType: true } },
+        revisions: { where: { status: 'PENDING' }, select: { id: true } },
+        items: { where: { isActive: true }, include: { product: { select: { name: true, unit: true } } } },
+      },
+    })
+    const orderById = new Map(orderRows.map(order => [order.id, order]))
+    if (orderRows.length !== requestedIds.length) {
+      const observed = await prisma.purchaseOrder.findMany({
+        where: { tenantId, id: { in: requestedIds } },
+        select: { id: true, status: true },
+      })
+      const conflicts = requestedIds
+        .filter(id => !orderById.has(id))
+        .map(id => ({ id, status: observed.find(order => order.id === id)?.status || 'NOT_FOUND' }))
+      return reply.status(409).send({ error: '操作组中有订单已被处理，请刷新后重试', conflicts, operationGroup: group })
+    }
+    if (orderRows.some(order => order.revisions.length > 0)) {
+      const blockedRows = orderRows.filter(order => order.revisions.length > 0).map(order => order.id)
+      return reply.status(409).send({ error: '订单有待门店确认的修改，确认完成后才能接单', blockedOrderIds: blockedRows, operationGroup: group })
+    }
+
+    // The grouping key guarantees one supplier; still verify it before touching
+    // inventory so a corrupted legacy row fails closed.
+    const sortedOrders = requestedIds.map(id => orderById.get(id)!).sort((a, b) => a.id.localeCompare(b.id))
+    const supplierId = sortedOrders[0].supplierId
+    if (sortedOrders.some(order => order.supplierId !== supplierId)) {
+      return reply.status(409).send({ error: '操作组包含多个供应商，不能合并操作', operationGroup: group })
+    }
+    const supplier = sortedOrders[0].supplier
+    const isWarehouseOrder = supplier.sourceType === 'HEADQ_WAREHOUSE'
+    const ledgerMode = isWarehouseOrder ? await safeWarehouseLedgerMode(tenantId, req.log) : null
+    const warehouseLinesByOrder = new Map<string, any[]>()
+    for (const order of sortedOrders) {
+      warehouseLinesByOrder.set(order.id, order.items.map(item => ({
+        purchaseOrderItemId: item.id, productId: item.productId, quantity: item.quantity,
+        productName: item.product?.name, productUnit: item.product?.unit,
+        orderUnitSnapshot: item.orderUnitSnapshot, inventoryUnitSnapshot: item.inventoryUnitSnapshot,
+        inventoryUnitsPerOrderUnitSnapshot: item.inventoryUnitsPerOrderUnitSnapshot,
+      })))
+    }
+
+    await prisma.$transaction(async tx => {
+      // Serialise group operations.  Individual /:id/confirm requests still
+      // win by rowVersion CAS; if one wins, this whole batch rolls back.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`operation-group:${tenantId}:${groupIdParam}`}))`
+      for (const order of sortedOrders) {
+        const updated = await tx.purchaseOrder.updateMany({
+          where: { id: order.id, tenantId, status: 'SUBMITTED', rowVersion: order.rowVersion },
+          data: { status: 'CONFIRMED', rowVersion: { increment: 1 } },
+        })
+        if (updated.count === 0) throw { statusCode: 409, message: '操作组中订单状态已变化，请刷新后重试' }
+        if (!isWarehouseOrder && supplier.inventoryMode === 'STRICT') {
+          await reserveSupplierStockForOrder(tx, {
+            tenantId, supplierId: order.supplierId, purchaseOrderId: order.id,
+            lines: order.items.map(item => ({
+              purchaseOrderItemId: item.id, productId: item.productId,
+              quantity: item.quantity, productName: item.product?.name,
+            })),
+          })
+        }
+        if (isWarehouseOrder && ledgerMode?.inventoryMode === 'STRICT') {
+          await reserveWarehouseLedgerForOrder(tx, {
+            tenantId, purchaseOrderId: order.id, userId,
+            lines: warehouseLinesByOrder.get(order.id) || [],
+          })
+        }
+        await tx.purchaseOrderEvent.create({
+          data: {
+            tenantId, purchaseOrderId: order.id, eventType: 'ACCEPTED', actorId: userId, actorRole: role,
+            fromStatus: 'SUBMITTED', toStatus: 'CONFIRMED', requestId: req.id, ip: req.ip,
+            metadata: {
+              operationGroupId: groupIdParam,
+              operationGroupRequestKey: idempotencyKey || null,
+              operationGroupMemberIndex: group.memberOrderIds.indexOf(order.id),
+            },
+          },
+        })
+        await tx.opLog.create({
+          data: {
+            tenantId, userId, action: `供应商批量接单 (${groupIdParam})`, target: order.no,
+            entityType: 'PurchaseOrder', targetId: order.id,
+            metadata: { operationGroupId: groupIdParam, operationGroupRequestKey: idempotencyKey || null },
+          },
+        })
+      }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+
+    if (isWarehouseOrder && ledgerMode?.inventoryMode === 'SHADOW') {
+      for (const order of sortedOrders) {
+        void postShadowWarehouseLedger({
+          tenantId, userId, sourceId: order.id, orderingKey: order.id,
+          eventType: 'ORDER_RESERVED', payload: { purchaseOrderId: order.id, operationGroupId: groupIdParam },
+          log: req.log,
+          work: () => postWarehouseReservationForOrder({
+            tenantId, purchaseOrderId: order.id, userId, lines: warehouseLinesByOrder.get(order.id) || [],
+          }),
+        })
+      }
+    }
+    for (const order of sortedOrders) {
+      void notifyOrderConfirmed(tenantId, order.no, supplier.name || '', order.storeId)
+      notify({
+        tenantId, event: 'PO_ACCEPTED', eventKey: `PO:${order.id}:ACCEPTED`,
+        payload: { orderId: order.id, no: order.no, supplierName: supplier.name || '', operationGroupId: groupIdParam },
+        toStoreIds: order.storeId ? [order.storeId] : undefined,
+      })
+    }
+    const response = {
+      success: true,
+      groupId: groupIdParam,
+      confirmedOrderIds: requestedIds,
+      confirmedOrderNos: requestedIds.map(id => orderById.get(id)?.no).filter(Boolean),
+      memberCount: requestedIds.length,
+    }
+    if (cacheKey) setOperationGroupReplay(cacheKey, response)
+    return response
   })
 
   // ── 详情 ──────────────────────────────────────────

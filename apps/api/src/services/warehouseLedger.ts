@@ -1520,11 +1520,14 @@ export async function consumeWarehouseLedgerForShipment(
   tx: Prisma.TransactionClient,
   input: {
     tenantId: string
+    warehouseId?: string | null
     purchaseOrderId: string
     deliveryOrderId: string
     orderNo: string
     userId: string
     effectiveAt?: Date
+    /** Post-shipment quantity/add-item mutations need a distinct append-only movement. */
+    idempotencyKeySuffix?: string
     lines: FrozenOrderInventoryLine[]
   },
 ) {
@@ -1535,7 +1538,7 @@ export async function consumeWarehouseLedgerForShipment(
   if (!orderScope || orderScope.supplier.sourceType !== 'HEADQ_WAREHOUSE') {
     throw businessError('该订单不是总仓履约订单，不能记总仓出库', 409)
   }
-  const warehouseId = await resolveTenantWarehouseId(tx, input.tenantId, undefined)
+  const warehouseId = await resolveTenantWarehouseId(tx, input.tenantId, input.warehouseId)
   const mode = await warehouseMode(tx, input.tenantId, warehouseId)
   const lines = input.lines.map(line => {
     const resolved = resolveFrozenOrderInventoryLine(line)
@@ -1563,7 +1566,9 @@ export async function consumeWarehouseLedgerForShipment(
   const effectiveAt = input.effectiveAt || new Date()
 
   for (const line of lines) {
-    const idempotencyKey = `delivery-outbound:${input.deliveryOrderId}:${line.purchaseOrderItemId}`
+    const suffix = String(input.idempotencyKeySuffix || '').trim()
+    const idempotencyKey = `delivery-outbound:${input.deliveryOrderId}:${line.purchaseOrderItemId}${suffix ? `:${suffix}` : ''}`
+    if (idempotencyKey.length > 160) throw businessError('总仓出库幂等键过长', 400)
     const existingMovement = await tx.warehouseLedgerMovement.findUnique({
       where: { tenantId_warehouseId_idempotencyKey: { tenantId: input.tenantId, warehouseId, idempotencyKey } },
     })
@@ -1654,6 +1659,7 @@ export async function consumeWarehouseLedgerForShipment(
 
 export async function postWarehouseShipment(input: {
   tenantId: string
+  warehouseId?: string | null
   purchaseOrderId: string
   deliveryOrderId: string
   orderNo: string
@@ -2230,7 +2236,16 @@ export async function reverseDeliveryOutboundInTransaction(
   let restore = reverseInventoryQty
   for (const allocation of allocations) {
     if (restore.lte(0)) break
-    const giveBack = Prisma.Decimal.min(restore, allocation.quantity).toDecimalPlaces(QTY_DP)
+    const lot = await tx.warehouseLedgerLot.findUnique({
+      where: { id: allocation.lotId },
+      select: { initialQty: true, remainingQty: true },
+    })
+    if (!lot) throw businessError('总仓出库批次不存在，无法安全冲回', 409)
+    // A movement can be partially reversed more than once. Restore only the
+    // lot's current capacity; otherwise replaying different partial reversals
+    // could push remainingQty above initialQty.
+    const capacity = Prisma.Decimal.max(ZERO, lot.initialQty.minus(lot.remainingQty)).toDecimalPlaces(QTY_DP)
+    const giveBack = Prisma.Decimal.min(restore, allocation.quantity, capacity).toDecimalPlaces(QTY_DP)
     if (giveBack.lte(0)) continue
     await tx.warehouseLedgerLot.update({
       where: { id: allocation.lotId },

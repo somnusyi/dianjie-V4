@@ -3,10 +3,14 @@ import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { isStoreScoped, isSupplierRole, resolveActiveStore } from '../lib/auth-scope'
 import { requireSupplierCapability } from '../lib/supplier-access'
-import { allowsSupplyDataRead, supplyDataReadScope } from '../lib/internal-supply-chain-access'
+import { allowsSupplyDataRead, hasInternalSupplyChainCapability, supplyDataReadScope } from '../lib/internal-supply-chain-access'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 import { calendarDateSchema } from '../lib/calendar-date'
-import { removeDeliveryItemInTransaction } from '../services/deliveryItemRemoval'
+import {
+  addDeliveryItemInTransaction,
+  changeDeliveryItemQuantityInTransaction,
+  removeDeliveryItemInTransaction,
+} from '../services/deliveryItemRemoval'
 
 const listQuerySchema = z.object({
   status: z.enum(['DRAFT', 'SHIPPED', 'DELIVERED', 'RECEIVED', 'CANCELLED']).optional(),
@@ -21,6 +25,31 @@ const listQuerySchema = z.object({
 }).refine(q => !q.dateFrom || !q.dateTo || q.dateFrom <= q.dateTo, {
   message: '开始日期不能晚于结束日期',
   path: ['dateFrom'],
+})
+
+const deliveryItemQuantitySchema = z.coerce.number()
+  .positive('新增商品数量必须大于 0')
+  .max(99_999_999.99, '新增商品数量超过系统上限')
+  .refine(value => Math.abs(value * 100 - Math.round(value * 100)) < 0.000001, '数量最多保留 2 位小数')
+
+export const deliveryAddItemBodySchema = z.object({
+  productId: z.string().trim().min(1).optional(),
+  customProduct: z.object({
+    name: z.string().trim().min(1, '商品名称必填').max(80, '商品名称不能超过 80 字'),
+    unit: z.string().trim().min(1, '商品单位必填').max(16, '商品单位不能超过 16 字')
+      .refine(value => !/^\d/.test(value), '单位不能以数字开头'),
+    unitPrice: z.coerce.number()
+      .nonnegative('商品价格不能为负')
+      .max(99_999_999.99, '商品价格超过系统上限')
+      .refine(value => Math.abs(value * 100 - Math.round(value * 100)) < 0.000001, '商品价格最多保留 2 位小数'),
+  }).strict().optional(),
+  quantity: deliveryItemQuantitySchema,
+  rowVersion: z.coerce.number().int().nonnegative('rowVersion 无效'),
+  reason: z.string().trim().max(200, '原因不能超过 200 字').optional(),
+}).strict().superRefine((value, context) => {
+  if (Boolean(value.productId) === Boolean(value.customProduct)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['productId'], message: 'productId 和 customProduct 必须且只能填一个' })
+  }
 })
 
 export const deliveryRoutes: FastifyPluginAsync = async app => {
@@ -134,14 +163,100 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
     }
   })
 
-  // 仅供应商负责人/员工可在门店确认收货前移除配送中的单个商品。
+  const resolveInternalDeliverySupplier = async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!hasInternalSupplyChainCapability(role, 'delivery.write')) {
+      reply.status(403).send({ error: '仅内部供应链可调整配送商品' })
+      return null
+    }
+    const scopedDelivery = await prisma.deliveryOrder.findFirst({
+      where: { id: String(req.params.id), tenantId },
+      select: { supplierId: true },
+    })
+    if (!scopedDelivery) {
+      reply.status(404).send({ error: '配送单不存在' })
+      return null
+    }
+    return scopedDelivery.supplierId
+  }
+
+  app.patch('/:id/item-quantity', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
+    const { tenantId, userId, role } = req.user
+    const scopedSupplierId = await resolveInternalDeliverySupplier(req, reply)
+    if (!scopedSupplierId) return
+    const parsed = z.object({
+      itemId: z.string().trim().min(1, 'itemId 必填'),
+      targetQuantity: z.coerce.number()
+        .positive('调整后数量必须大于 0')
+        .max(99_999_999.99, '调整后数量超过系统上限')
+        .refine(value => Math.abs(value * 100 - Math.round(value * 100)) < 0.000001, '数量最多保留 2 位小数'),
+      rowVersion: z.coerce.number().int().nonnegative('rowVersion 无效'),
+      reason: z.string().trim().max(200, '原因不能超过 200 字').optional(),
+    }).safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    try {
+      return await prisma.$transaction(tx => changeDeliveryItemQuantityInTransaction(tx, {
+        tenantId,
+        supplierId: scopedSupplierId,
+        deliveryOrderId: String(req.params.id),
+        itemId: parsed.data.itemId,
+        targetQuantity: new Prisma.Decimal(parsed.data.targetQuantity),
+        userId,
+        userRole: role,
+        rowVersion: parsed.data.rowVersion,
+        reason: parsed.data.reason,
+        requestId: req.id,
+        ip: req.ip,
+      }), {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        timeout: 30_000,
+      })
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      throw error
+    }
+  })
+
+  app.post('/:id/add-item', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
+    const { tenantId, userId, role } = req.user
+    const scopedSupplierId = await resolveInternalDeliverySupplier(req, reply)
+    if (!scopedSupplierId) return
+    const parsed = deliveryAddItemBodySchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    try {
+      return await prisma.$transaction(tx => addDeliveryItemInTransaction(tx, {
+        tenantId,
+        supplierId: scopedSupplierId,
+        deliveryOrderId: String(req.params.id),
+        productId: parsed.data.productId,
+        customProduct: parsed.data.customProduct ? {
+          name: parsed.data.customProduct.name,
+          unit: parsed.data.customProduct.unit,
+          unitPrice: new Prisma.Decimal(parsed.data.customProduct.unitPrice),
+        } : null,
+        quantity: new Prisma.Decimal(parsed.data.quantity),
+        userId,
+        userRole: role,
+        rowVersion: parsed.data.rowVersion,
+        reason: parsed.data.reason,
+        requestId: req.id,
+        ip: req.ip,
+      }), {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        timeout: 30_000,
+      })
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      throw error
+    }
+  })
+
+  // 仅内部供应链可在门店确认收货前移除配送中的单个商品。
   // 这是软移除：保留原明细和审计流水，库存/订单金额在同一事务冲回。
   app.patch('/:id/remove-item', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
-    const { tenantId, userId, role, supplierId } = req.user
-    if (!['SUPPLIER_OWNER', 'SUPPLIER_STAFF'].includes(role)) {
-      return reply.status(403).send({ error: '仅供应商负责人或供应商员工可移除商品' })
-    }
-    const scopedSupplierId = requireSupplierCapability(role, supplierId, 'delivery.item_remove')
+    const { tenantId, userId, role } = req.user
+    const scopedSupplierId = await resolveInternalDeliverySupplier(req, reply)
+    if (!scopedSupplierId) return
     const parsed = z.object({
       itemId: z.string().trim().min(1, 'itemId 必填'),
       rowVersion: z.coerce.number().int().nonnegative('rowVersion 无效'),

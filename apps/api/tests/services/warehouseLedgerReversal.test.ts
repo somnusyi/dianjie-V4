@@ -78,7 +78,13 @@ function buildTx(options: {
         { lotId: 'lot-2', quantity: new Prisma.Decimal(400) },
       ]),
     },
-    warehouseLedgerLot: { update: lotUpdate },
+    warehouseLedgerLot: {
+      findUnique: vi.fn().mockResolvedValue({
+        initialQty: new Prisma.Decimal(1000),
+        remainingQty: new Prisma.Decimal(0),
+      }),
+      update: lotUpdate,
+    },
     // 比例加价钩子：FIXED 商品直接安静跳过，不写价格与日志
     product: {
       findFirst: vi.fn().mockResolvedValue({

@@ -8,7 +8,7 @@ import {
   supplyDataReadScope,
   type InternalSupplyChainCapability,
 } from '../../src/lib/internal-supply-chain-access'
-import { canOperateSupplyOrder } from '../../src/routes/orders'
+import { canOperateInternalOperationGroup, canOperateSupplyOrder } from '../../src/routes/orders'
 
 describe('internal supply-chain scope', () => {
   it('is neither store-scoped nor supplier-bound', () => {
@@ -101,5 +101,14 @@ describe('internal supply-chain scope', () => {
     expect(canOperateSupplyOrder('SUPPLIER_OWNER')).toBe(true)
     expect(canOperateSupplyOrder('MANAGER')).toBe(false)
     expect(canOperateSupplyOrder('FINANCE')).toBe(false)
+  })
+
+  it('keeps the newer operation-group workflow internal-only', () => {
+    expect(canOperateInternalOperationGroup('SUPPLY_CHAIN')).toBe(true)
+    expect(canOperateInternalOperationGroup('SUPPLIER_OWNER')).toBe(false)
+    expect(canOperateInternalOperationGroup('SUPPLIER_STAFF')).toBe(false)
+    // Existing elevated governance roles remain an explicit exception.
+    expect(canOperateInternalOperationGroup('ADMIN')).toBe(true)
+    expect(canOperateInternalOperationGroup('SUPER_ADMIN')).toBe(true)
   })
 })

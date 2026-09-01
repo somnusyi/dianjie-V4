@@ -27,7 +27,11 @@ function tx(clash: { effectiveAt: string; productId: string } | null, baselineSn
       findFirst: vi.fn().mockResolvedValue({ supplier: { sourceType: 'HEADQ_WAREHOUSE' } }),
     },
     warehouse: {
-      findFirst: vi.fn().mockResolvedValue({ id: 'wh-1', inventoryMode: 'OFF', isActive: true }),
+      findFirst: vi.fn(async ({ where }: any) => ({
+        id: where.id || 'wh-1',
+        inventoryMode: 'OFF',
+        isActive: true,
+      })),
     },
     warehouseInventoryImport: {
       findMany: vi.fn(async () => (
@@ -74,6 +78,23 @@ const input = {
 }
 
 describe('总仓出库来源互斥（商品级 + 纪元）', () => {
+  it('显式仓库 ID 优先于租户默认仓', async () => {
+    const client = tx(null, '2026-08-17')
+    await consumeWarehouseLedgerForShipment(client, {
+      ...input,
+      warehouseId: 'wh-explicit',
+    } as any).catch(() => undefined)
+
+    expect(client.warehouse.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: 'tenant-1', id: 'wh-explicit', isActive: true },
+      select: { id: true },
+    })
+    expect(client.warehouse.findFirst).toHaveBeenCalledWith({
+      where: { id: 'wh-explicit', tenantId: 'tenant-1', isActive: true },
+      select: { inventoryMode: true },
+    })
+  })
+
   it('同纪元内同商品已被美团包记出库 → 系统发货链路被拒并说明原因', async () => {
     // 基准 8.17；冲突流水 8.18（新纪元内、同商品）
     await expect(consumeWarehouseLedgerForShipment(

@@ -29,6 +29,21 @@ describe('operation group printable item merge', () => {
       productId: 'p1', quantity: '1.00', amount: '6.00', sourceOrderNos: ['PO-02'],
     })
   })
+
+  it('ignores removed zero-quantity delivery lines', () => {
+    const items = mergeOperationGroupItems([
+      {
+        no: 'PO-01',
+        items: [
+          { productId: 'p1', name: '土豆', spec: null, unit: 'kg', quantity: '0', amount: '0.00' },
+          { productId: 'p2', name: '青菜', spec: null, unit: 'kg', quantity: '2', amount: '20.00' },
+        ],
+      },
+    ])
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ productId: 'p2', quantity: '2.00', amount: '20.00' })
+  })
 })
 
 describe('operation group add-product owner', () => {

@@ -8,15 +8,19 @@ let tenantId = ''
 let supplierId = ''
 let storeId = ''
 let supplierUserId = ''
+let supplyChainUserId = ''
 let storeUserId = ''
 let productAId = ''
 let productBId = ''
 let productCId = ''
+let productDId = ''
+let productEId = ''
 let orderId = ''
 let deliveryId = ''
 let itemAId = ''
 let itemBId = ''
 let itemCId = ''
+let itemDId = ''
 let app: ReturnType<typeof Fastify>
 
 describe('delivery item removal (integration)', () => {
@@ -31,11 +35,17 @@ describe('delivery item removal (integration)', () => {
     supplierId = supplier.id
     storeId = store.id
 
-    const [supplierUser, storeUser] = await Promise.all([
+    const [supplierUser, supplyChainUser, storeUser] = await Promise.all([
       prisma.user.create({
         data: {
           tenantId, supplierId, name: '移除测试供应商账号', email: `supplier-${suffix}@local.test`,
           password: 'test-only', role: 'SUPPLIER_OWNER',
+        },
+      }),
+      prisma.user.create({
+        data: {
+          tenantId, name: '移除测试供应链账号', email: `supply-chain-${suffix}@local.test`,
+          password: 'test-only', role: 'SUPPLY_CHAIN',
         },
       }),
       prisma.user.create({
@@ -46,9 +56,10 @@ describe('delivery item removal (integration)', () => {
       }),
     ])
     supplierUserId = supplierUser.id
+    supplyChainUserId = supplyChainUser.id
     storeUserId = storeUser.id
 
-    const [productA, productB, productC] = await Promise.all([
+    const [productA, productB, productC, productD, productE] = await Promise.all([
       prisma.product.create({
         data: {
           tenantId, supplierId, code: `REMOVE-A-${suffix}`, name: '待移除商品 A',
@@ -67,21 +78,36 @@ describe('delivery item removal (integration)', () => {
           unit: 'kg', category: '测试', price: 10, stock: 0,
         },
       }),
+      prisma.product.create({
+        data: {
+          tenantId, supplierId, code: `REMOVE-D-${suffix}`, name: '保留商品 D',
+          unit: 'kg', category: '测试', price: 10, stock: 0,
+        },
+      }),
+      prisma.product.create({
+        data: {
+          tenantId, supplierId, code: `REMOVE-E-${suffix}`, name: '新增商品 E',
+          unit: 'kg', category: '测试', price: 5, stock: 0,
+        },
+      }),
     ])
     productAId = productA.id
     productBId = productB.id
     productCId = productC.id
+    productDId = productD.id
+    productEId = productE.id
 
     const order = await prisma.purchaseOrder.create({
       data: {
         tenantId, no: `PO-${suffix}`, storeId, supplierId, expectedDate: new Date('2026-08-31'),
-        totalAmount: 40, originalTotalAmount: 40, currentOrderAmount: 40, status: 'DELIVERING',
+        totalAmount: 50, originalTotalAmount: 50, currentOrderAmount: 50, status: 'DELIVERING',
         createdById: storeUserId,
         items: {
           create: [
             { productId: productAId, quantity: 2, shippedQty: 2, unitPrice: 10, amount: 20 },
             { productId: productBId, quantity: 1, shippedQty: 1, unitPrice: 10, amount: 10 },
             { productId: productCId, quantity: 1, shippedQty: 1, unitPrice: 10, amount: 10 },
+            { productId: productDId, quantity: 1, shippedQty: 1, unitPrice: 10, amount: 10 },
           ],
         },
       },
@@ -92,7 +118,7 @@ describe('delivery item removal (integration)', () => {
     const delivery = await prisma.deliveryOrder.create({
       data: {
         tenantId, no: `DO-${suffix}`, purchaseOrderId: orderId, storeId, supplierId,
-        status: 'SHIPPED', actualTotalAmount: 40, createdById: supplierUserId,
+        status: 'SHIPPED', actualTotalAmount: 50, createdById: supplierUserId,
         shippedById: supplierUserId, shippedAt: new Date('2026-08-31T01:00:00.000Z'),
         items: {
           create: [
@@ -111,6 +137,11 @@ describe('delivery item removal (integration)', () => {
               orderedQtySnapshot: 1, shippedQty: 1, unitPriceSnapshot: 10, amount: 10,
               productNameSnapshot: '保留商品 C', productUnitSnapshot: 'kg',
             },
+            {
+              purchaseOrderItemId: order.items[3].id, productId: productDId,
+              orderedQtySnapshot: 1, shippedQty: 1, unitPriceSnapshot: 10, amount: 10,
+              productNameSnapshot: '保留商品 D', productUnitSnapshot: 'kg',
+            },
           ],
         },
       },
@@ -120,13 +151,16 @@ describe('delivery item removal (integration)', () => {
     itemAId = delivery.items.find(item => item.productId === productAId)!.id
     itemBId = delivery.items.find(item => item.productId === productBId)!.id
     itemCId = delivery.items.find(item => item.productId === productCId)!.id
+    itemDId = delivery.items.find(item => item.productId === productDId)!.id
 
     app = Fastify()
     app.decorate('authenticate', async (request: any) => {
       const actor = String(request.headers['x-test-actor'] || 'supplier')
       request.user = actor === 'store'
         ? { tenantId, storeId, storeIds: [storeId], userId: storeUserId, role: 'MANAGER' }
-        : { tenantId, supplierId, userId: supplierUserId, role: 'SUPPLIER_OWNER' }
+        : actor === 'supply-chain'
+          ? { tenantId, userId: supplyChainUserId, role: 'SUPPLY_CHAIN', supplierId: null }
+          : { tenantId, supplierId, userId: supplierUserId, role: 'SUPPLIER_OWNER' }
     })
     await app.register(deliveryRoutes, { prefix: '/api/deliveries' })
     await app.ready()
@@ -152,15 +186,15 @@ describe('delivery item removal (integration)', () => {
     await prisma.tenant.delete({ where: { id: tenantId } })
   })
 
-  it('soft-removes one item, recalculates totals, and hides it from reads', async () => {
+  it('lets internal supply chain soft-remove one item, recalculates totals, and hides it from reads', async () => {
     const response = await app.inject({
       method: 'PATCH',
       url: `/api/deliveries/${deliveryId}/remove-item`,
-      headers: { 'x-test-actor': 'supplier' },
+      headers: { 'x-test-actor': 'supply-chain' },
       payload: { itemId: itemAId, rowVersion: 0 },
     })
     expect(response.statusCode).toBe(200)
-    expect(response.json()).toMatchObject({ success: true, deliveryTotal: '20.00', orderTotal: '20.00' })
+    expect(response.json()).toMatchObject({ success: true, deliveryTotal: '30.00', orderTotal: '30.00' })
 
     const [delivery, order, removedItem, deliveryList] = await Promise.all([
       prisma.deliveryOrder.findUnique({ where: { id: deliveryId } }),
@@ -168,13 +202,38 @@ describe('delivery item removal (integration)', () => {
       prisma.deliveryOrderItem.findUnique({ where: { id: itemAId } }),
       app.inject({ method: 'GET', url: '/api/deliveries?page=1&pageSize=20', headers: { 'x-test-actor': 'supplier' } }),
     ])
-    expect(delivery?.actualTotalAmount.toString()).toBe('20')
+    expect(delivery?.actualTotalAmount.toString()).toBe('30')
     expect(delivery?.rowVersion).toBe(1)
-    expect(order?.totalAmount.toString()).toBe('20')
+    expect(order?.totalAmount.toString()).toBe('30')
     expect(removedItem?.shippedQty.toString()).toBe('0')
     expect(removedItem?.amount.toString()).toBe('0')
     expect(deliveryList.statusCode).toBe(200)
-    expect(deliveryList.json().items[0].items.map((item: any) => item.id)).toEqual([itemBId, itemCId])
+    expect(deliveryList.json().items[0].items.map((item: any) => item.id)).toEqual([itemBId, itemCId, itemDId])
+  })
+
+  it('changes a positive quantity and adds an existing catalog product before delivery', async () => {
+    const quantityResponse = await app.inject({
+      method: 'PATCH',
+      url: `/api/deliveries/${deliveryId}/item-quantity`,
+      headers: { 'x-test-actor': 'supply-chain' },
+      payload: { itemId: itemDId, targetQuantity: 2, rowVersion: 1 },
+    })
+    expect(quantityResponse.statusCode).toBe(200)
+    expect(quantityResponse.json()).toMatchObject({ rowVersion: 2, deliveryTotal: '40.00', orderTotal: '40.00' })
+
+    const addResponse = await app.inject({
+      method: 'POST',
+      url: `/api/deliveries/${deliveryId}/add-item`,
+      headers: { 'x-test-actor': 'supply-chain' },
+      payload: { productId: productEId, quantity: 2, rowVersion: 2 },
+    })
+    expect(addResponse.statusCode).toBe(200)
+    expect(addResponse.json()).toMatchObject({ rowVersion: 3, productId: productEId, deliveryTotal: '50.00', orderTotal: '50.00' })
+    const added = await prisma.deliveryOrderItem.findUniqueOrThrow({
+      where: { deliveryOrderId_productId: { deliveryOrderId: deliveryId, productId: productEId } },
+    })
+    expect(added.shippedQty.toString()).toBe('2')
+    expect(added.unitPriceSnapshot.toString()).toBe('5')
   })
 
   it('reverses strict supplier stock and reservation facts atomically', async () => {
@@ -204,18 +263,43 @@ describe('delivery item removal (integration)', () => {
       },
     })
 
+    const increase = await app.inject({
+      method: 'PATCH',
+      url: `/api/deliveries/${deliveryId}/item-quantity`,
+      headers: { 'x-test-actor': 'supply-chain' },
+      payload: { itemId: itemBId, targetQuantity: 2, rowVersion: 3 },
+    })
+    expect(increase.statusCode).toBe(200)
+    expect(increase.json()).toMatchObject({ rowVersion: 4, deliveryTotal: '60.00', orderTotal: '60.00' })
+    expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productBId } })).stock)).toBe(8)
+    expect(Number((await prisma.supplierStockBatch.findUniqueOrThrow({ where: { id: batch.id } })).remainingQty)).toBe(8)
+    expect(Number((await prisma.supplierStockReservation.findUniqueOrThrow({ where: { purchaseOrderItemId: poItemB.id } })).fulfilledQty)).toBe(2)
+
+    const decrease = await app.inject({
+      method: 'PATCH',
+      url: `/api/deliveries/${deliveryId}/item-quantity`,
+      headers: { 'x-test-actor': 'supply-chain' },
+      payload: { itemId: itemBId, targetQuantity: 1, rowVersion: 4 },
+    })
+    expect(decrease.statusCode).toBe(200)
+    expect(decrease.json()).toMatchObject({ rowVersion: 5, deliveryTotal: '50.00', orderTotal: '50.00' })
+    expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productBId } })).stock)).toBe(9)
+    expect(Number((await prisma.supplierStockBatch.findUniqueOrThrow({ where: { id: batch.id } })).remainingQty)).toBe(9)
+    expect(Number((await prisma.supplierStockReservation.findUniqueOrThrow({ where: { purchaseOrderItemId: poItemB.id } })).fulfilledQty)).toBe(1)
+
     const response = await app.inject({
       method: 'PATCH',
       url: `/api/deliveries/${deliveryId}/remove-item`,
-      headers: { 'x-test-actor': 'supplier' },
-      payload: { itemId: itemBId, rowVersion: 1 },
+      headers: { 'x-test-actor': 'supply-chain' },
+      payload: { itemId: itemBId, rowVersion: 5 },
     })
     expect(response.statusCode).toBe(200)
-    expect(response.json()).toMatchObject({ success: true, deliveryTotal: '10.00', orderTotal: '10.00' })
+    expect(response.json()).toMatchObject({ success: true, deliveryTotal: '40.00', orderTotal: '40.00' })
     expect(Number((await prisma.product.findUniqueOrThrow({ where: { id: productBId } })).stock)).toBe(10)
     expect(Number((await prisma.supplierStockBatch.findUniqueOrThrow({ where: { id: batch.id } })).remainingQty)).toBe(10)
     expect(await prisma.supplierStockReservation.findUniqueOrThrow({ where: { purchaseOrderItemId: poItemB.id } })).toMatchObject({ status: 'RELEASED' })
     expect(await prisma.supplierStockMovement.count({ where: { tenantId, sourceType: 'DeliveryOrderItemRemoval' } })).toBe(1)
+    await prisma.supplier.update({ where: { id: supplierId }, data: { inventoryMode: 'NOT_TRACKED' } })
   })
 
   it('rejects store-side removal even before receipt', async () => {
@@ -223,8 +307,19 @@ describe('delivery item removal (integration)', () => {
       method: 'PATCH',
       url: `/api/deliveries/${deliveryId}/remove-item`,
       headers: { 'x-test-actor': 'store' },
-      payload: { itemId: itemCId, rowVersion: 2 },
+      payload: { itemId: itemCId, rowVersion: 6 },
     })
     expect(response.statusCode).toBe(403)
+  })
+
+  it('allows internal supply chain to remove the remaining item before receipt', async () => {
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/api/deliveries/${deliveryId}/remove-item`,
+      headers: { 'x-test-actor': 'supply-chain' },
+      payload: { itemId: itemCId, rowVersion: 6 },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({ success: true, deliveryTotal: '30.00', orderTotal: '30.00' })
   })
 })

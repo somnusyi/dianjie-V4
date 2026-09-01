@@ -63,7 +63,7 @@ import {
   loadOrderDraftProducts,
   validateOrderDraftLines,
 } from '../services/orderDraftValidation'
-import { buildOperationGroups, type OperationGroupCandidate } from '../services/orderOperationGroups'
+import { buildOperationGroups, operationGroupId, type OperationGroupCandidate } from '../services/orderOperationGroups'
 import { latestOperationGroupOrderId, loadOperationGroupDetails } from '../services/orderOperationGroupDetails'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
@@ -72,6 +72,17 @@ const PURCHASE_QUANTITY_MAX = 99_999_999.99
 export function canOperateSupplyOrder(role: string | undefined | null): boolean {
   return isSupplierRole(role)
     || hasInternalSupplyChainCapability(role, 'order.write')
+    || ['ADMIN', 'SUPER_ADMIN'].includes(role || '')
+}
+
+/**
+ * Operation groups are an internal warehouse workflow, not a supplier UI
+ * feature.  Keep the legacy single-order supplier actions above unchanged,
+ * but gate the newer grouping/aggregate surfaces to the internal role (and
+ * the existing elevated governance roles).
+ */
+export function canOperateInternalOperationGroup(role: string | undefined | null): boolean {
+  return hasInternalSupplyChainCapability(role, 'order.write')
     || ['ADMIN', 'SUPER_ADMIN'].includes(role || '')
 }
 
@@ -227,8 +238,8 @@ const chefAckSchema = z.object({
 }).strict()
 
 const operationGroupConfirmSchema = z.object({
-  // Optional subset allows the UI to retry only visible rows; when omitted,
-  // the server confirms every current member of the computed group.
+  // The client may resend the member list for an idempotent retry; the server
+  // still requires the complete current group and rejects partial subsets.
   orderIds: z.array(z.string().min(1)).min(1).max(100).optional(),
   idempotencyKey: z.string().trim().min(8).max(80).optional(),
 }).strict()
@@ -393,7 +404,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     // tenant-scoped set so pagination/keyword filters cannot split a group.
     // Only pending orders can become members; no new order number is created.
     let operationMemberships = new Map<string, { operationGroup: any; operationGroupPosition: number | null }>()
-    if (canOperateSupplyOrder(role)) {
+    if (canOperateInternalOperationGroup(role)) {
       const groupWhere: any = { ...supplyDataReadScope(req.user) }
       if (q.storeId) groupWhere.storeId = q.storeId
       if (q.supplierId && !isSupplierRole(role)) groupWhere.supplierId = q.supplierId
@@ -403,7 +414,12 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           id: true, no: true, storeId: true, supplierId: true, expectedDate: true,
           status: true, createdAt: true, updatedAt: true, submittedAt: true,
           revisions: { where: { status: 'PENDING' }, select: { id: true } },
-          events: { orderBy: { occurredAt: 'desc' }, take: 1, select: { occurredAt: true } },
+          events: {
+            where: { eventType: 'ACCEPTED' },
+            orderBy: { occurredAt: 'desc' },
+            take: 1,
+            select: { occurredAt: true, metadata: true },
+          },
         },
       })
       operationMemberships = buildOperationGroups(groupCandidates.map(candidate => ({
@@ -414,6 +430,59 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         lastOperationAt: candidate.events[0]?.occurredAt || null,
         hasPendingRevision: candidate.revisions.length > 0,
       } as OperationGroupCandidate)))
+
+      // Accepted groups remain a collection for later fulfillment and one-note
+      // printing. Their immutable ACCEPTED events are the durable membership
+      // source; no synthetic purchase order is created.
+      const acceptedByGroup = new Map<string, Array<{ row: typeof groupCandidates[number]; index: number }>>()
+      for (const candidate of groupCandidates) {
+        // Historical ACCEPTED events must not override the current pending
+        // grouping (for example after an administrative reopen), and a
+        // cancelled member invalidates the collection rather than leaving a
+        // misleading partial group in the list.
+        if (['DRAFT', 'SUBMITTED', 'CANCELLED'].includes(candidate.status)) continue
+        const metadata = candidate.events[0]?.metadata as Record<string, unknown> | null
+        const acceptedGroupId = typeof metadata?.operationGroupId === 'string' ? metadata.operationGroupId : ''
+        const index = Number(metadata?.operationGroupMemberIndex)
+        if (!/^og_[a-f0-9]{24}$/.test(acceptedGroupId) || !Number.isInteger(index) || index < 0) continue
+        const members = acceptedByGroup.get(acceptedGroupId) || []
+        members.push({ row: candidate, index })
+        acceptedByGroup.set(acceptedGroupId, members)
+      }
+      for (const [acceptedGroupId, rawMembers] of acceptedByGroup) {
+        const members = [...rawMembers].sort((a, b) => a.index - b.index || a.row.id.localeCompare(b.row.id))
+        if (members.length < 2) continue
+        // Every original member is written with a zero-based position. Missing
+        // or duplicate positions mean the event set is incomplete/corrupt, so
+        // fail closed instead of reconstructing a duplicate or partial group.
+        if (members.some((member, index) => member.index !== index)) continue
+        const memberIds = members.map(member => member.row.id)
+        if (operationGroupId(memberIds) !== acceptedGroupId) continue
+        const first = members[0].row
+        const expectedDate = new Date(first.expectedDate).toISOString().slice(0, 10)
+        const sameBoundary = members.every(member => member.row.storeId === first.storeId
+          && member.row.supplierId === first.supplierId
+          && new Date(member.row.expectedDate).toISOString().slice(0, 10) === expectedDate)
+        if (!sameBoundary) continue
+        const group = {
+          id: acceptedGroupId,
+          storeId: first.storeId,
+          supplierId: first.supplierId,
+          expectedDate,
+          memberOrderIds: memberIds,
+          memberOrderNos: members.map(member => member.row.no),
+          memberCount: members.length,
+          firstCreatedAt: members[0].row.createdAt.toISOString(),
+          lastCreatedAt: members[members.length - 1].row.createdAt.toISOString(),
+          idleSince: members[members.length - 1].row.createdAt.toISOString(),
+          eligibleAt: members[members.length - 1].row.createdAt.toISOString(),
+          isEligible: false,
+          blockedOrderIds: [],
+        }
+        members.forEach((member, index) => {
+          operationMemberships.set(member.row.id, { operationGroup: group, operationGroupPosition: index })
+        })
+      }
     }
     const decoratedItems = items.map((item: any) => {
       const membership = operationMemberships.get(item.id)
@@ -431,7 +500,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const parsed = operationGroupConfirmSchema.safeParse(req.body || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { tenantId, userId, role } = req.user
-    if (!canOperateSupplyOrder(role)) return reply.status(403).send({ error: '无权限批量接单' })
+    if (!canOperateInternalOperationGroup(role)) return reply.status(403).send({ error: '仅内部供应链可批量接单' })
 
     const groupIdParam = String((req.params as any).groupId || '')
     if (!/^og_[a-f0-9]{24}$/.test(groupIdParam)) {
@@ -615,7 +684,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         })
         await tx.opLog.create({
           data: {
-            tenantId, userId, action: `供应商批量接单 (${groupIdParam})`, target: order.no,
+            tenantId, userId, action: `订单集合批量接单 (${groupIdParam})`, target: order.no,
             entityType: 'PurchaseOrder', targetId: order.id,
             metadata: { operationGroupId: groupIdParam, operationGroupRequestKey: idempotencyKey || null },
           },
@@ -658,8 +727,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   // 必须放在 /:id 之前，否则 Fastify 会把 operation-groups 当作订单 id。
   app.get('/operation-groups/:groupId', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
     const { role } = req.user
-    if (!allowsSupplyDataRead(role, 'order.read')) {
-      return reply.status(403).send({ error: '无权查看采购订单' })
+    if (!canOperateInternalOperationGroup(role)) {
+      return reply.status(403).send({ error: '仅内部供应链可查看订单集合' })
     }
     const groupId = String((req.params as any).groupId || '')
     const detail = await loadOperationGroupDetails(req.user, groupId)
@@ -1061,6 +1130,14 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const requesterAllowed = canOperateSupplyOrder(role)
       || ['MANAGER', 'KITCHEN_LEAD', 'PURCHASER', 'CHEF_DIRECTOR'].includes(role)
     if (!requesterAllowed) return reply.status(403).send({ error: '无权申请修改订货单' })
+
+    // Group-level add-product is owned by the internal supply-chain workflow.
+    // Legacy single-order supplier revisions remain unchanged when no group
+    // id is supplied; a supplier cannot reach the new aggregate path by
+    // forging an operationGroupId query/body field.
+    if (input.operationGroupId && !canOperateInternalOperationGroup(role)) {
+      return reply.status(403).send({ error: '仅内部供应链可对订单集合增加商品' })
+    }
 
     const order = await prisma.purchaseOrder.findFirst({
       where: { id, tenantId, status: 'SUBMITTED' },

@@ -168,6 +168,8 @@ export function mergeOperationGroupItems(orders: Array<{ no: string; items: Arra
     for (const item of order.items || []) {
       const productId = String(item.productId || '')
       if (!productId) continue
+      const quantity = decimalValue(item.quantity)
+      if (quantity.lte(0)) continue
       const name = String(item.name || '—')
       const spec = item.spec == null ? null : String(item.spec)
       const unit = String(item.unit || '—')
@@ -177,7 +179,7 @@ export function mergeOperationGroupItems(orders: Array<{ no: string; items: Arra
       const current = merged.get(key) || {
         productId, name, spec, unit, quantity: new Prisma.Decimal(0), amount: new Prisma.Decimal(0), sourceOrderNos: [],
       }
-      current.quantity = current.quantity.add(decimalValue(item.quantity))
+      current.quantity = current.quantity.add(quantity)
       current.amount = current.amount.add(decimalValue(item.amount))
       if (!current.sourceOrderNos.includes(order.no)) current.sourceOrderNos.push(order.no)
       merged.set(key, current)
@@ -209,7 +211,7 @@ const detailInclude = {
   items: { where: { isActive: true }, include: { product: true } },
   deliveries: {
     orderBy: { createdAt: 'asc' as const },
-    include: { items: { include: { product: true } } },
+    include: { items: { where: { shippedQty: { gt: 0 } }, include: { product: true } } },
   },
 }
 

@@ -96,18 +96,33 @@ export default function SupplierOrderDetailPage() {
     ? '/v2/supply-chain/fulfillment'
     : '/v2/supplier/orders'
   const viewerRole = getUser()?.role || ''
-  const canRemoveDeliveryItem = viewerRole === 'SUPPLIER_OWNER' || viewerRole === 'SUPPLIER_STAFF'
+  const canRemoveDeliveryItem = viewerRole === 'SUPPLY_CHAIN'
+  const canAdjustDeliveryBeforeDelivery = viewerRole === 'SUPPLY_CHAIN'
   const params = useParams() as any
   const router = useRouter()
   const searchParams = useSearchParams()
   const id = params.id as string
   const operationGroupId = searchParams.get('operationGroup')
   const groupAddRequested = searchParams.get('groupAdd') === '1'
+  // A group entry is an operation view, not an invitation to run an
+  // individual-order action.  Keep this guard independent of the async group
+  // metadata load so a stale/deep link cannot expose a one-order mutation.
+  const isOperationGroupContext = Boolean(operationGroupId)
   const [order, setOrder] = useState<Order | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [shipmentNotice, setShipmentNotice] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [removingItemId, setRemovingItemId] = useState<string | null>(null)
+  const [adjustingItemId, setAdjustingItemId] = useState<string | null>(null)
+  const [deliveryQty, setDeliveryQty] = useState<Record<string, string>>({})
+  const [deliveryAddTarget, setDeliveryAddTarget] = useState<NonNullable<Order['deliveries']>[number] | null>(null)
+  const [deliveryAddMode, setDeliveryAddMode] = useState<'existing' | 'custom'>('existing')
+  const [deliveryAddProductId, setDeliveryAddProductId] = useState('')
+  const [deliveryAddQuantity, setDeliveryAddQuantity] = useState('1')
+  const [deliveryCustomName, setDeliveryCustomName] = useState('')
+  const [deliveryCustomUnit, setDeliveryCustomUnit] = useState('件')
+  const [deliveryCustomPrice, setDeliveryCustomPrice] = useState('')
+  const [deliveryAdjustError, setDeliveryAdjustError] = useState<string | null>(null)
   const [shipNote, setShipNote] = useState('')
   // 发货时可调整每行的实际发货量 (称重 / 缺货). key=itemId, value=shippedQty
   const [shipQty, setShipQty] = useState<Record<string, number>>({})
@@ -134,12 +149,16 @@ export default function SupplierOrderDetailPage() {
   const [confirmState, openConfirm] = useConfirmSheet()
 
   function load() {
-    apiFetch<Order>(`/api/orders/${id}`).then(setOrder).catch(e => setError(e.message || '加载失败'))
+    apiFetch<Order>(`/api/orders/${id}`).then(data => {
+      setOrder(data)
+      setDeliveryQty(Object.fromEntries((data.deliveries || []).flatMap(delivery =>
+        delivery.items.map(item => [item.id, String(item.shippedQty)]))))
+    }).catch(e => setError(e.message || '加载失败'))
   }
   useEffect(() => { load() }, [id])
 
   function ship() {
-    if (!order) return
+    if (!order || isOperationGroupContext) return
     setShipmentNotice(null)
     const lines = buildPartialShipmentLines(order.items, shipQty)
     const newTotal = computeShipmentNewTotal(lines)
@@ -198,7 +217,7 @@ export default function SupplierOrderDetailPage() {
   }
 
   function confirmOrder() {
-    if (!order) return
+    if (!order || isOperationGroupContext) return
     openConfirm({
       title: `接单 ${order.no}?`,
       body: `${order.items.length} 件商品 · 共 ¥${Number(order.currentOrderAmount ?? order.originalTotalAmount ?? order.totalAmount).toLocaleString()}\n接单后店长能看到"已接单"状态, 你需要按期望日期 ${dayjs(order.expectedDate).format('MM/DD')} 前发货.${order.supplier.inventoryMode === 'STRICT' ? '\n系统会预占本单所需的供应商库存。' : '\n当前未核算供应商仓库库存，不会因库存数字不完整阻断接单。'}`,
@@ -336,7 +355,7 @@ export default function SupplierOrderDetailPage() {
   }
 
   function rejectOrder() {
-    if (!order) return
+    if (!order || isOperationGroupContext) return
     const reason = window.prompt('请说明拒单原因 (店长能看到):')
     if (!reason || !reason.trim()) return
     openConfirm({
@@ -360,6 +379,7 @@ export default function SupplierOrderDetailPage() {
 
   function removeDeliveryItem(delivery: NonNullable<Order['deliveries']>[number], item: NonNullable<Order['deliveries']>[number]['items'][number]) {
     if (!order || !canRemoveDeliveryItem || delivery.receipt || !['SHIPPED', 'DELIVERED'].includes(delivery.status)) return
+    setDeliveryAdjustError(null)
     openConfirm({
       title: `移除配送商品？`,
       body: `${item.product?.name || '该商品'} · 实发 ${item.shippedQty}${item.product?.unit || ''}\n仅在门店确认收货前可操作。移除后会同步冲回供应商库存和配送金额，原订单历史仍保留。`,
@@ -374,10 +394,96 @@ export default function SupplierOrderDetailPage() {
             body: JSON.stringify({ itemId: item.id, rowVersion: delivery.rowVersion }),
           })
           load()
-        } catch (e: any) { setError(e.message || '移除商品失败'); throw e }
+        } catch (e: any) { setDeliveryAdjustError(e.message || '移除商品失败'); throw e }
         finally { setSubmitting(false); setRemovingItemId(null) }
       },
     })
+  }
+
+  function adjustDeliveryItemQuantity(delivery: NonNullable<Order['deliveries']>[number], item: NonNullable<Order['deliveries']>[number]['items'][number]) {
+    if (!order || !canAdjustDeliveryBeforeDelivery || delivery.receipt || delivery.status !== 'SHIPPED') return
+    setDeliveryAdjustError(null)
+    const targetQuantity = Number(deliveryQty[item.id])
+    const currentQuantity = Number(item.shippedQty)
+    if (!Number.isFinite(targetQuantity) || targetQuantity <= 0) {
+      setDeliveryAdjustError('数量必须大于 0；如需删除整项，请点击“移除”')
+      return
+    }
+    if (Math.abs(targetQuantity - currentQuantity) < 0.0001) return
+    openConfirm({
+      title: `修改配送数量？`,
+      body: `${item.product?.name || '该商品'} · ${currentQuantity}${item.product?.unit || ''} → ${targetQuantity}${item.product?.unit || ''}\n仅在送达前可操作，库存、金额和送货单会同步更新。`,
+      confirmLabel: '确认修改',
+      tone: 'primary',
+      onConfirm: async () => {
+        setSubmitting(true)
+        setAdjustingItemId(item.id)
+        try {
+          await apiFetch(`/api/deliveries/${delivery.id}/item-quantity`, {
+            method: 'PATCH',
+            body: JSON.stringify({ itemId: item.id, targetQuantity, rowVersion: delivery.rowVersion }),
+          })
+          load()
+        } catch (e: any) { setDeliveryAdjustError(e.message || '修改数量失败'); throw e }
+        finally { setSubmitting(false); setAdjustingItemId(null) }
+      },
+    })
+  }
+
+  function canSaveDeliveryItemQuantity(item: NonNullable<Order['deliveries']>[number]['items'][number]) {
+    const targetQuantity = Number(deliveryQty[item.id])
+    return Number.isFinite(targetQuantity)
+      && targetQuantity > 0
+      && Math.abs(targetQuantity - Number(item.shippedQty)) >= 0.0001
+  }
+
+  async function openDeliveryAdd(delivery: NonNullable<Order['deliveries']>[number]) {
+    if (!order || !canAdjustDeliveryBeforeDelivery || delivery.receipt || delivery.status !== 'SHIPPED') return
+    setDeliveryAdjustError(null)
+    setDeliveryAddTarget(delivery)
+    setDeliveryAddMode('existing')
+    setDeliveryAddProductId('')
+    setDeliveryAddQuantity('1')
+    setDeliveryCustomName('')
+    setDeliveryCustomUnit('件')
+    setDeliveryCustomPrice('')
+    try {
+      const data = await apiFetch<any>(`/api/products?supplierId=${encodeURIComponent(order.supplier.id)}&page=1&pageSize=100`)
+      const list = Array.isArray(data) ? data : (data?.items || [])
+      setCatalog((list as RevisionCatalogProduct[]).filter(product => product.status === 'ENABLED'))
+    } catch (e: any) {
+      setDeliveryAddTarget(null)
+      setDeliveryAdjustError(e.message || '加载商品目录失败')
+    }
+  }
+
+  async function submitDeliveryAdd() {
+    if (!order || !deliveryAddTarget || submitting) return
+    setDeliveryAdjustError(null)
+    const quantity = Number(deliveryAddQuantity)
+    if (!Number.isFinite(quantity) || quantity <= 0) { setDeliveryAdjustError('新增数量必须大于 0'); return }
+    const customPrice = Number(deliveryCustomPrice)
+    if (deliveryAddMode === 'existing' && !deliveryAddProductId) { setDeliveryAdjustError('请选择已有商品'); return }
+    if (deliveryAddMode === 'custom' && (!deliveryCustomName.trim() || !deliveryCustomUnit.trim() || !Number.isFinite(customPrice) || customPrice < 0)) {
+      setDeliveryAdjustError('请完整填写自定义商品名称、单位和价格')
+      return
+    }
+    setSubmitting(true)
+    try {
+      await apiFetch(`/api/deliveries/${deliveryAddTarget.id}/add-item`, {
+        method: 'POST',
+        body: JSON.stringify({
+          quantity,
+          rowVersion: deliveryAddTarget.rowVersion,
+          ...(deliveryAddMode === 'existing'
+            ? { productId: deliveryAddProductId }
+            : { customProduct: { name: deliveryCustomName.trim(), unit: deliveryCustomUnit.trim(), unitPrice: customPrice } }),
+        }),
+      })
+      setDeliveryAddTarget(null)
+      load()
+    } catch (e: any) { setDeliveryAdjustError(e.message || '增加商品失败') }
+    finally { setSubmitting(false) }
   }
 
   if (!order && !error) {
@@ -499,6 +605,9 @@ export default function SupplierOrderDetailPage() {
       {(order.deliveries?.length ?? 0) > 0 && (
         <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
           <h2 className="text-h2">关联配送单 ({order.deliveries!.length})</h2>
+          {deliveryAdjustError && !deliveryAddTarget && (
+            <div className="mt-2 rounded-cta border border-red/30 bg-red-bg px-3 py-2 text-caption text-red-fg">{deliveryAdjustError}</div>
+          )}
           <ul className="mt-2 space-y-2">
             {order.deliveries!.map(delivery => (
               <li key={delivery.id} className="rounded-cta border border-border bg-bg p-2">
@@ -511,11 +620,34 @@ export default function SupplierOrderDetailPage() {
                   本次 {delivery.items.length > 0 ? delivery.items.map(item => `${item.product?.name || ''} ${item.shippedQty}${item.product?.unit || ''}`).join('、') : '暂无可配送商品'}
                   {delivery.receipt && <> · 入库单 {delivery.receipt.no}</>}
                 </div>
+                {canAdjustDeliveryBeforeDelivery && !delivery.receipt && delivery.status === 'SHIPPED' && (
+                  <div className="mt-2 flex justify-end border-t border-border pt-2">
+                    <button type="button" onClick={() => void openDeliveryAdd(delivery)} disabled={submitting}
+                      className="rounded-cta border border-amber/50 bg-amber/5 px-3 py-1.5 text-button text-amber-fg disabled:opacity-40">
+                      ＋ 增加商品
+                    </button>
+                  </div>
+                )}
                 {canRemoveDeliveryItem && !delivery.receipt && ['SHIPPED', 'DELIVERED'].includes(delivery.status) && delivery.items.length > 0 && (
                   <div className="mt-2 pt-2 border-t border-border space-y-1">
                     {delivery.items.map(item => (
-                      <div key={item.id} className="flex items-center gap-2 text-micro">
+                      <div key={item.id} className="flex flex-wrap items-center gap-2 text-micro">
                         <span className="flex-1 truncate">{item.product?.name || '商品'} · {item.shippedQty}{item.product?.unit || ''}</span>
+                        {canAdjustDeliveryBeforeDelivery && delivery.status === 'SHIPPED' && (
+                          <>
+                            <input type="number" inputMode="decimal" min="0.01" step="0.01"
+                              aria-label={`${item.product?.name || '商品'}配送数量`}
+                              value={deliveryQty[item.id] ?? String(item.shippedQty)}
+                              onChange={event => setDeliveryQty(current => ({ ...current, [item.id]: event.target.value }))}
+                              className="w-20 rounded-cta border border-border bg-white px-2 py-1 text-right font-num text-caption" />
+                            <span className="text-gray3">{item.product?.unit || ''}</span>
+                            <button type="button" onClick={() => adjustDeliveryItemQuantity(delivery, item)}
+                              disabled={submitting || adjustingItemId === item.id || !canSaveDeliveryItemQuantity(item)}
+                              className="rounded-cta border border-amber/50 px-2 py-1 text-amber-fg disabled:opacity-40">
+                              {adjustingItemId === item.id ? '保存中…' : '保存数量'}
+                            </button>
+                          </>
+                        )}
                         <button
                           type="button"
                           onClick={() => removeDeliveryItem(delivery, item)}
@@ -754,27 +886,32 @@ export default function SupplierOrderDetailPage() {
         )
       })()}
 
-      {/* 底部固定操作栏 - 按状态显示按钮 */}
+      {/* 底部固定操作栏 - 按状态显示按钮。集合上下文只保留改单入口，
+          不允许从原订单详情绕过集合执行拒单/接单/发货。 */}
       {order.status === 'SUBMITTED' && (
-        <div className={`fixed bottom-0 left-0 right-0 bg-white border-t border-border p-4 grid ${pendingRevision ? 'grid-cols-2' : 'grid-cols-3'} gap-2`}
+        <div className={`fixed bottom-0 left-0 right-0 bg-white border-t border-border p-4 grid ${isOperationGroupContext ? 'grid-cols-1' : pendingRevision ? 'grid-cols-2' : 'grid-cols-3'} gap-2`}
              style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom))' }}>
-          <button onClick={rejectOrder} disabled={submitting}
-            className="py-3 bg-white border border-red text-red-fg rounded-cta text-button disabled:opacity-40">拒单</button>
+          {!isOperationGroupContext && (
+            <button onClick={rejectOrder} disabled={submitting}
+              className="py-3 bg-white border border-red text-red-fg rounded-cta text-button disabled:opacity-40">拒单</button>
+          )}
           {pendingRevision ? (
             <button disabled className="py-3 bg-amber/10 border border-amber text-amber-fg rounded-cta text-button opacity-70">待门店确认</button>
           ) : (
             <>
               <button onClick={openAddPicker} disabled={submitting}
                 className="py-3 bg-white border border-amber text-amber-fg rounded-cta text-button disabled:opacity-40">申请调整</button>
-              <button onClick={confirmOrder} disabled={submitting}
-                className="py-3 bg-ink text-white rounded-cta text-button disabled:opacity-40">
-                {submitting ? '提交中…' : '接单'}
-              </button>
+              {!isOperationGroupContext && (
+                <button onClick={confirmOrder} disabled={submitting}
+                  className="py-3 bg-ink text-white rounded-cta text-button disabled:opacity-40">
+                  {submitting ? '提交中…' : '接单'}
+                </button>
+              )}
             </>
           )}
         </div>
       )}
-      {order.status === 'CONFIRMED' && (
+      {order.status === 'CONFIRMED' && !isOperationGroupContext && (
         <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border p-4 grid grid-cols-2 gap-2"
              style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom))' }}>
           <button onClick={rejectOrder} disabled={submitting}
@@ -786,7 +923,7 @@ export default function SupplierOrderDetailPage() {
         </div>
       )}
       {/* DELIVERING (在途) — 司机到门店后填备注 + 点「确认送达」启动 24h 倒计时 */}
-      {order.status === 'DELIVERING' && (
+      {order.status === 'DELIVERING' && !isOperationGroupContext && (
         <>
           {/* 客户验收单 — 2026-05-29 客户反馈: 厨师收货后传照片+备注, 供应商看完确认无误才点送达 */}
           {order.chefAckAt ? (
@@ -988,6 +1125,69 @@ export default function SupplierOrderDetailPage() {
                         className="px-4 py-3 rounded-cta border border-border text-button text-gray2">取消</button>
                 <button onClick={submitAdd} disabled={submitting || selectedCount === 0 || !adjustReason.trim() || hasPendingSelected}
                         className="px-6 py-3 bg-amber text-white rounded-cta text-button disabled:opacity-40">提交申请</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {deliveryAddTarget && (() => {
+        const existingProductIds = new Set(deliveryAddTarget.items.map(item => item.productId))
+        const availableProducts = catalog.filter(product => !existingProductIds.has(product.id))
+        const selectedProduct = availableProducts.find(product => product.id === deliveryAddProductId)
+        const selectedPricing = selectedProduct ? resolveRevisionCatalogPricing(selectedProduct) : null
+        const parsedAddQuantity = Number(deliveryAddQuantity)
+        const addQuantityValid = Number.isFinite(parsedAddQuantity) && parsedAddQuantity > 0
+        const parsedCustomPrice = Number(deliveryCustomPrice)
+        const customPriceValid = deliveryCustomPrice.trim() !== '' && Number.isFinite(parsedCustomPrice) && parsedCustomPrice >= 0
+        return (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/60 p-4 sm:items-center" onClick={() => { if (!submitting) setDeliveryAddTarget(null) }}>
+            <div className="w-full max-w-lg rounded-card bg-white p-4" onClick={event => event.stopPropagation()}>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-h2">增加配送商品</h3>
+                  <p className="mt-1 text-micro text-gray3">仅在送达前可操作，加入后同步库存、金额和送货单。</p>
+                </div>
+                <button type="button" onClick={() => setDeliveryAddTarget(null)} disabled={submitting} className="h-8 w-8 rounded-full bg-bg text-gray2 disabled:opacity-40">×</button>
+              </div>
+              {deliveryAdjustError && (
+                <div className="mt-3 rounded-cta border border-red/30 bg-red-bg px-3 py-2 text-caption text-red-fg">{deliveryAdjustError}</div>
+              )}
+              <div className="mt-4 grid grid-cols-2 rounded-cta bg-bg p-1">
+                <button type="button" onClick={() => setDeliveryAddMode('existing')} className={`rounded-cta px-3 py-2 text-button ${deliveryAddMode === 'existing' ? 'bg-white text-ink shadow-sm' : 'text-gray3'}`}>已有商品</button>
+                <button type="button" onClick={() => setDeliveryAddMode('custom')} className={`rounded-cta px-3 py-2 text-button ${deliveryAddMode === 'custom' ? 'bg-white text-ink shadow-sm' : 'text-gray3'}`}>自定义商品</button>
+              </div>
+
+              {deliveryAddMode === 'existing' ? (
+                <div className="mt-4 space-y-3">
+                  <label className="block text-micro text-gray3">选择商品</label>
+                  <select value={deliveryAddProductId} onChange={event => setDeliveryAddProductId(event.target.value)} className="w-full rounded-cta border border-border bg-white px-3 py-2 text-body">
+                    <option value="">请选择原配送单中没有的商品</option>
+                    {availableProducts.map(product => {
+                      const pricing = resolveRevisionCatalogPricing(product)
+                      return <option key={product.id} value={product.id} disabled={pricing.status !== 'READY'}>{product.name}{product.spec ? ` · ${product.spec}` : ''}{pricing.status === 'READY' ? ` · ¥${pricing.orderUnitPrice}/${pricing.orderUnit}` : ' · 价格待核验'}</option>
+                    })}
+                  </select>
+                  <div className="rounded-cta bg-bg px-3 py-2 text-caption text-gray2">
+                    {selectedPricing?.status === 'READY' ? `系统价格：¥${selectedPricing.orderUnitPrice} / ${selectedPricing.orderUnit}` : '选择商品后自动带出系统价格'}
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <label className="text-micro text-gray3 sm:col-span-2">商品名称<input value={deliveryCustomName} onChange={event => setDeliveryCustomName(event.target.value)} maxLength={80} className="mt-1 w-full rounded-cta border border-border px-3 py-2 text-body" placeholder="请输入新商品名称" /></label>
+                  <label className="text-micro text-gray3">单位<input value={deliveryCustomUnit} onChange={event => setDeliveryCustomUnit(event.target.value)} maxLength={16} className="mt-1 w-full rounded-cta border border-border px-3 py-2 text-body" placeholder="件 / kg / 箱" /></label>
+                  <label className="text-micro text-gray3">单价<input type="number" inputMode="decimal" min="0" step="0.01" value={deliveryCustomPrice} onChange={event => setDeliveryCustomPrice(event.target.value)} className="mt-1 w-full rounded-cta border border-border px-3 py-2 font-num text-body" placeholder="0.00" /></label>
+                </div>
+              )}
+
+              <label className="mt-4 block text-micro text-gray3">增加数量<input type="number" inputMode="decimal" min="0.01" step="0.01" value={deliveryAddQuantity} onChange={event => setDeliveryAddQuantity(event.target.value)} className="mt-1 w-full rounded-cta border border-border px-3 py-2 font-num text-body" /></label>
+              <div className="mt-5 flex gap-2">
+                <button type="button" onClick={() => setDeliveryAddTarget(null)} disabled={submitting} className="flex-1 rounded-cta border border-border py-2.5 text-button text-gray2 disabled:opacity-40">取消</button>
+                <button type="button" onClick={() => void submitDeliveryAdd()}
+                  disabled={submitting || !addQuantityValid || (deliveryAddMode === 'existing' ? !deliveryAddProductId || selectedPricing?.status !== 'READY' : !deliveryCustomName.trim() || !deliveryCustomUnit.trim() || !customPriceValid)}
+                  className="flex-1 rounded-cta bg-ink py-2.5 text-button text-white disabled:opacity-40">
+                  {submitting ? '提交中…' : '确认增加'}
+                </button>
               </div>
             </div>
           </div>

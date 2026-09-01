@@ -5,8 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { OrderCenterTabs } from '@/components/v2/order-center-tabs'
 import { apiFetch } from '@/lib/v2-auth'
-import { clientRequestId } from '@/lib/client-id'
-import { buildFulfillmentGroups, latestFulfillmentGroupOrderId, type FulfillmentGroup, type OperationGroup } from '@/lib/fulfillment-groups'
+import { buildFulfillmentGroups, type FulfillmentGroup, type OperationGroup } from '@/lib/fulfillment-groups'
 import { formatOrderStatusLabel, orderStatusTone } from '@/lib/supply-order-delivery-pc'
 
 type Order = {
@@ -56,25 +55,10 @@ function itemSummary(order: Order) {
 
 type ProductionFulfillmentGroup = Omit<FulfillmentGroup, 'orders'> & { orders: Order[] }
 
-function operationGroupWindow(group: ProductionFulfillmentGroup) {
-  const times = group.orders.map(order => Date.parse(order.createdAt)).filter(value => Number.isFinite(value))
-  if (times.length === 0) return null
-  const format = (value: number) => new Date(value).toLocaleString('zh-CN', {
-    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
-  })
-  const first = Math.min(...times)
-  const last = Math.max(...times)
-  return first === last ? format(first) : `${format(first)}—${format(last)}`
-}
-
 function InternalOperationGroupCard({
   group,
-  submitting,
-  onBatchConfirm,
 }: {
   group: ProductionFulfillmentGroup
-  submitting: string | null
-  onBatchConfirm: (group: ProductionFulfillmentGroup) => void
 }) {
   const first = group.orders[0]
   const metadata = group.metadata
@@ -82,87 +66,45 @@ function InternalOperationGroupCard({
   const memberCount = Math.max(metadata.memberCount || 0, group.orders.length)
   const memberNos = metadata.memberOrderNos || group.orders.map(order => order.no)
   const missingCount = Math.max(0, memberCount - group.orders.length)
-  const window = operationGroupWindow(group)
-  const isSubmitting = submitting === metadata.id
-  const latestOrderId = latestFulfillmentGroupOrderId(group)
-  const latestOrder = group.orders.find(order => order.id === latestOrderId)
-  const groupCanAdd = Boolean(
-    latestOrderId
-      && metadata.isEligible === true
-      && !metadata.blockedOrderIds?.includes(latestOrderId)
-      && (!latestOrder || latestOrder.status === 'SUBMITTED'),
-  )
-  const addProductHref = latestOrderId
-    ? `/v2/supply-chain/fulfillment/${encodeURIComponent(latestOrderId)}?operationGroup=${encodeURIComponent(metadata.id)}&groupAdd=1`
-    : null
+  const isPendingGroup = metadata.isEligible === true && group.orders.every(order => order.status === 'SUBMITTED')
 
   return (
-    <li
-      onClick={() => { location.href = `/v2/supply-chain/fulfillment/${first.id}` }}
-      className="rounded-card border border-amber/40 bg-white p-4 cursor-pointer hover:bg-bg-warm transition-colors"
-    >
-      <div className="flex flex-wrap items-center gap-2 border-b border-border pb-3">
-        <Chip tone="orange">同店两小时集合</Chip>
-        <span className="text-caption text-gray2">{memberCount} 张待接单订单</span>
-        {window && <span className="ml-auto text-micro text-gray3">下单时间 {window}</span>}
-      </div>
-      <div className="mt-3 divide-y divide-border/70">
-        {memberNos.map((no, index) => {
-          const order = group.orders.find(row => row.no === no) || group.orders[index]
-          if (!order) {
-            return <div key={`${metadata.id}:${no}:${index}`} className="py-2 text-caption text-gray3">订单号：{no} · 下单日期：—</div>
-          }
-          return (
-            <div key={`${metadata.id}:${order.id}`} className="py-3 first:pt-0 last:pb-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <Chip tone={orderStatusTone(order.status)}>{formatOrderStatusLabel(order.status)}</Chip>
-                <b className="font-num text-body">#{order.no}</b>
-                <span className="text-micro text-gray3 ml-auto">{new Date(order.createdAt).toLocaleString('zh-CN', { hour12: false })}</span>
+    <li className="rounded-card border border-border bg-white px-4">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+        <div className="min-w-0 divide-y divide-border/70">
+          {memberNos.map((no, index) => {
+            const order = group.orders.find(row => row.no === no)
+            if (!order) {
+              return <div key={`${metadata.id}:${no}:${index}`} className="py-3 text-caption text-gray3">订单号：{no} · 下单日期：—</div>
+            }
+            return (
+              <div key={`${metadata.id}:${order.id}`} className="grid gap-4 py-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] lg:items-center">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Chip tone={orderStatusTone(order.status)}>{formatOrderStatusLabel(order.status)}</Chip>
+                    <b className="font-num text-body">#{order.no}</b>
+                    <span className="text-micro text-gray3">{new Date(order.createdAt).toLocaleString('zh-CN', { hour12: false })}</span>
+                  </div>
+                  <h2 className="mt-2 text-h2">{order.store?.name || '未知门店'}</h2>
+                  <p className="mt-1 text-caption text-gray2">{itemSummary(order)}</p>
+                </div>
+                <div className="text-caption text-gray2">
+                  <div>供应商：{order.supplier?.name || '未分配'}</div>
+                  <div className="mt-1">期望到货：{order.expectedDate?.slice(0, 10) || '—'}</div>
+                  <div className="mt-1 font-num text-h2 text-ink">¥{Number(order.totalAmount || 0).toLocaleString('zh-CN')}</div>
+                </div>
               </div>
-              <div className="mt-1 flex items-center justify-between gap-3">
-                <span className="text-h2">{order.store?.name || '未知门店'}</span>
-                <span className="font-num text-h2">¥{Number(order.totalAmount || 0).toLocaleString('zh-CN')}</span>
-              </div>
-              <p className="mt-1 text-caption text-gray2">{itemSummary(order)}</p>
-            </div>
-          )
-        })}
-        {missingCount > 0 && <div className="pt-2 text-micro text-gray3">还有 {missingCount} 张订单将在批量操作时一并处理</div>}
+            )
+          })}
+          {missingCount > 0 && <div className="py-2 text-micro text-gray3">还有 {missingCount} 张订单将在批量操作时一并处理</div>}
+        </div>
+        <Link
+          href={`/v2/supply-chain/fulfillment/group/${encodeURIComponent(metadata.id)}`}
+          className="mb-4 min-w-28 rounded-cta bg-ink px-4 py-2.5 text-center text-button text-white lg:mb-0"
+        >
+          {isPendingGroup ? '批量接单 ›' : '查看集合 ›'}
+        </Link>
       </div>
-      <button
-        type="button"
-        disabled={isSubmitting || !group.canBatchConfirm}
-        onClick={event => {
-          event.stopPropagation()
-          onBatchConfirm(group)
-        }}
-        className="mt-4 w-full rounded-cta bg-ink px-4 py-2.5 text-center text-button text-white disabled:opacity-50"
-      >
-        {isSubmitting ? '批量接单中…' : `批量接单（${memberCount}）`}
-      </button>
-      <a
-        href={`/v2/supply-chain/fulfillment/${encodeURIComponent(metadata.id)}/delivery-note`}
-        onClick={event => event.stopPropagation()}
-        className="mt-2 block w-full rounded-cta border border-border bg-white px-4 py-2.5 text-center text-button text-gray2 hover:bg-bg-warm"
-      >
-        🖨 打印集合送货单
-      </a>
-      {addProductHref && groupCanAdd ? (
-        <a
-          href={addProductHref}
-          onClick={event => event.stopPropagation()}
-          className="mt-2 block w-full rounded-cta border border-amber/50 bg-amber/5 px-4 py-2.5 text-center text-button text-amber-fg hover:bg-amber/10"
-        >
-          ＋ 增加商品（默认加入最晚订单）
-        </a>
-      ) : (
-        <span
-          className="mt-2 block w-full rounded-cta border border-border bg-bg px-4 py-2.5 text-center text-button text-gray3"
-          title="集合当前不可申请调整"
-        >
-          ＋ 增加商品（暂不可用）
-        </span>
-      )}
     </li>
   )
 }
@@ -172,7 +114,6 @@ export default function InternalSupplyChainFulfillmentPage() {
   const [bucket, setBucket] = useState<Bucket>('ALL')
   const [keyword, setKeyword] = useState('')
   const [error, setError] = useState('')
-  const [submitting, setSubmitting] = useState<string | null>(null)
 
   function load() {
     setError('')
@@ -182,27 +123,6 @@ export default function InternalSupplyChainFulfillmentPage() {
         setOrders([])
         setError(String(reason?.message || reason))
       })
-  }
-
-  async function confirmOperationGroup(group: ProductionFulfillmentGroup) {
-    const metadata = group.metadata
-    if (!metadata || !group.canBatchConfirm || submitting) return
-    const orderIds = metadata.memberOrderIds?.length
-      ? metadata.memberOrderIds
-      : group.orders.map(order => order.id)
-    setSubmitting(metadata.id)
-    setError('')
-    try {
-      await apiFetch(`/api/orders/operation-groups/${encodeURIComponent(metadata.id)}/confirm`, {
-        method: 'POST',
-        body: JSON.stringify({ orderIds, idempotencyKey: clientRequestId() }),
-      })
-      load()
-    } catch (reason: any) {
-      setError(String(reason?.message || reason || '批量接单失败'))
-    } finally {
-      setSubmitting(null)
-    }
   }
 
   useEffect(() => { load() }, [])
@@ -301,8 +221,6 @@ export default function InternalSupplyChainFulfillmentPage() {
               <InternalOperationGroupCard
                 key={`group:${entry.group.id}`}
                 group={entry.group}
-                submitting={submitting}
-                onBatchConfirm={confirmOperationGroup}
               />
             )
           }

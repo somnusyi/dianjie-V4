@@ -567,7 +567,7 @@ export default function DeliveryNotePrintPage() {
     <>
       {/* 打印样式 — 纸张 + 隐藏顶栏 */}
       <style jsx global>{`
-        @page { size: A4; margin: 12mm; }
+        @page { size: A4; margin: ${isOperationGroup ? '12mm 12mm 6mm 12mm' : '12mm'}; }
         @media print {
           body { background: white !important; }
           .no-print { display: none !important; }
@@ -648,8 +648,11 @@ export default function DeliveryNotePrintPage() {
       )}
 
       {/* A4 纸面 */}
-      <div id="print-area" className="print-page mx-auto my-6 bg-white p-10 shadow-md text-ink"
-           style={{ width: '210mm', minHeight: '297mm', fontFamily: 'system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif' }}>
+      <div
+        id="print-area"
+        className={`print-page mx-auto my-6 bg-white shadow-md text-ink ${isOperationGroup ? 'px-10 pb-5 pt-10' : 'p-10'}`}
+        style={{ width: '210mm', minHeight: isOperationGroup ? 'auto' : '297mm', fontFamily: 'system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif' }}
+      >
         {/* 抬头 */}
         <div className="text-center border-b-2 border-ink pb-3">
           <div className="text-2xl font-bold tracking-widest">{order.supplier.name}</div>

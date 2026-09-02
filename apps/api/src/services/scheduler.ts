@@ -30,7 +30,7 @@ export async function autoReceivePurchaseOrder(orderId: string) {
         where: { status: 'DELIVERED' },
         orderBy: { deliveredAt: 'desc' },
         take: 1,
-        include: { items: { include: { product: { select: { shelfDays: true } } } } },
+        include: { items: { where: { shippedQty: { gt: 0 }, removedAt: null }, include: { product: { select: { shelfDays: true } } } } },
       },
     },
   })

@@ -766,7 +766,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         deliveries: {
           orderBy: { createdAt: 'asc' },
           include: {
-            items: { where: { shippedQty: { gt: 0 } }, include: { product: true } },
+            items: { where: { removedAt: null }, include: { product: true } },
             receipt: { select: { id: true, no: true, totalAmount: true, status: true } },
           },
         },

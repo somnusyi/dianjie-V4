@@ -211,7 +211,7 @@ const detailInclude = {
   items: { where: { isActive: true }, include: { product: true } },
   deliveries: {
     orderBy: { createdAt: 'asc' as const },
-    include: { items: { where: { shippedQty: { gt: 0 } }, include: { product: true } } },
+    include: { items: { where: { removedAt: null }, include: { product: true } } },
   },
 }
 

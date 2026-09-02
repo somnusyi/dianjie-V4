@@ -287,9 +287,9 @@ async function resolveWarehouseMode(
 }
 
 /**
- * 在收货前移除配送单的一行。配送明细采用“软移除”（实发量/金额置零），
- * 原订单、原始快照和历史流水均保留；读取接口过滤零实发行，所以用户看到的
- * 效果仍是商品被移除。所有库存、预占、订单金额和审计事件在同一事务完成。
+ * 在收货前移除配送单的一行。配送明细采用“软移除”（实发量/金额置零并记录
+ * removedAt），原订单、原始快照和历史流水均保留。读取接口只过滤 removedAt，
+ * 因此“数量保存为 0”仍会显示，只有点击移除才从页面消失。
  */
 export async function removeDeliveryItemInTransaction(
   tx: Prisma.TransactionClient,
@@ -352,7 +352,7 @@ export async function removeDeliveryItemInTransaction(
   const item = delivery.items.find(candidate => candidate.id === input.itemId)
   if (!item) throw businessError('配送商品不存在', 404)
   const removedQty = new Prisma.Decimal(item.shippedQty as any)
-  if (removedQty.lte(0)) {
+  if (item.removedAt) {
     return {
       success: true,
       alreadyRemoved: true,
@@ -370,7 +370,7 @@ export async function removeDeliveryItemInTransaction(
   const remainingCount = await tx.deliveryOrderItem.count({
     where: { deliveryOrderId: delivery.id, id: { not: item.id }, shippedQty: { gt: 0 } },
   })
-  if (remainingCount === 0) throw businessError('配送单至少要保留一件商品；如整单不发请走拒单流程', 409)
+  if (removedQty.gt(0) && remainingCount === 0) throw businessError('配送单至少要保留一件商品；如整单不发请走拒单流程', 409)
 
   const poItemId = item.purchaseOrderItemId
   if (!poItemId) throw businessError('历史配送明细未关联原订货行，不能安全移除', 409)
@@ -387,17 +387,19 @@ export async function removeDeliveryItemInTransaction(
       if (warehouseReservation?.status === 'ACTIVE') {
         throw businessError('总仓预占尚未结算，暂不能移除；请稍后刷新重试', 409)
       }
-      await reverseWarehouseOutboundQuantity(tx, {
-        tenantId: input.tenantId,
-        userId: input.userId,
-        deliveryOrderId: delivery.id,
-        deliveryOrderItemId: item.id,
-        purchaseOrderItemId: poItemId,
-        productId: item.productId,
-        quantity: removedQty,
-        reason,
-        operationKey: 'remove',
-      })
+      if (removedQty.gt(0)) {
+        await reverseWarehouseOutboundQuantity(tx, {
+          tenantId: input.tenantId,
+          userId: input.userId,
+          deliveryOrderId: delivery.id,
+          deliveryOrderItemId: item.id,
+          purchaseOrderItemId: poItemId,
+          productId: item.productId,
+          quantity: removedQty,
+          reason,
+          operationKey: 'remove',
+        })
+      }
       if (warehouseReservation?.status === 'CONSUMED') {
         await tx.warehouseLedgerReservation.update({
           where: { id: warehouseReservation.id },
@@ -406,17 +408,19 @@ export async function removeDeliveryItemInTransaction(
       }
     }
   } else if (delivery.purchaseOrder.supplier.inventoryMode === 'STRICT') {
-    await reverseSupplierOutbound(tx, {
-      tenantId: input.tenantId,
-      supplierId: input.supplierId,
-      deliveryOrderId: delivery.id,
-      deliveryOrderItemId: item.id,
-      productId: item.productId,
-      quantity: removedQty,
-      userId: input.userId,
-      orderNo: delivery.purchaseOrder.no,
-      reason,
-    })
+    if (removedQty.gt(0)) {
+      await reverseSupplierOutbound(tx, {
+        tenantId: input.tenantId,
+        supplierId: input.supplierId,
+        deliveryOrderId: delivery.id,
+        deliveryOrderItemId: item.id,
+        productId: item.productId,
+        quantity: removedQty,
+        userId: input.userId,
+        orderNo: delivery.purchaseOrder.no,
+        reason,
+      })
+    }
     const reservation = await tx.supplierStockReservation.findUnique({ where: { purchaseOrderItemId: poItemId } })
     if (reservation) {
       const nextFulfilled = Prisma.Decimal.max(new Prisma.Decimal(0), new Prisma.Decimal(reservation.fulfilledQty as any).minus(removedQty))
@@ -432,7 +436,7 @@ export async function removeDeliveryItemInTransaction(
 
   await tx.deliveryOrderItem.update({
     where: { id: item.id },
-    data: { shippedQty: ZERO, amount: ZERO, receivedQty: null },
+    data: { shippedQty: ZERO, amount: ZERO, receivedQty: null, removedAt: new Date() },
   })
 
   const remainingDeliveryItems = await tx.deliveryOrderItem.findMany({
@@ -802,21 +806,21 @@ async function recalculateDeliveryAndOrderTotals(
   return { deliveryTotal, orderTotal }
 }
 
-/** Internal supply chain adjusts a positive shipped quantity before delivery. */
+/** Internal supply chain adjusts a non-negative shipped quantity before delivery. */
 export async function changeDeliveryItemQuantityInTransaction(
   tx: Prisma.TransactionClient,
   input: QuantityInput,
 ) {
   const delivery = await loadDeliveryForInternalMutation(tx, input)
   const item = delivery.items.find(candidate => candidate.id === input.itemId)
-  if (!item || new Prisma.Decimal(item.shippedQty).lte(0)) throw businessError('配送商品不存在', 404)
+  if (!item || item.removedAt) throw businessError('配送商品不存在', 404)
   if (!item.purchaseOrderItemId) throw businessError('历史配送明细未关联原订货行，不能安全调整', 409)
   const poItem = delivery.purchaseOrder.items.find(candidate => candidate.id === item.purchaseOrderItemId)
   if (!poItem) throw businessError('原订货行不存在或已停用，不能安全调整', 409)
 
   const target = new Prisma.Decimal(input.targetQuantity).toDecimalPlaces(2)
   const current = new Prisma.Decimal(item.shippedQty).toDecimalPlaces(2)
-  if (target.lte(0)) throw businessError('调整后数量必须大于 0；数量为 0 请使用移除商品', 400)
+  if (target.lt(0)) throw businessError('调整后数量不能小于 0', 400)
   if (target.equals(current)) throw businessError('调整后数量与当前相同', 400)
   const delta = target.minus(current)
   const reason = String(input.reason || '内部供应链在送达前调整商品数量').trim().slice(0, 200)
@@ -1021,9 +1025,9 @@ export async function addDeliveryItemInTransaction(
   const duplicate = delivery.items.find(candidate => candidate.productId === product.id)
   if (duplicate) {
     throw businessError(
-      new Prisma.Decimal(duplicate.shippedQty).gt(0)
-        ? '该商品已在配送单中，请使用数量调整'
-        : '该商品曾从本配送单移除，为保留原审计行暂不能重复新增',
+      duplicate.removedAt
+        ? '该商品曾从本配送单移除，为保留原审计行暂不能重复新增'
+        : '该商品已在配送单中，请使用数量调整',
       409,
     )
   }

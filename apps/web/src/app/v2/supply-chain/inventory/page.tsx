@@ -365,7 +365,7 @@ export default function InternalSupplyChainInventoryPage() {
     setBatchSearch('')
   }
 
-  // 入库行内键盘导航：↑↓ 换行、Enter 下移、←→ 在光标到文本边缘时换格（中间位置保留正常光标移动）
+  // 入库行内键盘导航：数字输入框不可靠支持 selectionStart，方向键直接按表格单元格移动。
   function gridCellKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     const key = event.key
     if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter'].includes(key)) return
@@ -376,13 +376,8 @@ export default function InternalSupplyChainInventoryPage() {
     let nextCol = col
     if (key === 'ArrowUp') nextRow = row - 1
     else if (key === 'ArrowDown' || key === 'Enter') nextRow = row + 1
-    else if (key === 'ArrowLeft') {
-      if ((cell.selectionStart ?? 0) > 0) return
-      nextCol = col - 1
-    } else if (key === 'ArrowRight') {
-      if ((cell.selectionStart ?? 0) < cell.value.length) return
-      nextCol = col + 1
-    }
+    else if (key === 'ArrowLeft') nextCol = col - 1
+    else if (key === 'ArrowRight') nextCol = col + 1
     const next = cell.closest('table')?.querySelector(`input[data-grid-r="${nextRow}"][data-grid-c="${nextCol}"]`) as HTMLInputElement | null
     if (!next) return
     event.preventDefault()

@@ -2168,6 +2168,7 @@ model DeliveryOrderItem {
   inventoryUnitsPerCostUnitSnapshot     Decimal?                     @db.Decimal(18, 6)
   manufactureDate                       DateTime?                    @db.Date
   expiryDate                            DateTime?                    @db.Date
+  removedAt                             DateTime?
   createdAt                             DateTime                     @default(now())
 
   deliveryOrder     DeliveryOrder      @relation(fields: [deliveryOrderId], references: [id], onDelete: Cascade)
@@ -2177,6 +2178,7 @@ model DeliveryOrderItem {
 
   @@unique([deliveryOrderId, productId])
   @@index([productId, deliveryOrderId])
+  @@index([deliveryOrderId, removedAt])
   @@map("delivery_order_items")
 }
 

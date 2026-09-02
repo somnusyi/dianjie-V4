@@ -116,12 +116,8 @@ export default function SupplierOrderDetailPage() {
   const [adjustingItemId, setAdjustingItemId] = useState<string | null>(null)
   const [deliveryQty, setDeliveryQty] = useState<Record<string, string>>({})
   const [deliveryAddTarget, setDeliveryAddTarget] = useState<NonNullable<Order['deliveries']>[number] | null>(null)
-  const [deliveryAddMode, setDeliveryAddMode] = useState<'existing' | 'custom'>('existing')
   const [deliveryAddProductId, setDeliveryAddProductId] = useState('')
   const [deliveryAddQuantity, setDeliveryAddQuantity] = useState('1')
-  const [deliveryCustomName, setDeliveryCustomName] = useState('')
-  const [deliveryCustomUnit, setDeliveryCustomUnit] = useState('件')
-  const [deliveryCustomPrice, setDeliveryCustomPrice] = useState('')
   const [deliveryAdjustError, setDeliveryAdjustError] = useState<string | null>(null)
   const [shipNote, setShipNote] = useState('')
   // 发货时可调整每行的实际发货量 (称重 / 缺货). key=itemId, value=shippedQty
@@ -405,14 +401,14 @@ export default function SupplierOrderDetailPage() {
     setDeliveryAdjustError(null)
     const targetQuantity = Number(deliveryQty[item.id])
     const currentQuantity = Number(item.shippedQty)
-    if (!Number.isFinite(targetQuantity) || targetQuantity <= 0) {
-      setDeliveryAdjustError('数量必须大于 0；如需删除整项，请点击“移除”')
+    if (!Number.isFinite(targetQuantity) || targetQuantity < 0) {
+      setDeliveryAdjustError('数量不能小于 0')
       return
     }
     if (Math.abs(targetQuantity - currentQuantity) < 0.0001) return
     openConfirm({
-      title: `修改配送数量？`,
-      body: `${item.product?.name || '该商品'} · ${currentQuantity}${item.product?.unit || ''} → ${targetQuantity}${item.product?.unit || ''}\n仅在送达前可操作，库存、金额和送货单会同步更新。`,
+      title: '修改配送数量？',
+      body: `${item.product?.name || '该商品'} · ${currentQuantity}${item.product?.unit || ''} → ${targetQuantity}${item.product?.unit || ''}\n数量保存为 0 时商品仍保留；仅点击“移除”才会移除商品。库存、金额和送货单会同步更新。`,
       confirmLabel: '确认修改',
       tone: 'primary',
       onConfirm: async () => {
@@ -421,7 +417,11 @@ export default function SupplierOrderDetailPage() {
         try {
           await apiFetch(`/api/deliveries/${delivery.id}/item-quantity`, {
             method: 'PATCH',
-            body: JSON.stringify({ itemId: item.id, targetQuantity, rowVersion: delivery.rowVersion }),
+            body: JSON.stringify({
+              itemId: item.id,
+              rowVersion: delivery.rowVersion,
+              targetQuantity,
+            }),
           })
           load()
         } catch (e: any) { setDeliveryAdjustError(e.message || '修改数量失败'); throw e }
@@ -433,7 +433,7 @@ export default function SupplierOrderDetailPage() {
   function canSaveDeliveryItemQuantity(item: NonNullable<Order['deliveries']>[number]['items'][number]) {
     const targetQuantity = Number(deliveryQty[item.id])
     return Number.isFinite(targetQuantity)
-      && targetQuantity > 0
+      && targetQuantity >= 0
       && Math.abs(targetQuantity - Number(item.shippedQty)) >= 0.0001
   }
 
@@ -441,12 +441,8 @@ export default function SupplierOrderDetailPage() {
     if (!order || !canAdjustDeliveryBeforeDelivery || delivery.receipt || delivery.status !== 'SHIPPED') return
     setDeliveryAdjustError(null)
     setDeliveryAddTarget(delivery)
-    setDeliveryAddMode('existing')
     setDeliveryAddProductId('')
     setDeliveryAddQuantity('1')
-    setDeliveryCustomName('')
-    setDeliveryCustomUnit('件')
-    setDeliveryCustomPrice('')
     try {
       const data = await apiFetch<any>(`/api/products?supplierId=${encodeURIComponent(order.supplier.id)}&page=1&pageSize=100`)
       const list = Array.isArray(data) ? data : (data?.items || [])
@@ -462,12 +458,7 @@ export default function SupplierOrderDetailPage() {
     setDeliveryAdjustError(null)
     const quantity = Number(deliveryAddQuantity)
     if (!Number.isFinite(quantity) || quantity <= 0) { setDeliveryAdjustError('新增数量必须大于 0'); return }
-    const customPrice = Number(deliveryCustomPrice)
-    if (deliveryAddMode === 'existing' && !deliveryAddProductId) { setDeliveryAdjustError('请选择已有商品'); return }
-    if (deliveryAddMode === 'custom' && (!deliveryCustomName.trim() || !deliveryCustomUnit.trim() || !Number.isFinite(customPrice) || customPrice < 0)) {
-      setDeliveryAdjustError('请完整填写自定义商品名称、单位和价格')
-      return
-    }
+    if (!deliveryAddProductId) { setDeliveryAdjustError('请选择仓库商品'); return }
     setSubmitting(true)
     try {
       await apiFetch(`/api/deliveries/${deliveryAddTarget.id}/add-item`, {
@@ -475,9 +466,7 @@ export default function SupplierOrderDetailPage() {
         body: JSON.stringify({
           quantity,
           rowVersion: deliveryAddTarget.rowVersion,
-          ...(deliveryAddMode === 'existing'
-            ? { productId: deliveryAddProductId }
-            : { customProduct: { name: deliveryCustomName.trim(), unit: deliveryCustomUnit.trim(), unitPrice: customPrice } }),
+          productId: deliveryAddProductId,
         }),
       })
       setDeliveryAddTarget(null)
@@ -609,9 +598,10 @@ export default function SupplierOrderDetailPage() {
             <div className="mt-2 rounded-cta border border-red/30 bg-red-bg px-3 py-2 text-caption text-red-fg">{deliveryAdjustError}</div>
           )}
           <ul className="mt-2 space-y-2">
-            {order.deliveries!.map(delivery => (
+            {order.deliveries!.map((delivery, deliveryIndex) => (
               <li key={delivery.id} className="rounded-cta border border-border bg-bg p-2">
                 <div className="flex items-center gap-2">
+                  <span className="rounded-chip bg-white px-2 py-0.5 font-num text-micro text-gray3">序号 {deliveryIndex + 1}</span>
                   <span className="font-num text-caption">{delivery.no}</span>
                   <Chip tone={delivery.status === 'RECEIVED' ? 'green' : 'orange'}>{delivery.status}</Chip>
                   <span className="ml-auto font-num text-caption">¥{Number(delivery.actualTotalAmount).toLocaleString()}</span>
@@ -635,7 +625,7 @@ export default function SupplierOrderDetailPage() {
                         <span className="flex-1 truncate">{item.product?.name || '商品'} · {item.shippedQty}{item.product?.unit || ''}</span>
                         {canAdjustDeliveryBeforeDelivery && delivery.status === 'SHIPPED' && (
                           <>
-                            <input type="number" inputMode="decimal" min="0.01" step="0.01"
+                            <input type="number" inputMode="decimal" min="0" step="0.01"
                               aria-label={`${item.product?.name || '商品'}配送数量`}
                               value={deliveryQty[item.id] ?? String(item.shippedQty)}
                               onChange={event => setDeliveryQty(current => ({ ...current, [item.id]: event.target.value }))}
@@ -683,29 +673,32 @@ export default function SupplierOrderDetailPage() {
           )}
           <span className="text-caption text-gray3 font-num">合计 ¥{currentOrderAmount.toLocaleString()}</span>
         </div>
-        <ul className="divide-y divide-border">
-          {order.items.map(it => (
-            <li key={it.id} className="px-3 py-2 flex items-start gap-2 text-caption">
-              <div className="flex-1 min-w-0">
-                <div className="truncate">{it.product?.name || '-'}</div>
-                {it.product?.spec && <div className="text-micro text-gray3">{it.product.spec}</div>}
-              </div>
-              <div className="text-right font-num">
-                {/* 总价醒目 + 下方"数量 × 单价"拆解, 替代原来易误解的 "¥50 → ¥250" 箭头 */}
-                <div className="text-caption">¥{Number(it.amount).toLocaleString()}</div>
-                <div className="text-micro text-gray3">
-                  {it.quantity}{it.product?.unit || ''} × ¥{it.unitPrice}{it.product?.unit ? `/${it.product.unit}` : ''}
-                </div>
-                {it.shippedQty != null && Math.abs(Number(it.shippedQty) - Number(it.quantity)) > 0.0001 && (
-                  <div className="text-micro text-amber-fg">实发 {it.shippedQty}</div>
-                )}
-                {it.receivedQty != null && Math.abs(Number(it.receivedQty) - Number(it.shippedQty ?? it.quantity)) > 0.0001 && (
-                  <div className="text-micro text-red-fg">实收 {it.receivedQty}</div>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
+        <div className="overflow-x-auto border-t border-border">
+          <table className="w-full min-w-[680px] text-left text-caption">
+            <thead className="bg-bg text-micro text-gray3">
+              <tr>
+                <th className="w-16 px-3 py-2">序号</th>
+                <th className="px-3 py-2">名称</th>
+                <th className="px-3 py-2 text-right">数量</th>
+                <th className="px-3 py-2">规格</th>
+                <th className="px-3 py-2 text-right">单价</th>
+                <th className="px-3 py-2 text-right">总价</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {order.items.map((it, itemIndex) => (
+                <tr key={it.id}>
+                  <td className="px-3 py-3 font-num text-gray3">{itemIndex + 1}</td>
+                  <td className="px-3 py-3">{it.product?.name || '-'}</td>
+                  <td className="px-3 py-3 text-right font-num">{it.shippedQty ?? it.quantity}{it.product?.unit || ''}</td>
+                  <td className="px-3 py-3 text-gray2">{it.product?.spec || '-'}</td>
+                  <td className="px-3 py-3 text-right font-num">¥{Number(it.unitPrice).toLocaleString()}</td>
+                  <td className="px-3 py-3 text-right font-num">¥{Number(it.amount).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* 到货差异 — 显示履约链、完整明细、证据与处理按钮 */}
@@ -1138,8 +1131,6 @@ export default function SupplierOrderDetailPage() {
         const selectedPricing = selectedProduct ? resolveRevisionCatalogPricing(selectedProduct) : null
         const parsedAddQuantity = Number(deliveryAddQuantity)
         const addQuantityValid = Number.isFinite(parsedAddQuantity) && parsedAddQuantity > 0
-        const parsedCustomPrice = Number(deliveryCustomPrice)
-        const customPriceValid = deliveryCustomPrice.trim() !== '' && Number.isFinite(parsedCustomPrice) && parsedCustomPrice >= 0
         return (
           <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/60 p-4 sm:items-center" onClick={() => { if (!submitting) setDeliveryAddTarget(null) }}>
             <div className="w-full max-w-lg rounded-card bg-white p-4" onClick={event => event.stopPropagation()}>
@@ -1153,38 +1144,25 @@ export default function SupplierOrderDetailPage() {
               {deliveryAdjustError && (
                 <div className="mt-3 rounded-cta border border-red/30 bg-red-bg px-3 py-2 text-caption text-red-fg">{deliveryAdjustError}</div>
               )}
-              <div className="mt-4 grid grid-cols-2 rounded-cta bg-bg p-1">
-                <button type="button" onClick={() => setDeliveryAddMode('existing')} className={`rounded-cta px-3 py-2 text-button ${deliveryAddMode === 'existing' ? 'bg-white text-ink shadow-sm' : 'text-gray3'}`}>已有商品</button>
-                <button type="button" onClick={() => setDeliveryAddMode('custom')} className={`rounded-cta px-3 py-2 text-button ${deliveryAddMode === 'custom' ? 'bg-white text-ink shadow-sm' : 'text-gray3'}`}>自定义商品</button>
+              <div className="mt-4 space-y-3">
+                <label className="block text-micro text-gray3">选择仓库商品</label>
+                <select value={deliveryAddProductId} onChange={event => setDeliveryAddProductId(event.target.value)} className="w-full rounded-cta border border-border bg-white px-3 py-2 text-body">
+                  <option value="">请选择原配送单中没有的仓库商品</option>
+                  {availableProducts.map(product => {
+                    const pricing = resolveRevisionCatalogPricing(product)
+                    return <option key={product.id} value={product.id} disabled={pricing.status !== 'READY'}>{product.name}{product.spec ? ` · ${product.spec}` : ''}{pricing.status === 'READY' ? ` · ¥${pricing.orderUnitPrice}/${pricing.orderUnit}` : ' · 价格待核验'}</option>
+                  })}
+                </select>
+                <div className="rounded-cta bg-bg px-3 py-2 text-caption text-gray2">
+                  {selectedPricing?.status === 'READY' ? `系统价格：¥${selectedPricing.orderUnitPrice} / ${selectedPricing.orderUnit}` : '选择仓库商品后自动带出系统价格'}
+                </div>
               </div>
-
-              {deliveryAddMode === 'existing' ? (
-                <div className="mt-4 space-y-3">
-                  <label className="block text-micro text-gray3">选择商品</label>
-                  <select value={deliveryAddProductId} onChange={event => setDeliveryAddProductId(event.target.value)} className="w-full rounded-cta border border-border bg-white px-3 py-2 text-body">
-                    <option value="">请选择原配送单中没有的商品</option>
-                    {availableProducts.map(product => {
-                      const pricing = resolveRevisionCatalogPricing(product)
-                      return <option key={product.id} value={product.id} disabled={pricing.status !== 'READY'}>{product.name}{product.spec ? ` · ${product.spec}` : ''}{pricing.status === 'READY' ? ` · ¥${pricing.orderUnitPrice}/${pricing.orderUnit}` : ' · 价格待核验'}</option>
-                    })}
-                  </select>
-                  <div className="rounded-cta bg-bg px-3 py-2 text-caption text-gray2">
-                    {selectedPricing?.status === 'READY' ? `系统价格：¥${selectedPricing.orderUnitPrice} / ${selectedPricing.orderUnit}` : '选择商品后自动带出系统价格'}
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <label className="text-micro text-gray3 sm:col-span-2">商品名称<input value={deliveryCustomName} onChange={event => setDeliveryCustomName(event.target.value)} maxLength={80} className="mt-1 w-full rounded-cta border border-border px-3 py-2 text-body" placeholder="请输入新商品名称" /></label>
-                  <label className="text-micro text-gray3">单位<input value={deliveryCustomUnit} onChange={event => setDeliveryCustomUnit(event.target.value)} maxLength={16} className="mt-1 w-full rounded-cta border border-border px-3 py-2 text-body" placeholder="件 / kg / 箱" /></label>
-                  <label className="text-micro text-gray3">单价<input type="number" inputMode="decimal" min="0" step="0.01" value={deliveryCustomPrice} onChange={event => setDeliveryCustomPrice(event.target.value)} className="mt-1 w-full rounded-cta border border-border px-3 py-2 font-num text-body" placeholder="0.00" /></label>
-                </div>
-              )}
 
               <label className="mt-4 block text-micro text-gray3">增加数量<input type="number" inputMode="decimal" min="0.01" step="0.01" value={deliveryAddQuantity} onChange={event => setDeliveryAddQuantity(event.target.value)} className="mt-1 w-full rounded-cta border border-border px-3 py-2 font-num text-body" /></label>
               <div className="mt-5 flex gap-2">
                 <button type="button" onClick={() => setDeliveryAddTarget(null)} disabled={submitting} className="flex-1 rounded-cta border border-border py-2.5 text-button text-gray2 disabled:opacity-40">取消</button>
                 <button type="button" onClick={() => void submitDeliveryAdd()}
-                  disabled={submitting || !addQuantityValid || (deliveryAddMode === 'existing' ? !deliveryAddProductId || selectedPricing?.status !== 'READY' : !deliveryCustomName.trim() || !deliveryCustomUnit.trim() || !customPriceValid)}
+                  disabled={submitting || !addQuantityValid || !deliveryAddProductId || selectedPricing?.status !== 'READY'}
                   className="flex-1 rounded-cta bg-ink py-2.5 text-button text-white disabled:opacity-40">
                   {submitting ? '提交中…' : '确认增加'}
                 </button>

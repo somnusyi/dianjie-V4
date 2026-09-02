@@ -116,7 +116,7 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
           purchaseOrder: { select: { id: true, no: true, status: true, originalTotalAmount: true, currentOrderAmount: true } },
           store: { select: { id: true, name: true } },
           supplier: { select: { id: true, name: true } },
-          items: { where: { shippedQty: { gt: 0 } }, include: { product: { select: { id: true, code: true, name: true, unit: true, spec: true } } } },
+          items: { where: { removedAt: null }, include: { product: { select: { id: true, code: true, name: true, unit: true, spec: true } } } },
           receipt: { select: { id: true, no: true, totalAmount: true, status: true } },
         },
       }),
@@ -147,7 +147,7 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
         shippedBy: { select: { id: true, name: true } },
         deliveredBy: { select: { id: true, name: true } },
         receivedBy: { select: { id: true, name: true } },
-        items: { where: { shippedQty: { gt: 0 } }, include: { product: true } },
+        items: { where: { removedAt: null }, include: { product: true } },
         events: { orderBy: { occurredAt: 'asc' }, include: { actor: { select: { id: true, name: true, role: true } } } },
         receipt: { include: { items: { include: { product: true } } } },
       },
@@ -187,7 +187,7 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
     const parsed = z.object({
       itemId: z.string().trim().min(1, 'itemId 必填'),
       targetQuantity: z.coerce.number()
-        .positive('调整后数量必须大于 0')
+        .nonnegative('调整后数量不能小于 0')
         .max(99_999_999.99, '调整后数量超过系统上限')
         .refine(value => Math.abs(value * 100 - Math.round(value * 100)) < 0.000001, '数量最多保留 2 位小数'),
       rowVersion: z.coerce.number().int().nonnegative('rowVersion 无效'),

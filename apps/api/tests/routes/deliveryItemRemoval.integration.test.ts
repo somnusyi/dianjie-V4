@@ -322,4 +322,44 @@ describe('delivery item removal (integration)', () => {
     expect(response.statusCode).toBe(200)
     expect(response.json()).toMatchObject({ success: true, deliveryTotal: '30.00', orderTotal: '30.00' })
   })
+
+  it('keeps a zero-quantity item visible until remove is explicitly used', async () => {
+    const saveZero = await app.inject({
+      method: 'PATCH',
+      url: `/api/deliveries/${deliveryId}/item-quantity`,
+      headers: { 'x-test-actor': 'supply-chain' },
+      payload: { itemId: itemDId, targetQuantity: 0, rowVersion: 7 },
+    })
+    expect(saveZero.statusCode).toBe(200)
+    expect(saveZero.json()).toMatchObject({ rowVersion: 8, deliveryTotal: '10.00', orderTotal: '10.00' })
+
+    const afterSave = await app.inject({
+      method: 'GET',
+      url: `/api/deliveries/${deliveryId}`,
+      headers: { 'x-test-actor': 'supply-chain' },
+    })
+    expect(afterSave.statusCode).toBe(200)
+    expect(afterSave.json().items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: itemDId, shippedQty: '0' }),
+    ]))
+    expect((await prisma.deliveryOrderItem.findUniqueOrThrow({ where: { id: itemDId } })).removedAt).toBeNull()
+
+    const removeZero = await app.inject({
+      method: 'PATCH',
+      url: `/api/deliveries/${deliveryId}/remove-item`,
+      headers: { 'x-test-actor': 'supply-chain' },
+      payload: { itemId: itemDId, rowVersion: 8 },
+    })
+    expect(removeZero.statusCode).toBe(200)
+    expect(removeZero.json()).toMatchObject({ success: true, alreadyRemoved: false, rowVersion: 9 })
+
+    const afterRemove = await app.inject({
+      method: 'GET',
+      url: `/api/deliveries/${deliveryId}`,
+      headers: { 'x-test-actor': 'supply-chain' },
+    })
+    expect(afterRemove.statusCode).toBe(200)
+    expect(afterRemove.json().items.map((item: any) => item.id)).not.toContain(itemDId)
+    expect((await prisma.deliveryOrderItem.findUniqueOrThrow({ where: { id: itemDId } })).removedAt).not.toBeNull()
+  })
 })

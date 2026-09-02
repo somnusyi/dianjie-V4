@@ -212,6 +212,40 @@ describe('总仓库存页面', () => {
     container.remove()
   })
 
+  it('moves across populated batch cells with all four arrow keys', async () => {
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('菌菇酱') ?? false)
+    const open = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('批量入库'))
+    await act(async () => { open?.click() })
+    await waitFor(() => container.textContent?.includes('总仓批量入库') ?? false)
+    checkAndAddCandidates(container, ['菌菇酱', '午餐肉'])
+
+    const firstQuantity = container.querySelector('input[aria-label="菌菇酱采购数量"]') as HTMLInputElement
+    const firstPrice = container.querySelector('input[aria-label="菌菇酱采购单价"]') as HTMLInputElement
+    const firstAmount = container.querySelector('input[aria-label="菌菇酱行金额"]') as HTMLInputElement
+    const secondAmount = container.querySelector('input[aria-label="午餐肉行金额"]') as HTMLInputElement
+    change(firstQuantity, '12')
+
+    firstQuantity.focus()
+    act(() => firstQuantity.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })))
+    expect(document.activeElement).toBe(firstPrice)
+
+    act(() => firstPrice.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })))
+    expect(document.activeElement).toBe(firstAmount)
+
+    act(() => firstAmount.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })))
+    expect(document.activeElement).toBe(secondAmount)
+
+    act(() => secondAmount.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })))
+    expect(document.activeElement).toBe(container.querySelector('input[aria-label="午餐肉采购单价"]'))
+
+    act(() => (document.activeElement as HTMLInputElement).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })))
+    expect(document.activeElement).toBe(firstPrice)
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
   it('verifies an inferred unit conversion from the review queue', async () => {
     vi.stubGlobal('confirm', vi.fn(() => true))
     const inferred = { ...inventory, items: [{ ...inventory.items[0], unitConversionStatus: 'INFERRED' }] }

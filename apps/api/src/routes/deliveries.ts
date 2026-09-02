@@ -32,6 +32,24 @@ const deliveryItemQuantitySchema = z.coerce.number()
   .max(99_999_999.99, '新增商品数量超过系统上限')
   .refine(value => Math.abs(value * 100 - Math.round(value * 100)) < 0.000001, '数量最多保留 2 位小数')
 
+const deliveryAdditionSchema = z.object({
+  productId: z.string().trim().min(1).optional(),
+  customProduct: z.object({
+    name: z.string().trim().min(1, '商品名称必填').max(80, '商品名称不能超过 80 字'),
+    unit: z.string().trim().min(1, '商品单位必填').max(16, '商品单位不能超过 16 字')
+      .refine(value => !/^\d/.test(value), '单位不能以数字开头'),
+    unitPrice: z.coerce.number()
+      .nonnegative('商品价格不能为负')
+      .max(99_999_999.99, '商品价格超过系统上限')
+      .refine(value => Math.abs(value * 100 - Math.round(value * 100)) < 0.000001, '商品价格最多保留 2 位小数'),
+  }).strict().optional(),
+  quantity: deliveryItemQuantitySchema,
+}).strict().superRefine((value, context) => {
+  if (Boolean(value.productId) === Boolean(value.customProduct)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['productId'], message: 'productId 和 customProduct 必须且只能填一个' })
+  }
+})
+
 export const deliveryAddItemBodySchema = z.object({
   productId: z.string().trim().min(1).optional(),
   customProduct: z.object({
@@ -49,6 +67,36 @@ export const deliveryAddItemBodySchema = z.object({
 }).strict().superRefine((value, context) => {
   if (Boolean(value.productId) === Boolean(value.customProduct)) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['productId'], message: 'productId 和 customProduct 必须且只能填一个' })
+  }
+})
+
+const deliveryBatchMutationBodySchema = z.object({
+  rowVersion: z.coerce.number().int().nonnegative('rowVersion 无效'),
+  reason: z.string().trim().max(200, '原因不能超过 200 字').optional(),
+  quantityChanges: z.array(z.object({
+    itemId: z.string().trim().min(1, 'itemId 必填'),
+    targetQuantity: z.coerce.number()
+      .nonnegative('调整后数量不能小于 0')
+      .max(99_999_999.99, '调整后数量超过系统上限')
+      .refine(value => Math.abs(value * 100 - Math.round(value * 100)) < 0.000001, '数量最多保留 2 位小数'),
+  }).strict()).max(500).default([]),
+  removals: z.array(z.object({ itemId: z.string().trim().min(1, 'itemId 必填') }).strict()).max(500).default([]),
+  additions: z.array(deliveryAdditionSchema).max(500).default([]),
+}).strict().superRefine((value, context) => {
+  const operationCount = value.quantityChanges.length + value.removals.length + value.additions.length
+  if (operationCount === 0) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: '没有需要保存的商品变更' })
+  }
+  if (operationCount > 500) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: '单次最多保存 500 项商品变更' })
+  }
+  const changedIds = value.quantityChanges.map(item => item.itemId)
+  const removedIds = value.removals.map(item => item.itemId)
+  if (new Set(changedIds).size !== changedIds.length || new Set(removedIds).size !== removedIds.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: '同一商品不能重复提交' })
+  }
+  if (removedIds.some(itemId => changedIds.includes(itemId))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: '移除的商品不能同时修改数量' })
   }
 })
 
@@ -179,6 +227,88 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
     }
     return scopedDelivery.supplierId
   }
+
+  // 商品明细页的唯一保存入口：数量、新增和移除在同一个串行化事务中完成。
+  app.patch('/:id/items', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
+    const { tenantId, userId, role } = req.user
+    const scopedSupplierId = await resolveInternalDeliverySupplier(req, reply)
+    if (!scopedSupplierId) return
+    const parsed = deliveryBatchMutationBodySchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+
+    try {
+      return await prisma.$transaction(async tx => {
+        let rowVersion = parsed.data.rowVersion
+        let lastResult: any = null
+        const common = {
+          tenantId,
+          supplierId: scopedSupplierId,
+          deliveryOrderId: String(req.params.id),
+          userId,
+          userRole: role,
+          reason: parsed.data.reason,
+          requestId: req.id,
+          ip: req.ip,
+        }
+        for (const change of parsed.data.quantityChanges) {
+          lastResult = await changeDeliveryItemQuantityInTransaction(tx, {
+            ...common,
+            itemId: change.itemId,
+            targetQuantity: new Prisma.Decimal(change.targetQuantity),
+            rowVersion,
+          })
+          rowVersion = lastResult.rowVersion
+        }
+        for (const addition of parsed.data.additions) {
+          lastResult = await addDeliveryItemInTransaction(tx, {
+            ...common,
+            productId: addition.productId,
+            customProduct: addition.customProduct ? {
+              name: addition.customProduct.name,
+              unit: addition.customProduct.unit,
+              unitPrice: new Prisma.Decimal(addition.customProduct.unitPrice),
+            } : null,
+            quantity: new Prisma.Decimal(addition.quantity),
+            rowVersion,
+          })
+          rowVersion = lastResult.rowVersion
+        }
+        for (const removal of parsed.data.removals) {
+          lastResult = await removeDeliveryItemInTransaction(tx, {
+            ...common,
+            itemId: removal.itemId,
+            rowVersion,
+          })
+          rowVersion = lastResult.rowVersion
+        }
+        const positiveItemCount = await tx.deliveryOrderItem.count({
+          where: {
+            deliveryOrderId: String(req.params.id),
+            removedAt: null,
+            shippedQty: { gt: new Prisma.Decimal(0) },
+          },
+        })
+        if (positiveItemCount === 0) {
+          throw Object.assign(new Error('配送单至少保留一条数量大于 0 的商品'), { statusCode: 400 })
+        }
+        return {
+          success: true,
+          rowVersion,
+          deliveryTotal: lastResult?.deliveryTotal,
+          orderTotal: lastResult?.orderTotal,
+          changedCount: parsed.data.quantityChanges.length,
+          addedCount: parsed.data.additions.length,
+          removedCount: parsed.data.removals.length,
+        }
+      }, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        timeout: 60_000,
+      })
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      throw error
+    }
+  })
 
   app.patch('/:id/item-quantity', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
     const { tenantId, userId, role } = req.user

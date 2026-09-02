@@ -1,4 +1,5 @@
 import { FastifyPluginAsync } from 'fastify'
+import { createId } from '@paralleldrive/cuid2'
 import { businessMonthKey } from '../lib/businessTime'
 import { checkDeliveryRuleBlock } from '../services/deliveryRuleEnforcement'
 import { z } from 'zod'
@@ -179,12 +180,37 @@ const orderCreateSchema = z.object({
   idempotencyKey: z.string().max(80).optional(),
 })
 
-const revisionCreateSchema = z.object({
+const revisionQuantitySchema = z.number()
+  .positive('订货数量必须大于 0')
+  .max(PURCHASE_QUANTITY_MAX, '订货数量超过系统上限')
+
+const revisionCatalogItemSchema = z.object({
+  productId: z.string().min(1),
+  quantity: revisionQuantitySchema,
+}).strict()
+
+const revisionCustomItemSchema = z.object({
+  customProduct: z.object({
+    name: z.string().trim().min(1, '商品名称必填').max(80, '商品名称不能超过 80 字'),
+    spec: z.string().trim().max(80, '商品规格不能超过 80 字').nullable().optional(),
+    unit: z.string().trim().min(1, '商品单位必填').max(16, '商品单位不能超过 16 字')
+      .refine(value => !/^\d/.test(value), '单位不能以数字开头'),
+    unitPrice: z.number()
+      .nonnegative('商品价格不能为负')
+      .max(PURCHASE_QUANTITY_MAX, '商品价格超过系统上限')
+      .refine(value => Math.abs(value * 100 - Math.round(value * 100)) < 0.000001, '商品价格最多保留 2 位小数'),
+  }).strict(),
+  quantity: revisionQuantitySchema.refine(
+    value => Math.abs(value * 100 - Math.round(value * 100)) < 0.000001,
+    '订货数量最多保留 2 位小数',
+  ),
+}).strict()
+
+const revisionItemSchema = z.union([revisionCatalogItemSchema, revisionCustomItemSchema])
+
+export const revisionCreateSchema = z.object({
   reason: z.string().trim().min(2, '请填写改单原因').max(200),
-  items: z.array(z.object({
-    productId: z.string().min(1),
-    quantity: z.number().positive('订货数量必须大于 0').max(PURCHASE_QUANTITY_MAX, '订货数量超过系统上限'),
-  }).strict()).min(1, '订货单至少保留一个商品').max(500).optional(),
+  items: z.array(revisionItemSchema).min(1, '订货单至少保留一个商品').max(500).optional(),
   expectedDate: calendarDateSchema.optional(),
   note: z.string().max(500).nullable().optional(),
   baseRowVersion: z.number().int().nonnegative(),
@@ -192,6 +218,32 @@ const revisionCreateSchema = z.object({
   // 集合入口只允许把新增商品归入集合内业务时间最晚的原订单。
   operationGroupId: z.string().regex(/^og_[a-f0-9]{24}$/, '操作组标识无效').optional(),
 }).strict()
+
+type RevisionItemInput = z.infer<typeof revisionItemSchema>
+
+function isCustomRevisionItem(item: RevisionItemInput): item is z.infer<typeof revisionCustomItemSchema> {
+  return 'customProduct' in item
+}
+
+function normalizedCustomRevisionProduct(item: z.infer<typeof revisionCustomItemSchema>) {
+  return {
+    name: item.customProduct.name.trim(),
+    spec: item.customProduct.spec?.trim() || null,
+    unit: item.customProduct.unit.trim(),
+    unitPrice: new Prisma.Decimal(item.customProduct.unitPrice).toFixed(2),
+  }
+}
+
+function directRevisionRequestFingerprint(input: z.infer<typeof revisionCreateSchema>): string {
+  return hashRequestBody({
+    operationGroupId: input.operationGroupId,
+    reason: input.reason,
+    baseRowVersion: input.baseRowVersion,
+    items: (input.items || []).map(item => isCustomRevisionItem(item)
+      ? { customProduct: normalizedCustomRevisionProduct(item), quantity: new Prisma.Decimal(item.quantity).toFixed(2) }
+      : { productId: item.productId, quantity: new Prisma.Decimal(item.quantity).toFixed(2) }),
+  }, 'internal-operation-group-revision')
+}
 
 const revisionReviewSchema = z.object({
   note: z.string().trim().max(200).optional(),
@@ -1135,8 +1187,46 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     // Legacy single-order supplier revisions remain unchanged when no group
     // id is supplied; a supplier cannot reach the new aggregate path by
     // forging an operationGroupId query/body field.
-    if (input.operationGroupId && !canOperateInternalOperationGroup(role)) {
-      return reply.status(403).send({ error: '仅内部供应链可对订单集合增加商品' })
+    if (input.operationGroupId && !hasInternalSupplyChainCapability(role, 'order.write')) {
+      return reply.status(403).send({ error: '仅内部供应链可直接修改订单集合' })
+    }
+
+    // 直改重放是一个已完成请求的只读查询，必须早于当前订单状态和
+    // 操作组成员校验。这样首次成功后即使集合已接单，丢包重试仍返回同一结果。
+    const directFingerprint = input.operationGroupId
+      ? directRevisionRequestFingerprint(input)
+      : null
+    const readDirectReplay = async (client: any) => {
+      if (!input.operationGroupId || !input.requestKey || !directFingerprint) return null
+      const duplicate = await client.purchaseOrderRevision.findFirst({
+        where: { tenantId, purchaseOrderId: id, requestKey: input.requestKey },
+        include: { requestedBy: { select: { id: true, name: true, role: true } } },
+      })
+      if (!duplicate) return null
+      const event = await client.purchaseOrderEvent.findFirst({
+        where: {
+          tenantId, purchaseOrderId: id,
+          eventType: 'REVISION_REQUESTED',
+          metadata: { path: ['revisionId'], equals: duplicate.id },
+        } as any,
+        select: { metadata: true },
+      })
+      const metadata = event?.metadata as Record<string, unknown> | null
+      const matches = duplicate.status === 'APPROVED'
+        && duplicate.requestedById === userId
+        && duplicate.reason === input.reason
+        && duplicate.baseRowVersion === input.baseRowVersion
+        && metadata?.operationGroupId === input.operationGroupId
+        && metadata?.requestFingerprint === directFingerprint
+      return { duplicate, matches }
+    }
+    if (input.operationGroupId) {
+      if (!input.requestKey) return reply.status(400).send({ error: '操作组改单必须提供 requestKey' })
+      const replay = await readDirectReplay(prisma)
+      if (replay) {
+        if (!replay.matches) return reply.status(409).send({ error: '同一改单请求键不能用于不同请求内容或申请人' })
+        return reply.status(200).send({ ...replay.duplicate, directApplied: true, duplicated: true })
+      }
     }
 
     const order = await prisma.purchaseOrder.findFirst({
@@ -1171,14 +1261,365 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(409).send({ error: '集合新增商品只能加入集合内下单时间最晚的原订单，请从集合入口重新打开' })
       }
     }
-    if (input.baseRowVersion !== order.rowVersion) return reply.status(409).send({ error: '订单已更新，请刷新后重新提交' })
     if ((isSupplierRole(role) || hasInternalSupplyChainCapability(role, 'order.write'))
         && (input.expectedDate !== undefined || input.note !== undefined)) {
       return reply.status(400).send({ error: '供应商只能申请调整商品或数量' })
     }
 
+    // 内部供应链的集合改单不再产生“待门店确认”。幂等重放必须先于
+    // rowVersion 检查和自定义商品建档，否则成功请求的重试会因首次提交已
+    // 将 rowVersion +1 而被误判为冲突。
+    if (input.operationGroupId) {
+      if (input.baseRowVersion !== order.rowVersion) return reply.status(409).send({ error: '订单已更新，请刷新后重新提交' })
+
+      let createdCustomProduct = false
+      try {
+        const result = await prisma.$transaction(async tx => {
+          // 与批量接单共用操作组锁，与 legacy revision 共用订单锁。
+          // custom SKU 、revision 和订单明细因此成功全成功、失败全回滚。
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`operation-group:${tenantId}:${input.operationGroupId}`}))`
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`order-revision:${tenantId}:${id}`}))`
+
+          const lockedReplay = await readDirectReplay(tx)
+          if (lockedReplay) {
+            if (!lockedReplay.matches) throw { statusCode: 409, message: '同一改单请求键不能用于不同请求内容或申请人' }
+            return { revision: lockedReplay.duplicate, duplicated: true, customProductCreated: false }
+          }
+
+          const currentOrder = await tx.purchaseOrder.findFirst({
+            where: { id, tenantId, status: 'SUBMITTED' },
+            include: {
+              store: true, supplier: true,
+              createdBy: { select: { id: true, name: true, role: true } },
+              items: { include: { product: true } },
+            },
+          })
+          if (!currentOrder) throw { statusCode: 409, message: '订单已接单或状态已变化，请刷新' }
+          if (currentOrder.rowVersion !== input.baseRowVersion) {
+            throw { statusCode: 409, message: '订单已更新，请刷新后重新提交' }
+          }
+
+          // 锁内重算集合：防止另一个标签页接单后，旧集合链接仍改到原订单。
+          const groupRows = await tx.purchaseOrder.findMany({
+            where: { ...supplyDataReadScope(req.user) },
+            select: {
+              id: true, no: true, storeId: true, supplierId: true, expectedDate: true,
+              status: true, createdAt: true, updatedAt: true, submittedAt: true,
+              revisions: { where: { status: 'PENDING' }, select: { id: true } },
+              events: { orderBy: { occurredAt: 'desc' }, take: 1, select: { occurredAt: true } },
+            },
+          })
+          const memberships = buildOperationGroups(groupRows.map(candidate => ({
+            id: candidate.id, no: candidate.no, storeId: candidate.storeId,
+            supplierId: candidate.supplierId, expectedDate: candidate.expectedDate,
+            status: candidate.status, createdAt: candidate.createdAt, updatedAt: candidate.updatedAt,
+            submittedAt: candidate.submittedAt,
+            lastOperationAt: candidate.events[0]?.occurredAt || null,
+            hasPendingRevision: candidate.revisions.length > 0,
+          } as OperationGroupCandidate)))
+          const currentGroup = memberships.get(id)?.operationGroup || null
+          const groupRowMap = new Map(groupRows.map(candidate => [candidate.id, candidate]))
+          const latestId = currentGroup
+            ? latestOperationGroupOrderId(currentGroup.memberOrderIds.map(memberId => {
+                const member = groupRowMap.get(memberId)!
+                return { id: member.id, createdAt: member.createdAt, submittedAt: member.submittedAt }
+              }))
+            : null
+          if (!currentGroup || currentGroup.id !== input.operationGroupId || latestId !== id) {
+            throw { statusCode: 409, message: '操作组已变化，请从集合入口刷新后重试' }
+          }
+
+          // 旧版内部集合可能留下 PENDING；只终结同一集合、同类内部操作的旧申请。
+          // 供应商或无集合的 PENDING 不得被直改覆盖。
+          const pending = await tx.purchaseOrderRevision.findMany({
+            where: { purchaseOrderId: id, status: 'PENDING' },
+            include: { requestedBy: { select: { role: true } } },
+          })
+          if (pending.length > 0) {
+            const pendingEvents = await tx.purchaseOrderEvent.findMany({
+              where: { purchaseOrderId: id, eventType: 'REVISION_REQUESTED' },
+              select: { metadata: true },
+            })
+            const supersedable = pending.filter(candidate => {
+              const event = pendingEvents.find(item => (item.metadata as any)?.revisionId === candidate.id)
+              return hasInternalSupplyChainCapability(candidate.requestedBy.role, 'order.write')
+                && (event?.metadata as any)?.operationGroupId === input.operationGroupId
+            })
+            if (supersedable.length !== pending.length) {
+              throw { statusCode: 409, message: '该订单已有供应商或非集合改单待门店确认，不能直接覆盖' }
+            }
+            const supersededAt = new Date()
+            await tx.purchaseOrderRevision.updateMany({
+              where: { id: { in: supersedable.map(candidate => candidate.id) }, status: 'PENDING' },
+              data: {
+                status: 'CANCELLED', reviewedById: userId, reviewedAt: supersededAt,
+                reviewNote: '已由内部操作组直接改单取代',
+              },
+            })
+            for (const candidate of supersedable) {
+              await tx.purchaseOrderEvent.create({
+                data: {
+                  tenantId, purchaseOrderId: id, eventType: 'REVISION_REJECTED', actorId: userId, actorRole: role,
+                  fromStatus: currentOrder.status, toStatus: currentOrder.status, requestId: req.id, ip: req.ip,
+                  metadata: {
+                    revisionId: candidate.id, superseded: true,
+                    supersededByRequestKey: input.requestKey, operationGroupId: input.operationGroupId,
+                  },
+                },
+              })
+            }
+          }
+
+          const before = buildOrderSnapshot(currentOrder as any, 'current')
+          const requestedItems: RevisionItemInput[] = input.items
+            ?? before.items.map(item => ({ productId: item.productId, quantity: Number(item.quantity) }))
+          const catalogIds = [...new Set(requestedItems
+            .filter((item): item is z.infer<typeof revisionCatalogItemSchema> => !isCustomRevisionItem(item))
+            .map(item => item.productId))]
+          const products = await tx.product.findMany({
+            where: { id: { in: catalogIds }, tenantId, supplierId: currentOrder.supplierId },
+          })
+          if (products.length !== catalogIds.length) throw { statusCode: 400, message: '存在不属于该供应商的商品' }
+          const productMap = new Map(products.map(product => [product.id, product]))
+          const customKeyByInput = new Map<RevisionItemInput, string>()
+          const customByKey = new Map<string, ReturnType<typeof normalizedCustomRevisionProduct>>()
+          for (const item of requestedItems) {
+            if (!isCustomRevisionItem(item)) continue
+            const custom = normalizedCustomRevisionProduct(item)
+            const key = JSON.stringify(custom)
+            customKeyByInput.set(item, key)
+            customByKey.set(key, custom)
+          }
+          const customProductByKey = new Map<string, any>()
+          for (const key of [...customByKey.keys()].sort()) {
+            const custom = customByKey.get(key)!
+            await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`custom-order-product:${tenantId}:${currentOrder.supplierId}:${key}`}))`
+            let product = await tx.product.findFirst({
+              where: {
+                tenantId, supplierId: currentOrder.supplierId,
+                name: custom.name, spec: custom.spec, unit: custom.unit,
+                price: new Prisma.Decimal(custom.unitPrice), status: 'ENABLED',
+                purchaseUnit: custom.unit, inventoryUnit: custom.unit,
+                orderUnit: custom.unit, costUnit: custom.unit,
+                inventoryUnitsPerPurchaseUnit: new Prisma.Decimal(1),
+                inventoryUnitsPerOrderUnit: new Prisma.Decimal(1),
+                inventoryUnitsPerCostUnit: new Prisma.Decimal(1),
+                unitConversionStatus: 'VERIFIED',
+                OR: [{ pricingMode: null }, { pricingMode: 'FIXED' }],
+              },
+              orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+            })
+            if (!product) {
+              product = await tx.product.create({
+                data: {
+                  tenantId, supplierId: currentOrder.supplierId,
+                  code: `CUSTOM-${createId().slice(-12).toUpperCase()}`,
+                  name: custom.name, spec: custom.spec, category: '其他', unit: custom.unit,
+                  purchaseUnit: custom.unit, inventoryUnit: custom.unit,
+                  orderUnit: custom.unit, costUnit: custom.unit,
+                  inventoryUnitsPerPurchaseUnit: new Prisma.Decimal(1),
+                  inventoryUnitsPerOrderUnit: new Prisma.Decimal(1),
+                  inventoryUnitsPerCostUnit: new Prisma.Decimal(1),
+                  unitConversionStatus: 'VERIFIED', unitConversionVerifiedAt: new Date(),
+                  price: new Prisma.Decimal(custom.unitPrice), pricingMode: 'FIXED',
+                  stock: new Prisma.Decimal(0), minOrderQty: new Prisma.Decimal('0.01'),
+                  stepQty: new Prisma.Decimal('0.01'), status: 'ENABLED',
+                },
+              })
+              createdCustomProduct = true
+              await tx.opLog.create({
+                data: {
+                  tenantId, userId, role,
+                  action: `操作组改单自动建档商品 ${product.name} (#${product.code})`,
+                  target: product.code, targetId: product.id, entityType: 'Product',
+                  metadata: {
+                    source: 'ORDER_GROUP_DIRECT_REVISION', operationGroupId: input.operationGroupId,
+                    supplierId: currentOrder.supplierId, name: product.name, spec: product.spec,
+                    unit: product.unit, price: new Prisma.Decimal(product.price).toFixed(2),
+                  },
+                },
+              })
+            }
+            customProductByKey.set(key, product)
+            productMap.set(product.id, product)
+          }
+
+          const resolvedItems = requestedItems.map(item => {
+            if (!isCustomRevisionItem(item)) return { productId: item.productId, quantity: item.quantity, custom: false }
+            const product = customProductByKey.get(customKeyByInput.get(item)!)!
+            return { productId: product.id, quantity: item.quantity, custom: true }
+          })
+          if (new Set(resolvedItems.map(item => item.productId)).size !== resolvedItems.length) {
+            throw { statusCode: 400, message: '同一商品不能重复提交多行' }
+          }
+          const beforeMap = new Map(before.items.map(item => [item.productId, item]))
+          const afterItems = resolvedItems.map(item => {
+            const product = productMap.get(item.productId)!
+            const previous = beforeMap.get(item.productId)
+            if (!previous && product.status !== 'ENABLED') throw { statusCode: 400, message: `${product.name} 已停售，不能追加` }
+            if (!item.custom) {
+              const moq = Number(product.minOrderQty || 1)
+              const step = Number(product.stepQty || 1)
+              if (item.quantity < moq - 0.0001) throw { statusCode: 400, message: `${product.name} 起订量为 ${moq} ${product.unit}` }
+              if (step > 0 && Math.abs(((item.quantity - moq) / step) - Math.round((item.quantity - moq) / step)) > 0.0001) {
+                throw { statusCode: 400, message: `${product.name} 需以 ${step} ${product.unit} 为步长` }
+              }
+            }
+            const pricedLine = previous
+              ? { unitPrice: new Prisma.Decimal(previous.unitPrice), amount: lineAmount(item.quantity, previous.unitPrice) }
+              : item.custom
+                ? {
+                    unitPrice: new Prisma.Decimal(product.price).toDecimalPlaces(2),
+                    amount: lineAmount(item.quantity, product.price),
+                  }
+                : costUnitPricedOrderLine({ product, quantity: item.quantity })
+            const frozenUnits = previous
+              ? copyFrozenSupplyDocumentFourUnits(previous)
+              : freezeProductFourUnitsForSupplyDocument(product)
+            return {
+              lineId: previous?.lineId ?? `revision:${item.productId}`,
+              productId: item.productId, code: product.code, name: product.name, spec: product.spec,
+              unit: String(frozenUnits.orderUnitSnapshot || product.unit),
+              quantity: new Prisma.Decimal(item.quantity).toFixed(2),
+              unitPrice: pricedLine.unitPrice.toFixed(2), amount: pricedLine.amount.toFixed(2),
+              lineOrigin: previous?.lineOrigin ?? 'APPROVED_REVISION' as const,
+              purchaseUnitSnapshot: String(frozenUnits.purchaseUnitSnapshot),
+              inventoryUnitSnapshot: String(frozenUnits.inventoryUnitSnapshot),
+              orderUnitSnapshot: String(frozenUnits.orderUnitSnapshot),
+              costUnitSnapshot: String(frozenUnits.costUnitSnapshot),
+              unitConversionStatusSnapshot: frozenUnits.unitConversionStatusSnapshot!,
+              inventoryUnitsPerPurchaseUnitSnapshot: new Prisma.Decimal(frozenUnits.inventoryUnitsPerPurchaseUnitSnapshot!).toFixed(6),
+              inventoryUnitsPerOrderUnitSnapshot: new Prisma.Decimal(frozenUnits.inventoryUnitsPerOrderUnitSnapshot!).toFixed(6),
+              inventoryUnitsPerCostUnitSnapshot: new Prisma.Decimal(frozenUnits.inventoryUnitsPerCostUnitSnapshot!).toFixed(6),
+            }
+          }).sort((a, b) => a.productId.localeCompare(b.productId))
+          const afterTotal = afterItems.reduce((sum, item) => sum.add(item.amount), new Prisma.Decimal(0)).toDecimalPlaces(2)
+          const amountError = orderAmountBoundError(afterItems.map(item => new Prisma.Decimal(item.amount)), afterTotal)
+          if (amountError) throw { statusCode: 400, message: amountError }
+          const maxRevision = await tx.purchaseOrderRevision.aggregate({
+            where: { purchaseOrderId: id }, _max: { revisionNo: true },
+          })
+          const revisionNo = (maxRevision._max.revisionNo ?? 0) + 1
+          const after: OrderSnapshot = {
+            ...before, items: afterItems, totalAmount: afterTotal.toFixed(2), revisionNo,
+          }
+          const changes = diffOrderSnapshots(before, after)
+          if (changes.length === 0) throw { statusCode: 400, message: '没有检测到任何修改' }
+
+          const created = await tx.purchaseOrderRevision.create({
+            data: {
+              tenantId, purchaseOrderId: id, revisionNo, type: revisionType(changes),
+              status: 'APPROVED', reason: input.reason,
+              beforeSnapshot: before as any, afterSnapshot: after as any, changeSet: changes as any,
+              requestKey: input.requestKey, baseRowVersion: input.baseRowVersion,
+              requestedById: userId, reviewedById: userId, reviewedAt: new Date(),
+              reviewNote: '内部操作组改单直接生效',
+            },
+            include: { requestedBy: { select: { id: true, name: true, role: true } } },
+          })
+          const updated = await tx.purchaseOrder.updateMany({
+            where: { id, tenantId, status: 'SUBMITTED', rowVersion: input.baseRowVersion },
+            data: {
+              totalAmount: afterTotal, currentOrderAmount: afterTotal, currentRevisionNo: revisionNo,
+              rowVersion: { increment: 1 },
+            },
+          })
+          if (updated.count !== 1) throw { statusCode: 409, message: '订单已被其他人处理，请刷新' }
+
+          const desired = new Map(after.items.map(item => [item.productId, item]))
+          for (const item of currentOrder.items) {
+            // 已停用行是审计历史；重新追加同一 SKU 时新建行，不覆写旧行的
+            // 价格/四单位快照，也不会造成 amount 与 unitPrice 口径不一致。
+            if (!item.isActive) continue
+            const next = desired.get(item.productId)
+            if (!next) {
+              if (item.isActive) {
+                await tx.purchaseOrderItem.update({
+                  where: { id: item.id }, data: { isActive: false, lastRevisionId: created.id },
+                })
+              }
+              continue
+            }
+            await tx.purchaseOrderItem.update({
+              where: { id: item.id },
+              data: {
+                quantity: new Prisma.Decimal(next.quantity), amount: new Prisma.Decimal(next.amount),
+                isActive: true, lastRevisionId: created.id,
+              },
+            })
+            desired.delete(item.productId)
+          }
+          for (const next of desired.values()) {
+            await tx.purchaseOrderItem.create({
+              data: {
+                purchaseOrderId: id, productId: next.productId,
+                quantity: new Prisma.Decimal(next.quantity), unitPrice: new Prisma.Decimal(next.unitPrice),
+                amount: new Prisma.Decimal(next.amount), lineOrigin: 'APPROVED_REVISION',
+                isActive: true, lastRevisionId: created.id,
+                ...copyFrozenSupplyDocumentFourUnits(next),
+              },
+            })
+          }
+          await tx.purchaseOrderEvent.create({
+            data: {
+              tenantId, purchaseOrderId: id, eventType: 'REVISION_REQUESTED', actorId: userId, actorRole: role,
+              fromStatus: currentOrder.status, toStatus: currentOrder.status, requestId: req.id, ip: req.ip,
+              metadata: {
+                revisionId: created.id, revisionNo, reason: input.reason, changes,
+                operationGroupId: input.operationGroupId, requestFingerprint: directFingerprint, directApplied: true,
+              },
+            },
+          })
+          await tx.purchaseOrderEvent.create({
+            data: {
+              tenantId, purchaseOrderId: id, eventType: 'REVISION_APPROVED', actorId: userId, actorRole: role,
+              fromStatus: currentOrder.status, toStatus: currentOrder.status, requestId: req.id, ip: req.ip,
+              metadata: {
+                revisionId: created.id, revisionNo, changes,
+                operationGroupId: input.operationGroupId, directApplied: true,
+              },
+            },
+          })
+          await tx.opLog.create({
+            data: {
+              tenantId, userId, role,
+              action: `内部操作组直接修改订货单 ${currentOrder.no} (第 ${revisionNo} 次): ${input.reason}`,
+              target: currentOrder.no, entityType: 'PurchaseOrderRevision', targetId: created.id,
+              metadata: {
+                changes, operationGroupId: input.operationGroupId, directApplied: true,
+                beforeSnapshotHash: snapshotHash(before), afterSnapshotHash: snapshotHash(after),
+              },
+            },
+          })
+          return { revision: created, duplicated: false, customProductCreated: createdCustomProduct }
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 })
+        if (result.customProductCreated) void invalidatePattern(`products:full:${tenantId}:*`)
+        return reply.status(result.duplicated ? 200 : 201).send({
+          ...result.revision, directApplied: true, duplicated: result.duplicated,
+        })
+      } catch (error: any) {
+        if ((error?.code === 'P2002' || error?.code === 'P2034') && input.requestKey) {
+          const duplicate = await readDirectReplay(prisma)
+          if (duplicate) {
+            if (!duplicate.matches) return reply.status(409).send({ error: '同一改单请求键不能用于不同请求内容或申请人' })
+            return reply.status(200).send({ ...duplicate.duplicate, directApplied: true, duplicated: true })
+          }
+        }
+        if (error?.code === 'P2002') return reply.status(409).send({ error: '该订单改单请求已存在' })
+        if (error?.code === 'P2034') return reply.status(409).send({ error: '订单正在被处理，请刷新后重试' })
+        if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+        throw error
+      }
+    }
+
+    if (input.baseRowVersion !== order.rowVersion) return reply.status(409).send({ error: '订单已更新，请刷新后重新提交' })
+    if (input.items?.some(isCustomRevisionItem)) {
+      return reply.status(400).send({ error: '自定义商品仅支持内部供应链操作组直接改单' })
+    }
+
     const before = buildOrderSnapshot(order as any, 'current')
-    const requestedItems = input.items ?? before.items.map(item => ({ productId: item.productId, quantity: Number(item.quantity) }))
+    const requestedItems: Array<z.infer<typeof revisionCatalogItemSchema>> = (input.items as Array<z.infer<typeof revisionCatalogItemSchema>> | undefined)
+      ?? before.items.map(item => ({ productId: item.productId, quantity: Number(item.quantity) }))
     if (new Set(requestedItems.map(item => item.productId)).size !== requestedItems.length) {
       return reply.status(400).send({ error: '同一商品不能重复提交多行' })
     }
@@ -1269,6 +1710,14 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
 
     try {
       const revision = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`order-revision:${tenantId}:${id}`}))`
+        const currentOrder = await tx.purchaseOrder.findFirst({
+          where: { id, tenantId, status: 'SUBMITTED' },
+          select: { rowVersion: true },
+        })
+        if (!currentOrder || currentOrder.rowVersion !== input.baseRowVersion) {
+          throw { statusCode: 409, message: '订单已更新，请刷新后重新提交' }
+        }
         const pending = await tx.purchaseOrderRevision.findFirst({ where: { purchaseOrderId: id, status: 'PENDING' } })
         if (pending) throw { statusCode: 409, message: '该订单已有待门店确认的修改' }
         const maxRevision = await tx.purchaseOrderRevision.aggregate({ where: { purchaseOrderId: id }, _max: { revisionNo: true } })

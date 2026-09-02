@@ -14,7 +14,9 @@
     "db:push": "pnpm --filter @dianjie/db db:push",
     "db:migrate": "pnpm --filter @dianjie/db db:migrate",
     "db:studio": "pnpm --filter @dianjie/db db:studio",
-    "db:seed": "pnpm --filter @dianjie/db db:seed"
+    "db:seed": "pnpm --filter @dianjie/db db:seed",
+    "sandbox:sync": "bash scripts/local-sandbox-sync.sh",
+    "sandbox:init": "bash scripts/local-sandbox-sync.sh --empty"
   },
   "devDependencies": {
     "playwright": "^1.60.0",

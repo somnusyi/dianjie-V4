@@ -34,6 +34,28 @@ export type RevisionCatalogPricing =
       message: string
     }
 
+export type RevisionCustomProductDraft = {
+  name: string
+  spec: string
+  unit: string
+  unitPrice: string
+  quantity: string
+}
+
+export type RevisionCustomProductItem = {
+  customProduct: {
+    name: string
+    spec?: string
+    unit: string
+    unitPrice: number
+  }
+  quantity: number
+}
+
+export type RevisionCustomProductResult =
+  | { status: 'READY'; item: RevisionCustomProductItem; lineAmount: string }
+  | { status: 'INVALID'; message: string }
+
 /**
  * 计算目录商品的订货单位价。
  *
@@ -54,6 +76,54 @@ export function calculateRevisionLineAmount(
 ): string | null {
   if (pricing.status !== 'READY') return null
   return calculateOrderEntryLineAmount(quantity, pricing.orderUnitPrice)
+}
+
+/**
+ * Validate and normalize an internal-operation custom line before it reaches
+ * the revision API. Keeping this as a pure function makes the request contract
+ * testable without coupling it to the order-detail component.
+ */
+export function resolveRevisionCustomProductDraft(
+  draft: RevisionCustomProductDraft,
+): RevisionCustomProductResult {
+  const name = draft.name.trim()
+  const spec = draft.spec.trim()
+  const unit = draft.unit.trim()
+  const unitPrice = Number(draft.unitPrice)
+  const quantity = Number(draft.quantity)
+
+  if (!name) return { status: 'INVALID', message: '请填写自定义商品名称' }
+  if (name.length > 80) return { status: 'INVALID', message: '自定义商品名称不能超过 80 字' }
+  if (spec.length > 80) return { status: 'INVALID', message: '自定义商品规格不能超过 80 字' }
+  if (!unit) return { status: 'INVALID', message: '请填写自定义商品单位' }
+  if (unit.length > 16) return { status: 'INVALID', message: '自定义商品单位不能超过 16 字' }
+  if (/^\d/.test(unit)) return { status: 'INVALID', message: '自定义商品单位不能以数字开头' }
+  if (!draft.unitPrice.trim() || !Number.isFinite(unitPrice) || unitPrice < 0) {
+    return { status: 'INVALID', message: '自定义商品单价必须大于或等于 0' }
+  }
+  if (unitPrice > 99_999_999.99 || Math.abs(unitPrice * 100 - Math.round(unitPrice * 100)) > 0.000001) {
+    return { status: 'INVALID', message: '自定义商品单价最多 2 位小数且不能超过系统上限' }
+  }
+  if (!draft.quantity.trim() || !Number.isFinite(quantity) || quantity <= 0) {
+    return { status: 'INVALID', message: '自定义商品数量必须大于 0' }
+  }
+  if (quantity > 99_999_999.99 || Math.abs(quantity * 100 - Math.round(quantity * 100)) > 0.000001) {
+    return { status: 'INVALID', message: '自定义商品数量最多 2 位小数且不能超过系统上限' }
+  }
+
+  return {
+    status: 'READY',
+    item: {
+      customProduct: {
+        name,
+        ...(spec ? { spec } : {}),
+        unit,
+        unitPrice,
+      },
+      quantity,
+    },
+    lineAmount: (unitPrice * quantity).toFixed(2),
+  }
 }
 
 /** 合计已经就绪的行金额；任一行未就绪时不返回可能误导的部分合计。 */

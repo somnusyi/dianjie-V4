@@ -70,3 +70,6 @@ apps/android/app/debug/
 uploads/
 tmp/
 *.snapshot.json
+
+# 本地沙盒数据库快照（可能含敏感业务数据，严禁入库）
+.local-sandbox-backups/

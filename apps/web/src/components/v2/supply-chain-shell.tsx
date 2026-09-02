@@ -127,6 +127,7 @@ function mobileActiveKey(pathname: string): string {
 export function SupplyChainShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() || ''
   const router = useRouter()
+  const sandbox = process.env.NEXT_PUBLIC_SANDBOX_MODE === 'true'
 
   return (
     <div className="min-h-screen bg-bg">
@@ -182,6 +183,11 @@ export function SupplyChainShell({ children }: { children: ReactNode }) {
 
       {/* 主内容区 — 移动端无左侧内边距，PC 有 lg:pl-64 */}
       <main className="min-h-screen lg:pl-64">
+        {sandbox && (
+          <div className="sticky top-0 z-40 border-b border-amber/40 bg-amber/15 px-4 py-2 text-center text-caption text-amber-fg">
+            本地沙盒 · 页面修改只写入本机，不会更改线上数据
+          </div>
+        )}
         <div className="mx-auto min-h-screen w-full max-w-[1600px]">{children}</div>
       </main>
 

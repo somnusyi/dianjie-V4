@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.dianjie.sandbox.api</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/weiyi/.nvm/versions/node/v20.20.2/bin/corepack</string>
+    <string>pnpm</string>
+    <string>--filter</string>
+    <string>@dianjie/api</string>
+    <string>start</string>
+  </array>
+  <key>WorkingDirectory</key>
+	<string>/Users/weiyi/Documents/ChatGPT/颠界/dianjie-V4-direct-revision</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/weiyi/.nvm/versions/node/v20.20.2/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>StandardOutPath</key>
+  <string>/tmp/dianjie-sandbox-api.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/dianjie-sandbox-api.log</string>
+</dict>
+</plist>

@@ -1,5 +1,7 @@
 # 滇界 · 开发进展(自最近 Sprint 起)
 
+> 2026-09-01：已建立内部供应链本地沙盒：线上数据只读单向快照到 `dianjie_v4_local`，本地页面写操作只落本机；API 在 PREVIEW/SANDBOX 模式下强制拒绝非 localhost 数据库。新增 `pnpm sandbox:init` / `pnpm sandbox:sync`、本地供应链账号初始化脚本和前端沙盒常驻提示。本地库 87 个迁移全部通过，API/Web 编译通过，Web 634 个测试通过，指定手机号实际登录成功。
+
 > 2026-07-25：内部供应链 `SUPPLY_CHAIN` 角色完成安全收口（租户内跨店只读订单/配送/收货/库存/纯消耗，独立只读工作台；营业额、成本率、收货财务对象及业务写操作均拒绝）。仅本地修复与验证，未部署。
 
 > 更新日期:2026-04-30 (本机时间)
@@ -177,3 +179,11 @@ SUPPLIER 供应商 /v2/supplier/home + 4 Tab + 上传发票入口
 下次启动:
 1. 局域网测试: web 已在 :3200 跑(pnpm dev), 手机扫码访问 http://192.168.1.70:3200/v2/login
 2. 部署:用户授权 SCP/SSH 后,1 次部署激活全部新功能
+
+## 2026-09-02 本地总仓批量入库验收
+
+- 根因：原本地商品的 `unitConversionStatus` 全为 `PENDING`，且无 `WAREHOUSE_UPSTREAM` 供应商，因此批量入库候选数为 0。
+- 夹具：`apps/api/scripts/seed-local-warehouse-acceptance.ts`，只允许 localhost + `dianjie_v4_local` + `PREVIEW_MODE=true`。
+- 验收：`apps/api/scripts/verify-local-warehouse-acceptance.ts`，通过真实 HTTP API 执行。
+- 结果：14/14 PASS；覆盖登录权限、候选商品、上游供应商、三行批量入库、四单位换算、幂等重放、幂等冲突、重复商品拒绝、整单原子回滚、供应商闸口、生产/到期日期、入库记录、批次台账、台账审计。
+- 实测入账：每次完整运行增加大米 50kg / 300 元、菜籽油 36 瓶 / 504 元、牛肉 4000g / 272 元；全部仅在本地预览库。

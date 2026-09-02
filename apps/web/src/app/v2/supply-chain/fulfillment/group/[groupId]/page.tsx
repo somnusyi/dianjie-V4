@@ -67,8 +67,8 @@ function shortDate(value: string | null | undefined) {
  * Internal supply-chain group detail. A group is an operation view over the
  * original orders, so this page never invents an order number or writes an
  * aggregate order row. The only mutation is the explicit atomic batch-confirm
- * action; product additions continue through the normal revision workflow on
- * the latest source order.
+ * action. Pre-acceptance edits are written directly to the latest source order
+ * by the internal operation-group revision path.
  */
 export default function InternalOperationGroupDetailPage() {
   const router = useRouter()
@@ -198,7 +198,7 @@ export default function InternalOperationGroupDetailPage() {
           </div>
           {(detail.group.blockedOrderIds || []).length > 0 && (
             <div className="mt-3 rounded-cta border border-amber/30 bg-amber/10 p-3 text-caption text-amber-fg">
-              集合内有待门店确认的改单，暂不能批量接单。
+              集合内有历史未完成改单，暂不能批量接单。可先进入下方改单页处理。
             </div>
           )}
         </section>
@@ -265,7 +265,7 @@ export default function InternalOperationGroupDetailPage() {
           )}
           {addProductHref && detail.source === 'pending' && latestOrder?.status === 'SUBMITTED' && (
             <Link href={addProductHref} className="rounded-cta border border-amber/50 bg-amber/5 px-4 py-3 text-center text-button text-amber-fg">
-              ＋ 增加商品（加入最晚订单）
+              接单前修改（数量 / 商品）
             </Link>
           )}
           <Link href={`/v2/supply-chain/fulfillment/${encodeURIComponent(detail.group.id)}/delivery-note`} className="rounded-cta border border-border bg-white px-4 py-3 text-center text-button text-gray2 sm:col-span-2">

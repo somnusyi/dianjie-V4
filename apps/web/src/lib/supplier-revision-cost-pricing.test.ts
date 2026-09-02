@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   calculateRevisionLineAmount,
   resolveRevisionCatalogPricing,
+  resolveRevisionCustomProductDraft,
   sumRevisionLineAmounts,
 } from './supplier-revision-cost-pricing'
 
@@ -153,6 +154,46 @@ describe('sumRevisionLineAmounts', () => {
   })
 })
 
+describe('resolveRevisionCustomProductDraft', () => {
+  it('normalizes a complete custom item for the direct revision API', () => {
+    expect(resolveRevisionCustomProductDraft({
+      name: '  时令菜  ',
+      spec: ' 500g / 袋 ',
+      unit: ' 袋 ',
+      unitPrice: '12.30',
+      quantity: '2.50',
+    })).toEqual({
+      status: 'READY',
+      item: {
+        customProduct: { name: '时令菜', spec: '500g / 袋', unit: '袋', unitPrice: 12.3 },
+        quantity: 2.5,
+      },
+      lineAmount: '30.75',
+    })
+  })
+
+  it('omits an empty optional specification', () => {
+    const result = resolveRevisionCustomProductDraft({
+      name: '临时商品', spec: '  ', unit: '件', unitPrice: '0', quantity: '1',
+    })
+    expect(result.status).toBe('READY')
+    if (result.status === 'READY') {
+      expect(result.item.customProduct).toEqual({ name: '临时商品', unit: '件', unitPrice: 0 })
+    }
+  })
+
+  it.each([
+    ['missing name', { name: '', spec: '', unit: '件', unitPrice: '1', quantity: '1' }],
+    ['overlong spec', { name: '商品', spec: 'x'.repeat(81), unit: '件', unitPrice: '1', quantity: '1' }],
+    ['numeric unit prefix', { name: '商品', spec: '', unit: '2箱', unitPrice: '1', quantity: '1' }],
+    ['three-decimal price', { name: '商品', spec: '', unit: '件', unitPrice: '1.001', quantity: '1' }],
+    ['zero quantity', { name: '商品', spec: '', unit: '件', unitPrice: '1', quantity: '0' }],
+    ['three-decimal quantity', { name: '商品', spec: '', unit: '件', unitPrice: '1', quantity: '1.001' }],
+  ])('rejects %s', (_case, draft) => {
+    expect(resolveRevisionCustomProductDraft(draft)).toMatchObject({ status: 'INVALID' })
+  })
+})
+
 describe('supplier revision page pricing contract', () => {
   const source = readFileSync(
     new URL('../app/v2/supplier/orders/[id]/page.tsx', import.meta.url),
@@ -175,5 +216,49 @@ describe('supplier revision page pricing contract', () => {
     expect(source).toContain("selectedTotal === null ? 'text-caption text-red-fg'")
     expect(source).toContain('调整后金额待核验')
     expect(source).toContain('hasPendingSelected')
+  })
+
+  it('gates immediate custom-product revision to internal operation groups', () => {
+    expect(source).toContain("viewerRole === 'SUPPLY_CHAIN' && isOperationGroupContext")
+    expect(source).toContain('revisionCustomDrafts.map(resolveRevisionCustomProductDraft)')
+    expect(source).toContain('const items = [...catalogItems, ...customItems]')
+    expect(source).toContain("isDirectOperationGroupRevision ? '立即修改' : '提交申请'")
+    expect(source).toContain('router.replace(`/v2/supply-chain/fulfillment/group/${encodeURIComponent(operationGroupId)}`)')
+  })
+
+  it('scopes the internal catalog to the order supplier', () => {
+    expect(source).toContain('isDirectOperationGroupRevision && order?.supplier.id')
+    expect(source).toContain('`/api/products?supplierId=${encodeURIComponent(order.supplier.id)}`')
+    expect(source).toContain(": '/api/products'")
+  })
+
+  it('reuses one request key for retries of the same open draft', () => {
+    expect(source).toContain('const revisionRequestKeyRef = useRef<string | null>(null)')
+    expect(source).toContain('const requestKey = revisionRequestKeyRef.current || clientRequestId()')
+    expect(source).toContain('revisionRequestKeyRef.current = requestKey')
+    expect(source).toContain('revisionRequestKeyRef.current = null')
+    expect(source).toContain('requestKey,')
+    expect(source).not.toContain('requestKey: clientRequestId()')
+  })
+
+  it('preserves the legacy supplier approval copy outside an operation group', () => {
+    expect(source).toContain('提交后须门店确认，确认前不能接单。')
+    expect(source).toContain("isDirectOperationGroupRevision ? '确认修改' : '提交申请'")
+  })
+})
+
+describe('internal operation-group revision entry contract', () => {
+  const source = readFileSync(
+    new URL('../app/v2/supply-chain/fulfillment/group/[groupId]/page.tsx', import.meta.url),
+    'utf8',
+  )
+
+  it('routes the latest source order into direct pre-acceptance editing', () => {
+    expect(source).toContain('operationGroup=${encodeURIComponent(detail.group.id)}&groupAdd=1')
+    expect(source).toContain('接单前修改（数量 / 商品）')
+  })
+
+  it('does not advertise a store-confirmation waiting step', () => {
+    expect(source).not.toContain('待门店确认')
   })
 })

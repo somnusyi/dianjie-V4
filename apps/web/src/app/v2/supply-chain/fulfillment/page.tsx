@@ -67,6 +67,7 @@ function InternalOperationGroupCard({
   const memberNos = metadata.memberOrderNos || group.orders.map(order => order.no)
   const missingCount = Math.max(0, memberCount - group.orders.length)
   const isPendingGroup = metadata.isEligible === true && group.orders.every(order => order.status === 'SUBMITTED')
+  const hasConfirmedMember = group.orders.some(order => order.status === 'CONFIRMED')
 
   return (
     <li className="rounded-card border border-border bg-white px-4">
@@ -102,7 +103,7 @@ function InternalOperationGroupCard({
           href={`/v2/supply-chain/fulfillment/group/${encodeURIComponent(metadata.id)}`}
           className="mb-4 min-w-28 rounded-cta bg-ink px-4 py-2.5 text-center text-button text-white lg:mb-0"
         >
-          {isPendingGroup ? '批量接单 ›' : '查看集合 ›'}
+          {isPendingGroup ? '批量接单 ›' : hasConfirmedMember ? '批量发货 ›' : '查看集合 ›'}
         </Link>
       </div>
     </li>

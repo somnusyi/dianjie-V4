@@ -277,7 +277,12 @@ const detailInclude = {
   items: { where: { isActive: true }, include: { product: true } },
   deliveries: {
     orderBy: { createdAt: 'asc' as const },
-    include: { items: { where: { removedAt: null }, include: { product: true } } },
+    include: {
+      items: { where: { removedAt: null }, include: { product: true } },
+      // The group UI only needs to know whether a receipt already exists in
+      // order to hide delivery-item editing. Do not expose receipt contents.
+      receipt: { select: { id: true } },
+    },
   },
 }
 
@@ -432,7 +437,14 @@ export async function loadOperationGroupDetails(
     deliverySummaries: (Array.isArray(row.deliveries) ? row.deliveries : [])
       .filter((delivery: any) => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
       .sort((a: any, b: any) => dateText(a.shippedAt || a.createdAt).localeCompare(dateText(b.shippedAt || b.createdAt)))
-      .map((delivery: any) => ({ no: String(delivery.no), items: deliverySnapshotLines(delivery) })),
+      .map((delivery: any) => ({
+        id: String(delivery.id),
+        no: String(delivery.no),
+        status: String(delivery.status),
+        rowVersion: Number(delivery.rowVersion),
+        hasReceipt: Boolean(delivery.receipt),
+        items: deliverySnapshotLines(delivery),
+      })),
     createdAt: dateText(row.createdAt),
     submittedAt: row.submittedAt ? dateText(row.submittedAt) : null,
     expectedDate: expectedDateKey(row.expectedDate),

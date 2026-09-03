@@ -1,6 +1,4 @@
-'use client'
-
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { Chip, ProgressDots } from '@/components/v2'
 
 export type OrderDetailTableRow = {
@@ -12,47 +10,6 @@ export type OrderDetailTableRow = {
   unitPrice: number
   originalQuantity: number
   sourceLabel?: string
-}
-
-function HorizontalDragArea({ children, viewportClassName = '' }: { children: ReactNode; viewportClassName?: string }) {
-  const viewportRef = useRef<HTMLDivElement>(null)
-  const [position, setPosition] = useState(0)
-  const [maximum, setMaximum] = useState(0)
-
-  useEffect(() => {
-    const viewport = viewportRef.current
-    if (!viewport) return
-    const measure = () => {
-      const nextMaximum = Math.max(0, viewport.scrollWidth - viewport.clientWidth)
-      setMaximum(nextMaximum)
-      setPosition(Math.min(viewport.scrollLeft, nextMaximum))
-    }
-    measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(viewport)
-    if (viewport.firstElementChild) observer.observe(viewport.firstElementChild)
-    return () => observer.disconnect()
-  }, [children])
-
-  return <div>
-    <div ref={viewportRef} onScroll={event => setPosition(event.currentTarget.scrollLeft)}
-      className={`overflow-x-auto overscroll-x-contain ${viewportClassName}`}>{children}</div>
-    <div className="no-print border-t border-border px-3 py-2.5">
-      <div className="mb-1.5 flex items-center justify-between text-micro text-gray3">
-        <span>{maximum > 0 ? '左右拖动查看完整明细' : '当前已显示完整明细'}</span>
-        <span className="font-num">{Math.round(maximum ? position / maximum * 100 : 0)}%</span>
-      </div>
-      <input type="range" min={0} max={Math.max(1, maximum)} step={1} value={position}
-        disabled={maximum === 0}
-        onChange={event => {
-          const next = Number(event.target.value)
-          setPosition(next)
-          viewportRef.current?.scrollTo({ left: next, behavior: 'auto' })
-        }}
-        aria-label="横向拖动查看完整内容"
-        className="block h-3 w-full cursor-ew-resize touch-pan-x accent-ink" />
-    </div>
-  </div>
 }
 
 export function OrderDetailHeader(props: {
@@ -82,11 +39,13 @@ export function OrderAmountCard(props: {
   return <section className="mx-4 mt-2 rounded-card border border-border bg-white p-4">
     <div className="text-micro font-num text-gray3">{props.eyebrow}</div>
     <div className="mt-1 flex items-baseline justify-between gap-3">
-      <span className="text-h2">{props.name}</span>
+      <span>
+        <span className="block text-h2">{props.name}</span>
+        {props.originalOrderAmount && <span className="mt-1 block text-micro text-gray3">原始订单金额 ¥{props.originalOrderAmount}</span>}
+      </span>
       <span className="text-right">
         <span className="block text-micro text-gray3">{props.amountLabel}</span>
         <span className="font-num text-h1">¥{props.amount}</span>
-        {props.originalOrderAmount && <span className="mt-0.5 block text-micro text-gray3">原始订单金额 ¥{props.originalOrderAmount}</span>}
       </span>
     </div>
     {props.children}
@@ -95,15 +54,11 @@ export function OrderAmountCard(props: {
 
 export function OrderDeliverySummary({ lines }: { lines: string[] }) {
   if (lines.length === 0) return null
-  return <section className="mx-4 mt-3 rounded-card border border-border bg-white">
-    <h2 className="px-3 pt-3 text-h2">关联配送单 ({lines.length})</h2>
-    <HorizontalDragArea viewportClassName="px-3">
-      <div className="min-w-max py-2 text-caption text-gray2">
-        {lines.map((line, index) => <div key={`${index}:${line}`} className="whitespace-nowrap py-2.5 pr-10 leading-6">
-          <span className="mr-2 inline-block min-w-6 font-num text-gray3">{index + 1}.</span>{line}
-        </div>)}
-      </div>
-    </HorizontalDragArea>
+  return <section className="mx-4 mt-3 rounded-card border border-border bg-white p-3">
+    <h2 className="text-h2">关联配送单 ({lines.length})</h2>
+    <p className="mt-3 break-words text-caption leading-7 text-gray2">
+      {lines.map((line, index) => `${index + 1}.${line}`).join('、')}
+    </p>
   </section>
 }
 
@@ -123,6 +78,7 @@ export function OrderProductTable(props: {
   onSave?: () => void
   renderQuantity?: (row: OrderDetailTableRow) => ReactNode
   onRemove?: (row: OrderDetailTableRow) => void
+  canRemove?: (row: OrderDetailTableRow) => boolean
   notice?: ReactNode
 }) {
   return <section className="mx-4 mt-3 rounded-card border border-border bg-white">
@@ -134,9 +90,9 @@ export function OrderProductTable(props: {
         className="whitespace-nowrap rounded-cta bg-ink px-4 py-1.5 text-button text-white disabled:opacity-40">{props.saving ? '保存中…' : '保存'}</button>}
     </div>
     {props.notice}
-    <HorizontalDragArea viewportClassName="border-t border-border">
-      <table className="w-full min-w-[760px] text-left text-caption">
-        <thead className="bg-bg text-micro text-gray3"><tr>
+    <div className="max-h-[60vh] overflow-y-auto border-t border-border">
+      <table className="w-full table-fixed text-left text-micro sm:text-caption">
+        <thead className="sticky top-0 z-10 bg-bg text-micro text-gray3"><tr>
           <th className="w-16 px-3 py-2">序号</th><th className="px-3 py-2">名称</th><th className="px-3 py-2">规格</th>
           <th className="px-3 py-2 text-right">数量</th><th className="px-3 py-2 text-right">单价</th><th className="px-3 py-2 text-right">总价</th>
           {props.editable && <th className="w-20 px-3 py-2 text-right">操作</th>}
@@ -151,13 +107,13 @@ export function OrderProductTable(props: {
               <td className="px-3 py-3 text-right font-num">{props.renderQuantity ? props.renderQuantity(row) : <>{row.quantity}{row.unit}</>}</td>
               <td className="px-3 py-3 text-right font-num">¥{row.unitPrice.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
               <td className="px-3 py-3 text-right font-num">¥{(row.quantity * row.unitPrice).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-              {props.editable && <td className="px-3 py-3 text-right">{props.onRemove && <button type="button" onClick={() => props.onRemove?.(row)}
+              {props.editable && <td className="px-3 py-3 text-right">{props.onRemove && (props.canRemove?.(row) ?? true) && <button type="button" onClick={() => props.onRemove?.(row)}
                 className="rounded-cta border border-red-fg/40 px-2 py-1 text-micro text-red-fg">移除</button>}</td>}
             </tr>
           })}
           {props.rows.length === 0 && <tr><td colSpan={props.editable ? 7 : 6} className="px-4 py-10 text-center text-caption text-gray3">暂无可展示商品</td></tr>}
         </tbody>
       </table>
-    </HorizontalDragArea>
+    </div>
   </section>
 }

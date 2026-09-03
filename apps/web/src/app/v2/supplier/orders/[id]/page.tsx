@@ -152,6 +152,9 @@ export default function SupplierOrderDetailPage() {
   const [shipNote, setShipNote] = useState('')
   // 发货时可调整每行的实际发货量 (称重 / 缺货). key=itemId, value=shippedQty
   const [shipQty, setShipQty] = useState<Record<string, number>>({})
+  const [removedShipmentItemIds, setRemovedShipmentItemIds] = useState<string[]>([])
+  const [savedRemovedShipmentItemIds, setSavedRemovedShipmentItemIds] = useState<string[]>([])
+  const [shipmentRestoreQty, setShipmentRestoreQty] = useState<Record<string, number>>({})
   // 送达备注 — 不用 window.prompt (WebView 禁用)
   const [deliverNote, setDeliverNote] = useState('')
   // 报损拒绝弹层 (state-driven, 替代 window.prompt)
@@ -210,10 +213,19 @@ export default function SupplierOrderDetailPage() {
         })
         setShipQty(restored?.quantities || {})
         setSavedShipQty(restored?.quantities || {})
+        setRemovedShipmentItemIds(restored?.removedItemIds || [])
+        setSavedRemovedShipmentItemIds(restored?.removedItemIds || [])
+        setShipmentRestoreQty(Object.fromEntries((restored?.removedItemIds || []).map(itemId => {
+          const line = buildPartialShipmentLines(data.items, {}).find(candidate => candidate.it.id === itemId)
+          return [itemId, line?.remaining || 0]
+        })))
       } else {
         if (typeof window !== 'undefined' && draftKey) clearShipmentDraft(localStorage, draftKey)
         setShipQty({})
         setSavedShipQty({})
+        setRemovedShipmentItemIds([])
+        setSavedRemovedShipmentItemIds([])
+        setShipmentRestoreQty({})
       }
     }).catch(e => setError(e.message || '加载失败'))
   }
@@ -222,7 +234,11 @@ export default function SupplierOrderDetailPage() {
   function ship() {
     if (!order || isOperationGroupContext) return
     setShipmentNotice(null)
-    const lines = buildPartialShipmentLines(order.items, shipQty)
+    const effectiveShipQty = {
+      ...shipQty,
+      ...Object.fromEntries(removedShipmentItemIds.map(itemId => [itemId, 0])),
+    }
+    const lines = buildPartialShipmentLines(order.items, effectiveShipQty)
     const newTotal = computeShipmentNewTotal(lines)
     const changed = lines.filter(l => l.changed)
     // 实发上限 per-product: max(下单 × shipUpperPct, 下单 + shipUpperBuffer)
@@ -483,6 +499,29 @@ export default function SupplierOrderDetailPage() {
       : [...current, itemId])
   }
 
+  function removeShipmentItem(itemId: string) {
+    const currentLine = order ? buildPartialShipmentLines(order.items, shipQty).find(line => line.it.id === itemId) : null
+    setShipmentRestoreQty(current => ({
+      ...current,
+      [itemId]: currentLine && currentLine.sq > 0 ? currentLine.sq : currentLine?.remaining || 0,
+    }))
+    setRemovedShipmentItemIds(current => current.includes(itemId) ? current : [...current, itemId])
+    setSaveNotice(null)
+  }
+
+  function restoreShipmentItem(itemId: string) {
+    const fallback = order ? buildPartialShipmentLines(order.items, {}).find(line => line.it.id === itemId)?.remaining || 0 : 0
+    const quantity = shipmentRestoreQty[itemId] ?? fallback
+    setShipQty(current => ({ ...current, [itemId]: quantity }))
+    setRemovedShipmentItemIds(current => current.filter(id => id !== itemId))
+    setQuantityDrafts(current => {
+      const next = { ...current }
+      delete next[itemId]
+      return next
+    })
+    setSaveNotice(null)
+  }
+
   async function openDeliveryAdd(delivery: NonNullable<Order['deliveries']>[number]) {
     if (!order || !canAdjustDeliveryBeforeDelivery || delivery.receipt || delivery.status !== 'SHIPPED') return
     setDeliveryAdjustError(null)
@@ -564,7 +603,11 @@ export default function SupplierOrderDetailPage() {
   const shipmentAmount = (order.deliveries || [])
     .filter(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
     .reduce((sum, delivery) => sum + Number(delivery.actualTotalAmount || 0), 0)
-  const shipLinesForButton = order.status === 'CONFIRMED' ? buildPartialShipmentLines(order.items, shipQty) : null
+  const effectiveShipQty = {
+    ...shipQty,
+    ...Object.fromEntries(removedShipmentItemIds.map(itemId => [itemId, 0])),
+  }
+  const shipLinesForButton = order.status === 'CONFIRMED' ? buildPartialShipmentLines(order.items, effectiveShipQty) : null
   const shipAllZero = shipLinesForButton ? !hasAnyPositiveShipment(shipLinesForButton) : false
   const editableDelivery = (order.deliveries || []).find(delivery =>
     canAdjustDeliveryBeforeDelivery && !delivery.receipt && delivery.status === 'SHIPPED')
@@ -604,7 +647,7 @@ export default function SupplierOrderDetailPage() {
     }),
   ]
 
-  const confirmedLines = canEditConfirmedDetails ? buildPartialShipmentLines(order.items, shipQty) : []
+  const confirmedLines = canEditConfirmedDetails ? buildPartialShipmentLines(order.items, effectiveShipQty) : []
   const deliveryRows = editableDelivery ? [
     ...editableDelivery.items.filter(item => !removedDeliveryItemIds.includes(item.id)).map(item => ({
       key: item.id,
@@ -634,7 +677,7 @@ export default function SupplierOrderDetailPage() {
   const detailRows = canEditDeliveryDetails
     ? deliveryRows
     : canEditConfirmedDetails
-      ? confirmedLines.filter(line => line.sq > 0).map(line => {
+      ? confirmedLines.filter(line => !removedShipmentItemIds.includes(line.it.id)).map(line => {
           const fullItem = order.items.find(item => item.id === line.it.id)
           return ({
           key: line.it.id,
@@ -670,8 +713,9 @@ export default function SupplierOrderDetailPage() {
     || submittedCatalogRows.length > 0
     || removedOrderProductIds.length > 0
   )
-  const shipmentDirty = canEditConfirmedDetails && confirmedLines.some(line =>
+  const shipmentDirty = canEditConfirmedDetails && (confirmedLines.some(line =>
     Math.abs(line.sq - (savedShipQty[line.it.id] ?? line.remaining)) >= 0.0001)
+    || [...removedShipmentItemIds].sort().join('|') !== [...savedRemovedShipmentItemIds].sort().join('|'))
   const deliveryDirty = canEditDeliveryDetails && (
     editableDelivery?.items.some(item => !removedDeliveryItemIds.includes(item.id)
       && Math.abs(Number(deliveryQty[item.id] ?? item.shippedQty) - Number(item.shippedQty)) >= 0.0001)
@@ -706,6 +750,7 @@ export default function SupplierOrderDetailPage() {
           orderRowVersion: order.rowVersion,
           userId: viewerUserId,
           quantities,
+          removedItemIds: removedShipmentItemIds,
           updatedAt: new Date().toISOString(),
         })
       } catch {
@@ -713,6 +758,7 @@ export default function SupplierOrderDetailPage() {
         return
       }
       setSavedShipQty(quantities)
+      setSavedRemovedShipmentItemIds([...removedShipmentItemIds])
       setSaveNotice('发货数量已保存到本机，刷新页面也会保留；点击“确认发货”后写入配送单。')
       return
     }
@@ -767,7 +813,7 @@ export default function SupplierOrderDetailPage() {
 
       <OrderDeliverySummary lines={(order.deliveries || [])
         .filter(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
-        .map(delivery => `${delivery.no} · ${delivery.items.map(item => `${item.product?.name || '商品'}${item.shippedQty}${item.productUnitSnapshot || item.product?.unit || ''}`).join('、')}`)} />
+        .flatMap(delivery => delivery.items.map(item => `${item.product?.name || '商品'}${item.shippedQty}${item.productUnitSnapshot || item.product?.unit || ''}`))} />
       <OrderProgressCard currentIndex={step} />
 
       <OrderProductTable
@@ -778,7 +824,21 @@ export default function SupplierOrderDetailPage() {
         dirty={detailsDirty}
         onAdd={(canEditSubmittedDetails || canEditDeliveryDetails) ? () => canEditDeliveryDetails && editableDelivery ? void openDeliveryAdd(editableDelivery) : void openAddPicker() : undefined}
         onSave={() => void saveDetails()}
-        notice={<>{deliveryAdjustError && <div className="mx-3 mb-2 rounded-cta border border-red/30 bg-red-bg px-3 py-2 text-caption text-red-fg">{deliveryAdjustError}</div>}{revisionError && <p className="mx-3 mb-2 text-micro text-red-fg">{revisionError}</p>}</>}
+        notice={<>
+          {deliveryAdjustError && <div className="mx-3 mb-2 rounded-cta border border-red/30 bg-red-bg px-3 py-2 text-caption text-red-fg">{deliveryAdjustError}</div>}
+          {revisionError && <p className="mx-3 mb-2 text-micro text-red-fg">{revisionError}</p>}
+          {canEditConfirmedDetails && <div className="mx-3 mb-2">
+            <p className="text-micro text-gray3">数量 0 仍保留商品，“移除”才会从本次发货中删除。</p>
+            {removedShipmentItemIds.length > 0 && <div className="mt-2 rounded-cta border border-amber/30 bg-amber/10 p-2">
+              <div className="text-micro text-amber-fg">已移除商品（可恢复）</div>
+              <div className="mt-1 flex flex-wrap gap-2">{removedShipmentItemIds.map(itemId => {
+                const item = order.items.find(candidate => candidate.id === itemId)
+                return <button key={itemId} type="button" onClick={() => restoreShipmentItem(itemId)}
+                  className="rounded-cta border border-amber bg-white px-2 py-1 text-micro text-amber-fg">恢复 {item?.product?.name || '商品'}</button>
+              })}</div>
+            </div>}
+          </div>}
+        </>}
         renderQuantity={baseRow => {
           const row = detailRows.find(item => item.key === baseRow.key)!
           const rowDirty = Math.abs(row.quantity - row.originalQuantity) >= 0.0001 || row.originalQuantity === 0
@@ -805,7 +865,7 @@ export default function SupplierOrderDetailPage() {
           const row = detailRows.find(item => item.key === baseRow.key)!
           setSaveNotice(null)
           if (row.source === 'order' || row.source === 'catalog') removeOrderProduct(row.productId)
-          else if (row.source === 'shipment' && row.itemId) setShipQty(current => ({ ...current, [row.itemId!]: 0 }))
+          else if (row.source === 'shipment' && row.itemId) removeShipmentItem(row.itemId)
           else if (row.source === 'delivery' && row.itemId) removeDeliveryItem(row.itemId)
           else if (row.source === 'delivery-addition') setPendingDeliveryAdditions(current => current.filter(item => item.key !== row.key))
         }}

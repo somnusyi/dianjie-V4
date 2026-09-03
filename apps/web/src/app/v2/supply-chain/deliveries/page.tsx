@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { OrderCenterTabs } from '@/components/v2/order-center-tabs'
+import { OrderCenterHorizontalTable } from '@/components/v2/order-center-horizontal-table'
 import { EmptyState, FriendlyError, SkeletonCard } from '@/components/v2/skeleton'
 import { apiFetch } from '@/lib/v2-auth'
 import {
@@ -214,10 +215,11 @@ export default function InternalSupplyChainDeliveriesPage() {
 
         {deliveries && deliveries.length > 0 && (
           <div className="overflow-hidden rounded-card border border-border bg-white">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-caption">
+            <OrderCenterHorizontalTable>
+              <table className="w-full min-w-[1200px] text-left text-caption">
                 <thead className="bg-bg text-gray3">
                   <tr>
+                    <th className="w-16 whitespace-nowrap px-4 py-3">序号</th>
                     <th className="px-4 py-3">配送单号</th>
                     <th className="px-4 py-3">关联订货单号</th>
                     <th className="px-4 py-3">门店</th>
@@ -231,18 +233,19 @@ export default function InternalSupplyChainDeliveriesPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {deliveries.map(delivery => (
+                  {deliveries.map((delivery, index) => (
                     <tr key={delivery.id} className="hover:bg-bg/50">
-                      <td className="px-4 py-3 font-num"><b>{delivery.no}</b></td>
-                      <td className="px-4 py-3 font-num text-gray2">{delivery.purchaseOrder?.no || '—'}</td>
-                      <td className="px-4 py-3 text-gray2">{delivery.store?.name || '—'}</td>
-                      <td className="px-4 py-3 text-gray2">{delivery.supplier?.name || '—'}</td>
-                      <td className="px-4 py-3 font-num text-gray2">{orderDeliveryDateText(delivery.createdAt)}</td>
-                      <td className="px-4 py-3 font-num text-gray2">{orderDeliveryDateText(delivery.shippedAt)}</td>
-                      <td className="px-4 py-3"><Chip tone={deliveryStatusTone(delivery.status)}>{formatDeliveryStatusLabel(delivery.status)}</Chip></td>
-                      <td className="px-4 py-3 text-gray2">{deliveryItemSummary(delivery)}</td>
-                      <td className="px-4 py-3 text-right font-num">¥{Number(delivery.actualTotalAmount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="whitespace-nowrap px-4 py-4 font-num text-gray3">{index + 1}.</td>
+                      <td className="whitespace-nowrap px-4 py-4 font-num"><b>{delivery.no}</b></td>
+                      <td className="whitespace-nowrap px-4 py-4 font-num text-gray2">{delivery.purchaseOrder?.no || '—'}</td>
+                      <td className="whitespace-nowrap px-4 py-4 text-gray2">{delivery.store?.name || '—'}</td>
+                      <td className="whitespace-nowrap px-4 py-4 text-gray2">{delivery.supplier?.name || '—'}</td>
+                      <td className="whitespace-nowrap px-4 py-4 font-num text-gray2">{orderDeliveryDateText(delivery.createdAt)}</td>
+                      <td className="whitespace-nowrap px-4 py-4 font-num text-gray2">{orderDeliveryDateText(delivery.shippedAt)}</td>
+                      <td className="whitespace-nowrap px-4 py-4"><Chip tone={deliveryStatusTone(delivery.status)}>{formatDeliveryStatusLabel(delivery.status)}</Chip></td>
+                      <td className="min-w-72 whitespace-nowrap px-4 py-4 text-gray2">{deliveryItemSummary(delivery)}</td>
+                      <td className="whitespace-nowrap px-4 py-4 text-right font-num">¥{Number(delivery.actualTotalAmount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td className="whitespace-nowrap px-4 py-4 text-right">
                         {delivery.purchaseOrder?.id
                           ? <a href={`/v2/supply-chain/fulfillment/${delivery.purchaseOrder.id}`} className="text-button text-amber-fg">查看订单 ›</a>
                           : <span className="text-gray3">—</span>}
@@ -250,9 +253,9 @@ export default function InternalSupplyChainDeliveriesPage() {
                     </tr>
                   ))}
                 </tbody>
-                <tfoot className="border-t border-border bg-bg"><tr><td colSpan={8} className="px-4 py-3 text-right font-semibold">合计</td><td className="px-4 py-3 text-right font-num font-semibold">¥{deliveries.reduce((sum, delivery) => sum + Number(delivery.actualTotalAmount || 0), 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td /></tr></tfoot>
+                <tfoot className="border-t border-border bg-bg"><tr><td colSpan={9} className="px-4 py-3 text-right font-semibold">合计</td><td className="px-4 py-3 text-right font-num font-semibold">¥{deliveries.reduce((sum, delivery) => sum + Number(delivery.actualTotalAmount || 0), 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td /></tr></tfoot>
               </table>
-            </div>
+            </OrderCenterHorizontalTable>
           </div>
         )}
 

@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { OrderCenterTabs } from '@/components/v2/order-center-tabs'
+import { OrderCenterHorizontalTable } from '@/components/v2/order-center-horizontal-table'
 import { EmptyState, FriendlyError, SkeletonCard } from '@/components/v2/skeleton'
 import { apiFetch } from '@/lib/v2-auth'
 import {
@@ -214,10 +215,11 @@ export default function InternalSupplyChainOrdersPage() {
 
         {orders && orders.length > 0 && (
           <div className="overflow-hidden rounded-card border border-border bg-white">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-caption">
+            <OrderCenterHorizontalTable>
+              <table className="w-full min-w-[1080px] text-left text-caption">
                 <thead className="bg-bg text-gray3">
                   <tr>
+                    <th className="w-16 whitespace-nowrap px-4 py-3">序号</th>
                     <th className="px-4 py-3">订货单号</th>
                     <th className="px-4 py-3">门店</th>
                     <th className="px-4 py-3">供应商</th>
@@ -230,8 +232,9 @@ export default function InternalSupplyChainOrdersPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {orders.map(order => (
+                  {orders.map((order, index) => (
                     <tr key={order.id} className="hover:bg-bg/50">
+                      <td className="whitespace-nowrap px-4 py-3 font-num text-gray3">{index + 1}.</td>
                       <td className="px-4 py-3 font-num"><b>{order.no}</b></td>
                       <td className="px-4 py-3 text-gray2">{order.store?.name || '—'}</td>
                       <td className="px-4 py-3 text-gray2">{order.supplier?.name || '—'}</td>
@@ -246,9 +249,9 @@ export default function InternalSupplyChainOrdersPage() {
                     </tr>
                   ))}
                 </tbody>
-                <tfoot className="border-t border-border bg-bg"><tr><td colSpan={7} className="px-4 py-3 text-right font-semibold">合计</td><td className="px-4 py-3 text-right font-num font-semibold">¥{orders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td /></tr></tfoot>
+                <tfoot className="border-t border-border bg-bg"><tr><td colSpan={8} className="px-4 py-3 text-right font-semibold">合计</td><td className="px-4 py-3 text-right font-num font-semibold">¥{orders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td /></tr></tfoot>
               </table>
-            </div>
+            </OrderCenterHorizontalTable>
           </div>
         )}
 

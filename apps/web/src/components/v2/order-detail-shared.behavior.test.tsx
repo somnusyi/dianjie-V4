@@ -1,20 +1,10 @@
 // @vitest-environment jsdom
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { Simulate } from 'react-dom/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { OrderDeliverySummary } from './order-detail-shared'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
-
-let resizeCallback: ResizeObserverCallback
-
-class ResizeObserverMock {
-  constructor(callback: ResizeObserverCallback) { resizeCallback = callback }
-  observe() {}
-  disconnect() {}
-  unobserve() {}
-}
 
 function renderSummary(lines: string[]) {
   const container = document.createElement('div')
@@ -25,35 +15,16 @@ function renderSummary(lines: string[]) {
 }
 
 describe('shared delivery summary', () => {
-  beforeEach(() => { globalThis.ResizeObserver = ResizeObserverMock as any })
-
-  it('renders every delivery on its own sequentially numbered row', () => {
-    const { container, cleanup } = renderSummary(['PS-01 · 白菜2斤', 'PS-02 · 土豆3袋'])
-    const numbers = [...container.querySelectorAll('span.min-w-6')]
-    expect(numbers.map(node => node.textContent)).toEqual(['1.', '2.'])
-    expect(container.textContent).toContain('1.PS-01 · 白菜2斤')
-    expect(container.textContent).toContain('2.PS-02 · 土豆3袋')
+  it('renders one compact, continuously numbered product list', () => {
+    const { container, cleanup } = renderSummary(['白菜2斤', '土豆3袋'])
+    expect(container.querySelector('p')?.textContent).toBe('1.白菜2斤、2.土豆3袋')
     cleanup()
   })
 
-  it('shows a range control for horizontal overflow and scrolls with it', () => {
-    const { container, cleanup } = renderSummary(['PS-01 · 很长的配送商品内容'])
-    const viewport = container.querySelector('.overflow-x-auto') as HTMLDivElement
-    Object.defineProperties(viewport, {
-      clientWidth: { configurable: true, value: 200 },
-      scrollWidth: { configurable: true, value: 500 },
-    })
-    const scrollTo = vi.fn()
-    viewport.scrollTo = scrollTo as any
-    act(() => resizeCallback([], {} as ResizeObserver))
-
-    const range = container.querySelector('input[aria-label="横向拖动查看完整内容"]') as HTMLInputElement
-    expect(range).not.toBeNull()
-    expect(range.max).toBe('300')
-    act(() => {
-      Simulate.change(range, { target: { value: '125' } } as any)
-    })
-    expect(scrollTo).toHaveBeenCalledWith({ left: 125, behavior: 'auto' })
+  it('does not add a range control or delivery grouping UI', () => {
+    const { container, cleanup } = renderSummary(['白菜2斤'])
+    expect(container.querySelector('input[type="range"]')).toBeNull()
+    expect(container.querySelectorAll('p')).toHaveLength(1)
     cleanup()
   })
 })

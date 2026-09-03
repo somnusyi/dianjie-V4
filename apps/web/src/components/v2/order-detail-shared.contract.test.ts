@@ -38,13 +38,29 @@ describe('single and grouped fulfillment detail architecture', () => {
     expect(sharedComponent).toContain('数量</th><th className="px-3 py-2 text-right">单价</th><th className="px-3 py-2 text-right">总价</th>')
   })
 
-  it('keeps horizontal overflow and its draggable range inside the shared component', () => {
-    expect(sharedComponent).toContain('function HorizontalDragArea')
-    expect(sharedComponent).toContain('overflow-x-auto overscroll-x-contain')
-    expect(sharedComponent).toContain('aria-label="横向拖动查看完整内容"')
-    expect(sharedComponent).toContain("viewportRef.current?.scrollTo({ left: next, behavior: 'auto' })")
-    expect(sharedComponent).toContain('<HorizontalDragArea viewportClassName="px-3">')
-    expect(sharedComponent.match(/<HorizontalDragArea viewportClassName=/g)).toHaveLength(2)
+  it('keeps horizontal range controls out of shared order details', () => {
+    expect(sharedComponent).not.toContain('HorizontalDragArea')
+    expect(sharedComponent).not.toContain('aria-label="横向拖动查看完整内容"')
+    const productTable = sharedComponent.slice(sharedComponent.indexOf('export function OrderProductTable'))
+    expect(productTable).not.toContain('type="range"')
+  })
+
+  it('flattens delivery products into one numbered list without delivery numbers or grouping', () => {
+    const groupLines = groupPage.slice(
+      groupPage.indexOf('const deliveryLines ='),
+      groupPage.indexOf('const filteredCatalog ='),
+    )
+    expect(groupLines).toContain('flatMap(delivery =>')
+    expect(groupLines).toContain('delivery.items.map(item =>')
+    expect(groupLines).not.toContain('delivery.no')
+
+    const singleLines = singlePage.slice(
+      singlePage.indexOf('<OrderDeliverySummary lines='),
+      singlePage.indexOf('<OrderProgressCard'),
+    )
+    expect(singleLines).toContain('.flatMap(delivery => delivery.items.map(item =>')
+    expect(singleLines).not.toContain('delivery.no')
+    expect(sharedComponent).toContain('{index + 1}.')
   })
 
   it('keeps the simplified amount language on both pages', () => {
@@ -59,14 +75,38 @@ describe('single and grouped fulfillment detail architecture', () => {
     expect(singlePage).toContain('order.originalTotalAmount ?? order.totalAmount')
     expect(groupPage).toContain('detail.totals.originalOrderAmount')
     expect(singlePage).toContain('displayedShipmentAmount')
-    expect(groupPage).toContain('detail.totals.hasAnyShipment ? detail.totals.shipmentAmount : productTotal')
+    expect(groupPage).toContain('detailEditable ? productTotal : detail.totals.hasAnyShipment ? detail.totals.shipmentAmount : productTotal')
+  })
+
+  it('places the original order amount in the same left-hand block below the store name', () => {
+    const card = sharedComponent.slice(
+      sharedComponent.indexOf('export function OrderAmountCard'),
+      sharedComponent.indexOf('export function OrderDeliverySummary'),
+    )
+    const nameIndex = card.indexOf('{props.name}')
+    const originalIndex = card.indexOf('原始订单金额 ¥{props.originalOrderAmount}')
+    const shipmentLabelIndex = card.indexOf('{props.amountLabel}')
+    expect(nameIndex).toBeGreaterThan(-1)
+    expect(originalIndex).toBeGreaterThan(nameIndex)
+    expect(originalIndex).toBeLessThan(shipmentLabelIndex)
+  })
+
+  it('keeps a batch shipment path after a group has been accepted', () => {
+    expect(groupPage).toContain("const shipmentEditable = detail?.source === 'accepted'")
+    expect(groupPage).toContain("order.status === 'CONFIRMED'")
+    expect(groupPage).toContain('`/api/orders/${encodeURIComponent(order.id)}/ship`')
+    expect(groupPage).toContain('批量确认发货')
   })
 
   it('keeps zero quantity and removal as separate actions', () => {
     expect(singlePage).toContain('return { ...prev, [pid]: q }')
     expect(singlePage).toContain('removeOrderProduct(row.productId)')
-    expect(groupPage).toContain('row.orderId === order.id).map(row => ({ productId: row.productId, quantity: row.quantity }))')
-    expect(groupPage).not.toContain('row.orderId === order.id && row.quantity > 0')
+    const orderRevisionPayload = groupPage.slice(
+      groupPage.indexOf('const orders = detail.orders.map(order => ({'),
+      groupPage.indexOf('const requestKey = requestKeyRef.current'),
+    )
+    expect(orderRevisionPayload).toContain('row.orderId === order.id).map(row => ({ productId: row.productId, quantity: row.quantity }))')
+    expect(orderRevisionPayload).not.toContain('row.quantity > 0')
   })
 
   it('labels printed and exported totals as shipment amount', () => {

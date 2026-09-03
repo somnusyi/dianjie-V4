@@ -4,6 +4,7 @@ export type ShipmentDraft = {
   orderRowVersion: number
   userId: string
   quantities: Record<string, number>
+  removedItemIds?: string[]
   updatedAt: string
 }
 
@@ -43,6 +44,7 @@ export function readShipmentDraft(
     const draft = JSON.parse(raw) as ShipmentDraft
     const allowedItemIds = new Set(expected.itemIds)
     const entries = Object.entries(draft.quantities || {})
+    const removedItemIds = Array.isArray(draft.removedItemIds) ? draft.removedItemIds : []
     const valid = draft.version === 1
       && draft.orderId === expected.orderId
       && draft.orderRowVersion === expected.orderRowVersion
@@ -53,6 +55,8 @@ export function readShipmentDraft(
         && quantity >= 0
         && quantity <= PURCHASE_QUANTITY_MAX
         && Math.abs(quantity * 100 - Math.round(quantity * 100)) < 0.000001)
+      && new Set(removedItemIds).size === removedItemIds.length
+      && removedItemIds.every(itemId => allowedItemIds.has(itemId) && draft.quantities[itemId] === 0)
     if (valid) return draft
   } catch {
     // Corrupt or obsolete drafts are removed below.

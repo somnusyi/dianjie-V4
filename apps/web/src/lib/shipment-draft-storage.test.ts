@@ -91,4 +91,23 @@ describe('confirmed shipment draft storage', () => {
       })).toBeNull()
     }
   })
+
+  it('restores explicit removals only when they belong to the order and have zero quantity', () => {
+    const storage = memoryStorage()
+    const key = 'draft'
+    const valid = {
+      version: 1 as const, orderId: 'order-a', orderRowVersion: 1, userId: 'user-a',
+      quantities: { 'item-a': 0, 'item-b': 2 }, removedItemIds: ['item-a'],
+      updatedAt: '2026-09-03T00:00:00.000Z',
+    }
+    writeShipmentDraft(storage, key, valid)
+    expect(readShipmentDraft(storage, key, {
+      orderId: 'order-a', orderRowVersion: 1, userId: 'user-a', itemIds: ['item-a', 'item-b'],
+    })).toEqual(valid)
+
+    writeShipmentDraft(storage, key, { ...valid, removedItemIds: ['item-b'] })
+    expect(readShipmentDraft(storage, key, {
+      orderId: 'order-a', orderRowVersion: 1, userId: 'user-a', itemIds: ['item-a', 'item-b'],
+    })).toBeNull()
+  })
 })

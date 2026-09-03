@@ -53,6 +53,7 @@ function change(element: HTMLSelectElement | HTMLInputElement, value: string) {
 
 describe('入库记录中心', () => {
   beforeEach(() => {
+    sessionStorage.clear()
     mockFetch.mockReset()
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
@@ -117,9 +118,11 @@ describe('入库记录中心', () => {
     const { container, root } = renderPage()
     await waitFor(() => container.textContent?.includes('水牛毛肚') ?? false)
 
-    const inputs = Array.from(container.querySelectorAll('input[type="date"]')) as HTMLInputElement[]
-    change(inputs[0], '2026-08-01')
-    change(inputs[1], '2026-08-31')
+    const dateButton = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('请选择日期范围'))
+    act(() => dateButton?.click())
+    act(() => (container.querySelector('button[aria-label="上个月"]') as HTMLButtonElement).click())
+    act(() => (container.querySelector('button[aria-label="2026-08-01"]') as HTMLButtonElement).click())
+    act(() => (container.querySelector('button[aria-label="2026-08-31"]') as HTMLButtonElement).click())
     const supplierSelect = Array.from(container.querySelectorAll('select')).find(element =>
       Array.from(element.options).some(option => option.text === '全部供应商')) as HTMLSelectElement
     change(supplierSelect, 'sup-1')

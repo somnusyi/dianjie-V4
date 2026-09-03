@@ -58,11 +58,16 @@ const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
         label: '商品管理',
         description: '商品、分类、导入与记录',
         icon: '品',
-        match: ['/v2/supply-chain/products', '/v2/supply-chain/categories'],
+        match: ['/v2/supply-chain/products', '/v2/supply-chain/categories', '/v2/supply-chain/relations'],
       },
-      { href: '/v2/supply-chain/inventory', label: '仓库库存', description: '库存、入库、批次与流水', icon: '仓' },
-      { href: '/v2/supply-chain/inbound', label: '入库记录', description: '入库流水、供应商归属与来源认领', icon: '入' },
-      { href: '/v2/supply-chain/docs', label: '单据审核', description: '入库/出库单据、会计审核与改单留痕', icon: '单' },
+      {
+        href: '/v2/supply-chain/inventory',
+        label: '库存与单据',
+        description: '库存查询、入库记录与单据审核',
+        icon: '仓',
+        match: ['/v2/supply-chain/inventory', '/v2/supply-chain/inbound', '/v2/supply-chain/docs'],
+      },
+      { href: '/v2/supply-chain/transfers', label: '门店调拨', description: '门店间调出、发货与收货', icon: '调' },
       { href: '/v2/supply-chain/suppliers', label: '上游供应商', description: '总仓采购合作方', icon: '供' },
     ],
   },
@@ -107,6 +112,9 @@ function mobileActiveKey(pathname: string): string {
     pathname.startsWith('/v2/supply-chain/inventory') ||
     pathname.startsWith('/v2/supply-chain/products') ||
     pathname.startsWith('/v2/supply-chain/categories') ||
+    pathname.startsWith('/v2/supply-chain/inbound') ||
+    pathname.startsWith('/v2/supply-chain/docs') ||
+    pathname.startsWith('/v2/supply-chain/transfers') ||
     pathname.startsWith('/v2/supply-chain/suppliers')
   ) {
     return 'inventory'

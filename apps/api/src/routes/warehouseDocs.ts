@@ -64,12 +64,26 @@ export const warehouseDocsRoutes: FastifyPluginAsync = async app => {
     if (type) where.type = type
     if (status) where.status = status
     if (query.supplierId) where.supplierId = String(query.supplierId)
+    const supplierTerm = String(query.supplierQ || '').trim()
+    if (supplierTerm) where.supplierName = { contains: supplierTerm, mode: 'insensitive' }
     if (query.from || query.to) {
       where.effectiveAt = {}
       if (query.from) where.effectiveAt.gte = new Date(`${query.from}T00:00:00+08:00`)
       if (query.to) where.effectiveAt.lte = new Date(`${query.to}T23:59:59.999+08:00`)
     }
-    if (query.q) where.docNo = { contains: String(query.q).trim(), mode: 'insensitive' }
+    const term = String(query.q || '').trim()
+    const termProducts = term ? await prisma.product.findMany({
+      where: { tenantId: req.user.tenantId, OR: [
+        { code: { contains: term, mode: 'insensitive' } },
+        { name: { contains: term, mode: 'insensitive' } },
+      ] },
+      select: { id: true, code: true, name: true }, take: 201,
+    }) : []
+    if (term) where.OR = [
+      { docNo: { contains: term, mode: 'insensitive' } },
+      { lines: { some: { productName: { contains: term, mode: 'insensitive' } } } },
+      ...(termProducts.length ? [{ lines: { some: { productId: { in: termProducts.map(product => product.id) } } } }] : []),
+    ]
     const [items, total] = await Promise.all([
       prisma.warehouseDoc.findMany({
         where,

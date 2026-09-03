@@ -13,6 +13,99 @@ const COST_DP = 6
 
 type Decimalish = Prisma.Decimal | string | number
 
+export type DeliveryOutboundCostBreakdown = {
+  total: string
+  lineAmounts: Map<string, string>
+}
+
+export function summarizeDeliveryOutboundCostRows(
+  rows: Array<{ id: string; sourceId: string; sourceLineId?: string | null; valueDelta: Decimalish }>,
+  reversals: Array<{ sourceLineId: string; valueDelta: Decimalish }> = [],
+) {
+  const totals = new Map<string, Prisma.Decimal>()
+  const lineTotals = new Map<string, Map<string, Prisma.Decimal>>()
+  const movementSources = new Map<string, { deliveryId: string; sourceLineId: string | null }>()
+  for (const row of rows) {
+    const sourceLineId = row.sourceLineId ? String(row.sourceLineId) : null
+    movementSources.set(row.id, { deliveryId: row.sourceId, sourceLineId })
+    const valueDelta = new Prisma.Decimal(row.valueDelta || 0)
+    const cost = valueDelta.isNegative() ? valueDelta.negated() : ZERO
+    totals.set(row.sourceId, (totals.get(row.sourceId) || ZERO).plus(cost))
+    if (sourceLineId) {
+      const deliveryLines = lineTotals.get(row.sourceId) || new Map<string, Prisma.Decimal>()
+      deliveryLines.set(sourceLineId, (deliveryLines.get(sourceLineId) || ZERO).plus(cost))
+      lineTotals.set(row.sourceId, deliveryLines)
+    }
+  }
+  for (const reversal of reversals) {
+    const source = movementSources.get(reversal.sourceLineId)
+    if (!source) continue
+    const valueDelta = new Prisma.Decimal(reversal.valueDelta || 0)
+    if (!valueDelta.isPositive()) continue
+    totals.set(source.deliveryId, (totals.get(source.deliveryId) || ZERO).minus(valueDelta))
+    if (source.sourceLineId) {
+      const deliveryLines = lineTotals.get(source.deliveryId)
+      if (deliveryLines) {
+        deliveryLines.set(
+          source.sourceLineId,
+          (deliveryLines.get(source.sourceLineId) || ZERO).minus(valueDelta),
+        )
+      }
+    }
+  }
+
+  return new Map([...totals].map(([deliveryId, total]) => [
+    deliveryId,
+    {
+      total: Prisma.Decimal.max(ZERO, total).toFixed(2),
+      lineAmounts: new Map([...(lineTotals.get(deliveryId) || new Map())].map(([sourceLineId, lineTotal]) => [
+        sourceLineId,
+        Prisma.Decimal.max(ZERO, lineTotal).toFixed(2),
+      ])),
+    },
+  ]))
+}
+
+export function sumDeliveryOutboundCostRows(
+  rows: Array<{ id: string; sourceId: string; sourceLineId?: string | null; valueDelta: Decimalish }>,
+  reversals: Array<{ sourceLineId: string; valueDelta: Decimalish }> = [],
+) {
+  return new Map([...summarizeDeliveryOutboundCostRows(rows, reversals)].map(([deliveryId, breakdown]) => [
+    deliveryId,
+    breakdown.total,
+  ]))
+}
+
+/** 历史配送单成本必须取发货当时冻结的总仓出库流水，不能用当前商品价格反算。 */
+export async function deliveryOutboundCostBreakdowns(tenantId: string, deliveryIds: string[]) {
+  const ids = [...new Set(deliveryIds.filter(Boolean))]
+  const result = new Map<string, DeliveryOutboundCostBreakdown>()
+  if (ids.length === 0) return result
+  const rows = await prisma.warehouseLedgerMovement.findMany({
+    where: {
+      tenantId,
+      type: 'ORDER_OUTBOUND',
+      sourceType: 'DeliveryOrder',
+      sourceId: { in: ids },
+    },
+    select: { id: true, sourceId: true, sourceLineId: true, valueDelta: true },
+  })
+  const reversals = await prisma.warehouseLedgerMovement.findMany({
+    where: {
+      tenantId,
+      type: 'REVERSAL',
+      sourceLineId: { in: rows.map(row => row.id) },
+    },
+    select: { sourceLineId: true, valueDelta: true },
+  })
+  return summarizeDeliveryOutboundCostRows(rows, reversals)
+}
+
+export async function deliveryOutboundCostAmounts(tenantId: string, deliveryIds: string[]) {
+  const breakdowns = await deliveryOutboundCostBreakdowns(tenantId, deliveryIds)
+  return new Map([...breakdowns].map(([deliveryId, breakdown]) => [deliveryId, breakdown.total]))
+}
+
 type LockedBalance = {
   id: string
   productId: string

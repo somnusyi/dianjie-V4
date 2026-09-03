@@ -184,6 +184,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
   app.get('/', authRead, async (req: any, reply: any) => {
     const parsed = z.object({
       q: z.string().trim().max(100).optional(),
+      productStatus: z.enum(['ALL', 'PENDING_APPROVAL', 'PENDING_DISABLE', 'ENABLED', 'DISABLED']).default('ALL'),
       scope: z.enum(['stock', 'bom-mapping', 'unit-review']).default('stock'),
       page: z.coerce.number().int().min(1).default(1),
       pageSize: z.coerce.number().int().min(1).max(500).default(100),
@@ -198,6 +199,9 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
     const scopeWhere = buildWarehouseInventoryScopeWhere({ tenantId, warehouseId, scope: parsed.data.scope })
     const where: Prisma.ProductWhereInput = {
       ...scopeWhere,
+      status: parsed.data.productStatus === 'ALL'
+        ? { in: ['PENDING_APPROVAL', 'PENDING_DISABLE', 'ENABLED', 'DISABLED'] }
+        : parsed.data.productStatus,
       ...(terms.length ? {
         AND: terms.map(term => ({
           OR: [
@@ -220,7 +224,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         skip: (parsed.data.page - 1) * parsed.data.pageSize,
         take: parsed.data.pageSize,
         select: {
-          id: true, code: true, name: true, spec: true, category: true, unit: true,
+          id: true, code: true, name: true, spec: true, category: true, unit: true, status: true,
           purchaseUnit: true, inventoryUnit: true, orderUnit: true, costUnit: true,
           inventoryUnitsPerPurchaseUnit: true, inventoryUnitsPerOrderUnit: true,
           inventoryUnitsPerCostUnit: true, unitConversionStatus: true, minStock: true,
@@ -248,6 +252,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         name: product.name,
         spec: product.spec,
         category: product.category,
+        productStatus: product.status,
         purchaseUnit: contract.purchaseUnit,
         inventoryUnit: contract.inventoryUnit,
         purchaseToInventoryFactor: contract.inventoryUnitsPerPurchaseUnit,

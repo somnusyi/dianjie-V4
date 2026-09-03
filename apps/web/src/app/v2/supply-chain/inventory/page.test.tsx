@@ -92,6 +92,7 @@ function checkAndAddCandidates(container: HTMLElement, names: string[]) {
 
 describe('总仓库存页面', () => {
   beforeEach(() => {
+    sessionStorage.clear()
     mockFetch.mockReset()
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
@@ -142,9 +143,9 @@ describe('总仓库存页面', () => {
     const open = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '单条入库')
     act(() => open?.click())
 
-    const selects = Array.from(container.querySelectorAll('select')) as HTMLSelectElement[]
+    const productSelect = container.querySelector('select[aria-label="入库商品"]') as HTMLSelectElement
     const numberInputs = Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[]
-    change(selects[0], 'product-1')
+    change(productSelect, 'product-1')
     change(numberInputs[0], '2')
     change(numberInputs[1], '160')
 

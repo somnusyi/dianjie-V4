@@ -11,6 +11,7 @@ import { isStoreScoped, isSupplierRole, requireSupplierBinding, resolveActiveSto
 import {
   allowsSupplyDataRead,
   hasInternalSupplyChainCapability,
+  isInternalSupplyChainRole,
   supplyDataReadScope,
 } from '../lib/internal-supply-chain-access'
 import { resignOssUrls } from './upload'
@@ -33,6 +34,8 @@ import {
 } from '../services/supplierStockReservation'
 import {
   consumeWarehouseLedgerForShipment,
+  deliveryOutboundCostBreakdowns,
+  type DeliveryOutboundCostBreakdown,
   getWarehouseLedgerMode,
   postWarehouseReleaseForOrder,
   postWarehouseReservationForOrder,
@@ -1184,10 +1187,30 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       },
     })
     if (!order) throw { statusCode: 404, message: '采购订单不存在' }
+    const canReadInternalCost = isInternalSupplyChainRole(req.user.role)
+    const deliveryCostById = canReadInternalCost
+      ? await deliveryOutboundCostBreakdowns(
+        req.user.tenantId,
+        Array.isArray((order as any).deliveries)
+          ? (order as any).deliveries.map((delivery: any) => String(delivery.id))
+          : [],
+      )
+      : new Map<string, DeliveryOutboundCostBreakdown>()
     if (Array.isArray((order as any).deliveries)) {
       ;(order as any).deliveries = (order as any).deliveries.map((delivery: any) => ({
         ...delivery,
-        items: Array.isArray(delivery.items) ? delivery.items.map(withDocumentProductSnapshot) : [],
+        ...(canReadInternalCost ? { costAmount: deliveryCostById.get(String(delivery.id))?.total ?? null } : {}),
+        items: Array.isArray(delivery.items) ? delivery.items.map((raw: any) => {
+          const item = withDocumentProductSnapshot(raw)
+          return {
+            ...item,
+            ...(canReadInternalCost ? {
+              costAmount: item.purchaseOrderItemId
+                ? deliveryCostById.get(String(delivery.id))?.lineAmounts.get(String(item.purchaseOrderItemId)) ?? null
+                : null,
+            } : {}),
+          }
+        }) : [],
       }))
     }
     // OSS 签名 1h 过期 → 读取时把所有 OSS URL 字段统一重签

@@ -414,7 +414,7 @@ export default function SupplierCategoriesPage() {
                         </div>
                       )}
                       <div className="mt-1 text-caption text-gray3">{category.count} 个 SKU · 商品和库存同步归类</div>
-                      {markupEditId === category.id && (
+                      {editingId !== category.id && markupEditId === category.id && (
                         <div className="mt-2">
                           <div className="flex items-center gap-2">
                             <input
@@ -439,10 +439,15 @@ export default function SupplierCategoriesPage() {
 
                     {!category.isSystem && category.id && editingId !== category.id && (
                       <div className="flex flex-wrap justify-end gap-x-3 gap-y-1">
-                        <button onClick={() => { setEditingId(category.id); setEditingName(category.name) }} className="text-caption text-accent">改名</button>
+                        <button onClick={() => {
+                          setMarkupEditId(null)
+                          setEditingId(category.id)
+                          setEditingName(category.name)
+                        }} className="text-caption text-accent">改名</button>
                         {internalSupplyChain && (
                           <button
                             onClick={() => {
+                              setEditingId(null)
                               setMarkupEditId(markupEditId === category.id ? null : category.id)
                               setMarkupEditValue(category.defaultMarkupPercent != null ? String(category.defaultMarkupPercent) : '')
                             }}

@@ -135,7 +135,11 @@ describe('single and grouped fulfillment detail architecture', () => {
   })
 
   it('labels printed and exported totals as shipment amount', () => {
-    expect(deliveryNotePage).toContain("['实发金额', '', '', '', totalQtyLocal")
+    expect(deliveryNotePage).toContain("['#', '品名', '规格', '单位', '数量', '单价(¥)', '发货金额(¥)', '成本金额(¥)']")
+    expect(deliveryNotePage).toContain("['合计', '', '', '', totalQtyLocal, '', Number(totalLocal.toFixed(2)),")
+    expect(deliveryNotePage).toContain("it.costAmount != null ? Number(Number(it.costAmount).toFixed(2)) : '—'")
+    expect(deliveryNotePage).toContain('exportOrder.costAmount == null ? null : Number(exportOrder.costAmount)')
+    expect(deliveryNotePage).toContain("['F', 'G', 'H']")
     expect(deliveryNotePage).toContain('>实发金额</td>')
     expect(deliveryNotePage).not.toContain('原订货单总额')
   })

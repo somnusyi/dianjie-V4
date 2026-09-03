@@ -58,6 +58,20 @@ describe('operation group printable item merge', () => {
       quantity: '2.00', amount: '20.00', sourceOrderNos: ['PO-01'],
     })
   })
+
+  it('adds complete per-item frozen costs and keeps an incomplete merge private', () => {
+    const complete = mergeOperationGroupItems([
+      { no: 'PO-01', items: [{ productId: 'p1', name: '土豆', spec: null, unit: 'kg', quantity: '2', amount: '20', costAmount: '12.50' }] },
+      { no: 'PO-02', items: [{ productId: 'p1', name: '土豆', spec: null, unit: 'kg', quantity: '1', amount: '10', costAmount: '6.25' }] },
+    ])
+    expect(complete[0]?.costAmount).toBe('18.75')
+
+    const incomplete = mergeOperationGroupItems([
+      { no: 'PO-01', items: [{ productId: 'p1', name: '土豆', spec: null, unit: 'kg', quantity: '2', amount: '20', costAmount: '12.50' }] },
+      { no: 'PO-02', items: [{ productId: 'p1', name: '土豆', spec: null, unit: 'kg', quantity: '1', amount: '10' }] },
+    ])
+    expect(incomplete[0]?.costAmount).toBeNull()
+  })
 })
 
 describe('operation group shipment amount boundary', () => {
@@ -103,19 +117,26 @@ describe('operation group delivery summaries API', () => {
           {
             id: 'delivery-late', no: 'D-LATE', status: 'DELIVERED', rowVersion: 4, receipt: { id: 'receipt-1' },
             createdAt: new Date('2026-09-03T01:30:00.000Z'), shippedAt: new Date('2026-09-03T02:30:00.000Z'), actualTotalAmount: '6',
-            items: [{ id: 'di-2', productId: 'p2', shippedQty: '3', unitPriceSnapshot: '2', amount: '6', productNameSnapshot: '冻土豆', productUnitSnapshot: '袋', product: { name: '新土豆', unit: '箱' } }],
+            items: [{ id: 'di-2', purchaseOrderItemId: 'poi-2', productId: 'p2', shippedQty: '3', unitPriceSnapshot: '2', amount: '6', productNameSnapshot: '冻土豆', productUnitSnapshot: '袋', product: { name: '新土豆', unit: '箱' } }],
           },
           {
             id: 'delivery-early', no: 'D-EARLY', status: 'SHIPPED', rowVersion: 2, receipt: null,
             createdAt: new Date('2026-09-03T01:20:00.000Z'), shippedAt: new Date('2026-09-03T02:00:00.000Z'), actualTotalAmount: '4',
-            items: [{ id: 'di-1', productId: 'p1', shippedQty: '2', unitPriceSnapshot: '2', amount: '4', productNameSnapshot: '冻白菜', productUnitSnapshot: '斤', product: { name: '新白菜', unit: '箱' } }],
+            items: [{ id: 'di-1', purchaseOrderItemId: 'poi-1', productId: 'p1', shippedQty: '2', unitPriceSnapshot: '2', amount: '4', productNameSnapshot: '冻白菜', productUnitSnapshot: '斤', product: { name: '新白菜', unit: '箱' } }],
           },
           { no: 'D-CANCEL', status: 'CANCELLED', createdAt: occurredAt, actualTotalAmount: '99', items: [] },
         ],
       },
     ] as any)
 
-    const detail = await loadOperationGroupDetails({ tenantId: 'tenant-1', role: 'SUPPLY_CHAIN' }, groupId)
+    const detail = await loadOperationGroupDetails(
+      { tenantId: 'tenant-1', role: 'SUPPLY_CHAIN' },
+      groupId,
+      { deliveryCostBreakdowns: async () => new Map([
+        ['delivery-early', { total: '2.50', lineAmounts: new Map([['poi-1', '2.50']]) }],
+        ['delivery-late', { total: '3.50', lineAmounts: new Map([['poi-2', '3.50']]) }],
+      ]) },
+    )
 
     expect(detail?.orders[0]).toMatchObject({
       no: 'PO-01',
@@ -133,6 +154,25 @@ describe('operation group delivery summaries API', () => {
     expect((detail?.orders[0] as any).deliverySummaries.map((delivery: any) => delivery.no))
       .toEqual(['D-EARLY', 'D-LATE'])
     expect((detail?.orders[1] as any).deliverySummaries).toEqual([])
+    expect(detail?.totals.costAmount).toBe('6.00')
+    expect(detail?.mergedItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({ productId: 'p1', costAmount: '2.50' }),
+      expect.objectContaining({ productId: 'p2', costAmount: '3.50' }),
+    ]))
+    const incompleteCostDetail = await loadOperationGroupDetails(
+      { tenantId: 'tenant-1', role: 'SUPPLY_CHAIN' },
+      groupId,
+      { deliveryCosts: async () => new Map([['delivery-early', '2.50']]) },
+    )
+    expect(incompleteCostDetail?.totals.costAmount).toBeNull()
+    const externalCostReader = vi.fn(async () => new Map([['delivery-early', '2.50'], ['delivery-late', '3.50']]))
+    const supplierDetail = await loadOperationGroupDetails(
+      { tenantId: 'tenant-1', role: 'SUPPLIER', supplierId: 'supplier-1' },
+      groupId,
+      { deliveryCosts: externalCostReader },
+    )
+    expect(externalCostReader).not.toHaveBeenCalled()
+    expect(supplierDetail?.totals.costAmount).toBeNull()
     expect(prisma.purchaseOrder.findMany).toHaveBeenCalledWith(expect.objectContaining({
       include: expect.objectContaining({
         deliveries: expect.objectContaining({

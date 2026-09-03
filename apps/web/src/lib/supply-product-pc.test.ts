@@ -13,6 +13,7 @@ import {
   formatPriceChangeConfirmBody,
   formatProductQuantity,
   formatProductStatusLabel,
+  filterSupplierOptions,
   hasActiveFilters,
   isNewCategoryName,
   keepFiltersForPage,
@@ -28,6 +29,24 @@ import {
   validateProductQuantities,
   validateProductQuantity,
 } from './supply-product-pc'
+
+describe('filterSupplierOptions', () => {
+  const suppliers = [
+    { id: 's1', no: 'SUP001', name: '南京鲜配', contactName: '张师傅', contactPhone: '13800138000' },
+    { id: 's2', no: 'SUP002', name: '云南菌菇', contactName: '李经理', contactPhone: '13900139000' },
+  ]
+
+  it('does a case-insensitive contains match across visible supplier fields', () => {
+    expect(filterSupplierOptions(suppliers, '鲜配').map(item => item.id)).toEqual(['s1'])
+    expect(filterSupplierOptions(suppliers, 'sup002').map(item => item.id)).toEqual(['s2'])
+    expect(filterSupplierOptions(suppliers, '师傅').map(item => item.id)).toEqual(['s1'])
+    expect(filterSupplierOptions(suppliers, '13900').map(item => item.id)).toEqual(['s2'])
+  })
+
+  it('returns the original list for an empty search', () => {
+    expect(filterSupplierOptions(suppliers, '  ')).toEqual(suppliers)
+  })
+})
 
 describe('buildProductQuery', () => {
   it('returns only pagination when no filters are active', () => {

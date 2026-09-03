@@ -8,6 +8,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
+import { ProductToolTabs } from '@/components/v2/product-tool-tabs'
 import { EmptyState, FriendlyError, SkeletonList } from '@/components/v2/skeleton'
 import { apiFetch } from '@/lib/v2-auth'
 import {
@@ -91,14 +92,15 @@ export default function SupplyRelationsPage() {
       </header>
 
       <main className="mx-auto max-w-[1440px] px-6">
-        <nav aria-label="供货关系视角" className="flex flex-wrap gap-2 border-b border-border py-4">
+        <ProductToolTabs />
+        <nav aria-label="供货关系视角" className="my-4 inline-flex flex-wrap rounded-cta border border-border bg-white p-0.5">
           {(Object.keys(VIEW_LABEL) as View[]).map(key => (
             <button
               key={key}
               onClick={() => setView(key)}
               aria-pressed={view === key}
-              className={`rounded-cta px-4 py-2 text-button ${
-                view === key ? 'bg-ink text-white' : 'border border-border bg-white text-gray2'
+              className={`rounded-cta px-3 py-1.5 text-caption ${
+                view === key ? 'bg-ink text-white' : 'text-gray2'
               }`}
             >
               {VIEW_LABEL[key]}

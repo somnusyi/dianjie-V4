@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
+import { DateRangeCalendar } from '@/components/v2/date-range-calendar'
+import { WarehouseToolTabs } from '@/components/v2/warehouse-tool-tabs'
 import { apiFetch } from '@/lib/v2-auth'
+import { readWarehouseViewState, useWarehouseScrollRestoration, writeWarehouseViewState } from '@/lib/warehouse-view-state'
 
 type UpstreamSupplier = {
   id: string
@@ -87,39 +90,6 @@ function supplierCell(row: InboundRecord) {
   return { text, tone: 'muted' as const }
 }
 
-// 本地时区 yyyy-mm-dd（避免 toISOString 的 UTC 日期偏移）
-function fmtDate(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
-function datePresetRange(key: string): { from: string; to: string } {
-  const now = new Date()
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  switch (key) {
-    case 'today': return { from: fmtDate(today), to: fmtDate(today) }
-    case 'yesterday': {
-      const y = new Date(today); y.setDate(y.getDate() - 1)
-      return { from: fmtDate(y), to: fmtDate(y) }
-    }
-    case 'thisMonth': return { from: fmtDate(new Date(today.getFullYear(), today.getMonth(), 1)), to: fmtDate(today) }
-    case 'lastMonth': {
-      const first = new Date(today.getFullYear(), today.getMonth() - 1, 1)
-      const last = new Date(today.getFullYear(), today.getMonth(), 0)
-      return { from: fmtDate(first), to: fmtDate(last) }
-    }
-    case 'thisYear': return { from: fmtDate(new Date(today.getFullYear(), 0, 1)), to: fmtDate(today) }
-    default: return { from: '', to: '' }
-  }
-}
-
-const DATE_PRESETS = [
-  { key: 'today', label: '今天' },
-  { key: 'yesterday', label: '昨天' },
-  { key: 'thisMonth', label: '本月' },
-  { key: 'lastMonth', label: '上月' },
-  { key: 'thisYear', label: '今年' },
-]
-
 export default function InboundRecordsPage() {
   const [suppliers, setSuppliers] = useState<UpstreamSupplier[]>([])
   const [unclaimed, setUnclaimed] = useState<UnclaimedSource[]>([])
@@ -130,6 +100,7 @@ export default function InboundRecordsPage() {
   const [supplierId, setSupplierId] = useState('')
   const [source, setSource] = useState('all')
   const [q, setQ] = useState('')
+  const [restored, setRestored] = useState(false)
   const [page, setPage] = useState(1)
   const [data, setData] = useState<InboundResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -171,7 +142,15 @@ export default function InboundRecordsPage() {
     loadUnclaimed()
   }, [loadUnclaimed])
 
-  useEffect(() => { load(1) }, [load])
+  useEffect(() => { if (restored) load(page) }, [load, page, restored])
+
+  useEffect(() => {
+    const saved = readWarehouseViewState('warehouse-inbound-view', { from: '', to: '', supplierId: '', source: 'all', q: '', page: 1 })
+    setFrom(saved.from); setTo(saved.to); setSupplierId(saved.supplierId); setSource(saved.source); setQ(saved.q); setPage(saved.page)
+    setRestored(true)
+  }, [])
+  useEffect(() => { if (restored) writeWarehouseViewState('warehouse-inbound-view', { from, to, supplierId, source, q, page }) }, [from, to, supplierId, source, q, page, restored])
+  useWarehouseScrollRestoration('warehouse-inbound-view')
 
   async function claim(item: UnclaimedSource) {
     const target = claimTarget[item.sourceName]
@@ -198,8 +177,18 @@ export default function InboundRecordsPage() {
   const items = data?.items || []
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1
 
+  function resetFilters() {
+    setFrom('')
+    setTo('')
+    setSupplierId('')
+    setSource('all')
+    setQ('')
+    setPage(1)
+  }
+
   return (
-    <div className="mx-auto max-w-7xl p-4 pb-24">
+    <div className="min-h-screen bg-bg px-4 py-5 pb-24 lg:px-8 lg:py-7">
+      <WarehouseToolTabs />
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-h1">入库记录</h1>
@@ -244,27 +233,12 @@ export default function InboundRecordsPage() {
       </section>}
 
       <section className="mt-4 rounded-card border border-border bg-white p-4">
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <span className="text-micro text-gray3">快捷日期</span>
-          {DATE_PRESETS.map(preset => {
-            const range = datePresetRange(preset.key)
-            const active = from === range.from && to === range.to
-            return (
-              <button
-                key={preset.key}
-                type="button"
-                onClick={() => { setFrom(range.from); setTo(range.to); setPage(1) }}
-                className={`h-8 rounded-full border px-3 text-micro ${active ? 'border-accent bg-accent text-white' : 'border-border bg-white text-gray3 hover:border-accent hover:text-accent'}`}
-              >{preset.label}</button>
-            )
-          })}
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-          <label><span className="mb-1 block text-micro text-gray3">开始日期</span><input type="date" value={from} onChange={event => setFrom(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
-          <label><span className="mb-1 block text-micro text-gray3">结束日期</span><input type="date" value={to} onChange={event => setTo(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
-          <label><span className="mb-1 block text-micro text-gray3">供应商</span><select value={supplierId} onChange={event => setSupplierId(event.target.value)} className="h-11 w-full rounded-cta border border-border bg-white px-3"><option value="">全部供应商</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}</select></label>
-          <label><span className="mb-1 block text-micro text-gray3">来源类型</span><select value={source} onChange={event => setSource(event.target.value)} className="h-11 w-full rounded-cta border border-border bg-white px-3">{SOURCE_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-          <label className="lg:col-span-2"><span className="mb-1 block text-micro text-gray3">商品</span><input value={q} onChange={event => setQ(event.target.value)} placeholder="编码 / 名称" className="h-11 w-full rounded-cta border border-border px-3" /></label>
+        <div className="grid items-end gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(260px,1.4fr)_minmax(180px,1fr)_minmax(160px,0.8fr)_minmax(260px,1.4fr)_auto]">
+          <DateRangeCalendar value={{ from, to }} onChange={range => { setFrom(range.from); setTo(range.to); setPage(1) }} />
+          <label><span className="mb-1 block text-micro text-gray3">供应商</span><select value={supplierId} onChange={event => { setSupplierId(event.target.value); setPage(1) }} className="h-11 w-full rounded-cta border border-border bg-white px-3"><option value="">全部供应商</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}</select></label>
+          <label><span className="mb-1 block text-micro text-gray3">来源类型</span><select value={source} onChange={event => { setSource(event.target.value); setPage(1) }} className="h-11 w-full rounded-cta border border-border bg-white px-3">{SOURCE_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+          <label><span className="mb-1 block text-micro text-gray3">商品</span><input value={q} onChange={event => { setQ(event.target.value); setPage(1) }} placeholder="编码 / 名称" className="h-11 w-full rounded-cta border border-border px-3" /></label>
+          <button type="button" onClick={resetFilters} className="h-11 rounded-cta border border-border bg-white px-4 text-button text-gray2">重置</button>
         </div>
       </section>
 
@@ -319,8 +293,8 @@ export default function InboundRecordsPage() {
         {data && data.total > data.pageSize && <div className="flex items-center justify-between border-t border-border px-4 py-3">
           <span className="text-micro text-gray3">第 {page} / {totalPages} 页</span>
           <div className="flex gap-2">
-            <button onClick={() => load(page - 1)} disabled={loading || page <= 1} className="rounded-cta border border-border bg-white px-4 py-2 text-button text-gray2 disabled:opacity-40">上一页</button>
-            <button onClick={() => load(page + 1)} disabled={loading || page >= totalPages} className="rounded-cta border border-border bg-white px-4 py-2 text-button text-gray2 disabled:opacity-40">下一页</button>
+            <button onClick={() => setPage(page - 1)} disabled={loading || page <= 1} className="rounded-cta border border-border bg-white px-4 py-2 text-button text-gray2 disabled:opacity-40">上一页</button>
+            <button onClick={() => setPage(page + 1)} disabled={loading || page >= totalPages} className="rounded-cta border border-border bg-white px-4 py-2 text-button text-gray2 disabled:opacity-40">下一页</button>
           </div>
         </div>}
       </section>

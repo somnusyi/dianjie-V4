@@ -17,6 +17,7 @@ type Order = {
   purchaseOrderNo?: string
   purchaseOrderTotalAmount?: string
   totalAmount: string
+  costAmount?: string | null
   expectedDate: string; createdAt: string
   shippedAt: string | null
   shippedNote: string | null
@@ -27,10 +28,10 @@ type Order = {
   supplier: { id: string; name: string; contactName?: string | null; contactPhone?: string | null }
   createdBy: { id: string; name: string }
   shippedBy: { id: string; name: string } | null
-  items: { id: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string
+  items: { id: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string; costAmount?: string | null
            product?: { name: string; spec: string | null; unit: string; code: string } }[]
-  deliveries?: { id: string; no: string; status: string; rowVersion?: number; actualTotalAmount: string; note?: string | null; createdAt?: string | null; shippedAt?: string | null; deliveredAt?: string | null
-    items: { id: string; orderedQtySnapshot: string; shippedQty: string; unitPriceSnapshot: string; amount: string
+  deliveries?: { id: string; no: string; status: string; rowVersion?: number; actualTotalAmount: string; costAmount?: string | null; note?: string | null; createdAt?: string | null; shippedAt?: string | null; deliveredAt?: string | null
+    items: { id: string; orderedQtySnapshot: string; shippedQty: string; unitPriceSnapshot: string; amount: string; costAmount?: string | null
       product?: { name: string; spec: string | null; unit: string; code: string } }[] }[]
 }
 
@@ -75,6 +76,7 @@ type OperationGroupItem = {
   shippedQty?: number | string | null
   unitPrice?: number | string | null
   amount?: number | string | null
+  costAmount?: number | string | null
   product?: { id?: string; name?: string | null; spec?: string | null; unit?: string | null; code?: string | null } | null
 }
 
@@ -91,7 +93,7 @@ type OperationGroupResponse = {
   source?: 'pending' | 'accepted'
   orders: OperationGroupMember[]
   mergedItems: OperationGroupItem[]
-  totals?: { quantity?: number | string | null; amount?: number | string | null }
+  totals?: { quantity?: number | string | null; amount?: number | string | null; costAmount?: number | string | null }
 }
 
 type OperationGroupPreviewPayload = {
@@ -322,6 +324,7 @@ function normalizeSingleOrder(data: Order): Order {
     purchaseOrderTotalAmount: data.totalAmount,
     no: latest.no,
     totalAmount: latest.actualTotalAmount,
+    costAmount: latest.costAmount ?? null,
     shippedAt: latest.shippedAt || data.shippedAt,
     shippedNote: latest.note || null,
     items: latest.items.map(item => ({
@@ -330,6 +333,7 @@ function normalizeSingleOrder(data: Order): Order {
       shippedQty: item.shippedQty,
       unitPrice: item.unitPriceSnapshot,
       amount: item.amount,
+      costAmount: item.costAmount ?? null,
       product: item.product,
     })),
   }
@@ -363,6 +367,7 @@ function normalizeOperationGroup(data: OperationGroupResponse): NormalizedOperat
       shippedQty: item.shippedQty == null ? null : decimalText(item.shippedQty),
       unitPrice: decimalText(item.unitPrice),
       amount,
+      costAmount: item.costAmount == null ? null : decimalText(item.costAmount),
       product: {
         name: item.name ?? product.name ?? '—',
         spec: item.spec ?? product.spec ?? null,
@@ -407,6 +412,7 @@ function normalizeOperationGroup(data: OperationGroupResponse): NormalizedOperat
       no: '',
       status: first.status || 'CONFIRMED',
       totalAmount,
+      costAmount: data.totals?.costAmount == null ? null : decimalText(data.totals.costAmount),
       purchaseOrderTotalAmount: totalAmount,
       expectedDate,
       createdAt: first.createdAt,
@@ -462,6 +468,7 @@ export default function DeliveryNotePrintPage() {
   const router = useRouter()
   const id = String(params.id || '')
   const isOperationGroup = /^og_[a-f0-9]{24}$/.test(id)
+  const canExportInternalCost = getUser()?.role === 'SUPPLY_CHAIN'
   const [order, setOrder] = useState<Order | null>(null)
   const [groupMembers, setGroupMembers] = useState<NormalizedOperationGroup['members'] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -694,24 +701,25 @@ export default function DeliveryNotePrintPage() {
       const documentLabel = isOperationGroup ? '集合送货单' : exportOrder.no
       const totalLocal = exportOrder.items.reduce((s, i) => s + itemAmtLocal(i), 0)
       const totalQtyLocal = exportOrder.items.reduce((s, i) => s + itemQtyLocal(i), 0)
+      const costTotalLocal = exportOrder.costAmount == null ? null : Number(exportOrder.costAmount)
 
       // 构造表格 (aoa = array of arrays)
       const aoa: any[][] = [
-        [`送货单 · ${documentLabel}`, '', '', '', '', '', ''],
+        [`送货单 · ${documentLabel}`, '', '', '', '', '', '', ''],
         [],
-        ['供应商', exportOrder.supplier.name, '', '', '收货方', exportOrder.store.name, ''],
-        ['供应方联系人', `${exportOrder.supplier.contactName || '—'}${exportOrder.supplier.contactPhone ? ' · ' + exportOrder.supplier.contactPhone : ''}`, '', '', '收货人', `${(exportOrder.consignee?.name ?? exportOrder.store.managerName) || '—'}${(exportOrder.consignee?.phone ?? exportOrder.store.phone) ? ' · ' + (exportOrder.consignee?.phone ?? exportOrder.store.phone) : ''}`, ''],
-        ['收货地址', exportOrder.store.address || '—', '', '', '', '', ''],
+        ['供应商', exportOrder.supplier.name, '', '', '收货方', exportOrder.store.name, '', ''],
+        ['供应方联系人', `${exportOrder.supplier.contactName || '—'}${exportOrder.supplier.contactPhone ? ' · ' + exportOrder.supplier.contactPhone : ''}`, '', '', '收货人', `${(exportOrder.consignee?.name ?? exportOrder.store.managerName) || '—'}${(exportOrder.consignee?.phone ?? exportOrder.store.phone) ? ' · ' + (exportOrder.consignee?.phone ?? exportOrder.store.phone) : ''}`, '', ''],
+        ['收货地址', exportOrder.store.address || '—', '', '', '', '', '', ''],
         ...(isOperationGroup && exportGroupMembers && exportGroupMembers.length > 0
           ? exportGroupMembers.map(member => [
-            '送货单号', member.deliveryNos?.length ? member.deliveryNos.join('、') : member.deliveryNo || member.no, '', '', '下单日期', dayjs(member.createdAt).format('YYYY-MM-DD HH:mm'), '',
+            '送货单号', member.deliveryNos?.length ? member.deliveryNos.join('、') : member.deliveryNo || member.no, '', '', '下单日期', dayjs(member.createdAt).format('YYYY-MM-DD HH:mm'), '', '',
           ])
-          : [['下单时间', dayjs(exportOrder.createdAt).format('YYYY-MM-DD HH:mm'), '', '', '下单人', exportOrder.createdBy?.name || '—', '']]),
-        ['期望到货', dayjs(exportOrder.expectedDate).format('YYYY-MM-DD'), '', '', '发货时间', exportOrder.shippedAt ? dayjs(exportOrder.shippedAt).format('YYYY-MM-DD HH:mm') : '—', ''],
-        exportOrder.note ? ['订单备注', exportOrder.note, '', '', '', '', ''] : null,
-        exportOrder.shippedNote ? ['发货备注', exportOrder.shippedNote, '', '', '', '', ''] : null,
+          : [['下单时间', dayjs(exportOrder.createdAt).format('YYYY-MM-DD HH:mm'), '', '', '下单人', exportOrder.createdBy?.name || '—', '', '']]),
+        ['期望到货', dayjs(exportOrder.expectedDate).format('YYYY-MM-DD'), '', '', '发货时间', exportOrder.shippedAt ? dayjs(exportOrder.shippedAt).format('YYYY-MM-DD HH:mm') : '—', '', ''],
+        exportOrder.note ? ['订单备注', exportOrder.note, '', '', '', '', '', ''] : null,
+        exportOrder.shippedNote ? ['发货备注', exportOrder.shippedNote, '', '', '', '', '', ''] : null,
         [],
-        ['#', '品名', '规格', '单位', '数量', '单价(¥)', '金额(¥)'],
+        ['#', '品名', '规格', '单位', '数量', '单价(¥)', '发货金额(¥)', '成本金额(¥)'],
         ...exportOrder.items.map((it, i) => [
           i + 1,
           it.product?.name || '—',
@@ -720,44 +728,47 @@ export default function DeliveryNotePrintPage() {
           itemQtyLocal(it),
           Number(it.unitPrice),
           Number(itemAmtLocal(it).toFixed(2)),
+          canExportInternalCost && it.costAmount != null ? Number(Number(it.costAmount).toFixed(2)) : '—',
         ]),
-        ['实发金额', '', '', '', totalQtyLocal, '', Number(totalLocal.toFixed(2))],
-        ['大写', `人民币 ${num2cn(totalLocal)}`, '', '', '', '', ''],
+        ['合计', '', '', '', totalQtyLocal, '', Number(totalLocal.toFixed(2)), canExportInternalCost && costTotalLocal != null ? Number(costTotalLocal.toFixed(2)) : '—'],
+        ['大写', `人民币 ${num2cn(totalLocal)}`, '', '', '', '', '', ''],
       ].filter(Boolean) as any[][]
 
       const ws = XLSX.utils.aoa_to_sheet(aoa)
       // 列宽
       ws['!cols'] = [
         { wch: 6 }, { wch: 30 }, { wch: 22 }, { wch: 8 },
-        { wch: 12 }, { wch: 14 }, { wch: 16 },
+        { wch: 12 }, { wch: 14 }, { wch: 16 }, { wch: 16 },
       ]
       // 合并标题行
       ws['!merges'] = ws['!merges'] || []
-      ws['!merges'].push({ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } })   // 标题横跨 7 列
-      // 大写行第二列 → 第七列合并
+      ws['!merges'].push({ s: { r: 0, c: 0 }, e: { r: 0, c: 7 } })   // 标题横跨 8 列
+      // 大写行第二列 → 第八列合并
       const lastRowIdx = aoa.length - 1
-      ws['!merges'].push({ s: { r: lastRowIdx, c: 1 }, e: { r: lastRowIdx, c: 6 } })
+      ws['!merges'].push({ s: { r: lastRowIdx, c: 1 }, e: { r: lastRowIdx, c: 7 } })
       // 备注行 (如果有) 合并第二列横到末
       let noteRowIdx = 7   // 7=订单备注潜在位置 (前面是 7 行 + 1 空行)
       // 安全地按内容查找备注行
       aoa.forEach((row, i) => {
         if (row[0] === '订单备注' || row[0] === '发货备注' || row[0] === '收货地址') {
-          ws['!merges']!.push({ s: { r: i, c: 1 }, e: { r: i, c: 6 } })
+          ws['!merges']!.push({ s: { r: i, c: 1 }, e: { r: i, c: 7 } })
         }
       })
 
       // 货币列数字格式
       const headerRow = aoa.findIndex(r => r[0] === '#')
       if (headerRow >= 0) {
-        for (let r = headerRow + 1; r < aoa.length - 2; r++) {
-          ;['F', 'G'].forEach(col => {
+        for (let r = headerRow + 1; r < aoa.length - 1; r++) {
+          ;['F', 'G', 'H'].forEach(col => {
             const cellRef = `${col}${r + 1}`
             if (ws[cellRef]) ws[cellRef].z = '¥#,##0.00'
           })
         }
-        // 合计行
-        const totalCell = `G${aoa.length - 1}`
-        if (ws[totalCell]) ws[totalCell].z = '¥#,##0.00'
+        const totalRowIndex = aoa.findIndex(row => row[0] === '合计')
+        for (const col of ['G', 'H']) {
+          const cell = totalRowIndex >= 0 ? ws[`${col}${totalRowIndex + 1}`] : null
+          if (cell && typeof cell.v === 'number') cell.z = '¥#,##0.00'
+        }
       }
 
       const wb = XLSX.utils.book_new()

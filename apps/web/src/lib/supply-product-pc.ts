@@ -53,7 +53,25 @@ export type CategoryOption = { name: string; count: number }
 /** 供应商分类主数据项（GET /api/products/categories?supplierId=… 的返回形态）。 */
 export type MasterCategoryOption = CategoryOption & { isActive?: boolean; sortOrder?: number }
 
-export type SupplierOption = { id: string; name: string }
+export type SupplierOption = {
+  id: string
+  name: string
+  no?: string
+  contactName?: string | null
+  contactPhone?: string | null
+}
+
+/** 新增商品选择履约供应商时，按名称、编码、联系人或电话做包含匹配。 */
+export function filterSupplierOptions<T extends SupplierOption>(suppliers: T[], query: string): T[] {
+  const keyword = query.trim().toLocaleLowerCase('zh-CN')
+  if (!keyword) return suppliers
+  return suppliers.filter(supplier => [
+    supplier.name,
+    supplier.no,
+    supplier.contactName,
+    supplier.contactPhone,
+  ].some(value => String(value || '').toLocaleLowerCase('zh-CN').includes(keyword)))
+}
 
 /** 四位商品数量字段的表单类型（库存、安全库存、起订量、步长）。 */
 export type SupplyProductQuantityForm = {

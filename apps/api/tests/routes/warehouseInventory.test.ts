@@ -63,7 +63,11 @@ import {
 import { auditWarehouseLedger } from '../../src/services/warehouseLedgerAudit'
 import { reconcileWarehouseShadowLedger } from '../../src/services/warehouseLedgerReconciliation'
 import { ensureWarehouseDoc } from '../../src/services/warehouseDocs'
-import { buildWarehouseInventoryScopeWhere, warehouseInventoryRoutes } from '../../src/routes/warehouseInventory'
+import {
+  buildWarehouseInventoryScopeWhere,
+  currentInventoryShipmentAmount,
+  warehouseInventoryRoutes,
+} from '../../src/routes/warehouseInventory'
 
 const recordInbound = vi.mocked(recordManualWarehouseInbound)
 const recordBatchInbound = vi.mocked(recordBatchManualWarehouseInbound)
@@ -183,6 +187,19 @@ describe('warehouse inventory routes', () => {
         tenantId: 'tenant-1', status: 'ENABLED', unitConversionStatus: { not: 'VERIFIED' },
         NOT: { category: 'BOM待采购映射' },
       })
+  })
+
+  it('values current physical stock at the product cost-unit price for inventory export', () => {
+    expect(currentInventoryShipmentAmount({
+      physicalQty: 24,
+      price: 30,
+      inventoryUnitsPerCostUnit: 12,
+    })).toBe(60)
+    expect(currentInventoryShipmentAmount({
+      physicalQty: 24,
+      price: 30,
+      inventoryUnitsPerCostUnit: null,
+    })).toBeNull()
   })
 
   it('records a manual inbound bound to an upstream supplier', async () => {

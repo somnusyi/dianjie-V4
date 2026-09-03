@@ -211,32 +211,92 @@ function orderedLines(order: any): Array<any> {
 }
 
 function deliverySnapshotLines(delivery: any, costs?: Map<string, DeliveryOutboundCostBreakdown>): Array<any> {
-  return (Array.isArray(delivery?.items) ? delivery.items : []).map((raw: any) => {
-    const item = withDocumentProductSnapshot(raw)
-    const product = item.product || {}
-    return {
-      id: item.id,
-      productId: item.productId,
-      name: String(product.name || '—'),
-      spec: product.spec == null ? null : String(product.spec),
-      unit: String(product.unit || '—'),
-      quantity: decimalString(item.shippedQty),
-      shippedQty: decimalString(item.shippedQty),
-      unitPrice: decimalString(item.unitPriceSnapshot),
-      amount: decimalString(item.amount),
-      ...(costs ? {
-        costAmount: item.purchaseOrderItemId
-          ? costs.get(String(delivery.id))?.lineAmounts.get(String(item.purchaseOrderItemId)) ?? null
-          : null,
-      } : {}),
-    }
-  })
+  return (Array.isArray(delivery?.items) ? delivery.items : [])
+    .filter((raw: any) => raw.removedAt == null)
+    .map((raw: any) => {
+      const item = withDocumentProductSnapshot(raw)
+      const product = item.product || {}
+      return {
+        id: item.id,
+        productId: item.productId,
+        name: String(product.name || '—'),
+        spec: product.spec == null ? null : String(product.spec),
+        unit: String(product.unit || '—'),
+        quantity: decimalString(item.shippedQty),
+        shippedQty: decimalString(item.shippedQty),
+        unitPrice: decimalString(item.unitPriceSnapshot),
+        amount: decimalString(item.amount),
+        ...(costs ? {
+          costAmount: item.purchaseOrderItemId
+            ? costs.get(String(delivery.id))?.lineAmounts.get(String(item.purchaseOrderItemId)) ?? null
+            : null,
+        } : {}),
+      }
+    })
+}
+
+function shipmentDraft(order: any): any | null {
+  if (order?.status !== 'CONFIRMED') return null
+  return [...(Array.isArray(order?.deliveries) ? order.deliveries : [])]
+    .filter((delivery: any) => delivery.status === 'DRAFT')
+    .sort((a: any, b: any) => numberValue(a.rowVersion) - numberValue(b.rowVersion)
+      || dateText(a.createdAt).localeCompare(dateText(b.createdAt))
+      || String(a.id || '').localeCompare(String(b.id || '')))[0] || null
+}
+
+function shipmentDraftItems(draft: any): Array<any> {
+  return (Array.isArray(draft?.items) ? draft.items : [])
+    .filter((raw: any) => raw.removedAt == null)
+    .map((raw: any) => {
+      const item = withDocumentProductSnapshot(raw)
+      return {
+        id: String(item.id),
+        purchaseOrderItemId: item.purchaseOrderItemId == null ? null : String(item.purchaseOrderItemId),
+        productId: String(item.productId),
+        shippedQty: decimalString(item.shippedQty),
+        unitPriceSnapshot: decimalString(item.unitPriceSnapshot),
+        amount: decimalString(item.amount),
+        productNameSnapshot: item.productNameSnapshot == null ? null : String(item.productNameSnapshot),
+        productSpecSnapshot: item.productSpecSnapshot == null ? null : String(item.productSpecSnapshot),
+        productUnitSnapshot: item.productUnitSnapshot == null ? null : String(item.productUnitSnapshot),
+        product: item.product || null,
+      }
+    })
 }
 
 function shipmentLines(order: any, costs?: Map<string, DeliveryOutboundCostBreakdown>): Array<any> {
   const deliveries = (Array.isArray(order.deliveries) ? order.deliveries : [])
     .filter((delivery: any) => isFormalDeliveryStatus(delivery.status))
   return deliveries.flatMap((delivery: any) => deliverySnapshotLines(delivery, costs))
+}
+
+/**
+ * Resolve the exact persisted rows represented by the operation-group editor.
+ *
+ * The source changes with the workflow phase, but the group detail and its
+ * delivery note must not choose independently:
+ * - SUBMITTED: current purchase-order rows;
+ * - CONFIRMED with a saved server draft: active DRAFT delivery rows;
+ * - SHIPPED / DELIVERED / RECEIVED: every formal delivery snapshot;
+ * - accepted members without either document yet: current order rows.
+ *
+ * An existing empty draft/formal delivery intentionally returns an empty list;
+ * it must never fall back to the ordered quantities after every line was
+ * removed.
+ */
+export function operationGroupDocumentLines(
+  order: any,
+  costs?: Map<string, DeliveryOutboundCostBreakdown>,
+): Array<any> {
+  const draft = shipmentDraft(order)
+  if (draft) return deliverySnapshotLines(draft)
+
+  const formalDeliveries = (Array.isArray(order?.deliveries) ? order.deliveries : [])
+    .filter((delivery: any) => isFormalDeliveryStatus(delivery.status))
+  if (formalDeliveries.length > 0) {
+    return formalDeliveries.flatMap((delivery: any) => deliverySnapshotLines(delivery, costs))
+  }
+  return orderedLines(order)
 }
 
 /** Pure, deterministic product merge used by the API and unit tests. */
@@ -312,7 +372,11 @@ const detailInclude = {
   deliveries: {
     orderBy: { createdAt: 'asc' as const },
     include: {
-      items: { where: { removedAt: null }, include: { product: true } },
+      items: {
+        where: { removedAt: null },
+        orderBy: [{ createdAt: 'asc' as const }, { id: 'asc' as const }],
+        include: { product: true },
+      },
       // The group UI only needs to know whether a receipt already exists in
       // order to hide delivery-item editing. Do not expose receipt contents.
       receipt: { select: { id: true } },
@@ -486,46 +550,56 @@ export async function loadOperationGroupDetails(
     }
   }
 
-  const printableOrders = orderedRows.map(row => ({
-    id: row.id,
-    no: row.no,
-    rowVersion: row.rowVersion,
-    deliveryNo: activeDelivery(row)?.no || null,
-    deliveryNos: (Array.isArray(row.deliveries) ? row.deliveries : [])
-      .filter((delivery: any) => isFormalDeliveryStatus(delivery.status))
-      .map((delivery: any) => String(delivery.no)),
-    deliverySummaries: (Array.isArray(row.deliveries) ? row.deliveries : [])
-      .filter((delivery: any) => isFormalDeliveryStatus(delivery.status))
-      .sort((a: any, b: any) => dateText(a.shippedAt || a.createdAt).localeCompare(dateText(b.shippedAt || b.createdAt)))
-      .map((delivery: any) => ({
-        id: String(delivery.id),
-        no: String(delivery.no),
-        status: String(delivery.status),
-        rowVersion: Number(delivery.rowVersion),
-        hasReceipt: Boolean(delivery.receipt),
-        items: deliverySnapshotLines(delivery, costBreakdownByDeliveryId),
-      })),
-    createdAt: dateText(row.createdAt),
-    submittedAt: row.submittedAt ? dateText(row.submittedAt) : null,
-    expectedDate: expectedDateKey(row.expectedDate),
-    status: row.status,
-    shippedAt: row.shippedAt ? dateText(row.shippedAt) : null,
-    store: row.store ? {
-      id: row.store.id, name: row.store.name, no: row.store.no,
-      address: row.store.address || null, managerName: row.store.managerName || null,
-      phone: row.store.phone || null,
-    } : null,
-    supplier: row.supplier ? {
-      id: row.supplier.id, name: row.supplier.name,
-      contactName: row.supplier.contactName || null, contactPhone: row.supplier.contactPhone || null,
-    } : null,
-    createdBy: row.createdBy || null,
-    shippedBy: row.shippedBy || null,
-    consignee: { name: row.store?.managerName || null, phone: row.store?.phone || null },
-    items: sourceLines(row, costBreakdownByDeliveryId),
-    orderedItems: orderedLines(row),
-    shipmentItems: shipmentLines(row, costBreakdownByDeliveryId),
-  }))
+  const printableOrders = orderedRows.map(row => {
+    const draft = shipmentDraft(row)
+    return {
+      id: row.id,
+      no: row.no,
+      rowVersion: row.rowVersion,
+      deliveryNo: activeDelivery(row)?.no || null,
+      deliveryNos: (Array.isArray(row.deliveries) ? row.deliveries : [])
+        .filter((delivery: any) => isFormalDeliveryStatus(delivery.status))
+        .map((delivery: any) => String(delivery.no)),
+      deliverySummaries: (Array.isArray(row.deliveries) ? row.deliveries : [])
+        .filter((delivery: any) => isFormalDeliveryStatus(delivery.status))
+        .sort((a: any, b: any) => dateText(a.shippedAt || a.createdAt).localeCompare(dateText(b.shippedAt || b.createdAt)))
+        .map((delivery: any) => ({
+          id: String(delivery.id),
+          no: String(delivery.no),
+          status: String(delivery.status),
+          rowVersion: Number(delivery.rowVersion),
+          hasReceipt: Boolean(delivery.receipt),
+          items: deliverySnapshotLines(delivery, costBreakdownByDeliveryId),
+        })),
+      shipmentDraft: draft ? {
+        id: String(draft.id),
+        no: String(draft.no),
+        status: 'DRAFT' as const,
+        rowVersion: Number(draft.rowVersion),
+        items: shipmentDraftItems(draft),
+      } : null,
+      createdAt: dateText(row.createdAt),
+      submittedAt: row.submittedAt ? dateText(row.submittedAt) : null,
+      expectedDate: expectedDateKey(row.expectedDate),
+      status: row.status,
+      shippedAt: row.shippedAt ? dateText(row.shippedAt) : null,
+      store: row.store ? {
+        id: row.store.id, name: row.store.name, no: row.store.no,
+        address: row.store.address || null, managerName: row.store.managerName || null,
+        phone: row.store.phone || null,
+      } : null,
+      supplier: row.supplier ? {
+        id: row.supplier.id, name: row.supplier.name,
+        contactName: row.supplier.contactName || null, contactPhone: row.supplier.contactPhone || null,
+      } : null,
+      createdBy: row.createdBy || null,
+      shippedBy: row.shippedBy || null,
+      consignee: { name: row.store?.managerName || null, phone: row.store?.phone || null },
+      items: sourceLines(row, costBreakdownByDeliveryId),
+      orderedItems: orderedLines(row),
+      shipmentItems: shipmentLines(row, costBreakdownByDeliveryId),
+    }
+  })
   const orderedMergedItems = mergeOperationGroupItems(printableOrders.map(order => ({
     no: order.no,
     items: order.orderedItems,
@@ -534,27 +608,33 @@ export async function loadOperationGroupDetails(
     no: order.no,
     items: order.shipmentItems,
   })))
+  const documentMergedItems = mergeOperationGroupItems(orderedRows.map(row => ({
+    no: row.no,
+    items: operationGroupDocumentLines(row, costBreakdownByDeliveryId),
+  })))
   const shipmentSummary = operationGroupShipmentSummary(orderedRows)
-  const costByDeliveryId = new Map([...(costBreakdownByDeliveryId || new Map())].map(([deliveryId, breakdown]) => [
-    deliveryId,
-    breakdown.total,
-  ]))
-  const hasCompleteDeliveryCosts = canReadInternalCost && validDeliveries.length > 0 && validDeliveries.every(
-    (delivery: any) => costByDeliveryId.has(String(delivery.id)),
-  )
-  const costAmount = hasCompleteDeliveryCosts
-    ? [...costByDeliveryId.values()].reduce((sum, value) => sum.add(decimalValue(value)), new Prisma.Decimal(0)).toFixed(2)
-    : null
   const { hasAnyShipment, snapshotComplete, shipmentAmount } = shipmentSummary
-  // Once shipment snapshots exist, the aggregate product view contains only
-  // shipment lines. Never fill missing members with ordered quantities.
-  const mergedItems = hasAnyShipment ? shipmentMergedItems : orderedMergedItems
+  // The aggregate document projection follows the same per-member source as
+  // the group editor. In particular, a persisted CONFIRMED-stage DRAFT must be
+  // printable without relying on one browser tab's preview cache.
+  const mergedItems = documentMergedItems
+  // Never expose a partial internal-cost total for a mixed group. A group can
+  // contain formal delivery rows beside CONFIRMED order/DRAFT rows; the latter
+  // deliberately have no outbound cost yet. The total is therefore available
+  // only when every row in the document projection carries a complete cost.
+  const hasCompleteDocumentCosts = canReadInternalCost
+    && validDeliveries.length > 0
+    && mergedItems.every(item => item.costAmount !== null)
+  const costAmount = hasCompleteDocumentCosts
+    ? mergedItems.reduce(
+      (sum, item) => sum.add(decimalValue(item.costAmount)),
+      new Prisma.Decimal(0),
+    ).toFixed(2)
+    : null
   const shipmentQuantity = shipmentMergedItems.reduce((sum, item) => sum.add(decimalValue(item.quantity)), new Prisma.Decimal(0)).toFixed(2)
   const totals = {
     quantity: mergedItems.reduce((sum, item) => sum.add(decimalValue(item.quantity)), new Prisma.Decimal(0)).toFixed(2),
-    amount: hasAnyShipment
-      ? shipmentAmount
-      : orderedMergedItems.reduce((sum, item) => sum.add(decimalValue(item.amount)), new Prisma.Decimal(0)).toFixed(2),
+    amount: mergedItems.reduce((sum, item) => sum.add(decimalValue(item.amount)), new Prisma.Decimal(0)).toFixed(2),
     orderedQuantity: orderedMergedItems.reduce((sum, item) => sum.add(decimalValue(item.quantity)), new Prisma.Decimal(0)).toFixed(2),
     orderedAmount: orderedMergedItems.reduce((sum, item) => sum.add(decimalValue(item.amount)), new Prisma.Decimal(0)).toFixed(2),
     originalOrderAmount: orderedRows.reduce((sum, row) => sum.add(decimalValue(row.originalTotalAmount ?? row.totalAmount)), new Prisma.Decimal(0)).toFixed(2),

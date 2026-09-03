@@ -46,6 +46,12 @@ import {
   shipmentDraftStorageKey,
 } from '@/lib/shipment-draft-storage'
 import { loadAllProductCatalog, loadAllWarehouseProductCatalog } from '@/lib/load-product-catalog'
+import {
+  buildSingleOrderPreviewPayload,
+  calculateSingleDeliveryNoteTotal,
+  SINGLE_DELIVERY_NOTE_PREVIEW_INDEX_PREFIX,
+  SINGLE_DELIVERY_NOTE_PREVIEW_PREFIX,
+} from '@/lib/single-delivery-note-preview'
 
 type Order = {
   id: string; no: string; status: string
@@ -132,6 +138,14 @@ type ShipmentDraftRecovery = {
   additions: PendingDeliveryAddition[]
   quantityDrafts: Record<string, string>
   errorMessage: string
+}
+
+function singlePreviewStorageKey(orderId: string, token: string) {
+  return `${SINGLE_DELIVERY_NOTE_PREVIEW_PREFIX}${orderId}:${token}`
+}
+
+function singlePreviewIndexKey(orderId: string) {
+  return `${SINGLE_DELIVERY_NOTE_PREVIEW_INDEX_PREFIX}${orderId}`
 }
 
 export default function SupplierOrderDetailPage() {
@@ -961,9 +975,7 @@ export default function SupplierOrderDetailPage() {
             pendingRemoval: false,
           }))
 
-  const detailTotal = detailRows
-    .filter(row => !row.pendingRemoval)
-    .reduce((sum, row) => sum + row.quantity * row.unitPrice, 0)
+  const detailTotal = calculateSingleDeliveryNoteTotal(detailRows) ?? 0
 
   const quantityDraftReason = (rawValue: string) => {
     const text = rawValue.trim()
@@ -1004,6 +1016,57 @@ export default function SupplierOrderDetailPage() {
   const canShowSave = canEditSubmittedDetails || canEditConfirmedDetails || canEditDeliveryDetails
   const hasActualDelivery = (order.deliveries || []).some(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
   const displayedShipmentAmount = canShowSave || !hasActualDelivery ? detailTotal : shipmentAmount
+
+  function openSingleDeliveryNote() {
+    if (!order) return
+    setDeliveryAdjustError(null)
+    if (invalidQuantityDraft) {
+      setDeliveryAdjustError(`${invalidQuantityDraft.name}：${invalidQuantityDraft.reason}`)
+      return
+    }
+    if (typeof window === 'undefined') return
+
+    let tenantKey = ''
+    try {
+      const tenant = JSON.parse(window.localStorage.getItem('tenant') || '{}')
+      tenantKey = String(tenant?.id || tenant?.slug || '')
+    } catch {
+      tenantKey = ''
+    }
+    if (!viewerUserId || !tenantKey) {
+      setDeliveryAdjustError('当前账号信息不完整，请重新登录后再打开送货单')
+      return
+    }
+
+    const token = clientRequestId()
+    let payload
+    try {
+      payload = buildSingleOrderPreviewPayload({
+        order,
+        ownerUserId: viewerUserId,
+        tenantKey,
+        rows: detailRows.map(row => ({
+          ...row,
+          spec: row.spec || null,
+          unit: row.unit || '',
+        })),
+      })
+    } catch (error: any) {
+      setDeliveryAdjustError(error?.message || '商品明细存在无效数据，请核对后再打开送货单')
+      return
+    }
+    const latestKey = singlePreviewIndexKey(order.id)
+    try {
+      const previousToken = window.sessionStorage.getItem(latestKey)
+      if (previousToken) window.sessionStorage.removeItem(singlePreviewStorageKey(order.id, previousToken))
+      window.sessionStorage.setItem(singlePreviewStorageKey(order.id, token), JSON.stringify(payload))
+      window.sessionStorage.setItem(latestKey, token)
+    } catch {
+      setDeliveryAdjustError('送货单预览数据暂存失败，请重试')
+      return
+    }
+    router.push(`${orderBase}/${order.id}/delivery-note?preview=${encodeURIComponent(token)}`)
+  }
 
   async function saveDetails() {
     if (!order || !detailsDirty || submitting) return
@@ -1117,7 +1180,7 @@ export default function SupplierOrderDetailPage() {
 
   return (
     <div className="min-h-screen bg-bg pb-32">
-      <OrderDetailHeader onBack={() => router.back()} onDeliveryNote={() => router.push(`${orderBase}/${order.id}/delivery-note`)}
+      <OrderDetailHeader onBack={() => router.back()} onDeliveryNote={openSingleDeliveryNote}
         statusLabel={status.detailLabel} statusTone={tone} />
       {shipmentNotice && (
         <div className="mx-4 mt-2 rounded-card border border-green-fg/20 bg-green-bg p-3 text-caption text-green-fg">

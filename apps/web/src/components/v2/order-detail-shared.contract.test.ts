@@ -149,6 +149,6 @@ describe('single and grouped fulfillment detail architecture', () => {
       expect(groupPage).not.toContain(forbidden)
     }
     for (const source of [singlePage, groupPage]) expect(source).not.toContain('待门店确认')
-    expect(groupPage.match(/delivery-note/g)).toHaveLength(1)
+    expect(groupPage.match(/\/delivery-note\?preview=/g)).toHaveLength(1)
   })
 })

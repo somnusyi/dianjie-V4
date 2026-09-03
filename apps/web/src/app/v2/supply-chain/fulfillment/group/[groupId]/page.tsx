@@ -18,6 +18,7 @@ import {
   resolveRevisionCatalogPricing,
 } from '@/lib/supplier-revision-cost-pricing'
 import { loadAllWarehouseProductCatalog } from '@/lib/load-product-catalog'
+import { buildOperationGroupDeliveryNoteProjection } from '@/lib/operation-group-delivery-note-preview'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 
 const PURCHASE_QUANTITY_MAX = 99_999_999.99
@@ -40,6 +41,7 @@ type Member = {
   id: string; no: string; rowVersion: number; createdAt: string; submittedAt?: string | null; status?: string | null
   store?: { name?: string; address?: string | null } | null; supplier?: { name?: string } | null
   items: Item[]; orderedItems: Item[]; shipmentItems: Item[]
+  shipmentDraft?: ServerShipmentDraft | null
   deliverySummaries: Array<{ id: string; no: string; status: string; rowVersion: number; hasReceipt: boolean; items: Item[] }>
 }
 type Detail = {
@@ -67,7 +69,6 @@ type ServerShipmentDraft = {
     product?: { name?: string | null; spec?: string | null; unit?: string | null } | null
   }>
 }
-type OrderDraftDetail = { deliveries?: ServerShipmentDraft[] }
 type DraftRow = OrderDetailTableRow & {
   productId: string
   orderId: string
@@ -253,6 +254,15 @@ function money(value: string | number) {
   return Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+function quantityDraftReason(rawValue: string): string | null {
+  const text = rawValue.trim()
+  const value = Number(text)
+  if (!text || !Number.isFinite(value) || value < 0) return '数量不能为空且不能小于 0'
+  if (value > PURCHASE_QUANTITY_MAX) return '数量超过系统上限'
+  if (Math.abs(value * 100 - Math.round(value * 100)) > 0.000001) return '数量最多保留 2 位小数'
+  return null
+}
+
 function fingerprint(rows: DraftRow[]) {
   return JSON.stringify([...rows].sort((a, b) => a.key.localeCompare(b.key)).map(row => [
     row.orderId,
@@ -333,15 +343,10 @@ export default function OperationGroupDetailPage() {
     setLoading(true); setLoadError(null)
     try {
       const data = await apiFetch<Detail>(`/api/orders/operation-groups/${encodeURIComponent(groupId)}`)
-      const confirmedOrders = data.orders.filter(order => order.status === 'CONFIRMED')
-      const draftEntries = await Promise.all(confirmedOrders.map(async order => {
-        const orderDetail = await apiFetch<OrderDraftDetail>(`/api/orders/${encodeURIComponent(order.id)}`)
-        const draft = [...(orderDetail.deliveries || [])]
-          .filter(delivery => delivery.status === 'DRAFT')
-          .sort((a, b) => a.rowVersion - b.rowVersion)[0] || null
-        return [order.id, draft] as const
-      }))
-      const nextShipmentDrafts = Object.fromEntries(draftEntries.filter((entry): entry is readonly [string, ServerShipmentDraft] => Boolean(entry[1])))
+      const nextShipmentDrafts = Object.fromEntries(data.orders.flatMap(order =>
+        order.status === 'CONFIRMED' && order.shipmentDraft
+          ? [[order.id, order.shipmentDraft] as const]
+          : []))
       const nextRows = rowsFromDetail(data, nextShipmentDrafts)
       const confirmedIds = new Set(data.orders.filter(order => order.status === 'CONFIRMED').map(order => order.id))
       const editableDeliveryIds = new Set(data.orders.flatMap(order => order.deliverySummaries
@@ -364,6 +369,7 @@ export default function OperationGroupDetailPage() {
   useEffect(() => { void load() }, [groupId])
 
   const sortedOrders = useMemo(() => [...(detail?.orders || [])].sort((a, b) => Date.parse(a.submittedAt || a.createdAt) - Date.parse(b.submittedAt || b.createdAt) || a.id.localeCompare(b.id)), [detail])
+  const deliveryNoteProjection = useMemo(() => buildOperationGroupDeliveryNoteProjection(rows), [rows])
   const latestOrder = sortedOrders[sortedOrders.length - 1]
   const editable = detail?.source === 'pending' && detail.orders.every(order => order.status === 'SUBMITTED')
   const shipmentEditable = detail?.source === 'accepted' && detail.orders.some(order => order.status === 'CONFIRMED')
@@ -379,17 +385,16 @@ export default function OperationGroupDetailPage() {
   const confirmedOrderIds = new Set(confirmedOrders.map(order => order.id))
   const editableRows = editable ? rows : rows.filter(row => confirmedOrderIds.has(row.orderId)
     || Boolean(row.deliveryId && editableDeliveryIds.has(row.deliveryId)) || row.isDeliveryAddition)
-  const hasInvalidQuantityDraft = Object.values(quantityDrafts).some(raw => {
-    const value = Number(raw)
-    return raw.trim() === '' || !Number.isFinite(value) || value < 0 || value > PURCHASE_QUANTITY_MAX
-      || Math.abs(value * 100 - Math.round(value * 100)) > 0.000001
-  })
+  const hasInvalidQuantityDraft = Object.values(quantityDrafts)
+    .some(raw => quantityDraftReason(raw) !== null)
   const dirty = detailEditable && (fingerprint(editableRows) !== baseline || hasInvalidQuantityDraft)
   const blocked = Boolean(detail?.group.blockedOrderIds?.length)
   const canAccept = Boolean(detail?.source === 'pending' && detail.group.isEligible && !blocked && !dirty)
 
   function updateQuantity(row: DraftRow, value: number) {
-    if (!Number.isFinite(value) || value < 0 || value > PURCHASE_QUANTITY_MAX) return
+    // Keep the last valid row value authoritative. Invalid raw text stays in
+    // quantityDrafts so preview/save remain blocked until the user corrects it.
+    if (quantityDraftReason(String(value)) !== null) return
     clearDeliveryNotePreview()
     setRows(current => current.map(item => item.key === row.key ? { ...item, quantity: value } : item))
     setActionError(null); setNotice(null)
@@ -597,44 +602,6 @@ export default function OperationGroupDetailPage() {
       return
     }
 
-    const merged = new Map<string, {
-      productId: string
-      name: string
-      spec: string | null
-      unit: string
-      quantity: number
-      amount: number
-      fallbackUnitPrice: number
-    }>()
-    for (const row of rows.filter(item => !item.pendingRemoval)) {
-      const key = `${row.productId}|${row.name}|${row.spec || ''}|${row.unit}`
-      const current = merged.get(key) || {
-        productId: row.productId,
-        name: row.name,
-        spec: row.spec || null,
-        unit: row.unit,
-        quantity: 0,
-        amount: 0,
-        fallbackUnitPrice: row.unitPrice,
-      }
-      current.quantity += row.quantity
-      current.amount += row.quantity * row.unitPrice
-      merged.set(key, current)
-    }
-    const items = [...merged.values()].map((item, index) => ({
-      id: `live:${index}:${item.productId}`,
-      productId: item.productId,
-      name: item.name,
-      spec: item.spec,
-      unit: item.unit,
-      quantity: Number(item.quantity.toFixed(2)),
-      shippedQty: Number(item.quantity.toFixed(2)),
-      unitPrice: Number((item.quantity > 0 ? item.amount / item.quantity : item.fallbackUnitPrice).toFixed(2)),
-      amount: Number(item.amount.toFixed(2)),
-    }))
-    const quantity = items.reduce((sum, item) => sum + item.quantity, 0)
-    const amount = items.reduce((sum, item) => sum + item.amount, 0)
-
     try {
       clearDeliveryNotePreview()
       const token = clientRequestId()
@@ -650,11 +617,8 @@ export default function OperationGroupDetailPage() {
         expiresAt: createdAt + GROUP_DELIVERY_NOTE_PREVIEW_TTL_MS,
         serverSignature: operationGroupServerSignature(detail, shipmentDrafts),
         draftRows: rows,
-        items,
-        totals: {
-          quantity: Number(quantity.toFixed(2)),
-          amount: Number(amount.toFixed(2)),
-        },
+        items: deliveryNoteProjection.items,
+        totals: deliveryNoteProjection.totals,
       }
       window.sessionStorage.setItem(storageKey, JSON.stringify(preview))
       window.sessionStorage.setItem(latestKey, token)
@@ -879,8 +843,7 @@ export default function OperationGroupDetailPage() {
   if (loadError || !detail) return <div className="min-h-screen bg-bg p-4"><button onClick={() => router.back()} className="text-caption text-gray2">‹ 返回</button><div className="mt-6 rounded-card bg-red-bg p-4 text-red-fg">{loadError || '集合不存在'}</div></div>
 
   const first = detail.orders[0]
-  const productTotal = rows.filter(row => !row.pendingRemoval)
-    .reduce((sum, row) => sum + row.quantity * row.unitPrice, 0)
+  const productTotal = deliveryNoteProjection.totals.amount
   const deliveryLines = detail.orders.flatMap(order => order.deliverySummaries.flatMap(delivery =>
     delivery.items.map(item => `${item.name}${item.quantity}${item.unit}`)))
   const addTargetRows = editable
@@ -964,8 +927,13 @@ export default function OperationGroupDetailPage() {
           || (row.deliveryId && editableDeliveryIds.has(row.deliveryId)))
         if (row.pendingRemoval) return <>{row.quantity}{row.unit}</>
         return rowEditable ? <span className="inline-flex items-center gap-1"><input type="number" inputMode="decimal" min="0" max={PURCHASE_QUANTITY_MAX} step="0.01" aria-label={`${row.name}数量`}
-          value={quantityDrafts[row.key] ?? String(row.quantity)} onChange={event => { const raw = event.target.value; setQuantityDrafts(current => ({ ...current, [row.key]: raw })); if (raw !== '') updateQuantity(row, Number(raw)) }}
-          onBlur={() => setQuantityDrafts(current => { const next = { ...current }; delete next[row.key]; return next })}
+          value={quantityDrafts[row.key] ?? String(row.quantity)} onChange={event => { const raw = event.target.value; setQuantityDrafts(current => ({ ...current, [row.key]: raw })); if (quantityDraftReason(raw) === null) updateQuantity(row, Number(raw)) }}
+          onBlur={() => {
+            const raw = quantityDrafts[row.key]
+            const reason = raw === undefined ? null : quantityDraftReason(raw)
+            if (reason) { setActionError(`${row.name}：${reason}`); return }
+            setQuantityDrafts(current => { const next = { ...current }; delete next[row.key]; return next })
+          }}
           className={`w-24 rounded-cta border bg-white px-2 py-1 text-right font-num ${Math.abs(row.quantity - row.originalQuantity) >= 0.0001 ? 'border-red text-red-fg' : 'border-border text-ink'}`} /><span className="text-gray3">{row.unit}</span></span> : <>{row.quantity}{row.unit}</>
       }} />
 

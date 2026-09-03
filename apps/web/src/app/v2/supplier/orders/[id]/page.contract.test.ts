@@ -85,7 +85,7 @@ describe('single confirmed-order shipment draft semantics', () => {
     expect(source).toContain("['SHIPPED', 'DELIVERED'].includes(currentDelivery.status)")
     expect(source).toContain('pendingRemoval: canEditDeliveryDetails && removedDeliveryItemIds.includes(item.id)')
     expect(source).not.toContain(".filter(item => !canEditDeliveryDetails || !removedDeliveryItemIds.includes(item.id))")
-    expect(source).toContain('.filter(row => !row.pendingRemoval)')
+    expect(source).toContain('calculateSingleDeliveryNoteTotal(detailRows)')
     expect(source).toContain('restoreDeliveryItem(row.itemId)')
     expect(source).toContain("setSaveNotice('商品明细已保存')")
     expect(source).toContain('load()')
@@ -110,5 +110,14 @@ describe('single confirmed-order shipment draft semantics', () => {
     expect(source).toContain('请先保存商品明细后再确认发货')
     expect(source).toContain('<button onClick={ship} disabled={submitting || detailsDirty}')
     expect(source).toContain("确认发货 (出发)")
+  })
+
+  it('opens every phase from the current detail rows with the same per-line money rule', () => {
+    expect(source).toContain('function openSingleDeliveryNote()')
+    expect(source).toContain('payload = buildSingleOrderPreviewPayload({')
+    expect(source).toContain('rows: detailRows')
+    expect(source).toContain('const detailTotal = calculateSingleDeliveryNoteTotal(detailRows) ?? 0')
+    expect(source).toContain('onDeliveryNote={openSingleDeliveryNote}')
+    expect(source).toContain('delivery-note?preview=${encodeURIComponent(token)}')
   })
 })

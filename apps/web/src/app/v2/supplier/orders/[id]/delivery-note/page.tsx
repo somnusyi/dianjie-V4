@@ -11,9 +11,19 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 import dayjs from 'dayjs'
+import {
+  applySingleOrderPreview,
+  parseSingleOrderPreviewPayload,
+  singleOrderServerSignature,
+  SINGLE_DELIVERY_NOTE_PREVIEW_INDEX_PREFIX,
+  SINGLE_DELIVERY_NOTE_PREVIEW_PREFIX,
+  type SingleDeliveryNotePreviewPayload,
+} from '@/lib/single-delivery-note-preview'
+import { parseOperationGroupDeliveryNoteProjection } from '@/lib/operation-group-delivery-note-preview'
 
 type Order = {
   id: string; no: string; status: string
+  rowVersion?: number
   purchaseOrderNo?: string
   purchaseOrderTotalAmount?: string
   totalAmount: string
@@ -32,7 +42,9 @@ type Order = {
            product?: { name: string; spec: string | null; unit: string; code: string } }[]
   deliveries?: { id: string; no: string; status: string; rowVersion?: number; actualTotalAmount: string; costAmount?: string | null; note?: string | null; createdAt?: string | null; shippedAt?: string | null; deliveredAt?: string | null
     items: { id: string; orderedQtySnapshot: string; shippedQty: string; unitPriceSnapshot: string; amount: string; costAmount?: string | null
-      product?: { name: string; spec: string | null; unit: string; code: string } }[] }[]
+      product?: { name: string; spec: string | null; unit: string; code: string } }[]
+    receipt?: { id: string } | null
+  }[]
 }
 
 /**
@@ -64,6 +76,11 @@ type OperationGroupMember = {
     status?: string | null
     hasReceipt?: boolean
   }>
+  shipmentDraft?: {
+    id: string
+    rowVersion: number
+    status: 'DRAFT'
+  } | null
 }
 
 type OperationGroupItem = {
@@ -118,6 +135,11 @@ type OperationGroupPreview = Pick<OperationGroupPreviewPayload, 'items' | 'total
   token: string
 }
 
+type SingleOrderPreview = Pick<SingleDeliveryNotePreviewPayload, 'items' | 'totalAmount' | 'serverSignature'> & {
+  storageKey: string
+  token: string
+}
+
 type ShipmentDraftSignature = { id: string; rowVersion: number }
 
 function tenantKeyFromLocalStorage() {
@@ -128,6 +150,66 @@ function tenantKeyFromLocalStorage() {
   } catch {
     return ''
   }
+}
+
+function deliveryNotePreviewRequested() {
+  if (typeof window === 'undefined') return false
+  return Boolean(new URLSearchParams(window.location.search).get('preview'))
+}
+
+function singleOrderPreviewToken() {
+  if (typeof window === 'undefined') return ''
+  const token = new URLSearchParams(window.location.search).get('preview') || ''
+  return /^[0-9a-f-]{36}$/i.test(token) ? token : ''
+}
+
+function removeSingleOrderPreview(orderId: string, token: string, storageKey: string) {
+  if (typeof window === 'undefined') return
+  window.sessionStorage.removeItem(storageKey)
+  const latestKey = `${SINGLE_DELIVERY_NOTE_PREVIEW_INDEX_PREFIX}${orderId}`
+  if (window.sessionStorage.getItem(latestKey) === token) window.sessionStorage.removeItem(latestKey)
+}
+
+function readSingleOrderPreview(orderId: string): SingleOrderPreview | null {
+  if (typeof window === 'undefined') return null
+  const token = singleOrderPreviewToken()
+  if (!token) return null
+  const storageKey = `${SINGLE_DELIVERY_NOTE_PREVIEW_PREFIX}${orderId}:${token}`
+  const discard = () => removeSingleOrderPreview(orderId, token, storageKey)
+  try {
+    const raw = window.sessionStorage.getItem(storageKey)
+    if (!raw) {
+      discard()
+      return null
+    }
+    const ownerUserId = String(getUser()?.id || '')
+    const tenantKey = tenantKeyFromLocalStorage()
+    const payload = parseSingleOrderPreviewPayload({ raw, orderId, ownerUserId, tenantKey })
+    if (!payload) {
+      discard()
+      return null
+    }
+    return {
+      items: payload.items,
+      totalAmount: payload.totalAmount,
+      serverSignature: payload.serverSignature,
+      storageKey,
+      token,
+    }
+  } catch {
+    discard()
+    return null
+  }
+}
+
+function verifySingleOrderPreview(data: Order, orderId: string): SingleOrderPreview | null {
+  const preview = readSingleOrderPreview(orderId)
+  if (!preview) return null
+  if (singleOrderServerSignature(data) !== preview.serverSignature) {
+    removeSingleOrderPreview(orderId, preview.token, preview.storageKey)
+    return null
+  }
+  return preview
 }
 
 function operationGroupPreviewToken() {
@@ -179,40 +261,18 @@ function readOperationGroupPreview(groupId: string): OperationGroupPreview | nul
       discard()
       return null
     }
-    const items = payload.items.map((item, index): OperationGroupItem | null => {
-      const productId = String(item?.productId || '').trim()
-      const name = String(item?.name || '').trim()
-      const unit = String(item?.unit || '').trim()
-      const quantity = Number(item?.shippedQty ?? item?.quantity)
-      const unitPrice = Number(item?.unitPrice)
-      const amount = Number(item?.amount)
-      if (!productId || !name || !unit || !Number.isFinite(quantity) || quantity < 0
-        || !Number.isFinite(unitPrice) || unitPrice < 0 || !Number.isFinite(amount) || amount < 0) return null
-      return {
-        id: String(item?.id || `live:${index}:${productId}`),
-        productId,
-        name,
-        spec: item?.spec == null ? null : String(item.spec),
-        unit,
-        quantity,
-        shippedQty: quantity,
-        unitPrice,
-        amount,
-      }
+    const projection = parseOperationGroupDeliveryNoteProjection({
+      draftRows: payload.draftRows,
+      items: payload.items,
+      totals: payload.totals,
     })
-    if (items.some(item => item === null)) {
-      discard()
-      return null
-    }
-    const quantity = Number(payload.totals?.quantity)
-    const amount = Number(payload.totals?.amount)
-    if (!Number.isFinite(quantity) || quantity < 0 || !Number.isFinite(amount) || amount < 0) {
+    if (!projection) {
       discard()
       return null
     }
     return {
-      items: items as OperationGroupItem[],
-      totals: { quantity, amount },
+      items: projection.items,
+      totals: projection.totals,
       serverSignature: payload.serverSignature,
       storageKey,
       token,
@@ -253,32 +313,17 @@ function operationGroupServerSignature(
 async function verifyOperationGroupPreview(data: OperationGroupResponse, groupId: string) {
   const preview = readOperationGroupPreview(groupId)
   if (!preview) return null
-  try {
-    // Only a group URL carrying a locally valid short preview token performs
-    // these member reads. They are required because the aggregate endpoint
-    // deliberately omits the internal CONFIRMED shipment DRAFT.
-    const memberDetails = await Promise.all(data.orders.map(order =>
-      apiFetch<Order>(`/api/orders/${encodeURIComponent(order.id)}`)))
-    const shipmentDrafts = Object.fromEntries(memberDetails.map((detail, index) => {
-      const member = data.orders[index]
-      if (member.status !== 'CONFIRMED') return [member.id, null]
-      const draft = [...(detail.deliveries || [])]
-        .filter(delivery => delivery.status === 'DRAFT')
-        .sort((a, b) => Number(a.rowVersion || 0) - Number(b.rowVersion || 0))[0]
-      return [member.id, draft ? { id: draft.id, rowVersion: Number(draft.rowVersion) } : null]
-    })) as Record<string, ShipmentDraftSignature | null>
-    if (operationGroupServerSignature(data, shipmentDrafts) !== preview.serverSignature) {
-      removeOperationGroupPreview(groupId, preview.token, preview.storageKey)
-      return null
-    }
-    return preview
-  } catch {
-    // A transient member-detail read failure makes this refresh unverifiable,
-    // not stale. Render the coherent server aggregate for this attempt while
-    // keeping the tab-scoped snapshot so returning to the group can revalidate
-    // and recover its unsaved rows.
+  const shipmentDrafts = Object.fromEntries(data.orders.map(member => [
+    member.id,
+    member.status === 'CONFIRMED' && member.shipmentDraft
+      ? { id: member.shipmentDraft.id, rowVersion: Number(member.shipmentDraft.rowVersion) }
+      : null,
+  ])) as Record<string, ShipmentDraftSignature | null>
+  if (operationGroupServerSignature(data, shipmentDrafts) !== preview.serverSignature) {
+    removeOperationGroupPreview(groupId, preview.token, preview.storageKey)
     return null
   }
+  return preview
 }
 
 function applyOperationGroupPreview(data: OperationGroupResponse, preview: OperationGroupPreview): OperationGroupResponse {
@@ -316,24 +361,49 @@ function deliveryPdfFilename(order: Pick<Order, 'store' | 'expectedDate' | 'crea
 function normalizeSingleOrder(data: Order): Order {
   const currentDeliveries = (data.deliveries || [])
     .filter(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
-  const latest = currentDeliveries[currentDeliveries.length - 1]
-  if (!latest) return data
+  const latestFormal = currentDeliveries[currentDeliveries.length - 1]
+  if (latestFormal) {
+    return {
+      ...data,
+      purchaseOrderNo: data.no,
+      purchaseOrderTotalAmount: data.totalAmount,
+      no: latestFormal.no,
+      totalAmount: latestFormal.actualTotalAmount,
+      costAmount: latestFormal.costAmount ?? null,
+      shippedAt: latestFormal.shippedAt || data.shippedAt,
+      shippedNote: latestFormal.note || null,
+      items: latestFormal.items.map(item => ({
+        id: item.id,
+        quantity: item.orderedQtySnapshot,
+        shippedQty: item.shippedQty,
+        unitPrice: item.unitPriceSnapshot,
+        amount: item.amount,
+        costAmount: item.costAmount ?? null,
+        product: item.product,
+      })),
+    }
+  }
+
+  // The detail endpoint orders deliveries by createdAt ascending and the
+  // editor uses the first DRAFT. A saved CONFIRMED-stage draft is therefore
+  // also the direct/open-refresh fallback for the delivery note. Keep the PO
+  // number until shipment creates a formal DO number; only the draft's exact
+  // rows and actual total replace the original order snapshot.
+  const shipmentDraft = data.status === 'CONFIRMED'
+    ? (data.deliveries || []).find(delivery => delivery.status === 'DRAFT')
+    : null
+  if (!shipmentDraft) return data
   return {
     ...data,
-    purchaseOrderNo: data.no,
-    purchaseOrderTotalAmount: data.totalAmount,
-    no: latest.no,
-    totalAmount: latest.actualTotalAmount,
-    costAmount: latest.costAmount ?? null,
-    shippedAt: latest.shippedAt || data.shippedAt,
-    shippedNote: latest.note || null,
-    items: latest.items.map(item => ({
+    totalAmount: shipmentDraft.actualTotalAmount,
+    costAmount: null,
+    items: shipmentDraft.items.map(item => ({
       id: item.id,
       quantity: item.orderedQtySnapshot,
       shippedQty: item.shippedQty,
       unitPrice: item.unitPriceSnapshot,
       amount: item.amount,
-      costAmount: item.costAmount ?? null,
+      costAmount: null,
       product: item.product,
     })),
   }
@@ -488,11 +558,19 @@ export default function DeliveryNotePrintPage() {
     if (isOperationGroup) {
       const data = await apiFetch<OperationGroupResponse>(`/api/orders/operation-groups/${encodeURIComponent(id)}`)
       const preview = await verifyOperationGroupPreview(data, id)
+      if (deliveryNotePreviewRequested() && !preview) {
+        throw new Error('送货单预览已失效，请返回商品明细重新打开')
+      }
       const normalized = normalizeOperationGroup(preview ? applyOperationGroupPreview(data, preview) : data)
       return { order: normalized.order, members: normalized.members }
     }
     const data = await apiFetch<Order>(`/api/orders/${id}`)
-    return { order: normalizeSingleOrder(data), members: null }
+    const preview = verifySingleOrderPreview(data, id)
+    if (deliveryNotePreviewRequested() && !preview) {
+      throw new Error('送货单预览已失效，请返回商品明细重新打开')
+    }
+    const normalized = normalizeSingleOrder(data)
+    return { order: preview ? applySingleOrderPreview(normalized, preview) : normalized, members: null }
   }, [id, isOperationGroup])
 
   const refreshLatestDocument = useCallback(async (): Promise<DeliveryNoteDocument | null> => {
@@ -692,10 +770,9 @@ export default function DeliveryNotePrintPage() {
       const exportGroupMembers = latestDocument.members
       const XLSX = await import('xlsx')
       const itemQtyLocal = (i: Order['items'][number]) => i.shippedQty != null ? Number(i.shippedQty) : Number(i.quantity)
-      // Aggregate lines carry the source-line amount. Use it for groups so
-      // different historical prices are not silently recomputed from one price;
-      // retain the original calculation for single orders.
-      const itemAmtLocal = (i: Order['items'][number]) => isOperationGroup && i.amount != null
+      // Persisted and preview rows both carry the authoritative, per-line
+      // half-up amount. Never recompute it with binary floating point.
+      const itemAmtLocal = (i: Order['items'][number]) => i.amount != null
         ? Number(i.amount)
         : itemQtyLocal(i) * Number(i.unitPrice)
       const documentLabel = isOperationGroup ? '集合送货单' : exportOrder.no
@@ -820,7 +897,7 @@ export default function DeliveryNotePrintPage() {
   const documentLabel = isOperationGroup ? '集合送货单' : order.no
   // 送货单按实际发货量 (shippedQty) 显示, 没填则按 quantity. 合同金额已在 ship 时重算.
   const itemQty = (i: Order['items'][number]) => i.shippedQty != null ? Number(i.shippedQty) : Number(i.quantity)
-  const itemAmt = (i: Order['items'][number]) => isOperationGroup && i.amount != null
+  const itemAmt = (i: Order['items'][number]) => i.amount != null
     ? Number(i.amount)
     : itemQty(i) * Number(i.unitPrice)
   const total = order.items.reduce((s, i) => s + itemAmt(i), 0)

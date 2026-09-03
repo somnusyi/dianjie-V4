@@ -108,10 +108,18 @@ describe('operation group delivery summaries API', () => {
     vi.spyOn(prisma.purchaseOrder, 'findMany').mockResolvedValue([
       {
         ...base, id: 'order-b', no: 'PO-02', createdAt: new Date('2026-09-03T02:00:00.000Z'), submittedAt: new Date('2026-09-03T02:00:00.000Z'),
-        deliveries: [],
+        deliveries: [{
+          id: 'draft-b', no: 'D-DRAFT-B', status: 'DRAFT', rowVersion: 3,
+          createdAt: new Date('2026-09-03T02:10:00.000Z'), actualTotalAmount: '7',
+          items: [{
+            id: 'draft-item-b', purchaseOrderItemId: 'poi-3', productId: 'p3', shippedQty: '1',
+            unitPriceSnapshot: '7', amount: '7', productNameSnapshot: '冻菜花', productUnitSnapshot: '颗',
+            product: { name: '新菜花', unit: '箱' },
+          }],
+        }],
       },
       {
-        ...base, id: 'order-a', no: 'PO-01', createdAt: new Date('2026-09-03T01:00:00.000Z'), submittedAt: new Date('2026-09-03T01:00:00.000Z'),
+        ...base, id: 'order-a', no: 'PO-01', status: 'DELIVERING', createdAt: new Date('2026-09-03T01:00:00.000Z'), submittedAt: new Date('2026-09-03T01:00:00.000Z'),
         deliveries: [
           { no: 'D-DRAFT', status: 'DRAFT', createdAt: new Date('2026-09-03T01:10:00.000Z'), actualTotalAmount: '99', items: [] },
           {
@@ -154,10 +162,19 @@ describe('operation group delivery summaries API', () => {
     expect((detail?.orders[0] as any).deliverySummaries.map((delivery: any) => delivery.no))
       .toEqual(['D-EARLY', 'D-LATE'])
     expect((detail?.orders[1] as any).deliverySummaries).toEqual([])
-    expect(detail?.totals.costAmount).toBe('6.00')
+    expect((detail?.orders[1] as any).shipmentDraft).toMatchObject({
+      id: 'draft-b', no: 'D-DRAFT-B', status: 'DRAFT', rowVersion: 3,
+      items: [{ productId: 'p3', shippedQty: '1', amount: '7' }],
+    })
+    // Formal rows have complete outbound costs, but the CONFIRMED member's
+    // draft row has no outbound cost yet. Never return the formal-only 6.00 as
+    // though it were the complete mixed-document total.
+    expect(detail?.totals.costAmount).toBeNull()
+    expect(detail?.totals.amount).toBe('17.00')
     expect(detail?.mergedItems).toEqual(expect.arrayContaining([
       expect.objectContaining({ productId: 'p1', costAmount: '2.50' }),
       expect.objectContaining({ productId: 'p2', costAmount: '3.50' }),
+      expect.objectContaining({ productId: 'p3', amount: '7.00', costAmount: null }),
     ]))
     const incompleteCostDetail = await loadOperationGroupDetails(
       { tenantId: 'tenant-1', role: 'SUPPLY_CHAIN' },

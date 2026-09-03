@@ -23,8 +23,8 @@ describe('confirmed operation-group shipment removal recovery', () => {
   })
 
   it('loads and saves one durable server shipment draft per confirmed source order', () => {
-    expect(source).toContain('Promise.all(confirmedOrders.map(async order =>')
-    expect(source).toContain(".filter(delivery => delivery.status === 'DRAFT')")
+    expect(source).toContain("order.status === 'CONFIRMED' && order.shipmentDraft")
+    expect(source).toContain('[[order.id, order.shipmentDraft] as const]')
     expect(source).toContain('rowsFromDetail(data, nextShipmentDrafts)')
     expect(source).toContain('`/api/orders/${encodeURIComponent(order.id)}/shipment-draft`')
     expect(source).toContain("method: 'PUT'")
@@ -36,8 +36,17 @@ describe('confirmed operation-group shipment removal recovery', () => {
   })
 
   it('uses the editable product total until no group detail remains editable', () => {
-    expect(source).toContain('const productTotal = rows.filter(row => !row.pendingRemoval)')
+    expect(source).toContain('const deliveryNoteProjection = useMemo(() => buildOperationGroupDeliveryNoteProjection(rows), [rows])')
+    expect(source).toContain('const productTotal = deliveryNoteProjection.totals.amount')
     expect(source).toContain('amount={money(detailEditable ? productTotal : detail.totals.hasAnyShipment ? detail.totals.shipmentAmount : productTotal)}')
+  })
+
+  it('keeps invalid quantity text gated instead of copying it into rows or clearing it on blur', () => {
+    expect(source).toContain('function quantityDraftReason(rawValue: string)')
+    expect(source).toContain('if (quantityDraftReason(String(value)) !== null) return')
+    expect(source).toContain('if (quantityDraftReason(raw) === null) updateQuantity(row, Number(raw))')
+    expect(source).toContain('const reason = raw === undefined ? null : quantityDraftReason(raw)')
+    expect(source).toContain('if (reason) { setActionError(`${row.name}：${reason}`); return }')
   })
 
   it('adds warehouse products to an explicitly selected confirmed order or editable delivery', () => {
@@ -109,9 +118,9 @@ describe('confirmed operation-group shipment removal recovery', () => {
 
   it('passes the current unsaved group rows to the delivery note through a short-lived session token', () => {
     expect(source).toContain('function openDeliveryNote()')
-    expect(source).toContain('rows.filter(item => !item.pendingRemoval)')
-    expect(source).toContain('current.quantity += row.quantity')
-    expect(source).toContain('current.amount += row.quantity * row.unitPrice')
+    expect(source).toContain("import { buildOperationGroupDeliveryNoteProjection } from '@/lib/operation-group-delivery-note-preview'")
+    expect(source).toContain('items: deliveryNoteProjection.items')
+    expect(source).toContain('totals: deliveryNoteProjection.totals')
     expect(source).toContain('window.sessionStorage.setItem(storageKey, JSON.stringify(preview))')
     expect(source).toContain('GROUP_DELIVERY_NOTE_PREVIEW_TTL_MS')
     expect(source).toContain('schemaVersion: 2')

@@ -39,6 +39,10 @@ describe('delivery note live refresh contract', () => {
     expect(source).toContain('expiresAt - createdAt !== GROUP_DELIVERY_NOTE_PREVIEW_TTL_MS')
     expect(source).toContain('expiresAt <= now')
     expect(source).toContain('!Array.isArray(payload.draftRows)')
+    expect(source).toContain('const projection = parseOperationGroupDeliveryNoteProjection({')
+    expect(source).toContain('draftRows: payload.draftRows')
+    expect(source).toContain('items: projection.items')
+    expect(source).toContain('totals: projection.totals')
     expect(source).toContain('mergedItems: preview.items')
     expect(source).toContain('preview ? applyOperationGroupPreview(data, preview) : data')
   })
@@ -54,25 +58,23 @@ describe('delivery note live refresh contract', () => {
     expect(source).toContain('operationGroupServerSignature(data, shipmentDrafts) !== preview.serverSignature')
   })
 
-  it('reads member DRAFT versions only while verifying a locally valid group preview', () => {
+  it('reads member DRAFT versions from the same coherent group response', () => {
     expect(source).toContain('const preview = readOperationGroupPreview(groupId)')
     expect(source).toContain('if (!preview) return null')
-    expect(source).toContain('await Promise.all(data.orders.map(order =>')
-    expect(source).toContain('`/api/orders/${encodeURIComponent(order.id)}`')
-    expect(source).toContain(".filter(delivery => delivery.status === 'DRAFT')")
-    expect(source).toContain("if (member.status !== 'CONFIRMED') return [member.id, null]")
+    expect(source).toContain('const shipmentDrafts = Object.fromEntries(data.orders.map(member => [')
+    expect(source).toContain("member.status === 'CONFIRMED' && member.shipmentDraft")
+    expect(source).not.toContain('`/api/orders/${encodeURIComponent(order.id)}`')
   })
 
-  it('deletes unverifiable snapshots and falls back to one coherent server document', () => {
+  it('deletes unverifiable snapshots and fails closed for an explicitly requested preview', () => {
     expect(source.match(/removeOperationGroupPreview\(groupId, preview\.token, preview\.storageKey\)/g)).toHaveLength(1)
-    expect(source).toContain('return null')
-    expect(source).toContain('normalizeOperationGroup(preview ? applyOperationGroupPreview(data, preview) : data)')
+    expect(source).toContain('if (deliveryNotePreviewRequested() && !preview)')
+    expect(source).toContain("throw new Error('送货单预览已失效，请返回商品明细重新打开')")
   })
 
-  it('keeps a valid local snapshot when member reads fail transiently', () => {
-    expect(source).toContain('A transient member-detail read failure makes this refresh unverifiable')
-    expect(source).toContain('keeping the tab-scoped snapshot so returning to the group can revalidate')
-    expect(source).toContain('operationGroupServerSignature(data, shipmentDrafts) !== preview.serverSignature')
+  it('still renders one coherent server document when no preview was requested', () => {
+    expect(source).toContain('normalizeOperationGroup(preview ? applyOperationGroupPreview(data, preview) : data)')
+    expect(source).toContain('return { order: normalized.order, members: normalized.members }')
   })
 
   it('keeps item JSON out of the delivery-note URL', () => {
@@ -80,9 +82,27 @@ describe('delivery note live refresh contract', () => {
     expect(source).not.toContain("JSON.parse(new URLSearchParams(window.location.search)")
   })
 
-  it('does not inspect group preview storage for a single order', () => {
+  it('verifies and applies a valid single-order preview against the server version', () => {
     expect(source).toContain('if (isOperationGroup) {')
     expect(source).toContain('const preview = await verifyOperationGroupPreview(data, id)')
     expect(source).toContain('const data = await apiFetch<Order>(`/api/orders/${id}`)')
+    expect(source).toContain('const preview = verifySingleOrderPreview(data, id)')
+    expect(source).toContain('singleOrderServerSignature(data) !== preview.serverSignature')
+    expect(source).toContain('preview ? applySingleOrderPreview(normalized, preview) : normalized')
+  })
+
+  it('uses a saved confirmed DRAFT as the coherent no-preview server fallback', () => {
+    expect(source).toContain("const shipmentDraft = data.status === 'CONFIRMED'")
+    expect(source).toContain(".find(delivery => delivery.status === 'DRAFT')")
+    expect(source).toContain('totalAmount: shipmentDraft.actualTotalAmount')
+    expect(source).toContain('items: shipmentDraft.items.map(item => ({')
+    expect(source).toContain('shippedQty: item.shippedQty')
+    expect(source).not.toContain('no: shipmentDraft.no')
+  })
+
+  it('renders and exports the authoritative line amount for single and group documents', () => {
+    expect(source).toContain("const itemAmtLocal = (i: Order['items'][number]) => i.amount != null")
+    expect(source).toContain("const itemAmt = (i: Order['items'][number]) => i.amount != null")
+    expect(source).not.toContain('isOperationGroup && i.amount != null')
   })
 })

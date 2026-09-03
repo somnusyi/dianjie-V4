@@ -7,6 +7,7 @@ import {
   type OperationGroupCandidate,
 } from './orderOperationGroups'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
+import { FORMAL_DELIVERY_STATUSES, legacyVisibleDeliveryWhere } from './shipmentDraftMarker'
 
 /**
  * Read-only detail for a two-hour operation group.
@@ -210,6 +211,10 @@ const detailInclude = {
   shippedBy: { select: { id: true, name: true, role: true } },
   items: { where: { isActive: true }, include: { product: true } },
   deliveries: {
+    where: {
+      status: { in: [...FORMAL_DELIVERY_STATUSES] },
+      ...legacyVisibleDeliveryWhere(),
+    },
     orderBy: { createdAt: 'asc' as const },
     include: { items: { where: { removedAt: null }, include: { product: true } } },
   },

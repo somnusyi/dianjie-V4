@@ -1,5 +1,16 @@
-import { describe, expect, it } from 'vitest'
-import { latestOperationGroupOrderId, mergeOperationGroupItems } from '../../src/services/orderOperationGroupDetails'
+import { prisma } from '@dianjie/db'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  latestOperationGroupOrderId,
+  loadOperationGroupDetails,
+  mergeOperationGroupItems,
+} from '../../src/services/orderOperationGroupDetails'
+import { operationGroupId } from '../../src/services/orderOperationGroups'
+import { FORMAL_DELIVERY_STATUSES, SERVER_SHIPMENT_DRAFT_KEY } from '../../src/services/shipmentDraftMarker'
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 describe('operation group printable item merge', () => {
   it('merges only identical product snapshots and preserves source order numbers', () => {
@@ -60,5 +71,27 @@ describe('operation group add-product owner', () => {
       { id: 'a01', createdAt: '2026-08-31T10:00:00.000Z' },
       { id: 'a02', createdAt: '2026-08-31T10:30:00.000Z' },
     ])).toBe('a02')
+  })
+})
+
+describe('operation group shipment-draft compatibility', () => {
+  it('loads only formal, unmarked deliveries for accepted group details', async () => {
+    const memberIds = ['order-a', 'order-b']
+    const groupId = operationGroupId(memberIds)
+    vi.spyOn(prisma.purchaseOrderEvent, 'findMany').mockResolvedValue(memberIds.map((purchaseOrderId, index) => ({
+      purchaseOrderId,
+      occurredAt: new Date(`2026-09-03T0${index + 1}:00:00.000Z`),
+      metadata: { operationGroupId: groupId, operationGroupMemberIndex: index },
+    })) as any)
+    const findMany = vi.spyOn(prisma.purchaseOrder, 'findMany').mockResolvedValue([])
+
+    await expect(loadOperationGroupDetails({ tenantId: 'tenant-a', role: 'SUPPLY_CHAIN' }, groupId)).resolves.toBeNull()
+
+    const deliveryWhere = (findMany.mock.calls[0][0] as any).include.deliveries.where
+    expect(deliveryWhere.status).toEqual({ in: [...FORMAL_DELIVERY_STATUSES] })
+    expect(deliveryWhere.OR).toEqual([
+      { idempotencyKey: null },
+      { idempotencyKey: { not: SERVER_SHIPMENT_DRAFT_KEY } },
+    ])
   })
 })

@@ -1,4 +1,5 @@
 import { prisma } from '@dianjie/db'
+import { FORMAL_DELIVERY_STATUSES, legacyVisibleDeliveryWhere } from './shipmentDraftMarker'
 
 export type SupplyChainAuditIssue = {
   code: string
@@ -80,7 +81,9 @@ export async function auditSupplierSupplyChain(input: {
     db.deliveryOrder.findMany({
       where: {
         tenantId: input.tenantId, supplierId: input.supplierId,
-        status: { not: 'CANCELLED' }, createdAt: { gte: since },
+        status: { in: [...FORMAL_DELIVERY_STATUSES] },
+        createdAt: { gte: since },
+        ...legacyVisibleDeliveryWhere(),
       },
       include: { items: true },
       orderBy: { createdAt: 'desc' },

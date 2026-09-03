@@ -65,6 +65,7 @@ import {
 } from '../services/orderDraftValidation'
 import { buildOperationGroups, operationGroupId, type OperationGroupCandidate } from '../services/orderOperationGroups'
 import { latestOperationGroupOrderId, loadOperationGroupDetails } from '../services/orderOperationGroupDetails'
+import { FORMAL_DELIVERY_STATUSES, legacyVisibleDeliveryWhere } from '../services/shipmentDraftMarker'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
 const PURCHASE_QUANTITY_MAX = 99_999_999.99
@@ -391,7 +392,10 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           },
           lossClaims: { select: { id: true, status: true, totalLossAmount: true } },
           deliveries: {
-            where: { status: { not: 'CANCELLED' } },
+            where: {
+              status: { in: [...FORMAL_DELIVERY_STATUSES] },
+              ...legacyVisibleDeliveryWhere(),
+            },
             select: { id: true, status: true, actualTotalAmount: true },
           },
           receipts: { select: { id: true, totalAmount: true, status: true } },
@@ -764,6 +768,10 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           include: { actor: { select: { id: true, name: true, role: true } } },
         },
         deliveries: {
+          where: {
+            status: { not: 'DRAFT' },
+            ...legacyVisibleDeliveryWhere(),
+          },
           orderBy: { createdAt: 'asc' },
           include: {
             items: { where: { removedAt: null }, include: { product: true } },

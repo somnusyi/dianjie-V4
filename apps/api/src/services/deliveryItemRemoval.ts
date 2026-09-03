@@ -9,6 +9,7 @@ import {
   resolveFrozenOrderInventoryLine,
   reverseDeliveryOutboundInTransaction,
 } from './warehouseLedger'
+import { FORMAL_DELIVERY_STATUSES } from './shipmentDraftMarker'
 
 const ZERO = new Prisma.Decimal(0)
 const SUPPLIER_STOCK_REMOVAL_SOURCE = 'DeliveryOrderItemRemoval'
@@ -454,7 +455,10 @@ export async function removeDeliveryItemInTransaction(
   const poDeliveryItems = await tx.deliveryOrderItem.findMany({
     where: {
       purchaseOrderItemId: poItemId,
-      deliveryOrder: { purchaseOrderId: delivery.purchaseOrderId, status: { not: 'CANCELLED' } },
+      deliveryOrder: {
+        purchaseOrderId: delivery.purchaseOrderId,
+        status: { in: [...FORMAL_DELIVERY_STATUSES] },
+      },
       shippedQty: { gt: 0 },
     },
     select: { shippedQty: true, amount: true },
@@ -776,7 +780,10 @@ async function recalculateDeliveryAndOrderTotals(
   const linkedItems = await tx.deliveryOrderItem.findMany({
     where: {
       purchaseOrderItemId: input.purchaseOrderItemId,
-      deliveryOrder: { purchaseOrderId: input.delivery.purchaseOrderId, status: { not: 'CANCELLED' } },
+      deliveryOrder: {
+        purchaseOrderId: input.delivery.purchaseOrderId,
+        status: { in: [...FORMAL_DELIVERY_STATUSES] },
+      },
       shippedQty: { gt: 0 },
     },
     select: { shippedQty: true, amount: true },

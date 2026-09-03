@@ -11,6 +11,7 @@ import {
   changeDeliveryItemQuantityInTransaction,
   removeDeliveryItemInTransaction,
 } from '../services/deliveryItemRemoval'
+import { legacyVisibleDeliveryWhere } from '../services/shipmentDraftMarker'
 
 const listQuerySchema = z.object({
   status: z.enum(['DRAFT', 'SHIPPED', 'DELIVERED', 'RECEIVED', 'CANCELLED']).optional(),
@@ -70,7 +71,9 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
     if (isSupplierRole(role)) where.supplierId = requireSupplierCapability(role, actorSupplierId, 'order.read')
     else if (q.supplierId) where.supplierId = q.supplierId
     if (q.status) where.status = q.status
+    else where.status = { not: 'DRAFT' }
     const and: any[] = []
+    and.push(legacyVisibleDeliveryWhere())
     if (q.productId) and.push({ items: { some: { productId: q.productId } } })
     if (q.keyword) {
       and.push({
@@ -136,7 +139,11 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
     if (!allowsSupplyDataRead(role, 'delivery.read')) {
       throw { statusCode: 403, message: '无权查看配送单' }
     }
-    const where: any = { id: req.params.id, ...supplyDataReadScope(req.user) }
+    const where: any = {
+      id: req.params.id,
+      ...supplyDataReadScope(req.user),
+      ...legacyVisibleDeliveryWhere(),
+    }
     if (isSupplierRole(role)) where.supplierId = requireSupplierCapability(role, supplierId, 'order.read')
     const delivery = await prisma.deliveryOrder.findFirst({
       where,
@@ -170,7 +177,11 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
       return null
     }
     const scopedDelivery = await prisma.deliveryOrder.findFirst({
-      where: { id: String(req.params.id), tenantId },
+      where: {
+        id: String(req.params.id),
+        tenantId,
+        ...legacyVisibleDeliveryWhere(),
+      },
       select: { supplierId: true },
     })
     if (!scopedDelivery) {

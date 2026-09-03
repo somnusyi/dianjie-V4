@@ -12,7 +12,8 @@ let otherTenantId = ''
 let storeId = ''
 let supplierId = ''
 let productId = ''
-let pendingProductId = ''
+let verifiedCaseProductId = ''
+let unconvertibleProductId = ''
 let tempDir = ''
 
 async function writeInventoryWorkbook(
@@ -65,7 +66,7 @@ describe('inventory snapshot import script (integration)', () => {
     ])
     storeId = store.id
     supplierId = supplier.id
-    const [currentProduct, pendingProduct] = await Promise.all([
+    const [currentProduct, verifiedCaseProduct, unconvertibleProduct] = await Promise.all([
       prisma.product.create({
         data: {
           tenantId, supplierId, code: `OYSTER-${suffix}`, name: '生蚝测试',
@@ -76,15 +77,24 @@ describe('inventory snapshot import script (integration)', () => {
       }),
       prisma.product.create({
         data: {
-          tenantId, supplierId, code: `SAUCE-${suffix}`, name: '待确认酱料',
+          tenantId, supplierId, code: `SAUCE-${suffix}`, name: '已核验酱料',
           spec: '8袋/箱', unit: '箱', inventoryUnit: '箱',
           inventoryUnitsPerPurchaseUnit: 1, unitConversionStatus: 'VERIFIED',
           price: 80, stock: 10,
         },
       }),
+      prisma.product.create({
+        data: {
+          tenantId, supplierId, code: `UNCONVERTIBLE-${suffix}`, name: '无换算规格料',
+          spec: null, unit: '箱', inventoryUnit: '箱',
+          inventoryUnitsPerPurchaseUnit: 1, unitConversionStatus: 'VERIFIED',
+          price: 60, stock: 10,
+        },
+      }),
     ])
     productId = currentProduct.id
-    pendingProductId = pendingProduct.id
+    verifiedCaseProductId = verifiedCaseProduct.id
+    unconvertibleProductId = unconvertibleProduct.id
     await prisma.product.create({
       data: {
         tenantId: otherTenantId, supplierId: otherSupplier.id, code: `OYSTER-${suffix}`,
@@ -158,7 +168,7 @@ describe('inventory snapshot import script (integration)', () => {
     expect(Number(snapshot.items[0].normalizationFactor)).toBe(18)
   })
 
-  it('blocks an incomplete replacement before deleting the existing baseline', async () => {
+  it('replaces the baseline when a VERIFIED 8袋/箱 conversion is deterministic', async () => {
     const existing = await prisma.inventorySnapshot.create({
       data: {
         tenantId,
@@ -173,9 +183,9 @@ describe('inventory snapshot import script (integration)', () => {
         matchedCount: 1,
         items: {
           create: {
-            productId: pendingProductId,
+            productId: verifiedCaseProductId,
             section: '调料岗',
-            rawName: '待确认酱料',
+            rawName: '已核验酱料',
             rawSpec: '8袋/箱',
             unit: '箱',
             quantity: 1,
@@ -192,7 +202,7 @@ describe('inventory snapshot import script (integration)', () => {
     })
     const source = await writeInventoryWorkbook('pending.xlsx', [{
       section: '调料岗',
-      name: '待确认酱料',
+      name: '已核验酱料',
       spec: '8袋/箱',
       unitPrice: 10,
       unit: '袋',
@@ -200,9 +210,90 @@ describe('inventory snapshot import script (integration)', () => {
     }])
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
     try {
-      await expect(runInventorySnapshotImport([
+      const result = await runInventorySnapshotImport([
         source,
         '--date=2026-07-23',
+        `--tenant=${suffix}`,
+        `--store-no=STORE-${suffix}`,
+        '--commit',
+        '--replace',
+        '--confirm=import-reviewed-inventory-snapshot',
+      ])
+      expect(result).toMatchObject({
+        committed: true,
+        matchedCount: 1,
+        normalizationPendingCount: 0,
+        canCommit: true,
+      })
+    } finally {
+      log.mockRestore()
+    }
+
+    const replacement = await prisma.inventorySnapshot.findUniqueOrThrow({
+      where: {
+        storeId_snapshotDate: {
+          storeId,
+          snapshotDate: new Date('2026-07-23T00:00:00.000Z'),
+        },
+      },
+      include: { items: true },
+    })
+    expect(replacement.id).not.toBe(existing.id)
+    expect(replacement.sourceFilename).toBe('pending.xlsx')
+    expect(replacement.items).toHaveLength(1)
+    expect(replacement.items[0].productId).toBe(verifiedCaseProductId)
+    expect(Number(replacement.items[0].normalizedQuantity)).toBeCloseTo(0.875)
+    expect(replacement.items[0].normalizedUnit).toBe('箱')
+    expect(Number(replacement.items[0].normalizationFactor)).toBeCloseTo(0.125)
+    expect(replacement.items[0].normalizationStatus).toBe('CONVERTED')
+    expect(await prisma.inventorySnapshot.findUnique({ where: { id: existing.id } })).toBeNull()
+  })
+
+  it('blocks a truly unconvertible replacement before deleting the existing baseline', async () => {
+    const existing = await prisma.inventorySnapshot.create({
+      data: {
+        tenantId,
+        storeId,
+        snapshotDate: new Date('2026-07-24T00:00:00.000Z'),
+        sourceFilename: 'existing-unconvertible-baseline.xlsx',
+        sourceHash: 'b'.repeat(64),
+        totalValue: 60,
+        itemCount: 1,
+        nonzeroCount: 1,
+        zeroCount: 0,
+        matchedCount: 1,
+        items: {
+          create: {
+            productId: unconvertibleProductId,
+            section: '调料岗',
+            rawName: '无换算规格料',
+            rawSpec: null,
+            unit: '箱',
+            quantity: 1,
+            unitPrice: 60,
+            amount: 60,
+            normalizedQuantity: 1,
+            normalizedUnit: '箱',
+            normalizationFactor: 1,
+            normalizationStatus: 'EXACT',
+            sortOrder: 1,
+          },
+        },
+      },
+    })
+    const source = await writeInventoryWorkbook('unconvertible.xlsx', [{
+      section: '调料岗',
+      name: '无换算规格料',
+      spec: '散装',
+      unitPrice: 10,
+      unit: '袋',
+      quantity: 6,
+    }])
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    try {
+      await expect(runInventorySnapshotImport([
+        source,
+        '--date=2026-07-24',
         `--tenant=${suffix}`,
         `--store-no=STORE-${suffix}`,
         '--commit',
@@ -214,9 +305,9 @@ describe('inventory snapshot import script (integration)', () => {
     }
 
     const preserved = await prisma.inventorySnapshot.findUniqueOrThrow({ where: { id: existing.id } })
-    expect(preserved.sourceFilename).toBe('existing-safe-baseline.xlsx')
+    expect(preserved.sourceFilename).toBe('existing-unconvertible-baseline.xlsx')
     expect(await prisma.inventorySnapshot.count({
-      where: { tenantId, storeId, snapshotDate: new Date('2026-07-23T00:00:00.000Z') },
+      where: { tenantId, storeId, snapshotDate: new Date('2026-07-24T00:00:00.000Z') },
     })).toBe(1)
   })
 })

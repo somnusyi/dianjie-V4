@@ -15,7 +15,15 @@ import {
   supplierLossClaimSettlementHint,
   supplierOrderStatusMeta,
 } from '@/lib/supplier-domain'
-import { Chip, ProgressDots } from '@/components/v2'
+import { Chip } from '@/components/v2'
+import {
+  OrderAmountCard,
+  OrderDeliverySummary,
+  OrderDetailHeader,
+  OrderProductTable,
+  OrderProgressCard,
+  type OrderDetailTableRow,
+} from '@/components/v2/order-detail-shared'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import dayjs from 'dayjs'
 import { clientRequestId } from '@/lib/client-id'
@@ -714,16 +722,8 @@ export default function SupplierOrderDetailPage() {
 
   return (
     <div className="min-h-screen bg-bg pb-32">
-      <header className="px-4 pt-4 pb-2 flex items-center gap-2">
-        <button onClick={() => router.back()} className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</button>
-        <h1 className="text-h1 flex-1 truncate">订单详情</h1>
-        <button
-          onClick={() => router.push(`${orderBase}/${order.id}/delivery-note`)}
-          className="px-3 py-1.5 rounded-cta border border-border bg-white text-button text-gray2 whitespace-nowrap"
-          title="打开打印 / 导出 PDF 页面"
-        >🖨 送货单</button>
-        <Chip tone={tone}>{status.detailLabel}</Chip>
-      </header>
+      <OrderDetailHeader onBack={() => router.back()} onDeliveryNote={() => router.push(`${orderBase}/${order.id}/delivery-note`)}
+        statusLabel={status.detailLabel} statusTone={tone} />
       {shipmentNotice && (
         <div className="mx-4 mt-2 rounded-card border border-green-fg/20 bg-green-bg p-3 text-caption text-green-fg">
           {shipmentNotice}
@@ -741,13 +741,9 @@ export default function SupplierOrderDetailPage() {
         </div>
       )}
 
-      {/* 主信息 */}
-      <div className="mx-4 mt-2 bg-white rounded-card border border-border p-4">
-        <div className="text-micro text-gray3 font-num">#{order.no}</div>
-        <div className="flex items-baseline justify-between mt-1">
-          <span className="text-h2">{order.store.name}</span>
-          <span className="text-right"><span className="text-micro text-gray3 block">{SUPPLIER_MONEY_TERMS.orderedAmount}</span><span className="font-num text-h1">¥{currentOrderAmount.toLocaleString()}</span></span>
-        </div>
+      <OrderAmountCard eyebrow={`#${order.no}`} name={order.store.name} amountLabel={SUPPLIER_MONEY_TERMS.shipmentAmount}
+        amount={shipmentAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        orderedAmount={currentOrderAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}>
         {order.store.address && <div className="text-micro text-gray3 mt-1">📍 {order.store.address}</div>}
         <div className="text-caption text-gray2 mt-2">
           下单 {dayjs(order.createdAt).format('MM/DD HH:mm')} · 期望到货 {dayjs(order.expectedDate).format('MM/DD')}
@@ -777,140 +773,56 @@ export default function SupplierOrderDetailPage() {
           </div>
         </div>
         <p className="text-micro text-gray3 mt-2">订货按已确认订单；实发按配送单；应付按门店实收入库单，三者不混用。</p>
-      </div>
+      </OrderAmountCard>
 
-      {/* 改单审批状态与历史 */}
-      {(order.revisions?.length ?? 0) > 0 && (
-        <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
-          <h2 className="text-h2">改单记录 ({order.revisions!.length})</h2>
-          <ul className="mt-2 space-y-2">
-            {order.revisions!.map(revision => (
-              <li key={revision.id} className={`rounded-cta border p-2 ${revision.status === 'PENDING' ? 'border-amber bg-amber/10' : 'border-border bg-bg'}`}>
-                <div className="flex items-center gap-2">
-                  <span className="text-caption">第 {revision.revisionNo} 次 · {revision.reason}</span>
-                  <Chip tone={revision.status === 'PENDING' ? 'orange' : revision.status === 'APPROVED' ? 'green' : 'gray'}>
-                    {revision.status === 'PENDING'
-                      ? (isDirectOperationGroupRevision ? '历史改单待处理' : '待门店确认')
-                      : revision.status === 'APPROVED'
-                        ? (isDirectOperationGroupRevision ? '已生效' : '已确认')
-                        : revision.status === 'CANCELLED' ? (isDirectOperationGroupRevision ? '已替代' : '已取消') : '已驳回'}
-                  </Chip>
-                </div>
-                <div className="text-micro text-gray3 mt-1">
-                  {revision.requestedBy?.name || '供应商'} · {dayjs(revision.requestedAt).format('MM/DD HH:mm')} · {revision.changeSet?.length || 0} 项变化
-                  {revision.reviewedBy?.name && <> · {revision.reviewedBy.name} 已处理</>}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <OrderDeliverySummary lines={(order.deliveries || []).flatMap(delivery => delivery.items.map(item => `${item.product?.name || '商品'}${item.shippedQty}${item.product?.unit || ''}`))} />
+      <OrderProgressCard currentIndex={step} />
 
-      {(order.deliveries?.length ?? 0) > 0 && (
-        <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
-          <h2 className="text-h2">关联配送单 ({order.deliveries!.length})</h2>
-          <p className="mt-2 overflow-x-auto whitespace-nowrap text-caption text-gray2">
-            {order.deliveries!.flatMap(delivery => delivery.items).length > 0
-              ? order.deliveries!.flatMap(delivery => delivery.items).map((item, itemIndex) =>
-                  `${itemIndex + 1}${item.product?.name || '商品'}${item.shippedQty}${item.product?.unit || ''}`)
-                  .join('、')
-              : '暂无配送商品'}
-          </p>
-        </div>
-      )}
-
-      {/* 进度条 */}
-      <div className="mx-4 mt-3 bg-white rounded-card border border-border p-4">
-        <ProgressDots
-          steps={['已发起', '已接单', '在途', '送达', '门店已收'].map(label => ({label}))}
-          currentIndex={step}
-        />
-      </div>
-
-      {/* 商品明细 */}
-      <div className="mx-4 mt-3 bg-white rounded-card border border-border">
-        <div className="px-3 pt-3 pb-2 flex items-center gap-2">
-          <h2 className="text-h2">商品明细 ({detailRows.length})</h2>
-          {(canEditSubmittedDetails || canEditDeliveryDetails) && (
-            <button type="button" onClick={() => canEditDeliveryDetails && editableDelivery ? void openDeliveryAdd(editableDelivery) : void openAddPicker()}
-              className="px-2 py-1 rounded-cta border border-amber text-amber-fg text-caption">＋ 增加商品</button>
-          )}
-          <span className="ml-auto text-caption text-gray3 font-num">合计 ¥{detailRows.reduce((sum, row) => sum + row.quantity * row.unitPrice, 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-          {canShowSave && (
-            <button type="button" onClick={() => void saveDetails()} disabled={!detailsDirty || submitting}
-              className="px-4 py-1.5 rounded-cta bg-ink text-white text-button whitespace-nowrap disabled:opacity-40">
-              {submitting ? '保存中…' : '保存'}
-            </button>
-          )}
-        </div>
-        {deliveryAdjustError && <div className="mx-3 mb-2 rounded-cta border border-red/30 bg-red-bg px-3 py-2 text-caption text-red-fg">{deliveryAdjustError}</div>}
-        {revisionError && <p className="mx-3 mb-2 text-micro text-red-fg">{revisionError}</p>}
-        <div className="overflow-x-auto border-t border-border">
-          <table className="w-full min-w-[760px] text-left text-caption">
-            <thead className="bg-bg text-micro text-gray3">
-              <tr>
-                <th className="w-16 px-3 py-2">序号</th>
-                <th className="px-3 py-2">名称</th>
-                <th className="px-3 py-2">规格</th>
-                <th className="px-3 py-2 text-right">数量</th>
-                <th className="px-3 py-2 text-right">单价</th>
-                <th className="px-3 py-2 text-right">总价</th>
-                {canShowSave && <th className="w-20 px-3 py-2 text-right">操作</th>}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {detailRows.map((row, itemIndex) => {
-                const rowDirty = Math.abs(row.quantity - row.originalQuantity) >= 0.0001 || row.originalQuantity === 0
-                return <tr key={row.key} className={rowDirty ? 'bg-red-bg/50 text-red-fg' : ''}>
-                  <td className="px-3 py-3 font-num text-gray3">{itemIndex + 1}</td>
-                  <td className="px-3 py-3">{row.name}</td>
-                  <td className="px-3 py-3 text-gray2">{row.spec || '-'}</td>
-                  <td className="px-3 py-3 text-right font-num">
-                    {canShowSave ? <span className="inline-flex items-center gap-1">
-                      <input type="number" inputMode="decimal" min="0" step="0.01" value={quantityDrafts[row.key] ?? String(row.quantity)} aria-label={`${row.name}数量`}
-                        onChange={event => {
-                          const rawValue = event.target.value
-                          setQuantityDrafts(current => ({ ...current, [row.key]: rawValue }))
-                          if (rawValue === '') return
-                          const quantity = Number(rawValue)
-                          if (!Number.isFinite(quantity) || quantity < 0) return
-                          setSaveNotice(null)
-                          if (row.source === 'order' || row.source === 'catalog') setAddQtyFor(row.productId, quantity)
-                          else if (row.source === 'shipment' && row.itemId) setShipQty(current => ({ ...current, [row.itemId!]: quantity }))
-                          else if (row.source === 'delivery' && row.itemId) setDeliveryQty(current => ({ ...current, [row.itemId!]: String(quantity) }))
-                          else if (row.source === 'delivery-addition') setPendingDeliveryAdditions(current => current.map(item => item.key === row.key ? { ...item, quantity } : item))
-                        }}
-                        onBlur={() => setQuantityDrafts(current => {
-                          const next = { ...current }
-                          delete next[row.key]
-                          return next
-                        })}
-                        className={`w-20 rounded-cta border bg-white px-2 py-1 text-right font-num ${rowDirty ? 'border-red text-red-fg' : 'border-border text-ink'}`} />
-                      <span className="text-gray3">{row.unit}</span>
-                    </span> : <>{row.quantity}{row.unit}</>}
-                  </td>
-                  <td className="px-3 py-3 text-right font-num">¥{row.unitPrice.toLocaleString()}</td>
-                  <td className="px-3 py-3 text-right font-num">¥{(row.quantity * row.unitPrice).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                  {canShowSave && <td className="px-3 py-3 text-right">
-                    <button type="button" onClick={() => {
-                      setSaveNotice(null)
-                      if (row.source === 'order' || row.source === 'catalog') setAddQtyFor(row.productId, 0)
-                      else if (row.source === 'shipment' && row.itemId) setShipQty(current => ({ ...current, [row.itemId!]: 0 }))
-                      else if (row.source === 'delivery' && row.itemId) removeDeliveryItem(row.itemId)
-                      else if (row.source === 'delivery-addition') setPendingDeliveryAdditions(current => current.filter(item => item.key !== row.key))
-                    }} className="rounded-cta border border-red-fg/40 px-2 py-1 text-micro text-red-fg">移除</button>
-                  </td>}
-                </tr>
-              })}
-            </tbody>
-          </table>
-        </div>
-        {canEditConfirmedDetails && <div className="border-t border-border p-3">
-          <label className="text-micro text-gray3 block mb-1">发货备注 (选填)</label>
-          <input value={shipNote} onChange={event => setShipNote(event.target.value)} maxLength={120}
-            className="w-full bg-bg border border-border rounded p-2 text-body" placeholder="如：司机张三 18800001234 / 预计 2h 到" />
-        </div>}
-      </div>
+      <OrderProductTable
+        rows={detailRows as OrderDetailTableRow[]}
+        editable={canShowSave}
+        total={detailRows.reduce((sum, row) => sum + row.quantity * row.unitPrice, 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        saving={submitting}
+        dirty={detailsDirty}
+        onAdd={(canEditSubmittedDetails || canEditDeliveryDetails) ? () => canEditDeliveryDetails && editableDelivery ? void openDeliveryAdd(editableDelivery) : void openAddPicker() : undefined}
+        onSave={() => void saveDetails()}
+        notice={<>{deliveryAdjustError && <div className="mx-3 mb-2 rounded-cta border border-red/30 bg-red-bg px-3 py-2 text-caption text-red-fg">{deliveryAdjustError}</div>}{revisionError && <p className="mx-3 mb-2 text-micro text-red-fg">{revisionError}</p>}</>}
+        renderQuantity={baseRow => {
+          const row = detailRows.find(item => item.key === baseRow.key)!
+          const rowDirty = Math.abs(row.quantity - row.originalQuantity) >= 0.0001 || row.originalQuantity === 0
+          return canShowSave ? <span className="inline-flex items-center gap-1">
+            <input type="number" inputMode="decimal" min="0" step="0.01" value={quantityDrafts[row.key] ?? String(row.quantity)} aria-label={`${row.name}数量`}
+              onChange={event => {
+                const rawValue = event.target.value
+                setQuantityDrafts(current => ({ ...current, [row.key]: rawValue }))
+                if (rawValue === '') return
+                const quantity = Number(rawValue)
+                if (!Number.isFinite(quantity) || quantity < 0) return
+                setSaveNotice(null)
+                if (row.source === 'order' || row.source === 'catalog') setAddQtyFor(row.productId, quantity)
+                else if (row.source === 'shipment' && row.itemId) setShipQty(current => ({ ...current, [row.itemId!]: quantity }))
+                else if (row.source === 'delivery' && row.itemId) setDeliveryQty(current => ({ ...current, [row.itemId!]: String(quantity) }))
+                else if (row.source === 'delivery-addition') setPendingDeliveryAdditions(current => current.map(item => item.key === row.key ? { ...item, quantity } : item))
+              }}
+              onBlur={() => setQuantityDrafts(current => { const next = { ...current }; delete next[row.key]; return next })}
+              className={`w-20 rounded-cta border bg-white px-2 py-1 text-right font-num ${rowDirty ? 'border-red text-red-fg' : 'border-border text-ink'}`} />
+            <span className="text-gray3">{row.unit}</span>
+          </span> : <>{row.quantity}{row.unit}</>
+        }}
+        onRemove={baseRow => {
+          const row = detailRows.find(item => item.key === baseRow.key)!
+          setSaveNotice(null)
+          if (row.source === 'order' || row.source === 'catalog') setAddQtyFor(row.productId, 0)
+          else if (row.source === 'shipment' && row.itemId) setShipQty(current => ({ ...current, [row.itemId!]: 0 }))
+          else if (row.source === 'delivery' && row.itemId) removeDeliveryItem(row.itemId)
+          else if (row.source === 'delivery-addition') setPendingDeliveryAdditions(current => current.filter(item => item.key !== row.key))
+        }}
+      />
+      {canEditConfirmedDetails && <div className="mx-4 border-x border-b border-border bg-white p-3">
+        <label className="mb-1 block text-micro text-gray3">发货备注 (选填)</label>
+        <input value={shipNote} onChange={event => setShipNote(event.target.value)} maxLength={120}
+          className="w-full rounded border border-border bg-bg p-2 text-body" placeholder="如：司机张三 18800001234 / 预计 2h 到" />
+      </div>}
 
       {/* 到货差异 — 显示履约链、完整明细、证据与处理按钮 */}
       {(order.lossClaims?.length ?? 0) > 0 && (

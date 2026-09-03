@@ -43,6 +43,7 @@ type OperationGroupMember = {
   id: string
   no: string
   deliveryNo?: string | null
+  deliveryNos?: string[]
   createdAt: string
   submittedAt?: string | null
   expectedDate?: string | null
@@ -88,7 +89,7 @@ type OperationGroupResponse = {
 
 type NormalizedOperationGroup = {
   order: Order
-  members: Array<Pick<OperationGroupMember, 'id' | 'no' | 'deliveryNo' | 'createdAt' | 'submittedAt'>>
+  members: Array<Pick<OperationGroupMember, 'id' | 'no' | 'deliveryNo' | 'deliveryNos' | 'createdAt' | 'submittedAt'>>
 }
 
 function decimalText(value: number | string | null | undefined, fallback = '0') {
@@ -184,6 +185,7 @@ function normalizeOperationGroup(data: OperationGroupResponse): NormalizedOperat
       id: item.id,
       no: item.no,
       deliveryNo: item.deliveryNo || null,
+      deliveryNos: item.deliveryNos || [],
       createdAt: item.createdAt,
       submittedAt: item.submittedAt || null,
     })),
@@ -445,7 +447,7 @@ export default function DeliveryNotePrintPage() {
         ['收货地址', order.store.address || '—', '', '', '', '', ''],
         ...(isOperationGroup && groupMembers && groupMembers.length > 0
           ? groupMembers.map(member => [
-            '送货单号', member.deliveryNo || member.no, '', '', '下单日期', dayjs(member.createdAt).format('YYYY-MM-DD HH:mm'), '',
+            '送货单号', member.deliveryNos?.length ? member.deliveryNos.join('、') : member.deliveryNo || member.no, '', '', '下单日期', dayjs(member.createdAt).format('YYYY-MM-DD HH:mm'), '',
           ])
           : [['下单时间', dayjs(order.createdAt).format('YYYY-MM-DD HH:mm'), '', '', '下单人', order.createdBy?.name || '—', '']]),
         ['期望到货', dayjs(order.expectedDate).format('YYYY-MM-DD'), '', '', '发货时间', order.shippedAt ? dayjs(order.shippedAt).format('YYYY-MM-DD HH:mm') : '—', ''],
@@ -667,7 +669,7 @@ export default function DeliveryNotePrintPage() {
               ? groupMembers.map(member => (
                 <tr key={member.id}>
                   <td className="border border-gray3 px-2 py-1.5 bg-bg w-24">送货单号</td>
-                  <td className="border border-gray3 px-2 py-1.5 font-mono">{member.deliveryNo || member.no}</td>
+                  <td className="border border-gray3 px-2 py-1.5 font-mono">{member.deliveryNos?.length ? member.deliveryNos.join('、') : member.deliveryNo || member.no}</td>
                   <td className="border border-gray3 px-2 py-1.5 bg-bg w-24">下单日期</td>
                   <td className="border border-gray3 px-2 py-1.5">{dayjs(member.createdAt).format('YYYY-MM-DD HH:mm')}</td>
                 </tr>

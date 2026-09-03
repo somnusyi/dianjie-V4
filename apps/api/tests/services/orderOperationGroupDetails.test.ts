@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { latestOperationGroupOrderId, mergeOperationGroupItems } from '../../src/services/orderOperationGroupDetails'
+import {
+  latestOperationGroupOrderId,
+  mergeOperationGroupItems,
+  operationGroupShipmentSummary,
+} from '../../src/services/orderOperationGroupDetails'
 
 describe('operation group printable item merge', () => {
   it('merges only identical product snapshots and preserves source order numbers', () => {
@@ -43,6 +47,22 @@ describe('operation group printable item merge', () => {
 
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({ productId: 'p2', quantity: '2.00', amount: '20.00' })
+  })
+})
+
+describe('operation group shipment amount boundary', () => {
+  it('adds every valid delivery snapshot without falling back to unordered members', () => {
+    expect(operationGroupShipmentSummary([
+      { deliveries: [{ status: 'SHIPPED', actualTotalAmount: '21.50' }, { status: 'DELIVERED', actualTotalAmount: '8.25' }] },
+      { deliveries: [] },
+      { deliveries: [{ status: 'DRAFT', actualTotalAmount: '999.00' }, { status: 'CANCELLED', actualTotalAmount: '999.00' }] },
+    ])).toEqual({ shipmentAmount: '29.75', hasAnyShipment: true, snapshotComplete: false })
+  })
+
+  it('reports zero shipment rather than substituting ordered money', () => {
+    expect(operationGroupShipmentSummary([{ deliveries: [] }, { deliveries: [] }])).toEqual({
+      shipmentAmount: '0.00', hasAnyShipment: false, snapshotComplete: false,
+    })
   })
 })
 

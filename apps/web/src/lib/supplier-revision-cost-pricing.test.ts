@@ -218,10 +218,13 @@ describe('supplier revision page pricing contract', () => {
     expect(source).toContain('hasPendingSelected')
   })
 
-  it('applies internal supply-chain revisions directly for both single orders and operation groups', () => {
+  it('applies internal supply-chain revisions directly without a custom-product path', () => {
     expect(source).toContain("const isDirectOperationGroupRevision = viewerRole === 'SUPPLY_CHAIN'")
-    expect(source).toContain('revisionCustomDrafts.map(resolveRevisionCustomProductDraft)')
-    expect(source).toContain('const items = [...catalogItems, ...customItems]')
+    expect(source).toContain('const items = catalogItems')
+    expect(source).not.toContain('revisionCustomDrafts')
+    expect(source).not.toContain('resolveRevisionCustomProductDraft')
+    expect(source).not.toContain('customItems')
+    expect(source).not.toContain('自定义商品')
     expect(source).toContain("confirmLabel: isDirectOperationGroupRevision ? '确认修改' : '提交申请'")
     expect(source).toContain('router.replace(`/v2/supply-chain/fulfillment/group/${encodeURIComponent(operationGroupId)}`)')
   })
@@ -253,9 +256,15 @@ describe('internal operation-group revision entry contract', () => {
     'utf8',
   )
 
-  it('routes the latest source order into direct pre-acceptance editing', () => {
-    expect(source).toContain('operationGroup=${encodeURIComponent(detail.group.id)}&groupAdd=1')
-    expect(source).toContain('接单前修改（数量 / 商品）')
+  it('edits and atomically saves the whole group in place instead of routing into one order', () => {
+    expect(source).toContain('const orders = detail.orders.map(order => ({')
+    expect(source).toContain('rows.filter(row => row.orderId === order.id)')
+    expect(source).toContain('`/api/orders/operation-groups/${encodeURIComponent(detail.group.id)}/items`')
+    expect(source).toContain("method: 'PATCH'")
+    expect(source).toContain('所有变化在同一个事务中生效或全部回滚')
+    expect(source).not.toContain('operationGroup=${encodeURIComponent(detail.group.id)}&groupAdd=1')
+    expect(source).not.toContain('接单前修改（数量 / 商品）')
+    expect(source).not.toContain('自定义商品')
   })
 
   it('does not advertise a store-confirmation waiting step', () => {

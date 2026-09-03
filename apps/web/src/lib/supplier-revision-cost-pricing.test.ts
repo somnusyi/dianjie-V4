@@ -230,9 +230,7 @@ describe('supplier revision page pricing contract', () => {
   })
 
   it('scopes the internal catalog to the order supplier', () => {
-    expect(source).toContain('isDirectOperationGroupRevision && order?.supplier.id')
-    expect(source).toContain('`/api/products?supplierId=${encodeURIComponent(order.supplier.id)}`')
-    expect(source).toContain(": '/api/products'")
+    expect(source).toContain('loadAllProductCatalog(isDirectOperationGroupRevision ? order?.supplier.id : null)')
   })
 
   it('reuses one request key for retries of the same open draft', () => {

@@ -194,10 +194,8 @@ function orderedLines(order: any): Array<any> {
     })
 }
 
-function shipmentLines(order: any): Array<any> {
-  const deliveries = (Array.isArray(order.deliveries) ? order.deliveries : [])
-    .filter((delivery: any) => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
-  return deliveries.flatMap((delivery: any) => (Array.isArray(delivery.items) ? delivery.items : []).map((raw: any) => {
+function deliverySnapshotLines(delivery: any): Array<any> {
+  return (Array.isArray(delivery?.items) ? delivery.items : []).map((raw: any) => {
     const item = withDocumentProductSnapshot(raw)
     const product = item.product || {}
     return {
@@ -211,7 +209,13 @@ function shipmentLines(order: any): Array<any> {
       unitPrice: decimalString(item.unitPriceSnapshot),
       amount: decimalString(item.amount),
     }
-  }))
+  })
+}
+
+function shipmentLines(order: any): Array<any> {
+  const deliveries = (Array.isArray(order.deliveries) ? order.deliveries : [])
+    .filter((delivery: any) => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
+  return deliveries.flatMap(deliverySnapshotLines)
 }
 
 /** Pure, deterministic product merge used by the API and unit tests. */
@@ -425,6 +429,10 @@ export async function loadOperationGroupDetails(
     deliveryNos: (Array.isArray(row.deliveries) ? row.deliveries : [])
       .filter((delivery: any) => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
       .map((delivery: any) => String(delivery.no)),
+    deliverySummaries: (Array.isArray(row.deliveries) ? row.deliveries : [])
+      .filter((delivery: any) => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
+      .sort((a: any, b: any) => dateText(a.shippedAt || a.createdAt).localeCompare(dateText(b.shippedAt || b.createdAt)))
+      .map((delivery: any) => ({ no: String(delivery.no), items: deliverySnapshotLines(delivery) })),
     createdAt: dateText(row.createdAt),
     submittedAt: row.submittedAt ? dateText(row.submittedAt) : null,
     expectedDate: expectedDateKey(row.expectedDate),

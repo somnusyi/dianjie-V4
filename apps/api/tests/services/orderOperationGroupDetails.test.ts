@@ -1,9 +1,14 @@
-import { describe, expect, it } from 'vitest'
+import { prisma } from '@dianjie/db'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   latestOperationGroupOrderId,
+  loadOperationGroupDetails,
   mergeOperationGroupItems,
   operationGroupShipmentSummary,
 } from '../../src/services/orderOperationGroupDetails'
+import { operationGroupId } from '../../src/services/orderOperationGroups'
+
+afterEach(() => vi.restoreAllMocks())
 
 describe('operation group printable item merge', () => {
   it('merges only identical product snapshots and preserves source order numbers', () => {
@@ -63,6 +68,58 @@ describe('operation group shipment amount boundary', () => {
     expect(operationGroupShipmentSummary([{ deliveries: [] }, { deliveries: [] }])).toEqual({
       shipmentAmount: '0.00', hasAnyShipment: false, snapshotComplete: false,
     })
+  })
+})
+
+describe('operation group delivery summaries API', () => {
+  it('returns every valid delivery with its own frozen product lines in chronological order', async () => {
+    const memberIds = ['order-a', 'order-b']
+    const groupId = operationGroupId(memberIds)
+    const occurredAt = new Date('2026-09-03T03:00:00.000Z')
+    vi.spyOn(prisma.purchaseOrderEvent, 'findMany').mockResolvedValue(memberIds.map((purchaseOrderId, index) => ({
+      purchaseOrderId, occurredAt, metadata: { operationGroupId: groupId, operationGroupMemberIndex: index },
+    })) as any)
+
+    const base = {
+      storeId: 'store-1', supplierId: 'supplier-1', expectedDate: new Date('2026-09-05T00:00:00.000Z'),
+      status: 'CONFIRMED', updatedAt: occurredAt, rowVersion: 1, originalTotalAmount: '10.00', totalAmount: '10.00',
+      receivedAt: null, store: { id: 'store-1', no: 'S01', name: '一店' },
+      supplier: { id: 'supplier-1', name: '总仓' }, createdBy: null, shippedBy: null, items: [],
+    }
+    vi.spyOn(prisma.purchaseOrder, 'findMany').mockResolvedValue([
+      {
+        ...base, id: 'order-b', no: 'PO-02', createdAt: new Date('2026-09-03T02:00:00.000Z'), submittedAt: new Date('2026-09-03T02:00:00.000Z'),
+        deliveries: [],
+      },
+      {
+        ...base, id: 'order-a', no: 'PO-01', createdAt: new Date('2026-09-03T01:00:00.000Z'), submittedAt: new Date('2026-09-03T01:00:00.000Z'),
+        deliveries: [
+          { no: 'D-DRAFT', status: 'DRAFT', createdAt: new Date('2026-09-03T01:10:00.000Z'), actualTotalAmount: '99', items: [] },
+          {
+            no: 'D-LATE', status: 'DELIVERED', createdAt: new Date('2026-09-03T01:30:00.000Z'), shippedAt: new Date('2026-09-03T02:30:00.000Z'), actualTotalAmount: '6',
+            items: [{ id: 'di-2', productId: 'p2', shippedQty: '3', unitPriceSnapshot: '2', amount: '6', productNameSnapshot: '冻土豆', productUnitSnapshot: '袋', product: { name: '新土豆', unit: '箱' } }],
+          },
+          {
+            no: 'D-EARLY', status: 'SHIPPED', createdAt: new Date('2026-09-03T01:20:00.000Z'), shippedAt: new Date('2026-09-03T02:00:00.000Z'), actualTotalAmount: '4',
+            items: [{ id: 'di-1', productId: 'p1', shippedQty: '2', unitPriceSnapshot: '2', amount: '4', productNameSnapshot: '冻白菜', productUnitSnapshot: '斤', product: { name: '新白菜', unit: '箱' } }],
+          },
+          { no: 'D-CANCEL', status: 'CANCELLED', createdAt: occurredAt, actualTotalAmount: '99', items: [] },
+        ],
+      },
+    ] as any)
+
+    const detail = await loadOperationGroupDetails({ tenantId: 'tenant-1', role: 'SUPPLY_CHAIN' }, groupId)
+
+    expect(detail?.orders[0]).toMatchObject({
+      no: 'PO-01',
+      deliverySummaries: [
+        { no: 'D-EARLY', items: [{ name: '冻白菜', unit: '斤', quantity: '2' }] },
+        { no: 'D-LATE', items: [{ name: '冻土豆', unit: '袋', quantity: '3' }] },
+      ],
+    })
+    expect((detail?.orders[0] as any).deliverySummaries.map((delivery: any) => delivery.no))
+      .toEqual(['D-EARLY', 'D-LATE'])
+    expect((detail?.orders[1] as any).deliverySummaries).toEqual([])
   })
 })
 

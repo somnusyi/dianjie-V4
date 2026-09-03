@@ -13,6 +13,7 @@ import {
 } from '@/components/v2/order-detail-shared'
 import { clientRequestId } from '@/lib/client-id'
 import { RevisionCatalogProduct, resolveRevisionCatalogPricing } from '@/lib/supplier-revision-cost-pricing'
+import { loadAllProductCatalog } from '@/lib/load-product-catalog'
 import { apiFetch } from '@/lib/v2-auth'
 
 const PURCHASE_QUANTITY_MAX = 99_999_999.99
@@ -21,7 +22,7 @@ type Item = { id: string; productId: string; name: string; spec: string | null; 
 type Member = {
   id: string; no: string; rowVersion: number; createdAt: string; submittedAt?: string | null; status?: string | null
   store?: { name?: string; address?: string | null } | null; supplier?: { name?: string } | null
-  items: Item[]; orderedItems: Item[]; shipmentItems: Item[]
+  items: Item[]; orderedItems: Item[]; shipmentItems: Item[]; deliverySummaries: Array<{ no: string; items: Item[] }>
 }
 type Detail = {
   source: 'pending' | 'accepted'
@@ -107,8 +108,7 @@ export default function OperationGroupDetailPage() {
   async function openAdd() {
     if (!detail || !editable) return
     try {
-      const data = await apiFetch<any>(`/api/products?supplierId=${encodeURIComponent(detail.group.supplierId)}&page=1&pageSize=100`)
-      const list = Array.isArray(data) ? data : data?.items || []
+      const list = await loadAllProductCatalog(detail.group.supplierId)
       setCatalog((list as RevisionCatalogProduct[]).filter(product => product.status === 'ENABLED'))
       setSearch(''); setAddOpen(true); setActionError(null)
     } catch (error: any) { setActionError(error?.message || '加载商品目录失败') }
@@ -162,7 +162,8 @@ export default function OperationGroupDetailPage() {
 
   const first = detail.orders[0]
   const productTotal = rows.reduce((sum, row) => sum + row.quantity * row.unitPrice, 0)
-  const deliveryLines = detail.orders.flatMap(order => order.shipmentItems.map(item => `${item.name}${item.quantity}${item.unit}`))
+  const deliveryLines = detail.orders.flatMap(order => order.deliverySummaries.map(delivery =>
+    `${delivery.no} · ${delivery.items.map(item => `${item.name}${item.quantity}${item.unit}`).join('、')}`))
   const filteredCatalog = catalog.filter(product => !search.trim() || `${product.name} ${product.spec || ''}`.toLowerCase().includes(search.trim().toLowerCase()))
 
   return <div className="min-h-screen bg-bg pb-28">

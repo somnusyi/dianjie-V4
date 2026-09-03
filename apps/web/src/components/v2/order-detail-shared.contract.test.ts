@@ -25,10 +25,26 @@ describe('single and grouped fulfillment detail architecture', () => {
     }
   })
 
+  it('loads the complete paginated product catalog on both editing pages', () => {
+    for (const source of [singlePage, groupPage]) {
+      expect(source).toContain("import { loadAllProductCatalog } from '@/lib/load-product-catalog'")
+      expect(source).toContain('await loadAllProductCatalog(')
+    }
+  })
+
   it('keeps the shared product table as the only owner of its save control and column order', () => {
     expect(sharedComponent.match(/\{props\.saving \? '保存中…' : '保存'\}/g)).toHaveLength(1)
     expect(sharedComponent).toContain('序号</th><th className="px-3 py-2">名称</th><th className="px-3 py-2">规格</th>')
     expect(sharedComponent).toContain('数量</th><th className="px-3 py-2 text-right">单价</th><th className="px-3 py-2 text-right">总价</th>')
+  })
+
+  it('keeps horizontal overflow and its draggable range inside the shared component', () => {
+    expect(sharedComponent).toContain('function HorizontalDragArea')
+    expect(sharedComponent).toContain('overflow-x-auto overscroll-x-contain')
+    expect(sharedComponent).toContain('aria-label="横向拖动查看完整内容"')
+    expect(sharedComponent).toContain("viewportRef.current?.scrollTo({ left: next, behavior: 'auto' })")
+    expect(sharedComponent).toContain('<HorizontalDragArea viewportClassName="px-3">')
+    expect(sharedComponent.match(/<HorizontalDragArea viewportClassName=/g)).toHaveLength(2)
   })
 
   it('keeps the simplified amount language on both pages', () => {

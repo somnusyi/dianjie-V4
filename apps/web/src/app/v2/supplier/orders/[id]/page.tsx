@@ -46,6 +46,7 @@ import {
   shipmentDraftStorageKey,
   writeShipmentDraft,
 } from '@/lib/shipment-draft-storage'
+import { loadAllProductCatalog } from '@/lib/load-product-catalog'
 
 type Order = {
   id: string; no: string; status: string
@@ -303,11 +304,7 @@ export default function SupplierOrderDetailPage() {
     setAddOpen(true)
     setAddSearch(''); setRevisionError(null)
     try {
-      const catalogEndpoint = isDirectOperationGroupRevision && order?.supplier.id
-        ? `/api/products?supplierId=${encodeURIComponent(order.supplier.id)}`
-        : '/api/products'
-      const data = await apiFetch<any>(catalogEndpoint)
-      const list = Array.isArray(data) ? data : (data?.items || [])
+      const list = await loadAllProductCatalog(isDirectOperationGroupRevision ? order?.supplier.id : null)
       const existingIds = new Set((order?.items || []).map(it => it.productId))
       setCatalog((list as RevisionCatalogProduct[]).filter((p: RevisionCatalogProduct) => p.status === 'ENABLED' || existingIds.has(p.id)))
     } catch (e: any) {
@@ -492,8 +489,7 @@ export default function SupplierOrderDetailPage() {
     setDeliveryAddTarget(delivery)
     setDeliveryAddProductId('')
     try {
-      const data = await apiFetch<any>(`/api/products?supplierId=${encodeURIComponent(order.supplier.id)}&page=1&pageSize=100`)
-      const list = Array.isArray(data) ? data : (data?.items || [])
+      const list = await loadAllProductCatalog(order.supplier.id)
       setCatalog((list as RevisionCatalogProduct[]).filter(product => product.status === 'ENABLED'))
     } catch (e: any) {
       setDeliveryAddTarget(null)
@@ -769,7 +765,9 @@ export default function SupplierOrderDetailPage() {
         {order.shippedNote && <div className="mt-2 bg-amber/10 rounded p-2 text-caption text-amber-fg">📦 发货备注: {order.shippedNote}</div>}
       </OrderAmountCard>
 
-      <OrderDeliverySummary lines={(order.deliveries || []).flatMap(delivery => delivery.items.map(item => `${item.product?.name || '商品'}${item.shippedQty}${item.product?.unit || ''}`))} />
+      <OrderDeliverySummary lines={(order.deliveries || [])
+        .filter(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
+        .map(delivery => `${delivery.no} · ${delivery.items.map(item => `${item.product?.name || '商品'}${item.shippedQty}${item.productUnitSnapshot || item.product?.unit || ''}`).join('、')}`)} />
       <OrderProgressCard currentIndex={step} />
 
       <OrderProductTable

@@ -58,12 +58,6 @@ export function buildShipmentCloseSummary(lines: ShipmentCloseLineInput[]): Ship
   }
 }
 
-export function assertPositiveShipment(summary: ShipmentCloseSummary) {
-  if (!summary.lines.some(line => line.shippedQty > 0)) {
-    throw Object.assign(new Error('本次配送数量必须大于 0，零实发不会关闭订单或释放预占'), { statusCode: 400 })
-  }
-}
-
 export function shipmentRequestFingerprint(
   note: string | undefined,
   items: Array<{ itemId: string; shippedQty: number }> | undefined,

@@ -881,10 +881,16 @@ describe('supplier tenant scope (integration)', () => {
       })
       expect(invalid.statusCode).toBe(400)
     }
+    const foreignResponse = await app.inject({
+      method: 'GET',
+      url: `/api/inventory/consumptions?days=30&storeId=${otherStore.id}`,
+      headers: { 'x-test-actor': 'chef' },
+    })
+    expect(foreignResponse.statusCode).toBe(403)
+
     for (let attempt = 0; attempt < 3; attempt++) {
       const response = await app.inject({
-        method: 'GET',
-        url: `/api/inventory/consumptions?days=30&storeId=${otherStore.id}`,
+        method: 'GET', url: '/api/inventory/consumptions?days=30',
         headers: { 'x-test-actor': 'chef' },
       })
       expect(response.statusCode).toBe(200)
@@ -966,14 +972,26 @@ describe('supplier tenant scope (integration)', () => {
       },
     })
 
+    const [foreignSnapshot, foreignEstimated] = await Promise.all([
+      app.inject({
+        method: 'GET', url: `/api/inventory/snapshot/latest?storeId=${otherStore.id}`,
+        headers: { 'x-test-actor': 'chef' },
+      }),
+      app.inject({
+        method: 'GET', url: `/api/inventory?storeId=${otherStore.id}`,
+        headers: { 'x-test-actor': 'chef' },
+      }),
+    ])
+    expect([foreignSnapshot.statusCode, foreignEstimated.statusCode]).toEqual([403, 403])
+
     for (let attempt = 0; attempt < 3; attempt++) {
       const [snapshot, estimated] = await Promise.all([
         app.inject({
-          method: 'GET', url: `/api/inventory/snapshot/latest?storeId=${otherStore.id}`,
+          method: 'GET', url: '/api/inventory/snapshot/latest',
           headers: { 'x-test-actor': 'chef' },
         }),
         app.inject({
-          method: 'GET', url: `/api/inventory?storeId=${otherStore.id}`,
+          method: 'GET', url: '/api/inventory',
           headers: { 'x-test-actor': 'chef' },
         }),
       ])

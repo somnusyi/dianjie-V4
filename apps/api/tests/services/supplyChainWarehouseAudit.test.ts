@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { auditSupplierSupplyChain } from '../../src/services/supplyChainAudit'
-import { FORMAL_DELIVERY_STATUSES, SERVER_SHIPMENT_DRAFT_KEY } from '../../src/services/shipmentDraftMarker'
 
 type Row = Record<string, any>
 
@@ -148,22 +147,25 @@ function baseDb(overrides: {
 }
 
 describe('supplyChainAudit — warehouse stock dual-source check', () => {
-  it('audits only formal deliveries and excludes server shipment drafts', async () => {
-    let deliveryWhere: any
-    const db = baseDb()
-    const original = db.deliveryOrder.findMany
-    db.deliveryOrder.findMany = (args: any) => {
-      deliveryWhere = args.where
-      return original(args)
-    }
+  describe('delivery document scope', () => {
+    it('audits only formal deliveries and excludes mutable shipment drafts', async () => {
+      const calls: any[] = []
+      const db = baseDb({ supplier: { ...baseSupplier, inventoryMode: 'NOT_TRACKED' } })
+      const originalFindMany = db.deliveryOrder.findMany
+      db.deliveryOrder.findMany = (args: any) => {
+        calls.push(args)
+        return originalFindMany(args)
+      }
 
-    await auditSupplierSupplyChain({ tenantId: 'tenant-a', supplierId: 'sup-1' }, db)
+      await auditSupplierSupplyChain({ tenantId: 'tenant-a', supplierId: 'sup-1' }, db)
 
-    expect(deliveryWhere.status).toEqual({ in: [...FORMAL_DELIVERY_STATUSES] })
-    expect(deliveryWhere.OR).toEqual([
-      { idempotencyKey: null },
-      { idempotencyKey: { not: SERVER_SHIPMENT_DRAFT_KEY } },
-    ])
+      expect(calls).toHaveLength(1)
+      expect(calls[0].where).toMatchObject({
+        tenantId: 'tenant-a',
+        supplierId: 'sup-1',
+        status: { in: ['SHIPPED', 'DELIVERED', 'RECEIVED'] },
+      })
+    })
   })
 
   describe('non-STRICT inventoryMode', () => {

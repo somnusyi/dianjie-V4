@@ -74,7 +74,7 @@ describe('shipment draft rollback compatibility reads', () => {
     await app.close()
   })
 
-  it('excludes marked drafts from order list and detail delivery relations', async () => {
+  it('keeps drafts out of order totals while exposing the current draft to the order editor', async () => {
     const findMany = vi.spyOn(prisma.purchaseOrder, 'findMany').mockResolvedValue([])
     vi.spyOn(prisma.purchaseOrder, 'count').mockResolvedValue(0)
     const findFirst = vi.spyOn(prisma.purchaseOrder, 'findFirst').mockResolvedValue(null)
@@ -90,13 +90,11 @@ describe('shipment draft rollback compatibility reads', () => {
     expect(list.statusCode).toBe(200)
     const listDeliveryWhere = (findMany.mock.calls[0][0] as any).include.deliveries.where
     expect(listDeliveryWhere.status).toEqual({ in: [...FORMAL_DELIVERY_STATUSES] })
-    expectDraftMarkerExcluded(listDeliveryWhere)
 
     const detail = await app.inject({ method: 'GET', url: '/api/orders/order-1' })
     expect(detail.statusCode).toBe(404)
     const detailDeliveryWhere = (findFirst.mock.calls[0][0] as any).include.deliveries.where
-    expect(detailDeliveryWhere.status).toEqual({ not: 'DRAFT' })
-    expectDraftMarkerExcluded(detailDeliveryWhere)
+    expect(detailDeliveryWhere).toBeUndefined()
     await app.close()
   })
 })

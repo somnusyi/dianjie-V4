@@ -1337,6 +1337,166 @@ describe('supplier order to receipt flow (integration)', () => {
 
   })
 
+  it('keeps quantity zero active, tombstones only explicit removals, and excludes removed rows from manual receipt', async () => {
+    const originalSupplier = await prisma.supplier.findUniqueOrThrow({
+      where: { id: supplierId },
+      select: { inventoryMode: true, inventoryActivatedAt: true },
+    })
+    await prisma.supplier.update({
+      where: { id: supplierId },
+      data: { inventoryMode: 'NOT_TRACKED', inventoryActivatedAt: null },
+    })
+    const [zeroProduct, removedProduct, activeProduct] = await Promise.all([
+      prisma.product.create({
+        data: {
+          tenantId, supplierId, code: `${suffix}-ZERO-ACTIVE`, name: '零数量保留商品', category: '测试', unit: '斤',
+          purchaseUnit: '箱', inventoryUnit: 'g', orderUnit: '斤', costUnit: 'g',
+          inventoryUnitsPerPurchaseUnit: 10000, inventoryUnitsPerOrderUnit: 500,
+          inventoryUnitsPerCostUnit: 1, unitConversionStatus: 'VERIFIED',
+          price: 0.02, stock: 0, minOrderQty: 1, stepQty: 1, shelfDays: 7,
+        },
+      }),
+      prisma.product.create({
+        data: {
+          tenantId, supplierId, code: `${suffix}-EXPLICIT-REMOVE`, name: '明确移除商品', category: '测试', unit: '斤',
+          purchaseUnit: '箱', inventoryUnit: 'g', orderUnit: '斤', costUnit: 'g',
+          inventoryUnitsPerPurchaseUnit: 10000, inventoryUnitsPerOrderUnit: 500,
+          inventoryUnitsPerCostUnit: 1, unitConversionStatus: 'VERIFIED',
+          price: 0.02, stock: 0, minOrderQty: 1, stepQty: 1, shelfDays: 7,
+        },
+      }),
+      prisma.product.create({
+        data: {
+          tenantId, supplierId, code: `${suffix}-RECEIPT-ACTIVE`, name: '实际收货商品', category: '测试', unit: '斤',
+          purchaseUnit: '箱', inventoryUnit: 'g', orderUnit: '斤', costUnit: 'g',
+          inventoryUnitsPerPurchaseUnit: 10000, inventoryUnitsPerOrderUnit: 500,
+          inventoryUnitsPerCostUnit: 1, unitConversionStatus: 'VERIFIED',
+          price: 0.02, stock: 0, minOrderQty: 1, stepQty: 1, shelfDays: 7,
+        },
+      }),
+    ])
+
+    try {
+      const zeroCreate = await app.inject({
+        method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' },
+        payload: {
+          supplierId, storeId, expectedDate: '2026-07-21', idempotencyKey: `zero-active-create-${suffix}`,
+          items: [{ productId: zeroProduct.id, quantity: 2, unitPrice: 999 }],
+        },
+      })
+      expect(zeroCreate.statusCode).toBe(200)
+      const zeroOrder = zeroCreate.json()
+      expect((await app.inject({
+        method: 'PATCH', url: `/api/orders/${zeroOrder.id}/confirm`, headers: { 'x-test-actor': 'supplier' },
+      })).statusCode).toBe(200)
+      const zeroShipPayload = {
+        idempotencyKey: `zero-active-ship-${suffix}`,
+        items: [{ itemId: zeroOrder.items[0].id, shippedQty: 0 }],
+      }
+      const zeroShip = await app.inject({
+        method: 'PATCH', url: `/api/orders/${zeroOrder.id}/ship`, headers: { 'x-test-actor': 'supplier' },
+        payload: zeroShipPayload,
+      })
+      expect(zeroShip.statusCode).toBe(200)
+      expect(zeroShip.json()).toMatchObject({ newTotal: 0, changedLines: 1 })
+      const zeroDelivery = await prisma.deliveryOrder.findUniqueOrThrow({
+        where: { id: zeroShip.json().deliveryId }, include: { items: true },
+      })
+      expect(zeroDelivery.items).toHaveLength(1)
+      expect(Number(zeroDelivery.items[0].shippedQty)).toBe(0)
+      expect(zeroDelivery.items[0].removedAt).toBeNull()
+      const zeroDetail = await app.inject({
+        method: 'GET', url: `/api/orders/${zeroOrder.id}`, headers: { 'x-test-actor': 'supplier' },
+      })
+      expect(zeroDetail.statusCode).toBe(200)
+      expect(zeroDetail.json().deliveries[0].items).toHaveLength(1)
+
+      const mixedCreate = await app.inject({
+        method: 'POST', url: '/api/orders', headers: { 'x-test-actor': 'chef' },
+        payload: {
+          supplierId, storeId, expectedDate: '2026-07-21', idempotencyKey: `explicit-remove-create-${suffix}`,
+          items: [
+            { productId: removedProduct.id, quantity: 2, unitPrice: 999 },
+            { productId: activeProduct.id, quantity: 2, unitPrice: 999 },
+          ],
+        },
+      })
+      expect(mixedCreate.statusCode).toBe(200)
+      const mixedOrder = mixedCreate.json()
+      expect((await app.inject({
+        method: 'PATCH', url: `/api/orders/${mixedOrder.id}/confirm`, headers: { 'x-test-actor': 'supplier' },
+      })).statusCode).toBe(200)
+      const removedOrderItem = mixedOrder.items.find((item: any) => item.productId === removedProduct.id)
+      const activeOrderItem = mixedOrder.items.find((item: any) => item.productId === activeProduct.id)
+      const mixedShipPayload = {
+        idempotencyKey: `explicit-remove-ship-${suffix}`,
+        items: [
+          { itemId: removedOrderItem.id, shippedQty: 0 },
+          { itemId: activeOrderItem.id, shippedQty: 1 },
+        ],
+        removedItemIds: [removedOrderItem.id],
+      }
+      const mixedShip = await app.inject({
+        method: 'PATCH', url: `/api/orders/${mixedOrder.id}/ship`, headers: { 'x-test-actor': 'supplier' },
+        payload: mixedShipPayload,
+      })
+      expect(mixedShip.statusCode).toBe(200)
+      const mixedDelivery = await prisma.deliveryOrder.findUniqueOrThrow({
+        where: { id: mixedShip.json().deliveryId }, include: { items: true },
+      })
+      expect(mixedDelivery.items).toHaveLength(2)
+      const removedDeliveryItem = mixedDelivery.items.find(item => item.productId === removedProduct.id)!
+      expect(Number(removedDeliveryItem.shippedQty)).toBe(0)
+      expect(removedDeliveryItem.removedAt).toBeInstanceOf(Date)
+      expect(mixedDelivery.items.find(item => item.productId === activeProduct.id)?.removedAt).toBeNull()
+
+      const replay = await app.inject({
+        method: 'PATCH', url: `/api/orders/${mixedOrder.id}/ship`, headers: { 'x-test-actor': 'supplier' },
+        payload: mixedShipPayload,
+      })
+      expect(replay.statusCode).toBe(200)
+      expect(replay.json()).toMatchObject({ duplicated: true, deliveryId: mixedDelivery.id })
+      const semanticallyDifferentReplay = await app.inject({
+        method: 'PATCH', url: `/api/orders/${mixedOrder.id}/ship`, headers: { 'x-test-actor': 'supplier' },
+        payload: { ...mixedShipPayload, removedItemIds: [] },
+      })
+      expect(semanticallyDifferentReplay.statusCode).toBe(409)
+
+      const mixedDetail = await app.inject({
+        method: 'GET', url: `/api/orders/${mixedOrder.id}`, headers: { 'x-test-actor': 'supplier' },
+      })
+      expect(mixedDetail.statusCode).toBe(200)
+      expect(mixedDetail.json().deliveries[0].items.map((item: any) => item.productId)).toEqual([activeProduct.id])
+
+      // A defensive corruption simulation proves manual receipt applies the
+      // same removedAt filter as automatic receipt, even if a tombstone ever
+      // carries a stale positive quantity.
+      await prisma.deliveryOrderItem.update({
+        where: { id: removedDeliveryItem.id },
+        data: { shippedQty: 1, amount: 10 },
+      })
+      expect((await app.inject({
+        method: 'PATCH', url: `/api/orders/${mixedOrder.id}/deliver`, headers: { 'x-test-actor': 'supplier' }, payload: {},
+      })).statusCode).toBe(200)
+      const receive = await app.inject({
+        method: 'PATCH', url: `/api/orders/${mixedOrder.id}/receive`, headers: { 'x-test-actor': 'chef' }, payload: {},
+      })
+      expect(receive.statusCode).toBe(200)
+      const receipt = await prisma.receipt.findUniqueOrThrow({
+        where: { id: receive.json().receipt.id }, include: { items: true },
+      })
+      expect(receipt.items.map(item => item.productId)).toEqual([activeProduct.id])
+    } finally {
+      await prisma.supplier.update({
+        where: { id: supplierId },
+        data: {
+          inventoryMode: originalSupplier.inventoryMode,
+          inventoryActivatedAt: originalSupplier.inventoryActivatedAt,
+        },
+      })
+    }
+  })
+
   it('allows order confirmation and shipment when supplier inventory is not tracked', async () => {
     await prisma.supplier.update({
       where: { id: supplierId },

@@ -7,9 +7,9 @@
  * 内容: 抬头(供应商) + 收货方(门店地址) + 订单元数据 + 商品明细表 + 合计大写 + 签字栏
  */
 'use client'
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { apiFetch } from '@/lib/v2-auth'
+import { apiFetch, getUser } from '@/lib/v2-auth'
 import dayjs from 'dayjs'
 
 type Order = {
@@ -29,7 +29,7 @@ type Order = {
   shippedBy: { id: string; name: string } | null
   items: { id: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string
            product?: { name: string; spec: string | null; unit: string; code: string } }[]
-  deliveries?: { id: string; no: string; status: string; actualTotalAmount: string; note?: string | null; shippedAt?: string | null
+  deliveries?: { id: string; no: string; status: string; rowVersion?: number; actualTotalAmount: string; note?: string | null; createdAt?: string | null; shippedAt?: string | null; deliveredAt?: string | null
     items: { id: string; orderedQtySnapshot: string; shippedQty: string; unitPriceSnapshot: string; amount: string
       product?: { name: string; spec: string | null; unit: string; code: string } }[] }[]
 }
@@ -42,7 +42,9 @@ type Order = {
 type OperationGroupMember = {
   id: string
   no: string
+  rowVersion: number
   deliveryNo?: string | null
+  deliveryNos?: string[]
   createdAt: string
   submittedAt?: string | null
   expectedDate?: string | null
@@ -55,6 +57,12 @@ type OperationGroupMember = {
   shippedBy?: Order['shippedBy']
   note?: string | null
   shippedNote?: string | null
+  deliverySummaries?: Array<{
+    id: string
+    rowVersion: number
+    status?: string | null
+    hasReceipt?: boolean
+  }>
 }
 
 type OperationGroupItem = {
@@ -86,9 +94,211 @@ type OperationGroupResponse = {
   totals?: { quantity?: number | string | null; amount?: number | string | null }
 }
 
+type OperationGroupPreviewPayload = {
+  schemaVersion: 2
+  groupId: string
+  ownerUserId: string
+  tenantKey: string
+  createdAt: number
+  expiresAt: number
+  serverSignature: string
+  draftRows: unknown[]
+  items: OperationGroupItem[]
+  totals: { quantity: number; amount: number }
+}
+
+const GROUP_DELIVERY_NOTE_PREVIEW_PREFIX = 'dianjie:operation-group-print-preview:'
+const GROUP_DELIVERY_NOTE_PREVIEW_INDEX_PREFIX = 'dianjie:operation-group-print-preview-latest:'
+const GROUP_DELIVERY_NOTE_PREVIEW_TTL_MS = 30 * 60 * 1000
+
+type OperationGroupPreview = Pick<OperationGroupPreviewPayload, 'items' | 'totals' | 'serverSignature'> & {
+  storageKey: string
+  token: string
+}
+
+type ShipmentDraftSignature = { id: string; rowVersion: number }
+
+function tenantKeyFromLocalStorage() {
+  if (typeof window === 'undefined') return ''
+  try {
+    const tenant = JSON.parse(window.localStorage.getItem('tenant') || '{}')
+    return String(tenant?.id || tenant?.slug || '')
+  } catch {
+    return ''
+  }
+}
+
+function operationGroupPreviewToken() {
+  if (typeof window === 'undefined') return ''
+  const token = new URLSearchParams(window.location.search).get('preview') || ''
+  return /^[0-9a-f-]{36}$/i.test(token) ? token : ''
+}
+
+function removeOperationGroupPreview(groupId: string, token: string, storageKey: string) {
+  if (typeof window === 'undefined') return
+  window.sessionStorage.removeItem(storageKey)
+  const latestKey = `${GROUP_DELIVERY_NOTE_PREVIEW_INDEX_PREFIX}${groupId}`
+  if (window.sessionStorage.getItem(latestKey) === token) window.sessionStorage.removeItem(latestKey)
+}
+
+/**
+ * The group detail page can contain valid edits that have not been saved yet.
+ * Its delivery-note link stores the current display rows in this tab's
+ * sessionStorage and puts an unguessable short token in the URL. A preview is
+ * overlaid only while its owner, tenant, lifetime and complete server version
+ * signature still match; otherwise the document stays entirely server-backed.
+ */
+function readOperationGroupPreview(groupId: string): OperationGroupPreview | null {
+  if (typeof window === 'undefined') return null
+  const token = operationGroupPreviewToken()
+  if (!token) return null
+  const storageKey = `${GROUP_DELIVERY_NOTE_PREVIEW_PREFIX}${groupId}:${token}`
+  const discard = () => removeOperationGroupPreview(groupId, token, storageKey)
+  try {
+    const raw = window.sessionStorage.getItem(storageKey)
+    if (!raw) {
+      discard()
+      return null
+    }
+    const payload = JSON.parse(raw) as Partial<OperationGroupPreviewPayload>
+    const ownerUserId = String(getUser()?.id || '')
+    const tenantKey = tenantKeyFromLocalStorage()
+    const createdAt = Number(payload.createdAt)
+    const expiresAt = Number(payload.expiresAt)
+    const now = Date.now()
+    if (payload.schemaVersion !== 2 || payload.groupId !== groupId
+      || !ownerUserId || payload.ownerUserId !== ownerUserId
+      || !tenantKey || payload.tenantKey !== tenantKey
+      || !Number.isFinite(createdAt) || !Number.isFinite(expiresAt)
+      || createdAt <= 0 || createdAt > now || expiresAt <= now
+      || expiresAt - createdAt !== GROUP_DELIVERY_NOTE_PREVIEW_TTL_MS
+      || typeof payload.serverSignature !== 'string' || !payload.serverSignature
+      || !Array.isArray(payload.draftRows) || !Array.isArray(payload.items)) {
+      discard()
+      return null
+    }
+    const items = payload.items.map((item, index): OperationGroupItem | null => {
+      const productId = String(item?.productId || '').trim()
+      const name = String(item?.name || '').trim()
+      const unit = String(item?.unit || '').trim()
+      const quantity = Number(item?.shippedQty ?? item?.quantity)
+      const unitPrice = Number(item?.unitPrice)
+      const amount = Number(item?.amount)
+      if (!productId || !name || !unit || !Number.isFinite(quantity) || quantity < 0
+        || !Number.isFinite(unitPrice) || unitPrice < 0 || !Number.isFinite(amount) || amount < 0) return null
+      return {
+        id: String(item?.id || `live:${index}:${productId}`),
+        productId,
+        name,
+        spec: item?.spec == null ? null : String(item.spec),
+        unit,
+        quantity,
+        shippedQty: quantity,
+        unitPrice,
+        amount,
+      }
+    })
+    if (items.some(item => item === null)) {
+      discard()
+      return null
+    }
+    const quantity = Number(payload.totals?.quantity)
+    const amount = Number(payload.totals?.amount)
+    if (!Number.isFinite(quantity) || quantity < 0 || !Number.isFinite(amount) || amount < 0) {
+      discard()
+      return null
+    }
+    return {
+      items: items as OperationGroupItem[],
+      totals: { quantity, amount },
+      serverSignature: payload.serverSignature,
+      storageKey,
+      token,
+    }
+  } catch {
+    discard()
+    return null
+  }
+}
+
+function operationGroupServerSignature(
+  data: OperationGroupResponse,
+  shipmentDrafts: Record<string, ShipmentDraftSignature | null>,
+) {
+  return JSON.stringify([...data.orders]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map(order => {
+      const draft = shipmentDrafts[order.id] || null
+      const deliverySummaries = [...(order.deliverySummaries || [])]
+        .filter(delivery => delivery.status !== 'DRAFT')
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map(delivery => [
+          delivery.id,
+          Number(delivery.rowVersion),
+          String(delivery.status || ''),
+          Boolean(delivery.hasReceipt),
+        ])
+      return [
+        order.id,
+        Number(order.rowVersion),
+        String(order.status || ''),
+        draft ? [draft.id, Number(draft.rowVersion)] : null,
+        deliverySummaries,
+      ]
+    }))
+}
+
+async function verifyOperationGroupPreview(data: OperationGroupResponse, groupId: string) {
+  const preview = readOperationGroupPreview(groupId)
+  if (!preview) return null
+  try {
+    // Only a group URL carrying a locally valid short preview token performs
+    // these member reads. They are required because the aggregate endpoint
+    // deliberately omits the internal CONFIRMED shipment DRAFT.
+    const memberDetails = await Promise.all(data.orders.map(order =>
+      apiFetch<Order>(`/api/orders/${encodeURIComponent(order.id)}`)))
+    const shipmentDrafts = Object.fromEntries(memberDetails.map((detail, index) => {
+      const member = data.orders[index]
+      if (member.status !== 'CONFIRMED') return [member.id, null]
+      const draft = [...(detail.deliveries || [])]
+        .filter(delivery => delivery.status === 'DRAFT')
+        .sort((a, b) => Number(a.rowVersion || 0) - Number(b.rowVersion || 0))[0]
+      return [member.id, draft ? { id: draft.id, rowVersion: Number(draft.rowVersion) } : null]
+    })) as Record<string, ShipmentDraftSignature | null>
+    if (operationGroupServerSignature(data, shipmentDrafts) !== preview.serverSignature) {
+      removeOperationGroupPreview(groupId, preview.token, preview.storageKey)
+      return null
+    }
+    return preview
+  } catch {
+    // A transient member-detail read failure makes this refresh unverifiable,
+    // not stale. Render the coherent server aggregate for this attempt while
+    // keeping the tab-scoped snapshot so returning to the group can revalidate
+    // and recover its unsaved rows.
+    return null
+  }
+}
+
+function applyOperationGroupPreview(data: OperationGroupResponse, preview: OperationGroupPreview): OperationGroupResponse {
+  return {
+    ...data,
+    mergedItems: preview.items,
+    totals: {
+      ...(data.totals || {}),
+      quantity: preview.totals.quantity,
+      amount: preview.totals.amount,
+    },
+  }
+}
+
 type NormalizedOperationGroup = {
   order: Order
-  members: Array<Pick<OperationGroupMember, 'id' | 'no' | 'deliveryNo' | 'createdAt' | 'submittedAt'>>
+  members: Array<Pick<OperationGroupMember, 'id' | 'no' | 'deliveryNo' | 'deliveryNos' | 'createdAt' | 'submittedAt'>>
+}
+
+type DeliveryNoteDocument = {
+  order: Order
+  members: NormalizedOperationGroup['members'] | null
 }
 
 function decimalText(value: number | string | null | undefined, fallback = '0') {
@@ -99,6 +309,36 @@ function deliveryPdfFilename(order: Pick<Order, 'store' | 'expectedDate' | 'crea
   const storeName = (order.store?.name || '门店').replace(/[\\/:*?"<>|]/g, '_').trim() || '门店'
   const date = dayjs(order.expectedDate || order.createdAt).format('YYYYMMDD')
   return `${storeName}-${date}-配送单.pdf`
+}
+
+function normalizeSingleOrder(data: Order): Order {
+  const currentDeliveries = (data.deliveries || [])
+    .filter(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
+  const latest = currentDeliveries[currentDeliveries.length - 1]
+  if (!latest) return data
+  return {
+    ...data,
+    purchaseOrderNo: data.no,
+    purchaseOrderTotalAmount: data.totalAmount,
+    no: latest.no,
+    totalAmount: latest.actualTotalAmount,
+    shippedAt: latest.shippedAt || data.shippedAt,
+    shippedNote: latest.note || null,
+    items: latest.items.map(item => ({
+      id: item.id,
+      quantity: item.orderedQtySnapshot,
+      shippedQty: item.shippedQty,
+      unitPrice: item.unitPriceSnapshot,
+      amount: item.amount,
+      product: item.product,
+    })),
+  }
+}
+
+function waitForDocumentPaint() {
+  return new Promise<void>(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  })
 }
 
 /** Convert the aggregate endpoint payload into the unchanged print renderer model. */
@@ -184,6 +424,7 @@ function normalizeOperationGroup(data: OperationGroupResponse): NormalizedOperat
       id: item.id,
       no: item.no,
       deliveryNo: item.deliveryNo || null,
+      deliveryNos: item.deliveryNos || [],
       createdAt: item.createdAt,
       submittedAt: item.submittedAt || null,
     })),
@@ -233,63 +474,77 @@ export default function DeliveryNotePrintPage() {
   const [ossUrl, setOssUrl] = useState<string | null>(null)  // 真 https URL (上传到 OSS 后拿到, ArkWeb / 微信都可用)
   const [uploading, setUploading] = useState(false)
   const [copied, setCopied] = useState(false)
+  const refreshRequestRef = useRef(0)
+  const artifactEpochRef = useRef(0)
+
+  const fetchLatestDocument = useCallback(async (): Promise<DeliveryNoteDocument> => {
+    if (isOperationGroup) {
+      const data = await apiFetch<OperationGroupResponse>(`/api/orders/operation-groups/${encodeURIComponent(id)}`)
+      const preview = await verifyOperationGroupPreview(data, id)
+      const normalized = normalizeOperationGroup(preview ? applyOperationGroupPreview(data, preview) : data)
+      return { order: normalized.order, members: normalized.members }
+    }
+    const data = await apiFetch<Order>(`/api/orders/${id}`)
+    return { order: normalizeSingleOrder(data), members: null }
+  }, [id, isOperationGroup])
+
+  const refreshLatestDocument = useCallback(async (): Promise<DeliveryNoteDocument | null> => {
+    const requestId = ++refreshRequestRef.current
+    try {
+      const latest = await fetchLatestDocument()
+      if (requestId !== refreshRequestRef.current) return null
+      // Exported files belong to one exact document snapshot. Once a newer
+      // snapshot is adopted, old preview/share handles must become unusable.
+      artifactEpochRef.current += 1
+      setPdfUrl(null)
+      setPdfBlob(null)
+      setOssUrl(null)
+      setUploading(false)
+      setCopied(false)
+      setGroupMembers(latest.members)
+      setOrder(latest.order)
+      setError(null)
+      return latest
+    } catch (e: any) {
+      if (requestId === refreshRequestRef.current) setError(e.message || '加载失败')
+      throw e
+    }
+  }, [fetchLatestDocument])
 
   useEffect(() => {
-    let cancelled = false
     setError(null)
     setOrder(null)
     setGroupMembers(null)
 
-    const load = async () => {
-      try {
-        if (isOperationGroup) {
-          const data = await apiFetch<OperationGroupResponse>(`/api/orders/operation-groups/${encodeURIComponent(id)}`)
-          if (cancelled) return
-          const normalized = normalizeOperationGroup(data)
-          setGroupMembers(normalized.members)
-          setOrder(normalized.order)
-          return
-        }
-
-        // Keep the original single-order request and delivery snapshot behavior
-        // byte-for-byte in meaning; only og_ IDs use the aggregate branch above.
-        const data = await apiFetch<Order>(`/api/orders/${id}`)
-        if (cancelled) return
-        const latest = [...(data.deliveries || [])]
-          .filter(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
-          .sort((a, b) => String(b.shippedAt || '').localeCompare(String(a.shippedAt || '')))[0]
-        if (!latest) return setOrder(data)
-        setOrder({
-          ...data,
-          purchaseOrderNo: data.no,
-          purchaseOrderTotalAmount: data.totalAmount,
-          no: latest.no,
-          totalAmount: latest.actualTotalAmount,
-          shippedAt: latest.shippedAt || data.shippedAt,
-          shippedNote: latest.note || null,
-          items: latest.items.map(item => ({
-            id: item.id,
-            quantity: item.orderedQtySnapshot,
-            shippedQty: item.shippedQty,
-            unitPrice: item.unitPriceSnapshot,
-            amount: item.amount,
-            product: item.product,
-          })),
-        })
-      } catch (e: any) {
-        if (!cancelled) setError(e.message || '加载失败')
-      }
+    const refreshWhenActive = () => { void refreshLatestDocument().catch(() => undefined) }
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') refreshWhenActive()
     }
-    void load()
+    refreshWhenActive()
+    window.addEventListener('focus', refreshWhenActive)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
 
-    return () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl) }
-  }, [id, isOperationGroup])
+    return () => {
+      refreshRequestRef.current += 1
+      window.removeEventListener('focus', refreshWhenActive)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
+  }, [refreshLatestDocument])
+
+  async function refreshBeforeDocumentAction() {
+    const latest = await refreshLatestDocument()
+    if (!latest) throw new Error('送货单正在刷新，请重试')
+    await waitForDocumentPaint()
+    return latest
+  }
 
   // 真 PDF 下载 — 用 html2canvas + jspdf, 跨平台 (含 WebView / iOS Capacitor / 鸿蒙 ArkWeb)
   async function exportPDF() {
-    if (!order || exporting) return
+    if (exporting) return
     setExporting(true)
     try {
+      const latestDocument = await refreshBeforeDocumentAction()
+      const artifactEpoch = artifactEpochRef.current
       const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
         import('html2canvas'), import('jspdf')
       ])
@@ -348,30 +603,31 @@ export default function DeliveryNotePrintPage() {
       // 生成 blob → 同时存 blob 和 data URL
       const blob = pdf.output('blob') as Blob
       const dataUrl = pdf.output('datauristring') as string
+      if (artifactEpoch !== artifactEpochRef.current) throw new Error('送货单数据已刷新，请重新生成')
       setPdfBlob(blob)
       setPdfUrl(dataUrl)
       setOssUrl(null); setCopied(false)
       // 同时上传到 OSS 获取真 https URL — ArkWeb / 微信内置浏览器都能用
-      void uploadToOss(blob)
+      void uploadToOss(blob, latestDocument.order, artifactEpoch)
     } catch (e: any) {
       alert('导出失败: ' + (e.message || e))
     } finally {
       setExporting(false)
     }
   }
-  async function uploadToOss(blob: Blob) {
-    if (!order) return
+  async function uploadToOss(blob: Blob, sourceOrder: Order, artifactEpoch: number) {
+    if (artifactEpoch !== artifactEpochRef.current) return
     setUploading(true)
     try {
       const fd = new FormData()
-      fd.append('file', blob, deliveryPdfFilename(order))
+      fd.append('file', blob, deliveryPdfFilename(sourceOrder))
       const res = await apiFetch<{url: string}>('/api/upload?category=documents', { method: 'POST', body: fd as any })
-      setOssUrl(res.url)
+      if (artifactEpoch === artifactEpochRef.current) setOssUrl(res.url)
     } catch (e: any) {
       // 上传失败不阻塞预览, 用户仍可用 iframe 看
       console.warn('OSS upload failed', e)
     } finally {
-      setUploading(false)
+      if (artifactEpoch === artifactEpochRef.current) setUploading(false)
     }
   }
   async function copyOssUrl() {
@@ -421,9 +677,12 @@ export default function DeliveryNotePrintPage() {
   // 导出 Excel — 客户(供应商)需要拿结构化数据回 ERP 或自己核算, PDF 是看的, Excel 是用的
   // 跟 PDF 并存, 不互斥
   async function exportExcel() {
-    if (!order || exportingXlsx) return
+    if (exportingXlsx) return
     setExportingXlsx(true)
     try {
+      const latestDocument = await refreshBeforeDocumentAction()
+      const exportOrder = latestDocument.order
+      const exportGroupMembers = latestDocument.members
       const XLSX = await import('xlsx')
       const itemQtyLocal = (i: Order['items'][number]) => i.shippedQty != null ? Number(i.shippedQty) : Number(i.quantity)
       // Aggregate lines carry the source-line amount. Use it for groups so
@@ -432,28 +691,28 @@ export default function DeliveryNotePrintPage() {
       const itemAmtLocal = (i: Order['items'][number]) => isOperationGroup && i.amount != null
         ? Number(i.amount)
         : itemQtyLocal(i) * Number(i.unitPrice)
-      const documentLabel = isOperationGroup ? '集合送货单' : order.no
-      const totalLocal = order.items.reduce((s, i) => s + itemAmtLocal(i), 0)
-      const totalQtyLocal = order.items.reduce((s, i) => s + itemQtyLocal(i), 0)
+      const documentLabel = isOperationGroup ? '集合送货单' : exportOrder.no
+      const totalLocal = exportOrder.items.reduce((s, i) => s + itemAmtLocal(i), 0)
+      const totalQtyLocal = exportOrder.items.reduce((s, i) => s + itemQtyLocal(i), 0)
 
       // 构造表格 (aoa = array of arrays)
       const aoa: any[][] = [
         [`送货单 · ${documentLabel}`, '', '', '', '', '', ''],
         [],
-        ['供应商', order.supplier.name, '', '', '收货方', order.store.name, ''],
-        ['供应方联系人', `${order.supplier.contactName || '—'}${order.supplier.contactPhone ? ' · ' + order.supplier.contactPhone : ''}`, '', '', '收货人', `${(order.consignee?.name ?? order.store.managerName) || '—'}${(order.consignee?.phone ?? order.store.phone) ? ' · ' + (order.consignee?.phone ?? order.store.phone) : ''}`, ''],
-        ['收货地址', order.store.address || '—', '', '', '', '', ''],
-        ...(isOperationGroup && groupMembers && groupMembers.length > 0
-          ? groupMembers.map(member => [
-            '送货单号', member.deliveryNo || member.no, '', '', '下单日期', dayjs(member.createdAt).format('YYYY-MM-DD HH:mm'), '',
+        ['供应商', exportOrder.supplier.name, '', '', '收货方', exportOrder.store.name, ''],
+        ['供应方联系人', `${exportOrder.supplier.contactName || '—'}${exportOrder.supplier.contactPhone ? ' · ' + exportOrder.supplier.contactPhone : ''}`, '', '', '收货人', `${(exportOrder.consignee?.name ?? exportOrder.store.managerName) || '—'}${(exportOrder.consignee?.phone ?? exportOrder.store.phone) ? ' · ' + (exportOrder.consignee?.phone ?? exportOrder.store.phone) : ''}`, ''],
+        ['收货地址', exportOrder.store.address || '—', '', '', '', '', ''],
+        ...(isOperationGroup && exportGroupMembers && exportGroupMembers.length > 0
+          ? exportGroupMembers.map(member => [
+            '送货单号', member.deliveryNos?.length ? member.deliveryNos.join('、') : member.deliveryNo || member.no, '', '', '下单日期', dayjs(member.createdAt).format('YYYY-MM-DD HH:mm'), '',
           ])
-          : [['下单时间', dayjs(order.createdAt).format('YYYY-MM-DD HH:mm'), '', '', '下单人', order.createdBy?.name || '—', '']]),
-        ['期望到货', dayjs(order.expectedDate).format('YYYY-MM-DD'), '', '', '发货时间', order.shippedAt ? dayjs(order.shippedAt).format('YYYY-MM-DD HH:mm') : '—', ''],
-        order.note ? ['订单备注', order.note, '', '', '', '', ''] : null,
-        order.shippedNote ? ['发货备注', order.shippedNote, '', '', '', '', ''] : null,
+          : [['下单时间', dayjs(exportOrder.createdAt).format('YYYY-MM-DD HH:mm'), '', '', '下单人', exportOrder.createdBy?.name || '—', '']]),
+        ['期望到货', dayjs(exportOrder.expectedDate).format('YYYY-MM-DD'), '', '', '发货时间', exportOrder.shippedAt ? dayjs(exportOrder.shippedAt).format('YYYY-MM-DD HH:mm') : '—', ''],
+        exportOrder.note ? ['订单备注', exportOrder.note, '', '', '', '', ''] : null,
+        exportOrder.shippedNote ? ['发货备注', exportOrder.shippedNote, '', '', '', '', ''] : null,
         [],
         ['#', '品名', '规格', '单位', '数量', '单价(¥)', '金额(¥)'],
-        ...order.items.map((it, i) => [
+        ...exportOrder.items.map((it, i) => [
           i + 1,
           it.product?.name || '—',
           it.product?.spec || '—',
@@ -462,7 +721,7 @@ export default function DeliveryNotePrintPage() {
           Number(it.unitPrice),
           Number(itemAmtLocal(it).toFixed(2)),
         ]),
-        ['合计', '', '', '', totalQtyLocal, '', Number(totalLocal.toFixed(2))],
+        ['实发金额', '', '', '', totalQtyLocal, '', Number(totalLocal.toFixed(2))],
         ['大写', `人民币 ${num2cn(totalLocal)}`, '', '', '', '', ''],
       ].filter(Boolean) as any[][]
 
@@ -534,9 +793,14 @@ export default function DeliveryNotePrintPage() {
     }
   }
   // 系统浏览器打印 (PC) — 在 WebView 里多半无效, 已不推荐
-  function tryPrint() {
-    if (typeof window.print === 'function') window.print()
-    else alert('当前环境不支持系统打印, 请用「下载 PDF」按钮')
+  async function tryPrint() {
+    try {
+      await refreshBeforeDocumentAction()
+      if (typeof window.print === 'function') window.print()
+      else alert('当前环境不支持系统打印, 请用「下载 PDF」按钮')
+    } catch (e: any) {
+      alert('打印前刷新失败: ' + (e?.message || e))
+    }
   }
 
   if (error) return <div className="p-8 text-center text-red-fg">{error}</div>
@@ -551,7 +815,6 @@ export default function DeliveryNotePrintPage() {
   const total = order.items.reduce((s, i) => s + itemAmt(i), 0)
   const itemsCount = order.items.length
   const totalQty = order.items.reduce((s, i) => s + itemQty(i), 0)
-  const hasAdjust = order.items.some(i => i.shippedQty != null && Math.abs(Number(i.shippedQty) - Number(i.quantity)) > 0.0001)
 
   // 打印手工分页：首页要给抬头/元数据留空间所以行数少，续页多。
   // 用多个 tbody + break-before 强制分页——不让浏览器自己在表格中间找断点（会截断/丢行导致漏货）
@@ -667,7 +930,7 @@ export default function DeliveryNotePrintPage() {
               ? groupMembers.map(member => (
                 <tr key={member.id}>
                   <td className="border border-gray3 px-2 py-1.5 bg-bg w-24">送货单号</td>
-                  <td className="border border-gray3 px-2 py-1.5 font-mono">{member.deliveryNo || member.no}</td>
+                  <td className="border border-gray3 px-2 py-1.5 font-mono">{member.deliveryNos?.length ? member.deliveryNos.join('、') : member.deliveryNo || member.no}</td>
                   <td className="border border-gray3 px-2 py-1.5 bg-bg w-24">下单日期</td>
                   <td className="border border-gray3 px-2 py-1.5">{dayjs(member.createdAt).format('YYYY-MM-DD HH:mm')}</td>
                 </tr>
@@ -766,9 +1029,9 @@ export default function DeliveryNotePrintPage() {
                   })}
                   {isLastChunk && (
                     <>
-                      {/* 合计 */}
+                      {/* 实发金额 */}
                       <tr className="bg-bg font-semibold">
-                        <td colSpan={4} className="border border-gray3 px-2 py-1.5 text-right">合计</td>
+                        <td colSpan={4} className="border border-gray3 px-2 py-1.5 text-right">实发金额</td>
                         <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{totalQty}</td>
                         <td className="border border-gray3 px-2 py-1.5"></td>
                         <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{total.toFixed(2)}</td>
@@ -786,12 +1049,6 @@ export default function DeliveryNotePrintPage() {
           </tbody>
         </table>
 
-        {/* 调整提示 */}
-        {hasAdjust && (
-          <div className="mt-3 text-xs text-amber-fg border-l-4 border-amber pl-2">
-            ⚠ 本配送单数量与原订货单不同 (原订货单总额 ¥{Number(order.purchaseOrderTotalAmount || order.totalAmount).toFixed(2)})
-          </div>
-        )}
         {/* 备注 */}
         {(order.note || order.shippedNote) && (
           <div className="mt-4 text-sm">

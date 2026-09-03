@@ -114,7 +114,10 @@ async function serializableWithRetry<T>(
  * a known unit mismatch without a frozen factor is rejected.
  */
 export function resolveFrozenOrderInventoryLine(line: FrozenOrderInventoryLine): ResolvedOrderLine {
-  const originalQuantity = quantity(line.quantity, `${line.productName || '商品'}订货数量`)
+  // A delivery line with quantity 0 is still a real, visible line. Reservation
+  // creation filters zero lines, while mutation/print flows keep the frozen
+  // unit contract available for that line.
+  const originalQuantity = nonnegativeQuantity(line.quantity, `${line.productName || '商品'}订货数量`)
   const originalUnit = String(line.orderUnitSnapshot || line.productUnit || '').trim()
   const inventoryUnit = String(line.inventoryUnitSnapshot || line.productUnit || originalUnit).trim()
   if (!originalUnit || !inventoryUnit) throw businessError(`${line.productName || '商品'}缺少冻结单位`, 400)
@@ -131,6 +134,26 @@ export function resolveFrozenOrderInventoryLine(line: FrozenOrderInventoryLine):
     conversionFactor,
     inventoryQuantity: originalQuantity.mul(conversionFactor).toDecimalPlaces(QTY_DP),
     inventoryUnit,
+  }
+}
+
+/**
+ * Close a reservation without ever writing fulfilledInventoryQty above the
+ * reservation cap enforced by PostgreSQL. Extra shipped quantity is a normal
+ * outbound delta, not extra fulfilment of the original reservation.
+ */
+export function warehouseReservationCloseState(
+  reservedInput: Decimalish,
+  shippedInput: Decimalish,
+) {
+  const reserved = quantity(reservedInput, '预占数量')
+  const shipped = nonnegativeQuantity(shippedInput, '实发数量')
+  const fulfilledInventoryQty = Prisma.Decimal.min(reserved, shipped).toDecimalPlaces(QTY_DP)
+  const releasedInventoryQty = reserved.minus(fulfilledInventoryQty).toDecimalPlaces(QTY_DP)
+  return {
+    fulfilledInventoryQty,
+    releasedInventoryQty,
+    status: fulfilledInventoryQty.gt(0) ? 'CONSUMED' as const : 'RELEASED' as const,
   }
 }
 
@@ -1286,18 +1309,28 @@ export async function reserveWarehouseLedgerForOrder(
     lines: FrozenOrderInventoryLine[]
   },
 ) {
-  const orderScope = await tx.purchaseOrder.findFirst({
-    where: { id: input.purchaseOrderId, tenantId: input.tenantId },
-    select: { status: true, supplier: { select: { sourceType: true } } },
+  // Serialize the async reservation projector with shipment/cancellation. A
+  // stale ACCEPTED event must not recreate an ACTIVE reservation after the
+  // order has already advanced.
+  const lockedOrders = await tx.$queryRaw<Array<{ status: string; supplierId: string }>>(Prisma.sql`
+    SELECT "status", "supplierId"
+    FROM "purchase_orders"
+    WHERE "id" = ${input.purchaseOrderId} AND "tenantId" = ${input.tenantId}
+    FOR UPDATE
+  `)
+  if (lockedOrders.length !== 1) return
+  const supplier = await tx.supplier.findFirst({
+    where: { id: lockedOrders[0].supplierId, tenantId: input.tenantId },
+    select: { sourceType: true },
   })
-  if (!orderScope || orderScope.supplier.sourceType !== 'HEADQ_WAREHOUSE') return
+  if (supplier?.sourceType !== 'HEADQ_WAREHOUSE') return
   // A SHADOW task may start after a fast cancel or shipment. Current business
   // state wins over the stale ACCEPTED event so a late projector can never
   // recreate an ACTIVE reservation on a closed order.
-  if (orderScope.status !== 'CONFIRMED') return
+  if (lockedOrders[0].status !== 'CONFIRMED') return
   const warehouseId = await resolveTenantWarehouseId(tx, input.tenantId, undefined)
   const mode = await warehouseMode(tx, input.tenantId, warehouseId)
-  const lines = input.lines.map(resolveFrozenOrderInventoryLine)
+  const lines = input.lines.map(resolveFrozenOrderInventoryLine).filter(line => line.inventoryQuantity.gt(0))
   const balances = await lockBalances(tx, {
     tenantId: input.tenantId,
     warehouseId,
@@ -1552,7 +1585,12 @@ export async function consumeWarehouseLedgerForShipment(
   })
   await assertSingleOutboundLedgerSource(tx, {
     tenantId: input.tenantId, warehouseId, incoming: 'DeliveryOrder',
-    products: lines.map(line => line.productId),
+    // A zero-quantity document line releases an existing reservation but does
+    // not create an outbound ledger movement. Historical package outbounds
+    // therefore must not block saving that line at zero.
+    products: lines
+      .filter(line => line.shippedInventoryQuantity.gt(0))
+      .map(line => line.productId),
   })
   const balances = await lockBalances(tx, {
     tenantId: input.tenantId,
@@ -1569,10 +1607,20 @@ export async function consumeWarehouseLedgerForShipment(
     const suffix = String(input.idempotencyKeySuffix || '').trim()
     const idempotencyKey = `delivery-outbound:${input.deliveryOrderId}:${line.purchaseOrderItemId}${suffix ? `:${suffix}` : ''}`
     if (idempotencyKey.length > 160) throw businessError('总仓出库幂等键过长', 400)
+    const requestFingerprint = fingerprint({
+      purchaseOrderId: input.purchaseOrderId,
+      deliveryOrderId: input.deliveryOrderId,
+      purchaseOrderItemId: line.purchaseOrderItemId,
+      productId: line.productId,
+      shippedOriginalQuantity: line.shippedOriginalQuantity.toFixed(QTY_DP),
+      originalUnit: line.originalUnit,
+      conversionFactor: line.conversionFactor.toFixed(QTY_DP),
+      inventoryQuantity: line.shippedInventoryQuantity.toFixed(QTY_DP),
+      inventoryUnit: line.inventoryUnit,
+    })
     const existingMovement = await tx.warehouseLedgerMovement.findUnique({
       where: { tenantId_warehouseId_idempotencyKey: { tenantId: input.tenantId, warehouseId, idempotencyKey } },
     })
-    if (existingMovement) continue
     const reservation = reservationByItem.get(line.purchaseOrderItemId)
     if (reservation && (
       reservation.tenantId !== input.tenantId
@@ -1584,6 +1632,154 @@ export async function consumeWarehouseLedgerForShipment(
     }
     const ownReserved = reservation?.status === 'ACTIVE' ? reservation.inventoryQuantity : ZERO
     const balance = balances.get(line.productId)!
+    if (existingMovement) {
+      const sameLegacyPayload = existingMovement.type === 'ORDER_OUTBOUND'
+        && existingMovement.productId === line.productId
+        && existingMovement.sourceId === input.deliveryOrderId
+        && existingMovement.sourceLineId === line.purchaseOrderItemId
+        && new Prisma.Decimal(existingMovement.inventoryQuantity).equals(line.shippedInventoryQuantity)
+        && new Prisma.Decimal(existingMovement.conversionFactor).equals(line.conversionFactor)
+        && existingMovement.inventoryUnit === line.inventoryUnit
+      if (
+        (existingMovement.requestFingerprint && existingMovement.requestFingerprint !== requestFingerprint)
+        || (!existingMovement.requestFingerprint && !sameLegacyPayload)
+      ) throw businessError('同一发货幂等键不能用于不同的商品或数量', 409)
+
+      // The SHADOW reservation projector can finish after the physical
+      // outbound movement. Settle that late reservation here without creating
+      // a second outbound or deducting physical stock twice.
+      if (reservation?.status === 'ACTIVE') {
+        const nextReserved = balance.reservedQty.minus(ownReserved)
+        if (nextReserved.lt(0)) throw businessError('总仓预占余额异常，请先审计库存流水', 409)
+        const close = warehouseReservationCloseState(
+          reservation.inventoryQuantity,
+          existingMovement.inventoryQuantity,
+        )
+        const lateReleaseKey = `late-reservation-release:${input.deliveryOrderId}:${line.purchaseOrderItemId}`
+        const lateRelease = await tx.warehouseLedgerMovement.findUnique({
+          where: { tenantId_warehouseId_idempotencyKey: { tenantId: input.tenantId, warehouseId, idempotencyKey: lateReleaseKey } },
+        })
+        if (!lateRelease) {
+          await tx.warehouseLedgerMovement.create({
+            data: {
+              tenantId: input.tenantId,
+              warehouseId,
+              productId: line.productId,
+              type: 'ORDER_RELEASED',
+              physicalDelta: ZERO,
+              reservedDelta: ownReserved.negated(),
+              valueDelta: ZERO,
+              physicalAfter: balance.physicalQty,
+              reservedAfter: nextReserved,
+              valueAfter: balance.inventoryValue,
+              averageUnitCostAfter: balance.averageUnitCost,
+              originalQuantity: reservation.originalQuantity,
+              originalUnit: reservation.originalUnit,
+              conversionFactor: reservation.conversionFactor,
+              inventoryQuantity: reservation.inventoryQuantity,
+              inventoryUnit: reservation.inventoryUnit,
+              inventoryUnitCost: balance.averageUnitCost,
+              sourceType: 'PurchaseOrder',
+              sourceId: input.purchaseOrderId,
+              sourceLineId: line.purchaseOrderItemId,
+              idempotencyKey: lateReleaseKey,
+              requestFingerprint: fingerprint({ existingMovementId: existingMovement.id, reservationId: reservation.id }),
+              effectiveAt,
+              note: `结算延迟预占 ${input.orderNo}`,
+              createdById: input.userId,
+            },
+          })
+          await persistBalance(tx, balance, {
+            physicalQty: balance.physicalQty,
+            reservedQty: nextReserved,
+            inventoryValue: balance.inventoryValue,
+            averageUnitCost: balance.averageUnitCost,
+          })
+        }
+        await tx.warehouseLedgerReservation.update({
+          where: { id: reservation.id },
+          data: {
+            status: close.status,
+            fulfilledInventoryQty: close.fulfilledInventoryQty,
+            consumedAt: close.status === 'CONSUMED' ? effectiveAt : null,
+            releasedAt: close.releasedInventoryQty.gt(0) || close.status === 'RELEASED' ? effectiveAt : null,
+          },
+        })
+      } else if (!reservation && line.shippedInventoryQuantity.gt(0)) {
+        // Heal an older or concurrently-posted outbound whose audit
+        // reservation is missing. The outbound fingerprint above proves this
+        // is the same delivery line, so creating the consumed fact is safe and
+        // does not deduct stock a second time.
+        await tx.warehouseLedgerReservation.create({
+          data: {
+            tenantId: input.tenantId,
+            warehouseId,
+            productId: line.productId,
+            purchaseOrderId: input.purchaseOrderId,
+            purchaseOrderItemId: line.purchaseOrderItemId,
+            originalQuantity: line.shippedOriginalQuantity,
+            originalUnit: line.originalUnit,
+            conversionFactor: line.conversionFactor,
+            inventoryQuantity: line.shippedInventoryQuantity,
+            fulfilledInventoryQty: line.shippedInventoryQuantity,
+            inventoryUnit: line.inventoryUnit,
+            status: 'CONSUMED',
+            consumedAt: effectiveAt,
+          },
+        })
+      }
+      continue
+    }
+
+    // Quantity zero remains a document line. It has no physical outbound, but
+    // any original reservation must still be fully released.
+    if (line.shippedInventoryQuantity.isZero()) {
+      if (reservation?.status === 'ACTIVE') {
+        const nextReserved = balance.reservedQty.minus(ownReserved)
+        if (nextReserved.lt(0)) throw businessError('总仓预占余额异常，请先审计库存流水', 409)
+        const releaseKey = `zero-shipment-release:${input.deliveryOrderId}:${line.purchaseOrderItemId}`
+        await tx.warehouseLedgerMovement.create({
+          data: {
+            tenantId: input.tenantId,
+            warehouseId,
+            productId: line.productId,
+            type: 'ORDER_RELEASED',
+            physicalDelta: ZERO,
+            reservedDelta: ownReserved.negated(),
+            valueDelta: ZERO,
+            physicalAfter: balance.physicalQty,
+            reservedAfter: nextReserved,
+            valueAfter: balance.inventoryValue,
+            averageUnitCostAfter: balance.averageUnitCost,
+            originalQuantity: reservation.originalQuantity,
+            originalUnit: reservation.originalUnit,
+            conversionFactor: reservation.conversionFactor,
+            inventoryQuantity: reservation.inventoryQuantity,
+            inventoryUnit: reservation.inventoryUnit,
+            inventoryUnitCost: balance.averageUnitCost,
+            sourceType: 'PurchaseOrder',
+            sourceId: input.purchaseOrderId,
+            sourceLineId: line.purchaseOrderItemId,
+            idempotencyKey: releaseKey,
+            requestFingerprint,
+            effectiveAt,
+            note: `零实发释放预占 ${input.orderNo}`,
+            createdById: input.userId,
+          },
+        })
+        await persistBalance(tx, balance, {
+          physicalQty: balance.physicalQty,
+          reservedQty: nextReserved,
+          inventoryValue: balance.inventoryValue,
+          averageUnitCost: balance.averageUnitCost,
+        })
+        await tx.warehouseLedgerReservation.update({
+          where: { id: reservation.id },
+          data: { status: 'RELEASED', fulfilledInventoryQty: ZERO, consumedAt: null, releasedAt: effectiveAt },
+        })
+      }
+      continue
+    }
     const protectedAvailable = balance.physicalQty.minus(balance.reservedQty.minus(ownReserved))
     if (mode === 'STRICT' && protectedAvailable.lt(line.shippedInventoryQuantity)) {
       throw businessError(`${line.productName || '商品'} 总仓可发库存不足：可发 ${protectedAvailable.toFixed(3)} ${line.inventoryUnit}，实发 ${line.shippedInventoryQuantity.toFixed(3)} ${line.inventoryUnit}`)
@@ -1621,6 +1817,7 @@ export async function consumeWarehouseLedgerForShipment(
         sourceId: input.deliveryOrderId,
         sourceLineId: line.purchaseOrderItemId,
         idempotencyKey,
+        requestFingerprint,
         effectiveAt,
         note: `发货 ${input.orderNo}`,
         createdById: input.userId,
@@ -1643,14 +1840,36 @@ export async function consumeWarehouseLedgerForShipment(
       throw businessError(`${line.productName || '商品'} 批次余额不足，不能在严格库存模式出库`, 409)
     }
     if (reservation?.status === 'ACTIVE') {
-      const partiallyReleased = line.shippedInventoryQuantity.lt(reservation.inventoryQuantity)
+      const close = warehouseReservationCloseState(reservation.inventoryQuantity, line.shippedInventoryQuantity)
       await tx.warehouseLedgerReservation.update({
         where: { id: reservation.id },
         data: {
-          status: line.shippedInventoryQuantity.gt(0) ? 'CONSUMED' : 'RELEASED',
+          status: close.status,
+          fulfilledInventoryQty: close.fulfilledInventoryQty,
+          consumedAt: close.status === 'CONSUMED' ? effectiveAt : null,
+          releasedAt: close.releasedInventoryQty.gt(0) || close.status === 'RELEASED' ? effectiveAt : null,
+        },
+      })
+    } else if (!reservation) {
+      // Shipment-draft additions did not exist when the order was accepted,
+      // so they have no ACTIVE reservation to close. The positive outbound is
+      // nevertheless a completed audit fact and must get a consumed record;
+      // later quantity/remove/restore mutations rely on this invariant.
+      await tx.warehouseLedgerReservation.create({
+        data: {
+          tenantId: input.tenantId,
+          warehouseId,
+          productId: line.productId,
+          purchaseOrderId: input.purchaseOrderId,
+          purchaseOrderItemId: line.purchaseOrderItemId,
+          originalQuantity: line.shippedOriginalQuantity,
+          originalUnit: line.originalUnit,
+          conversionFactor: line.conversionFactor,
+          inventoryQuantity: line.shippedInventoryQuantity,
           fulfilledInventoryQty: line.shippedInventoryQuantity,
-          consumedAt: line.shippedInventoryQuantity.gt(0) ? effectiveAt : null,
-          releasedAt: partiallyReleased || line.shippedInventoryQuantity.isZero() ? effectiveAt : null,
+          inventoryUnit: line.inventoryUnit,
+          status: 'CONSUMED',
+          consumedAt: effectiveAt,
         },
       })
     }

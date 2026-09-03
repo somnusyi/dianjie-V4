@@ -76,7 +76,7 @@ describe('warehouse shadow ledger migration contract', () => {
     // posts one shadow reservation per member order.
     expect(orderRoute.match(/void postShadowWarehouseLedger\(\{/g)).toHaveLength(5)
     expect(orderRoute).toContain("ledgerMode?.inventoryMode === 'SHADOW'")
-    expect(orderRoute).toContain("return { warehouseId: null, inventoryMode: 'OFF' as const }")
+    expect(orderRoute).toContain("throw Object.assign(new Error('总仓库存状态暂时不可用，请稍后重试'), { statusCode: 503 })")
     expect(orderRoute).toContain('const shadowPostingQueues = new Map<string, Promise<void>>()')
     expect(orderRoute).toContain('effectiveAt: shippedAt')
     expect(orderRoute).toContain('orderUnitSnapshot: line.it.orderUnitSnapshot')

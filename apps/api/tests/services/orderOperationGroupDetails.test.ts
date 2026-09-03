@@ -4,13 +4,11 @@ import {
   latestOperationGroupOrderId,
   loadOperationGroupDetails,
   mergeOperationGroupItems,
+  operationGroupShipmentSummary,
 } from '../../src/services/orderOperationGroupDetails'
 import { operationGroupId } from '../../src/services/orderOperationGroups'
-import { FORMAL_DELIVERY_STATUSES, SERVER_SHIPMENT_DRAFT_KEY } from '../../src/services/shipmentDraftMarker'
 
-afterEach(() => {
-  vi.restoreAllMocks()
-})
+afterEach(() => vi.restoreAllMocks())
 
 describe('operation group printable item merge', () => {
   it('merges only identical product snapshots and preserves source order numbers', () => {
@@ -41,19 +39,110 @@ describe('operation group printable item merge', () => {
     })
   })
 
-  it('ignores removed zero-quantity delivery lines', () => {
+  it('preserves current zero-quantity delivery lines', () => {
     const items = mergeOperationGroupItems([
       {
         no: 'PO-01',
         items: [
-          { productId: 'p1', name: '土豆', spec: null, unit: 'kg', quantity: '0', amount: '0.00' },
+          { productId: 'p1', name: '土豆', spec: null, unit: 'kg', quantity: '0', unitPrice: '6.50', amount: '0.00' },
           { productId: 'p2', name: '青菜', spec: null, unit: 'kg', quantity: '2', amount: '20.00' },
         ],
       },
     ])
 
-    expect(items).toHaveLength(1)
-    expect(items[0]).toMatchObject({ productId: 'p2', quantity: '2.00', amount: '20.00' })
+    expect(items).toHaveLength(2)
+    expect(items.find(item => item.productId === 'p1')).toMatchObject({
+      quantity: '0.00', unitPrice: '6.50', amount: '0.00', sourceOrderNos: ['PO-01'],
+    })
+    expect(items.find(item => item.productId === 'p2')).toMatchObject({
+      quantity: '2.00', amount: '20.00', sourceOrderNos: ['PO-01'],
+    })
+  })
+})
+
+describe('operation group shipment amount boundary', () => {
+  it('adds every valid delivery snapshot without falling back to unordered members', () => {
+    expect(operationGroupShipmentSummary([
+      { deliveries: [{ status: 'SHIPPED', actualTotalAmount: '21.50' }, { status: 'DELIVERED', actualTotalAmount: '8.25' }] },
+      { deliveries: [] },
+      { deliveries: [{ status: 'DRAFT', actualTotalAmount: '999.00' }, { status: 'CANCELLED', actualTotalAmount: '999.00' }] },
+    ])).toEqual({ shipmentAmount: '29.75', hasAnyShipment: true, snapshotComplete: false })
+  })
+
+  it('reports zero shipment rather than substituting ordered money', () => {
+    expect(operationGroupShipmentSummary([{ deliveries: [] }, { deliveries: [] }])).toEqual({
+      shipmentAmount: '0.00', hasAnyShipment: false, snapshotComplete: false,
+    })
+  })
+})
+
+describe('operation group delivery summaries API', () => {
+  it('returns every valid delivery with its own frozen product lines in chronological order', async () => {
+    const memberIds = ['order-a', 'order-b']
+    const groupId = operationGroupId(memberIds)
+    const occurredAt = new Date('2026-09-03T03:00:00.000Z')
+    vi.spyOn(prisma.purchaseOrderEvent, 'findMany').mockResolvedValue(memberIds.map((purchaseOrderId, index) => ({
+      purchaseOrderId, occurredAt, metadata: { operationGroupId: groupId, operationGroupMemberIndex: index },
+    })) as any)
+
+    const base = {
+      storeId: 'store-1', supplierId: 'supplier-1', expectedDate: new Date('2026-09-05T00:00:00.000Z'),
+      status: 'CONFIRMED', updatedAt: occurredAt, rowVersion: 1, originalTotalAmount: '10.00', totalAmount: '10.00',
+      receivedAt: null, store: { id: 'store-1', no: 'S01', name: '一店' },
+      supplier: { id: 'supplier-1', name: '总仓' }, createdBy: null, shippedBy: null, items: [],
+    }
+    vi.spyOn(prisma.purchaseOrder, 'findMany').mockResolvedValue([
+      {
+        ...base, id: 'order-b', no: 'PO-02', createdAt: new Date('2026-09-03T02:00:00.000Z'), submittedAt: new Date('2026-09-03T02:00:00.000Z'),
+        deliveries: [],
+      },
+      {
+        ...base, id: 'order-a', no: 'PO-01', createdAt: new Date('2026-09-03T01:00:00.000Z'), submittedAt: new Date('2026-09-03T01:00:00.000Z'),
+        deliveries: [
+          { no: 'D-DRAFT', status: 'DRAFT', createdAt: new Date('2026-09-03T01:10:00.000Z'), actualTotalAmount: '99', items: [] },
+          {
+            id: 'delivery-late', no: 'D-LATE', status: 'DELIVERED', rowVersion: 4, receipt: { id: 'receipt-1' },
+            createdAt: new Date('2026-09-03T01:30:00.000Z'), shippedAt: new Date('2026-09-03T02:30:00.000Z'), actualTotalAmount: '6',
+            items: [{ id: 'di-2', productId: 'p2', shippedQty: '3', unitPriceSnapshot: '2', amount: '6', productNameSnapshot: '冻土豆', productUnitSnapshot: '袋', product: { name: '新土豆', unit: '箱' } }],
+          },
+          {
+            id: 'delivery-early', no: 'D-EARLY', status: 'SHIPPED', rowVersion: 2, receipt: null,
+            createdAt: new Date('2026-09-03T01:20:00.000Z'), shippedAt: new Date('2026-09-03T02:00:00.000Z'), actualTotalAmount: '4',
+            items: [{ id: 'di-1', productId: 'p1', shippedQty: '2', unitPriceSnapshot: '2', amount: '4', productNameSnapshot: '冻白菜', productUnitSnapshot: '斤', product: { name: '新白菜', unit: '箱' } }],
+          },
+          { no: 'D-CANCEL', status: 'CANCELLED', createdAt: occurredAt, actualTotalAmount: '99', items: [] },
+        ],
+      },
+    ] as any)
+
+    const detail = await loadOperationGroupDetails({ tenantId: 'tenant-1', role: 'SUPPLY_CHAIN' }, groupId)
+
+    expect(detail?.orders[0]).toMatchObject({
+      no: 'PO-01',
+      deliverySummaries: [
+        {
+          id: 'delivery-early', no: 'D-EARLY', status: 'SHIPPED', rowVersion: 2, hasReceipt: false,
+          items: [{ name: '冻白菜', unit: '斤', quantity: '2' }],
+        },
+        {
+          id: 'delivery-late', no: 'D-LATE', status: 'DELIVERED', rowVersion: 4, hasReceipt: true,
+          items: [{ name: '冻土豆', unit: '袋', quantity: '3' }],
+        },
+      ],
+    })
+    expect((detail?.orders[0] as any).deliverySummaries.map((delivery: any) => delivery.no))
+      .toEqual(['D-EARLY', 'D-LATE'])
+    expect((detail?.orders[1] as any).deliverySummaries).toEqual([])
+    expect(prisma.purchaseOrder.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      include: expect.objectContaining({
+        deliveries: expect.objectContaining({
+          include: expect.objectContaining({
+            items: expect.objectContaining({ where: { removedAt: null } }),
+            receipt: { select: { id: true } },
+          }),
+        }),
+      }),
+    }))
   })
 })
 
@@ -71,27 +160,5 @@ describe('operation group add-product owner', () => {
       { id: 'a01', createdAt: '2026-08-31T10:00:00.000Z' },
       { id: 'a02', createdAt: '2026-08-31T10:30:00.000Z' },
     ])).toBe('a02')
-  })
-})
-
-describe('operation group shipment-draft compatibility', () => {
-  it('loads only formal, unmarked deliveries for accepted group details', async () => {
-    const memberIds = ['order-a', 'order-b']
-    const groupId = operationGroupId(memberIds)
-    vi.spyOn(prisma.purchaseOrderEvent, 'findMany').mockResolvedValue(memberIds.map((purchaseOrderId, index) => ({
-      purchaseOrderId,
-      occurredAt: new Date(`2026-09-03T0${index + 1}:00:00.000Z`),
-      metadata: { operationGroupId: groupId, operationGroupMemberIndex: index },
-    })) as any)
-    const findMany = vi.spyOn(prisma.purchaseOrder, 'findMany').mockResolvedValue([])
-
-    await expect(loadOperationGroupDetails({ tenantId: 'tenant-a', role: 'SUPPLY_CHAIN' }, groupId)).resolves.toBeNull()
-
-    const deliveryWhere = (findMany.mock.calls[0][0] as any).include.deliveries.where
-    expect(deliveryWhere.status).toEqual({ in: [...FORMAL_DELIVERY_STATUSES] })
-    expect(deliveryWhere.OR).toEqual([
-      { idempotencyKey: null },
-      { idempotencyKey: { not: SERVER_SHIPMENT_DRAFT_KEY } },
-    ])
   })
 })

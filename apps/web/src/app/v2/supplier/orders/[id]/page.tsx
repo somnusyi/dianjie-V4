@@ -15,7 +15,15 @@ import {
   supplierLossClaimSettlementHint,
   supplierOrderStatusMeta,
 } from '@/lib/supplier-domain'
-import { Chip, ProgressDots } from '@/components/v2'
+import { Chip } from '@/components/v2'
+import {
+  OrderAmountCard,
+  OrderDeliverySummary,
+  OrderDetailHeader,
+  OrderProductTable,
+  OrderProgressCard,
+  type OrderDetailTableRow,
+} from '@/components/v2/order-detail-shared'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import dayjs from 'dayjs'
 import { clientRequestId } from '@/lib/client-id'
@@ -23,15 +31,21 @@ import {
   buildPartialShipmentLines,
   buildShipmentConfirmBody,
   computeShipmentNewTotal,
-  hasAnyPositiveShipment,
   mapFulfillmentToCloseSummary,
 } from '@/lib/partial-shipment-ui'
 import {
   calculateRevisionLineAmount,
+  matchesWarehouseProductSearch,
   RevisionCatalogProduct,
   resolveRevisionCatalogPricing,
   sumRevisionLineAmounts,
 } from '@/lib/supplier-revision-cost-pricing'
+import {
+  clearShipmentDraft,
+  readShipmentDraft,
+  shipmentDraftStorageKey,
+} from '@/lib/shipment-draft-storage'
+import { loadAllProductCatalog, loadAllWarehouseProductCatalog } from '@/lib/load-product-catalog'
 
 type Order = {
   id: string; no: string; status: string
@@ -59,8 +73,8 @@ type Order = {
     requestedBy?: { name: string }; reviewedBy?: { name: string } | null; reviewedAt?: string | null; reviewNote?: string | null
   }[]
   deliveries?: {
-    id: string; no: string; status: string; actualTotalAmount: string; rowVersion: number; shippedAt?: string | null; deliveredAt?: string | null; receivedAt?: string | null
-    items: { id: string; productId: string; shippedQty: string; receivedQty?: string | null; product?: { name: string; unit: string } }[]
+    id: string; no: string; status: string; actualTotalAmount: string; rowVersion: number; createdAt?: string | null; shippedAt?: string | null; deliveredAt?: string | null; receivedAt?: string | null
+    items: { id: string; purchaseOrderItemId?: string | null; productId: string; shippedQty: string; receivedQty?: string | null; unitPriceSnapshot?: string; amount?: string; productSpecSnapshot?: string | null; productUnitSnapshot?: string | null; product?: { name: string; unit: string; spec?: string | null } }[]
     receipt?: { id: string; no: string; totalAmount: string; status: string } | null
   }[]
   lossClaims?: {
@@ -91,13 +105,43 @@ type OperationGroupDetailResponse = {
   }>
 }
 
+type PendingDeliveryAddition = {
+  key: string
+  purchaseOrderItemId?: string | null
+  productId: string
+  name: string
+  spec: string | null
+  unit: string
+  unitPrice: number
+  quantity: number
+  pendingRemoval?: boolean
+}
+
+type ShipmentDraftPayloadItem = {
+  purchaseOrderItemId: string | null
+  productId: string
+  shippedQty: number
+  removed: boolean
+}
+
+type ShipmentDraftRecovery = {
+  attemptedItems: ShipmentDraftPayloadItem[]
+  shipQty: Record<string, number>
+  removedItemIds: string[]
+  restoreQty: Record<string, number>
+  additions: PendingDeliveryAddition[]
+  quantityDrafts: Record<string, string>
+  errorMessage: string
+}
+
 export default function SupplierOrderDetailPage() {
-  const orderBase = getUser()?.role === 'SUPPLY_CHAIN'
+  const viewer = getUser()
+  const orderBase = viewer?.role === 'SUPPLY_CHAIN'
     ? '/v2/supply-chain/fulfillment'
     : '/v2/supplier/orders'
-  const viewerRole = getUser()?.role || ''
-  const canRemoveDeliveryItem = viewerRole === 'SUPPLY_CHAIN'
-  const canAdjustDeliveryBeforeDelivery = viewerRole === 'SUPPLY_CHAIN'
+  const viewerRole = viewer?.role || ''
+  const viewerUserId = viewer?.id || ''
+  const canAdjustDeliveryDetails = viewerRole === 'SUPPLY_CHAIN'
   const params = useParams() as any
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -108,20 +152,29 @@ export default function SupplierOrderDetailPage() {
   // individual-order action.  Keep this guard independent of the async group
   // metadata load so a stale/deep link cannot expose a one-order mutation.
   const isOperationGroupContext = Boolean(operationGroupId)
+  // 内部供应链修改订货明细直接生效，不再进入门店确认步骤。
+  const isDirectOperationGroupRevision = viewerRole === 'SUPPLY_CHAIN'
   const [order, setOrder] = useState<Order | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [shipmentNotice, setShipmentNotice] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [removingItemId, setRemovingItemId] = useState<string | null>(null)
-  const [adjustingItemId, setAdjustingItemId] = useState<string | null>(null)
   const [deliveryQty, setDeliveryQty] = useState<Record<string, string>>({})
+  const [removedDeliveryItemIds, setRemovedDeliveryItemIds] = useState<string[]>([])
+  const [pendingDeliveryAdditions, setPendingDeliveryAdditions] = useState<PendingDeliveryAddition[]>([])
+  const [savedShipQty, setSavedShipQty] = useState<Record<string, number>>({})
+  const [saveNotice, setSaveNotice] = useState<string | null>(null)
   const [deliveryAddTarget, setDeliveryAddTarget] = useState<NonNullable<Order['deliveries']>[number] | null>(null)
+  const [shipmentAddOpen, setShipmentAddOpen] = useState(false)
   const [deliveryAddProductId, setDeliveryAddProductId] = useState('')
-  const [deliveryAddQuantity, setDeliveryAddQuantity] = useState('1')
+  const [deliveryAddSearch, setDeliveryAddSearch] = useState('')
   const [deliveryAdjustError, setDeliveryAdjustError] = useState<string | null>(null)
   const [shipNote, setShipNote] = useState('')
   // 发货时可调整每行的实际发货量 (称重 / 缺货). key=itemId, value=shippedQty
   const [shipQty, setShipQty] = useState<Record<string, number>>({})
+  const [removedShipmentItemIds, setRemovedShipmentItemIds] = useState<string[]>([])
+  const [savedRemovedShipmentItemIds, setSavedRemovedShipmentItemIds] = useState<string[]>([])
+  const [shipmentRestoreQty, setShipmentRestoreQty] = useState<Record<string, number>>({})
+  const [pendingShipmentAdditions, setPendingShipmentAdditions] = useState<PendingDeliveryAddition[]>([])
   // 送达备注 — 不用 window.prompt (WebView 禁用)
   const [deliverNote, setDeliverNote] = useState('')
   // 报损拒绝弹层 (state-driven, 替代 window.prompt)
@@ -129,12 +182,14 @@ export default function SupplierOrderDetailPage() {
   const [rejectNote, setRejectNote] = useState('')
   // 图片全屏放大 (target="_blank" 在 WebView 不工作)
   const [zoomImg, setZoomImg] = useState<string | null>(null)
-  // 接单前改单申请: 当前订货数量 + 可追加商品, 全部须门店确认
+  // 接单前改单：普通供应商保持申请流；内部操作组提交后直接生效。
   const [addOpen, setAddOpen] = useState(false)
   const [catalog, setCatalog] = useState<RevisionCatalogProduct[]>([])
   const [addQty, setAddQty] = useState<Record<string, number>>({})
-  const [addSearch, setAddSearch] = useState('')
-  const [adjustReason, setAdjustReason] = useState('')
+  const [removedOrderProductIds, setRemovedOrderProductIds] = useState<string[]>([])
+  // 数量编辑允许短暂为空，避免用户必须先输入新数字再删除旧数字。
+  const [quantityDrafts, setQuantityDrafts] = useState<Record<string, string>>({})
+  const [revisionError, setRevisionError] = useState<string | null>(null)
   const [groupAddContext, setGroupAddContext] = useState<{
     groupId: string
     targetNo: string
@@ -142,21 +197,125 @@ export default function SupplierOrderDetailPage() {
     memberCount: number
   } | null>(null)
   const groupAddAttemptedRef = useRef<string | null>(null)
+  const revisionRequestKeyRef = useRef<string | null>(null)
+  const shipRequestKeyRef = useRef<string | null>(null)
   const [confirmState, openConfirm] = useConfirmSheet()
 
-  function load() {
+  function shipmentDraftKey(orderId: string) {
+    if (typeof window === 'undefined' || !viewerUserId) return null
+    let tenantId = ''
+    try {
+      const storedTenant = JSON.parse(localStorage.getItem('tenant') || '{}')
+      tenantId = String(storedTenant?.id || storedTenant?.slug || '')
+    } catch {}
+    // Never place two tenants in a shared fallback namespace.
+    if (!tenantId) return null
+    return shipmentDraftStorageKey({ tenantId, userId: viewerUserId, orderId })
+  }
+
+  function load(options?: { shipmentDraftRecovery?: ShipmentDraftRecovery }) {
     apiFetch<Order>(`/api/orders/${id}`).then(data => {
       setOrder(data)
+      if (data.status !== 'CONFIRMED' && shipRequestKeyRef.current) {
+        shipRequestKeyRef.current = null
+        setDeliveryAdjustError(null)
+      }
       setDeliveryQty(Object.fromEntries((data.deliveries || []).flatMap(delivery =>
         delivery.items.map(item => [item.id, String(item.shippedQty)]))))
-    }).catch(e => setError(e.message || '加载失败'))
+      setAddQty(Object.fromEntries(data.items.map(item => [item.productId, Number(item.quantity)])))
+      setRemovedOrderProductIds([])
+      setQuantityDrafts({})
+      setRemovedDeliveryItemIds([])
+      setPendingDeliveryAdditions([])
+      const draftKey = shipmentDraftKey(data.id)
+      const serverDraft = (data.deliveries || []).find(delivery => delivery.status === 'DRAFT')
+      if (data.status === 'CONFIRMED' && serverDraft) {
+        const quantities = Object.fromEntries(serverDraft.items.map(item => [item.purchaseOrderItemId || `draft-${item.id}`, Number(item.shippedQty)]))
+        const recovery = options?.shipmentDraftRecovery
+        const signature = (items: Array<{ purchaseOrderItemId?: string | null; productId: string; shippedQty: number | string }>) => items
+          .map(item => `${item.purchaseOrderItemId || `product:${item.productId}`}|${item.productId}|${Number(item.shippedQty).toFixed(2)}`)
+          .sort()
+          .join('\n')
+        const attemptedActive = recovery?.attemptedItems.filter(item => !item.removed) || []
+        const recoveredSave = Boolean(recovery && signature(attemptedActive) === signature(serverDraft.items))
+        setShipQty(recovery && !recoveredSave ? { ...quantities, ...recovery.shipQty } : quantities)
+        setSavedShipQty(quantities)
+        setRemovedShipmentItemIds(recovery && !recoveredSave ? recovery.removedItemIds : [])
+        setSavedRemovedShipmentItemIds([])
+        setShipmentRestoreQty(recovery && !recoveredSave ? recovery.restoreQty : {})
+        setPendingShipmentAdditions(recovery && !recoveredSave ? recovery.additions : [])
+        setQuantityDrafts(recovery && !recoveredSave ? recovery.quantityDrafts : {})
+        if (recovery) {
+          if (recoveredSave) {
+            setDeliveryAdjustError(null)
+            setSaveNotice('商品明细已保存')
+          } else {
+            setDeliveryAdjustError(`${recovery.errorMessage}；已刷新服务器最新草稿，本地未保存编辑仍保留，请核对后重试`)
+          }
+        }
+        if (typeof window !== 'undefined' && draftKey) clearShipmentDraft(localStorage, draftKey)
+      } else if (data.status === 'CONFIRMED'
+          && (options?.shipmentDraftRecovery || (typeof window !== 'undefined' && draftKey))) {
+        const restored = typeof window !== 'undefined' && draftKey
+          ? readShipmentDraft(localStorage, draftKey, {
+              orderId: data.id,
+              orderRowVersion: data.rowVersion,
+              userId: viewerUserId,
+              itemIds: data.items.map(item => item.id),
+            })
+          : null
+        setShipQty(restored?.quantities || {})
+        setSavedShipQty(restored?.quantities || {})
+        setRemovedShipmentItemIds(restored?.removedItemIds || [])
+        setSavedRemovedShipmentItemIds(restored?.removedItemIds || [])
+        setShipmentRestoreQty(Object.fromEntries((restored?.removedItemIds || []).map(itemId => {
+          const line = buildPartialShipmentLines(data.items, {}).find(candidate => candidate.it.id === itemId)
+          return [itemId, line?.remaining || 0]
+        })))
+        setPendingShipmentAdditions(options?.shipmentDraftRecovery?.additions || [])
+        if (options?.shipmentDraftRecovery) {
+          setShipQty(current => ({ ...current, ...options.shipmentDraftRecovery!.shipQty }))
+          setRemovedShipmentItemIds(options.shipmentDraftRecovery.removedItemIds)
+          setShipmentRestoreQty(options.shipmentDraftRecovery.restoreQty)
+          setQuantityDrafts(options.shipmentDraftRecovery.quantityDrafts)
+          setDeliveryAdjustError(`${options.shipmentDraftRecovery.errorMessage}；服务器尚未返回已保存草稿，本地编辑仍保留，请重试`)
+        }
+      } else {
+        if (typeof window !== 'undefined' && draftKey) clearShipmentDraft(localStorage, draftKey)
+        setShipQty({})
+        setSavedShipQty({})
+        setRemovedShipmentItemIds([])
+        setSavedRemovedShipmentItemIds([])
+        setShipmentRestoreQty({})
+        setPendingShipmentAdditions([])
+      }
+    }).catch(e => {
+      if (options?.shipmentDraftRecovery) {
+        setDeliveryAdjustError(`${options.shipmentDraftRecovery.errorMessage}；重新加载最新草稿也失败，本地编辑仍保留`)
+      } else {
+        setError(e.message || '加载失败')
+      }
+    })
   }
-  useEffect(() => { load() }, [id])
+  useEffect(() => {
+    shipRequestKeyRef.current = null
+    load()
+  }, [id])
 
   function ship() {
     if (!order || isOperationGroupContext) return
     setShipmentNotice(null)
-    const lines = buildPartialShipmentLines(order.items, shipQty)
+    setDeliveryAdjustError(null)
+    const serverDraft = (order.deliveries || []).find(delivery => delivery.status === 'DRAFT') || null
+    const activeDraftOrderItemIds = new Set((serverDraft?.items || []).map(item => item.purchaseOrderItemId).filter(Boolean))
+    const effectiveShipQty = {
+      ...shipQty,
+      ...Object.fromEntries(removedShipmentItemIds.map(itemId => [itemId, 0])),
+      ...(serverDraft ? Object.fromEntries(order.items
+        .filter(item => !activeDraftOrderItemIds.has(item.id))
+        .map(item => [item.id, 0])) : {}),
+    }
+    const lines = buildPartialShipmentLines(order.items, effectiveShipQty)
     const newTotal = computeShipmentNewTotal(lines)
     const changed = lines.filter(l => l.changed)
     // 实发上限 per-product: max(下单 × shipUpperPct, 下单 + shipUpperBuffer)
@@ -174,19 +333,16 @@ export default function SupplierOrderDetailPage() {
       setError(`${overLimit.it.product?.name || ''} 实发超上限 ${shipUpper(overLimit.it).toFixed(2)} (下单 ${overLimit.it.quantity}, 该商品阈值: ≤ ${pct}×下单 或 ≤ 下单+${buf} 取大). 在商品页可调阈值.`)
       return
     }
-    if (!hasAnyPositiveShipment(lines)) {
-      setError('本次发货数量必须大于 0，零实发不会关闭订单或释放预占。如不发货请不要提交。')
-      return
-    }
-
-    const itemsBody = changed.length > 0 ? lines.map(l => ({ itemId: l.it.id, shippedQty: l.sq })) : undefined
-    const body = buildShipmentConfirmBody({
+    const itemsBody = !serverDraft && changed.length > 0 ? lines.map(l => ({ itemId: l.it.id, shippedQty: l.sq })) : undefined
+    const body = serverDraft ? `已保存 ${serverDraft.items.length} 项实发商品明细。确认后生成配送单并进入配送中。` : buildShipmentConfirmBody({
       itemCount: order.items.length,
       lines,
       newTotal,
       oldTotal: Number(order.totalAmount),
       inventoryMode: order.supplier.inventoryMode,
     })
+    const shipRequestKey = shipRequestKeyRef.current || clientRequestId()
+    shipRequestKeyRef.current = shipRequestKey
 
     openConfirm({
       title: `确认发货 ${order.no}?`,
@@ -198,15 +354,29 @@ export default function SupplierOrderDetailPage() {
         try {
           const res = await apiFetch<any>(`/api/orders/${order.id}/ship`, {
             method: 'PATCH',
-            body: JSON.stringify({ note: shipNote.trim() || undefined, items: itemsBody, idempotencyKey: clientRequestId() }),
+            body: JSON.stringify({
+              note: shipNote.trim() || undefined,
+              ...(!serverDraft ? { items: itemsBody, removedItemIds: removedShipmentItemIds } : {}),
+              ...(serverDraft ? { draftRowVersion: serverDraft.rowVersion } : {}),
+              idempotencyKey: shipRequestKey,
+            }),
           })
+          shipRequestKeyRef.current = null
           const fulfillment = mapFulfillmentToCloseSummary(res?.fulfillment)
           if (fulfillment?.hasClosedRemainder) {
             const closedNames = fulfillment.lines.filter(l => l.closedQty > 0).map(l => `${l.productName || '商品'} ${l.closedQty}`).join('、')
             setShipmentNotice(`发货成功。未发余量已关闭: ${closedNames}。不会补送，如仍需须门店重新下单。`)
           }
+          const draftKey = shipmentDraftKey(order.id)
+          if (typeof window !== 'undefined' && draftKey) clearShipmentDraft(localStorage, draftKey)
           load()
-        } catch (e: any) { setError(e.message || '发货失败'); throw e }
+        } catch (e: any) {
+          setDeliveryAdjustError(e.message || '发货失败')
+          // A lost response may still mean the transaction committed. Reloading
+          // reveals that success; otherwise the same request key remains ready
+          // for a user-confirmed retry against the refreshed draft version.
+          load()
+        }
         finally { setSubmitting(false) }
       },
     })
@@ -232,18 +402,29 @@ export default function SupplierOrderDetailPage() {
 
   // 打开改单 picker — 拉自家 catalog, 预填当前订单数量
   async function openAddPicker() {
+    if (!order) return
+    revisionRequestKeyRef.current = clientRequestId()
     setAddOpen(true)
-    setAddSearch(''); setAdjustReason('')
-    setAddQty(Object.fromEntries((order?.items || []).map(it => [it.productId, Number(it.quantity)])))
+    setCatalog([])
+    setDeliveryAddProductId('')
+    setDeliveryAddSearch('')
+    setRevisionError(null)
     try {
-      const data = await apiFetch<any>('/api/products')
-      const list = Array.isArray(data) ? data : (data?.items || [])
+      const list = isDirectOperationGroupRevision
+        ? await loadAllWarehouseProductCatalog(order.supplier.id)
+        : await loadAllProductCatalog()
       const existingIds = new Set((order?.items || []).map(it => it.productId))
       setCatalog((list as RevisionCatalogProduct[]).filter((p: RevisionCatalogProduct) => p.status === 'ENABLED' || existingIds.has(p.id)))
     } catch (e: any) {
       setError(e.message || '加载 catalog 失败')
-      setAddOpen(false)
+      closeAddPicker()
     }
+  }
+
+  function closeAddPicker() {
+    setAddOpen(false)
+    setRevisionError(null)
+    revisionRequestKeyRef.current = null
   }
 
   // A group card routes to the latest source order, while the API rechecks
@@ -273,7 +454,8 @@ export default function SupplierOrderDetailPage() {
           targetCreatedAt: latest.createdAt,
           memberCount: members.length,
         })
-        if (order.status === 'SUBMITTED' && !order.revisions?.some(revision => revision.status === 'PENDING')) {
+        if (order.status === 'SUBMITTED'
+            && (isDirectOperationGroupRevision || !order.revisions?.some(revision => revision.status === 'PENDING'))) {
           void openAddPicker()
         }
       })
@@ -281,23 +463,42 @@ export default function SupplierOrderDetailPage() {
         if (!cancelled) setError(error?.message || '集合信息加载失败')
       })
     return () => { cancelled = true }
-  }, [order, operationGroupId, groupAddRequested])
+  }, [order, operationGroupId, groupAddRequested, isDirectOperationGroupRevision])
 
   function setAddQtyFor(pid: string, q: number) {
+    setRevisionError(null)
+    setRemovedOrderProductIds(current => current.filter(productId => productId !== pid))
     setAddQty(prev => {
-      const next = { ...prev }
-      if (q <= 0) delete next[pid]
-      else next[pid] = q
-      return next
+      if (q < 0) return prev
+      return { ...prev, [pid]: q }
     })
   }
+
+  function removeOrderProduct(pid: string) {
+    setRevisionError(null)
+    setRemovedOrderProductIds(current => current.includes(pid) ? current : [...current, pid])
+    setSaveNotice(null)
+  }
+
+  function restoreOrderProduct(pid: string) {
+    setRemovedOrderProductIds(current => current.filter(productId => productId !== pid))
+    setRevisionError(null)
+    setSaveNotice(null)
+  }
+
+  function showRevisionError(message: string) {
+    if (isDirectOperationGroupRevision) setRevisionError(message)
+    else setError(message)
+  }
+
   async function submitAdd() {
     if (!order) return
-    const items = Object.entries(addQty).filter(([, q]) => q > 0).map(([productId, quantity]) => ({ productId, quantity }))
-    if (items.length === 0) { setError('订货单至少保留一个商品'); return }
-    if (!adjustReason.trim()) { setError('请填写改单原因'); return }
-
-    const amounts = items.map(({ productId, quantity }) => {
+    const catalogItems = Object.entries(addQty)
+      .filter(([productId, q]) => q >= 0 && !removedOrderProductIds.includes(productId))
+      .map(([productId, quantity]) => ({ productId, quantity }))
+    const items = catalogItems
+    if (items.length > 500) { showRevisionError('单次最多保留 500 条商品明细'); return }
+    const catalogAmounts = catalogItems.map(({ productId, quantity }) => {
       const existing = order.items.find(it => it.productId === productId)
       if (existing) {
         const p = catalog.find(c => c.id === productId)
@@ -312,23 +513,28 @@ export default function SupplierOrderDetailPage() {
       }
       const p = catalog.find(c => c.id === productId)
       if (!p) {
-        setError('商品目录已变化，请刷新后重新申请调整')
+        showRevisionError('商品目录已变化，请刷新后重新申请调整')
         return null
       }
       const pricing = resolveRevisionCatalogPricing(p)
       if (pricing.status === 'PENDING') {
-        setError(pricing.message)
+        showRevisionError(pricing.message)
         return null
       }
       return calculateRevisionLineAmount(quantity, pricing)
     })
-    const total = sumRevisionLineAmounts(amounts)
+    const total = sumRevisionLineAmounts(catalogAmounts)
     if (total === null) return
+    const requestKey = revisionRequestKeyRef.current || clientRequestId()
+    revisionRequestKeyRef.current = requestKey
+    const automaticReason = viewerRole === 'SUPPLY_CHAIN' ? '内部供应链商品明细调整' : '供应商商品明细调整'
 
     openConfirm({
-      title: `申请调整订货单?`,
-      body: `调整后 ${items.length} 项 · ¥${Number(total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n提交后须门店确认，确认前不能接单。\n原因: ${adjustReason.trim()}`,
-      confirmLabel: '提交申请',
+      title: isDirectOperationGroupRevision ? '确认并立即更新订货单？' : '申请调整订货单?',
+      body: isDirectOperationGroupRevision
+        ? `调整后 ${items.length} 项 · ¥${Number(total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n提交后立即生效，可返回集合继续批量接单。`
+        : `调整后 ${items.length} 项 · ¥${Number(total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n提交后须门店确认，确认前不能接单。`,
+      confirmLabel: isDirectOperationGroupRevision ? '确认修改' : '提交申请',
       tone: 'primary',
       onConfirm: async () => {
         setSubmitting(true)
@@ -337,14 +543,22 @@ export default function SupplierOrderDetailPage() {
             method: 'POST',
             body: JSON.stringify({
               items,
-              reason: adjustReason.trim(),
+              reason: automaticReason,
               baseRowVersion: order.rowVersion,
-              requestKey: clientRequestId(),
+              requestKey,
               ...(operationGroupId ? { operationGroupId } : {}),
             }),
           })
-          setAddOpen(false); load()
-        } catch (e: any) { setError(e.message || '改单申请失败'); throw e }
+          closeAddPicker()
+          if (isDirectOperationGroupRevision && operationGroupId) {
+            router.replace(`/v2/supply-chain/fulfillment/group/${encodeURIComponent(operationGroupId)}`)
+          } else {
+            load()
+          }
+        } catch (e: any) {
+          showRevisionError(e.message || (isDirectOperationGroupRevision ? '直接改单失败' : '改单申请失败'))
+          throw e
+        }
         finally { setSubmitting(false) }
       },
     })
@@ -373,79 +587,91 @@ export default function SupplierOrderDetailPage() {
     })
   }
 
-  function removeDeliveryItem(delivery: NonNullable<Order['deliveries']>[number], item: NonNullable<Order['deliveries']>[number]['items'][number]) {
-    if (!order || !canRemoveDeliveryItem || delivery.receipt || !['SHIPPED', 'DELIVERED'].includes(delivery.status)) return
+  function removeDeliveryItem(itemId: string) {
     setDeliveryAdjustError(null)
-    openConfirm({
-      title: `移除配送商品？`,
-      body: `${item.product?.name || '该商品'} · 实发 ${item.shippedQty}${item.product?.unit || ''}\n仅在门店确认收货前可操作。移除后会同步冲回供应商库存和配送金额，原订单历史仍保留。`,
-      confirmLabel: '确认移除',
-      tone: 'danger',
-      onConfirm: async () => {
-        setSubmitting(true)
-        setRemovingItemId(item.id)
-        try {
-          await apiFetch(`/api/deliveries/${delivery.id}/remove-item`, {
-            method: 'PATCH',
-            body: JSON.stringify({ itemId: item.id, rowVersion: delivery.rowVersion }),
-          })
-          load()
-        } catch (e: any) { setDeliveryAdjustError(e.message || '移除商品失败'); throw e }
-        finally { setSubmitting(false); setRemovingItemId(null) }
-      },
-    })
+    setRemovedDeliveryItemIds(current => current.includes(itemId) ? current : [...current, itemId])
+    setSaveNotice(null)
   }
 
-  function adjustDeliveryItemQuantity(delivery: NonNullable<Order['deliveries']>[number], item: NonNullable<Order['deliveries']>[number]['items'][number]) {
-    if (!order || !canAdjustDeliveryBeforeDelivery || delivery.receipt || delivery.status !== 'SHIPPED') return
-    setDeliveryAdjustError(null)
-    const targetQuantity = Number(deliveryQty[item.id])
-    const currentQuantity = Number(item.shippedQty)
-    if (!Number.isFinite(targetQuantity) || targetQuantity < 0) {
-      setDeliveryAdjustError('数量不能小于 0')
-      return
+  function restoreDeliveryItem(itemId: string) {
+    const productId = order?.deliveries
+      ?.flatMap(delivery => delivery.items)
+      .find(item => item.id === itemId)?.productId
+    setRemovedDeliveryItemIds(current => current.filter(id => id !== itemId))
+    // A restored server row owns this product again. Drop any stale local
+    // addition defensively so save can never submit add + remove together.
+    if (productId) {
+      setPendingDeliveryAdditions(current => current.filter(item => item.productId !== productId))
     }
-    if (Math.abs(targetQuantity - currentQuantity) < 0.0001) return
-    openConfirm({
-      title: '修改配送数量？',
-      body: `${item.product?.name || '该商品'} · ${currentQuantity}${item.product?.unit || ''} → ${targetQuantity}${item.product?.unit || ''}\n数量保存为 0 时商品仍保留；仅点击“移除”才会移除商品。库存、金额和送货单会同步更新。`,
-      confirmLabel: '确认修改',
-      tone: 'primary',
-      onConfirm: async () => {
-        setSubmitting(true)
-        setAdjustingItemId(item.id)
-        try {
-          await apiFetch(`/api/deliveries/${delivery.id}/item-quantity`, {
-            method: 'PATCH',
-            body: JSON.stringify({
-              itemId: item.id,
-              rowVersion: delivery.rowVersion,
-              targetQuantity,
-            }),
-          })
-          load()
-        } catch (e: any) { setDeliveryAdjustError(e.message || '修改数量失败'); throw e }
-        finally { setSubmitting(false); setAdjustingItemId(null) }
-      },
-    })
+    setSaveNotice(null)
   }
 
-  function canSaveDeliveryItemQuantity(item: NonNullable<Order['deliveries']>[number]['items'][number]) {
-    const targetQuantity = Number(deliveryQty[item.id])
-    return Number.isFinite(targetQuantity)
-      && targetQuantity >= 0
-      && Math.abs(targetQuantity - Number(item.shippedQty)) >= 0.0001
+  function removeShipmentItem(itemId: string, displayedQuantity?: number) {
+    const currentLine = order ? buildPartialShipmentLines(order.items, shipQty).find(line => line.it.id === itemId) : null
+    setShipmentRestoreQty(current => ({
+      ...current,
+      [itemId]: displayedQuantity ?? (currentLine && currentLine.sq > 0 ? currentLine.sq : currentLine?.remaining || 0),
+    }))
+    setRemovedShipmentItemIds(current => current.includes(itemId) ? current : [...current, itemId])
+    setSaveNotice(null)
+  }
+
+  function restoreShipmentItem(itemId: string, displayedQuantity?: number) {
+    const fallback = order ? buildPartialShipmentLines(order.items, {}).find(line => line.it.id === itemId)?.remaining || 0 : 0
+    const quantity = shipmentRestoreQty[itemId] ?? displayedQuantity ?? fallback
+    setShipQty(current => ({ ...current, [itemId]: quantity }))
+    setRemovedShipmentItemIds(current => current.filter(id => id !== itemId))
+    setQuantityDrafts(current => {
+      const next = { ...current }
+      delete next[itemId]
+      return next
+    })
+    setSaveNotice(null)
+  }
+
+  async function openShipmentAdd() {
+    if (!order || order.status !== 'CONFIRMED') return
+    setDeliveryAdjustError(null)
+    setDeliveryAddTarget(null)
+    setShipmentAddOpen(true)
+    setDeliveryAddProductId('')
+    setDeliveryAddSearch('')
+    setCatalog([])
+    try {
+      const list = await loadAllWarehouseProductCatalog(order.supplier.id)
+      const originalProductIds = new Set(order.items.map(item => item.productId))
+      const products = new Map((list as RevisionCatalogProduct[]).map(product => [product.id, product]))
+      // 已保存移除的原订货行不会出现在 DRAFT items 中；即使商品后来
+      // 停用或移出仓库目录，也必须保留一个原订单快照入口供用户恢复。
+      for (const item of order.items) {
+        if (products.has(item.productId)) continue
+        products.set(item.productId, {
+          id: item.productId,
+          name: item.product?.name || '商品',
+          code: item.product?.code || null,
+          spec: item.product?.spec || null,
+          category: null,
+          unit: item.orderUnitSnapshot || item.productUnitSnapshot || item.product?.unit || null,
+          status: 'ORDER_SNAPSHOT',
+        })
+      }
+      setCatalog([...products.values()].filter(product => product.status === 'ENABLED' || originalProductIds.has(product.id)))
+    } catch (e: any) {
+      setShipmentAddOpen(false)
+      setDeliveryAdjustError(e.message || '加载商品目录失败')
+    }
   }
 
   async function openDeliveryAdd(delivery: NonNullable<Order['deliveries']>[number]) {
-    if (!order || !canAdjustDeliveryBeforeDelivery || delivery.receipt || delivery.status !== 'SHIPPED') return
+    if (!order || !canAdjustDeliveryDetails || delivery.receipt || !['SHIPPED', 'DELIVERED'].includes(delivery.status)) return
     setDeliveryAdjustError(null)
+    setShipmentAddOpen(false)
     setDeliveryAddTarget(delivery)
     setDeliveryAddProductId('')
-    setDeliveryAddQuantity('1')
+    setDeliveryAddSearch('')
+    setCatalog([])
     try {
-      const data = await apiFetch<any>(`/api/products?supplierId=${encodeURIComponent(order.supplier.id)}&page=1&pageSize=100`)
-      const list = Array.isArray(data) ? data : (data?.items || [])
+      const list = await loadAllWarehouseProductCatalog(order.supplier.id)
       setCatalog((list as RevisionCatalogProduct[]).filter(product => product.status === 'ENABLED'))
     } catch (e: any) {
       setDeliveryAddTarget(null)
@@ -453,26 +679,94 @@ export default function SupplierOrderDetailPage() {
     }
   }
 
-  async function submitDeliveryAdd() {
-    if (!order || !deliveryAddTarget || submitting) return
+  async function submitDetailAdd() {
+    if (!order || (!deliveryAddTarget && !shipmentAddOpen && !addOpen)) return
     setDeliveryAdjustError(null)
-    const quantity = Number(deliveryAddQuantity)
-    if (!Number.isFinite(quantity) || quantity <= 0) { setDeliveryAdjustError('新增数量必须大于 0'); return }
     if (!deliveryAddProductId) { setDeliveryAdjustError('请选择仓库商品'); return }
-    setSubmitting(true)
-    try {
-      await apiFetch(`/api/deliveries/${deliveryAddTarget.id}/add-item`, {
-        method: 'POST',
-        body: JSON.stringify({
-          quantity,
-          rowVersion: deliveryAddTarget.rowVersion,
-          productId: deliveryAddProductId,
-        }),
-      })
+    const product = catalog.find(item => item.id === deliveryAddProductId)
+    if (!product) { setDeliveryAdjustError('商品目录已变化，请重新选择'); return }
+    if (addOpen) {
+      const existing = order.items.find(item => item.productId === product.id)
+      if (existing && removedOrderProductIds.includes(product.id)) {
+        restoreOrderProduct(product.id)
+      } else {
+        const pricing = existing ? null : resolveRevisionCatalogPricing(product)
+        if (!existing && pricing?.status !== 'READY') { setDeliveryAdjustError('该商品价格待核验，暂不能加入'); return }
+        setAddQtyFor(product.id, 1)
+      }
+      closeAddPicker()
+      setDeliveryAddProductId('')
+      setSaveNotice(null)
+      return
+    }
+    if (shipmentAddOpen) {
+      const original = order.items.find(item => item.productId === product.id)
+      const pricing = original ? null : resolveRevisionCatalogPricing(product)
+      if (!original && pricing?.status !== 'READY') { setDeliveryAdjustError('该商品价格待核验，暂不能加入'); return }
+      const unit = original?.orderUnitSnapshot || original?.productUnitSnapshot || original?.product?.unit
+        || (pricing?.status === 'READY' ? pricing.orderUnit : product.unit) || ''
+      const unitPrice = original ? Number(original.unitPrice) : Number(pricing?.status === 'READY' ? pricing.orderUnitPrice : 0)
+      setPendingShipmentAdditions(current => [...current, {
+        key: original?.id || `shipment-add-${product.id}`,
+        purchaseOrderItemId: original?.id || null,
+        productId: product.id,
+        name: original?.product?.name || product.name,
+        spec: original?.product?.spec || product.spec || null,
+        unit,
+        unitPrice,
+        quantity: original ? Number(original.quantity) : 1,
+      }])
+      setShipmentAddOpen(false)
+      setDeliveryAddProductId('')
+      setSaveNotice(null)
+      return
+    }
+    const pendingRemovedItem = deliveryAddTarget!.items.find(item =>
+      item.productId === product.id && removedDeliveryItemIds.includes(item.id))
+    if (pendingRemovedItem) {
+      // Re-selecting a row removed during this unsaved edit is an undo. Do not
+      // send an addition and removal for the same delivery product.
+      restoreDeliveryItem(pendingRemovedItem.id)
+      setDeliveryAddProductId('')
       setDeliveryAddTarget(null)
-      load()
-    } catch (e: any) { setDeliveryAdjustError(e.message || '增加商品失败') }
-    finally { setSubmitting(false) }
+      return
+    }
+    const pricing = resolveRevisionCatalogPricing(product)
+    if (pricing.status !== 'READY') { setDeliveryAdjustError('该商品价格待核验，暂不能加入'); return }
+    setPendingDeliveryAdditions(current => [...current, {
+      key: clientRequestId(),
+      productId: product.id,
+      name: product.name,
+      spec: product.spec || null,
+      unit: pricing.orderUnit,
+      unitPrice: Number(pricing.orderUnitPrice),
+      quantity: 1,
+    }])
+    setDeliveryAddTarget(null)
+    setSaveNotice(null)
+  }
+
+  async function saveDeliveryDetails(delivery: NonNullable<Order['deliveries']>[number]) {
+    const quantityChanges = delivery.items.flatMap(item => {
+      if (removedDeliveryItemIds.includes(item.id)) return []
+      const targetQuantity = Number(deliveryQty[item.id] ?? item.shippedQty)
+      if (!Number.isFinite(targetQuantity) || targetQuantity < 0) throw new Error(`${item.product?.name || '商品'}数量无效`)
+      return Math.abs(targetQuantity - Number(item.shippedQty)) >= 0.0001
+        ? [{ itemId: item.id, targetQuantity }]
+        : []
+    })
+    await apiFetch(`/api/deliveries/${delivery.id}/items`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        rowVersion: delivery.rowVersion,
+        reason: '商品明细统一保存',
+        quantityChanges,
+        removals: removedDeliveryItemIds.map(itemId => ({ itemId })),
+        additions: pendingDeliveryAdditions
+          .filter(item => !item.pendingRemoval)
+          .map(item => ({ productId: item.productId, quantity: item.quantity })),
+      }),
+    })
   }
 
   if (!order && !error) {
@@ -497,46 +791,354 @@ export default function SupplierOrderDetailPage() {
   const step = status.progressStep
   const tone = status.tone
   const pendingRevision = order.revisions?.find(revision => revision.status === 'PENDING')
-  const originalAmount = Number(order.originalTotalAmount ?? order.totalAmount)
   const currentOrderAmount = Number(order.currentOrderAmount ?? order.originalTotalAmount ?? order.totalAmount)
   const shipmentAmount = (order.deliveries || [])
-    .filter(delivery => delivery.status !== 'CANCELLED')
+    .filter(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
     .reduce((sum, delivery) => sum + Number(delivery.actualTotalAmount || 0), 0)
-  const receivedAmount = (order.receipts || []).reduce((sum, receipt) => sum + Number(receipt.totalAmount || 0), 0)
-  const shipLinesForButton = order.status === 'CONFIRMED' ? buildPartialShipmentLines(order.items, shipQty) : null
-  const shipAllZero = shipLinesForButton ? !hasAnyPositiveShipment(shipLinesForButton) : false
+  const effectiveShipQty = {
+    ...shipQty,
+    ...Object.fromEntries(removedShipmentItemIds.map(itemId => [itemId, 0])),
+  }
+  // The detail API returns deliveries in creation order. Once a real delivery
+  // exists it owns the editable/displayed product snapshot until its receipt
+  // is saved; purchase-order lines are only a pre-delivery source.
+  const currentDeliveries = (order.deliveries || [])
+    .filter(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
+  const currentDelivery = currentDeliveries[currentDeliveries.length - 1] || null
+  const draftDelivery = (order.deliveries || []).find(delivery => delivery.status === 'DRAFT') || null
+  const editableDelivery = currentDelivery
+    && canAdjustDeliveryDetails
+    && !currentDelivery.receipt
+    && ['SHIPPED', 'DELIVERED'].includes(currentDelivery.status)
+    ? currentDelivery
+    : null
+  const canEditSubmittedDetails = !currentDelivery && order.status === 'SUBMITTED'
+    && (isDirectOperationGroupRevision || !pendingRevision)
+  const canEditConfirmedDetails = !currentDelivery && order.status === 'CONFIRMED' && !isOperationGroupContext
+  const canEditDeliveryDetails = Boolean(editableDelivery)
+
+  const submittedCatalogRows = catalog.filter(product =>
+    Object.prototype.hasOwnProperty.call(addQty, product.id) && !order.items.some(item => item.productId === product.id))
+  const submittedRows = [
+    ...order.items.map(item => ({
+      key: item.id,
+      itemId: item.id,
+      productId: item.productId,
+      name: item.product?.name || '-',
+      spec: item.product?.spec || null,
+      unit: item.orderUnitSnapshot || item.productUnitSnapshot || item.product?.unit || '',
+      unitPrice: Number(item.unitPrice),
+      quantity: addQty[item.productId] ?? Number(item.quantity),
+      originalQuantity: Number(item.quantity),
+      source: 'order' as const,
+      pendingRemoval: removedOrderProductIds.includes(item.productId),
+    })),
+    ...submittedCatalogRows.map(product => {
+      const pricing = resolveRevisionCatalogPricing(product)
+      return {
+        key: `catalog-${product.id}`,
+        productId: product.id,
+        name: product.name,
+        spec: product.spec || null,
+        unit: pricing.status === 'READY' ? pricing.orderUnit : product.unit,
+        unitPrice: pricing.status === 'READY' ? Number(pricing.orderUnitPrice) : 0,
+        quantity: addQty[product.id] || 0,
+        originalQuantity: 0,
+        source: 'catalog' as const,
+        pendingRemoval: removedOrderProductIds.includes(product.id),
+      }
+    }),
+  ]
+
+  const confirmedLines = canEditConfirmedDetails ? buildPartialShipmentLines(order.items, effectiveShipQty) : []
+  const confirmedDraftRows = draftDelivery ? draftDelivery.items.map(item => {
+    const original = order.items.find(candidate => candidate.id === item.purchaseOrderItemId)
+      || order.items.find(candidate => candidate.productId === item.productId)
+    const key = item.purchaseOrderItemId || `draft-${item.id}`
+    const pendingRemoval = removedShipmentItemIds.includes(key)
+    const baselineQuantity = Number(item.shippedQty)
+    return {
+      key,
+      itemId: key,
+      purchaseOrderItemId: item.purchaseOrderItemId || null,
+      productId: item.productId,
+      name: item.product?.name || original?.product?.name || '-',
+      spec: item.productSpecSnapshot || item.product?.spec || original?.product?.spec || null,
+      unit: item.productUnitSnapshot || item.product?.unit || original?.orderUnitSnapshot || original?.productUnitSnapshot || original?.product?.unit || '',
+      unitPrice: Number(item.unitPriceSnapshot ?? (Number(item.amount || 0) / Math.max(baselineQuantity, 1))),
+      quantity: pendingRemoval
+        ? shipmentRestoreQty[key] ?? savedShipQty[key] ?? baselineQuantity
+        : shipQty[key] ?? baselineQuantity,
+      originalQuantity: savedShipQty[key] ?? baselineQuantity,
+      source: 'shipment' as const,
+      pendingRemoval,
+    }
+  }) : []
+  const localShipmentAdditionRows = pendingShipmentAdditions.map(item => ({
+    key: item.key,
+    itemId: item.key,
+    purchaseOrderItemId: item.purchaseOrderItemId || null,
+    productId: item.productId,
+    name: item.name,
+    spec: item.spec,
+    unit: item.unit,
+    unitPrice: item.unitPrice,
+    quantity: item.quantity,
+    originalQuantity: 0,
+    source: 'shipment-addition' as const,
+    pendingRemoval: item.pendingRemoval === true,
+  }))
+  const deliveryRows = currentDelivery ? [
+    ...currentDelivery.items
+      .map(item => ({
+      key: item.id,
+      itemId: item.id,
+      productId: item.productId,
+      name: item.product?.name || '-',
+      spec: item.productSpecSnapshot || item.product?.spec || null,
+      unit: item.productUnitSnapshot || item.product?.unit || '',
+      unitPrice: Number(item.unitPriceSnapshot ?? (Number(item.amount || 0) / Math.max(Number(item.shippedQty), 1))),
+      quantity: canEditDeliveryDetails ? Number(deliveryQty[item.id] ?? item.shippedQty) : Number(item.shippedQty),
+      originalQuantity: Number(item.shippedQty),
+      source: 'delivery' as const,
+      pendingRemoval: canEditDeliveryDetails && removedDeliveryItemIds.includes(item.id),
+    })),
+    ...(canEditDeliveryDetails
+      ? pendingDeliveryAdditions.map(item => ({
+          key: item.key,
+          productId: item.productId,
+          name: item.name,
+          spec: item.spec,
+          unit: item.unit,
+          unitPrice: item.unitPrice,
+          quantity: item.quantity,
+          originalQuantity: 0,
+          source: 'delivery-addition' as const,
+          pendingRemoval: item.pendingRemoval === true,
+        }))
+      : []),
+  ] : []
+
+  const detailRows = currentDelivery
+    ? deliveryRows
+    : canEditConfirmedDetails
+      ? [
+        ...(draftDelivery ? confirmedDraftRows : confirmedLines
+          .filter(line => !(savedRemovedShipmentItemIds.includes(line.it.id) && removedShipmentItemIds.includes(line.it.id)))
+          .map(line => {
+          const fullItem = order.items.find(item => item.id === line.it.id)
+          const pendingRemoval = removedShipmentItemIds.includes(line.it.id)
+          return ({
+          key: line.it.id,
+          itemId: line.it.id,
+          productId: line.it.productId,
+          name: line.it.product?.name || '-',
+          spec: fullItem?.product?.spec || null,
+          unit: fullItem?.orderUnitSnapshot || fullItem?.productUnitSnapshot || line.it.product?.unit || '',
+          unitPrice: Number(line.it.unitPrice),
+          quantity: pendingRemoval
+            ? shipmentRestoreQty[line.it.id] ?? savedShipQty[line.it.id] ?? line.remaining
+            : line.sq,
+          originalQuantity: savedShipQty[line.it.id] ?? line.remaining,
+          source: 'shipment' as const,
+          pendingRemoval,
+        })})),
+        ...localShipmentAdditionRows,
+      ]
+      : canEditSubmittedDetails
+        ? submittedRows
+        : order.items.map(item => ({
+            key: item.id,
+            itemId: item.id,
+            productId: item.productId,
+            name: item.product?.name || '-',
+            spec: item.product?.spec || null,
+            unit: item.orderUnitSnapshot || item.productUnitSnapshot || item.product?.unit || '',
+            unitPrice: Number(item.unitPrice),
+            quantity: Number(item.shippedQty ?? item.quantity),
+            originalQuantity: Number(item.shippedQty ?? item.quantity),
+            source: 'readonly' as const,
+            pendingRemoval: false,
+          }))
+
+  const detailTotal = detailRows
+    .filter(row => !row.pendingRemoval)
+    .reduce((sum, row) => sum + row.quantity * row.unitPrice, 0)
+
+  const quantityDraftReason = (rawValue: string) => {
+    const text = rawValue.trim()
+    const quantity = Number(text)
+    if (!text || !Number.isFinite(quantity) || quantity < 0) return '数量不能为空且不能小于 0'
+    if (Math.abs(quantity * 100 - Math.round(quantity * 100)) >= 0.000001) return '数量最多保留 2 位小数'
+    return null
+  }
+  let invalidQuantityDraft: { name: string; reason: string } | null = null
+  for (const [key, rawValue] of Object.entries(quantityDrafts)) {
+    const row = detailRows.find(candidate => candidate.key === key)
+    if (!row || row.pendingRemoval) continue
+    const reason = quantityDraftReason(rawValue)
+    if (reason) {
+      invalidQuantityDraft = { name: row.name, reason }
+      break
+    }
+  }
+
+  const submittedDirty = canEditSubmittedDetails && (
+    order.items.some(item => Math.abs((addQty[item.productId] ?? 0) - Number(item.quantity)) >= 0.0001)
+    || submittedCatalogRows.length > 0
+    || removedOrderProductIds.length > 0
+  )
+  const shipmentDirty = canEditConfirmedDetails && (detailRows.some(row =>
+    row.source === 'shipment-addition'
+    || row.pendingRemoval
+    || (row.source === 'shipment' && Math.abs(row.quantity - row.originalQuantity) >= 0.0001))
+    || [...removedShipmentItemIds].sort().join('|') !== [...savedRemovedShipmentItemIds].sort().join('|')
+    || pendingShipmentAdditions.length > 0)
+  const deliveryDirty = canEditDeliveryDetails && (
+    editableDelivery?.items.some(item => !removedDeliveryItemIds.includes(item.id)
+      && Math.abs(Number(deliveryQty[item.id] ?? item.shippedQty) - Number(item.shippedQty)) >= 0.0001)
+    || removedDeliveryItemIds.length > 0
+    || pendingDeliveryAdditions.length > 0
+  )
+  const detailsDirty = submittedDirty || shipmentDirty || deliveryDirty || Boolean(invalidQuantityDraft)
+  const canShowSave = canEditSubmittedDetails || canEditConfirmedDetails || canEditDeliveryDetails
+  const hasActualDelivery = (order.deliveries || []).some(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
+  const displayedShipmentAmount = canShowSave || !hasActualDelivery ? detailTotal : shipmentAmount
+
+  async function saveDetails() {
+    if (!order || !detailsDirty || submitting) return
+    setError(null)
+    setSaveNotice(null)
+    if (invalidQuantityDraft) {
+      setDeliveryAdjustError(`${invalidQuantityDraft.name}：${invalidQuantityDraft.reason}`)
+      return
+    }
+    if (canEditSubmittedDetails) {
+      const hasServerChange = order.items.some(item => removedOrderProductIds.includes(item.productId)
+        || Math.abs((addQty[item.productId] ?? Number(item.quantity)) - Number(item.quantity)) >= 0.0001)
+        || submittedCatalogRows.some(product => !removedOrderProductIds.includes(product.id))
+      if (!hasServerChange) {
+        const cancelledProductIds = new Set(removedOrderProductIds.filter(productId => !order.items.some(item => item.productId === productId)))
+        setAddQty(current => Object.fromEntries(Object.entries(current).filter(([productId]) => !cancelledProductIds.has(productId))))
+        setRemovedOrderProductIds(current => current.filter(productId => !cancelledProductIds.has(productId)))
+        setSaveNotice('商品明细已保存')
+        return
+      }
+      await submitAdd()
+      return
+    }
+    if (canEditConfirmedDetails) {
+      const confirmedRowsForSave = detailRows.filter(row => row.source === 'shipment' || row.source === 'shipment-addition')
+      const originalIds = new Set(order.items.map(item => item.id))
+      const items: Array<{
+        purchaseOrderItemId: string | null
+        productId: string
+        shippedQty: number
+        removed: boolean
+      }> = order.items.map(item => {
+        const row = confirmedRowsForSave.find(candidate => candidate.key === item.id
+          || ('purchaseOrderItemId' in candidate && candidate.purchaseOrderItemId === item.id))
+        const removed = !row || row.pendingRemoval === true
+        return {
+          purchaseOrderItemId: item.id,
+          productId: item.productId,
+          shippedQty: removed ? 0 : row.quantity,
+          removed,
+        }
+      })
+      for (const row of confirmedRowsForSave) {
+        const purchaseOrderItemId = 'purchaseOrderItemId' in row ? row.purchaseOrderItemId : row.itemId
+        if ((purchaseOrderItemId && originalIds.has(purchaseOrderItemId))
+            || (row.source === 'shipment-addition' && row.pendingRemoval)) continue
+        items.push({
+          purchaseOrderItemId: purchaseOrderItemId || null,
+          productId: row.productId,
+          shippedQty: row.pendingRemoval ? 0 : row.quantity,
+          removed: row.pendingRemoval === true,
+        })
+      }
+      const invalid = items.find(item => !Number.isFinite(item.shippedQty) || item.shippedQty < 0)
+      if (invalid) { setError('实发数量不能小于 0'); return }
+      setSubmitting(true)
+      try {
+        await apiFetch(`/api/orders/${order.id}/shipment-draft`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            orderRowVersion: order.rowVersion,
+            draftRowVersion: draftDelivery?.rowVersion ?? null,
+            items,
+          }),
+        })
+        const draftKey = shipmentDraftKey(order.id)
+        if (typeof window !== 'undefined' && draftKey) clearShipmentDraft(localStorage, draftKey)
+        setSaveNotice('商品明细已保存')
+        load()
+      } catch (e: any) {
+        const errorMessage = e.message || '发货商品明细保存失败'
+        setDeliveryAdjustError(errorMessage)
+        load({
+          shipmentDraftRecovery: {
+            attemptedItems: items.map(item => ({ ...item })),
+            shipQty: { ...shipQty },
+            removedItemIds: [...removedShipmentItemIds],
+            restoreQty: { ...shipmentRestoreQty },
+            additions: pendingShipmentAdditions.map(item => ({ ...item })),
+            quantityDrafts: { ...quantityDrafts },
+            errorMessage,
+          },
+        })
+      } finally {
+        setSubmitting(false)
+      }
+      return
+    }
+    if (editableDelivery) {
+      const hasServerChange = editableDelivery.items.some(item => !removedDeliveryItemIds.includes(item.id)
+        && Math.abs(Number(deliveryQty[item.id] ?? item.shippedQty) - Number(item.shippedQty)) >= 0.0001)
+        || removedDeliveryItemIds.length > 0
+        || pendingDeliveryAdditions.some(item => !item.pendingRemoval)
+      if (!hasServerChange) {
+        setPendingDeliveryAdditions([])
+        setSaveNotice('商品明细已保存')
+        return
+      }
+      setSubmitting(true)
+      try {
+        await saveDeliveryDetails(editableDelivery)
+        setSaveNotice('商品明细已保存')
+        load()
+      } catch (e: any) {
+        setDeliveryAdjustError(e.message || '保存商品明细失败')
+      } finally {
+        setSubmitting(false)
+      }
+    }
+  }
 
   return (
     <div className="min-h-screen bg-bg pb-32">
-      <header className="px-4 pt-4 pb-2 flex items-center gap-2">
-        <button onClick={() => router.back()} className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</button>
-        <h1 className="text-h1 flex-1 truncate">订单详情</h1>
-        <button
-          onClick={() => router.push(`${orderBase}/${order.id}/delivery-note`)}
-          className="px-3 py-1.5 rounded-cta border border-border bg-white text-button text-gray2 whitespace-nowrap"
-          title="打开打印 / 导出 PDF 页面"
-        >🖨 送货单</button>
-        <Chip tone={tone}>{status.detailLabel}</Chip>
-      </header>
+      <OrderDetailHeader onBack={() => router.back()} onDeliveryNote={() => router.push(`${orderBase}/${order.id}/delivery-note`)}
+        statusLabel={status.detailLabel} statusTone={tone} />
       {shipmentNotice && (
         <div className="mx-4 mt-2 rounded-card border border-green-fg/20 bg-green-bg p-3 text-caption text-green-fg">
           {shipmentNotice}
         </div>
       )}
+      {saveNotice && (
+        <div className="mx-4 mt-2 rounded-card border border-green-fg/20 bg-green-bg p-3 text-caption text-green-fg">
+          {saveNotice}
+        </div>
+      )}
       {groupAddContext && (
         <div className="mx-4 mt-2 rounded-card border border-amber/30 bg-amber/10 p-3 text-caption text-amber-fg">
-          集合新增商品默认加入下单时间最晚的原订单 <b>#{groupAddContext.targetNo}</b>（{dayjs(groupAddContext.targetCreatedAt).format('MM/DD HH:mm')}）。
+          集合改单将更新下单时间最晚的原订单 <b>#{groupAddContext.targetNo}</b>（{dayjs(groupAddContext.targetCreatedAt).format('MM/DD HH:mm')}）。
           集合内共 {groupAddContext.memberCount} 张原订单，其他订单不变。
         </div>
       )}
 
-      {/* 主信息 */}
-      <div className="mx-4 mt-2 bg-white rounded-card border border-border p-4">
-        <div className="text-micro text-gray3 font-num">#{order.no}</div>
-        <div className="flex items-baseline justify-between mt-1">
-          <span className="text-h2">{order.store.name}</span>
-          <span className="text-right"><span className="text-micro text-gray3 block">{SUPPLIER_MONEY_TERMS.orderedAmount}</span><span className="font-num text-h1">¥{currentOrderAmount.toLocaleString()}</span></span>
-        </div>
+      <OrderAmountCard eyebrow={`#${order.no}`} name={order.store.name} amountLabel={SUPPLIER_MONEY_TERMS.shipmentAmount}
+        amount={displayedShipmentAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        originalOrderAmount={Number(order.originalTotalAmount ?? order.totalAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}>
         {order.store.address && <div className="text-micro text-gray3 mt-1">📍 {order.store.address}</div>}
         <div className="text-caption text-gray2 mt-2">
           下单 {dayjs(order.createdAt).format('MM/DD HH:mm')} · 期望到货 {dayjs(order.expectedDate).format('MM/DD')}
@@ -546,160 +1148,90 @@ export default function SupplierOrderDetailPage() {
         </div>
         {order.note && <div className="mt-2 bg-bg rounded p-2 text-caption text-gray2">📝 {order.note}</div>}
         {order.shippedNote && <div className="mt-2 bg-amber/10 rounded p-2 text-caption text-amber-fg">📦 发货备注: {order.shippedNote}</div>}
-        {(order.currentRevisionNo || 0) > 0 && (
-          <div className="mt-2 text-micro text-gray3">
-            原始订货 ¥{originalAmount.toLocaleString()} · 当前第 {order.currentRevisionNo} 版 ¥{currentOrderAmount.toLocaleString()}
-          </div>
-        )}
-        <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-border">
-          <div>
-            <div className="text-micro text-gray3">{SUPPLIER_MONEY_TERMS.orderedAmount}</div>
-            <div className="font-num text-caption">¥{currentOrderAmount.toLocaleString()}</div>
-          </div>
-          <div>
-            <div className="text-micro text-gray3">{SUPPLIER_MONEY_TERMS.shipmentAmount}</div>
-            <div className="font-num text-caption">{shipmentAmount > 0 ? `¥${shipmentAmount.toLocaleString()}` : '—'}</div>
-          </div>
-          <div>
-            <div className="text-micro text-gray3">{SUPPLIER_MONEY_TERMS.payableAmount}</div>
-            <div className="font-num text-caption">{receivedAmount > 0 ? `¥${receivedAmount.toLocaleString()}` : '—'}</div>
-          </div>
-        </div>
-        <p className="text-micro text-gray3 mt-2">订货按已确认订单；实发按配送单；应付按门店实收入库单，三者不混用。</p>
-      </div>
+      </OrderAmountCard>
 
-      {/* 改单审批状态与历史 */}
-      {(order.revisions?.length ?? 0) > 0 && (
-        <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
-          <h2 className="text-h2">改单记录 ({order.revisions!.length})</h2>
-          <ul className="mt-2 space-y-2">
-            {order.revisions!.map(revision => (
-              <li key={revision.id} className={`rounded-cta border p-2 ${revision.status === 'PENDING' ? 'border-amber bg-amber/10' : 'border-border bg-bg'}`}>
-                <div className="flex items-center gap-2">
-                  <span className="text-caption">第 {revision.revisionNo} 次 · {revision.reason}</span>
-                  <Chip tone={revision.status === 'PENDING' ? 'orange' : revision.status === 'APPROVED' ? 'green' : 'gray'}>
-                    {revision.status === 'PENDING' ? '待门店确认' : revision.status === 'APPROVED' ? '已确认' : '已驳回'}
-                  </Chip>
-                </div>
-                <div className="text-micro text-gray3 mt-1">
-                  {revision.requestedBy?.name || '供应商'} · {dayjs(revision.requestedAt).format('MM/DD HH:mm')} · {revision.changeSet?.length || 0} 项变化
-                  {revision.reviewedBy?.name && <> · {revision.reviewedBy.name} 已处理</>}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <OrderDeliverySummary lines={(order.deliveries || [])
+        .filter(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
+        .flatMap(delivery => delivery.items.map(item => `${item.product?.name || '商品'}${item.shippedQty}${item.productUnitSnapshot || item.product?.unit || ''}`))} />
+      <OrderProgressCard currentIndex={step} />
 
-      {(order.deliveries?.length ?? 0) > 0 && (
-        <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
-          <h2 className="text-h2">关联配送单 ({order.deliveries!.length})</h2>
-          {deliveryAdjustError && !deliveryAddTarget && (
-            <div className="mt-2 rounded-cta border border-red/30 bg-red-bg px-3 py-2 text-caption text-red-fg">{deliveryAdjustError}</div>
-          )}
-          <ul className="mt-2 space-y-2">
-            {order.deliveries!.map((delivery, deliveryIndex) => (
-              <li key={delivery.id} className="rounded-cta border border-border bg-bg p-2">
-                <div className="flex items-center gap-2">
-                  <span className="rounded-chip bg-white px-2 py-0.5 font-num text-micro text-gray3">序号 {deliveryIndex + 1}</span>
-                  <span className="font-num text-caption">{delivery.no}</span>
-                  <Chip tone={delivery.status === 'RECEIVED' ? 'green' : 'orange'}>{delivery.status}</Chip>
-                  <span className="ml-auto font-num text-caption">¥{Number(delivery.actualTotalAmount).toLocaleString()}</span>
-                </div>
-                <div className="text-micro text-gray3 mt-1">
-                  本次 {delivery.items.length > 0 ? delivery.items.map(item => `${item.product?.name || ''} ${item.shippedQty}${item.product?.unit || ''}`).join('、') : '暂无可配送商品'}
-                  {delivery.receipt && <> · 入库单 {delivery.receipt.no}</>}
-                </div>
-                {canAdjustDeliveryBeforeDelivery && !delivery.receipt && delivery.status === 'SHIPPED' && (
-                  <div className="mt-2 flex justify-end border-t border-border pt-2">
-                    <button type="button" onClick={() => void openDeliveryAdd(delivery)} disabled={submitting}
-                      className="rounded-cta border border-amber/50 bg-amber/5 px-3 py-1.5 text-button text-amber-fg disabled:opacity-40">
-                      ＋ 增加商品
-                    </button>
-                  </div>
-                )}
-                {canRemoveDeliveryItem && !delivery.receipt && ['SHIPPED', 'DELIVERED'].includes(delivery.status) && delivery.items.length > 0 && (
-                  <div className="mt-2 pt-2 border-t border-border space-y-1">
-                    {delivery.items.map(item => (
-                      <div key={item.id} className="flex flex-wrap items-center gap-2 text-micro">
-                        <span className="flex-1 truncate">{item.product?.name || '商品'} · {item.shippedQty}{item.product?.unit || ''}</span>
-                        {canAdjustDeliveryBeforeDelivery && delivery.status === 'SHIPPED' && (
-                          <>
-                            <input type="number" inputMode="decimal" min="0" step="0.01"
-                              aria-label={`${item.product?.name || '商品'}配送数量`}
-                              value={deliveryQty[item.id] ?? String(item.shippedQty)}
-                              onChange={event => setDeliveryQty(current => ({ ...current, [item.id]: event.target.value }))}
-                              className="w-20 rounded-cta border border-border bg-white px-2 py-1 text-right font-num text-caption" />
-                            <span className="text-gray3">{item.product?.unit || ''}</span>
-                            <button type="button" onClick={() => adjustDeliveryItemQuantity(delivery, item)}
-                              disabled={submitting || adjustingItemId === item.id || !canSaveDeliveryItemQuantity(item)}
-                              className="rounded-cta border border-amber/50 px-2 py-1 text-amber-fg disabled:opacity-40">
-                              {adjustingItemId === item.id ? '保存中…' : '保存数量'}
-                            </button>
-                          </>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => removeDeliveryItem(delivery, item)}
-                          disabled={submitting || removingItemId === item.id}
-                          className="rounded-cta border border-red-fg/40 px-2 py-1 text-red-fg disabled:opacity-40"
-                        >{removingItemId === item.id ? '处理中…' : '移除'}</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* 进度条 */}
-      <div className="mx-4 mt-3 bg-white rounded-card border border-border p-4">
-        <ProgressDots
-          steps={['已发起', '已接单', '在途', '送达', '门店已收'].map(label => ({label}))}
-          currentIndex={step}
-        />
-      </div>
-
-      {/* 商品明细 */}
-      <div className="mx-4 mt-3 bg-white rounded-card border border-border">
-        <div className="px-3 pt-3 pb-2 flex items-center gap-2">
-          <h2 className="text-h2 flex-1">商品明细 ({order.items.length})</h2>
-          {order.status === 'SUBMITTED' && !pendingRevision && (
-            <button onClick={openAddPicker}
-                    className="px-2 py-1 rounded-cta border border-amber text-amber-fg text-caption"
-                    title="库存核查后申请调整，须门店确认">申请调整</button>
-          )}
-          <span className="text-caption text-gray3 font-num">合计 ¥{currentOrderAmount.toLocaleString()}</span>
-        </div>
-        <div className="overflow-x-auto border-t border-border">
-          <table className="w-full min-w-[680px] text-left text-caption">
-            <thead className="bg-bg text-micro text-gray3">
-              <tr>
-                <th className="w-16 px-3 py-2">序号</th>
-                <th className="px-3 py-2">名称</th>
-                <th className="px-3 py-2 text-right">数量</th>
-                <th className="px-3 py-2">规格</th>
-                <th className="px-3 py-2 text-right">单价</th>
-                <th className="px-3 py-2 text-right">总价</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {order.items.map((it, itemIndex) => (
-                <tr key={it.id}>
-                  <td className="px-3 py-3 font-num text-gray3">{itemIndex + 1}</td>
-                  <td className="px-3 py-3">{it.product?.name || '-'}</td>
-                  <td className="px-3 py-3 text-right font-num">{it.shippedQty ?? it.quantity}{it.product?.unit || ''}</td>
-                  <td className="px-3 py-3 text-gray2">{it.product?.spec || '-'}</td>
-                  <td className="px-3 py-3 text-right font-num">¥{Number(it.unitPrice).toLocaleString()}</td>
-                  <td className="px-3 py-3 text-right font-num">¥{Number(it.amount).toLocaleString()}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <OrderProductTable
+        rows={detailRows as OrderDetailTableRow[]}
+        editable={canShowSave}
+        total={detailTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        saving={submitting}
+        dirty={detailsDirty}
+        onAdd={(canEditSubmittedDetails || canEditConfirmedDetails || canEditDeliveryDetails) ? () => {
+          if (canEditDeliveryDetails && editableDelivery) void openDeliveryAdd(editableDelivery)
+          else if (canEditConfirmedDetails) void openShipmentAdd()
+          else void openAddPicker()
+        } : undefined}
+        onSave={() => void saveDetails()}
+        notice={<>
+          {deliveryAdjustError && <div className="mx-3 mb-2 rounded-cta border border-red/30 bg-red-bg px-3 py-2 text-caption text-red-fg">{deliveryAdjustError}</div>}
+          {revisionError && <p className="mx-3 mb-2 text-micro text-red-fg">{revisionError}</p>}
+          {canEditConfirmedDetails && <div className="mx-3 mb-2">
+            <p className="text-micro text-gray3">数量 0 仍保留商品，“移除”才会从本次发货中删除。</p>
+          </div>}
+        </>}
+        renderQuantity={baseRow => {
+          const row = detailRows.find(item => item.key === baseRow.key)!
+          if (row.pendingRemoval) return <>{row.quantity}{row.unit}</>
+          const rowDirty = Math.abs(row.quantity - row.originalQuantity) >= 0.0001
+            || row.source === 'catalog'
+            || row.source === 'shipment-addition'
+            || row.source === 'delivery-addition'
+          return canShowSave ? <span className="inline-flex items-center gap-1">
+            <input type="number" inputMode="decimal" min="0" step="0.01" value={quantityDrafts[row.key] ?? String(row.quantity)} aria-label={`${row.name}数量`}
+              onChange={event => {
+                const rawValue = event.target.value
+                setQuantityDrafts(current => ({ ...current, [row.key]: rawValue }))
+                setDeliveryAdjustError(null)
+                if (quantityDraftReason(rawValue)) return
+                const quantity = Number(rawValue)
+                setSaveNotice(null)
+                if (row.source === 'order' || row.source === 'catalog') setAddQtyFor(row.productId, quantity)
+                else if (row.source === 'shipment' && row.itemId) setShipQty(current => ({ ...current, [row.itemId!]: quantity }))
+                else if (row.source === 'shipment-addition') setPendingShipmentAdditions(current => current.map(item => item.key === row.key ? { ...item, quantity } : item))
+                else if (row.source === 'delivery' && row.itemId) setDeliveryQty(current => ({ ...current, [row.itemId!]: String(quantity) }))
+                else if (row.source === 'delivery-addition') setPendingDeliveryAdditions(current => current.map(item => item.key === row.key ? { ...item, quantity } : item))
+              }}
+              onBlur={() => {
+                const rawValue = quantityDrafts[row.key]
+                const reason = rawValue === undefined ? null : quantityDraftReason(rawValue)
+                if (reason) {
+                  setDeliveryAdjustError(`${row.name}：${reason}`)
+                  return
+                }
+                setQuantityDrafts(current => { const next = { ...current }; delete next[row.key]; return next })
+              }}
+              className={`w-20 rounded-cta border bg-white px-2 py-1 text-right font-num ${rowDirty ? 'border-red text-red-fg' : 'border-border text-ink'}`} />
+            <span className="text-gray3">{row.unit}</span>
+          </span> : <>{row.quantity}{row.unit}</>
+        }}
+        onRemove={baseRow => {
+          const row = detailRows.find(item => item.key === baseRow.key)!
+          setSaveNotice(null)
+          if (row.source === 'order' || row.source === 'catalog') removeOrderProduct(row.productId)
+          else if (row.source === 'shipment' && row.itemId) removeShipmentItem(row.itemId, row.quantity)
+          else if (row.source === 'shipment-addition') setPendingShipmentAdditions(current => current.map(item => item.key === row.key ? { ...item, pendingRemoval: true } : item))
+          else if (row.source === 'delivery' && row.itemId) removeDeliveryItem(row.itemId)
+          else if (row.source === 'delivery-addition') setPendingDeliveryAdditions(current => current.map(item => item.key === row.key ? { ...item, pendingRemoval: true } : item))
+        }}
+        onRestore={baseRow => {
+          const row = detailRows.find(item => item.key === baseRow.key)!
+          if (row.source === 'order' || row.source === 'catalog') restoreOrderProduct(row.productId)
+          else if (row.source === 'shipment' && row.itemId) restoreShipmentItem(row.itemId, row.quantity)
+          else if (row.source === 'shipment-addition') setPendingShipmentAdditions(current => current.map(item => item.key === row.key ? { ...item, pendingRemoval: false } : item))
+          else if (row.source === 'delivery' && row.itemId) restoreDeliveryItem(row.itemId)
+          else if (row.source === 'delivery-addition') setPendingDeliveryAdditions(current => current.map(item => item.key === row.key ? { ...item, pendingRemoval: false } : item))
+        }}
+      />
+      {canEditConfirmedDetails && <div className="mx-4 border-x border-b border-border bg-white p-3">
+        <label className="mb-1 block text-micro text-gray3">发货备注 (选填)</label>
+        <input value={shipNote} onChange={event => setShipNote(event.target.value)} maxLength={120}
+          className="w-full rounded border border-border bg-bg p-2 text-body" placeholder="如：司机张三 18800001234 / 预计 2h 到" />
+      </div>}
 
       {/* 到货差异 — 显示履约链、完整明细、证据与处理按钮 */}
       {(order.lossClaims?.length ?? 0) > 0 && (
@@ -805,113 +1337,31 @@ export default function SupplierOrderDetailPage() {
         </div>
       )}
 
-      {/* CONFIRMED 状态: 让供应商调整发货量 + 填发货备注 */}
-      {order.status === 'CONFIRMED' && (() => {
-        const lines = buildPartialShipmentLines(order.items, shipQty)
-        const newTotal = computeShipmentNewTotal(lines)
-        const oldTotal = Number(order.totalAmount)
-        const totalDiffer = Math.abs(newTotal - oldTotal) > 0.01
-        const allZero = !hasAnyPositiveShipment(lines)
-        return (
-          <>
-            <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-micro text-gray3">实际发货量 (称重 / 缺货可改)</label>
-                <button
-                  type="button"
-                  onClick={() => setShipQty({})}
-                  className="text-micro text-accent"
-                  disabled={lines.every(l => !l.changed)}
-                >全部按剩余量</button>
-              </div>
-              <ul className="divide-y divide-border">
-                {lines.map(l => (
-                  <li key={l.it.id} className="py-2 flex items-center gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-body truncate">{l.it.product?.name || '-'}</div>
-                      <div className="text-micro text-gray3">下单 {l.orig} · 已发 {l.previous} · 剩余 {l.remaining} {l.it.product?.unit} · ¥{l.it.unitPrice}</div>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      {(() => {
-                        const pct = Number(l.it.product?.shipUpperPct ?? 1.10)
-                        const buf = Number(l.it.product?.shipUpperBuffer ?? 5)
-                        const upper = Math.max(0, Math.max(l.orig * pct, l.orig + buf) - l.previous)
-                        return (
-                          <>
-                            <input
-                              type="number" inputMode="decimal" step="0.01" min="0" max={upper}
-                              value={l.sq}
-                              onChange={e => setShipQty(prev => ({ ...prev, [l.it.id]: Math.max(0, Math.min(upper, Number(e.target.value) || 0)) }))}
-                              className={`w-20 text-right font-num bg-bg rounded-chip px-2 py-1 outline-none ${l.changed ? (l.sq > l.orig ? 'border border-red text-red-fg' : 'border border-amber text-amber-fg') : ''}`}
-                            />
-                            <span className="text-micro text-gray3">{l.it.product?.unit}</span>
-                            <button
-                              type="button"
-                              onClick={() => setShipQty(prev => ({ ...prev, [l.it.id]: 0 }))}
-                              disabled={l.sq === 0}
-                              title={`将${l.it.product?.name || '该商品'}本次实发设为 0`}
-                              aria-label={`移除${l.it.product?.name || '该商品'}（实发设为 0）`}
-                              className="ml-1 rounded-cta border border-red-fg/40 px-2 py-1 text-micro text-red-fg disabled:opacity-40"
-                            >移除</button>
-                          </>
-                        )
-                      })()}
-                    </div>
-                    <span className="font-num text-caption w-20 text-right">¥{(l.sq * Number(l.it.unitPrice)).toFixed(2)}</span>
-                  </li>
-                ))}
-              </ul>
-              {totalDiffer && (
-                <div className="mt-2 pt-2 border-t border-border flex items-center justify-between text-caption">
-                  <span className="text-amber-fg">实发金额</span>
-                  <span className="font-num text-amber-fg">¥{newTotal.toLocaleString()} <span className="text-gray3 line-through ml-1">¥{oldTotal.toLocaleString()}</span></span>
-                </div>
-              )}
-              <p className="text-micro text-gray3 mt-2">默认按剩余未配送数量发完。可直接修改实发数量（称重 / 缺货）；点击行内“移除”会将该行本次实发设为 0。首次发货后，所有未发余量将永久关闭，不会补送；如仍需须门店重新下单。价格继承已确认订货单，配送不可改价。</p>
-              {allZero && <p className="text-micro text-red-fg mt-1">⚠ 所有商品发货数量为 0，无法提交。请至少填写一项正数发货量。</p>}
-            </div>
-            <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
-              <label className="text-micro text-gray3 block mb-1">发货备注 (选填)</label>
-              <input value={shipNote} onChange={e => setShipNote(e.target.value)} maxLength={120}
-                className="w-full bg-bg border border-border rounded p-2 text-body" placeholder="如: 司机张三 18800001234 / 预计 2h 到" />
-            </div>
-          </>
-        )
-      })()}
-
-      {/* 底部固定操作栏 - 按状态显示按钮。集合上下文只保留改单入口，
-          不允许从原订单详情绕过集合执行拒单/接单/发货。 */}
-      {order.status === 'SUBMITTED' && (
-        <div className={`fixed bottom-0 left-0 right-0 bg-white border-t border-border p-4 grid ${isOperationGroupContext ? 'grid-cols-1' : pendingRevision ? 'grid-cols-2' : 'grid-cols-3'} gap-2`}
+      {/* 底部只保留流程动作，商品调整统一由顶部保存。 */}
+      {order.status === 'SUBMITTED' && !isOperationGroupContext && (
+        <div className={`fixed bottom-0 left-0 right-0 bg-white border-t border-border p-4 grid ${pendingRevision ? 'grid-cols-2' : 'grid-cols-2'} gap-2`}
              style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom))' }}>
-          {!isOperationGroupContext && (
-            <button onClick={rejectOrder} disabled={submitting}
-              className="py-3 bg-white border border-red text-red-fg rounded-cta text-button disabled:opacity-40">拒单</button>
-          )}
-          {pendingRevision ? (
-            <button disabled className="py-3 bg-amber/10 border border-amber text-amber-fg rounded-cta text-button opacity-70">待门店确认</button>
+          <button onClick={rejectOrder} disabled={submitting}
+            className="py-3 bg-white border border-red text-red-fg rounded-cta text-button disabled:opacity-40">拒单</button>
+          {pendingRevision && !isDirectOperationGroupRevision ? (
+            <button disabled className="py-3 bg-amber/10 border border-amber text-amber-fg rounded-cta text-button opacity-70">修改处理中</button>
           ) : (
-            <>
-              <button onClick={openAddPicker} disabled={submitting}
-                className="py-3 bg-white border border-amber text-amber-fg rounded-cta text-button disabled:opacity-40">申请调整</button>
-              {!isOperationGroupContext && (
-                <button onClick={confirmOrder} disabled={submitting}
-                  className="py-3 bg-ink text-white rounded-cta text-button disabled:opacity-40">
-                  {submitting ? '提交中…' : '接单'}
-                </button>
-              )}
-            </>
+            <button onClick={confirmOrder} disabled={submitting || detailsDirty}
+              className="py-3 bg-ink text-white rounded-cta text-button disabled:opacity-40">
+              {submitting ? '提交中…' : '接单'}
+            </button>
           )}
         </div>
       )}
       {order.status === 'CONFIRMED' && !isOperationGroupContext && (
         <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border p-4 grid grid-cols-2 gap-2"
              style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom))' }}>
+          {detailsDirty && <p className="col-span-2 text-center text-micro text-amber-fg">请先保存商品明细后再确认发货</p>}
           <button onClick={rejectOrder} disabled={submitting}
             className="py-3 bg-white border border-red text-red-fg rounded-cta text-button disabled:opacity-40">拒单</button>
-          <button onClick={ship} disabled={submitting || shipAllZero}
+          <button onClick={ship} disabled={submitting || detailsDirty}
             className="py-3 bg-ink text-white rounded-cta text-button disabled:opacity-40">
-            {submitting ? '提交中…' : shipAllZero ? '发货数量不能为 0' : '确认发货 (出发)'}
+            {submitting ? '提交中…' : '确认发货 (出发)'}
           </button>
         </div>
       )}
@@ -964,6 +1414,7 @@ export default function SupplierOrderDetailPage() {
           </div>
           <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border p-4 grid grid-cols-1 gap-2"
                style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom))' }}>
+            {detailsDirty && <p className="text-center text-micro text-amber-fg">请先保存商品明细后再确认送达</p>}
             <button
               onClick={() => {
                 const hasAck = !!order.chefAckAt
@@ -987,7 +1438,7 @@ export default function SupplierOrderDetailPage() {
                   },
                 })
               }}
-              disabled={submitting}
+              disabled={submitting || detailsDirty}
               className="py-3 bg-amber text-white rounded-cta text-button disabled:opacity-40">
               {submitting ? '提交中…' : '✓ 确认送达 (司机到店时点)'}
             </button>
@@ -996,175 +1447,99 @@ export default function SupplierOrderDetailPage() {
         </>
       )}
 
-      {/* 接单前改单申请抽屉 */}
-      {addOpen && (() => {
-        const filtered = catalog.filter(p => {
-          if (!addSearch.trim()) return true
-          const hay = `${p.name} ${p.spec || ''}`.toLowerCase()
-          return addSearch.toLowerCase().split(/\s+/).filter(Boolean).every(t => hay.includes(t))
-        })
-        const selectedDetails = Object.entries(addQty).filter(([, q]) => q > 0)
-        const selectedCount = selectedDetails.length
-        const hasPendingSelected = selectedDetails.some(([pid]) => {
-          const existing = order.items.find(it => it.productId === pid)
-          if (existing) return false
-          const p = catalog.find(c => c.id === pid)
-          return !p || resolveRevisionCatalogPricing(p).status === 'PENDING'
-        })
-        const selectedAmounts = selectedDetails.map(([pid, q]) => {
-          const existing = order.items.find(it => it.productId === pid)
-          if (existing) {
-            const p = catalog.find(c => c.id === pid)
-            const unit = existing.orderUnitSnapshot || existing.productUnitSnapshot || existing.product?.unit || p?.unit || '订货单位'
-            return calculateRevisionLineAmount(q, {
-              status: 'READY',
-              orderUnitPrice: existing.unitPrice,
-              orderUnit: unit,
-              unitLabel: `元 / ${unit}`,
-              costPriceSource: '历史冻结订货价',
-            })
-          }
-          const p = catalog.find(c => c.id === pid)
-          if (!p) return null
-          return calculateRevisionLineAmount(q, resolveRevisionCatalogPricing(p))
-        })
-        const selectedTotal = sumRevisionLineAmounts(selectedAmounts)
-        return (
-          <div className="fixed inset-0 z-50" onClick={() => setAddOpen(false)}>
-            <div className="absolute inset-0 bg-ink/60" />
-            <div className="absolute bottom-0 left-0 right-0 bg-white rounded-t-card max-h-[80vh] flex flex-col"
-                 onClick={e => e.stopPropagation()}>
-              <div className="w-12 h-1 bg-gray5 rounded-full mx-auto mt-2" />
-              <div className="px-4 pt-3 pb-2 flex items-baseline justify-between">
-                <h3 className="text-h2">{groupAddContext ? '申请调整订货单（加入最晚订单）' : '申请调整订货单'}</h3>
-                <span className="text-caption text-gray3">{filtered.length}/{catalog.length} 商品</span>
-              </div>
-              <p className="px-4 pb-2 text-micro text-gray3">可调整数量、移除或增加商品；已有行保持冻结订货价，新增商品按当前四单位合同换算订货价，待核验或非 1:1 合同缺失商品不可加入。提交后须门店确认才能接单。</p>
-              <div className="px-4 pb-2">
-                <label className="text-micro text-gray3 block mb-1">改单原因 *</label>
-                <textarea value={adjustReason} onChange={e => setAdjustReason(e.target.value)} maxLength={200} rows={2}
-                  placeholder="例如：土豆库存不足，申请 20kg 调整为 15kg"
-                  className="w-full bg-bg border border-border rounded-cta px-3 py-2 text-body outline-none focus:border-amber" />
-              </div>
-              <div className="px-4 pb-2 relative">
-                <input type="search" value={addSearch} onChange={e => setAddSearch(e.target.value)}
-                       placeholder="搜索 名称 / 规格" className="w-full bg-bg rounded-chip px-9 py-2 text-body outline-none" />
-                <span className="absolute left-7 top-1/2 -translate-y-1/2 text-gray3 text-caption">🔍</span>
-                {addSearch && (
-                  <button onClick={() => setAddSearch('')}
-                          className="absolute right-6 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-gray5 text-gray2 text-caption flex items-center justify-center">×</button>
-                )}
-              </div>
-              <ul className="overflow-auto flex-1 divide-y divide-border">
-                {filtered.length === 0 && <li className="px-4 py-8 text-center text-caption text-gray3">无匹配商品</li>}
-                {filtered.map(p => {
-                  const q = addQty[p.id] || 0
-                  const existing = order.items.find(it => it.productId === p.id)
-                  const pricing = existing ? null : resolveRevisionCatalogPricing(p)
-                  const canSelect = !!existing || pricing?.status === 'READY'
-                  return (
-                    <li key={p.id} className={`flex items-center px-4 py-3 ${q > 0 ? 'bg-amber/5' : ''}`}>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-body truncate">{p.name}</div>
-                        <div className="text-micro text-gray3 font-num">
-                          {(() => {
-                            if (existing) {
-                              const unit = existing.orderUnitSnapshot || existing.productUnitSnapshot || existing.product?.unit || p.unit || '订货单位'
-                              return `¥${Number(existing.unitPrice).toFixed(2)} / ${unit} · 历史冻结价`
-                            }
-                            if (pricing?.status === 'READY') {
-                              return `¥${pricing.orderUnitPrice} · ${pricing.unitLabel} · ${pricing.costPriceSource}`
-                            }
-                            if (pricing?.status === 'PENDING') {
-                              return <span className="text-red-fg">{pricing.message}</span>
-                            }
-                            return '无法计算订货价'
-                          })()}
-                        </div>
-                      </div>
-                      {q === 0 ? (
-                        <button onClick={() => setAddQtyFor(p.id, 1)}
-                                disabled={!canSelect}
-                                className="px-3 py-1.5 rounded-cta bg-amber/10 text-amber-fg text-button disabled:opacity-40 disabled:bg-gray5">
-                          {canSelect ? '+ 加入' : '不可加入'}
-                        </button>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <button onClick={() => setAddQtyFor(p.id, q - 1)}
-                                  className="w-8 h-8 rounded-full bg-bg text-h2 flex items-center justify-center">−</button>
-                          <input type="number" inputMode="decimal" min="0" step="0.5" value={q}
-                                 onChange={e => setAddQtyFor(p.id, Math.max(0, Number(e.target.value) || 0))}
-                                 disabled={!canSelect}
-                                 className="w-14 text-center font-num text-body bg-bg rounded-chip py-1 outline-none disabled:opacity-50" />
-                          <button onClick={() => setAddQtyFor(p.id, q + 1)}
-                                  disabled={!canSelect}
-                                  className="w-8 h-8 rounded-full bg-amber text-white text-h2 flex items-center justify-center disabled:opacity-40">+</button>
-                        </div>
-                      )}
-                    </li>
-                  )
-                })}
-              </ul>
-              <div className="border-t border-border p-3 flex items-center gap-3">
-                <div className="flex-1">
-                  <div className="text-micro text-gray3">已选 {selectedCount} 项</div>
-                  <div className={selectedTotal === null ? 'text-caption text-red-fg' : 'font-num text-h2'}>
-                    {selectedTotal === null
-                      ? '调整后金额待核验'
-                      : `调整后 ¥${Number(selectedTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                  </div>
-                </div>
-                <button onClick={() => setAddOpen(false)}
-                        className="px-4 py-3 rounded-cta border border-border text-button text-gray2">取消</button>
-                <button onClick={submitAdd} disabled={submitting || selectedCount === 0 || !adjustReason.trim() || hasPendingSelected}
-                        className="px-6 py-3 bg-amber text-white rounded-cta text-button disabled:opacity-40">提交申请</button>
-              </div>
-            </div>
-          </div>
-        )
-      })()}
-
-      {deliveryAddTarget && (() => {
-        const existingProductIds = new Set(deliveryAddTarget.items.map(item => item.productId))
-        const availableProducts = catalog.filter(product => !existingProductIds.has(product.id))
+      {(deliveryAddTarget || shipmentAddOpen || addOpen) && (() => {
+        const isSubmittedAdd = addOpen
+        const isShipmentDraftAdd = shipmentAddOpen
+        const pendingRemovedProductIds = isSubmittedAdd
+          ? new Set(removedOrderProductIds)
+          : new Set((deliveryAddTarget?.items || [])
+              .filter(item => removedDeliveryItemIds.includes(item.id))
+              .map(item => item.productId))
+        const existingProductIds = isSubmittedAdd
+          ? new Set(detailRows.filter(item => !item.pendingRemoval).map(item => item.productId))
+          : isShipmentDraftAdd
+            ? new Set(detailRows.map(item => item.productId))
+            : new Set((deliveryAddTarget?.items || [])
+                .filter(item => !removedDeliveryItemIds.includes(item.id))
+                .map(item => item.productId))
+        const pendingAdditionProductIds = new Set((isSubmittedAdd
+          ? []
+          : isShipmentDraftAdd ? pendingShipmentAdditions : pendingDeliveryAdditions).map(item => item.productId))
+        const availableProducts = catalog
+          .filter(product => !existingProductIds.has(product.id) && !pendingAdditionProductIds.has(product.id))
+          .filter(product => matchesWarehouseProductSearch(product, deliveryAddSearch))
         const selectedProduct = availableProducts.find(product => product.id === deliveryAddProductId)
+        const selectedPendingRemoval = Boolean(selectedProduct && pendingRemovedProductIds.has(selectedProduct.id))
+        const selectedRestoresOriginal = Boolean((isShipmentDraftAdd || isSubmittedAdd) && selectedProduct
+          && order.items.some(item => item.productId === selectedProduct.id))
         const selectedPricing = selectedProduct ? resolveRevisionCatalogPricing(selectedProduct) : null
-        const parsedAddQuantity = Number(deliveryAddQuantity)
-        const addQuantityValid = Number.isFinite(parsedAddQuantity) && parsedAddQuantity > 0
+        const closeDetailAdd = () => {
+          setDeliveryAddTarget(null)
+          setShipmentAddOpen(false)
+          if (isSubmittedAdd) closeAddPicker()
+        }
         return (
-          <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/60 p-4 sm:items-center" onClick={() => { if (!submitting) setDeliveryAddTarget(null) }}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/60 p-4" onClick={() => { if (!submitting) closeDetailAdd() }}>
             <div className="w-full max-w-lg rounded-card bg-white p-4" onClick={event => event.stopPropagation()}>
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <h3 className="text-h2">增加配送商品</h3>
-                  <p className="mt-1 text-micro text-gray3">仅在送达前可操作，加入后同步库存、金额和送货单。</p>
+                  <h3 className="text-h2">增加商品</h3>
+                  <p className="mt-1 text-micro text-gray3">{isSubmittedAdd || isShipmentDraftAdd ? '加入后回到商品明细调整数量，并由右上角统一保存。' : '收货单保存前可操作，加入后同步库存、金额和送货单。'}</p>
                 </div>
-                <button type="button" onClick={() => setDeliveryAddTarget(null)} disabled={submitting} className="h-8 w-8 rounded-full bg-bg text-gray2 disabled:opacity-40">×</button>
+                <button type="button" onClick={closeDetailAdd} disabled={submitting} className="h-8 w-8 rounded-full bg-bg text-gray2 disabled:opacity-40">×</button>
               </div>
               {deliveryAdjustError && (
                 <div className="mt-3 rounded-cta border border-red/30 bg-red-bg px-3 py-2 text-caption text-red-fg">{deliveryAdjustError}</div>
               )}
               <div className="mt-4 space-y-3">
-                <label className="block text-micro text-gray3">选择仓库商品</label>
-                <select value={deliveryAddProductId} onChange={event => setDeliveryAddProductId(event.target.value)} className="w-full rounded-cta border border-border bg-white px-3 py-2 text-body">
-                  <option value="">请选择原配送单中没有的仓库商品</option>
+                <label className="block text-micro text-gray3" htmlFor="delivery-warehouse-product-search">选择仓库商品</label>
+                <input
+                  id="delivery-warehouse-product-search"
+                  type="search"
+                  value={deliveryAddSearch}
+                  onChange={event => { setDeliveryAddSearch(event.target.value); setDeliveryAddProductId('') }}
+                  placeholder="搜索商品名称"
+                  className="w-full rounded-cta border border-border bg-bg px-3 py-2 text-body outline-none focus:border-accent"
+                />
+                <div className="max-h-72 overflow-y-auto rounded-cta border border-border bg-white">
+                  {availableProducts.length === 0 && <div className="px-3 py-8 text-center text-caption text-gray3">没有匹配的仓库商品</div>}
                   {availableProducts.map(product => {
                     const pricing = resolveRevisionCatalogPricing(product)
-                    return <option key={product.id} value={product.id} disabled={pricing.status !== 'READY'}>{product.name}{product.spec ? ` · ${product.spec}` : ''}{pricing.status === 'READY' ? ` · ¥${pricing.orderUnitPrice}/${pricing.orderUnit}` : ' · 价格待核验'}</option>
+                    const selected = deliveryAddProductId === product.id
+                    const restoresPendingRemoval = pendingRemovedProductIds.has(product.id)
+                    return (
+                      <button
+                        key={product.id}
+                        type="button"
+                        disabled={pricing.status !== 'READY' && !restoresPendingRemoval && !((isSubmittedAdd || isShipmentDraftAdd) && order.items.some(item => item.productId === product.id))}
+                        aria-pressed={selected}
+                        onClick={() => setDeliveryAddProductId(product.id)}
+                        className={`flex w-full items-center gap-3 border-b border-l-4 border-border px-3 py-3 text-left transition-colors last:border-b-0 disabled:opacity-40 ${selected ? 'border-l-amber bg-amber/20' : 'border-l-transparent hover:bg-bg'}`}
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className={`block text-body ${selected ? 'font-medium text-amber-fg' : ''}`}>{product.name}</span>
+                          <span className="block text-micro text-gray3">{[product.code, product.category, product.spec].filter(Boolean).join(' · ') || '暂无编码、分类或规格'}</span>
+                        </span>
+                        <span className="shrink-0 text-right font-num text-caption">
+                          <span className="block">{restoresPendingRemoval || ((isSubmittedAdd || isShipmentDraftAdd) && order.items.some(item => item.productId === product.id)) ? '恢复原明细' : pricing.status === 'READY' ? `¥${pricing.orderUnitPrice}/${pricing.orderUnit}` : '价格待核验'}</span>
+                          {selected && <span className="mt-1 block text-button text-amber-fg">✓ 已选择</span>}
+                        </span>
+                      </button>
+                    )
                   })}
-                </select>
+                </div>
                 <div className="rounded-cta bg-bg px-3 py-2 text-caption text-gray2">
-                  {selectedPricing?.status === 'READY' ? `系统价格：¥${selectedPricing.orderUnitPrice} / ${selectedPricing.orderUnit}` : '选择仓库商品后自动带出系统价格'}
+                  {selectedPendingRemoval || selectedRestoresOriginal ? '确认后恢复到商品明细' : selectedPricing?.status === 'READY' ? `系统价格：¥${selectedPricing.orderUnitPrice} / ${selectedPricing.orderUnit}` : '选择仓库商品后自动带出系统价格'}
                 </div>
               </div>
 
-              <label className="mt-4 block text-micro text-gray3">增加数量<input type="number" inputMode="decimal" min="0.01" step="0.01" value={deliveryAddQuantity} onChange={event => setDeliveryAddQuantity(event.target.value)} className="mt-1 w-full rounded-cta border border-border px-3 py-2 font-num text-body" /></label>
+              <p className="mt-4 text-micro text-gray3">加入后默认数量为 1，请回到商品明细中调整。</p>
               <div className="mt-5 flex gap-2">
-                <button type="button" onClick={() => setDeliveryAddTarget(null)} disabled={submitting} className="flex-1 rounded-cta border border-border py-2.5 text-button text-gray2 disabled:opacity-40">取消</button>
-                <button type="button" onClick={() => void submitDeliveryAdd()}
-                  disabled={submitting || !addQuantityValid || !deliveryAddProductId || selectedPricing?.status !== 'READY'}
+                <button type="button" onClick={closeDetailAdd} disabled={submitting} className="flex-1 rounded-cta border border-border py-2.5 text-button text-gray2 disabled:opacity-40">取消</button>
+                <button type="button" onClick={() => void submitDetailAdd()}
+                  disabled={submitting || !deliveryAddProductId || (!selectedPendingRemoval && !selectedRestoresOriginal && selectedPricing?.status !== 'READY')}
                   className="flex-1 rounded-cta bg-ink py-2.5 text-button text-white disabled:opacity-40">
-                  {submitting ? '提交中…' : '确认增加'}
+                  {submitting ? '提交中…' : selectedPendingRemoval || selectedRestoresOriginal ? '确认恢复' : '确认增加'}
                 </button>
               </div>
             </div>

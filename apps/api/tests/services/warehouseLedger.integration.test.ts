@@ -210,6 +210,57 @@ describe('central warehouse ledger (integration)', () => {
     expect(Number(lot.remainingQty)).toBe(12)
   })
 
+  it('lets a zero shipment line settle without an unrelated outbound-source conflict', async () => {
+    const balance = await prisma.warehouseLedgerBalance.findUniqueOrThrow({
+      where: { tenantId_warehouseId_productId: { tenantId, warehouseId, productId } },
+    })
+    await prisma.warehouseLedgerMovement.create({
+      data: {
+        tenantId,
+        warehouseId,
+        productId,
+        type: 'ORDER_OUTBOUND',
+        physicalDelta: 0,
+        reservedDelta: 0,
+        valueDelta: 0,
+        physicalAfter: balance.physicalQty,
+        reservedAfter: balance.reservedQty,
+        valueAfter: balance.inventoryValue,
+        averageUnitCostAfter: balance.averageUnitCost,
+        originalQuantity: 0,
+        originalUnit: '袋',
+        conversionFactor: 1,
+        inventoryQuantity: 0,
+        inventoryUnit: '袋',
+        inventoryUnitCost: balance.averageUnitCost,
+        sourceType: 'MeituanDailyPackage',
+        sourceId: `PACKAGE-${suffix}`,
+        sourceLineId: `PACKAGE-LINE-${suffix}`,
+        idempotencyKey: `package-outbound-${suffix}`,
+        effectiveAt: new Date('2026-08-02T11:00:00+08:00'),
+        createdById: userId,
+      },
+    })
+
+    await expect(postWarehouseShipment({
+      tenantId,
+      purchaseOrderId: orderId,
+      deliveryOrderId: `DO-ZERO-${suffix}`,
+      orderNo: `PO-${suffix}`,
+      userId,
+      effectiveAt: new Date('2026-08-02T12:00:00+08:00'),
+      lines: [frozenLine(0, 0)],
+    })).resolves.toBeUndefined()
+
+    const after = await prisma.warehouseLedgerBalance.findUniqueOrThrow({
+      where: { tenantId_warehouseId_productId: { tenantId, warehouseId, productId } },
+    })
+    expect(Number(after.physicalQty)).toBe(Number(balance.physicalQty))
+    expect(await prisma.warehouseLedgerMovement.count({
+      where: { tenantId, warehouseId, sourceId: `DO-ZERO-${suffix}`, type: 'ORDER_OUTBOUND' },
+    })).toBe(0)
+  })
+
   it('blocks over-reservation and refuses to reverse an inbound batch after consumption', async () => {
     const oversized = await prisma.purchaseOrder.create({
       data: {

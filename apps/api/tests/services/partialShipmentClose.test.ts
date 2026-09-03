@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  assertPositiveShipment,
   buildShipmentCloseSummary,
   reservationCloseState,
   shipmentReplayMatches,
@@ -64,18 +63,20 @@ describe('partial shipment closes unshipped remainder', () => {
     expect(Number(reservationCloseState(3, 0).fulfilledQty)).toBe(0)
   })
 
-  it('rejects an all-zero shipment before any close transaction starts', () => {
+  it('represents an all-zero shipment without conflating zero with removal', () => {
     const summary = buildShipmentCloseSummary([
       { itemId: 'line-a', productId: 'product-a', orderedQty: 6, shippedQty: 0 },
       { itemId: 'line-b', productId: 'product-b', orderedQty: 3, shippedQty: 0 },
     ])
 
-    expect(() => assertPositiveShipment(summary)).toThrow('零实发不会关闭订单或释放预占')
-    try {
-      assertPositiveShipment(summary)
-    } catch (error: any) {
-      expect(error.statusCode).toBe(400)
-    }
+    expect(summary).toMatchObject({
+      hasClosedRemainder: true,
+      isPartial: true,
+      lines: [
+        { itemId: 'line-a', shippedQty: 0, closedQty: 6 },
+        { itemId: 'line-b', shippedQty: 0, closedQty: 3 },
+      ],
+    })
   })
 
   it('replays the same fingerprint and identifies a conflicting request', () => {

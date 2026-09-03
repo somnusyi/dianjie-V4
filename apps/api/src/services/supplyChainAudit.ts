@@ -1,5 +1,5 @@
 import { prisma } from '@dianjie/db'
-import { FORMAL_DELIVERY_STATUSES, legacyVisibleDeliveryWhere } from './shipmentDraftMarker'
+import { formalDeliveryStatusFilter } from './shipmentDraftMarker'
 
 export type SupplyChainAuditIssue = {
   code: string
@@ -81,9 +81,9 @@ export async function auditSupplierSupplyChain(input: {
     db.deliveryOrder.findMany({
       where: {
         tenantId: input.tenantId, supplierId: input.supplierId,
-        status: { in: [...FORMAL_DELIVERY_STATUSES] },
-        createdAt: { gte: since },
-        ...legacyVisibleDeliveryWhere(),
+        // Audit only formal delivery documents. Internal shipment drafts are
+        // mutable edit state and must not create inventory/amount findings.
+        status: formalDeliveryStatusFilter(), createdAt: { gte: since },
       },
       include: { items: true },
       orderBy: { createdAt: 'desc' },

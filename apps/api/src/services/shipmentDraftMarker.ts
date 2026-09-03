@@ -1,16 +1,20 @@
 /**
- * Stable compatibility boundary for server-side shipment drafts.
+ * Stable compatibility marker for internal shipment drafts.
  *
- * This module deliberately has no dependency on the shipment-draft feature.
- * Legacy read paths import it so they keep hiding internal drafts even if the
- * feature implementation is rolled back while draft rows remain in storage.
+ * Keep this outside the shipment-draft implementation so the delivery-list
+ * compatibility release can retain the marker filter even when the feature
+ * implementation itself is rolled back.
  */
 export const SERVER_SHIPMENT_DRAFT_KEY = 'server-shipment-draft-v1'
 
 export const FORMAL_DELIVERY_STATUSES = ['SHIPPED', 'DELIVERED', 'RECEIVED'] as const
 
-/** Prisma-compatible predicate that excludes rows owned by the draft feature. */
-export function legacyVisibleDeliveryWhere() {
+export function formalDeliveryStatusFilter() {
+  return { in: [...FORMAL_DELIVERY_STATUSES] }
+}
+
+/** Prisma `not` does not include SQL NULL, so both public cases are explicit. */
+export function publicDeliveryMarkerFilter() {
   return {
     OR: [
       { idempotencyKey: null },

@@ -8,6 +8,11 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
+import { OrderCenterHorizontalTable } from '@/components/v2/order-center-horizontal-table'
+import {
+  OrderCenterResizableTable,
+  type OrderCenterTableColumn,
+} from '@/components/v2/order-center-resizable-table'
 import { OrderCenterTabs } from '@/components/v2/order-center-tabs'
 import { EmptyState, FriendlyError, SkeletonCard } from '@/components/v2/skeleton'
 import { apiFetch } from '@/lib/v2-auth'
@@ -33,6 +38,82 @@ import {
 type Store = { id: string; no: string; name: string }
 
 type ProjectedOrder = ReturnType<typeof projectOrderRow>
+
+const ORDER_COLUMNS: readonly OrderCenterTableColumn<ProjectedOrder>[] = [
+  {
+    id: 'sequence',
+    header: '序号',
+    defaultWidth: 58,
+    cellClassName: 'font-num text-gray3',
+    renderCell: (_order, index) => index + 1,
+  },
+  {
+    id: 'orderNo',
+    header: '订货单号',
+    defaultWidth: 238,
+    cellClassName: 'font-num',
+    renderCell: order => <b>{order.no}</b>,
+  },
+  {
+    id: 'store',
+    header: '门店',
+    defaultWidth: 136,
+    cellClassName: 'text-gray2',
+    renderCell: order => order.store?.name || '—',
+  },
+  {
+    id: 'supplier',
+    header: '供应商',
+    defaultWidth: 214,
+    cellClassName: 'text-gray2',
+    renderCell: order => order.supplier?.name || '—',
+  },
+  {
+    id: 'createdAt',
+    header: '创建日期',
+    defaultWidth: 110,
+    cellClassName: 'font-num text-gray2',
+    renderCell: order => orderDeliveryDateText(order.createdAt),
+  },
+  {
+    id: 'expectedDeliveryDate',
+    header: '期望到货日',
+    defaultWidth: 97,
+    cellClassName: 'font-num text-gray2',
+    renderCell: order => orderDeliveryDateText(order.expectedDeliveryDate),
+  },
+  {
+    id: 'status',
+    header: '状态',
+    defaultWidth: 77,
+    renderCell: order => <Chip tone={orderStatusTone(order.status)}>{formatOrderStatusLabel(order.status)}</Chip>,
+  },
+  {
+    id: 'summary',
+    header: '商品摘要',
+    defaultWidth: 400,
+    cellClassName: 'text-gray2',
+    renderCell: order => {
+      const summary = orderItemSummary(order)
+      return <span title={summary}>{summary}</span>
+    },
+  },
+  {
+    id: 'amount',
+    header: '金额',
+    defaultWidth: 104,
+    align: 'right',
+    cellClassName: 'font-num',
+    renderCell: order => `¥${Number(order.totalAmount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+  },
+  {
+    id: 'action',
+    header: '操作',
+    defaultWidth: 103,
+    align: 'right',
+    renderCell: order => <a href={`/v2/supply-chain/fulfillment/${order.id}`} className="text-button text-amber-fg">查看履约 ›</a>,
+  },
+]
 
 export default function InternalSupplyChainOrdersPage() {
   const [orders, setOrders] = useState<ProjectedOrder[] | null>(null)
@@ -213,42 +294,26 @@ export default function InternalSupplyChainOrdersPage() {
         )}
 
         {orders && orders.length > 0 && (
-          <div className="overflow-hidden rounded-card border border-border bg-white">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-caption">
-                <thead className="bg-bg text-gray3">
-                  <tr>
-                    <th className="px-4 py-3">订货单号</th>
-                    <th className="px-4 py-3">门店</th>
-                    <th className="px-4 py-3">供应商</th>
-                    <th className="px-4 py-3">创建日期</th>
-                    <th className="px-4 py-3">期望到货日</th>
-                    <th className="px-4 py-3">状态</th>
-                    <th className="px-4 py-3">商品摘要</th>
-                    <th className="px-4 py-3 text-right">金额</th>
-                    <th className="px-4 py-3 text-right">操作</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {orders.map(order => (
-                    <tr key={order.id} className="hover:bg-bg/50">
-                      <td className="px-4 py-3 font-num"><b>{order.no}</b></td>
-                      <td className="px-4 py-3 text-gray2">{order.store?.name || '—'}</td>
-                      <td className="px-4 py-3 text-gray2">{order.supplier?.name || '—'}</td>
-                      <td className="px-4 py-3 font-num text-gray2">{orderDeliveryDateText(order.createdAt)}</td>
-                      <td className="px-4 py-3 font-num text-gray2">{orderDeliveryDateText(order.expectedDeliveryDate)}</td>
-                      <td className="px-4 py-3"><Chip tone={orderStatusTone(order.status)}>{formatOrderStatusLabel(order.status)}</Chip></td>
-                      <td className="px-4 py-3 text-gray2">{orderItemSummary(order)}</td>
-                      <td className="px-4 py-3 text-right font-num">¥{Number(order.totalAmount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                      <td className="px-4 py-3 text-right">
-                        <a href={`/v2/supply-chain/fulfillment/${order.id}`} className="text-button text-amber-fg">查看履约 ›</a>
+          <div className="overflow-clip rounded-card border border-border bg-white">
+            <OrderCenterHorizontalTable>
+              <OrderCenterResizableTable
+                ariaLabel="订货单查询结果"
+                columns={ORDER_COLUMNS}
+                rows={orders}
+                rowKey={order => order.id}
+                footer={(
+                  <tfoot className="border-t border-border bg-bg">
+                    <tr>
+                      <td colSpan={8} className="px-4 py-3 text-right font-semibold">合计</td>
+                      <td className="px-4 py-3 text-right font-num font-semibold">
+                        ¥{orders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
+                      <td />
                     </tr>
-                  ))}
-                </tbody>
-                <tfoot className="border-t border-border bg-bg"><tr><td colSpan={7} className="px-4 py-3 text-right font-semibold">合计</td><td className="px-4 py-3 text-right font-num font-semibold">¥{orders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td /></tr></tfoot>
-              </table>
-            </div>
+                  </tfoot>
+                )}
+              />
+            </OrderCenterHorizontalTable>
           </div>
         )}
 

@@ -193,7 +193,7 @@ export async function consumeSupplierStockForShipment(
   const closedAt = input.closedAt || new Date()
   for (const line of input.lines) {
     const closure = reservationCloseState(line.quantity, line.shippedQty)
-    await tx.supplierStockReservation.updateMany({
+    const updated = await tx.supplierStockReservation.updateMany({
       where: { purchaseOrderItemId: line.purchaseOrderItemId, purchaseOrderId: input.purchaseOrderId, status: 'ACTIVE' },
       data: {
         status: closure.status,
@@ -204,6 +204,32 @@ export async function consumeSupplierStockForShipment(
         releasedAt: closure.markReleasedAt ? closedAt : null,
       },
     })
+    // A product first added in the shipment draft has no reservation from the
+    // earlier accept-order step. Persist the already-consumed audit fact after
+    // its outbound succeeds so later quantity/remove/restore operations have
+    // the same invariant as original order lines. A zero line deliberately
+    // remains reservation-free until its first positive outbound.
+    if (updated.count === 0 && new Prisma.Decimal(line.shippedQty).gt(0)) {
+      const existing = await tx.supplierStockReservation.findUnique({
+        where: { purchaseOrderItemId: line.purchaseOrderItemId },
+      })
+      if (!existing) {
+        const shipped = new Prisma.Decimal(line.shippedQty).toDecimalPlaces(3)
+        await tx.supplierStockReservation.create({
+          data: {
+            tenantId: input.tenantId,
+            supplierId: input.supplierId,
+            productId: line.productId,
+            purchaseOrderId: input.purchaseOrderId,
+            purchaseOrderItemId: line.purchaseOrderItemId,
+            quantity: shipped,
+            fulfilledQty: shipped,
+            status: 'CONSUMED',
+            consumedAt: closedAt,
+          },
+        })
+      }
+    }
   }
 }
 

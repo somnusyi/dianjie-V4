@@ -7,7 +7,7 @@ import {
   type OperationGroupCandidate,
 } from './orderOperationGroups'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
-import { FORMAL_DELIVERY_STATUSES, legacyVisibleDeliveryWhere } from './shipmentDraftMarker'
+import { FORMAL_DELIVERY_STATUSES } from './shipmentDraftMarker'
 
 /**
  * Read-only detail for a two-hour operation group.
@@ -45,7 +45,18 @@ export type OperationGroupDetail = {
   source: 'pending' | 'accepted'
   orders: Array<Record<string, unknown>>
   mergedItems: OperationGroupDetailLine[]
-  totals: { quantity: string; amount: string }
+  totals: {
+    quantity: string
+    amount: string
+    orderedQuantity: string
+    orderedAmount: string
+    originalOrderAmount: string
+    shipmentQuantity: string
+    shipmentAmount: string
+    hasAnyShipment: boolean
+    snapshotComplete: boolean
+  }
+  progressStep: number
 }
 
 export type OperationGroupOrderTimeLike = {
@@ -86,6 +97,21 @@ function decimalValue(value: unknown, fallback = '0'): Prisma.Decimal {
   }
 }
 
+function isFormalDeliveryStatus(status: string | null | undefined): boolean {
+  return FORMAL_DELIVERY_STATUSES.includes(status as typeof FORMAL_DELIVERY_STATUSES[number])
+}
+
+export function operationGroupShipmentSummary(orders: Array<{ deliveries?: Array<{ status?: string | null; actualTotalAmount?: unknown }> }>) {
+  const validDeliveries = orders.flatMap(order => (order.deliveries || [])
+    .filter(delivery => isFormalDeliveryStatus(delivery.status)))
+  return {
+    shipmentAmount: validDeliveries.reduce((sum, delivery) => sum.add(decimalValue(delivery.actualTotalAmount)), new Prisma.Decimal(0)).toFixed(2),
+    hasAnyShipment: validDeliveries.length > 0,
+    snapshotComplete: orders.every(order => (order.deliveries || [])
+      .some(delivery => isFormalDeliveryStatus(delivery.status))),
+  }
+}
+
 function numberValue(value: unknown): number {
   const n = Number(value)
   return Number.isFinite(n) ? n : 0
@@ -104,7 +130,7 @@ function expectedDateKey(value: unknown): string {
 function activeDelivery(order: any): any | null {
   const deliveries = Array.isArray(order.deliveries) ? order.deliveries : []
   return [...deliveries]
-    .filter(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
+    .filter(delivery => isFormalDeliveryStatus(delivery.status))
     .sort((a, b) => dateText(b.shippedAt || b.createdAt).localeCompare(dateText(a.shippedAt || a.createdAt)))[0] || null
 }
 
@@ -153,6 +179,50 @@ function sourceLines(order: any): Array<any> {
     })
 }
 
+function orderedLines(order: any): Array<any> {
+  return (Array.isArray(order.items) ? order.items : [])
+    .filter((item: any) => item.isActive !== false)
+    .map((raw: any) => {
+      const item = withDocumentProductSnapshot(raw)
+      const product = item.product || {}
+      return {
+        id: item.id,
+        productId: item.productId,
+        name: String(product.name || '—'),
+        spec: product.spec == null ? null : String(product.spec),
+        unit: String(product.unit || '—'),
+        quantity: decimalString(item.quantity),
+        shippedQty: item.shippedQty == null ? null : decimalString(item.shippedQty),
+        unitPrice: decimalString(item.unitPrice),
+        amount: decimalString(item.amount),
+      }
+    })
+}
+
+function deliverySnapshotLines(delivery: any): Array<any> {
+  return (Array.isArray(delivery?.items) ? delivery.items : []).map((raw: any) => {
+    const item = withDocumentProductSnapshot(raw)
+    const product = item.product || {}
+    return {
+      id: item.id,
+      productId: item.productId,
+      name: String(product.name || '—'),
+      spec: product.spec == null ? null : String(product.spec),
+      unit: String(product.unit || '—'),
+      quantity: decimalString(item.shippedQty),
+      shippedQty: decimalString(item.shippedQty),
+      unitPrice: decimalString(item.unitPriceSnapshot),
+      amount: decimalString(item.amount),
+    }
+  })
+}
+
+function shipmentLines(order: any): Array<any> {
+  const deliveries = (Array.isArray(order.deliveries) ? order.deliveries : [])
+    .filter((delivery: any) => isFormalDeliveryStatus(delivery.status))
+  return deliveries.flatMap(deliverySnapshotLines)
+}
+
 /** Pure, deterministic product merge used by the API and unit tests. */
 export function mergeOperationGroupItems(orders: Array<{ no: string; items: Array<any> }>): OperationGroupDetailLine[] {
   const merged = new Map<string, {
@@ -162,6 +232,7 @@ export function mergeOperationGroupItems(orders: Array<{ no: string; items: Arra
     unit: string
     quantity: Prisma.Decimal
     amount: Prisma.Decimal
+    fallbackUnitPrice: Prisma.Decimal
     sourceOrderNos: string[]
   }>()
 
@@ -170,7 +241,9 @@ export function mergeOperationGroupItems(orders: Array<{ no: string; items: Arra
       const productId = String(item.productId || '')
       if (!productId) continue
       const quantity = decimalValue(item.quantity)
-      if (quantity.lte(0)) continue
+      // Callers already pass only current, non-removed document rows. A zero
+      // quantity is therefore a meaningful delivery snapshot, not a removal.
+      if (quantity.lt(0)) continue
       const name = String(item.name || '—')
       const spec = item.spec == null ? null : String(item.spec)
       const unit = String(item.unit || '—')
@@ -178,7 +251,8 @@ export function mergeOperationGroupItems(orders: Array<{ no: string; items: Arra
       // from being silently merged just because the current SKU was renamed.
       const key = `${productId}|${name}|${spec || ''}|${unit}`
       const current = merged.get(key) || {
-        productId, name, spec, unit, quantity: new Prisma.Decimal(0), amount: new Prisma.Decimal(0), sourceOrderNos: [],
+        productId, name, spec, unit, quantity: new Prisma.Decimal(0), amount: new Prisma.Decimal(0),
+        fallbackUnitPrice: decimalValue(item.unitPrice), sourceOrderNos: [],
       }
       current.quantity = current.quantity.add(quantity)
       current.amount = current.amount.add(decimalValue(item.amount))
@@ -198,7 +272,7 @@ export function mergeOperationGroupItems(orders: Array<{ no: string; items: Arra
     // A weighted price keeps the displayed line mathematically consistent
     // when historical source orders used different frozen prices. The exact
     // amount remains authoritative and is returned separately.
-    unitPrice: item.quantity.gt(0) ? item.amount.div(item.quantity).toFixed(2) : '0.00',
+    unitPrice: item.quantity.gt(0) ? item.amount.div(item.quantity).toFixed(2) : item.fallbackUnitPrice.toFixed(2),
     amount: item.amount.toFixed(2),
     sourceOrderNos: item.sourceOrderNos,
   }))
@@ -211,12 +285,13 @@ const detailInclude = {
   shippedBy: { select: { id: true, name: true, role: true } },
   items: { where: { isActive: true }, include: { product: true } },
   deliveries: {
-    where: {
-      status: { in: [...FORMAL_DELIVERY_STATUSES] },
-      ...legacyVisibleDeliveryWhere(),
-    },
     orderBy: { createdAt: 'asc' as const },
-    include: { items: { where: { removedAt: null }, include: { product: true } } },
+    include: {
+      items: { where: { removedAt: null }, include: { product: true } },
+      // The group UI only needs to know whether a receipt already exists in
+      // order to hide delivery-item editing. Do not expose receipt contents.
+      receipt: { select: { id: true } },
+    },
   },
 }
 
@@ -363,7 +438,22 @@ export async function loadOperationGroupDetails(
   const printableOrders = orderedRows.map(row => ({
     id: row.id,
     no: row.no,
+    rowVersion: row.rowVersion,
     deliveryNo: activeDelivery(row)?.no || null,
+    deliveryNos: (Array.isArray(row.deliveries) ? row.deliveries : [])
+      .filter((delivery: any) => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
+      .map((delivery: any) => String(delivery.no)),
+    deliverySummaries: (Array.isArray(row.deliveries) ? row.deliveries : [])
+      .filter((delivery: any) => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
+      .sort((a: any, b: any) => dateText(a.shippedAt || a.createdAt).localeCompare(dateText(b.shippedAt || b.createdAt)))
+      .map((delivery: any) => ({
+        id: String(delivery.id),
+        no: String(delivery.no),
+        status: String(delivery.status),
+        rowVersion: Number(delivery.rowVersion),
+        hasReceipt: Boolean(delivery.receipt),
+        items: deliverySnapshotLines(delivery),
+      })),
     createdAt: dateText(row.createdAt),
     submittedAt: row.submittedAt ? dateText(row.submittedAt) : null,
     expectedDate: expectedDateKey(row.expectedDate),
@@ -382,11 +472,41 @@ export async function loadOperationGroupDetails(
     shippedBy: row.shippedBy || null,
     consignee: { name: row.store?.managerName || null, phone: row.store?.phone || null },
     items: sourceLines(row),
+    orderedItems: orderedLines(row),
+    shipmentItems: shipmentLines(row),
   }))
-  const mergedItems = mergeOperationGroupItems(printableOrders)
+  const orderedMergedItems = mergeOperationGroupItems(printableOrders.map(order => ({
+    no: order.no,
+    items: order.orderedItems,
+  })))
+  const shipmentMergedItems = mergeOperationGroupItems(printableOrders.map(order => ({
+    no: order.no,
+    items: order.shipmentItems,
+  })))
+  const shipmentSummary = operationGroupShipmentSummary(orderedRows)
+  const validDeliveries = orderedRows.flatMap(row => (Array.isArray(row.deliveries) ? row.deliveries : [])
+    .filter((delivery: any) => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED'))
+  const { hasAnyShipment, snapshotComplete, shipmentAmount } = shipmentSummary
+  // Once shipment snapshots exist, the aggregate product view contains only
+  // shipment lines. Never fill missing members with ordered quantities.
+  const mergedItems = hasAnyShipment ? shipmentMergedItems : orderedMergedItems
+  const shipmentQuantity = shipmentMergedItems.reduce((sum, item) => sum.add(decimalValue(item.quantity)), new Prisma.Decimal(0)).toFixed(2)
   const totals = {
     quantity: mergedItems.reduce((sum, item) => sum.add(decimalValue(item.quantity)), new Prisma.Decimal(0)).toFixed(2),
-    amount: mergedItems.reduce((sum, item) => sum.add(decimalValue(item.amount)), new Prisma.Decimal(0)).toFixed(2),
+    amount: hasAnyShipment
+      ? shipmentAmount
+      : orderedMergedItems.reduce((sum, item) => sum.add(decimalValue(item.amount)), new Prisma.Decimal(0)).toFixed(2),
+    orderedQuantity: orderedMergedItems.reduce((sum, item) => sum.add(decimalValue(item.quantity)), new Prisma.Decimal(0)).toFixed(2),
+    orderedAmount: orderedMergedItems.reduce((sum, item) => sum.add(decimalValue(item.amount)), new Prisma.Decimal(0)).toFixed(2),
+    originalOrderAmount: orderedRows.reduce((sum, row) => sum.add(decimalValue(row.originalTotalAmount ?? row.totalAmount)), new Prisma.Decimal(0)).toFixed(2),
+    shipmentQuantity,
+    shipmentAmount,
+    hasAnyShipment,
+    snapshotComplete,
   }
-  return { group, source, orders: printableOrders, mergedItems, totals }
+  const progressStep = source === 'pending' ? 0
+    : orderedRows.every(row => row.receivedAt) ? 4
+      : validDeliveries.length > 0 && validDeliveries.every((delivery: any) => ['DELIVERED', 'RECEIVED'].includes(String(delivery.status))) ? 3
+        : validDeliveries.length > 0 ? 2 : 1
+  return { group, source, orders: printableOrders, mergedItems, totals, progressStep }
 }

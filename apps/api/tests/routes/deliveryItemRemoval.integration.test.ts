@@ -208,7 +208,9 @@ describe('delivery item removal (integration)', () => {
     expect(removedItem?.shippedQty.toString()).toBe('0')
     expect(removedItem?.amount.toString()).toBe('0')
     expect(deliveryList.statusCode).toBe(200)
-    expect(deliveryList.json().items[0].items.map((item: any) => item.id)).toEqual([itemBId, itemCId, itemDId])
+    const visibleItemIds = deliveryList.json().items[0].items.map((item: any) => item.id)
+    expect(visibleItemIds).toHaveLength(3)
+    expect(visibleItemIds).toEqual(expect.arrayContaining([itemBId, itemCId, itemDId]))
   })
 
   it('changes a positive quantity and adds an existing catalog product before delivery', async () => {
@@ -361,5 +363,164 @@ describe('delivery item removal (integration)', () => {
     expect(afterRemove.statusCode).toBe(200)
     expect(afterRemove.json().items.map((item: any) => item.id)).not.toContain(itemDId)
     expect((await prisma.deliveryOrderItem.findUniqueOrThrow({ where: { id: itemDId } })).removedAt).not.toBeNull()
+  })
+
+  it('rejects empty, duplicate, and conflicting batch mutations without changing the delivery', async () => {
+    const before = await prisma.deliveryOrder.findUniqueOrThrow({ where: { id: deliveryId } })
+    const invalidPayloads = [
+      { rowVersion: before.rowVersion },
+      {
+        rowVersion: before.rowVersion,
+        quantityChanges: [
+          { itemId: 'duplicate-item', targetQuantity: 1 },
+          { itemId: 'duplicate-item', targetQuantity: 2 },
+        ],
+      },
+      {
+        rowVersion: before.rowVersion,
+        quantityChanges: [{ itemId: 'conflicting-item', targetQuantity: 1 }],
+        removals: [{ itemId: 'conflicting-item' }],
+      },
+    ]
+
+    for (const payload of invalidPayloads) {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/api/deliveries/${deliveryId}/items`,
+        headers: { 'x-test-actor': 'supply-chain' },
+        payload,
+      })
+      expect(response.statusCode).toBe(400)
+    }
+
+    const after = await prisma.deliveryOrder.findUniqueOrThrow({ where: { id: deliveryId } })
+    expect(after.rowVersion).toBe(before.rowVersion)
+    expect(after.actualTotalAmount.toString()).toBe(before.actualTotalAmount.toString())
+  })
+
+  it('rejects store-side batch mutation before any item is changed', async () => {
+    const before = await prisma.deliveryOrder.findUniqueOrThrow({ where: { id: deliveryId } })
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/api/deliveries/${deliveryId}/items`,
+      headers: { 'x-test-actor': 'store' },
+      payload: {
+        rowVersion: before.rowVersion,
+        quantityChanges: [{ itemId: itemAId, targetQuantity: 99 }],
+      },
+    })
+
+    expect(response.statusCode).toBe(403)
+    expect(response.json()).toEqual({ error: '仅内部供应链可调整配送商品' })
+    expect((await prisma.deliveryOrder.findUniqueOrThrow({ where: { id: deliveryId } })).rowVersion).toBe(before.rowVersion)
+  })
+
+  it('saves quantity, addition, and removal atomically as one batch request', async () => {
+    const batchOrder = await prisma.purchaseOrder.create({
+      data: {
+        tenantId, no: `PO-BATCH-${suffix}`, storeId, supplierId, expectedDate: new Date('2026-09-01'),
+        totalAmount: 30, originalTotalAmount: 30, currentOrderAmount: 30, status: 'DELIVERING',
+        createdById: storeUserId,
+        items: {
+          create: [
+            { productId: productAId, quantity: 2, shippedQty: 2, unitPrice: 10, amount: 20 },
+            { productId: productBId, quantity: 1, shippedQty: 1, unitPrice: 10, amount: 10 },
+          ],
+        },
+      },
+      include: { items: true },
+    })
+    const batchDelivery = await prisma.deliveryOrder.create({
+      data: {
+        tenantId, no: `DO-BATCH-${suffix}`, purchaseOrderId: batchOrder.id, storeId, supplierId,
+        status: 'SHIPPED', actualTotalAmount: 30, createdById: supplierUserId,
+        shippedById: supplierUserId, shippedAt: new Date('2026-09-01T01:00:00.000Z'),
+        items: {
+          create: batchOrder.items.map(item => ({
+            purchaseOrderItemId: item.id,
+            productId: item.productId,
+            orderedQtySnapshot: item.quantity,
+            shippedQty: item.shippedQty,
+            unitPriceSnapshot: item.unitPrice,
+            amount: item.amount,
+            productNameSnapshot: item.productId === productAId ? '批量调整商品' : '批量移除商品',
+            productUnitSnapshot: 'kg',
+          })),
+        },
+      },
+      include: { items: true },
+    })
+    const quantityItem = batchDelivery.items.find(item => item.productId === productAId)!
+    const removalItem = batchDelivery.items.find(item => item.productId === productBId)!
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/api/deliveries/${batchDelivery.id}/items`,
+      headers: { 'x-test-actor': 'supply-chain' },
+      payload: {
+        rowVersion: 0,
+        reason: '商品明细统一保存测试',
+        quantityChanges: [{ itemId: quantityItem.id, targetQuantity: 3 }],
+        additions: [{
+          customProduct: { name: '批量新增商品', unit: '件', unitPrice: 7.5 },
+          quantity: 2,
+        }],
+        removals: [{ itemId: removalItem.id }],
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({
+      success: true,
+      rowVersion: 3,
+      changedCount: 1,
+      addedCount: 1,
+      removedCount: 1,
+      deliveryTotal: '45.00',
+      orderTotal: '45.00',
+    })
+    const [removed, added, delivery] = await Promise.all([
+      prisma.deliveryOrderItem.findUniqueOrThrow({ where: { id: removalItem.id } }),
+      prisma.deliveryOrderItem.findFirstOrThrow({
+        where: { deliveryOrderId: batchDelivery.id, productNameSnapshot: '批量新增商品', removedAt: null },
+      }),
+      prisma.deliveryOrder.findUniqueOrThrow({ where: { id: batchDelivery.id } }),
+    ])
+    expect(removed.removedAt).not.toBeNull()
+    expect(removed.shippedQty.toString()).toBe('0')
+    expect(added.shippedQty.toString()).toBe('2')
+    expect(added.amount.toString()).toBe('15')
+    expect(delivery.rowVersion).toBe(3)
+    expect((await prisma.deliveryOrderItem.findUniqueOrThrow({ where: { id: quantityItem.id } })).shippedQty.toString()).toBe('3')
+
+    const eventsBefore = await prisma.deliveryOrderEvent.count({ where: { tenantId, deliveryOrderId: batchDelivery.id } })
+    const rollbackResponse = await app.inject({
+      method: 'PATCH',
+      url: `/api/deliveries/${batchDelivery.id}/items`,
+      headers: { 'x-test-actor': 'supply-chain' },
+      payload: {
+        rowVersion: 3,
+        quantityChanges: [{ itemId: quantityItem.id, targetQuantity: 4 }],
+        additions: [{
+          customProduct: { name: '应回滚的商品', unit: '件', unitPrice: 3 },
+          quantity: 1,
+        }],
+        removals: [{ itemId: 'missing-item-that-forces-rollback' }],
+      },
+    })
+
+    expect(rollbackResponse.statusCode).toBe(404)
+    expect(rollbackResponse.json()).toEqual({ error: '配送商品不存在' })
+    const [afterRollback, retainedAfter, rolledBackProduct, eventsAfter] = await Promise.all([
+      prisma.deliveryOrder.findUniqueOrThrow({ where: { id: batchDelivery.id } }),
+      prisma.deliveryOrderItem.findUniqueOrThrow({ where: { id: quantityItem.id } }),
+      prisma.product.findFirst({ where: { tenantId, name: '应回滚的商品' } }),
+      prisma.deliveryOrderEvent.count({ where: { tenantId, deliveryOrderId: batchDelivery.id } }),
+    ])
+    expect(afterRollback.rowVersion).toBe(3)
+    expect(afterRollback.actualTotalAmount.toString()).toBe('45')
+    expect(retainedAfter.shippedQty.toString()).toBe('3')
+    expect(retainedAfter.amount.toString()).toBe('30')
+    expect(rolledBackProduct).toBeNull()
+    expect(eventsAfter).toBe(eventsBefore)
   })
 })

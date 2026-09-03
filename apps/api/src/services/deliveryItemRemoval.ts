@@ -1,6 +1,6 @@
 import { Prisma } from '@dianjie/db'
 import { createId } from '@paralleldrive/cuid2'
-import { costUnitPricedOrderLine, PURCHASE_ORDER_AMOUNT_MAX } from './costUnitPricing'
+import { costUnitPricedOrderLine, costUnitPriceToOrderUnitPrice, PURCHASE_ORDER_AMOUNT_MAX } from './costUnitPricing'
 import { resolveTenantWarehouseId } from './defaultWarehouse'
 import { consumeSupplierStockBatches } from './supplierStockBatch'
 import { freezeProductFourUnitsForSupplyDocument } from './supplyDocumentUnitSnapshots'
@@ -8,8 +8,9 @@ import {
   consumeWarehouseLedgerForShipment,
   resolveFrozenOrderInventoryLine,
   reverseDeliveryOutboundInTransaction,
+  warehouseReservationCloseState,
 } from './warehouseLedger'
-import { FORMAL_DELIVERY_STATUSES } from './shipmentDraftMarker'
+import { formalDeliveryStatusFilter } from './shipmentDraftMarker'
 
 const ZERO = new Prisma.Decimal(0)
 const SUPPLIER_STOCK_REMOVAL_SOURCE = 'DeliveryOrderItemRemoval'
@@ -368,11 +369,6 @@ export async function removeDeliveryItemInTransaction(
     throw businessError('该商品已有实收数量，不能移除', 409)
   }
 
-  const remainingCount = await tx.deliveryOrderItem.count({
-    where: { deliveryOrderId: delivery.id, id: { not: item.id }, shippedQty: { gt: 0 } },
-  })
-  if (removedQty.gt(0) && remainingCount === 0) throw businessError('配送单至少要保留一件商品；如整单不发请走拒单流程', 409)
-
   const poItemId = item.purchaseOrderItemId
   if (!poItemId) throw businessError('历史配送明细未关联原订货行，不能安全移除', 409)
   const poItem = delivery.purchaseOrder.items.find(candidate => candidate.id === poItemId)
@@ -384,10 +380,18 @@ export async function removeDeliveryItemInTransaction(
   if (sourceType === 'HEADQ_WAREHOUSE') {
     const mode = await resolveWarehouseMode(tx, input.tenantId, delivery.warehouseId)
     if (mode !== 'OFF') {
+      const warehouseId = delivery.warehouseId || await resolveTenantWarehouseId(tx, input.tenantId, undefined)
+      await settleActiveWarehouseReservationBeforeMutation(tx, {
+        tenantId: input.tenantId,
+        warehouseId,
+        purchaseOrderId: delivery.purchaseOrderId,
+        deliveryOrderId: delivery.id,
+        orderNo: delivery.purchaseOrder.no,
+        purchaseOrderItemId: poItemId,
+        item,
+        userId: input.userId,
+      })
       const warehouseReservation = await tx.warehouseLedgerReservation.findUnique({ where: { purchaseOrderItemId: poItemId } })
-      if (warehouseReservation?.status === 'ACTIVE') {
-        throw businessError('总仓预占尚未结算，暂不能移除；请稍后刷新重试', 409)
-      }
       if (removedQty.gt(0)) {
         await reverseWarehouseOutboundQuantity(tx, {
           tenantId: input.tenantId,
@@ -398,7 +402,7 @@ export async function removeDeliveryItemInTransaction(
           productId: item.productId,
           quantity: removedQty,
           reason,
-          operationKey: 'remove',
+          operationKey: `remove-${input.rowVersion}`,
         })
       }
       if (warehouseReservation?.status === 'CONSUMED') {
@@ -420,6 +424,7 @@ export async function removeDeliveryItemInTransaction(
         userId: input.userId,
         orderNo: delivery.purchaseOrder.no,
         reason,
+        sourceId: `${delivery.id}:${item.id}:${input.rowVersion}`,
       })
     }
     const reservation = await tx.supplierStockReservation.findUnique({ where: { purchaseOrderItemId: poItemId } })
@@ -457,7 +462,7 @@ export async function removeDeliveryItemInTransaction(
       purchaseOrderItemId: poItemId,
       deliveryOrder: {
         purchaseOrderId: delivery.purchaseOrderId,
-        status: { in: [...FORMAL_DELIVERY_STATUSES] },
+        status: formalDeliveryStatusFilter(),
       },
       shippedQty: { gt: 0 },
     },
@@ -638,7 +643,9 @@ async function loadDeliveryForInternalMutation(
     || delivery.supplierId !== input.supplierId
     || delivery.purchaseOrder.supplierId !== input.supplierId
   ) throw businessError('配送单不存在', 404)
-  if (delivery.status !== 'SHIPPED') throw businessError('仅未送达的配送单可以调整商品', 409)
+  if (!['SHIPPED', 'DELIVERED'].includes(delivery.status)) {
+    throw businessError('仅收货单保存前可以调整配送商品', 409)
+  }
   if (delivery.receipt) throw businessError('配送单已生成收货单，不能调整商品', 409)
   if (delivery.rowVersion !== input.rowVersion) throw businessError('配送单已更新，请刷新后重试', 409)
   return delivery
@@ -656,6 +663,63 @@ function resolvedInventoryTarget(item: any, targetQuantity: Prisma.Decimal) {
     inventoryUnitSnapshot: item.inventoryUnitSnapshot,
     inventoryUnitsPerOrderUnitSnapshot: item.inventoryUnitsPerOrderUnitSnapshot,
   })
+}
+
+/**
+ * Shipment and the asynchronous reservation projector can cross in flight.
+ * Re-project the current delivery fact under the same delivery lock so an
+ * ACTIVE reservation is deterministically consumed/released before a user
+ * mutation. Existing outbound idempotency prevents a second stock deduction.
+ */
+async function settleActiveWarehouseReservationBeforeMutation(
+  tx: Prisma.TransactionClient,
+  input: {
+    tenantId: string
+    warehouseId: string
+    purchaseOrderId: string
+    deliveryOrderId: string
+    orderNo: string
+    purchaseOrderItemId: string
+    item: any
+    userId: string
+  },
+) {
+  const reservation = await tx.warehouseLedgerReservation.findUnique({
+    where: { purchaseOrderItemId: input.purchaseOrderItemId },
+  })
+  const currentQuantity = new Prisma.Decimal(input.item.shippedQty || 0).toDecimalPlaces(2)
+  if (reservation && reservation.status !== 'ACTIVE') return reservation
+  // In SHADOW mode the asynchronous projector can still be in flight when a
+  // user immediately edits a just-shipped draft addition. Re-project a
+  // positive current fact even when no reservation is visible yet; outbound
+  // idempotency prevents a second deduction and the ledger service fills the
+  // missing consumed reservation.
+  if (!reservation && currentQuantity.isZero()) return null
+  await consumeWarehouseLedgerForShipment(tx, {
+    tenantId: input.tenantId,
+    warehouseId: input.warehouseId,
+    purchaseOrderId: input.purchaseOrderId,
+    deliveryOrderId: input.deliveryOrderId,
+    orderNo: input.orderNo,
+    userId: input.userId,
+    effectiveAt: new Date(),
+    lines: [{
+      purchaseOrderItemId: input.purchaseOrderItemId,
+      productId: input.item.productId,
+      quantity: currentQuantity,
+      shippedQty: currentQuantity,
+      productName: input.item.productNameSnapshot || input.item.product?.name,
+      productUnit: input.item.productUnitSnapshot || input.item.product?.unit,
+      orderUnitSnapshot: input.item.orderUnitSnapshot,
+      inventoryUnitSnapshot: input.item.inventoryUnitSnapshot,
+      inventoryUnitsPerOrderUnitSnapshot: input.item.inventoryUnitsPerOrderUnitSnapshot,
+    }],
+  })
+  const settled = await tx.warehouseLedgerReservation.findUnique({
+    where: { purchaseOrderItemId: input.purchaseOrderItemId },
+  })
+  if (settled?.status === 'ACTIVE') throw businessError('总仓预占结算未完成，无法安全调整', 409)
+  return settled
 }
 
 async function syncSupplierReservation(
@@ -697,9 +761,16 @@ async function syncSupplierReservation(
     || reservation.productId !== input.productId
   ) throw businessError('供应商库存预占范围不一致，无法安全调整', 409)
   if (reservation.status === 'ACTIVE') throw businessError('供应商库存预占尚未结算，暂不能调整', 409)
+  const fulfilledQty = new Prisma.Decimal(input.targetQuantity).toDecimalPlaces(3)
+  const status = fulfilledQty.gt(0) ? 'CONSUMED' as const : 'RELEASED' as const
   await tx.supplierStockReservation.update({
     where: { id: reservation.id },
-    data: { status: 'CONSUMED', fulfilledQty: input.targetQuantity, consumedAt: reservation.consumedAt || new Date() },
+    data: {
+      status,
+      fulfilledQty,
+      consumedAt: status === 'CONSUMED' ? reservation.consumedAt || new Date() : null,
+      releasedAt: status === 'RELEASED' ? new Date() : null,
+    },
   })
 }
 
@@ -751,12 +822,14 @@ async function syncWarehouseReservation(
   if (!new Prisma.Decimal(reservation.conversionFactor).equals(resolved.conversionFactor)) {
     throw businessError('配送商品与总仓预占的单位换算不一致', 409)
   }
+  const close = warehouseReservationCloseState(reservation.inventoryQuantity, resolved.inventoryQuantity)
   await tx.warehouseLedgerReservation.update({
     where: { id: reservation.id },
     data: {
-      status: 'CONSUMED',
-      fulfilledInventoryQty: resolved.inventoryQuantity,
-      consumedAt: reservation.consumedAt || new Date(),
+      status: close.status,
+      fulfilledInventoryQty: close.fulfilledInventoryQty,
+      consumedAt: close.status === 'CONSUMED' ? reservation.consumedAt || new Date() : null,
+      releasedAt: close.releasedInventoryQty.gt(0) || close.status === 'RELEASED' ? new Date() : null,
     },
   })
 }
@@ -772,7 +845,7 @@ async function recalculateDeliveryAndOrderTotals(
   const deliveryTotal = sumDecimal(deliveryItems.map(item => item.amount)).toDecimalPlaces(2)
   if (deliveryTotal.gt(PURCHASE_ORDER_AMOUNT_MAX)) throw businessError('配送单总金额超过系统上限', 400)
   const deliveryUpdated = await tx.deliveryOrder.updateMany({
-    where: { id: input.delivery.id, status: 'SHIPPED', rowVersion: input.expectedDeliveryRowVersion },
+    where: { id: input.delivery.id, status: input.delivery.status, rowVersion: input.expectedDeliveryRowVersion },
     data: { actualTotalAmount: deliveryTotal, rowVersion: { increment: 1 } },
   })
   if (deliveryUpdated.count !== 1) throw businessError('配送单已被其他人处理，请刷新后重试', 409)
@@ -782,7 +855,7 @@ async function recalculateDeliveryAndOrderTotals(
       purchaseOrderItemId: input.purchaseOrderItemId,
       deliveryOrder: {
         purchaseOrderId: input.delivery.purchaseOrderId,
-        status: { in: [...FORMAL_DELIVERY_STATUSES] },
+        status: formalDeliveryStatusFilter(),
       },
       shippedQty: { gt: 0 },
     },
@@ -837,9 +910,22 @@ export async function changeDeliveryItemQuantityInTransaction(
     const mode = await resolveWarehouseMode(tx, input.tenantId, delivery.warehouseId)
     if (mode !== 'OFF') {
       const warehouseId = delivery.warehouseId || await resolveTenantWarehouseId(tx, input.tenantId, undefined)
+      await settleActiveWarehouseReservationBeforeMutation(tx, {
+        tenantId: input.tenantId,
+        warehouseId,
+        purchaseOrderId: delivery.purchaseOrderId,
+        deliveryOrderId: delivery.id,
+        orderNo: delivery.purchaseOrder.no,
+        purchaseOrderItemId: poItem.id,
+        item,
+        userId: input.userId,
+      })
       const reservation = await tx.warehouseLedgerReservation.findUnique({ where: { purchaseOrderItemId: poItem.id } })
-      if (!reservation) throw businessError('总仓预占记录缺失，无法安全调整', 409)
-      if (reservation.status === 'ACTIVE') throw businessError('总仓预占尚未结算，暂不能调整', 409)
+      // A post-shipment line may have been created at quantity 0. It has no
+      // outbound and deliberately no positive-only warehouse reservation yet;
+      // its first increase creates the consumed reservation atomically.
+      const canCreateReservation = !reservation && current.isZero() && delta.gt(0)
+      if (!reservation && !canCreateReservation) throw businessError('总仓预占记录缺失，无法安全调整', 409)
       if (delta.lt(0)) {
         await reverseWarehouseOutboundQuantity(tx, {
           tenantId: input.tenantId,
@@ -883,13 +969,14 @@ export async function changeDeliveryItemQuantityInTransaction(
         productId: item.productId,
         item,
         targetQuantity: target,
-        allowCreate: false,
+        allowCreate: canCreateReservation,
       })
     }
   } else if (supplier.inventoryMode === 'STRICT') {
     const reservation = await tx.supplierStockReservation.findUnique({ where: { purchaseOrderItemId: poItem.id } })
-    if (!reservation) throw businessError('供应商库存预占记录缺失，无法安全调整', 409)
-    if (reservation.status === 'ACTIVE') throw businessError('供应商库存预占尚未结算，暂不能调整', 409)
+    const canCreateReservation = !reservation && current.isZero() && delta.gt(0)
+    if (!reservation && !canCreateReservation) throw businessError('供应商库存预占记录缺失，无法安全调整', 409)
+    if (reservation?.status === 'ACTIVE') throw businessError('供应商库存预占尚未结算，暂不能调整', 409)
     if (delta.lt(0)) {
       await reverseSupplierOutbound(tx, {
         tenantId: input.tenantId,
@@ -924,7 +1011,7 @@ export async function changeDeliveryItemQuantityInTransaction(
       purchaseOrderItemId: poItem.id,
       productId: item.productId,
       targetQuantity: target,
-      allowCreate: false,
+      allowCreate: canCreateReservation,
     })
   }
 
@@ -984,6 +1071,172 @@ export async function changeDeliveryItemQuantityInTransaction(
   }
 }
 
+async function restoreRemovedDeliveryItemInTransaction(
+  tx: Prisma.TransactionClient,
+  input: AddItemInput,
+  delivery: any,
+  item: any,
+  product: any,
+  targetQuantity: Prisma.Decimal,
+  reason: string,
+) {
+  if (!item.purchaseOrderItemId) {
+    throw businessError('历史配送明细未关联原订货行，不能安全恢复', 409)
+  }
+  const poItem = await tx.purchaseOrderItem.findFirst({
+    where: {
+      id: item.purchaseOrderItemId,
+      purchaseOrderId: delivery.purchaseOrderId,
+      productId: item.productId,
+    },
+  })
+  if (!poItem) throw businessError('原订货行不存在，不能安全恢复', 409)
+
+  const unitPrice = new Prisma.Decimal(item.unitPriceSnapshot).toDecimalPlaces(2)
+  const amount = targetQuantity.mul(unitPrice).toDecimalPlaces(2)
+  if (amount.gt(PURCHASE_ORDER_AMOUNT_MAX)) throw businessError('单行金额超过系统上限', 400)
+  const supplier = delivery.purchaseOrder.supplier
+
+  if (targetQuantity.gt(0) && supplier.sourceType === 'HEADQ_WAREHOUSE') {
+    const mode = await resolveWarehouseMode(tx, input.tenantId, delivery.warehouseId)
+    if (mode !== 'OFF') {
+      const warehouseId = delivery.warehouseId || await resolveTenantWarehouseId(tx, input.tenantId, undefined)
+      await settleActiveWarehouseReservationBeforeMutation(tx, {
+        tenantId: input.tenantId,
+        warehouseId,
+        purchaseOrderId: delivery.purchaseOrderId,
+        deliveryOrderId: delivery.id,
+        orderNo: delivery.purchaseOrder.no,
+        purchaseOrderItemId: poItem.id,
+        item,
+        userId: input.userId,
+      })
+      await consumeWarehouseLedgerForShipment(tx, {
+        tenantId: input.tenantId,
+        warehouseId,
+        purchaseOrderId: delivery.purchaseOrderId,
+        deliveryOrderId: delivery.id,
+        orderNo: delivery.purchaseOrder.no,
+        userId: input.userId,
+        effectiveAt: new Date(),
+        idempotencyKeySuffix: `restore-${input.rowVersion}`,
+        lines: [{
+          purchaseOrderItemId: poItem.id,
+          productId: item.productId,
+          quantity: targetQuantity,
+          shippedQty: targetQuantity,
+          productName: item.productNameSnapshot || product.name,
+          productUnit: item.productUnitSnapshot || product.orderUnit || product.unit,
+          orderUnitSnapshot: item.orderUnitSnapshot,
+          inventoryUnitSnapshot: item.inventoryUnitSnapshot,
+          inventoryUnitsPerOrderUnitSnapshot: item.inventoryUnitsPerOrderUnitSnapshot,
+        }],
+      })
+      await syncWarehouseReservation(tx, {
+        tenantId: input.tenantId,
+        warehouseId,
+        purchaseOrderId: delivery.purchaseOrderId,
+        purchaseOrderItemId: poItem.id,
+        productId: item.productId,
+        item,
+        targetQuantity,
+        allowCreate: true,
+      })
+    }
+  } else if (targetQuantity.gt(0) && supplier.inventoryMode === 'STRICT') {
+    await consumeAdditionalSupplierOutbound(tx, {
+      tenantId: input.tenantId,
+      supplierId: input.supplierId,
+      purchaseOrderId: delivery.purchaseOrderId,
+      deliveryOrderId: delivery.id,
+      productId: item.productId,
+      quantity: targetQuantity,
+      userId: input.userId,
+      orderNo: delivery.purchaseOrder.no,
+      reason,
+    })
+    await syncSupplierReservation(tx, {
+      tenantId: input.tenantId,
+      supplierId: input.supplierId,
+      purchaseOrderId: delivery.purchaseOrderId,
+      purchaseOrderItemId: poItem.id,
+      productId: item.productId,
+      targetQuantity,
+      allowCreate: true,
+    })
+  }
+
+  await tx.purchaseOrderItem.update({
+    where: { id: poItem.id },
+    data: { isActive: true },
+  })
+  await tx.deliveryOrderItem.update({
+    where: { id: item.id },
+    data: {
+      shippedQty: targetQuantity,
+      amount,
+      receivedQty: null,
+      removedAt: null,
+    },
+  })
+  const totals = await recalculateDeliveryAndOrderTotals(tx, {
+    delivery,
+    purchaseOrderItemId: poItem.id,
+    expectedDeliveryRowVersion: input.rowVersion,
+  })
+  await tx.deliveryOrderEvent.create({
+    data: {
+      tenantId: input.tenantId,
+      deliveryOrderId: delivery.id,
+      eventType: 'UPDATED',
+      actorId: input.userId,
+      actorRole: input.userRole,
+      fromStatus: delivery.status,
+      toStatus: delivery.status,
+      requestId: input.requestId || null,
+      ip: input.ip || null,
+      metadata: {
+        action: 'RESTORE_ITEM_BEFORE_RECEIPT',
+        itemId: item.id,
+        productId: item.productId,
+        quantity: targetQuantity.toFixed(2),
+        unitPrice: unitPrice.toFixed(2),
+        amount: amount.toFixed(2),
+        reason,
+      },
+    },
+  })
+  await tx.opLog.create({
+    data: {
+      tenantId: input.tenantId,
+      userId: input.userId,
+      action: `内部供应链恢复配送商品 ${item.productNameSnapshot || product.name} ${targetQuantity.toFixed(2)}${item.productUnitSnapshot || product.orderUnit || product.unit || ''}`,
+      target: delivery.no,
+      entityType: 'DeliveryOrderItem',
+      targetId: item.id,
+      metadata: {
+        deliveryOrderId: delivery.id,
+        purchaseOrderId: delivery.purchaseOrderId,
+        productId: item.productId,
+        quantity: targetQuantity.toFixed(2),
+        unitPrice: unitPrice.toFixed(2),
+        reason,
+      },
+    },
+  })
+  return {
+    success: true,
+    restored: true,
+    itemId: item.id,
+    productId: item.productId,
+    customProductCreated: false,
+    deliveryId: delivery.id,
+    rowVersion: input.rowVersion + 1,
+    deliveryTotal: totals.deliveryTotal.toFixed(2),
+    orderTotal: totals.orderTotal.toFixed(2),
+  }
+}
+
 /** Internal supply chain appends a missing product to an already-shipped delivery. */
 export async function addDeliveryItemInTransaction(
   tx: Prisma.TransactionClient,
@@ -991,7 +1244,8 @@ export async function addDeliveryItemInTransaction(
 ) {
   const delivery = await loadDeliveryForInternalMutation(tx, input)
   const quantity = new Prisma.Decimal(input.quantity).toDecimalPlaces(2)
-  if (quantity.lte(0)) throw businessError('新增商品数量必须大于 0', 400)
+  if (quantity.lt(0)) throw businessError('新增商品数量不能小于 0', 400)
+  const reason = String(input.reason || '内部供应链增加或恢复配送商品').trim().slice(0, 200)
   const custom = input.customProduct || null
   let product: any
   if (custom) {
@@ -1019,9 +1273,34 @@ export async function addDeliveryItemInTransaction(
       },
     })
   } else {
+    const productId = String(input.productId)
+    const duplicate = delivery.items.find(candidate => candidate.productId === productId)
+    if (duplicate) {
+      const historicalProduct = duplicate.product
+      if (
+        !historicalProduct
+        || historicalProduct.id !== productId
+        || historicalProduct.tenantId !== input.tenantId
+        || historicalProduct.supplierId !== input.supplierId
+      ) {
+        throw businessError('商品不存在、已停用或不属于当前供应商', 404)
+      }
+      if (duplicate.removedAt) {
+        return restoreRemovedDeliveryItemInTransaction(
+          tx,
+          input,
+          delivery,
+          duplicate,
+          historicalProduct,
+          quantity,
+          reason,
+        )
+      }
+      throw businessError('该商品已在配送单中，请使用数量调整', 409)
+    }
     product = await tx.product.findFirst({
       where: {
-        id: String(input.productId),
+        id: productId,
         tenantId: input.tenantId,
         supplierId: input.supplierId,
         status: 'ENABLED',
@@ -1029,19 +1308,12 @@ export async function addDeliveryItemInTransaction(
     })
     if (!product) throw businessError('商品不存在、已停用或不属于当前供应商', 404)
   }
-  const duplicate = delivery.items.find(candidate => candidate.productId === product.id)
-  if (duplicate) {
-    throw businessError(
-      duplicate.removedAt
-        ? '该商品曾从本配送单移除，为保留原审计行暂不能重复新增'
-        : '该商品已在配送单中，请使用数量调整',
-      409,
-    )
-  }
 
   const priced = custom
     ? customDeliveryLinePrice(quantity, custom.unitPrice)
-    : costUnitPricedOrderLine({ product, quantity })
+    : quantity.isZero()
+      ? { unitPrice: costUnitPriceToOrderUnitPrice(product), amount: ZERO }
+      : costUnitPricedOrderLine({ product, quantity })
   if (priced.amount.gt(PURCHASE_ORDER_AMOUNT_MAX)) throw businessError('单行金额超过系统上限', 400)
   const frozen = freezeProductFourUnitsForSupplyDocument(product)
   const poItem = await tx.purchaseOrderItem.create({
@@ -1077,9 +1349,8 @@ export async function addDeliveryItemInTransaction(
       ...frozen,
     },
   })
-  const reason = String(input.reason || '内部供应链在送达前增加配送商品').trim().slice(0, 200)
   const supplier = delivery.purchaseOrder.supplier
-  if (supplier.sourceType === 'HEADQ_WAREHOUSE') {
+  if (quantity.gt(0) && supplier.sourceType === 'HEADQ_WAREHOUSE') {
     const mode = await resolveWarehouseMode(tx, input.tenantId, delivery.warehouseId)
     if (mode !== 'OFF') {
       const warehouseId = delivery.warehouseId || await resolveTenantWarehouseId(tx, input.tenantId, undefined)
@@ -1115,7 +1386,7 @@ export async function addDeliveryItemInTransaction(
         allowCreate: true,
       })
     }
-  } else if (supplier.inventoryMode === 'STRICT') {
+  } else if (quantity.gt(0) && supplier.inventoryMode === 'STRICT') {
     await consumeAdditionalSupplierOutbound(tx, {
       tenantId: input.tenantId,
       supplierId: input.supplierId,

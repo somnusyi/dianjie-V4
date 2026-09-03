@@ -29,9 +29,7 @@ import {
 import {
   calculateRevisionLineAmount,
   RevisionCatalogProduct,
-  RevisionCustomProductDraft,
   resolveRevisionCatalogPricing,
-  resolveRevisionCustomProductDraft,
   sumRevisionLineAmounts,
 } from '@/lib/supplier-revision-cost-pricing'
 import {
@@ -99,8 +97,6 @@ type OperationGroupDetailResponse = {
   }>
 }
 
-type RevisionCustomDraft = RevisionCustomProductDraft & { id: string }
-
 type PendingDeliveryAddition = {
   key: string
   productId: string
@@ -109,17 +105,6 @@ type PendingDeliveryAddition = {
   unit: string
   unitPrice: number
   quantity: number
-}
-
-function emptyRevisionCustomDraft(): RevisionCustomDraft {
-  return {
-    id: clientRequestId(),
-    name: '',
-    spec: '',
-    unit: '件',
-    unitPrice: '',
-    quantity: '1',
-  }
 }
 
 export default function SupplierOrderDetailPage() {
@@ -172,7 +157,6 @@ export default function SupplierOrderDetailPage() {
   // 数量编辑允许短暂为空，避免用户必须先输入新数字再删除旧数字。
   const [quantityDrafts, setQuantityDrafts] = useState<Record<string, string>>({})
   const [addSearch, setAddSearch] = useState('')
-  const [revisionCustomDrafts, setRevisionCustomDrafts] = useState<RevisionCustomDraft[]>([])
   const [revisionError, setRevisionError] = useState<string | null>(null)
   const [groupAddContext, setGroupAddContext] = useState<{
     groupId: string
@@ -324,7 +308,6 @@ export default function SupplierOrderDetailPage() {
 
   function closeAddPicker() {
     setAddOpen(false)
-    setRevisionCustomDrafts([])
     setRevisionError(null)
     revisionRequestKeyRef.current = null
   }
@@ -377,11 +360,6 @@ export default function SupplierOrderDetailPage() {
     })
   }
 
-  function updateRevisionCustomDraft(id: string, patch: Partial<RevisionCustomProductDraft>) {
-    setRevisionError(null)
-    setRevisionCustomDrafts(current => current.map(draft => draft.id === id ? { ...draft, ...patch } : draft))
-  }
-
   function showRevisionError(message: string) {
     if (isDirectOperationGroupRevision) setRevisionError(message)
     else setError(message)
@@ -390,13 +368,7 @@ export default function SupplierOrderDetailPage() {
   async function submitAdd() {
     if (!order) return
     const catalogItems = Object.entries(addQty).filter(([, q]) => q > 0).map(([productId, quantity]) => ({ productId, quantity }))
-    const customResults = isDirectOperationGroupRevision
-      ? revisionCustomDrafts.map(resolveRevisionCustomProductDraft)
-      : []
-    const invalidCustom = customResults.find(result => result.status === 'INVALID')
-    if (invalidCustom?.status === 'INVALID') { showRevisionError(invalidCustom.message); return }
-    const customItems = customResults.flatMap(result => result.status === 'READY' ? [result.item] : [])
-    const items = [...catalogItems, ...customItems]
+    const items = catalogItems
     if (items.length === 0) { showRevisionError('订货单至少保留一个商品'); return }
     if (items.length > 500) { showRevisionError('单次最多保留 500 条商品明细'); return }
     const catalogAmounts = catalogItems.map(({ productId, quantity }) => {
@@ -424,8 +396,7 @@ export default function SupplierOrderDetailPage() {
       }
       return calculateRevisionLineAmount(quantity, pricing)
     })
-    const customAmounts = customResults.flatMap(result => result.status === 'READY' ? [result.lineAmount] : [])
-    const total = sumRevisionLineAmounts([...catalogAmounts, ...customAmounts])
+    const total = sumRevisionLineAmounts(catalogAmounts)
     if (total === null) return
     const requestKey = revisionRequestKeyRef.current || clientRequestId()
     revisionRequestKeyRef.current = requestKey
@@ -591,22 +562,6 @@ export default function SupplierOrderDetailPage() {
 
   const submittedCatalogRows = catalog.filter(product =>
     (addQty[product.id] || 0) > 0 && !order.items.some(item => item.productId === product.id))
-  const submittedCustomRows = revisionCustomDrafts.flatMap(draft => {
-    const resolved = resolveRevisionCustomProductDraft(draft)
-    if (resolved.status !== 'READY') return []
-    return [{
-      key: `custom-${draft.id}`,
-      draftId: draft.id,
-      productId: `custom-${draft.id}`,
-      name: resolved.item.customProduct.name,
-      spec: draft.spec || null,
-      unit: resolved.item.customProduct.unit,
-      unitPrice: Number(resolved.item.customProduct.unitPrice),
-      quantity: Number(resolved.item.quantity),
-      originalQuantity: 0,
-      source: 'custom' as const,
-    }]
-  })
   const submittedRows = [
     ...order.items.map(item => ({
       key: item.id,
@@ -634,7 +589,6 @@ export default function SupplierOrderDetailPage() {
         source: 'catalog' as const,
       }
     }),
-    ...submittedCustomRows,
   ].filter(row => row.quantity > 0)
 
   const confirmedLines = canEditConfirmedDetails ? buildPartialShipmentLines(order.items, shipQty) : []
@@ -699,7 +653,6 @@ export default function SupplierOrderDetailPage() {
   const submittedDirty = canEditSubmittedDetails && (
     order.items.some(item => Math.abs((addQty[item.productId] ?? 0) - Number(item.quantity)) >= 0.0001)
     || submittedCatalogRows.length > 0
-    || revisionCustomDrafts.length > 0
   )
   const shipmentDirty = canEditConfirmedDetails && confirmedLines.some(line =>
     Math.abs(line.sq - (savedShipQty[line.it.id] ?? line.remaining)) >= 0.0001)
@@ -923,7 +876,6 @@ export default function SupplierOrderDetailPage() {
                           if (!Number.isFinite(quantity) || quantity < 0) return
                           setSaveNotice(null)
                           if (row.source === 'order' || row.source === 'catalog') setAddQtyFor(row.productId, quantity)
-                          else if (row.source === 'custom' && row.draftId) updateRevisionCustomDraft(row.draftId, { quantity: String(quantity) })
                           else if (row.source === 'shipment' && row.itemId) setShipQty(current => ({ ...current, [row.itemId!]: quantity }))
                           else if (row.source === 'delivery' && row.itemId) setDeliveryQty(current => ({ ...current, [row.itemId!]: String(quantity) }))
                           else if (row.source === 'delivery-addition') setPendingDeliveryAdditions(current => current.map(item => item.key === row.key ? { ...item, quantity } : item))
@@ -943,7 +895,6 @@ export default function SupplierOrderDetailPage() {
                     <button type="button" onClick={() => {
                       setSaveNotice(null)
                       if (row.source === 'order' || row.source === 'catalog') setAddQtyFor(row.productId, 0)
-                      else if (row.source === 'custom' && row.draftId) setRevisionCustomDrafts(current => current.filter(item => item.id !== row.draftId))
                       else if (row.source === 'shipment' && row.itemId) setShipQty(current => ({ ...current, [row.itemId!]: 0 }))
                       else if (row.source === 'delivery' && row.itemId) removeDeliveryItem(row.itemId)
                       else if (row.source === 'delivery-addition') setPendingDeliveryAdditions(current => current.filter(item => item.key !== row.key))
@@ -1075,9 +1026,8 @@ export default function SupplierOrderDetailPage() {
             <button disabled className="py-3 bg-amber/10 border border-amber text-amber-fg rounded-cta text-button opacity-70">待门店确认</button>
           ) : (
             <button onClick={confirmOrder} disabled={submitting || detailsDirty}
-              title={detailsDirty ? '请先保存商品明细' : undefined}
               className="py-3 bg-ink text-white rounded-cta text-button disabled:opacity-40">
-              {submitting ? '提交中…' : detailsDirty ? '请先保存明细' : '接单'}
+              {submitting ? '提交中…' : '接单'}
             </button>
           )}
         </div>
@@ -1182,12 +1132,7 @@ export default function SupplierOrderDetailPage() {
           return addSearch.toLowerCase().split(/\s+/).filter(Boolean).every(t => hay.includes(t))
         })
         const selectedDetails = Object.entries(addQty).filter(([, q]) => q > 0)
-        const customResults = isDirectOperationGroupRevision
-          ? revisionCustomDrafts.map(resolveRevisionCustomProductDraft)
-          : []
-        const invalidCustomResult = customResults.find(result => result.status === 'INVALID')
-        const hasInvalidCustom = Boolean(invalidCustomResult)
-        const selectedCount = selectedDetails.length + revisionCustomDrafts.length
+        const selectedCount = selectedDetails.length
         const hasPendingSelected = selectedDetails.some(([pid]) => {
           const existing = order.items.find(it => it.productId === pid)
           if (existing) return false
@@ -1211,8 +1156,7 @@ export default function SupplierOrderDetailPage() {
           if (!p) return null
           return calculateRevisionLineAmount(q, resolveRevisionCatalogPricing(p))
         })
-        const customAmounts = customResults.map(result => result.status === 'READY' ? result.lineAmount : null)
-        const selectedTotal = sumRevisionLineAmounts([...selectedAmounts, ...customAmounts])
+        const selectedTotal = sumRevisionLineAmounts(selectedAmounts)
         return (
           <div className="fixed inset-0 z-50" onClick={() => setAddOpen(false)}>
             <div className="absolute inset-0 bg-ink/60" />
@@ -1241,86 +1185,6 @@ export default function SupplierOrderDetailPage() {
                           className="absolute right-6 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-gray5 text-gray2 text-caption flex items-center justify-center">×</button>
                 )}
               </div>
-              {isDirectOperationGroupRevision && (
-                <div className="mx-4 mb-2 max-h-[36vh] overflow-y-auto rounded-card border border-amber/30 bg-amber/5 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-button text-ink">自定义商品</div>
-                      <div className="mt-0.5 text-micro text-gray3">用于目录中暂无的临时商品</div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => { setRevisionError(null); setRevisionCustomDrafts(current => [...current, emptyRevisionCustomDraft()]) }}
-                      disabled={selectedCount >= 500}
-                      className="shrink-0 rounded-cta border border-amber/50 bg-white px-3 py-1.5 text-button text-amber-fg disabled:opacity-40"
-                    >＋ 添加自定义商品</button>
-                  </div>
-                  {revisionCustomDrafts.length === 0 ? (
-                    <p className="mt-3 rounded-cta bg-white/70 px-3 py-2 text-micro text-gray3">如果商品已在目录中，请直接在下方加入；不在目录再使用自定义。</p>
-                  ) : (
-                    <div className="mt-3 space-y-3">
-                      {revisionCustomDrafts.map((draft, index) => (
-                        <div key={draft.id} className="rounded-cta border border-border bg-white p-3">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-caption text-gray2">自定义商品 {index + 1}</span>
-                            <button
-                              type="button"
-                              onClick={() => { setRevisionError(null); setRevisionCustomDrafts(current => current.filter(item => item.id !== draft.id)) }}
-                              className="rounded-cta border border-red-fg/30 px-2 py-1 text-micro text-red-fg"
-                            >删除</button>
-                          </div>
-                          <div className="mt-2 grid grid-cols-2 gap-2">
-                            <label className="col-span-2 text-micro text-gray3">名称 *
-                              <input
-                                value={draft.name}
-                                onChange={event => updateRevisionCustomDraft(draft.id, { name: event.target.value })}
-                                maxLength={80}
-                                className="mt-1 w-full rounded-cta border border-border px-3 py-2 text-body"
-                                placeholder="例如：时令菜"
-                              />
-                            </label>
-                            <label className="col-span-2 text-micro text-gray3">规格（选填）
-                              <input
-                                value={draft.spec}
-                                onChange={event => updateRevisionCustomDraft(draft.id, { spec: event.target.value })}
-                                maxLength={80}
-                                className="mt-1 w-full rounded-cta border border-border px-3 py-2 text-body"
-                                placeholder="例如：500g / 袋"
-                              />
-                            </label>
-                            <label className="text-micro text-gray3">单位 *
-                              <input
-                                value={draft.unit}
-                                onChange={event => updateRevisionCustomDraft(draft.id, { unit: event.target.value })}
-                                maxLength={16}
-                                className="mt-1 w-full rounded-cta border border-border px-3 py-2 text-body"
-                                placeholder="件 / kg / 箱"
-                              />
-                            </label>
-                            <label className="text-micro text-gray3">单价 *
-                              <input
-                                type="number"
-                                inputMode="decimal"
-                                min="0"
-                                max="99999999.99"
-                                step="0.01"
-                                value={draft.unitPrice}
-                                onChange={event => updateRevisionCustomDraft(draft.id, { unitPrice: event.target.value })}
-                                className="mt-1 w-full rounded-cta border border-border px-3 py-2 font-num text-body"
-                                placeholder="0.00"
-                              />
-                            </label>
-                            <p className="col-span-2 text-micro text-gray3">初始数量为 1，完成选择后请在商品明细中调整。</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {invalidCustomResult?.status === 'INVALID' && (
-                    <p className="mt-2 text-micro text-red-fg">{invalidCustomResult.message}</p>
-                  )}
-                </div>
-              )}
               <ul className="overflow-auto flex-1 divide-y divide-border">
                 {filtered.length === 0 && <li className="px-4 py-8 text-center text-caption text-gray3">无匹配商品</li>}
                 {filtered.map(p => {
@@ -1368,7 +1232,7 @@ export default function SupplierOrderDetailPage() {
                       : `调整后 ¥${Number(selectedTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                   </div>
                 </div>
-                <button onClick={() => setAddOpen(false)} disabled={hasPendingSelected || hasInvalidCustom || selectedCount > 500}
+                <button onClick={() => setAddOpen(false)} disabled={hasPendingSelected || selectedCount > 500}
                         className="px-6 py-3 bg-amber text-white rounded-cta text-button disabled:opacity-40">完成选择</button>
               </div>
             </div>

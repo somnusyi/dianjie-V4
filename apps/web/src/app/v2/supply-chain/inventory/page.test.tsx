@@ -3,6 +3,7 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import InternalSupplyChainInventoryPage from './page'
+import { buildInventoryExportRows } from '@/lib/inventory-export'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -25,8 +26,9 @@ const inventory = {
   items: [{
     id: 'product-1', code: 'DJ001', name: '菌菇酱', category: '酱料', spec: '8袋/箱',
     purchaseUnit: '箱', inventoryUnit: '袋', purchaseToInventoryFactor: 8,
-    unitConversionStatus: 'VERIFIED', physicalQty: 0, reservedQty: 0, availableQty: 0,
-    inventoryValue: 0, averageUnitCost: 0, statusFlag: 'OUT',
+    unitConversionStatus: 'VERIFIED', physicalQty: 24, reservedQty: 4, availableQty: 20,
+    inventoryValue: 120, averageUnitCost: 5, statusFlag: 'OK',
+    shipmentAmount: 168,
   }],
 }
 
@@ -117,6 +119,28 @@ describe('总仓库存页面', () => {
       }
       return Promise.reject(new Error(`unexpected API: ${url}`))
     })
+  })
+
+  it('writes current shipment and cost amounts as columns in the inventory Excel workbook', async () => {
+    const rows = buildInventoryExportRows(inventory.items as any, '')
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ 发货金额: 168, 成本金额: 120 })
+    const expectedHeaders = [
+      '商品编码', '商品名称', '商品状态', '分类', '规格', '采购单位', '库存单位',
+      '物理库存', '预占库存', '可用库存', '库存金额', '平均单位成本', '发货金额', '成本金额', '库存状态',
+    ]
+    expect(Object.keys(rows[0])).toEqual(expectedHeaders)
+
+    const XLSX = await import('xlsx')
+    const sheet = XLSX.utils.json_to_sheet(rows)
+    const book = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(book, sheet, '实时库存')
+    const reopened = XLSX.read(XLSX.write(book, { bookType: 'xlsx', type: 'buffer' }), { type: 'buffer' })
+    const values = XLSX.utils.sheet_to_json<unknown[]>(reopened.Sheets['实时库存'], { header: 1 })
+    expect(values[0]).toEqual(expectedHeaders)
+    expect(values[1][12]).toBe(168)
+    expect(values[1][13]).toBe(120)
   })
 
   it('shows one total-warehouse ledger without a supplier selector', async () => {

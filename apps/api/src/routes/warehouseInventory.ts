@@ -74,6 +74,18 @@ function number(value: Prisma.Decimal | null | undefined) {
   return Number(value || 0)
 }
 
+/** 实时库存按当前配送价的发货价值；价格是每成本单位，库存是最小库存单位。 */
+export function currentInventoryShipmentAmount(input: {
+  physicalQty: Prisma.Decimal | number | string
+  price: Prisma.Decimal | number | string
+  inventoryUnitsPerCostUnit: Prisma.Decimal | number | string | null | undefined
+}) {
+  if (input.inventoryUnitsPerCostUnit == null) return null
+  const factor = new Prisma.Decimal(input.inventoryUnitsPerCostUnit)
+  if (!factor.isFinite() || factor.lte(0)) return null
+  return Number(new Prisma.Decimal(input.physicalQty).mul(input.price).div(factor).toDecimalPlaces(2))
+}
+
 const manualInboundSchema = z.object({
   productId: z.string().trim().min(1),
   purchaseQuantity: z.number().positive().max(99_999_999),
@@ -225,6 +237,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         take: parsed.data.pageSize,
         select: {
           id: true, code: true, name: true, spec: true, category: true, unit: true, status: true,
+          price: true,
           purchaseUnit: true, inventoryUnit: true, orderUnit: true, costUnit: true,
           inventoryUnitsPerPurchaseUnit: true, inventoryUnitsPerOrderUnit: true,
           inventoryUnitsPerCostUnit: true, unitConversionStatus: true, minStock: true,
@@ -262,6 +275,11 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         availableQty,
         inventoryValue: number(balance?.inventoryValue),
         averageUnitCost: number(balance?.averageUnitCost),
+        shipmentAmount: currentInventoryShipmentAmount({
+          physicalQty,
+          price: product.price,
+          inventoryUnitsPerCostUnit: product.inventoryUnitsPerCostUnit,
+        }),
         rowVersion: balance?.rowVersion || 0,
         statusFlag: physicalQty < 0 ? 'SHADOW_GAP' : availableQty <= 0 ? 'OUT' : availableQty <= minInventoryQty ? 'LOW' : 'OK',
       }

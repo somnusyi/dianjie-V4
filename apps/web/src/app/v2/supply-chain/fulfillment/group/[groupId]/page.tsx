@@ -28,7 +28,7 @@ type Detail = {
   group: { id: string; supplierId: string; expectedDate: string; memberOrderIds: string[]; memberOrderNos: string[]; memberCount: number; firstCreatedAt: string; lastCreatedAt: string; isEligible?: boolean; blockedOrderIds?: string[] }
   orders: Member[]
   progressStep: number
-  totals: { quantity: string; amount: string; orderedQuantity: string; orderedAmount: string; shipmentQuantity: string; shipmentAmount: string; hasAnyShipment: boolean; snapshotComplete: boolean }
+  totals: { quantity: string; amount: string; orderedQuantity: string; orderedAmount: string; originalOrderAmount: string; shipmentQuantity: string; shipmentAmount: string; hasAnyShipment: boolean; snapshotComplete: boolean }
 }
 type DraftRow = OrderDetailTableRow & { productId: string; orderId: string; itemId: string }
 
@@ -130,8 +130,8 @@ export default function OperationGroupDetailPage() {
 
   async function save() {
     if (!detail || !editable || !dirty || submitting) return
-    const invalid = rows.find(row => row.quantity <= 0 || row.quantity > PURCHASE_QUANTITY_MAX || Math.abs(row.quantity * 100 - Math.round(row.quantity * 100)) > 0.000001)
-    if (invalid) { setActionError(`${invalid.name}数量必须大于 0，且最多保留 2 位小数`); return }
+    const invalid = rows.find(row => row.quantity < 0 || row.quantity > PURCHASE_QUANTITY_MAX || Math.abs(row.quantity * 100 - Math.round(row.quantity * 100)) > 0.000001)
+    if (invalid) { setActionError(`${invalid.name}数量不能小于 0，且最多保留 2 位小数`); return }
     const orders = detail.orders.map(order => ({
       orderId: order.id, baseRowVersion: order.rowVersion,
       items: rows.filter(row => row.orderId === order.id).map(row => ({ productId: row.productId, quantity: row.quantity })),
@@ -173,7 +173,7 @@ export default function OperationGroupDetailPage() {
 
     <OrderAmountCard eyebrow={`${detail.group.memberCount} 张原订单 · ${detail.group.memberOrderNos.map(no => `#${no}`).join('、')}`}
       name={first?.store?.name || '未知门店'} amountLabel="实发金额"
-      amount={money(detail.totals.shipmentAmount)} originalOrderAmount={money(detail.totals.orderedAmount)}>
+      amount={money(detail.totals.hasAnyShipment ? detail.totals.shipmentAmount : productTotal)} originalOrderAmount={money(detail.totals.originalOrderAmount)}>
       {first?.store?.address && <div className="mt-1 text-micro text-gray3">📍 {first.store.address}</div>}
       <div className="mt-2 text-caption text-gray2">下单 {dayjs(detail.group.firstCreatedAt).format('MM/DD HH:mm')}{detail.group.firstCreatedAt !== detail.group.lastCreatedAt && ` — ${dayjs(detail.group.lastCreatedAt).format('MM/DD HH:mm')}`} · 期望到货 {dayjs(detail.group.expectedDate).format('MM/DD')}<br />供应商 {first?.supplier?.name || '-'}</div>
     </OrderAmountCard>

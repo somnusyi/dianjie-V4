@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 const singlePage = readFileSync(new URL('../../app/v2/supplier/orders/[id]/page.tsx', import.meta.url), 'utf8')
 const groupPage = readFileSync(new URL('../../app/v2/supply-chain/fulfillment/group/[groupId]/page.tsx', import.meta.url), 'utf8')
+const deliveryNotePage = readFileSync(new URL('../../app/v2/supplier/orders/[id]/delivery-note/page.tsx', import.meta.url), 'utf8')
 const sharedComponent = readFileSync(new URL('./order-detail-shared.tsx', import.meta.url), 'utf8')
 const singlePreview = readFileSync(new URL('../../../../../docs/preview/011-single-order-detail.html', import.meta.url), 'utf8')
 const groupPreview = readFileSync(new URL('../../../../../docs/preview/011-batch-order-detail.html', import.meta.url), 'utf8')
@@ -39,6 +40,23 @@ describe('single and grouped fulfillment detail architecture', () => {
       expect(source).not.toContain('SUPPLIER_MONEY_TERMS.payableAmount')
     }
     expect(groupPage).not.toContain('>订货金额</th>')
+    expect(singlePage).toContain('order.originalTotalAmount ?? order.totalAmount')
+    expect(groupPage).toContain('detail.totals.originalOrderAmount')
+    expect(singlePage).toContain('displayedShipmentAmount')
+    expect(groupPage).toContain('detail.totals.hasAnyShipment ? detail.totals.shipmentAmount : productTotal')
+  })
+
+  it('keeps zero quantity and removal as separate actions', () => {
+    expect(singlePage).toContain('return { ...prev, [pid]: q }')
+    expect(singlePage).toContain('removeOrderProduct(row.productId)')
+    expect(groupPage).toContain('row.orderId === order.id).map(row => ({ productId: row.productId, quantity: row.quantity }))')
+    expect(groupPage).not.toContain('row.orderId === order.id && row.quantity > 0')
+  })
+
+  it('labels printed and exported totals as shipment amount', () => {
+    expect(deliveryNotePage).toContain("['实发金额', '', '', '', totalQtyLocal")
+    expect(deliveryNotePage).toContain('>实发金额</td>')
+    expect(deliveryNotePage).not.toContain('原订货单总额')
   })
 
   it('does not reintroduce duplicate legacy sections or a second group delivery-note action', () => {

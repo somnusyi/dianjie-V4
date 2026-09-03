@@ -181,7 +181,7 @@ const orderCreateSchema = z.object({
 })
 
 const revisionQuantitySchema = z.number()
-  .positive('订货数量必须大于 0')
+  .nonnegative('订货数量不能小于 0')
   .max(PURCHASE_QUANTITY_MAX, '订货数量超过系统上限')
 
 const revisionCatalogItemSchema = z.object({
@@ -723,8 +723,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             if (!previous && product.status !== 'ENABLED') throw { statusCode: 400, message: `${product.name} 已停售，不能追加` }
             const moq = Number(product.minOrderQty || 1)
             const step = Number(product.stepQty || 1)
-            if (item.quantity < moq - 0.0001) throw { statusCode: 400, message: `${product.name} 起订量为 ${moq} ${product.unit}` }
-            if (step > 0 && Math.abs(((item.quantity - moq) / step) - Math.round((item.quantity - moq) / step)) > 0.0001) {
+            if (item.quantity > 0 && item.quantity < moq - 0.0001) throw { statusCode: 400, message: `${product.name} 起订量为 ${moq} ${product.unit}` }
+            if (item.quantity > 0 && step > 0 && Math.abs(((item.quantity - moq) / step) - Math.round((item.quantity - moq) / step)) > 0.0001) {
               throw { statusCode: 400, message: `${product.name} 需以 ${step} ${product.unit} 为步长` }
             }
             const pricedLine = previous
@@ -1757,8 +1757,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             if (!item.custom) {
               const moq = Number(product.minOrderQty || 1)
               const step = Number(product.stepQty || 1)
-              if (item.quantity < moq - 0.0001) throw { statusCode: 400, message: `${product.name} 起订量为 ${moq} ${product.unit}` }
-              if (step > 0 && Math.abs(((item.quantity - moq) / step) - Math.round((item.quantity - moq) / step)) > 0.0001) {
+              if (item.quantity > 0 && item.quantity < moq - 0.0001) throw { statusCode: 400, message: `${product.name} 起订量为 ${moq} ${product.unit}` }
+              if (item.quantity > 0 && step > 0 && Math.abs(((item.quantity - moq) / step) - Math.round((item.quantity - moq) / step)) > 0.0001) {
                 throw { statusCode: 400, message: `${product.name} 需以 ${step} ${product.unit} 为步长` }
               }
             }
@@ -1941,8 +1941,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       if (!previous && product.status !== 'ENABLED') throw { statusCode: 400, message: `${product.name} 已停售，不能追加` }
       const moq = Number(product.minOrderQty || 1)
       const step = Number(product.stepQty || 1)
-      if (item.quantity < moq - 0.0001) throw { statusCode: 400, message: `${product.name} 起订量为 ${moq} ${product.unit}` }
-      if (step > 0 && Math.abs(((item.quantity - moq) / step) - Math.round((item.quantity - moq) / step)) > 0.0001) {
+      if (item.quantity > 0 && item.quantity < moq - 0.0001) throw { statusCode: 400, message: `${product.name} 起订量为 ${moq} ${product.unit}` }
+      if (item.quantity > 0 && step > 0 && Math.abs(((item.quantity - moq) / step) - Math.round((item.quantity - moq) / step)) > 0.0001) {
         throw { statusCode: 400, message: `${product.name} 需以 ${step} ${product.unit} 为步长` }
       }
       const pricedLine = previous

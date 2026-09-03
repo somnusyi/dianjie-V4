@@ -25,4 +25,10 @@ describe('operation-group atomic revision route contract', () => {
     expect(source).toContain('内部供应链不能覆盖')
     expect(source).toContain('supersededByGroupRequestKey')
   })
+
+  it('persists zero quantity as a line value instead of treating it as removal', () => {
+    expect(source).toContain(".nonnegative('订货数量不能小于 0')")
+    expect(source).toContain('if (item.quantity > 0 && item.quantity < moq - 0.0001)')
+    expect(source).toContain('quantity: new Prisma.Decimal(next.quantity)')
+  })
 })

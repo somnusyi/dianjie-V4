@@ -162,6 +162,7 @@ export default function SupplierOrderDetailPage() {
   const [addOpen, setAddOpen] = useState(false)
   const [catalog, setCatalog] = useState<RevisionCatalogProduct[]>([])
   const [addQty, setAddQty] = useState<Record<string, number>>({})
+  const [removedOrderProductIds, setRemovedOrderProductIds] = useState<string[]>([])
   // 数量编辑允许短暂为空，避免用户必须先输入新数字再删除旧数字。
   const [quantityDrafts, setQuantityDrafts] = useState<Record<string, string>>({})
   const [addSearch, setAddSearch] = useState('')
@@ -194,6 +195,7 @@ export default function SupplierOrderDetailPage() {
       setDeliveryQty(Object.fromEntries((data.deliveries || []).flatMap(delivery =>
         delivery.items.map(item => [item.id, String(item.shippedQty)]))))
       setAddQty(Object.fromEntries(data.items.map(item => [item.productId, Number(item.quantity)])))
+      setRemovedOrderProductIds([])
       setQuantityDrafts({})
       setRemovedDeliveryItemIds([])
       setPendingDeliveryAdditions([])
@@ -360,10 +362,19 @@ export default function SupplierOrderDetailPage() {
 
   function setAddQtyFor(pid: string, q: number) {
     setRevisionError(null)
+    setRemovedOrderProductIds(current => current.filter(productId => productId !== pid))
     setAddQty(prev => {
-      const next = { ...prev }
-      if (q <= 0) delete next[pid]
-      else next[pid] = q
+      if (q < 0) return prev
+      return { ...prev, [pid]: q }
+    })
+  }
+
+  function removeOrderProduct(pid: string) {
+    setRevisionError(null)
+    setRemovedOrderProductIds(current => current.includes(pid) ? current : [...current, pid])
+    setAddQty(current => {
+      const next = { ...current }
+      delete next[pid]
       return next
     })
   }
@@ -375,7 +386,7 @@ export default function SupplierOrderDetailPage() {
 
   async function submitAdd() {
     if (!order) return
-    const catalogItems = Object.entries(addQty).filter(([, q]) => q > 0).map(([productId, quantity]) => ({ productId, quantity }))
+    const catalogItems = Object.entries(addQty).filter(([, q]) => q >= 0).map(([productId, quantity]) => ({ productId, quantity }))
     const items = catalogItems
     if (items.length === 0) { showRevisionError('订货单至少保留一个商品'); return }
     if (items.length > 500) { showRevisionError('单次最多保留 500 条商品明细'); return }
@@ -567,9 +578,9 @@ export default function SupplierOrderDetailPage() {
   const canEditDeliveryDetails = Boolean(editableDelivery)
 
   const submittedCatalogRows = catalog.filter(product =>
-    (addQty[product.id] || 0) > 0 && !order.items.some(item => item.productId === product.id))
+    Object.prototype.hasOwnProperty.call(addQty, product.id) && !order.items.some(item => item.productId === product.id))
   const submittedRows = [
-    ...order.items.map(item => ({
+    ...order.items.filter(item => !removedOrderProductIds.includes(item.productId)).map(item => ({
       key: item.id,
       itemId: item.id,
       productId: item.productId,
@@ -595,7 +606,7 @@ export default function SupplierOrderDetailPage() {
         source: 'catalog' as const,
       }
     }),
-  ].filter(row => row.quantity > 0)
+  ]
 
   const confirmedLines = canEditConfirmedDetails ? buildPartialShipmentLines(order.items, shipQty) : []
   const deliveryRows = editableDelivery ? [
@@ -656,9 +667,12 @@ export default function SupplierOrderDetailPage() {
             source: 'readonly' as const,
           }))
 
+  const detailTotal = detailRows.reduce((sum, row) => sum + row.quantity * row.unitPrice, 0)
+
   const submittedDirty = canEditSubmittedDetails && (
     order.items.some(item => Math.abs((addQty[item.productId] ?? 0) - Number(item.quantity)) >= 0.0001)
     || submittedCatalogRows.length > 0
+    || removedOrderProductIds.length > 0
   )
   const shipmentDirty = canEditConfirmedDetails && confirmedLines.some(line =>
     Math.abs(line.sq - (savedShipQty[line.it.id] ?? line.remaining)) >= 0.0001)
@@ -670,6 +684,8 @@ export default function SupplierOrderDetailPage() {
   )
   const detailsDirty = submittedDirty || shipmentDirty || deliveryDirty
   const canShowSave = canEditSubmittedDetails || canEditConfirmedDetails || canEditDeliveryDetails
+  const hasActualDelivery = (order.deliveries || []).some(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
+  const displayedShipmentAmount = canShowSave || !hasActualDelivery ? detailTotal : shipmentAmount
 
   async function saveDetails() {
     if (!order || !detailsDirty || submitting) return
@@ -740,8 +756,8 @@ export default function SupplierOrderDetailPage() {
       )}
 
       <OrderAmountCard eyebrow={`#${order.no}`} name={order.store.name} amountLabel={SUPPLIER_MONEY_TERMS.shipmentAmount}
-        amount={shipmentAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-        originalOrderAmount={currentOrderAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}>
+        amount={displayedShipmentAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        originalOrderAmount={Number(order.originalTotalAmount ?? order.totalAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}>
         {order.store.address && <div className="text-micro text-gray3 mt-1">📍 {order.store.address}</div>}
         <div className="text-caption text-gray2 mt-2">
           下单 {dayjs(order.createdAt).format('MM/DD HH:mm')} · 期望到货 {dayjs(order.expectedDate).format('MM/DD')}
@@ -759,7 +775,7 @@ export default function SupplierOrderDetailPage() {
       <OrderProductTable
         rows={detailRows as OrderDetailTableRow[]}
         editable={canShowSave}
-        total={detailRows.reduce((sum, row) => sum + row.quantity * row.unitPrice, 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        total={detailTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         saving={submitting}
         dirty={detailsDirty}
         onAdd={(canEditSubmittedDetails || canEditDeliveryDetails) ? () => canEditDeliveryDetails && editableDelivery ? void openDeliveryAdd(editableDelivery) : void openAddPicker() : undefined}
@@ -790,7 +806,7 @@ export default function SupplierOrderDetailPage() {
         onRemove={baseRow => {
           const row = detailRows.find(item => item.key === baseRow.key)!
           setSaveNotice(null)
-          if (row.source === 'order' || row.source === 'catalog') setAddQtyFor(row.productId, 0)
+          if (row.source === 'order' || row.source === 'catalog') removeOrderProduct(row.productId)
           else if (row.source === 'shipment' && row.itemId) setShipQty(current => ({ ...current, [row.itemId!]: 0 }))
           else if (row.source === 'delivery' && row.itemId) removeDeliveryItem(row.itemId)
           else if (row.source === 'delivery-addition') setPendingDeliveryAdditions(current => current.filter(item => item.key !== row.key))
@@ -1078,12 +1094,13 @@ export default function SupplierOrderDetailPage() {
               <ul className="overflow-auto flex-1 divide-y divide-border">
                 {filtered.length === 0 && <li className="px-4 py-8 text-center text-caption text-gray3">无匹配商品</li>}
                 {filtered.map(p => {
-                  const q = addQty[p.id] || 0
+                  const included = Object.prototype.hasOwnProperty.call(addQty, p.id) && !removedOrderProductIds.includes(p.id)
+                  const q = addQty[p.id] ?? 0
                   const existing = order.items.find(it => it.productId === p.id)
                   const pricing = existing ? null : resolveRevisionCatalogPricing(p)
                   const canSelect = !!existing || pricing?.status === 'READY'
                   return (
-                    <li key={p.id} className={`flex items-center px-4 py-3 ${q > 0 ? 'bg-amber/5' : ''}`}>
+                    <li key={p.id} className={`flex items-center px-4 py-3 ${included ? 'bg-amber/5' : ''}`}>
                       <div className="flex-1 min-w-0">
                         <div className="text-body truncate">{p.name}</div>
                         <div className="text-micro text-gray3 font-num">
@@ -1102,7 +1119,7 @@ export default function SupplierOrderDetailPage() {
                           })()}
                         </div>
                       </div>
-                      {q === 0 ? (
+                      {!included ? (
                         <button onClick={() => setAddQtyFor(p.id, 1)}
                                 disabled={!canSelect}
                                 className="px-3 py-1.5 rounded-cta bg-amber/10 text-amber-fg text-button disabled:opacity-40 disabled:bg-gray5">

@@ -464,7 +464,7 @@ export default function DeliveryNotePrintPage() {
           Number(it.unitPrice),
           Number(itemAmtLocal(it).toFixed(2)),
         ]),
-        ['合计', '', '', '', totalQtyLocal, '', Number(totalLocal.toFixed(2))],
+        ['实发金额', '', '', '', totalQtyLocal, '', Number(totalLocal.toFixed(2))],
         ['大写', `人民币 ${num2cn(totalLocal)}`, '', '', '', '', ''],
       ].filter(Boolean) as any[][]
 
@@ -553,7 +553,6 @@ export default function DeliveryNotePrintPage() {
   const total = order.items.reduce((s, i) => s + itemAmt(i), 0)
   const itemsCount = order.items.length
   const totalQty = order.items.reduce((s, i) => s + itemQty(i), 0)
-  const hasAdjust = order.items.some(i => i.shippedQty != null && Math.abs(Number(i.shippedQty) - Number(i.quantity)) > 0.0001)
 
   // 打印手工分页：首页要给抬头/元数据留空间所以行数少，续页多。
   // 用多个 tbody + break-before 强制分页——不让浏览器自己在表格中间找断点（会截断/丢行导致漏货）
@@ -768,9 +767,9 @@ export default function DeliveryNotePrintPage() {
                   })}
                   {isLastChunk && (
                     <>
-                      {/* 合计 */}
+                      {/* 实发金额 */}
                       <tr className="bg-bg font-semibold">
-                        <td colSpan={4} className="border border-gray3 px-2 py-1.5 text-right">合计</td>
+                        <td colSpan={4} className="border border-gray3 px-2 py-1.5 text-right">实发金额</td>
                         <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{totalQty}</td>
                         <td className="border border-gray3 px-2 py-1.5"></td>
                         <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{total.toFixed(2)}</td>
@@ -788,12 +787,6 @@ export default function DeliveryNotePrintPage() {
           </tbody>
         </table>
 
-        {/* 调整提示 */}
-        {hasAdjust && (
-          <div className="mt-3 text-xs text-amber-fg border-l-4 border-amber pl-2">
-            ⚠ 本配送单数量与原订货单不同 (原订货单总额 ¥{Number(order.purchaseOrderTotalAmount || order.totalAmount).toFixed(2)})
-          </div>
-        )}
         {/* 备注 */}
         {(order.note || order.shippedNote) && (
           <div className="mt-4 text-sm">

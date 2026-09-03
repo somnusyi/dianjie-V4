@@ -49,6 +49,7 @@ export type OperationGroupDetail = {
     amount: string
     orderedQuantity: string
     orderedAmount: string
+    originalOrderAmount: string
     shipmentQuantity: string
     shipmentAmount: string
     hasAnyShipment: boolean
@@ -468,6 +469,7 @@ export async function loadOperationGroupDetails(
       : orderedMergedItems.reduce((sum, item) => sum.add(decimalValue(item.amount)), new Prisma.Decimal(0)).toFixed(2),
     orderedQuantity: orderedMergedItems.reduce((sum, item) => sum.add(decimalValue(item.quantity)), new Prisma.Decimal(0)).toFixed(2),
     orderedAmount: orderedMergedItems.reduce((sum, item) => sum.add(decimalValue(item.amount)), new Prisma.Decimal(0)).toFixed(2),
+    originalOrderAmount: orderedRows.reduce((sum, row) => sum.add(decimalValue(row.originalTotalAmount ?? row.totalAmount)), new Prisma.Decimal(0)).toFixed(2),
     shipmentQuantity,
     shipmentAmount,
     hasAnyShipment,

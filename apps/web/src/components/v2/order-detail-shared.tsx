@@ -12,6 +12,7 @@ export type OrderDetailTableRow = {
   originalQuantity: number
   sourceLabel?: string
   pendingRemoval?: boolean
+  partialPendingRemoval?: boolean
 }
 
 const pendingRemovalStrike = {
@@ -108,6 +109,7 @@ export function OrderProductTable(props: {
         <tbody className="divide-y divide-border">
           {props.rows.map((row, index) => {
             const pendingRemoval = row.pendingRemoval === true
+            const partialPendingRemoval = row.partialPendingRemoval === true
             const rowDirty = Math.abs(row.quantity - row.originalQuantity) >= 0.0001
             const strikeClass = pendingRemoval ? 'line-through decoration-2 decoration-gray3/80' : ''
             const canChangeRemoval = props.canRemove?.(row) ?? true
@@ -122,7 +124,7 @@ export function OrderProductTable(props: {
               <td className={`px-3 py-3 text-right font-num ${strikeClass}`}>¥{row.unitPrice.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
               <td className={`px-3 py-3 text-right font-num ${strikeClass}`}>¥{(row.amount ?? row.quantity * row.unitPrice).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
               {props.editable && <td className="px-3 py-3 text-right">
-                {pendingRemoval
+                {pendingRemoval || partialPendingRemoval
                   ? props.onRestore && canChangeRemoval && <button type="button" onClick={() => props.onRestore?.(row)}
                     className="rounded-cta border border-amber bg-white px-2 py-1 text-micro text-amber-fg">恢复</button>
                   : props.onRemove && canChangeRemoval && <button type="button" onClick={() => props.onRemove?.(row)}

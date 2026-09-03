@@ -84,12 +84,24 @@ describe('operation-group product aggregation', () => {
     expect(groupOperationGroupProductRows(variants)).toHaveLength(3)
   })
 
-  it('keeps a mixed locked product read-only instead of changing the wrong document', () => {
+  it('keeps locked quantity intact while editing or removing the editable part of a mixed product', () => {
     const mergeKey = groupOperationGroupProductRows(rows)[0].mergeKey
-    const result = updateOperationGroupProductQuantity(rows, mergeKey, 2, row => row.orderId === 'o2')
-    expect(result.error).toBe('该商品已有 3 件 不可修改')
-    expect(result.rows).toBe(rows)
-    expect(setOperationGroupProductRemoval(rows, mergeKey, true, row => row.orderId === 'o2').error)
-      .toBe('该商品包含当前不能修改的明细')
+    const belowLocked = updateOperationGroupProductQuantity(rows, mergeKey, 2, row => row.orderId === 'o2')
+    expect(belowLocked.error).toBe('该商品已有 3 件 不可修改')
+    expect(belowLocked.rows).toBe(rows)
+
+    const changed = updateOperationGroupProductQuantity(rows, mergeKey, 5, row => row.orderId === 'o2')
+    expect(changed.error).toBeNull()
+    expect(changed.rows.filter(row => row.productId === 'a').map(row => row.quantity)).toEqual([3, 2])
+
+    const removed = setOperationGroupProductRemoval(rows, mergeKey, true, row => row.orderId === 'o2')
+    expect(removed.error).toBeNull()
+    expect(removed.rows.filter(row => row.productId === 'a').map(row => row.pendingRemoval)).toEqual([false, true])
+    const partial = groupOperationGroupProductRows(removed.rows).find(row => row.productId === 'a')
+    expect(partial).toMatchObject({ quantity: 3, pendingRemoval: false, partialPendingRemoval: true })
+
+    const restored = setOperationGroupProductRemoval(removed.rows, mergeKey, false, row => row.orderId === 'o2')
+    expect(restored.error).toBeNull()
+    expect(restored.rows.filter(row => row.productId === 'a').map(row => row.pendingRemoval)).toEqual([false, false])
   })
 })

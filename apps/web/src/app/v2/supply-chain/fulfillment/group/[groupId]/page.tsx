@@ -945,14 +945,14 @@ export default function OperationGroupDetailPage() {
       restoreDisplayRow(row as GroupedDraftRow)
     }} canRemove={row => {
       const groupedRow = row as GroupedDraftRow
-      return groupedRow.members.every(isDraftRowEditable)
+      return groupedRow.members.some(isDraftRowEditable)
     }}
       notice={editable ? <p className="mx-3 mb-2 text-micro text-gray3">相同商品已合并显示；点一次保存后，变化会同步回集合内原订单并整体生效或回滚。</p> : (shipmentEditable || deliveryEditable) ? <div className="mx-3 mb-2">
         <p className="text-micro text-gray3">相同商品已合并显示；数量 0 仍保留商品，“移除”才会从本次发货中删除。</p>
       </div> : null}
       renderQuantity={rowBase => {
         const row = rowBase as GroupedDraftRow
-        const rowEditable = row.members.every(isDraftRowEditable)
+        const rowEditable = row.members.some(member => !member.pendingRemoval && isDraftRowEditable(member))
         if (row.pendingRemoval) return <>{row.quantity}{row.unit}</>
         return rowEditable ? <span className="inline-flex items-center gap-1"><input type="number" inputMode="decimal" min="0" max={PURCHASE_QUANTITY_MAX} step="0.01" aria-label={`${row.name}数量`}
           value={quantityDrafts[row.key] ?? String(row.quantity)} onChange={event => { const raw = event.target.value; setQuantityDrafts(current => ({ ...current, [row.key]: raw })); if (quantityDraftReason(raw) === null) updateQuantity(row, Number(raw)) }}

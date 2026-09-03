@@ -27,6 +27,7 @@ export type OperationGroupProductDisplayRow<T extends OperationGroupEditableProd
   unitPrice: number
   amount: number
   pendingRemoval: boolean
+  partialPendingRemoval: boolean
 }
 
 const QUANTITY_SCALE = 100
@@ -90,6 +91,7 @@ export function groupOperationGroupProductRows<T extends OperationGroupEditableP
       unitPrice: Number((quantity > 0 ? amount / quantity : first.unitPrice).toFixed(2)),
       amount,
       pendingRemoval: activeMembers.length === 0,
+      partialPendingRemoval: activeMembers.length > 0 && activeMembers.length < members.length,
     }
   })
 }
@@ -159,10 +161,14 @@ export function setOperationGroupProductRemoval<T extends OperationGroupEditable
   canEdit: (row: T) => boolean,
 ): { rows: T[]; error: string | null } {
   const members = rows.filter(row => operationGroupProductMergeKey(row) === mergeKey)
-  if (members.length === 0 || members.some(row => !canEdit(row))) {
-    return { rows, error: '该商品包含当前不能修改的明细' }
+  const editableMembers = members.filter(canEdit)
+  if (members.length === 0 || editableMembers.length === 0) {
+    return { rows, error: '该商品当前不能修改' }
   }
-  const memberKeys = new Set(members.map(row => row.key))
+  // A mixed batch can contain an immutable delivered row and an editable
+  // draft row for the same product. Only mutate the editable source rows;
+  // the locked quantity remains visible in the merged row.
+  const memberKeys = new Set(editableMembers.map(row => row.key))
   return {
     rows: rows.map(row => memberKeys.has(row.key) ? { ...row, pendingRemoval } : row),
     error: null,

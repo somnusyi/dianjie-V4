@@ -218,11 +218,11 @@ describe('supplier revision page pricing contract', () => {
     expect(source).toContain('hasPendingSelected')
   })
 
-  it('gates immediate custom-product revision to internal operation groups', () => {
-    expect(source).toContain("viewerRole === 'SUPPLY_CHAIN' && isOperationGroupContext")
+  it('applies internal supply-chain revisions directly for both single orders and operation groups', () => {
+    expect(source).toContain("const isDirectOperationGroupRevision = viewerRole === 'SUPPLY_CHAIN'")
     expect(source).toContain('revisionCustomDrafts.map(resolveRevisionCustomProductDraft)')
     expect(source).toContain('const items = [...catalogItems, ...customItems]')
-    expect(source).toContain("isDirectOperationGroupRevision ? '立即修改' : '提交申请'")
+    expect(source).toContain("confirmLabel: isDirectOperationGroupRevision ? '确认修改' : '提交申请'")
     expect(source).toContain('router.replace(`/v2/supply-chain/fulfillment/group/${encodeURIComponent(operationGroupId)}`)')
   })
 

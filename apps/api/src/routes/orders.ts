@@ -245,6 +245,30 @@ function directRevisionRequestFingerprint(input: z.infer<typeof revisionCreateSc
   }, 'internal-operation-group-revision')
 }
 
+export function isSupersedableInternalPendingRevisionEvent(
+  event: { actorRole?: string | null; metadata?: unknown } | null | undefined,
+  operationGroupId?: string,
+): boolean {
+  if (!event || !hasInternalSupplyChainCapability(event.actorRole, 'order.write')) return false
+  if (!event.metadata || typeof event.metadata !== 'object' || Array.isArray(event.metadata)) return false
+  const metadata = event.metadata as Record<string, unknown>
+  const eventOperationGroupId = typeof metadata.operationGroupId === 'string'
+    ? metadata.operationGroupId
+    : undefined
+  if (eventOperationGroupId !== operationGroupId) return false
+
+  const source = typeof metadata.source === 'string' ? metadata.source : undefined
+  const explicitlyInternal = metadata.directApplied === true
+    || source === 'INTERNAL_SUPPLY_CHAIN_REVISION'
+    || source === 'ORDER_GROUP_DIRECT_REVISION'
+    || source === 'SINGLE_ORDER_DIRECT_REVISION'
+  // Before source/directApplied were recorded, actorRole on the immutable request
+  // event was the only provenance.  Missing event metadata fails closed above;
+  // a user's mutable current role is deliberately never consulted here.
+  const legacyInternal = source === undefined && metadata.revisionId !== undefined
+  return explicitlyInternal || legacyInternal
+}
+
 const revisionReviewSchema = z.object({
   note: z.string().trim().max(200).optional(),
 }).strict()
@@ -803,7 +827,9 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         store: true, supplier: true,
         createdBy: { select: { id: true, name: true, role: true } },
         shippedBy: { select: { id: true, name: true } },
-        items: { include: { product: true } },
+        // 详情、发货草稿和后续 ship 入参只能基于当前生效明细；
+        // 历史行仍保留在修订快照/事件中，不从详情接口重新暴露。
+        items: { where: { isActive: true }, include: { product: true } },
         revisions: {
           orderBy: { revisionNo: 'asc' },
           include: {
@@ -879,7 +905,17 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       })))
       : null
     const fulfillmentByItem = new Map(fulfillment?.lines.map(line => [line.itemId, line]) || [])
-    const original = ((order as any).submittedSnapshot || buildOrderSnapshot(order as any, 'original')) as OrderSnapshot
+    // Modern orders carry an immutable submittedSnapshot.  For older rows that
+    // predate it, load inactive originals only for the historical fallback;
+    // they must never leak back into the detail items used by the UI/ship flow.
+    let original = (order as any).submittedSnapshot as OrderSnapshot | null
+    if (!original) {
+      const historicalItems = await prisma.purchaseOrderItem.findMany({
+        where: { purchaseOrderId: id },
+        include: { product: true },
+      })
+      original = buildOrderSnapshot({ ...(order as any), items: historicalItems } as any, 'original')
+    }
     const current = buildOrderSnapshot(order as any, 'current')
     return {
       ...order,
@@ -1179,6 +1215,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, userId, role, supplierId: actorSupplierId, storeId: actorStoreId } = req.user
     const { id } = req.params as any
     const input = parsed.data
+    const isDirectInternalRevision = hasInternalSupplyChainCapability(role, 'order.write')
     const requesterAllowed = canOperateSupplyOrder(role)
       || ['MANAGER', 'KITCHEN_LEAD', 'PURCHASER', 'CHEF_DIRECTOR'].includes(role)
     if (!requesterAllowed) return reply.status(403).send({ error: '无权申请修改订货单' })
@@ -1193,11 +1230,11 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
 
     // 直改重放是一个已完成请求的只读查询，必须早于当前订单状态和
     // 操作组成员校验。这样首次成功后即使集合已接单，丢包重试仍返回同一结果。
-    const directFingerprint = input.operationGroupId
+    const directFingerprint = isDirectInternalRevision
       ? directRevisionRequestFingerprint(input)
       : null
     const readDirectReplay = async (client: any) => {
-      if (!input.operationGroupId || !input.requestKey || !directFingerprint) return null
+      if (!isDirectInternalRevision || !input.requestKey || !directFingerprint) return null
       const duplicate = await client.purchaseOrderRevision.findFirst({
         where: { tenantId, purchaseOrderId: id, requestKey: input.requestKey },
         include: { requestedBy: { select: { id: true, name: true, role: true } } },
@@ -1216,12 +1253,12 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         && duplicate.requestedById === userId
         && duplicate.reason === input.reason
         && duplicate.baseRowVersion === input.baseRowVersion
-        && metadata?.operationGroupId === input.operationGroupId
+        && (metadata?.operationGroupId || undefined) === input.operationGroupId
         && metadata?.requestFingerprint === directFingerprint
       return { duplicate, matches }
     }
-    if (input.operationGroupId) {
-      if (!input.requestKey) return reply.status(400).send({ error: '操作组改单必须提供 requestKey' })
+    if (isDirectInternalRevision) {
+      if (!input.requestKey) return reply.status(400).send({ error: '内部供应链保存商品明细必须提供 requestKey' })
       const replay = await readDirectReplay(prisma)
       if (replay) {
         if (!replay.matches) return reply.status(409).send({ error: '同一改单请求键不能用于不同请求内容或申请人' })
@@ -1266,18 +1303,20 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: '供应商只能申请调整商品或数量' })
     }
 
-    // 内部供应链的集合改单不再产生“待门店确认”。幂等重放必须先于
+    // 内部供应链修改不再产生“待门店确认”。幂等重放必须先于
     // rowVersion 检查和自定义商品建档，否则成功请求的重试会因首次提交已
     // 将 rowVersion +1 而被误判为冲突。
-    if (input.operationGroupId) {
+    if (isDirectInternalRevision) {
       if (input.baseRowVersion !== order.rowVersion) return reply.status(409).send({ error: '订单已更新，请刷新后重新提交' })
 
       let createdCustomProduct = false
       try {
         const result = await prisma.$transaction(async tx => {
-          // 与批量接单共用操作组锁，与 legacy revision 共用订单锁。
+          // 集合操作与批量接单共用操作组锁；所有直改共用订单锁。
           // custom SKU 、revision 和订单明细因此成功全成功、失败全回滚。
-          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`operation-group:${tenantId}:${input.operationGroupId}`}))`
+          if (input.operationGroupId) {
+            await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`operation-group:${tenantId}:${input.operationGroupId}`}))`
+          }
           await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`order-revision:${tenantId}:${id}`}))`
 
           const lockedReplay = await readDirectReplay(tx)
@@ -1299,8 +1338,9 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             throw { statusCode: 409, message: '订单已更新，请刷新后重新提交' }
           }
 
-          // 锁内重算集合：防止另一个标签页接单后，旧集合链接仍改到原订单。
-          const groupRows = await tx.purchaseOrder.findMany({
+          // 集合入口在锁内重算归属；单笔入口不需要伪造集合。
+          if (input.operationGroupId) {
+            const groupRows = await tx.purchaseOrder.findMany({
             where: { ...supplyDataReadScope(req.user) },
             select: {
               id: true, no: true, storeId: true, supplierId: true, expectedDate: true,
@@ -1309,7 +1349,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
               events: { orderBy: { occurredAt: 'desc' }, take: 1, select: { occurredAt: true } },
             },
           })
-          const memberships = buildOperationGroups(groupRows.map(candidate => ({
+            const memberships = buildOperationGroups(groupRows.map(candidate => ({
             id: candidate.id, no: candidate.no, storeId: candidate.storeId,
             supplierId: candidate.supplierId, expectedDate: candidate.expectedDate,
             status: candidate.status, createdAt: candidate.createdAt, updatedAt: candidate.updatedAt,
@@ -1317,43 +1357,42 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             lastOperationAt: candidate.events[0]?.occurredAt || null,
             hasPendingRevision: candidate.revisions.length > 0,
           } as OperationGroupCandidate)))
-          const currentGroup = memberships.get(id)?.operationGroup || null
-          const groupRowMap = new Map(groupRows.map(candidate => [candidate.id, candidate]))
-          const latestId = currentGroup
-            ? latestOperationGroupOrderId(currentGroup.memberOrderIds.map(memberId => {
+            const currentGroup = memberships.get(id)?.operationGroup || null
+            const groupRowMap = new Map(groupRows.map(candidate => [candidate.id, candidate]))
+            const latestId = currentGroup
+              ? latestOperationGroupOrderId(currentGroup.memberOrderIds.map(memberId => {
                 const member = groupRowMap.get(memberId)!
                 return { id: member.id, createdAt: member.createdAt, submittedAt: member.submittedAt }
               }))
-            : null
-          if (!currentGroup || currentGroup.id !== input.operationGroupId || latestId !== id) {
-            throw { statusCode: 409, message: '操作组已变化，请从集合入口刷新后重试' }
+              : null
+            if (!currentGroup || currentGroup.id !== input.operationGroupId || latestId !== id) {
+              throw { statusCode: 409, message: '操作组已变化，请从集合入口刷新后重试' }
+            }
           }
 
-          // 旧版内部集合可能留下 PENDING；只终结同一集合、同类内部操作的旧申请。
-          // 供应商或无集合的 PENDING 不得被直改覆盖。
+          // 旧版内部流程可能留下 PENDING；只依据申请当时的不可变事件来终结
+          // 同一单笔/集合上下文的内部申请，永不根据申请人的当前角色覆盖供应商申请。
           const pending = await tx.purchaseOrderRevision.findMany({
             where: { purchaseOrderId: id, status: 'PENDING' },
-            include: { requestedBy: { select: { role: true } } },
           })
           if (pending.length > 0) {
             const pendingEvents = await tx.purchaseOrderEvent.findMany({
               where: { purchaseOrderId: id, eventType: 'REVISION_REQUESTED' },
-              select: { metadata: true },
+              select: { actorRole: true, metadata: true },
             })
             const supersedable = pending.filter(candidate => {
               const event = pendingEvents.find(item => (item.metadata as any)?.revisionId === candidate.id)
-              return hasInternalSupplyChainCapability(candidate.requestedBy.role, 'order.write')
-                && (event?.metadata as any)?.operationGroupId === input.operationGroupId
+              return isSupersedableInternalPendingRevisionEvent(event, input.operationGroupId)
             })
             if (supersedable.length !== pending.length) {
-              throw { statusCode: 409, message: '该订单已有供应商或非集合改单待门店确认，不能直接覆盖' }
+              throw { statusCode: 409, message: '该订单已有供应商提交的改单，内部供应链不能直接覆盖' }
             }
             const supersededAt = new Date()
             await tx.purchaseOrderRevision.updateMany({
               where: { id: { in: supersedable.map(candidate => candidate.id) }, status: 'PENDING' },
               data: {
                 status: 'CANCELLED', reviewedById: userId, reviewedAt: supersededAt,
-                reviewNote: '已由内部操作组直接改单取代',
+                reviewNote: '已由内部供应链直接修改取代',
               },
             })
             for (const candidate of supersedable) {
@@ -1513,7 +1552,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
               beforeSnapshot: before as any, afterSnapshot: after as any, changeSet: changes as any,
               requestKey: input.requestKey, baseRowVersion: input.baseRowVersion,
               requestedById: userId, reviewedById: userId, reviewedAt: new Date(),
-              reviewNote: '内部操作组改单直接生效',
+              reviewNote: '内部供应链修改直接生效',
             },
             include: { requestedBy: { select: { id: true, name: true, role: true } } },
           })
@@ -1567,6 +1606,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
               metadata: {
                 revisionId: created.id, revisionNo, reason: input.reason, changes,
                 operationGroupId: input.operationGroupId, requestFingerprint: directFingerprint, directApplied: true,
+                source: input.operationGroupId ? 'ORDER_GROUP_DIRECT_REVISION' : 'SINGLE_ORDER_DIRECT_REVISION',
               },
             },
           })
@@ -1583,7 +1623,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           await tx.opLog.create({
             data: {
               tenantId, userId, role,
-              action: `内部操作组直接修改订货单 ${currentOrder.no} (第 ${revisionNo} 次): ${input.reason}`,
+              action: `内部供应链直接修改订货单 ${currentOrder.no} (第 ${revisionNo} 次): ${input.reason}`,
               target: currentOrder.no, entityType: 'PurchaseOrderRevision', targetId: created.id,
               metadata: {
                 changes, operationGroupId: input.operationGroupId, directApplied: true,
@@ -1738,6 +1778,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             metadata: {
               revisionId: created.id, revisionNo, reason: input.reason, changes,
               operationGroupId: input.operationGroupId || null,
+              directApplied: false,
+              source: isSupplierRole(role) ? 'SUPPLIER_REVISION' : 'STORE_REVISION',
             },
           },
         })

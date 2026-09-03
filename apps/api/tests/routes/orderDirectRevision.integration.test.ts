@@ -238,6 +238,147 @@ describe('internal operation-group direct revision (integration)', () => {
     expect(supplierForgery.statusCode).toBe(403)
   })
 
+  it('applies and idempotently replays a SUPPLY_CHAIN single-order revision without an operation group', async () => {
+    const order = await createOrder('2026-12-29', `direct-single-${suffix}`)
+    const payload = {
+      reason: '内部单笔商品明细调整',
+      baseRowVersion: order.rowVersion,
+      requestKey: `direct-single-revision-${suffix}`,
+      items: [{ productId: reusableProductId, quantity: 4 }],
+    }
+
+    const first = await app.inject({
+      method: 'POST', url: `/api/orders/${order.id}/revisions`,
+      headers: { 'x-test-actor': 'supply-chain' }, payload,
+    })
+    expect(first.statusCode).toBe(201)
+    expect(first.json()).toMatchObject({ status: 'APPROVED', directApplied: true, duplicated: false })
+
+    const replay = await app.inject({
+      method: 'POST', url: `/api/orders/${order.id}/revisions`,
+      headers: { 'x-test-actor': 'supply-chain' }, payload,
+    })
+    expect(replay.statusCode).toBe(200)
+    expect(replay.json()).toMatchObject({ id: first.json().id, status: 'APPROVED', directApplied: true, duplicated: true })
+    const persisted = await prisma.purchaseOrder.findUniqueOrThrow({
+      where: { id: order.id }, include: { items: { where: { isActive: true } } },
+    })
+    expect(persisted.items[0].quantity.toString()).toBe('4')
+    expect(persisted.items[0].productId).toBe(reusableProductId)
+    expect(await prisma.purchaseOrderItem.count({
+      where: { purchaseOrderId: order.id, productId: baseProductId, isActive: false },
+    })).toBe(1)
+    const detail = await app.inject({
+      method: 'GET', url: `/api/orders/${order.id}`,
+      headers: { 'x-test-actor': 'supply-chain' },
+    })
+    expect(detail.statusCode).toBe(200)
+    expect(detail.json().items).toEqual([
+      expect.objectContaining({ productId: reusableProductId, quantity: '4' }),
+    ])
+    expect(await prisma.purchaseOrderRevision.count({ where: { purchaseOrderId: order.id } })).toBe(1)
+  })
+
+  it('supersedes only a legacy internal PENDING revision identified by immutable event provenance', async () => {
+    const order = await createOrder('2026-12-29', `legacy-internal-${suffix}`)
+    const pendingResponse = await app.inject({
+      method: 'POST', url: `/api/orders/${order.id}/revisions`,
+      headers: { 'x-test-actor': 'supplier' },
+      payload: {
+        reason: '模拟旧版内部待处理改单', baseRowVersion: order.rowVersion,
+        requestKey: `legacy-internal-pending-${suffix}`,
+        items: [{ productId: baseProductId, quantity: 2 }],
+      },
+    })
+    expect(pendingResponse.statusCode).toBe(201)
+    const pending = pendingResponse.json()
+    const event = await prisma.purchaseOrderEvent.findFirstOrThrow({
+      where: { purchaseOrderId: order.id, eventType: 'REVISION_REQUESTED' },
+    })
+    await prisma.$transaction([
+      prisma.purchaseOrderRevision.update({ where: { id: pending.id }, data: { requestedById: supplyChainUserId } }),
+      prisma.purchaseOrderEvent.update({
+        where: { id: event.id },
+        data: {
+          actorId: supplyChainUserId,
+          actorRole: 'SUPPLY_CHAIN',
+          metadata: { revisionId: pending.id, revisionNo: pending.revisionNo, operationGroupId: null },
+        },
+      }),
+    ])
+
+    const direct = await app.inject({
+      method: 'POST', url: `/api/orders/${order.id}/revisions`,
+      headers: { 'x-test-actor': 'supply-chain' },
+      payload: {
+        reason: '取代旧版内部待处理改单', baseRowVersion: order.rowVersion,
+        requestKey: `replace-legacy-internal-${suffix}`,
+        items: [{ productId: baseProductId, quantity: 3 }],
+      },
+    })
+    expect(direct.statusCode).toBe(201)
+    expect(await prisma.purchaseOrderRevision.findUniqueOrThrow({ where: { id: pending.id } }))
+      .toMatchObject({ status: 'CANCELLED', reviewNote: '已由内部供应链直接修改取代' })
+  })
+
+  it('blocks a supplier PENDING revision even if that requester later receives an internal role', async () => {
+    const order = await createOrder('2026-12-29', `supplier-provenance-${suffix}`)
+    const pending = await app.inject({
+      method: 'POST', url: `/api/orders/${order.id}/revisions`,
+      headers: { 'x-test-actor': 'supplier' },
+      payload: {
+        reason: '供应商待门店确认', baseRowVersion: order.rowVersion,
+        requestKey: `supplier-provenance-pending-${suffix}`,
+        items: [{ productId: baseProductId, quantity: 2 }],
+      },
+    })
+    expect(pending.statusCode).toBe(201)
+    await prisma.user.update({ where: { id: supplierUserId }, data: { role: 'SUPPLY_CHAIN' } })
+    try {
+      const direct = await app.inject({
+        method: 'POST', url: `/api/orders/${order.id}/revisions`,
+        headers: { 'x-test-actor': 'supply-chain' },
+        payload: {
+          reason: '不得覆盖供应商待处理改单', baseRowVersion: order.rowVersion,
+          requestKey: `blocked-by-supplier-pending-${suffix}`,
+          items: [{ productId: baseProductId, quantity: 3 }],
+        },
+      })
+      expect(direct.statusCode).toBe(409)
+      expect(direct.json().error).toContain('供应商提交的改单')
+      expect(await prisma.purchaseOrderRevision.findUniqueOrThrow({ where: { id: pending.json().id } }))
+        .toMatchObject({ status: 'PENDING' })
+    } finally {
+      await prisma.user.update({ where: { id: supplierUserId }, data: { role: 'SUPPLIER_OWNER' } })
+    }
+  })
+
+  it('blocks an ordinary supplier PENDING revision from an internal direct overwrite', async () => {
+    const order = await createOrder('2026-12-29', `supplier-pending-block-${suffix}`)
+    const pending = await app.inject({
+      method: 'POST', url: `/api/orders/${order.id}/revisions`,
+      headers: { 'x-test-actor': 'supplier' },
+      payload: {
+        reason: '供应商正常待确认改单', baseRowVersion: order.rowVersion,
+        requestKey: `supplier-pending-block-${suffix}`,
+        items: [{ productId: baseProductId, quantity: 2 }],
+      },
+    })
+    expect(pending.statusCode).toBe(201)
+    const direct = await app.inject({
+      method: 'POST', url: `/api/orders/${order.id}/revisions`,
+      headers: { 'x-test-actor': 'supply-chain' },
+      payload: {
+        reason: '尝试直接覆盖供应商改单', baseRowVersion: order.rowVersion,
+        requestKey: `supplier-pending-overwrite-${suffix}`,
+        items: [{ productId: baseProductId, quantity: 3 }],
+      },
+    })
+    expect(direct.statusCode).toBe(409)
+    expect(await prisma.purchaseOrderRevision.findUniqueOrThrow({ where: { id: pending.json().id } }))
+      .toMatchObject({ status: 'PENDING' })
+  })
+
   it('keeps the supplier single-order revision pending and rejects custom items outside an internal group', async () => {
     const order = await createOrder('2026-12-30', `legacy-order-${suffix}`)
     const pending = await app.inject({

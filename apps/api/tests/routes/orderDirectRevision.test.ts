@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { revisionCreateSchema } from '../../src/routes/orders'
+import { isSupersedableInternalPendingRevisionEvent, revisionCreateSchema } from '../../src/routes/orders'
 
 describe('operation-group direct revision request contract', () => {
   const base = {
@@ -42,5 +42,26 @@ describe('operation-group direct revision request contract', () => {
       requestKey: 'legacy-revision-request',
       items: [{ productId: 'product-1', quantity: 2.345 }],
     }).success).toBe(true)
+  })
+})
+
+describe('pending revision provenance', () => {
+  it('uses immutable request-event role and metadata, never the requester current role', () => {
+    expect(isSupersedableInternalPendingRevisionEvent({
+      actorRole: 'SUPPLY_CHAIN',
+      metadata: { revisionId: 'revision-1', operationGroupId: null },
+    })).toBe(true)
+    expect(isSupersedableInternalPendingRevisionEvent({
+      actorRole: 'SUPPLIER_OWNER',
+      metadata: { revisionId: 'revision-1', directApplied: true, source: 'SINGLE_ORDER_DIRECT_REVISION' },
+    })).toBe(false)
+  })
+
+  it('fails closed when legacy event metadata is absent or the operation group differs', () => {
+    expect(isSupersedableInternalPendingRevisionEvent({ actorRole: 'SUPPLY_CHAIN', metadata: null })).toBe(false)
+    expect(isSupersedableInternalPendingRevisionEvent({
+      actorRole: 'SUPPLY_CHAIN',
+      metadata: { revisionId: 'revision-1', operationGroupId: 'og_aaaaaaaaaaaaaaaaaaaaaaaa' },
+    }, 'og_bbbbbbbbbbbbbbbbbbbbbbbb')).toBe(false)
   })
 })

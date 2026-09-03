@@ -173,10 +173,9 @@ export default function OperationGroupDetailPage() {
 
     <OrderAmountCard eyebrow={`${detail.group.memberCount} 张原订单 · ${detail.group.memberOrderNos.map(no => `#${no}`).join('、')}`}
       name={first?.store?.name || '未知门店'} amountLabel="实发金额"
-      amount={money(detail.totals.shipmentAmount)} orderedAmount={money(detail.totals.orderedAmount)}>
+      amount={money(detail.totals.shipmentAmount)} originalOrderAmount={money(detail.totals.orderedAmount)}>
       {first?.store?.address && <div className="mt-1 text-micro text-gray3">📍 {first.store.address}</div>}
       <div className="mt-2 text-caption text-gray2">下单 {dayjs(detail.group.firstCreatedAt).format('MM/DD HH:mm')}{detail.group.firstCreatedAt !== detail.group.lastCreatedAt && ` — ${dayjs(detail.group.lastCreatedAt).format('MM/DD HH:mm')}`} · 期望到货 {dayjs(detail.group.expectedDate).format('MM/DD')}<br />供应商 {first?.supplier?.name || '-'}</div>
-      {detail.totals.hasAnyShipment && !detail.totals.snapshotComplete && <div className="mt-2 text-micro text-amber-fg">实发仅累计已生成的配送单，未发货原订单不计入。</div>}
     </OrderAmountCard>
     <OrderDeliverySummary lines={deliveryLines} />
     <OrderProgressCard currentIndex={detail.progressStep} />
@@ -190,7 +189,7 @@ export default function OperationGroupDetailPage() {
           className={`w-24 rounded-cta border bg-white px-2 py-1 text-right font-num ${Math.abs(row.quantity - row.originalQuantity) >= 0.0001 ? 'border-red text-red-fg' : 'border-border text-ink'}`} /><span className="text-gray3">{row.unit}</span></span> : <>{row.quantity}{row.unit}</>
       }} />
 
-    <section className="mx-4 mt-3 rounded-card border border-border bg-white"><div className="border-b border-border px-4 py-3"><h2 className="text-h2">集合内订单 ({detail.orders.length})</h2></div><div className="overflow-x-auto"><table className="w-full min-w-[520px] text-caption"><thead className="bg-bg text-micro text-gray3"><tr><th className="px-4 py-2 text-left">序号</th><th className="px-4 py-2 text-left">原订单号</th><th className="px-4 py-2 text-left">下单时间</th><th className="px-4 py-2 text-right">订货金额</th></tr></thead><tbody className="divide-y divide-border">{sortedOrders.map((order, index) => <tr key={order.id}><td className="px-4 py-3 font-num text-gray3">{index + 1}</td><td className="px-4 py-3 font-num">#{order.no}</td><td className="px-4 py-3 text-gray2">{dayjs(order.createdAt).format('MM/DD HH:mm')}</td><td className="px-4 py-3 text-right font-num">¥{money(order.orderedItems.reduce((sum, item) => sum + Number(item.amount), 0))}</td></tr>)}</tbody></table></div></section>
+    <section className="mx-4 mt-3 rounded-card border border-border bg-white"><div className="border-b border-border px-4 py-3"><h2 className="text-h2">集合内订单 ({detail.orders.length})</h2></div><div className="overflow-x-auto"><table className="w-full min-w-[420px] text-caption"><thead className="bg-bg text-micro text-gray3"><tr><th className="px-4 py-2 text-left">序号</th><th className="px-4 py-2 text-left">原订单号</th><th className="px-4 py-2 text-left">下单时间</th></tr></thead><tbody className="divide-y divide-border">{sortedOrders.map((order, index) => <tr key={order.id}><td className="px-4 py-3 font-num text-gray3">{index + 1}</td><td className="px-4 py-3 font-num">#{order.no}</td><td className="px-4 py-3 text-gray2">{dayjs(order.createdAt).format('MM/DD HH:mm')}</td></tr>)}</tbody></table></div></section>
 
     <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-white/95 p-3 backdrop-blur"><div className="mx-auto max-w-5xl">{detail.source === 'accepted' ? <div className="rounded-cta bg-green-bg px-4 py-3 text-center text-button text-green-fg">集合已接单</div> : <button onClick={() => setConfirmOpen(true)} disabled={!canAccept || submitting} className="w-full rounded-cta bg-ink px-4 py-3 text-button text-white disabled:opacity-40">批量接单</button>}</div></div>
 

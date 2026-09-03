@@ -33,7 +33,7 @@ export function OrderAmountCard(props: {
   name: ReactNode
   amountLabel: string
   amount: string
-  orderedAmount?: string | null
+  originalOrderAmount?: string | null
   children?: ReactNode
 }) {
   return <section className="mx-4 mt-2 rounded-card border border-border bg-white p-4">
@@ -43,7 +43,7 @@ export function OrderAmountCard(props: {
       <span className="text-right">
         <span className="block text-micro text-gray3">{props.amountLabel}</span>
         <span className="font-num text-h1">¥{props.amount}</span>
-        {props.orderedAmount && <span className="mt-0.5 block text-micro text-gray3">订货 ¥{props.orderedAmount}</span>}
+        {props.originalOrderAmount && <span className="mt-0.5 block text-micro text-gray3">原始订单金额 ¥{props.originalOrderAmount}</span>}
       </span>
     </div>
     {props.children}

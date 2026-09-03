@@ -30,6 +30,17 @@ describe('single and grouped fulfillment detail architecture', () => {
     expect(sharedComponent).toContain('数量</th><th className="px-3 py-2 text-right">单价</th><th className="px-3 py-2 text-right">总价</th>')
   })
 
+  it('keeps the simplified amount language on both pages', () => {
+    expect(sharedComponent).toContain('原始订单金额 ¥{props.originalOrderAmount}')
+    for (const source of [singlePage, groupPage]) {
+      expect(source).not.toContain('原始订货')
+      expect(source).not.toContain('当前第 {order.currentRevisionNo} 版')
+      expect(source).not.toContain('三者不混用')
+      expect(source).not.toContain('SUPPLIER_MONEY_TERMS.payableAmount')
+    }
+    expect(groupPage).not.toContain('>订货金额</th>')
+  })
+
   it('does not reintroduce duplicate legacy sections or a second group delivery-note action', () => {
     for (const forbidden of ['打印集合送货单', '保存明细', '改单记录', '自定义商品']) {
       expect(groupPage).not.toContain(forbidden)

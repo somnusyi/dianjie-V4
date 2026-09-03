@@ -553,12 +553,10 @@ export default function SupplierOrderDetailPage() {
   const step = status.progressStep
   const tone = status.tone
   const pendingRevision = order.revisions?.find(revision => revision.status === 'PENDING')
-  const originalAmount = Number(order.originalTotalAmount ?? order.totalAmount)
   const currentOrderAmount = Number(order.currentOrderAmount ?? order.originalTotalAmount ?? order.totalAmount)
   const shipmentAmount = (order.deliveries || [])
-    .filter(delivery => delivery.status !== 'CANCELLED')
+    .filter(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')
     .reduce((sum, delivery) => sum + Number(delivery.actualTotalAmount || 0), 0)
-  const receivedAmount = (order.receipts || []).reduce((sum, receipt) => sum + Number(receipt.totalAmount || 0), 0)
   const shipLinesForButton = order.status === 'CONFIRMED' ? buildPartialShipmentLines(order.items, shipQty) : null
   const shipAllZero = shipLinesForButton ? !hasAnyPositiveShipment(shipLinesForButton) : false
   const editableDelivery = (order.deliveries || []).find(delivery =>
@@ -743,7 +741,7 @@ export default function SupplierOrderDetailPage() {
 
       <OrderAmountCard eyebrow={`#${order.no}`} name={order.store.name} amountLabel={SUPPLIER_MONEY_TERMS.shipmentAmount}
         amount={shipmentAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-        orderedAmount={currentOrderAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}>
+        originalOrderAmount={currentOrderAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}>
         {order.store.address && <div className="text-micro text-gray3 mt-1">📍 {order.store.address}</div>}
         <div className="text-caption text-gray2 mt-2">
           下单 {dayjs(order.createdAt).format('MM/DD HH:mm')} · 期望到货 {dayjs(order.expectedDate).format('MM/DD')}
@@ -753,26 +751,6 @@ export default function SupplierOrderDetailPage() {
         </div>
         {order.note && <div className="mt-2 bg-bg rounded p-2 text-caption text-gray2">📝 {order.note}</div>}
         {order.shippedNote && <div className="mt-2 bg-amber/10 rounded p-2 text-caption text-amber-fg">📦 发货备注: {order.shippedNote}</div>}
-        {(order.currentRevisionNo || 0) > 0 && (
-          <div className="mt-2 text-micro text-gray3">
-            原始订货 ¥{originalAmount.toLocaleString()} · 当前第 {order.currentRevisionNo} 版 ¥{currentOrderAmount.toLocaleString()}
-          </div>
-        )}
-        <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-border">
-          <div>
-            <div className="text-micro text-gray3">{SUPPLIER_MONEY_TERMS.orderedAmount}</div>
-            <div className="font-num text-caption">¥{currentOrderAmount.toLocaleString()}</div>
-          </div>
-          <div>
-            <div className="text-micro text-gray3">{SUPPLIER_MONEY_TERMS.shipmentAmount}</div>
-            <div className="font-num text-caption">{shipmentAmount > 0 ? `¥${shipmentAmount.toLocaleString()}` : '—'}</div>
-          </div>
-          <div>
-            <div className="text-micro text-gray3">{SUPPLIER_MONEY_TERMS.payableAmount}</div>
-            <div className="font-num text-caption">{receivedAmount > 0 ? `¥${receivedAmount.toLocaleString()}` : '—'}</div>
-          </div>
-        </div>
-        <p className="text-micro text-gray3 mt-2">订货按已确认订单；实发按配送单；应付按门店实收入库单，三者不混用。</p>
       </OrderAmountCard>
 
       <OrderDeliverySummary lines={(order.deliveries || []).flatMap(delivery => delivery.items.map(item => `${item.product?.name || '商品'}${item.shippedQty}${item.product?.unit || ''}`))} />

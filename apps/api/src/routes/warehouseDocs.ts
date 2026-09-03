@@ -64,12 +64,25 @@ export const warehouseDocsRoutes: FastifyPluginAsync = async app => {
     if (type) where.type = type
     if (status) where.status = status
     if (query.supplierId) where.supplierId = String(query.supplierId)
+    if (query.productId) where.lines = { some: { productId: String(query.productId) } }
     if (query.from || query.to) {
       where.effectiveAt = {}
       if (query.from) where.effectiveAt.gte = new Date(`${query.from}T00:00:00+08:00`)
       if (query.to) where.effectiveAt.lte = new Date(`${query.to}T23:59:59.999+08:00`)
     }
-    if (query.q) where.docNo = { contains: String(query.q).trim(), mode: 'insensitive' }
+    const term = String(query.q || '').trim()
+    const termProducts = term ? await prisma.product.findMany({
+      where: { tenantId: req.user.tenantId, OR: [
+        { code: { contains: term, mode: 'insensitive' } },
+        { name: { contains: term, mode: 'insensitive' } },
+      ] },
+      select: { id: true, code: true, name: true }, take: 201,
+    }) : []
+    if (term) where.OR = [
+      { docNo: { contains: term, mode: 'insensitive' } },
+      { lines: { some: { productName: { contains: term, mode: 'insensitive' } } } },
+      ...(termProducts.length ? [{ lines: { some: { productId: { in: termProducts.map(product => product.id) } } } }] : []),
+    ]
     const [items, total] = await Promise.all([
       prisma.warehouseDoc.findMany({
         where,
@@ -79,7 +92,9 @@ export const warehouseDocsRoutes: FastifyPluginAsync = async app => {
       }),
       prisma.warehouseDoc.count({ where }),
     ])
-    return { items, total, page, pageSize }
+    const exactProducts = termProducts.filter(product => product.code.toLowerCase() === term.toLowerCase() || product.name.toLowerCase() === term.toLowerCase())
+    const matchedProduct = exactProducts.length === 1 ? exactProducts[0] : termProducts.length === 1 ? termProducts[0] : null
+    return { items, total, page, pageSize, matchedProduct }
   })
 
   // 单据详情（含行明细与操作日志）

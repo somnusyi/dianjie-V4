@@ -2,7 +2,9 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
+import { WarehouseToolTabs } from '@/components/v2/warehouse-tool-tabs'
 import { apiFetch } from '@/lib/v2-auth'
+import { readWarehouseViewState, useWarehouseScrollRestoration, writeWarehouseViewState } from '@/lib/warehouse-view-state'
 
 type InventoryItem = {
   id: string
@@ -10,6 +12,7 @@ type InventoryItem = {
   name: string
   spec?: string | null
   category?: string | null
+  productStatus: 'PENDING_APPROVAL' | 'PENDING_DISABLE' | 'ENABLED' | 'DISABLED'
   purchaseUnit: string
   inventoryUnit: string
   purchaseToInventoryFactor: number
@@ -65,6 +68,10 @@ type InventoryResponse = {
     unitReviewSku: number
   }
   items: InventoryItem[]
+  total: number
+  page: number
+  pageSize: number
+  totalPages: number
 }
 
 type InventoryScope = 'stock' | 'bom-mapping' | 'unit-review'
@@ -110,6 +117,10 @@ const MOVEMENT_LABEL: Record<string, string> = {
   REVERSAL: '冲销',
 }
 
+const PRODUCT_STATUS_LABEL: Record<InventoryItem['productStatus'], string> = {
+  PENDING_APPROVAL: '待启用审核', PENDING_DISABLE: '待停用审核', ENABLED: '启用', DISABLED: '停用',
+}
+
 function defaultEffectiveAt() {
   const date = new Date()
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
@@ -118,6 +129,10 @@ function defaultEffectiveAt() {
 
 function newIdempotencyKey() {
   return globalThis.crypto?.randomUUID?.() || `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+function excelSafe(value: string) {
+  return /^[\s]*[=+\-@]/.test(value) ? `'${value}` : value
 }
 
 function money(value: number) {
@@ -192,6 +207,12 @@ export default function InternalSupplyChainInventoryPage() {
   const [movements, setMovements] = useState<Movement[]>([])
   const [audit, setAudit] = useState<LedgerAudit | null>(null)
   const [q, setQ] = useState('')
+  const [productStatus, setProductStatus] = useState('ALL')
+  const [stockStatus, setStockStatus] = useState('')
+  const [linkedProductId, setLinkedProductId] = useState('')
+  const [linkedMode, setLinkedMode] = useState(false)
+  const [linkSearchOverride, setLinkSearchOverride] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [loading, setLoading] = useState(true)
   const [scope, setScope] = useState<InventoryScope>('stock')
   const [error, setError] = useState('')
@@ -254,11 +275,21 @@ export default function InternalSupplyChainInventoryPage() {
     setError('')
     setData(current => current ? { ...current, scope: requestedScope, items: [] } : current)
     try {
+      const params = new URLSearchParams({ scope: requestedScope, productStatus, page: '1', pageSize: '500' })
+      if (linkedMode && linkedProductId && !linkSearchOverride) params.set('productId', linkedProductId)
+      else if (q.trim()) params.set('q', q.trim())
       const [inventory, recent, ledgerAudit] = await Promise.all([
-        apiFetch<InventoryResponse>(`/api/warehouse-inventory?scope=${requestedScope}&page=1&pageSize=500`),
+        apiFetch<InventoryResponse>(`/api/warehouse-inventory?${params}`),
         apiFetch<Movement[]>('/api/warehouse-inventory/movements?limit=50'),
         apiFetch<LedgerAudit>('/api/warehouse-inventory/audit'),
       ])
+      if (inventory.totalPages > 1) {
+        const remaining = await Promise.all(Array.from({ length: inventory.totalPages - 1 }, (_, index) => {
+          params.set('page', String(index + 2))
+          return apiFetch<InventoryResponse>(`/api/warehouse-inventory?${params}`)
+        }))
+        inventory.items = [...inventory.items, ...remaining.flatMap(result => result.items)]
+      }
       setData(inventory)
       setMovements(recent || [])
       setAudit(ledgerAudit)
@@ -269,7 +300,21 @@ export default function InternalSupplyChainInventoryPage() {
     }
   }
 
-  useEffect(() => { load(scope) }, [scope])
+  useEffect(() => { load(scope) }, [scope, productStatus, q, linkedProductId, linkedMode, linkSearchOverride])
+
+  useEffect(() => {
+    const saved = readWarehouseViewState('warehouse-inventory-view', { q: '', productStatus: 'ALL', stockStatus: '', scope: 'stock' })
+    setQ(saved.q)
+    setProductStatus(saved.productStatus)
+    setStockStatus(saved.stockStatus)
+    setScope(saved.scope as InventoryScope)
+    setLinkedProductId(new URLSearchParams(window.location.search).get('linkedProductId') || '')
+  }, [])
+
+  useEffect(() => {
+    writeWarehouseViewState('warehouse-inventory-view', { q, productStatus, stockStatus, scope })
+  }, [q, productStatus, stockStatus, scope])
+  useWarehouseScrollRestoration('warehouse-inventory-view')
 
   useEffect(() => {
     apiFetch<UpstreamSupplier[]>('/api/suppliers?businessScope=WAREHOUSE_UPSTREAM')
@@ -288,9 +333,19 @@ export default function InternalSupplyChainInventoryPage() {
     : 0
   const visible = useMemo(() => {
     const term = q.trim().toLowerCase()
-    if (!term) return items
-    return items.filter(item => [item.code, item.name, item.spec, item.category]
-      .some(value => String(value || '').toLowerCase().includes(term)))
+    return items.filter(item => {
+      if ((!linkedMode || linkSearchOverride) && term && ![item.code, item.name, item.spec, item.category].some(value => String(value || '').toLowerCase().includes(term))) return false
+      if (linkedMode && !linkSearchOverride && linkedProductId && item.id !== linkedProductId) return false
+      return !stockStatus || item.statusFlag === stockStatus
+    })
+  }, [items, linkedMode, linkedProductId, linkSearchOverride, q, stockStatus])
+  const exactSearchProduct = useMemo(() => {
+    const term = q.trim().toLowerCase()
+    if (!term) return null
+    const exact = items.filter(item => item.code.toLowerCase() === term || item.name.toLowerCase() === term)
+    if (exact.length === 1) return exact[0]
+    const matching = items.filter(item => [item.code, item.name].some(value => value.toLowerCase().includes(term)))
+    return matching.length === 1 ? matching[0] : null
   }, [items, q])
   const filteredBatchCandidates = useMemo(() => {
     const term = batchSearch.trim().toLowerCase()
@@ -304,6 +359,42 @@ export default function InternalSupplyChainInventoryPage() {
     const lineAmount = Number(row.amount)
     return sum + (Number.isFinite(lineAmount) ? lineAmount : 0)
   }, 0)
+
+  async function exportInventory() {
+    setExporting(true)
+    setError('')
+    try {
+      const all: InventoryItem[] = []
+      let page = 1
+      let totalPages = 1
+      do {
+        const params = new URLSearchParams({ scope, productStatus, page: String(page), pageSize: '500' })
+        if (linkedMode && linkedProductId && !linkSearchOverride) params.set('productId', linkedProductId)
+        else if (q.trim()) params.set('q', q.trim())
+        const result = await apiFetch<InventoryResponse>(`/api/warehouse-inventory?${params}`)
+        all.push(...result.items)
+        totalPages = result.totalPages
+        page += 1
+      } while (page <= totalPages)
+      const rows = all.filter(item => !stockStatus || item.statusFlag === stockStatus).map(item => ({
+        商品编码: excelSafe(item.code), 商品名称: excelSafe(item.name), 商品状态: PRODUCT_STATUS_LABEL[item.productStatus],
+        分类: excelSafe(item.category || ''), 规格: excelSafe(item.spec || ''), 采购单位: excelSafe(item.purchaseUnit), 库存单位: excelSafe(item.inventoryUnit),
+        物理库存: item.physicalQty, 预占库存: item.reservedQty, 可用库存: item.availableQty,
+        库存金额: item.inventoryValue, 平均单位成本: item.averageUnitCost,
+        库存状态: item.statusFlag === 'SHADOW_GAP' ? '待实盘缺口' : item.statusFlag === 'OUT' ? '缺货' : item.statusFlag === 'LOW' ? '偏低' : '正常',
+      }))
+      const XLSX = await import('xlsx')
+      const sheet = XLSX.utils.json_to_sheet(rows)
+      const book = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(book, sheet, '实时库存')
+      XLSX.writeFile(book, `实时库存查询表-${new Date().toISOString().slice(0, 10)}.xlsx`)
+      setNotice(`已导出 ${rows.length} 条当前筛选结果`)
+    } catch (reason: any) {
+      setError(`导出失败：${String(reason?.message || reason)}`)
+    } finally {
+      setExporting(false)
+    }
+  }
 
   function openInbound() {
     setInboundOpen(true)
@@ -591,6 +682,7 @@ export default function InternalSupplyChainInventoryPage() {
 
   return (
     <div className="min-h-screen bg-bg px-4 py-5 lg:px-8 lg:py-7">
+      <WarehouseToolTabs linkedProductId={linkedProductId} product={!linkedMode || linkSearchOverride ? exactSearchProduct : null} onLinkedProductChange={id => { setLinkedProductId(id); setLinkSearchOverride(false) }} onLinkedModeChange={mode => { setLinkedMode(mode); setLinkSearchOverride(false) }} />
       <header className="flex flex-col gap-4 border-b border-border pb-5 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <div className="mb-2 flex items-center gap-2">
@@ -605,8 +697,11 @@ export default function InternalSupplyChainInventoryPage() {
         <div className="flex flex-wrap items-end gap-2">
           <label className="flex flex-col gap-1">
             <span className="text-micro text-gray3">商品搜索</span>
-            <input value={q} onChange={event => setQ(event.target.value)} placeholder="名称 / 编码 / 分类 / 规格" className="h-10 min-w-64 rounded-cta border border-border bg-white px-3 text-body" />
+            <input value={q} onChange={event => { setQ(event.target.value); if (linkedMode) setLinkSearchOverride(Boolean(event.target.value.trim())) }} placeholder={linkedMode ? '输入精确名称/编码可更换关联商品' : '名称 / 编码 / 分类 / 规格'} className="h-10 min-w-64 rounded-cta border border-border bg-white px-3 text-body" />
           </label>
+          <label className="flex flex-col gap-1"><span className="text-micro text-gray3">商品状态</span><select value={productStatus} onChange={event => setProductStatus(event.target.value)} className="h-10 rounded-cta border border-border bg-white px-3 text-body"><option value="ALL">全部状态</option><option value="ENABLED">启用</option><option value="DISABLED">停用</option><option value="PENDING_APPROVAL">待启用审核</option><option value="PENDING_DISABLE">待停用审核</option></select></label>
+          <label className="flex flex-col gap-1"><span className="text-micro text-gray3">库存状态</span><select value={stockStatus} onChange={event => setStockStatus(event.target.value)} className="h-10 rounded-cta border border-border bg-white px-3 text-body"><option value="">全部</option><option value="OK">正常</option><option value="LOW">偏低</option><option value="OUT">缺货</option><option value="SHADOW_GAP">待实盘缺口</option></select></label>
+          <button onClick={exportInventory} disabled={exporting} className="h-10 rounded-cta border border-border bg-white px-4 text-button text-gray2 disabled:opacity-40">{exporting ? '导出中…' : '导出 Excel'}</button>
           {scope === 'stock' && <>
             <button onClick={openCount} className="h-10 rounded-cta border border-accent bg-white px-4 text-button text-accent">单SKU实盘校准</button>
             {data?.summary.inventoryMode === 'SHADOW' && <button onClick={reconcileShadow} disabled={submitting} className="h-10 rounded-cta border border-border bg-white px-4 text-button text-gray2 disabled:opacity-40">补记影子差异</button>}
@@ -783,7 +878,7 @@ export default function InternalSupplyChainInventoryPage() {
         <div className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-card bg-white p-5 shadow-xl" onClick={event => event.stopPropagation()}>
           <div className="flex items-center justify-between"><div><h2 className="text-h2">总仓单条手工入库</h2><p className="mt-1 text-micro text-gray3">必须选择上游供应商；未绑定供货关系的商品会给出警告但允许放行。</p></div><button onClick={() => setInboundOpen(false)} className="px-2 text-h2 text-gray3">×</button></div>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <label className="sm:col-span-2"><span className="mb-1 block text-micro text-gray3">商品 *</span><select value={productId} onChange={event => setProductId(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3"><option value="">请选择</option>{items.map(item => <option key={item.id} value={item.id}>{item.code} · {item.name} · 采购单位 {item.purchaseUnit}</option>)}</select></label>
+            <label className="sm:col-span-2"><span className="mb-1 block text-micro text-gray3">商品 *</span><select aria-label="入库商品" value={productId} onChange={event => setProductId(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3"><option value="">请选择</option>{items.map(item => <option key={item.id} value={item.id}>{item.code} · {item.name} · 采购单位 {item.purchaseUnit}</option>)}</select></label>
             <label><span className="mb-1 block text-micro text-gray3">采购入库数量（{selectedProduct?.purchaseUnit || '采购单位'}）*</span><input type="number" min="0.000001" step="0.001" value={purchaseQuantity} onChange={event => setPurchaseQuantity(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
             <label><span className="mb-1 block text-micro text-gray3">入库总金额（元）*</span><input type="number" min="0.01" step="0.01" value={totalAmount} onChange={event => setTotalAmount(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
             {selectedProduct && <div className="sm:col-span-2 rounded-card border border-blue/20 bg-blue/5 p-3 text-caption text-gray2">入库单位指供应商交货/仓库收货时使用的采购单位。本次：<b>{qty(Number(purchaseQuantity))} {selectedProduct.purchaseUnit} × {qty(selectedProduct.purchaseToInventoryFactor, 6)} = {qty(normalizedQuantity, 6)} {selectedProduct.inventoryUnit}</b>{unitCost > 0 && <>，库存单位成本约 <b>{money(unitCost)}/{selectedProduct.inventoryUnit}</b></>}。</div>}

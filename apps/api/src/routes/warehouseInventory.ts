@@ -184,6 +184,8 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
   app.get('/', authRead, async (req: any, reply: any) => {
     const parsed = z.object({
       q: z.string().trim().max(100).optional(),
+      productId: z.string().trim().min(1).optional(),
+      productStatus: z.enum(['ALL', 'PENDING_APPROVAL', 'PENDING_DISABLE', 'ENABLED', 'DISABLED']).default('ALL'),
       scope: z.enum(['stock', 'bom-mapping', 'unit-review']).default('stock'),
       page: z.coerce.number().int().min(1).default(1),
       pageSize: z.coerce.number().int().min(1).max(500).default(100),
@@ -192,12 +194,23 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
     const { tenantId } = req.user
     const warehouseId = await resolveTenantWarehouseId(prisma, tenantId, undefined)
     const terms = parsed.data.q?.toLowerCase().split(/\s+/).filter(Boolean) || []
+    const matchedProducts = parsed.data.q ? await prisma.product.findMany({
+      where: { tenantId, OR: [
+        { code: { contains: parsed.data.q, mode: 'insensitive' } },
+        { name: { contains: parsed.data.q, mode: 'insensitive' } },
+      ] },
+      select: { id: true, code: true, name: true }, take: 201,
+    }) : []
     const stockWhere = buildWarehouseInventoryScopeWhere({ tenantId, warehouseId, scope: 'stock' })
     const bomMappingWhere = buildWarehouseInventoryScopeWhere({ tenantId, warehouseId, scope: 'bom-mapping' })
     const unitReviewWhere = buildWarehouseInventoryScopeWhere({ tenantId, warehouseId, scope: 'unit-review' })
     const scopeWhere = buildWarehouseInventoryScopeWhere({ tenantId, warehouseId, scope: parsed.data.scope })
     const where: Prisma.ProductWhereInput = {
       ...scopeWhere,
+      status: parsed.data.productStatus === 'ALL'
+        ? { in: ['PENDING_APPROVAL', 'PENDING_DISABLE', 'ENABLED', 'DISABLED'] }
+        : parsed.data.productStatus,
+      ...(parsed.data.productId ? { id: parsed.data.productId } : {}),
       ...(terms.length ? {
         AND: terms.map(term => ({
           OR: [
@@ -220,7 +233,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         skip: (parsed.data.page - 1) * parsed.data.pageSize,
         take: parsed.data.pageSize,
         select: {
-          id: true, code: true, name: true, spec: true, category: true, unit: true,
+          id: true, code: true, name: true, spec: true, category: true, unit: true, status: true,
           purchaseUnit: true, inventoryUnit: true, orderUnit: true, costUnit: true,
           inventoryUnitsPerPurchaseUnit: true, inventoryUnitsPerOrderUnit: true,
           inventoryUnitsPerCostUnit: true, unitConversionStatus: true, minStock: true,
@@ -248,6 +261,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         name: product.name,
         spec: product.spec,
         category: product.category,
+        productStatus: product.status,
         purchaseUnit: contract.purchaseUnit,
         inventoryUnit: contract.inventoryUnit,
         purchaseToInventoryFactor: contract.inventoryUnitsPerPurchaseUnit,
@@ -282,6 +296,10 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
       total,
       page: parsed.data.page,
       pageSize: parsed.data.pageSize,
+      matchedProduct: (() => {
+        const exact = matchedProducts.filter(product => product.code.toLowerCase() === parsed.data.q?.toLowerCase() || product.name.toLowerCase() === parsed.data.q?.toLowerCase())
+        return exact.length === 1 ? exact[0] : matchedProducts.length === 1 ? matchedProducts[0] : null
+      })(),
       totalPages: Math.max(1, Math.ceil(total / parsed.data.pageSize)),
     }
   })
@@ -331,6 +349,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
       to: z.string().date().optional(),
       supplierId: z.string().trim().min(1).optional(),
       q: z.string().trim().max(100).optional(),
+      productId: z.string().trim().min(1).optional(),
       source: z.enum(['all', 'manual', 'batch', 'package', 'opening']).default('all'),
       page: z.coerce.number().int().min(1).default(1),
       pageSize: z.coerce.number().int().min(1).max(100).default(50),
@@ -344,6 +363,13 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
       package: 'MeituanDailyPackage',
     }
     const terms = parsed.data.q?.toLowerCase().split(/\s+/).filter(Boolean) || []
+    const matchedProducts = parsed.data.q ? await prisma.product.findMany({
+      where: { tenantId, OR: [
+        { code: { contains: parsed.data.q, mode: 'insensitive' } },
+        { name: { contains: parsed.data.q, mode: 'insensitive' } },
+      ] },
+      select: { id: true, code: true, name: true }, take: 201,
+    }) : []
     const where: Prisma.WarehouseLedgerMovementWhereInput = {
       tenantId,
       warehouseId,
@@ -353,6 +379,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
           ? { type: { in: ['MANUAL_INBOUND', 'OPENING_BALANCE'] } }
           : { type: 'MANUAL_INBOUND', sourceType: sourceTypeMap[parsed.data.source] }),
       ...(parsed.data.supplierId ? { supplierId: parsed.data.supplierId } : {}),
+      ...(parsed.data.productId ? { productId: parsed.data.productId } : {}),
       ...(parsed.data.from ? { effectiveAt: { gte: new Date(`${parsed.data.from}T00:00:00+08:00`) } } : {}),
       ...(parsed.data.to ? { effectiveAt: { lte: new Date(`${parsed.data.to}T23:59:59.999+08:00`) } } : {}),
       ...(terms.length ? {
@@ -391,6 +418,10 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
       totalAmount: Math.round((sumAgg._sum.valueDelta ? number(sumAgg._sum.valueDelta) : 0) * 100) / 100,
       page: parsed.data.page,
       pageSize: parsed.data.pageSize,
+      matchedProduct: (() => {
+        const exact = matchedProducts.filter(product => product.code.toLowerCase() === parsed.data.q?.toLowerCase() || product.name.toLowerCase() === parsed.data.q?.toLowerCase())
+        return exact.length === 1 ? exact[0] : matchedProducts.length === 1 ? matchedProducts[0] : null
+      })(),
       items: rows.map(row => ({
         id: row.id,
         type: row.type,

@@ -1,7 +1,10 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { DateRangeCalendar } from '@/components/v2/date-range-calendar'
+import { WarehouseToolTabs } from '@/components/v2/warehouse-tool-tabs'
 import { apiFetch, getUser } from '@/lib/v2-auth'
+import { readWarehouseViewState, useWarehouseScrollRestoration, writeWarehouseViewState } from '@/lib/warehouse-view-state'
 
 // ── 类型 ──────────────────────────────────────────────
 type DocRow = {
@@ -52,6 +55,7 @@ type DocLog = {
 type DocDetail = DocRow & { lines: DocLine[]; logs: DocLog[] }
 
 type SupplierOption = { id: string; name: string; no?: string }
+type LinkedProduct = { id: string; code: string; name: string }
 
 // ── 权限：与后端 warehouseDocs 路由一致 ────────────────
 const AUDIT_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'FINANCE', 'SUPPLY_CHAIN'])
@@ -98,6 +102,11 @@ export default function WarehouseDocsPage() {
   const [type, setType] = useState<'MANUAL_INBOUND' | 'MANUAL_OUTBOUND'>('MANUAL_INBOUND')
   const [status, setStatus] = useState('')
   const [q, setQ] = useState('')
+  const [linkedProductId, setLinkedProductId] = useState('')
+  const [linkedMode, setLinkedMode] = useState(false)
+  const [linkSearchOverride, setLinkSearchOverride] = useState(false)
+  const [matchedProduct, setMatchedProduct] = useState<LinkedProduct | null>(null)
+  const [restored, setRestored] = useState(false)
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [page, setPage] = useState(1)
@@ -113,8 +122,13 @@ export default function WarehouseDocsPage() {
 
   // 从入库记录页「改单」跳转进来时直接打开对应单据（?doc=<id>）
   useEffect(() => {
-    const docIdFromUrl = new URLSearchParams(window.location.search).get('doc')
+    const params = new URLSearchParams(window.location.search)
+    const docIdFromUrl = params.get('doc')
     if (docIdFromUrl) setDetailId(docIdFromUrl)
+    const saved = readWarehouseViewState('warehouse-docs-view', { type: 'MANUAL_INBOUND', status: '', q: '', from: '', to: '', page: 1 })
+    setType(saved.type as 'MANUAL_INBOUND' | 'MANUAL_OUTBOUND'); setStatus(saved.status); setQ(saved.q); setFrom(saved.from); setTo(saved.to); setPage(saved.page)
+    setLinkedProductId(params.get('linkedProductId') || '')
+    setRestored(true)
   }, [])
 
   const load = useCallback(() => {
@@ -125,24 +139,29 @@ export default function WarehouseDocsPage() {
     params.set('page', String(page))
     params.set('pageSize', String(pageSize))
     if (status) params.set('status', status)
-    if (q.trim()) params.set('q', q.trim())
+    if (linkedMode && linkedProductId && !linkSearchOverride) params.set('productId', linkedProductId)
+    else if (q.trim()) params.set('q', q.trim())
     if (from) params.set('from', from)
     if (to) params.set('to', to)
-    apiFetch<{ items: DocRow[]; total: number }>(`/api/warehouse-docs?${params.toString()}`)
+    apiFetch<{ items: DocRow[]; total: number; matchedProduct?: LinkedProduct | null }>(`/api/warehouse-docs?${params.toString()}`)
       .then(data => {
         setItems(data.items || [])
         setTotal(data.total || 0)
+        setMatchedProduct(data.matchedProduct || null)
       })
       .catch(reason => setError(String(reason?.message || reason)))
       .finally(() => setLoading(false))
-  }, [type, status, q, from, to, page])
+  }, [type, status, q, from, to, page, linkedProductId, linkedMode, linkSearchOverride])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { if (restored) load() }, [load, restored])
+  useEffect(() => { if (restored) writeWarehouseViewState('warehouse-docs-view', { type, status, q, from, to, page }) }, [type, status, q, from, to, page, restored])
+  useWarehouseScrollRestoration('warehouse-docs-view')
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   return (
     <div className="space-y-4">
+      <WarehouseToolTabs linkedProductId={linkedProductId} product={!linkedMode || linkSearchOverride ? matchedProduct : null} onLinkedProductChange={id => { setLinkedProductId(id); setLinkSearchOverride(false) }} onLinkedModeChange={mode => { setLinkedMode(mode); setLinkSearchOverride(false) }} />
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-title font-semibold">单据审核</h1>
@@ -172,19 +191,11 @@ export default function WarehouseDocsPage() {
           <option value="POSTED">未审核</option>
           <option value="CONFIRMED">已审核</option>
         </select>
-        <input
-          type="date" value={from} onChange={event => { setFrom(event.target.value); setPage(1) }}
-          className="h-10 rounded-cta border border-border bg-white px-3 text-body"
-        />
-        <span className="text-gray2">至</span>
-        <input
-          type="date" value={to} onChange={event => { setTo(event.target.value); setPage(1) }}
-          className="h-10 rounded-cta border border-border bg-white px-3 text-body"
-        />
+        <div className="min-w-64"><DateRangeCalendar value={{ from, to }} onChange={range => { setFrom(range.from); setTo(range.to); setPage(1) }} /></div>
         <input
           value={q}
-          onChange={event => { setQ(event.target.value); setPage(1) }}
-          placeholder="单据编号"
+          onChange={event => { setQ(event.target.value); setPage(1); if (linkedMode) setLinkSearchOverride(Boolean(event.target.value.trim())) }}
+          placeholder={linkedMode ? '输入精确商品名称/编码可更换关联商品' : '单据编号 / 商品名称 / 编码'}
           className="h-10 rounded-cta border border-border bg-white px-3 text-body"
         />
         <button onClick={load} className="h-10 rounded-cta bg-primary px-4 text-button text-white">查询</button>

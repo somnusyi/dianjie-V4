@@ -19,6 +19,12 @@ import {
 } from '@/lib/supplier-revision-cost-pricing'
 import { loadAllWarehouseProductCatalog } from '@/lib/load-product-catalog'
 import { buildOperationGroupDeliveryNoteProjection } from '@/lib/operation-group-delivery-note-preview'
+import {
+  groupOperationGroupProductRows,
+  setOperationGroupProductRemoval,
+  updateOperationGroupProductQuantity,
+  type OperationGroupProductDisplayRow,
+} from '@/lib/operation-group-product-aggregation'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 
 const PURCHASE_QUANTITY_MAX = 99_999_999.99
@@ -79,6 +85,7 @@ type DraftRow = OrderDetailTableRow & {
   isUnsavedAddition?: boolean
   isDeliveryAddition?: boolean
 }
+type GroupedDraftRow = OperationGroupProductDisplayRow<DraftRow>
 
 type GroupDeliveryNotePreview = {
   schemaVersion: 2
@@ -282,9 +289,9 @@ function rowsFromDetail(detail: Detail, shipmentDrafts: Record<string, ServerShi
         purchaseOrderItemId: item.purchaseOrderItemId || null,
         orderId: order.id,
         productId: item.productId,
-        name: item.product?.name || item.productNameSnapshot || '—',
-        spec: item.productSpecSnapshot || item.product?.spec || null,
-        unit: item.productUnitSnapshot || item.product?.unit || '—',
+        name: item.productNameSnapshot ?? item.product?.name ?? '—',
+        spec: item.productSpecSnapshot ?? item.product?.spec ?? null,
+        unit: item.productUnitSnapshot ?? item.product?.unit ?? '—',
         quantity: Number(item.shippedQty),
         originalQuantity: Number(item.shippedQty),
         unitPrice: Number(item.unitPriceSnapshot || 0),
@@ -383,36 +390,61 @@ export default function OperationGroupDetailPage() {
   const deliveringOrders = (detail?.orders || []).filter(order => order.status === 'DELIVERING')
   const pendingConfirmOrders = (detail?.orders || []).filter(order => order.status === 'PENDING_CONFIRM')
   const confirmedOrderIds = new Set(confirmedOrders.map(order => order.id))
-  const editableRows = editable ? rows : rows.filter(row => confirmedOrderIds.has(row.orderId)
-    || Boolean(row.deliveryId && editableDeliveryIds.has(row.deliveryId)) || row.isDeliveryAddition)
+  function isDraftRowEditable(row: DraftRow) {
+    return Boolean(editable || confirmedOrderIds.has(row.orderId) || row.isDeliveryAddition
+      || (row.deliveryId && editableDeliveryIds.has(row.deliveryId)))
+  }
+  const editableRows = editable ? rows : rows.filter(isDraftRowEditable)
+  const displayRows = useMemo(() => groupOperationGroupProductRows(rows), [rows])
   const hasInvalidQuantityDraft = Object.values(quantityDrafts)
     .some(raw => quantityDraftReason(raw) !== null)
   const dirty = detailEditable && (fingerprint(editableRows) !== baseline || hasInvalidQuantityDraft)
   const blocked = Boolean(detail?.group.blockedOrderIds?.length)
   const canAccept = Boolean(detail?.source === 'pending' && detail.group.isEligible && !blocked && !dirty)
 
-  function updateQuantity(row: DraftRow, value: number) {
+  function updateQuantity(row: GroupedDraftRow, value: number) {
     // Keep the last valid row value authoritative. Invalid raw text stays in
     // quantityDrafts so preview/save remain blocked until the user corrects it.
     if (quantityDraftReason(String(value)) !== null) return
-    clearDeliveryNotePreview()
-    setRows(current => current.map(item => item.key === row.key ? { ...item, quantity: value } : item))
-    setActionError(null); setNotice(null)
-  }
-
-  function removeRow(row: DraftRow) {
-    clearDeliveryNotePreview()
-    setRows(current => current.map(item => item.key === row.key ? { ...item, pendingRemoval: true } : item))
-    setActionError(null); setNotice(null)
-  }
-
-  function removeShipmentRow(row: DraftRow) {
-    if (!confirmedOrderIds.has(row.orderId) && !(row.deliveryId && editableDeliveryIds.has(row.deliveryId))) {
-      setActionError('已经发货的原订单不能再次修改')
+    const result = updateOperationGroupProductQuantity(rows, row.mergeKey, value, isDraftRowEditable, PURCHASE_QUANTITY_MAX)
+    if (result.error) {
+      setActionError(result.error)
       return
     }
     clearDeliveryNotePreview()
-    setRows(current => current.map(item => item.key === row.key ? { ...item, pendingRemoval: true } : item))
+    setRows(result.rows)
+    setActionError(null); setNotice(null)
+  }
+
+  function removeDisplayRow(row: GroupedDraftRow) {
+    const result = setOperationGroupProductRemoval(rows, row.mergeKey, true, isDraftRowEditable)
+    if (result.error) {
+      setActionError(result.error)
+      return
+    }
+    clearDeliveryNotePreview()
+    setRows(result.rows)
+    setQuantityDrafts(current => {
+      const next = { ...current }
+      delete next[row.key]
+      return next
+    })
+    setActionError(null); setNotice(null)
+  }
+
+  function restoreDisplayRow(row: GroupedDraftRow) {
+    const result = setOperationGroupProductRemoval(rows, row.mergeKey, false, isDraftRowEditable)
+    if (result.error) {
+      setActionError(result.error)
+      return
+    }
+    clearDeliveryNotePreview()
+    setRows(result.rows)
+    setQuantityDrafts(current => {
+      const next = { ...current }
+      delete next[row.key]
+      return next
+    })
     setActionError(null); setNotice(null)
   }
 
@@ -907,24 +939,20 @@ export default function OperationGroupDetailPage() {
     </OrderAmountCard>
     <OrderDeliverySummary lines={deliveryLines} />
     <OrderProgressCard currentIndex={detail.progressStep} />
-    <OrderProductTable rows={rows} editable={detailEditable} total={money(productTotal)} saving={submitting} dirty={Boolean(dirty)} onAdd={detailEditable ? () => void openAdd() : undefined} onSave={() => void save()} onRemove={row => {
-      const draftRow = row as DraftRow
-      if (editable) removeRow(draftRow)
-      else removeShipmentRow(draftRow)
+    <OrderProductTable rows={displayRows} editable={detailEditable} total={money(productTotal)} saving={submitting} dirty={Boolean(dirty)} onAdd={detailEditable ? () => void openAdd() : undefined} onSave={() => void save()} onRemove={row => {
+      removeDisplayRow(row as GroupedDraftRow)
     }} onRestore={row => {
-      restoreShipmentRow(row as DraftRow)
+      restoreDisplayRow(row as GroupedDraftRow)
     }} canRemove={row => {
-      const draftRow = row as DraftRow
-      return Boolean(editable || confirmedOrderIds.has(draftRow.orderId) || draftRow.isDeliveryAddition
-        || (draftRow.deliveryId && editableDeliveryIds.has(draftRow.deliveryId)))
+      const groupedRow = row as GroupedDraftRow
+      return groupedRow.members.every(isDraftRowEditable)
     }}
-      notice={editable ? <p className="mx-3 mb-2 text-micro text-gray3">每行标明原订单归属；点一次保存后，所有变化在同一个事务中生效或全部回滚。</p> : (shipmentEditable || deliveryEditable) ? <div className="mx-3 mb-2">
-        <p className="text-micro text-gray3">这里填写每张原订单的实发数量；数量 0 仍保留商品，“移除”才会从本次发货中删除。</p>
+      notice={editable ? <p className="mx-3 mb-2 text-micro text-gray3">相同商品已合并显示；点一次保存后，变化会同步回集合内原订单并整体生效或回滚。</p> : (shipmentEditable || deliveryEditable) ? <div className="mx-3 mb-2">
+        <p className="text-micro text-gray3">相同商品已合并显示；数量 0 仍保留商品，“移除”才会从本次发货中删除。</p>
       </div> : null}
       renderQuantity={rowBase => {
-        const row = rowBase as DraftRow
-        const rowEditable = Boolean(editable || confirmedOrderIds.has(row.orderId) || row.isDeliveryAddition
-          || (row.deliveryId && editableDeliveryIds.has(row.deliveryId)))
+        const row = rowBase as GroupedDraftRow
+        const rowEditable = row.members.every(isDraftRowEditable)
         if (row.pendingRemoval) return <>{row.quantity}{row.unit}</>
         return rowEditable ? <span className="inline-flex items-center gap-1"><input type="number" inputMode="decimal" min="0" max={PURCHASE_QUANTITY_MAX} step="0.01" aria-label={`${row.name}数量`}
           value={quantityDrafts[row.key] ?? String(row.quantity)} onChange={event => { const raw = event.target.value; setQuantityDrafts(current => ({ ...current, [row.key]: raw })); if (quantityDraftReason(raw) === null) updateQuantity(row, Number(raw)) }}

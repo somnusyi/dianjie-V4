@@ -1,3 +1,8 @@
+import {
+  operationGroupProductMergeKey,
+  operationGroupRoundedLineAmount,
+} from './operation-group-product-aggregation'
+
 export type OperationGroupDeliveryNoteRow = {
   productId: string
   name: string
@@ -31,12 +36,6 @@ type OperationGroupDeliveryNoteProjectionPayload = {
   totals: unknown
 }
 
-function lineAmount(quantity: number, unitPrice: number) {
-  const quantityHundredths = Math.round(quantity * 100)
-  const unitPriceCents = Math.round(unitPrice * 100)
-  return Math.round((quantityHundredths * unitPriceCents) / 100) / 100
-}
-
 /**
  * Build the delivery-note projection from the exact rows currently displayed
  * by the operation-group editor. Explicit removals disappear, zero-quantity
@@ -58,7 +57,7 @@ export function buildOperationGroupDeliveryNoteProjection(
 
   for (const row of rows) {
     if (row.pendingRemoval) continue
-    const key = `${row.productId}|${row.name}|${row.spec || ''}|${row.unit}`
+    const key = operationGroupProductMergeKey(row)
     const current = merged.get(key) || {
       productId: row.productId,
       name: row.name,
@@ -72,7 +71,7 @@ export function buildOperationGroupDeliveryNoteProjection(
     // Persisted order and delivery documents round every source line to cents
     // before totals are added. Mirror that rule so a multi-order preview cannot
     // drift by one cent from the document produced immediately after saving.
-    current.amount += lineAmount(row.quantity, row.unitPrice)
+    current.amount += operationGroupRoundedLineAmount(row.quantity, row.unitPrice)
     merged.set(key, current)
   }
 

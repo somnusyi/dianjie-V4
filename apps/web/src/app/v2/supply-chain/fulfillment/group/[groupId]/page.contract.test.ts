@@ -5,11 +5,11 @@ const source = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8')
 
 describe('confirmed operation-group shipment removal recovery', () => {
   it('keeps every pending removal in the table with the shared inline restore interaction', () => {
-    expect(source).toContain('{ ...item, pendingRemoval: true }')
-    expect(source).toContain('{ ...item, pendingRemoval: false }')
+    expect(source).toContain('setOperationGroupProductRemoval(rows, row.mergeKey, true')
+    expect(source).toContain('setOperationGroupProductRemoval(rows, row.mergeKey, false')
     expect(source).toContain('onRestore={row =>')
     expect(source).toContain('if (row.pendingRemoval) return <>{row.quantity}{row.unit}</>')
-    expect(source).toContain('rows={rows}')
+    expect(source).toContain('rows={displayRows}')
     expect(source).not.toContain('已移除商品（可恢复）')
     expect(source).not.toContain('恢复 {row.name}')
     expect(source).not.toContain('每张原订单至少保留一个商品')
@@ -152,15 +152,25 @@ describe('confirmed operation-group shipment removal recovery', () => {
 
   it('invalidates an old preview before every new local row mutation', () => {
     for (const [start, end] of [
-      ['function updateQuantity', 'function removeRow'],
-      ['function removeRow', 'function removeShipmentRow'],
-      ['function removeShipmentRow', 'function restoreShipmentRow'],
+      ['function updateQuantity', 'function removeDisplayRow'],
+      ['function removeDisplayRow', 'function restoreDisplayRow'],
+      ['function restoreDisplayRow', 'function restoreShipmentRow'],
       ['function restoreShipmentRow', 'async function openAdd'],
     ]) {
       expect(source.slice(source.indexOf(start), source.indexOf(end))).toContain('clearDeliveryNotePreview()')
     }
     expect(source.slice(source.indexOf('function addProduct'), source.indexOf('function clearDeliveryNotePreview')))
       .toContain('clearDeliveryNotePreview()')
+  })
+
+  it('uses one merged product view for all batch phases while preserving source rows for save', () => {
+    expect(source).toContain("from '@/lib/operation-group-product-aggregation'")
+    expect(source).toContain('const displayRows = useMemo(() => groupOperationGroupProductRows(rows), [rows])')
+    expect(source).toContain('rows={displayRows}')
+    expect(source).toContain('updateOperationGroupProductQuantity(rows, row.mergeKey, value')
+    expect(source).toContain('groupedRow.members.every(isDraftRowEditable)')
+    expect(source).toContain('相同商品已合并显示')
+    expect(source).toContain('draftRows: rows')
   })
 
   it('saves quantity changes and removals against each delivery row version', () => {

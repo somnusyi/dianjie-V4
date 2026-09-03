@@ -8,6 +8,7 @@ export type OrderDetailTableRow = {
   unit: string
   quantity: number
   unitPrice: number
+  amount?: number
   originalQuantity: number
   sourceLabel?: string
   pendingRemoval?: boolean
@@ -119,7 +120,7 @@ export function OrderProductTable(props: {
               <td className={`px-3 py-3 text-gray2 ${strikeClass}`}>{row.spec || '-'}</td>
               <td className={`px-3 py-3 text-right font-num ${strikeClass}`}>{props.renderQuantity ? props.renderQuantity(row) : <>{row.quantity}{row.unit}</>}</td>
               <td className={`px-3 py-3 text-right font-num ${strikeClass}`}>¥{row.unitPrice.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-              <td className={`px-3 py-3 text-right font-num ${strikeClass}`}>¥{(row.quantity * row.unitPrice).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+              <td className={`px-3 py-3 text-right font-num ${strikeClass}`}>¥{(row.amount ?? row.quantity * row.unitPrice).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
               {props.editable && <td className="px-3 py-3 text-right">
                 {pendingRemoval
                   ? props.onRestore && canChangeRemoval && <button type="button" onClick={() => props.onRestore?.(row)}

@@ -261,7 +261,7 @@ describe('internal operation-group revision entry contract', () => {
     expect(source).toContain('rows.filter(row => row.orderId === order.id)')
     expect(source).toContain('`/api/orders/operation-groups/${encodeURIComponent(detail.group.id)}/items`')
     expect(source).toContain("method: 'PATCH'")
-    expect(source).toContain('所有变化在同一个事务中生效或全部回滚')
+    expect(source).toContain('变化会同步回集合内原订单并整体生效或回滚')
     expect(source).not.toContain('operationGroup=${encodeURIComponent(detail.group.id)}&groupAdd=1')
     expect(source).not.toContain('接单前修改（数量 / 商品）')
     expect(source).not.toContain('自定义商品')

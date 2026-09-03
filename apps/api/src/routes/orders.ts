@@ -11,6 +11,7 @@ import { isStoreScoped, isSupplierRole, requireSupplierBinding, resolveActiveSto
 import {
   allowsSupplyDataRead,
   hasInternalSupplyChainCapability,
+  isInternalSupplyChainRole,
   supplyDataReadScope,
 } from '../lib/internal-supply-chain-access'
 import { resignOssUrls } from './upload'
@@ -33,6 +34,7 @@ import {
 } from '../services/supplierStockReservation'
 import {
   consumeWarehouseLedgerForShipment,
+  deliveryOutboundCostAmounts,
   getWarehouseLedgerMode,
   postWarehouseReleaseForOrder,
   postWarehouseReservationForOrder,
@@ -1121,9 +1123,19 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       },
     })
     if (!order) throw { statusCode: 404, message: '采购订单不存在' }
+    const canReadInternalCost = isInternalSupplyChainRole(req.user.role)
+    const deliveryCostById = canReadInternalCost
+      ? await deliveryOutboundCostAmounts(
+        req.user.tenantId,
+        Array.isArray((order as any).deliveries)
+          ? (order as any).deliveries.map((delivery: any) => String(delivery.id))
+          : [],
+      )
+      : new Map<string, string>()
     if (Array.isArray((order as any).deliveries)) {
       ;(order as any).deliveries = (order as any).deliveries.map((delivery: any) => ({
         ...delivery,
+        ...(canReadInternalCost ? { costAmount: deliveryCostById.get(String(delivery.id)) ?? null } : {}),
         items: Array.isArray(delivery.items) ? delivery.items.map(withDocumentProductSnapshot) : [],
       }))
     }

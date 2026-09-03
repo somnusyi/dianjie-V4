@@ -288,6 +288,43 @@ describe('商品管理 PC 页面 · 供应商业务口径', () => {
 
     cleanup(container, root)
   })
+
+  it('新增商品时可在加大的供应商选择框内模糊搜索并添加供应商', async () => {
+    mockRoutes()
+
+    const { container, root } = render(<InternalSupplyChainProductsPage />)
+    await waitFor(() => Boolean(findButton(container, '＋ 新增商品')))
+
+    act(() => findButton(container, '＋ 新增商品')!.click())
+    await waitFor(() => container.textContent?.includes('新增商品') ?? false)
+    await waitFor(() => Boolean(findButton(container, '＋ 添加供应商') && !findButton(container, '＋ 添加供应商')!.disabled))
+
+    act(() => findButton(container, '＋ 添加供应商')!.click())
+    await waitFor(() => Boolean(container.querySelector(
+      'input[placeholder="搜索供应商名称、编码、联系人或电话"]',
+    )))
+    const search = container.querySelector(
+      'input[placeholder="搜索供应商名称、编码、联系人或电话"]',
+    ) as HTMLInputElement | null
+    expect(search).not.toBeNull()
+
+    act(() => { Simulate.change(search!, { target: { value: '蔬菜批' } as any }) })
+    await waitFor(() => Boolean(Array.from(container.querySelectorAll('[role="option"]')).find(option => (
+      option.textContent?.includes('昆明蔬菜批发')
+    ))))
+
+    const option = Array.from(container.querySelectorAll('[role="option"]')).find(item => (
+      item.textContent?.includes('昆明蔬菜批发')
+    )) as HTMLButtonElement | undefined
+    expect(option).toBeTruthy()
+    act(() => option!.click())
+
+    await waitFor(() => container.textContent?.includes('上游供应商 *') ?? false)
+    expect(container.textContent).toContain('昆明蔬菜批发')
+    expect(container.querySelector('[role="listbox"]')).toBeNull()
+
+    cleanup(container, root)
+  })
 })
 
 describe('商品管理 PC 页面 · 分类计数与列表筛选口径对齐', () => {

@@ -55,6 +55,7 @@ import {
   validateNewProductForm,
   validateProductQuantities,
   formatProductQuantity,
+  filterSupplierOptions,
   type CategoryOption,
   type SupplierOption,
   type SupplyProduct,
@@ -265,7 +266,13 @@ export default function InternalSupplyChainProductsPage() {
         if (!active) return
         setSuppliers(supplierOptions)
         setUpstreamSuppliers(Array.isArray(upstreamSupplierList)
-          ? upstreamSupplierList.map((supplier: any) => ({ id: supplier.id, name: supplier.name, no: supplier.no }))
+          ? upstreamSupplierList.map((supplier: any) => ({
+            id: supplier.id,
+            name: supplier.name,
+            no: supplier.no,
+            contactName: supplier.contactName,
+            contactPhone: supplier.contactPhone,
+          }))
           : [])
         setCatalogTotal(typeof catalog?.total === 'number' ? catalog.total : null)
         // 先按聚合接口快速渲染左侧分类树，随后用主数据补全。
@@ -457,11 +464,11 @@ export default function InternalSupplyChainProductsPage() {
     }))
   }
 
-  function addFormSourceRow() {
+  function addFormSourceRow(supplierId: string) {
     const used = new Set(formSources.map(row => row.supplierId))
-    const supplier = upstreamSuppliers.find(option => !used.has(option.id))
+    const supplier = upstreamSuppliers.find(option => option.id === supplierId && !used.has(option.id))
     if (!supplier) {
-      setFormError(upstreamSuppliers.length === 0 ? '请先在「上游供应商管理」建立供应商档案' : '全部上游供应商均已添加')
+      setFormError(upstreamSuppliers.length === 0 ? '请先在「上游供应商管理」建立供应商档案' : '该供应商已添加或不存在')
       return
     }
     setFormError(null)
@@ -1599,7 +1606,7 @@ function FormDialog({
   onRepriced?: (message: string) => void
   upstreamSuppliers?: UpstreamSupplierOption[]
   formSources?: SourceFormRow[]
-  onSourceAdd?: () => void
+  onSourceAdd?: (supplierId: string) => void
   onSourceChange?: (index: number, changes: Partial<SourceFormRow>) => void
   onSourceRemove?: (index: number) => void
 }) {
@@ -1623,6 +1630,12 @@ function FormDialog({
       || specConversion!.factor !== Number(form.inventoryUnitsPerPurchaseUnit))
   // datalist 的原生下拉箭头在部分浏览器点击无响应，这里提供一个可点击的候选列表作为可靠入口
   const [categoryListOpen, setCategoryListOpen] = useState(false)
+  const [sourcePickerOpen, setSourcePickerOpen] = useState(false)
+  const [sourceSupplierSearch, setSourceSupplierSearch] = useState('')
+  const availableSourceSuppliers = (upstreamSuppliers || []).filter(
+    supplier => !(formSources || []).some(row => row.supplierId === supplier.id),
+  )
+  const visibleSourceSuppliers = filterSupplierOptions(availableSourceSuppliers, sourceSupplierSearch)
   // 比例加价预览：编辑已有商品且选了比例加价时，拉取库存均价试算应售价。
   const [markupPreview, setMarkupPreview] = useState<any | null>(null)
   const [markupPreviewLoading, setMarkupPreviewLoading] = useState(false)
@@ -2074,12 +2087,61 @@ function FormDialog({
               <div className="col-span-2 rounded-cta border border-border bg-bg px-3 py-2">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-caption text-gray2">供货关系（总仓向谁采购）</div>
-                  <button
-                    type="button"
-                    onClick={onSourceAdd}
-                    disabled={formSources.length >= upstreamSuppliers.length}
-                    className="rounded-cta border border-accent/30 bg-accent/5 px-3 py-1 text-micro text-accent disabled:opacity-40"
-                  >＋ 添加供应商</button>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      aria-haspopup="listbox"
+                      aria-expanded={sourcePickerOpen}
+                      onClick={() => {
+                        setSourceSupplierSearch('')
+                        setSourcePickerOpen(open => !open)
+                      }}
+                      disabled={availableSourceSuppliers.length === 0}
+                      className="rounded-cta border border-accent/30 bg-accent/5 px-3 py-1 text-micro text-accent disabled:opacity-40"
+                    >＋ 添加供应商</button>
+                    {sourcePickerOpen && (
+                      <>
+                        <div className="fixed inset-0 z-10" onClick={() => setSourcePickerOpen(false)} />
+                        <div className="absolute bottom-full right-0 z-20 mb-1 w-[420px] max-w-[calc(100vw-3rem)] rounded-cta border border-border bg-white p-3 shadow-lg">
+                          <input
+                            autoFocus
+                            type="search"
+                            value={sourceSupplierSearch}
+                            onChange={event => setSourceSupplierSearch(event.target.value)}
+                            placeholder="搜索供应商名称、编码、联系人或电话"
+                            className="h-10 w-full rounded-cta border border-border bg-bg px-3 text-body outline-none focus:border-accent"
+                          />
+                          <div role="listbox" className="mt-2 max-h-72 overflow-y-scroll [scrollbar-gutter:stable]">
+                            {visibleSourceSuppliers.length === 0 ? (
+                              <p className="px-3 py-6 text-center text-caption text-gray3">没有匹配的供应商</p>
+                            ) : visibleSourceSuppliers.map(supplier => (
+                              <button
+                                key={supplier.id}
+                                type="button"
+                                role="option"
+                                aria-selected="false"
+                                onClick={() => {
+                                  onSourceAdd(supplier.id)
+                                  setSourcePickerOpen(false)
+                                  setSourceSupplierSearch('')
+                                }}
+                                className="flex min-h-12 w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-gray2 hover:bg-bg"
+                              >
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate text-body">{supplier.name}</span>
+                                  {(supplier.no || supplier.contactName || supplier.contactPhone) && (
+                                    <span className="block truncate text-micro text-gray3">
+                                      {[supplier.no, supplier.contactName, supplier.contactPhone].filter(Boolean).join(' · ')}
+                                    </span>
+                                  )}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
                 {formSources.length === 0 ? (
                   <p className="mt-2 text-micro leading-5 text-gray3">

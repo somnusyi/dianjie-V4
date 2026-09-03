@@ -13,6 +13,55 @@ const COST_DP = 6
 
 type Decimalish = Prisma.Decimal | string | number
 
+export function sumDeliveryOutboundCostRows(
+  rows: Array<{ id: string; sourceId: string; valueDelta: Decimalish }>,
+  reversals: Array<{ sourceLineId: string; valueDelta: Decimalish }> = [],
+) {
+  const totals = new Map<string, Prisma.Decimal>()
+  const deliveryByMovementId = new Map<string, string>()
+  for (const row of rows) {
+    deliveryByMovementId.set(row.id, row.sourceId)
+    const valueDelta = new Prisma.Decimal(row.valueDelta || 0)
+    const cost = valueDelta.isNegative() ? valueDelta.negated() : ZERO
+    totals.set(row.sourceId, (totals.get(row.sourceId) || ZERO).plus(cost))
+  }
+  for (const reversal of reversals) {
+    const deliveryId = deliveryByMovementId.get(reversal.sourceLineId)
+    if (!deliveryId) continue
+    const valueDelta = new Prisma.Decimal(reversal.valueDelta || 0)
+    if (valueDelta.isPositive()) totals.set(deliveryId, (totals.get(deliveryId) || ZERO).minus(valueDelta))
+  }
+  return new Map([...totals].map(([deliveryId, total]) => [
+    deliveryId,
+    Prisma.Decimal.max(ZERO, total).toFixed(2),
+  ]))
+}
+
+/** 历史配送单成本必须取发货当时冻结的总仓出库流水，不能用当前商品价格反算。 */
+export async function deliveryOutboundCostAmounts(tenantId: string, deliveryIds: string[]) {
+  const ids = [...new Set(deliveryIds.filter(Boolean))]
+  const result = new Map<string, string>()
+  if (ids.length === 0) return result
+  const rows = await prisma.warehouseLedgerMovement.findMany({
+    where: {
+      tenantId,
+      type: 'ORDER_OUTBOUND',
+      sourceType: 'DeliveryOrder',
+      sourceId: { in: ids },
+    },
+    select: { id: true, sourceId: true, valueDelta: true },
+  })
+  const reversals = await prisma.warehouseLedgerMovement.findMany({
+    where: {
+      tenantId,
+      type: 'REVERSAL',
+      sourceLineId: { in: rows.map(row => row.id) },
+    },
+    select: { sourceLineId: true, valueDelta: true },
+  })
+  return sumDeliveryOutboundCostRows(rows, reversals)
+}
+
 type LockedBalance = {
   id: string
   productId: string

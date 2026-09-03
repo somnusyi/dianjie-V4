@@ -9,7 +9,7 @@
 'use client'
 import { Fragment, useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { apiFetch } from '@/lib/v2-auth'
+import { apiFetch, getUser } from '@/lib/v2-auth'
 import dayjs from 'dayjs'
 
 type Order = {
@@ -17,6 +17,7 @@ type Order = {
   purchaseOrderNo?: string
   purchaseOrderTotalAmount?: string
   totalAmount: string
+  costAmount?: string | null
   expectedDate: string; createdAt: string
   shippedAt: string | null
   shippedNote: string | null
@@ -29,7 +30,7 @@ type Order = {
   shippedBy: { id: string; name: string } | null
   items: { id: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string
            product?: { name: string; spec: string | null; unit: string; code: string } }[]
-  deliveries?: { id: string; no: string; status: string; actualTotalAmount: string; note?: string | null; shippedAt?: string | null
+  deliveries?: { id: string; no: string; status: string; actualTotalAmount: string; costAmount?: string | null; note?: string | null; shippedAt?: string | null
     items: { id: string; orderedQtySnapshot: string; shippedQty: string; unitPriceSnapshot: string; amount: string
       product?: { name: string; spec: string | null; unit: string; code: string } }[] }[]
 }
@@ -84,7 +85,7 @@ type OperationGroupResponse = {
   source?: 'pending' | 'accepted'
   orders: OperationGroupMember[]
   mergedItems: OperationGroupItem[]
-  totals?: { quantity?: number | string | null; amount?: number | string | null }
+  totals?: { quantity?: number | string | null; amount?: number | string | null; costAmount?: number | string | null }
 }
 
 type NormalizedOperationGroup = {
@@ -168,6 +169,7 @@ function normalizeOperationGroup(data: OperationGroupResponse): NormalizedOperat
       no: '',
       status: first.status || 'CONFIRMED',
       totalAmount,
+      costAmount: data.totals?.costAmount == null ? null : decimalText(data.totals.costAmount),
       purchaseOrderTotalAmount: totalAmount,
       expectedDate,
       createdAt: first.createdAt,
@@ -223,6 +225,7 @@ export default function DeliveryNotePrintPage() {
   const router = useRouter()
   const id = String(params.id || '')
   const isOperationGroup = /^og_[a-f0-9]{24}$/.test(id)
+  const canExportInternalCost = getUser()?.role === 'SUPPLY_CHAIN'
   const [order, setOrder] = useState<Order | null>(null)
   const [groupMembers, setGroupMembers] = useState<NormalizedOperationGroup['members'] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -267,6 +270,7 @@ export default function DeliveryNotePrintPage() {
           purchaseOrderTotalAmount: data.totalAmount,
           no: latest.no,
           totalAmount: latest.actualTotalAmount,
+          costAmount: latest.costAmount ?? null,
           shippedAt: latest.shippedAt || data.shippedAt,
           shippedNote: latest.note || null,
           items: latest.items.map(item => ({
@@ -437,6 +441,7 @@ export default function DeliveryNotePrintPage() {
       const documentLabel = isOperationGroup ? '集合送货单' : order.no
       const totalLocal = order.items.reduce((s, i) => s + itemAmtLocal(i), 0)
       const totalQtyLocal = order.items.reduce((s, i) => s + itemQtyLocal(i), 0)
+      const costTotalLocal = order.costAmount == null ? null : Number(order.costAmount)
 
       // 构造表格 (aoa = array of arrays)
       const aoa: any[][] = [
@@ -464,7 +469,10 @@ export default function DeliveryNotePrintPage() {
           Number(it.unitPrice),
           Number(itemAmtLocal(it).toFixed(2)),
         ]),
-        ['实发金额', '', '', '', totalQtyLocal, '', Number(totalLocal.toFixed(2))],
+        ['发货金额', '', '', '', totalQtyLocal, '', Number(totalLocal.toFixed(2))],
+        canExportInternalCost
+          ? ['成本金额', '', '', '', '', '', costTotalLocal == null ? '—' : Number(costTotalLocal.toFixed(2))]
+          : null,
         ['大写', `人民币 ${num2cn(totalLocal)}`, '', '', '', '', ''],
       ].filter(Boolean) as any[][]
 
@@ -492,15 +500,18 @@ export default function DeliveryNotePrintPage() {
       // 货币列数字格式
       const headerRow = aoa.findIndex(r => r[0] === '#')
       if (headerRow >= 0) {
-        for (let r = headerRow + 1; r < aoa.length - 2; r++) {
+        for (let r = headerRow + 1; r < aoa.length - 1; r++) {
           ;['F', 'G'].forEach(col => {
             const cellRef = `${col}${r + 1}`
             if (ws[cellRef]) ws[cellRef].z = '¥#,##0.00'
           })
         }
         // 合计行
-        const totalCell = `G${aoa.length - 1}`
-        if (ws[totalCell]) ws[totalCell].z = '¥#,##0.00'
+        for (const label of ['发货金额', '成本金额']) {
+          const rowIndex = aoa.findIndex(row => row[0] === label)
+          const cell = rowIndex >= 0 ? ws[`G${rowIndex + 1}`] : null
+          if (cell && typeof cell.v === 'number') cell.z = '¥#,##0.00'
+        }
       }
 
       const wb = XLSX.utils.book_new()

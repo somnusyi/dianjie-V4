@@ -110,7 +110,9 @@ describe('single and grouped fulfillment detail architecture', () => {
   })
 
   it('labels printed and exported totals as shipment amount', () => {
-    expect(deliveryNotePage).toContain("['实发金额', '', '', '', totalQtyLocal")
+    expect(deliveryNotePage).toContain("['发货金额', '', '', '', totalQtyLocal")
+    expect(deliveryNotePage).toContain("['成本金额', '', '', '', '', '', costTotalLocal")
+    expect(deliveryNotePage).toContain('order.costAmount == null ? null : Number(order.costAmount)')
     expect(deliveryNotePage).toContain('>实发金额</td>')
     expect(deliveryNotePage).not.toContain('原订货单总额')
   })

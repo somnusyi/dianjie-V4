@@ -1,5 +1,5 @@
 import { Prisma, prisma } from '@dianjie/db'
-import { supplyDataReadScope } from '../lib/internal-supply-chain-access'
+import { isInternalSupplyChainRole, supplyDataReadScope } from '../lib/internal-supply-chain-access'
 import {
   buildOperationGroups,
   operationGroupId,
@@ -7,6 +7,7 @@ import {
   type OperationGroupCandidate,
 } from './orderOperationGroups'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
+import { deliveryOutboundCostAmounts } from './warehouseLedger'
 
 /**
  * Read-only detail for a two-hour operation group.
@@ -52,6 +53,7 @@ export type OperationGroupDetail = {
     originalOrderAmount: string
     shipmentQuantity: string
     shipmentAmount: string
+    costAmount: string | null
     hasAnyShipment: boolean
     snapshotComplete: boolean
   }
@@ -338,6 +340,9 @@ function groupFromAcceptedEvents(events: any[]): { group: OperationGroup; member
 export async function loadOperationGroupDetails(
   user: OperationGroupDetailUser,
   requestedGroupId: string,
+  dependencies: {
+    deliveryCosts?: (tenantId: string, deliveryIds: string[]) => Promise<Map<string, string>>
+  } = {},
 ): Promise<OperationGroupDetail | null> {
   if (!/^og_[a-f0-9]{24}$/.test(requestedGroupId)) return null
   const scope: any = supplyDataReadScope(user)
@@ -477,6 +482,19 @@ export async function loadOperationGroupDetails(
   const shipmentSummary = operationGroupShipmentSummary(orderedRows)
   const validDeliveries = orderedRows.flatMap(row => (Array.isArray(row.deliveries) ? row.deliveries : [])
     .filter((delivery: any) => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED'))
+  const canReadInternalCost = isInternalSupplyChainRole(user.role)
+  const costByDeliveryId = canReadInternalCost
+    ? await (dependencies.deliveryCosts || deliveryOutboundCostAmounts)(
+      user.tenantId,
+      validDeliveries.map((delivery: any) => String(delivery.id)),
+    )
+    : new Map<string, string>()
+  const hasCompleteDeliveryCosts = canReadInternalCost && validDeliveries.length > 0 && validDeliveries.every(
+    (delivery: any) => costByDeliveryId.has(String(delivery.id)),
+  )
+  const costAmount = hasCompleteDeliveryCosts
+    ? [...costByDeliveryId.values()].reduce((sum, value) => sum.add(decimalValue(value)), new Prisma.Decimal(0)).toFixed(2)
+    : null
   const { hasAnyShipment, snapshotComplete, shipmentAmount } = shipmentSummary
   // Once shipment snapshots exist, the aggregate product view contains only
   // shipment lines. Never fill missing members with ordered quantities.
@@ -492,6 +510,7 @@ export async function loadOperationGroupDetails(
     originalOrderAmount: orderedRows.reduce((sum, row) => sum.add(decimalValue(row.originalTotalAmount ?? row.totalAmount)), new Prisma.Decimal(0)).toFixed(2),
     shipmentQuantity,
     shipmentAmount,
+    costAmount,
     hasAnyShipment,
     snapshotComplete,
   }

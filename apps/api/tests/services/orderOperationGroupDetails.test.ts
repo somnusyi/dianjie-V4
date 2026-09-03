@@ -110,7 +110,11 @@ describe('operation group delivery summaries API', () => {
       },
     ] as any)
 
-    const detail = await loadOperationGroupDetails({ tenantId: 'tenant-1', role: 'SUPPLY_CHAIN' }, groupId)
+    const detail = await loadOperationGroupDetails(
+      { tenantId: 'tenant-1', role: 'SUPPLY_CHAIN' },
+      groupId,
+      { deliveryCosts: async () => new Map([['delivery-early', '2.50'], ['delivery-late', '3.50']]) },
+    )
 
     expect(detail?.orders[0]).toMatchObject({
       no: 'PO-01',
@@ -128,6 +132,21 @@ describe('operation group delivery summaries API', () => {
     expect((detail?.orders[0] as any).deliverySummaries.map((delivery: any) => delivery.no))
       .toEqual(['D-EARLY', 'D-LATE'])
     expect((detail?.orders[1] as any).deliverySummaries).toEqual([])
+    expect(detail?.totals.costAmount).toBe('6.00')
+    const incompleteCostDetail = await loadOperationGroupDetails(
+      { tenantId: 'tenant-1', role: 'SUPPLY_CHAIN' },
+      groupId,
+      { deliveryCosts: async () => new Map([['delivery-early', '2.50']]) },
+    )
+    expect(incompleteCostDetail?.totals.costAmount).toBeNull()
+    const externalCostReader = vi.fn(async () => new Map([['delivery-early', '2.50'], ['delivery-late', '3.50']]))
+    const supplierDetail = await loadOperationGroupDetails(
+      { tenantId: 'tenant-1', role: 'SUPPLIER', supplierId: 'supplier-1' },
+      groupId,
+      { deliveryCosts: externalCostReader },
+    )
+    expect(externalCostReader).not.toHaveBeenCalled()
+    expect(supplierDetail?.totals.costAmount).toBeNull()
     expect(prisma.purchaseOrder.findMany).toHaveBeenCalledWith(expect.objectContaining({
       include: expect.objectContaining({
         deliveries: expect.objectContaining({

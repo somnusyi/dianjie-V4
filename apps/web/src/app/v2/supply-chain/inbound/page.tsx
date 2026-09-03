@@ -42,7 +42,6 @@ type InboundResponse = {
   page: number
   pageSize: number
   items: InboundRecord[]
-  matchedProduct?: { id: string; code: string; name: string } | null
 }
 
 type UnclaimedSource = {
@@ -101,9 +100,6 @@ export default function InboundRecordsPage() {
   const [supplierId, setSupplierId] = useState('')
   const [source, setSource] = useState('all')
   const [q, setQ] = useState('')
-  const [linkedProductId, setLinkedProductId] = useState('')
-  const [linkedMode, setLinkedMode] = useState(false)
-  const [linkSearchOverride, setLinkSearchOverride] = useState(false)
   const [restored, setRestored] = useState(false)
   const [page, setPage] = useState(1)
   const [data, setData] = useState<InboundResponse | null>(null)
@@ -128,8 +124,7 @@ export default function InboundRecordsPage() {
       if (from) params.set('from', from)
       if (to) params.set('to', to)
       if (supplierId) params.set('supplierId', supplierId)
-      if (linkedMode && linkedProductId && !linkSearchOverride) params.set('productId', linkedProductId)
-      else if (q.trim()) params.set('q', q.trim())
+      if (q.trim()) params.set('q', q.trim())
       const result = await apiFetch<InboundResponse>(`/api/warehouse-inventory/inbound-records?${params}`)
       setData(result)
       setPage(result.page)
@@ -138,7 +133,7 @@ export default function InboundRecordsPage() {
     } finally {
       setLoading(false)
     }
-  }, [from, to, supplierId, source, q, linkedProductId, linkedMode, linkSearchOverride])
+  }, [from, to, supplierId, source, q])
 
   useEffect(() => {
     apiFetch<UpstreamSupplier[]>('/api/suppliers?businessScope=WAREHOUSE_UPSTREAM')
@@ -152,7 +147,6 @@ export default function InboundRecordsPage() {
   useEffect(() => {
     const saved = readWarehouseViewState('warehouse-inbound-view', { from: '', to: '', supplierId: '', source: 'all', q: '', page: 1 })
     setFrom(saved.from); setTo(saved.to); setSupplierId(saved.supplierId); setSource(saved.source); setQ(saved.q); setPage(saved.page)
-    setLinkedProductId(new URLSearchParams(window.location.search).get('linkedProductId') || '')
     setRestored(true)
   }, [])
   useEffect(() => { if (restored) writeWarehouseViewState('warehouse-inbound-view', { from, to, supplierId, source, q, page }) }, [from, to, supplierId, source, q, page, restored])
@@ -181,12 +175,20 @@ export default function InboundRecordsPage() {
   }
 
   const items = data?.items || []
-  const exactSearchProduct = data?.matchedProduct || null
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1
 
+  function resetFilters() {
+    setFrom('')
+    setTo('')
+    setSupplierId('')
+    setSource('all')
+    setQ('')
+    setPage(1)
+  }
+
   return (
-    <div className="mx-auto max-w-7xl p-4 pb-24">
-      <WarehouseToolTabs linkedProductId={linkedProductId} product={!linkedMode || linkSearchOverride ? exactSearchProduct : null} onLinkedProductChange={id => { setLinkedProductId(id); setLinkSearchOverride(false) }} onLinkedModeChange={mode => { setLinkedMode(mode); setLinkSearchOverride(false) }} />
+    <div className="min-h-screen bg-bg px-4 py-5 pb-24 lg:px-8 lg:py-7">
+      <WarehouseToolTabs />
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-h1">入库记录</h1>
@@ -231,11 +233,12 @@ export default function InboundRecordsPage() {
       </section>}
 
       <section className="mt-4 rounded-card border border-border bg-white p-4">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-          <div className="sm:col-span-2"><DateRangeCalendar value={{ from, to }} onChange={range => { setFrom(range.from); setTo(range.to); setPage(1) }} /></div>
+        <div className="grid items-end gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(260px,1.4fr)_minmax(180px,1fr)_minmax(160px,0.8fr)_minmax(260px,1.4fr)_auto]">
+          <DateRangeCalendar value={{ from, to }} onChange={range => { setFrom(range.from); setTo(range.to); setPage(1) }} />
           <label><span className="mb-1 block text-micro text-gray3">供应商</span><select value={supplierId} onChange={event => { setSupplierId(event.target.value); setPage(1) }} className="h-11 w-full rounded-cta border border-border bg-white px-3"><option value="">全部供应商</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}</select></label>
           <label><span className="mb-1 block text-micro text-gray3">来源类型</span><select value={source} onChange={event => { setSource(event.target.value); setPage(1) }} className="h-11 w-full rounded-cta border border-border bg-white px-3">{SOURCE_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-          <label className="lg:col-span-2"><span className="mb-1 block text-micro text-gray3">商品</span><input value={q} onChange={event => { setQ(event.target.value); setPage(1); if (linkedMode) setLinkSearchOverride(Boolean(event.target.value.trim())) }} placeholder={linkedMode ? '输入精确名称/编码可更换关联商品' : '编码 / 名称'} className="h-11 w-full rounded-cta border border-border px-3" /></label>
+          <label><span className="mb-1 block text-micro text-gray3">商品</span><input value={q} onChange={event => { setQ(event.target.value); setPage(1) }} placeholder="编码 / 名称" className="h-11 w-full rounded-cta border border-border px-3" /></label>
+          <button type="button" onClick={resetFilters} className="h-11 rounded-cta border border-border bg-white px-4 text-button text-gray2">重置</button>
         </div>
       </section>
 
@@ -272,7 +275,7 @@ export default function InboundRecordsPage() {
                   <td className="whitespace-nowrap px-3 py-3">
                     {row.doc ? (
                       <a
-                        href={`/v2/supply-chain/docs?doc=${row.doc.id}${linkedProductId ? `&linkedProductId=${encodeURIComponent(linkedProductId)}` : ''}`}
+                        href={`/v2/supply-chain/docs?doc=${row.doc.id}`}
                         className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-micro ${row.doc.status === 'POSTED' ? 'border-amber bg-amber-50 text-amber-fg hover:bg-amber-100' : 'border-border bg-bg text-gray2 hover:border-accent'}`}
                         title={row.doc.status === 'POSTED' ? '未审核，可点击改单' : '已审核，点击查看'}
                       >

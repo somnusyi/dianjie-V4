@@ -64,7 +64,8 @@ export const warehouseDocsRoutes: FastifyPluginAsync = async app => {
     if (type) where.type = type
     if (status) where.status = status
     if (query.supplierId) where.supplierId = String(query.supplierId)
-    if (query.productId) where.lines = { some: { productId: String(query.productId) } }
+    const supplierTerm = String(query.supplierQ || '').trim()
+    if (supplierTerm) where.supplierName = { contains: supplierTerm, mode: 'insensitive' }
     if (query.from || query.to) {
       where.effectiveAt = {}
       if (query.from) where.effectiveAt.gte = new Date(`${query.from}T00:00:00+08:00`)
@@ -92,9 +93,7 @@ export const warehouseDocsRoutes: FastifyPluginAsync = async app => {
       }),
       prisma.warehouseDoc.count({ where }),
     ])
-    const exactProducts = termProducts.filter(product => product.code.toLowerCase() === term.toLowerCase() || product.name.toLowerCase() === term.toLowerCase())
-    const matchedProduct = exactProducts.length === 1 ? exactProducts[0] : termProducts.length === 1 ? termProducts[0] : null
-    return { items, total, page, pageSize, matchedProduct }
+    return { items, total, page, pageSize }
   })
 
   // 单据详情（含行明细与操作日志）

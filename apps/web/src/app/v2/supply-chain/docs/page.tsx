@@ -55,7 +55,6 @@ type DocLog = {
 type DocDetail = DocRow & { lines: DocLine[]; logs: DocLog[] }
 
 type SupplierOption = { id: string; name: string; no?: string }
-type LinkedProduct = { id: string; code: string; name: string }
 
 // ── 权限：与后端 warehouseDocs 路由一致 ────────────────
 const AUDIT_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'FINANCE', 'SUPPLY_CHAIN'])
@@ -102,10 +101,7 @@ export default function WarehouseDocsPage() {
   const [type, setType] = useState<'MANUAL_INBOUND' | 'MANUAL_OUTBOUND'>('MANUAL_INBOUND')
   const [status, setStatus] = useState('')
   const [q, setQ] = useState('')
-  const [linkedProductId, setLinkedProductId] = useState('')
-  const [linkedMode, setLinkedMode] = useState(false)
-  const [linkSearchOverride, setLinkSearchOverride] = useState(false)
-  const [matchedProduct, setMatchedProduct] = useState<LinkedProduct | null>(null)
+  const [supplierQ, setSupplierQ] = useState('')
   const [restored, setRestored] = useState(false)
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
@@ -125,9 +121,8 @@ export default function WarehouseDocsPage() {
     const params = new URLSearchParams(window.location.search)
     const docIdFromUrl = params.get('doc')
     if (docIdFromUrl) setDetailId(docIdFromUrl)
-    const saved = readWarehouseViewState('warehouse-docs-view', { type: 'MANUAL_INBOUND', status: '', q: '', from: '', to: '', page: 1 })
-    setType(saved.type as 'MANUAL_INBOUND' | 'MANUAL_OUTBOUND'); setStatus(saved.status); setQ(saved.q); setFrom(saved.from); setTo(saved.to); setPage(saved.page)
-    setLinkedProductId(params.get('linkedProductId') || '')
+    const saved = readWarehouseViewState('warehouse-docs-view', { type: 'MANUAL_INBOUND', status: '', q: '', supplierQ: '', from: '', to: '', page: 1 })
+    setType(saved.type as 'MANUAL_INBOUND' | 'MANUAL_OUTBOUND'); setStatus(saved.status); setQ(saved.q); setSupplierQ(saved.supplierQ); setFrom(saved.from); setTo(saved.to); setPage(saved.page)
     setRestored(true)
   }, [])
 
@@ -139,29 +134,37 @@ export default function WarehouseDocsPage() {
     params.set('page', String(page))
     params.set('pageSize', String(pageSize))
     if (status) params.set('status', status)
-    if (linkedMode && linkedProductId && !linkSearchOverride) params.set('productId', linkedProductId)
-    else if (q.trim()) params.set('q', q.trim())
+    if (type === 'MANUAL_INBOUND' && supplierQ.trim()) params.set('supplierQ', supplierQ.trim())
+    if (q.trim()) params.set('q', q.trim())
     if (from) params.set('from', from)
     if (to) params.set('to', to)
-    apiFetch<{ items: DocRow[]; total: number; matchedProduct?: LinkedProduct | null }>(`/api/warehouse-docs?${params.toString()}`)
+    apiFetch<{ items: DocRow[]; total: number }>(`/api/warehouse-docs?${params.toString()}`)
       .then(data => {
         setItems(data.items || [])
         setTotal(data.total || 0)
-        setMatchedProduct(data.matchedProduct || null)
       })
       .catch(reason => setError(String(reason?.message || reason)))
       .finally(() => setLoading(false))
-  }, [type, status, q, from, to, page, linkedProductId, linkedMode, linkSearchOverride])
+  }, [type, status, q, supplierQ, from, to, page])
 
   useEffect(() => { if (restored) load() }, [load, restored])
-  useEffect(() => { if (restored) writeWarehouseViewState('warehouse-docs-view', { type, status, q, from, to, page }) }, [type, status, q, from, to, page, restored])
+  useEffect(() => { if (restored) writeWarehouseViewState('warehouse-docs-view', { type, status, q, supplierQ, from, to, page }) }, [type, status, q, supplierQ, from, to, page, restored])
   useWarehouseScrollRestoration('warehouse-docs-view')
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
+  function resetFilters() {
+    setStatus('')
+    setQ('')
+    setSupplierQ('')
+    setFrom('')
+    setTo('')
+    setPage(1)
+  }
+
   return (
-    <div className="space-y-4">
-      <WarehouseToolTabs linkedProductId={linkedProductId} product={!linkedMode || linkSearchOverride ? matchedProduct : null} onLinkedProductChange={id => { setLinkedProductId(id); setLinkSearchOverride(false) }} onLinkedModeChange={mode => { setLinkedMode(mode); setLinkSearchOverride(false) }} />
+    <div className="min-h-screen space-y-4 bg-bg px-4 py-5 pb-24 lg:px-8 lg:py-7">
+      <WarehouseToolTabs />
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-title font-semibold">单据审核</h1>
@@ -172,72 +175,80 @@ export default function WarehouseDocsPage() {
       {notice && <div className="rounded-card border border-emerald-200 bg-emerald-50 px-4 py-2 text-body text-emerald-700">{notice}</div>}
       {error && <div className="rounded-card border border-red-200 bg-red-50 px-4 py-2 text-body text-red-600">{error}</div>}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex rounded-cta border border-border bg-white p-0.5">
-          {([['MANUAL_INBOUND', '入库单'], ['MANUAL_OUTBOUND', '出库单']] as const).map(([value, label]) => (
-            <button
-              key={value}
-              onClick={() => { setType(value); setPage(1) }}
-              className={`rounded-cta px-4 py-1.5 text-button ${type === value ? 'bg-primary text-white' : 'text-gray2'}`}
-            >{label}</button>
-          ))}
+      <section className="rounded-card border border-border bg-white p-4">
+        <div className="grid items-end gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(120px,0.55fr)_minmax(120px,0.55fr)_224px_minmax(190px,0.85fr)_minmax(180px,0.75fr)_auto]">
+          <label>
+            <span className="mb-1 block text-micro text-gray3">单据类型</span>
+            <select value={type} onChange={event => { setType(event.target.value as typeof type); setPage(1) }} className="h-11 w-full rounded-cta border border-border bg-white px-3 text-body">
+              <option value="MANUAL_INBOUND">入库单</option>
+              <option value="MANUAL_OUTBOUND">出库单</option>
+            </select>
+          </label>
+          <label>
+            <span className="mb-1 block text-micro text-gray3">审核状态</span>
+            <select value={status} onChange={event => { setStatus(event.target.value); setPage(1) }} className="h-11 w-full rounded-cta border border-border bg-white px-3 text-body">
+              <option value="">全部状态</option>
+              <option value="POSTED">未审核</option>
+              <option value="CONFIRMED">已审核</option>
+            </select>
+          </label>
+          <DateRangeCalendar value={{ from, to }} onChange={range => { setFrom(range.from); setTo(range.to); setPage(1) }} label="单据日期" />
+          <label>
+            <span className="mb-1 block text-micro text-gray3">单据 / 商品</span>
+            <input
+              value={q}
+              onChange={event => { setQ(event.target.value); setPage(1) }}
+              placeholder="单据编号 / 商品名称 / 编码"
+              className="h-11 w-full rounded-cta border border-border bg-white px-3 text-body"
+            />
+          </label>
+          <label>
+            <span className="mb-1 block text-micro text-gray3">供应商</span>
+            <input
+              value={supplierQ}
+              disabled={type !== 'MANUAL_INBOUND'}
+              onChange={event => { setSupplierQ(event.target.value); setPage(1) }}
+              placeholder={type === 'MANUAL_INBOUND' ? '输入供应商名称' : '仅入库单可筛选'}
+              className="h-11 w-full rounded-cta border border-border bg-white px-3 text-body disabled:bg-bg disabled:text-gray3"
+            />
+          </label>
+          <button type="button" onClick={resetFilters} className="h-11 rounded-cta border border-border bg-white px-4 text-button text-gray2">重置</button>
         </div>
-        <select
-          value={status}
-          onChange={event => { setStatus(event.target.value); setPage(1) }}
-          className="h-10 rounded-cta border border-border bg-white px-3 text-body"
-        >
-          <option value="">全部状态</option>
-          <option value="POSTED">未审核</option>
-          <option value="CONFIRMED">已审核</option>
-        </select>
-        <div className="min-w-64"><DateRangeCalendar value={{ from, to }} onChange={range => { setFrom(range.from); setTo(range.to); setPage(1) }} /></div>
-        <input
-          value={q}
-          onChange={event => { setQ(event.target.value); setPage(1); if (linkedMode) setLinkSearchOverride(Boolean(event.target.value.trim())) }}
-          placeholder={linkedMode ? '输入精确商品名称/编码可更换关联商品' : '单据编号 / 商品名称 / 编码'}
-          className="h-10 rounded-cta border border-border bg-white px-3 text-body"
-        />
-        <button onClick={load} className="h-10 rounded-cta bg-primary px-4 text-button text-white">查询</button>
-      </div>
+      </section>
 
       <div className="overflow-x-auto rounded-card border border-border bg-white">
-        <table className="w-full min-w-[760px] text-body">
+        <table className="w-full min-w-[720px] text-body">
           <thead>
             <tr className="border-b border-border text-left text-caption text-gray2">
-              <th className="px-4 py-3">单据编号</th>
-              <th className="px-4 py-3">单据日期</th>
-              <th className="px-4 py-3">{type === 'MANUAL_INBOUND' ? '供应商' : '去向/原因'}</th>
-              <th className="px-4 py-3 text-right">行数</th>
-              <th className="px-4 py-3 text-right">总金额</th>
+              <th className="w-48 px-4 py-3">单据编号</th>
+              <th className="w-44 px-4 py-3">日期</th>
+              <th className="min-w-56 px-4 py-3">{type === 'MANUAL_INBOUND' ? '供应商' : '去向/原因'}</th>
+              <th className="w-36 px-4 py-3 text-right">总金额</th>
               <th className="px-4 py-3">审核状态</th>
-              <th className="px-4 py-3">制单时间</th>
-              <th className="px-4 py-3">操作</th>
+              <th className="w-24 px-4 py-3 text-right">操作</th>
             </tr>
           </thead>
           <tbody>
             {items.map(doc => (
               <tr key={doc.id} className="border-b border-border last:border-0 hover:bg-bg/50">
-                <td className="px-4 py-3 font-num">{doc.docNo}</td>
-                <td className="px-4 py-3">{fmtDay(doc.effectiveAt)}</td>
+                <td className="whitespace-nowrap px-4 py-3 font-num">{doc.docNo}</td>
+                <td className="px-4 py-3"><span className="whitespace-nowrap">{fmtDay(doc.effectiveAt)}</span><div className="mt-0.5 whitespace-nowrap text-micro text-gray3">制单 {fmtTime(doc.createdAt)}</div></td>
                 <td className="px-4 py-3">{type === 'MANUAL_INBOUND' ? (doc.supplierName || '—') : (doc.reason || '—')}</td>
-                <td className="px-4 py-3 text-right font-num">{doc.lineCount}</td>
-                <td className="px-4 py-3 text-right font-num">{money(doc.totalAmount)}</td>
+                <td className="px-4 py-3 text-right font-num"><b>{money(doc.totalAmount)}</b><div className="mt-0.5 text-micro text-gray3">{doc.lineCount} 行商品</div></td>
                 <td className="px-4 py-3"><StatusBadge status={doc.status} /></td>
-                <td className="px-4 py-3 text-caption text-gray2">{fmtTime(doc.createdAt)}</td>
-                <td className="px-4 py-3">
+                <td className="px-4 py-3 text-right">
                   <button
                     onClick={() => setDetailId(doc.id)}
-                    className="text-primary hover:underline"
+                    className="whitespace-nowrap text-accent hover:underline"
                   >查看{doc.status === 'POSTED' && canEdit ? '/改单' : ''}</button>
                 </td>
               </tr>
             ))}
             {!loading && items.length === 0 && (
-              <tr><td colSpan={8} className="px-4 py-10 text-center text-gray2">暂无单据</td></tr>
+              <tr><td colSpan={6} className="px-4 py-10 text-center text-gray2">暂无单据</td></tr>
             )}
             {loading && (
-              <tr><td colSpan={8} className="px-4 py-10 text-center text-gray2">加载中…</td></tr>
+              <tr><td colSpan={6} className="px-4 py-10 text-center text-gray2">加载中…</td></tr>
             )}
           </tbody>
         </table>
@@ -561,7 +572,7 @@ function DocDetailDialog({ docId, canAudit, canEdit, onClose, onChanged }: {
               <button
                 onClick={saveEdit}
                 disabled={busy || !hasEdits()}
-                className="h-9 rounded-cta bg-primary px-4 text-button text-white disabled:opacity-40"
+                className="h-9 rounded-cta bg-accent px-4 text-button text-white disabled:opacity-40"
               >{busy ? '保存中…' : '保存修改'}</button>
             </div>
           </div>

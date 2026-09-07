@@ -185,6 +185,14 @@ describe('internal supply-chain product actions (integration)', () => {
       where: { tenantId: tenantAId, code: `SC-F-${codeSuffix}` },
     })).toBe(0)
 
+    const unbound = await app.inject({
+      method: 'POST',
+      url: '/api/products',
+      payload: { code: `SC-U-${codeSuffix}`, name: '未绑定履约方商品', unit: '件' },
+    })
+    expect(unbound.statusCode).toBe(400)
+    expect(unbound.json().error).toContain('门店履约方')
+
     const chefCreate = await app.inject({
       method: 'POST',
       url: '/api/products',
@@ -253,6 +261,30 @@ describe('internal supply-chain product actions (integration)', () => {
     expect(notificationMocks.productChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ action: 'DISABLE', tenantId: tenantAId, productId: product.id }),
     )
+  })
+
+  it('lets supply chain repair a legacy enabled product that has no store fulfiller', async () => {
+    const legacy = await prisma.product.create({
+      data: {
+        tenantId: tenantAId,
+        code: `LEGACY-${codeSuffix}`,
+        name: '历史未绑定商品',
+        category: '蔬菜',
+        unit: '斤',
+        price: 8,
+        status: 'ENABLED',
+        supplierId: null,
+      },
+    })
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/api/products/${legacy.id}`,
+      payload: { supplierId: supplierAId },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect((await prisma.product.findUniqueOrThrow({ where: { id: legacy.id } })).supplierId).toBe(supplierAId)
   })
 
   it('keeps external supplier create and disable approval semantics unchanged', async () => {

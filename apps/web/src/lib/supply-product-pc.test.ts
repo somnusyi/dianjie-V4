@@ -340,6 +340,18 @@ describe('buildEditBody', () => {
     const body = buildEditBody(form, original)
     expect(body).toHaveProperty('spec', null)
   })
+
+  it('persists a newly selected store fulfiller for a legacy unbound product', () => {
+    const form = {
+      name: '木姜子油', code: 'ZBWP1125', category: '调味料类', unit: '桶',
+      spec: '', shelfDays: '365', supplierId: 'store-fulfiller-1',
+    }
+    const original = {
+      name: '木姜子油', code: 'ZBWP1125', category: '调味料类', unit: '桶',
+      spec: '', shelfDays: 365, supplierId: null,
+    }
+    expect(buildEditBody(form, original)).toEqual({ supplierId: 'store-fulfiller-1' })
+  })
 })
 
 describe('buildPriceChangeBody / buildStatusChangeBody', () => {

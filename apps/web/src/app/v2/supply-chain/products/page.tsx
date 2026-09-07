@@ -641,6 +641,7 @@ export default function InternalSupplyChainProductsPage() {
             unit: editing.unit || '',
             spec: editing.spec || '',
             shelfDays: Number(editing.shelfDays ?? 7),
+            supplierId: editing.supplier?.id || null,
             pricingMode: editing.pricingMode,
             markupPercent: editing.markupPercent,
             stock: editing.stock,
@@ -1701,14 +1702,14 @@ function FormDialog({
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-3">
-            {!editing && suppliers.length > 1 && (
-              <FormField label="内部履约主体">
+            {(!editing && suppliers.length > 1 || Boolean(editing && !editing.supplier?.id)) && (
+              <FormField label="门店履约方">
                 <select
                   value={form.supplierId}
                   onChange={e => onFieldChange('supplierId', e.target.value)}
                   className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body"
                 >
-                  <option value="">请选择内部履约主体</option>
+                  <option value="">请选择门店履约方</option>
                   {suppliers.map(supplier => (
                     <option key={supplier.id} value={supplier.id}>{supplier.name}</option>
                   ))}

@@ -140,6 +140,7 @@ export const productListFilterSchema = z.object({
 }).passthrough()
 
 const productPatchSchema = z.object({
+  supplierId: z.string().trim().min(1).max(64).optional(),
   code: z.string().trim().min(1).max(40).optional(),
   name: z.string().trim().min(1).max(80).optional(),
   spec: z.string().trim().max(80).nullable().optional(),
@@ -1266,11 +1267,27 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       delete data.unitConversionNote
       delete data.pricingMode
       delete data.markupPercent
+    } else if (role === 'SUPPLY_CHAIN' && !data.supplierId) {
+      return reply.status(400).send({ error: '请先选择门店履约方，再启用商品' })
     } else if (data.supplierId) {
       const scopedSupplier = await prisma.supplier.findFirst({
-        where: { id: data.supplierId, tenantId }, select: { id: true, name: true },
+        where: role === 'SUPPLY_CHAIN'
+          ? {
+            id: data.supplierId,
+            tenantId,
+            status: 'ENABLED',
+            businessScopes: { has: 'STORE_FULFILLER' },
+          }
+          : { id: data.supplierId, tenantId },
+        select: { id: true, name: true },
       })
-      if (!scopedSupplier) return reply.status(400).send({ error: '供应商不存在或不属于当前租户' })
+      if (!scopedSupplier) {
+        return reply.status(400).send({
+          error: role === 'SUPPLY_CHAIN'
+            ? '请选择一个已启用的门店履约方'
+            : '供应商不存在或不属于当前租户',
+        })
+      }
       supplierName = scopedSupplier.name
       // 内部供应链：当指定供应商时，分类必须属于该供应商且启用，禁止跨租户/越权引用
       if (role === 'SUPPLY_CHAIN' && data.category) {
@@ -1533,6 +1550,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           continue
         }
         data.supplierId = userSupplierId
+      } else if (role === 'SUPPLY_CHAIN' && !data.supplierId) {
+        failed.push({ row: i + 1, code: data.code, error: '请先选择门店履约方，再导入商品' })
+        continue
       }
       // 编码缺失自动生成
       if (!data.code) data.code = autoCode(data.supplierId || userSupplierId)
@@ -1581,14 +1601,23 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       const requestedSupplierIds = [...new Set(candidates.map(candidate => candidate.data.supplierId).filter(Boolean))] as string[]
       const allowedSuppliers = requestedSupplierIds.length > 0
         ? await prisma.supplier.findMany({
-          where: { tenantId, id: { in: requestedSupplierIds } }, select: { id: true },
+          where: role === 'SUPPLY_CHAIN'
+            ? { tenantId, id: { in: requestedSupplierIds }, status: 'ENABLED', businessScopes: { has: 'STORE_FULFILLER' } }
+            : { tenantId, id: { in: requestedSupplierIds } },
+          select: { id: true },
         })
         : []
       const allowedSupplierIds = new Set(allowedSuppliers.map(supplier => supplier.id))
       candidates = candidates.filter(candidate => {
         const candidateSupplierId = candidate.data.supplierId
         if (!candidateSupplierId || allowedSupplierIds.has(candidateSupplierId)) return true
-        failed.push({ row: candidate.row, code: candidate.data.code, error: '供应商不存在或不属于当前租户' })
+        failed.push({
+          row: candidate.row,
+          code: candidate.data.code,
+          error: role === 'SUPPLY_CHAIN'
+            ? '门店履约方不存在、未启用或不属于当前租户'
+            : '供应商不存在或不属于当前租户',
+        })
         return false
       })
     }
@@ -1966,7 +1995,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const allow = isSupplierRole(role)
       ? SUPPLIER_ALLOW
       : UNIT_GOVERNANCE_ROLES.has(role)
-        ? [...STAFF_ALLOW, ...UNIT_ALLOW, ...PRICING_ALLOW]
+        ? [...STAFF_ALLOW, ...(role === 'SUPPLY_CHAIN' ? ['supplierId'] : []), ...UNIT_ALLOW, ...PRICING_ALLOW]
         : STAFF_ALLOW
     const parsedPatch = productPatchSchema.safeParse(
       Object.fromEntries(Object.entries(body).filter(([k]) => allow.includes(k))),
@@ -2150,6 +2179,23 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       },
     })
     if (!before) return reply.status(404).send({ error: '商品不存在或无权修改' })
+    if (role === 'SUPPLY_CHAIN' && data.supplierId) {
+      const fulfiller = await prisma.supplier.findFirst({
+        where: {
+          id: data.supplierId,
+          tenantId,
+          status: 'ENABLED',
+          businessScopes: { has: 'STORE_FULFILLER' },
+        },
+        select: { id: true },
+      })
+      if (!fulfiller) {
+        return reply.status(400).send({ error: '请选择一个已启用的门店履约方' })
+      }
+    }
+    if (role === 'SUPPLY_CHAIN' && data.status === 'ENABLED' && !(data.supplierId || before.supplierId)) {
+      return reply.status(400).send({ error: '商品未绑定门店履约方，不能启用' })
+    }
     const mappingTouched = UNIT_ALLOW.some(field => Object.prototype.hasOwnProperty.call(data, field))
     if (Object.prototype.hasOwnProperty.call(data, 'unit') && !mappingTouched) {
       // Legacy unit edits keep legacy clients deterministic. The old verified
@@ -2265,8 +2311,13 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const after = await prisma.$transaction(async tx => {
       if (isSupplierRole(role) && data.category) {
         await lockActiveSupplierCategory(tx, tenantId, supplierId!, data.category)
-      } else if (role === 'SUPPLY_CHAIN' && data.category && before.supplierId) {
-        await lockActiveSupplierCategory(tx, tenantId, before.supplierId, data.category)
+      } else if (role === 'SUPPLY_CHAIN' && (data.category || data.supplierId)) {
+        const nextSupplierId = data.supplierId || before.supplierId
+        const nextCategory = data.category || before.category
+        if (!nextSupplierId) {
+          throw Object.assign(new Error('商品未绑定门店履约方'), { statusCode: 400 })
+        }
+        await lockActiveSupplierCategory(tx, tenantId, nextSupplierId, nextCategory)
       }
       let updated
       if (isSupplierRole(role) && data.status === 'ENABLED') {

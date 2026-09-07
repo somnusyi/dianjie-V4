@@ -359,6 +359,7 @@ export function buildEditBody(
     unit: string
     spec: string
     shelfDays: string
+    supplierId?: string
     pricingMode?: string
     markupPercent?: string
   } & Partial<SupplyProductQuantityForm>,
@@ -369,6 +370,7 @@ export function buildEditBody(
     unit: string
     spec: string
     shelfDays: number
+    supplierId?: string | null
     pricingMode?: string | null
     markupPercent?: number | string | null
     stock?: number | string | null
@@ -385,6 +387,9 @@ export function buildEditBody(
   if (form.spec.trim() !== (original.spec || '')) body.spec = form.spec.trim() || null
   const shelfDays = form.shelfDays.trim() === '' ? 7 : Number(form.shelfDays)
   if (shelfDays !== original.shelfDays) body.shelfDays = shelfDays
+  if ((form.supplierId || '').trim() !== (original.supplierId || '')) {
+    body.supplierId = (form.supplierId || '').trim()
+  }
 
   if (quantityChanged(form.minOrderQty, original.minOrderQty)) {
     body.minOrderQty = parseProductQuantity(form.minOrderQty ?? '')

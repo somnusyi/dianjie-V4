@@ -140,6 +140,31 @@ function findHeader(worksheet: ExcelJS.Worksheet) {
   return null
 }
 
+function findGroupedSummaryHeader(worksheet: ExcelJS.Worksheet) {
+  for (let groupRow = 1; groupRow < Math.min(20, worksheet.rowCount); groupRow += 1) {
+    const detailRow = groupRow + 1
+    const indexes = new Map<string, number>()
+    let currentGroup = ''
+    for (let index = 1; index <= worksheet.columnCount; index += 1) {
+      const group = normalizeHeader(cellText(worksheet.getRow(groupRow).getCell(index).value))
+      const label = normalizeHeader(cellText(worksheet.getRow(detailRow).getCell(index).value))
+      if (group) currentGroup = group
+      if (group && !['期初', '入库合计', '配送发货出库', '出库合计', '期末'].includes(group) && !indexes.has(group)) {
+        indexes.set(group, index)
+      }
+      if (!label) continue
+      if (!indexes.has(label)) indexes.set(label, index)
+      if (currentGroup && currentGroup !== label && !indexes.has(`${currentGroup}:${label}`)) {
+        indexes.set(`${currentGroup}:${label}`, index)
+      }
+    }
+    if (indexes.has(normalizeHeader('物品名称')) && indexes.has(normalizeHeader('期末:数量'))) {
+      return { rowNumber: detailRow, indexes }
+    }
+  }
+  return null
+}
+
 function column(indexes: Map<string, number>, label: string, ...aliases: string[]) {
   for (const candidate of [label, ...aliases]) {
     const found = indexes.get(normalizeHeader(candidate))
@@ -186,26 +211,35 @@ export async function parseMeituanWarehouseInventoryWorkbook(
 ): Promise<ParsedWarehouseInventoryWorkbook> {
   const workbook = new ExcelJS.Workbook()
   await workbook.xlsx.load(buffer as any)
-  const worksheet = workbook.worksheets.find(sheet => Boolean(findHeader(sheet)))
-  if (!worksheet) throw new Error('无法识别美团实时库存查询表表头')
-  const found = findHeader(worksheet)!
+  const standard = workbook.worksheets.map(sheet => ({ sheet, found: findHeader(sheet) })).find(item => item.found)
+  const grouped = standard ? null : workbook.worksheets.map(sheet => ({ sheet, found: findGroupedSummaryHeader(sheet) })).find(item => item.found)
+  const worksheet = standard?.sheet || grouped?.sheet
+  if (!worksheet) throw new Error('无法识别美团实时库存查询表或出入库汇总表表头')
+  const found = (standard?.found || grouped?.found)!
+  const summaryFormat = Boolean(grouped)
 
   const codeColumn = optionalColumn(found.indexes, '物品编码', '商品编码')
   const nameColumn = column(found.indexes, '物品名称', '商品名称')
   const specColumn = column(found.indexes, '规格型号', '规格')
   const categoryColumn = column(found.indexes, '物品类别', '商品类别')
   const unitColumn = column(found.indexes, '单位')
-  const conversionColumn = column(found.indexes, '基准单位换算率', '单位换算率')
+  const conversionColumn = summaryFormat ? null : column(found.indexes, '基准单位换算率', '单位换算率')
   const warehouseColumn = column(found.indexes, '仓库')
-  const quantityColumn = column(found.indexes, '库存量')
-  const amountColumn = optionalColumn(found.indexes, '库存金额')
-  const amountExTaxColumn = optionalColumn(found.indexes, '库存金额(不含税)')
-  const taxColumn = optionalColumn(found.indexes, '库存税额')
-  const averageCostColumn = optionalColumn(found.indexes, '库存均价(不含税)')
-  const expectedInboundColumn = optionalColumn(found.indexes, '预计入库量')
-  const expectedOutboundColumn = optionalColumn(found.indexes, '预计出库量')
-  const theoreticalQuantityColumn = optionalColumn(found.indexes, '理论库存量')
-  const theoreticalAmountColumn = optionalColumn(found.indexes, '理论库存金额')
+  const quantityColumn = summaryFormat ? column(found.indexes, '期末:数量') : column(found.indexes, '库存量')
+  const amountColumn = summaryFormat
+    ? optionalColumn(found.indexes, '期末:成本金额(不含税)', '期末:成本金额')
+    : optionalColumn(found.indexes, '库存金额')
+  const amountExTaxColumn = summaryFormat ? amountColumn : optionalColumn(found.indexes, '库存金额(不含税)')
+  const taxColumn = summaryFormat ? null : optionalColumn(found.indexes, '库存税额')
+  const averageCostColumn = summaryFormat
+    ? optionalColumn(found.indexes, '期末:成本均价(不含税)', '期末:成本均价')
+    : optionalColumn(found.indexes, '库存均价(不含税)')
+  const expectedInboundColumn = summaryFormat ? optionalColumn(found.indexes, '入库合计:数量') : optionalColumn(found.indexes, '预计入库量')
+  const expectedOutboundColumn = summaryFormat
+    ? optionalColumn(found.indexes, '配送发货出库:数量', '出库合计:数量')
+    : optionalColumn(found.indexes, '预计出库量')
+  const theoreticalQuantityColumn = summaryFormat ? null : optionalColumn(found.indexes, '理论库存量')
+  const theoreticalAmountColumn = summaryFormat ? amountColumn : optionalColumn(found.indexes, '理论库存金额')
   const costColumnsPresent = amountColumn != null
 
   const rows: ParsedWarehouseInventoryRow[] = []
@@ -257,7 +291,7 @@ export async function parseMeituanWarehouseInventoryWorkbook(
     if (sourceQuantity < 0) throw new Error(`第 ${rowNumber} 行库存量不能为负数`)
     if (decimalPlaces(sourceQuantity) > 6) throw new Error(`第 ${rowNumber} 行库存量最多支持 6 位小数`)
 
-    const conversionText = cellText(row.getCell(conversionColumn).value)
+    const conversionText = conversionColumn == null ? '' : cellText(row.getCell(conversionColumn).value)
     if (externalCode.length > 80) throw new Error(`第 ${rowNumber} 行物品编码超过 80 个字符`)
     if (externalName.length > 120) throw new Error(`第 ${rowNumber} 行物品名称超过 120 个字符`)
     if (purchaseUnit.length > 16) throw new Error(`第 ${rowNumber} 行采购单位超过 16 个字符`)

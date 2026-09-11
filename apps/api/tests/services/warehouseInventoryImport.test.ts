@@ -42,6 +42,18 @@ async function compactWorkbookBuffer() {
   return Buffer.from(await workbook.xlsx.writeBuffer())
 }
 
+async function outboundSummaryWorkbookBuffer() {
+  const workbook = new ExcelJS.Workbook()
+  const sheet = workbook.addWorksheet('出入库汇总表')
+  sheet.addRow(['出入库汇总表'])
+  sheet.addRow(['统计维度：物品；仓库：供应链总仓；出入库类型：配送发货出库'])
+  sheet.addRow(['物品编码', '物品名称', '规格型号', '物品类别', '统计类型', '单位', '机构', '机构编码', '仓库', '仓库类型', '期初', null, null, '入库合计', null, null, '配送发货出库', null, null, '出库合计', null, null, '期末', null, null])
+  sheet.addRow([null, null, null, null, null, null, null, null, null, null, '数量', '成本金额（不含税）', '成本均价（不含税）', '数量', '成本金额（不含税）', '成本均价（不含税）', '数量', '数量（辅助单位）', '成本金额（不含税）', '数量', '成本金额（不含税）', '成本均价（不含税）', '数量', '成本金额（不含税）', '成本均价（不含税）'])
+  sheet.addRow(['ZBWP0950', '测试袋装品', '8袋/箱', '干货', '原料类(成本类)', '箱', '总部配送中心', 'PS00001', '供应链总仓', '普通仓库', 60, 120, 2, null, null, null, 5, null, 10, 5, 10, 2, 55, 110, 2])
+  sheet.addRow(['合计', null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 110, null])
+  return Buffer.from(await workbook.xlsx.writeBuffer())
+}
+
 function sourceRow(overrides: Partial<ParsedWarehouseInventoryRow> = {}): ParsedWarehouseInventoryRow {
   return {
     rowNumber: 4,
@@ -89,6 +101,21 @@ function product(overrides: Partial<InventoryImportProduct> = {}): InventoryImpo
 }
 
 describe('Meituan warehouse inventory snapshot', () => {
+  it('parses the historical two-row 出入库汇总表 using 期末 quantity and cost', async () => {
+    const parsed = await parseMeituanWarehouseInventoryWorkbook(await outboundSummaryWorkbookBuffer())
+    expect(parsed.rows).toHaveLength(1)
+    expect(parsed.rows[0]).toMatchObject({
+      externalCode: 'ZBWP0950',
+      sourceQuantity: 55,
+      inventoryAmount: 110,
+      inventoryAmountExcludingTax: 110,
+      expectedInboundQuantity: 0,
+      expectedOutboundQuantity: 5,
+      theoreticalQuantity: 55,
+    })
+    expect(parsed.sourceTotalAmount).toBe(110)
+  })
+
   it('keeps the target warehouse, zero balances and source precision while ignoring the total row', async () => {
     const parsed = await parseMeituanWarehouseInventoryWorkbook(await workbookBuffer())
 

@@ -7,7 +7,16 @@ cd "$ROOT_DIR"
 
 SERVER="${UAT_SERVER:-root@116.62.32.162}"
 REMOTE="${UAT_REMOTE:-/app/dianjie-v4-uat}"
-UAT_HOST="${UAT_HOST:-uat-dianjie-20260917.116-62-32-162.nip.io}"
+# 对外入口：阿里云未备案域名在 80/443 会被 ICP 拦截，默认走「IP + 独立端口」HTTP 模式。
+# 若已有备案域名，可设 UAT_HTTPS_DOMAIN=uat.example.com 启用 certbot HTTPS 模式。
+UAT_PORT="${UAT_PORT:-8085}"
+UAT_HTTPS_DOMAIN="${UAT_HTTPS_DOMAIN:-}"
+UAT_PUBLIC_IP="${UAT_PUBLIC_IP:-116.62.32.162}"
+if [[ -n "$UAT_HTTPS_DOMAIN" ]]; then
+  PUBLIC_URL="https://$UAT_HTTPS_DOMAIN"
+else
+  PUBLIC_URL="http://$UAT_PUBLIC_IP:$UAT_PORT"
+fi
 UAT_DB_NAME="${UAT_DB_NAME:-dianjie_v4_uat}"
 UAT_TENANT_SLUG="${UAT_TENANT_SLUG:-supply-chain-uat}"
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10)
@@ -16,8 +25,12 @@ if [[ ! "$UAT_DB_NAME" =~ ^[a-zA-Z0-9_]+$ ]]; then
   echo "❌ UAT_DB_NAME 只能包含字母、数字和下划线"
   exit 1
 fi
-if [[ ! "$UAT_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]; then
-  echo "❌ UAT_HOST 格式不正确"
+if [[ ! "$UAT_PORT" =~ ^[0-9]+$ ]]; then
+  echo "❌ UAT_PORT 必须是数字"
+  exit 1
+fi
+if [[ -n "$UAT_HTTPS_DOMAIN" && ! "$UAT_HTTPS_DOMAIN" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+  echo "❌ UAT_HTTPS_DOMAIN 格式不正确"
   exit 1
 fi
 
@@ -74,7 +87,7 @@ test -f apps/web/.next/standalone/apps/web/server.js
 test -d apps/web/public
 
 echo "==> [3/9] 创建独立数据库与预发布环境文件"
-ssh_run "REMOTE='$REMOTE' UAT_HOST='$UAT_HOST' UAT_DB_NAME='$UAT_DB_NAME' UAT_TENANT_SLUG='$UAT_TENANT_SLUG' bash -s" <<'REMOTE_SETUP'
+ssh_run "REMOTE='$REMOTE' PUBLIC_URL='$PUBLIC_URL' UAT_DB_NAME='$UAT_DB_NAME' UAT_TENANT_SLUG='$UAT_TENANT_SLUG' bash -s" <<'REMOTE_SETUP'
 set -euo pipefail
 PROD_ENV=/app/dianjie-v4/.env
 test -f "$PROD_ENV"
@@ -116,7 +129,7 @@ fi
   printf 'JWT_REFRESH_SECRET=%s\n' "$JWT_REFRESH_SECRET"
   printf 'API_HOST=127.0.0.1\n'
   printf 'API_PORT=4005\n'
-  printf 'FRONTEND_URL=https://%s\n' "$UAT_HOST"
+  printf 'FRONTEND_URL=%s\n' "$PUBLIC_URL"
   printf 'NEXT_PUBLIC_API_URL=\n'
   printf 'NEXT_PUBLIC_API_BASE=http://127.0.0.1:4005\n'
   printf 'UPSTREAM_PROCUREMENT_ENABLED=true\n'
@@ -203,29 +216,41 @@ pm2 logs dianjie-v4-uat-api dianjie-v4-uat-web --lines 30 --nostream
 exit 1
 REMOTE_PM2
 
-echo "==> [8/9] 配置独立 HTTPS 测试入口"
-ssh_run "REMOTE='$REMOTE' UAT_HOST='$UAT_HOST' bash -s" <<'REMOTE_NGINX'
+echo "==> [8/9] 配置独立测试入口"
+if [[ -n "$UAT_HTTPS_DOMAIN" ]]; then
+  ssh_run "REMOTE='$REMOTE' UAT_HTTPS_DOMAIN='$UAT_HTTPS_DOMAIN' bash -s" <<'REMOTE_NGINX_HTTPS'
 set -euo pipefail
 mkdir -p /var/www/letsencrypt
-sed "s/__UAT_HOST__/$UAT_HOST/g" "$REMOTE/nginx-bootstrap.conf" > /etc/nginx/sites-available/dianjie-v4-uat
+sed "s/__UAT_HOST__/$UAT_HTTPS_DOMAIN/g" "$REMOTE/nginx-bootstrap.conf" > /etc/nginx/sites-available/dianjie-v4-uat
 ln -sfn /etc/nginx/sites-available/dianjie-v4-uat /etc/nginx/sites-enabled/dianjie-v4-uat
 nginx -t
 systemctl reload nginx
-if [ ! -f "/etc/letsencrypt/live/$UAT_HOST/fullchain.pem" ]; then
-  certbot certonly --webroot -w /var/www/letsencrypt -d "$UAT_HOST" \
+if [ ! -f "/etc/letsencrypt/live/$UAT_HTTPS_DOMAIN/fullchain.pem" ]; then
+  certbot certonly --webroot -w /var/www/letsencrypt -d "$UAT_HTTPS_DOMAIN" \
     --non-interactive --agree-tos --register-unsafely-without-email
 fi
-sed "s/__UAT_HOST__/$UAT_HOST/g" "$REMOTE/nginx.conf" > /etc/nginx/sites-available/dianjie-v4-uat
+sed "s/__UAT_HOST__/$UAT_HTTPS_DOMAIN/g" "$REMOTE/nginx.conf" > /etc/nginx/sites-available/dianjie-v4-uat
 nginx -t
 systemctl reload nginx
-REMOTE_NGINX
+REMOTE_NGINX_HTTPS
+else
+  # 端口 HTTP 模式：阿里云未备案域名会被 ICP 拦截，默认用 IP+独立端口
+  rsync -az -e "ssh ${SSH_OPTS[*]}" deploy/uat/nginx-port.conf "$SERVER:$REMOTE/"
+  ssh_run "REMOTE='$REMOTE' UAT_PORT='$UAT_PORT' bash -s" <<'REMOTE_NGINX_PORT'
+set -euo pipefail
+sed "s/__UAT_PORT__/$UAT_PORT/g" "$REMOTE/nginx-port.conf" > /etc/nginx/sites-available/dianjie-v4-uat
+ln -sfn /etc/nginx/sites-available/dianjie-v4-uat /etc/nginx/sites-enabled/dianjie-v4-uat
+nginx -t
+systemctl reload nginx
+REMOTE_NGINX_PORT
+fi
 
 echo "==> [9/9] 验证外部入口并记录版本"
-curl -fsS "https://$UAT_HOST/health" >/dev/null
-curl -fsS "https://$UAT_HOST/v2/login" >/dev/null
+curl -fsS "$PUBLIC_URL/health" >/dev/null
+curl -fsS "$PUBLIC_URL/v2/login" >/dev/null
 HEAD="$(git rev-parse HEAD)"
 ssh_run "printf '%s\n' '$HEAD' > '$REMOTE/.deployed-commit'"
 
 echo "✅ UAT 部署完成"
-echo "URL=https://$UAT_HOST/v2/login?tenant=$UAT_TENANT_SLUG"
+echo "URL=$PUBLIC_URL/v2/login?tenant=$UAT_TENANT_SLUG"
 echo "COMMIT=$HEAD"

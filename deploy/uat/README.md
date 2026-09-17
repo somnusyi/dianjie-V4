@@ -18,14 +18,20 @@
 ./scripts/deploy-uat.sh
 ```
 
-可通过环境变量覆盖服务器、域名、数据库名和租户：
+可通过环境变量覆盖端口、域名、数据库名和租户：
 
 ```bash
-UAT_HOST=uat.example.com \
+# 默认：IP + 独立端口 HTTP 模式（阿里云未备案域名在 80/443 会被 ICP 拦截）
+UAT_PORT=8085 ./scripts/deploy-uat.sh
+
+# 可选：已有备案域名时启用 HTTPS（certbot 自动签发）
+UAT_HTTPS_DOMAIN=uat.example.com \
 UAT_DB_NAME=dianjie_v4_uat \
 UAT_TENANT_SLUG=supply-chain-uat \
 ./scripts/deploy-uat.sh
 ```
+
+注意：端口模式需要先在阿里云安全组放行 `UAT_PORT`（默认 8085）的 TCP 入方向。
 
 首次部署会在服务器生成 `/app/dianjie-v4-uat/.uat-seed-password`，该文件权限为 `600`，不会写入 Git。UAT 账号由 `apps/api/scripts/seed-upstream-uat.ts` 幂等创建。
 

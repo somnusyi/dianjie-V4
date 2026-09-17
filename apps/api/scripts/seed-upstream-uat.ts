@@ -39,8 +39,11 @@ async function main() {
     },
   })
 
+  // 数据库触发器 tenants_create_default_warehouse_trg 会在建租户时自动创建
+  // code='default' 的默认仓，且 warehouses_one_default_per_tenant_key 部分唯一索引
+  // 限制每租户只能有一个 isDefault 仓。这里必须领养默认仓，不能另建第二个默认仓。
   const warehouse = await prisma.warehouse.upsert({
-    where: { tenantId_code: { tenantId: tenant.id, code: 'UAT-WH-01' } },
+    where: { tenantId_code: { tenantId: tenant.id, code: 'default' } },
     update: {
       name: 'UAT 供应链总仓',
       isActive: true,
@@ -50,7 +53,7 @@ async function main() {
     },
     create: {
       tenantId: tenant.id,
-      code: 'UAT-WH-01',
+      code: 'default',
       name: 'UAT 供应链总仓',
       isActive: true,
       isDefault: true,

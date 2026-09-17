@@ -160,6 +160,10 @@ rsync_run apps/api/scripts/ "$SERVER:$REMOTE/apps/api/scripts/"
 rsync -az -e "ssh ${SSH_OPTS[*]}" apps/api/package.json "$SERVER:$REMOTE/apps/api/package.json"
 rsync_run --exclude=node_modules packages/db/ "$SERVER:$REMOTE/packages/db/"
 rsync_run apps/web/.next/standalone/apps/web/ "$SERVER:$REMOTE/apps/web/apps/web/"
+# standalone 根目录的 node_modules/package.json 必须一并上传，
+# 否则 apps/web/apps/web/server.js 向上找不到 next 等运行时依赖（生产布局同构）
+rsync_run apps/web/.next/standalone/node_modules/ "$SERVER:$REMOTE/apps/web/node_modules/"
+rsync -az -e "ssh ${SSH_OPTS[*]}" apps/web/.next/standalone/package.json "$SERVER:$REMOTE/apps/web/package.json"
 rsync_run apps/web/.next/static/ "$SERVER:$REMOTE/apps/web/apps/web/.next/static/"
 rsync_run apps/web/public/ "$SERVER:$REMOTE/apps/web/apps/web/public/"
 rsync -az -e "ssh ${SSH_OPTS[*]}" deploy/uat/ecosystem.config.cjs "$SERVER:$REMOTE/ecosystem.config.cjs"

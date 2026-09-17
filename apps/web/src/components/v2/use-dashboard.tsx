@@ -6,7 +6,7 @@ export type DashboardData = {
   role: string
   user?: { id: string; name: string; role: string; store?: any; supplier?: any }
   store?: { id: string; name: string; no: string } | null
-  supplier?: { id: string; name: string } | null
+  supplier?: { id: string; name: string; businessScopes?: string[] } | null
   hero?: {
     label: string; value: string; meta?: string; rightSlot?: string
     delta?: { text: string; trend: 'up' | 'down' | 'flat' }

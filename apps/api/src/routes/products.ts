@@ -319,6 +319,13 @@ export async function buildProductListWhere(req: any): Promise<{ where?: any; fi
     // Approved offers are tenant-wide for every store. Pending/disabled
     // supplier catalog data is governance-only and must not leak to stores.
     where.status = 'ENABLED'
+    if (requestedSupplierId) where.supplierId = requestedSupplierId
+    where.supplier = {
+      is: {
+        status: 'ENABLED',
+        businessScopes: { hasSome: ['STORE_FULFILLER', 'DIRECT_STORE_VENDOR'] },
+      },
+    }
   }
   return { where, filters: parsedFilters.data }
 }
@@ -449,12 +456,83 @@ export function buildProductExportCsv(rows: ExportableProduct[]): string {
   return lines.join('\r\n')
 }
 
+export function projectCatalogAvailability(input: {
+  product: { stock: unknown }
+  supplierReserved?: unknown
+  warehouseBalance?: { physicalQty: unknown; reservedQty: unknown } | null
+  warehouseLedgerActive?: boolean
+}) {
+  const useWarehouse = Boolean(input.warehouseLedgerActive && input.warehouseBalance)
+  return useWarehouse
+    ? stockAvailability(
+        Number(input.warehouseBalance!.physicalQty || 0),
+        Number(input.warehouseBalance!.reservedQty || 0),
+      )
+    : stockAvailability(Number(input.product.stock || 0), Number(input.supplierReserved || 0))
+}
+
 export const productRoutes: FastifyPluginAsync = async (app) => {
   async function withAvailability<T extends { id: string; stock: unknown }>(tenantId: string, rows: T[]) {
-    const reserved = await getSupplierReservedStock({ tenantId, productIds: rows.map(row => row.id) })
+    // 商品目录行会缓存十分钟。供应商的履约类型决定库存数据源，不能把它
+    // 永久冻结在旧缓存响应中；每次用当前供应商档案重新判定总仓商品。
+    const supplierIds = [...new Set(rows.flatMap(row => {
+      const supplierId = (row as any).supplierId
+      return supplierId ? [String(supplierId)] : []
+    }))]
+    const supplierSources = supplierIds.length > 0
+      ? await prisma.supplier.findMany({
+          where: { tenantId, id: { in: supplierIds } },
+          select: { id: true, sourceType: true },
+        })
+      : []
+    const sourceTypeBySupplier = new Map(supplierSources.map(supplier => [supplier.id, supplier.sourceType]))
+    const isWarehouseProduct = (row: T) => {
+      const supplierId = (row as any).supplierId
+      return (row as any).supplier?.sourceType === 'HEADQ_WAREHOUSE'
+        || sourceTypeBySupplier.get(supplierId) === 'HEADQ_WAREHOUSE'
+    }
+    const warehouseProductIds = rows
+      .filter(isWarehouseProduct)
+      .map(row => row.id)
+    const externalProductIds = rows
+      .filter(row => !isWarehouseProduct(row))
+      .map(row => row.id)
+
+    const supplierReservedPromise = externalProductIds.length > 0
+      ? getSupplierReservedStock({ tenantId, productIds: externalProductIds })
+      : Promise.resolve(new Map<string, number>())
+    const warehouseProjectionPromise = warehouseProductIds.length > 0
+      ? (async () => {
+          const warehouseId = await resolveTenantWarehouseId(prisma, tenantId, undefined)
+          const [warehouse, balances] = await Promise.all([
+            prisma.warehouse.findFirst({
+              where: { id: warehouseId, tenantId, isActive: true },
+              select: { inventoryMode: true },
+            }),
+            prisma.warehouseLedgerBalance.findMany({
+              where: { tenantId, warehouseId, productId: { in: warehouseProductIds } },
+              select: { productId: true, physicalQty: true, reservedQty: true },
+            }),
+          ])
+          return {
+            active: Boolean(warehouse && warehouse.inventoryMode !== 'OFF'),
+            balances: new Map(balances.map(balance => [balance.productId, balance])),
+          }
+        })()
+      : Promise.resolve({ active: false, balances: new Map<string, { physicalQty: unknown; reservedQty: unknown }>() })
+
+    const [supplierReserved, warehouseProjection] = await Promise.all([
+      supplierReservedPromise,
+      warehouseProjectionPromise,
+    ])
     return rows.map(product => ({
       ...product,
-      ...stockAvailability(Number(product.stock || 0), reserved.get(product.id) || 0),
+      ...projectCatalogAvailability({
+        product,
+        supplierReserved: supplierReserved.get(product.id) || 0,
+        warehouseBalance: warehouseProjection.balances.get(product.id) || null,
+        warehouseLedgerActive: warehouseProjection.active,
+      }),
       imageUrl: signOssKey((product as any).imageKey),
     }))
   }
@@ -467,7 +545,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role, supplierId } = req.user
     const listInclude: any = role === 'SUPPLY_CHAIN'
       ? {
-          supplier: { select: { id: true, name: true } },
+          supplier: { select: { id: true, name: true, sourceType: true } },
           upstreamSources: {
             where: { isActive: true },
             select: {
@@ -479,7 +557,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
             orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
           },
         }
-      : { supplier: { select: { id: true, name: true } } }
+      : { supplier: { select: { id: true, name: true, sourceType: true } } }
 
     // 不传 page 时返回全量（兼容下拉框），缓存 10 分钟
     // 注意 cache key 加上 supplier scope，避免供应商之间互相污染

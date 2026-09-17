@@ -38,3 +38,19 @@ export function businessTimestampKey(at: Date | string | number = new Date()): s
 export function businessCompactTimestampKey(at: Date | string | number = new Date()): string {
   return dayjs(at).tz(BUSINESS_TZ).format('YYYYMMDDHHmmss')
 }
+
+/**
+ * 把两个业务日转换为 [start, endExclusive) 的 timestamptz 查询边界。
+ * 例如上海 9 月 1 日对应 UTC 8 月 31 日 16:00，避免月初/月底漏单。
+ */
+export function businessDateRangeInclusive(start: Date | string, end: Date | string) {
+  const startKey = businessDateKey(start)
+  const endKey = businessDateKey(end)
+  const startAt = dayjs.tz(startKey, BUSINESS_TZ).startOf('day')
+  const endAt = dayjs.tz(endKey, BUSINESS_TZ).startOf('day')
+  return {
+    start: startAt.toDate(),
+    end: endAt.toDate(),
+    endExclusive: endAt.add(1, 'day').toDate(),
+  }
+}

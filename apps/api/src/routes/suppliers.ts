@@ -2,6 +2,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '@dianjie/db'
 import { cached, invalidatePattern } from '../lib/cache'
+import { isStoreScoped } from '../lib/auth-scope'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const entityIdSchema = z.string().trim().min(1).max(64)
@@ -16,6 +17,7 @@ export const supplierListQuerySchema = z.object({
 const FINANCE_ROLES = new Set(['ADMIN', 'FINANCE', 'SUPER_ADMIN'])
 const SUPPLIER_MANAGEMENT_ROLES = new Set(['ADMIN', 'FINANCE', 'SUPER_ADMIN', 'SUPPLY_CHAIN'])
 const SUPPLIER_ROLES = new Set(['SUPPLIER_OWNER', 'SUPPLIER_STAFF'])
+export const STORE_ORDERING_SUPPLIER_SCOPES = ['STORE_FULFILLER', 'DIRECT_STORE_VENDOR'] as const
 const SAFE_SELECT = {
   id: true, no: true, name: true, category: true, status: true, businessScopes: true,
 } as const
@@ -25,6 +27,9 @@ const SUPPLY_CHAIN_SELECT = {
   contactPhone: true,
   creditType: true,
   creditDays: true,
+  upstreamReceiptReviewThreshold: true,
+  postReceiptClaimHours: true,
+  upstreamSensitiveCategories: true,
   createdAt: true,
   updatedAt: true,
 } as const
@@ -48,6 +53,9 @@ const supplierCreateSchema = z.object({
   bankAccountName: z.string().trim().max(80).optional().default(''),
   bankCode:      z.string().trim().max(40).optional().default(''),
   businessScopes: z.array(z.enum(SUPPLIER_BUSINESS_SCOPES)).min(1).max(3).optional(),
+  upstreamReceiptReviewThreshold: z.number().finite().min(0).max(1_000_000_000).optional().default(10_000),
+  postReceiptClaimHours: z.number().int().min(1).max(720).optional().default(48),
+  upstreamSensitiveCategories: z.array(z.string().trim().min(1).max(40)).max(100).optional().default([]),
 }).strict()
 const supplierOperationalCreateSchema = supplierCreateSchema.omit({
   autoPay: true,
@@ -57,6 +65,9 @@ const supplierOperationalCreateSchema = supplierCreateSchema.omit({
   bankAccountName: true,
   bankCode: true,
   businessScopes: true,
+}).extend({
+  creditType: z.enum(['FIXED_DAYS', 'MONTHLY', 'WEEKLY', 'ON_DELIVERY']).optional().default('MONTHLY'),
+  creditDays: z.number().int().min(0).max(365).optional().default(0),
 })
 
 // PATCH 可改字段(白名单): 排除 tenantId/status/id 等敏感/系统字段
@@ -81,30 +92,68 @@ export const supplierReadSelectForRole = (role: string) =>
       ? SUPPLY_CHAIN_SELECT
       : SAFE_SELECT
 
+export function supplierListWhereForRole(input: {
+  tenantId: string
+  role: string
+  supplierId?: string | null
+  status?: 'ENABLED' | 'DISABLED'
+  businessScope?: typeof SUPPLIER_BUSINESS_SCOPES[number]
+}) {
+  const { tenantId, role, supplierId, status, businessScope } = input
+  const where: any = { tenantId }
+  if (SUPPLIER_ROLES.has(role)) {
+    if (!supplierId) return { tenantId, id: '__UNBOUND_SUPPLIER__' }
+    where.id = supplierId
+  } else if (role === 'SUPPLY_CHAIN') {
+    if (status) where.status = status
+  } else if (isStoreScoped(role)) {
+    // 门店只能向“门店履约方”或“直送门店供应商”下单；纯总仓上游合作方
+    // 不得出现在门店下单候选中，避免把总仓采购与门店采购混为一条链路。
+    where.status = 'ENABLED'
+    where.businessScopes = { hasSome: [...STORE_ORDERING_SUPPLIER_SCOPES] }
+  } else if (!FINANCE_ROLES.has(role)) {
+    where.status = 'ENABLED'
+  } else if (status) {
+    where.status = status
+  }
+
+  if (businessScope) {
+    if (where.businessScopes) {
+      where.AND = [
+        { businessScopes: where.businessScopes },
+        { businessScopes: { has: businessScope } },
+      ]
+      delete where.businessScopes
+    } else {
+      where.businessScopes = { has: businessScope }
+    }
+  }
+  return where
+}
+
 export const supplierRoutes: FastifyPluginAsync = async (app) => {
   app.get('/', auth(app), async (req: any, reply: any) => {
     const parsed = supplierListQuerySchema.safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { role, supplierId } = req.user
     const { status, businessScope, page, pageSize = 20 } = parsed.data
-    const where: any = { tenantId: req.user.tenantId }
-    if (SUPPLIER_ROLES.has(role)) {
-      if (!supplierId) return page ? { items: [], total: 0, page, pageSize } : []
-      where.id = supplierId
-    } else if (role === 'SUPPLY_CHAIN') {
-      if (status) where.status = status
-    } else if (!FINANCE_ROLES.has(role)) {
-      // 订货岗位只需要启用供应商候选，不得看到银行、联系人和账期等敏感主数据。
-      where.status = 'ENABLED'
-    } else if (status) where.status = status
-    if (businessScope) where.businessScopes = { has: businessScope }
+    if (SUPPLIER_ROLES.has(role) && !supplierId) {
+      return page ? { items: [], total: 0, page, pageSize } : []
+    }
+    const where = supplierListWhereForRole({
+      tenantId: req.user.tenantId,
+      role,
+      supplierId,
+      status,
+      businessScope,
+    })
 
     const select = supplierReadSelectForRole(role)
 
     // 不传 page 时返回全量（兼容下拉框），缓存 10 分钟
     if (!page) {
       // 角色与 supplierId 必须进入缓存键，防止管理员完整数据被其他角色命中同一缓存。
-      return cached(`suppliers:full:${req.user.tenantId}:${role}:${supplierId || 'none'}:${status || 'all'}:${businessScope || 'all-scopes'}`, 600, () =>
+      return cached(`suppliers:v2:full:${req.user.tenantId}:${role}:${supplierId || 'none'}:${status || 'all'}:${businessScope || 'all-scopes'}`, 600, () =>
         prisma.supplier.findMany({ where, ...(select ? { select } : {}), orderBy: { createdAt: 'asc' } })
       )
     }
@@ -141,7 +190,9 @@ export const supplierRoutes: FastifyPluginAsync = async (app) => {
         })
         return created
       })
-      void invalidatePattern(`suppliers:full:${tenantId}:*`)
+      // 列表页会在创建成功后立即重载；必须等缓存失效完成再返回，
+      // 否则快速重载可能命中旧列表，造成“保存成功但新供应商消失”。
+      await invalidatePattern(`suppliers:v2:full:${tenantId}:*`)
       return reply.status(201).send(role === 'SUPPLY_CHAIN' ? toSupplyChainSupplierView(supplier) : supplier)
     } catch (e: any) {
       if (e.code === 'P2002') return reply.status(409).send({ error: '供应商编号已存在' })
@@ -182,7 +233,7 @@ export const supplierRoutes: FastifyPluginAsync = async (app) => {
       })
       return saved
     })
-    void invalidatePattern(`suppliers:full:${tenantId}:*`)
+    await invalidatePattern(`suppliers:v2:full:${tenantId}:*`)
     return role === 'SUPPLY_CHAIN' ? toSupplyChainSupplierView(updated) : updated
   })
 
@@ -213,7 +264,7 @@ export const supplierRoutes: FastifyPluginAsync = async (app) => {
       })
       return saved
     })
-    void invalidatePattern(`suppliers:full:${tenantId}:*`)
+    await invalidatePattern(`suppliers:v2:full:${tenantId}:*`)
     return role === 'SUPPLY_CHAIN' ? toSupplyChainSupplierView(updated) : updated
   })
 }

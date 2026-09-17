@@ -44,6 +44,8 @@ export default function InternalSupplyChainSuppliersPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [inviteUrl, setInviteUrl] = useState<string | null>(null)
+  const [inviting, setInviting] = useState(false)
 
   const [drawerMode, setDrawerMode] = useState<'create' | 'edit' | null>(null)
   const [formValues, setFormValues] = useState<SupplierFormValues>(EMPTY_SUPPLIER_FORM_VALUES)
@@ -136,6 +138,35 @@ export default function InternalSupplyChainSuppliersPage() {
     setDrawerMode('create')
   }
 
+  async function createSupplierInvite() {
+    if (!selected) return
+    setInviting(true)
+    setError(null)
+    try {
+      const invite = await apiFetch<{ token: string }>(`/api/upstream/suppliers/${selected.id}/invites`, {
+        method: 'POST',
+        body: JSON.stringify({ role: 'SUPPLIER_OWNER', note: '供应商负责人', expiresHours: 72 }),
+      })
+      const url = `${window.location.origin}/v2/invite/${invite.token}`
+      setInviteUrl(url)
+      let copied = false
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(url)
+          copied = true
+        }
+      } catch {
+        // The invite is already valid. Clipboard permissions must not turn a
+        // successful invite into an apparent failure.
+      }
+      setNotice(copied ? '供应商负责人邀请已生成并复制链接' : '供应商负责人邀请已生成，请手动复制链接')
+    } catch (reason: any) {
+      setError(reason?.message || '邀请创建失败')
+    } finally {
+      setInviting(false)
+    }
+  }
+
   function openEditDrawer() {
     if (!selected) return
     setFormValues(initializeSupplierFormValues(selected))
@@ -172,6 +203,9 @@ export default function InternalSupplyChainSuppliersPage() {
         })
         setNotice('上游供应商新增成功')
         closeDrawer()
+        // 全量列表按创建时间升序分页；新记录通常落在最后一页。
+        // 保存后直接按新编号定位，避免用户误以为创建结果“消失”。
+        setFilters(current => resetPageFilters(current, { q: created.no, status: '' }))
         load(created.id)
       } else if (drawerMode === 'edit' && selected) {
         const updated = await apiFetch<SupplySupplier>(`/api/suppliers/${selected.id}`, {
@@ -390,6 +424,16 @@ export default function InternalSupplyChainSuppliersPage() {
                     href={`/v2/supply-chain/suppliers/${selected.id}/products`}
                     className="mt-2 block rounded-cta bg-accent px-4 py-2.5 text-center text-button text-white"
                   >管理供货商品 →</a>
+                </div>
+                <div className="border-t border-border pt-4">
+                  <div className="text-micro text-gray3">供应商登录账号</div>
+                  <p className="mt-1 text-caption text-gray2">生成 72 小时有效的负责人注册链接，由供应商自行设置登录信息。</p>
+                  <button
+                    onClick={() => void createSupplierInvite()}
+                    disabled={inviting || selected.status !== 'ENABLED'}
+                    className="mt-2 w-full rounded-cta border border-accent px-4 py-2.5 text-button text-accent disabled:opacity-40"
+                  >{inviting ? '生成中…' : '生成负责人邀请链接'}</button>
+                  {inviteUrl && <div className="mt-2 rounded-lg bg-bg p-2 text-micro text-gray2 break-all">{inviteUrl}<button onClick={() => void navigator.clipboard?.writeText(inviteUrl)} className="ml-2 text-accent">复制</button></div>}
                 </div>
               </div>
             )}

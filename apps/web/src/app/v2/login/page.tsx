@@ -134,8 +134,9 @@ export default function LoginPage() {
 
         <form onSubmit={submit} className="space-y-3">
           <div className="bg-white rounded-card border border-border p-3">
-            <label className="text-micro text-gray3 block mb-1">手机号 / 邮箱</label>
+            <label htmlFor="v2-login-identifier" className="text-micro text-gray3 block mb-1">手机号 / 邮箱</label>
             <input
+              id="v2-login-identifier"
               type="text"
               inputMode="text"
               value={identifier}
@@ -147,8 +148,9 @@ export default function LoginPage() {
             />
           </div>
           <div className="bg-white rounded-card border border-border p-3">
-            <label className="text-micro text-gray3 block mb-1">密码</label>
+            <label htmlFor="v2-login-password" className="text-micro text-gray3 block mb-1">密码</label>
             <input
+              id="v2-login-password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}

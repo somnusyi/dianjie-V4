@@ -72,6 +72,7 @@ import { productRoutes } from '../../src/routes/products'
 const tenantId = 'tenant-four-units'
 const supplyChainUserId = 'user-four-units'
 const productId = 'product-four-units'
+const storeFulfillerId = 'store-fulfiller-four-units'
 
 function product(overrides: Record<string, any> = {}) {
   return {
@@ -127,6 +128,8 @@ describe('product four-unit master-data contract (document snapshots are next ph
     mocks.executeRaw.mockResolvedValue([])
     mocks.queryRaw.mockResolvedValue([])
     mocks.receiptItemAggregate.mockResolvedValue({ _avg: { inventoryUnitCostSnapshot: null }, _count: { _all: 0 } })
+    mocks.supplierFindFirst.mockResolvedValue({ id: storeFulfillerId, name: '测试门店履约方' })
+    mocks.categoryFindUnique.mockResolvedValue({ isActive: true })
     mocks.opLogCreate.mockResolvedValue({})
     mocks.productCreate.mockImplementation(async ({ data }: any) => product({
       ...data,
@@ -141,7 +144,7 @@ describe('product four-unit master-data contract (document snapshots are next ph
     const response = await app.inject({
       method: 'POST',
       url: '/api/products',
-      payload: { code: 'DEFAULT-UNIT', name: '默认单位商品' },
+      payload: { code: 'DEFAULT-UNIT', name: '默认单位商品', supplierId: storeFulfillerId },
     })
 
     expect(response.statusCode).toBe(201)
@@ -165,6 +168,7 @@ describe('product four-unit master-data contract (document snapshots are next ph
       payload: {
         code: 'EXPLICIT-UNIT',
         name: '显式单位商品',
+        supplierId: storeFulfillerId,
         unit: '箱',
         purchaseUnit: '箱',
         inventoryUnit: '瓶',
@@ -207,6 +211,7 @@ describe('product four-unit master-data contract (document snapshots are next ph
         payload: {
           code: `BAD-${String(inventoryUnitsPerOrderUnit)}`,
           name: '非法换算',
+          supplierId: storeFulfillerId,
           unit: '箱',
           orderUnit: '瓶',
           inventoryUnitsPerOrderUnit,
@@ -224,6 +229,7 @@ describe('product four-unit master-data contract (document snapshots are next ph
       payload: {
         code: 'AMBIGUOUS-UNIT',
         name: '同名单位歧义',
+        supplierId: storeFulfillerId,
         purchaseUnit: '箱',
         inventoryUnit: '瓶',
         orderUnit: '箱',
@@ -261,6 +267,7 @@ describe('product four-unit master-data contract (document snapshots are next ph
       payload: {
         code: 'LEGACY-UNIT',
         name: '旧客户端商品',
+        supplierId: storeFulfillerId,
         unit: '箱',
         spec: '24瓶*330ml/箱',
       },

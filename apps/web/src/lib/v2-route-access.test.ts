@@ -21,12 +21,13 @@ describe('rolesForV2Path', () => {
   })
 
   it('allows only the dedicated internal supply-chain workspace', () => {
-    expect(rolesForV2Path('/v2/supply-chain/home')).toEqual(['SUPPLY_CHAIN'])
-    expect(rolesForV2Path('/v2/supply-chain/products')).toEqual(['SUPPLY_CHAIN'])
-    expect(rolesForV2Path('/v2/supply-chain/receipts')).toEqual(['SUPPLY_CHAIN'])
-    expect(rolesForV2Path('/v2/supply-chain/orders')).toEqual(['SUPPLY_CHAIN'])
-    expect(rolesForV2Path('/v2/supply-chain/deliveries')).toEqual(['SUPPLY_CHAIN'])
-    expect(rolesForV2Path('/v2/supply-chain/stores')).toEqual(['SUPPLY_CHAIN'])
+    const internalRoles = ['SUPPLY_CHAIN', 'ADMIN', 'SUPER_ADMIN']
+    expect(rolesForV2Path('/v2/supply-chain/home')).toEqual(internalRoles)
+    expect(rolesForV2Path('/v2/supply-chain/products')).toEqual(internalRoles)
+    expect(rolesForV2Path('/v2/supply-chain/receipts')).toEqual(internalRoles)
+    expect(rolesForV2Path('/v2/supply-chain/orders')).toEqual(internalRoles)
+    expect(rolesForV2Path('/v2/supply-chain/deliveries')).toEqual(internalRoles)
+    expect(rolesForV2Path('/v2/supply-chain/stores')).toEqual(internalRoles)
     expect(isV2PathAllowedForRole('/v2/supply-chain/home', 'SUPPLY_CHAIN')).toBe(true)
     expect(isV2PathAllowedForRole('/v2/supply-chain/products', 'SUPPLY_CHAIN')).toBe(true)
     expect(isV2PathAllowedForRole('/v2/supply-chain/receipts', 'SUPPLY_CHAIN')).toBe(true)

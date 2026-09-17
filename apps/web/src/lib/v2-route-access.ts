@@ -1,6 +1,6 @@
 const MANAGER_ROLES = ['MANAGER', 'PURCHASER', 'REGIONAL_MANAGER'] as const
 const SUPPLIER_ROLES = ['SUPPLIER_OWNER', 'SUPPLIER_STAFF', 'SUPPLIER_SUB'] as const
-const INTERNAL_SUPPLY_CHAIN_ROLES = ['SUPPLY_CHAIN'] as const
+const INTERNAL_SUPPLY_CHAIN_ROLES = ['SUPPLY_CHAIN', 'ADMIN', 'SUPER_ADMIN'] as const
 
 function isInternalSupplyChainSharedReadPath(pathname: string): boolean {
   // 到货差异打印页由门店、供应商和内部供应链共用。页面只读取详情，后端仍会

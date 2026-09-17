@@ -82,7 +82,8 @@ vi.mock('@/components/v2', () => ({
   }) => (
     <div data-todo-tone={tone} data-todo-title={title}>
       {chips?.map((c, i) => <span key={i} data-chip-tone={c.tone}>{c.label}</span>)}
-      {sub && <span data-todo-sub={sub} />}
+      <span>{title}</span>
+      {sub && <span data-todo-sub={sub}>{sub}</span>}
       {primary && <button data-todo-action={primary.label} onClick={primary.onClick}>{primary.label}</button>}
     </div>
   ),
@@ -172,6 +173,13 @@ describe('内部供应链移动端工作台', () => {
           ],
         }
       }
+      if (String(path).startsWith('/api/upstream/workbench')) {
+        return {
+          audience: 'INTERNAL',
+          total: 4,
+          counts: { orders: 1, shipments: 1, receipts: 1, claims: 1, statements: 0 },
+        }
+      }
       throw new Error(`unexpected path: ${path}`)
     })
   })
@@ -183,6 +191,7 @@ describe('内部供应链移动端工作台', () => {
     expect(resourceCalls('/api/orders').length).toBe(1)
     expect(resourceCalls('/api/loss-claims').length).toBe(1)
     expect(resourceCalls('/api/warehouse-inventory').length).toBe(1)
+    expect(resourceCalls('/api/upstream/workbench').length).toBe(1)
 
     cleanup(container, root)
   })
@@ -217,6 +226,7 @@ describe('内部供应链移动端工作台', () => {
 
     const todos = container.querySelectorAll('[data-todo-tone]')
     expect(todos.length).toBeGreaterThanOrEqual(1)
+    expect(container.textContent).toContain('上游供应商协同待处理')
 
     // 应包含待接单、待发货、配送中
     const titles = Array.from(todos).map(el => el.getAttribute('data-todo-title'))
@@ -230,8 +240,8 @@ describe('内部供应链移动端工作台', () => {
     const { container, root } = render(<HomePage />)
     await waitFor(() => container.textContent?.includes('项需处理') ?? false)
 
-    // 3 单待处理 (submitted + confirmed + delivering)
-    expect(container.textContent).toContain('3 项需处理')
+    // 3 个门店履约待办 + 4 个上游采购待办
+    expect(container.textContent).toContain('7 项需处理')
 
     cleanup(container, root)
   })

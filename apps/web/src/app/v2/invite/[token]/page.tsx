@@ -74,6 +74,9 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
   }
 
   if (done) {
+    const loginHref = info?.tenantSlug
+      ? `/v2/login?tenant=${encodeURIComponent(info.tenantSlug)}`
+      : '/v2/login'
     return (
       <div className="min-h-screen bg-bg flex flex-col">
         <header className="px-6 pt-14 pb-6"><div className="text-h1">滇界</div></header>
@@ -82,7 +85,7 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
             <div className="w-14 h-14 rounded-full bg-amber/10 text-amber-fg flex items-center justify-center text-h1 mx-auto mb-3">✓</div>
             <div className="text-h2">账号激活成功</div>
             <p className="text-caption text-gray2 mt-2">你现在可以用刚才填的手机号 + 密码登录了。</p>
-            <a href="/v2/login" className="block mt-5 py-3 bg-ink text-white rounded-cta text-button">去登录</a>
+            <a href={loginHref} className="block mt-5 py-3 bg-ink text-white rounded-cta text-button">去登录</a>
           </div>
         </main>
       </div>
@@ -117,24 +120,24 @@ export default function InviteAcceptPage({ params }: { params: { token: string }
 
         <form onSubmit={submit} className="space-y-3">
           <div className="bg-white rounded-card border border-border p-3">
-            <label className="text-micro text-gray3 block mb-1">姓名</label>
-            <input value={form.name} onChange={e => setForm({...form, name: e.target.value})}
+            <label htmlFor="invite-name" className="text-micro text-gray3 block mb-1">姓名</label>
+            <input id="invite-name" value={form.name} onChange={e => setForm({...form, name: e.target.value})}
               className="w-full text-body bg-transparent outline-none" placeholder="张三" />
           </div>
           <div className="bg-white rounded-card border border-border p-3">
-            <label className="text-micro text-gray3 block mb-1">手机号 (登录账号)</label>
-            <input value={form.phone} onChange={e => setForm({...form, phone: e.target.value})}
+            <label htmlFor="invite-phone" className="text-micro text-gray3 block mb-1">手机号 (登录账号)</label>
+            <input id="invite-phone" value={form.phone} onChange={e => setForm({...form, phone: e.target.value})}
               inputMode="numeric" maxLength={11}
               className="w-full text-body bg-transparent outline-none font-num" placeholder="13800138000" />
           </div>
           <div className="bg-white rounded-card border border-border p-3">
-            <label className="text-micro text-gray3 block mb-1">设置密码 (≥6 位)</label>
-            <input type="password" value={form.password} onChange={e => setForm({...form, password: e.target.value})}
+            <label htmlFor="invite-password" className="text-micro text-gray3 block mb-1">设置密码 (≥6 位)</label>
+            <input id="invite-password" type="password" value={form.password} onChange={e => setForm({...form, password: e.target.value})}
               className="w-full text-body bg-transparent outline-none font-num" />
           </div>
           <div className="bg-white rounded-card border border-border p-3">
-            <label className="text-micro text-gray3 block mb-1">再次输入</label>
-            <input type="password" value={form.confirmPwd} onChange={e => setForm({...form, confirmPwd: e.target.value})}
+            <label htmlFor="invite-confirm-password" className="text-micro text-gray3 block mb-1">再次输入</label>
+            <input id="invite-confirm-password" type="password" value={form.confirmPwd} onChange={e => setForm({...form, confirmPwd: e.target.value})}
               className="w-full text-body bg-transparent outline-none font-num" />
           </div>
           {error && <div className="bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}

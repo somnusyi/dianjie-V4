@@ -14,7 +14,8 @@
     "db:push": "pnpm --filter @dianjie/db db:push",
     "db:migrate": "pnpm --filter @dianjie/db db:migrate",
     "db:studio": "pnpm --filter @dianjie/db db:studio",
-    "db:seed": "pnpm --filter @dianjie/db db:seed"
+    "db:seed": "pnpm --filter @dianjie/db db:seed",
+    "test:upstream:e2e": "NODE_ENV=test UPSTREAM_E2E_ALLOW_LOCAL=true playwright test --config=playwright.upstream.config.ts"
   },
   "devDependencies": {
     "playwright": "^1.60.0",

@@ -12,6 +12,7 @@ import { UserMenu } from '@/components/v2/user-menu'
 import { useDashboard, LoadingScreen, ErrorScreen, greetingFor } from '@/components/v2/use-dashboard'
 import { apiFetch } from '@/lib/v2-auth'
 import { supplierOrderBucket } from '@/lib/supplier-domain'
+import { supplierPortalMode } from '@/lib/supplier-experience'
 
 type Order = {
   id: string; no: string; status: string; totalAmount: number | string
@@ -23,6 +24,11 @@ type Order = {
 }
 type StockSummary = { inventoryMode: 'NOT_TRACKED' | 'STRICT'; totalSku: number; lowStock: number; outOfStock: number; reservedValue: number }
 type SupplyAudit = { summary: { errors: number; warnings: number }; issues: Array<{ label: string; detail: string }> }
+type UpstreamWorkbench = {
+  audience: 'SUPPLIER'
+  total: number
+  counts: { orders: number; shipments: number; receipts: number; claims: number; statements: number }
+}
 
 function timeAgo(iso: string) {
   const d = new Date(iso).getTime()
@@ -40,7 +46,23 @@ export default function SupplierHomePage() {
   const [orders, setOrders] = useState<Order[] | null>(null)
   const [stockSummary, setStockSummary] = useState<StockSummary | null>(null)
   const [supplyAudit, setSupplyAudit] = useState<SupplyAudit | null>(null)
+  const [upstream, setUpstream] = useState<UpstreamWorkbench | null>(null)
+  const portalMode = supplierPortalMode(data?.supplier?.businessScopes)
+
   useEffect(() => {
+    apiFetch<UpstreamWorkbench>('/api/upstream/workbench')
+      .then(setUpstream).catch(() => setUpstream(null))
+  }, [])
+
+  useEffect(() => {
+    if (!data || portalMode === 'UPSTREAM_ONLY') {
+      if (portalMode === 'UPSTREAM_ONLY') {
+        setOrders([])
+        setStockSummary(null)
+        setSupplyAudit(null)
+      }
+      return
+    }
     apiFetch<any>('/api/orders?pageSize=20')
       .then((d: any) => setOrders((d.items || d || [])))
       .catch(() => setOrders([]))
@@ -48,11 +70,13 @@ export default function SupplierHomePage() {
       .then(setStockSummary).catch(() => setStockSummary(null))
     apiFetch<SupplyAudit>('/api/supplier/insights/audit?days=90')
       .then(setSupplyAudit).catch(() => setSupplyAudit(null))
-  }, [])
+  }, [data, portalMode])
+
   if (error) return <ErrorScreen message={error} />
   if (!data) return <LoadingScreen />
   const { greeting, today } = greetingFor(data.user?.name)
   const ext = (data.hero as any)?.supplierExt || {}
+  const isWarehouseUpstream = data.supplier?.businessScopes?.includes('WAREHOUSE_UPSTREAM') || upstream?.total
   // 待处理 = 需要供应商动作的订单:
   //   SUBMITTED      → 待接单
   //   CONFIRMED      → 待发货
@@ -72,6 +96,10 @@ export default function SupplierHomePage() {
     ? stockSummary.lowStock + stockSummary.outOfStock
     : Number(ext.lowStockCnt || 0)
 
+  if (portalMode === 'UPSTREAM_ONLY') {
+    return <UpstreamOnlySupplierHome supplierName={data.supplier?.name || '供应商'} greeting={greeting} today={today} workbench={upstream} />
+  }
+
   return (
     <div className="min-h-screen bg-bg pb-20">
       <header className="px-4 pt-4 pb-2 flex items-center justify-between">
@@ -89,6 +117,29 @@ export default function SupplierHomePage() {
       <div className="mt-3">
         <GlanceStrip {...(data.hero as any)} />
       </div>
+
+      {isWarehouseUpstream && (
+        <Section
+          title="总仓采购待办"
+          right={upstream && upstream.total > 0 ? `${upstream.total} 项待处理` : undefined}
+          rightTone={upstream && upstream.total > 0 ? 'red' : undefined}
+        >
+          <a href="/v2/supplier/upstream" className="block rounded-card border border-border bg-white p-3 active:bg-bg/50">
+            <div className="flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-md bg-amber/10 text-h2 text-amber-fg">采</span>
+              <div className="min-w-0 flex-1">
+                <div className="text-h2">{upstream && upstream.total > 0 ? '有总仓采购需要处理' : '总仓采购暂无待办'}</div>
+                <p className="mt-0.5 text-caption text-gray2">
+                  {upstream
+                    ? `订单/发货 ${upstream.counts.orders + upstream.counts.shipments} · 差异 ${upstream.counts.claims} · 对账 ${upstream.counts.statements}`
+                    : '正在加载接单、发货、差异和对账待办'}
+                </p>
+              </div>
+              <span className="text-gray3">›</span>
+            </div>
+          </a>
+        </Section>
+      )}
 
       {stockSummary?.inventoryMode === 'NOT_TRACKED' && (
         <div className="mx-4 mt-3 rounded-card border border-amber/30 bg-amber/10 p-3 text-caption text-gray2">
@@ -242,6 +293,93 @@ export default function SupplierHomePage() {
         }}
       />
     </div>
+  )
+}
+
+function UpstreamOnlySupplierHome({ supplierName, greeting, today, workbench }: {
+  supplierName: string
+  greeting: string
+  today: string
+  workbench: UpstreamWorkbench | null
+}) {
+  const counts = workbench?.counts
+  const orderAndShipmentCount = (counts?.orders || 0) + (counts?.shipments || 0)
+
+  return (
+    <div className="min-h-screen bg-bg pb-20">
+      <header className="flex items-center justify-between px-4 pb-2 pt-4">
+        <div>
+          <p className="text-caption text-gray2">{greeting}</p>
+          <h1 className="text-h1">{supplierName}</h1>
+          <div className="mt-1 flex items-center gap-2">
+            <Chip tone="green">总仓供货合作方</Chip>
+            <span className="text-micro text-gray3">{today}</span>
+          </div>
+        </div>
+        <UserMenu />
+      </header>
+
+      <Section title="总仓采购待办" right={workbench?.total ? `${workbench.total} 项待处理` : undefined} rightTone={workbench?.total ? 'red' : undefined}>
+        <a href="/v2/supplier/upstream" className="block rounded-card border border-border bg-white p-4 active:bg-bg/50">
+          <div className="flex items-center gap-3">
+            <span className="flex h-11 w-11 items-center justify-center rounded-md bg-amber/10 text-h2 text-amber-fg">采</span>
+            <div className="min-w-0 flex-1">
+              <div className="text-h2">{workbench === null ? '正在加载总仓采购待办' : workbench.total > 0 ? '有总仓采购需要处理' : '总仓采购暂无待办'}</div>
+              <p className="mt-0.5 text-caption text-gray2">接单、改单、发货、到货差异和月度对账</p>
+            </div>
+            <span className="text-gray3">›</span>
+          </div>
+        </a>
+      </Section>
+
+      <Section title="待办分类">
+        <div className="grid grid-cols-3 gap-2">
+          <UpstreamCountCard label="采购/发货" value={orderAndShipmentCount} href="/v2/supplier/upstream#orders" />
+          <UpstreamCountCard label="到货差异" value={counts?.claims || 0} href="/v2/supplier/upstream#claims" urgent />
+          <UpstreamCountCard label="月度对账" value={counts?.statements || 0} href="/v2/supplier/upstream#settlements" urgent />
+        </div>
+      </Section>
+
+      <Section title="合作流程">
+        <div className="rounded-card border border-border bg-white p-4">
+          <div className="grid grid-cols-5 items-start gap-1 text-center text-micro text-gray2">
+            {['接单/改单', '发货', '总仓验收', '差异确认', '月度对账'].map((label, index) => (
+              <div key={label} className="relative">
+                <span className="mx-auto mb-1 flex h-7 w-7 items-center justify-center rounded-full bg-bg text-button text-gray1">{index + 1}</span>
+                <span>{label}</span>
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 border-t border-border pt-3 text-caption text-gray3">所有商品先送总仓；门店订货、总仓出库和门店收货由滇界内部供应链负责。</p>
+        </div>
+      </Section>
+
+      <BottomNav
+        tabs={[
+          { key: 'home', label: '工作台', icon: '⌂' },
+          { key: 'orders', label: '采购单', icon: '☷' },
+          { key: 'claims', label: '差异', icon: '△' },
+          { key: 'settlements', label: '对账', icon: '⛁' },
+          { key: 'me', label: '我的', icon: '◐' },
+        ]}
+        activeKey="home"
+        onChange={(key) => {
+          if (key === 'orders') location.href = '/v2/supplier/upstream#orders'
+          if (key === 'claims') location.href = '/v2/supplier/upstream#claims'
+          if (key === 'settlements') location.href = '/v2/supplier/upstream#settlements'
+          if (key === 'me') location.href = '/v2/me'
+        }}
+      />
+    </div>
+  )
+}
+
+function UpstreamCountCard({ label, value, href, urgent }: { label: string; value: number; href: string; urgent?: boolean }) {
+  return (
+    <a href={href} className="rounded-card border border-border bg-white p-3 text-center active:bg-bg/50">
+      <div className={`font-num text-h1 ${urgent && value > 0 ? 'text-red-fg' : 'text-gray1'}`}>{value}</div>
+      <div className="mt-1 text-micro text-gray3">{label}</div>
+    </a>
   )
 }
 

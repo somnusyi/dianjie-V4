@@ -30,6 +30,8 @@ import rateLimit from '@fastify/rate-limit'
 import { authRoutes } from './routes/auth'
 import { publicApplyRoute, applicationRoutes } from './routes/applications'
 import { inviteRoutes, inviteAcceptRoutes } from './routes/invites'
+import { upstreamSupplierInviteRoutes } from './routes/upstreamSupplierInvites'
+import { upstreamProcurementRoutes } from './routes/upstreamProcurement'
 import { openingTaskRoutes } from './routes/openingTasks'
 import { budgetRoutes } from './routes/budgets'
 import { storeRoutes } from './routes/stores'
@@ -227,6 +229,8 @@ async function bootstrap() {
   await app.register(applicationRoutes,    { prefix: '/api/applications' })
   await app.register(inviteRoutes,         { prefix: '/api/invites' })
   await app.register(inviteAcceptRoutes,   { prefix: '/api/invite-accept' })
+  await app.register(upstreamSupplierInviteRoutes, { prefix: '/api/upstream' })
+  await app.register(upstreamProcurementRoutes, { prefix: '/api/upstream' })
   await app.register(openingTaskRoutes,    { prefix: '/api/opening-tasks' })
   await app.register(budgetRoutes,         { prefix: '/api/budgets' })
   await app.register(dashboardRoutes,      { prefix: '/api/dashboard' })

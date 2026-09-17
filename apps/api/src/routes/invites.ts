@@ -149,7 +149,7 @@ export const inviteAcceptRoutes: FastifyPluginAsync = async (app) => {
     if (inv.consumedAt) return reply.status(400).send({ error: '邀请已被使用' })
     if (inv.expiresAt < new Date()) return reply.status(400).send({ error: '邀请已过期, 请联系老板重新发' })
 
-    const tenant = await prisma.tenant.findUnique({ where: { id: inv.tenantId }, select: { name: true } })
+    const tenant = await prisma.tenant.findUnique({ where: { id: inv.tenantId }, select: { name: true, slug: true } })
     const invStoreIds = inv.storeIds?.length ? inv.storeIds : (inv.storeId ? [inv.storeId] : [])
     const stores = invStoreIds.length
       ? await prisma.store.findMany({ where: { id: { in: invStoreIds } }, select: { id: true, name: true } })
@@ -158,6 +158,7 @@ export const inviteAcceptRoutes: FastifyPluginAsync = async (app) => {
     return {
       role: inv.role, note: inv.note, expiresAt: inv.expiresAt,
       tenantName: tenant?.name || '',
+      tenantSlug: tenant?.slug || '',
       storeName: stores[0]?.name || null,
       storeNames: stores.map(s => s.name),
       supplierName: supplier?.name || null,

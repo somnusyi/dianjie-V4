@@ -67,6 +67,7 @@ const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
         icon: '仓',
         match: ['/v2/supply-chain/inventory', '/v2/supply-chain/inbound', '/v2/supply-chain/docs'],
       },
+      { href: '/v2/supply-chain/procurement', label: '上游采购', description: '合同、下单、验收与月结', icon: '采' },
       { href: '/v2/supply-chain/transfers', label: '门店调拨', description: '门店间调出、发货与收货', icon: '调' },
       { href: '/v2/supply-chain/suppliers', label: '上游供应商', description: '总仓采购合作方', icon: '供' },
     ],
@@ -115,6 +116,7 @@ function mobileActiveKey(pathname: string): string {
     pathname.startsWith('/v2/supply-chain/inbound') ||
     pathname.startsWith('/v2/supply-chain/docs') ||
     pathname.startsWith('/v2/supply-chain/transfers') ||
+    pathname.startsWith('/v2/supply-chain/procurement') ||
     pathname.startsWith('/v2/supply-chain/suppliers')
   ) {
     return 'inventory'

@@ -1,6 +1,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
+import { upstreamFeatureEnabled } from '../lib/upstream-feature-flags'
 import { hasInternalSupplyChainCapability, isInternalSupplyChainRole } from '../lib/internal-supply-chain-access'
 import { resolveTenantWarehouseId } from '../services/defaultWarehouse'
 import {
@@ -525,6 +526,9 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
   })
 
   app.post('/manual-inbound', authWrite, async (req: any, reply: any) => {
+    if (upstreamFeatureEnabled('UPSTREAM_MANUAL_INBOUND_RESTRICTED')) {
+      return reply.status(409).send({ error: '手工入库已收口，请从上游采购的发货单发起验收入库' })
+    }
     const parsed = manualInboundSchema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const manufactureDate = parsed.data.manufactureDate ? new Date(`${parsed.data.manufactureDate}T00:00:00+08:00`) : null
@@ -614,6 +618,9 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
   })
 
   app.post('/batch-manual-inbound', authWrite, async (req: any, reply: any) => {
+    if (upstreamFeatureEnabled('UPSTREAM_MANUAL_INBOUND_RESTRICTED')) {
+      return reply.status(409).send({ error: '批量手工入库已收口，请从上游采购的发货单发起验收入库' })
+    }
     const parsed = batchManualInboundSchema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     try {

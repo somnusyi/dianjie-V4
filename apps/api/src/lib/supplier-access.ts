@@ -13,6 +13,11 @@ export const SUPPLIER_CAPABILITIES = [
   'settlement.read',
   'invoice.manage',
   'analytics.read',
+  'upstream.order.read',
+  'upstream.order.accept',
+  'upstream.order.ship',
+  'upstream.claim.respond',
+  'upstream.settlement.confirm',
 ] as const
 
 export type SupplierCapability = typeof SUPPLIER_CAPABILITIES[number]

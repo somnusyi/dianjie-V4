@@ -70,3 +70,8 @@ apps/android/app/debug/
 uploads/
 tmp/
 *.snapshot.json
+
+# 浏览器端到端测试报告与视觉证据
+playwright-report/
+test-results/
+.codex-artifacts/

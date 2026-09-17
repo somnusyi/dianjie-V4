@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
+  <rect width="640" height="480" fill="#f7f2e9"/>
+  <rect x="70" y="70" width="500" height="340" rx="24" fill="#ffffff" stroke="#c96f32" stroke-width="8"/>
+  <circle cx="220" cy="220" r="70" fill="#e9b872"/>
+  <path d="M160 335c50-85 90-85 140 0 45-65 85-65 135 0" fill="none" stroke="#8e4f2b" stroke-width="18" stroke-linecap="round"/>
+  <text x="320" y="130" text-anchor="middle" font-family="sans-serif" font-size="30" fill="#29231d">E2E 到货异常证据</text>
+  <text x="320" y="390" text-anchor="middle" font-family="sans-serif" font-size="22" fill="#756c62">仅用于本地自动化验收</text>
+</svg>

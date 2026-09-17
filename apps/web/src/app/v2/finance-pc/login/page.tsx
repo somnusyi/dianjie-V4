@@ -28,7 +28,9 @@ export default function FinancePCLoginPage() {
   useEffect(() => {
     const url = new URL(window.location.href)
     const t = (url.searchParams.get('tenant') || '').trim()
-    if (t === 'test') setTenantSlug('test')
+    // 与主登录页保持一致：验收/独立部署可显式指定租户，最终仍由后端
+    // PREVIEW_TENANT_SLUG 白名单校验，不能借此跨租户登录。
+    if (t) setTenantSlug(t)
     // 跳进来时带的 error 参数 (AuthGate 角色拒绝时会带 ?error=role)
     if (url.searchParams.get('error') === 'role') {
       setError('您的角色无权使用财务工作台 (仅 财务 / 老板 可登录)')
@@ -131,8 +133,9 @@ export default function FinancePCLoginPage() {
 
           <form onSubmit={submit} className="space-y-3">
             <div className="bg-white rounded-card border border-border p-3">
-              <label className="text-micro text-gray3 block mb-1">手机号 / 邮箱</label>
+              <label htmlFor="finance-login-identifier" className="text-micro text-gray3 block mb-1">手机号 / 邮箱</label>
               <input
+                id="finance-login-identifier"
                 type="text"
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
@@ -143,8 +146,9 @@ export default function FinancePCLoginPage() {
               />
             </div>
             <div className="bg-white rounded-card border border-border p-3">
-              <label className="text-micro text-gray3 block mb-1">密码</label>
+              <label htmlFor="finance-login-password" className="text-micro text-gray3 block mb-1">密码</label>
               <input
+                id="finance-login-password"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

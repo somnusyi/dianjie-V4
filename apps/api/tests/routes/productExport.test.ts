@@ -383,7 +383,16 @@ describe('buildProductListWhere', () => {
   it('limits store-scoped roles to ENABLED only', async () => {
     const result = await buildProductListWhere(req({ status: 'DISABLED' }, { role: 'KITCHEN_LEAD', storeId: 's1', storeIds: ['s1'] }))
     expect(result.error).toBeUndefined()
-    expect(result.where).toEqual({ tenantId, status: 'ENABLED' })
+    expect(result.where).toEqual({
+      tenantId,
+      status: 'ENABLED',
+      supplier: {
+        is: {
+          status: 'ENABLED',
+          businessScopes: { hasSome: ['STORE_FULFILLER', 'DIRECT_STORE_VENDOR'] },
+        },
+      },
+    })
   })
 
   it('does not accept tenantId or supplierId from query to expand scope', async () => {

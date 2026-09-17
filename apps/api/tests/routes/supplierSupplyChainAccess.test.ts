@@ -4,6 +4,7 @@ import {
   supplierCreateDataForRole,
   supplierListQuerySchema,
   supplierReadSelectForRole,
+  supplierListWhereForRole,
   supplierUpdateInputSchemaForRole,
   toSupplyChainSupplierView,
 } from '../../src/routes/suppliers'
@@ -46,6 +47,29 @@ describe('internal supply-chain supplier management boundary', () => {
   it('accepts an explicit upstream scope filter and rejects unknown scopes', () => {
     expect(supplierListQuerySchema.safeParse({ businessScope: 'WAREHOUSE_UPSTREAM' }).success).toBe(true)
     expect(supplierListQuerySchema.safeParse({ businessScope: 'NOT_A_SCOPE' }).success).toBe(false)
+  })
+
+  it('keeps warehouse-only upstream suppliers out of every store ordering role', () => {
+    for (const role of ['MANAGER', 'CHEF', 'PURCHASER', 'KITCHEN_LEAD', 'SUPERVISOR', 'REGIONAL_MANAGER']) {
+      expect(supplierListWhereForRole({ tenantId: 'tenant-1', role })).toEqual({
+        tenantId: 'tenant-1',
+        status: 'ENABLED',
+        businessScopes: { hasSome: ['STORE_FULFILLER', 'DIRECT_STORE_VENDOR'] },
+      })
+    }
+  })
+
+  it('does not let a store bypass its ordering scope with an upstream query filter', () => {
+    expect(supplierListWhereForRole({
+      tenantId: 'tenant-1', role: 'KITCHEN_LEAD', businessScope: 'WAREHOUSE_UPSTREAM',
+    })).toEqual({
+      tenantId: 'tenant-1',
+      status: 'ENABLED',
+      AND: [
+        { businessScopes: { hasSome: ['STORE_FULFILLER', 'DIRECT_STORE_VENDOR'] } },
+        { businessScopes: { has: 'WAREHOUSE_UPSTREAM' } },
+      ],
+    })
   })
 
   it('forces supply-chain-created profiles into the warehouse-upstream scope', () => {

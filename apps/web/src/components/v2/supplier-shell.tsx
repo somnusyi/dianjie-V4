@@ -3,6 +3,8 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import type { ReactNode } from 'react'
+import { getUser } from '@/lib/v2-auth'
+import { supplierPortalMode, type SupplierPortalMode } from '@/lib/supplier-experience'
 
 type SupplierCapability =
   | 'dashboard.read'
@@ -19,6 +21,7 @@ type NavItem = {
   icon: string
   capability: SupplierCapability
   match?: string[]
+  modes?: SupplierPortalMode[]
 }
 
 // 当前供应商账号统一权限；保留 capability 字段，后续切分订单员、仓管、财务时无需重做导航。
@@ -36,17 +39,18 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     title: '日常作业',
     items: [
       { href: '/v2/supplier/home', label: '工作台', description: '待办与预警', icon: '⌂', capability: 'dashboard.read' },
-      { href: '/v2/supplier/orders', label: '订单履约', description: '订货、实发、配送', icon: '☷', capability: 'order.manage' },
-      { href: '/v2/supplier/differences', label: '到货差异', description: '短缺、破损、责任确认', icon: '!', capability: 'order.manage' },
-      { href: '/v2/supplier/inventory', label: '库存', description: '默认仓与流水', icon: '▦', capability: 'inventory.manage' },
+      { href: '/v2/supplier/upstream', label: '总仓采购', description: '接单、改单、发货与对账', icon: '采', capability: 'order.manage', modes: ['UPSTREAM_ONLY', 'MIXED', 'UNKNOWN'] },
+      { href: '/v2/supplier/orders', label: '门店订单履约', description: '订货、实发、配送', icon: '☷', capability: 'order.manage', modes: ['STORE_ONLY', 'MIXED', 'UNKNOWN'] },
+      { href: '/v2/supplier/differences', label: '门店到货差异', description: '短缺、破损、责任确认', icon: '!', capability: 'order.manage', modes: ['STORE_ONLY', 'MIXED', 'UNKNOWN'] },
+      { href: '/v2/supplier/inventory', label: '门店履约库存', description: '默认仓与流水', icon: '▦', capability: 'inventory.manage', modes: ['STORE_ONLY', 'MIXED', 'UNKNOWN'] },
     ],
   },
   {
     title: '货品与经营',
     items: [
-      { href: '/v2/supplier/products', label: '商品与报价', description: 'SKU、分类、审批', icon: '□', capability: 'catalog.manage', match: ['/v2/supplier/products', '/v2/supplier/categories'] },
-      { href: '/v2/supplier/billing', label: '账单与发票', description: '应收、对账、开票', icon: '¥', capability: 'settlement.read', match: ['/v2/supplier/billing', '/v2/supplier/reconciliation', '/v2/supplier/invoices'] },
-      { href: '/v2/supplier/analytics', label: '经营分析', description: '门店与商品表现', icon: '↗', capability: 'analytics.read', match: ['/v2/supplier/analytics', '/v2/supplier/customers'] },
+      { href: '/v2/supplier/products', label: '商品与报价', description: 'SKU、分类、审批', icon: '□', capability: 'catalog.manage', match: ['/v2/supplier/products', '/v2/supplier/categories'], modes: ['STORE_ONLY', 'MIXED', 'UNKNOWN'] },
+      { href: '/v2/supplier/billing', label: '门店账单与发票', description: '应收、对账、开票', icon: '¥', capability: 'settlement.read', match: ['/v2/supplier/billing', '/v2/supplier/reconciliation', '/v2/supplier/invoices'], modes: ['STORE_ONLY', 'MIXED', 'UNKNOWN'] },
+      { href: '/v2/supplier/analytics', label: '门店经营分析', description: '门店与商品表现', icon: '↗', capability: 'analytics.read', match: ['/v2/supplier/analytics', '/v2/supplier/customers'], modes: ['STORE_ONLY', 'MIXED', 'UNKNOWN'] },
       { href: '/v2/supplier/history', label: '操作记录', description: '历史单据与追溯', icon: '◷', capability: 'dashboard.read' },
     ],
   },
@@ -59,6 +63,7 @@ function isActive(pathname: string, item: NavItem) {
 
 export function SupplierShell({ children }: { children: ReactNode }) {
   const pathname = usePathname()
+  const mode = supplierPortalMode(getUser()?.supplier?.businessScopes)
 
   return (
     <div className="supplier-portal min-h-screen bg-bg">
@@ -78,7 +83,10 @@ export function SupplierShell({ children }: { children: ReactNode }) {
             <section key={group.title} className="mb-5">
               <h2 className="mb-2 px-3 text-micro font-medium tracking-wider text-gray3">{group.title}</h2>
               <div className="space-y-1">
-                {group.items.filter(item => ACTIVE_CAPABILITIES.has(item.capability)).map(item => {
+                {group.items.filter(item =>
+                  ACTIVE_CAPABILITIES.has(item.capability)
+                  && (!item.modes || item.modes.includes(mode))
+                ).map(item => {
                   const active = isActive(pathname, item)
                   return (
                     <Link
@@ -102,8 +110,10 @@ export function SupplierShell({ children }: { children: ReactNode }) {
 
         <div className="border-t border-border p-4">
           <div className="rounded-xl bg-bg px-3 py-2">
-            <div className="text-button">默认仓</div>
-            <p className="mt-0.5 text-micro text-gray3">当前单仓执行 · 门店直送</p>
+            <div className="text-button">{mode === 'UPSTREAM_ONLY' ? '总仓供货合作方' : '默认仓'}</div>
+            <p className="mt-0.5 text-micro text-gray3">
+              {mode === 'UPSTREAM_ONLY' ? '接单、发货、差异与月结' : '当前单仓执行 · 门店履约'}
+            </p>
           </div>
         </div>
       </aside>

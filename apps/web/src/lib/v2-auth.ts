@@ -18,7 +18,7 @@ export type StoredUser = {
   store?: { id: string; name: string; no: string } | null
   stores?: { id: string; name: string; no: string }[]       // 可访问门店列表（切换器数据源）
   supplierId?: string | null
-  supplier?: { id: string; name: string } | null
+  supplier?: { id: string; name: string; businessScopes?: string[] } | null
 }
 
 const TOKEN_KEY = 'token'

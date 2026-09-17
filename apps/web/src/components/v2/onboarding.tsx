@@ -6,6 +6,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { getUser } from '@/lib/v2-auth'
+import { supplierPortalMode, type SupplierPortalMode } from '@/lib/supplier-experience'
 
 type Slide = { icon: string; title: string; body: string; tip?: string }
 
@@ -16,6 +17,10 @@ const BOSS_SLIDES: Slide[] = [
 const SUPPLIER_SLIDES: Slide[] = [
   { icon: '☰', title: '订单流水线', body: '待接单 → 已接单 → 配送中 → 已送达, 滑卡操作; 红条 = 厨师长报损待您处理' },
   { icon: '△', title: '报损 24h 内回复', body: '同意 → 自动退款 / 换货; 拒绝 → 走总厨二审' },
+]
+const UPSTREAM_SUPPLIER_SLIDES: Slide[] = [
+  { icon: '采', title: '总仓采购订单', body: '总仓发单后，在「总仓采购」完成接单或申请改单；确认后按采购单位建立发货单。', tip: '首页会集中显示需要您处理的总仓采购待办' },
+  { icon: '△', title: '到货差异与月结', body: '总仓验收产生短量或破损时及时确认差异；月末核对结算单，确认后进入财务锁账。' },
 ]
 const CHEF_DIR_SLIDES: Slide[] = [
   { icon: '✓', title: '集中审批 4 类单', body: '调价 / 新供应商 / 新菜品 / 大额食材, 顶部 Tab 一键过滤' },
@@ -69,23 +74,30 @@ export function Onboarding() {
   const [show, setShow] = useState(false)
   const [idx, setIdx] = useState(0)
   const [role, setRole] = useState<string | null>(null)
+  const [supplierMode, setSupplierMode] = useState<SupplierPortalMode>('UNKNOWN')
 
   useEffect(() => {
     const u = getUser()
     if (!u) return
-    const key = `v2-onboarded:${u.role}`
+    const mode = supplierPortalMode(u.supplier?.businessScopes)
+    const upstreamProfile = u.role.startsWith('SUPPLIER_') && mode === 'UPSTREAM_ONLY'
+    const key = upstreamProfile ? `v2-onboarded:${u.role}:warehouse-upstream` : `v2-onboarded:${u.role}`
     if (typeof localStorage !== 'undefined' && !localStorage.getItem(key)) {
-      setRole(u.role); setShow(true)
+      setRole(u.role); setSupplierMode(mode); setShow(true)
     }
   }, [])
 
   if (!show || !role) return null
-  const slides = SLIDES[role] || SLIDES.MANAGER
+  const upstreamProfile = role.startsWith('SUPPLIER_') && supplierMode === 'UPSTREAM_ONLY'
+  const slides = upstreamProfile ? UPSTREAM_SUPPLIER_SLIDES : SLIDES[role] || SLIDES.MANAGER
   const cur = slides[idx]
   const last = idx === slides.length - 1
 
   function dismiss() {
-    if (role) localStorage.setItem(`v2-onboarded:${role}`, '1')
+    if (role) {
+      const key = upstreamProfile ? `v2-onboarded:${role}:warehouse-upstream` : `v2-onboarded:${role}`
+      localStorage.setItem(key, '1')
+    }
     setShow(false)
   }
 

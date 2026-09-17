@@ -207,6 +207,6 @@ chmod 600 ~/.pgpass
 ## 后续可做（不强求）
 
 - [ ] **GitHub Actions CI**：push 到 PR 自动跑 `pnpm build + pnpm test + e2e`，merge 到 main 自动 `deploy.sh`
-- [ ] **Staging 环境**：同台 ECS 起 V4 第二份（端口 4445/3205 + DB `dianjie_v4_staging` + nginx `stage.dianjie.cc`），先 staging 验收再 prod
+- [x] **UAT 环境**：同台 ECS 隔离运行 API `4005` / Web `3205`、数据库 `dianjie_v4_uat`、Redis DB 5；使用 `scripts/deploy-uat.sh` 从 `release/supply-chain-uat-*` 发布，详见 `deploy/uat/README.md`
 - [ ] **monitoring**：把 Sentry DSN 真正配上（现在 .env 是空的）+ 接 PagerDuty / 企微告警
 - [ ] **deploy.sh 加 Slack / 企微 webhook 通知**

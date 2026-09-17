@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   BUSINESS_TZ,
   businessCompactTimestampKey,
+  businessDateRangeInclusive,
   businessDateKey,
   businessMonthKey,
   businessTimestampKey,
@@ -38,6 +39,15 @@ describe('businessTime', () => {
   describe('businessTimestampKey', () => {
     it('renders Shanghai wall-clock with underscore separator', () => {
       expect(businessTimestampKey(new Date('2026-08-14T16:30:05Z'))).toBe('20260815_003005')
+    })
+  })
+
+  describe('businessDateRangeInclusive', () => {
+    it('uses Shanghai midnight and an exclusive next-day boundary', () => {
+      const range = businessDateRangeInclusive(new Date('2026-09-01T00:00:00Z'), new Date('2026-09-30T00:00:00Z'))
+      expect(range.start.toISOString()).toBe('2026-08-31T16:00:00.000Z')
+      expect(range.end.toISOString()).toBe('2026-09-29T16:00:00.000Z')
+      expect(range.endExclusive.toISOString()).toBe('2026-09-30T16:00:00.000Z')
     })
   })
 

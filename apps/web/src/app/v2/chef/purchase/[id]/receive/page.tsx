@@ -68,7 +68,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
               </p>
             )}
             <p className="text-gray3 pt-2">
-              收货确认是供应商责任截止点。确认后发现的临期、变质、遗失或盘点差异均属于门店内部损耗，请走「店内盘损」。
+              确认后如发现与本次到货直接相关、可追溯的隐蔽短量、破损或变质，可在约定时限内从订单详情「补报到货异常」；临期、使用损耗、遗失或盘点差异请走「店内盘损」。
             </p>
           </div>
         </div>

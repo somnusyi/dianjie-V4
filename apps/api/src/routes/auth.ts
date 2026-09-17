@@ -44,7 +44,9 @@ async function loadScopeStores(user: { storeId: string | null; storeIds: string[
 export const authRoutes: FastifyPluginAsync = async (app) => {
 
   // POST /api/auth/login — 单独限流防密码爆破 (10 次/分钟/IP, 同事 c2a4470 引入, 保留)
-  app.post('/login', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } } as any, async (request, reply) => {
+  app.post('/login', {
+    config: { rateLimit: { max: process.env.NODE_ENV === 'test' ? 2_000 : 10, timeWindow: '1 minute' } },
+  } as any, async (request, reply) => {
     const body = loginSchema.safeParse(request.body)
     if (!body.success) {
       return reply.status(400).send({ error: body.error.issues[0].message })
@@ -69,14 +71,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           where: { tenantId_phone: { tenantId: tenant.id, phone: id } },
           include: {
             store: { select: { id: true, name: true, no: true } },
-            supplier: { select: { id: true, name: true } },
+            supplier: { select: { id: true, name: true, businessScopes: true } },
           },
         })
       : await prisma.user.findUnique({
           where: { tenantId_email: { tenantId: tenant.id, email: id } },
           include: {
             store: { select: { id: true, name: true, no: true } },
-            supplier: { select: { id: true, name: true } },
+            supplier: { select: { id: true, name: true, businessScopes: true } },
           },
         })
 
@@ -150,7 +152,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       where: { id: decoded.userId, tenantId: decoded.tenantId },
       include: {
         store:    { select: { id: true, name: true, no: true } },
-        supplier: { select: { id: true, name: true } },
+        supplier: { select: { id: true, name: true, businessScopes: true } },
         tenant: { select: { status: true } },
       },
     })
@@ -182,7 +184,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       where: { id: userId },
       include: {
         store: { select: { id: true, name: true, no: true } },
-        supplier: { select: { id: true, name: true } },
+        supplier: { select: { id: true, name: true, businessScopes: true } },
       },
     })
     if (!user) return { error: '用户不存在' }

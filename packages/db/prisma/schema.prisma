@@ -23,66 +23,81 @@ model Tenant {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
-  users                         User[]
-  stores                        Store[]
-  suppliers                     Supplier[]
-  products                      Product[]
-  warehouses                    Warehouse[]
-  warehouseStocks               WarehouseStock[]
-  warehouseInventoryImports     WarehouseInventoryImport[]
-  warehouseInventoryImportItems WarehouseInventoryImportItem[]
-  productExternalCodes          ProductExternalCode[]
-  warehouseLedgerBalances       WarehouseLedgerBalance[]
-  warehouseLedgerMovements      WarehouseLedgerMovement[]
-  warehouseLedgerReservations   WarehouseLedgerReservation[]
-  warehouseLedgerLots           WarehouseLedgerLot[]
-  warehouseLedgerLotAllocations WarehouseLedgerLotAllocation[]
-  supplierProductCategories     SupplierProductCategory[]
-  productUpstreamSources        ProductUpstreamSource[]
-  supplierNameAliases           SupplierNameAlias[]
-  receipts                      Receipt[]
-  reconciliations               Reconciliation[]
-  payments                      Payment[]
-  paymentSchedules              PaymentSchedule[]
-  opLogs                        OpLog[]
-  purchaseOrders                PurchaseOrder[]
-  purchaseOrderRevisions        PurchaseOrderRevision[]
-  purchaseOrderEvents           PurchaseOrderEvent[]
-  deliveryOrders                DeliveryOrder[]
-  deliveryOrderEvents           DeliveryOrderEvent[]
-  businessSequences             BusinessSequence[]
-  lossClaims                    LossClaim[]
-  paymentRules                  PaymentRule[]
-  deliveryRules                 DeliveryRule[]
-  consumptions                  StockConsumption[]
-  expenses                      StoreExpense[]
-  cashAccounts                  CashAccount[]
-  cashTransactions              CashTransaction[]
-  notifications                 Notification[]
-  invoices                      Invoice[]
-  invoicePayments               InvoicePayment[]
-  capitalProjects               CapitalProject[]
-  documents                     Document[]
-  productBatches                ProductBatch[]
-  stockMovements                SupplierStockMovement[]
-  supplierStockBatches          SupplierStockBatch[]
-  supplierStockBatchAllocations SupplierStockBatchAllocation[]
-  supplierStockReservations     SupplierStockReservation[]
-  inventorySnapshots            InventorySnapshot[]
-  inventoryCounts               InventoryCount[]
-  accountingPeriods             AccountingPeriod[]
-  pettyCash                     PettyCash[]
-  payrolls                      Payroll[]
-  dailyBusinessImports          DailyBusinessImport[]
-  deferredBomTasks              DeferredBomTask[]
-  dishAliases                   DishAlias[]
-  dishBomVersions               DishBomVersion[]
-  monthlyCloses                 StoreMonthlyClose[]
-  storeInventoryPolicies        StoreInventoryPolicy[]
-  feedbacks                     Feedback[]
-  feedbackMessages              FeedbackMessage[]
-  autoFixRuns                   AutoFixRun[]
-  bossChatMessages              BossChatMessage[]
+  users                                User[]
+  stores                               Store[]
+  suppliers                            Supplier[]
+  products                             Product[]
+  warehouses                           Warehouse[]
+  warehouseStocks                      WarehouseStock[]
+  warehouseInventoryImports            WarehouseInventoryImport[]
+  warehouseInventoryImportItems        WarehouseInventoryImportItem[]
+  productExternalCodes                 ProductExternalCode[]
+  warehouseLedgerBalances              WarehouseLedgerBalance[]
+  warehouseLedgerMovements             WarehouseLedgerMovement[]
+  warehouseLedgerReservations          WarehouseLedgerReservation[]
+  warehouseLedgerLots                  WarehouseLedgerLot[]
+  warehouseLedgerLotAllocations        WarehouseLedgerLotAllocation[]
+  supplierProductCategories            SupplierProductCategory[]
+  productUpstreamSources               ProductUpstreamSource[]
+  upstreamSupplierContracts            UpstreamSupplierContract[]
+  upstreamSupplierContractLines        UpstreamSupplierContractLine[]
+  upstreamPurchaseOrders               UpstreamPurchaseOrder[]
+  upstreamPurchaseOrderLines           UpstreamPurchaseOrderLine[]
+  upstreamPurchaseOrderRevisions       UpstreamPurchaseOrderRevision[]
+  upstreamPurchaseOrderEvents          UpstreamPurchaseOrderEvent[]
+  upstreamShipments                    UpstreamShipment[]
+  upstreamShipmentLines                UpstreamShipmentLine[]
+  upstreamReceipts                     UpstreamReceipt[]
+  upstreamReceiptLines                 UpstreamReceiptLine[]
+  upstreamArrivalClaims                UpstreamArrivalClaim[]
+  upstreamArrivalClaimLines            UpstreamArrivalClaimLine[]
+  upstreamSettlementStatements         UpstreamSettlementStatement[]
+  upstreamSettlementLines              UpstreamSettlementLine[]
+  upstreamSettlementInvoiceAllocations UpstreamSettlementInvoiceAllocation[]
+  supplierNameAliases                  SupplierNameAlias[]
+  receipts                             Receipt[]
+  reconciliations                      Reconciliation[]
+  payments                             Payment[]
+  paymentSchedules                     PaymentSchedule[]
+  opLogs                               OpLog[]
+  purchaseOrders                       PurchaseOrder[]
+  purchaseOrderRevisions               PurchaseOrderRevision[]
+  purchaseOrderEvents                  PurchaseOrderEvent[]
+  deliveryOrders                       DeliveryOrder[]
+  deliveryOrderEvents                  DeliveryOrderEvent[]
+  businessSequences                    BusinessSequence[]
+  lossClaims                           LossClaim[]
+  paymentRules                         PaymentRule[]
+  deliveryRules                        DeliveryRule[]
+  consumptions                         StockConsumption[]
+  expenses                             StoreExpense[]
+  cashAccounts                         CashAccount[]
+  cashTransactions                     CashTransaction[]
+  notifications                        Notification[]
+  invoices                             Invoice[]
+  invoicePayments                      InvoicePayment[]
+  capitalProjects                      CapitalProject[]
+  documents                            Document[]
+  productBatches                       ProductBatch[]
+  stockMovements                       SupplierStockMovement[]
+  supplierStockBatches                 SupplierStockBatch[]
+  supplierStockBatchAllocations        SupplierStockBatchAllocation[]
+  supplierStockReservations            SupplierStockReservation[]
+  inventorySnapshots                   InventorySnapshot[]
+  inventoryCounts                      InventoryCount[]
+  accountingPeriods                    AccountingPeriod[]
+  pettyCash                            PettyCash[]
+  payrolls                             Payroll[]
+  dailyBusinessImports                 DailyBusinessImport[]
+  deferredBomTasks                     DeferredBomTask[]
+  dishAliases                          DishAlias[]
+  dishBomVersions                      DishBomVersion[]
+  monthlyCloses                        StoreMonthlyClose[]
+  storeInventoryPolicies               StoreInventoryPolicy[]
+  feedbacks                            Feedback[]
+  feedbackMessages                     FeedbackMessage[]
+  autoFixRuns                          AutoFixRun[]
+  bossChatMessages                     BossChatMessage[]
 
   @@map("tenants")
 }
@@ -117,6 +132,9 @@ model Warehouse {
   ledgerReservations            WarehouseLedgerReservation[]
   ledgerLots                    WarehouseLedgerLot[]
   ledgerLotAllocations          WarehouseLedgerLotAllocation[]
+  upstreamPurchaseOrders        UpstreamPurchaseOrder[]
+  upstreamShipments             UpstreamShipment[]
+  upstreamReceipts              UpstreamReceipt[]
 
   @@unique([tenantId, code])
   @@unique([tenantId, id])
@@ -182,6 +200,7 @@ model WarehouseLedgerBalance {
 enum WarehouseLedgerMovementType {
   OPENING_BALANCE
   MANUAL_INBOUND
+  UPSTREAM_RECEIPT
   ORDER_RESERVED
   ORDER_RELEASED
   ORDER_OUTBOUND
@@ -224,15 +243,17 @@ model WarehouseLedgerMovement {
   reversalOfId         String?                     @unique @db.VarChar(64)
   recordedAt           DateTime                    @default(now())
 
-  tenant         Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  warehouse      Warehouse                      @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
-  product        Product                        @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
-  supplier       Supplier?                      @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  reversalOf     WarehouseLedgerMovement?       @relation("WarehouseLedgerMovementReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
-  reversal       WarehouseLedgerMovement?       @relation("WarehouseLedgerMovementReversal")
-  createdLot     WarehouseLedgerLot?            @relation("WarehouseLedgerLotSource")
-  lotAllocations WarehouseLedgerLotAllocation[]
-  docLines       WarehouseDocLine[]
+  tenant                Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse             Warehouse                      @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  product               Product                        @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  supplier              Supplier?                      @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  reversalOf            WarehouseLedgerMovement?       @relation("WarehouseLedgerMovementReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversal              WarehouseLedgerMovement?       @relation("WarehouseLedgerMovementReversal")
+  createdLot            WarehouseLedgerLot?            @relation("WarehouseLedgerLotSource")
+  lotAllocations        WarehouseLedgerLotAllocation[]
+  docLines              WarehouseDocLine[]
+  upstreamReceiptLine   UpstreamReceiptLine?           @relation("UpstreamReceiptLedgerMovement")
+  upstreamClaimLossLine UpstreamArrivalClaimLine?      @relation("UpstreamClaimLossLedgerMovement")
 
   @@unique([tenantId, warehouseId, idempotencyKey])
   @@index([tenantId, warehouseId, productId, effectiveAt])
@@ -299,6 +320,7 @@ model WarehouseLedgerReservation {
 enum WarehouseLedgerLotKind {
   OPENING
   MANUAL_INBOUND
+  UPSTREAM_RECEIPT
   ADJUSTMENT
 }
 
@@ -1270,6 +1292,12 @@ model Supplier {
   autoPay      Boolean    @default(false) // 是否自动打款
   autoPayLimit Decimal?   @db.Decimal(12, 2) // 自动付款金额上限
 
+  // 上游采购验收策略（仅 WAREHOUSE_UPSTREAM 使用）。普通验收单人确认，
+  // 命中金额、超收、临时价或敏感品类时进入双人复核。
+  upstreamReceiptReviewThreshold Decimal  @default(10000) @db.Decimal(20, 4)
+  postReceiptClaimHours          Int      @default(48)
+  upstreamSensitiveCategories    String[] @default([])
+
   // 收款信息
   bankName        String?
   bankAccount     String?
@@ -1290,26 +1318,32 @@ model Supplier {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant                 Tenant                         @relation(fields: [tenantId], references: [id])
-  users                  User[]                         @relation("SupplierUsers")
-  products               Product[]
-  receipts               Receipt[]
-  reconciliations        Reconciliation[]
-  payments               Payment[]
-  paymentSchedules       PaymentSchedule[]
-  purchaseOrders         PurchaseOrder[]
-  deliveryOrders         DeliveryOrder[]
-  lossClaims             LossClaim[]
-  invoices               Invoice[]
-  stockMovements         SupplierStockMovement[]
-  stockBatches           SupplierStockBatch[]
-  stockBatchAllocations  SupplierStockBatchAllocation[]
-  stockReservations      SupplierStockReservation[]
-  productCategories      SupplierProductCategory[]
-  upstreamProductSources ProductUpstreamSource[]
-  warehouseLedgerMovements WarehouseLedgerMovement[]
-  nameAliases            SupplierNameAlias[]
-  deliveryRules          DeliveryRule[]
+  tenant                       Tenant                         @relation(fields: [tenantId], references: [id])
+  users                        User[]                         @relation("SupplierUsers")
+  products                     Product[]
+  receipts                     Receipt[]
+  reconciliations              Reconciliation[]
+  payments                     Payment[]
+  paymentSchedules             PaymentSchedule[]
+  purchaseOrders               PurchaseOrder[]
+  deliveryOrders               DeliveryOrder[]
+  lossClaims                   LossClaim[]
+  invoices                     Invoice[]
+  stockMovements               SupplierStockMovement[]
+  stockBatches                 SupplierStockBatch[]
+  stockBatchAllocations        SupplierStockBatchAllocation[]
+  stockReservations            SupplierStockReservation[]
+  productCategories            SupplierProductCategory[]
+  upstreamProductSources       ProductUpstreamSource[]
+  upstreamContracts            UpstreamSupplierContract[]
+  upstreamPurchaseOrders       UpstreamPurchaseOrder[]
+  upstreamShipments            UpstreamShipment[]
+  upstreamReceipts             UpstreamReceipt[]
+  upstreamArrivalClaims        UpstreamArrivalClaim[]
+  upstreamSettlementStatements UpstreamSettlementStatement[]
+  warehouseLedgerMovements     WarehouseLedgerMovement[]
+  nameAliases                  SupplierNameAlias[]
+  deliveryRules                DeliveryRule[]
 
   @@unique([tenantId, no])
   @@index([businessScopes], type: Gin, map: "suppliers_business_scopes_idx")
@@ -1389,6 +1423,11 @@ model Product {
   inventoryCountItems           InventoryCountItem[]
   storeInventoryPolicies        StoreInventoryPolicy[]
   upstreamSources               ProductUpstreamSource[]
+  upstreamContractLines         UpstreamSupplierContractLine[]
+  upstreamPurchaseOrderLines    UpstreamPurchaseOrderLine[]
+  upstreamShipmentLines         UpstreamShipmentLine[]
+  upstreamReceiptLines          UpstreamReceiptLine[]
+  upstreamArrivalClaimLines     UpstreamArrivalClaimLine[]
 
   @@unique([tenantId, code])
   @@unique([tenantId, id])
@@ -1417,9 +1456,10 @@ model ProductUpstreamSource {
   createdAt                     DateTime @default(now())
   updatedAt                     DateTime @updatedAt
 
-  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  product  Product  @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Cascade)
-  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  tenant        Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product       Product                        @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Cascade)
+  supplier      Supplier                       @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  contractLines UpstreamSupplierContractLine[]
 
   @@unique([tenantId, productId, supplierId])
   @@index([tenantId, supplierId, isActive])
@@ -1427,21 +1467,648 @@ model ProductUpstreamSource {
   @@map("product_upstream_sources")
 }
 
+// ══════════════════════════════════════════════════════
+//   上游供应商采购闭环（总仓向外部供应商采购）
+// ══════════════════════════════════════════════════════
+
+enum UpstreamContractStatus {
+  DRAFT
+  ACTIVE
+  EXPIRED
+  TERMINATED
+}
+
+enum UpstreamPurchaseOrderStatus {
+  DRAFT
+  PENDING_APPROVAL
+  SUBMITTED_TO_SUPPLIER
+  CHANGE_PROPOSED
+  SUPPLIER_ACCEPTED
+  PARTIALLY_SHIPPED
+  SHIPPED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  SETTLEMENT_PENDING
+  CLOSED
+  CANCELLED
+}
+
+enum UpstreamPurchaseOrderOrigin {
+  MANUAL
+  REPLENISHMENT
+  EMERGENCY
+  HISTORICAL_BACKFILL
+}
+
+enum UpstreamPurchaseOrderRevisionStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  SUPERSEDED
+}
+
+enum UpstreamShipmentStatus {
+  DRAFT
+  SHIPPED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+enum UpstreamReceiptStatus {
+  DRAFT
+  INSPECTING
+  PENDING_REVIEW
+  POSTED
+  REVERSED
+}
+
+enum UpstreamReceiptReviewReason {
+  AMOUNT_THRESHOLD
+  OVER_RECEIPT
+  TEMPORARY_PRICE
+  SENSITIVE_CATEGORY
+}
+
+enum UpstreamArrivalClaimType {
+  SHORTAGE
+  DAMAGE
+  QUALITY
+  WRONG_ITEM
+  OVERAGE
+  POST_RECEIPT_DAMAGE
+}
+
+enum UpstreamArrivalClaimStatus {
+  PENDING_SUPPLIER
+  SUPPLIER_ACCEPTED
+  SUPPLIER_REJECTED
+  ARBITRATION
+  AUTO_ACCEPTED
+  RESOLVED
+  CANCELLED
+}
+
+enum UpstreamClaimResponsibility {
+  SUPPLIER
+  BUYER
+  SHARED
+  PENDING
+}
+
+enum UpstreamClaimResolution {
+  DEDUCTION
+  REPLACEMENT
+  RETURN
+  SHARED_LOSS
+  BUYER_ABSORB
+  NO_ACTION
+}
+
+enum UpstreamSettlementStatus {
+  DRAFT
+  SENT_TO_SUPPLIER
+  DISPUTED
+  CONFIRMED
+  LOCKED
+  INVOICED
+  PAID
+  CANCELLED
+}
+
+enum UpstreamSettlementLineSourceType {
+  RECEIPT
+  CLAIM
+  RETURN
+  PRICE_ADJUSTMENT
+  OTHER_ADJUSTMENT
+}
+
+model UpstreamSupplierContract {
+  id              String                 @id @default(cuid()) @db.VarChar(64)
+  tenantId        String
+  supplierId      String
+  contractNo      String                 @db.VarChar(80)
+  version         Int                    @default(1)
+  title           String                 @db.VarChar(160)
+  startsAt        DateTime               @db.Date
+  endsAt          DateTime?              @db.Date
+  settlementCycle CreditType             @default(MONTHLY)
+  settlementDays  Int                    @default(0)
+  taxInclusive    Boolean                @default(true)
+  defaultTaxRate  Decimal?               @db.Decimal(7, 6)
+  currency        String                 @default("CNY") @db.VarChar(3)
+  paymentMethod   String?                @db.VarChar(80)
+  discrepancyRule Json?
+  attachments     Json?
+  status          UpstreamContractStatus @default(DRAFT)
+  createdById     String
+  activatedAt     DateTime?
+  terminatedAt    DateTime?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  tenant         Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplier       Supplier                       @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  lines          UpstreamSupplierContractLine[]
+  purchaseOrders UpstreamPurchaseOrder[]
+
+  @@unique([tenantId, supplierId, contractNo, version])
+  @@unique([tenantId, id])
+  @@index([tenantId, supplierId, status, startsAt])
+  @@map("upstream_supplier_contracts")
+}
+
+model UpstreamSupplierContractLine {
+  id                            String    @id @default(cuid()) @db.VarChar(64)
+  tenantId                      String
+  contractId                    String    @db.VarChar(64)
+  productId                     String
+  upstreamSourceId              String?   @db.VarChar(64)
+  productCodeSnapshot           String    @db.VarChar(80)
+  productNameSnapshot           String    @db.VarChar(160)
+  productSpecSnapshot           String?   @db.VarChar(240)
+  supplierSkuSnapshot           String?   @db.VarChar(80)
+  purchaseUnit                  String    @db.VarChar(16)
+  inventoryUnit                 String    @db.VarChar(16)
+  inventoryUnitsPerPurchaseUnit Decimal   @db.Decimal(18, 6)
+  unitPrice                     Decimal   @db.Decimal(18, 6)
+  taxRate                       Decimal   @default(0) @db.Decimal(7, 6)
+  minOrderQty                   Decimal   @default(1) @db.Decimal(18, 6)
+  packageMultiple               Decimal   @default(1) @db.Decimal(18, 6)
+  leadTimeDays                  Int       @default(0)
+  shortTolerancePct             Decimal   @default(0) @db.Decimal(7, 6)
+  overTolerancePct              Decimal   @default(0) @db.Decimal(7, 6)
+  startsAt                      DateTime  @db.Date
+  endsAt                        DateTime? @db.Date
+  isActive                      Boolean   @default(true)
+  createdAt                     DateTime  @default(now())
+  updatedAt                     DateTime  @updatedAt
+
+  tenant         Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contract       UpstreamSupplierContract    @relation(fields: [tenantId, contractId], references: [tenantId, id], onDelete: Cascade)
+  product        Product                     @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  upstreamSource ProductUpstreamSource?      @relation(fields: [upstreamSourceId], references: [id], onDelete: SetNull)
+  orderLines     UpstreamPurchaseOrderLine[]
+
+  @@unique([contractId, productId, startsAt])
+  @@index([tenantId, productId, isActive])
+  @@index([upstreamSourceId])
+  @@map("upstream_supplier_contract_lines")
+}
+
+model UpstreamPurchaseOrder {
+  id                 String                      @id @default(cuid()) @db.VarChar(64)
+  tenantId           String
+  no                 String                      @db.VarChar(80)
+  supplierId         String
+  warehouseId        String                      @db.VarChar(64)
+  contractId         String?                     @db.VarChar(64)
+  status             UpstreamPurchaseOrderStatus @default(DRAFT)
+  origin             UpstreamPurchaseOrderOrigin @default(MANUAL)
+  expectedArrivalAt  DateTime?
+  currency           String                      @default("CNY") @db.VarChar(3)
+  taxInclusive       Boolean                     @default(true)
+  amountWithoutTax   Decimal                     @default(0) @db.Decimal(20, 4)
+  taxAmount          Decimal                     @default(0) @db.Decimal(20, 4)
+  totalAmount        Decimal                     @default(0) @db.Decimal(20, 4)
+  currentRevisionNo  Int                         @default(0)
+  rowVersion         Int                         @default(0)
+  idempotencyKey     String?                     @db.VarChar(160)
+  hasTemporaryPrice  Boolean                     @default(false)
+  note               String?                     @db.VarChar(500)
+  createdById        String
+  approvedById       String?
+  submittedAt        DateTime?
+  supplierAcceptedAt DateTime?
+  cancelledAt        DateTime?
+  closedAt           DateTime?
+  createdAt          DateTime                    @default(now())
+  updatedAt          DateTime                    @updatedAt
+
+  tenant    Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplier  Supplier                        @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  warehouse Warehouse                       @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  contract  UpstreamSupplierContract?       @relation(fields: [tenantId, contractId], references: [tenantId, id], onDelete: Restrict)
+  lines     UpstreamPurchaseOrderLine[]
+  revisions UpstreamPurchaseOrderRevision[]
+  events    UpstreamPurchaseOrderEvent[]
+  shipments UpstreamShipment[]
+  receipts  UpstreamReceipt[]
+  claims    UpstreamArrivalClaim[]
+
+  @@unique([tenantId, no])
+  @@unique([tenantId, id])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, supplierId, status, expectedArrivalAt])
+  @@index([tenantId, warehouseId, status])
+  @@map("upstream_purchase_orders")
+}
+
+model UpstreamPurchaseOrderLine {
+  id                            String   @id @default(cuid()) @db.VarChar(64)
+  tenantId                      String
+  purchaseOrderId               String   @db.VarChar(64)
+  lineNo                        Int
+  productId                     String
+  contractLineId                String?  @db.VarChar(64)
+  productCodeSnapshot           String   @db.VarChar(80)
+  productNameSnapshot           String   @db.VarChar(160)
+  productSpecSnapshot           String?  @db.VarChar(240)
+  supplierSkuSnapshot           String?  @db.VarChar(80)
+  purchaseUnit                  String   @db.VarChar(16)
+  inventoryUnit                 String   @db.VarChar(16)
+  inventoryUnitsPerPurchaseUnit Decimal  @db.Decimal(18, 6)
+  orderedQty                    Decimal  @db.Decimal(18, 6)
+  confirmedQty                  Decimal? @db.Decimal(18, 6)
+  shippedQty                    Decimal  @default(0) @db.Decimal(18, 6)
+  receivedQty                   Decimal  @default(0) @db.Decimal(18, 6)
+  unitPrice                     Decimal  @db.Decimal(18, 6)
+  taxRate                       Decimal  @default(0) @db.Decimal(7, 6)
+  amountWithoutTax              Decimal  @db.Decimal(20, 4)
+  taxAmount                     Decimal  @db.Decimal(20, 4)
+  totalAmount                   Decimal  @db.Decimal(20, 4)
+  shortTolerancePct             Decimal  @default(0) @db.Decimal(7, 6)
+  overTolerancePct              Decimal  @default(0) @db.Decimal(7, 6)
+  isTemporaryPrice              Boolean  @default(false)
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
+
+  tenant        Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseOrder UpstreamPurchaseOrder         @relation(fields: [tenantId, purchaseOrderId], references: [tenantId, id], onDelete: Cascade)
+  product       Product                       @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  contractLine  UpstreamSupplierContractLine? @relation(fields: [contractLineId], references: [id], onDelete: Restrict)
+  shipmentLines UpstreamShipmentLine[]
+  receiptLines  UpstreamReceiptLine[]
+  claimLines    UpstreamArrivalClaimLine[]
+
+  @@unique([purchaseOrderId, lineNo])
+  @@unique([tenantId, id])
+  @@index([tenantId, productId])
+  @@map("upstream_purchase_order_lines")
+}
+
+model UpstreamPurchaseOrderRevision {
+  id              String                              @id @default(cuid()) @db.VarChar(64)
+  tenantId        String
+  purchaseOrderId String                              @db.VarChar(64)
+  revisionNo      Int
+  status          UpstreamPurchaseOrderRevisionStatus @default(PENDING)
+  reason          String                              @db.VarChar(500)
+  beforeSnapshot  Json
+  afterSnapshot   Json
+  requestedById   String
+  requestedByRole String                              @db.VarChar(40)
+  reviewedById    String?
+  reviewedAt      DateTime?
+  reviewNote      String?                             @db.VarChar(500)
+  createdAt       DateTime                            @default(now())
+  updatedAt       DateTime                            @updatedAt
+
+  tenant        Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseOrder UpstreamPurchaseOrder @relation(fields: [tenantId, purchaseOrderId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([purchaseOrderId, revisionNo])
+  @@index([tenantId, status, createdAt])
+  @@map("upstream_purchase_order_revisions")
+}
+
+model UpstreamPurchaseOrderEvent {
+  id              String   @id @default(cuid()) @db.VarChar(64)
+  tenantId        String
+  purchaseOrderId String   @db.VarChar(64)
+  action          String   @db.VarChar(80)
+  fromStatus      String?  @db.VarChar(40)
+  toStatus        String?  @db.VarChar(40)
+  actorId         String?
+  actorRole       String?  @db.VarChar(40)
+  metadata        Json?
+  createdAt       DateTime @default(now())
+
+  tenant        Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseOrder UpstreamPurchaseOrder @relation(fields: [tenantId, purchaseOrderId], references: [tenantId, id], onDelete: Cascade)
+
+  @@index([tenantId, purchaseOrderId, createdAt])
+  @@map("upstream_purchase_order_events")
+}
+
+model UpstreamShipment {
+  id                 String                 @id @default(cuid()) @db.VarChar(64)
+  tenantId           String
+  no                 String                 @db.VarChar(80)
+  purchaseOrderId    String                 @db.VarChar(64)
+  supplierId         String
+  warehouseId        String                 @db.VarChar(64)
+  supplierShipmentNo String?                @db.VarChar(100)
+  status             UpstreamShipmentStatus @default(DRAFT)
+  carrierName        String?                @db.VarChar(100)
+  trackingNo         String?                @db.VarChar(100)
+  driverName         String?                @db.VarChar(80)
+  driverPhone        String?                @db.VarChar(40)
+  vehicleNo          String?                @db.VarChar(40)
+  expectedArrivalAt  DateTime?
+  shippedAt          DateTime?
+  attachments        Json?
+  note               String?                @db.VarChar(500)
+  idempotencyKey     String?                @db.VarChar(160)
+  createdById        String
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  tenant        Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseOrder UpstreamPurchaseOrder  @relation(fields: [tenantId, purchaseOrderId], references: [tenantId, id], onDelete: Restrict)
+  supplier      Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  warehouse     Warehouse              @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  lines         UpstreamShipmentLine[]
+  receipts      UpstreamReceipt[]
+
+  @@unique([tenantId, no])
+  @@unique([tenantId, id])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, supplierId, status, expectedArrivalAt])
+  @@map("upstream_shipments")
+}
+
+model UpstreamShipmentLine {
+  id                  String    @id @default(cuid()) @db.VarChar(64)
+  tenantId            String
+  shipmentId          String    @db.VarChar(64)
+  purchaseOrderLineId String    @db.VarChar(64)
+  productId           String
+  shippedQty          Decimal   @db.Decimal(18, 6)
+  purchaseUnit        String    @db.VarChar(16)
+  batchNo             String?   @db.VarChar(80)
+  manufactureDate     DateTime? @db.Date
+  expiryDate          DateTime? @db.Date
+  packageInfo         String?   @db.VarChar(240)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  tenant            Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shipment          UpstreamShipment          @relation(fields: [tenantId, shipmentId], references: [tenantId, id], onDelete: Cascade)
+  purchaseOrderLine UpstreamPurchaseOrderLine @relation(fields: [tenantId, purchaseOrderLineId], references: [tenantId, id], onDelete: Restrict)
+  product           Product                   @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  receiptLines      UpstreamReceiptLine[]
+
+  @@unique([shipmentId, purchaseOrderLineId])
+  @@unique([tenantId, id])
+  @@index([tenantId, productId])
+  @@map("upstream_shipment_lines")
+}
+
+model UpstreamReceipt {
+  id                  String                        @id @default(cuid()) @db.VarChar(64)
+  tenantId            String
+  no                  String                        @db.VarChar(80)
+  purchaseOrderId     String                        @db.VarChar(64)
+  shipmentId          String?                       @db.VarChar(64)
+  supplierId          String
+  warehouseId         String                        @db.VarChar(64)
+  status              UpstreamReceiptStatus         @default(DRAFT)
+  arrivedAt           DateTime?
+  inspectionStartedAt DateTime?
+  inspectorId         String?
+  reviewReasons       UpstreamReceiptReviewReason[] @default([])
+  reviewerId          String?
+  reviewedAt          DateTime?
+  payableAmount       Decimal                       @default(0) @db.Decimal(20, 4)
+  idempotencyKey      String?                       @db.VarChar(160)
+  rowVersion          Int                           @default(0)
+  evidence            Json?
+  note                String?                       @db.VarChar(500)
+  finalForShipment    Boolean                       @default(true)
+  postedAt            DateTime?
+  reversedAt          DateTime?
+  createdById         String
+  createdAt           DateTime                      @default(now())
+  updatedAt           DateTime                      @updatedAt
+
+  tenant        Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseOrder UpstreamPurchaseOrder  @relation(fields: [tenantId, purchaseOrderId], references: [tenantId, id], onDelete: Restrict)
+  shipment      UpstreamShipment?      @relation(fields: [tenantId, shipmentId], references: [tenantId, id], onDelete: Restrict)
+  supplier      Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  warehouse     Warehouse              @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  lines         UpstreamReceiptLine[]
+  claims        UpstreamArrivalClaim[]
+
+  @@unique([tenantId, no])
+  @@unique([tenantId, id])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, supplierId, status, arrivedAt])
+  @@map("upstream_receipts")
+}
+
+model UpstreamReceiptLine {
+  id                            String    @id @default(cuid()) @db.VarChar(64)
+  tenantId                      String
+  receiptId                     String    @db.VarChar(64)
+  purchaseOrderLineId           String    @db.VarChar(64)
+  shipmentLineId                String?   @db.VarChar(64)
+  productId                     String
+  orderedQty                    Decimal   @db.Decimal(18, 6)
+  shippedQty                    Decimal?  @db.Decimal(18, 6)
+  arrivedQty                    Decimal   @db.Decimal(18, 6)
+  acceptedQty                   Decimal   @db.Decimal(18, 6)
+  damagedQty                    Decimal   @default(0) @db.Decimal(18, 6)
+  rejectedQty                   Decimal   @default(0) @db.Decimal(18, 6)
+  shortageQty                   Decimal   @default(0) @db.Decimal(18, 6)
+  overageQty                    Decimal   @default(0) @db.Decimal(18, 6)
+  purchaseUnit                  String    @db.VarChar(16)
+  inventoryUnit                 String    @db.VarChar(16)
+  inventoryUnitsPerPurchaseUnit Decimal   @db.Decimal(18, 6)
+  inventoryAcceptedQty          Decimal   @db.Decimal(18, 6)
+  unitPrice                     Decimal   @db.Decimal(18, 6)
+  payableAmount                 Decimal   @db.Decimal(20, 4)
+  batchNo                       String?   @db.VarChar(80)
+  manufactureDate               DateTime? @db.Date
+  expiryDate                    DateTime? @db.Date
+  ledgerMovementId              String?   @unique @db.VarChar(64)
+  evidence                      Json?
+  note                          String?   @db.VarChar(500)
+  createdAt                     DateTime  @default(now())
+  updatedAt                     DateTime  @updatedAt
+
+  tenant            Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  receipt           UpstreamReceipt            @relation(fields: [tenantId, receiptId], references: [tenantId, id], onDelete: Cascade)
+  purchaseOrderLine UpstreamPurchaseOrderLine  @relation(fields: [tenantId, purchaseOrderLineId], references: [tenantId, id], onDelete: Restrict)
+  shipmentLine      UpstreamShipmentLine?      @relation(fields: [tenantId, shipmentLineId], references: [tenantId, id], onDelete: Restrict)
+  product           Product                    @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  ledgerMovement    WarehouseLedgerMovement?   @relation("UpstreamReceiptLedgerMovement", fields: [ledgerMovementId], references: [id], onDelete: Restrict)
+  claimLines        UpstreamArrivalClaimLine[]
+  settlementLines   UpstreamSettlementLine[]
+
+  @@unique([receiptId, purchaseOrderLineId])
+  @@unique([tenantId, id])
+  @@index([tenantId, productId])
+  @@map("upstream_receipt_lines")
+}
+
+model UpstreamArrivalClaim {
+  id                  String                      @id @default(cuid()) @db.VarChar(64)
+  tenantId            String
+  no                  String                      @db.VarChar(80)
+  purchaseOrderId     String                      @db.VarChar(64)
+  receiptId           String                      @db.VarChar(64)
+  supplierId          String
+  type                UpstreamArrivalClaimType
+  status              UpstreamArrivalClaimStatus  @default(PENDING_SUPPLIER)
+  responsibility      UpstreamClaimResponsibility @default(PENDING)
+  resolution          UpstreamClaimResolution?
+  claimedAmount       Decimal                     @default(0) @db.Decimal(20, 4)
+  resolvedAmount      Decimal?                    @db.Decimal(20, 4)
+  description         String                      @db.VarChar(1000)
+  evidence            Json?
+  supplierResponse    String?                     @db.VarChar(1000)
+  supplierRespondedAt DateTime?
+  responseDueAt       DateTime?
+  arbitratedById      String?
+  resolvedById        String?
+  resolvedAt          DateTime?
+  idempotencyKey      String?                     @db.VarChar(160)
+  createdById         String
+  createdAt           DateTime                    @default(now())
+  updatedAt           DateTime                    @updatedAt
+
+  tenant          Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseOrder   UpstreamPurchaseOrder      @relation(fields: [tenantId, purchaseOrderId], references: [tenantId, id], onDelete: Restrict)
+  receipt         UpstreamReceipt            @relation(fields: [tenantId, receiptId], references: [tenantId, id], onDelete: Restrict)
+  supplier        Supplier                   @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  lines           UpstreamArrivalClaimLine[]
+  settlementLines UpstreamSettlementLine[]
+
+  @@unique([tenantId, no])
+  @@unique([tenantId, id])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, supplierId, status, createdAt])
+  @@map("upstream_arrival_claims")
+}
+
+model UpstreamArrivalClaimLine {
+  id                  String   @id @default(cuid()) @db.VarChar(64)
+  tenantId            String
+  claimId             String   @db.VarChar(64)
+  receiptLineId       String   @db.VarChar(64)
+  purchaseOrderLineId String   @db.VarChar(64)
+  productId           String
+  affectedQty         Decimal  @db.Decimal(18, 6)
+  purchaseUnit        String   @db.VarChar(16)
+  unitPrice           Decimal  @db.Decimal(18, 6)
+  claimedAmount       Decimal  @db.Decimal(20, 4)
+  resolvedAmount      Decimal? @db.Decimal(20, 4)
+  lossMovementId      String?  @unique @db.VarChar(64)
+  createdAt           DateTime @default(now())
+
+  tenant            Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  claim             UpstreamArrivalClaim      @relation(fields: [tenantId, claimId], references: [tenantId, id], onDelete: Cascade)
+  receiptLine       UpstreamReceiptLine       @relation(fields: [tenantId, receiptLineId], references: [tenantId, id], onDelete: Restrict)
+  purchaseOrderLine UpstreamPurchaseOrderLine @relation(fields: [tenantId, purchaseOrderLineId], references: [tenantId, id], onDelete: Restrict)
+  product           Product                   @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  lossMovement      WarehouseLedgerMovement?  @relation("UpstreamClaimLossLedgerMovement", fields: [lossMovementId], references: [id], onDelete: Restrict)
+
+  @@unique([claimId, receiptLineId])
+  @@index([tenantId, productId])
+  @@map("upstream_arrival_claim_lines")
+}
+
+model UpstreamSettlementStatement {
+  id                    String                   @id @default(cuid()) @db.VarChar(64)
+  tenantId              String
+  no                    String                   @db.VarChar(80)
+  supplierId            String
+  periodStart           DateTime                 @db.Date
+  periodEnd             DateTime                 @db.Date
+  currency              String                   @default("CNY") @db.VarChar(3)
+  status                UpstreamSettlementStatus @default(DRAFT)
+  openingUnsettled      Decimal                  @default(0) @db.Decimal(20, 4)
+  receiptAmount         Decimal                  @default(0) @db.Decimal(20, 4)
+  deductionAmount       Decimal                  @default(0) @db.Decimal(20, 4)
+  adjustmentAmount      Decimal                  @default(0) @db.Decimal(20, 4)
+  payableAmount         Decimal                  @default(0) @db.Decimal(20, 4)
+  version               Int                      @default(1)
+  buyerConfirmedById    String?
+  buyerConfirmedAt      DateTime?
+  supplierConfirmedById String?
+  supplierConfirmedAt   DateTime?
+  lockedById            String?
+  lockedAt              DateTime?
+  paidAt                DateTime?
+  note                  String?                  @db.VarChar(500)
+  createdById           String
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+
+  tenant             Tenant                                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplier           Supplier                              @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  lines              UpstreamSettlementLine[]
+  invoiceAllocations UpstreamSettlementInvoiceAllocation[]
+
+  @@unique([tenantId, no])
+  @@unique([tenantId, supplierId, periodStart, periodEnd, version])
+  @@index([tenantId, supplierId, status, periodEnd])
+  @@map("upstream_settlement_statements")
+}
+
+model UpstreamSettlementLine {
+  id               String                           @id @default(cuid()) @db.VarChar(64)
+  tenantId         String
+  statementId      String                           @db.VarChar(64)
+  sourceType       UpstreamSettlementLineSourceType
+  sourceId         String                           @db.VarChar(64)
+  sourceNo         String                           @db.VarChar(80)
+  businessDate     DateTime                         @db.Date
+  receiptLineId    String?                          @db.VarChar(64)
+  claimId          String?                          @db.VarChar(64)
+  description      String                           @db.VarChar(500)
+  originalAmount   Decimal                          @default(0) @db.Decimal(20, 4)
+  adjustmentAmount Decimal                          @default(0) @db.Decimal(20, 4)
+  payableAmount    Decimal                          @db.Decimal(20, 4)
+  createdAt        DateTime                         @default(now())
+
+  tenant      Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  statement   UpstreamSettlementStatement @relation(fields: [statementId], references: [id], onDelete: Cascade)
+  receiptLine UpstreamReceiptLine?        @relation(fields: [receiptLineId], references: [id], onDelete: Restrict)
+  claim       UpstreamArrivalClaim?       @relation(fields: [claimId], references: [id], onDelete: Restrict)
+
+  @@unique([statementId, sourceType, sourceId])
+  @@index([tenantId, businessDate])
+  @@index([receiptLineId])
+  @@index([claimId])
+  @@map("upstream_settlement_lines")
+}
+
+model UpstreamSettlementInvoiceAllocation {
+  id          String   @id @default(cuid()) @db.VarChar(64)
+  tenantId    String
+  statementId String   @db.VarChar(64)
+  invoiceId   String
+  amount      Decimal  @db.Decimal(20, 4)
+  createdById String
+  createdAt   DateTime @default(now())
+
+  tenant    Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  statement UpstreamSettlementStatement @relation(fields: [statementId], references: [id], onDelete: Restrict)
+  invoice   Invoice                     @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@unique([statementId, invoiceId])
+  @@index([tenantId, invoiceId])
+  @@map("upstream_settlement_invoice_allocations")
+}
+
 // ── 供应商商品/库存分类主数据 ─────────────────────────
 // Product.category 继续保留名称快照以兼容订单、导入和历史数据；
 // 此表负责分类的新增、改名、排序及停用状态。
 model SupplierProductCategory {
-  id         String   @id @default(cuid())
-  tenantId   String
-  supplierId String
-  name       String   @db.VarChar(40)
-  sortOrder  Int      @default(0)
-  isActive   Boolean  @default(true)
-  isSystem   Boolean  @default(false) // “其他”等系统兜底分类不可停用/改名
+  id                   String   @id @default(cuid())
+  tenantId             String
+  supplierId           String
+  name                 String   @db.VarChar(40)
+  sortOrder            Int      @default(0)
+  isActive             Boolean  @default(true)
+  isSystem             Boolean  @default(false) // “其他”等系统兜底分类不可停用/改名
   // 分类默认加价比例%（比例加价定价）：商品未自填比例时继承；为空则该分类商品固定价
   defaultMarkupPercent Decimal? @db.Decimal(7, 2)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   tenant   Tenant   @relation(fields: [tenantId], references: [id])
   supplier Supplier @relation(fields: [supplierId], references: [id])
@@ -1620,38 +2287,39 @@ model PaymentSchedule {
 // ── 发票 (供应商上传 → 财务审核 → 财务分次付款) ──
 // 月度场景: 1 张总票对应 N 个订单, 财务可分次部分付款, 累计 ≤ 开票金额
 model Invoice {
-  id               String           @id @default(cuid())
-  tenantId         String
-  supplierId       String
+  id                            String                                @id @default(cuid())
+  tenantId                      String
+  supplierId                    String
   // 发票信息
-  invoiceNo        String // 发票号码
-  invoiceCode      String? // 发票代码 (旧版增值税票有, 电子发票无)
-  amount           Decimal          @db.Decimal(12, 2) // 价税合计 (开票金额)
-  amountWithoutTax Decimal?         @db.Decimal(12, 2) // 不含税金额
-  taxRate          Decimal?         @db.Decimal(5, 4) // 税率, 例 0.06
-  taxAmount        Decimal?         @db.Decimal(12, 2) // 税额
-  issueDate        DateTime // 开票日期
+  invoiceNo                     String // 发票号码
+  invoiceCode                   String? // 发票代码 (旧版增值税票有, 电子发票无)
+  amount                        Decimal                               @db.Decimal(12, 2) // 价税合计 (开票金额)
+  amountWithoutTax              Decimal?                              @db.Decimal(12, 2) // 不含税金额
+  taxRate                       Decimal?                              @db.Decimal(5, 4) // 税率, 例 0.06
+  taxAmount                     Decimal?                              @db.Decimal(12, 2) // 税额
+  issueDate                     DateTime // 开票日期
   // 文件
-  fileUrl          String // OSS URL
-  fileType         String           @default("image") // image | pdf
-  note             String?
+  fileUrl                       String // OSS URL
+  fileType                      String                                @default("image") // image | pdf
+  note                          String?
   // 上传 / 审核
-  uploadedById     String // 谁上传(供应商账号)
-  uploadedAt       DateTime         @default(now())
-  status           InvoiceStatus    @default(PENDING)
-  reviewedById     String?
-  reviewedAt       DateTime?
-  reviewNote       String?
+  uploadedById                  String // 谁上传(供应商账号)
+  uploadedAt                    DateTime                              @default(now())
+  status                        InvoiceStatus                         @default(PENDING)
+  reviewedById                  String?
+  reviewedAt                    DateTime?
+  reviewNote                    String?
   // 付款累计 (分次部分付款, 关键)
-  paidAmount       Decimal          @default(0) @db.Decimal(12, 2) // 累计已付金额, paidAmount ≤ amount
-  fullyPaidAt      DateTime? // 全部付清的时间(=null 说明还有余额)
+  paidAmount                    Decimal                               @default(0) @db.Decimal(12, 2) // 累计已付金额, paidAmount ≤ amount
+  fullyPaidAt                   DateTime? // 全部付清的时间(=null 说明还有余额)
   // 派生字段(计算): remainingAmount = amount - paidAmount
   // 关联
-  tenant           Tenant           @relation(fields: [tenantId], references: [id])
-  supplier         Supplier         @relation(fields: [supplierId], references: [id])
-  uploadedBy       User             @relation("InvoiceUploader", fields: [uploadedById], references: [id])
-  receipts         Receipt[] // 一张发票可对多张订单/入库(月底统一开票)
-  payments         InvoicePayment[] // 多次部分付款
+  tenant                        Tenant                                @relation(fields: [tenantId], references: [id])
+  supplier                      Supplier                              @relation(fields: [supplierId], references: [id])
+  uploadedBy                    User                                  @relation("InvoiceUploader", fields: [uploadedById], references: [id])
+  receipts                      Receipt[] // 一张发票可对多张订单/入库(月底统一开票)
+  payments                      InvoicePayment[] // 多次部分付款
+  upstreamSettlementAllocations UpstreamSettlementInvoiceAllocation[]
 
   @@unique([tenantId, supplierId, invoiceNo]) // 同一供应商同一票号唯一
   @@index([tenantId, status])
@@ -2337,25 +3005,25 @@ model PaymentRule {
 // enforce=false 只做软引导（下单页默认填最快到货日并提示），enforce=true 硬控制
 // （非送货日/不在订货时段直接拦截下单）。
 model DeliveryRule {
-  id                 String    @id @default(cuid())
-  tenantId           String
-  no                 String    @db.VarChar(32) // PS+日期+序号
-  name               String    @db.VarChar(80) // 线路名，如「南京线」
-  supplierId         String? // 供货机构；null = 内部供应链总仓
-  deliveryScheduleMode String   @default("WEEKLY") @db.VarChar(16) // WEEKLY | INTERVAL，两种送货日规则二选一
-  weekdays             Int[] // WEEKLY：送货日，1=周一 … 7=周日；INTERVAL 时为空数组
-  leadDays             Int       @default(1) // 下单后第 N 个送货日到货
-  deliveryIntervalDays Int? // INTERVAL：每隔 N 天送货，1～6
+  id                    String    @id @default(cuid())
+  tenantId              String
+  no                    String    @db.VarChar(32) // PS+日期+序号
+  name                  String    @db.VarChar(80) // 线路名，如「南京线」
+  supplierId            String? // 供货机构；null = 内部供应链总仓
+  deliveryScheduleMode  String    @default("WEEKLY") @db.VarChar(16) // WEEKLY | INTERVAL，两种送货日规则二选一
+  weekdays              Int[] // WEEKLY：送货日，1=周一 … 7=周日；INTERVAL 时为空数组
+  leadDays              Int       @default(1) // 下单后第 N 个送货日到货
+  deliveryIntervalDays  Int? // INTERVAL：每隔 N 天送货，1～6
   deliveryIntervalStart DateTime? @db.Date // INTERVAL 起算日期
-  orderWindowStart   String?   @db.VarChar(5) // 允许订货开始 "09:00"，空=不限
-  orderWindowEnd     String?   @db.VarChar(5) // 允许订货结束 "22:00"
-  enforce            Boolean   @default(false)
-  effectiveFrom      DateTime? @db.Date
-  effectiveTo        DateTime? @db.Date
-  status             String    @default("ENABLED") @db.VarChar(16) // ENABLED | DISABLED
-  note               String?   @db.VarChar(240)
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  orderWindowStart      String?   @db.VarChar(5) // 允许订货开始 "09:00"，空=不限
+  orderWindowEnd        String?   @db.VarChar(5) // 允许订货结束 "22:00"
+  enforce               Boolean   @default(false)
+  effectiveFrom         DateTime? @db.Date
+  effectiveTo           DateTime? @db.Date
+  status                String    @default("ENABLED") @db.VarChar(16) // ENABLED | DISABLED
+  note                  String?   @db.VarChar(240)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   tenant   Tenant              @relation(fields: [tenantId], references: [id])
   supplier Supplier?           @relation(fields: [supplierId], references: [id])
@@ -2456,7 +3124,7 @@ model UserApplication {
   supplierName String? // 注册新供应商公司名 → 审批后 SUPPLIER_OWNER + 自动创建 Supplier
 
   // 门店绑定 (requestedRole 为 MANAGER / KITCHEN_LEAD 时必填; 老板审批时预填可改)
-  requestedStoreId String?
+  requestedStoreId  String?
   // 多店申请：审批通过后写入 users.storeIds；为空时回退 requestedStoreId 单店
   requestedStoreIds String[] @default([])
 

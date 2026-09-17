@@ -274,7 +274,15 @@ describe('product direct actions (SUPPLY_CHAIN)', () => {
       })
 
       expect(response.statusCode).toBe(400)
-      expect(response.json().error).toContain('供应商不存在或不属于当前租户')
+      expect(response.json().error).toContain('已启用的门店履约方')
+      expect(mocks.supplierFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          id: otherSupplierId,
+          tenantId,
+          status: 'ENABLED',
+          businessScopes: { has: 'STORE_FULFILLER' },
+        }),
+      }))
       expect(mocks.productCreate).not.toHaveBeenCalled()
       expect(mocks.notifyProductChange).not.toHaveBeenCalled()
     })

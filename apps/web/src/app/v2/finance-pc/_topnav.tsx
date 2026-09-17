@@ -20,6 +20,7 @@ const TABS: Tab[] = [
     matchPrefix: '/v2/finance-pc/payable',
     group: [
       { label: '应付管理',     href: '/v2/finance-pc/payable',           desc: '按发票分次付款' },
+      { label: '上游采购对账', href: '/v2/finance-pc/upstream-settlements', desc: '供应商确认后由财务复核锁定' },
       { label: '发票审核',     href: '/v2/finance-pc/invoices',          desc: '财务通过后解锁付款', badgeKey: 'invoicePending' },
       { label: '待开票跟踪',   href: '/v2/finance-pc/invoices-pending',  desc: '已付款但供应商没开发票, 催办主战场', badgeKey: 'pendingInvoice' },
       { label: '资本支出审批', href: '/v2/finance-pc/capital-review',    desc: '店长申请 → 老板批 → 财务付' },

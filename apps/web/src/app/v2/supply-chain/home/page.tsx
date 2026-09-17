@@ -44,6 +44,18 @@ type WarehouseInventoryResponse = {
   items: Array<{ statusFlag: 'OK' | 'LOW' | 'OUT' | 'SHADOW_GAP' }>
 }
 
+type UpstreamWorkbench = {
+  audience: 'INTERNAL'
+  total: number
+  counts: {
+    orders: number
+    shipments: number
+    receipts: number
+    claims: number
+    statements: number
+  }
+}
+
 const STATUS_LABEL: Record<string, string> = {
   SUBMITTED: '待接单',
   CONFIRMED: '待发货',
@@ -67,6 +79,7 @@ export default function InternalSupplyChainHomePage() {
     lowStock: number
     outOfStock: number
   } | null>(null)
+  const [upstream, setUpstream] = useState<UpstreamWorkbench | null>(null)
 
   useEffect(() => {
     apiFetch<any>('/api/orders?pageSize=50')
@@ -82,6 +95,9 @@ export default function InternalSupplyChainHomePage() {
         outOfStock: d.items.filter(item => item.statusFlag === 'OUT').length,
       }))
       .catch(() => setInvSummary(null))
+    apiFetch<UpstreamWorkbench>('/api/upstream/workbench')
+      .then(setUpstream)
+      .catch(() => setUpstream(null))
   }, [])
 
   if (error) return <ErrorScreen message={error} />
@@ -94,7 +110,8 @@ export default function InternalSupplyChainHomePage() {
     delivering: (orders || []).filter(o => o.status === 'DELIVERING').length,
     pendingConfirm: (orders || []).filter(o => o.status === 'PENDING_CONFIRM').length,
   }
-  const todoCount = actionCounts.submitted + actionCounts.confirmed + actionCounts.delivering
+  const downstreamTodoCount = actionCounts.submitted + actionCounts.confirmed + actionCounts.delivering
+  const todoCount = downstreamTodoCount + (upstream?.total || 0)
 
   const pendingDiffs = (diffs || []).filter(d => d.status === 'PENDING').slice(0, 3)
   const inProgressOrders = (orders || []).filter(o =>
@@ -148,6 +165,19 @@ export default function InternalSupplyChainHomePage() {
           )}
           {orders !== null && diffs !== null && todoCount === 0 && pendingDiffs.length === 0 && (
             <p className="text-caption text-gray3 text-center py-4">✓ 今日无加急</p>
+          )}
+
+          {upstream && upstream.total > 0 && (
+            <TodoCard
+              tone="immediate"
+              chips={[
+                { label: '上游采购', tone: 'red' },
+                { label: `${upstream.total} 项待办`, tone: 'gray' },
+              ]}
+              title="上游供应商协同待处理"
+              sub={`订单 ${upstream.counts.orders} · 到仓 ${upstream.counts.shipments + upstream.counts.receipts} · 差异 ${upstream.counts.claims} · 对账 ${upstream.counts.statements}`}
+              primary={{ label: '去处理', onClick: () => { location.href = '/v2/supply-chain/procurement' } }}
+            />
           )}
 
           {/* 订单待办 */}
@@ -211,11 +241,12 @@ export default function InternalSupplyChainHomePage() {
 
       {/* 常用入口 — 2×2 紧凑网格 */}
       <Section title="常用入口">
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
           <QuickEntry href="/v2/supply-chain/fulfillment" icon="☷" label="订单中心" desc="待处理、配送与签收" tone="amber" />
           <QuickEntry href="/v2/supply-chain/stores" icon="店" label="门店运营" desc="订货、收货、消耗" tone="green" />
           <QuickEntry href="/v2/supply-chain/inventory" icon="仓" label="仓库库存" desc="库存、入库、批次" tone="default" />
           <QuickEntry href="/v2/supply-chain/products" icon="品" label="商品管理" desc="SKU、分类、报价" tone="default" />
+          <QuickEntry href="/v2/supply-chain/procurement" icon="采" label="上游采购" desc="下单、验收、差异与月结" tone="default" />
         </div>
       </Section>
 

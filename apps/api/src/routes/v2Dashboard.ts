@@ -59,7 +59,7 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
       where: { id: userId },
       include: {
         store: { select: { id: true, name: true, no: true } },
-        supplier: { select: { id: true, name: true } },
+        supplier: { select: { id: true, name: true, businessScopes: true } },
       },
     })
     if (!user) return reply.status(404).send({ error: '用户不存在' })

@@ -20,6 +20,7 @@ import {
   type SingleDeliveryNotePreviewPayload,
 } from '@/lib/single-delivery-note-preview'
 import { parseOperationGroupDeliveryNoteProjection } from '@/lib/operation-group-delivery-note-preview'
+import { num2cn } from '@/lib/num2cn'
 
 type Order = {
   id: string; no: string; status: string
@@ -505,32 +506,6 @@ function normalizeOperationGroup(data: OperationGroupResponse): NormalizedOperat
       submittedAt: item.submittedAt || null,
     })),
   }
-}
-
-// 阿拉伯数字 → 中文大写金额 (财务规范)
-function num2cn(n: number): string {
-  if (!Number.isFinite(n)) return '零元整'
-  if (n === 0) return '零元整'
-  const fraction = ['角', '分']
-  const digit = ['零', '壹', '贰', '叁', '肆', '伍', '陆', '柒', '捌', '玖']
-  const unit = [['元', '万', '亿'], ['', '拾', '佰', '仟']]
-  const head = n < 0 ? '负' : ''
-  n = Math.abs(n)
-  let s = ''
-  for (let i = 0; i < fraction.length; i++) {
-    s += (digit[Math.floor(n * 10 * Math.pow(10, i)) % 10] + fraction[i]).replace(/零./, '')
-  }
-  s = s || '整'
-  let intPart = Math.floor(n).toString()
-  for (let i = 0; i < unit[0].length && intPart.length > 0; i++) {
-    let p = ''
-    for (let j = 0; j < unit[1].length && intPart.length > 0; j++) {
-      p = digit[+intPart.slice(-1)] + unit[1][j] + p
-      intPart = intPart.slice(0, -1)
-    }
-    s = p.replace(/(零.)*零$/, '').replace(/^$/, '零') + unit[0][i] + s
-  }
-  return head + s.replace(/(零.)*零元/, '元').replace(/(零.)+/g, '零').replace(/^整$/, '零元整')
 }
 
 export default function DeliveryNotePrintPage() {

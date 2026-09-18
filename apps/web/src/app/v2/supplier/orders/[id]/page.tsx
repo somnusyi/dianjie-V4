@@ -580,19 +580,21 @@ export default function SupplierOrderDetailPage() {
 
   function rejectOrder() {
     if (!order || isOperationGroupContext) return
-    const reason = window.prompt('请说明拒单原因 (店长能看到):')
-    if (!reason || !reason.trim()) return
     openConfirm({
       title: `拒单 ${order.no}?`,
-      body: `理由: ${reason.trim()}\n\n拒单后订单将被取消, 店长收到通知, 需要重新下单.`,
+      body: '拒单后订单将被取消, 店长收到通知, 需要重新下单.',
       confirmLabel: '确认拒单',
       tone: 'danger',
-      onConfirm: async () => {
+      withInput: true,
+      inputRequired: true,
+      inputPlaceholder: '请说明拒单原因 (店长能看到)',
+      onConfirm: async (reason) => {
+        if (!reason) return
         setSubmitting(true)
         try {
           await apiFetch(`/api/orders/${order.id}/reject`, {
             method: 'PATCH',
-            body: JSON.stringify({ reason: reason.trim() }),
+            body: JSON.stringify({ reason }),
           })
           load()
         } catch (e: any) { setError(e.message || '拒单失败'); throw e }

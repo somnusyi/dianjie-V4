@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ProgressDots, Chip } from '@/components/v2'
+import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch } from '@/lib/v2-auth'
 
 const STATUS_TO_STEP: Record<string, number> = {
@@ -29,6 +30,7 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
   const [reviewError, setReviewError] = useState<string | null>(null)
   // 图片放大: target="_blank" 在 WebView 不工作, 用全屏 lightbox
   const [zoomImg, setZoomImg] = useState<string | null>(null)
+  const [cancelConfirm, openCancelConfirm] = useConfirmSheet()
   useEffect(() => {
     apiFetch(`/api/orders/${params.id}`).then(setPo).catch(e => setError(String(e?.message || e)))
   }, [params.id])
@@ -292,19 +294,27 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
         {/* 撤回 — 2026-05-29 客户反馈: 放宽到供应商发货前 (SUBMITTED + CONFIRMED) */}
         {(po.status === 'SUBMITTED' || po.status === 'CONFIRMED') && (
           <button
-            onClick={async () => {
-              const hint = po.status === 'CONFIRMED'
-                ? `⚠ 该单供应商已接单 (可能正在备货). 撤回后供应商会被通知"立即停止备货".\n\n撤回原因 (必填, 供应商可见):`
-                : '撤回原因 (必填, 供应商可见):'
-              const reason = window.prompt(hint)?.trim() || ''
-              if (!reason) return
-              if (!confirm(`确认撤回订单 ${po.no}? 撤回后无法恢复, 需要重新下单`)) return
-              try {
-                await apiFetch(`/api/orders/${po.id}/cancel`, {
-                  method: 'PATCH', body: JSON.stringify({ reason })
-                })
-                location.reload()
-              } catch (e: any) { alert(e.message || '撤回失败') }
+            onClick={() => {
+              openCancelConfirm({
+                title: `撤回订单 ${po.no}?`,
+                body: (po.status === 'CONFIRMED'
+                  ? '⚠ 该单供应商已接单 (可能正在备货). 撤回后供应商会被通知"立即停止备货".\n\n'
+                  : '') + '撤回后无法恢复, 需要重新下单.',
+                confirmLabel: '确认撤回',
+                tone: 'danger',
+                withInput: true,
+                inputRequired: true,
+                inputPlaceholder: '撤回原因 (必填, 供应商可见)',
+                onConfirm: async (reason) => {
+                  if (!reason) return
+                  try {
+                    await apiFetch(`/api/orders/${po.id}/cancel`, {
+                      method: 'PATCH', body: JSON.stringify({ reason })
+                    })
+                    location.reload()
+                  } catch (e: any) { setError(e.message || '撤回失败'); throw e }
+                },
+              })
             }}
             className="px-4 py-3 bg-white border border-red text-red-fg rounded-cta text-button">
             撤回
@@ -346,6 +356,7 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
                   className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/20 text-white text-h2 flex items-center justify-center">×</button>
         </div>
       )}
+      <ConfirmSheet {...cancelConfirm} />
     </div>
   )
 }

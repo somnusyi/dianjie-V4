@@ -258,7 +258,7 @@ async function main() {
     where: { tenantId_email: { tenantId: tenant.id, email: input.email } },
     update: {
       phone: input.phone,
-      password,
+      // 密码只在首次创建时写入: 重部署会重跑 seed, 不应把测试人员已改过的密码重置回随机值
       name: input.name,
       role: input.role,
       status: 'ACTIVE',

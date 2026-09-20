@@ -226,6 +226,18 @@ export function AnnotationLayer() {
     finally { setBusy(false) }
   }
 
+  /* ── 清除：清空本页全部批注（含其他人写的），二次确认 ── */
+  const clearPage = async () => {
+    if (!window.confirm(`确定清空本页全部批注（共 ${items.length} 条，包括其他人写的）？此操作不可恢复。`)) return
+    setBusy(true)
+    try {
+      await apiFetch(`/api/page-annotations/page?pageKey=${encodeURIComponent(pageKey)}`, { method: 'DELETE' })
+      setItems([])
+      setViewId(null)
+    } catch (reason: any) { window.alert(reason?.message || '清除失败') }
+    finally { setBusy(false) }
+  }
+
   /* ── 工具条拖动（贴边跟随，桌面/手机一致）── */
   const onBarDragStart = (event: React.PointerEvent) => {
     const rect = (event.currentTarget.parentElement as HTMLElement).getBoundingClientRect()
@@ -347,6 +359,15 @@ export function AnnotationLayer() {
             color: visible ? '#374151' : '#dc2626',
           }}
         >{visible ? '隐藏批注' : '显示批注'}</button>
+        <button
+          onClick={() => void clearPage()}
+          disabled={busy || items.length === 0}
+          title="清空本页全部批注（包括其他人写的），需二次确认"
+          style={{
+            height: 40, padding: '0 12px', borderRadius: 12, cursor: 'pointer', fontSize: 13, whiteSpace: 'nowrap',
+            border: '1px solid #fecaca', background: '#fef2f2', color: '#dc2626', opacity: busy || items.length === 0 ? 0.35 : 1,
+          }}
+        >清除</button>
       </div>
     </>,
     document.body,

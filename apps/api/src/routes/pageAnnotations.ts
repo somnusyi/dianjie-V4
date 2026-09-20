@@ -148,6 +148,21 @@ export const pageAnnotationRoutes: FastifyPluginAsync = async (app) => {
     return { ...row, mine: true, deletable: true }
   })
 
+  // DELETE /api/page-annotations/page?pageKey=... — 清空本页全部批注（共享白板橡皮擦，前端二次确认）
+  app.delete('/page', {
+    ...auth(app),
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+  }, async (request: any, reply) => {
+    const actor = await loadActor(request)
+    if (!actor) return notFound(reply)
+    const pageKey = String(request.query?.pageKey || '')
+    if (!pageKeySchema.safeParse(pageKey).success) {
+      return reply.status(400).send({ error: '页面路径格式不正确' })
+    }
+    const result = await prisma.pageAnnotation.deleteMany({ where: { tenantId: actor.tenantId, pageKey } })
+    return { success: true, deleted: result.count }
+  })
+
   // DELETE /api/page-annotations/:id — 所有人规则一致：只能删自己写的
   app.delete('/:id', {
     ...auth(app),

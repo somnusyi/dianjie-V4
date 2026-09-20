@@ -4639,3 +4639,20 @@ model BossChatMessage {
   @@index([tenantId, userId, createdAt])
   @@map("boss_chat_messages")
 }
+
+// UAT 灰度专用：页面批注层（图钉+涂鸦）。批注跟页面走，同一页所有白名单账号共享一层；
+// 与业务表完全隔离（无外键），只经 /api/page-annotations 读写。
+model PageAnnotation {
+  id          String   @id @default(cuid())
+  tenantId    String
+  pageKey     String // 页面路由，如 /v2/supply-chain/procurement
+  kind        String // PIN / STROKE
+  payload     Json // PIN: {text,x,y} STROKE: {points:[[x,y]...],width}
+  authorId    String
+  authorName  String
+  authorPhone String
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, pageKey, createdAt])
+  @@map("page_annotations")
+}

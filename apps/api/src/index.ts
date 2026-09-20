@@ -32,6 +32,7 @@ import { publicApplyRoute, applicationRoutes } from './routes/applications'
 import { inviteRoutes, inviteAcceptRoutes } from './routes/invites'
 import { upstreamSupplierInviteRoutes } from './routes/upstreamSupplierInvites'
 import { upstreamProcurementRoutes } from './routes/upstreamProcurement'
+import { pageAnnotationRoutes } from './routes/pageAnnotations'
 import { openingTaskRoutes } from './routes/openingTasks'
 import { budgetRoutes } from './routes/budgets'
 import { storeRoutes } from './routes/stores'
@@ -231,6 +232,8 @@ async function bootstrap() {
   await app.register(inviteAcceptRoutes,   { prefix: '/api/invite-accept' })
   await app.register(upstreamSupplierInviteRoutes, { prefix: '/api/upstream' })
   await app.register(upstreamProcurementRoutes, { prefix: '/api/upstream' })
+  // UAT 灰度专用页面批注层（图钉+涂鸦），白名单外账号 404 无感知
+  await app.register(pageAnnotationRoutes,  { prefix: '/api/page-annotations' })
   await app.register(openingTaskRoutes,    { prefix: '/api/opening-tasks' })
   await app.register(budgetRoutes,         { prefix: '/api/budgets' })
   await app.register(dashboardRoutes,      { prefix: '/api/dashboard' })

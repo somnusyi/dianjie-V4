@@ -7,6 +7,7 @@
 import { usePathname } from 'next/navigation'
 import { AuthGate } from '@/components/v2/auth-gate'
 import { Onboarding } from '@/components/v2/onboarding'
+import { AnnotationLayer } from '@/components/annotations/annotation-layer'
 import { rolesForV2Path } from '@/lib/v2-route-access'
 
 export default function V2Layout({ children }: { children: React.ReactNode }) {
@@ -27,5 +28,6 @@ export default function V2Layout({ children }: { children: React.ReactNode }) {
   // home 页才弹 onboarding (不打扰二级页)
   const isHome = /^\/v2\/[^/]+\/home\/?$/.test(pathname)
   const requireRole = rolesForV2Path(pathname)
-  return <AuthGate requireRole={requireRole ? [...requireRole] : undefined}>{children}{isHome && <Onboarding />}</AuthGate>
+  // UAT 灰度专用页面批注层（图钉+涂鸦）：白名单外账号服务端 404，前端整体不渲染
+  return <AuthGate requireRole={requireRole ? [...requireRole] : undefined}>{children}{isHome && <Onboarding />}<AnnotationLayer /></AuthGate>
 }

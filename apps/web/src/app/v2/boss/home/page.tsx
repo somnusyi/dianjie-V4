@@ -78,8 +78,8 @@ export default function BossHomePage() {
         </a>
       </div>
 
-      {/* 供应链工作台 — ADMIN/超管落地在老板首页, 需要直达入口做收货复核等操作 */}
-      {(getUser()?.role === 'ADMIN' || getUser()?.role === 'SUPER_ADMIN') && (
+      {/* 供应链工作台 — 仅超管逃生口保留直达；ADMIN 已按权限收口移出上游采购，老板界面恢复正常 */}
+      {getUser()?.role === 'SUPER_ADMIN' && (
         <div className="px-4 mt-2">
           <a href="/v2/supply-chain/home" className="block bg-white border border-border rounded-card p-3 flex items-center justify-between">
             <div>

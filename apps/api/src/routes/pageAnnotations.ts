@@ -23,11 +23,18 @@ const strokePayloadSchema = z.object({
   points: z.array(pointSchema).min(2, '笔迹至少 2 个点').max(4000, '单笔笔迹点数过多'),
   width: z.number().finite().min(1).max(12).default(3),
 }).strict()
+const rectPayloadSchema = z.object({
+  x: z.number().finite().min(0).max(100000),
+  y: z.number().finite().min(0).max(100000),
+  w: z.number().finite().min(1).max(100000),
+  h: z.number().finite().min(1).max(100000),
+  width: z.number().finite().min(1).max(12).default(3),
+}).strict()
 
 const pageKeySchema = z.string().trim().min(1).max(200).regex(/^\/[A-Za-z0-9\-_/.%]*$/, '页面路径格式不正确')
 const createSchema = z.object({
   pageKey: pageKeySchema,
-  kind: z.enum(['PIN', 'STROKE']),
+  kind: z.enum(['PIN', 'STROKE', 'RECT']),
   payload: z.unknown(),
 }).strict()
 const patchSchema = z.object({ payload: z.unknown() }).strict()
@@ -109,7 +116,9 @@ export const pageAnnotationRoutes: FastifyPluginAsync = async (app) => {
     const { pageKey, kind } = parsed.data
     const payload = kind === 'PIN'
       ? pinPayloadSchema.safeParse(parsed.data.payload)
-      : strokePayloadSchema.safeParse(parsed.data.payload)
+      : kind === 'RECT'
+        ? rectPayloadSchema.safeParse(parsed.data.payload)
+        : strokePayloadSchema.safeParse(parsed.data.payload)
     if (!payload.success) return reply.status(400).send({ error: payload.error.issues[0].message })
     const row = await prisma.pageAnnotation.create({
       data: {

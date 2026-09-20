@@ -15,8 +15,8 @@ import { apiFetch } from '@/lib/v2-auth'
 
 type Annotation = {
   id: string
-  kind: 'PIN' | 'STROKE'
-  payload: { text?: string; x?: number; y?: number; points?: Array<[number, number]>; width?: number }
+  kind: 'PIN' | 'STROKE' | 'RECT'
+  payload: { text?: string; x?: number; y?: number; points?: Array<[number, number]>; w?: number; h?: number; width?: number }
   authorId: string
   authorName: string
   authorPhone: string
@@ -59,6 +59,18 @@ function findPinAt(x: number, y: number, items: Annotation[]): Annotation | null
   }
   return best ? best.item : null
 }
+function findRectAt(x: number, y: number, items: Annotation[]): Annotation | null {
+  for (const item of items) {
+    if (item.kind !== 'RECT' || item.payload?.x == null) continue
+    const rx = item.payload.x || 0
+    const ry = item.payload.y || 0
+    const rw = item.payload.w || 0
+    const rh = item.payload.h || 0
+    const insideWithMargin = x >= rx - 10 && x <= rx + rw + 10 && y >= ry - 10 && y <= ry + rh + 10
+    if (insideWithMargin) return item
+  }
+  return null
+}
 
 function ssGet(key: string, fallback: boolean) {
   if (typeof window === 'undefined') return fallback
@@ -74,7 +86,7 @@ export function AnnotationLayer() {
   const [mounted, setMounted] = useState(false)
   const [config, setConfig] = useState<boolean>(false)
   const [items, setItems] = useState<Annotation[]>([])
-  const [mode, setMode] = useState<null | 'pin' | 'draw' | 'erase'>(null)
+  const [mode, setMode] = useState<null | 'pin' | 'draw' | 'rect' | 'erase'>(null)
   const [visible, setVisible] = useState(() => ssGet('anno.visible', true))
   const [docSize, setDocSize] = useState({ w: 0, h: 0 })
   const [draft, setDraft] = useState<{ x: number; y: number } | null>(null)
@@ -83,6 +95,7 @@ export function AnnotationLayer() {
   const [editText, setEditText] = useState('')
   const [busy, setBusy] = useState(false)
   const [eraseTip, setEraseTip] = useState('')
+  const [rectPreview, setRectPreview] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const [bar, setBar] = useState<{ x: number; y: number } | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const drawingRef = useRef<Array<[number, number]> | null>(null)
@@ -237,7 +250,7 @@ export function AnnotationLayer() {
     finally { setBusy(false) }
   }
   const undoLastStroke = async () => {
-    const target = [...items].reverse().find(item => item.kind === 'STROKE' && item.deletable)
+    const target = [...items].reverse().find(item => (item.kind === 'STROKE' || item.kind === 'RECT') && item.deletable)
     if (target) await removeItem(target.id)
   }
 
@@ -268,10 +281,38 @@ export function AnnotationLayer() {
     const x = event.pageX
     const y = event.pageY
     const pin = findPinAt(x, y, items)
-    const target = pin || findStrokeAt(x, y, items)
+    const target = pin || findRectAt(x, y, items) || findStrokeAt(x, y, items)
     if (!target) return
     if (!target.deletable) { flashTip('只能擦除自己写的批注'); return }
     await removeItem(target.id)
+  }
+
+  /* ── 方框：按住拖出一个红框，松手保存；拖太小视为取消 ── */
+  const onRectDown = (event: React.PointerEvent) => {
+    ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
+    setRectPreview({ x0: event.pageX, y0: event.pageY, x1: event.pageX, y1: event.pageY })
+  }
+  const onRectMove = (event: React.PointerEvent) => {
+    setRectPreview(current => current ? { ...current, x1: event.pageX, y1: event.pageY } : null)
+  }
+  const onRectUp = async (event: React.PointerEvent) => {
+    const preview = rectPreview
+    setRectPreview(null)
+    if (!preview) return
+    const x = Math.min(preview.x0, event.pageX)
+    const y = Math.min(preview.y0, event.pageY)
+    const w = Math.abs(event.pageX - preview.x0)
+    const h = Math.abs(event.pageY - preview.y0)
+    if (w < 10 || h < 10) return
+    setBusy(true)
+    try {
+      const row = await apiFetch<Annotation>('/api/page-annotations', {
+        method: 'POST',
+        body: JSON.stringify({ pageKey, kind: 'RECT', payload: { x, y, w, h, width: 3 } }),
+      })
+      setItems(current => [...current, row])
+    } catch (reason: any) { window.alert(reason?.message || '保存失败，请重试') }
+    finally { setBusy(false) }
   }
 
   /* ── 工具条拖动（贴边跟随，桌面/手机一致）── */
@@ -323,6 +364,39 @@ export function AnnotationLayer() {
           <div
             onClick={event => void onEraseClick(event)}
             style={{ position: 'absolute', inset: 0, pointerEvents: 'auto', cursor: 'cell', zIndex: 1 }}
+          />
+        )}
+        {mode === 'rect' && (
+          <div
+            onPointerDown={onRectDown}
+            onPointerMove={onRectMove}
+            onPointerUp={onRectUp}
+            onPointerCancel={() => setRectPreview(null)}
+            style={{ position: 'absolute', inset: 0, pointerEvents: 'auto', cursor: 'crosshair', touchAction: 'none', zIndex: 1 }}
+          />
+        )}
+        {/* 方框批注（框住区域的红框） */}
+        {items.filter(item => item.kind === 'RECT' && item.payload?.x != null).map(item => (
+          <div
+            key={item.id}
+            style={{
+              position: 'absolute',
+              left: item.payload?.x || 0, top: item.payload?.y || 0,
+              width: item.payload?.w || 0, height: item.payload?.h || 0,
+              border: `${item.payload?.width || 3}px solid ${RED}`, borderRadius: 2,
+              pointerEvents: 'none',
+            }}
+          />
+        ))}
+        {/* 方框拖动中的虚线预览 */}
+        {rectPreview && (
+          <div
+            style={{
+              position: 'absolute',
+              left: Math.min(rectPreview.x0, rectPreview.x1), top: Math.min(rectPreview.y0, rectPreview.y1),
+              width: Math.abs(rectPreview.x1 - rectPreview.x0), height: Math.abs(rectPreview.y1 - rectPreview.y0),
+              border: `2px dashed ${RED}`, pointerEvents: 'none', zIndex: 2,
+            }}
           />
         )}
         {/* 图钉：只有小点本身可点 */}
@@ -379,9 +453,9 @@ export function AnnotationLayer() {
       {/* 批注模式提示条 */}
       {mode && (
         <div style={{ position: 'fixed', top: 8, left: '50%', transform: 'translateX(-50%)', zIndex: 46, background: '#111827', color: '#fff', borderRadius: 999, padding: '6px 14px', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 4px 12px rgba(0,0,0,.25)' }}>
-          <span>批注模式中：{mode === 'pin' ? '点页面放图钉' : mode === 'erase' ? '橡皮擦：点自己画的笔迹或图钉擦除' : '直接在页面上画'}</span>
+          <span>批注模式中：{mode === 'pin' ? '点页面放图钉' : mode === 'rect' ? '方框：按住拖出一个框' : mode === 'erase' ? '橡皮擦：点自己画的笔迹或图钉擦除' : '直接在页面上画'}</span>
           {eraseTip && <span style={{ color: '#fca5a5' }}>{eraseTip}</span>}
-          {mode === 'draw' && <button onClick={() => void undoLastStroke()} disabled={busy} style={{ background: 'transparent', color: '#fbbf24', border: 'none', fontSize: 13, cursor: 'pointer' }}>撤销上一笔</button>}
+          {(mode === 'draw' || mode === 'rect') && <button onClick={() => void undoLastStroke()} disabled={busy} style={{ background: 'transparent', color: '#fbbf24', border: 'none', fontSize: 13, cursor: 'pointer' }}>撤销上一笔</button>}
           <button onClick={() => { setMode(null); setDraft(null) }} style={{ background: 'transparent', color: '#fff', border: '1px solid #4b5563', borderRadius: 6, fontSize: 12, padding: '2px 8px', cursor: 'pointer' }}>退出</button>
         </div>
       )}
@@ -399,6 +473,7 @@ export function AnnotationLayer() {
         </div>
         <ToolButton active={mode === 'pin'} disabled={!visible} title="图钉：点页面任意位置写批注" onClick={() => { setMode(mode === 'pin' ? null : 'pin'); setDraft(null); setViewId(null) }}>📌</ToolButton>
         <ToolButton active={mode === 'draw'} disabled={!visible} title="涂鸦：在页面上圈画（红笔）" onClick={() => { setMode(mode === 'draw' ? null : 'draw'); setDraft(null); setViewId(null) }}>✏️</ToolButton>
+        <ToolButton active={mode === 'rect'} disabled={!visible} title="方框：按住拖动框住一块区域" onClick={() => { setMode(mode === 'rect' ? null : 'rect'); setDraft(null); setViewId(null) }}>▭</ToolButton>
         <ToolButton active={mode === 'erase'} disabled={!visible} title="橡皮擦：点自己画的笔迹或图钉擦掉，别人的擦不动" onClick={() => { setMode(mode === 'erase' ? null : 'erase'); setDraft(null); setViewId(null) }}>🧽</ToolButton>
         <button
           onClick={toggleVisible}

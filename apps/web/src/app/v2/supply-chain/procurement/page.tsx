@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import { clientRequestId } from '@/lib/client-id'
+import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import {
   currentMonthRange,
   money,
@@ -75,6 +76,7 @@ type ShipmentLine = {
   shippedQty: string | number
   purchaseUnit: string
   purchaseOrderLine: { productNameSnapshot: string; productSpecSnapshot?: string | null }
+  receiptLines?: Array<{ arrivedQty: string | number; shortageQty: string | number }>
 }
 type Shipment = {
   id: string
@@ -161,6 +163,7 @@ export default function UpstreamProcurementPage() {
   const [working, setWorking] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [revisionRejectConfirm, openRevisionRejectConfirm] = useConfirmSheet()
   const [orders, setOrders] = useState<Order[]>([])
   const [shipments, setShipments] = useState<Shipment[]>([])
   const [receipts, setReceipts] = useState<Receipt[]>([])
@@ -224,6 +227,19 @@ export default function UpstreamProcurementPage() {
 
   useEffect(() => { void loadAll() }, [loadAll])
 
+  // 单据状态会被他人推进: 回到本页(切Tab/解锁/切回浏览器)自动刷新, 避免看到旧状态误判
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === 'visible') void loadAll()
+    }
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [loadAll])
+
   async function run(key: string, task: () => Promise<unknown>, success: string) {
     setWorking(key)
     setError(null)
@@ -256,6 +272,15 @@ export default function UpstreamProcurementPage() {
   }
 
   async function createContract() {
+    // 填了但无效 (负数/非数字) 的单价不能静默丢弃, 必须点名提示
+    const invalidPriced = sources.filter(source => {
+      const raw = (sourcePrices[source.id] || '').trim()
+      return raw !== '' && !(Number(raw) > 0)
+    })
+    if (invalidPriced.length > 0) {
+      setError(`以下商品的单价无效，未纳入合同：${invalidPriced.map(source => source.product.name).join('、')}。请改为大于 0 的价格，或清空后重试。`)
+      return
+    }
     const lines = sources.filter(source => Number(sourcePrices[source.id]) > 0).map(source => ({
       upstreamSourceId: source.id,
       unitPrice: Number(sourcePrices[source.id]),
@@ -411,12 +436,28 @@ export default function UpstreamProcurementPage() {
     }
   }
 
-  async function reviewRevision(order: Order, decision: 'ACCEPT' | 'REJECT') {
+  async function reviewRevision(order: Order, decision: 'ACCEPT' | 'REJECT', note?: string) {
     const detail = await apiFetch<Order>(`/api/upstream/purchase-orders/${order.id}`)
     const revision = detail.revisions?.find(item => item.status === 'PENDING')
     if (!revision) throw new Error('未找到待审核改单')
     return apiFetch(`/api/upstream/purchase-orders/${order.id}/revisions/${revision.id}/review`, {
-      method: 'POST', body: JSON.stringify({ decision }),
+      method: 'POST', body: JSON.stringify({ decision, ...(note ? { note } : {}) }),
+    })
+  }
+
+  function rejectRevisionWithReason(order: Order) {
+    openRevisionRejectConfirm({
+      title: `驳回改单 ${order.no}?`,
+      body: '驳回后采购单回到「已提交供应商」状态，供应商会看到你填写的理由。',
+      confirmLabel: '确认驳回',
+      tone: 'danger',
+      withInput: true,
+      inputRequired: true,
+      inputPlaceholder: '驳回理由 (必填, 供应商可见)',
+      onConfirm: async (reason) => {
+        if (!reason) return
+        await run(order.id, () => reviewRevision(order, 'REJECT', reason), '改单已驳回')
+      },
     })
   }
 
@@ -482,11 +523,11 @@ export default function UpstreamProcurementPage() {
               <div className="text-right"><div className="text-h3">{money(order.totalAmount)}</div><div className="mt-2 flex flex-wrap justify-end gap-2">
                 {order.status === 'DRAFT' && <ActionButton onClick={() => void run(order.id, () => apiFetch(`/api/upstream/purchase-orders/${order.id}/submit-for-approval`, { method: 'POST' }), '采购单已提交内部审核')} disabled={working === order.id}>提交审核</ActionButton>}
                 {order.status === 'PENDING_APPROVAL' && <ActionButton onClick={() => window.confirm('确认合同、价格和数量无误并发送供应商？') && void run(order.id, () => apiFetch(`/api/upstream/purchase-orders/${order.id}/approve-and-send`, { method: 'POST' }), '采购单已发送供应商')} disabled={working === order.id}>审核并发送</ActionButton>}
-                {order.status === 'CHANGE_PROPOSED' && <><ActionButton onClick={() => void run(order.id, () => reviewRevision(order, 'ACCEPT'), '改单已接受')} disabled={working === order.id}>接受改单</ActionButton><ActionButton tone="danger" onClick={() => void run(order.id, () => reviewRevision(order, 'REJECT'), '改单已驳回')} disabled={working === order.id}>驳回</ActionButton></>}
+                {order.status === 'CHANGE_PROPOSED' && <><ActionButton onClick={() => void run(order.id, () => reviewRevision(order, 'ACCEPT'), '改单已接受')} disabled={working === order.id}>接受改单</ActionButton><ActionButton tone="danger" onClick={() => rejectRevisionWithReason(order)} disabled={working === order.id}>驳回</ActionButton></>}
               </div></div>
             </div>
           </article>)}
-          <div className="rounded-2xl border border-border bg-white p-4"><h2 className="text-h3">供应商发货动态</h2><div className="mt-3 space-y-2">{shipments.length === 0 ? <p className="text-caption text-gray3">暂无发货单</p> : shipments.map(shipment => <div key={shipment.id} className="flex flex-col gap-2 rounded-xl bg-bg p-3 sm:flex-row sm:items-center sm:justify-between"><div><b>{shipment.no}</b><p className="text-caption text-gray2">采购单 {shipment.purchaseOrder.no} · {shipment.lines.length} 项 · {shipment.status}</p></div>{['SHIPPED', 'PARTIALLY_RECEIVED'].includes(shipment.status) && <ActionButton onClick={() => openReceipt(shipment)}>登记到货</ActionButton>}</div>)}</div></div>
+          <div className="rounded-2xl border border-border bg-white p-4"><h2 className="text-h3">供应商发货动态</h2><div className="mt-3 space-y-2">{shipments.length === 0 ? <p className="text-caption text-gray3">暂无发货单</p> : shipments.map(shipment => <div key={shipment.id} className="flex flex-col gap-2 rounded-xl bg-bg p-3 sm:flex-row sm:items-center sm:justify-between"><div><b>{shipment.no}</b><p className="text-caption text-gray2">采购单 {shipment.purchaseOrder.no} · {shipment.lines.length} 项 · {shipment.status}</p></div>{['SHIPPED', 'PARTIALLY_RECEIVED'].includes(shipment.status) && !shipmentFullyInspected(shipment) && <ActionButton onClick={() => openReceipt(shipment)}>登记到货</ActionButton>}</div>)}</div></div>
         </section>}
 
         {!loading && tab === 'receipts' && <section className="space-y-3">
@@ -501,8 +542,17 @@ export default function UpstreamProcurementPage() {
 
         {!loading && tab === 'contracts' && <section className="space-y-4"><div className="flex justify-end"><ActionButton onClick={() => setShowContractForm(value => !value)}>{showContractForm ? '收起' : '新建合同'}</ActionButton></div>{showContractForm && <Panel title="新建月结合同"><div className="grid gap-3 md:grid-cols-4"><Field label="供应商"><select className="input" value={contractSupplierId} onChange={event => void loadSources(event.target.value)}><option value="">请选择</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></Field><Field label="合同编号"><input className="input" value={contractForm.contractNo} onChange={event => setContractForm(value => ({ ...value, contractNo: event.target.value }))} placeholder="例如 HT202609-01" /></Field><Field label="合同名称"><input className="input" value={contractForm.title} onChange={event => setContractForm(value => ({ ...value, title: event.target.value }))} placeholder="例如 2026年食材供货合同" /></Field><Field label="生效日"><input className="input" type="date" value={contractForm.startsAt} onChange={event => setContractForm(value => ({ ...value, startsAt: event.target.value }))} /></Field></div><div className="mt-4 overflow-x-auto"><table className="w-full text-caption"><thead><tr className="border-b text-left"><th className="p-2">商品</th><th className="p-2">采购单位</th><th className="p-2">库存换算</th><th className="p-2">含税单价（留空不纳入）</th></tr></thead><tbody>{sources.map(source => <tr key={source.id} className="border-b border-border"><td className="p-2"><b>{source.product.name}</b><div className="text-gray3">{source.product.code} · {source.product.spec || '—'}</div></td><td className="p-2">{source.purchaseUnit}</td><td className="p-2">1 {source.purchaseUnit} = {String(source.inventoryUnitsPerPurchaseUnit)} {source.product.inventoryUnit || source.product.unit}</td><td className="p-2"><input className="input w-36" type="number" min="0" step="0.01" value={sourcePrices[source.id] || ''} onChange={event => setSourcePrices(value => ({ ...value, [source.id]: event.target.value }))} /></td></tr>)}</tbody></table>{contractSupplierId && sources.length === 0 && <p className="p-4 text-caption text-gray3">该供应商尚未绑定可采购商品，请先在“商品管理”维护商品供应商。</p>}</div><div className="mt-4 flex justify-end"><ActionButton onClick={() => void createContract()} disabled={working === 'create-contract'}>保存合同草稿</ActionButton></div></Panel>}{contracts.length === 0 ? <Empty text="暂无合同" /> : contracts.map(contract => <article key={contract.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex items-center gap-2"><b className="text-h3">{contract.contractNo} · {contract.title}</b><Badge status={contract.status} labels={{ DRAFT: '草稿', ACTIVE: '生效中', TERMINATED: '已终止' }} /></div><p className="mt-1 text-caption text-gray2">{contract.supplier.name} · V{contract.version} · {contract.lines.length} 个商品 · {shortDate(contract.startsAt)} 起</p></div>{contract.status === 'DRAFT' && <ActionButton onClick={() => window.confirm('确认合同价格及换算无误并正式启用？') && void run(contract.id, () => apiFetch(`/api/upstream/contracts/${contract.id}/activate`, { method: 'POST' }), '合同已启用')} disabled={working === contract.id}>启用合同</ActionButton>}</div></article>)}</section>}
       </main>
+      <ConfirmSheet {...revisionRejectConfirm} />
     </div>
   )
+}
+
+function shipmentFullyInspected(shipment: Shipment): boolean {
+  // 每一行发货数量的「实到+短少」都已入账, 视为收完 — 不再显示「登记到货」
+  return shipment.lines.length > 0 && shipment.lines.every(line => {
+    const inspected = (line.receiptLines || []).reduce((sum, item) => sum + Number(item.arrivedQty) + Number(item.shortageQty), 0)
+    return inspected + 0.000001 >= Number(line.shippedQty)
+  })
 }
 
 function Summary({ label, value, danger }: { label: string; value: number; danger?: boolean }) {

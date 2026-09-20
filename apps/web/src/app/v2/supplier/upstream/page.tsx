@@ -100,6 +100,8 @@ export default function SupplierUpstreamPage() {
   const [shipping, setShipping] = useState({ carrierName: '', trackingNo: '', expectedArrivalAt: '' })
   const [respondingClaim, setRespondingClaim] = useState<Claim | null>(null)
   const [claimResponse, setClaimResponse] = useState('')
+  const [claimEvidence, setClaimEvidence] = useState<Array<{ url: string; name: string }>>([])
+  const [uploadingClaimEvidence, setUploadingClaimEvidence] = useState(false)
   const shipmentRequestKeysRef = useRef<Record<string, string>>({})
 
   useEffect(() => {
@@ -129,6 +131,19 @@ export default function SupplierUpstreamPage() {
   }, [])
 
   useEffect(() => { void loadAll() }, [loadAll])
+
+  // 采购方会推进单据状态: 回到本页自动刷新, 避免按旧状态操作
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === 'visible') void loadAll()
+    }
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [loadAll])
 
   async function run(key: string, task: () => Promise<unknown>, success: string) {
     setWorking(key)
@@ -197,13 +212,35 @@ export default function SupplierUpstreamPage() {
     }
   }
 
+  async function uploadClaimEvidence(file: File) {
+    if (claimEvidence.length >= 4) return setError('举证材料最多上传 4 个文件')
+    setUploadingClaimEvidence(true)
+    setError(null)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const uploaded = await apiFetch<{ url: string }>('/api/upload?category=loss-claims', { method: 'POST', body: form })
+      setClaimEvidence(current => [...current, { url: uploaded.url, name: file.name }].slice(0, 4))
+    } catch (reason: any) {
+      setError(reason?.message || '举证材料上传失败')
+    } finally {
+      setUploadingClaimEvidence(false)
+    }
+  }
+
   async function respondClaim(decision: 'ACCEPT' | 'REJECT') {
     if (!respondingClaim || !claimResponse.trim()) return setError('请填写确认说明')
+    if (decision === 'REJECT' && claimEvidence.length === 0) return setError('提出异议时至少上传 1 张举证照片')
     await run(respondingClaim.id, () => apiFetch(`/api/upstream/arrival-claims/${respondingClaim.id}/respond`, {
-      method: 'POST', body: JSON.stringify({ decision, response: claimResponse.trim() }),
+      method: 'POST', body: JSON.stringify({
+        decision,
+        response: claimResponse.trim(),
+        evidence: claimEvidence.map(item => ({ url: item.url, name: item.name })),
+      }),
     }), decision === 'ACCEPT' ? '差异已接受，等待采购方办结' : '已提出异议，等待采购方处理')
     setRespondingClaim(null)
     setClaimResponse('')
+    setClaimEvidence([])
   }
 
   const pendingOrders = orders.filter(order => ['SUBMITTED_TO_SUPPLIER', 'SUPPLIER_ACCEPTED', 'PARTIALLY_SHIPPED', 'PARTIALLY_RECEIVED', 'CHANGE_PROPOSED'].includes(order.status)).length
@@ -230,7 +267,7 @@ export default function SupplierUpstreamPage() {
         <div className="mt-4 flex justify-end">{editMode === 'change' ? <Button onClick={() => void submitChange()} disabled={working === editingOrder.id}>提交改单申请</Button> : <Button onClick={() => void createShipment()} disabled={working === editingOrder.id}>保存发货单草稿</Button>}</div>
       </Panel>}
 
-      {respondingClaim && <Panel title={`确认到货差异 · ${respondingClaim.no}`} onClose={() => setRespondingClaim(null)}><p className="mb-3 text-caption text-gray2">{respondingClaim.description} · 申请金额 {money(respondingClaim.claimedAmount)}</p><textarea className="supplier-input min-h-24" value={claimResponse} onChange={event => setClaimResponse(event.target.value)} placeholder="填写核对结果、接受说明或异议理由" /><div className="mt-4 flex justify-end gap-2"><Button danger onClick={() => void respondClaim('REJECT')} disabled={working === respondingClaim.id}>提出异议</Button><Button onClick={() => void respondClaim('ACCEPT')} disabled={working === respondingClaim.id}>接受差异</Button></div></Panel>}
+      {respondingClaim && <Panel title={`确认到货差异 · ${respondingClaim.no}`} onClose={() => setRespondingClaim(null)}><p className="mb-3 text-caption text-gray2">{respondingClaim.description} · 申请金额 {money(respondingClaim.claimedAmount)}</p><textarea className="supplier-input min-h-24" value={claimResponse} onChange={event => setClaimResponse(event.target.value)} placeholder="填写核对结果、接受说明或异议理由" /><div className="mt-3"><span className="mb-1 block text-micro text-gray3">举证照片（提出异议时至少 1 张，最多 4 个文件）</span><div className="flex flex-wrap items-center gap-2">{claimEvidence.map((item, index) => <span key={index} className="rounded-lg bg-bg px-2 py-1 text-micro text-gray2">{item.name}<button className="ml-1 text-red-700" onClick={() => setClaimEvidence(current => current.filter((_, i) => i !== index))}>×</button></span>)}<label className={`cursor-pointer rounded-lg border border-dashed border-border px-3 py-1.5 text-caption ${uploadingClaimEvidence ? 'text-gray3' : 'text-accent'}`}>{uploadingClaimEvidence ? '上传中…' : '+ 上传照片'}<input type="file" accept="image/*" className="hidden" disabled={uploadingClaimEvidence} onChange={event => { const file = event.target.files?.[0]; if (file) void uploadClaimEvidence(file); event.target.value = '' }} /></label></div></div><div className="mt-4 flex justify-end gap-2"><Button danger onClick={() => void respondClaim('REJECT')} disabled={working === respondingClaim.id}>提出异议</Button><Button onClick={() => void respondClaim('ACCEPT')} disabled={working === respondingClaim.id}>接受差异</Button></div></Panel>}
 
       {!loading && tab === 'orders' && <section className="space-y-3">{orders.length === 0 ? <Empty text="暂无总仓采购单" /> : orders.map(order => <article key={order.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><b className="text-h3">{order.no}</b><Badge status={order.status} labels={UPSTREAM_ORDER_STATUS_LABEL} /></div><p className="mt-1 text-caption text-gray2">送达 {order.warehouse.name} · {order._count?.lines || 0} 项 · 期望 {shortDate(order.expectedArrivalAt)}</p><p className="mt-1 text-h3">{money(order.totalAmount)}</p></div><div className="flex flex-wrap gap-2">{order.status === 'SUBMITTED_TO_SUPPLIER' && <><Button secondary onClick={() => void openOrderForm(order, 'change')}>申请改单</Button><Button onClick={() => window.confirm('确认可按采购单履约并接单？') && void run(order.id, () => apiFetch(`/api/upstream/purchase-orders/${order.id}/accept`, { method: 'POST' }), '采购单已接单')} disabled={working === order.id}>确认接单</Button></>}{['SUPPLIER_ACCEPTED', 'PARTIALLY_SHIPPED', 'PARTIALLY_RECEIVED'].includes(order.status) && <Button onClick={() => void openOrderForm(order, 'ship')}>新建发货单</Button>}{order.status === 'SUPPLIER_ACCEPTED' && <Button secondary onClick={() => void openOrderForm(order, 'change')}>申请改单</Button>}</div></div></article>)}</section>}
 

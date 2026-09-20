@@ -18,7 +18,7 @@ import { Sparkline } from '@/components/v2/sparkline'
 import { UserMenu } from '@/components/v2/user-menu'
 import { useDashboard, LoadingScreen, ErrorScreen, greetingFor } from '@/components/v2/use-dashboard'
 import { BankAccountCard } from '@/components/v2/bank-account-card'
-import { apiFetch } from '@/lib/v2-auth'
+import { apiFetch, getUser } from '@/lib/v2-auth'
 
 // 招行实时账户从 cashbook/accounts 拉, 财务在 finance/funds 页可增删, 老板这里只读显示
 type BankAcct = {
@@ -77,6 +77,19 @@ export default function BossHomePage() {
           <div className="text-micro text-gray3 mt-0.5">各店建店投入台账</div>
         </a>
       </div>
+
+      {/* 供应链工作台 — ADMIN/超管落地在老板首页, 需要直达入口做收货复核等操作 */}
+      {(getUser()?.role === 'ADMIN' || getUser()?.role === 'SUPER_ADMIN') && (
+        <div className="px-4 mt-2">
+          <a href="/v2/supply-chain/home" className="block bg-white border border-border rounded-card p-3 flex items-center justify-between">
+            <div>
+              <div className="text-button">供 供应链工作台</div>
+              <div className="text-micro text-gray3 mt-0.5">上游采购、到货验收复核、对账</div>
+            </div>
+            <span className="text-gray3">›</span>
+          </a>
+        </div>
+      )}
 
       {/* 招行实时账户 — 老板只读, 财务在「资金」页管理(增删) */}
       {bankAccts.length > 0 && (

@@ -2286,6 +2286,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   app.patch('/:id/revisions/:revisionId/reject', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
     const parsed = revisionReviewSchema.safeParse(req.body || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    // 驳回必须留痕理由, 事后可查
+    if (!parsed.data.note) return reply.status(400).send({ error: '驳回必须填写理由' })
     const { tenantId, userId, role, storeId } = req.user
     const { id, revisionId } = req.params as any
     if (!['MANAGER', 'KITCHEN_LEAD', 'PURCHASER', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'].includes(role)) {

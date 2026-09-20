@@ -31,7 +31,9 @@ const isoDateInput = z.coerce.date()
 
 const contractCreateSchema = z.object({
   supplierId: idSchema,
-  contractNo: z.string().trim().min(1).max(80),
+  // 合同编号会打印/导出到正式单据: 限制长度与字符集, 挡住脚本注入和超长文本
+  contractNo: z.string().trim().min(1).max(40)
+    .regex(/^[\w一-龥（）()【】\[\]#\-—_./·:：\s]+$/, '合同编号只能包含文字、数字和常用符号'),
   title: z.string().trim().min(1).max(160),
   startsAt: isoDateInput,
   endsAt: isoDateInput.optional(),
@@ -157,6 +159,12 @@ const receiptCreateSchema = z.object({
   if (new Set(ids).size !== ids.length) {
     ctx.addIssue({ code: 'custom', path: ['lines'], message: '验收商品不能重复' })
   }
+  // 全 0 收货单没有业务意义, 还会白占一次人工复核
+  const hasAnyQuantity = data.lines.some(line =>
+    line.arrivedQty > 0 || line.acceptedQty > 0 || line.damagedQty > 0 || line.rejectedQty > 0)
+  if (!hasAnyQuantity) {
+    ctx.addIssue({ code: 'custom', path: ['lines'], message: '收货数量不能全部为 0，请至少填写一项实到数量' })
+  }
 })
 
 const postReceiptClaimSchema = z.object({
@@ -177,7 +185,16 @@ const receiptReversalSchema = z.object({
 const supplierClaimResponseSchema = z.object({
   decision: z.enum(['ACCEPT', 'REJECT']),
   response: z.string().trim().min(1).max(1000),
-}).strict()
+  evidence: z.array(z.object({
+    url: z.string().trim().min(1).max(500),
+    name: z.string().trim().max(200).optional(),
+  })).max(4).optional(),
+}).strict().superRefine((data, ctx) => {
+  // 手册要求异议必须带举证照片
+  if (data.decision === 'REJECT' && !(data.evidence && data.evidence.length > 0)) {
+    ctx.addIssue({ code: 'custom', path: ['evidence'], message: '提出异议时至少上传 1 张举证照片' })
+  }
+})
 
 const claimResolutionSchema = z.object({
   responsibility: z.enum(['SUPPLIER', 'BUYER', 'SHARED']),
@@ -445,8 +462,12 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
           const target = orderLine.confirmedQty || orderLine.orderedQty
           const maximum = target.times(decimal(1).plus(orderLine.overTolerancePct))
           if (orderLine.receivedQty.plus(line.acceptedQty).greaterThan(maximum)) {
+            // 分清场景: 已收满多为「重复登记/页面没刷新」, 与真正的超上限是两回事
+            const alreadyFull = orderLine.receivedQty.greaterThanOrEqualTo(maximum)
             throw Object.assign(
-              new Error(`${orderLine.productNameSnapshot} 累计合格收货超过合同允许上限 ${maximum.toString()} ${orderLine.purchaseUnit}`),
+              new Error(alreadyFull
+                ? `${orderLine.productNameSnapshot} 已完成全部收货，该发货单可能刚被他人验收，请刷新页面核对状态`
+                : `${orderLine.productNameSnapshot} 累计合格收货超过合同允许上限 ${maximum.toString()} ${orderLine.purchaseUnit}`),
               { statusCode: 409 },
             )
           }
@@ -1088,6 +1109,8 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     const parsed = revisionReviewSchema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const d = parsed.data
+    // 驳回必须留痕理由, 供应商和审计都能查到原因
+    if (d.decision === 'REJECT' && !d.note) return reply.status(400).send({ error: '驳回改单必须填写理由' })
 
     const result = await prisma.$transaction(async tx => {
       const revision = await tx.upstreamPurchaseOrderRevision.findFirst({
@@ -1181,7 +1204,11 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
       where: { tenantId, ...(supplierId ? { supplierId } : {}) },
       include: {
         purchaseOrder: { select: { id: true, no: true, status: true, expectedArrivalAt: true } },
-        lines: { include: { purchaseOrderLine: { select: { productNameSnapshot: true, productSpecSnapshot: true } } } },
+        lines: { include: {
+          purchaseOrderLine: { select: { productNameSnapshot: true, productSpecSnapshot: true } },
+          // 已入账的收货数量, 前端据此判断发货单是否已收完 (隐藏「登记到货」入口)
+          receiptLines: { where: { receipt: { status: 'POSTED' } }, select: { arrivedQty: true, shortageQty: true } },
+        } },
       },
       orderBy: { createdAt: 'desc' },
       take: 200,
@@ -1860,15 +1887,27 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     const parsed = supplierClaimResponseSchema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const d = parsed.data
-    const changed = await prisma.upstreamArrivalClaim.updateMany({
-      where: { id: claimId.data, tenantId, supplierId, status: 'PENDING_SUPPLIER' },
-      data: {
-        status: d.decision === 'ACCEPT' ? 'SUPPLIER_ACCEPTED' : 'SUPPLIER_REJECTED',
-        supplierResponse: d.response,
-        supplierRespondedAt: new Date(),
-      },
+    const updated = await prisma.$transaction(async tx => {
+      const claim = await tx.upstreamArrivalClaim.findFirst({
+        where: { id: claimId.data, tenantId, supplierId, status: 'PENDING_SUPPLIER' },
+        select: { id: true, evidence: true },
+      })
+      if (!claim) return null
+      // 供应商举证并入差异单证据包, 打上来源标记便于仲裁时区分
+      const priorEvidence = Array.isArray(claim.evidence) ? claim.evidence : []
+      const supplierEvidence = (d.evidence || []).map(item => ({ ...item, source: 'SUPPLIER_RESPONSE' }))
+      await tx.upstreamArrivalClaim.update({
+        where: { id: claim.id },
+        data: {
+          status: d.decision === 'ACCEPT' ? 'SUPPLIER_ACCEPTED' : 'SUPPLIER_REJECTED',
+          supplierResponse: d.response,
+          supplierRespondedAt: new Date(),
+          ...(supplierEvidence.length ? { evidence: [...priorEvidence, ...supplierEvidence] } : {}),
+        },
+      })
+      return claim
     })
-    if (changed.count !== 1) return reply.status(409).send({ error: '差异单不存在、无权访问或已处理' })
+    if (!updated) return reply.status(409).send({ error: '差异单不存在、无权访问或已处理' })
     await prisma.opLog.create({
       data: { tenantId, userId, role, action: `供应商${d.decision === 'ACCEPT' ? '接受' : '拒绝'}到货差异`, entityType: 'UpstreamArrivalClaim', targetId: claimId.data },
     })
@@ -2013,7 +2052,9 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     })
     if (!supplier) return reply.status(400).send({ error: '上游供应商不存在或已停用' })
 
-    const result = await prisma.$transaction(async tx => {
+    let result: { empty: true } | { empty: false; statementId: string }
+    try {
+      result = await prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`upstream-settlement:${tenantId}:${d.supplierId}:${start.toISOString()}:${endExclusive.toISOString()}`}))::text AS locked`
       const [receiptLines, claims, previousVersion] = await Promise.all([
         tx.upstreamReceiptLine.findMany({
@@ -2114,7 +2155,16 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
         data: { tenantId, userId, role, action: '生成上游月度对账单', entityType: 'UpstreamSettlementStatement', target: no, targetId: statement.id },
       })
       return { empty: false, statementId: statement.id } as const
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 20_000 })
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 20_000 })
+    } catch (error: any) {
+      if (
+        error?.code === 'P2034' || error?.code === 'P2002'
+        || (error?.code === 'P2010' && String(error?.meta?.code || '') === '40001')
+      ) {
+        return reply.status(409).send({ error: '该对账单刚被他人处理，请刷新后重试' })
+      }
+      throw error
+    }
     if (result.empty) return reply.status(409).send({ error: '该结算周期没有新的已入账收货或已办结扣款' })
     const statement = await prisma.upstreamSettlementStatement.findUnique({
       where: { id: result.statementId },

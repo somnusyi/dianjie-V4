@@ -45,7 +45,6 @@ type Actor = {
   tenantId: string
   phone: string
   name: string
-  isAdmin: boolean
 }
 
 async function loadActor(request: any): Promise<Actor | null> {
@@ -53,13 +52,12 @@ async function loadActor(request: any): Promise<Actor | null> {
   const { userId, tenantId } = request.user || {}
   if (!userId || !tenantId) return null
   const allowed = phoneList(process.env.ANNOTATION_ALLOWED_PHONES)
-  const admins = phoneList(process.env.ANNOTATION_ADMIN_PHONES)
   const user = await prisma.user.findFirst({
     where: { id: userId, tenantId, status: 'ACTIVE' },
     select: { id: true, name: true, phone: true },
   })
   if (!user || !user.phone || !allowed.includes(user.phone)) return null
-  return { userId, tenantId, phone: user.phone, name: user.name || '', isAdmin: admins.includes(user.phone) }
+  return { userId, tenantId, phone: user.phone, name: user.name || '' }
 }
 
 function notFound(reply: any) {
@@ -67,14 +65,14 @@ function notFound(reply: any) {
 }
 
 export const pageAnnotationRoutes: FastifyPluginAsync = async (app) => {
-  // GET /api/page-annotations/config — 前端探测自己能否使用批注
+  // GET /api/page-annotations/config — 前端探测自己能否使用批注（所有白名单账号行为一致，无管理员概念）
   app.get('/config', {
     ...auth(app),
     config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
   }, async (request: any, reply) => {
     const actor = await loadActor(request)
     if (!actor) return notFound(reply)
-    return { enabled: true, admin: actor.isAdmin, author: { name: actor.name, phone: actor.phone } }
+    return { enabled: true }
   })
 
   // GET /api/page-annotations?pageKey=/v2/xxx — 取该页共享批注层
@@ -96,7 +94,7 @@ export const pageAnnotationRoutes: FastifyPluginAsync = async (app) => {
         authorId: true, authorName: true, authorPhone: true, createdAt: true,
       },
     })
-    return rows.map(row => ({ ...row, mine: row.authorId === actor.userId, deletable: row.authorId === actor.userId || actor.isAdmin }))
+    return rows.map(row => ({ ...row, mine: row.authorId === actor.userId, deletable: row.authorId === actor.userId }))
   })
 
   // POST /api/page-annotations — 加一条（图钉或一笔涂鸦）
@@ -150,7 +148,7 @@ export const pageAnnotationRoutes: FastifyPluginAsync = async (app) => {
     return { ...row, mine: true, deletable: true }
   })
 
-  // DELETE /api/page-annotations/:id — 作者可删自己的；管理员可删任何
+  // DELETE /api/page-annotations/:id — 所有人规则一致：只能删自己写的
   app.delete('/:id', {
     ...auth(app),
     config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
@@ -160,48 +158,10 @@ export const pageAnnotationRoutes: FastifyPluginAsync = async (app) => {
     const id = String(request.params?.id || '')
     const existing = await prisma.pageAnnotation.findFirst({ where: { id, tenantId: actor.tenantId } })
     if (!existing) return notFound(reply)
-    if (existing.authorId !== actor.userId && !actor.isAdmin) {
+    if (existing.authorId !== actor.userId) {
       return reply.status(403).send({ error: '只能删除自己写的批注' })
     }
     await prisma.pageAnnotation.delete({ where: { id } })
     return { success: true }
-  })
-
-  // GET /api/page-annotations/export — 仅管理员：全量批注导出为 Markdown（按页面分组）
-  app.get('/export', {
-    ...auth(app),
-    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
-  }, async (request: any, reply) => {
-    const actor = await loadActor(request)
-    if (!actor) return notFound(reply)
-    if (!actor.isAdmin) return reply.status(403).send({ error: '仅批注管理员可导出' })
-    const rows = await prisma.pageAnnotation.findMany({
-      where: { tenantId: actor.tenantId },
-      orderBy: [{ pageKey: 'asc' }, { createdAt: 'asc' }],
-    })
-    const groups = new Map<string, typeof rows>()
-    for (const row of rows) {
-      const list = groups.get(row.pageKey) || []
-      list.push(row)
-      groups.set(row.pageKey, list)
-    }
-    const lines: string[] = [`# 页面批注清单`, ``, `导出时间：${new Date().toLocaleString('zh-CN')}`, `共 ${rows.length} 条（${groups.size} 个页面）`, ``]
-    for (const [pageKey, list] of groups) {
-      lines.push(`## ${pageKey}`, ``)
-      for (const row of list) {
-        const time = row.createdAt.toLocaleString('zh-CN')
-        if (row.kind === 'PIN') {
-          const payload = row.payload as { text?: string }
-          lines.push(`- 📌 [${time}] ${row.authorName}（${row.authorPhone}）：${payload.text || ''}`)
-        } else {
-          const payload = row.payload as { points?: unknown[][] }
-          lines.push(`- ✏️ [${time}] ${row.authorName}（${row.authorPhone}）：涂鸦一笔（${payload.points?.length || 0} 点）`)
-        }
-      }
-      lines.push(``)
-    }
-    if (rows.length === 0) lines.push(`（暂无批注）`, ``)
-    reply.header('Content-Type', 'text/markdown; charset=utf-8')
-    return reply.send(lines.join('\n'))
   })
 }

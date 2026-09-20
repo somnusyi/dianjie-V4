@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { usePathname } from 'next/navigation'
-import { apiFetch, getToken } from '@/lib/v2-auth'
+import { apiFetch } from '@/lib/v2-auth'
 
 type Annotation = {
   id: string
@@ -40,11 +40,10 @@ function ssSet(key: string, value: boolean) {
 export function AnnotationLayer() {
   const pathname = usePathname() || '/'
   const [mounted, setMounted] = useState(false)
-  const [config, setConfig] = useState<{ admin: boolean } | null>(null)
+  const [config, setConfig] = useState<boolean>(false)
   const [items, setItems] = useState<Annotation[]>([])
   const [mode, setMode] = useState<null | 'pin' | 'draw'>(null)
   const [visible, setVisible] = useState(() => ssGet('anno.visible', true))
-  const [closed, setClosed] = useState(() => ssGet('anno.closed', false))
   const [docSize, setDocSize] = useState({ w: 0, h: 0 })
   const [draft, setDraft] = useState<{ x: number; y: number } | null>(null)
   const [draftText, setDraftText] = useState('')
@@ -54,7 +53,6 @@ export function AnnotationLayer() {
   const [bar, setBar] = useState<{ x: number; y: number } | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const drawingRef = useRef<Array<[number, number]> | null>(null)
-  const lastKeyBRef = useRef(0)
   const dragRef = useRef<{ dx: number; dy: number } | null>(null)
 
   const pageKey = pathname.split('?')[0] || '/'
@@ -64,9 +62,9 @@ export function AnnotationLayer() {
   useEffect(() => {
     if (!mounted) return
     let alive = true
-    apiFetch<{ enabled: boolean; admin: boolean }>('/api/page-annotations/config')
-      .then(data => { if (alive && data?.enabled) setConfig({ admin: !!data.admin }) })
-      .catch(() => { /* 无此功能或未登录：保持 null，页面完全不受影响 */ })
+    apiFetch<{ enabled: boolean }>('/api/page-annotations/config')
+      .then(data => { if (alive && data?.enabled) setConfig(true) })
+      .catch(() => { /* 无此功能或未登录：保持 false，页面完全不受影响 */ })
     return () => { alive = false }
   }, [mounted])
 
@@ -128,24 +126,6 @@ export function AnnotationLayer() {
     }
     if (drawingRef.current) drawStroke(drawingRef.current, 3)
   }, [items, docSize, mode])
-
-  /* ── 双击 B 唤回 / Esc 退出模式 ── */
-  useEffect(() => {
-    if (!config) return
-    const onKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null
-      const typing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
-      if (typing) return
-      if (event.key === 'Escape') { setMode(null); setDraft(null); setViewId(null); return }
-      if (event.key === 'b' || event.key === 'B') {
-        const now = Date.now()
-        if (now - lastKeyBRef.current < 500) { setClosed(false); ssSet('anno.closed', false) }
-        lastKeyBRef.current = now
-      }
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [config])
 
   /* ── 画笔：pointer 事件统一鼠标/触摸，坐标为文档坐标（跟随滚动）── */
   const pagePoint = (event: React.PointerEvent): [number, number] => {
@@ -246,22 +226,6 @@ export function AnnotationLayer() {
     finally { setBusy(false) }
   }
 
-  /* ── 管理员导出：按页面分组的 Markdown ── */
-  const exportMarkdown = async () => {
-    try {
-      const token = getToken()
-      const res = await fetch('/api/page-annotations/export', { headers: token ? { Authorization: `Bearer ${token}` } : {} })
-      if (!res.ok) throw new Error('导出失败')
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `页面批注清单-${new Date().toISOString().slice(0, 10)}.md`
-      link.click()
-      URL.revokeObjectURL(url)
-    } catch (reason: any) { window.alert(reason?.message || '导出失败') }
-  }
-
   /* ── 工具条拖动（贴边跟随，桌面/手机一致）── */
   const onBarDragStart = (event: React.PointerEvent) => {
     const rect = (event.currentTarget.parentElement as HTMLElement).getBoundingClientRect()
@@ -283,7 +247,7 @@ export function AnnotationLayer() {
     if (!next) { setMode(null); setDraft(null); setViewId(null) }
   }
 
-  if (!mounted || !config || closed) return null
+  if (!mounted || !config) return null
 
   const barStyle = bar ? { left: bar.x, top: bar.y } : undefined
   const popoverLeft = (x: number) => Math.max(8, Math.min(x, docSize.w - 280))
@@ -336,9 +300,6 @@ export function AnnotationLayer() {
         {/* 图钉查看 / 编辑 / 删除 */}
         {viewItem && (
           <div style={{ position: 'absolute', left: popoverLeft(viewItem.payload?.x || 0), top: (viewItem.payload?.y || 0) + 16, width: 264, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.18)', padding: 10, pointerEvents: 'auto', zIndex: 3 }}>
-            <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 4 }}>
-              {viewItem.authorName} · {new Date(viewItem.createdAt).toLocaleString('zh-CN')}{viewItem.mine ? ' · 我' : ''}
-            </div>
             <textarea
               value={editText}
               onChange={event => setEditText(event.target.value)}
@@ -386,8 +347,6 @@ export function AnnotationLayer() {
             color: visible ? '#374151' : '#dc2626',
           }}
         >{visible ? '隐藏批注' : '显示批注'}</button>
-        {config.admin && <ToolButton title="导出全部页面批注清单（Markdown）" onClick={() => void exportMarkdown()}>⬇️</ToolButton>}
-        <ToolButton title="关闭工具条（连按两次 B 唤回）" onClick={() => { setClosed(true); ssSet('anno.closed', true) }}>✕</ToolButton>
       </div>
     </>,
     document.body,

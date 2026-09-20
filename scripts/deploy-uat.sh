@@ -135,10 +135,9 @@ fi
   printf 'UPSTREAM_PROCUREMENT_ENABLED=true\n'
   printf 'UPSTREAM_RECEIPT_POSTING_ENABLED=true\n'
   printf 'UPSTREAM_MANUAL_INBOUND_RESTRICTED=false\n'
-  # UAT 灰度专用页面批注层（图钉+涂鸦）：仅 8 个测试账号可见，管理员可删任意并导出清单
+  # UAT 灰度专用页面批注层（图钉+涂鸦）：仅 8 个测试账号可见，所有人规则一致（各自只能删改自己的）
   printf 'ANNOTATIONS_ENABLED=true\n'
   printf 'ANNOTATION_ALLOWED_PHONES=13970000001,13970000002,13970000003,13970000004,13970000005,13970000006,13900000007,13970000008\n'
-  printf 'ANNOTATION_ADMIN_PHONES=13970000001\n'
   printf 'AUTO_FIX_MODE=off\n'
   printf 'AUTO_FIX_DEPLOY_ENABLED=false\n'
   printf 'AUTO_FIX_CORE_API_ENABLED=false\n'

@@ -275,6 +275,14 @@ export function AnnotationLayer() {
     setBar({ x, y })
   }
 
+  /* ── 显/隐：显示时可增删改；隐藏时锁定（退出模式、按钮置灰），页面回到原生状态 ── */
+  const toggleVisible = () => {
+    const next = !visible
+    setVisible(next)
+    ssSet('anno.visible', next)
+    if (!next) { setMode(null); setDraft(null); setViewId(null) }
+  }
+
   if (!mounted || !config || closed) return null
 
   const barStyle = bar ? { left: bar.x, top: bar.y } : undefined
@@ -366,9 +374,18 @@ export function AnnotationLayer() {
         >
           ⠿
         </div>
-        <ToolButton active={mode === 'pin'} title="图钉：点页面任意位置写批注" onClick={() => { setMode(mode === 'pin' ? null : 'pin'); setDraft(null); setViewId(null) }}>📌</ToolButton>
-        <ToolButton active={mode === 'draw'} title="涂鸦：在页面上圈画（红笔）" onClick={() => { setMode(mode === 'draw' ? null : 'draw'); setDraft(null); setViewId(null) }}>✏️</ToolButton>
-        <ToolButton title={visible ? '隐藏全部批注' : '显示全部批注'} onClick={() => { setVisible(!visible); ssSet('anno.visible', !visible) }}>{visible ? '🙈' : '👁️'}</ToolButton>
+        <ToolButton active={mode === 'pin'} disabled={!visible} title="图钉：点页面任意位置写批注" onClick={() => { setMode(mode === 'pin' ? null : 'pin'); setDraft(null); setViewId(null) }}>📌</ToolButton>
+        <ToolButton active={mode === 'draw'} disabled={!visible} title="涂鸦：在页面上圈画（红笔）" onClick={() => { setMode(mode === 'draw' ? null : 'draw'); setDraft(null); setViewId(null) }}>✏️</ToolButton>
+        <button
+          onClick={toggleVisible}
+          title={visible ? '隐藏后页面恢复原样，且不能增删改批注' : '恢复显示本页全部批注'}
+          style={{
+            height: 40, padding: '0 12px', borderRadius: 12, cursor: 'pointer', fontSize: 13, whiteSpace: 'nowrap',
+            border: visible ? '1px solid #e5e7eb' : '1.5px solid #dc2626',
+            background: visible ? '#f9fafb' : '#fef2f2',
+            color: visible ? '#374151' : '#dc2626',
+          }}
+        >{visible ? '隐藏批注' : '显示批注'}</button>
         {config.admin && <ToolButton title="导出全部页面批注清单（Markdown）" onClick={() => void exportMarkdown()}>⬇️</ToolButton>}
         <ToolButton title="关闭工具条（连按两次 B 唤回）" onClick={() => { setClosed(true); ssSet('anno.closed', true) }}>✕</ToolButton>
       </div>
@@ -377,14 +394,16 @@ export function AnnotationLayer() {
   )
 }
 
-function ToolButton({ children, title, active, onClick }: { children: React.ReactNode; title: string; active?: boolean; onClick: () => void }) {
+function ToolButton({ children, title, active, disabled, onClick }: { children: React.ReactNode; title: string; active?: boolean; disabled?: boolean; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
       title={title}
+      disabled={disabled}
       style={{
-        width: 40, height: 40, borderRadius: 12, border: 'none', cursor: 'pointer', fontSize: 17,
+        width: 40, height: 40, borderRadius: 12, border: 'none', cursor: disabled ? 'not-allowed' : 'pointer', fontSize: 17,
         background: active ? '#fef2f2' : 'transparent', boxShadow: active ? 'inset 0 0 0 2px #dc2626' : undefined,
+        opacity: disabled ? 0.35 : 1,
       }}
     >{children}</button>
   )

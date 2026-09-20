@@ -20,9 +20,9 @@ import {
 } from '../services/warehouseLedger'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
-const INTERNAL_ROLES = new Set(['SUPPLY_CHAIN', 'ADMIN', 'SUPER_ADMIN'])
-const APPROVER_ROLES = new Set(['SUPPLY_CHAIN', 'ADMIN', 'SUPER_ADMIN'])
-const FINANCE_ROLES = new Set(['FINANCE', 'ADMIN', 'SUPER_ADMIN'])
+const INTERNAL_ROLES = new Set(['SUPPLY_CHAIN', 'SUPER_ADMIN'])
+const APPROVER_ROLES = new Set(['SUPPLY_CHAIN', 'SUPER_ADMIN'])
+const FINANCE_ROLES = new Set(['FINANCE', 'SUPER_ADMIN'])
 const SETTLEMENT_READ_ROLES = new Set([...INTERNAL_ROLES, ...FINANCE_ROLES])
 const idSchema = z.string().trim().min(1).max(64)
 const decimalInput = z.coerce.number().finite().positive()

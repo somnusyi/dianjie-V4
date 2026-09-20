@@ -282,7 +282,8 @@ async function main() {
 
   const accounts = await Promise.all([
     upsertUser({ email: 'uat.supply-chain@local.invalid', phone: '13970000001', name: 'UAT 供应链采购', role: 'SUPPLY_CHAIN' }),
-    upsertUser({ email: 'uat.reviewer@local.invalid', phone: '13970000002', name: 'UAT 第二复核人', role: 'ADMIN' }),
+    upsertUser({ email: 'uat.reviewer@local.invalid', phone: '13970000002', name: 'UAT 老板', role: 'ADMIN' }),
+    upsertUser({ email: 'uat.supply-chain-2@local.invalid', phone: '13970000008', name: 'UAT 供应链第二人（复核）', role: 'SUPPLY_CHAIN' }),
     upsertUser({ email: 'uat.finance@local.invalid', phone: '13970000003', name: 'UAT 财务', role: 'FINANCE' }),
     upsertUser({ email: 'uat.supplier@local.invalid', phone: '13970000004', name: 'UAT 供应商负责人', role: 'SUPPLIER_OWNER', supplierId: upstreamSupplier.id }),
     upsertUser({ email: 'uat.other-supplier@local.invalid', phone: '13970000005', name: 'UAT 隔离供应商负责人', role: 'SUPPLIER_OWNER', supplierId: isolatedSupplier.id }),

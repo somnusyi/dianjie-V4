@@ -28,6 +28,38 @@ type Annotation = {
 const RED = '#dc2626'
 const DOT = 14
 
+/* ── 橡皮擦命中检测：点到笔迹线段/图钉圆心的距离 ── */
+function distToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number) {
+  const dx = bx - ax
+  const dy = by - ay
+  const len2 = dx * dx + dy * dy
+  let t = len2 === 0 ? 0 : ((px - ax) * dx + (py - ay) * dy) / len2
+  t = Math.max(0, Math.min(1, t))
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+}
+function findStrokeAt(x: number, y: number, items: Annotation[]): Annotation | null {
+  let best: { item: Annotation; d: number } | null = null
+  for (const item of items) {
+    if (item.kind !== 'STROKE' || !item.payload?.points?.length) continue
+    const pts = item.payload.points
+    const threshold = (item.payload.width || 3) + 8
+    for (let i = 1; i < pts.length; i += 1) {
+      const d = distToSegment(x, y, pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1])
+      if (d <= threshold && (!best || d < best.d)) best = { item, d }
+    }
+  }
+  return best ? best.item : null
+}
+function findPinAt(x: number, y: number, items: Annotation[]): Annotation | null {
+  let best: { item: Annotation; d: number } | null = null
+  for (const item of items) {
+    if (item.kind !== 'PIN' || item.payload?.x == null) continue
+    const d = Math.hypot(x - (item.payload.x || 0), y - (item.payload.y || 0))
+    if (d <= 16 && (!best || d < best.d)) best = { item, d }
+  }
+  return best ? best.item : null
+}
+
 function ssGet(key: string, fallback: boolean) {
   if (typeof window === 'undefined') return fallback
   const raw = window.sessionStorage.getItem(key)
@@ -42,7 +74,7 @@ export function AnnotationLayer() {
   const [mounted, setMounted] = useState(false)
   const [config, setConfig] = useState<boolean>(false)
   const [items, setItems] = useState<Annotation[]>([])
-  const [mode, setMode] = useState<null | 'pin' | 'draw'>(null)
+  const [mode, setMode] = useState<null | 'pin' | 'draw' | 'erase'>(null)
   const [visible, setVisible] = useState(() => ssGet('anno.visible', true))
   const [docSize, setDocSize] = useState({ w: 0, h: 0 })
   const [draft, setDraft] = useState<{ x: number; y: number } | null>(null)
@@ -50,6 +82,7 @@ export function AnnotationLayer() {
   const [viewId, setViewId] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
   const [busy, setBusy] = useState(false)
+  const [eraseTip, setEraseTip] = useState('')
   const [bar, setBar] = useState<{ x: number; y: number } | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const drawingRef = useRef<Array<[number, number]> | null>(null)
@@ -226,16 +259,19 @@ export function AnnotationLayer() {
     finally { setBusy(false) }
   }
 
-  /* ── 清除：清空本页全部批注（含其他人写的），二次确认 ── */
-  const clearPage = async () => {
-    if (!window.confirm(`确定清空本页全部批注（共 ${items.length} 条，包括其他人写的）？此操作不可恢复。`)) return
-    setBusy(true)
-    try {
-      await apiFetch(`/api/page-annotations/page?pageKey=${encodeURIComponent(pageKey)}`, { method: 'DELETE' })
-      setItems([])
-      setViewId(null)
-    } catch (reason: any) { window.alert(reason?.message || '清除失败') }
-    finally { setBusy(false) }
+  /* ── 橡皮擦：点中的笔迹/图钉，自己的擦掉，别人的提示擦不动 ── */
+  const flashTip = useCallback((text: string) => {
+    setEraseTip(text)
+    window.setTimeout(() => setEraseTip(''), 2000)
+  }, [])
+  const onEraseClick = async (event: React.MouseEvent) => {
+    const x = event.pageX
+    const y = event.pageY
+    const pin = findPinAt(x, y, items)
+    const target = pin || findStrokeAt(x, y, items)
+    if (!target) return
+    if (!target.deletable) { flashTip('只能擦除自己写的批注'); return }
+    await removeItem(target.id)
   }
 
   /* ── 工具条拖动（贴边跟随，桌面/手机一致）── */
@@ -283,11 +319,24 @@ export function AnnotationLayer() {
             style={{ position: 'absolute', inset: 0, pointerEvents: 'auto', cursor: 'copy' }}
           />
         )}
+        {mode === 'erase' && (
+          <div
+            onClick={event => void onEraseClick(event)}
+            style={{ position: 'absolute', inset: 0, pointerEvents: 'auto', cursor: 'cell', zIndex: 1 }}
+          />
+        )}
         {/* 图钉：只有小点本身可点 */}
         {!draft && mode !== 'pin' && items.filter(item => item.kind === 'PIN' && item.payload?.x != null).map(item => (
           <button
             key={item.id}
-            onClick={() => { setViewId(viewId === item.id ? null : item.id); setEditText(item.payload?.text || '') }}
+            onClick={() => {
+              if (mode === 'erase') {
+                if (item.deletable) void removeItem(item.id)
+                else flashTip('只能擦除自己写的批注')
+                return
+              }
+              setViewId(viewId === item.id ? null : item.id); setEditText(item.payload?.text || '')
+            }}
             style={{ position: 'absolute', left: (item.payload?.x || 0) - DOT / 2, top: (item.payload?.y || 0) - DOT / 2, width: DOT, height: DOT, borderRadius: '50%', background: RED, border: '2px solid #fff', boxShadow: '0 1px 4px rgba(0,0,0,.35)', pointerEvents: 'auto', cursor: 'pointer', zIndex: 2 }}
             aria-label="批注图钉"
           />
@@ -330,7 +379,8 @@ export function AnnotationLayer() {
       {/* 批注模式提示条 */}
       {mode && (
         <div style={{ position: 'fixed', top: 8, left: '50%', transform: 'translateX(-50%)', zIndex: 46, background: '#111827', color: '#fff', borderRadius: 999, padding: '6px 14px', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 4px 12px rgba(0,0,0,.25)' }}>
-          <span>批注模式中：{mode === 'pin' ? '点页面放图钉' : '直接在页面上画'}</span>
+          <span>批注模式中：{mode === 'pin' ? '点页面放图钉' : mode === 'erase' ? '橡皮擦：点自己画的笔迹或图钉擦除' : '直接在页面上画'}</span>
+          {eraseTip && <span style={{ color: '#fca5a5' }}>{eraseTip}</span>}
           {mode === 'draw' && <button onClick={() => void undoLastStroke()} disabled={busy} style={{ background: 'transparent', color: '#fbbf24', border: 'none', fontSize: 13, cursor: 'pointer' }}>撤销上一笔</button>}
           <button onClick={() => { setMode(null); setDraft(null) }} style={{ background: 'transparent', color: '#fff', border: '1px solid #4b5563', borderRadius: 6, fontSize: 12, padding: '2px 8px', cursor: 'pointer' }}>退出</button>
         </div>
@@ -349,6 +399,7 @@ export function AnnotationLayer() {
         </div>
         <ToolButton active={mode === 'pin'} disabled={!visible} title="图钉：点页面任意位置写批注" onClick={() => { setMode(mode === 'pin' ? null : 'pin'); setDraft(null); setViewId(null) }}>📌</ToolButton>
         <ToolButton active={mode === 'draw'} disabled={!visible} title="涂鸦：在页面上圈画（红笔）" onClick={() => { setMode(mode === 'draw' ? null : 'draw'); setDraft(null); setViewId(null) }}>✏️</ToolButton>
+        <ToolButton active={mode === 'erase'} disabled={!visible} title="橡皮擦：点自己画的笔迹或图钉擦掉，别人的擦不动" onClick={() => { setMode(mode === 'erase' ? null : 'erase'); setDraft(null); setViewId(null) }}>🧽</ToolButton>
         <button
           onClick={toggleVisible}
           title={visible ? '隐藏后页面恢复原样，且不能增删改批注' : '恢复显示本页全部批注'}
@@ -359,15 +410,6 @@ export function AnnotationLayer() {
             color: visible ? '#374151' : '#dc2626',
           }}
         >{visible ? '隐藏批注' : '显示批注'}</button>
-        <button
-          onClick={() => void clearPage()}
-          disabled={busy || items.length === 0}
-          title="清空本页全部批注（包括其他人写的），需二次确认"
-          style={{
-            height: 40, padding: '0 12px', borderRadius: 12, cursor: 'pointer', fontSize: 13, whiteSpace: 'nowrap',
-            border: '1px solid #fecaca', background: '#fef2f2', color: '#dc2626', opacity: busy || items.length === 0 ? 0.35 : 1,
-          }}
-        >清除</button>
       </div>
     </>,
     document.body,

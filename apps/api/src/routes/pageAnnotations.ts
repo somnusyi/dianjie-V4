@@ -58,29 +58,15 @@ const PAGE_ROLE_RULES: Array<{ prefix: string; roles: string[] }> = [
   { prefix: '/v2/boss-pc', roles: ['ADMIN', 'SUPER_ADMIN'] },
   { prefix: '/v2/boss', roles: ['ADMIN', 'SUPER_ADMIN'] },
 ]
-const SUPPLIER_PAGE_PREFIX = '/v2/supplier'
-
-function isSupplierPage(pageKey: string): boolean {
-  return pageKey === SUPPLIER_PAGE_PREFIX || pageKey.startsWith(`${SUPPLIER_PAGE_PREFIX}/`)
-}
-
-/** 校验当前角色能否读写该页面批注；通过则返回该页的供应商隔离范围（供应商页=本公司，其余=null 共享） */
-function pageScopeGuard(request: any, reply: any, pageKey: string): { ok: true; scopeSupplierId: string | null } | { ok: false } {
+/** 校验当前角色能否读写该页面批注；页面内所有能进来的账号共享同一层（如供应链采购/复核、两个供应商账号） */
+function pageScopeGuard(request: any, reply: any, pageKey: string): { ok: boolean } {
   const role = request.user?.role
   const rule = PAGE_ROLE_RULES.find(item => pageKey === item.prefix || pageKey.startsWith(`${item.prefix}/`))
   if (rule && !rule.roles.includes(role)) {
     reply.status(403).send({ error: '这个页面不属于当前角色，不能读写这里的批注' })
     return { ok: false }
   }
-  if (isSupplierPage(pageKey)) {
-    const supplierId = request.user?.supplierId
-    if (!supplierId) {
-      reply.status(403).send({ error: '供应商页面批注仅限供应商账号' })
-      return { ok: false }
-    }
-    return { ok: true, scopeSupplierId: supplierId }
-  }
-  return { ok: true, scopeSupplierId: null }
+  return { ok: true }
 }
 
 function annotationsEnabled(): boolean {
@@ -133,10 +119,9 @@ export const pageAnnotationRoutes: FastifyPluginAsync = async (app) => {
     if (!pageKeySchema.safeParse(pageKey).success) {
       return reply.status(400).send({ error: '页面路径格式不正确' })
     }
-    const guard = pageScopeGuard(request, reply, pageKey)
-    if (!guard.ok) return
+    if (!pageScopeGuard(request, reply, pageKey).ok) return
     const rows = await prisma.pageAnnotation.findMany({
-      where: { tenantId: actor.tenantId, pageKey, scopeSupplierId: guard.scopeSupplierId },
+      where: { tenantId: actor.tenantId, pageKey },
       orderBy: { createdAt: 'asc' },
       select: {
         id: true, pageKey: true, kind: true, payload: true,
@@ -156,8 +141,7 @@ export const pageAnnotationRoutes: FastifyPluginAsync = async (app) => {
     const parsed = createSchema.safeParse(request.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { pageKey, kind } = parsed.data
-    const guard = pageScopeGuard(request, reply, pageKey)
-    if (!guard.ok) return
+    if (!pageScopeGuard(request, reply, pageKey).ok) return
     const payload = kind === 'PIN'
       ? pinPayloadSchema.safeParse(parsed.data.payload)
       : kind === 'RECT'
@@ -170,7 +154,6 @@ export const pageAnnotationRoutes: FastifyPluginAsync = async (app) => {
         pageKey,
         kind,
         payload: payload.data as object,
-        scopeSupplierId: guard.scopeSupplierId,
         authorId: actor.userId,
         authorName: actor.name,
         authorPhone: actor.phone,
@@ -191,9 +174,7 @@ export const pageAnnotationRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.status(400).send({ error: '参数格式不正确' })
     const existing = await prisma.pageAnnotation.findFirst({ where: { id, tenantId: actor.tenantId } })
     if (!existing) return notFound(reply)
-    const guard = pageScopeGuard(request, reply, existing.pageKey)
-    if (!guard.ok) return
-    if (existing.scopeSupplierId !== guard.scopeSupplierId) return notFound(reply)
+    if (!pageScopeGuard(request, reply, existing.pageKey).ok) return
     if (existing.authorId !== actor.userId) return reply.status(403).send({ error: '只能修改自己写的批注' })
     if (existing.kind !== 'PIN') return reply.status(400).send({ error: '只有图钉可编辑，涂鸦请撤销重画' })
     const payload = pinPayloadSchema.safeParse(parsed.data.payload)
@@ -215,9 +196,7 @@ export const pageAnnotationRoutes: FastifyPluginAsync = async (app) => {
     const id = String(request.params?.id || '')
     const existing = await prisma.pageAnnotation.findFirst({ where: { id, tenantId: actor.tenantId } })
     if (!existing) return notFound(reply)
-    const guard = pageScopeGuard(request, reply, existing.pageKey)
-    if (!guard.ok) return
-    if (existing.scopeSupplierId !== guard.scopeSupplierId) return notFound(reply)
+    if (!pageScopeGuard(request, reply, existing.pageKey).ok) return
     if (existing.authorId !== actor.userId) {
       return reply.status(403).send({ error: '只能删除自己写的批注' })
     }

@@ -4651,8 +4651,6 @@ model PageAnnotation {
   authorId    String
   authorName  String
   authorPhone String
-  // 供应商门户页按公司隔离：供应商页=本公司ID，其余页面=null 全角色共享（受页面归属校验）
-  scopeSupplierId String?
   createdAt   DateTime @default(now())
 
   @@index([tenantId, pageKey, createdAt])

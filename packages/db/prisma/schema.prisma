@@ -14,6 +14,8 @@ datasource db {
 
 // ── 租户（SaaS 多租户）────────────────────────────────
 model Tenant {
+  storeTransfers StoreTransfer[]
+
   id        String       @id @default(cuid())
   name      String // 品牌名称
   slug      String       @unique // URL 标识 dianjie
@@ -1177,6 +1179,9 @@ model WeComSyncLog {
 
 // ── 门店 ──────────────────────────────────────────────
 model Store {
+  transfersOut StoreTransfer[] @relation("StoreTransferFrom")
+  transfersIn StoreTransfer[] @relation("StoreTransferTo")
+
   id              String      @id @default(cuid())
   tenantId        String
   no              String // DJ001
@@ -1352,6 +1357,8 @@ model Supplier {
 
 // ── 商品 ──────────────────────────────────────────────
 model Product {
+  storeTransferItems StoreTransferItem[]
+
   id                            String                      @id @default(cuid())
   tenantId                      String
   code                          String // MR001
@@ -4655,4 +4662,61 @@ model PageAnnotation {
 
   @@index([tenantId, pageKey, createdAt])
   @@map("page_annotations")
+}
+
+// 门店调拨登记：PENDING -> SHIPPED -> RECEIVED；PENDING -> REVOKED。
+// 单价为创建时人工确认的库存单位价格快照，不回填或改写门店盘点快照。
+enum StoreTransferStatus {
+  PENDING
+  SHIPPED
+  RECEIVED
+  REVOKED
+}
+
+model StoreTransfer {
+  id           String @id @default(cuid())
+  tenantId     String
+  no           String
+  fromStoreId  String
+  toStoreId    String
+  transferDate DateTime @db.Date
+  status       StoreTransferStatus @default(PENDING)
+  note         String @default("")
+  createdById  String
+  shippedById  String?
+  receivedById String?
+  revokedById  String?
+  requestKey   String
+  createdAt    DateTime @default(now())
+  shippedAt    DateTime?
+  receivedAt   DateTime?
+  revokedAt    DateTime?
+  tenant       Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  fromStore    Store @relation("StoreTransferFrom", fields: [fromStoreId], references: [id], onDelete: Restrict)
+  toStore      Store @relation("StoreTransferTo", fields: [toStoreId], references: [id], onDelete: Restrict)
+  items        StoreTransferItem[]
+  @@unique([tenantId, no])
+  @@unique([tenantId, requestKey])
+  @@index([tenantId, transferDate, status])
+  @@map("store_transfers")
+}
+
+model StoreTransferItem {
+  id              String @id @default(cuid())
+  transferId      String
+  productId       String
+  name            String
+  code            String
+  spec            String?
+  category        String?
+  unit            String
+  quantity        Decimal @db.Decimal(18, 6)
+  cost            Decimal @db.Decimal(18, 6)
+  settlement      Decimal @db.Decimal(18, 6)
+  outAmount       Decimal @db.Decimal(20, 4)
+  inAmount        Decimal @db.Decimal(20, 4)
+  transfer        StoreTransfer @relation(fields: [transferId], references: [id], onDelete: Restrict)
+  product         Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  @@unique([transferId, productId])
+  @@map("store_transfer_items")
 }

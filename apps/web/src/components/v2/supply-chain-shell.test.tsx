@@ -19,9 +19,9 @@ vi.mock('next/navigation', () => ({
 }))
 
 vi.mock('next/link', () => ({
-  default: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
-    <a href={String(href)} {...props}>{children}</a>
-  ),
+  default: React.forwardRef<HTMLAnchorElement, React.AnchorHTMLAttributes<HTMLAnchorElement>>(({ href, children, ...props }, ref) => (
+    <a ref={ref} href={String(href)} {...props}>{children}</a>
+  )),
 }))
 
 vi.mock('@/components/v2', () => ({
@@ -95,5 +95,29 @@ describe('SupplyChainShell 移动端导航', () => {
     expect(container.querySelector('aside')?.className).toContain('lg:flex')
 
     cleanup()
+  })
+})
+
+
+describe('库存报表悬浮导航', () => {
+  it('移入展开，经过浮层取消关闭，移出后关闭；保留业务导航', () => {
+    vi.useFakeTimers()
+    const { container, cleanup } = renderShell('/v2/supply-chain/reports')
+    try {
+      const trigger = container.querySelector('a[aria-controls="inventory-report-flyout"]')!
+      act(() => trigger.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
+      expect(trigger.getAttribute('aria-expanded')).toBe('true')
+      const panel = document.querySelector('#inventory-report-flyout')!
+      expect(panel.querySelectorAll('a')).toHaveLength(8)
+      act(() => trigger.dispatchEvent(new MouseEvent('mouseout', { bubbles: true })))
+      act(() => panel.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
+      act(() => vi.advanceTimersByTime(200))
+      expect(document.querySelector('#inventory-report-flyout')).not.toBeNull()
+      act(() => panel.dispatchEvent(new MouseEvent('mouseout', { bubbles: true })))
+      act(() => vi.advanceTimersByTime(150))
+      expect(document.querySelector('#inventory-report-flyout')).toBeNull()
+      expect(container.querySelector('a[href="/v2/supply-chain/home"]')).not.toBeNull()
+      expect(container.querySelector('a[href="/v2/supply-chain/fulfillment"]')).not.toBeNull()
+    } finally { cleanup(); vi.useRealTimers() }
   })
 })

@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
+import { InventoryReportMenu } from './inventory-report-menu'
 import type { ReactNode } from 'react'
 import { BottomNav } from '@/components/v2'
 
@@ -110,6 +111,7 @@ function mobileActiveKey(pathname: string): string {
   }
   // 库存相关子页归到 inventory
   if (
+    pathname.startsWith('/v2/supply-chain/reports') ||
     pathname.startsWith('/v2/supply-chain/inventory') ||
     pathname.startsWith('/v2/supply-chain/products') ||
     pathname.startsWith('/v2/supply-chain/categories') ||
@@ -158,6 +160,7 @@ export function SupplyChainShell({ children }: { children: ReactNode }) {
               <div className="space-y-1">
                 {group.items.map(item => {
                   const selected = active(pathname, item)
+                  if (item.href === '/v2/supply-chain/inventory') return <InventoryReportMenu key={item.href} selected={selected || pathname.startsWith('/v2/supply-chain/reports')} />
                   return (
                     <Link
                       key={item.href}
@@ -192,7 +195,7 @@ export function SupplyChainShell({ children }: { children: ReactNode }) {
 
       {/* 主内容区 — 移动端无左侧内边距，PC 有 lg:pl-64 */}
       <main className="min-h-screen lg:pl-64">
-        <div className="mx-auto min-h-screen w-full max-w-[1600px]">{children}</div>
+        <div className={`mx-auto min-h-screen w-full ${pathname.startsWith('/v2/supply-chain/reports') ? '' : 'max-w-[1600px]'}`}>{children}</div>
       </main>
 
       {/* 移动端底部导航 — lg 以下显示 */}

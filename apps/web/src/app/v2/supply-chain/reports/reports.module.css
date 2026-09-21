@@ -8,19 +8,22 @@
 .heading h1{font-size:21px}
 .heading small{display:none}
 .reports button,.reports select,.reports input{padding:5px 9px}
-.card{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;column-gap:12px;row-gap:8px;padding:10px 12px;border-radius:9px;max-height:30vh}
-.filters{grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px;margin:0}
-.filters label{gap:3px;font-size:11px;min-width:0}
-.filters input,.filters select{height:29px;font-size:12px;padding:3px 7px}
+.card{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;column-gap:10px;row-gap:6px;padding:7px 10px;border-radius:9px;max-height:30vh}
+.filters{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin:0}
+.filters label{flex-direction:row;align-items:center;gap:5px;font-size:11px;min-width:0;white-space:nowrap}
+.filters input,.filters select{flex:1;width:0;height:27px;font-size:12px;padding:3px 6px}
 .filterFoot{border:0;padding:0;gap:6px;white-space:nowrap;align-self:end}
 .filterFoot>div{gap:6px}
-.filterFoot button{font-size:12px;height:29px;padding:3px 9px}
-.advancedFilters{grid-column:1/-1;grid-row:2;border-top:1px solid #eee;padding-top:9px}
+.filterFoot button{font-size:12px;height:27px;padding:3px 9px}
+.advancedFilters{grid-column:1/-1;grid-row:2;border-top:1px solid #eee;padding-top:7px}
+.advancedFilters label{flex-direction:column;align-items:stretch;gap:3px}
+.advancedFilters input,.advancedFilters select{flex:auto;width:100%}
+.advancedFilters .range input{width:0;flex:1}
 .note{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
 .results{min-height:29px}
 .results button{font-size:12px;padding:4px 9px}
 .pagination{padding:7px 12px;font-size:12px}
 .scroll td{padding-top:11px;padding-bottom:11px}
-@media(max-width:1199px){.card{grid-template-columns:1fr}.filterFoot{justify-content:flex-end}.advancedFilters{grid-row:auto}.filters{grid-template-columns:repeat(auto-fit,minmax(145px,1fr))}}
+@media(max-width:1199px){.card{grid-template-columns:1fr}.filterFoot{justify-content:flex-end}.advancedFilters{grid-row:auto}.filters{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}}
 @media(max-width:1023px){.content{padding:12px;gap:8px}.heading{flex-direction:row;align-items:center;flex-wrap:wrap}.heading h1{font-size:20px}.actions{gap:6px}.card{max-height:36vh}.tableCard{min-height:480px}.scroll{max-height:70vh}.top{padding:10px 12px}}
 @media(max-width:600px){.filters{grid-template-columns:repeat(2,minmax(0,1fr))}.heading{gap:8px}.actions{width:100%}.actions select{flex:1;min-width:0}.content{padding:10px}.tableCard{min-height:420px}}

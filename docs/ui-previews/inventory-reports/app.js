@@ -27,7 +27,7 @@ const movements = products.flatMap((p,i) => [0,1].map(side => {
 }));
 const stock = products.map(p => {const rows=movements.filter(r=>r.code===p.code);const qty=p.openingQty+rows.reduce((s,r)=>s+r.inQty-r.outQty,0);return {...p,qty,amount:round(qty*p.price)};});
 const transfers = products.slice(0,16).flatMap((p,i)=>[0,1].map(n=>({...p,org:'总部',warehouse:'供应链总仓',target:i%2?'示例门店 B':'示例门店 A',targetWarehouse:'门店仓',doc:`DB202609${String(i*2+n+1).padStart(5,'0')}`,date:`2026-09-${18+n}`,cost:p.price,settlement:round(p.price*1.1),transferQty:4+n,outAmount:round((4+n)*p.price),inAmount:round((4+n)*round(p.price*1.1))})));
-let current = reports[0], opened = ['realtime'], filters = {}, rows = [], page=1, pageSize=20, sortKey='', sortDirection=1;
+let current = reports[0], opened = [], filters = {}, rows = [], page=1, pageSize=20, sortKey='', sortDirection=1;
 const hiddenColumns = new Map(reports.map(r=>[r.id,new Set()]));
 const number = (value,kind) => value==null?'—':kind==='money'||kind==='price'?money.format(value):quantity.format(value);
 function toast(message){$('#toast').textContent=message;$('#toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('#toast').hidden=true,2600);}
@@ -45,9 +45,23 @@ document.addEventListener('pointerdown',e=>{if(!$('#report-menu').contains(e.tar
 $('#report-links').innerHTML=reports.map(r=>`<a href="#${r.id}" data-report="${r.id}">${r.title}</a>`).join('');
 $('#report-links').addEventListener('click',e=>{if(e.target.closest('a'))closeMenu();});
 function renderTabs(){
-  $('#workspace-tabs').innerHTML=opened.map(id=>{const r=reports.find(x=>x.id===id);return `<a href="#${id}" ${id===current.id?'aria-current="page"':''} class="${id===current.id?'active':''}">${r.title}</a>`;}).join('');
-  document.querySelectorAll('[data-report]').forEach(a=>a.classList.toggle('active',a.dataset.report===current.id));
+  $('#workspace-tabs').innerHTML=opened.map(id=>{const r=reports.find(x=>x.id===id);return `<div class="workspace-tab ${id===current?.id?'active':''}"><a href="#${id}" ${id===current?.id?'aria-current="page"':''}>${r.title}</a><button class="tab-close" data-close-report="${id}" aria-label="关闭${r.title}" title="关闭${r.title}">×</button></div>`;}).join('');
+  document.querySelectorAll('[data-report]').forEach(a=>a.classList.toggle('active',a.dataset.report===current?.id));
 }
+$('#workspace-tabs').addEventListener('click',e=>{
+  const button=e.target.closest('[data-close-report]');
+  if(!button)return;
+  const id=button.dataset.closeReport;
+  const index=opened.indexOf(id);
+  if(index<0)return;
+  opened.splice(index,1);
+  if(current?.id===id){
+    location.hash=opened[index]||opened[index-1]||'reports';
+  }else{
+    renderTabs();
+  }
+});
+$('#open-report').onclick=openMenu;
 const selectField=(key,label,options,value='')=>`<label>${label}<select name="${key}">${options.map(v=>`<option value="${esc(v)}" ${v===value?'selected':''}>${esc(v||'全部')}</option>`).join('')}</select></label>`;
 const textField=(key,label,placeholder)=>`<label>${label}<input name="${key}" placeholder="${placeholder}"></label>`;
 const rangeField=(key,label)=>`<label>${label}<span class="number-range"><input aria-label="${label}最小值" type="number" step="any" name="${key}Min" placeholder="最小值"><span>—</span><input aria-label="${label}最大值" type="number" step="any" name="${key}Max" placeholder="最大值"></span></label>`;
@@ -121,7 +135,16 @@ function renderTable(){
   $('#page-index').textContent=`${page} / ${pages}`;$('#prev').disabled=page<=1;$('#next').disabled=page>=pages;
   document.querySelectorAll('[data-sort]').forEach(b=>b.onclick=()=>{sortDirection=sortKey===b.dataset.sort?-sortDirection:1;sortKey=b.dataset.sort;renderTable();});
 }
-function navigate(){const id=location.hash.slice(1);current=reports.find(r=>r.id===id)||reports[0];if(!opened.includes(current.id))opened.push(current.id);$('#report-title').textContent=current.title;$('#report-description').textContent=current.description;document.title=`${current.title} · 滇界 UI 预览`;sortKey='';renderTabs();renderFilters();query();closeMenu();$('.table-scroll').scrollTo(0,0);}
+function navigate(){
+  const id=location.hash.slice(1);
+  const empty=id==='reports';
+  $('.workspace').hidden=empty;
+  $('#empty-workspace').hidden=!empty;
+  if(empty){current=null;document.title='库存与单据 · 滇界 UI 预览';renderTabs();closeMenu();return;}
+  current=reports.find(r=>r.id===id)||reports[0];
+  if(!opened.includes(current.id))opened.push(current.id);
+  $('#report-title').textContent=current.title;$('#report-description').textContent=current.description;document.title=`${current.title} · 滇界 UI 预览`;sortKey='';renderTabs();renderFilters();query();closeMenu();$('.table-scroll').scrollTo(0,0);
+}
 window.addEventListener('hashchange',navigate);
 $('#query-form').onsubmit=e=>{e.preventDefault();query();};
 $('#reset').onclick=()=>{renderFilters();query();};

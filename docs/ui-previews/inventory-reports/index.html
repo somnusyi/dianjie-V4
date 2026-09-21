@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>滇界 · 库存报表交互预览</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">滇</span><div><strong>内部供应链</strong><small>统一采购与履约中心</small></div></div>
+    <nav aria-label="内部供应链主导航">
+      <p class="nav-heading">日常作业</p>
+      <button class="nav-item" disabled><i>⌂</i><span>工作台<small>今日待办、异常与健康</small></span></button>
+      <button class="nav-item" disabled><i>☷</i><span>订单中心<small>待处理、订货与配送</small></span></button>
+      <button class="nav-item" disabled><i>!</i><span>到货差异<small>短量、破损与报损</small></span></button>
+      <button class="nav-item" disabled><i>店</i><span>门店运营<small>订货、收货、库存与消耗</small></span></button>
+      <button class="nav-item" disabled><i>班</i><span>配送班表<small>送货日、到货期与适用门店</small></span></button>
+      <p class="nav-heading">货品与仓库</p>
+      <button class="nav-item" disabled><i>品</i><span>商品管理<small>商品、分类、导入与记录</small></span></button>
+      <button class="nav-item selected" id="report-trigger" aria-expanded="false" aria-controls="report-menu"><i>仓</i><span>库存与单据<small>库存报表、明细与汇总</small></span><b>›</b></button>
+      <button class="nav-item" disabled><i>采</i><span>上游采购<small>合同、下单、验收与月结</small></span></button>
+      <button class="nav-item" disabled><i>调</i><span>门店调拨<small>门店间调出、发货与收货</small></span></button>
+      <button class="nav-item" disabled><i>供</i><span>上游供应商<small>总仓采购合作方</small></span></button>
+      <p class="nav-heading">核算与分析</p>
+      <button class="nav-item" disabled><i>¥</i><span>账务查询<small>账期、对账与发票</small></span></button>
+      <button class="nav-item" disabled><i>↗</i><span>经营分析<small>门店、SKU、趋势与健康</small></span></button>
+    </nav>
+    <div class="sidebar-foot"><span class="dot"></span> 当前：供应链总仓<small>滇界云管 · DianJie v1.1.0</small></div>
+  </aside>
+  <section id="report-menu" class="flyout" aria-label="库存与单据报表导航" hidden>
+    <div class="flyout-heading"><strong>库存与单据</strong><span>选择报表</span></div>
+    <div class="menu-group"><h2>库存报表</h2><div class="menu-links" id="report-links"></div></div>
+    <div class="menu-group existing"><h2>仓库作业</h2><div><span>入库记录</span><span>单据审核</span><small>原有作业入口保留，本次仅预览报表</small></div></div>
+  </section>
+  <main>
+    <header class="topbar"><div class="breadcrumb">货品与仓库 <span>/</span> 库存与单据</div><div class="identity"><span class="preview-tag">UI 预览 · 示例数据</span><span class="avatar">采</span>供应链采购</div></header>
+    <div class="workspace-tabs" id="workspace-tabs" aria-label="已打开报表"></div>
+    <section class="workspace">
+      <div class="page-heading"><div><div class="eyebrow">库存报表</div><h1 id="report-title"></h1><p id="report-description"></p></div><div class="heading-actions"><button id="mobile-menu">切换报表 ▾</button><button id="fullscreen">⛶ 专注表格</button><button class="primary" id="export">↓ 导出 CSV（示例）</button></div></div>
+      <form id="query-form" class="query-card">
+        <div id="filters" class="filters"></div>
+        <div id="advanced-filters" class="filters advanced" hidden></div>
+        <div class="filter-footer"><button type="button" id="advanced-toggle" class="text-button" aria-expanded="false">更多筛选 ⌄</button><span id="query-hint">按条件查询库存数据</span><div><button type="button" id="reset">重置</button><button type="submit" class="primary">⌕ 查询</button></div></div>
+      </form>
+      <div class="results-bar"><div><strong>报表明细</strong><span id="count"></span><span class="result-note" id="result-note"></span></div><div><button id="density" class="quiet">紧凑行高</button><button id="columns" class="quiet">☷ 列设置</button></div></div>
+      <section class="table-card" aria-label="报表查询结果"><div class="table-scroll" tabindex="0" aria-label="可横向滚动的报表表格"><table id="report-table"></table></div><div class="pagination"><span id="page-summary"></span><div><label>每页 <select id="page-size"><option>10</option><option selected>20</option><option>50</option></select> 条</label><button id="prev" aria-label="上一页">‹</button><span id="page-index"></span><button id="next" aria-label="下一页">›</button></div></div></section>
+      <footer class="preview-footer"><span>交互预览：可切换报表、查询、排序和导出示例数据</span><span>尚未连接业务接口与数据库</span></footer>
+    </section>
+  </main>
+  <dialog id="column-dialog"><div class="dialog-title"><h2>显示列</h2><button id="close-columns" aria-label="关闭列设置">×</button></div><p>物品标识固定显示，其余字段可按需隐藏。</p><div id="column-options"></div><button id="all-columns">恢复全部列</button><button class="primary" id="done-columns">完成</button></dialog>
+  <div id="toast" role="status" hidden></div>
+  <script src="./app.js"></script>
+</body>
+</html>

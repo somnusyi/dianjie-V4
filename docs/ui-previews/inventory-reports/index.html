@@ -17,7 +17,7 @@
       <button class="nav-item" disabled><i>班</i><span>配送班表<small>送货日、到货期与适用门店</small></span></button>
       <p class="nav-heading">货品与仓库</p>
       <button class="nav-item" disabled><i>品</i><span>商品管理<small>商品、分类、导入与记录</small></span></button>
-      <button class="nav-item selected" id="report-trigger" aria-expanded="false" aria-controls="report-menu"><i>仓</i><span>库存与单据<small>库存报表、明细与汇总</small></span><b>›</b></button>
+      <button class="nav-item selected" id="report-trigger" aria-expanded="false" aria-controls="report-menu"><i>仓</i><span>库存报表<small>库存报表、明细与汇总</small></span><b>›</b></button>
       <button class="nav-item" disabled><i>采</i><span>上游采购<small>合同、下单、验收与月结</small></span></button>
       <button class="nav-item" disabled><i>调</i><span>门店调拨<small>门店间调出、发货与收货</small></span></button>
       <button class="nav-item" disabled><i>供</i><span>上游供应商<small>总仓采购合作方</small></span></button>
@@ -27,15 +27,15 @@
     </nav>
     <div class="sidebar-foot"><span class="dot"></span> 当前：供应链总仓<small>滇界云管 · DianJie v1.1.0</small></div>
   </aside>
-  <section id="report-menu" class="flyout" aria-label="库存与单据报表导航" hidden>
-    <div class="flyout-heading"><strong>库存与单据</strong><span>选择报表</span></div>
+  <section id="report-menu" class="flyout" aria-label="库存报表导航" hidden>
+    <div class="flyout-heading"><strong>库存报表</strong><span>选择报表</span></div>
     <div class="menu-group"><h2>库存报表</h2><div class="menu-links" id="report-links"></div></div>
     <div class="menu-group existing"><h2>仓库作业</h2><div><span>入库记录</span><span>单据审核</span><small>原有作业入口保留，本次仅预览报表</small></div></div>
   </section>
   <main>
-    <header class="topbar"><div class="breadcrumb">货品与仓库 <span>/</span> 库存与单据</div><div class="identity"><span class="preview-tag">UI 预览 · 示例数据</span><span class="avatar">采</span>供应链采购</div></header>
+    <header class="topbar"><div class="breadcrumb">货品与仓库 <span>/</span> 库存报表</div><div class="identity"><span class="preview-tag">UI 预览 · 示例数据</span><span class="avatar">采</span>供应链采购</div></header>
     <div class="workspace-tabs" id="workspace-tabs" aria-label="已打开报表"></div>
-    <section id="empty-workspace" hidden><h1>暂无打开的报表</h1><p>从“库存与单据”菜单选择一张报表，继续查看。</p><button class="primary" id="open-report">选择报表</button></section>
+    <section id="empty-workspace" hidden><h1>暂无打开的报表</h1><p>从“库存报表”菜单选择一张报表，继续查看。</p><button class="primary" id="open-report">选择报表</button></section>
     <section class="workspace">
       <div class="page-heading"><div><div class="eyebrow">库存报表</div><h1 id="report-title"></h1><p id="report-description"></p></div><div class="heading-actions"><button id="mobile-menu">切换报表 ▾</button><button id="fullscreen">⛶ 专注表格</button><button class="primary" id="export">↓ 导出 CSV（示例）</button></div></div>
       <form id="query-form" class="query-card">

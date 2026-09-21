@@ -140,7 +140,7 @@ function navigate(){
   const empty=id==='reports';
   $('.workspace').hidden=empty;
   $('#empty-workspace').hidden=!empty;
-  if(empty){current=null;document.title='库存与单据 · 滇界 UI 预览';renderTabs();closeMenu();return;}
+  if(empty){current=null;document.title='库存报表 · 滇界 UI 预览';renderTabs();closeMenu();return;}
   current=reports.find(r=>r.id===id)||reports[0];
   if(!opened.includes(current.id))opened.push(current.id);
   $('#report-title').textContent=current.title;$('#report-description').textContent=current.description;document.title=`${current.title} · 滇界 UI 预览`;sortKey='';renderTabs();renderFilters();query();closeMenu();$('.table-scroll').scrollTo(0,0);

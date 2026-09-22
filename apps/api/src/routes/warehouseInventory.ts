@@ -36,6 +36,7 @@ async function registerWarehouseDoc(input: {
 
 const READ_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'FINANCE', 'PURCHASER'])
 const WRITE_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'PURCHASER'])
+const ORDER_ENTRY_POLICY_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'SUPPLY_CHAIN'])
 export type WarehouseInventoryScope = 'stock' | 'bom-mapping' | 'unit-review'
 
 export function buildWarehouseInventoryScopeWhere(input: {
@@ -67,6 +68,18 @@ function requireCapability(capability: 'inventory.read' | 'inventory.write') {
   return async (req: any, reply: any) => {
     if (!hasCapability(req.user?.role, capability)) {
       return reply.status(403).send({ error: capability === 'inventory.read' ? '无权查看总仓库存' : '无权操作总仓库存' })
+    }
+  }
+}
+
+function canEditOrderEntryPolicy(role: string | undefined | null) {
+  return Boolean(role && ORDER_ENTRY_POLICY_ROLES.has(role))
+}
+
+function requireOrderEntryPolicyWrite() {
+  return async (req: any, reply: any) => {
+    if (!canEditOrderEntryPolicy(req.user?.role)) {
+      return reply.status(403).send({ error: '无权设置门店订货零库存策略' })
     }
   }
 }
@@ -190,9 +203,22 @@ const physicalCountSchema = z.object({
   note: z.string().trim().min(2).max(240),
 })
 
+const orderEntryPolicySchema = z.object({
+  blockZeroStockAtOrderEntry: z.boolean(),
+  rowVersion: z.number().int().nonnegative(),
+}).strict()
+
+function isWarehousePolicyTransactionConflict(error: any) {
+  if (error?.code === 'P2034') return true
+  return error?.code === 'P2010'
+    && (String(error?.meta?.code || '') === '40001'
+      || /could not serialize|serialization failure|SQLSTATE\s*40001/i.test(String(error?.meta?.message || error?.message || '')))
+}
+
 export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
   const authRead = { preHandler: [(app as any).authenticate, requireCapability('inventory.read')] }
   const authWrite = { preHandler: [(app as any).authenticate, requireCapability('inventory.write')] }
+  const authOrderEntryPolicyWrite = { preHandler: [(app as any).authenticate, requireOrderEntryPolicyWrite()] }
 
   app.get('/', authRead, async (req: any, reply: any) => {
     const parsed = z.object({
@@ -229,7 +255,15 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
     const [warehouse, products, total, stockSku, bomMappingSku, unitReviewSku, allBalances, activeReservations, movementCount] = await Promise.all([
       prisma.warehouse.findFirstOrThrow({
         where: { id: warehouseId, tenantId },
-        select: { id: true, code: true, name: true, inventoryMode: true, inventoryActivatedAt: true },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          rowVersion: true,
+          inventoryMode: true,
+          blockZeroStockAtOrderEntry: true,
+          inventoryActivatedAt: true,
+        },
       }),
       prisma.product.findMany({
         where,
@@ -290,6 +324,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
     const negativeSku = allBalances.filter(item => item.physicalQty.lt(0)).length
     return {
       warehouse,
+      canEditOrderEntryPolicy: canEditOrderEntryPolicy(req.user.role),
       summary: {
         inventoryMode: warehouse.inventoryMode,
         totalSku: stockSku,
@@ -475,6 +510,114 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
 
   app.get('/audit', authRead, async (req: any) => {
     return auditWarehouseLedger(req.user.tenantId)
+  })
+
+  /** 仅配置门店提交内部总仓订单时的零库存阻断，不改变台账、预占或出库模式。 */
+  app.patch('/order-entry-policy', authOrderEntryPolicyWrite, async (req: any, reply: any) => {
+    const parsed = orderEntryPolicySchema.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+
+    const { tenantId, userId, role } = req.user
+    const warehouseId = await resolveTenantWarehouseId(prisma, tenantId, undefined)
+    try {
+      return await prisma.$transaction(async tx => {
+        const lockedWarehouses = await tx.$queryRaw<Array<{
+          id: string
+          name: string
+          inventoryMode: 'OFF' | 'SHADOW' | 'STRICT'
+          blockZeroStockAtOrderEntry: boolean
+          rowVersion: number
+        }>>`
+          SELECT "id", "name", "inventoryMode"::text AS "inventoryMode",
+                 "blockZeroStockAtOrderEntry", "rowVersion"
+          FROM "warehouses"
+          WHERE "id" = ${warehouseId} AND "tenantId" = ${tenantId} AND "isActive" = true
+          FOR UPDATE
+        `
+        const warehouse = lockedWarehouses[0]
+        if (!warehouse) throw Object.assign(new Error('总仓不存在或不属于当前租户'), { statusCode: 404 })
+        if (warehouse.rowVersion !== parsed.data.rowVersion) {
+          throw Object.assign(new Error('库存策略已被其他人更新，请刷新后重试'), { statusCode: 409 })
+        }
+        if (warehouse.blockZeroStockAtOrderEntry === parsed.data.blockZeroStockAtOrderEntry) {
+          return {
+            warehouseId: warehouse.id,
+            blockZeroStockAtOrderEntry: warehouse.blockZeroStockAtOrderEntry,
+            rowVersion: warehouse.rowVersion,
+            unchanged: true,
+          }
+        }
+        if (parsed.data.blockZeroStockAtOrderEntry && warehouse.inventoryMode === 'OFF') {
+          throw Object.assign(new Error('总仓库存投影尚未启用，不能在门店提交阶段按零库存阻断'), { statusCode: 409 })
+        }
+        if (parsed.data.blockZeroStockAtOrderEntry && warehouse.inventoryMode === 'SHADOW') {
+          const audit = await auditWarehouseLedger(tenantId, tx, warehouse.id)
+          if (!audit.readyForStrict) {
+            throw Object.assign(
+              new Error(`库存四账审计未通过，仍有 ${audit.blockerCount} 项阻断问题，不能在门店提交阶段按零库存阻断`),
+              { statusCode: 409, blockerCount: audit.blockerCount, firstIssue: audit.issues[0] || null },
+            )
+          }
+        }
+
+        const updated = await tx.warehouse.updateMany({
+          where: {
+            id: warehouse.id,
+            tenantId,
+            isActive: true,
+            rowVersion: parsed.data.rowVersion,
+          },
+          data: {
+            blockZeroStockAtOrderEntry: parsed.data.blockZeroStockAtOrderEntry,
+            rowVersion: { increment: 1 },
+          },
+        })
+        if (updated.count !== 1) {
+          throw Object.assign(new Error('库存策略已被其他人更新，请刷新后重试'), { statusCode: 409 })
+        }
+        await tx.opLog.create({
+          data: {
+            tenantId,
+            userId,
+            role,
+            action: parsed.data.blockZeroStockAtOrderEntry
+              ? '门店提交订单切换为零库存禁止提交'
+              : '门店提交订单切换为库存仅提醒、仍可提交',
+            target: warehouse.name,
+            targetId: warehouse.id,
+            entityType: 'Warehouse',
+            ip: req.ip,
+            metadata: {
+              inventoryMode: warehouse.inventoryMode,
+              before: warehouse.blockZeroStockAtOrderEntry,
+              after: parsed.data.blockZeroStockAtOrderEntry,
+              role,
+              requestId: req.id,
+              ip: req.ip,
+              scope: 'ORDER_ENTRY_ONLY',
+            },
+          },
+        })
+        return {
+          warehouseId: warehouse.id,
+          blockZeroStockAtOrderEntry: parsed.data.blockZeroStockAtOrderEntry,
+          rowVersion: warehouse.rowVersion + 1,
+          unchanged: false,
+        }
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead })
+    } catch (error: any) {
+      if (error?.statusCode) {
+        return reply.status(error.statusCode).send({
+          error: error.message,
+          ...(typeof error.blockerCount === 'number' ? { blockerCount: error.blockerCount } : {}),
+          ...(error.firstIssue ? { firstIssue: error.firstIssue } : {}),
+        })
+      }
+      if (isWarehousePolicyTransactionConflict(error)) {
+        return reply.status(409).send({ error: '库存策略正在被其他人更新，请刷新后重试' })
+      }
+      throw error
+    }
   })
 
   app.get('/inbound-candidates', authRead, async (req: any, reply: any) => {

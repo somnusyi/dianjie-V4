@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { buildWarehouseLedgerAudit } from '../../src/services/warehouseLedgerAudit'
+import { describe, expect, it, vi } from 'vitest'
+import { auditWarehouseLedger, buildWarehouseLedgerAudit } from '../../src/services/warehouseLedgerAudit'
 
 const now = new Date('2026-08-02T00:00:00.000Z')
 
@@ -65,5 +65,41 @@ describe('warehouse ledger audit', () => {
       'SKU_BASELINE_MISSING',
       'UNIT_CONVERSION_UNVERIFIED',
     ]))
+  })
+
+  it('reads every audit book through the supplied transaction client', async () => {
+    const rows = validRows()
+    const db = {
+      warehouse: {
+        findFirstOrThrow: vi.fn().mockResolvedValue({
+          id: 'warehouse-1', code: 'WH-1', name: '供应链总仓',
+          inventoryMode: 'SHADOW', inventoryActivatedAt: null,
+        }),
+      },
+      warehouseLedgerBalance: { findMany: vi.fn().mockResolvedValue(rows.balances) },
+      warehouseLedgerMovement: { findMany: vi.fn().mockResolvedValue(rows.movements) },
+      warehouseLedgerReservation: {
+        findMany: vi.fn().mockResolvedValue(rows.activeReservations.map(row => ({
+          productId: row.productId,
+          inventoryUnit: row.inventoryUnit,
+          inventoryQuantity: row.inventoryQuantity,
+          purchaseOrder: { status: row.orderStatus },
+        }))),
+      },
+      warehouseLedgerLot: { findMany: vi.fn().mockResolvedValue(rows.lots) },
+      product: { findMany: vi.fn().mockResolvedValue(rows.requiredProducts) },
+    } as any
+
+    const result = await auditWarehouseLedger('tenant-1', db, 'warehouse-1')
+
+    expect(result).toMatchObject({ readyForStrict: true, blockerCount: 0 })
+    expect(db.warehouse.findFirstOrThrow).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'warehouse-1', tenantId: 'tenant-1' },
+    }))
+    expect(db.warehouseLedgerBalance.findMany).toHaveBeenCalledOnce()
+    expect(db.warehouseLedgerMovement.findMany).toHaveBeenCalledOnce()
+    expect(db.warehouseLedgerReservation.findMany).toHaveBeenCalledOnce()
+    expect(db.warehouseLedgerLot.findMany).toHaveBeenCalledOnce()
+    expect(db.product.findMany).toHaveBeenCalledOnce()
   })
 })

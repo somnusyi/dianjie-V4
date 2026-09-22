@@ -2,6 +2,7 @@ import { Prisma, prisma } from '@dianjie/db'
 import { costUnitPricedOrderLine, PURCHASE_ORDER_AMOUNT_MAX } from './costUnitPricing'
 import { freezeProductFourUnitsForSupplyDocument } from './supplyDocumentUnitSnapshots'
 import { sumOrderAmount } from './purchaseOrderIntegrity'
+import { getWarehouseLedgerMode } from './warehouseLedger'
 
 export const PURCHASE_ORDER_QUANTITY_MAX = 99_999_999.99
 
@@ -25,12 +26,17 @@ export const orderDraftProductSelect = {
   inventoryUnitsPerOrderUnit: true,
   inventoryUnitsPerCostUnit: true,
   unitConversionStatus: true,
+  stock: true,
 } satisfies Prisma.ProductSelect
 
-export type OrderDraftProduct = Prisma.ProductGetPayload<{ select: typeof orderDraftProductSelect }>
+export type OrderDraftProduct = Prisma.ProductGetPayload<{ select: typeof orderDraftProductSelect }> & {
+  availableStock: number
+  inventoryEnforced: boolean
+  warehouseOrderEntryPolicyApplies: boolean
+}
 
 export type OrderDraftIssue = {
-  code: 'DUPLICATE_PRODUCT' | 'PRODUCT_UNAVAILABLE' | 'BELOW_MINIMUM' | 'INVALID_STEP' | 'PRICE_UNAVAILABLE' | 'AMOUNT_LIMIT'
+  code: 'DUPLICATE_PRODUCT' | 'PRODUCT_UNAVAILABLE' | 'OUT_OF_STOCK' | 'BELOW_MINIMUM' | 'INVALID_STEP' | 'PRICE_UNAVAILABLE' | 'AMOUNT_LIMIT'
   productId?: string
   productName?: string
   message: string
@@ -52,7 +58,7 @@ export async function loadOrderDraftProducts(input: {
   supplierId: string
   productIds: string[]
 }): Promise<OrderDraftProduct[]> {
-  return prisma.product.findMany({
+  const [products, supplier] = await Promise.all([prisma.product.findMany({
     where: {
       id: { in: input.productIds },
       tenantId: input.tenantId,
@@ -60,7 +66,90 @@ export async function loadOrderDraftProducts(input: {
       status: 'ENABLED',
     },
     select: orderDraftProductSelect,
+  }), prisma.supplier.findFirst({
+    where: { id: input.supplierId, tenantId: input.tenantId },
+    select: { inventoryMode: true, sourceType: true },
+  })])
+  const warehouseSource = supplier?.sourceType === 'HEADQ_WAREHOUSE'
+  const warehouseLedger = warehouseSource ? await getWarehouseLedgerMode(input.tenantId) : null
+  // 这一新策略只属于内部总仓。外部供应商继续保持基线行为：
+  // 断货时提醒但允许提交，库存预占在接单阶段处理。
+  const inventoryEnforced = warehouseSource && Boolean(warehouseLedger?.blockZeroStockAtOrderEntry)
+  const productIds = products.map(product => product.id)
+  const warehouseBalances = inventoryEnforced && warehouseLedger
+    ? await prisma.warehouseLedgerBalance.findMany({
+        where: {
+          tenantId: input.tenantId,
+          warehouseId: warehouseLedger.warehouseId,
+          productId: { in: productIds },
+        },
+        select: { productId: true, physicalQty: true, reservedQty: true },
+      })
+    : []
+  const warehouseBalanceByProduct = new Map(warehouseBalances.map(balance => [balance.productId, balance]))
+  return products.map(product => ({
+    ...product,
+    availableStock: Math.max(0, inventoryEnforced
+      ? Number(warehouseBalanceByProduct.get(product.id)?.physicalQty || 0)
+        - Number(warehouseBalanceByProduct.get(product.id)?.reservedQty || 0)
+      : Number(product.stock || 0)),
+    inventoryEnforced,
+    warehouseOrderEntryPolicyApplies: warehouseSource,
+  }))
+}
+
+/**
+ * Close the policy-switch race at the actual order write boundary.
+ *
+ * The supplier and warehouse rows are locking reads inside the serializable
+ * order transaction. Policy updates need an exclusive lock on the same
+ * warehouse row. If a policy update wins after this transaction's snapshot,
+ * PostgreSQL raises a serialization conflict and the route retries the whole
+ * transaction instead of continuing with stale policy data.
+ */
+export async function enforceWarehouseOrderEntryPolicyInTransaction(
+  tx: Prisma.TransactionClient,
+  input: {
+    tenantId: string
+    supplierId: string
+    items: Array<{ productId: string; productName: string }>
+  },
+) {
+  const suppliers = await tx.$queryRaw<Array<{ sourceType: string }>>`
+    SELECT "sourceType"::text AS "sourceType"
+    FROM "suppliers"
+    WHERE "id" = ${input.supplierId} AND "tenantId" = ${input.tenantId}
+    FOR SHARE
+  `
+  const supplier = suppliers[0]
+  if (supplier?.sourceType !== 'HEADQ_WAREHOUSE') return
+
+  const warehouses = await tx.$queryRaw<Array<{ id: string; blockZeroStockAtOrderEntry: boolean }>>`
+    SELECT "id", "blockZeroStockAtOrderEntry"
+    FROM "warehouses"
+    WHERE "tenantId" = ${input.tenantId} AND "isDefault" = true AND "isActive" = true
+    FOR SHARE
+  `
+  const warehouse = warehouses[0]
+  if (!warehouse) throw Object.assign(new Error('总仓不存在或已停用'), { statusCode: 404 })
+  if (!warehouse.blockZeroStockAtOrderEntry) return
+
+  const balances = await tx.warehouseLedgerBalance.findMany({
+    where: {
+      tenantId: input.tenantId,
+      warehouseId: warehouse.id,
+      productId: { in: input.items.map(item => item.productId) },
+    },
+    select: { productId: true, physicalQty: true, reservedQty: true },
   })
+  const byProduct = new Map(balances.map(balance => [balance.productId, balance]))
+  const blocked = input.items.find(item => {
+    const balance = byProduct.get(item.productId)
+    return Number(balance?.physicalQty || 0) - Number(balance?.reservedQty || 0) <= 0
+  })
+  if (blocked) {
+    throw Object.assign(new Error(`${blocked.productName} 当前可用库存为 0，不能提交订单`), { statusCode: 400 })
+  }
 }
 
 /**
@@ -98,6 +187,15 @@ export function validateOrderDraftLines(
   for (const item of items) {
     const product = productMap.get(item.productId)
     if (!product) continue
+    if (product.inventoryEnforced && product.availableStock <= 0) {
+      issues.push({
+        code: 'OUT_OF_STOCK',
+        productId: product.id,
+        productName: product.name,
+        message: `${product.name} 当前可用库存为 0，不能下单`,
+      })
+      continue
+    }
     const minimum = Number(product.minOrderQty || 1)
     const step = Number(product.stepQty || 1)
     const quantity = Number(item.quantity)

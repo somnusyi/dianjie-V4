@@ -1,5 +1,7 @@
 import type { Page, TestInfo } from 'playwright/test'
 
+const apiBaseUrl = (process.env.UPSTREAM_E2E_API_URL || 'http://127.0.0.1:4444').replace(/\/+$/, '')
+
 export type UpstreamFixture = {
   stamp: string
   tenantId: string
@@ -43,7 +45,7 @@ export async function login(
 export async function api<T = any>(page: Page, path: string, init: RequestInit = {}) {
   const token = await page.evaluate(() => localStorage.getItem('token') || localStorage.getItem('dj_token'))
   if (!token) throw new Error('当前页面没有登录令牌')
-  const response = await fetch(`http://127.0.0.1:4444${path}`, {
+  const response = await fetch(`${apiBaseUrl}${path}`, {
     ...init,
     headers: {
       ...(init.body ? { 'Content-Type': 'application/json' } : {}),

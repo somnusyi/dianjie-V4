@@ -63,9 +63,11 @@ import {
   PURCHASE_ORDER_AMOUNT_MAX,
 } from '../services/costUnitPricing'
 import {
+  enforceWarehouseOrderEntryPolicyInTransaction,
   loadOrderDraftProducts,
   validateOrderDraftLines,
 } from '../services/orderDraftValidation'
+import { groupDeliveryReceiveDifferences } from '../services/deliveryReceiveDifferences'
 import { buildOperationGroups, operationGroupId, type OperationGroupCandidate } from '../services/orderOperationGroups'
 import { latestOperationGroupOrderId, loadOperationGroupDetails } from '../services/orderOperationGroupDetails'
 import {
@@ -92,6 +94,14 @@ export function canOperateSupplyOrder(role: string | undefined | null): boolean 
 export function canOperateInternalOperationGroup(role: string | undefined | null): boolean {
   return hasInternalSupplyChainCapability(role, 'order.write')
     || ['ADMIN', 'SUPER_ADMIN'].includes(role || '')
+}
+
+export function isOrderCreateSerializableConflict(error: any): boolean {
+  if (error?.code === 'P2034') return true
+  if (error?.code !== 'P2010') return false
+  const databaseCode = String(error?.meta?.code || '')
+  const databaseMessage = String(error?.meta?.message || error?.message || '')
+  return databaseCode === '40001' || /could not serialize|serialization failure|SQLSTATE\s*40001/i.test(databaseMessage)
 }
 
 const shadowPostingQueues = new Map<string, Promise<void>>()
@@ -355,6 +365,8 @@ const deliveryReceiveSchema = z.object({
   items: z.array(z.object({
     productId: z.string().min(1, 'productId 必填'),
     receivedQty: z.number().nonnegative('实收数量不能为负').max(PURCHASE_QUANTITY_MAX, '实收数量超过系统上限'),
+    kind: z.enum(['ARRIVAL_SHORTAGE', 'ARRIVAL_DAMAGE']).optional(),
+    reason: z.string().trim().max(30).optional(),
   }).strict()).max(500, '单次最多 500 条收货明细').optional(),
   evidenceImages: z.array(z.string().min(1, '证据图片地址不能为空')).max(9, '证据图片最多 9 张').optional(),
   reason: z.string().optional(),
@@ -1370,6 +1382,11 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     // 忽略客户端 unitPrice；共享校验已按四单位合同权威重算每一行。
     const itemsData = draftValidation.lines
     const totalAmount = draftValidation.totalAmount!
+    const productNameById = new Map(productsMoq.map(product => [product.id, product.name]))
+    const orderEntryPolicyItems = items.map(item => ({
+      productId: item.productId,
+      productName: productNameById.get(item.productId) || '商品',
+    }))
     // 配送班表硬控制（enforce=true 才拦截；软引导班表不拦，仅下单页默认填日期）
     const deliveryBlock = await checkDeliveryRuleBlock({ tenantId, storeId: finalStoreId, supplierId, expectedDate })
     if (deliveryBlock) return reply.status(400).send({ error: deliveryBlock })
@@ -1378,8 +1395,14 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const actionPrefix = role === 'CHEF_DIRECTOR' ? `总厨代下单` : `创建采购订单`
 
     let order: any
-    try {
-      order = await prisma.$transaction(async (tx) => {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        order = await prisma.$transaction(async (tx) => {
+          await enforceWarehouseOrderEntryPolicyInTransaction(tx, {
+            tenantId,
+            supplierId,
+            items: orderEntryPolicyItems,
+          })
         // A new sequence table can be empty while historical orders already exist.
         // Correct it from the largest current-period order number before incrementing.
         const latestOrder = await tx.purchaseOrder.findFirst({
@@ -1442,21 +1465,26 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             target: created.no, entityType: 'PurchaseOrder', targetId: created.id,
           },
         })
-        return { ...created, submittedSnapshot: original, submittedSnapshotHash: hash }
-      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
-    } catch (error: any) {
-      if ((error?.code === 'P2002' || error?.code === 'P2034') && idempotencyKey) {
-        const existing = await prisma.purchaseOrder.findFirst({
-          where: { tenantId, createdById: userId, idempotencyKey },
-          include: replayInclude,
-        })
-        if (existing) {
-          if (!createReplayMatches(existing)) return reply.status(409).send({ error: '同一幂等键不能用于不同的订货请求' })
-          return replayResponse(existing)
+          return { ...created, submittedSnapshot: original, submittedSnapshotHash: hash }
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+        break
+      } catch (error: any) {
+        const serializableConflict = isOrderCreateSerializableConflict(error)
+        if ((error?.code === 'P2002' || serializableConflict) && idempotencyKey) {
+          const existing = await prisma.purchaseOrder.findFirst({
+            where: { tenantId, createdById: userId, idempotencyKey },
+            include: replayInclude,
+          })
+          if (existing) {
+            if (!createReplayMatches(existing)) return reply.status(409).send({ error: '同一幂等键不能用于不同的订货请求' })
+            return replayResponse(existing)
+          }
         }
+        if (serializableConflict && attempt < 3) continue
+        throw error
       }
-      throw error
     }
+    if (!order) throw new Error('订单事务未能完成')
 
     void invalidatePattern(`dashboard:stats:${tenantId}:*`)
     void invalidatePattern(`stores:list:${tenantId}:*`)
@@ -3378,6 +3406,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       throw { statusCode: 400, message: '同一商品不能重复提交多行实收数量' }
     }
     const receivedMap = new Map<string, number>()
+    const receivedInputByProduct = new Map((receivedItems || []).map(item => [item.productId, item]))
     for (const ri of receivedItems || []) {
       const item = delivery.items.find(i => i.productId === ri.productId)
       const qty = ri.receivedQty
@@ -3390,13 +3419,18 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const deliveryReceivedItems = delivery.items.map(item => ({
       ...item,
       actualReceivedQty: receivedMap.has(item.productId) ? receivedMap.get(item.productId)! : Number(item.shippedQty),
+      differenceKind: receivedInputByProduct.get(item.productId)?.kind ?? lossKind,
+      differenceReason: receivedInputByProduct.get(item.productId)?.reason?.trim().slice(0, 30) || lossReason,
     }))
 
     // P0-1: Receipt.totalAmount = sum(receivedQty * unitPrice), 不再用 order.totalAmount
     // receivedQty 缺省时按 shippedQty (供应商实际发货) → 没 shippedQty 才回退 quantity
     const actualReceivedTotal = deliveryReceivedItems.reduce(
-      (sum, item) => sum + item.actualReceivedQty * Number(item.unitPriceSnapshot), 0,
-    )
+      (sum, item) => sum.plus(
+        new Prisma.Decimal(item.actualReceivedQty).mul(item.unitPriceSnapshot).toDecimalPlaces(2),
+      ),
+      new Prisma.Decimal(0),
+    ).toDecimalPlaces(2)
 
     // 判断是否存在报损 — 应到 = shippedQty (ship 时议定的量), 实收 < 应到 才算报损
     // 供应商在 ship 时调减不算报损 (金额已按实发算清, 没有未付的钱)
@@ -3406,6 +3440,9 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         const expected = Number(item.shippedQty)
         const lossQty = expected - item.actualReceivedQty
         if (lossQty <= 0) return null
+        const unitPrice = new Prisma.Decimal(item.unitPriceSnapshot)
+        const expectedAmount = new Prisma.Decimal(expected).mul(unitPrice).toDecimalPlaces(2)
+        const receivedAmount = new Prisma.Decimal(item.actualReceivedQty).mul(unitPrice).toDecimalPlaces(2)
         return {
           productId: item.productId,
           deliveryOrderItemId: item.id,
@@ -3413,20 +3450,23 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           receivedQty: item.actualReceivedQty,
           lossQty,
           unitPrice: item.unitPriceSnapshot,
-          lossAmount: lossQty * Number(item.unitPriceSnapshot),
+          lossAmount: expectedAmount.minus(receivedAmount),
           productCodeSnapshot: item.productCodeSnapshot,
           productNameSnapshot: item.productNameSnapshot,
           productSpecSnapshot: item.productSpecSnapshot,
           productUnitSnapshot: item.productUnitSnapshot,
           productCategorySnapshot: item.productCategorySnapshot,
+          kind: item.differenceKind,
+          reason: item.differenceReason,
         }
       })
       .filter(Boolean) as Array<{
         productId: string; deliveryOrderItemId: string; orderedQty: any; receivedQty: number;
-        lossQty: number; unitPrice: any; lossAmount: number;
+        lossQty: number; unitPrice: any; lossAmount: Prisma.Decimal;
         productCodeSnapshot: string | null; productNameSnapshot: string | null;
         productSpecSnapshot: string | null; productUnitSnapshot: string | null;
         productCategorySnapshot: string | null;
+        kind: 'ARRIVAL_SHORTAGE' | 'ARRIVAL_DAMAGE'; reason: string | null;
       }>
 
     const hasLoss = lossLines.length > 0
@@ -3469,7 +3509,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
                 productId: item.productId,
                 quantity: new Prisma.Decimal(item.actualReceivedQty),
                 unitPrice: item.unitPriceSnapshot,
-                amount: new Prisma.Decimal(item.actualReceivedQty).mul(item.unitPriceSnapshot),
+                amount: new Prisma.Decimal(item.actualReceivedQty).mul(item.unitPriceSnapshot).toDecimalPlaces(2),
                 productCodeSnapshot: item.productCodeSnapshot,
                 productNameSnapshot: item.productNameSnapshot,
                 productSpecSnapshot: item.productSpecSnapshot,
@@ -3485,43 +3525,54 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         await ensureReceiptInventoryUnitSnapshots(tx, receipt.id)
 
         if (hasLoss) {
-          const latestClaim = await tx.lossClaim.findFirst({
-            where: { tenantId, no: { startsWith: `LC${ym}` } },
-            orderBy: { no: 'desc' }, select: { no: true },
-          })
-          const claimFloor = Number(latestClaim?.no.slice(`LC${ym}`.length) || 0)
-          const lcNo = await nextBusinessNo(tx, tenantId, 'LOSS_CLAIM', ym, 'LC', claimFloor)
-          const totalLoss = lossLines.reduce((s, l) => s + l.lossAmount, 0)
-          await tx.lossClaim.create({
-            data: {
-              tenantId, no: lcNo,
-              kind: lossKind as any,
-              payableBasis: 'NET_AT_RECEIPT',
-              purchaseOrderId: id,
-              deliveryOrderId: delivery.id,
-              receiptId: receipt.id,
-              storeId: order.storeId,
-              supplierId: order.supplierId,
-              totalLossAmount: totalLoss,
-              reason: lossReason,
-              description: lossReason
-                ? `${lossReason} · 验收到货差异 (${order.no})`
-                : lossKind === 'ARRIVAL_DAMAGE'
-                  ? `验收破损/品质异常 (${order.no})`
-                  : `验收短量自动记录 (${order.no})`,
-              evidenceImages: Array.isArray(evidenceImages) ? evidenceImages.slice(0, 9) : [],
-              status: 'PENDING' as any,
-              createdById: userId,
-              items: { create: lossLines },
-            },
-          })
-          await tx.opLog.create({
-            data: {
-              tenantId, userId,
-              action: `验收短量自动建报损 ${lcNo}，损失 ¥${totalLoss.toFixed(2)}`,
-              target: lcNo, entityType: 'LossClaim',
-            },
-          })
+          for (const group of groupDeliveryReceiveDifferences(lossLines)) {
+            const groupKind = group.kind
+            const groupLines = group.lines
+            const latestClaim = await tx.lossClaim.findFirst({
+              where: { tenantId, no: { startsWith: `LC${ym}` } },
+              orderBy: { no: 'desc' }, select: { no: true },
+            })
+            const claimFloor = Number(latestClaim?.no.slice(`LC${ym}`.length) || 0)
+            const lcNo = await nextBusinessNo(tx, tenantId, 'LOSS_CLAIM', ym, 'LC', claimFloor)
+            const totalLoss = groupLines.reduce(
+              (sum, line) => sum.plus(line.lossAmount),
+              new Prisma.Decimal(0),
+            ).toDecimalPlaces(2)
+            const reasons = [...new Set(groupLines.map(line => line.reason).filter((reason): reason is string => Boolean(reason)))]
+            const groupReason = reasons.length === 1 ? reasons[0] : reasons.length > 1 ? '逐商品原因见明细' : null
+            await tx.lossClaim.create({
+              data: {
+                tenantId, no: lcNo,
+                kind: groupKind as any,
+                payableBasis: 'NET_AT_RECEIPT',
+                purchaseOrderId: id,
+                deliveryOrderId: delivery.id,
+                receiptId: receipt.id,
+                storeId: order.storeId,
+                supplierId: order.supplierId,
+                totalLossAmount: totalLoss,
+                reason: groupReason,
+                description: groupReason
+                  ? `${groupReason} · 验收到货差异 (${order.no})`
+                  : groupKind === 'ARRIVAL_DAMAGE'
+                    ? `验收破损/品质异常 (${order.no})`
+                    : `验收短量自动记录 (${order.no})`,
+                evidenceImages: Array.isArray(evidenceImages) ? evidenceImages.slice(0, 9) : [],
+                status: 'PENDING' as any,
+                createdById: userId,
+                items: {
+                  create: groupLines.map(({ kind: _kind, ...line }) => line),
+                },
+              },
+            })
+            await tx.opLog.create({
+              data: {
+                tenantId, userId,
+                action: `验收${groupKind === 'ARRIVAL_DAMAGE' ? '破损/品质异常' : '短量'}建报损 ${lcNo}，损失 ¥${totalLoss.toFixed(2)}`,
+                target: lcNo, entityType: 'LossClaim',
+              },
+            })
+          }
         }
 
         for (const item of deliveryReceivedItems) {
@@ -3563,7 +3614,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           },
         })
         return { receipt, no }
-      })
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30_000 })
     } catch (error: any) {
       // rowVersion 是正常并发的第一道门禁；deliveryOrderId 唯一约束是最终兜底。
       // 若另一个事务恰好先提交了同一配送单的入库单，Prisma 会抛 P2002

@@ -462,11 +462,13 @@ export function projectCatalogAvailability(input: {
   warehouseBalance?: { physicalQty: unknown; reservedQty: unknown } | null
   warehouseLedgerActive?: boolean
 }) {
-  const useWarehouse = Boolean(input.warehouseLedgerActive && input.warehouseBalance)
+  // 严格仓库账中“没有余额行”就是 0 库存，不能回退到旧 Product.stock。
+  // 否则前端会显示可下单，而服务端又会按 0 拒绝，形成不一致。
+  const useWarehouse = Boolean(input.warehouseLedgerActive)
   return useWarehouse
     ? stockAvailability(
-        Number(input.warehouseBalance!.physicalQty || 0),
-        Number(input.warehouseBalance!.reservedQty || 0),
+        Number(input.warehouseBalance?.physicalQty || 0),
+        Number(input.warehouseBalance?.reservedQty || 0),
       )
     : stockAvailability(Number(input.product.stock || 0), Number(input.supplierReserved || 0))
 }
@@ -482,14 +484,17 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const supplierSources = supplierIds.length > 0
       ? await prisma.supplier.findMany({
           where: { tenantId, id: { in: supplierIds } },
-          select: { id: true, sourceType: true },
+          select: { id: true, sourceType: true, inventoryMode: true },
         })
       : []
-    const sourceTypeBySupplier = new Map(supplierSources.map(supplier => [supplier.id, supplier.sourceType]))
+    const supplierById = new Map(supplierSources.map(supplier => [supplier.id, supplier]))
     const isWarehouseProduct = (row: T) => {
-      const supplierId = (row as any).supplierId
-      return (row as any).supplier?.sourceType === 'HEADQ_WAREHOUSE'
-        || sourceTypeBySupplier.get(supplierId) === 'HEADQ_WAREHOUSE'
+      const supplierId = String((row as any).supplierId || '')
+      const currentSupplier = supplierById.get(supplierId)
+      // 供应商主档可在商品列表缓存期内变更，以本次新读取为准。
+      return currentSupplier
+        ? currentSupplier.sourceType === 'HEADQ_WAREHOUSE'
+        : (row as any).supplier?.sourceType === 'HEADQ_WAREHOUSE'
     }
     const warehouseProductIds = rows
       .filter(isWarehouseProduct)
@@ -507,7 +512,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           const [warehouse, balances] = await Promise.all([
             prisma.warehouse.findFirst({
               where: { id: warehouseId, tenantId, isActive: true },
-              select: { inventoryMode: true },
+              select: { inventoryMode: true, blockZeroStockAtOrderEntry: true },
             }),
             prisma.warehouseLedgerBalance.findMany({
               where: { tenantId, warehouseId, productId: { in: warehouseProductIds } },
@@ -515,26 +520,45 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
             }),
           ])
           return {
-            active: Boolean(warehouse && warehouse.inventoryMode !== 'OFF'),
+            inventoryMode: warehouse?.inventoryMode || null,
+            blockZeroStockAtOrderEntry: warehouse?.blockZeroStockAtOrderEntry ?? null,
             balances: new Map(balances.map(balance => [balance.productId, balance])),
           }
         })()
-      : Promise.resolve({ active: false, balances: new Map<string, { physicalQty: unknown; reservedQty: unknown }>() })
+      : Promise.resolve({
+          inventoryMode: null,
+          blockZeroStockAtOrderEntry: null,
+          balances: new Map<string, { physicalQty: unknown; reservedQty: unknown }>(),
+        })
 
     const [supplierReserved, warehouseProjection] = await Promise.all([
       supplierReservedPromise,
       warehouseProjectionPromise,
     ])
-    return rows.map(product => ({
-      ...product,
-      ...projectCatalogAvailability({
-        product,
-        supplierReserved: supplierReserved.get(product.id) || 0,
-        warehouseBalance: warehouseProjection.balances.get(product.id) || null,
-        warehouseLedgerActive: warehouseProjection.active,
-      }),
-      imageUrl: signOssKey((product as any).imageKey),
-    }))
+    return rows.map(product => {
+      const supplierId = String((product as any).supplierId || '')
+      const warehouseProduct = isWarehouseProduct(product)
+      return {
+        ...product,
+        ...projectCatalogAvailability({
+          product,
+          supplierReserved: supplierReserved.get(product.id) || 0,
+          warehouseBalance: warehouseProjection.balances.get(product.id) || null,
+          warehouseLedgerActive: Boolean(warehouseProjection.inventoryMode && warehouseProjection.inventoryMode !== 'OFF'),
+        }),
+        // 门店下单页不能只看供应商 inventoryMode：内部总仓商品
+        // 的权威开关在仓库账。把最终判定随商品行返回，避免前端猜测。
+        inventoryEnforced: warehouseProduct
+          ? Boolean(warehouseProjection.blockZeroStockAtOrderEntry)
+          : false,
+        // tracked 只表示有可以展示的库存投影；enforced 才表示零库存会阻断提交。
+        // 内部总仓的两个状态必须分开，才能在“仅提醒”时仍告知零库存。
+        inventoryTracked: warehouseProduct
+          ? Boolean(warehouseProjection.inventoryMode && warehouseProjection.inventoryMode !== 'OFF')
+          : supplierById.get(supplierId)?.inventoryMode === 'STRICT',
+        imageUrl: signOssKey((product as any).imageKey),
+      }
+    })
   }
 
   app.get('/', auth(app), async (req: any, reply: any) => {

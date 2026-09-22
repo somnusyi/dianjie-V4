@@ -8,7 +8,6 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
-import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { OrderProductImage } from '@/components/v2/order-product-image'
 import {
   calculateOrderEntryLineAmount,
@@ -16,9 +15,10 @@ import {
   sumOrderEntryLineAmounts,
 } from '@/lib/order-entry-cost-pricing'
 import { deliveryScheduleText } from '@/lib/delivery-rule-cycle'
+import { isOrderEntryStockBlocked, isOrderEntryZeroStock } from '@/lib/order-entry-stock-policy'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 
-type Supplier = { id: string; name: string; category: string | null; bankAccount: string | null }
+type Supplier = { id: string; name: string; category: string | null; bankAccount: string | null; inventoryMode?: 'STRICT' | 'NOT_TRACKED' }
 type Product  = { id: string; name: string; unit: string; price: string; supplierId: string | null
                   spec?: string | null; category?: string | null; code?: string
                   imageUrl?: string | null
@@ -31,6 +31,8 @@ type Product  = { id: string; name: string; unit: string; price: string; supplie
                   minOrderQty?: string | number; stepQty?: string | number
                   stock?: string | number | null
                   physicalStock?: number; reservedStock?: number; availableStock?: number
+                  inventoryTracked?: boolean
+                  inventoryEnforced?: boolean
                   status?: string  /* ENABLED / DISABLED / PENDING_APPROVAL / PENDING_DISABLE */ }
 type LineItem = { productId: string; quantity: number; unitPrice: number }
 
@@ -68,7 +70,6 @@ export default function ChefPONewPage() {
   const [idempotencyKey, setIdempotencyKey] = useState(() => `po-${Date.now()}-${Math.random().toString(36).slice(2,10)}`)
   const [error, setError] = useState<string | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
-  const [confirm, openConfirm] = useConfirmSheet()
   const [searchQ, setSearchQ] = useState('')
   const [catFilter, setCatFilter] = useState<string>('全部')
   // 草稿恢复 banner: 显示"已恢复 N 项草稿"提示, 用户可一键清空
@@ -188,6 +189,10 @@ export default function ChefPONewPage() {
   // 起订量/步长 helper
   function moq(p: Product) { return Math.max(0.01, Number(p.minOrderQty || 1)) }
   function step(p: Product) { return Math.max(0.01, Number(p.stepQty || 1)) }
+  function stockBlocked(p: Product) {
+    const supplier = suppliers.find(item => item.id === p.supplierId)
+    return isOrderEntryStockBlocked(p, supplier)
+  }
   // 把任意数 round 到合法整倍数 (>= moq, 偏移 step)
   function snap(p: Product, q: number) {
     const m = moq(p), s = step(p)
@@ -197,6 +202,10 @@ export default function ChefPONewPage() {
   }
   function addItem(p: Product) {
     if (items.some(i => i.productId === p.id)) return
+    if (stockBlocked(p)) {
+      setError(`${p.name} 当前可用库存为 0，不能加入采购单`)
+      return
+    }
     const pricing = resolveOrderEntryCostPricing(p)
     if (pricing.status === 'PENDING') {
       setError(`${pricing.message}，请联系采购核验单位换算后再加入`)
@@ -219,6 +228,10 @@ export default function ChefPONewPage() {
   function setQtyByProduct(p: Product, qty: number) {
     if (qty <= 0) {
       setItems(prev => prev.filter(i => i.productId !== p.id))
+      return
+    }
+    if (stockBlocked(p)) {
+      setError(`${p.name} 当前可用库存为 0，不能加入采购单`)
       return
     }
     const pricing = resolveOrderEntryCostPricing(p)
@@ -246,6 +259,13 @@ export default function ChefPONewPage() {
       .filter((p): p is Product => !!p && p.status != null && p.status !== 'ENABLED')
     if (blocked.length > 0) {
       setError(`以下商品已停售/待审, 请先移除: ${blocked.map(p => p.name).join('、')}`)
+      return
+    }
+    const outOfStock = items
+      .map(item => products.find(product => product.id === item.productId))
+      .filter((product): product is Product => product !== undefined && stockBlocked(product))
+    if (outOfStock.length > 0) {
+      setError(`以下商品当前可用库存为 0，请先移除：${outOfStock.map(product => product.name).join('、')}`)
       return
     }
     const submitItems: LineItem[] = []
@@ -522,7 +542,9 @@ export default function ChefPONewPage() {
                 const pricing = resolveOrderEntryCostPricing(p)
                 const pricePending = pricing.status === 'PENDING'
                 const stockNum = Number(p.availableStock ?? p.stock ?? 0)
-                const outOfStock = stockNum <= 0
+                const stockSupplier = suppliers.find(item => item.id === p.supplierId)
+                const zeroStock = isOrderEntryZeroStock(p, stockSupplier)
+                const outOfStock = stockBlocked(p)
                 // 商品状态: 供应商下架 / 待审批的 SKU 不可加入采购单 (server 端 orders.ts:298 兜底拦)
                 const notOrderable = p.status != null && p.status !== 'ENABLED'
                 const statusChip = p.status === 'DISABLED'         ? { label: '已停售', cls: 'bg-gray5 text-gray2' }
@@ -543,8 +565,9 @@ export default function ChefPONewPage() {
                         {!notOrderable && Number(p.minOrderQty || 1) > 1 && (
                           <span className="text-micro px-1.5 py-0.5 bg-amber/10 text-amber-fg rounded-chip whitespace-nowrap">起订 {moq(p)}{step(p) > 1 ? `·步 ${step(p)}` : ''}</span>
                         )}
-                        {!notOrderable && outOfStock && (
-                          <span className="text-micro px-1.5 py-0.5 bg-red-50 text-red-600 rounded-chip whitespace-nowrap">⚠ 供应商断货</span>
+                        {!notOrderable && zeroStock && (outOfStock
+                          ? <span className="text-micro px-1.5 py-0.5 bg-red-50 text-red-600 rounded-chip whitespace-nowrap">库存为0·不可提交</span>
+                          : <span className="text-micro px-1.5 py-0.5 bg-amber/10 text-amber-fg rounded-chip whitespace-nowrap">库存为0·可提交</span>
                         )}
                       </div>
                       {pricing.status === 'READY' ? (
@@ -593,24 +616,13 @@ export default function ChefPONewPage() {
                           aria-label="该商品价格待核验"
                         >不可加入</button>
                       )
+                    ) : outOfStock ? (
+                      <button type="button" disabled className="cursor-not-allowed rounded-cta bg-gray5 px-3 py-1.5 text-button text-gray3" aria-label={`${p.name}库存为0不可加入`}>库存为 0</button>
                     ) : qty === 0 ? (
                       <button
                         type="button"
-                        onClick={() => {
-                          if (outOfStock) {
-                            openConfirm({
-                              title: '供应商断货提醒',
-                              body: <span>「<b>{p.name}</b>」供应商当前库存为 <b className="text-red-600">0</b>,可能无法按时发货。仍要加入采购单吗?</span>,
-                              confirmLabel: '仍然加入',
-                              cancelLabel: '取消',
-                              tone: 'danger',
-                              onConfirm: () => addItem(p),
-                            })
-                          } else {
-                            addItem(p)
-                          }
-                        }}
-                        className={`px-3 py-1.5 rounded-cta text-button ${outOfStock ? 'bg-red-50 text-red-600' : 'bg-amber/10 text-amber-fg'}`}
+                        onClick={() => addItem(p)}
+                        className="rounded-cta bg-amber/10 px-3 py-1.5 text-button text-amber-fg"
                       >+ 加入</button>
                     ) : (
                       <div className="flex items-center gap-2">
@@ -665,7 +677,6 @@ export default function ChefPONewPage() {
           {submitting ? '提交中…' : `提交采购单${total !== null && Number(total) > 0 ? ` · ¥${total}` : ''}`}
         </button>
       </div>
-      <ConfirmSheet {...confirm} />
     </div>
   )
 }

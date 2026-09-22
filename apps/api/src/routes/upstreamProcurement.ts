@@ -12,6 +12,7 @@ import {
 import { requireSupplierCapability } from '../lib/supplier-access'
 import { upstreamFeatureEnabled, upstreamFeatureSnapshot } from '../lib/upstream-feature-flags'
 import { businessDateRangeInclusive } from '../lib/businessTime'
+import { hashRequestBody } from '../lib/idempotency'
 import { nextUpstreamDocumentNo } from '../services/upstreamDocumentNo'
 import {
   postUpstreamClaimLossInTransaction,
@@ -20,10 +21,17 @@ import {
 } from '../services/warehouseLedger'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
-const INTERNAL_ROLES = new Set(['SUPPLY_CHAIN', 'SUPER_ADMIN'])
-const APPROVER_ROLES = new Set(['SUPPLY_CHAIN', 'SUPER_ADMIN'])
+// Keep the API aligned with the guarded supply-chain workspace: tenant ADMIN
+// can enter this workspace and may act as the required second receipt reviewer.
+const INTERNAL_ROLES = new Set(['SUPPLY_CHAIN', 'ADMIN', 'SUPER_ADMIN'])
+const APPROVER_ROLES = new Set(['SUPPLY_CHAIN', 'ADMIN', 'SUPER_ADMIN'])
 const FINANCE_ROLES = new Set(['FINANCE', 'SUPER_ADMIN'])
 const SETTLEMENT_READ_ROLES = new Set([...INTERNAL_ROLES, ...FINANCE_ROLES])
+const POST_RECEIPT_SHORTAGE_ORDER_STATUSES = new Set<UpstreamPurchaseOrderStatus>([
+  'RECEIVED',
+  'SETTLEMENT_PENDING',
+  'CLOSED',
+])
 const idSchema = z.string().trim().min(1).max(64)
 const decimalInput = z.coerce.number().finite().positive()
 const nonNegativeDecimalInput = z.coerce.number().finite().min(0)
@@ -169,13 +177,24 @@ const receiptCreateSchema = z.object({
 
 const postReceiptClaimSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(160),
+  type: z.enum(['SHORTAGE', 'POST_RECEIPT_DAMAGE']).default('POST_RECEIPT_DAMAGE'),
   description: z.string().trim().min(2).max(1000),
   evidence: z.array(z.record(z.unknown())).min(1).max(20),
   lines: z.array(z.object({
-    receiptLineId: idSchema,
+    purchaseOrderLineId: idSchema.optional(),
+    receiptLineId: idSchema.optional(),
     affectedQty: decimalInput,
+  }).superRefine((line, ctx) => {
+    if (!line.purchaseOrderLineId && !line.receiptLineId) {
+      ctx.addIssue({ code: 'custom', message: '补报商品标识必填' })
+    }
   })).min(1).max(100),
-}).strict()
+}).strict().superRefine((data, ctx) => {
+  const lineKeys = data.lines.map(line => line.purchaseOrderLineId || line.receiptLineId)
+  if (new Set(lineKeys).size !== lineKeys.length) {
+    ctx.addIssue({ code: 'custom', path: ['lines'], message: '同一商品不能重复补报' })
+  }
+})
 
 const receiptReversalSchema = z.object({
   reason: z.string().trim().min(2).max(240),
@@ -229,6 +248,122 @@ function decimal(value: Prisma.Decimal.Value) {
 
 function money(value: Prisma.Decimal) {
   return value.toDecimalPlaces(4)
+}
+
+type UpstreamSettlementClaimDeductionInput = {
+  type: string
+  resolvedAmount: Prisma.Decimal.Value | null
+  lines?: Array<{
+    receiptLine?: {
+      acceptedQty: Prisma.Decimal.Value
+      arrivedQty: Prisma.Decimal.Value
+      overageQty: Prisma.Decimal.Value
+      unitPrice: Prisma.Decimal.Value
+    } | null
+  }>
+}
+
+/**
+ * Only amounts that were already included in receipt payable may be deducted
+ * again during settlement. Initial shortage/damage/quality quantities were
+ * excluded from acceptedQty. Overage is mixed: only its accepted portion was
+ * paid, so cap the deduction to that included amount.
+ */
+export function upstreamSettlementClaimDeduction(
+  claim: UpstreamSettlementClaimDeductionInput,
+) {
+  const resolvedAmount = Prisma.Decimal.max(decimal(0), decimal(claim.resolvedAmount || 0))
+  if (claim.type === 'POST_RECEIPT_DAMAGE') return money(resolvedAmount)
+  if (claim.type !== 'OVERAGE') return decimal(0)
+
+  const includedOverageAmount = (claim.lines || []).reduce((sum, line) => {
+    if (!line.receiptLine) return sum
+    const receiptLine = line.receiptLine
+    const overageQty = decimal(receiptLine.overageQty)
+    const regularArrivedQty = Prisma.Decimal.max(
+      decimal(0),
+      decimal(receiptLine.arrivedQty).minus(overageQty),
+    )
+    const acceptedOverageQty = Prisma.Decimal.min(
+      overageQty,
+      Prisma.Decimal.max(decimal(0), decimal(receiptLine.acceptedQty).minus(regularArrivedQty)),
+    )
+    return sum.plus(acceptedOverageQty.times(receiptLine.unitPrice))
+  }, decimal(0))
+  return money(Prisma.Decimal.min(resolvedAmount, includedOverageAmount))
+}
+
+type PostReceiptClaimInput = z.infer<typeof postReceiptClaimSchema>
+type PostReceiptClaimReceipt = {
+  lines: any[]
+  purchaseOrder: { lines: any[] }
+}
+
+export function normalizePostReceiptClaimLines(
+  input: PostReceiptClaimInput,
+  receipt: PostReceiptClaimReceipt,
+) {
+  const receiptLineById = new Map(receipt.lines.map(line => [line.id, line]))
+  const orderLineById = new Map(receipt.purchaseOrder.lines.map(line => [line.id, line]))
+  const normalized = input.lines.map(lineInput => {
+    const receiptLine = lineInput.receiptLineId ? receiptLineById.get(lineInput.receiptLineId) : undefined
+    if (lineInput.receiptLineId && !receiptLine) {
+      throw Object.assign(new Error('补报明细不属于该收货单'), { statusCode: 400 })
+    }
+    const purchaseOrderLineId = lineInput.purchaseOrderLineId || receiptLine?.purchaseOrderLineId
+    const purchaseOrderLine = purchaseOrderLineId ? orderLineById.get(purchaseOrderLineId) : undefined
+    if (!purchaseOrderLine) {
+      throw Object.assign(new Error('补报商品不属于该收货单对应的采购单'), { statusCode: 400 })
+    }
+    if (receiptLine && receiptLine.purchaseOrderLineId !== purchaseOrderLine.id) {
+      throw Object.assign(new Error('收货明细与采购商品不匹配'), { statusCode: 400 })
+    }
+    if (input.type === 'POST_RECEIPT_DAMAGE' && !receiptLine) {
+      throw Object.assign(new Error(`${purchaseOrderLine.productNameSnapshot} 本次没有合格收货数量，不能按收货后破损补报`), { statusCode: 400 })
+    }
+    return { input: lineInput, receiptLine, purchaseOrderLine }
+  })
+
+  const seenPurchaseOrderLineIds = new Set<string>()
+  for (const line of normalized) {
+    if (seenPurchaseOrderLineIds.has(line.purchaseOrderLine.id)) {
+      throw Object.assign(new Error('同一商品不能重复补报'), { statusCode: 400 })
+    }
+    seenPurchaseOrderLineIds.add(line.purchaseOrderLine.id)
+  }
+  return normalized
+}
+
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJson)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, canonicalJson(child)]),
+    )
+  }
+  return value
+}
+
+export function postReceiptClaimRequestFingerprint(input: {
+  receiptId: string
+  claim: PostReceiptClaimInput
+  normalizedLines: ReturnType<typeof normalizePostReceiptClaimLines>
+}) {
+  return hashRequestBody({
+    receiptId: input.receiptId,
+    type: input.claim.type,
+    description: input.claim.description,
+    evidence: canonicalJson(input.claim.evidence),
+    lines: input.normalizedLines
+      .map(line => ({
+        purchaseOrderLineId: line.purchaseOrderLine.id,
+        receiptLineId: line.receiptLine?.id || null,
+        affectedQty: decimal(line.input.affectedQty).toString(),
+      }))
+      .sort((left, right) => left.purchaseOrderLineId.localeCompare(right.purchaseOrderLineId)),
+  }, 'upstream-post-receipt-claim-v1')
 }
 
 function ensureInternal(role: string, reply: any) {
@@ -1391,7 +1526,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
       where: { tenantId, ...(supplierId ? { supplierId } : {}) },
       include: {
         supplier: { select: { id: true, no: true, name: true } },
-        purchaseOrder: { select: { id: true, no: true, status: true } },
+        purchaseOrder: { select: { id: true, no: true, status: true, totalAmount: true, amountWithoutTax: true } },
         shipment: { select: { id: true, no: true, status: true } },
         _count: { select: { lines: true, claims: true } },
       },
@@ -1402,21 +1537,65 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/receipts/:id', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
-    if (!INTERNAL_ROLES.has(role)) return reply.status(403).send({ error: '仅供应链内部人员可查看总仓收货单' })
+    const scopedSupplierId = INTERNAL_ROLES.has(role)
+      ? undefined
+      : supplierScope(req, 'upstream.order.read')
     const receiptId = idSchema.safeParse(req.params.id)
     if (!receiptId.success) return reply.status(400).send({ error: '收货单标识格式不正确' })
     const receipt = await prisma.upstreamReceipt.findFirst({
-      where: { id: receiptId.data, tenantId },
-      include: {
+      where: { id: receiptId.data, tenantId, ...(scopedSupplierId ? { supplierId: scopedSupplierId } : {}) },
+      select: {
+        id: true,
+        no: true,
+        supplierId: true,
+        status: true,
+        payableAmount: true,
+        reviewReasons: true,
+        postedAt: true,
+        createdAt: true,
         supplier: {
           select: { id: true, no: true, name: true, postReceiptClaimHours: true },
         },
-        purchaseOrder: { select: { id: true, no: true, status: true } },
+        purchaseOrder: {
+          select: {
+            id: true,
+            no: true,
+            status: true,
+            totalAmount: true,
+            amountWithoutTax: true,
+            lines: {
+              select: {
+                id: true,
+                productId: true,
+                productCodeSnapshot: true,
+                productNameSnapshot: true,
+                productSpecSnapshot: true,
+                purchaseUnit: true,
+                orderedQty: true,
+                confirmedQty: true,
+                shippedQty: true,
+                receivedQty: true,
+                unitPrice: true,
+              },
+              orderBy: { lineNo: 'asc' },
+            },
+          },
+        },
         shipment: { select: { id: true, no: true, status: true } },
         lines: {
-          include: {
+          select: {
+            id: true,
+            purchaseOrderLineId: true,
+            arrivedQty: true,
+            acceptedQty: true,
+            shortageQty: true,
+            damagedQty: true,
+            rejectedQty: true,
+            purchaseUnit: true,
+            unitPrice: true,
+            payableAmount: true,
             purchaseOrderLine: {
-              select: { productCodeSnapshot: true, productNameSnapshot: true, productSpecSnapshot: true },
+              select: { id: true, productCodeSnapshot: true, productNameSnapshot: true, productSpecSnapshot: true },
             },
           },
           orderBy: { createdAt: 'asc' },
@@ -1795,36 +1974,87 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
         await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`upstream-receipt:${receiptId.data}`}))::text AS locked`
         const receipt = await tx.upstreamReceipt.findFirst({
           where: { id: receiptId.data, tenantId, status: 'POSTED' },
-          include: { supplier: true, lines: { include: { purchaseOrderLine: true } } },
+          include: {
+            supplier: true,
+            purchaseOrder: { include: { lines: true } },
+            lines: { include: { purchaseOrderLine: true } },
+          },
         })
         if (!receipt || !receipt.postedAt) return null
+        const normalizedLines = normalizePostReceiptClaimLines(d, receipt)
+        const requestFingerprint = postReceiptClaimRequestFingerprint({
+          receiptId: receipt.id,
+          claim: d,
+          normalizedLines,
+        })
+        const existingClaim = await tx.upstreamArrivalClaim.findFirst({
+          where: { tenantId, idempotencyKey: d.idempotencyKey },
+          include: { lines: true },
+        })
+        if (existingClaim) {
+          if (
+            existingClaim.receiptId !== receipt.id
+            || existingClaim.type !== d.type
+            || existingClaim.requestFingerprint !== requestFingerprint
+          ) {
+            throw Object.assign(new Error('同一幂等键不能用于不同的补报请求'), { statusCode: 409 })
+          }
+          return { replayed: true, claim: existingClaim }
+        }
+        // 少发补报必须以整张采购单的最终应收数为口径。分批发货/收货尚未完成时，
+        // “确认数量 - 累计已收”中还包含后续未发数量，不能提前当作少发。
+        if (
+          d.type === 'SHORTAGE'
+          && !POST_RECEIPT_SHORTAGE_ORDER_STATUSES.has(receipt.purchaseOrder.status)
+        ) {
+          throw Object.assign(
+            new Error('采购单尚未完成全部发货与收货，不能补报少发；请在最终收货完成后重试'),
+            { statusCode: 409 },
+          )
+        }
         const deadline = new Date(receipt.postedAt.getTime() + receipt.supplier.postReceiptClaimHours * 3_600_000)
         if (deadline < new Date()) {
           throw Object.assign(new Error(`已超过收货后 ${receipt.supplier.postReceiptClaimHours} 小时补报时限`), { statusCode: 409 })
         }
-        const receiptLineById = new Map(receipt.lines.map(line => [line.id, line]))
-        if (d.lines.some(line => !receiptLineById.has(line.receiptLineId))) {
-          throw Object.assign(new Error('补报明细不属于该收货单'), { statusCode: 400 })
-        }
         const priorClaimLines = await tx.upstreamArrivalClaimLine.findMany({
           where: {
-            receiptLineId: { in: d.lines.map(line => line.receiptLineId) },
-            claim: { status: { not: 'CANCELLED' }, type: 'POST_RECEIPT_DAMAGE' },
+            purchaseOrderLineId: { in: normalizedLines.map(line => line.purchaseOrderLine.id) },
+            claim: {
+              purchaseOrderId: receipt.purchaseOrderId,
+              status: { not: 'CANCELLED' },
+              type: d.type,
+              ...(d.type === 'POST_RECEIPT_DAMAGE' ? { receiptId: receipt.id } : {}),
+            },
           },
-          select: { receiptLineId: true, affectedQty: true },
+          select: { purchaseOrderLineId: true, affectedQty: true },
         })
         const alreadyClaimed = new Map<string, Prisma.Decimal>()
         for (const line of priorClaimLines) {
-          alreadyClaimed.set(line.receiptLineId, (alreadyClaimed.get(line.receiptLineId) || decimal(0)).plus(line.affectedQty))
+          alreadyClaimed.set(
+            line.purchaseOrderLineId,
+            (alreadyClaimed.get(line.purchaseOrderLineId) || decimal(0)).plus(line.affectedQty),
+          )
         }
         let claimedAmount = decimal(0)
-        for (const input of d.lines) {
-          const receiptLine = receiptLineById.get(input.receiptLineId)!
-          const cumulative = (alreadyClaimed.get(input.receiptLineId) || decimal(0)).plus(input.affectedQty)
-          if (cumulative.greaterThan(receiptLine.acceptedQty)) {
-            throw Object.assign(new Error(`${receiptLine.purchaseOrderLine.productNameSnapshot} 累计补报数量不能超过原合格收货数量`), { statusCode: 400 })
+        const claimedInRequest = new Map<string, Prisma.Decimal>()
+        for (const line of normalizedLines) {
+          const { input, receiptLine, purchaseOrderLine } = line
+          const currentRequestAmount = claimedInRequest.get(purchaseOrderLine.id) || decimal(0)
+          const cumulative = (alreadyClaimed.get(purchaseOrderLine.id) || decimal(0))
+            .plus(currentRequestAmount)
+            .plus(input.affectedQty)
+          const maximum = d.type === 'SHORTAGE'
+            ? Prisma.Decimal.max(
+                decimal(0),
+                (purchaseOrderLine.confirmedQty || purchaseOrderLine.orderedQty).minus(purchaseOrderLine.receivedQty),
+              )
+            : receiptLine!.acceptedQty
+          if (cumulative.greaterThan(maximum)) {
+            const label = d.type === 'SHORTAGE' ? '当前未收数量' : '原合格收货数量'
+            throw Object.assign(new Error(`${purchaseOrderLine.productNameSnapshot} 累计补报数量不能超过${label} ${maximum.toString()} ${purchaseOrderLine.purchaseUnit}`), { statusCode: 400 })
           }
-          claimedAmount = claimedAmount.plus(decimal(input.affectedQty).times(receiptLine.unitPrice))
+          claimedInRequest.set(purchaseOrderLine.id, currentRequestAmount.plus(input.affectedQty))
+          claimedAmount = claimedAmount.plus(decimal(input.affectedQty).times(purchaseOrderLine.unitPrice))
         }
         const no = await nextUpstreamDocumentNo(tx, tenantId, 'claim')
         const claim = await tx.upstreamArrivalClaim.create({
@@ -1834,45 +2064,72 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
             purchaseOrderId: receipt.purchaseOrderId,
             receiptId: receipt.id,
             supplierId: receipt.supplierId,
-            type: 'POST_RECEIPT_DAMAGE',
+            type: d.type,
             claimedAmount: money(claimedAmount),
             description: d.description,
             evidence: d.evidence as Prisma.InputJsonValue,
             responseDueAt: deadline,
             idempotencyKey: d.idempotencyKey,
+            requestFingerprint,
             createdById: userId,
           },
         })
-        for (const input of d.lines) {
-          const receiptLine = receiptLineById.get(input.receiptLineId)!
+        for (const { input, receiptLine, purchaseOrderLine } of normalizedLines) {
           await tx.upstreamArrivalClaimLine.create({
             data: {
               tenantId,
               claimId: claim.id,
-              receiptLineId: receiptLine.id,
-              purchaseOrderLineId: receiptLine.purchaseOrderLineId,
-              productId: receiptLine.productId,
+              receiptLineId: receiptLine?.id || null,
+              purchaseOrderLineId: purchaseOrderLine.id,
+              productId: purchaseOrderLine.productId,
               affectedQty: input.affectedQty,
-              purchaseUnit: receiptLine.purchaseUnit,
-              unitPrice: receiptLine.unitPrice,
-              claimedAmount: money(decimal(input.affectedQty).times(receiptLine.unitPrice)),
+              purchaseUnit: purchaseOrderLine.purchaseUnit,
+              unitPrice: purchaseOrderLine.unitPrice,
+              claimedAmount: money(decimal(input.affectedQty).times(purchaseOrderLine.unitPrice)),
             },
           })
         }
         await tx.opLog.create({
           data: { tenantId, userId, role, action: '收货后补报到货异常', entityType: 'UpstreamArrivalClaim', target: no, targetId: claim.id },
         })
-        return tx.upstreamArrivalClaim.findUnique({ where: { id: claim.id }, include: { lines: true } })
+        const saved = await tx.upstreamArrivalClaim.findUnique({ where: { id: claim.id }, include: { lines: true } })
+        return { replayed: false, claim: saved }
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
       if (!result) return reply.status(404).send({ error: '已入账收货单不存在' })
-      return reply.status(201).send(result)
+      return reply.status(result.replayed ? 200 : 201).send(result.claim)
     } catch (error: any) {
-      if (error?.code === 'P2002') {
+      if (error?.code === 'P2002' || error?.code === 'P2034') {
         const existing = await prisma.upstreamArrivalClaim.findFirst({
           where: { tenantId, idempotencyKey: d.idempotencyKey },
           include: { lines: true },
         })
-        if (existing) return reply.status(200).send(existing)
+        if (existing) {
+          if (existing.receiptId !== receiptId.data || existing.type !== d.type) {
+            return reply.status(409).send({ error: '同一幂等键不能用于不同的补报请求' })
+          }
+          const receipt = await prisma.upstreamReceipt.findFirst({
+            where: { id: receiptId.data, tenantId },
+            include: {
+              purchaseOrder: { include: { lines: true } },
+              lines: { include: { purchaseOrderLine: true } },
+            },
+          })
+          if (receipt) {
+            const normalizedLines = normalizePostReceiptClaimLines(d, receipt)
+            const requestFingerprint = postReceiptClaimRequestFingerprint({
+              receiptId: receipt.id,
+              claim: d,
+              normalizedLines,
+            })
+            if (existing.requestFingerprint === requestFingerprint) {
+              return reply.status(200).send(existing)
+            }
+          }
+          return reply.status(409).send({ error: '同一幂等键不能用于不同的补报请求' })
+        }
+        if (error?.code === 'P2034') {
+          return reply.status(409).send({ error: '补报请求刚被其他操作处理，请刷新后重试' })
+        }
       }
       if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
       throw error
@@ -1950,6 +2207,9 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
         throw Object.assign(new Error('确认金额不能超过差异申请金额'), { statusCode: 400 })
       }
       if (claim.type === 'POST_RECEIPT_DAMAGE') {
+        if (claim.lines.some(line => !line.receiptLine)) {
+          throw Object.assign(new Error('收货后破损差异缺少原收货明细，禁止入账'), { statusCode: 409 })
+        }
         await postUpstreamClaimLossInTransaction(tx, {
           tenantId,
           warehouseId: claim.receipt.warehouseId,
@@ -1964,9 +2224,9 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
             productName: line.product.name,
             purchaseQuantity: line.affectedQty,
             purchaseUnit: line.purchaseUnit,
-            conversionFactor: line.receiptLine.inventoryUnitsPerPurchaseUnit,
-            inventoryQuantity: line.affectedQty.times(line.receiptLine.inventoryUnitsPerPurchaseUnit),
-            inventoryUnit: line.receiptLine.inventoryUnit,
+            conversionFactor: line.receiptLine!.inventoryUnitsPerPurchaseUnit,
+            inventoryQuantity: line.affectedQty.times(line.receiptLine!.inventoryUnitsPerPurchaseUnit),
+            inventoryUnit: line.receiptLine!.inventoryUnit,
           })),
         })
       }
@@ -2030,7 +2290,31 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
       where: { id: statementId.data, tenantId, ...(supplierId ? { supplierId } : {}) },
       include: {
         supplier: { select: { id: true, no: true, name: true } },
-        lines: { orderBy: [{ businessDate: 'asc' }, { createdAt: 'asc' }] },
+        lines: {
+          include: {
+            receiptLine: {
+              select: {
+                id: true,
+                receipt: {
+                  select: {
+                    id: true,
+                    no: true,
+                    purchaseOrder: { select: { id: true, no: true } },
+                  },
+                },
+              },
+            },
+            claim: {
+              select: {
+                id: true,
+                no: true,
+                purchaseOrder: { select: { id: true, no: true } },
+                receipt: { select: { id: true, no: true } },
+              },
+            },
+          },
+          orderBy: [{ businessDate: 'asc' }, { createdAt: 'asc' }],
+        },
         invoiceAllocations: { include: { invoice: true } },
       },
     })
@@ -2080,6 +2364,20 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
             resolution: { in: ['DEDUCTION', 'SHARED_LOSS'] },
             settlementLines: { none: { statement: { status: { not: 'CANCELLED' } } } },
           },
+          include: {
+            lines: {
+              select: {
+                receiptLine: {
+                  select: {
+                    acceptedQty: true,
+                    arrivedQty: true,
+                    overageQty: true,
+                    unitPrice: true,
+                  },
+                },
+              },
+            },
+          },
           orderBy: { resolvedAt: 'asc' },
         }),
         tx.upstreamSettlementStatement.findFirst({
@@ -2092,7 +2390,11 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
         return { empty: true } as const
       }
       const receiptAmount = receiptLines.reduce((sum, line) => sum.plus(line.payableAmount), decimal(0))
-      const deductionAmount = claims.reduce((sum, claim) => sum.plus(claim.resolvedAmount || 0), decimal(0))
+      const claimDeductions = new Map(
+        claims.map(claim => [claim.id, upstreamSettlementClaimDeduction(claim)]),
+      )
+      const deductionAmount = [...claimDeductions.values()]
+        .reduce((sum, amount) => sum.plus(amount), decimal(0))
       const payableAmount = money(receiptAmount.minus(deductionAmount))
       const no = await nextUpstreamDocumentNo(tx, tenantId, 'settlement')
       const statement = await tx.upstreamSettlementStatement.create({
@@ -2128,6 +2430,8 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
       }
       for (const claim of claims) {
         const amount = claim.resolvedAmount || decimal(0)
+        const deduction = claimDeductions.get(claim.id) || decimal(0)
+        const deductsPayable = deduction.greaterThan(0)
         await tx.upstreamSettlementLine.create({
           data: {
             tenantId,
@@ -2137,10 +2441,12 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
             sourceNo: claim.no,
             businessDate: claim.resolvedAt || claim.createdAt,
             claimId: claim.id,
-            description: `到货差异扣款：${claim.description}`,
+            description: deductsPayable
+              ? `到货差异扣款：${claim.description}`
+              : `到货差异（已在收货净额中体现，不重复扣款）：${claim.description}`,
             originalAmount: amount,
-            adjustmentAmount: amount.negated(),
-            payableAmount: amount.negated(),
+            adjustmentAmount: deduction.negated(),
+            payableAmount: deduction.negated(),
           },
         })
       }

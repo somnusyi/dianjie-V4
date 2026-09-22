@@ -1,4 +1,5 @@
 import Fastify from 'fastify'
+import { Prisma, prisma } from '@dianjie/db'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../src/services/warehouseLedger', () => ({
@@ -28,6 +29,13 @@ const mocks = vi.hoisted(() => ({
   movementAggregate: vi.fn(),
   docLineFindMany: vi.fn(),
   resolveWarehouseId: vi.fn(),
+  warehouseFindFirst: vi.fn(),
+  warehouseFindFirstOrThrow: vi.fn(),
+  warehouseUpdateMany: vi.fn(),
+  warehouseQueryRaw: vi.fn(),
+  productCount: vi.fn(),
+  balanceFindMany: vi.fn(),
+  reservationCount: vi.fn(),
 }))
 
 vi.mock('@dianjie/db', async importOriginal => {
@@ -37,6 +45,7 @@ vi.mock('@dianjie/db', async importOriginal => {
     product: {
       findMany: (...args: any[]) => mocks.productFindMany(...args),
       findFirst: (...args: any[]) => mocks.productFindFirst(...args),
+      count: (...args: any[]) => mocks.productCount(...args),
     },
     productUpstreamSource: { findMany: (...args: any[]) => mocks.sourceFindMany(...args) },
     opLog: { create: (...args: any[]) => mocks.opLogCreate(...args) },
@@ -46,7 +55,16 @@ vi.mock('@dianjie/db', async importOriginal => {
       aggregate: (...args: any[]) => mocks.movementAggregate(...args),
     },
     warehouseDocLine: { findMany: (...args: any[]) => mocks.docLineFindMany(...args) },
+    warehouse: {
+      findFirst: (...args: any[]) => mocks.warehouseFindFirst(...args),
+      findFirstOrThrow: (...args: any[]) => mocks.warehouseFindFirstOrThrow(...args),
+      updateMany: (...args: any[]) => mocks.warehouseUpdateMany(...args),
+    },
+    warehouseLedgerBalance: { findMany: (...args: any[]) => mocks.balanceFindMany(...args) },
+    warehouseLedgerReservation: { count: (...args: any[]) => mocks.reservationCount(...args) },
   }
+  prismaMock.$queryRaw = (...args: any[]) => mocks.warehouseQueryRaw(...args)
+  prismaMock.$transaction = vi.fn(async (work: (tx: any) => unknown) => work(prismaMock))
   return { ...actual, prisma: prismaMock }
 })
 
@@ -127,6 +145,7 @@ describe('warehouse inventory routes', () => {
         { id: 'movement-2', productId: 'product-2', physicalDelta: 5, inventoryUnit: '瓶', valueDelta: 50 },
       ],
     } as any)
+    auditLedger.mockReset()
     auditLedger.mockResolvedValue({ readyForStrict: false, blockerCount: 2, issues: [] } as any)
     reverseInbound.mockReset()
     reverseInbound.mockResolvedValue({ replayed: false, warehouseId: 'warehouse-1', movement: { id: 'reversal-1' } } as any)
@@ -172,6 +191,29 @@ describe('warehouse inventory routes', () => {
     ] as any)
     mocks.resolveWarehouseId.mockReset()
     mocks.resolveWarehouseId.mockResolvedValue('warehouse-1')
+    mocks.warehouseFindFirst.mockReset()
+    mocks.warehouseFindFirst.mockResolvedValue({
+      id: 'warehouse-1', name: '供应链总仓', inventoryMode: 'SHADOW',
+      blockZeroStockAtOrderEntry: false, inventoryActivatedAt: null, rowVersion: 3,
+    })
+    mocks.warehouseFindFirstOrThrow.mockReset()
+    mocks.warehouseFindFirstOrThrow.mockResolvedValue({
+      id: 'warehouse-1', code: 'WH-1', name: '供应链总仓', inventoryMode: 'SHADOW',
+      blockZeroStockAtOrderEntry: false, inventoryActivatedAt: null, rowVersion: 3,
+    })
+    mocks.warehouseUpdateMany.mockReset()
+    mocks.warehouseUpdateMany.mockResolvedValue({ count: 1 })
+    mocks.warehouseQueryRaw.mockReset()
+    mocks.warehouseQueryRaw.mockResolvedValue([{
+      id: 'warehouse-1', name: '供应链总仓', inventoryMode: 'SHADOW',
+      blockZeroStockAtOrderEntry: false, rowVersion: 3,
+    }])
+    mocks.productCount.mockReset()
+    mocks.productCount.mockResolvedValue(0)
+    mocks.balanceFindMany.mockReset()
+    mocks.balanceFindMany.mockResolvedValue([])
+    mocks.reservationCount.mockReset()
+    mocks.reservationCount.mockResolvedValue(0)
   })
 
   it('separates real warehouse stock from BOM placeholders and unit-governance queues', () => {
@@ -375,6 +417,186 @@ describe('warehouse inventory routes', () => {
     expect(auditLedger).toHaveBeenCalledWith('tenant-1')
     expect(response.json()).toMatchObject({ readyForStrict: false, blockerCount: 2 })
     await app.close()
+  })
+
+  it('enables the independent zero-stock order-entry block after SHADOW audit passes', async () => {
+    auditLedger.mockResolvedValue({ readyForStrict: true, blockerCount: 0, issues: [] } as any)
+    const app = buildApp({ tenantId: 'tenant-1', userId: 'buyer-1', role: 'SUPPLY_CHAIN' })
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/order-entry-policy',
+      payload: { blockZeroStockAtOrderEntry: true, rowVersion: 3 },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(auditLedger).toHaveBeenCalledWith('tenant-1', prisma, 'warehouse-1')
+    expect(prisma.$transaction).toHaveBeenCalledWith(
+      expect.any(Function),
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    )
+    expect(mocks.warehouseQueryRaw).toHaveBeenCalledOnce()
+    const [queryParts, warehouseId, tenantId] = mocks.warehouseQueryRaw.mock.calls[0]
+    expect(queryParts.join(' ')).toContain('FOR UPDATE')
+    expect([warehouseId, tenantId]).toEqual(['warehouse-1', 'tenant-1'])
+    expect(mocks.warehouseUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        id: 'warehouse-1', tenantId: 'tenant-1', isActive: true, rowVersion: 3,
+      }),
+      data: {
+        blockZeroStockAtOrderEntry: true,
+        rowVersion: { increment: 1 },
+      },
+    }))
+    expect(mocks.opLogCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        tenantId: 'tenant-1', userId: 'buyer-1', role: 'SUPPLY_CHAIN', entityType: 'Warehouse',
+        ip: expect.any(String),
+        metadata: expect.objectContaining({
+          inventoryMode: 'SHADOW', before: false, after: true, role: 'SUPPLY_CHAIN',
+          requestId: expect.any(String), ip: expect.any(String), scope: 'ORDER_ENTRY_ONLY',
+        }),
+      }),
+    }))
+    expect(response.json()).toMatchObject({
+      warehouseId: 'warehouse-1', blockZeroStockAtOrderEntry: true, rowVersion: 4, unchanged: false,
+    })
+    await app.close()
+  })
+
+  it('rejects enabling the block while the SHADOW four-book audit has blockers', async () => {
+    auditLedger.mockResolvedValue({
+      readyForStrict: false,
+      blockerCount: 2,
+      issues: [{ code: 'SKU_BASELINE_MISSING', productId: 'product-1', message: '未完成实盘' }],
+    } as any)
+    const app = buildApp({ tenantId: 'tenant-1', userId: 'buyer-1', role: 'SUPPLY_CHAIN' })
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/order-entry-policy',
+      payload: { blockZeroStockAtOrderEntry: true, rowVersion: 3 },
+    })
+
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toMatchObject({ blockerCount: 2, firstIssue: { code: 'SKU_BASELINE_MISSING' } })
+    expect(mocks.warehouseQueryRaw).toHaveBeenCalledOnce()
+    expect(mocks.warehouseUpdateMany).not.toHaveBeenCalled()
+    expect(mocks.opLogCreate).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it('disables the order-entry block without an audit and never changes ledger mode or activation', async () => {
+    mocks.warehouseQueryRaw.mockResolvedValue([{
+      id: 'warehouse-1', name: '供应链总仓', inventoryMode: 'STRICT',
+      blockZeroStockAtOrderEntry: true, rowVersion: 8,
+    }])
+    const app = buildApp({ tenantId: 'tenant-1', userId: 'buyer-1', role: 'SUPPLY_CHAIN' })
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/order-entry-policy',
+      payload: { blockZeroStockAtOrderEntry: false, rowVersion: 8 },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(auditLedger).not.toHaveBeenCalled()
+    expect(mocks.warehouseUpdateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: { blockZeroStockAtOrderEntry: false, rowVersion: { increment: 1 } },
+    }))
+    const updateData = mocks.warehouseUpdateMany.mock.calls[0]?.[0]?.data
+    expect(updateData).not.toHaveProperty('inventoryMode')
+    expect(updateData).not.toHaveProperty('inventoryActivatedAt')
+    expect(response.json()).toMatchObject({ blockZeroStockAtOrderEntry: false, rowVersion: 9 })
+    await app.close()
+  })
+
+  it('allows only supply-chain governance roles to reach the policy endpoint', async () => {
+    for (const role of ['SUPPLY_CHAIN', 'ADMIN', 'SUPER_ADMIN']) {
+      const app = buildApp({ tenantId: 'tenant-1', userId: `${role}-1`, role })
+      const response = await app.inject({
+        method: 'PATCH', url: '/order-entry-policy',
+        payload: { blockZeroStockAtOrderEntry: false, rowVersion: 3 },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().unchanged).toBe(true)
+      await app.close()
+    }
+
+    mocks.warehouseQueryRaw.mockClear()
+    for (const role of ['PURCHASER', 'FINANCE', 'SUPPLIER_OWNER', 'SUPPLIER_STAFF']) {
+      const app = buildApp({ tenantId: 'tenant-1', userId: `${role}-1`, role })
+      const response = await app.inject({
+        method: 'PATCH', url: '/order-entry-policy',
+        payload: { blockZeroStockAtOrderEntry: true, rowVersion: 3 },
+      })
+      expect(response.statusCode).toBe(403)
+      await app.close()
+    }
+    expect(mocks.warehouseQueryRaw).not.toHaveBeenCalled()
+    expect(mocks.warehouseUpdateMany).not.toHaveBeenCalled()
+  })
+
+  it('rejects enabling under OFF, rejects stale CAS, and returns unchanged before audit', async () => {
+    const app = buildApp({ tenantId: 'tenant-1', userId: 'buyer-1', role: 'SUPPLY_CHAIN' })
+    mocks.warehouseQueryRaw.mockResolvedValueOnce([{
+      id: 'warehouse-1', name: '供应链总仓', inventoryMode: 'OFF',
+      blockZeroStockAtOrderEntry: false, rowVersion: 0,
+    }])
+    const off = await app.inject({
+      method: 'PATCH', url: '/order-entry-policy', payload: { blockZeroStockAtOrderEntry: true, rowVersion: 0 },
+    })
+    expect(off.statusCode).toBe(409)
+
+    mocks.warehouseQueryRaw.mockResolvedValueOnce([{
+      id: 'warehouse-1', name: '供应链总仓', inventoryMode: 'SHADOW',
+      blockZeroStockAtOrderEntry: false, rowVersion: 4,
+    }])
+    const stale = await app.inject({
+      method: 'PATCH', url: '/order-entry-policy', payload: { blockZeroStockAtOrderEntry: true, rowVersion: 3 },
+    })
+    expect(stale.statusCode).toBe(409)
+    expect(stale.json().error).toContain('刷新')
+
+    mocks.warehouseQueryRaw.mockResolvedValueOnce([{
+      id: 'warehouse-1', name: '供应链总仓', inventoryMode: 'SHADOW',
+      blockZeroStockAtOrderEntry: true, rowVersion: 5,
+    }])
+    const unchanged = await app.inject({
+      method: 'PATCH', url: '/order-entry-policy', payload: { blockZeroStockAtOrderEntry: true, rowVersion: 5 },
+    })
+    expect(unchanged.statusCode).toBe(200)
+    expect(unchanged.json()).toMatchObject({ blockZeroStockAtOrderEntry: true, rowVersion: 5, unchanged: true })
+    expect(auditLedger).not.toHaveBeenCalled()
+    expect(mocks.warehouseUpdateMany).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it('maps a repeatable-read serialization conflict to a refreshable policy conflict', async () => {
+    vi.mocked(prisma.$transaction).mockRejectedValueOnce({ code: 'P2034' } as never)
+    const app = buildApp({ tenantId: 'tenant-1', userId: 'buyer-1', role: 'SUPPLY_CHAIN' })
+
+    const response = await app.inject({
+      method: 'PATCH', url: '/order-entry-policy',
+      payload: { blockZeroStockAtOrderEntry: true, rowVersion: 3 },
+    })
+
+    expect(response.statusCode).toBe(409)
+    expect(response.json().error).toContain('刷新后重试')
+    await app.close()
+  })
+
+  it('returns canEditOrderEntryPolicy with the same dedicated role boundary', async () => {
+    for (const [role, expected] of [
+      ['SUPPLY_CHAIN', true],
+      ['ADMIN', true],
+      ['SUPER_ADMIN', true],
+      ['FINANCE', false],
+      ['PURCHASER', false],
+    ] as const) {
+      const app = buildApp({ tenantId: 'tenant-1', userId: `${role}-1`, role })
+      const response = await app.inject({ method: 'GET', url: '/' })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().canEditOrderEntryPolicy).toBe(expected)
+      await app.close()
+    }
   })
 
   it('requires a reason and appends a manual-inbound reversal', async () => {

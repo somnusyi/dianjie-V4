@@ -267,10 +267,14 @@ export async function getWarehouseLedgerMode(tenantId: string) {
   const warehouseId = await resolveTenantWarehouseId(prisma, tenantId, undefined)
   const warehouse = await prisma.warehouse.findFirst({
     where: { id: warehouseId, tenantId, isActive: true },
-    select: { inventoryMode: true },
+    select: { inventoryMode: true, blockZeroStockAtOrderEntry: true },
   })
   if (!warehouse) throw businessError('总仓不存在或已停用', 404)
-  return { warehouseId, inventoryMode: warehouse.inventoryMode }
+  return {
+    warehouseId,
+    inventoryMode: warehouse.inventoryMode,
+    blockZeroStockAtOrderEntry: warehouse.blockZeroStockAtOrderEntry,
+  }
 }
 
 async function lockBalances(

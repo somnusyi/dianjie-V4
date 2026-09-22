@@ -1,5 +1,30 @@
 import { describe, expect, it } from 'vitest'
-import { isSupersedableInternalPendingRevisionEvent, revisionCreateSchema } from '../../src/routes/orders'
+import {
+  isOrderCreateSerializableConflict,
+  isSupersedableInternalPendingRevisionEvent,
+  revisionCreateSchema,
+} from '../../src/routes/orders'
+
+describe('order-create serializable conflict classification', () => {
+  it('recognizes Prisma P2034 and PostgreSQL 40001 surfaced through P2010', () => {
+    expect(isOrderCreateSerializableConflict({ code: 'P2034' })).toBe(true)
+    expect(isOrderCreateSerializableConflict({ code: 'P2010', meta: { code: '40001' } })).toBe(true)
+    expect(isOrderCreateSerializableConflict({
+      code: 'P2010',
+      meta: { message: 'could not serialize access due to concurrent update' },
+    })).toBe(true)
+    expect(isOrderCreateSerializableConflict({
+      code: 'P2010',
+      message: 'serialization failure (SQLSTATE 40001)',
+    })).toBe(true)
+  })
+
+  it('does not retry unrelated Prisma or database failures', () => {
+    expect(isOrderCreateSerializableConflict({ code: 'P2002' })).toBe(false)
+    expect(isOrderCreateSerializableConflict({ code: 'P2010', meta: { code: '23505' } })).toBe(false)
+    expect(isOrderCreateSerializableConflict(new Error('connection refused'))).toBe(false)
+  })
+})
 
 describe('operation-group direct revision request contract', () => {
   const base = {

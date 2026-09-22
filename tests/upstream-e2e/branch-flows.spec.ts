@@ -1,3 +1,4 @@
+import { resolve } from 'node:path'
 import { expect, test, type Page } from 'playwright/test'
 import { api, apiOk, capture, fixture, login } from './helpers'
 
@@ -78,7 +79,13 @@ test('E2E-02：供应商改单，采购方接受后只生效一个版本', async
   orderCard = supplyPage.locator('article').filter({ hasText: order.no })
   await expect(orderCard.getByText('供应商改单待审核')).toBeVisible()
   await capture(supplyPage, testInfo, '21-buyer-change-review')
-  await orderCard.getByRole('button', { name: '接受改单' }).click()
+  await orderCard.getByRole('button', { name: '查看改单内容' }).click()
+  const revisionPanel = supplyPage.getByRole('heading', { name: `改单审核 · ${order.no}` }).locator('..').locator('..')
+  await expect(revisionPanel).toContainText('本批次可供数量调整为 3 箱')
+  const revisionRow = revisionPanel.getByRole('row').filter({ hasText: data.productName })
+  await expect(revisionRow).toContainText('4')
+  await expect(revisionRow).toContainText('3')
+  await revisionPanel.getByRole('button', { name: '确认接受改单' }).click()
   await expect(supplyPage.getByText('改单已接受')).toBeVisible()
 
   const { prisma } = await import('@dianjie/db')
@@ -145,8 +152,11 @@ test('E2E-03/04：分批发货、异常验收、不同人员复核与差异仲�
     let receiptCard = supplyPage.locator('article').filter({ hasText: firstReceipt.no })
     await receiptCard.getByRole('button', { name: '开始验收' }).click()
     receiptCard = supplyPage.locator('article').filter({ hasText: firstReceipt.no })
-    supplyPage.once('dialog', dialog => dialog.accept())
-    await receiptCard.getByRole('button', { name: '确认验收' }).click()
+    await receiptCard.getByRole('button', { name: '查看明细并验收' }).click()
+    const receiptDetailPanel = supplyPage.getByRole('heading', { name: `收货单明细 · ${firstReceipt.no}` }).locator('..').locator('..')
+    await expect(receiptDetailPanel).toContainText(order.no)
+    await expect(receiptDetailPanel).toContainText(data.productName)
+    await receiptDetailPanel.getByRole('button', { name: '确认验收并提交' }).click()
     receiptCard = supplyPage.locator('article').filter({ hasText: firstReceipt.no })
     await expect(receiptCard.getByText('待复核')).toBeVisible()
     await capture(supplyPage, testInfo, '30-high-risk-receipt-pending-review')
@@ -158,8 +168,11 @@ test('E2E-03/04：分批发货、异常验收、不同人员复核与差异仲�
     await reviewerPage.goto('/v2/supply-chain/procurement')
     await reviewerPage.getByRole('button', { name: '到货验收', exact: true }).click()
     const reviewerCard = reviewerPage.locator('article').filter({ hasText: firstReceipt.no })
-    reviewerPage.once('dialog', dialog => dialog.accept())
-    await reviewerCard.getByRole('button', { name: '第二人复核入库' }).click()
+    await reviewerCard.getByRole('button', { name: '查看明细并复核' }).click()
+    const reviewerDetailPanel = reviewerPage.getByRole('heading', { name: `收货单明细 · ${firstReceipt.no}` }).locator('..').locator('..')
+    await expect(reviewerDetailPanel).toContainText(order.no)
+    await expect(reviewerDetailPanel).toContainText(data.productName)
+    await reviewerDetailPanel.getByRole('button', { name: '确认复核并入库' }).click()
     await expect(reviewerPage.getByText('复核通过，库存已入账')).toBeVisible()
     await capture(reviewerPage, testInfo, '31-independent-review-posted')
 
@@ -218,15 +231,23 @@ test('E2E-03/04：分批发货、异常验收、不同人员复核与差异仲�
     await supplierPage.getByRole('button', { name: '到货差异' }).click()
     const claimCard = supplierPage.locator('article').filter({ hasText: claim.no })
     await claimCard.getByRole('button', { name: '立即核对' }).click()
-    await supplierPage.getByPlaceholder('填写核对结果、接受说明或异议理由').fill('对现场破损数量有异议，请采购方复核')
-    await supplierPage.getByRole('button', { name: '提出异议' }).click()
+    const claimPanel = supplierPage.getByRole('heading', { name: `确认到货差异 · ${claim.no}` }).locator('..').locator('..')
+    await claimPanel.getByPlaceholder('填写核对结果、接受说明或异议理由').fill('对现场破损数量有异议，请采购方复核')
+    await supplierPage.route('**/api/upload?category=loss-claims', route => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ url: `https://e2e.local/evidence/dispute-${data.stamp}.svg` }),
+    }))
+    await claimPanel.locator('input[type="file"]').setInputFiles(resolve(process.cwd(), 'tests/upstream-e2e/fixtures/claim-evidence.svg'))
+    await expect(claimPanel.getByText('claim-evidence.svg')).toBeVisible()
+    await claimPanel.getByRole('button', { name: '提出异议' }).click()
 
     await supplyPage.reload()
     await supplyPage.getByRole('button', { name: '到货差异' }).click()
     const rejectedClaimCard = supplyPage.locator('article').filter({ hasText: claim.no })
     await rejectedClaimCard.getByRole('button', { name: '转仲裁' }).click()
     supplyPage.once('dialog', dialog => dialog.accept())
-    await rejectedClaimCard.getByRole('button', { name: '确认责任并扣款' }).click()
+    await rejectedClaimCard.getByRole('button', { name: '确认责任并办结' }).click()
     await expect(supplyPage.getByText('差异已办结并进入对账')).toBeVisible()
     await capture(supplyPage, testInfo, '33-claim-arbitrated-and-resolved')
   } finally {

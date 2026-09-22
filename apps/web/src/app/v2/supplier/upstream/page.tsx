@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import { settlementLineTypeLabel } from '@/lib/upstream-settlement-copy'
 import { clientRequestId } from '@/lib/client-id'
 import {
   money,
@@ -50,9 +51,29 @@ type Claim = {
   status: string
   claimedAmount: string | number
   description: string
-  purchaseOrder: { no: string }
-  receipt: { no: string }
+  purchaseOrder: { id: string; no: string }
+  receipt: { id: string; no: string }
   lines: Array<{ id: string; affectedQty: string | number; purchaseUnit: string; product: { name: string } }>
+}
+type ReceiptDetail = {
+  id: string
+  no: string
+  status: string
+  payableAmount: string | number
+  reviewReasons?: string[]
+  purchaseOrder: { id: string; no: string; totalAmount?: string | number }
+  shipment: { id: string; no: string }
+  lines: Array<{
+    id: string
+    arrivedQty?: string | number
+    acceptedQty: string | number
+    shortageQty?: string | number
+    damagedQty?: string | number
+    rejectedQty?: string | number
+    purchaseUnit: string
+    payableAmount?: string | number
+    purchaseOrderLine: { productCodeSnapshot: string; productNameSnapshot: string; productSpecSnapshot?: string | null }
+  }>
 }
 type Statement = {
   id: string
@@ -65,6 +86,20 @@ type Statement = {
   payableAmount: string | number
   version: number
   _count: { lines: number; invoiceAllocations: number }
+}
+type StatementDetail = Statement & {
+  lines: Array<{
+    id: string
+    sourceType: string
+    sourceNo: string
+    businessDate: string
+    description: string
+    originalAmount: string | number
+    adjustmentAmount: string | number
+    payableAmount: string | number
+    receiptLine?: { receipt?: { id: string; no: string; purchaseOrder?: { id: string; no: string } } } | null
+    claim?: { id: string; no: string; purchaseOrder?: { id: string; no: string }; receipt?: { id: string; no: string } } | null
+  }>
 }
 
 const TABS: Array<{ key: Tab; label: string }> = [
@@ -94,6 +129,9 @@ export default function SupplierUpstreamPage() {
   const [claims, setClaims] = useState<Claim[]>([])
   const [statements, setStatements] = useState<Statement[]>([])
   const [editingOrder, setEditingOrder] = useState<Order | null>(null)
+  const [viewingOrder, setViewingOrder] = useState<Order | null>(null)
+  const [viewingReceipt, setViewingReceipt] = useState<ReceiptDetail | null>(null)
+  const [viewingStatement, setViewingStatement] = useState<StatementDetail | null>(null)
   const [editMode, setEditMode] = useState<'change' | 'ship' | null>(null)
   const [lineValues, setLineValues] = useState<Record<string, string>>({})
   const [changeReason, setChangeReason] = useState('')
@@ -181,6 +219,38 @@ export default function SupplierUpstreamPage() {
     }
   }
 
+  async function openOrderDetail(order: Pick<Order, 'id'>) {
+    setError(null)
+    try {
+      setViewingOrder(await apiFetch<Order>(`/api/upstream/purchase-orders/${order.id}`))
+      setViewingReceipt(null)
+      setEditingOrder(null)
+      setEditMode(null)
+    } catch (reason: any) {
+      setError(reason?.message || '采购单明细加载失败')
+    }
+  }
+
+  async function openReceiptDetail(receipt: Pick<ReceiptDetail, 'id'>) {
+    setError(null)
+    try {
+      setViewingReceipt(await apiFetch<ReceiptDetail>(`/api/upstream/receipts/${receipt.id}`))
+      setTab('claims')
+    } catch (reason: any) {
+      setError(reason?.message || '收货单明细加载失败')
+    }
+  }
+
+  async function openStatementDetail(statement: Pick<Statement, 'id'>) {
+    setError(null)
+    try {
+      setViewingStatement(await apiFetch<StatementDetail>(`/api/upstream/settlement-statements/${statement.id}`))
+      setTab('settlements')
+    } catch (reason: any) {
+      setError(reason?.message || '对账单来源明细加载失败')
+    }
+  }
+
   async function submitChange() {
     if (!editingOrder || !changeReason.trim()) return setError('请填写改单原因')
     const lines = (editingOrder.lines || []).map(line => ({ lineId: line.id, quantity: Number(lineValues[line.id]) }))
@@ -260,6 +330,27 @@ export default function SupplierUpstreamPage() {
       <div className="mb-5 flex gap-2 overflow-x-auto">{TABS.map(item => <button key={item.key} onClick={() => setTab(item.key)} className={`whitespace-nowrap rounded-full px-4 py-2 text-button ${tab === item.key ? 'bg-gray1 text-white' : 'border border-border bg-white text-gray2'}`}>{item.label}</button>)}</div>
       {loading && <Empty text="正在加载总仓采购业务…" />}
 
+      {viewingOrder && <Panel title={`采购单明细 · ${viewingOrder.no}`} onClose={() => setViewingOrder(null)}><div className="grid gap-2 rounded-xl bg-bg p-3 text-caption sm:grid-cols-3"><div><span className="text-gray3">收货总仓</span><div>{viewingOrder.warehouse.name}</div></div><div><span className="text-gray3">期望到货</span><div>{shortDate(viewingOrder.expectedArrivalAt)}</div></div><div><span className="text-gray3">订单金额</span><div><b>{money(viewingOrder.totalAmount)}</b></div></div></div><div className="mt-4 overflow-x-auto"><table className="w-full text-left text-caption"><thead><tr className="border-b"><th className="p-2">商品</th><th className="p-2">规格</th><th className="p-2">采购单位</th><th className="p-2">订单数量</th><th className="p-2">已发数量</th><th className="p-2">单价</th><th className="p-2">小计</th></tr></thead><tbody>{(viewingOrder.lines || []).map(line => { const quantity = Number(line.confirmedQty ?? line.orderedQty); return <tr key={line.id} className="border-b border-border"><td className="p-2"><b>{line.productNameSnapshot}</b></td><td className="p-2">{line.productSpecSnapshot || '—'}</td><td className="p-2">{line.purchaseUnit}</td><td className="p-2">{quantity}</td><td className="p-2">{String(line.shippedQty)}</td><td className="p-2">{money(line.unitPrice)}</td><td className="p-2">{money(quantity * Number(line.unitPrice))}</td></tr> })}</tbody></table></div></Panel>}
+
+      {viewingReceipt && <Panel title={`收货单明细 · ${viewingReceipt.no}`} onClose={() => setViewingReceipt(null)}>
+        <div className="grid gap-2 rounded-xl bg-bg p-3 text-caption sm:grid-cols-3">
+          <div><span className="text-gray3">采购单</span><div><button type="button" className="font-medium underline decoration-dotted underline-offset-2" aria-label={`查看采购单 ${viewingReceipt.purchaseOrder.no} 全部内容`} onClick={() => void openOrderDetail(viewingReceipt.purchaseOrder)}>{viewingReceipt.purchaseOrder.no}</button></div></div>
+          <div><span className="text-gray3">采购单金额</span><div>{viewingReceipt.purchaseOrder.totalAmount == null ? '—' : money(viewingReceipt.purchaseOrder.totalAmount)}</div></div>
+          <div><span className="text-gray3">本次应付</span><div><b>{money(viewingReceipt.payableAmount)}</b></div></div>
+        </div>
+        <div className="mt-4 overflow-x-auto"><table className="w-full text-left text-caption"><thead><tr className="border-b"><th className="p-2">商品</th><th className="p-2">规格</th><th className="p-2">实到</th><th className="p-2">合格</th><th className="p-2">短缺</th><th className="p-2">破损</th><th className="p-2">拒收</th><th className="p-2">单位</th></tr></thead><tbody>{viewingReceipt.lines.map(line => <tr key={line.id} className="border-b border-border"><td className="p-2"><b>{line.purchaseOrderLine.productNameSnapshot}</b></td><td className="p-2">{line.purchaseOrderLine.productSpecSnapshot || line.purchaseOrderLine.productCodeSnapshot}</td><td className="p-2">{String(line.arrivedQty ?? '—')}</td><td className="p-2">{String(line.acceptedQty)}</td><td className="p-2">{String(line.shortageQty ?? 0)}</td><td className="p-2">{String(line.damagedQty ?? 0)}</td><td className="p-2">{String(line.rejectedQty ?? 0)}</td><td className="p-2">{line.purchaseUnit}</td></tr>)}</tbody></table></div>
+        {viewingReceipt.reviewReasons?.length ? <p className="mt-3 rounded-lg bg-amber/10 p-3 text-caption">复核：{viewingReceipt.reviewReasons.join('、')}</p> : null}
+      </Panel>}
+
+      {viewingStatement && <Panel title={`对账单来源明细 · ${viewingStatement.no}`} onClose={() => setViewingStatement(null)}>
+        <div className="rounded-xl bg-bg p-3 text-caption">{shortDate(viewingStatement.periodStart)}—{shortDate(viewingStatement.periodEnd)} · 收货 {money(viewingStatement.receiptAmount)} · 扣款 {money(viewingStatement.deductionAmount)} · 应收 <b>{money(viewingStatement.payableAmount)}</b></div>
+        <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[880px] text-left text-caption"><thead><tr className="border-b"><th className="p-2">日期</th><th className="p-2">类型</th><th className="p-2">采购单</th><th className="p-2">收货单</th><th className="p-2">差异单</th><th className="p-2">说明</th><th className="p-2">原金额</th><th className="p-2">调整</th><th className="p-2">应收</th></tr></thead><tbody>{viewingStatement.lines.map(line => {
+          const purchaseOrder = line.receiptLine?.receipt?.purchaseOrder || line.claim?.purchaseOrder
+          const receipt = line.receiptLine?.receipt || line.claim?.receipt
+          return <tr key={line.id} className="border-b border-border"><td className="p-2">{shortDate(line.businessDate)}</td><td className="p-2">{settlementLineTypeLabel(line.sourceType, line.adjustmentAmount)}</td><td className="p-2">{purchaseOrder ? <button type="button" className="underline decoration-dotted" onClick={() => void openOrderDetail(purchaseOrder)}>{purchaseOrder.no}</button> : '—'}</td><td className="p-2">{receipt ? <button type="button" className="underline decoration-dotted" onClick={() => void openReceiptDetail(receipt)}>{receipt.no}</button> : '—'}</td><td className="p-2">{line.claim?.no || '—'}</td><td className="p-2">{line.description}</td><td className="p-2">{money(line.originalAmount)}</td><td className="p-2">{money(line.adjustmentAmount)}</td><td className="p-2"><b>{money(line.payableAmount)}</b></td></tr>
+        })}</tbody></table></div>
+      </Panel>}
+
       {editingOrder && <Panel title={`${editMode === 'change' ? '申请改单' : '新建发货单'} · ${editingOrder.no}`} onClose={() => { setEditingOrder(null); setEditMode(null) }}>
         {editMode === 'change' && <label className="mb-4 block"><span className="mb-1 block text-micro text-gray3">改单原因</span><textarea className="supplier-input min-h-20" value={changeReason} onChange={event => setChangeReason(event.target.value)} placeholder="说明缺货、规格或到货期变化" /></label>}
         {editMode === 'ship' && <div className="mb-4 grid gap-3 sm:grid-cols-3"><Field label="承运/配送方"><input className="supplier-input" value={shipping.carrierName} onChange={event => setShipping(value => ({ ...value, carrierName: event.target.value }))} /></Field><Field label="运单号"><input className="supplier-input" value={shipping.trackingNo} onChange={event => setShipping(value => ({ ...value, trackingNo: event.target.value }))} /></Field><Field label="预计到仓"><input type="date" className="supplier-input" value={shipping.expectedArrivalAt} onChange={event => setShipping(value => ({ ...value, expectedArrivalAt: event.target.value }))} /></Field></div>}
@@ -269,13 +360,13 @@ export default function SupplierUpstreamPage() {
 
       {respondingClaim && <Panel title={`确认到货差异 · ${respondingClaim.no}`} onClose={() => setRespondingClaim(null)}><p className="mb-3 text-caption text-gray2">{respondingClaim.description} · 申请金额 {money(respondingClaim.claimedAmount)}</p><textarea className="supplier-input min-h-24" value={claimResponse} onChange={event => setClaimResponse(event.target.value)} placeholder="填写核对结果、接受说明或异议理由" /><div className="mt-3"><span className="mb-1 block text-micro text-gray3">举证照片（提出异议时至少 1 张，最多 4 个文件）</span><div className="flex flex-wrap items-center gap-2">{claimEvidence.map((item, index) => <span key={index} className="rounded-lg bg-bg px-2 py-1 text-micro text-gray2">{item.name}<button className="ml-1 text-red-700" onClick={() => setClaimEvidence(current => current.filter((_, i) => i !== index))}>×</button></span>)}<label className={`cursor-pointer rounded-lg border border-dashed border-border px-3 py-1.5 text-caption ${uploadingClaimEvidence ? 'text-gray3' : 'text-accent'}`}>{uploadingClaimEvidence ? '上传中…' : '+ 上传照片'}<input type="file" accept="image/*" className="hidden" disabled={uploadingClaimEvidence} onChange={event => { const file = event.target.files?.[0]; if (file) void uploadClaimEvidence(file); event.target.value = '' }} /></label></div></div><div className="mt-4 flex justify-end gap-2"><Button danger onClick={() => void respondClaim('REJECT')} disabled={working === respondingClaim.id}>提出异议</Button><Button onClick={() => void respondClaim('ACCEPT')} disabled={working === respondingClaim.id}>接受差异</Button></div></Panel>}
 
-      {!loading && tab === 'orders' && <section className="space-y-3">{orders.length === 0 ? <Empty text="暂无总仓采购单" /> : orders.map(order => <article key={order.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><b className="text-h3">{order.no}</b><Badge status={order.status} labels={UPSTREAM_ORDER_STATUS_LABEL} /></div><p className="mt-1 text-caption text-gray2">送达 {order.warehouse.name} · {order._count?.lines || 0} 项 · 期望 {shortDate(order.expectedArrivalAt)}</p><p className="mt-1 text-h3">{money(order.totalAmount)}</p></div><div className="flex flex-wrap gap-2">{order.status === 'SUBMITTED_TO_SUPPLIER' && <><Button secondary onClick={() => void openOrderForm(order, 'change')}>申请改单</Button><Button onClick={() => window.confirm('确认可按采购单履约并接单？') && void run(order.id, () => apiFetch(`/api/upstream/purchase-orders/${order.id}/accept`, { method: 'POST' }), '采购单已接单')} disabled={working === order.id}>确认接单</Button></>}{['SUPPLIER_ACCEPTED', 'PARTIALLY_SHIPPED', 'PARTIALLY_RECEIVED'].includes(order.status) && <Button onClick={() => void openOrderForm(order, 'ship')}>新建发货单</Button>}{order.status === 'SUPPLIER_ACCEPTED' && <Button secondary onClick={() => void openOrderForm(order, 'change')}>申请改单</Button>}</div></div></article>)}</section>}
+      {!loading && tab === 'orders' && <section className="space-y-3">{orders.length === 0 ? <Empty text="暂无总仓采购单" /> : orders.map(order => <article key={order.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><button type="button" onClick={() => void openOrderDetail(order)} className="text-h3 underline decoration-dotted underline-offset-4" aria-label={`查看采购单 ${order.no} 明细`}>{order.no}</button><Badge status={order.status} labels={UPSTREAM_ORDER_STATUS_LABEL} /></div><p className="mt-1 text-caption text-gray2">送达 {order.warehouse.name} · {order._count?.lines || 0} 项 · 期望 {shortDate(order.expectedArrivalAt)}</p><p className="mt-1 text-h3">{money(order.totalAmount)}</p></div><div className="flex flex-wrap gap-2"><Button secondary onClick={() => void openOrderDetail(order)}>查看明细</Button>{order.status === 'SUBMITTED_TO_SUPPLIER' && <><Button secondary onClick={() => void openOrderForm(order, 'change')}>申请改单</Button><Button onClick={() => window.confirm('确认可按采购单履约并接单？') && void run(order.id, () => apiFetch(`/api/upstream/purchase-orders/${order.id}/accept`, { method: 'POST' }), '采购单已接单')} disabled={working === order.id}>确认接单</Button></>}{['SUPPLIER_ACCEPTED', 'PARTIALLY_SHIPPED', 'PARTIALLY_RECEIVED'].includes(order.status) && <Button onClick={() => void openOrderForm(order, 'ship')}>新建发货单</Button>}{order.status === 'SUPPLIER_ACCEPTED' && <Button secondary onClick={() => void openOrderForm(order, 'change')}>申请改单</Button>}</div></div></article>)}</section>}
 
       {!loading && tab === 'shipments' && <section className="space-y-3">{shipments.length === 0 ? <Empty text="暂无发货单" /> : shipments.map(shipment => <article key={shipment.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex items-center gap-2"><b className="text-h3">{shipment.no}</b><Badge status={shipment.status} labels={{ DRAFT: '待发车', SHIPPED: '运输中', PARTIALLY_RECEIVED: '部分收货', RECEIVED: '已收货' }} /></div><p className="mt-1 text-caption text-gray2">采购单 {shipment.purchaseOrder.no} · {shipment.lines.length} 项 · 到仓 {shortDate(shipment.expectedArrivalAt)}</p>{shipment.carrierName && <p className="mt-1 text-caption text-gray3">{shipment.carrierName} {shipment.trackingNo || ''}</p>}</div>{shipment.status === 'DRAFT' && <Button onClick={() => window.confirm('确认商品和数量无误并发车？发车后数量不能修改。') && void run(shipment.id, () => apiFetch(`/api/upstream/shipments/${shipment.id}/dispatch`, { method: 'POST' }), '已确认发车，等待总仓收货')} disabled={working === shipment.id}>确认发车</Button>}</div></article>)}</section>}
 
-      {!loading && tab === 'claims' && <section className="space-y-3">{claims.length === 0 ? <Empty text="暂无到货差异" /> : claims.map(claim => <article key={claim.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><b className="text-h3">{claim.no}</b><Badge status={claim.status} labels={UPSTREAM_CLAIM_STATUS_LABEL} /><span className="text-caption text-red-700">{money(claim.claimedAmount)}</span></div><p className="mt-2 text-caption text-gray1">{claim.description}</p><p className="mt-1 text-caption text-gray3">采购单 {claim.purchaseOrder.no} · 收货单 {claim.receipt.no}</p><ul className="mt-2 text-caption text-gray2">{claim.lines.map(line => <li key={line.id}>· {line.product.name} {String(line.affectedQty)} {line.purchaseUnit}</li>)}</ul></div>{claim.status === 'PENDING_SUPPLIER' && <Button onClick={() => { setRespondingClaim(claim); setClaimResponse('') }}>立即核对</Button>}</div></article>)}</section>}
+      {!loading && tab === 'claims' && <section className="space-y-3">{claims.length === 0 ? <Empty text="暂无到货差异" /> : claims.map(claim => <article key={claim.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><b className="text-h3">{claim.no}</b><Badge status={claim.status} labels={UPSTREAM_CLAIM_STATUS_LABEL} /><span className="text-caption text-red-700">{money(claim.claimedAmount)}</span></div><p className="mt-2 text-caption text-gray1">{claim.description}</p><div className="mt-2 flex flex-wrap gap-2 text-caption"><button type="button" onClick={() => void openOrderDetail(claim.purchaseOrder)} className="rounded-lg border border-border bg-bg px-2 py-1 underline decoration-dotted">采购单 {claim.purchaseOrder.no}</button><button type="button" onClick={() => void openReceiptDetail(claim.receipt)} className="rounded-lg border border-border bg-bg px-2 py-1 underline decoration-dotted">查看收货单 {claim.receipt.no}</button></div><ul className="mt-2 text-caption text-gray2">{claim.lines.map(line => <li key={line.id}>· {line.product.name} {String(line.affectedQty)} {line.purchaseUnit}</li>)}</ul></div><div className="flex gap-2"><Button secondary onClick={() => void openReceiptDetail(claim.receipt)}>查看对应收货</Button>{claim.status === 'PENDING_SUPPLIER' && <Button onClick={() => { setRespondingClaim(claim); setClaimResponse('') }}>立即核对</Button>}</div></div></article>)}</section>}
 
-      {!loading && tab === 'settlements' && <section className="space-y-3">{statements.length === 0 ? <Empty text="暂无月度对账单" /> : statements.map(statement => <article key={statement.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex items-center gap-2"><b className="text-h3">{statement.no}</b><Badge status={statement.status} labels={UPSTREAM_SETTLEMENT_STATUS_LABEL} /></div><p className="mt-1 text-caption text-gray2">{shortDate(statement.periodStart)}—{shortDate(statement.periodEnd)} · V{statement.version} · {statement._count.lines} 项</p><p className="mt-1 text-caption text-gray3">收货 {money(statement.receiptAmount)} · 扣款 {money(statement.deductionAmount)}</p><p className="mt-1 text-h3">应收 {money(statement.payableAmount)}</p></div>{statement.status === 'SENT_TO_SUPPLIER' && <div className="flex gap-2"><Button danger onClick={() => { const reason = window.prompt('请填写对账异议原因'); if (reason?.trim()) void run(statement.id, () => apiFetch(`/api/upstream/settlement-statements/${statement.id}/dispute`, { method: 'POST', body: JSON.stringify({ reason: reason.trim() }) }), '对账异议已提交') }}>提出异议</Button><Button onClick={() => window.confirm('确认本期收货、扣款和应收金额无误？') && void run(statement.id, () => apiFetch(`/api/upstream/settlement-statements/${statement.id}/confirm`, { method: 'POST' }), '月度对账已确认')} disabled={working === statement.id}>确认对账</Button></div>}</div></article>)}</section>}
+      {!loading && tab === 'settlements' && <section className="space-y-3">{statements.length === 0 ? <Empty text="暂无月度对账单" /> : statements.map(statement => <article key={statement.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex items-center gap-2"><button type="button" onClick={() => void openStatementDetail(statement)} className="text-h3 underline decoration-dotted underline-offset-4">{statement.no}</button><Badge status={statement.status} labels={UPSTREAM_SETTLEMENT_STATUS_LABEL} /></div><p className="mt-1 text-caption text-gray2">{shortDate(statement.periodStart)}—{shortDate(statement.periodEnd)} · V{statement.version} · {statement._count.lines} 项</p><p className="mt-1 text-caption text-gray3">收货 {money(statement.receiptAmount)} · 扣款 {money(statement.deductionAmount)}</p><p className="mt-1 text-h3">应收 {money(statement.payableAmount)}</p></div><div className="flex flex-wrap gap-2"><Button secondary onClick={() => void openStatementDetail(statement)}>查看采购 / 收货 / 差异来源</Button>{statement.status === 'SENT_TO_SUPPLIER' && <><Button danger onClick={() => { const reason = window.prompt('请填写对账异议原因'); if (reason?.trim()) void run(statement.id, () => apiFetch(`/api/upstream/settlement-statements/${statement.id}/dispute`, { method: 'POST', body: JSON.stringify({ reason: reason.trim() }) }), '对账异议已提交') }}>提出异议</Button><Button onClick={() => window.confirm('确认本期收货、扣款和应收金额无误？') && void run(statement.id, () => apiFetch(`/api/upstream/settlement-statements/${statement.id}/confirm`, { method: 'POST' }), '月度对账已确认')} disabled={working === statement.id}>确认对账</Button></>}</div></div></article>)}</section>}
     </main>
   </div>
 }

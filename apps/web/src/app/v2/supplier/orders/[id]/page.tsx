@@ -74,8 +74,9 @@ type Order = {
   shippedBy: { id: string; name: string } | null
   items: { id: string; productId: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string; receivedQty: string | null; orderUnitSnapshot?: string | null; productUnitSnapshot?: string | null; product?: { name: string; spec: string | null; unit: string; code: string; shipUpperPct?: string | number; shipUpperBuffer?: string | number } }[]
   revisions?: {
-    id: string; revisionNo: number; status: string; reason: string; requestedAt: string
+    id: string; revisionNo: number; status: string; reason: string; requestedAt?: string; createdAt?: string
     changeSet: { kind: string; productId?: string; before?: any; after?: any }[]
+    beforeSnapshot?: RevisionSnapshot | null; afterSnapshot?: RevisionSnapshot | null
     requestedBy?: { name: string }; reviewedBy?: { name: string } | null; reviewedAt?: string | null; reviewNote?: string | null
   }[]
   deliveries?: {
@@ -97,6 +98,36 @@ type Order = {
   }[]
   receipt?: { id: string; no: string } | null
   receipts?: { id: string; no: string; totalAmount: string; status: string }[]
+}
+
+type RevisionSnapshot = {
+  totalAmount?: string | number
+  items?: Array<{
+    productId: string
+    code?: string | null
+    name?: string | null
+    spec?: string | null
+    unit?: string | null
+    quantity: string | number
+    unitPrice: string | number
+    amount?: string | number
+  }>
+}
+
+function RevisionSnapshotTable({ title, snapshot }: { title: string; snapshot?: RevisionSnapshot | null }) {
+  const items = snapshot?.items || []
+  return <div className="overflow-hidden rounded-cta border border-border">
+    <div className="flex items-center justify-between bg-bg px-3 py-2 text-caption font-medium">
+      <span>{title}</span><span>合计 ¥{Number(snapshot?.totalAmount || 0).toFixed(2)}</span>
+    </div>
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[560px] text-micro">
+        <thead><tr className="border-b border-border text-left text-gray3"><th className="p-2">商品</th><th className="p-2">规格</th><th className="p-2">数量</th><th className="p-2">单价</th><th className="p-2">金额</th></tr></thead>
+        <tbody>{items.map((item, index) => <tr key={`${item.productId}-${index}`} className="border-b border-border last:border-0"><td className="p-2"><b>{item.name || item.code || item.productId}</b>{item.code ? <div className="text-gray3">{item.code}</div> : null}</td><td className="p-2">{item.spec || '—'}</td><td className="p-2">{String(item.quantity)} {item.unit || ''}</td><td className="p-2">¥{Number(item.unitPrice || 0).toFixed(2)}</td><td className="p-2">¥{Number(item.amount ?? Number(item.quantity) * Number(item.unitPrice)).toFixed(2)}</td></tr>)}</tbody>
+      </table>
+      {items.length === 0 ? <p className="p-3 text-caption text-gray3">该历史快照暂无商品明细</p> : null}
+    </div>
+  </div>
 }
 
 type OperationGroupDetailResponse = {
@@ -1214,6 +1245,28 @@ export default function SupplierOrderDetailPage() {
         {order.note && <div className="mt-2 bg-bg rounded p-2 text-caption text-gray2">📝 {order.note}</div>}
         {order.shippedNote && <div className="mt-2 bg-amber/10 rounded p-2 text-caption text-amber-fg">📦 发货备注: {order.shippedNote}</div>}
       </OrderAmountCard>
+
+      {(order.revisions?.length ?? 0) > 0 && <section className="mx-4 mt-3 rounded-card border border-border bg-white p-3">
+        <div className="mb-2"><h2 className="text-h2">改单记录</h2><p className="mt-1 text-micro text-gray3">每次改单前后的完整商品快照都保留，不会用新明细覆盖原始单据。</p></div>
+        <div className="space-y-2">{order.revisions!.map(revision => <details key={revision.id} className="rounded-cta border border-border" open={revision.status === 'PENDING'}>
+          <summary className="cursor-pointer list-none px-3 py-2 text-caption font-medium">
+            第 {revision.revisionNo} 次改单 · {{ PENDING: '待审核', APPROVED: '已生效', REJECTED: '已驳回', CANCELLED: '已取消' }[revision.status] || revision.status}
+            <span className="ml-2 font-normal text-gray3">{revision.reason}</span>
+          </summary>
+          <div className="border-t border-border p-3">
+            <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-micro text-gray3">
+              <span>申请人：{revision.requestedBy?.name || '—'}</span>
+              <span>申请时间：{revision.createdAt || revision.requestedAt ? dayjs(revision.createdAt || revision.requestedAt).format('YYYY-MM-DD HH:mm') : '—'}</span>
+              {revision.reviewedBy?.name ? <span>审核人：{revision.reviewedBy.name}</span> : null}
+              {revision.reviewNote ? <span>审核说明：{revision.reviewNote}</span> : null}
+            </div>
+            <div className="grid gap-3 xl:grid-cols-2">
+              <RevisionSnapshotTable title="改单前（原始内容）" snapshot={revision.beforeSnapshot} />
+              <RevisionSnapshotTable title={revision.status === 'APPROVED' ? '改单后（已生效）' : revision.status === 'PENDING' ? '改单后（待审核）' : '改单后（未生效记录）'} snapshot={revision.afterSnapshot} />
+            </div>
+          </div>
+        </details>)}</div>
+      </section>}
 
       <OrderDeliverySummary lines={(order.deliveries || [])
         .filter(delivery => delivery.status !== 'DRAFT' && delivery.status !== 'CANCELLED')

@@ -19,8 +19,8 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [received, setReceived] = useState<Record<string, number>>({})
-  const [differenceKind, setDifferenceKind] = useState<'ARRIVAL_SHORTAGE' | 'ARRIVAL_DAMAGE'>('ARRIVAL_SHORTAGE')
-  const [lossReason, setLossReason] = useState('')           // 自定义差异原因 (可选)
+  const [differenceKinds, setDifferenceKinds] = useState<Record<string, 'ARRIVAL_SHORTAGE' | 'ARRIVAL_DAMAGE'>>({})
+  const [differenceReasons, setDifferenceReasons] = useState<Record<string, string>>({})
   const [evidence, setEvidence] = useState<string[]>([])     // OSS URL 数组
   const [uploading, setUploading] = useState(false)
   const [confirmState, openConfirm] = useConfirmSheet()
@@ -32,10 +32,13 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
       const activeDelivery = (d.deliveries || []).find((delivery: any) => delivery.status === 'DELIVERED')
       const deliveryItems = activeDelivery?.items || []
       const init: Record<string, number> = {}
+      const initialKinds: Record<string, 'ARRIVAL_SHORTAGE' | 'ARRIVAL_DAMAGE'> = {}
       deliveryItems.forEach((it: any) => {
         init[it.productId] = Number(it.shippedQty)
+        initialKinds[it.productId] = 'ARRIVAL_SHORTAGE'
       })
       setReceived(init)
+      setDifferenceKinds(initialKinds)
     }).catch(e => setError(String(e?.message || e)))
   }, [params.id])
 
@@ -122,10 +125,12 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
             items: items.map((it: any) => ({
               productId: it.productId,
               receivedQty: Number(received[it.productId] ?? 0),
+              ...(Number(received[it.productId] ?? 0) < expected(it) ? {
+                kind: differenceKinds[it.productId] || 'ARRIVAL_SHORTAGE',
+                ...(differenceReasons[it.productId]?.trim() ? { reason: differenceReasons[it.productId].trim() } : {}),
+              } : {}),
             })),
             evidenceImages: hasLoss ? evidence : undefined,
-            kind: hasLoss ? differenceKind : undefined,
-            reason: hasLoss && lossReason.trim() ? lossReason.trim() : undefined,
           }),
         })
         router.push(`/v2/chef/purchase/po-success/${params.id}`)
@@ -173,6 +178,9 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
             const shipped = it.shippedQty != null ? Number(it.shippedQty) : null
             const exp = shipped != null ? shipped : ordered
             const isLoss = rq < exp
+            const differenceLabel = differenceKinds[it.productId] === 'ARRIVAL_DAMAGE'
+              ? '破损 / 品质异常'
+              : '数量短缺'
             const supplierShortShipped = shipped != null && shipped < ordered
             // 「按下单索赔」: 把实收设回 0 (或减到供应商少发的量), 让差额计入报损
             // 等同于"我不接受供应商擅自调减, 要求按 5 件赔"
@@ -224,7 +232,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
                   <span className="text-micro text-gray3 w-12 text-right">{it.product?.unit || ''}</span>
                 </div>
                 {isLoss && (
-                  <p className="text-micro text-red-fg mt-2">短缺 {(exp - rq).toFixed(2)} {it.product?.unit || ''} · 损失 ¥{((exp - rq) * Number(it.unitPrice)).toFixed(2)}</p>
+                  <p className="text-micro text-red-fg mt-2">{differenceLabel} {(exp - rq).toFixed(2)} {it.product?.unit || ''} · 差异金额 ¥{((exp - rq) * Number(it.unitPrice)).toFixed(2)}</p>
                 )}
               </li>
             )
@@ -249,22 +257,22 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
         </div>
       </Section>
 
-      {/* 到货差异类型和原因 */}
+      {/* 到货差异类型按商品设置，同一张验收单可同时短缺和报损 */}
       {hasLoss && (
-        <Section title="到货差异类型" right={lossReason.trim() ? '' : '可补充说明'}>
-          <div className="grid grid-cols-2 gap-2 mb-2">
-            <button type="button" onClick={() => setDifferenceKind('ARRIVAL_SHORTAGE')}
-              className={`py-2 rounded-cta text-button border ${differenceKind === 'ARRIVAL_SHORTAGE' ? 'bg-ink text-white border-ink' : 'bg-white text-gray2 border-border'}`}>
-              数量短缺
-            </button>
-            <button type="button" onClick={() => setDifferenceKind('ARRIVAL_DAMAGE')}
-              className={`py-2 rounded-cta text-button border ${differenceKind === 'ARRIVAL_DAMAGE' ? 'bg-ink text-white border-ink' : 'bg-white text-gray2 border-border'}`}>
-              破损 / 品质异常
-            </button>
+        <Section title="逐商品选择到货差异" right="可同时选不同类型">
+          <div className="space-y-3">
+            {items.filter((it: any) => Number(received[it.productId] ?? 0) < expected(it)).map((it: any) => {
+              const kind = differenceKinds[it.productId] || 'ARRIVAL_SHORTAGE'
+              return <div key={it.productId} className="rounded-card border border-border bg-white p-3">
+                <div className="mb-2 flex items-center justify-between gap-2"><b>{it.product?.name || it.productId}</b><span className="text-caption text-red-fg">差异 {(expected(it) - Number(received[it.productId] ?? 0)).toFixed(2)} {it.product?.unit || ''}</span></div>
+                <div className="mb-2 grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => setDifferenceKinds(current => ({ ...current, [it.productId]: 'ARRIVAL_SHORTAGE' }))} className={`rounded-cta border py-2 text-button ${kind === 'ARRIVAL_SHORTAGE' ? 'border-ink bg-ink text-white' : 'border-border bg-white text-gray2'}`}>数量短缺</button>
+                  <button type="button" onClick={() => setDifferenceKinds(current => ({ ...current, [it.productId]: 'ARRIVAL_DAMAGE' }))} className={`rounded-cta border py-2 text-button ${kind === 'ARRIVAL_DAMAGE' ? 'border-ink bg-ink text-white' : 'border-border bg-white text-gray2'}`}>破损 / 品质异常</button>
+                </div>
+                <input type="text" value={differenceReasons[it.productId] || ''} onChange={event => setDifferenceReasons(current => ({ ...current, [it.productId]: event.target.value }))} maxLength={30} placeholder={kind === 'ARRIVAL_DAMAGE' ? '如：包装破损、变质、规格不符…' : '如：少送 2 斤、短斤…'} className="w-full rounded-cta border border-border bg-white px-3 py-2.5 text-body text-ink placeholder:text-gray3 focus:border-accent focus:outline-none" />
+              </div>
+            })}
           </div>
-          <input type="text" value={lossReason} onChange={(e) => setLossReason(e.target.value)} maxLength={30}
-            placeholder={differenceKind === 'ARRIVAL_DAMAGE' ? '如：包装破损、变质、规格不符…' : '如：少送 2 斤、短斤…'}
-            className="w-full bg-white border border-border rounded-cta px-3 py-2.5 text-body text-ink placeholder:text-gray3 focus:outline-none focus:border-accent" />
         </Section>
       )}
 

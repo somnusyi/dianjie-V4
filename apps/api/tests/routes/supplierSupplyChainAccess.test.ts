@@ -22,6 +22,7 @@ describe('internal supply-chain supplier management boundary', () => {
       creditDays: true,
       status: true,
       businessScopes: true,
+      inventoryMode: true,
     })
     expect(select).not.toHaveProperty('bankAccount')
     expect(select).not.toHaveProperty('autoPay')

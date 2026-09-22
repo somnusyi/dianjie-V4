@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { WarehouseToolTabs } from '@/components/v2/warehouse-tool-tabs'
 import { apiFetch } from '@/lib/v2-auth'
@@ -46,11 +46,14 @@ type UpstreamSupplier = {
 }
 
 type InventoryResponse = {
+  canEditOrderEntryPolicy: boolean
   warehouse: {
     id: string
     code: string
     name: string
+    rowVersion: number
     inventoryMode: 'OFF' | 'SHADOW' | 'STRICT'
+    blockZeroStockAtOrderEntry: boolean
     inventoryActivatedAt?: string | null
   }
   summary: {
@@ -240,6 +243,10 @@ export default function InternalSupplyChainInventoryPage() {
   const [suppliers, setSuppliers] = useState<UpstreamSupplier[]>([])
   const [gateWarnings, setGateWarnings] = useState<string[]>([])
   const [verifyingId, setVerifyingId] = useState('')
+  const [policyMode, setPolicyMode] = useState<'ALLOW' | 'BLOCK' | ''>('')
+  const [policyOpen, setPolicyOpen] = useState(false)
+  const [savingPolicy, setSavingPolicy] = useState(false)
+  const savingPolicyRef = useRef(false)
 
   // 单位待核验：人工确认换算关系后放行入库（只提交状态，后端原样保留四单位口径）
   async function verifyUnitConversion(item: InventoryItem) {
@@ -281,6 +288,7 @@ export default function InternalSupplyChainInventoryPage() {
         inventory.items = [...inventory.items, ...remaining.flatMap(result => result.items)]
       }
       setData(inventory)
+      setPolicyMode(inventory.warehouse.blockZeroStockAtOrderEntry ? 'BLOCK' : 'ALLOW')
       setMovements(recent || [])
       setAudit(ledgerAudit)
     } catch (reason: any) {
@@ -659,6 +667,66 @@ export default function InternalSupplyChainInventoryPage() {
     }
   }
 
+  async function saveOrderEntryPolicy() {
+    if (!data || !policyMode || savingPolicyRef.current) return
+    const currentPolicyMode = data.warehouse.blockZeroStockAtOrderEntry ? 'BLOCK' : 'ALLOW'
+    if (policyMode === currentPolicyMode) {
+      setNotice('门店订货库存策略没有变化')
+      return
+    }
+    if (policyMode === 'BLOCK' && data.warehouse.inventoryMode === 'OFF') {
+      setError('总仓库存投影尚未启用，不能在门店提交阶段按零库存阻断')
+      return
+    }
+    if (policyMode === 'BLOCK' && data.warehouse.inventoryMode === 'SHADOW' && !audit?.readyForStrict) {
+      setError(`库存四账审计尚有 ${audit?.blockerCount ?? '未知'} 项阻断问题，不能在门店提交阶段按零库存阻断`)
+      return
+    }
+    const confirmation = policyMode === 'BLOCK'
+      ? '确认切换为“库存为 0，禁止下单”？\n只在门店提交阶段检查可用库存是否为 0；可用库存大于 0 不代表足够覆盖本次订购量。'
+      : '确认切换为“仅提醒，仍可下单”？\n门店可以提交订单，但提交时不锁库存；严格库存模式下，总仓接单仍可能因整单库存不足失败。'
+    if (!window.confirm(confirmation)) {
+      setPolicyMode(currentPolicyMode)
+      return
+    }
+
+    savingPolicyRef.current = true
+    setSavingPolicy(true)
+    setError('')
+    try {
+      await apiFetch('/api/warehouse-inventory/order-entry-policy', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          blockZeroStockAtOrderEntry: policyMode === 'BLOCK',
+          rowVersion: data.warehouse.rowVersion,
+        }),
+      })
+      setNotice(policyMode === 'BLOCK'
+        ? '已启用“库存为 0，禁止下单”；只影响门店提交阶段'
+        : '已切换为“仅提醒，仍可下单”；总仓后续履约仍按库存账规则处理')
+      setPolicyOpen(false)
+      await load(scope)
+    } catch (reason: any) {
+      setError(String(reason?.message || reason))
+      setPolicyMode(currentPolicyMode)
+    } finally {
+      savingPolicyRef.current = false
+      setSavingPolicy(false)
+    }
+  }
+
+  function openOrderEntryPolicy() {
+    if (!data) return
+    setPolicyMode(data.warehouse.blockZeroStockAtOrderEntry ? 'BLOCK' : 'ALLOW')
+    setPolicyOpen(true)
+  }
+
+  function closeOrderEntryPolicy() {
+    if (savingPolicy) return
+    setPolicyMode(data?.warehouse.blockZeroStockAtOrderEntry ? 'BLOCK' : 'ALLOW')
+    setPolicyOpen(false)
+  }
+
   return (
     <div className="min-h-screen bg-bg px-4 py-5 lg:px-8 lg:py-7">
       <WarehouseToolTabs />
@@ -705,6 +773,21 @@ export default function InternalSupplyChainInventoryPage() {
         <div className="mt-4 rounded-card border border-gray3/30 bg-bg p-4 text-caption text-gray2">
           <b>当前总仓订单投影未启用。</b>可先核验四单位和准备实盘数据；订单接单、取消、发货不会写入新账。完成指定租户发布检查后再显式启用 SHADOW。
         </div>
+      )}
+      {data && (
+        <section aria-label="门店订货零库存策略" className="mt-4 rounded-card border border-border bg-white p-4">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div>
+              <h2 className="text-h2">门店订货零库存策略</h2>
+              <p className="mt-1 text-caption text-gray2">当前：<b>{data.warehouse.blockZeroStockAtOrderEntry ? '库存为 0，禁止下单' : '仅提醒，仍可下单'}</b>。只影响门店向内部总仓提交订单的阶段。</p>
+            </div>
+            {data.canEditOrderEntryPolicy && <button
+              type="button"
+              onClick={openOrderEntryPolicy}
+              className="h-10 rounded-cta bg-ink px-4 text-button text-white"
+            >设置订货策略</button>}
+          </div>
+        </section>
       )}
       {audit && (
         <div className={`mt-4 rounded-card border p-4 text-caption ${audit.readyForStrict ? 'border-green/30 bg-green/10 text-green-fg' : 'border-amber/30 bg-amber/10 text-gray2'}`}>
@@ -785,6 +868,46 @@ export default function InternalSupplyChainInventoryPage() {
           </ul>
         </div>
       </section>
+
+      {policyOpen && data && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeOrderEntryPolicy}>
+        <div role="dialog" aria-modal="true" aria-labelledby="order-entry-policy-title" className="w-full max-w-3xl rounded-card bg-white p-5 shadow-xl" onClick={event => event.stopPropagation()}>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 id="order-entry-policy-title" className="text-h2">门店订货零库存策略</h2>
+              <p className="mt-1 text-caption text-gray2">选择门店向内部总仓订货时的处理方式。打开和关闭本窗口都不会改变策略，只有确认保存才会生效。</p>
+            </div>
+            <button type="button" aria-label="关闭订货策略" onClick={closeOrderEntryPolicy} disabled={savingPolicy} className="px-2 text-h2 text-gray3 disabled:opacity-40">×</button>
+          </div>
+          <div className="mt-4 grid gap-3">
+            <label className={`cursor-pointer rounded-card border p-4 ${policyMode === 'ALLOW' ? 'border-accent bg-accent/5' : 'border-border bg-bg'}`}>
+              <span className="flex items-start gap-3">
+                <input type="radio" name="order-entry-policy" value="ALLOW" checked={policyMode === 'ALLOW'} onChange={() => setPolicyMode('ALLOW')} className="mt-1" />
+                <span><b className="block text-body">仅提醒，仍可下单</b><span className="mt-1 block text-caption text-gray2">门店可以提交订单，但提交时不锁定库存；严格库存模式下，总仓接单仍可能因整单库存不足失败。</span></span>
+              </span>
+            </label>
+            {(() => {
+              const blockUnavailable = !data.warehouse.blockZeroStockAtOrderEntry
+                && (data.warehouse.inventoryMode === 'OFF'
+                  || (data.warehouse.inventoryMode === 'SHADOW' && !audit?.readyForStrict))
+              return <label className={`rounded-card border p-4 ${blockUnavailable ? 'cursor-not-allowed border-border bg-bg opacity-60' : 'cursor-pointer'} ${policyMode === 'BLOCK' ? 'border-accent bg-accent/5' : 'border-border bg-bg'}`}>
+              <span className="flex items-start gap-3">
+                <input type="radio" name="order-entry-policy" value="BLOCK" checked={policyMode === 'BLOCK'} disabled={blockUnavailable} onChange={() => setPolicyMode('BLOCK')} className="mt-1" />
+                <span>
+                  <b className="block text-body">库存为 0，禁止下单</b>
+                  <span className="mt-1 block text-caption text-gray2">门店提交时，可用库存为 0 的商品不可提交；可用库存大于 0 不代表足够覆盖本次订购量。</span>
+                  {blockUnavailable && data.warehouse.inventoryMode === 'OFF' && <span className="mt-1 block text-micro text-amber-fg">暂不可选：总仓库存投影尚未启用。</span>}
+                  {blockUnavailable && data.warehouse.inventoryMode === 'SHADOW' && <span className="mt-1 block text-micro text-amber-fg">暂不可选：库存四账审计尚有 {audit?.blockerCount ?? '—'} 项阻断问题{audit?.issues[0]?.message ? `，首项：${audit.issues[0].message}` : ''}</span>}
+                </span>
+              </span>
+            </label>
+            })()}
+          </div>
+          <div className="mt-4 flex justify-end gap-2">
+            <button type="button" onClick={closeOrderEntryPolicy} disabled={savingPolicy} className="h-10 rounded-cta border border-border bg-white px-4 text-button text-gray2 disabled:opacity-40">取消</button>
+            <button type="button" onClick={saveOrderEntryPolicy} disabled={savingPolicy || !policyMode || policyMode === (data.warehouse.blockZeroStockAtOrderEntry ? 'BLOCK' : 'ALLOW')} className="h-10 rounded-cta bg-ink px-4 text-button text-white disabled:cursor-not-allowed disabled:opacity-40">{savingPolicy ? '保存中…' : '确认保存'}</button>
+          </div>
+        </div>
+      </div>}
 
       {batchOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setBatchOpen(false)}>
         <div className="max-h-[94vh] w-full max-w-6xl overflow-auto rounded-card bg-white p-5 shadow-xl" onClick={event => event.stopPropagation()}>

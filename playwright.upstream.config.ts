@@ -6,6 +6,21 @@ import { defineConfig, devices } from 'playwright/test'
 
 loadEnv({ path: resolve(process.cwd(), 'apps/api/.env') })
 
+const webBaseUrl = (process.env.UPSTREAM_E2E_WEB_URL || 'http://127.0.0.1:3200').replace(/\/+$/, '')
+const apiBaseUrl = (process.env.UPSTREAM_E2E_API_URL || 'http://127.0.0.1:4444').replace(/\/+$/, '')
+
+function portFromUrl(value: string) {
+  const url = new URL(value)
+  return url.port || (url.protocol === 'https:' ? '443' : '80')
+}
+
+function shellQuote(value: string) {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+const webPort = portFromUrl(webBaseUrl)
+const apiPort = portFromUrl(apiBaseUrl)
+
 function findInstalledChromium() {
   if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
     return process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
@@ -41,7 +56,7 @@ export default defineConfig({
     ['html', { outputFolder: 'playwright-report/upstream', open: 'never' }],
   ],
   use: {
-    baseURL: 'http://127.0.0.1:3200',
+    baseURL: webBaseUrl,
     actionTimeout: 15_000,
     navigationTimeout: 30_000,
     ...devices['Desktop Chrome'],
@@ -53,18 +68,18 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: 'NODE_ENV=test UPSTREAM_PROCUREMENT_ENABLED=true UPSTREAM_RECEIPT_POSTING_ENABLED=true pnpm --filter @dianjie/api dev',
+      command: `API_PORT=${apiPort} FRONTEND_URL=${shellQuote(webBaseUrl)} NODE_ENV=test UPSTREAM_PROCUREMENT_ENABLED=true UPSTREAM_RECEIPT_POSTING_ENABLED=true pnpm --filter @dianjie/api dev`,
       cwd: process.cwd(),
-      url: 'http://127.0.0.1:4444/health',
+      url: `${apiBaseUrl}/health`,
       timeout: 120_000,
       reuseExistingServer: false,
       stdout: 'pipe',
       stderr: 'pipe',
     },
     {
-      command: 'pnpm --filter @dianjie/web dev',
+      command: `WEB_PORT=${webPort} NEXT_PUBLIC_API_BASE=${shellQuote(apiBaseUrl)} pnpm --filter @dianjie/web dev`,
       cwd: process.cwd(),
-      url: 'http://127.0.0.1:3200/v2/login',
+      url: `${webBaseUrl}/v2/login`,
       timeout: 120_000,
       reuseExistingServer: false,
       stdout: 'pipe',

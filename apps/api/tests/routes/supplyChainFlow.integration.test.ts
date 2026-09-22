@@ -696,6 +696,109 @@ describe('supplier order to receipt flow (integration)', () => {
     expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })).status).toBe('RECEIVED')
   })
 
+  it('creates separate shortage and damage claims from one multi-product receipt', async () => {
+    const [shortageProduct, damagedProduct] = await Promise.all([
+      prisma.product.create({
+        data: {
+          tenantId, supplierId, code: `${suffix}-MIXED-SHORT`, name: '混合验收土豆', category: '测试',
+          unit: '箱', purchaseUnit: '箱', inventoryUnit: '箱', orderUnit: '箱', costUnit: '箱',
+          inventoryUnitsPerPurchaseUnit: 1, inventoryUnitsPerOrderUnit: 1,
+          inventoryUnitsPerCostUnit: 1, unitConversionStatus: 'VERIFIED',
+          price: 10, stock: 0, shelfDays: 7,
+        },
+      }),
+      prisma.product.create({
+        data: {
+          tenantId, supplierId, code: `${suffix}-MIXED-DAMAGE`, name: '混合验收菌菇', category: '测试',
+          unit: '件', purchaseUnit: '件', inventoryUnit: '件', orderUnit: '件', costUnit: '件',
+          inventoryUnitsPerPurchaseUnit: 1, inventoryUnitsPerOrderUnit: 1,
+          inventoryUnitsPerCostUnit: 1, unitConversionStatus: 'VERIFIED',
+          price: 20, stock: 0, shelfDays: 7,
+        },
+      }),
+    ])
+    const order = await prisma.purchaseOrder.create({
+      data: {
+        tenantId, no: `MIXED-RECEIVE-${suffix}`, storeId, supplierId,
+        expectedDate: new Date('2026-07-20T00:00:00.000Z'), totalAmount: 200,
+        status: 'PENDING_CONFIRM', createdById: chefUserId,
+        items: {
+          create: [
+            {
+              productId: shortageProduct.id, quantity: 10, originalQuantity: 10,
+              shippedQty: 10, unitPrice: 10, originalUnitPrice: 10,
+              amount: 100, originalAmount: 100,
+            },
+            {
+              productId: damagedProduct.id, quantity: 5, originalQuantity: 5,
+              shippedQty: 5, unitPrice: 20, originalUnitPrice: 20,
+              amount: 100, originalAmount: 100,
+            },
+          ],
+        },
+      },
+      include: { items: true },
+    })
+    const orderItemByProduct = new Map(order.items.map(item => [item.productId, item]))
+    const delivery = await prisma.deliveryOrder.create({
+      data: {
+        tenantId, no: `DO-MIXED-RECEIVE-${suffix}`, purchaseOrderId: order.id,
+        storeId, supplierId, status: 'DELIVERED', actualTotalAmount: 200,
+        createdById: supplierUserId, shippedById: supplierUserId, deliveredById: supplierUserId,
+        shippedAt: new Date(), deliveredAt: new Date(),
+        items: {
+          create: [
+            {
+              purchaseOrderItemId: orderItemByProduct.get(shortageProduct.id)!.id,
+              productId: shortageProduct.id, orderedQtySnapshot: 10, shippedQty: 10,
+              unitPriceSnapshot: 10, amount: 100,
+              productCodeSnapshot: shortageProduct.code, productNameSnapshot: shortageProduct.name,
+              productUnitSnapshot: '箱', productCategorySnapshot: '测试',
+            },
+            {
+              purchaseOrderItemId: orderItemByProduct.get(damagedProduct.id)!.id,
+              productId: damagedProduct.id, orderedQtySnapshot: 5, shippedQty: 5,
+              unitPriceSnapshot: 20, amount: 100,
+              productCodeSnapshot: damagedProduct.code, productNameSnapshot: damagedProduct.name,
+              productUnitSnapshot: '件', productCategorySnapshot: '测试',
+            },
+          ],
+        },
+      },
+    })
+
+    const response = await app.inject({
+      method: 'PATCH', url: `/api/orders/${order.id}/receive`, headers: { 'x-test-actor': 'chef' },
+      payload: {
+        items: [
+          { productId: shortageProduct.id, receivedQty: 8, kind: 'ARRIVAL_SHORTAGE', reason: '少送 2 箱' },
+          { productId: damagedProduct.id, receivedQty: 4, kind: 'ARRIVAL_DAMAGE', reason: '包装破损' },
+        ],
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    const receipt = await prisma.receipt.findUniqueOrThrow({
+      where: { id: response.json().receipt.id }, include: { items: true },
+    })
+    const claims = await prisma.lossClaim.findMany({
+      where: { deliveryOrderId: delivery.id }, include: { items: true }, orderBy: { kind: 'asc' },
+    })
+    expect(Number(receipt.totalAmount)).toBe(160)
+    expect(receipt.items).toHaveLength(2)
+    expect(claims).toHaveLength(2)
+    expect(new Set(claims.map(claim => claim.receiptId))).toEqual(new Set([receipt.id]))
+
+    const shortage = claims.find(claim => claim.kind === 'ARRIVAL_SHORTAGE')!
+    const damaged = claims.find(claim => claim.kind === 'ARRIVAL_DAMAGE')!
+    expect(shortage).toMatchObject({ reason: '少送 2 箱', totalLossAmount: expect.anything() })
+    expect(Number(shortage.totalLossAmount)).toBe(20)
+    expect(shortage.items.map(item => item.productId)).toEqual([shortageProduct.id])
+    expect(damaged).toMatchObject({ reason: '包装破损', totalLossAmount: expect.anything() })
+    expect(Number(damaged.totalLossAmount)).toBe(20)
+    expect(damaged.items.map(item => item.productId)).toEqual([damagedProduct.id])
+  })
+
   it('returns the same delivery for concurrent identical shipment retries', async () => {
     const replayProduct = await prisma.product.create({
       data: {

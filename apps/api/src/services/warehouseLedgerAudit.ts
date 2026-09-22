@@ -1,6 +1,16 @@
 import { Prisma, prisma } from '@dianjie/db'
 import { resolveTenantWarehouseId } from './defaultWarehouse'
 
+type WarehouseLedgerAuditDb = Pick<
+  typeof prisma,
+  | 'warehouse'
+  | 'warehouseLedgerBalance'
+  | 'warehouseLedgerMovement'
+  | 'warehouseLedgerReservation'
+  | 'warehouseLedgerLot'
+  | 'product'
+>
+
 type Decimalish = Prisma.Decimal | string | number | null | undefined
 
 type BalanceRow = {
@@ -242,22 +252,27 @@ export function buildWarehouseLedgerAudit(input: {
   }
 }
 
-export async function auditWarehouseLedger(tenantId: string) {
-  const warehouseId = await resolveTenantWarehouseId(prisma, tenantId, undefined)
+export async function auditWarehouseLedger(
+  tenantId: string,
+  db: WarehouseLedgerAuditDb = prisma,
+  lockedWarehouseId?: string,
+) {
+  const warehouseId = lockedWarehouseId
+    || await resolveTenantWarehouseId(db, tenantId, undefined)
   const [warehouse, balances, movements, activeReservations, lots, requiredProducts] = await Promise.all([
-    prisma.warehouse.findFirstOrThrow({
+    db.warehouse.findFirstOrThrow({
       where: { id: warehouseId, tenantId },
       select: { id: true, code: true, name: true, inventoryMode: true, inventoryActivatedAt: true },
     }),
-    prisma.warehouseLedgerBalance.findMany({ where: { tenantId, warehouseId } }),
-    prisma.warehouseLedgerMovement.findMany({
+    db.warehouseLedgerBalance.findMany({ where: { tenantId, warehouseId } }),
+    db.warehouseLedgerMovement.findMany({
       where: { tenantId, warehouseId },
       select: {
         id: true, type: true, productId: true, inventoryUnit: true, physicalDelta: true, reservedDelta: true,
         valueDelta: true, physicalAfter: true, reservedAfter: true, valueAfter: true, recordedAt: true,
       },
     }),
-    prisma.warehouseLedgerReservation.findMany({
+    db.warehouseLedgerReservation.findMany({
       where: { tenantId, warehouseId, status: 'ACTIVE' },
       select: {
         productId: true,
@@ -266,11 +281,11 @@ export async function auditWarehouseLedger(tenantId: string) {
         purchaseOrder: { select: { status: true } },
       },
     }),
-    prisma.warehouseLedgerLot.findMany({
+    db.warehouseLedgerLot.findMany({
       where: { tenantId, warehouseId, remainingQty: { gt: 0 } },
       select: { productId: true, inventoryUnit: true, remainingQty: true },
     }),
-    prisma.product.findMany({
+    db.product.findMany({
       where: {
         tenantId,
         status: 'ENABLED',

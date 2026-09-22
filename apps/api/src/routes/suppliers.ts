@@ -20,6 +20,7 @@ const SUPPLIER_ROLES = new Set(['SUPPLIER_OWNER', 'SUPPLIER_STAFF'])
 export const STORE_ORDERING_SUPPLIER_SCOPES = ['STORE_FULFILLER', 'DIRECT_STORE_VENDOR'] as const
 const SAFE_SELECT = {
   id: true, no: true, name: true, category: true, status: true, businessScopes: true,
+  inventoryMode: true,
 } as const
 const SUPPLY_CHAIN_SELECT = {
   ...SAFE_SELECT,

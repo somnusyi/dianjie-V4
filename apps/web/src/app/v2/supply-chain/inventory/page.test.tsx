@@ -16,7 +16,11 @@ import { apiFetch } from '@/lib/v2-auth'
 const mockFetch = vi.mocked(apiFetch)
 
 const inventory = {
-  warehouse: { id: 'warehouse-1', code: 'default', name: '供应链总仓', inventoryMode: 'SHADOW' },
+  canEditOrderEntryPolicy: true,
+  warehouse: {
+    id: 'warehouse-1', code: 'default', name: '供应链总仓', rowVersion: 3,
+    inventoryMode: 'SHADOW', blockZeroStockAtOrderEntry: false,
+  },
   summary: {
     inventoryMode: 'SHADOW', totalSku: 1, physicalSku: 0, negativeSku: 0,
     totalValue: 0, activeReservations: 0, movementCount: 0, strictActivated: false,
@@ -156,6 +160,198 @@ describe('总仓库存页面', () => {
     expect(container.textContent).not.toContain('采购→库存单位')
     expect(container.textContent).toContain('库存四账审计：1 项待处理')
     expect(container.textContent).not.toContain('选择供应商')
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('opens and cancels the order-entry policy dialog without writing', async () => {
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('设置订货策略') ?? false)
+
+    const open = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '设置订货策略')
+    act(() => open?.click())
+    expect(container.querySelector('[role="dialog"]')).toBeTruthy()
+    expect(container.textContent).toContain('仅提醒，仍可下单')
+    expect(container.textContent).toContain('库存为 0，禁止下单')
+    const unchangedSave = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '确认保存') as HTMLButtonElement
+    expect(unchangedSave.disabled).toBe(true)
+    expect(mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/order-entry-policy')).toBe(false)
+
+    const cancel = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '取消')
+    act(() => cancel?.click())
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    expect(mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/order-entry-policy')).toBe(false)
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('disables BLOCK when SHADOW audit fails and shows the blocker count and first reason', async () => {
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('设置订货策略') ?? false)
+    act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '设置订货策略')?.click())
+
+    const block = container.querySelector('input[name="order-entry-policy"][value="BLOCK"]') as HTMLInputElement
+    expect(block.disabled).toBe(true)
+    expect(container.textContent).toContain('尚有 1 项阻断问题')
+    expect(container.textContent).toContain('首项：批次剩余数量与物理余额不一致')
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('disables BLOCK when the warehouse inventory projection is OFF', async () => {
+    mockFetch.mockImplementation((path) => {
+      const url = String(path)
+      if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve({
+        ...inventory,
+        warehouse: { ...inventory.warehouse, inventoryMode: 'OFF' },
+        summary: { ...inventory.summary, inventoryMode: 'OFF' },
+      })
+      if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
+      if (url === '/api/warehouse-inventory/audit') return Promise.resolve({
+        readyForStrict: true, blockerCount: 0, warningCount: 0, checkedSku: 1, issues: [],
+      })
+      if (url === '/api/suppliers?businessScope=WAREHOUSE_UPSTREAM') return Promise.resolve([])
+      return Promise.reject(new Error(`unexpected API: ${url}`))
+    })
+
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('设置订货策略') ?? false)
+    act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '设置订货策略')?.click())
+
+    const block = container.querySelector('input[name="order-entry-policy"][value="BLOCK"]') as HTMLInputElement
+    expect(block.disabled).toBe(true)
+    expect(container.textContent).toContain('暂不可选：总仓库存投影尚未启用')
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('requires confirmation for ALLOW to BLOCK and cancellation sends no PATCH and restores ALLOW', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => false))
+    mockFetch.mockImplementation((path, init) => {
+      const url = String(path)
+      if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
+      if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
+      if (url === '/api/warehouse-inventory/audit') return Promise.resolve({
+        readyForStrict: true, blockerCount: 0, warningCount: 0, checkedSku: 1, issues: [],
+      })
+      if (url === '/api/suppliers?businessScope=WAREHOUSE_UPSTREAM') return Promise.resolve([])
+      if (url === '/api/warehouse-inventory/order-entry-policy' && init?.method === 'PATCH') {
+        return Promise.resolve({ blockZeroStockAtOrderEntry: true, rowVersion: 4 })
+      }
+      return Promise.reject(new Error(`unexpected API: ${url}`))
+    })
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('设置订货策略') ?? false)
+    act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '设置订货策略')?.click())
+    const block = container.querySelector('input[name="order-entry-policy"][value="BLOCK"]') as HTMLInputElement
+    act(() => block.click())
+    const save = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '确认保存')
+    await act(async () => { save?.click() })
+
+    expect(window.confirm).toHaveBeenCalled()
+    expect(mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/order-entry-policy')).toBe(false)
+    expect((container.querySelector('input[name="order-entry-policy"][value="ALLOW"]') as HTMLInputElement).checked).toBe(true)
+
+    act(() => root.unmount())
+    container.remove()
+    vi.unstubAllGlobals()
+  })
+
+  it('submits one audited BLOCK policy change, ignores a double click, and does not update the page before success', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    let resolvePolicy!: (value: unknown) => void
+    const pendingPolicy = new Promise(resolve => { resolvePolicy = resolve })
+    mockFetch.mockImplementation((path, init) => {
+      const url = String(path)
+      if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
+      if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
+      if (url === '/api/warehouse-inventory/audit') return Promise.resolve({
+        readyForStrict: true, blockerCount: 0, warningCount: 0, checkedSku: 1, issues: [],
+      })
+      if (url === '/api/suppliers?businessScope=WAREHOUSE_UPSTREAM') return Promise.resolve([])
+      if (url === '/api/warehouse-inventory/order-entry-policy' && init?.method === 'PATCH') return pendingPolicy as Promise<any>
+      return Promise.reject(new Error(`unexpected API: ${url}`))
+    })
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('设置订货策略') ?? false)
+    act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '设置订货策略')?.click())
+    act(() => (container.querySelector('input[name="order-entry-policy"][value="BLOCK"]') as HTMLInputElement).click())
+    const save = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '确认保存') as HTMLButtonElement
+    await act(async () => { save.click(); save.click() })
+
+    expect(container.textContent).toContain('当前：仅提醒，仍可下单')
+    expect((Array.from(container.querySelectorAll('button')).find(button => button.textContent === '保存中…') as HTMLButtonElement).disabled).toBe(true)
+    expect(mockFetch.mock.calls.filter(([path]) => String(path) === '/api/warehouse-inventory/order-entry-policy')).toHaveLength(1)
+    const policyCall = mockFetch.mock.calls.find(([path]) => String(path) === '/api/warehouse-inventory/order-entry-policy')
+    expect(JSON.parse(String(policyCall?.[1]?.body))).toEqual({ blockZeroStockAtOrderEntry: true, rowVersion: 3 })
+
+    await act(async () => { resolvePolicy({ blockZeroStockAtOrderEntry: true, rowVersion: 4 }); await pendingPolicy })
+    await waitFor(() => container.querySelector('[role="dialog"]') === null)
+
+    act(() => root.unmount())
+    container.remove()
+    vi.unstubAllGlobals()
+  })
+
+  it('keeps the current policy and resets the selection when saving fails', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    let rejectPolicy!: (reason: unknown) => void
+    const pendingPolicy = new Promise((_resolve, reject) => { rejectPolicy = reject })
+    mockFetch.mockImplementation((path, init) => {
+      const url = String(path)
+      if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
+      if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
+      if (url === '/api/warehouse-inventory/audit') return Promise.resolve({
+        readyForStrict: true, blockerCount: 0, warningCount: 0, checkedSku: 1, issues: [],
+      })
+      if (url === '/api/suppliers?businessScope=WAREHOUSE_UPSTREAM') return Promise.resolve([])
+      if (url === '/api/warehouse-inventory/order-entry-policy' && init?.method === 'PATCH') return pendingPolicy as Promise<any>
+      return Promise.reject(new Error(`unexpected API: ${url}`))
+    })
+
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('设置订货策略') ?? false)
+    act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '设置订货策略')?.click())
+    act(() => (container.querySelector('input[name="order-entry-policy"][value="BLOCK"]') as HTMLInputElement).click())
+    const save = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '确认保存') as HTMLButtonElement
+    await act(async () => { save.click() })
+
+    expect(container.textContent).toContain('当前：仅提醒，仍可下单')
+    await act(async () => {
+      rejectPolicy(new Error('策略保存失败'))
+      await pendingPolicy.catch(() => undefined)
+    })
+
+    expect(container.querySelector('[role="dialog"]')).toBeTruthy()
+    expect(container.textContent).toContain('策略保存失败')
+    expect(container.textContent).toContain('当前：仅提醒，仍可下单')
+    expect((container.querySelector('input[name="order-entry-policy"][value="ALLOW"]') as HTMLInputElement).checked).toBe(true)
+    expect((Array.from(container.querySelectorAll('button')).find(button => button.textContent === '确认保存') as HTMLButtonElement).disabled).toBe(true)
+
+    act(() => root.unmount())
+    container.remove()
+    vi.unstubAllGlobals()
+  })
+
+  it('shows read-only roles the current policy without a settings entry', async () => {
+    mockFetch.mockImplementation((path) => {
+      const url = String(path)
+      if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve({ ...inventory, canEditOrderEntryPolicy: false })
+      if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
+      if (url === '/api/warehouse-inventory/audit') return Promise.resolve({
+        readyForStrict: false, blockerCount: 1, warningCount: 0, checkedSku: 1,
+        issues: [{ code: 'LOT_BALANCE_MISMATCH', productId: 'product-1', message: '批次剩余数量与物理余额不一致' }],
+      })
+      if (url === '/api/suppliers?businessScope=WAREHOUSE_UPSTREAM') return Promise.resolve([])
+      return Promise.reject(new Error(`unexpected API: ${url}`))
+    })
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('当前：仅提醒，仍可下单') ?? false)
+    expect(Array.from(container.querySelectorAll('button')).some(button => button.textContent === '设置订货策略')).toBe(false)
 
     act(() => root.unmount())
     container.remove()

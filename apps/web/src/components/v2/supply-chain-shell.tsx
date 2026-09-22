@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
+import { FinanceReportMenu } from './finance-report-menu'
 import { InventoryReportMenu } from './inventory-report-menu'
 import type { ReactNode } from 'react'
 import { BottomNav } from '@/components/v2'
@@ -76,6 +77,7 @@ const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
   {
     title: '核算与分析',
     items: [
+      { href: '/v2/supply-chain/finance-reports', label: '财务报表', description: '毛利分析、物品与明细', icon: '¥' },
       { href: '/v2/supply-chain/billing', label: '账务查询', description: '账期、对账与发票', icon: '¥' },
       { href: '/v2/supply-chain/analytics', label: '经营分析', description: '门店、SKU、趋势与健康', icon: '↗' },
     ],
@@ -160,6 +162,7 @@ export function SupplyChainShell({ children }: { children: ReactNode }) {
               <div className="space-y-1">
                 {group.items.map(item => {
                   const selected = active(pathname, item)
+                  if (item.href === '/v2/supply-chain/finance-reports') return <FinanceReportMenu key={item.href} selected={selected} />
                   if (item.href === '/v2/supply-chain/inventory') return <InventoryReportMenu key={item.href} selected={selected || pathname.startsWith('/v2/supply-chain/reports')} />
                   return (
                     <Link
@@ -195,7 +198,7 @@ export function SupplyChainShell({ children }: { children: ReactNode }) {
 
       {/* 主内容区 — 移动端无左侧内边距，PC 有 lg:pl-64 */}
       <main className="min-h-screen lg:pl-64">
-        <div className={`mx-auto min-h-screen w-full ${pathname.startsWith('/v2/supply-chain/reports') ? '' : 'max-w-[1600px]'}`}>{children}</div>
+        <div className={`mx-auto min-h-screen w-full ${(pathname.startsWith('/v2/supply-chain/reports') || pathname.startsWith('/v2/supply-chain/finance-reports')) ? '' : 'max-w-[1600px]'}`}>{children}</div>
       </main>
 
       {/* 移动端底部导航 — lg 以下显示 */}

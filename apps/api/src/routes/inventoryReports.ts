@@ -7,7 +7,7 @@ import { loadInventoryReport, reportIds, reportQuerySchema } from '../services/i
 
 export function inventoryReportAccess(role: string, write = false) {
   if (isInternalSupplyChainRole(role)) return hasInternalSupplyChainCapability(role, write ? 'inventory.write' : 'inventory.read')
-  return (write ? ['SUPER_ADMIN', 'ADMIN', 'PURCHASER'] : ['SUPER_ADMIN', 'ADMIN', 'FINANCE', 'PURCHASER']).includes(role)
+  return (write ? ['SUPER_ADMIN', 'ADMIN'] : ['SUPER_ADMIN', 'ADMIN', 'FINANCE']).includes(role)
 }
 export const inventoryReportRoutes: FastifyPluginAsync = async app => {
   app.get('/:report', { preHandler: [(app as any).authenticate] }, async (req: any, reply) => {

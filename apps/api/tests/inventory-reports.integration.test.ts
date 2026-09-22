@@ -10,8 +10,8 @@ import fieldContract from '../src/services/report-field-contract.json'
 import { storeTransferRoutes } from '../src/routes/storeTransfers'
 
 const app = Fastify()
-let tenantId = '', otherTenantId = '', productId = '', warehouseId = '', fromStoreId = '', toStoreId = '', foreignStoreId = '', userId = ''
-let token = '', supplierToken = '', foreignToken = '', financeToken = ''
+let tenantId = '', otherTenantId = '', productId = '', secondProductId = '', warehouseId = '', fromStoreId = '', toStoreId = '', foreignStoreId = '', userId = ''
+let token = '', supplierToken = '', foreignToken = '', financeToken = '', purchaserToken = ''
 const headers = (value = token) => ({ authorization: `Bearer ${value}` })
 const query = 'start=2026-09-01&end=2026-09-21'
 const report = (id: string, extra = '', t = token) => app.inject({ url: `/api/inventory-reports/${id}?${query}${extra}`, headers: headers(t) })
@@ -26,6 +26,7 @@ describe('inventory reports and persistent store transfers', () => {
     warehouseId = (await prisma.warehouse.findFirstOrThrow({ where: { tenantId, isDefault: true } })).id
     const supplier = await prisma.supplier.create({ data: { tenantId, no: 'SUP', name: '测试供应商' } })
     const product = await prisma.product.create({ data: { tenantId, supplierId: supplier.id, code: 'REPORT-01', name: '测试土豆', price: 3, unit: 'kg', inventoryUnit: 'kg', purchaseUnit: '箱', inventoryUnitsPerPurchaseUnit: 10, orderUnit: 'kg', costUnit: 'kg', inventoryUnitsPerOrderUnit: 1, inventoryUnitsPerCostUnit: 1, unitConversionStatus: 'VERIFIED', status: 'ENABLED' } }); productId = product.id
+    const secondProduct = await prisma.product.create({ data: { tenantId, supplierId: supplier.id, code: 'REPORT-02', name: '测试红薯', price: 4, unit: 'kg', inventoryUnit: 'kg', purchaseUnit: '箱', inventoryUnitsPerPurchaseUnit: 10, orderUnit: 'kg', costUnit: 'kg', inventoryUnitsPerOrderUnit: 1, inventoryUnitsPerCostUnit: 1, unitConversionStatus: 'VERIFIED', status: 'ENABLED' } }); secondProductId = secondProduct.id
     userId = (await prisma.user.create({ data: { tenantId, email: 'report@local.test', name: '测试', password: 'test-only', role: 'SUPPLY_CHAIN' } })).id
     fromStoreId = (await prisma.store.create({ data: { tenantId, no: 'A', name: '调出门店' } })).id
     toStoreId = (await prisma.store.create({ data: { tenantId, no: 'B', name: '调入门店' } })).id
@@ -37,7 +38,7 @@ describe('inventory reports and persistent store transfers', () => {
     await app.register(jwt, { secret: 'inventory-report-integration-secret-only' })
     app.decorate('authenticate', async (req: any) => { await req.jwtVerify() })
     await app.register(inventoryReportRoutes, { prefix: '/api/inventory-reports' }); await app.register(storeTransferRoutes, { prefix: '/api/store-transfers' })
-    token = app.jwt.sign({ userId, tenantId, role: 'SUPPLY_CHAIN' }); supplierToken = app.jwt.sign({ userId, tenantId, role: 'SUPPLIER_OWNER' }); foreignToken = app.jwt.sign({ userId, tenantId: otherTenantId, role: 'ADMIN' }); financeToken = app.jwt.sign({ userId, tenantId, role: 'FINANCE' })
+    token = app.jwt.sign({ userId, tenantId, role: 'SUPPLY_CHAIN' }); supplierToken = app.jwt.sign({ userId, tenantId, role: 'SUPPLIER_OWNER' }); foreignToken = app.jwt.sign({ userId, tenantId: otherTenantId, role: 'ADMIN' }); financeToken = app.jwt.sign({ userId, tenantId, role: 'FINANCE' }); purchaserToken = app.jwt.sign({ userId, tenantId, role: 'PURCHASER', storeId: fromStoreId, storeIds: [fromStoreId] })
     await app.ready()
   })
   afterAll(async () => {
@@ -55,6 +56,12 @@ describe('inventory reports and persistent store transfers', () => {
     expect((await report('realtime', '', foreignToken)).json().total).toBe(0)
     expect((await report('realtime', `&warehouseId=${warehouseId}`, foreignToken)).json().total).toBe(0)
     expect((await app.inject({ method: 'POST', url: '/api/store-transfers', headers: headers(financeToken), payload: {} })).statusCode).toBe(403)
+    expect((await app.inject({ url: '/api/store-transfers', headers: headers(financeToken) })).statusCode).toBe(200)
+    for (const id of reportIds) expect((await report(id, '', purchaserToken)).statusCode).toBe(403)
+    expect((await app.inject({ url: '/api/store-transfers', headers: headers(purchaserToken) })).statusCode).toBe(403)
+    expect((await app.inject({ url: '/api/store-transfers/products', headers: headers(purchaserToken) })).statusCode).toBe(403)
+    expect((await app.inject({ method: 'POST', url: '/api/store-transfers', headers: headers(purchaserToken), payload: {} })).statusCode).toBe(403)
+    expect((await app.inject({ method: 'PATCH', url: '/api/store-transfers/not-visible/status', headers: headers(purchaserToken), payload: { status: 'SHIPPED' } })).statusCode).toBe(403)
   })
   it('reconciles Shanghai date boundaries and preserves complete balances with type filters', async () => {
     const response = await report('summary'); expect(response.statusCode).toBe(200)
@@ -72,7 +79,9 @@ describe('inventory reports and persistent store transfers', () => {
     expect((await create({ toStoreId: foreignStoreId })).statusCode).toBe(400)
     expect((await create({ toStoreId: fromStoreId })).statusCode).toBe(400)
     const key = randomUUID(); const res = await create({ requestKey: key }); expect(res.statusCode, res.body).toBe(201); const row = res.json()
-    expect((await create({ requestKey: key })).json().id).toBe(row.id)
+    const replay = await create({ requestKey: key }); expect(replay.statusCode, replay.body).toBe(200); expect(replay.json().id).toBe(row.id)
+    expect((await create({ requestKey: key, items: [{ productId, quantity: 4, cost: 2, settlement: 2.5 }] })).statusCode).toBe(409)
+    expect(await prisma.storeTransfer.count({ where: { tenantId, requestKey: key } })).toBe(1)
     expect((await transition(row.id, 'RECEIVED')).statusCode).toBe(409)
     expect((await report('transfer-detail')).json().total).toBe(0)
     expect((await transition(row.id, 'SHIPPED')).statusCode).toBe(200)
@@ -83,6 +92,35 @@ describe('inventory reports and persistent store transfers', () => {
     expect(reread.status).toBe('RECEIVED'); expect(reread.createdById).toBe(userId); expect(reread.shippedById).toBe(userId)
     expect((await report('transfer-detail')).json().rows[0]).toMatchObject({ date: '2026-09-21', transferQty: 3, outAmount: 6, inAmount: 7.5, org: '调出门店', target: '调入门店' })
     expect((await app.inject({ url: `/api/store-transfers/${row.id}/status`, method: 'PATCH', headers: headers(foreignToken), payload: { status: 'SHIPPED' } })).statusCode).toBe(404)
+  })
+  it('normalizes item order and decimals, and safely serializes concurrent idempotent creates', async () => {
+    const orderedItems = [
+      { productId, quantity: 2, cost: 3, settlement: 3.5 },
+      { productId: secondProductId, quantity: 1, cost: 4, settlement: 4.5 },
+    ]
+    const orderKey = randomUUID()
+    const first = await create({ requestKey: orderKey, note: '  顺序测试  ', items: orderedItems })
+    expect(first.statusCode, first.body).toBe(201)
+    const reordered = await create({ requestKey: orderKey, note: '顺序测试', items: [...orderedItems].reverse() })
+    expect(reordered.statusCode, reordered.body).toBe(200)
+    expect(reordered.json().id).toBe(first.json().id)
+
+    const concurrentKey = randomUUID()
+    const [left, right] = await Promise.all([
+      create({ requestKey: concurrentKey }),
+      create({ requestKey: concurrentKey }),
+    ])
+    expect([left.statusCode, right.statusCode].sort()).toEqual([200, 201])
+    expect(left.json().id).toBe(right.json().id)
+    expect(await prisma.storeTransfer.count({ where: { tenantId, requestKey: concurrentKey } })).toBe(1)
+
+    const conflictingKey = randomUUID()
+    const [one, two] = await Promise.all([
+      create({ requestKey: conflictingKey, items: [{ productId, quantity: 2, cost: 2, settlement: 2.5 }] }),
+      create({ requestKey: conflictingKey, items: [{ productId, quantity: 3, cost: 2, settlement: 2.5 }] }),
+    ])
+    expect([one.statusCode, two.statusCode].sort()).toEqual([201, 409])
+    expect(await prisma.storeTransfer.count({ where: { tenantId, requestKey: conflictingKey } })).toBe(1)
   })
   it('aggregates weighted prices before filtering, excludes revoked and pending transfers', async () => {
     const second = (await create({ items: [{ productId, quantity: 1, cost: 6, settlement: 7.5 }] })).json()

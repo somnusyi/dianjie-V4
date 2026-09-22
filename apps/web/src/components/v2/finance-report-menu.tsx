@@ -2,7 +2,7 @@
 import Link from 'next/link'
 import { createPortal } from 'react-dom'
 import { useEffect, useRef, useState } from 'react'
-import { financeReports } from '@/app/v2/supply-chain/finance-reports/preview-data'
+import { financeReports } from '@/app/v2/supply-chain/finance-reports/report-definitions'
 export function FinanceReportMenu({ selected }: { selected: boolean }) {
   const [top, setTop] = useState<number | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout>>()

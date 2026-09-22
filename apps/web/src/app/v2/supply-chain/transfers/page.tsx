@@ -7,7 +7,8 @@ import { apiFetch } from '@/lib/v2-auth'
 
 type Store = { id: string; no: string; name: string }
 type TransferStatus = 'PENDING' | 'SHIPPED' | 'RECEIVED' | 'REVOKED'
-type TransferItem = { id: string; name: string; quantity: number; unit: string }
+type TransferItem = { id: string; name: string; quantity: number; unit: string; cost: number; settlement: number }
+type Product = { id: string; code: string; name: string; inventoryUnit: string }
 type Transfer = {
   id: string
   no: string
@@ -27,10 +28,10 @@ type Draft = {
   toStoreId: string
   transferDate: string
   note: string
-  items: Array<{ name: string; quantity: string; unit: string }>
+  requestKey: string
+  items: Array<{ productId: string; quantity: string; cost: string; settlement: string }>
 }
 
-const TRANSFER_STORAGE_KEY = 'dianjie-supply-chain-store-transfers-v1'
 const FILTER_STORAGE_KEY = 'dianjie-supply-chain-store-transfer-filters-v1'
 
 const STATUS_META: Record<TransferStatus, { label: string; tone: 'orange' | 'blue' | 'green' | 'gray' }> = {
@@ -53,27 +54,14 @@ function newDraft(): Draft {
     toStoreId: '',
     transferDate: localDate(),
     note: '',
-    items: [{ name: '', quantity: '1', unit: '件' }],
+    requestKey: '',
+    items: [{ productId: '', quantity: '1', cost: '', settlement: '' }],
   }
-}
-
-function parseStoredTransfers(raw: string | null): Transfer[] {
-  if (!raw) return []
-  try {
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-
-function transferNo() {
-  const now = new Date()
-  const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
-  return `DJDB${stamp}${String(now.getTime()).slice(-5)}`
 }
 
 export default function StoreTransfersPage() {
+  const [products, setProducts] = useState<Product[]>([])
+  const [saving, setSaving] = useState(false)
   const [stores, setStores] = useState<Store[]>([])
   const [transfers, setTransfers] = useState<Transfer[]>([])
   const [ready, setReady] = useState(false)
@@ -88,7 +76,8 @@ export default function StoreTransfersPage() {
   const [keyword, setKeyword] = useState('')
 
   useEffect(() => {
-    setTransfers(parseStoredTransfers(sessionStorage.getItem(TRANSFER_STORAGE_KEY)))
+    apiFetch<Transfer[]>('/api/store-transfers').then(setTransfers).catch(e => setStoreError(e.message)).finally(() => setReady(true))
+    apiFetch<Product[]>('/api/store-transfers/products').then(setProducts).catch(e => setStoreError(e.message))
     try {
       const filters = JSON.parse(sessionStorage.getItem(FILTER_STORAGE_KEY) || '{}')
       setDateRange(filters.dateRange || { from: '', to: '' })
@@ -99,7 +88,6 @@ export default function StoreTransfersPage() {
     } catch {
       // 旧缓存不可用时直接使用默认筛选。
     }
-    setReady(true)
 
     let alive = true
     apiFetch<{ items: Store[] } | Store[]>('/api/stores')
@@ -113,11 +101,6 @@ export default function StoreTransfersPage() {
       })
     return () => { alive = false }
   }, [])
-
-  useEffect(() => {
-    if (!ready) return
-    sessionStorage.setItem(TRANSFER_STORAGE_KEY, JSON.stringify(transfers))
-  }, [ready, transfers])
 
   useEffect(() => {
     if (!ready) return
@@ -150,7 +133,7 @@ export default function StoreTransfersPage() {
 
   function openCreate() {
     setNotice('')
-    setDraft(newDraft())
+    setDraft({ ...newDraft(), requestKey: crypto.randomUUID() })
     setModalOpen(true)
   }
 
@@ -161,45 +144,25 @@ export default function StoreTransfersPage() {
     }))
   }
 
-  function createTransfer() {
-    const fromStore = stores.find(store => store.id === draft.fromStoreId)
-    const toStore = stores.find(store => store.id === draft.toStoreId)
-    const items = draft.items
-      .map((item, index) => ({ id: `${Date.now()}-${index}`, name: item.name.trim(), quantity: Number(item.quantity), unit: item.unit.trim() || '件' }))
-      .filter(item => item.name && item.quantity > 0)
-    if (!fromStore || !toStore) return setNotice('请选择调出门店和调入门店')
-    if (fromStore.id === toStore.id) return setNotice('调出门店和调入门店不能相同')
-    if (!draft.transferDate) return setNotice('请选择调拨日期')
-    if (!items.length) return setNotice('请至少填写一个商品及有效数量')
-
-    const now = new Date().toISOString()
-    const row: Transfer = {
-      id: `${Date.now()}`,
-      no: transferNo(),
-      transferDate: draft.transferDate,
-      fromStore,
-      toStore,
-      status: 'PENDING',
-      items,
-      note: draft.note.trim(),
-      createdAt: now,
-    }
-    setTransfers(current => [row, ...current])
-    setModalOpen(false)
-    setNotice(`调拨单 ${row.no} 已新建，当前为待发货`)
+  async function createTransfer() {
+    if (saving) return
+    if (!draft.fromStoreId || !draft.toStoreId) return setNotice('请选择调出和调入门店')
+    if (draft.fromStoreId === draft.toStoreId) return setNotice('调出和调入门店不能相同')
+    if (draft.items.some(i => !i.productId || !i.quantity || !i.cost.trim() || !i.settlement.trim())) return setNotice('请填写商品、数量、成本单价和结算单价（可明确填写 0）')
+    setSaving(true)
+    try {
+      const row = await apiFetch<Transfer>('/api/store-transfers', { method: 'POST', body: JSON.stringify({ ...draft, items: draft.items.map(i => ({ productId: i.productId, quantity: Number(i.quantity), cost: Number(i.cost), settlement: Number(i.settlement) })) }) })
+      setTransfers(current => [row, ...current.filter(r => r.id !== row.id)]); setModalOpen(false); setNotice(`调拨单 ${row.no} 已保存到后台`)
+    } catch (e: any) { setNotice(e.message) } finally { setSaving(false) }
   }
 
-  function changeStatus(id: string, nextStatus: TransferStatus) {
-    const now = new Date().toISOString()
-    const row = transfers.find(item => item.id === id)
-    if (!row) return
-    setTransfers(current => current.map(item => item.id === id ? {
-      ...item,
-      status: nextStatus,
-      ...(nextStatus === 'SHIPPED' ? { shippedAt: now } : {}),
-      ...(nextStatus === 'RECEIVED' ? { receivedAt: now } : {}),
-    } : item))
-    setNotice(`调拨单 ${row.no} 已${nextStatus === 'SHIPPED' ? '发货' : nextStatus === 'RECEIVED' ? '收货' : '撤回'}`)
+  async function changeStatus(id: string, nextStatus: TransferStatus) {
+    if (saving) return
+    setSaving(true)
+    try {
+      const row = await apiFetch<Transfer>(`/api/store-transfers/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status: nextStatus }) })
+      setTransfers(current => current.map(item => item.id === id ? row : item)); setNotice(`调拨单 ${row.no} 已${nextStatus === 'SHIPPED' ? '发货' : nextStatus === 'RECEIVED' ? '收货' : '撤回'}`)
+    } catch (e: any) { setNotice(e.message) } finally { setSaving(false) }
   }
 
   return (
@@ -208,10 +171,10 @@ export default function StoreTransfersPage() {
         <div>
           <div className="mb-2 flex items-center gap-2">
             <Chip tone="blue">门店之间</Chip>
-            <span className="text-caption text-gray3">调拨演示 · 不变更实际库存</span>
+            <span className="text-caption text-gray3">调拨登记 · 已连接后台</span>
           </div>
           <h1 className="text-h1">门店调拨单</h1>
-          <p className="mt-1 text-caption text-gray2">调拨单保存在当前浏览器会话，待正式对接库存后再入账。</p>
+          <p className="mt-1 text-caption text-gray2">调拨单保存到后台；已发货和已收货单据进入库存报表。本登记不改写门店盘点库存。</p>
         </div>
         <button type="button" onClick={openCreate} disabled={stores.length < 2}
           className="rounded-cta bg-accent px-5 py-2.5 text-button text-white disabled:opacity-40">+新建调拨单</button>
@@ -280,7 +243,7 @@ export default function StoreTransfersPage() {
       {modalOpen && <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/30 p-4" onMouseDown={event => event.currentTarget === event.target && setModalOpen(false)}>
         <div role="dialog" aria-modal="true" aria-label="新建调拨单" className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-card border border-border bg-white shadow-xl">
           <div className="flex items-center justify-between border-b border-border px-5 py-4">
-            <div><h2 className="text-h2">新建调拨单</h2><p className="mt-1 text-micro text-gray3">仅保存为交互演示，不扣减门店库存</p></div>
+            <div><h2 className="text-h2">新建调拨单</h2><p className="mt-1 text-micro text-gray3">按库存单位填写数量与价格，保存后冻结；本登记不扣减门店盘点库存</p></div>
             <button type="button" onClick={() => setModalOpen(false)} aria-label="关闭" className="p-2 text-xl text-gray3">×</button>
           </div>
           <div className="grid gap-4 p-5 sm:grid-cols-2">
@@ -294,17 +257,18 @@ export default function StoreTransfersPage() {
             <label className="flex flex-col gap-1"><span className="text-micro text-gray3">备注</span><input value={draft.note} onChange={event => setDraft(current => ({ ...current, note: event.target.value }))} placeholder="选填" className="h-11 rounded-cta border border-border px-3 text-body" /></label>
           </div>
           <div className="px-5 pb-5">
-            <div className="mb-2 flex items-center justify-between"><h3 className="text-button">调拨商品</h3><button type="button" onClick={() => setDraft(current => ({ ...current, items: [...current.items, { name: '', quantity: '1', unit: '件' }] }))} className="text-button text-amber-fg">+添加一行</button></div>
-            <div className="space-y-2">{draft.items.map((item, index) => <div key={index} className="grid grid-cols-[minmax(0,1fr)_100px_90px_36px] gap-2">
-              <input aria-label={`第${index + 1}行商品`} value={item.name} onChange={event => updateItem(index, { name: event.target.value })} placeholder="商品名称" className="h-10 rounded-cta border border-border px-3 text-body" />
-              <input aria-label={`第${index + 1}行数量`} type="number" min="0.001" step="0.001" value={item.quantity} onChange={event => updateItem(index, { quantity: event.target.value })} className="h-10 rounded-cta border border-border px-3 text-body" />
-              <input aria-label={`第${index + 1}行单位`} value={item.unit} onChange={event => updateItem(index, { unit: event.target.value })} placeholder="单位" className="h-10 rounded-cta border border-border px-3 text-body" />
+            <div className="mb-2 flex items-center justify-between"><h3 className="text-button">调拨商品</h3><button type="button" onClick={() => setDraft(current => ({ ...current, items: [...current.items, { productId: '', quantity: '1', cost: '', settlement: '' }] }))} className="text-button text-amber-fg">+添加一行</button></div>
+            <div className="space-y-2">{draft.items.map((item, index) => <div key={index} className="grid grid-cols-[minmax(0,1fr)_90px_100px_100px_36px] gap-2">
+              <select aria-label={`第${index + 1}行商品`} value={item.productId} onChange={event => updateItem(index, { productId: event.target.value })} className="h-10 min-w-0 rounded-cta border border-border px-2 text-body"><option value="">选择商品（库存单位）</option>{products.map(p => <option key={p.id} value={p.id}>{p.code} · {p.name} / {p.inventoryUnit}</option>)}</select>
+              <input aria-label={`第${index + 1}行数量`} type="number" min="0.000001" step="0.000001" value={item.quantity} onChange={event => updateItem(index, { quantity: event.target.value })} placeholder="数量" className="h-10 min-w-0 rounded-cta border border-border px-2 text-body" />
+              <input aria-label={`第${index + 1}行成本单价`} type="number" min="0" step="0.000001" value={item.cost} onChange={event => updateItem(index, { cost: event.target.value })} placeholder="成本单价" className="h-10 min-w-0 rounded-cta border border-border px-2 text-body" />
+              <input aria-label={`第${index + 1}行结算单价`} type="number" min="0" step="0.000001" value={item.settlement} onChange={event => updateItem(index, { settlement: event.target.value })} placeholder="结算单价" className="h-10 min-w-0 rounded-cta border border-border px-2 text-body" />
               <button type="button" aria-label={`删除第${index + 1}行`} disabled={draft.items.length === 1} onClick={() => setDraft(current => ({ ...current, items: current.items.filter((_, itemIndex) => itemIndex !== index) }))} className="text-gray3 disabled:opacity-30">×</button>
             </div>)}</div>
           </div>
           <div className="flex items-center justify-between border-t border-border px-5 py-4">
             <span className="text-caption text-red-fg">{notice}</span>
-            <div className="flex gap-2"><button type="button" onClick={() => setModalOpen(false)} className="rounded-cta border border-border px-4 py-2 text-button text-gray2">取消</button><button type="button" onClick={createTransfer} className="rounded-cta bg-accent px-5 py-2 text-button text-white">保存调拨单</button></div>
+            <div className="flex gap-2"><button type="button" onClick={() => setModalOpen(false)} className="rounded-cta border border-border px-4 py-2 text-button text-gray2">取消</button><button type="button" onClick={createTransfer} disabled={saving} className="rounded-cta bg-accent px-5 py-2 text-button text-white">保存调拨单</button></div>
           </div>
         </div>
       </div>}

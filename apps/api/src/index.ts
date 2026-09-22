@@ -87,6 +87,9 @@ import { meituanDataRoutes } from './routes/meituanData'
 import { dailyBusinessImportRoutes } from './routes/dailyBusinessImports'
 import { inventoryCountRoutes } from './routes/inventoryCounts'
 import { warehouseInventoryImportRoutes } from './routes/warehouseInventoryImports'
+import { supplyChainFinanceReportRoutes } from './routes/supplyChainFinanceReports'
+import { inventoryReportRoutes } from './routes/inventoryReports'
+import { storeTransferRoutes } from './routes/storeTransfers'
 import { warehouseInventoryRoutes } from './routes/warehouseInventory'
 import { warehouseDocsRoutes } from './routes/warehouseDocs'
 import { consumptionAdminRoutes, consumptionRoutes } from './routes/consumption'
@@ -279,6 +282,9 @@ async function bootstrap() {
   app.register(multipart, { limits: { fileSize: 55 * 1024 * 1024 } })
   app.register(uploadRoutes, { prefix: '/api' })
   app.register(warehouseInventoryImportRoutes, { prefix: '/api/warehouse-inventory-imports' })
+  app.register(supplyChainFinanceReportRoutes, { prefix: '/api/supply-chain/finance-reports' })
+  app.register(inventoryReportRoutes, { prefix: '/api/inventory-reports' })
+  app.register(storeTransferRoutes, { prefix: '/api/store-transfers' })
   app.register(warehouseInventoryRoutes, { prefix: '/api/warehouse-inventory' })
   app.register(warehouseDocsRoutes, { prefix: '/api/warehouse-docs' })
   app.register(invoiceRoutes, { prefix: '/api/invoices' })

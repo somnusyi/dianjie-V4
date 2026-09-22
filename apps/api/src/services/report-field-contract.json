@@ -1,0 +1,1134 @@
+[
+  {
+    "id": "realtime",
+    "category": "库存报表",
+    "title": "实时库存查询表",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "number"
+      },
+      {
+        "key": "code",
+        "label": "物品编码",
+        "kind": "text"
+      },
+      {
+        "key": "name",
+        "label": "物品名称",
+        "kind": "text"
+      },
+      {
+        "key": "spec",
+        "label": "规格型号",
+        "kind": "text"
+      },
+      {
+        "key": "category",
+        "label": "物品类别",
+        "kind": "text"
+      },
+      {
+        "key": "unit",
+        "label": "单位",
+        "kind": "text"
+      },
+      {
+        "key": "conversion",
+        "label": "与基准单位的换算率",
+        "kind": "number"
+      },
+      {
+        "key": "orgCode",
+        "label": "机构编码",
+        "kind": "text"
+      },
+      {
+        "key": "org",
+        "label": "机构",
+        "kind": "text"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库",
+        "kind": "text"
+      },
+      {
+        "key": "qty",
+        "label": "库存量",
+        "kind": "number"
+      },
+      {
+        "key": "netAmount",
+        "label": "库存金额（不含税）",
+        "kind": "number"
+      },
+      {
+        "key": "netPrice",
+        "label": "库存均价（不含税）",
+        "kind": "number"
+      },
+      {
+        "key": "expectedIn",
+        "label": "预计入库量",
+        "kind": "number"
+      },
+      {
+        "key": "expectedOut",
+        "label": "预计出库量",
+        "kind": "number"
+      }
+    ]
+  },
+  {
+    "id": "movements",
+    "category": "库存报表",
+    "title": "出入库明细表",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "number"
+      },
+      {
+        "key": "code",
+        "label": "物品编码",
+        "kind": "text"
+      },
+      {
+        "key": "name",
+        "label": "物品名称",
+        "kind": "text"
+      },
+      {
+        "key": "spec",
+        "label": "规格型号",
+        "kind": "text"
+      },
+      {
+        "key": "category",
+        "label": "物品类别",
+        "kind": "text"
+      },
+      {
+        "key": "baseUnit",
+        "label": "基准单位",
+        "kind": "text"
+      },
+      {
+        "key": "unit",
+        "label": "单位",
+        "kind": "text"
+      },
+      {
+        "key": "org",
+        "label": "机构",
+        "kind": "text"
+      },
+      {
+        "key": "orgCode",
+        "label": "机构编码",
+        "kind": "text"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库",
+        "kind": "text"
+      },
+      {
+        "key": "upstream",
+        "label": "上游单据号",
+        "kind": "text"
+      },
+      {
+        "key": "upstreamType",
+        "label": "上游单据类型",
+        "kind": "text"
+      },
+      {
+        "key": "doc",
+        "label": "出入库单据号",
+        "kind": "text"
+      },
+      {
+        "key": "type",
+        "label": "出入库类型",
+        "kind": "text"
+      },
+      {
+        "key": "reason",
+        "label": "原因类型",
+        "kind": "text"
+      },
+      {
+        "key": "adjustment",
+        "label": "是否调整单",
+        "kind": "text"
+      },
+      {
+        "key": "counterparty",
+        "label": "对方机构",
+        "kind": "text"
+      },
+      {
+        "key": "counterpartyCode",
+        "label": "对方机构编码",
+        "kind": "text"
+      },
+      {
+        "key": "upstreamDate",
+        "label": "上游单据日期",
+        "kind": "text"
+      },
+      {
+        "key": "date",
+        "label": "出入库单据日期",
+        "kind": "text"
+      },
+      {
+        "key": "createdAt",
+        "label": "出入库单据创建时间",
+        "kind": "text"
+      },
+      {
+        "key": "createdBy",
+        "label": "出入库单据创建人",
+        "kind": "text"
+      },
+      {
+        "key": "reviewedAt",
+        "label": "出入库单据审核时间",
+        "kind": "text"
+      },
+      {
+        "key": "inBaseQty",
+        "label": "入库数量（基准单位）",
+        "kind": "number"
+      },
+      {
+        "key": "inQty",
+        "label": "入库数量",
+        "kind": "number"
+      },
+      {
+        "key": "inPrice",
+        "label": "入库成本单价",
+        "kind": "number"
+      },
+      {
+        "key": "inAmount",
+        "label": "入库成本金额",
+        "kind": "number"
+      },
+      {
+        "key": "inSettlementPrice",
+        "label": "入库结算单价",
+        "kind": "number"
+      },
+      {
+        "key": "inSettlementAmount",
+        "label": "入库结算金额",
+        "kind": "number"
+      },
+      {
+        "key": "inDiscountPrice",
+        "label": "入库折后结算单价",
+        "kind": "number"
+      },
+      {
+        "key": "inDiscountAmount",
+        "label": "入库折后结算金额",
+        "kind": "number"
+      },
+      {
+        "key": "outBaseQty",
+        "label": "出库数量（基准单位）",
+        "kind": "number"
+      },
+      {
+        "key": "outQty",
+        "label": "出库数量",
+        "kind": "number"
+      },
+      {
+        "key": "outPrice",
+        "label": "出库成本单价",
+        "kind": "number"
+      },
+      {
+        "key": "outAmount",
+        "label": "出库成本金额",
+        "kind": "number"
+      },
+      {
+        "key": "outSettlementPrice",
+        "label": "出库结算单价",
+        "kind": "number"
+      },
+      {
+        "key": "outSettlementAmount",
+        "label": "出库结算金额",
+        "kind": "number"
+      },
+      {
+        "key": "outDiscountPrice",
+        "label": "出库折后结算单价",
+        "kind": "number"
+      },
+      {
+        "key": "outDiscountAmount",
+        "label": "出库折后结算金额",
+        "kind": "number"
+      },
+      {
+        "key": "outProfit",
+        "label": "折后出库毛利额",
+        "kind": "number"
+      },
+      {
+        "key": "note",
+        "label": "备注",
+        "kind": "text"
+      },
+      {
+        "key": "returnDifference",
+        "label": "退返货差异金额",
+        "kind": "number"
+      }
+    ]
+  },
+  {
+    "id": "summary",
+    "category": "库存报表",
+    "title": "出入库汇总表",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "number"
+      },
+      {
+        "key": "code",
+        "label": "物品编码",
+        "kind": "text"
+      },
+      {
+        "key": "name",
+        "label": "物品名称",
+        "kind": "text"
+      },
+      {
+        "key": "spec",
+        "label": "规格型号",
+        "kind": "text"
+      },
+      {
+        "key": "category",
+        "label": "物品类别",
+        "kind": "text"
+      },
+      {
+        "key": "unit",
+        "label": "单位",
+        "kind": "text"
+      },
+      {
+        "key": "org",
+        "label": "机构",
+        "kind": "text"
+      },
+      {
+        "key": "orgCode",
+        "label": "机构编码",
+        "kind": "text"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库",
+        "kind": "text"
+      },
+      {
+        "key": "openingQty",
+        "label": "期初数量",
+        "kind": "number"
+      },
+      {
+        "key": "openingAmount",
+        "label": "期初成本金额",
+        "kind": "number"
+      },
+      {
+        "key": "openingPrice",
+        "label": "期初成本均价",
+        "kind": "number"
+      },
+      {
+        "key": "inQty",
+        "label": "入库合计数量",
+        "kind": "number"
+      },
+      {
+        "key": "inAmount",
+        "label": "入库合计成本金额",
+        "kind": "number"
+      },
+      {
+        "key": "inPrice",
+        "label": "入库合计成本均价",
+        "kind": "number"
+      },
+      {
+        "key": "outQty",
+        "label": "出库合计数量",
+        "kind": "number"
+      },
+      {
+        "key": "outAmount",
+        "label": "出库合计成本金额",
+        "kind": "number"
+      },
+      {
+        "key": "outPrice",
+        "label": "出库合计成本均价",
+        "kind": "number"
+      },
+      {
+        "key": "closingQty",
+        "label": "期末数量",
+        "kind": "number"
+      },
+      {
+        "key": "closingAmount",
+        "label": "期末成本金额",
+        "kind": "number"
+      },
+      {
+        "key": "closingPrice",
+        "label": "期末成本均价",
+        "kind": "number"
+      }
+    ]
+  },
+  {
+    "id": "other-summary",
+    "category": "库存报表",
+    "title": "其他出入库汇总表",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "number"
+      },
+      {
+        "key": "code",
+        "label": "物品编码",
+        "kind": "text"
+      },
+      {
+        "key": "name",
+        "label": "物品名称",
+        "kind": "text"
+      },
+      {
+        "key": "spec",
+        "label": "规格型号",
+        "kind": "text"
+      },
+      {
+        "key": "category",
+        "label": "物品类别",
+        "kind": "text"
+      },
+      {
+        "key": "baseUnit",
+        "label": "基准单位",
+        "kind": "text"
+      },
+      {
+        "key": "org",
+        "label": "机构",
+        "kind": "text"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库",
+        "kind": "text"
+      },
+      {
+        "key": "type",
+        "label": "出入库类型",
+        "kind": "text"
+      },
+      {
+        "key": "reason",
+        "label": "原因类型",
+        "kind": "text"
+      },
+      {
+        "key": "quantity",
+        "label": "数量",
+        "kind": "number"
+      },
+      {
+        "key": "amount",
+        "label": "金额",
+        "kind": "number"
+      }
+    ]
+  },
+  {
+    "id": "transfer-detail",
+    "category": "库存报表",
+    "title": "机构间调拨明细表",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "number"
+      },
+      {
+        "key": "doc",
+        "label": "调拨单号",
+        "kind": "text"
+      },
+      {
+        "key": "code",
+        "label": "物品编码",
+        "kind": "text"
+      },
+      {
+        "key": "name",
+        "label": "物品名称",
+        "kind": "text"
+      },
+      {
+        "key": "batchNo",
+        "label": "批次号",
+        "kind": "text"
+      },
+      {
+        "key": "status",
+        "label": "单据状态",
+        "kind": "text"
+      },
+      {
+        "key": "date",
+        "label": "调拨日期",
+        "kind": "text"
+      },
+      {
+        "key": "shippedReviewedAt",
+        "label": "调拨出库审核时间",
+        "kind": "text"
+      },
+      {
+        "key": "org",
+        "label": "调出机构",
+        "kind": "text"
+      },
+      {
+        "key": "fromCompany",
+        "label": "调出机构公司",
+        "kind": "text"
+      },
+      {
+        "key": "fromCompanyCode",
+        "label": "调出机构公司代码",
+        "kind": "text"
+      },
+      {
+        "key": "warehouse",
+        "label": "调出仓库",
+        "kind": "text"
+      },
+      {
+        "key": "receivedDate",
+        "label": "调拨入库日期",
+        "kind": "text"
+      },
+      {
+        "key": "receivedReviewedAt",
+        "label": "调拨入库审核时间",
+        "kind": "text"
+      },
+      {
+        "key": "target",
+        "label": "调入机构",
+        "kind": "text"
+      },
+      {
+        "key": "toCompany",
+        "label": "调入机构公司",
+        "kind": "text"
+      },
+      {
+        "key": "toCompanyCode",
+        "label": "调入机构公司代码",
+        "kind": "text"
+      },
+      {
+        "key": "targetWarehouse",
+        "label": "调入仓库",
+        "kind": "text"
+      },
+      {
+        "key": "spec",
+        "label": "规格型号",
+        "kind": "text"
+      },
+      {
+        "key": "category",
+        "label": "物品类别",
+        "kind": "text"
+      },
+      {
+        "key": "baseUnit",
+        "label": "基准单位",
+        "kind": "text"
+      },
+      {
+        "key": "baseQuantity",
+        "label": "调拨数量（基准单位）",
+        "kind": "number"
+      },
+      {
+        "key": "unit",
+        "label": "业务单位",
+        "kind": "text"
+      },
+      {
+        "key": "transferQty",
+        "label": "调拨数量",
+        "kind": "number"
+      },
+      {
+        "key": "inAmount",
+        "label": "调入金额",
+        "kind": "number"
+      },
+      {
+        "key": "outAmount",
+        "label": "调出成本金额",
+        "kind": "number"
+      },
+      {
+        "key": "outSettlementAmount",
+        "label": "调出结算金额",
+        "kind": "number"
+      },
+      {
+        "key": "inPrice",
+        "label": "调入单价",
+        "kind": "number"
+      },
+      {
+        "key": "cost",
+        "label": "调出成本单价",
+        "kind": "number"
+      },
+      {
+        "key": "settlement",
+        "label": "调出结算单价",
+        "kind": "number"
+      },
+      {
+        "key": "note",
+        "label": "备注",
+        "kind": "text"
+      }
+    ]
+  },
+  {
+    "id": "transfer-summary",
+    "category": "库存报表",
+    "title": "机构间调拨汇总表",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "number"
+      },
+      {
+        "key": "code",
+        "label": "物品编码",
+        "kind": "text"
+      },
+      {
+        "key": "name",
+        "label": "物品名称",
+        "kind": "text"
+      },
+      {
+        "key": "org",
+        "label": "调出机构",
+        "kind": "text"
+      },
+      {
+        "key": "target",
+        "label": "调入机构",
+        "kind": "text"
+      },
+      {
+        "key": "spec",
+        "label": "规格型号",
+        "kind": "text"
+      },
+      {
+        "key": "category",
+        "label": "物品类别",
+        "kind": "text"
+      },
+      {
+        "key": "unit",
+        "label": "单位",
+        "kind": "text"
+      },
+      {
+        "key": "transferQty",
+        "label": "调拨数量",
+        "kind": "number"
+      },
+      {
+        "key": "inAmount",
+        "label": "调入金额",
+        "kind": "number"
+      },
+      {
+        "key": "outAmount",
+        "label": "调出成本金额",
+        "kind": "number"
+      },
+      {
+        "key": "outSettlementAmount",
+        "label": "调出结算金额",
+        "kind": "number"
+      },
+      {
+        "key": "inPrice",
+        "label": "调入均价",
+        "kind": "number"
+      },
+      {
+        "key": "cost",
+        "label": "调出成本均价",
+        "kind": "number"
+      },
+      {
+        "key": "settlement",
+        "label": "调出结算均价",
+        "kind": "number"
+      }
+    ]
+  },
+  {
+    "id": "stagnant",
+    "category": "库存报表",
+    "title": "库存呆滞品查询表",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "number"
+      },
+      {
+        "key": "org",
+        "label": "机构",
+        "kind": "text"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库",
+        "kind": "text"
+      },
+      {
+        "key": "name",
+        "label": "物品名称",
+        "kind": "text"
+      },
+      {
+        "key": "spec",
+        "label": "规格型号",
+        "kind": "text"
+      },
+      {
+        "key": "code",
+        "label": "物品编码",
+        "kind": "text"
+      },
+      {
+        "key": "unit",
+        "label": "单位",
+        "kind": "text"
+      },
+      {
+        "key": "firstInAt",
+        "label": "最早一次入库时间",
+        "kind": "text"
+      },
+      {
+        "key": "lastInAt",
+        "label": "最近一次入库时间",
+        "kind": "text"
+      },
+      {
+        "key": "lastOutAt",
+        "label": "最近一次出库时间",
+        "kind": "text"
+      },
+      {
+        "key": "lastInQty",
+        "label": "最近一次入库数量",
+        "kind": "number"
+      },
+      {
+        "key": "lastOutQty",
+        "label": "最近一次出库数量",
+        "kind": "number"
+      },
+      {
+        "key": "qty",
+        "label": "库存数量",
+        "kind": "number"
+      },
+      {
+        "key": "retainedDays",
+        "label": "已滞留天数",
+        "kind": "number"
+      },
+      {
+        "key": "stagnantDays",
+        "label": "物品呆滞天数",
+        "kind": "number"
+      },
+      {
+        "key": "isStagnant",
+        "label": "是否呆滞",
+        "kind": "text"
+      }
+    ]
+  },
+  {
+    "id": "alerts",
+    "category": "库存报表",
+    "title": "库存预警表",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "number"
+      },
+      {
+        "key": "code",
+        "label": "物品编码",
+        "kind": "text"
+      },
+      {
+        "key": "name",
+        "label": "物品名称",
+        "kind": "text"
+      },
+      {
+        "key": "unit",
+        "label": "单位",
+        "kind": "text"
+      },
+      {
+        "key": "category",
+        "label": "物品类别",
+        "kind": "text"
+      },
+      {
+        "key": "org",
+        "label": "机构",
+        "kind": "text"
+      },
+      {
+        "key": "qty",
+        "label": "当前库存数",
+        "kind": "number"
+      },
+      {
+        "key": "maxQty",
+        "label": "库存上限",
+        "kind": "number"
+      },
+      {
+        "key": "minQty",
+        "label": "库存下限",
+        "kind": "number"
+      },
+      {
+        "key": "alertStatus",
+        "label": "预警状态",
+        "kind": "text"
+      }
+    ]
+  },
+  {
+    "id": "group-profit",
+    "category": "财务报表",
+    "title": "集团毛利分析表",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "quantity"
+      },
+      {
+        "key": "center",
+        "label": "配送中心名称",
+        "kind": "text"
+      },
+      {
+        "key": "customer",
+        "label": "客户名称",
+        "kind": "text"
+      },
+      {
+        "key": "revenue",
+        "label": "折后收入",
+        "kind": "money"
+      },
+      {
+        "key": "cost",
+        "label": "出库成本",
+        "kind": "money"
+      },
+      {
+        "key": "profit",
+        "label": "折后毛利额",
+        "kind": "money"
+      },
+      {
+        "key": "rate",
+        "label": "折后毛利率",
+        "kind": "percent"
+      }
+    ]
+  },
+  {
+    "id": "item-profit",
+    "category": "财务报表",
+    "title": "集团物品毛利分析表",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "quantity"
+      },
+      {
+        "key": "center",
+        "label": "配送中心名称",
+        "kind": "text"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库",
+        "kind": "text"
+      },
+      {
+        "key": "customer",
+        "label": "客户名称",
+        "kind": "text"
+      },
+      {
+        "key": "category",
+        "label": "类别名称",
+        "kind": "text"
+      },
+      {
+        "key": "itemName",
+        "label": "物品名称",
+        "kind": "text"
+      },
+      {
+        "key": "spec",
+        "label": "规格",
+        "kind": "text"
+      },
+      {
+        "key": "unit",
+        "label": "单位",
+        "kind": "text"
+      },
+      {
+        "key": "quantity",
+        "label": "净销量",
+        "kind": "quantity"
+      },
+      {
+        "key": "revenue",
+        "label": "折后收入",
+        "kind": "money"
+      },
+      {
+        "key": "cost",
+        "label": "出库成本",
+        "kind": "money"
+      },
+      {
+        "key": "profit",
+        "label": "折后毛利额",
+        "kind": "money"
+      },
+      {
+        "key": "rate",
+        "label": "折后毛利率",
+        "kind": "percent"
+      },
+      {
+        "key": "averageRevenue",
+        "label": "折后收入均价",
+        "kind": "money"
+      },
+      {
+        "key": "averageCost",
+        "label": "出库成本均价",
+        "kind": "money"
+      },
+      {
+        "key": "priorMonthClosingPrice",
+        "label": "上月期末库存均价",
+        "kind": "money"
+      }
+    ]
+  },
+  {
+    "id": "profit-detail",
+    "category": "财务报表",
+    "title": "集团毛利明细表",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "quantity"
+      },
+      {
+        "key": "center",
+        "label": "配送中心名称",
+        "kind": "text"
+      },
+      {
+        "key": "customer",
+        "label": "客户名称",
+        "kind": "text"
+      },
+      {
+        "key": "code",
+        "label": "客户编码",
+        "kind": "text"
+      },
+      {
+        "key": "itemName",
+        "label": "物品名称",
+        "kind": "text"
+      },
+      {
+        "key": "itemCode",
+        "label": "物品编码",
+        "kind": "text"
+      },
+      {
+        "key": "spec",
+        "label": "规格型号",
+        "kind": "text"
+      },
+      {
+        "key": "category",
+        "label": "物品类别",
+        "kind": "text"
+      },
+      {
+        "key": "source",
+        "label": "单据类型",
+        "kind": "text"
+      },
+      {
+        "key": "warehouse",
+        "label": "配送中心仓库",
+        "kind": "text"
+      },
+      {
+        "key": "document",
+        "label": "单据号",
+        "kind": "text"
+      },
+      {
+        "key": "date",
+        "label": "业务日期",
+        "kind": "text"
+      },
+      {
+        "key": "unit",
+        "label": "单位",
+        "kind": "text"
+      },
+      {
+        "key": "quantity",
+        "label": "数量",
+        "kind": "quantity"
+      },
+      {
+        "key": "costPrice",
+        "label": "成本单价",
+        "kind": "money"
+      },
+      {
+        "key": "cost",
+        "label": "成本金额",
+        "kind": "money"
+      },
+      {
+        "key": "beforePrice",
+        "label": "折前发/退货单价",
+        "kind": "money"
+      },
+      {
+        "key": "beforeRevenue",
+        "label": "折前发/退货金额",
+        "kind": "money"
+      },
+      {
+        "key": "revenuePrice",
+        "label": "折后发/退货单价",
+        "kind": "money"
+      },
+      {
+        "key": "revenue",
+        "label": "折后发/退货金额",
+        "kind": "money"
+      },
+      {
+        "key": "recognizedDate",
+        "label": "收入成本确认日期",
+        "kind": "text"
+      },
+      {
+        "key": "recognizedCost",
+        "label": "已确认成本",
+        "kind": "money"
+      },
+      {
+        "key": "recognizedBeforeRevenue",
+        "label": "已确认折前收入",
+        "kind": "money"
+      },
+      {
+        "key": "recognizedRevenue",
+        "label": "已确认折后收入",
+        "kind": "money"
+      },
+      {
+        "key": "recognizedBeforeProfit",
+        "label": "已确认折前毛利",
+        "kind": "money"
+      },
+      {
+        "key": "recognizedProfit",
+        "label": "已确认折后毛利",
+        "kind": "money"
+      }
+    ]
+  }
+]

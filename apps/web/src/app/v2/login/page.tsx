@@ -12,8 +12,8 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // tenant 隔离: 默认 dianjie (真实公司), URL ?tenant=test 进 test tenant (8 个演示账号)
-  const [tenantSlug, setTenantSlug] = useState('dianjie')
+  // tenant 隔离: 本地预览配置优先，未配置时默认 dianjie；URL tenant 参数可覆盖。
+  const [tenantSlug, setTenantSlug] = useState(process.env.NEXT_PUBLIC_PREVIEW_TENANT_SLUG?.trim() || 'dianjie')
   // 已登录用户信息: 给"继续 / 换号"选择, 不再自动跳走 (同事的 UX 升级)
   const [existingUser, setExistingUser] = useState<{ name?: string; role: string } | null>(null)
   // 有效会话自动进入中的过渡态
@@ -198,7 +198,11 @@ export default function LoginPage() {
 
         {/* tenant 当前状态指示 — 让你一眼看到登的是真实公司还是测试环境 */}
         <div className="mt-3 text-center text-micro">
-          {tenantSlug === 'test' ? (
+          {tenantSlug !== 'dianjie' && tenantSlug !== 'test' ? (
+            <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-bg text-amber-fg">
+              {tenantSlug === process.env.NEXT_PUBLIC_PREVIEW_TENANT_SLUG?.trim() ? '测试环境' : '当前租户'} · {tenantSlug}
+            </span>
+          ) : tenantSlug === 'test' ? (
             <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-bg text-amber-fg">
               测试环境 (滇界测试 · 演示账号专用) · <a href="/v2/login" className="underline">切回真实</a>
             </span>

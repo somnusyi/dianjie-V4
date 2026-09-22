@@ -1,0 +1,29 @@
+.reports{height:100dvh;display:flex;flex-direction:column;color:#2a2218;background:#faf6ef;font-size:13px}.reports button,.reports select,.reports input{font:inherit;border:1px solid #e8e2d5;border-radius:7px;background:white;padding:8px 11px;color:inherit}.reports button{cursor:pointer}.reports button:hover{background:#faf6ef}.reports button:disabled{opacity:.45;cursor:default}.reports button.primary{background:#b8853d;border-color:#b8853d;color:white}.top{display:flex;justify-content:space-between;background:#fffdf8;padding:18px 26px;border-bottom:1px solid #e8e2d5;color:#777}.tabs{display:flex;overflow-x:auto;flex-shrink:0;background:#fffdf8;border-bottom:1px solid #e8e2d5;min-height:45px;padding:0 18px}.tabs>div{display:flex;align-items:center;white-space:nowrap;padding-left:15px;gap:8px;border-right:1px solid #eee}.tabs a{padding:14px 0}.tabs button{border:0;background:transparent;padding:3px 8px}.tabs .active{color:#91652b;border-bottom:2px solid #b8853d;background:#faf6ef}.content{flex:1;min-height:0;display:flex;flex-direction:column;padding:20px 24px;gap:12px}.heading{display:flex;justify-content:space-between;gap:12px;align-items:center}.heading h1{font-size:25px;font-weight:650}.heading small{color:#a77c3a}.actions,.results,.filterFoot,.pagination,.pagination>div,.filterFoot>div{display:flex;align-items:center;gap:10px}.card{background:#fffdf8;border:1px solid #e8e2d5;border-radius:12px;padding:16px;flex-shrink:0;max-height:42vh;overflow:auto}.filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px}.filters label{display:flex;flex-direction:column;gap:5px;color:#716557;font-size:12px}.filters input,.filters select{width:100%;min-width:0;height:35px}.range{display:flex;gap:5px}.filterFoot{justify-content:space-between;border-top:1px solid #eee;padding-top:12px}.results,.pagination{justify-content:space-between}.results small{font-weight:400;color:#888;margin-left:10px}.results>div{display:flex;gap:10px}.note{font-size:12px;color:#817666}.tableCard{display:flex;flex-direction:column;flex:1;min-height:180px;border:1px solid #e8e2d5;border-radius:12px;overflow:hidden;background:#fffdf8}.scroll{flex:1;overflow:auto}.scroll table{border-collapse:separate;border-spacing:0;min-width:100%;white-space:nowrap}.scroll th{background:#f3eee5;font-weight:500;border-bottom:1px solid #e8e2d5;padding:8px 14px;text-align:left}.scroll thead{position:sticky;top:0;z-index:1}.scroll th button{border:0;padding:0;background:transparent}.scroll td{padding:14px;border-bottom:1px solid #eee}.scroll tbody tr:hover{background:#faf6ef}.scroll td:first-child{position:sticky;left:0;background:#fffdf8}.numeric{text-align:right;font-variant-numeric:tabular-nums}.pagination{border-top:1px solid #e8e2d5;padding:12px 16px;color:#807363}.compact .scroll td{padding-top:8px;padding-bottom:8px}.error{background:#fff0ed;color:#b42318;padding:10px;display:flex;justify-content:space-between}.focused{position:fixed;inset:0;z-index:90}.overlay{position:fixed;inset:0;background:#0004;z-index:100;display:grid;place-items:center}.dialog{background:white;padding:25px;border-radius:14px;max-width:680px;max-height:85vh;overflow:auto}.dialog h2{font-size:22px;margin-bottom:15px}.dialog>div{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px}.dialog label{display:flex;align-items:center;gap:8px}@media(max-width:1023px){.reports{height:auto;min-height:100dvh;padding-bottom:65px}.heading{align-items:start;flex-direction:column}.actions{flex-wrap:wrap}.content{padding:15px}.tableCard{min-height:400px}.scroll{max-height:65vh}.top{padding:16px}.top>span:last-child{display:none}}
+
+/* Compact report workspace: keep routine filters on one short row. */
+.top{padding:9px 20px;font-size:12px}
+.tabs{min-height:34px;padding:0 12px}
+.tabs a{padding:8px 0}
+.content{padding:12px 18px;gap:8px}
+.heading h1{font-size:21px}
+.heading small{display:none}
+.reports button,.reports select,.reports input{padding:5px 9px}
+.card{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;column-gap:10px;row-gap:6px;padding:7px 10px;border-radius:9px;max-height:30vh}
+.filters{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin:0}
+.filters label{flex-direction:row;align-items:center;gap:5px;font-size:11px;min-width:0;white-space:nowrap}
+.filters input,.filters select{flex:1;width:0;height:27px;font-size:12px;padding:3px 6px}
+.filterFoot{border:0;padding:0;gap:6px;white-space:nowrap;align-self:end}
+.filterFoot>div{gap:6px}
+.filterFoot button{font-size:12px;height:27px;padding:3px 9px}
+.advancedFilters{grid-column:1/-1;grid-row:2;border-top:1px solid #eee;padding-top:7px}
+.advancedFilters label{flex-direction:column;align-items:stretch;gap:3px}
+.advancedFilters input,.advancedFilters select{flex:auto;width:100%}
+.advancedFilters .range input{width:0;flex:1}
+.note{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
+.results{min-height:29px}
+.results button{font-size:12px;padding:4px 9px}
+.pagination{padding:7px 12px;font-size:12px}
+.scroll td{padding-top:11px;padding-bottom:11px}
+@media(max-width:1199px){.card{grid-template-columns:1fr}.filterFoot{justify-content:flex-end}.advancedFilters{grid-row:auto}.filters{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}}
+@media(max-width:1023px){.content{padding:12px;gap:8px}.heading{flex-direction:row;align-items:center;flex-wrap:wrap}.heading h1{font-size:20px}.actions{gap:6px}.card{max-height:36vh}.tableCard{min-height:480px}.scroll{max-height:70vh}.top{padding:10px 12px}}
+@media(max-width:600px){.filters{grid-template-columns:repeat(2,minmax(0,1fr))}.heading{gap:8px}.actions{width:100%}.actions select{flex:1;min-width:0}.content{padding:10px}.tableCard{min-height:420px}}

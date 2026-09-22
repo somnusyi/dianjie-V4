@@ -69,4 +69,3 @@ ALTER TABLE "store_transfer_items" ADD CONSTRAINT "store_transfer_items_transfer
 
 -- AddForeignKey
 ALTER TABLE "store_transfer_items" ADD CONSTRAINT "store_transfer_items_productId_fkey" FOREIGN KEY ("productId") REFERENCES "products"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-

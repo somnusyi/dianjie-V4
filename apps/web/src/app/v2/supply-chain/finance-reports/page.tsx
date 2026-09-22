@@ -6,7 +6,7 @@ import styles from '../reports/reports.module.css'
 import local from './preview.module.css'
 import { apiFetch } from '@/lib/v2-auth'
 import { financeReports, defaultFinanceFilters, type FinanceRow, type FinanceColumn, type FinanceFilters } from './report-definitions'
-type Result = { id: string; rows: FinanceRow[]; total: number; page: number; note: string; warnings: string[]; options: Record<string, string[]> }
+type Result = { id: string; columns: FinanceColumn[]; rows: FinanceRow[]; total: number; page: number; note: string; warnings: string[]; options: Record<string, string[]> }
 
 const href = (id: string) => `/v2/supply-chain/finance-reports?report=${id}`
 function FinanceReports() {
@@ -49,8 +49,8 @@ function FinanceReports() {
   }, [id, query, refresh, report])
   const rows = result?.id === id ? result.rows : []
   const total = result?.id === id ? result.total : 0
-  const columns: FinanceColumn[] = (report?.columns || []).filter(c => !hidden.includes(c.key))
-  const numericColumns = (report?.columns || []).filter(c => 'kind' in c) as FinanceColumn[]
+  const columns: FinanceColumn[] = (result?.columns || []).filter(c => !hidden.includes(c.key))
+  const numericColumns = (result?.columns || []).filter(c => c.kind && c.key !== 'seq') as FinanceColumn[]
   const totalPages = Math.max(1, Math.ceil(total / size)); const currentPage = result?.page || 1
   const view = rows
   function closeTab(key: string) {
@@ -86,12 +86,12 @@ function FinanceReports() {
       {!report ? <p>从“财务报表”菜单选择一张表，继续查看。</p> : <>
         <form className={styles.card} onSubmit={e => { e.preventDefault(); apply() }}>
           <div className={styles.filters}>
-            {id === 'group-profit' ? <>{select('customer', '客户名称')}{select('center', '配送中心')}</> : <>{input('keyword', id === 'profit-detail' ? '名称 / 编码' : '物品 / 编码')}{id === 'profit-detail' ? input('document', '单据号') : select('customer', '客户名称')}</>}
+            {id === 'group-profit' ? <>{select('customer', '客户名称')}{select('center', '配送中心名称')}</> : <>{input('keyword', id === 'profit-detail' ? '客户 / 物品 / 编码' : '物品 / 编码')}{id === 'profit-detail' ? input('document', '单据号') : select('customer', '客户名称')}</>}
             {input('start', '开始日期', 'date')}{input('end', '结束日期', 'date')}
           </div>
           {advanced && <div className={`${styles.filters} ${styles.advancedFilters}`}>
             {id === 'item-profit' && <>{select('warehouse', '仓库')}{select('category', '类别名称')}{select('unit', '单位')}</>}
-            {id === 'profit-detail' && select('source', '出入库相关项')}
+            {id === 'profit-detail' && select('source', '单据类型')}
             {numericColumns.map(c => <label key={c.key}>{c.label}{c.kind === 'percent' ? '（%）' : ''}<span className={styles.range}>{(['min', 'max'] as const).map(side => <input key={side} aria-label={`${c.label}${side === 'min' ? '最小值' : '最大值'}`} type="number" step="any" placeholder={side === 'min' ? '最小值' : '最大值'} value={ranges[c.key]?.[side] == null ? '' : Number(ranges[c.key]?.[side]) * (c.kind === 'percent' ? 100 : 1)} onChange={e => setRanges(r => ({ ...r, [c.key]: { ...r[c.key], [side]: e.target.value === '' ? undefined : Number(e.target.value) / (c.kind === 'percent' ? 100 : 1) } }))} />)}</span></label>)}
           </div>}
           <div className={styles.filterFoot}><button type="button" onClick={() => setAdvanced(v => !v)} aria-expanded={advanced}>{advanced ? '收起筛选' : '更多筛选'}</button><div><button type="button" onClick={reset}>重置</button><button className={styles.primary}>查询</button></div></div>
@@ -101,12 +101,12 @@ function FinanceReports() {
         {result?.warnings.map(w => <p role="status" className={local.notice} key={w}>{w}</p>)}
         <p className={styles.note} title={result?.note || report.note}>{result?.note || report.note}</p>
         <div className={styles.results}><strong>报表明细 <small>共 {total} 条</small></strong><div><button onClick={() => setCompact(v => !v)}>{compact ? '标准行高' : '紧凑行高'}</button><button onClick={() => setColumnDialog(true)}>列设置</button></div></div>
-        <div className={styles.tableCard} aria-busy={loading}><div className={styles.scroll}><table><thead><tr>{columns.map(c => <th key={c.key}><button onClick={() => { setSort(c.key); setDescending(sort === c.key ? !descending : false); setPage(1) }}>{c.label}{sort === c.key ? descending ? ' ↓' : ' ↑' : ''}</button></th>)}</tr></thead><tbody>{loading ? <tr><td colSpan={columns.length}>正在查询…</td></tr> : view.length ? view.map(row => <tr key={String(row.id)}>{columns.map(c => <td key={c.key} className={`${c.kind ? styles.numeric : ''} ${typeof row[c.key] === 'number' && Number(row[c.key]) < 0 ? local.negative : ''}`}>{format(row[c.key], c)}</td>)}</tr>) : <tr><td colSpan={columns.length} className={local.empty}>{error ? '查询失败，请重试' : '没有符合条件的记录'}</td></tr>}</tbody></table></div>
+        <div className={styles.tableCard} aria-busy={loading}><div className={styles.scroll}><table><thead><tr>{columns.map(c => <th key={c.key}><button disabled={c.key === 'seq'} onClick={() => { setSort(c.key); setDescending(sort === c.key ? !descending : false); setPage(1) }}>{c.label}{sort === c.key ? descending ? ' ↓' : ' ↑' : ''}</button></th>)}</tr></thead><tbody>{loading ? <tr><td colSpan={columns.length}>正在查询…</td></tr> : view.length ? view.map(row => <tr key={String(row.id)}>{columns.map(c => <td key={c.key} className={`${c.kind ? styles.numeric : ''} ${typeof row[c.key] === 'number' && Number(row[c.key]) < 0 ? local.negative : ''}`}>{format(row[c.key], c)}</td>)}</tr>) : <tr><td colSpan={columns.length} className={local.empty}>{error ? '查询失败，请重试' : '没有符合条件的记录'}</td></tr>}</tbody></table></div>
           <div className={styles.pagination}><span>共 {total} 条</span><div><select aria-label="每页条数" value={size} onChange={e => { setSize(Number(e.target.value)); setPage(1) }}>{[10, 20, 50].map(n => <option key={n} value={n}>{n} 条 / 页</option>)}</select><button disabled={loading || currentPage <= 1} onClick={() => setPage(currentPage - 1)}>上一页</button><span>{currentPage} / {totalPages}</span><button disabled={loading || currentPage >= totalPages} onClick={() => setPage(currentPage + 1)}>下一页</button></div></div>
         </div>
       </>}
     </section>
-    {columnDialog && <div className={styles.overlay} onClick={() => setColumnDialog(false)}><section className={styles.dialog} role="dialog" aria-modal="true" aria-label="财务报表显示列" onClick={e => e.stopPropagation()}><h2>显示列</h2><div>{report?.columns.map((c, i) => <label key={c.key}><input type="checkbox" checked={!hidden.includes(c.key)} disabled={i === 0} onChange={e => setHidden(old => e.target.checked ? old.filter(k => k !== c.key) : [...old, c.key])} />{c.label}</label>)}</div><button onClick={() => setHidden([])}>恢复全部列</button><button className={styles.primary} onClick={() => setColumnDialog(false)}>完成</button></section></div>}
+    {columnDialog && <div className={styles.overlay} onClick={() => setColumnDialog(false)}><section className={styles.dialog} role="dialog" aria-modal="true" aria-label="财务报表显示列" onClick={e => e.stopPropagation()}><h2>显示列</h2><div>{result?.columns.map((c, i) => <label key={c.key}><input type="checkbox" checked={!hidden.includes(c.key)} disabled={i === 0} onChange={e => setHidden(old => e.target.checked ? old.filter(k => k !== c.key) : [...old, c.key])} />{c.label}</label>)}</div><button onClick={() => setHidden([])}>恢复全部列</button><button className={styles.primary} onClick={() => setColumnDialog(false)}>完成</button></section></div>}
   </div>
 }
 export default function FinanceReportsPage() { return <Suspense fallback={<p>正在加载财务报表…</p>}><FinanceReports /></Suspense> }

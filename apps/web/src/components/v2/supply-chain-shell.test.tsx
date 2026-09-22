@@ -108,7 +108,8 @@ describe('库存报表悬浮导航', () => {
       act(() => trigger.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
       expect(trigger.getAttribute('aria-expanded')).toBe('true')
       const panel = document.querySelector('#inventory-report-flyout')!
-      expect(panel.querySelectorAll('a')).toHaveLength(8)
+      expect(panel.querySelectorAll('a')).toHaveLength(11)
+      expect([...panel.querySelectorAll('a')].slice(0, 8).map(a => a.textContent)).toEqual(['实时库存查询表', '出入库明细表', '出入库汇总表', '其他出入库汇总表', '机构间调拨明细表', '机构间调拨汇总表', '库存呆滞品查询表', '库存预警表'])
       act(() => trigger.dispatchEvent(new MouseEvent('mouseout', { bubbles: true })))
       act(() => panel.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
       act(() => vi.advanceTimersByTime(200))

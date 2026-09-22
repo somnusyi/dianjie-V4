@@ -1,22 +1,22 @@
 import { Prisma } from '@dianjie/db'
 import { z } from 'zod'
+import { inventoryColumns, numberReportRows } from './reportFieldContract'
+import { loadInventorySupplement, reportTimestamp } from './inventoryReportSupplement'
 import { businessDateKey, businessDateRangeInclusive } from '../lib/businessTime'
 
-export const reportIds = ['realtime', 'movements', 'summary', 'transfer-detail', 'transfer-summary'] as const
+export const reportIds = ['realtime', 'movements', 'summary', 'other-summary', 'transfer-detail', 'transfer-summary', 'stagnant', 'alerts'] as const
 export type ReportId = typeof reportIds[number]
 export type ReportRow = Record<string, string | number | null>
 export type ReportColumn = { key: string; label: string; kind: 'text' | 'number'; group?: string }
-const c = (key: string, label: string, kind: 'text' | 'number' = 'text', group?: string): ReportColumn => ({ key, label, kind, group })
-const item = [c('name', '物品名称'), c('code', '物品编码'), c('spec', '规格型号'), c('category', '物品类别'), c('unit', '单位')]
-const org = [c('org', '机构名称'), c('warehouse', '仓库')]
-const flow = (prefix: string, group: string) => [c(`${prefix}Qty`, '数量', 'number', group), c(`${prefix}Amount`, '金额', 'number', group)]
-const transfer = [...item, c('org', '调出机构'), c('warehouse', '调出仓库'), c('target', '调入机构'), c('targetWarehouse', '调入仓库'), c('cost', '调出成本单价', 'number'), c('settlement', '结算单价', 'number'), c('transferQty', '调拨数量', 'number'), c('outAmount', '调出金额', 'number'), c('inAmount', '调入金额', 'number')]
 export const reportDefinitions: Record<ReportId, { title: string; note: string; columns: ReportColumn[] }> = {
-  realtime: { title: '实时库存查询表', note: '预计入库为已提交采购单尚未合格验收的数量；预计出库为当前预占数量。数量均为库存单位。', columns: [...item, c('conversion', '单位换算'), ...org, c('qty', '库存量', 'number'), c('amount', '库存金额', 'number'), c('price', '均价', 'number'), c('expectedIn', '预计入库', 'number'), c('expectedOut', '预计出库', 'number')] },
-  movements: { title: '出入库明细表', note: '金额仅展示有冻结税率依据的不含税金额；无依据显示“—”。预占、释放不计作实物出入库；冲销保留反向记录。', columns: [...item, ...org, c('doc', '出入库单据号'), c('type', '出入库类型'), c('upstream', '上游单据号'), c('upstreamType', '上游单据类型'), c('reason', '原因类型'), c('adjustment', '调整单标识'), c('counterparty', '对方机构'), c('upstreamDate', '上游单据日期'), c('date', '出入库日期'), c('inQty', '数量', 'number', '入库'), c('inPrice', '单价（不含税）', 'number', '入库'), c('inAmount', '金额（不含税）', 'number', '入库'), c('outQty', '数量', 'number', '出库'), c('outPrice', '单价（不含税）', 'number', '出库'), c('outAmount', '金额（不含税）', 'number', '出库')] },
-  summary: { title: '出入库汇总表', note: '金额按库存台账成本口径。期末 = 期初 + 入库 − 出库；类型筛选仅选取期间发生该类型的物品，余额仍包含全部类型。纯金额调整按金额方向计入。', columns: [...item, ...org, c('type', '出入库类型'), ...flow('opening', '期初'), ...flow('in', '入库'), ...flow('out', '出库'), ...flow('closing', '期末结余')] },
-  'transfer-detail': { title: '机构间调拨明细表', note: '统计已发货、已收货的门店间调拨登记；金额采用建单时确认的价格快照，待发货和已撤回不计入。调拨登记不改写门店盘点库存。', columns: [c('doc', '调拨单号'), c('date', '调拨日期'), ...transfer] },
-  'transfer-summary': { title: '机构间调拨汇总表', note: '按物品、库存单位及调出/调入门店汇总已发货、已收货的调拨登记；单价按数量加权。', columns: transfer },
+  realtime: { title: '实时库存查询表', note: '数量为库存基准单位，换算率为 1。预计入库按未验收采购量，预计出库为预占量。库存台账未独立核算不含税余额，不含税金额/均价显示“—”；机构编码尚未维护。', columns: inventoryColumns('realtime') },
+  movements: { title: '出入库明细表', note: '基准数量为库存单位，业务数量为单据原单位。金额沿用不含税口径，仅有冻结税率依据时展示；未记录的折扣、结算、审核与退返货差异不推算。预占与释放不计实物出入库。', columns: inventoryColumns('movements') },
+  summary: { title: '出入库汇总表', note: '成本按库存台账口径，期末=期初+入库−出库；均价=对应成本金额/数量，数量为零时显示“—”。类型筛选选取发生该类型的物品，余额包含全部类型。', columns: inventoryColumns('summary') },
+  'other-summary': { title: '其他出入库汇总表', note: '汇总手工出入库、盘点、报损及其冲销，按物品、仓库、基准单位、出入库类型和原因分组。入库为正、出库为负；金额按库存台账成本口径。', columns: inventoryColumns('other-summary') },
+  'transfer-detail': { title: '机构间调拨明细表', note: '已发货/已收货的门店调拨登记，数量为登记时冻结的库存单位，金额为登记价格快照。未记录批次、门店仓库、公司归属和独立审核时间时显示“—”；登记不改写门店盘点库存。', columns: inventoryColumns('transfer-detail') },
+  'transfer-summary': { title: '机构间调拨汇总表', note: '按物品、单位和调出/调入门店汇总已发货/已收货登记；均价按数量加权，调入与调出结算金额均采用登记结算金额。', columns: inventoryColumns('transfer-summary') },
+  stagnant: { title: '库存呆滞品查询表', note: '展示当前正库存。已滞留天数按最近出库日计算，无出库记录时按最早入库日计算；是否呆滞按查询阈值判断。缺少历史流水不推断天数。', columns: inventoryColumns('stagnant') },
+  alerts: { title: '库存预警表', note: '当前库存按仓库台账；下限沿用总部库存安全库存并换算为库存单位。系统尚无库存上限，显示“—”；无有效单位换算时不推断下限。', columns: inventoryColumns('alerts') },
 }
 const text = z.string().trim().max(120).default('')
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(v => { const d = new Date(`${v}T00:00:00Z`); return !isNaN(+d) && d.toISOString().slice(0, 10) === v }, '日期无效')
@@ -28,6 +28,7 @@ export const reportQuerySchema = z.object({
     try { const r = z.record(z.object({ min: z.number().finite().optional(), max: z.number().finite().optional() }).refine(v => v.min == null || v.max == null || v.min <= v.max, '最小值不能大于最大值')).parse(JSON.parse(value)); return r }
     catch { ctx.addIssue({ code: 'custom', message: '数值范围无效' }); return z.NEVER }
   }),
+  stagnantDays: z.coerce.number().int().min(1).max(36500).default(30),
   page: z.coerce.number().int().min(1).max(100000).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(20), sort: text, direction: z.enum(['asc', 'desc']).default('asc'), export: z.enum(['0', '1']).default('0'),
 }).refine(q => q.start <= q.end, '开始日期不能晚于结束日期')
 export type ReportQuery = z.infer<typeof reportQuerySchema>
@@ -77,18 +78,20 @@ export async function loadInventoryReport(tx: Prisma.TransactionClient, tenantId
   const scope = { tenantId, ...(q.warehouseId ? { warehouseId: q.warehouseId } : {}), product }
   const warehouses = await tx.warehouse.findMany({ where: { tenantId }, select: { id: true, name: true, isDefault: true } })
   let rows: ReportRow[] = []
-  if (id === 'realtime') {
+  if (['other-summary', 'stagnant', 'alerts'].includes(id)) {
+    rows = await loadInventorySupplement(tx, tenantId, id, q, scope)
+  } else if (id === 'realtime') {
     const balances = bounded(await tx.warehouseLedgerBalance.findMany({ where: scope, include: { product: true, warehouse: true }, take: LIMIT + 1 }))
     const incoming = bounded(await tx.upstreamPurchaseOrderLine.findMany({ where: { tenantId, product, purchaseOrder: { tenantId, ...(q.warehouseId ? { warehouseId: q.warehouseId } : {}), status: { in: ['SUBMITTED_TO_SUPPLIER', 'CHANGE_PROPOSED', 'SUPPLIER_ACCEPTED', 'PARTIALLY_SHIPPED', 'SHIPPED', 'PARTIALLY_RECEIVED'] } } }, include: { product: true, purchaseOrder: { select: { warehouseId: true, warehouse: true } } }, take: LIMIT + 1 }))
     const expected = new Map<string, Prisma.Decimal>()
     for (const l of incoming) { const key = `${l.purchaseOrder.warehouseId}/${l.productId}/${l.inventoryUnit}`; expected.set(key, (expected.get(key) || dec(0)).plus(Prisma.Decimal.max(0, (l.confirmedQty ?? l.orderedQty).minus(l.receivedQty)).mul(l.inventoryUnitsPerPurchaseUnit))) }
-    rows = balances.map(b => ({ ...base(b.product, b.warehouse, b.inventoryUnit), conversion: b.product.inventoryUnitsPerPurchaseUnit && b.product.purchaseUnit ? `1 ${b.product.purchaseUnit} = ${b.product.inventoryUnitsPerPurchaseUnit} ${b.product.inventoryUnit}` : null, qty: num(b.physicalQty), amount: num(b.inventoryValue), price: num(b.averageUnitCost), expectedIn: num(expected.get(`${b.warehouseId}/${b.productId}/${b.inventoryUnit}`)), expectedOut: num(b.reservedQty) }))
+    rows = balances.map(b => ({ ...base(b.product, b.warehouse, b.inventoryUnit), conversion: 1, netAmount: null, netPrice: null, qty: num(b.physicalQty), amount: num(b.inventoryValue), price: num(b.averageUnitCost), expectedIn: num(expected.get(`${b.warehouseId}/${b.productId}/${b.inventoryUnit}`)), expectedOut: num(b.reservedQty) }))
     const present = new Set(balances.map(b => `${b.warehouseId}/${b.productId}/${b.inventoryUnit}`))
     for (const l of incoming) {
       const key = `${l.purchaseOrder.warehouseId}/${l.productId}/${l.inventoryUnit}`
       if (present.has(key)) continue
       present.add(key)
-      rows.push({ ...base(l.product, l.purchaseOrder.warehouse, l.inventoryUnit), conversion: `1 ${l.purchaseUnit} = ${l.inventoryUnitsPerPurchaseUnit} ${l.inventoryUnit}`, qty: 0, amount: 0, price: null, expectedIn: num(expected.get(key)), expectedOut: 0 })
+      rows.push({ ...base(l.product, l.purchaseOrder.warehouse, l.inventoryUnit), conversion: 1, netAmount: null, netPrice: null, qty: 0, amount: 0, price: null, expectedIn: num(expected.get(key)), expectedOut: 0 })
     }
   } else if (id === 'summary') {
     // Aggregate all historical deltas in PostgreSQL, including reversals and value-only corrections.
@@ -115,28 +118,56 @@ export async function loadInventoryReport(tx: Prisma.TransactionClient, tenantId
     const transfers = bounded(await tx.storeTransferItem.findMany({ where: { product: { tenantId }, ...(q.keyword ? { OR: [{ name: { contains: q.keyword, mode: 'insensitive' } }, { code: { contains: q.keyword, mode: 'insensitive' } }] } : {}), ...(q.category ? { category: q.category } : {}),
       transfer: { tenantId, status: { in: ['SHIPPED', 'RECEIVED'] }, transferDate: { gte: new Date(`${q.start}T00:00:00Z`), lte: new Date(`${q.end}T00:00:00Z`) }, ...(q.org ? { fromStore: { name: q.org } } : {}), ...(q.target ? { toStore: { name: q.target } } : {}) },
     }, include: { transfer: { include: { fromStore: true, toStore: true } } }, take: LIMIT + 1 }))
-    rows = transfers.map(l => ({ productId: l.productId, name: l.name, code: l.code, spec: l.spec, category: l.category, unit: l.unit, org: l.transfer.fromStore.name, fromStoreId: l.transfer.fromStoreId, warehouse: null, warehouseId: null, target: l.transfer.toStore.name, targetId: l.transfer.toStoreId, targetWarehouse: null, doc: l.transfer.no, date: businessDateKey(l.transfer.transferDate), transferQty: num(l.quantity), cost: num(l.cost), settlement: num(l.settlement), outAmount: num(l.outAmount), inAmount: num(l.inAmount) }))
+    rows = transfers.map(l => ({ productId: l.productId, name: l.name, code: l.code, spec: l.spec, category: l.category, unit: l.unit, org: l.transfer.fromStore.name, fromStoreId: l.transfer.fromStoreId, warehouse: null, warehouseId: null, target: l.transfer.toStore.name, targetId: l.transfer.toStoreId, targetWarehouse: null, status: l.transfer.status === 'RECEIVED' ? '已收货' : '已发货', receivedDate: l.transfer.receivedAt ? businessDateKey(l.transfer.receivedAt) : null, note: l.transfer.note, doc: l.transfer.no, date: businessDateKey(l.transfer.transferDate), transferQty: num(l.quantity), cost: num(l.cost), settlement: num(l.settlement), outAmount: num(l.outAmount), inAmount: num(l.inAmount) }))
     if (id === 'transfer-summary') rows = aggregateTransfers(rows)
+    rows = rows.map(r => ({ ...r, baseUnit: r.unit, baseQuantity: r.transferQty, outSettlementAmount: r.inAmount, inPrice: r.settlement }))
   } else {
     const movements = bounded(await tx.warehouseLedgerMovement.findMany({ where: { ...scope, effectiveAt: { gte: range.start, lt: range.endExclusive }, type: { notIn: ['ORDER_RESERVED', 'ORDER_RELEASED'] } }, include: { product: true, warehouse: true, supplier: true, docLines: { where: { tenantId }, include: { doc: true } }, upstreamReceiptLine: { include: { receipt: { include: { purchaseOrder: true } }, purchaseOrderLine: true } } }, orderBy: [{ effectiveAt: 'desc' }, { id: 'asc' }], take: LIMIT + 1 }))
     const deliveries = await tx.deliveryOrder.findMany({ where: { tenantId, id: { in: movements.filter(m => m.sourceType === 'DeliveryOrder').map(m => m.sourceId) } }, include: { store: true, purchaseOrder: true, items: true } })
     const byDelivery = new Map(deliveries.map(d => [d.id, d]))
+    const creatorIds = [...new Set(movements.flatMap(m => [m.docLines[0]?.doc.createdById, m.upstreamReceiptLine?.receipt.createdById, byDelivery.get(m.sourceId)?.createdById, m.createdById].filter((v): v is string => Boolean(v))))]
+    const creators = await tx.user.findMany({ where: { tenantId, id: { in: creatorIds } }, select: { id: true, name: true } })
+    const creatorNames = new Map(creators.map(u => [u.id, u.name]))
     for (const m of movements) {
       const d = byDelivery.get(m.sourceId)
       const receiptLine = m.upstreamReceiptLine?.tenantId === tenantId ? m.upstreamReceiptLine : null
       const doc = m.docLines[0]?.doc
       const inbound = m.physicalDelta.gt(0) || m.physicalDelta.eq(0) && m.valueDelta.gte(0)
-      // No blanket tax=0 fallback: warehouse cost is not necessarily a tax-exclusive amount.
-      const net = receiptLine ? receiptLine.receipt.purchaseOrder.taxInclusive ? receiptLine.payableAmount.div(dec(1).plus(receiptLine.purchaseOrderLine.taxRate)) : receiptLine.payableAmount : null
-      const absQty = m.physicalDelta.abs()
-      rows.push({ ...base(m.product, m.warehouse, m.inventoryUnit), doc: doc?.docNo || receiptLine?.receipt.no || d?.no || null, type: movementLabels[m.type] || m.type, upstream: receiptLine?.receipt.purchaseOrder.no || d?.purchaseOrder.no || null, upstreamType: receiptLine ? '上游采购单' : d ? '门店订货单' : sourceLabels[m.sourceType] || '其他库存单据', reason: doc?.reason || movementLabels[m.type] || m.type, adjustment: ['ADJUSTMENT', 'REVERSAL'].includes(m.type) ? '是' : '否', counterparty: d?.store.name || m.supplier?.name || m.sourceName || null, upstreamDate: receiptLine ? businessDateKey(receiptLine.receipt.purchaseOrder.createdAt) : d ? businessDateKey(d.purchaseOrder.createdAt) : null, date: businessDateKey(m.effectiveAt), inQty: inbound ? num(absQty) : 0, outQty: inbound ? 0 : num(absQty), inAmount: inbound ? net == null ? null : num(net) : 0, outAmount: inbound ? 0 : net == null ? null : num(net), inPrice: inbound && net != null && !absQty.eq(0) ? num(net.div(absQty)) : null, outPrice: !inbound && net != null && !absQty.eq(0) ? num(net.div(absQty)) : null })
+      // Preserve tax-exclusive semantics. No frozen tax basis => unavailable, never cost-as-net.
+      const divisor = receiptLine ? receiptLine.receipt.purchaseOrder.taxInclusive ? dec(1).plus(receiptLine.purchaseOrderLine.taxRate) : dec(1) : null
+      const net = divisor ? m.valueDelta.abs().div(divisor) : null
+      const settlement = divisor && receiptLine ? receiptLine.payableAmount.div(divisor) : null
+      const absQty = m.physicalDelta.abs(), businessQty = m.originalQuantity.abs()
+      const quantity = absQty.eq(0) ? dec(0) : businessQty
+      const createdById = doc?.createdById || receiptLine?.receipt.createdById || d?.createdById || m.createdById
+      rows.push({ ...base(m.product, m.warehouse, m.originalUnit), id: m.id, baseUnit: m.inventoryUnit,
+        doc: doc?.docNo || receiptLine?.receipt.no || d?.no || null, type: movementLabels[m.type] || m.type,
+        upstream: receiptLine?.receipt.purchaseOrder.no || d?.purchaseOrder.no || null,
+        upstreamType: receiptLine ? '上游采购单' : d ? '门店订货单' : sourceLabels[m.sourceType] || '其他库存单据',
+        reason: doc?.reason || movementLabels[m.type] || m.type, adjustment: ['ADJUSTMENT', 'REVERSAL'].includes(m.type) ? '是' : '否',
+        counterparty: d?.store.name || m.supplier?.name || m.sourceName || null, counterpartyCode: d?.store.no || m.supplier?.no || null,
+        upstreamDate: receiptLine ? businessDateKey(receiptLine.receipt.purchaseOrder.createdAt) : d ? businessDateKey(d.purchaseOrder.createdAt) : null,
+        date: businessDateKey(m.effectiveAt), createdAt: reportTimestamp(doc?.createdAt || receiptLine?.receipt.createdAt || d?.createdAt),
+        createdBy: createdById ? creatorNames.get(createdById) || null : null,
+        reviewedAt: reportTimestamp(doc?.reviewStatus === 'REVIEWED' ? doc.confirmedAt : receiptLine?.receipt.reviewedAt),
+        inBaseQty: inbound ? num(absQty) : 0, outBaseQty: inbound ? 0 : num(absQty),
+        inQty: inbound ? num(quantity) : 0, outQty: inbound ? 0 : num(quantity),
+        inAmount: inbound ? net == null ? null : num(net) : 0, outAmount: inbound ? 0 : net == null ? null : num(net),
+        inPrice: inbound && net != null && !quantity.eq(0) ? num(net.div(quantity)) : null,
+        outPrice: !inbound && net != null && !quantity.eq(0) ? num(net.div(quantity)) : null,
+        inSettlementAmount: inbound && settlement != null ? num(settlement) : null,
+        inSettlementPrice: inbound && settlement != null && !quantity.eq(0) ? num(settlement.div(quantity)) : null,
+        note: m.docLines[0]?.note || doc?.note || receiptLine?.receipt.note || m.note || null,
+      })
     }
     if (id === 'movements' && q.type) rows = rows.filter(r => r.type === q.type)
   }
+  if (id === 'summary') rows = rows.map(r => ({ ...r, ...Object.fromEntries(['opening', 'in', 'out', 'closing'].map(p => [p + 'Price', !r[p + 'Qty'] ? null : num(dec(r[p + 'Amount']).div(r[p + 'Qty']!))])) }))
   rows = filterReportRows(rows, q)
   const definition = reportDefinitions[id]
-  const sort = definition.columns.some(c => c.key === q.sort) ? q.sort : id === 'movements' || id === 'transfer-detail' ? 'date' : 'code'
+  const sort = q.sort !== 'seq' && definition.columns.some(c => c.key === q.sort) ? q.sort : id === 'movements' || id === 'transfer-detail' ? 'date' : 'code'
   rows.sort((a, b) => { const av = a[sort], bv = b[sort]; if (av == null) return bv == null ? 0 : 1; if (bv == null) return -1; return (typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv), 'zh-CN', { numeric: true })) * (q.direction === 'desc' ? -1 : 1) })
+  rows = numberReportRows(rows, definition.columns)
   const total = rows.length; const page = Math.min(q.page, Math.max(1, Math.ceil(total / q.pageSize)))
   return { ...definition, id, warehouses, rows: q.export === '1' ? rows : rows.slice((page - 1) * q.pageSize, page * q.pageSize), total, page, pageSize: q.pageSize, generatedAt: new Date().toISOString() }
 }

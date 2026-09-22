@@ -5,6 +5,8 @@ import { prisma } from '@dianjie/db'
 import ExcelJS from 'exceljs'
 import { randomUUID } from 'crypto'
 import { inventoryReportRoutes } from '../src/routes/inventoryReports'
+import { reportIds } from '../src/services/inventoryReports'
+import fieldContract from '../src/services/report-field-contract.json'
 import { storeTransferRoutes } from '../src/routes/storeTransfers'
 
 const app = Fastify()
@@ -29,7 +31,7 @@ describe('inventory reports and persistent store transfers', () => {
     toStoreId = (await prisma.store.create({ data: { tenantId, no: 'B', name: '调入门店' } })).id
     foreignStoreId = (await prisma.store.create({ data: { tenantId: otherTenantId, no: 'C', name: '其他租户门店' } })).id
     for (const [date, qty, value, type] of [['2026-08-31T15:59:59Z', 10, 20, 'OPENING_BALANCE'], ['2026-08-31T16:00:00Z', 5, 15, 'MANUAL_INBOUND'], ['2026-09-21T15:59:59Z', -2, -4, 'ORDER_OUTBOUND'], ['2026-09-21T16:00:00Z', 99, 198, 'MANUAL_INBOUND']] as const) {
-      await prisma.warehouseLedgerMovement.create({ data: { tenantId, warehouseId, productId, type, effectiveAt: new Date(date), physicalDelta: qty, valueDelta: value, physicalAfter: 0, reservedAfter: 0, valueAfter: 0, averageUnitCostAfter: 0, originalQuantity: Math.abs(qty), originalUnit: 'kg', conversionFactor: 1, inventoryQuantity: Math.abs(qty), inventoryUnit: 'kg', sourceType: 'ReportFixture', sourceId: randomUUID(), idempotencyKey: randomUUID() } })
+      await prisma.warehouseLedgerMovement.create({ data: { tenantId, warehouseId, productId, type, effectiveAt: new Date(date), physicalDelta: qty, valueDelta: value, physicalAfter: 0, reservedAfter: 0, valueAfter: 0, averageUnitCostAfter: 0, originalQuantity: qty === 5 ? 0.5 : Math.abs(qty), originalUnit: qty === 5 ? '箱' : 'kg', conversionFactor: qty === 5 ? 10 : 1, inventoryQuantity: Math.abs(qty), inventoryUnit: 'kg', sourceType: qty === 5 ? 'WarehouseManualInbound' : 'ReportFixture', sourceId: randomUUID(), idempotencyKey: randomUUID() } })
     }
     await prisma.warehouseLedgerBalance.create({ data: { tenantId, warehouseId, productId, inventoryUnit: 'kg', physicalQty: 112, reservedQty: 2, inventoryValue: 229, averageUnitCost: 2.044643 } })
     await app.register(jwt, { secret: 'inventory-report-integration-secret-only' })
@@ -61,7 +63,7 @@ describe('inventory reports and persistent store transfers', () => {
   })
   it('does not mislabel unknown tax values, validates dates and numeric ranges', async () => {
     const rows = (await report('movements')).json().rows; expect(rows).toHaveLength(2)
-    expect(rows.find((r: any) => r.inQty === 5).inAmount).toBeNull()
+    expect(rows.find((r: any) => r.inBaseQty === 5).inAmount).toBeNull()
     expect((await report('realtime', '&ranges=not-json')).statusCode).toBe(400)
     expect((await app.inject({ url: '/api/inventory-reports/summary?start=2026-02-30&end=2026-09-21', headers: headers() })).statusCode).toBe(400)
     expect((await report('realtime', `&ranges=${encodeURIComponent(JSON.stringify({ amount: { min: 230 } }))}`)).json().total).toBe(0)
@@ -99,4 +101,36 @@ describe('inventory reports and persistent store transfers', () => {
     const quantityColumn = plain.columns.findIndex((c: any) => c.key === 'transferQty') + 1
     expect(sheet.getRow(2).getCell(quantityColumn).value).toBe(plain.rows[0].transferQty)
   })
+  it('separates business/base units, keeps unknown tax/audit facts empty, and calculates weighted inventory prices', async () => {
+    const r = (await report('movements')).json().rows.find((r: any) => r.inBaseQty === 5)
+    expect(r).toMatchObject({ unit: '箱', baseUnit: 'kg', inQty: 0.5, inBaseQty: 5, inAmount: null, inPrice: null, reviewedAt: null, outProfit: null })
+    expect((await report('realtime')).json().rows[0]).toMatchObject({ conversion: 1, qty: 112, netAmount: null, netPrice: null })
+    expect((await report('summary')).json().rows[0]).toMatchObject({ openingPrice: 2, inPrice: 3, outPrice: 2 })
+  })
+  it('serves other movements, stagnation and alerts with tenant and role isolation', async () => {
+    expect((await report('other-summary')).json().rows[0]).toMatchObject({ baseUnit: 'kg', quantity: 5, amount: 15, type: '手工入库' })
+    expect((await report('stagnant', '&stagnantDays=36500')).json().rows[0]).toMatchObject({ qty: 112, stagnantDays: 36500, isStagnant: '否', lastInQty: 99, lastOutQty: 2 })
+    expect((await report('alerts')).json().rows[0]).toMatchObject({ qty: 112, minQty: 0, maxQty: null })
+    expect((await report('stagnant', '&stagnantDays=0')).statusCode).toBe(400)
+    for (const id of ['other-summary', 'stagnant', 'alerts']) {
+      expect((await report(id, '', supplierToken)).statusCode).toBe(403)
+      expect((await report(id, '', financeToken)).statusCode).toBe(200)
+      expect((await report(id, '', foreignToken)).json().total).toBe(0)
+    }
+  })
+  it('keeps all eight report field orders consistent with export; serials continue across pages', async () => {
+    for (const id of reportIds) {
+      const plain = (await report(id)).json()
+      expect(plain.columns.map((c: any) => c.label)).toEqual(fieldContract.find(r => r.id === id)!.columns.map(c => c.label))
+      const exported = (await report(id, '&export=1')).json()
+      const book = new ExcelJS.Workbook(); await book.xlsx.load(Buffer.from(exported.fileBase64, 'base64') as any)
+      expect(book.worksheets[0].getRow(1).values).toEqual([undefined, ...plain.columns.map((c: any) => c.label)])
+      for (const [i, row] of plain.rows.entries()) {
+        expect(row.seq).toBe(i + 1)
+        for (const [j, col] of plain.columns.entries()) expect(book.worksheets[0].getRow(i + 2).getCell(j + 1).value ?? null).toEqual(row[col.key] ?? null)
+      }
+    }
+    expect((await report('movements', '&pageSize=1&page=2')).json().rows[0].seq).toBe(2)
+  })
+
 })

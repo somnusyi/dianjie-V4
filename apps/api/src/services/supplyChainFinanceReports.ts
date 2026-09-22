@@ -1,18 +1,17 @@
 import { Prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { businessDateKey, businessDateRangeInclusive } from '../lib/businessTime'
+import { financeColumns, numberReportRows } from './reportFieldContract'
 import { reportQuerySchema } from './inventoryReports'
 
 export const financeReportIds = ['group-profit', 'item-profit', 'profit-detail'] as const
 export type FinanceReportId = typeof financeReportIds[number]
 export type FinanceRow = Record<string, string | number | null>
-type Column = { key: string; label: string; kind?: 'money' | 'quantity' | 'percent' }
-const c = (key: string, label: string, kind?: Column['kind']): Column => ({ key, label, ...(kind ? { kind } : {}) })
 export const financeDefinitions = {
-  'group-profit': { title: '集团毛利分析表', columns: [c('customer', '客户名称'), c('center', '配送中心'), c('profit', '折后毛利', 'money'), c('revenue', '折后收入', 'money'), c('cost', '出库成本', 'money')] },
-  'item-profit': { title: '集团物品毛利分析表', columns: [c('warehouse', '仓库'), c('customer', '客户名称'), c('category', '类别名称'), c('itemName', '物品名称'), c('spec', '规格'), c('unit', '单位'), c('quantity', '净销量', 'quantity'), c('revenue', '折后收入', 'money'), c('cost', '出库成本', 'money'), c('rate', '毛利率', 'percent'), c('averageRevenue', '折后收入均价', 'money'), c('averageCost', '出库成本均价', 'money')] },
-  'profit-detail': { title: '集团毛利明细表', columns: [c('code', '编码'), c('name', '名称'), c('itemCode', '物品编码'), c('spec', '规格型号'), c('document', '单据号'), c('date', '业务日期'), c('source', '出入库相关项'), c('quantity', '数量', 'quantity'), c('cost', '成本', 'money'), c('revenue', '发货金额', 'money')] },
-} satisfies Record<FinanceReportId, { title: string; columns: Column[] }>
+  'group-profit': { title: '集团毛利分析表', columns: financeColumns('group-profit') },
+  'item-profit': { title: '集团物品毛利分析表', columns: financeColumns('item-profit') },
+  'profit-detail': { title: '集团毛利明细表', columns: financeColumns('profit-detail') },
+}
 const text = z.string().trim().max(120).default('')
 export const financeQuerySchema = z.object({ customer: text, center: text, keyword: text, warehouse: text, category: text, unit: text, document: text, source: text }).passthrough().transform((raw, ctx) => {
   const parsed = reportQuerySchema.safeParse(raw)
@@ -27,7 +26,7 @@ function bounded<T>(rows: T[]): T[] {
   return rows
 }
 const reversalSources = ['ReceiptRejectionReversal', 'LossClaimReversal', 'DeliveryOrderShipCancel']
-const note = '总部配送毛利口径：收入按配送行冻结成交单价×业务数量，成本按出库台账金额；退回/短缺/撤销在发生日冲减。数量为库存单位，配送中心按出库仓库。缺少成本或金额依据时显示“—”，相关汇总毛利不计算。此为配送经营报表，不含门店营业额、采购退货、门店调拨或未关联配送的美团导入。'
+const note = '折前价格/金额及收入成本确认字段尚无独立业务记录，显示“—”；上月期末均价按查询开始日所在月份的前一月末库存成本计算。总部配送毛利口径：收入按配送行冻结成交单价×业务数量，成本按出库台账金额；退回/短缺/撤销在发生日冲减。数量为库存单位，配送中心按出库仓库。缺少成本或金额依据时显示“—”，相关汇总毛利不计算。此为配送经营报表，不含门店营业额、采购退货、门店调拨或未关联配送的美团导入。'
 
 export function aggregateFinance(rows: FinanceRow[], id: FinanceReportId): FinanceRow[] {
   if (id === 'profit-detail') return rows
@@ -80,6 +79,20 @@ export async function loadFinanceReport(tx: Prisma.TransactionClient, tenantId: 
     }
   }
   bounded(rows)
+  if (id === 'item-profit' && rows.length) {
+    const monthStart = businessDateRangeInclusive(`${q.start.slice(0, 7)}-01`, `${q.start.slice(0, 7)}-01`).start
+    const previous = await tx.warehouseLedgerMovement.groupBy({
+      by: ['warehouseId', 'productId', 'inventoryUnit'],
+      where: { tenantId, warehouseId: { in: [...new Set(rows.map(r => String(r.warehouseId)))] }, productId: { in: [...new Set(rows.map(r => String(r.productId)))] }, effectiveAt: { lt: monthStart } },
+      _sum: { physicalDelta: true, valueDelta: true },
+    })
+    const priceByKey = new Map(previous.map(p => [JSON.stringify([p.warehouseId, p.productId, p.inventoryUnit]), !p._sum.physicalDelta?.gt(0) || p._sum.valueDelta == null ? null : Number(p._sum.valueDelta.div(p._sum.physicalDelta))]))
+    for (const row of rows) row.priorMonthClosingPrice = priceByKey.get(JSON.stringify([row.warehouseId, row.productId, row.unit])) ?? null
+  }
+  for (const row of rows) {
+    row.costPrice = !row.quantity || row.cost == null ? null : Number(dec(row.cost).div(row.quantity))
+    row.revenuePrice = !row.quantity || row.revenue == null ? null : Number(dec(row.revenue).div(row.quantity))
+  }
   const options = Object.fromEntries(['customer', 'center', 'warehouse', 'category', 'unit', 'source'].map(k => [k, [...new Set(rows.flatMap(r => r[k] == null ? [] : [String(r[k])]))].sort((a, b) => a.localeCompare(b, 'zh-CN'))]))
   const filtered = rows.filter(r => {
     for (const key of ['customer', 'center', 'warehouse', 'category', 'unit', 'source'] as const) if (q[key] && r[key] !== q[key]) return false
@@ -87,8 +100,9 @@ export async function loadFinanceReport(tx: Prisma.TransactionClient, tenantId: 
     return !q.keyword || `${r.itemName ?? ''} ${r.itemCode ?? ''} ${r.name ?? ''} ${r.code ?? ''}`.toLowerCase().includes(q.keyword.toLowerCase())
   })
   let result = aggregateFinance(filtered, id).filter(r => Object.entries(q.ranges).every(([key, v]) => r[key] != null && typeof r[key] === 'number' && (v.min == null || Number(r[key]) >= v.min) && (v.max == null || Number(r[key]) <= v.max)))
-  const sort = financeDefinitions[id].columns.some(c => c.key === q.sort) ? q.sort : id === 'profit-detail' ? 'date' : 'customer'
+  const sort = q.sort !== 'seq' && financeDefinitions[id].columns.some(c => c.key === q.sort) ? q.sort : id === 'profit-detail' ? 'date' : 'customer'
   result.sort((a, b) => { const av = a[sort], bv = b[sort]; if (av == null) return bv == null ? 0 : 1; if (bv == null) return -1; return (typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv), 'zh-CN', { numeric: true })) * (q.direction === 'desc' ? -1 : 1) || String(a.id).localeCompare(String(b.id)) })
+  result = numberReportRows(result, financeDefinitions[id].columns)
   const total = result.length, page = Math.min(q.page, Math.max(1, Math.ceil(total / q.pageSize)))
   const warnings = []
   if (filtered.some(r => r.cost == null)) warnings.push('部分配送尚无成本台账，成本及相关毛利显示“—”；未记成本行按配送单当前实发金额展示。')

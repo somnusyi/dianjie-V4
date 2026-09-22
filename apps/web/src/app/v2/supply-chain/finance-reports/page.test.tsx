@@ -11,7 +11,7 @@ vi.mock('next/link', () => ({ default: ({ href, children }: any) => <a href={hre
 let root: ReturnType<typeof createRoot> | null = null
 let container: HTMLDivElement
 function render() { container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container); act(() => root!.render(<Page />)) }
-const data = (customer: string) => ({ id: 'group-profit', rows: [{ id: customer, customer, center: '仓库', profit: 10, revenue: 30, cost: 20 }], total: 1, page: 1, note: '业务口径', warnings: [], options: {} })
+const data = (customer: string) => ({ id: 'group-profit', columns: [{ key: 'customer', label: '客户名称' }], rows: [{ id: customer, customer, center: '仓库', profit: 10, revenue: 30, cost: 20 }], total: 1, page: 1, note: '业务口径', warnings: [], options: {} })
 afterEach(() => { act(() => root?.unmount()); container?.remove(); mock.api.mockReset(); mock.report = 'group-profit' })
 describe('financial reports API states', () => {
   it('shows access failure instead of displaying sample financial data', async () => {

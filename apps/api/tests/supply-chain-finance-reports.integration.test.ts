@@ -30,6 +30,7 @@ describe('supply-chain financial reports against PostgreSQL', () => {
     await move({ effectiveAt: new Date('2026-09-21T16:00:00Z') }) // next business day, excluded
     // An ordinary purchase/manual inbound is not a sales return.
     await move({ type: 'MANUAL_INBOUND', sourceType: 'WarehouseManualInbound', sourceId: 'inbound', physicalDelta: 100, valueDelta: 500 })
+    await move({ type: 'OPENING_BALANCE', sourceType: 'OpeningFixture', physicalDelta: 40, valueDelta: 200, effectiveAt: new Date('2026-08-01T00:00:00Z') })
     const historic = await move({ effectiveAt: new Date('2026-08-30T00:00:00Z') })
     await move({ type: 'REVERSAL', sourceType: 'DeliveryOrderShipCancel', sourceId: 'cancel', sourceLineId: historic.id, physicalDelta: 2, valueDelta: 10, originalQuantity: 0.2, inventoryQuantity: 2 })
     await app.register(jwt, { secret: 'finance-report-integration-only' })
@@ -62,11 +63,12 @@ describe('supply-chain financial reports against PostgreSQL', () => {
     const res = await report('profit-detail'); expect(res.statusCode, res.body).toBe(200)
     const rows = res.json().rows
     expect(rows).toHaveLength(3)
+    expect(rows[0]).toMatchObject({ seq: 1, costPrice: 5, revenuePrice: 10, beforeRevenue: null, recognizedDate: null, recognizedCost: null })
     expect(rows.find((r: any) => r.source === '配送出库')).toMatchObject({ name: '客户一', code: 'C01', quantity: 20, cost: 100, revenue: 200, date: '2026-09-01' })
     expect(rows.find((r: any) => r.source === '返货入库')).toMatchObject({ quantity: -5, cost: -25, revenue: -50, date: '2026-09-21' })
     expect(rows.find((r: any) => r.source === '配送撤销/减量')).toMatchObject({ quantity: -2, revenue: -20, cost: -10 })
     expect((await report('group-profit')).json().rows[0]).toMatchObject({ revenue: 130, cost: 65, profit: 65 })
-    expect((await report('item-profit')).json().rows[0]).toMatchObject({ itemName: '历史名称', quantity: 13, revenue: 130, cost: 65, rate: 0.5, averageRevenue: 10, averageCost: 5 })
+    expect((await report('item-profit')).json().rows[0]).toMatchObject({ itemName: '历史名称', quantity: 13, revenue: 130, cost: 65, rate: 0.5, averageRevenue: 10, averageCost: 5, priorMonthClosingPrice: 5 })
   })
   it('filters before grouping; numeric filters apply after aggregation; stable pagination and full Excel export', async () => {
     expect((await report('profit-detail', `&source=${encodeURIComponent('返货入库')}`)).json().total).toBe(1)
@@ -74,7 +76,7 @@ describe('supply-chain financial reports against PostgreSQL', () => {
     expect((await report('profit-detail', '&keyword=nonexistent')).json().total).toBe(0)
     expect((await report('profit-detail', `&customer=${encodeURIComponent('客户一')}&document=DO-FIN`)).json().total).toBe(3)
     const page = (await report('profit-detail', '&pageSize=1&page=2&sort=revenue&direction=desc')).json()
-    expect(page.rows).toHaveLength(1); expect(page.rows[0].revenue).toBe(-20)
+    expect(page.rows[0].seq).toBe(2); expect(page.rows).toHaveLength(1); expect(page.rows[0].revenue).toBe(-20)
     for (const id of ['group-profit', 'item-profit', 'profit-detail']) {
       const list = (await report(id)).json()
       const exported = await report(id, '&pageSize=1&export=1'); expect(exported.statusCode).toBe(200)

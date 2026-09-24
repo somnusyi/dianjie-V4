@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { FinanceReportMenu } from './finance-report-menu'
 import { InventoryReportMenu } from './inventory-report-menu'
+import { ManagementNav } from './management-nav'
 import type { ReactNode } from 'react'
 import { BottomNav } from '@/components/v2'
 
@@ -55,6 +56,8 @@ const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
   {
     title: '货品与仓库',
     items: [
+      { href: '/v2/supply-chain/inventory-management', label: '库存管理', description: '出入库单据与库存上下限', icon: '存' },
+      { href: '/v2/supply-chain/stocktake', label: '盘点管理', description: '盘点与盈亏单据', icon: '盘' },
       {
         href: '/v2/supply-chain/products',
         label: '商品管理',
@@ -88,7 +91,7 @@ const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
 const MOBILE_TABS = [
   { key: 'home', label: '工作台', icon: '⌂', href: '/v2/supply-chain/home' },
   { key: 'orders', label: '订单', icon: '☷', href: '/v2/supply-chain/fulfillment' },
-  { key: 'inventory', label: '库存', icon: '▦', href: '/v2/supply-chain/inventory' },
+  { key: 'inventory', label: '库存', icon: '▦', href: '/v2/supply-chain/inventory-management/purchase-in' },
   { key: 'more', label: '更多', icon: '◐', href: '/v2/supply-chain/analytics' },
 ]
 
@@ -114,6 +117,7 @@ function mobileActiveKey(pathname: string): string {
   // 库存相关子页归到 inventory
   if (
     pathname.startsWith('/v2/supply-chain/reports') ||
+    pathname.startsWith('/v2/supply-chain/stocktake') ||
     pathname.startsWith('/v2/supply-chain/inventory') ||
     pathname.startsWith('/v2/supply-chain/products') ||
     pathname.startsWith('/v2/supply-chain/categories') ||
@@ -162,6 +166,8 @@ export function SupplyChainShell({ children }: { children: ReactNode }) {
               <div className="space-y-1">
                 {group.items.map(item => {
                   const selected = active(pathname, item)
+                  if (item.href === '/v2/supply-chain/inventory-management') return <ManagementNav key={item.href} group="inventory" pathname={pathname} />
+                  if (item.href === '/v2/supply-chain/stocktake') return <ManagementNav key={item.href} group="stocktake" pathname={pathname} />
                   if (item.href === '/v2/supply-chain/finance-reports') return <FinanceReportMenu key={item.href} selected={selected} />
                   if (item.href === '/v2/supply-chain/inventory') return <InventoryReportMenu key={item.href} selected={selected || pathname.startsWith('/v2/supply-chain/reports')} />
                   return (
@@ -198,7 +204,7 @@ export function SupplyChainShell({ children }: { children: ReactNode }) {
 
       {/* 主内容区 — 移动端无左侧内边距，PC 有 lg:pl-64 */}
       <main className="min-h-screen lg:pl-64">
-        <div className={`mx-auto min-h-screen w-full ${(pathname.startsWith('/v2/supply-chain/reports') || pathname.startsWith('/v2/supply-chain/finance-reports')) ? '' : 'max-w-[1600px]'}`}>{children}</div>
+        <div className={`mx-auto min-h-screen w-full ${(pathname.startsWith('/v2/supply-chain/reports') || pathname.startsWith('/v2/supply-chain/finance-reports') || pathname.startsWith('/v2/supply-chain/inventory-management') || pathname.startsWith('/v2/supply-chain/stocktake')) ? '' : 'max-w-[1600px]'}`}>{children}</div>
       </main>
 
       {/* 移动端底部导航 — lg 以下显示 */}

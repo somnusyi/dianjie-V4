@@ -63,6 +63,8 @@ describe('SupplyChainShell 移动端导航', () => {
     ['/v2/supply-chain/fulfillment/order-1', 'orders'],
     ['/v2/supply-chain/orders', 'orders'],
     ['/v2/supply-chain/inventory/item-1', 'inventory'],
+    ['/v2/supply-chain/inventory-management/purchase-in', 'inventory'],
+    ['/v2/supply-chain/stocktake/count', 'inventory'],
     ['/v2/supply-chain/products', 'inventory'],
     ['/v2/supply-chain/differences', 'more'],
     ['/v2/supply-chain/stores/store-1', 'more'],

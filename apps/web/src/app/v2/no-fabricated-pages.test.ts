@@ -21,6 +21,8 @@ const V2_ROOT = path.join(__dirname)
 const STATIC_PAGE_ALLOWLIST: Record<string, string> = {
   'wecom-bridge/page.tsx': '企微 OAuth 跳转桥页，只做重定向',
   'boss/payment-onboarding/page.tsx': '收款接入 checklist，状态存 localStorage，不展示经营数据',
+  'supply-chain/inventory-management/page.tsx': '服务端仅重定向到采购入库页，不渲染业务数据',
+  'supply-chain/stocktake/page.tsx': '服务端仅重定向到盘点单页，不渲染业务数据',
 }
 
 function collectPages(dir: string, acc: string[] = []): string[] {

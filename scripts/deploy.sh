@@ -89,7 +89,8 @@ run "pnpm --filter @dianjie/db exec prisma generate"
 run "pnpm --filter @dianjie/api test"
 run "pnpm --filter @dianjie/api build"
 run "pnpm --filter @dianjie/web exec tsc --noEmit"
-run "pnpm --filter @dianjie/web build"
+# Override ignored local preview settings when compiling a production release.
+run "NEXT_PUBLIC_PREVIEW_TENANT_SLUG= NEXT_PUBLIC_API_URL= NEXT_PUBLIC_API_BASE=http://127.0.0.1:4004 pnpm --filter @dianjie/web build"
 
 # 校验产物存在
 [ -d apps/api/dist ] || { echo "❌ apps/api/dist 不存在"; exit 1; }

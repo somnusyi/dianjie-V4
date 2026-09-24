@@ -89,6 +89,7 @@ import { inventoryCountRoutes } from './routes/inventoryCounts'
 import { warehouseInventoryImportRoutes } from './routes/warehouseInventoryImports'
 import { supplyChainFinanceReportRoutes } from './routes/supplyChainFinanceReports'
 import { inventoryReportRoutes } from './routes/inventoryReports'
+import { inventoryManagementRoutes } from './routes/inventoryManagement'
 import { storeTransferRoutes } from './routes/storeTransfers'
 import { warehouseInventoryRoutes } from './routes/warehouseInventory'
 import { warehouseDocsRoutes } from './routes/warehouseDocs'
@@ -284,6 +285,7 @@ async function bootstrap() {
   app.register(warehouseInventoryImportRoutes, { prefix: '/api/warehouse-inventory-imports' })
   app.register(supplyChainFinanceReportRoutes, { prefix: '/api/supply-chain/finance-reports' })
   app.register(inventoryReportRoutes, { prefix: '/api/inventory-reports' })
+  app.register(inventoryManagementRoutes, { prefix: '/api/inventory-management' })
   app.register(storeTransferRoutes, { prefix: '/api/store-transfers' })
   app.register(warehouseInventoryRoutes, { prefix: '/api/warehouse-inventory' })
   app.register(warehouseDocsRoutes, { prefix: '/api/warehouse-docs' })

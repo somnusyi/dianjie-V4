@@ -172,10 +172,10 @@ pnpm --filter @dianjie/api test
 pnpm --filter @dianjie/api build
 pnpm --filter @dianjie/web exec tsc --noEmit
 WEB_BUILD_LOG="${TMPDIR:-/tmp}/dianjie-v4-web-build-${SHORT_HEAD}-$$.log"
-if ! WEB_PORT="${V4_BUILD_GUARD_PORT:-3299}" pnpm --filter @dianjie/web build >"$WEB_BUILD_LOG" 2>&1; then
+if ! NEXT_PUBLIC_PREVIEW_TENANT_SLUG= NEXT_PUBLIC_API_URL= NEXT_PUBLIC_API_BASE=http://127.0.0.1:4004 WEB_PORT="${V4_BUILD_GUARD_PORT:-3299}" pnpm --filter @dianjie/web build >"$WEB_BUILD_LOG" 2>&1; then
   echo "   ⚠ Web 首次正式构建失败，保留完整日志并清缓存重试一次"
   tail -80 "$WEB_BUILD_LOG"
-  if ! WEB_PORT="${V4_BUILD_GUARD_PORT:-3299}" pnpm --filter @dianjie/web build >"$WEB_BUILD_LOG" 2>&1; then
+  if ! NEXT_PUBLIC_PREVIEW_TENANT_SLUG= NEXT_PUBLIC_API_URL= NEXT_PUBLIC_API_BASE=http://127.0.0.1:4004 WEB_PORT="${V4_BUILD_GUARD_PORT:-3299}" pnpm --filter @dianjie/web build >"$WEB_BUILD_LOG" 2>&1; then
     echo "❌ Web 正式构建重试后仍失败"
     tail -160 "$WEB_BUILD_LOG"
     exit 1

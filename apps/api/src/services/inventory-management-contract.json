@@ -1,0 +1,1103 @@
+[
+  {
+    "id": "purchase-in",
+    "group": "inventory",
+    "title": "采购入库",
+    "dateLabel": "入库日期",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "number"
+      },
+      {
+        "key": "no",
+        "label": "单据编号",
+        "kind": "text"
+      },
+      {
+        "key": "date",
+        "label": "入库日期",
+        "kind": "text"
+      },
+      {
+        "key": "upstream",
+        "label": "上游单据号",
+        "kind": "text"
+      },
+      {
+        "key": "org",
+        "label": "采购机构",
+        "kind": "text"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库",
+        "kind": "text"
+      },
+      {
+        "key": "supplier",
+        "label": "供应商",
+        "kind": "text"
+      },
+      {
+        "key": "amount",
+        "label": "金额",
+        "kind": "number"
+      },
+      {
+        "key": "status",
+        "label": "状态",
+        "kind": "text"
+      },
+      {
+        "key": "review",
+        "label": "复审状态",
+        "kind": "text"
+      },
+      {
+        "key": "createdAt",
+        "label": "创建时间",
+        "kind": "text"
+      },
+      {
+        "key": "creator",
+        "label": "创建人",
+        "kind": "text"
+      },
+      {
+        "key": "note",
+        "label": "备注",
+        "kind": "text"
+      },
+      {
+        "key": "attachments",
+        "label": "附件",
+        "kind": "text"
+      }
+    ],
+    "filters": [
+      {
+        "key": "org",
+        "label": "采购机构"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库"
+      },
+      {
+        "key": "no",
+        "label": "单据编号"
+      },
+      {
+        "key": "supplier",
+        "label": "供应商"
+      },
+      {
+        "key": "item",
+        "label": "物品"
+      },
+      {
+        "key": "status",
+        "label": "单据状态"
+      }
+    ],
+    "advanced": [
+      {
+        "key": "review",
+        "label": "复审状态"
+      },
+      {
+        "key": "supplierAccount",
+        "label": "供应商分账"
+      },
+      {
+        "key": "upstream",
+        "label": "上游单据号"
+      },
+      {
+        "key": "priceAdjusted",
+        "label": "被调过价"
+      },
+      {
+        "key": "note",
+        "label": "备注"
+      }
+    ]
+  },
+  {
+    "id": "purchase-return",
+    "group": "inventory",
+    "title": "采购退货出库",
+    "dateLabel": "出库日期",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "number"
+      },
+      {
+        "key": "no",
+        "label": "单据编号",
+        "kind": "text"
+      },
+      {
+        "key": "date",
+        "label": "出库日期",
+        "kind": "text"
+      },
+      {
+        "key": "upstream",
+        "label": "上游单据号",
+        "kind": "text"
+      },
+      {
+        "key": "org",
+        "label": "采购机构",
+        "kind": "text"
+      },
+      {
+        "key": "supplier",
+        "label": "供应商",
+        "kind": "text"
+      },
+      {
+        "key": "amount",
+        "label": "金额",
+        "kind": "number"
+      },
+      {
+        "key": "status",
+        "label": "状态",
+        "kind": "text"
+      },
+      {
+        "key": "review",
+        "label": "复审状态",
+        "kind": "text"
+      },
+      {
+        "key": "reconciliation",
+        "label": "对账状态",
+        "kind": "text"
+      },
+      {
+        "key": "invoice",
+        "label": "发票状态",
+        "kind": "text"
+      },
+      {
+        "key": "printed",
+        "label": "打印状态",
+        "kind": "text"
+      },
+      {
+        "key": "createdAt",
+        "label": "创建时间",
+        "kind": "text"
+      },
+      {
+        "key": "creator",
+        "label": "创建人",
+        "kind": "text"
+      },
+      {
+        "key": "note",
+        "label": "备注",
+        "kind": "text"
+      }
+    ],
+    "filters": [
+      {
+        "key": "org",
+        "label": "采购机构"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库"
+      },
+      {
+        "key": "no",
+        "label": "单据编号"
+      },
+      {
+        "key": "supplier",
+        "label": "供应商"
+      },
+      {
+        "key": "item",
+        "label": "物品"
+      },
+      {
+        "key": "status",
+        "label": "单据状态"
+      }
+    ],
+    "advanced": [
+      {
+        "key": "review",
+        "label": "复审状态"
+      },
+      {
+        "key": "reconciliation",
+        "label": "对账状态"
+      },
+      {
+        "key": "supplierAccount",
+        "label": "供应商分账"
+      },
+      {
+        "key": "upstream",
+        "label": "上游单据号"
+      },
+      {
+        "key": "invoice",
+        "label": "发票状态"
+      },
+      {
+        "key": "printed",
+        "label": "打印状态"
+      },
+      {
+        "key": "note",
+        "label": "备注"
+      }
+    ]
+  },
+  {
+    "id": "other-in",
+    "group": "inventory",
+    "title": "其他入库",
+    "dateLabel": "入库日期",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "number"
+      },
+      {
+        "key": "no",
+        "label": "单据编号",
+        "kind": "text"
+      },
+      {
+        "key": "date",
+        "label": "入库日期",
+        "kind": "text"
+      },
+      {
+        "key": "org",
+        "label": "机构",
+        "kind": "text"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库",
+        "kind": "text"
+      },
+      {
+        "key": "reason",
+        "label": "入库原因",
+        "kind": "text"
+      },
+      {
+        "key": "amount",
+        "label": "金额",
+        "kind": "number"
+      },
+      {
+        "key": "status",
+        "label": "状态",
+        "kind": "text"
+      },
+      {
+        "key": "review",
+        "label": "复审状态",
+        "kind": "text"
+      },
+      {
+        "key": "printed",
+        "label": "打印状态",
+        "kind": "text"
+      },
+      {
+        "key": "createdAt",
+        "label": "创建时间",
+        "kind": "text"
+      },
+      {
+        "key": "creator",
+        "label": "创建人",
+        "kind": "text"
+      },
+      {
+        "key": "note",
+        "label": "备注",
+        "kind": "text"
+      }
+    ],
+    "filters": [
+      {
+        "key": "org",
+        "label": "机构"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库"
+      },
+      {
+        "key": "no",
+        "label": "单据编号"
+      },
+      {
+        "key": "item",
+        "label": "物品"
+      },
+      {
+        "key": "status",
+        "label": "单据状态"
+      },
+      {
+        "key": "review",
+        "label": "复审状态"
+      }
+    ],
+    "advanced": [
+      {
+        "key": "reason",
+        "label": "入库原因"
+      },
+      {
+        "key": "thirdParty",
+        "label": "第三方单据号"
+      },
+      {
+        "key": "printed",
+        "label": "打印状态"
+      },
+      {
+        "key": "note",
+        "label": "备注"
+      }
+    ]
+  },
+  {
+    "id": "other-out",
+    "group": "inventory",
+    "title": "其他出库",
+    "dateLabel": "出库日期",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "number"
+      },
+      {
+        "key": "no",
+        "label": "单据编号",
+        "kind": "text"
+      },
+      {
+        "key": "date",
+        "label": "出库日期",
+        "kind": "text"
+      },
+      {
+        "key": "upstream",
+        "label": "上游单据号",
+        "kind": "text"
+      },
+      {
+        "key": "org",
+        "label": "机构",
+        "kind": "text"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库",
+        "kind": "text"
+      },
+      {
+        "key": "reason",
+        "label": "出库原因",
+        "kind": "text"
+      },
+      {
+        "key": "amount",
+        "label": "金额",
+        "kind": "number"
+      },
+      {
+        "key": "status",
+        "label": "状态",
+        "kind": "text"
+      },
+      {
+        "key": "review",
+        "label": "复审状态",
+        "kind": "text"
+      },
+      {
+        "key": "printed",
+        "label": "打印状态",
+        "kind": "text"
+      },
+      {
+        "key": "createdAt",
+        "label": "创建时间",
+        "kind": "text"
+      },
+      {
+        "key": "creator",
+        "label": "创建人",
+        "kind": "text"
+      },
+      {
+        "key": "note",
+        "label": "备注",
+        "kind": "text"
+      }
+    ],
+    "filters": [
+      {
+        "key": "org",
+        "label": "机构"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库"
+      },
+      {
+        "key": "no",
+        "label": "单据编号"
+      },
+      {
+        "key": "item",
+        "label": "物品"
+      },
+      {
+        "key": "status",
+        "label": "单据状态"
+      },
+      {
+        "key": "review",
+        "label": "复审状态"
+      }
+    ],
+    "advanced": [
+      {
+        "key": "reason",
+        "label": "出库原因"
+      },
+      {
+        "key": "upstream",
+        "label": "上游单据号"
+      },
+      {
+        "key": "thirdParty",
+        "label": "第三方单据号"
+      },
+      {
+        "key": "printed",
+        "label": "打印状态"
+      },
+      {
+        "key": "note",
+        "label": "备注"
+      }
+    ]
+  },
+  {
+    "id": "count",
+    "group": "stocktake",
+    "title": "盘点单",
+    "dateLabel": "盘点日期",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "number"
+      },
+      {
+        "key": "no",
+        "label": "单据编号",
+        "kind": "text"
+      },
+      {
+        "key": "date",
+        "label": "盘点日期",
+        "kind": "text"
+      },
+      {
+        "key": "org",
+        "label": "机构名称",
+        "kind": "text"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库",
+        "kind": "text"
+      },
+      {
+        "key": "itemCount",
+        "label": "物品数",
+        "kind": "number"
+      },
+      {
+        "key": "bookAmount",
+        "label": "账面金额",
+        "kind": "number"
+      },
+      {
+        "key": "actualAmount",
+        "label": "实盘金额",
+        "kind": "number"
+      },
+      {
+        "key": "differenceAmount",
+        "label": "盈亏金额",
+        "kind": "number"
+      },
+      {
+        "key": "countType",
+        "label": "盘点类型",
+        "kind": "text"
+      },
+      {
+        "key": "countMethod",
+        "label": "盘点方式",
+        "kind": "text"
+      },
+      {
+        "key": "status",
+        "label": "状态",
+        "kind": "text"
+      },
+      {
+        "key": "difference",
+        "label": "盘点差异",
+        "kind": "text"
+      },
+      {
+        "key": "auditedAt",
+        "label": "审核日期",
+        "kind": "text"
+      },
+      {
+        "key": "printed",
+        "label": "打印状态",
+        "kind": "text"
+      },
+      {
+        "key": "createdAt",
+        "label": "创建时间",
+        "kind": "text"
+      },
+      {
+        "key": "creator",
+        "label": "创建人",
+        "kind": "text"
+      }
+    ],
+    "filters": [
+      {
+        "key": "no",
+        "label": "单据编号"
+      },
+      {
+        "key": "org",
+        "label": "机构"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库"
+      },
+      {
+        "key": "difference",
+        "label": "盘点差异"
+      },
+      {
+        "key": "item",
+        "label": "物品"
+      },
+      {
+        "key": "status",
+        "label": "单据状态"
+      }
+    ],
+    "advanced": [
+      {
+        "key": "countType",
+        "label": "盘点类型"
+      },
+      {
+        "key": "printed",
+        "label": "打印状态"
+      },
+      {
+        "key": "note",
+        "label": "备注"
+      },
+      {
+        "key": "countPlan",
+        "label": "盘点方案编号"
+      }
+    ]
+  },
+  {
+    "id": "multi-count",
+    "group": "stocktake",
+    "title": "多人盘点单",
+    "dateLabel": "盘点日期",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "number"
+      },
+      {
+        "key": "no",
+        "label": "单据编号",
+        "kind": "text"
+      },
+      {
+        "key": "date",
+        "label": "盘点日期",
+        "kind": "text"
+      },
+      {
+        "key": "org",
+        "label": "机构",
+        "kind": "text"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库",
+        "kind": "text"
+      },
+      {
+        "key": "itemCount",
+        "label": "物品数",
+        "kind": "number"
+      },
+      {
+        "key": "status",
+        "label": "状态",
+        "kind": "text"
+      },
+      {
+        "key": "auditedAt",
+        "label": "审核日期",
+        "kind": "text"
+      },
+      {
+        "key": "generated",
+        "label": "是否生成盘点单",
+        "kind": "text"
+      },
+      {
+        "key": "printed",
+        "label": "打印状态",
+        "kind": "text"
+      },
+      {
+        "key": "createdAt",
+        "label": "创建日期",
+        "kind": "text"
+      },
+      {
+        "key": "creator",
+        "label": "创建人",
+        "kind": "text"
+      }
+    ],
+    "filters": [
+      {
+        "key": "no",
+        "label": "单据编号"
+      },
+      {
+        "key": "org",
+        "label": "机构"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库"
+      },
+      {
+        "key": "item",
+        "label": "物品"
+      },
+      {
+        "key": "status",
+        "label": "单据状态"
+      },
+      {
+        "key": "generated",
+        "label": "是否生成盘点单"
+      }
+    ],
+    "advanced": [
+      {
+        "key": "printed",
+        "label": "打印状态"
+      },
+      {
+        "key": "note",
+        "label": "备注"
+      }
+    ]
+  },
+  {
+    "id": "profit",
+    "group": "stocktake",
+    "title": "盘盈单",
+    "dateLabel": "单据日期",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "number"
+      },
+      {
+        "key": "no",
+        "label": "单据编号",
+        "kind": "text"
+      },
+      {
+        "key": "sourceNo",
+        "label": "来源单号",
+        "kind": "text"
+      },
+      {
+        "key": "date",
+        "label": "单据日期",
+        "kind": "text"
+      },
+      {
+        "key": "org",
+        "label": "机构",
+        "kind": "text"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库",
+        "kind": "text"
+      },
+      {
+        "key": "itemCount",
+        "label": "物品（项）",
+        "kind": "number"
+      },
+      {
+        "key": "status",
+        "label": "状态",
+        "kind": "text"
+      },
+      {
+        "key": "printed",
+        "label": "打印状态",
+        "kind": "text"
+      },
+      {
+        "key": "createdAt",
+        "label": "创建时间",
+        "kind": "text"
+      },
+      {
+        "key": "creator",
+        "label": "创建人",
+        "kind": "text"
+      },
+      {
+        "key": "note",
+        "label": "备注",
+        "kind": "text"
+      }
+    ],
+    "filters": [
+      {
+        "key": "org",
+        "label": "机构"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库"
+      },
+      {
+        "key": "no",
+        "label": "单据编号"
+      },
+      {
+        "key": "sourceNo",
+        "label": "来源单号"
+      },
+      {
+        "key": "item",
+        "label": "物品"
+      },
+      {
+        "key": "status",
+        "label": "单据状态"
+      }
+    ],
+    "advanced": [
+      {
+        "key": "thirdParty",
+        "label": "第三方单据号"
+      },
+      {
+        "key": "printed",
+        "label": "打印状态"
+      },
+      {
+        "key": "note",
+        "label": "备注"
+      }
+    ]
+  },
+  {
+    "id": "loss",
+    "group": "stocktake",
+    "title": "盘亏单",
+    "dateLabel": "单据日期",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "number"
+      },
+      {
+        "key": "no",
+        "label": "单据编号",
+        "kind": "text"
+      },
+      {
+        "key": "sourceNo",
+        "label": "来源单号",
+        "kind": "text"
+      },
+      {
+        "key": "date",
+        "label": "单据日期",
+        "kind": "text"
+      },
+      {
+        "key": "org",
+        "label": "机构",
+        "kind": "text"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库",
+        "kind": "text"
+      },
+      {
+        "key": "itemCount",
+        "label": "物品（项）",
+        "kind": "number"
+      },
+      {
+        "key": "status",
+        "label": "状态",
+        "kind": "text"
+      },
+      {
+        "key": "printed",
+        "label": "打印状态",
+        "kind": "text"
+      },
+      {
+        "key": "creator",
+        "label": "创建人",
+        "kind": "text"
+      },
+      {
+        "key": "createdAt",
+        "label": "创建时间",
+        "kind": "text"
+      },
+      {
+        "key": "note",
+        "label": "备注",
+        "kind": "text"
+      }
+    ],
+    "filters": [
+      {
+        "key": "org",
+        "label": "机构"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库"
+      },
+      {
+        "key": "no",
+        "label": "单据编号"
+      },
+      {
+        "key": "sourceNo",
+        "label": "来源单号"
+      },
+      {
+        "key": "item",
+        "label": "物品"
+      },
+      {
+        "key": "status",
+        "label": "单据状态"
+      }
+    ],
+    "advanced": [
+      {
+        "key": "thirdParty",
+        "label": "第三方单号"
+      },
+      {
+        "key": "printed",
+        "label": "打印状态"
+      },
+      {
+        "key": "note",
+        "label": "备注"
+      }
+    ]
+  },
+  {
+    "id": "limits",
+    "group": "inventory",
+    "title": "库存上下限",
+    "dateLabel": "",
+    "columns": [
+      {
+        "key": "seq",
+        "label": "序号",
+        "kind": "number"
+      },
+      {
+        "key": "orgCode",
+        "label": "机构编码",
+        "kind": "text"
+      },
+      {
+        "key": "org",
+        "label": "机构名称",
+        "kind": "text"
+      },
+      {
+        "key": "warehouseCode",
+        "label": "仓库编码",
+        "kind": "text"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库名称",
+        "kind": "text"
+      },
+      {
+        "key": "code",
+        "label": "物品编码",
+        "kind": "text"
+      },
+      {
+        "key": "name",
+        "label": "物品名称",
+        "kind": "text"
+      },
+      {
+        "key": "spec",
+        "label": "规格型号",
+        "kind": "text"
+      },
+      {
+        "key": "unit",
+        "label": "单位",
+        "kind": "text"
+      },
+      {
+        "key": "minDays",
+        "label": "最小库存天数",
+        "kind": "number"
+      },
+      {
+        "key": "safeDays",
+        "label": "安全库存天数",
+        "kind": "number"
+      },
+      {
+        "key": "maxDays",
+        "label": "最大库存天数",
+        "kind": "number"
+      },
+      {
+        "key": "avg7",
+        "label": "近7天日均出库量",
+        "kind": "number"
+      },
+      {
+        "key": "avg14",
+        "label": "近14天日均出库量",
+        "kind": "number"
+      },
+      {
+        "key": "avg21",
+        "label": "近21天日均出库量",
+        "kind": "number"
+      },
+      {
+        "key": "avg30",
+        "label": "近30天日均出库量",
+        "kind": "number"
+      },
+      {
+        "key": "avg60",
+        "label": "近60天日均出库量",
+        "kind": "number"
+      },
+      {
+        "key": "minQty",
+        "label": "库存下限数量",
+        "kind": "number"
+      },
+      {
+        "key": "maxQty",
+        "label": "库存上限数量",
+        "kind": "number"
+      },
+      {
+        "key": "safeQty",
+        "label": "安全库存",
+        "kind": "number"
+      },
+      {
+        "key": "currentQty",
+        "label": "当前库存",
+        "kind": "number"
+      }
+    ],
+    "filters": [
+      {
+        "key": "org",
+        "label": "机构"
+      },
+      {
+        "key": "warehouse",
+        "label": "仓库"
+      },
+      {
+        "key": "category",
+        "label": "物品类别"
+      },
+      {
+        "key": "item",
+        "label": "物品信息"
+      },
+      {
+        "key": "stockStatus",
+        "label": "库存状态"
+      }
+    ],
+    "advanced": []
+  }
+]

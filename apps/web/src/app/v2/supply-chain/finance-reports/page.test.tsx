@@ -19,7 +19,7 @@ describe('financial reports API states', () => {
     await act(async () => render())
     expect(container.textContent).toContain('无权查看财务报表')
     expect(container.textContent).not.toContain('示例门店')
-    expect([...container.querySelectorAll('button')].find(b => b.textContent === '导出 Excel')?.disabled).toBe(true)
+    expect([...container.querySelectorAll('button')].find(b => b.textContent === '导出列表')?.disabled).toBe(true)
   })
   it('ignores a stale response after a new query completes', async () => {
     const pending: Array<(value: any) => void> = []

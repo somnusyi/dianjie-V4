@@ -79,7 +79,7 @@ pnpm --filter @dianjie/api test
 pnpm --filter @dianjie/web test
 pnpm --filter @dianjie/web exec tsc --noEmit
 pnpm --filter @dianjie/api build
-NEXT_PUBLIC_API_BASE=http://127.0.0.1:4005 WEB_PORT=3299 pnpm --filter @dianjie/web build
+NEXT_PUBLIC_PREVIEW_TENANT_SLUG="$UAT_TENANT_SLUG" NEXT_PUBLIC_API_URL= NEXT_PUBLIC_API_BASE=http://127.0.0.1:4005 WEB_PORT=3299 pnpm --filter @dianjie/web build
 
 test -f apps/api/dist/index.js
 test -f apps/api/scripts/seed-upstream-uat.ts

@@ -157,10 +157,12 @@ export function receiptStatusTone(status: string): 'green' | 'gray' | 'orange' |
 }
 
 type ReceiptItem = {
+  quantity?: string | number | null
+  productUnitSnapshot?: string | null
   productNameSnapshot?: string | null
   productCodeSnapshot?: string | null
   productSpecSnapshot?: string | null
-  product?: { name?: string; code?: string; spec?: string }
+  product?: { name?: string; code?: string; spec?: string; unit?: string }
 }
 
 /**
@@ -178,12 +180,14 @@ export function projectReceiptRow(row: any) {
     createdAt: row.createdAt,
     store: row.store ? { id: row.store.id, name: row.store.name, no: row.store.no } : null,
     supplier: row.supplier ? { id: row.supplier.id, name: row.supplier.name, no: row.supplier.no } : null,
-    items: Array.isArray(row.items) ? row.items.map(projectReceiptItem) : [],
+    items: Array.isArray(row.items) ? (row.items as ReceiptItem[]).map(projectReceiptItem) : [],
   }
 }
 
 function projectReceiptItem(item: ReceiptItem) {
   return {
+    quantity: item.quantity ?? null,
+    unit: item.productUnitSnapshot ?? item.product?.unit ?? null,
     productNameSnapshot: item.productNameSnapshot ?? item.product?.name ?? null,
     productCodeSnapshot: item.productCodeSnapshot ?? item.product?.code ?? null,
     productSpecSnapshot: item.productSpecSnapshot ?? item.product?.spec ?? null,

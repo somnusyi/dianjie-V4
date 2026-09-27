@@ -325,6 +325,11 @@
         "key": "note",
         "label": "备注",
         "kind": "text"
+      },
+      {
+        "key": "attachments",
+        "label": "附件",
+        "kind": "text"
       }
     ],
     "filters": [

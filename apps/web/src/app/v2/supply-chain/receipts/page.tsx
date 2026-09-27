@@ -6,7 +6,7 @@
  */
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { EmptyState, FriendlyError, SkeletonCard } from '@/components/v2/skeleton'
 import { apiFetch } from '@/lib/v2-auth'
@@ -33,6 +33,7 @@ type Store = { id: string; no: string; name: string }
 type ProjectedReceipt = ReturnType<typeof projectReceiptRow>
 
 export default function InternalSupplyChainReceiptsPage() {
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   const [receipts, setReceipts] = useState<ProjectedReceipt[] | null>(null)
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -208,14 +209,14 @@ export default function InternalSupplyChainReceiptsPage() {
                 </thead>
                 <tbody className="divide-y divide-border">
                   {receipts.map(receipt => (
-                    <tr key={receipt.id} className="hover:bg-bg/50">
-                      <td className="px-4 py-3 font-num"><b>{receipt.no}</b></td>
+                    <Fragment key={receipt.id}><tr className="hover:bg-bg/50">
+                      <td className="px-4 py-3 font-num"><button className="underline" aria-expanded={expandedId === receipt.id} onClick={() => setExpandedId(value => value === receipt.id ? null : receipt.id)}>{receipt.no} {expandedId === receipt.id ? '收起' : '展开明细'}</button></td>
                       <td className="px-4 py-3 text-gray2">{receipt.store?.name || '—'}</td>
                       <td className="px-4 py-3 text-gray2">{receipt.supplier?.name || '—'}</td>
                       <td className="px-4 py-3 font-num text-gray2">{receiptDateText(receipt.deliveryDate)}</td>
                       <td className="px-4 py-3"><Chip tone={receiptStatusTone(receipt.status)}>{formatReceiptStatusLabel(receipt.status)}</Chip></td>
                       <td className="px-4 py-3 text-gray2">{receiptItemSummary(receipt.items)}</td>
-                    </tr>
+                    </tr>{expandedId === receipt.id && <tr><td colSpan={6} className="bg-bg p-4"><ul className="grid gap-2 sm:grid-cols-2">{receipt.items.map((item, index) => <li key={index} className="rounded-lg border bg-white p-3"><b>{item.productNameSnapshot || '未记录商品'}</b><p>{item.productCodeSnapshot} · {item.productSpecSnapshot || '—'}</p><p>实收 {item.quantity ?? '未记录'} {item.unit || ''}</p></li>)}</ul>{receipt.note && <p className="mt-2">备注：{receipt.note}</p>}</td></tr>}</Fragment>
                   ))}
                 </tbody>
               </table>

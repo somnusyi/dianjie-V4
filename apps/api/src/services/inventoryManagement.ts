@@ -62,7 +62,7 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
       tx.user.findMany({ where: { tenantId, id: { in: docs.flatMap(d => d.createdById ? [d.createdById] : []) } }, select: { id: true, name: true } }),
     ])
     const names = new Map(users.map(u => [u.id, u.name])); const warehouseNames = new Map(warehouses.map(w => [w.id, w.name]))
-    rows = docs.map(d => ({ id: d.id, no: d.docNo, date: day(d.effectiveAt), org, warehouse: warehouseNames.get(d.warehouseId) ?? null,
+    rows = docs.map(d => ({ recordType: 'WAREHOUSE_DOC', detailId: d.id, attachments: Array.isArray(d.attachments) ? `${d.attachments.length} 项` : '0 项', id: d.id, no: d.docNo, date: day(d.effectiveAt), org, warehouse: warehouseNames.get(d.warehouseId) ?? null,
       reason: d.reason, amount: Number(d.totalAmount), status: d.status === 'CONFIRMED' ? '已审核' : '未审核',
       review: d.reviewStatus === 'REVIEWED' ? '已复审' : '未复审', createdAt: timestamp(d.createdAt), creator: d.createdById ? names.get(d.createdById) ?? null : null, note: d.note,
     }))
@@ -95,13 +95,13 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
     const names = new Map(users.map(u => [u.id, u.name])); const warehouseNames = new Map(warehouses.map(w => [w.id, w.name]))
     const statuses = { DRAFT: '草稿', INSPECTING: '验收中', PENDING_REVIEW: '待复核', POSTED: '已入库', REVERSED: '已冲销' }
     const purchaseRows = [
-      ...receipts.map(r => ({ id: `receipt:${r.id}`, rawId: r.id, sourceRank: 0, sortAt: r.postedAt,
+      ...receipts.map(r => ({ recordType: 'UPSTREAM_RECEIPT', detailId: r.id, id: `receipt:${r.id}`, rawId: r.id, sourceRank: 0, sortAt: r.postedAt,
         no: r.no, date: day(r.postedAt), upstream: r.purchaseOrder.no, org, warehouse: warehouseNames.get(r.warehouseId) ?? null,
         supplier: r.supplier.name, amount: Number(r.payableAmount), status: statuses[r.status], review: null,
         createdAt: timestamp(r.createdAt), creator: names.get(r.createdById) ?? null, note: r.note,
         attachments: Array.isArray(r.evidence) ? `${r.evidence.length} 项` : null,
       })),
-      ...manualDocs.map(d => ({ id: `warehouse-doc:${d.id}`, rawId: d.id, sourceRank: 1, sortAt: d.effectiveAt,
+      ...manualDocs.map(d => ({ recordType: 'WAREHOUSE_DOC', detailId: d.id, id: `warehouse-doc:${d.id}`, rawId: d.id, sourceRank: 1, sortAt: d.effectiveAt,
         no: d.docNo, date: day(d.effectiveAt), upstream: null, org, warehouse: warehouseNames.get(d.warehouseId) ?? null,
         supplier: d.supplierName, amount: Number(d.totalAmount), status: '已入库', review: d.reviewStatus === 'REVIEWED' ? '已复审' : '未复审',
         createdAt: timestamp(d.createdAt), creator: d.createdById ? names.get(d.createdById) ?? null : null, note: d.note,

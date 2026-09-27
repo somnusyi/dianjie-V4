@@ -74,3 +74,9 @@ describe('rolesForV2Path', () => {
     expect(rolesForV2Path('/v2/finance-pc/home')).toBeUndefined()
   })
 })
+
+it('财务仅新增总仓盘点审核入口，供应链可打开自己的消息', () => {
+  expect(rolesForV2Path('/v2/supply-chain/stocktake/work')).toContain('FINANCE')
+  expect(rolesForV2Path('/v2/supply-chain/procurement')).not.toContain('FINANCE')
+  expect(isV2PathAllowedForRole('/v2/notifications', 'SUPPLY_CHAIN')).toBe(true)
+})

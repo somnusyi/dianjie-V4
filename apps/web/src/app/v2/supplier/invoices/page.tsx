@@ -169,7 +169,7 @@ export default function SupplierInvoicesPage() {
                     </div>
                     <p className="text-micro text-gray3 truncate">
                       {r.store?.name || '门店'} · 入库 {fmt(r.deliveryDate)}
-                      {sched && ` · 应付 ${fmt(sched.dueAt)}`}
+                      {sched && <span className={sched.status !== 'PAID' && new Date(sched.dueAt).getTime() < Date.now() ? 'text-red-fg font-semibold' : ''}> · 应付 {fmt(sched.dueAt)}{sched.status !== 'PAID' && new Date(sched.dueAt).getTime() < Date.now() ? '（已逾期）' : ''}</span>}
                     </p>
                   </div>
                 </li>

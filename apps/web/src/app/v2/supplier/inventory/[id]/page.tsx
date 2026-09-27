@@ -107,6 +107,7 @@ export default function SkuDetailPage() {
   if (!item) {
     return (
       <div className="min-h-screen bg-bg p-4">
+
         <a href="/v2/supplier/inventory" className="text-caption text-gray2">‹ 返回库存</a>
         {error ? <p className="text-red-fg mt-4">{error}</p> : <p className="text-gray3 mt-4">加载中…</p>}
       </div>
@@ -115,6 +116,7 @@ export default function SkuDetailPage() {
 
   return (
     <div className="min-h-screen bg-bg pb-20">
+      {item?.nearestExpiry && item.daysToExpiry != null && item.daysToExpiry <= 7 && <p role="status" className="m-4 rounded-xl bg-red-50 p-3 text-red-700">{item.daysToExpiry < 0 ? '库存有已过期批次，请核对处理' : '库存有7天内临期批次，请优先检查'} · {item.nearestExpiry}</p>}
       <header className="px-4 pt-4 pb-2 flex items-center gap-3">
         <a href="/v2/supplier/inventory" className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</a>
         <h1 className="text-h1 flex-1 truncate">{item.name}</h1>
@@ -198,7 +200,7 @@ export default function SkuDetailPage() {
                 <div className="text-micro text-gray3 mt-1 flex flex-wrap gap-x-3 gap-y-1">
                   <span>初始 {batch.initialQty}</span>
                   {batch.manufactureDate && <span>生产 {batch.manufactureDate}</span>}
-                  {batch.expiryDate && <span className="text-amber-fg">到期 {batch.expiryDate}</span>}
+                  {batch.expiryDate && <span className={new Date(batch.expiryDate).getTime() < Date.now() + 7 * 86400000 ? "text-red-fg font-semibold" : "text-amber-fg"}>到期 {batch.expiryDate}{new Date(batch.expiryDate).getTime() < Date.now() ? "（已过期）" : new Date(batch.expiryDate).getTime() < Date.now() + 7 * 86400000 ? "（7天内临期）" : ""}</span>}
                   <span>入账 {new Date(batch.createdAt).toLocaleDateString('zh-CN')}</span>
                 </div>
                 {batch.source?.reason && <div className="text-caption text-gray2 mt-1">{batch.source.reason}</div>}

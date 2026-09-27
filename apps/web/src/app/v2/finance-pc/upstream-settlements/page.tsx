@@ -28,10 +28,14 @@ type Statement = {
 
 export default function UpstreamSettlementsPage() {
   const [items, setItems] = useState<Statement[] | null>(null)
+  const [focusId, setFocusId] = useState('')
   const [query, setQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [working, setWorking] = useState<string | null>(null)
+
+  useEffect(() => { setFocusId(new URLSearchParams(window.location.search).get('doc') || '') }, [])
+  useEffect(() => { if (items && focusId) document.getElementById(`settlement-${focusId}`)?.scrollIntoView?.({ behavior: 'smooth', block: 'center' }) }, [items, focusId])
 
   const load = useCallback(async () => {
     setError(null)
@@ -94,6 +98,7 @@ export default function UpstreamSettlementsPage() {
         {error && <div className="mb-4 rounded-card bg-red-bg p-3 text-caption text-red-fg">{error}</div>}
         {notice && <div className="mb-4 rounded-card bg-green-bg p-3 text-caption text-green-fg">{notice}</div>}
 
+        <a href="/v2/supply-chain/stocktake/work" className="mb-4 inline-block underline">总仓盘点审核</a>
         <section className="mb-4 grid gap-3 sm:grid-cols-3">
           <Stat label="待财务锁定" value={`${summary.confirmed} 单`} danger={summary.confirmed > 0} />
           <Stat label="待锁定应付" value={money(summary.payable)} danger={summary.confirmed > 0} />
@@ -117,7 +122,7 @@ export default function UpstreamSettlementsPage() {
             <tbody>
               {items === null && <tr><td colSpan={8} className="px-4 py-10 text-center text-caption text-gray3">加载中…</td></tr>}
               {items !== null && filtered.length === 0 && <tr><td colSpan={8} className="px-4 py-10 text-center text-caption text-gray3">暂无上游采购对账单</td></tr>}
-              {filtered.map(item => <tr key={item.id} className="border-t border-border hover:bg-[#FAF8F2]">
+              {filtered.map(item => <tr id={`settlement-${item.id}`} key={item.id} className="border-t border-border hover:bg-[#FAF8F2]">
                 <td className="px-4 py-3"><b className="font-num text-body">{item.no}</b><div className="text-micro text-gray3">V{item.version} · {item._count.lines} 条</div></td>
                 <td className="px-4 py-3 text-caption">{item.supplier.name}<div className="text-micro text-gray3">{item.supplier.no}</div></td>
                 <td className="px-4 py-3 font-num text-caption">{shortDate(item.periodStart)}—{shortDate(item.periodEnd)}</td>

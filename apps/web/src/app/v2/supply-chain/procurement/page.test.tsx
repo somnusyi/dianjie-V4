@@ -370,9 +370,9 @@ describe('上游采购收货后补报', () => {
     const { container, root } = renderPage()
     await waitFor(() => container.textContent?.includes('合同与价格') ?? false)
     act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '合同与价格')?.click())
-    await waitFor(() => container.textContent?.includes('查看合同内容') ?? false)
+    await waitFor(() => container.textContent?.includes(contract.contractNo) ?? false)
 
-    const open = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '查看合同内容')
+    const open = Array.from(container.querySelectorAll('button')).find(button => button.getAttribute('aria-label') === `查看合同 ${contract.title} 内容`)
     act(() => open?.click())
     await waitFor(() => container.textContent?.includes('合同内容 · 2026年菌菇供货合同') ?? false)
 
@@ -396,9 +396,9 @@ describe('上游采购收货后补报', () => {
     const { container, root } = renderPage()
     await waitFor(() => container.textContent?.includes('月度对账') ?? false)
     act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '月度对账')?.click())
-    await waitFor(() => container.textContent?.includes('查看来源明细') ?? false)
+    await waitFor(() => container.textContent?.includes(statement.no) ?? false)
 
-    const open = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '查看来源明细')
+    const open = Array.from(container.querySelectorAll('button')).find(button => button.textContent === statement.no)
     await act(async () => { open?.click() })
     await waitFor(() => container.textContent?.includes(`对账单明细 · ${statement.no}`) ?? false)
 

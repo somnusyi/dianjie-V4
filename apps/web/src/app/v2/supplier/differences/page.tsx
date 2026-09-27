@@ -95,7 +95,7 @@ export default function SupplierDifferencesPage() {
     openConfirm({
       title: action === 'approve' ? `${meta.supplierActionLabel} ${claim.no}` : `对 ${claim.no} 提出异议`,
       body: action === 'approve'
-        ? supplierLossClaimSettlementHint(claim.payableBasis)
+        ? `${supplierLossClaimSettlementHint(claim.payableBasis)} 本次涉及 ¥${Number(claim.totalLossAmount || 0).toFixed(2)}，请核对后确认。`
         : '请填写异议依据。提交后由总厨仲裁，相关应付保持冻结。',
       confirmLabel: action === 'approve' ? meta.supplierActionLabel : '提交异议',
       tone: action === 'approve' ? 'primary' : 'danger',
@@ -214,7 +214,7 @@ export default function SupplierDifferencesPage() {
                   {claim.purchaseOrder && <a href={internalSupplyChain ? `/v2/supply-chain/fulfillment/${claim.purchaseOrder.id}` : `/v2/supplier/orders/${claim.purchaseOrder.id}`} className="rounded-cta border border-border px-3 py-2 text-caption text-gray2">订单</a>}
                   {!internalSupplyChain && claim.status === 'PENDING' && <>
                     <button type="button" disabled={submitting === claim.id} onClick={() => handle(claim, 'reject')} className="rounded-cta border border-red px-3 py-2 text-caption text-red-fg disabled:opacity-40">异议</button>
-                    <button type="button" disabled={submitting === claim.id} onClick={() => handle(claim, 'approve')} className="rounded-cta bg-ink px-3 py-2 text-button text-white disabled:opacity-40">确认</button>
+                    <button type="button" disabled={submitting === claim.id} onClick={() => handle(claim, 'approve')} className="rounded-cta bg-ink px-3 py-2 text-button text-white disabled:opacity-40">确认 ¥{Number(claim.totalLossAmount || 0).toFixed(2)}</button>
                   </>}
                 </div>
               </div>

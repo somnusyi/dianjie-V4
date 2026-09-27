@@ -54,7 +54,7 @@ const ORDER_COLUMNS: readonly OrderCenterTableColumn<ProjectedOrder>[] = [
     header: '订货单号',
     defaultWidth: 238,
     cellClassName: 'font-num',
-    renderCell: order => <b>{order.no}</b>,
+    renderCell: order => <div><b>{order.no}</b>{['CONFIRMED', 'DELIVERING', 'PENDING_CONFIRM', 'RECEIVED', 'COMPLETED'].includes(order.status) && <a className="mt-1 block text-micro underline" href={`/v2/supply-chain/fulfillment/${order.id}/delivery-note`}>打印送货单 / PDF</a>}</div>,
   },
   {
     id: 'store',

@@ -38,6 +38,7 @@ async function cleanupFixture() {
   await prisma.upstreamPurchaseOrderRevision.deleteMany({ where: { tenantId } })
   await prisma.upstreamPurchaseOrderLine.deleteMany({ where: { tenantId } })
   await prisma.upstreamPurchaseOrder.deleteMany({ where: { tenantId } })
+  await prisma.notification.deleteMany({ where: { tenantId } })
   await prisma.opLog.deleteMany({ where: { tenantId } })
   await prisma.businessSequence.deleteMany({ where: { tenantId } })
   await prisma.product.deleteMany({ where: { tenantId } })
@@ -208,7 +209,7 @@ describe('upstream post-receipt shortage for an entirely missing receipt line (i
 
       app = Fastify()
       app.decorate('authenticate', async (request: any) => {
-        request.user = { tenantId, userId, role: 'SUPPLY_CHAIN' }
+        request.user = request.headers['x-test-actor'] === 'supplier' ? { tenantId, userId, supplierId, role: 'SUPPLIER_OWNER' } : { tenantId, userId, role: 'SUPPLY_CHAIN' }
       })
       await app.register(upstreamProcurementRoutes, { prefix: '/api/upstream' })
       await app.ready()
@@ -338,5 +339,14 @@ describe('upstream post-receipt shortage for an entirely missing receipt line (i
       payableAmount: '0',
     })
     expect(shortageTraceLine.description).toContain('已在收货净额中体现，不重复扣款')
+    expect((await app.inject({ method: 'POST', url: `/api/upstream/settlement-statements/${statement.id}/send` })).statusCode).toBe(200)
+    const confirmed = await app.inject({ method: 'POST', url: `/api/upstream/settlement-statements/${statement.id}/confirm`, headers: { 'x-test-actor': 'supplier' } })
+    expect(confirmed.statusCode).toBe(200)
+    const notifications = await prisma.notification.findMany({ where: { tenantId, refId: statement.id } })
+    expect(notifications).toHaveLength(1)
+    expect(notifications[0]).toMatchObject({ recipientRole: 'FINANCE', refType: 'UpstreamSettlementStatement', type: 'UPSTREAM_SETTLEMENT_CONFIRMED' })
+    expect((await app.inject({ method: 'POST', url: `/api/upstream/settlement-statements/${statement.id}/confirm`, headers: { 'x-test-actor': 'supplier' } })).statusCode).toBe(409)
+    expect(await prisma.notification.count({ where: { tenantId, refId: statement.id } })).toBe(1)
+
   })
 })

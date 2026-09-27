@@ -2633,12 +2633,16 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     const supplierId = requireSupplierCapability(role, req.user.supplierId, 'upstream.settlement.confirm')
     const statementId = idSchema.safeParse(req.params.id)
     if (!statementId.success) return reply.status(400).send({ error: '对账单标识格式不正确' })
-    const changed = await prisma.upstreamSettlementStatement.updateMany({
-      where: { id: statementId.data, tenantId, supplierId, status: 'SENT_TO_SUPPLIER' },
-      data: { status: 'CONFIRMED', supplierConfirmedById: userId, supplierConfirmedAt: new Date() },
+    return prisma.$transaction(async tx => {
+      const changed = await tx.upstreamSettlementStatement.updateMany({
+        where: { id: statementId.data, tenantId, supplierId, status: 'SENT_TO_SUPPLIER' },
+        data: { status: 'CONFIRMED', supplierConfirmedById: userId, supplierConfirmedAt: new Date() },
+      })
+      if (changed.count !== 1) return reply.status(409).send({ error: '对账单不存在、无权访问或当前不可确认' })
+      const statement = await tx.upstreamSettlementStatement.findUniqueOrThrow({ where: { id: statementId.data }, include: { lines: true } })
+      await tx.notification.create({ data: { tenantId, recipientRole: 'FINANCE', type: 'UPSTREAM_SETTLEMENT_CONFIRMED', title: '上游对账已确认，待财务锁定', body: `对账单 ${statement.no} 已由供应商确认，请核对并锁定。`, refType: 'UpstreamSettlementStatement', refId: statement.id, dedupeKey: `upstream-settlement-confirmed:${statement.id}:${statement.version}` } })
+      return statement
     })
-    if (changed.count !== 1) return reply.status(409).send({ error: '对账单不存在、无权访问或当前不可确认' })
-    return prisma.upstreamSettlementStatement.findUnique({ where: { id: statementId.data }, include: { lines: true } })
   })
 
   app.post('/settlement-statements/:id/dispute', auth(app), async (req: any, reply: any) => {

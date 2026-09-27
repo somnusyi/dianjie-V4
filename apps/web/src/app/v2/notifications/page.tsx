@@ -20,6 +20,7 @@ type Notif = {
 }
 
 const TYPE_LABEL: Record<string, string> = {
+  UPSTREAM_SETTLEMENT_CONFIRMED: '对账待锁定',
   ORDER_SUBMITTED: '新订单',
   ORDER_SHIPPED: '已发货',
   RECEIPT_CONFIRMED: '已收货',
@@ -37,6 +38,7 @@ function refLink(n: Notif, role: string): string | null {
   const isChef     = role === 'CHEF_DIRECTOR' || role === 'CHEF'
   const isFinBoss  = role === 'FINANCE' || role === 'ADMIN' || role === 'SUPER_ADMIN' || role === 'BOSS'
 
+  if (n.refType === 'UpstreamSettlementStatement' && ['FINANCE', 'ADMIN', 'SUPER_ADMIN'].includes(role)) return `/v2/finance-pc/upstream-settlements?doc=${encodeURIComponent(n.refId)}`
   if (n.refType === 'PurchaseOrder') {
     if (isSupplier) return `/v2/supplier/orders/${n.refId}`
     if (isStore)    return `/v2/chef/purchase/po-success/${n.refId}`

@@ -235,7 +235,7 @@ export default function WarehouseDocsPage() {
           <tbody>
             {items.map(doc => (
               <tr key={doc.id} className="border-b border-border last:border-0 hover:bg-bg/50">
-                <td className="whitespace-nowrap px-4 py-3 font-num">{doc.docNo}</td>
+                <td className="whitespace-nowrap px-4 py-3 font-num">{doc.docNo}{doc.unauditedAt && doc.status === 'POSTED' && <span className="ml-2 text-red-700">被会计退回</span>}</td>
                 <td className="px-4 py-3"><span className="whitespace-nowrap">{fmtDay(doc.effectiveAt)}</span><div className="mt-0.5 whitespace-nowrap text-micro text-gray3">制单 {fmtTime(doc.createdAt)}</div></td>
                 <td className="px-4 py-3">{type === 'MANUAL_INBOUND' ? (doc.supplierName || '—') : (doc.reason || '—')}</td>
                 <td className="px-4 py-3 text-right font-num"><b>{money(doc.totalAmount)}</b><div className="mt-0.5 text-micro text-gray3">{doc.lineCount} 行商品</div></td>
@@ -245,7 +245,7 @@ export default function WarehouseDocsPage() {
                   <button
                     onClick={() => setDetailId(doc.id)}
                     className="whitespace-nowrap text-accent hover:underline"
-                  >查看{doc.status === 'POSTED' && canEdit ? '/改单' : ''}</button>
+                  >{doc.status === 'POSTED' && canEdit ? '编辑单据' : canAudit ? '查看并审核' : '查看单据'}</button>
                 </td>
               </tr>
             ))}

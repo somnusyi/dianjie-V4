@@ -65,6 +65,8 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
     rows = docs.map(d => ({ id: d.id, no: d.docNo, date: day(d.effectiveAt), org, warehouse: warehouseNames.get(d.warehouseId) ?? null,
       reason: d.reason, amount: Number(d.totalAmount), status: d.status === 'CONFIRMED' ? '已审核' : '未审核',
       review: d.reviewStatus === 'REVIEWED' ? '已复审' : '未复审', createdAt: timestamp(d.createdAt), creator: d.createdById ? names.get(d.createdById) ?? null : null, note: d.note,
+      source: id === 'other-in' ? '其他入库' : '其他出库',
+      attachments: Array.isArray(d.attachments) ? `${d.attachments.length} 项` : '0 项',
     }))
     note = '数据来自现有仓库单据。未记录的上游单号、第三方单号及打印状态显示为“—”。物品按单据中的名称查询。'
   } else if (id === 'purchase-in') {
@@ -99,12 +101,14 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
         no: r.no, date: day(r.postedAt), upstream: r.purchaseOrder.no, org, warehouse: warehouseNames.get(r.warehouseId) ?? null,
         supplier: r.supplier.name, amount: Number(r.payableAmount), status: statuses[r.status], review: null,
         createdAt: timestamp(r.createdAt), creator: names.get(r.createdById) ?? null, note: r.note,
+        source: '采购收货',
         attachments: Array.isArray(r.evidence) ? `${r.evidence.length} 项` : null,
       })),
       ...manualDocs.map(d => ({ id: `warehouse-doc:${d.id}`, rawId: d.id, sourceRank: 1, sortAt: d.effectiveAt,
         no: d.docNo, date: day(d.effectiveAt), upstream: null, org, warehouse: warehouseNames.get(d.warehouseId) ?? null,
         supplier: d.supplierName, amount: Number(d.totalAmount), status: '已入库', review: d.reviewStatus === 'REVIEWED' ? '已复审' : '未复审',
         createdAt: timestamp(d.createdAt), creator: d.createdById ? names.get(d.createdById) ?? null : null, note: d.note,
+        source: '手工入库',
         attachments: Array.isArray(d.attachments) && d.attachments.length > 0 ? `${d.attachments.length} 项` : null,
       })),
     ]
@@ -280,7 +284,7 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
   ]))
   const page = Math.min(q.page, Math.max(1, Math.ceil(total / q.pageSize)))
   const resultRows = (q.export ? rows : rows.slice((page - 1) * q.pageSize, page * q.pageSize)).map((r, i) => ({
-    id: r.id, ...Object.fromEntries(config.columns.map(c => [c.key, c.key === 'seq' ? (q.export ? 0 : (page - 1) * q.pageSize) + i + 1 : r[c.key] ?? null])),
+    id: r.id, source: r.source ?? null, ...Object.fromEntries(config.columns.map(c => [c.key, c.key === 'seq' ? (q.export ? 0 : (page - 1) * q.pageSize) + i + 1 : r[c.key] ?? null])),
   }))
   return { id, title: config.title, columns: config.columns, rows: resultRows, total, totals, page, pageSize: q.pageSize, options,
     supportedFilters: sourceAvailable ? [...supportedFilters] : [], sourceAvailable, note, generatedAt: timestamp(new Date()) }

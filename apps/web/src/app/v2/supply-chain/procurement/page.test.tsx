@@ -883,9 +883,9 @@ describe('上游采购收货后补报', () => {
         .find((button) => button.textContent === '月度对账')
         ?.click()
     )
-    await waitFor(() => container.textContent?.includes('查看来源明细') ?? false)
+    await waitFor(() => container.textContent?.includes(statement.no) ?? false)
 
-    const open = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '查看来源明细')
+    const open = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === statement.no)
     await act(async () => {
       open?.click()
     })

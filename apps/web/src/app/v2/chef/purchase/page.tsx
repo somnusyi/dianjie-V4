@@ -242,7 +242,7 @@ export default function ChefPurchasePage() {
           { key: 'home', label: '工作台', icon: '⌂' },
           { key: 'inventory', label: '库存', icon: '⛁' },
           { key: 'purchase', label: '采购', icon: '☰', badge: pendingRevisionOrders.length },
-          { key: 'check', label: '盘点', icon: '◐' },
+          { key: 'check', label: '报损', icon: '◐' },
         ]}
         activeKey={tab}
         onChange={(k) => {

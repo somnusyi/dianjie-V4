@@ -90,13 +90,13 @@ describe('purchase-in inventory management source coverage (integration)', () =>
       `receipt:receipt-${suffix}`,
       `warehouse-doc:manual-tie-${suffix}`,
     ])
-    expect(result.rows[0]).toMatchObject({ no: `MI-NEW-${suffix}`, supplier: '历史供应商快照', status: '已入库', review: '已复审', upstream: null, attachments: '1 项', creator: '合并测试经办人' })
-    expect(result.rows[1]).toMatchObject({ no: `RC-${suffix}`, supplier: '当前供应商名', status: '已入库', review: null, upstream: `PO-${suffix}`, attachments: '1 项' })
+    expect(result.rows[0]).toMatchObject({ no: `MI-NEW-${suffix}`, supplier: '历史供应商快照', status: '已入库', review: '已复审', upstream: null, source: '手工入库', attachments: '1 项', creator: '合并测试经办人' })
+    expect(result.rows[1]).toMatchObject({ no: `RC-${suffix}`, supplier: '当前供应商名', status: '已入库', review: null, upstream: `PO-${suffix}`, source: '采购收货', attachments: '1 项' })
     expect(result.rows[2]).toMatchObject({ supplier: null, review: '未复审', attachments: null, creator: null })
     expect(result.options.supplier).toEqual(['历史供应商快照', '当前供应商名'])
     expect(result.options.review).toEqual(['已复审', '未复审'])
     const otherIn = await prisma.$transaction(tx => loadInventoryManagement(tx, tenantId, 'other-in', query()))
-    expect(otherIn.rows.map(row => row.no)).toContain(`MI-NEW-${suffix}`)
+    expect(otherIn.rows.find(row => row.no === `MI-NEW-${suffix}`)).toMatchObject({ source: '其他入库', attachments: '1 项' })
     await expect(sourceCounts()).resolves.toEqual(countsBefore)
   })
 

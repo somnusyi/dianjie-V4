@@ -8,7 +8,7 @@ import { managementPages } from '../../src/services/inventoryManagement'
 const fixture = vi.hoisted(() => ({ tx: {} as any }))
 vi.mock('@dianjie/db', async original => ({ ...await original<typeof import('@dianjie/db')>(), prisma: { $transaction: (fn: any) => fn(fixture.tx) } }))
 const app = Fastify()
-const doc = (id: string, tenantId = 'one') => ({ id, tenantId, docNo: `DOC-${id}`, type: 'MANUAL_INBOUND', effectiveAt: new Date('2026-09-01T00:00:00Z'), warehouseId: 'wh', createdById: 'u', totalAmount: 12.5, status: 'CONFIRMED', reviewStatus: 'UNREVIEWED', createdAt: new Date('2026-08-31T16:00:00Z'), note: '测试', reason: '期初入库' })
+const doc = (id: string, tenantId = 'one') => ({ id, tenantId, docNo: `DOC-${id}`, type: 'MANUAL_INBOUND', effectiveAt: new Date('2026-09-01T00:00:00Z'), warehouseId: 'wh', createdById: 'u', totalAmount: 12.5, status: 'CONFIRMED', reviewStatus: 'UNREVIEWED', createdAt: new Date('2026-08-31T16:00:00Z'), note: '测试', reason: '期初入库', attachments: [{ name: '随货单.pdf' }] })
 const get = (id: string, query: Record<string, string> = {}, role = 'SUPPLY_CHAIN', tenantId = 'one') => app.inject({ url: `/api/inventory-management/${id}?${new URLSearchParams(query)}`, headers: { authorization: `Bearer ${app.jwt.sign({ role, tenantId })}` } })
 beforeAll(async () => {
   await app.register(jwt, { secret: 'management-local-test-only-key' })
@@ -49,13 +49,14 @@ describe('管理表格读取接口', () => {
   })
   it('筛选使用完整结果后再分页；导出包括所有匹配结果', async () => {
     const page = (await get('other-in', { pageSize: '1', page: '2' })).json()
-    expect(page.total).toBe(2); expect(page.totals.amount).toBe(25); expect(page.rows[0]).toMatchObject({ seq: 2, no: 'DOC-b', amount: 12.5, printed: null })
+    expect(page.total).toBe(2); expect(page.totals.amount).toBe(25); expect(page.rows[0]).toMatchObject({ seq: 2, no: 'DOC-b', amount: 12.5, printed: null, source: '其他入库', attachments: '1 项' })
     const filtered = (await get('other-in', { filters: JSON.stringify({ no: 'doc-b', review: '未复审' }), pageSize: '1', page: '50' })).json()
     expect(filtered.total).toBe(1); expect(filtered.page).toBe(1); expect(filtered.rows[0].seq).toBe(1)
     const exported = (await get('other-in', { pageSize: '1', export: '1' })).json()
     const book = new ExcelJS.Workbook(); await book.xlsx.load(Buffer.from(exported.fileBase64, 'base64') as any)
     expect(book.worksheets[0].rowCount).toBe(3)
     expect(book.worksheets[0].getRow(1).values).toContain('打印状态')
+    expect(book.worksheets[0].getRow(1).values).toContain('附件')
   })
   it('采购入库的四个排除字段不出现在响应与导出表头中', async () => {
     const result = (await get('purchase-in')).json()

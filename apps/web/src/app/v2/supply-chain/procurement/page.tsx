@@ -1538,6 +1538,7 @@ export default function UpstreamProcurementPage() {
                         </button>
                         <Badge status={order.status} labels={UPSTREAM_ORDER_STATUS_LABEL} />
                         {order.hasTemporaryPrice && <span className="rounded-full bg-red-50 px-2 py-1 text-micro text-red-700">临时价</span>}
+                        {purchaseOrderOverdueText(order) && <span className="rounded-full bg-red-50 px-2 py-1 text-micro font-semibold text-red-700">{purchaseOrderOverdueText(order)}</span>}
                       </div>
                       <p className="mt-1 text-caption text-gray2">
                         {order.supplier.name} → {order.warehouse.name} · {order._count?.lines || 0} 项 · 到货 {shortDate(order.expectedArrivalAt)}
@@ -2318,9 +2319,6 @@ export default function UpstreamProcurementPage() {
                       {statement.status === 'CONFIRMED' && <p className="mt-1 text-micro text-amber-fg">供应商已确认，等待财务锁定。</p>}
                     </div>
                     <div className="flex gap-2">
-                      <ActionButton tone="light" onClick={() => void openStatementDetail(statement)}>
-                        查看来源明细
-                      </ActionButton>
                       {statement.status === 'DRAFT' || statement.status === 'DISPUTED' ? (
                         <ActionButton
                           onClick={() => void run(statement.id, () => apiFetch(`/api/upstream/settlement-statements/${statement.id}/send`, { method: 'POST' }), '对账单已发送供应商')}
@@ -2605,6 +2603,15 @@ function shipmentFullyInspected(shipment: Shipment): boolean {
       return inspected + 0.000001 >= Number(line.shippedQty)
     })
   )
+}
+
+function purchaseOrderOverdueText(order: Order): string | null {
+  if (!order.expectedArrivalAt || ['DRAFT', 'RECEIVED', 'SETTLEMENT_PENDING', 'CLOSED', 'SETTLED', 'COMPLETED', 'CANCELLED', 'REJECTED'].includes(order.status)) return null
+  const due = order.expectedArrivalAt.slice(0, 10)
+  const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+  if (due >= today) return null
+  const days = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${due}T00:00:00Z`)) / 86400000)
+  return `逾期 ${days} 天`
 }
 
 function revisionComparison(order: Order, revision: NonNullable<Order['revisions']>[number]) {

@@ -77,7 +77,7 @@ describe('inventory management with real PostgreSQL', () => {
     expect(await prisma.warehouseLedgerMovement.count({ where: { tenantId } })).toBe(2)
     const inRows = (await get('other-in')).json().rows; const outRows = (await get('other-out')).json().rows
     expect(inRows).toHaveLength(1); expect(outRows).toHaveLength(1)
-    expect(inRows[0]).toMatchObject({ amount: 200, warehouse: '验证总仓', creator: '验证操作员', status: '未审核' })
+    expect(inRows[0]).toMatchObject({ amount: 200, warehouse: '验证总仓', creator: '验证操作员', status: '未审核', source: '其他入库', attachments: '0 项' })
     expect(outRows[0]).toMatchObject({ amount: 50, reason: '本地联调领用' })
     inboundNo = inRows[0].no; outboundNo = outRows[0].no
     expect((await get('limits')).json().rows[0]).toMatchObject({ currentQty: 15, unit: 'kg', minQty: null, safeQty: null })

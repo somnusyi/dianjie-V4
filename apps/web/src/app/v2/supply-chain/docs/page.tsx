@@ -240,12 +240,12 @@ export default function WarehouseDocsPage() {
                 <td className="px-4 py-3">{type === 'MANUAL_INBOUND' ? (doc.supplierName || '—') : (doc.reason || '—')}</td>
                 <td className="px-4 py-3 text-right font-num"><b>{money(doc.totalAmount)}</b><div className="mt-0.5 text-micro text-gray3">{doc.lineCount} 行商品</div></td>
                 <td className="px-4 py-3 text-center">{doc.type === 'MANUAL_INBOUND' ? `${doc.attachmentCount || 0} 份` : '—'}</td>
-                <td className="px-4 py-3"><StatusBadge status={doc.status} /></td>
+                <td className="px-4 py-3"><div className="flex flex-wrap items-center gap-2"><StatusBadge status={doc.status} />{doc.unauditedAt && <span className="rounded-full bg-red-50 px-2 py-0.5 text-caption text-red-700">被会计退回</span>}</div></td>
                 <td className="px-4 py-3 text-right">
                   <button
                     onClick={() => setDetailId(doc.id)}
                     className="whitespace-nowrap text-accent hover:underline"
-                  >查看{doc.status === 'POSTED' && canEdit ? '/改单' : ''}</button>
+                  >{doc.status === 'POSTED' && canEdit ? '改单' : '查看'}</button>
                 </td>
               </tr>
             ))}

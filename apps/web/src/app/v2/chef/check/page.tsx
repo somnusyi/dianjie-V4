@@ -1,5 +1,5 @@
 /**
- * 厨师长 App · 盘点 Tab — 店内报损 (临期 / 客退 / 变质 / 掉落 / 破损)
+ * 厨师长 App · 报损 Tab — 店内报损 (临期 / 客退 / 变质 / 掉落 / 破损)
  *
  * 接 GET /api/loss-claims (会按 storeId 自动过滤)
  * - 只显示本店 isManual=true 的报损 (店内自有损耗, 不走供应商扣账期)
@@ -95,7 +95,7 @@ export default function ChefCheckPage() {
     <div className="min-h-screen bg-bg pb-20">
       <header className="px-4 pt-4 pb-2 flex items-center justify-between">
         <div>
-          <h1 className="text-h1">盘点</h1>
+          <h1 className="text-h1">报损</h1>
           <p className="text-caption text-gray3">{storeName ? storeName + ' · 后厨' : '本店 · 后厨'}</p>
         </div>
       </header>
@@ -249,7 +249,7 @@ export default function ChefCheckPage() {
           { key: 'home', label: '工作台', icon: '⌂' },
           { key: 'inventory', label: '库存', icon: '⛁' },
           { key: 'purchase', label: '采购', icon: '☰' },
-          { key: 'check', label: '盘点', icon: '◐' },
+          { key: 'check', label: '报损', icon: '◐' },
         ]}
         activeKey={tab}
         onChange={(k) => {

@@ -45,6 +45,12 @@ function localToday() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 }
 
+function isPaymentOverdue(schedule?: Receipt['paymentSchedule']) {
+  if (!schedule) return false
+  const activeStatuses = ['PENDING', 'PENDING_APPROVAL', 'APPROVED', 'NOTIFIED', 'PROCESSING', 'FAILED']
+  return schedule.status === 'OVERDUE' || (activeStatuses.includes(schedule.status) && schedule.dueAt.slice(0, 10) < localToday())
+}
+
 export default function SupplierInvoicesPage() {
   const [pending, setPending] = useState<Receipt[] | null>(null)
   const [history, setHistory] = useState<Invoice[] | null>(null)
@@ -158,8 +164,9 @@ export default function SupplierInvoicesPage() {
             {pending.map(r => {
               const checked = selectedIds.has(r.id)
               const sched = r.paymentSchedule
+              const overdue = isPaymentOverdue(sched)
               return (
-                <li key={r.id} onClick={() => toggle(r.id)} className={`px-3 py-3 cursor-pointer flex items-start gap-3 ${checked ? 'bg-amber/5' : ''}`}>
+                <li key={r.id} onClick={() => toggle(r.id)} className={`px-3 py-3 cursor-pointer flex items-start gap-3 ${overdue ? 'bg-red-bg/40' : checked ? 'bg-amber/5' : ''}`}>
                   <div className={`w-5 h-5 rounded border-2 mt-0.5 shrink-0 flex items-center justify-center ${checked ? 'bg-amber border-amber text-white' : 'border-gray4 bg-white'}`}>
                     {checked && <span className="text-[10px] leading-none">✓</span>}
                   </div>
@@ -168,9 +175,10 @@ export default function SupplierInvoicesPage() {
                       <span className="font-num text-gray3 text-caption">{r.no}</span>
                       <span className="font-num text-h2">¥{Number(r.totalAmount).toLocaleString()}</span>
                     </div>
-                    <p className="text-micro text-gray3 truncate">
+                    <p className={`text-micro truncate ${overdue ? 'font-semibold text-red-fg' : 'text-gray3'}`}>
                       {r.store?.name || '门店'} · 入库 {fmt(r.deliveryDate)}
                       {sched && ` · 应付 ${fmt(sched.dueAt)}`}
+                      {overdue && ' · 已逾期'}
                     </p>
                   </div>
                 </li>

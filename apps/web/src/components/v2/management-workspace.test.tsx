@@ -15,7 +15,7 @@ vi.mock('next/link', () => ({ default: React.forwardRef<HTMLAnchorElement, any>(
 const expected: Record<string, string> = {
   'purchase-in': '序号|单据编号|入库日期|上游单据号|采购机构|仓库|供应商|金额|状态|复审状态|创建时间|创建人|备注|附件',
   'purchase-return': '序号|单据编号|出库日期|上游单据号|采购机构|供应商|金额|状态|复审状态|发票状态|打印状态|创建时间|创建人|备注',
-  'other-in': '序号|单据编号|入库日期|机构|仓库|入库原因|金额|状态|复审状态|打印状态|创建时间|创建人|备注',
+  'other-in': '序号|单据编号|入库日期|机构|仓库|入库原因|金额|状态|复审状态|打印状态|创建时间|创建人|备注|附件',
   'other-out': '序号|单据编号|出库日期|上游单据号|机构|仓库|出库原因|金额|状态|复审状态|打印状态|创建时间|创建人|备注',
   count: '序号|单据编号|盘点日期|机构名称|仓库|物品数|账面金额|实盘金额|盈亏金额|盘点类型|盘点方式|状态|盘点差异|审核日期|打印状态|创建时间|创建人',
   'multi-count': '序号|单据编号|盘点日期|机构|仓库|物品数|状态|审核日期|是否生成盘点单|打印状态|创建日期|创建人',
@@ -36,9 +36,9 @@ beforeEach(() => {
 })
 afterEach(() => { act(() => root.unmount()); container.remove() })
 describe('审核要求与管理页面', () => {
-  it.each(Object.keys(expected))('%s 默认表头与实地核对的字段顺序一致（包含操作）', async id => {
+  it.each(Object.keys(expected))('%s 默认表头与实地核对的字段顺序一致', async id => {
     await render(id)
-    expect([...container.querySelectorAll('th')].map(th => th.textContent)).toEqual(['', ...expected[id].split('|'), '操作'])
+    expect([...container.querySelectorAll('th')].map(th => th.textContent)).toEqual(['', ...expected[id].split('|'), ...(id === 'count' ? ['操作'] : [])])
   })
   it('两个平级导航悬停后显示对应的 5 / 4 个菜单，离开可关闭', () => {
     vi.useFakeTimers()
@@ -143,10 +143,18 @@ describe('审核要求与管理页面', () => {
     const link = [...container.querySelectorAll('a')].find(item => item.textContent === '复盘')
     expect(link?.getAttribute('href')).toBe('/v2/supply-chain/stocktake/count/1')
   })
+  it('采购与其他入库单号显示来源徽标，普通列表不再提供重复详情弹窗', async () => {
+    api.fetch.mockResolvedValueOnce({ ...result('purchase-in'), rows: [{ id: '1', no: 'DOC-01', seq: 1, source: '采购收货', attachments: '2 项' }] })
+    await render('purchase-in')
+    expect(container.textContent).toContain('DOC-01采购收货')
+    expect(container.textContent).toContain('2 项')
+    expect(button('查看')).toBeUndefined()
+    expect(container.querySelector('button[aria-label="查看 DOC-01 内容"]')).toBeNull()
+  })
   it('请求失败时保留完整表头并允许重试；缺少来源时明确说明', async () => {
     api.fetch.mockRejectedValueOnce(new Error('网络异常'))
     await render(); expect(container.querySelector('[role=alert]')?.textContent).toContain('网络异常')
-    expect(container.querySelectorAll('th').length).toBe(16)
+    expect(container.querySelectorAll('th').length).toBe(15)
     await act(async () => button('重新查询').click()); expect(container.querySelector('[role=alert]')).toBeNull()
     api.fetch.mockResolvedValueOnce({ ...result('multi-count'), rows: [], sourceAvailable: false, note: '暂无独立单据来源' })
     await render('multi-count'); expect(container.textContent).toContain('暂无可用单据来源'); expect(button('导出列表').disabled).toBe(true)

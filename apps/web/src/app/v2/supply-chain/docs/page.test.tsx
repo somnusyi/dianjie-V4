@@ -137,7 +137,7 @@ describe('单据审核页面', () => {
     const { container, root } = renderPage()
     await waitFor(() => container.textContent?.includes('RK20260927-001') ?? false)
     expect(container.textContent).toContain('1 份')
-    act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('查看'))?.click())
+    act(() => Array.from(container.querySelectorAll('button')).find(button => ['查看', '改单'].includes(button.textContent || ''))?.click())
     await waitFor(() => container.textContent?.includes('供应商送货单.pdf') ?? false)
     expect(container.textContent).toContain('供应商随货单据（1份）')
     expect(container.textContent).not.toContain('报损举证')

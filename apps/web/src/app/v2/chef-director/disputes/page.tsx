@@ -107,7 +107,7 @@ export default function DisputesPage() {
         {claims && <Chip tone={claims.length > 0 ? 'red' : 'gray'}>{claims.length} 待裁</Chip>}
       </header>
 
-      <p className="px-4 mt-1 text-micro text-gray3">两类待审: ① 供应商拒绝的争议(扣减仲裁) ② 店内报损 ≥¥500(通过/驳回)</p>
+      <p className="px-4 mt-1 text-micro text-gray3">两类待审: ① 供应商拒绝的争议(扣减仲裁) ② 店内报损待审核(通过/驳回)</p>
 
       {error && <div className="mx-4 mt-4 bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}
 

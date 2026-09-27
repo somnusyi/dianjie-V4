@@ -50,7 +50,8 @@ export default function ChefDirectorLossPage() {
   const [total, setTotal] = useState(0)
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // 全部报损列表 默认显示头 10 条, 点击"查看全部"展开
+  // 报损只保留一份列表；待督导和大额通过筛选查看，避免同一单据重复出现。
+  const [onlySupervision, setOnlySupervision] = useState(false)
   const [showAllDetails, setShowAllDetails] = useState(false)
   // 证据照点击放大 (复用其他页面同一套 lightbox 模式)
   const [zoomImg, setZoomImg] = useState<string | null>(null)
@@ -97,13 +98,9 @@ export default function ChefDirectorLossPage() {
     return Object.values(map).sort((a, b) => b.total - a.total)
   }, [items])
 
-  // 待督导异常: PENDING/NEGOTIATING + 大额 (>=200)
-  const abnormal = useMemo(() => {
-    if (!items) return []
-    return items.filter(i =>
-      i.status === 'PENDING' || i.status === 'NEGOTIATING' || Number(i.totalLossAmount) >= 200
-    ).slice(0, 5)
-  }, [items])
+  const filteredItems = useMemo(() => (items || []).filter(item =>
+    !onlySupervision || ['PENDING', 'NEGOTIATING'].includes(item.status) || Number(item.totalLossAmount) >= 200
+  ), [items, onlySupervision])
   const hasMore = items !== null && items.length < total
 
   return (
@@ -133,56 +130,31 @@ export default function ChefDirectorLossPage() {
 
       {error && <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">加载失败: {error}</div>}
 
-      <Section title="待督导报损" right={`${abnormal.length} 项` } rightTone={abnormal.length > 0 ? 'red' : undefined}>
-        {items === null && <p className="text-caption text-gray3 text-center py-6">加载中…</p>}
-        {items !== null && abnormal.length === 0 && (
-          <div className="bg-white rounded-card border border-border p-6 text-center">
-            <p className="text-caption text-gray3">暂无待督导的异常报损</p>
-          </div>
-        )}
-        {abnormal.length > 0 && (
-          <ul className="space-y-2">
-            {abnormal.map(a => {
-              const tone = a.status === 'PENDING' || a.status === 'NEGOTIATING'
-                ? 'orange' : (Number(a.totalLossAmount) >= 200 ? 'red' : 'gray')
-              return (
-                <li key={a.id} className={`relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full ${tone === 'red' ? 'before:bg-red' : tone === 'orange' ? 'before:bg-orange' : 'before:bg-gray4'}`}>
-                  <div className="flex items-center gap-2 mb-1 flex-wrap">
-                    <Chip tone={STATUS_TONE[a.status] || 'gray'}>{STATUS_LABEL[a.status] || a.status}</Chip>
-                    {Number(a.totalLossAmount) >= 200 && <Chip tone="red">大额</Chip>}
-                    <span className="text-micro text-gray3 ml-auto">{fmtDate(a.createdAt)} · {a.no}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-h2">{a.store?.name || '—'}</span>
-                    <span className="font-num text-h2">¥{Number(a.totalLossAmount).toLocaleString()}</span>
-                  </div>
-                  <p className="text-caption text-gray2 mt-0.5">
-                    {a.purchaseOrder?.no || '—'} · {a.supplier?.name || '—'} · {a.createdBy?.name || '—'} 发起
-                  </p>
-                  {a.description && <p className="text-micro text-gray3 mt-1 line-clamp-2">{a.description}</p>}
-                </li>
-              )
-            })}
-          </ul>
-        )}
-      </Section>
-
       {/* 全部报损明细 (2026-05-31 客户反馈: 总厨看不到盘点里自动通过的报损)
           按时间倒序, 默认显示头 10 条, 点击查看全部. 复用 zoomImg lightbox 看证据照. */}
       <Section
-        title="全部报损明细"
-        right={items ? `已加载 ${items.length}/${total || items.length} 条` : ''}
+        title="报损明细"
+        right={items ? (onlySupervision ? `待督导 / 大额 ${filteredItems.length} 条` : `已加载 ${items.length}/${total || items.length} 条`) : ''}
       >
+        <div className="mb-3 inline-flex rounded-cta bg-bg p-0.5" aria-label="报损明细筛选">
+          <button type="button" aria-pressed={!onlySupervision} onClick={() => { setOnlySupervision(false); setShowAllDetails(false) }} className={`rounded-cta px-3 py-1.5 text-button ${!onlySupervision ? 'bg-ink text-white' : 'text-gray2'}`}>全部</button>
+          <button type="button" aria-pressed={onlySupervision} onClick={() => { setOnlySupervision(true); setShowAllDetails(false) }} className={`rounded-cta px-3 py-1.5 text-button ${onlySupervision ? 'bg-ink text-white' : 'text-gray2'}`}>待督导 / 大额</button>
+        </div>
         {items === null && <p className="text-caption text-gray3 text-center py-4">加载中…</p>}
         {items !== null && items.length === 0 && (
           <div className="bg-white rounded-card border border-border p-6 text-center">
             <p className="text-caption text-gray3">近 30 天暂无报损</p>
           </div>
         )}
-        {items !== null && items.length > 0 && (
+        {items !== null && items.length > 0 && filteredItems.length === 0 && (
+          <div className="bg-white rounded-card border border-border p-6 text-center">
+            <p className="text-caption text-gray3">暂无待督导或大额报损</p>
+          </div>
+        )}
+        {items !== null && filteredItems.length > 0 && (
           <>
             <ul className="space-y-2">
-              {(showAllDetails ? items : items.slice(0, 10)).map(lc => {
+              {(showAllDetails ? filteredItems : filteredItems.slice(0, 10)).map(lc => {
                 const isMan = lc.isManual === true
                 return (
                   <li key={lc.id} className="bg-white rounded-card border border-border p-3">
@@ -242,13 +214,13 @@ export default function ChefDirectorLossPage() {
                 )
               })}
             </ul>
-            {items.length > 10 && (
+            {filteredItems.length > 10 && (
               <button
                 type="button"
                 onClick={() => setShowAllDetails(v => !v)}
                 className="block w-full text-center py-3 mt-2 text-caption text-amber-fg bg-white rounded-card border border-border"
               >
-                {showAllDetails ? '↑ 收起 (仅显示 10 条)' : `查看全部 ${items.length} 条 ›`}
+                {showAllDetails ? '↑ 收起 (仅显示 10 条)' : `查看全部 ${filteredItems.length} 条 ›`}
               </button>
             )}
             {hasMore && (

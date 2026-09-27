@@ -6,7 +6,7 @@
  */
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { EmptyState, FriendlyError, SkeletonCard } from '@/components/v2/skeleton'
 import { apiFetch } from '@/lib/v2-auth'
@@ -31,6 +31,7 @@ import {
 type Store = { id: string; no: string; name: string }
 
 type ProjectedReceipt = ReturnType<typeof projectReceiptRow>
+type ProjectedReceiptItem = { productNameSnapshot?: string | null; productCodeSnapshot?: string | null; productSpecSnapshot?: string | null }
 
 export default function InternalSupplyChainReceiptsPage() {
   const [receipts, setReceipts] = useState<ProjectedReceipt[] | null>(null)
@@ -41,6 +42,7 @@ export default function InternalSupplyChainReceiptsPage() {
   const [draftFilters, setDraftFilters] = useState<ReceiptFilters>(DEFAULT_RECEIPT_FILTERS)
   const [stores, setStores] = useState<Store[]>([])
   const [dateError, setDateError] = useState<string | null>(null)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   const requestSequence = useRef(0)
 
   useEffect(() => {
@@ -208,14 +210,17 @@ export default function InternalSupplyChainReceiptsPage() {
                 </thead>
                 <tbody className="divide-y divide-border">
                   {receipts.map(receipt => (
-                    <tr key={receipt.id} className="hover:bg-bg/50">
-                      <td className="px-4 py-3 font-num"><b>{receipt.no}</b></td>
+                    <Fragment key={receipt.id}>
+                    <tr className="hover:bg-bg/50">
+                      <td className="px-4 py-3 font-num"><button type="button" className="font-semibold text-accent underline decoration-dotted underline-offset-4" aria-expanded={expandedId === receipt.id} onClick={() => setExpandedId(current => current === receipt.id ? null : receipt.id)}>{receipt.no}</button></td>
                       <td className="px-4 py-3 text-gray2">{receipt.store?.name || '—'}</td>
                       <td className="px-4 py-3 text-gray2">{receipt.supplier?.name || '—'}</td>
                       <td className="px-4 py-3 font-num text-gray2">{receiptDateText(receipt.deliveryDate)}</td>
                       <td className="px-4 py-3"><Chip tone={receiptStatusTone(receipt.status)}>{formatReceiptStatusLabel(receipt.status)}</Chip></td>
                       <td className="px-4 py-3 text-gray2">{receiptItemSummary(receipt.items)}</td>
                     </tr>
+                    {expandedId === receipt.id && <tr className="bg-bg/60"><td colSpan={6} className="px-4 py-4"><div className="rounded-xl border border-border bg-white p-3"><div className="mb-2 flex items-center justify-between"><b className="text-body">收货商品明细</b><span className="text-micro text-gray3">共 {receipt.items.length} 项</span></div>{receipt.items.length > 0 ? <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{receipt.items.map((item: ProjectedReceiptItem, index: number) => <div key={`${item.productCodeSnapshot || item.productNameSnapshot || index}-${index}`} className="rounded-lg border border-border px-3 py-2"><div className="text-body font-medium">{item.productNameSnapshot || '未命名商品'}</div><div className="mt-1 text-micro text-gray3">{item.productCodeSnapshot || '无编码'} · {item.productSpecSnapshot || '无规格'}</div></div>)}</div> : <p className="text-caption text-gray3">该收货记录没有可展示的商品行。</p>}</div></td></tr>}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>

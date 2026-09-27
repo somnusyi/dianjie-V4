@@ -6,17 +6,14 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { BottomNav, Chip, ProgressDots } from '@/components/v2'
-import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 import {
   SUPPLIER_MONEY_TERMS,
   supplierDeliveryStatusMeta,
-  supplierLossClaimKindMeta,
-  supplierLossClaimResponsibility,
-  supplierLossClaimSettlementHint,
   supplierOrderStatusMeta,
 } from '@/lib/supplier-domain'
 import dayjs from 'dayjs'
+import { SUPPLIER_DIFFERENCES_PATH, supplierOrdersLegacyDifferenceRedirect } from './legacy-difference-redirect'
 
 type Order = {
   id: string; no: string; status: string
@@ -48,19 +45,8 @@ type SearchCriteria = { keyword: string; dateFrom: string; dateTo: string }
 const EMPTY_SEARCH: SearchCriteria = { keyword: '', dateFrom: '', dateTo: '' }
 
 type LossClaim = {
-  id: string; no: string; status: string
-  kind?: string | null
-  payableBasis?: string | null
-  totalLossAmount: string; description: string; createdAt: string
-  handlerNote?: string | null
-  store: { name: string }
-  purchaseOrder: { id: string; no: string; totalAmount?: string }
-  purchaseOrderId?: string
-  deliveryOrder?: { id: string; no: string } | null
-  receipt?: { id: string; no: string } | null
-  items: { product: { name: string; unit: string; spec?: string | null }; orderedQty: string; receivedQty: string; lossQty: string; lossAmount: string }[]
+  id: string; status: string; totalLossAmount: string
 }
-
 
 export default function SupplierOrdersPage() {
   const internalSupplyChain = getUser()?.role === 'SUPPLY_CHAIN'
@@ -75,23 +61,18 @@ export default function SupplierOrdersPage() {
   const [claims, setClaims] = useState<LossClaim[] | null>(null)
   const [ordersTotal, setOrdersTotal] = useState(0)
   const [deliveriesTotal, setDeliveriesTotal] = useState(0)
-  const [claimsTotal, setClaimsTotal] = useState(0)
   const [error, setError] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState<string | null>(null)
   const [loadingOrders, setLoadingOrders] = useState(false)
   const [loadingDeliveries, setLoadingDeliveries] = useState(false)
-  const [loadingClaims, setLoadingClaims] = useState(false)
   const [searchDraft, setSearchDraft] = useState<SearchCriteria>(EMPTY_SEARCH)
   const [appliedSearch, setAppliedSearch] = useState<SearchCriteria>(EMPTY_SEARCH)
-  // 2026-06-02: 支持 URL ?filter=报损 等 (从 billing 页报损 banner 跳过来直接进对应 filter)
-  const [filter, setFilter] = useState<'待接单' | '待发货' | '运送中' | '到货差异' | '已完成' | '已取消'>(() => {
+  const legacyDifferenceRedirect = typeof window === 'undefined' ? null : supplierOrdersLegacyDifferenceRedirect(window.location.search)
+  const [filter, setFilter] = useState<'待接单' | '待发货' | '运送中' | '已完成' | '已取消'>(() => {
     if (typeof window === 'undefined') return '待接单'
     const sp = new URLSearchParams(window.location.search)
     const raw = sp.get('filter')
-    const f = raw === '报损' ? '到货差异' : raw
-    return ['待接单', '待发货', '运送中', '到货差异', '已完成', '已取消'].includes(String(f)) ? f as any : '待接单'
+    return ['待接单', '待发货', '运送中', '已完成', '已取消'].includes(String(raw)) ? raw as any : '待接单'
   })
-  const [confirmState, openConfirm] = useConfirmSheet()
 
   function buildListQuery(page: number, pageSize: number, criteria = appliedSearch, orderFilter?: string) {
     const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
@@ -112,7 +93,6 @@ export default function SupplierOrdersPage() {
       setOrders((o as any).items || (o as any) || [])
       setClaims((c as any).items || (c as any) || [])
       setOrdersTotal(Number((o as any).total ?? (o as any).items?.length ?? 0))
-      setClaimsTotal(Number((c as any).total ?? (c as any).items?.length ?? 0))
     } catch (e: any) { setError(e.message || '加载失败') }
   }
 
@@ -129,7 +109,14 @@ export default function SupplierOrdersPage() {
     }
   }
 
-  useEffect(() => { void load(); void loadDeliveries() }, [])
+  useEffect(() => {
+    if (legacyDifferenceRedirect) {
+      location.href = internalSupplyChain ? '/v2/supply-chain/receipts' : legacyDifferenceRedirect
+      return
+    }
+    void load()
+    void loadDeliveries()
+  }, [])
 
   function applySearch() {
     if (searchDraft.dateFrom && searchDraft.dateTo && searchDraft.dateFrom > searchDraft.dateTo) {
@@ -181,74 +168,6 @@ export default function SupplierOrdersPage() {
     }
   }
 
-  async function loadMoreClaims() {
-    if (!claims || loadingClaims) return
-    setLoadingClaims(true)
-    try {
-      const page = Math.floor(claims.length / 20) + 1
-      const d = await apiFetch<{ items: LossClaim[]; total: number }>(`/api/loss-claims?page=${page}&pageSize=20`)
-      setClaims(current => [...(current || []), ...(d.items || [])])
-      setClaimsTotal(Number(d.total ?? claimsTotal))
-    } catch (e: any) {
-      setError(e.message || '加载失败')
-    } finally {
-      setLoadingClaims(false)
-    }
-  }
-
-  function handleClaim(c: LossClaim, action: 'approve' | 'reject') {
-    if (submitting) return
-    const kind = supplierLossClaimKindMeta(c.kind)
-    if (action === 'reject') {
-      openConfirm({
-        title: `对 ${c.no} 提出异议`,
-        body: '请填写异议依据。提交后由总厨仲裁，相关应付会保持冻结。',
-        confirmLabel: '提交异议',
-        tone: 'danger',
-        withInput: true,
-        inputRequired: true,
-        inputPlaceholder: '例如：包装完好，疑非物流问题…',
-        onConfirm: async (note) => {
-          setSubmitting(c.id)
-          try {
-            await apiFetch(`/api/loss-claims/${c.id}/handle`, {
-              method: 'PATCH',
-              body: JSON.stringify({ action: 'reject', note }),
-            })
-            await load()
-          } catch (e: any) {
-            alert(e.message || '操作失败')
-            throw e
-          } finally {
-            setSubmitting(null)
-          }
-        },
-      })
-    } else {
-      openConfirm({
-        title: `${kind.supplierActionLabel} ¥${Number(c.totalLossAmount).toFixed(2)}`,
-        body: supplierLossClaimSettlementHint(c.payableBasis),
-        confirmLabel: kind.supplierActionLabel,
-        tone: 'primary',
-        onConfirm: async () => {
-          setSubmitting(c.id)
-          try {
-            await apiFetch(`/api/loss-claims/${c.id}/handle`, {
-              method: 'PATCH',
-              body: JSON.stringify({ action: 'approve', note: `已确认${kind.label}` }),
-            })
-            await load()
-          } catch (e: any) {
-            alert(e.message || '操作失败')
-            throw e
-          } finally {
-            setSubmitting(null)
-          }
-        },
-      })
-    }
-  }
-
   const pendingClaims = (claims || []).filter(c => c.status === 'PENDING')
 
   function statusInTab(s: string, f: string) {
@@ -266,7 +185,6 @@ export default function SupplierOrdersPage() {
   const displayOrders = visible
   const hasMoreOrders = orders !== null && orders.length < ordersTotal
   const hasMoreDeliveries = deliveries !== null && deliveries.length < deliveriesTotal
-  const hasMoreClaims = claims !== null && claims.length < claimsTotal
 
   return (
     <div className="min-h-screen bg-bg pb-20">
@@ -318,13 +236,9 @@ export default function SupplierOrdersPage() {
       </form>
 
       {/* 到货差异待处理 banner（仅 PENDING 数量 > 0 时显示，强制提醒）*/}
-      {documentView === 'orders' && pendingClaims.length > 0 && filter !== '到货差异' && (
+      {documentView === 'orders' && pendingClaims.length > 0 && (
         <button
-          onClick={() => {
-            location.href = internalSupplyChain
-              ? '/v2/supply-chain/receipts'
-              : '/v2/supplier/differences'
-          }}
+          onClick={() => { location.href = internalSupplyChain ? '/v2/supply-chain/receipts' : SUPPLIER_DIFFERENCES_PATH }}
           className="mx-4 mt-2 w-[calc(100%-32px)] bg-red-bg border border-red/30 rounded-card p-3 flex items-center gap-3 text-left"
         >
           <span className="w-9 h-9 rounded-md bg-red text-white flex items-center justify-center text-h2">⚠</span>
@@ -346,12 +260,12 @@ export default function SupplierOrdersPage() {
           const isUrgent = (f === '待接单' || f === '到货差异') && cnt > 0
           return (
             <button key={f} onClick={() => f === '到货差异'
-              ? location.href = internalSupplyChain ? '/v2/supply-chain/receipts' : '/v2/supplier/differences'
+              ? location.href = internalSupplyChain ? '/v2/supply-chain/receipts' : SUPPLIER_DIFFERENCES_PATH
               : (setFilter(f), void load(appliedSearch, f))}
-              className={`shrink-0 px-3 py-1.5 rounded-cta text-button relative ${filter === f ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
+              className={`shrink-0 px-3 py-1.5 rounded-cta text-button relative ${f !== '到货差异' && filter === f ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
               <span>{f}</span>
-              {cnt > 0 && <span className={`font-num ml-1 ${filter === f ? '' : isUrgent ? 'text-red-fg' : 'text-gray3'}`}>{cnt}</span>}
-              {isUrgent && filter !== f && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-red rounded-full" />}
+              {cnt > 0 && <span className={`font-num ml-1 ${f !== '到货差异' && filter === f ? '' : isUrgent ? 'text-red-fg' : 'text-gray3'}`}>{cnt}</span>}
+              {isUrgent && (f === '到货差异' || filter !== f) && <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-red rounded-full" />}
             </button>
           )
         })}
@@ -359,100 +273,8 @@ export default function SupplierOrdersPage() {
 
       {error && <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}
 
-      {/* 到货差异工作台 — 显示全部历史记录，PENDING 在最上 */}
-      {documentView === 'orders' && filter === '到货差异' && (() => {
-        const claimStatusMeta: Record<string, { label: string; tone: 'red' | 'gray' | 'orange' | 'blue' | 'green'; barClass: string }> = {
-          PENDING:     { label: '待处理',     tone: 'red',    barClass: 'before:bg-red' },
-          APPROVED:    { label: '已同意',     tone: 'gray',   barClass: 'before:bg-gray4' },
-          AUTO_APPROVED: { label: '超时自动确认', tone: 'gray', barClass: 'before:bg-gray4' },
-          REJECTED:    { label: '已拒绝·待总厨', tone: 'orange', barClass: 'before:bg-orange' },
-          NEGOTIATING: { label: '协商中',     tone: 'orange', barClass: 'before:bg-orange' },
-          RESOLVED:    { label: '总厨已仲裁', tone: 'blue',   barClass: 'before:bg-gray4' },
-        }
-        const sorted = [...(claims || [])].sort((a, b) => {
-          if (a.status === 'PENDING' && b.status !== 'PENDING') return -1
-          if (a.status !== 'PENDING' && b.status === 'PENDING') return 1
-          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        })
-        return (
-          <ul className="px-4 mt-3 space-y-2">
-            {sorted.length === 0 && (
-              <li className="text-caption text-gray3 text-center py-12">暂无到货差异记录</li>
-            )}
-            {sorted.map(c => {
-              const meta = claimStatusMeta[c.status] || { label: c.status, tone: 'gray' as const, barClass: 'before:bg-gray4' }
-              const isPending = c.status === 'PENDING'
-              const kind = supplierLossClaimKindMeta(c.kind)
-              return (
-                <li key={c.id} className={`relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full ${meta.barClass}`}>
-                  <a href={`${orderBase}/${c.purchaseOrder.id || c.purchaseOrderId}`} className="block">
-                    <div className="flex items-center gap-2 mb-1">
-                      <Chip tone={meta.tone}>{meta.label}</Chip>
-                      <Chip tone="blue">{kind.label}</Chip>
-                      <span className="text-micro text-gray3 ml-auto">{timeAgo(c.createdAt)}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-h2">{c.store.name} <span className="text-micro text-gray3 font-num">#{c.purchaseOrder.no}</span></span>
-                      <span className={`font-num text-h2 ${isPending ? 'text-red-fg' : 'text-gray2'}`}>−¥{Number(c.totalLossAmount).toFixed(2)}</span>
-                    </div>
-                    <p className="text-caption text-gray2 mt-0.5">{c.description}</p>
-                    <div className="mt-2 grid grid-cols-1 lg:grid-cols-3 gap-1 text-micro text-gray3">
-                      <span>责任节点：{supplierLossClaimResponsibility(c.status)}</span>
-                      <span>配送单：{c.deliveryOrder?.no || '历史未关联'}</span>
-                      <span>收货单：{c.receipt?.no || '历史未关联'}</span>
-                    </div>
-                    <ul className="mt-2 text-micro text-gray2 space-y-0.5">
-                      {(c.items || []).map((it, idx) => (
-                        <li key={idx}>· {it.product?.name}{it.product?.spec ? ` (${it.product.spec})` : ''}: 应到 {it.orderedQty} / 实收 {it.receivedQty}{it.product?.unit || ''} · {kind.quantityLabel} {it.lossQty} · ¥{Number(it.lossAmount).toFixed(2)}</li>
-                      ))}
-                    </ul>
-                    {c.handlerNote && (
-                      <p className="text-micro text-gray3 mt-1.5">处理备注：{c.handlerNote}</p>
-                    )}
-                    <p className="text-micro text-amber-fg mt-2">查看证据图 / 完整明细 ›</p>
-                  </a>
-                  <a
-                    href={`/v2/loss-claims/${c.id}/print`}
-                    className="mt-3 w-full py-2 rounded-cta border border-ink text-ink text-button flex items-center justify-center"
-                  >
-                    查看并打印差异单
-                  </a>
-                  {/* 操作按钮仅 PENDING 时显示 */}
-                  {isPending && (
-                    <div className="grid grid-cols-2 gap-2 mt-3">
-                      <button
-                        onClick={() => handleClaim(c, 'reject')}
-                        disabled={submitting === c.id}
-                        className="py-2 border border-red text-red rounded-cta text-button disabled:opacity-40"
-                      >提出异议</button>
-                      <button
-                        onClick={() => handleClaim(c, 'approve')}
-                        disabled={submitting === c.id}
-                        className="py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40"
-                      >{submitting === c.id ? '提交中…' : kind.supplierActionLabel}</button>
-                    </div>
-                  )}
-                </li>
-              )
-            })}
-            {hasMoreClaims && (
-              <li>
-                <button
-                  type="button"
-                  onClick={() => void loadMoreClaims()}
-                  disabled={loadingClaims}
-                  className="w-full py-3 bg-white rounded-card border border-border text-caption text-amber-fg disabled:opacity-50"
-                >
-                  {loadingClaims ? '加载中…' : `加载更多差异 · 已显示 ${claims?.length || 0}/${claimsTotal}`}
-                </button>
-              </li>
-            )}
-          </ul>
-        )
-      })()}
-
       {/* 普通订单 tabs 内容 */}
-      {documentView === 'orders' && filter !== '到货差异' && (
+      {documentView === 'orders' && (
       <ul className="px-4 mt-3 space-y-2">
         {visible.length === 0 && orders !== null && (
           <li className="text-caption text-gray3 text-center py-12">暂无{filter}订单</li>
@@ -515,6 +337,11 @@ export default function SupplierOrdersPage() {
                   </a>
                 </div>
               )}
+              {(o.deliveries?.length ?? 0) > 0 && (
+                <div className="mt-3" onClick={event => event.stopPropagation()}>
+                  <a href={`${orderBase}/${o.id}/delivery-note`} className="inline-flex rounded-cta border border-ink px-3 py-1.5 text-button text-ink">打印送货单</a>
+                </div>
+              )}
             </li>
           )
         })}
@@ -558,6 +385,9 @@ export default function SupplierOrdersPage() {
                   {delivery.items.map(item => `${item.product.name} ${item.shippedQty}${item.product.unit}`).join('、')}
                 </p>
                 {delivery.receipt && <p className="text-micro text-green-fg mt-2">已生成入库单 #{delivery.receipt.no}</p>}
+                <div className="mt-3" onClick={event => event.stopPropagation()}>
+                  <a href={`${orderBase}/${delivery.purchaseOrder.id}/delivery-note`} className="inline-flex rounded-cta border border-ink px-3 py-1.5 text-button text-ink">打印送货单</a>
+                </div>
               </li>
             )
           })}
@@ -588,8 +418,6 @@ export default function SupplierOrdersPage() {
           if (k === 'me')        location.href = '/v2/supplier/history'
         }}
       />
-
-      <ConfirmSheet {...confirmState} />
     </div>
   )
 }

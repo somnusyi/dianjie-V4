@@ -9,8 +9,8 @@
 ### SC-UX-FIX-20260928｜独立 UX 修复
 
 - worktree：`dianjie-V4-ux-fixes-20260928`；分支：`codex/ux-fixes-20260928`。
-- 状态：批次 1 待验收，后续批次按序推进；WIP `9161117` 已推送。
-- 验证：API/Web 类型检查通过；API 122 文件 1245 项通过；Web 886 项中 885 项通过，重复列宽契约更新后该文件 3 项通过。
+- 状态：批次 1、2 待验收，后续批次按序推进；WIP `9161117` 已推送。
+- 验证：API/Web 类型检查通过；API 122 文件 1245 项通过；Web 70 文件 886 项通过（批次 2 完整回归）。
 - 边界：仅当前 worktree；隔离数据库 `dianjie_ux_fixes_20260928_ci`；未访问并行会话目录或生产/UAT。
 - 记录：`docs/development/meeting-ux-batch-1-20260928.md`。
 

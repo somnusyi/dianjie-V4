@@ -148,7 +148,7 @@ export default function SupplierInvoicesPage() {
         {pending === null && <p className="text-caption text-gray3 text-center py-6">加载中…</p>}
         {pending?.length === 0 && (
           <div className="bg-white rounded-card border border-border p-6 text-center">
-            <p className="text-caption text-gray3">暂无待开票订单</p>
+            <p className="text-caption text-gray3">暂无待开票订单 · <a href="/v2/supplier/orders" className="underline">查看订单进度</a></p>
             <p className="text-micro text-gray4 mt-1">订单确认入库后会出现在这里, 可批量勾选合并开票</p>
           </div>
         )}
@@ -183,7 +183,7 @@ export default function SupplierInvoicesPage() {
       <Section title="发票历史" right={history ? `${history.length} 张` : ''}>
         {history?.length === 0 && (
           <div className="bg-white rounded-card border border-border p-6 text-center">
-            <p className="text-caption text-gray3">暂无上传的发票</p>
+            <p className="text-caption text-gray3">暂无上传的发票 · <a href="/v2/supplier/orders" className="underline">查看订单与收货进度</a></p>
           </div>
         )}
         {history && history.length > 0 && (

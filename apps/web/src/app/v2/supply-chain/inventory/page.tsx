@@ -255,6 +255,7 @@ export default function InternalSupplyChainInventoryPage() {
   const [loading, setLoading] = useState(true)
   const [scope, setScope] = useState<InventoryScope>('stock')
   const [error, setError] = useState('')
+  const [createdDocId, setCreatedDocId] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
   const [inboundOpen, setInboundOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
@@ -695,7 +696,7 @@ export default function InternalSupplyChainInventoryPage() {
     setError('')
     setGateWarnings([])
     try {
-      const result = await apiFetch<{ replayed: boolean; count: number; totalAmount: number; gateWarnings?: string[] }>('/api/warehouse-inventory/batch-manual-inbound', {
+      const result = await apiFetch<{ doc?: { id: string }; replayed: boolean; count: number; totalAmount: number; gateWarnings?: string[] }>('/api/warehouse-inventory/batch-manual-inbound', {
         method: 'POST',
         body: JSON.stringify({
           items: batchRows.map(row => ({
@@ -712,6 +713,7 @@ export default function InternalSupplyChainInventoryPage() {
         }),
       })
       setBatchOpen(false)
+      setCreatedDocId(result.doc?.id || null)
       setGateWarnings(result.gateWarnings || [])
       setNotice(result.replayed
         ? '该批量入库单已经处理，本次未重复入账'
@@ -745,7 +747,7 @@ export default function InternalSupplyChainInventoryPage() {
     setError('')
     setGateWarnings([])
     try {
-      const result = await apiFetch<{ replayed: boolean; gateWarnings?: string[] }>('/api/warehouse-inventory/manual-inbound', {
+      const result = await apiFetch<{ doc?: { id: string }; replayed: boolean; gateWarnings?: string[] }>('/api/warehouse-inventory/manual-inbound', {
         method: 'POST',
         body: JSON.stringify({
           productId,
@@ -762,6 +764,7 @@ export default function InternalSupplyChainInventoryPage() {
         }),
       })
       setInboundOpen(false)
+      setCreatedDocId(result.doc?.id || null)
       setGateWarnings(result.gateWarnings || [])
       setNotice(result.replayed ? '该入库请求已处理，本次返回原结果，没有重复入账' : '手工入库成功：数量、成本、批次和流水已原子记入总仓影子账')
       await load()
@@ -957,7 +960,7 @@ export default function InternalSupplyChainInventoryPage() {
       </header>
 
       {error && <div className="mt-4 rounded-card border border-red/30 bg-red-bg p-3 text-caption text-red-fg">{error}</div>}
-      {notice && <div className="mt-4 rounded-card border border-green/30 bg-green/10 p-3 text-caption text-green-fg">{notice}</div>}
+      {notice && <div className="mt-4 rounded-card border border-green/30 bg-green/10 p-3 text-caption text-green-fg">{notice}{createdDocId && <a className="ml-3 underline" href={`/v2/supply-chain/docs?doc=${encodeURIComponent(createdDocId)}`}>查看单据</a>}</div>}
       {gateWarnings.length > 0 && <div className="mt-4 rounded-card border border-amber/40 bg-amber/10 p-3 text-caption text-amber-fg">
         <b>入库闸口警告（已放行）：</b>以下商品未绑定该供应商的供货关系，建议在「供货关系」页补齐——{gateWarnings.join('；')}
       </div>}

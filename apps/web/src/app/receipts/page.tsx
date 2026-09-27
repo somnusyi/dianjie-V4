@@ -226,9 +226,14 @@ export default function ReceiptsPage() {
     { key: 'supplier', title: '供应商', render: (_: any, r: any) => r.tempSupplierName || r.supplier?.name },
     { key: 'deliveryDate', title: '到货日期', render: (v: string) => fmtDate(v) },
     { key: 'totalAmount', title: '金额', render: (v: any) => Number(v) < 0 ? <span className="dj-chip dj-chip-red">金额异常</span> : <b>{fmt(v)}</b> },
-    { key: 'status', title: '状态', render: (v: string) => {
+    { key: 'status', title: '状态', render: (v: string, row: any) => {
       const s = STATUS_INFO[v] || { label: v, color: '#6b7280', bg: '#f3f4f6' }
-      return <span className="dj-chip" style={{ background: s.bg, color: s.color }}>{s.label}</span>
+      return <>
+        <span className="dj-chip" style={{ background: s.bg, color: s.color }}>{s.label}</span>
+        {row.storeReceiptDeadline?.overdue && ['PENDING', 'PENDING_CONFIRM'].includes(v) && (
+          <span className="dj-chip dj-chip-red" style={{ marginLeft: 6 }}>已逾期，需处理</span>
+        )}
+      </>
     }},
     { key: 'paymentSchedule', title: '账期', render: (_: any, r: any) => {
       const s = r.paymentSchedule

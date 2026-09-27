@@ -37,11 +37,13 @@ vi.mock('@/components/v2/skeleton', () => ({
 
 vi.mock('@/lib/v2-auth', () => ({
   apiFetch: vi.fn(),
+  apiDownload: vi.fn(),
 }))
 
-import { apiFetch } from '@/lib/v2-auth'
+import { apiDownload, apiFetch } from '@/lib/v2-auth'
 
 const mockFetch = vi.mocked(apiFetch)
+const mockDownload = vi.mocked(apiDownload)
 
 const STORES = [
   { id: 'store-1', no: 'S01', name: '测试门店' },
@@ -145,7 +147,16 @@ const orderRaw = {
   supplierId: 'sup-1',
   status: 'CONFIRMED',
   createdAt: '2026-07-18T10:00:00Z',
+  submittedAt: '2026-07-18T10:01:00Z',
+  splitAt: '2026-07-18T10:15:00Z',
+  lastOperationAt: '2026-07-18T10:16:00Z',
   expectedDeliveryDate: '2026-07-22',
+  creationSource: '门店提交',
+  creationType: '常规订货',
+  note: '测试备注',
+  printStatus: '已发起打印',
+  createdBy: { id: 'user-1', name: '测试创建人' },
+  downstreamDocuments: [{ id: 'd1', no: 'D-001', status: 'SHIPPED' }],
   store: STORES[0],
   supplier: { id: 'sup-1', no: 'SUP01', name: '测试供应商' },
   submittedSnapshot: { items: [{ name: '香蕉', code: 'BAN', spec: '2kg' }] },
@@ -196,6 +207,9 @@ function assertNoFinancialFields(container: HTMLElement) {
 describe('内部供应链只读 PC 页面回归', () => {
   beforeEach(() => {
     mockFetch.mockReset()
+    mockDownload.mockReset()
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:test') })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
   })
 
   describe('收货查询 /v2/supply-chain/receipts', () => {
@@ -349,7 +363,54 @@ describe('内部供应链只读 PC 页面回归', () => {
       expect(container.textContent).toContain('金额')
       expect(container.textContent).toContain('合计')
       expect(container.textContent).toContain('¥9,999.99')
+      expect(container.textContent).toContain('门店提交')
+      expect(container.textContent).toContain('常规订货')
+      expect(container.textContent).toContain('测试备注')
+      expect(container.textContent).toContain('已发起打印')
+      expect(container.textContent).toContain('测试创建人')
+      expect(container.textContent).toContain('D-001')
       cleanup(container, root)
+    })
+
+    it('使用当前已应用筛选导出全部匹配订货单', async () => {
+      mockApi(() => Promise.resolve({ items: [orderRaw], total: 1 }))
+      mockDownload.mockResolvedValue({ blob: new Blob(['xlsx']), filename: '门店订货单.xlsx' })
+      const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+      const { container, root } = render(<OrdersPage />)
+      await waitFor(() => container.textContent?.includes('O-001') ?? false)
+      await waitFor(() => (getInputByLabel(container, '门店') as HTMLSelectElement).options.length > 1)
+      act(() => {
+        setInputValue(getInputByLabel(container, '关键字') as HTMLInputElement, '  O-001  ')
+        setSelectValue(getInputByLabel(container, '门店') as HTMLSelectElement, 'store-1')
+        setInputValue(getInputByLabel(container, '开始日期') as HTMLInputElement, '2026-07-01')
+        setInputValue(getInputByLabel(container, '结束日期') as HTMLInputElement, '2026-07-31')
+        setSelectValue(getInputByLabel(container, '状态') as HTMLSelectElement, 'CONFIRMED')
+        setSelectValue(getInputByLabel(container, '每页') as HTMLSelectElement, '50')
+      })
+      act(() => findButton(container, '查询')!.click())
+      await waitFor(() => lastResourceUrl('/api/orders').searchParams.get('status') === 'CONFIRMED')
+      await act(async () => {
+        findButton(container, '导出')!.click()
+        await sleep(0)
+      })
+      await waitFor(() => mockDownload.mock.calls.length === 1 && vi.mocked(URL.createObjectURL).mock.calls.length === 1)
+
+      const [path] = mockDownload.mock.calls[0]
+      const url = new URL(String(path), 'http://localhost')
+      expect(url.pathname).toBe('/api/orders/export.xlsx')
+      expect(url.searchParams.get('page')).toBe('1')
+      expect(url.searchParams.get('pageSize')).toBe('50')
+      expect(url.searchParams.get('keyword')).toBe('O-001')
+      expect(url.searchParams.get('storeId')).toBe('store-1')
+      expect(url.searchParams.get('dateFrom')).toBe('2026-07-01')
+      expect(url.searchParams.get('dateTo')).toBe('2026-07-31')
+      expect(url.searchParams.get('status')).toBe('CONFIRMED')
+      expect(URL.createObjectURL).toHaveBeenCalled()
+      expect(click).toHaveBeenCalled()
+
+      cleanup(container, root)
+      click.mockRestore()
     })
 
     it('综合筛选后查询与翻页保留状态等参数', async () => {

@@ -198,6 +198,29 @@ export function validateOrderDeliveryDateRange(dateFrom: string, dateTo: string)
   return null
 }
 
+const shanghaiDateTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+})
+
+/** 将服务端 UTC 时间稳定显示为中国标准时间，避免直接截取 ISO 字符串少 8 小时。 */
+export function orderDateTimeText(value?: string | null): string {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  const parts = Object.fromEntries(
+    shanghaiDateTimeFormatter.formatToParts(date)
+      .filter(part => part.type !== 'literal')
+      .map(part => [part.type, part.value]),
+  )
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`
+}
+
 /**
  * 分页范围文本：第 start–end 项，共 total 项。
  */
@@ -304,7 +327,24 @@ export function projectOrderRow(row: any) {
     status: row.status,
     totalAmount: row.currentOrderAmount ?? row.originalTotalAmount ?? row.totalAmount ?? 0,
     createdAt: row.createdAt,
-    expectedDeliveryDate: row.expectedDeliveryDate,
+    expectedDeliveryDate: row.expectedDate ?? row.expectedDeliveryDate,
+    estimatedArrivalAt: row.expectedDate ?? row.expectedDeliveryDate,
+    creationSource: row.creationSource ?? '历史记录',
+    creationType: row.creationType ?? '常规订货',
+    submittedAt: row.submittedAt ?? null,
+    splitAt: row.splitAt ?? null,
+    lastOperationAt: row.lastOperationAt ?? row.updatedAt ?? row.createdAt,
+    note: row.note ?? null,
+    printStatus: row.printStatus ?? '未打印',
+    lastPrintRequestedAt: row.lastPrintRequestedAt ?? null,
+    createdBy: row.createdBy ? { id: row.createdBy.id, name: row.createdBy.name } : null,
+    downstreamDocuments: Array.isArray(row.downstreamDocuments)
+      ? row.downstreamDocuments.map((delivery: any) => ({
+        id: delivery.id,
+        no: delivery.no,
+        status: delivery.status,
+      }))
+      : [],
     store: row.store ? { id: row.store.id, name: row.store.name, no: row.store.no } : null,
     supplier: row.supplier ? { id: row.supplier.id, name: row.supplier.name, no: row.supplier.no } : null,
     submittedSnapshotItems,

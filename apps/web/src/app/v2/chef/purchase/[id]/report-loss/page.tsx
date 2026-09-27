@@ -34,6 +34,7 @@ export default function PostReceiptLossPage({ params }: { params: { id: string }
 
   const receipts = useMemo(() => eligibleReceipts(po), [po])
   const receipt = receipts.find((item: any) => item.id === receiptId)
+  const lateReport = Boolean(receipt && isLateReport(receipt))
   const productRows = useMemo(() => aggregateReceiptItems(receipt?.items || []), [receipt])
   const claimedByProduct = useMemo(() => {
     const result: Record<string, number> = {}
@@ -61,13 +62,15 @@ export default function PostReceiptLossPage({ params }: { params: { id: string }
   }
 
   function submit() {
-    if (!receipt) return alert('没有处于 48 小时补报期内的收货单')
+    if (!receipt) return alert('没有可补报的收货单')
     if (!selected.length) return alert('请至少填写 1 项异常数量')
     if (!reason.trim() || !description.trim()) return alert('请填写异常原因和具体说明')
     if (!evidence.length) return alert('请至少上传 1 份现场照片或视频')
     openConfirm({
       title: `提交到货异常 ¥${total.toFixed(2)}`,
-      body: '提交后异常数量立即移出可用库存，供应商需在 24 小时内处理。',
+      body: lateReport
+        ? '该补报已超过到货日 12:00。提交后异常数量立即移出可用库存，并且必须人工审批。'
+        : '提交后异常数量立即移出可用库存，供应商需在 24 小时内处理。',
       confirmLabel: '确认提交',
       tone: 'primary',
       onConfirm: async () => {
@@ -106,14 +109,14 @@ export default function PostReceiptLossPage({ params }: { params: { id: string }
       </header>
 
       <div className="mx-4 mt-3 bg-amber/10 border border-amber/40 rounded-card p-3">
-        <div className="flex items-center gap-2"><Chip tone="orange">48 小时内</Chip><b className="text-body">拆包后发现异常可补报</b></div>
-        <p className="text-micro text-gray2 mt-2">异常实物提交后立即从可用库存中隔离；供应商同意后扣减应付，拒绝则转总厨仲裁。</p>
+        <div className="flex items-center gap-2"><Chip tone={lateReport ? 'red' : 'orange'}>{lateReport ? '逾期补报' : '到货日 12:00 前'}</Chip><b className="text-body">拆包后发现异常可补报</b></div>
+        <p className="text-micro text-gray2 mt-2">异常实物提交后立即从可用库存中隔离；逾期补报必须人工审批，供应商同意后扣减应付。</p>
       </div>
 
       {!receipts.length ? (
         <div className="mx-4 mt-4 bg-white border border-border rounded-card p-5 text-center">
           <p className="text-h2">当前没有可补报的收货单</p>
-          <p className="text-caption text-gray3 mt-2">仅支持收货确认后 48 小时内补报；超时请走门店内部报损。</p>
+          <p className="text-caption text-gray3 mt-2">请先确认收货单状态；逾期仍可如实补报，并进入人工审批。</p>
           <button onClick={() => router.push('/v2/chef/check/new')} className="mt-4 px-5 py-3 bg-ink text-white rounded-cta text-button">登记店内报损</button>
         </div>
       ) : (
@@ -192,12 +195,17 @@ export default function PostReceiptLossPage({ params }: { params: { id: string }
 }
 
 function eligibleReceipts(po: any) {
-  const now = Date.now()
-  return (po?.receipts || []).filter((receipt: any) => receipt.confirmedAt && ['CONFIRMED', 'ACCOUNTED'].includes(receipt.status) && new Date(receipt.confirmedAt).getTime() + 48 * 60 * 60 * 1000 >= now)
+  return (po?.receipts || []).filter((receipt: any) => receipt.confirmedAt && ['CONFIRMED', 'ACCOUNTED'].includes(receipt.status))
 }
 
 function deadlineText(receipt: any) {
-  return new Date(new Date(receipt.confirmedAt).getTime() + 48 * 60 * 60 * 1000).toLocaleString('zh-CN')
+  const dateKey = new Date(receipt.deliveryDate).toISOString().slice(0, 10)
+  return `${dateKey} 12:00`
+}
+
+function isLateReport(receipt: any) {
+  const dateKey = new Date(receipt.deliveryDate).toISOString().slice(0, 10)
+  return Date.now() > new Date(`${dateKey}T04:00:00.000Z`).getTime()
 }
 
 function isVideoEvidence(url: string) {

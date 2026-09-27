@@ -130,9 +130,12 @@ export default function LossClaimsPage() {
     { key: 'supplier', title: '供应商', render: (_: any, row: any) => row.supplier?.name },
     { key: 'totalLossAmount', title: '损失金额', render: (v: any) => <b className="is-red">{fmt(v)}</b> },
     { key: 'description', title: '说明', render: (v: string) => <span style={{ fontSize: 11, color: '#6b7280' }}>{v?.slice(0, 30)}{v?.length > 30 ? '...' : ''}</span> },
-    { key: 'status', title: '状态', render: (v: string) => {
+    { key: 'status', title: '状态', render: (v: string, row: any) => {
       const s = STATUS_INFO[v] || { label: v, color: '#6b7280', bg: '#f3f4f6' }
-      return <span className="dj-chip" style={{ background: s.bg, color: s.color }}>{s.label}</span>
+      return <>
+        <span className="dj-chip" style={{ background: s.bg, color: s.color }}>{s.label}</span>
+        {row.lateReport?.overdue && <span className="dj-chip dj-chip-red" style={{ marginLeft: 6 }}>逾期补报 · 人工审批</span>}
+      </>
     }},
     { key: 'createdAt', title: '提交时间', render: (v: string) => fmtDate(v) },
     { key: 'actions', title: '操作', render: (_: any, row: any) => (
@@ -191,7 +194,7 @@ export default function LossClaimsPage() {
           <article className={summary.pending > 0 ? 'tone-orange' : 'tone-green'}>
             <span>待供应商处理</span>
             <strong>{summary.pending} 笔</strong>
-            <em>超时会进入自动同意策略</em>
+            <em>逾期补报必须人工审批</em>
           </article>
           <article className="tone-red">
             <span>待确认扣款</span>
@@ -243,8 +246,8 @@ export default function LossClaimsPage() {
                 <span>拒绝并写明原因，门店可补充证据复核。</span>
               </article>
               <article>
-                <strong>超时未处理</strong>
-                <span>进入自动同意策略，避免账期长期悬挂。</span>
+                <strong>逾期补报</strong>
+                <span>允许如实提交，但必须人工审批，不会自动同意。</span>
               </article>
             </div>
 

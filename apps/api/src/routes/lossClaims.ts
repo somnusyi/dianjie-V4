@@ -17,6 +17,7 @@ import { setReceiptSettlementAmountInTransaction } from '../services/receiptSett
 import { arrivalDifferencesToCsv } from '../services/arrivalDifferenceExport'
 import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
 import { reverseDeliveryOutboundInTransaction } from '../services/warehouseLedger'
+import { storeReceiptDeadlineStatus } from '../services/storeReceiptDeadline'
 
 const LOSS_AMOUNT_MAX = new Prisma.Decimal('9999999999.99')
 
@@ -195,13 +196,35 @@ export async function approveLossClaimAtomically(params: {
     await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`loss-handle:${params.claimId}`}))::text AS locked`
     const claim = await tx.lossClaim.findFirst({
       where: { id: params.claimId, tenantId: params.tenantId, isManual: false },
-      include: { items: true, purchaseOrder: { include: { receipt: true } } },
+      include: {
+        items: true,
+        purchaseOrder: { include: { receipt: true } },
+        receipt: { select: { deliveryDate: true } },
+      },
     })
     if (!claim) return { transitioned: false, duplicated: false, claim: null }
     if (claim.status === 'APPROVED' || claim.status === 'AUTO_APPROVED') {
       return { transitioned: false, duplicated: true, claim }
     }
     if (claim.status !== 'PENDING') return { transitioned: false, duplicated: false, claim }
+    // 逾期补报仍可提交，也必须由供应商或授权人员人工处理；定时任务不得自动同意。
+    if (params.automatic && claim.receipt?.deliveryDate
+      && storeReceiptDeadlineStatus(claim.receipt.deliveryDate, claim.createdAt).overdue) {
+      return {
+        transitioned: false,
+        duplicated: false,
+        claim,
+        skipped: 'OVERDUE_REQUIRES_MANUAL_APPROVAL',
+      }
+    }
+
+    // Share the receipt-finance lock with derivative creation before reading or
+    // reopening its schedule; this prevents a claim resolution from racing a
+    // newly-created ON_HOLD schedule into a permanently frozen state.
+    const receiptFinanceId = payableReceiptIdForClaim(claim)
+    if (receiptFinanceId) {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`receipt-finance:${receiptFinanceId}`}))::text AS locked`
+    }
 
     let payableAdjustment = '入库时已按实收净额计算，本次不重复调整应付'
     if (claim.payableBasis === 'GROSS_PENDING_CLAIM') {
@@ -223,7 +246,9 @@ export async function approveLossClaimAtomically(params: {
       await setReceiptSettlementAmountInTransaction(tx, {
         receiptId,
         amount: nextAmount,
-        scheduleStatus: otherOpenClaims > 0 ? 'ON_HOLD' : 'PENDING',
+        scheduleStatus: otherOpenClaims > 0
+          ? 'ON_HOLD'
+          : (schedule.needApproval ? (schedule.approvedAt ? 'APPROVED' : 'PENDING_APPROVAL') : 'PENDING'),
       })
       payableAdjustment = `应付 ${schedule.amount.toFixed(2)} → ${nextAmount.toFixed(2)}`
     } else if (claim.payableBasis === 'NET_AT_RECEIPT' && claim.receiptId) {
@@ -239,7 +264,9 @@ export async function approveLossClaimAtomically(params: {
         await setReceiptSettlementAmountInTransaction(tx, {
           receiptId: claim.receiptId,
           amount: schedule.amount,
-          scheduleStatus: otherOpenClaims > 0 ? 'ON_HOLD' : 'PENDING',
+          scheduleStatus: otherOpenClaims > 0
+            ? 'ON_HOLD'
+            : (schedule.needApproval ? (schedule.approvedAt ? 'APPROVED' : 'PENDING_APPROVAL') : 'PENDING'),
         })
       }
     }
@@ -315,6 +342,23 @@ function payableReceiptIdForClaim(claim: {
   return claim.receiptId || claim.purchaseOrder?.receiptId || null
 }
 
+function withReceiptDeadline<T extends {
+  createdAt: Date
+  receipt?: { deliveryDate?: Date | null } | null
+}>(claim: T) {
+  const receiptDate = claim.receipt?.deliveryDate
+  if (!receiptDate) return claim
+  const deadline = storeReceiptDeadlineStatus(receiptDate, claim.createdAt)
+  return {
+    ...claim,
+    lateReport: {
+      deadlineAt: deadline.deadlineAt,
+      overdue: deadline.overdue,
+      requiresManualApproval: deadline.requiresManualApproval,
+    },
+  }
+}
+
 export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 列表 ──────────────────────────────────────────
@@ -345,7 +389,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
         supplier: { select: { name: true } },
         purchaseOrder: { select: { id: true, no: true } },
         deliveryOrder: { select: { id: true, no: true } },
-        receipt: { select: { id: true, no: true } },
+        receipt: { select: { id: true, no: true, deliveryDate: true } },
         createdBy: { select: { name: true } },
         handledBy: { select: { name: true, role: true } },
         items: { include: { product: { select: { name: true, unit: true, spec: true } } } },
@@ -353,7 +397,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     })
     // OSS 签名 1h 过期 → 读取时统一重签,前端不会再看到裂图
     const items = claims.map((c) => ({
-      ...c,
+      ...withReceiptDeadline(c),
       items: c.items.map(withDocumentProductSnapshot),
       evidenceImages: resignOssUrls(c.evidenceImages),
     }))
@@ -553,13 +597,13 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     if (!claim) return reply.status(404).send({ error: '报损单不存在或无权查看' })
 
     return {
-      ...claim,
+      ...withReceiptDeadline(claim),
       items: claim.items.map(withDocumentProductSnapshot),
       evidenceImages: resignOssUrls(claim.evidenceImages),
     }
   })
 
-  // ── 验收后 48 小时补报到货异常 ────────────────────────
+  // ── 验收后补报到货异常 ───────────────────────────────
   // 隐蔽破损/品质异常可能在拆包后才发现。创建时立即把实物移出可用库存，
   // 同时冻结未付账期；供应商是否认可只决定结算，不恢复已确认异常的实物。
   app.post('/', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
@@ -571,10 +615,11 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const input = parsed.data
     const now = new Date()
-
     try {
-      const claim = await prisma.$transaction(async tx => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`post-receipt-loss:${input.receiptId}`}))::text AS locked`
+      const created = await prisma.$transaction(async tx => {
+        // Post-receipt reports mutate the same settlement as approval and
+        // derivative creation, so they must share their receipt-level lock.
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`receipt-finance:${input.receiptId}`}))::text AS locked`
         const receipt = await tx.receipt.findFirst({
           where: {
             id: input.receiptId,
@@ -592,15 +637,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
           },
         })
         if (!receipt || !receipt.purchaseOrder) throw { statusCode: 404, message: '未找到对应的已确认收货单' }
-        if (!receipt.confirmedAt) throw { statusCode: 409, message: '收货单缺少确认时间，暂不能补报，请联系管理员核对' }
-        const deadline = dayjs(receipt.confirmedAt).add(48, 'hour')
-        if (dayjs(now).isAfter(deadline)) {
-          throw {
-            statusCode: 409,
-            code: 'POST_RECEIPT_CLAIM_WINDOW_EXPIRED',
-            message: `该收货单已超过 48 小时补报期限（截止 ${deadline.format('YYYY-MM-DD HH:mm')}）`,
-          }
-        }
+        const deadlineStatus = storeReceiptDeadlineStatus(receipt.deliveryDate, now)
         const schedule = receipt.paymentSchedule
         if (!schedule) throw { statusCode: 409, message: '该收货单账期尚未生成，请稍后重试' }
         if (['PROCESSING', 'PAID', 'CANCELLED'].includes(schedule.status)) {
@@ -694,6 +731,8 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
             evidenceImages: input.evidenceImages,
             status: 'PENDING',
             createdById: userId,
+            // The filing timestamp and deadline classification must be the same instant.
+            createdAt: now,
             items: { create: itemsData },
           },
           include: { items: { include: { product: true } } },
@@ -710,19 +749,37 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
             target: no,
             entityType: 'LossClaim',
             targetId: created.id,
-            metadata: { receiptId: receipt.id, deadline: deadline.toISOString() },
+            metadata: {
+              receiptId: receipt.id,
+              receiptDeadlineAt: deadlineStatus.deadlineAt.toISOString(),
+              overdue: deadlineStatus.overdue,
+              requiresManualApproval: deadlineStatus.requiresManualApproval,
+            },
           },
         })
-        return created
+        return { claim: created, receiptDeadline: deadlineStatus }
       })
 
       notify({
         tenantId,
         event: 'LOSS_PENDING',
-        eventKey: `LOSS:${claim.id}:CREATED`,
-        payload: { lossNo: claim.no, amount: Number(claim.totalLossAmount), orderId: input.purchaseOrderId },
+        eventKey: `LOSS:${created.claim.id}:CREATED`,
+        payload: {
+          lossNo: created.claim.no,
+          amount: Number(created.claim.totalLossAmount),
+          orderId: input.purchaseOrderId,
+          lateReportOverdue: created.receiptDeadline.overdue,
+        },
       })
-      return reply.status(201).send({ ...claim, evidenceImages: resignOssUrls(claim.evidenceImages) })
+      return reply.status(201).send({
+        ...created.claim,
+        lateReport: {
+          deadlineAt: created.receiptDeadline.deadlineAt,
+          overdue: created.receiptDeadline.overdue,
+          requiresManualApproval: created.receiptDeadline.requiresManualApproval,
+        },
+        evidenceImages: resignOssUrls(created.claim.evidenceImages),
+      })
     } catch (error: any) {
       return reply.status(error?.statusCode || 500).send({ code: error?.code, error: error?.message || '补报失败' })
     }
@@ -934,6 +991,9 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
         await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`loss-handle:${claim.id}`}))::text AS locked`
         const fresh = await tx.lossClaim.findFirst({ where: claimWhere, select: { id: true } })
         if (!fresh) return false
+        // Use the same lock as receipt derivative creation and approval so
+        // concurrent outcomes for separate claims cannot overwrite settlement.
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`receipt-finance:${payableReceiptId}`}))::text AS locked`
         const schedule = await tx.paymentSchedule.findUnique({
           where: { receiptId: payableReceiptId },
         })
@@ -1074,6 +1134,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       }
       const receiptId = payableReceiptIdForClaim(claim)
       if (!receiptId) throw { statusCode: 409, message: '报损未关联可调整的收货与账期记录' }
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`receipt-finance:${receiptId}`}))::text AS locked`
       const schedule = await tx.paymentSchedule.findUnique({ where: { receiptId } })
       if (!schedule || schedule.status !== 'ON_HOLD') {
         throw { statusCode: 409, message: '账期记录不存在或已被其他流程处理' }
@@ -1092,7 +1153,9 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       await setReceiptSettlementAmountInTransaction(tx, {
         receiptId,
         amount: nextAmount,
-        scheduleStatus: otherOpenClaims > 0 ? 'ON_HOLD' : 'PENDING',
+        scheduleStatus: otherOpenClaims > 0
+          ? 'ON_HOLD'
+          : (schedule.needApproval ? (schedule.approvedAt ? 'APPROVED' : 'PENDING_APPROVAL') : 'PENDING'),
       })
       await tx.lossClaim.update({
         where: { id: claim.id },

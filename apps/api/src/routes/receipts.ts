@@ -24,6 +24,7 @@ import {
   planReceiptCorrection,
   ReceiptCorrectionError,
 } from '../services/receiptCorrection'
+import { storeReceiptDeadlineStatus } from '../services/storeReceiptDeadline'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const RECEIPT_OPERATOR_ROLES = new Set(['MANAGER', 'KITCHEN_LEAD', 'ADMIN', 'SUPER_ADMIN'])
@@ -142,10 +143,36 @@ export function toInternalSupplyChainReceipt(row: any) {
     supplierVerifyNote: row.supplierVerifyNote,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    storeReceiptDeadline: row.storeReceiptDeadline,
     store: row.store,
     supplier: row.supplier,
     createdBy: row.createdBy,
     items: row.items,
+  }
+}
+
+export function withStoreReceiptDeadline<T extends {
+  deliveryDate: Date
+  status: string
+  confirmedAt?: Date | null
+  purchaseOrder?: { expectedDate: Date } | null
+}>(receipt: T, now: Date = new Date()) {
+  const expectedDate = receipt.purchaseOrder?.expectedDate
+  const useExpectedDate = Boolean(expectedDate && ['DRAFT', 'PENDING', 'PENDING_CONFIRM'].includes(receipt.status))
+  const pending = ['DRAFT', 'PENDING', 'PENDING_CONFIRM'].includes(receipt.status)
+  const deadline = storeReceiptDeadlineStatus(
+    useExpectedDate ? expectedDate! : receipt.deliveryDate,
+    pending ? now : (receipt.confirmedAt || now),
+  )
+  return {
+    ...receipt,
+    storeReceiptDeadline: {
+      deadlineAt: deadline.deadlineAt,
+      overdue: deadline.overdue,
+      requiresAction: pending && deadline.overdue,
+      // 待收货可展示约定到货日；已收货必须以实际/已冻结的到货业务日为准。
+      source: useExpectedDate ? 'PURCHASE_ORDER_EXPECTED_DATE' : 'RECEIPT_DELIVERY_DATE',
+    },
   }
 }
 
@@ -238,6 +265,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
         include: {
           store: { select: { id: true, no: true, name: true } },
           supplier: { select: { id: true, no: true, name: true } },
+          purchaseOrder: { select: { expectedDate: true } },
           createdBy: { select: { id: true, name: true } },
           items: {
             include: {
@@ -258,7 +286,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     ])
     const items = rows.map(receipt => {
       const withSnapshots = {
-        ...receipt,
+        ...withStoreReceiptDeadline(receipt),
         items: receipt.items.map(withDocumentProductSnapshot),
       }
       return internalRead ? toInternalSupplyChainReceipt(withSnapshots) : withSnapshots
@@ -279,6 +307,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       include: {
         store: internalRead ? { select: { id: true, no: true, name: true } } : true,
         supplier: internalRead ? { select: { id: true, no: true, name: true } } : true,
+        purchaseOrder: { select: { expectedDate: true } },
         createdBy: { select: { id: true, name: true } },
         items: {
           include: {
@@ -297,7 +326,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     })
     if (!receipt) return reply.status(404).send({ error: '入库单不存在' })
     const withSnapshots = {
-      ...receipt,
+      ...withStoreReceiptDeadline(receipt),
       items: receipt.items.map(withDocumentProductSnapshot),
     }
     return internalRead ? toInternalSupplyChainReceipt(withSnapshots) : withSnapshots
@@ -533,6 +562,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     }))
     const totalLossAmount = lossItemsData.reduce((sum, item) => sum.add(item.lossAmount), new Prisma.Decimal(0)).toDecimalPlaces(2)
     const confirmedAt = new Date()
+    const lateReport = storeReceiptDeadlineStatus(receipt.deliveryDate, confirmedAt)
     const ym = businessMonthKey(confirmedAt)
 
     await prisma.$transaction(async tx => {
@@ -569,8 +599,10 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
             totalLossAmount,
             description,
             evidenceImages,
-            status: 'APPROVED',
+            // 逾期到货差异仍按实收额入账；财务派生会按未决差异冻结账期，待人工审批。
+            status: lateReport.overdue ? 'PENDING' : 'APPROVED',
             createdById: userId,
+            createdAt: confirmedAt,
             items: { create: lossItemsData },
           },
         })
@@ -607,11 +639,18 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     })
 
     const store = await prisma.store.findUnique({ where: { id: receipt.storeId }, select: { name: true } })
-    void notifyReceiptConfirmed(tenantId, receipt.no, store?.name || '', totalLossAmount.gt(0), totalLossAmount.toNumber())
+    void notifyReceiptConfirmed(
+      tenantId, receipt.no, store?.name || '', totalLossAmount.gt(0), totalLossAmount.toNumber(), lateReport.overdue,
+    )
     return {
       message: `报损入库成功，账期按实收金额 ¥${actualAmount.toFixed(2)} 生成`,
       actualAmount: actualAmount.toNumber(),
       totalLossAmount: totalLossAmount.toNumber(),
+      lateReport: {
+        deadlineAt: lateReport.deadlineAt,
+        overdue: lateReport.overdue,
+        requiresManualApproval: lateReport.requiresManualApproval,
+      },
     }
   })
 

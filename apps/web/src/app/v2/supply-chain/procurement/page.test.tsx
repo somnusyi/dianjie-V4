@@ -107,6 +107,7 @@ const statementDetail = {
 function installPageMock(options: {
   orders?: any[]
   receipts?: any[]
+  purchaseReturns?: any[]
   contracts?: any[]
   statements?: any[]
   orderDetail?: any
@@ -115,6 +116,7 @@ function installPageMock(options: {
 } = {}) {
   const orders = options.orders ?? []
   const receipts = options.receipts ?? []
+  const purchaseReturns = options.purchaseReturns ?? []
   const contracts = options.contracts ?? []
   const statements = options.statements ?? []
   mockFetch.mockImplementation((path, init) => {
@@ -122,6 +124,7 @@ function installPageMock(options: {
     if (url === '/api/upstream/purchase-orders' && !init) return Promise.resolve(orders)
     if (url === '/api/upstream/shipments') return Promise.resolve([])
     if (url === '/api/upstream/receipts') return Promise.resolve(receipts)
+    if (url === '/api/upstream/purchase-returns') return Promise.resolve(purchaseReturns)
     if (url === '/api/upstream/arrival-claims') return Promise.resolve([])
     if (url === '/api/upstream/settlement-statements') return Promise.resolve(statements)
     if (url === '/api/upstream/contracts') return Promise.resolve(contracts)
@@ -168,6 +171,7 @@ describe('上游采购收货后补报', () => {
       if (url === '/api/upstream/purchase-orders') return Promise.resolve([])
       if (url === '/api/upstream/shipments') return Promise.resolve([])
       if (url === '/api/upstream/receipts') return Promise.resolve([postedReceipt])
+      if (url === '/api/upstream/purchase-returns') return Promise.resolve([])
       if (url === '/api/upstream/arrival-claims') return Promise.resolve([])
       if (url === '/api/upstream/settlement-statements') return Promise.resolve([])
       if (url === '/api/upstream/contracts') return Promise.resolve([])
@@ -238,6 +242,7 @@ describe('上游采购收货后补报', () => {
       if (url === '/api/upstream/purchase-orders') return Promise.resolve([])
       if (url === '/api/upstream/shipments') return Promise.resolve([])
       if (url === '/api/upstream/receipts') return Promise.resolve([postedReceipt])
+      if (url === '/api/upstream/purchase-returns') return Promise.resolve([])
       if (url === '/api/upstream/arrival-claims') return Promise.resolve([])
       if (url === '/api/upstream/settlement-statements') return Promise.resolve([])
       if (url === '/api/upstream/contracts') return Promise.resolve([])
@@ -400,6 +405,35 @@ describe('上游采购收货后补报', () => {
     expect(container.textContent).toContain(changeOrder.no)
     expect(container.textContent).toContain(`收货单 ${postedReceipt.no}`)
     expect(container.textContent).toContain('差异单 UCL202609000001')
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('采购退货按独立单据展示并明确审批时才扣库存', async () => {
+    installPageMock({
+      purchaseReturns: [{
+        id: 'return-1', no: 'URT202609000001', status: 'PENDING_APPROVAL', reason: '质量不合格',
+        settlementAmount: 100, ledgerCostAmount: 0, createdAt: '2026-09-28T01:00:00Z',
+        supplier: postedReceipt.supplier,
+        warehouse: { id: 'warehouse-1', code: 'WH001', name: '供应链总仓' },
+        lines: [{
+          id: 'return-line-1', receiptLineId: 'receipt-line-1', purchaseQuantity: 4, purchaseUnit: 'kg',
+          inventoryQuantity: 4, inventoryUnit: 'kg', settlementUnitPrice: 25, settlementAmount: 100,
+          product: { id: 'product-1', code: 'P001', name: '云南小土豆', spec: '10kg/箱' },
+          receiptLine: { id: 'receipt-line-1', receiptId: postedReceipt.id, receipt: { no: postedReceipt.no } },
+        }],
+      }],
+    })
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('采购退货') ?? false)
+    act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '采购退货')?.click())
+    await waitFor(() => container.textContent?.includes('URT202609000001') ?? false)
+
+    expect(container.textContent).toContain(`原收货单 ${postedReceipt.no}`)
+    expect(container.textContent).toContain('云南小土豆')
+    expect(container.textContent).toContain('待审核')
+    expect(container.textContent).toContain('审核并出库')
 
     act(() => root.unmount())
     container.remove()

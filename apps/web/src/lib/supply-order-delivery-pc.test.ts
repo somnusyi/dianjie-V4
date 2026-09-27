@@ -15,6 +15,7 @@ import {
   keepDeliveryFiltersForPage,
   keepOrderFiltersForPage,
   orderDeliveryDateText,
+  orderDateTimeText,
   orderDeliveryPaginationRange,
   orderDeliveryTotalPages,
   orderItemSummary,
@@ -217,6 +218,17 @@ describe('validateOrderDeliveryDateRange', () => {
   it('returns error when dateFrom is after dateTo', () => {
     const result = validateOrderDeliveryDateRange('2026-07-25', '2026-07-01')
     expect(result).toBe('开始日期不能晚于结束日期')
+  })
+})
+
+describe('orderDateTimeText', () => {
+  it('formats UTC timestamps in Asia/Shanghai', () => {
+    expect(orderDateTimeText('2026-07-15T09:00:00.000Z')).toBe('2026-07-15 17:00')
+  })
+
+  it('returns a dash for missing or invalid values', () => {
+    expect(orderDateTimeText(null)).toBe('—')
+    expect(orderDateTimeText('not-a-date')).toBe('—')
   })
 })
 

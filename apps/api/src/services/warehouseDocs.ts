@@ -13,6 +13,53 @@ function docError(message: string, statusCode = 409) {
 
 const docNoSequenceAttempts = 5
 
+export type WarehouseDocAttachmentInput = {
+  key: string
+  name: string
+  mime: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif' | 'application/pdf'
+  size: number
+}
+
+const warehouseDocAttachmentMimes = new Set<WarehouseDocAttachmentInput['mime']>([
+  'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf',
+])
+
+/**
+ * Supplier delivery documents are stored as durable OSS object keys, never as
+ * expiring signed URLs. The key prefix is tenant-owned and purpose-specific so
+ * another module's loss evidence cannot be attached by reference.
+ */
+export function normalizeWarehouseDocAttachments(tenantId: string, value: unknown): WarehouseDocAttachmentInput[] {
+  if (value == null) return []
+  if (!Array.isArray(value)) throw docError('随货单据格式无效', 400)
+  if (value.length > 9) throw docError('随货单据最多上传9份', 400)
+  const prefix = `warehouse-docs/${tenantId}/`
+  const seen = new Set<string>()
+  return value.map((candidate, index) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      throw docError(`第${index + 1}份随货单据格式无效`, 400)
+    }
+    const raw = candidate as Record<string, unknown>
+    const key = typeof raw.key === 'string' ? raw.key.trim() : ''
+    const name = typeof raw.name === 'string' ? raw.name.trim() : ''
+    const mime = typeof raw.mime === 'string' ? raw.mime : ''
+    const size = Number(raw.size)
+    if (!key.startsWith(prefix) || key.length > 1024 || key.slice(prefix.length).length === 0 || key.includes('..')) {
+      throw docError(`第${index + 1}份随货单据不属于当前租户`, 403)
+    }
+    if (seen.has(key)) throw docError('随货单据不能重复', 400)
+    if (!name || name.length > 160) throw docError(`第${index + 1}份随货单据名称无效`, 400)
+    if (!warehouseDocAttachmentMimes.has(mime as WarehouseDocAttachmentInput['mime'])) {
+      throw docError(`第${index + 1}份随货单据类型无效`, 400)
+    }
+    if (!Number.isInteger(size) || size <= 0 || size > 10 * 1024 * 1024) {
+      throw docError(`第${index + 1}份随货单据大小无效`, 400)
+    }
+    seen.add(key)
+    return { key, name, mime: mime as WarehouseDocAttachmentInput['mime'], size }
+  })
+}
+
 /** 生成单据编号：RK/CK + yyyymmdd（按单据日期，北京时间）+ 当日序号。唯一冲突时递增重试。 */
 async function generateDocNo(tenantId: string, type: 'MANUAL_INBOUND' | 'MANUAL_OUTBOUND', effectiveAt: Date) {
   const prefix = type === 'MANUAL_INBOUND' ? 'RK' : 'CK'
@@ -71,55 +118,78 @@ export async function ensureWarehouseDoc(input: {
   idempotencyKey: string
   supplierId?: string | null
   supplierName?: string | null
+  attachments?: WarehouseDocAttachmentInput[]
   reason?: string | null
   note?: string | null
   lines: WarehouseDocLineInput[]
 }) {
+  const idempotencyWhere = {
+    tenantId_type_idempotencyKey: {
+      tenantId: input.tenantId,
+      type: input.type,
+      idempotencyKey: input.idempotencyKey,
+    },
+  } as const
   const existing = await prisma.warehouseDoc.findUnique({
-    where: { tenantId_type_idempotencyKey: { tenantId: input.tenantId, type: input.type, idempotencyKey: input.idempotencyKey } },
+    where: idempotencyWhere,
     include: { lines: true },
   })
   if (existing) return { doc: existing, created: false }
-  const docNo = await generateDocNo(input.tenantId, input.type, input.effectiveAt)
   const totalAmount = input.lines.reduce((sum, line) => sum.plus(line.amount), new Prisma.Decimal(0)).toDecimalPlaces(4)
-  const doc = await prisma.warehouseDoc.create({
-    data: {
-      tenantId: input.tenantId,
-      docNo,
-      type: input.type,
-      warehouseId: input.warehouseId,
-      supplierId: input.supplierId || null,
-      supplierName: input.supplierName || null,
-      reason: input.reason || null,
-      note: input.note || null,
-      effectiveAt: input.effectiveAt,
-      status: 'POSTED',
-      lineCount: input.lines.length,
-      totalAmount,
-      idempotencyKey: input.idempotencyKey,
-      createdById: input.userId,
-      lines: {
-        create: input.lines.map((line, index) => ({
+  let doc: any = null
+  for (let attempt = 0; attempt < docNoSequenceAttempts; attempt += 1) {
+    const docNo = await generateDocNo(input.tenantId, input.type, input.effectiveAt)
+    try {
+      doc = await prisma.warehouseDoc.create({
+        data: {
           tenantId: input.tenantId,
-          lineNo: index + 1,
-          productId: line.productId,
-          productName: line.productName,
-          quantity: new Prisma.Decimal(line.quantity),
-          unit: line.unit,
-          unitPrice: line.unitPrice === null || line.unitPrice === undefined ? null : new Prisma.Decimal(line.unitPrice),
-          amount: new Prisma.Decimal(line.amount),
-          inventoryQuantity: new Prisma.Decimal(line.inventoryQuantity),
-          inventoryUnit: line.inventoryUnit,
-          note: line.note || null,
-          batchNo: line.batchNo || null,
-          manufactureDate: line.manufactureDate || null,
-          expiryDate: line.expiryDate || null,
-          movementId: line.movementId || null,
-        })),
-      },
-    },
-    include: { lines: true },
-  })
+          docNo,
+          type: input.type,
+          warehouseId: input.warehouseId,
+          supplierId: input.supplierId || null,
+          supplierName: input.supplierName || null,
+          attachments: input.attachments?.length ? input.attachments : Prisma.DbNull,
+          reason: input.reason || null,
+          note: input.note || null,
+          effectiveAt: input.effectiveAt,
+          status: 'POSTED',
+          lineCount: input.lines.length,
+          totalAmount,
+          idempotencyKey: input.idempotencyKey,
+          createdById: input.userId,
+          lines: {
+            create: input.lines.map((line, index) => ({
+              tenantId: input.tenantId,
+              lineNo: index + 1,
+              productId: line.productId,
+              productName: line.productName,
+              quantity: new Prisma.Decimal(line.quantity),
+              unit: line.unit,
+              unitPrice: line.unitPrice === null || line.unitPrice === undefined ? null : new Prisma.Decimal(line.unitPrice),
+              amount: new Prisma.Decimal(line.amount),
+              inventoryQuantity: new Prisma.Decimal(line.inventoryQuantity),
+              inventoryUnit: line.inventoryUnit,
+              note: line.note || null,
+              batchNo: line.batchNo || null,
+              manufactureDate: line.manufactureDate || null,
+              expiryDate: line.expiryDate || null,
+              movementId: line.movementId || null,
+            })),
+          },
+        },
+        include: { lines: true },
+      })
+      break
+    } catch (error: any) {
+      if (error?.code !== 'P2002') throw error
+      // 同一幂等请求并发时，唯一约束的败方返回赢家；不同请求同时
+      // 撞到单号时则重新取号，避免台账已过账但登记接口返回 500。
+      const winner = await prisma.warehouseDoc.findUnique({ where: idempotencyWhere, include: { lines: true } })
+      if (winner) return { doc: winner, created: false }
+      if (attempt === docNoSequenceAttempts - 1) throw error
+    }
+  }
+  if (!doc) throw docError('仓库单据登记失败，请使用同一请求标识重试', 409)
   await prisma.warehouseDocLog.create({
     data: {
       tenantId: input.tenantId,

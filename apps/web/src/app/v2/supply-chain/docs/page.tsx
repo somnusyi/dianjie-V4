@@ -24,7 +24,10 @@ type DocRow = {
   confirmedAt: string | null
   unauditedAt: string | null
   unauditReason: string | null
+  attachmentCount: number
 }
+
+type DocAttachment = { name: string; mime: string; size: number; url: string }
 
 type DocLine = {
   id: string
@@ -52,7 +55,7 @@ type DocLog = {
   createdAt: string
 }
 
-type DocDetail = DocRow & { lines: DocLine[]; logs: DocLog[] }
+type DocDetail = DocRow & { lines: DocLine[]; logs: DocLog[]; attachments: DocAttachment[] }
 
 type SupplierOption = { id: string; name: string; no?: string }
 
@@ -224,6 +227,7 @@ export default function WarehouseDocsPage() {
               <th className="w-44 px-4 py-3">日期</th>
               <th className="min-w-56 px-4 py-3">{type === 'MANUAL_INBOUND' ? '供应商' : '去向/原因'}</th>
               <th className="w-36 px-4 py-3 text-right">总金额</th>
+              <th className="w-28 px-4 py-3 text-center">随货单据</th>
               <th className="px-4 py-3">审核状态</th>
               <th className="w-24 px-4 py-3 text-right">操作</th>
             </tr>
@@ -235,6 +239,7 @@ export default function WarehouseDocsPage() {
                 <td className="px-4 py-3"><span className="whitespace-nowrap">{fmtDay(doc.effectiveAt)}</span><div className="mt-0.5 whitespace-nowrap text-micro text-gray3">制单 {fmtTime(doc.createdAt)}</div></td>
                 <td className="px-4 py-3">{type === 'MANUAL_INBOUND' ? (doc.supplierName || '—') : (doc.reason || '—')}</td>
                 <td className="px-4 py-3 text-right font-num"><b>{money(doc.totalAmount)}</b><div className="mt-0.5 text-micro text-gray3">{doc.lineCount} 行商品</div></td>
+                <td className="px-4 py-3 text-center">{doc.type === 'MANUAL_INBOUND' ? `${doc.attachmentCount || 0} 份` : '—'}</td>
                 <td className="px-4 py-3"><StatusBadge status={doc.status} /></td>
                 <td className="px-4 py-3 text-right">
                   <button
@@ -245,10 +250,10 @@ export default function WarehouseDocsPage() {
               </tr>
             ))}
             {!loading && items.length === 0 && (
-              <tr><td colSpan={6} className="px-4 py-10 text-center text-gray2">暂无单据</td></tr>
+              <tr><td colSpan={7} className="px-4 py-10 text-center text-gray2">暂无单据</td></tr>
             )}
             {loading && (
-              <tr><td colSpan={6} className="px-4 py-10 text-center text-gray2">加载中…</td></tr>
+              <tr><td colSpan={7} className="px-4 py-10 text-center text-gray2">加载中…</td></tr>
             )}
           </tbody>
         </table>
@@ -488,6 +493,14 @@ function DocDetailDialog({ docId, canAudit, canEdit, onClose, onChanged }: {
             备注
             <div className="text-body text-ink">{doc.note || '—'}</div>
           </div>
+          {inbound && <div className="space-y-2 text-caption text-gray2 sm:col-span-2">
+            <div>供应商随货单据（{doc.attachments?.length || 0}份）</div>
+            {doc.attachments?.length ? <div className="flex flex-wrap gap-2">{doc.attachments.map((item, index) => (
+              <a key={`${item.name}-${index}`} href={item.url} target="_blank" rel="noreferrer" className="rounded-cta border border-border bg-bg px-3 py-2 text-caption text-accent hover:underline">
+                {item.name} · {(item.size / 1024 / 1024).toFixed(1)}MB
+              </a>
+            ))}</div> : <div className="text-body text-gray3">未上传</div>}
+          </div>}
         </div>
 
         {/* 行明细 */}

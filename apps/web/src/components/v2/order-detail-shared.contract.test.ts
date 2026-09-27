@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const singlePage = readFileSync(new URL('../../app/v2/supplier/orders/[id]/page.tsx', import.meta.url), 'utf8')
+const supplierOrderListPage = readFileSync(new URL('../../app/v2/supplier/orders/page.tsx', import.meta.url), 'utf8')
+const poSuccessPage = readFileSync(new URL('../../app/v2/chef/purchase/po-success/[id]/page.tsx', import.meta.url), 'utf8')
 const groupPage = readFileSync(new URL('../../app/v2/supply-chain/fulfillment/group/[groupId]/page.tsx', import.meta.url), 'utf8')
 const deliveryNotePage = readFileSync(new URL('../../app/v2/supplier/orders/[id]/delivery-note/page.tsx', import.meta.url), 'utf8')
 const sharedComponent = readFileSync(new URL('./order-detail-shared.tsx', import.meta.url), 'utf8')
@@ -121,6 +123,22 @@ describe('single and grouped fulfillment detail architecture', () => {
     expect(groupPage).toContain("order.status === 'CONFIRMED'")
     expect(groupPage).toContain('`/api/orders/${encodeURIComponent(order.id)}/ship`')
     expect(groupPage).toContain('批量确认发货')
+  })
+
+  it('does not promise automatic receipt after a supplier confirms delivery', () => {
+    expect(singlePage).not.toContain('启动 24h 自动收货')
+    expect(singlePage).not.toContain('自动收货倒计时')
+    expect(singlePage).toContain('门店仍须人工验收，系统不会自动收货')
+  })
+
+  it('does not promise automatic confirmation for overdue supplier differences', () => {
+    expect(supplierOrderListPage).not.toContain('24h 未响应自动确认')
+    expect(supplierOrderListPage).toContain('逾期补报须人工审批')
+  })
+
+  it('shows late-report manual approval only while the report remains pending', () => {
+    expect(singlePage).toContain("c.status === 'PENDING' ? '逾期补报：必须人工审批，不会自动同意。' : '逾期补报'")
+    expect(poSuccessPage).toContain("lc.status === 'PENDING' ? '逾期补报 · 需人工审批' : '逾期补报'")
   })
 
   it('keeps zero quantity and removal as separate actions', () => {

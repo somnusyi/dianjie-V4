@@ -14,8 +14,17 @@ vi.mock('../../src/services/warehouseLedgerAudit', () => ({
 vi.mock('../../src/services/warehouseLedgerReconciliation', () => ({
   reconcileWarehouseShadowLedger: vi.fn(),
 }))
-vi.mock('../../src/services/warehouseDocs', () => ({
-  ensureWarehouseDoc: vi.fn(),
+vi.mock('../../src/services/warehouseDocs', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../src/services/warehouseDocs')>()
+  return { ...actual, ensureWarehouseDoc: vi.fn() }
+})
+const priceHistory = vi.hoisted(() => vi.fn())
+const assertWarehouseDocumentObjects = vi.hoisted(() => vi.fn())
+vi.mock('../../src/services/purchaseInboundPriceHistory', () => ({
+  findLatestPurchaseInboundPrices: (...args: any[]) => priceHistory(...args),
+}))
+vi.mock('../../src/routes/upload', () => ({
+  assertWarehouseDocumentObjects: (...args: any[]) => assertWarehouseDocumentObjects(...args),
 }))
 
 const mocks = vi.hoisted(() => ({
@@ -120,6 +129,8 @@ const body = {
 
 describe('warehouse inventory routes', () => {
   beforeEach(() => {
+    assertWarehouseDocumentObjects.mockReset()
+    assertWarehouseDocumentObjects.mockResolvedValue(undefined)
     recordInbound.mockReset()
     recordInbound.mockResolvedValue({
       replayed: false,
@@ -214,6 +225,8 @@ describe('warehouse inventory routes', () => {
     mocks.balanceFindMany.mockResolvedValue([])
     mocks.reservationCount.mockReset()
     mocks.reservationCount.mockResolvedValue(0)
+    priceHistory.mockReset()
+    priceHistory.mockResolvedValue([])
   })
 
   it('separates real warehouse stock from BOM placeholders and unit-governance queues', () => {
@@ -262,6 +275,89 @@ describe('warehouse inventory routes', () => {
     await app.close()
   })
 
+  it('stores validated tenant-owned supplier delivery documents on the warehouse document', async () => {
+    const app = buildApp({ tenantId: 'tenant-1', userId: 'user-1', role: 'SUPPLY_CHAIN' })
+    const attachments = [{
+      key: 'warehouse-docs/tenant-1/delivery-note.pdf',
+      name: '供应商送货单.pdf',
+      mime: 'application/pdf',
+      size: 12345,
+    }]
+    vi.mocked(ensureWarehouseDoc).mockResolvedValueOnce({
+      doc: { id: 'doc-attachment', docNo: 'RK20260802-002', status: 'POSTED', attachments },
+      created: true,
+    } as any)
+    const response = await app.inject({ method: 'POST', url: '/manual-inbound', payload: { ...body, attachments } })
+
+    expect(response.statusCode).toBe(200)
+    expect(ensureWarehouseDoc).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 'tenant-1',
+      type: 'MANUAL_INBOUND',
+      attachments,
+    }))
+    expect(assertWarehouseDocumentObjects).toHaveBeenCalledWith('tenant-1', attachments)
+    expect(JSON.stringify(response.json())).not.toContain(attachments[0].key)
+    await app.close()
+  })
+
+  it('rejects foreign-purpose and cross-tenant attachment keys before inventory posting', async () => {
+    const app = buildApp({ tenantId: 'tenant-1', userId: 'user-1', role: 'SUPPLY_CHAIN' })
+    for (const key of ['loss-claims/tenant-1/proof.jpg', 'warehouse-docs/tenant-2/delivery-note.pdf']) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/manual-inbound',
+        payload: { ...body, attachments: [{ key, name: '错误附件.pdf', mime: 'application/pdf', size: 100 }] },
+      })
+      expect(response.statusCode).toBe(403)
+    }
+    expect(recordInbound).not.toHaveBeenCalled()
+    expect(ensureWarehouseDoc).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it('rejects a missing warehouse document object before inventory posting', async () => {
+    assertWarehouseDocumentObjects.mockRejectedValueOnce(Object.assign(new Error('随货单据不存在或已失效，请重新上传'), { statusCode: 400 }))
+    const app = buildApp({ tenantId: 'tenant-1', userId: 'user-1', role: 'SUPPLY_CHAIN' })
+    const response = await app.inject({
+      method: 'POST',
+      url: '/manual-inbound',
+      payload: { ...body, attachments: [{
+        key: 'warehouse-docs/tenant-1/missing.pdf', name: '不存在.pdf', mime: 'application/pdf', size: 100,
+      }] },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json().error).toContain('不存在')
+    expect(recordInbound).not.toHaveBeenCalled()
+    expect(ensureWarehouseDoc).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it('reads tenant-scoped purchase inbound price history for internal read roles only', async () => {
+    priceHistory.mockResolvedValue([{
+      productId: 'product-1', purchaseUnit: '件', unitPrice: 80,
+      effectiveAt: new Date('2026-09-24T08:00:00.000Z'), source: 'MANUAL_INBOUND',
+    }])
+    mocks.productFindMany.mockResolvedValue([{ id: 'product-1', purchaseUnit: '件', unit: '袋' }])
+    const app = buildApp({ tenantId: 'tenant-1', userId: 'user-1', role: 'FINANCE' })
+    const response = await app.inject({ method: 'GET', url: '/purchase-inbound-price-history?supplierId=sup-1&productIds=product-1,unknown' })
+
+    expect(response.statusCode).toBe(200)
+    expect(priceHistory).toHaveBeenCalledWith({
+      tenantId: 'tenant-1', supplierId: 'sup-1', productIds: ['product-1'], purchaseUnits: { 'product-1': '件' },
+    })
+    expect(response.json()).toEqual({ items: [{ productId: 'product-1', purchaseUnit: '件', unitPrice: 80, effectiveAt: '2026-09-24T08:00:00.000Z', source: 'MANUAL_INBOUND' }] })
+    await app.close()
+  })
+
+  it('rejects malformed history requests and warehouse supplier roles', async () => {
+    const internal = buildApp({ tenantId: 'tenant-1', userId: 'user-1', role: 'SUPPLY_CHAIN' })
+    expect((await internal.inject({ method: 'GET', url: '/purchase-inbound-price-history?supplierId=sup-1' })).statusCode).toBe(400)
+    await internal.close()
+    const supplier = buildApp({ tenantId: 'tenant-1', userId: 'supplier-user', role: 'SUPPLIER_OWNER' })
+    expect((await supplier.inject({ method: 'GET', url: '/purchase-inbound-price-history?supplierId=sup-1&productIds=product-1' })).statusCode).toBe(403)
+    await supplier.close()
+  })
+
   it('rejects manual inbound without a supplier', async () => {
     const app = buildApp({ tenantId: 'tenant-1', userId: 'user-1', role: 'SUPPLY_CHAIN' })
     const { supplierId, ...noSupplier } = body
@@ -300,6 +396,16 @@ describe('warehouse inventory routes', () => {
 
   it('posts multiple inbound lines as one batch command', async () => {
     const app = buildApp({ tenantId: 'tenant-1', userId: 'user-1', role: 'SUPPLY_CHAIN' })
+    const attachments = [{
+      key: 'warehouse-docs/tenant-1/batch-delivery-note.pdf',
+      name: '批量入库送货单.pdf',
+      mime: 'application/pdf',
+      size: 23456,
+    }]
+    vi.mocked(ensureWarehouseDoc).mockResolvedValueOnce({
+      doc: { id: 'doc-batch-attachment', docNo: 'RK20260808-002', status: 'POSTED', attachments },
+      created: true,
+    } as any)
     const response = await app.inject({
       method: 'POST',
       url: '/batch-manual-inbound',
@@ -312,6 +418,7 @@ describe('warehouse inventory routes', () => {
         idempotencyKey: 'batch-inbound-0001',
         supplierId: 'sup-1',
         note: '一张单多商品入库',
+        attachments,
       },
     })
 
@@ -325,7 +432,14 @@ describe('warehouse inventory routes', () => {
         expect.objectContaining({ productId: 'product-2', purchaseQuantity: 5, unitPrice: 10 }),
       ],
     }))
+    expect(ensureWarehouseDoc).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 'tenant-1',
+      type: 'MANUAL_INBOUND',
+      attachments,
+    }))
+    expect(assertWarehouseDocumentObjects).toHaveBeenCalledWith('tenant-1', attachments)
     expect(response.json()).toMatchObject({ ok: true, count: 2, totalAmount: 210, gateWarnings: [] })
+    expect(JSON.stringify(response.json())).not.toContain(attachments[0].key)
     await app.close()
   })
 

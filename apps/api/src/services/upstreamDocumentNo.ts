@@ -6,6 +6,7 @@ const configs = {
   purchaseOrder: { scope: 'UPSTREAM_PO', prefix: 'UPO' },
   shipment: { scope: 'UPSTREAM_SHIP', prefix: 'USH' },
   receipt: { scope: 'UPSTREAM_RCPT', prefix: 'URC' },
+  purchaseReturn: { scope: 'UPSTREAM_RETURN', prefix: 'URT' },
   claim: { scope: 'UPSTREAM_CLAIM', prefix: 'UCL' },
   settlement: { scope: 'UPSTREAM_STMT', prefix: 'UST' },
 } as const

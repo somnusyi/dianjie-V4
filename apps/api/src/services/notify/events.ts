@@ -32,7 +32,7 @@ export const EVENTS = {
   },
   PO_PENDING_CONFIRM: {
     label: '订单到店',
-    desc: '供应商点击送达 → 厨师长验收 24h 倒计时',
+    desc: '供应商点击送达 → 通知门店尽快人工验收，系统不会自动收货',
     defaultRoles: ['KITCHEN_LEAD'],
     scopedBy: 'store',
     urgent: true,
@@ -80,8 +80,10 @@ export const EVENTS = {
     urgent: false,
   },
   PO_AUTO_RECEIVED: {
-    label: '超时自动收货',
-    desc: '送达 24h 未验收自动收货 → 提醒厨师长',
+    // Keep the legacy event key for stored notification compatibility; receipt
+    // confirmation itself is now always a store action.
+    label: '超时待人工验收',
+    desc: '送达后仍待门店人工验收 → 提醒厨师长',
     defaultRoles: ['KITCHEN_LEAD'],
     scopedBy: 'store',
     urgent: false,
@@ -225,7 +227,7 @@ export function renderTemplate(event: EventKey, payload: Record<string, any>): R
         kind: 'textcard',
         textcard: {
           title: `⏰ 待验收 #${payload.no || ''}`,
-          description: `${payload.supplierName || '供应商'} 已送达,合计 ¥${fmt(payload.total)}。24h 未验收将自动收货,请尽快确认。`,
+          description: `${payload.supplierName || '供应商'} 已送达,合计 ¥${fmt(payload.total)}。请门店尽快人工验收；系统不会自动收货。`,
           url: `${baseUrl()}/v2/chef/purchase/${payload.orderId}/receive`,
           btntxt: '去验收',
         },
@@ -235,7 +237,7 @@ export function renderTemplate(event: EventKey, payload: Record<string, any>): R
         kind: 'textcard',
         textcard: {
           title: `⚠ 报损待处理 ${payload.lossNo || ''}`,
-          description: `${payload.storeName || '门店'} 报损 ¥${fmt(payload.amount)}。${payload.itemPreview || ''}。24h 未处理将自动同意。`,
+          description: `${payload.storeName || '门店'} 报损 ¥${fmt(payload.amount)}。${payload.itemPreview || ''}。${payload.lateReportOverdue ? '该补报已逾期，必须人工审批，不会自动同意。' : '请在 24 小时内处理。'}`,
           url: `${baseUrl()}/v2/supplier/orders/${payload.orderId}`,
           btntxt: '查看证据',
         },
@@ -294,8 +296,8 @@ export function renderTemplate(event: EventKey, payload: Record<string, any>): R
       return {
         kind: 'textcard',
         textcard: {
-          title: `⏰ 订单超时自动收货 #${payload.no || ''}`,
-          description: `该订单送达 24h 内未验收,系统已自动确认收货。如有短量请及时报损。`,
+          title: `⏰ 订单待人工验收 #${payload.no || ''}`,
+          description: `该订单送达后仍待门店人工验收；系统不会自动确认收货。如有短量请在验收时如实报损。`,
           url: `${baseUrl()}/v2/chef/purchase/${payload.orderId}`,
           btntxt: '查看',
         },

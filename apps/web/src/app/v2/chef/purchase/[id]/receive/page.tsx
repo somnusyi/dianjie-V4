@@ -86,6 +86,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
   }
 
   const activeDelivery = (po.deliveries || []).find((delivery: any) => delivery.status === 'DELIVERED')
+  const receiptDeadline = po.storeReceiptDeadline
   const items = (activeDelivery?.items || []).map((item: any) => ({
     ...item,
     quantity: item.orderedQtySnapshot,
@@ -143,7 +144,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
     if (hasLoss) {
       openConfirm({
         title: `本单存在到货差异 ¥${lossAmount.toFixed(2)}`,
-        body: '确认收货后将按实收金额生成应付，并通知供应商确认差异；24h 未响应自动确认，不会再次重复扣款。',
+        body: '确认收货后将按实收金额生成应付，并通知供应商确认差异；逾期到货差异必须人工审批，不会自动确认。',
         confirmLabel: '确认收货',
         tone: 'primary',
         onConfirm: doSubmit,
@@ -167,6 +168,12 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
           <span className="font-num text-h2">¥{Number(po.totalAmount).toLocaleString()}</span>
         </div>
         <p className="text-caption text-gray3 mt-1">订货 {po.no} · 配送 {activeDelivery?.no || '-'} · {items.length} 项</p>
+        {receiptDeadline && (
+          <p className={`text-caption mt-2 ${receiptDeadline.overdue ? 'text-red-fg' : 'text-amber-fg'}`}>
+            请于 {new Date(receiptDeadline.deadlineAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' })} 前完成入库
+            （{receiptDeadline.source === 'DELIVERY_ARRIVAL_DATE' ? '实际到货日期' : '预计到货日期'}）{receiptDeadline.overdue ? '；当前已逾期，请立即人工处理。' : ''}
+          </p>
+        )}
       </div>
 
       {/* 商品逐条核对 */}
@@ -243,7 +250,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
       <Section title="收货说明">
         <div className="bg-white rounded-card border border-border p-3">
           <p className="text-caption text-amber-fg mb-2">
-            请在提交前核对数量、破损、品质和现场证据。拆包后才发现的隐蔽异常，可在确认收货后 48 小时内补报。
+            请在提交前核对数量、破损、品质和现场证据。拆包后才发现的隐蔽异常仍可补报；超过到货日 12:00 的补报将标记逾期并进入人工审批。
           </p>
           <p className="text-caption text-gray2">
             实收金额：<span className="font-num text-h2 text-ink">¥{total.toFixed(2)}</span>
@@ -251,7 +258,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
           {hasLoss && (
             <p className="text-caption text-red-fg mt-1">
               本单存在到货差异 ¥{lossAmount.toFixed(2)}，应付按实收金额生成，并通知 {po.supplier?.name} 确认。
-              对方 24h 未响应将自动确认差异。
+              逾期补报不会自动确认，需人工审批。
             </p>
           )}
         </div>

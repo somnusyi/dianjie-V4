@@ -51,6 +51,9 @@ model Tenant {
   upstreamShipmentLines                UpstreamShipmentLine[]
   upstreamReceipts                     UpstreamReceipt[]
   upstreamReceiptLines                 UpstreamReceiptLine[]
+  upstreamPurchaseReturns              UpstreamPurchaseReturn[]
+  upstreamPurchaseReturnLines          UpstreamPurchaseReturnLine[]
+  upstreamPurchaseReturnEvents         UpstreamPurchaseReturnEvent[]
   upstreamArrivalClaims                UpstreamArrivalClaim[]
   upstreamArrivalClaimLines            UpstreamArrivalClaimLine[]
   upstreamSettlementStatements         UpstreamSettlementStatement[]
@@ -108,21 +111,21 @@ model Tenant {
 // 当前每个 tenant 只启用一个 code=default 的默认仓；数据库 partial unique
 // index 保证单默认仓，模型保留未来同 tenant 多仓能力。
 model Warehouse {
-  id                   String                 @id @default(cuid()) @db.VarChar(64)
-  tenantId             String
-  code                 String                 @db.VarChar(64)
-  name                 String                 @db.VarChar(100)
-  isDefault            Boolean                @default(false)
-  isActive             Boolean                @default(true)
-  rowVersion           Int                    @default(0)
+  id                         String                 @id @default(cuid()) @db.VarChar(64)
+  tenantId                   String
+  code                       String                 @db.VarChar(64)
+  name                       String                 @db.VarChar(100)
+  isDefault                  Boolean                @default(false)
+  isActive                   Boolean                @default(true)
+  rowVersion                 Int                    @default(0)
   // OFF 默认不投影；SHADOW 只记账与告警且不阻断现有履约；完成新实盘期初和切换评审后才可改为 STRICT。
   inventoryMode        WarehouseInventoryMode @default(OFF)
   // 仅控制门店向内部总仓提交订单时是否阻断零库存。
   // 不改变 inventoryMode 所有的台账投影、接单预占和发货出库语义。
   blockZeroStockAtOrderEntry Boolean                @default(false)
-  inventoryActivatedAt DateTime?
-  createdAt            DateTime               @default(now())
-  updatedAt            DateTime               @updatedAt
+  inventoryActivatedAt       DateTime?
+  createdAt                  DateTime               @default(now())
+  updatedAt                  DateTime               @updatedAt
 
   tenant                        Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   stocks                        WarehouseStock[]
@@ -140,6 +143,7 @@ model Warehouse {
   upstreamPurchaseOrders        UpstreamPurchaseOrder[]
   upstreamShipments             UpstreamShipment[]
   upstreamReceipts              UpstreamReceipt[]
+  upstreamPurchaseReturns       UpstreamPurchaseReturn[]
 
   @@unique([tenantId, code])
   @@unique([tenantId, id])
@@ -209,6 +213,7 @@ enum WarehouseLedgerMovementType {
   ORDER_RESERVED
   ORDER_RELEASED
   ORDER_OUTBOUND
+  PURCHASE_RETURN
   ADJUSTMENT
   LOSS
   REVERSAL
@@ -248,17 +253,18 @@ model WarehouseLedgerMovement {
   reversalOfId         String?                     @unique @db.VarChar(64)
   recordedAt           DateTime                    @default(now())
 
-  tenant                Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  warehouse             Warehouse                      @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
-  product               Product                        @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
-  supplier              Supplier?                      @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  reversalOf            WarehouseLedgerMovement?       @relation("WarehouseLedgerMovementReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
-  reversal              WarehouseLedgerMovement?       @relation("WarehouseLedgerMovementReversal")
-  createdLot            WarehouseLedgerLot?            @relation("WarehouseLedgerLotSource")
-  lotAllocations        WarehouseLedgerLotAllocation[]
-  docLines              WarehouseDocLine[]
-  upstreamReceiptLine   UpstreamReceiptLine?           @relation("UpstreamReceiptLedgerMovement")
-  upstreamClaimLossLine UpstreamArrivalClaimLine?      @relation("UpstreamClaimLossLedgerMovement")
+  tenant                     Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse                  Warehouse                      @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  product                    Product                        @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  supplier                   Supplier?                      @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  reversalOf                 WarehouseLedgerMovement?       @relation("WarehouseLedgerMovementReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversal                   WarehouseLedgerMovement?       @relation("WarehouseLedgerMovementReversal")
+  createdLot                 WarehouseLedgerLot?            @relation("WarehouseLedgerLotSource")
+  lotAllocations             WarehouseLedgerLotAllocation[]
+  docLines                   WarehouseDocLine[]
+  upstreamReceiptLine        UpstreamReceiptLine?           @relation("UpstreamReceiptLedgerMovement")
+  upstreamClaimLossLine      UpstreamArrivalClaimLine?      @relation("UpstreamClaimLossLedgerMovement")
+  upstreamPurchaseReturnLine UpstreamPurchaseReturnLine?    @relation("UpstreamPurchaseReturnLedgerMovement")
 
   @@unique([tenantId, warehouseId, idempotencyKey])
   @@index([tenantId, warehouseId, productId, effectiveAt])
@@ -420,6 +426,7 @@ model WarehouseDoc {
   warehouseId    String                   @db.VarChar(64)
   supplierId     String?
   supplierName   String?                  @db.VarChar(120) // 快照，供应商改名不影响历史单据
+  attachments    Json? // 供应商随货单据：持久化 OSS key/name/mime/size；与报损举证分离
   reason         String?                  @db.VarChar(120) // 出库单：原因/去向
   note           String?                  @db.VarChar(240)
   effectiveAt    DateTime
@@ -1183,7 +1190,7 @@ model WeComSyncLog {
 // ── 门店 ──────────────────────────────────────────────
 model Store {
   transfersOut StoreTransfer[] @relation("StoreTransferFrom")
-  transfersIn StoreTransfer[] @relation("StoreTransferTo")
+  transfersIn  StoreTransfer[] @relation("StoreTransferTo")
 
   id              String      @id @default(cuid())
   tenantId        String
@@ -1347,6 +1354,7 @@ model Supplier {
   upstreamPurchaseOrders       UpstreamPurchaseOrder[]
   upstreamShipments            UpstreamShipment[]
   upstreamReceipts             UpstreamReceipt[]
+  upstreamPurchaseReturns      UpstreamPurchaseReturn[]
   upstreamArrivalClaims        UpstreamArrivalClaim[]
   upstreamSettlementStatements UpstreamSettlementStatement[]
   warehouseLedgerMovements     WarehouseLedgerMovement[]
@@ -1354,6 +1362,7 @@ model Supplier {
   deliveryRules                DeliveryRule[]
 
   @@unique([tenantId, no])
+  @@unique([tenantId, id])
   @@index([businessScopes], type: Gin, map: "suppliers_business_scopes_idx")
   @@map("suppliers")
 }
@@ -1437,6 +1446,7 @@ model Product {
   upstreamPurchaseOrderLines    UpstreamPurchaseOrderLine[]
   upstreamShipmentLines         UpstreamShipmentLine[]
   upstreamReceiptLines          UpstreamReceiptLine[]
+  upstreamPurchaseReturnLines   UpstreamPurchaseReturnLine[]
   upstreamArrivalClaimLines     UpstreamArrivalClaimLine[]
 
   @@unique([tenantId, code])
@@ -1938,19 +1948,134 @@ model UpstreamReceiptLine {
   createdAt                     DateTime  @default(now())
   updatedAt                     DateTime  @updatedAt
 
-  tenant            Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  receipt           UpstreamReceipt            @relation(fields: [tenantId, receiptId], references: [tenantId, id], onDelete: Cascade)
-  purchaseOrderLine UpstreamPurchaseOrderLine  @relation(fields: [tenantId, purchaseOrderLineId], references: [tenantId, id], onDelete: Restrict)
-  shipmentLine      UpstreamShipmentLine?      @relation(fields: [tenantId, shipmentLineId], references: [tenantId, id], onDelete: Restrict)
-  product           Product                    @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
-  ledgerMovement    WarehouseLedgerMovement?   @relation("UpstreamReceiptLedgerMovement", fields: [ledgerMovementId], references: [id], onDelete: Restrict)
-  claimLines        UpstreamArrivalClaimLine[]
-  settlementLines   UpstreamSettlementLine[]
+  tenant              Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  receipt             UpstreamReceipt              @relation(fields: [tenantId, receiptId], references: [tenantId, id], onDelete: Cascade)
+  purchaseOrderLine   UpstreamPurchaseOrderLine    @relation(fields: [tenantId, purchaseOrderLineId], references: [tenantId, id], onDelete: Restrict)
+  shipmentLine        UpstreamShipmentLine?        @relation(fields: [tenantId, shipmentLineId], references: [tenantId, id], onDelete: Restrict)
+  product             Product                      @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  ledgerMovement      WarehouseLedgerMovement?     @relation("UpstreamReceiptLedgerMovement", fields: [ledgerMovementId], references: [id], onDelete: Restrict)
+  claimLines          UpstreamArrivalClaimLine[]
+  settlementLines     UpstreamSettlementLine[]
+  purchaseReturnLines UpstreamPurchaseReturnLine[]
 
   @@unique([receiptId, purchaseOrderLineId])
   @@unique([tenantId, id])
   @@index([tenantId, productId])
   @@map("upstream_receipt_lines")
+}
+
+enum UpstreamPurchaseReturnStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  RECEIVED
+  REJECTED
+  CANCELLED
+}
+
+enum UpstreamPurchaseReturnEventType {
+  CREATED
+  SUBMITTED
+  APPROVED
+  REJECTED
+  CANCELLED
+  RECEIVED
+}
+
+// 总仓退回上游供应商：独立于到货差异。提交不动库存，审批时才从采购方总仓出库；
+// 供应商实际收到后另记 RECEIVED 事实，不复用门店履约供应商的 SupplierStock。
+model UpstreamPurchaseReturn {
+  id                 String                       @id @default(cuid()) @db.VarChar(64)
+  tenantId           String
+  no                 String                       @db.VarChar(80)
+  supplierId         String
+  warehouseId        String                       @db.VarChar(64)
+  status             UpstreamPurchaseReturnStatus @default(DRAFT)
+  reason             String                       @db.VarChar(240)
+  note               String?                      @db.VarChar(500)
+  settlementAmount   Decimal                      @default(0) @db.Decimal(20, 4)
+  ledgerCostAmount   Decimal                      @default(0) @db.Decimal(20, 4)
+  idempotencyKey     String?                      @db.VarChar(160)
+  requestFingerprint String?                      @db.Char(64)
+  rowVersion         Int                          @default(0)
+  createdById        String
+  submittedById      String?
+  submittedAt        DateTime?
+  approvedById       String?
+  approvedAt         DateTime?
+  rejectedById       String?
+  rejectedAt         DateTime?
+  rejectionReason    String?                      @db.VarChar(240)
+  cancelledById      String?
+  cancelledAt        DateTime?
+  cancellationReason String?                      @db.VarChar(240)
+  receivedById       String?
+  receivedAt         DateTime?
+  receivedNote       String?                      @db.VarChar(240)
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
+
+  tenant    Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplier  Supplier                      @relation(fields: [tenantId, supplierId], references: [tenantId, id], onDelete: Restrict)
+  warehouse Warehouse                     @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  lines     UpstreamPurchaseReturnLine[]
+  events    UpstreamPurchaseReturnEvent[]
+
+  @@unique([tenantId, no])
+  @@unique([tenantId, id])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, supplierId, status, createdAt])
+  @@map("upstream_purchase_returns")
+}
+
+model UpstreamPurchaseReturnLine {
+  id                            String   @id @default(cuid()) @db.VarChar(64)
+  tenantId                      String
+  returnId                      String   @db.VarChar(64)
+  receiptLineId                 String   @db.VarChar(64)
+  productId                     String
+  purchaseQuantity              Decimal  @db.Decimal(18, 6)
+  purchaseUnit                  String   @db.VarChar(16)
+  inventoryUnitsPerPurchaseUnit Decimal  @db.Decimal(18, 6)
+  inventoryQuantity             Decimal  @db.Decimal(18, 6)
+  inventoryUnit                 String   @db.VarChar(16)
+  settlementUnitPrice           Decimal  @db.Decimal(18, 6)
+  settlementAmount              Decimal  @db.Decimal(20, 4)
+  ledgerCostAmount              Decimal? @db.Decimal(20, 4)
+  ledgerMovementId              String?  @unique @db.VarChar(64)
+  note                          String?  @db.VarChar(240)
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
+
+  tenant         Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseReturn UpstreamPurchaseReturn   @relation(fields: [tenantId, returnId], references: [tenantId, id], onDelete: Cascade)
+  receiptLine    UpstreamReceiptLine      @relation(fields: [tenantId, receiptLineId], references: [tenantId, id], onDelete: Restrict)
+  product        Product                  @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  ledgerMovement WarehouseLedgerMovement? @relation("UpstreamPurchaseReturnLedgerMovement", fields: [ledgerMovementId], references: [id], onDelete: Restrict)
+
+  @@unique([returnId, receiptLineId])
+  @@unique([tenantId, id])
+  @@index([tenantId, productId])
+  @@index([tenantId, receiptLineId])
+  @@map("upstream_purchase_return_lines")
+}
+
+model UpstreamPurchaseReturnEvent {
+  id         String                          @id @default(cuid()) @db.VarChar(64)
+  tenantId   String
+  returnId   String                          @db.VarChar(64)
+  type       UpstreamPurchaseReturnEventType
+  fromStatus UpstreamPurchaseReturnStatus?
+  toStatus   UpstreamPurchaseReturnStatus
+  actorId    String
+  note       String?                         @db.VarChar(500)
+  createdAt  DateTime                        @default(now())
+
+  tenant         Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseReturn UpstreamPurchaseReturn @relation(fields: [tenantId, returnId], references: [tenantId, id], onDelete: Cascade)
+
+  @@index([tenantId, returnId, createdAt])
+  @@map("upstream_purchase_return_events")
 }
 
 model UpstreamArrivalClaim {
@@ -3410,6 +3535,7 @@ enum PurchaseOrderEventType {
   CREATED
   SUBMITTED
   ACCEPTED
+  PRINT_REQUESTED
   REVISION_REQUESTED
   REVISION_APPROVED
   REVISION_REJECTED
@@ -4679,27 +4805,28 @@ enum StoreTransferStatus {
 }
 
 model StoreTransfer {
-  id           String @id @default(cuid())
+  id           String              @id @default(cuid())
   tenantId     String
   no           String
   fromStoreId  String
   toStoreId    String
-  transferDate DateTime @db.Date
+  transferDate DateTime            @db.Date
   status       StoreTransferStatus @default(PENDING)
-  note         String @default("")
+  note         String              @default("")
   createdById  String
   shippedById  String?
   receivedById String?
   revokedById  String?
   requestKey   String
-  createdAt    DateTime @default(now())
+  createdAt    DateTime            @default(now())
   shippedAt    DateTime?
   receivedAt   DateTime?
   revokedAt    DateTime?
-  tenant       Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  fromStore    Store @relation("StoreTransferFrom", fields: [fromStoreId], references: [id], onDelete: Restrict)
-  toStore      Store @relation("StoreTransferTo", fields: [toStoreId], references: [id], onDelete: Restrict)
+  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  fromStore    Store               @relation("StoreTransferFrom", fields: [fromStoreId], references: [id], onDelete: Restrict)
+  toStore      Store               @relation("StoreTransferTo", fields: [toStoreId], references: [id], onDelete: Restrict)
   items        StoreTransferItem[]
+
   @@unique([tenantId, no])
   @@unique([tenantId, requestKey])
   @@index([tenantId, transferDate, status])
@@ -4707,21 +4834,22 @@ model StoreTransfer {
 }
 
 model StoreTransferItem {
-  id              String @id @default(cuid())
-  transferId      String
-  productId       String
-  name            String
-  code            String
-  spec            String?
-  category        String?
-  unit            String
-  quantity        Decimal @db.Decimal(18, 6)
-  cost            Decimal @db.Decimal(18, 6)
-  settlement      Decimal @db.Decimal(18, 6)
-  outAmount       Decimal @db.Decimal(20, 4)
-  inAmount        Decimal @db.Decimal(20, 4)
-  transfer        StoreTransfer @relation(fields: [transferId], references: [id], onDelete: Restrict)
-  product         Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  id         String        @id @default(cuid())
+  transferId String
+  productId  String
+  name       String
+  code       String
+  spec       String?
+  category   String?
+  unit       String
+  quantity   Decimal       @db.Decimal(18, 6)
+  cost       Decimal       @db.Decimal(18, 6)
+  settlement Decimal       @db.Decimal(18, 6)
+  outAmount  Decimal       @db.Decimal(20, 4)
+  inAmount   Decimal       @db.Decimal(20, 4)
+  transfer   StoreTransfer @relation(fields: [transferId], references: [id], onDelete: Restrict)
+  product    Product       @relation(fields: [productId], references: [id], onDelete: Restrict)
+
   @@unique([transferId, productId])
   @@map("store_transfer_items")
 }

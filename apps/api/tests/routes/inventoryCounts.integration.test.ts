@@ -51,8 +51,11 @@ describe('store inventory count workflow (integration)', () => {
 
     app = Fastify()
     app.decorate('authenticate', async (request: any) => {
-      request.user = String(request.headers['x-test-actor'] || 'chef') === 'supplier'
+      const actor = String(request.headers['x-test-actor'] || 'chef')
+      request.user = actor === 'supplier'
         ? { tenantId, supplierId, userId, role: 'SUPPLIER_OWNER' }
+        : actor === 'supply-chain'
+          ? { tenantId, userId, role: 'SUPPLY_CHAIN' }
         : { tenantId, storeId, storeIds: [storeId], userId, role: 'KITCHEN_LEAD' }
     })
     await app.register(inventoryCountRoutes, { prefix: '/api/inventory-counts' })
@@ -201,6 +204,63 @@ describe('store inventory count workflow (integration)', () => {
     expect(reverse.json().status).toBe('REVERSED')
     expect(await prisma.inventorySnapshot.count({ where: { tenantId, storeId, snapshotDate: new Date('2026-07-18T00:00:00.000Z') } })).toBe(0)
     expect(await prisma.inventorySnapshot.count({ where: { tenantId, storeId, snapshotDate: new Date('2026-07-10T00:00:00.000Z') } })).toBe(1)
+  })
+
+  it('allows supply-chain inventory.read to review an existing count but not write it', async () => {
+    const created = await app.inject({ method: 'POST', url: '/api/inventory-counts', payload: { countDate: '2026-07-19' } })
+    expect(created.statusCode).toBe(201)
+    const count = created.json()
+    const detail = await app.inject({ method: 'GET', url: `/api/inventory-counts/${count.id}`, headers: { 'x-test-actor': 'supply-chain' } })
+    expect(detail.statusCode).toBe(200)
+    expect(detail.json().items[0].countedQuantity).toBeNull()
+    const rejectedWrite = await app.inject({ method: 'POST', url: `/api/inventory-counts/${count.id}/start`, headers: { 'x-test-actor': 'supply-chain' }, payload: { rowVersion: count.rowVersion } })
+    expect(rejectedWrite.statusCode).toBe(403)
+    const cancelled = await app.inject({ method: 'POST', url: `/api/inventory-counts/${count.id}/cancel`, payload: { rowVersion: count.rowVersion, reason: '只读权限回归清理' } })
+    expect(cancelled.statusCode).toBe(200)
+  })
+
+  it('keeps supply-chain review tenant-scoped and rejects every count write endpoint', async () => {
+    const created = await app.inject({ method: 'POST', url: '/api/inventory-counts', payload: { countDate: '2026-07-20' } })
+    expect(created.statusCode).toBe(201)
+    const count = created.json()
+
+    const writes = await Promise.all([
+      app.inject({ method: 'POST', url: `/api/inventory-counts/${count.id}/start`, headers: { 'x-test-actor': 'supply-chain' }, payload: { rowVersion: count.rowVersion } }),
+      app.inject({ method: 'PUT', url: `/api/inventory-counts/${count.id}/items`, headers: { 'x-test-actor': 'supply-chain' }, payload: { rowVersion: count.rowVersion, items: [] } }),
+      app.inject({ method: 'POST', url: `/api/inventory-counts/${count.id}/submit`, headers: { 'x-test-actor': 'supply-chain' }, payload: { rowVersion: count.rowVersion } }),
+      app.inject({ method: 'POST', url: `/api/inventory-counts/${count.id}/confirm`, headers: { 'x-test-actor': 'supply-chain' }, payload: { rowVersion: count.rowVersion } }),
+      app.inject({ method: 'POST', url: `/api/inventory-counts/${count.id}/reverse`, headers: { 'x-test-actor': 'supply-chain' }, payload: { rowVersion: count.rowVersion, reason: '无权冲销' } }),
+      app.inject({ method: 'POST', url: `/api/inventory-counts/${count.id}/cancel`, headers: { 'x-test-actor': 'supply-chain' }, payload: { rowVersion: count.rowVersion, reason: '无权取消' } }),
+    ])
+    expect(writes.map(response => response.statusCode)).toEqual([403, 403, 403, 403, 403, 403])
+
+    const foreignSuffix = `foreign-${suffix}`
+    let foreignTenantId = ''
+    try {
+      const foreignTenant = await prisma.tenant.create({ data: { name: `跨租户盘点 ${suffix}`, slug: foreignSuffix } })
+      foreignTenantId = foreignTenant.id
+      const foreignStore = await prisma.store.create({ data: { tenantId: foreignTenantId, no: `STORE-${foreignSuffix}`, name: '跨租户门店' } })
+      const foreignUser = await prisma.user.create({
+        data: { tenantId: foreignTenantId, storeId: foreignStore.id, storeIds: [foreignStore.id], name: '跨租户盘点员', email: `${foreignSuffix}@local.test`, password: 'integration-test-only', role: 'KITCHEN_LEAD' },
+      })
+      const foreignCount = await prisma.inventoryCount.create({
+        data: { tenantId: foreignTenantId, storeId: foreignStore.id, no: `PD-${foreignSuffix}`, countDate: new Date('2026-07-20T00:00:00.000Z'), createdById: foreignUser.id },
+      })
+      const forbiddenDetail = await app.inject({ method: 'GET', url: `/api/inventory-counts/${foreignCount.id}`, headers: { 'x-test-actor': 'supply-chain' } })
+      expect(forbiddenDetail.statusCode).toBe(404)
+    } finally {
+      if (foreignTenantId) {
+        await prisma.inventoryCountItem.deleteMany({ where: { inventoryCount: { tenantId: foreignTenantId } } })
+        await prisma.inventoryCount.deleteMany({ where: { tenantId: foreignTenantId } })
+        await prisma.opLog.deleteMany({ where: { tenantId: foreignTenantId } })
+        await prisma.user.deleteMany({ where: { tenantId: foreignTenantId } })
+        await prisma.store.deleteMany({ where: { tenantId: foreignTenantId } })
+        await prisma.tenant.delete({ where: { id: foreignTenantId } })
+      }
+    }
+
+    const cancelled = await app.inject({ method: 'POST', url: `/api/inventory-counts/${count.id}/cancel`, payload: { rowVersion: count.rowVersion, reason: '权限验收后清理' } })
+    expect(cancelled.statusCode).toBe(200)
   })
 
   it('allows only one active count per store under concurrency', async () => {

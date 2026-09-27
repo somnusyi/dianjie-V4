@@ -24,7 +24,6 @@ function bounded<T>(rows: T[], max = 10000): T[] {
   return rows
 }
 const absentSources: Record<string, string> = {
-  'purchase-return': '当前系统尚未建立独立的采购退货出库单，暂不能提供对应单据记录。',
   'multi-count': '当前系统尚未建立多人盘点单，普通盘点记录仍在“盘点单”中查看。',
   profit: '当前系统尚未生成独立盘盈单，盘点盈亏金额可在“盘点单”中查看。',
   loss: '当前系统尚未生成独立盘亏单，盘点盈亏金额可在“盘点单”中查看。',
@@ -73,22 +72,117 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
     }))
     note = '数据来自现有仓库单据。未记录的上游单号、第三方单号及打印状态显示为“—”。物品按单据中的名称查询。'
   } else if (id === 'purchase-in') {
-    supportedFilters.add('supplier'); supportedFilters.add('upstream')
-    const receipts = bounded(await tx.upstreamReceipt.findMany({
-      where: { tenantId, ...dateRange('postedAt'), supplier: { tenantId },
-        ...(q.filters.warehouse ? { warehouse: { tenantId, name: { contains: q.filters.warehouse, mode: 'insensitive' } } } : {}),
-        ...(q.filters.item ? { lines: { some: { tenantId, product: { tenantId, ...productMatch } } } } : {}),
-      }, include: { supplier: { select: { name: true } }, warehouse: { select: { name: true } }, purchaseOrder: { select: { no: true } } },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 10001,
-    }))
-    const users = await tx.user.findMany({ where: { tenantId, id: { in: receipts.map(r => r.createdById) } }, select: { id: true, name: true } })
-    const names = new Map(users.map(u => [u.id, u.name]))
+    supportedFilters.add('supplier'); supportedFilters.add('upstream'); supportedFilters.add('review')
+    const warehouseFilterIds = q.filters.warehouse
+      ? (await tx.warehouse.findMany({ where: { tenantId, name: { contains: q.filters.warehouse, mode: 'insensitive' } }, select: { id: true } })).map(w => w.id)
+      : null
+    const [receipts, manualDocs] = await Promise.all([
+      tx.upstreamReceipt.findMany({
+        where: { tenantId, ...dateRange('postedAt'), supplier: { tenantId },
+          ...(warehouseFilterIds ? { warehouseId: { in: warehouseFilterIds } } : {}),
+          ...(q.filters.item ? { lines: { some: { tenantId, product: { tenantId, ...productMatch } } } } : {}),
+        }, include: { supplier: { select: { name: true } }, purchaseOrder: { select: { no: true } } },
+        orderBy: [{ postedAt: 'desc' }, { id: 'desc' }], take: 10001,
+      }),
+      tx.warehouseDoc.findMany({
+        where: { tenantId, type: 'MANUAL_INBOUND', supplierId: { not: null }, ...dateRange('effectiveAt'),
+          ...(warehouseFilterIds ? { warehouseId: { in: warehouseFilterIds } } : {}),
+          ...(q.filters.item ? { lines: { some: { tenantId, productName: { contains: q.filters.item, mode: 'insensitive' } } } } : {}),
+        }, orderBy: [{ effectiveAt: 'desc' }, { id: 'desc' }], take: 10001,
+      }),
+    ])
+    bounded(receipts); bounded(manualDocs)
+    const [warehouses, users] = await Promise.all([
+      tx.warehouse.findMany({ where: { tenantId, id: { in: [...new Set([...receipts.map(r => r.warehouseId), ...manualDocs.map(d => d.warehouseId)])] } }, select: { id: true, name: true } }),
+      tx.user.findMany({ where: { tenantId, id: { in: [...new Set([...receipts.map(r => r.createdById), ...manualDocs.flatMap(d => d.createdById ? [d.createdById] : [])])] } }, select: { id: true, name: true } }),
+    ])
+    const names = new Map(users.map(u => [u.id, u.name])); const warehouseNames = new Map(warehouses.map(w => [w.id, w.name]))
     const statuses = { DRAFT: '草稿', INSPECTING: '验收中', PENDING_REVIEW: '待复核', POSTED: '已入库', REVERSED: '已冲销' }
-    rows = receipts.map(r => ({ id: r.id, no: r.no, date: day(r.postedAt), upstream: r.purchaseOrder.no, org, warehouse: r.warehouse.name,
-      supplier: r.supplier.name, amount: Number(r.payableAmount), status: statuses[r.status], createdAt: timestamp(r.createdAt), creator: names.get(r.createdById) ?? null, note: r.note,
-      attachments: Array.isArray(r.evidence) ? `${r.evidence.length} 项` : null,
+    const purchaseRows = [
+      ...receipts.map(r => ({ id: `receipt:${r.id}`, rawId: r.id, sourceRank: 0, sortAt: r.postedAt,
+        no: r.no, date: day(r.postedAt), upstream: r.purchaseOrder.no, org, warehouse: warehouseNames.get(r.warehouseId) ?? null,
+        supplier: r.supplier.name, amount: Number(r.payableAmount), status: statuses[r.status], review: null,
+        createdAt: timestamp(r.createdAt), creator: names.get(r.createdById) ?? null, note: r.note,
+        attachments: Array.isArray(r.evidence) ? `${r.evidence.length} 项` : null,
+      })),
+      ...manualDocs.map(d => ({ id: `warehouse-doc:${d.id}`, rawId: d.id, sourceRank: 1, sortAt: d.effectiveAt,
+        no: d.docNo, date: day(d.effectiveAt), upstream: null, org, warehouse: warehouseNames.get(d.warehouseId) ?? null,
+        supplier: d.supplierName, amount: Number(d.totalAmount), status: '已入库', review: d.reviewStatus === 'REVIEWED' ? '已复审' : '未复审',
+        createdAt: timestamp(d.createdAt), creator: d.createdById ? names.get(d.createdById) ?? null : null, note: d.note,
+        attachments: Array.isArray(d.attachments) && d.attachments.length > 0 ? `${d.attachments.length} 项` : null,
+      })),
+    ]
+    bounded(purchaseRows)
+    purchaseRows.sort((a, b) => (b.sortAt?.getTime() ?? Number.NEGATIVE_INFINITY) - (a.sortAt?.getTime() ?? Number.NEGATIVE_INFINITY)
+      || a.sourceRank - b.sourceRank || b.rawId.localeCompare(a.rawId))
+    rows = purchaseRows.map(({ rawId: _rawId, sourceRank: _sourceRank, sortAt: _sortAt, ...row }) => row)
+    note = '数据来自采购收货单及关联供应商的手工入库单，入库日期取实际过账/生效日期；未入库收货单可按创建时间查询。附件列显示采购收货凭证或手工入库随货单据数量，两类附件用途彼此独立。'
+  } else if (id === 'purchase-return') {
+    supportedFilters.add('supplier'); supportedFilters.add('upstream'); supportedFilters.add('review')
+    const warehouseFilterIds = q.filters.warehouse
+      ? (await tx.warehouse.findMany({ where: { tenantId, name: { contains: q.filters.warehouse, mode: 'insensitive' } }, select: { id: true } })).map(w => w.id)
+      : null
+    const returnDateWhere = q.dateField === 'createdAt'
+      ? dateRange('approvedAt')
+      : (!q.start && !q.end)
+          ? {}
+          : {
+              OR: [
+                { approvedAt: {
+                  ...(q.start ? { gte: businessDateRangeInclusive(q.start, q.start).start } : {}),
+                  ...(q.end ? { lt: businessDateRangeInclusive(q.end, q.end).endExclusive } : {}),
+                } },
+                { approvedAt: null, createdAt: {
+                  ...(q.start ? { gte: businessDateRangeInclusive(q.start, q.start).start } : {}),
+                  ...(q.end ? { lt: businessDateRangeInclusive(q.end, q.end).endExclusive } : {}),
+                } },
+              ],
+            }
+    const returns = bounded(await tx.upstreamPurchaseReturn.findMany({
+      where: {
+        tenantId,
+        ...returnDateWhere,
+        ...(warehouseFilterIds ? { warehouseId: { in: warehouseFilterIds } } : {}),
+        ...(q.filters.item ? { lines: { some: { tenantId, product: { tenantId, ...productMatch } } } } : {}),
+      },
+      include: {
+        supplier: { select: { name: true } },
+        warehouse: { select: { name: true } },
+        lines: { include: { receiptLine: { include: { receipt: { select: { no: true } } } } } },
+      },
+      orderBy: [{ approvedAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }, { id: 'desc' }],
+      take: 10001,
     }))
-    note = '数据来自采购收货单，入库日期取实际过账日期；未入库单据可按创建时间查询。现有验收复核不等同于入库后复审，复审状态显示“—”；附件列显示收货凭证数量。'
+    const users = await tx.user.findMany({
+      where: { tenantId, id: { in: [...new Set(returns.map(row => row.createdById))] } },
+      select: { id: true, name: true },
+    })
+    const names = new Map(users.map(user => [user.id, user.name]))
+    const statuses = {
+      DRAFT: '草稿', PENDING_APPROVAL: '待审核', APPROVED: '已出库', RECEIVED: '供应商已收货', REJECTED: '已驳回', CANCELLED: '已取消',
+    }
+    rows = returns.map(row => {
+      const upstreamNos = [...new Set(row.lines.map(line => line.receiptLine.receipt.no))]
+      return {
+        id: row.id,
+        no: row.no,
+        date: day(row.approvedAt ?? row.createdAt),
+        upstream: upstreamNos.join('、') || null,
+        org,
+        warehouse: row.warehouse.name,
+        supplier: row.supplier.name,
+        amount: Number(row.settlementAmount),
+        status: statuses[row.status],
+        review: row.status === 'PENDING_APPROVAL' ? '待审核' : ['APPROVED', 'RECEIVED'].includes(row.status) ? '已审核' : null,
+        reconciliation: null,
+        invoice: ['APPROVED', 'RECEIVED'].includes(row.status) ? '待开票' : null,
+        printed: null,
+        createdAt: timestamp(row.createdAt),
+        creator: names.get(row.createdById) ?? null,
+        note: row.note || row.reason,
+      }
+    })
+    note = '数据来自独立采购退货单：创建和提交不动库存，已审核单据日期取实际出库日期，未审核单据日期取创建日期；供应商实收仅更新退货状态，不重复增加任何仓库库存。上游单据号取原采购收货单。'
   } else if (id === 'count') {
     supportedFilters.delete('warehouse'); supportedFilters.add('difference')
     const counts = bounded(await tx.inventoryCount.findMany({

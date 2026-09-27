@@ -835,7 +835,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     })
     sheet.getRow(1).font = { bold: true }
     sheet.views = [{ state: 'frozen', ySplit: 1 }]
-    sheet.autoFilter = { from: 'A1', to: 'R1' }
+    sheet.autoFilter = { from: 'A1', to: 'S1' }
     sheet.getColumn('amount').numFmt = '#,##0.00'
     const filename = `门店订货单-${dayjs().format('YYYYMMDD-HHmmss')}.xlsx`
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer())

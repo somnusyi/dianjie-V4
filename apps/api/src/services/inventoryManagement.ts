@@ -23,11 +23,7 @@ function bounded<T>(rows: T[], max = 10000): T[] {
   if (rows.length > max) throw Object.assign(new Error('记录过多，请缩小日期、仓库或物品范围后查询。'), { statusCode: 422 })
   return rows
 }
-const absentSources: Record<string, string> = {
-  'multi-count': '当前系统尚未建立多人盘点单，普通盘点记录仍在“盘点单”中查看。',
-  profit: '当前系统尚未生成独立盘盈单，盘点盈亏金额可在“盘点单”中查看。',
-  loss: '当前系统尚未生成独立盘亏单，盘点盈亏金额可在“盘点单”中查看。',
-}
+const absentSources: Record<string, string> = {}
 const optionFields = new Set(['org', 'warehouse', 'supplier', 'status', 'review', 'printed', 'difference', 'generated', 'reconciliation', 'invoice', 'stockStatus', 'category', 'countType', 'reason', 'supplierAccount'])
 
 export async function loadInventoryManagement(tx: Prisma.TransactionClient, tenantId: string, id: string, q: Query) {
@@ -184,7 +180,7 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
     })
     note = '数据来自独立采购退货单：创建和提交不动库存，已审核单据日期取实际出库日期，未审核单据日期取创建日期；供应商实收仅更新退货状态，不重复增加任何仓库库存。上游单据号取原采购收货单。'
   } else if (id === 'count') {
-    supportedFilters.delete('warehouse'); supportedFilters.add('difference')
+    supportedFilters.add('difference')
     const counts = bounded(await tx.inventoryCount.findMany({
       where: { tenantId, store: { tenantId }, ...dateRange('countDate'),
         ...(q.filters.item ? { items: { some: { productNameSnapshot: { contains: q.filters.item, mode: 'insensitive' } } } } : {}),
@@ -231,6 +227,27 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
     }))
     note = '当前库存来自仓库台账，单位为库存单位；日均出库量按截至昨日的完整自然日计算，已撤销流水不计入，历史单位不一致时显示“—”。仓库级上下限、安全库存及天数尚未配置，显示“—”，库存状态暂不可判断。'
   }
+  if (['count', 'multi-count', 'profit', 'loss'].includes(id)) {
+    supportedFilters.add('sourceNo'); supportedFilters.add('difference'); supportedFilters.add('generated')
+    const stocktakes = bounded(await tx.warehouseStocktake.findMany({
+      where: { tenantId, ...(['profit', 'loss'].includes(id) ? { adjustments: { some: { kind: id === 'profit' ? 'PROFIT' : 'LOSS', ...dateRange('createdAt') } } } : dateRange('countDate')), ...(q.filters.item ? { lines: { some: { OR: [{ productName: { contains: q.filters.item, mode: 'insensitive' } }, { productCode: { contains: q.filters.item, mode: 'insensitive' } }] } } } : {}) },
+      include: { warehouse: true, lines: true, partitions: true, adjustments: true }, orderBy: [{ countDate: 'desc' }, { id: 'desc' }], take: 10001,
+    }))
+    const statuses: Record<string, string> = { DRAFT: '草稿', COUNTING: '盘点中', REVIEWING: '待审核', CONFIRMED: '已审核', CANCELLED: '已取消' }
+    const users = await tx.user.findMany({ where: { tenantId, id: { in: stocktakes.map(count => count.createdById) } }, select: { id: true, name: true } })
+    for (const count of stocktakes) {
+      const base = { id: count.id, no: count.no, date: day(count.countDate), org, warehouse: count.warehouse.name, itemCount: count.lines.length, status: statuses[count.status], auditedAt: day(count.confirmedAt), createdAt: timestamp(count.createdAt), creator: users.find(user => user.id === count.createdById)?.name || null, note: count.note, recordType: 'WAREHOUSE_STOCKTAKE', detailId: count.id }
+      if (id === 'profit' || id === 'loss') {
+        for (const adjustment of count.adjustments.filter(row => row.kind === (id === 'profit' ? 'PROFIT' : 'LOSS'))) rows.push({ ...base, id: adjustment.id, no: adjustment.no, sourceNo: count.no, date: day(adjustment.createdAt), createdAt: timestamp(adjustment.createdAt), itemCount: adjustment.itemCount, amount: Number(adjustment.amount), status: '已过账' })
+      } else if (id === 'count' || count.partitions.length > 1) {
+        const total = (key: 'bookValue' | 'countedValue' | 'differenceAmount') => Number(count.lines.reduce((sum, line) => sum.plus(line[key] || 0), new Prisma.Decimal(0)))
+        rows.push({ ...base, bookAmount: total('bookValue'), actualAmount: total('countedValue'), differenceAmount: total('differenceAmount'), generated: count.status === 'CONFIRMED' ? '是' : '否', difference: count.lines.some(line => line.countedQuantity == null) ? '未盘完' : count.lines.some(line => !line.differenceQuantity?.isZero()) ? '有差异' : '无差异' })
+      }
+    }
+    rows = bounded(rows)
+    rows.sort((a, b) => String(b.date).localeCompare(String(a.date)))
+    note = id === 'count' ? '总仓盘点与历史门店盘点统一查询；总仓单支持多人分区录入、汇总提交、审核生成盘盈盘亏。' : id === 'multi-count' ? '多人分区总仓盘点；每位负责人独立保存，汇总后提交审核。' : '来自已审核总仓盘点，库存调整与盘盈盘亏单在同一事务中生成。'
+  }
   const options: Record<string, string[]> = {}
   for (const f of [...config.filters, ...config.advanced]) {
     options[f.key] = optionFields.has(f.key)
@@ -245,7 +262,7 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
   ]))
   const page = Math.min(q.page, Math.max(1, Math.ceil(total / q.pageSize)))
   const resultRows = (q.export ? rows : rows.slice((page - 1) * q.pageSize, page * q.pageSize)).map((r, i) => ({
-    id: r.id, ...Object.fromEntries(config.columns.map(c => [c.key, c.key === 'seq' ? (q.export ? 0 : (page - 1) * q.pageSize) + i + 1 : r[c.key] ?? null])),
+    id: r.id, ...(r.recordType ? { recordType: r.recordType, detailId: r.detailId } : {}), ...Object.fromEntries(config.columns.map(c => [c.key, c.key === 'seq' ? (q.export ? 0 : (page - 1) * q.pageSize) + i + 1 : r[c.key] ?? null])),
   }))
   return { id, title: config.title, columns: config.columns, rows: resultRows, total, totals, page, pageSize: q.pageSize, options,
     supportedFilters: sourceAvailable ? [...supportedFilters] : [], sourceAvailable, note, generatedAt: timestamp(new Date()) }

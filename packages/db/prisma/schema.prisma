@@ -14,6 +14,10 @@ datasource db {
 
 // ── 租户（SaaS 多租户）────────────────────────────────
 model Tenant {
+  warehouseStocktakes WarehouseStocktake[]
+  warehouseStocktakePartitions WarehouseStocktakePartition[]
+  warehouseStocktakeLines WarehouseStocktakeLine[]
+  warehouseStocktakeAdjustments WarehouseStocktakeAdjustment[]
   storeTransfers StoreTransfer[]
 
   id        String       @id @default(cuid())
@@ -111,6 +115,7 @@ model Tenant {
 // 当前每个 tenant 只启用一个 code=default 的默认仓；数据库 partial unique
 // index 保证单默认仓，模型保留未来同 tenant 多仓能力。
 model Warehouse {
+  stocktakes WarehouseStocktake[]
   id                         String                 @id @default(cuid()) @db.VarChar(64)
   tenantId                   String
   code                       String                 @db.VarChar(64)
@@ -266,6 +271,8 @@ model WarehouseLedgerMovement {
   upstreamClaimLossLine      UpstreamArrivalClaimLine?      @relation("UpstreamClaimLossLedgerMovement")
   upstreamPurchaseReturnLine UpstreamPurchaseReturnLine?    @relation("UpstreamPurchaseReturnLedgerMovement")
 
+  stocktakeLine WarehouseStocktakeLine?
+  @@unique([tenantId, id])
   @@unique([tenantId, warehouseId, idempotencyKey])
   @@index([tenantId, warehouseId, productId, effectiveAt])
   @@index([tenantId, sourceType, sourceId])
@@ -687,6 +694,12 @@ model User {
   @@unique([tenantId, email])
   @@unique([tenantId, phone])
   @@unique([tenantId, wecomUserId])
+  warehouseStocktakesCreated WarehouseStocktake[] @relation("WarehouseStocktakeCreator")
+  warehouseStocktakesSubmitted WarehouseStocktake[] @relation("WarehouseStocktakeSubmitter")
+  warehouseStocktakesConfirmed WarehouseStocktake[] @relation("WarehouseStocktakeAuditor")
+  warehouseStocktakeAssignments WarehouseStocktakePartition[] @relation("WarehouseStocktakeAssignee")
+  warehouseStocktakeSaves WarehouseStocktakePartition[] @relation("WarehouseStocktakeSaver")
+  @@unique([tenantId, id])
   @@map("users")
 }
 
@@ -1369,6 +1382,7 @@ model Supplier {
 
 // ── 商品 ──────────────────────────────────────────────
 model Product {
+  warehouseStocktakeLines WarehouseStocktakeLine[]
   storeTransferItems StoreTransferItem[]
 
   id                            String                      @id @default(cuid())
@@ -4852,4 +4866,96 @@ model StoreTransferItem {
 
   @@unique([transferId, productId])
   @@map("store_transfer_items")
+}
+
+// 供应链总仓盘点。多人按分区录入；审核与库存过账在同一事务完成。
+model WarehouseStocktake {
+  id String @id @default(cuid()) @db.VarChar(64)
+  tenantId String
+  warehouseId String @db.VarChar(64)
+  no String @db.VarChar(80)
+  countDate DateTime @db.Date
+  status InventoryCountStatus @default(DRAFT)
+  note String? @db.VarChar(240)
+  createdById String
+  submittedById String?
+  confirmedById String?
+  submittedAt DateTime?
+  confirmedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse Warehouse @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  createdBy User @relation("WarehouseStocktakeCreator", fields: [tenantId, createdById], references: [tenantId, id], onDelete: Restrict)
+  submittedBy User? @relation("WarehouseStocktakeSubmitter", fields: [tenantId, submittedById], references: [tenantId, id], onDelete: Restrict)
+  confirmedBy User? @relation("WarehouseStocktakeAuditor", fields: [tenantId, confirmedById], references: [tenantId, id], onDelete: Restrict)
+  partitions WarehouseStocktakePartition[]
+  lines WarehouseStocktakeLine[]
+  adjustments WarehouseStocktakeAdjustment[]
+  @@unique([tenantId, id])
+  @@unique([tenantId, no])
+  @@index([tenantId, countDate])
+  @@map("warehouse_stocktakes")
+}
+model WarehouseStocktakePartition {
+  id String @id @default(cuid()) @db.VarChar(64)
+  tenantId String
+  stocktakeId String @db.VarChar(64)
+  name String @db.VarChar(80)
+  assignedToId String
+  savedById String?
+  savedAt DateTime?
+  version Int @default(0)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stocktake WarehouseStocktake @relation(fields: [tenantId, stocktakeId], references: [tenantId, id], onDelete: Cascade)
+  assignedTo User @relation("WarehouseStocktakeAssignee", fields: [tenantId, assignedToId], references: [tenantId, id], onDelete: Restrict)
+  savedBy User? @relation("WarehouseStocktakeSaver", fields: [tenantId, savedById], references: [tenantId, id], onDelete: Restrict)
+  @@unique([tenantId, stocktakeId, id])
+  lines WarehouseStocktakeLine[]
+  @@unique([tenantId, id])
+  @@unique([tenantId, stocktakeId, name])
+  @@map("warehouse_stocktake_partitions")
+}
+model WarehouseStocktakeLine {
+  id String @id @default(cuid()) @db.VarChar(64)
+  tenantId String
+  stocktakeId String @db.VarChar(64)
+  partitionId String @db.VarChar(64)
+  productId String
+  productName String
+  productCode String
+  inventoryUnit String @db.VarChar(16)
+  bookQuantity Decimal @db.Decimal(18,6)
+  bookValue Decimal @db.Decimal(20,4)
+  bookVersion Int
+  unitCost Decimal @db.Decimal(18,6)
+  countedQuantity Decimal? @db.Decimal(18,6)
+  countedValue Decimal? @db.Decimal(20,4)
+  differenceQuantity Decimal? @db.Decimal(18,6)
+  differenceAmount Decimal? @db.Decimal(20,4)
+  reason String? @db.VarChar(240)
+  movementId String? @unique @db.VarChar(64)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stocktake WarehouseStocktake @relation(fields: [tenantId, stocktakeId], references: [tenantId, id], onDelete: Cascade)
+  partition WarehouseStocktakePartition @relation(fields: [tenantId, stocktakeId, partitionId], references: [tenantId, stocktakeId, id], onDelete: Restrict)
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  movement WarehouseLedgerMovement? @relation(fields: [tenantId, movementId], references: [tenantId, id], onDelete: Restrict)
+  @@unique([tenantId, movementId])
+  @@unique([tenantId, stocktakeId, productId])
+  @@map("warehouse_stocktake_lines")
+}
+model WarehouseStocktakeAdjustment {
+  id String @id @default(cuid()) @db.VarChar(64)
+  tenantId String
+  stocktakeId String @db.VarChar(64)
+  no String @db.VarChar(90)
+  kind String @db.VarChar(10)
+  amount Decimal @db.Decimal(20,4)
+  itemCount Int
+  createdAt DateTime @default(now())
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stocktake WarehouseStocktake @relation(fields: [tenantId, stocktakeId], references: [tenantId, id], onDelete: Restrict)
+  @@unique([tenantId, stocktakeId, kind])
+  @@unique([tenantId, no])
+  @@map("warehouse_stocktake_adjustments")
 }

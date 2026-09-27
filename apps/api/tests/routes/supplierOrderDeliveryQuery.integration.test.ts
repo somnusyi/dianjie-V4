@@ -362,7 +362,7 @@ describe('supplier order and delivery list query (integration)', () => {
     expect(sheet.getRow(2).getCell(2).value).toBe(`PO-A2-${suffix}`)
     expect(sheet.getRow(3).getCell(2).value).toBe(`PO-A-${suffix}`)
     expect(sheet.getRow(2).getCell(5).value).toBe('2026-07-15 16:00')
-    expect(String(sheet.getRow(3).getCell(17).value)).toContain(`DO-A-${suffix}`)
+    expect(String(sheet.getRow(3).getCell(16).value)).toContain(`DO-A-${suffix}`)
   })
 
   it('rejects order reads, exports and print artifacts for non-business or unbound roles', async () => {

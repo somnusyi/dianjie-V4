@@ -75,3 +75,6 @@ tmp/
 playwright-report/
 test-results/
 .codex-artifacts/
+
+# Local UX regression logs and scratch scripts
+.local/

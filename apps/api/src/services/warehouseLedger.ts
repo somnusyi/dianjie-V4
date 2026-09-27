@@ -1772,6 +1772,9 @@ export async function recordBatchManualWarehouseOutbound(input: BatchManualWareh
 
 export type WarehousePhysicalCountInput = {
   tenantId: string
+  warehouseId?: string
+  stocktakeId?: string
+  expectedBookVersion?: number
   userId: string
   productId: string
   countedInventoryQuantity: Decimalish
@@ -1786,9 +1789,10 @@ export type WarehousePhysicalCountInput = {
  * depleted with allocations and replaced by one auditable count lot, while
  * the movement delta keeps the balance history mathematically continuous.
  */
-export async function recordWarehousePhysicalCount(input: WarehousePhysicalCountInput) {
-  const warehouseId = await resolveTenantWarehouseId(prisma, input.tenantId, undefined)
-  const product = await prisma.product.findFirst({
+export async function recordWarehousePhysicalCount(input: WarehousePhysicalCountInput, transaction?: Prisma.TransactionClient) {
+  const client = transaction || prisma
+  const warehouseId = await resolveTenantWarehouseId(client, input.tenantId, input.warehouseId)
+  const product = await client.product.findFirst({
     where: { id: input.productId, tenantId: input.tenantId, status: 'ENABLED' },
     select: {
       id: true,
@@ -1824,7 +1828,7 @@ export async function recordWarehousePhysicalCount(input: WarehousePhysicalCount
     note: input.note || null,
   })
 
-  return serializableWithRetry(async tx => {
+  const work = async (tx: Prisma.TransactionClient) => {
     const replayWhere = {
       tenantId_warehouseId_idempotencyKey: {
         tenantId: input.tenantId,
@@ -1848,6 +1852,11 @@ export async function recordWarehousePhysicalCount(input: WarehousePhysicalCount
       return { replayed: true, movement: concurrentReplay, warehouseId }
     }
     const balance = balances.get(product.id)!
+    if (input.expectedBookVersion != null) {
+      const current = await tx.warehouseLedgerBalance.findUniqueOrThrow({ where: { id: balance.id } })
+      if (current.rowVersion !== input.expectedBookVersion) throw businessError('盘点期间库存已变动，请取消本单并重新发起盘点，避免覆盖新入出库', 409)
+      if (countedQuantity.lt(balance.reservedQty)) throw businessError('实盘数量低于已预留库存，请先处理相关订单预占', 409)
+    }
     const mode = await warehouseMode(tx, input.tenantId, warehouseId)
     if (mode === 'STRICT' && countedQuantity.lt(balance.reservedQty)) {
       throw businessError('实盘数量低于活动预占，严格模式下必须先处理相关订单预占', 409)
@@ -1872,7 +1881,7 @@ export async function recordWarehousePhysicalCount(input: WarehousePhysicalCount
         tenantId: input.tenantId,
         warehouseId,
         productId: product.id,
-        type: previousCount ? 'ADJUSTMENT' : 'OPENING_BALANCE',
+        type: input.stocktakeId || previousCount ? 'ADJUSTMENT' : 'OPENING_BALANCE',
         physicalDelta,
         reservedDelta: ZERO,
         valueDelta,
@@ -1886,8 +1895,8 @@ export async function recordWarehousePhysicalCount(input: WarehousePhysicalCount
         inventoryQuantity: countedQuantity,
         inventoryUnit: contract.inventoryUnit,
         inventoryUnitCost: averageUnitCost,
-        sourceType: 'WarehousePhysicalCount',
-        sourceId: rawKey,
+        sourceType: input.stocktakeId ? 'WarehouseStocktake' : 'WarehousePhysicalCount',
+        sourceId: input.stocktakeId || rawKey,
         sourceLineId: product.id,
         idempotencyKey,
         requestFingerprint,
@@ -1934,7 +1943,7 @@ export async function recordWarehousePhysicalCount(input: WarehousePhysicalCount
           tenantId: input.tenantId,
           warehouseId,
           productId: product.id,
-          kind: previousCount ? 'ADJUSTMENT' : 'OPENING',
+          kind: input.stocktakeId || previousCount ? 'ADJUSTMENT' : 'OPENING',
           batchNo: `${previousCount ? 'CA' : 'OB'}-${input.effectiveAt.toISOString().slice(0, 10).replaceAll('-', '')}-${movement.id.slice(-8)}`,
           initialQty: countedQuantity,
           remainingQty: countedQuantity,
@@ -1966,7 +1975,8 @@ export async function recordWarehousePhysicalCount(input: WarehousePhysicalCount
       },
     })
     return { replayed: false, movement: { ...movement, createdLot: lot }, warehouseId }
-  })
+  }
+  return transaction ? work(transaction) : serializableWithRetry(work)
 }
 
 export async function reverseManualWarehouseInbound(input: {

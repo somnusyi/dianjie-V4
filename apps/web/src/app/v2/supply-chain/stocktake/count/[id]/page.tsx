@@ -105,7 +105,7 @@ export default function StocktakeReviewPrintPage({ params }: { params: { id: str
     let current = true
     setCount(null)
     setError('')
-    apiFetch<Count>(`/api/inventory-counts/${params.id}`)
+    apiFetch<Count>(new URLSearchParams(window.location.search).get('source') === 'warehouse' ? `/api/warehouse-stocktakes/${params.id}/review` : `/api/inventory-counts/${params.id}`)
       .then(next => { if (current) setCount(next) })
       .catch(nextError => { if (current) setError(nextError.message || '盘点单加载失败') })
     return () => { current = false }

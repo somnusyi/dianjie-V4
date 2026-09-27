@@ -137,10 +137,7 @@ export default function InternalSupplyChainHomePage() {
           <h1 className="text-h1">供应链工作台</h1>
           <p className="text-caption text-gray3 mt-0.5">{today}</p>
         </div>
-        <div className="flex items-center gap-2">
-          <button className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center" aria-label="搜索">⌕</button>
-          <UserMenu />
-        </div>
+        <UserMenu />
       </header>
 
       {/* Glance 数据条 */}

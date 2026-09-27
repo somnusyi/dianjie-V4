@@ -416,6 +416,7 @@ describe('projectOrderRow', () => {
     expect(projected.no).toBe('PO20260701001')
     expect(projected.status).toBe('SUBMITTED')
     expect(projected.expectedDeliveryDate).toBe('2026-07-02T00:00:00.000Z')
+    expect((projected as any).estimatedArrivalAt).toBeUndefined()
     expect(projected.store).toEqual({ id: 's1', name: '门店A', no: 'S01' })
     expect(projected.supplier).toEqual({ id: 'sup1', name: '供应商A', no: 'SUP01' })
     expect(projected.submittedSnapshotItems).toHaveLength(2)

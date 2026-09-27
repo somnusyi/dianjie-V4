@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
+import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { DateRangeCalendar, type DateRangeValue } from '@/components/v2/date-range-calendar'
 import { apiFetch } from '@/lib/v2-auth'
 
@@ -74,6 +75,7 @@ export default function StoreTransfersPage() {
   const [toStoreId, setToStoreId] = useState('')
   const [status, setStatus] = useState<TransferStatus | ''>('')
   const [keyword, setKeyword] = useState('')
+  const [confirmState, openConfirm] = useConfirmSheet()
 
   useEffect(() => {
     apiFetch<Transfer[]>('/api/store-transfers').then(setTransfers).catch(e => setStoreError(e.message)).finally(() => setReady(true))
@@ -157,12 +159,23 @@ export default function StoreTransfersPage() {
   }
 
   async function changeStatus(id: string, nextStatus: TransferStatus) {
-    if (saving) return
+    if (saving) throw new Error('已有调拨操作正在进行，请稍候')
     setSaving(true)
     try {
       const row = await apiFetch<Transfer>(`/api/store-transfers/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status: nextStatus }) })
       setTransfers(current => current.map(item => item.id === id ? row : item)); setNotice(`调拨单 ${row.no} 已${nextStatus === 'SHIPPED' ? '发货' : nextStatus === 'RECEIVED' ? '收货' : '撤回'}`)
-    } catch (e: any) { setNotice(e.message) } finally { setSaving(false) }
+    } catch (e: any) { setNotice(e.message); throw e } finally { setSaving(false) }
+  }
+
+  function requestStatusChange(row: Transfer, nextStatus: TransferStatus) {
+    const action = nextStatus === 'SHIPPED' ? '发货' : nextStatus === 'RECEIVED' ? '收货' : '撤回'
+    openConfirm({
+      title: `确认${action}调拨单？`,
+      body: `调拨单 ${row.no}\n${nextStatus === 'REVOKED' ? '撤回后该单将不再继续流转。' : `确认后状态将更新为“${STATUS_META[nextStatus].label}”。`}`,
+      confirmLabel: `确认${action}`,
+      tone: nextStatus === 'REVOKED' ? 'danger' : 'primary',
+      onConfirm: () => changeStatus(row.id, nextStatus),
+    })
   }
 
   return (
@@ -225,8 +238,8 @@ export default function StoreTransfersPage() {
                   <td className="whitespace-nowrap px-4 py-4"><Chip tone={STATUS_META[row.status]?.tone || 'gray'}>{STATUS_META[row.status]?.label || row.status}</Chip></td>
                   <td className="whitespace-nowrap px-4 py-4 font-num text-gray2">{new Date(row.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
                   <td className="whitespace-nowrap px-4 py-4 text-right">
-                    {row.status === 'PENDING' && <div className="flex justify-end gap-3"><Action onClick={() => changeStatus(row.id, 'SHIPPED')}>发货</Action><Action muted onClick={() => changeStatus(row.id, 'REVOKED')}>撤回</Action></div>}
-                    {row.status === 'SHIPPED' && <Action onClick={() => changeStatus(row.id, 'RECEIVED')}>收货</Action>}
+                    {row.status === 'PENDING' && <div className="flex justify-end gap-3"><Action onClick={() => requestStatusChange(row, 'SHIPPED')}>发货</Action><Action muted onClick={() => requestStatusChange(row, 'REVOKED')}>撤回</Action></div>}
+                    {row.status === 'SHIPPED' && <Action onClick={() => requestStatusChange(row, 'RECEIVED')}>收货</Action>}
                     {(row.status === 'RECEIVED' || row.status === 'REVOKED') && <span className="text-gray3">—</span>}
                   </td>
                 </tr>)}
@@ -272,6 +285,7 @@ export default function StoreTransfersPage() {
           </div>
         </div>
       </div>}
+      <ConfirmSheet {...confirmState} />
     </div>
   )
 }

@@ -98,7 +98,7 @@ export default function MePage() {
               </a>
             </li>
           )}
-          {(u.role === 'BOSS' || u.role === 'ADMIN' || u.role === 'SUPER_ADMIN' || u.role === 'FINANCE') && (
+          {(u.role === 'ADMIN' || u.role === 'SUPER_ADMIN' || u.role === 'FINANCE') && (
             <>
               <li>
                 <a href="/v2/profit" className="flex items-center px-3 py-3">

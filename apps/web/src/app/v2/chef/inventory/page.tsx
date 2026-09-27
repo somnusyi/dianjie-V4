@@ -97,14 +97,10 @@ export default function ChefInventoryPage() {
 
   return (
     <div className="min-h-screen bg-bg pb-20">
-      <header className="px-4 pt-4 pb-2 flex items-center justify-between">
+      <header className="px-4 pt-4 pb-2">
         <div>
           <h1 className="text-h1">库存</h1>
           <p className="text-caption text-gray3">本店 · 后厨</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">⌕</button>
-          <button className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">⋮</button>
         </div>
       </header>
 

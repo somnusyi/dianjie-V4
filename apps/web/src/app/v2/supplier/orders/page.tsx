@@ -84,27 +84,28 @@ export default function SupplierOrdersPage() {
   const [searchDraft, setSearchDraft] = useState<SearchCriteria>(EMPTY_SEARCH)
   const [appliedSearch, setAppliedSearch] = useState<SearchCriteria>(EMPTY_SEARCH)
   // 2026-06-02: 支持 URL ?filter=报损 等 (从 billing 页报损 banner 跳过来直接进对应 filter)
-  const [filter, setFilter] = useState<'待接单' | '待发货' | '运送中' | '到货差异' | '已完成'>(() => {
+  const [filter, setFilter] = useState<'待接单' | '待发货' | '运送中' | '到货差异' | '已完成' | '已取消'>(() => {
     if (typeof window === 'undefined') return '待接单'
     const sp = new URLSearchParams(window.location.search)
     const raw = sp.get('filter')
     const f = raw === '报损' ? '到货差异' : raw
-    return ['待接单', '待发货', '运送中', '到货差异', '已完成'].includes(String(f)) ? f as any : '待接单'
+    return ['待接单', '待发货', '运送中', '到货差异', '已完成', '已取消'].includes(String(f)) ? f as any : '待接单'
   })
   const [confirmState, openConfirm] = useConfirmSheet()
 
-  function buildListQuery(page: number, pageSize: number, criteria = appliedSearch) {
+  function buildListQuery(page: number, pageSize: number, criteria = appliedSearch, orderFilter?: string) {
     const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
     if (criteria.keyword.trim()) params.set('keyword', criteria.keyword.trim())
     if (criteria.dateFrom) params.set('dateFrom', criteria.dateFrom)
     if (criteria.dateTo) params.set('dateTo', criteria.dateTo)
+    if (orderFilter === '已取消') params.set('status', 'CANCELLED')
     return params.toString()
   }
 
-  async function load(criteria = appliedSearch) {
+  async function load(criteria = appliedSearch, orderFilter = filter) {
     try {
       const [o, c] = await Promise.all([
-        apiFetch<{ items: Order[]; total: number }>(`/api/orders?${buildListQuery(1, 50, criteria)}`),
+        apiFetch<{ items: Order[]; total: number }>(`/api/orders?${buildListQuery(1, 50, criteria, orderFilter)}`),
         apiFetch<{ items: LossClaim[]; total: number }>('/api/loss-claims?page=1&pageSize=20')
           .catch(() => ({ items: [] as LossClaim[], total: 0 })),
       ])
@@ -155,7 +156,7 @@ export default function SupplierOrdersPage() {
     setLoadingOrders(true)
     try {
       const page = Math.floor(orders.length / 50) + 1
-      const d = await apiFetch<{ items: Order[]; total: number }>(`/api/orders?${buildListQuery(page, 50)}`)
+      const d = await apiFetch<{ items: Order[]; total: number }>(`/api/orders?${buildListQuery(page, 50, appliedSearch, filter)}`)
       setOrders(current => [...(current || []), ...(d.items || [])])
       setOrdersTotal(Number(d.total ?? ordersTotal))
     } catch (e: any) {
@@ -254,7 +255,8 @@ export default function SupplierOrdersPage() {
     if (f === '待接单') return s === 'SUBMITTED'
     if (f === '待发货') return s === 'CONFIRMED'
     if (f === '运送中') return s === 'PENDING_CONFIRM' || s === 'DELIVERING'   // DELIVERING 兼容老数据
-    if (f === '已完成') return ['RECEIVED', 'COMPLETED', 'CANCELLED'].includes(s)
+    if (f === '已完成') return ['RECEIVED', 'COMPLETED'].includes(s)
+    if (f === '已取消') return s === 'CANCELLED'
     return false
   }
   const visible = (orders || []).filter(o => statusInTab(o.status, filter))
@@ -335,15 +337,17 @@ export default function SupplierOrdersPage() {
       )}
 
       {documentView === 'orders' && <div className="px-4 mt-2 flex gap-2 overflow-x-auto">
-        {(['待接单', '待发货', '运送中', '到货差异', '已完成'] as const).map((f) => {
+        {(['待接单', '待发货', '运送中', '到货差异', '已完成', '已取消'] as const).map((f) => {
           const cnt = f === '到货差异'
             ? pendingClaims.length
+            : f === '已取消' && filter === '已取消'
+              ? ordersTotal
             : (orders || []).filter(o => statusInTab(o.status, f)).length
           const isUrgent = (f === '待接单' || f === '到货差异') && cnt > 0
           return (
             <button key={f} onClick={() => f === '到货差异'
               ? location.href = internalSupplyChain ? '/v2/supply-chain/receipts' : '/v2/supplier/differences'
-              : setFilter(f)}
+              : (setFilter(f), void load(appliedSearch, f))}
               className={`shrink-0 px-3 py-1.5 rounded-cta text-button relative ${filter === f ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
               <span>{f}</span>
               {cnt > 0 && <span className={`font-num ml-1 ${filter === f ? '' : isUrgent ? 'text-red-fg' : 'text-gray3'}`}>{cnt}</span>}

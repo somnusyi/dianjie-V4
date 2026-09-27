@@ -356,13 +356,17 @@ describe('supplier order and delivery list query (integration)', () => {
     await prisma.purchaseOrder.delete({ where: { id: exportPeerId } })
     const sheet = workbook.getWorksheet('门店订货单')!
     expect(sheet.rowCount).toBe(3)
-    expect(sheet.getRow(1).values).toEqual(expect.arrayContaining([
-      '订货单号', '创建来源', '创建类型', '单据提交时间', '分单时间', '操作时间', '备注', '打印状态', '创建人', '下游单据',
-    ]))
+    expect((sheet.getRow(1).values as any[]).slice(1)).toEqual([
+      '序号', '订货单号', '门店', '供应商', '创建时间', '创建来源', '创建类型', '单据状态',
+      '期望到货时间', '单据提交时间', '分单时间', '操作时间', '备注', '打印状态', '创建人',
+      '下游单据', '商品摘要', '金额',
+    ])
     expect(sheet.getRow(2).getCell(2).value).toBe(`PO-A2-${suffix}`)
     expect(sheet.getRow(3).getCell(2).value).toBe(`PO-A-${suffix}`)
     expect(sheet.getRow(2).getCell(5).value).toBe('2026-07-15 16:00')
-    expect(String(sheet.getRow(3).getCell(17).value)).toContain(`DO-A-${suffix}`)
+    expect(String(sheet.getRow(3).getCell(16).value)).toContain(`DO-A-${suffix}`)
+    expect(String(sheet.getRow(3).getCell(17).value)).toContain(`A商品-${suffix}`)
+    expect(Number(sheet.getRow(3).getCell(18).value)).toBeGreaterThan(0)
   })
 
   it('rejects order reads, exports and print artifacts for non-business or unbound roles', async () => {

@@ -47,23 +47,36 @@ export function ConfirmSheet(props: ConfirmSheetState & { close: () => void }) {
   } = props
   const [val, setVal] = useState('')
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const busyRef = React.useRef(false)
   // open 关闭时 reset
-  React.useEffect(() => { if (!open) { setVal(''); setBusy(false) } }, [open])
+  React.useEffect(() => {
+    if (!open) {
+      setVal('')
+      setBusy(false)
+      setError('')
+      busyRef.current = false
+    }
+  }, [open])
 
   if (!open) return null
 
   const handleConfirm = async () => {
-    if (withInput && inputRequired && !val.trim()) return
+    if (busyRef.current || (withInput && inputRequired && !val.trim())) return
     try {
+      busyRef.current = true
       setBusy(true)
+      setError('')
       await onConfirm?.(withInput ? val.trim() : undefined)
       close()
     } catch (e: any) {
-      // 错误展示交给调用方（onConfirm 内 throw 时停留）
+      busyRef.current = false
       setBusy(false)
+      setError(String(e?.message || '操作失败，请重试'))
     }
   }
   const handleCancel = () => {
+    if (busyRef.current) return
     onCancel?.()
     close()
   }
@@ -75,10 +88,13 @@ export function ConfirmSheet(props: ConfirmSheetState & { close: () => void }) {
 
   return (
     <div
+      data-testid="confirm-sheet-backdrop"
       className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40"
       onClick={handleCancel}
     >
       <div
+        role="dialog"
+        aria-modal="true"
         className="bg-bg-card w-full max-w-md rounded-t-2xl p-5 pb-7"
         style={{ paddingBottom: 'calc(28px + env(safe-area-inset-bottom))' }}
         onClick={(e) => e.stopPropagation()}
@@ -86,6 +102,7 @@ export function ConfirmSheet(props: ConfirmSheetState & { close: () => void }) {
         <div className="w-10 h-1 bg-border rounded-full mx-auto mb-4" />
         <h3 className="text-h2 text-ink">{title}</h3>
         {body && <div className="mt-2 text-caption text-gray2 whitespace-pre-line">{body}</div>}
+        {error && <div role="alert" className="mt-3 rounded-cta bg-red-bg px-3 py-2 text-caption text-red-fg">{error}</div>}
         {withInput && (
           <textarea
             autoFocus

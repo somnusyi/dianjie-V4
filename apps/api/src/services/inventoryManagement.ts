@@ -13,7 +13,7 @@ export const managementQuerySchema = z.object({
     catch { ctx.addIssue({ code: 'custom', message: '筛选条件不正确' }); return z.NEVER }
   }),
   page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(20),
-  export: z.enum(['1']).optional(),
+  export: z.enum(['1']).optional(), print: z.enum(['1']).optional(),
 }).refine(q => !q.start || !q.end || q.start <= q.end, '开始日期不能晚于结束日期')
 type Query = z.infer<typeof managementQuerySchema>
 const textMatch = (value: unknown, query: string) => String(value ?? '').toLocaleLowerCase().includes(query.toLocaleLowerCase())
@@ -283,8 +283,9 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
     Number(rows.reduce((sum, r) => sum.plus(r[c.key] == null ? 0 : Number(r[c.key])), new Prisma.Decimal(0)).toDecimalPlaces(6)),
   ]))
   const page = Math.min(q.page, Math.max(1, Math.ceil(total / q.pageSize)))
-  const resultRows = (q.export ? rows : rows.slice((page - 1) * q.pageSize, page * q.pageSize)).map((r, i) => ({
-    id: r.id, source: r.source ?? null, ...Object.fromEntries(config.columns.map(c => [c.key, c.key === 'seq' ? (q.export ? 0 : (page - 1) * q.pageSize) + i + 1 : r[c.key] ?? null])),
+  const allRows = Boolean(q.export || q.print)
+  const resultRows = (allRows ? rows : rows.slice((page - 1) * q.pageSize, page * q.pageSize)).map((r, i) => ({
+    id: r.id, source: r.source ?? null, ...Object.fromEntries(config.columns.map(c => [c.key, c.key === 'seq' ? (allRows ? i : (page - 1) * q.pageSize + i) + 1 : r[c.key] ?? null])),
   }))
   return { id, title: config.title, columns: config.columns, rows: resultRows, total, totals, page, pageSize: q.pageSize, options,
     supportedFilters: sourceAvailable ? [...supportedFilters] : [], sourceAvailable, note, generatedAt: timestamp(new Date()) }

@@ -54,6 +54,8 @@ function change(element: HTMLSelectElement | HTMLInputElement, value: string) {
 describe('入库记录中心', () => {
   beforeEach(() => {
     sessionStorage.clear()
+    ;(URL as any).createObjectURL = vi.fn(() => 'blob:inbound-export')
+    ;(URL as any).revokeObjectURL = vi.fn()
     mockFetch.mockReset()
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
@@ -76,6 +78,22 @@ describe('入库记录中心', () => {
       }
       return Promise.reject(new Error(`unexpected API: ${url}`))
     })
+  })
+
+  it('exports every row in the current filter instead of only the visible page', async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('水牛毛肚') ?? false)
+
+    const button = Array.from(container.querySelectorAll('button')).find(item => item.textContent === '导出当前筛选')
+    await act(async () => { button?.click() })
+    await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path).includes('pageSize=100')))
+
+    expect(click).toHaveBeenCalledTimes(1)
+    expect(mockFetch.mock.calls.some(([path]) => String(path).includes('source=all'))).toBe(true)
+    click.mockRestore()
+    act(() => root.unmount())
+    container.remove()
   })
 
   it('lists inbound records with structured supplier and batch info', async () => {

@@ -45,6 +45,8 @@ describe('单据审核页面', () => {
   beforeEach(() => {
     sessionStorage.clear()
     history.replaceState({}, '', '/v2/supply-chain/docs')
+    ;(URL as any).createObjectURL = vi.fn(() => 'blob:docs-export')
+    ;(URL as any).revokeObjectURL = vi.fn()
     mockFetch.mockReset()
     mockFetch.mockImplementation(path => {
       if (String(path).startsWith('/api/warehouse-docs?')) {
@@ -52,6 +54,28 @@ describe('单据审核页面', () => {
       }
       return Promise.reject(new Error(`unexpected API: ${String(path)}`))
     })
+  })
+
+  it('导出当前筛选的完整单据列表', async () => {
+    const row = {
+      id: 'doc-export', docNo: 'RK20260928-001', type: 'MANUAL_INBOUND', supplierId: 'sup-1', supplierName: '井育苗菇',
+      reason: null, note: '到货', effectiveAt: '2026-09-28T02:00:00.000Z', status: 'CONFIRMED', reviewStatus: 'REVIEWED',
+      lineCount: 2, totalAmount: 200, createdAt: '2026-09-28T02:01:00.000Z', confirmedAt: '2026-09-28T03:00:00.000Z', unauditedAt: null, unauditReason: null, attachmentCount: 1,
+    }
+    mockFetch.mockImplementation(path => String(path).startsWith('/api/warehouse-docs?')
+      ? Promise.resolve({ items: [row], total: 1, page: 1, pageSize: String(path).includes('pageSize=200') ? 200 : 20 })
+      : Promise.reject(new Error(`unexpected API: ${String(path)}`)))
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('RK20260928-001') ?? false)
+
+    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent === '导出当前筛选')?.click() })
+    await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path).includes('pageSize=200')))
+
+    expect(click).toHaveBeenCalledTimes(1)
+    click.mockRestore()
+    act(() => root.unmount())
+    container.remove()
   })
 
   it('用明确的单据类型筛选取代第二组切换，且只保留重置', async () => {

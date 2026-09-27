@@ -1,4 +1,5 @@
 import { FastifyPluginAsync } from 'fastify'
+import ExcelJS from 'exceljs'
 import { businessMonthKey } from '../lib/businessTime'
 import { z } from 'zod'
 import { Prisma, prisma } from '@dianjie/db'
@@ -37,6 +38,11 @@ const receiptCorrectionSchema = z.object({
   })).min(1, '至少要更正一行').max(50),
 })
 const RECEIPT_AMOUNT_MAX = new Prisma.Decimal('9999999999.99')
+export const RECEIPT_EXPORT_MAX_ROWS = 10_000
+
+export function exceedsReceiptExportLimit(rowCount: number) {
+  return rowCount > RECEIPT_EXPORT_MAX_ROWS
+}
 
 export const receiptListFilterSchema = z.object({
   status: z.preprocess(
@@ -292,6 +298,66 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       return internalRead ? toInternalSupplyChainReceipt(withSnapshots) : withSnapshots
     })
     return { items, total, page: p, pageSize: ps }
+  })
+
+  // 收货查询导出：沿用列表权限、租户范围与筛选，不夹带付款、银行等财务字段。
+  app.get('/export.xlsx', auth(app), async (req: any, reply: any) => {
+    const { role } = req.user
+    if (!allowsSupplyDataRead(role, 'receipt.read')) {
+      return reply.status(403).send({ error: '无权导出入库单' })
+    }
+    const parsed = receiptListFilterSchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const rows = await prisma.receipt.findMany({
+      where: buildReceiptListWhere(parsed.data, req.user),
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: RECEIPT_EXPORT_MAX_ROWS + 1,
+      include: {
+        store: { select: { name: true } },
+        supplier: { select: { name: true } },
+        items: { include: { product: { select: { code: true, name: true, spec: true, unit: true } } } },
+      },
+    })
+    if (exceedsReceiptExportLimit(rows.length)) {
+      return reply.status(422).send({ error: `导出结果超过 ${RECEIPT_EXPORT_MAX_ROWS} 条，请缩小筛选范围` })
+    }
+    const statusLabels: Record<string, string> = {
+      DRAFT: '草稿', PENDING: '待确认', PENDING_CONFIRM: '待确认', CONFIRMED: '已确认',
+      ACCOUNTED: '已入账', VOID: '已作废', REJECTED: '已驳回',
+    }
+    const workbook = new ExcelJS.Workbook()
+    workbook.creator = '滇界云管'
+    const sheet = workbook.addWorksheet('收货查询')
+    sheet.columns = [
+      { header: '序号', key: 'sequence', width: 8 },
+      { header: '收货单号', key: 'no', width: 24 },
+      { header: '门店', key: 'store', width: 22 },
+      { header: '供应商', key: 'supplier', width: 26 },
+      { header: '业务到货日', key: 'deliveryDate', width: 16 },
+      { header: '状态', key: 'status', width: 14 },
+      { header: '商品摘要', key: 'itemSummary', width: 56 },
+    ]
+    rows.forEach((row, index) => {
+      const items = row.items.map(withDocumentProductSnapshot)
+      sheet.addRow({
+        sequence: index + 1,
+        no: row.no,
+        store: row.store?.name || '',
+        supplier: row.supplier?.name || row.tempSupplierName || '',
+        deliveryDate: row.deliveryDate ? new Date(row.deliveryDate).toISOString().slice(0, 10) : '',
+        status: statusLabels[row.status] || row.status,
+        itemSummary: items.map((item: any) => [item.productNameSnapshot, item.productCodeSnapshot, item.productSpecSnapshot].filter(Boolean).join(' / ')).join('、'),
+      })
+    })
+    sheet.getRow(1).font = { bold: true }
+    sheet.views = [{ state: 'frozen', ySplit: 1 }]
+    sheet.autoFilter = { from: 'A1', to: 'G1' }
+    const filename = `收货查询-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}.xlsx`
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer())
+    return reply
+      .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`)
+      .send(buffer)
   })
 
   // ── 详情 ──────────────────────────────────────────

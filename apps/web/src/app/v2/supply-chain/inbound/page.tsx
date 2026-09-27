@@ -82,6 +82,20 @@ function recordSourceLabel(row: InboundRecord) {
   return SOURCE_LABEL[row.sourceType] || row.sourceType
 }
 
+function downloadCsv(filename: string, rows: Array<Array<string | number | null | undefined>>) {
+  const csv = '\uFEFF' + rows.map(row => row.map(value => {
+    const raw = String(value ?? '')
+    const text = typeof value === 'string' && /^[=+\-@\t]/.test(raw) ? `'${raw}` : raw
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+  }).join(',')).join('\n')
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 function supplierCell(row: InboundRecord) {
   if (row.supplier) return { text: row.supplier.name, tone: 'normal' as const }
   const text = row.sourceName || '—'
@@ -104,6 +118,7 @@ export default function InboundRecordsPage() {
   const [page, setPage] = useState(1)
   const [data, setData] = useState<InboundResponse | null>(null)
   const [loading, setLoading] = useState(true)
+  const [exporting, setExporting] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
@@ -177,6 +192,44 @@ export default function InboundRecordsPage() {
   const items = data?.items || []
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1
 
+  function inboundParams(pageNo: number, pageSize: number) {
+    const params = new URLSearchParams({ page: String(pageNo), pageSize: String(pageSize), source })
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    if (supplierId) params.set('supplierId', supplierId)
+    if (q.trim()) params.set('q', q.trim())
+    return params
+  }
+
+  async function exportRecords() {
+    setExporting(true)
+    setError('')
+    try {
+      const all: InboundRecord[] = []
+      let pageNo = 1
+      let total = 0
+      do {
+        const response = await apiFetch<InboundResponse>(`/api/warehouse-inventory/inbound-records?${inboundParams(pageNo, 100)}`)
+        const rows = response.items || []
+        all.push(...rows)
+        total = response.total
+        if (rows.length === 0) break
+        pageNo += 1
+      } while (all.length < total)
+      downloadCsv(`入库记录_${from || '全部'}_${to || '全部'}.csv`, [
+        ['日期', '商品编码', '商品名称', '分类', '入库数量', '原单位', '库存数量', '库存单位', '库存单价', '金额', '供应商', '来源', '批次', '效期', '单据编号', '状态'],
+        ...all.map(row => {
+          const supplier = supplierCell(row)
+          return [day(row.effectiveAt), row.product.code, row.product.name, row.product.category, row.originalQuantity, row.originalUnit, row.inventoryQuantity, row.inventoryUnit, row.inventoryUnitCost, row.amount, supplier.text, recordSourceLabel(row), row.batchNo, row.expiryDate ? String(row.expiryDate).slice(0, 10) : '', row.doc?.docNo, row.reversed ? '已冲销' : '有效']
+        }),
+      ])
+    } catch (reason: any) {
+      setError(String(reason?.message || '导出失败'))
+    } finally {
+      setExporting(false)
+    }
+  }
+
   function resetFilters() {
     setFrom('')
     setTo('')
@@ -194,7 +247,10 @@ export default function InboundRecordsPage() {
           <h1 className="text-h1">入库记录</h1>
           <p className="mt-1 text-caption text-gray3">总仓全部入库流水：手工、批量、美团数据包与期初建账 · 按供应商归集</p>
         </div>
-        <Link href="/v2/supply-chain/relations" className="rounded-cta border border-border bg-white px-4 py-2 text-button text-gray2">供货关系 →</Link>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => void exportRecords()} disabled={loading || exporting || !data?.total} className="rounded-cta bg-ink px-4 py-2 text-button text-white disabled:opacity-40">{exporting ? '导出中…' : '导出当前筛选'}</button>
+          <Link href="/v2/supply-chain/relations" className="rounded-cta border border-border bg-white px-4 py-2 text-button text-gray2">供货关系 →</Link>
+        </div>
       </div>
 
       {notice && <div className="mt-4 rounded-card border border-green/30 bg-green/10 p-3 text-caption text-green-fg">{notice}</div>}

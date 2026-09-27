@@ -88,6 +88,20 @@ function fmtDay(value: string | null | undefined) {
   return new Date(value).toLocaleDateString('zh-CN')
 }
 
+function downloadCsv(filename: string, rows: Array<Array<string | number | null | undefined>>) {
+  const csv = '\uFEFF' + rows.map(row => row.map(value => {
+    const raw = String(value ?? '')
+    const text = typeof value === 'string' && /^[=+\-@\t]/.test(raw) ? `'${raw}` : raw
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+  }).join(',')).join('\n')
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 function StatusBadge({ status }: { status: DocRow['status'] }) {
   if (status === 'CONFIRMED') {
     return <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-caption text-emerald-700">已审核</span>
@@ -114,6 +128,7 @@ export default function WarehouseDocsPage() {
   const [items, setItems] = useState<DocRow[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -156,6 +171,42 @@ export default function WarehouseDocsPage() {
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
+  function docParams(pageNo: number, size: number) {
+    const params = new URLSearchParams({ type, page: String(pageNo), pageSize: String(size) })
+    if (status) params.set('status', status)
+    if (type === 'MANUAL_INBOUND' && supplierQ.trim()) params.set('supplierQ', supplierQ.trim())
+    if (q.trim()) params.set('q', q.trim())
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    return params
+  }
+
+  async function exportDocs() {
+    setExporting(true)
+    setError(null)
+    try {
+      const all: DocRow[] = []
+      let pageNo = 1
+      let totalRows = 0
+      do {
+        const response = await apiFetch<{ items: DocRow[]; total: number }>(`/api/warehouse-docs?${docParams(pageNo, 200)}`)
+        const rows = response.items || []
+        all.push(...rows)
+        totalRows = response.total
+        if (rows.length === 0) break
+        pageNo += 1
+      } while (all.length < totalRows)
+      downloadCsv(`${type === 'MANUAL_INBOUND' ? '入库单据审核' : '出库单据审核'}_${from || '全部'}_${to || '全部'}.csv`, [
+        ['单据编号', '单据日期', type === 'MANUAL_INBOUND' ? '供应商' : '去向/原因', '总金额', '商品行数', '随货单据数', '审核状态', '复审状态', '会计退回时间', '退回原因', '创建时间', '备注'],
+        ...all.map(doc => [doc.docNo, fmtDay(doc.effectiveAt), type === 'MANUAL_INBOUND' ? doc.supplierName : doc.reason, doc.totalAmount, doc.lineCount, doc.attachmentCount, doc.status === 'CONFIRMED' ? '已审核' : '未审核', doc.reviewStatus === 'REVIEWED' ? '已复审' : '未复审', fmtTime(doc.unauditedAt), doc.unauditReason, fmtTime(doc.createdAt), doc.note]),
+      ])
+    } catch (reason: any) {
+      setError(String(reason?.message || '导出失败'))
+    } finally {
+      setExporting(false)
+    }
+  }
+
   function resetFilters() {
     setStatus('')
     setQ('')
@@ -173,6 +224,7 @@ export default function WarehouseDocsPage() {
           <h1 className="text-title font-semibold">单据审核</h1>
           <p className="text-caption text-gray2">入库/出库单据：仓库制单即过账，会计审核锁定；改单需会计反审核，全程留痕</p>
         </div>
+        <button type="button" onClick={() => void exportDocs()} disabled={loading || exporting || total === 0} className="rounded-cta bg-ink px-4 py-2 text-button text-white disabled:opacity-40">{exporting ? '导出中…' : '导出当前筛选'}</button>
       </header>
 
       {notice && <div className="rounded-card border border-emerald-200 bg-emerald-50 px-4 py-2 text-body text-emerald-700">{notice}</div>}

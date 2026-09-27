@@ -29,6 +29,7 @@ const button = (name: string) => [...container.querySelectorAll('button')].find(
 async function render(id = 'purchase-in') { await act(async () => root.render(<ManagementWorkspace key={id} config={managementPages.find(p => p.id === id)!} />)) }
 beforeEach(() => {
   sessionStorage.clear(); navigation.push.mockReset()
+  Object.defineProperty(window, 'print', { configurable: true, value: vi.fn() })
   container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container)
   api.fetch.mockReset(); api.fetch.mockImplementation((url: string) => Promise.resolve(result(url.split('/').at(-1)!.split('?')[0])))
   HTMLDialogElement.prototype.showModal = function () { this.open = true }
@@ -137,6 +138,17 @@ describe('审核要求与管理页面', () => {
     expect([...container.querySelectorAll('th')].map(th => th.textContent)).not.toContain('复审状态')
     act(() => button('恢复全部字段').click())
     expect([...container.querySelectorAll('th')].map(th => th.textContent)).toContain('复审状态')
+  })
+  it('只在查询结果可用时打印当前筛选结果', async () => {
+    await render()
+    await act(async () => { button('打印当前筛选结果').click(); await new Promise(resolve => setTimeout(resolve, 10)) })
+    expect(String(api.fetch.mock.calls.at(-1)?.[0])).toContain('print=1')
+    expect(container.querySelector('[aria-label="采购入库当前筛选打印结果"]')?.textContent).toContain('DOC-01')
+    expect(window.print).toHaveBeenCalledTimes(1)
+
+    api.fetch.mockResolvedValueOnce({ ...result('multi-count'), rows: [], sourceAvailable: false, note: '暂无独立单据来源' })
+    await render('multi-count')
+    expect(button('打印当前筛选结果').disabled).toBe(true)
   })
   it('盘点单从供应链管理表格进入只读复盘页', async () => {
     await render('count')

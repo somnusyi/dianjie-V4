@@ -5,6 +5,7 @@ import { apiFetch } from '@/lib/v2-auth'
 import { claimResolutionCopy, settlementLineTypeLabel } from '@/lib/upstream-settlement-copy'
 import { clientRequestId } from '@/lib/client-id'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
+import { printSheet } from './print-sheet'
 import {
   currentMonthRange,
   loadCreatedRecord,
@@ -208,6 +209,7 @@ type Claim = {
   supplierId: string
   purchaseOrder: { id: string; no: string }
   receipt: { id: string; no: string; postedAt?: string | null }
+  evidence?: Array<Record<string, unknown>> | null
   lines: Array<{ id: string; affectedQty: string | number; purchaseUnit: string; product: { code: string; name: string } }>
 }
 type Statement = {
@@ -982,6 +984,16 @@ export default function UpstreamProcurementPage() {
           border-color: #c96f32;
           box-shadow: 0 0 0 3px rgba(201, 111, 50, 0.12);
         }
+        @media print {
+          body[data-procurement-printing="true"] > :not([data-print-clone="true"]) { display: none !important; }
+          body[data-procurement-printing="true"] > [data-print-clone="true"] {
+            display: block !important;
+            width: 100% !important;
+            border: 0 !important;
+            box-shadow: none !important;
+          }
+          [data-print-clone="true"] [data-print-hidden] { display: none !important; }
+        }
       `}</style>
       <header className="mx-auto max-w-[1440px] border-b border-border pb-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -1037,7 +1049,7 @@ export default function UpstreamProcurementPage() {
 
         {viewingPurchaseReturn && (
           <div className="mb-4">
-            <Panel title={`采购退货单明细 · ${viewingPurchaseReturn.no}`} onClose={() => setViewingPurchaseReturn(null)}>
+            <Panel title={`采购退货单明细 · ${viewingPurchaseReturn.no}`} onClose={() => setViewingPurchaseReturn(null)} printId={`purchase-return-${viewingPurchaseReturn.id}`}>
               <div className="grid gap-2 rounded-xl bg-bg p-3 text-caption sm:grid-cols-2 lg:grid-cols-4">
                 <div>
                   <span className="text-gray3">供应商</span>
@@ -1154,6 +1166,7 @@ export default function UpstreamProcurementPage() {
           <div className="mb-4">
             <Panel
               title={`收货单明细 · ${viewingReceipt.no}`}
+              printId={`receipt-${viewingReceipt.id}`}
               onClose={() => {
                 setViewingReceipt(null)
                 setReceiptReviewAction(null)
@@ -2075,7 +2088,7 @@ export default function UpstreamProcurementPage() {
               claims.map((claim) => {
                 const resolutionCopy = claimResolutionCopy(claim.type, money(claim.claimedAmount))
                 return (
-                  <article key={claim.id} className="rounded-2xl border border-border bg-white p-4">
+                  <article key={claim.id} id={`arrival-claim-${claim.id}`} data-print-sheet className="rounded-2xl border border-border bg-white p-4">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
                         <div className="flex flex-wrap items-center gap-2">
@@ -2107,6 +2120,23 @@ export default function UpstreamProcurementPage() {
                             </li>
                           ))}
                         </ul>
+                        {claim.evidence && claim.evidence.length > 0 && (
+                          <div className="mt-2 text-caption text-gray2">
+                            <b>举证材料：</b>
+                            <span className="ml-1 inline-flex flex-wrap gap-2">
+                              {claim.evidence.map((item, index) => {
+                                const evidence = claimEvidence(item, index)
+                                return evidence.url ? (
+                                  <a key={`${evidence.url}-${index}`} href={evidence.url} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                                    {evidence.name}
+                                  </a>
+                                ) : (
+                                  <span key={`evidence-${index}`}>{evidence.name}</span>
+                                )
+                              })}
+                            </span>
+                          </div>
+                        )}
                         {claim.supplierResponse && <p className="mt-2 rounded-lg bg-bg p-2 text-caption text-gray2">供应商回复：{claim.supplierResponse}</p>}
                         {claim.responsibility && (
                           <p className="mt-1 text-micro text-gray3">
@@ -2115,7 +2145,8 @@ export default function UpstreamProcurementPage() {
                           </p>
                         )}
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex gap-2" data-print-hidden>
+                        <PrintButton printId={`arrival-claim-${claim.id}`} />
                         {claim.status === 'SUPPLIER_REJECTED' && (
                           <ActionButton
                             tone="danger"
@@ -2159,7 +2190,7 @@ export default function UpstreamProcurementPage() {
         {!loading && tab === 'settlements' && (
           <section className="space-y-4">
             {viewingStatement && (
-              <Panel title={`对账单明细 · ${viewingStatement.no}`} onClose={() => setViewingStatement(null)}>
+              <Panel title={`对账单明细 · ${viewingStatement.no}`} onClose={() => setViewingStatement(null)} printId={`statement-${viewingStatement.id}`}>
                 <div className="rounded-xl bg-bg p-3 text-caption">
                   {viewingStatement.supplier.name} · {shortDate(viewingStatement.periodStart)}—{shortDate(viewingStatement.periodEnd)} · 应付 <b>{money(viewingStatement.payableAmount)}</b>
                 </div>
@@ -2338,7 +2369,7 @@ export default function UpstreamProcurementPage() {
         {!loading && tab === 'contracts' && (
           <section className="space-y-4">
             {viewingContract && (
-              <Panel title={`合同内容 · ${viewingContract.title}`} onClose={() => setViewingContract(null)}>
+              <Panel title={`合同内容 · ${viewingContract.title}`} onClose={() => setViewingContract(null)} printId={`contract-${viewingContract.id}`}>
                 <div className="grid gap-2 rounded-xl bg-bg p-3 text-caption sm:grid-cols-2 lg:grid-cols-4">
                   <div>
                     <span className="text-gray3">合同编号</span>
@@ -2703,16 +2734,34 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-function Panel({ title, children, onClose }: { title: string; children: ReactNode; onClose?: () => void }) {
+function claimEvidence(item: Record<string, unknown>, index: number) {
+  const rawUrl = typeof item.url === 'string' ? item.url.trim() : ''
+  const url = rawUrl.startsWith('/') || /^https?:\/\//i.test(rawUrl) ? rawUrl : ''
+  const rawName = typeof item.name === 'string' ? item.name.trim() : ''
+  return { name: rawName || `举证 ${index + 1}`, url }
+}
+
+function PrintButton({ printId }: { printId: string }) {
   return (
-    <div className="rounded-2xl border border-amber/30 bg-white p-4 shadow-sm">
+    <button type="button" onClick={() => printSheet(printId)} className="rounded-lg border border-border bg-white px-3 py-1.5 text-button text-gray2">
+      打印 / 保存 PDF
+    </button>
+  )
+}
+
+function Panel({ title, children, onClose, printId }: { title: string; children: ReactNode; onClose?: () => void; printId?: string }) {
+  return (
+    <div id={printId} data-print-sheet={printId ? true : undefined} className="rounded-2xl border border-amber/30 bg-white p-4 shadow-sm">
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-h3">{title}</h2>
-        {onClose && (
-          <button onClick={onClose} className="text-caption text-gray3">
-            关闭
-          </button>
-        )}
+        <div className="flex items-center gap-2" data-print-hidden>
+          {printId && <PrintButton printId={printId} />}
+          {onClose && (
+            <button onClick={onClose} className="text-caption text-gray3">
+              关闭
+            </button>
+          )}
+        </div>
       </div>
       {children}
     </div>

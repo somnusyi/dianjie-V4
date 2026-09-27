@@ -236,6 +236,40 @@ describe('内部供应链只读 PC 页面回归', () => {
       cleanup(container, root)
     })
 
+    it('使用当前已应用筛选导出全部匹配收货记录', async () => {
+      mockApi(() => Promise.resolve({ items: [receiptRaw], total: 1 }))
+      mockDownload.mockResolvedValue({ blob: new Blob(['xlsx']), filename: '收货查询.xlsx' })
+      const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+      const { container, root } = render(<ReceiptsPage />)
+      await waitFor(() => container.textContent?.includes('R-001') ?? false)
+      await waitFor(() => (getInputByLabel(container, '门店') as HTMLSelectElement).options.length > 1)
+      act(() => {
+        setInputValue(getInputByLabel(container, '关键字') as HTMLInputElement, '  R-001  ')
+        setSelectValue(getInputByLabel(container, '门店') as HTMLSelectElement, 'store-1')
+        setInputValue(getInputByLabel(container, '开始日期') as HTMLInputElement, '2026-07-01')
+        setInputValue(getInputByLabel(container, '结束日期') as HTMLInputElement, '2026-07-31')
+        setSelectValue(getInputByLabel(container, '每页') as HTMLSelectElement, '50')
+      })
+      act(() => findButton(container, '查询')!.click())
+      await waitFor(() => lastResourceUrl('/api/receipts').searchParams.get('keyword') === 'R-001')
+      await act(async () => { findButton(container, '导出')!.click(); await sleep(0) })
+      await waitFor(() => mockDownload.mock.calls.length === 1)
+
+      const url = new URL(String(mockDownload.mock.calls[0][0]), 'http://localhost')
+      expect(url.pathname).toBe('/api/receipts/export.xlsx')
+      expect(url.searchParams.get('keyword')).toBe('R-001')
+      expect(url.searchParams.get('storeId')).toBe('store-1')
+      expect(url.searchParams.get('dateFrom')).toBe('2026-07-01')
+      expect(url.searchParams.get('dateTo')).toBe('2026-07-31')
+      expect(url.searchParams.get('page')).toBe('1')
+      expect(url.searchParams.get('pageSize')).toBe('50')
+      expect(click).toHaveBeenCalled()
+
+      cleanup(container, root)
+      click.mockRestore()
+    })
+
     it('输入筛选后点击查询、翻页、清空发出符合合同的 URL', async () => {
       let total = 1
       mockApi(path => {
@@ -535,6 +569,42 @@ describe('内部供应链只读 PC 页面回归', () => {
       expect(container.textContent).toContain('合计')
       expect(container.textContent).toContain('¥5,555.55')
       cleanup(container, root)
+    })
+
+    it('使用当前已应用筛选导出全部匹配配送单', async () => {
+      mockApi(() => Promise.resolve({ items: [deliveryRaw], total: 1 }))
+      mockDownload.mockResolvedValue({ blob: new Blob(['xlsx']), filename: '配送单查询.xlsx' })
+      const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+      const { container, root } = render(<DeliveriesPage />)
+      await waitFor(() => container.textContent?.includes('D-001') ?? false)
+      await waitFor(() => (getInputByLabel(container, '门店') as HTMLSelectElement).options.length > 1)
+      act(() => {
+        setInputValue(getInputByLabel(container, '关键字') as HTMLInputElement, '  D-001  ')
+        setSelectValue(getInputByLabel(container, '门店') as HTMLSelectElement, 'store-1')
+        setInputValue(getInputByLabel(container, '开始日期') as HTMLInputElement, '2026-07-01')
+        setInputValue(getInputByLabel(container, '结束日期') as HTMLInputElement, '2026-07-31')
+        setSelectValue(getInputByLabel(container, '状态') as HTMLSelectElement, 'SHIPPED')
+        setSelectValue(getInputByLabel(container, '每页') as HTMLSelectElement, '50')
+      })
+      act(() => findButton(container, '查询')!.click())
+      await waitFor(() => lastResourceUrl('/api/deliveries').searchParams.get('status') === 'SHIPPED')
+      await act(async () => { findButton(container, '导出')!.click(); await sleep(0) })
+      await waitFor(() => mockDownload.mock.calls.length === 1)
+
+      const url = new URL(String(mockDownload.mock.calls[0][0]), 'http://localhost')
+      expect(url.pathname).toBe('/api/deliveries/export.xlsx')
+      expect(url.searchParams.get('keyword')).toBe('D-001')
+      expect(url.searchParams.get('storeId')).toBe('store-1')
+      expect(url.searchParams.get('dateFrom')).toBe('2026-07-01')
+      expect(url.searchParams.get('dateTo')).toBe('2026-07-31')
+      expect(url.searchParams.get('status')).toBe('SHIPPED')
+      expect(url.searchParams.get('page')).toBe('1')
+      expect(url.searchParams.get('pageSize')).toBe('50')
+      expect(click).toHaveBeenCalled()
+
+      cleanup(container, root)
+      click.mockRestore()
     })
 
     it('综合筛选、翻页与清空符合 API 合同', async () => {

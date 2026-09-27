@@ -27,6 +27,7 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
   const [draft, setDraft] = useState(defaults); const [applied, setApplied] = useState(defaults)
   const [result, setResult] = useState<ManagementResult | null>(null); const [error, setError] = useState('')
   const [loading, setLoading] = useState(true); const [exporting, setExporting] = useState(false)
+  const [printing, setPrinting] = useState(false); const [printResult, setPrintResult] = useState<ManagementResult | null>(null)
   const [page, setPage] = useState(1); const [pageSize, setPageSize] = useState(20); const [refresh, setRefresh] = useState(0)
   const [advanced, setAdvanced] = useState(false); const [selected, setSelected] = useState<string[]>([])
   const [hidden, setHidden] = useState<string[]>([]); const [focused, setFocused] = useState(false)
@@ -82,6 +83,21 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
       const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, config.title); XLSX.writeFile(book, `${config.title}-所选记录.xlsx`)
     } catch { setError('导出所选记录失败，请重试') } finally { setExporting(false) }
   }
+  async function printCurrentResults() {
+    if (loading || printing || !result?.sourceAvailable) return
+    setPrinting(true); setError('')
+    try {
+      const full = await apiFetch<ManagementResult>(`/api/inventory-management/${config.id}?${query}&print=1`)
+      setPrintResult(full)
+      await new Promise<void>(resolve => window.setTimeout(resolve, 0))
+      const clear = () => { setPrintResult(null); setPrinting(false) }
+      window.addEventListener('afterprint', clear, { once: true })
+      window.print()
+    } catch (e: any) {
+      setError(e.message || '打印准备失败')
+      setPrinting(false)
+    }
+  }
   const columns = config.columns.filter(c => !hidden.includes(c.key))
   const rows = result?.rows || []
   const showOperation = config.id === 'count'
@@ -109,6 +125,7 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
         {['other-in', 'other-out'].includes(config.id) && <Link href="/v2/supply-chain/docs">单据审核 ↗</Link>}
         <button disabled={loading || exporting || !result?.sourceAvailable} onClick={exportList}>{exporting ? '正在导出…' : '导出列表'}</button>
         {selected.length > 0 && <button disabled={exporting || loading} onClick={exportSelected}>导出所选（{selected.length}）</button>}
+        <button disabled={loading || printing || !result?.sourceAvailable} onClick={printCurrentResults}>{printing ? '正在准备打印…' : '打印当前筛选结果'}</button>
       </div>{config.id === 'limits' ? <label className={styles.unit}>计量单位类型 <select aria-label="计量单位类型" value="inventory" onChange={() => {}}><option value="inventory">库存单位</option></select></label> : <span className={styles.total}>共 {result?.total ?? '—'} 条</span>}</div>
       <div className={styles.tableCard} aria-busy={loading}>
         <div className={styles.scroll} tabIndex={0} role="region" aria-label={`${config.title}表格，可横向滚动`}><table>
@@ -125,6 +142,11 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
         <footer className={styles.pagination}><span>已选 <strong>{selected.length}</strong> 条 <span className={styles.divider}>|</span> 共 {result?.total ?? '—'} 条</span><div className={styles.actions}><select aria-label="每页条数" value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1) }}>{[20, 50, 100].map(n => <option key={n} value={n}>{n} 条 / 页</option>)}</select><button aria-label="上一页" disabled={loading || !result || result.page <= 1} onClick={() => setPage((result?.page || 1) - 1)}>‹</button><span>{result?.page || 1} / {Math.max(1, Math.ceil((result?.total || 0) / pageSize))}</span><button aria-label="下一页" disabled={loading || !result || result.page * pageSize >= result.total} onClick={() => setPage((result?.page || 1) + 1)}>›</button></div></footer>
       </div>
     </section>
+    {printResult && <section className={styles.printOnly} aria-label={`${config.title}当前筛选打印结果`}>
+      <h1>{config.title}</h1>
+      <p>共 {printResult.total} 条 · 生成时间 {printResult.generatedAt || '—'}</p>
+      <table><thead><tr>{config.columns.map(column => <th key={column.key}>{column.label}</th>)}</tr></thead><tbody>{printResult.rows.map(row => <tr key={row.id}>{config.columns.map(column => <td key={column.key}>{display(row[column.key], column.kind)}</td>)}</tr>)}</tbody></table>
+    </section>}
     <dialog ref={dialogRef} className={styles.dialog} onClose={() => setDialog(null)} aria-label={dialog === 'columns' ? '表格设置' : '记录信息'}>
       <header><h2>{dialog === 'columns' ? '表格设置' : '记录信息'}</h2><button ref={firstDialogButton} onClick={() => setDialog(null)} aria-label="关闭">×</button></header>
       {dialog === 'columns' ? <><p>默认字段及顺序与审核要求一致。隐藏字段只影响当前页面显示。</p><div className={styles.columnList}>{config.columns.map(c => <label key={c.key}><input type="checkbox" disabled={c.key === 'seq'} checked={!hidden.includes(c.key)} onChange={e => setHidden(old => e.target.checked ? old.filter(k => k !== c.key) : [...old, c.key])} />{c.label}</label>)}</div><footer><button onClick={() => setHidden([])}>恢复全部字段</button><button className={styles.primary} onClick={() => setDialog(null)}>完成</button></footer></> : dialog && <dl className={styles.detail}>{config.columns.filter(c => c.key !== 'seq').map(c => <div key={c.key}><dt>{c.label}</dt><dd>{display(dialog[c.key], c.kind)}</dd></div>)}</dl>}

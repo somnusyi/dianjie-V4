@@ -3,6 +3,7 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import UpstreamProcurementPage from './page'
+import { printSheet } from './print-sheet'
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
 vi.mock('@/lib/v2-auth', () => ({ apiFetch: vi.fn() }))
@@ -304,6 +305,27 @@ function change(element: HTMLInputElement | HTMLTextAreaElement, value: string) 
 }
 
 describe('上游采购收货后补报', () => {
+  it('打印时只创建目标单据副本，并在打印结束后完整清理', () => {
+    const sheet = document.createElement('article')
+    sheet.id = 'claim-print-test'
+    sheet.innerHTML = '<h2>差异单</h2><button data-print-hidden>不打印操作</button>'
+    document.body.appendChild(sheet)
+    const print = vi.spyOn(window, 'print').mockImplementation(() => undefined)
+
+    printSheet(sheet.id)
+
+    expect(print).toHaveBeenCalledOnce()
+    expect(document.body.dataset.procurementPrinting).toBe('true')
+    const clone = document.body.querySelector('[data-print-clone="true"]')
+    expect(clone?.textContent).toContain('差异单')
+    expect(clone?.querySelector('[data-print-hidden]')).not.toBeNull()
+
+    window.dispatchEvent(new Event('afterprint'))
+    expect(document.body.dataset.procurementPrinting).toBeUndefined()
+    expect(document.body.querySelector('[data-print-clone="true"]')).toBeNull()
+    sheet.remove()
+  })
+
   beforeEach(() => {
     mockFetch.mockReset()
     mockFetch.mockImplementation((path, init) => {

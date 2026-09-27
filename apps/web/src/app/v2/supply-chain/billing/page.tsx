@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
+import { downloadBillingCsv } from './csv-export'
 
 type Schedule = {
   id: string
@@ -91,6 +92,9 @@ export default function InternalSupplyChainBillingPage() {
     () => Array.from(new Set(schedules.map(item => item.receipt?.store?.name).filter(Boolean) as string[])).sort(),
     [schedules],
   )
+  const exportRows = tab === 'schedule'
+    ? filteredSchedules
+    : tab === 'reconciliation' ? reconciliations : invoices
 
   return (
     <div className="min-h-screen bg-bg px-4 py-5 lg:px-8 lg:py-7">
@@ -111,10 +115,20 @@ export default function InternalSupplyChainBillingPage() {
         <Metric label="待审发票" value={`${stats.pendingInvoices} 张`} />
       </section>
 
-      <div className="mb-4 flex gap-2">
+      <div className="mb-4 flex flex-wrap gap-2">
         <Tab active={tab === 'schedule'} onClick={() => setTab('schedule')}>账期 {schedules.length}</Tab>
         <Tab active={tab === 'reconciliation'} onClick={() => setTab('reconciliation')}>对账单 {reconciliations.length}</Tab>
         <Tab active={tab === 'invoice'} onClick={() => setTab('invoice')}>发票 {invoices.length}</Tab>
+        <button
+          type="button"
+          disabled={loading || exportRows.length === 0}
+          onClick={() => {
+            if (tab === 'schedule') downloadBillingCsv('schedule', filteredSchedules)
+            else if (tab === 'reconciliation') downloadBillingCsv('reconciliation', reconciliations)
+            else downloadBillingCsv('invoice', invoices)
+          }}
+          className="ml-auto rounded-cta border border-ink bg-white px-4 py-2 text-button text-ink disabled:cursor-not-allowed disabled:opacity-40"
+        >导出当前{tab === 'schedule' ? '账期' : tab === 'reconciliation' ? '对账单' : '发票'} CSV</button>
       </div>
 
       {tab === 'schedule' && (

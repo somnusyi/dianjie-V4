@@ -9,7 +9,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { EmptyState, FriendlyError, SkeletonCard } from '@/components/v2/skeleton'
-import { apiFetch } from '@/lib/v2-auth'
+import { apiDownload, apiFetch } from '@/lib/v2-auth'
 import {
   buildReceiptQuery,
   DEFAULT_RECEIPT_FILTERS,
@@ -42,6 +42,7 @@ export default function InternalSupplyChainReceiptsPage() {
   const [draftFilters, setDraftFilters] = useState<ReceiptFilters>(DEFAULT_RECEIPT_FILTERS)
   const [stores, setStores] = useState<Store[]>([])
   const [dateError, setDateError] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const requestSequence = useRef(0)
 
@@ -105,6 +106,28 @@ export default function InternalSupplyChainReceiptsPage() {
     setDraftFilters(cleared)
     setFilters(cleared)
     setDateError(null)
+  }
+
+  async function exportReceipts() {
+    if (exporting) return
+    setExporting(true)
+    setError(null)
+    try {
+      const query = buildReceiptQuery({ ...filters, page: 1, pageSize: filters.pageSize })
+      const { blob, filename } = await apiDownload(`/api/receipts/export.xlsx${query}`, '收货查询.xlsx')
+      const href = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = href
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(href), 5_000)
+    } catch (reason: any) {
+      setError(String(reason?.message || reason))
+    } finally {
+      setExporting(false)
+    }
   }
 
   return (
@@ -174,6 +197,11 @@ export default function InternalSupplyChainReceiptsPage() {
             disabled={!filterActive}
             className="rounded-cta border border-border bg-white px-3 py-2 text-button text-gray2 disabled:opacity-40"
           >清空</button>
+          <button
+            onClick={exportReceipts}
+            disabled={exporting || Boolean(dateError)}
+            className="rounded-cta border border-accent bg-white px-4 py-2 text-button text-accent disabled:opacity-40"
+          >{exporting ? '正在导出…' : '导出'}</button>
         </div>
 
         {dateError && (

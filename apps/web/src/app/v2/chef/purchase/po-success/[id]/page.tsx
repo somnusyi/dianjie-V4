@@ -81,7 +81,13 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
     <div className="min-h-screen bg-bg pb-32">
       <header className="px-4 pt-4 pb-2 flex items-center gap-2">
         <button onClick={() => router.push('/v2/chef/purchase')} className="text-gray2 text-h2">‹</button>
-        <h1 className="text-h1">采购单</h1>
+        <h1 className="flex-1 text-h1">采购单</h1>
+        <button
+          type="button"
+          onClick={() => router.push(`/v2/chef/purchase/po-success/${po.id}/delivery-note`)}
+          className="whitespace-nowrap rounded-cta border border-border bg-white px-3 py-1.5 text-button text-gray2"
+          title="打开送货单打印 / 导出 PDF 页面"
+        >🖨 打印送货单</button>
       </header>
 
       <div className="mx-4 mt-3 bg-ink text-white rounded-card p-5">

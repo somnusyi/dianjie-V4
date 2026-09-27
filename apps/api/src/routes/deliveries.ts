@@ -1,4 +1,5 @@
 import { FastifyPluginAsync } from 'fastify'
+import ExcelJS from 'exceljs'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { isStoreScoped, isSupplierRole, resolveActiveStore } from '../lib/auth-scope'
@@ -27,6 +28,76 @@ const listQuerySchema = z.object({
   message: '开始日期不能晚于结束日期',
   path: ['dateFrom'],
 })
+
+export const DELIVERY_EXPORT_MAX_ROWS = 10_000
+
+export function exceedsDeliveryExportLimit(rowCount: number) {
+  return rowCount > DELIVERY_EXPORT_MAX_ROWS
+}
+
+function buildDeliveryListWhere(q: z.infer<typeof listQuerySchema>, user: any) {
+  const { role, supplierId: actorSupplierId } = user
+  const where: any = supplyDataReadScope(user)
+  if (q.storeId) {
+    if (isStoreScoped(role)) resolveActiveStore(user, q.storeId)
+    where.storeId = q.storeId
+  }
+  if (isSupplierRole(role)) where.supplierId = requireSupplierCapability(role, actorSupplierId, 'order.read')
+  else if (q.supplierId) where.supplierId = q.supplierId
+  if (q.status) where.status = q.status
+  else where.status = { not: 'DRAFT' }
+  const and: any[] = [publicDeliveryMarkerFilter()]
+  if (q.productId) and.push({ items: { some: { productId: q.productId } } })
+  if (q.keyword) {
+    and.push({
+      OR: [
+        { no: { contains: q.keyword, mode: 'insensitive' } },
+        { purchaseOrder: { no: { contains: q.keyword, mode: 'insensitive' } } },
+        { store: { name: { contains: q.keyword, mode: 'insensitive' } } },
+        {
+          items: {
+            some: {
+              OR: [
+                { productNameSnapshot: { contains: q.keyword, mode: 'insensitive' } },
+                { productCodeSnapshot: { contains: q.keyword, mode: 'insensitive' } },
+                { productSpecSnapshot: { contains: q.keyword, mode: 'insensitive' } },
+                {
+                  product: {
+                    OR: [
+                      { name: { contains: q.keyword, mode: 'insensitive' } },
+                      { code: { contains: q.keyword, mode: 'insensitive' } },
+                      { spec: { contains: q.keyword, mode: 'insensitive' } },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        },
+      ],
+    })
+  }
+  where.AND = and
+  if (q.dateFrom || q.dateTo) {
+    where.createdAt = {
+      ...(q.dateFrom ? { gte: new Date(`${q.dateFrom}T00:00:00+08:00`) } : {}),
+      ...(q.dateTo ? { lte: new Date(`${q.dateTo}T23:59:59.999+08:00`) } : {}),
+    }
+  }
+  return where
+}
+
+const shanghaiDateTime = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', hour12: false,
+})
+
+function formatShanghaiDateTime(value: Date | string | null | undefined) {
+  if (!value) return ''
+  const parts = Object.fromEntries(shanghaiDateTime.formatToParts(new Date(value))
+    .filter(part => part.type !== 'literal').map(part => [part.type, part.value]))
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`
+}
 
 const deliveryItemQuantitySchema = z.coerce.number()
   .nonnegative('新增商品数量不能小于 0')
@@ -127,63 +198,12 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
   app.get('/', { preHandler: [(app as any).authenticate] }, async (req: any, reply) => {
     const parsed = listQuerySchema.safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-    const { role, supplierId: actorSupplierId } = req.user
+    const { role } = req.user
     if (!allowsSupplyDataRead(role, 'delivery.read')) {
       return reply.status(403).send({ error: '无权查看配送单' })
     }
     const q = parsed.data
-    const where: any = supplyDataReadScope(req.user)
-    if (q.storeId) {
-      // 门店级角色指定门店时必须在可访问集合内（越权抛 403），非门店级按传入过滤
-      if (isStoreScoped(role)) resolveActiveStore(req.user, q.storeId)
-      where.storeId = q.storeId
-    }
-    if (isSupplierRole(role)) where.supplierId = requireSupplierCapability(role, actorSupplierId, 'order.read')
-    else if (q.supplierId) where.supplierId = q.supplierId
-    if (q.status) where.status = q.status
-    else where.status = { not: 'DRAFT' }
-    const and: any[] = []
-    // Internal shipment drafts are implementation details, not formal
-    // delivery documents. Never expose their stable marker through this
-    // ordinary list, even when a caller explicitly asks for status=DRAFT.
-    and.push(publicDeliveryMarkerFilter())
-    if (q.productId) and.push({ items: { some: { productId: q.productId } } })
-    if (q.keyword) {
-      and.push({
-        OR: [
-          { no: { contains: q.keyword, mode: 'insensitive' } },
-          { purchaseOrder: { no: { contains: q.keyword, mode: 'insensitive' } } },
-          { store: { name: { contains: q.keyword, mode: 'insensitive' } } },
-          {
-            items: {
-              some: {
-                OR: [
-                  { productNameSnapshot: { contains: q.keyword, mode: 'insensitive' } },
-                  { productCodeSnapshot: { contains: q.keyword, mode: 'insensitive' } },
-                  { productSpecSnapshot: { contains: q.keyword, mode: 'insensitive' } },
-                  {
-                    product: {
-                      OR: [
-                        { name: { contains: q.keyword, mode: 'insensitive' } },
-                        { code: { contains: q.keyword, mode: 'insensitive' } },
-                        { spec: { contains: q.keyword, mode: 'insensitive' } },
-                      ],
-                    },
-                  },
-                ],
-              },
-            },
-          },
-        ],
-      })
-    }
-    if (and.length) where.AND = and
-    if (q.dateFrom || q.dateTo) {
-      where.createdAt = {
-        ...(q.dateFrom ? { gte: new Date(`${q.dateFrom}T00:00:00+08:00`) } : {}),
-        ...(q.dateTo ? { lte: new Date(`${q.dateTo}T23:59:59.999+08:00`) } : {}),
-      }
-    }
+    const where = buildDeliveryListWhere(q, req.user)
     const skip = (q.page - 1) * q.pageSize
     const [items, total] = await Promise.all([
       prisma.deliveryOrder.findMany({
@@ -205,6 +225,72 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
       })),
       total, page: q.page, pageSize: q.pageSize,
     }
+  })
+
+  // 配送单查询导出：复用列表的权限、租户范围与筛选，导出全部匹配行。
+  app.get('/export.xlsx', { preHandler: [(app as any).authenticate] }, async (req: any, reply) => {
+    const parsed = listQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    if (!allowsSupplyDataRead(req.user.role, 'delivery.read')) {
+      return reply.status(403).send({ error: '无权导出配送单' })
+    }
+    const rows = await prisma.deliveryOrder.findMany({
+      where: buildDeliveryListWhere(parsed.data, req.user),
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: DELIVERY_EXPORT_MAX_ROWS + 1,
+      include: {
+        purchaseOrder: { select: { no: true } },
+        store: { select: { name: true } },
+        supplier: { select: { name: true } },
+        items: { where: { removedAt: null }, include: { product: { select: { code: true, name: true, spec: true, unit: true } } } },
+      },
+    })
+    if (exceedsDeliveryExportLimit(rows.length)) {
+      return reply.status(422).send({ error: `导出结果超过 ${DELIVERY_EXPORT_MAX_ROWS} 条，请缩小筛选范围` })
+    }
+    const statusLabels: Record<string, string> = {
+      DRAFT: '草稿', SHIPPED: '已发货', DELIVERED: '已送达', RECEIVED: '已收货', CANCELLED: '已取消',
+    }
+    const workbook = new ExcelJS.Workbook()
+    workbook.creator = '滇界云管'
+    const sheet = workbook.addWorksheet('配送单查询')
+    sheet.columns = [
+      { header: '序号', key: 'sequence', width: 8 },
+      { header: '配送单号', key: 'no', width: 24 },
+      { header: '关联订货单号', key: 'orderNo', width: 24 },
+      { header: '门店', key: 'store', width: 22 },
+      { header: '供应商', key: 'supplier', width: 26 },
+      { header: '创建时间', key: 'createdAt', width: 22 },
+      { header: '发货时间', key: 'shippedAt', width: 22 },
+      { header: '状态', key: 'status', width: 14 },
+      { header: '商品摘要', key: 'itemSummary', width: 50 },
+      { header: '金额', key: 'amount', width: 16 },
+    ]
+    rows.forEach((row, index) => {
+      const items = row.items.map(withDocumentProductSnapshot)
+      sheet.addRow({
+        sequence: index + 1,
+        no: row.no,
+        orderNo: row.purchaseOrder?.no || '',
+        store: row.store?.name || '',
+        supplier: row.supplier?.name || '',
+        createdAt: formatShanghaiDateTime(row.createdAt),
+        shippedAt: formatShanghaiDateTime(row.shippedAt),
+        status: statusLabels[row.status] || row.status,
+        itemSummary: items.map((item: any) => [item.productNameSnapshot, item.productCodeSnapshot, item.productSpecSnapshot].filter(Boolean).join(' / ')).join('、'),
+        amount: Number(row.actualTotalAmount || 0),
+      })
+    })
+    sheet.getRow(1).font = { bold: true }
+    sheet.views = [{ state: 'frozen', ySplit: 1 }]
+    sheet.autoFilter = { from: 'A1', to: 'J1' }
+    sheet.getColumn('amount').numFmt = '#,##0.00'
+    const filename = `配送单查询-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}.xlsx`
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer())
+    return reply
+      .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`)
+      .send(buffer)
   })
 
   app.get('/:id', { preHandler: [(app as any).authenticate] }, async (req: any) => {

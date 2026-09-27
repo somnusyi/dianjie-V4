@@ -92,6 +92,7 @@ async function main() {
       settlementDays: 0,
       taxInclusive: true,
       currency: 'CNY',
+      idempotencyKey: `e2e-contract-${stamp}`,
       lines: [{
         upstreamSourceId: source.id,
         unitPrice: Number(source.quotedUnitPrice || 12.34),

@@ -1621,6 +1621,8 @@ model UpstreamSupplierContract {
   paymentMethod   String?                @db.VarChar(80)
   discrepancyRule Json?
   attachments     Json?
+  idempotencyKey  String?                @db.VarChar(160)
+  requestFingerprint String?             @db.Char(64)
   status          UpstreamContractStatus @default(DRAFT)
   createdById     String
   activatedAt     DateTime?
@@ -1634,6 +1636,7 @@ model UpstreamSupplierContract {
   purchaseOrders UpstreamPurchaseOrder[]
 
   @@unique([tenantId, supplierId, contractNo, version])
+  @@unique([tenantId, idempotencyKey])
   @@unique([tenantId, id])
   @@index([tenantId, supplierId, status, startsAt])
   @@map("upstream_supplier_contracts")

@@ -20,6 +20,7 @@ async function createReadyOrder(
       settlementDays: 0,
       taxInclusive: true,
       currency: 'CNY',
+      idempotencyKey: `visual-contract-${suffix}-${data.stamp}`.slice(0, 160),
       lines: [{
         upstreamSourceId: data.sourceId,
         unitPrice: 100,

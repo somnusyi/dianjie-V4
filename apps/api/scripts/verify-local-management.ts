@@ -51,7 +51,7 @@ async function main() {
 
   const source = await prisma.productUpstreamSource.findFirstOrThrow({ where: { tenantId: tenant.id, productId: product.id, supplierId: supplier.id } })
   const suffix = Date.now().toString()
-  const agreement = await request('/api/upstream/contracts', tokens.supply, { supplierId: supplier.id, contractNo: `LOCAL-${suffix}`, title: '本地验证采购合同', startsAt: new Date(Date.now() - 86400000).toISOString(), lines: [{ upstreamSourceId: source.id, unitPrice: 100 }] })
+  const agreement = await request('/api/upstream/contracts', tokens.supply, { supplierId: supplier.id, contractNo: `LOCAL-${suffix}`, title: '本地验证采购合同', startsAt: new Date(Date.now() - 86400000).toISOString(), idempotencyKey: `verify-contract-${suffix}`, lines: [{ upstreamSourceId: source.id, unitPrice: 100 }] })
   await request(`/api/upstream/contracts/${agreement.id}/activate`, tokens.supply, undefined, 'POST')
   const order = await request('/api/upstream/purchase-orders', tokens.supply, { supplierId: supplier.id, warehouseId: warehouse.id, contractId: agreement.id, idempotencyKey: `verify-${randomUUID()}`, lines: [{ contractLineId: agreement.lines[0].id, quantity: 1 }] })
   for (const action of ['submit-for-approval', 'approve-and-send']) await request(`/api/upstream/purchase-orders/${order.id}/${action}`, tokens.admin, undefined, 'POST')

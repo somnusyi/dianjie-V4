@@ -150,6 +150,7 @@ export default function SupplierInvoicesPage() {
           <div className="bg-white rounded-card border border-border p-6 text-center">
             <p className="text-caption text-gray3">暂无待开票订单</p>
             <p className="text-micro text-gray4 mt-1">订单确认入库后会出现在这里, 可批量勾选合并开票</p>
+            <a href="/v2/supplier/billing" className="mt-3 inline-block text-button text-amber-fg">返回账期与对账</a>
           </div>
         )}
         {pending && pending.length > 0 && (
@@ -184,6 +185,7 @@ export default function SupplierInvoicesPage() {
         {history?.length === 0 && (
           <div className="bg-white rounded-card border border-border p-6 text-center">
             <p className="text-caption text-gray3">暂无上传的发票</p>
+            <a href="/v2/supplier/billing" className="mt-3 inline-block text-button text-amber-fg">先确认待开票账期</a>
           </div>
         )}
         {history && history.length > 0 && (

@@ -250,7 +250,7 @@ export default function WarehouseDocsPage() {
               </tr>
             ))}
             {!loading && items.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-10 text-center text-gray2">暂无单据</td></tr>
+              <tr><td colSpan={7} className="px-4 py-10 text-center text-gray2"><p>暂无单据</p><a href="/v2/supply-chain/inventory" className="mt-2 inline-block text-button text-accent hover:underline">去总仓库存制单</a></td></tr>
             )}
             {loading && (
               <tr><td colSpan={7} className="px-4 py-10 text-center text-gray2">加载中…</td></tr>

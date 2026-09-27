@@ -108,6 +108,7 @@ function installPageMock(options: {
   orders?: any[]
   receipts?: any[]
   purchaseReturns?: any[]
+  claims?: any[]
   contracts?: any[]
   statements?: any[]
   orderDetail?: any
@@ -117,6 +118,7 @@ function installPageMock(options: {
   const orders = options.orders ?? []
   const receipts = options.receipts ?? []
   const purchaseReturns = options.purchaseReturns ?? []
+  const claims = options.claims ?? []
   const contracts = options.contracts ?? []
   const statements = options.statements ?? []
   mockFetch.mockImplementation((path, init) => {
@@ -125,7 +127,7 @@ function installPageMock(options: {
     if (url === '/api/upstream/shipments') return Promise.resolve([])
     if (url === '/api/upstream/receipts') return Promise.resolve(receipts)
     if (url === '/api/upstream/purchase-returns') return Promise.resolve(purchaseReturns)
-    if (url === '/api/upstream/arrival-claims') return Promise.resolve([])
+    if (url === '/api/upstream/arrival-claims') return Promise.resolve(claims)
     if (url === '/api/upstream/settlement-statements') return Promise.resolve(statements)
     if (url === '/api/upstream/contracts') return Promise.resolve(contracts)
     if (url === '/api/upstream/setup-options') return Promise.resolve({ suppliers: [postedReceipt.supplier], warehouses: [] })
@@ -405,6 +407,41 @@ describe('上游采购收货后补报', () => {
     expect(container.textContent).toContain(changeOrder.no)
     expect(container.textContent).toContain(`收货单 ${postedReceipt.no}`)
     expect(container.textContent).toContain('差异单 UCL202609000001')
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('在到货差异页打开来源单据时不离开当前页签', async () => {
+    installPageMock({
+      claims: [{
+        id: 'claim-1', no: 'UCL202609000001', type: 'SHORTAGE', status: 'PENDING_SUPPLIER',
+        claimedAmount: 50, description: '到货短缺', supplierId: postedReceipt.supplier.id,
+        purchaseOrder: { id: changeOrder.id, no: changeOrder.no },
+        receipt: { id: postedReceipt.id, no: postedReceipt.no },
+        lines: [{ id: 'claim-line-1', affectedQty: 1, purchaseUnit: 'kg', product: { code: 'P001', name: '人工见手青' } }],
+      }],
+      orderDetail: changeOrderDetail,
+      receiptDetailValue: receiptDetail,
+    })
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('到货差异') ?? false)
+    const claimsTab = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '到货差异')!
+    act(() => claimsTab.click())
+    await waitFor(() => container.textContent?.includes('UCL202609000001') ?? false)
+
+    const sourceOrder = Array.from(container.querySelectorAll('button')).find(button => button.textContent === `采购单 ${changeOrder.no}`)!
+    await act(async () => { sourceOrder.click() })
+    await waitFor(() => container.textContent?.includes(`采购单明细 · ${changeOrder.no}`) ?? false)
+    expect(claimsTab.className).toContain('bg-gray1')
+    expect(container.textContent).toContain('UCL202609000001')
+
+    const close = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '关闭')!
+    act(() => close.click())
+    const sourceReceipt = Array.from(container.querySelectorAll('button')).find(button => button.textContent === `收货单 ${postedReceipt.no}`)!
+    await act(async () => { sourceReceipt.click() })
+    await waitFor(() => container.textContent?.includes(`收货单明细 · ${postedReceipt.no}`) ?? false)
+    expect(claimsTab.className).toContain('bg-gray1')
 
     act(() => root.unmount())
     container.remove()

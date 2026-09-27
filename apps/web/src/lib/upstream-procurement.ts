@@ -82,3 +82,26 @@ export function currentMonthRange(now = new Date()) {
   const lastDay = String(new Date(year, now.getMonth() + 1, 0).getDate()).padStart(2, '0')
   return { start: `${year}-${month}-01`, end: `${year}-${month}-${lastDay}` }
 }
+
+export type ReceiptReviewAction = 'confirm' | 'review' | null
+
+/** Pick the valid next UI action when an idempotent receipt request is replayed. */
+export function receiptReviewActionForStatus(status: string): ReceiptReviewAction {
+  if (status === 'INSPECTING') return 'confirm'
+  if (status === 'PENDING_REVIEW') return 'review'
+  return null
+}
+
+/** A failed post-success refresh must never turn a completed mutation into a retryable failure. */
+export async function loadCreatedRecord<T extends { id: string }>(
+  id: string,
+  load: () => Promise<T[]>,
+): Promise<{ rows: T[]; record: T } | null> {
+  try {
+    const rows = await load()
+    const record = rows.find(item => item.id === id)
+    return record ? { rows, record } : null
+  } catch {
+    return null
+  }
+}

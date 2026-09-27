@@ -256,6 +256,7 @@ export default function InternalSupplyChainInventoryPage() {
   const [scope, setScope] = useState<InventoryScope>('stock')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [noticeDocId, setNoticeDocId] = useState<string | null>(null)
   const [inboundOpen, setInboundOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
   const [batchCandidates, setBatchCandidates] = useState<InboundCandidate[]>([])
@@ -322,7 +323,7 @@ export default function InternalSupplyChainInventoryPage() {
         method: 'PATCH',
         body: JSON.stringify({ unitConversionStatus: 'VERIFIED' }),
       })
-      setNotice(`「${item.name}」换算已核验（${mapping}），现在可以入库了`)
+      setNoticeDocId(null); setNotice(`「${item.name}」换算已核验（${mapping}），现在可以入库了`)
       await load(scope)
     } catch (reason: any) {
       setError(String(reason?.message || reason))
@@ -526,7 +527,7 @@ export default function InternalSupplyChainInventoryPage() {
       const book = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(book, sheet, '实时库存')
       XLSX.writeFile(book, `实时库存查询表-${new Date().toISOString().slice(0, 10)}.xlsx`)
-      setNotice(`已导出 ${rows.length} 条当前筛选结果`)
+      setNoticeDocId(null); setNotice(`已导出 ${rows.length} 条当前筛选结果`)
     } catch (reason: any) {
       setError(`导出失败：${String(reason?.message || reason)}`)
     } finally {
@@ -695,7 +696,7 @@ export default function InternalSupplyChainInventoryPage() {
     setError('')
     setGateWarnings([])
     try {
-      const result = await apiFetch<{ replayed: boolean; count: number; totalAmount: number; gateWarnings?: string[] }>('/api/warehouse-inventory/batch-manual-inbound', {
+      const result = await apiFetch<{ replayed: boolean; count: number; totalAmount: number; gateWarnings?: string[]; doc: { id: string } }>('/api/warehouse-inventory/batch-manual-inbound', {
         method: 'POST',
         body: JSON.stringify({
           items: batchRows.map(row => ({
@@ -712,6 +713,7 @@ export default function InternalSupplyChainInventoryPage() {
         }),
       })
       setBatchOpen(false)
+      setNoticeDocId(result.doc.id)
       setGateWarnings(result.gateWarnings || [])
       setNotice(result.replayed
         ? '该批量入库单已经处理，本次未重复入账'
@@ -745,7 +747,7 @@ export default function InternalSupplyChainInventoryPage() {
     setError('')
     setGateWarnings([])
     try {
-      const result = await apiFetch<{ replayed: boolean; gateWarnings?: string[] }>('/api/warehouse-inventory/manual-inbound', {
+      const result = await apiFetch<{ replayed: boolean; gateWarnings?: string[]; doc: { id: string } }>('/api/warehouse-inventory/manual-inbound', {
         method: 'POST',
         body: JSON.stringify({
           productId,
@@ -762,6 +764,7 @@ export default function InternalSupplyChainInventoryPage() {
         }),
       })
       setInboundOpen(false)
+      setNoticeDocId(result.doc.id)
       setGateWarnings(result.gateWarnings || [])
       setNotice(result.replayed ? '该入库请求已处理，本次返回原结果，没有重复入账' : '手工入库成功：数量、成本、批次和流水已原子记入总仓影子账')
       await load()
@@ -781,7 +784,7 @@ export default function InternalSupplyChainInventoryPage() {
         method: 'POST',
         body: JSON.stringify({ reason, idempotencyKey: newIdempotencyKey() }),
       })
-      setNotice(result.replayed ? '该冲销请求已处理，本次未重复记账' : '手工入库已追加反向流水；原流水仍完整保留')
+      setNoticeDocId(null); setNotice(result.replayed ? '该冲销请求已处理，本次未重复记账' : '手工入库已追加反向流水；原流水仍完整保留')
       await load()
     } catch (reasonValue: any) {
       setError(String(reasonValue?.message || reasonValue))
@@ -831,7 +834,7 @@ export default function InternalSupplyChainInventoryPage() {
         }),
       })
       setCountOpen(false)
-      setNotice(result.replayed ? '该实盘请求已处理，本次未重复记账' : '该 SKU 已按实盘绝对数量和金额校准；需覆盖全部启用 SKU 后才可能进入严格库存')
+      setNoticeDocId(null); setNotice(result.replayed ? '该实盘请求已处理，本次未重复记账' : '该 SKU 已按实盘绝对数量和金额校准；需覆盖全部启用 SKU 后才可能进入严格库存')
       await load()
     } catch (reason: any) {
       setError(String(reason?.message || reason))
@@ -855,7 +858,7 @@ export default function InternalSupplyChainInventoryPage() {
         failureCount += result.failures.length
         cursor = result.nextCursor || null
       } while (cursor)
-      setNotice(`影子账补记完成：完整扫描 ${scanned} 张总仓订单，失败 ${failureCount} 张${failureCount ? '，请查看操作日志' : ''}`)
+      setNoticeDocId(null); setNotice(`影子账补记完成：完整扫描 ${scanned} 张总仓订单，失败 ${failureCount} 张${failureCount ? '，请查看操作日志' : ''}`)
       await load()
     } catch (reason: any) {
       setError(String(reason?.message || reason))
@@ -868,7 +871,7 @@ export default function InternalSupplyChainInventoryPage() {
     if (!data || !policyMode || savingPolicyRef.current) return
     const currentPolicyMode = data.warehouse.blockZeroStockAtOrderEntry ? 'BLOCK' : 'ALLOW'
     if (policyMode === currentPolicyMode) {
-      setNotice('门店订货库存策略没有变化')
+      setNoticeDocId(null); setNotice('门店订货库存策略没有变化')
       return
     }
     if (policyMode === 'BLOCK' && data.warehouse.inventoryMode === 'OFF') {
@@ -898,7 +901,7 @@ export default function InternalSupplyChainInventoryPage() {
           rowVersion: data.warehouse.rowVersion,
         }),
       })
-      setNotice(policyMode === 'BLOCK'
+      setNoticeDocId(null); setNotice(policyMode === 'BLOCK'
         ? '已启用“库存为 0，禁止下单”；只影响门店提交阶段'
         : '已切换为“仅提醒，仍可下单”；总仓后续履约仍按库存账规则处理')
       setPolicyOpen(false)
@@ -957,7 +960,7 @@ export default function InternalSupplyChainInventoryPage() {
       </header>
 
       {error && <div className="mt-4 rounded-card border border-red/30 bg-red-bg p-3 text-caption text-red-fg">{error}</div>}
-      {notice && <div className="mt-4 rounded-card border border-green/30 bg-green/10 p-3 text-caption text-green-fg">{notice}</div>}
+      {notice && <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-card border border-green/30 bg-green/10 p-3 text-caption text-green-fg"><span>{notice}</span>{noticeDocId && <a href={`/v2/supply-chain/docs?doc=${encodeURIComponent(noticeDocId)}`} className="rounded-lg border border-green/30 bg-white px-3 py-1.5 text-button text-green-fg">查看单据</a>}</div>}
       {gateWarnings.length > 0 && <div className="mt-4 rounded-card border border-amber/40 bg-amber/10 p-3 text-caption text-amber-fg">
         <b>入库闸口警告（已放行）：</b>以下商品未绑定该供应商的供货关系，建议在「供货关系」页补齐——{gateWarnings.join('；')}
       </div>}

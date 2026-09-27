@@ -15,14 +15,16 @@ import {
 } from '@/components/v2/order-center-resizable-table'
 import { OrderCenterTabs } from '@/components/v2/order-center-tabs'
 import { EmptyState, FriendlyError, SkeletonCard } from '@/components/v2/skeleton'
-import { apiFetch } from '@/lib/v2-auth'
+import { apiDownload, apiFetch } from '@/lib/v2-auth'
 import {
   buildOrderQuery,
   DEFAULT_ORDER_FILTERS,
   formatOrderStatusLabel,
+  formatDeliveryStatusLabel,
   hasActiveOrderFilters,
   keepOrderFiltersForPage,
   orderDeliveryDateText,
+  orderDateTimeText,
   orderDeliveryPaginationRange,
   orderDeliveryTotalPages,
   orderItemSummary,
@@ -76,6 +78,20 @@ const ORDER_COLUMNS: readonly OrderCenterTableColumn<ProjectedOrder>[] = [
     renderCell: order => orderDeliveryDateText(order.createdAt),
   },
   {
+    id: 'creationSource',
+    header: '创建来源',
+    defaultWidth: 128,
+    cellClassName: 'text-gray2',
+    renderCell: order => order.creationSource,
+  },
+  {
+    id: 'creationType',
+    header: '创建类型',
+    defaultWidth: 105,
+    cellClassName: 'text-gray2',
+    renderCell: order => order.creationType,
+  },
+  {
     id: 'expectedDeliveryDate',
     header: '期望到货日',
     defaultWidth: 97,
@@ -83,10 +99,74 @@ const ORDER_COLUMNS: readonly OrderCenterTableColumn<ProjectedOrder>[] = [
     renderCell: order => orderDeliveryDateText(order.expectedDeliveryDate),
   },
   {
+    id: 'estimatedArrivalAt',
+    header: '预计到货日',
+    defaultWidth: 97,
+    cellClassName: 'font-num text-gray2',
+    renderCell: order => orderDeliveryDateText(order.estimatedArrivalAt),
+  },
+  {
     id: 'status',
     header: '状态',
     defaultWidth: 77,
     renderCell: order => <Chip tone={orderStatusTone(order.status)}>{formatOrderStatusLabel(order.status)}</Chip>,
+  },
+  {
+    id: 'submittedAt',
+    header: '提交时间',
+    defaultWidth: 146,
+    cellClassName: 'font-num text-gray2',
+    renderCell: order => orderDateTimeText(order.submittedAt),
+  },
+  {
+    id: 'splitAt',
+    header: '分单时间',
+    defaultWidth: 146,
+    cellClassName: 'font-num text-gray2',
+    renderCell: order => orderDateTimeText(order.splitAt),
+  },
+  {
+    id: 'lastOperationAt',
+    header: '操作时间',
+    defaultWidth: 146,
+    cellClassName: 'font-num text-gray2',
+    renderCell: order => orderDateTimeText(order.lastOperationAt),
+  },
+  {
+    id: 'note',
+    header: '备注',
+    defaultWidth: 180,
+    cellClassName: 'text-gray2',
+    renderCell: order => <span title={order.note || ''}>{order.note || '—'}</span>,
+  },
+  {
+    id: 'printStatus',
+    header: '打印状态',
+    defaultWidth: 112,
+    cellClassName: 'text-gray2',
+    renderCell: order => order.printStatus,
+  },
+  {
+    id: 'createdBy',
+    header: '创建人',
+    defaultWidth: 118,
+    cellClassName: 'text-gray2',
+    renderCell: order => order.createdBy?.name || '—',
+  },
+  {
+    id: 'downstreamDocuments',
+    header: '下游单据',
+    defaultWidth: 240,
+    cellClassName: 'text-gray2',
+    renderCell: order => order.downstreamDocuments.length > 0
+      ? <div className="flex flex-wrap gap-x-2 gap-y-1">{order.downstreamDocuments.map((delivery: { id: string; no: string; status: string }) => (
+          <a
+            key={delivery.id}
+            href={`/v2/supply-chain/deliveries?keyword=${encodeURIComponent(delivery.no)}`}
+            className="text-amber-fg underline decoration-dotted underline-offset-2"
+          >{delivery.no} · {formatDeliveryStatusLabel(delivery.status)}</a>
+        ))}</div>
+      : '—',
   },
   {
     id: 'summary',
@@ -124,6 +204,7 @@ export default function InternalSupplyChainOrdersPage() {
   const [draftFilters, setDraftFilters] = useState<OrderFilters>(DEFAULT_ORDER_FILTERS)
   const [stores, setStores] = useState<Store[]>([])
   const [dateError, setDateError] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
   const abortControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -196,6 +277,28 @@ export default function InternalSupplyChainOrdersPage() {
     setDraftFilters(cleared)
     setFilters(cleared)
     setDateError(null)
+  }
+
+  async function exportOrders() {
+    if (exporting) return
+    setExporting(true)
+    setError(null)
+    try {
+      const query = buildOrderQuery({ ...filters, page: 1, pageSize: filters.pageSize })
+      const { blob, filename } = await apiDownload(`/api/orders/export.xlsx${query}`, '门店订货单.xlsx')
+      const href = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = href
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(href), 5_000)
+    } catch (reason: any) {
+      setError(String(reason?.message || reason))
+    } finally {
+      setExporting(false)
+    }
   }
 
   return (
@@ -273,6 +376,11 @@ export default function InternalSupplyChainOrdersPage() {
             disabled={!filterActive}
             className="rounded-cta border border-border bg-white px-3 py-2 text-button text-gray2 disabled:opacity-40"
           >清空</button>
+          <button
+            onClick={exportOrders}
+            disabled={exporting || Boolean(dateError)}
+            className="rounded-cta border border-accent bg-white px-4 py-2 text-button text-accent disabled:opacity-40"
+          >{exporting ? '正在导出…' : '导出'}</button>
         </div>
 
         {dateError && (
@@ -304,7 +412,7 @@ export default function InternalSupplyChainOrdersPage() {
                 footer={(
                   <tfoot className="border-t border-border bg-bg">
                     <tr>
-                      <td colSpan={8} className="px-4 py-3 text-right font-semibold">合计</td>
+                      <td colSpan={18} className="px-4 py-3 text-right font-semibold">合计</td>
                       <td className="px-4 py-3 text-right font-num font-semibold">
                         ¥{orders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>

@@ -439,25 +439,20 @@ async function main() {
       prisma.purchaseOrder.update({ where: { id: orderId }, data: { deliveredAt: overdueDeliveredAt } }),
       prisma.deliveryOrder.update({ where: { id: secondShip.body.deliveryId }, data: { deliveredAt: overdueDeliveredAt } }),
     ])
-    const [secondAutoReceive, secondManualReceive] = await Promise.all([
+    const [disabledAutoReceive, secondManualReceive] = await Promise.all([
       autoReceivePurchaseOrder(orderId),
       api(`/api/orders/${orderId}/receive`, managerToken, {
         method: 'PATCH', body: JSON.stringify({ items: [{ productId: product.id, receivedQty: 3 }] }),
       }),
     ])
-    assert.ok(secondAutoReceive, '自动收货竞争后必须返回入库单')
+    assert.equal(disabledAutoReceive, null, '自动收货必须停用，不得创建或确认入库单')
     assert.equal(secondManualReceive.status, 200, JSON.stringify(secondManualReceive.body))
-    assert.equal(secondAutoReceive.receipt.id, secondManualReceive.body.receipt.id)
-    assert.equal(
-      [secondAutoReceive.duplicated, secondManualReceive.body.duplicated === true].filter(Boolean).length,
-      1,
-      '自动收货与手工收货竞争时必须恰好一方命中幂等结果',
-    )
+    assert.equal(secondManualReceive.body.duplicated, false, '手工收货是唯一确认入口，不应由停用的自动任务生成幂等结果')
     assert.equal(await prisma.receipt.count({ where: { deliveryOrderId: secondShip.body.deliveryId } }), 1)
     assert.equal(await prisma.deliveryOrderEvent.count({ where: { deliveryOrderId: secondShip.body.deliveryId, eventType: 'RECEIVED' } }), 1)
-    assert.equal(await prisma.paymentSchedule.count({ where: { receiptId: secondAutoReceive.receipt.id } }), 1)
-    assert.equal(await prisma.reconciliationItem.count({ where: { receiptId: secondAutoReceive.receipt.id } }), 1)
-    receiptIds.push(secondAutoReceive.receipt.id)
+    assert.equal(await prisma.paymentSchedule.count({ where: { receiptId: secondManualReceive.body.receipt.id } }), 1)
+    assert.equal(await prisma.reconciliationItem.count({ where: { receiptId: secondManualReceive.body.receipt.id } }), 1)
+    receiptIds.push(secondManualReceive.body.receipt.id)
 
     const detail = await api(`/api/orders/${orderId}`, managerToken)
     assert.equal(detail.status, 200)

@@ -1,199 +1,20 @@
 import { prisma } from '@dianjie/db'
-import { businessMonthKey } from '../lib/businessTime'
 import dayjs from 'dayjs'
 import { executeBankPayment } from './paymentSchedule'
 import { sendNotification as notify } from './notification'
-import { fireAndForget as notifyWeCom } from './notify'
 import { runMeituanHourlySync, runMeituanDailyReconcile } from './meituan/cron'
 import { isCmbSyncEnabled, syncAllCmbAccounts } from './cmbAutoSync'
-import { nextBusinessNo } from './purchaseOrderIntegrity'
-import { ensureReceiptDerivatives, repairReceiptDerivatives } from './receiptDerivatives'
-import { ensureReceiptInventoryUnitSnapshots } from './receiptInventoryUnits'
-import { revalueStoreConsumptionCosts } from './inventoryCosting'
+import { repairReceiptDerivatives } from './receiptDerivatives'
 import { runDailyReportReminder } from './dailyReportReminder'
-import { copyFrozenSupplyDocumentFourUnits } from './supplyDocumentUnitSnapshots'
+import { storeReceiptDeadlineStatus } from './storeReceiptDeadline'
 
 /**
- * 对一张已经送达、超时未确认的订货单执行自动收货。
- * 配送单状态抢占、入库单、累计实收和订单状态在同一事务内提交；
- * 因而可与门店手工收货安全竞争，失败方只读取已生成的入库单。
+ * 自动收货已取消：收货事实只能由门店人工确认。保留导出以兼容历史脚本，
+ * 但无论调用方为何均不会读取或写入订单、入库、库存、账期或派生记录。
  */
 export async function autoReceivePurchaseOrder(orderId: string) {
-  const overdueBefore = dayjs().subtract(24, 'hour').toDate()
-  const order = await prisma.purchaseOrder.findFirst({
-    where: { id: orderId, status: 'PENDING_CONFIRM', deliveredAt: { lt: overdueBefore } },
-    include: {
-      items: { where: { isActive: true } },
-      supplier: true,
-      store: true,
-      deliveries: {
-        where: { status: 'DELIVERED' },
-        orderBy: { deliveredAt: 'desc' },
-        take: 1,
-        include: { items: { where: { shippedQty: { gt: 0 }, removedAt: null }, include: { product: { select: { shelfDays: true } } } } },
-      },
-    },
-  })
-  if (!order) {
-    const existing = await prisma.receipt.findFirst({
-      where: { purchaseOrderId: orderId, deliveryOrderId: { not: null } },
-      orderBy: { createdAt: 'desc' },
-    })
-    if (!existing) return null
-    const derivatives = await ensureReceiptDerivatives(existing.id)
-    return { receipt: existing, duplicated: true, derivatives }
-  }
-
-  const delivery = order.deliveries[0]
-  if (!delivery) {
-    console.error(`自动收货跳过 ${order.no}: 未找到待收货配送单`)
-    return null
-  }
-  // 系统自动送达的单不自动收货：自动送达只解锁状态，收货事实以门店人手确认为准。
-  if (delivery.autoDelivered) {
-    console.log(`自动收货跳过 ${order.no}: 配送单为系统自动送达，等待门店人工验收`)
-    return null
-  }
-
-  const receivedAt = new Date()
-  const totalAmount = delivery.items.reduce(
-    (sum, item) => sum + Number(item.shippedQty) * Number(item.unitPriceSnapshot),
-    0,
-  )
-  const ym = businessMonthKey(receivedAt)
-
-  const receipt = await prisma.$transaction(async tx => {
-    const claimed = await tx.deliveryOrder.updateMany({
-      where: {
-        id: delivery.id,
-        tenantId: order.tenantId,
-        status: 'DELIVERED',
-        rowVersion: delivery.rowVersion,
-      },
-      data: {
-        status: 'RECEIVED',
-        receivedAt,
-        receivedById: order.createdById,
-        rowVersion: { increment: 1 },
-      },
-    })
-    if (claimed.count !== 1) return null
-
-    const latestReceipt = await tx.receipt.findFirst({
-      where: { tenantId: order.tenantId, no: { startsWith: `RK${ym}` } },
-      orderBy: { no: 'desc' },
-      select: { no: true },
-    })
-    const parsedFloor = Number(latestReceipt?.no.slice(`RK${ym}`.length) || 0)
-    const receiptFloor = Number.isFinite(parsedFloor) ? parsedFloor : 0
-    const no = await nextBusinessNo(tx, order.tenantId, 'RECEIPT', ym, 'RK', receiptFloor)
-
-    const created = await tx.receipt.create({
-      data: {
-        tenantId: order.tenantId,
-        no,
-        storeId: order.storeId,
-        supplierId: order.supplierId,
-        purchaseOrderId: order.id,
-        deliveryOrderId: delivery.id,
-        deliveryDate: receivedAt,
-        totalAmount,
-        status: 'CONFIRMED',
-        confirmedAt: receivedAt,
-        createdById: order.createdById,
-        items: {
-          create: delivery.items.map(item => ({
-            productId: item.productId,
-            quantity: item.shippedQty,
-            unitPrice: item.unitPriceSnapshot,
-            amount: Number(item.unitPriceSnapshot) * Number(item.shippedQty),
-            productCodeSnapshot: item.productCodeSnapshot,
-            productNameSnapshot: item.productNameSnapshot,
-            productSpecSnapshot: item.productSpecSnapshot,
-            productUnitSnapshot: item.productUnitSnapshot,
-            productCategorySnapshot: item.productCategorySnapshot,
-            ...copyFrozenSupplyDocumentFourUnits(item),
-            productionDate: item.manufactureDate || receivedAt,
-            expiryDate: item.expiryDate || dayjs(receivedAt).add(item.product.shelfDays, 'day').toDate(),
-          })),
-        },
-      },
-    })
-    await ensureReceiptInventoryUnitSnapshots(tx, created.id)
-
-    for (const item of delivery.items) {
-      await tx.deliveryOrderItem.update({
-        where: { id: item.id },
-        data: { receivedQty: item.shippedQty },
-      })
-      const previous = await tx.deliveryOrderItem.aggregate({
-        where: {
-          productId: item.productId,
-          deliveryOrder: { purchaseOrderId: order.id, status: 'RECEIVED', id: { not: delivery.id } },
-        },
-        _sum: { receivedQty: true },
-      })
-      await tx.purchaseOrderItem.updateMany({
-        where: { purchaseOrderId: order.id, productId: item.productId },
-        data: { receivedQty: Number(previous._sum.receivedQty || 0) + Number(item.shippedQty) },
-      })
-    }
-
-    await tx.deliveryOrderEvent.create({
-      data: {
-        tenantId: order.tenantId,
-        deliveryOrderId: delivery.id,
-        eventType: 'RECEIVED',
-        fromStatus: 'DELIVERED',
-        toStatus: 'RECEIVED',
-        metadata: { receiptId: created.id, autoConfirmed: true },
-      },
-    })
-    await tx.purchaseOrder.update({
-      where: { id: order.id },
-      data: {
-        // 首次有效发货已关闭未发余量，自动收货后同样不得回到待发货状态。
-        status: 'COMPLETED',
-        receivedAt,
-        receiptId: created.id,
-        autoConfirmed: true,
-      },
-    })
-    await tx.opLog.create({
-      data: {
-        tenantId: order.tenantId,
-        userId: order.createdById,
-        action: `[自动] 24h 自动确认收货 ${order.no}`,
-        target: order.no,
-        entityType: 'PurchaseOrder',
-        targetId: order.id,
-      },
-    })
-    return created
-  })
-
-  if (!receipt) {
-    const existing = await prisma.receipt.findUnique({ where: { deliveryOrderId: delivery.id } })
-    if (!existing) return null
-    const derivatives = await ensureReceiptDerivatives(existing.id)
-    return { receipt: existing, duplicated: true, derivatives }
-  }
-
-  const derivatives = await ensureReceiptDerivatives(receipt.id)
-  if (!derivatives.voucher.ok) console.error(`自动收货凭证生成失败 ${order.no}:`, derivatives.voucher.error)
-  if (!derivatives.finance.ok) console.error(`自动收货财务派生记录失败 ${order.no}:`, derivatives.finance.error)
-  await revalueStoreConsumptionCosts(order.tenantId, order.storeId).catch(error => {
-    console.error(`自动收货成本快照刷新失败 ${order.no}:`, error)
-  })
-
-  notifyWeCom({
-    tenantId: order.tenantId,
-    event: 'PO_AUTO_RECEIVED',
-    eventKey: `PO:${order.id}:AUTO_RECEIVED`,
-    payload: { orderId: order.id, no: order.no },
-    toStoreIds: order.storeId ? [order.storeId] : undefined,
-  })
-  return { receipt, duplicated: false, derivatives }
+  console.warn(`自动收货已停用，等待门店人工收货：${orderId}`)
+  return null
 }
 
 export type PaymentReminderKind = '3DAY' | '1DAY'
@@ -304,6 +125,54 @@ export async function ensurePaymentDueReminder(scheduleId: string, kind: Payment
     })
   }
   return { ...result, skipped: false }
+}
+
+/**
+ * Scan every pending arrival claim eligible for the existing 24-hour automatic
+ * rule. Late same-day reports are intentionally counted but never approved.
+ * A stable cursor prevents an arbitrary first 200 late reports from starving
+ * older eligible records behind them.
+ */
+export async function autoApproveEligibleLossClaims(now = dayjs()) {
+  const { approveLossClaimAtomically } = await import('../routes/lossClaims')
+  let autoApprovedCount = 0
+  let overdueManualReviewCount = 0
+  let scannedLossClaims = 0
+  let cursor: string | undefined
+  for (;;) {
+    const overdueLossClaims = await prisma.lossClaim.findMany({
+      where: { status: 'PENDING', isManual: false, createdAt: { lt: now.subtract(24, 'hour').toDate() } },
+      include: { items: true, purchaseOrder: { include: { receipt: true } }, receipt: { select: { deliveryDate: true } } },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: 200,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    })
+    if (!overdueLossClaims.length) break
+    scannedLossClaims += overdueLossClaims.length
+    for (const c of overdueLossClaims) {
+      if (c.receipt?.deliveryDate && storeReceiptDeadlineStatus(c.receipt.deliveryDate, c.createdAt).overdue) {
+        overdueManualReviewCount++
+        console.log(`⏭ 跳过逾期补报 ${c.no}：需要人工审批`)
+        continue
+      }
+      try {
+        const result = await approveLossClaimAtomically({
+          claimId: c.id, tenantId: c.tenantId, operatorId: c.createdById,
+          reason: `[自动] 24h 自动同意报损 ${c.no}`, automatic: true,
+        })
+        if (!result.transitioned) {
+          console.log(`⏭ 跳过 ${c.no} (并发竞争: 已不是 PENDING)`)
+          continue
+        }
+        autoApprovedCount++
+      } catch (e: any) {
+        console.error(`自动同意报损失败 ${c.no}:`, e.message)
+      }
+    }
+    if (overdueLossClaims.length < 200) break
+    cursor = overdueLossClaims[overdueLossClaims.length - 1].id
+  }
+  return { autoApprovedCount, overdueManualReviewCount, scannedLossClaims }
 }
 
 export async function runDailyCheck() {
@@ -435,26 +304,6 @@ export async function runDailyCheck() {
 
   console.log(`✅ 账期扫描完成: 提醒成功${reminderSuccess}笔/失败${reminderFailed}笔，付款${dueSchedules.length + pendingDue.length}笔，OVERDUE 复活${overdueOk}笔`)
 
-  // ── 6. 24h 自动收货 (供应商点送达 24h 后门店未确认 → 自动 RECEIVED) ───
-  // 倒计时基准从 shippedAt (发出) 改为 deliveredAt (送达). 还在路上的不会被自动收货
-  const overdueShipped = await prisma.purchaseOrder.findMany({
-    where: {
-      status: 'PENDING_CONFIRM',
-      deliveredAt: { lt: now.subtract(24, 'hour').toDate() },   // 必须有 deliveredAt 且超 24h
-    },
-    select: { id: true, no: true },
-    take: 200,
-  })
-  let autoReceivedCount = 0
-  for (const o of overdueShipped) {
-    try {
-      const result = await autoReceivePurchaseOrder(o.id)
-      if (result && !result.duplicated) autoReceivedCount++
-    } catch (e: any) {
-      console.error(`自动收货失败 ${o.no}:`, e.message)
-    }
-  }
-
   // 已确认的入库单不会再次进入待确认扫描；独立补偿最近缺失的财务派生记录。
   try {
     const derivativeRepair = await repairReceiptDerivatives()
@@ -469,34 +318,10 @@ export async function runDailyCheck() {
     console.error('入库派生修复扫描失败:', error?.message || error)
   }
 
-  // ── 7. 报损 24h 自动同意 (PENDING 超 24h → AUTO_APPROVED + 回补供应商库存) ───
-  const overdueLossClaims = await prisma.lossClaim.findMany({
-    where: { status: 'PENDING', createdAt: { lt: now.subtract(24, 'hour').toDate() } },
-    include: { items: true, purchaseOrder: { include: { receipt: true } } },
-    take: 200,
-  })
-  const { approveLossClaimAtomically } = await import('../routes/lossClaims')
-  for (const c of overdueLossClaims) {
-    try {
-      // 状态抢占、库存回补、库存流水和审计日志同事务，且与供应商人工处理共用事务锁。
-      const result = await approveLossClaimAtomically({
-        claimId: c.id,
-        tenantId: c.tenantId,
-        operatorId: c.createdById,
-        reason: `[自动] 24h 自动同意报损 ${c.no}`,
-        automatic: true,
-      })
-      if (!result.transitioned) {
-        // 供应商在 schedule fire 之前已抢先操作 — 跳过此条
-        console.log(`⏭ 跳过 ${c.no} (并发竞争: 已不是 PENDING)`)
-        continue
-      }
-    } catch (e: any) {
-      console.error(`自动同意报损失败 ${c.no}:`, e.message)
-    }
-  }
+  // ── 6. 报损 24h 自动同意（逾期补报必须保留人工审批） ───
+  const { autoApprovedCount, overdueManualReviewCount, scannedLossClaims } = await autoApproveEligibleLossClaims(now)
 
-  console.log(`✅ 自动收货 ${autoReceivedCount}/${overdueShipped.length} 单, 自动同意报损 ${overdueLossClaims.length} 笔`)
+  console.log(`✅ 自动收货已停用；自动同意报损 ${autoApprovedCount} 笔，逾期补报人工审批 ${overdueManualReviewCount} 笔（扫描 ${scannedLossClaims} 笔）`)
 
   // 5. 周期性凭证模板 (房租/水电/折旧 月度自动建凭证)
   try {

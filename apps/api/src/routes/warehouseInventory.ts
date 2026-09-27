@@ -14,7 +14,14 @@ import {
 import { auditWarehouseLedger } from '../services/warehouseLedgerAudit'
 import { reconcileWarehouseShadowLedger } from '../services/warehouseLedgerReconciliation'
 import { resolveProductFourUnits } from '../services/inventoryUnits'
-import { ensureWarehouseDoc, type WarehouseDocLineInput } from '../services/warehouseDocs'
+import {
+  ensureWarehouseDoc,
+  normalizeWarehouseDocAttachments,
+  type WarehouseDocAttachmentInput,
+  type WarehouseDocLineInput,
+} from '../services/warehouseDocs'
+import { findLatestPurchaseInboundPrices } from '../services/purchaseInboundPriceHistory'
+import { assertWarehouseDocumentObjects } from './upload'
 
 /** 过账后登记单据（find-or-create，幂等键与台账批次对齐）。登记失败抛错，前端可用同一幂等键安全重试。 */
 async function registerWarehouseDoc(input: {
@@ -26,6 +33,7 @@ async function registerWarehouseDoc(input: {
   idempotencyKey: string
   supplierId?: string | null
   supplierName?: string | null
+  attachments?: WarehouseDocAttachmentInput[]
   reason?: string | null
   note?: string | null
   lines: WarehouseDocLineInput[]
@@ -112,6 +120,12 @@ const manualInboundSchema = z.object({
   batchNo: z.string().trim().max(80).optional().nullable(),
   manufactureDate: z.string().date().optional().nullable(),
   expiryDate: z.string().date().optional().nullable(),
+  attachments: z.array(z.object({
+    key: z.string().trim().min(1).max(1024),
+    name: z.string().trim().min(1).max(160),
+    mime: z.enum(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf']),
+    size: z.number().int().positive().max(10 * 1024 * 1024),
+  }).strict()).max(9).optional().default([]),
 })
 
 const batchManualInboundSchema = z.object({
@@ -130,6 +144,12 @@ const batchManualInboundSchema = z.object({
   supplierId: z.string({ required_error: '请选择供货供应商' }).trim().min(1, '请选择供货供应商'),
   sourceName: z.string().trim().max(120).optional().nullable(),
   note: z.string().trim().max(240).optional().nullable(),
+  attachments: z.array(z.object({
+    key: z.string().trim().min(1).max(1024),
+    name: z.string().trim().min(1).max(160),
+    mime: z.enum(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf']),
+    size: z.number().int().positive().max(10 * 1024 * 1024),
+  }).strict()).max(9).optional().default([]),
 }).superRefine((value, context) => {
   const productIds = value.items.map(item => item.productId)
   if (new Set(productIds).size !== productIds.length) {
@@ -668,6 +688,15 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
     }
   })
 
+  app.get('/purchase-inbound-price-history', authRead, async (req: any, reply: any) => {
+    const parsed = z.object({ supplierId: z.string().trim().min(1), productIds: z.string().trim().min(1).max(10_000).transform(value => Array.from(new Set(value.split(',').map(id => id.trim()).filter(Boolean)))).pipe(z.array(z.string()).min(1).max(200)) }).safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const products = await prisma.product.findMany({ where: { tenantId: req.user.tenantId, id: { in: parsed.data.productIds } }, select: { id: true, purchaseUnit: true, unit: true } })
+    const purchaseUnits = Object.fromEntries(products.map(product => [product.id, product.purchaseUnit || product.unit]))
+    const items = await findLatestPurchaseInboundPrices({ tenantId: req.user.tenantId, supplierId: parsed.data.supplierId, productIds: products.map(product => product.id), purchaseUnits })
+    return { items: items.map(item => ({ ...item, effectiveAt: item.effectiveAt.toISOString() })) }
+  })
+
   app.post('/manual-inbound', authWrite, async (req: any, reply: any) => {
     if (upstreamFeatureEnabled('UPSTREAM_MANUAL_INBOUND_RESTRICTED')) {
       return reply.status(409).send({ error: '手工入库已收口，请从上游采购的发货单发起验收入库' })
@@ -677,6 +706,8 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
     const manufactureDate = parsed.data.manufactureDate ? new Date(`${parsed.data.manufactureDate}T00:00:00+08:00`) : null
     const expiryDate = parsed.data.expiryDate ? new Date(`${parsed.data.expiryDate}T00:00:00+08:00`) : null
     try {
+      const attachments = normalizeWarehouseDocAttachments(req.user.tenantId, parsed.data.attachments)
+      await assertWarehouseDocumentObjects(req.user.tenantId, attachments)
       const supplier = await requireUpstreamSupplier(req.user.tenantId, parsed.data.supplierId)
       const gateWarnings = await inboundGateWarnings(req.user.tenantId, supplier.id, [parsed.data.productId])
       const result = await recordManualWarehouseInbound({
@@ -720,6 +751,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         idempotencyKey: `manual-inbound:${parsed.data.idempotencyKey}`,
         supplierId: supplier.id,
         supplierName: supplier.name,
+        attachments,
         note: parsed.data.note,
         lines: [{
           productId: parsed.data.productId,
@@ -767,6 +799,8 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
     const parsed = batchManualInboundSchema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     try {
+      const attachments = normalizeWarehouseDocAttachments(req.user.tenantId, parsed.data.attachments)
+      await assertWarehouseDocumentObjects(req.user.tenantId, attachments)
       const supplier = await requireUpstreamSupplier(req.user.tenantId, parsed.data.supplierId)
       const gateWarnings = await inboundGateWarnings(req.user.tenantId, supplier.id, parsed.data.items.map(item => item.productId))
       const result = await recordBatchManualWarehouseInbound({
@@ -816,6 +850,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         idempotencyKey: `manual-inbound-batch:${parsed.data.idempotencyKey}`,
         supplierId: supplier.id,
         supplierName: supplier.name,
+        attachments,
         note: parsed.data.note,
         lines: parsed.data.items.map(item => {
           const movement = movementByProduct.get(item.productId)

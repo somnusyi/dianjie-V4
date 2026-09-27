@@ -15,6 +15,17 @@ import { businessDateRangeInclusive } from '../lib/businessTime'
 import { hashRequestBody } from '../lib/idempotency'
 import { nextUpstreamDocumentNo } from '../services/upstreamDocumentNo'
 import {
+  approveUpstreamPurchaseReturn,
+  cancelUpstreamPurchaseReturn,
+  createUpstreamPurchaseReturn,
+  getUpstreamPurchaseReturn,
+  listReturnableUpstreamReceiptLines,
+  listUpstreamPurchaseReturns,
+  receiveUpstreamPurchaseReturn,
+  rejectUpstreamPurchaseReturn,
+  submitUpstreamPurchaseReturn,
+} from '../services/upstreamPurchaseReturns'
+import {
   postUpstreamClaimLossInTransaction,
   postUpstreamReceiptInTransaction,
   reverseUpstreamReceiptInTransaction,
@@ -174,6 +185,32 @@ const receiptCreateSchema = z.object({
     ctx.addIssue({ code: 'custom', path: ['lines'], message: '收货数量不能全部为 0，请至少填写一项实到数量' })
   }
 })
+
+const purchaseReturnCreateSchema = z.object({
+  supplierId: idSchema,
+  warehouseId: idSchema,
+  reason: z.string().trim().min(2).max(240),
+  note: z.string().trim().max(500).optional(),
+  idempotencyKey: z.string().trim().min(8).max(160),
+  lines: z.array(z.object({
+    receiptLineId: idSchema,
+    purchaseQuantity: decimalInput,
+    note: z.string().trim().max(240).optional(),
+  }).strict()).min(1).max(500),
+}).strict().superRefine((data, ctx) => {
+  const ids = data.lines.map(line => line.receiptLineId)
+  if (new Set(ids).size !== ids.length) {
+    ctx.addIssue({ code: 'custom', path: ['lines'], message: '同一收货明细不能重复退货' })
+  }
+})
+
+const purchaseReturnReasonSchema = z.object({
+  reason: z.string().trim().min(2).max(240),
+}).strict()
+
+const purchaseReturnReceiveSchema = z.object({
+  note: z.string().trim().max(240).optional(),
+}).strict()
 
 const postReceiptClaimSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(160),
@@ -1805,6 +1842,10 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
             lines: {
               include: {
                 settlementLines: { select: { statement: { select: { status: true, no: true } } } },
+                purchaseReturnLines: {
+                  where: { purchaseReturn: { status: { in: ['PENDING_APPROVAL', 'APPROVED', 'RECEIVED'] } } },
+                  select: { purchaseReturn: { select: { no: true, status: true } } },
+                },
               },
             },
             claims: { select: { status: true, no: true } },
@@ -1826,6 +1867,12 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
           .find(line => line.statement.status !== 'CANCELLED')
         if (activeSettlement) {
           throw Object.assign(new Error(`收货单已进入对账单 ${activeSettlement.statement.no}，不能直接冲销`), { statusCode: 409 })
+        }
+        const linkedReturn = receipt.lines
+          .flatMap(line => line.purchaseReturnLines)
+          .find(line => ['PENDING_APPROVAL', 'APPROVED', 'RECEIVED'].includes(line.purchaseReturn.status))
+        if (linkedReturn) {
+          throw Object.assign(new Error(`收货单已关联采购退货单 ${linkedReturn.purchaseReturn.no}，不能直接冲销`), { statusCode: 409 })
         }
 
         await reverseUpstreamReceiptInTransaction(tx, {
@@ -1941,6 +1988,95 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
       if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
       throw error
     }
+  })
+
+  app.get('/purchase-returns/returnable-lines', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!ensureInternal(role, reply)) return
+    return listReturnableUpstreamReceiptLines({
+      tenantId,
+      supplierId: typeof req.query?.supplierId === 'string' ? req.query.supplierId : undefined,
+      warehouseId: typeof req.query?.warehouseId === 'string' ? req.query.warehouseId : undefined,
+      take: Number(req.query?.take) || undefined,
+    })
+  })
+
+  app.get('/purchase-returns', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!ensureInternal(role, reply)) return
+    const status = typeof req.query?.status === 'string'
+      ? z.enum(['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'RECEIVED', 'REJECTED', 'CANCELLED']).safeParse(req.query.status)
+      : null
+    if (status && !status.success) return reply.status(400).send({ error: '采购退货状态无效' })
+    return listUpstreamPurchaseReturns({
+      tenantId,
+      supplierId: typeof req.query?.supplierId === 'string' ? req.query.supplierId : undefined,
+      warehouseId: typeof req.query?.warehouseId === 'string' ? req.query.warehouseId : undefined,
+      status: status?.success ? status.data : undefined,
+      take: Number(req.query?.take) || undefined,
+    })
+  })
+
+  app.get('/purchase-returns/:id', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!ensureInternal(role, reply)) return
+    const id = idSchema.safeParse(req.params.id)
+    if (!id.success) return reply.status(400).send({ error: '采购退货单标识格式不正确' })
+    return getUpstreamPurchaseReturn(tenantId, id.data)
+  })
+
+  app.post('/purchase-returns', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role, userId } = req.user
+    if (!ensureInternal(role, reply)) return
+    const parsed = purchaseReturnCreateSchema.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    return createUpstreamPurchaseReturn({ tenantId, userId, ...parsed.data })
+  })
+
+  app.post('/purchase-returns/:id/submit', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role, userId } = req.user
+    if (!ensureInternal(role, reply)) return
+    const id = idSchema.safeParse(req.params.id)
+    if (!id.success) return reply.status(400).send({ error: '采购退货单标识格式不正确' })
+    return submitUpstreamPurchaseReturn(tenantId, id.data, userId)
+  })
+
+  app.post('/purchase-returns/:id/approve', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role, userId } = req.user
+    if (!APPROVER_ROLES.has(role)) return reply.status(403).send({ error: '仅供应链审核人员可审批采购退货' })
+    const id = idSchema.safeParse(req.params.id)
+    if (!id.success) return reply.status(400).send({ error: '采购退货单标识格式不正确' })
+    return approveUpstreamPurchaseReturn(tenantId, id.data, userId)
+  })
+
+  app.post('/purchase-returns/:id/reject', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role, userId } = req.user
+    if (!APPROVER_ROLES.has(role)) return reply.status(403).send({ error: '仅供应链审核人员可驳回采购退货' })
+    const id = idSchema.safeParse(req.params.id)
+    if (!id.success) return reply.status(400).send({ error: '采购退货单标识格式不正确' })
+    const parsed = purchaseReturnReasonSchema.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    return rejectUpstreamPurchaseReturn(tenantId, id.data, userId, parsed.data.reason)
+  })
+
+  app.post('/purchase-returns/:id/cancel', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role, userId } = req.user
+    if (!ensureInternal(role, reply)) return
+    const id = idSchema.safeParse(req.params.id)
+    if (!id.success) return reply.status(400).send({ error: '采购退货单标识格式不正确' })
+    const parsed = purchaseReturnReasonSchema.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    return cancelUpstreamPurchaseReturn(tenantId, id.data, userId, parsed.data.reason)
+  })
+
+  app.post('/purchase-returns/:id/receive', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role, userId } = req.user
+    if (!ensureInternal(role, reply)) return
+    const id = idSchema.safeParse(req.params.id)
+    if (!id.success) return reply.status(400).send({ error: '采购退货单标识格式不正确' })
+    const parsed = purchaseReturnReceiveSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    return receiveUpstreamPurchaseReturn(tenantId, id.data, userId, parsed.data.note)
   })
 
   app.get('/arrival-claims', auth(app), async (req: any) => {

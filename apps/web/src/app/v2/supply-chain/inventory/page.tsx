@@ -1,6 +1,7 @@
 'use client'
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import type { Dispatch, SetStateAction } from 'react'
 import { Chip } from '@/components/v2'
 import { WarehouseToolTabs } from '@/components/v2/warehouse-tool-tabs'
 import { apiFetch } from '@/lib/v2-auth'
@@ -37,7 +38,13 @@ type BatchInboundRow = {
   unitPrice: string
   /** 行金额（价税合计）。可编辑凑整：改金额自动反算采购单价 */
   amount: string
+  priceSource: 'none' | 'auto' | 'manual'
+  amountSource: 'none' | 'auto' | 'manual'
 }
+type PriceHistory = { productId: string; purchaseUnit: string; unitPrice: number; effectiveAt: string; source: string }
+type InboundAttachment = { key: string; name: string; mime: string; size: number; url: string }
+const MAX_BATCH_INBOUND_ITEMS = 200
+const MAX_INBOUND_ATTACHMENTS = 9
 
 type UpstreamSupplier = {
   id: string
@@ -152,6 +159,44 @@ function conversionNote(item: InventoryItem) {
   return '不能用于真实入库和成本计算'
 }
 
+function InboundAttachmentPicker({ items, uploading, onFiles, onRemove }: {
+  items: InboundAttachment[]
+  uploading: boolean
+  onFiles: (files: File[]) => void
+  onRemove: (key: string) => void
+}) {
+  return (
+    <div className="sm:col-span-full rounded-card border border-border bg-bg p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div><b className="text-caption">供应商随货单据（可选）</b><div className="text-micro text-gray3">发货单、订货单等图片或PDF；与报损举证分开，最多9份</div></div>
+        <label className={`cursor-pointer rounded-cta border border-dashed border-accent bg-white px-3 py-2 text-button text-accent ${uploading || items.length >= MAX_INBOUND_ATTACHMENTS ? 'pointer-events-none opacity-40' : ''}`}>
+          {uploading ? '上传中…' : '+ 添加单据'}
+          <input
+            aria-label="上传供应商随货单据"
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/gif,application/pdf"
+            multiple
+            disabled={uploading || items.length >= MAX_INBOUND_ATTACHMENTS}
+            className="hidden"
+            onChange={event => {
+              const files = Array.from(event.target.files || [])
+              event.target.value = ''
+              if (files.length) onFiles(files)
+            }}
+          />
+        </label>
+      </div>
+      {items.length > 0 && <div className="mt-3 flex flex-wrap gap-2">{items.map(item => (
+        <span key={item.key} className="inline-flex max-w-full items-center gap-2 rounded-cta border border-border bg-white px-2.5 py-1.5 text-micro">
+          <a href={item.url} target="_blank" rel="noreferrer" className="max-w-64 truncate text-accent">{item.name}</a>
+          <span className="text-gray3">{(item.size / 1024 / 1024).toFixed(1)}MB</span>
+          <button type="button" aria-label={`移除${item.name}`} onClick={() => onRemove(item.key)} className="text-red-fg">×</button>
+        </span>
+      ))}</div>}
+    </div>
+  )
+}
+
 // 可搜索的供应商选择器 — 供应商多了以后下拉翻找容易选错，输入编号/名称即筛
 function SupplierCombobox({ suppliers, value, onChange }: {
   suppliers: UpstreamSupplier[]
@@ -220,6 +265,8 @@ export default function InternalSupplyChainInventoryPage() {
   const [batchEffectiveAt, setBatchEffectiveAt] = useState(defaultEffectiveAt)
   const [batchSupplierId, setBatchSupplierId] = useState('')
   const [batchNote, setBatchNote] = useState('采购到货批量入库')
+  const [batchAttachments, setBatchAttachments] = useState<InboundAttachment[]>([])
+  const [batchAttachmentsUploading, setBatchAttachmentsUploading] = useState(false)
   const [batchKey, setBatchKey] = useState(newIdempotencyKey)
   const [batchLoading, setBatchLoading] = useState(false)
   const [productId, setProductId] = useState('')
@@ -228,6 +275,8 @@ export default function InternalSupplyChainInventoryPage() {
   const [effectiveAt, setEffectiveAt] = useState(defaultEffectiveAt)
   const [supplierId, setSupplierId] = useState('')
   const [note, setNote] = useState('采购到货手工入库')
+  const [attachments, setAttachments] = useState<InboundAttachment[]>([])
+  const [attachmentsUploading, setAttachmentsUploading] = useState(false)
   const [batchNo, setBatchNo] = useState('')
   const [manufactureDate, setManufactureDate] = useState('')
   const [expiryDate, setExpiryDate] = useState('')
@@ -241,6 +290,20 @@ export default function InternalSupplyChainInventoryPage() {
   const [countNote, setCountNote] = useState('总仓现场实盘校准')
   const [countKey, setCountKey] = useState(newIdempotencyKey)
   const [suppliers, setSuppliers] = useState<UpstreamSupplier[]>([])
+  const [singleHistory, setSingleHistory] = useState<PriceHistory | null>(null)
+  const [singleHistoryLoaded, setSingleHistoryLoaded] = useState(false)
+  const [batchHistory, setBatchHistory] = useState<Record<string, PriceHistory>>({})
+  const singlePriceRequest = useRef(0)
+  const batchPriceRequest = useRef(0)
+  const singleHistoryKey = useRef('')
+  const singleProductKey = useRef('')
+  const batchHistoryKey = useRef('')
+  const batchHistorySupplierId = useRef('')
+  const singlePriceSource = useRef<'none' | 'auto' | 'manual'>('none')
+  const singleAmountSource = useRef<'none' | 'auto' | 'manual'>('none')
+  const purchaseQuantityRef = useRef('')
+  const [singleUnitPrice, setSingleUnitPrice] = useState('')
+  const [batchHistoryLoaded, setBatchHistoryLoaded] = useState(false)
   const [gateWarnings, setGateWarnings] = useState<string[]>([])
   const [verifyingId, setVerifyingId] = useState('')
   const [policyMode, setPolicyMode] = useState<'ALLOW' | 'BLOCK' | ''>('')
@@ -321,6 +384,94 @@ export default function InternalSupplyChainInventoryPage() {
 
   const items = data?.items || []
   const selectedProduct = items.find(item => item.id === productId)
+  purchaseQuantityRef.current = purchaseQuantity
+  useEffect(() => {
+    const request = ++singlePriceRequest.current
+    const key = supplierId && selectedProduct ? `${supplierId}\u0000${selectedProduct.id}` : ''
+    const productKey = selectedProduct?.id || ''
+    if (singleProductKey.current && singleProductKey.current !== productKey) {
+      singlePriceSource.current = 'none'
+      singleAmountSource.current = 'none'
+      setTotalAmount('')
+      setSingleUnitPrice('')
+    }
+    singleProductKey.current = productKey
+    if (singleHistoryKey.current && singleHistoryKey.current !== key) {
+      singlePriceSource.current = 'none'
+      singleAmountSource.current = 'none'
+      setTotalAmount('')
+      setSingleUnitPrice('')
+    }
+    singleHistoryKey.current = key
+    setSingleHistory(null)
+    setSingleHistoryLoaded(false)
+    if (!supplierId || !selectedProduct) {
+      return
+    }
+    apiFetch<{ items: PriceHistory[] }>(`/api/warehouse-inventory/purchase-inbound-price-history?supplierId=${encodeURIComponent(supplierId)}&productIds=${encodeURIComponent(selectedProduct.id)}`)
+      .then(result => {
+        if (request !== singlePriceRequest.current) return
+        const history = result.items[0] || null
+        setSingleHistory(history)
+        setSingleHistoryLoaded(true)
+        if (history && singlePriceSource.current === 'none' && singleAmountSource.current === 'none') {
+          singlePriceSource.current = 'auto'
+          singleAmountSource.current = 'auto'
+          setSingleUnitPrice(String(history.unitPrice))
+          setTotalAmount(Number(purchaseQuantityRef.current) > 0 ? (Number(purchaseQuantityRef.current) * history.unitPrice).toFixed(2) : '')
+        }
+      }).catch(() => { if (request === singlePriceRequest.current) { setSingleHistory(null); setSingleHistoryLoaded(false) } })
+  }, [supplierId, selectedProduct?.id])
+  useEffect(() => {
+    if (singleAmountSource.current === 'manual' && Number(purchaseQuantity) > 0 && Number(totalAmount) > 0) {
+      setSingleUnitPrice((Number(totalAmount) / Number(purchaseQuantity)).toFixed(6))
+    } else if (singlePriceSource.current !== 'none' && Number(purchaseQuantity) > 0 && Number(singleUnitPrice) > 0) {
+      singleAmountSource.current = 'auto'
+      setTotalAmount((Number(purchaseQuantity) * Number(singleUnitPrice)).toFixed(2))
+    } else if (singlePriceSource.current !== 'none' && singleAmountSource.current !== 'manual') {
+      singleAmountSource.current = 'none'
+      setTotalAmount('')
+    }
+  }, [purchaseQuantity])
+  useEffect(() => {
+    const request = ++batchPriceRequest.current
+    const ids = batchRows.map(row => row.productId).join(',')
+    const key = batchSupplierId ? `${batchSupplierId}\u0000${ids}` : ''
+    const supplierChanged = Boolean(batchHistorySupplierId.current) && batchHistorySupplierId.current !== batchSupplierId
+    if (supplierChanged) {
+      setBatchRows(rows => rows.map(row => ({
+        ...row,
+        unitPrice: row.priceSource === 'auto' ? '' : row.unitPrice,
+        priceSource: row.priceSource === 'auto' ? 'none' : row.priceSource,
+        // An auto amount derived from a manually entered price belongs to the
+        // operator, not to the prior supplier's history; recompute it instead
+        // of clearing the row into an unpostable state.
+        amount: row.priceSource === 'manual' && row.amountSource === 'auto' && Number(row.purchaseQuantity) > 0 && Number(row.unitPrice) > 0
+          ? (Number(row.purchaseQuantity) * Number(row.unitPrice)).toFixed(2)
+          : row.amountSource === 'auto' ? '' : row.amount,
+        amountSource: row.priceSource === 'manual' && row.amountSource === 'auto' && Number(row.purchaseQuantity) > 0 && Number(row.unitPrice) > 0
+          ? 'auto'
+          : row.amountSource === 'auto' ? 'none' : row.amountSource,
+      })))
+    }
+    batchHistoryKey.current = key
+    batchHistorySupplierId.current = batchSupplierId
+    setBatchHistory({})
+    setBatchHistoryLoaded(false)
+    if (!batchSupplierId || !batchRows.length) {
+      return
+    }
+    apiFetch<{ items: PriceHistory[] }>(`/api/warehouse-inventory/purchase-inbound-price-history?supplierId=${encodeURIComponent(batchSupplierId)}&productIds=${encodeURIComponent(ids)}`)
+      .then(result => {
+        if (request !== batchPriceRequest.current) return
+        const found = Object.fromEntries(result.items.map(item => [item.productId, item]))
+        setBatchHistory(found)
+        setBatchHistoryLoaded(true)
+        setBatchRows(rows => rows.map(row => row.priceSource === 'none' && row.amountSource === 'none' && found[row.productId]
+          ? { ...row, unitPrice: String(found[row.productId].unitPrice), amount: Number(row.purchaseQuantity) > 0 ? (Number(row.purchaseQuantity) * found[row.productId].unitPrice).toFixed(2) : '', priceSource: 'auto', amountSource: Number(row.purchaseQuantity) > 0 ? 'auto' : 'none' }
+          : row))
+      }).catch(() => { if (request === batchPriceRequest.current) { setBatchHistory({}); setBatchHistoryLoaded(false) } })
+  }, [batchSupplierId, batchRows.map(row => row.productId).join(',')])
   const countedProduct = items.find(item => item.id === countProductId)
   const normalizedQuantity = selectedProduct && Number(purchaseQuantity) > 0
     ? Number(purchaseQuantity) * selectedProduct.purchaseToInventoryFactor
@@ -388,9 +539,16 @@ export default function InternalSupplyChainInventoryPage() {
     setProductId('')
     setPurchaseQuantity('')
     setTotalAmount('')
+    setSingleUnitPrice('')
+    singlePriceSource.current = 'none'
+    singleAmountSource.current = 'none'
+    singleHistoryKey.current = ''
+    singleProductKey.current = ''
     setEffectiveAt(defaultEffectiveAt())
     setSupplierId('')
     setNote('采购到货手工入库')
+    setAttachments([])
+    setAttachmentsUploading(false)
     setBatchNo('')
     setManufactureDate('')
     setExpiryDate('')
@@ -407,6 +565,8 @@ export default function InternalSupplyChainInventoryPage() {
     setBatchEffectiveAt(defaultEffectiveAt())
     setBatchSupplierId('')
     setBatchNote('采购到货批量入库')
+    setBatchAttachments([])
+    setBatchAttachmentsUploading(false)
     setBatchKey(newIdempotencyKey())
     setBatchLoading(true)
     setError('')
@@ -418,6 +578,31 @@ export default function InternalSupplyChainInventoryPage() {
       setBatchOpen(false)
     } finally {
       setBatchLoading(false)
+    }
+  }
+
+  async function uploadInboundAttachments(
+    files: File[],
+    current: InboundAttachment[],
+    setCurrent: Dispatch<SetStateAction<InboundAttachment[]>>,
+    setUploading: Dispatch<SetStateAction<boolean>>,
+  ) {
+    const room = MAX_INBOUND_ATTACHMENTS - current.length
+    if (room <= 0) { setError('随货单据最多上传9份'); return }
+    const selected = files.slice(0, room)
+    if (selected.length < files.length) setError(`随货单据最多上传9份，本次只处理前${selected.length}份`)
+    setUploading(true)
+    try {
+      for (const file of selected) {
+        const form = new FormData()
+        form.append('file', file, file.name)
+        const uploaded = await apiFetch<InboundAttachment>('/api/upload?category=warehouse-docs', { method: 'POST', body: form as any })
+        setCurrent(items => items.some(item => item.key === uploaded.key) ? items : [...items, uploaded].slice(0, MAX_INBOUND_ATTACHMENTS))
+      }
+    } catch (reason: any) {
+      setError(String(reason?.message || reason))
+    } finally {
+      setUploading(false)
     }
   }
 
@@ -438,8 +623,11 @@ export default function InternalSupplyChainInventoryPage() {
     const checked = new Set(checkedCandidateIds)
     const additions = batchCandidates.filter(item => checked.has(item.id) && !batchRows.some(row => row.productId === item.id))
     if (additions.length === 0) return
-    setBatchRows(rows => [...rows, ...additions.map(item => ({ productId: item.id, purchaseQuantity: '', unitPrice: '', amount: '' }))])
-    setCheckedCandidateIds([])
+    const available = Math.max(0, MAX_BATCH_INBOUND_ITEMS - batchRows.length)
+    const accepted = additions.slice(0, available)
+    if (accepted.length) setBatchRows(rows => [...rows, ...accepted.map(item => ({ productId: item.id, purchaseQuantity: '', unitPrice: '', amount: '', priceSource: 'none' as const, amountSource: 'none' as const }))])
+    if (accepted.length < additions.length) setError(`单张批量入库最多 ${MAX_BATCH_INBOUND_ITEMS} 种商品；已保留当前 ${batchRows.length} 种，并添加 ${accepted.length} 种`)
+    setCheckedCandidateIds(accepted.length < additions.length ? additions.slice(accepted.length).map(item => item.id) : [])
     setBatchSearch('')
   }
 
@@ -473,9 +661,16 @@ export default function InternalSupplyChainInventoryPage() {
       const priceValue = Number(next.unitPrice)
       const amountValue = Number(next.amount)
       if (field === 'purchaseQuantity' || field === 'unitPrice') {
-        next.amount = qtyValue > 0 && priceValue > 0 ? (qtyValue * priceValue).toFixed(2) : ''
+        if (field === 'unitPrice') next.priceSource = 'manual'
+        if (field === 'purchaseQuantity' && next.amountSource === 'manual') {
+          if (qtyValue > 0 && amountValue > 0) { next.unitPrice = (amountValue / qtyValue).toFixed(6); next.priceSource = 'manual' }
+        } else {
+          next.amount = qtyValue > 0 && priceValue > 0 ? (qtyValue * priceValue).toFixed(2) : ''
+          next.amountSource = next.amount ? 'auto' : 'none'
+        }
       } else if (field === 'amount') {
-        next.unitPrice = qtyValue > 0 && amountValue > 0 ? (amountValue / qtyValue).toFixed(6) : next.unitPrice
+        next.amountSource = 'manual'
+        if (qtyValue > 0 && amountValue > 0) { next.unitPrice = (amountValue / qtyValue).toFixed(6); next.priceSource = 'manual' }
       }
       return next
     }))
@@ -513,6 +708,7 @@ export default function InternalSupplyChainInventoryPage() {
           idempotencyKey: batchKey,
           supplierId: batchSupplierId,
           note: batchNote.trim() || null,
+          attachments: batchAttachments.map(({ key, name, mime, size }) => ({ key, name, mime, size })),
         }),
       })
       setBatchOpen(false)
@@ -562,6 +758,7 @@ export default function InternalSupplyChainInventoryPage() {
           batchNo: batchNo.trim() || null,
           manufactureDate: manufactureDate || null,
           expiryDate: expiryDate || null,
+          attachments: attachments.map(({ key, name, mime, size }) => ({ key, name, mime, size })),
         }),
       })
       setInboundOpen(false)
@@ -956,7 +1153,7 @@ export default function InternalSupplyChainInventoryPage() {
                     <td className="px-3 py-3"><b>{product.name}</b><div className="text-micro text-gray3">{product.code} · {product.spec || '无规格'}</div></td>
                     <td className="px-3 py-3"><b>{product.purchaseUnit}</b></td>
                     <td className="px-3 py-3"><input aria-label={`${product.name}采购数量`} type="number" min="0.000001" step="0.001" value={row.purchaseQuantity} onChange={event => updateBatchRow(row.productId, 'purchaseQuantity', event.target.value)} data-grid-r={index} data-grid-c={0} onKeyDown={gridCellKeyDown} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></td>
-                    <td className="px-3 py-3"><div className="flex items-center justify-end gap-1"><span>¥</span><input aria-label={`${product.name}采购单价`} type="number" min="0.0001" step="0.01" value={row.unitPrice} onChange={event => updateBatchRow(row.productId, 'unitPrice', event.target.value)} data-grid-r={index} data-grid-c={1} onKeyDown={gridCellKeyDown} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></div></td>
+                    <td className="px-3 py-3"><div className="flex items-center justify-end gap-1"><span>¥</span><input aria-label={`${product.name}采购单价`} type="number" min="0.0001" step="0.01" value={row.unitPrice} onChange={event => updateBatchRow(row.productId, 'unitPrice', event.target.value)} data-grid-r={index} data-grid-c={1} onKeyDown={gridCellKeyDown} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></div>{batchHistory[row.productId] ? <div className="mt-1 text-micro text-gray3">上次 {money(batchHistory[row.productId].unitPrice)}/{product.purchaseUnit} · {row.unitPrice ? <>本次 {Number(row.unitPrice) - batchHistory[row.productId].unitPrice >= 0 ? '+' : ''}{money(Number(row.unitPrice) - batchHistory[row.productId].unitPrice)}</> : '本次待填写'}</div> : batchSupplierId && batchHistoryLoaded ? <div className="mt-1 text-micro text-gray3">无历史采购价</div> : null}</td>
                     <td className="px-3 py-3"><div className="flex items-center justify-end gap-1"><span>¥</span><input aria-label={`${product.name}行金额`} type="number" min="0.01" step="0.01" value={row.amount} onChange={event => updateBatchRow(row.productId, 'amount', event.target.value)} data-grid-r={index} data-grid-c={2} onKeyDown={gridCellKeyDown} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></div></td>
                     <td className="px-3 py-3"><b>{qty(purchaseQuantity)} {product.purchaseUnit} = {qty(purchaseQuantity * product.purchaseToInventoryFactor, 6)} {product.inventoryUnit}</b><div className="text-micro text-green-fg">已核验换算</div></td>
                     <td className="px-3 py-3"><button onClick={() => setBatchRows(rows => rows.filter(item => item.productId !== row.productId))} className="text-button text-red-fg">移除</button></td>
@@ -972,8 +1169,14 @@ export default function InternalSupplyChainInventoryPage() {
             <label><span className="mb-1 block text-micro text-gray3">实际入库时间 *</span><input type="datetime-local" value={batchEffectiveAt} onChange={event => setBatchEffectiveAt(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
             <label><span className="mb-1 block text-micro text-gray3">供货供应商 *</span><SupplierCombobox suppliers={suppliers} value={batchSupplierId} onChange={setBatchSupplierId} /></label>
             <label><span className="mb-1 block text-micro text-gray3">整单备注</span><input value={batchNote} maxLength={240} onChange={event => setBatchNote(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
+            <InboundAttachmentPicker
+              items={batchAttachments}
+              uploading={batchAttachmentsUploading}
+              onFiles={files => void uploadInboundAttachments(files, batchAttachments, setBatchAttachments, setBatchAttachmentsUploading)}
+              onRemove={key => setBatchAttachments(items => items.filter(item => item.key !== key))}
+            />
           </div>
-          <div className="mt-4 flex items-center justify-between gap-4"><p className="text-micro text-gray3">只显示四单位已经核验的商品，避免箱、件、kg 等错误换算进入正式库存。</p><button onClick={submitBatchInbound} disabled={submitting || batchRows.length === 0} className="h-11 min-w-52 rounded-cta bg-accent px-6 text-button text-white disabled:opacity-40">{submitting ? '正在整单记账…' : `确认批量入库 · ${money(batchTotal)}`}</button></div>
+          <div className="mt-4 flex items-center justify-between gap-4"><p className="text-micro text-gray3">只显示四单位已经核验的商品，避免箱、件、kg 等错误换算进入正式库存。</p><button onClick={submitBatchInbound} disabled={submitting || batchAttachmentsUploading || batchRows.length === 0} className="h-11 min-w-52 rounded-cta bg-accent px-6 text-button text-white disabled:opacity-40">{batchAttachmentsUploading ? '等待附件上传…' : submitting ? '正在整单记账…' : `确认批量入库 · ${money(batchTotal)}`}</button></div>
         </div>
       </div>}
 
@@ -983,7 +1186,8 @@ export default function InternalSupplyChainInventoryPage() {
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <label className="sm:col-span-2"><span className="mb-1 block text-micro text-gray3">商品 *</span><select aria-label="入库商品" value={productId} onChange={event => setProductId(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3"><option value="">请选择</option>{items.map(item => <option key={item.id} value={item.id}>{item.code} · {item.name} · 采购单位 {item.purchaseUnit}</option>)}</select></label>
             <label><span className="mb-1 block text-micro text-gray3">采购入库数量（{selectedProduct?.purchaseUnit || '采购单位'}）*</span><input type="number" min="0.000001" step="0.001" value={purchaseQuantity} onChange={event => setPurchaseQuantity(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
-            <label><span className="mb-1 block text-micro text-gray3">入库总金额（元）*</span><input type="number" min="0.01" step="0.01" value={totalAmount} onChange={event => setTotalAmount(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
+            <label><span className="mb-1 block text-micro text-gray3">采购单价（元/{selectedProduct?.purchaseUnit || '采购单位'}）</span><input aria-label="采购单价" type="number" min="0.0001" step="0.01" value={singleUnitPrice} onChange={event => { const value = event.target.value; singlePriceSource.current = 'manual'; singleAmountSource.current = 'auto'; setSingleUnitPrice(value); setTotalAmount(Number(purchaseQuantity) > 0 && Number(value) > 0 ? (Number(purchaseQuantity) * Number(value)).toFixed(2) : '') }} className="h-11 w-full rounded-cta border border-border px-3" /></label>
+            <label><span className="mb-1 block text-micro text-gray3">入库总金额（元）*</span><input aria-label="入库总金额" type="number" min="0.01" step="0.01" value={totalAmount} onChange={event => { const value = event.target.value; singleAmountSource.current = 'manual'; singlePriceSource.current = 'manual'; setTotalAmount(value); setSingleUnitPrice(Number(purchaseQuantity) > 0 && Number(value) > 0 ? (Number(value) / Number(purchaseQuantity)).toFixed(6) : '') }} className="h-11 w-full rounded-cta border border-border px-3" />{singleHistory ? <span className="mt-1 block text-micro text-gray3">上次 {money(singleHistory.unitPrice)}/{selectedProduct?.purchaseUnit}；{singleUnitPrice ? <>本次 {Number(singleUnitPrice) - singleHistory.unitPrice >= 0 ? '+' : ''}{money(Number(singleUnitPrice) - singleHistory.unitPrice)}</> : '本次待填写'}</span> : supplierId && selectedProduct && singleHistoryLoaded ? <span className="mt-1 block text-micro text-gray3">无历史采购价</span> : null}</label>
             {selectedProduct && <div className="sm:col-span-2 rounded-card border border-blue/20 bg-blue/5 p-3 text-caption text-gray2">入库单位指供应商交货/仓库收货时使用的采购单位。本次：<b>{qty(Number(purchaseQuantity))} {selectedProduct.purchaseUnit} × {qty(selectedProduct.purchaseToInventoryFactor, 6)} = {qty(normalizedQuantity, 6)} {selectedProduct.inventoryUnit}</b>{unitCost > 0 && <>，库存单位成本约 <b>{money(unitCost)}/{selectedProduct.inventoryUnit}</b></>}。</div>}
             <label><span className="mb-1 block text-micro text-gray3">实际入库时间 *</span><input type="datetime-local" value={effectiveAt} onChange={event => setEffectiveAt(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
             <label><span className="mb-1 block text-micro text-gray3">供货供应商 *</span><SupplierCombobox suppliers={suppliers} value={supplierId} onChange={setSupplierId} /></label>
@@ -991,8 +1195,14 @@ export default function InternalSupplyChainInventoryPage() {
             <label><span className="mb-1 block text-micro text-gray3">入库说明</span><input value={note} maxLength={240} onChange={event => setNote(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
             <label><span className="mb-1 block text-micro text-gray3">生产日期（可选）</span><input type="date" value={manufactureDate} onChange={event => setManufactureDate(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
             <label><span className="mb-1 block text-micro text-gray3">到期日期（可选）</span><input type="date" value={expiryDate} onChange={event => setExpiryDate(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
+            <InboundAttachmentPicker
+              items={attachments}
+              uploading={attachmentsUploading}
+              onFiles={files => void uploadInboundAttachments(files, attachments, setAttachments, setAttachmentsUploading)}
+              onRemove={key => setAttachments(items => items.filter(item => item.key !== key))}
+            />
           </div>
-          <button onClick={inbound} disabled={submitting} className="mt-4 h-11 w-full rounded-cta bg-accent text-button text-white disabled:opacity-40">{submitting ? '正在原子记账…' : '确认手工入库'}</button>
+          <button onClick={inbound} disabled={submitting || attachmentsUploading} className="mt-4 h-11 w-full rounded-cta bg-accent text-button text-white disabled:opacity-40">{attachmentsUploading ? '等待附件上传…' : submitting ? '正在原子记账…' : '确认手工入库'}</button>
         </div>
       </div>}
       {countOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setCountOpen(false)}>

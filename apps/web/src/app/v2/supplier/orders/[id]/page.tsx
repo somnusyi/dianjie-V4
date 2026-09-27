@@ -94,6 +94,7 @@ type Order = {
     evidenceImages?: string[] | null
     handlerNote?: string | null
     createdAt?: string
+    lateReport?: { overdue?: boolean; requiresManualApproval?: boolean }
     items: { product: { name: string; unit?: string }; lossQty: string; lossAmount: string }[]
   }[]
   receipt?: { id: string; no: string } | null
@@ -1372,6 +1373,9 @@ export default function SupplierOrderDetailPage() {
                   <span className="ml-auto font-num text-h2 text-red-fg">−¥{Number(c.totalLossAmount).toLocaleString()}</span>
                 </div>
                 {c.description && <div className="text-caption text-gray2 mt-1">{c.description}</div>}
+                {c.lateReport?.overdue && (
+                  <p className="text-caption text-red-fg mt-1">{c.status === 'PENDING' ? '逾期补报：必须人工审批，不会自动同意。' : '逾期补报'}</p>
+                )}
                 <div className="mt-2 grid grid-cols-1 lg:grid-cols-3 gap-1 text-micro text-gray3">
                   <span>责任节点：{supplierLossClaimResponsibility(c.status)}</span>
                   <span>配送单：{c.deliveryOrder?.no || '历史未关联'}</span>
@@ -1483,7 +1487,7 @@ export default function SupplierOrderDetailPage() {
           </button>
         </div>
       )}
-      {/* DELIVERING (在途) — 司机到门店后填备注 + 点「确认送达」启动 24h 倒计时 */}
+      {/* DELIVERING (在途) — 司机到门店后填备注 + 点「确认送达」，等待门店人工验收 */}
       {order.status === 'DELIVERING' && !isOperationGroupContext && (
         <>
           {/* 客户验收单 — 2026-05-29 客户反馈: 厨师收货后传照片+备注, 供应商看完确认无误才点送达 */}
@@ -1519,7 +1523,7 @@ export default function SupplierOrderDetailPage() {
                 ⏳ 客户还未发验收单
               </div>
               <p className="text-micro text-gray3 mt-1">
-                建议等客户收货后确认无误再点送达; 如急可强制送达 (24h 倒计时会触发自动收货)
+                建议等客户收货后确认无误再点送达；如急可强制送达，但门店仍须人工验收，系统不会自动收货
               </p>
             </div>
           )}
@@ -1539,8 +1543,8 @@ export default function SupplierOrderDetailPage() {
                 openConfirm({
                   title: hasAck ? `确认 ${order.no} 已送达门店?` : `客户还没发验收单, 仍要送达?`,
                   body: hasAck
-                    ? `客户已发验收单, 确认收货无误 — 提交后启动 24h 自动收货${deliverNote ? `\n\n备注: ${deliverNote}` : ''}`
-                    : `⚠ 客户还没发验收单, 强制送达会启动 24h 自动收货倒计时, 如客户有异议可能撞期。建议等客户发验收单后再点。${deliverNote ? `\n\n备注: ${deliverNote}` : ''}`,
+                    ? `客户已发验收单, 确认收货无误 — 提交后等待门店人工验收，系统不会自动收货${deliverNote ? `\n\n备注: ${deliverNote}` : ''}`
+                    : `⚠ 客户还没发验收单；强制送达后仍须门店人工验收，系统不会自动收货。建议等客户发验收单后再点。${deliverNote ? `\n\n备注: ${deliverNote}` : ''}`,
                   confirmLabel: hasAck ? '确认送达' : '强制送达',
                   tone: hasAck ? 'primary' : 'danger',
                   onConfirm: async () => {

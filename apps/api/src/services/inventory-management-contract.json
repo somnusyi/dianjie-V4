@@ -177,11 +177,6 @@
         "kind": "text"
       },
       {
-        "key": "reconciliation",
-        "label": "对账状态",
-        "kind": "text"
-      },
-      {
         "key": "invoice",
         "label": "发票状态",
         "kind": "text"
@@ -237,10 +232,6 @@
       {
         "key": "review",
         "label": "复审状态"
-      },
-      {
-        "key": "reconciliation",
-        "label": "对账状态"
       },
       {
         "key": "supplierAccount",

@@ -1,5 +1,6 @@
 import { FastifyPluginAsync } from 'fastify'
 import { createId } from '@paralleldrive/cuid2'
+import ExcelJS from 'exceljs'
 import { businessMonthKey } from '../lib/businessTime'
 import { checkDeliveryRuleBlock } from '../services/deliveryRuleEnforcement'
 import { z } from 'zod'
@@ -8,8 +9,8 @@ import dayjs from 'dayjs'
 import { invalidatePattern } from '../lib/cache'
 import { notifyOrderSubmitted, notifyOrderShipped, notifyOrderConfirmed, notifyOrderRejected, sendNotification } from '../services/notification'
 import { isStoreScoped, isSupplierRole, requireSupplierBinding, resolveActiveStore, storeScopeOf } from '../lib/auth-scope'
+import { supplierCapabilitiesForRole } from '../lib/supplier-access'
 import {
-  allowsSupplyDataRead,
   hasInternalSupplyChainCapability,
   isInternalSupplyChainRole,
   supplyDataReadScope,
@@ -75,6 +76,7 @@ import {
   saveShipmentDraftInTransaction,
 } from '../services/shipmentDraft'
 import { formalDeliveryStatusFilter } from '../services/shipmentDraftMarker'
+import { storeReceiptDateFromArrivalAt, storeReceiptDeadlineStatus } from '../services/storeReceiptDeadline'
 
 // CLAUDE.md 约定：所有写入用 zod 校验
 const PURCHASE_QUANTITY_MAX = 99_999_999.99
@@ -388,6 +390,153 @@ const orderListQuerySchema = z.object({
   path: ['dateFrom'],
 })
 
+const orderPrintBatchSchema = z.object({
+  action: z.literal('BROWSER_PRINT'),
+  orderIds: z.array(z.string().min(1)).min(1).max(100),
+}).strict()
+
+export const ORDER_EXPORT_MAX_ROWS = 10_000
+
+export function exceedsOrderExportLimit(rowCount: number): boolean {
+  return rowCount > ORDER_EXPORT_MAX_ROWS
+}
+
+export function orderCreationSource(actorRole?: string | null) {
+  if (actorRole && isStoreScoped(actorRole)) return '门店端'
+  if (['CHEF_DIRECTOR', 'SUPPLY_CHAIN', 'ADMIN', 'SUPER_ADMIN'].includes(actorRole || '')) return '管理后台'
+  return '历史记录'
+}
+
+function canReadOrderArtifacts(user: any): boolean {
+  const role = user?.role as string | undefined
+  if (isSupplierRole(role)) {
+    return Boolean(user?.supplierId) && supplierCapabilitiesForRole(role).has('order.read')
+  }
+  if (isStoreScoped(role)) return (storeScopeOf(user) ?? []).length > 0
+  if (isInternalSupplyChainRole(role)) return hasInternalSupplyChainCapability(role, 'order.read')
+  return ['CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN'].includes(role || '')
+}
+
+function latestOrderOperationAt(item: any, events: any[]): Date | string | null {
+  const candidates = [
+    item.updatedAt,
+    ...events.map((event: any) => event.occurredAt),
+    ...(Array.isArray(item.deliveries)
+      ? item.deliveries.flatMap((delivery: any) => [
+        delivery.createdAt,
+        delivery.updatedAt,
+        delivery.shippedAt,
+        delivery.deliveredAt,
+        delivery.receivedAt,
+      ])
+      : []),
+  ].filter(Boolean)
+  if (candidates.length === 0) return null
+  return candidates.reduce((latest, candidate) => (
+    new Date(candidate).getTime() > new Date(latest).getTime() ? candidate : latest
+  ))
+}
+
+const shanghaiDateTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+})
+
+function formatShanghaiDateTime(value: Date | string | null | undefined): string {
+  if (!value) return ''
+  const parts = Object.fromEntries(
+    shanghaiDateTimeFormatter.formatToParts(new Date(value))
+      .filter(part => part.type !== 'literal')
+      .map(part => [part.type, part.value]),
+  )
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`
+}
+
+function formatBusinessDate(value: Date | string | null | undefined): string {
+  if (!value) return ''
+  return new Date(value).toISOString().slice(0, 10)
+}
+
+function decorateOrderListItem(item: any) {
+  const events = Array.isArray(item.events) ? item.events : []
+  const createdEvent = events.find((event: any) => event.eventType === 'CREATED')
+  const acceptedEvents = events.filter((event: any) => event.eventType === 'ACCEPTED')
+  const printEvents = events.filter((event: any) => event.eventType === 'PRINT_REQUESTED')
+  const creationSource = typeof createdEvent?.metadata?.creationSource === 'string'
+    ? createdEvent.metadata.creationSource
+    : '历史记录'
+  const downstreamDocuments = Array.isArray(item.deliveries)
+    ? item.deliveries.map((delivery: any) => ({
+      id: delivery.id,
+      no: delivery.no,
+      status: delivery.status,
+      createdAt: delivery.createdAt,
+      shippedAt: delivery.shippedAt,
+    }))
+    : []
+  const { events: _events, ...safeItem } = item
+  return {
+    ...safeItem,
+    creationSource,
+    creationType: '常规订货',
+    splitAt: acceptedEvents.at(-1)?.occurredAt || null,
+    lastOperationAt: latestOrderOperationAt(item, events),
+    printStatus: printEvents.length > 0 ? '已发起打印' : '未打印',
+    lastPrintRequestedAt: printEvents.at(-1)?.occurredAt || null,
+    downstreamDocuments,
+  }
+}
+
+async function buildOrderListWhere(user: any, q: z.infer<typeof orderListQuerySchema>) {
+  const { tenantId, role } = user
+  const where: any = supplyDataReadScope(user)
+  if (q.status) where.status = q.status
+  if (q.storeId) {
+    if (isStoreScoped(role)) resolveActiveStore(user, q.storeId)
+    where.storeId = q.storeId
+  }
+  if (q.supplierId && !isSupplierRole(role)) where.supplierId = q.supplierId
+  const and: any[] = []
+  if (q.productId) and.push({ items: { some: { productId: q.productId, isActive: true } } })
+  if (q.keyword) {
+    const snapshotOrderIds = await findOrderIdsBySubmittedSnapshot(tenantId, q.keyword)
+    and.push({
+      OR: [
+        { no: { contains: q.keyword, mode: 'insensitive' } },
+        { store: { name: { contains: q.keyword, mode: 'insensitive' } } },
+        {
+          items: {
+            some: {
+              isActive: true,
+              product: {
+                OR: [
+                  { name: { contains: q.keyword, mode: 'insensitive' } },
+                  { code: { contains: q.keyword, mode: 'insensitive' } },
+                  { spec: { contains: q.keyword, mode: 'insensitive' } },
+                ],
+              },
+            },
+          },
+        },
+        ...(snapshotOrderIds.length > 0 ? [{ id: { in: snapshotOrderIds } }] : []),
+      ],
+    })
+  }
+  if (and.length) where.AND = and
+  if (q.dateFrom || q.dateTo) {
+    where.createdAt = {
+      ...(q.dateFrom ? { gte: new Date(`${q.dateFrom}T00:00:00+08:00`) } : {}),
+      ...(q.dateTo ? { lte: new Date(`${q.dateTo}T23:59:59.999+08:00`) } : {}),
+    }
+  }
+  return where
+}
+
 const operationGroupRevisionSchema = z.object({
   requestKey: z.string().trim().min(8).max(80),
   orders: z.array(z.object({
@@ -452,52 +601,11 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const parsed = orderListQuerySchema.safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const { tenantId, role } = req.user
-    if (!allowsSupplyDataRead(role, 'order.read')) {
+    if (!canReadOrderArtifacts(req.user)) {
       return reply.status(403).send({ error: '无权查看采购订单' })
     }
     const q = parsed.data
-    const where: any = supplyDataReadScope(req.user)
-
-    if (q.status) where.status = q.status
-    if (q.storeId) {
-      // 门店级角色指定门店时必须在可访问集合内（越权抛 403），并收窄到单店
-      if (isStoreScoped(role)) resolveActiveStore(req.user, q.storeId)
-      where.storeId = q.storeId
-    }
-    if (q.supplierId && !isSupplierRole(role)) where.supplierId = q.supplierId
-    const and: any[] = []
-    if (q.productId) and.push({ items: { some: { productId: q.productId, isActive: true } } })
-    if (q.keyword) {
-      const snapshotOrderIds = await findOrderIdsBySubmittedSnapshot(tenantId, q.keyword)
-      and.push({
-        OR: [
-          { no: { contains: q.keyword, mode: 'insensitive' } },
-          { store: { name: { contains: q.keyword, mode: 'insensitive' } } },
-          {
-            items: {
-              some: {
-                isActive: true,
-                product: {
-                  OR: [
-                    { name: { contains: q.keyword, mode: 'insensitive' } },
-                    { code: { contains: q.keyword, mode: 'insensitive' } },
-                    { spec: { contains: q.keyword, mode: 'insensitive' } },
-                  ],
-                },
-              },
-            },
-          },
-          ...(snapshotOrderIds.length > 0 ? [{ id: { in: snapshotOrderIds } }] : []),
-        ],
-      })
-    }
-    if (and.length) where.AND = and
-    if (q.dateFrom || q.dateTo) {
-      where.createdAt = {
-        ...(q.dateFrom ? { gte: new Date(`${q.dateFrom}T00:00:00+08:00`) } : {}),
-        ...(q.dateTo ? { lte: new Date(`${q.dateTo}T23:59:59.999+08:00`) } : {}),
-      }
-    }
+    const where = await buildOrderListWhere(req.user, q)
 
     const p = q.page
     const ps = q.pageSize
@@ -511,6 +619,10 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           store: { select: { id: true, name: true } },
           supplier: { select: { id: true, name: true } },
           createdBy: { select: { id: true, name: true, role: true } },
+          events: {
+            orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
+            select: { eventType: true, occurredAt: true, actorRole: true, metadata: true },
+          },
           items: { where: { isActive: true }, include: { product: { select: { name: true, unit: true, spec: true, code: true } } } },
           revisions: {
             where: { status: 'PENDING' },
@@ -527,7 +639,11 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             // Server-side DRAFT rows are private edit state. Order-list
             // delivery totals and status summaries include formal documents only.
             where: { status: formalDeliveryStatusFilter() },
-            select: { id: true, status: true, actualTotalAmount: true },
+            orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+            select: {
+              id: true, no: true, status: true, actualTotalAmount: true,
+              createdAt: true, updatedAt: true, shippedAt: true, deliveredAt: true, receivedAt: true,
+            },
           },
           receipts: { select: { id: true, totalAmount: true, status: true } },
         },
@@ -619,7 +735,8 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         })
       }
     }
-    const decoratedItems = items.map((item: any) => {
+    const decoratedItems = items.map((rawItem: any) => {
+      const item = decorateOrderListItem(rawItem)
       const membership = operationMemberships.get(item.id)
       return {
         ...item,
@@ -628,6 +745,135 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       }
     })
     return { items: decoratedItems, total, page: p, pageSize: ps }
+  })
+
+  // 门店订货单独立导出：沿用列表的权限、租户范围、筛选与排序，导出全部匹配行而非当前页。
+  app.get('/export.xlsx', { preHandler: [(app as any).authenticate] }, async (req: any, reply) => {
+    const parsed = orderListQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    if (!canReadOrderArtifacts(req.user)) return reply.status(403).send({ error: '无权导出采购订单' })
+    const where = await buildOrderListWhere(req.user, parsed.data)
+    const rows = await prisma.purchaseOrder.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: ORDER_EXPORT_MAX_ROWS + 1,
+      include: {
+        store: { select: { id: true, no: true, name: true } },
+        supplier: { select: { id: true, no: true, name: true } },
+        createdBy: { select: { id: true, name: true, role: true } },
+        items: { where: { isActive: true }, include: { product: { select: { name: true, code: true, spec: true, unit: true } } } },
+        events: {
+          orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
+          select: { eventType: true, occurredAt: true, actorRole: true, metadata: true },
+        },
+        deliveries: {
+          where: { status: formalDeliveryStatusFilter() },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          select: {
+            id: true, no: true, status: true, actualTotalAmount: true,
+            createdAt: true, updatedAt: true, shippedAt: true, deliveredAt: true, receivedAt: true,
+          },
+        },
+      },
+    })
+    if (exceedsOrderExportLimit(rows.length)) {
+      return reply.status(422).send({ error: `导出结果超过 ${ORDER_EXPORT_MAX_ROWS} 条，请缩小筛选范围` })
+    }
+    const workbook = new ExcelJS.Workbook()
+    workbook.creator = '滇界云管'
+    const sheet = workbook.addWorksheet('门店订货单')
+    sheet.columns = [
+      { header: '序号', key: 'sequence', width: 8 },
+      { header: '订货单号', key: 'no', width: 24 },
+      { header: '门店', key: 'store', width: 22 },
+      { header: '供应商', key: 'supplier', width: 26 },
+      { header: '创建时间', key: 'createdAt', width: 22 },
+      { header: '创建来源', key: 'creationSource', width: 16 },
+      { header: '创建类型', key: 'creationType', width: 14 },
+      { header: '单据状态', key: 'status', width: 14 },
+      { header: '期望到货时间', key: 'expectedDate', width: 18 },
+      { header: '预计到货时间', key: 'estimatedArrivalAt', width: 18 },
+      { header: '单据提交时间', key: 'submittedAt', width: 22 },
+      { header: '分单时间', key: 'splitAt', width: 22 },
+      { header: '操作时间', key: 'lastOperationAt', width: 22 },
+      { header: '备注', key: 'note', width: 30 },
+      { header: '打印状态', key: 'printStatus', width: 14 },
+      { header: '创建人', key: 'createdBy', width: 18 },
+      { header: '下游单据', key: 'downstreamDocuments', width: 34 },
+      { header: '商品摘要', key: 'itemSummary', width: 48 },
+      { header: '金额', key: 'amount', width: 16 },
+    ]
+    const statusLabels: Record<string, string> = {
+      DRAFT: '草稿', SUBMITTED: '已提交', CONFIRMED: '已确认', DELIVERING: '配送中',
+      PENDING_CONFIRM: '待确认', RECEIVED: '已收货', COMPLETED: '已完成', CANCELLED: '已取消',
+    }
+    rows.forEach((raw, index) => {
+      const row = decorateOrderListItem(raw)
+      const snapshotItems = Array.isArray((row.submittedSnapshot as any)?.items) ? (row.submittedSnapshot as any).items : []
+      const names = snapshotItems.length > 0
+        ? snapshotItems.map((item: any) => item?.name).filter(Boolean)
+        : row.items.map((item: any) => item.product?.name).filter(Boolean)
+      sheet.addRow({
+        sequence: index + 1,
+        no: row.no,
+        store: row.store?.name || '',
+        supplier: row.supplier?.name || '',
+        createdAt: formatShanghaiDateTime(row.createdAt),
+        creationSource: row.creationSource,
+        creationType: row.creationType,
+        status: statusLabels[row.status] || row.status,
+        expectedDate: formatBusinessDate(row.expectedDate),
+        estimatedArrivalAt: formatBusinessDate(row.expectedDate),
+        submittedAt: formatShanghaiDateTime(row.submittedAt),
+        splitAt: formatShanghaiDateTime(row.splitAt),
+        lastOperationAt: formatShanghaiDateTime(row.lastOperationAt),
+        note: row.note || '',
+        printStatus: row.printStatus,
+        createdBy: row.createdBy?.name || '',
+        downstreamDocuments: row.downstreamDocuments.map((delivery: any) => `${delivery.no}(${delivery.status})`).join('、'),
+        itemSummary: names.join('、'),
+        amount: Number(row.currentOrderAmount ?? row.originalTotalAmount ?? row.totalAmount ?? 0),
+      })
+    })
+    sheet.getRow(1).font = { bold: true }
+    sheet.views = [{ state: 'frozen', ySplit: 1 }]
+    sheet.autoFilter = { from: 'A1', to: 'S1' }
+    sheet.getColumn('amount').numFmt = '#,##0.00'
+    const filename = `门店订货单-${dayjs().format('YYYYMMDD-HHmmss')}.xlsx`
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer())
+    return reply
+      .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`)
+      .send(buffer)
+  })
+
+  // 集合送货单一次可包含多张原订货单；事件必须全成功或全失败。
+  // 浏览器无法证明物理打印已完成，所以状态如实记为“已发起打印”。
+  app.post('/print-events', { preHandler: [(app as any).authenticate] }, async (req: any, reply) => {
+    const parsed = orderPrintBatchSchema.safeParse(req.body || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    if (!canReadOrderArtifacts(req.user)) return reply.status(403).send({ error: '无权打印订货单' })
+    const orderIds = [...new Set(parsed.data.orderIds)]
+    const orders = await prisma.purchaseOrder.findMany({
+      where: { id: { in: orderIds }, ...supplyDataReadScope(req.user) },
+      select: { id: true },
+    })
+    if (orders.length !== orderIds.length) return reply.status(404).send({ error: '订货单不存在或无权访问' })
+    const occurredAt = new Date()
+    await prisma.purchaseOrderEvent.createMany({
+      data: orderIds.map(purchaseOrderId => ({
+        tenantId: req.user.tenantId,
+        purchaseOrderId,
+        eventType: 'PRINT_REQUESTED' as const,
+        actorId: req.user.userId,
+        actorRole: req.user.role,
+        requestId: req.id,
+        ip: req.ip,
+        occurredAt,
+        metadata: { action: parsed.data.action },
+      })),
+    })
+    return reply.status(201).send({ count: orderIds.length, occurredAt, printStatus: '已发起打印' })
   })
 
   // ── 操作组商品明细原子保存（原订单仍是唯一业务单据） ─────────
@@ -1152,7 +1398,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   app.get('/:id', { preHandler: [(app as any).authenticate] }, async (req: any) => {
     const { role } = req.user
     const { id } = req.params as any
-    if (!allowsSupplyDataRead(role, 'order.read')) {
+    if (!canReadOrderArtifacts(req.user)) {
       throw { statusCode: 403, message: '无权查看采购订单' }
     }
     // 按角色 scope 过滤，避免店长/供应商越权读到别家单据
@@ -1187,7 +1433,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         lossClaims: {
           include: {
             deliveryOrder: { select: { id: true, no: true } },
-            receipt: { select: { id: true, no: true } },
+            receipt: { select: { id: true, no: true, deliveryDate: true } },
             items: { include: { product: true } },
           },
         },
@@ -1229,6 +1475,16 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (Array.isArray((order as any).lossClaims)) {
       ;(order as any).lossClaims = (order as any).lossClaims.map((c: any) => ({
         ...c,
+        ...(c.receipt?.deliveryDate ? {
+          lateReport: (() => {
+            const deadline = storeReceiptDeadlineStatus(c.receipt.deliveryDate, c.createdAt)
+            return {
+              deadlineAt: deadline.deadlineAt,
+              overdue: deadline.overdue,
+              requiresManualApproval: deadline.requiresManualApproval,
+            }
+          })(),
+        } : {}),
         items: Array.isArray(c.items) ? c.items.map(withDocumentProductSnapshot) : [],
         evidenceImages: resignOssUrls(c.evidenceImages),
       }))
@@ -1273,8 +1529,20 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       original = buildOrderSnapshot({ ...(order as any), items: historicalItems } as any, 'original')
     }
     const current = buildOrderSnapshot(order as any, 'current')
+    const pendingDelivery = (order as any).deliveries?.find((delivery: any) => delivery.status === 'DELIVERED')
+    const hasActualArrival = Boolean(pendingDelivery?.deliveredAt && !pendingDelivery?.autoDelivered)
+    const arrivalDate = hasActualArrival
+      ? storeReceiptDateFromArrivalAt(pendingDelivery.deliveredAt)
+      : (order as any).expectedDate
+    const pendingReceiptDeadline = arrivalDate ? storeReceiptDeadlineStatus(arrivalDate) : null
     return {
       ...order,
+      storeReceiptDeadline: pendingReceiptDeadline && {
+        deadlineAt: pendingReceiptDeadline.deadlineAt,
+        overdue: pendingReceiptDeadline.overdue,
+        requiresAction: (order as any).status === 'COMPLETED' ? false : pendingReceiptDeadline.requiresAction,
+        source: hasActualArrival ? 'DELIVERY_ARRIVAL_DATE' : 'PURCHASE_ORDER_EXPECTED_DATE',
+      },
       items: activeItems.map((item: any) => ({
         ...item,
         orderedQty: Number(item.quantity),
@@ -1393,6 +1661,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const submittedAt = new Date()
     const ym = businessMonthKey()
     const actionPrefix = role === 'CHEF_DIRECTOR' ? `总厨代下单` : `创建采购订单`
+    const creationSource = orderCreationSource(role)
 
     let order: any
     for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -1449,7 +1718,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             {
               tenantId, purchaseOrderId: created.id, eventType: 'CREATED',
               actorId: userId, actorRole: role, toStatus: 'SUBMITTED', requestId: req.id, ip: req.ip,
-              metadata: { no, orderedTotalAmount: totalAmount.toFixed(2), requestFingerprint },
+              metadata: { no, orderedTotalAmount: totalAmount.toFixed(2), requestFingerprint, creationSource, creationType: '常规订货' },
             },
             {
               tenantId, purchaseOrderId: created.id, eventType: 'SUBMITTED',
@@ -2201,7 +2470,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
   app.get('/:id/revisions', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
     const { role } = req.user
     const { id } = req.params as any
-    if (!allowsSupplyDataRead(role, 'order.read')) {
+    if (!canReadOrderArtifacts(req.user)) {
       return reply.status(403).send({ error: '无权查看采购订单' })
     }
     const where: any = { id, ...supplyDataReadScope(req.user) }
@@ -3208,7 +3477,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     }
   })
 
-  // ── 供应商/司机点「已送达」 ─ DELIVERING → PENDING_CONFIRM, 启动 24h 自动收货 ──
+  // ── 供应商/司机点「已送达」 ─ DELIVERING → PENDING_CONFIRM，等待门店人工收货 ──
   app.patch('/:id/deliver', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
     const { tenantId, userId, role } = req.user
     const { id } = req.params as any
@@ -3229,7 +3498,6 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const delivery = order.deliveries[0]
     if (!delivery) return reply.status(409).send({ error: '未找到可送达的独立配送单' })
     const deliveredAt = new Date()
-    const autoConfirmAt = dayjs(deliveredAt).add(24, 'hour').toDate()
     await prisma.$transaction(async tx => {
       const upd = await tx.deliveryOrder.updateMany({
         where: { id: delivery.id, status: 'SHIPPED', rowVersion: delivery.rowVersion },
@@ -3250,9 +3518,9 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       await tx.opLog.create({
         data: {
           tenantId, userId,
-          action: `供应商标记送达${note ? ': ' + String(note).slice(0,80) : ''}, 24h 内门店未确认将自动收货`,
+          action: `供应商标记送达${note ? ': ' + String(note).slice(0,80) : ''}，等待门店人工收货`,
           target: order.no, entityType: 'PurchaseOrder', targetId: id,
-          metadata: { autoConfirmAt },
+          metadata: { deliveredAt: deliveredAt.toISOString(), requiresManualReceipt: true },
         },
       })
     })
@@ -3261,7 +3529,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       tenantId, recipientRole: 'MANAGER' as any,
       type: 'ORDER_DELIVERED' as any,
       title: `订单已送达, 请尽快验收 ${order.no}`,
-      body: `${supplier?.name || ''} 已送达, 请 24h 内确认收货, 否则系统将自动确认`,
+      body: `${supplier?.name || ''} 已送达，请门店尽快人工确认收货；系统不会自动收货`,
       refType: 'PurchaseOrder', refId: id,
     })
     notify({
@@ -3273,7 +3541,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       },
       toStoreIds: [order.storeId],
     })
-    return { success: true, autoConfirmAt }
+    return { success: true }
   })
 
   // ── 厨师发送验收单 ─ DELIVERING 状态下, 收到货物后传照片+(选填)备注给供应商 ──
@@ -3475,6 +3743,14 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     // fullyShipped 只描述数量是否全发；无论其值如何，首次发货都已关闭履约余量。
     const fullyShipped = order.items.every(item => Number(item.shippedQty || 0) + 0.0001 >= Number(item.quantity))
     const receivedAt = new Date()
+    // Use the actual arrival's Shanghai business date. An auto-delivered marker is not arrival
+    // evidence, so it falls back to the scheduled expectedDate rather than confirmation time.
+    const actualDeliveredAt = delivery.autoDelivered
+      ? null
+      : (delivery.deliveredAt || order.deliveredAt)
+    const receiptDeliveryDate = actualDeliveredAt
+      ? storeReceiptDateFromArrivalAt(actualDeliveredAt)
+      : order.expectedDate
     const ym = businessMonthKey(receivedAt)
     let committed: { receipt: any; no: string }
     try {
@@ -3499,7 +3775,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             deliveryOrderId: delivery.id,
             storeId: order.storeId,
             supplierId: order.supplierId,
-            deliveryDate: receivedAt,
+            deliveryDate: receiptDeliveryDate,
             totalAmount: actualReceivedTotal,
             status: 'CONFIRMED',
             confirmedAt: receivedAt,
@@ -3560,6 +3836,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
                 evidenceImages: Array.isArray(evidenceImages) ? evidenceImages.slice(0, 9) : [],
                 status: 'PENDING' as any,
                 createdById: userId,
+                createdAt: receivedAt,
                 items: {
                   create: groupLines.map(({ kind: _kind, ...line }) => line),
                 },
@@ -3638,15 +3915,6 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       const result = await ensureReceiptDerivatives(receipt.id)
       if (!result.voucher.ok || !result.finance.ok) {
         req.log.error({ receiptId: receipt.id, result }, '收货后财务派生记录未完整生成，等待幂等补偿')
-      }
-      if (hasLoss && result.finance.ok) {
-        await prisma.paymentSchedule.updateMany({
-          where: {
-            receiptId: receipt.id,
-            status: { in: ['PENDING', 'NOTIFIED', 'PENDING_APPROVAL', 'APPROVED', 'OVERDUE'] },
-          },
-          data: { status: 'ON_HOLD' },
-        })
       }
     } catch (error) {
       // 收货主事务已经成功，不把派生财务流程的临时故障伪装成收货失败。

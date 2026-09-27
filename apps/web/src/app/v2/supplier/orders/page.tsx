@@ -328,7 +328,7 @@ export default function SupplierOrdersPage() {
           <span className="w-9 h-9 rounded-md bg-red text-white flex items-center justify-center text-h2">⚠</span>
           <div className="flex-1">
             <div className="text-h2 text-red-fg">{pendingClaims.length} 笔到货差异待确认</div>
-            <p className="text-micro text-red-fg">涉及 ¥{pendingClaims.reduce((s, c) => s + Number(c.totalLossAmount || 0), 0).toFixed(2)} · 24h 未响应自动确认</p>
+            <p className="text-micro text-red-fg">涉及 ¥{pendingClaims.reduce((s, c) => s + Number(c.totalLossAmount || 0), 0).toFixed(2)} · 请及时处理；逾期补报须人工审批</p>
           </div>
           <span className="text-red-fg">›</span>
         </button>

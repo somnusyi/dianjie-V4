@@ -29,9 +29,17 @@ const MAX_VIDEO_BYTES = 50 * 1024 * 1024
 
 const ALLOWED_CATEGORY_VALUES = [
   'loss-claims', 'invoices', 'capital', 'documents',
-  'reimbursements', 'misc', 'chef-ack', 'products', 'inventory-counts', 'feedback',
+  'reimbursements', 'misc', 'chef-ack', 'products', 'inventory-counts', 'feedback', 'warehouse-docs',
 ] as const
 const ALLOWED_CATEGORIES = new Set<string>(ALLOWED_CATEGORY_VALUES)
+const WAREHOUSE_DOC_UPLOAD_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'PURCHASER', 'SUPPLY_CHAIN'])
+const WAREHOUSE_DOC_READ_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'FINANCE', 'PURCHASER', 'SUPPLY_CHAIN'])
+export function canUploadWarehouseDocument(role: unknown) {
+  return WAREHOUSE_DOC_UPLOAD_ROLES.has(String(role || ''))
+}
+export function canReadWarehouseDocument(role: unknown) {
+  return WAREHOUSE_DOC_READ_ROLES.has(String(role || ''))
+}
 const uploadQuerySchema = z.object({
   category: z.enum(ALLOWED_CATEGORY_VALUES).default('misc'),
 }).strict()
@@ -113,6 +121,52 @@ export function signOssKey(key: string | null | undefined): string | null {
   }
 }
 
+export type WarehouseDocumentObjectMetadata = {
+  key: string
+  name: string
+  mime: string
+  size: number
+}
+
+/**
+ * 入库过账前向 OSS 核对对象确实存在，且服务端看到的 MIME/大小与客户端提交一致。
+ * 这防止授权写角色绕过上传接口伪造同租户 key，留下永久坏链接。
+ */
+export async function assertWarehouseDocumentObjects(
+  tenantId: string,
+  attachments: WarehouseDocumentObjectMetadata[],
+): Promise<void> {
+  if (attachments.length === 0) return
+  const client = ossClient()
+  await Promise.all(attachments.map(async (attachment, index) => {
+    if (!attachment.key.startsWith(`warehouse-docs/${tenantId}/`)) {
+      const error: any = new Error(`第${index + 1}份随货单据不属于当前租户`)
+      error.statusCode = 403
+      throw error
+    }
+    let result: any
+    try {
+      result = await client.head(attachment.key)
+    } catch (cause: any) {
+      const missing = cause?.status === 404 || cause?.statusCode === 404 || cause?.code === 'NoSuchKey'
+      const error: any = new Error(missing
+        ? `第${index + 1}份随货单据不存在或已失效，请重新上传`
+        : `第${index + 1}份随货单据暂时无法核验，请稍后重试`)
+      error.statusCode = missing ? 400 : 503
+      error.cause = cause
+      throw error
+    }
+    const headers = result?.res?.headers || result?.headers || {}
+    const actualSize = Number(headers['content-length'] ?? headers['Content-Length'])
+    const actualMime = String(headers['content-type'] ?? headers['Content-Type'] ?? '').split(';')[0].trim().toLowerCase()
+    if (!Number.isFinite(actualSize) || actualSize !== attachment.size || actualMime !== attachment.mime.toLowerCase()) {
+      const error: any = new Error(`第${index + 1}份随货单据元数据与已上传文件不一致，请重新上传`)
+      error.statusCode = 400
+      throw error
+    }
+  }))
+}
+
 export function objectExtensionForMime(mime: string): string {
   return OBJECT_EXTENSION_BY_MIME[mime] || '.bin'
 }
@@ -120,6 +174,9 @@ export function objectExtensionForMime(mime: string): string {
 async function uploadOne(req: any, reply: any, opts: { allowedMimes: string[]; category: string }) {
   const user = req.user
   if (!user) return reply.status(401).send({ error: '未登录' })
+  if (opts.category === 'warehouse-docs' && !canUploadWarehouseDocument(user.role)) {
+    return reply.status(403).send({ error: '无权上传采购入库随货单据' })
+  }
   if (!ALLOWED_CATEGORIES.has(opts.category)) {
     return reply.status(400).send({ error: `category 必须是 ${[...ALLOWED_CATEGORIES].join(' / ')}` })
   }
@@ -199,6 +256,11 @@ export async function uploadRoutes(app: FastifyInstance) {
     // 防越权: 只签“允许类别/当前租户/对象名”结构的对象。
     if (!ALLOWED_CATEGORIES.has(category) || tenantId !== req.user.tenantId || objectPath.length === 0 || objectPath.some(part => !part)) {
       return reply.status(403).send({ error: '无权访问' })
+    }
+    // 仅同租户仍不够：随货单据还受仓库单据读取角色约束。
+    // 否则知道（或猜到）对象 key 的普通门店角色也能绕过单据接口重新签名。
+    if (category === 'warehouse-docs' && !canReadWarehouseDocument(req.user.role)) {
+      return reply.status(403).send({ error: '无权查看采购入库随货单据' })
     }
     const url = toHttps(ossClient().signatureUrl(key, { expires }))
     return reply.send({ url })

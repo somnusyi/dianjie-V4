@@ -105,4 +105,13 @@ describe('delivery note live refresh contract', () => {
     expect(source).toContain("const itemAmt = (i: Order['items'][number]) => i.amount != null")
     expect(source).not.toContain('isOperationGroup && i.amount != null')
   })
+
+  it('records one atomic print-status event batch only when browser printing is initiated', () => {
+    expect(source).toContain("async function recordPrintEvents(")
+    expect(source).toContain("await apiFetch('/api/orders/print-events', {")
+    expect(source).toContain("body: JSON.stringify({ action: 'BROWSER_PRINT', orderIds })")
+    expect(source).toContain('await recordPrintEvents(latestDocument)')
+    expect(source).not.toContain("recordPrintEvents(latestDocument, 'PDF_GENERATED')")
+    expect(source).not.toContain("recordPrintEvents(latestDocument, 'EXCEL_EXPORTED')")
+  })
 })

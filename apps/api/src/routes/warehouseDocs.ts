@@ -5,8 +5,10 @@ import { hasInternalSupplyChainCapability, isInternalSupplyChainRole } from '../
 import {
   confirmWarehouseDoc,
   editWarehouseDoc,
+  normalizeWarehouseDocAttachments,
   unconfirmWarehouseDoc,
 } from '../services/warehouseDocs'
+import { signOssKey } from './upload'
 
 // 仓库单据（审核流）：台账之上的控制层。
 // 读：仓库/财务可见；改单：仓库写角色；审核/反审核：会计（FINANCE）与管理员。
@@ -30,6 +32,11 @@ function requireDocAccess(capability: 'read' | 'write' | 'audit', message: strin
       return reply.status(403).send({ error: message })
     }
   }
+}
+
+export function withoutWarehouseDocAttachmentKeys<T extends { attachments?: unknown }>(doc: T): Omit<T, 'attachments'> {
+  const { attachments: _attachments, ...safeDoc } = doc
+  return safeDoc
 }
 
 const editSchema = z.object({
@@ -93,7 +100,15 @@ export const warehouseDocsRoutes: FastifyPluginAsync = async app => {
       }),
       prisma.warehouseDoc.count({ where }),
     ])
-    return { items, total, page, pageSize }
+    return {
+      items: items.map(item => ({
+        ...withoutWarehouseDocAttachmentKeys(item),
+        attachmentCount: Array.isArray(item.attachments) ? item.attachments.length : 0,
+      })),
+      total,
+      page,
+      pageSize,
+    }
   })
 
   // 单据详情（含行明细与操作日志）
@@ -106,7 +121,25 @@ export const warehouseDocsRoutes: FastifyPluginAsync = async app => {
       },
     })
     if (!doc) return reply.status(404).send({ error: '单据不存在' })
-    return doc
+    let attachments: ReturnType<typeof normalizeWarehouseDocAttachments> = []
+    try {
+      attachments = normalizeWarehouseDocAttachments(req.user.tenantId, doc.attachments)
+    } catch {
+      // A malformed historical value must not expose a foreign key or make the
+      // whole accounting document unreadable. It remains visible as zero files.
+      attachments = []
+    }
+    const safeDoc = withoutWarehouseDocAttachmentKeys(doc)
+    return {
+      ...safeDoc,
+      attachmentCount: attachments.length,
+      attachments: attachments.map(item => ({
+        name: item.name,
+        mime: item.mime,
+        size: item.size,
+        url: signOssKey(item.key),
+      })).filter(item => Boolean(item.url)),
+    }
   })
 
   // 会计审核
@@ -157,7 +190,7 @@ export const warehouseDocsRoutes: FastifyPluginAsync = async app => {
         reason: parsed.data.reason,
         lines: parsed.data.lines,
       })
-      return { ok: true, changed: result.changed, doc: result.doc }
+      return { ok: true, changed: result.changed, doc: withoutWarehouseDocAttachmentKeys(result.doc) }
     } catch (error: any) {
       if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
       throw error

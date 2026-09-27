@@ -16,7 +16,7 @@ import {
   UPSTREAM_SETTLEMENT_STATUS_LABEL,
 } from '@/lib/upstream-procurement'
 
-type Tab = 'orders' | 'receipts' | 'claims' | 'settlements' | 'contracts'
+type Tab = 'orders' | 'receipts' | 'returns' | 'claims' | 'settlements' | 'contracts'
 type Supplier = { id: string; no: string; name: string }
 type Warehouse = { id: string; code: string; name: string }
 type Source = {
@@ -152,6 +152,41 @@ type ReceiptDetail = Receipt & {
     }
   }>
 }
+type ReturnableReceiptLine = {
+  id: string
+  acceptedQty: string | number
+  returnableQuantity: string | number
+  purchaseUnit: string
+  unitPrice: string | number
+  product: { id: string; code: string; name: string; spec?: string | null }
+  receipt: { id: string; no: string; supplierId: string; warehouseId: string; postedAt?: string | null; supplier: Supplier; warehouse: Warehouse }
+}
+type PurchaseReturn = {
+  id: string
+  no: string
+  status: 'DRAFT' | 'PENDING_APPROVAL' | 'APPROVED' | 'RECEIVED' | 'REJECTED' | 'CANCELLED'
+  reason: string
+  note?: string | null
+  settlementAmount: string | number
+  ledgerCostAmount: string | number
+  createdAt: string
+  approvedAt?: string | null
+  receivedAt?: string | null
+  supplier: Supplier
+  warehouse: Warehouse
+  lines: Array<{
+    id: string
+    receiptLineId: string
+    purchaseQuantity: string | number
+    purchaseUnit: string
+    inventoryQuantity: string | number
+    inventoryUnit: string
+    settlementUnitPrice: string | number
+    settlementAmount: string | number
+    product: { id: string; code: string; name: string; spec?: string | null }
+    receiptLine: { id: string; receiptId: string; receipt: { no: string } }
+  }>
+}
 type RevisionSnapshot = {
   expectedArrivalAt?: string | null
   lines?: Array<{ id: string; quantity: string | number }>
@@ -204,6 +239,7 @@ type StatementDetail = Statement & {
 const TABS: Array<{ key: Tab; label: string }> = [
   { key: 'orders', label: '采购单' },
   { key: 'receipts', label: '到货验收' },
+  { key: 'returns', label: '采购退货' },
   { key: 'claims', label: '到货差异' },
   { key: 'settlements', label: '月度对账' },
   { key: 'contracts', label: '合同与价格' },
@@ -228,6 +264,8 @@ export default function UpstreamProcurementPage() {
   const [orders, setOrders] = useState<Order[]>([])
   const [shipments, setShipments] = useState<Shipment[]>([])
   const [receipts, setReceipts] = useState<Receipt[]>([])
+  const [purchaseReturns, setPurchaseReturns] = useState<PurchaseReturn[]>([])
+  const [returnableLines, setReturnableLines] = useState<ReturnableReceiptLine[]>([])
   const [claims, setClaims] = useState<Claim[]>([])
   const [statements, setStatements] = useState<Statement[]>([])
   const [contracts, setContracts] = useState<Contract[]>([])
@@ -237,6 +275,12 @@ export default function UpstreamProcurementPage() {
   const [contractSupplierId, setContractSupplierId] = useState('')
   const [showContractForm, setShowContractForm] = useState(false)
   const [showOrderForm, setShowOrderForm] = useState(false)
+  const [showReturnForm, setShowReturnForm] = useState(false)
+  const [returnSupplierId, setReturnSupplierId] = useState('')
+  const [returnWarehouseId, setReturnWarehouseId] = useState('')
+  const [returnReason, setReturnReason] = useState('')
+  const [returnNote, setReturnNote] = useState('')
+  const [returnQuantities, setReturnQuantities] = useState<Record<string, string>>({})
   const [contractForm, setContractForm] = useState({ contractNo: '', title: '', startsAt: new Date().toISOString().slice(0, 10) })
   const [sourcePrices, setSourcePrices] = useState<Record<string, string>>({})
   const [orderContractId, setOrderContractId] = useState('')
@@ -260,6 +304,7 @@ export default function UpstreamProcurementPage() {
   const orderRequestKeyRef = useRef(clientRequestId())
   const receiptRequestKeysRef = useRef<Record<string, string>>({})
   const postClaimRequestKeysRef = useRef<Record<string, string>>({})
+  const purchaseReturnRequestKeyRef = useRef(clientRequestId())
   const month = useMemo(() => currentMonthRange(), [])
   const [settlementForm, setSettlementForm] = useState({ supplierId: '', periodStart: month.start, periodEnd: month.end })
 
@@ -267,10 +312,11 @@ export default function UpstreamProcurementPage() {
     setLoading(true)
     setError(null)
     try {
-      const [orderRows, shipmentRows, receiptRows, claimRows, statementRows, contractRows, setup] = await Promise.all([
+      const [orderRows, shipmentRows, receiptRows, returnRows, claimRows, statementRows, contractRows, setup] = await Promise.all([
         apiFetch<Order[]>('/api/upstream/purchase-orders'),
         apiFetch<Shipment[]>('/api/upstream/shipments'),
         apiFetch<Receipt[]>('/api/upstream/receipts'),
+        apiFetch<PurchaseReturn[]>('/api/upstream/purchase-returns'),
         apiFetch<Claim[]>('/api/upstream/arrival-claims'),
         apiFetch<Statement[]>('/api/upstream/settlement-statements'),
         apiFetch<Contract[]>('/api/upstream/contracts'),
@@ -279,12 +325,15 @@ export default function UpstreamProcurementPage() {
       setOrders(orderRows)
       setShipments(shipmentRows)
       setReceipts(receiptRows)
+      setPurchaseReturns(returnRows)
       setClaims(claimRows)
       setStatements(statementRows)
       setContracts(contractRows)
       setSuppliers(setup.suppliers)
       setWarehouses(setup.warehouses)
       setOrderWarehouseId(value => value || setup.warehouses[0]?.id || '')
+      setReturnSupplierId(value => value || setup.suppliers[0]?.id || '')
+      setReturnWarehouseId(value => value || setup.warehouses[0]?.id || '')
       setSettlementForm(value => ({ ...value, supplierId: value.supplierId || setup.suppliers[0]?.id || '' }))
     } catch (reason: any) {
       setError(reason?.message || '上游采购数据加载失败')
@@ -410,6 +459,72 @@ export default function UpstreamProcurementPage() {
       orderRequestKeyRef.current = clientRequestId()
       setShowOrderForm(false)
     }
+  }
+
+  async function loadReturnableLines(supplierId = returnSupplierId, warehouseId = returnWarehouseId) {
+    setError(null)
+    setReturnableLines([])
+    setReturnQuantities({})
+    if (!supplierId || !warehouseId) return
+    try {
+      const query = new URLSearchParams({ supplierId, warehouseId })
+      setReturnableLines(await apiFetch<ReturnableReceiptLine[]>(`/api/upstream/purchase-returns/returnable-lines?${query}`))
+    } catch (reason: any) {
+      setError(reason?.message || '可退采购收货明细加载失败')
+    }
+  }
+
+  async function openReturnForm() {
+    setShowReturnForm(true)
+    await loadReturnableLines()
+  }
+
+  async function createPurchaseReturn() {
+    const lines = returnableLines
+      .filter(line => Number(returnQuantities[line.id]) > 0)
+      .map(line => ({ receiptLineId: line.id, purchaseQuantity: Number(returnQuantities[line.id]) }))
+    if (!returnSupplierId || !returnWarehouseId) return setError('请选择供应商和退货总仓')
+    if (returnReason.trim().length < 2) return setError('请填写至少2个字符的退货原因')
+    if (!lines.length) return setError('至少填写一个商品的退货数量')
+    const invalid = lines.find(line => {
+      const source = returnableLines.find(item => item.id === line.receiptLineId)!
+      return line.purchaseQuantity > Number(source.returnableQuantity) + 0.000001
+    })
+    if (invalid) return setError('退货数量不能超过页面显示的可退数量')
+    const succeeded = await run('create-purchase-return', () => apiFetch('/api/upstream/purchase-returns', {
+      method: 'POST',
+      body: JSON.stringify({
+        supplierId: returnSupplierId,
+        warehouseId: returnWarehouseId,
+        reason: returnReason.trim(),
+        note: returnNote.trim() || undefined,
+        idempotencyKey: purchaseReturnRequestKeyRef.current,
+        lines,
+      }),
+    }), '采购退货草稿已创建；提交审核前不会扣减库存')
+    if (succeeded) {
+      purchaseReturnRequestKeyRef.current = clientRequestId()
+      setShowReturnForm(false)
+      setReturnReason('')
+      setReturnNote('')
+      setReturnQuantities({})
+    }
+  }
+
+  async function rejectPurchaseReturn(row: PurchaseReturn) {
+    const reason = window.prompt(`请输入退货单 ${row.no} 的驳回原因`)
+    if (!reason) return
+    await run(`reject-return-${row.id}`, () => apiFetch(`/api/upstream/purchase-returns/${row.id}/reject`, {
+      method: 'POST', body: JSON.stringify({ reason }),
+    }), '采购退货已驳回，未扣减库存')
+  }
+
+  async function cancelPurchaseReturn(row: PurchaseReturn) {
+    const reason = window.prompt(`请输入退货单 ${row.no} 的取消原因`)
+    if (!reason) return
+    await run(`cancel-return-${row.id}`, () => apiFetch(`/api/upstream/purchase-returns/${row.id}/cancel`, {
+      method: 'POST', body: JSON.stringify({ reason }),
+    }), '采购退货已取消，未扣减库存')
   }
 
   function openReceipt(shipment: Shipment) {
@@ -736,6 +851,22 @@ export default function UpstreamProcurementPage() {
             <div className="mt-4 flex justify-end"><ActionButton onClick={() => void submitPostReceiptClaim()} disabled={working === `post-claim-${claimingReceipt.id}` || uploadingEvidence}>提交补报</ActionButton></div>
           </Panel>}
           {receipts.length === 0 ? <Empty text="暂无待验收单据" /> : receipts.map(receipt => <article key={receipt.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex items-center gap-2"><button type="button" onClick={() => void openReceiptDetail(receipt)} className="text-h3 underline decoration-dotted underline-offset-4" aria-label={`查看收货单 ${receipt.no} 明细`}>{receipt.no}</button><Badge status={receipt.status} labels={UPSTREAM_RECEIPT_STATUS_LABEL} /></div><p className="mt-1 text-caption text-gray2">{receipt.supplier.name} · 采购单 <b>{receipt.purchaseOrder.no}</b> · 发货单 {receipt.shipment.no}</p><p className="mt-1 text-caption text-gray3">{receipt._count.lines} 项 · 采购单金额 <b>{receipt.purchaseOrder.totalAmount == null ? '—' : money(receipt.purchaseOrder.totalAmount)}</b> · 本次应付 <b>{money(receipt.payableAmount)}</b>{receipt.reviewReasons?.length ? ` · 复核：${receipt.reviewReasons.join('、')}` : ''}</p>{receipt.status === 'POSTED' && receipt._count.claims > 0 && <p className="mt-1 text-micro text-amber-fg">已关联差异单，不能整单冲销；如库存有误请走实盘调整。</p>}</div><div className="flex flex-wrap gap-2">{receipt.status === 'DRAFT' && <ActionButton onClick={() => void run(receipt.id, () => apiFetch(`/api/upstream/receipts/${receipt.id}/start-inspection`, { method: 'POST' }), '已开始验收')} disabled={working === receipt.id}>开始验收</ActionButton>}{receipt.status === 'INSPECTING' && <ActionButton onClick={() => void openReceiptDetail(receipt, 'confirm')} disabled={working === receipt.id}>查看明细并验收</ActionButton>}{receipt.status === 'PENDING_REVIEW' && <ActionButton onClick={() => void openReceiptDetail(receipt, 'review')} disabled={working === receipt.id}>查看明细并复核</ActionButton>}{receipt.status === 'POSTED' && <ActionButton tone="light" onClick={() => void openPostReceiptClaim(receipt)}>收货后补报异常</ActionButton>}{receipt.status === 'POSTED' && receipt._count.claims === 0 && <ActionButton tone="danger" onClick={() => void reverseReceipt(receipt)} disabled={working === `reverse-${receipt.id}`}>冲销收货</ActionButton>}</div></div></article>)}
+        </section>}
+
+        {!loading && tab === 'returns' && <section className="space-y-4">
+          <div className="flex justify-end"><ActionButton onClick={() => void (showReturnForm ? Promise.resolve(setShowReturnForm(false)) : openReturnForm())}>{showReturnForm ? '收起' : '新建采购退货'}</ActionButton></div>
+          {showReturnForm && <Panel title="新建采购退货">
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+              <Field label="上游供应商"><select className="input" value={returnSupplierId} onChange={event => { const value = event.target.value; setReturnSupplierId(value); void loadReturnableLines(value, returnWarehouseId) }}><option value="">请选择</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}</select></Field>
+              <Field label="退货总仓"><select className="input" value={returnWarehouseId} onChange={event => { const value = event.target.value; setReturnWarehouseId(value); void loadReturnableLines(returnSupplierId, value) }}><option value="">请选择</option>{warehouses.map(warehouse => <option key={warehouse.id} value={warehouse.id}>{warehouse.code} · {warehouse.name}</option>)}</select></Field>
+              <Field label="退货原因"><input className="input" value={returnReason} maxLength={240} onChange={event => setReturnReason(event.target.value)} placeholder="例如质量不合格" /></Field>
+              <Field label="备注（选填）"><input className="input" value={returnNote} maxLength={500} onChange={event => setReturnNote(event.target.value)} /></Field>
+            </div>
+            <p className="mt-3 rounded-xl bg-amber/10 p-3 text-caption text-amber-fg">保存草稿和提交审核都不扣库存；只有审核通过才从采购方总仓出库。供应商实际签收后再单独登记，不会重复增加库存。</p>
+            <div className="mt-4 overflow-x-auto"><table className="w-full text-left text-caption"><thead><tr className="border-b"><th className="p-2">原收货单</th><th className="p-2">商品</th><th className="p-2">原合格数量</th><th className="p-2">可退数量</th><th className="p-2">原采购单价</th><th className="p-2">本次退货数量</th></tr></thead><tbody>{returnableLines.map(line => <tr key={line.id} className="border-b border-border"><td className="p-2"><b>{line.receipt.no}</b><div className="text-gray3">{shortDate(line.receipt.postedAt)}</div></td><td className="p-2"><b>{line.product.name}</b><div className="text-gray3">{line.product.code} · {line.product.spec || '—'}</div></td><td className="p-2">{String(line.acceptedQty)} {line.purchaseUnit}</td><td className="p-2"><b>{String(line.returnableQuantity)} {line.purchaseUnit}</b></td><td className="p-2">{money(line.unitPrice)}/{line.purchaseUnit}</td><td className="p-2"><input className="input w-32" aria-label={`${line.product.name}退货数量`} type="number" min="0" max={Number(line.returnableQuantity)} step="any" value={returnQuantities[line.id] || ''} onChange={event => setReturnQuantities(current => ({ ...current, [line.id]: event.target.value }))} /></td></tr>)}</tbody></table>{returnableLines.length === 0 && <p className="p-6 text-center text-caption text-gray3">所选供应商和仓库暂无可退的已入库商品。</p>}</div>
+            <div className="mt-4 flex justify-end"><ActionButton onClick={() => void createPurchaseReturn()} disabled={working === 'create-purchase-return'}>保存退货草稿</ActionButton></div>
+          </Panel>}
+          {purchaseReturns.length === 0 ? <Empty text="暂无采购退货单" /> : purchaseReturns.map(row => <article key={row.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between"><div><div className="flex flex-wrap items-center gap-2"><b className="text-h3">{row.no}</b><Badge status={row.status} labels={{ DRAFT: '草稿', PENDING_APPROVAL: '待审核', APPROVED: '已出库', RECEIVED: '供应商已收货', REJECTED: '已驳回', CANCELLED: '已取消' }} /><span className="text-caption text-red-700">退货金额 {money(row.settlementAmount)}</span></div><p className="mt-1 text-caption text-gray2">{row.supplier.name} · {row.warehouse.name} · {row.reason}</p><ul className="mt-2 text-caption text-gray2">{row.lines.map(line => <li key={line.id}>· 原收货单 {line.receiptLine.receipt.no} · {line.product.name} {String(line.purchaseQuantity)} {line.purchaseUnit} · {money(line.settlementAmount)}</li>)}</ul>{['APPROVED', 'RECEIVED'].includes(row.status) && <p className="mt-2 text-micro text-gray3">实际库存成本 {money(row.ledgerCostAmount)} · 审批出库 {shortDate(row.approvedAt)}{row.receivedAt ? ` · 供应商签收 ${shortDate(row.receivedAt)}` : ''}</p>}</div><div className="flex flex-wrap gap-2">{row.status === 'DRAFT' && <><ActionButton onClick={() => void run(`submit-return-${row.id}`, () => apiFetch(`/api/upstream/purchase-returns/${row.id}/submit`, { method: 'POST' }), '采购退货已提交审核；当前仍未扣库存')} disabled={working === `submit-return-${row.id}`}>提交审核</ActionButton><ActionButton tone="danger" onClick={() => void cancelPurchaseReturn(row)}>取消</ActionButton></>}{row.status === 'PENDING_APPROVAL' && <><ActionButton onClick={() => window.confirm(`确认退货单 ${row.no} 无误并从采购方总仓扣减库存？`) && void run(`approve-return-${row.id}`, () => apiFetch(`/api/upstream/purchase-returns/${row.id}/approve`, { method: 'POST' }), '采购退货已审核并从总仓出库')} disabled={working === `approve-return-${row.id}`}>审核并出库</ActionButton><ActionButton tone="danger" onClick={() => void rejectPurchaseReturn(row)}>驳回</ActionButton></>}{row.status === 'APPROVED' && <ActionButton onClick={() => window.confirm(`确认供应商已实际收到退货单 ${row.no} 的货物？`) && void run(`receive-return-${row.id}`, () => apiFetch(`/api/upstream/purchase-returns/${row.id}/receive`, { method: 'POST', body: '{}' }), '已登记供应商实际收货')} disabled={working === `receive-return-${row.id}`}>登记供应商实收</ActionButton>}</div></div></article>)}
         </section>}
 
         {!loading && tab === 'claims' && <section className="space-y-3">{claims.length === 0 ? <Empty text="暂无到货差异" /> : claims.map(claim => { const resolutionCopy = claimResolutionCopy(claim.type, money(claim.claimedAmount)); return <article key={claim.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><b className="text-h3">{claim.no}</b><Badge status={claim.status} labels={UPSTREAM_CLAIM_STATUS_LABEL} /><span className="text-caption text-red-700">{money(claim.claimedAmount)}</span></div><p className="mt-2 text-caption text-gray1">{claim.description}</p><div className="mt-2 flex flex-wrap gap-2 text-caption"><button type="button" onClick={() => void openOrderDetail(claim.purchaseOrder)} className="rounded-lg border border-border bg-bg px-2 py-1 underline decoration-dotted underline-offset-2">采购单 {claim.purchaseOrder.no}</button><button type="button" onClick={() => void openReceiptDetail(claim.receipt)} className="rounded-lg border border-border bg-bg px-2 py-1 underline decoration-dotted underline-offset-2">收货单 {claim.receipt.no}</button></div><ul className="mt-2 text-caption text-gray2">{claim.lines.map(line => <li key={line.id}>· {line.product.name} {String(line.affectedQty)} {line.purchaseUnit}</li>)}</ul>{claim.supplierResponse && <p className="mt-2 rounded-lg bg-bg p-2 text-caption text-gray2">供应商回复：{claim.supplierResponse}</p>}{claim.responsibility && <p className="mt-1 text-micro text-gray3">处理结果：{claim.responsibility} · {claim.resolution || '待定'}{claim.resolvedAmount != null ? ` · ${money(claim.resolvedAmount)}` : ''}</p>}</div><div className="flex gap-2">{claim.status === 'SUPPLIER_REJECTED' && <ActionButton tone="danger" onClick={() => void run(claim.id, () => apiFetch(`/api/upstream/arrival-claims/${claim.id}/start-arbitration`, { method: 'POST' }), '差异已进入仲裁')} disabled={working === claim.id}>转仲裁</ActionButton>}{['SUPPLIER_ACCEPTED', 'AUTO_ACCEPTED', 'ARBITRATION'].includes(claim.status) && <ActionButton onClick={() => window.confirm(resolutionCopy.confirmation) && void run(claim.id, () => apiFetch(`/api/upstream/arrival-claims/${claim.id}/resolve`, { method: 'POST', body: JSON.stringify({ responsibility: 'SUPPLIER', resolution: 'DEDUCTION', resolvedAmount: Number(claim.claimedAmount) }) }), '差异已办结并进入对账')} disabled={working === claim.id}>{resolutionCopy.button}</ActionButton>}</div></div></article> })}</section>}

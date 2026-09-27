@@ -13,7 +13,7 @@ import { voucherForPayment } from './voucher'
 import { checkReceiptBlockedByInvoicePath, cancelScheduleDueToInvoiceLock } from './paymentMutex'
 import { nextBusinessNo } from './purchaseOrderIntegrity'
 
-const AUTO_PAY_THRESHOLD = 2000  // 超过此金额需总部审批
+export const AUTO_PAY_THRESHOLD = 2000  // 超过此金额需总部审批
 
 interface CreateScheduleParams {
   tenantId: string
@@ -80,6 +80,17 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
     let schedule = existingSchedule
     let scheduleCreated = false
     if (!schedule) {
+      // A receipt can carry an unresolved NET_AT_RECEIPT difference. Create the
+      // schedule already frozen under the same receipt-finance lock so payment
+      // cannot race the later loss-claim hold.
+      const openArrivalClaims = await tx.lossClaim.count({
+        where: {
+          receiptId: receipt.id,
+          isManual: false,
+          payableBasis: 'NET_AT_RECEIPT',
+          status: { in: ['PENDING', 'REJECTED', 'NEGOTIATING'] },
+        },
+      })
       schedule = await tx.paymentSchedule.create({
         data: {
           tenantId,
@@ -91,7 +102,7 @@ export async function autoProcessAfterConfirm({ tenantId, receipt, supplier }: C
           confirmedAt,
           dueAt,
           needApproval,
-          status: needApproval ? 'PENDING_APPROVAL' : 'PENDING',
+          status: openArrivalClaims > 0 ? 'ON_HOLD' : (needApproval ? 'PENDING_APPROVAL' : 'PENDING'),
         },
       })
       scheduleCreated = true

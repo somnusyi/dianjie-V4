@@ -135,15 +135,18 @@ describe('post-receipt arrival loss (integration)', () => {
     expect(response.json().error).toContain('最多还可补报')
   })
 
-  it('closes the supplier claim window exactly after 48 hours', async () => {
+  it('accepts a late report, marks it overdue, and keeps it pending for manual approval', async () => {
     await prisma.receipt.update({
       where: { id: receiptId },
-      data: { confirmedAt: new Date(Date.now() - 49 * 60 * 60 * 1000) },
+      data: { deliveryDate: new Date(Date.now() - 24 * 60 * 60 * 1000) },
     })
     const response = await app.inject({
       method: 'POST', url: '/api/loss-claims', payload: { ...payload(), items: [{ productId, lossQty: 0.1 }] },
     })
-    expect(response.statusCode).toBe(409)
-    expect(response.json()).toMatchObject({ code: 'POST_RECEIPT_CLAIM_WINDOW_EXPIRED' })
+    expect(response.statusCode).toBe(201)
+    expect(response.json()).toMatchObject({
+      status: 'PENDING',
+      lateReport: { overdue: true, requiresManualApproval: true },
+    })
   })
 })

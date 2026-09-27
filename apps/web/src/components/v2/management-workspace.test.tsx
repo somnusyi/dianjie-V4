@@ -14,7 +14,7 @@ vi.mock('next/link', () => ({ default: React.forwardRef<HTMLAnchorElement, any>(
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 const expected: Record<string, string> = {
   'purchase-in': '序号|单据编号|入库日期|上游单据号|采购机构|仓库|供应商|金额|状态|复审状态|创建时间|创建人|备注|附件',
-  'purchase-return': '序号|单据编号|出库日期|上游单据号|采购机构|供应商|金额|状态|复审状态|对账状态|发票状态|打印状态|创建时间|创建人|备注',
+  'purchase-return': '序号|单据编号|出库日期|上游单据号|采购机构|供应商|金额|状态|复审状态|发票状态|打印状态|创建时间|创建人|备注',
   'other-in': '序号|单据编号|入库日期|机构|仓库|入库原因|金额|状态|复审状态|打印状态|创建时间|创建人|备注',
   'other-out': '序号|单据编号|出库日期|上游单据号|机构|仓库|出库原因|金额|状态|复审状态|打印状态|创建时间|创建人|备注',
   count: '序号|单据编号|盘点日期|机构名称|仓库|物品数|账面金额|实盘金额|盈亏金额|盘点类型|盘点方式|状态|盘点差异|审核日期|打印状态|创建时间|创建人',
@@ -137,6 +137,11 @@ describe('审核要求与管理页面', () => {
     expect([...container.querySelectorAll('th')].map(th => th.textContent)).not.toContain('复审状态')
     act(() => button('恢复全部字段').click())
     expect([...container.querySelectorAll('th')].map(th => th.textContent)).toContain('复审状态')
+  })
+  it('盘点单从供应链管理表格进入只读复盘页', async () => {
+    await render('count')
+    const link = [...container.querySelectorAll('a')].find(item => item.textContent === '复盘')
+    expect(link?.getAttribute('href')).toBe('/v2/supply-chain/stocktake/count/1')
   })
   it('请求失败时保留完整表头并允许重试；缺少来源时明确说明', async () => {
     api.fetch.mockRejectedValueOnce(new Error('网络异常'))

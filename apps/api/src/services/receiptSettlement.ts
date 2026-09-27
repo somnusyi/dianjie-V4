@@ -1,4 +1,5 @@
 import { Prisma } from '@dianjie/db'
+import { AUTO_PAY_THRESHOLD } from './paymentSchedule'
 
 type ScheduleStatus =
   | 'PENDING'
@@ -36,9 +37,17 @@ export async function setReceiptSettlementAmountInTransaction(
     throw { statusCode: 409, message: '该收货单已进入付款或已付款，不能自动调整结算金额' }
   }
 
+  const existingSchedule = await tx.paymentSchedule.findUniqueOrThrow({ where: { receiptId: input.receiptId } })
+  // A post-receipt rejection can increase a previously small net settlement.
+  // Crossing the ordinary threshold must never bypass its pre-existing approval
+  // gate; once required, approval is intentionally never downgraded here.
+  const needApproval = existingSchedule.needApproval || amount.gt(AUTO_PAY_THRESHOLD)
+  const status = input.scheduleStatus === 'PENDING' && needApproval
+    ? 'PENDING_APPROVAL'
+    : input.scheduleStatus
   const schedule = await tx.paymentSchedule.update({
     where: { receiptId: input.receiptId },
-    data: { amount, status: input.scheduleStatus },
+    data: { amount, needApproval, status },
   })
 
   if (!item) return { schedule, reconciliation: null }

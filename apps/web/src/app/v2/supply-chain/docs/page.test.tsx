@@ -114,4 +114,36 @@ describe('单据审核页面', () => {
     act(() => root.unmount())
     container.remove()
   })
+
+  it('在入库单列表和详情显示供应商随货单据，不把它写成报损举证', async () => {
+    const row = {
+      id: 'doc-1', docNo: 'RK20260927-001', type: 'MANUAL_INBOUND', supplierId: 'sup-1', supplierName: '井育苗菇',
+      reason: null, note: '采购到货', effectiveAt: '2026-09-27T02:00:00.000Z', status: 'POSTED', reviewStatus: 'UNREVIEWED',
+      lineCount: 1, totalAmount: 100, createdAt: '2026-09-27T02:01:00.000Z', confirmedAt: null, unauditedAt: null, unauditReason: null,
+      attachmentCount: 1,
+    }
+    mockFetch.mockImplementation(path => {
+      const url = String(path)
+      if (url.startsWith('/api/warehouse-docs?')) return Promise.resolve({ items: [row], total: 1, page: 1, pageSize: 20 })
+      if (url === '/api/warehouse-docs/doc-1') return Promise.resolve({
+        ...row,
+        lines: [{ id: 'line-1', lineNo: 1, productId: 'p-1', productName: '土豆', quantity: 10, unit: 'kg', unitPrice: 10, amount: 100, inventoryQuantity: 10, inventoryUnit: 'kg', note: null, batchNo: null, manufactureDate: null, expiryDate: null }],
+        logs: [],
+        attachments: [{ name: '供应商送货单.pdf', mime: 'application/pdf', size: 2048, url: 'https://signed.test/delivery.pdf' }],
+      })
+      if (url.startsWith('/api/suppliers?')) return Promise.resolve([])
+      return Promise.reject(new Error(`unexpected API: ${url}`))
+    })
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('RK20260927-001') ?? false)
+    expect(container.textContent).toContain('1 份')
+    act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('查看'))?.click())
+    await waitFor(() => container.textContent?.includes('供应商送货单.pdf') ?? false)
+    expect(container.textContent).toContain('供应商随货单据（1份）')
+    expect(container.textContent).not.toContain('报损举证')
+    expect((container.querySelector('a[href="https://signed.test/delivery.pdf"]') as HTMLAnchorElement).target).toBe('_blank')
+
+    act(() => root.unmount())
+    container.remove()
+  })
 })

@@ -43,9 +43,7 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
   const originalTotal = Number(po.originalTotalAmount ?? po.totalAmount ?? 0)
   const pendingRevision = po.revisions?.find((revision: any) => revision.status === 'PENDING')
   const postReceiptClaimOpen = (po.receipts || []).some((receipt: any) =>
-    receipt.confirmedAt
-    && ['CONFIRMED', 'ACCOUNTED'].includes(receipt.status)
-    && new Date(receipt.confirmedAt).getTime() + 48 * 60 * 60 * 1000 >= Date.now()
+    receipt.confirmedAt && ['CONFIRMED', 'ACCOUNTED'].includes(receipt.status)
   )
 
   function openRevisionReview(action: 'approve' | 'reject') {
@@ -100,7 +98,7 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
             {statusLabel(po.status)}
           </Chip>
           <Chip tone="gray">{po.items?.length ?? 0} 项</Chip>
-          {po.status === 'PENDING_CONFIRM' && <Chip tone="orange">24h 内验收否则自动确认</Chip>}
+          {po.status === 'PENDING_CONFIRM' && <Chip tone="orange">请尽快人工验收</Chip>}
         </div>
       </div>
 
@@ -249,6 +247,9 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
                     <Chip tone={lc.status === 'APPROVED' || lc.status === 'AUTO_APPROVED' ? 'green' : lc.status === 'REJECTED' ? 'red' : 'orange'}>
                       {lossLabel(lc.status)}
                     </Chip>
+                    {lc.lateReport?.requiresManualApproval && (
+                      <Chip tone="orange">{lc.status === 'PENDING' ? '逾期补报 · 需人工审批' : '逾期补报'}</Chip>
+                    )}
                     <span className="text-micro text-gray3 font-num">{lc.no}</span>
                   </div>
                   <span className="font-num text-body text-red-fg">−¥{Number(lc.totalLossAmount).toFixed(2)}</span>

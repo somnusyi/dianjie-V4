@@ -114,7 +114,9 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
           <tbody>{loading || !rows.length ? <tr><td colSpan={columns.length + 2}><div className={styles.empty}><span aria-hidden="true">▤</span><strong>{loading ? '正在查询…' : error ? '查询未完成' : result?.sourceAvailable === false ? '暂无可用单据来源' : '暂无符合条件的记录'}</strong><p>{!loading && (error ? '请重试后查看记录。' : result?.sourceAvailable === false ? result.note : '可以调整筛选条件后重新查询。')}</p></div></td></tr> : rows.map(row => <tr key={row.id} data-selected={selected.includes(String(row.id))}>
             <td className={styles.check}><input type="checkbox" aria-label={`选择${row.no || row.name}`} checked={selected.includes(String(row.id))} onChange={e => setSelected(old => e.target.checked ? [...old, String(row.id)] : old.filter(v => v !== String(row.id)))} /></td>
             {columns.map(c => <td key={c.key} className={c.kind === 'number' ? styles.numeric : ''} title={row[c.key] == null ? '尚未记录' : String(row[c.key])}>{c.key === 'no' ? <button className={styles.textButton} onClick={() => setDialog(row)}>{row[c.key]}</button> : ['status', 'review'].includes(c.key) && row[c.key] ? <span className={styles.badge}>{row[c.key]}</span> : display(row[c.key], c.kind)}</td>)}
-            <td className={styles.operation}><button className={styles.textButton} onClick={() => setDialog(row)}>查看</button></td>
+            <td className={styles.operation}>{config.id === 'count' && row.recordType !== 'IMPORTED_BASELINE'
+              ? <Link className={styles.textButton} href={`/v2/supply-chain/stocktake/count/${row.id}`}>复盘</Link>
+              : <button className={styles.textButton} onClick={() => setDialog(row)}>查看</button>}</td>
           </tr>)}</tbody>
           {!!result?.total && !!Object.keys(result.totals || {}).length && <tfoot><tr title="全部筛选结果合计"><td /><td>合计</td>{columns.slice(1).map(c => <td key={c.key} className={styles.numeric}>{result.totals?.[c.key] == null ? '' : display(result.totals[c.key], 'number')}</td>)}<td className={styles.operation} /></tr></tfoot>}
         </table></div>

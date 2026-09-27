@@ -151,9 +151,16 @@ export function notifyOrderShipped(
   })
 }
 
-export function notifyReceiptConfirmed(tenantId: string, receiptNo: string, storeName: string, hasLoss: boolean, lossAmount: number) {
+export function notifyReceiptConfirmed(
+  tenantId: string,
+  receiptNo: string,
+  storeName: string,
+  hasLoss: boolean,
+  lossAmount: number,
+  lateReportOverdue = false,
+) {
   const body = hasLoss
-    ? `${storeName} 确认收货 ${receiptNo}，报损 ¥${lossAmount.toLocaleString()}，请24h内处理`
+    ? `${storeName} 确认收货 ${receiptNo}，报损 ¥${lossAmount.toLocaleString()}，${lateReportOverdue ? '该补报已逾期，必须人工审批，不会自动同意' : '请24h内处理'}`
     : `${storeName} 确认收货 ${receiptNo}，无损耗`
   return sendNotification({
     tenantId,

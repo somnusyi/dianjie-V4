@@ -103,8 +103,8 @@ describe('autoDeliverStaleShipments（送达兜底）', () => {
   })
 })
 
-describe('autoReceivePurchaseOrder（自动送达单跳过自动收货）', () => {
-  it('系统自动送达的配送单不自动收货，等待门店人工验收', async () => {
+describe('autoReceivePurchaseOrder（已停用）', () => {
+  it('无论配送单是否人工送达，均不自动收货', async () => {
     P.purchaseOrder.findFirst.mockResolvedValue({
       id: 'po-1',
       tenantId: 'tenant-1',
@@ -124,10 +124,11 @@ describe('autoReceivePurchaseOrder（自动送达单跳过自动收货）', () =
     })
     const result = await autoReceivePurchaseOrder('po-1')
     expect(result).toBeNull()
+    expect(P.purchaseOrder.findFirst).not.toHaveBeenCalled()
     expect(P.$transaction).not.toHaveBeenCalled()
   })
 
-  it('人工点送达的配送单维持原有 24h 自动收货行为（不跳过）', async () => {
+  it('人工点送达也不会绕过停用保护', async () => {
     P.purchaseOrder.findFirst.mockResolvedValue({
       id: 'po-1',
       tenantId: 'tenant-1',
@@ -145,11 +146,8 @@ describe('autoReceivePurchaseOrder（自动送达单跳过自动收货）', () =
         items: [],
       }],
     })
-    // 人工送达的单会进入收货事务路径（本测试仅断言它没被 autoDelivered 拦截）
-    P.$transaction.mockImplementation(async (fn: any) => fn({
-      deliveryOrder: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
-    }))
     await autoReceivePurchaseOrder('po-1')
-    expect(P.$transaction).toHaveBeenCalled()
+    expect(P.purchaseOrder.findFirst).not.toHaveBeenCalled()
+    expect(P.$transaction).not.toHaveBeenCalled()
   })
 })

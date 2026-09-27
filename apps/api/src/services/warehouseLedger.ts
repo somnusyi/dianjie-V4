@@ -857,6 +857,189 @@ export async function postUpstreamReceiptInTransaction(
   return { replayed: false, movements }
 }
 
+export type UpstreamPurchaseReturnPostingLine = {
+  returnLineId: string
+  productId: string
+  productName: string
+  purchaseQuantity: Decimalish
+  purchaseUnit: string
+  conversionFactor: Decimalish
+  inventoryQuantity: Decimalish
+  inventoryUnit: string
+}
+
+export type UpstreamPurchaseReturnPostingInput = {
+  tenantId: string
+  warehouseId: string
+  supplierId: string
+  supplierName: string
+  purchaseReturnId: string
+  purchaseReturnNo: string
+  userId: string
+  effectiveAt: Date
+  lines: UpstreamPurchaseReturnPostingLine[]
+}
+
+/**
+ * 在采购退货审批事务内扣减采购方总仓库存。
+ *
+ * 退货申请和提交阶段不得调用本函数；只有审批通过才产生 PURCHASE_RETURN
+ * 流水。供应商实际收货是后续独立事实，不在这里增加任何 SupplierStock。
+ */
+export async function postUpstreamPurchaseReturnInTransaction(
+  tx: Prisma.TransactionClient,
+  input: UpstreamPurchaseReturnPostingInput,
+) {
+  if (!input.effectiveAt || Number.isNaN(input.effectiveAt.getTime())) throw businessError('采购退货出库时间无效', 400)
+  if (!Array.isArray(input.lines) || input.lines.length === 0 || input.lines.length > 500) {
+    throw businessError('采购退货必须包含 1–500 行商品', 400)
+  }
+  const lineIds = input.lines.map(line => String(line.returnLineId || '').trim())
+  if (lineIds.some(id => !id) || new Set(lineIds).size !== lineIds.length) {
+    throw businessError('采购退货明细标识无效或重复', 400)
+  }
+  const lines = input.lines.map(line => {
+    const purchaseQuantity = quantity(line.purchaseQuantity, `${line.productName}退货数量`)
+    const conversionFactor = quantity(line.conversionFactor, `${line.productName}单位换算系数`)
+    const inventoryQuantity = quantity(line.inventoryQuantity, `${line.productName}库存退货数量`)
+    const expectedInventoryQuantity = purchaseQuantity.mul(conversionFactor).toDecimalPlaces(QTY_DP)
+    if (!inventoryQuantity.equals(expectedInventoryQuantity)) {
+      throw businessError(`${line.productName}冻结换算结果不一致，禁止退货出库`, 409)
+    }
+    return { ...line, purchaseQuantity, conversionFactor, inventoryQuantity }
+  })
+  const requestFingerprint = fingerprint({
+    purchaseReturnId: input.purchaseReturnId,
+    lines: lines.map(line => ({
+      returnLineId: line.returnLineId,
+      productId: line.productId,
+      purchaseQuantity: line.purchaseQuantity.toFixed(QTY_DP),
+      purchaseUnit: line.purchaseUnit,
+      conversionFactor: line.conversionFactor.toFixed(QTY_DP),
+      inventoryQuantity: line.inventoryQuantity.toFixed(QTY_DP),
+      inventoryUnit: line.inventoryUnit,
+    })),
+  })
+  const movementKey = (line: typeof lines[number]) => `purchase-return:${input.purchaseReturnId}:${line.returnLineId}`
+  if (lines.some(line => movementKey(line).length > 160)) throw businessError('采购退货幂等键过长', 400)
+
+  const findReplay = () => tx.warehouseLedgerMovement.findMany({
+    where: {
+      tenantId: input.tenantId,
+      warehouseId: input.warehouseId,
+      sourceType: 'UpstreamPurchaseReturn',
+      sourceId: input.purchaseReturnId,
+    },
+    orderBy: { sourceLineId: 'asc' },
+  })
+  const validateReplay = (rows: Awaited<ReturnType<typeof findReplay>>) => {
+    if (rows.length === 0) return null
+    if (rows.length !== lines.length || rows.some(row => row.requestFingerprint !== requestFingerprint)) {
+      throw businessError('采购退货已经按不同内容出库，禁止重复审批', 409)
+    }
+    return { replayed: true, movements: rows }
+  }
+  const earlyReplay = validateReplay(await findReplay())
+  if (earlyReplay) return earlyReplay
+
+  const balances = await lockBalances(tx, {
+    tenantId: input.tenantId,
+    warehouseId: input.warehouseId,
+    products: lines.map(line => ({ productId: line.productId, inventoryUnit: line.inventoryUnit })),
+  })
+  const concurrentReplay = validateReplay(await findReplay())
+  if (concurrentReplay) return concurrentReplay
+
+  const movements = []
+  for (const line of lines) {
+    const balance = balances.get(line.productId)!
+    const availableQty = balance.physicalQty.minus(balance.reservedQty).toDecimalPlaces(QTY_DP)
+    if (availableQty.lt(line.inventoryQuantity)) {
+      throw businessError(`${line.productName} 可用总仓库存不足，不能审批退货`, 409)
+    }
+    let costOut = line.inventoryQuantity.mul(balance.averageUnitCost).toDecimalPlaces(VALUE_DP)
+    const nextPhysical = balance.physicalQty.minus(line.inventoryQuantity).toDecimalPlaces(QTY_DP)
+    let nextValue = balance.inventoryValue.minus(costOut).toDecimalPlaces(VALUE_DP)
+    if (nextPhysical.isZero()) {
+      costOut = balance.inventoryValue
+      nextValue = ZERO
+    }
+    const nextAverage = nextAverageCost(nextValue, nextPhysical, balance.averageUnitCost)
+    const movement = await tx.warehouseLedgerMovement.create({
+      data: {
+        tenantId: input.tenantId,
+        warehouseId: input.warehouseId,
+        productId: line.productId,
+        type: 'PURCHASE_RETURN',
+        physicalDelta: line.inventoryQuantity.negated(),
+        reservedDelta: ZERO,
+        valueDelta: costOut.negated(),
+        physicalAfter: nextPhysical,
+        reservedAfter: balance.reservedQty,
+        valueAfter: nextValue,
+        averageUnitCostAfter: nextAverage,
+        originalQuantity: line.purchaseQuantity,
+        originalUnit: line.purchaseUnit,
+        conversionFactor: line.conversionFactor,
+        inventoryQuantity: line.inventoryQuantity,
+        inventoryUnit: line.inventoryUnit,
+        inventoryUnitCost: line.inventoryQuantity.gt(0)
+          ? costOut.div(line.inventoryQuantity).toDecimalPlaces(COST_DP)
+          : ZERO,
+        sourceType: 'UpstreamPurchaseReturn',
+        sourceId: input.purchaseReturnId,
+        sourceLineId: line.returnLineId,
+        idempotencyKey: movementKey(line),
+        requestFingerprint,
+        effectiveAt: input.effectiveAt,
+        note: `采购退货 ${input.purchaseReturnNo}`,
+        sourceName: input.supplierName,
+        supplierId: input.supplierId,
+        createdById: input.userId,
+      },
+    })
+    await persistBalance(tx, balance, {
+      physicalQty: nextPhysical,
+      reservedQty: balance.reservedQty,
+      inventoryValue: nextValue,
+      averageUnitCost: nextAverage,
+    })
+    await allocateLotsFefo(tx, {
+      tenantId: input.tenantId,
+      warehouseId: input.warehouseId,
+      productId: line.productId,
+      movementId: movement.id,
+      quantity: line.inventoryQuantity,
+    })
+    await tx.upstreamPurchaseReturnLine.update({
+      where: { id: line.returnLineId },
+      data: { ledgerMovementId: movement.id, ledgerCostAmount: costOut },
+    })
+    await tx.opLog.create({
+      data: {
+        tenantId: input.tenantId,
+        userId: input.userId,
+        action: `采购退货出库 ${line.productName} ${line.purchaseQuantity.toFixed()} ${line.purchaseUnit}`,
+        target: input.purchaseReturnNo,
+        entityType: 'UpstreamPurchaseReturn',
+        targetId: input.purchaseReturnId,
+        metadata: {
+          warehouseId: input.warehouseId,
+          supplierId: input.supplierId,
+          productId: line.productId,
+          returnLineId: line.returnLineId,
+          inventoryQuantity: line.inventoryQuantity.toFixed(QTY_DP),
+          inventoryUnit: line.inventoryUnit,
+          ledgerCostAmount: costOut.toFixed(VALUE_DP),
+          movementId: movement.id,
+        },
+      },
+    })
+    movements.push(movement)
+  }
+  return { replayed: false, movements }
+}
+
 export type UpstreamReceiptReversalInput = {
   tenantId: string
   warehouseId: string

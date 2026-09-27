@@ -598,6 +598,18 @@ export default function DeliveryNotePrintPage() {
     return latest
   }
 
+  async function recordPrintEvents(
+    source: DeliveryNoteDocument,
+  ) {
+    const orderIds = source.members?.length
+      ? source.members.map(member => member.id)
+      : [source.order.id]
+    await apiFetch('/api/orders/print-events', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'BROWSER_PRINT', orderIds }),
+    })
+  }
+
   // 真 PDF 下载 — 用 html2canvas + jspdf, 跨平台 (含 WebView / iOS Capacitor / 鸿蒙 ArkWeb)
   async function exportPDF() {
     if (exporting) return
@@ -858,8 +870,11 @@ export default function DeliveryNotePrintPage() {
   // 系统浏览器打印 (PC) — 在 WebView 里多半无效, 已不推荐
   async function tryPrint() {
     try {
-      await refreshBeforeDocumentAction()
-      if (typeof window.print === 'function') window.print()
+      const latestDocument = await refreshBeforeDocumentAction()
+      if (typeof window.print === 'function') {
+        window.print()
+        await recordPrintEvents(latestDocument)
+      }
       else alert('当前环境不支持系统打印, 请用「下载 PDF」按钮')
     } catch (e: any) {
       alert('打印前刷新失败: ' + (e?.message || e))

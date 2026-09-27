@@ -103,6 +103,7 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
       {result?.note && <p className={styles.note} title={result.note}>{result.note}</p>}
       <div className={styles.toolbar}><div className={styles.actions}>
         {config.id === 'purchase-in' && <Link href="/v2/supply-chain/procurement" className={styles.primary}>采购作业 ↗</Link>}
+        {['count', 'multi-count'].includes(config.id) && <Link href="/v2/supply-chain/stocktake/work" className={styles.primary}>总仓盘点作业 ↗</Link>}
         {['other-in', 'other-out', 'limits'].includes(config.id) && <Link href="/v2/supply-chain/inventory" className={styles.primary}>库存作业 ↗</Link>}
         {['other-in', 'other-out'].includes(config.id) && <Link href="/v2/supply-chain/docs">单据审核 ↗</Link>}
         <button disabled={loading || exporting || !result?.sourceAvailable} onClick={exportList}>{exporting ? '正在导出…' : '导出列表'}</button>
@@ -115,7 +116,7 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
             <td className={styles.check}><input type="checkbox" aria-label={`选择${row.no || row.name}`} checked={selected.includes(String(row.id))} onChange={e => setSelected(old => e.target.checked ? [...old, String(row.id)] : old.filter(v => v !== String(row.id)))} /></td>
             {columns.map(c => <td key={c.key} className={c.kind === 'number' ? styles.numeric : ''} title={row[c.key] == null ? '尚未记录' : String(row[c.key])}>{c.key === 'no' ? <button className={styles.textButton} onClick={() => setDialog(row)}>{row[c.key]}</button> : ['status', 'review'].includes(c.key) && row[c.key] ? <span className={styles.badge}>{row[c.key]}</span> : display(row[c.key], c.kind)}</td>)}
             <td className={styles.operation}>{config.id === 'count' && row.recordType !== 'IMPORTED_BASELINE'
-              ? <Link className={styles.textButton} href={`/v2/supply-chain/stocktake/count/${row.id}`}>复盘</Link>
+              ? <Link className={styles.textButton} href={String(row.id).startsWith('warehouse:') ? `/v2/supply-chain/stocktake/count/${String(row.id).slice(10)}?source=warehouse` : `/v2/supply-chain/stocktake/count/${row.id}`}>复盘</Link>
               : <button className={styles.textButton} onClick={() => setDialog(row)}>查看</button>}</td>
           </tr>)}</tbody>
           {!!result?.total && !!Object.keys(result.totals || {}).length && <tfoot><tr title="全部筛选结果合计"><td /><td>合计</td>{columns.slice(1).map(c => <td key={c.key} className={styles.numeric}>{result.totals?.[c.key] == null ? '' : display(result.totals[c.key], 'number')}</td>)}<td className={styles.operation} /></tr></tfoot>}

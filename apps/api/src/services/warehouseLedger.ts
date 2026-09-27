@@ -114,6 +114,7 @@ type LockedBalance = {
   reservedQty: Prisma.Decimal
   inventoryValue: Prisma.Decimal
   averageUnitCost: Prisma.Decimal
+  rowVersion: number
 }
 
 export type FrozenOrderInventoryLine = {
@@ -316,7 +317,7 @@ async function lockBalances(
   if (productIds.length === 0) return new Map<string, LockedBalance>()
   const rows = await tx.$queryRaw<LockedBalance[]>(Prisma.sql`
     SELECT "id", "productId", "inventoryUnit", "physicalQty", "reservedQty",
-           "inventoryValue", "averageUnitCost"
+           "inventoryValue", "averageUnitCost", "rowVersion"
     FROM "warehouse_ledger_balances"
     WHERE "tenantId" = ${input.tenantId}
       AND "warehouseId" = ${input.warehouseId}
@@ -1779,6 +1780,153 @@ export type WarehousePhysicalCountInput = {
   effectiveAt: Date
   idempotencyKey: string
   note?: string | null
+}
+
+export type WarehouseStocktakeDifferenceInput = {
+  tenantId: string
+  warehouseId: string
+  stocktakeId: string
+  stocktakeItemId: string
+  userId: string
+  productId: string
+  productName: string
+  inventoryUnit: string
+  expectedBookVersion: number
+  differenceQuantity: Decimalish
+  unitCost: Decimalish
+  effectiveAt: Date
+  reason: string
+}
+
+/**
+ * Post one reviewed stocktake difference inside the caller's serializable
+ * transaction. Unlike the legacy absolute physical-count helper, this keeps
+ * every unaffected lot intact: losses consume FEFO lots and profits create one
+ * adjustment lot for the positive delta only.
+ */
+export async function postWarehouseStocktakeDifference(
+  tx: Prisma.TransactionClient,
+  input: WarehouseStocktakeDifferenceInput,
+) {
+  const differenceQuantity = decimal(input.differenceQuantity, '盘点差异数量').toDecimalPlaces(QTY_DP)
+  if (differenceQuantity.isZero()) throw businessError('零差异不得生成台账流水', 400)
+  const unitCost = decimal(input.unitCost, '盘点单位成本').toDecimalPlaces(COST_DP)
+  if (unitCost.lt(0) || (differenceQuantity.gt(0) && unitCost.lte(0))) {
+    throw businessError('盘盈商品必须有大于0的单位成本', 400)
+  }
+  const idempotencyKey = `warehouse-stocktake:${input.stocktakeItemId}`
+  const requestFingerprint = fingerprint({
+    stocktakeId: input.stocktakeId,
+    stocktakeItemId: input.stocktakeItemId,
+    productId: input.productId,
+    differenceQuantity: differenceQuantity.toFixed(QTY_DP),
+    unitCost: unitCost.toFixed(COST_DP),
+  })
+  const replayWhere = {
+    tenantId_warehouseId_idempotencyKey: {
+      tenantId: input.tenantId,
+      warehouseId: input.warehouseId,
+      idempotencyKey,
+    },
+  }
+  const replay = await tx.warehouseLedgerMovement.findUnique({ where: replayWhere })
+  if (replay) {
+    if (replay.requestFingerprint !== requestFingerprint) throw businessError('盘点幂等键与已过账内容不一致', 409)
+    return { replayed: true, movement: replay }
+  }
+
+  const balances = await lockBalances(tx, {
+    tenantId: input.tenantId,
+    warehouseId: input.warehouseId,
+    products: [{ productId: input.productId, inventoryUnit: input.inventoryUnit }],
+  })
+  const balance = balances.get(input.productId)!
+  if (balance.rowVersion !== input.expectedBookVersion) {
+    throw businessError(`盘点期间「${input.productName}」库存已变动，请退回并重新发起`, 409)
+  }
+
+  const quantityAbs = differenceQuantity.abs().toDecimalPlaces(QTY_DP)
+  const isProfit = differenceQuantity.gt(0)
+  const nextPhysical = balance.physicalQty.plus(differenceQuantity).toDecimalPlaces(QTY_DP)
+  if (nextPhysical.lt(balance.reservedQty)) throw businessError(`「${input.productName}」实盘数量低于活动预占`, 409)
+  if (nextPhysical.lt(0)) throw businessError(`「${input.productName}」盘亏数量超过账面库存`, 409)
+  let valueDelta = quantityAbs.mul(unitCost).toDecimalPlaces(VALUE_DP)
+  if (!isProfit) valueDelta = valueDelta.negated()
+  let nextValue = balance.inventoryValue.plus(valueDelta).toDecimalPlaces(VALUE_DP)
+  if (!isProfit && nextPhysical.isZero()) {
+    valueDelta = balance.inventoryValue.negated()
+    nextValue = ZERO
+  }
+  if (nextValue.lt(0)) throw businessError(`「${input.productName}」盘亏成本超过账面库存金额`, 409)
+  const nextAverage = nextAverageCost(nextValue, nextPhysical, unitCost)
+  const movement = await tx.warehouseLedgerMovement.create({
+    data: {
+      tenantId: input.tenantId,
+      warehouseId: input.warehouseId,
+      productId: input.productId,
+      type: isProfit ? 'ADJUSTMENT' : 'LOSS',
+      physicalDelta: differenceQuantity,
+      reservedDelta: ZERO,
+      valueDelta,
+      physicalAfter: nextPhysical,
+      reservedAfter: balance.reservedQty,
+      valueAfter: nextValue,
+      averageUnitCostAfter: nextAverage,
+      originalQuantity: quantityAbs,
+      originalUnit: input.inventoryUnit,
+      conversionFactor: new Prisma.Decimal(1),
+      inventoryQuantity: quantityAbs,
+      inventoryUnit: input.inventoryUnit,
+      inventoryUnitCost: unitCost,
+      sourceType: 'WarehouseStocktake',
+      sourceId: input.stocktakeId,
+      sourceLineId: input.stocktakeItemId,
+      idempotencyKey,
+      requestFingerprint,
+      effectiveAt: input.effectiveAt,
+      note: input.reason,
+      createdById: input.userId,
+    },
+  })
+  await persistBalance(tx, balance, {
+    physicalQty: nextPhysical,
+    reservedQty: balance.reservedQty,
+    inventoryValue: nextValue,
+    averageUnitCost: nextAverage,
+  })
+  if (isProfit) {
+    await tx.warehouseLedgerLot.create({
+      data: {
+        tenantId: input.tenantId,
+        warehouseId: input.warehouseId,
+        productId: input.productId,
+        kind: 'ADJUSTMENT',
+        batchNo: `ST-${input.effectiveAt.toISOString().slice(0, 10).replaceAll('-', '')}-${movement.id.slice(-8)}`,
+        initialQty: quantityAbs,
+        remainingQty: quantityAbs,
+        inventoryUnit: input.inventoryUnit,
+        inventoryUnitCost: unitCost,
+        sourceName: '总仓盘盈',
+        sourceMovementId: movement.id,
+      },
+    })
+  } else {
+    const allocated = await allocateLotsFefo(tx, {
+      tenantId: input.tenantId,
+      warehouseId: input.warehouseId,
+      productId: input.productId,
+      movementId: movement.id,
+      quantity: quantityAbs,
+    })
+    if (!allocated.eq(quantityAbs)) throw businessError(`「${input.productName}」可追溯批次数量不足，不能审核盘亏`, 409)
+  }
+  await applyMarkupReprice(tx, {
+    tenantId: input.tenantId,
+    productId: input.productId,
+    averageUnitCost: nextAverage,
+    trigger: { type: 'WarehouseStocktake', id: movement.id },
+  })
+  return { replayed: false, movement }
 }
 
 /**

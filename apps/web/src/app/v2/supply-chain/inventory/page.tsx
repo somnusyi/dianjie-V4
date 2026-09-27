@@ -951,8 +951,7 @@ export default function InternalSupplyChainInventoryPage() {
           <button type="button" onClick={resetFilters} className="h-10 rounded-cta border border-border bg-white px-4 text-button text-gray2">重置</button>
           <button onClick={exportInventory} disabled={exporting} className="h-10 rounded-cta border border-border bg-white px-4 text-button text-gray2 disabled:opacity-40">{exporting ? '导出中…' : '导出 Excel'}</button>
           {scope === 'stock' && <>
-            <button onClick={openCount} className="h-10 rounded-cta border border-accent bg-white px-4 text-button text-accent">单SKU实盘校准</button>
-            {data?.summary.inventoryMode === 'SHADOW' && <button onClick={reconcileShadow} disabled={submitting} className="h-10 rounded-cta border border-border bg-white px-4 text-button text-gray2 disabled:opacity-40">补记影子差异</button>}
+            <a href="/v2/supply-chain/stocktake/work" className="flex h-10 items-center rounded-cta border border-accent bg-white px-4 text-button text-accent">总仓多人盘点</a>
             <button onClick={openInbound} className="h-10 rounded-cta border border-accent bg-white px-4 text-button text-accent">单条入库</button>
             <button onClick={openBatchInbound} className="h-10 rounded-cta bg-accent px-4 text-button text-white">+ 批量入库</button>
           </>}

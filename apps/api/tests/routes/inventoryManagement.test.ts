@@ -23,6 +23,8 @@ beforeEach(() => {
     warehouse: { findMany: vi.fn(async () => [{ id: 'wh', name: '总仓' }]) },
     user: { findMany: vi.fn(async () => [{ id: 'u', name: '测试员' }]) },
     upstreamReceipt: { findMany: vi.fn(async () => []) }, inventoryCount: { findMany: vi.fn(async () => []) },
+    warehouseStocktake: { findMany: vi.fn(async () => []) },
+    warehouseStocktakeAdjustment: { findMany: vi.fn(async () => []) },
     upstreamPurchaseReturn: { findMany: vi.fn(async () => []) },
     warehouseLedgerBalance: { findMany: vi.fn(async () => []) }, warehouseLedgerMovement: { findMany: vi.fn(async () => []) },
   }
@@ -43,7 +45,7 @@ describe('管理表格读取接口', () => {
   })
   it.each(managementPages.map(p => p.id))('%s 返回预期状态，所有根业务查询都携带租户', async id => {
     expect((await get(id)).statusCode).toBe(200)
-    for (const model of ['warehouseDoc', 'warehouse', 'user', 'upstreamReceipt', 'upstreamPurchaseReturn', 'inventoryCount', 'warehouseLedgerBalance', 'warehouseLedgerMovement']) for (const [args] of fixture.tx[model].findMany.mock.calls) expect(args.where.tenantId).toBe('one')
+    for (const model of ['warehouseDoc', 'warehouse', 'user', 'upstreamReceipt', 'upstreamPurchaseReturn', 'inventoryCount', 'warehouseStocktake', 'warehouseStocktakeAdjustment', 'warehouseLedgerBalance', 'warehouseLedgerMovement']) for (const [args] of fixture.tx[model].findMany.mock.calls) expect(args.where.tenantId).toBe('one')
   })
   it('筛选使用完整结果后再分页；导出包括所有匹配结果', async () => {
     const page = (await get('other-in', { pageSize: '1', page: '2' })).json()
@@ -69,10 +71,10 @@ describe('管理表格读取接口', () => {
     expect(fixture.tx.upstreamReceipt.findMany.mock.calls[0][0].where.createdAt.gte).toEqual(new Date('2026-08-31T16:00:00Z'))
     for (const q of [{ start: '2026-02-30' }, { start: '2026-09-02', end: '2026-09-01' }, { filters: 'invalid' }, { filters: '{"unknown":"x"}' }, { pageSize: '1000' }]) expect((await get('other-in', q)).statusCode).toBe(400)
   })
-  it('缺少独立单据来源时明确返回不可用，并拒绝导出', async () => {
+  it('多人盘点、盘盈和盘亏已接入独立单据来源', async () => {
     for (const id of ['multi-count', 'profit', 'loss']) {
-      expect((await get(id)).json()).toMatchObject({ sourceAvailable: false, total: 0, rows: [] })
-      expect((await get(id, { export: '1' })).statusCode).toBe(422)
+      expect((await get(id)).json()).toMatchObject({ sourceAvailable: true, total: 0, rows: [] })
+      expect((await get(id, { export: '1' })).statusCode).toBe(200)
     }
   })
   it('大结果显式报错，不能悄悄截断列表或导出', async () => {

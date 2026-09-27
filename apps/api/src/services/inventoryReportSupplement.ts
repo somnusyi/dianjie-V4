@@ -12,7 +12,7 @@ const bounds = <T>(rows: T[]) => {
 }
 const base = (p: any, w: any, unit: string): ReportRow => ({ productId: p.id, code: p.code, name: p.name, spec: p.spec, category: p.category, unit, baseUnit: unit, org: '总部', orgCode: null, warehouse: w.name, warehouseId: w.id })
 const labels: Record<string, string> = { MANUAL_INBOUND: '手工入库', ORDER_OUTBOUND: '出库', ADJUSTMENT: '库存调整', LOSS: '报损', REVERSAL: '冲销' }
-const otherSources = ['WarehouseManualInbound', 'WarehouseBatchManualInbound', 'WarehouseManualOutbound', 'WarehousePhysicalCount', 'WarehouseManualInboundReversal', 'WarehouseDocValueAdjust', 'LossClaimReversal']
+const otherSources = ['WarehouseManualInbound', 'WarehouseBatchManualInbound', 'WarehouseManualOutbound', 'WarehousePhysicalCount', 'WarehouseStocktake', 'WarehouseManualInboundReversal', 'WarehouseDocValueAdjust', 'LossClaimReversal']
 
 export function daysWithoutOutbound(now: Date, lastOutbound?: Date | null, firstInbound?: Date | null) {
   const reference = lastOutbound || firstInbound

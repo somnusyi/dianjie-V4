@@ -90,6 +90,12 @@ model Tenant {
   supplierStockReservations            SupplierStockReservation[]
   inventorySnapshots                   InventorySnapshot[]
   inventoryCounts                      InventoryCount[]
+  warehouseStocktakes                  WarehouseStocktake[]
+  warehouseStocktakeItems              WarehouseStocktakeItem[]
+  warehouseStocktakeSections           WarehouseStocktakeSection[]
+  warehouseStocktakeEntries            WarehouseStocktakeEntry[]
+  warehouseStocktakeAdjustments        WarehouseStocktakeAdjustment[]
+  warehouseStocktakeAdjustmentLines    WarehouseStocktakeAdjustmentLine[]
   accountingPeriods                    AccountingPeriod[]
   pettyCash                            PettyCash[]
   payrolls                             Payroll[]
@@ -144,6 +150,7 @@ model Warehouse {
   upstreamShipments             UpstreamShipment[]
   upstreamReceipts              UpstreamReceipt[]
   upstreamPurchaseReturns       UpstreamPurchaseReturn[]
+  stocktakes                    WarehouseStocktake[]
 
   @@unique([tenantId, code])
   @@unique([tenantId, id])
@@ -265,6 +272,7 @@ model WarehouseLedgerMovement {
   upstreamReceiptLine        UpstreamReceiptLine?           @relation("UpstreamReceiptLedgerMovement")
   upstreamClaimLossLine      UpstreamArrivalClaimLine?      @relation("UpstreamClaimLossLedgerMovement")
   upstreamPurchaseReturnLine UpstreamPurchaseReturnLine?    @relation("UpstreamPurchaseReturnLedgerMovement")
+  stocktakeAdjustmentLine    WarehouseStocktakeAdjustmentLine? @relation("WarehouseStocktakeAdjustmentMovement")
 
   @@unique([tenantId, warehouseId, idempotencyKey])
   @@index([tenantId, warehouseId, productId, effectiveAt])
@@ -678,6 +686,11 @@ model User {
   submittedInventoryCounts      InventoryCount[]        @relation("InventoryCountSubmittedBy")
   confirmedInventoryCounts      InventoryCount[]        @relation("InventoryCountConfirmedBy")
   reversedInventoryCounts       InventoryCount[]        @relation("InventoryCountReversedBy")
+  createdWarehouseStocktakes    WarehouseStocktake[]     @relation("WarehouseStocktakeCreatedBy")
+  submittedWarehouseStocktakes  WarehouseStocktake[]     @relation("WarehouseStocktakeSubmittedBy")
+  reviewedWarehouseStocktakes   WarehouseStocktake[]     @relation("WarehouseStocktakeReviewedBy")
+  assignedStocktakeSections     WarehouseStocktakeSection[] @relation("WarehouseStocktakeSectionAssignee")
+  stocktakeEntries              WarehouseStocktakeEntry[] @relation("WarehouseStocktakeEntryActor")
   confirmedMonthlyCloses        StoreMonthlyClose[]     @relation("StoreMonthlyCloseConfirmedBy")
   feedbacks                     Feedback[]              @relation("FeedbackReporter")
   decidedFeedbacks              Feedback[]              @relation("FeedbackDecisionBy")
@@ -687,6 +700,7 @@ model User {
   @@unique([tenantId, email])
   @@unique([tenantId, phone])
   @@unique([tenantId, wecomUserId])
+  @@unique([tenantId, id])
   @@map("users")
 }
 
@@ -1440,6 +1454,8 @@ model Product {
   dishBomItems                  DishBomItem[]
   inventorySnapshotItems        InventorySnapshotItem[]
   inventoryCountItems           InventoryCountItem[]
+  warehouseStocktakeItems       WarehouseStocktakeItem[]
+  warehouseStocktakeAdjustmentLines WarehouseStocktakeAdjustmentLine[]
   storeInventoryPolicies        StoreInventoryPolicy[]
   upstreamSources               ProductUpstreamSource[]
   upstreamContractLines         UpstreamSupplierContractLine[]
@@ -3929,6 +3945,204 @@ model InventoryCountItem {
   @@index([inventoryCountId, sortOrder])
   @@index([productId])
   @@map("inventory_count_items")
+}
+
+enum WarehouseStocktakeStatus {
+  DRAFT
+  COUNTING
+  REVIEWING
+  CONFIRMED
+  CANCELLED
+}
+
+enum WarehouseStocktakeSectionStatus {
+  OPEN
+  SUBMITTED
+}
+
+enum WarehouseStocktakeAdjustmentType {
+  PROFIT
+  LOSS
+}
+
+// 总仓供应链盘点：与门店 InventoryCount 完全隔离，审核后才一次性过账。
+model WarehouseStocktake {
+  id                   String                   @id @default(cuid()) @db.VarChar(64)
+  tenantId             String
+  warehouseId          String                   @db.VarChar(64)
+  no                   String                   @db.VarChar(40)
+  countDate            DateTime                 @db.Date
+  status               WarehouseStocktakeStatus @default(DRAFT)
+  rowVersion           Int                      @default(0)
+  itemCount            Int                      @default(0)
+  countedCount         Int                      @default(0)
+  differenceCount      Int                      @default(0)
+  totalBookValue       Decimal                  @default(0) @db.Decimal(20, 4)
+  totalCountedValue    Decimal                  @default(0) @db.Decimal(20, 4)
+  totalDifferenceValue Decimal                  @default(0) @db.Decimal(20, 4)
+  note                 String?                  @db.VarChar(500)
+  reviewNote           String?                  @db.VarChar(500)
+  requestKey           String                   @db.VarChar(160)
+  createdById          String
+  submittedById        String?
+  reviewedById         String?
+  submittedAt          DateTime?
+  reviewedAt           DateTime?
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+
+  tenant      Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse   Warehouse                      @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  createdBy   User                           @relation("WarehouseStocktakeCreatedBy", fields: [tenantId, createdById], references: [tenantId, id], onDelete: Restrict)
+  submittedBy User?                          @relation("WarehouseStocktakeSubmittedBy", fields: [tenantId, submittedById], references: [tenantId, id], onDelete: Restrict)
+  reviewedBy  User?                          @relation("WarehouseStocktakeReviewedBy", fields: [tenantId, reviewedById], references: [tenantId, id], onDelete: Restrict)
+  sections    WarehouseStocktakeSection[]
+  items       WarehouseStocktakeItem[]
+  entries     WarehouseStocktakeEntry[]
+  adjustments WarehouseStocktakeAdjustment[]
+
+  @@unique([tenantId, no])
+  @@unique([tenantId, id])
+  @@unique([tenantId, requestKey])
+  @@index([tenantId, warehouseId, status, countDate])
+  @@map("warehouse_stocktakes")
+}
+
+model WarehouseStocktakeSection {
+  id           String                          @id @default(cuid()) @db.VarChar(64)
+  tenantId     String
+  stocktakeId  String                          @db.VarChar(64)
+  name         String                          @db.VarChar(120)
+  assignedToId String
+  status       WarehouseStocktakeSectionStatus @default(OPEN)
+  rowVersion   Int                             @default(0)
+  submittedAt  DateTime?
+  createdAt    DateTime                        @default(now())
+  updatedAt    DateTime                        @updatedAt
+
+  tenant     Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stocktake  WarehouseStocktake  @relation(fields: [tenantId, stocktakeId], references: [tenantId, id], onDelete: Cascade)
+  assignedTo User                @relation("WarehouseStocktakeSectionAssignee", fields: [tenantId, assignedToId], references: [tenantId, id], onDelete: Restrict)
+  items      WarehouseStocktakeItem[]
+  entries    WarehouseStocktakeEntry[]
+
+  @@unique([stocktakeId, name])
+  @@unique([tenantId, id])
+  @@unique([tenantId, stocktakeId, id])
+  @@index([tenantId, assignedToId, status])
+  @@map("warehouse_stocktake_sections")
+}
+
+model WarehouseStocktakeItem {
+  id                  String    @id @default(cuid()) @db.VarChar(64)
+  tenantId            String
+  stocktakeId         String    @db.VarChar(64)
+  sectionId           String    @db.VarChar(64)
+  productId           String
+  productCodeSnapshot String    @db.VarChar(80)
+  productNameSnapshot String    @db.VarChar(160)
+  productSpecSnapshot String?   @db.VarChar(240)
+  categorySnapshot    String?   @db.VarChar(120)
+  inventoryUnit       String    @db.VarChar(16)
+  bookQuantity        Decimal   @db.Decimal(18, 6)
+  bookValue           Decimal   @db.Decimal(20, 4)
+  averageUnitCost     Decimal   @db.Decimal(18, 6)
+  bookBalanceVersion  Int
+  countedUnitCost     Decimal?  @db.Decimal(18, 6)
+  countedQuantity     Decimal?  @db.Decimal(18, 6)
+  countedValue        Decimal?  @db.Decimal(20, 4)
+  differenceQuantity  Decimal?  @db.Decimal(18, 6)
+  differenceValue     Decimal?  @db.Decimal(20, 4)
+  reason              String?   @db.VarChar(240)
+  sortOrder           Int
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  tenant          Tenant                            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stocktake       WarehouseStocktake                @relation(fields: [tenantId, stocktakeId], references: [tenantId, id], onDelete: Cascade)
+  section         WarehouseStocktakeSection         @relation(fields: [tenantId, stocktakeId, sectionId], references: [tenantId, stocktakeId, id], onDelete: Restrict)
+  product         Product                           @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  entry           WarehouseStocktakeEntry?
+  adjustmentLines WarehouseStocktakeAdjustmentLine[]
+
+  @@unique([stocktakeId, productId])
+  @@unique([tenantId, id])
+  @@unique([tenantId, stocktakeId, id])
+  @@index([sectionId, sortOrder])
+  @@index([tenantId, productId])
+  @@map("warehouse_stocktake_items")
+}
+
+model WarehouseStocktakeEntry {
+  id              String   @id @default(cuid()) @db.VarChar(64)
+  tenantId        String
+  stocktakeId     String   @db.VarChar(64)
+  sectionId       String   @db.VarChar(64)
+  stocktakeItemId String   @unique @db.VarChar(64)
+  enteredById     String
+  countedQuantity Decimal  @db.Decimal(18, 6)
+  countedUnitCost Decimal  @db.Decimal(18, 6)
+  note            String?  @db.VarChar(240)
+  rowVersion      Int      @default(0)
+  savedAt         DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant    Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stocktake WarehouseStocktake        @relation(fields: [tenantId, stocktakeId], references: [tenantId, id], onDelete: Cascade)
+  section   WarehouseStocktakeSection @relation(fields: [tenantId, stocktakeId, sectionId], references: [tenantId, stocktakeId, id], onDelete: Cascade)
+  item      WarehouseStocktakeItem    @relation(fields: [tenantId, stocktakeId, stocktakeItemId], references: [tenantId, stocktakeId, id], onDelete: Cascade)
+  enteredBy User                      @relation("WarehouseStocktakeEntryActor", fields: [tenantId, enteredById], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId, enteredById, savedAt])
+  @@index([stocktakeId, sectionId])
+  @@unique([tenantId, stocktakeItemId])
+  @@unique([tenantId, stocktakeId, stocktakeItemId])
+  @@map("warehouse_stocktake_entries")
+}
+
+model WarehouseStocktakeAdjustment {
+  id          String                           @id @default(cuid()) @db.VarChar(64)
+  tenantId    String
+  stocktakeId String                           @db.VarChar(64)
+  no          String                           @db.VarChar(40)
+  type        WarehouseStocktakeAdjustmentType
+  itemCount   Int                              @default(0)
+  totalAmount Decimal                          @default(0) @db.Decimal(20, 4)
+  createdAt   DateTime                         @default(now())
+
+  tenant    Tenant                             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stocktake WarehouseStocktake                 @relation(fields: [tenantId, stocktakeId], references: [tenantId, id], onDelete: Restrict)
+  lines     WarehouseStocktakeAdjustmentLine[]
+
+  @@unique([tenantId, no])
+  @@unique([tenantId, id])
+  @@unique([stocktakeId, type])
+  @@index([tenantId, type, createdAt])
+  @@map("warehouse_stocktake_adjustments")
+}
+
+model WarehouseStocktakeAdjustmentLine {
+  id               String   @id @default(cuid()) @db.VarChar(64)
+  tenantId         String
+  adjustmentId     String   @db.VarChar(64)
+  stocktakeItemId  String   @db.VarChar(64)
+  productId        String
+  quantity         Decimal  @db.Decimal(18, 6)
+  inventoryUnit    String   @db.VarChar(16)
+  unitCost         Decimal  @db.Decimal(18, 6)
+  amount           Decimal  @db.Decimal(20, 4)
+  movementId       String?  @unique @db.VarChar(64)
+  createdAt        DateTime @default(now())
+
+  tenant        Tenant                           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  adjustment    WarehouseStocktakeAdjustment     @relation(fields: [tenantId, adjustmentId], references: [tenantId, id], onDelete: Cascade)
+  stocktakeItem WarehouseStocktakeItem           @relation(fields: [tenantId, stocktakeItemId], references: [tenantId, id], onDelete: Restrict)
+  product       Product                          @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  movement      WarehouseLedgerMovement?         @relation("WarehouseStocktakeAdjustmentMovement", fields: [movementId], references: [id], onDelete: Restrict)
+
+  @@unique([adjustmentId, stocktakeItemId])
+  @@index([tenantId, productId])
+  @@map("warehouse_stocktake_adjustment_lines")
 }
 
 // ── 门店费用录入（利润表用）────────────────────────

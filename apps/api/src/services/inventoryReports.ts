@@ -33,7 +33,7 @@ export const reportQuerySchema = z.object({
 }).refine(q => q.start <= q.end, '开始日期不能晚于结束日期')
 export type ReportQuery = z.infer<typeof reportQuerySchema>
 export const movementLabels: Record<string, string> = { OPENING_BALANCE: '期初建账', MANUAL_INBOUND: '手工入库', UPSTREAM_RECEIPT: '采购入库', ORDER_OUTBOUND: '出库', ADJUSTMENT: '库存调整', LOSS: '报损', REVERSAL: '冲销' }
-const sourceLabels: Record<string, string> = { WarehouseManualInbound: '手工入库单', WarehouseBatchManualInbound: '批量入库单', WarehouseManualOutbound: '手工出库单', WarehousePhysicalCount: '库存盘点单', WarehouseManualInboundReversal: '入库冲销单', WarehouseDocValueAdjust: '单据金额调整', MeituanDailyPackage: '每日采购数据包', UpstreamReceiptReversal: '采购收货冲销', UpstreamArrivalClaim: '采购到货差异', LossClaimReversal: '报损冲销', DeliveryOrderShipCancel: '配送撤销', ReceiptRejectionReversal: '拒收冲销' }
+const sourceLabels: Record<string, string> = { WarehouseManualInbound: '手工入库单', WarehouseBatchManualInbound: '批量入库单', WarehouseManualOutbound: '手工出库单', WarehousePhysicalCount: '库存盘点单', WarehouseStocktake: '总仓盘点单', WarehouseManualInboundReversal: '入库冲销单', WarehouseDocValueAdjust: '单据金额调整', MeituanDailyPackage: '每日采购数据包', UpstreamReceiptReversal: '采购收货冲销', UpstreamArrivalClaim: '采购到货差异', LossClaimReversal: '报损冲销', DeliveryOrderShipCancel: '配送撤销', ReceiptRejectionReversal: '拒收冲销' }
 const dec = (n: any) => new Prisma.Decimal(n ?? 0)
 const num = (n: any) => Number(n ?? 0)
 const LIMIT = 20000

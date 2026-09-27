@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { createPortal, flushSync } from 'react-dom'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import { useSearchParams } from 'next/navigation'
 
 type CountItem = {
   id: string
@@ -89,6 +90,8 @@ function PrintPage({ count, scope, rows, continuation = false, emptyText }: { co
 }
 
 export default function StocktakeReviewPrintPage({ params }: { params: { id: string } }) {
+  const searchParams = useSearchParams()
+  const warehouseSource = searchParams?.get('source') === 'warehouse'
   const [count, setCount] = useState<Count | null>(null)
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
@@ -105,11 +108,11 @@ export default function StocktakeReviewPrintPage({ params }: { params: { id: str
     let current = true
     setCount(null)
     setError('')
-    apiFetch<Count>(`/api/inventory-counts/${params.id}`)
+    apiFetch<Count>(warehouseSource ? `/api/warehouse-stocktakes/${params.id}/review` : `/api/inventory-counts/${params.id}`)
       .then(next => { if (current) setCount(next) })
       .catch(nextError => { if (current) setError(nextError.message || '盘点单加载失败') })
     return () => { current = false }
-  }, [params.id])
+  }, [params.id, warehouseSource])
 
   const items = useMemo(() => (count?.items || []).filter(item => {
     const text = `${item.productCodeSnapshot || ''} ${item.productNameSnapshot || ''} ${item.productSpecSnapshot || ''}`.toLowerCase()

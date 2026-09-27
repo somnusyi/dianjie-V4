@@ -23,11 +23,7 @@ function bounded<T>(rows: T[], max = 10000): T[] {
   if (rows.length > max) throw Object.assign(new Error('记录过多，请缩小日期、仓库或物品范围后查询。'), { statusCode: 422 })
   return rows
 }
-const absentSources: Record<string, string> = {
-  'multi-count': '当前系统尚未建立多人盘点单，普通盘点记录仍在“盘点单”中查看。',
-  profit: '当前系统尚未生成独立盘盈单，盘点盈亏金额可在“盘点单”中查看。',
-  loss: '当前系统尚未生成独立盘亏单，盘点盈亏金额可在“盘点单”中查看。',
-}
+const absentSources: Record<string, string> = {}
 const optionFields = new Set(['org', 'warehouse', 'supplier', 'status', 'review', 'printed', 'difference', 'generated', 'reconciliation', 'invoice', 'stockStatus', 'category', 'countType', 'reason', 'supplierAccount'])
 
 export async function loadInventoryManagement(tx: Prisma.TransactionClient, tenantId: string, id: string, q: Query) {
@@ -184,21 +180,60 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
     })
     note = '数据来自独立采购退货单：创建和提交不动库存，已审核单据日期取实际出库日期，未审核单据日期取创建日期；供应商实收仅更新退货状态，不重复增加任何仓库库存。上游单据号取原采购收货单。'
   } else if (id === 'count') {
-    supportedFilters.delete('warehouse'); supportedFilters.add('difference')
-    const counts = bounded(await tx.inventoryCount.findMany({
+    supportedFilters.add('warehouse'); supportedFilters.add('difference')
+    const [counts, warehouseCounts] = await Promise.all([tx.inventoryCount.findMany({
       where: { tenantId, store: { tenantId }, ...dateRange('countDate'),
         ...(q.filters.item ? { items: { some: { productNameSnapshot: { contains: q.filters.item, mode: 'insensitive' } } } } : {}),
       }, include: { store: { select: { name: true } } }, orderBy: [{ countDate: 'desc' }, { id: 'desc' }], take: 10001,
-    }))
-    const users = await tx.user.findMany({ where: { tenantId, id: { in: counts.map(c => c.createdById) } }, select: { id: true, name: true } })
+    }), tx.warehouseStocktake.findMany({
+      where: { tenantId, ...dateRange('countDate'),
+        ...(q.filters.warehouse ? { warehouse: { name: { contains: q.filters.warehouse, mode: 'insensitive' } } } : {}),
+        ...(q.filters.item ? { items: { some: { productNameSnapshot: { contains: q.filters.item, mode: 'insensitive' } } } } : {}),
+      }, include: { warehouse: { select: { name: true } } }, orderBy: [{ countDate: 'desc' }, { id: 'desc' }], take: 10001,
+    })])
+    bounded(counts); bounded(warehouseCounts)
+    const users = await tx.user.findMany({ where: { tenantId, id: { in: [...counts.map(c => c.createdById), ...warehouseCounts.map(c => c.createdById)] } }, select: { id: true, name: true } })
     const names = new Map(users.map(u => [u.id, u.name]))
     const statuses = { DRAFT: '草稿', COUNTING: '盘点中', REVIEWING: '待审核', CONFIRMED: '已审核', CANCELLED: '已取消', REVERSED: '已冲销' }
-    rows = counts.map(c => ({ id: c.id, no: c.no, date: c.countDate.toISOString().slice(0, 10), org: c.store.name, itemCount: c.itemCount,
+    rows = [...counts.map(c => ({ id: c.id, no: c.no, date: c.countDate.toISOString().slice(0, 10), org: c.store.name, warehouse: null, itemCount: c.itemCount,
       bookAmount: Number(c.totalBookValue), actualAmount: Number(c.totalCountedValue), differenceAmount: Number(c.totalDifferenceValue),
-      status: statuses[c.status], difference: c.countedCount < c.itemCount ? '未盘完' : c.differenceCount ? '有差异' : '无差异',
+      countType: '门店盘点', countMethod: '单人/门店', status: statuses[c.status], difference: c.countedCount < c.itemCount ? '未盘完' : c.differenceCount ? '有差异' : '无差异',
       auditedAt: day(c.confirmedAt), createdAt: timestamp(c.createdAt), creator: names.get(c.createdById) ?? null, note: c.note,
+    })), ...warehouseCounts.map(c => ({ id: `warehouse:${c.id}`, no: c.no, date: c.countDate.toISOString().slice(0, 10), org, warehouse: c.warehouse.name, itemCount: c.itemCount,
+      bookAmount: Number(c.totalBookValue), actualAmount: Number(c.totalCountedValue), differenceAmount: Number(c.totalDifferenceValue),
+      countType: '总仓盘点', countMethod: '多人分区', status: statuses[c.status], difference: c.countedCount < c.itemCount ? '未盘完' : c.differenceCount ? '有差异' : '无差异',
+      auditedAt: day(c.reviewedAt), createdAt: timestamp(c.createdAt), creator: names.get(c.createdById) ?? null, note: c.note,
+    }))]
+    note = '门店盘点与总仓供应链多人分区盘点同表展示，并以盘点类型区分数据来源。'
+  } else if (id === 'multi-count') {
+    supportedFilters.add('generated')
+    const counts = bounded(await tx.warehouseStocktake.findMany({
+      where: { tenantId, ...dateRange('countDate'),
+        ...(q.filters.warehouse ? { warehouse: { name: { contains: q.filters.warehouse, mode: 'insensitive' } } } : {}),
+        ...(q.filters.item ? { items: { some: { productNameSnapshot: { contains: q.filters.item, mode: 'insensitive' } } } } : {}),
+      }, include: { warehouse: { select: { name: true } }, createdBy: { select: { name: true } }, sections: { select: { id: true } } },
+      orderBy: [{ countDate: 'desc' }, { id: 'desc' }], take: 10001,
     }))
-    note = '数据来自现有门店盘点单。仓库、盘点类型、盘点方式、打印状态和盘点方案未记录，显示“—”；未盘完的金额为当前已录入金额。'
+    const statuses = { DRAFT: '草稿', COUNTING: '盘点中', REVIEWING: '待审核', CONFIRMED: '已审核', CANCELLED: '已取消' }
+    rows = counts.map(c => ({ id: c.id, no: c.no, date: c.countDate.toISOString().slice(0, 10), org, warehouse: c.warehouse.name,
+      itemCount: c.itemCount, status: statuses[c.status], auditedAt: day(c.reviewedAt), generated: c.status === 'CONFIRMED' ? '是' : '否',
+      createdAt: timestamp(c.createdAt), creator: c.createdBy.name, note: c.note,
+    }))
+    note = '总仓多人盘点单；各分区由指定负责人录入并提交，汇总审核后生成盘盈/盘亏单。'
+  } else if (id === 'profit' || id === 'loss') {
+    const type = id === 'profit' ? 'PROFIT' : 'LOSS'
+    const adjustments = bounded(await tx.warehouseStocktakeAdjustment.findMany({
+      where: { tenantId, type,
+        stocktake: { ...dateRange('countDate'), ...(q.filters.warehouse ? { warehouse: { name: { contains: q.filters.warehouse, mode: 'insensitive' } } } : {}) },
+        ...(q.filters.item ? { lines: { some: { product: { name: { contains: q.filters.item, mode: 'insensitive' } } } } } : {}),
+      }, include: { stocktake: { include: { warehouse: { select: { name: true } }, reviewedBy: { select: { name: true } } } } },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 10001,
+    }))
+    rows = adjustments.map(a => ({ id: a.id, no: a.no, sourceNo: a.stocktake.no, date: a.stocktake.countDate.toISOString().slice(0, 10),
+      org, warehouse: a.stocktake.warehouse.name, itemCount: a.itemCount, status: '已审核', createdAt: timestamp(a.createdAt),
+      creator: a.stocktake.reviewedBy?.name ?? null, note: a.stocktake.note,
+    }))
+    note = id === 'profit' ? '总仓盘点审核生成的盘盈单。' : '总仓盘点审核生成的盘亏单。'
   } else if (id === 'limits') {
     supportedFilters.clear(); ['org', 'warehouse', 'category', 'item'].forEach(k => supportedFilters.add(k))
     const balances = bounded(await tx.warehouseLedgerBalance.findMany({ where: { tenantId,

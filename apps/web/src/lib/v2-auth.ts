@@ -91,6 +91,7 @@ export function routeForRole(role: string): string {
     ADMIN:          '/v2/boss/home',          // legacy
     SUPER_ADMIN:    '/v2/boss/home',
     MANAGER:        '/v2/manager/home',
+    SUPERVISOR:     '/v2/manager/home',       // 主管（本店有限事务）
     PURCHASER:      '/v2/manager/home',       // legacy
     REGIONAL_MANAGER: '/v2/manager/home',     // 区域经理（多店店长视角）
     KITCHEN_LEAD:   '/v2/chef/home',

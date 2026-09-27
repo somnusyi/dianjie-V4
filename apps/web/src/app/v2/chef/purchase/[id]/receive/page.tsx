@@ -8,13 +8,16 @@
  */
 'use client'
 import { useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch } from '@/lib/v2-auth'
 
 export default function ReceivePage({ params }: { params: { id: string } }) {
   const router = useRouter()
+  const pathname = usePathname()
+  const managerContext = pathname.startsWith('/v2/manager/')
+  const purchaseBase = managerContext ? '/v2/manager/purchase' : '/v2/chef/purchase'
   const [po, setPo] = useState<any>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [error, setError] = useState('')
@@ -88,9 +91,9 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
           </div>
         </div>
         <div className="mx-4 mt-3 flex gap-2">
-          <button onClick={() => router.push('/v2/chef/check/new')}
+          <button onClick={() => router.push(managerContext ? '/v2/manager/home' : '/v2/chef/check/new')}
                   className="flex-1 py-3 bg-white border border-border text-ink rounded-cta text-button">
-            店内盘损
+            {managerContext ? '返回店长首页' : '店内盘损'}
           </button>
         </div>
       </div>
@@ -150,7 +153,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
             evidenceImages: hasLoss ? evidence : undefined,
           }),
         })
-        router.push(`/v2/chef/purchase/po-success/${params.id}`)
+        router.push(`${purchaseBase}/po-success/${params.id}`)
       } catch (e: any) {
         showError(e.message || '收货失败')
         setSubmitting(false)

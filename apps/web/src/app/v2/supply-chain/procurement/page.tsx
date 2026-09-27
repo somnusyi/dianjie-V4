@@ -2347,7 +2347,7 @@ export default function UpstreamProcurementPage() {
                       <p className="mt-1 text-caption text-gray3">
                         收货 {money(statement.receiptAmount)} · 扣款 {money(statement.deductionAmount)} · 应付 <b>{money(statement.payableAmount)}</b>
                       </p>
-                      {statement.status === 'CONFIRMED' && <p className="mt-1 text-micro text-amber-fg">供应商已确认，等待财务锁定。</p>}
+                      {statement.status === 'CONFIRMED' && <p className="mt-1 text-micro text-amber-fg">供应商已确认，已通知财务，等待锁定。</p>}
                     </div>
                     <div className="flex gap-2">
                       {statement.status === 'DRAFT' || statement.status === 'DISPUTED' ? (

@@ -7,6 +7,7 @@ describe('supply-chain role routes', () => {
     expect(pcRouteForRole('SUPPLY_CHAIN')).toBe('/v2/supply-chain/home')
     expect(routeForRole('SUPPLY_CHAIN')).not.toBe('/v2/manager/home')
     expect(routeForRole('SUPPLY_CHAIN')).not.toBe('/v2/supplier/home')
+    expect(routeForRole('SUPERVISOR')).toBe('/v2/manager/home')
   })
 })
 

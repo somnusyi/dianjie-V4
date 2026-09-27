@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
 const push = vi.fn()
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push, back: vi.fn() }) }))
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push, back: vi.fn() }), usePathname: () => '/v2/chef/purchase/po-success/order-1' }))
 vi.mock('@/lib/v2-auth', () => ({ apiFetch: vi.fn() }))
 
 import { apiFetch } from '@/lib/v2-auth'

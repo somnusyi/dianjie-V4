@@ -39,7 +39,7 @@ describe('操作体验批次七打印与导出契约', () => {
     expect(billing).toContain("downloadBillingCsv('schedule'")
     expect(billing).toContain("downloadBillingCsv('reconciliation'")
     expect(billing).toContain("downloadBillingCsv('invoice'")
-    expect(chef).toContain('/v2/chef/purchase/po-success/${po.id}/delivery-note')
+    expect(chef).toContain('${purchaseBase}/po-success/${po.id}/delivery-note')
     expect(chefPrint).toContain("@/app/v2/supplier/orders/[id]/delivery-note/page")
   })
 

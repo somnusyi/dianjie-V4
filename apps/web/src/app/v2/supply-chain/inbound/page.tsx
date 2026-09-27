@@ -1,4 +1,5 @@
 'use client'
+import { ResponsiveDataTable } from '@/components/v2/responsive-data-table'
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
@@ -307,7 +308,7 @@ export default function InboundRecordsPage() {
           </div>
         </div>
         <div className="overflow-auto">
-          {items.length > 0 && <table className="w-full min-w-[1080px] text-left text-caption">
+          {items.length > 0 && <ResponsiveDataTable><table className="w-full min-w-[1080px] text-left text-caption">
             <thead className="bg-bg text-gray3"><tr>
               <th className="px-3 py-3">日期</th><th className="px-3 py-3">商品</th><th className="px-3 py-3 text-right">入库数量</th>
               <th className="px-3 py-3 text-right">单价</th><th className="px-3 py-3 text-right">金额</th>
@@ -342,7 +343,7 @@ export default function InboundRecordsPage() {
                 </tr>
               })}
             </tbody>
-          </table>}
+          </table></ResponsiveDataTable>}
           {!loading && items.length === 0 && <div className="py-12 text-center text-caption text-gray3">当前筛选条件下没有入库记录</div>}
           {loading && <div className="py-12 text-center text-caption text-gray3">正在加载…</div>}
         </div>

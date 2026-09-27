@@ -30,6 +30,11 @@ export default function UpstreamSettlementsPage() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [working, setWorking] = useState<string | null>(null)
+  const [focusedStatementId, setFocusedStatementId] = useState<string | null>(null)
+
+  useEffect(() => {
+    setFocusedStatementId(new URLSearchParams(window.location.search).get('statementId'))
+  }, [])
 
   const load = useCallback(async () => {
     setError(null)
@@ -42,6 +47,11 @@ export default function UpstreamSettlementsPage() {
   }, [])
 
   useEffect(() => { void load() }, [load])
+
+  useEffect(() => {
+    if (!focusedStatementId || !items?.some(item => item.id === focusedStatementId)) return
+    document.getElementById(`settlement-${focusedStatementId}`)?.scrollIntoView({ block: 'center' })
+  }, [focusedStatementId, items])
 
   const filtered = useMemo(() => {
     const keyword = query.trim().toLowerCase()
@@ -115,7 +125,7 @@ export default function UpstreamSettlementsPage() {
             <tbody>
               {items === null && <tr><td colSpan={8} className="px-4 py-10 text-center text-caption text-gray3">加载中…</td></tr>}
               {items !== null && filtered.length === 0 && <tr><td colSpan={8} className="px-4 py-10 text-center text-caption text-gray3">暂无上游采购对账单</td></tr>}
-              {filtered.map(item => <tr key={item.id} className="border-t border-border hover:bg-[#FAF8F2]">
+              {filtered.map(item => <tr id={`settlement-${item.id}`} key={item.id} className={`border-t border-border hover:bg-[#FAF8F2] ${focusedStatementId === item.id ? 'bg-amber/10 ring-1 ring-inset ring-amber/40' : ''}`}>
                 <td className="px-4 py-3"><b className="font-num text-body">{item.no}</b><div className="text-micro text-gray3">V{item.version} · {item._count.lines} 条</div></td>
                 <td className="px-4 py-3 text-caption">{item.supplier.name}<div className="text-micro text-gray3">{item.supplier.no}</div></td>
                 <td className="px-4 py-3 font-num text-caption">{shortDate(item.periodStart)}—{shortDate(item.periodEnd)}</td>

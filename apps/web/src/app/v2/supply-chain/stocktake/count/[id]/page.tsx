@@ -1,4 +1,5 @@
 'use client'
+import { ResponsiveDataTable } from '@/components/v2/responsive-data-table'
 
 import Link from 'next/link'
 import { createPortal, flushSync } from 'react-dom'
@@ -70,7 +71,7 @@ const fullPrintRow = (item: CountItem): PrintRow => ({ item, productText: produc
 
 function ReviewTable({ items, printable = false, printRows }: { items: CountItem[]; printable?: boolean; printRows?: PrintRow[] }) {
   const rows = printRows || items.map(fullPrintRow)
-  return <table className={`${printable ? 'w-full' : 'min-w-[980px]'} border-collapse text-left text-caption`}>
+  return <ResponsiveDataTable desktopOnly={printable} label="盘点复盘"><table className={`${printable ? 'w-full' : 'min-w-[980px]'} border-collapse text-left text-caption`}>
     {printable && <colgroup><col style={{ width: '10%' }} /><col style={{ width: '18%' }} /><col style={{ width: '5%' }} /><col style={{ width: '7%' }} /><col style={{ width: '7%' }} /><col style={{ width: '8%' }} /><col style={{ width: '10%' }} /><col style={{ width: '29%' }} /><col style={{ width: '6%' }} /></colgroup>}
     <thead><tr className="border-b border-gray3 bg-bg"><th className="px-3 py-2">编码</th><th className="px-3 py-2">商品 / 规格</th><th className="px-3 py-2">单位</th><th className="px-3 py-2 text-right">账面</th><th className="px-3 py-2 text-right">实盘</th><th className="px-3 py-2 text-right">差异数量</th><th className="px-3 py-2 text-right">差异金额</th><th className="px-3 py-2">原因说明</th><th className="px-3 py-2 text-right">证据</th></tr></thead>
     <tbody>{(printable ? rows : items.map(fullPrintRow)).map(({ item, productText: printedProduct, reasonText: printedReason, continuation }, index) => <tr key={`${item.id}-${index}`} className="border-b border-border align-top">
@@ -78,7 +79,7 @@ function ReviewTable({ items, printable = false, printRows }: { items: CountItem
       <td className="px-3 py-2 text-right font-num">{continuation ? '—' : item.countedQuantity == null ? '未盘' : number(item.countedQuantity)}</td><td className="px-3 py-2 text-right font-num">{continuation ? '—' : item.differenceQuantity == null ? '—' : number(item.differenceQuantity)}</td><td className="px-3 py-2 text-right font-num">{continuation ? '—' : item.differenceAmount == null ? '—' : `¥${money(item.differenceAmount)}`}</td>
       <td className="px-3 py-2">{printedReason || '（续）'}</td><td className="px-3 py-2 text-right">{continuation ? '—' : `${evidenceCount(item)} 张`}</td>
     </tr>)}</tbody>
-  </table>
+  </table></ResponsiveDataTable>
 }
 
 function PrintPage({ count, scope, rows, continuation = false, emptyText }: { count: Count; scope: string; rows: PrintRow[]; continuation?: boolean; emptyText?: string }) {

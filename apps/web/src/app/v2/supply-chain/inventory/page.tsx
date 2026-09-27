@@ -4,6 +4,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
+import { ResponsiveDataTable } from '@/components/v2/responsive-data-table'
 import { WarehouseToolTabs } from '@/components/v2/warehouse-tool-tabs'
 import { apiFetch } from '@/lib/v2-auth'
 import { buildInventoryExportRows } from '@/lib/inventory-export'
@@ -1037,7 +1038,7 @@ export default function InternalSupplyChainInventoryPage() {
             </div>
           </div>
           <div className="max-h-[680px] overflow-auto">
-            {scope === 'stock' ? <table className="w-full min-w-[1180px] text-left text-caption">
+            {scope === 'stock' ? <ResponsiveDataTable><table className="w-full min-w-[1180px] text-left text-caption">
               <thead className="sticky top-0 bg-bg text-gray3"><tr><th className="px-4 py-3">商品</th><th className="px-4 py-3">采购规格</th><th className="px-4 py-3">库存单位</th><th className="px-4 py-3">换算关系</th><th className="px-4 py-3 text-right">物理</th><th className="px-4 py-3 text-right">预占</th><th className="px-4 py-3 text-right">可用</th><th className="px-4 py-3 text-right">金额</th><th className="px-4 py-3">状态</th></tr></thead>
               <tbody className="divide-y divide-border">
                 {visible.map(item => <tr key={item.id}>
@@ -1052,7 +1053,7 @@ export default function InternalSupplyChainInventoryPage() {
                   <td className="px-4 py-3"><Chip tone={item.statusFlag === 'SHADOW_GAP' || item.statusFlag === 'OUT' ? 'red' : item.statusFlag === 'LOW' ? 'orange' : 'green'}>{item.statusFlag === 'SHADOW_GAP' ? '待实盘缺口' : item.statusFlag === 'OUT' ? '缺货' : item.statusFlag === 'LOW' ? '偏低' : '正常'}</Chip></td>
                 </tr>)}
               </tbody>
-            </table> : <table className="w-full min-w-[820px] text-left text-caption">
+            </table></ResponsiveDataTable> : <ResponsiveDataTable><table className="w-full min-w-[820px] text-left text-caption">
               <thead className="sticky top-0 bg-bg text-gray3"><tr><th className="px-4 py-3">商品</th><th className="px-4 py-3">当前临时单位</th><th className="px-4 py-3">待处理事项</th><th className="px-4 py-3">处理入口</th></tr></thead>
               <tbody className="divide-y divide-border">
                 {visible.map(item => <tr key={item.id}>
@@ -1070,7 +1071,7 @@ export default function InternalSupplyChainInventoryPage() {
                   </td>
                 </tr>)}
               </tbody>
-            </table>}
+            </table></ResponsiveDataTable>}
             {!loading && visible.length === 0 && <div className="py-12 text-center text-caption text-gray3">暂无匹配商品</div>}
           </div>
         </div>
@@ -1164,7 +1165,7 @@ export default function InternalSupplyChainInventoryPage() {
           </div>
 
           <div className="mt-4 overflow-auto rounded-card border border-border">
-            <table className="w-full min-w-[920px] text-left text-caption">
+            <ResponsiveDataTable><table className="w-full min-w-[920px] text-left text-caption">
               <thead className="bg-bg text-gray3"><tr><th className="px-3 py-3">序号</th><th className="px-3 py-3">商品</th><th className="px-3 py-3">采购单位</th><th className="px-3 py-3 text-right">数量</th><th className="px-3 py-3 text-right">采购单价</th><th className="px-3 py-3 text-right">金额</th><th className="px-3 py-3">换算预览</th><th className="px-3 py-3"></th></tr></thead>
               <tbody className="divide-y divide-border">
                 {batchRows.map((row, index) => {
@@ -1183,7 +1184,7 @@ export default function InternalSupplyChainInventoryPage() {
                 })}
               </tbody>
               <tfoot className="border-t border-border bg-bg"><tr><td colSpan={4} className="px-3 py-3 text-right text-gray2">合计 {batchRows.length} 种商品</td><td className="px-3 py-3 text-right text-gray2">总金额</td><td className="px-3 py-3 text-right font-num text-h2">{money(batchTotal)}</td><td colSpan={2}></td></tr></tfoot>
-            </table>
+            </table></ResponsiveDataTable>
             {!batchRows.length && <div className="py-10 text-center text-caption text-gray3">请从上方搜索并添加本次入库商品</div>}
           </div>
 

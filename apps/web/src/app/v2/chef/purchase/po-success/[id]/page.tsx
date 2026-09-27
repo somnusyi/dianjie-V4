@@ -4,7 +4,7 @@
  */
 'use client'
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { ProgressDots, Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch } from '@/lib/v2-auth'
@@ -22,6 +22,8 @@ const STATUS_TO_STEP: Record<string, number> = {
 
 export default function PoSuccessPage({ params }: { params: { id: string } }) {
   const router = useRouter()
+  const pathname = usePathname()
+  const purchaseBase = pathname.startsWith('/v2/manager/') ? '/v2/manager/purchase' : '/v2/chef/purchase'
   const [po, setPo] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
   const [reviewing, setReviewing] = useState(false)
@@ -80,11 +82,11 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
   return (
     <div className="min-h-screen bg-bg pb-32">
       <header className="px-4 pt-4 pb-2 flex items-center gap-2">
-        <button onClick={() => router.push('/v2/chef/purchase')} className="text-gray2 text-h2">‹</button>
+        <button onClick={() => router.push(purchaseBase === '/v2/manager/purchase' ? '/v2/manager/home' : purchaseBase)} className="text-gray2 text-h2">‹</button>
         <h1 className="flex-1 text-h1">采购单</h1>
         <button
           type="button"
-          onClick={() => router.push(`/v2/chef/purchase/po-success/${po.id}/delivery-note`)}
+          onClick={() => router.push(`${purchaseBase}/po-success/${po.id}/delivery-note`)}
           className="whitespace-nowrap rounded-cta border border-border bg-white px-3 py-1.5 text-button text-gray2"
           title="打开送货单打印 / 导出 PDF 页面"
         >🖨 打印送货单</button>
@@ -297,7 +299,7 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
       )}
 
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border p-3 flex gap-3">
-        <button onClick={() => router.push('/v2/chef/purchase')} className="px-4 py-3 bg-white border border-border rounded-cta text-button text-gray2">返回采购</button>
+        <button onClick={() => router.push(purchaseBase === '/v2/manager/purchase' ? '/v2/manager/home' : purchaseBase)} className="px-4 py-3 bg-white border border-border rounded-cta text-button text-gray2">返回采购</button>
         {/* 撤回 — 2026-05-29 客户反馈: 放宽到供应商发货前 (SUBMITTED + CONFIRMED) */}
         {(po.status === 'SUBMITTED' || po.status === 'CONFIRMED') && (
           <button
@@ -328,25 +330,25 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
           </button>
         )}
         {isPendingConfirm && (
-          <button onClick={() => router.push(`/v2/chef/purchase/${po.id}/receive`)} className="flex-1 py-3 bg-ink text-white rounded-cta text-button">
+          <button onClick={() => router.push(`${purchaseBase}/${po.id}/receive`)} className="flex-1 py-3 bg-ink text-white rounded-cta text-button">
             去验收
           </button>
         )}
         {/* DELIVERING (在途) → 发验收单入口. 已发过的话文案变成"重发验收单" */}
         {po.status === 'DELIVERING' && (
           <button
-            onClick={() => router.push(`/v2/chef/purchase/${po.id}/ack`)}
+            onClick={() => router.push(`${purchaseBase}/${po.id}/ack`)}
             className={`flex-1 py-3 rounded-cta text-button ${po.chefAckAt ? 'bg-white border border-amber text-amber-fg' : 'bg-amber text-white'}`}>
             {po.chefAckAt ? '重发验收单' : '📷 发验收单'}
           </button>
         )}
         {postReceiptClaimOpen && (
-          <button onClick={() => router.push(`/v2/chef/purchase/${po.id}/report-loss`)} className="flex-1 py-3 bg-white border border-red text-red-fg rounded-cta text-button">
+          <button onClick={() => router.push(`${purchaseBase}/${po.id}/report-loss`)} className="flex-1 py-3 bg-white border border-red text-red-fg rounded-cta text-button">
             补报到货异常
           </button>
         )}
         {!postReceiptClaimOpen && !isPendingConfirm && po.status !== 'CANCELLED' && po.status !== 'SUBMITTED' && po.status !== 'DELIVERING' && (
-          <button onClick={() => router.push('/v2/chef/purchase/new')} className="flex-1 py-3 bg-ink text-white rounded-cta text-button">
+          <button onClick={() => router.push(`${purchaseBase}/new`)} className="flex-1 py-3 bg-ink text-white rounded-cta text-button">
             再发一单
           </button>
         )}

@@ -123,7 +123,7 @@ export default function ManagerHomePage() {
               chips={[{ label: '待验收', tone: 'red' }, { label: `#${o.no}`, tone: 'gray' }]}
               title={`${o.supplier?.name || '供应商'} · ${o.items?.length ?? 0} 项 · ¥${Math.round(Number(o.totalAmount || 0)).toLocaleString()}`}
               sub="厨师长 / 店长 都能验收 · 实收 < 下单自动建报损"
-              primary={{ label: '去验收', onClick: () => location.href = `/v2/chef/purchase/${o.id}/receive` }}
+              primary={{ label: '去验收', onClick: () => location.href = `/v2/manager/purchase/${o.id}/receive` }}
             />
           ))}
           {(pendingLoss || []).slice(0, 3).map(l => (

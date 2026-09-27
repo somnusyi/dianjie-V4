@@ -9,11 +9,13 @@
  */
 'use client'
 import { useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { apiFetch } from '@/lib/v2-auth'
 
 export default function ChefAckPage({ params }: { params: { id: string } }) {
   const router = useRouter()
+  const pathname = usePathname()
+  const purchaseHome = pathname.startsWith('/v2/manager/') ? '/v2/manager/home' : '/v2/chef/purchase'
   const [po, setPo] = useState<any>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [error, setError] = useState('')
@@ -74,7 +76,7 @@ export default function ChefAckPage({ params }: { params: { id: string } }) {
           </div>
         </div>
         <div className="mx-4 mt-3">
-          <button onClick={() => router.push('/v2/chef/purchase')}
+          <button onClick={() => router.push(purchaseHome)}
                   className="w-full py-3 bg-ink text-white rounded-cta text-button">
             返回采购列表
           </button>
@@ -139,7 +141,7 @@ export default function ChefAckPage({ params }: { params: { id: string } }) {
       </header>
 
       {error && <div ref={errorRef} role="alert" tabIndex={-1} className="mx-4 mt-2 rounded-card bg-red-bg p-3 text-caption text-red-fg outline-none">{error}</div>}
-      {notice && <div role="status" className="mx-4 mt-2 rounded-card bg-green-bg p-3 text-caption text-green-fg">{notice}<button type="button" onClick={() => router.push('/v2/chef/purchase')} className="mt-2 block underline">返回采购列表</button></div>}
+      {notice && <div role="status" className="mx-4 mt-2 rounded-card bg-green-bg p-3 text-caption text-green-fg">{notice}<button type="button" onClick={() => router.push(purchaseHome)} className="mt-2 block underline">返回采购列表</button></div>}
 
       {/* 订单上下文 */}
       <div className="mx-4 mt-2 bg-white rounded-card border border-border p-3">

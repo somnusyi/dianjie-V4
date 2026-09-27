@@ -1,4 +1,5 @@
 'use client'
+import { ResponsiveDataTable } from '@/components/v2/responsive-data-table'
 
 import { useCallback, useEffect, useState } from 'react'
 import { DateRangeCalendar } from '@/components/v2/date-range-calendar'
@@ -272,7 +273,7 @@ export default function WarehouseDocsPage() {
       </section>
 
       <div className="overflow-x-auto rounded-card border border-border bg-white">
-        <table className="w-full min-w-[720px] text-body">
+        <ResponsiveDataTable><table className="w-full min-w-[720px] text-body">
           <thead>
             <tr className="border-b border-border text-left text-caption text-gray2">
               <th className="w-48 px-4 py-3">单据编号</th>
@@ -308,7 +309,7 @@ export default function WarehouseDocsPage() {
               <tr><td colSpan={7} className="px-4 py-10 text-center text-gray2">加载中…</td></tr>
             )}
           </tbody>
-        </table>
+        </table></ResponsiveDataTable>
       </div>
 
       {total > 0 && (
@@ -556,7 +557,7 @@ function DocDetailDialog({ docId, canAudit, canEdit, onClose, onChanged }: {
         </div>
 
         {/* 行明细 */}
-        <table className="mb-4 w-full min-w-[640px] text-body">
+        <ResponsiveDataTable><table className="mb-4 w-full min-w-[640px] text-body">
           <thead>
             <tr className="border-b border-border text-left text-caption text-gray2">
               <th className="py-2 pr-2">#</th>
@@ -579,6 +580,7 @@ function DocDetailDialog({ docId, canAudit, canEdit, onClose, onChanged }: {
                   <td className="py-2 pr-2 text-right font-num">
                     {editable && inbound ? (
                       <input
+                        aria-label={`${line.productName}数量`}
                         value={edit.quantity ?? String(line.quantity)}
                         onChange={event => setLineEdit(line.id, 'quantity', event.target.value)}
                         className="h-8 w-24 rounded-cta border border-border px-2 text-right font-num"
@@ -590,6 +592,7 @@ function DocDetailDialog({ docId, canAudit, canEdit, onClose, onChanged }: {
                   <td className="py-2 pr-2 text-right font-num">
                     {editable ? (
                       <input
+                        aria-label={`${line.productName}金额`}
                         value={edit.amount ?? String(line.amount)}
                         onChange={event => setLineEdit(line.id, 'amount', event.target.value)}
                         className="h-8 w-28 rounded-cta border border-border px-2 text-right font-num"
@@ -602,6 +605,7 @@ function DocDetailDialog({ docId, canAudit, canEdit, onClose, onChanged }: {
                   <td className="py-2">
                     {editable ? (
                       <input
+                        aria-label={`${line.productName}备注`}
                         value={edit.note ?? (line.note || '')}
                         onChange={event => setLineEdit(line.id, 'note', event.target.value)}
                         className="h-8 w-32 rounded-cta border border-border px-2"
@@ -619,7 +623,7 @@ function DocDetailDialog({ docId, canAudit, canEdit, onClose, onChanged }: {
               <td colSpan={2}></td>
             </tr>
           </tfoot>
-        </table>
+        </table></ResponsiveDataTable>
 
         {/* 改单操作区 */}
         {editable && (

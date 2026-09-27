@@ -1,4 +1,5 @@
 'use client'
+import { ResponsiveDataTable } from '@/components/v2/responsive-data-table'
 
 import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
@@ -221,7 +222,7 @@ export default function StoreTransfersPage() {
 
         <div className="overflow-hidden rounded-card border border-border bg-white">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1120px] text-left text-caption">
+            <ResponsiveDataTable><table className="w-full min-w-[1120px] text-left text-caption">
               <thead className="bg-bg text-gray3"><tr>
                 <th className="w-16 px-4 py-3">序号</th><th className="px-4 py-3">调拨单号</th><th className="px-4 py-3">调拨日期</th>
                 <th className="px-4 py-3">调出门店</th><th className="px-4 py-3">调入门店</th><th className="px-4 py-3">商品明细</th>
@@ -247,7 +248,7 @@ export default function StoreTransfersPage() {
                   {transfers.length ? '没有符合筛选条件的调拨单' : '暂无调拨单，点击右上角“新建调拨单”开始'}
                 </td></tr>}
               </tbody>
-            </table>
+            </table></ResponsiveDataTable>
           </div>
           <div className="border-t border-border bg-bg px-4 py-3 text-right text-caption text-gray3">共 {visible.length} 条记录</div>
         </div>

@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
+import { routeForRole, setSession } from '@/lib/v2-auth'
 import { useAuthStore } from '@/store/auth'
 import styles from './page.module.css'
 
@@ -20,8 +21,8 @@ export default function LoginPage() {
       const res = await api.post('/api/auth/login', { email, password })
       setToken(res.data.token)
       setUser(res.data.user)
-      if (res.data.refreshToken) localStorage.setItem('dj_refresh', res.data.refreshToken)
-      router.push('/dashboard')
+      setSession(res.data.token, res.data.user, res.data.tenant, res.data.refreshToken)
+      router.replace(routeForRole(res.data.user.role))
     } catch (err: any) {
       setError(err.response?.data?.error || '登录失败，请重试')
     } finally { setLoading(false) }

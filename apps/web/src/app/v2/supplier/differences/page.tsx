@@ -211,8 +211,8 @@ export default function SupplierDifferencesPage() {
                   <a href={`/v2/loss-claims/${claim.id}/print`} className="rounded-cta border border-border px-3 py-2 text-caption text-gray2">打印</a>
                   {claim.purchaseOrder && <a href={internalSupplyChain ? `/v2/supply-chain/fulfillment/${claim.purchaseOrder.id}` : `/v2/supplier/orders/${claim.purchaseOrder.id}`} className="rounded-cta border border-border px-3 py-2 text-caption text-gray2">订单</a>}
                   {!internalSupplyChain && claim.status === 'PENDING' && <>
-                    <button type="button" disabled={submitting === claim.id} onClick={() => handle(claim, 'reject')} className="rounded-cta border border-red px-3 py-2 text-caption text-red-fg disabled:opacity-40">异议</button>
-                    <button type="button" disabled={submitting === claim.id} onClick={() => handle(claim, 'approve')} className="rounded-cta bg-ink px-3 py-2 text-button text-white disabled:opacity-40">确认</button>
+                    <button type="button" disabled={submitting === claim.id} onClick={() => handle(claim, 'reject')} className="rounded-cta border border-red px-3 py-2 text-caption text-red-fg disabled:opacity-40">提出异议</button>
+                    <button type="button" disabled={submitting === claim.id} onClick={() => handle(claim, 'approve')} className="rounded-cta bg-ink px-3 py-2 text-button text-white disabled:opacity-40">{kindMeta.supplierActionLabel} ¥{Number(claim.totalLossAmount).toFixed(2)}</button>
                   </>}
                 </div>
               </div>

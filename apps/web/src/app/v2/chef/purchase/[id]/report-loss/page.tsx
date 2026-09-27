@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch } from '@/lib/v2-auth'
@@ -10,6 +10,9 @@ type ClaimKind = 'ARRIVAL_DAMAGE' | 'ARRIVAL_SHORTAGE'
 
 export default function PostReceiptLossPage({ params }: { params: { id: string } }) {
   const router = useRouter()
+  const pathname = usePathname()
+  const managerContext = pathname.startsWith('/v2/manager/')
+  const purchaseBase = managerContext ? '/v2/manager/purchase' : '/v2/chef/purchase'
   const [po, setPo] = useState<any>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [error, setError] = useState('')
@@ -104,7 +107,7 @@ export default function PostReceiptLossPage({ params }: { params: { id: string }
               items: selected.map(row => ({ productId: row.productId, lossQty: Number(quantity[row.productId]) })),
             }),
           })
-          router.push(`/v2/chef/purchase/po-success/${po.id}`)
+          router.push(`${purchaseBase}/po-success/${po.id}`)
         } catch (e: any) {
           showError(e?.message || '补报失败')
           setSubmitting(false)
@@ -135,7 +138,7 @@ export default function PostReceiptLossPage({ params }: { params: { id: string }
         <div className="mx-4 mt-4 bg-white border border-border rounded-card p-5 text-center">
           <p className="text-h2">当前没有可补报的收货单</p>
           <p className="text-caption text-gray3 mt-2">请先确认收货单状态；逾期仍可如实补报，并进入人工审批。</p>
-          <button onClick={() => router.push('/v2/chef/check/new')} className="mt-4 px-5 py-3 bg-ink text-white rounded-cta text-button">登记店内报损</button>
+          <button onClick={() => router.push(managerContext ? '/v2/manager/home' : '/v2/chef/check/new')} className="mt-4 px-5 py-3 bg-ink text-white rounded-cta text-button">{managerContext ? '返回店长首页' : '登记店内报损'}</button>
         </div>
       ) : (
         <>

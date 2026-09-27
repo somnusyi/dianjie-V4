@@ -7,6 +7,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import { NOTIFICATION_TYPE_LABEL, notificationRefLink } from '@/lib/notification-routing'
 
 type Notif = {
   id: string
@@ -17,45 +18,6 @@ type Notif = {
   refId: string | null
   read: boolean
   createdAt: string
-}
-
-const TYPE_LABEL: Record<string, string> = {
-  ORDER_SUBMITTED: '新订单',
-  ORDER_SHIPPED: '已发货',
-  RECEIPT_CONFIRMED: '已收货',
-  LOSS_CLAIM_RESULT: '报损',
-  APPROVAL_PENDING: '待审批',
-  APPROVAL_DONE: '审批完成',
-  PAYMENT_DONE: '付款',
-}
-
-// 按角色路由 — 同一 refType 不同角色看不同页, 避免点了 404
-function refLink(n: Notif, role: string): string | null {
-  if (!n.refType || !n.refId) return null
-  const isSupplier = role === 'SUPPLIER_OWNER' || role === 'SUPPLIER_STAFF' || role === 'SUPPLIER_SUB'
-  const isStore    = role === 'MANAGER' || role === 'KITCHEN_LEAD' || role === 'PURCHASER'
-  const isChef     = role === 'CHEF_DIRECTOR' || role === 'CHEF'
-  const isFinBoss  = role === 'FINANCE' || role === 'ADMIN' || role === 'SUPER_ADMIN' || role === 'BOSS'
-
-  if (n.refType === 'PurchaseOrder') {
-    if (isSupplier) return `/v2/supplier/orders/${n.refId}`
-    if (isStore)    return `/v2/chef/purchase/po-success/${n.refId}`
-    if (isFinBoss)  return `/v2/supplier/orders/${n.refId}`   // 老板/财务能看任何订单详情
-    return `/v2/supplier/orders/${n.refId}`
-  }
-  if (n.refType === 'LossClaim') {
-    if (isChef)     return `/v2/chef-director/disputes`
-    if (isSupplier) return `/v2/supplier/orders`              // 报损依附于订单, 跳订单列表
-    if (isStore)    return `/v2/chef/check`                   // 店内报损看 check 页
-    return `/v2/chef-director/loss`
-  }
-  if (n.refType === 'Document') return `/v2/chef-director/approvals`
-  if (n.refType === 'PaymentSchedule') return `/v2/finance/home`
-  if (n.refType === 'Receipt') {
-    if (isSupplier) return `/v2/supplier/billing`
-    return `/v2/finance/home`
-  }
-  return null
 }
 
 function timeAgo(iso: string) {
@@ -90,7 +52,7 @@ export default function NotificationsPage() {
     }
     const u = (typeof window !== 'undefined') ? (await import('@/lib/v2-auth')).getUser() : null
     const role = (u as any)?.role || ''
-    const link = refLink(n, role)
+    const link = notificationRefLink(n, role)
     if (link) location.href = link
   }
 
@@ -127,7 +89,7 @@ export default function NotificationsPage() {
               onClick={() => open(n)}
               className={`relative bg-white rounded-card border border-border p-3 cursor-pointer ${!n.read ? 'before:content-[\'\'] before:absolute before:left-2 before:top-3.5 before:w-1.5 before:h-1.5 before:rounded-full before:bg-amber' : ''} ${!n.read ? 'pl-5' : ''}`}>
             <div className="flex items-center gap-2 mb-1">
-              <span className="text-micro text-gray3">{TYPE_LABEL[n.type] || n.type}</span>
+              <span className="text-micro text-gray3">{NOTIFICATION_TYPE_LABEL[n.type] || n.type}</span>
               <span className="text-micro text-gray4 ml-auto">{timeAgo(n.createdAt)}</span>
             </div>
             <div className={`text-h2 ${!n.read ? '' : 'text-gray2'}`}>{n.title}</div>

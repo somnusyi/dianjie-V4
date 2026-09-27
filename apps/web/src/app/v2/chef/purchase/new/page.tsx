@@ -6,7 +6,7 @@
  */
 'use client'
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { OrderProductImage } from '@/components/v2/order-product-image'
 import {
@@ -59,6 +59,8 @@ function timeAgoCn(ts: number): string {
 
 export default function ChefPONewPage() {
   const router = useRouter()
+  const pathname = usePathname()
+  const purchaseBase = pathname.startsWith('/v2/manager/') ? '/v2/manager/purchase' : '/v2/chef/purchase'
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [products, setProducts]   = useState<Product[]>([])
   const [supplierId, setSupplierId] = useState<string>('')
@@ -302,7 +304,7 @@ export default function ChefPONewPage() {
       })
       // 提交成功 → 草稿清掉, 下次进页面是空白态
       localStorage.removeItem(DRAFT_KEY)
-      router.push(`/v2/chef/purchase/po-success/${order.id}`)
+      router.push(`${purchaseBase}/po-success/${order.id}`)
     } catch (e: any) {
       setError(e.message || '提交失败')
       setSubmitting(false)

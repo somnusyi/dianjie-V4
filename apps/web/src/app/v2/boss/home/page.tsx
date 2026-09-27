@@ -82,7 +82,7 @@ export default function BossHomePage() {
 
       {/* 供应链工作台 — 仅超管逃生口保留直达；ADMIN 已按权限收口移出上游采购，老板界面恢复正常 */}
       {getUser()?.role === 'SUPER_ADMIN' && (
-        <div className="px-4 mt-2">
+        <div className="px-4 mt-2 space-y-2">
           <a href="/v2/supply-chain/home" className="block bg-white border border-border rounded-card p-3 flex items-center justify-between">
             <div>
               <div className="text-button">供 供应链工作台</div>
@@ -90,6 +90,16 @@ export default function BossHomePage() {
             </div>
             <span className="text-gray3">›</span>
           </a>
+          <div className="grid grid-cols-2 gap-2">
+            <a href="/v2/boss/assistant" className="block bg-white border border-border rounded-card p-3">
+              <div className="text-button">AI 经营助手</div>
+              <div className="text-micro text-gray3 mt-0.5">直接查看经营分析</div>
+            </a>
+            <a href="/v2/boss/autofix" className="block bg-white border border-border rounded-card p-3">
+              <div className="text-button">自动修复记录</div>
+              <div className="text-micro text-gray3 mt-0.5">直接查看执行与审计</div>
+            </a>
+          </div>
         </div>
       )}
 

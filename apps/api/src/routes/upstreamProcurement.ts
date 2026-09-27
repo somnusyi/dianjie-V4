@@ -3160,24 +3160,44 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     const supplierId = requireSupplierCapability(role, req.user.supplierId, 'upstream.settlement.confirm')
     const statementId = idSchema.safeParse(req.params.id)
     if (!statementId.success) return reply.status(400).send({ error: '对账单标识格式不正确' })
-    const changed = await prisma.upstreamSettlementStatement.updateMany({
-      where: {
-        id: statementId.data,
-        tenantId,
-        supplierId,
-        status: 'SENT_TO_SUPPLIER',
-      },
-      data: {
-        status: 'CONFIRMED',
-        supplierConfirmedById: userId,
-        supplierConfirmedAt: new Date(),
-      },
+    const statement = await prisma.$transaction(async (tx) => {
+      const changed = await tx.upstreamSettlementStatement.updateMany({
+        where: {
+          id: statementId.data,
+          tenantId,
+          supplierId,
+          status: 'SENT_TO_SUPPLIER',
+        },
+        data: {
+          status: 'CONFIRMED',
+          supplierConfirmedById: userId,
+          supplierConfirmedAt: new Date(),
+        },
+      })
+      if (changed.count !== 1) return null
+      const confirmed = await tx.upstreamSettlementStatement.findUnique({
+        where: { id: statementId.data },
+        include: { lines: true },
+      })
+      if (!confirmed) throw new Error('确认后的上游对账单不存在')
+      // 确认状态和系统通知在同一事务内落库：不会出现“已确认但财务没收到”或
+      // “尚未确认却提前通知财务”。幂等键同时防止重复通知。
+      await tx.notification.create({
+        data: {
+          tenantId,
+          recipientRole: 'FINANCE',
+          type: 'UPSTREAM_SETTLEMENT_CONFIRMED',
+          title: '上游对账单待锁定',
+          body: `供应商已确认对账单 ${confirmed.no}，应付金额 ¥${confirmed.payableAmount.toString()}，请进入上游结算锁定。`,
+          refType: 'UpstreamSettlementStatement',
+          refId: confirmed.id,
+          dedupeKey: `UPSTREAM_SETTLEMENT:${confirmed.id}:CONFIRMED`,
+        },
+      })
+      return confirmed
     })
-    if (changed.count !== 1) return reply.status(409).send({ error: '对账单不存在、无权访问或当前不可确认' })
-    return prisma.upstreamSettlementStatement.findUnique({
-      where: { id: statementId.data },
-      include: { lines: true },
-    })
+    if (!statement) return reply.status(409).send({ error: '对账单不存在、无权访问或当前不可确认' })
+    return statement
   })
 
   app.post('/settlement-statements/:id/dispute', auth(app), async (req: any, reply: any) => {

@@ -3,8 +3,9 @@ import { isV2PathAllowedForRole, rolesForV2Path } from './v2-route-access'
 
 describe('rolesForV2Path', () => {
   it('protects every manager page from supplier sessions', () => {
-    expect(rolesForV2Path('/v2/manager/home')).toEqual(['MANAGER', 'PURCHASER', 'REGIONAL_MANAGER'])
-    expect(rolesForV2Path('/v2/manager/inventory')).toEqual(['MANAGER', 'PURCHASER', 'REGIONAL_MANAGER'])
+    const managerRoles = ['MANAGER', 'SUPERVISOR', 'PURCHASER', 'REGIONAL_MANAGER']
+    expect(rolesForV2Path('/v2/manager/home')).toEqual(managerRoles)
+    expect(rolesForV2Path('/v2/manager/inventory')).toEqual(managerRoles)
   })
 
   it('protects every supplier page from store sessions', () => {

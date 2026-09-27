@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const push = vi.fn()
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push, back: vi.fn() }),
+  usePathname: () => '/v2/chef/purchase/order-1/receive',
 }))
 vi.mock('@/lib/v2-auth', () => ({ apiFetch: vi.fn() }))
 

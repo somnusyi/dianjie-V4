@@ -322,11 +322,10 @@ export default function SupplierOrdersPage() {
                   />
                 </div>
               )}
-              {/* SUBMITTED 状态: 整卡已可点跳详情, 这里只放紧急快捷按钮 (接/拒) */}
+              {/* 接单/拒单都必须进入详情核对，列表不伪装成可直接执行动作。 */}
               {o.status === 'SUBMITTED' && (
-                <div className="grid grid-cols-2 gap-2 mt-3" onClick={e => e.stopPropagation()}>
-                  <a href={`${orderBase}/${o.id}`} className="py-2 bg-white border border-red text-caption text-red-fg rounded-cta text-center">拒单</a>
-                  <a href={`${orderBase}/${o.id}`} className="py-2 bg-ink text-white rounded-cta text-caption text-center">接单</a>
+                <div className="mt-3" onClick={e => e.stopPropagation()}>
+                  <a href={`${orderBase}/${o.id}`} className="block w-full py-2 bg-ink text-white rounded-cta text-caption text-center">查看订单并处理</a>
                 </div>
               )}
               {o.status === 'CONFIRMED' && (

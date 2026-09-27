@@ -439,3 +439,41 @@ describe('上游采购收货后补报', () => {
     container.remove()
   })
 })
+
+describe('合同复用下单直通', () => {
+  beforeEach(() => { mockFetch.mockReset() })
+  const openOrderForm = async (container: HTMLElement) => {
+    await waitFor(() => Array.from(container.querySelectorAll('button')).some(button => button.textContent === '新建采购单'))
+    await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '新建采购单')?.click())
+  }
+  it('自动选用唯一生效合同并带入商品，无需手选合同', async () => {
+    installPageMock({ contracts: [contract] })
+    const { container, root } = renderPage()
+    await openOrderForm(container)
+    await waitFor(() => container.textContent?.includes('已自动选用合同') ?? false)
+    expect(container.textContent).toContain(contract.contractNo)
+    expect(container.textContent).toContain('赤松茸A')
+    expect(container.querySelector('select[aria-label="已生效合同"]')).toBeNull()
+    act(() => root.unmount()); container.remove()
+  })
+  it('多个生效合同才显示选择器', async () => {
+    installPageMock({ contracts: [contract, { ...contract, id: 'contract-2', contractNo: 'HT-02' }] })
+    const { container, root } = renderPage()
+    await openOrderForm(container)
+    expect(container.querySelector('select[aria-label="已生效合同"]')?.querySelectorAll('option')).toHaveLength(3)
+    act(() => root.unmount()); container.remove()
+  })
+  it('无合同可在采购面板直接快速建合同，并预填供货关系现行价', async () => {
+    installPageMock()
+    const base = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation((path, init) => String(path).includes('setup-options?supplierId=') ? Promise.resolve({ sources: [{ ...contract.lines[0], id: 'source-1' }] }) : base(path, init))
+    const { container, root } = renderPage()
+    await openOrderForm(container)
+    await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '快速建合同')?.click())
+    const modal = container.querySelector('[role="dialog"]')!
+    expect(modal.textContent).toContain('新建月结合同')
+    expect((modal.querySelector('input[type="number"]') as HTMLInputElement).value).toBe('150')
+    expect(container.textContent).toContain('保存采购单草稿')
+    act(() => root.unmount()); container.remove()
+  })
+})

@@ -1,4 +1,6 @@
 'use client'
+import { ReportActions, collectReportPages } from '@/components/v2/report-actions'
+import type { TableReport } from '@/lib/table-report'
 
 import { useCallback, useEffect, useState } from 'react'
 import { DateRangeCalendar } from '@/components/v2/date-range-calendar'
@@ -165,6 +167,15 @@ export default function WarehouseDocsPage() {
     setPage(1)
   }
 
+  async function loadReport(): Promise<TableReport> {
+    const rows = await collectReportPages<DocRow>((page, pageSize) => {
+      const params = new URLSearchParams({ type, page: String(page), pageSize: String(pageSize) })
+      if (status) params.set('status', status); if (q.trim()) params.set('q', q.trim()); if (type === 'MANUAL_INBOUND' && supplierQ.trim()) params.set('supplierQ', supplierQ.trim()); if (from) params.set('from', from); if (to) params.set('to', to)
+      return apiFetch(`/api/warehouse-docs?${params}`)
+    })
+    return { title: '单据审核', subtitle: '当前筛选结果（全部页）', headers: ['单据号', '类型', '日期', '供应商', '金额', '行数', '附件数', '审核状态', '退回原因', '备注'], rows: rows.map(row => [row.docNo, row.type === 'MANUAL_INBOUND' ? '入库' : '出库', row.effectiveAt, row.supplierName, row.totalAmount, row.lineCount, row.attachmentCount, row.status === 'CONFIRMED' ? '已审核' : '未审核', row.unauditReason, row.note]) }
+  }
+
   return (
     <div className="min-h-screen space-y-4 bg-bg px-4 py-5 pb-24 lg:px-8 lg:py-7">
       <WarehouseToolTabs />
@@ -173,6 +184,7 @@ export default function WarehouseDocsPage() {
           <h1 className="text-title font-semibold">单据审核</h1>
           <p className="text-caption text-gray2">入库/出库单据：仓库制单即过账，会计审核锁定；改单需会计反审核，全程留痕</p>
         </div>
+        <ReportActions loadReport={loadReport} disabled={loading} />
       </header>
 
       {notice && <div className="rounded-card border border-emerald-200 bg-emerald-50 px-4 py-2 text-body text-emerald-700">{notice}</div>}

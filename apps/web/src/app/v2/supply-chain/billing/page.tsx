@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
+import { ReportActions, collectReportPages } from '@/components/v2/report-actions'
+import type { TableReport } from '@/lib/table-report'
 
 type Schedule = {
   id: string
@@ -92,6 +94,12 @@ export default function InternalSupplyChainBillingPage() {
     [schedules],
   )
 
+  function loadReport(): TableReport {
+    if (tab === 'schedule') return { title: '供应链账期', headers: ['供应商', '收货单', '门店', '应付日期', '金额', '状态'], rows: filteredSchedules.map(row => [row.supplier?.name, row.receipt?.no, row.receipt?.store?.name, row.dueAt, Number(row.amount), row.status]) }
+    if (tab === 'reconciliation') return { title: '供应链对账单', headers: ['对账单', '供应商', '开始日期', '结束日期', '金额', '状态'], rows: reconciliations.map(row => [row.no, row.supplier?.name, row.periodStart, row.periodEnd, Number(row.totalAmount), row.status]) }
+    return { title: '供应链发票', headers: ['发票号', '供应商', '开票日期', '金额', '状态'], rows: invoices.map(row => [row.invoiceNo, row.supplier?.name, row.issueDate, Number(row.amount), row.status]) }
+  }
+
   return (
     <div className="min-h-screen bg-bg px-4 py-5 lg:px-8 lg:py-7">
       <header className="border-b border-border pb-5">
@@ -101,6 +109,7 @@ export default function InternalSupplyChainBillingPage() {
         </div>
         <h1 className="text-h1">账务查询</h1>
         <p className="mt-1 text-caption text-gray2">查看全部供应商的账期、对账单与发票，不提供付款、审核或银行操作。</p>
+        <ReportActions csv loadReport={loadReport} disabled={loading} />
       </header>
 
       {error && <div className="mt-4 rounded-card border border-red/30 bg-red-bg p-3 text-caption text-red-fg">{error}</div>}

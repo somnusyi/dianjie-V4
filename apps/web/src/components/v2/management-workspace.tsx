@@ -5,6 +5,8 @@ import { FilterDateRange } from './filter-date-range'
 import filters from './scm-filter-bar.module.css'
 import { useEffect, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import { ReportActions, collectReportPages } from '@/components/v2/report-actions'
+import type { TableReport } from '@/lib/table-report'
 import { managementPages, managementHref, managementGroupLabel, type ManagementGroup, type ManagementPage, type ManagementResult, type ManagementRow } from '@/lib/inventory-management'
 import styles from './management-workspace.module.css'
 
@@ -91,6 +93,13 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
     return null
   }
   function sourceLabel(row: ManagementRow) { return row.recordType === 'WAREHOUSE_DOC' ? '手工仓库单' : row.recordType === 'UPSTREAM_RECEIPT' ? '采购收货' : '' }
+  async function filteredReport(): Promise<TableReport> {
+    const file = await apiFetch<{ fileBase64: string }>(`/api/inventory-management/${config.id}?${query}&export=1`)
+    const XLSX = await import('xlsx')
+    const workbook = XLSX.read(file.fileBase64, { type: 'base64' })
+    const table = XLSX.utils.sheet_to_json<any[]>(workbook.Sheets[workbook.SheetNames[0]], { header: 1 })
+    return { title: config.title, subtitle: '当前筛选结果（全部记录）', headers: table[0] || [], rows: table.slice(1) }
+  }
   const columns = config.columns.filter(c => !hidden.includes(c.key))
   const rows = result?.rows || []
   const group = config.group as ManagementGroup
@@ -115,6 +124,7 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
         {config.id === 'purchase-in' && <Link href="/v2/supply-chain/procurement" className={styles.primary}>采购作业 ↗</Link>}
         {['other-in', 'other-out', 'limits'].includes(config.id) && <Link href="/v2/supply-chain/inventory" className={styles.primary}>库存作业 ↗</Link>}
         {['other-in', 'other-out'].includes(config.id) && <Link href="/v2/supply-chain/docs">单据审核 ↗</Link>}
+        <ReportActions printOnly loadReport={filteredReport} disabled={loading || !result?.sourceAvailable} />
         <button disabled={loading || exporting || !result?.sourceAvailable} onClick={exportList}>{exporting ? '正在导出…' : '导出列表'}</button>
         {selected.length > 0 && <button disabled={exporting || loading} onClick={exportSelected}>导出所选（{selected.length}）</button>}
       </div>{config.id === 'limits' ? <label className={styles.unit}>计量单位类型 <select aria-label="计量单位类型" value="inventory" onChange={() => {}}><option value="inventory">库存单位</option></select></label> : <span className={styles.total}>共 {result?.total ?? '—'} 条</span>}</div>

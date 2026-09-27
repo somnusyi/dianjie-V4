@@ -8,6 +8,8 @@ import { useRouter } from 'next/navigation'
 import { ProgressDots, Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch } from '@/lib/v2-auth'
+import { ReportActions, collectReportPages } from '@/components/v2/report-actions'
+import type { TableReport } from '@/lib/table-report'
 
 const STATUS_TO_STEP: Record<string, number> = {
   DRAFT: 0,
@@ -81,7 +83,7 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
     <div className="min-h-screen bg-bg pb-32">
       <header className="px-4 pt-4 pb-2 flex items-center gap-2">
         <button onClick={() => router.push('/v2/chef/purchase')} className="text-gray2 text-h2">‹</button>
-        <h1 className="text-h1">采购单</h1>
+        <h1 className="text-h1">采购单</h1><ReportActions printOnly loadReport={() => ({ title: `采购单-${po.no}`, subtitle: `${po.supplier?.name || ''} · 期望 ${new Date(po.expectedDate).toLocaleDateString('zh-CN')} · 总额 ¥${total}`, headers: ['商品', '规格', '数量', '单位', '单价', '金额'], rows: (po.items || []).map((item: any) => [item.product?.name || item.productId, item.product?.spec, item.quantity, item.product?.unit, item.unitPrice, item.amount]) })} />
       </header>
 
       <div className="mx-4 mt-3 bg-ink text-white rounded-card p-5">

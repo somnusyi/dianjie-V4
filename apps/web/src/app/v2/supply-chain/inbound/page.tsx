@@ -5,6 +5,8 @@ import Link from 'next/link'
 import { DateRangeCalendar } from '@/components/v2/date-range-calendar'
 import { WarehouseToolTabs } from '@/components/v2/warehouse-tool-tabs'
 import { apiFetch } from '@/lib/v2-auth'
+import { ReportActions, collectReportPages } from '@/components/v2/report-actions'
+import type { TableReport } from '@/lib/table-report'
 import { readWarehouseViewState, useWarehouseScrollRestoration, writeWarehouseViewState } from '@/lib/warehouse-view-state'
 
 type UpstreamSupplier = {
@@ -186,6 +188,15 @@ export default function InboundRecordsPage() {
     setPage(1)
   }
 
+  async function loadReport(): Promise<TableReport> {
+    const rows = await collectReportPages<InboundRecord>((page, pageSize) => {
+      const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize), source })
+      if (from) params.set('from', from); if (to) params.set('to', to); if (supplierId) params.set('supplierId', supplierId); if (q.trim()) params.set('q', q.trim())
+      return apiFetch(`/api/warehouse-inventory/inbound-records?${params}`)
+    })
+    return { title: '入库记录', subtitle: '当前筛选结果（全部页）', headers: ['单据号', '日期', '商品编码', '商品', '供应商', '采购数量', '采购单位', '库存数量', '库存单位', '金额', '批次', '到期', '已冲销'], rows: rows.map(row => [row.doc?.docNo, row.effectiveAt, row.product.code, row.product.name, row.supplier?.name || row.sourceName, row.originalQuantity, row.originalUnit, row.inventoryQuantity, row.inventoryUnit, row.amount, row.batchNo, row.expiryDate, row.reversed ? '是' : '否']) }
+  }
+
   return (
     <div className="min-h-screen bg-bg px-4 py-5 pb-24 lg:px-8 lg:py-7">
       <WarehouseToolTabs />
@@ -194,7 +205,7 @@ export default function InboundRecordsPage() {
           <h1 className="text-h1">入库记录</h1>
           <p className="mt-1 text-caption text-gray3">总仓全部入库流水：手工、批量、美团数据包与期初建账 · 按供应商归集</p>
         </div>
-        <Link href="/v2/supply-chain/relations" className="rounded-cta border border-border bg-white px-4 py-2 text-button text-gray2">供货关系 →</Link>
+<ReportActions loadReport={loadReport} disabled={loading} />        <Link href="/v2/supply-chain/relations" className="rounded-cta border border-border bg-white px-4 py-2 text-button text-gray2">供货关系 →</Link>
       </div>
 
       {notice && <div className="mt-4 rounded-card border border-green/30 bg-green/10 p-3 text-caption text-green-fg">{notice}</div>}

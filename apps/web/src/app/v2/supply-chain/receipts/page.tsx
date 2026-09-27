@@ -10,6 +10,8 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { EmptyState, FriendlyError, SkeletonCard } from '@/components/v2/skeleton'
 import { apiFetch } from '@/lib/v2-auth'
+import { ReportActions, collectReportPages } from '@/components/v2/report-actions'
+import type { TableReport } from '@/lib/table-report'
 import {
   buildReceiptQuery,
   DEFAULT_RECEIPT_FILTERS,
@@ -106,6 +108,11 @@ export default function InternalSupplyChainReceiptsPage() {
     setDateError(null)
   }
 
+  async function loadReport(): Promise<TableReport> {
+    const rows = await collectReportPages<any>((page, pageSize) => apiFetch(`/api/receipts${buildReceiptQuery({ ...filters, page, pageSize })}`))
+    return { title: '收货查询', subtitle: '当前筛选结果（全部页）', headers: ['收货单号', '门店', '供应商', '业务到货日', '状态', '商品摘要'], rows: rows.map(projectReceiptRow).map(row => [row.no, row.store?.name, row.supplier?.name, row.deliveryDate?.slice(0, 10), formatReceiptStatusLabel(row.status), receiptItemSummary(row.items)]) }
+  }
+
   return (
     <div className="min-h-screen bg-bg px-4 py-5 lg:px-8 lg:py-7">
       <header className="mx-auto flex max-w-[1440px] flex-col gap-3 border-b border-border pb-5 lg:flex-row lg:items-center lg:justify-between">
@@ -122,6 +129,7 @@ export default function InternalSupplyChainReceiptsPage() {
         <div className="flex items-center gap-2">
           <a href="/v2/supply-chain/home" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button text-gray2">← 返回工作台</a>
         </div>
+        <ReportActions loadReport={loadReport} disabled={loading} />
       </header>
 
       <main className="mx-auto max-w-[1440px]">

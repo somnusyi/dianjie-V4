@@ -1,4 +1,5 @@
 'use client'
+import { ResponsiveDataTable } from '@/components/v2/responsive-data-table'
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
@@ -947,7 +948,7 @@ export default function InternalSupplyChainInventoryPage() {
         <div className="flex flex-wrap items-end gap-2">
           <label className="flex flex-col gap-1">
             <span className="text-micro text-gray3">商品搜索</span>
-            <input value={q} onChange={event => setQ(event.target.value)} placeholder="名称 / 编码 / 分类 / 规格" className="h-10 min-w-64 rounded-cta border border-border bg-white px-3 text-body" />
+            <input value={q} onChange={event => setQ(event.target.value)} placeholder="名称 / 编码 / 分类 / 规格" className="h-10 min-w-0 w-full sm:w-64 rounded-cta border border-border bg-white px-3 text-body" />
           </label>
           <label className="flex flex-col gap-1"><span className="text-micro text-gray3">商品状态</span><select value={productStatus} onChange={event => setProductStatus(event.target.value)} className="h-10 rounded-cta border border-border bg-white px-3 text-body"><option value="ALL">全部状态</option><option value="ENABLED">启用</option><option value="DISABLED">停用</option><option value="PENDING_APPROVAL">待启用审核</option><option value="PENDING_DISABLE">待停用审核</option></select></label>
           <label className="flex flex-col gap-1"><span className="text-micro text-gray3">库存状态</span><select value={stockStatus} onChange={event => setStockStatus(event.target.value)} className="h-10 rounded-cta border border-border bg-white px-3 text-body"><option value="">全部</option><option value="OK">正常</option><option value="LOW">偏低</option><option value="OUT">缺货</option><option value="SHADOW_GAP">待实盘缺口</option></select></label>
@@ -1021,7 +1022,7 @@ export default function InternalSupplyChainInventoryPage() {
             </div>
           </div>
           <div className="max-h-[680px] overflow-auto">
-            {scope === 'stock' ? <table className="w-full min-w-[1180px] text-left text-caption">
+            {scope === 'stock' ? <ResponsiveDataTable><table className="w-full min-w-[1180px] text-left text-caption">
               <thead className="sticky top-0 bg-bg text-gray3"><tr><th className="px-4 py-3">商品</th><th className="px-4 py-3">采购规格</th><th className="px-4 py-3">库存单位</th><th className="px-4 py-3">换算关系</th><th className="px-4 py-3 text-right">物理</th><th className="px-4 py-3 text-right">预占</th><th className="px-4 py-3 text-right">可用</th><th className="px-4 py-3 text-right">金额</th><th className="px-4 py-3">状态</th></tr></thead>
               <tbody className="divide-y divide-border">
                 {visible.map(item => <tr key={item.id}>
@@ -1036,7 +1037,7 @@ export default function InternalSupplyChainInventoryPage() {
                   <td className="px-4 py-3"><Chip tone={item.statusFlag === 'SHADOW_GAP' || item.statusFlag === 'OUT' ? 'red' : item.statusFlag === 'LOW' ? 'orange' : 'green'}>{item.statusFlag === 'SHADOW_GAP' ? '待实盘缺口' : item.statusFlag === 'OUT' ? '缺货' : item.statusFlag === 'LOW' ? '偏低' : '正常'}</Chip></td>
                 </tr>)}
               </tbody>
-            </table> : <table className="w-full min-w-[820px] text-left text-caption">
+            </table></ResponsiveDataTable> : <ResponsiveDataTable><table className="w-full min-w-[820px] text-left text-caption">
               <thead className="sticky top-0 bg-bg text-gray3"><tr><th className="px-4 py-3">商品</th><th className="px-4 py-3">当前临时单位</th><th className="px-4 py-3">待处理事项</th><th className="px-4 py-3">处理入口</th></tr></thead>
               <tbody className="divide-y divide-border">
                 {visible.map(item => <tr key={item.id}>
@@ -1054,7 +1055,7 @@ export default function InternalSupplyChainInventoryPage() {
                   </td>
                 </tr>)}
               </tbody>
-            </table>}
+            </table></ResponsiveDataTable>}
             {!loading && visible.length === 0 && <div className="py-12 text-center text-caption text-gray3">暂无匹配商品</div>}
           </div>
         </div>
@@ -1148,7 +1149,7 @@ export default function InternalSupplyChainInventoryPage() {
           </div>
 
           <div className="mt-4 overflow-auto rounded-card border border-border">
-            <table className="w-full min-w-[920px] text-left text-caption">
+            <ResponsiveDataTable><table className="w-full min-w-[920px] text-left text-caption">
               <thead className="bg-bg text-gray3"><tr><th className="px-3 py-3">序号</th><th className="px-3 py-3">商品</th><th className="px-3 py-3">采购单位</th><th className="px-3 py-3 text-right">数量</th><th className="px-3 py-3 text-right">采购单价</th><th className="px-3 py-3 text-right">金额</th><th className="px-3 py-3">换算预览</th><th className="px-3 py-3"></th></tr></thead>
               <tbody className="divide-y divide-border">
                 {batchRows.map((row, index) => {
@@ -1167,7 +1168,7 @@ export default function InternalSupplyChainInventoryPage() {
                 })}
               </tbody>
               <tfoot className="border-t border-border bg-bg"><tr><td colSpan={4} className="px-3 py-3 text-right text-gray2">合计 {batchRows.length} 种商品</td><td className="px-3 py-3 text-right text-gray2">总金额</td><td className="px-3 py-3 text-right font-num text-h2">{money(batchTotal)}</td><td colSpan={2}></td></tr></tfoot>
-            </table>
+            </table></ResponsiveDataTable>
             {!batchRows.length && <div className="py-10 text-center text-caption text-gray3">请从上方搜索并添加本次入库商品</div>}
           </div>
 
@@ -1182,7 +1183,7 @@ export default function InternalSupplyChainInventoryPage() {
               onRemove={key => setBatchAttachments(items => items.filter(item => item.key !== key))}
             />
           </div>
-          <div className="mt-4 flex items-center justify-between gap-4"><p className="text-micro text-gray3">只显示四单位已经核验的商品，避免箱、件、kg 等错误换算进入正式库存。</p><button onClick={submitBatchInbound} disabled={submitting || batchAttachmentsUploading || batchRows.length === 0} className="h-11 min-w-52 rounded-cta bg-accent px-6 text-button text-white disabled:opacity-40">{batchAttachmentsUploading ? '等待附件上传…' : submitting ? '正在整单记账…' : `确认批量入库 · ${money(batchTotal)}`}</button></div>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-4"><p className="text-micro text-gray3">只显示四单位已经核验的商品，避免箱、件、kg 等错误换算进入正式库存。</p><button onClick={submitBatchInbound} disabled={submitting || batchAttachmentsUploading || batchRows.length === 0} className="h-11 min-w-52 rounded-cta bg-accent px-6 text-button text-white disabled:opacity-40">{batchAttachmentsUploading ? '等待附件上传…' : submitting ? '正在整单记账…' : `确认批量入库 · ${money(batchTotal)}`}</button></div>
         </div>
       </div>}
 

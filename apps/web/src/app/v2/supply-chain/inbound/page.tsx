@@ -1,4 +1,5 @@
 'use client'
+import { ResponsiveDataTable } from '@/components/v2/responsive-data-table'
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
@@ -254,15 +255,15 @@ export default function InboundRecordsPage() {
       </section>
 
       <section className="mt-4 overflow-hidden rounded-card border border-border bg-white">
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
           <h2 className="text-h2">入库流水{data ? `（共 ${data.total} 行）` : ''}</h2>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             {data && data.totalAmount !== undefined && <span className="text-caption font-semibold text-accent">合计 ¥{data.totalAmount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
             <span className="text-micro text-gray3">金额为含税入库金额 · 单价按库存单位</span>
           </div>
         </div>
         <div className="overflow-auto">
-          {items.length > 0 && <table className="w-full min-w-[1080px] text-left text-caption">
+          {items.length > 0 && <ResponsiveDataTable><table className="w-full min-w-[1080px] text-left text-caption">
             <thead className="bg-bg text-gray3"><tr>
               <th className="px-3 py-3">日期</th><th className="px-3 py-3">商品</th><th className="px-3 py-3 text-right">入库数量</th>
               <th className="px-3 py-3 text-right">单价</th><th className="px-3 py-3 text-right">金额</th>
@@ -297,7 +298,7 @@ export default function InboundRecordsPage() {
                 </tr>
               })}
             </tbody>
-          </table>}
+          </table></ResponsiveDataTable>}
           {!loading && items.length === 0 && <div className="py-12 text-center text-caption text-gray3">当前筛选条件下没有入库记录</div>}
           {loading && <div className="py-12 text-center text-caption text-gray3">正在加载…</div>}
         </div>

@@ -1,4 +1,5 @@
 'use client'
+import { ResponsiveDataTable } from '@/components/v2/responsive-data-table'
 import { ReportActions, collectReportPages } from '@/components/v2/report-actions'
 import type { TableReport } from '@/lib/table-report'
 
@@ -232,7 +233,7 @@ export default function WarehouseDocsPage() {
       </section>
 
       <div className="overflow-x-auto rounded-card border border-border bg-white">
-        <table className="w-full min-w-[720px] text-body">
+        <ResponsiveDataTable><table className="w-full min-w-[720px] text-body">
           <thead>
             <tr className="border-b border-border text-left text-caption text-gray2">
               <th className="w-48 px-4 py-3">单据编号</th>
@@ -268,7 +269,7 @@ export default function WarehouseDocsPage() {
               <tr><td colSpan={7} className="px-4 py-10 text-center text-gray2">加载中…</td></tr>
             )}
           </tbody>
-        </table>
+        </table></ResponsiveDataTable>
       </div>
 
       {total > 0 && (
@@ -516,7 +517,7 @@ function DocDetailDialog({ docId, canAudit, canEdit, onClose, onChanged }: {
         </div>
 
         {/* 行明细 */}
-        <table className="mb-4 w-full min-w-[640px] text-body">
+        <ResponsiveDataTable><table className="mb-4 w-full min-w-[640px] text-body">
           <thead>
             <tr className="border-b border-border text-left text-caption text-gray2">
               <th className="py-2 pr-2">#</th>
@@ -579,7 +580,7 @@ function DocDetailDialog({ docId, canAudit, canEdit, onClose, onChanged }: {
               <td colSpan={2}></td>
             </tr>
           </tfoot>
-        </table>
+        </table></ResponsiveDataTable>
 
         {/* 改单操作区 */}
         {editable && (

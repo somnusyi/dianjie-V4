@@ -99,13 +99,6 @@ const ORDER_COLUMNS: readonly OrderCenterTableColumn<ProjectedOrder>[] = [
     renderCell: order => orderDeliveryDateText(order.expectedDeliveryDate),
   },
   {
-    id: 'estimatedArrivalAt',
-    header: '预计到货日',
-    defaultWidth: 97,
-    cellClassName: 'font-num text-gray2',
-    renderCell: order => orderDeliveryDateText(order.estimatedArrivalAt),
-  },
-  {
     id: 'status',
     header: '状态',
     defaultWidth: 77,

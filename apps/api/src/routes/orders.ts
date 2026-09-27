@@ -792,7 +792,6 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
       { header: '创建类型', key: 'creationType', width: 14 },
       { header: '单据状态', key: 'status', width: 14 },
       { header: '期望到货时间', key: 'expectedDate', width: 18 },
-      { header: '预计到货时间', key: 'estimatedArrivalAt', width: 18 },
       { header: '单据提交时间', key: 'submittedAt', width: 22 },
       { header: '分单时间', key: 'splitAt', width: 22 },
       { header: '操作时间', key: 'lastOperationAt', width: 22 },
@@ -823,7 +822,6 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         creationType: row.creationType,
         status: statusLabels[row.status] || row.status,
         expectedDate: formatBusinessDate(row.expectedDate),
-        estimatedArrivalAt: formatBusinessDate(row.expectedDate),
         submittedAt: formatShanghaiDateTime(row.submittedAt),
         splitAt: formatShanghaiDateTime(row.splitAt),
         lastOperationAt: formatShanghaiDateTime(row.lastOperationAt),
@@ -837,7 +835,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     })
     sheet.getRow(1).font = { bold: true }
     sheet.views = [{ state: 'frozen', ySplit: 1 }]
-    sheet.autoFilter = { from: 'A1', to: 'S1' }
+    sheet.autoFilter = { from: 'A1', to: 'R1' }
     sheet.getColumn('amount').numFmt = '#,##0.00'
     const filename = `门店订货单-${dayjs().format('YYYYMMDD-HHmmss')}.xlsx`
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer())

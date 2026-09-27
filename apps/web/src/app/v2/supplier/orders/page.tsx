@@ -84,12 +84,12 @@ export default function SupplierOrdersPage() {
   const [searchDraft, setSearchDraft] = useState<SearchCriteria>(EMPTY_SEARCH)
   const [appliedSearch, setAppliedSearch] = useState<SearchCriteria>(EMPTY_SEARCH)
   // 2026-06-02: 支持 URL ?filter=报损 等 (从 billing 页报损 banner 跳过来直接进对应 filter)
-  const [filter, setFilter] = useState<'待接单' | '待发货' | '运送中' | '到货差异' | '已完成'>(() => {
+  const [filter, setFilter] = useState<'待接单' | '待发货' | '运送中' | '到货差异' | '已完成' | '已取消'>(() => {
     if (typeof window === 'undefined') return '待接单'
     const sp = new URLSearchParams(window.location.search)
     const raw = sp.get('filter')
     const f = raw === '报损' ? '到货差异' : raw
-    return ['待接单', '待发货', '运送中', '到货差异', '已完成'].includes(String(f)) ? f as any : '待接单'
+    return ['待接单', '待发货', '运送中', '到货差异', '已完成', '已取消'].includes(String(f)) ? f as any : '待接单'
   })
   const [confirmState, openConfirm] = useConfirmSheet()
 
@@ -254,7 +254,8 @@ export default function SupplierOrdersPage() {
     if (f === '待接单') return s === 'SUBMITTED'
     if (f === '待发货') return s === 'CONFIRMED'
     if (f === '运送中') return s === 'PENDING_CONFIRM' || s === 'DELIVERING'   // DELIVERING 兼容老数据
-    if (f === '已完成') return ['RECEIVED', 'COMPLETED', 'CANCELLED'].includes(s)
+    if (f === '已取消') return s === 'CANCELLED'
+    if (f === '已完成') return ['RECEIVED', 'COMPLETED'].includes(s)
     return false
   }
   const visible = (orders || []).filter(o => statusInTab(o.status, filter))
@@ -335,7 +336,7 @@ export default function SupplierOrdersPage() {
       )}
 
       {documentView === 'orders' && <div className="px-4 mt-2 flex gap-2 overflow-x-auto">
-        {(['待接单', '待发货', '运送中', '到货差异', '已完成'] as const).map((f) => {
+        {(['待接单', '待发货', '运送中', '到货差异', '已完成', '已取消'] as const).map((f) => {
           const cnt = f === '到货差异'
             ? pendingClaims.length
             : (orders || []).filter(o => statusInTab(o.status, f)).length

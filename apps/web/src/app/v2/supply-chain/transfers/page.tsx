@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { Chip } from '@/components/v2'
 import { DateRangeCalendar, type DateRangeValue } from '@/components/v2/date-range-calendar'
 import { apiFetch } from '@/lib/v2-auth'
@@ -60,6 +61,7 @@ function newDraft(): Draft {
 }
 
 export default function StoreTransfersPage() {
+  const [confirm, openConfirm] = useConfirmSheet()
   const [products, setProducts] = useState<Product[]>([])
   const [saving, setSaving] = useState(false)
   const [stores, setStores] = useState<Store[]>([])
@@ -156,6 +158,11 @@ export default function StoreTransfersPage() {
     } catch (e: any) { setNotice(e.message) } finally { setSaving(false) }
   }
 
+  function confirmStatus(id: string, nextStatus: TransferStatus) {
+    const label = { SHIPPED: '发货', RECEIVED: '收货', REVOKED: '撤回', PENDING: '保存' }[nextStatus]
+    openConfirm({ title: `确认${label}调拨单？`, body: `调拨单 ${transfers.find(row => row.id === id)?.no || ''} 将更新状态，请核对门店和商品。`, confirmLabel: label, tone: nextStatus === 'REVOKED' ? 'danger' : 'primary', onConfirm: () => changeStatus(id, nextStatus) })
+  }
+
   async function changeStatus(id: string, nextStatus: TransferStatus) {
     if (saving) return
     setSaving(true)
@@ -225,8 +232,8 @@ export default function StoreTransfersPage() {
                   <td className="whitespace-nowrap px-4 py-4"><Chip tone={STATUS_META[row.status]?.tone || 'gray'}>{STATUS_META[row.status]?.label || row.status}</Chip></td>
                   <td className="whitespace-nowrap px-4 py-4 font-num text-gray2">{new Date(row.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
                   <td className="whitespace-nowrap px-4 py-4 text-right">
-                    {row.status === 'PENDING' && <div className="flex justify-end gap-3"><Action onClick={() => changeStatus(row.id, 'SHIPPED')}>发货</Action><Action muted onClick={() => changeStatus(row.id, 'REVOKED')}>撤回</Action></div>}
-                    {row.status === 'SHIPPED' && <Action onClick={() => changeStatus(row.id, 'RECEIVED')}>收货</Action>}
+                    {row.status === 'PENDING' && <div className="flex justify-end gap-3"><Action onClick={() => confirmStatus(row.id, 'SHIPPED')}>发货</Action><Action muted onClick={() => confirmStatus(row.id, 'REVOKED')}>撤回</Action></div>}
+                    {row.status === 'SHIPPED' && <Action onClick={() => confirmStatus(row.id, 'RECEIVED')}>收货</Action>}
                     {(row.status === 'RECEIVED' || row.status === 'REVOKED') && <span className="text-gray3">—</span>}
                   </td>
                 </tr>)}
@@ -272,6 +279,7 @@ export default function StoreTransfersPage() {
           </div>
         </div>
       </div>}
+      <ConfirmSheet {...confirm} />
     </div>
   )
 }

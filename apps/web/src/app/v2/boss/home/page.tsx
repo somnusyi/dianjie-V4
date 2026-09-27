@@ -67,7 +67,7 @@ export default function BossHomePage() {
       </div>
 
       {/* 净利总览 + 建店资金 快捷入口 */}
-      <div className="px-4 mt-3 grid grid-cols-2 gap-2">
+      {['ADMIN', 'SUPER_ADMIN', 'FINANCE'].includes(getUser()?.role || '') && <div className="px-4 mt-3 grid grid-cols-2 gap-2">
         <a href="/v2/profit" className="block bg-amber/10 border border-amber/30 rounded-card p-3">
           <div className="text-button text-amber-fg">⛁ 净利总览</div>
           <div className="text-micro text-gray2 mt-0.5">月/季/年/累计</div>
@@ -76,7 +76,7 @@ export default function BossHomePage() {
           <div className="text-button">¥ 建店资金</div>
           <div className="text-micro text-gray3 mt-0.5">各店建店投入台账</div>
         </a>
-      </div>
+      </div>}
 
       {/* 供应链工作台 — 仅超管逃生口保留直达；ADMIN 已按权限收口移出上游采购，老板界面恢复正常 */}
       {getUser()?.role === 'SUPER_ADMIN' && (

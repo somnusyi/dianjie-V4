@@ -328,7 +328,6 @@ export function projectOrderRow(row: any) {
     totalAmount: row.currentOrderAmount ?? row.originalTotalAmount ?? row.totalAmount ?? 0,
     createdAt: row.createdAt,
     expectedDeliveryDate: row.expectedDate ?? row.expectedDeliveryDate,
-    estimatedArrivalAt: row.expectedDate ?? row.expectedDeliveryDate,
     creationSource: row.creationSource ?? '历史记录',
     creationType: row.creationType ?? '常规订货',
     submittedAt: row.submittedAt ?? null,

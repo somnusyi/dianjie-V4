@@ -71,7 +71,6 @@ describe('order and delivery table horizontal controls', () => {
       creationSource: 128,
       creationType: 105,
       expectedDeliveryDate: 97,
-      estimatedArrivalAt: 97,
       status: 77,
       submittedAt: 146,
       splitAt: 146,

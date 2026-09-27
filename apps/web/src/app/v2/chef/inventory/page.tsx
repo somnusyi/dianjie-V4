@@ -103,8 +103,6 @@ export default function ChefInventoryPage() {
           <p className="text-caption text-gray3">本店 · 后厨</p>
         </div>
         <div className="flex items-center gap-2">
-          <button className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">⌕</button>
-          <button className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">⋮</button>
         </div>
       </header>
 

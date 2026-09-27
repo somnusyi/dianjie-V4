@@ -63,7 +63,6 @@ export default function ChefPurchasePage() {
           <h1 className="text-h1">采购</h1>
           <p className="text-caption text-gray3">本月 {monthOrders.length} 单 · 总额 ¥{(monthTotal/1000).toFixed(1)}K</p>
         </div>
-        <button className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">⌧</button>
       </header>
 
       <div className="mt-3">

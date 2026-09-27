@@ -15,6 +15,8 @@ import { ProductImagePreview } from '@/components/v2/product-image-preview'
 import { apiDownload, apiFetch } from '@/lib/v2-auth'
 import { filterSupplierCategories } from '@/lib/supplier-category-filter'
 import { downloadProductExport, saveBlob } from './export-products'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Product = {
   id: string; code: string; name: string; category: string; unit: string
@@ -138,7 +140,7 @@ export default function SupplierProductsPage() {
         try {
           await apiFetch(`/api/products/batches/${b.id}/revoke`, { method: 'PATCH' })
           load()
-        } catch (e: any) { alert(e.message || '撤回失败'); throw e }
+        } catch (e: any) { notifyUser(e.message || '撤回失败'); throw e }
       },
     })
   }
@@ -209,10 +211,10 @@ export default function SupplierProductsPage() {
             ? `\n⏳ 涨价单 ${res.documentNo} 已提交总厨审批`
             : ''
           setEditing(null)
-          alert('✓ 已保存' + approvalMsg)
+          notifyUser('✓ 已保存' + approvalMsg)
           load()
         } catch (e: any) {
-          alert(e.message || '保存失败'); throw e
+          notifyUser(e.message || '保存失败'); throw e
         } finally { setSubmitting(false) }
       },
     })
@@ -231,10 +233,10 @@ export default function SupplierProductsPage() {
             body: JSON.stringify({ status: next }),
           })
           if (res?.statusChange === 'PENDING_APPROVAL') {
-            alert(`✓ 停售申请已提交总厨审批 (单号 ${res.documentNo})`)
+            notifyUser(`✓ 停售申请已提交总厨审批 (单号 ${res.documentNo})`)
           }
           load()
-        } catch (e: any) { alert(e.message || '操作失败'); throw e }
+        } catch (e: any) { notifyUser(e.message || '操作失败'); throw e }
       },
     })
   }
@@ -292,7 +294,7 @@ export default function SupplierProductsPage() {
         setNewSku(current => ({ ...current, imageKey: uploaded.key }))
       }
     } catch (e: any) {
-      alert(e.message || '图片上传失败')
+      notifyUser(e.message || '图片上传失败')
     } finally {
       setUploadingId(null)
     }
@@ -326,7 +328,7 @@ export default function SupplierProductsPage() {
         method: 'POST', body: JSON.stringify({ ids: [...selected], status }),
       })
     } catch (error: any) {
-      alert(error?.message || '影响范围预览失败')
+      notifyUser(error?.message || '影响范围预览失败')
       return
     }
     const impactSummary = [
@@ -348,7 +350,7 @@ export default function SupplierProductsPage() {
         const res: any = await apiFetch('/api/products/batch-status', {
           method: 'PATCH', body: JSON.stringify({ ids: [...selected], status }),
         })
-        if (res?.documentNo) alert(`✓ 已提交审批单 ${res.documentNo}`)
+        if (res?.documentNo) notifyUser(`✓ 已提交审批单 ${res.documentNo}`)
         setSelected(new Set()); load()
       },
     })
@@ -379,7 +381,7 @@ export default function SupplierProductsPage() {
         body: JSON.stringify(body),
       })
       setCreateOpen(false)
-      alert('✓ 新建 SKU 已提交总厨审批, 通过后才会上架显示给餐厅')
+      notifyUser('✓ 新建 SKU 已提交总厨审批, 通过后才会上架显示给餐厅')
       load()
     } catch (e: any) {
       setCreateErr(e.message || '创建失败')

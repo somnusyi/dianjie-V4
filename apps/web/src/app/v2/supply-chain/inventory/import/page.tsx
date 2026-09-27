@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
+import { confirmDialog, promptDialog } from '@/lib/ui-dialogs'
+
 
 type Issue = { code: string; message: string; detail?: string }
 type Product = {
@@ -246,7 +248,7 @@ export default function WarehouseSnapshotImportPage() {
 
   async function applyBaseline() {
     if (!current || !canApplyBaseline) return
-    if (!window.confirm(`仅当 ${current.snapshotDate} 是连续记账的首日时使用：确认将该日期期末库存设为基准？后续日期必须写入每日出入库，不能再用快照覆盖。`)) return
+    if (!(await confirmDialog(`仅当 ${current.snapshotDate} 是连续记账的首日时使用：确认将该日期期末库存设为基准？后续日期必须写入每日出入库，不能再用快照覆盖。`))) return
     setBusy('baseline')
     setError('')
     try {
@@ -264,7 +266,7 @@ export default function WarehouseSnapshotImportPage() {
 
   async function applyDailyLedger() {
     if (!current || !canApplyDailyLedger) return
-    if (!window.confirm(`确认以 ${current.snapshotDate} 的前一日期末库存为基准，写入 ${current.snapshotDate} 的净采购入库和配送出库，再与本日期末库存快照核对？快照不会直接覆盖账面库存。`)) return
+    if (!(await confirmDialog(`确认以 ${current.snapshotDate} 的前一日期末库存为基准，写入 ${current.snapshotDate} 的净采购入库和配送出库，再与本日期末库存快照核对？快照不会直接覆盖账面库存。`))) return
     setBusy('daily-ledger')
     setError('')
     try {
@@ -282,7 +284,7 @@ export default function WarehouseSnapshotImportPage() {
 
   async function confirmNameSuggestions() {
     if (!current || nameSuggestionCount === 0) return
-    if (!window.confirm(`确认 ${nameSuggestionCount} 个“美团名称与系统名称完全相同且唯一”的商品候选吗？确认后会保存美团编码映射；单位问题仍会继续阻断库存确认。`)) return
+    if (!(await confirmDialog(`确认 ${nameSuggestionCount} 个“美团名称与系统名称完全相同且唯一”的商品候选吗？确认后会保存美团编码映射；单位问题仍会继续阻断库存确认。`))) return
     setBusy('bulk-map')
     setError('')
     try {
@@ -302,7 +304,7 @@ export default function WarehouseSnapshotImportPage() {
 
   async function reverseImport() {
     if (!current || current.status !== 'CONFIRMED') return
-    const reason = window.prompt('请输入撤销原因（至少 2 个字）。撤销会追加反向流水，不会删除原记录。')?.trim()
+    const reason = (await promptDialog('请输入撤销原因（至少 2 个字）。撤销会追加反向流水，不会删除原记录。'))?.trim()
     if (!reason) return
     setBusy('reverse')
     setError('')

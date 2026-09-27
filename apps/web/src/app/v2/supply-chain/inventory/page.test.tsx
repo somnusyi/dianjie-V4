@@ -11,6 +11,8 @@ vi.mock('@/components/v2', () => ({
   Chip: ({ children }: { children: React.ReactNode }) => <span data-chip="true">{children}</span>,
 }))
 vi.mock('@/lib/v2-auth', () => ({ apiFetch: vi.fn() }))
+vi.mock('@/lib/ui-dialogs', () => ({ confirmDialog: vi.fn(), promptDialog: vi.fn(), notifyUser: vi.fn() }))
+import { confirmDialog } from '@/lib/ui-dialogs'
 import { apiFetch } from '@/lib/v2-auth'
 
 const mockFetch = vi.mocked(apiFetch)
@@ -231,7 +233,7 @@ describe('总仓库存页面', () => {
   })
 
   it('requires confirmation for ALLOW to BLOCK and cancellation sends no PATCH and restores ALLOW', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => false))
+    vi.mocked(confirmDialog).mockResolvedValue(false)
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
@@ -253,7 +255,7 @@ describe('总仓库存页面', () => {
     const save = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '确认保存')
     await act(async () => { save?.click() })
 
-    expect(window.confirm).toHaveBeenCalled()
+    expect(confirmDialog).toHaveBeenCalled()
     expect(mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/order-entry-policy')).toBe(false)
     expect((container.querySelector('input[name="order-entry-policy"][value="ALLOW"]') as HTMLInputElement).checked).toBe(true)
 
@@ -263,7 +265,7 @@ describe('总仓库存页面', () => {
   })
 
   it('submits one audited BLOCK policy change, ignores a double click, and does not update the page before success', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => true))
+    vi.mocked(confirmDialog).mockResolvedValue(true)
     let resolvePolicy!: (value: unknown) => void
     const pendingPolicy = new Promise(resolve => { resolvePolicy = resolve })
     mockFetch.mockImplementation((path, init) => {
@@ -299,7 +301,7 @@ describe('总仓库存页面', () => {
   })
 
   it('keeps the current policy and resets the selection when saving fails', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => true))
+    vi.mocked(confirmDialog).mockResolvedValue(true)
     let rejectPolicy!: (reason: unknown) => void
     const pendingPolicy = new Promise((_resolve, reject) => { rejectPolicy = reject })
     mockFetch.mockImplementation((path, init) => {
@@ -731,7 +733,7 @@ describe('总仓库存页面', () => {
   })
 
   it('verifies an inferred unit conversion from the review queue', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => true))
+    vi.mocked(confirmDialog).mockResolvedValue(true)
     const inferred = { ...inventory, items: [{ ...inventory.items[0], unitConversionStatus: 'INFERRED' }] }
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
@@ -761,7 +763,7 @@ describe('总仓库存页面', () => {
 
     const call = mockFetch.mock.calls.find(([path, init]) => String(path) === '/api/products/product-1' && init?.method === 'PATCH')
     expect(JSON.parse(String(call?.[1]?.body))).toEqual({ unitConversionStatus: 'VERIFIED' })
-    expect(window.confirm).toHaveBeenCalled()
+    expect(confirmDialog).toHaveBeenCalled()
 
     act(() => root.unmount())
     container.remove()

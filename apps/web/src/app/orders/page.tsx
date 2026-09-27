@@ -13,6 +13,8 @@ import {
 import { canCancelLegacyOrder, validateCancelReason } from './cancel-order'
 import dayjs from 'dayjs'
 import { z } from 'zod'
+import { confirmDialog, promptDialog } from '@/lib/ui-dialogs'
+
 
 const orderSchema = z.object({
   supplierId: z.string().min(1, '请选择供应商'),
@@ -212,26 +214,26 @@ export default function OrdersPage() {
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         {/* 供应商：确认送达 */}
         {['SUBMITTED','CONFIRMED'].includes(row.status) && user?.role === 'SUPPLIER_STAFF' && (
-          <Btn size="sm" variant="primary" onClick={() => {
-            if (window.confirm('确认货物已送达门店？')) ship(row.id)
+          <Btn size="sm" variant="primary" onClick={async () => {
+            if ((await confirmDialog('确认货物已送达门店？'))) ship(row.id)
           }}>确认送达</Btn>
         )}
         {/* 店长：超期未送达，主动发起 */}
         {row.status === 'SUBMITTED' && ['MANAGER','ADMIN'].includes(user?.role) && isOverdue(row) && (
           <Btn size="sm" style={{ background: '#fef9c3', color: '#92400e', border: '1px solid #fde68a', fontSize: 11 }}
-            onClick={() => { if (window.confirm('供应商未标记送达，确认货物已到？')) { ship(row.id, '店长主动发起'); setTimeout(() => router.push('/receipts'), 1000) } }}>
+            onClick={async () => { if ((await confirmDialog('供应商未标记送达，确认货物已到？'))) { ship(row.id, '店长主动发起'); setTimeout(() => router.push('/receipts'), 1000) } }}>
             货已到，发起收货
           </Btn>
         )}
         {/* 取消 */}
         {canCancelLegacyOrder(row.status, user?.role) && (
           <Btn size="sm" variant="danger" onClick={async () => {
-            const result = validateCancelReason(window.prompt('撤回原因 (必填, 供应商可见, 最长 200 字):'))
+            const result = validateCancelReason((await promptDialog('撤回原因 (必填, 供应商可见, 最长 200 字):')))
             if (!result.success) {
               show(result.error, 'error')
               return
             }
-            if (!window.confirm('确认撤回？撤回后无法恢复，需要重新下单')) return
+            if (!(await confirmDialog('确认撤回？撤回后无法恢复，需要重新下单'))) return
             try {
               await api.patch(`/api/orders/${row.id}/cancel`, { reason: result.reason })
               show('订单已撤回')

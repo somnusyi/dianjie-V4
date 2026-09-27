@@ -10,6 +10,8 @@ import dayjs from 'dayjs'
 import { Chip } from '@/components/v2'
 import { ErrorScreen } from '@/components/v2/use-dashboard'
 import { apiFetch, getToken } from '@/lib/v2-auth'
+import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
+
 
 type Entry = {
   id: string; lineNo: number; summary: string
@@ -70,12 +72,12 @@ export default function FinanceVouchersPage() {
       await apiFetch(`/api/vouchers/${id}/post`, { method: 'PATCH' })
       await reload()
     } catch (e: any) {
-      alert(e.message)
+      notifyUser(e.message)
     } finally { setBusy(false) }
   }
   async function postAll() {
     if (stats.draft === 0) return
-    if (!confirm(`确定批量审核本月 ${stats.draft} 笔草稿凭证吗?`)) return
+    if (!(await confirmDialog(`确定批量审核本月 ${stats.draft} 笔草稿凭证吗?`))) return
     setBusy(true)
     try {
       for (const v of list.filter(v => v.status === 'DRAFT')) {
@@ -84,13 +86,13 @@ export default function FinanceVouchersPage() {
       setSelected(new Set())
       await reload()
     } catch (e: any) {
-      alert(e.message)
+      notifyUser(e.message)
     } finally { setBusy(false) }
   }
   async function postSelected() {
     const ids = Array.from(selected)
     if (ids.length === 0) return
-    if (!confirm(`确定审核选中 ${ids.length} 笔凭证?`)) return
+    if (!(await confirmDialog(`确定审核选中 ${ids.length} 笔凭证?`))) return
     setBusy(true)
     try {
       for (const id of ids) {
@@ -101,7 +103,7 @@ export default function FinanceVouchersPage() {
       }
       setSelected(new Set())
       await reload()
-    } catch (e: any) { alert(e.message) } finally { setBusy(false) }
+    } catch (e: any) { notifyUser(e.message) } finally { setBusy(false) }
   }
   function toggleSelect(id: string) {
     setSelected(prev => {
@@ -124,7 +126,7 @@ export default function FinanceVouchersPage() {
       headers: { Authorization: `Bearer ${token}` },
     })
     if (!res.ok) {
-      alert('导出失败')
+      notifyUser('导出失败')
       return
     }
     const blob = await res.blob()

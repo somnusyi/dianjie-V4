@@ -12,6 +12,8 @@ import dayjs from 'dayjs'
 import { MonthPicker } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../../_topnav'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Store = { id: string; name: string }
 type Item = {
@@ -113,7 +115,7 @@ export default function PayrollNewPage() {
       })
       router.replace('/v2/finance-pc/payroll')
     } catch (e: any) {
-      alert(e?.message || '提交失败')
+      notifyUser(e?.message || '提交失败')
       setSubmitting(false)
     }
   }

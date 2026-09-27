@@ -15,6 +15,8 @@ import dayjs from 'dayjs'
 import { Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../../_topnav'
+import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
+
 
 type Doc = {
   id: string; no: string; title: string; amount: string
@@ -94,25 +96,25 @@ export default function FinancePCPaymentRequestDetailPage() {
   const canCancel = d.status === 'PENDING'
 
   async function markPaid() {
-    if (!confirm(`确认已经在网银/招行 App 完成转账 ${fmt2(Number(d!.amount))} 给 ${d!.payload?.payeeName}? 系统会自动建凭证草稿.`)) return
+    if (!(await confirmDialog(`确认已经在网银/招行 App 完成转账 ${fmt2(Number(d!.amount))} 给 ${d!.payload?.payeeName}? 系统会自动建凭证草稿.`))) return
     setBusy(true)
     try {
       const r = await apiFetch<any>(`/api/payment-requests/${id}/mark-paid`, {
         method: 'PATCH',
         body: JSON.stringify({ bankFrom, bankTxNo }),
       })
-      if (r?.voucherWarning) alert(`已标记付款,但凭证生成失败: ${r.voucherWarning}\n请财务手工补建`)
+      if (r?.voucherWarning) notifyUser(`已标记付款,但凭证生成失败: ${r.voucherWarning}\n请财务手工补建`)
       await reload()
-    } catch (e: any) { alert(e.message) } finally { setBusy(false) }
+    } catch (e: any) { notifyUser(e.message) } finally { setBusy(false) }
   }
 
   async function cancel() {
-    if (!confirm('撤回后无法恢复, 需要重新提交. 确认撤回?')) return
+    if (!(await confirmDialog('撤回后无法恢复, 需要重新提交. 确认撤回?'))) return
     setBusy(true)
     try {
       await apiFetch(`/api/payment-requests/${id}/cancel`, { method: 'PATCH' })
       await reload()
-    } catch (e: any) { alert(e.message) } finally { setBusy(false) }
+    } catch (e: any) { notifyUser(e.message) } finally { setBusy(false) }
   }
 
   return (

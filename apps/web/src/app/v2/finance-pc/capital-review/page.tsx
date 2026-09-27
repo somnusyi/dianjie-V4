@@ -18,6 +18,8 @@ import dayjs from 'dayjs'
 import { Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../_topnav'
+import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
+
 
 type Project = {
   id: string; name: string
@@ -115,7 +117,7 @@ export default function FinancePCCapitalReviewPage() {
 
   async function approve(e: Expense, decision: 'APPROVE' | 'REJECT', note?: string) {
     if (submitting) return
-    if (decision === 'APPROVE' && !confirm(`批准付款 ¥${Number(e.amount).toLocaleString()} → ${e.vendor}?`)) return
+    if (decision === 'APPROVE' && !(await confirmDialog(`批准付款 ¥${Number(e.amount).toLocaleString()} → ${e.vendor}?`))) return
     setSubmitting(e.id)
     try {
       await apiFetch(`/api/capital/expenses/${e.id}/approve`, {
@@ -123,7 +125,7 @@ export default function FinancePCCapitalReviewPage() {
       })
       setRejectFor(null); setRejectNote('')
       load()
-    } catch (err: any) { alert(err.message) }
+    } catch (err: any) { notifyUser(err.message) }
     finally { setSubmitting(null) }
   }
 
@@ -317,9 +319,9 @@ function CapitalPayModal({ expense, onClose, onDone }: { expense: Expense; onClo
           paymentMethod, accountId, bankTxNo: bankTxNo || undefined, paidAt,
         }),
       })
-      if (result?.voucherWarning) alert(result.voucherWarning)
+      if (result?.voucherWarning) notifyUser(result.voucherWarning)
       onDone()
-    } catch (e: any) { alert(e?.message || '付款失败'); setBusy(false) }
+    } catch (e: any) { notifyUser(e?.message || '付款失败'); setBusy(false) }
   }
 
   return (

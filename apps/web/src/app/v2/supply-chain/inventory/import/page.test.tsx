@@ -11,6 +11,8 @@ vi.mock('@/components/v2', () => ({
 }))
 
 vi.mock('@/lib/v2-auth', () => ({ apiFetch: vi.fn() }))
+vi.mock('@/lib/ui-dialogs', () => ({ confirmDialog: vi.fn(), promptDialog: vi.fn() }))
+import { confirmDialog } from '@/lib/ui-dialogs'
 import { apiFetch } from '@/lib/v2-auth'
 
 const mockFetch = vi.mocked(apiFetch)
@@ -57,11 +59,7 @@ async function waitFor(predicate: () => boolean, timeout = 1000) {
 describe('美团期初库存基线导入页面', () => {
   beforeEach(() => {
     mockFetch.mockReset()
-    Object.defineProperty(window, 'confirm', {
-      configurable: true,
-      writable: true,
-      value: vi.fn(() => true),
-    })
+    vi.mocked(confirmDialog).mockResolvedValue(true)
     let current = importRecord(false)
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
@@ -139,7 +137,7 @@ describe('美团期初库存基线导入页面', () => {
     })
 
     await act(async () => { button!.click() })
-    expect(vi.mocked(window.confirm)).toHaveBeenCalledWith(expect.stringContaining('设为基准'))
+    expect(vi.mocked(confirmDialog)).toHaveBeenCalledWith(expect.stringContaining('设为基准'))
     await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path).endsWith('/baseline')))
     await waitFor(() => container.textContent?.includes('连续记账基准') ?? false)
 

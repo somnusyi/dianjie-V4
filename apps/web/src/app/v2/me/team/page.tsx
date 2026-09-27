@@ -6,6 +6,8 @@
 import { useEffect, useState } from 'react'
 import { getToken, getUser, routeForRole } from '@/lib/v2-auth'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 const ROLE_OPTIONS = [
   { value: 'MANAGER',        label: '店长' },
@@ -390,12 +392,12 @@ export default function TeamPage() {
                   onClick={() => {
                     const url = `${window.location.origin}/v2/invite/${inviteResult.token}`
                     if (navigator.clipboard?.writeText) {
-                      navigator.clipboard.writeText(url).then(() => alert('已复制'))
+                      navigator.clipboard.writeText(url).then(() => notifyUser('已复制'))
                     } else {
                       const el = document.createElement('textarea')
                       el.value = url; document.body.appendChild(el); el.select()
                       document.execCommand('copy'); document.body.removeChild(el)
-                      alert('已复制')
+                      notifyUser('已复制')
                     }
                   }}
                   className="w-full py-3 bg-amber text-white rounded-cta text-button">

@@ -12,6 +12,8 @@ import { useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch } from '@/lib/v2-auth'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Product = {
   id: string; code: string; name: string; unit: string; price: number | string; avgUnitCost?: number | string; stock?: number | string
@@ -53,7 +55,7 @@ export default function ChefLossNewPage() {
       const res = await apiFetch<{ url: string }>('/api/upload?category=loss-claims', { method: 'POST', body: fd as any })
       setEvidence(prev => [...prev, res.url])
     } catch (e: any) {
-      alert('上传失败: ' + (e?.message || e))
+      notifyUser('上传失败: ' + (e?.message || e))
     } finally {
       setUploading(false)
     }
@@ -80,8 +82,8 @@ export default function ChefLossNewPage() {
 
   function submit() {
     if (submitting) return
-    if (items.length === 0) return alert('请选择至少 1 项商品')
-    if (reason === '其他' && !customReason.trim()) return alert('选「其他」时请填写自定义原因')
+    if (items.length === 0) return notifyUser('请选择至少 1 项商品')
+    if (reason === '其他' && !customReason.trim()) return notifyUser('选「其他」时请填写自定义原因')
     openConfirm({
       title: `${effectiveReason} · ¥${total.toFixed(2)}`,
       body: `登记 ${items.length} 项店内报损 · 直接计入 P&L 损耗成本，不影响供应商账期`,
@@ -96,7 +98,7 @@ export default function ChefLossNewPage() {
           })
           router.push('/v2/chef/check')
         } catch (e: any) {
-          alert(e.message || '提交失败')
+          notifyUser(e.message || '提交失败')
           setSubmitting(false)
           throw e
         }
@@ -219,7 +221,7 @@ export default function ChefLossNewPage() {
                      e.target.value = ''
                      for (const f of files) {
                        if (f.type.startsWith('video/') && f.size > 50 * 1024 * 1024) {
-                         alert(`视频"${f.name}"超过 50MB, 请压缩后再传`)
+                         notifyUser(`视频"${f.name}"超过 50MB, 请压缩后再传`)
                          continue
                        }
                        await uploadPhoto(f)

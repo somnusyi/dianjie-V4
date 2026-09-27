@@ -17,6 +17,8 @@ import { apiFetch } from '@/lib/v2-auth'
 import { exportXlsx } from '@/lib/exportXlsx'
 import dayjs from 'dayjs'
 import FinanceTopNav from '../_topnav'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Account = {
   id: string
@@ -159,7 +161,7 @@ export default function FinancePCFundsPage() {
                   const s = await apiFetch<Summary>('/api/cashbook/summary')
                   setSummary(s)
                 } catch (e: any) {
-                  alert('同步失败: ' + (e?.message || e))
+                  notifyUser('同步失败: ' + (e?.message || e))
                 } finally {
                   setSyncing(false)
                 }
@@ -238,7 +240,7 @@ export default function FinancePCFundsPage() {
                   }
                   await exportXlsx(`资金对账单-${ym}.xlsx`, sheets)
                 } catch (e: any) {
-                  alert('导出失败: ' + (e?.message || e))
+                  notifyUser('导出失败: ' + (e?.message || e))
                 }
               }}
               disabled={!summary || accounts.length === 0}

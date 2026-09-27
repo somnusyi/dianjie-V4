@@ -21,6 +21,8 @@ import {
 } from '@/lib/single-delivery-note-preview'
 import { parseOperationGroupDeliveryNoteProjection } from '@/lib/operation-group-delivery-note-preview'
 import { num2cn } from '@/lib/num2cn'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Order = {
   id: string; no: string; status: string
@@ -682,7 +684,7 @@ export default function DeliveryNotePrintPage() {
       // 同时上传到 OSS 获取真 https URL — ArkWeb / 微信内置浏览器都能用
       void uploadToOss(blob, latestDocument.order, artifactEpoch)
     } catch (e: any) {
-      alert('导出失败: ' + (e.message || e))
+      notifyUser('导出失败: ' + (e.message || e))
     } finally {
       setExporting(false)
     }
@@ -862,7 +864,7 @@ export default function DeliveryNotePrintPage() {
       document.body.removeChild(link)
       setTimeout(() => URL.revokeObjectURL(url), 5000)
     } catch (e: any) {
-      alert('导出 Excel 失败: ' + (e?.message || e))
+      notifyUser('导出 Excel 失败: ' + (e?.message || e))
     } finally {
       setExportingXlsx(false)
     }
@@ -875,9 +877,9 @@ export default function DeliveryNotePrintPage() {
         window.print()
         await recordPrintEvents(latestDocument)
       }
-      else alert('当前环境不支持系统打印, 请用「下载 PDF」按钮')
+      else notifyUser('当前环境不支持系统打印, 请用「下载 PDF」按钮')
     } catch (e: any) {
-      alert('打印前刷新失败: ' + (e?.message || e))
+      notifyUser('打印前刷新失败: ' + (e?.message || e))
     }
   }
 

@@ -12,6 +12,8 @@ import { useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch } from '@/lib/v2-auth'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 export default function ReceivePage({ params }: { params: { id: string } }) {
   const router = useRouter()
@@ -110,7 +112,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
       const res = await apiFetch<{ url: string }>('/api/upload?category=loss-claims', { method: 'POST', body: fd as any })
       setEvidence(prev => [...prev, res.url])
     } catch (e: any) {
-      alert('上传失败: ' + (e.message || e))
+      notifyUser('上传失败: ' + (e.message || e))
     } finally {
       setUploading(false)
     }
@@ -136,7 +138,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
         })
         router.push(`/v2/chef/purchase/po-success/${params.id}`)
       } catch (e: any) {
-        alert(e.message || '收货失败')
+        notifyUser(e.message || '收货失败')
         setSubmitting(false)
         throw e
       }
@@ -319,7 +321,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
                          // 串行上传, 顺序保留; 视频客户端先校验大小给出友好错 (避免传完再被服务端拒)
                          for (const f of files) {
                            if (f.type.startsWith('video/') && f.size > 50 * 1024 * 1024) {
-                             alert(`视频"${f.name}"超过 50MB, 请压缩后再传`)
+                             notifyUser(`视频"${f.name}"超过 50MB, 请压缩后再传`)
                              continue
                            }
                            await uploadPhoto(f)

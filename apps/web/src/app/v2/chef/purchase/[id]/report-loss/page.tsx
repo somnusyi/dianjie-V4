@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch } from '@/lib/v2-auth'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type ClaimKind = 'ARRIVAL_DAMAGE' | 'ARRIVAL_SHORTAGE'
 
@@ -55,17 +57,17 @@ export default function PostReceiptLossPage({ params }: { params: { id: string }
       const result = await apiFetch<{ url: string }>('/api/upload?category=loss-claims', { method: 'POST', body: fd as any })
       setEvidence(current => [...current, result.url].slice(0, 9))
     } catch (e: any) {
-      alert(e?.message || '证据上传失败')
+      notifyUser(e?.message || '证据上传失败')
     } finally {
       setUploading(false)
     }
   }
 
   function submit() {
-    if (!receipt) return alert('没有可补报的收货单')
-    if (!selected.length) return alert('请至少填写 1 项异常数量')
-    if (!reason.trim() || !description.trim()) return alert('请填写异常原因和具体说明')
-    if (!evidence.length) return alert('请至少上传 1 份现场照片或视频')
+    if (!receipt) return notifyUser('没有可补报的收货单')
+    if (!selected.length) return notifyUser('请至少填写 1 项异常数量')
+    if (!reason.trim() || !description.trim()) return notifyUser('请填写异常原因和具体说明')
+    if (!evidence.length) return notifyUser('请至少上传 1 份现场照片或视频')
     openConfirm({
       title: `提交到货异常 ¥${total.toFixed(2)}`,
       body: lateReport
@@ -90,7 +92,7 @@ export default function PostReceiptLossPage({ params }: { params: { id: string }
           })
           router.push(`/v2/chef/purchase/po-success/${po.id}`)
         } catch (e: any) {
-          alert(e?.message || '补报失败')
+          notifyUser(e?.message || '补报失败')
           setSubmitting(false)
           throw e
         }

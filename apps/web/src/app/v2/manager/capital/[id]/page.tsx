@@ -18,6 +18,8 @@ import { useParams, useRouter } from 'next/navigation'
 import { apiFetch } from '@/lib/v2-auth'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Contract = {
   id: string; category: string; vendor: string
@@ -98,7 +100,7 @@ export default function ManagerCapitalDetailPage() {
           await apiFetch(`/api/capital/expenses/${expId}/cancel`, { method: 'PATCH' })
           load()
         } catch (e: any) {
-          alert(e.message || '撤回失败')
+          notifyUser(e.message || '撤回失败')
           throw e
         }
       },

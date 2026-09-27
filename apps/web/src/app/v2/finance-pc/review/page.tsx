@@ -14,6 +14,8 @@ import { Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import dayjs from 'dayjs'
 import FinanceTopNav from '../_topnav'
+import { confirmDialog, notifyUser, promptDialog } from '@/lib/ui-dialogs'
+
 
 type Doc = {
   id: string; no: string; type: string; title: string
@@ -70,7 +72,7 @@ export default function FinancePCReviewPage() {
 
   async function bulkApprove() {
     if (selected.size === 0 || submitting) return
-    if (!confirm(`确认批量通过 ${selected.size} 单 (合计 ${fmtMoney(selectedSum)})?`)) return
+    if (!(await confirmDialog(`确认批量通过 ${selected.size} 单 (合计 ${fmtMoney(selectedSum)})?`))) return
     setSubmitting(true)
     setError(null)
     const ids = Array.from(selected)
@@ -98,7 +100,7 @@ export default function FinancePCReviewPage() {
   async function singleDecision(id: string, decision: 'APPROVE' | 'REJECT') {
     let comment = ''
     if (decision === 'REJECT') {
-      const reason = window.prompt('请填写驳回原因:')
+      const reason = (await promptDialog('请填写驳回原因:'))
       if (!reason?.trim()) return
       comment = reason.trim()
     }
@@ -110,7 +112,7 @@ export default function FinancePCReviewPage() {
       })
       setRefreshKey(k => k + 1)
     } catch (e: any) {
-      alert(`${decision === 'APPROVE' ? '通过' : '驳回'} 失败: ${e?.message || e}`)
+      notifyUser(`${decision === 'APPROVE' ? '通过' : '驳回'} 失败: ${e?.message || e}`)
     } finally {
       setSubmitting(false)
     }

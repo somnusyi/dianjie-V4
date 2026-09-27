@@ -7,6 +7,8 @@ import { WarehouseToolTabs } from '@/components/v2/warehouse-tool-tabs'
 import { apiFetch } from '@/lib/v2-auth'
 import { buildInventoryExportRows } from '@/lib/inventory-export'
 import { readWarehouseViewState, useWarehouseScrollRestoration, writeWarehouseViewState } from '@/lib/warehouse-view-state'
+import { confirmDialog } from '@/lib/ui-dialogs'
+
 
 type InventoryItem = {
   id: string
@@ -315,7 +317,7 @@ export default function InternalSupplyChainInventoryPage() {
   // 单位待核验：人工确认换算关系后放行入库（只提交状态，后端原样保留四单位口径）
   async function verifyUnitConversion(item: InventoryItem) {
     const mapping = conversionText(item)
-    if (!window.confirm(`确认「${item.name}」的换算关系：${mapping}？\n核验通过后该商品才能入库记账；换算不对请点「前往商品管理」改好再核验。`)) return
+    if (!(await confirmDialog(`确认「${item.name}」的换算关系：${mapping}？\n核验通过后该商品才能入库记账；换算不对请点「前往商品管理」改好再核验。`))) return
     setVerifyingId(item.id)
     setError('')
     try {
@@ -885,11 +887,12 @@ export default function InternalSupplyChainInventoryPage() {
     const confirmation = policyMode === 'BLOCK'
       ? '确认切换为“库存为 0，禁止下单”？\n只在门店提交阶段检查可用库存是否为 0；可用库存大于 0 不代表足够覆盖本次订购量。'
       : '确认切换为“仅提醒，仍可下单”？\n门店可以提交订单，但提交时不锁库存；严格库存模式下，总仓接单仍可能因整单库存不足失败。'
-    if (!window.confirm(confirmation)) {
+    if (!(await confirmDialog(confirmation))) {
       setPolicyMode(currentPolicyMode)
       return
     }
 
+    if (savingPolicyRef.current) return
     savingPolicyRef.current = true
     setSavingPolicy(true)
     setError('')

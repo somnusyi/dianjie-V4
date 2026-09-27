@@ -9,6 +9,8 @@ import dayjs from 'dayjs'
 import { Chip } from '@/components/v2'
 import { ErrorScreen } from '@/components/v2/use-dashboard'
 import { apiFetch } from '@/lib/v2-auth'
+import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
+
 
 type TemplateEntry = {
   accountCode: string; accountName: string
@@ -76,24 +78,24 @@ export default function VoucherTemplatesPage() {
         method: 'PUT', body: JSON.stringify({ enabled: !t.enabled }),
       })
       await reload()
-    } catch (e: any) { alert(e.message) } finally { setBusy(false) }
+    } catch (e: any) { notifyUser(e.message) } finally { setBusy(false) }
   }
   async function del(t: Template) {
-    if (!confirm(`删除模板「${t.name}」?`)) return
+    if (!(await confirmDialog(`删除模板「${t.name}」?`))) return
     setBusy(true)
     try {
       await apiFetch(`/api/voucher-templates/${t.id}`, { method: 'DELETE' })
       await reload()
-    } catch (e: any) { alert(e.message) } finally { setBusy(false) }
+    } catch (e: any) { notifyUser(e.message) } finally { setBusy(false) }
   }
   async function runNow() {
-    if (!confirm('立即扫描所有模板,本月未跑的将自动建草稿凭证')) return
+    if (!(await confirmDialog('立即扫描所有模板,本月未跑的将自动建草稿凭证'))) return
     setBusy(true)
     try {
       const r = await apiFetch<any>('/api/voucher-templates/run-now', { method: 'POST' })
-      alert(`生成 ${r.run} 笔凭证, 跳过 ${r.skipped} 笔`)
+      notifyUser(`生成 ${r.run} 笔凭证, 跳过 ${r.skipped} 笔`)
       await reload()
-    } catch (e: any) { alert(e.message) } finally { setBusy(false) }
+    } catch (e: any) { notifyUser(e.message) } finally { setBusy(false) }
   }
   async function createFromPreset(p: typeof PRESET[number]) {
     setBusy(true)
@@ -105,7 +107,7 @@ export default function VoucherTemplatesPage() {
         }),
       })
       await reload()
-    } catch (e: any) { alert(e.message) } finally { setBusy(false) }
+    } catch (e: any) { notifyUser(e.message) } finally { setBusy(false) }
   }
 
   if (error) return <ErrorScreen message={error} />

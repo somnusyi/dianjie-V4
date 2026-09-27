@@ -11,6 +11,8 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiFetch } from '@/lib/v2-auth'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 export default function ChefAckPage({ params }: { params: { id: string } }) {
   const router = useRouter()
@@ -75,7 +77,7 @@ export default function ChefAckPage({ params }: { params: { id: string } }) {
 
   async function uploadPhoto(file: File) {
     if (images.length >= 5) {
-      alert('最多 5 张照片')
+      notifyUser('最多 5 张照片')
       return
     }
     setUploading(true)
@@ -85,7 +87,7 @@ export default function ChefAckPage({ params }: { params: { id: string } }) {
       const res = await apiFetch<{ url: string }>('/api/upload?category=chef-ack', { method: 'POST', body: fd as any })
       setImages(prev => [...prev, res.url])
     } catch (e: any) {
-      alert('上传失败: ' + (e?.message || e))
+      notifyUser('上传失败: ' + (e?.message || e))
     } finally {
       setUploading(false)
     }
@@ -97,18 +99,18 @@ export default function ChefAckPage({ params }: { params: { id: string } }) {
 
   async function submit() {
     if (submitting) return
-    if (images.length === 0) { alert('请至少上传 1 张验收照片'); return }
-    if (images.length > 5)   { alert('最多 5 张'); return }
+    if (images.length === 0) { notifyUser('请至少上传 1 张验收照片'); return }
+    if (images.length > 5)   { notifyUser('最多 5 张'); return }
     setSubmitting(true)
     try {
       await apiFetch(`/api/orders/${params.id}/chef-ack`, {
         method: 'PATCH',
         body: JSON.stringify({ images, note: note.trim() || undefined }),
       })
-      alert('验收单已发送给供应商')
+      notifyUser('验收单已发送给供应商')
       router.push('/v2/chef/purchase')
     } catch (e: any) {
-      alert('发送失败: ' + (e?.message || e))
+      notifyUser('发送失败: ' + (e?.message || e))
       setSubmitting(false)
     }
   }

@@ -18,6 +18,8 @@ import dayjs from 'dayjs'
 import { Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../_topnav'
+import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
+
 
 type Period = {
   id: string
@@ -104,16 +106,16 @@ export default function FinancePCPeriodClosePage() {
 
   async function doClose(month: string) {
     if (busy) return
-    if (!confirm(`关账 ${month}?\n\n会自动:\n• 生成期末结转凭证 (主营业务收入 → 本年利润)\n• 锁定当月凭证 (不可改/反审/作废)\n\n确认?`)) return
+    if (!(await confirmDialog(`关账 ${month}?\n\n会自动:\n• 生成期末结转凭证 (主营业务收入 → 本年利润)\n• 锁定当月凭证 (不可改/反审/作废)\n\n确认?`))) return
     setBusy(true)
     try {
       const r: any = await apiFetch('/api/vouchers/periods/close', {
         method: 'POST', body: JSON.stringify({ month, closeNote: closeNote || null, withCarryover: true }),
       })
-      alert(`✓ ${month} 已关账${r.carryoverVoucherId ? ', 期末结转凭证已生成' : ' (本月无损益, 未生成结转凭证)'}`)
+      notifyUser(`✓ ${month} 已关账${r.carryoverVoucherId ? ', 期末结转凭证已生成' : ' (本月无损益, 未生成结转凭证)'}`)
       setCloseFor(null); setCloseNote('')
       load()
-    } catch (e: any) { alert(e.message || '关账失败') }
+    } catch (e: any) { notifyUser(e.message || '关账失败') }
     finally { setBusy(false) }
   }
 
@@ -123,22 +125,22 @@ export default function FinancePCPeriodClosePage() {
       const url = `/api/vouchers/periods/preview?month=${month}${includeDraft ? '&includeDraft=1' : ''}`
       const p = await apiFetch<any>(url)
       setPreview({ ...p, _month: month })
-    } catch (e: any) { alert(e.message || '预览失败') }
+    } catch (e: any) { notifyUser(e.message || '预览失败') }
     finally { setPreviewLoading(false) }
   }
 
   async function doReopen() {
     if (!reopenFor || busy) return
-    if (!reopenNote.trim()) { alert('请填重开原因 (审计留痕)'); return }
+    if (!reopenNote.trim()) { notifyUser('请填重开原因 (审计留痕)'); return }
     setBusy(true)
     try {
       await apiFetch('/api/vouchers/periods/reopen', {
         method: 'POST', body: JSON.stringify({ month: reopenFor.month, reopenNote }),
       })
-      alert(`✓ ${reopenFor.month} 已重开`)
+      notifyUser(`✓ ${reopenFor.month} 已重开`)
       setReopenFor(null); setReopenNote('')
       load()
-    } catch (e: any) { alert(e.message || '重开失败') }
+    } catch (e: any) { notifyUser(e.message || '重开失败') }
     finally { setBusy(false) }
   }
 

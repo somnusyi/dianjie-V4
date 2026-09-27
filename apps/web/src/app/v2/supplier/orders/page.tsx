@@ -17,6 +17,8 @@ import {
   supplierOrderStatusMeta,
 } from '@/lib/supplier-domain'
 import dayjs from 'dayjs'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Order = {
   id: string; no: string; status: string
@@ -216,7 +218,7 @@ export default function SupplierOrdersPage() {
             })
             await load()
           } catch (e: any) {
-            alert(e.message || '操作失败')
+            notifyUser(e.message || '操作失败')
             throw e
           } finally {
             setSubmitting(null)
@@ -238,7 +240,7 @@ export default function SupplierOrdersPage() {
             })
             await load()
           } catch (e: any) {
-            alert(e.message || '操作失败')
+            notifyUser(e.message || '操作失败')
             throw e
           } finally {
             setSubmitting(null)

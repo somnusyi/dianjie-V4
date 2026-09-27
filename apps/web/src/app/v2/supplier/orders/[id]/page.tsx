@@ -52,6 +52,8 @@ import {
   SINGLE_DELIVERY_NOTE_PREVIEW_INDEX_PREFIX,
   SINGLE_DELIVERY_NOTE_PREVIEW_PREFIX,
 } from '@/lib/single-delivery-note-preview'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Order = {
   id: string; no: string; status: string
@@ -1437,7 +1439,7 @@ export default function SupplierOrderDetailPage() {
                                 body: JSON.stringify({ action: 'approve' }),
                               })
                               load()
-                            } catch (e: any) { alert(e.message || '操作失败'); throw e }
+                            } catch (e: any) { notifyUser(e.message || '操作失败'); throw e }
                           },
                         })
                       }}
@@ -1700,7 +1702,7 @@ export default function SupplierOrderDetailPage() {
                     })
                     setRejectingClaim(null)
                     load()
-                  } catch (e: any) { alert(e.message || '操作失败') }
+                  } catch (e: any) { notifyUser(e.message || '操作失败') }
                   finally { setSubmitting(false) }
                 }}
                 className="flex-1 py-2 bg-red text-white rounded-cta text-button disabled:opacity-40">

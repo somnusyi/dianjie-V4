@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import { notifyUser, promptDialog } from '@/lib/ui-dialogs'
+
 
 export const invoicePaymentMethods = [
   { value: 'manual', label: '银行转账', accountType: 'BANK' },
@@ -87,7 +89,7 @@ export default function InvoicePaymentResultDialog({
           note: note.trim() || undefined,
         }),
       })
-      if (result?.voucherWarning) alert(result.voucherWarning)
+      if (result?.voucherWarning) notifyUser(result.voucherWarning)
       onDone()
     } catch (e: any) {
       setError(e?.message || '付款确认失败')
@@ -95,7 +97,7 @@ export default function InvoicePaymentResultDialog({
   }
 
   async function markFailed() {
-    const reason = window.prompt('请输入付款失败原因')?.trim()
+    const reason = (await promptDialog('请输入付款失败原因'))?.trim()
     if (!reason) return
     setBusy(true); setError(null)
     try {
@@ -108,7 +110,7 @@ export default function InvoicePaymentResultDialog({
   }
 
   async function cancelPayment() {
-    const reason = window.prompt('取消原因（可不填）')?.trim()
+    const reason = (await promptDialog('取消原因（可不填）'))?.trim()
     if (reason === undefined) return
     setBusy(true); setError(null)
     try {

@@ -26,6 +26,7 @@ export type ConfirmSheetState = {
   withInput?: boolean
   inputPlaceholder?: string
   inputRequired?: boolean
+  inputInitialValue?: string
   onConfirm?: (inputValue?: string) => void | Promise<void>
   onCancel?: () => void
 }
@@ -42,10 +43,10 @@ export function useConfirmSheet(): [ConfirmSheetState & { close: () => void }, (
 export function ConfirmSheet(props: ConfirmSheetState & { close: () => void }) {
   const {
     open, title, body, confirmLabel = '确认', cancelLabel = '取消',
-    tone = 'default', withInput, inputPlaceholder, inputRequired,
+    tone = 'default', withInput, inputPlaceholder, inputRequired, inputInitialValue,
     onConfirm, onCancel, close,
   } = props
-  const [val, setVal] = useState('')
+  const [val, setVal] = useState(inputInitialValue || '')
   const [busy, setBusy] = useState(false)
   // open 关闭时 reset
   React.useEffect(() => { if (!open) { setVal(''); setBusy(false) } }, [open])
@@ -64,6 +65,7 @@ export function ConfirmSheet(props: ConfirmSheetState & { close: () => void }) {
     }
   }
   const handleCancel = () => {
+    if (busy) return
     onCancel?.()
     close()
   }
@@ -75,7 +77,8 @@ export function ConfirmSheet(props: ConfirmSheetState & { close: () => void }) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40"
+      role="dialog" aria-modal="true" aria-label={title}
+      className="fixed inset-0 z-[70] flex items-end justify-center bg-ink/40"
       onClick={handleCancel}
     >
       <div

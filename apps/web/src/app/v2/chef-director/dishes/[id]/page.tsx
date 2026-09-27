@@ -6,6 +6,8 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { ErrorScreen } from '@/components/v2/use-dashboard'
 import { apiFetch } from '@/lib/v2-auth'
+import { confirmDialog } from '@/lib/ui-dialogs'
+
 
 type Product = {
   id: string
@@ -213,7 +215,7 @@ export default function DishDetailPage() {
         published = await apiFetch<BomVersion>(`/api/dishes/bom-versions/${draft.id}/publish`, { method: 'POST', body: JSON.stringify({}) })
       } catch (reason: any) {
         if (reason.data?.code !== 'HISTORICAL_CONFIRMATION_REQUIRED') throw reason
-        if (!window.confirm(`${reason.message}\n\n确认发布这次历史纠错吗？发布后请回到 BOM 待办执行历史回补。`)) return
+        if (!(await confirmDialog(`${reason.message}\n\n确认发布这次历史纠错吗？发布后请回到 BOM 待办执行历史回补。`))) return
         published = await apiFetch<BomVersion>(`/api/dishes/bom-versions/${draft.id}/publish`, {
           method: 'POST', body: JSON.stringify({ confirmHistoricalCorrection: true }),
         })
@@ -311,9 +313,9 @@ export default function DishDetailPage() {
       const impact = await apiFetch<{
         importCount: number; saleDays: number; saleQuantity: number; saleRevenue: number; from: string; to: string
       }>(`/api/daily-business-imports/bom-recalculation-impact?versionId=${encodeURIComponent(version.id)}`)
-      const confirmed = window.confirm(
+      const confirmed = (await confirmDialog(
         `历史重算影响预览\n\n营业日期：${shortDate(impact.from)} ～ ${shortDate(impact.to)}\n日报：${impact.importCount} 天\n该菜品销量：${impact.saleQuantity} 份\n销售收入：¥${fmt(impact.saleRevenue)}\n\n系统会按各营业日有效 BOM 原子重建库存消耗。确认继续吗？`,
-      )
+      ))
       if (!confirmed) return
       const result = await apiFetch<{ recalculatedImportCount: number }>('/api/daily-business-imports/bom-recalculation', {
         method: 'POST', body: JSON.stringify({ versionId: version.id, confirm: true }),

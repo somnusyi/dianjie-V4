@@ -4,6 +4,8 @@ import {
   BlackHero, PeriodPills, TodoCard, MetricTile, StackedBar, ProgressDots,
   ApprovalRouting, BottomNav, ActionButtonPair, ActionButton, StoreAvatar, Chip,
 } from './index'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 export default function DesignSystemPage() {
   const [period, setPeriod] = useState('month')
@@ -67,7 +69,7 @@ export default function DesignSystemPage() {
             chips={[{ label: '差评', tone: 'red' }, { label: '12分钟前', tone: 'gray' }]}
             title="1 星差评 · 等位 50 分钟"
             sub="客户·刘女士 · 已加微信 · 优先回复"
-            primary={{ label: '去回复', onClick: () => alert('去回复') }}
+            primary={{ label: '去回复', onClick: () => notifyUser('去回复') }}
           />
           <TodoCard
             tone="today"
@@ -151,7 +153,7 @@ export default function DesignSystemPage() {
             activeKey={tab}
             onChange={setTab}
             fabKey="fab"
-            onFab={() => alert('打开中央抽屉')}
+            onFab={() => notifyUser('打开中央抽屉')}
           />
         </div>
       </Section>

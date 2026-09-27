@@ -9,6 +9,8 @@ import {
   statusTone,
   UPSTREAM_SETTLEMENT_STATUS_LABEL,
 } from '@/lib/upstream-procurement'
+import { confirmDialog } from '@/lib/ui-dialogs'
+
 
 type Statement = {
   id: string
@@ -59,7 +61,7 @@ export default function UpstreamSettlementsPage() {
   }), { confirmed: 0, locked: 0, payable: 0 }), [items])
 
   async function lockStatement(statement: Statement) {
-    if (!window.confirm(`确认锁定对账单 ${statement.no}？锁定后本期金额不能再修改。`)) return
+    if (!(await confirmDialog(`确认锁定对账单 ${statement.no}？锁定后本期金额不能再修改。`))) return
     setWorking(statement.id)
     setError(null)
     setNotice(null)

@@ -76,6 +76,8 @@ import {
   type FourUnitForm,
   validateFourUnitForm,
 } from '@/lib/supply-product-four-units'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type ProductRow = SupplyProduct & {
   spec?: string | null
@@ -816,7 +818,7 @@ export default function InternalSupplyChainProductsPage() {
           setNotice('调价已直接生效，并已通知总厨。')
           load()
         } catch (reason: any) {
-          alert(reason?.message || '调价失败')
+          notifyUser(reason?.message || '调价失败')
           throw reason
         } finally { setSubmitting(false) }
       },
@@ -842,7 +844,7 @@ export default function InternalSupplyChainProductsPage() {
           setNotice(`${isDisable ? '停售' : '恢复'}已直接生效，并已通知总厨。`)
           load()
         } catch (reason: any) {
-          alert(reason?.message || '操作失败')
+          notifyUser(reason?.message || '操作失败')
           throw reason
         } finally { setSubmitting(false) }
       },
@@ -881,7 +883,7 @@ export default function InternalSupplyChainProductsPage() {
     if (selectedCount === 0 || !bulkCategory.trim()) return
     const blocked = bulkCategoryBlockedReason(filters)
     if (blocked) {
-      alert(blocked)
+      notifyUser(blocked)
       return
     }
     openConfirm({
@@ -901,7 +903,7 @@ export default function InternalSupplyChainProductsPage() {
           setNotice(buildBatchSuccessNotice('category', res?.count ?? selectedCount))
           load()
         } catch (reason: any) {
-          alert(reason?.message || '批量分类失败')
+          notifyUser(reason?.message || '批量分类失败')
           throw reason
         } finally { setSubmitting(false) }
       },
@@ -919,7 +921,7 @@ export default function InternalSupplyChainProductsPage() {
       })
     } catch (reason: any) {
       setSubmitting(false)
-      alert(reason?.message || '影响范围预览失败')
+      notifyUser(reason?.message || '影响范围预览失败')
       return
     }
     setSubmitting(false)
@@ -941,7 +943,7 @@ export default function InternalSupplyChainProductsPage() {
           setNotice(buildBatchSuccessNotice(isDisable ? 'disable' : 'restore', res?.count ?? selectedCount))
           load()
         } catch (reason: any) {
-          alert(reason?.message || '批量状态变更失败')
+          notifyUser(reason?.message || '批量状态变更失败')
           throw reason
         } finally { setSubmitting(false) }
       },

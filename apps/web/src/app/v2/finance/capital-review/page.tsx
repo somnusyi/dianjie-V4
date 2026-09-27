@@ -11,6 +11,8 @@ import dayjs from 'dayjs'
 import { apiFetch } from '@/lib/v2-auth'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Project = {
   id: string; name: string
@@ -115,7 +117,7 @@ export default function CapitalReviewPage() {
           method: 'PATCH', body: JSON.stringify({ decision, note }),
         })
         load()
-      } catch (err: any) { alert(err.message); throw err }
+      } catch (err: any) { notifyUser(err.message); throw err }
       finally { setSubmitting(null) }
     }
     if (decision === 'REJECT') {
@@ -263,7 +265,7 @@ function MobileCapitalPayModal({ expense, onClose, onDone }: { expense: Expense;
       const result = await apiFetch<any>(`/api/capital/expenses/${expense.id}/pay`, {
         method: 'PATCH', body: JSON.stringify({ paymentMethod, accountId, bankTxNo: bankTxNo || undefined, paidAt }),
       })
-      if (result?.voucherWarning) alert(result.voucherWarning)
+      if (result?.voucherWarning) notifyUser(result.voucherWarning)
       onDone()
     } catch (e: any) { setError(e?.message || '付款失败'); setBusy(false) }
   }

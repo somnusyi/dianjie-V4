@@ -5,6 +5,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import { UserMenu } from '@/components/v2/user-menu'
 import { formatQuantity } from '@/lib/format'
+import { notifyUser, promptDialog } from '@/lib/ui-dialogs'
+
 
 type InventorySummary = {
   status: 'AVAILABLE' | 'NO_BASELINE'
@@ -63,15 +65,15 @@ export default function ManagerInventoryPage() {
   const [filter, setFilter] = useState<Filter>('all')
 
   async function configurePolicy(item: EstimatedItem) {
-    const minimumText = window.prompt(`设置“${item.name}”安全库存（单位：${item.unit}）`, String(item.minStock || 0))
+    const minimumText = (await promptDialog(`设置“${item.name}”安全库存（单位：${item.unit}）`, String(item.minStock || 0)))
     if (minimumText == null) return
     const minStock = Number(minimumText)
-    if (!Number.isFinite(minStock) || minStock < 0) return window.alert('安全库存必须是大于等于 0 的数字')
-    const targetText = window.prompt(`设置“${item.name}”建议补货目标（单位：${item.unit}，可留空）`, item.targetStock == null ? '' : String(item.targetStock))
+    if (!Number.isFinite(minStock) || minStock < 0) return notifyUser('安全库存必须是大于等于 0 的数字')
+    const targetText = (await promptDialog(`设置“${item.name}”建议补货目标（单位：${item.unit}，可留空）`, item.targetStock == null ? '' : String(item.targetStock)))
     if (targetText == null) return
     const targetStock = targetText.trim() === '' ? null : Number(targetText)
     if (targetStock != null && (!Number.isFinite(targetStock) || targetStock < minStock)) {
-      return window.alert('建议补货目标必须大于等于安全库存')
+      return notifyUser('建议补货目标必须大于等于安全库存')
     }
     try {
       const policy = await apiFetch<{ minStock: number; targetStock: number | null }>(`/api/inventory/policies/${item.id}`, {
@@ -81,7 +83,7 @@ export default function ManagerInventoryPage() {
         ? { ...row, ...policy, isLowStock: policy.minStock > 0 && Number(row.stock) < policy.minStock }
         : row))
     } catch (e: any) {
-      window.alert(e?.message || '保存安全库存失败')
+      notifyUser(e?.message || '保存安全库存失败')
     }
   }
 

@@ -12,6 +12,8 @@ import { useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import dayjs from 'dayjs'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Claim = {
   id: string; no: string; status: string
@@ -71,8 +73,8 @@ export default function DisputesPage() {
       } else {
         // 供应商拒绝的争议 → resolve (要扣减金额)
         const v = Number(deduct)
-        if (!Number.isFinite(v) || v < 0) { alert('扣减金额非法'); setSubmitting(false); return }
-        if (v > Number(picked.totalLossAmount)) { alert('扣减不能超过报损总额 ¥' + Number(picked.totalLossAmount).toFixed(2)); setSubmitting(false); return }
+        if (!Number.isFinite(v) || v < 0) { notifyUser('扣减金额非法'); setSubmitting(false); return }
+        if (v > Number(picked.totalLossAmount)) { notifyUser('扣减不能超过报损总额 ¥' + Number(picked.totalLossAmount).toFixed(2)); setSubmitting(false); return }
         await apiFetch(`/api/loss-claims/${picked.id}/resolve`, {
           method: 'PATCH',
           body: JSON.stringify({ finalDeductAmount: v, note: note.trim() || undefined }),
@@ -81,21 +83,21 @@ export default function DisputesPage() {
       setPicked(null)
       load()
     } catch (e: any) {
-      alert(e.message || '仲裁失败')
+      notifyUser(e.message || '仲裁失败')
     } finally {
       setSubmitting(false)
     }
   }
   async function rejectManual() {
     if (!picked || !picked.isManual) return
-    if (!note.trim()) { alert('驳回必须填理由'); return }
+    if (!note.trim()) { notifyUser('驳回必须填理由'); return }
     setSubmitting(true)
     try {
       await apiFetch(`/api/loss-claims/${picked.id}/manual-review`, {
         method: 'PATCH', body: JSON.stringify({ action: 'reject', note: note.trim() }),
       })
       setPicked(null); load()
-    } catch (e: any) { alert(e.message || '驳回失败') }
+    } catch (e: any) { notifyUser(e.message || '驳回失败') }
     finally { setSubmitting(false) }
   }
 

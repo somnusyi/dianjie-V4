@@ -3,6 +3,8 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import { confirmDialog } from '@/lib/ui-dialogs'
+
 
 type Dish = { id: string; name: string; category?: string | null }
 type Recipe = { id: string; variantKey: string; quantity: string; unit: string; product: { name: string; unit: string } }
@@ -77,7 +79,7 @@ export default function ChefDirectorBomPage() {
   }
 
   async function backfill(task: BomTask) {
-    if (!window.confirm(`确认按当前 BOM 回补 ${shortDate(task.businessDate)} 的库存消耗？\n${task.rawDishName}${task.spec ? `（${task.spec}）` : ''} · ${task.quantity} 份\n\n该操作有幂等保护，不会重复扣减。`)) return
+    if (!(await confirmDialog(`确认按当前 BOM 回补 ${shortDate(task.businessDate)} 的库存消耗？\n${task.rawDishName}${task.spec ? `（${task.spec}）` : ''} · ${task.quantity} 份\n\n该操作有幂等保护，不会重复扣减。`))) return
     setBusyId(task.id)
     try {
       await apiFetch(`/api/daily-business-imports/bom-tasks/${task.id}/backfill`, { method: 'POST' })

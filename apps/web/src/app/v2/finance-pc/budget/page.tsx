@@ -11,6 +11,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import { Chip } from '@/components/v2'
 import FinanceTopNav from '../_topnav'
+import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
+
 
 const CATEGORY_LABEL: Record<string, string> = {
   CONTRACT: '合同', CONSTRUCTION: '装修工程', FIRE: '消防',
@@ -150,11 +152,11 @@ export default function BudgetPCPage() {
   }
 
   async function deleteRow(row: Row) {
-    if (!confirm(`确认删除「${row.name}」?`)) return
+    if (!(await confirmDialog(`确认删除「${row.name}」?`))) return
     try {
       await apiFetch(`/api/budgets/${row.id}`, { method: 'DELETE' })
       await refresh()
-    } catch (e: any) { alert(e?.message || '删除失败') }
+    } catch (e: any) { notifyUser(e?.message || '删除失败') }
   }
 
   // 按 category 分组

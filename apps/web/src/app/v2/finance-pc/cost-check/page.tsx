@@ -19,6 +19,8 @@ import dayjs from 'dayjs'
 import { Chip, MonthPicker } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../_topnav'
+import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
+
 
 type Verification = { done: boolean; at?: string | null }
 type Receipt = {
@@ -87,18 +89,18 @@ export default function FinancePCCostCheckPage() {
     try {
       await apiFetch(`/api/receipts/${r.id}/verify`, { method: 'PATCH', body: JSON.stringify({ actor }) })
       await load()
-    } catch (e: any) { alert(e?.message || '核对失败') }
+    } catch (e: any) { notifyUser(e?.message || '核对失败') }
     finally { setBusy(false) }
   }
 
   async function revoke(r: Receipt, actor: 'supplier' | 'finance') {
     if (busy) return
-    if (!confirm(`确定撤销${actor === 'supplier' ? '供应商' : '财务'}核对? 撤销供应商会级联撤销财务.`)) return
+    if (!(await confirmDialog(`确定撤销${actor === 'supplier' ? '供应商' : '财务'}核对? 撤销供应商会级联撤销财务.`))) return
     setBusy(true)
     try {
       await apiFetch(`/api/receipts/${r.id}/verify/revoke`, { method: 'PATCH', body: JSON.stringify({ actor }) })
       await load()
-    } catch (e: any) { alert(e?.message || '撤销失败') }
+    } catch (e: any) { notifyUser(e?.message || '撤销失败') }
     finally { setBusy(false) }
   }
 
@@ -110,24 +112,24 @@ export default function FinancePCCostCheckPage() {
         method: 'PATCH', body: JSON.stringify({ sourceType: sourceType === 'UNCATEGORIZED' ? null : sourceType }),
       })
       await load()
-    } catch (e: any) { alert(e?.message || '失败') }
+    } catch (e: any) { notifyUser(e?.message || '失败') }
     finally { setBusy(false) }
   }
 
   // 批量打标 (BUG#11 fix)
   async function batchSetSourceType(sourceType: GroupKey) {
     if (busy || selected.size === 0) return
-    if (!confirm(`批量打标 ${selected.size} 个供应商 → ${sourceType}?`)) return
+    if (!(await confirmDialog(`批量打标 ${selected.size} 个供应商 → ${sourceType}?`))) return
     setBusy(true)
     try {
       const r = await apiFetch<{ updated: number }>('/api/finance/cost-check/suppliers/batch-source-type', {
         method: 'POST',
         body: JSON.stringify({ ids: Array.from(selected), sourceType }),
       })
-      alert(`✓ 已打标 ${r.updated} 个供应商`)
+      notifyUser(`✓ 已打标 ${r.updated} 个供应商`)
       setSelected(new Set())
       await load()
-    } catch (e: any) { alert(e?.message || '失败') }
+    } catch (e: any) { notifyUser(e?.message || '失败') }
     finally { setBusy(false) }
   }
   function toggleSelect(supplierId: string) {

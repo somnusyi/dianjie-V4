@@ -18,6 +18,8 @@ import { Chip } from '@/components/v2'
 import dayjs from 'dayjs'
 import FinanceTopNav from '../_topnav'
 import InvoicePaymentResultDialog, { invoicePaymentMethods } from '@/components/v2/InvoicePaymentResultDialog'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Receipt = {
   id: string; no: string; totalAmount: string | number; deliveryDate: string
@@ -117,9 +119,9 @@ export default function FinancePCPayablePage() {
   async function submitPay() {
     if (!target) return
     const amt = Number(payAmount)
-    if (!amt || amt <= 0) { alert('付款金额必须 > 0'); return }
+    if (!amt || amt <= 0) { notifyUser('付款金额必须 > 0'); return }
     if (amt > target.remainingAmount + 0.01) {
-      alert(`金额超过剩余可付 ${fmt2(target.remainingAmount)}`); return
+      notifyUser(`金额超过剩余可付 ${fmt2(target.remainingAmount)}`); return
     }
     setSubmitting(true)
     try {
@@ -132,7 +134,7 @@ export default function FinancePCPayablePage() {
       })
       setTarget(null); setPayAmount(''); setPayNote('')
       load()
-    } catch (e: any) { alert(e.message || '付款失败') }
+    } catch (e: any) { notifyUser(e.message || '付款失败') }
     setSubmitting(false)
   }
 

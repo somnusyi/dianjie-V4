@@ -12,6 +12,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { usePathname } from 'next/navigation'
 import { apiFetch } from '@/lib/v2-auth'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Annotation = {
   id: string
@@ -235,7 +237,7 @@ export function AnnotationLayer() {
       })
       setItems(current => [...current, row])
       setDraft(null); setDraftText(''); setMode(null)
-    } catch (reason: any) { window.alert(reason?.message || '保存失败，请重试') }
+    } catch (reason: any) { notifyUser(reason?.message || '保存失败，请重试') }
     finally { setBusy(false) }
   }
 
@@ -246,7 +248,7 @@ export function AnnotationLayer() {
       await apiFetch(`/api/page-annotations/${id}`, { method: 'DELETE' })
       setItems(current => current.filter(item => item.id !== id))
       setViewId(null)
-    } catch (reason: any) { window.alert(reason?.message || '删除失败') }
+    } catch (reason: any) { notifyUser(reason?.message || '删除失败') }
     finally { setBusy(false) }
   }
   const undoLastStroke = async () => {
@@ -268,7 +270,7 @@ export function AnnotationLayer() {
       })
       setItems(current => current.map(item => (item.id === id ? updated : item)))
       setViewId(null)
-    } catch (reason: any) { window.alert(reason?.message || '保存失败') }
+    } catch (reason: any) { notifyUser(reason?.message || '保存失败') }
     finally { setBusy(false) }
   }
 
@@ -311,7 +313,7 @@ export function AnnotationLayer() {
         body: JSON.stringify({ pageKey, kind: 'RECT', payload: { x, y, w, h, width: 3 } }),
       })
       setItems(current => [...current, row])
-    } catch (reason: any) { window.alert(reason?.message || '保存失败，请重试') }
+    } catch (reason: any) { notifyUser(reason?.message || '保存失败，请重试') }
     finally { setBusy(false) }
   }
 

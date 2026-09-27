@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react'
 import AppLayout from '@/components/AppLayout'
 import { PageHeader, Card, Table, Badge, Btn, Modal, Field, Input, Select, fmt, fmtDate, useToast, TableSkeleton } from '@/components/ui'
 import api from '@/lib/api'
+import { confirmDialog, promptDialog } from '@/lib/ui-dialogs'
+
 
 export default function ReconciliationsPage() {
   const [recons, setRecons] = useState<any[]>([])
@@ -27,11 +29,11 @@ export default function ReconciliationsPage() {
   const review = async (id: string, action: 'approve' | 'reject') => {
     let note: string | undefined
     if (action === 'reject') {
-      const value = window.prompt('请输入驳回原因（必填）')
+      const value = (await promptDialog('请输入驳回原因（必填）'))
       if (value === null) return
       note = value.trim()
       if (!note) return show('请填写驳回原因', 'error')
-    } else if (!window.confirm('确认审核通过？')) return
+    } else if (!(await confirmDialog('确认审核通过？'))) return
     setReviewingId(id)
     try {
       await api.patch(`/api/reconciliations/${id}/review`, { action, note })

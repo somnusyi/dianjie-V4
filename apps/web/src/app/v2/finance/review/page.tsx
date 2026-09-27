@@ -9,6 +9,8 @@ import { useEffect, useState } from 'react'
 import { BottomNav, Chip, StoreAvatar } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch } from '@/lib/v2-auth'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type ApiDoc = {
   id: string; number: string; type: string; title: string
@@ -59,7 +61,7 @@ export default function FinanceReviewPage() {
           body: JSON.stringify({ decision }),
         })
         await load()
-      } catch (e: any) { alert(e.message || '操作失败'); throw e }
+      } catch (e: any) { notifyUser(e.message || '操作失败'); throw e }
       finally { setSubmitting(null) }
     }
     if (decision === 'APPROVE') {
@@ -106,7 +108,7 @@ export default function FinanceReviewPage() {
         for (const id of ids) {
           try {
             await apiFetch(`/api/documents/${id}/decisions`, { method: 'POST', body: JSON.stringify({ decision: 'APPROVE' }) })
-          } catch (e: any) { alert(`${id}: ${e.message || '失败'}`); break }
+          } catch (e: any) { notifyUser(`${id}: ${e.message || '失败'}`); break }
         }
         setSelected(new Set()); setBatchMode(false); load()
       },

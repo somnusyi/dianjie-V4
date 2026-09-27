@@ -6,6 +6,8 @@
 import { useEffect, useState } from 'react'
 import { ApprovalRouting, ActionButtonPair, Chip, ProgressDots } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Doc = {
   id: string
@@ -82,7 +84,7 @@ export default function BossApprovalDetailPage({ params }: { params: { id: strin
       })
       const data = await res.json()
       if (res.ok) location.href = '/v2/boss/approvals'
-      else { alert(data.error || '操作失败'); setSubmitting(false); throw new Error(data.error) }
+      else { notifyUser(data.error || '操作失败'); setSubmitting(false); throw new Error(data.error) }
     }
     if (decision === 'APPROVE') {
       openConfirm({

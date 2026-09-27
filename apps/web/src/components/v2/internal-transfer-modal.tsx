@@ -19,6 +19,8 @@
 'use client'
 import { useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
+
 
 export type TransferAccount = {
   id: string
@@ -50,11 +52,11 @@ export function InternalTransferModal({ open, from, candidates, onClose, onSucce
     if (!to) { setError('请选择收款账户'); return }
     const amt = Number(amount)
     if (!Number.isFinite(amt) || amt <= 0) { setError('金额必须 > 0'); return }
-    if (!confirm(
+    if (!(await confirmDialog(
       `确认从「${from!.name}」转出 ¥${amt.toFixed(2)} 到「${to.name}」?\n\n` +
       `这是真实银行转账, 提交后会立即扣款, 不可撤销。\n` +
       `备注: ${remark.trim() || '(无)'}`
-    )) return
+    ))) return
 
     setSubmitting(true)
     try {
@@ -71,7 +73,7 @@ export function InternalTransferModal({ open, from, candidates, onClose, onSucce
         setError(`银行返回失败: ${r.resultCode || ''} ${r.resultMsg || ''}`)
         return
       }
-      alert(
+      notifyUser(
         `✅ 转账成功\n\n` +
         `银行流水号: ${r.txNo || '-'}\n` +
         `业务参考号: ${r.bizNo}\n` +

@@ -8,29 +8,42 @@
  * 限制: 1-5 张图; 备注选填, 提供则上限 500 字
  */
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiFetch } from '@/lib/v2-auth'
 
 export default function ChefAckPage({ params }: { params: { id: string } }) {
   const router = useRouter()
   const [po, setPo] = useState<any>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const errorRef = useRef<HTMLDivElement>(null)
   const [images, setImages] = useState<string[]>([])      // OSS URL 数组, 上限 3
   const [note, setNote] = useState('')
   const [uploading, setUploading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [sent, setSent] = useState(false)
 
   useEffect(() => {
     apiFetch(`/api/orders/${params.id}`)
       .then((d: any) => setPo(d))
-      .catch(e => setError(String(e?.message || e)))
+      .catch(e => setLoadError(String(e?.message || e)))
   }, [params.id])
 
-  if (error) {
+  useEffect(() => {
+    if (error) errorRef.current?.focus()
+  }, [error])
+
+  function showError(message: string) {
+    setNotice('')
+    setError(message)
+  }
+
+  if (loadError) {
     return (
       <div className="min-h-screen bg-bg p-6">
-        <div className="bg-red-bg text-red-fg rounded-card p-4">{error}</div>
+        <div role="alert" className="bg-red-bg text-red-fg rounded-card p-4">{loadError}</div>
         <button onClick={() => router.back()} className="mt-4 px-4 py-2 bg-ink text-white rounded-cta">返回</button>
       </div>
     )
@@ -75,7 +88,7 @@ export default function ChefAckPage({ params }: { params: { id: string } }) {
 
   async function uploadPhoto(file: File) {
     if (images.length >= 5) {
-      alert('最多 5 张照片')
+      showError('最多 5 张照片')
       return
     }
     setUploading(true)
@@ -84,8 +97,10 @@ export default function ChefAckPage({ params }: { params: { id: string } }) {
       fd.append('file', file, file.name || 'ack.jpg')
       const res = await apiFetch<{ url: string }>('/api/upload?category=chef-ack', { method: 'POST', body: fd as any })
       setImages(prev => [...prev, res.url])
+      setError('')
+      setNotice('照片已上传，可继续补充或发送验收单。')
     } catch (e: any) {
-      alert('上传失败: ' + (e?.message || e))
+      showError('上传失败: ' + (e?.message || e))
     } finally {
       setUploading(false)
     }
@@ -96,19 +111,22 @@ export default function ChefAckPage({ params }: { params: { id: string } }) {
   }
 
   async function submit() {
-    if (submitting) return
-    if (images.length === 0) { alert('请至少上传 1 张验收照片'); return }
-    if (images.length > 5)   { alert('最多 5 张'); return }
+    if (submitting || sent) return
+    if (images.length === 0) { showError('请至少上传 1 张验收照片'); return }
+    if (images.length > 5)   { showError('最多 5 张'); return }
+    setError('')
+    setNotice('')
     setSubmitting(true)
     try {
       await apiFetch(`/api/orders/${params.id}/chef-ack`, {
         method: 'PATCH',
         body: JSON.stringify({ images, note: note.trim() || undefined }),
       })
-      alert('验收单已发送给供应商')
-      router.push('/v2/chef/purchase')
+      setNotice('验收单已发送给供应商。下一步：返回采购列表等待供应商确认送达。')
+      setSent(true)
+      setSubmitting(false)
     } catch (e: any) {
-      alert('发送失败: ' + (e?.message || e))
+      showError('发送失败: ' + (e?.message || e))
       setSubmitting(false)
     }
   }
@@ -119,6 +137,9 @@ export default function ChefAckPage({ params }: { params: { id: string } }) {
         <button onClick={() => router.back()} className="text-gray2 text-h2">‹</button>
         <h1 className="text-h1">发验收单</h1>
       </header>
+
+      {error && <div ref={errorRef} role="alert" tabIndex={-1} className="mx-4 mt-2 rounded-card bg-red-bg p-3 text-caption text-red-fg outline-none">{error}</div>}
+      {notice && <div role="status" className="mx-4 mt-2 rounded-card bg-green-bg p-3 text-caption text-green-fg">{notice}<button type="button" onClick={() => router.push('/v2/chef/purchase')} className="mt-2 block underline">返回采购列表</button></div>}
 
       {/* 订单上下文 */}
       <div className="mx-4 mt-2 bg-white rounded-card border border-border p-3">
@@ -208,9 +229,9 @@ export default function ChefAckPage({ params }: { params: { id: string } }) {
         <button
           type="button"
           onClick={submit}
-          disabled={submitting || uploading || images.length === 0}
+          disabled={submitting || uploading || images.length === 0 || sent}
           className="flex-1 py-3 bg-ink text-white rounded-cta text-button disabled:bg-gray3 disabled:cursor-not-allowed">
-          {submitting ? '发送中…' : '发给供应商'}
+          {submitting ? '发送中…' : sent ? '已发送' : '发给供应商'}
         </button>
       </div>
     </div>

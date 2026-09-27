@@ -9,8 +9,9 @@
  * 单店业务 (合肥瑶海店) 不做门店 filter, 只搜索 + 批量勾选 + 批量过
  */
 'use client'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
+import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch } from '@/lib/v2-auth'
 import dayjs from 'dayjs'
 import FinanceTopNav from '../_topnav'
@@ -36,12 +37,18 @@ export default function FinancePCReviewPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [confirmState, openConfirm] = useConfirmSheet()
+  const errorRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     apiFetch<{ items: Doc[]; total: number }>('/api/payment-requests?status=PENDING&pageSize=100')
       .then(d => { setItems(d.items || []); setTotal(d.total || 0); setSelected(new Set()) })
       .catch(e => setError(String(e?.message || e)))
   }, [refreshKey])
+
+  useEffect(() => {
+    if (error) errorRef.current?.focus()
+  }, [error])
 
   const filtered = useMemo(() => {
     if (!items) return []
@@ -68,9 +75,18 @@ export default function FinancePCReviewPage() {
     else setSelected(new Set(filtered.map(i => i.id)))
   }
 
-  async function bulkApprove() {
+  function bulkApprove() {
     if (selected.size === 0 || submitting) return
-    if (!confirm(`确认批量通过 ${selected.size} 单 (合计 ${fmtMoney(selectedSum)})?`)) return
+    openConfirm({
+      title: '确认批量通过',
+      body: `确认批量通过 ${selected.size} 单（合计 ${fmtMoney(selectedSum)}）？`,
+      confirmLabel: '确认批量通过',
+      onConfirm: performBulkApprove,
+    })
+  }
+
+  async function performBulkApprove() {
+    if (selected.size === 0 || submitting) return
     setSubmitting(true)
     setError(null)
     const ids = Array.from(selected)
@@ -95,14 +111,31 @@ export default function FinancePCReviewPage() {
     if (fail > 0) setError(`通过 ${ok} 单, 失败 ${fail} 单. 失败原因: ${failMsg.slice(0, 3).join(' | ')}`)
   }
 
-  async function singleDecision(id: string, decision: 'APPROVE' | 'REJECT') {
-    let comment = ''
+  function singleDecision(id: string, decision: 'APPROVE' | 'REJECT') {
     if (decision === 'REJECT') {
-      const reason = window.prompt('请填写驳回原因:')
-      if (!reason?.trim()) return
-      comment = reason.trim()
+      openConfirm({
+        title: '驳回付款申请',
+        body: '请填写驳回原因，提交后将记录在审批决策中。',
+        confirmLabel: '确认驳回',
+        tone: 'danger',
+        withInput: true,
+        inputRequired: true,
+        inputPlaceholder: '请填写驳回原因',
+        onConfirm: reason => performSingleDecision(id, decision, reason?.trim() || ''),
+      })
+      return
     }
+    openConfirm({
+      title: '确认通过付款申请',
+      body: '通过后将记录本次初审决策。',
+      confirmLabel: '确认通过',
+      onConfirm: () => performSingleDecision(id, decision, ''),
+    })
+  }
+
+  async function performSingleDecision(id: string, decision: 'APPROVE' | 'REJECT', comment: string) {
     setSubmitting(true)
+    setError(null)
     try {
       await apiFetch(`/api/documents/${id}/decisions`, {
         method: 'POST',
@@ -110,7 +143,9 @@ export default function FinancePCReviewPage() {
       })
       setRefreshKey(k => k + 1)
     } catch (e: any) {
-      alert(`${decision === 'APPROVE' ? '通过' : '驳回'} 失败: ${e?.message || e}`)
+      const message = `${decision === 'APPROVE' ? '通过' : '驳回'} 失败: ${e?.message || e}`
+      setError(message)
+      throw new Error(message)
     } finally {
       setSubmitting(false)
     }
@@ -143,7 +178,7 @@ export default function FinancePCReviewPage() {
         </div>
 
         {error && (
-          <div className="bg-red-bg text-red-fg rounded-card p-3 text-caption mb-4">{error}</div>
+          <div ref={errorRef} role="alert" tabIndex={-1} className="bg-red-bg text-red-fg rounded-card p-3 text-caption mb-4 outline-none">{error}</div>
         )}
 
         <div className="bg-white rounded-card border border-border overflow-hidden">
@@ -239,6 +274,7 @@ export default function FinancePCReviewPage() {
           </button>
         </div>
       </main>
+      <ConfirmSheet {...confirmState} />
     </div>
   )
 }

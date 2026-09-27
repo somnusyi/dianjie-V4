@@ -7,7 +7,7 @@
  * POST /api/loss-claims/manual { items, reason, description }
  */
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
@@ -42,7 +42,19 @@ export default function ChefLossNewPage() {
   const [submitting, setSubmitting] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [evidence, setEvidence] = useState<string[]>([])
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const errorRef = useRef<HTMLDivElement>(null)
   const [confirmState, openConfirm] = useConfirmSheet()
+
+  useEffect(() => {
+    if (error) errorRef.current?.focus()
+  }, [error])
+
+  function showError(message: string) {
+    setNotice('')
+    setError(message)
+  }
 
   // 上传单张图片到 OSS, 复用 receive 页同款 endpoint
   async function uploadPhoto(file: File) {
@@ -52,8 +64,10 @@ export default function ChefLossNewPage() {
       fd.append('file', file, file.name || 'evidence.jpg')
       const res = await apiFetch<{ url: string }>('/api/upload?category=loss-claims', { method: 'POST', body: fd as any })
       setEvidence(prev => [...prev, res.url])
+      setError('')
+      setNotice('证据已上传，可继续补充或提交报损。')
     } catch (e: any) {
-      alert('上传失败: ' + (e?.message || e))
+      showError('上传失败: ' + (e?.message || e))
     } finally {
       setUploading(false)
     }
@@ -80,8 +94,10 @@ export default function ChefLossNewPage() {
 
   function submit() {
     if (submitting) return
-    if (items.length === 0) return alert('请选择至少 1 项商品')
-    if (reason === '其他' && !customReason.trim()) return alert('选「其他」时请填写自定义原因')
+    if (items.length === 0) return showError('请选择至少 1 项商品')
+    if (reason === '其他' && !customReason.trim()) return showError('选「其他」时请填写自定义原因')
+    setError('')
+    setNotice('')
     openConfirm({
       title: `${effectiveReason} · ¥${total.toFixed(2)}`,
       body: `登记 ${items.length} 项店内报损 · 直接计入 P&L 损耗成本，不影响供应商账期`,
@@ -96,9 +112,8 @@ export default function ChefLossNewPage() {
           })
           router.push('/v2/chef/check')
         } catch (e: any) {
-          alert(e.message || '提交失败')
+          showError(e.message || '提交失败')
           setSubmitting(false)
-          throw e
         }
       },
     })
@@ -110,6 +125,9 @@ export default function ChefLossNewPage() {
         <button onClick={() => router.back()} className="text-gray2 text-h2">‹</button>
         <h1 className="text-h1">新增报损</h1>
       </header>
+
+      {error && <div ref={errorRef} role="alert" tabIndex={-1} className="mx-4 mt-2 rounded-card bg-red-bg p-3 text-caption text-red-fg outline-none">{error}</div>}
+      {notice && <div role="status" className="mx-4 mt-2 rounded-card bg-green-bg p-3 text-caption text-green-fg">{notice}</div>}
 
       {/* 原因选择 */}
       <div className="mx-4 mt-2 bg-bg-card rounded-card border border-border p-3">
@@ -219,7 +237,7 @@ export default function ChefLossNewPage() {
                      e.target.value = ''
                      for (const f of files) {
                        if (f.type.startsWith('video/') && f.size > 50 * 1024 * 1024) {
-                         alert(`视频"${f.name}"超过 50MB, 请压缩后再传`)
+                         showError(`视频"${f.name}"超过 50MB, 请压缩后再传`)
                          continue
                        }
                        await uploadPhoto(f)

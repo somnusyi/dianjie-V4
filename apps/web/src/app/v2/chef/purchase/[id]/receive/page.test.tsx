@@ -116,4 +116,24 @@ describe('门店验收逐商品差异', () => {
     act(() => root.unmount())
     container.remove()
   })
+
+  it('提交失败时显示并聚焦页内提示', async () => {
+    mockFetch.mockImplementation((path, init) => {
+      if (String(path) === '/api/orders/order-1' && !init) return Promise.resolve(order)
+      if (String(path) === '/api/orders/order-1/receive' && init?.method === 'PATCH') return Promise.reject(new Error('库存状态已变化'))
+      return Promise.reject(new Error(`unexpected API: ${String(path)}`))
+    })
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('确认收货 ·') ?? false)
+
+    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.startsWith('确认收货 ·'))
+    await act(async () => { submit?.click() })
+
+    await waitFor(() => Boolean(container.querySelector('[role="alert"]')))
+    const alert = container.querySelector('[role="alert"]') as HTMLElement
+    expect(alert.textContent).toContain('库存状态已变化')
+    expect(document.activeElement).toBe(alert)
+    act(() => root.unmount())
+    container.remove()
+  })
 })

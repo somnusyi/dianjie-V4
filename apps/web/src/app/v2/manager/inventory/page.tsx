@@ -1,9 +1,10 @@
 /** 店长移动端 · 门店库存盘点明细 */
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import { UserMenu } from '@/components/v2/user-menu'
+import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { formatQuantity } from '@/lib/format'
 
 type InventorySummary = {
@@ -61,28 +62,39 @@ export default function ManagerInventoryPage() {
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
+  const minimumRef = useRef<HTMLInputElement>(null)
+  const targetRef = useRef<HTMLInputElement>(null)
+  const [confirmState, openConfirm] = useConfirmSheet()
 
-  async function configurePolicy(item: EstimatedItem) {
-    const minimumText = window.prompt(`设置“${item.name}”安全库存（单位：${item.unit}）`, String(item.minStock || 0))
-    if (minimumText == null) return
+  function configurePolicy(item: EstimatedItem) {
+    openConfirm({
+      title: `设置“${item.name}”库存预警`,
+      body: <div className="mt-3 grid gap-3 text-left">
+        <p>单位：{item.unit}。建议补货目标可留空。</p>
+        <label><span className="mb-1 block text-micro text-gray3">安全库存</span><input ref={minimumRef} autoFocus aria-label="安全库存" type="number" min="0" step="0.001" defaultValue={String(item.minStock || 0)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
+        <label><span className="mb-1 block text-micro text-gray3">建议补货目标</span><input ref={targetRef} aria-label="建议补货目标" type="number" min="0" step="0.001" defaultValue={item.targetStock == null ? '' : String(item.targetStock)} placeholder="可留空" className="h-11 w-full rounded-cta border border-border px-3" /></label>
+      </div>,
+      confirmLabel: '确认保存',
+      tone: 'primary',
+      onConfirm: () => savePolicy(item),
+    })
+  }
+
+  async function savePolicy(item: EstimatedItem) {
+    const minimumText = minimumRef.current?.value ?? ''
+    const targetText = targetRef.current?.value ?? ''
     const minStock = Number(minimumText)
-    if (!Number.isFinite(minStock) || minStock < 0) return window.alert('安全库存必须是大于等于 0 的数字')
-    const targetText = window.prompt(`设置“${item.name}”建议补货目标（单位：${item.unit}，可留空）`, item.targetStock == null ? '' : String(item.targetStock))
-    if (targetText == null) return
+    if (!Number.isFinite(minStock) || minStock < 0) throw new Error('安全库存必须是大于等于 0 的数字')
     const targetStock = targetText.trim() === '' ? null : Number(targetText)
     if (targetStock != null && (!Number.isFinite(targetStock) || targetStock < minStock)) {
-      return window.alert('建议补货目标必须大于等于安全库存')
+      throw new Error('建议补货目标必须大于等于安全库存')
     }
-    try {
-      const policy = await apiFetch<{ minStock: number; targetStock: number | null }>(`/api/inventory/policies/${item.id}`, {
-        method: 'PATCH', body: JSON.stringify({ minStock, targetStock }),
-      })
-      setEstimate(rows => rows.map(row => row.id === item.id
-        ? { ...row, ...policy, isLowStock: policy.minStock > 0 && Number(row.stock) < policy.minStock }
-        : row))
-    } catch (e: any) {
-      window.alert(e?.message || '保存安全库存失败')
-    }
+    const policy = await apiFetch<{ minStock: number; targetStock: number | null }>(`/api/inventory/policies/${item.id}`, {
+      method: 'PATCH', body: JSON.stringify({ minStock, targetStock }),
+    })
+    setEstimate(rows => rows.map(row => row.id === item.id
+      ? { ...row, ...policy, isLowStock: policy.minStock > 0 && Number(row.stock) < policy.minStock }
+      : row))
   }
 
   useEffect(() => {
@@ -221,6 +233,7 @@ export default function ManagerInventoryPage() {
           </div>
         </>
       )}
+      <ConfirmSheet {...confirmState} />
     </div>
   )
 }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
@@ -11,7 +11,10 @@ type ClaimKind = 'ARRIVAL_DAMAGE' | 'ARRIVAL_SHORTAGE'
 export default function PostReceiptLossPage({ params }: { params: { id: string } }) {
   const router = useRouter()
   const [po, setPo] = useState<any>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const errorRef = useRef<HTMLDivElement>(null)
   const [receiptId, setReceiptId] = useState('')
   const [kind, setKind] = useState<ClaimKind>('ARRIVAL_DAMAGE')
   const [quantity, setQuantity] = useState<Record<string, number>>({})
@@ -29,8 +32,17 @@ export default function PostReceiptLossPage({ params }: { params: { id: string }
         const eligible = eligibleReceipts(data)
         setReceiptId(eligible[eligible.length - 1]?.id || '')
       })
-      .catch((e: any) => setError(e?.message || '加载失败'))
+      .catch((e: any) => setLoadError(e?.message || '加载失败'))
   }, [params.id])
+
+  useEffect(() => {
+    if (error) errorRef.current?.focus()
+  }, [error])
+
+  function showError(message: string) {
+    setNotice('')
+    setError(message)
+  }
 
   const receipts = useMemo(() => eligibleReceipts(po), [po])
   const receipt = receipts.find((item: any) => item.id === receiptId)
@@ -54,18 +66,22 @@ export default function PostReceiptLossPage({ params }: { params: { id: string }
       fd.append('file', file, file.name || 'evidence.jpg')
       const result = await apiFetch<{ url: string }>('/api/upload?category=loss-claims', { method: 'POST', body: fd as any })
       setEvidence(current => [...current, result.url].slice(0, 9))
+      setError('')
+      setNotice('现场证据已上传，可继续补充或提交异常。')
     } catch (e: any) {
-      alert(e?.message || '证据上传失败')
+      showError(e?.message || '证据上传失败')
     } finally {
       setUploading(false)
     }
   }
 
   function submit() {
-    if (!receipt) return alert('没有可补报的收货单')
-    if (!selected.length) return alert('请至少填写 1 项异常数量')
-    if (!reason.trim() || !description.trim()) return alert('请填写异常原因和具体说明')
-    if (!evidence.length) return alert('请至少上传 1 份现场照片或视频')
+    if (!receipt) return showError('没有可补报的收货单')
+    if (!selected.length) return showError('请至少填写 1 项异常数量')
+    if (!reason.trim() || !description.trim()) return showError('请填写异常原因和具体说明')
+    if (!evidence.length) return showError('请至少上传 1 份现场照片或视频')
+    setError('')
+    setNotice('')
     openConfirm({
       title: `提交到货异常 ¥${total.toFixed(2)}`,
       body: lateReport
@@ -90,15 +106,14 @@ export default function PostReceiptLossPage({ params }: { params: { id: string }
           })
           router.push(`/v2/chef/purchase/po-success/${po.id}`)
         } catch (e: any) {
-          alert(e?.message || '补报失败')
+          showError(e?.message || '补报失败')
           setSubmitting(false)
-          throw e
         }
       },
     })
   }
 
-  if (error) return <div className="p-6 text-red-fg">{error}</div>
+  if (loadError) return <div role="alert" className="p-6 text-red-fg">{loadError}</div>
   if (!po) return <div className="p-6 text-caption text-gray3">加载中…</div>
 
   return (
@@ -107,6 +122,9 @@ export default function PostReceiptLossPage({ params }: { params: { id: string }
         <button onClick={() => router.back()} className="text-gray2 text-h2">‹</button>
         <h1 className="text-h1">收货后补报异常</h1>
       </header>
+
+      {error && <div ref={errorRef} role="alert" tabIndex={-1} className="mx-4 mt-2 rounded-card bg-red-bg p-3 text-caption text-red-fg outline-none">{error}</div>}
+      {notice && <div role="status" className="mx-4 mt-2 rounded-card bg-green-bg p-3 text-caption text-green-fg">{notice}</div>}
 
       <div className="mx-4 mt-3 bg-amber/10 border border-amber/40 rounded-card p-3">
         <div className="flex items-center gap-2"><Chip tone={lateReport ? 'red' : 'orange'}>{lateReport ? '逾期补报' : '到货日 12:00 前'}</Chip><b className="text-body">拆包后发现异常可补报</b></div>

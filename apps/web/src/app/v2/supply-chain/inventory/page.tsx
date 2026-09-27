@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { Chip } from '@/components/v2'
+import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { WarehouseToolTabs } from '@/components/v2/warehouse-tool-tabs'
 import { apiFetch } from '@/lib/v2-auth'
 import { buildInventoryExportRows } from '@/lib/inventory-export'
@@ -311,11 +312,21 @@ export default function InternalSupplyChainInventoryPage() {
   const [policyOpen, setPolicyOpen] = useState(false)
   const [savingPolicy, setSavingPolicy] = useState(false)
   const savingPolicyRef = useRef(false)
+  const [confirmState, openConfirm] = useConfirmSheet()
 
   // 单位待核验：人工确认换算关系后放行入库（只提交状态，后端原样保留四单位口径）
-  async function verifyUnitConversion(item: InventoryItem) {
+  function verifyUnitConversion(item: InventoryItem) {
     const mapping = conversionText(item)
-    if (!window.confirm(`确认「${item.name}」的换算关系：${mapping}？\n核验通过后该商品才能入库记账；换算不对请点「前往商品管理」改好再核验。`)) return
+    openConfirm({
+      title: '确认单位换算',
+      body: `确认「${item.name}」的换算关系：${mapping}？\n核验通过后该商品才能入库记账；换算不对请点「前往商品管理」改好再核验。`,
+      confirmLabel: '确认核验',
+      tone: 'primary',
+      onConfirm: () => confirmUnitConversion(item, mapping),
+    })
+  }
+
+  async function confirmUnitConversion(item: InventoryItem, mapping: string) {
     setVerifyingId(item.id)
     setError('')
     try {
@@ -327,6 +338,7 @@ export default function InternalSupplyChainInventoryPage() {
       await load(scope)
     } catch (reason: any) {
       setError(String(reason?.message || reason))
+      throw reason
     } finally {
       setVerifyingId('')
     }
@@ -867,7 +879,7 @@ export default function InternalSupplyChainInventoryPage() {
     }
   }
 
-  async function saveOrderEntryPolicy() {
+  function saveOrderEntryPolicy() {
     if (!data || !policyMode || savingPolicyRef.current) return
     const currentPolicyMode = data.warehouse.blockZeroStockAtOrderEntry ? 'BLOCK' : 'ALLOW'
     if (policyMode === currentPolicyMode) {
@@ -885,11 +897,18 @@ export default function InternalSupplyChainInventoryPage() {
     const confirmation = policyMode === 'BLOCK'
       ? '确认切换为“库存为 0，禁止下单”？\n只在门店提交阶段检查可用库存是否为 0；可用库存大于 0 不代表足够覆盖本次订购量。'
       : '确认切换为“仅提醒，仍可下单”？\n门店可以提交订单，但提交时不锁库存；严格库存模式下，总仓接单仍可能因整单库存不足失败。'
-    if (!window.confirm(confirmation)) {
-      setPolicyMode(currentPolicyMode)
-      return
-    }
+    openConfirm({
+      title: '确认修改订货策略',
+      body: confirmation,
+      confirmLabel: '确认切换',
+      tone: policyMode === 'BLOCK' ? 'danger' : 'default',
+      onCancel: () => setPolicyMode(currentPolicyMode),
+      onConfirm: () => confirmOrderEntryPolicy(currentPolicyMode),
+    })
+  }
 
+  async function confirmOrderEntryPolicy(currentPolicyMode: 'ALLOW' | 'BLOCK') {
+    if (!data || !policyMode || savingPolicyRef.current) return
     savingPolicyRef.current = true
     setSavingPolicy(true)
     setError('')
@@ -909,6 +928,7 @@ export default function InternalSupplyChainInventoryPage() {
     } catch (reason: any) {
       setError(String(reason?.message || reason))
       setPolicyMode(currentPolicyMode)
+      throw reason
     } finally {
       savingPolicyRef.current = false
       setSavingPolicy(false)
@@ -1222,6 +1242,7 @@ export default function InternalSupplyChainInventoryPage() {
           <button onClick={recordCount} disabled={submitting} className="mt-4 h-11 w-full rounded-cta bg-accent text-button text-white disabled:opacity-40">{submitting ? '正在校准…' : '确认实盘校准'}</button>
         </div>
       </div>}
+      <ConfirmSheet {...confirmState} />
     </div>
   )
 }

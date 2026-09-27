@@ -179,7 +179,8 @@ describe('总仓库存页面', () => {
     expect(unchangedSave.disabled).toBe(true)
     expect(mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/order-entry-policy')).toBe(false)
 
-    const cancel = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '取消')
+    const dialog = container.querySelector('[role="dialog"]') as HTMLElement
+    const cancel = Array.from(dialog.querySelectorAll('button')).find(button => button.textContent === '取消') as HTMLButtonElement
     act(() => cancel?.click())
     expect(container.querySelector('[role="dialog"]')).toBeNull()
     expect(mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/order-entry-policy')).toBe(false)
@@ -231,7 +232,6 @@ describe('总仓库存页面', () => {
   })
 
   it('requires confirmation for ALLOW to BLOCK and cancellation sends no PATCH and restores ALLOW', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => false))
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
@@ -252,18 +252,18 @@ describe('总仓库存页面', () => {
     act(() => block.click())
     const save = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '确认保存')
     await act(async () => { save?.click() })
+    expect(container.textContent).toContain('确认修改订货策略')
+    const cancel = container.querySelector('[data-testid="confirm-sheet-backdrop"] button') as HTMLButtonElement
+    await act(async () => { cancel?.click() })
 
-    expect(window.confirm).toHaveBeenCalled()
     expect(mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/order-entry-policy')).toBe(false)
     expect((container.querySelector('input[name="order-entry-policy"][value="ALLOW"]') as HTMLInputElement).checked).toBe(true)
 
     act(() => root.unmount())
     container.remove()
-    vi.unstubAllGlobals()
   })
 
   it('submits one audited BLOCK policy change, ignores a double click, and does not update the page before success', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => true))
     let resolvePolicy!: (value: unknown) => void
     const pendingPolicy = new Promise(resolve => { resolvePolicy = resolve })
     mockFetch.mockImplementation((path, init) => {
@@ -282,7 +282,9 @@ describe('总仓库存页面', () => {
     act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '设置订货策略')?.click())
     act(() => (container.querySelector('input[name="order-entry-policy"][value="BLOCK"]') as HTMLInputElement).click())
     const save = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '确认保存') as HTMLButtonElement
-    await act(async () => { save.click(); save.click() })
+    await act(async () => { save.click() })
+    const confirmChange = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '确认切换') as HTMLButtonElement
+    await act(async () => { confirmChange.click(); confirmChange.click() })
 
     expect(container.textContent).toContain('当前：仅提醒，仍可下单')
     expect((Array.from(container.querySelectorAll('button')).find(button => button.textContent === '保存中…') as HTMLButtonElement).disabled).toBe(true)
@@ -295,11 +297,9 @@ describe('总仓库存页面', () => {
 
     act(() => root.unmount())
     container.remove()
-    vi.unstubAllGlobals()
   })
 
   it('keeps the current policy and resets the selection when saving fails', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => true))
     let rejectPolicy!: (reason: unknown) => void
     const pendingPolicy = new Promise((_resolve, reject) => { rejectPolicy = reject })
     mockFetch.mockImplementation((path, init) => {
@@ -320,6 +320,8 @@ describe('总仓库存页面', () => {
     act(() => (container.querySelector('input[name="order-entry-policy"][value="BLOCK"]') as HTMLInputElement).click())
     const save = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '确认保存') as HTMLButtonElement
     await act(async () => { save.click() })
+    const confirmChange = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '确认切换') as HTMLButtonElement
+    await act(async () => { confirmChange.click() })
 
     expect(container.textContent).toContain('当前：仅提醒，仍可下单')
     await act(async () => {
@@ -335,7 +337,6 @@ describe('总仓库存页面', () => {
 
     act(() => root.unmount())
     container.remove()
-    vi.unstubAllGlobals()
   })
 
   it('shows read-only roles the current policy without a settings entry', async () => {
@@ -731,7 +732,6 @@ describe('总仓库存页面', () => {
   })
 
   it('verifies an inferred unit conversion from the review queue', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => true))
     const inferred = { ...inventory, items: [{ ...inventory.items[0], unitConversionStatus: 'INFERRED' }] }
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
@@ -757,15 +757,15 @@ describe('总仓库存页面', () => {
 
     const verify = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('确认 1 箱 = 8 袋'))
     await act(async () => { verify?.click() })
+    expect(container.textContent).toContain('确认单位换算')
+    const confirmVerify = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '确认核验')
+    await act(async () => { confirmVerify?.click() })
     await waitFor(() => mockFetch.mock.calls.some(([path, init]) => String(path) === '/api/products/product-1' && init?.method === 'PATCH'))
 
     const call = mockFetch.mock.calls.find(([path, init]) => String(path) === '/api/products/product-1' && init?.method === 'PATCH')
     expect(JSON.parse(String(call?.[1]?.body))).toEqual({ unitConversionStatus: 'VERIFIED' })
-    expect(window.confirm).toHaveBeenCalled()
-
     act(() => root.unmount())
     container.remove()
-    vi.unstubAllGlobals()
   })
 
   it('derives unit price from edited line amount for round-off totals', async () => {

@@ -276,6 +276,7 @@ export default function UpstreamProcurementPage() {
     run: () => void
   } | null>(null)
   const [revisionRejectConfirm, openRevisionRejectConfirm] = useConfirmSheet()
+  const [actionConfirm, openActionConfirm] = useConfirmSheet()
   const [orders, setOrders] = useState<Order[]>([])
   const [shipments, setShipments] = useState<Shipment[]>([])
   const [receipts, setReceipts] = useState<Receipt[]>([])
@@ -391,7 +392,7 @@ export default function UpstreamProcurementPage() {
     }
   }, [loadAll])
 
-  async function run<T>(key: string, task: () => Promise<T>, success: string, onSuccess?: (result: T) => void | Promise<void>) {
+  async function run<T>(key: string, task: () => Promise<T>, success: string, onSuccess?: (result: T) => void | Promise<void>, rethrow = false) {
     setWorking(key)
     setError(null)
     setNotice(null)
@@ -411,7 +412,9 @@ export default function UpstreamProcurementPage() {
       }
       return true
     } catch (reason: any) {
-      setError(reason?.message || '操作失败')
+      const message = reason?.message || '操作失败'
+      setError(message)
+      if (rethrow) throw new Error(message)
       return false
     } finally {
       setWorking(null)
@@ -687,32 +690,38 @@ export default function UpstreamProcurementPage() {
     }
   }
 
-  async function rejectPurchaseReturn(row: PurchaseReturn) {
-    const reason = window.prompt(`请输入退货单 ${row.no} 的驳回原因`)
-    if (!reason) return
-    await run(
-      `reject-return-${row.id}`,
-      () =>
-        apiFetch(`/api/upstream/purchase-returns/${row.id}/reject`, {
-          method: 'POST',
-          body: JSON.stringify({ reason }),
-        }),
-      '采购退货已驳回，未扣减库存'
-    )
+  function rejectPurchaseReturn(row: PurchaseReturn) {
+    openActionConfirm({
+      title: `驳回退货单 ${row.no}`,
+      body: '驳回后不会扣减库存，申请人会看到驳回原因。',
+      confirmLabel: '确认驳回', tone: 'danger', withInput: true, inputRequired: true,
+      inputPlaceholder: '请输入驳回原因',
+      onConfirm: async reason => {
+        if (!reason) throw new Error('请填写驳回原因')
+        await run(
+          `reject-return-${row.id}`,
+          () => apiFetch(`/api/upstream/purchase-returns/${row.id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }),
+          '采购退货已驳回，未扣减库存', undefined, true
+        )
+      },
+    })
   }
 
-  async function cancelPurchaseReturn(row: PurchaseReturn) {
-    const reason = window.prompt(`请输入退货单 ${row.no} 的取消原因`)
-    if (!reason) return
-    await run(
-      `cancel-return-${row.id}`,
-      () =>
-        apiFetch(`/api/upstream/purchase-returns/${row.id}/cancel`, {
-          method: 'POST',
-          body: JSON.stringify({ reason }),
-        }),
-      '采购退货已取消，未扣减库存'
-    )
+  function cancelPurchaseReturn(row: PurchaseReturn) {
+    openActionConfirm({
+      title: `取消退货单 ${row.no}`,
+      body: '取消后不会扣减库存，单据保留审计记录。',
+      confirmLabel: '确认取消', tone: 'danger', withInput: true, inputRequired: true,
+      inputPlaceholder: '请输入取消原因',
+      onConfirm: async reason => {
+        if (!reason) throw new Error('请填写取消原因')
+        await run(
+          `cancel-return-${row.id}`,
+          () => apiFetch(`/api/upstream/purchase-returns/${row.id}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) }),
+          '采购退货已取消，未扣减库存', undefined, true
+        )
+      },
+    })
   }
 
   function openReceipt(shipment: Shipment) {
@@ -934,20 +943,23 @@ export default function UpstreamProcurementPage() {
     })
   }
 
-  async function reverseReceipt(receipt: Receipt) {
-    const reason = window.prompt('请输入冲销原因（例如：重复收货、录入错误）')?.trim()
-    if (!reason) return
-    if (reason.length < 2) return setError('冲销原因至少填写 2 个字符')
-    if (!window.confirm(`确认整单冲销收货单 ${receipt.no}？库存、金额和采购进度都会恢复，且操作不可删除。`)) return
-    await run(
-      `reverse-${receipt.id}`,
-      () =>
-        apiFetch(`/api/upstream/receipts/${receipt.id}/reverse`, {
-          method: 'POST',
-          body: JSON.stringify({ reason, idempotencyKey: clientRequestId() }),
-        }),
-      '收货单已冲销，库存与采购进度已恢复'
-    )
+  function reverseReceipt(receipt: Receipt) {
+    openActionConfirm({
+      title: `整单冲销收货单 ${receipt.no}`,
+      body: '库存、金额和采购进度都会恢复；系统追加反向记录，操作不可删除。',
+      confirmLabel: '确认冲销', tone: 'danger', withInput: true, inputRequired: true,
+      inputPlaceholder: '请输入至少2个字的冲销原因，例如：重复收货、录入错误',
+      onConfirm: async reason => {
+        if (!reason || reason.trim().length < 2) throw new Error('冲销原因至少填写 2 个字符')
+        await run(
+          `reverse-${receipt.id}`,
+          () => apiFetch(`/api/upstream/receipts/${receipt.id}/reverse`, {
+            method: 'POST', body: JSON.stringify({ reason: reason.trim(), idempotencyKey: clientRequestId() }),
+          }),
+          '收货单已冲销，库存与采购进度已恢复', undefined, true
+        )
+      },
+    })
   }
 
   const pendingReceiptCount = receipts.filter((item) => ['DRAFT', 'INSPECTING', 'PENDING_REVIEW'].includes(item.status)).length
@@ -1544,10 +1556,14 @@ export default function UpstreamProcurementPage() {
                         )}
                         {order.status === 'PENDING_APPROVAL' && (
                           <ActionButton
-                            onClick={() =>
-                              window.confirm('确认合同、价格和数量无误并发送供应商？') &&
-                              void run(order.id, () => apiFetch(`/api/upstream/purchase-orders/${order.id}/approve-and-send`, { method: 'POST' }), '采购单已发送供应商')
-                            }
+                            onClick={() => openActionConfirm({
+                              title: `审核并发送采购单 ${order.no}`,
+                              body: '请确认合同、价格和数量无误。确认后采购单会发送给供应商。',
+                              confirmLabel: '确认并发送', tone: 'primary',
+                              onConfirm: async () => {
+                                await run(order.id, () => apiFetch(`/api/upstream/purchase-orders/${order.id}/approve-and-send`, { method: 'POST' }), '采购单已发送供应商', undefined, true)
+                              },
+                            })}
                             disabled={working === order.id}
                           >
                             审核并发送
@@ -2010,10 +2026,14 @@ export default function UpstreamProcurementPage() {
                       {row.status === 'PENDING_APPROVAL' && (
                         <>
                           <ActionButton
-                            onClick={() =>
-                              window.confirm(`确认退货单 ${row.no} 无误并从采购方总仓扣减库存？`) &&
-                              void run(`approve-return-${row.id}`, () => apiFetch(`/api/upstream/purchase-returns/${row.id}/approve`, { method: 'POST' }), '采购退货已审核并从总仓出库')
-                            }
+                            onClick={() => openActionConfirm({
+                              title: `审核退货单 ${row.no} 并出库`,
+                              body: '确认后会从采购方总仓扣减库存并保留退货出库记录。',
+                              confirmLabel: '审核并出库', tone: 'danger',
+                              onConfirm: async () => {
+                                await run(`approve-return-${row.id}`, () => apiFetch(`/api/upstream/purchase-returns/${row.id}/approve`, { method: 'POST' }), '采购退货已审核并从总仓出库', undefined, true)
+                              },
+                            })}
                             disabled={working === `approve-return-${row.id}`}
                           >
                             审核并出库
@@ -2025,10 +2045,14 @@ export default function UpstreamProcurementPage() {
                       )}
                       {row.status === 'APPROVED' && (
                         <ActionButton
-                          onClick={() =>
-                            window.confirm(`确认供应商已实际收到退货单 ${row.no} 的货物？`) &&
-                            void run(`receive-return-${row.id}`, () => apiFetch(`/api/upstream/purchase-returns/${row.id}/receive`, { method: 'POST', body: '{}' }), '已登记供应商实际收货')
-                          }
+                          onClick={() => openActionConfirm({
+                            title: `登记退货单 ${row.no} 实际收货`,
+                            body: '仅在供应商已实际收到退货货物后确认。',
+                            confirmLabel: '确认已收货', tone: 'primary',
+                            onConfirm: async () => {
+                              await run(`receive-return-${row.id}`, () => apiFetch(`/api/upstream/purchase-returns/${row.id}/receive`, { method: 'POST', body: '{}' }), '已登记供应商实际收货', undefined, true)
+                            },
+                          })}
                           disabled={working === `receive-return-${row.id}`}
                         >
                           登记供应商实收
@@ -2102,22 +2126,21 @@ export default function UpstreamProcurementPage() {
                         )}
                         {['SUPPLIER_ACCEPTED', 'AUTO_ACCEPTED', 'ARBITRATION'].includes(claim.status) && (
                           <ActionButton
-                            onClick={() =>
-                              window.confirm(resolutionCopy.confirmation) &&
-                              void run(
-                                claim.id,
-                                () =>
-                                  apiFetch(`/api/upstream/arrival-claims/${claim.id}/resolve`, {
+                            onClick={() => openActionConfirm({
+                              title: resolutionCopy.button,
+                              body: resolutionCopy.confirmation,
+                              confirmLabel: '确认办结', tone: 'primary',
+                              onConfirm: async () => {
+                                await run(
+                                  claim.id,
+                                  () => apiFetch(`/api/upstream/arrival-claims/${claim.id}/resolve`, {
                                     method: 'POST',
-                                    body: JSON.stringify({
-                                      responsibility: 'SUPPLIER',
-                                      resolution: 'DEDUCTION',
-                                      resolvedAmount: Number(claim.claimedAmount),
-                                    }),
+                                    body: JSON.stringify({ responsibility: 'SUPPLIER', resolution: 'DEDUCTION', resolvedAmount: Number(claim.claimedAmount) }),
                                   }),
-                                '差异已办结并进入对账'
-                              )
-                            }
+                                  '差异已办结并进入对账', undefined, true
+                                )
+                              },
+                            })}
                             disabled={working === claim.id}
                           >
                             {resolutionCopy.button}
@@ -2568,6 +2591,7 @@ export default function UpstreamProcurementPage() {
         )}
       </main>
       <ConfirmSheet {...revisionRejectConfirm} />
+      <ConfirmSheet {...actionConfirm} />
     </div>
   )
 }

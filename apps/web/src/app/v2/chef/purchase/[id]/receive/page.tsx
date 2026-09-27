@@ -7,7 +7,7 @@
  * - 收货后跳 po-success 页, 看到 ProgressDots 推进 + 报损
  */
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
@@ -16,7 +16,10 @@ import { apiFetch } from '@/lib/v2-auth'
 export default function ReceivePage({ params }: { params: { id: string } }) {
   const router = useRouter()
   const [po, setPo] = useState<any>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const errorRef = useRef<HTMLDivElement>(null)
   const [submitting, setSubmitting] = useState(false)
   const [received, setReceived] = useState<Record<string, number>>({})
   const [differenceKinds, setDifferenceKinds] = useState<Record<string, 'ARRIVAL_SHORTAGE' | 'ARRIVAL_DAMAGE'>>({})
@@ -39,10 +42,19 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
       })
       setReceived(init)
       setDifferenceKinds(initialKinds)
-    }).catch(e => setError(String(e?.message || e)))
+    }).catch(e => setLoadError(String(e?.message || e)))
   }, [params.id])
 
-  if (error) return <div className="p-6 text-red-fg">{error}</div>
+  useEffect(() => {
+    if (error) errorRef.current?.focus()
+  }, [error])
+
+  function showError(message: string) {
+    setNotice('')
+    setError(message)
+  }
+
+  if (loadError) return <div role="alert" className="p-6 text-red-fg">{loadError}</div>
   if (!po) return <div className="p-6 text-gray3 text-caption">加载中…</div>
 
   // ── 状态守卫: 非待验收状态不让重复填表 ──
@@ -109,8 +121,10 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
       fd.append('file', file, file.name || 'evidence.jpg')
       const res = await apiFetch<{ url: string }>('/api/upload?category=loss-claims', { method: 'POST', body: fd as any })
       setEvidence(prev => [...prev, res.url])
+      setError('')
+      setNotice('到货差异证据已上传，可继续核对或确认收货。')
     } catch (e: any) {
-      alert('上传失败: ' + (e.message || e))
+      showError('上传失败: ' + (e.message || e))
     } finally {
       setUploading(false)
     }
@@ -118,6 +132,8 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
   function submit() {
     if (submitting) return
     const doSubmit = async () => {
+      setError('')
+      setNotice('')
       setSubmitting(true)
       try {
         await apiFetch(`/api/orders/${params.id}/receive`, {
@@ -136,9 +152,8 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
         })
         router.push(`/v2/chef/purchase/po-success/${params.id}`)
       } catch (e: any) {
-        alert(e.message || '收货失败')
+        showError(e.message || '收货失败')
         setSubmitting(false)
-        throw e
       }
     }
     if (hasLoss) {
@@ -160,6 +175,9 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
         <button onClick={() => router.back()} className="text-gray2 text-h2">‹</button>
         <h1 className="text-h1">验收</h1>
       </header>
+
+      {error && <div ref={errorRef} role="alert" tabIndex={-1} className="mx-4 mt-2 rounded-card bg-red-bg p-3 text-caption text-red-fg outline-none">{error}</div>}
+      {notice && <div role="status" className="mx-4 mt-2 rounded-card bg-green-bg p-3 text-caption text-green-fg">{notice}</div>}
 
       {/* PO 信息 */}
       <div className="mx-4 mt-2 bg-white rounded-card border border-border p-3">
@@ -319,7 +337,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
                          // 串行上传, 顺序保留; 视频客户端先校验大小给出友好错 (避免传完再被服务端拒)
                          for (const f of files) {
                            if (f.type.startsWith('video/') && f.size > 50 * 1024 * 1024) {
-                             alert(`视频"${f.name}"超过 50MB, 请压缩后再传`)
+                             showError(`视频"${f.name}"超过 50MB, 请压缩后再传`)
                              continue
                            }
                            await uploadPhoto(f)

@@ -57,11 +57,6 @@ async function waitFor(predicate: () => boolean, timeout = 1000) {
 describe('美团期初库存基线导入页面', () => {
   beforeEach(() => {
     mockFetch.mockReset()
-    Object.defineProperty(window, 'confirm', {
-      configurable: true,
-      writable: true,
-      value: vi.fn(() => true),
-    })
     let current = importRecord(false)
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
@@ -97,6 +92,9 @@ describe('美团期初库存基线导入页面', () => {
 
     const button = Array.from(container.querySelectorAll('button')).find(item => item.textContent?.includes('批量确认同名候选'))
     await act(async () => { button?.click() })
+    expect(container.textContent).toContain('确认同名商品映射')
+    const confirmButton = Array.from(container.querySelectorAll('button')).find(item => item.textContent === '确认映射')
+    await act(async () => { confirmButton?.click() })
     await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path).endsWith('/resolve-name-suggestions')))
 
     const call = mockFetch.mock.calls.find(([path]) => String(path).endsWith('/resolve-name-suggestions'))
@@ -139,7 +137,9 @@ describe('美团期初库存基线导入页面', () => {
     })
 
     await act(async () => { button!.click() })
-    expect(vi.mocked(window.confirm)).toHaveBeenCalledWith(expect.stringContaining('设为基准'))
+    expect(container.textContent).toContain('确认设为库存基准')
+    const confirmButton = Array.from(container.querySelectorAll('button')).find(item => item.textContent === '确认设为基准')
+    await act(async () => { confirmButton?.click() })
     await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path).endsWith('/baseline')))
     await waitFor(() => container.textContent?.includes('连续记账基准') ?? false)
 

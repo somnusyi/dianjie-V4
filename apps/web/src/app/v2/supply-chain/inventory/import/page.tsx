@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
+import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch } from '@/lib/v2-auth'
 
 type Issue = { code: string; message: string; detail?: string }
@@ -146,6 +147,7 @@ export default function WarehouseSnapshotImportPage() {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [confirmState, openConfirm] = useConfirmSheet()
 
   async function loadHistory(selectId?: string) {
     const result = await apiFetch<{ items: InventoryImport[] }>('/api/warehouse-inventory-imports')
@@ -244,9 +246,19 @@ export default function WarehouseSnapshotImportPage() {
     }
   }
 
-  async function applyBaseline() {
+  function applyBaseline() {
     if (!current || !canApplyBaseline) return
-    if (!window.confirm(`仅当 ${current.snapshotDate} 是连续记账的首日时使用：确认将该日期期末库存设为基准？后续日期必须写入每日出入库，不能再用快照覆盖。`)) return
+    openConfirm({
+      title: '确认设为库存基准',
+      body: `仅当 ${current.snapshotDate} 是连续记账的首日时使用：确认将该日期期末库存设为基准？后续日期必须写入每日出入库，不能再用快照覆盖。`,
+      confirmLabel: '确认设为基准',
+      tone: 'primary',
+      onConfirm: performApplyBaseline,
+    })
+  }
+
+  async function performApplyBaseline() {
+    if (!current || !canApplyBaseline) return
     setBusy('baseline')
     setError('')
     try {
@@ -257,14 +269,25 @@ export default function WarehouseSnapshotImportPage() {
       await loadHistory(current.id)
     } catch (reason: any) {
       setError(String(reason?.message || reason))
+      throw reason
     } finally {
       setBusy('')
     }
   }
 
-  async function applyDailyLedger() {
+  function applyDailyLedger() {
     if (!current || !canApplyDailyLedger) return
-    if (!window.confirm(`确认以 ${current.snapshotDate} 的前一日期末库存为基准，写入 ${current.snapshotDate} 的净采购入库和配送出库，再与本日期末库存快照核对？快照不会直接覆盖账面库存。`)) return
+    openConfirm({
+      title: '确认写入当日流水',
+      body: `确认以 ${current.snapshotDate} 的前一日期末库存为基准，写入 ${current.snapshotDate} 的净采购入库和配送出库，再与本日期末库存快照核对？快照不会直接覆盖账面库存。`,
+      confirmLabel: '确认写入',
+      tone: 'primary',
+      onConfirm: performApplyDailyLedger,
+    })
+  }
+
+  async function performApplyDailyLedger() {
+    if (!current || !canApplyDailyLedger) return
     setBusy('daily-ledger')
     setError('')
     try {
@@ -275,14 +298,25 @@ export default function WarehouseSnapshotImportPage() {
       await loadHistory(current.id)
     } catch (reason: any) {
       setError(String(reason?.message || reason))
+      throw reason
     } finally {
       setBusy('')
     }
   }
 
-  async function confirmNameSuggestions() {
+  function confirmNameSuggestions() {
     if (!current || nameSuggestionCount === 0) return
-    if (!window.confirm(`确认 ${nameSuggestionCount} 个“美团名称与系统名称完全相同且唯一”的商品候选吗？确认后会保存美团编码映射；单位问题仍会继续阻断库存确认。`)) return
+    openConfirm({
+      title: '确认同名商品映射',
+      body: `确认 ${nameSuggestionCount} 个“美团名称与系统名称完全相同且唯一”的商品候选吗？确认后会保存美团编码映射；单位问题仍会继续阻断库存确认。`,
+      confirmLabel: '确认映射',
+      tone: 'primary',
+      onConfirm: performConfirmNameSuggestions,
+    })
+  }
+
+  async function performConfirmNameSuggestions() {
+    if (!current || nameSuggestionCount === 0) return
     setBusy('bulk-map')
     setError('')
     try {
@@ -295,26 +329,41 @@ export default function WarehouseSnapshotImportPage() {
       await loadHistory(record.id)
     } catch (reason: any) {
       setError(String(reason?.message || reason))
+      throw reason
     } finally {
       setBusy('')
     }
   }
 
-  async function reverseImport() {
+  function reverseImport() {
     if (!current || current.status !== 'CONFIRMED') return
-    const reason = window.prompt('请输入撤销原因（至少 2 个字）。撤销会追加反向流水，不会删除原记录。')?.trim()
-    if (!reason) return
+    openConfirm({
+      title: '撤销库存快照',
+      body: '撤销会追加反向流水，不会删除原记录。',
+      confirmLabel: '确认撤销',
+      tone: 'danger',
+      withInput: true,
+      inputRequired: true,
+      inputPlaceholder: '请输入撤销原因（至少 2 个字）',
+      onConfirm: reason => performReverseImport(reason || ''),
+    })
+  }
+
+  async function performReverseImport(reason: string) {
+    if (!current || current.status !== 'CONFIRMED') return
+    if (reason.trim().length < 2) throw new Error('撤销原因至少需要 2 个字')
     setBusy('reverse')
     setError('')
     try {
       const record = await apiFetch<InventoryImport>(`/api/warehouse-inventory-imports/${current.id}/reverse`, {
-        method: 'POST', body: JSON.stringify({ rowVersion: current.rowVersion, reason }),
+        method: 'POST', body: JSON.stringify({ rowVersion: current.rowVersion, reason: reason.trim() }),
       })
       setCurrent(record)
       setNotice('库存快照已撤销，原导入单与反向流水均已保留。')
       await loadHistory(record.id)
     } catch (reasonValue: any) {
       setError(String(reasonValue?.message || reasonValue))
+      throw reasonValue
     } finally {
       setBusy('')
     }
@@ -418,6 +467,7 @@ export default function WarehouseSnapshotImportPage() {
           </>}
         </main>
       </section>
+      <ConfirmSheet {...confirmState} />
     </div>
   )
 }

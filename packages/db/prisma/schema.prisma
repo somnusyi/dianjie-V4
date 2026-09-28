@@ -724,6 +724,7 @@ model User {
   archivedProductQualityStandards   ProductQualityStandard[]              @relation("ProductQualityStandardArchivedBy")
   createdPurchasePriceStandards     ProductPurchasePriceStandard[]        @relation("ProductPurchasePriceStandardCreatedBy")
   archivedPurchasePriceStandards    ProductPurchasePriceStandard[]        @relation("ProductPurchasePriceStandardArchivedBy")
+  createdEvidenceRequirementChanges ProductEvidenceRequirementChange[]    @relation("ProductEvidenceRequirementChangeCreatedBy")
   approvedUpstreamPriceExceptions   UpstreamReceipt[]                     @relation("UpstreamReceiptPriceExceptionApprover")
 
   @@unique([tenantId, email])
@@ -1451,7 +1452,7 @@ model SupplierArchiveRecord {
 
   @@unique([tenantId, id])
   @@unique([tenantId, requestKey])
-  @@index([tenantId, supplierId, section, createdAt])
+  @@index([tenantId, supplierId, section, createdAt], map: "supplier_archive_records_tenantId_supplierId_section_createdAt_")
   @@map("supplier_archive_records")
 }
 
@@ -1489,17 +1490,17 @@ model SupplierEvidenceDocument {
   createdAt              DateTime                     @default(now())
   updatedAt              DateTime                     @updatedAt
 
-  tenant           Tenant                                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  supplier         Supplier                              @relation(fields: [tenantId, supplierId], references: [tenantId, id], onDelete: Restrict)
-  createdBy        User                                  @relation("SupplierEvidenceDocumentCreatedBy", fields: [tenantId, createdById], references: [tenantId, id], onDelete: Restrict)
-  archivedBy       User?                                 @relation("SupplierEvidenceDocumentArchivedBy", fields: [tenantId, archivedById], references: [tenantId, id], onDelete: Restrict)
+  tenant           Tenant                                @relation(fields: [tenantId], references: [id], onDelete: Cascade, map: "supplier_evidence_documents_tenant_fkey")
+  supplier         Supplier                              @relation(fields: [tenantId, supplierId], references: [tenantId, id], onDelete: Restrict, map: "supplier_evidence_documents_supplier_fkey")
+  createdBy        User                                  @relation("SupplierEvidenceDocumentCreatedBy", fields: [tenantId, createdById], references: [tenantId, id], onDelete: Restrict, map: "supplier_evidence_documents_created_by_fkey")
+  archivedBy       User?                                 @relation("SupplierEvidenceDocumentArchivedBy", fields: [tenantId, archivedById], references: [tenantId, id], onDelete: Restrict, map: "supplier_evidence_documents_archived_by_fkey")
   products         SupplierEvidenceDocumentProduct[]
   receiptLineLinks UpstreamReceiptLineEvidenceDocument[]
 
   @@unique([tenantId, id])
   @@unique([tenantId, requestKey])
-  @@unique([tenantId, supplierId, type, version])
-  @@index([tenantId, supplierId, type, archivedAt, createdAt])
+  @@unique([tenantId, supplierId, type, version], map: "supplier_evidence_documents_scope_version_key")
+  @@index([tenantId, supplierId, type, archivedAt, createdAt], map: "supplier_evidence_documents_scope_archive_created_idx")
   @@map("supplier_evidence_documents")
 }
 
@@ -1527,13 +1528,13 @@ model SupplierEvidenceDocumentProduct {
   productId  String
   createdAt  DateTime @default(now())
 
-  tenant   Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  document SupplierEvidenceDocument @relation(fields: [tenantId, documentId], references: [tenantId, id], onDelete: Restrict)
-  product  Product                  @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  tenant   Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade, map: "supplier_evidence_document_products_tenant_fkey")
+  document SupplierEvidenceDocument @relation(fields: [tenantId, documentId], references: [tenantId, id], onDelete: Restrict, map: "supplier_evidence_document_products_document_fkey")
+  product  Product                  @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict, map: "supplier_evidence_document_products_product_fkey")
 
-  @@unique([documentId, productId])
+  @@unique([documentId, productId], map: "supplier_evidence_document_products_document_product_key")
   @@unique([tenantId, id])
-  @@index([tenantId, productId, createdAt])
+  @@index([tenantId, productId, createdAt], map: "supplier_evidence_document_products_tenant_product_created_idx")
   @@map("supplier_evidence_document_products")
 }
 
@@ -1559,17 +1560,17 @@ model UpstreamReceiptLineEvidenceDocument {
   voidRequestKey         String?   @db.VarChar(160)
   voidRequestFingerprint String?   @db.Char(64)
 
-  tenant      Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  receiptLine UpstreamReceiptLine      @relation(fields: [tenantId, receiptLineId], references: [tenantId, id], onDelete: Restrict)
-  document    SupplierEvidenceDocument @relation(fields: [tenantId, documentId], references: [tenantId, id], onDelete: Restrict)
-  linkedBy    User                     @relation("ReceiptEvidenceDocumentLinkedBy", fields: [tenantId, linkedById], references: [tenantId, id], onDelete: Restrict)
-  voidedBy    User?                    @relation("ReceiptEvidenceDocumentVoidedBy", fields: [tenantId, voidedById], references: [tenantId, id], onDelete: Restrict)
+  tenant      Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade, map: "upstream_receipt_line_evidence_documents_tenant_fkey")
+  receiptLine UpstreamReceiptLine      @relation(fields: [tenantId, receiptLineId], references: [tenantId, id], onDelete: Restrict, map: "upstream_receipt_line_evidence_documents_receipt_line_fkey")
+  document    SupplierEvidenceDocument @relation(fields: [tenantId, documentId], references: [tenantId, id], onDelete: Restrict, map: "upstream_receipt_line_evidence_documents_document_fkey")
+  linkedBy    User                     @relation("ReceiptEvidenceDocumentLinkedBy", fields: [tenantId, linkedById], references: [tenantId, id], onDelete: Restrict, map: "upstream_receipt_line_evidence_documents_linked_by_fkey")
+  voidedBy    User?                    @relation("ReceiptEvidenceDocumentVoidedBy", fields: [tenantId, voidedById], references: [tenantId, id], onDelete: Restrict, map: "upstream_receipt_line_evidence_documents_voided_by_fkey")
 
   @@unique([tenantId, id])
-  @@unique([tenantId, linkRequestKey])
-  @@unique([tenantId, voidRequestKey])
-  @@index([tenantId, receiptLineId, documentId, voidedAt])
-  @@index([tenantId, documentId, voidedAt, linkedAt])
+  @@unique([tenantId, linkRequestKey], map: "upstream_receipt_line_evidence_documents_link_request_key")
+  @@unique([tenantId, voidRequestKey], map: "upstream_receipt_line_evidence_documents_void_request_key")
+  @@index([tenantId, receiptLineId, documentId, voidedAt], map: "upstream_receipt_line_evidence_documents_line_document_void_idx")
+  @@index([tenantId, documentId, voidedAt, linkedAt], map: "upstream_receipt_line_evidence_documents_document_void_linked_i")
   @@map("upstream_receipt_line_evidence_documents")
 }
 
@@ -1679,8 +1680,8 @@ model ProductEvidenceRequirementChange {
   productId             String
   beforeStatus          ProductEvidenceRequirement
   afterStatus           ProductEvidenceRequirement
-  beforeRequiredTypes   SupplierEvidenceDocumentType[]
-  afterRequiredTypes    SupplierEvidenceDocumentType[]
+  beforeRequiredTypes   SupplierEvidenceDocumentType[] @default([])
+  afterRequiredTypes    SupplierEvidenceDocumentType[] @default([])
   expectedVersion       Int
   newVersion            Int
   reason                String                         @db.VarChar(500)
@@ -1691,11 +1692,12 @@ model ProductEvidenceRequirementChange {
   createdByRoleSnapshot String                         @db.VarChar(40)
   createdAt             DateTime                       @default(now())
 
-  product Product @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  product   Product @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict, map: "product_evidence_requirement_changes_product_fkey")
+  createdBy User    @relation("ProductEvidenceRequirementChangeCreatedBy", fields: [tenantId, createdById], references: [tenantId, id], onDelete: Restrict, map: "product_evidence_requirement_changes_actor_fkey")
 
-  @@unique([tenantId, id])
-  @@unique([tenantId, requestKey])
-  @@index([tenantId, productId, createdAt])
+  @@unique([tenantId, id], map: "product_evidence_requirement_changes_tenant_id_key")
+  @@unique([tenantId, requestKey], map: "product_evidence_requirement_changes_request_key")
+  @@index([tenantId, productId, createdAt], map: "product_evidence_requirement_changes_product_created_idx")
   @@map("product_evidence_requirement_changes")
 }
 
@@ -1734,7 +1736,7 @@ model ProductQualityStandard {
   @@unique([tenantId, productId, version])
   @@unique([tenantId, requestKey])
   @@unique([tenantId, archiveRequestKey])
-  @@index([tenantId, productId, active, effectiveAt])
+  @@index([tenantId, productId, active, effectiveAt], map: "product_quality_standards_tenantId_productId_active_effectiveAt")
   @@map("product_quality_standards")
 }
 
@@ -1766,18 +1768,18 @@ model ProductPurchasePriceStandard {
   updatedAt                 DateTime  @updatedAt
 
   tenant             Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  product            Product                     @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
-  supplier           Supplier                    @relation(fields: [tenantId, supplierId], references: [tenantId, id], onDelete: Restrict)
-  createdBy          User                        @relation("ProductPurchasePriceStandardCreatedBy", fields: [tenantId, createdById], references: [tenantId, id], onDelete: Restrict)
-  archivedBy         User?                       @relation("ProductPurchasePriceStandardArchivedBy", fields: [tenantId, archivedById], references: [tenantId, id], onDelete: Restrict)
+  product            Product                     @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict, map: "product_purchase_price_standards_product_fkey")
+  supplier           Supplier                    @relation(fields: [tenantId, supplierId], references: [tenantId, id], onDelete: Restrict, map: "product_purchase_price_standards_supplier_fkey")
+  createdBy          User                        @relation("ProductPurchasePriceStandardCreatedBy", fields: [tenantId, createdById], references: [tenantId, id], onDelete: Restrict, map: "product_purchase_price_standards_created_by_fkey")
+  archivedBy         User?                       @relation("ProductPurchasePriceStandardArchivedBy", fields: [tenantId, archivedById], references: [tenantId, id], onDelete: Restrict, map: "product_purchase_price_standards_archived_by_fkey")
   purchaseOrderLines UpstreamPurchaseOrderLine[] @relation("PurchaseOrderLinePriceStandard")
   receiptLines       UpstreamReceiptLine[]       @relation("ReceiptLinePriceStandard")
 
   @@unique([tenantId, id])
-  @@unique([tenantId, productId, supplierId, purchaseUnit, currency, taxInclusive, version])
+  @@unique([tenantId, productId, supplierId, purchaseUnit, currency, taxInclusive, version], map: "product_purchase_price_standards_scope_version_key")
   @@unique([tenantId, requestKey])
   @@unique([tenantId, archiveRequestKey])
-  @@index([tenantId, productId, supplierId, purchaseUnit, active, effectiveAt])
+  @@index([tenantId, productId, supplierId, purchaseUnit, active, effectiveAt], map: "product_purchase_price_standards_scope_active_idx")
   @@map("product_purchase_price_standards")
 }
 
@@ -1835,8 +1837,8 @@ model WarehouseInventoryPolicyEvent {
   policy WarehouseInventoryPolicy @relation(fields: [tenantId, policyId], references: [tenantId, id], onDelete: Restrict)
 
   @@unique([tenantId, requestId])
-  @@index([tenantId, policyId, createdAt])
-  @@index([tenantId, actorId, createdAt])
+  @@index([tenantId, policyId, createdAt], map: "warehouse_inventory_policy_events_tenantId_policyId_createdAt_i")
+  @@index([tenantId, actorId, createdAt], map: "warehouse_inventory_policy_events_tenantId_actorId_createdAt_id")
   @@map("warehouse_inventory_policy_events")
 }
 
@@ -4541,9 +4543,9 @@ model WarehouseStocktake {
 
   tenant      Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   warehouse   Warehouse                      @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
-  createdBy   User                           @relation("WarehouseStocktakeCreatedBy", fields: [tenantId, createdById], references: [tenantId, id], onDelete: Restrict)
-  submittedBy User?                          @relation("WarehouseStocktakeSubmittedBy", fields: [tenantId, submittedById], references: [tenantId, id], onDelete: Restrict)
-  reviewedBy  User?                          @relation("WarehouseStocktakeReviewedBy", fields: [tenantId, reviewedById], references: [tenantId, id], onDelete: Restrict)
+  createdBy   User                           @relation("WarehouseStocktakeCreatedBy", fields: [tenantId, createdById], references: [tenantId, id], onDelete: Restrict, map: "wst_created_actor_fk")
+  submittedBy User?                          @relation("WarehouseStocktakeSubmittedBy", fields: [tenantId, submittedById], references: [tenantId, id], onDelete: Restrict, map: "wst_submitted_actor_fk")
+  reviewedBy  User?                          @relation("WarehouseStocktakeReviewedBy", fields: [tenantId, reviewedById], references: [tenantId, id], onDelete: Restrict, map: "wst_reviewed_actor_fk")
   sections    WarehouseStocktakeSection[]
   items       WarehouseStocktakeItem[]
   entries     WarehouseStocktakeEntry[]
@@ -4552,7 +4554,7 @@ model WarehouseStocktake {
   @@unique([tenantId, no])
   @@unique([tenantId, id])
   @@unique([tenantId, requestKey])
-  @@index([tenantId, warehouseId, status, countDate])
+  @@index([tenantId, warehouseId, status, countDate], map: "wst_tenant_warehouse_status_date_idx")
   @@map("warehouse_stocktakes")
 }
 
@@ -4570,14 +4572,14 @@ model WarehouseStocktakeSection {
 
   tenant     Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   stocktake  WarehouseStocktake        @relation(fields: [tenantId, stocktakeId], references: [tenantId, id], onDelete: Cascade)
-  assignedTo User                      @relation("WarehouseStocktakeSectionAssignee", fields: [tenantId, assignedToId], references: [tenantId, id], onDelete: Restrict)
+  assignedTo User                      @relation("WarehouseStocktakeSectionAssignee", fields: [tenantId, assignedToId], references: [tenantId, id], onDelete: Restrict, map: "wsts_assignee_fk")
   items      WarehouseStocktakeItem[]
   entries    WarehouseStocktakeEntry[]
 
   @@unique([stocktakeId, name])
   @@unique([tenantId, id])
-  @@unique([tenantId, stocktakeId, id])
-  @@index([tenantId, assignedToId, status])
+  @@unique([tenantId, stocktakeId, id], map: "wsts_tenant_stocktake_id_key")
+  @@index([tenantId, assignedToId, status], map: "wsts_tenant_assignee_status_idx")
   @@map("warehouse_stocktake_sections")
 }
 
@@ -4608,16 +4610,16 @@ model WarehouseStocktakeItem {
 
   tenant          Tenant                             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   stocktake       WarehouseStocktake                 @relation(fields: [tenantId, stocktakeId], references: [tenantId, id], onDelete: Cascade)
-  section         WarehouseStocktakeSection          @relation(fields: [tenantId, stocktakeId, sectionId], references: [tenantId, stocktakeId, id], onDelete: Restrict)
+  section         WarehouseStocktakeSection          @relation(fields: [tenantId, stocktakeId, sectionId], references: [tenantId, stocktakeId, id], onDelete: Restrict, map: "wsti_section_fk")
   product         Product                            @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
   entry           WarehouseStocktakeEntry?
   adjustmentLines WarehouseStocktakeAdjustmentLine[]
 
   @@unique([stocktakeId, productId])
   @@unique([tenantId, id])
-  @@unique([tenantId, stocktakeId, id])
-  @@index([sectionId, sortOrder])
-  @@index([tenantId, productId])
+  @@unique([tenantId, stocktakeId, id], map: "wsti_tenant_stocktake_id_key")
+  @@index([sectionId, sortOrder], map: "wsti_section_sort_idx")
+  @@index([tenantId, productId], map: "wsti_tenant_product_idx")
   @@map("warehouse_stocktake_items")
 }
 
@@ -4637,14 +4639,14 @@ model WarehouseStocktakeEntry {
 
   tenant    Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   stocktake WarehouseStocktake        @relation(fields: [tenantId, stocktakeId], references: [tenantId, id], onDelete: Cascade)
-  section   WarehouseStocktakeSection @relation(fields: [tenantId, stocktakeId, sectionId], references: [tenantId, stocktakeId, id], onDelete: Cascade)
-  item      WarehouseStocktakeItem    @relation(fields: [tenantId, stocktakeId, stocktakeItemId], references: [tenantId, stocktakeId, id], onDelete: Cascade)
-  enteredBy User                      @relation("WarehouseStocktakeEntryActor", fields: [tenantId, enteredById], references: [tenantId, id], onDelete: Restrict)
+  section   WarehouseStocktakeSection @relation(fields: [tenantId, stocktakeId, sectionId], references: [tenantId, stocktakeId, id], onDelete: Cascade, map: "wste_section_fk")
+  item      WarehouseStocktakeItem    @relation(fields: [tenantId, stocktakeId, stocktakeItemId], references: [tenantId, stocktakeId, id], onDelete: Cascade, map: "wste_item_fk")
+  enteredBy User                      @relation("WarehouseStocktakeEntryActor", fields: [tenantId, enteredById], references: [tenantId, id], onDelete: Restrict, map: "wste_actor_fk")
 
   @@unique([tenantId, stocktakeItemId])
-  @@unique([tenantId, stocktakeId, stocktakeItemId])
-  @@index([tenantId, enteredById, savedAt])
-  @@index([stocktakeId, sectionId])
+  @@unique([tenantId, stocktakeId, stocktakeItemId], map: "wste_tenant_stocktake_item_key")
+  @@index([tenantId, enteredById, savedAt], map: "wste_tenant_actor_saved_idx")
+  @@index([stocktakeId, sectionId], map: "wste_stocktake_section_idx")
   @@map("warehouse_stocktake_entries")
 }
 
@@ -4679,17 +4681,17 @@ model WarehouseStocktakeAdjustmentLine {
   inventoryUnit   String   @db.VarChar(16)
   unitCost        Decimal  @db.Decimal(18, 6)
   amount          Decimal  @db.Decimal(20, 4)
-  movementId      String?  @unique @db.VarChar(64)
+  movementId      String?  @unique(map: "wstal_movement_key") @db.VarChar(64)
   createdAt       DateTime @default(now())
 
   tenant        Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   adjustment    WarehouseStocktakeAdjustment @relation(fields: [tenantId, adjustmentId], references: [tenantId, id], onDelete: Cascade)
-  stocktakeItem WarehouseStocktakeItem       @relation(fields: [tenantId, stocktakeItemId], references: [tenantId, id], onDelete: Restrict)
+  stocktakeItem WarehouseStocktakeItem       @relation(fields: [tenantId, stocktakeItemId], references: [tenantId, id], onDelete: Restrict, map: "warehouse_stocktake_adjustment_lines_tenantId_stocktakeItemId_f")
   product       Product                      @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
-  movement      WarehouseLedgerMovement?     @relation("WarehouseStocktakeAdjustmentMovement", fields: [movementId], references: [id], onDelete: Restrict)
+  movement      WarehouseLedgerMovement?     @relation("WarehouseStocktakeAdjustmentMovement", fields: [movementId], references: [id], onDelete: Restrict, map: "wstal_movement_fk")
 
-  @@unique([adjustmentId, stocktakeItemId])
-  @@index([tenantId, productId])
+  @@unique([adjustmentId, stocktakeItemId], map: "wstal_adjustment_item_key")
+  @@index([tenantId, productId], map: "wstal_tenant_product_idx")
   @@map("warehouse_stocktake_adjustment_lines")
 }
 

@@ -7,13 +7,15 @@ import {
   requiresUpstreamReceiptReview,
   UpstreamReceiptReviewerConflictError,
   upstreamReceiptReviewReasons,
+  upstreamReceiptPriceReviewFlags,
   UpstreamPurchaseOrderStatus,
 } from '../domain/upstreamProcurement'
 import { requireSupplierCapability } from '../lib/supplier-access'
 import { upstreamFeatureEnabled, upstreamFeatureSnapshot } from '../lib/upstream-feature-flags'
-import { businessDateRangeInclusive } from '../lib/businessTime'
+import { businessDateKey, businessDateRangeInclusive } from '../lib/businessTime'
 import { hashRequestBody } from '../lib/idempotency'
 import { nextUpstreamDocumentNo } from '../services/upstreamDocumentNo'
+import { evaluateReceiptEvidenceCompleteness } from '../services/receiptEvidencePolicy'
 import {
   approveUpstreamPurchaseReturn,
   cancelUpstreamPurchaseReturn,
@@ -26,6 +28,7 @@ import {
   submitUpstreamPurchaseReturn,
 } from '../services/upstreamPurchaseReturns'
 import { postUpstreamClaimLossInTransaction, postUpstreamReceiptInTransaction, reverseUpstreamReceiptInTransaction } from '../services/warehouseLedger'
+import { assertWarehouseDocumentObjects, signOssKey } from './upload'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 // Keep the API aligned with the guarded supply-chain workspace: tenant ADMIN
@@ -39,6 +42,56 @@ const idSchema = z.string().trim().min(1).max(64)
 const decimalInput = z.coerce.number().finite().positive()
 const nonNegativeDecimalInput = z.coerce.number().finite().min(0)
 const isoDateInput = z.coerce.date()
+const qualityEvidenceItemSchema = z.object({
+  key: z.string().trim().min(1).max(1024),
+  name: z.string().trim().min(1).max(160),
+  mime: z.enum(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf']),
+  size: z.number().int().positive().max(10 * 1024 * 1024),
+}).strict()
+const qualityEvidenceSchema = z.array(qualityEvidenceItemSchema).max(20)
+
+function jsonDepth(value: unknown, depth = 0): number {
+  if (!value || typeof value !== 'object') return depth
+  const children = Array.isArray(value) ? value : Object.values(value as Record<string, unknown>)
+  if (children.length === 0) return depth + 1
+  return Math.max(...children.map((child) => jsonDepth(child, depth + 1)))
+}
+
+const boundedCriteriaSchema = z.record(z.unknown()).superRefine((value, ctx) => {
+  if (Object.keys(value).length === 0) ctx.addIssue({ code: 'custom', message: '请至少填写一项质量标准' })
+  if (Object.keys(value).length > 50) ctx.addIssue({ code: 'custom', message: '质量标准项不能超过50项' })
+  if (jsonDepth(value) > 6) ctx.addIssue({ code: 'custom', message: '质量标准层级不能超过6层' })
+  if (Buffer.byteLength(JSON.stringify(value), 'utf8') > 20 * 1024) ctx.addIssue({ code: 'custom', message: '质量标准内容不能超过20KB' })
+})
+
+const qualityStandardCreateSchema = z.object({
+  productId: idSchema,
+  title: z.string().trim().min(2).max(160),
+  criteria: boundedCriteriaSchema,
+  effectiveAt: isoDateInput,
+  requestKey: z.string().trim().min(8).max(160),
+}).strict()
+
+const priceStandardCreateSchema = z.object({
+  productId: idSchema,
+  supplierId: idSchema,
+  purchaseUnit: z.string().trim().min(1).max(16),
+  currency: z.string().trim().length(3).transform((value) => value.toUpperCase()),
+  taxInclusive: z.boolean(),
+  unitPrice: decimalInput,
+  effectiveAt: isoDateInput,
+  requestKey: z.string().trim().min(8).max(160),
+}).strict()
+
+const standardDeactivateSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  reason: z.string().trim().min(2).max(500),
+  requestKey: z.string().trim().min(8).max(160),
+}).strict()
+
+const receiptReviewSchema = z.object({
+  priceExceptionReason: z.string().trim().min(2).max(500).optional(),
+}).strict()
 
 const contractCreateSchema = z
   .object({
@@ -224,6 +277,9 @@ const receiptCreateSchema = z
             manufactureDate: isoDateInput.optional(),
             expiryDate: isoDateInput.optional(),
             evidence: z.array(z.record(z.unknown())).max(20).optional(),
+            qualityResult: z.enum(['PASS', 'FAIL']).optional(),
+            qualityEvidence: qualityEvidenceSchema.optional(),
+            qualityDisposition: z.string().trim().max(500).optional(),
             note: z.string().trim().max(500).optional(),
           })
           .superRefine((line, ctx) => {
@@ -240,6 +296,12 @@ const receiptCreateSchema = z
                 path: ['expiryDate'],
                 message: '到期日不能早于生产日期',
               })
+            }
+            if (line.qualityResult === 'FAIL') {
+              if (line.acceptedQty > 0) ctx.addIssue({ code: 'custom', path: ['acceptedQty'], message: '质量验收不合格的数量不能作为合格入库' })
+              if (line.rejectedQty <= 0) ctx.addIssue({ code: 'custom', path: ['rejectedQty'], message: '质量验收不合格时必须填写拒收数量' })
+              if (!line.qualityEvidence?.length) ctx.addIssue({ code: 'custom', path: ['qualityEvidence'], message: '质量验收不合格必须上传证据' })
+              if (!line.qualityDisposition?.trim()) ctx.addIssue({ code: 'custom', path: ['qualityDisposition'], message: '质量验收不合格必须填写处置结果' })
             }
           })
       )
@@ -520,6 +582,37 @@ function canonicalJson(value: unknown): unknown {
   return value
 }
 
+export function standardReplacementArchiveRequestKey(kind: 'quality' | 'price', requestKey: string, fingerprint: string) {
+  return `replace:${hashRequestBody({ requestKey, fingerprint }, `${kind}-standard-replacement-v1`)}`
+}
+
+export function upstreamReceiptRequestFingerprint(shipmentId: string, input: z.infer<typeof receiptCreateSchema>) {
+  return hashRequestBody({
+    shipmentId,
+    arrivedAt: input.arrivedAt?.toISOString() || null,
+    finalForShipment: input.finalForShipment,
+    evidence: canonicalJson(input.evidence || []),
+    note: input.note || null,
+    lines: input.lines
+      .map((line) => ({
+        shipmentLineId: line.shipmentLineId,
+        arrivedQty: decimal(line.arrivedQty).toString(),
+        acceptedQty: decimal(line.acceptedQty).toString(),
+        damagedQty: decimal(line.damagedQty).toString(),
+        rejectedQty: decimal(line.rejectedQty).toString(),
+        batchNo: line.batchNo || null,
+        manufactureDate: line.manufactureDate?.toISOString() || null,
+        expiryDate: line.expiryDate?.toISOString() || null,
+        evidence: canonicalJson(line.evidence || []),
+        qualityResult: line.qualityResult || null,
+        qualityEvidence: canonicalJson(line.qualityEvidence || []),
+        qualityDisposition: line.qualityDisposition || null,
+        note: line.note || null,
+      }))
+      .sort((left, right) => left.shipmentLineId.localeCompare(right.shipmentLineId)),
+  }, 'upstream-receipt-create-v2')
+}
+
 export function postReceiptClaimRequestFingerprint(input: { receiptId: string; claim: PostReceiptClaimInput; normalizedLines: ReturnType<typeof normalizePostReceiptClaimLines> }) {
   return hashRequestBody(
     {
@@ -562,6 +655,76 @@ async function scopedPurchaseOrder(req: any, id: string) {
       shipments: { orderBy: { createdAt: 'desc' } },
     },
   })
+}
+
+const standardListQuerySchema = z.object({
+  productId: idSchema.optional(),
+  supplierId: idSchema.optional(),
+  includeArchived: z.enum(['0', '1']).optional().default('0').transform((value) => value === '1'),
+}).strict()
+
+async function standardActor(tenantId: string, userId: string) {
+  const actor = await prisma.user.findFirst({
+    where: { tenantId, id: userId, status: 'ACTIVE' },
+    select: { id: true, name: true, role: true },
+  })
+  if (!actor) throw Object.assign(new Error('操作人账号不存在或已停用'), { statusCode: 403 })
+  return actor
+}
+
+function qualityStandardView(record: any) {
+  return {
+    id: record.id,
+    productId: record.productId,
+    version: record.version,
+    title: record.title,
+    criteria: record.criteria,
+    effectiveAt: record.effectiveAt,
+    active: record.active,
+    createdByName: record.createdByNameSnapshot,
+    createdByRole: record.createdByRoleSnapshot,
+    createdAt: record.createdAt,
+    archivedAt: record.archivedAt,
+    archivedByName: record.archivedByNameSnapshot,
+    archivedByRole: record.archivedByRoleSnapshot,
+    ...(record.product ? { product: record.product } : {}),
+  }
+}
+
+function priceStandardView(record: any) {
+  return {
+    id: record.id,
+    productId: record.productId,
+    supplierId: record.supplierId,
+    version: record.version,
+    purchaseUnit: record.purchaseUnit,
+    currency: record.currency,
+    taxInclusive: record.taxInclusive,
+    unitPrice: record.unitPrice,
+    effectiveAt: record.effectiveAt,
+    active: record.active,
+    createdByName: record.createdByNameSnapshot,
+    createdByRole: record.createdByRoleSnapshot,
+    createdAt: record.createdAt,
+    archivedAt: record.archivedAt,
+    archivedByName: record.archivedByNameSnapshot,
+    archivedByRole: record.archivedByRoleSnapshot,
+    ...(record.product ? { product: record.product } : {}),
+    ...(record.supplier ? { supplier: record.supplier } : {}),
+  }
+}
+
+async function runStandardTransaction<T>(operation: () => Promise<T>): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await operation()
+    } catch (error: any) {
+      lastError = error
+      if (!['P2002', 'P2034'].includes(error?.code) || attempt === 2) throw error
+    }
+  }
+  throw lastError
 }
 
 export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
@@ -628,6 +791,316 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
         : Promise.resolve([]),
     ])
     return { suppliers, warehouses, sources }
+  })
+
+  app.get('/quality-standards', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!ensureInternal(role, reply)) return
+    const parsed = standardListQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const records = await prisma.productQualityStandard.findMany({
+      where: {
+        tenantId,
+        ...(parsed.data.productId ? { productId: parsed.data.productId } : {}),
+        ...(!parsed.data.includeArchived ? { active: true } : {}),
+      },
+      include: { product: { select: { id: true, code: true, name: true, spec: true } } },
+      orderBy: [{ product: { name: 'asc' } }, { version: 'desc' }],
+    })
+    return records.map(qualityStandardView)
+  })
+
+  app.post('/quality-standards', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role, userId } = req.user
+    if (!ensureInternal(role, reply)) return
+    const parsed = qualityStandardCreateSchema.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const d = parsed.data
+    if (businessDateKey(d.effectiveAt) > businessDateKey()) return reply.status(400).send({ error: '暂不支持未来日期生效，请在生效当日更新质量标准' })
+    const fingerprint = hashRequestBody(canonicalJson({
+      productId: d.productId,
+      title: d.title,
+      criteria: d.criteria,
+      effectiveAt: d.effectiveAt.toISOString(),
+    }), 'product-quality-standard-v1')
+    try {
+      const actor = await standardActor(tenantId, userId)
+      const result = await runStandardTransaction(() => prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`quality-standard:${tenantId}:${d.productId}`}))::text AS locked`
+        const replay = await tx.productQualityStandard.findFirst({ where: { tenantId, requestKey: d.requestKey } })
+        if (replay) {
+          if (replay.requestFingerprint !== fingerprint) throw Object.assign(new Error('同一 requestKey 不能用于不同质量标准'), { statusCode: 409 })
+          return { record: replay, replayed: true }
+        }
+        const product = await tx.product.findFirst({ where: { tenantId, id: d.productId }, select: { id: true, name: true } })
+        if (!product) throw Object.assign(new Error('商品不存在'), { statusCode: 400 })
+        const latest = await tx.productQualityStandard.findFirst({
+          where: { tenantId, productId: d.productId },
+          orderBy: { version: 'desc' },
+          select: { version: true },
+        })
+        const now = new Date()
+        await tx.productQualityStandard.updateMany({
+          where: { tenantId, productId: d.productId, active: true },
+          data: {
+            active: false,
+            archivedAt: now,
+            archivedById: actor.id,
+            archivedByNameSnapshot: actor.name,
+            archivedByRoleSnapshot: actor.role,
+            archiveRequestKey: standardReplacementArchiveRequestKey('quality', d.requestKey, fingerprint),
+            archiveRequestFingerprint: fingerprint,
+          },
+        })
+        const record = await tx.productQualityStandard.create({
+          data: {
+            tenantId,
+            productId: d.productId,
+            version: (latest?.version || 0) + 1,
+            title: d.title,
+            criteria: canonicalJson(d.criteria) as Prisma.InputJsonValue,
+            effectiveAt: d.effectiveAt,
+            createdById: actor.id,
+            createdByNameSnapshot: actor.name,
+            createdByRoleSnapshot: actor.role,
+            requestKey: d.requestKey,
+            requestFingerprint: fingerprint,
+          },
+        })
+        await tx.opLog.create({
+          data: {
+            tenantId,
+            userId,
+            role,
+            action: '更新商品质量验收标准',
+            entityType: 'ProductQualityStandard',
+            target: product.name,
+            targetId: record.id,
+            metadata: { productId: product.id, version: record.version },
+          },
+        })
+        return { record, replayed: false }
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }))
+      return reply.status(result.replayed ? 200 : 201).send(qualityStandardView(result.record))
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      if (['P2002', 'P2034'].includes(error?.code)) return reply.status(409).send({ error: '质量标准正在被其他人更新，请刷新后重试' })
+      throw error
+    }
+  })
+
+  app.post('/quality-standards/:id/deactivate', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role, userId } = req.user
+    if (!ensureInternal(role, reply)) return
+    const standardId = idSchema.safeParse(req.params.id)
+    const parsed = standardDeactivateSchema.safeParse(req.body)
+    if (!standardId.success) return reply.status(400).send({ error: '标准标识格式不正确' })
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const d = parsed.data
+    const fingerprint = hashRequestBody({ standardId: standardId.data, expectedVersion: d.expectedVersion, reason: d.reason }, 'quality-standard-deactivate-v1')
+    try {
+      const actor = await standardActor(tenantId, userId)
+      const result = await runStandardTransaction(() => prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`quality-standard-id:${tenantId}:${standardId.data}`}))::text AS locked`
+        const replay = await tx.productQualityStandard.findFirst({ where: { tenantId, archiveRequestKey: d.requestKey } })
+        if (replay) {
+          if (replay.id !== standardId.data || replay.archiveRequestFingerprint !== fingerprint) throw Object.assign(new Error('同一 requestKey 不能用于不同停用操作'), { statusCode: 409 })
+          return { record: replay, replayed: true }
+        }
+        const current = await tx.productQualityStandard.findFirst({ where: { tenantId, id: standardId.data } })
+        if (!current) throw Object.assign(new Error('质量标准不存在'), { statusCode: 404 })
+        if (!current.active || current.version !== d.expectedVersion) throw Object.assign(new Error('质量标准已变更，请刷新后再停用'), { statusCode: 409 })
+        const record = await tx.productQualityStandard.update({
+          where: { id: current.id },
+          data: {
+            active: false,
+            archivedAt: new Date(),
+            archivedById: actor.id,
+            archivedByNameSnapshot: actor.name,
+            archivedByRoleSnapshot: actor.role,
+            archiveRequestKey: d.requestKey,
+            archiveRequestFingerprint: fingerprint,
+          },
+        })
+        await tx.opLog.create({ data: { tenantId, userId, role, action: '停用商品质量验收标准', entityType: 'ProductQualityStandard', targetId: record.id, metadata: { reason: d.reason, version: record.version } } })
+        return { record, replayed: false }
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }))
+      return reply.status(200).send(qualityStandardView(result.record))
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      if (['P2002', 'P2034'].includes(error?.code)) return reply.status(409).send({ error: '质量标准正在被更新，请刷新后重试' })
+      throw error
+    }
+  })
+
+  app.get('/price-standards', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role } = req.user
+    if (!ensureInternal(role, reply)) return
+    const parsed = standardListQuerySchema.safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const records = await prisma.productPurchasePriceStandard.findMany({
+      where: {
+        tenantId,
+        ...(parsed.data.productId ? { productId: parsed.data.productId } : {}),
+        ...(parsed.data.supplierId ? { supplierId: parsed.data.supplierId } : {}),
+        ...(!parsed.data.includeArchived ? { active: true } : {}),
+      },
+      include: {
+        product: { select: { id: true, code: true, name: true, spec: true } },
+        supplier: { select: { id: true, no: true, name: true } },
+      },
+      orderBy: [{ product: { name: 'asc' } }, { version: 'desc' }],
+    })
+    return records.map(priceStandardView)
+  })
+
+  app.post('/price-standards', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role, userId } = req.user
+    if (!ensureInternal(role, reply)) return
+    const parsed = priceStandardCreateSchema.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const d = parsed.data
+    if (businessDateKey(d.effectiveAt) > businessDateKey()) return reply.status(400).send({ error: '暂不支持未来日期生效，请在生效当日更新价格标准' })
+    const normalizedPrice = decimal(d.unitPrice).toFixed(6)
+    const fingerprint = hashRequestBody(canonicalJson({
+      productId: d.productId,
+      supplierId: d.supplierId,
+      purchaseUnit: d.purchaseUnit,
+      currency: d.currency,
+      taxInclusive: d.taxInclusive,
+      unitPrice: normalizedPrice,
+      effectiveAt: d.effectiveAt.toISOString(),
+    }), 'product-purchase-price-standard-v1')
+    try {
+      const actor = await standardActor(tenantId, userId)
+      const result = await runStandardTransaction(() => prisma.$transaction(async (tx) => {
+        const scopeKey = `price-standard:${tenantId}:${d.productId}:${d.supplierId}:${d.purchaseUnit}:${d.currency}:${d.taxInclusive}`
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${scopeKey}))::text AS locked`
+        const replay = await tx.productPurchasePriceStandard.findFirst({ where: { tenantId, requestKey: d.requestKey } })
+        if (replay) {
+          if (replay.requestFingerprint !== fingerprint) throw Object.assign(new Error('同一 requestKey 不能用于不同价格标准'), { statusCode: 409 })
+          return { record: replay, replayed: true }
+        }
+        const [product, supplier, source] = await Promise.all([
+          tx.product.findFirst({ where: { tenantId, id: d.productId }, select: { id: true, name: true } }),
+          tx.supplier.findFirst({
+            where: { tenantId, id: d.supplierId, status: 'ENABLED', businessScopes: { has: 'WAREHOUSE_UPSTREAM' } },
+            select: { id: true, name: true },
+          }),
+          tx.productUpstreamSource.findFirst({
+            where: {
+              tenantId,
+              supplierId: d.supplierId,
+              productId: d.productId,
+              purchaseUnit: d.purchaseUnit,
+              isActive: true,
+            },
+            select: { id: true },
+          }),
+        ])
+        if (!product) throw Object.assign(new Error('商品不存在'), { statusCode: 400 })
+        if (!supplier) throw Object.assign(new Error('上游供应商不存在或已停用'), { statusCode: 400 })
+        if (!source) throw Object.assign(new Error('该供应商与商品没有启用中的同采购单位供货关系'), { statusCode: 400 })
+        const latest = await tx.productPurchasePriceStandard.findFirst({
+          where: { tenantId, productId: d.productId, supplierId: d.supplierId, purchaseUnit: d.purchaseUnit, currency: d.currency, taxInclusive: d.taxInclusive },
+          orderBy: { version: 'desc' },
+          select: { version: true },
+        })
+        const now = new Date()
+        await tx.productPurchasePriceStandard.updateMany({
+          where: { tenantId, productId: d.productId, supplierId: d.supplierId, purchaseUnit: d.purchaseUnit, currency: d.currency, taxInclusive: d.taxInclusive, active: true },
+          data: {
+            active: false,
+            archivedAt: now,
+            archivedById: actor.id,
+            archivedByNameSnapshot: actor.name,
+            archivedByRoleSnapshot: actor.role,
+            archiveRequestKey: standardReplacementArchiveRequestKey('price', d.requestKey, fingerprint),
+            archiveRequestFingerprint: fingerprint,
+          },
+        })
+        const record = await tx.productPurchasePriceStandard.create({
+          data: {
+            tenantId,
+            productId: d.productId,
+            supplierId: d.supplierId,
+            version: (latest?.version || 0) + 1,
+            purchaseUnit: d.purchaseUnit,
+            currency: d.currency,
+            taxInclusive: d.taxInclusive,
+            unitPrice: normalizedPrice,
+            effectiveAt: d.effectiveAt,
+            createdById: actor.id,
+            createdByNameSnapshot: actor.name,
+            createdByRoleSnapshot: actor.role,
+            requestKey: d.requestKey,
+            requestFingerprint: fingerprint,
+          },
+        })
+        await tx.opLog.create({
+          data: {
+            tenantId,
+            userId,
+            role,
+            action: '更新商品标准采购价',
+            entityType: 'ProductPurchasePriceStandard',
+            target: `${supplier.name} / ${product.name}`,
+            targetId: record.id,
+            metadata: { productId: product.id, supplierId: supplier.id, version: record.version, purchaseUnit: d.purchaseUnit, currency: d.currency, taxInclusive: d.taxInclusive },
+          },
+        })
+        return { record, replayed: false }
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }))
+      return reply.status(result.replayed ? 200 : 201).send(priceStandardView(result.record))
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      if (['P2002', 'P2034'].includes(error?.code)) return reply.status(409).send({ error: '价格标准正在被其他人更新，请刷新后重试' })
+      throw error
+    }
+  })
+
+  app.post('/price-standards/:id/deactivate', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role, userId } = req.user
+    if (!ensureInternal(role, reply)) return
+    const standardId = idSchema.safeParse(req.params.id)
+    const parsed = standardDeactivateSchema.safeParse(req.body)
+    if (!standardId.success) return reply.status(400).send({ error: '标准标识格式不正确' })
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const d = parsed.data
+    const fingerprint = hashRequestBody({ standardId: standardId.data, expectedVersion: d.expectedVersion, reason: d.reason }, 'price-standard-deactivate-v1')
+    try {
+      const actor = await standardActor(tenantId, userId)
+      const result = await runStandardTransaction(() => prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`price-standard-id:${tenantId}:${standardId.data}`}))::text AS locked`
+        const replay = await tx.productPurchasePriceStandard.findFirst({ where: { tenantId, archiveRequestKey: d.requestKey } })
+        if (replay) {
+          if (replay.id !== standardId.data || replay.archiveRequestFingerprint !== fingerprint) throw Object.assign(new Error('同一 requestKey 不能用于不同停用操作'), { statusCode: 409 })
+          return { record: replay, replayed: true }
+        }
+        const current = await tx.productPurchasePriceStandard.findFirst({ where: { tenantId, id: standardId.data } })
+        if (!current) throw Object.assign(new Error('价格标准不存在'), { statusCode: 404 })
+        if (!current.active || current.version !== d.expectedVersion) throw Object.assign(new Error('价格标准已变更，请刷新后再停用'), { statusCode: 409 })
+        const record = await tx.productPurchasePriceStandard.update({
+          where: { id: current.id },
+          data: {
+            active: false,
+            archivedAt: new Date(),
+            archivedById: actor.id,
+            archivedByNameSnapshot: actor.name,
+            archivedByRoleSnapshot: actor.role,
+            archiveRequestKey: d.requestKey,
+            archiveRequestFingerprint: fingerprint,
+          },
+        })
+        await tx.opLog.create({ data: { tenantId, userId, role, action: '停用商品标准采购价', entityType: 'ProductPurchasePriceStandard', targetId: record.id, metadata: { reason: d.reason, version: record.version } } })
+        return { record, replayed: false }
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }))
+      return reply.status(200).send(priceStandardView(result.record))
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      if (['P2002', 'P2034'].includes(error?.code)) return reply.status(409).send({ error: '价格标准正在被更新，请刷新后重试' })
+      throw error
+    }
   })
 
   app.get('/workbench', auth(app), async (req: any, reply: any) => {
@@ -724,6 +1197,9 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     if (!INTERNAL_ROLES.has(role)) return reply.status(403).send({ error: '仅供应链内部人员可确认收货' })
     const receiptId = idSchema.safeParse(req.params.id)
     if (!receiptId.success) return reply.status(400).send({ error: '收货单标识格式不正确' })
+    const reviewParsed = receiptReviewSchema.safeParse(req.body || {})
+    if (!reviewParsed.success) return reply.status(400).send({ error: reviewParsed.error.issues[0].message })
+    const reviewData = reviewParsed.data
 
     try {
       const result = await prisma.$transaction(
@@ -746,7 +1222,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
               shipment: { include: { lines: true } },
               lines: {
                 include: {
-                  product: { select: { category: true } },
+                  product: { select: { category: true, evidenceRequirement: true, requiredEvidenceTypes: true } },
                   purchaseOrderLine: true,
                   shipmentLine: true,
                 },
@@ -757,14 +1233,29 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
           if (review) assertDifferentReceiptReviewer(receipt.inspectorId || '', userId)
 
           const sensitiveCategories = new Set(receipt.supplier.upstreamSensitiveCategories)
+          const { hasAboveStandardPrice, hasTemporaryPriceWithoutStandard } = upstreamReceiptPriceReviewFlags(
+            receipt.lines.map((line) => ({
+              unitPrice: line.unitPrice,
+              standardUnitPriceSnapshot: line.standardUnitPriceSnapshot,
+              isTemporaryPrice: line.purchaseOrderLine.isTemporaryPrice,
+            }))
+          )
           const reviewInput = {
             payableAmount: Number(receipt.payableAmount),
             reviewAmountThreshold: Number(receipt.supplier.upstreamReceiptReviewThreshold),
             hasOverReceipt: receipt.lines.some((line) => line.overageQty.gt(0)),
-            hasTemporaryPrice: receipt.purchaseOrder.hasTemporaryPrice,
+            // 逐行判断：有标准价的行只在超标时复核；无标准价的临时价行仍按旧规则复核。
+            hasTemporaryPrice: hasTemporaryPriceWithoutStandard,
+            hasAboveStandardPrice,
             hasSensitiveCategory: receipt.lines.some((line) => sensitiveCategories.has(line.product.category)),
           }
           const reviewReasons = upstreamReceiptReviewReasons(reviewInput)
+          if (review && reviewReasons.includes('ABOVE_STANDARD_PRICE') && !['ADMIN', 'SUPER_ADMIN'].includes(role)) {
+            throw Object.assign(new Error('实际采购价高于标准价，仅管理员可批准价格例外'), { statusCode: 403 })
+          }
+          if (review && reviewReasons.includes('ABOVE_STANDARD_PRICE') && !reviewData.priceExceptionReason) {
+            throw Object.assign(new Error('实际采购价高于标准价，复核人必须填写价格例外原因'), { statusCode: 400 })
+          }
           if (!review && requiresUpstreamReceiptReview(reviewInput)) {
             const pending = await tx.upstreamReceipt.update({
               where: { id: receipt.id },
@@ -826,6 +1317,12 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
               manufactureDate: line.manufactureDate,
               expiryDate: line.expiryDate,
             }))
+          const evidenceCompleteness = await evaluateReceiptEvidenceCompleteness(tx, {
+            tenantId,
+            supplierId: receipt.supplierId,
+            businessAt: receipt.arrivedAt || new Date(),
+            lines: receipt.lines,
+          })
           if (ledgerLines.length > 0) {
             await postUpstreamReceiptInTransaction(tx, {
               tenantId,
@@ -928,6 +1425,12 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
           })
           const nextOrderStatus = allDispatched && allDispatchedQuantitiesInspected ? 'RECEIVED' : 'PARTIALLY_RECEIVED'
           const now = new Date()
+          const priceExceptionApprover = review && reviewReasons.includes('ABOVE_STANDARD_PRICE')
+            ? await tx.user.findFirst({ where: { tenantId, id: userId, status: 'ACTIVE' }, select: { id: true, name: true, role: true } })
+            : null
+          if (review && reviewReasons.includes('ABOVE_STANDARD_PRICE') && !priceExceptionApprover) {
+            throw Object.assign(new Error('价格例外复核人账号不存在或已停用'), { statusCode: 403 })
+          }
           if (receipt.shipment) {
             const priorLines = await tx.upstreamReceiptLine.findMany({
               where: {
@@ -972,6 +1475,14 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
               reviewReasons,
               reviewerId: review ? userId : null,
               reviewedAt: review ? now : null,
+              ...(priceExceptionApprover ? {
+                priceExceptionReason: reviewData.priceExceptionReason,
+                priceExceptionApprovedById: priceExceptionApprover.id,
+                priceExceptionApprovedByNameSnapshot: priceExceptionApprover.name,
+                priceExceptionApprovedByRoleSnapshot: priceExceptionApprover.role,
+                priceExceptionApprovedAt: now,
+              } : {}),
+              evidenceCompletenessSnapshot: evidenceCompleteness as Prisma.InputJsonValue,
               postedAt: now,
               rowVersion: { increment: 1 },
             },
@@ -990,6 +1501,13 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
                 receiptId: receipt.id,
                 receiptNo: receipt.no,
                 claimIds,
+                reviewReasons,
+                ...(priceExceptionApprover ? {
+                  priceExceptionReason: reviewData.priceExceptionReason,
+                  priceExceptionApprovedById: priceExceptionApprover.id,
+                  priceExceptionApprovedByNameSnapshot: priceExceptionApprover.name,
+                  priceExceptionApprovedByRoleSnapshot: priceExceptionApprover.role,
+                } : {}),
               },
             },
           })
@@ -1319,6 +1837,26 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: '采购商品不属于所选合同或已停用' })
     }
     const contractLineById = new Map(contractLines.map((line) => [line.id, line]))
+    const productIds = [...new Set(contractLines.map((line) => line.productId))]
+    const todayBusinessRange = businessDateRangeInclusive(businessDateKey(), businessDateKey())
+    const [qualityStandards, priceStandards] = await Promise.all([
+      prisma.productQualityStandard.findMany({
+        where: { tenantId, productId: { in: productIds }, active: true, effectiveAt: { lt: todayBusinessRange.endExclusive } },
+      }),
+      prisma.productPurchasePriceStandard.findMany({
+        where: {
+          tenantId,
+          supplierId: d.supplierId,
+          productId: { in: productIds },
+          currency: contract.currency,
+          taxInclusive: contract.taxInclusive,
+          active: true,
+          effectiveAt: { lt: todayBusinessRange.endExclusive },
+        },
+      }),
+    ])
+    const qualityStandardByProduct = new Map(qualityStandards.map((standard) => [standard.productId, standard]))
+    const priceStandardByScope = new Map(priceStandards.map((standard) => [`${standard.productId}\u0000${standard.purchaseUnit}`, standard]))
 
     try {
       const order = await prisma.$transaction(
@@ -1340,6 +1878,8 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
             }
             const unitPrice = decimal(input.temporaryUnitPrice ?? source.unitPrice)
             const temporary = input.temporaryUnitPrice !== undefined && !unitPrice.equals(source.unitPrice)
+            const qualityStandard = qualityStandardByProduct.get(source.productId)
+            const priceStandard = priceStandardByScope.get(`${source.productId}\u0000${source.purchaseUnit}`)
             hasTemporaryPrice ||= temporary
             const baseAmount = money(quantity.times(unitPrice))
             const rate = decimal(source.taxRate)
@@ -1362,6 +1902,14 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
               inventoryUnitsPerPurchaseUnit: source.inventoryUnitsPerPurchaseUnit,
               orderedQty: quantity,
               unitPrice,
+              standardUnitPriceSnapshot: priceStandard?.unitPrice || null,
+              priceStandardCurrencySnapshot: priceStandard?.currency || null,
+              priceStandardTaxInclusiveSnapshot: priceStandard?.taxInclusive ?? null,
+              priceStandardId: priceStandard?.id || null,
+              priceStandardVersionSnapshot: priceStandard?.version || null,
+              qualityStandardId: qualityStandard?.id || null,
+              qualityStandardVersionSnapshot: qualityStandard?.version || null,
+              qualityCriteriaSnapshot: qualityStandard?.criteria || undefined,
               taxRate: rate,
               amountWithoutTax: lineWithoutTax,
               taxAmount: lineTax,
@@ -1737,12 +2285,23 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
       where: { tenantId, ...(supplierId ? { supplierId } : {}) },
       include: {
         purchaseOrder: {
-          select: { id: true, no: true, status: true, expectedArrivalAt: true },
+          select: { id: true, no: true, status: true, expectedArrivalAt: true, currency: true },
         },
         lines: {
           include: {
             purchaseOrderLine: {
-              select: { productNameSnapshot: true, productSpecSnapshot: true },
+              select: {
+                productId: true,
+                productNameSnapshot: true,
+                productSpecSnapshot: true,
+                unitPrice: true,
+                standardUnitPriceSnapshot: true,
+                priceStandardCurrencySnapshot: true,
+                priceStandardTaxInclusiveSnapshot: true,
+                qualityStandardId: true,
+                qualityStandardVersionSnapshot: true,
+                qualityCriteriaSnapshot: true,
+              },
             },
             // 已入账的收货数量, 前端据此判断发货单是否已收完 (隐藏「登记到货」入口)
             receiptLines: {
@@ -1965,6 +2524,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
             id: true,
             no: true,
             status: true,
+            currency: true,
             totalAmount: true,
             amountWithoutTax: true,
           },
@@ -1993,8 +2553,14 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
         no: true,
         supplierId: true,
         status: true,
+        arrivedAt: true,
+        evidenceCompletenessSnapshot: true,
         payableAmount: true,
         reviewReasons: true,
+        priceExceptionReason: true,
+        priceExceptionApprovedByNameSnapshot: true,
+        priceExceptionApprovedByRoleSnapshot: true,
+        priceExceptionApprovedAt: true,
         postedAt: true,
         createdAt: true,
         supplier: {
@@ -2025,6 +2591,14 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
                 shippedQty: true,
                 receivedQty: true,
                 unitPrice: true,
+                standardUnitPriceSnapshot: true,
+                priceStandardCurrencySnapshot: true,
+                priceStandardTaxInclusiveSnapshot: true,
+                priceStandardId: true,
+                priceStandardVersionSnapshot: true,
+                qualityStandardId: true,
+                qualityStandardVersionSnapshot: true,
+                qualityCriteriaSnapshot: true,
               },
               orderBy: { lineNo: 'asc' },
             },
@@ -2034,6 +2608,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
         lines: {
           select: {
             id: true,
+            productId: true,
             purchaseOrderLineId: true,
             arrivedQty: true,
             acceptedQty: true,
@@ -2042,6 +2617,17 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
             rejectedQty: true,
             purchaseUnit: true,
             unitPrice: true,
+            standardUnitPriceSnapshot: true,
+            priceStandardCurrencySnapshot: true,
+            priceStandardTaxInclusiveSnapshot: true,
+            priceStandardId: true,
+            priceStandardVersionSnapshot: true,
+            qualityStandardId: true,
+            qualityStandardVersionSnapshot: true,
+            qualityCriteriaSnapshot: true,
+            qualityResult: true,
+            qualityEvidence: true,
+            qualityDisposition: true,
             payableAmount: true,
             purchaseOrderLine: {
               select: {
@@ -2051,13 +2637,35 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
                 productSpecSnapshot: true,
               },
             },
+            product: { select: { evidenceRequirement: true, requiredEvidenceTypes: true } },
           },
           orderBy: { createdAt: 'asc' },
         },
       },
     })
     if (!receipt) return reply.status(404).send({ error: '收货单不存在' })
-    return receipt
+    const evidenceCompleteness = await evaluateReceiptEvidenceCompleteness(prisma, {
+      tenantId,
+      supplierId: receipt.supplierId,
+      businessAt: receipt.arrivedAt || new Date(),
+      lines: receipt.lines,
+    })
+    return {
+      ...receipt,
+      canApprovePriceException: ['ADMIN', 'SUPER_ADMIN'].includes(role),
+      evidenceCompleteness,
+      lines: receipt.lines.map((line) => ({
+        ...line,
+        qualityEvidence: Array.isArray(line.qualityEvidence)
+          ? (line.qualityEvidence as Array<Record<string, unknown>>).map((item) => ({
+              name: String(item.name || '质量证据'),
+              mime: String(item.mime || ''),
+              size: Number(item.size || 0),
+              url: signOssKey(typeof item.key === 'string' ? item.key : null),
+            }))
+          : [],
+      })),
+    }
   })
 
   app.post('/shipments/:id/receipts', auth(app), async (req: any, reply: any) => {
@@ -2068,6 +2676,24 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     const parsed = receiptCreateSchema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const d = parsed.data
+    const requestFingerprint = upstreamReceiptRequestFingerprint(shipmentId.data, d)
+
+    const replay = await prisma.upstreamReceipt.findFirst({
+      where: { tenantId, idempotencyKey: d.idempotencyKey },
+      include: { lines: true },
+    })
+    if (replay) {
+      if (replay.shipmentId !== shipmentId.data || replay.requestFingerprint !== requestFingerprint) {
+        return reply.status(409).send({ error: '同一幂等键不能用于不同收货内容' })
+      }
+      return reply.status(200).send(replay)
+    }
+
+    try {
+      await assertWarehouseDocumentObjects(tenantId, d.lines.flatMap((line) => line.qualityEvidence || []))
+    } catch (error: any) {
+      return reply.status(error?.statusCode || 503).send({ error: error?.message || '质量证据暂时无法核验' })
+    }
 
     try {
       const result = await prisma.$transaction(
@@ -2084,8 +2710,8 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
               include: { lines: true },
             })
             if (existing) {
-              if (existing.shipmentId !== shipmentId.data) {
-                throw Object.assign(new Error('幂等键已用于其他发货单'), {
+              if (existing.shipmentId !== shipmentId.data || existing.requestFingerprint !== requestFingerprint) {
+                throw Object.assign(new Error('同一幂等键不能用于不同收货内容'), {
                   statusCode: 409,
                 })
               }
@@ -2141,6 +2767,12 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
           const receiptLines = d.lines.map((input) => {
             const shipmentLine = shipmentLineById.get(input.shipmentLineId)!
             const orderLine = orderLineById.get(shipmentLine.purchaseOrderLineId)!
+            if (orderLine.qualityStandardId && !input.qualityResult) {
+              throw Object.assign(new Error(`${orderLine.productNameSnapshot} 已配置质量标准，必须填写验收结果`), { statusCode: 400 })
+            }
+            if (!orderLine.qualityStandardId && (input.qualityResult || input.qualityEvidence?.length || input.qualityDisposition?.trim())) {
+              throw Object.assign(new Error(`${orderLine.productNameSnapshot} 未配置质量标准，不能提交质量验收结果`), { statusCode: 400 })
+            }
             const arrived = decimal(input.arrivedQty)
             const accepted = decimal(input.acceptedQty)
             const previousArrived = priorArrived.get(shipmentLine.id) || decimal(0)
@@ -2173,6 +2805,17 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
               inventoryUnitsPerPurchaseUnit: orderLine.inventoryUnitsPerPurchaseUnit,
               inventoryAcceptedQty: accepted.times(orderLine.inventoryUnitsPerPurchaseUnit).toDecimalPlaces(6),
               unitPrice: orderLine.unitPrice,
+              standardUnitPriceSnapshot: orderLine.standardUnitPriceSnapshot,
+              priceStandardCurrencySnapshot: orderLine.priceStandardCurrencySnapshot,
+              priceStandardTaxInclusiveSnapshot: orderLine.priceStandardTaxInclusiveSnapshot,
+              priceStandardId: orderLine.priceStandardId,
+              priceStandardVersionSnapshot: orderLine.priceStandardVersionSnapshot,
+              qualityStandardId: orderLine.qualityStandardId,
+              qualityStandardVersionSnapshot: orderLine.qualityStandardVersionSnapshot,
+              qualityCriteriaSnapshot: orderLine.qualityCriteriaSnapshot || undefined,
+              qualityResult: input.qualityResult || null,
+              qualityEvidence: input.qualityEvidence as Prisma.InputJsonValue | undefined,
+              qualityDisposition: input.qualityDisposition || null,
               payableAmount: linePayable,
               batchNo: input.batchNo || shipmentLine.batchNo || null,
               manufactureDate: manufactureDate || null,
@@ -2193,6 +2836,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
               arrivedAt: d.arrivedAt || new Date(),
               payableAmount: money(payableAmount),
               idempotencyKey: d.idempotencyKey || null,
+              requestFingerprint,
               evidence: d.evidence as Prisma.InputJsonValue | undefined,
               note: d.note || null,
               finalForShipment: d.finalForShipment,
@@ -2224,7 +2868,12 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
           where: { tenantId, idempotencyKey: d.idempotencyKey },
           include: { lines: true },
         })
-        if (existing) return reply.status(200).send(existing)
+        if (existing) {
+          if (existing.shipmentId !== shipmentId.data || existing.requestFingerprint !== requestFingerprint) {
+            return reply.status(409).send({ error: '同一幂等键不能用于不同收货内容' })
+          }
+          return reply.status(200).send(existing)
+        }
       }
       if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
       throw error

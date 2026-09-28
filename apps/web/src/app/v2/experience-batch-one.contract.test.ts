@@ -34,12 +34,13 @@ describe('2026-09-28 操作体验速修', () => {
     expect(supplierOrders).toContain('void load(appliedSearch, f)')
   })
 
-  it('requires ConfirmSheet before transfer shipment, receipt, or revocation', () => {
-    expect(transfers).toContain("import { ConfirmSheet, useConfirmSheet }")
+  it('lets supply-chain review and operate store transfers', () => {
+    expect(transfers).toContain('供应链审核')
+    expect(transfers).toContain('可新建、发货、收货、撤回')
+    expect(transfers).toContain('+新建调拨单')
     expect(transfers).toContain("requestStatusChange(row, 'SHIPPED')")
     expect(transfers).toContain("requestStatusChange(row, 'RECEIVED')")
     expect(transfers).toContain("requestStatusChange(row, 'REVOKED')")
-    expect(transfers).toContain('<ConfirmSheet {...confirmState} />')
   })
 
   it('removes decorative controls that had no click behavior', () => {

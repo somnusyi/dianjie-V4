@@ -5,6 +5,7 @@ import { apiFetch } from '@/lib/v2-auth'
 import { claimResolutionCopy, settlementLineTypeLabel } from '@/lib/upstream-settlement-copy'
 import { clientRequestId } from '@/lib/client-id'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
+import { SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT } from '@/components/v2/supply-chain-shell'
 import { printSheet } from './print-sheet'
 import {
   currentMonthRange,
@@ -19,7 +20,7 @@ import {
   UPSTREAM_SETTLEMENT_STATUS_LABEL,
 } from '@/lib/upstream-procurement'
 
-type Tab = 'orders' | 'receipts' | 'returns' | 'claims' | 'settlements' | 'contracts'
+type Tab = 'orders' | 'receipts' | 'returns' | 'claims' | 'settlements' | 'contracts' | 'standards'
 type Supplier = { id: string; no: string; name: string }
 type Warehouse = { id: string; code: string; name: string }
 type Source = {
@@ -32,6 +33,7 @@ type Source = {
   product: { id: string; code: string; name: string; spec?: string | null; inventoryUnit?: string | null; unit: string }
 }
 type ContractLine = Source & {
+  productId: string
   productNameSnapshot: string
   productCodeSnapshot: string
   productSpecSnapshot?: string | null
@@ -77,6 +79,13 @@ type OrderLine = {
   shippedQty: string | number
   receivedQty: string | number
   unitPrice: string | number
+  standardUnitPriceSnapshot?: string | number | null
+  priceStandardCurrencySnapshot?: string | null
+  priceStandardTaxInclusiveSnapshot?: boolean | null
+  priceStandardVersionSnapshot?: number | null
+  qualityStandardId?: string | null
+  qualityStandardVersionSnapshot?: number | null
+  qualityCriteriaSnapshot?: Record<string, unknown> | null
 }
 type Order = {
   id: string
@@ -110,7 +119,18 @@ type ShipmentLine = {
   purchaseOrderLineId: string
   shippedQty: string | number
   purchaseUnit: string
-  purchaseOrderLine: { productNameSnapshot: string; productSpecSnapshot?: string | null }
+  purchaseOrderLine: {
+    productId: string
+    productNameSnapshot: string
+    productSpecSnapshot?: string | null
+    unitPrice: string | number
+    standardUnitPriceSnapshot?: string | number | null
+    priceStandardCurrencySnapshot?: string | null
+    priceStandardTaxInclusiveSnapshot?: boolean | null
+    qualityStandardId?: string | null
+    qualityStandardVersionSnapshot?: number | null
+    qualityCriteriaSnapshot?: Record<string, unknown> | null
+  }
   receiptLines?: Array<{ arrivedQty: string | number; shortageQty: string | number }>
 }
 type Shipment = {
@@ -118,7 +138,7 @@ type Shipment = {
   no: string
   status: string
   supplierId: string
-  purchaseOrder: { id: string; no: string; status: string; expectedArrivalAt?: string | null }
+  purchaseOrder: { id: string; no: string; status: string; expectedArrivalAt?: string | null; currency?: string }
   lines: ShipmentLine[]
 }
 type Receipt = {
@@ -127,7 +147,7 @@ type Receipt = {
   status: string
   payableAmount: string | number
   supplier: Supplier
-  purchaseOrder: { id: string; no: string; status: string; totalAmount?: string | number; amountWithoutTax?: string | number }
+  purchaseOrder: { id: string; no: string; status: string; currency?: string; totalAmount?: string | number; amountWithoutTax?: string | number }
   shipment: { id: string; no: string; status: string }
   reviewReasons?: string[]
   postedAt?: string | null
@@ -135,8 +155,17 @@ type Receipt = {
   _count: { lines: number; claims: number }
 }
 type ReceiptDetail = Receipt & {
+  canApprovePriceException?: boolean
   supplier: Supplier & { postReceiptClaimHours: number }
   purchaseOrder: Receipt['purchaseOrder'] & { lines: OrderLine[] }
+  evidenceCompleteness?: {
+    businessLicense: { status: 'COMPLETE' | 'MISSING' }
+    missingCount: number
+    pendingConfigurationCount: number
+    blocksPosting: false
+    lines: Array<{ receiptLineId: string; productName: string; status: 'PENDING_CONFIGURATION' | 'NOT_REQUIRED' | 'COMPLETE' | 'MISSING'; missingTypes: ReceiptEvidenceType[] }>
+  }
+  evidenceCompletenessSnapshot?: { missingCount?: number; pendingConfigurationCount?: number } | null
   lines: Array<{
     id: string
     purchaseOrderLineId: string
@@ -147,6 +176,16 @@ type ReceiptDetail = Receipt & {
     rejectedQty?: string | number
     purchaseUnit: string
     unitPrice?: string | number
+    standardUnitPriceSnapshot?: string | number | null
+    priceStandardCurrencySnapshot?: string | null
+    priceStandardTaxInclusiveSnapshot?: boolean | null
+    priceStandardVersionSnapshot?: number | null
+    qualityStandardId?: string | null
+    qualityStandardVersionSnapshot?: number | null
+    qualityCriteriaSnapshot?: Record<string, unknown> | null
+    qualityResult?: 'PASS' | 'FAIL' | null
+    qualityEvidence?: Array<{ name: string; mime: string; size: number; url?: string | null }> | null
+    qualityDisposition?: string | null
     payableAmount?: string | number
     purchaseOrderLine: {
       productCodeSnapshot: string
@@ -154,6 +193,17 @@ type ReceiptDetail = Receipt & {
       productSpecSnapshot?: string | null
     }
   }>
+}
+
+type ReceiptEvidenceType = 'QUARANTINE_CERTIFICATE' | 'INSPECTION_REPORT' | 'SLAUGHTER_CERTIFICATE' | 'PRODUCTION_INSPECTION_REPORT' | 'THIRD_PARTY_TEST_REPORT' | 'PESTICIDE_RESIDUE_REPORT' | 'OTHER_PRODUCT_EVIDENCE'
+const RECEIPT_EVIDENCE_TYPE_LABEL: Record<ReceiptEvidenceType, string> = {
+  QUARANTINE_CERTIFICATE: '检疫证明',
+  INSPECTION_REPORT: '检验检测报告',
+  SLAUGHTER_CERTIFICATE: '屠宰证',
+  PRODUCTION_INSPECTION_REPORT: '生产检验报告',
+  THIRD_PARTY_TEST_REPORT: '第三方检测报告',
+  PESTICIDE_RESIDUE_REPORT: '蔬菜农残报告',
+  OTHER_PRODUCT_EVIDENCE: '其他产品随货资料',
 }
 type ReturnableReceiptLine = {
   id: string
@@ -241,6 +291,36 @@ type StatementDetail = Statement & {
   }>
 }
 
+type QualityStandard = {
+  id: string
+  productId: string
+  version: number
+  title: string
+  criteria: Record<string, unknown>
+  effectiveAt: string
+  active: boolean
+  createdByName: string
+  archivedAt?: string | null
+  product: { id: string; code: string; name: string; spec?: string | null }
+}
+
+type PriceStandard = {
+  id: string
+  productId: string
+  supplierId: string
+  version: number
+  purchaseUnit: string
+  currency: string
+  taxInclusive: boolean
+  unitPrice: string | number
+  effectiveAt: string
+  active: boolean
+  createdByName: string
+  archivedAt?: string | null
+  product: { id: string; code: string; name: string; spec?: string | null }
+  supplier: Supplier
+}
+
 const TABS: Array<{ key: Tab; label: string }> = [
   { key: 'orders', label: '采购单' },
   { key: 'receipts', label: '到货验收' },
@@ -248,7 +328,35 @@ const TABS: Array<{ key: Tab; label: string }> = [
   { key: 'claims', label: '到货差异' },
   { key: 'settlements', label: '月度对账' },
   { key: 'contracts', label: '合同与价格' },
+  { key: 'standards', label: '价格与质量标准' },
 ]
+
+const RECEIPT_REVIEW_REASON_LABEL: Record<string, string> = {
+  AMOUNT_THRESHOLD: '金额达到复核阈值',
+  OVER_RECEIPT: '存在超收',
+  TEMPORARY_PRICE: '使用临时价',
+  ABOVE_STANDARD_PRICE: '实际采购价高于标准价',
+  SENSITIVE_CATEGORY: '敏感品类',
+}
+
+function qualityCriteriaText(criteria: Record<string, unknown> | null | undefined) {
+  if (!criteria) return '—'
+  if (typeof criteria.description === 'string') return criteria.description
+  return Object.entries(criteria).map(([key, value]) => `${key}：${typeof value === 'string' ? value : JSON.stringify(value)}`).join('；')
+}
+
+function currencyAmount(value: string | number, currency = 'CNY') {
+  return `${currency} ${Number(value).toFixed(2)}`
+}
+
+function shanghaiBusinessDate(date = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date)
+}
 
 function Badge({ status, labels }: { status: string; labels: Record<string, string> }) {
   return <span className={`rounded-full px-2.5 py-1 text-micro font-medium ${statusTone(status)}`}>{labels[status] || status}</span>
@@ -287,6 +395,8 @@ export default function UpstreamProcurementPage() {
   const [claims, setClaims] = useState<Claim[]>([])
   const [statements, setStatements] = useState<Statement[]>([])
   const [contracts, setContracts] = useState<Contract[]>([])
+  const [qualityStandards, setQualityStandards] = useState<QualityStandard[]>([])
+  const [priceStandards, setPriceStandards] = useState<PriceStandard[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [sources, setSources] = useState<Source[]>([])
@@ -302,7 +412,7 @@ export default function UpstreamProcurementPage() {
   const [contractForm, setContractForm] = useState({
     contractNo: '',
     title: '',
-    startsAt: new Date().toISOString().slice(0, 10),
+    startsAt: shanghaiBusinessDate(),
   })
   const [sourcePrices, setSourcePrices] = useState<Record<string, string>>({})
   const [orderSupplierId, setOrderSupplierId] = useState('')
@@ -311,7 +421,16 @@ export default function UpstreamProcurementPage() {
   const [orderArrival, setOrderArrival] = useState('')
   const [orderQuantities, setOrderQuantities] = useState<Record<string, string>>({})
   const [receiving, setReceiving] = useState<Shipment | null>(null)
-  const [receiptLines, setReceiptLines] = useState<Record<string, { arrived: string; accepted: string; damaged: string; rejected: string }>>({})
+  const [receiptLines, setReceiptLines] = useState<Record<string, {
+    arrived: string
+    accepted: string
+    damaged: string
+    rejected: string
+    qualityResult: '' | 'PASS' | 'FAIL'
+    qualityDisposition: string
+    qualityEvidence: Array<{ key: string; name: string; mime: string; size: number }>
+  }>>({})
+  const [uploadingQualityLineId, setUploadingQualityLineId] = useState<string | null>(null)
   const [claimingReceipt, setClaimingReceipt] = useState<ReceiptDetail | null>(null)
   const [postClaimType, setPostClaimType] = useState<'SHORTAGE' | 'POST_RECEIPT_DAMAGE'>('POST_RECEIPT_DAMAGE')
   const [postClaimDescription, setPostClaimDescription] = useState('')
@@ -322,6 +441,7 @@ export default function UpstreamProcurementPage() {
   const [reviewingRevisionOrder, setReviewingRevisionOrder] = useState<Order | null>(null)
   const [viewingReceipt, setViewingReceipt] = useState<ReceiptDetail | null>(null)
   const [receiptReviewAction, setReceiptReviewAction] = useState<'confirm' | 'review' | null>(null)
+  const [priceExceptionReason, setPriceExceptionReason] = useState('')
   const [viewingStatement, setViewingStatement] = useState<StatementDetail | null>(null)
   const [viewingContract, setViewingContract] = useState<Contract | null>(null)
   const [viewingPurchaseReturn, setViewingPurchaseReturn] = useState<PurchaseReturn | null>(null)
@@ -331,6 +451,8 @@ export default function UpstreamProcurementPage() {
   const postClaimRequestKeysRef = useRef<Record<string, string>>({})
   const purchaseReturnRequestKeyRef = useRef(clientRequestId())
   const contractRequestKeyRef = useRef(clientRequestId())
+  const qualityStandardRequestKeyRef = useRef(clientRequestId())
+  const priceStandardRequestKeyRef = useRef(clientRequestId())
   const sourceRequestRef = useRef(0)
   const month = useMemo(() => currentMonthRange(), [])
   const [settlementForm, setSettlementForm] = useState({
@@ -338,12 +460,50 @@ export default function UpstreamProcurementPage() {
     periodStart: month.start,
     periodEnd: month.end,
   })
+  const [qualityStandardForm, setQualityStandardForm] = useState({
+    productId: '',
+    title: '',
+    criteria: '',
+    effectiveAt: shanghaiBusinessDate(),
+  })
+  const [priceScopeKey, setPriceScopeKey] = useState('')
+  const [priceStandardForm, setPriceStandardForm] = useState({
+    unitPrice: '',
+    effectiveAt: shanghaiBusinessDate(),
+  })
+  const standardScopes = useMemo(() => {
+    const seen = new Set<string>()
+    return contracts.flatMap((contract) => contract.lines.map((line) => ({
+      key: `${contract.supplierId}|${line.productId}|${line.purchaseUnit}|${contract.currency}|${contract.taxInclusive}`,
+      supplierId: contract.supplierId,
+      supplierName: contract.supplier.name,
+      productId: line.productId,
+      productCode: line.productCodeSnapshot,
+      productName: line.productNameSnapshot,
+      productSpec: line.productSpecSnapshot,
+      purchaseUnit: line.purchaseUnit,
+      currency: contract.currency,
+      taxInclusive: contract.taxInclusive,
+    }))).filter((scope) => {
+      if (seen.has(scope.key)) return false
+      seen.add(scope.key)
+      return true
+    })
+  }, [contracts])
+  const standardProducts = useMemo(() => {
+    const seen = new Set<string>()
+    return standardScopes.filter((scope) => {
+      if (seen.has(scope.productId)) return false
+      seen.add(scope.productId)
+      return true
+    })
+  }, [standardScopes])
 
   const loadAll = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [orderRows, shipmentRows, receiptRows, returnRows, claimRows, statementRows, contractRows, setup] = await Promise.all([
+      const [orderRows, shipmentRows, receiptRows, returnRows, claimRows, statementRows, contractRows, qualityRows, priceRows, setup] = await Promise.all([
         apiFetch<Order[]>('/api/upstream/purchase-orders'),
         apiFetch<Shipment[]>('/api/upstream/shipments'),
         apiFetch<Receipt[]>('/api/upstream/receipts'),
@@ -351,6 +511,8 @@ export default function UpstreamProcurementPage() {
         apiFetch<Claim[]>('/api/upstream/arrival-claims'),
         apiFetch<Statement[]>('/api/upstream/settlement-statements'),
         apiFetch<Contract[]>('/api/upstream/contracts'),
+        apiFetch<QualityStandard[]>('/api/upstream/quality-standards?includeArchived=1'),
+        apiFetch<PriceStandard[]>('/api/upstream/price-standards?includeArchived=1'),
         apiFetch<{ suppliers: Supplier[]; warehouses: Warehouse[] }>('/api/upstream/setup-options'),
       ])
       setOrders(orderRows)
@@ -360,6 +522,8 @@ export default function UpstreamProcurementPage() {
       setClaims(claimRows)
       setStatements(statementRows)
       setContracts(contractRows)
+      setQualityStandards(qualityRows)
+      setPriceStandards(priceRows)
       setSuppliers(setup.suppliers)
       setWarehouses(setup.warehouses)
       setOrderWarehouseId((value) => value || setup.warehouses[0]?.id || '')
@@ -380,6 +544,34 @@ export default function UpstreamProcurementPage() {
   useEffect(() => {
     void loadAll()
   }, [loadAll])
+
+  useEffect(() => {
+    const dirty = Boolean(receiving)
+      || Boolean(qualityStandardForm.productId || qualityStandardForm.title || qualityStandardForm.criteria)
+      || Boolean(priceScopeKey || priceStandardForm.unitPrice)
+    if (!dirty) return
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    const warnInternalNavigation = (event: Event) => {
+      event.preventDefault()
+      const proceed = (event as CustomEvent<{ proceed?: () => void }>).detail?.proceed
+      openActionConfirm({
+        title: '放弃未提交的内容？',
+        body: '当前页面有尚未提交的采购、价格或质量验收内容。离开后将不会保留。',
+        confirmLabel: '放弃并离开',
+        tone: 'danger',
+        onConfirm: () => proceed?.(),
+      })
+    }
+    window.addEventListener('beforeunload', warn)
+    window.addEventListener(SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT, warnInternalNavigation)
+    return () => {
+      window.removeEventListener('beforeunload', warn)
+      window.removeEventListener(SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT, warnInternalNavigation)
+    }
+  }, [receiving, qualityStandardForm, priceScopeKey, priceStandardForm.unitPrice, openActionConfirm])
 
   // 单据状态会被他人推进: 回到本页(切Tab/解锁/切回浏览器)自动刷新, 避免看到旧状态误判
   useEffect(() => {
@@ -568,11 +760,11 @@ export default function UpstreamProcurementPage() {
       return
     }
     const supplier = suppliers.find((item) => item.id === orderSupplierId)
-    const dateKey = new Date().toISOString().slice(0, 10).replaceAll('-', '')
+    const dateKey = shanghaiBusinessDate().replaceAll('-', '')
     setContractForm({
       contractNo: `KJ${dateKey}-${supplier?.no || 'SUP'}`,
       title: `${supplier?.name || '供应商'}长期供货框架`,
-      startsAt: new Date().toISOString().slice(0, 10),
+      startsAt: shanghaiBusinessDate(),
     })
     setQuickContractFromOrder(true)
     await loadSources(orderSupplierId)
@@ -738,6 +930,9 @@ export default function UpstreamProcurementPage() {
             accepted: String(line.shippedQty),
             damaged: '0',
             rejected: '0',
+            qualityResult: '',
+            qualityDisposition: '',
+            qualityEvidence: [],
           },
         ])
       )
@@ -745,8 +940,30 @@ export default function UpstreamProcurementPage() {
     receiptRequestKeysRef.current[shipment.id] ||= clientRequestId()
   }
 
+  function closeReceiving() {
+    if (!receiving) return
+    openActionConfirm({
+      title: '放弃本次到货登记',
+      body: '已填写的数量、质量结果和尚未提交的证据将不保留。',
+      confirmLabel: '确认放弃',
+      tone: 'danger',
+      onConfirm: async () => {
+        setReceiving(null)
+      },
+    })
+  }
+
   async function createReceipt() {
     if (!receiving) return
+    for (const line of receiving.lines) {
+      const input = receiptLines[line.id]
+      if (line.purchaseOrderLine.qualityStandardId && !input?.qualityResult) return setError(`${line.purchaseOrderLine.productNameSnapshot}必须选择质量验收结果`)
+      if (input?.qualityResult === 'FAIL') {
+        if (Number(input.accepted || 0) > 0 || Number(input.rejected || 0) <= 0) return setError(`${line.purchaseOrderLine.productNameSnapshot}不合格时合格数量必须为0且拒收数量必须大于0`)
+        if (!input.qualityDisposition.trim()) return setError(`${line.purchaseOrderLine.productNameSnapshot}不合格时必须填写处置结果`)
+        if (!input.qualityEvidence.length) return setError(`${line.purchaseOrderLine.productNameSnapshot}不合格时必须上传证据`)
+      }
+    }
     const shipmentId = receiving.id
     setWorking(`receive-${shipmentId}`)
     setError(null)
@@ -764,6 +981,9 @@ export default function UpstreamProcurementPage() {
             acceptedQty: Number(receiptLines[line.id]?.accepted || 0),
             damagedQty: Number(receiptLines[line.id]?.damaged || 0),
             rejectedQty: Number(receiptLines[line.id]?.rejected || 0),
+            qualityResult: receiptLines[line.id]?.qualityResult || undefined,
+            qualityDisposition: receiptLines[line.id]?.qualityDisposition || undefined,
+            qualityEvidence: receiptLines[line.id]?.qualityEvidence || undefined,
           })),
         }),
       })
@@ -813,6 +1033,7 @@ export default function UpstreamProcurementPage() {
       setViewingPurchaseReturn(null)
       setViewingReceipt(detail)
       setReceiptReviewAction(action)
+      setPriceExceptionReason('')
       if (!preserveTab && tab !== 'claims') setTab('receipts')
     } catch (reason: any) {
       setError(reason?.message || '收货单明细加载失败')
@@ -821,6 +1042,14 @@ export default function UpstreamProcurementPage() {
 
   async function submitReceiptReview() {
     if (!viewingReceipt || !receiptReviewAction) return
+    if (receiptReviewAction === 'review' && viewingReceipt.reviewReasons?.includes('ABOVE_STANDARD_PRICE') && !viewingReceipt.canApprovePriceException) {
+      setError('实际采购价高于标准价，需等待管理员核价')
+      return
+    }
+    if (receiptReviewAction === 'review' && viewingReceipt.reviewReasons?.includes('ABOVE_STANDARD_PRICE') && !priceExceptionReason.trim()) {
+      setError('实际采购价高于标准价，请填写价格例外复核原因')
+      return
+    }
     const receipt = viewingReceipt
     const endpoint = receiptReviewAction === 'confirm' ? 'confirm' : 'review-and-post'
     const success = receiptReviewAction === 'confirm' ? '验收已确认' : '复核通过，库存已入账'
@@ -829,12 +1058,112 @@ export default function UpstreamProcurementPage() {
       () =>
         apiFetch(`/api/upstream/receipts/${receipt.id}/${endpoint}`, {
           method: 'POST',
+          body: JSON.stringify(receiptReviewAction === 'review' && receipt.reviewReasons?.includes('ABOVE_STANDARD_PRICE')
+            ? { priceExceptionReason: priceExceptionReason.trim() }
+            : {}),
         }),
       success
     )
     if (succeeded) {
       setViewingReceipt(null)
       setReceiptReviewAction(null)
+    }
+  }
+
+  async function createQualityStandard() {
+    if (!qualityStandardForm.productId || !qualityStandardForm.title.trim() || !qualityStandardForm.criteria.trim()) {
+      return setError('请选择商品并填写标准名称和验收条件')
+    }
+    const succeeded = await run(
+      'create-quality-standard',
+      () => apiFetch('/api/upstream/quality-standards', {
+        method: 'POST',
+        body: JSON.stringify({
+          productId: qualityStandardForm.productId,
+          title: qualityStandardForm.title.trim(),
+          criteria: { description: qualityStandardForm.criteria.trim() },
+          effectiveAt: `${qualityStandardForm.effectiveAt}T00:00:00.000Z`,
+          requestKey: qualityStandardRequestKeyRef.current,
+        }),
+      }),
+      '质量验收标准已更新',
+    )
+    if (succeeded) {
+      qualityStandardRequestKeyRef.current = clientRequestId()
+      setQualityStandardForm((current) => ({ ...current, title: '', criteria: '' }))
+    }
+  }
+
+  async function createPriceStandard() {
+    const scope = standardScopes.find((item) => item.key === priceScopeKey)
+    if (!scope || !priceStandardForm.unitPrice || Number(priceStandardForm.unitPrice) <= 0) return setError('请选择供货关系并填写大于0的标准价')
+    const succeeded = await run(
+      'create-price-standard',
+      () => apiFetch('/api/upstream/price-standards', {
+        method: 'POST',
+        body: JSON.stringify({
+          productId: scope.productId,
+          supplierId: scope.supplierId,
+          purchaseUnit: scope.purchaseUnit,
+          currency: scope.currency,
+          taxInclusive: scope.taxInclusive,
+          unitPrice: Number(priceStandardForm.unitPrice),
+          effectiveAt: `${priceStandardForm.effectiveAt}T00:00:00.000Z`,
+          requestKey: priceStandardRequestKeyRef.current,
+        }),
+      }),
+      '标准采购价已更新',
+    )
+    if (succeeded) {
+      priceStandardRequestKeyRef.current = clientRequestId()
+      setPriceStandardForm((current) => ({ ...current, unitPrice: '' }))
+    }
+  }
+
+  function deactivateStandard(kind: 'quality' | 'price', standard: QualityStandard | PriceStandard) {
+    const requestKey = clientRequestId()
+    openActionConfirm({
+      title: kind === 'quality' ? '停用质量验收标准' : '停用标准采购价',
+      body: '停用只影响之后新建的采购单，历史单据仍保留当时冻结的标准版本。',
+      confirmLabel: '确认停用',
+      tone: 'danger',
+      withInput: true,
+      inputRequired: true,
+      inputPlaceholder: '请填写停用原因',
+      onConfirm: async (reason) => {
+        if (!reason) throw new Error('请填写停用原因')
+        await run(
+          `deactivate-${kind}-${standard.id}`,
+          () => apiFetch(`/api/upstream/${kind === 'quality' ? 'quality' : 'price'}-standards/${standard.id}/deactivate`, {
+            method: 'POST',
+            body: JSON.stringify({ expectedVersion: standard.version, reason, requestKey }),
+          }),
+          '标准已停用',
+          undefined,
+          true,
+        )
+      },
+    })
+  }
+
+  async function uploadQualityEvidence(lineId: string, file: File) {
+    setUploadingQualityLineId(lineId)
+    setError(null)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const uploaded = await apiFetch<{ key: string; name: string; mime: string; size: number }>('/api/upload?category=warehouse-docs', { method: 'POST', body: form })
+      setReceiptLines((current) => ({
+        ...current,
+        [lineId]: {
+          ...current[lineId],
+          qualityEvidence: [...(current[lineId]?.qualityEvidence || []), uploaded].slice(0, 20),
+        },
+      }))
+    } catch (reason: any) {
+      setError(reason?.message || '质量证据上传失败')
+    } finally {
+      setUploadingQualityLineId(null)
     }
   }
 
@@ -1209,6 +1538,8 @@ export default function UpstreamProcurementPage() {
                     <tr className="border-b">
                       <th className="p-2">商品</th>
                       <th className="p-2">规格</th>
+                      <th className="p-2">标准价 / 实际价</th>
+                      <th className="p-2">质量标准 / 结果</th>
                       <th className="p-2">实到</th>
                       <th className="p-2">合格</th>
                       <th className="p-2">短缺</th>
@@ -1225,6 +1556,26 @@ export default function UpstreamProcurementPage() {
                           <b>{line.purchaseOrderLine.productNameSnapshot}</b>
                         </td>
                         <td className="p-2">{line.purchaseOrderLine.productSpecSnapshot || line.purchaseOrderLine.productCodeSnapshot}</td>
+                        <td className="p-2 whitespace-nowrap">
+                          <div>{line.standardUnitPriceSnapshot == null ? '未配标准价' : `标准 ${currencyAmount(line.standardUnitPriceSnapshot, line.priceStandardCurrencySnapshot || 'CNY')}`}</div>
+                          <div className={line.standardUnitPriceSnapshot != null && Number(line.unitPrice) > Number(line.standardUnitPriceSnapshot) ? 'font-medium text-red-600' : 'text-gray2'}>实际 {line.unitPrice == null ? '—' : currencyAmount(line.unitPrice, line.priceStandardCurrencySnapshot || viewingReceipt.purchaseOrder.currency || 'CNY')}</div>
+                        </td>
+                        <td className="p-2 min-w-48">
+                          {line.qualityStandardId ? (
+                            <>
+                              <div>v{line.qualityStandardVersionSnapshot} · {line.qualityResult === 'PASS' ? '合格' : line.qualityResult === 'FAIL' ? '不合格' : '未填'}</div>
+                              <div className="text-micro text-gray3">{qualityCriteriaText(line.qualityCriteriaSnapshot)}</div>
+                              {line.qualityDisposition && <div className="text-micro text-gray2">处置：{line.qualityDisposition}</div>}
+                              {line.qualityEvidence?.length ? (
+                                <div className="mt-1 space-y-1 text-micro">
+                                  {line.qualityEvidence.map((file, index) => file.url ? (
+                                    <a key={`${file.name}-${index}`} href={file.url} target="_blank" rel="noreferrer" className="block text-accent underline">证据{index + 1}：{file.name}</a>
+                                  ) : <div key={`${file.name}-${index}`} className="text-red-600">证据{index + 1}：{file.name}（暂时无法打开）</div>)}
+                                </div>
+                              ) : null}
+                            </>
+                          ) : <span className="text-gray3">未配质量标准</span>}
+                        </td>
                         <td className="p-2">{String(line.arrivedQty ?? '—')}</td>
                         <td className="p-2">{String(line.acceptedQty)}</td>
                         <td className="p-2">{String(line.shortageQty ?? 0)}</td>
@@ -1240,17 +1591,35 @@ export default function UpstreamProcurementPage() {
               {viewingReceipt.reviewReasons?.length ? (
                 <div className="mt-3 rounded-lg border border-amber/30 bg-amber/10 p-3 text-caption">
                   <b>复核原因：</b>
-                  {viewingReceipt.reviewReasons.join('、')}
+                  {viewingReceipt.reviewReasons.map((reason) => RECEIPT_REVIEW_REASON_LABEL[reason] || reason).join('、')}
                 </div>
               ) : null}
-              {receiptReviewAction && (
-                <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-border p-3">
-                  <p className="text-caption text-gray2">请确认采购单、发货单、金额及全部商品明细均已核对。</p>
-                  <ActionButton onClick={() => void submitReceiptReview()} disabled={working === viewingReceipt.id}>
-                    {receiptReviewAction === 'confirm' ? '确认验收并提交' : '确认复核并入库'}
-                  </ActionButton>
+              {viewingReceipt.evidenceCompleteness && (
+                <div className={`mt-3 rounded-lg border p-3 text-caption ${viewingReceipt.evidenceCompleteness.missingCount || viewingReceipt.evidenceCompleteness.pendingConfigurationCount ? 'border-amber/30 bg-amber/10' : 'border-green-fg/20 bg-green-bg'}`}>
+                  <div className="flex flex-wrap items-center justify-between gap-2"><div><b>来货资料：</b>营业执照 {viewingReceipt.evidenceCompleteness.businessLicense.status === 'COMPLETE' ? '已有' : '缺失'} · 缺件 {viewingReceipt.evidenceCompleteness.missingCount} 项 · 商品规则待配置 {viewingReceipt.evidenceCompleteness.pendingConfigurationCount} 项。<span className="ml-1">只提示，不阻断验收或入库。</span></div><a href={`/v2/supply-chain/suppliers/${encodeURIComponent(viewingReceipt.supplier.id)}/evidence?receiptId=${encodeURIComponent(viewingReceipt.id)}`} className="text-button text-accent">查看/补齐本次资料 →</a></div>
+                  {viewingReceipt.evidenceCompleteness.lines.some(line => line.status === 'MISSING' || line.status === 'PENDING_CONFIGURATION') && <div className="mt-2 space-y-1 text-micro text-amber-fg">{viewingReceipt.evidenceCompleteness.lines.filter(line => line.status === 'MISSING' || line.status === 'PENDING_CONFIGURATION').map(line => <div key={line.receiptLineId}>{line.productName}：{line.status === 'PENDING_CONFIGURATION' ? '所需资料类型待配置' : `尚缺 ${line.missingTypes.map(type => RECEIPT_EVIDENCE_TYPE_LABEL[type]).join('、')}`}</div>)}</div>}
+                  {viewingReceipt.status === 'POSTED' && viewingReceipt.evidenceCompletenessSnapshot && <div className="mt-1 text-micro text-gray3">过账时快照：缺 {viewingReceipt.evidenceCompletenessSnapshot.missingCount || 0} 项，待配置 {viewingReceipt.evidenceCompletenessSnapshot.pendingConfigurationCount || 0} 项；后续补录不改写快照。</div>}
                 </div>
               )}
+              {receiptReviewAction === 'review' && viewingReceipt.reviewReasons?.includes('ABOVE_STANDARD_PRICE') && !viewingReceipt.canApprovePriceException ? (
+                <div className="mt-4 rounded-xl border border-amber/30 bg-amber/10 p-3 text-caption">
+                  实际采购价高于标准价，需等待管理员核价；当前账号不能批准价格例外。
+                </div>
+              ) : receiptReviewAction ? (
+                <div className="mt-4 space-y-3 rounded-xl border border-border p-3">
+                  <p className="text-caption text-gray2">请确认采购单、发货单、金额及全部商品明细均已核对。</p>
+                  {receiptReviewAction === 'review' && viewingReceipt.reviewReasons?.includes('ABOVE_STANDARD_PRICE') && (
+                    <Field label="价格例外复核原因（必填）">
+                      <textarea className="input min-h-20" value={priceExceptionReason} onChange={(event) => setPriceExceptionReason(event.target.value)} placeholder="说明涨价原因、核价依据和批准结论" />
+                    </Field>
+                  )}
+                  <div className="flex justify-end">
+                    <ActionButton onClick={() => void submitReceiptReview()} disabled={working === viewingReceipt.id}>
+                      {receiptReviewAction === 'confirm' ? '确认验收并提交' : '确认复核并入库'}
+                    </ActionButton>
+                  </div>
+                </div>
+              ) : null}
             </Panel>
           </div>
         )}
@@ -1620,18 +1989,21 @@ export default function UpstreamProcurementPage() {
         {!loading && tab === 'receipts' && (
           <section className="space-y-3">
             {receiving && (
-              <Panel title={`登记到货 · ${receiving.no}`} onClose={() => setReceiving(null)}>
+              <Panel title={`登记到货 · ${receiving.no}`} onClose={closeReceiving}>
                 <p className="mb-3 text-caption text-gray2">请按现场实际填写。合格数量会形成总仓库存，破损/拒收/短缺会自动生成差异单。</p>
                 <div className="overflow-x-auto">
                   <table className="w-full text-caption">
                     <thead>
                       <tr className="border-b text-left">
                         <th className="p-2">商品</th>
+                        <th className="p-2">标准价 / 实际价</th>
+                        <th className="p-2">质量标准</th>
                         <th className="p-2">发货</th>
                         <th className="p-2">实到</th>
                         <th className="p-2">合格</th>
                         <th className="p-2">破损</th>
                         <th className="p-2">拒收</th>
+                        <th className="p-2">质量验收</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1640,6 +2012,22 @@ export default function UpstreamProcurementPage() {
                           <td className="p-2">
                             <b>{line.purchaseOrderLine.productNameSnapshot}</b>
                             <div className="text-gray3">{line.purchaseOrderLine.productSpecSnapshot || '—'}</div>
+                          </td>
+                          <td className="p-2 whitespace-nowrap">
+                            <div>标准 {line.purchaseOrderLine.standardUnitPriceSnapshot == null ? '未配置' : currencyAmount(line.purchaseOrderLine.standardUnitPriceSnapshot, line.purchaseOrderLine.priceStandardCurrencySnapshot || 'CNY')}</div>
+                            <div className={line.purchaseOrderLine.standardUnitPriceSnapshot != null && Number(line.purchaseOrderLine.unitPrice) > Number(line.purchaseOrderLine.standardUnitPriceSnapshot) ? 'font-medium text-red-600' : 'text-gray2'}>
+                              实际 {currencyAmount(line.purchaseOrderLine.unitPrice, line.purchaseOrderLine.priceStandardCurrencySnapshot || receiving.purchaseOrder.currency || 'CNY')}
+                              {line.purchaseOrderLine.standardUnitPriceSnapshot != null ? ` · 差额 ${currencyAmount(Number(line.purchaseOrderLine.unitPrice) - Number(line.purchaseOrderLine.standardUnitPriceSnapshot), line.purchaseOrderLine.priceStandardCurrencySnapshot || receiving.purchaseOrder.currency || 'CNY')}` : ''}
+                            </div>
+                            {line.purchaseOrderLine.standardUnitPriceSnapshot != null && <div className="text-micro text-gray3">{line.purchaseOrderLine.priceStandardTaxInclusiveSnapshot ? '含税' : '不含税'}口径</div>}
+                          </td>
+                          <td className="p-2 min-w-48">
+                            {line.purchaseOrderLine.qualityStandardId ? (
+                              <>
+                                <b>v{line.purchaseOrderLine.qualityStandardVersionSnapshot}</b>
+                                <div className="mt-1 text-micro text-gray2">{qualityCriteriaText(line.purchaseOrderLine.qualityCriteriaSnapshot)}</div>
+                              </>
+                            ) : <span className="text-gray3">未配置</span>}
                           </td>
                           <td className="p-2">
                             {String(line.shippedQty)} {line.purchaseUnit}
@@ -1664,6 +2052,53 @@ export default function UpstreamProcurementPage() {
                               />
                             </td>
                           ))}
+                          <td className="p-2 min-w-56">
+                            {line.purchaseOrderLine.qualityStandardId ? (
+                              <div className="space-y-2">
+                                <select
+                                  className="input"
+                                  value={receiptLines[line.id]?.qualityResult || ''}
+                                  onChange={(event) => setReceiptLines((current) => ({
+                                    ...current,
+                                    [line.id]: { ...current[line.id], qualityResult: event.target.value as '' | 'PASS' | 'FAIL' },
+                                  }))}
+                                >
+                                  <option value="">请选择</option>
+                                  <option value="PASS">合格</option>
+                                  <option value="FAIL">不合格</option>
+                                </select>
+                                {receiptLines[line.id]?.qualityResult === 'FAIL' && (
+                                  <>
+                                    <textarea
+                                      className="input min-h-16"
+                                      placeholder="填写退货、换货或拒收等处置结果"
+                                      value={receiptLines[line.id]?.qualityDisposition || ''}
+                                      onChange={(event) => setReceiptLines((current) => ({ ...current, [line.id]: { ...current[line.id], qualityDisposition: event.target.value } }))}
+                                    />
+                                    <label className="block cursor-pointer rounded-lg border border-dashed border-border p-2 text-center text-micro">
+                                      {uploadingQualityLineId === line.id ? '正在上传…' : '上传不合格证据'}
+                                      <input type="file" accept="image/*,application/pdf" className="hidden" disabled={uploadingQualityLineId === line.id} onChange={(event) => {
+                                        const file = event.target.files?.[0]
+                                        if (file) void uploadQualityEvidence(line.id, file)
+                                        event.currentTarget.value = ''
+                                      }} />
+                                    </label>
+                                    <div className="space-y-1 text-micro">
+                                      {(receiptLines[line.id]?.qualityEvidence || []).map((file, index) => (
+                                        <div key={`${file.key}-${index}`} className="flex items-center justify-between gap-2 rounded bg-bg px-2 py-1">
+                                          <span className="truncate">{file.name} · {(file.size / 1024).toFixed(1)}KB</span>
+                                          <button type="button" className="text-red-600 underline" onClick={() => setReceiptLines((current) => ({
+                                            ...current,
+                                            [line.id]: { ...current[line.id], qualityEvidence: current[line.id].qualityEvidence.filter((_, itemIndex) => itemIndex !== index) },
+                                          }))}>移除</button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            ) : <span className="text-gray3">无强制标准</span>}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -1826,6 +2261,12 @@ export default function UpstreamProcurementPage() {
                       {receipt.status === 'POSTED' && receipt._count.claims > 0 && <p className="mt-1 text-micro text-amber-fg">已关联差异单，不能整单冲销；如库存有误请走实盘调整。</p>}
                     </div>
                     <div className="flex flex-wrap gap-2">
+                      <a
+                        href={`/v2/supply-chain/suppliers/${encodeURIComponent(receipt.supplier.id)}/evidence?receiptId=${encodeURIComponent(receipt.id)}`}
+                        className="rounded-lg border border-accent bg-white px-3 py-2 text-caption font-medium text-accent"
+                      >
+                        {receipt.status === 'POSTED' ? '查看来货证明' : '维护来货证明'}
+                      </a>
                       {receipt.status === 'DRAFT' && (
                         <ActionButton
                           onClick={() => void run(receipt.id, () => apiFetch(`/api/upstream/receipts/${receipt.id}/start-inspection`, { method: 'POST' }), '已开始验收')}
@@ -2363,6 +2804,65 @@ export default function UpstreamProcurementPage() {
                 </article>
               ))
             )}
+          </section>
+        )}
+
+        {!loading && tab === 'standards' && (
+          <section className="space-y-4">
+            <div className="rounded-2xl border border-amber/30 bg-amber/10 p-4 text-caption text-gray1">
+              <b>使用顺序：</b>先维护商品与供应商的供货关系，再按采购单位、币种和含税口径配标准价；质量标准按商品维护。新采购单会冻结当时版本，之后修改不会篡改历史。
+            </div>
+            <div className="grid gap-4 xl:grid-cols-2">
+              <Panel title="新版本·商品质量验收标准">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="商品">
+                    <select className="input" value={qualityStandardForm.productId} onChange={(event) => setQualityStandardForm((current) => ({ ...current, productId: event.target.value }))}>
+                      <option value="">请选择商品</option>
+                      {standardProducts.map((item) => <option key={item.productId} value={item.productId}>{item.productName} · {item.productSpec || item.productCode}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="标准名称">
+                    <input className="input" value={qualityStandardForm.title} onChange={(event) => setQualityStandardForm((current) => ({ ...current, title: event.target.value }))} placeholder="例如：黑牛肝菌到货验收标准" />
+                  </Field>
+                  <Field label="验收条件">
+                    <textarea className="input min-h-24" value={qualityStandardForm.criteria} onChange={(event) => setQualityStandardForm((current) => ({ ...current, criteria: event.target.value }))} placeholder="填写外观、新鲜度、大小、气味、不可接收情形等" />
+                  </Field>
+                  <Field label="生效日">
+                    <input className="input" type="date" max={shanghaiBusinessDate()} value={qualityStandardForm.effectiveAt} onChange={(event) => setQualityStandardForm((current) => ({ ...current, effectiveAt: event.target.value }))} />
+                  </Field>
+                </div>
+                <div className="mt-4 flex justify-end"><ActionButton onClick={() => void createQualityStandard()} disabled={working === 'create-quality-standard'}>保存新版本</ActionButton></div>
+              </Panel>
+              <Panel title="新版本·标准采购价">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="供应商 / 商品 / 采购单位">
+                    <select className="input" value={priceScopeKey} onChange={(event) => setPriceScopeKey(event.target.value)}>
+                      <option value="">请选择已有供货关系</option>
+                      {standardScopes.map((scope) => <option key={scope.key} value={scope.key}>{scope.supplierName} · {scope.productName} · {scope.purchaseUnit} · {scope.currency} · {scope.taxInclusive ? '含税' : '不含税'}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="标准单价">
+                    <input className="input" type="number" min="0.000001" step="0.000001" value={priceStandardForm.unitPrice} onChange={(event) => setPriceStandardForm((current) => ({ ...current, unitPrice: event.target.value }))} />
+                  </Field>
+                  <Field label="生效日">
+                    <input className="input" type="date" max={shanghaiBusinessDate()} value={priceStandardForm.effectiveAt} onChange={(event) => setPriceStandardForm((current) => ({ ...current, effectiveAt: event.target.value }))} />
+                  </Field>
+                </div>
+                <div className="mt-4 flex justify-end"><ActionButton onClick={() => void createPriceStandard()} disabled={working === 'create-price-standard'}>保存新版本</ActionButton></div>
+              </Panel>
+            </div>
+
+            <Panel title="质量标准·当前与历史">
+              <div className="overflow-x-auto"><table className="w-full text-left text-caption"><thead><tr className="border-b"><th className="p-2">商品</th><th className="p-2">版本</th><th className="p-2">名称 / 条件</th><th className="p-2">生效日</th><th className="p-2">状态</th><th className="p-2">操作</th></tr></thead><tbody>
+                {qualityStandards.map((standard) => <tr key={standard.id} className="border-b border-border"><td className="p-2"><b>{standard.product.name}</b><div className="text-gray3">{standard.product.spec || standard.product.code}</div></td><td className="p-2">v{standard.version}</td><td className="p-2"><b>{standard.title}</b><div className="text-gray3">{qualityCriteriaText(standard.criteria)}</div></td><td className="p-2">{shortDate(standard.effectiveAt)}</td><td className="p-2">{standard.active ? <span className="text-green-700">启用中</span> : <span className="text-gray3">历史版本</span>}</td><td className="p-2">{standard.active ? <ActionButton tone="danger" onClick={() => deactivateStandard('quality', standard)}>停用</ActionButton> : '—'}</td></tr>)}
+              </tbody></table></div>
+            </Panel>
+
+            <Panel title="价格标准·当前与历史">
+              <div className="overflow-x-auto"><table className="w-full text-left text-caption"><thead><tr className="border-b"><th className="p-2">供应商</th><th className="p-2">商品</th><th className="p-2">版本</th><th className="p-2">口径</th><th className="p-2">标准价</th><th className="p-2">状态</th><th className="p-2">操作</th></tr></thead><tbody>
+                {priceStandards.map((standard) => <tr key={standard.id} className="border-b border-border"><td className="p-2">{standard.supplier.name}</td><td className="p-2"><b>{standard.product.name}</b><div className="text-gray3">{standard.product.spec || standard.product.code}</div></td><td className="p-2">v{standard.version}</td><td className="p-2">{standard.purchaseUnit} · {standard.currency} · {standard.taxInclusive ? '含税' : '不含税'}</td><td className="p-2"><b>{currencyAmount(standard.unitPrice, standard.currency)}</b></td><td className="p-2">{standard.active ? <span className="text-green-700">启用中</span> : <span className="text-gray3">历史版本</span>}</td><td className="p-2">{standard.active ? <ActionButton tone="danger" onClick={() => deactivateStandard('price', standard)}>停用</ActionButton> : '—'}</td></tr>)}
+              </tbody></table></div>
+            </Panel>
           </section>
         )}
 

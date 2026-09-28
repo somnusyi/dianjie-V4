@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { FinanceReportMenu } from './finance-report-menu'
 import { InventoryReportMenu } from './inventory-report-menu'
 import { ManagementNav } from './management-nav'
-import type { ReactNode } from 'react'
+import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import { BottomNav } from '@/components/v2'
 
 type NavItem = {
@@ -23,12 +23,13 @@ const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
       { href: '/v2/supply-chain/home', label: '工作台', description: '今日待办、异常与健康', icon: '⌂' },
       {
         href: '/v2/supply-chain/fulfillment',
-        label: '订单中心',
-        description: '待处理、订货与配送',
+        label: '配送管理',
+        description: '订货、补货、配送与收货',
         icon: '☷',
         match: [
           '/v2/supply-chain/fulfillment',
           '/v2/supply-chain/orders',
+          '/v2/supply-chain/replenishment-orders',
           '/v2/supply-chain/deliveries',
         ],
       },
@@ -95,6 +96,16 @@ const MOBILE_TABS = [
   { key: 'more', label: '更多', icon: '◐', href: '/v2/supply-chain/analytics' },
 ]
 
+export const SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT = 'dianjie:supply-chain-before-navigate'
+
+export function requestSupplyChainNavigation(proceed?: () => void) {
+  if (typeof window === 'undefined') return true
+  return window.dispatchEvent(new CustomEvent(SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT, {
+    cancelable: true,
+    detail: { proceed },
+  }))
+}
+
 function active(pathname: string, item: NavItem) {
   return (item.match || [item.href]).some(
     path => pathname === path || pathname.startsWith(`${path}/`),
@@ -109,6 +120,7 @@ function mobileActiveKey(pathname: string): string {
   // 订单相关子页归到 orders
   if (
     pathname.startsWith('/v2/supply-chain/orders') ||
+    pathname.startsWith('/v2/supply-chain/replenishment-orders') ||
     pathname.startsWith('/v2/supply-chain/deliveries') ||
     pathname.startsWith('/v2/supply-chain/fulfillment')
   ) {
@@ -146,8 +158,19 @@ export function SupplyChainShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() || ''
   const router = useRouter()
 
+  function guardInternalLink(event: ReactMouseEvent<HTMLDivElement>) {
+    const anchor = (event.target as HTMLElement | null)?.closest('a[href]') as HTMLAnchorElement | null
+    if (!anchor) return
+    const href = anchor.getAttribute('href') || ''
+    if (!href.startsWith('/') || href === pathname || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    if (!requestSupplyChainNavigation(() => router.push(href))) {
+      event.preventDefault()
+      event.stopPropagation()
+    }
+  }
+
   return (
-    <div className="min-h-screen bg-bg">
+    <div className="min-h-screen bg-bg" onClickCapture={guardInternalLink}>
       {/* PC 侧边栏 — lg 以上显示 */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-border bg-white lg:flex">
         <div className="border-b border-border px-5 py-5">
@@ -214,7 +237,7 @@ export function SupplyChainShell({ children }: { children: ReactNode }) {
           activeKey={mobileActiveKey(pathname)}
           onChange={(k) => {
             const t = MOBILE_TABS.find(tab => tab.key === k)
-            if (t && t.href !== pathname) router.push(t.href)
+            if (t && t.href !== pathname && requestSupplyChainNavigation(() => router.push(t.href))) router.push(t.href)
           }}
         />
       </div>

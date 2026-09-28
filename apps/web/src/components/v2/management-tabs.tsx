@@ -7,7 +7,7 @@ import styles from './management-workspace.module.css'
 
 const storageKey = 'dianjie:management-open-tabs'
 
-export function ManagementTabs({ activeId }: { activeId: string }) {
+export function ManagementTabs({ activeId, beforeNavigate }: { activeId: string; beforeNavigate?: () => boolean }) {
   const router = useRouter()
   const [opened, setOpened] = useState<string[]>([activeId])
   const activeTab = useRef<HTMLDivElement>(null)
@@ -23,6 +23,7 @@ export function ManagementTabs({ activeId }: { activeId: string }) {
   }, [activeId])
   useEffect(() => { activeTab.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' }) }, [opened, activeId])
   function close(id: string) {
+    if (id === activeId && beforeNavigate && !beforeNavigate()) return
     const index = opened.indexOf(id)
     const remaining = opened.filter(key => key !== id)
     save(remaining)
@@ -34,7 +35,9 @@ export function ManagementTabs({ activeId }: { activeId: string }) {
   return <nav className={styles.tabs} aria-label="已打开的库存与盘点页面">{opened.map(id => {
     const page = managementPages.find(item => item.id === id)!
     return <div key={id} ref={id === activeId ? activeTab : undefined} className={id === activeId ? styles.activeTab : ''}>
-      <Link href={managementHref(page)} aria-current={id === activeId ? 'page' : undefined}>{page.title}</Link>
+      <Link href={managementHref(page)} aria-current={id === activeId ? 'page' : undefined} onClick={event => {
+        if (id !== activeId && beforeNavigate && !beforeNavigate()) event.preventDefault()
+      }}>{page.title}</Link>
       <button type="button" aria-label={`关闭${page.title}`} title={`关闭${page.title}`} onClick={() => close(id)}>×</button>
     </div>
   })}</nav>

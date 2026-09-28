@@ -458,7 +458,7 @@ describe('supplier order to receipt flow (integration)', () => {
     try {
       const deliveryPromise = app.inject({
         method: 'PATCH', url: `/api/orders/${order.id}/deliver`,
-        headers: { 'x-test-actor': 'supplier' }, payload: { note: '供应商已送达' },
+        headers: { 'x-test-actor': 'supplier' }, payload: { note: '供应商已送达', driverName: '司机甲' },
       })
       await waitForDeliveryUpdate()
       const acknowledgementPromise = app.inject({
@@ -532,7 +532,7 @@ describe('supplier order to receipt flow (integration)', () => {
       `)
       const failedDelivery = await app.inject({
         method: 'PATCH', url: `/api/orders/${order.id}/deliver`,
-        headers: { 'x-test-actor': 'supplier' }, payload: { note: '故障注入送达' },
+        headers: { 'x-test-actor': 'supplier' }, payload: { note: '故障注入送达', driverName: '司机甲' },
       })
       expect(failedDelivery.statusCode).toBe(500)
       expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })).status).toBe('DELIVERING')
@@ -546,7 +546,7 @@ describe('supplier order to receipt flow (integration)', () => {
 
     const retry = await app.inject({
       method: 'PATCH', url: `/api/orders/${order.id}/deliver`,
-      headers: { 'x-test-actor': 'supplier' }, payload: { note: '清除故障后重试' },
+      headers: { 'x-test-actor': 'supplier' }, payload: { note: '清除故障后重试', driverName: '司机甲' },
     })
     expect(retry.statusCode).toBe(200)
     expect((await prisma.purchaseOrder.findUniqueOrThrow({ where: { id: order.id } })).status).toBe('PENDING_CONFIRM')
@@ -1262,9 +1262,13 @@ describe('supplier order to receipt flow (integration)', () => {
     }
 
     const deliver = await app.inject({
-      method: 'PATCH', url: `/api/orders/${order.id}/deliver`, headers: { 'x-test-actor': 'supplier' }, payload: { note: '已到店' },
+      method: 'PATCH', url: `/api/orders/${order.id}/deliver`, headers: { 'x-test-actor': 'supplier' }, payload: { note: '已到店', driverName: '司机甲' },
     })
     expect(deliver.statusCode).toBe(200)
+    const deliveredResponsibility = await prisma.deliveryOrder.findFirstOrThrow({ where: { purchaseOrderId: order.id } })
+    expect(deliveredResponsibility.driverNameSnapshot).toBe('司机甲')
+    const deliveredResponsibilityEvent = await prisma.deliveryOrderEvent.findFirstOrThrow({ where: { deliveryOrderId: deliveredResponsibility.id, eventType: 'DELIVERED' } })
+    expect(deliveredResponsibilityEvent.metadata).toMatchObject({ driverName: '司机甲' })
 
     const invalidReceivePayloads = [
       { items: [null] },
@@ -1579,7 +1583,7 @@ describe('supplier order to receipt flow (integration)', () => {
         data: { shippedQty: 1, amount: 10 },
       })
       expect((await app.inject({
-        method: 'PATCH', url: `/api/orders/${mixedOrder.id}/deliver`, headers: { 'x-test-actor': 'supplier' }, payload: {},
+        method: 'PATCH', url: `/api/orders/${mixedOrder.id}/deliver`, headers: { 'x-test-actor': 'supplier' }, payload: { driverName: '司机甲' },
       })).statusCode).toBe(200)
       const receive = await app.inject({
         method: 'PATCH', url: `/api/orders/${mixedOrder.id}/receive`, headers: { 'x-test-actor': 'chef' }, payload: {},

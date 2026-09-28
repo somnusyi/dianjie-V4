@@ -158,6 +158,7 @@ export type UpstreamReceiptReviewInput = {
   reviewAmountThreshold: number
   hasOverReceipt: boolean
   hasTemporaryPrice: boolean
+  hasAboveStandardPrice?: boolean
   hasSensitiveCategory: boolean
 }
 
@@ -165,7 +166,19 @@ export type UpstreamReceiptReviewReason =
   | 'AMOUNT_THRESHOLD'
   | 'OVER_RECEIPT'
   | 'TEMPORARY_PRICE'
+  | 'ABOVE_STANDARD_PRICE'
   | 'SENSITIVE_CATEGORY'
+
+export function upstreamReceiptPriceReviewFlags(lines: Array<{
+  unitPrice: unknown
+  standardUnitPriceSnapshot: unknown | null
+  isTemporaryPrice: boolean
+}>) {
+  return {
+    hasAboveStandardPrice: lines.some((line) => line.standardUnitPriceSnapshot !== null && Number(line.unitPrice) > Number(line.standardUnitPriceSnapshot)),
+    hasTemporaryPriceWithoutStandard: lines.some((line) => line.standardUnitPriceSnapshot === null && line.isTemporaryPrice),
+  }
+}
 
 /** 普通收货单人确认；命中任一风险条件则必须由不同用户复核。 */
 export function upstreamReceiptReviewReasons(input: UpstreamReceiptReviewInput): UpstreamReceiptReviewReason[] {
@@ -174,6 +187,7 @@ export function upstreamReceiptReviewReasons(input: UpstreamReceiptReviewInput):
     reasons.push('AMOUNT_THRESHOLD')
   }
   if (input.hasOverReceipt) reasons.push('OVER_RECEIPT')
+  if (input.hasAboveStandardPrice) reasons.push('ABOVE_STANDARD_PRICE')
   if (input.hasTemporaryPrice) reasons.push('TEMPORARY_PRICE')
   if (input.hasSensitiveCategory) reasons.push('SENSITIVE_CATEGORY')
   return reasons

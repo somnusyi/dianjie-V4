@@ -11,8 +11,6 @@ function docError(message: string, statusCode = 409) {
   return error
 }
 
-const docNoSequenceAttempts = 5
-
 export type WarehouseDocAttachmentInput = {
   key: string
   name: string
@@ -60,31 +58,45 @@ export function normalizeWarehouseDocAttachments(tenantId: string, value: unknow
   })
 }
 
-/** 生成单据编号：RK/CK + yyyymmdd（按单据日期，北京时间）+ 当日序号。唯一冲突时递增重试。 */
-async function generateDocNo(tenantId: string, type: 'MANUAL_INBOUND' | 'MANUAL_OUTBOUND', effectiveAt: Date) {
+/**
+ * 生成单据编号：RK/CK + yyyymmdd（按单据日期，北京时间）+ 当日序号。
+ * BusinessSequence 的 upsert+increment 由数据库串行分配，避免在事务内
+ * 捕获 P2002 后继续查询（PostgreSQL 唯一冲突后事务已 aborted）。
+ */
+async function generateDocNo(db: Prisma.TransactionClient | typeof prisma, tenantId: string, type: 'MANUAL_INBOUND' | 'MANUAL_OUTBOUND', effectiveAt: Date) {
   const prefix = type === 'MANUAL_INBOUND' ? 'RK' : 'CK'
   const beijing = new Date(effectiveAt.getTime() + 8 * 3_600_000)
   const yyyy = beijing.getUTCFullYear()
   const mm = String(beijing.getUTCMonth() + 1).padStart(2, '0')
   const dd = String(beijing.getUTCDate()).padStart(2, '0')
   const day = `${yyyy}${mm}${dd}`
-  const count = await prisma.warehouseDoc.count({
-    where: { tenantId, type, docNo: { startsWith: `${prefix}${day}-` } },
+  const numberPrefix = `${prefix}${day}-`
+  const last = await db.warehouseDoc.findFirst({
+    where: { tenantId, type, docNo: { startsWith: numberPrefix } },
+    orderBy: { docNo: 'desc' },
+    select: { docNo: true },
   })
-  for (let attempt = 0; attempt < docNoSequenceAttempts; attempt += 1) {
-    const candidate = `${prefix}${day}-${String(count + 1 + attempt).padStart(3, '0')}`
-    const clash = await prisma.warehouseDoc.findUnique({
-      where: { tenantId_docNo: { tenantId, docNo: candidate } },
-      select: { id: true },
+  const parsedFloor = Number(last?.docNo.slice(numberPrefix.length) || 0)
+  const floor = Number.isSafeInteger(parsedFloor) && parsedFloor >= 0 ? parsedFloor : 0
+  const scope = type === 'MANUAL_INBOUND' ? 'WHDOC_IN' : 'WHDOC_OUT'
+  if (floor > 0) {
+    await db.businessSequence.updateMany({
+      where: { tenantId, scope, period: day, value: { lt: floor } },
+      data: { value: floor },
     })
-    if (!clash) return candidate
   }
-  return `${prefix}${day}-${Date.now().toString(36).toUpperCase()}`
+  const sequence = await db.businessSequence.upsert({
+    where: { tenantId_scope_period: { tenantId, scope, period: day } },
+    create: { tenantId, scope, period: day, value: Math.max(1, floor + 1) },
+    update: { value: { increment: 1 } },
+    select: { value: true },
+  })
+  return `${numberPrefix}${String(sequence.value).padStart(3, '0')}`
 }
 
-async function resolveActorName(tenantId: string, userId: string | null | undefined) {
+async function resolveActorName(db: Prisma.TransactionClient | typeof prisma, tenantId: string, userId: string | null | undefined) {
   if (!userId) return null
-  const user = await prisma.user.findFirst({ where: { id: userId, tenantId }, select: { name: true } })
+  const user = await db.user.findFirst({ where: { id: userId, tenantId }, select: { name: true } })
   return user?.name || null
 }
 
@@ -109,7 +121,7 @@ export type WarehouseDocLineInput = {
  * 建单（find-or-create）：手工入库/出库过账后调用，把台账批次登记为一张单据。
  * 幂等：同一 (type, idempotencyKey) 重复调用直接返回已有单据。
  */
-export async function ensureWarehouseDoc(input: {
+export type EnsureWarehouseDocInput = {
   tenantId: string
   userId: string
   type: 'MANUAL_INBOUND' | 'MANUAL_OUTBOUND'
@@ -122,7 +134,14 @@ export async function ensureWarehouseDoc(input: {
   reason?: string | null
   note?: string | null
   lines: WarehouseDocLineInput[]
-}) {
+}
+
+export async function ensureWarehouseDocInTransaction(tx: Prisma.TransactionClient, input: EnsureWarehouseDocInput) {
+  // 同租户/单据类型/业务日的取号串行化。ReadCommitted 独立建单路径在等待后
+  // 能看到前一事务已提交的幂等单据和 BusinessSequence；台账内嵌路径仍由
+  // 外层 Serializable 整笔重试保证扣库+建单原子性。
+  const lockDay = new Date(input.effectiveAt.getTime() + 8 * 3_600_000).toISOString().slice(0, 10)
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`warehouse-doc:${input.tenantId}:${input.type}:${lockDay}`}, 0))::text AS locked`
   const idempotencyWhere = {
     tenantId_type_idempotencyKey: {
       tenantId: input.tenantId,
@@ -130,17 +149,14 @@ export async function ensureWarehouseDoc(input: {
       idempotencyKey: input.idempotencyKey,
     },
   } as const
-  const existing = await prisma.warehouseDoc.findUnique({
+  const existing = await tx.warehouseDoc.findUnique({
     where: idempotencyWhere,
     include: { lines: true },
   })
   if (existing) return { doc: existing, created: false }
   const totalAmount = input.lines.reduce((sum, line) => sum.plus(line.amount), new Prisma.Decimal(0)).toDecimalPlaces(4)
-  let doc: any = null
-  for (let attempt = 0; attempt < docNoSequenceAttempts; attempt += 1) {
-    const docNo = await generateDocNo(input.tenantId, input.type, input.effectiveAt)
-    try {
-      doc = await prisma.warehouseDoc.create({
+  const docNo = await generateDocNo(tx, input.tenantId, input.type, input.effectiveAt)
+  const doc = await tx.warehouseDoc.create({
         data: {
           tenantId: input.tenantId,
           docNo,
@@ -179,28 +195,35 @@ export async function ensureWarehouseDoc(input: {
         },
         include: { lines: true },
       })
-      break
-    } catch (error: any) {
-      if (error?.code !== 'P2002') throw error
-      // 同一幂等请求并发时，唯一约束的败方返回赢家；不同请求同时
-      // 撞到单号时则重新取号，避免台账已过账但登记接口返回 500。
-      const winner = await prisma.warehouseDoc.findUnique({ where: idempotencyWhere, include: { lines: true } })
-      if (winner) return { doc: winner, created: false }
-      if (attempt === docNoSequenceAttempts - 1) throw error
-    }
-  }
-  if (!doc) throw docError('仓库单据登记失败，请使用同一请求标识重试', 409)
-  await prisma.warehouseDocLog.create({
+  await tx.warehouseDocLog.create({
     data: {
       tenantId: input.tenantId,
       docId: doc.id,
       action: 'CREATE',
       actorId: input.userId,
-      actorName: await resolveActorName(input.tenantId, input.userId),
+      actorName: await resolveActorName(tx, input.tenantId, input.userId),
       detail: { lineCount: input.lines.length, totalAmount: totalAmount.toFixed(2) },
     },
   })
   return { doc, created: true }
+}
+
+export async function ensureWarehouseDoc(input: EnsureWarehouseDocInput) {
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    try {
+      return await prisma.$transaction(tx => ensureWarehouseDocInTransaction(tx, input), {
+        isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+      })
+    } catch (error: any) {
+      const rawSerializationConflict = error?.code === 'P2010'
+        && (String(error?.meta?.code || '') === '40001'
+          || /could not serialize|serialization failure|SQLSTATE\s*40001/i.test(String(error?.meta?.message || error?.message || '')))
+      // 整笔事务重试：绝不在已 aborted 的 PostgreSQL 事务内继续查询。
+      // P2002 可能来自同幂等请求的并发首写，重试后会命中已存在单据。
+      if ((!['P2034', 'P2002'].includes(error?.code) && !rawSerializationConflict) || attempt === 4) throw error
+    }
+  }
+  throw docError('仓库单据登记失败，请使用同一请求标识重试', 409)
 }
 
 /** 会计审核：POSTED → CONFIRMED，锁定单据。 */
@@ -218,7 +241,7 @@ export async function confirmWarehouseDoc(input: { tenantId: string; userId: str
       docId: doc.id,
       action: 'CONFIRM',
       actorId: input.userId,
-      actorName: await resolveActorName(input.tenantId, input.userId),
+      actorName: await resolveActorName(prisma, input.tenantId, input.userId),
     },
   })
   return { doc: updated, changed: true }
@@ -247,7 +270,7 @@ export async function unconfirmWarehouseDoc(input: { tenantId: string; userId: s
       docId: doc.id,
       action: 'UNCONFIRM',
       actorId: input.userId,
-      actorName: await resolveActorName(input.tenantId, input.userId),
+      actorName: await resolveActorName(prisma, input.tenantId, input.userId),
       reason,
     },
   })
@@ -472,7 +495,7 @@ export async function editWarehouseDoc(input: {
         docId: doc.id,
         action: 'EDIT',
         actorId: input.userId,
-        actorName: await resolveActorName(input.tenantId, input.userId),
+        actorName: await resolveActorName(prisma, input.tenantId, input.userId),
         reason: editReason,
         detail: diffDetail,
       },

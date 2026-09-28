@@ -295,8 +295,9 @@ const revisionReviewSchema = z.object({
   note: z.string().trim().max(200).optional(),
 }).strict()
 
-const deliveryShipSchema = z.object({
+export const deliveryShipSchema = z.object({
   note: z.string().trim().max(200).optional(),
+  pickerName: z.string().trim().min(1, '请填写实际分拣负责人').max(80).optional(),
   idempotencyKey: z.string().trim().min(8).max(80),
   // When a saved server draft exists, callers echo the version they reviewed.
   // A newer draft from another tab must never be shipped silently.
@@ -325,8 +326,9 @@ const shipmentDraftSchema = z.object({
   }).strict()).max(500),
 }).strict()
 
-const deliveryDeliverSchema = z.object({
+export const deliveryDeliverSchema = z.object({
   note: z.string().trim().max(500, '送达备注最长 500 字').optional(),
+  driverName: z.string().trim().min(1, '请填写实际配送/司机姓名').max(80),
 }).strict()
 
 function normalizeOrderCreateItems(items: Array<{ productId: string; quantity: number | string }>) {
@@ -2824,7 +2826,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     // body 可选传 items: [{ itemId, shippedQty }] — 称重 / 缺货时供应商按实际发货量调整
     const parsedShip = deliveryShipSchema.safeParse(req.body || {})
     if (!parsedShip.success) return reply.status(400).send({ error: parsedShip.error.issues[0].message })
-    const { note, items: shippedItems, removedItemIds = [], idempotencyKey, draftRowVersion } = parsedShip.data
+    const { note, pickerName, items: shippedItems, removedItemIds = [], idempotencyKey, draftRowVersion } = parsedShip.data
     const normalizedRemovedItemIds = [...removedItemIds].sort()
     const baseRequestFingerprint = shipmentRequestFingerprint(note, shippedItems)
     // A persisted server draft is the authoritative shipment snapshot. Bind
@@ -2839,9 +2841,10 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     // Keep old no-removal fingerprints replay-compatible.  A request that
     // explicitly removes a zero row must not be replay-equivalent to one that
     // merely saves that row at quantity zero.
-    const requestFingerprint = normalizedRemovedItemIds.length > 0
+    let requestFingerprint = normalizedRemovedItemIds.length > 0
       ? hashRequestBody({ shipment: versionedRequestFingerprint, removedItemIds: normalizedRemovedItemIds }, 'supplier-shipment-removals')
       : versionedRequestFingerprint
+    if (pickerName) requestFingerprint = hashRequestBody({ shipment: requestFingerprint, pickerName }, 'delivery-picker-v1')
 
     if (!canOperateSupplyOrder(role)) throw { statusCode: 403, message: '无权限' }
     const scopedSupplierId = requireSupplierBinding(role, req.user.supplierId)
@@ -3003,6 +3006,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     })
     if (!order) throw { statusCode: 400, message: '订单不存在或状态不可发货' }
     const isWarehouseOrder = order.supplier.sourceType === 'HEADQ_WAREHOUSE'
+    if (isWarehouseOrder && !pickerName) return reply.status(400).send({ error: '总仓发货必须填写实际分拣负责人' })
     const ledgerMode = isWarehouseOrder ? await safeWarehouseLedgerMode(tenantId, req.log) : null
 
     // 有服务端 DRAFT 时，它是唯一的发货明细权威来源；无 DRAFT 时
@@ -3260,6 +3264,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             note: note || null,
             idempotencyKey,
             shippedById: userId,
+            pickerNameSnapshot: pickerName || null,
             shippedAt,
             rowVersion: { increment: 1 },
           },
@@ -3277,6 +3282,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
               fulfillment,
               removedItemIds: effectiveRemovedItemIds,
               source: 'SERVER_SHIPMENT_DRAFT',
+              pickerName: pickerName || null,
               fulfillmentClosedAt: shippedAt.toISOString(),
             },
           },
@@ -3288,7 +3294,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           data: {
             tenantId, no: deliveryNo, purchaseOrderId: order.id, storeId: order.storeId, supplierId: order.supplierId,
             status: 'SHIPPED', actualTotalAmount: newTotalAmount, note: note || null,
-            idempotencyKey, createdById: userId, shippedById: userId, shippedAt,
+            idempotencyKey, createdById: userId, shippedById: userId, pickerNameSnapshot: pickerName || null, shippedAt,
             items: {
               create: lineShipped.map(line => ({
                 purchaseOrderItemId: line.it.id, productId: line.it.productId,
@@ -3311,12 +3317,12 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             {
               tenantId, deliveryOrderId: delivery.id, eventType: 'CREATED', actorId: userId, actorRole: role,
               toStatus: 'DRAFT', requestId: req.id, ip: req.ip,
-              metadata: { requestFingerprint, fulfillment, removedItemIds: effectiveRemovedItemIds, fulfillmentClosedAt: shippedAt.toISOString() },
+              metadata: { requestFingerprint, fulfillment, removedItemIds: effectiveRemovedItemIds, pickerName: pickerName || null, fulfillmentClosedAt: shippedAt.toISOString() },
             },
             {
               tenantId, deliveryOrderId: delivery.id, eventType: 'SHIPPED', actorId: userId, actorRole: role,
               fromStatus: 'DRAFT', toStatus: 'SHIPPED', requestId: req.id, ip: req.ip,
-              metadata: { requestFingerprint, fulfillment, removedItemIds: effectiveRemovedItemIds, fulfillmentClosedAt: shippedAt.toISOString() },
+              metadata: { requestFingerprint, fulfillment, removedItemIds: effectiveRemovedItemIds, pickerName: pickerName || null, fulfillmentClosedAt: shippedAt.toISOString() },
             },
           ],
         })
@@ -3484,7 +3490,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     }
     const parsedDeliver = deliveryDeliverSchema.safeParse(req.body || {})
     if (!parsedDeliver.success) return reply.status(400).send({ error: parsedDeliver.error.issues[0].message })
-    const { note } = parsedDeliver.data
+    const { note, driverName } = parsedDeliver.data
     const where: any = { id, tenantId, status: 'DELIVERING' }
     const scopedSupplierId = requireSupplierBinding(role, req.user.supplierId)
     if (scopedSupplierId) where.supplierId = scopedSupplierId
@@ -3499,7 +3505,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     await prisma.$transaction(async tx => {
       const upd = await tx.deliveryOrder.updateMany({
         where: { id: delivery.id, status: 'SHIPPED', rowVersion: delivery.rowVersion },
-        data: { status: 'DELIVERED', deliveredAt, deliveredById: userId, rowVersion: { increment: 1 } },
+        data: { status: 'DELIVERED', deliveredAt, deliveredById: userId, driverNameSnapshot: driverName, rowVersion: { increment: 1 } },
       })
       if (upd.count === 0) throw { statusCode: 409, message: '配送单状态已变化，请刷新' }
       const orderUpd = await tx.purchaseOrder.updateMany({
@@ -3511,6 +3517,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         data: {
           tenantId, deliveryOrderId: delivery.id, eventType: 'DELIVERED', actorId: userId, actorRole: role,
           fromStatus: 'SHIPPED', toStatus: 'DELIVERED', requestId: req.id, ip: req.ip,
+          metadata: { driverName },
         },
       })
       await tx.opLog.create({
@@ -3518,7 +3525,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           tenantId, userId,
           action: `供应商标记送达${note ? ': ' + String(note).slice(0,80) : ''}，等待门店人工收货`,
           target: order.no, entityType: 'PurchaseOrder', targetId: id,
-          metadata: { deliveredAt: deliveredAt.toISOString(), requiresManualReceipt: true },
+          metadata: { deliveredAt: deliveredAt.toISOString(), requiresManualReceipt: true, driverName },
         },
       })
     })

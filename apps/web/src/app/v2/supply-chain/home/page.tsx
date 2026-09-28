@@ -256,6 +256,9 @@ export default function InternalSupplyChainHomePage() {
           <MoreItem href="/v2/supply-chain/analytics" label="经营分析" desc="门店、SKU、趋势与健康" />
           <MoreItem href="/v2/supply-chain/receipts" label="收货查询" desc="历史收货记录" />
           <MoreItem href="/v2/supply-chain/orders" label="订货查询" desc="历史订货记录" />
+          <MoreItem href="/v2/supply-chain/reports?report=realtime" label="库存报表" desc="实时库存、出入库与预警" />
+          <MoreItem href="/v2/supply-chain/finance-reports?report=group-profit" label="财务报表" desc="集团、物品与配送毛利" />
+          <MoreItem href="/v2/supply-chain/stocktake/count" label="盘点管理" desc="单人、多人盘点与复盘" />
         </div>
       </Section>
 

@@ -1,6 +1,7 @@
 import { Prisma } from '@dianjie/db'
 import { businessDateKey, businessDateRangeInclusive } from '../lib/businessTime'
 import type { ReportQuery, ReportRow } from './inventoryReports'
+import { inventoryAlertStatus, resolveInventoryRule, type InventoryRulePolicy } from './warehouseInventoryPolicy'
 const LIMIT = 20000
 const decimal = (n: any) => new Prisma.Decimal(n ?? 0)
 export function reportTimestamp(date: Date | null | undefined) {
@@ -12,17 +13,16 @@ const bounds = <T>(rows: T[]) => {
 }
 const base = (p: any, w: any, unit: string): ReportRow => ({ productId: p.id, code: p.code, name: p.name, spec: p.spec, category: p.category, unit, baseUnit: unit, org: '总部', orgCode: null, warehouse: w.name, warehouseId: w.id })
 const labels: Record<string, string> = { MANUAL_INBOUND: '手工入库', ORDER_OUTBOUND: '出库', ADJUSTMENT: '库存调整', LOSS: '报损', REVERSAL: '冲销' }
-const otherSources = ['WarehouseManualInbound', 'WarehouseBatchManualInbound', 'WarehouseManualOutbound', 'WarehousePhysicalCount', 'WarehouseStocktake', 'WarehouseManualInboundReversal', 'WarehouseDocValueAdjust', 'LossClaimReversal']
+const otherSources = ['WarehouseManualInbound', 'WarehouseBatchManualInbound', 'WarehouseManualOutbound', 'WarehouseSelfLoss', 'WarehousePhysicalCount', 'WarehouseStocktake', 'WarehouseManualInboundReversal', 'WarehouseDocValueAdjust', 'LossClaimReversal']
 
 export function daysWithoutOutbound(now: Date, lastOutbound?: Date | null, firstInbound?: Date | null) {
   const reference = lastOutbound || firstInbound
   if (!reference) return null
   return Math.max(0, Math.floor((Date.parse(businessDateKey(now)) - Date.parse(businessDateKey(reference))) / 86400000))
 }
-export function warehouseAlert(quantity: Prisma.Decimal, product: any) {
-  const verified = product.unitConversionStatus === 'VERIFIED' && product.inventoryUnitsPerOrderUnit?.gt(0)
-  const lower = verified ? decimal(product.minStock).mul(product.inventoryUnitsPerOrderUnit) : null
-  return { minQty: lower == null ? null : Number(lower), maxQty: null, alertStatus: quantity.lte(0) ? '缺货' : lower == null ? '下限单位待确认' : quantity.lt(lower) ? '低于下限' : '未触发下限（未设上限）' }
+export function warehouseAlert(quantity: Prisma.Decimal, product: any, policy?: InventoryRulePolicy, inventoryUnit?: string) {
+  const rule = resolveInventoryRule(product, policy, inventoryUnit || product.inventoryUnit || product.unit)
+  return { minQty: rule.minQty, maxQty: rule.maxQty, alertStatus: inventoryAlertStatus(quantity, rule), ruleSource: rule.source }
 }
 export async function loadInventorySupplement(tx: Prisma.TransactionClient, tenantId: string, id: string, q: ReportQuery, scope: { tenantId: string; warehouseId?: string; product: Prisma.ProductWhereInput }): Promise<ReportRow[]> {
   if (id === 'other-summary') {
@@ -40,7 +40,14 @@ export async function loadInventorySupplement(tx: Prisma.TransactionClient, tena
     return [...grouped.values()]
   }
   const balances = bounds(await tx.warehouseLedgerBalance.findMany({ where: { ...scope, ...(id === 'stagnant' ? { physicalQty: { gt: 0 } } : {}) }, include: { product: true, warehouse: true }, orderBy: { id: 'asc' }, take: LIMIT + 1 }))
-  if (id === 'alerts') return balances.map(b => ({ ...base(b.product, b.warehouse, b.inventoryUnit), qty: Number(b.physicalQty), ...warehouseAlert(b.physicalQty, b.product) }))
+  const policies = balances.length ? await tx.warehouseInventoryPolicy.findMany({
+    where: { tenantId, productId: { in: [...new Set(balances.map(balance => balance.productId))] }, ...(q.warehouseId ? { warehouseId: q.warehouseId } : {}) },
+  }) : []
+  const policyByKey = new Map(policies.map(policy => [`${policy.warehouseId}/${policy.productId}`, policy]))
+  if (id === 'alerts') return balances.map(b => ({
+    ...base(b.product, b.warehouse, b.inventoryUnit), qty: Number(b.physicalQty),
+    ...warehouseAlert(b.physicalQty, b.product, policyByKey.get(`${b.warehouseId}/${b.productId}`), b.inventoryUnit),
+  }))
   const now = new Date()
   const history = bounds(await tx.warehouseLedgerMovement.findMany({ where: { ...scope, productId: { in: balances.map(b => b.productId) }, effectiveAt: { lte: now }, physicalDelta: { not: 0 }, type: { notIn: ['ORDER_RESERVED', 'ORDER_RELEASED'] } }, select: { id: true, productId: true, warehouseId: true, inventoryUnit: true, effectiveAt: true, physicalDelta: true }, orderBy: [{ effectiveAt: 'asc' }, { id: 'asc' }], take: LIMIT + 1 }))
   type Movement = typeof history[number]
@@ -54,6 +61,8 @@ export async function loadInventorySupplement(tx: Prisma.TransactionClient, tena
   return balances.map(b => {
     const h = byKey.get(key(b)) || {}
     const retainedDays = daysWithoutOutbound(now, h.lastOut?.effectiveAt, h.firstIn?.effectiveAt)
-    return { ...base(b.product, b.warehouse, b.inventoryUnit), qty: Number(b.physicalQty), firstInAt: reportTimestamp(h.firstIn?.effectiveAt), lastInAt: reportTimestamp(h.lastIn?.effectiveAt), lastOutAt: reportTimestamp(h.lastOut?.effectiveAt), lastInQty: h.lastIn ? Number(h.lastIn.physicalDelta) : null, lastOutQty: h.lastOut ? Number(h.lastOut.physicalDelta.abs()) : null, retainedDays, stagnantDays: q.stagnantDays, isStagnant: retainedDays == null ? null : retainedDays >= q.stagnantDays ? '是' : '否' }
+    const policy = policyByKey.get(`${b.warehouseId}/${b.productId}`)
+    const stagnantDays = q.stagnantDays ?? (policy?.active ? policy.stagnantDays : 30)
+    return { ...base(b.product, b.warehouse, b.inventoryUnit), qty: Number(b.physicalQty), firstInAt: reportTimestamp(h.firstIn?.effectiveAt), lastInAt: reportTimestamp(h.lastIn?.effectiveAt), lastOutAt: reportTimestamp(h.lastOut?.effectiveAt), lastInQty: h.lastIn ? Number(h.lastIn.physicalDelta) : null, lastOutQty: h.lastOut ? Number(h.lastOut.physicalDelta.abs()) : null, retainedDays, stagnantDays, isStagnant: retainedDays == null ? null : retainedDays >= stagnantDays ? '是' : '否' }
   })
 }

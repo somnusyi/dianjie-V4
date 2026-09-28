@@ -43,7 +43,19 @@ vi.mock('@dianjie/db', async importOriginal => {
     $executeRaw: vi.fn(async () => 0),
   }
   const prismaMock = {
-    $transaction: async (work: any) => work(tx),
+    $transaction: async (work: any) => {
+      const movementSnapshot = [...movements]
+      const logSnapshot = [...opLogs]
+      const balanceSnapshot = { ...balanceRow }
+      const lotSnapshot = lots.map(lot => ({ ...lot }))
+      try { return await work(tx) } catch (error) {
+        movements.splice(0, movements.length, ...movementSnapshot)
+        opLogs.splice(0, opLogs.length, ...logSnapshot)
+        balanceRow = balanceSnapshot
+        lots = lotSnapshot
+        throw error
+      }
+    },
     warehouse: { findFirst: vi.fn(async () => ({ inventoryMode: 'STRICT' })) },
     product: {
       findMany: vi.fn(async ({ where }: any) => PRODUCTS.filter(p => where.id.in.includes(p.id) && p.status === 'ENABLED')),
@@ -152,6 +164,45 @@ describe('recordBatchManualWarehouseOutbound', () => {
     expect(again.replayed).toBe(true)
     expect(movements).toHaveLength(1)
     expect(balanceRow.physicalQty.toFixed(6)).toBe('70.000000')
+  })
+
+  it('总仓自损只能按移动均价且不能占用已预留库存', async () => {
+    reset()
+    await expect(recordBatchManualWarehouseOutbound(baseInput({
+      businessType: 'SELF_LOSS',
+      items: [{ productId: 'prod-1', inventoryQuantity: 1, totalAmount: 1 }],
+    }))).rejects.toThrow('不能手工覆盖')
+    balanceRow.reservedQty = new Prisma.Decimal(80)
+    await expect(recordBatchManualWarehouseOutbound(baseInput({
+      businessType: 'SELF_LOSS', idempotencyKey: 'self-loss-reserved',
+      items: [{ productId: 'prod-1', inventoryQuantity: 21 }],
+    }))).rejects.toThrow('可用总仓库存不足')
+    expect(movements).toHaveLength(0)
+  })
+
+  it('总仓自损同键同内容重放，异内容拒绝', async () => {
+    reset()
+    const input = baseInput({ businessType: 'SELF_LOSS', idempotencyKey: 'self-loss-idem', items: [{ productId: 'prod-1', inventoryQuantity: 3 }] })
+    await recordBatchManualWarehouseOutbound(input)
+    expect((await recordBatchManualWarehouseOutbound(input)).replayed).toBe(true)
+    await expect(recordBatchManualWarehouseOutbound(baseInput({
+      businessType: 'SELF_LOSS', idempotencyKey: 'self-loss-idem', items: [{ productId: 'prod-1', inventoryQuantity: 4 }],
+    }))).rejects.toThrow('同一幂等键不能用于不同')
+    expect(movements).toHaveLength(1)
+  })
+
+  it('总仓自损单据落库失败时整笔扣库回滚', async () => {
+    reset()
+    await expect(recordBatchManualWarehouseOutbound(baseInput({
+      businessType: 'SELF_LOSS', idempotencyKey: 'self-loss-doc-failure',
+      items: [{ productId: 'prod-1', inventoryQuantity: 3 }],
+      finalizeInTransaction: async () => { throw new Error('单据写入失败') },
+    }))).rejects.toThrow('单据写入失败')
+    expect(movements).toHaveLength(0)
+    expect(opLogs).toHaveLength(0)
+    expect(balanceRow.physicalQty.toFixed(6)).toBe('100.000000')
+    expect(balanceRow.inventoryValue.toFixed(4)).toBe('1000.0000')
+    expect(lots[0].remainingQty.toFixed(6)).toBe('100.000000')
   })
 
   it('四单位未核验拒绝出库', async () => {

@@ -411,12 +411,24 @@ export default function InternalSupplyChainSuppliersPage() {
                   <div className="text-micro text-gray3">账期</div>
                   <div className="text-body text-gray2">{formatCreditDays(selected)}</div>
                 </div>
+                <div>
+                  <div className="text-micro text-gray3">联系地址</div>
+                  <div className="text-body text-gray2">{selected.address || '—'}</div>
+                </div>
                 {selected.category && (
                   <div>
                     <div className="text-micro text-gray3">类目</div>
                     <div className="text-body text-gray2">{selected.category}</div>
                   </div>
                 )}
+                <div className="border-t border-border pt-4">
+                  <div className="text-micro text-gray3">集中档案</div>
+                  <p className="mt-1 text-caption text-gray2">统一查看资质、合同、财务与开票资料，敏感分区由服务端限权。</p>
+                  <a
+                    href={`/v2/supply-chain/suppliers/${selected.id}/archive`}
+                    className="mt-2 block rounded-cta border border-accent px-4 py-2.5 text-center text-button text-accent"
+                  >打开集中档案 →</a>
+                </div>
                 <div className="border-t border-border pt-4">
                   <div className="text-micro text-gray3">供货关系</div>
                   <p className="mt-1 text-caption text-gray2">批量维护这家供应商可供的商品（对齐美团供货关系）。</p>
@@ -562,6 +574,16 @@ function SupplierEditorDrawer({
               maxLength={40}
               className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
               placeholder="如 蔬菜、水产"
+            />
+          </DrawerField>
+
+          <DrawerField label="联系地址" error={errors.address}>
+            <input
+              value={values.address}
+              onChange={e => onChange('address', e.target.value)}
+              maxLength={300}
+              className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+              placeholder="供应商公司地址"
             />
           </DrawerField>
 

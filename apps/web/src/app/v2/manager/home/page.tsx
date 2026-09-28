@@ -105,6 +105,11 @@ export default function ManagerHomePage() {
         </div>
       )}
 
+      <a href="/v2/manager/replenishment-orders" className="mx-4 mt-3 flex items-center gap-3 rounded-card border border-border bg-white px-4 py-3 active:bg-bg/50">
+        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-amber/10 text-amber-fg">补</span>
+        <div className="flex-1"><div className="text-button">本店补货进度</div><div className="mt-0.5 text-micro text-gray3">查看额外补货、配送与收货进度</div></div><span className="text-gray3">›</span>
+      </a>
+
       <Section title="待办" right={(() => {
         const n = (pendingLoss?.length || 0) + (pendingInv?.length || 0)
         return n > 0 ? `${n} 项` : undefined

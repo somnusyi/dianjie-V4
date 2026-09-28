@@ -42,7 +42,7 @@ async function main() {
   const inboundBody = { productId: product.id, supplierId: supplier.id, purchaseQuantity: 2, totalAmount: 200, effectiveAt, idempotencyKey: `verify-${randomUUID()}`, note: '本地真实联通验证' }
   const inbound = await request('/api/warehouse-inventory/manual-inbound', tokens.supply, inboundBody)
   assert.equal((await request('/api/warehouse-inventory/manual-inbound', tokens.supply, inboundBody)).replayed, true)
-  const outbound = await request('/api/warehouse-inventory/batch-manual-outbound', tokens.supply, { items: [{ productId: product.id, inventoryQuantity: 5, totalAmount: 50 }], effectiveAt, idempotencyKey: `verify-${randomUUID()}`, reason: '本地真实联通验证领用' })
+  const outbound = await request('/api/warehouse-inventory/batch-manual-outbound', tokens.supply, { items: [{ productId: product.id, inventoryQuantity: 5, totalAmount: 50 }], effectiveAt, idempotencyKey: `verify-${randomUUID()}`, purpose: 'SAMPLE_ISSUE', reason: '本地真实联通验证领用' })
   await request(`/api/warehouse-docs/${inbound.doc.id}/confirm`, tokens.admin, undefined, 'POST')
   let balance = await prisma.warehouseLedgerBalance.findFirstOrThrow({ where: { tenantId: tenant.id, warehouseId: warehouse.id, productId: product.id } })
   assert.equal(Number(balance.physicalQty), initialQty + 15); assert.equal(Number(balance.inventoryValue), initialValue + 150)

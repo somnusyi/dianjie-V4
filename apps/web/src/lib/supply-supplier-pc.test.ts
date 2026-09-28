@@ -188,6 +188,7 @@ describe('供应商表单', () => {
         name: '大理水产',
         contactName: '张三',
         contactPhone: '13800138000',
+        address: '',
         category: '水产',
         creditType: 'MONTHLY',
         creditDays: '30',
@@ -215,12 +216,14 @@ describe('供应商表单', () => {
         name: 'B'.repeat(81),
         contactName: 'C'.repeat(41),
         contactPhone: 'D'.repeat(21),
+        address: 'F'.repeat(301),
         category: 'E'.repeat(41),
       })
       expect(errors.no).toBe('编号最多 40 个字符')
       expect(errors.name).toBe('名称最多 80 个字符')
       expect(errors.contactName).toBe('联系人最多 40 个字符')
       expect(errors.contactPhone).toBe('联系电话最多 20 个字符')
+      expect(errors.address).toBe('联系地址最多 300 个字符')
       expect(errors.category).toBe('类目最多 40 个字符')
     })
 
@@ -270,6 +273,7 @@ describe('供应商表单', () => {
         name: '测试供应商',
         contactName: '张三',
         contactPhone: '',
+        address: '',
         category: '蔬菜',
         creditType: 'FIXED_DAYS',
         creditDays: 45,

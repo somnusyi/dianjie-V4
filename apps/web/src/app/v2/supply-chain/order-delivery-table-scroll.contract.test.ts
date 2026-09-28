@@ -94,6 +94,8 @@ describe('order and delivery table horizontal controls', () => {
       status: 77,
       summary: 400,
       amount: 102,
+      costAmount: 112,
+      profit: 102,
       action: 103,
     })
   })

@@ -274,6 +274,9 @@ describe('内部供应链移动端工作台', () => {
     expect(hrefs).toContain('/v2/supply-chain/analytics')
     expect(hrefs).toContain('/v2/supply-chain/receipts')
     expect(hrefs).toContain('/v2/supply-chain/orders')
+    expect(hrefs).toContain('/v2/supply-chain/reports?report=realtime')
+    expect(hrefs).toContain('/v2/supply-chain/finance-reports?report=group-profit')
+    expect(hrefs).toContain('/v2/supply-chain/stocktake/count')
 
     cleanup(container, root)
   })

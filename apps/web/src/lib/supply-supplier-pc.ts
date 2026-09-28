@@ -22,6 +22,7 @@ export type SupplySupplier = {
   businessScopes?: SupplierBusinessScope[]
   contactName?: string | null
   contactPhone?: string | null
+  address?: string | null
   creditType?: string | null
   creditDays?: number | null
   createdAt?: string | null
@@ -199,6 +200,7 @@ export type SupplierFormValues = {
   name: string
   contactName: string
   contactPhone: string
+  address: string
   category: string
   creditType: SupplierCreditType
   creditDays: string
@@ -209,6 +211,7 @@ export const EMPTY_SUPPLIER_FORM_VALUES: SupplierFormValues = {
   name: '',
   contactName: '',
   contactPhone: '',
+  address: '',
   category: '',
   creditType: 'FIXED_DAYS',
   creditDays: '30',
@@ -224,6 +227,7 @@ export function initializeSupplierFormValues(supplier?: SupplySupplier | null): 
     name: supplier.name ?? '',
     contactName: supplier.contactName ?? '',
     contactPhone: supplier.contactPhone ?? '',
+    address: supplier.address ?? '',
     category: supplier.category ?? '',
     creditType: (supplier.creditType as SupplierCreditType) || 'FIXED_DAYS',
     creditDays: supplier.creditDays != null ? String(supplier.creditDays) : '30',
@@ -260,6 +264,7 @@ export function validateSupplierForm(values: SupplierFormValues): SupplierFormEr
 
   if (values.contactName.trim().length > 40) errors.contactName = '联系人最多 40 个字符'
   if (values.contactPhone.trim().length > 20) errors.contactPhone = '联系电话最多 20 个字符'
+  if (values.address.trim().length > 300) errors.address = '联系地址最多 300 个字符'
   if (values.category.trim().length > 40) errors.category = '类目最多 40 个字符'
 
   if (!SUPPLIER_CREDIT_TYPE_OPTIONS.some(opt => opt.value === values.creditType)) {
@@ -291,6 +296,7 @@ export function buildSupplierCreatePayload(values: SupplierFormValues): Record<s
     name: values.name.trim(),
     contactName: values.contactName.trim(),
     contactPhone: values.contactPhone.trim(),
+    address: values.address.trim(),
     category: values.category.trim(),
     creditType: values.creditType,
   }

@@ -6,7 +6,8 @@ import { inventoryReportAccess } from './inventoryReports'
 import { businessDateKey } from '../lib/businessTime'
 import { hashRequestBody } from '../lib/idempotency'
 
-// 供应链/管理员：创建 -> PENDING；PENDING -> SHIPPED 或 REVOKED；SHIPPED -> RECEIVED。
+// 门店调拨由供应链审核推进，管理员保留兼容写入：创建 -> PENDING；
+// PENDING -> SHIPPED 或 REVOKED；SHIPPED -> RECEIVED。
 // RECEIVED、REVOKED 为终态。记录操作者及时间，CAS 防止并发覆盖；当前仅登记调拨，不改写盘点快照。
 const createSchema = z.object({
   fromStoreId: z.string().min(1), toStoreId: z.string().min(1), requestKey: z.string().uuid(),
@@ -62,7 +63,12 @@ function isSerializableConflict(error: any) {
 export const storeTransferRoutes: FastifyPluginAsync = async app => {
   app.addHook('preHandler', (app as any).authenticate)
   app.addHook('preHandler', async (req: any, reply) => {
-    if (!req.user?.tenantId || !inventoryReportAccess(req.user.role, req.method !== 'GET')) return reply.status(403).send({ error: '无权操作门店调拨' })
+    if (!req.user?.tenantId) return reply.status(403).send({ error: '无权操作门店调拨' })
+    const canRead = inventoryReportAccess(req.user.role)
+    const canWrite = ['ADMIN', 'SUPER_ADMIN', 'SUPPLY_CHAIN'].includes(req.user.role)
+    if (req.method === 'GET' ? !canRead : !canWrite) {
+      return reply.status(403).send({ error: req.method === 'GET' ? '无权查看门店调拨' : '门店调拨须由供应链或管理员审核操作' })
+    }
   })
   app.get('/', async (req: any) => {
     const rows = await prisma.storeTransfer.findMany({ where: { tenantId: req.user.tenantId }, include, orderBy: { createdAt: 'desc' }, take: 1001 })

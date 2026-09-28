@@ -68,6 +68,16 @@ model Tenant {
   purchaseOrders                       PurchaseOrder[]
   purchaseOrderRevisions               PurchaseOrderRevision[]
   purchaseOrderEvents                  PurchaseOrderEvent[]
+  replenishmentOrders                  ReplenishmentOrder[]
+  replenishmentOrderItems              ReplenishmentOrderItem[]
+  replenishmentOrderEvents             ReplenishmentOrderEvent[]
+  replenishmentFulfillmentLinks        ReplenishmentFulfillmentLink[]
+  supplierArchiveRecords               SupplierArchiveRecord[]
+  supplierEvidenceDocuments            SupplierEvidenceDocument[]
+  supplierEvidenceDocumentProducts     SupplierEvidenceDocumentProduct[]
+  upstreamReceiptLineEvidenceDocuments UpstreamReceiptLineEvidenceDocument[]
+  productQualityStandards              ProductQualityStandard[]
+  productPurchasePriceStandards        ProductPurchasePriceStandard[]
   deliveryOrders                       DeliveryOrder[]
   deliveryOrderEvents                  DeliveryOrderEvent[]
   businessSequences                    BusinessSequence[]
@@ -96,6 +106,8 @@ model Tenant {
   warehouseStocktakeEntries            WarehouseStocktakeEntry[]
   warehouseStocktakeAdjustments        WarehouseStocktakeAdjustment[]
   warehouseStocktakeAdjustmentLines    WarehouseStocktakeAdjustmentLine[]
+  warehouseInventoryPolicies           WarehouseInventoryPolicy[]
+  warehouseInventoryPolicyEvents       WarehouseInventoryPolicyEvent[]
   accountingPeriods                    AccountingPeriod[]
   pettyCash                            PettyCash[]
   payrolls                             Payroll[]
@@ -125,7 +137,7 @@ model Warehouse {
   isActive                   Boolean                @default(true)
   rowVersion                 Int                    @default(0)
   // OFF 默认不投影；SHADOW 只记账与告警且不阻断现有履约；完成新实盘期初和切换评审后才可改为 STRICT。
-  inventoryMode        WarehouseInventoryMode @default(OFF)
+  inventoryMode              WarehouseInventoryMode @default(OFF)
   // 仅控制门店向内部总仓提交订单时是否阻断零库存。
   // 不改变 inventoryMode 所有的台账投影、接单预占和发货出库语义。
   blockZeroStockAtOrderEntry Boolean                @default(false)
@@ -151,6 +163,7 @@ model Warehouse {
   upstreamReceipts              UpstreamReceipt[]
   upstreamPurchaseReturns       UpstreamPurchaseReturn[]
   stocktakes                    WarehouseStocktake[]
+  inventoryPolicies             WarehouseInventoryPolicy[]
 
   @@unique([tenantId, code])
   @@unique([tenantId, id])
@@ -260,18 +273,18 @@ model WarehouseLedgerMovement {
   reversalOfId         String?                     @unique @db.VarChar(64)
   recordedAt           DateTime                    @default(now())
 
-  tenant                     Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  warehouse                  Warehouse                      @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
-  product                    Product                        @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
-  supplier                   Supplier?                      @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  reversalOf                 WarehouseLedgerMovement?       @relation("WarehouseLedgerMovementReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
-  reversal                   WarehouseLedgerMovement?       @relation("WarehouseLedgerMovementReversal")
-  createdLot                 WarehouseLedgerLot?            @relation("WarehouseLedgerLotSource")
+  tenant                     Tenant                            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse                  Warehouse                         @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  product                    Product                           @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  supplier                   Supplier?                         @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  reversalOf                 WarehouseLedgerMovement?          @relation("WarehouseLedgerMovementReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversal                   WarehouseLedgerMovement?          @relation("WarehouseLedgerMovementReversal")
+  createdLot                 WarehouseLedgerLot?               @relation("WarehouseLedgerLotSource")
   lotAllocations             WarehouseLedgerLotAllocation[]
   docLines                   WarehouseDocLine[]
-  upstreamReceiptLine        UpstreamReceiptLine?           @relation("UpstreamReceiptLedgerMovement")
-  upstreamClaimLossLine      UpstreamArrivalClaimLine?      @relation("UpstreamClaimLossLedgerMovement")
-  upstreamPurchaseReturnLine UpstreamPurchaseReturnLine?    @relation("UpstreamPurchaseReturnLedgerMovement")
+  upstreamReceiptLine        UpstreamReceiptLine?              @relation("UpstreamReceiptLedgerMovement")
+  upstreamClaimLossLine      UpstreamArrivalClaimLine?         @relation("UpstreamClaimLossLedgerMovement")
+  upstreamPurchaseReturnLine UpstreamPurchaseReturnLine?       @relation("UpstreamPurchaseReturnLedgerMovement")
   stocktakeAdjustmentLine    WarehouseStocktakeAdjustmentLine? @relation("WarehouseStocktakeAdjustmentMovement")
 
   @@unique([tenantId, warehouseId, idempotencyKey])
@@ -651,51 +664,67 @@ model User {
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  tenant                        Tenant                  @relation(fields: [tenantId], references: [id])
-  store                         Store?                  @relation(fields: [storeId], references: [id])
-  supplier                      Supplier?               @relation("SupplierUsers", fields: [supplierId], references: [id])
-  receipts                      Receipt[]
-  opLogs                        OpLog[]
-  consumptions                  StockConsumption[]      @relation("ConsumptionCreatedBy")
-  voidedConsumptions            StockConsumption[]      @relation("ConsumptionVoidedBy")
-  createdPOs                    PurchaseOrder[]         @relation("POCreatedBy")
-  shippedPOs                    PurchaseOrder[]         @relation("POShippedBy")
-  requestedPORevisions          PurchaseOrderRevision[] @relation("PORevisionRequestedBy")
-  reviewedPORevisions           PurchaseOrderRevision[] @relation("PORevisionReviewedBy")
-  purchaseOrderEvents           PurchaseOrderEvent[]
-  createdDeliveries             DeliveryOrder[]         @relation("DeliveryCreatedBy")
-  shippedDeliveries             DeliveryOrder[]         @relation("DeliveryShippedBy")
-  deliveredDeliveries           DeliveryOrder[]         @relation("DeliveryDeliveredBy")
-  receivedDeliveries            DeliveryOrder[]         @relation("DeliveryReceivedBy")
-  deliveryOrderEvents           DeliveryOrderEvent[]
-  createdLCs                    LossClaim[]             @relation("LCCreatedBy")
-  handledLCs                    LossClaim[]             @relation("LCHandledBy")
-  resolvedLCs                   LossClaim[]             @relation("LCResolvedBy")
-  cashTransactions              CashTransaction[]
-  notifications                 Notification[]
-  uploadedInvoices              Invoice[]               @relation("InvoiceUploader")
-  initiatedDocuments            Document[]
-  approvedSteps                 DocumentStep[]
-  documentDecisions             DocumentDecision[]
-  stockMovements                SupplierStockMovement[]
-  supplierStockBatches          SupplierStockBatch[]
-  createdDailyBusinessImports   DailyBusinessImport[]   @relation("DailyBusinessImportCreatedBy")
-  confirmedDailyBusinessImports DailyBusinessImport[]   @relation("DailyBusinessImportConfirmedBy")
-  resolvedDeferredBomTasks      DeferredBomTask[]       @relation("DeferredBomTaskResolvedBy")
-  createdInventoryCounts        InventoryCount[]        @relation("InventoryCountCreatedBy")
-  submittedInventoryCounts      InventoryCount[]        @relation("InventoryCountSubmittedBy")
-  confirmedInventoryCounts      InventoryCount[]        @relation("InventoryCountConfirmedBy")
-  reversedInventoryCounts       InventoryCount[]        @relation("InventoryCountReversedBy")
-  createdWarehouseStocktakes    WarehouseStocktake[]     @relation("WarehouseStocktakeCreatedBy")
-  submittedWarehouseStocktakes  WarehouseStocktake[]     @relation("WarehouseStocktakeSubmittedBy")
-  reviewedWarehouseStocktakes   WarehouseStocktake[]     @relation("WarehouseStocktakeReviewedBy")
-  assignedStocktakeSections     WarehouseStocktakeSection[] @relation("WarehouseStocktakeSectionAssignee")
-  stocktakeEntries              WarehouseStocktakeEntry[] @relation("WarehouseStocktakeEntryActor")
-  confirmedMonthlyCloses        StoreMonthlyClose[]     @relation("StoreMonthlyCloseConfirmedBy")
-  feedbacks                     Feedback[]              @relation("FeedbackReporter")
-  decidedFeedbacks              Feedback[]              @relation("FeedbackDecisionBy")
-  decidedAutoFixRuns            AutoFixRun[]            @relation("AutoFixDecisionBy")
-  bossChatMessages              BossChatMessage[]
+  tenant                            Tenant                                @relation(fields: [tenantId], references: [id])
+  store                             Store?                                @relation(fields: [storeId], references: [id])
+  supplier                          Supplier?                             @relation("SupplierUsers", fields: [supplierId], references: [id])
+  receipts                          Receipt[]
+  opLogs                            OpLog[]
+  consumptions                      StockConsumption[]                    @relation("ConsumptionCreatedBy")
+  voidedConsumptions                StockConsumption[]                    @relation("ConsumptionVoidedBy")
+  createdPOs                        PurchaseOrder[]                       @relation("POCreatedBy")
+  shippedPOs                        PurchaseOrder[]                       @relation("POShippedBy")
+  requestedPORevisions              PurchaseOrderRevision[]               @relation("PORevisionRequestedBy")
+  reviewedPORevisions               PurchaseOrderRevision[]               @relation("PORevisionReviewedBy")
+  purchaseOrderEvents               PurchaseOrderEvent[]
+  createdDeliveries                 DeliveryOrder[]                       @relation("DeliveryCreatedBy")
+  shippedDeliveries                 DeliveryOrder[]                       @relation("DeliveryShippedBy")
+  deliveredDeliveries               DeliveryOrder[]                       @relation("DeliveryDeliveredBy")
+  receivedDeliveries                DeliveryOrder[]                       @relation("DeliveryReceivedBy")
+  deliveryOrderEvents               DeliveryOrderEvent[]
+  createdLCs                        LossClaim[]                           @relation("LCCreatedBy")
+  handledLCs                        LossClaim[]                           @relation("LCHandledBy")
+  resolvedLCs                       LossClaim[]                           @relation("LCResolvedBy")
+  cashTransactions                  CashTransaction[]
+  notifications                     Notification[]
+  uploadedInvoices                  Invoice[]                             @relation("InvoiceUploader")
+  initiatedDocuments                Document[]
+  approvedSteps                     DocumentStep[]
+  documentDecisions                 DocumentDecision[]
+  stockMovements                    SupplierStockMovement[]
+  supplierStockBatches              SupplierStockBatch[]
+  createdDailyBusinessImports       DailyBusinessImport[]                 @relation("DailyBusinessImportCreatedBy")
+  confirmedDailyBusinessImports     DailyBusinessImport[]                 @relation("DailyBusinessImportConfirmedBy")
+  resolvedDeferredBomTasks          DeferredBomTask[]                     @relation("DeferredBomTaskResolvedBy")
+  createdInventoryCounts            InventoryCount[]                      @relation("InventoryCountCreatedBy")
+  submittedInventoryCounts          InventoryCount[]                      @relation("InventoryCountSubmittedBy")
+  confirmedInventoryCounts          InventoryCount[]                      @relation("InventoryCountConfirmedBy")
+  reversedInventoryCounts           InventoryCount[]                      @relation("InventoryCountReversedBy")
+  createdWarehouseStocktakes        WarehouseStocktake[]                  @relation("WarehouseStocktakeCreatedBy")
+  submittedWarehouseStocktakes      WarehouseStocktake[]                  @relation("WarehouseStocktakeSubmittedBy")
+  reviewedWarehouseStocktakes       WarehouseStocktake[]                  @relation("WarehouseStocktakeReviewedBy")
+  assignedStocktakeSections         WarehouseStocktakeSection[]           @relation("WarehouseStocktakeSectionAssignee")
+  stocktakeEntries                  WarehouseStocktakeEntry[]             @relation("WarehouseStocktakeEntryActor")
+  confirmedMonthlyCloses            StoreMonthlyClose[]                   @relation("StoreMonthlyCloseConfirmedBy")
+  feedbacks                         Feedback[]                            @relation("FeedbackReporter")
+  decidedFeedbacks                  Feedback[]                            @relation("FeedbackDecisionBy")
+  decidedAutoFixRuns                AutoFixRun[]                          @relation("AutoFixDecisionBy")
+  bossChatMessages                  BossChatMessage[]
+  replenishmentOrdersCreated        ReplenishmentOrder[]                  @relation("ReplenishmentCreatedBy")
+  replenishmentOrdersSubmitted      ReplenishmentOrder[]                  @relation("ReplenishmentSubmittedBy")
+  replenishmentOrdersAccepted       ReplenishmentOrder[]                  @relation("ReplenishmentAcceptedBy")
+  replenishmentOrdersCancelled      ReplenishmentOrder[]                  @relation("ReplenishmentCancelledBy")
+  replenishmentOrderEvents          ReplenishmentOrderEvent[]             @relation("ReplenishmentEventActor")
+  createdSupplierArchiveRecords     SupplierArchiveRecord[]               @relation("SupplierArchiveCreatedBy")
+  archivedSupplierArchiveRecords    SupplierArchiveRecord[]               @relation("SupplierArchiveArchivedBy")
+  createdSupplierEvidenceDocuments  SupplierEvidenceDocument[]            @relation("SupplierEvidenceDocumentCreatedBy")
+  archivedSupplierEvidenceDocuments SupplierEvidenceDocument[]            @relation("SupplierEvidenceDocumentArchivedBy")
+  linkedReceiptEvidenceDocuments    UpstreamReceiptLineEvidenceDocument[] @relation("ReceiptEvidenceDocumentLinkedBy")
+  voidedReceiptEvidenceDocuments    UpstreamReceiptLineEvidenceDocument[] @relation("ReceiptEvidenceDocumentVoidedBy")
+  createdProductQualityStandards    ProductQualityStandard[]              @relation("ProductQualityStandardCreatedBy")
+  archivedProductQualityStandards   ProductQualityStandard[]              @relation("ProductQualityStandardArchivedBy")
+  createdPurchasePriceStandards     ProductPurchasePriceStandard[]        @relation("ProductPurchasePriceStandardCreatedBy")
+  archivedPurchasePriceStandards    ProductPurchasePriceStandard[]        @relation("ProductPurchasePriceStandardArchivedBy")
+  approvedUpstreamPriceExceptions   UpstreamReceipt[]                     @relation("UpstreamReceiptPriceExceptionApprover")
 
   @@unique([tenantId, email])
   @@unique([tenantId, phone])
@@ -1275,8 +1304,10 @@ model Store {
   monthlyCloses        StoreMonthlyClose[]
   inventoryPolicies    StoreInventoryPolicy[]
   deliveryRuleStores   DeliveryRuleStore[]
+  replenishmentOrders  ReplenishmentOrder[]
 
   @@unique([tenantId, no])
+  @@unique([tenantId, id])
   @@map("stores")
 }
 
@@ -1304,6 +1335,7 @@ model Supplier {
   name           String
   contactName    String?
   contactPhone   String?
+  address        String?
   category       String? // 菌类 / 蔬菜 / 水产
   status         SupplierStatus          @default(ENABLED)
   // 一个合作方可能既给总仓供货，也可能直接履约门店。业务范围用于把
@@ -1374,6 +1406,10 @@ model Supplier {
   warehouseLedgerMovements     WarehouseLedgerMovement[]
   nameAliases                  SupplierNameAlias[]
   deliveryRules                DeliveryRule[]
+  replenishmentOrders          ReplenishmentOrder[]
+  archiveRecords               SupplierArchiveRecord[]
+  evidenceDocuments            SupplierEvidenceDocument[]
+  purchasePriceStandards       ProductPurchasePriceStandard[]
 
   @@unique([tenantId, no])
   @@unique([tenantId, id])
@@ -1381,95 +1417,427 @@ model Supplier {
   @@map("suppliers")
 }
 
+// 供应商集中档案。会议只确认“资质/合同/财务/开票”四个分区；
+// 合同必须复用 UpstreamSupplierContract，本表仅保存其余三类未定子字段的通用档案条目。
+model SupplierArchiveRecord {
+  id                     String                 @id @default(cuid()) @db.VarChar(64)
+  tenantId               String
+  supplierId             String
+  section                SupplierArchiveSection
+  title                  String                 @db.VarChar(160)
+  note                   String?                @db.VarChar(1000)
+  validFrom              DateTime?              @db.Date
+  validUntil             DateTime?              @db.Date
+  objectKey              String?                @db.VarChar(1024)
+  fileName               String?                @db.VarChar(255)
+  fileMime               String?                @db.VarChar(120)
+  fileSize               Int?
+  requestKey             String                 @db.VarChar(160)
+  requestFingerprint     String                 @db.Char(64)
+  createdById            String                 @db.VarChar(64)
+  createdByNameSnapshot  String                 @db.VarChar(120)
+  createdByRoleSnapshot  String                 @db.VarChar(40)
+  archivedAt             DateTime?
+  archivedById           String?                @db.VarChar(64)
+  archivedByNameSnapshot String?                @db.VarChar(120)
+  archivedByRoleSnapshot String?                @db.VarChar(40)
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplier   Supplier @relation(fields: [tenantId, supplierId], references: [tenantId, id], onDelete: Restrict)
+  createdBy  User     @relation("SupplierArchiveCreatedBy", fields: [tenantId, createdById], references: [tenantId, id], onDelete: Restrict)
+  archivedBy User?    @relation("SupplierArchiveArchivedBy", fields: [tenantId, archivedById], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, requestKey])
+  @@index([tenantId, supplierId, section, createdAt])
+  @@map("supplier_archive_records")
+}
+
+enum SupplierArchiveSection {
+  QUALIFICATION
+  FINANCE
+  INVOICE
+}
+
+// 供应商证照与每次来货证明的独立版本库。该模型不复用 SupplierArchiveRecord：
+// 营业执照可长期复用；检疫证明按商品约束并通过显式关联绑定实际到货行。
+model SupplierEvidenceDocument {
+  id                     String                       @id @default(cuid()) @db.VarChar(64)
+  tenantId               String
+  supplierId             String
+  type                   SupplierEvidenceDocumentType
+  version                Int
+  title                  String                       @db.VarChar(160)
+  note                   String?                      @db.VarChar(1000)
+  validFrom              DateTime?                    @db.Date
+  validUntil             DateTime?                    @db.Date
+  objectKey              String                       @db.VarChar(1024)
+  fileName               String                       @db.VarChar(255)
+  fileMime               String                       @db.VarChar(120)
+  fileSize               Int
+  requestKey             String                       @db.VarChar(160)
+  requestFingerprint     String                       @db.Char(64)
+  createdById            String                       @db.VarChar(64)
+  createdByNameSnapshot  String                       @db.VarChar(120)
+  createdByRoleSnapshot  String                       @db.VarChar(40)
+  archivedAt             DateTime?
+  archivedById           String?                      @db.VarChar(64)
+  archivedByNameSnapshot String?                      @db.VarChar(120)
+  archivedByRoleSnapshot String?                      @db.VarChar(40)
+  createdAt              DateTime                     @default(now())
+  updatedAt              DateTime                     @updatedAt
+
+  tenant           Tenant                                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplier         Supplier                              @relation(fields: [tenantId, supplierId], references: [tenantId, id], onDelete: Restrict)
+  createdBy        User                                  @relation("SupplierEvidenceDocumentCreatedBy", fields: [tenantId, createdById], references: [tenantId, id], onDelete: Restrict)
+  archivedBy       User?                                 @relation("SupplierEvidenceDocumentArchivedBy", fields: [tenantId, archivedById], references: [tenantId, id], onDelete: Restrict)
+  products         SupplierEvidenceDocumentProduct[]
+  receiptLineLinks UpstreamReceiptLineEvidenceDocument[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, requestKey])
+  @@unique([tenantId, supplierId, type, version])
+  @@index([tenantId, supplierId, type, archivedAt, createdAt])
+  @@map("supplier_evidence_documents")
+}
+
+enum SupplierEvidenceDocumentType {
+  BUSINESS_LICENSE
+  QUARANTINE_CERTIFICATE
+  INSPECTION_REPORT
+  SLAUGHTER_CERTIFICATE
+  PRODUCTION_INSPECTION_REPORT
+  THIRD_PARTY_TEST_REPORT
+  PESTICIDE_RESIDUE_REPORT
+  OTHER_PRODUCT_EVIDENCE
+}
+
+enum ProductEvidenceRequirement {
+  PENDING
+  REQUIRED
+  NOT_REQUIRED
+}
+
+model SupplierEvidenceDocumentProduct {
+  id         String   @id @default(cuid()) @db.VarChar(64)
+  tenantId   String
+  documentId String   @db.VarChar(64)
+  productId  String
+  createdAt  DateTime @default(now())
+
+  tenant   Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document SupplierEvidenceDocument @relation(fields: [tenantId, documentId], references: [tenantId, id], onDelete: Restrict)
+  product  Product                  @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([documentId, productId])
+  @@unique([tenantId, id])
+  @@index([tenantId, productId, createdAt])
+  @@map("supplier_evidence_document_products")
+}
+
+// 实际到货行与证据的不可变多对多关联；同一证明可复用于多行、多次到货。
+model UpstreamReceiptLineEvidenceDocument {
+  id                     String    @id @default(cuid()) @db.VarChar(64)
+  tenantId               String
+  receiptLineId          String    @db.VarChar(64)
+  documentId             String    @db.VarChar(64)
+  linkedById             String    @db.VarChar(64)
+  linkedByNameSnapshot   String    @db.VarChar(120)
+  linkedByRoleSnapshot   String    @db.VarChar(40)
+  linkedAt               DateTime  @default(now())
+  linkedAfterPosted      Boolean   @default(false)
+  backfillReason         String?   @db.VarChar(500)
+  linkRequestKey         String    @db.VarChar(160)
+  linkRequestFingerprint String    @db.Char(64)
+  voidedAt               DateTime?
+  voidedById             String?   @db.VarChar(64)
+  voidedByNameSnapshot   String?   @db.VarChar(120)
+  voidedByRoleSnapshot   String?   @db.VarChar(40)
+  voidReason             String?   @db.VarChar(500)
+  voidRequestKey         String?   @db.VarChar(160)
+  voidRequestFingerprint String?   @db.Char(64)
+
+  tenant      Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  receiptLine UpstreamReceiptLine      @relation(fields: [tenantId, receiptLineId], references: [tenantId, id], onDelete: Restrict)
+  document    SupplierEvidenceDocument @relation(fields: [tenantId, documentId], references: [tenantId, id], onDelete: Restrict)
+  linkedBy    User                     @relation("ReceiptEvidenceDocumentLinkedBy", fields: [tenantId, linkedById], references: [tenantId, id], onDelete: Restrict)
+  voidedBy    User?                    @relation("ReceiptEvidenceDocumentVoidedBy", fields: [tenantId, voidedById], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, linkRequestKey])
+  @@unique([tenantId, voidRequestKey])
+  @@index([tenantId, receiptLineId, documentId, voidedAt])
+  @@index([tenantId, documentId, voidedAt, linkedAt])
+  @@map("upstream_receipt_line_evidence_documents")
+}
+
 // ── 商品 ──────────────────────────────────────────────
 model Product {
   storeTransferItems StoreTransferItem[]
 
-  id                            String                      @id @default(cuid())
+  id                            String                         @id @default(cuid())
   tenantId                      String
   code                          String // MR001
   name                          String
   spec                          String? // 规格型号 (如 "24瓶*330ml/件" / "5kg/袋")
-  category                      String                      @default("其他") // 类目可选, 默认"其他"
+  category                      String                         @default("其他") // 类目可选, 默认"其他"
   imageKey                      String? // OSS 对象 key；读取时动态签名，避免长期保存过期 URL
   // legacy unit 继续服务旧客户端；V5 新调用方应使用下面四单位合同。
-  unit                          String                      @default("kg")
+  unit                          String                         @default("kg")
   // nullable 仅用于旧代码绕过 V5 API 直接建商品时的兼容回退；V5 API 始终显式写完整四单位。
-  purchaseUnit                  String?                     @db.VarChar(16)
-  orderUnit                     String?                     @db.VarChar(16)
-  costUnit                      String?                     @db.VarChar(16)
+  purchaseUnit                  String?                        @db.VarChar(16)
+  orderUnit                     String?                        @db.VarChar(16)
+  costUnit                      String?                        @db.VarChar(16)
   // 所有因子统一表达“1 个对应单位 = 多少库存单位”。
   // 本阶段只建立商品主数据合同；订单、配送、收货、入库历史快照在下一阶段扩展。
-  inventoryUnit                 String?                     @db.VarChar(16)
-  inventoryUnitsPerPurchaseUnit Decimal?                    @db.Decimal(18, 6)
-  inventoryUnitsPerOrderUnit    Decimal?                    @db.Decimal(18, 6)
-  inventoryUnitsPerCostUnit     Decimal?                    @db.Decimal(18, 6)
-  unitConversionStatus          ProductUnitConversionStatus @default(PENDING)
-  unitConversionNote            String?                     @db.VarChar(500)
+  inventoryUnit                 String?                        @db.VarChar(16)
+  inventoryUnitsPerPurchaseUnit Decimal?                       @db.Decimal(18, 6)
+  inventoryUnitsPerOrderUnit    Decimal?                       @db.Decimal(18, 6)
+  inventoryUnitsPerCostUnit     Decimal?                       @db.Decimal(18, 6)
+  unitConversionStatus          ProductUnitConversionStatus    @default(PENDING)
+  unitConversionNote            String?                        @db.VarChar(500)
   unitConversionVerifiedAt      DateTime?
-  price                         Decimal                     @db.Decimal(10, 2) // 参考单价
+  price                         Decimal                        @db.Decimal(10, 2) // 参考单价
   // 比例加价定价（2026-08-20）：MARKUP 时按总仓库存移动均价 ×(1+比例) 自动定卖价；
   // null/FIXED 为固定价。markupPercent 为空时继承分类默认比例。
-  pricingMode                   String?                     @db.VarChar(16) // FIXED | MARKUP
-  markupPercent                 Decimal?                    @db.Decimal(7, 2) // 加价比例%，如 20 = +20%
-  stock                         Decimal                     @default(0) @db.Decimal(12, 3)
-  minStock                      Decimal                     @default(0) @db.Decimal(12, 3) // 安全库存
-  minOrderQty                   Decimal                     @default(1) @db.Decimal(12, 3) // 起订量 (≥1)
-  stepQty                       Decimal                     @default(1) @db.Decimal(12, 3) // 整倍数步长 (1=随便; 10=必须 10/20/30...)
-  shelfDays                     Int                         @default(7) // 保质期天数
+  pricingMode                   String?                        @db.VarChar(16) // FIXED | MARKUP
+  markupPercent                 Decimal?                       @db.Decimal(7, 2) // 加价比例%，如 20 = +20%
+  stock                         Decimal                        @default(0) @db.Decimal(12, 3)
+  minStock                      Decimal                        @default(0) @db.Decimal(12, 3) // 安全库存
+  minOrderQty                   Decimal                        @default(1) @db.Decimal(12, 3) // 起订量 (≥1)
+  stepQty                       Decimal                        @default(1) @db.Decimal(12, 3) // 整倍数步长 (1=随便; 10=必须 10/20/30...)
+  shelfDays                     Int                            @default(7) // 保质期天数
+  evidenceRequirement           ProductEvidenceRequirement     @default(PENDING)
+  requiredEvidenceTypes         SupplierEvidenceDocumentType[] @default([])
+  evidenceRequirementVersion    Int                            @default(0)
   // 实发量上限 (供应商发货时允许调整的弹性, 2026-05-28 客户反馈 per-product 可配)
   // 校验公式: upper = max(下单 × shipUpperPct, 下单 + shipUpperBuffer)
   // 默认 1.10 / 5.00 跟之前全局阈值一致, 历史商品零行为变化
-  shipUpperPct                  Decimal                     @default(1.10) @db.Decimal(5, 2) // 实发百分比上限 (1.10 = 110%)
-  shipUpperBuffer               Decimal                     @default(5.00) @db.Decimal(10, 2) // 实发绝对加量上限 (单位件)
-  status                        ProductStatus               @default(ENABLED)
+  shipUpperPct                  Decimal                        @default(1.10) @db.Decimal(5, 2) // 实发百分比上限 (1.10 = 110%)
+  shipUpperBuffer               Decimal                        @default(5.00) @db.Decimal(10, 2) // 实发绝对加量上限 (单位件)
+  status                        ProductStatus                  @default(ENABLED)
   supplierId                    String?
-  createdAt                     DateTime                    @default(now())
-  updatedAt                     DateTime                    @updatedAt
+  createdAt                     DateTime                       @default(now())
+  updatedAt                     DateTime                       @updatedAt
 
   // 批量上传归属（用于导入历史 + 撤回；单条创建为 null）
   batchId String?
   batch   ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
 
-  tenant                        Tenant                         @relation(fields: [tenantId], references: [id])
-  supplier                      Supplier?                      @relation(fields: [supplierId], references: [id])
-  receiptItems                  ReceiptItem[]
-  purchaseOrderItems            PurchaseOrderItem[]
-  deliveryOrderItems            DeliveryOrderItem[]
-  lossClaimItems                LossClaimItem[]
-  consumptions                  StockConsumption[]
-  stockMovements                SupplierStockMovement[]
-  stockBatches                  SupplierStockBatch[]
-  stockBatchAllocations         SupplierStockBatchAllocation[]
-  stockReservations             SupplierStockReservation[]
-  warehouseStocks               WarehouseStock[]
-  externalCodes                 ProductExternalCode[]
-  warehouseImportItems          WarehouseInventoryImportItem[]
-  warehouseLedgerBalances       WarehouseLedgerBalance[]
-  warehouseLedgerMovements      WarehouseLedgerMovement[]
-  warehouseLedgerReservations   WarehouseLedgerReservation[]
-  warehouseLedgerLots           WarehouseLedgerLot[]
-  warehouseLedgerLotAllocations WarehouseLedgerLotAllocation[]
-  dishRecipes                   DishRecipe[]
-  dishBomItems                  DishBomItem[]
-  inventorySnapshotItems        InventorySnapshotItem[]
-  inventoryCountItems           InventoryCountItem[]
-  warehouseStocktakeItems       WarehouseStocktakeItem[]
+  tenant                            Tenant                             @relation(fields: [tenantId], references: [id])
+  supplier                          Supplier?                          @relation(fields: [supplierId], references: [id])
+  receiptItems                      ReceiptItem[]
+  purchaseOrderItems                PurchaseOrderItem[]
+  deliveryOrderItems                DeliveryOrderItem[]
+  lossClaimItems                    LossClaimItem[]
+  consumptions                      StockConsumption[]
+  stockMovements                    SupplierStockMovement[]
+  stockBatches                      SupplierStockBatch[]
+  stockBatchAllocations             SupplierStockBatchAllocation[]
+  stockReservations                 SupplierStockReservation[]
+  warehouseStocks                   WarehouseStock[]
+  warehouseInventoryPolicies        WarehouseInventoryPolicy[]
+  externalCodes                     ProductExternalCode[]
+  warehouseImportItems              WarehouseInventoryImportItem[]
+  warehouseLedgerBalances           WarehouseLedgerBalance[]
+  warehouseLedgerMovements          WarehouseLedgerMovement[]
+  warehouseLedgerReservations       WarehouseLedgerReservation[]
+  warehouseLedgerLots               WarehouseLedgerLot[]
+  warehouseLedgerLotAllocations     WarehouseLedgerLotAllocation[]
+  dishRecipes                       DishRecipe[]
+  dishBomItems                      DishBomItem[]
+  inventorySnapshotItems            InventorySnapshotItem[]
+  inventoryCountItems               InventoryCountItem[]
+  warehouseStocktakeItems           WarehouseStocktakeItem[]
   warehouseStocktakeAdjustmentLines WarehouseStocktakeAdjustmentLine[]
-  storeInventoryPolicies        StoreInventoryPolicy[]
-  upstreamSources               ProductUpstreamSource[]
-  upstreamContractLines         UpstreamSupplierContractLine[]
-  upstreamPurchaseOrderLines    UpstreamPurchaseOrderLine[]
-  upstreamShipmentLines         UpstreamShipmentLine[]
-  upstreamReceiptLines          UpstreamReceiptLine[]
-  upstreamPurchaseReturnLines   UpstreamPurchaseReturnLine[]
-  upstreamArrivalClaimLines     UpstreamArrivalClaimLine[]
+  storeInventoryPolicies            StoreInventoryPolicy[]
+  upstreamSources                   ProductUpstreamSource[]
+  upstreamContractLines             UpstreamSupplierContractLine[]
+  upstreamPurchaseOrderLines        UpstreamPurchaseOrderLine[]
+  upstreamShipmentLines             UpstreamShipmentLine[]
+  upstreamReceiptLines              UpstreamReceiptLine[]
+  upstreamPurchaseReturnLines       UpstreamPurchaseReturnLine[]
+  upstreamArrivalClaimLines         UpstreamArrivalClaimLine[]
+  replenishmentOrderItems           ReplenishmentOrderItem[]
+  qualityStandards                  ProductQualityStandard[]
+  purchasePriceStandards            ProductPurchasePriceStandard[]
+  supplierEvidenceDocuments         SupplierEvidenceDocumentProduct[]
+  evidenceRequirementChanges        ProductEvidenceRequirementChange[]
 
   @@unique([tenantId, code])
   @@unique([tenantId, id])
   @@index([batchId])
   @@index([tenantId, supplierId, category, status])
   @@map("products")
+}
+
+model ProductEvidenceRequirementChange {
+  id                    String                         @id @default(cuid()) @db.VarChar(64)
+  tenantId              String
+  productId             String
+  beforeStatus          ProductEvidenceRequirement
+  afterStatus           ProductEvidenceRequirement
+  beforeRequiredTypes   SupplierEvidenceDocumentType[]
+  afterRequiredTypes    SupplierEvidenceDocumentType[]
+  expectedVersion       Int
+  newVersion            Int
+  reason                String                         @db.VarChar(500)
+  requestKey            String                         @db.VarChar(160)
+  requestFingerprint    String                         @db.Char(64)
+  createdById           String                         @db.VarChar(64)
+  createdByNameSnapshot String                         @db.VarChar(120)
+  createdByRoleSnapshot String                         @db.VarChar(40)
+  createdAt             DateTime                       @default(now())
+
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, requestKey])
+  @@index([tenantId, productId, createdAt])
+  @@map("product_evidence_requirement_changes")
+}
+
+// 商品质量标准按版本保存；采购单与每次验收行都冻结当时版本和规则，后续更新不改写历史。
+model ProductQualityStandard {
+  id                        String    @id @default(cuid()) @db.VarChar(64)
+  tenantId                  String
+  productId                 String
+  version                   Int
+  title                     String    @db.VarChar(160)
+  criteria                  Json
+  effectiveAt               DateTime  @db.Date
+  active                    Boolean   @default(true)
+  createdById               String    @db.VarChar(64)
+  createdByNameSnapshot     String    @db.VarChar(120)
+  createdByRoleSnapshot     String    @db.VarChar(40)
+  requestKey                String    @db.VarChar(160)
+  requestFingerprint        String    @db.Char(64)
+  archivedAt                DateTime?
+  archivedById              String?   @db.VarChar(64)
+  archivedByNameSnapshot    String?   @db.VarChar(120)
+  archivedByRoleSnapshot    String?   @db.VarChar(40)
+  archiveRequestKey         String?   @db.VarChar(160)
+  archiveRequestFingerprint String?   @db.Char(64)
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  tenant             Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product            Product                     @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  createdBy          User                        @relation("ProductQualityStandardCreatedBy", fields: [tenantId, createdById], references: [tenantId, id], onDelete: Restrict)
+  archivedBy         User?                       @relation("ProductQualityStandardArchivedBy", fields: [tenantId, archivedById], references: [tenantId, id], onDelete: Restrict)
+  purchaseOrderLines UpstreamPurchaseOrderLine[] @relation("PurchaseOrderLineQualityStandard")
+  receiptLines       UpstreamReceiptLine[]       @relation("ReceiptLineQualityStandard")
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, productId, version])
+  @@unique([tenantId, requestKey])
+  @@unique([tenantId, archiveRequestKey])
+  @@index([tenantId, productId, active, effectiveAt])
+  @@map("product_quality_standards")
+}
+
+// 标准采购价是独立、版本化的主数据；合同报价和历史入库价不能冒充标准价。
+model ProductPurchasePriceStandard {
+  id                        String    @id @default(cuid()) @db.VarChar(64)
+  tenantId                  String
+  productId                 String
+  supplierId                String
+  version                   Int
+  purchaseUnit              String    @db.VarChar(16)
+  currency                  String    @db.VarChar(3)
+  taxInclusive              Boolean
+  unitPrice                 Decimal   @db.Decimal(18, 6)
+  effectiveAt               DateTime  @db.Date
+  active                    Boolean   @default(true)
+  createdById               String    @db.VarChar(64)
+  createdByNameSnapshot     String    @db.VarChar(120)
+  createdByRoleSnapshot     String    @db.VarChar(40)
+  requestKey                String    @db.VarChar(160)
+  requestFingerprint        String    @db.Char(64)
+  archivedAt                DateTime?
+  archivedById              String?   @db.VarChar(64)
+  archivedByNameSnapshot    String?   @db.VarChar(120)
+  archivedByRoleSnapshot    String?   @db.VarChar(40)
+  archiveRequestKey         String?   @db.VarChar(160)
+  archiveRequestFingerprint String?   @db.Char(64)
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  tenant             Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product            Product                     @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  supplier           Supplier                    @relation(fields: [tenantId, supplierId], references: [tenantId, id], onDelete: Restrict)
+  createdBy          User                        @relation("ProductPurchasePriceStandardCreatedBy", fields: [tenantId, createdById], references: [tenantId, id], onDelete: Restrict)
+  archivedBy         User?                       @relation("ProductPurchasePriceStandardArchivedBy", fields: [tenantId, archivedById], references: [tenantId, id], onDelete: Restrict)
+  purchaseOrderLines UpstreamPurchaseOrderLine[] @relation("PurchaseOrderLinePriceStandard")
+  receiptLines       UpstreamReceiptLine[]       @relation("ReceiptLinePriceStandard")
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, productId, supplierId, purchaseUnit, currency, taxInclusive, version])
+  @@unique([tenantId, requestKey])
+  @@unique([tenantId, archiveRequestKey])
+  @@index([tenantId, productId, supplierId, purchaseUnit, active, effectiveAt])
+  @@map("product_purchase_price_standards")
+}
+
+// ── 总仓商品库存规则 ────────────────────────────────
+// 上下限数量统一保存为仓库台账的库存基准单位，不随商品订货单位换算变更而静默重算。
+// Product.minStock 只作未建规则时的向前兼容回退，新配置一律写入本表。
+model WarehouseInventoryPolicy {
+  id                    String   @id @default(cuid()) @db.VarChar(64)
+  tenantId              String
+  warehouseId           String   @db.VarChar(64)
+  productId             String
+  inventoryUnitSnapshot String   @db.VarChar(16)
+  minQty                Decimal? @db.Decimal(18, 6)
+  maxQty                Decimal? @db.Decimal(18, 6)
+  stagnantDays          Int      @default(30)
+  active                Boolean  @default(true)
+  rowVersion            Int      @default(0)
+  createdById           String
+  createdByName         String   @db.VarChar(100)
+  createdByRole         String   @db.VarChar(40)
+  updatedById           String
+  updatedByName         String   @db.VarChar(100)
+  updatedByRole         String   @db.VarChar(40)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  tenant    Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse Warehouse                       @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  product   Product                         @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  events    WarehouseInventoryPolicyEvent[]
+
+  @@unique([tenantId, warehouseId, productId])
+  @@unique([tenantId, id])
+  @@index([tenantId, warehouseId, active])
+  @@index([tenantId, productId])
+  @@index([tenantId, createdById])
+  @@index([tenantId, updatedById])
+  @@map("warehouse_inventory_policies")
+}
+
+model WarehouseInventoryPolicyEvent {
+  id                 String   @id @default(cuid()) @db.VarChar(64)
+  tenantId           String
+  policyId           String   @db.VarChar(64)
+  actorId            String
+  actorName          String   @db.VarChar(100)
+  actorRole          String   @db.VarChar(40)
+  requestId          String   @db.VarChar(100)
+  requestFingerprint String   @db.VarChar(64)
+  beforeValue        Json?
+  afterValue         Json
+  createdAt          DateTime @default(now())
+
+  tenant Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  policy WarehouseInventoryPolicy @relation(fields: [tenantId, policyId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, requestId])
+  @@index([tenantId, policyId, createdAt])
+  @@index([tenantId, actorId, createdAt])
+  @@map("warehouse_inventory_policy_events")
 }
 
 // ── 商品上游采购来源 ─────────────────────────────────
@@ -1563,7 +1931,13 @@ enum UpstreamReceiptReviewReason {
   AMOUNT_THRESHOLD
   OVER_RECEIPT
   TEMPORARY_PRICE
+  ABOVE_STANDARD_PRICE
   SENSITIVE_CATEGORY
+}
+
+enum UpstreamQualityResult {
+  PASS
+  FAIL
 }
 
 enum UpstreamArrivalClaimType {
@@ -1621,30 +1995,30 @@ enum UpstreamSettlementLineSourceType {
 }
 
 model UpstreamSupplierContract {
-  id              String                 @id @default(cuid()) @db.VarChar(64)
-  tenantId        String
-  supplierId      String
-  contractNo      String                 @db.VarChar(80)
-  version         Int                    @default(1)
-  title           String                 @db.VarChar(160)
-  startsAt        DateTime               @db.Date
-  endsAt          DateTime?              @db.Date
-  settlementCycle CreditType             @default(MONTHLY)
-  settlementDays  Int                    @default(0)
-  taxInclusive    Boolean                @default(true)
-  defaultTaxRate  Decimal?               @db.Decimal(7, 6)
-  currency        String                 @default("CNY") @db.VarChar(3)
-  paymentMethod   String?                @db.VarChar(80)
-  discrepancyRule Json?
-  attachments     Json?
-  idempotencyKey  String?                @db.VarChar(160)
-  requestFingerprint String?             @db.Char(64)
-  status          UpstreamContractStatus @default(DRAFT)
-  createdById     String
-  activatedAt     DateTime?
-  terminatedAt    DateTime?
-  createdAt       DateTime               @default(now())
-  updatedAt       DateTime               @updatedAt
+  id                 String                 @id @default(cuid()) @db.VarChar(64)
+  tenantId           String
+  supplierId         String
+  contractNo         String                 @db.VarChar(80)
+  version            Int                    @default(1)
+  title              String                 @db.VarChar(160)
+  startsAt           DateTime               @db.Date
+  endsAt             DateTime?              @db.Date
+  settlementCycle    CreditType             @default(MONTHLY)
+  settlementDays     Int                    @default(0)
+  taxInclusive       Boolean                @default(true)
+  defaultTaxRate     Decimal?               @db.Decimal(7, 6)
+  currency           String                 @default("CNY") @db.VarChar(3)
+  paymentMethod      String?                @db.VarChar(80)
+  discrepancyRule    Json?
+  attachments        Json?
+  idempotencyKey     String?                @db.VarChar(160)
+  requestFingerprint String?                @db.Char(64)
+  status             UpstreamContractStatus @default(DRAFT)
+  createdById        String
+  activatedAt        DateTime?
+  terminatedAt       DateTime?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
 
   tenant         Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   supplier       Supplier                       @relation(fields: [supplierId], references: [id], onDelete: Restrict)
@@ -1745,45 +2119,57 @@ model UpstreamPurchaseOrder {
 }
 
 model UpstreamPurchaseOrderLine {
-  id                            String   @id @default(cuid()) @db.VarChar(64)
-  tenantId                      String
-  purchaseOrderId               String   @db.VarChar(64)
-  lineNo                        Int
-  productId                     String
-  contractLineId                String?  @db.VarChar(64)
-  productCodeSnapshot           String   @db.VarChar(80)
-  productNameSnapshot           String   @db.VarChar(160)
-  productSpecSnapshot           String?  @db.VarChar(240)
-  supplierSkuSnapshot           String?  @db.VarChar(80)
-  purchaseUnit                  String   @db.VarChar(16)
-  inventoryUnit                 String   @db.VarChar(16)
-  inventoryUnitsPerPurchaseUnit Decimal  @db.Decimal(18, 6)
-  orderedQty                    Decimal  @db.Decimal(18, 6)
-  confirmedQty                  Decimal? @db.Decimal(18, 6)
-  shippedQty                    Decimal  @default(0) @db.Decimal(18, 6)
-  receivedQty                   Decimal  @default(0) @db.Decimal(18, 6)
-  unitPrice                     Decimal  @db.Decimal(18, 6)
-  taxRate                       Decimal  @default(0) @db.Decimal(7, 6)
-  amountWithoutTax              Decimal  @db.Decimal(20, 4)
-  taxAmount                     Decimal  @db.Decimal(20, 4)
-  totalAmount                   Decimal  @db.Decimal(20, 4)
-  shortTolerancePct             Decimal  @default(0) @db.Decimal(7, 6)
-  overTolerancePct              Decimal  @default(0) @db.Decimal(7, 6)
-  isTemporaryPrice              Boolean  @default(false)
-  createdAt                     DateTime @default(now())
-  updatedAt                     DateTime @updatedAt
+  id                                String   @id @default(cuid()) @db.VarChar(64)
+  tenantId                          String
+  purchaseOrderId                   String   @db.VarChar(64)
+  lineNo                            Int
+  productId                         String
+  contractLineId                    String?  @db.VarChar(64)
+  productCodeSnapshot               String   @db.VarChar(80)
+  productNameSnapshot               String   @db.VarChar(160)
+  productSpecSnapshot               String?  @db.VarChar(240)
+  supplierSkuSnapshot               String?  @db.VarChar(80)
+  purchaseUnit                      String   @db.VarChar(16)
+  inventoryUnit                     String   @db.VarChar(16)
+  inventoryUnitsPerPurchaseUnit     Decimal  @db.Decimal(18, 6)
+  orderedQty                        Decimal  @db.Decimal(18, 6)
+  confirmedQty                      Decimal? @db.Decimal(18, 6)
+  shippedQty                        Decimal  @default(0) @db.Decimal(18, 6)
+  receivedQty                       Decimal  @default(0) @db.Decimal(18, 6)
+  unitPrice                         Decimal  @db.Decimal(18, 6)
+  standardUnitPriceSnapshot         Decimal? @db.Decimal(18, 6)
+  priceStandardCurrencySnapshot     String?  @db.VarChar(3)
+  priceStandardTaxInclusiveSnapshot Boolean?
+  priceStandardId                   String?  @db.VarChar(64)
+  priceStandardVersionSnapshot      Int?
+  qualityStandardId                 String?  @db.VarChar(64)
+  qualityStandardVersionSnapshot    Int?
+  qualityCriteriaSnapshot           Json?
+  taxRate                           Decimal  @default(0) @db.Decimal(7, 6)
+  amountWithoutTax                  Decimal  @db.Decimal(20, 4)
+  taxAmount                         Decimal  @db.Decimal(20, 4)
+  totalAmount                       Decimal  @db.Decimal(20, 4)
+  shortTolerancePct                 Decimal  @default(0) @db.Decimal(7, 6)
+  overTolerancePct                  Decimal  @default(0) @db.Decimal(7, 6)
+  isTemporaryPrice                  Boolean  @default(false)
+  createdAt                         DateTime @default(now())
+  updatedAt                         DateTime @updatedAt
 
-  tenant        Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  purchaseOrder UpstreamPurchaseOrder         @relation(fields: [tenantId, purchaseOrderId], references: [tenantId, id], onDelete: Cascade)
-  product       Product                       @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
-  contractLine  UpstreamSupplierContractLine? @relation(fields: [contractLineId], references: [id], onDelete: Restrict)
-  shipmentLines UpstreamShipmentLine[]
-  receiptLines  UpstreamReceiptLine[]
-  claimLines    UpstreamArrivalClaimLine[]
+  tenant          Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseOrder   UpstreamPurchaseOrder         @relation(fields: [tenantId, purchaseOrderId], references: [tenantId, id], onDelete: Cascade)
+  product         Product                       @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  contractLine    UpstreamSupplierContractLine? @relation(fields: [contractLineId], references: [id], onDelete: Restrict)
+  qualityStandard ProductQualityStandard?       @relation("PurchaseOrderLineQualityStandard", fields: [tenantId, qualityStandardId], references: [tenantId, id], onDelete: Restrict)
+  priceStandard   ProductPurchasePriceStandard? @relation("PurchaseOrderLinePriceStandard", fields: [tenantId, priceStandardId], references: [tenantId, id], onDelete: Restrict)
+  shipmentLines   UpstreamShipmentLine[]
+  receiptLines    UpstreamReceiptLine[]
+  claimLines      UpstreamArrivalClaimLine[]
 
   @@unique([purchaseOrderId, lineNo])
   @@unique([tenantId, id])
   @@index([tenantId, productId])
+  @@index([tenantId, qualityStandardId])
+  @@index([tenantId, priceStandardId])
   @@map("upstream_purchase_order_lines")
 }
 
@@ -1896,39 +2282,47 @@ model UpstreamShipmentLine {
 }
 
 model UpstreamReceipt {
-  id                  String                        @id @default(cuid()) @db.VarChar(64)
-  tenantId            String
-  no                  String                        @db.VarChar(80)
-  purchaseOrderId     String                        @db.VarChar(64)
-  shipmentId          String?                       @db.VarChar(64)
-  supplierId          String
-  warehouseId         String                        @db.VarChar(64)
-  status              UpstreamReceiptStatus         @default(DRAFT)
-  arrivedAt           DateTime?
-  inspectionStartedAt DateTime?
-  inspectorId         String?
-  reviewReasons       UpstreamReceiptReviewReason[] @default([])
-  reviewerId          String?
-  reviewedAt          DateTime?
-  payableAmount       Decimal                       @default(0) @db.Decimal(20, 4)
-  idempotencyKey      String?                       @db.VarChar(160)
-  rowVersion          Int                           @default(0)
-  evidence            Json?
-  note                String?                       @db.VarChar(500)
-  finalForShipment    Boolean                       @default(true)
-  postedAt            DateTime?
-  reversedAt          DateTime?
-  createdById         String
-  createdAt           DateTime                      @default(now())
-  updatedAt           DateTime                      @updatedAt
+  id                                   String                        @id @default(cuid()) @db.VarChar(64)
+  tenantId                             String
+  no                                   String                        @db.VarChar(80)
+  purchaseOrderId                      String                        @db.VarChar(64)
+  shipmentId                           String?                       @db.VarChar(64)
+  supplierId                           String
+  warehouseId                          String                        @db.VarChar(64)
+  status                               UpstreamReceiptStatus         @default(DRAFT)
+  arrivedAt                            DateTime?
+  inspectionStartedAt                  DateTime?
+  inspectorId                          String?
+  reviewReasons                        UpstreamReceiptReviewReason[] @default([])
+  reviewerId                           String?
+  reviewedAt                           DateTime?
+  priceExceptionReason                 String?                       @db.VarChar(500)
+  priceExceptionApprovedById           String?                       @db.VarChar(64)
+  priceExceptionApprovedByNameSnapshot String?                       @db.VarChar(120)
+  priceExceptionApprovedByRoleSnapshot String?                       @db.VarChar(40)
+  priceExceptionApprovedAt             DateTime?
+  payableAmount                        Decimal                       @default(0) @db.Decimal(20, 4)
+  idempotencyKey                       String?                       @db.VarChar(160)
+  requestFingerprint                   String?                       @db.Char(64)
+  rowVersion                           Int                           @default(0)
+  evidence                             Json?
+  evidenceCompletenessSnapshot         Json?
+  note                                 String?                       @db.VarChar(500)
+  finalForShipment                     Boolean                       @default(true)
+  postedAt                             DateTime?
+  reversedAt                           DateTime?
+  createdById                          String
+  createdAt                            DateTime                      @default(now())
+  updatedAt                            DateTime                      @updatedAt
 
-  tenant        Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  purchaseOrder UpstreamPurchaseOrder  @relation(fields: [tenantId, purchaseOrderId], references: [tenantId, id], onDelete: Restrict)
-  shipment      UpstreamShipment?      @relation(fields: [tenantId, shipmentId], references: [tenantId, id], onDelete: Restrict)
-  supplier      Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  warehouse     Warehouse              @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
-  lines         UpstreamReceiptLine[]
-  claims        UpstreamArrivalClaim[]
+  tenant                 Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseOrder          UpstreamPurchaseOrder  @relation(fields: [tenantId, purchaseOrderId], references: [tenantId, id], onDelete: Restrict)
+  shipment               UpstreamShipment?      @relation(fields: [tenantId, shipmentId], references: [tenantId, id], onDelete: Restrict)
+  supplier               Supplier               @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  warehouse              Warehouse              @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  priceExceptionApprover User?                  @relation("UpstreamReceiptPriceExceptionApprover", fields: [tenantId, priceExceptionApprovedById], references: [tenantId, id], onDelete: Restrict)
+  lines                  UpstreamReceiptLine[]
+  claims                 UpstreamArrivalClaim[]
 
   @@unique([tenantId, no])
   @@unique([tenantId, id])
@@ -1938,48 +2332,64 @@ model UpstreamReceipt {
 }
 
 model UpstreamReceiptLine {
-  id                            String    @id @default(cuid()) @db.VarChar(64)
-  tenantId                      String
-  receiptId                     String    @db.VarChar(64)
-  purchaseOrderLineId           String    @db.VarChar(64)
-  shipmentLineId                String?   @db.VarChar(64)
-  productId                     String
-  orderedQty                    Decimal   @db.Decimal(18, 6)
-  shippedQty                    Decimal?  @db.Decimal(18, 6)
-  arrivedQty                    Decimal   @db.Decimal(18, 6)
-  acceptedQty                   Decimal   @db.Decimal(18, 6)
-  damagedQty                    Decimal   @default(0) @db.Decimal(18, 6)
-  rejectedQty                   Decimal   @default(0) @db.Decimal(18, 6)
-  shortageQty                   Decimal   @default(0) @db.Decimal(18, 6)
-  overageQty                    Decimal   @default(0) @db.Decimal(18, 6)
-  purchaseUnit                  String    @db.VarChar(16)
-  inventoryUnit                 String    @db.VarChar(16)
-  inventoryUnitsPerPurchaseUnit Decimal   @db.Decimal(18, 6)
-  inventoryAcceptedQty          Decimal   @db.Decimal(18, 6)
-  unitPrice                     Decimal   @db.Decimal(18, 6)
-  payableAmount                 Decimal   @db.Decimal(20, 4)
-  batchNo                       String?   @db.VarChar(80)
-  manufactureDate               DateTime? @db.Date
-  expiryDate                    DateTime? @db.Date
-  ledgerMovementId              String?   @unique @db.VarChar(64)
-  evidence                      Json?
-  note                          String?   @db.VarChar(500)
-  createdAt                     DateTime  @default(now())
-  updatedAt                     DateTime  @updatedAt
+  id                                String                 @id @default(cuid()) @db.VarChar(64)
+  tenantId                          String
+  receiptId                         String                 @db.VarChar(64)
+  purchaseOrderLineId               String                 @db.VarChar(64)
+  shipmentLineId                    String?                @db.VarChar(64)
+  productId                         String
+  orderedQty                        Decimal                @db.Decimal(18, 6)
+  shippedQty                        Decimal?               @db.Decimal(18, 6)
+  arrivedQty                        Decimal                @db.Decimal(18, 6)
+  acceptedQty                       Decimal                @db.Decimal(18, 6)
+  damagedQty                        Decimal                @default(0) @db.Decimal(18, 6)
+  rejectedQty                       Decimal                @default(0) @db.Decimal(18, 6)
+  shortageQty                       Decimal                @default(0) @db.Decimal(18, 6)
+  overageQty                        Decimal                @default(0) @db.Decimal(18, 6)
+  purchaseUnit                      String                 @db.VarChar(16)
+  inventoryUnit                     String                 @db.VarChar(16)
+  inventoryUnitsPerPurchaseUnit     Decimal                @db.Decimal(18, 6)
+  inventoryAcceptedQty              Decimal                @db.Decimal(18, 6)
+  unitPrice                         Decimal                @db.Decimal(18, 6)
+  standardUnitPriceSnapshot         Decimal?               @db.Decimal(18, 6)
+  priceStandardCurrencySnapshot     String?                @db.VarChar(3)
+  priceStandardTaxInclusiveSnapshot Boolean?
+  priceStandardId                   String?                @db.VarChar(64)
+  priceStandardVersionSnapshot      Int?
+  qualityStandardId                 String?                @db.VarChar(64)
+  qualityStandardVersionSnapshot    Int?
+  qualityCriteriaSnapshot           Json?
+  qualityResult                     UpstreamQualityResult?
+  qualityEvidence                   Json?
+  qualityDisposition                String?                @db.VarChar(500)
+  payableAmount                     Decimal                @db.Decimal(20, 4)
+  batchNo                           String?                @db.VarChar(80)
+  manufactureDate                   DateTime?              @db.Date
+  expiryDate                        DateTime?              @db.Date
+  ledgerMovementId                  String?                @unique @db.VarChar(64)
+  evidence                          Json?
+  note                              String?                @db.VarChar(500)
+  createdAt                         DateTime               @default(now())
+  updatedAt                         DateTime               @updatedAt
 
-  tenant              Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  receipt             UpstreamReceipt              @relation(fields: [tenantId, receiptId], references: [tenantId, id], onDelete: Cascade)
-  purchaseOrderLine   UpstreamPurchaseOrderLine    @relation(fields: [tenantId, purchaseOrderLineId], references: [tenantId, id], onDelete: Restrict)
-  shipmentLine        UpstreamShipmentLine?        @relation(fields: [tenantId, shipmentLineId], references: [tenantId, id], onDelete: Restrict)
-  product             Product                      @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
-  ledgerMovement      WarehouseLedgerMovement?     @relation("UpstreamReceiptLedgerMovement", fields: [ledgerMovementId], references: [id], onDelete: Restrict)
-  claimLines          UpstreamArrivalClaimLine[]
-  settlementLines     UpstreamSettlementLine[]
-  purchaseReturnLines UpstreamPurchaseReturnLine[]
+  tenant                Tenant                                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  receipt               UpstreamReceipt                       @relation(fields: [tenantId, receiptId], references: [tenantId, id], onDelete: Cascade)
+  purchaseOrderLine     UpstreamPurchaseOrderLine             @relation(fields: [tenantId, purchaseOrderLineId], references: [tenantId, id], onDelete: Restrict)
+  shipmentLine          UpstreamShipmentLine?                 @relation(fields: [tenantId, shipmentLineId], references: [tenantId, id], onDelete: Restrict)
+  product               Product                               @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  qualityStandard       ProductQualityStandard?               @relation("ReceiptLineQualityStandard", fields: [tenantId, qualityStandardId], references: [tenantId, id], onDelete: Restrict)
+  priceStandard         ProductPurchasePriceStandard?         @relation("ReceiptLinePriceStandard", fields: [tenantId, priceStandardId], references: [tenantId, id], onDelete: Restrict)
+  ledgerMovement        WarehouseLedgerMovement?              @relation("UpstreamReceiptLedgerMovement", fields: [ledgerMovementId], references: [id], onDelete: Restrict)
+  claimLines            UpstreamArrivalClaimLine[]
+  settlementLines       UpstreamSettlementLine[]
+  purchaseReturnLines   UpstreamPurchaseReturnLine[]
+  evidenceDocumentLinks UpstreamReceiptLineEvidenceDocument[]
 
   @@unique([receiptId, purchaseOrderLineId])
   @@unique([tenantId, id])
   @@index([tenantId, productId])
+  @@index([tenantId, qualityStandardId])
+  @@index([tenantId, priceStandardId])
   @@map("upstream_receipt_lines")
 }
 
@@ -2799,23 +3209,25 @@ model PurchaseOrder {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  tenant                      Tenant                       @relation(fields: [tenantId], references: [id])
-  store                       Store                        @relation(fields: [storeId], references: [id])
-  supplier                    Supplier                     @relation(fields: [supplierId], references: [id])
-  createdBy                   User                         @relation("POCreatedBy", fields: [createdById], references: [id])
-  shippedBy                   User?                        @relation("POShippedBy", fields: [shippedById], references: [id])
-  items                       PurchaseOrderItem[]
-  revisions                   PurchaseOrderRevision[]
-  events                      PurchaseOrderEvent[]
-  deliveries                  DeliveryOrder[]
-  lossClaims                  LossClaim[]
-  receipt                     Receipt?                     @relation("PurchaseOrderPrimaryReceipt", fields: [receiptId], references: [id])
-  receipts                    Receipt[]                    @relation("PurchaseOrderReceipts")
-  stockReservations           SupplierStockReservation[]
-  warehouseLedgerReservations WarehouseLedgerReservation[]
+  tenant                       Tenant                        @relation(fields: [tenantId], references: [id])
+  store                        Store                         @relation(fields: [storeId], references: [id])
+  supplier                     Supplier                      @relation(fields: [supplierId], references: [id])
+  createdBy                    User                          @relation("POCreatedBy", fields: [createdById], references: [id])
+  shippedBy                    User?                         @relation("POShippedBy", fields: [shippedById], references: [id])
+  items                        PurchaseOrderItem[]
+  revisions                    PurchaseOrderRevision[]
+  events                       PurchaseOrderEvent[]
+  deliveries                   DeliveryOrder[]
+  lossClaims                   LossClaim[]
+  receipt                      Receipt?                      @relation("PurchaseOrderPrimaryReceipt", fields: [receiptId], references: [id])
+  receipts                     Receipt[]                     @relation("PurchaseOrderReceipts")
+  stockReservations            SupplierStockReservation[]
+  warehouseLedgerReservations  WarehouseLedgerReservation[]
+  replenishmentFulfillmentLink ReplenishmentFulfillmentLink?
 
   @@unique([tenantId, no])
   @@unique([tenantId, createdById, idempotencyKey])
+  @@unique([tenantId, id])
   @@index([supplierId, status])
   @@map("purchase_orders")
 }
@@ -2914,34 +3326,154 @@ model PurchaseOrderEvent {
   @@map("purchase_order_events")
 }
 
+// ── 独立门店补货需求：接单后桥接正式订货单履约 ─────────────────────
+model ReplenishmentOrder {
+  id                 String                   @id @default(cuid()) @db.VarChar(64)
+  tenantId           String
+  no                 String                   @db.VarChar(80)
+  storeId            String
+  supplierId         String
+  expectedDate       DateTime                 @db.Date
+  totalAmount        Decimal                  @default(0) @db.Decimal(12, 2)
+  status             ReplenishmentOrderStatus @default(DRAFT)
+  source             String                   @default("SUPPLY_CHAIN_PROXY") @db.VarChar(40)
+  note               String?                  @db.VarChar(500)
+  idempotencyKey     String?                  @db.VarChar(80)
+  requestFingerprint String                   @db.VarChar(64)
+  rowVersion         Int                      @default(0)
+  submittedAt        DateTime?
+  acceptedAt         DateTime?
+  cancelledAt        DateTime?
+  cancelReason       String?                  @db.VarChar(500)
+  createdById        String
+  submittedById      String?
+  acceptedById       String?
+  cancelledById      String?
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  tenant      Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  store       Store                         @relation(fields: [tenantId, storeId], references: [tenantId, id], onDelete: Restrict)
+  supplier    Supplier                      @relation(fields: [tenantId, supplierId], references: [tenantId, id], onDelete: Restrict)
+  createdBy   User                          @relation("ReplenishmentCreatedBy", fields: [tenantId, createdById], references: [tenantId, id], onDelete: Restrict)
+  submittedBy User?                         @relation("ReplenishmentSubmittedBy", fields: [tenantId, submittedById], references: [tenantId, id], onDelete: Restrict)
+  acceptedBy  User?                         @relation("ReplenishmentAcceptedBy", fields: [tenantId, acceptedById], references: [tenantId, id], onDelete: Restrict)
+  cancelledBy User?                         @relation("ReplenishmentCancelledBy", fields: [tenantId, cancelledById], references: [tenantId, id], onDelete: Restrict)
+  items       ReplenishmentOrderItem[]
+  events      ReplenishmentOrderEvent[]
+  fulfillment ReplenishmentFulfillmentLink?
+
+  @@unique([tenantId, no])
+  @@unique([tenantId, createdById, idempotencyKey])
+  @@unique([tenantId, id])
+  @@index([tenantId, storeId, status, createdAt])
+  @@index([tenantId, supplierId, status, createdAt])
+  @@map("replenishment_orders")
+}
+
+model ReplenishmentOrderItem {
+  id                                    String                       @id @default(cuid()) @db.VarChar(64)
+  tenantId                              String
+  replenishmentOrderId                  String                       @db.VarChar(64)
+  productId                             String
+  quantity                              Decimal                      @db.Decimal(10, 2)
+  unitPrice                             Decimal                      @db.Decimal(10, 2)
+  amount                                Decimal                      @db.Decimal(12, 2)
+  productCodeSnapshot                   String?                      @db.VarChar(80)
+  productNameSnapshot                   String                       @db.VarChar(160)
+  productSpecSnapshot                   String?                      @db.VarChar(240)
+  productCategorySnapshot               String?                      @db.VarChar(100)
+  purchaseUnitSnapshot                  String?                      @db.VarChar(16)
+  inventoryUnitSnapshot                 String?                      @db.VarChar(16)
+  orderUnitSnapshot                     String?                      @db.VarChar(16)
+  costUnitSnapshot                      String?                      @db.VarChar(16)
+  unitConversionStatusSnapshot          ProductUnitConversionStatus?
+  inventoryUnitsPerPurchaseUnitSnapshot Decimal?                     @db.Decimal(18, 6)
+  inventoryUnitsPerOrderUnitSnapshot    Decimal?                     @db.Decimal(18, 6)
+  inventoryUnitsPerCostUnitSnapshot     Decimal?                     @db.Decimal(18, 6)
+  createdAt                             DateTime                     @default(now())
+
+  tenant             Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  replenishmentOrder ReplenishmentOrder @relation(fields: [tenantId, replenishmentOrderId], references: [tenantId, id], onDelete: Cascade)
+  product            Product            @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([replenishmentOrderId, productId])
+  @@index([tenantId, productId])
+  @@map("replenishment_order_items")
+}
+
+model ReplenishmentOrderEvent {
+  id                   String                      @id @default(cuid()) @db.VarChar(64)
+  tenantId             String
+  replenishmentOrderId String                      @db.VarChar(64)
+  eventType            ReplenishmentOrderEventType
+  actorId              String?
+  actorRole            String?                     @db.VarChar(40)
+  fromStatus           ReplenishmentOrderStatus?
+  toStatus             ReplenishmentOrderStatus?
+  requestId            String?                     @db.VarChar(100)
+  requestKey           String?                     @db.VarChar(80)
+  ip                   String?                     @db.VarChar(80)
+  metadata             Json?
+  occurredAt           DateTime                    @default(now())
+
+  tenant             Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  replenishmentOrder ReplenishmentOrder @relation(fields: [tenantId, replenishmentOrderId], references: [tenantId, id], onDelete: Restrict)
+  actor              User?              @relation("ReplenishmentEventActor", fields: [tenantId, actorId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, requestKey])
+  @@index([tenantId, replenishmentOrderId, occurredAt])
+  @@map("replenishment_order_events")
+}
+
+model ReplenishmentFulfillmentLink {
+  id                   String   @id @default(cuid()) @db.VarChar(64)
+  tenantId             String
+  replenishmentOrderId String   @unique @db.VarChar(64)
+  purchaseOrderId      String   @unique
+  createdAt            DateTime @default(now())
+
+  tenant             Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  replenishmentOrder ReplenishmentOrder @relation(fields: [tenantId, replenishmentOrderId], references: [tenantId, id], onDelete: Restrict)
+  purchaseOrder      PurchaseOrder      @relation(fields: [tenantId, purchaseOrderId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, replenishmentOrderId])
+  @@unique([tenantId, purchaseOrderId])
+  @@index([tenantId, purchaseOrderId])
+  @@map("replenishment_fulfillment_links")
+}
+
 // ── 独立配送单: 一张订货单可分多次配送，发货后冻结 ──────────────────
 model DeliveryOrder {
-  id                String              @id @default(cuid())
-  tenantId          String
-  no                String
-  purchaseOrderId   String
-  storeId           String
-  supplierId        String
+  id                 String              @id @default(cuid())
+  tenantId           String
+  no                 String
+  purchaseOrderId    String
+  storeId            String
+  supplierId         String
   // 兼容期允许旧运行时省略；数据库仅在 INSERT 缺省时填 tenant 默认仓，并以
   // validated non-null CHECK + tenant 复合外键保证落库事实完整。
-  warehouseId       String?             @db.VarChar(64)
-  status            DeliveryOrderStatus @default(DRAFT)
-  actualTotalAmount Decimal             @default(0) @db.Decimal(12, 2)
-  note              String?
-  idempotencyKey    String?             @db.VarChar(80)
-  rowVersion        Int                 @default(0)
-  createdById       String
-  shippedById       String?
-  deliveredById     String?
-  receivedById      String?
-  shippedAt         DateTime?
-  deliveredAt       DateTime?
-  receivedAt        DateTime?
+  warehouseId        String?             @db.VarChar(64)
+  status             DeliveryOrderStatus @default(DRAFT)
+  actualTotalAmount  Decimal             @default(0) @db.Decimal(12, 2)
+  note               String?
+  idempotencyKey     String?             @db.VarChar(80)
+  rowVersion         Int                 @default(0)
+  createdById        String
+  shippedById        String?
+  deliveredById      String?
+  receivedById       String?
+  pickerNameSnapshot String?             @db.VarChar(80)
+  driverNameSnapshot String?             @db.VarChar(80)
+  shippedAt          DateTime?
+  deliveredAt        DateTime?
+  receivedAt         DateTime?
   // 发货超 24h 未人工点送达时系统自动推进的标记；此类单跳过 24h 自动收货，
   // 收货事实仍以门店人工确认为准（防"货未到→自动送达→自动收货→幽灵入账"）。
-  autoDelivered     Boolean             @default(false)
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
+  autoDelivered      Boolean             @default(false)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
 
   tenant        Tenant               @relation(fields: [tenantId], references: [id])
   warehouse     Warehouse?           @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
@@ -3528,6 +4060,22 @@ enum PurchaseOrderStatus {
   CANCELLED // 已取消
 }
 
+enum ReplenishmentOrderStatus {
+  DRAFT
+  SUBMITTED
+  ACCEPTED
+  CANCELLED
+}
+
+enum ReplenishmentOrderEventType {
+  CREATED
+  EDITED
+  SUBMITTED
+  ACCEPTED
+  CANCELLED
+  DELIVERY_CREATED
+}
+
 enum PurchaseOrderItemOrigin {
   ORIGINAL
   APPROVED_REVISION
@@ -4020,9 +4568,9 @@ model WarehouseStocktakeSection {
   createdAt    DateTime                        @default(now())
   updatedAt    DateTime                        @updatedAt
 
-  tenant     Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  stocktake  WarehouseStocktake  @relation(fields: [tenantId, stocktakeId], references: [tenantId, id], onDelete: Cascade)
-  assignedTo User                @relation("WarehouseStocktakeSectionAssignee", fields: [tenantId, assignedToId], references: [tenantId, id], onDelete: Restrict)
+  tenant     Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stocktake  WarehouseStocktake        @relation(fields: [tenantId, stocktakeId], references: [tenantId, id], onDelete: Cascade)
+  assignedTo User                      @relation("WarehouseStocktakeSectionAssignee", fields: [tenantId, assignedToId], references: [tenantId, id], onDelete: Restrict)
   items      WarehouseStocktakeItem[]
   entries    WarehouseStocktakeEntry[]
 
@@ -4034,34 +4582,34 @@ model WarehouseStocktakeSection {
 }
 
 model WarehouseStocktakeItem {
-  id                  String    @id @default(cuid()) @db.VarChar(64)
+  id                  String   @id @default(cuid()) @db.VarChar(64)
   tenantId            String
-  stocktakeId         String    @db.VarChar(64)
-  sectionId           String    @db.VarChar(64)
+  stocktakeId         String   @db.VarChar(64)
+  sectionId           String   @db.VarChar(64)
   productId           String
-  productCodeSnapshot String    @db.VarChar(80)
-  productNameSnapshot String    @db.VarChar(160)
-  productSpecSnapshot String?   @db.VarChar(240)
-  categorySnapshot    String?   @db.VarChar(120)
-  inventoryUnit       String    @db.VarChar(16)
-  bookQuantity        Decimal   @db.Decimal(18, 6)
-  bookValue           Decimal   @db.Decimal(20, 4)
-  averageUnitCost     Decimal   @db.Decimal(18, 6)
+  productCodeSnapshot String   @db.VarChar(80)
+  productNameSnapshot String   @db.VarChar(160)
+  productSpecSnapshot String?  @db.VarChar(240)
+  categorySnapshot    String?  @db.VarChar(120)
+  inventoryUnit       String   @db.VarChar(16)
+  bookQuantity        Decimal  @db.Decimal(18, 6)
+  bookValue           Decimal  @db.Decimal(20, 4)
+  averageUnitCost     Decimal  @db.Decimal(18, 6)
   bookBalanceVersion  Int
-  countedUnitCost     Decimal?  @db.Decimal(18, 6)
-  countedQuantity     Decimal?  @db.Decimal(18, 6)
-  countedValue        Decimal?  @db.Decimal(20, 4)
-  differenceQuantity  Decimal?  @db.Decimal(18, 6)
-  differenceValue     Decimal?  @db.Decimal(20, 4)
-  reason              String?   @db.VarChar(240)
+  countedUnitCost     Decimal? @db.Decimal(18, 6)
+  countedQuantity     Decimal? @db.Decimal(18, 6)
+  countedValue        Decimal? @db.Decimal(20, 4)
+  differenceQuantity  Decimal? @db.Decimal(18, 6)
+  differenceValue     Decimal? @db.Decimal(20, 4)
+  reason              String?  @db.VarChar(240)
   sortOrder           Int
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
-  tenant          Tenant                            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  stocktake       WarehouseStocktake                @relation(fields: [tenantId, stocktakeId], references: [tenantId, id], onDelete: Cascade)
-  section         WarehouseStocktakeSection         @relation(fields: [tenantId, stocktakeId, sectionId], references: [tenantId, stocktakeId, id], onDelete: Restrict)
-  product         Product                           @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  tenant          Tenant                             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stocktake       WarehouseStocktake                 @relation(fields: [tenantId, stocktakeId], references: [tenantId, id], onDelete: Cascade)
+  section         WarehouseStocktakeSection          @relation(fields: [tenantId, stocktakeId, sectionId], references: [tenantId, stocktakeId, id], onDelete: Restrict)
+  product         Product                            @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
   entry           WarehouseStocktakeEntry?
   adjustmentLines WarehouseStocktakeAdjustmentLine[]
 
@@ -4093,10 +4641,10 @@ model WarehouseStocktakeEntry {
   item      WarehouseStocktakeItem    @relation(fields: [tenantId, stocktakeId, stocktakeItemId], references: [tenantId, stocktakeId, id], onDelete: Cascade)
   enteredBy User                      @relation("WarehouseStocktakeEntryActor", fields: [tenantId, enteredById], references: [tenantId, id], onDelete: Restrict)
 
-  @@index([tenantId, enteredById, savedAt])
-  @@index([stocktakeId, sectionId])
   @@unique([tenantId, stocktakeItemId])
   @@unique([tenantId, stocktakeId, stocktakeItemId])
+  @@index([tenantId, enteredById, savedAt])
+  @@index([stocktakeId, sectionId])
   @@map("warehouse_stocktake_entries")
 }
 
@@ -4122,23 +4670,23 @@ model WarehouseStocktakeAdjustment {
 }
 
 model WarehouseStocktakeAdjustmentLine {
-  id               String   @id @default(cuid()) @db.VarChar(64)
-  tenantId         String
-  adjustmentId     String   @db.VarChar(64)
-  stocktakeItemId  String   @db.VarChar(64)
-  productId        String
-  quantity         Decimal  @db.Decimal(18, 6)
-  inventoryUnit    String   @db.VarChar(16)
-  unitCost         Decimal  @db.Decimal(18, 6)
-  amount           Decimal  @db.Decimal(20, 4)
-  movementId       String?  @unique @db.VarChar(64)
-  createdAt        DateTime @default(now())
+  id              String   @id @default(cuid()) @db.VarChar(64)
+  tenantId        String
+  adjustmentId    String   @db.VarChar(64)
+  stocktakeItemId String   @db.VarChar(64)
+  productId       String
+  quantity        Decimal  @db.Decimal(18, 6)
+  inventoryUnit   String   @db.VarChar(16)
+  unitCost        Decimal  @db.Decimal(18, 6)
+  amount          Decimal  @db.Decimal(20, 4)
+  movementId      String?  @unique @db.VarChar(64)
+  createdAt       DateTime @default(now())
 
-  tenant        Tenant                           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  adjustment    WarehouseStocktakeAdjustment     @relation(fields: [tenantId, adjustmentId], references: [tenantId, id], onDelete: Cascade)
-  stocktakeItem WarehouseStocktakeItem           @relation(fields: [tenantId, stocktakeItemId], references: [tenantId, id], onDelete: Restrict)
-  product       Product                          @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
-  movement      WarehouseLedgerMovement?         @relation("WarehouseStocktakeAdjustmentMovement", fields: [movementId], references: [id], onDelete: Restrict)
+  tenant        Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  adjustment    WarehouseStocktakeAdjustment @relation(fields: [tenantId, adjustmentId], references: [tenantId, id], onDelete: Cascade)
+  stocktakeItem WarehouseStocktakeItem       @relation(fields: [tenantId, stocktakeItemId], references: [tenantId, id], onDelete: Restrict)
+  product       Product                      @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  movement      WarehouseLedgerMovement?     @relation("WarehouseStocktakeAdjustmentMovement", fields: [movementId], references: [id], onDelete: Restrict)
 
   @@unique([adjustmentId, stocktakeItemId])
   @@index([tenantId, productId])

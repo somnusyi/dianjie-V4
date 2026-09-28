@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   transaction: vi.fn(),
   queryRaw: vi.fn(),
   statementCount: vi.fn(),
+  supplierEvidenceFindFirst: vi.fn(),
+  receiptEvidenceFindMany: vi.fn(),
 }))
 
 vi.mock('@dianjie/db', async () => {
@@ -31,6 +33,8 @@ vi.mock('@dianjie/db', async () => {
     },
     $transaction: (...args: any[]) => mocks.transaction(...args),
     upstreamSettlementStatement: { count: (...args: any[]) => mocks.statementCount(...args) },
+    supplierEvidenceDocument: { findFirst: (...args: any[]) => mocks.supplierEvidenceFindFirst(...args) },
+    upstreamReceiptLineEvidenceDocument: { findMany: (...args: any[]) => mocks.receiptEvidenceFindMany(...args) },
     },
   }
 })
@@ -67,6 +71,8 @@ describe('upstream role workbench', () => {
     mocks.claimFindFirst.mockResolvedValue(null)
     mocks.claimCount.mockResolvedValue(5)
     mocks.statementCount.mockResolvedValue(6)
+    mocks.supplierEvidenceFindFirst.mockResolvedValue(null)
+    mocks.receiptEvidenceFindMany.mockResolvedValue([])
     mocks.queryRaw.mockResolvedValue([{ locked: '1' }])
     mocks.transaction.mockImplementation(async (callback: (tx: any) => unknown) => callback({
       $queryRaw: (...args: any[]) => mocks.queryRaw(...args),

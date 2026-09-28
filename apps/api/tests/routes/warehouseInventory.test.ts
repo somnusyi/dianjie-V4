@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../src/services/warehouseLedger', () => ({
   recordBatchManualWarehouseInbound: vi.fn(),
+  recordBatchManualWarehouseOutbound: vi.fn(),
   recordManualWarehouseInbound: vi.fn(),
   recordWarehousePhysicalCount: vi.fn(),
   reverseManualWarehouseInbound: vi.fn(),
@@ -83,6 +84,7 @@ vi.mock('../../src/services/defaultWarehouse', () => ({
 
 import {
   recordBatchManualWarehouseInbound,
+  recordBatchManualWarehouseOutbound,
   recordManualWarehouseInbound,
   recordWarehousePhysicalCount,
   reverseManualWarehouseInbound,
@@ -98,6 +100,7 @@ import {
 
 const recordInbound = vi.mocked(recordManualWarehouseInbound)
 const recordBatchInbound = vi.mocked(recordBatchManualWarehouseInbound)
+const recordBatchOutbound = vi.mocked(recordBatchManualWarehouseOutbound)
 const reverseInbound = vi.mocked(reverseManualWarehouseInbound)
 const recordCount = vi.mocked(recordWarehousePhysicalCount)
 const auditLedger = vi.mocked(auditWarehouseLedger)
@@ -156,6 +159,7 @@ describe('warehouse inventory routes', () => {
         { id: 'movement-2', productId: 'product-2', physicalDelta: 5, inventoryUnit: '瓶', valueDelta: 50 },
       ],
     } as any)
+    recordBatchOutbound.mockReset()
     auditLedger.mockReset()
     auditLedger.mockResolvedValue({ readyForStrict: false, blockerCount: 2, issues: [] } as any)
     reverseInbound.mockReset()
@@ -329,6 +333,27 @@ describe('warehouse inventory routes', () => {
     expect(response.json().error).toContain('不存在')
     expect(recordInbound).not.toHaveBeenCalled()
     expect(ensureWarehouseDoc).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it('rejects missing self-loss evidence before any inventory posting', async () => {
+    assertWarehouseDocumentObjects.mockRejectedValueOnce(Object.assign(new Error('现场证据不存在或已失效，请重新上传'), { statusCode: 400 }))
+    const app = buildApp({ tenantId: 'tenant-1', userId: 'user-1', role: 'SUPPLY_CHAIN' })
+    const response = await app.inject({
+      method: 'POST',
+      url: '/batch-self-loss',
+      payload: {
+        items: [{ productId: 'product-1', inventoryQuantity: 2 }],
+        effectiveAt: '2026-09-28T10:00:00+08:00',
+        idempotencyKey: 'self-loss-missing-evidence-0001',
+        reason: '过期变质',
+        responsibility: '总仓保管',
+        attachments: [{ key: 'warehouse-docs/tenant-1/missing.jpg', name: '不存在.jpg', mime: 'image/jpeg', size: 100 }],
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json().error).toContain('不存在')
+    expect(recordBatchOutbound).not.toHaveBeenCalled()
     await app.close()
   })
 

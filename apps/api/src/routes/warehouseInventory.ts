@@ -16,6 +16,7 @@ import { reconcileWarehouseShadowLedger } from '../services/warehouseLedgerRecon
 import { resolveProductFourUnits } from '../services/inventoryUnits'
 import {
   ensureWarehouseDoc,
+  ensureWarehouseDocInTransaction,
   normalizeWarehouseDocAttachments,
   type WarehouseDocAttachmentInput,
   type WarehouseDocLineInput,
@@ -162,8 +163,8 @@ const batchManualInboundSchema = z.object({
   })
 })
 
-// 批量手工出库（2026-08-23）：订单体系之外的总仓出库——门店拨补/样品/报损/历史补录。
-// 数量按库存单位；成本缺省按移动均价带出，可指定权威成本（如美团口径）。
+// 批量手工出库（2026-08-23）：只处理非自损的结构化业务用途。
+// 自损必须走 /batch-self-loss，不允许通过自由文本理由规避责任、证据和成本口径。
 const batchManualOutboundSchema = z.object({
   items: z.array(z.object({
     productId: z.string().trim().min(1),
@@ -173,8 +174,40 @@ const batchManualOutboundSchema = z.object({
   })).min(1).max(200),
   effectiveAt: z.string().datetime({ offset: true }),
   idempotencyKey: z.string().trim().min(8).max(80),
+  purpose: z.enum(['STORE_REALLOCATION', 'SAMPLE_ISSUE', 'HISTORICAL_CORRECTION']),
   reason: z.string().trim().min(2, '请填写出库原因/去向').max(120),
+  responsibility: z.string().trim().max(120).optional().nullable(),
   sourceName: z.string().trim().max(120).optional().nullable(),
+  attachments: z.array(z.object({
+    key: z.string().trim().min(1).max(1024),
+    name: z.string().trim().min(1).max(160),
+    mime: z.enum(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf']),
+    size: z.number().int().positive().max(10 * 1024 * 1024),
+  }).strict()).max(9).optional().default([]),
+}).superRefine((value, context) => {
+  const productIds = value.items.map(item => item.productId)
+  if (new Set(productIds).size !== productIds.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['items'], message: '同一商品不能重复添加' })
+  }
+})
+
+// 总仓自损使用独立端点和结构化输入，不能通过自由文本原因绕过责任、证据和成本口径。
+const batchSelfLossSchema = z.object({
+  items: z.array(z.object({
+    productId: z.string().trim().min(1),
+    inventoryQuantity: z.number().positive().max(99_999_999),
+    note: z.string().trim().max(240).optional().nullable(),
+  })).min(1).max(200),
+  effectiveAt: z.string().datetime({ offset: true }),
+  idempotencyKey: z.string().trim().min(8).max(80),
+  reason: z.enum(['盘亏损毁', '过期变质', '搬运损坏', '保管不当', '其他自损']),
+  responsibility: z.string({ required_error: '请填写责任归属' }).trim().min(2, '请填写责任归属').max(120),
+  attachments: z.array(z.object({
+    key: z.string().trim().min(1).max(1024),
+    name: z.string().trim().min(1).max(160),
+    mime: z.enum(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf']),
+    size: z.number().int().positive().max(10 * 1024 * 1024),
+  }).strict(), { required_error: '总仓自损必须上传现场证据' }).min(1, '总仓自损必须上传现场证据').max(9),
 }).superRefine((value, context) => {
   const productIds = value.items.map(item => item.productId)
   if (new Set(productIds).size !== productIds.length) {
@@ -233,6 +266,100 @@ function isWarehousePolicyTransactionConflict(error: any) {
   return error?.code === 'P2010'
     && (String(error?.meta?.code || '') === '40001'
       || /could not serialize|serialization failure|SQLSTATE\s*40001/i.test(String(error?.meta?.message || error?.message || '')))
+}
+
+type BatchOutboundRouteData = {
+  items: Array<{ productId: string; inventoryQuantity: number; totalAmount?: number | null; note?: string | null }>
+  effectiveAt: string
+  idempotencyKey: string
+  purpose?: 'STORE_REALLOCATION' | 'SAMPLE_ISSUE' | 'HISTORICAL_CORRECTION'
+  reason: string
+  responsibility?: string | null
+  sourceName?: string | null
+  attachments: WarehouseDocAttachmentInput[]
+}
+
+async function executeBatchManualOutbound(
+  req: any,
+  data: BatchOutboundRouteData,
+  businessType: 'GENERIC' | 'SELF_LOSS',
+) {
+  const attachments = normalizeWarehouseDocAttachments(req.user.tenantId, data.attachments)
+  await assertWarehouseDocumentObjects(req.user.tenantId, attachments)
+  const purposeLabels = { STORE_REALLOCATION: '门店拨补', SAMPLE_ISSUE: '样品领用', HISTORICAL_CORRECTION: '历史补录' } as const
+  const reason = businessType === 'SELF_LOSS'
+    ? `总仓自损：${data.reason}`
+    : `【${purposeLabels[data.purpose!]}】${data.reason}`
+  const sourceName = data.responsibility ? `责任归属：${data.responsibility}` : data.sourceName
+  const outProductRows = await prisma.product.findMany({
+    where: { tenantId: req.user.tenantId, id: { in: data.items.map(item => item.productId) } },
+    select: { id: true, name: true, inventoryUnit: true },
+  })
+  const outProductById = new Map(outProductRows.map(product => [product.id, product]))
+  const result = await recordBatchManualWarehouseOutbound({
+    tenantId: req.user.tenantId,
+    userId: req.user.userId,
+    items: data.items.map(item => ({
+      productId: item.productId,
+      inventoryQuantity: item.inventoryQuantity,
+      totalAmount: businessType === 'SELF_LOSS' ? null : item.totalAmount ?? null,
+      note: item.note,
+    })),
+    effectiveAt: new Date(data.effectiveAt),
+    idempotencyKey: data.idempotencyKey,
+    reason,
+    sourceName,
+    businessType,
+    finalizeInTransaction: async (tx, ledgerResult) => {
+      const created = await ensureWarehouseDocInTransaction(tx, {
+        tenantId: req.user.tenantId,
+        userId: req.user.userId,
+        type: 'MANUAL_OUTBOUND',
+        warehouseId: ledgerResult.warehouseId,
+        effectiveAt: new Date(data.effectiveAt),
+        idempotencyKey: `${businessType === 'SELF_LOSS' ? 'self-loss' : 'manual-outbound'}:${data.idempotencyKey}`,
+        reason,
+        attachments,
+        note: data.responsibility ? `责任归属：${data.responsibility}` : null,
+        lines: data.items.map(item => {
+          const movement = ledgerResult.movements.find(row => row.productId === item.productId)
+          const product = outProductById.get(item.productId)
+          const quantity = movement ? Math.abs(number(movement.physicalDelta)) : item.inventoryQuantity
+          const amount = movement ? Math.abs(number(movement.valueDelta)) : 0
+          return {
+            productId: item.productId,
+            productName: product?.name || item.productId,
+            quantity,
+            unit: String(movement?.inventoryUnit || product?.inventoryUnit || ''),
+            unitPrice: quantity > 0 ? Math.round((amount / quantity) * 1_000_000) / 1_000_000 : null,
+            amount: Math.round(amount * 100) / 100,
+            inventoryQuantity: quantity,
+            inventoryUnit: String(movement?.inventoryUnit || product?.inventoryUnit || ''),
+            note: item.note,
+            movementId: movement?.id || null,
+          }
+        }),
+      })
+      return { id: created.doc.id, docNo: created.doc.docNo, status: created.doc.status, created: created.created }
+    },
+  })
+  const totalAmount = result.movements.reduce((sum, movement) => sum + Math.abs(number(movement.valueDelta)), 0)
+  const outDoc = result.finalized as { id: string; docNo: string; status: string; created: boolean }
+  return {
+    ok: true,
+    replayed: result.replayed,
+    warehouseId: result.warehouseId,
+    count: result.movements.length,
+    totalAmount,
+    doc: outDoc,
+    movements: result.movements.map(movement => ({
+      id: movement.id,
+      productId: movement.productId,
+      physicalDelta: number(movement.physicalDelta),
+      inventoryUnit: movement.inventoryUnit,
+      valueDelta: number(movement.valueDelta),
+    })),
+  }
 }
 
 export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
@@ -900,69 +1027,18 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
     const parsed = batchManualOutboundSchema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     try {
-      const result = await recordBatchManualWarehouseOutbound({
-        tenantId: req.user.tenantId,
-        userId: req.user.userId,
-        items: parsed.data.items.map(item => ({
-          productId: item.productId,
-          inventoryQuantity: item.inventoryQuantity,
-          totalAmount: item.totalAmount ?? null,
-          note: item.note,
-        })),
-        effectiveAt: new Date(parsed.data.effectiveAt),
-        idempotencyKey: parsed.data.idempotencyKey,
-        reason: parsed.data.reason,
-        sourceName: parsed.data.sourceName,
-      })
-      const totalAmount = result.movements.reduce((sum, movement) => sum + Math.abs(number(movement.valueDelta)), 0)
-      const outProductRows = await prisma.product.findMany({
-        where: { tenantId: req.user.tenantId, id: { in: parsed.data.items.map(item => item.productId) } },
-        select: { id: true, name: true, inventoryUnit: true },
-      })
-      const outProductById = new Map(outProductRows.map(product => [product.id, product]))
-      const outDoc = await registerWarehouseDoc({
-        tenantId: req.user.tenantId,
-        userId: req.user.userId,
-        type: 'MANUAL_OUTBOUND',
-        warehouseId: result.warehouseId,
-        effectiveAt: new Date(parsed.data.effectiveAt),
-        idempotencyKey: `manual-outbound:${parsed.data.idempotencyKey}`,
-        reason: parsed.data.reason,
-        note: null,
-        lines: parsed.data.items.map(item => {
-          const movement = result.movements.find(row => row.productId === item.productId)
-          const product = outProductById.get(item.productId)
-          const quantity = movement ? Math.abs(number(movement.physicalDelta)) : item.inventoryQuantity
-          const amount = movement ? Math.abs(number(movement.valueDelta)) : (item.totalAmount ?? 0)
-          return {
-            productId: item.productId,
-            productName: product?.name || item.productId,
-            quantity,
-            unit: String(movement?.inventoryUnit || product?.inventoryUnit || ''),
-            unitPrice: quantity > 0 ? Math.round((amount / quantity) * 1_000_000) / 1_000_000 : null,
-            amount: Math.round(amount * 100) / 100,
-            inventoryQuantity: quantity,
-            inventoryUnit: String(movement?.inventoryUnit || product?.inventoryUnit || ''),
-            note: item.note,
-            movementId: movement?.id || null,
-          }
-        }),
-      })
-      return {
-        ok: true,
-        replayed: result.replayed,
-        warehouseId: result.warehouseId,
-        count: result.movements.length,
-        totalAmount,
-        doc: outDoc,
-        movements: result.movements.map(movement => ({
-          id: movement.id,
-          productId: movement.productId,
-          physicalDelta: number(movement.physicalDelta),
-          inventoryUnit: movement.inventoryUnit,
-          valueDelta: number(movement.valueDelta),
-        })),
-      }
+      return await executeBatchManualOutbound(req, parsed.data, 'GENERIC')
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      throw error
+    }
+  })
+
+  app.post('/batch-self-loss', authWrite, async (req: any, reply: any) => {
+    const parsed = batchSelfLossSchema.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    try {
+      return await executeBatchManualOutbound(req, parsed.data, 'SELF_LOSS')
     } catch (error: any) {
       if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
       throw error

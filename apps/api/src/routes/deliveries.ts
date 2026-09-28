@@ -4,7 +4,7 @@ import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { isStoreScoped, isSupplierRole, resolveActiveStore } from '../lib/auth-scope'
 import { requireSupplierCapability } from '../lib/supplier-access'
-import { allowsSupplyDataRead, hasInternalSupplyChainCapability, supplyDataReadScope } from '../lib/internal-supply-chain-access'
+import { allowsSupplyDataRead, hasInternalSupplyChainCapability, isInternalSupplyChainRole, supplyDataReadScope } from '../lib/internal-supply-chain-access'
 import { withDocumentProductSnapshot } from '../lib/supply-document-snapshot'
 import { calendarDateSchema } from '../lib/calendar-date'
 import {
@@ -13,6 +13,7 @@ import {
   removeDeliveryItemInTransaction,
 } from '../services/deliveryItemRemoval'
 import { publicDeliveryMarkerFilter } from '../services/shipmentDraftMarker'
+import { loadDeliveryProfitProjections } from '../services/deliveryProfitProjection'
 
 const listQuerySchema = z.object({
   status: z.enum(['DRAFT', 'SHIPPED', 'DELIVERED', 'RECEIVED', 'CANCELLED']).optional(),
@@ -33,6 +34,35 @@ export const DELIVERY_EXPORT_MAX_ROWS = 10_000
 
 export function exceedsDeliveryExportLimit(rowCount: number) {
   return rowCount > DELIVERY_EXPORT_MAX_ROWS
+}
+
+async function deliveryProfitById(user: any, deliveries: any[]) {
+  if (!isInternalSupplyChainRole(user?.role)) return new Map()
+  return loadDeliveryProfitProjections(prisma, user.tenantId, deliveries.map(delivery => ({
+    id: String(delivery.id),
+    items: (delivery.items || []).map((item: any) => ({
+      id: String(item.id),
+      productId: String(item.productId),
+      purchaseOrderItemId: item.purchaseOrderItemId ? String(item.purchaseOrderItemId) : null,
+      orderedQtySnapshot: item.orderedQtySnapshot,
+      shippedQty: item.shippedQty,
+      unitPriceSnapshot: item.unitPriceSnapshot,
+      amount: item.amount,
+    })),
+  })))
+}
+
+function attachDeliveryProfit(delivery: any, profitById: Map<string, any>) {
+  const profitability = profitById.get(String(delivery.id)) || null
+  const lines = new Map((profitability?.lines || []).map((line: any) => [String(line.itemId), line]))
+  return {
+    ...delivery,
+    ...(profitability ? { profitability } : {}),
+    items: (delivery.items || []).map((raw: any) => ({
+      ...withDocumentProductSnapshot(raw),
+      ...(lines.has(String(raw.id)) ? { profitability: lines.get(String(raw.id)) } : {}),
+    })),
+  }
 }
 
 function buildDeliveryListWhere(q: z.infer<typeof listQuerySchema>, user: any) {
@@ -218,11 +248,9 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
       }),
       prisma.deliveryOrder.count({ where }),
     ])
+    const profitById = await deliveryProfitById(req.user, items)
     return {
-      items: items.map(delivery => ({
-        ...delivery,
-        items: delivery.items.map(withDocumentProductSnapshot),
-      })),
+      items: items.map(delivery => attachDeliveryProfit(delivery, profitById)),
       total, page: q.page, pageSize: q.pageSize,
     }
   })
@@ -248,6 +276,8 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
     if (exceedsDeliveryExportLimit(rows.length)) {
       return reply.status(422).send({ error: `导出结果超过 ${DELIVERY_EXPORT_MAX_ROWS} 条，请缩小筛选范围` })
     }
+    const profitById = await deliveryProfitById(req.user, rows)
+    const includeProfit = isInternalSupplyChainRole(req.user.role)
     const statusLabels: Record<string, string> = {
       DRAFT: '草稿', SHIPPED: '已发货', DELIVERED: '已送达', RECEIVED: '已收货', CANCELLED: '已取消',
     }
@@ -264,10 +294,15 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
       { header: '发货时间', key: 'shippedAt', width: 22 },
       { header: '状态', key: 'status', width: 14 },
       { header: '商品摘要', key: 'itemSummary', width: 50 },
-      { header: '金额', key: 'amount', width: 16 },
+      { header: '发货金额', key: 'amount', width: 16 },
+      ...(includeProfit ? [
+        { header: '成本金额', key: 'costAmount', width: 16 },
+        { header: '利润', key: 'profit', width: 16 },
+      ] : []),
     ]
     rows.forEach((row, index) => {
       const items = row.items.map(withDocumentProductSnapshot)
+      const profitability = profitById.get(String(row.id))
       sheet.addRow({
         sequence: index + 1,
         no: row.no,
@@ -278,14 +313,98 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
         shippedAt: formatShanghaiDateTime(row.shippedAt),
         status: statusLabels[row.status] || row.status,
         itemSummary: items.map((item: any) => [item.productNameSnapshot, item.productCodeSnapshot, item.productSpecSnapshot].filter(Boolean).join(' / ')).join('、'),
-        amount: Number(row.actualTotalAmount || 0),
+        amount: includeProfit
+          ? (profitability?.shippedAmount == null ? '—' : Number(profitability.shippedAmount))
+          : Number(row.actualTotalAmount || 0),
+        ...(includeProfit ? {
+          costAmount: profitability?.costAmount == null ? '—' : Number(profitability.costAmount),
+          profit: profitability?.profit == null ? '—' : Number(profitability.profit),
+        } : {}),
       })
     })
     sheet.getRow(1).font = { bold: true }
     sheet.views = [{ state: 'frozen', ySplit: 1 }]
-    sheet.autoFilter = { from: 'A1', to: 'J1' }
+    sheet.autoFilter = { from: 'A1', to: includeProfit ? 'L1' : 'J1' }
     sheet.getColumn('amount').numFmt = '#,##0.00'
+    if (includeProfit) {
+      sheet.getColumn('costAmount').numFmt = '#,##0.00'
+      sheet.getColumn('profit').numFmt = '#,##0.00'
+    }
     const filename = `配送单查询-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}.xlsx`
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer())
+    return reply
+      .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`)
+      .send(buffer)
+  })
+
+  app.get('/:id/export.xlsx', { preHandler: [(app as any).authenticate] }, async (req: any, reply) => {
+    if (!isInternalSupplyChainRole(req.user.role)) {
+      return reply.status(403).send({ error: '只有内部供应链可导出配送成本利润明细' })
+    }
+    const delivery = await prisma.deliveryOrder.findFirst({
+      where: { id: String(req.params.id), ...supplyDataReadScope(req.user), ...publicDeliveryMarkerFilter() },
+      include: {
+        purchaseOrder: { select: { no: true } },
+        store: { select: { name: true } },
+        supplier: { select: { name: true } },
+        items: { where: { removedAt: null }, include: { product: true } },
+      },
+    })
+    if (!delivery) return reply.status(404).send({ error: '配送单不存在' })
+    const profitById = await deliveryProfitById(req.user, [delivery])
+    const projected = attachDeliveryProfit(delivery, profitById)
+    const workbook = new ExcelJS.Workbook()
+    workbook.creator = '滇界云管'
+    const sheet = workbook.addWorksheet('配送成本利润明细')
+    sheet.columns = [
+      { header: '序号', key: 'sequence', width: 8 },
+      { header: '配送单号', key: 'deliveryNo', width: 24 },
+      { header: '关联订货单号', key: 'orderNo', width: 24 },
+      { header: '门店', key: 'store', width: 22 },
+      { header: '供应商', key: 'supplier', width: 26 },
+      { header: '物品编码', key: 'productCode', width: 18 },
+      { header: '物品名称', key: 'productName', width: 24 },
+      { header: '规格型号', key: 'productSpec', width: 18 },
+      { header: '单位', key: 'unit', width: 12 },
+      { header: '接单数量', key: 'acceptedQuantity', width: 14 },
+      { header: '发货数量', key: 'shippedQuantity', width: 14 },
+      { header: '发货单价', key: 'unitPrice', width: 14 },
+      { header: '发货金额', key: 'shippedAmount', width: 14 },
+      { header: '净结算金额', key: 'settlementAmount', width: 18 },
+      { header: '成本单价', key: 'costUnitPrice', width: 14 },
+      { header: '成本金额', key: 'costAmount', width: 14 },
+      { header: '利润', key: 'profit', width: 14 },
+    ]
+    projected.items.forEach((item: any, index: number) => {
+      const p = item.profitability
+      sheet.addRow({
+        sequence: index + 1,
+        deliveryNo: delivery.no,
+        orderNo: delivery.purchaseOrder.no,
+        store: delivery.store.name,
+        supplier: delivery.supplier.name,
+        productCode: item.productCodeSnapshot || item.product?.code || '',
+        productName: item.productNameSnapshot || item.product?.name || '',
+        productSpec: item.productSpecSnapshot || item.product?.spec || '',
+        unit: item.productUnitSnapshot || item.product?.unit || '',
+        acceptedQuantity: p?.acceptedQuantity == null ? '—' : Number(p.acceptedQuantity),
+        shippedQuantity: p?.shippedQuantity == null ? '—' : Number(p.shippedQuantity),
+        unitPrice: p?.unitPrice == null ? '—' : Number(p.unitPrice),
+        shippedAmount: p?.shippedAmount == null ? '—' : Number(p.shippedAmount),
+        settlementAmount: p?.settlementAmount == null ? '—' : Number(p.settlementAmount),
+        costUnitPrice: p?.costUnitPrice == null ? '—' : Number(p.costUnitPrice),
+        costAmount: p?.costAmount == null ? '—' : Number(p.costAmount),
+        profit: p?.profit == null ? '—' : Number(p.profit),
+      })
+    })
+    sheet.getRow(1).font = { bold: true }
+    sheet.views = [{ state: 'frozen', ySplit: 1 }]
+    sheet.autoFilter = { from: 'A1', to: 'Q1' }
+    for (const key of ['unitPrice', 'shippedAmount', 'settlementAmount', 'costUnitPrice', 'costAmount', 'profit']) {
+      sheet.getColumn(key).numFmt = '#,##0.00'
+    }
+    const filename = `配送成本利润明细-${delivery.no}.xlsx`
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer())
     return reply
       .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
@@ -319,9 +438,9 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
       },
     })
     if (!delivery) throw { statusCode: 404, message: '配送单不存在' }
+    const profitById = await deliveryProfitById(req.user, [delivery])
     return {
-      ...delivery,
-      items: delivery.items.map(withDocumentProductSnapshot),
+      ...attachDeliveryProfit(delivery, profitById),
       receipt: delivery.receipt ? {
         ...delivery.receipt,
         items: delivery.receipt.items.map(withDocumentProductSnapshot),

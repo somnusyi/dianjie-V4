@@ -8,6 +8,7 @@ import {
   assertUpstreamSettlementTransition,
   requiresUpstreamReceiptReview,
   upstreamReceiptReviewReasons,
+  upstreamReceiptPriceReviewFlags,
 } from '../../src/domain/upstreamProcurement'
 
 describe('upstream procurement state machines', () => {
@@ -62,6 +63,50 @@ describe('upstream receipt review policy', () => {
       'TEMPORARY_PRICE',
       'SENSITIVE_CATEGORY',
     ])
+  })
+
+  it('uses the explicit above-standard reason when actual price exceeds the frozen standard', () => {
+    expect(upstreamReceiptReviewReasons({
+      payableAmount: 100,
+      reviewAmountThreshold: 10_000,
+      hasOverReceipt: false,
+      hasTemporaryPrice: false,
+      hasAboveStandardPrice: true,
+      hasSensitiveCategory: false,
+    })).toEqual(['ABOVE_STANDARD_PRICE'])
+  })
+
+  it('keeps the legacy temporary-price review when no above-standard trigger is present', () => {
+    expect(upstreamReceiptReviewReasons({
+      payableAmount: 100,
+      reviewAmountThreshold: 10_000,
+      hasOverReceipt: false,
+      hasTemporaryPrice: true,
+      hasAboveStandardPrice: false,
+      hasSensitiveCategory: false,
+    })).toEqual(['TEMPORARY_PRICE'])
+  })
+
+  it('evaluates standard-price and legacy temporary-price rows independently in a mixed receipt', () => {
+    expect(upstreamReceiptPriceReviewFlags([
+      { unitPrice: 18, standardUnitPriceSnapshot: 20, isTemporaryPrice: true },
+      { unitPrice: 30, standardUnitPriceSnapshot: null, isTemporaryPrice: true },
+    ])).toEqual({ hasAboveStandardPrice: false, hasTemporaryPriceWithoutStandard: true })
+    expect(upstreamReceiptPriceReviewFlags([
+      { unitPrice: 21, standardUnitPriceSnapshot: 20, isTemporaryPrice: false },
+      { unitPrice: 30, standardUnitPriceSnapshot: null, isTemporaryPrice: false },
+    ])).toEqual({ hasAboveStandardPrice: true, hasTemporaryPriceWithoutStandard: false })
+  })
+
+  it('keeps both reasons for above-standard and unstandardized temporary-price rows in one receipt', () => {
+    expect(upstreamReceiptReviewReasons({
+      payableAmount: 100,
+      reviewAmountThreshold: 10_000,
+      hasOverReceipt: false,
+      hasTemporaryPrice: true,
+      hasAboveStandardPrice: true,
+      hasSensitiveCategory: false,
+    })).toEqual(['ABOVE_STANDARD_PRICE', 'TEMPORARY_PRICE'])
   })
 
   it('enforces separation between inspector and reviewer', () => {

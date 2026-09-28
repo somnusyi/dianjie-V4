@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { inventoryColumns, numberReportRows } from './reportFieldContract'
 import { loadInventorySupplement, reportTimestamp } from './inventoryReportSupplement'
 import { businessDateKey, businessDateRangeInclusive } from '../lib/businessTime'
+import { projectDeliveryMovementEconomics } from './deliveryProfitProjection'
 
 export const reportIds = ['realtime', 'movements', 'summary', 'other-summary', 'transfer-detail', 'transfer-summary', 'stagnant', 'alerts'] as const
 export type ReportId = typeof reportIds[number]
@@ -15,8 +16,8 @@ export const reportDefinitions: Record<ReportId, { title: string; note: string; 
   'other-summary': { title: '其他出入库汇总表', note: '汇总手工出入库、盘点、报损及其冲销，按物品、仓库、基准单位、出入库类型和原因分组。入库为正、出库为负；金额按库存台账成本口径。', columns: inventoryColumns('other-summary') },
   'transfer-detail': { title: '机构间调拨明细表', note: '已发货/已收货的门店调拨登记，数量为登记时冻结的库存单位，金额为登记价格快照。未记录批次、门店仓库、公司归属和独立审核时间时显示“—”；登记不改写门店盘点库存。', columns: inventoryColumns('transfer-detail') },
   'transfer-summary': { title: '机构间调拨汇总表', note: '按物品、单位和调出/调入门店汇总已发货/已收货登记；均价按数量加权，调入与调出结算金额均采用登记结算金额。', columns: inventoryColumns('transfer-summary') },
-  stagnant: { title: '库存呆滞品查询表', note: '展示当前正库存。已滞留天数按最近出库日计算，无出库记录时按最早入库日计算；是否呆滞按查询阈值判断。缺少历史流水不推断天数。', columns: inventoryColumns('stagnant') },
-  alerts: { title: '库存预警表', note: '当前库存按仓库台账；下限沿用总部库存安全库存并换算为库存单位。系统尚无库存上限，显示“—”；无有效单位换算时不推断下限。', columns: inventoryColumns('alerts') },
+  stagnant: { title: '库存呆滞品查询表', note: '展示当前正库存。已滞留天数按最近出库日计算，无出库记录时按最早入库日计算。默认使用每个商品的呆滞天数规则（未配置为30天）；本次查询阈值只临时覆盖结果，不改写配置，也不自动移库。', columns: inventoryColumns('stagnant') },
+  alerts: { title: '库存预警表', note: '当前库存、上下限均使用仓库库存基准单位。优先读取按仓库和商品配置的规则；未建规则时仅将已核验的旧安全库存作兼容回退。', columns: inventoryColumns('alerts') },
 }
 const text = z.string().trim().max(120).default('')
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(v => { const d = new Date(`${v}T00:00:00Z`); return !isNaN(+d) && d.toISOString().slice(0, 10) === v }, '日期无效')
@@ -28,12 +29,12 @@ export const reportQuerySchema = z.object({
     try { const r = z.record(z.object({ min: z.number().finite().optional(), max: z.number().finite().optional() }).refine(v => v.min == null || v.max == null || v.min <= v.max, '最小值不能大于最大值')).parse(JSON.parse(value)); return r }
     catch { ctx.addIssue({ code: 'custom', message: '数值范围无效' }); return z.NEVER }
   }),
-  stagnantDays: z.coerce.number().int().min(1).max(36500).default(30),
+  stagnantDays: z.preprocess(value => value === '' || value == null ? undefined : value, z.coerce.number().int().min(1).max(36500).optional()),
   page: z.coerce.number().int().min(1).max(100000).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(20), sort: text, direction: z.enum(['asc', 'desc']).default('asc'), export: z.enum(['0', '1']).default('0'),
 }).refine(q => q.start <= q.end, '开始日期不能晚于结束日期')
 export type ReportQuery = z.infer<typeof reportQuerySchema>
 export const movementLabels: Record<string, string> = { OPENING_BALANCE: '期初建账', MANUAL_INBOUND: '手工入库', UPSTREAM_RECEIPT: '采购入库', ORDER_OUTBOUND: '出库', ADJUSTMENT: '库存调整', LOSS: '报损', REVERSAL: '冲销' }
-const sourceLabels: Record<string, string> = { WarehouseManualInbound: '手工入库单', WarehouseBatchManualInbound: '批量入库单', WarehouseManualOutbound: '手工出库单', WarehousePhysicalCount: '库存盘点单', WarehouseStocktake: '总仓盘点单', WarehouseManualInboundReversal: '入库冲销单', WarehouseDocValueAdjust: '单据金额调整', MeituanDailyPackage: '每日采购数据包', UpstreamReceiptReversal: '采购收货冲销', UpstreamArrivalClaim: '采购到货差异', LossClaimReversal: '报损冲销', DeliveryOrderShipCancel: '配送撤销', ReceiptRejectionReversal: '拒收冲销' }
+const sourceLabels: Record<string, string> = { WarehouseManualInbound: '手工入库单', WarehouseBatchManualInbound: '批量入库单', WarehouseManualOutbound: '手工出库单', WarehouseSelfLoss: '总仓自损单', WarehousePhysicalCount: '库存盘点单', WarehouseStocktake: '总仓盘点单', WarehouseManualInboundReversal: '入库冲销单', WarehouseDocValueAdjust: '单据金额调整', MeituanDailyPackage: '每日采购数据包', UpstreamReceiptReversal: '采购收货冲销', UpstreamArrivalClaim: '采购到货差异', LossClaimReversal: '报损冲销', DeliveryOrderShipCancel: '配送撤销', ReceiptRejectionReversal: '拒收冲销' }
 const dec = (n: any) => new Prisma.Decimal(n ?? 0)
 const num = (n: any) => Number(n ?? 0)
 const LIMIT = 20000
@@ -123,13 +124,49 @@ export async function loadInventoryReport(tx: Prisma.TransactionClient, tenantId
     rows = rows.map(r => ({ ...r, baseUnit: r.unit, baseQuantity: r.transferQty, outSettlementAmount: r.inAmount, inPrice: r.settlement }))
   } else {
     const movements = bounded(await tx.warehouseLedgerMovement.findMany({ where: { ...scope, effectiveAt: { gte: range.start, lt: range.endExclusive }, type: { notIn: ['ORDER_RESERVED', 'ORDER_RELEASED'] } }, include: { product: true, warehouse: true, supplier: true, docLines: { where: { tenantId }, include: { doc: true } }, upstreamReceiptLine: { include: { receipt: { include: { purchaseOrder: true } }, purchaseOrderLine: true } } }, orderBy: [{ effectiveAt: 'desc' }, { id: 'asc' }], take: LIMIT + 1 }))
-    const deliveries = await tx.deliveryOrder.findMany({ where: { tenantId, id: { in: movements.filter(m => m.sourceType === 'DeliveryOrder').map(m => m.sourceId) } }, include: { store: true, purchaseOrder: true, items: true } })
+    const deliveryReversalSources = new Set(['DeliveryOrderShipCancel', 'ReceiptRejectionReversal', 'LossClaimReversal'])
+    const reversalOriginIds = movements
+      .filter(m => m.type === 'REVERSAL' && deliveryReversalSources.has(m.sourceType) && Boolean(m.sourceLineId))
+      .map(m => m.sourceLineId!)
+    const reversalOrigins = reversalOriginIds.length ? await tx.warehouseLedgerMovement.findMany({
+      where: { tenantId, id: { in: reversalOriginIds }, type: 'ORDER_OUTBOUND', sourceType: 'DeliveryOrder' },
+      select: { id: true, sourceId: true, sourceLineId: true, productId: true },
+    }) : []
+    const reversalOriginById = new Map(reversalOrigins.map(origin => [origin.id, origin]))
+    const deliveryIds = [...new Set([
+      ...movements.filter(m => m.sourceType === 'DeliveryOrder').map(m => m.sourceId),
+      ...reversalOrigins.map(origin => origin.sourceId),
+    ])]
+    const deliveries = await tx.deliveryOrder.findMany({ where: { tenantId, id: { in: deliveryIds } }, include: { store: true, purchaseOrder: true, items: true } })
     const byDelivery = new Map(deliveries.map(d => [d.id, d]))
+    const deliveryItemByLedgerKey = new Map<string, typeof deliveries[number]['items'][number]>()
+    for (const delivery of deliveries) {
+      for (const item of delivery.items) if (item.purchaseOrderItemId) {
+        deliveryItemByLedgerKey.set(`${delivery.id}/${item.purchaseOrderItemId}/${item.productId}`, item)
+      }
+    }
     const creatorIds = [...new Set(movements.flatMap(m => [m.docLines[0]?.doc.createdById, m.upstreamReceiptLine?.receipt.createdById, byDelivery.get(m.sourceId)?.createdById, m.createdById].filter((v): v is string => Boolean(v))))]
     const creators = await tx.user.findMany({ where: { tenantId, id: { in: creatorIds } }, select: { id: true, name: true } })
     const creatorNames = new Map(creators.map(u => [u.id, u.name]))
     for (const m of movements) {
       const d = byDelivery.get(m.sourceId)
+      const reversalOrigin = m.sourceLineId && deliveryReversalSources.has(m.sourceType) ? reversalOriginById.get(m.sourceLineId) : undefined
+      const deliveryContext = d || (reversalOrigin ? byDelivery.get(reversalOrigin.sourceId) : undefined)
+      const reversalProductMatches = !reversalOrigin || m.productId === reversalOrigin.productId
+      const deliveryItem = d && m.sourceLineId
+        ? deliveryItemByLedgerKey.get(`${d.id}/${m.sourceLineId}/${m.productId}`)
+        : reversalOrigin?.sourceLineId && reversalProductMatches
+          ? deliveryItemByLedgerKey.get(`${reversalOrigin.sourceId}/${reversalOrigin.sourceLineId}/${reversalOrigin.productId}`)
+          : undefined
+      const deliveryDirection = d ? 'OUTBOUND' as const : reversalOrigin ? 'REVERSAL' as const : null
+      const deliveryQuantity = dec(m.originalQuantity)
+      const deliveryUnitPrice = deliveryItem ? dec(deliveryItem.unitPriceSnapshot) : null
+      const deliverySettlementAmount = deliveryDirection && deliveryUnitPrice && !deliveryQuantity.isNegative() && !deliveryUnitPrice.isNegative()
+        ? deliveryQuantity.mul(deliveryUnitPrice)
+        : null
+      const deliveryEconomics = deliveryDirection && deliveryItem
+        ? projectDeliveryMovementEconomics({ direction: deliveryDirection, quantity: m.originalQuantity, valueDelta: m.valueDelta, unitPrice: deliveryItem.unitPriceSnapshot })
+        : null
       const receiptLine = m.upstreamReceiptLine?.tenantId === tenantId ? m.upstreamReceiptLine : null
       const doc = m.docLines[0]?.doc
       const inbound = m.physicalDelta.gt(0) || m.physicalDelta.eq(0) && m.valueDelta.gte(0)
@@ -139,24 +176,28 @@ export async function loadInventoryReport(tx: Prisma.TransactionClient, tenantId
       const settlement = divisor && receiptLine ? receiptLine.payableAmount.div(divisor) : null
       const absQty = m.physicalDelta.abs(), businessQty = m.originalQuantity.abs()
       const quantity = absQty.eq(0) ? dec(0) : businessQty
-      const createdById = doc?.createdById || receiptLine?.receipt.createdById || d?.createdById || m.createdById
+      const createdById = doc?.createdById || receiptLine?.receipt.createdById || m.createdById || deliveryContext?.createdById
       rows.push({ ...base(m.product, m.warehouse, m.originalUnit), id: m.id, baseUnit: m.inventoryUnit,
-        doc: doc?.docNo || receiptLine?.receipt.no || d?.no || null, type: movementLabels[m.type] || m.type,
-        upstream: receiptLine?.receipt.purchaseOrder.no || d?.purchaseOrder.no || null,
-        upstreamType: receiptLine ? '上游采购单' : d ? '门店订货单' : sourceLabels[m.sourceType] || '其他库存单据',
-        reason: doc?.reason || movementLabels[m.type] || m.type, adjustment: ['ADJUSTMENT', 'REVERSAL'].includes(m.type) ? '是' : '否',
-        counterparty: d?.store.name || m.supplier?.name || m.sourceName || null, counterpartyCode: d?.store.no || m.supplier?.no || null,
-        upstreamDate: receiptLine ? businessDateKey(receiptLine.receipt.purchaseOrder.createdAt) : d ? businessDateKey(d.purchaseOrder.createdAt) : null,
-        date: businessDateKey(m.effectiveAt), createdAt: reportTimestamp(doc?.createdAt || receiptLine?.receipt.createdAt || d?.createdAt),
+        doc: doc?.docNo || receiptLine?.receipt.no || d?.no || (reversalOrigin ? m.sourceId : null), type: movementLabels[m.type] || m.type,
+        upstream: receiptLine?.receipt.purchaseOrder.no || deliveryContext?.purchaseOrder.no || null,
+        upstreamType: receiptLine ? '上游采购单' : reversalOrigin ? sourceLabels[m.sourceType] : d ? '门店订货单' : sourceLabels[m.sourceType] || '其他库存单据',
+        reason: doc?.reason || (reversalOrigin ? sourceLabels[m.sourceType] : null) || movementLabels[m.type] || m.type, adjustment: ['ADJUSTMENT', 'REVERSAL'].includes(m.type) ? '是' : '否',
+        counterparty: deliveryContext?.store.name || m.supplier?.name || m.sourceName || null, counterpartyCode: deliveryContext?.store.no || m.supplier?.no || null,
+        upstreamDate: receiptLine ? businessDateKey(receiptLine.receipt.purchaseOrder.createdAt) : deliveryContext ? businessDateKey(deliveryContext.purchaseOrder.createdAt) : null,
+        date: businessDateKey(m.effectiveAt), createdAt: reportTimestamp(doc?.createdAt || receiptLine?.receipt.createdAt || m.recordedAt || deliveryContext?.createdAt),
         createdBy: createdById ? creatorNames.get(createdById) || null : null,
         reviewedAt: reportTimestamp(doc?.reviewStatus === 'REVIEWED' ? doc.confirmedAt : receiptLine?.receipt.reviewedAt),
         inBaseQty: inbound ? num(absQty) : 0, outBaseQty: inbound ? 0 : num(absQty),
         inQty: inbound ? num(quantity) : 0, outQty: inbound ? 0 : num(quantity),
-        inAmount: inbound ? net == null ? null : num(net) : 0, outAmount: inbound ? 0 : net == null ? null : num(net),
-        inPrice: inbound && net != null && !quantity.eq(0) ? num(net.div(quantity)) : null,
-        outPrice: !inbound && net != null && !quantity.eq(0) ? num(net.div(quantity)) : null,
+        inAmount: inbound ? deliveryDirection === 'REVERSAL' ? deliveryEconomics ? num(deliveryEconomics.costAmount) : null : net == null ? null : num(net) : 0,
+        outAmount: inbound ? 0 : deliveryDirection === 'OUTBOUND' ? deliveryEconomics ? num(deliveryEconomics.costAmount) : null : net == null ? null : num(net),
+        inPrice: inbound ? deliveryDirection === 'REVERSAL' ? deliveryEconomics && !quantity.eq(0) ? num(deliveryEconomics.costAmount.div(quantity)) : null : net != null && !quantity.eq(0) ? num(net.div(quantity)) : null : null,
+        outPrice: !inbound ? deliveryDirection === 'OUTBOUND' ? deliveryEconomics && !quantity.eq(0) ? num(deliveryEconomics.costAmount.div(quantity)) : null : net != null && !quantity.eq(0) ? num(net.div(quantity)) : null : null,
         inSettlementAmount: inbound && settlement != null ? num(settlement) : null,
         inSettlementPrice: inbound && settlement != null && !quantity.eq(0) ? num(settlement.div(quantity)) : null,
+        outSettlementAmount: deliveryDirection === 'OUTBOUND' && deliverySettlementAmount ? num(deliverySettlementAmount) : deliveryDirection === 'REVERSAL' && deliverySettlementAmount ? num(deliverySettlementAmount.negated()) : null,
+        outSettlementPrice: deliveryDirection && deliverySettlementAmount ? num(deliveryUnitPrice!) : null,
+        outProfit: deliveryDirection === 'OUTBOUND' && deliveryEconomics ? num(deliveryEconomics.profit) : deliveryDirection === 'REVERSAL' && deliveryEconomics ? num(deliveryEconomics.profit.negated()) : null,
         note: m.docLines[0]?.note || doc?.note || receiptLine?.receipt.note || m.note || null,
       })
     }

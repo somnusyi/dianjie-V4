@@ -13,6 +13,7 @@ let userId = ''
 let productId = ''
 let externalSupplierId = ''
 let externalProductId = ''
+let actorRole = 'KITCHEN_LEAD'
 let app: ReturnType<typeof Fastify>
 
 function deferred() {
@@ -54,6 +55,9 @@ async function cleanupFixture() {
   await prisma.supplierStockBatchAllocation.deleteMany({ where: { tenantId } })
   await prisma.supplierStockBatch.deleteMany({ where: { tenantId } })
   await prisma.supplierStockMovement.deleteMany({ where: { tenantId } })
+  await prisma.deliveryOrderEvent.deleteMany({ where: { tenantId } })
+  await prisma.deliveryOrderItem.deleteMany({ where: { deliveryOrder: { tenantId } } })
+  await prisma.deliveryOrder.deleteMany({ where: { tenantId } })
   await prisma.purchaseOrderEvent.deleteMany({ where: { tenantId } })
   await prisma.purchaseOrderRevision.deleteMany({ where: { tenantId } })
   await prisma.purchaseOrderItem.deleteMany({ where: { purchaseOrder: { tenantId } } })
@@ -193,7 +197,7 @@ describe('HEADQ warehouse order entry stock guard (integration)', () => {
           storeId,
           storeIds: [storeId],
           userId,
-          role: 'KITCHEN_LEAD',
+          role: actorRole,
         }
       })
       await app.register(purchaseOrderRoutes, { prefix: '/api/orders' })
@@ -389,5 +393,92 @@ describe('HEADQ warehouse order entry stock guard (integration)', () => {
     expect(await prisma.purchaseOrder.count({
       where: { tenantId, supplierId: externalSupplierId, status: 'SUBMITTED' },
     })).toBe(1)
+  })
+
+  it('requires and freezes the actual HEADQ picker and binds it to idempotent shipment replay', async () => {
+    actorRole = 'ADMIN'
+    try {
+      await prisma.warehouse.update({
+        where: { id: warehouseId },
+        data: { inventoryMode: 'OFF', blockZeroStockAtOrderEntry: false },
+      })
+      const order = await prisma.purchaseOrder.create({
+        data: {
+          tenantId,
+          no: `PO-PICKER-${suffix}`,
+          storeId,
+          supplierId,
+          expectedDate: new Date('2030-01-06T00:00:00.000Z'),
+          totalAmount: 36,
+          originalTotalAmount: 36,
+          currentOrderAmount: 36,
+          status: 'CONFIRMED',
+          submittedAt: new Date(),
+          createdById: userId,
+          items: {
+            create: {
+              productId,
+              quantity: 2,
+              originalQuantity: 2,
+              unitPrice: 18,
+              originalUnitPrice: 18,
+              amount: 36,
+              originalAmount: 36,
+              purchaseUnitSnapshot: 'kg',
+              orderUnitSnapshot: 'kg',
+              inventoryUnitSnapshot: 'kg',
+              costUnitSnapshot: 'kg',
+              unitConversionStatusSnapshot: 'VERIFIED',
+              inventoryUnitsPerPurchaseUnitSnapshot: 1,
+              inventoryUnitsPerOrderUnitSnapshot: 1,
+              inventoryUnitsPerCostUnitSnapshot: 1,
+            },
+          },
+        },
+      })
+      const idempotencyKey = `picker-${suffix}`
+
+      const missing = await app.inject({
+        method: 'PATCH',
+        url: `/api/orders/${order.id}/ship`,
+        payload: { idempotencyKey },
+      })
+      expect(missing.statusCode).toBe(400)
+      expect(missing.json()).toEqual({ error: '总仓发货必须填写实际分拣负责人' })
+      expect(await prisma.deliveryOrder.count({ where: { tenantId, purchaseOrderId: order.id } })).toBe(0)
+
+      const first = await app.inject({
+        method: 'PATCH',
+        url: `/api/orders/${order.id}/ship`,
+        payload: { idempotencyKey, pickerName: '分拣员甲' },
+      })
+      expect(first.statusCode).toBe(200)
+      expect(first.json()).toMatchObject({ success: true })
+      const delivery = await prisma.deliveryOrder.findFirstOrThrow({
+        where: { tenantId, purchaseOrderId: order.id },
+        include: { events: { where: { eventType: 'SHIPPED' } } },
+      })
+      expect(delivery.pickerNameSnapshot).toBe('分拣员甲')
+      expect(delivery.events[0]?.metadata).toMatchObject({ pickerName: '分拣员甲' })
+
+      const replay = await app.inject({
+        method: 'PATCH',
+        url: `/api/orders/${order.id}/ship`,
+        payload: { idempotencyKey, pickerName: '分拣员甲' },
+      })
+      expect(replay.statusCode).toBe(200)
+      expect(replay.json()).toMatchObject({ success: true, duplicated: true, deliveryId: delivery.id })
+
+      const conflictingReplay = await app.inject({
+        method: 'PATCH',
+        url: `/api/orders/${order.id}/ship`,
+        payload: { idempotencyKey, pickerName: '分拣员乙' },
+      })
+      expect(conflictingReplay.statusCode).toBe(409)
+      expect(conflictingReplay.json()).toEqual({ error: '同一幂等键不能用于不同的发货请求' })
+      expect(await prisma.deliveryOrder.count({ where: { tenantId, purchaseOrderId: order.id } })).toBe(1)
+    } finally {
+      actorRole = 'KITCHEN_LEAD'
+    }
   })
 })

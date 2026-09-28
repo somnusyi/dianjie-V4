@@ -30,15 +30,29 @@ const MAX_VIDEO_BYTES = 50 * 1024 * 1024
 const ALLOWED_CATEGORY_VALUES = [
   'loss-claims', 'invoices', 'capital', 'documents',
   'reimbursements', 'misc', 'chef-ack', 'products', 'inventory-counts', 'feedback', 'warehouse-docs',
+  'supplier-archive-general', 'supplier-archive-sensitive',
+  'supplier-evidence-documents',
 ] as const
 const ALLOWED_CATEGORIES = new Set<string>(ALLOWED_CATEGORY_VALUES)
 const WAREHOUSE_DOC_UPLOAD_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'PURCHASER', 'SUPPLY_CHAIN'])
 const WAREHOUSE_DOC_READ_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'FINANCE', 'PURCHASER', 'SUPPLY_CHAIN'])
+const SUPPLIER_ARCHIVE_GENERAL_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'FINANCE', 'SUPPLY_CHAIN'])
+const SUPPLIER_ARCHIVE_SENSITIVE_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'FINANCE'])
+const SUPPLIER_EVIDENCE_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'SUPPLY_CHAIN'])
 export function canUploadWarehouseDocument(role: unknown) {
   return WAREHOUSE_DOC_UPLOAD_ROLES.has(String(role || ''))
 }
 export function canReadWarehouseDocument(role: unknown) {
   return WAREHOUSE_DOC_READ_ROLES.has(String(role || ''))
+}
+export function canManageSupplierArchiveGeneral(role: unknown) {
+  return SUPPLIER_ARCHIVE_GENERAL_ROLES.has(String(role || ''))
+}
+export function canManageSupplierArchiveSensitive(role: unknown) {
+  return SUPPLIER_ARCHIVE_SENSITIVE_ROLES.has(String(role || ''))
+}
+export function canManageSupplierEvidence(role: unknown) {
+  return SUPPLIER_EVIDENCE_ROLES.has(String(role || ''))
 }
 const uploadQuerySchema = z.object({
   category: z.enum(ALLOWED_CATEGORY_VALUES).default('misc'),
@@ -167,6 +181,68 @@ export async function assertWarehouseDocumentObjects(
   }))
 }
 
+export async function assertSupplierArchiveObject(input: {
+  tenantId: string
+  sensitive: boolean
+  attachment: WarehouseDocumentObjectMetadata
+}): Promise<void> {
+  const { tenantId, sensitive, attachment } = input
+  const category = sensitive ? 'supplier-archive-sensitive' : 'supplier-archive-general'
+  if (!attachment.key.startsWith(`${category}/${tenantId}/`)) {
+    const error: any = new Error('档案附件不属于当前租户或档案分区')
+    error.statusCode = 403
+    throw error
+  }
+  let result: any
+  try {
+    result = await ossClient().head(attachment.key)
+  } catch (cause: any) {
+    const missing = cause?.status === 404 || cause?.statusCode === 404 || cause?.code === 'NoSuchKey'
+    const error: any = new Error(missing ? '档案附件不存在或已失效，请重新上传' : '档案附件暂时无法核验，请稍后重试')
+    error.statusCode = missing ? 400 : 503
+    error.cause = cause
+    throw error
+  }
+  const headers = result?.res?.headers || result?.headers || {}
+  const actualSize = Number(headers['content-length'] ?? headers['Content-Length'])
+  const actualMime = String(headers['content-type'] ?? headers['Content-Type'] ?? '').split(';')[0].trim().toLowerCase()
+  if (!Number.isFinite(actualSize) || actualSize !== attachment.size || actualMime !== attachment.mime.toLowerCase()) {
+    const error: any = new Error('档案附件元数据与已上传文件不一致，请重新上传')
+    error.statusCode = 400
+    throw error
+  }
+}
+
+export async function assertSupplierEvidenceObject(input: {
+  tenantId: string
+  attachment: WarehouseDocumentObjectMetadata
+}): Promise<void> {
+  const { tenantId, attachment } = input
+  if (!attachment.key.startsWith(`supplier-evidence-documents/${tenantId}/`)) {
+    const error: any = new Error('来货证明附件不属于当前租户')
+    error.statusCode = 403
+    throw error
+  }
+  let result: any
+  try {
+    result = await ossClient().head(attachment.key)
+  } catch (cause: any) {
+    const missing = cause?.status === 404 || cause?.statusCode === 404 || cause?.code === 'NoSuchKey'
+    const error: any = new Error(missing ? '来货证明附件不存在或已失效，请重新上传' : '来货证明附件暂时无法核验，请稍后重试')
+    error.statusCode = missing ? 400 : 503
+    error.cause = cause
+    throw error
+  }
+  const headers = result?.res?.headers || result?.headers || {}
+  const actualSize = Number(headers['content-length'] ?? headers['Content-Length'])
+  const actualMime = String(headers['content-type'] ?? headers['Content-Type'] ?? '').split(';')[0].trim().toLowerCase()
+  if (!Number.isFinite(actualSize) || actualSize !== attachment.size || actualMime !== attachment.mime.toLowerCase()) {
+    const error: any = new Error('来货证明附件元数据与已上传文件不一致，请重新上传')
+    error.statusCode = 400
+    throw error
+  }
+}
+
 export function objectExtensionForMime(mime: string): string {
   return OBJECT_EXTENSION_BY_MIME[mime] || '.bin'
 }
@@ -176,6 +252,15 @@ async function uploadOne(req: any, reply: any, opts: { allowedMimes: string[]; c
   if (!user) return reply.status(401).send({ error: '未登录' })
   if (opts.category === 'warehouse-docs' && !canUploadWarehouseDocument(user.role)) {
     return reply.status(403).send({ error: '无权上传采购入库随货单据' })
+  }
+  if (opts.category === 'supplier-archive-general' && !canManageSupplierArchiveGeneral(user.role)) {
+    return reply.status(403).send({ error: '无权上传供应商档案' })
+  }
+  if (opts.category === 'supplier-archive-sensitive' && !canManageSupplierArchiveSensitive(user.role)) {
+    return reply.status(403).send({ error: '无权上传财务或开票档案' })
+  }
+  if (opts.category === 'supplier-evidence-documents' && !canManageSupplierEvidence(user.role)) {
+    return reply.status(403).send({ error: '无权上传来货证明' })
   }
   if (!ALLOWED_CATEGORIES.has(opts.category)) {
     return reply.status(400).send({ error: `category 必须是 ${[...ALLOWED_CATEGORIES].join(' / ')}` })
@@ -261,6 +346,12 @@ export async function uploadRoutes(app: FastifyInstance) {
     // 否则知道（或猜到）对象 key 的普通门店角色也能绕过单据接口重新签名。
     if (category === 'warehouse-docs' && !canReadWarehouseDocument(req.user.role)) {
       return reply.status(403).send({ error: '无权查看采购入库随货单据' })
+    }
+    // 供应商档案必须先按 record -> supplier -> role/scope 授权。
+    // 通用 key 签名端点无法确认档案已绑定哪个供应商，因此一律拒绝；
+    // 持久读取只由 /api/suppliers/:supplierId/archive 返回短签。
+    if (category === 'supplier-archive-general' || category === 'supplier-archive-sensitive' || category === 'supplier-evidence-documents') {
+      return reply.status(403).send({ error: category === 'supplier-evidence-documents' ? '请通过来货证明记录查看附件' : '请通过供应商档案记录查看附件' })
     }
     const url = toHttps(ossClient().signatureUrl(key, { expires }))
     return reply.send({ url })

@@ -3,14 +3,13 @@ import { ResponsiveDataTable } from '@/components/v2/responsive-data-table'
 
 import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
-import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { DateRangeCalendar, type DateRangeValue } from '@/components/v2/date-range-calendar'
 import { apiFetch } from '@/lib/v2-auth'
 
 type Store = { id: string; no: string; name: string }
+type Product = { id: string; code: string; name: string; inventoryUnit?: string | null }
 type TransferStatus = 'PENDING' | 'SHIPPED' | 'RECEIVED' | 'REVOKED'
 type TransferItem = { id: string; name: string; quantity: number; unit: string; cost: number; settlement: number }
-type Product = { id: string; code: string; name: string; inventoryUnit: string }
 type Transfer = {
   id: string
   no: string
@@ -25,15 +24,6 @@ type Transfer = {
   receivedAt?: string
 }
 
-type Draft = {
-  fromStoreId: string
-  toStoreId: string
-  transferDate: string
-  note: string
-  requestKey: string
-  items: Array<{ productId: string; quantity: string; cost: string; settlement: string }>
-}
-
 const FILTER_STORAGE_KEY = 'dianjie-supply-chain-store-transfer-filters-v1'
 
 const STATUS_META: Record<TransferStatus, { label: string; tone: 'orange' | 'blue' | 'green' | 'gray' }> = {
@@ -43,44 +33,23 @@ const STATUS_META: Record<TransferStatus, { label: string; tone: 'orange' | 'blu
   REVOKED: { label: '已撤回', tone: 'gray' },
 }
 
-function localDate(value = new Date()) {
-  const y = value.getFullYear()
-  const m = String(value.getMonth() + 1).padStart(2, '0')
-  const d = String(value.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
-
-function newDraft(): Draft {
-  return {
-    fromStoreId: '',
-    toStoreId: '',
-    transferDate: localDate(),
-    note: '',
-    requestKey: '',
-    items: [{ productId: '', quantity: '1', cost: '', settlement: '' }],
-  }
-}
-
 export default function StoreTransfersPage() {
-  const [products, setProducts] = useState<Product[]>([])
-  const [saving, setSaving] = useState(false)
   const [stores, setStores] = useState<Store[]>([])
+  const [products, setProducts] = useState<Product[]>([])
   const [transfers, setTransfers] = useState<Transfer[]>([])
   const [ready, setReady] = useState(false)
   const [storeError, setStoreError] = useState('')
-  const [notice, setNotice] = useState('')
-  const [modalOpen, setModalOpen] = useState(false)
-  const [draft, setDraft] = useState<Draft>(newDraft)
+  const [busy, setBusy] = useState('')
+  const [showCreate, setShowCreate] = useState(false)
   const [dateRange, setDateRange] = useState<DateRangeValue>({ from: '', to: '' })
   const [fromStoreId, setFromStoreId] = useState('')
   const [toStoreId, setToStoreId] = useState('')
   const [status, setStatus] = useState<TransferStatus | ''>('')
   const [keyword, setKeyword] = useState('')
-  const [confirmState, openConfirm] = useConfirmSheet()
+  const [form, setForm] = useState({ transferDate: new Date().toISOString().slice(0, 10), fromStoreId: '', toStoreId: '', productId: '', quantity: '1', cost: '0', settlement: '0', note: '' })
 
   useEffect(() => {
-    apiFetch<Transfer[]>('/api/store-transfers').then(setTransfers).catch(e => setStoreError(e.message)).finally(() => setReady(true))
-    apiFetch<Product[]>('/api/store-transfers/products').then(setProducts).catch(e => setStoreError(e.message))
+    loadTransfers().finally(() => setReady(true))
     try {
       const filters = JSON.parse(sessionStorage.getItem(FILTER_STORAGE_KEY) || '{}')
       setDateRange(filters.dateRange || { from: '', to: '' })
@@ -101,6 +70,14 @@ export default function StoreTransfersPage() {
       })
       .catch(reason => {
         if (alive) setStoreError(`门店列表加载失败：${String(reason?.message || reason)}`)
+      })
+    apiFetch<Product[]>('/api/store-transfers/products')
+      .then(data => {
+        if (!alive) return
+        setProducts(data)
+      })
+      .catch(reason => {
+        if (alive) setStoreError(`调拨商品加载失败：${String(reason?.message || reason)}`)
       })
     return () => { alive = false }
   }, [])
@@ -134,49 +111,63 @@ export default function StoreTransfersPage() {
     setKeyword('')
   }
 
-  function openCreate() {
-    setNotice('')
-    setDraft({ ...newDraft(), requestKey: crypto.randomUUID() })
-    setModalOpen(true)
-  }
-
-  function updateItem(index: number, changes: Partial<Draft['items'][number]>) {
-    setDraft(current => ({
-      ...current,
-      items: current.items.map((item, itemIndex) => itemIndex === index ? { ...item, ...changes } : item),
-    }))
+  async function loadTransfers() {
+    try {
+      setTransfers(await apiFetch<Transfer[]>('/api/store-transfers'))
+    } catch (e: any) {
+      setStoreError(e.message || '调拨单加载失败')
+    }
   }
 
   async function createTransfer() {
-    if (saving) return
-    if (!draft.fromStoreId || !draft.toStoreId) return setNotice('请选择调出和调入门店')
-    if (draft.fromStoreId === draft.toStoreId) return setNotice('调出和调入门店不能相同')
-    if (draft.items.some(i => !i.productId || !i.quantity || !i.cost.trim() || !i.settlement.trim())) return setNotice('请填写商品、数量、成本单价和结算单价（可明确填写 0）')
-    setSaving(true)
+    setStoreError('')
+    if (!form.fromStoreId || !form.toStoreId || !form.productId) {
+      setStoreError('请先选择调出门店、调入门店和商品')
+      return
+    }
+    const quantity = Number(form.quantity)
+    const cost = Number(form.cost)
+    const settlement = Number(form.settlement)
+    if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(cost) || cost < 0 || !Number.isFinite(settlement) || settlement < 0) {
+      setStoreError('数量、成本价、结算价格式不正确')
+      return
+    }
+    setBusy('create')
     try {
-      const row = await apiFetch<Transfer>('/api/store-transfers', { method: 'POST', body: JSON.stringify({ ...draft, items: draft.items.map(i => ({ productId: i.productId, quantity: Number(i.quantity), cost: Number(i.cost), settlement: Number(i.settlement) })) }) })
-      setTransfers(current => [row, ...current.filter(r => r.id !== row.id)]); setModalOpen(false); setNotice(`调拨单 ${row.no} 已保存到后台`)
-    } catch (e: any) { setNotice(e.message) } finally { setSaving(false) }
+      await apiFetch('/api/store-transfers', {
+        method: 'POST',
+        body: JSON.stringify({
+          fromStoreId: form.fromStoreId,
+          toStoreId: form.toStoreId,
+          transferDate: form.transferDate,
+          note: form.note,
+          requestKey: crypto.randomUUID(),
+          items: [{ productId: form.productId, quantity, cost, settlement }],
+        }),
+      })
+      setShowCreate(false)
+      setForm(current => ({ ...current, productId: '', quantity: '1', cost: '0', settlement: '0', note: '' }))
+      await loadTransfers()
+    } catch (e: any) {
+      setStoreError(e.message || '新建调拨单失败')
+    } finally {
+      setBusy('')
+    }
   }
 
-  async function changeStatus(id: string, nextStatus: TransferStatus) {
-    if (saving) throw new Error('已有调拨操作正在进行，请稍候')
-    setSaving(true)
+  async function requestStatusChange(row: Transfer, nextStatus: 'SHIPPED' | 'RECEIVED' | 'REVOKED') {
+    const label = nextStatus === 'SHIPPED' ? '审核发货' : nextStatus === 'RECEIVED' ? '确认收货' : '撤回'
+    if (!window.confirm(`确认${label}调拨单 ${row.no}？`)) return
+    setBusy(`${row.id}:${nextStatus}`)
+    setStoreError('')
     try {
-      const row = await apiFetch<Transfer>(`/api/store-transfers/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status: nextStatus }) })
-      setTransfers(current => current.map(item => item.id === id ? row : item)); setNotice(`调拨单 ${row.no} 已${nextStatus === 'SHIPPED' ? '发货' : nextStatus === 'RECEIVED' ? '收货' : '撤回'}`)
-    } catch (e: any) { setNotice(e.message); throw e } finally { setSaving(false) }
-  }
-
-  function requestStatusChange(row: Transfer, nextStatus: TransferStatus) {
-    const action = nextStatus === 'SHIPPED' ? '发货' : nextStatus === 'RECEIVED' ? '收货' : '撤回'
-    openConfirm({
-      title: `确认${action}调拨单？`,
-      body: `调拨单 ${row.no}\n${nextStatus === 'REVOKED' ? '撤回后该单将不再继续流转。' : `确认后状态将更新为“${STATUS_META[nextStatus].label}”。`}`,
-      confirmLabel: `确认${action}`,
-      tone: nextStatus === 'REVOKED' ? 'danger' : 'primary',
-      onConfirm: () => changeStatus(row.id, nextStatus),
-    })
+      await apiFetch(`/api/store-transfers/${row.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: nextStatus }) })
+      await loadTransfers()
+    } catch (e: any) {
+      setStoreError(e.message || `${label}失败`)
+    } finally {
+      setBusy('')
+    }
   }
 
   return (
@@ -190,13 +181,47 @@ export default function StoreTransfersPage() {
           <h1 className="text-h1">门店调拨单</h1>
           <p className="mt-1 text-caption text-gray2">调拨单保存到后台；已发货和已收货单据进入库存报表。本登记不改写门店盘点库存。</p>
         </div>
-        <button type="button" onClick={openCreate} disabled={stores.length < 2}
-          className="rounded-cta bg-accent px-5 py-2.5 text-button text-white disabled:opacity-40">+新建调拨单</button>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="rounded-cta border border-green-200 bg-green-bg px-4 py-2.5 text-caption text-green-fg">供应链审核 · 可新建、发货、收货、撤回</div>
+          <button type="button" onClick={() => setShowCreate(value => !value)} className="h-11 rounded-cta bg-accent px-4 text-button text-white shadow-card">+新建调拨单</button>
+        </div>
       </header>
 
       <main className="mx-auto max-w-[1440px]">
         {storeError && <div className="mt-4 rounded-card border border-red-fg/20 bg-red-bg px-4 py-3 text-caption text-red-fg">{storeError}</div>}
-        {notice && <div className="mt-4 rounded-card border border-amber/30 bg-amber/10 px-4 py-3 text-caption text-amber-fg">{notice}</div>}
+
+        {showCreate && <section className="mt-4 rounded-card border border-border bg-white p-4 shadow-card">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-h2">新建门店调拨单</h2>
+              <p className="text-caption text-gray2">供应链审核录入一张门店间调拨；保存后状态为待发货。</p>
+            </div>
+            <button type="button" onClick={() => setShowCreate(false)} className="rounded-cta border border-border bg-white px-3 py-2 text-caption text-gray2">收起</button>
+          </div>
+          <div className="grid gap-3 md:grid-cols-4">
+            <label className="flex flex-col gap-1"><span className="text-micro text-gray3">调拨日期</span><input type="date" value={form.transferDate} onChange={event => setForm({ ...form, transferDate: event.target.value })} className="h-11 rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></label>
+            <FilterSelect label="调出门店" value={form.fromStoreId} onChange={value => setForm({ ...form, fromStoreId: value })}>
+              <option value="">请选择</option>
+              {stores.map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}
+            </FilterSelect>
+            <FilterSelect label="调入门店" value={form.toStoreId} onChange={value => setForm({ ...form, toStoreId: value })}>
+              <option value="">请选择</option>
+              {stores.map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}
+            </FilterSelect>
+            <FilterSelect label="调拨商品" value={form.productId} onChange={value => setForm({ ...form, productId: value })}>
+              <option value="">请选择</option>
+              {products.map(product => <option key={product.id} value={product.id}>{product.code} · {product.name}{product.inventoryUnit ? ` / ${product.inventoryUnit}` : ''}</option>)}
+            </FilterSelect>
+            <NumberInput label="数量" value={form.quantity} onChange={value => setForm({ ...form, quantity: value })} />
+            <NumberInput label="调出成本价" value={form.cost} onChange={value => setForm({ ...form, cost: value })} />
+            <NumberInput label="调入结算价" value={form.settlement} onChange={value => setForm({ ...form, settlement: value })} />
+            <label className="flex flex-col gap-1"><span className="text-micro text-gray3">备注</span><input value={form.note} onChange={event => setForm({ ...form, note: event.target.value })} placeholder="可选" className="h-11 rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></label>
+          </div>
+          <div className="mt-4 flex justify-end gap-2">
+            <button type="button" onClick={() => setShowCreate(false)} className="h-10 rounded-cta border border-border bg-white px-4 text-button text-gray2">取消</button>
+            <button type="button" disabled={busy === 'create'} onClick={createTransfer} className="h-10 rounded-cta bg-accent px-4 text-button text-white disabled:opacity-60">{busy === 'create' ? '保存中...' : '保存调拨单'}</button>
+          </div>
+        </section>}
 
         <section className="flex flex-wrap items-end gap-3 py-4">
           <DateRangeCalendar label="调拨日期" value={dateRange} onChange={setDateRange} />
@@ -239,13 +264,16 @@ export default function StoreTransfersPage() {
                   <td className="whitespace-nowrap px-4 py-4"><Chip tone={STATUS_META[row.status]?.tone || 'gray'}>{STATUS_META[row.status]?.label || row.status}</Chip></td>
                   <td className="whitespace-nowrap px-4 py-4 font-num text-gray2">{new Date(row.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
                   <td className="whitespace-nowrap px-4 py-4 text-right">
-                    {row.status === 'PENDING' && <div className="flex justify-end gap-3"><Action onClick={() => requestStatusChange(row, 'SHIPPED')}>发货</Action><Action muted onClick={() => requestStatusChange(row, 'REVOKED')}>撤回</Action></div>}
-                    {row.status === 'SHIPPED' && <Action onClick={() => requestStatusChange(row, 'RECEIVED')}>收货</Action>}
-                    {(row.status === 'RECEIVED' || row.status === 'REVOKED') && <span className="text-gray3">—</span>}
+                    {row.status === 'PENDING' && <div className="flex justify-end gap-2">
+                      <ActionButton disabled={busy === `${row.id}:SHIPPED`} onClick={() => requestStatusChange(row, 'SHIPPED')}>审核发货</ActionButton>
+                      <ActionButton disabled={busy === `${row.id}:REVOKED`} tone="gray" onClick={() => requestStatusChange(row, 'REVOKED')}>撤回</ActionButton>
+                    </div>}
+                    {row.status === 'SHIPPED' && <ActionButton disabled={busy === `${row.id}:RECEIVED`} onClick={() => requestStatusChange(row, 'RECEIVED')}>确认收货</ActionButton>}
+                    {['RECEIVED', 'REVOKED'].includes(row.status) && <span className="text-micro text-gray3">已完成</span>}
                   </td>
                 </tr>)}
                 {ready && visible.length === 0 && <tr><td colSpan={9} className="px-4 py-16 text-center text-gray3">
-                  {transfers.length ? '没有符合筛选条件的调拨单' : '暂无调拨单，点击右上角“新建调拨单”开始'}
+                  {transfers.length ? '没有符合筛选条件的调拨单' : '暂无门店调拨记录'}
                 </td></tr>}
               </tbody>
             </table></ResponsiveDataTable>
@@ -254,39 +282,6 @@ export default function StoreTransfersPage() {
         </div>
       </main>
 
-      {modalOpen && <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/30 p-4" onMouseDown={event => event.currentTarget === event.target && setModalOpen(false)}>
-        <div role="dialog" aria-modal="true" aria-label="新建调拨单" className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-card border border-border bg-white shadow-xl">
-          <div className="flex items-center justify-between border-b border-border px-5 py-4">
-            <div><h2 className="text-h2">新建调拨单</h2><p className="mt-1 text-micro text-gray3">按库存单位填写数量与价格，保存后冻结；本登记不扣减门店盘点库存</p></div>
-            <button type="button" onClick={() => setModalOpen(false)} aria-label="关闭" className="p-2 text-xl text-gray3">×</button>
-          </div>
-          <div className="grid gap-4 p-5 sm:grid-cols-2">
-            <FilterSelect label="调出门店 *" value={draft.fromStoreId} onChange={value => setDraft(current => ({ ...current, fromStoreId: value }))}>
-              <option value="">请选择</option>{stores.map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}
-            </FilterSelect>
-            <FilterSelect label="调入门店 *" value={draft.toStoreId} onChange={value => setDraft(current => ({ ...current, toStoreId: value }))}>
-              <option value="">请选择</option>{stores.filter(store => store.id !== draft.fromStoreId).map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}
-            </FilterSelect>
-            <label className="flex flex-col gap-1"><span className="text-micro text-gray3">调拨日期 *</span><input type="date" value={draft.transferDate} onChange={event => setDraft(current => ({ ...current, transferDate: event.target.value }))} className="h-11 rounded-cta border border-border px-3 text-body" /></label>
-            <label className="flex flex-col gap-1"><span className="text-micro text-gray3">备注</span><input value={draft.note} onChange={event => setDraft(current => ({ ...current, note: event.target.value }))} placeholder="选填" className="h-11 rounded-cta border border-border px-3 text-body" /></label>
-          </div>
-          <div className="px-5 pb-5">
-            <div className="mb-2 flex items-center justify-between"><h3 className="text-button">调拨商品</h3><button type="button" onClick={() => setDraft(current => ({ ...current, items: [...current.items, { productId: '', quantity: '1', cost: '', settlement: '' }] }))} className="text-button text-amber-fg">+添加一行</button></div>
-            <div className="space-y-2">{draft.items.map((item, index) => <div key={index} className="grid grid-cols-[minmax(0,1fr)_90px_100px_100px_36px] gap-2">
-              <select aria-label={`第${index + 1}行商品`} value={item.productId} onChange={event => updateItem(index, { productId: event.target.value })} className="h-10 min-w-0 rounded-cta border border-border px-2 text-body"><option value="">选择商品（库存单位）</option>{products.map(p => <option key={p.id} value={p.id}>{p.code} · {p.name} / {p.inventoryUnit}</option>)}</select>
-              <input aria-label={`第${index + 1}行数量`} type="number" min="0.000001" step="0.000001" value={item.quantity} onChange={event => updateItem(index, { quantity: event.target.value })} placeholder="数量" className="h-10 min-w-0 rounded-cta border border-border px-2 text-body" />
-              <input aria-label={`第${index + 1}行成本单价`} type="number" min="0" step="0.000001" value={item.cost} onChange={event => updateItem(index, { cost: event.target.value })} placeholder="成本单价" className="h-10 min-w-0 rounded-cta border border-border px-2 text-body" />
-              <input aria-label={`第${index + 1}行结算单价`} type="number" min="0" step="0.000001" value={item.settlement} onChange={event => updateItem(index, { settlement: event.target.value })} placeholder="结算单价" className="h-10 min-w-0 rounded-cta border border-border px-2 text-body" />
-              <button type="button" aria-label={`删除第${index + 1}行`} disabled={draft.items.length === 1} onClick={() => setDraft(current => ({ ...current, items: current.items.filter((_, itemIndex) => itemIndex !== index) }))} className="text-gray3 disabled:opacity-30">×</button>
-            </div>)}</div>
-          </div>
-          <div className="flex items-center justify-between border-t border-border px-5 py-4">
-            <span className="text-caption text-red-fg">{notice}</span>
-            <div className="flex gap-2"><button type="button" onClick={() => setModalOpen(false)} className="rounded-cta border border-border px-4 py-2 text-button text-gray2">取消</button><button type="button" onClick={createTransfer} disabled={saving} className="rounded-cta bg-accent px-5 py-2 text-button text-white">保存调拨单</button></div>
-          </div>
-        </div>
-      </div>}
-      <ConfirmSheet {...confirmState} />
     </div>
   )
 }
@@ -295,6 +290,13 @@ function FilterSelect({ label, value, onChange, children }: { label: string; val
   return <label className="flex min-w-48 flex-col gap-1"><span className="text-micro text-gray3">{label}</span><select value={value} onChange={event => onChange(event.target.value)} className="h-11 rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent">{children}</select></label>
 }
 
-function Action({ children, onClick, muted = false }: { children: React.ReactNode; onClick: () => void; muted?: boolean }) {
-  return <button type="button" onClick={onClick} className={`text-button ${muted ? 'text-gray2' : 'text-amber-fg'}`}>{children}</button>
+function NumberInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return <label className="flex flex-col gap-1"><span className="text-micro text-gray3">{label}</span><input type="number" min="0" step="0.000001" value={value} onChange={event => onChange(event.target.value)} className="h-11 rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></label>
+}
+
+function ActionButton({ children, disabled, tone = 'accent', onClick }: { children: React.ReactNode; disabled?: boolean; tone?: 'accent' | 'gray'; onClick: () => void }) {
+  const cls = tone === 'gray'
+    ? 'border border-border bg-white text-gray2'
+    : 'bg-accent text-white'
+  return <button type="button" disabled={disabled} onClick={onClick} className={`rounded-cta px-3 py-1.5 text-micro font-semibold disabled:opacity-60 ${cls}`}>{children}</button>
 }

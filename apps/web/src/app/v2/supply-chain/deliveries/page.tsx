@@ -2,7 +2,7 @@
  * 内部供应链 · 配送单查询（桌面端 · 只读）
  *
  * 消费 /api/deliveries 分页列表；筛选全部由服务端执行。
- * 不提供任何写操作按钮；不展示财务/应付/银行/营业额/成本率字段。
+ * 不提供任何写操作按钮；仅内部供应链查看冻结出库成本与利润。
  */
 'use client'
 
@@ -38,6 +38,12 @@ import {
 type Store = { id: string; no: string; name: string }
 
 type ProjectedDelivery = ReturnType<typeof projectDeliveryRow>
+
+function initialDeliveryFilters(): DeliveryFilters {
+  if (typeof window === 'undefined') return DEFAULT_DELIVERY_FILTERS
+  const keyword = new URLSearchParams(window.location.search).get('keyword')?.trim() || ''
+  return keyword ? { ...DEFAULT_DELIVERY_FILTERS, keyword } : DEFAULT_DELIVERY_FILTERS
+}
 
 const DELIVERY_COLUMNS: readonly OrderCenterTableColumn<ProjectedDelivery>[] = [
   {
@@ -107,20 +113,34 @@ const DELIVERY_COLUMNS: readonly OrderCenterTableColumn<ProjectedDelivery>[] = [
   },
   {
     id: 'amount',
-    header: '金额',
+    header: '发货金额',
     defaultWidth: 102,
     align: 'right',
     cellClassName: 'font-num',
-    renderCell: delivery => `¥${Number(delivery.actualTotalAmount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+    renderCell: delivery => moneyText(delivery.profitability?.shippedAmount ?? delivery.actualTotalAmount),
+  },
+  {
+    id: 'costAmount',
+    header: '成本金额',
+    defaultWidth: 112,
+    align: 'right',
+    cellClassName: 'font-num',
+    renderCell: delivery => <span title={delivery.profitability?.costAmount == null ? '进入明细查看缺成本或勾稽告警' : undefined}>{moneyText(delivery.profitability?.costAmount)}</span>,
+  },
+  {
+    id: 'profit',
+    header: '利润',
+    defaultWidth: 102,
+    align: 'right',
+    cellClassName: 'font-num',
+    renderCell: delivery => <span title={delivery.profitability?.profit == null ? '进入明细查看缺成本或勾稽告警' : undefined}>{moneyText(delivery.profitability?.profit)}</span>,
   },
   {
     id: 'action',
     header: '操作',
     defaultWidth: 103,
     align: 'right',
-    renderCell: delivery => delivery.purchaseOrder?.id
-      ? <a href={`/v2/supply-chain/fulfillment/${delivery.purchaseOrder.id}`} className="text-button text-amber-fg">查看订单 ›</a>
-      : <span className="text-gray3">—</span>,
+    renderCell: delivery => <a href={`/v2/supply-chain/deliveries/${delivery.id}`} className="text-button text-amber-fg">查看明细 ›</a>,
   },
 ]
 
@@ -129,8 +149,8 @@ export default function InternalSupplyChainDeliveriesPage() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [filters, setFilters] = useState<DeliveryFilters>(DEFAULT_DELIVERY_FILTERS)
-  const [draftFilters, setDraftFilters] = useState<DeliveryFilters>(DEFAULT_DELIVERY_FILTERS)
+  const [filters, setFilters] = useState<DeliveryFilters>(initialDeliveryFilters)
+  const [draftFilters, setDraftFilters] = useState<DeliveryFilters>(initialDeliveryFilters)
   const [stores, setStores] = useState<Store[]>([])
   const [dateError, setDateError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
@@ -343,8 +363,10 @@ export default function InternalSupplyChainDeliveriesPage() {
                     <tr>
                       <td colSpan={9} className="px-4 py-3 text-right font-semibold">合计</td>
                       <td className="px-4 py-3 text-right font-num font-semibold">
-                        ¥{deliveries.reduce((sum, delivery) => sum + Number(delivery.actualTotalAmount || 0), 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {moneyText(deliveries.reduce((sum, delivery) => sum + Number(delivery.profitability?.shippedAmount ?? delivery.actualTotalAmount ?? 0), 0))}
                       </td>
+                      <td className="px-4 py-3 text-right font-num font-semibold">{moneyTotalOrDash(deliveries.map(delivery => delivery.profitability?.costAmount))}</td>
+                      <td className="px-4 py-3 text-right font-num font-semibold">{moneyTotalOrDash(deliveries.map(delivery => delivery.profitability?.profit))}</td>
                       <td />
                     </tr>
                   </tfoot>
@@ -375,6 +397,18 @@ export default function InternalSupplyChainDeliveriesPage() {
       </main>
     </div>
   )
+}
+
+function moneyText(value: unknown) {
+  if (value == null || value === '') return '—'
+  const amount = Number(value)
+  if (!Number.isFinite(amount)) return '—'
+  return `¥${amount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function moneyTotalOrDash(values: unknown[]) {
+  if (values.length === 0 || values.some(value => value == null || value === '' || !Number.isFinite(Number(value)))) return '—'
+  return moneyText(values.reduce<number>((sum, value) => sum + Number(value), 0))
 }
 
 function FilterInput({ label, value, onChange, placeholder, type = 'search' }: {

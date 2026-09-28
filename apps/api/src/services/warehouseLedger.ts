@@ -196,7 +196,10 @@ async function serializableWithRetry<T>(
       // committed balance or idempotent movement is visible and the request
       // deterministically continues or replays. Business duplicates such as
       // a reused batch number are detected explicitly after the retry.
-      if (!['P2034', 'P2002'].includes(error?.code) || attempt === 4) throw error
+      const rawSerializationConflict = error?.code === 'P2010'
+        && (String(error?.meta?.code || '') === '40001'
+          || /could not serialize|serialization failure|SQLSTATE\s*40001/i.test(String(error?.meta?.message || error?.message || '')))
+      if ((!['P2034', 'P2002'].includes(error?.code) && !rawSerializationConflict) || attempt === 4) throw error
     }
   }
   throw new Error('总仓库存事务重试失败')
@@ -1591,6 +1594,14 @@ export type BatchManualWarehouseOutboundInput = {
   /** 出库原因/去向，如「门店拨补（美团 8.22 配送）」「报损」 */
   reason: string
   sourceName?: string | null
+  /** SELF_LOSS 只能按冻结移动均价出库，并且不能占用已预留给配送的库存。 */
+  businessType?: 'GENERIC' | 'SELF_LOSS'
+  /** 需要与扣库原子提交的单据/审计写入。 */
+  finalizeInTransaction?: (tx: Prisma.TransactionClient, result: {
+    replayed: boolean
+    movements: Array<{ id: string; productId: string; physicalDelta: Prisma.Decimal; valueDelta: Prisma.Decimal; inventoryUnit: string }>
+    warehouseId: string
+  }) => Promise<unknown>
 }
 
 /**
@@ -1601,8 +1612,10 @@ export type BatchManualWarehouseOutboundInput = {
  * 样品、报损、切换期历史补录。此函数提供有审计、有幂等、有 FEFO 批次
  * 分摊的手工出库通道。
  *
- * 语义与每日包出库对齐：type=ORDER_OUTBOUND、sourceType='WarehouseManualOutbound'
- * 区分来源；成本默认按移动均价带出，调用方可指定权威成本（如美团口径金额）；
+ * 语义与每日包出库对齐：type=ORDER_OUTBOUND；普通业务使用
+ * sourceType='WarehouseManualOutbound'，总仓自损使用独立的
+ * sourceType='WarehouseSelfLoss'，供报表和审计稳定筛选，不依赖 reason 文本。
+ * 成本默认按移动均价带出，调用方可指定权威成本（如美团口径金额）；
  * 清零行尾差全部带出；STRICT 模式库存不足即整批拒绝。不回写 Product.stock。
  */
 export async function recordBatchManualWarehouseOutbound(input: BatchManualWarehouseOutboundInput) {
@@ -1610,6 +1623,7 @@ export async function recordBatchManualWarehouseOutbound(input: BatchManualWareh
   if (!input.items.length) throw businessError('出库明细不能为空', 400)
   if (!input.effectiveAt || Number.isNaN(input.effectiveAt.getTime())) throw businessError('出库时间无效', 400)
   const reason = String(input.reason || '').trim()
+  const businessType = input.businessType || 'GENERIC'
   if (reason.length < 2) throw businessError('请填写出库原因/去向', 400)
   const sourceRequestId = String(input.idempotencyKey || '').trim()
   const normalizedIdempotencyKey = `manual-outbound:${sourceRequestId}`
@@ -1649,6 +1663,7 @@ export async function recordBatchManualWarehouseOutbound(input: BatchManualWareh
     const specifiedAmount = item.totalAmount === null || item.totalAmount === undefined
       ? null
       : decimal(item.totalAmount, `${product.name}出库成本`).toDecimalPlaces(VALUE_DP)
+    if (businessType === 'SELF_LOSS' && specifiedAmount !== null) throw businessError('总仓自损成本必须按冻结移动平均成本计算，不能手工覆盖', 400)
     if (specifiedAmount !== null && specifiedAmount.lte(0)) throw businessError(`${product.name}出库成本必须大于0`, 400)
     return { index, product, contract, inventoryQuantity, specifiedAmount, note: item.note || null }
   })
@@ -1657,15 +1672,32 @@ export async function recordBatchManualWarehouseOutbound(input: BatchManualWareh
     const lineKeys = lines.map(line => `${normalizedIdempotencyKey}:${line.product.id}`)
     const existing = await tx.warehouseLedgerMovement.findMany({
       where: { tenantId: input.tenantId, warehouseId, idempotencyKey: { in: lineKeys } },
-      select: { id: true, idempotencyKey: true, productId: true, physicalDelta: true, valueDelta: true, inventoryUnit: true },
+      select: { id: true, idempotencyKey: true, productId: true, physicalDelta: true, valueDelta: true, inventoryUnit: true, requestFingerprint: true },
     })
     const existingByKey = new Map(existing.map(row => [row.idempotencyKey, row]))
-    if (existing.length === lineKeys.length) {
-      return {
+    const fingerprintFor = (line: typeof lines[number]) => fingerprint({
+      businessType,
+      productId: line.product.id,
+      inventoryQuantity: line.inventoryQuantity.toFixed(QTY_DP),
+      totalAmount: line.specifiedAmount?.toFixed(VALUE_DP) || null,
+      effectiveAt: input.effectiveAt.toISOString(),
+      reason,
+      sourceName: input.sourceName || null,
+      note: line.note,
+    })
+    if (existing.length > 0) {
+      const exactReplay = existing.length === lineKeys.length && lines.every(line => {
+        const row = existingByKey.get(`${normalizedIdempotencyKey}:${line.product.id}`)
+        return row?.productId === line.product.id && row.requestFingerprint === fingerprintFor(line)
+      })
+      if (!exactReplay) throw businessError('同一幂等键不能用于不同的出库请求', 409)
+      const replayResult = {
         replayed: true,
         movements: existing.map(row => ({ id: row.id, productId: row.productId, physicalDelta: row.physicalDelta, valueDelta: row.valueDelta, inventoryUnit: row.inventoryUnit })),
         warehouseId,
       }
+      const finalized = input.finalizeInTransaction ? await input.finalizeInTransaction(tx, replayResult) : undefined
+      return { ...replayResult, finalized }
     }
 
     const balances = await lockBalances(tx, {
@@ -1680,7 +1712,11 @@ export async function recordBatchManualWarehouseOutbound(input: BatchManualWareh
       const replay = existingByKey.get(idempotencyKey)
       if (replay) { movements.push({ id: replay.id, productId: replay.productId, physicalDelta: replay.physicalDelta, valueDelta: replay.valueDelta, inventoryUnit: replay.inventoryUnit }); continue }
       const balance = balances.get(line.product.id)!
-      if (inventoryMode === 'STRICT' && balance.physicalQty.lt(line.inventoryQuantity)) {
+      const availableQty = balance.physicalQty.minus(balance.reservedQty)
+      const insufficient = businessType === 'SELF_LOSS'
+        ? availableQty.lt(line.inventoryQuantity)
+        : inventoryMode === 'STRICT' && balance.physicalQty.lt(line.inventoryQuantity)
+      if (insufficient) {
         throw businessError(`${line.product.name} 可用总仓库存不足，不能出库`, 409)
       }
       let costOut = line.specifiedAmount !== null
@@ -1709,18 +1745,11 @@ export async function recordBatchManualWarehouseOutbound(input: BatchManualWareh
           inventoryQuantity: line.inventoryQuantity,
           inventoryUnit: line.contract.inventoryUnit,
           inventoryUnitCost: line.inventoryQuantity.gt(0) ? costOut.div(line.inventoryQuantity).toDecimalPlaces(COST_DP) : ZERO,
-          sourceType: 'WarehouseManualOutbound',
+          sourceType: businessType === 'SELF_LOSS' ? 'WarehouseSelfLoss' : 'WarehouseManualOutbound',
           sourceId: sourceRequestId,
           sourceLineId: line.product.id,
           idempotencyKey,
-          requestFingerprint: fingerprint({
-            productId: line.product.id,
-            inventoryQuantity: line.inventoryQuantity.toFixed(QTY_DP),
-            totalAmount: line.specifiedAmount?.toFixed(VALUE_DP) || null,
-            effectiveAt: input.effectiveAt.toISOString(),
-            reason,
-            note: line.note,
-          }),
+          requestFingerprint: fingerprintFor(line),
           effectiveAt: input.effectiveAt,
           note: line.note ? `${reason}｜${line.note}` : reason,
           sourceName: input.sourceName || null,
@@ -1755,6 +1784,7 @@ export async function recordBatchManualWarehouseOutbound(input: BatchManualWareh
             inventoryUnit: line.contract.inventoryUnit,
             costOut: costOut.toFixed(2),
             reason,
+            businessType,
             documentLine: line.index + 1,
           },
         },
@@ -1767,7 +1797,9 @@ export async function recordBatchManualWarehouseOutbound(input: BatchManualWareh
         inventoryUnit: line.contract.inventoryUnit,
       })
     }
-    return { replayed: false, movements, warehouseId }
+    const result = { replayed: false, movements, warehouseId }
+    const finalized = input.finalizeInTransaction ? await input.finalizeInTransaction(tx, result) : undefined
+    return { ...result, finalized }
   })
 }
 

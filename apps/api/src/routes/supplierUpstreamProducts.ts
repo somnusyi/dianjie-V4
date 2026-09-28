@@ -48,6 +48,9 @@ const PRODUCT_SNAPSHOT_SELECT = {
   id: true, code: true, name: true, category: true, spec: true, unit: true,
   purchaseUnit: true, inventoryUnit: true, inventoryUnitsPerPurchaseUnit: true,
   price: true, status: true,
+  evidenceRequirement: true,
+  requiredEvidenceTypes: true,
+  evidenceRequirementVersion: true,
 } as const
 
 function serializeBinding(row: any) {

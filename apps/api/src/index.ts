@@ -37,6 +37,8 @@ import { openingTaskRoutes } from './routes/openingTasks'
 import { budgetRoutes } from './routes/budgets'
 import { storeRoutes } from './routes/stores'
 import { supplierRoutes } from './routes/suppliers'
+import { supplierArchiveRoutes } from './routes/supplierArchives'
+import { supplierEvidenceDocumentRoutes } from './routes/supplierEvidenceDocuments'
 import { productRoutes } from './routes/products'
 import { productUpstreamSourceRoutes } from './routes/productUpstreamSources'
 import { supplierUpstreamProductRoutes, upstreamRelationsRoutes } from './routes/supplierUpstreamProducts'
@@ -57,6 +59,7 @@ import { logRoutes } from './routes/logs'
 import { startScheduler } from './services/scheduler'
 import { purchaseOrderRoutes } from './routes/orders'
 import { deliveryRoutes } from './routes/deliveries'
+import { replenishmentOrderRoutes } from './routes/replenishmentOrders'
 import { registerIdempotency } from './lib/idempotency'
 import { lossClaimRoutes } from './routes/lossClaims'
 import { paymentRuleRoutes } from './routes/paymentRules'
@@ -244,6 +247,8 @@ async function bootstrap() {
   await app.register(dashboardRoutes,      { prefix: '/api/dashboard' })
   await app.register(storeRoutes,          { prefix: '/api/stores' })
   await app.register(supplierRoutes,       { prefix: '/api/suppliers' })
+  await app.register(supplierArchiveRoutes, { prefix: '/api/suppliers' })
+  await app.register(supplierEvidenceDocumentRoutes, { prefix: '/api' })
   await app.register(productRoutes,        { prefix: '/api/products' })
   await app.register(productUpstreamSourceRoutes, { prefix: '/api/product-upstream-sources' })
   await app.register(supplierUpstreamProductRoutes, { prefix: '/api/suppliers' })
@@ -263,6 +268,7 @@ async function bootstrap() {
   await app.register(logRoutes,            { prefix: '/api/logs' })
   app.register(purchaseOrderRoutes, { prefix: '/api/orders' })
   app.register(deliveryRoutes, { prefix: '/api/deliveries' })
+  app.register(replenishmentOrderRoutes, { prefix: '/api/replenishment-orders' })
   app.register(lossClaimRoutes, { prefix: '/api/loss-claims' })
   app.register(paymentRuleRoutes, { prefix: '/api/payment-rules' })
   app.register(deliveryRuleRoutes, { prefix: '/api/delivery-rules' })

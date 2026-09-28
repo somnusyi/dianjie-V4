@@ -13,7 +13,10 @@ export type OrderDraftInputLine = {
 
 export const orderDraftProductSelect = {
   id: true,
+  code: true,
   name: true,
+  spec: true,
+  category: true,
   unit: true,
   minOrderQty: true,
   stepQty: true,

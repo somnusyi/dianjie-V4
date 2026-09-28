@@ -26,7 +26,7 @@ describe('warehouse shadow ledger migration contract', () => {
     const movement = schema.match(/model WarehouseLedgerMovement \{[\s\S]*?\n\}/)?.[0] || ''
     const reservation = schema.match(/model WarehouseLedgerReservation \{[\s\S]*?\n\}/)?.[0] || ''
 
-    expect(warehouse).toContain('inventoryMode        WarehouseInventoryMode @default(OFF)')
+    expect(warehouse).toMatch(/inventoryMode\s+WarehouseInventoryMode\s+@default\(OFF\)/)
     expect(migration).toContain("CREATE TYPE \"WarehouseInventoryMode\" AS ENUM ('OFF', 'SHADOW', 'STRICT')")
     expect(migration).toContain("DEFAULT 'OFF'")
     for (const model of [balance, movement, reservation]) {

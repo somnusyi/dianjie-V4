@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import UpstreamProcurementPage from './page'
 import { printSheet } from './print-sheet'
+import { SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT } from '@/components/v2/supply-chain-shell'
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
 vi.mock('@/lib/v2-auth', () => ({ apiFetch: vi.fn() }))
@@ -227,6 +228,7 @@ const statementDetail = {
 function installPageMock(
   options: {
     orders?: any[]
+    shipments?: any[]
     receipts?: any[]
     purchaseReturns?: any[]
     claims?: any[]
@@ -240,6 +242,7 @@ function installPageMock(
   } = {}
 ) {
   const orders = options.orders ?? []
+  const shipments = options.shipments ?? []
   const receipts = options.receipts ?? []
   const purchaseReturns = options.purchaseReturns ?? []
   const claims = options.claims ?? []
@@ -250,12 +253,14 @@ function installPageMock(
   mockFetch.mockImplementation((path, init) => {
     const url = String(path)
     if (url === '/api/upstream/purchase-orders' && !init) return Promise.resolve(orders)
-    if (url === '/api/upstream/shipments') return Promise.resolve([])
+    if (url === '/api/upstream/shipments') return Promise.resolve(shipments)
     if (url === '/api/upstream/receipts') return Promise.resolve(receipts)
     if (url === '/api/upstream/purchase-returns') return Promise.resolve(purchaseReturns)
     if (url === '/api/upstream/arrival-claims') return Promise.resolve(claims)
     if (url === '/api/upstream/settlement-statements') return Promise.resolve(statements)
     if (url === '/api/upstream/contracts' && !init) return Promise.resolve(contracts)
+    if (url === '/api/upstream/quality-standards?includeArchived=1') return Promise.resolve([])
+    if (url === '/api/upstream/price-standards?includeArchived=1') return Promise.resolve([])
     if (url === '/api/upstream/contracts' && init?.method === 'POST')
       return Promise.resolve({
         id: 'contract-created',
@@ -273,6 +278,7 @@ function installPageMock(
     if (url === '/api/upstream/settlement-statements/statement-1') return Promise.resolve(options.statementDetailValue)
     if (url === '/api/upstream/purchase-orders/order-1/revisions/revision-1/review' && init?.method === 'POST') return Promise.resolve({ success: true })
     if (url === '/api/upstream/receipts/receipt-1/confirm' && init?.method === 'POST') return Promise.resolve({ success: true })
+    if (url === '/api/upstream/receipts/receipt-1/review-and-post' && init?.method === 'POST') return Promise.resolve({ success: true })
     return Promise.reject(new Error(`unexpected API: ${url}`))
   })
 }
@@ -337,6 +343,8 @@ describe('上游采购收货后补报', () => {
       if (url === '/api/upstream/arrival-claims') return Promise.resolve([])
       if (url === '/api/upstream/settlement-statements') return Promise.resolve([])
       if (url === '/api/upstream/contracts') return Promise.resolve([])
+      if (url === '/api/upstream/quality-standards?includeArchived=1') return Promise.resolve([])
+      if (url === '/api/upstream/price-standards?includeArchived=1') return Promise.resolve([])
       if (url === '/api/upstream/setup-options')
         return Promise.resolve({
           suppliers: [postedReceipt.supplier],
@@ -482,6 +490,8 @@ describe('上游采购收货后补报', () => {
       if (url === '/api/upstream/arrival-claims') return Promise.resolve([])
       if (url === '/api/upstream/settlement-statements') return Promise.resolve([])
       if (url === '/api/upstream/contracts') return Promise.resolve([])
+      if (url === '/api/upstream/quality-standards?includeArchived=1') return Promise.resolve([])
+      if (url === '/api/upstream/price-standards?includeArchived=1') return Promise.resolve([])
       if (url === '/api/upstream/setup-options')
         return Promise.resolve({
           suppliers: [postedReceipt.supplier],
@@ -800,6 +810,8 @@ describe('上游采购收货后补报', () => {
       if (url === '/api/upstream/arrival-claims') return Promise.resolve([])
       if (url === '/api/upstream/settlement-statements') return Promise.resolve([])
       if (url === '/api/upstream/contracts' && !init) return Promise.resolve([])
+      if (url === '/api/upstream/quality-standards?includeArchived=1') return Promise.resolve([])
+      if (url === '/api/upstream/price-standards?includeArchived=1') return Promise.resolve([])
       if (url === '/api/upstream/setup-options')
         return Promise.resolve({
           suppliers: [postedReceipt.supplier, supplierTwo],
@@ -1027,6 +1039,192 @@ describe('上游采购收货后补报', () => {
     expect(container.textContent).toContain('待审核')
     expect(container.textContent).toContain('审核并出库')
 
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('有质量标准的到货行必须由验收人显式选择结果', async () => {
+    const shipment = {
+      id: 'shipment-quality-1',
+      no: 'USH-Q-1',
+      status: 'SHIPPED',
+      supplierId: 'supplier-1',
+      purchaseOrder: { id: 'order-1', no: 'UPO-Q-1', status: 'SHIPPED' },
+      lines: [{
+        id: 'shipment-line-q1',
+        purchaseOrderLineId: 'order-line-q1',
+        shippedQty: 5,
+        purchaseUnit: 'kg',
+        receiptLines: [],
+        purchaseOrderLine: {
+          productId: 'product-1',
+          productNameSnapshot: '人工见手青',
+          productSpecSnapshot: '5kg/箱',
+          unitPrice: 18,
+          standardUnitPriceSnapshot: 20,
+          priceStandardCurrencySnapshot: 'CNY',
+          priceStandardTaxInclusiveSnapshot: true,
+          qualityStandardId: 'quality-1',
+          qualityStandardVersionSnapshot: 2,
+          qualityCriteriaSnapshot: { description: '无异味、无腐烂' },
+        },
+      }],
+    }
+    installPageMock({ shipments: [shipment] })
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('USH-Q-1') ?? false)
+    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '登记到货')?.click())
+    await waitFor(() => container.textContent?.includes('无异味、无腐烂') ?? false)
+
+    const qualitySelect = Array.from(container.querySelectorAll('select')).find((select) => select.textContent?.includes('合格') && select.textContent?.includes('不合格')) as HTMLSelectElement
+    expect(qualitySelect.value).toBe('')
+    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '生成收货单')?.click())
+    await waitFor(() => container.textContent?.includes('必须选择质量验收结果') ?? false)
+    expect(mockFetch.mock.calls.some(([path, init]) => String(path).includes('/shipments/shipment-quality-1/receipts') && init?.method === 'POST')).toBe(false)
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('质量验收不合格必须填写拒收处置并上传证据', async () => {
+    const shipment = {
+      id: 'shipment-quality-fail-1',
+      no: 'USH-Q-FAIL-1',
+      status: 'SHIPPED',
+      supplierId: 'supplier-1',
+      purchaseOrder: { id: 'order-1', no: 'UPO-Q-FAIL-1', status: 'SHIPPED', currency: 'CNY' },
+      lines: [{
+        id: 'shipment-line-quality-fail-1',
+        purchaseOrderLineId: 'order-line-quality-fail-1',
+        shippedQty: 10,
+        purchaseUnit: 'kg',
+        receiptLines: [],
+        purchaseOrderLine: {
+          productId: 'product-1',
+          productNameSnapshot: '人工见手青',
+          productSpecSnapshot: '5kg/箱',
+          unitPrice: 18,
+          standardUnitPriceSnapshot: 20,
+          priceStandardCurrencySnapshot: 'CNY',
+          priceStandardTaxInclusiveSnapshot: true,
+          qualityStandardId: 'quality-1',
+          qualityStandardVersionSnapshot: 2,
+          qualityCriteriaSnapshot: { description: '无异味、无腐烂' },
+        },
+      }],
+    }
+    installPageMock({ shipments: [shipment] })
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('USH-Q-FAIL-1') ?? false)
+    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '登记到货')?.click())
+    await waitFor(() => container.textContent?.includes('无异味、无腐烂') ?? false)
+
+    const qualitySelect = Array.from(container.querySelectorAll('select')).find((select) => select.textContent?.includes('合格') && select.textContent?.includes('不合格')) as HTMLSelectElement
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(qualitySelect, 'FAIL')
+      qualitySelect.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    const quantityInputs = Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[]
+    change(quantityInputs[1], '0')
+    change(quantityInputs[3], '10')
+    const disposition = Array.from(container.querySelectorAll('textarea')).find((item) => item.placeholder.includes('处置结果'))!
+    change(disposition, '整批拒收并退回供应商')
+    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '生成收货单')?.click())
+
+    await waitFor(() => container.textContent?.includes('不合格时必须上传证据') ?? false)
+    expect(mockFetch.mock.calls.some(([path, init]) => String(path).includes('/shipments/shipment-quality-fail-1/receipts') && init?.method === 'POST')).toBe(false)
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('超标准价二审必须填写价格例外原因并随请求提交', async () => {
+    const pending = {
+      ...postedReceipt,
+      status: 'PENDING_REVIEW',
+      reviewReasons: ['ABOVE_STANDARD_PRICE'],
+      _count: { lines: 1, claims: 0 },
+    }
+    const detail = {
+      ...receiptDetail,
+      ...pending,
+      canApprovePriceException: true,
+      lines: [{
+        ...receiptDetail.lines[0],
+        unitPrice: 21,
+        standardUnitPriceSnapshot: 20,
+        priceStandardCurrencySnapshot: 'CNY',
+        priceStandardTaxInclusiveSnapshot: true,
+        priceStandardVersionSnapshot: 1,
+      }],
+    }
+    installPageMock({ receipts: [pending], receiptDetailValue: detail })
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('到货验收') ?? false)
+    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '到货验收')?.click())
+    await waitFor(() => container.textContent?.includes('查看明细并复核') ?? false)
+    await act(async () => { Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '查看明细并复核')?.click() })
+    await waitFor(() => container.textContent?.includes('价格例外复核原因') ?? false)
+
+    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '确认复核并入库')?.click())
+    await waitFor(() => container.textContent?.includes('请填写价格例外复核原因') ?? false)
+    const textarea = Array.from(container.querySelectorAll('textarea')).find((item) => item.placeholder.includes('涨价原因'))!
+    change(textarea, '供应商当日临时涨价，已核对并同意')
+    await act(async () => { Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '确认复核并入库')?.click() })
+    await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path).endsWith('/review-and-post')))
+    const call = mockFetch.mock.calls.find(([path]) => String(path).endsWith('/review-and-post'))!
+    expect(JSON.parse(String(call[1]?.body))).toEqual({ priceExceptionReason: '供应商当日临时涨价，已核对并同意' })
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('无价格例外权限时只显示等待管理员核价且不提供复核按钮', async () => {
+    const pending = {
+      ...postedReceipt,
+      status: 'PENDING_REVIEW',
+      reviewReasons: ['ABOVE_STANDARD_PRICE'],
+      _count: { lines: 1, claims: 0 },
+    }
+    installPageMock({
+      receipts: [pending],
+      receiptDetailValue: {
+        ...receiptDetail,
+        ...pending,
+        canApprovePriceException: false,
+      },
+    })
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('到货验收') ?? false)
+    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '到货验收')?.click())
+    await waitFor(() => container.textContent?.includes('查看明细并复核') ?? false)
+    await act(async () => { Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '查看明细并复核')?.click() })
+
+    await waitFor(() => container.textContent?.includes('需等待管理员核价') ?? false)
+    expect(container.textContent).not.toContain('价格例外复核原因（必填）')
+    expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent === '确认复核并入库')).toBe(false)
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('填写标准草稿后取消侧栏跳转会保留当前页面和输入', async () => {
+    installPageMock()
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('价格与质量标准') ?? false)
+    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '价格与质量标准')?.click())
+    await waitFor(() => container.textContent?.includes('新版本·商品质量验收标准') ?? false)
+    const title = container.querySelector('input[placeholder*="黑牛肝菌"]') as HTMLInputElement
+    change(title, '临时质量标准草稿')
+
+    const event = new CustomEvent(SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT, { cancelable: true })
+    let allowed = true
+    act(() => { allowed = window.dispatchEvent(event) })
+
+    expect(allowed).toBe(false)
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain('放弃未提交的内容')
+    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '取消')?.click())
+    expect(title.value).toBe('临时质量标准草稿')
     act(() => root.unmount())
     container.remove()
   })

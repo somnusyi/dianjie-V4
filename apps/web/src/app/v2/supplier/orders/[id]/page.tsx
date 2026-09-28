@@ -223,6 +223,7 @@ export default function SupplierOrderDetailPage() {
   const [pendingShipmentAdditions, setPendingShipmentAdditions] = useState<PendingDeliveryAddition[]>([])
   // 送达备注 — 不用 window.prompt (WebView 禁用)
   const [deliverNote, setDeliverNote] = useState('')
+  const [driverName, setDriverName] = useState('')
   // 报损拒绝弹层 (state-driven, 替代 window.prompt)
   const [rejectingClaim, setRejectingClaim] = useState<{ id: string; no: string; amount: string } | null>(null)
   const [rejectNote, setRejectNote] = useState('')
@@ -1529,10 +1530,14 @@ export default function SupplierOrderDetailPage() {
           )}
           {/* 送达备注输入 — 在固定底部 bar 上方 */}
           <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
-            <label className="text-micro text-gray3 block mb-1">送达备注 (选填, 比如 司机姓名 / 签收人)</label>
+            <label className="text-micro text-gray3 block mb-1">实际配送/司机姓名（必填）</label>
+            <input value={driverName} onChange={e => setDriverName(e.target.value)} maxLength={80}
+              className="mb-3 w-full bg-bg border border-border rounded p-2 text-body"
+              placeholder="填写本次实际送货司机或配送人" />
+            <label className="text-micro text-gray3 block mb-1">送达备注（选填）</label>
             <input value={deliverNote} onChange={e => setDeliverNote(e.target.value)} maxLength={120}
               className="w-full bg-bg border border-border rounded p-2 text-body"
-              placeholder="如: 司机张三 18800001234 / 签收人 林城" />
+              placeholder="如：签收人林城、门店后门交接" />
           </div>
           <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-border p-4 grid grid-cols-1 gap-2"
                style={{ paddingBottom: 'calc(16px + env(safe-area-inset-bottom))' }}>
@@ -1543,8 +1548,8 @@ export default function SupplierOrderDetailPage() {
                 openConfirm({
                   title: hasAck ? `确认 ${order.no} 已送达门店?` : `客户还没发验收单, 仍要送达?`,
                   body: hasAck
-                    ? `客户已发验收单, 确认收货无误 — 提交后等待门店人工验收，系统不会自动收货${deliverNote ? `\n\n备注: ${deliverNote}` : ''}`
-                    : `⚠ 客户还没发验收单；强制送达后仍须门店人工验收，系统不会自动收货。建议等客户发验收单后再点。${deliverNote ? `\n\n备注: ${deliverNote}` : ''}`,
+                    ? `实际配送人：${driverName.trim()}\n客户已发验收单，提交后等待门店人工验收，系统不会自动收货${deliverNote ? `\n\n备注: ${deliverNote}` : ''}`
+                    : `实际配送人：${driverName.trim()}\n⚠ 客户还没发验收单；强制送达后仍须门店人工验收，系统不会自动收货。${deliverNote ? `\n\n备注: ${deliverNote}` : ''}`,
                   confirmLabel: hasAck ? '确认送达' : '强制送达',
                   tone: hasAck ? 'primary' : 'danger',
                   onConfirm: async () => {
@@ -1552,7 +1557,7 @@ export default function SupplierOrderDetailPage() {
                     try {
                       await apiFetch(`/api/orders/${order.id}/deliver`, {
                         method: 'PATCH',
-                        body: JSON.stringify({ note: deliverNote.trim() || undefined }),
+                        body: JSON.stringify({ note: deliverNote.trim() || undefined, driverName: driverName.trim() }),
                       })
                       load()
                     } catch (e: any) { setError(e.message || '提交失败'); throw e }
@@ -1560,7 +1565,7 @@ export default function SupplierOrderDetailPage() {
                   },
                 })
               }}
-              disabled={submitting || detailsDirty}
+              disabled={submitting || detailsDirty || !driverName.trim()}
               className="py-3 bg-amber text-white rounded-cta text-button disabled:opacity-40">
               {submitting ? '提交中…' : '✓ 确认送达 (司机到店时点)'}
             </button>

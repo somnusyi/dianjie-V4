@@ -222,6 +222,15 @@ describe('confirmed operation-group shipment removal recovery', () => {
     expect(source).not.toContain('待门店确认')
   })
 
+  it('captures actual picker and driver separately from status operators', () => {
+    expect(source).toContain('实际分拣负责人（必填）')
+    expect(source).toContain('pickerName: pickerName.trim()')
+    expect(source).toContain('实际配送/司机姓名（必填）')
+    expect(source).toContain('driverName: driverName.trim()')
+    expect(source).toContain('disabled={submitting || !pickerName.trim()}')
+    expect(source).toContain('disabled={dirty || submitting || !driverName.trim()}')
+  })
+
   it('loads and searches only warehouse-scoped supplier products', () => {
     expect(source).toContain('loadAllWarehouseProductCatalog(detail.group.supplierId)')
     expect(source).toContain('matchesWarehouseProductSearch(product, search)')

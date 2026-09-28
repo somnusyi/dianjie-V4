@@ -23,6 +23,8 @@ const STATIC_PAGE_ALLOWLIST: Record<string, string> = {
   'boss/payment-onboarding/page.tsx': '收款接入 checklist，状态存 localStorage，不展示经营数据',
   'supply-chain/inventory-management/page.tsx': '服务端仅重定向到采购入库页，不渲染业务数据',
   'supply-chain/stocktake/page.tsx': '服务端仅重定向到盘点单页，不渲染业务数据',
+  'supply-chain/replenishment-orders/new/page.tsx': '新建页仅挂载 ReplenishmentOrderEditor，取数和提交由共享组件完成',
+  'supply-chain/replenishment-orders/[id]/page.tsx': '详情页仅解析路由并挂载 ReplenishmentOrderEditor，真实数据由共享组件读取',
 }
 
 function collectPages(dir: string, acc: string[] = []): string[] {

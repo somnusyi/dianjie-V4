@@ -372,7 +372,19 @@ export function projectDeliveryRow(row: any) {
       : null,
     store: row.store ? { id: row.store.id, name: row.store.name, no: row.store.no } : null,
     supplier: row.supplier ? { id: row.supplier.id, name: row.supplier.name, no: row.supplier.no } : null,
-    items: Array.isArray(row.items) ? row.items.map(projectDocumentItem) : [],
+    profitability: row.profitability ? {
+      shippedAmount: row.profitability.shippedAmount ?? null,
+      settlementAmount: row.profitability.settlementAmount ?? null,
+      costAmount: row.profitability.costAmount ?? null,
+      profit: row.profitability.profit ?? null,
+      completeCost: Boolean(row.profitability.completeCost),
+      warnings: Array.isArray(row.profitability.warnings) ? row.profitability.warnings : [],
+    } : null,
+    items: Array.isArray(row.items) ? row.items.map((item: any) => ({
+      id: item.id,
+      ...projectDocumentItem(item),
+      profitability: item.profitability ?? null,
+    })) : [],
   }
 }
 

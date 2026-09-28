@@ -189,6 +189,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
           <span className="font-num text-h2">¥{Number(po.totalAmount).toLocaleString()}</span>
         </div>
         <p className="text-caption text-gray3 mt-1">订货 {po.no} · 配送 {activeDelivery?.no || '-'} · {items.length} 项</p>
+        {activeDelivery?.id && <a href={`/v2/delivery-evidence/${encodeURIComponent(activeDelivery.id)}`} className="mt-2 inline-block text-button text-accent">查看本批次来货证明 →</a>}
         {receiptDeadline && (
           <p className={`text-caption mt-2 ${receiptDeadline.overdue ? 'text-red-fg' : 'text-amber-fg'}`}>
             请于 {new Date(receiptDeadline.deadlineAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' })} 前完成入库

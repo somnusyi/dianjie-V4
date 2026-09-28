@@ -6,13 +6,14 @@ import { usePathname } from 'next/navigation'
 const TABS = [
   { href: '/v2/supply-chain/fulfillment', label: '待处理', description: '接单、发货、送达' },
   { href: '/v2/supply-chain/orders', label: '订货单', description: '门店原始订货记录' },
+  { href: '/v2/supply-chain/replenishment-orders', label: '门店补货单', description: '独立补货需求，不改原订货单' },
   { href: '/v2/supply-chain/deliveries', label: '配送单', description: '按实际发货形成' },
 ] as const
 
 export function OrderCenterTabs() {
   const pathname = usePathname() || ''
   return (
-    <nav aria-label="订单中心视图" className="flex flex-wrap gap-2 border-b border-border py-4">
+    <nav aria-label="配送管理功能" className="flex flex-wrap gap-2 border-b border-border py-4">
       {TABS.map(tab => {
         const active = pathname === tab.href || pathname.startsWith(`${tab.href}/`)
         return (

@@ -6,7 +6,8 @@ import { WarehouseToolTabs } from './warehouse-tool-tabs'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
-vi.mock('next/navigation', () => ({ usePathname: () => '/v2/supply-chain/inventory' }))
+const navigation = vi.hoisted(() => ({ pathname: '/v2/supply-chain/inventory' }))
+vi.mock('next/navigation', () => ({ usePathname: () => navigation.pathname }))
 vi.mock('next/link', () => ({
   default: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) =>
     <a href={href} {...props}>{children}</a>,
@@ -21,19 +22,31 @@ function renderTabs() {
 }
 
 describe('库存与单据页面切换', () => {
-  it('只显示三个固定标签，链接不携带关联商品参数', () => {
+  it('显示四个固定标签，链接不携带关联商品参数', () => {
+    navigation.pathname = '/v2/supply-chain/inventory'
     const { container, root } = renderTabs()
     const links = Array.from(container.querySelectorAll('a'))
 
-    expect(links.map(link => link.textContent)).toEqual(['库存查询', '入库记录', '单据审核'])
+    expect(links.map(link => link.textContent)).toEqual(['库存查询', '总仓自损', '入库记录', '单据审核'])
     expect(links.map(link => link.getAttribute('href'))).toEqual([
       '/v2/supply-chain/inventory',
+      '/v2/supply-chain/inventory/loss',
       '/v2/supply-chain/inbound',
       '/v2/supply-chain/docs',
     ])
     expect(links[0].getAttribute('aria-current')).toBe('page')
     expect(container.textContent).not.toContain('关联查看')
     expect(container.querySelector('[role="switch"]')).toBeNull()
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('总仓自损子路由只选中自损标签', () => {
+    navigation.pathname = '/v2/supply-chain/inventory/loss'
+    const { container, root } = renderTabs()
+    const current = container.querySelectorAll('[aria-current="page"]')
+    expect(current).toHaveLength(1)
+    expect(current[0].textContent).toBe('总仓自损')
     act(() => root.unmount())
     container.remove()
   })

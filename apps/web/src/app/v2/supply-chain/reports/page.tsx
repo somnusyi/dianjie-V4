@@ -11,7 +11,7 @@ import styles from './reports.module.css'
 type Column = { key: string; label: string; kind: 'text' | 'number'; group?: string }
 type Result = { id: string; title: string; note: string; columns: Column[]; rows: Record<string, string | number | null>[]; total: number; page: number; pageSize: number; warehouses: { id: string; name: string; isDefault: boolean }[] }
 const today = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date())
-const initialFilters = () => ({ start: `${today().slice(0, 7)}-01`, end: today(), keyword: '', warehouseId: '', category: '', unit: '', org: '', type: '', doc: '', upstream: '', upstreamType: '', reason: '', adjustment: '', counterparty: '', target: '', conversion: '', stagnantDays: '30' })
+const initialFilters = () => ({ start: `${today().slice(0, 7)}-01`, end: today(), keyword: '', warehouseId: '', category: '', unit: '', org: '', type: '', doc: '', upstream: '', upstreamType: '', reason: '', adjustment: '', counterparty: '', target: '', conversion: '', stagnantDays: '' })
 type Filters = ReturnType<typeof initialFilters>
 function Reports() {
   const router = useRouter(); const params = useSearchParams(); const requested = params.get('report') || 'realtime'
@@ -28,7 +28,9 @@ function Reports() {
     if (id) setOpened(old => old.includes(id) ? old : [...old, id])
     setFilters(initialFilters()); setApplied(initialFilters()); setRanges({}); setAppliedRanges({}); setPage(1); setSort(''); setHidden([]); setResult(null)
   }, [id])
-  const query = new URLSearchParams({ ...applied, ranges: JSON.stringify(appliedRanges), page: String(page), pageSize: String(pageSize), sort, direction }).toString()
+  const queryParams = new URLSearchParams({ ...applied, ranges: JSON.stringify(appliedRanges), page: String(page), pageSize: String(pageSize), sort, direction })
+  if (!applied.stagnantDays) queryParams.delete('stagnantDays')
+  const query = queryParams.toString()
   useEffect(() => {
     const serial = ++requestSerial.current
     if (!id) { setResult(null); setLoading(false); return }
@@ -60,11 +62,11 @@ function Reports() {
           <div className={filterStyles.fields}>
             {!currentStock && <div className={filterStyles.date}><span className={filterStyles.dateLabel}>日期范围：</span><FilterDateRange value={{ start: filters.start, end: filters.end }} onChange={range => setFilters(f => ({ ...f, ...range }))} /></div>}
             {transfer ? <>{input('org', '调出门店')}{input('target', '调入门店')}</> : <><label><span>仓库：</span><select value={filters.warehouseId} onChange={e => setFilters(f => ({ ...f, warehouseId: e.target.value }))}><option value="">全部仓库</option>{result?.warehouses.map(w => <option key={w.id} value={w.id}>{w.name}{w.isDefault ? '（默认）' : ''}</option>)}</select></label></>}
-            {input('keyword', '物品名称 / 编码')}{currentStock && input('category', '物品类别')}{id === 'stagnant' && input('stagnantDays', '呆滞天数阈值', 'number')}
+            {input('keyword', '物品名称 / 编码')}{currentStock && input('category', '物品类别')}{id === 'stagnant' && input('stagnantDays', '本次查询阈值（留空按商品规则）', 'number')}
 
 
           </div>
-          {advanced && <div className={`${filterStyles.fields} ${filterStyles.advanced}`}>{!transfer && <label><span>机构名称：</span><input value="总部" readOnly /></label>}{!currentStock && input('category', '物品类别')}            {['movements', 'summary', 'other-summary'].includes(id) && <label><span>出入库类型：</span><select value={filters.type} onChange={e => setFilters(f => ({ ...f, type: e.target.value }))}>{['', '期初建账', '手工入库', '采购入库', '出库', '库存调整', '报损', '冲销'].map(v => <option key={v} value={v}>{v || '全部'}</option>)}</select></label>}
+          {advanced && <div className={`${filterStyles.fields} ${filterStyles.advanced}`}>{!transfer && <label><span>机构：</span><input value="总部" readOnly /></label>}{!currentStock && input('category', '物品类别')}            {['movements', 'summary', 'other-summary'].includes(id) && <label><span>出入库类型：</span><select value={filters.type} onChange={e => setFilters(f => ({ ...f, type: e.target.value }))}>{['', '期初建账', '手工入库', '采购入库', '出库', '库存调整', '报损', '冲销'].map(v => <option key={v} value={v}>{v || '全部'}</option>)}</select></label>}
             {['movements', 'transfer-detail'].includes(id) && input('doc', '单据号')}{input('unit', '单位')}{id === 'realtime' && input('conversion', '与基准单位的换算率')}{id === 'other-summary' && input('reason', '原因类型')}{id === 'movements' && <>{input('upstream', '上游单据号')}{input('upstreamType', '上游单据类型')}{input('reason', '原因类型')}{input('counterparty', '对方机构')}<label><span>调整单标识：</span><select value={filters.adjustment} onChange={e => setFilters(f => ({ ...f, adjustment: e.target.value }))}><option value="">全部</option><option>是</option><option>否</option></select></label></>}{result?.columns.filter(c => c.kind === 'number' && c.key !== 'seq').map(c => <label key={c.key}>{c.group} {c.label}<span className={filterStyles.range}><input aria-label={`${c.group || ''}${c.label}最小值`} type="number" step="any" placeholder="最小值" value={ranges[c.key]?.min ?? ''} onChange={e => setRanges(r => ({ ...r, [c.key]: { ...r[c.key], min: e.target.value === '' ? undefined : Number(e.target.value) } }))} /><input aria-label={`${c.group || ''}${c.label}最大值`} type="number" step="any" placeholder="最大值" value={ranges[c.key]?.max ?? ''} onChange={e => setRanges(r => ({ ...r, [c.key]: { ...r[c.key], max: e.target.value === '' ? undefined : Number(e.target.value) } }))} /></span></label>)}</div>}
           <div className={filterStyles.buttons}><button type="button" className={filterStyles.expand} onClick={() => setAdvanced(v => !v)} aria-expanded={advanced}>{advanced ? '收起筛选 ∧' : '展开筛选 ∨'}</button><button className={filterStyles.primary}>查询</button><button type="button" onClick={() => { setFilters(initialFilters()); setApplied(initialFilters()); setRanges({}); setAppliedRanges({}); setPage(1); setRefresh(n => n + 1) }}>重置</button></div>
         </form>

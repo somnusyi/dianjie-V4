@@ -33,13 +33,19 @@ type Store = { id: string; no: string; name: string }
 type ProjectedReceipt = ReturnType<typeof projectReceiptRow>
 type ProjectedReceiptItem = { productNameSnapshot?: string | null; productCodeSnapshot?: string | null; productSpecSnapshot?: string | null }
 
+function initialReceiptFilters(): ReceiptFilters {
+  if (typeof window === 'undefined') return DEFAULT_RECEIPT_FILTERS
+  const keyword = new URLSearchParams(window.location.search).get('keyword')?.trim() || ''
+  return keyword ? { ...DEFAULT_RECEIPT_FILTERS, keyword } : DEFAULT_RECEIPT_FILTERS
+}
+
 export default function InternalSupplyChainReceiptsPage() {
   const [receipts, setReceipts] = useState<ProjectedReceipt[] | null>(null)
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [filters, setFilters] = useState<ReceiptFilters>(DEFAULT_RECEIPT_FILTERS)
-  const [draftFilters, setDraftFilters] = useState<ReceiptFilters>(DEFAULT_RECEIPT_FILTERS)
+  const [filters, setFilters] = useState<ReceiptFilters>(initialReceiptFilters)
+  const [draftFilters, setDraftFilters] = useState<ReceiptFilters>(initialReceiptFilters)
   const [stores, setStores] = useState<Store[]>([])
   const [dateError, setDateError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)

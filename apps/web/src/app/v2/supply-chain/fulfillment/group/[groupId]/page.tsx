@@ -340,8 +340,10 @@ export default function OperationGroupDetailPage() {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [shipConfirmOpen, setShipConfirmOpen] = useState(false)
   const [shipNote, setShipNote] = useState('')
+  const [pickerName, setPickerName] = useState('')
   const [deliverConfirmOpen, setDeliverConfirmOpen] = useState(false)
   const [deliverNote, setDeliverNote] = useState('')
+  const [driverName, setDriverName] = useState('')
   const requestKeyRef = useRef<string | null>(null)
   const confirmKeyRef = useRef<string | null>(null)
   const shipKeysRef = useRef<Record<string, string>>({})
@@ -809,6 +811,7 @@ export default function OperationGroupDetailPage() {
 
   async function shipGroup() {
     if (!detail || !shipmentEditable || dirty || submitting) return
+    if (!pickerName.trim()) return setActionError('请填写实际分拣负责人')
     const confirmedOrders = detail.orders.filter(order => order.status === 'CONFIRMED')
     setSubmitting(true); setActionError(null)
     let completed = 0
@@ -822,6 +825,7 @@ export default function OperationGroupDetailPage() {
           method: 'PATCH',
           body: JSON.stringify({
             note: shipNote.trim() || undefined,
+            pickerName: pickerName.trim(),
             idempotencyKey,
             ...(serverDraft ? {
               draftRowVersion: serverDraft.rowVersion,
@@ -836,7 +840,7 @@ export default function OperationGroupDetailPage() {
         delete shipKeysRef.current[order.id]
         completed += 1
       }
-      setShipConfirmOpen(false); setShipNote('')
+      setShipConfirmOpen(false); setShipNote(''); setPickerName('')
       clearDeliveryNotePreview()
       await load(); setNotice(`批量发货成功，已分别生成 ${completed} 张配送单`)
     } catch (error: any) {
@@ -849,17 +853,18 @@ export default function OperationGroupDetailPage() {
 
   async function deliverGroup() {
     if (!detail || deliveringOrders.length === 0 || dirty || submitting) return
+    if (!driverName.trim()) return setActionError('请填写实际配送/司机姓名')
     setSubmitting(true); setActionError(null)
     let completed = 0
     try {
       for (const order of deliveringOrders) {
         await apiFetch(`/api/orders/${encodeURIComponent(order.id)}/deliver`, {
           method: 'PATCH',
-          body: JSON.stringify({ note: deliverNote.trim() || undefined }),
+          body: JSON.stringify({ note: deliverNote.trim() || undefined, driverName: driverName.trim() }),
         })
         completed += 1
       }
-      setDeliverConfirmOpen(false); setDeliverNote('')
+      setDeliverConfirmOpen(false); setDeliverNote(''); setDriverName('')
       clearDeliveryNotePreview()
       await load(); setNotice(`批量确认送达成功，已更新 ${completed} 张原订单`)
     } catch (error: any) {
@@ -1048,7 +1053,7 @@ export default function OperationGroupDetailPage() {
       </div>
     </div>}
     {confirmOpen && <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/60 p-4 sm:items-center" role="dialog" aria-modal="true"><div className="w-full max-w-md rounded-card bg-white p-4"><h2 className="text-h2">确认批量接单？</h2><p className="mt-2 text-caption text-gray2">将一次接单 {detail.group.memberCount} 张原订单。不会创建聚合订单，原订单号与历史保留不变。</p><div className="mt-4 grid grid-cols-2 gap-2"><button onClick={() => setConfirmOpen(false)} className="rounded-cta border border-border px-4 py-2.5">取消</button><button onClick={() => void accept()} disabled={submitting} className="rounded-cta bg-ink px-4 py-2.5 text-white disabled:opacity-50">{submitting ? '提交中…' : '确认批量接单'}</button></div></div></div>}
-    {shipConfirmOpen && <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/60 p-4 sm:items-center" role="dialog" aria-modal="true"><div className="w-full max-w-md rounded-card bg-white p-4"><h2 className="text-h2">确认批量发货？</h2><p className="mt-2 whitespace-pre-line text-caption text-gray2">将发货 {detail.orders.filter(order => order.status === 'CONFIRMED').length} 张原订单，并按原订单分别生成配送单。{shipNote.trim() ? `\n备注：${shipNote.trim()}` : ''}</p><div className="mt-4 grid grid-cols-2 gap-2"><button onClick={() => setShipConfirmOpen(false)} className="rounded-cta border border-border px-4 py-2.5">取消</button><button onClick={() => void shipGroup()} disabled={submitting} className="rounded-cta bg-ink px-4 py-2.5 text-white disabled:opacity-50">{submitting ? '发货中…' : '确认批量发货'}</button></div></div></div>}
-    {deliverConfirmOpen && <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/60 p-4 sm:items-center" role="dialog" aria-modal="true"><div className="w-full max-w-md rounded-card bg-white p-4"><h2 className="text-h2">确认批量送达？</h2><p className="mt-2 text-caption text-gray2">将确认 {deliveringOrders.length} 张原订单已送达，并进入收货阶段。</p><label className="mt-3 block text-micro text-gray3">送达备注（选填）<input value={deliverNote} onChange={event => setDeliverNote(event.target.value)} maxLength={200} placeholder="例如司机、签收人或送达说明" className="mt-1 w-full rounded-cta border border-border bg-bg px-3 py-2 text-body" /></label><div className="mt-4 grid grid-cols-2 gap-2"><button onClick={() => setDeliverConfirmOpen(false)} disabled={submitting} className="rounded-cta border border-border px-4 py-2.5 disabled:opacity-50">取消</button><button onClick={() => void deliverGroup()} disabled={dirty || submitting} className="rounded-cta bg-amber px-4 py-2.5 text-white disabled:opacity-50">{submitting ? '提交中…' : '确认批量送达'}</button></div></div></div>}
+    {shipConfirmOpen && <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/60 p-4 sm:items-center" role="dialog" aria-modal="true"><div className="w-full max-w-md rounded-card bg-white p-4"><h2 className="text-h2">确认批量发货？</h2><p className="mt-2 whitespace-pre-line text-caption text-gray2">将发货 {detail.orders.filter(order => order.status === 'CONFIRMED').length} 张原订单，并按原订单分别生成配送单。{shipNote.trim() ? `\n备注：${shipNote.trim()}` : ''}</p><label className="mt-3 block text-micro text-gray3">实际分拣负责人（必填）<input value={pickerName} onChange={event => setPickerName(event.target.value)} maxLength={80} placeholder="填写本批次实际分拣人姓名" className="mt-1 w-full rounded-cta border border-border bg-bg px-3 py-2 text-body" /></label><div className="mt-4 grid grid-cols-2 gap-2"><button onClick={() => setShipConfirmOpen(false)} className="rounded-cta border border-border px-4 py-2.5">取消</button><button onClick={() => void shipGroup()} disabled={submitting || !pickerName.trim()} className="rounded-cta bg-ink px-4 py-2.5 text-white disabled:opacity-50">{submitting ? '发货中…' : '确认批量发货'}</button></div></div></div>}
+    {deliverConfirmOpen && <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/60 p-4 sm:items-center" role="dialog" aria-modal="true"><div className="w-full max-w-md rounded-card bg-white p-4"><h2 className="text-h2">确认批量送达？</h2><p className="mt-2 text-caption text-gray2">将确认 {deliveringOrders.length} 张原订单已送达，并进入收货阶段。</p><label className="mt-3 block text-micro text-gray3">实际配送/司机姓名（必填）<input value={driverName} onChange={event => setDriverName(event.target.value)} maxLength={80} placeholder="填写本次实际送货司机或配送人" className="mt-1 w-full rounded-cta border border-border bg-bg px-3 py-2 text-body" /></label><label className="mt-3 block text-micro text-gray3">送达备注（选填）<input value={deliverNote} onChange={event => setDeliverNote(event.target.value)} maxLength={200} placeholder="例如签收人或送达说明" className="mt-1 w-full rounded-cta border border-border bg-bg px-3 py-2 text-body" /></label><div className="mt-4 grid grid-cols-2 gap-2"><button onClick={() => setDeliverConfirmOpen(false)} disabled={submitting} className="rounded-cta border border-border px-4 py-2.5 disabled:opacity-50">取消</button><button onClick={() => void deliverGroup()} disabled={dirty || submitting || !driverName.trim()} className="rounded-cta bg-amber px-4 py-2.5 text-white disabled:opacity-50">{submitting ? '提交中…' : '确认批量送达'}</button></div></div></div>}
   </div>
 }

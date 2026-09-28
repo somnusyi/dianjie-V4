@@ -459,9 +459,10 @@ describe('projectDeliveryRow', () => {
     store: { id: 's1', no: 'S01', name: '门店A' },
     supplier: { id: 'sup1', no: 'SUP01', name: '供应商A' },
     items: [
-      { productNameSnapshot: '白菜', productCodeSnapshot: 'BC01', productSpecSnapshot: '500g', product: { name: '当前白菜' } },
+      { id: 'di1', productNameSnapshot: '白菜', productCodeSnapshot: 'BC01', productSpecSnapshot: '500g', product: { name: '当前白菜' }, profitability: { costAmount: '60.00', profit: '40.00' } },
       { productNameSnapshot: null, product: { name: '萝卜', code: 'LB01' } },
     ],
+    profitability: { shippedAmount: '100.00', settlementAmount: '100.00', costAmount: '60.00', profit: '40.00', completeCost: true, warnings: [] },
     receipt: { id: 'r1', no: 'RK20260701001', totalAmount: 1000 },
     actualTotalAmount: 980,
   }
@@ -475,6 +476,8 @@ describe('projectDeliveryRow', () => {
     expect(projected.purchaseOrder).toEqual({ id: 'o1', no: 'PO20260701001' })
     expect(projected.items).toHaveLength(2)
     expect(projected.items[0].productNameSnapshot).toBe('白菜')
+    expect(projected.profitability).toMatchObject({ costAmount: '60.00', profit: '40.00', completeCost: true })
+    expect(projected.items[0].profitability).toEqual({ costAmount: '60.00', profit: '40.00' })
   })
 
   it('excludes write-operation fields while exposing delivery amount', () => {

@@ -4,6 +4,12 @@ import { describe, expect, it } from 'vitest'
 const source = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8')
 
 describe('single confirmed-order shipment draft semantics', () => {
+  it('requires and submits the actual delivery person separately from the optional note', () => {
+    expect(source).toContain('实际配送/司机姓名（必填）')
+    expect(source).toContain('driverName: driverName.trim()')
+    expect(source).toContain('disabled={submitting || detailsDirty || !driverName.trim()}')
+  })
+
   it('keeps zero quantity and unsaved removals visible with row-level restore', () => {
     expect(source).toContain('const pendingRemoval = removedShipmentItemIds.includes(line.it.id)')
     expect(source).toContain('shipmentRestoreQty[line.it.id] ?? savedShipQty[line.it.id] ?? line.remaining')

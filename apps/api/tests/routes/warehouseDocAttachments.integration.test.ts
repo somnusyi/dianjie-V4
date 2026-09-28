@@ -19,6 +19,7 @@ describe('warehouse document supplier delivery attachments (integration)', () =>
       await prisma.warehouseDocLog.deleteMany({ where: { tenantId } })
       await prisma.warehouseDocLine.deleteMany({ where: { tenantId } })
       await prisma.warehouseDoc.deleteMany({ where: { tenantId } })
+      await prisma.businessSequence.deleteMany({ where: { tenantId } })
       await prisma.warehouse.deleteMany({ where: { tenantId } })
       await prisma.tenant.deleteMany({ where: { id: tenantId } })
     }
@@ -86,6 +87,26 @@ describe('warehouse document supplier delivery attachments (integration)', () =>
     expect(new Set(results.map(result => result.doc.id)).size).toBe(1)
     expect(results.filter(result => result.created)).toHaveLength(1)
     expect(await prisma.warehouseDoc.count({ where: { tenantId, type: 'MANUAL_INBOUND', idempotencyKey } })).toBe(1)
+  })
+
+  it('为不同并发请求分配唯一单号，不在冲突后的失败事务中继续查询', async () => {
+    const effectiveAt = new Date('2026-09-27T04:00:00.000Z')
+    const calls = Array.from({ length: 8 }, (_, index) => ensureWarehouseDoc({
+      tenantId,
+      userId: 'attachment-test-user',
+      type: 'MANUAL_INBOUND',
+      warehouseId,
+      effectiveAt,
+      idempotencyKey: `attachment-distinct-${index}-${suffix}`,
+      lines: [{
+        productId: `distinct-product-${index}`, productName: `并发商品${index + 1}`, quantity: 1, unit: '箱', unitPrice: 10,
+        amount: 10, inventoryQuantity: 10, inventoryUnit: '件',
+      }],
+    }))
+    const results = await Promise.all(calls)
+    expect(results.every(result => result.created)).toBe(true)
+    expect(new Set(results.map(result => result.doc.id)).size).toBe(8)
+    expect(new Set(results.map(result => result.doc.docNo)).size).toBe(8)
   })
 
   it('treats existing null metadata as empty and rejects cross-purpose or cross-tenant keys', async () => {

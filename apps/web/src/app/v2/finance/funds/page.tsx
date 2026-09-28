@@ -22,6 +22,8 @@ import { SwipeableRow } from '@/components/v2/swipeable-row'
 import { InternalTransferModal, type TransferAccount } from '@/components/v2/internal-transfer-modal'
 import { apiFetch } from '@/lib/v2-auth'
 import dayjs from 'dayjs'
+import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
+
 
 type CashbookSummary = {
   totalBalance: number | string
@@ -93,12 +95,12 @@ export default function FinanceFundsPage() {
   useEffect(() => { load() }, [])
 
   async function createAccount() {
-    if (!draft.name.trim()) { alert('账户名称必填'); return }
+    if (!draft.name.trim()) { notifyUser('账户名称必填'); return }
     // 招行实时账户必须填合规账号
     if (draft.isCmbLive) {
       const cmbAcct = draft.cmbBindAccount.trim()
       if (!/^[0-9]{10,25}$/.test(cmbAcct)) {
-        alert('招行账号格式不对, 应为 10-25 位数字'); return
+        notifyUser('招行账号格式不对, 应为 10-25 位数字'); return
       }
     }
     setSaving(true)
@@ -118,17 +120,17 @@ export default function FinanceFundsPage() {
       setDraft({ name: '', type: 'BANK', bankName: '', accountNo: '', note: '', isCmbLive: false, cmbBindAccount: '' })
       load()
     } catch (e: any) {
-      alert(e.message || '创建失败')
+      notifyUser(e.message || '创建失败')
     } finally { setSaving(false) }
   }
 
   async function softDeleteAccount(a: Account) {
-    if (!confirm(`确定停用「${a.name}」?\n停用后从列表消失但历史流水保留, 不能恢复时联系开发`)) return
+    if (!(await confirmDialog(`确定停用「${a.name}」?\n停用后从列表消失但历史流水保留, 不能恢复时联系开发`))) return
     try {
       await apiFetch(`/api/cashbook/accounts/${a.id}`, { method: 'DELETE' })
       load()
     } catch (e: any) {
-      alert(e.message || '删除失败')
+      notifyUser(e.message || '删除失败')
     }
   }
 

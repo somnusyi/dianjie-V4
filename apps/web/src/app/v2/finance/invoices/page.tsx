@@ -8,6 +8,8 @@ import { useEffect, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Invoice = {
   id: string; invoiceNo: string; invoiceCode?: string | null
@@ -57,7 +59,7 @@ export default function FinanceInvoicesPage() {
           method: 'PATCH', body: JSON.stringify({ action, note }),
         })
         load()
-      } catch (e: any) { alert(e.message || '操作失败'); throw e }
+      } catch (e: any) { notifyUser(e.message || '操作失败'); throw e }
       finally { setSubmitting(null) }
     }
     if (action === 'REJECT') {

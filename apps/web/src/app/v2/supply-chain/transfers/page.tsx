@@ -1,5 +1,6 @@
 'use client'
 import { ResponsiveDataTable } from '@/components/v2/responsive-data-table'
+import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 
 import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
@@ -34,6 +35,7 @@ const STATUS_META: Record<TransferStatus, { label: string; tone: 'orange' | 'blu
 }
 
 export default function StoreTransfersPage() {
+  const [confirmState, openConfirm] = useConfirmSheet()
   const [stores, setStores] = useState<Store[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [transfers, setTransfers] = useState<Transfer[]>([])
@@ -155,16 +157,27 @@ export default function StoreTransfersPage() {
     }
   }
 
-  async function requestStatusChange(row: Transfer, nextStatus: 'SHIPPED' | 'RECEIVED' | 'REVOKED') {
+  function requestStatusChange(row: Transfer, nextStatus: 'SHIPPED' | 'RECEIVED' | 'REVOKED') {
     const label = nextStatus === 'SHIPPED' ? '审核发货' : nextStatus === 'RECEIVED' ? '确认收货' : '撤回'
-    if (!window.confirm(`确认${label}调拨单 ${row.no}？`)) return
+    openConfirm({
+      title: `确认${label}调拨单？`,
+      body: `调拨单 ${row.no} 将更新状态，请核对调出门店、调入门店和商品明细。`,
+      confirmLabel: label,
+      tone: nextStatus === 'REVOKED' ? 'danger' : 'primary',
+      onConfirm: () => changeStatus(row, nextStatus, label),
+    })
+  }
+
+  async function changeStatus(row: Transfer, nextStatus: 'SHIPPED' | 'RECEIVED' | 'REVOKED', label: string) {
     setBusy(`${row.id}:${nextStatus}`)
     setStoreError('')
     try {
       await apiFetch(`/api/store-transfers/${row.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: nextStatus }) })
       await loadTransfers()
     } catch (e: any) {
-      setStoreError(e.message || `${label}失败`)
+      const message = e.message || `${label}失败`
+      setStoreError(message)
+      throw new Error(message)
     } finally {
       setBusy('')
     }
@@ -281,7 +294,7 @@ export default function StoreTransfersPage() {
           <div className="border-t border-border bg-bg px-4 py-3 text-right text-caption text-gray3">共 {visible.length} 条记录</div>
         </div>
       </main>
-
+      <ConfirmSheet {...confirmState} />
     </div>
   )
 }

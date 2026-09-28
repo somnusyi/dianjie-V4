@@ -6,6 +6,7 @@ import { Chip } from '@/components/v2'
 import { SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT } from '@/components/v2/supply-chain-shell'
 import { EmptyState, FriendlyError, SkeletonList } from '@/components/v2/skeleton'
 import { clientRequestId } from '@/lib/client-id'
+import { confirmDialog, promptDialog } from '@/lib/ui-dialogs'
 import { apiFetch } from '@/lib/v2-auth'
 
 type EvidenceType = 'BUSINESS_LICENSE' | 'QUARANTINE_CERTIFICATE' | 'INSPECTION_REPORT' | 'SLAUGHTER_CERTIFICATE' | 'PRODUCTION_INSPECTION_REPORT' | 'THIRD_PARTY_TEST_REPORT' | 'PESTICIDE_RESIDUE_REPORT' | 'OTHER_PRODUCT_EVIDENCE'
@@ -141,7 +142,11 @@ export default function SupplierEvidencePage() {
     if (!editorDirty) return
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
     const warnInternalNavigation = (event: Event) => {
-      if (saving || !window.confirm('当前有尚未提交的证明或到货关联内容，确定离开吗？')) event.preventDefault()
+      event.preventDefault()
+      if (saving) return
+      const proceed = (event as CustomEvent<{ proceed?: () => void }>).detail?.proceed
+      void confirmDialog('当前有尚未提交的证明或到货关联内容，确定离开吗？')
+        .then(confirmed => { if (confirmed) proceed?.() })
     }
     window.addEventListener('beforeunload', warn)
     window.addEventListener(SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT, warnInternalNavigation)
@@ -220,8 +225,8 @@ export default function SupplierEvidencePage() {
       return
     }
     if (draft.status === (product.evidenceRequirement || 'PENDING') && JSON.stringify(currentTypes) === JSON.stringify(nextTypes)) return
-    if (!window.confirm(`该规则是商品全局规则，修改后会影响「${product.name}」的所有上游供应商来货验收。确认继续？`)) return
-    const reason = window.prompt(`请填写将「${product.name}」随货资料规则改为「${REQUIREMENT_LABEL[draft.status]}」的依据（该规则适用于此商品的所有上游供应商）`)
+    if (!(await confirmDialog(`该规则是商品全局规则，修改后会影响「${product.name}」的所有上游供应商来货验收。确认继续？`))) return
+    const reason = await promptDialog(`请填写将「${product.name}」随货资料规则改为「${REQUIREMENT_LABEL[draft.status]}」的依据（该规则适用于此商品的所有上游供应商）`)
     if (!reason?.trim()) return
     try {
       await apiFetch(`/api/suppliers/${encodeURIComponent(supplierId)}/evidence-requirements/${encodeURIComponent(product.id)}`, {
@@ -247,7 +252,7 @@ export default function SupplierEvidencePage() {
   }
 
   async function archiveDocument(document: Evidence) {
-    if (!window.confirm(`归档「${document.title}」？历史到货和门店追溯仍会保留当时证明。`)) return
+    if (!(await confirmDialog(`归档「${document.title}」？历史到货和门店追溯仍会保留当时证明。`))) return
     try {
       await apiFetch(`/api/suppliers/${encodeURIComponent(supplierId)}/evidence-documents/${encodeURIComponent(document.id)}/archive`, { method: 'PATCH' })
       setNotice('证明已归档；历史关联未被删除')
@@ -312,7 +317,7 @@ export default function SupplierEvidencePage() {
 
   async function voidLink(linkId: string) {
     if (!receipt) return
-    const reason = window.prompt('请填写作废这条事后补录的原因（原始随货关联不可作废）')
+    const reason = await promptDialog('请填写作废这条事后补录的原因（原始随货关联不可作废）')
     if (!reason?.trim()) return
     try {
       await apiFetch(`/api/upstream/receipts/${encodeURIComponent(receipt.receipt.id)}/evidence-links/${encodeURIComponent(linkId)}/void`, {

@@ -12,6 +12,8 @@ import {
   isLossClaimVideo,
   printableEvidenceImages,
 } from '@/lib/loss-claim-print'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type LossClaimDetail = {
   id: string
@@ -154,7 +156,7 @@ export default function LossClaimPrintPage() {
       const date = dayjs(claim.createdAt).format('YYYYMMDD')
       pdf.save(`${storeName}-${date}-报损单.pdf`)
     } catch (reason: any) {
-      alert(`保存 PDF 失败：${reason?.message || reason}`)
+      notifyUser(`保存 PDF 失败：${reason?.message || reason}`)
     } finally {
       setSaving(false)
     }

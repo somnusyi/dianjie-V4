@@ -49,7 +49,7 @@ describe('管理表格读取接口', () => {
   })
   it('筛选使用完整结果后再分页；导出包括所有匹配结果', async () => {
     const page = (await get('other-in', { pageSize: '1', page: '2' })).json()
-    expect(page.total).toBe(2); expect(page.totals.amount).toBe(25); expect(page.rows[0]).toMatchObject({ seq: 2, no: 'DOC-b', amount: 12.5, printed: null, source: '其他入库', attachments: '1 项' })
+    expect(page.total).toBe(2); expect(page.totals.amount).toBe(25); expect(page.rows[0]).toMatchObject({ seq: 2, no: 'DOC-b', amount: 12.5, printed: null, source: '其他入库', attachments: '1 项', recordType: 'WAREHOUSE_DOC', detailId: 'b' })
     const filtered = (await get('other-in', { filters: JSON.stringify({ no: 'doc-b', review: '未复审' }), pageSize: '1', page: '50' })).json()
     expect(filtered.total).toBe(1); expect(filtered.page).toBe(1); expect(filtered.rows[0].seq).toBe(1)
     const exported = (await get('other-in', { pageSize: '1', export: '1' })).json()
@@ -61,6 +61,7 @@ describe('管理表格读取接口', () => {
   it('采购入库的四个排除字段不出现在响应与导出表头中', async () => {
     const result = (await get('purchase-in')).json()
     expect(result.columns.map((c: any) => c.label)).toEqual(['序号', '单据编号', '入库日期', '上游单据号', '采购机构', '仓库', '供应商', '金额', '状态', '复审状态', '创建时间', '创建人', '备注', '附件'])
+    expect(result.rows[0]).toMatchObject({ recordType: 'WAREHOUSE_DOC', detailId: 'b' })
     const file = (await get('purchase-in', { export: '1' })).json()
     const book = new ExcelJS.Workbook(); await book.xlsx.load(Buffer.from(file.fileBase64, 'base64') as any)
     for (const label of ['对账状态', '发票状态', '打印状态', '质检次数']) expect(book.worksheets[0].getRow(1).values).not.toContain(label)

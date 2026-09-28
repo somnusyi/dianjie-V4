@@ -155,11 +155,12 @@ describe('审核要求与管理页面', () => {
     const link = [...container.querySelectorAll('a')].find(item => item.textContent === '复盘')
     expect(link?.getAttribute('href')).toBe('/v2/supply-chain/stocktake/count/1')
   })
-  it('采购与其他入库单号显示来源徽标，普通列表不再提供重复详情弹窗', async () => {
-    api.fetch.mockResolvedValueOnce({ ...result('purchase-in'), rows: [{ id: '1', no: 'DOC-01', seq: 1, source: '采购收货', attachments: '2 项' }] })
+  it('采购与其他入库单号显示来源徽标，并直达原始单据与附件', async () => {
+    api.fetch.mockResolvedValueOnce({ ...result('purchase-in'), rows: [{ id: 'receipt:1', detailId: '1', recordType: 'UPSTREAM_RECEIPT', no: 'DOC-01', seq: 1, source: '采购收货', attachments: '2 项' }] })
     await render('purchase-in')
     expect(container.textContent).toContain('DOC-01采购收货')
     expect(container.textContent).toContain('2 项')
+    expect(container.querySelector('a[href="/v2/supply-chain/procurement?receipt=1"]')?.textContent).toBe('DOC-01')
     expect(button('查看')).toBeUndefined()
     expect(container.querySelector('button[aria-label="查看 DOC-01 内容"]')).toBeNull()
   })

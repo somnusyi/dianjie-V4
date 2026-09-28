@@ -333,6 +333,7 @@ describe('上游采购收货后补报', () => {
   })
 
   beforeEach(() => {
+    window.history.replaceState({}, '', '/v2/supply-chain/procurement')
     mockFetch.mockReset()
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
@@ -928,6 +929,41 @@ describe('上游采购收货后补报', () => {
     expect(container.textContent).toContain(changeOrder.no)
     expect(container.textContent).toContain(`收货单 ${postedReceipt.no}`)
     expect(container.textContent).toContain('差异单 UCL202609000001')
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('带收货单编号的链接可直达对应验收页并带出当前处理动作', async () => {
+    const inspectingReceipt = { ...postedReceipt, status: 'INSPECTING' }
+    installPageMock({
+      receipts: [inspectingReceipt],
+      receiptDetailValue: { ...receiptDetail, status: 'INSPECTING' },
+    })
+    window.history.replaceState({}, '', '/v2/supply-chain/procurement?tab=receipts&receipt=receipt-1')
+
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes(`收货单明细 · ${postedReceipt.no}`) ?? false)
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/upstream/receipts/receipt-1')
+    expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent === '确认验收并提交')).toBe(true)
+
+    act(() => root.unmount())
+    container.remove()
+  })
+
+  it('对账单支持编号直达，且列表保留可定位的单据锚点', async () => {
+    installPageMock({
+      statements: [statement],
+      statementDetailValue: statementDetail,
+    })
+    window.history.replaceState({}, '', '/v2/supply-chain/procurement?statementId=statement-1')
+
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes(`对账单明细 · ${statement.no}`) ?? false)
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/upstream/settlement-statements/statement-1')
+    expect(container.querySelector('#statement-statement-1')).not.toBeNull()
 
     act(() => root.unmount())
     container.remove()

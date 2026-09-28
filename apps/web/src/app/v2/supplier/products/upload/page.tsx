@@ -19,6 +19,8 @@ import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { ProductToolTabs } from '@/components/v2/product-tool-tabs'
 import { apiFetch, getUser } from '@/lib/v2-auth'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type SupplierOption = { id: string; no: string; name: string }
 
@@ -179,7 +181,7 @@ export default function BatchUploadPage() {
         setSuppliers(list)
         if (list[0]) setSelectedSupplierId(list[0].id)
       })
-      .catch(error => alert(error?.message || '供应商加载失败'))
+      .catch(error => notifyUser(error?.message || '供应商加载失败'))
   }, [internalSupplyChain])
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -191,7 +193,7 @@ export default function BatchUploadPage() {
       const parsed = await parseFile(f)
       setRows(validate(parsed))
     } catch (err: any) {
-      alert('解析失败: ' + (err.message || err))
+      notifyUser('解析失败: ' + (err.message || err))
       setRows(null)
     }
     e.target.value = ''
@@ -204,7 +206,7 @@ export default function BatchUploadPage() {
   function submit() {
     if (!rows || valid === 0 || submitting) return
     if (internalSupplyChain && !selectedSupplierId) {
-      alert('请先选择供应商')
+      notifyUser('请先选择供应商')
       return
     }
     openConfirm({
@@ -275,7 +277,7 @@ export default function BatchUploadPage() {
             return { ...r, __ok: true }
           }))
         } catch (e: any) {
-          alert(e.message || '上传失败')
+          notifyUser(e.message || '上传失败')
           throw e
         } finally {
           setSubmitting(false)

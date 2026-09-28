@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from 'react'
 import AppLayout from '@/components/AppLayout'
 import { Table, Btn, Modal, Field, Input, Select, fmt, fmtDate, useToast } from '@/components/ui'
 import api from '@/lib/api'
+import { promptDialog } from '@/lib/ui-dialogs'
+
 
 const STATUS_INFO: Record<string, { label: string; color: string; bg: string }> = {
   PENDING:      { label: '待供应商处理', color: '#854f0b', bg: '#faeeda' },
@@ -105,8 +107,8 @@ export default function LossClaimsPage() {
   }
 
   // 模拟图片上传（实际接入OSS）
-  const addImage = () => {
-    const url = prompt('请输入图片URL（实际版本将支持直接拍照上传）')
+  const addImage = async () => {
+    const url = (await promptDialog('请输入图片URL（实际版本将支持直接拍照上传）'))
     if (url) setForm({ ...form, evidenceImages: [...form.evidenceImages, url] })
   }
 

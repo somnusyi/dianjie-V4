@@ -4,6 +4,8 @@ import AppLayout from '@/components/AppLayout'
 import { Table, Btn, Modal, Field, Input, Select, fmt, fmtDate, useToast, Pagination } from '@/components/ui'
 import api from '@/lib/api'
 import { z } from 'zod'
+import { promptDialog } from '@/lib/ui-dialogs'
+
 
 const receiptSchema = z.object({
   supplierId: z.string().min(1, '请选择供应商'),
@@ -194,8 +196,8 @@ export default function ReceiptsPage() {
     } catch (e: any) { show(e.response?.data?.error || '创建失败', 'error') }
   }
 
-  const addImage = () => {
-    const url = prompt('输入图片URL（正式版支持拍照上传）')
+  const addImage = async () => {
+    const url = (await promptDialog('输入图片URL（正式版支持拍照上传）'))
     if (url) setLossImages([...lossImages, url])
   }
 

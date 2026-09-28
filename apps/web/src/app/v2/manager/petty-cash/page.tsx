@@ -5,6 +5,8 @@ import dayjs from 'dayjs'
 import { Chip } from '@/components/v2'
 import { UserMenu } from '@/components/v2/user-menu'
 import { apiFetch } from '@/lib/v2-auth'
+import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
+
 
 type Expense = {
   id: string
@@ -73,7 +75,7 @@ export default function ManagerPettyCashPage() {
   }
 
   async function removeExpense(item: Item, expense: Expense) {
-    if (!confirm(`删除 ${expense.category} ${money(expense.amount)}？`)) return
+    if (!(await confirmDialog(`删除 ${expense.category} ${money(expense.amount)}？`))) return
     try {
       await apiFetch(`/api/petty-cash/${item.id}/expenses/${expense.id}`, { method: 'DELETE' })
       await loadDetail(item.id)
@@ -88,7 +90,7 @@ export default function ManagerPettyCashPage() {
       const approved = Number(detail.approvedAmount || 0)
       const returned = Math.round((approved - spent) * 100) / 100
       if (returned < 0) throw new Error('开支已超过批准额，请先检查明细')
-      if (!confirm(`确认提交报账？\n已录开支 ${money(spent)}\n应退余款 ${money(returned)}\n提交后不能再修改开支。`)) return
+      if (!(await confirmDialog(`确认提交报账？\n已录开支 ${money(spent)}\n应退余款 ${money(returned)}\n提交后不能再修改开支。`))) return
       await apiFetch(`/api/petty-cash/${item.id}/reconcile`, {
         method: 'PATCH', body: JSON.stringify({ spentAmount: spent, returnedAmount: returned }),
       })
@@ -225,7 +227,7 @@ function ExpenseModal({ item, onClose, onDone }: { item: Item; onClose: () => vo
         method: 'POST', body: JSON.stringify({ date, category, amount: value, note: note || undefined }),
       })
       await onDone(); onClose()
-    } catch (e: any) { alert(e?.message || '开支保存失败'); setBusy(false) }
+    } catch (e: any) { notifyUser(e?.message || '开支保存失败'); setBusy(false) }
   }
 
   return (

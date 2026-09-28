@@ -37,6 +37,7 @@ describe('rolesForV2Path', () => {
     expect(isV2PathAllowedForRole('/v2/supply-chain/stores', 'SUPPLY_CHAIN')).toBe(true)
     expect(isV2PathAllowedForRole('/v2/me', 'SUPPLY_CHAIN')).toBe(true)
     expect(isV2PathAllowedForRole('/v2/me/password', 'SUPPLY_CHAIN')).toBe(true)
+    expect(isV2PathAllowedForRole('/v2/notifications', 'SUPPLY_CHAIN')).toBe(true)
     expect(isV2PathAllowedForRole('/v2/feedback/new', 'SUPPLY_CHAIN')).toBe(true)
     expect(isV2PathAllowedForRole('/v2/feedback/mine', 'SUPPLY_CHAIN')).toBe(true)
     expect(isV2PathAllowedForRole('/v2/loss-claims/claim-1/print', 'SUPPLY_CHAIN')).toBe(true)
@@ -73,5 +74,15 @@ describe('rolesForV2Path', () => {
     expect(rolesForV2Path('/v2/login')).toBeUndefined()
     expect(rolesForV2Path('/v2/inventory-counts')).toBeUndefined()
     expect(rolesForV2Path('/v2/finance-pc/home')).toBeUndefined()
+  })
+
+  it('给采购员开放总仓盘点作业、给财务开放审核，不放宽其他供应链页面', () => {
+    expect(rolesForV2Path('/v2/supply-chain/stocktake/work')).toContain('PURCHASER')
+    expect(rolesForV2Path('/v2/supply-chain/stocktake/work')).toContain('FINANCE')
+    expect(rolesForV2Path('/v2/supply-chain/stocktake/count/count-1')).toContain('PURCHASER')
+    expect(rolesForV2Path('/v2/supply-chain/stocktake/count')).not.toContain('PURCHASER')
+    expect(rolesForV2Path('/v2/supply-chain/stocktake/profit')).not.toContain('PURCHASER')
+    expect(rolesForV2Path('/v2/supply-chain/procurement')).not.toContain('PURCHASER')
+    expect(rolesForV2Path('/v2/supply-chain/procurement')).not.toContain('FINANCE')
   })
 })

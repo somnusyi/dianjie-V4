@@ -8,8 +8,10 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
+import { ReportActions, collectReportPages } from '@/components/v2/report-actions'
 import { EmptyState, FriendlyError, SkeletonCard } from '@/components/v2/skeleton'
 import { apiDownload, apiFetch } from '@/lib/v2-auth'
+import type { TableReport } from '@/lib/table-report'
 import {
   buildReceiptQuery,
   DEFAULT_RECEIPT_FILTERS,
@@ -31,7 +33,7 @@ import {
 type Store = { id: string; no: string; name: string }
 
 type ProjectedReceipt = ReturnType<typeof projectReceiptRow>
-type ProjectedReceiptItem = { productNameSnapshot?: string | null; productCodeSnapshot?: string | null; productSpecSnapshot?: string | null }
+type ProjectedReceiptItem = { quantity?: string | number | null; unit?: string | null; productNameSnapshot?: string | null; productCodeSnapshot?: string | null; productSpecSnapshot?: string | null }
 
 function initialReceiptFilters(): ReceiptFilters {
   if (typeof window === 'undefined') return DEFAULT_RECEIPT_FILTERS
@@ -136,6 +138,16 @@ export default function InternalSupplyChainReceiptsPage() {
     }
   }
 
+  async function loadPrintReport(): Promise<TableReport> {
+    const rows = await collectReportPages<any>((page, pageSize) => apiFetch(`/api/receipts${buildReceiptQuery({ ...filters, page, pageSize })}`))
+    return {
+      title: '收货查询',
+      subtitle: '当前筛选结果（全部页）',
+      headers: ['收货单号', '门店', '供应商', '业务到货日', '状态', '商品摘要'],
+      rows: rows.map(projectReceiptRow).map(row => [row.no, row.store?.name, row.supplier?.name, row.deliveryDate?.slice(0, 10), formatReceiptStatusLabel(row.status), receiptItemSummary(row.items)]),
+    }
+  }
+
   return (
     <div className="min-h-screen bg-bg px-4 py-5 lg:px-8 lg:py-7">
       <header className="mx-auto flex max-w-[1440px] flex-col gap-3 border-b border-border pb-5 lg:flex-row lg:items-center lg:justify-between">
@@ -150,6 +162,7 @@ export default function InternalSupplyChainReceiptsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <ReportActions printOnly loadReport={loadPrintReport} disabled={loading || Boolean(dateError) || total === 0} />
           <a href="/v2/supply-chain/home" className="rounded-cta border border-border bg-white px-4 py-2.5 text-button text-gray2">← 返回工作台</a>
         </div>
       </header>
@@ -253,7 +266,7 @@ export default function InternalSupplyChainReceiptsPage() {
                       <td className="px-4 py-3"><Chip tone={receiptStatusTone(receipt.status)}>{formatReceiptStatusLabel(receipt.status)}</Chip></td>
                       <td className="px-4 py-3 text-gray2">{receiptItemSummary(receipt.items)}</td>
                     </tr>
-                    {expandedId === receipt.id && <tr className="bg-bg/60"><td colSpan={6} className="px-4 py-4"><div className="rounded-xl border border-border bg-white p-3"><div className="mb-2 flex items-center justify-between"><b className="text-body">收货商品明细</b><span className="text-micro text-gray3">共 {receipt.items.length} 项</span></div>{receipt.items.length > 0 ? <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{receipt.items.map((item: ProjectedReceiptItem, index: number) => <div key={`${item.productCodeSnapshot || item.productNameSnapshot || index}-${index}`} className="rounded-lg border border-border px-3 py-2"><div className="text-body font-medium">{item.productNameSnapshot || '未命名商品'}</div><div className="mt-1 text-micro text-gray3">{item.productCodeSnapshot || '无编码'} · {item.productSpecSnapshot || '无规格'}</div></div>)}</div> : <p className="text-caption text-gray3">该收货记录没有可展示的商品行。</p>}</div></td></tr>}
+                    {expandedId === receipt.id && <tr className="bg-bg/60"><td colSpan={6} className="px-4 py-4"><div className="rounded-xl border border-border bg-white p-3"><div className="mb-2 flex items-center justify-between"><b className="text-body">收货商品明细</b><span className="text-micro text-gray3">共 {receipt.items.length} 项</span></div>{receipt.items.length > 0 ? <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{receipt.items.map((item: ProjectedReceiptItem, index: number) => <div key={`${item.productCodeSnapshot || item.productNameSnapshot || index}-${index}`} className="rounded-lg border border-border px-3 py-2"><div className="text-body font-medium">{item.productNameSnapshot || '未命名商品'}</div><div className="mt-1 text-micro text-gray3">{item.productCodeSnapshot || '无编码'} · {item.productSpecSnapshot || '无规格'}</div><div className="mt-1 text-caption text-gray2">实收 {item.quantity ?? '未记录'} {item.unit || ''}</div></div>)}</div> : <p className="text-caption text-gray3">该收货记录没有可展示的商品行。</p>}</div></td></tr>}
                     </Fragment>
                   ))}
                 </tbody>

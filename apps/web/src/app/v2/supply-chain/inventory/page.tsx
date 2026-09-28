@@ -965,7 +965,7 @@ export default function InternalSupplyChainInventoryPage() {
         <div className="flex flex-wrap items-end gap-2">
           <label className="flex flex-col gap-1">
             <span className="text-micro text-gray3">商品搜索</span>
-            <input value={q} onChange={event => setQ(event.target.value)} placeholder="名称 / 编码 / 分类 / 规格" className="h-10 min-w-64 rounded-cta border border-border bg-white px-3 text-body" />
+            <input value={q} onChange={event => setQ(event.target.value)} placeholder="名称 / 编码 / 分类 / 规格" className="h-10 w-full min-w-0 rounded-cta border border-border bg-white px-3 text-body sm:w-64" />
           </label>
           <label className="flex flex-col gap-1"><span className="text-micro text-gray3">商品状态</span><select value={productStatus} onChange={event => setProductStatus(event.target.value)} className="h-10 rounded-cta border border-border bg-white px-3 text-body"><option value="ALL">全部状态</option><option value="ENABLED">启用</option><option value="DISABLED">停用</option><option value="PENDING_APPROVAL">待启用审核</option><option value="PENDING_DISABLE">待停用审核</option></select></label>
           <label className="flex flex-col gap-1"><span className="text-micro text-gray3">库存状态</span><select value={stockStatus} onChange={event => setStockStatus(event.target.value)} className="h-10 rounded-cta border border-border bg-white px-3 text-body"><option value="">全部</option><option value="OK">正常</option><option value="LOW">偏低</option><option value="OUT">缺货</option><option value="SHADOW_GAP">待实盘缺口</option></select></label>
@@ -1199,7 +1199,7 @@ export default function InternalSupplyChainInventoryPage() {
               onRemove={key => setBatchAttachments(items => items.filter(item => item.key !== key))}
             />
           </div>
-          <div className="mt-4 flex items-center justify-between gap-4"><p className="text-micro text-gray3">只显示四单位已经核验的商品，避免箱、件、kg 等错误换算进入正式库存。</p><button onClick={submitBatchInbound} disabled={submitting || batchAttachmentsUploading || batchRows.length === 0} className="h-11 min-w-52 rounded-cta bg-accent px-6 text-button text-white disabled:opacity-40">{batchAttachmentsUploading ? '等待附件上传…' : submitting ? '正在整单记账…' : `确认批量入库 · ${money(batchTotal)}`}</button></div>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-4"><p className="text-micro text-gray3">只显示四单位已经核验的商品，避免箱、件、kg 等错误换算进入正式库存。</p><button onClick={submitBatchInbound} disabled={submitting || batchAttachmentsUploading || batchRows.length === 0} className="h-11 min-w-52 rounded-cta bg-accent px-6 text-button text-white disabled:opacity-40">{batchAttachmentsUploading ? '等待附件上传…' : submitting ? '正在整单记账…' : `确认批量入库 · ${money(batchTotal)}`}</button></div>
         </div>
       </div>}
 

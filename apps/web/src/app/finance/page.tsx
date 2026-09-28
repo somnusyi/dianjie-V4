@@ -5,6 +5,8 @@ import AppLayout from '@/components/AppLayout'
 import { Btn, Field, Input, Modal, Pagination, Select, Table, fmt, fmtDate, useToast } from '@/components/ui'
 import api from '@/lib/api'
 import dayjs from 'dayjs'
+import { confirmDialog } from '@/lib/ui-dialogs'
+
 
 type Tab = 'schedules' | 'payments' | 'rules'
 
@@ -198,7 +200,7 @@ export default function FinancePage() {
   }
 
   const deleteRule = async (rule: any) => {
-    if (!window.confirm(`确认删除规则「${rule.name}」？`)) return
+    if (!(await confirmDialog(`确认删除规则「${rule.name}」？`))) return
     try {
       await api.delete(`/api/payment-rules/${rule.id}`)
       load(payPage)

@@ -4,8 +4,10 @@ import { ResponsiveDataTable } from '@/components/v2/responsive-data-table'
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { DateRangeCalendar } from '@/components/v2/date-range-calendar'
+import { ReportActions, collectReportPages } from '@/components/v2/report-actions'
 import { WarehouseToolTabs } from '@/components/v2/warehouse-tool-tabs'
 import { apiFetch } from '@/lib/v2-auth'
+import type { TableReport } from '@/lib/table-report'
 import { readWarehouseViewState, useWarehouseScrollRestoration, writeWarehouseViewState } from '@/lib/warehouse-view-state'
 
 type UpstreamSupplier = {
@@ -231,6 +233,19 @@ export default function InboundRecordsPage() {
     }
   }
 
+  async function loadPrintReport(): Promise<TableReport> {
+    const rows = await collectReportPages<InboundRecord>((pageNo, pageSize) => apiFetch<InboundResponse>(`/api/warehouse-inventory/inbound-records?${inboundParams(pageNo, pageSize)}`))
+    return {
+      title: '入库记录',
+      subtitle: '当前筛选结果（全部页）',
+      headers: ['日期', '商品编码', '商品名称', '分类', '入库数量', '原单位', '库存数量', '库存单位', '库存单价', '金额', '供应商', '来源', '批次', '效期', '单据编号', '状态'],
+      rows: rows.map(row => {
+        const supplier = supplierCell(row)
+        return [day(row.effectiveAt), row.product.code, row.product.name, row.product.category, row.originalQuantity, row.originalUnit, row.inventoryQuantity, row.inventoryUnit, row.inventoryUnitCost, row.amount, supplier.text, recordSourceLabel(row), row.batchNo, row.expiryDate ? String(row.expiryDate).slice(0, 10) : '', row.doc?.docNo, row.reversed ? '已冲销' : '有效']
+      }),
+    }
+  }
+
   function resetFilters() {
     setFrom('')
     setTo('')
@@ -250,6 +265,7 @@ export default function InboundRecordsPage() {
         </div>
         <div className="flex gap-2">
           <button type="button" onClick={() => void exportRecords()} disabled={loading || exporting || !data?.total} className="rounded-cta bg-ink px-4 py-2 text-button text-white disabled:opacity-40">{exporting ? '导出中…' : '导出当前筛选'}</button>
+          <ReportActions printOnly loadReport={loadPrintReport} disabled={loading || !data?.total} />
           <Link href="/v2/supply-chain/relations" className="rounded-cta border border-border bg-white px-4 py-2 text-button text-gray2">供货关系 →</Link>
         </div>
       </div>

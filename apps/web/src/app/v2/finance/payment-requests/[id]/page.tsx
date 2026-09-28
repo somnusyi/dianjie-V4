@@ -9,6 +9,8 @@ import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { ErrorScreen } from '@/components/v2/use-dashboard'
 import { apiFetch } from '@/lib/v2-auth'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Doc = {
   id: string; no: string; title: string; amount: string
@@ -66,16 +68,16 @@ export default function PaymentRequestDetailPage() {
       const r = await apiFetch<any>(`/api/payment-requests/${id}/mark-paid`, {
         method: 'PATCH', body: JSON.stringify({ bankFrom, bankTxNo }),
       })
-      if (r?.voucherWarning) alert(`已标记付款,但凭证生成失败: ${r.voucherWarning}\n请财务手工补建`)
+      if (r?.voucherWarning) notifyUser(`已标记付款,但凭证生成失败: ${r.voucherWarning}\n请财务手工补建`)
       await reload()
-    } catch (e: any) { alert(e.message) } finally { setBusy(false) }
+    } catch (e: any) { notifyUser(e.message) } finally { setBusy(false) }
   }
   async function cancel() {
     setBusy(true)
     try {
       await apiFetch(`/api/payment-requests/${id}/cancel`, { method: 'PATCH' })
       await reload()
-    } catch (e: any) { alert(e.message) } finally { setBusy(false) }
+    } catch (e: any) { notifyUser(e.message) } finally { setBusy(false) }
   }
 
   return (

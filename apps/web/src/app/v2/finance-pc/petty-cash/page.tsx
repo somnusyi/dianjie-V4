@@ -15,6 +15,8 @@ import dayjs from 'dayjs'
 import { Chip, MonthPicker } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../_topnav'
+import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
+
 
 type Item = {
   id: string
@@ -91,11 +93,11 @@ export default function FinancePCPettyCashPage() {
   }
 
   async function doCancel(it: Item) {
-    if (!confirm('确定取消申请?')) return
+    if (!(await confirmDialog('确定取消申请?'))) return
     try {
       await apiFetch(`/api/petty-cash/${it.id}/cancel`, { method: 'PATCH' })
       await load()
-    } catch (e: any) { alert(e?.message || '失败') }
+    } catch (e: any) { notifyUser(e?.message || '失败') }
   }
 
   const summary = useMemo(() => {
@@ -271,7 +273,7 @@ function NewModal({ stores, onClose, onCreated }: { stores: Store[]; onClose: ()
 
   async function submit() {
     const amt = Number(amount)
-    if (!storeId || !amt || amt <= 0) { alert('请填门店和金额'); return }
+    if (!storeId || !amt || amt <= 0) { notifyUser('请填门店和金额'); return }
     setBusy(true)
     try {
       await apiFetch('/api/petty-cash', {
@@ -279,7 +281,7 @@ function NewModal({ stores, onClose, onCreated }: { stores: Store[]; onClose: ()
         body: JSON.stringify({ storeId, month, requestedAmount: amt, requestNote: note || undefined }),
       })
       onCreated(); onClose()
-    } catch (e: any) { alert(e?.message || '失败'); setBusy(false) }
+    } catch (e: any) { notifyUser(e?.message || '失败'); setBusy(false) }
   }
 
   return (
@@ -331,7 +333,7 @@ function ApproveModal({ item, onClose, onApproved }: { item: Item; onClose: () =
 
   async function submit() {
     const amt = Number(amount)
-    if (!amt || amt <= 0) { alert('金额不对'); return }
+    if (!amt || amt <= 0) { notifyUser('金额不对'); return }
     setBusy(true)
     try {
       await apiFetch(`/api/petty-cash/${item.id}/approve`, {
@@ -339,7 +341,7 @@ function ApproveModal({ item, onClose, onApproved }: { item: Item; onClose: () =
         body: JSON.stringify({ approvedAmount: amt }),
       })
       onApproved(); onClose()
-    } catch (e: any) { alert(e?.message || '失败'); setBusy(false) }
+    } catch (e: any) { notifyUser(e?.message || '失败'); setBusy(false) }
   }
 
   return (
@@ -408,9 +410,9 @@ function PayModal({ item, onClose, onDone }: { item: Item; onClose: () => void; 
         method: 'PATCH',
         body: JSON.stringify({ paymentMethod, accountId, bankTxNo: bankTxNo || undefined, paymentDate }),
       })
-      if (result?.voucherWarning) alert(result.voucherWarning)
+      if (result?.voucherWarning) notifyUser(result.voucherWarning)
       onDone(); onClose()
-    } catch (e: any) { alert(e?.message || '失败'); setBusy(false) }
+    } catch (e: any) { notifyUser(e?.message || '失败'); setBusy(false) }
   }
 
   const fmt = (n: number) => `¥${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -502,9 +504,9 @@ function CloseModal({ item, onClose, onDone }: { item: Item; onClose: () => void
         method: 'PATCH',
         body: JSON.stringify(returned > 0 ? { returnAccountId: accountId, returnDate } : {}),
       })
-      if (result?.voucherWarning) alert(result.voucherWarning)
+      if (result?.voucherWarning) notifyUser(result.voucherWarning)
       onDone(); onClose()
-    } catch (e: any) { alert(e?.message || '失败'); setBusy(false) }
+    } catch (e: any) { notifyUser(e?.message || '失败'); setBusy(false) }
   }
 
   return (

@@ -7,6 +7,8 @@ import { useEffect, useState } from 'react'
 import { getUser, getToken, clearSession, routeForRole } from '@/lib/v2-auth'
 import { ROLE_LABELS } from '@/components/v2/role-labels'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 export default function MePage() {
   const [u, setU] = useState<any>(null)
@@ -30,7 +32,7 @@ export default function MePage() {
   }
   function resetOnboarding() {
     Object.keys(localStorage).filter(k => k.startsWith('v2-onboarded:')).forEach(k => localStorage.removeItem(k))
-    alert('引导已重置, 下次进入工作台会重新显示')
+    notifyUser('引导已重置, 下次进入工作台会重新显示')
   }
   function logout() {
     openConfirm({

@@ -26,6 +26,9 @@ export type ConfirmSheetState = {
   withInput?: boolean
   inputPlaceholder?: string
   inputRequired?: boolean
+  inputInitialValue?: string
+  /** 覆盖遮罩层级；全局对话框需高于导航浮层和打印预览。 */
+  layerClassName?: string
   onConfirm?: (inputValue?: string) => void | Promise<void>
   onCancel?: () => void
 }
@@ -42,22 +45,25 @@ export function useConfirmSheet(): [ConfirmSheetState & { close: () => void }, (
 export function ConfirmSheet(props: ConfirmSheetState & { close: () => void }) {
   const {
     open, title, body, confirmLabel = '确认', cancelLabel = '取消',
-    tone = 'default', withInput, inputPlaceholder, inputRequired,
+    tone = 'default', withInput, inputPlaceholder, inputRequired, inputInitialValue,
+    layerClassName = 'z-[70]',
     onConfirm, onCancel, close,
   } = props
-  const [val, setVal] = useState('')
+  const [val, setVal] = useState(inputInitialValue || '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const busyRef = React.useRef(false)
   // open 关闭时 reset
   React.useEffect(() => {
-    if (!open) {
+    if (open) {
+      setVal(inputInitialValue || '')
+    } else {
       setVal('')
       setBusy(false)
       setError('')
       busyRef.current = false
     }
-  }, [open])
+  }, [open, inputInitialValue])
 
   if (!open) return null
 
@@ -89,12 +95,13 @@ export function ConfirmSheet(props: ConfirmSheetState & { close: () => void }) {
   return (
     <div
       data-testid="confirm-sheet-backdrop"
-      className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      className={`fixed inset-0 ${layerClassName} flex items-end justify-center bg-ink/40`}
       onClick={handleCancel}
     >
       <div
-        role="dialog"
-        aria-modal="true"
         className="bg-bg-card w-full max-w-md rounded-t-2xl p-5 pb-7"
         style={{ paddingBottom: 'calc(28px + env(safe-area-inset-bottom))' }}
         onClick={(e) => e.stopPropagation()}

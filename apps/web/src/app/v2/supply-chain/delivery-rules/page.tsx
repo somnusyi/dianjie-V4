@@ -8,6 +8,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import { deliveryScheduleText, isDeliveryScheduleDate, nextDeliveryScheduleDates } from '@/lib/delivery-rule-cycle'
 import dayjs from 'dayjs'
+import { confirmDialog } from '@/lib/ui-dialogs'
+
 
 type Store = { id: string; no: string; name: string }
 type Supplier = { id: string; name: string }
@@ -190,7 +192,7 @@ export default function DeliveryRulesPage() {
 
   async function toggleStatus(rule: Rule) {
     const next = rule.status === 'ENABLED' ? 'DISABLED' : 'ENABLED'
-    if (next === 'DISABLED' && !window.confirm(`确认停用「${rule.name}」？停用后门店下单不再受该班表约束。`)) return
+    if (next === 'DISABLED' && !(await confirmDialog(`确认停用「${rule.name}」？停用后门店下单不再受该班表约束。`))) return
     try {
       await apiFetch(`/api/delivery-rules/${rule.id}`, { method: 'PATCH', body: JSON.stringify({ status: next }) })
       setNotice(`班表「${rule.name}」已${next === 'ENABLED' ? '启用' : '停用'}`)

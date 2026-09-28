@@ -3,8 +3,10 @@ import { ResponsiveDataTable } from '@/components/v2/responsive-data-table'
 
 import { useCallback, useEffect, useState } from 'react'
 import { DateRangeCalendar } from '@/components/v2/date-range-calendar'
+import { ReportActions, collectReportPages } from '@/components/v2/report-actions'
 import { WarehouseToolTabs } from '@/components/v2/warehouse-tool-tabs'
 import { apiFetch, getUser } from '@/lib/v2-auth'
+import type { TableReport } from '@/lib/table-report'
 import { readWarehouseViewState, useWarehouseScrollRestoration, writeWarehouseViewState } from '@/lib/warehouse-view-state'
 
 // ── 类型 ──────────────────────────────────────────────
@@ -208,6 +210,16 @@ export default function WarehouseDocsPage() {
     }
   }
 
+  async function loadPrintReport(): Promise<TableReport> {
+    const rows = await collectReportPages<DocRow>((pageNo, size) => apiFetch<{ items: DocRow[]; total: number }>(`/api/warehouse-docs?${docParams(pageNo, size)}`))
+    return {
+      title: type === 'MANUAL_INBOUND' ? '入库单据审核' : '出库单据审核',
+      subtitle: '当前筛选结果（全部页）',
+      headers: ['单据编号', '单据日期', type === 'MANUAL_INBOUND' ? '供应商' : '去向/原因', '总金额', '商品行数', '随货单据数', '审核状态', '复审状态', '会计退回时间', '退回原因', '创建时间', '备注'],
+      rows: rows.map(doc => [doc.docNo, fmtDay(doc.effectiveAt), type === 'MANUAL_INBOUND' ? doc.supplierName : doc.reason, doc.totalAmount, doc.lineCount, doc.attachmentCount, doc.status === 'CONFIRMED' ? '已审核' : '未审核', doc.reviewStatus === 'REVIEWED' ? '已复审' : '未复审', fmtTime(doc.unauditedAt), doc.unauditReason, fmtTime(doc.createdAt), doc.note]),
+    }
+  }
+
   function resetFilters() {
     setStatus('')
     setQ('')
@@ -225,7 +237,10 @@ export default function WarehouseDocsPage() {
           <h1 className="text-title font-semibold">单据审核</h1>
           <p className="text-caption text-gray2">入库/出库单据：仓库制单即过账，会计审核锁定；改单需会计反审核，全程留痕</p>
         </div>
-        <button type="button" onClick={() => void exportDocs()} disabled={loading || exporting || total === 0} className="rounded-cta bg-ink px-4 py-2 text-button text-white disabled:opacity-40">{exporting ? '导出中…' : '导出当前筛选'}</button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => void exportDocs()} disabled={loading || exporting || total === 0} className="rounded-cta bg-ink px-4 py-2 text-button text-white disabled:opacity-40">{exporting ? '导出中…' : '导出当前筛选'}</button>
+          <ReportActions printOnly loadReport={loadPrintReport} disabled={loading || total === 0} />
+        </div>
       </header>
 
       {notice && <div className="rounded-card border border-emerald-200 bg-emerald-50 px-4 py-2 text-body text-emerald-700">{notice}</div>}

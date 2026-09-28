@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import dayjs from 'dayjs'
 import { BottomNav, Chip } from '@/components/v2'
+import { ReportActions } from '@/components/v2/report-actions'
 import { apiDownload, apiFetch } from '@/lib/v2-auth'
 
 type StatementLine = {
@@ -121,6 +122,12 @@ export default function SupplierReconciliationPage() {
                 className="ml-2 bg-transparent font-num text-ink outline-none"
               />
             </label>
+            {statement && <ReportActions printOnly disabled={loading} loadReport={() => ({
+              title: `${statement.supplier.name}-${statement.month}月对账单`,
+              subtitle: `应付合计 ${money(statement.summary.payableAmount)}`,
+              headers: ['收货单', '门店', '日期', '订货单', '配送单', '订货金额', '配送金额', '收货金额', '应付调整', '应付金额', '付款状态', '应付日期'],
+              rows: statement.lines.map(line => [line.receiptNo, line.store.name, line.deliveryDate, line.purchaseOrder?.no, line.deliveryOrder?.no, line.orderedAmount, line.shipmentAmount, line.receivedAmount, line.payableAdjustment, line.payableAmount, STATUS_LABEL[line.schedule?.status || ''] || '未生成账期', line.schedule?.dueAt]),
+            })} />}
             <button type="button" onClick={exportStatement} disabled={exporting} className="rounded-cta border border-border bg-white px-3 py-2 text-button text-gray2 disabled:opacity-40">
               {exporting ? '导出中…' : '导出全部'}
             </button>

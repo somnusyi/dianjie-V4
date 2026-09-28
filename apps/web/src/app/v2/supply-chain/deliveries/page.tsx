@@ -14,8 +14,10 @@ import {
   type OrderCenterTableColumn,
 } from '@/components/v2/order-center-resizable-table'
 import { OrderCenterTabs } from '@/components/v2/order-center-tabs'
+import { ReportActions, collectReportPages } from '@/components/v2/report-actions'
 import { EmptyState, FriendlyError, SkeletonCard } from '@/components/v2/skeleton'
 import { apiDownload, apiFetch } from '@/lib/v2-auth'
+import type { TableReport } from '@/lib/table-report'
 import {
   buildDeliveryQuery,
   DEFAULT_DELIVERY_FILTERS,
@@ -250,6 +252,28 @@ export default function InternalSupplyChainDeliveriesPage() {
     }
   }
 
+  async function loadPrintReport(): Promise<TableReport> {
+    const rows = await collectReportPages<any>((page, pageSize) => apiFetch(`/api/deliveries${buildDeliveryQuery({ ...filters, page, pageSize })}`))
+    return {
+      title: '配送单查询',
+      subtitle: '当前筛选结果（全部页）',
+      headers: ['配送单号', '订货单号', '门店', '供应商', '创建时间', '发货时间', '状态', '商品摘要', '发货金额', '成本金额', '利润'],
+      rows: rows.map(projectDeliveryRow).map(row => [
+        row.no,
+        row.purchaseOrder?.no,
+        row.store?.name,
+        row.supplier?.name,
+        orderDeliveryDateText(row.createdAt),
+        orderDeliveryDateText(row.shippedAt),
+        formatDeliveryStatusLabel(row.status),
+        deliveryItemSummary(row),
+        row.profitability?.shippedAmount ?? row.actualTotalAmount,
+        row.profitability?.costAmount,
+        row.profitability?.profit,
+      ]),
+    }
+  }
+
   return (
     <div className="min-h-screen bg-bg px-4 py-5 lg:px-8 lg:py-7">
       <header className="mx-auto flex max-w-[1440px] flex-col gap-3 border-b border-border pb-5 lg:flex-row lg:items-center lg:justify-between">
@@ -263,6 +287,7 @@ export default function InternalSupplyChainDeliveriesPage() {
             {deliveries ? `${total} 条配送记录` : '加载中…'}
           </p>
         </div>
+        <ReportActions printOnly loadReport={loadPrintReport} disabled={loading || Boolean(dateError) || total === 0} />
       </header>
 
       <main className="mx-auto max-w-[1440px]">

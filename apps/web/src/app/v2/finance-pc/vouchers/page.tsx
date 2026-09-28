@@ -17,6 +17,8 @@ import dayjs from 'dayjs'
 import { Chip, MonthPicker } from '@/components/v2'
 import { apiFetch, getToken } from '@/lib/v2-auth'
 import FinanceTopNav from '../_topnav'
+import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
+
 
 type Entry = {
   id: string; lineNo: number; summary: string
@@ -94,13 +96,13 @@ export default function FinancePCVouchersPage() {
     try {
       await apiFetch(`/api/vouchers/${id}/post`, { method: 'PATCH' })
       await reload()
-    } catch (e: any) { alert(e.message) } finally { setBusy(false) }
+    } catch (e: any) { notifyUser(e.message) } finally { setBusy(false) }
   }
 
   async function postSelected() {
     const ids = Array.from(selected)
     if (ids.length === 0) return
-    if (!confirm(`确定审核选中的 ${ids.length} 笔凭证?`)) return
+    if (!(await confirmDialog(`确定审核选中的 ${ids.length} 笔凭证?`))) return
     setBusy(true)
     let ok = 0, fail = 0
     const failMsg: string[] = []
@@ -116,13 +118,13 @@ export default function FinancePCVouchersPage() {
       }
     }
     setBusy(false)
-    if (fail > 0) alert(`✓ ${ok} 笔, ✗ ${fail} 笔失败:\n${failMsg.slice(0, 3).join('\n')}`)
+    if (fail > 0) notifyUser(`✓ ${ok} 笔, ✗ ${fail} 笔失败:\n${failMsg.slice(0, 3).join('\n')}`)
     await reload()
   }
 
   async function postAllDraft() {
     if (stats.draft === 0) return
-    if (!confirm(`确定一键审核本月全部 ${stats.draft} 笔草稿?`)) return
+    if (!(await confirmDialog(`确定一键审核本月全部 ${stats.draft} 笔草稿?`))) return
     setBusy(true)
     let ok = 0, fail = 0
     for (const v of list.filter(v => v.status === 'DRAFT')) {
@@ -132,7 +134,7 @@ export default function FinancePCVouchersPage() {
       } catch { fail++ }
     }
     setBusy(false)
-    if (fail > 0) alert(`✓ ${ok} 笔, ✗ ${fail} 笔失败 (查看草稿状态自查)`)
+    if (fail > 0) notifyUser(`✓ ${ok} 笔, ✗ ${fail} 笔失败 (查看草稿状态自查)`)
     await reload()
   }
 
@@ -146,7 +148,7 @@ export default function FinancePCVouchersPage() {
       const res = await fetch(`/api/vouchers/export?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       })
-      if (!res.ok) { alert('导出失败 ' + res.status); return }
+      if (!res.ok) { notifyUser('导出失败 ' + res.status); return }
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')

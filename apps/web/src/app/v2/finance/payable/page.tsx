@@ -13,6 +13,8 @@ import { apiFetch } from '@/lib/v2-auth'
 import { clientRequestId } from '@/lib/client-id'
 import { Chip } from '@/components/v2'
 import InvoicePaymentResultDialog, { invoicePaymentMethods } from '@/components/v2/InvoicePaymentResultDialog'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type CashAccount = { id: string; type: string; status: string; balance: string | number }
 
@@ -110,9 +112,9 @@ export default function FinancePayablePage() {
   async function submitPay() {
     if (!target) return
     const amt = Number(payAmount)
-    if (!amt || amt <= 0) { alert('付款金额必须 > 0'); return }
+    if (!amt || amt <= 0) { notifyUser('付款金额必须 > 0'); return }
     if (amt > target.remainingAmount + 0.01) {
-      alert(`金额超过剩余可付 ¥${target.remainingAmount.toLocaleString()}`); return
+      notifyUser(`金额超过剩余可付 ¥${target.remainingAmount.toLocaleString()}`); return
     }
     setSubmitting(true)
     try {
@@ -125,7 +127,7 @@ export default function FinancePayablePage() {
       })
       setTarget(null); setPayAmount(''); setPayNote('')
       load()
-    } catch (e: any) { alert(e.message || '付款失败') }
+    } catch (e: any) { notifyUser(e.message || '付款失败') }
     setSubmitting(false)
   }
 

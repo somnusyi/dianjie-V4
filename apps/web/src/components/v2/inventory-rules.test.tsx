@@ -6,8 +6,9 @@ import { InventoryRules } from './inventory-rules'
 import { SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT } from './supply-chain-shell'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
-const mock = vi.hoisted(() => ({ api: vi.fn() }))
+const mock = vi.hoisted(() => ({ api: vi.fn(), confirm: vi.fn() }))
 vi.mock('@/lib/v2-auth', () => ({ apiFetch: mock.api }))
+vi.mock('@/lib/ui-dialogs', () => ({ confirmDialog: mock.confirm }))
 vi.mock('next/link', () => ({ default: ({ href, children, ...props }: any) => <a href={href} {...props}>{children}</a> }))
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 
@@ -28,7 +29,7 @@ async function render(unitChanged = false, source: 'configured' | 'legacy-fallba
   container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container)
   await act(async () => root!.render(<InventoryRules />))
 }
-afterEach(() => { act(() => root?.unmount()); container?.remove(); sessionStorage.clear(); mock.api.mockReset(); vi.restoreAllMocks() })
+afterEach(() => { act(() => root?.unmount()); container?.remove(); sessionStorage.clear(); mock.api.mockReset(); mock.confirm.mockReset(); vi.restoreAllMocks() })
 
 function setInput(input: HTMLInputElement | HTMLSelectElement, value: string) {
   const descriptor = Object.getOwnPropertyDescriptor(input instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value')!
@@ -62,22 +63,22 @@ describe('库存上下限与呆滞规则页面', () => {
   })
 
   it('库存单位变更必须二次确认', async () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    mock.confirm.mockResolvedValue(false)
     await render(true)
     const max = container.querySelector('input[aria-label="土豆库存上限"]') as HTMLInputElement
     await act(async () => setInput(max, '25'))
     const save = [...container.querySelectorAll('button')].find(button => button.textContent === '保存')!
     await act(async () => save.click())
-    expect(confirm).toHaveBeenCalled()
+    expect(mock.confirm).toHaveBeenCalled()
     expect(mock.api.mock.calls.some(([url]) => url === '/api/inventory-reports/policies/p1')).toBe(false)
-    confirm.mockReturnValue(true)
+    mock.confirm.mockResolvedValue(true)
     await act(async () => save.click())
     const call = mock.api.mock.calls.find(([url, init]) => url === '/api/inventory-reports/policies/p1' && init?.method === 'PATCH')
     expect(JSON.parse(String(call?.[1]?.body)).confirmUnitChange).toBe(true)
   })
 
   it('旧安全库存显示为兼容生效，保存时明确迁移', async () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    mock.confirm.mockResolvedValue(true)
     await render(false, 'legacy-fallback')
     expect(container.textContent).toContain('旧安全库存兼容 · 待迁移')
     expect(container.textContent).toContain('兼容生效')
@@ -85,7 +86,7 @@ describe('库存上下限与呆滞规则页面', () => {
     await act(async () => setInput(max, '25'))
     const save = [...container.querySelectorAll('button')].find(button => button.textContent === '迁移并保存')!
     await act(async () => save.click())
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('迁移为该仓库的独立库存规则'))
+    expect(mock.confirm).toHaveBeenCalledWith(expect.stringContaining('迁移为该仓库的独立库存规则'))
   })
 
   it('保存一行不会丢失另一行尚未保存的修改', async () => {
@@ -101,14 +102,14 @@ describe('库存上下限与呆滞规则页面', () => {
   })
 
   it('切换仓库前拦截未保存修改，取消后不发请求', async () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    mock.confirm.mockResolvedValue(false)
     await render()
     const max = container.querySelector('input[aria-label="土豆库存上限"]') as HTMLInputElement
     await act(async () => setInput(max, '25'))
     const callsBefore = mock.api.mock.calls.length
     const warehouse = container.querySelector('select[aria-label="仓库"]') as HTMLSelectElement
     await act(async () => setInput(warehouse, 'w2'))
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('尚未保存'))
+    expect(mock.confirm).toHaveBeenCalledWith(expect.stringContaining('尚未保存'))
     expect(mock.api.mock.calls.length).toBe(callsBefore)
   })
 
@@ -132,19 +133,19 @@ describe('库存上下限与呆滞规则页面', () => {
   })
 
   it('停用已生效规则必须危险确认', async () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    mock.confirm.mockResolvedValue(false)
     await render()
     const toggle = container.querySelector('input[aria-label="土豆启用库存规则"]') as HTMLInputElement
     await act(async () => toggle.click())
     const save = [...container.querySelectorAll('button')].find(button => button.textContent === '保存')!
     await act(async () => save.click())
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('不会恢复旧安全库存'))
+    expect(mock.confirm).toHaveBeenCalledWith(expect.stringContaining('不会恢复旧安全库存'))
     expect(mock.api.mock.calls.some(([url]) => url === '/api/inventory-reports/policies/p1')).toBe(false)
   })
 
   it('未保存修改会保护报表深链、管理标签和浏览器离开', async () => {
     sessionStorage.setItem('dianjie:management-open-tabs', JSON.stringify(['purchase-in']))
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    mock.confirm.mockResolvedValue(false)
     await render()
     const max = container.querySelector('input[aria-label="土豆库存上限"]') as HTMLInputElement
     await act(async () => setInput(max, '25'))
@@ -155,14 +156,14 @@ describe('库存上下限与呆滞规则页面', () => {
 
     const alertLink = container.querySelector('a[href="/v2/supply-chain/reports?report=alerts"]')!
     const alertNavigation = new MouseEvent('click', { bubbles: true, cancelable: true })
-    alertLink.dispatchEvent(alertNavigation)
+    await act(async () => { alertLink.dispatchEvent(alertNavigation); await Promise.resolve() })
     expect(alertNavigation.defaultPrevented).toBe(true)
 
     const tabLink = container.querySelector('nav[aria-label="已打开的库存与盘点页面"] a[href="/v2/supply-chain/inventory-management/purchase-in"]')!
     const tabNavigation = new MouseEvent('click', { bubbles: true, cancelable: true })
-    tabLink.dispatchEvent(tabNavigation)
+    await act(async () => { tabLink.dispatchEvent(tabNavigation); await Promise.resolve() })
     expect(tabNavigation.defaultPrevented).toBe(true)
-    expect(confirm).toHaveBeenCalledTimes(2)
+    expect(mock.confirm).toHaveBeenCalledTimes(2)
   })
 
   it('全局侧边栏或底部导航会拦截未保存规则，取消保留且确认只跳转一次', async () => {

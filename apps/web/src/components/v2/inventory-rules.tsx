@@ -1,8 +1,10 @@
 'use client'
 
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import { confirmDialog } from '@/lib/ui-dialogs'
 import { ConfirmSheet, useConfirmSheet } from './confirm-sheet'
 import { ManagementTabs } from './management-tabs'
 import { SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT } from './supply-chain-shell'
@@ -34,6 +36,7 @@ const alertStatus = (quantity: number, minQty: number | null, maxQty: number | n
 }
 
 export function InventoryRules() {
+  const router = useRouter()
   const [result, setResult] = useState<Result | null>(null)
   const [warehouseId, setWarehouseId] = useState('')
   const [query, setQuery] = useState('')
@@ -109,12 +112,12 @@ export function InventoryRules() {
     setDirtyIds(current => new Set(current).add(productId))
   }
 
-  function confirmLeave() {
-    return !dirtyRef.current.size || window.confirm(`当前有 ${dirtyRef.current.size} 条规则尚未保存，继续会丢失这些修改。是否继续？`)
+  async function confirmLeave() {
+    return !dirtyRef.current.size || await confirmDialog(`当前有 ${dirtyRef.current.size} 条规则尚未保存，继续会丢失这些修改。是否继续？`)
   }
 
-  function leaveDirty(action: () => void) {
-    if (!confirmLeave()) return
+  async function leaveDirty(action: () => void) {
+    if (!(await confirmLeave())) return
     setDirtyIds(new Set())
     action()
   }
@@ -131,11 +134,11 @@ export function InventoryRules() {
     if (!Number.isInteger(stagnantDays) || stagnantDays < 1 || stagnantDays > 36500) { setError(`${row.name}：呆滞天数必须是1–36500的整数`); return }
     let confirmUnitChange = false
     if (row.unitChanged) {
-      confirmUnitChange = window.confirm(`「${row.name}」的库存基准单位已变为 ${row.inventoryUnit}。\n请确认已用新单位重新核对上下限，继续保存？`)
+      confirmUnitChange = await confirmDialog(`「${row.name}」的库存基准单位已变为 ${row.inventoryUnit}。\n请确认已用新单位重新核对上下限，继续保存？`)
       if (!confirmUnitChange) return
     }
-    if (row.source === 'legacy-fallback' && !window.confirm(`「${row.name}」当前使用旧安全库存兼容值。保存后将迁移为该仓库的独立库存规则，是否继续？`)) return
-    if (row.active && !draft.active && !window.confirm(`停用「${row.name}」后，该仓库商品将按“阈值未配置”处理，且不会恢复旧安全库存。是否确认停用？`)) return
+    if (row.source === 'legacy-fallback' && !(await confirmDialog(`「${row.name}」当前使用旧安全库存兼容值。保存后将迁移为该仓库的独立库存规则，是否继续？`))) return
+    if (row.active && !draft.active && !(await confirmDialog(`停用「${row.name}」后，该仓库商品将按“阈值未配置”处理，且不会恢复旧安全库存。是否确认停用？`))) return
     setSaving(row.productId); setError(''); setNotice('')
     try {
       const saved = await apiFetch<{ policy: { minQty: number | null; maxQty: number | null; stagnantDays: number; active: boolean; rowVersion: number }; replayed: boolean }>(`/api/inventory-reports/policies/${row.productId}`, { method: 'PATCH', body: JSON.stringify({
@@ -167,14 +170,14 @@ export function InventoryRules() {
   const rows = result?.items || []
   return <div className={styles.page}>
     <header className={styles.breadcrumb}><span>货品与仓库 <span>/</span> <strong>库存管理</strong></span><span>库存基准单位规则</span></header>
-    <div className={filters.mobileMenu}><details><summary>库存管理菜单</summary><nav aria-label="库存管理功能菜单">{managementPages.filter(item => item.group === 'inventory').map(item => <Link key={item.id} href={managementHref(item)} aria-current={item.id === 'limits' ? 'page' : undefined} onClick={event => { if (item.id !== 'limits' && !confirmLeave()) event.preventDefault() }}>{item.title}</Link>)}</nav></details></div>
+    <div className={filters.mobileMenu}><details><summary>库存管理菜单</summary><nav aria-label="库存管理功能菜单">{managementPages.filter(item => item.group === 'inventory').map(item => <Link key={item.id} href={managementHref(item)} aria-current={item.id === 'limits' ? 'page' : undefined} onClick={event => { if (item.id !== 'limits' && dirtyRef.current.size) { event.preventDefault(); void leaveDirty(() => router.push(managementHref(item))) } }}>{item.title}</Link>)}</nav></details></div>
     <ManagementTabs activeId="limits" beforeNavigate={confirmLeave} />
     <main className={styles.content}>
-      <div className={styles.heading}><div><p>库存管理</p><h1>库存上下限与呆滞规则</h1><small>数量统一使用库存基准单位；配置只提醒，不自动移库。</small></div><div className={styles.links}><Link href="/v2/supply-chain/reports?report=alerts" onClick={event => { if (!confirmLeave()) event.preventDefault() }}>查看库存预警 ↗</Link><Link href="/v2/supply-chain/reports?report=stagnant" onClick={event => { if (!confirmLeave()) event.preventDefault() }}>查看呆滞品 ↗</Link></div></div>
-      <form className={styles.toolbar} onSubmit={event => { event.preventDefault(); leaveDirty(() => { setAppliedQuery(query.trim()); setPage(1) }) }}>
-        <label><span>仓库</span><select aria-label="仓库" value={warehouseId} onChange={event => { const value = event.target.value; leaveDirty(() => { setWarehouseId(value); setPage(1) }) }} disabled={loading}>{result?.warehouses.map(item => <option key={item.id} value={item.id}>{item.name}{item.isDefault ? '（默认）' : ''}</option>)}</select></label>
+      <div className={styles.heading}><div><p>库存管理</p><h1>库存上下限与呆滞规则</h1><small>数量统一使用库存基准单位；配置只提醒，不自动移库。</small></div><div className={styles.links}><Link href="/v2/supply-chain/reports?report=alerts" onClick={event => { if (dirtyRef.current.size) { event.preventDefault(); void leaveDirty(() => router.push('/v2/supply-chain/reports?report=alerts')) } }}>查看库存预警 ↗</Link><Link href="/v2/supply-chain/reports?report=stagnant" onClick={event => { if (dirtyRef.current.size) { event.preventDefault(); void leaveDirty(() => router.push('/v2/supply-chain/reports?report=stagnant')) } }}>查看呆滞品 ↗</Link></div></div>
+      <form className={styles.toolbar} onSubmit={event => { event.preventDefault(); void leaveDirty(() => { setAppliedQuery(query.trim()); setPage(1) }) }}>
+        <label><span>仓库</span><select aria-label="仓库" value={warehouseId} onChange={event => { const value = event.target.value; void leaveDirty(() => { setWarehouseId(value); setPage(1) }) }} disabled={loading}>{result?.warehouses.map(item => <option key={item.id} value={item.id}>{item.name}{item.isDefault ? '（默认）' : ''}</option>)}</select></label>
         <label><span>商品</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="名称 / 编码 / 类别" /></label>
-        <button className={styles.primary}>查询</button><button type="button" onClick={() => leaveDirty(() => { setQuery(''); setAppliedQuery(''); setPage(1) })}>重置</button>
+        <button className={styles.primary}>查询</button><button type="button" onClick={() => void leaveDirty(() => { setQuery(''); setAppliedQuery(''); setPage(1) })}>重置</button>
       </form>
       {error && <div className={styles.error} role="alert">{error}<button onClick={() => void load()}>重新加载</button></div>}
       {notice && <div className={styles.notice} role="status">{notice}</div>}
@@ -195,7 +198,7 @@ export function InventoryRules() {
             </tr>
           })}
         </tbody></table></div>
-        <footer className={styles.pagination}><span>共 {result?.total ?? 0} 项{dirtyIds.size ? ` · ${dirtyIds.size} 条未保存` : ''}</span><div><select aria-label="每页条数" value={pageSize} onChange={event => { const value = Number(event.target.value); leaveDirty(() => { setPageSize(value); setPage(1) }) }}><option value="20">20条</option><option value="50">50条</option><option value="100">100条</option></select><button disabled={loading || page <= 1} onClick={() => leaveDirty(() => setPage(value => value - 1))}>上一页</button><span>{page} / {Math.max(1, Math.ceil((result?.total || 0) / pageSize))}</span><button disabled={loading || page * pageSize >= (result?.total || 0)} onClick={() => leaveDirty(() => setPage(value => value + 1))}>下一页</button></div></footer>
+        <footer className={styles.pagination}><span>共 {result?.total ?? 0} 项{dirtyIds.size ? ` · ${dirtyIds.size} 条未保存` : ''}</span><div><select aria-label="每页条数" value={pageSize} onChange={event => { const value = Number(event.target.value); void leaveDirty(() => { setPageSize(value); setPage(1) }) }}><option value="20">20条</option><option value="50">50条</option><option value="100">100条</option></select><button disabled={loading || page <= 1} onClick={() => void leaveDirty(() => setPage(value => value - 1))}>上一页</button><span>{page} / {Math.max(1, Math.ceil((result?.total || 0) / pageSize))}</span><button disabled={loading || page * pageSize >= (result?.total || 0)} onClick={() => void leaveDirty(() => setPage(value => value + 1))}>下一页</button></div></footer>
       </section>
     </main>
     <ConfirmSheet {...leaveConfirm} />

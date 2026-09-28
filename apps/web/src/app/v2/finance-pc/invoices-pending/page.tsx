@@ -18,6 +18,8 @@ import dayjs from 'dayjs'
 import { BlackHero, Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../_topnav'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Receipt = {
   id: string; no: string
@@ -71,7 +73,7 @@ export default function FinancePCInvoicesPendingPage() {
   function copyContact(r: Receipt) {
     const supplier = `${r.supplier.name} ${r.supplier.contactName || ''} ${r.supplier.contactPhone || ''}`.trim()
     const msg = `催发票: 入库单 ${r.no} (${r.store.name}) ¥${Number(r.totalAmount).toFixed(2)} 已付款 ${r.daysSincePaid || 0} 天 — ${supplier}`
-    navigator.clipboard?.writeText(msg).then(() => alert('已复制催办文案 (可粘贴到企微 / 微信群)')).catch(() => alert(msg))
+    navigator.clipboard?.writeText(msg).then(() => notifyUser('已复制催办文案 (可粘贴到企微 / 微信群)')).catch(() => notifyUser(msg))
   }
 
   return (

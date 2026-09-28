@@ -7,6 +7,8 @@
 'use client'
 import { useEffect, useState, useRef } from 'react'
 import { getUser, getToken } from '@/lib/v2-auth'
+import { confirmDialog } from '@/lib/ui-dialogs'
+
 
 const CATEGORY_LABEL: Record<string, string> = {
   CONTRACT: '合同', CONSTRUCTION: '装修工程', FIRE: '消防',
@@ -241,7 +243,7 @@ export default function BudgetPage({ params }: { params: { storeId: string } }) 
   }
 
   async function deleteRow(row: Row) {
-    if (!confirm(`确认删除「${row.name}」?`)) return
+    if (!(await confirmDialog(`确认删除「${row.name}」?`))) return
     try {
       const t = getToken()
       await fetch(`/api/budgets/${row.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${t}` } })

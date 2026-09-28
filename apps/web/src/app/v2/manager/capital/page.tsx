@@ -10,6 +10,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 import { Chip } from '@/components/v2'
 import { SkeletonList, FriendlyError, EmptyState } from '@/components/v2/skeleton'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Project = {
   id: string; name: string; type: string; status: string
@@ -48,7 +50,7 @@ export default function ManagerCapitalPage() {
   }, [])
 
   async function create() {
-    if (!form.name.trim()) { alert('请填项目名'); return }
+    if (!form.name.trim()) { notifyUser('请填项目名'); return }
     setSubmitting(true)
     try {
       const p = await apiFetch<Project>('/api/capital/projects', {
@@ -63,7 +65,7 @@ export default function ManagerCapitalPage() {
       setShowNew(false)
       setForm({ name: '', type: 'NEW_STORE', budget: '', repaymentTerms: '', note: '' })
       location.href = `/v2/manager/capital/${p.id}`
-    } catch (e: any) { alert(e.message || '立项失败') }
+    } catch (e: any) { notifyUser(e.message || '立项失败') }
     setSubmitting(false)
   }
 

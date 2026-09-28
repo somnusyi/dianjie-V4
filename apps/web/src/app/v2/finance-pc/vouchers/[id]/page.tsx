@@ -17,6 +17,8 @@ import dayjs from 'dayjs'
 import { Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../../_topnav'
+import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
+
 
 type Entry = {
   id: string; lineNo: number; summary: string
@@ -65,13 +67,13 @@ export default function FinancePCVoucherDetailPage() {
   useEffect(() => { reload() }, [id])
 
   async function action(path: string, confirmMsg?: string) {
-    if (confirmMsg && !confirm(confirmMsg)) return
+    if (confirmMsg && !(await confirmDialog(confirmMsg))) return
     setBusy(true)
     try {
       await apiFetch(`/api/vouchers/${id}/${path}`, { method: 'PATCH' })
       await reload()
     } catch (e: any) {
-      alert(e.message)
+      notifyUser(e.message)
     } finally { setBusy(false) }
   }
 

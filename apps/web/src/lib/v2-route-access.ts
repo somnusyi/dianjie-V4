@@ -17,6 +17,12 @@ function isInternalSupplyChainSharedReadPath(pathname: string): boolean {
  * 登录校验，由各自现有守卫处理。
  */
 export function rolesForV2Path(pathname: string): readonly string[] | undefined {
+  if (pathname === '/v2/supply-chain/stocktake/work' || /^\/v2\/supply-chain\/stocktake\/count\/[^/]+\/?$/.test(pathname)) {
+    return [...INTERNAL_SUPPLY_CHAIN_ROLES, 'PURCHASER', 'FINANCE']
+  }
+  if (pathname === '/v2/supply-chain/stocktake' || pathname.startsWith('/v2/supply-chain/stocktake/')) {
+    return [...INTERNAL_SUPPLY_CHAIN_ROLES, 'FINANCE']
+  }
   if (pathname === '/v2/supply-chain' || pathname.startsWith('/v2/supply-chain/')) {
     return INTERNAL_SUPPLY_CHAIN_ROLES
   }
@@ -36,6 +42,7 @@ export function rolesForV2Path(pathname: string): readonly string[] | undefined 
  */
 export function isV2PathAllowedForRole(pathname: string, role: string): boolean {
   if (role !== 'SUPPLY_CHAIN') return true
+  if (pathname === '/v2/notifications') return true
   if (pathname === '/v2/me' || pathname === '/v2/me/password') return true
   // 反馈是所有已登录员工的共享能力；否则全局反馈按钮对供应链角色会形成死链接。
   if (pathname === '/v2/feedback' || pathname.startsWith('/v2/feedback/')) return true

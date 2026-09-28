@@ -20,6 +20,8 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { apiFetch } from '@/lib/v2-auth'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Tx = {
   date: string         // yyyymmdd
@@ -126,7 +128,7 @@ export function BankTransactionsDrawer({
         }),
       })
       if (!r.success || !r.url) {
-        alert(`下载失败: ${r.resultMsg || r.resultCode || '银行无返回'}`)
+        notifyUser(`下载失败: ${r.resultMsg || r.resultCode || '银行无返回'}`)
         return
       }
       const fullUrl = new URL(r.url, window.location.origin).toString()
@@ -178,7 +180,7 @@ export function BankTransactionsDrawer({
       // 用户在系统分享菜单里点取消会抛 error, 静默处理 (不弹错误 alert)
       const msg = String(e?.message || e || '').toLowerCase()
       if (msg.includes('cancel') || msg.includes('canceled') || msg.includes('cancelled')) return
-      alert(e?.message || '操作失败')
+      notifyUser(e?.message || '操作失败')
     } finally {
       setDownloadingSeq(null)
     }

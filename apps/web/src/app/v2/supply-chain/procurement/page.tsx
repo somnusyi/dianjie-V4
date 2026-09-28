@@ -446,6 +446,7 @@ export default function UpstreamProcurementPage() {
   const [viewingContract, setViewingContract] = useState<Contract | null>(null)
   const [viewingPurchaseReturn, setViewingPurchaseReturn] = useState<PurchaseReturn | null>(null)
   const [quickContractFromOrder, setQuickContractFromOrder] = useState(false)
+  const deepLinkOpened = useRef(false)
   const orderRequestKeyRef = useRef(clientRequestId())
   const receiptRequestKeysRef = useRef<Record<string, string>>({})
   const postClaimRequestKeysRef = useRef<Record<string, string>>({})
@@ -544,6 +545,53 @@ export default function UpstreamProcurementPage() {
   useEffect(() => {
     void loadAll()
   }, [loadAll])
+
+  useEffect(() => {
+    if (loading || deepLinkOpened.current) return
+    const query = new URLSearchParams(window.location.search)
+    const orderId = query.get('order') || query.get('orderId')
+    const receiptId = query.get('receipt') || query.get('receiptId')
+    const returnId = query.get('return') || query.get('returnId')
+    const claimId = query.get('claim') || query.get('claimId')
+    const statementId = query.get('statement') || query.get('statementId')
+    const contractId = query.get('contract') || query.get('contractId')
+    if (!orderId && !receiptId && !returnId && !claimId && !statementId && !contractId) return
+
+    deepLinkOpened.current = true
+    if (orderId) {
+      setTab('orders')
+      void openOrderDetail({ id: orderId })
+      return
+    }
+    if (receiptId) {
+      const receipt = receipts.find((item) => item.id === receiptId)
+      setTab('receipts')
+      void openReceiptDetail({ id: receiptId }, receiptReviewActionForStatus(receipt?.status || ''))
+      return
+    }
+    if (returnId) {
+      setTab('returns')
+      const row = purchaseReturns.find((item) => item.id === returnId)
+      if (row) setViewingPurchaseReturn(row)
+      else setError('未找到链接对应的采购退货单')
+      return
+    }
+    if (claimId) {
+      focusRecord('claims', `arrival-claim-${claimId}`)
+      return
+    }
+    if (statementId) {
+      setTab('settlements')
+      void openStatementDetail({ id: statementId } as Statement)
+      return
+    }
+    if (contractId) {
+      setTab('contracts')
+      const row = contracts.find((item) => item.id === contractId)
+      if (row) setViewingContract(row)
+      else setError('未找到链接对应的合同')
+    }
+  }, [loading])
 
   useEffect(() => {
     const dirty = Boolean(receiving)
@@ -2679,7 +2727,7 @@ export default function UpstreamProcurementPage() {
                                     className="underline decoration-dotted"
                                     onClick={() => {
                                       setViewingStatement(null)
-                                      setTab('claims')
+                                      focusRecord('claims', `arrival-claim-${line.claim!.id}`)
                                     }}
                                   >
                                     差异单 {line.claim.no}
@@ -2773,7 +2821,7 @@ export default function UpstreamProcurementPage() {
               <Empty text="暂无对账单" />
             ) : (
               statements.map((statement) => (
-                <article key={statement.id} className="rounded-2xl border border-border bg-white p-4">
+                <article id={`statement-${statement.id}`} key={statement.id} className="rounded-2xl border border-border bg-white p-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <div className="flex items-center gap-2">

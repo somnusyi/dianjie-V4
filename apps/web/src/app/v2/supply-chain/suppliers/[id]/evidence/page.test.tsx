@@ -12,9 +12,13 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(),
 }))
 vi.mock('@/lib/v2-auth', () => ({ apiFetch: vi.fn() }))
+vi.mock('@/lib/ui-dialogs', () => ({ confirmDialog: vi.fn(), promptDialog: vi.fn() }))
 import { apiFetch } from '@/lib/v2-auth'
+import { confirmDialog, promptDialog } from '@/lib/ui-dialogs'
 
 const mockFetch = vi.mocked(apiFetch)
+const mockConfirm = vi.mocked(confirmDialog)
+const mockPrompt = vi.mocked(promptDialog)
 const product = { id: 'product-1', code: 'P001', name: '牛肉', evidenceRequirement: 'PENDING', requiredEvidenceTypes: [], evidenceRequirementVersion: 0 }
 
 function installFetch() {
@@ -55,12 +59,12 @@ function change(element: HTMLInputElement | HTMLSelectElement, value: string | b
 describe('商品随货资料规则编辑', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockConfirm.mockResolvedValue(true)
+    mockPrompt.mockResolvedValue('牛肉到货需三类资料')
     installFetch()
   })
 
   it('选必须提供并勾选3类后只确认、填原因和PATCH一次', async () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
-    const prompt = vi.spyOn(window, 'prompt').mockReturnValue('牛肉到货需三类资料')
     const { container, root } = renderPage()
     await waitFor(() => expect(container.textContent).toContain('商品随货资料规则'))
     change(container.querySelector('select[aria-label="牛肉资料规则"]') as HTMLSelectElement, 'REQUIRED')
@@ -69,9 +73,9 @@ describe('商品随货资料规则编辑', () => {
     await waitFor(() => expect(mockFetch.mock.calls.filter(([, options]) => options?.method === 'PATCH')).toHaveLength(1))
     const patchCall = mockFetch.mock.calls.find(([, options]) => options?.method === 'PATCH')!
     expect(JSON.parse(String(patchCall[1]?.body))).toMatchObject({ status: 'REQUIRED', requiredTypes: ['QUARANTINE_CERTIFICATE', 'SLAUGHTER_CERTIFICATE', 'THIRD_PARTY_TEST_REPORT'] })
-    expect(confirm).toHaveBeenCalledTimes(1)
-    expect(prompt).toHaveBeenCalledTimes(1)
-    confirm.mockRestore(); prompt.mockRestore(); act(() => root.unmount()); container.remove()
+    expect(mockConfirm).toHaveBeenCalledTimes(1)
+    expect(mockPrompt).toHaveBeenCalledTimes(1)
+    act(() => root.unmount()); container.remove()
   })
 
   it('必须提供未勾类型时不能保存', async () => {
@@ -85,7 +89,7 @@ describe('商品随货资料规则编辑', () => {
   })
 
   it('取消站内离开后保留未保存规则草稿', async () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    mockConfirm.mockResolvedValue(false)
     const { container, root } = renderPage()
     await waitFor(() => expect(container.textContent).toContain('商品随货资料规则'))
     change(container.querySelector('select[aria-label="牛肉资料规则"]') as HTMLSelectElement, 'REQUIRED')
@@ -96,6 +100,7 @@ describe('商品随货资料规则编辑', () => {
     act(() => { allowed = window.dispatchEvent(event) })
     expect(allowed).toBe(false)
     expect(checkbox.checked).toBe(true)
-    confirm.mockRestore(); act(() => root.unmount()); container.remove()
+    expect(mockConfirm).toHaveBeenCalledTimes(1)
+    act(() => root.unmount()); container.remove()
   })
 })

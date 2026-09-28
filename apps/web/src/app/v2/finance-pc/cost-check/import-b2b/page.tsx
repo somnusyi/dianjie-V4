@@ -20,6 +20,8 @@ import { useRouter } from 'next/navigation'
 import dayjs from 'dayjs'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../../_topnav'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Supplier = { id: string; name: string; sourceType?: string | null }
 type Store = { id: string; name: string }
@@ -121,7 +123,7 @@ export default function ImportB2BPage() {
         setTimeout(() => router.push('/v2/finance-pc/cost-check'), 2000)
       }
     } catch (e: any) {
-      alert(e?.message || '提交失败')
+      notifyUser(e?.message || '提交失败')
     } finally { setSubmitting(false) }
   }
 

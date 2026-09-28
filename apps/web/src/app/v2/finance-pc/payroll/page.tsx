@@ -14,6 +14,8 @@ import dayjs from 'dayjs'
 import { Chip, MonthPicker } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../_topnav'
+import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
+
 
 type Item = {
   id: string; month: string
@@ -60,18 +62,18 @@ export default function FinancePCPayrollPage() {
   useEffect(() => { void load() }, [filterMonth])
 
   async function doApprove(it: Item) {
-    if (!confirm(`确认审批 ${it.month} 工资单? (${it._count.items} 人, 实发 ${fmtMoney(Number(it.totalNet))})`)) return
+    if (!(await confirmDialog(`确认审批 ${it.month} 工资单? (${it._count.items} 人, 实发 ${fmtMoney(Number(it.totalNet))})`))) return
     try {
       await apiFetch(`/api/payroll/${it.id}/approve`, { method: 'PATCH' })
       await load()
-    } catch (e: any) { alert(e?.message || '失败') }
+    } catch (e: any) { notifyUser(e?.message || '失败') }
   }
   async function doVoid(it: Item) {
-    if (!confirm('确认作废? 已发放的需要先反审凭证 + 红冲')) return
+    if (!(await confirmDialog('确认作废? 已发放的需要先反审凭证 + 红冲'))) return
     try {
       await apiFetch(`/api/payroll/${it.id}/void`, { method: 'PATCH' })
       await load()
-    } catch (e: any) { alert(e?.message || '失败') }
+    } catch (e: any) { notifyUser(e?.message || '失败') }
   }
 
   return (
@@ -206,9 +208,9 @@ function MarkPaidModal({ item, onClose, onDone }: { item: Item; onClose: () => v
         method: 'PATCH',
         body: JSON.stringify({ payMethod, accountId, bankTxNo: bankTxNo || undefined, payDate }),
       })
-      if (r?.voucherWarning) alert(r.voucherWarning)
+      if (r?.voucherWarning) notifyUser(r.voucherWarning)
       onDone(); onClose()
-    } catch (e: any) { alert(e?.message || '失败'); setBusy(false) }
+    } catch (e: any) { notifyUser(e?.message || '失败'); setBusy(false) }
   }
 
   const fmt = (n: number) => `¥${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`

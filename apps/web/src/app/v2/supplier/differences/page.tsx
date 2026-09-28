@@ -10,6 +10,8 @@ import {
   supplierLossClaimResponsibility,
   supplierLossClaimSettlementHint,
 } from '@/lib/supplier-domain'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Claim = {
   id: string; no: string; status: string; kind: string; payableBasis: string
@@ -112,7 +114,7 @@ export default function SupplierDifferencesPage() {
           })
           await load()
         } catch (reason: any) {
-          alert(reason.message || '处理失败')
+          notifyUser(reason.message || '处理失败')
           throw reason
         } finally {
           setSubmitting(null)

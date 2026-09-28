@@ -21,6 +21,7 @@ const TABS: Tab[] = [
     group: [
       { label: '应付管理',     href: '/v2/finance-pc/payable',           desc: '按发票分次付款' },
       { label: '上游采购对账', href: '/v2/finance-pc/upstream-settlements', desc: '供应商确认后由财务复核锁定' },
+      { label: '总仓盘点审核', href: '/v2/supply-chain/stocktake/work', desc: '复核总仓盘点并生成盘盈盘亏' },
       { label: '发票审核',     href: '/v2/finance-pc/invoices',          desc: '财务通过后解锁付款', badgeKey: 'invoicePending' },
       { label: '待开票跟踪',   href: '/v2/finance-pc/invoices-pending',  desc: '已付款但供应商没开发票, 催办主战场', badgeKey: 'pendingInvoice' },
       { label: '资本支出审批', href: '/v2/finance-pc/capital-review',    desc: '店长申请 → 老板批 → 财务付' },
@@ -241,6 +242,9 @@ export default function FinanceTopNav() {
                     {user?.email && ` · ${user.email}`}
                   </div>
                 </div>
+                <Link href="/v2/supply-chain/stocktake/work" className="block border-b border-border px-4 py-3 text-button text-ink hover:bg-bg" onClick={() => setUserMenuOpen(false)}>
+                  总仓盘点审核
+                </Link>
                 <button onClick={logout}
                         className="w-full text-left px-4 py-3 text-button text-gray2 hover:bg-bg transition">
                   换个账号登录

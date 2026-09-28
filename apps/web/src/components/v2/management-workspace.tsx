@@ -98,6 +98,16 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
       setPrinting(false)
     }
   }
+  function detailHref(row: ManagementRow) {
+    if (row.recordType === 'WAREHOUSE_DOC') return `/v2/supply-chain/docs?doc=${encodeURIComponent(String(row.detailId))}`
+    if (row.recordType === 'UPSTREAM_RECEIPT') return `/v2/supply-chain/procurement?receipt=${encodeURIComponent(String(row.detailId))}`
+    if (row.recordType === 'WAREHOUSE_STOCKTAKE') return `/v2/supply-chain/stocktake/work?doc=${encodeURIComponent(String(row.detailId))}`
+    if (config.id === 'purchase-return') return `/v2/supply-chain/procurement?return=${encodeURIComponent(String(row.id))}`
+    if (config.id === 'count' && row.recordType !== 'IMPORTED_BASELINE') return String(row.id).startsWith('warehouse:')
+      ? `/v2/supply-chain/stocktake/count/${String(row.id).slice(10)}?source=warehouse`
+      : `/v2/supply-chain/stocktake/count/${row.id}`
+    return null
+  }
   const columns = config.columns.filter(c => !hidden.includes(c.key))
   const rows = result?.rows || []
   const showOperation = config.id === 'count'
@@ -132,7 +142,7 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
           <thead><tr><th className={styles.check}><input type="checkbox" aria-label="选择本页全部记录" disabled={!rows.length || loading} checked={!!rows.length && selected.length === rows.length} ref={el => { if (el) el.indeterminate = selected.length > 0 && selected.length < rows.length }} onChange={e => setSelected(e.target.checked ? rows.map(r => String(r.id)) : [])} /></th>{columns.map(c => <th key={c.key} className={c.kind === 'number' ? styles.numeric : ''}>{c.label}</th>)}{showOperation && <th className={styles.operation}>操作</th>}</tr></thead>
           <tbody>{loading || !rows.length ? <tr><td colSpan={columns.length + (showOperation ? 2 : 1)}><div className={styles.empty}><span aria-hidden="true">▤</span><strong>{loading ? '正在查询…' : error ? '查询未完成' : result?.sourceAvailable === false ? '暂无可用单据来源' : '暂无符合条件的记录'}</strong><p>{!loading && (error ? '请重试后查看记录。' : result?.sourceAvailable === false ? result.note : '可以调整筛选条件后重新查询。')}</p></div></td></tr> : rows.map(row => <tr key={row.id} data-selected={selected.includes(String(row.id))}>
             <td className={styles.check}><input type="checkbox" aria-label={`选择${row.no || row.name}`} checked={selected.includes(String(row.id))} onChange={e => setSelected(old => e.target.checked ? [...old, String(row.id)] : old.filter(v => v !== String(row.id)))} /></td>
-            {columns.map(c => <td key={c.key} className={c.kind === 'number' ? styles.numeric : ''} title={row[c.key] == null ? '尚未记录' : String(row[c.key])}>{c.key === 'no' ? <><span>{display(row[c.key], c.kind)}</span>{row.source && <span className={`${styles.badge} ml-2`}>{row.source}</span>}</> : ['status', 'review'].includes(c.key) && row[c.key] ? <span className={styles.badge}>{row[c.key]}</span> : display(row[c.key], c.kind)}</td>)}
+            {columns.map(c => <td key={c.key} className={c.kind === 'number' ? styles.numeric : ''} title={row[c.key] == null ? '尚未记录' : String(row[c.key])}>{c.key === 'no' ? <>{detailHref(row) ? <Link className={styles.textButton} href={detailHref(row)!}>{display(row[c.key], c.kind)}</Link> : <span>{display(row[c.key], c.kind)}</span>}{row.source && <span className={`${styles.badge} ml-2`}>{row.source}</span>}</> : ['status', 'review'].includes(c.key) && row[c.key] ? <span className={styles.badge}>{row[c.key]}</span> : display(row[c.key], c.kind)}</td>)}
             {showOperation && <td className={styles.operation}>{row.recordType !== 'IMPORTED_BASELINE'
               ? <Link className={styles.textButton} href={String(row.id).startsWith('warehouse:') ? `/v2/supply-chain/stocktake/count/${String(row.id).slice(10)}?source=warehouse` : `/v2/supply-chain/stocktake/count/${row.id}`}>复盘</Link>
               : '—'}</td>}

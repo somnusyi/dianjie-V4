@@ -196,7 +196,7 @@ describe('projectReceiptRow', () => {
     store: { id: 's1', no: 'S01', name: '门店A' },
     supplier: { id: 'sup1', no: 'SUP01', name: '供应商A' },
     items: [
-      { productNameSnapshot: '白菜', productCodeSnapshot: 'BC01', productSpecSnapshot: '500g' },
+      { quantity: 12, productUnitSnapshot: '斤', productNameSnapshot: '白菜', productCodeSnapshot: 'BC01', productSpecSnapshot: '500g' },
     ],
     paymentSchedule: { id: 'ps1', status: 'PENDING' },
     invoice: { id: 'inv1' },
@@ -212,6 +212,7 @@ describe('projectReceiptRow', () => {
     expect(projected.supplier).toEqual({ id: 'sup1', name: '供应商A', no: 'SUP01' })
     expect(projected.items).toHaveLength(1)
     expect(projected.items[0].productNameSnapshot).toBe('白菜')
+    expect(projected.items[0]).toMatchObject({ quantity: 12, unit: '斤' })
   })
 
   it('excludes financial fields from projection', () => {
@@ -233,11 +234,12 @@ describe('projectReceiptRow', () => {
   it('falls back to product relation when snapshot is missing', () => {
     const row = {
       ...fullRow,
-      items: [{ product: { name: '萝卜', code: 'LB01', spec: '1kg' } }],
+      items: [{ quantity: '3.5', product: { name: '萝卜', code: 'LB01', spec: '1kg', unit: '箱' } }],
     }
     const projected = projectReceiptRow(row)
     expect(projected.items[0].productNameSnapshot).toBe('萝卜')
     expect(projected.items[0].productCodeSnapshot).toBe('LB01')
+    expect(projected.items[0]).toMatchObject({ quantity: '3.5', unit: '箱' })
   })
 })
 

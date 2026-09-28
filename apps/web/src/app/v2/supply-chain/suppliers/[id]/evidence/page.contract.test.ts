@@ -15,7 +15,7 @@ describe('来货资料页面合同', () => {
 
   it('明确商品规则是全局规则且需要二次确认', () => {
     expect(evidencePage).toContain('适用于该商品的所有上游供应商')
-    expect(evidencePage).toContain('window.confirm')
+    expect(evidencePage).toContain('confirmDialog')
     expect(evidencePage).toContain('expectedVersion')
     expect(evidencePage).toContain('expectedRequiredTypes')
     expect(evidencePage).toContain('所需资料类型（可多选）')
@@ -26,7 +26,8 @@ describe('来货资料页面合同', () => {
     expect(evidencePage).toContain('SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT')
     expect(evidencePage).toContain('Object.values(selectedLinks).some')
     expect(evidencePage).toContain('backfillReason.trim()')
-    expect(evidencePage).toContain('saving || !window.confirm')
+    expect(evidencePage).toContain("if (saving) return")
+    expect(evidencePage).toContain('proceed?.()')
   })
 
   it('缺件只提示不阻断，验收页可直达补齐', () => {

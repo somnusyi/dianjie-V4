@@ -9,6 +9,8 @@ import { useEffect, useState } from 'react'
 import { BottomNav, Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch } from '@/lib/v2-auth'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type ApiDoc = {
   id: string; number: string; type: string; title: string
@@ -56,7 +58,7 @@ export default function ChefDirectorApprovalsPage() {
       const data = await apiFetch<any>(`/api/documents/${docId}/preview?full=1`)
       setFullSheet({ docId, data })
     } catch (e: any) {
-      alert(e.message || '加载失败')
+      notifyUser(e.message || '加载失败')
     } finally { setLoadingFull(false) }
   }
 
@@ -116,7 +118,7 @@ export default function ChefDirectorApprovalsPage() {
         body: JSON.stringify({ decision, comment }),
       })
       await load()
-    } catch (e: any) { alert(e.message || '操作失败') }
+    } catch (e: any) { notifyUser(e.message || '操作失败') }
     setSubmitting(null)
   }
 

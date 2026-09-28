@@ -16,6 +16,8 @@ import dayjs from 'dayjs'
 import { apiFetch } from '@/lib/v2-auth'
 import { Chip } from '@/components/v2'
 import FinanceTopNav from '../_topnav'
+import { notifyUser } from '@/lib/ui-dialogs'
+
 
 type Invoice = {
   id: string; invoiceNo: string; invoiceCode?: string | null
@@ -88,7 +90,7 @@ export default function FinancePCInvoicesPage() {
 
   async function decide(action: 'APPROVE' | 'REJECT', note?: string) {
     if (!picked || submitting) return
-    if (action === 'REJECT' && !note?.trim()) { alert('请填写驳回原因'); return }
+    if (action === 'REJECT' && !note?.trim()) { notifyUser('请填写驳回原因'); return }
     setSubmitting(true)
     try {
       await apiFetch(`/api/invoices/${picked.id}/verify`, {
@@ -96,7 +98,7 @@ export default function FinancePCInvoicesPage() {
       })
       setShowReject(false); setRejectNote('')
       load()
-    } catch (e: any) { alert(e.message || '操作失败') }
+    } catch (e: any) { notifyUser(e.message || '操作失败') }
     finally { setSubmitting(false) }
   }
 

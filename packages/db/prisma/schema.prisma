@@ -5543,8 +5543,8 @@ model BossChatMessage {
   @@map("boss_chat_messages")
 }
 
-// UAT 灰度专用：页面批注层（图钉+涂鸦）。批注跟页面走，同一页所有白名单账号共享一层；
-// 与业务表完全隔离（无外键），只经 /api/page-annotations 读写。
+// 历史页面批注数据仅作留存；前端入口和读写接口已全局下线。
+// 保留模型可避免在部署时误删已有数据，与业务表仍无外键。
 model PageAnnotation {
   id          String   @id @default(cuid())
   tenantId    String

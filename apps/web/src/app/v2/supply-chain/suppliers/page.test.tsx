@@ -148,7 +148,7 @@ const SUPPLIERS = [
   },
 ]
 
-const SENSITIVE_SUBSTRINGS = ['银行', '账号', '密钥', 'autoPay', '付款', '对账']
+const SENSITIVE_SUBSTRINGS = ['银行', '银行账号', '密钥', 'autoPay', '付款', '对账']
 
 describe('上游供应商管理 PC 页面', () => {
   beforeEach(() => {
@@ -272,6 +272,7 @@ describe('上游供应商管理 PC 页面', () => {
     }
     expect(text).not.toContain('6222')
     expect(text).not.toContain('测试银行')
+    expect(text).not.toContain('TEST-FAKE-ACCOUNT-NUMBER')
 
     cleanup(container, root)
   })

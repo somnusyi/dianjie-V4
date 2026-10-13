@@ -317,6 +317,7 @@ export default function InternalSupplyChainSuppliersPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <a href="/v2/supply-chain/suppliers/accounts" className="rounded-cta border border-accent bg-white px-4 py-2.5 text-button text-accent">添加供应商账号</a>
           <button
             onClick={openCreateDrawer}
             className="rounded-cta bg-accent px-4 py-2.5 text-button text-white"

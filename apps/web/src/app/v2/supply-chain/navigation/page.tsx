@@ -17,6 +17,7 @@ const warehouseTools = [
 export default function SupplyChainNavigationPage() {
   const groups = [
     ...SUPPLY_CHAIN_NAV_GROUPS,
+    { title: '供应商账号', items: [{ label: '添加供应商账号', href: '/v2/supply-chain/suppliers/accounts' }] },
     { title: '库存管理与验收', items: warehouseTools },
     { title: '库存与盘点单据', items: managementPages.map(page => ({ label: page.title, href: managementHref(page) })) },
     { title: '库存报表', items: inventoryReports.map(report => ({ label: report.title, href: `/v2/supply-chain/reports?report=${report.id}` })) },

@@ -153,6 +153,9 @@ const SENSITIVE_SUBSTRINGS = ['银行', '账号', '密钥', 'autoPay', '付款',
 describe('上游供应商管理 PC 页面', () => {
   beforeEach(() => {
     mockFetch.mockReset()
+    localStorage.clear()
+    localStorage.setItem('user', JSON.stringify({ id: 'supply-test' }))
+    localStorage.setItem('tenant', JSON.stringify({ id: 'tenant-test' }))
   })
 
   it('首次加载只请求上游供应商并渲染编号、名称、状态、联系人、电话、账期', async () => {
@@ -357,8 +360,9 @@ describe('上游供应商管理 PC 页面', () => {
     }
     let createdSaved = false
     mockFetch.mockImplementation((path, init) => {
+      if (path === '/api/products') return Promise.resolve([{ id: 'p-valid', code: 'P-VALID', name: '有效商品', category: '测试', unit: 'kg', purchaseUnit: '箱', inventoryUnitsPerPurchaseUnit: 10, price: 30, status: 'ENABLED' }])
       const method = (init?.method ?? 'GET').toUpperCase()
-      if (method === 'POST' && path === '/api/suppliers') {
+      if (method === 'POST' && path === '/api/suppliers/create-with-products') {
         createdSaved = true
         return Promise.resolve(created)
       }
@@ -378,10 +382,13 @@ describe('上游供应商管理 PC 页面', () => {
     act(() => setInputValue(getInputByLabel(container, '类目'), '肉禽'))
     act(() => setInputValue(getInputByLabel(container, '账期天数'), '45'))
 
+    await waitFor(() => document.body.textContent?.includes('P-VALID') ?? false)
+    const validProduct = Array.from(document.body.querySelectorAll('label')).find(label => label.textContent?.includes('P-VALID'))?.querySelector('input') as HTMLInputElement
+    act(() => validProduct.click())
     act(() => findButton(container, '保存')?.click())
-    await waitFor(() => methodCalls('POST', '/api/suppliers').length === 1)
+    await waitFor(() => methodCalls('POST', '/api/suppliers/create-with-products').length === 1)
 
-    const body = lastCallBody('/api/suppliers', 'POST')
+    const body = lastCallBody('/api/suppliers/create-with-products', 'POST').supplier
     expect(body).toMatchObject({
       no: 'SUP003',
       name: '曲靖肉禽',
@@ -459,7 +466,7 @@ describe('上游供应商管理 PC 页面', () => {
     act(() => findButton(container, '保存')?.click())
 
     await sleep(50)
-    expect(methodCalls('POST', '/api/suppliers')).toHaveLength(0)
+    expect(mockFetch.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0)
     expect(document.body.textContent).toContain('请输入供应商编号')
     expect(document.body.textContent).toContain('请输入供应商名称')
     expect(document.body.textContent).toContain('请输入账期天数')
@@ -469,9 +476,10 @@ describe('上游供应商管理 PC 页面', () => {
 
   it('保存失败时保留输入并展示错误', async () => {
     mockFetch.mockImplementation((path, init) => {
+      if (path === '/api/products') return Promise.resolve([{ id: 'p-valid', code: 'P-VALID', name: '有效商品', category: '测试', unit: 'kg', purchaseUnit: '箱', inventoryUnitsPerPurchaseUnit: 10, price: 30, status: 'ENABLED' }])
       const method = (init?.method ?? 'GET').toUpperCase()
-      if (method === 'POST' && path === '/api/suppliers') {
-        return Promise.reject(new Error('编号已存在'))
+      if (method === 'POST' && path === '/api/suppliers/create-with-products') {
+        return Promise.reject(Object.assign(new Error('编号已存在'), { status: 409 }))
       }
       return Promise.resolve(SUPPLIERS)
     })
@@ -485,12 +493,15 @@ describe('上游供应商管理 PC 页面', () => {
     act(() => setInputValue(getInputByLabel(container, '编号'), 'SUP003'))
     act(() => setInputValue(getInputByLabel(container, '名称'), '失败供应商'))
 
+    await waitFor(() => document.body.textContent?.includes('P-VALID') ?? false)
+    const validProduct = Array.from(document.body.querySelectorAll('label')).find(label => label.textContent?.includes('P-VALID'))?.querySelector('input') as HTMLInputElement
+    act(() => validProduct.click())
     act(() => findButton(container, '保存')?.click())
     await waitFor(() => document.body.textContent?.includes('编号已存在') ?? false)
 
     expect((getInputByLabel(container, '编号') as HTMLInputElement).value).toBe('SUP003')
     expect((getInputByLabel(container, '名称') as HTMLInputElement).value).toBe('失败供应商')
-    expect(methodCalls('POST', '/api/suppliers')).toHaveLength(1)
+    expect(methodCalls('POST', '/api/suppliers/create-with-products')).toHaveLength(1)
 
     cleanup(container, root)
   })
@@ -510,9 +521,109 @@ describe('上游供应商管理 PC 页面', () => {
     act(() => findButton(container, '取消')?.click())
     await sleep(50)
 
-    expect(methodCalls('POST', '/api/suppliers')).toHaveLength(0)
+    expect(mockFetch.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0)
     expect(document.body.textContent).not.toContain('未保存供应商')
 
     cleanup(container, root)
   })
+
+  it('新增供应商时可在同一抽屉选择商品并自动建立供货关系', async () => {
+    const created = { ...SUPPLIERS[0], id: 'sup-3', no: 'SUP003', name: '新供应商' }
+    const product = { id: 'p-1', code: 'P001', name: '土豆', category: '蔬菜', spec: '500g', unit: 'kg', purchaseUnit: '箱', inventoryUnit: 'kg', inventoryUnitsPerPurchaseUnit: 10, price: 30, status: 'ENABLED' }
+    mockFetch.mockImplementation((path, init) => {
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (path === '/api/products') return Promise.resolve([product])
+      if (method === 'POST' && path === '/api/suppliers/create-with-products') return Promise.resolve(created)
+      if (method === 'POST' && path === '/api/suppliers/sup-3/upstream-products') return Promise.resolve({ boundCount: 1 })
+      return Promise.resolve(SUPPLIERS)
+    })
+    const { container, root } = render(<SuppliersPage />)
+    await waitFor(() => container.textContent?.includes('昆明蔬菜批发') ?? false)
+    act(() => findButton(container, '新增上游供应商')?.click())
+    await waitFor(() => document.body.textContent?.includes('全选分类：蔬菜（1）') ?? false)
+
+    act(() => setInputValue(getInputByLabel(container, '编号'), 'SUP003'))
+    act(() => setInputValue(getInputByLabel(container, '名称'), '新供应商'))
+    const productCheckbox = Array.from(document.body.querySelectorAll('label')).find(label => label.textContent?.includes('P001'))?.querySelector('input') as HTMLInputElement
+    act(() => productCheckbox.click())
+    act(() => findButton(container, '保存')?.click())
+
+    await waitFor(() => methodCalls('POST', '/api/suppliers/create-with-products').length === 1)
+    expect(lastCallBody('/api/suppliers/create-with-products', 'POST')).toMatchObject({ items: [{ productId: 'p-1', purchaseUnit: '箱', inventoryUnitsPerPurchaseUnit: 10, quotedUnitPrice: 30, isPrimary: false }] })
+    await waitFor(() => container.textContent?.includes('已绑定 1 个供货商品') ?? false)
+    expect(container.textContent).toContain('已绑定 1 个供货商品')
+    cleanup(container, root)
+  })
+  it('未选商品或缺换算时保留表单，不创建半完成供应商', async () => {
+    mockFetch.mockImplementation(path => Promise.resolve(path === '/api/products'
+      ? [{ id: 'p-missing', code: 'P-MISSING', name: '缺换算商品', category: '测试', unit: '箱', purchaseUnit: '箱', inventoryUnitsPerPurchaseUnit: null, price: 30, status: 'ENABLED' }]
+      : SUPPLIERS))
+    const { container, root } = render(<SuppliersPage />)
+    await waitFor(() => container.textContent?.includes('昆明蔬菜批发') ?? false)
+    act(() => findButton(container, '新增上游供应商')?.click())
+    await waitFor(() => document.body.textContent?.includes('P-MISSING') ?? false)
+    act(() => setInputValue(getInputByLabel(container, '编号'), 'SUP-GUARD'))
+    act(() => setInputValue(getInputByLabel(container, '名称'), '校验供应商'))
+    act(() => findButton(container, '保存')?.click())
+    expect(document.body.textContent).toContain('必须至少选择一个供货商品')
+    expect(mockFetch.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0)
+    const product = Array.from(document.body.querySelectorAll('label')).find(label => label.textContent?.includes('P-MISSING'))?.querySelector('input') as HTMLInputElement
+    act(() => product.click())
+    act(() => findButton(container, '保存')?.click())
+    expect(document.body.textContent).toContain('请先补齐 缺换算商品')
+    expect(getInputByLabel(container, '名称').value).toBe('校验供应商')
+    expect(product.checked).toBe(true)
+    expect(mockFetch.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0)
+    cleanup(container, root)
+  })
+
+  it('网络结果未知后刷新恢复同账号原请求，不重复生成请求编号', async () => {
+    let attempts = 0
+    const product = { id: 'p-replay', code: 'P-REPLAY', name: '重放商品', category: '测试', unit: 'kg', purchaseUnit: '箱', inventoryUnitsPerPurchaseUnit: 10, price: 30, status: 'ENABLED' }
+    mockFetch.mockImplementation((path, init) => {
+      if (path === '/api/products') return Promise.resolve([product])
+      if (init?.method === 'POST') return ++attempts === 1
+        ? Promise.reject(new Error('网络结果未知'))
+        : Promise.resolve({ ...SUPPLIERS[0], id: 'created-replay', no: 'SUP-REPLAY' })
+      return Promise.resolve(SUPPLIERS)
+    })
+    let view = render(<SuppliersPage />)
+    await waitFor(() => view.container.textContent?.includes('昆明蔬菜批发') ?? false)
+    act(() => findButton(view.container, '新增上游供应商')?.click())
+    await waitFor(() => document.body.textContent?.includes('P-REPLAY') ?? false)
+    act(() => setInputValue(getInputByLabel(view.container, '编号'), 'SUP-REPLAY'))
+    act(() => setInputValue(getInputByLabel(view.container, '名称'), '恢复原请求'))
+    const productBox = Array.from(document.body.querySelectorAll('label')).find(label => label.textContent?.includes('P-REPLAY'))?.querySelector('input') as HTMLInputElement
+    act(() => productBox.click())
+    act(() => findButton(view.container, '保存')?.click())
+    await waitFor(() => document.body.textContent?.includes('网络结果未知') ?? false)
+    const first = lastCallBody('/api/suppliers/create-with-products', 'POST')
+    expect(getInputByLabel(view.container, '名称').matches(':disabled')).toBe(true)
+    cleanup(view.container, view.root)
+    view = render(<SuppliersPage />)
+    await waitFor(() => view.container.textContent?.includes('昆明蔬菜批发') ?? false)
+    act(() => findButton(view.container, '新增上游供应商')?.click())
+    await waitFor(() => document.body.textContent?.includes('上次创建结果待确认') ?? false)
+    expect(getInputByLabel(view.container, '名称').value).toBe('恢复原请求')
+    act(() => findButton(view.container, '保存')?.click())
+    await waitFor(() => view.container.textContent?.includes('已绑定 1 个供货商品') ?? false)
+    expect(lastCallBody('/api/suppliers/create-with-products', 'POST')).toEqual(first)
+    expect(Object.keys(localStorage).some(key => key.startsWith('dj:supplier-create:'))).toBe(false)
+    cleanup(view.container, view.root)
+  })
+
+  it('迟到的建议编号不覆盖手工填写', async () => {
+    let resolveNumber!: (value: { no: string }) => void
+    mockFetch.mockImplementation(path => path === '/api/suppliers/next-number'
+      ? new Promise(resolve => { resolveNumber = resolve })
+      : Promise.resolve(path === '/api/products' ? [] : SUPPLIERS))
+    const { container, root } = render(<SuppliersPage />)
+    await waitFor(() => container.textContent?.includes('昆明蔬菜批发') ?? false)
+    act(() => findButton(container, '新增上游供应商')?.click())
+    act(() => setInputValue(getInputByLabel(container, '编号'), 'MANUAL-SUP'))
+    await act(async () => resolveNumber({ no: 'SUP777' }))
+    expect(getInputByLabel(container, '编号').value).toBe('MANUAL-SUP')
+    cleanup(container, root)
+  })
+
 })

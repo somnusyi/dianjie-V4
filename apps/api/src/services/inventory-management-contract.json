@@ -182,9 +182,9 @@
         "kind": "text"
       },
       {
-      "key": "printed",
-      "label": "打印状态",
-      "kind": "text"
+        "key": "printed",
+        "label": "打印状态",
+        "kind": "text"
       },
       {
         "key": "createdAt",
@@ -321,17 +321,17 @@
         "label": "创建人",
         "kind": "text"
       },
-    {
-      "key": "note",
-      "label": "备注",
-      "kind": "text"
-    },
-    {
-      "key": "attachments",
-      "label": "附件",
-      "kind": "text"
-    }
-  ],
+      {
+        "key": "note",
+        "label": "备注",
+        "kind": "text"
+      },
+      {
+        "key": "attachments",
+        "label": "附件",
+        "kind": "text"
+      }
+    ],
     "filters": [
       {
         "key": "org",
@@ -611,7 +611,9 @@
       {
         "key": "difference",
         "label": "盘点差异"
-      },
+      }
+    ],
+    "advanced": [
       {
         "key": "item",
         "label": "物品"
@@ -619,9 +621,7 @@
       {
         "key": "status",
         "label": "单据状态"
-      }
-    ],
-    "advanced": [
+      },
       {
         "key": "countType",
         "label": "盘点类型"

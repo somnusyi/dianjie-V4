@@ -6,6 +6,8 @@
  * 不显示审批按钮或"待总厨审批"语义；不复用外部供应商身份。
  */
 'use client'
+import {productPriceConversion,convertProductInputPrice,type PriceBasis} from '@/lib/product-price-conversion'
+
 import { useEffect, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { ProductToolTabs } from '@/components/v2/product-tool-tabs'
@@ -38,7 +40,6 @@ import {
   countProductsByCategory,
   DEFAULT_SUPPLY_PRODUCT_FILTERS,
   formatCostUnitPriceLabel,
-  formatMoney,
   formatPriceChangeConfirmBody,
   formatProductStatusLabel,
   hasActiveFilters,
@@ -71,6 +72,7 @@ import {
   formatConversionSummary,
   formatOrderUnitPriceHint,
   fourUnitFormFromProduct,
+  inferUnitContractStatus,
   isSimpleFourUnitContract,
   parseSpecConversion,
   type FourUnitForm,
@@ -97,6 +99,24 @@ type ProductRow = SupplyProduct & {
   pricingMode?: string | null
   markupPercent?: number | string | null
   upstreamSources?: ProductUpstreamSource[]
+}
+
+function editFourUnitForm(product: ProductRow): FourUnitForm {
+  const form = fourUnitFormFromProduct(product)
+  for (const key of ['inventoryUnitsPerPurchaseUnit', 'inventoryUnitsPerOrderUnit', 'inventoryUnitsPerCostUnit'] as const) {
+    const value = product[key]
+    if (value == null || String(value).trim() === '' || !Number.isFinite(Number(value)) || Number(value) <= 0) form[key] = ''
+  }
+  return form
+}
+
+function sameUnitForm(a: FourUnitForm, b: FourUnitForm) {
+  return Object.keys(DEFAULT_FOUR_UNIT_FORM).every(key => {
+    const left = a[key as keyof FourUnitForm].trim()
+    const right = b[key as keyof FourUnitForm].trim()
+    return key.startsWith('inventoryUnitsPer') && left && right && Number.isFinite(Number(left)) && Number.isFinite(Number(right))
+      ? Number(left) === Number(right) : left === right
+  })
 }
 
 type UpstreamSupplierOption = SupplierOption & { no?: string }
@@ -129,6 +149,7 @@ type SourceFormRow = {
 }
 
 type FormState = {
+  priceBasis?: PriceBasis
   name: string
   code: string
   category: string
@@ -142,6 +163,7 @@ type FormState = {
 } & FourUnitForm & SupplyProductQuantityForm
 
 const EMPTY_FORM: FormState = {
+  priceBasis: 'purchase',
   name: '',
   code: '',
   category: '',
@@ -569,7 +591,7 @@ export default function InternalSupplyChainProductsPage() {
       // 曾在此 lockCostUnitToMinimum「保存即纠正」，但编辑模式不提交价格，
       // 归一后单位成本必然变化，被 unitContractGuard 全数拦下——96 个档案因此无法编辑。
       // 现在原样加载；只有用户主动改动单位区时才走严格校验 + 护栏折算价格。
-      ...fourUnitFormFromProduct(product),
+      ...editFourUnitForm(product),
       stock: String(product.stock ?? 0),
       minStock: String(product.minStock ?? 0),
       minOrderQty: String(product.minOrderQty ?? 1),
@@ -613,11 +635,10 @@ export default function InternalSupplyChainProductsPage() {
     // 编辑且四单位区块完全未动：允许 costUnit≠库存单位的历史口径原样保留。
     // 一旦用户改动单位区任一字段，回到严格规则（成本单位=库存单位），
     // 由后端 unitContractGuard 继续兜底成本不变式。
-    const fourUnitsUnchanged = Boolean(editing)
-      && JSON.stringify(buildFourUnitValues(form))
-        === JSON.stringify(buildFourUnitValues(fourUnitFormFromProduct(editing ?? {})))
-    const validationError = validateNewProductForm(form)
-      || validateFourUnitForm(form, { allowLegacyCostUnit: fourUnitsUnchanged })
+    const fourUnitsUnchanged = Boolean(editing) && sameUnitForm(form, editFourUnitForm(editing!))
+    const convertedPrice = editing ? null : productPriceConversion(form)
+    const validationError = (!editing ? convertedPrice?.error : null) || validateNewProductForm(form)
+      || (fourUnitsUnchanged ? null : validateFourUnitForm(form))
       || validateProductQuantities(form, { editableOnly: Boolean(editing) })
       || (form.pricingMode === 'MARKUP' ? validateMarkupPercentInput(form.markupPercent) : null)
       || validateSourceRows(formSources)
@@ -651,7 +672,9 @@ export default function InternalSupplyChainProductsPage() {
             minOrderQty: editing.minOrderQty,
             stepQty: editing.stepQty,
           }),
-          ...buildFourUnitEditBody(fourUnitForm, fourUnitFormFromProduct(editing)),
+          ...(fourUnitsUnchanged ? {} : inferUnitContractStatus(editing) !== 'VERIFIED'
+            ? buildFourUnitCreateBody(fourUnitForm)
+            : buildFourUnitEditBody(fourUnitForm, fourUnitFormFromProduct(editing))),
         }
         let imageKey: string | null = null
         if (pendingImageFile) imageKey = await uploadPendingImage()
@@ -671,7 +694,7 @@ export default function InternalSupplyChainProductsPage() {
         let imageKey: string | null = null
         if (pendingImageFile) imageKey = await uploadPendingImage()
         const body = {
-          ...buildCreateBody({ ...form, imageKey }),
+          ...buildCreateBody({ ...form, price: convertedPrice!.costUnitPrice!, imageKey }),
           ...buildFourUnitCreateBody(fourUnitForm),
         }
         const created: any = await apiFetch('/api/products', { method: 'POST', body: JSON.stringify(body) })
@@ -700,6 +723,7 @@ export default function InternalSupplyChainProductsPage() {
   }
 
   function handleFieldChange(key: string, value: string) {
+    if(key==='priceBasis'){const price=convertProductInputPrice(form,value as PriceBasis);if(price===null){setFormError('切换后的计价单位无法准确表达当前单价，请保留原计价单位');return}setFormError(null);setForm(current=>({...current,priceBasis:value as PriceBasis,price}));return}
     setForm(current => {
       const next = { ...current, [key]: value }
       // 成本单位锁定为最小单位：库存单位变化时同步成本单位并固定换算因子为 1。
@@ -713,9 +737,11 @@ export default function InternalSupplyChainProductsPage() {
         next.orderUnit = value
       }
       if (key === 'inventoryUnitsPerPurchaseUnit'
+        && current.orderUnit === current.purchaseUnit
         && current.inventoryUnitsPerOrderUnit === current.inventoryUnitsPerPurchaseUnit) {
         next.inventoryUnitsPerOrderUnit = value
       }
+      if (key === 'inventoryUnitsPerPurchaseUnit' && current.costUnit === current.inventoryUnit && !current.inventoryUnitsPerCostUnit) next.inventoryUnitsPerCostUnit = '1'
       return next
     })
     if (key === 'category') setCategoryNotice(null)
@@ -737,9 +763,11 @@ export default function InternalSupplyChainProductsPage() {
           next.orderUnit = typedValue
         }
         if (typedKey === 'inventoryUnitsPerPurchaseUnit'
-          && current.inventoryUnitsPerOrderUnit === current.inventoryUnitsPerPurchaseUnit) {
+          && current.orderUnit === current.purchaseUnit
+        && current.inventoryUnitsPerOrderUnit === current.inventoryUnitsPerPurchaseUnit) {
           next.inventoryUnitsPerOrderUnit = typedValue
         }
+        if (typedKey === 'inventoryUnitsPerPurchaseUnit' && next.costUnit === next.inventoryUnit && !next.inventoryUnitsPerCostUnit) next.inventoryUnitsPerCostUnit = '1'
       }
       return next
     })
@@ -1080,7 +1108,7 @@ export default function InternalSupplyChainProductsPage() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full table-fixed text-left text-caption">
+              <table className="min-w-[1460px] w-full table-fixed text-left text-caption">
                 <thead className="bg-bg text-gray3">
                   <tr>
                     <th className="w-9 px-3 py-3">
@@ -1094,6 +1122,7 @@ export default function InternalSupplyChainProductsPage() {
                     <th className="w-[245px] px-3 py-3">商品</th>
                     <th className="w-[76px] px-3 py-3">分类</th>
                     <th className="w-[190px] px-3 py-3">采购来源</th>
+                    <th className="w-[180px] px-3 py-3">单位换算</th>
                     <th className="w-[110px] px-3 py-3 text-right">库存 / 安全线</th>
                     <th className="w-[96px] px-3 py-3 text-right">最小下单量</th>
                     <th className="w-[120px] px-3 py-3 text-right">采购价</th>
@@ -1106,6 +1135,7 @@ export default function InternalSupplyChainProductsPage() {
                     const imageUrl = resolveProductImageUrl(product.imageUrl)
                     const selected = selectedIds.has(product.id)
                     const unitValues = buildFourUnitValues(fourUnitFormFromProduct(product))
+                    const unitStatus = inferUnitContractStatus(product)
                     const orderUnitHint = formatOrderUnitPriceHint(Number(product.price), product)
                     return (
                       <tr key={product.id} className={`hover:bg-bg/50 ${selected ? 'bg-accent/5' : ''}`}>
@@ -1156,6 +1186,10 @@ export default function InternalSupplyChainProductsPage() {
                             </>
                           )}
                         </td>
+                        <td className="px-3 py-3 text-gray2">
+                          <b className="block text-ink">{unitStatus === 'VERIFIED' ? <>1 {unitValues.purchaseUnit} = {unitValues.inventoryUnitsPerPurchaseUnit} {unitValues.inventoryUnit}</> : unitStatus === 'INFERRED' ? '历史换算未核验' : '换算待核验'}</b>
+                          <span className="mt-0.5 block text-micro text-gray3">订货 {unitValues.orderUnit} · 成本 {unitValues.costUnit}</span>
+                        </td>
                         <td className="px-3 py-3 text-right font-num">
                           <b>{formatProductQuantity(product.stock)}</b>
                           <span className="mt-0.5 block text-micro text-gray3">安全 {formatProductQuantity(product.minStock)}</span>
@@ -1166,7 +1200,7 @@ export default function InternalSupplyChainProductsPage() {
                         </td>
                         <td className="px-3 py-3 text-right font-num">
                           <>
-                            {formatMoney(product.price)}
+                            {`¥${Number(product.price).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:6})}`}
                             {product.pricingMode === 'MARKUP' && (
                               <Chip tone="orange">比例加价</Chip>
                             )}
@@ -1621,7 +1655,9 @@ function FormDialog({
     ? '只修改商品档案；价格使用列表「调价」，库存使用「仓库库存」。保存后直接生效并通知总厨。'
     : '直接生效并通知总厨'
   const fourUnitValues = buildFourUnitValues(form)
-  const unitSummary = formatConversionSummary(fourUnitValues)
+  const pricePreview = productPriceConversion(form)
+  const inputPriceUnit = (form.priceBasis || 'purchase') === 'inventory' ? form.inventoryUnit : form.priceBasis === 'order' ? form.orderUnit : form.purchaseUnit
+  const unitSummary = validateFourUnitForm(form, { allowLegacyCostUnit: true }) ? '换算待补齐或核验' : formatConversionSummary(fourUnitValues)
   // 简化口径：订货跟随采购、成本跟随库存。简化界面只问两个单位和一个换算，
   // 不再平铺八个格子；历史档案（成本单位≠库存单位等）直接进高级模式原样展示。
   const simpleUnitContract = isSimpleFourUnitContract(fourUnitValues)
@@ -1983,7 +2019,7 @@ function FormDialog({
                 </div>
                 <div className="mt-2 flex items-center justify-between">
                   <p className="text-micro text-gray2">
-                    {formatConversionSummary(buildFourUnitValues(form))}
+                    {unitSummary}
                   </p>
                   {simpleUnitContract && (
                     <button
@@ -2000,11 +2036,17 @@ function FormDialog({
             </div>
             {!editing && (
               <>
-                <FormField label={formatCostUnitPriceLabel(form.costUnit)} required>
+                <FormField label="单价计价单位">
+                  <select aria-label="单价计价单位" value={form.priceBasis || 'purchase'} onChange={event=>onFieldChange('priceBasis',event.target.value)} className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body">
+                    <option value="purchase">采购单位：{form.purchaseUnit || '待填写'}</option><option value="order">订货单位：{form.orderUnit || '待填写'}</option><option value="inventory">最小单位：{form.inventoryUnit || '待填写'}</option>
+                  </select>
+                </FormField>
+                <FormField label={`输入单价（元 / ${inputPriceUnit.trim() || '待选单位'}）`} required>
                   <input
                     type="number"
                     min="0"
-                    step="0.01"
+                    step="0.000001"
+                    aria-label="商品输入单价"
                     value={form.price}
                     onChange={e => onFieldChange('price', e.target.value)}
                     className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
@@ -2265,9 +2307,10 @@ function FormDialog({
                 <p className="mt-2 text-micro leading-5 text-gray3">可绑多家供应商，需指定一家主供；留空不影响建档。</p>
               </div>
             )}
-            <FormField label="最小下单量">
+            <FormField label={`最小下单量（${form.orderUnit.trim() || '待选订货单位'}）`}>
               <input
                 type="number"
+                aria-label="商品最小下单量"
                 min="0.001"
                 step="0.001"
                 value={form.minOrderQty}
@@ -2275,6 +2318,14 @@ function FormDialog({
                 className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
               />
             </FormField>
+            {!editing&&<section aria-label="单价与起订量换算" className="col-span-2 rounded-lg border border-border bg-bg p-3 text-caption">
+              <table className="w-full text-left"><thead><tr><th className="pb-2">计价口径</th><th>单价及单位</th><th>数量及单位</th><th>对应金额</th></tr></thead><tbody>
+                <tr><td className="py-1">输入单价</td><td>{form.price!==''?`${form.price} 元 / ${inputPriceUnit}`:'—'}</td><td>1 {inputPriceUnit}</td><td>{form.price!==''?`${form.price} 元`:'—'}</td></tr>
+                <tr><td className="py-1">最小单位</td><td>{pricePreview.inventoryUnitPrice!==null?`${pricePreview.inventoryUnitPrice} 元 / ${form.inventoryUnit}`:'—'}</td><td>1 {form.inventoryUnit}</td><td>{pricePreview.inventoryUnitPrice!==null?`${pricePreview.inventoryUnitPrice} 元`:'—'}</td></tr>
+                <tr><td className="py-1">起订量</td><td>{pricePreview.orderUnitPrice!==null?`${pricePreview.orderUnitPrice} 元 / ${form.orderUnit}`:'—'}</td><td>{form.minOrderQty} {form.orderUnit}{pricePreview.minimumInventoryQuantity!==null?`（${pricePreview.minimumInventoryQuantity} ${form.inventoryUnit}）`:''}</td><td>{pricePreview.minimumOrderAmount!==null?`${pricePreview.minimumOrderAmount} 元`:'—'}</td></tr>
+              </tbody></table><p className="mt-2 text-micro text-gray3">起订量按订货单位计算；起订金额按订货结算单价联动。最小单位单价保留最多六位小数。</p>
+              {form.price!==''&&pricePreview.error&&<p role="status" className="mt-1 text-red-fg">{pricePreview.error}；换算完成后才能新增。</p>}
+            </section>}
             <details className="col-span-2 rounded-cta border border-border bg-bg px-3 py-2">
               <summary className="cursor-pointer text-caption text-gray2">更多设置</summary>
               <div className="mt-3 grid grid-cols-2 items-end gap-3">

@@ -10,10 +10,23 @@ import { buildInventoryExportRows } from '@/lib/inventory-export'
 vi.mock('@/components/v2', () => ({
   Chip: ({ children }: { children: React.ReactNode }) => <span data-chip="true">{children}</span>,
 }))
-vi.mock('@/lib/v2-auth', () => ({ apiFetch: vi.fn() }))
+vi.mock('@/lib/v2-auth', () => ({ apiFetch: vi.fn(), getUser: () => ({id:'test-user',role:'SUPPLY_CHAIN'}) }))
 import { apiFetch } from '@/lib/v2-auth'
 
 const mockFetch = vi.mocked(apiFetch)
+
+// Legacy inventory assertions now also provide the server-draft dependency.
+function mockWithDrafts(implementation:(...args:any[])=>Promise<any>) {
+  mockFetch.mockImplementation((path,init)=>{
+    const url=String(path)
+    if(url.startsWith('/api/warehouse-inventory/inbound-drafts?'))return Promise.resolve({draft:null})
+    if(url.includes('/inbound-drafts/') && init?.method==='PUT') {
+      const body=JSON.parse(String(init.body));return Promise.resolve({draft:{id:url.split('/').pop(),version:body.baseVersion+1,payload:body.payload,status:'EDITING'}})
+    }
+    if(url.endsWith('/discard'))return Promise.resolve({ok:true})
+    return implementation(path,init)
+  })
+}
 
 const inventory = {
   canEditOrderEntryPolicy: true,
@@ -99,11 +112,12 @@ function checkAndAddCandidates(container: HTMLElement, names: string[]) {
 describe('总仓库存页面', () => {
   beforeEach(() => {
     sessionStorage.clear()
+    localStorage.clear()
     mockFetch.mockReset()
-    mockFetch.mockImplementation((path, init) => {
+    mockWithDrafts((path, init) => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
-      if (url === '/api/warehouse-inventory/inbound-candidates?limit=500') return Promise.resolve({ items: [...inventory.items, secondCandidate] })
+      if (url === '/api/warehouse-inventory/inbound-candidates?paged=1&limit=100&q=') return Promise.resolve({ items: [...inventory.items, secondCandidate] })
       if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
       if (url === '/api/warehouse-inventory/audit') return Promise.resolve({
         readyForStrict: false,
@@ -124,6 +138,26 @@ describe('总仓库存页面', () => {
       }
       return Promise.reject(new Error(`unexpected API: ${url}`))
     })
+  })
+
+  it.each([5, undefined])('uses current inbound amount in reversal confirmation (%s)', async currentInboundValue => {
+    const original = mockFetch.getMockImplementation()!
+    mockWithDrafts((path, init) => {
+      if (String(path).startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([{
+        id: 'repriced-inbound', type: 'MANUAL_INBOUND', physicalDelta: 3, reservedDelta: 0,
+        valueDelta: 3, currentInboundValue, physicalAfter: 13, reservedAfter: 0, inventoryUnit: 'kg',
+        effectiveAt: '2026-10-10T02:00:00Z', product: { id: 'product-1', code: 'DJ001', name: '菌菇酱' },
+      }])
+      return original(path, init)
+    })
+    const { container, root } = renderPage()
+    await waitFor(() => Array.from(container.querySelectorAll('button')).some(b => b.textContent === '冲销'))
+    act(() => Array.from(container.querySelectorAll('button')).find(b => b.textContent === '冲销')?.click())
+    expect(container.textContent).toContain(currentInboundValue === undefined ? '库存成本按当前已入账金额计算' : '库存成本 ¥5.00')
+    expect(container.textContent).not.toContain('库存成本 ¥3.00')
+    act(() => Array.from(container.querySelectorAll('button')).find(b => b.textContent === '取消')?.click())
+    expect(mockFetch.mock.calls.some(([path]) => String(path).endsWith('/reverse'))).toBe(false)
+    act(() => root.unmount()); container.remove()
   })
 
   it('writes current shipment and cost amounts as columns in the inventory Excel workbook', async () => {
@@ -204,7 +238,7 @@ describe('总仓库存页面', () => {
   })
 
   it('disables BLOCK when the warehouse inventory projection is OFF', async () => {
-    mockFetch.mockImplementation((path) => {
+    mockWithDrafts((path) => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve({
         ...inventory,
@@ -232,7 +266,7 @@ describe('总仓库存页面', () => {
   })
 
   it('requires confirmation for ALLOW to BLOCK and cancellation sends no PATCH and restores ALLOW', async () => {
-    mockFetch.mockImplementation((path, init) => {
+    mockWithDrafts((path, init) => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
       if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
@@ -266,7 +300,7 @@ describe('总仓库存页面', () => {
   it('submits one audited BLOCK policy change, ignores a double click, and does not update the page before success', async () => {
     let resolvePolicy!: (value: unknown) => void
     const pendingPolicy = new Promise(resolve => { resolvePolicy = resolve })
-    mockFetch.mockImplementation((path, init) => {
+    mockWithDrafts((path, init) => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
       if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
@@ -302,7 +336,7 @@ describe('总仓库存页面', () => {
   it('keeps the current policy and resets the selection when saving fails', async () => {
     let rejectPolicy!: (reason: unknown) => void
     const pendingPolicy = new Promise((_resolve, reject) => { rejectPolicy = reject })
-    mockFetch.mockImplementation((path, init) => {
+    mockWithDrafts((path, init) => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
       if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
@@ -340,7 +374,7 @@ describe('总仓库存页面', () => {
   })
 
   it('shows read-only roles the current policy without a settings entry', async () => {
-    mockFetch.mockImplementation((path) => {
+    mockWithDrafts((path) => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve({ ...inventory, canEditOrderEntryPolicy: false })
       if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
@@ -364,6 +398,7 @@ describe('总仓库存页面', () => {
     await waitFor(() => container.textContent?.includes('菌菇酱') ?? false)
     const open = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '单条入库')
     act(() => open?.click())
+    await waitFor(() => container.querySelector<HTMLFieldSetElement>('fieldset.contents')?.disabled === false)
 
     const productSelect = container.querySelector('select[aria-label="入库商品"]') as HTMLSelectElement
     const numberInputs = Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[]
@@ -372,7 +407,7 @@ describe('总仓库存页面', () => {
     change(numberInputs[2], '160')
 
     // 未选供应商时前端拦截，不发请求
-    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('确认手工入库'))
+    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('提交审核并入库'))
     await act(async () => { submit?.click() })
     expect(container.textContent).toContain('请选择供货供应商')
     expect(mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/manual-inbound')).toBe(false)
@@ -395,10 +430,10 @@ describe('总仓库存页面', () => {
   })
 
   it('uploads a supplier delivery document and submits only durable attachment metadata', async () => {
-    mockFetch.mockImplementation((path, init) => {
+    mockWithDrafts((path, init) => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
-      if (url === '/api/warehouse-inventory/inbound-candidates?limit=500') return Promise.resolve({ items: [...inventory.items, secondCandidate] })
+      if (url === '/api/warehouse-inventory/inbound-candidates?paged=1&limit=100&q=') return Promise.resolve({ items: [...inventory.items, secondCandidate] })
       if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
       if (url === '/api/warehouse-inventory/audit') return Promise.resolve({ readyForStrict: true, blockerCount: 0, warningCount: 0, checkedSku: 1, issues: [] })
       if (url === '/api/suppliers?businessScope=WAREHOUSE_UPSTREAM') return Promise.resolve([{ id: 'sup-1', no: 'SUP001', name: '井育苗菇' }])
@@ -412,6 +447,7 @@ describe('总仓库存页面', () => {
     const { container, root } = renderPage()
     await waitFor(() => container.textContent?.includes('菌菇酱') ?? false)
     act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '单条入库')?.click())
+    await waitFor(() => container.querySelector<HTMLFieldSetElement>('fieldset.contents')?.disabled === false)
     change(container.querySelector('select[aria-label="入库商品"]') as HTMLSelectElement, 'product-1')
     const numberInputs = Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[]
     change(numberInputs[0], '2')
@@ -424,7 +460,7 @@ describe('总仓库存页面', () => {
     await act(async () => { fileInput.dispatchEvent(new Event('change', { bubbles: true })) })
     await waitFor(() => container.textContent?.includes('供应商送货单.pdf') ?? false)
 
-    await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '确认手工入库')?.click())
+    await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '提交审核并入库')?.click())
     await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/manual-inbound'))
     const call = mockFetch.mock.calls.find(([path]) => String(path) === '/api/warehouse-inventory/manual-inbound')
     expect(JSON.parse(String(call?.[1]?.body)).attachments).toEqual([{
@@ -437,7 +473,7 @@ describe('总仓库存页面', () => {
   })
 
   it('fills a blank single inbound amount from history but preserves a manual amount', async () => {
-    mockFetch.mockImplementation((path, init) => {
+    mockWithDrafts((path, init) => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
       if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
@@ -448,6 +484,7 @@ describe('总仓库存页面', () => {
     })
     const { container, root } = renderPage(); await waitFor(() => container.textContent?.includes('菌菇酱') ?? false)
     act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '单条入库')?.click())
+    await waitFor(() => container.querySelector<HTMLFieldSetElement>('fieldset.contents')?.disabled === false)
     change(container.querySelector('select[aria-label="入库商品"]') as HTMLSelectElement, 'product-1')
     change((Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[])[0], '2')
     pickSupplier(container)
@@ -462,7 +499,7 @@ describe('总仓库存页面', () => {
   it('uses the latest quantity when a pending single-history response resolves', async () => {
     let resolveHistory!: (value: unknown) => void
     const pendingHistory = new Promise(resolve => { resolveHistory = resolve })
-    mockFetch.mockImplementation(path => {
+    mockWithDrafts(path => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
       if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
@@ -473,6 +510,7 @@ describe('总仓库存页面', () => {
     })
     const { container, root } = renderPage(); await waitFor(() => container.textContent?.includes('菌菇酱') ?? false)
     act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '单条入库')?.click())
+    await waitFor(() => container.querySelector<HTMLFieldSetElement>('fieldset.contents')?.disabled === false)
     change(container.querySelector('select[aria-label="入库商品"]') as HTMLSelectElement, 'product-1')
     const quantity = (Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[])[0]
     change(quantity, '2'); pickSupplier(container); change(quantity, '3')
@@ -484,6 +522,7 @@ describe('总仓库存页面', () => {
   it('keeps manual price authoritative but keeps manual total authoritative when quantity changes', async () => {
     const { container, root } = renderPage(); await waitFor(() => container.textContent?.includes('菌菇酱') ?? false)
     act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '单条入库')?.click())
+    await waitFor(() => container.querySelector<HTMLFieldSetElement>('fieldset.contents')?.disabled === false)
     change(container.querySelector('select[aria-label="入库商品"]') as HTMLSelectElement, 'product-1')
     const quantity = (Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[])[0]
     const price = container.querySelector('input[aria-label="采购单价"]') as HTMLInputElement
@@ -498,7 +537,7 @@ describe('总仓库存页面', () => {
 
   it('clears manual values when the product changes before a supplier is selected', async () => {
     const twoProducts = { ...inventory, items: [...inventory.items, secondCandidate] }
-    mockFetch.mockImplementation(path => {
+    mockWithDrafts(path => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(twoProducts)
       if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
@@ -508,6 +547,7 @@ describe('总仓库存页面', () => {
     })
     const { container, root } = renderPage(); await waitFor(() => container.textContent?.includes('午餐肉') ?? false)
     act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '单条入库')?.click())
+    await waitFor(() => container.querySelector<HTMLFieldSetElement>('fieldset.contents')?.disabled === false)
     const select = container.querySelector('select[aria-label="入库商品"]') as HTMLSelectElement
     change(select, 'product-1'); change((Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[])[0], '2')
     change(container.querySelector('input[aria-label="入库总金额"]') as HTMLInputElement, '160')
@@ -518,7 +558,7 @@ describe('总仓库存页面', () => {
   })
 
   it('replaces an automatic price when supplier changes and keeps it linked to quantity', async () => {
-    mockFetch.mockImplementation(path => {
+    mockWithDrafts(path => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
       if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
@@ -530,6 +570,7 @@ describe('总仓库存页面', () => {
     })
     const { container, root } = renderPage(); await waitFor(() => container.textContent?.includes('菌菇酱') ?? false)
     act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '单条入库')?.click())
+    await waitFor(() => container.querySelector<HTMLFieldSetElement>('fieldset.contents')?.disabled === false)
     change(container.querySelector('select[aria-label="入库商品"]') as HTMLSelectElement, 'product-1')
     change((Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[])[0], '2')
     pickSupplier(container, '供应商A')
@@ -566,7 +607,7 @@ describe('总仓库存页面', () => {
     pickSupplier(container)
     expect(container.textContent).toContain('2 箱 = 16 袋')
     expect(container.textContent).toContain('¥400.00')
-    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('确认批量入库'))
+    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('提交审核并批量入库'))
     await act(async () => { submit?.click() })
     await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/batch-manual-inbound'))
 
@@ -583,14 +624,77 @@ describe('总仓库存页面', () => {
     container.remove()
   })
 
+  it('keeps selected products when remote searches replace the candidate page', async () => {
+    const original=mockFetch.getMockImplementation()!
+    mockWithDrafts((path,init)=>{
+      const url=decodeURIComponent(String(path))
+      if(url==='/api/warehouse-inventory/inbound-candidates?paged=1&limit=100&q=午餐')return Promise.resolve({items:[secondCandidate],nextCursor:'next-meat'})
+      if(url==='/api/warehouse-inventory/inbound-candidates?paged=1&limit=100&q=午餐&cursor=next-meat')return Promise.resolve({items:[{...secondCandidate,id:'product-600',code:'DJ600',name:'午餐备用'}],nextCursor:null})
+      return original(path,init)
+    })
+    const {container,root}=renderPage();await waitFor(()=>!!container.textContent?.includes('菌菇酱'))
+    await act(async()=>Array.from(container.querySelectorAll('button')).find(b=>b.textContent==='+ 批量入库')?.click())
+    await waitFor(()=>!!container.querySelector('input[aria-label="选择菌菇酱"]'))
+    act(()=>(container.querySelector('input[aria-label="选择菌菇酱"]') as HTMLInputElement).click())
+    const search=container.querySelector('input[placeholder="名称 / 编码 / 规格"]') as HTMLInputElement
+    change(search,'午餐')
+    await act(async()=>Array.from(container.querySelectorAll('button')).find(b=>b.textContent==='查询商品')?.click())
+    act(()=>(container.querySelector('input[aria-label="选择午餐肉"]') as HTMLInputElement).click())
+    // 尚未点击查询的新词不应改变服务器已应用查询的续页参数。
+    change(search,'午餐备用')
+    await act(async()=>Array.from(container.querySelectorAll('button')).find(b=>b.textContent==='加载更多商品')?.click())
+    await waitFor(()=>!!container.querySelector('input[aria-label="选择午餐备用"]'))
+    act(()=>(container.querySelector('input[aria-label="选择午餐备用"]') as HTMLInputElement).click())
+    act(()=>Array.from(container.querySelectorAll('button')).find(b=>b.textContent?.includes('添加选中商品'))?.click())
+    expect(container.textContent).toContain('合计 3 种商品')
+    expect(container.querySelector('input[aria-label="菌菇酱采购数量"]')).toBeTruthy()
+    expect(container.querySelector('input[aria-label="午餐肉采购数量"]')).toBeTruthy()
+    expect(container.querySelector('input[aria-label="午餐备用采购数量"]')).toBeTruthy()
+    act(()=>root.unmount());container.remove()
+  })
+
+  it('displays remote multi-keyword matches without hiding reversed name tokens',async()=>{
+    const original=mockFetch.getMockImplementation()!
+    mockWithDrafts((path,init)=>decodeURIComponent(String(path))==='/api/warehouse-inventory/inbound-candidates?paged=1&limit=100&q=土豆+大'
+      ?Promise.resolve({items:[{...secondCandidate,id:'potato',name:'大土豆'}]}) : original(path,init))
+    const {container,root}=renderPage();await waitFor(()=>!!container.textContent?.includes('菌菇酱'))
+    await act(async()=>Array.from(container.querySelectorAll('button')).find(b=>b.textContent==='+ 批量入库')?.click())
+    change(container.querySelector('input[placeholder="名称 / 编码 / 规格"]') as HTMLInputElement,'土豆 大')
+    await act(async()=>Array.from(container.querySelectorAll('button')).find(b=>b.textContent==='查询商品')?.click())
+    expect(container.querySelector('input[aria-label="选择大土豆"]')).toBeTruthy()
+    act(()=>root.unmount());container.remove()
+  })
+
+  it('restores frozen warehouse and missing product instead of adopting the current default warehouse',async()=>{
+    const original=mockFetch.getMockImplementation()!
+    const saved={mode:'BATCH',warehouseId:'original-warehouse',supplierId:'sup-1',effectiveAt:'2026-10-12T03:00',effectiveAtIso:'2026-10-12T10:00:40.104Z',rows:[{productId:'outside-page',purchaseQuantity:'3',unitPrice:'2',amount:'6',priceSource:'manual',amountSource:'manual'}],attachments:[],displayUnits:[{productId:'outside-page',unit:'箱',inventoryUnit:'袋',conversionFactor:8}],executionSnapshot:{version:1,warehouse:{id:'original-warehouse',name:'原仓库',code:'ORIGINAL',inventoryMode:'SHADOW'},products:[{id:'outside-page',code:'OUTSIDE',name:'原商品',enabled:true,displayMatched:true,units:{purchaseUnit:'箱',inventoryUnit:'袋',inventoryUnitsPerPurchaseUnit:8,status:'VERIFIED',structured:{purchase:true}}}]}}
+    mockFetch.mockImplementation((path,init)=>{
+      const url=String(path)
+      if(url==='/api/warehouse-inventory/inbound-drafts?mode=BATCH')return Promise.resolve({draft:{id:'original-draft',version:2,status:'EDITING',payload:saved}})
+      if(url.startsWith('/api/warehouse-inventory/inbound-candidates?productIds='))return Promise.resolve({items:[]})
+      return original(path,init)
+    })
+    const {container,root}=renderPage();await waitFor(()=>!!container.textContent?.includes('菌菇酱'))
+    await act(async()=>Array.from(container.querySelectorAll('button')).find(b=>b.textContent==='+ 批量入库')?.click())
+    await waitFor(()=>!!container.querySelector('input[aria-label="原商品采购数量"]'))
+    expect(container.textContent).toContain('草稿仓库：原仓库（ORIGINAL）')
+    expect(container.textContent).toContain('3 箱 = 24 袋')
+    await act(async()=>Array.from(container.querySelectorAll('button')).find(b=>b.textContent==='保存草稿（不入库）')?.click())
+    await waitFor(()=>mockFetch.mock.calls.some(([path,init])=>String(path).endsWith('/original-draft')&&init?.method==='PUT'))
+    const call=mockFetch.mock.calls.find(([path,init])=>String(path).endsWith('/original-draft')&&init?.method==='PUT')!
+    expect(JSON.parse(String(call[1]?.body)).payload).toMatchObject({effectiveAt:saved.effectiveAt,effectiveAtIso:saved.effectiveAtIso,warehouseId:'original-warehouse',displayUnits:[{productId:'outside-page',unit:'箱',inventoryUnit:'袋',conversionFactor:8}],rows:[{productId:'outside-page',purchaseQuantity:'3',amount:'6'}]})
+    expect(mockFetch.mock.calls.some(([path])=>String(path).endsWith('/batch-manual-inbound'))).toBe(false)
+    act(()=>root.unmount());container.remove()
+  })
+
   it('caps a batch at 200 distinct products and warns instead of requesting 201 history rows', async () => {
     const manyCandidates = Array.from({ length: 201 }, (_, index) => ({
       ...secondCandidate, id: `bulk-${index}`, code: `BULK${index}`, name: `批量商品${index}`,
     }))
-    mockFetch.mockImplementation(path => {
+    mockWithDrafts(path => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
-      if (url === '/api/warehouse-inventory/inbound-candidates?limit=500') return Promise.resolve({ items: manyCandidates })
+      if (url === '/api/warehouse-inventory/inbound-candidates?paged=1&limit=100&q=') return Promise.resolve({ items: manyCandidates })
       if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
       if (url === '/api/warehouse-inventory/audit') return Promise.resolve({ readyForStrict: true, blockerCount: 0, warningCount: 0, checkedSku: 1, issues: [] })
       if (url === '/api/suppliers?businessScope=WAREHOUSE_UPSTREAM') return Promise.resolve([])
@@ -609,10 +713,10 @@ describe('总仓库存页面', () => {
   it('does not overwrite a manually entered batch amount when history arrives late', async () => {
     let resolveHistory!: (value: unknown) => void
     const pendingHistory = new Promise(resolve => { resolveHistory = resolve })
-    mockFetch.mockImplementation(path => {
+    mockWithDrafts(path => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
-      if (url === '/api/warehouse-inventory/inbound-candidates?limit=500') return Promise.resolve({ items: [...inventory.items, secondCandidate] })
+      if (url === '/api/warehouse-inventory/inbound-candidates?paged=1&limit=100&q=') return Promise.resolve({ items: [...inventory.items, secondCandidate] })
       if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
       if (url === '/api/warehouse-inventory/audit') return Promise.resolve({ readyForStrict: true, blockerCount: 0, warningCount: 0, checkedSku: 1, issues: [] })
       if (url === '/api/suppliers?businessScope=WAREHOUSE_UPSTREAM') return Promise.resolve([{ id: 'sup-1', no: 'SUP001', name: '井育苗菇' }])
@@ -633,10 +737,10 @@ describe('总仓库存页面', () => {
   })
 
   it('preserves a manual batch amount when a row-set refresh does not alter existing rows', async () => {
-    mockFetch.mockImplementation(path => {
+    mockWithDrafts(path => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
-      if (url === '/api/warehouse-inventory/inbound-candidates?limit=500') return Promise.resolve({ items: [...inventory.items, secondCandidate] })
+      if (url === '/api/warehouse-inventory/inbound-candidates?paged=1&limit=100&q=') return Promise.resolve({ items: [...inventory.items, secondCandidate] })
       if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
       if (url === '/api/warehouse-inventory/audit') return Promise.resolve({ readyForStrict: true, blockerCount: 0, warningCount: 0, checkedSku: 1, issues: [] })
       if (url === '/api/suppliers?businessScope=WAREHOUSE_UPSTREAM') return Promise.resolve([{ id: 'sup-1', no: 'SUP001', name: '井育苗菇' }])
@@ -674,10 +778,10 @@ describe('总仓库存页面', () => {
   })
 
   it('recalculates the amount from a manual batch price after the supplier changes', async () => {
-    mockFetch.mockImplementation(path => {
+    mockWithDrafts(path => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
-      if (url === '/api/warehouse-inventory/inbound-candidates?limit=500') return Promise.resolve({ items: [...inventory.items, secondCandidate] })
+      if (url === '/api/warehouse-inventory/inbound-candidates?paged=1&limit=100&q=') return Promise.resolve({ items: [...inventory.items, secondCandidate] })
       if (url.startsWith('/api/warehouse-inventory/movements')) return Promise.resolve([])
       if (url === '/api/warehouse-inventory/audit') return Promise.resolve({ readyForStrict: true, blockerCount: 0, warningCount: 0, checkedSku: 1, issues: [] })
       if (url === '/api/suppliers?businessScope=WAREHOUSE_UPSTREAM') return Promise.resolve([{ id: 'sup-a', no: 'A', name: '供应商A' }, { id: 'sup-b', no: 'B', name: '供应商B' }])
@@ -733,7 +837,7 @@ describe('总仓库存页面', () => {
 
   it('verifies an inferred unit conversion from the review queue', async () => {
     const inferred = { ...inventory, items: [{ ...inventory.items[0], unitConversionStatus: 'INFERRED' }] }
-    mockFetch.mockImplementation((path, init) => {
+    mockWithDrafts((path, init) => {
       const url = String(path)
       if (url.startsWith('/api/warehouse-inventory?scope=unit-review')) return Promise.resolve(inferred)
       if (url.startsWith('/api/warehouse-inventory?scope=')) return Promise.resolve(inventory)
@@ -792,7 +896,7 @@ describe('总仓库存页面', () => {
     expect(Number(priceInput.value)).toBeCloseTo(83.333333, 5)
 
     pickSupplier(container)
-    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('确认批量入库'))
+    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('提交审核并批量入库'))
     await act(async () => { submit?.click() })
     await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/batch-manual-inbound'))
 
@@ -806,4 +910,53 @@ describe('总仓库存页面', () => {
     act(() => root.unmount())
     container.remove()
   })
+  it('requires an inline reversal reason and cancellation sends no request', async () => {
+    const fallback = mockFetch.getMockImplementation()!
+    mockWithDrafts((path, init) => String(path) === '/api/warehouse-inventory/movements?limit=50'
+      ? Promise.resolve([{ id: 'in-test', type: 'MANUAL_INBOUND', physicalDelta: 2, valueDelta: 6, reservedDelta: 0, physicalAfter: 10, inventoryUnit: 'kg', effectiveAt: '2026-10-10', product: { id: 'p', code: 'P', name: '冲销测试商品' } }])
+      : fallback(path, init))
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('冲销测试商品') ?? false)
+    const button = (name: string) => Array.from(container.querySelectorAll('button')).find(el => el.textContent === name)!
+    act(() => button('冲销').click())
+    expect(container.textContent).toContain('确认冲销手工入库')
+    expect(button('确认冲销').disabled).toBe(true)
+    act(() => button('取消').click())
+    expect(mockFetch.mock.calls.some(([path, init]) => String(path).endsWith('/reverse') && init?.method === 'POST')).toBe(false)
+    act(() => root.unmount()); container.remove()
+  })
+
+  it('keeps the reversal request key after failure and blocks duplicate confirmation while pending', async () => {
+    const fallback = mockFetch.getMockImplementation()!
+    let attempts = 0
+    let finish!: (value: unknown) => void
+    mockWithDrafts((path, init) => {
+      if (String(path) === '/api/warehouse-inventory/movements?limit=50') return Promise.resolve([{ id: 'in-test', type: 'MANUAL_INBOUND', physicalDelta: 2, valueDelta: 6, reservedDelta: 0, physicalAfter: 10, inventoryUnit: 'kg', effectiveAt: '2026-10-10', product: { id: 'p', code: 'P', name: '冲销测试商品' } }])
+      if (String(path).endsWith('/reverse')) {
+        attempts += 1
+        return attempts === 1 ? Promise.reject(new Error('网络失败')) : new Promise(resolve => { finish = resolve })
+      }
+      return fallback(path, init)
+    })
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('冲销测试商品') ?? false)
+    const button = (name: string) => Array.from(container.querySelectorAll('button')).find(el => el.textContent === name)!
+    act(() => button('冲销').click())
+    const input = container.querySelector('textarea') as HTMLTextAreaElement
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, '隔离测试冲销')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => button('确认冲销').click())
+    expect(input.value).toBe('隔离测试冲销')
+    expect(container.textContent).toContain('网络失败')
+    act(() => { button('确认冲销').click(); button('确认冲销')?.click() })
+    expect(attempts).toBe(2)
+    const calls = mockFetch.mock.calls.filter(([path]) => String(path).endsWith('/reverse'))
+    expect(JSON.parse(String(calls[0][1]?.body)).idempotencyKey).toBe(JSON.parse(String(calls[1][1]?.body)).idempotencyKey)
+    await act(async () => finish({ replayed: true }))
+    expect(container.textContent).toContain('该冲销请求已处理，本次未重复记账')
+    act(() => root.unmount()); container.remove()
+  })
+
 })

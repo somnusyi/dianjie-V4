@@ -1,7 +1,7 @@
 import { Prisma } from '@dianjie/db'
 import { businessDateKey, businessDateRangeInclusive } from '../lib/businessTime'
 import type { ReportQuery, ReportRow } from './inventoryReports'
-import { inventoryAlertStatus, resolveInventoryRule, type InventoryRulePolicy } from './warehouseInventoryPolicy'
+import { STAGNANT_REMINDER_DAYS, inventoryAlertStatus, resolveInventoryRule, type InventoryRulePolicy } from './warehouseInventoryPolicy'
 const LIMIT = 20000
 const decimal = (n: any) => new Prisma.Decimal(n ?? 0)
 export function reportTimestamp(date: Date | null | undefined) {
@@ -61,8 +61,7 @@ export async function loadInventorySupplement(tx: Prisma.TransactionClient, tena
   return balances.map(b => {
     const h = byKey.get(key(b)) || {}
     const retainedDays = daysWithoutOutbound(now, h.lastOut?.effectiveAt, h.firstIn?.effectiveAt)
-    const policy = policyByKey.get(`${b.warehouseId}/${b.productId}`)
-    const stagnantDays = q.stagnantDays ?? (policy?.active ? policy.stagnantDays : 30)
+    const stagnantDays = STAGNANT_REMINDER_DAYS
     return { ...base(b.product, b.warehouse, b.inventoryUnit), qty: Number(b.physicalQty), firstInAt: reportTimestamp(h.firstIn?.effectiveAt), lastInAt: reportTimestamp(h.lastIn?.effectiveAt), lastOutAt: reportTimestamp(h.lastOut?.effectiveAt), lastInQty: h.lastIn ? Number(h.lastIn.physicalDelta) : null, lastOutQty: h.lastOut ? Number(h.lastOut.physicalDelta.abs()) : null, retainedDays, stagnantDays, isStagnant: retainedDays == null ? null : retainedDays >= stagnantDays ? '是' : '否' }
   })
 }

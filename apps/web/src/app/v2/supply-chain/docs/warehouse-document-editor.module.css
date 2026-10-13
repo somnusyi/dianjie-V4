@@ -1,0 +1,6 @@
+.footer { position: fixed; left: 256px; right: 0; bottom: 0; z-index: 40; display: flex; justify-content: flex-end; gap: 10px; padding: 16px 24px; border-top: 1px solid #e6dfd3; background: #fff; }
+.footer button { border: 1px solid #ded5c7; border-radius: 7px; padding: 9px 22px; font-size: 14px; }
+.footer button:last-child { background: #a78143; border-color: #a78143; color: white; }
+.footer button:disabled { opacity: .45; }
+:global(.supply-mobile-mode) .footer { left: 0; padding-bottom: calc(70px + env(safe-area-inset-bottom)); flex-wrap: wrap; }
+@media print { .footer { display: none; } }

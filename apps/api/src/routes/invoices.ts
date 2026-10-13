@@ -124,6 +124,23 @@ export const invoiceRoutes: FastifyPluginAsync = async app => {
     const where: Prisma.InvoiceWhereInput = { tenantId }
     if (parsed.data.status) where.status = parsed.data.status
     if (isSupplierRole(role)) where.supplierId = supplierId
+    if (hasInternalSupplyChainCapability(role, 'finance.read')) {
+      const invoices = await prisma.invoice.findMany({
+        where,
+        select: {
+          id: true, invoiceNo: true, amount: true, status: true, issueDate: true,
+          supplier: { select: { id: true, name: true } },
+          receipts: { where: { tenantId }, select: { id: true, tenantId: true } },
+        },
+        orderBy: { uploadedAt: 'desc' }, take: 50,
+      })
+      return invoices.map(invoice => ({
+        id: invoice.id, invoiceNo: invoice.invoiceNo, amount: invoice.amount,
+        status: invoice.status, issueDate: invoice.issueDate,
+        supplier: invoice.supplier && { id: invoice.supplier.id, name: invoice.supplier.name },
+        receipts: invoice.receipts.filter(receipt => receipt.tenantId === tenantId).map(receipt => ({ id: receipt.id })),
+      }))
+    }
     const invoices = await prisma.invoice.findMany({
       where,
       include: {
@@ -220,6 +237,41 @@ export const invoiceRoutes: FastifyPluginAsync = async app => {
     }
     if (isSupplierRole(role) && !supplierId) {
       return reply.status(403).send({ error: '供应商账号未绑定供应商' })
+    }
+    // DJ-002: internal read access receives only approved invoice and source fields.
+    // Keep the existing finance/supplier response contract below unchanged.
+    if (hasInternalSupplyChainCapability(role, 'finance.read')) {
+      const invoice = await prisma.invoice.findFirst({
+        where: { id: req.params.id, tenantId },
+        select: {
+          id: true, invoiceNo: true, invoiceCode: true, amount: true,
+          amountWithoutTax: true, taxRate: true, taxAmount: true,
+          issueDate: true, status: true, note: true, fileUrl: true, fileType: true,
+          supplier: { select: { id: true, name: true } },
+          receipts: {
+            where: { tenantId },
+            select: {
+              id: true, tenantId: true, no: true, deliveryDate: true, totalAmount: true,
+              store: { select: { name: true } },
+            },
+            orderBy: [{ deliveryDate: 'asc' }, { id: 'asc' }],
+          },
+        },
+      })
+      if (!invoice) return reply.status(404).send({ error: '发票不存在' })
+      return withSignedFile({
+        id: invoice.id, invoiceNo: invoice.invoiceNo, invoiceCode: invoice.invoiceCode,
+        amount: invoice.amount, amountWithoutTax: invoice.amountWithoutTax,
+        taxRate: invoice.taxRate, taxAmount: invoice.taxAmount,
+        issueDate: invoice.issueDate, status: invoice.status, note: invoice.note,
+        fileUrl: invoice.fileUrl, fileType: invoice.fileType,
+        supplier: invoice.supplier && { id: invoice.supplier.id, name: invoice.supplier.name },
+        receipts: invoice.receipts.filter(receipt => receipt.tenantId === tenantId).map(receipt => ({
+          id: receipt.id, no: receipt.no, deliveryDate: receipt.deliveryDate,
+          totalAmount: receipt.totalAmount,
+          store: receipt.store && { name: receipt.store.name },
+        })),
+      })
     }
     const invoice = await prisma.invoice.findFirst({
       where: {

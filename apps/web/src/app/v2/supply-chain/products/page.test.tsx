@@ -143,6 +143,18 @@ describe('商品管理 PC 页面 · 编辑弹窗分类组合框', () => {
     mockFetch.mockReset()
   })
 
+  it('商品列表直接展示单位换算列，不需要进入编辑弹窗查找', async () => {
+    mockRoutes()
+    const { container, root } = render(<InternalSupplyChainProductsPage />)
+    await waitFor(() => container.textContent?.includes('土豆') ?? false)
+
+    expect(Array.from(container.querySelectorAll('th')).some(th => th.textContent === '单位换算')).toBe(true)
+    expect(container.textContent).toContain('历史换算未核验')
+    expect(container.textContent).not.toContain('1 kg = 1 kg')
+
+    cleanup(container, root)
+  })
+
   it('编辑商品时分类字段渲染为单一组合框，预填当前分类且不再重复渲染下拉', async () => {
     mockRoutes()
 
@@ -462,4 +474,99 @@ describe('商品管理 PC 页面 · 门店端分类隔离', () => {
 
     cleanup(container, root)
   })
+})
+
+
+describe('单位换算列表不伪造1:1', () => {
+  it.each(['PENDING', 'VERIFIED'])('原始状态%s分别显示待核或真实比例', async status => {
+    mockRoutes()
+    const original = mockFetch.getMockImplementation()!
+    const product = { ...PRODUCT, unitConversionStatus: status, purchaseUnit: '箱', inventoryUnit: '瓶', orderUnit: '箱', costUnit: '瓶', inventoryUnitsPerPurchaseUnit: status === 'PENDING' ? null : 10, inventoryUnitsPerOrderUnit: status === 'PENDING' ? null : 10, inventoryUnitsPerCostUnit: 1 }
+    mockFetch.mockImplementation((path, init) => String(path).startsWith('/api/products') && !String(path).startsWith('/api/products/categories')
+      ? Promise.resolve(String(path).includes('page=') ? { items: [product], total: 1, page: 1, pageSize: 20 } : [product])
+      : original(path, init))
+    const { container, root } = render(<InternalSupplyChainProductsPage />)
+    await waitFor(() => container.textContent?.includes('土豆') ?? false)
+    if (status === 'PENDING') {
+      expect(container.textContent).toContain('换算待核验')
+      expect(container.textContent).not.toContain('1 箱 = 1 瓶')
+    } else expect(container.textContent).toContain('1 箱 = 10 瓶')
+    cleanup(container, root)
+  })
+})
+
+
+describe('旧商品编辑不把缺失因子补成1', () => {
+  function mockPending(overrides: Record<string, unknown> = {}) {
+    mockFetch.mockReset()
+    mockRoutes()
+    const original = mockFetch.getMockImplementation()!
+    const product = { ...PRODUCT, unitConversionStatus: 'PENDING', purchaseUnit: 'kg', inventoryUnit: 'kg', orderUnit: 'kg', costUnit: 'kg', inventoryUnitsPerPurchaseUnit: null, inventoryUnitsPerOrderUnit: null, inventoryUnitsPerCostUnit: null, ...overrides }
+    mockFetch.mockImplementation((path, init) => String(path).startsWith('/api/products') && !String(path).startsWith('/api/products/categories') && !init?.method
+      ? Promise.resolve(String(path).includes('page=') ? { items: [product], total: 1, page: 1, pageSize: 20 } : [product])
+      : original(path, init))
+  }
+  function inputFor(container: Element, labelText: string) {
+    const label = Array.from(container.querySelectorAll('label')).find(label => label.textContent?.trim() === labelText)
+    if (!label) throw new Error(`missing label ${labelText}`)
+    return label.querySelector('input')!
+  }
+  it('缺换算编辑留空，单独改名称不回填单位因子', async () => {
+    mockPending()
+    const { container, root } = render(<InternalSupplyChainProductsPage />)
+    await waitFor(() => container.textContent?.includes('土豆') ?? false)
+    await act(async () => findButton(container, '编辑')!.click())
+    expect(inputFor(container, '1 kg = ？kg').value).toBe('')
+    expect(container.textContent).toContain('换算待补齐或核验')
+    act(() => Simulate.change(inputFor(container, '名称 *'), { target: { value: '土豆改名' } as any }))
+    await act(async () => findButton(container, '保存修改')!.click())
+    const patch = mockFetch.mock.calls.find(([, init]) => init?.method === 'PATCH')!
+    expect(JSON.parse(String(patch[1]!.body))).toEqual({ name: '土豆改名' })
+    cleanup(container, root)
+  })
+  it('人工输入1后发送完整合同，不能因默认值diff漏掉补齐', async () => {
+    mockPending()
+    const { container, root } = render(<InternalSupplyChainProductsPage />)
+    await waitFor(() => container.textContent?.includes('土豆') ?? false)
+    await act(async () => findButton(container, '编辑')!.click())
+    act(() => Simulate.change(inputFor(container, '1 kg = ？kg'), { target: { value: '1' } as any }))
+    await act(async () => findButton(container, '保存修改')!.click())
+    const patch = mockFetch.mock.calls.find(([, init]) => init?.method === 'PATCH')!
+    expect(JSON.parse(String(patch[1]!.body))).toMatchObject({ purchaseUnit: 'kg', inventoryUnit: 'kg', orderUnit: 'kg', costUnit: 'kg', inventoryUnitsPerPurchaseUnit: 1, inventoryUnitsPerOrderUnit: 1, inventoryUnitsPerCostUnit: 1, unit: 'kg' })
+    cleanup(container, root)
+  })
+  it('不同订货单位的缺比例不跟随采购因子，必须分别补齐', async () => {
+    mockPending({ orderUnit: '盒', unit: '盒' })
+    const { container, root } = render(<InternalSupplyChainProductsPage />)
+    await waitFor(() => container.textContent?.includes('土豆') ?? false)
+    await act(async () => findButton(container, '编辑')!.click())
+    act(() => Simulate.change(inputFor(container, '1 采购单位 = ？库存单位'), { target: { value: '1' } as any }))
+    expect(inputFor(container, '1 订货单位 = ？库存单位').value).toBe('')
+    await act(async () => findButton(container, '保存修改')!.click())
+    expect(mockFetch.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(false)
+    expect(container.textContent).toContain('换算因子必填')
+    act(() => Simulate.change(inputFor(container, '1 订货单位 = ？库存单位'), { target: { value: '2' } as any }))
+    await act(async () => findButton(container, '保存修改')!.click())
+    const patch = mockFetch.mock.calls.find(([, init]) => init?.method === 'PATCH')!
+    expect(JSON.parse(String(patch[1]!.body))).toMatchObject({ orderUnit: '盒', inventoryUnitsPerPurchaseUnit: 1, inventoryUnitsPerOrderUnit: 2, inventoryUnitsPerCostUnit: 1 })
+    cleanup(container, root)
+  })
+
+})
+
+it('新建商品输入采购单价，显示最小单位和起订金额，并按成本单位价格提交',async()=>{
+ mockRoutes();const original=mockFetch.getMockImplementation()!;mockFetch.mockImplementation((path,init)=>init?.method==='POST'&&path==='/api/products'?Promise.resolve({id:'new'}):original(path,init))
+ const {container,root}=render(<InternalSupplyChainProductsPage />)
+ try{
+  await waitFor(()=>!!findButton(container,'＋ 新增商品'));act(()=>findButton(container,'＋ 新增商品')!.click())
+  const field=(label:string)=>Array.from(container.querySelectorAll('label')).find(item=>item.textContent?.includes(label))!.querySelector('input')!
+  const change=(input:HTMLInputElement,value:string)=>act(()=>Simulate.change(input,{target:{value} as any}))
+  change(field('名称'),'单位换算测试');change(field('采购单位（'),'kg');change(field('库存最小单位'),'g');change(field('1 kg ='),'1000')
+  change(container.querySelector('[aria-label="商品输入单价"]')!,'95');change(container.querySelector('[aria-label="商品最小下单量"]')!,'2')
+  const preview=container.querySelector('[aria-label="单价与起订量换算"]')!
+  expect(preview.textContent).toContain('0.095 元 / g');expect(preview.textContent).toContain('95 元 / kg');expect(preview.textContent).toContain('2000 g');expect(preview.textContent).toContain('190 元')
+  await act(async()=>findButton(container,'新增')!.click())
+  const write=mockFetch.mock.calls.find(([path,init])=>path==='/api/products'&&init?.method==='POST')!
+  expect(JSON.parse(String(write[1]?.body))).toMatchObject({price:0.095,costUnit:'g',inventoryUnit:'g',orderUnit:'kg',minOrderQty:2,inventoryUnitsPerPurchaseUnit:1000,inventoryUnitsPerOrderUnit:1000,inventoryUnitsPerCostUnit:1})
+ }finally{cleanup(container,root)}
 })

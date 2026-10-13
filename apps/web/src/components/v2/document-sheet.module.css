@@ -1,0 +1,54 @@
+.page { min-height: calc(100dvh - 48px); min-width: 0; padding: 16px 18px 96px; background: #fff; color: #302d28; font-size: 13px; }
+.header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.header h1,.header h2 { font-size: 20px; }
+.header button,.toolbar button { padding: 5px 12px; border: 1px solid #ddd; border-radius: 4px; background: #fff; }
+.meta { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px 18px; margin-bottom: 10px; padding: 12px; border: 1px solid #e6e3de; border-radius: 3px; background: #fcfbf8; }
+.meta > div,.meta > label { white-space: nowrap; display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0; font-size: 13px; }
+.meta > div > div,.meta > label > input,.meta > label > select { flex: 1; min-width: 0; }
+.meta input,.meta select { height: 30px; margin: 0; padding: 4px 8px; border: 1px solid #ddd; border-radius: 3px; font-size: 13px; }
+.wide { grid-column: span 2; }
+.toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.toolbar input,.toolbar select { height: 30px; border: 1px solid #ddd; border-radius: 3px; padding: 4px 8px; }
+.tableWrap { max-width: 100%; max-height: 55dvh; min-height: 180px; overflow: auto; border: 1px solid #e6e3de; background: #fff; }
+.tableWrap table { width: 100%; min-width: 1500px; border-collapse: separate; border-spacing: 0; margin: 0; white-space: nowrap; font-size: 13px; }
+.tableWrap th { position: sticky; top: 0; z-index: 3; height: 38px; background: #f6f6f5; font-weight: 500; }
+.tableWrap th,.tableWrap td { padding: 5px 9px; border-right: 1px solid #eee; border-bottom: 1px solid #eee; vertical-align: middle; }
+.tableWrap tbody tr:nth-child(even) { background: #fafafa; }
+.tableWrap tbody tr:hover { background: #fff9e9; }
+.tableWrap td input:not([type=checkbox]),.tableWrap td select { box-sizing: border-box; height: 30px; min-width: 96px; width: 116px; border: 1px solid #ddd; border-radius: 3px; padding: 3px 7px; font-size: 13px; }
+.tableWrap td input[type=date] { width: 142px; }
+.tableWrap td input[type=number] { text-align: right; }
+.tableWrap td input:disabled { background: #f5f5f4; color: #73706a; }
+.tableWrap tfoot td { position: sticky; bottom: 0; z-index: 2; height: 38px; background: #f6f6f5; font-weight: 600; }
+.tableWrap th:first-child,.tableWrap tbody td:first-child { position: sticky; left: 0; z-index: 2; min-width: 48px; background: #f6f6f5; }
+.tableWrap th:first-child { z-index: 4; }
+.tableWrap [data-column=code] { min-width: 136px; }
+.tableWrap [data-column=name] { min-width: 180px; }
+.ruleTable table { min-width: 1100px; }
+.ruleTable td:first-child { min-width: 220px; }
+.ruleTable td b,.ruleTable td small { display: block; }
+.ruleTable td small { white-space: normal; }
+.ruleTable td:last-child { min-width: 220px; white-space: normal; }
+.ruleContent { display: flex; flex-direction: column; gap: 10px; }
+.page .ruleCard { border: 0; border-radius: 0; background: #fff; }
+.meta > div { overflow: hidden; text-overflow: ellipsis; }
+.meta .attachments { display: block; white-space: normal; }
+.attachments > label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.attachments input { max-width: 100%; }
+.attachments a { overflow-wrap: anywhere; }
+.footer { position: fixed; left: 256px; right: 0; bottom: 0; z-index: 40; display: flex; justify-content: flex-end; gap: 10px; padding: 14px 24px; border-top: 1px solid #dedbd5; background: #fff; }
+.page .footer button { box-sizing: border-box; height: 36px; min-width: 78px; padding: 8px 18px; border: 1px solid #d6d2cb; border-radius: 4px; background: white; }
+.footer button:last-child { background: #a78143; border-color: #a78143; color: #fff; }
+.page button:disabled,.footer button:disabled { opacity: .45; cursor: not-allowed; }
+.records { margin-top: 12px; padding: 10px 0; border-top: 1px solid #eee; }
+.records summary { cursor: pointer; color: #746b5b; }
+.records ul { margin-top: 10px; }
+:global(.supply-mobile-mode) .footer { left: 0; padding-bottom: calc(70px + env(safe-area-inset-bottom)); flex-wrap: wrap; }
+@media(max-width:1000px) { .meta { grid-template-columns: repeat(2,minmax(0,1fr)); } .header { flex-wrap: wrap; } }
+@media print { .footer,.toolbar { display: none; } .tableWrap { max-height: none; overflow: visible; } }
+
+.workPage { display: flex; flex-direction: column; gap: 12px; }
+.workSection { padding: 10px 0; border-top: 1px solid #e6e3de; }
+.workSection .toolbar { margin-top: 8px; }
+.workSection .tableWrap { min-height: 0; }
+.workSection .tableWrap table { min-width: 1280px; }

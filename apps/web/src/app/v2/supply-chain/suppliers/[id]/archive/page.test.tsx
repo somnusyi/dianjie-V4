@@ -31,7 +31,12 @@ async function waitFor(predicate: () => boolean) {
 }
 
 describe('供应商集中档案页', () => {
-  beforeEach(() => { mockFetch.mockReset() })
+  beforeEach(() => {
+    mockFetch.mockReset()
+    sessionStorage.clear()
+    localStorage.setItem('user', JSON.stringify({ id: 'qa-user' }))
+    localStorage.setItem('tenant', JSON.stringify({ id: 'qa-tenant' }))
+  })
 
   it('按四分区展示，合同复用现有合同，供应链不渲染敏感内容', async () => {
     mockFetch.mockResolvedValue({
@@ -63,4 +68,60 @@ describe('供应商集中档案页', () => {
     act(() => root.unmount())
     container.remove()
   })
+
+  it('响应丢失后重放同一请求及附件，同步重复点击只写一次', async () => {
+    const fixture = {
+      supplier: { id: 'supplier-1', no: 'SUP001', name: '测试档案', status: 'ENABLED' },
+      permissions: { canManageGeneral: true, canViewSensitive: false, canManageSensitive: false },
+      sections: { qualifications: { restricted: false, count: 0, records: [] }, contracts: { restricted: false, count: 0, records: [] }, finance: { restricted: true, count: null }, invoice: { restricted: true, count: null } },
+    }
+    const writes: string[] = []
+    let uploads = 0
+    mockFetch.mockImplementation(async (url, options) => {
+      if (String(url).startsWith('/api/upload')) {
+        uploads++
+        return { key: 'supplier-archive-general/t/a.png', name: '模拟附件.png', mime: 'image/png', size: 10 } as any
+      }
+      if (options?.method === 'POST') {
+        writes.push(String(options.body))
+        if (writes.length === 1) throw Object.assign(new Error('response lost'), { status: 503 })
+        return { id: 'record-1', duplicated: true } as any
+      }
+      return fixture as any
+    })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    act(() => root.render(<SupplierArchivePage />))
+    await waitFor(() => container.textContent?.includes('测试档案') ?? false)
+    const button = (name: string) => Array.from(container.querySelectorAll('button')).find(b => b.textContent === name)!
+    act(() => button('+新增条目').click())
+    const input = container.querySelector('input:not([type])') as HTMLInputElement
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '营业执照测试')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      const fileInput = container.querySelector('input[type="file"]')!
+      Object.defineProperty(fileInput, 'files', { value: [new File(['test'], '模拟附件.png', { type: 'image/png' })] })
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await act(async () => { button('保存').click(); button('保存').click() })
+    await waitFor(() => container.textContent?.includes('保存结果待确认') ?? false)
+    expect(writes).toHaveLength(1)
+    expect(input.matches(':disabled')).toBe(true)
+    act(() => button('取消').click())
+    expect(container.textContent).toContain('请重试原请求后再关闭')
+    act(() => root.unmount())
+    const recoveredRoot = createRoot(container)
+    act(() => recoveredRoot.render(<SupplierArchivePage />))
+    await waitFor(() => container.textContent?.includes('已恢复上次待确认请求') ?? false)
+    await act(async () => button('重试原请求').click())
+    await waitFor(() => container.textContent?.includes('档案条目已新增') ?? false)
+    expect(uploads).toBe(1)
+    expect(writes).toHaveLength(2)
+    expect(writes[1]).toBe(writes[0])
+    expect(sessionStorage.length).toBe(0)
+    act(() => recoveredRoot.unmount())
+    container.remove()
+  })
+
 })

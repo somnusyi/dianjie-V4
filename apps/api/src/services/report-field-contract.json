@@ -60,13 +60,13 @@
         "kind": "number"
       },
       {
-        "key": "netAmount",
-        "label": "库存金额（不含税）",
+        "key": "amount",
+        "label": "库存金额",
         "kind": "number"
       },
       {
-        "key": "netPrice",
-        "label": "库存均价（不含税）",
+        "key": "price",
+        "label": "库存均价",
         "kind": "number"
       },
       {

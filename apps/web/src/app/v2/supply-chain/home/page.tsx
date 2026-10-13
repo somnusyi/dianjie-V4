@@ -241,7 +241,7 @@ export default function InternalSupplyChainHomePage() {
         <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
           <QuickEntry href="/v2/supply-chain/fulfillment" icon="☷" label="订单中心" desc="待处理、配送与签收" tone="amber" />
           <QuickEntry href="/v2/supply-chain/stores" icon="店" label="门店运营" desc="订货、收货、消耗" tone="green" />
-          <QuickEntry href="/v2/supply-chain/inventory" icon="仓" label="仓库库存" desc="库存、入库、批次" tone="default" />
+          <QuickEntry href="/v2/supply-chain/inventory" icon="仓" label="库存管理与验收" desc="库存、自损、入库与审核" tone="default" />
           <QuickEntry href="/v2/supply-chain/products" icon="品" label="商品管理" desc="SKU、分类、报价" tone="default" />
           <QuickEntry href="/v2/supply-chain/procurement" icon="采" label="上游采购" desc="下单、验收、差异与月结" tone="default" />
         </div>
@@ -252,6 +252,7 @@ export default function InternalSupplyChainHomePage() {
         <div className="grid gap-2 lg:grid-cols-2">
           <MoreItem href="/v2/supply-chain/differences" label="到货差异" desc="短量、破损与报损" />
           <MoreItem href="/v2/supply-chain/suppliers" label="上游供应商" desc="总仓采购合作方" />
+          <MoreItem href="/v2/supply-chain/inventory/loss" label="总仓自损" desc="登记原因、责任和现场证据" />
           <MoreItem href="/v2/supply-chain/billing" label="账务查询" desc="账期、对账与发票" />
           <MoreItem href="/v2/supply-chain/analytics" label="经营分析" desc="门店、SKU、趋势与健康" />
           <MoreItem href="/v2/supply-chain/receipts" label="收货查询" desc="历史收货记录" />

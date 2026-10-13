@@ -14,6 +14,9 @@ datasource db {
 
 // ── 租户（SaaS 多租户）────────────────────────────────
 model Tenant {
+  documentQualityImages DocumentQualityImage[]
+  procurementApprovalEvents ProcurementApprovalEvent[]
+  supplierCreateRequests SupplierCreateRequest[]
   storeTransfers StoreTransfer[]
 
   id        String       @id @default(cuid())
@@ -30,6 +33,7 @@ model Tenant {
   suppliers                            Supplier[]
   products                             Product[]
   warehouses                           Warehouse[]
+  warehouseInboundDrafts               WarehouseInboundDraft[]
   warehouseStocks                      WarehouseStock[]
   warehouseInventoryImports            WarehouseInventoryImport[]
   warehouseInventoryImportItems        WarehouseInventoryImportItem[]
@@ -107,6 +111,8 @@ model Tenant {
   warehouseStocktakeAdjustments        WarehouseStocktakeAdjustment[]
   warehouseStocktakeAdjustmentLines    WarehouseStocktakeAdjustmentLine[]
   warehouseInventoryPolicies           WarehouseInventoryPolicy[]
+  inventoryPolicyRevisions             WarehouseInventoryPolicyRevision[]
+  inventoryPolicyRevisionEvents        WarehouseInventoryPolicyRevisionEvent[]
   warehouseInventoryPolicyEvents       WarehouseInventoryPolicyEvent[]
   accountingPeriods                    AccountingPeriod[]
   pettyCash                            PettyCash[]
@@ -164,6 +170,7 @@ model Warehouse {
   upstreamPurchaseReturns       UpstreamPurchaseReturn[]
   stocktakes                    WarehouseStocktake[]
   inventoryPolicies             WarehouseInventoryPolicy[]
+  inventoryPolicyRevisions      WarehouseInventoryPolicyRevision[]
 
   @@unique([tenantId, code])
   @@unique([tenantId, id])
@@ -363,6 +370,8 @@ model WarehouseLedgerLot {
   productId         String
   kind              WarehouseLedgerLotKind
   batchNo           String                 @db.VarChar(80)
+  batchRevision     Int                    @default(1)
+  replacesLotId     String?                @db.VarChar(64)
   initialQty        Decimal                @db.Decimal(18, 6)
   remainingQty      Decimal                @db.Decimal(18, 6)
   inventoryUnit     String                 @db.VarChar(16)
@@ -380,8 +389,12 @@ model WarehouseLedgerLot {
   product        Product                        @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
   sourceMovement WarehouseLedgerMovement        @relation("WarehouseLedgerLotSource", fields: [sourceMovementId], references: [id], onDelete: Restrict)
   allocations    WarehouseLedgerLotAllocation[]
+  predecessor    WarehouseLedgerLot? @relation("WarehouseLotRevisions", fields: [tenantId, replacesLotId], references: [tenantId, id], onDelete: Restrict, onUpdate: Cascade, map: "warehouse_lot_revision_parent_fkey")
+  revisions      WarehouseLedgerLot[] @relation("WarehouseLotRevisions")
 
-  @@unique([tenantId, warehouseId, productId, batchNo])
+  @@unique([tenantId, warehouseId, productId, batchNo, batchRevision], map: "warehouse_lot_batch_revision_key")
+  @@unique([tenantId, id], map: "warehouse_lot_tenant_id_key")
+  @@unique([tenantId, replacesLotId], map: "warehouse_lot_revision_successor_key")
   @@index([tenantId, warehouseId, productId, remainingQty])
   @@index([tenantId, warehouseId, expiryDate])
   @@map("warehouse_ledger_lots")
@@ -433,13 +446,56 @@ enum WarehouseDocReviewStatus {
 }
 
 enum WarehouseDocLogAction {
+  UNREVIEW
+  REVIEW
   CREATE
   CONFIRM
   UNCONFIRM
   EDIT
 }
 
+// Same-actor server drafts; unfinished strings are stored without posting inventory.
+model WarehouseInboundDraft {
+  id          String   @id @db.VarChar(80)
+  tenantId    String
+  createdById String
+  mode        String   @db.VarChar(8)
+  status      String   @default("EDITING") @db.VarChar(16)
+  version     Int      @default(1)
+  payload     Json
+  docId       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  reconfirmations WarehouseDraftReconfirmation[]
+
+  @@unique([tenantId, id], map: "warehouse_inbound_drafts_tenant_id_key")
+  @@index([tenantId, createdById, mode, status, updatedAt], map: "warehouse_inbound_drafts_owner_idx")
+  @@map("warehouse_inbound_drafts")
+}
+
+// Append-only receipts for explicit unit/warehouse rechecks; no inventory writes.
+model WarehouseDraftReconfirmation {
+  id                 String @id @default(cuid())
+  tenantId           String
+  draftId            String @db.VarChar(80)
+  actorId            String
+  requestId          String @db.VarChar(100)
+  baseVersion        Int
+  resultVersion      Int
+  payloadFingerprint String @db.Char(64)
+  resultPayload      Json
+  createdAt          DateTime @default(now())
+  draft WarehouseInboundDraft @relation(fields: [tenantId, draftId], references: [tenantId, id], onDelete: Restrict, map: "warehouse_draft_reconfirmations_draft_fkey")
+
+  @@unique([tenantId, requestId], map: "warehouse_draft_reconfirmations_request_key")
+  @@index([tenantId, draftId, createdAt], map: "warehouse_draft_reconfirmations_draft_idx")
+  @@map("warehouse_draft_reconfirmations")
+}
+
 model WarehouseDoc {
+  qualityImages DocumentQualityImage[]
   id             String                   @id @default(cuid())
   tenantId       String
   docNo          String                   @db.VarChar(40)
@@ -469,6 +525,7 @@ model WarehouseDoc {
   logs  WarehouseDocLog[]
 
   @@unique([tenantId, docNo])
+  @@unique([tenantId, id])
   @@unique([tenantId, type, idempotencyKey])
   @@index([tenantId, type, status, effectiveAt])
   @@index([tenantId, supplierId, effectiveAt])
@@ -488,6 +545,7 @@ model WarehouseDocLine {
   amount            Decimal   @db.Decimal(20, 4) // 行金额（入库=价税合计；出库=成本额）
   inventoryQuantity Decimal   @db.Decimal(18, 6) // 折算库存单位数量
   inventoryUnit     String    @db.VarChar(16)
+  isGift            Boolean   @default(false) // 明确赠品，数量正常入库、金额与成本为0
   note              String?   @db.VarChar(240)
   batchNo           String?   @db.VarChar(80)
   manufactureDate   DateTime? @db.Date
@@ -1330,6 +1388,7 @@ model RevenueRecord {
 
 // ── 供应商 ────────────────────────────────────────────
 model Supplier {
+  createRequests SupplierCreateRequest[]
   id             String                  @id @default(cuid())
   tenantId       String
   no             String // SUP001
@@ -1600,7 +1659,7 @@ model Product {
   unitConversionStatus          ProductUnitConversionStatus    @default(PENDING)
   unitConversionNote            String?                        @db.VarChar(500)
   unitConversionVerifiedAt      DateTime?
-  price                         Decimal                        @db.Decimal(10, 2) // 参考单价
+  price                         Decimal                        @db.Decimal(18, 6) // 每成本单位参考单价，保留最小单位折算精度
   // 比例加价定价（2026-08-20）：MARKUP 时按总仓库存移动均价 ×(1+比例) 自动定卖价；
   // null/FIXED 为固定价。markupPercent 为空时继承分类默认比例。
   pricingMode                   String?                        @db.VarChar(16) // FIXED | MARKUP
@@ -1640,6 +1699,7 @@ model Product {
   stockReservations                 SupplierStockReservation[]
   warehouseStocks                   WarehouseStock[]
   warehouseInventoryPolicies        WarehouseInventoryPolicy[]
+  inventoryPolicyRevisions          WarehouseInventoryPolicyRevision[]
   externalCodes                     ProductExternalCode[]
   warehouseImportItems              WarehouseInventoryImportItem[]
   warehouseLedgerBalances           WarehouseLedgerBalance[]
@@ -1797,6 +1857,7 @@ model WarehouseInventoryPolicy {
   stagnantDays          Int      @default(30)
   active                Boolean  @default(true)
   rowVersion            Int      @default(0)
+  restoredLegacy        Boolean  @default(false)
   createdById           String
   createdByName         String   @db.VarChar(100)
   createdByRole         String   @db.VarChar(40)
@@ -1818,6 +1879,54 @@ model WarehouseInventoryPolicy {
   @@index([tenantId, createdById])
   @@index([tenantId, updatedById])
   @@map("warehouse_inventory_policies")
+}
+
+// Working approval document; effective limits remain in WarehouseInventoryPolicy.
+// Every edit/transition is retained in immutable events, including previous effective values.
+model WarehouseInventoryPolicyRevision {
+  id                   String   @id @default(cuid()) @db.VarChar(64)
+  tenantId             String
+  warehouseId          String   @db.VarChar(64)
+  productId            String
+  status               String   @default("DRAFT") @db.VarChar(16)
+  payload              Json
+  previousEffective    Json?
+  baseEffectiveVersion Int      @default(0)
+  effectiveVersion     Int?
+  rowVersion           Int      @default(1)
+  cycleNumber          Int      @default(1)
+  isCurrent            Boolean  @default(true)
+  createdById          String
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse            Warehouse @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  product              Product @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  events               WarehouseInventoryPolicyRevisionEvent[]
+  @@unique([tenantId, warehouseId, productId, cycleNumber], map: "policy_revision_cycle_key")
+  @@index([tenantId, warehouseId, productId, isCurrent], map: "policy_revision_current_idx")
+  @@unique([tenantId, id], map: "policy_revision_tenant_id_key")
+  @@map("warehouse_inventory_policy_revisions")
+}
+
+model WarehouseInventoryPolicyRevisionEvent {
+  id                 String @id @default(cuid()) @db.VarChar(64)
+  tenantId           String
+  revisionId         String @db.VarChar(64)
+  action             String @db.VarChar(16)
+  requestId          String @db.VarChar(100)
+  fingerprint        String @db.VarChar(64)
+  actorId            String
+  actorName          String
+  actorRole          String
+  beforeValue        Json?
+  afterValue         Json
+  createdAt          DateTime @default(now())
+  tenant             Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  revision           WarehouseInventoryPolicyRevision @relation(fields: [tenantId, revisionId], references: [tenantId, id], onDelete: Restrict)
+  @@unique([tenantId, requestId], map: "policy_revision_request_key")
+  @@index([tenantId, revisionId, createdAt], map: "policy_revision_event_history_idx")
+  @@map("warehouse_inventory_policy_revision_events")
 }
 
 model WarehouseInventoryPolicyEvent {
@@ -2220,6 +2329,7 @@ model UpstreamPurchaseOrderEvent {
 }
 
 model UpstreamShipment {
+  qualityImages DocumentQualityImage[]
   id                 String                 @id @default(cuid()) @db.VarChar(64)
   tenantId           String
   no                 String                 @db.VarChar(80)
@@ -2284,6 +2394,11 @@ model UpstreamShipmentLine {
 }
 
 model UpstreamReceipt {
+  qualityImages DocumentQualityImage[]
+  approvalStatus ProcurementApprovalStatus?
+  approvalVersion Int @default(1)
+  approvalContentFingerprint String? @db.Char(64)
+  approvalEvents ProcurementApprovalEvent[]
   id                                   String                        @id @default(cuid()) @db.VarChar(64)
   tenantId                             String
   no                                   String                        @db.VarChar(80)
@@ -2416,6 +2531,11 @@ enum UpstreamPurchaseReturnEventType {
 // 总仓退回上游供应商：独立于到货差异。提交不动库存，审批时才从采购方总仓出库；
 // 供应商实际收到后另记 RECEIVED 事实，不复用门店履约供应商的 SupplierStock。
 model UpstreamPurchaseReturn {
+  qualityImages DocumentQualityImage[]
+  approvalStatus ProcurementApprovalStatus?
+  approvalVersion Int @default(1)
+  approvalContentFingerprint String? @db.Char(64)
+  approvalEvents ProcurementApprovalEvent[]
   id                 String                       @id @default(cuid()) @db.VarChar(64)
   tenantId           String
   no                 String                       @db.VarChar(80)
@@ -3737,6 +3857,35 @@ model DeliveryRuleStore {
 }
 
 // ── 操作日志 ──────────────────────────────────────────
+// Append-only image history. Separate from business content and approval versions.
+model DocumentQualityImage {
+  id String @id @default(cuid())
+  tenantId String
+  warehouseDocId String?
+  receiptId String? @db.VarChar(64)
+  returnId String? @db.VarChar(64)
+  shipmentId String? @db.VarChar(64)
+  version Int
+  requestId String @db.VarChar(100)
+  fingerprint String @db.Char(64)
+  image Json
+  actorId String
+  actorName String
+  actorRole String
+  createdAt DateTime @default(now())
+  tenant Tenant @relation(fields:[tenantId],references:[id],onDelete:Restrict)
+  warehouseDoc WarehouseDoc? @relation(fields:[tenantId,warehouseDocId],references:[tenantId,id],onDelete:Restrict)
+  receipt UpstreamReceipt? @relation(fields:[tenantId,receiptId],references:[tenantId,id],onDelete:Restrict)
+  purchaseReturn UpstreamPurchaseReturn? @relation(fields:[tenantId,returnId],references:[tenantId,id],onDelete:Restrict)
+  shipment UpstreamShipment? @relation(fields:[tenantId,shipmentId],references:[tenantId,id],onDelete:Restrict,map:"document_quality_images_tenantid_shipmentid_fkey")
+  @@unique([tenantId,shipmentId,version],map:"document_quality_images_tenantid_shipmentid_version_key")
+  @@unique([tenantId,requestId])
+  @@unique([tenantId,warehouseDocId,version])
+  @@unique([tenantId,receiptId,version])
+  @@unique([tenantId,returnId,version])
+  @@map("document_quality_images")
+}
+
 model OpLog {
   id         String   @id @default(cuid())
   tenantId   String
@@ -4533,6 +4682,7 @@ model WarehouseStocktake {
   note                 String?                  @db.VarChar(500)
   reviewNote           String?                  @db.VarChar(500)
   requestKey           String                   @db.VarChar(160)
+  countScope           String                   @default("SELECTED") @db.VarChar(16)
   createdById          String
   submittedById        String?
   reviewedById         String?
@@ -4594,6 +4744,7 @@ model WarehouseStocktakeItem {
   productSpecSnapshot String?  @db.VarChar(240)
   categorySnapshot    String?  @db.VarChar(120)
   inventoryUnit       String   @db.VarChar(16)
+  unitPending         Boolean  @default(false)
   bookQuantity        Decimal  @db.Decimal(18, 6)
   bookValue           Decimal  @db.Decimal(20, 4)
   averageUnitCost     Decimal  @db.Decimal(18, 6)
@@ -5619,4 +5770,57 @@ model StoreTransferItem {
 
   @@unique([transferId, productId])
   @@map("store_transfer_items")
+}
+
+// DJ-005: successful atomic creation requests only; tenant-scoped durable replay.
+model SupplierCreateRequest {
+  id String @id @default(cuid())
+  tenantId String
+  requestKey String @db.VarChar(160)
+  actorId String
+  payloadHash String @db.Char(64)
+  supplierId String
+  response Json
+  createdAt DateTime @default(now())
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  supplier Supplier @relation(fields: [tenantId, supplierId], references: [tenantId, id], onDelete: Restrict)
+  @@unique([tenantId, requestKey])
+  @@map("supplier_create_requests")
+}
+
+// DEC042/043: approval progress is separate from physical receipt/return facts.
+enum ProcurementApprovalStatus {
+  DRAFT
+  PENDING
+  AUDITED
+  REVIEWED
+}
+enum ProcurementApprovalAction {
+  SAVE
+  SUBMIT
+  AUDIT
+  UNCONFIRM
+  REVIEW
+}
+model ProcurementApprovalEvent {
+  id String @id @default(cuid()) @db.VarChar(64)
+  tenantId String
+  receiptId String? @db.VarChar(64)
+  returnId String? @db.VarChar(64)
+  action ProcurementApprovalAction
+  requestId String @db.VarChar(100)
+  fingerprint String @db.Char(64)
+  actorId String
+  actorName String
+  actorRole String
+  beforeValue Json?
+  afterValue Json
+  createdAt DateTime @default(now())
+  tenant Tenant @relation(fields:[tenantId],references:[id],onDelete:Cascade)
+  receipt UpstreamReceipt? @relation(fields:[tenantId,receiptId],references:[tenantId,id],onDelete:Restrict)
+  purchaseReturn UpstreamPurchaseReturn? @relation(fields:[tenantId,returnId],references:[tenantId,id],onDelete:Restrict)
+  @@unique([tenantId,requestId])
+  @@index([tenantId,receiptId,createdAt])
+  @@index([tenantId,returnId,createdAt])
+  @@map("procurement_approval_events")
 }

@@ -10,13 +10,13 @@ export type ReportId = typeof reportIds[number]
 export type ReportRow = Record<string, string | number | null>
 export type ReportColumn = { key: string; label: string; kind: 'text' | 'number'; group?: string }
 export const reportDefinitions: Record<ReportId, { title: string; note: string; columns: ReportColumn[] }> = {
-  realtime: { title: '实时库存查询表', note: '数量为库存基准单位，换算率为 1。预计入库按未验收采购量，预计出库为预占量。库存台账未独立核算不含税余额，不含税金额/均价显示“—”；机构编码尚未维护。', columns: inventoryColumns('realtime') },
+  realtime: { title: '实时库存查询表', note: '数量为库存基准单位，换算率为 1；库存金额与库存均价按仓库移动平均成本展示。预计入库按未验收采购量，预计出库为预占量；机构编码尚未维护。', columns: inventoryColumns('realtime') },
   movements: { title: '出入库明细表', note: '基准数量为库存单位，业务数量为单据原单位。金额沿用不含税口径，仅有冻结税率依据时展示；未记录的折扣、结算、审核与退返货差异不推算。预占与释放不计实物出入库。', columns: inventoryColumns('movements') },
   summary: { title: '出入库汇总表', note: '成本按库存台账口径，期末=期初+入库−出库；均价=对应成本金额/数量，数量为零时显示“—”。类型筛选选取发生该类型的物品，余额包含全部类型。', columns: inventoryColumns('summary') },
   'other-summary': { title: '其他出入库汇总表', note: '汇总手工出入库、盘点、报损及其冲销，按物品、仓库、基准单位、出入库类型和原因分组。入库为正、出库为负；金额按库存台账成本口径。', columns: inventoryColumns('other-summary') },
   'transfer-detail': { title: '机构间调拨明细表', note: '已发货/已收货的门店调拨登记，数量为登记时冻结的库存单位，金额为登记价格快照。未记录批次、门店仓库、公司归属和独立审核时间时显示“—”；登记不改写门店盘点库存。', columns: inventoryColumns('transfer-detail') },
   'transfer-summary': { title: '机构间调拨汇总表', note: '按物品、单位和调出/调入门店汇总已发货/已收货登记；均价按数量加权，调入与调出结算金额均采用登记结算金额。', columns: inventoryColumns('transfer-summary') },
-  stagnant: { title: '库存呆滞品查询表', note: '展示当前正库存。已滞留天数按最近出库日计算，无出库记录时按最早入库日计算。默认使用每个商品的呆滞天数规则（未配置为30天）；本次查询阈值只临时覆盖结果，不改写配置，也不自动移库。', columns: inventoryColumns('stagnant') },
+  stagnant: { title: '库存呆滞品查询表', note: '展示当前正库存。已滞留天数按最近出库日计算，无出库记录时按最早入库日计算。所有商品统一满30天提醒；旧配置和查询参数不能覆盖，只提醒，不自动移库或出库。', columns: inventoryColumns('stagnant') },
   alerts: { title: '库存预警表', note: '当前库存、上下限均使用仓库库存基准单位。优先读取按仓库和商品配置的规则；未建规则时仅将已核验的旧安全库存作兼容回退。', columns: inventoryColumns('alerts') },
 }
 const text = z.string().trim().max(120).default('')

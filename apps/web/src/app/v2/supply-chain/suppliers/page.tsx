@@ -13,6 +13,9 @@ import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { EmptyState, FriendlyError, SkeletonList } from '@/components/v2/skeleton'
 import { apiFetch } from '@/lib/v2-auth'
+import { clientRequestId } from '@/lib/client-id'
+import { readPendingSupplierCreate, savePendingSupplierCreate, clearPendingSupplierCreate, type PendingSupplierCreate } from '@/lib/supplier-create-pending'
+import { buildBindItems, type RelationProduct } from '@/lib/supply-relations'
 import {
   applySupplierFilters,
   buildSupplierCreatePayload,
@@ -52,6 +55,12 @@ export default function InternalSupplyChainSuppliersPage() {
   const [formErrors, setFormErrors] = useState<Partial<Record<keyof SupplierFormValues, string>>>({})
   const [formError, setFormError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [pendingCreate, setPendingCreate] = useState<PendingSupplierCreate | null>(null)
+  const submitRef = useRef(false)
+  const autoNumberRef = useRef(false)
+  const [catalog, setCatalog] = useState<RelationProduct[]>([])
+  const [catalogLoading, setCatalogLoading] = useState(false)
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([])
 
   const [confirmState, openConfirm] = useConfirmSheet()
   const abortRef = useRef<AbortController | null>(null)
@@ -135,7 +144,40 @@ export default function InternalSupplyChainSuppliersPage() {
     setFormValues(EMPTY_SUPPLIER_FORM_VALUES)
     setFormErrors({})
     setFormError(null)
+    setSelectedProductIds([])
     setDrawerMode('create')
+    autoNumberRef.current = false
+    let recovered: PendingSupplierCreate | null = null
+    try {
+      const pending = readPendingSupplierCreate()
+      recovered = pending
+      setPendingCreate(pending)
+      if (pending) {
+        setFormValues(pending.formValues)
+        setSelectedProductIds(pending.items.map(item => item.productId))
+        setFormError('上次创建结果待确认，保存将重试原请求；不能更改内容')
+      }
+    } catch (reason: any) { setFormError(reason.message); setDrawerMode(null); setError(reason.message); return }
+    if (!recovered) {
+      apiFetch<{ no: string }>('/api/suppliers/next-number')
+        .then(result => {
+          if (typeof result.no !== 'string') return
+          setFormValues(current => {
+            if (current.no) return current
+            autoNumberRef.current = true
+            return { ...current, no: result.no }
+          })
+        })
+        .catch(() => setFormError('自动编号读取失败，可手工填写编号或关闭后重试'))
+    }
+    setCatalogLoading(true)
+    apiFetch<RelationProduct[]>('/api/products')
+      .then(rows => setCatalog((Array.isArray(rows) ? rows : []).filter(product => product.status === 'ENABLED').map(product => {
+        const saved = recovered?.items.find(item => item.productId === product.id)
+        return saved ? { ...product, purchaseUnit: saved.purchaseUnit, inventoryUnitsPerPurchaseUnit: saved.inventoryUnitsPerPurchaseUnit } : product
+      })))
+      .catch(reason => setFormError(`供货商品读取失败：${reason?.message || reason}`))
+      .finally(() => setCatalogLoading(false))
   }
 
   async function createSupplierInvite() {
@@ -180,6 +222,8 @@ export default function InternalSupplyChainSuppliersPage() {
   }
 
   function handleFormChange(field: keyof SupplierFormValues, value: string) {
+    if (saving || (drawerMode === 'create' && pendingCreate)) return
+    if (field === 'no') autoNumberRef.current = false
     setFormValues(prev => ({ ...prev, [field]: value }))
     setFormErrors(prev => {
       const next = { ...prev }
@@ -189,19 +233,48 @@ export default function InternalSupplyChainSuppliersPage() {
   }
 
   async function handleFormSubmit() {
+    if (submitRef.current) return
     const errors = validateSupplierForm(formValues)
     setFormErrors(errors)
     if (Object.keys(errors).length > 0) return
 
+    if (drawerMode === 'create' && !pendingCreate) {
+      if (selectedProductIds.length === 0) {
+        setFormError('新建供应商必须至少选择一个供货商品')
+        return
+      }
+      const selectedProducts = catalog.filter(product => selectedProductIds.includes(product.id))
+      if (selectedProducts.length !== selectedProductIds.length) {
+        setFormError('所选商品资料不完整，请重新加载商品后再保存；供应商尚未创建')
+        return
+      }
+      const { missingConversion } = buildBindItems(selectedProducts)
+      missingConversion.push(...selectedProducts.filter(product => !product.purchaseUnit?.trim()).map(product => product.id))
+      if (missingConversion.length > 0) {
+        const names = selectedProducts.filter(product => missingConversion.includes(product.id)).map(product => product.name).join('、')
+        setFormError(`请先补齐 ${names} 的采购单位换算；供应商尚未创建，表单和选择已保留`)
+        return
+      }
+    }
+    submitRef.current = true
     setSaving(true)
     setFormError(null)
     try {
       if (drawerMode === 'create') {
-        const created = await apiFetch<SupplySupplier>('/api/suppliers', {
-          method: 'POST',
-          body: JSON.stringify(buildSupplierCreatePayload(formValues)),
+        const request = pendingCreate || {
+          requestKey: clientRequestId(), numberMode: autoNumberRef.current ? 'AUTO' as const : 'MANUAL' as const, supplier: buildSupplierCreatePayload(formValues),
+          items: buildBindItems(catalog.filter(product => selectedProductIds.includes(product.id))).items,
+          formValues: { ...formValues },
+        }
+        // Persist before sending; reload/network uncertainty must replay the identical request.
+        savePendingSupplierCreate(request)
+        setPendingCreate(request)
+        const created = await apiFetch<SupplySupplier>('/api/suppliers/create-with-products', {
+          method: 'POST', body: JSON.stringify({ requestKey: request.requestKey, numberMode: request.numberMode || 'MANUAL', supplier: request.supplier, items: request.items }),
         })
-        setNotice('上游供应商新增成功')
+        clearPendingSupplierCreate()
+        setPendingCreate(null)
+        setNotice(`上游供应商新增成功，已绑定 ${request.items.length} 个供货商品`)
         closeDrawer()
         // 全量列表按创建时间升序分页；新记录通常落在最后一页。
         // 保存后直接按新编号定位，避免用户误以为创建结果“消失”。
@@ -217,8 +290,13 @@ export default function InternalSupplyChainSuppliersPage() {
         load(updated.id)
       }
     } catch (reason: any) {
-      setFormError(reason?.message || '保存失败，请重试')
+      if (drawerMode === 'create' && [400, 403, 404, 409].includes(reason?.status)) {
+        clearPendingSupplierCreate()
+        setPendingCreate(null)
+      }
+      setFormError(reason?.message || '保存结果待确认，请重试原请求')
     } finally {
+      submitRef.current = false
       setSaving(false)
     }
   }
@@ -461,9 +539,18 @@ export default function InternalSupplyChainSuppliersPage() {
         errors={formErrors}
         error={formError}
         saving={saving}
+        locked={drawerMode === 'create' && !!pendingCreate}
         onChange={handleFormChange}
         onSubmit={handleFormSubmit}
         onClose={closeDrawer}
+        catalog={catalog}
+        catalogLoading={catalogLoading}
+        selectedProductIds={selectedProductIds}
+        onSelectedProductIdsChange={ids => { if (!saving && !pendingCreate) setSelectedProductIds(ids) }}
+        onProductConversionChange={(id, field, value) => {
+          if (saving || pendingCreate) return
+          setCatalog(rows => rows.map(row => row.id === id ? { ...row, [field]: value } : row))
+        }}
       />
     </div>
   )
@@ -475,20 +562,33 @@ function SupplierEditorDrawer({
   errors,
   error,
   saving,
+  locked,
   onChange,
   onSubmit,
   onClose,
+  catalog,
+  catalogLoading,
+  selectedProductIds,
+  onSelectedProductIdsChange,
+  onProductConversionChange,
 }: {
   mode: 'create' | 'edit' | null
   values: SupplierFormValues
   errors: Partial<Record<keyof SupplierFormValues, string>>
   error: string | null
   saving: boolean
+  locked: boolean
   onChange: (field: keyof SupplierFormValues, value: string) => void
   onSubmit: () => void
   onClose: () => void
+  catalog: RelationProduct[]
+  catalogLoading: boolean
+  selectedProductIds: string[]
+  onSelectedProductIdsChange: (ids: string[]) => void
+  onProductConversionChange: (id: string, field: 'purchaseUnit' | 'inventoryUnitsPerPurchaseUnit', value: string | number | null) => void
 }) {
   const [mounted, setMounted] = useState(false)
+  const [productQuery, setProductQuery] = useState('')
   useEffect(() => { setMounted(true) }, [])
 
   if (!mode || !mounted) return null
@@ -518,7 +618,7 @@ function SupplierEditorDrawer({
           </button>
         </div>
 
-        <div className="flex-1 space-y-4 overflow-auto p-6">
+        <fieldset disabled={saving || locked} className="flex-1 space-y-4 overflow-auto p-6">
           {error && (
             <div className="rounded-card border border-red-fg/20 bg-red-bg px-4 py-3 text-caption text-red-fg">
               {error}
@@ -535,6 +635,7 @@ function SupplierEditorDrawer({
               placeholder="如 SUP001"
             />
           </DrawerField>
+          {mode === 'create' && <p className="text-micro text-gray3">建议编号不占号，保存时确认；手工修改后按填写编号创建。</p>}
 
           <DrawerField label="名称" error={errors.name} required>
             <input
@@ -611,7 +712,17 @@ function SupplierEditorDrawer({
               />
             </DrawerField>
           )}
-        </div>
+
+          {mode === 'create' && <section className="rounded-card border border-border p-4">
+            <div className="flex items-start justify-between gap-3"><div><h3 className="text-body font-medium">供货商品</h3><p className="mt-1 text-micro text-gray3">至少选择一个商品，全部绑定成功后才算创建成功。企业附件可在集中档案后补。</p></div><span className="whitespace-nowrap text-caption text-accent">已选 {selectedProductIds.length} 项</span></div>
+            <input type="search" value={productQuery} onChange={event => setProductQuery(event.target.value)} placeholder="搜索商品名称 / 编码" className="mt-3 h-10 w-full rounded-cta border border-border px-3 text-body" />
+            {catalogLoading ? <p className="py-5 text-center text-caption text-gray3">商品加载中…</p> : <div className="mt-3 max-h-64 space-y-3 overflow-auto">{Array.from(new Set(catalog.map(product => product.category || '未分类'))).map(category => { const rows = catalog.filter(product => (product.category || '未分类') === category && `${product.code} ${product.name}`.toLowerCase().includes(productQuery.trim().toLowerCase())); if (!rows.length) return null; const allSelected = rows.every(product => selectedProductIds.includes(product.id)); return <div key={category} className="rounded-lg bg-bg p-2"><label className="flex items-center gap-2 text-caption font-medium"><input type="checkbox" checked={allSelected} onChange={event => onSelectedProductIdsChange(event.target.checked ? Array.from(new Set([...selectedProductIds, ...rows.map(product => product.id)])) : selectedProductIds.filter(id => !rows.some(product => product.id === id)))} />全选分类：{category}（{rows.length}）</label><div className="mt-2 grid gap-2 sm:grid-cols-2">{rows.map(product => <label key={product.id} className="flex items-start gap-2 text-caption"><input type="checkbox" checked={selectedProductIds.includes(product.id)} onChange={event => onSelectedProductIdsChange(event.target.checked ? [...selectedProductIds, product.id] : selectedProductIds.filter(id => id !== product.id))} /><span><b>{product.name}</b><span className="block text-micro text-gray3">{product.code} · 1 {product.purchaseUnit || product.unit} = {product.inventoryUnitsPerPurchaseUnit || '未维护'} {product.inventoryUnit || product.unit}</span></span></label>)}</div></div> })}{catalog.length === 0 && <p className="py-5 text-center text-caption text-gray3">暂无可绑定商品</p>}</div>}
+            {catalog.filter(product => selectedProductIds.includes(product.id)).map(product => <div key={`conversion-${product.id}`} className="mt-3 grid grid-cols-2 gap-2">
+              <label className="text-micro text-gray3">{product.name}采购单位<input aria-label={`${product.name}采购单位`} value={product.purchaseUnit || ''} onChange={event => onProductConversionChange(product.id, 'purchaseUnit', event.target.value)} className="mt-1 h-10 w-full rounded-cta border border-border px-3 text-body" /></label>
+              <label className="text-micro text-gray3">1采购单位对应库存数量<input aria-label={`${product.name}采购到库存换算`} type="number" min="0.000001" step="any" value={product.inventoryUnitsPerPurchaseUnit ?? ''} onChange={event => onProductConversionChange(product.id, 'inventoryUnitsPerPurchaseUnit', event.target.value === '' ? null : Number(event.target.value))} className="mt-1 h-10 w-full rounded-cta border border-border px-3 text-body" /></label>
+            </div>)}
+          </section>}
+        </fieldset>
 
         <div className="flex items-center justify-end gap-3 border-t border-border px-6 py-4">
           <button

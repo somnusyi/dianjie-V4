@@ -1,3 +1,8 @@
+import {changeProcurementApproval,procurementApprovalView} from '../services/procurementApproval'
+import {registerDocumentQualityImageRoutes} from './documentQualityImage'
+import {saveProcurementDocument} from '../services/procurementDocumentEdit'
+import {saveProcurementDocumentNote} from '../services/procurementDocumentNote'
+import {submitUpstreamPurchaseReturnInTransaction,postUpstreamPurchaseReturnBusinessInTransaction} from '../services/upstreamPurchaseReturns'
 import { Prisma, prisma } from '@dianjie/db'
 import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
@@ -271,6 +276,7 @@ const receiptCreateSchema = z
             shipmentLineId: idSchema,
             arrivedQty: nonNegativeDecimalInput,
             acceptedQty: nonNegativeDecimalInput,
+            unitPrice: nonNegativeDecimalInput.optional(),
             damagedQty: nonNegativeDecimalInput.default(0),
             rejectedQty: nonNegativeDecimalInput.default(0),
             batchNo: z.string().trim().max(80).optional(),
@@ -290,6 +296,7 @@ const receiptCreateSchema = z
                 message: '合格、破损和拒收数量之和不能超过实到数量',
               })
             }
+            for(const key of ['arrivedQty','acceptedQty','damagedQty','rejectedQty'] as const){if(line[key]>0&&decimal(line[key]).toDecimalPlaces(6).isZero())ctx.addIssue({code:'custom',path:[key],message:'非零数量至少为0.000001'})}
             if (line.manufactureDate && line.expiryDate && line.expiryDate < line.manufactureDate) {
               ctx.addIssue({
                 code: 'custom',
@@ -600,6 +607,7 @@ export function upstreamReceiptRequestFingerprint(shipmentId: string, input: z.i
         acceptedQty: decimal(line.acceptedQty).toString(),
         damagedQty: decimal(line.damagedQty).toString(),
         rejectedQty: decimal(line.rejectedQty).toString(),
+        ...(line.unitPrice===undefined?{}:{unitPrice:decimal(line.unitPrice).toString()}),
         batchNo: line.batchNo || null,
         manufactureDate: line.manufactureDate?.toISOString() || null,
         expiryDate: line.expiryDate?.toISOString() || null,
@@ -727,12 +735,335 @@ async function runStandardTransaction<T>(operation: () => Promise<T>): Promise<T
   throw lastError
 }
 
-export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
-  app.addHook('onRequest', async (req, reply) => {
-    if (!upstreamFeatureEnabled('UPSTREAM_PROCUREMENT_ENABLED')) {
-      return reply.status(503).send({ error: '上游采购模块尚未启用' })
-    }
+/** Full source business posting; caller may atomically include approval progress/events. */
+export async function postReceiptBusinessInTransaction(tx:Prisma.TransactionClient,tenantId:string,role:string,userId:string,receiptId:string,review:boolean,reviewData:z.infer<typeof receiptReviewSchema>,forApproval=false){
+  const preliminary = await tx.upstreamReceipt.findFirst({
+    where: { id: receiptId, tenantId },
+    select: { purchaseOrderId: true },
   })
+  if (!preliminary) return null
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`upstream-po:${preliminary.purchaseOrderId}`}))::text AS locked`
+  const receipt = await tx.upstreamReceipt.findFirst({
+    where: {
+      id: receiptId,
+      tenantId,
+      status: forApproval ? {in:['DRAFT','INSPECTING','PENDING_REVIEW']} : review ? 'PENDING_REVIEW' : 'INSPECTING',
+    },
+    include: {
+      supplier: true,
+      purchaseOrder: { include: { lines: true } },
+      shipment: { include: { lines: true } },
+      lines: {
+        include: {
+          product: { select: { category: true, evidenceRequirement: true, requiredEvidenceTypes: true } },
+          purchaseOrderLine: true,
+          shipmentLine: true,
+        },
+      },
+    },
+  })
+  if (!receipt) return null
+  if (review) assertDifferentReceiptReviewer(receipt.inspectorId || '', userId)
+
+  const sensitiveCategories = new Set(receipt.supplier.upstreamSensitiveCategories)
+  const { hasAboveStandardPrice, hasTemporaryPriceWithoutStandard } = upstreamReceiptPriceReviewFlags(
+    receipt.lines.map((line) => ({
+      unitPrice: line.unitPrice,
+      standardUnitPriceSnapshot: line.standardUnitPriceSnapshot,
+      isTemporaryPrice: line.purchaseOrderLine.isTemporaryPrice,
+    }))
+  )
+  const reviewInput = {
+    payableAmount: Number(receipt.payableAmount),
+    reviewAmountThreshold: Number(receipt.supplier.upstreamReceiptReviewThreshold),
+    hasOverReceipt: receipt.lines.some((line) => line.overageQty.gt(0)),
+    // 逐行判断：有标准价的行只在超标时复核；无标准价的临时价行仍按旧规则复核。
+    hasTemporaryPrice: hasTemporaryPriceWithoutStandard,
+    hasAboveStandardPrice,
+    hasSensitiveCategory: receipt.lines.some((line) => sensitiveCategories.has(line.product.category)),
+  }
+  const reviewReasons = upstreamReceiptReviewReasons(reviewInput)
+  if (hasAboveStandardPrice) {
+    throw Object.assign(new Error('实际采购价高于标准价，禁止验收入库'), { statusCode: 409 })
+  }
+  if (!review && requiresUpstreamReceiptReview(reviewInput)) {
+    const pending = await tx.upstreamReceipt.update({
+      where: { id: receipt.id },
+      data: {
+        status: 'PENDING_REVIEW',
+        inspectorId: userId,
+        reviewReasons,
+        rowVersion: { increment: 1 },
+      },
+      include: { lines: true },
+    })
+    await tx.opLog.create({
+      data: {
+        tenantId,
+        userId,
+        role,
+        action: '上游收货提交复核',
+        entityType: 'UpstreamReceipt',
+        target: receipt.no,
+        targetId: receipt.id,
+        metadata: { reviewReasons },
+      },
+    })
+    return { pendingReview: true, receipt: pending }
+  }
+
+  const orderLineById = new Map(receipt.purchaseOrder.lines.map((line) => [line.id, line]))
+  for (const line of receipt.lines) {
+    const orderLine = orderLineById.get(line.purchaseOrderLineId)!
+    const target = orderLine.confirmedQty || orderLine.orderedQty
+    const maximum = target.times(decimal(1).plus(orderLine.overTolerancePct))
+    if (orderLine.receivedQty.plus(line.acceptedQty).greaterThan(maximum)) {
+      // 分清场景: 已收满多为「重复登记/页面没刷新」, 与真正的超上限是两回事
+      const alreadyFull = orderLine.receivedQty.greaterThanOrEqualTo(maximum)
+      throw Object.assign(
+        new Error(
+          alreadyFull
+            ? `${orderLine.productNameSnapshot} 已完成全部收货，该发货单可能刚被他人验收，请刷新页面核对状态`
+            : `${orderLine.productNameSnapshot} 累计合格收货超过合同允许上限 ${maximum.toString()} ${orderLine.purchaseUnit}`
+        ),
+        { statusCode: 409 }
+      )
+    }
+  }
+
+  const ledgerLines = receipt.lines
+    .filter((line) => line.acceptedQty.gt(0))
+    .map((line) => ({
+      receiptLineId: line.id,
+      productId: line.productId,
+      productName: line.purchaseOrderLine.productNameSnapshot,
+      purchaseQuantity: line.acceptedQty,
+      purchaseUnit: line.purchaseUnit,
+      conversionFactor: line.inventoryUnitsPerPurchaseUnit,
+      inventoryQuantity: line.inventoryAcceptedQty,
+      inventoryUnit: line.inventoryUnit,
+      totalAmount: line.payableAmount,
+      batchNo: line.batchNo,
+      manufactureDate: line.manufactureDate,
+      expiryDate: line.expiryDate,
+    }))
+  const evidenceCompleteness = await evaluateReceiptEvidenceCompleteness(tx, {
+    tenantId,
+    supplierId: receipt.supplierId,
+    businessAt: receipt.arrivedAt || new Date(),
+    lines: receipt.lines,
+  })
+  if (ledgerLines.length > 0) {
+    await postUpstreamReceiptInTransaction(tx, {
+      tenantId,
+      warehouseId: receipt.warehouseId,
+      supplierId: receipt.supplierId,
+      supplierName: receipt.supplier.name,
+      receiptId: receipt.id,
+      receiptNo: receipt.no,
+      userId,
+      effectiveAt: receipt.arrivedAt || new Date(),
+      lines: ledgerLines,
+    })
+  }
+
+  for (const line of receipt.lines) {
+    await tx.upstreamPurchaseOrderLine.update({
+      where: { id: line.purchaseOrderLineId },
+      data: { receivedQty: { increment: line.acceptedQty } },
+    })
+    const orderLine = orderLineById.get(line.purchaseOrderLineId)!
+    orderLine.receivedQty = orderLine.receivedQty.plus(line.acceptedQty)
+  }
+
+  const claimCandidates = receipt.lines.flatMap((line) => {
+    const candidates: Array<{
+      type: 'SHORTAGE' | 'DAMAGE' | 'QUALITY' | 'OVERAGE'
+      qty: Prisma.Decimal
+    }> = []
+    if (line.shortageQty.gt(0)) candidates.push({ type: 'SHORTAGE', qty: line.shortageQty })
+    if (line.damagedQty.gt(0)) candidates.push({ type: 'DAMAGE', qty: line.damagedQty })
+    if (line.rejectedQty.gt(0)) candidates.push({ type: 'QUALITY', qty: line.rejectedQty })
+    if (line.overageQty.gt(0)) candidates.push({ type: 'OVERAGE', qty: line.overageQty })
+    return candidates.map((candidate) => ({ line, ...candidate }))
+  })
+  const claimIds: string[] = []
+  for (const candidate of claimCandidates) {
+    const no = await nextUpstreamDocumentNo(tx, tenantId, 'claim')
+    const amount = money(candidate.qty.times(candidate.line.unitPrice))
+    const claim = await tx.upstreamArrivalClaim.create({
+      data: {
+        tenantId,
+        no,
+        purchaseOrderId: receipt.purchaseOrderId,
+        receiptId: receipt.id,
+        supplierId: receipt.supplierId,
+        type: candidate.type,
+        claimedAmount: amount,
+        description: `${candidate.line.purchaseOrderLine.productNameSnapshot} 到货${candidate.type}`,
+        evidence: candidate.line.evidence || receipt.evidence || undefined,
+        responseDueAt: new Date(Date.now() + receipt.supplier.postReceiptClaimHours * 3_600_000),
+        createdById: userId,
+      },
+    })
+    await tx.upstreamArrivalClaimLine.create({
+      data: {
+        tenantId,
+        claimId: claim.id,
+        receiptLineId: candidate.line.id,
+        purchaseOrderLineId: candidate.line.purchaseOrderLineId,
+        productId: candidate.line.productId,
+        affectedQty: candidate.qty,
+        purchaseUnit: candidate.line.purchaseUnit,
+        unitPrice: candidate.line.unitPrice,
+        claimedAmount: amount,
+      },
+    })
+    claimIds.push(claim.id)
+  }
+
+  // 采购单是否履约完成看“已发数量是否全部完成到货核对”，而不是只看
+  // 合格入库数。破损、拒收和短缺会进入差异单，但不应让采购单永久卡在
+  // PARTIALLY_RECEIVED；只有供应商尚未发完或某一发货单尚未收完才保持部分收货。
+  const orderShipmentLines = await tx.upstreamShipmentLine.findMany({
+    where: {
+      shipment: {
+        tenantId,
+        purchaseOrderId: receipt.purchaseOrderId,
+        status: { not: 'CANCELLED' },
+      },
+    },
+    include: {
+      receiptLines: {
+        where: { receipt: { status: 'POSTED' } },
+        select: {
+          receiptId: true,
+          arrivedQty: true,
+          shortageQty: true,
+        },
+      },
+    },
+  })
+  const allDispatched = receipt.purchaseOrder.lines.every((line) => line.shippedQty.greaterThanOrEqualTo(line.confirmedQty || line.orderedQty))
+  const allDispatchedQuantitiesInspected = orderShipmentLines.every((line) => {
+    const previouslyAccounted = line.receiptLines.reduce((sum, item) => sum.plus(item.arrivedQty).plus(item.shortageQty), decimal(0))
+    const currentLine = receipt.lines.find((item) => item.shipmentLineId === line.id)
+    return previouslyAccounted
+      .plus(currentLine?.arrivedQty || decimal(0))
+      .plus(currentLine?.shortageQty || decimal(0))
+      .greaterThanOrEqualTo(line.shippedQty)
+  })
+  const nextOrderStatus = allDispatched && allDispatchedQuantitiesInspected ? 'RECEIVED' : 'PARTIALLY_RECEIVED'
+  const now = new Date()
+  if (receipt.shipment) {
+    const priorLines = await tx.upstreamReceiptLine.findMany({
+      where: {
+        shipmentLineId: {
+          in: receipt.shipment.lines.map((line) => line.id),
+        },
+        receiptId: { not: receipt.id },
+        receipt: { status: 'POSTED' },
+      },
+      select: {
+        shipmentLineId: true,
+        arrivedQty: true,
+        shortageQty: true,
+      },
+    })
+    const processed = new Map<string, Prisma.Decimal>()
+    for (const line of priorLines) {
+      if (!line.shipmentLineId) continue
+      processed.set(line.shipmentLineId, (processed.get(line.shipmentLineId) || decimal(0)).plus(line.arrivedQty).plus(line.shortageQty))
+    }
+    for (const line of receipt.lines) {
+      if (!line.shipmentLineId) continue
+      processed.set(line.shipmentLineId, (processed.get(line.shipmentLineId) || decimal(0)).plus(line.arrivedQty).plus(line.shortageQty))
+    }
+    const shipmentReceived = receipt.shipment.lines.every((line) => (processed.get(line.id) || decimal(0)).greaterThanOrEqualTo(line.shippedQty))
+    await tx.upstreamShipment.update({
+      where: { id: receipt.shipment.id },
+      data: {
+        status: shipmentReceived ? 'RECEIVED' : 'PARTIALLY_RECEIVED',
+      },
+    })
+  }
+  await tx.upstreamPurchaseOrder.update({
+    where: { id: receipt.purchaseOrderId },
+    data: { status: nextOrderStatus, rowVersion: { increment: 1 } },
+  })
+  const posted = await tx.upstreamReceipt.update({
+    where: { id: receipt.id },
+    data: {
+      status: 'POSTED',
+      inspectorId: receipt.inspectorId || userId,
+      reviewReasons,
+      reviewerId: review ? userId : null,
+      reviewedAt: review ? now : null,
+      evidenceCompletenessSnapshot: evidenceCompleteness as Prisma.InputJsonValue,
+      postedAt: now,
+      rowVersion: { increment: 1 },
+    },
+    include: { lines: true },
+  })
+  await tx.upstreamPurchaseOrderEvent.create({
+    data: {
+      tenantId,
+      purchaseOrderId: receipt.purchaseOrderId,
+      action: 'POST_RECEIPT',
+      fromStatus: receipt.purchaseOrder.status,
+      toStatus: nextOrderStatus,
+      actorId: userId,
+      actorRole: role,
+      metadata: {
+        receiptId: receipt.id,
+        receiptNo: receipt.no,
+        claimIds,
+        reviewReasons,
+      },
+    },
+  })
+  return { pendingReview: false, receipt: posted, claimIds }
+}
+
+export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
+  app.addHook('onRequest', async (_req, reply) => {
+    if (!upstreamFeatureEnabled('UPSTREAM_PROCUREMENT_ENABLED')) return reply.status(503).send({ error: '上游采购模块尚未启用' })
+  })
+  for(const [path,kind] of [['receipts','RECEIPT'],['purchase-returns','RETURN']] as const){
+    app.patch(`/${path}/:id/note`,auth(app),async(req:any,reply:any)=>{
+      const id=idSchema.safeParse(req.params.id)
+      if(!id.success)return reply.code(400).send({error:'单据标识不正确'})
+      try{return await saveProcurementDocumentNote({tenantId:req.user.tenantId,userId:req.user.userId,kind,sourceId:id.data,body:req.body})}
+      catch(error:any){if(error.statusCode)return reply.code(error.statusCode).send({error:error.message});throw error}
+    })
+    app.put(`/${path}/:id`,auth(app),async(req:any,reply:any)=>{
+      const id=idSchema.safeParse(req.params.id)
+      if(!id.success)return reply.code(400).send({error:'单据标识不正确'})
+      try{return await saveProcurementDocument({tenantId:req.user.tenantId,userId:req.user.userId,kind,sourceId:id.data,body:req.body})}
+      catch(error:any){if(error.statusCode)return reply.code(error.statusCode).send({error:error.message});throw error}
+    })
+  }
+  registerDocumentQualityImageRoutes(app,'/receipts','RECEIPT',auth(app))
+  registerDocumentQualityImageRoutes(app,'/purchase-returns','RETURN',auth(app))
+  const progressBody=z.object({approvalVersion:z.number().int().min(1),sourceVersion:z.number().int().min(0),requestId:z.string().min(8).max(100),priceExceptionReason:z.string().trim().min(2).max(500).optional()}).strict()
+  const progressHandler=(kind:'RECEIPT'|'RETURN',fixedAction?:'submit'|'audit'|'review')=>async(req:any,reply:any)=>{
+    if(!ensureInternal(req.user.role,reply))return
+    const params=z.object({id:idSchema,action:z.enum(['save','submit','audit','unconfirm','review']).optional()}).safeParse(req.params)
+    const body=progressBody.safeParse(req.body)
+    if(!params.success||!body.success)return reply.code(400).send({error:'请使用编辑页提交完整单据版本和请求编号'})
+    const action=fixedAction||params.data.action
+    if(!action)return reply.code(400).send({error:'审批操作缺失'})
+    if(kind==='RECEIPT'&&action==='review'&&!upstreamFeatureEnabled('UPSTREAM_RECEIPT_POSTING_ENABLED'))return reply.code(503).send({error:'上游收货入账当前处于灰度关闭状态'})
+    const {tenantId,userId}=req.user
+    try{
+      return await changeProcurementApproval({tenantId,userId,kind,sourceId:params.data.id,action,...body.data,reviewData:body.data.priceExceptionReason?{priceExceptionReason:body.data.priceExceptionReason}:{}},kind==='RECEIPT'?{
+        review:async(tx,source)=>{const result=await postReceiptBusinessInTransaction(tx,tenantId,'SUPPLY_CHAIN',userId,source.id,true,body.data.priceExceptionReason?{priceExceptionReason:body.data.priceExceptionReason}:{},true);if(!result||result.pendingReview)throw Object.assign(new Error('收货尚未完成实际过账'),{statusCode:409});return result},
+      }:{submit:(tx,source)=>submitUpstreamPurchaseReturnInTransaction(tx,tenantId,source.id,userId),review:(tx,source)=>postUpstreamPurchaseReturnBusinessInTransaction(tx,tenantId,source.id,userId)})
+    }catch(error:any){if(error instanceof UpstreamReceiptReviewerConflictError)return reply.code(409).send({error:error.message});if(error.statusCode)return reply.code(error.statusCode).send({error:error.message});throw error}
+  }
+  app.post('/receipts/:id/approval/:action',auth(app),progressHandler('RECEIPT'))
+  app.post('/purchase-returns/:id/approval/:action',auth(app),progressHandler('RETURN'))
+
 
   app.get('/feature-status', auth(app), async () => upstreamFeatureSnapshot())
 
@@ -1188,349 +1519,6 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
       counts: { orders, shipments, receipts: 0, claims, statements },
     }
   })
-
-  async function postReceipt(req: any, reply: any, review: boolean) {
-    if (!upstreamFeatureEnabled('UPSTREAM_RECEIPT_POSTING_ENABLED')) {
-      return reply.status(503).send({ error: '上游收货入账当前处于灰度关闭状态' })
-    }
-    const { tenantId, role, userId } = req.user
-    if (!INTERNAL_ROLES.has(role)) return reply.status(403).send({ error: '仅供应链内部人员可确认收货' })
-    const receiptId = idSchema.safeParse(req.params.id)
-    if (!receiptId.success) return reply.status(400).send({ error: '收货单标识格式不正确' })
-    const reviewParsed = receiptReviewSchema.safeParse(req.body || {})
-    if (!reviewParsed.success) return reply.status(400).send({ error: reviewParsed.error.issues[0].message })
-    const reviewData = reviewParsed.data
-
-    try {
-      const result = await prisma.$transaction(
-        async (tx) => {
-          const preliminary = await tx.upstreamReceipt.findFirst({
-            where: { id: receiptId.data, tenantId },
-            select: { purchaseOrderId: true },
-          })
-          if (!preliminary) return null
-          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`upstream-po:${preliminary.purchaseOrderId}`}))::text AS locked`
-          const receipt = await tx.upstreamReceipt.findFirst({
-            where: {
-              id: receiptId.data,
-              tenantId,
-              status: review ? 'PENDING_REVIEW' : 'INSPECTING',
-            },
-            include: {
-              supplier: true,
-              purchaseOrder: { include: { lines: true } },
-              shipment: { include: { lines: true } },
-              lines: {
-                include: {
-                  product: { select: { category: true, evidenceRequirement: true, requiredEvidenceTypes: true } },
-                  purchaseOrderLine: true,
-                  shipmentLine: true,
-                },
-              },
-            },
-          })
-          if (!receipt) return null
-          if (review) assertDifferentReceiptReviewer(receipt.inspectorId || '', userId)
-
-          const sensitiveCategories = new Set(receipt.supplier.upstreamSensitiveCategories)
-          const { hasAboveStandardPrice, hasTemporaryPriceWithoutStandard } = upstreamReceiptPriceReviewFlags(
-            receipt.lines.map((line) => ({
-              unitPrice: line.unitPrice,
-              standardUnitPriceSnapshot: line.standardUnitPriceSnapshot,
-              isTemporaryPrice: line.purchaseOrderLine.isTemporaryPrice,
-            }))
-          )
-          const reviewInput = {
-            payableAmount: Number(receipt.payableAmount),
-            reviewAmountThreshold: Number(receipt.supplier.upstreamReceiptReviewThreshold),
-            hasOverReceipt: receipt.lines.some((line) => line.overageQty.gt(0)),
-            // 逐行判断：有标准价的行只在超标时复核；无标准价的临时价行仍按旧规则复核。
-            hasTemporaryPrice: hasTemporaryPriceWithoutStandard,
-            hasAboveStandardPrice,
-            hasSensitiveCategory: receipt.lines.some((line) => sensitiveCategories.has(line.product.category)),
-          }
-          const reviewReasons = upstreamReceiptReviewReasons(reviewInput)
-          if (review && reviewReasons.includes('ABOVE_STANDARD_PRICE') && !['ADMIN', 'SUPER_ADMIN'].includes(role)) {
-            throw Object.assign(new Error('实际采购价高于标准价，仅管理员可批准价格例外'), { statusCode: 403 })
-          }
-          if (review && reviewReasons.includes('ABOVE_STANDARD_PRICE') && !reviewData.priceExceptionReason) {
-            throw Object.assign(new Error('实际采购价高于标准价，复核人必须填写价格例外原因'), { statusCode: 400 })
-          }
-          if (!review && requiresUpstreamReceiptReview(reviewInput)) {
-            const pending = await tx.upstreamReceipt.update({
-              where: { id: receipt.id },
-              data: {
-                status: 'PENDING_REVIEW',
-                inspectorId: userId,
-                reviewReasons,
-                rowVersion: { increment: 1 },
-              },
-              include: { lines: true },
-            })
-            await tx.opLog.create({
-              data: {
-                tenantId,
-                userId,
-                role,
-                action: '上游收货提交复核',
-                entityType: 'UpstreamReceipt',
-                target: receipt.no,
-                targetId: receipt.id,
-                metadata: { reviewReasons },
-              },
-            })
-            return { pendingReview: true, receipt: pending }
-          }
-
-          const orderLineById = new Map(receipt.purchaseOrder.lines.map((line) => [line.id, line]))
-          for (const line of receipt.lines) {
-            const orderLine = orderLineById.get(line.purchaseOrderLineId)!
-            const target = orderLine.confirmedQty || orderLine.orderedQty
-            const maximum = target.times(decimal(1).plus(orderLine.overTolerancePct))
-            if (orderLine.receivedQty.plus(line.acceptedQty).greaterThan(maximum)) {
-              // 分清场景: 已收满多为「重复登记/页面没刷新」, 与真正的超上限是两回事
-              const alreadyFull = orderLine.receivedQty.greaterThanOrEqualTo(maximum)
-              throw Object.assign(
-                new Error(
-                  alreadyFull
-                    ? `${orderLine.productNameSnapshot} 已完成全部收货，该发货单可能刚被他人验收，请刷新页面核对状态`
-                    : `${orderLine.productNameSnapshot} 累计合格收货超过合同允许上限 ${maximum.toString()} ${orderLine.purchaseUnit}`
-                ),
-                { statusCode: 409 }
-              )
-            }
-          }
-
-          const ledgerLines = receipt.lines
-            .filter((line) => line.acceptedQty.gt(0))
-            .map((line) => ({
-              receiptLineId: line.id,
-              productId: line.productId,
-              productName: line.purchaseOrderLine.productNameSnapshot,
-              purchaseQuantity: line.acceptedQty,
-              purchaseUnit: line.purchaseUnit,
-              conversionFactor: line.inventoryUnitsPerPurchaseUnit,
-              inventoryQuantity: line.inventoryAcceptedQty,
-              inventoryUnit: line.inventoryUnit,
-              totalAmount: line.payableAmount,
-              batchNo: line.batchNo,
-              manufactureDate: line.manufactureDate,
-              expiryDate: line.expiryDate,
-            }))
-          const evidenceCompleteness = await evaluateReceiptEvidenceCompleteness(tx, {
-            tenantId,
-            supplierId: receipt.supplierId,
-            businessAt: receipt.arrivedAt || new Date(),
-            lines: receipt.lines,
-          })
-          if (ledgerLines.length > 0) {
-            await postUpstreamReceiptInTransaction(tx, {
-              tenantId,
-              warehouseId: receipt.warehouseId,
-              supplierId: receipt.supplierId,
-              supplierName: receipt.supplier.name,
-              receiptId: receipt.id,
-              receiptNo: receipt.no,
-              userId,
-              effectiveAt: receipt.arrivedAt || new Date(),
-              lines: ledgerLines,
-            })
-          }
-
-          for (const line of receipt.lines) {
-            await tx.upstreamPurchaseOrderLine.update({
-              where: { id: line.purchaseOrderLineId },
-              data: { receivedQty: { increment: line.acceptedQty } },
-            })
-            const orderLine = orderLineById.get(line.purchaseOrderLineId)!
-            orderLine.receivedQty = orderLine.receivedQty.plus(line.acceptedQty)
-          }
-
-          const claimCandidates = receipt.lines.flatMap((line) => {
-            const candidates: Array<{
-              type: 'SHORTAGE' | 'DAMAGE' | 'QUALITY' | 'OVERAGE'
-              qty: Prisma.Decimal
-            }> = []
-            if (line.shortageQty.gt(0)) candidates.push({ type: 'SHORTAGE', qty: line.shortageQty })
-            if (line.damagedQty.gt(0)) candidates.push({ type: 'DAMAGE', qty: line.damagedQty })
-            if (line.rejectedQty.gt(0)) candidates.push({ type: 'QUALITY', qty: line.rejectedQty })
-            if (line.overageQty.gt(0)) candidates.push({ type: 'OVERAGE', qty: line.overageQty })
-            return candidates.map((candidate) => ({ line, ...candidate }))
-          })
-          const claimIds: string[] = []
-          for (const candidate of claimCandidates) {
-            const no = await nextUpstreamDocumentNo(tx, tenantId, 'claim')
-            const amount = money(candidate.qty.times(candidate.line.unitPrice))
-            const claim = await tx.upstreamArrivalClaim.create({
-              data: {
-                tenantId,
-                no,
-                purchaseOrderId: receipt.purchaseOrderId,
-                receiptId: receipt.id,
-                supplierId: receipt.supplierId,
-                type: candidate.type,
-                claimedAmount: amount,
-                description: `${candidate.line.purchaseOrderLine.productNameSnapshot} 到货${candidate.type}`,
-                evidence: candidate.line.evidence || receipt.evidence || undefined,
-                responseDueAt: new Date(Date.now() + receipt.supplier.postReceiptClaimHours * 3_600_000),
-                createdById: userId,
-              },
-            })
-            await tx.upstreamArrivalClaimLine.create({
-              data: {
-                tenantId,
-                claimId: claim.id,
-                receiptLineId: candidate.line.id,
-                purchaseOrderLineId: candidate.line.purchaseOrderLineId,
-                productId: candidate.line.productId,
-                affectedQty: candidate.qty,
-                purchaseUnit: candidate.line.purchaseUnit,
-                unitPrice: candidate.line.unitPrice,
-                claimedAmount: amount,
-              },
-            })
-            claimIds.push(claim.id)
-          }
-
-          // 采购单是否履约完成看“已发数量是否全部完成到货核对”，而不是只看
-          // 合格入库数。破损、拒收和短缺会进入差异单，但不应让采购单永久卡在
-          // PARTIALLY_RECEIVED；只有供应商尚未发完或某一发货单尚未收完才保持部分收货。
-          const orderShipmentLines = await tx.upstreamShipmentLine.findMany({
-            where: {
-              shipment: {
-                tenantId,
-                purchaseOrderId: receipt.purchaseOrderId,
-                status: { not: 'CANCELLED' },
-              },
-            },
-            include: {
-              receiptLines: {
-                where: { receipt: { status: 'POSTED' } },
-                select: {
-                  receiptId: true,
-                  arrivedQty: true,
-                  shortageQty: true,
-                },
-              },
-            },
-          })
-          const allDispatched = receipt.purchaseOrder.lines.every((line) => line.shippedQty.greaterThanOrEqualTo(line.confirmedQty || line.orderedQty))
-          const allDispatchedQuantitiesInspected = orderShipmentLines.every((line) => {
-            const previouslyAccounted = line.receiptLines.reduce((sum, item) => sum.plus(item.arrivedQty).plus(item.shortageQty), decimal(0))
-            const currentLine = receipt.lines.find((item) => item.shipmentLineId === line.id)
-            return previouslyAccounted
-              .plus(currentLine?.arrivedQty || decimal(0))
-              .plus(currentLine?.shortageQty || decimal(0))
-              .greaterThanOrEqualTo(line.shippedQty)
-          })
-          const nextOrderStatus = allDispatched && allDispatchedQuantitiesInspected ? 'RECEIVED' : 'PARTIALLY_RECEIVED'
-          const now = new Date()
-          const priceExceptionApprover = review && reviewReasons.includes('ABOVE_STANDARD_PRICE')
-            ? await tx.user.findFirst({ where: { tenantId, id: userId, status: 'ACTIVE' }, select: { id: true, name: true, role: true } })
-            : null
-          if (review && reviewReasons.includes('ABOVE_STANDARD_PRICE') && !priceExceptionApprover) {
-            throw Object.assign(new Error('价格例外复核人账号不存在或已停用'), { statusCode: 403 })
-          }
-          if (receipt.shipment) {
-            const priorLines = await tx.upstreamReceiptLine.findMany({
-              where: {
-                shipmentLineId: {
-                  in: receipt.shipment.lines.map((line) => line.id),
-                },
-                receiptId: { not: receipt.id },
-                receipt: { status: 'POSTED' },
-              },
-              select: {
-                shipmentLineId: true,
-                arrivedQty: true,
-                shortageQty: true,
-              },
-            })
-            const processed = new Map<string, Prisma.Decimal>()
-            for (const line of priorLines) {
-              if (!line.shipmentLineId) continue
-              processed.set(line.shipmentLineId, (processed.get(line.shipmentLineId) || decimal(0)).plus(line.arrivedQty).plus(line.shortageQty))
-            }
-            for (const line of receipt.lines) {
-              if (!line.shipmentLineId) continue
-              processed.set(line.shipmentLineId, (processed.get(line.shipmentLineId) || decimal(0)).plus(line.arrivedQty).plus(line.shortageQty))
-            }
-            const shipmentReceived = receipt.shipment.lines.every((line) => (processed.get(line.id) || decimal(0)).greaterThanOrEqualTo(line.shippedQty))
-            await tx.upstreamShipment.update({
-              where: { id: receipt.shipment.id },
-              data: {
-                status: shipmentReceived ? 'RECEIVED' : 'PARTIALLY_RECEIVED',
-              },
-            })
-          }
-          await tx.upstreamPurchaseOrder.update({
-            where: { id: receipt.purchaseOrderId },
-            data: { status: nextOrderStatus, rowVersion: { increment: 1 } },
-          })
-          const posted = await tx.upstreamReceipt.update({
-            where: { id: receipt.id },
-            data: {
-              status: 'POSTED',
-              inspectorId: receipt.inspectorId || userId,
-              reviewReasons,
-              reviewerId: review ? userId : null,
-              reviewedAt: review ? now : null,
-              ...(priceExceptionApprover ? {
-                priceExceptionReason: reviewData.priceExceptionReason,
-                priceExceptionApprovedById: priceExceptionApprover.id,
-                priceExceptionApprovedByNameSnapshot: priceExceptionApprover.name,
-                priceExceptionApprovedByRoleSnapshot: priceExceptionApprover.role,
-                priceExceptionApprovedAt: now,
-              } : {}),
-              evidenceCompletenessSnapshot: evidenceCompleteness as Prisma.InputJsonValue,
-              postedAt: now,
-              rowVersion: { increment: 1 },
-            },
-            include: { lines: true },
-          })
-          await tx.upstreamPurchaseOrderEvent.create({
-            data: {
-              tenantId,
-              purchaseOrderId: receipt.purchaseOrderId,
-              action: 'POST_RECEIPT',
-              fromStatus: receipt.purchaseOrder.status,
-              toStatus: nextOrderStatus,
-              actorId: userId,
-              actorRole: role,
-              metadata: {
-                receiptId: receipt.id,
-                receiptNo: receipt.no,
-                claimIds,
-                reviewReasons,
-                ...(priceExceptionApprover ? {
-                  priceExceptionReason: reviewData.priceExceptionReason,
-                  priceExceptionApprovedById: priceExceptionApprover.id,
-                  priceExceptionApprovedByNameSnapshot: priceExceptionApprover.name,
-                  priceExceptionApprovedByRoleSnapshot: priceExceptionApprover.role,
-                } : {}),
-              },
-            },
-          })
-          return { pendingReview: false, receipt: posted, claimIds }
-        },
-        {
-          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-          timeout: 20_000,
-        }
-      )
-      if (!result) return reply.status(409).send({ error: '收货单不存在或当前状态不可确认' })
-      return result
-    } catch (error: any) {
-      if (error instanceof UpstreamReceiptReviewerConflictError) {
-        return reply.status(409).send({ error: error.message })
-      }
-      if (error?.code === 'P2034' || (error?.code === 'P2010' && String(error?.meta?.code || '') === '40001')) {
-        return reply.status(409).send({ error: '收货单正在被处理，请刷新后查看结果' })
-      }
-      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
-      throw error
-    }
-  }
 
   app.get('/contracts', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
@@ -2511,6 +2499,30 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     return result
   })
 
+  app.get('/shipments/:id/receipt-context',auth(app),async(req:any,reply:any)=>{
+    const {tenantId,userId,role}=req.user
+    if(!INTERNAL_ROLES.has(role))return reply.code(403).send({error:'仅供应链内部人员可新建收货单'})
+    const id=idSchema.safeParse(req.params.id)
+    if(!id.success)return reply.code(400).send({error:'发货单标识不正确'})
+    const shipment=await prisma.upstreamShipment.findFirst({where:{tenantId,id:id.data},include:{supplier:{select:{id:true,no:true,name:true}},warehouse:{select:{id:true,code:true,name:true}},purchaseOrder:{select:{id:true,no:true}},lines:{include:{purchaseOrderLine:{include:{product:{select:{code:true,name:true,spec:true,category:true}}}},receiptLines:{where:{receipt:{status:{not:'REVERSED'}}},select:{arrivedQty:true}}}}}})
+    if(!shipment)return reply.code(404).send({error:'发货单不存在'})
+    const existing=await prisma.upstreamReceipt.findFirst({where:{tenantId,shipmentId:shipment.id,createdById:userId,status:{in:['DRAFT','INSPECTING','PENDING_REVIEW']},OR:[{approvalStatus:null},{approvalStatus:{in:['DRAFT','PENDING','AUDITED']}}]},select:{id:true,no:true},orderBy:{createdAt:'desc'}})
+    if(existing)return {existingSourceId:existing.id,existingNo:existing.no}
+    if(!['SHIPPED','PARTIALLY_RECEIVED'].includes(shipment.status))return reply.code(409).send({error:'该发货单当前不能新建收货'})
+    if(!shipment.lines.some(line=>line.shippedQty.greaterThan(line.receiptLines.reduce((sum,row)=>sum.plus(row.arrivedQty),decimal(0)))))return reply.code(409).send({error:'该发货单数量已全部登记，请查看已有收货单，不要重复新建'})
+    return {shipmentId:shipment.id,shipmentNo:shipment.no,organizationName:(await prisma.tenant.findUnique({where:{id:tenantId},select:{name:true}}))?.name||null,supplier:shipment.supplier,warehouse:shipment.warehouse,purchaseOrder:shipment.purchaseOrder,createdAt:new Date().toISOString(),lines:shipment.lines.map(line=>{
+      const remaining=Prisma.Decimal.max(0,line.shippedQty.minus(line.receiptLines.reduce((sum,row)=>sum.plus(row.arrivedQty),decimal(0))))
+      return {id:line.id,purchaseUnit:line.purchaseOrderLine.purchaseUnit,inventoryUnit:line.purchaseOrderLine.inventoryUnit,inventoryUnitsPerPurchaseUnit:line.purchaseOrderLine.inventoryUnitsPerPurchaseUnit,arrivedQty:remaining,acceptedQty:remaining,damagedQty:0,rejectedQty:0,unitPrice:line.purchaseOrderLine.unitPrice,payableAmount:money(remaining.times(line.purchaseOrderLine.unitPrice)),batchNo:line.batchNo,manufactureDate:line.manufactureDate,expiryDate:line.expiryDate,product:line.purchaseOrderLine.product,purchaseOrderLine:{productCodeSnapshot:line.purchaseOrderLine.productCodeSnapshot,productNameSnapshot:line.purchaseOrderLine.productNameSnapshot,productSpecSnapshot:line.purchaseOrderLine.productSpecSnapshot}}
+    })}
+  })
+  app.get('/receipts/by-request/:key',auth(app),async(req:any,reply:any)=>{
+    const {tenantId,role}=req.user
+    if(!INTERNAL_ROLES.has(role))return reply.code(403).send({error:'无权核对收货创建结果'})
+    const key=z.string().min(8).max(160).safeParse(req.params.key)
+    if(!key.success)return reply.code(400).send({error:'请求编号不正确'})
+    const row=await prisma.upstreamReceipt.findFirst({where:{tenantId,idempotencyKey:key.data},select:{id:true,no:true,status:true}})
+    return {receipt:row}
+  })
   app.get('/receipts', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
     if (!INTERNAL_ROLES.has(role)) return reply.status(403).send({ error: '仅供应链内部人员可查看总仓收货单' })
@@ -2554,6 +2566,11 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
         supplierId: true,
         status: true,
         arrivedAt: true,
+        note: true,
+        warehouse: {select:{id:true,code:true,name:true}},
+        approvalStatus: true,
+        approvalVersion: true,
+        rowVersion: true,
         evidenceCompletenessSnapshot: true,
         payableAmount: true,
         reviewReasons: true,
@@ -2617,6 +2634,13 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
             rejectedQty: true,
             purchaseUnit: true,
             unitPrice: true,
+            inventoryUnit: true,
+            inventoryUnitsPerPurchaseUnit: true,
+            inventoryAcceptedQty: true,
+            batchNo: true,
+            manufactureDate: true,
+            expiryDate: true,
+            note: true,
             standardUnitPriceSnapshot: true,
             priceStandardCurrencySnapshot: true,
             priceStandardTaxInclusiveSnapshot: true,
@@ -2637,7 +2661,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
                 productSpecSnapshot: true,
               },
             },
-            product: { select: { evidenceRequirement: true, requiredEvidenceTypes: true } },
+            product: { select: { code:true,name:true,spec:true,category:true,evidenceRequirement: true, requiredEvidenceTypes: true } },
           },
           orderBy: { createdAt: 'asc' },
         },
@@ -2652,7 +2676,9 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     })
     return {
       ...receipt,
-      canApprovePriceException: ['ADMIN', 'SUPER_ADMIN'].includes(role),
+      ...procurementApprovalView('RECEIPT', receipt),
+      organizationName: (await prisma.tenant.findUnique({where:{id:tenantId},select:{name:true}}))?.name || null,
+      canApprovePriceException: false,
       evidenceCompleteness,
       lines: receipt.lines.map((line) => ({
         ...line,
@@ -2757,24 +2783,22 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
           for (const line of priorReceiptLines) {
             if (!line.shipmentLineId) continue
             priorArrived.set(line.shipmentLineId, (priorArrived.get(line.shipmentLineId) || decimal(0)).plus(line.arrivedQty))
-            const shipmentLine = shipmentLineById.get(line.shipmentLineId)
-            if (shipmentLine && line.receipt.status !== 'POSTED') {
-              priorAcceptedByOrderLine.set(shipmentLine.purchaseOrderLineId, (priorAcceptedByOrderLine.get(shipmentLine.purchaseOrderLineId) || decimal(0)).plus(line.acceptedQty))
-            }
           }
+          const pendingOrderLines=await tx.upstreamReceiptLine.findMany({where:{tenantId,purchaseOrderLineId:{in:d.lines.map(line=>shipmentLineById.get(line.shipmentLineId)!.purchaseOrderLineId)},receipt:{status:{notIn:['POSTED','REVERSED']}}},select:{purchaseOrderLineId:true,acceptedQty:true}})
+          for(const line of pendingOrderLines)priorAcceptedByOrderLine.set(line.purchaseOrderLineId,(priorAcceptedByOrderLine.get(line.purchaseOrderLineId)||decimal(0)).plus(line.acceptedQty))
 
           let payableAmount = decimal(0)
           const receiptLines = d.lines.map((input) => {
             const shipmentLine = shipmentLineById.get(input.shipmentLineId)!
             const orderLine = orderLineById.get(shipmentLine.purchaseOrderLineId)!
-            if (orderLine.qualityStandardId && !input.qualityResult) {
-              throw Object.assign(new Error(`${orderLine.productNameSnapshot} 已配置质量标准，必须填写验收结果`), { statusCode: 400 })
-            }
             if (!orderLine.qualityStandardId && (input.qualityResult || input.qualityEvidence?.length || input.qualityDisposition?.trim())) {
               throw Object.assign(new Error(`${orderLine.productNameSnapshot} 未配置质量标准，不能提交质量验收结果`), { statusCode: 400 })
             }
-            const arrived = decimal(input.arrivedQty)
-            const accepted = decimal(input.acceptedQty)
+            const arrived = decimal(input.arrivedQty).toDecimalPlaces(6)
+            const accepted = decimal(input.acceptedQty).toDecimalPlaces(6)
+            const damaged=decimal(input.damagedQty).toDecimalPlaces(6),rejected=decimal(input.rejectedQty).toDecimalPlaces(6)
+            if(accepted.plus(damaged).plus(rejected).gt(arrived))throw Object.assign(new Error('收货、破损和拒收数量归一后不能超过实到数量'),{statusCode:400})
+            if(accepted.gt(0)&&accepted.times(orderLine.inventoryUnitsPerPurchaseUnit).toDecimalPlaces(6).isZero())throw Object.assign(new Error('换算后的库存数量小于最小精度，请核对数量和换算'),{statusCode:400})
             const previousArrived = priorArrived.get(shipmentLine.id) || decimal(0)
             const shortage = d.finalForShipment ? Prisma.Decimal.max(decimal(0), shipmentLine.shippedQty.minus(previousArrived).minus(arrived)) : decimal(0)
             const overage = Prisma.Decimal.max(decimal(0), previousArrived.plus(arrived).minus(shipmentLine.shippedQty))
@@ -2784,7 +2808,8 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
             if (orderAccepted.greaterThan(maximum)) {
               throw Object.assign(new Error(`${orderLine.productNameSnapshot} 合格验收数量超过合同允许上限 ${maximum.toString()} ${orderLine.purchaseUnit}`), { statusCode: 400 })
             }
-            const linePayable = money(accepted.times(orderLine.unitPrice))
+            const actualUnitPrice=(input.unitPrice===undefined?orderLine.unitPrice:decimal(input.unitPrice)).toDecimalPlaces(6)
+            const linePayable = money(accepted.times(actualUnitPrice))
             payableAmount = payableAmount.plus(linePayable)
             const manufactureDate = input.manufactureDate || shipmentLine.manufactureDate
             const expiryDate = input.expiryDate || shipmentLine.expiryDate
@@ -2796,15 +2821,15 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
               shippedQty: shipmentLine.shippedQty,
               arrivedQty: arrived,
               acceptedQty: accepted,
-              damagedQty: input.damagedQty,
-              rejectedQty: input.rejectedQty,
+              damagedQty: damaged,
+              rejectedQty: rejected,
               shortageQty: shortage,
               overageQty: overage,
               purchaseUnit: orderLine.purchaseUnit,
               inventoryUnit: orderLine.inventoryUnit,
               inventoryUnitsPerPurchaseUnit: orderLine.inventoryUnitsPerPurchaseUnit,
               inventoryAcceptedQty: accepted.times(orderLine.inventoryUnitsPerPurchaseUnit).toDecimalPlaces(6),
-              unitPrice: orderLine.unitPrice,
+              unitPrice: actualUnitPrice,
               standardUnitPriceSnapshot: orderLine.standardUnitPriceSnapshot,
               priceStandardCurrencySnapshot: orderLine.priceStandardCurrencySnapshot,
               priceStandardTaxInclusiveSnapshot: orderLine.priceStandardTaxInclusiveSnapshot,
@@ -2827,6 +2852,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
           const no = await nextUpstreamDocumentNo(tx, tenantId, 'receipt')
           const created = await tx.upstreamReceipt.create({
             data: {
+              approvalStatus:'DRAFT',
               tenantId,
               no,
               purchaseOrderId: shipment.purchaseOrderId,
@@ -2886,7 +2912,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     const receiptId = idSchema.safeParse(req.params.id)
     if (!receiptId.success) return reply.status(400).send({ error: '收货单标识格式不正确' })
     const changed = await prisma.upstreamReceipt.updateMany({
-      where: { id: receiptId.data, tenantId, status: 'DRAFT' },
+      where: { id: receiptId.data, tenantId, status: 'DRAFT', OR: [{ approvalStatus: null }, { approvalStatus: { in: ['DRAFT', 'PENDING'] } }] },
       data: {
         status: 'INSPECTING',
         inspectionStartedAt: new Date(),
@@ -2901,8 +2927,8 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     })
   })
 
-  app.post('/receipts/:id/confirm', auth(app), (req: any, reply: any) => postReceipt(req, reply, false))
-  app.post('/receipts/:id/review-and-post', auth(app), (req: any, reply: any) => postReceipt(req, reply, true))
+  app.post('/receipts/:id/confirm', auth(app), progressHandler('RECEIPT','audit'))
+  app.post('/receipts/:id/review-and-post', auth(app), progressHandler('RECEIPT','review'))
 
   app.post('/receipts/:id/reverse', auth(app), async (req: any, reply: any) => {
     if (!upstreamFeatureEnabled('UPSTREAM_RECEIPT_POSTING_ENABLED')) {
@@ -3085,6 +3111,32 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     }
   })
 
+  app.get('/purchase-returns/create-context',auth(app),async(req:any,reply:any)=>{
+    const {tenantId,userId,role}=req.user
+    if(!ensureInternal(role,reply))return
+    const parsed=z.object({supplierId:idSchema,warehouseId:idSchema,requestKey:z.string().min(8).max(160).optional(),cursor:idSchema.optional(),sourceIds:z.string().max(25000).optional()}).safeParse(req.query)
+    if(!parsed.success)return reply.code(400).send({error:'请选择供应商和退货仓库'})
+    const {supplierId,warehouseId,requestKey,cursor,sourceIds}=parsed.data
+    const [supplier,warehouse,tenant]=await Promise.all([
+      prisma.supplier.findFirst({where:{id:supplierId,tenantId,status:'ENABLED',businessScopes:{has:'WAREHOUSE_UPSTREAM'}},select:{id:true,no:true,name:true}}),
+      prisma.warehouse.findFirst({where:{id:warehouseId,tenantId,isActive:true},select:{id:true,code:true,name:true}}),
+      prisma.tenant.findUnique({where:{id:tenantId},select:{name:true}}),
+    ])
+    if(!supplier||!warehouse)return reply.code(404).send({error:'供应商或退货仓库不可用'})
+    if(requestKey){
+      const existing=await prisma.upstreamPurchaseReturn.findFirst({where:{tenantId,createdById:userId,supplierId,warehouseId,idempotencyKey:requestKey,status:{in:['DRAFT','PENDING_APPROVAL']},OR:[{approvalStatus:null},{approvalStatus:{in:['DRAFT','PENDING','AUDITED']}}]},select:{id:true,no:true}})
+      if(existing)return {existingSourceId:existing.id,existingNo:existing.no}
+    }
+    const requestedIds=sourceIds?sourceIds.split(','):[]
+    if(requestedIds.length>500||requestedIds.some(id=>!idSchema.safeParse(id).success))return reply.code(400).send({error:'恢复来源行标识不正确'})
+    const page=await listReturnableUpstreamReceiptLines({tenantId,supplierId,warehouseId,take:200,cursor,includeUnavailable:true})
+    const recovered=requestedIds.length?await listReturnableUpstreamReceiptLines({tenantId,supplierId,warehouseId,take:500,sourceIds:requestedIds,includeUnavailable:true}):[]
+    const rows=new Map(page.filter(line=>line.returnableQuantity.gt(0)).map(line=>[line.id,line]))
+    for(const line of recovered)rows.set(line.id,line)
+    const lines=[...rows.values()]
+    return {nextCursor:page.length===200?page[page.length-1].id:null,supplier,warehouse,organizationName:tenant?.name||null,createdAt:new Date().toISOString(),lines:lines.map(line=>({id:line.id,purchaseUnit:line.purchaseUnit,inventoryUnit:line.inventoryUnit,inventoryUnitsPerPurchaseUnit:line.inventoryUnitsPerPurchaseUnit,returnableQuantity:line.returnableQuantity,unavailableReason:line.unavailableReason,purchaseQuantity:0,settlementUnitPrice:line.unitPrice,settlementAmount:0,product:line.product,receiptLine:{receipt:{no:line.receipt.no}}}))}
+  })
+
   app.get('/purchase-returns/returnable-lines', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
     if (!ensureInternal(role, reply)) return
@@ -3126,21 +3178,9 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     return createUpstreamPurchaseReturn({ tenantId, userId, ...parsed.data })
   })
 
-  app.post('/purchase-returns/:id/submit', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role, userId } = req.user
-    if (!ensureInternal(role, reply)) return
-    const id = idSchema.safeParse(req.params.id)
-    if (!id.success) return reply.status(400).send({ error: '采购退货单标识格式不正确' })
-    return submitUpstreamPurchaseReturn(tenantId, id.data, userId)
-  })
+  app.post('/purchase-returns/:id/submit',auth(app),progressHandler('RETURN','submit'))
 
-  app.post('/purchase-returns/:id/approve', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role, userId } = req.user
-    if (!APPROVER_ROLES.has(role)) return reply.status(403).send({ error: '仅供应链审核人员可审批采购退货' })
-    const id = idSchema.safeParse(req.params.id)
-    if (!id.success) return reply.status(400).send({ error: '采购退货单标识格式不正确' })
-    return approveUpstreamPurchaseReturn(tenantId, id.data, userId)
-  })
+  app.post('/purchase-returns/:id/approve',auth(app),progressHandler('RETURN','audit'))
 
   app.post('/purchase-returns/:id/reject', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, userId } = req.user

@@ -3,19 +3,19 @@ import Link from 'next/link'
 import { FilterDateRange } from '@/components/v2/filter-date-range'
 import filterStyles from '@/components/v2/scm-filter-bar.module.css'
 import { Suspense, useEffect, useRef, useState } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
 import styles from '../reports/reports.module.css'
 import local from './preview.module.css'
+import {ManagementTabs} from '@/components/v2/management-tabs'
 import { apiFetch } from '@/lib/v2-auth'
 import { financeReports, defaultFinanceFilters, type FinanceRow, type FinanceColumn, type FinanceFilters } from './report-definitions'
 type Result = { id: string; columns: FinanceColumn[]; rows: FinanceRow[]; total: number; page: number; note: string; warnings: string[]; options: Record<string, string[]> }
 
 const href = (id: string) => `/v2/supply-chain/finance-reports?report=${id}`
 function FinanceReports() {
-  const router = useRouter(); const search = useSearchParams()
+  const search = useSearchParams()
   const id = search.get('report') || 'group-profit'
   const report = financeReports.find(r => r.id === id)
-  const [opened, setOpened] = useState<string[]>([])
   const [filters, setFilters] = useState(defaultFinanceFilters)
   const [applied, setApplied] = useState(defaultFinanceFilters)
   const [advanced, setAdvanced] = useState(false)
@@ -27,7 +27,6 @@ function FinanceReports() {
   const [focused, setFocused] = useState(false)
   const [notice, setNotice] = useState(''); const [exporting, setExporting] = useState(false)
   useEffect(() => {
-    if (financeReports.some(r => r.id === id)) setOpened(old => old.includes(id) ? old : [...old, id])
     setFilters(defaultFinanceFilters()); setApplied(defaultFinanceFilters()); setRanges({}); setAppliedRanges({}); setPage(1); setSort(''); setHidden([]); setAdvanced(false); setNotice(''); setColumnDialog(false)
   }, [id])
   useEffect(() => {
@@ -55,10 +54,6 @@ function FinanceReports() {
   const numericColumns = (result?.columns || []).filter(c => c.kind && c.key !== 'seq') as FinanceColumn[]
   const totalPages = Math.max(1, Math.ceil(total / size)); const currentPage = result?.page || 1
   const view = rows
-  function closeTab(key: string) {
-    const index = opened.indexOf(key); const rest = opened.filter(r => r !== key); setOpened(rest)
-    if (key === id) router.push(href(rest[index] || rest[index - 1] || 'none'))
-  }
   function apply() {
     if (filters.start && filters.end && filters.start > filters.end) return setNotice('开始日期不能晚于结束日期')
     if (Object.values(ranges).some(r => r.min != null && r.max != null && r.min > r.max)) return setNotice('最小值不能大于最大值')
@@ -83,7 +78,7 @@ function FinanceReports() {
   return <div className={`${styles.reports} ${local.preview} ${focused ? styles.focused : ''}`}>
     <header className={styles.top}><span>核算与分析 / <strong>财务报表</strong></span><span className={local.badge}>业务数据 · 总部配送毛利</span></header>
     <div className={filterStyles.mobileMenu}><details><summary>财务报表菜单</summary><nav aria-label="财务报表功能菜单">{financeReports.map(r => <Link key={r.id} href={`/v2/supply-chain/finance-reports?report=${r.id}`}>{r.title}</Link>)}</nav></details></div>
-    <nav className={styles.tabs} aria-label="已打开财务报表">{opened.map(key => <div key={key} className={key === id ? styles.active : ''}><Link href={href(key)}>{financeReports.find(r => r.id === key)?.title}</Link><button aria-label={`关闭${financeReports.find(r => r.id === key)?.title}`} onClick={() => closeTab(key)}>×</button></div>)}</nav>
+    <ManagementTabs activeId={`finance:${id}`} />
     <section className={styles.content}>
       <div className={styles.heading}><h1>{report?.title || '暂无打开的财务报表'}</h1><div className={styles.actions}><button onClick={() => setFocused(v => !v)}>{focused ? '退出专注' : '专注表格'}</button><button disabled={!report || loading || !result} onClick={() => setColumnDialog(true)}>表格设置</button></div></div>
       {!report ? <p>从“财务报表”菜单选择一张表，继续查看。</p> : <>

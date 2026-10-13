@@ -98,11 +98,11 @@ export function ConfirmSheet(props: ConfirmSheetState & { close: () => void }) {
       role="dialog"
       aria-modal="true"
       aria-label={title}
-      className={`fixed inset-0 ${layerClassName} flex items-end justify-center bg-ink/40`}
+      className={`fixed inset-0 ${layerClassName} flex items-center justify-center bg-ink/40 p-4`}
       onClick={handleCancel}
     >
       <div
-        className="bg-bg-card w-full max-w-md rounded-t-2xl p-5 pb-7"
+        className="bg-bg-card w-full max-w-md max-h-[85dvh] overflow-y-auto rounded-2xl p-5 pb-7"
         style={{ paddingBottom: 'calc(28px + env(safe-area-inset-bottom))' }}
         onClick={(e) => e.stopPropagation()}
       >

@@ -446,7 +446,7 @@ export function buildProductExportCsv(rows: ExportableProduct[]): string {
         row.inventoryUnitsPerPurchaseUnit ?? factorFallback,
         row.inventoryUnitsPerOrderUnit ?? factorFallback,
         row.inventoryUnitsPerCostUnit ?? factorFallback,
-        Number(row.price).toFixed(2),
+        Number(row.price).toFixed(6),
         orderUnitPrice?.toFixed(2) || '',
         conversionStatus,
         formatProductStatus(row.status),

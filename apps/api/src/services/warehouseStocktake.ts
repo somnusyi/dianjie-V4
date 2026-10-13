@@ -8,8 +8,8 @@ const fail = (message: string, statusCode = 409) => Object.assign(new Error(mess
 const dec = (value: Prisma.Decimal | string | number) => new Prisma.Decimal(value)
 
 export const WAREHOUSE_STOCKTAKE_WRITE_ROLES = ['SUPPLY_CHAIN', 'SUPER_ADMIN', 'ADMIN', 'PURCHASER'] as const
-export const WAREHOUSE_STOCKTAKE_AUDIT_ROLES = ['SUPPLY_CHAIN', 'SUPER_ADMIN', 'ADMIN', 'FINANCE'] as const
-export const WAREHOUSE_STOCKTAKE_READ_ROLES = [...new Set([...WAREHOUSE_STOCKTAKE_WRITE_ROLES, ...WAREHOUSE_STOCKTAKE_AUDIT_ROLES])]
+export const WAREHOUSE_STOCKTAKE_AUDIT_ROLES = ['SUPPLY_CHAIN', 'SUPER_ADMIN', 'ADMIN'] as const
+export const WAREHOUSE_STOCKTAKE_READ_ROLES = [...new Set([...WAREHOUSE_STOCKTAKE_WRITE_ROLES, ...WAREHOUSE_STOCKTAKE_AUDIT_ROLES, 'FINANCE'])]
 
 const detailInclude = {
   warehouse: { select: { id: true, code: true, name: true } },
@@ -92,8 +92,8 @@ export async function warehouseStocktakeOptions(tenantId: string) {
   const [warehouses, products, users] = await Promise.all([
     prisma.warehouse.findMany({ where: { tenantId, isActive: true }, select: { id: true, code: true, name: true }, orderBy: { name: 'asc' } }),
     prisma.product.findMany({
-      where: { tenantId, status: 'ENABLED', unitConversionStatus: 'VERIFIED' },
-      select: { id: true, code: true, name: true, spec: true, category: true, unit: true, inventoryUnit: true },
+      where: { tenantId, status: 'ENABLED' },
+      select: { id: true, code: true, name: true, spec: true, category: true, unit: true, inventoryUnit: true, unitConversionStatus: true },
       orderBy: [{ category: 'asc' }, { code: 'asc' }],
     }),
     prisma.user.findMany({
@@ -111,6 +111,7 @@ type CreateInput = {
   requestKey: string
   warehouseId: string
   countDate: string
+  countScope?: 'ALL' | 'SELECTED'
   note?: string | null
   sections: Array<{ name: string; assignedToId: string; productIds: string[] }>
 }
@@ -131,17 +132,28 @@ export async function createWarehouseStocktake(input: CreateInput) {
       const sameRequest = replay.warehouseId === input.warehouseId
         && replay.countDate.toISOString().slice(0, 10) === input.countDate
         && (replay.note || null) === (input.note?.trim() || null)
+        && (!input.countScope || replay.countScope === input.countScope)
         && JSON.stringify(actual) === JSON.stringify(expected)
       if (!sameRequest) throw fail('同一请求键不能用于不同的盘点单内容', 409)
       return { replayed: true, stocktake: replay }
     }
     const warehouse = await tx.warehouse.findFirst({ where: { tenantId: input.tenantId, id: input.warehouseId, isActive: true } })
     if (!warehouse) throw fail('总仓不存在或不属于当前租户', 404)
+    const active = await tx.warehouseStocktake.findFirst({
+      where: { tenantId: input.tenantId, warehouseId: input.warehouseId, status: { in: ['DRAFT', 'COUNTING', 'REVIEWING'] } },
+      select: { id: true },
+    })
+    if (active) throw fail('当前仓库已有活动盘点单，请先完成或取消', 409)
     if (!input.sections.length) throw fail('至少需要一个盘点分区', 400)
+    if (input.sections.some(section => !section.productIds.length)) throw fail('每个分区至少分配一个商品', 400)
     const names = input.sections.map(section => section.name.trim())
     if (names.some(name => !name) || new Set(names).size !== names.length) throw fail('分区名称不能为空或重复', 400)
     const productIds = input.sections.flatMap(section => section.productIds)
     if (!productIds.length || new Set(productIds).size !== productIds.length) throw fail('盘点商品不能为空或跨分区重复', 400)
+    if (input.countScope === 'ALL') {
+      const allProducts = await tx.product.findMany({ where: { tenantId: input.tenantId, status: 'ENABLED' }, select: { id: true } })
+      if (allProducts.length !== productIds.length || allProducts.some(product => !productIds.includes(product.id))) throw fail('全部盘点必须完整分配全部启用商品，请刷新商品范围后重试', 400)
+    }
     const assigneeIds = [...new Set(input.sections.map(section => section.assignedToId))]
     const users = await tx.user.findMany({
       where: { tenantId: input.tenantId, id: { in: assigneeIds }, status: 'ACTIVE', role: { in: [...WAREHOUSE_STOCKTAKE_WRITE_ROLES] } },
@@ -149,15 +161,16 @@ export async function createWarehouseStocktake(input: CreateInput) {
     })
     if (users.length !== assigneeIds.length) throw fail('分区负责人必须是本租户启用中的供应链写入人员', 400)
     const products = await tx.product.findMany({
-      where: { tenantId: input.tenantId, id: { in: productIds }, status: 'ENABLED', unitConversionStatus: 'VERIFIED' },
+      where: { tenantId: input.tenantId, id: { in: productIds }, status: 'ENABLED' },
       select: {
         id: true, code: true, name: true, spec: true, category: true, unit: true, purchaseUnit: true, orderUnit: true,
         costUnit: true, inventoryUnit: true, inventoryUnitsPerPurchaseUnit: true, inventoryUnitsPerOrderUnit: true,
         inventoryUnitsPerCostUnit: true, unitConversionStatus: true,
       },
     })
-    if (products.length !== productIds.length) throw fail('商品不存在、已停用或四单位换算未核验', 400)
+    if (products.length !== productIds.length) throw fail('商品不存在或已停用', 400)
     for (const product of products) {
+      if (product.unitConversionStatus !== 'VERIFIED') continue
       const unit = resolveProductFourUnits(product).inventoryUnit
       await tx.warehouseLedgerBalance.upsert({
         where: { tenantId_warehouseId_productId: { tenantId: input.tenantId, warehouseId: input.warehouseId, productId: product.id } },
@@ -177,6 +190,7 @@ export async function createWarehouseStocktake(input: CreateInput) {
         no: `WST-${input.countDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`,
         countDate: new Date(`${input.countDate}T00:00:00.000Z`),
         requestKey: input.requestKey,
+        countScope: input.countScope || 'SELECTED',
         note: input.note?.trim() || null,
         createdById: input.userId,
         itemCount: productIds.length,
@@ -196,7 +210,8 @@ export async function createWarehouseStocktake(input: CreateInput) {
       })
       for (const productId of sectionInput.productIds) {
         const product = productsById.get(productId)!
-        const balance = balancesByProduct.get(productId)!
+        const balance = balancesByProduct.get(productId)
+        const unitPending = product.unitConversionStatus !== 'VERIFIED'
         await tx.warehouseStocktakeItem.create({
           data: {
             tenantId: input.tenantId,
@@ -207,11 +222,12 @@ export async function createWarehouseStocktake(input: CreateInput) {
             productNameSnapshot: product.name,
             productSpecSnapshot: product.spec,
             categorySnapshot: product.category,
-            inventoryUnit: balance.inventoryUnit,
-            bookQuantity: balance.physicalQty,
-            bookValue: balance.inventoryValue,
-            averageUnitCost: balance.averageUnitCost,
-            bookBalanceVersion: balance.rowVersion,
+            inventoryUnit: balance?.inventoryUnit || product.inventoryUnit || product.unit || '待核验',
+            unitPending,
+            bookQuantity: balance?.physicalQty || ZERO,
+            bookValue: balance?.inventoryValue || ZERO,
+            averageUnitCost: balance?.averageUnitCost || ZERO,
+            bookBalanceVersion: balance?.rowVersion || 0,
             sortOrder: sortOrder++,
           },
         })
@@ -242,6 +258,7 @@ export async function saveWarehouseStocktakeSection(input: {
     for (const entry of input.items) {
       const item = section.items.find(row => row.id === entry.itemId)
       if (!item) throw fail('录入商品不属于当前分区', 400)
+      if (item.unitPending) throw fail(`「${item.productNameSnapshot}」换算待核验，请先补齐并刷新换算`, 400)
       const countedQuantity = dec(entry.countedQuantity).toDecimalPlaces(6)
       if (!countedQuantity.isFinite() || countedQuantity.lt(0)) throw fail('实盘数量不能为负数', 400)
       const requestedCost = entry.countedUnitCost == null ? item.averageUnitCost : dec(entry.countedUnitCost).toDecimalPlaces(6)
@@ -266,7 +283,12 @@ export async function saveWarehouseStocktakeSection(input: {
     }
     const allEntries = await tx.warehouseStocktakeItem.findMany({ where: { tenantId: input.tenantId, stocktakeId: stocktake.id } })
     const sectionItems = allEntries.filter(item => item.sectionId === section.id)
+    if (input.submit && sectionItems.some(item => item.unitPending)) throw fail('分区存在待核验换算，不能提交正式盘点', 400)
     if (input.submit && sectionItems.some(item => item.countedQuantity == null)) throw fail('请完整录入分区内全部商品后再提交', 400)
+    if (input.submit) {
+      const missingReason = sectionItems.find(item => !dec(item.differenceQuantity || 0).isZero() && !item.reason?.trim())
+      if (missingReason) throw fail(`「${missingReason.productNameSnapshot}」存在差异，请填写盘盈/盘亏原因后再提交分区`, 400)
+    }
     const changed = await tx.warehouseStocktakeSection.updateMany({
       where: { id: section.id, tenantId: input.tenantId, rowVersion: input.rowVersion, status: 'OPEN' },
       data: { rowVersion: { increment: 1 }, status: input.submit ? 'SUBMITTED' : 'OPEN', submittedAt: input.submit ? new Date() : null },
@@ -286,6 +308,33 @@ export async function saveWarehouseStocktakeSection(input: {
   })
 }
 
+export async function refreshWarehouseStocktakeUnits(input: { tenantId: string; id: string; rowVersion: number }) {
+  return serializable(async tx => {
+    const stocktake = await lockStocktake(tx, input.tenantId, input.id)
+    if (!['DRAFT', 'COUNTING'].includes(stocktake.status)) throw fail('仅录入中的盘点草稿可以刷新换算', 409)
+    const pending = stocktake.sections.flatMap(section => section.items).filter(item => item.unitPending)
+    if (!pending.length) return stocktake
+    if (stocktake.rowVersion !== input.rowVersion) throw fail('盘点已更新，请刷新后重试', 409)
+    for (const item of pending) {
+      const product = await tx.product.findFirst({ where: { tenantId: input.tenantId, id: item.productId, status: 'ENABLED', unitConversionStatus: 'VERIFIED' } })
+      if (!product) throw fail(`「${item.productNameSnapshot}」尚未补齐并核验换算`, 400)
+      const inventoryUnit = resolveProductFourUnits(product).inventoryUnit
+      const balance = await tx.warehouseLedgerBalance.upsert({
+        where: { tenantId_warehouseId_productId: { tenantId: input.tenantId, warehouseId: stocktake.warehouseId, productId: item.productId } },
+        create: { tenantId: input.tenantId, warehouseId: stocktake.warehouseId, productId: item.productId, inventoryUnit }, update: {},
+      })
+      if (balance.inventoryUnit !== inventoryUnit) throw fail(`「${item.productNameSnapshot}」库存单位与现有台账不同，不能自动改写`, 409)
+      await tx.warehouseStocktakeItem.update({ where: { id: item.id }, data: {
+        unitPending: false, inventoryUnit, bookQuantity: balance.physicalQty, bookValue: balance.inventoryValue,
+        averageUnitCost: balance.averageUnitCost, bookBalanceVersion: balance.rowVersion,
+      } })
+    }
+    const items = await tx.warehouseStocktakeItem.findMany({ where: { tenantId: input.tenantId, stocktakeId: input.id } })
+    await tx.warehouseStocktake.update({ where: { id: input.id }, data: { rowVersion: { increment: 1 }, totalBookValue: items.reduce((sum, item) => sum.plus(item.bookValue), ZERO) } })
+    return tx.warehouseStocktake.findFirstOrThrow({ where: { id: input.id }, include: detailInclude })
+  })
+}
+
 export async function submitWarehouseStocktake(input: { tenantId: string; userId: string; id: string; rowVersion: number }) {
   return serializable(async tx => {
     const stocktake = await lockStocktake(tx, input.tenantId, input.id)
@@ -294,6 +343,7 @@ export async function submitWarehouseStocktake(input: { tenantId: string; userId
     if (stocktake.rowVersion !== input.rowVersion) throw fail('盘点单已更新，请刷新后重试', 409)
     if (stocktake.sections.some(section => section.status !== 'SUBMITTED')) throw fail('请先完成并提交所有盘点分区', 400)
     const items = stocktake.sections.flatMap(section => section.items)
+    if (items.some(item => item.unitPending)) throw fail('存在待核验换算，不能提交正式盘点', 400)
     if (!items.length || items.some(item => item.countedQuantity == null)) throw fail('实盘数据不完整', 400)
     const missingReason = items.find(item => !dec(item.differenceQuantity || 0).isZero() && !item.reason?.trim())
     if (missingReason) throw fail(`「${missingReason.productNameSnapshot}」存在差异，请填写盘盈/盘亏原因`, 400)
@@ -343,6 +393,7 @@ export async function approveWarehouseStocktake(input: { tenantId: string; userI
     if (stocktake.status === 'CONFIRMED') return { replayed: true, stocktake }
     if (stocktake.status !== 'REVIEWING') throw fail('只有待审核盘点单可以审核', 409)
     const items = stocktake.sections.flatMap(section => section.items).sort((a, b) => a.productId.localeCompare(b.productId))
+    if (items.some(item => item.unitPending)) throw fail('存在待核验换算，不能审核盘点', 400)
     const productIds = items.map(item => item.productId)
     const balances = productIds.length ? await tx.$queryRaw<Array<{
       productId: string; physicalQty: Prisma.Decimal; reservedQty: Prisma.Decimal; inventoryValue: Prisma.Decimal; rowVersion: number

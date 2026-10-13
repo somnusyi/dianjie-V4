@@ -30,17 +30,13 @@ afterEach(() => {
 })
 
 describe('库存呆滞品查询阈值', () => {
-  it('默认留空使用逐商品规则，只在用户输入后临时覆盖', async () => {
+  it('显示统一30天且不能输入临时阈值，查询不携带覆盖参数', async () => {
     mock.api.mockResolvedValue(response)
     await render()
+    expect(container.textContent).toContain('统一30天')
+    expect(container.querySelector('input[type="number"]')).toBeNull()
     expect(mock.api.mock.calls[0][0]).not.toContain('stagnantDays=')
-    const input = [...container.querySelectorAll('input')].find(node => node.type === 'number' && node.closest('label')?.textContent?.includes('本次查询阈值'))!
-    await act(async () => {
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
-      setter.call(input, '45')
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-      container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
-    })
-    expect(mock.api.mock.calls.at(-1)?.[0]).toContain('stagnantDays=45')
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(mock.api.mock.calls.at(-1)?.[0]).not.toContain('stagnantDays=')
   })
 })

@@ -1,5 +1,7 @@
 'use client'
+import { WarehouseDocumentEditor, type WarehouseDocumentAction } from './warehouse-document-editor'
 import { ResponsiveDataTable } from '@/components/v2/responsive-data-table'
+import { DocumentQualityImageButton } from '@/components/v2/document-quality-image'
 
 import { useCallback, useEffect, useState } from 'react'
 import { DateRangeCalendar } from '@/components/v2/date-range-calendar'
@@ -51,7 +53,7 @@ type DocLine = {
 
 type DocLog = {
   id: string
-  action: 'CREATE' | 'CONFIRM' | 'UNCONFIRM' | 'EDIT'
+  action: 'CREATE' | 'CONFIRM' | 'UNCONFIRM' | 'EDIT' | 'REVIEW' | 'UNREVIEW'
   actorName: string | null
   reason: string | null
   detail: any
@@ -63,10 +65,11 @@ type DocDetail = DocRow & { lines: DocLine[]; logs: DocLog[]; attachments: DocAt
 type SupplierOption = { id: string; name: string; no?: string }
 
 // ── 权限：与后端 warehouseDocs 路由一致 ────────────────
-const AUDIT_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'FINANCE', 'SUPPLY_CHAIN'])
 const EDIT_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'PURCHASER', 'SUPPLY_CHAIN'])
 
 const LOG_ACTION_LABEL: Record<DocLog['action'], string> = {
+  REVIEW: '复审',
+  UNREVIEW: '取消复审',
   CREATE: '制单',
   CONFIRM: '审核',
   UNCONFIRM: '反审核',
@@ -88,7 +91,7 @@ function fmtTime(value: string | null | undefined) {
 
 function fmtDay(value: string | null | undefined) {
   if (!value) return '—'
-  return new Date(value).toLocaleDateString('zh-CN')
+  return new Date(value).toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' })
 }
 
 function downloadCsv(filename: string, rows: Array<Array<string | number | null | undefined>>) {
@@ -109,13 +112,14 @@ function StatusBadge({ status }: { status: DocRow['status'] }) {
   if (status === 'CONFIRMED') {
     return <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-caption text-emerald-700">已审核</span>
   }
-  return <span className="rounded-full bg-amber-50 px-2 py-0.5 text-caption text-amber-fg">未审核</span>
+  return <span className="rounded-full bg-amber-50 px-2 py-0.5 text-caption text-amber-fg">待审核</span>
 }
 
 // ── 主页面 ────────────────────────────────────────────
 export default function WarehouseDocsPage() {
   const user = getUser()
-  const canAudit = AUDIT_ROLES.has(user?.role || '')
+  const canAudit = user?.role === 'SUPPLY_CHAIN'
+  const canReview = user?.role === 'SUPPLY_CHAIN'
   const canEdit = EDIT_ROLES.has(user?.role || '')
 
   const [type, setType] = useState<'MANUAL_INBOUND' | 'MANUAL_OUTBOUND'>('MANUAL_INBOUND')
@@ -136,6 +140,9 @@ export default function WarehouseDocsPage() {
   const [notice, setNotice] = useState<string | null>(null)
 
   const [detailId, setDetailId] = useState<string | null>(null)
+  const [detailAction, setDetailAction] = useState<WarehouseDocumentAction | undefined>()
+  const [detailAttempt, setDetailAttempt] = useState(0)
+  function openDoc(id: string, action?: WarehouseDocumentAction) { setDetailAttempt(n => n + 1); setDetailAction(action); setDetailId(id) }
 
   // 从入库记录页「改单」跳转进来时直接打开对应单据（?doc=<id>）
   useEffect(() => {
@@ -200,8 +207,8 @@ export default function WarehouseDocsPage() {
         pageNo += 1
       } while (all.length < totalRows)
       downloadCsv(`${type === 'MANUAL_INBOUND' ? '入库单据审核' : '出库单据审核'}_${from || '全部'}_${to || '全部'}.csv`, [
-        ['单据编号', '单据日期', type === 'MANUAL_INBOUND' ? '供应商' : '去向/原因', '总金额', '商品行数', '随货单据数', '审核状态', '复审状态', '会计退回时间', '退回原因', '创建时间', '备注'],
-        ...all.map(doc => [doc.docNo, fmtDay(doc.effectiveAt), type === 'MANUAL_INBOUND' ? doc.supplierName : doc.reason, doc.totalAmount, doc.lineCount, doc.attachmentCount, doc.status === 'CONFIRMED' ? '已审核' : '未审核', doc.reviewStatus === 'REVIEWED' ? '已复审' : '未复审', fmtTime(doc.unauditedAt), doc.unauditReason, fmtTime(doc.createdAt), doc.note]),
+        ['单据编号', '单据日期', type === 'MANUAL_INBOUND' ? '供应商' : '去向/原因', '总金额', '商品行数', type === 'MANUAL_INBOUND' ? '随货单据数' : '现场证据数', '审核状态', '复审状态', '反审核时间', '退回原因', '创建时间', '备注'],
+        ...all.map(doc => [doc.docNo, fmtDay(doc.effectiveAt), type === 'MANUAL_INBOUND' ? doc.supplierName : doc.reason, doc.totalAmount, doc.lineCount, doc.attachmentCount, doc.status === 'CONFIRMED' ? '已审核' : '待审核', doc.reviewStatus === 'REVIEWED' ? '已复审' : '未复审', fmtTime(doc.unauditedAt), doc.unauditReason, fmtTime(doc.createdAt), doc.note]),
       ])
     } catch (reason: any) {
       setError(String(reason?.message || '导出失败'))
@@ -215,8 +222,8 @@ export default function WarehouseDocsPage() {
     return {
       title: type === 'MANUAL_INBOUND' ? '入库单据审核' : '出库单据审核',
       subtitle: '当前筛选结果（全部页）',
-      headers: ['单据编号', '单据日期', type === 'MANUAL_INBOUND' ? '供应商' : '去向/原因', '总金额', '商品行数', '随货单据数', '审核状态', '复审状态', '会计退回时间', '退回原因', '创建时间', '备注'],
-      rows: rows.map(doc => [doc.docNo, fmtDay(doc.effectiveAt), type === 'MANUAL_INBOUND' ? doc.supplierName : doc.reason, doc.totalAmount, doc.lineCount, doc.attachmentCount, doc.status === 'CONFIRMED' ? '已审核' : '未审核', doc.reviewStatus === 'REVIEWED' ? '已复审' : '未复审', fmtTime(doc.unauditedAt), doc.unauditReason, fmtTime(doc.createdAt), doc.note]),
+      headers: ['单据编号', '单据日期', type === 'MANUAL_INBOUND' ? '供应商' : '去向/原因', '总金额', '商品行数', type === 'MANUAL_INBOUND' ? '随货单据数' : '现场证据数', '审核状态', '复审状态', '反审核时间', '退回原因', '创建时间', '备注'],
+      rows: rows.map(doc => [doc.docNo, fmtDay(doc.effectiveAt), type === 'MANUAL_INBOUND' ? doc.supplierName : doc.reason, doc.totalAmount, doc.lineCount, doc.attachmentCount, doc.status === 'CONFIRMED' ? '已审核' : '待审核', doc.reviewStatus === 'REVIEWED' ? '已复审' : '未复审', fmtTime(doc.unauditedAt), doc.unauditReason, fmtTime(doc.createdAt), doc.note]),
     }
   }
 
@@ -235,9 +242,11 @@ export default function WarehouseDocsPage() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-title font-semibold">单据审核</h1>
-          <p className="text-caption text-gray2">入库/出库单据：仓库制单即过账，会计审核锁定；改单需会计反审核，全程留痕</p>
+          <p className="text-caption text-gray2">入库/出库单据：新入库草稿不记库存，入库人员提交审核后入库，供应链再复审；历史单据保留原记录</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {canEdit && <a href="/v2/supply-chain/docs/new" className="rounded-cta border border-border bg-white px-4 py-2 text-button">新增入库单</a>}
+          {canEdit && <a href="/v2/supply-chain/docs/new-outbound" className="rounded-cta border border-border bg-white px-4 py-2 text-button">新增出库单</a>}
           <button type="button" onClick={() => void exportDocs()} disabled={loading || exporting || total === 0} className="rounded-cta bg-ink px-4 py-2 text-button text-white disabled:opacity-40">{exporting ? '导出中…' : '导出当前筛选'}</button>
           <ReportActions printOnly loadReport={loadPrintReport} disabled={loading || total === 0} />
         </div>
@@ -259,7 +268,7 @@ export default function WarehouseDocsPage() {
             <span className="mb-1 block text-micro text-gray3">审核状态</span>
             <select value={status} onChange={event => { setStatus(event.target.value); setPage(1) }} className="h-11 w-full rounded-cta border border-border bg-white px-3 text-body">
               <option value="">全部状态</option>
-              <option value="POSTED">未审核</option>
+              <option value="POSTED">待审核</option>
               <option value="CONFIRMED">已审核</option>
             </select>
           </label>
@@ -288,16 +297,17 @@ export default function WarehouseDocsPage() {
       </section>
 
       <div className="overflow-x-auto rounded-card border border-border bg-white">
-        <ResponsiveDataTable><table className="w-full min-w-[720px] text-body">
+        <ResponsiveDataTable><table className="w-full min-w-[1150px] text-body">
           <thead>
             <tr className="border-b border-border text-left text-caption text-gray2">
               <th className="w-48 px-4 py-3">单据编号</th>
               <th className="w-44 px-4 py-3">日期</th>
               <th className="min-w-56 px-4 py-3">{type === 'MANUAL_INBOUND' ? '供应商' : '去向/原因'}</th>
               <th className="w-36 px-4 py-3 text-right">总金额</th>
-              <th className="w-28 px-4 py-3 text-center">随货单据</th>
+              <th className="w-28 px-4 py-3 text-center">{type === 'MANUAL_INBOUND' ? '随货单据' : '现场证据'}</th>
               <th className="px-4 py-3">审核状态</th>
-              <th className="w-24 px-4 py-3 text-right">操作</th>
+              <th className="px-4 py-3">复审状态</th>
+              <th className="sticky right-0 min-w-[370px] bg-white px-4 py-3 text-left">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -307,21 +317,33 @@ export default function WarehouseDocsPage() {
                 <td className="px-4 py-3"><span className="whitespace-nowrap">{fmtDay(doc.effectiveAt)}</span><div className="mt-0.5 whitespace-nowrap text-micro text-gray3">制单 {fmtTime(doc.createdAt)}</div></td>
                 <td className="px-4 py-3">{type === 'MANUAL_INBOUND' ? (doc.supplierName || '—') : (doc.reason || '—')}</td>
                 <td className="px-4 py-3 text-right font-num"><b>{money(doc.totalAmount)}</b><div className="mt-0.5 text-micro text-gray3">{doc.lineCount} 行商品</div></td>
-                <td className="px-4 py-3 text-center">{doc.type === 'MANUAL_INBOUND' ? `${doc.attachmentCount || 0} 份` : '—'}</td>
-                <td className="px-4 py-3"><div className="flex flex-wrap items-center gap-2"><StatusBadge status={doc.status} />{doc.unauditedAt && <span className="rounded-full bg-red-50 px-2 py-0.5 text-caption text-red-700">被会计退回</span>}</div></td>
-                <td className="px-4 py-3 text-right">
-                  <button
-                    onClick={() => setDetailId(doc.id)}
-                    className="whitespace-nowrap text-accent hover:underline"
-                  >{doc.status === 'POSTED' && canEdit ? '改单' : '查看'}</button>
+                <td className="px-4 py-3 text-center">{`${doc.attachmentCount || 0} 份`}</td>
+                <td className="px-4 py-3"><div className="flex flex-wrap items-center gap-2"><StatusBadge status={doc.status} />{doc.unauditedAt && <span className="rounded-full bg-red-50 px-2 py-0.5 text-caption text-red-700">已退回</span>}</div></td>
+                <td className="px-4 py-3">{doc.reviewStatus === 'REVIEWED' ? '已复审' : '未复审'}</td>
+                <td className="sticky right-0 bg-white px-4 py-3 text-left">
+                  <div className="flex items-center gap-2 whitespace-nowrap text-accent">
+                    {doc.status === 'POSTED' ? <>
+                      {canEdit && <a href={`/v2/supply-chain/docs/${encodeURIComponent(doc.id)}/edit`} className="hover:underline">编辑</a>}
+                      {canAudit && <button onClick={() => openDoc(doc.id, 'audit')}>审核</button>}
+                    </> : doc.reviewStatus === 'REVIEWED'
+                      ? null
+                      : <>{canAudit && <button onClick={() => openDoc(doc.id, 'unconfirm')}>反审核</button>}{canReview && <button onClick={() => openDoc(doc.id, 'review')}>复审</button>}</>}
+                    <span aria-hidden="true" className="text-gray3">｜</span>
+                    <button onClick={() => openDoc(doc.id, 'print')}>打印</button>
+                    {doc.status === 'POSTED' && canEdit
+                      ? <a href={`/v2/supply-chain/docs/${encodeURIComponent(doc.id)}/edit`} title="进入编辑页保存单据修改">保存</a>
+                      : <button disabled title="当前单据锁定，不能保存修改" className="text-gray3">保存</button>}
+                    <DocumentQualityImageButton kind="WAREHOUSE" sourceId={doc.id} />
+                    <button onClick={() => openDoc(doc.id)} className="text-gray2">查看</button>
+                  </div>
                 </td>
               </tr>
             ))}
             {!loading && items.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-10 text-center text-gray2"><p>暂无单据</p><a href="/v2/supply-chain/inventory" className="mt-2 inline-block text-button text-accent hover:underline">去总仓库存制单</a></td></tr>
+              <tr><td colSpan={8} className="px-4 py-10 text-center text-gray2"><p>暂无单据</p><a href="/v2/supply-chain/inventory" className="mt-2 inline-block text-button text-accent hover:underline">去总仓库存制单</a></td></tr>
             )}
             {loading && (
-              <tr><td colSpan={7} className="px-4 py-10 text-center text-gray2">加载中…</td></tr>
+              <tr><td colSpan={8} className="px-4 py-10 text-center text-gray2">加载中…</td></tr>
             )}
           </tbody>
         </table></ResponsiveDataTable>
@@ -345,10 +367,13 @@ export default function WarehouseDocsPage() {
       )}
 
       {detailId && (
-        <DocDetailDialog
+        <WarehouseDocumentEditor
+          key={`${detailId}:${detailAction || 'view'}:${detailAttempt}`}
           docId={detailId}
+          initialAction={detailAction}
           canAudit={canAudit}
           canEdit={canEdit}
+          canReview={canReview}
           onClose={() => setDetailId(null)}
           onChanged={message => {
             setNotice(message)
@@ -356,375 +381,6 @@ export default function WarehouseDocsPage() {
           }}
         />
       )}
-    </div>
-  )
-}
-
-// ── 单据详情 / 改单 / 审核 ─────────────────────────────
-function DocDetailDialog({ docId, canAudit, canEdit, onClose, onChanged }: {
-  docId: string
-  canAudit: boolean
-  canEdit: boolean
-  onClose: () => void
-  onChanged: (message: string) => void
-}) {
-  const [doc, setDoc] = useState<DocDetail | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [suppliers, setSuppliers] = useState<SupplierOption[]>([])
-
-  // 编辑态
-  const [editReason, setEditReason] = useState('')
-  const [lineEdits, setLineEdits] = useState<Record<string, { amount?: string; quantity?: string; note?: string }>>({})
-  const [supplierId, setSupplierId] = useState('')
-  const [unauditReason, setUnauditReason] = useState('')
-  const [unauditOpen, setUnauditOpen] = useState(false)
-
-  const load = useCallback(() => {
-    setLoading(true)
-    setError(null)
-    apiFetch<DocDetail>(`/api/warehouse-docs/${docId}`)
-      .then(data => {
-        setDoc(data)
-        setSupplierId(data.supplierId || '')
-        setLineEdits({})
-        setEditReason('')
-      })
-      .catch(reason => setError(String(reason?.message || reason)))
-      .finally(() => setLoading(false))
-  }, [docId])
-
-  useEffect(() => { load() }, [load])
-
-  useEffect(() => {
-    if (doc?.type !== 'MANUAL_INBOUND' || !canEdit) return
-    apiFetch<SupplierOption[]>('/api/suppliers?status=ENABLED&businessScope=WAREHOUSE_UPSTREAM')
-      .then(list => setSuppliers(Array.isArray(list) ? list : []))
-      .catch(() => {})
-  }, [doc?.type, canEdit])
-
-  if (!doc && loading) {
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
-        <div className="rounded-card bg-white p-10 text-gray2" onClick={event => event.stopPropagation()}>加载中…</div>
-      </div>
-    )
-  }
-  if (!doc) return null
-
-  const editable = doc.status === 'POSTED' && canEdit
-  const inbound = doc.type === 'MANUAL_INBOUND'
-
-  function lineEdit(lineId: string) {
-    return lineEdits[lineId] || {}
-  }
-
-  function setLineEdit(lineId: string, field: 'amount' | 'quantity' | 'note', value: string) {
-    setLineEdits(current => ({ ...current, [lineId]: { ...current[lineId], [field]: value } }))
-  }
-
-  function hasEdits() {
-    if (supplierId && doc && supplierId !== doc.supplierId) return true
-    return Object.entries(lineEdits).some(([lineId, edit]) => {
-      const line = doc?.lines.find(row => row.id === lineId)
-      if (!line) return false
-      if (edit.amount !== undefined && edit.amount !== '' && Math.abs(Number(edit.amount) - line.amount) > 0.0001) return true
-      if (edit.quantity !== undefined && edit.quantity !== '' && Math.abs(Number(edit.quantity) - line.quantity) > 0.000001) return true
-      if (edit.note !== undefined && edit.note !== (line.note || '')) return true
-      return false
-    })
-  }
-
-  async function saveEdit() {
-    if (!doc) return
-    if (editReason.trim().length < 2) { setError('请填写修改原因'); return }
-    setBusy(true)
-    setError(null)
-    try {
-      const lines = Object.entries(lineEdits).map(([lineId, edit]) => {
-        const line = doc.lines.find(row => row.id === lineId)!
-        return {
-          lineId,
-          amount: edit.amount !== undefined && edit.amount !== '' && Math.abs(Number(edit.amount) - line.amount) > 0.0001 ? Number(edit.amount) : undefined,
-          quantity: edit.quantity !== undefined && edit.quantity !== '' && Math.abs(Number(edit.quantity) - line.quantity) > 0.000001 ? Number(edit.quantity) : undefined,
-          note: edit.note !== undefined && edit.note !== (line.note || '') ? edit.note : undefined,
-        }
-      }).filter(row => row.amount !== undefined || row.quantity !== undefined || row.note !== undefined)
-      const result = await apiFetch<{ ok: boolean; changed: boolean }>(`/api/warehouse-docs/${doc.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          editReason: editReason.trim(),
-          supplierId: supplierId !== doc.supplierId ? supplierId : undefined,
-          lines,
-        }),
-      })
-      onChanged(result.changed ? `单据 ${doc.docNo} 已修改，金额变化已同步库存台账` : `单据 ${doc.docNo} 无实质修改`)
-      load()
-    } catch (reason: any) {
-      setError(String(reason?.message || reason))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function confirm() {
-    if (!doc) return
-    setBusy(true)
-    setError(null)
-    try {
-      await apiFetch(`/api/warehouse-docs/${doc.id}/confirm`, { method: 'POST', body: JSON.stringify({}) })
-      onChanged(`单据 ${doc.docNo} 已审核锁定`)
-      load()
-    } catch (reason: any) {
-      setError(String(reason?.message || reason))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function unconfirm() {
-    if (!doc) return
-    if (unauditReason.trim().length < 2) { setError('请填写退回原因'); return }
-    setBusy(true)
-    setError(null)
-    try {
-      await apiFetch(`/api/warehouse-docs/${doc.id}/unconfirm`, {
-        method: 'POST',
-        body: JSON.stringify({ reason: unauditReason.trim() }),
-      })
-      onChanged(`单据 ${doc.docNo} 已退回，仓库可修改`)
-      setUnauditOpen(false)
-      load()
-    } catch (reason: any) {
-      setError(String(reason?.message || reason))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
-      <div
-        className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-card bg-white p-6"
-        onClick={event => event.stopPropagation()}
-      >
-        <div className="mb-4 flex items-start justify-between">
-          <div>
-            <div className="flex items-center gap-3">
-              <h2 className="text-title font-semibold font-num">{doc.docNo}</h2>
-              <StatusBadge status={doc.status} />
-              <span className="text-caption text-gray2">{inbound ? '入库单' : '出库单'}</span>
-            </div>
-            <p className="mt-1 text-caption text-gray2">
-              单据日期 {fmtDay(doc.effectiveAt)} · 制单 {fmtTime(doc.createdAt)}
-              {doc.confirmedAt ? ` · 审核 ${fmtTime(doc.confirmedAt)}` : ''}
-            </p>
-          </div>
-          <button onClick={onClose} className="rounded-cta border border-border px-3 py-1.5 text-button text-gray2">关闭</button>
-        </div>
-
-        {doc.unauditReason && doc.status === 'POSTED' && (
-          <div className="mb-3 rounded-card border border-amber-200 bg-amber-50 px-4 py-2 text-body text-amber-fg">
-            会计退回：{doc.unauditReason}（{fmtTime(doc.unauditedAt)}）—— 请修改后通知会计重新审核
-          </div>
-        )}
-        {error && <div className="mb-3 rounded-card border border-red-200 bg-red-50 px-4 py-2 text-body text-red-600">{error}</div>}
-
-        {/* 表头 */}
-        <div className="mb-4 grid grid-cols-1 gap-3 rounded-card border border-border p-4 sm:grid-cols-2">
-          {inbound ? (
-            <label className="space-y-1 text-caption text-gray2">
-              供应商
-              {editable ? (
-                <select
-                  value={supplierId}
-                  onChange={event => setSupplierId(event.target.value)}
-                  className="h-9 w-full rounded-cta border border-border bg-white px-2 text-body text-ink"
-                >
-                  {!supplierId && <option value="">未指定</option>}
-                  {suppliers.map(supplier => (
-                    <option key={supplier.id} value={supplier.id}>{supplier.no ? `${supplier.no} ` : ''}{supplier.name}</option>
-                  ))}
-                </select>
-              ) : (
-                <div className="text-body text-ink">{doc.supplierName || '—'}</div>
-              )}
-            </label>
-          ) : (
-            <div className="space-y-1 text-caption text-gray2">
-              去向/原因
-              <div className="text-body text-ink">{doc.reason || '—'}</div>
-            </div>
-          )}
-          <div className="space-y-1 text-caption text-gray2">
-            备注
-            <div className="text-body text-ink">{doc.note || '—'}</div>
-          </div>
-          {inbound && <div className="space-y-2 text-caption text-gray2 sm:col-span-2">
-            <div>供应商随货单据（{doc.attachments?.length || 0}份）</div>
-            {doc.attachments?.length ? <div className="flex flex-wrap gap-2">{doc.attachments.map((item, index) => (
-              <a key={`${item.name}-${index}`} href={item.url} target="_blank" rel="noreferrer" className="rounded-cta border border-border bg-bg px-3 py-2 text-caption text-accent hover:underline">
-                {item.name} · {(item.size / 1024 / 1024).toFixed(1)}MB
-              </a>
-            ))}</div> : <div className="text-body text-gray3">未上传</div>}
-          </div>}
-        </div>
-
-        {/* 行明细 */}
-        <ResponsiveDataTable><table className="mb-4 w-full min-w-[640px] text-body">
-          <thead>
-            <tr className="border-b border-border text-left text-caption text-gray2">
-              <th className="py-2 pr-2">#</th>
-              <th className="py-2 pr-2">商品</th>
-              <th className="py-2 pr-2 text-right">数量</th>
-              <th className="py-2 pr-2">单位</th>
-              <th className="py-2 pr-2 text-right">单价</th>
-              <th className="py-2 pr-2 text-right">金额{inbound ? '（价税合计）' : '（成本）'}</th>
-              <th className="py-2 pr-2">批次/效期</th>
-              <th className="py-2">备注</th>
-            </tr>
-          </thead>
-          <tbody>
-            {doc.lines.map(line => {
-              const edit = lineEdit(line.id)
-              return (
-                <tr key={line.id} className="border-b border-border last:border-0">
-                  <td className="py-2 pr-2 font-num text-gray2">{line.lineNo}</td>
-                  <td className="py-2 pr-2">{line.productName}</td>
-                  <td className="py-2 pr-2 text-right font-num">
-                    {editable && inbound ? (
-                      <input
-                        aria-label={`${line.productName}数量`}
-                        value={edit.quantity ?? String(line.quantity)}
-                        onChange={event => setLineEdit(line.id, 'quantity', event.target.value)}
-                        className="h-8 w-24 rounded-cta border border-border px-2 text-right font-num"
-                      />
-                    ) : fmtQty(line.quantity)}
-                  </td>
-                  <td className="py-2 pr-2">{line.unit}</td>
-                  <td className="py-2 pr-2 text-right font-num">{line.unitPrice === null ? '—' : money(line.unitPrice)}</td>
-                  <td className="py-2 pr-2 text-right font-num">
-                    {editable ? (
-                      <input
-                        aria-label={`${line.productName}金额`}
-                        value={edit.amount ?? String(line.amount)}
-                        onChange={event => setLineEdit(line.id, 'amount', event.target.value)}
-                        className="h-8 w-28 rounded-cta border border-border px-2 text-right font-num"
-                      />
-                    ) : money(line.amount)}
-                  </td>
-                  <td className="py-2 pr-2 text-caption text-gray2">
-                    {line.batchNo || '—'}{line.expiryDate ? ` / ${fmtDay(line.expiryDate)}` : ''}
-                  </td>
-                  <td className="py-2">
-                    {editable ? (
-                      <input
-                        aria-label={`${line.productName}备注`}
-                        value={edit.note ?? (line.note || '')}
-                        onChange={event => setLineEdit(line.id, 'note', event.target.value)}
-                        className="h-8 w-32 rounded-cta border border-border px-2"
-                      />
-                    ) : (line.note || '—')}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-          <tfoot>
-            <tr className="text-body font-semibold">
-              <td colSpan={5} className="py-2 text-right text-gray2">合计</td>
-              <td className="py-2 text-right font-num">{money(doc.totalAmount)}</td>
-              <td colSpan={2}></td>
-            </tr>
-          </tfoot>
-        </table></ResponsiveDataTable>
-
-        {/* 改单操作区 */}
-        {editable && (
-          <div className="mb-4 space-y-2 rounded-card border border-border p-4">
-            <p className="text-caption text-gray2">
-              可改：金额/单价、{inbound ? '数量（批次未被消耗时）、供应商、' : ''}备注。金额变化自动生成差额调整流水；数量变化自动冲销重记。出库单数量不能改（数量差错请走实盘/报损）。
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                value={editReason}
-                onChange={event => setEditReason(event.target.value)}
-                placeholder="修改原因（必填，如：供应商后补运费）"
-                className="h-9 min-w-64 flex-1 rounded-cta border border-border px-3 text-body"
-              />
-              <button
-                onClick={saveEdit}
-                disabled={busy || !hasEdits()}
-                className="h-9 rounded-cta bg-accent px-4 text-button text-white disabled:opacity-40"
-              >{busy ? '保存中…' : '保存修改'}</button>
-            </div>
-          </div>
-        )}
-
-        {/* 审核操作区 */}
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          {doc.status === 'POSTED' && canAudit && (
-            <button
-              onClick={confirm}
-              disabled={busy}
-              className="h-9 rounded-cta bg-emerald-600 px-4 text-button text-white disabled:opacity-40"
-            >{busy ? '处理中…' : '审核（锁定单据）'}</button>
-          )}
-          {doc.status === 'CONFIRMED' && canAudit && !unauditOpen && (
-            <button
-              onClick={() => setUnauditOpen(true)}
-              disabled={busy}
-              className="h-9 rounded-cta border border-amber-300 bg-amber-50 px-4 text-button text-amber-fg disabled:opacity-40"
-            >反审核（退回仓库修改）</button>
-          )}
-          {unauditOpen && (
-            <div className="flex w-full flex-wrap items-center gap-2 rounded-card border border-amber-200 bg-amber-50 p-3">
-              <input
-                value={unauditReason}
-                onChange={event => setUnauditReason(event.target.value)}
-                placeholder="退回原因（必填，仓库人员会看到）"
-                className="h-9 min-w-64 flex-1 rounded-cta border border-border bg-white px-3 text-body"
-              />
-              <button
-                onClick={unconfirm}
-                disabled={busy}
-                className="h-9 rounded-cta bg-amber-600 px-4 text-button text-white disabled:opacity-40"
-              >确认退回</button>
-              <button onClick={() => setUnauditOpen(false)} className="h-9 rounded-cta border border-border bg-white px-3 text-button text-gray2">取消</button>
-            </div>
-          )}
-          {!canAudit && (
-            <span className="text-caption text-gray2">审核/反审核仅会计与管理员可操作</span>
-          )}
-        </div>
-
-        {/* 操作日志 */}
-        <div className="rounded-card border border-border p-4">
-          <h3 className="mb-2 text-body font-semibold">操作记录</h3>
-          <ul className="space-y-1 text-caption text-gray2">
-            {doc.logs.map(log => (
-              <li key={log.id} className="flex flex-wrap gap-2">
-                <span className="font-num">{fmtTime(log.createdAt)}</span>
-                <span className="text-ink">{LOG_ACTION_LABEL[log.action]}</span>
-                <span>{log.actorName || '系统'}</span>
-                {log.reason && <span className="text-amber-fg">{log.reason}</span>}
-                {log.action === 'EDIT' && log.detail?.lines?.length > 0 && (
-                  <span>
-                    {log.detail.lines.map((line: any) =>
-                      `第${line.lineNo}行${line.productName}${line.amount ? ` 金额${line.amount.from}→${line.amount.to}` : ''}${line.quantity ? ` 数量${line.quantity.from}→${line.quantity.to}` : ''}`
-                    ).join('；')}
-                  </span>
-                )}
-                {log.action === 'EDIT' && log.detail?.header?.supplier && (
-                  <span>供应商 {log.detail.header.supplier.from || '—'} → {log.detail.header.supplier.to}</span>
-                )}
-              </li>
-            ))}
-            {doc.logs.length === 0 && <li>暂无记录</li>}
-          </ul>
-        </div>
-      </div>
     </div>
   )
 }

@@ -7,7 +7,7 @@ import { printSheet } from './print-sheet'
 import { SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT } from '@/components/v2/supply-chain-shell'
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
-vi.mock('@/lib/v2-auth', () => ({ apiFetch: vi.fn() }))
+vi.mock('@/lib/v2-auth', () => ({ apiFetch: vi.fn(), getUser: () => ({ role: 'SUPPLY_CHAIN' }) }))
 import { apiFetch } from '@/lib/v2-auth'
 
 const mockFetch = vi.mocked(apiFetch)
@@ -311,6 +311,45 @@ function change(element: HTMLInputElement | HTMLTextAreaElement, value: string) 
 }
 
 describe('上游采购收货后补报', () => {
+  it('收货单缺少发货关联时列表与详情仍能打开', async () => {
+    const withoutShipment = { ...postedReceipt, shipment: null }
+    installPageMock({ receipts: [withoutShipment], receiptDetailValue: { ...receiptDetail, shipment: null } })
+    window.history.replaceState({}, '', '/v2/supply-chain/procurement?receipt=receipt-1')
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes(`收货单明细 · ${postedReceipt.no}`) ?? false)
+    expect(container.textContent).toContain('人工见手青')
+    expect(container.textContent).toContain('发货单')
+    act(() => root.unmount()); container.remove()
+  })
+  it('审核请求携带双版本，取消不发送，网络重试复用请求编号', async () => {
+    const pending = { ...postedReceipt, status: 'INSPECTING', approvalStatus: 'PENDING', approvalVersion: 2, rowVersion: 4 }
+    installPageMock({ receipts: [pending], receiptDetailValue: { ...receiptDetail, ...pending } })
+    const normal = mockFetch.getMockImplementation()!
+    let attempts = 0
+    mockFetch.mockImplementation((path, init) => String(path).endsWith('/approval/audit') ? (++attempts === 1 ? Promise.reject(new Error('网络失败')) : Promise.resolve({ approvalStatus: 'AUDITED' })) : normal(path, init))
+    window.history.replaceState({}, '', '/v2/supply-chain/procurement?receipt=receipt-1')
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('收货单明细') ?? false)
+    const audit = () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '审核')!
+    act(() => audit().click())
+    let dialog = container.querySelector('[role="dialog"]')!
+    act(() => Array.from(dialog.querySelectorAll('button')).find(button => button.textContent === '取消')!.click())
+    expect(attempts).toBe(0)
+    act(() => audit().click())
+    dialog = container.querySelector('[role="dialog"]')!
+    await act(async () => Array.from(dialog.querySelectorAll('button')).find(button => button.textContent === '审核')!.click())
+    await waitFor(() => dialog.textContent?.includes('网络失败') ?? false)
+    await act(async () => Array.from(dialog.querySelectorAll('button')).find(button => button.textContent === '审核')!.click())
+    await waitFor(() => !container.querySelector('[role="dialog"]'))
+    const calls = mockFetch.mock.calls.filter(([path]) => String(path).endsWith('/approval/audit'))
+    expect(calls).toHaveLength(2)
+    const first = JSON.parse(String(calls[0][1]?.body))
+    expect(first).toMatchObject({ approvalVersion: 2, sourceVersion: 4 })
+    expect(first.requestId).toBeTruthy()
+    expect(JSON.parse(String(calls[1][1]?.body))).toEqual(first)
+    expect(container.textContent).toContain('库存未改变')
+    act(() => root.unmount()); container.remove()
+  })
   it('打印时只创建目标单据副本，并在打印结束后完整清理', () => {
     const sheet = document.createElement('article')
     sheet.id = 'claim-print-test'
@@ -639,9 +678,9 @@ describe('上游采购收货后补报', () => {
         .find((button) => button.textContent === '到货验收')
         ?.click()
     )
-    await waitFor(() => container.textContent?.includes('查看明细并验收') ?? false)
+    await waitFor(() => container.textContent?.includes(inspecting.no) ?? false)
 
-    const open = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '查看明细并验收')
+    const open = container.querySelector(`button[aria-label="查看收货单 ${inspecting.no} 明细"]`) as HTMLButtonElement
     await act(async () => {
       open?.click()
     })
@@ -650,7 +689,7 @@ describe('上游采购收货后补报', () => {
     expect(container.textContent).toContain('采购单金额')
     expect(container.textContent).toContain('¥21,645.00')
     expect(container.textContent).toContain('人工见手青')
-    expect(container.textContent).toContain('确认验收并提交')
+    expect(container.textContent).toContain('超标准价不能验收入库')
     expect(mockFetch.mock.calls.some(([path, init]) => String(path).endsWith('/confirm') && init?.method === 'POST')).toBe(false)
 
     const purchaseOrderLink = container.querySelector(`button[aria-label="查看采购单 ${changeOrder.no} 全部内容"]`) as HTMLButtonElement
@@ -946,7 +985,7 @@ describe('上游采购收货后补报', () => {
     await waitFor(() => container.textContent?.includes(`收货单明细 · ${postedReceipt.no}`) ?? false)
 
     expect(mockFetch).toHaveBeenCalledWith('/api/upstream/receipts/receipt-1')
-    expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent === '确认验收并提交')).toBe(true)
+    expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent === '提交')).toBe(true)
 
     act(() => root.unmount())
     container.remove()
@@ -1022,13 +1061,14 @@ describe('上游采购收货后补报', () => {
     container.remove()
   })
 
-  it('采购退货按独立单据展示并明确审批时才扣库存', async () => {
+  it('采购退货待审核只显示审核，不能提示审核立即出库', async () => {
     installPageMock({
       purchaseReturns: [
         {
           id: 'return-1',
           no: 'URT202609000001',
           status: 'PENDING_APPROVAL',
+          approvalStatus: 'PENDING', approvalVersion: 2, rowVersion: 1,
           reason: '质量不合格',
           settlementAmount: 100,
           ledgerCostAmount: 0,
@@ -1073,175 +1113,36 @@ describe('上游采购收货后补报', () => {
     expect(container.textContent).toContain(`原收货单 ${postedReceipt.no}`)
     expect(container.textContent).toContain('云南小土豆')
     expect(container.textContent).toContain('待审核')
-    expect(container.textContent).toContain('审核并出库')
+    expect(Array.from(container.querySelectorAll('button')).some(button => button.textContent === '审核')).toBe(true)
+    expect(container.textContent).not.toContain('审核并出库')
 
     act(() => root.unmount())
     container.remove()
   })
 
-  it('有质量标准的到货行必须由验收人显式选择结果', async () => {
-    const shipment = {
-      id: 'shipment-quality-1',
-      no: 'USH-Q-1',
-      status: 'SHIPPED',
-      supplierId: 'supplier-1',
-      purchaseOrder: { id: 'order-1', no: 'UPO-Q-1', status: 'SHIPPED' },
-      lines: [{
-        id: 'shipment-line-q1',
-        purchaseOrderLineId: 'order-line-q1',
-        shippedQty: 5,
-        purchaseUnit: 'kg',
-        receiptLines: [],
-        purchaseOrderLine: {
-          productId: 'product-1',
-          productNameSnapshot: '人工见手青',
-          productSpecSnapshot: '5kg/箱',
-          unitPrice: 18,
-          standardUnitPriceSnapshot: 20,
-          priceStandardCurrencySnapshot: 'CNY',
-          priceStandardTaxInclusiveSnapshot: true,
-          qualityStandardId: 'quality-1',
-          qualityStandardVersionSnapshot: 2,
-          qualityCriteriaSnapshot: { description: '无异味、无腐烂' },
-        },
-      }],
-    }
+  it('登记到货入口转到共用新建编辑页，不再提供旧PASS/FAIL表单', async () => {
+    const shipment = { id: 'shipment-quality-1', no: 'USH-Q-1', status: 'SHIPPED', supplierId: 'supplier-1', purchaseOrder: { id: 'order-1', no: 'UPO-Q-1', status: 'SHIPPED' }, lines: [{ id: 'line-q-1', purchaseOrderLineId: 'order-line-q-1', shippedQty: 10, purchaseUnit: 'kg', purchaseOrderLine: { productId: 'product-1', productNameSnapshot: '合成质检商品', unitPrice: 25, qualityStandardId: 'quality-1', qualityStandardVersionSnapshot: 1, qualityCriteriaSnapshot: { description: '历史标准' } } }] }
     installPageMock({ shipments: [shipment] })
     const { container, root } = renderPage()
-    await waitFor(() => container.textContent?.includes('USH-Q-1') ?? false)
-    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '登记到货')?.click())
-    await waitFor(() => container.textContent?.includes('无异味、无腐烂') ?? false)
-
-    const qualitySelect = Array.from(container.querySelectorAll('select')).find((select) => select.textContent?.includes('合格') && select.textContent?.includes('不合格')) as HTMLSelectElement
-    expect(qualitySelect.value).toBe('')
-    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '生成收货单')?.click())
-    await waitFor(() => container.textContent?.includes('必须选择质量验收结果') ?? false)
-    expect(mockFetch.mock.calls.some(([path, init]) => String(path).includes('/shipments/shipment-quality-1/receipts') && init?.method === 'POST')).toBe(false)
-
-    act(() => root.unmount())
-    container.remove()
+    await waitFor(() => Boolean(container.querySelector('a[href*="receipts/new"]')))
+    const link = container.querySelector<HTMLAnchorElement>('a[href*="receipts/new"]')!
+    expect(link.getAttribute('href')).toBe('/v2/supply-chain/procurement/receipts/new?shipment=shipment-quality-1')
+    expect(container.textContent).not.toContain('质量验收不合格')
+    expect(mockFetch.mock.calls.some(([,init]) => init?.method === 'POST')).toBe(false)
+    act(() => root.unmount()); container.remove()
   })
 
-  it('质量验收不合格必须填写拒收处置并上传证据', async () => {
-    const shipment = {
-      id: 'shipment-quality-fail-1',
-      no: 'USH-Q-FAIL-1',
-      status: 'SHIPPED',
-      supplierId: 'supplier-1',
-      purchaseOrder: { id: 'order-1', no: 'UPO-Q-FAIL-1', status: 'SHIPPED', currency: 'CNY' },
-      lines: [{
-        id: 'shipment-line-quality-fail-1',
-        purchaseOrderLineId: 'order-line-quality-fail-1',
-        shippedQty: 10,
-        purchaseUnit: 'kg',
-        receiptLines: [],
-        purchaseOrderLine: {
-          productId: 'product-1',
-          productNameSnapshot: '人工见手青',
-          productSpecSnapshot: '5kg/箱',
-          unitPrice: 18,
-          standardUnitPriceSnapshot: 20,
-          priceStandardCurrencySnapshot: 'CNY',
-          priceStandardTaxInclusiveSnapshot: true,
-          qualityStandardId: 'quality-1',
-          qualityStandardVersionSnapshot: 2,
-          qualityCriteriaSnapshot: { description: '无异味、无腐烂' },
-        },
-      }],
-    }
-    installPageMock({ shipments: [shipment] })
+  it('收货明细不提供未经批准的管理员价格例外入口', async () => {
+    const pending = { ...postedReceipt, status: 'PENDING_REVIEW', approvalStatus: 'AUDITED', approvalVersion: 3, rowVersion: 1, reviewReasons: ['ABOVE_STANDARD_PRICE'] }
+    installPageMock({ receipts: [pending], receiptDetailValue: { ...receiptDetail, ...pending, canApprovePriceException: true } })
+    window.history.replaceState({}, '', '/v2/supply-chain/procurement?receipt=receipt-1')
     const { container, root } = renderPage()
-    await waitFor(() => container.textContent?.includes('USH-Q-FAIL-1') ?? false)
-    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '登记到货')?.click())
-    await waitFor(() => container.textContent?.includes('无异味、无腐烂') ?? false)
-
-    const qualitySelect = Array.from(container.querySelectorAll('select')).find((select) => select.textContent?.includes('合格') && select.textContent?.includes('不合格')) as HTMLSelectElement
-    act(() => {
-      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(qualitySelect, 'FAIL')
-      qualitySelect.dispatchEvent(new Event('change', { bubbles: true }))
-    })
-    const quantityInputs = Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[]
-    change(quantityInputs[1], '0')
-    change(quantityInputs[3], '10')
-    const disposition = Array.from(container.querySelectorAll('textarea')).find((item) => item.placeholder.includes('处置结果'))!
-    change(disposition, '整批拒收并退回供应商')
-    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '生成收货单')?.click())
-
-    await waitFor(() => container.textContent?.includes('不合格时必须上传证据') ?? false)
-    expect(mockFetch.mock.calls.some(([path, init]) => String(path).includes('/shipments/shipment-quality-fail-1/receipts') && init?.method === 'POST')).toBe(false)
-
-    act(() => root.unmount())
-    container.remove()
-  })
-
-  it('超标准价二审必须填写价格例外原因并随请求提交', async () => {
-    const pending = {
-      ...postedReceipt,
-      status: 'PENDING_REVIEW',
-      reviewReasons: ['ABOVE_STANDARD_PRICE'],
-      _count: { lines: 1, claims: 0 },
-    }
-    const detail = {
-      ...receiptDetail,
-      ...pending,
-      canApprovePriceException: true,
-      lines: [{
-        ...receiptDetail.lines[0],
-        unitPrice: 21,
-        standardUnitPriceSnapshot: 20,
-        priceStandardCurrencySnapshot: 'CNY',
-        priceStandardTaxInclusiveSnapshot: true,
-        priceStandardVersionSnapshot: 1,
-      }],
-    }
-    installPageMock({ receipts: [pending], receiptDetailValue: detail })
-    const { container, root } = renderPage()
-    await waitFor(() => container.textContent?.includes('到货验收') ?? false)
-    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '到货验收')?.click())
-    await waitFor(() => container.textContent?.includes('查看明细并复核') ?? false)
-    await act(async () => { Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '查看明细并复核')?.click() })
-    await waitFor(() => container.textContent?.includes('价格例外复核原因') ?? false)
-
-    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '确认复核并入库')?.click())
-    await waitFor(() => container.textContent?.includes('请填写价格例外复核原因') ?? false)
-    const textarea = Array.from(container.querySelectorAll('textarea')).find((item) => item.placeholder.includes('涨价原因'))!
-    change(textarea, '供应商当日临时涨价，已核对并同意')
-    await act(async () => { Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '确认复核并入库')?.click() })
-    await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path).endsWith('/review-and-post')))
-    const call = mockFetch.mock.calls.find(([path]) => String(path).endsWith('/review-and-post'))!
-    expect(JSON.parse(String(call[1]?.body))).toEqual({ priceExceptionReason: '供应商当日临时涨价，已核对并同意' })
-
-    act(() => root.unmount())
-    container.remove()
-  })
-
-  it('无价格例外权限时只显示等待管理员核价且不提供复核按钮', async () => {
-    const pending = {
-      ...postedReceipt,
-      status: 'PENDING_REVIEW',
-      reviewReasons: ['ABOVE_STANDARD_PRICE'],
-      _count: { lines: 1, claims: 0 },
-    }
-    installPageMock({
-      receipts: [pending],
-      receiptDetailValue: {
-        ...receiptDetail,
-        ...pending,
-        canApprovePriceException: false,
-      },
-    })
-    const { container, root } = renderPage()
-    await waitFor(() => container.textContent?.includes('到货验收') ?? false)
-    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '到货验收')?.click())
-    await waitFor(() => container.textContent?.includes('查看明细并复核') ?? false)
-    await act(async () => { Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '查看明细并复核')?.click() })
-
-    await waitFor(() => container.textContent?.includes('需等待管理员核价') ?? false)
-    expect(container.textContent).not.toContain('价格例外复核原因（必填）')
-    expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent === '确认复核并入库')).toBe(false)
-
-    act(() => root.unmount())
-    container.remove()
+    await waitFor(() => container.textContent?.includes(`收货单明细 · ${pending.no}`) ?? false)
+    expect(container.textContent).toContain('超标准价不能验收入库')
+    expect(container.textContent).not.toContain('价格例外复核原因')
+    expect(container.querySelector('textarea[placeholder*="涨价原因"]')).toBeNull()
+    expect(mockFetch.mock.calls.some(([,init]) => init?.method === 'POST')).toBe(false)
+    act(() => root.unmount()); container.remove()
   })
 
   it('填写标准草稿后取消侧栏跳转会保留当前页面和输入', async () => {
@@ -1264,4 +1165,23 @@ describe('上游采购收货后补报', () => {
     act(() => root.unmount())
     container.remove()
   })
+  it('新建采购表单离开先确认，取消保留到货日期，放弃才跳转', async () => {
+    installPageMock({ contracts: [contract], warehouses: [{ id: 'warehouse-1', code: 'WH001', name: '供应链总仓' }] })
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('新建采购单') ?? false)
+    act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '新建采购单')!.click())
+    await waitFor(() => container.textContent?.includes('期望到货日') ?? false)
+    const arrival = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="date"]')).find(input => input.closest('label')?.textContent?.includes('期望到货日'))!
+    change(arrival, '2026-10-15')
+    const proceed = vi.fn()
+    act(() => { expect(window.dispatchEvent(new CustomEvent(SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT, { cancelable: true, detail: { proceed } }))).toBe(false) })
+    await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '取消')!.click())
+    expect(arrival.value).toBe('2026-10-15')
+    expect(proceed).not.toHaveBeenCalled()
+    act(() => { window.dispatchEvent(new CustomEvent(SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT, { cancelable: true, detail: { proceed } })) })
+    await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '放弃并离开')!.click())
+    expect(proceed).toHaveBeenCalledTimes(1)
+    act(() => root.unmount()); container.remove()
+  })
+
 })

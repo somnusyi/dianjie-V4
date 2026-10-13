@@ -6,13 +6,13 @@ import { useEffect, useRef, useState } from 'react'
 type MenuLink = { title: string; href: string }
 
 /** Shared two-column preview for the supply-chain workspaces. */
-export function WorkspaceMenu({ id, title, description, icon, selected, href, items, shortcuts = [], pathname }: {
+export function WorkspaceMenu({ id, title, description, icon, selected, href, items, shortcuts = [], pathname, openOnly = false }: {
   id: string; title: string; description: string; icon: string; selected: boolean; href: string
-  items: MenuLink[]; shortcuts?: MenuLink[]; pathname?: string
+  items: MenuLink[]; shortcuts?: MenuLink[]; pathname?: string; openOnly?: boolean
 }) {
   const [top, setTop] = useState<number | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout>>()
-  const trigger = useRef<HTMLAnchorElement>(null)
+  const trigger = useRef<HTMLElement | null>(null)
   const panel = useRef<HTMLDivElement>(null)
   const cancel = () => clearTimeout(timer.current)
   const close = () => { cancel(); timer.current = setTimeout(() => setTop(null), 150) }
@@ -36,11 +36,14 @@ export function WorkspaceMenu({ id, title, description, icon, selected, href, it
     document.addEventListener('keydown', escape); document.addEventListener('pointerdown', outside); window.addEventListener('resize', reposition)
     return () => { cancel(); document.removeEventListener('keydown', escape); document.removeEventListener('pointerdown', outside); window.removeEventListener('resize', reposition) }
   }, [])
-  return <>
-    <Link ref={trigger} href={href} onMouseEnter={open} onMouseLeave={close} onFocus={open} onBlur={close} onClick={() => setTop(null)} aria-expanded={top !== null} aria-controls={id} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 ${selected ? 'bg-amber/10 text-amber-fg' : 'text-gray1 hover:bg-bg'}`}>
+  const triggerContent = <>
       <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${selected ? 'bg-amber text-white' : 'bg-bg text-gray2'}`}>{icon}</span>
       <span className="min-w-0"><strong className="block text-button">{title}</strong><span className="block truncate text-micro text-gray3">{description}</span></span><span className="ml-auto">›</span>
-    </Link>
+  </>
+  const triggerClass = `flex items-center gap-3 rounded-xl px-3 py-2.5 ${selected ? 'bg-amber/10 text-amber-fg' : 'text-gray1 hover:bg-bg'}`
+  return <>
+    {openOnly ? <button ref={element => { trigger.current = element }} type="button" onMouseEnter={open} onMouseLeave={close} onFocus={open} onBlur={close} onClick={open} aria-expanded={top !== null} aria-controls={id} className={`${triggerClass} w-full text-left`}>{triggerContent}</button>
+      : <Link ref={element => { trigger.current = element }} href={href} onMouseEnter={open} onMouseLeave={close} onFocus={open} onBlur={close} onClick={() => setTop(null)} aria-expanded={top !== null} aria-controls={id} className={triggerClass}>{triggerContent}</Link>}
     {top !== null && createPortal(<div ref={panel} id={id} onMouseEnter={cancel} onMouseLeave={close} onFocus={cancel} onBlur={close} style={{ top, left: 246, width: 500, maxWidth: 'calc(100vw - 258px)', maxHeight: 'calc(100dvh - 24px)', overflowY: 'auto' }} className="fixed z-[80] rounded-xl border border-border bg-white p-4 shadow-xl" aria-label={`${title}导航`}>
       <h2 className="mb-3 border-b border-border pb-3 text-h2">{title}</h2>
       <div className="grid grid-cols-2 gap-x-3 gap-y-1">{items.map(item => <Link key={item.href} href={item.href} aria-current={pathname === item.href ? 'page' : undefined} onClick={() => setTop(null)} className={`block rounded-lg px-3 py-2.5 text-button hover:bg-bg hover:text-amber-fg ${pathname === item.href ? 'bg-amber/10 text-amber-fg' : ''}`}>{item.title}</Link>)}</div>

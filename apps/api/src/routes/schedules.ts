@@ -21,6 +21,10 @@ const legacyRejectSchema = z.object({
   note: z.string().trim().min(1, '驳回必须填写原因').max(1000),
 }).strict()
 
+const detailParamsSchema = z.object({
+  id: z.string().trim().min(1).max(100),
+}).strict()
+
 function httpError(message: string, statusCode: number) {
   return Object.assign(new Error(message), { statusCode })
 }
@@ -63,6 +67,25 @@ export const scheduleRoutes: FastifyPluginAsync = async (app) => {
       d.setDate(d.getDate() + days)
       where.dueAt = { lte: d }
     }
+    if (hasInternalSupplyChainCapability(role, 'finance.read')) {
+      const rows = await prisma.paymentSchedule.findMany({
+        where,
+        select: {
+          id: true, amount: true, status: true, dueAt: true, paidAt: true,
+          supplier: { select: { id: true, name: true } },
+          receipt: { select: { id: true, tenantId: true, no: true, deliveryDate: true, store: { select: { name: true } } } },
+        },
+        orderBy: { dueAt: 'asc' },
+      })
+      return rows.map(row => ({
+        id: row.id, amount: row.amount, status: row.status, dueAt: row.dueAt, paidAt: row.paidAt,
+        supplier: row.supplier && { id: row.supplier.id, name: row.supplier.name },
+        receipt: row.receipt?.tenantId === tenantId ? {
+          id: row.receipt.id, no: row.receipt.no, deliveryDate: row.receipt.deliveryDate,
+          store: row.receipt.store && { name: row.receipt.store.name },
+        } : null,
+      }))
+    }
     return prisma.paymentSchedule.findMany({
       where,
       include: {
@@ -94,6 +117,58 @@ export const scheduleRoutes: FastifyPluginAsync = async (app) => {
       },
       orderBy: { createdAt: 'asc' },
     })
+  })
+
+  // 单笔只读详情（DEC-023 / DJ-002）：到期/付款状态与来源入库单。
+  // 只返回 select 白名单字段；不带 bankTxNo/bankRawResponse 等银行与审批原始信息，无任何写副作用。
+  app.get('/:id', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role, supplierId } = req.user
+    if (!GROUP_READ_ROLES.has(role)
+        && !isSupplierRole(role)
+        && !isStoreScoped(role)
+        && !hasInternalSupplyChainCapability(role, 'finance.read')) {
+      return reply.status(403).send({ error: '无权查看付款计划' })
+    }
+    const parsed = detailParamsSchema.safeParse(req.params || {})
+    if (!parsed.success) return reply.status(400).send({ error: '账期ID无效' })
+    // 与列表一致的租户/供应商/门店过滤；findFirst 同时收 id 与 tenantId
+    const where: any = { id: parsed.data.id, tenantId }
+    if (isSupplierRole(role)) where.supplierId = supplierId || '__NONE__'
+    if (isStoreScoped(role)) {
+      const scope = storeScopeOf(req.user) ?? []
+      where.storeId = scope.length ? { in: scope } : '__NONE__'
+    }
+    try {
+      const schedule = await prisma.paymentSchedule.findFirst({
+        where,
+        select: {
+          id: true, amount: true, status: true, dueAt: true, paidAt: true,
+          supplier: { select: { id: true, name: true } },
+          receipt: {
+            select: {
+              id: true, no: true, deliveryDate: true, totalAmount: true, tenantId: true,
+              store: { select: { id: true, name: true } },
+            },
+          },
+        },
+      })
+      if (!schedule) return reply.status(404).send({ error: '账期不存在' })
+      // 子关联租户一致性：来源入库不属于本租户时按无来源呈现，不泄露其内容
+      const source = schedule.receipt && schedule.receipt.tenantId === tenantId
+        ? {
+            id: schedule.receipt.id,
+            no: schedule.receipt.no,
+            deliveryDate: schedule.receipt.deliveryDate,
+            totalAmount: schedule.receipt.totalAmount,
+            store: schedule.receipt.store,
+          }
+        : null
+      const { receipt: _checked, ...detail } = schedule
+      return { ...detail, receipt: source }
+    } catch (error: any) {
+      req.log.error({ err: error }, 'payment schedule detail read failed')
+      return reply.status(500).send({ error: '账期详情加载失败' })
+    }
   })
 
   async function reviewSchedule(params: {

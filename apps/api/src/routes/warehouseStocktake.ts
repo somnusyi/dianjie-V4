@@ -1,5 +1,6 @@
 import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
+import { prisma } from '@dianjie/db'
 import {
   approveWarehouseStocktake,
   cancelWarehouseStocktake,
@@ -7,6 +8,7 @@ import {
   getWarehouseStocktake,
   listWarehouseStocktakes,
   rejectWarehouseStocktake,
+  refreshWarehouseStocktakeUnits,
   saveWarehouseStocktakeSection,
   submitWarehouseStocktake,
   warehouseStocktakeOptions,
@@ -21,6 +23,7 @@ const createSchema = z.object({
   requestKey: z.string().trim().min(8).max(160),
   warehouseId: id,
   countDate: z.string().date(),
+  countScope: z.enum(['ALL', 'SELECTED']).optional(),
   note: z.string().trim().max(500).optional().nullable(),
   sections: z.array(z.object({
     name: z.string().trim().min(1).max(120),
@@ -58,6 +61,12 @@ export const warehouseStocktakeRoutes: FastifyPluginAsync = async app => {
     return reply.status(error.statusCode || 500).send({ error: error.statusCode ? error.message : '盘点操作失败，请稍后重试' })
   })
 
+  app.get('/logs', auth(WAREHOUSE_STOCKTAKE_READ_ROLES), async (req: any) => {
+    const rows = await prisma.opLog.findMany({ where: { tenantId: req.user.tenantId, entityType: 'WarehouseStocktake' }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 100, select: { id: true, target: true, action: true, createdAt: true, userId: true } })
+    const actors = await prisma.user.findMany({ where: { tenantId: req.user.tenantId, id: { in: rows.flatMap(row => row.userId ? [row.userId] : []) } }, select: { id: true, name: true } })
+    const names = new Map(actors.map(actor => [actor.id, actor.name]))
+    return { items: rows.map(row => ({ id: row.id, no: row.target, action: row.action, createdAt: row.createdAt, actor: row.userId ? names.get(row.userId) || '—' : '—' })) }
+  })
   app.get('/options', auth(WAREHOUSE_STOCKTAKE_READ_ROLES), async (req: any) => warehouseStocktakeOptions(req.user.tenantId))
   app.get('/', auth(WAREHOUSE_STOCKTAKE_READ_ROLES), async (req: any, reply) => {
     const parsed = z.object({
@@ -104,6 +113,11 @@ export const warehouseStocktakeRoutes: FastifyPluginAsync = async app => {
     return saveWarehouseStocktakeSection({
       tenantId: req.user.tenantId, userId: req.user.userId, stocktakeId: req.params.id, sectionId: req.params.sectionId, ...parsed.data,
     })
+  })
+  app.post('/:id/refresh-units', auth(WAREHOUSE_STOCKTAKE_WRITE_ROLES), async (req: any, reply) => {
+    const parsed = rowVersionSchema.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    return refreshWarehouseStocktakeUnits({ tenantId: req.user.tenantId, id: req.params.id, ...parsed.data })
   })
   app.post('/:id/submit', auth(WAREHOUSE_STOCKTAKE_WRITE_ROLES), async (req: any, reply) => {
     const parsed = rowVersionSchema.safeParse(req.body)

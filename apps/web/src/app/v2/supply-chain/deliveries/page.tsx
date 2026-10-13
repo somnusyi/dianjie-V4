@@ -77,13 +77,6 @@ const DELIVERY_COLUMNS: readonly OrderCenterTableColumn<ProjectedDelivery>[] = [
     renderCell: delivery => delivery.store?.name || '—',
   },
   {
-    id: 'supplier',
-    header: '供应商',
-    defaultWidth: 214,
-    cellClassName: 'text-gray2',
-    renderCell: delivery => delivery.supplier?.name || '—',
-  },
-  {
     id: 'createdAt',
     header: '创建时间',
     defaultWidth: 110,
@@ -102,16 +95,6 @@ const DELIVERY_COLUMNS: readonly OrderCenterTableColumn<ProjectedDelivery>[] = [
     header: '状态',
     defaultWidth: 77,
     renderCell: delivery => <Chip tone={deliveryStatusTone(delivery.status)}>{formatDeliveryStatusLabel(delivery.status)}</Chip>,
-  },
-  {
-    id: 'summary',
-    header: '商品摘要',
-    defaultWidth: 400,
-    cellClassName: 'text-gray2',
-    renderCell: delivery => {
-      const summary = deliveryItemSummary(delivery)
-      return <span title={summary}>{summary}</span>
-    },
   },
   {
     id: 'amount',

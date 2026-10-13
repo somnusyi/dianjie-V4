@@ -39,6 +39,10 @@ const reviewSchema = z.object({
   note: z.string().trim().max(1000).optional(),
 }).strict()
 
+const detailParamsSchema = z.object({
+  id: z.string().trim().min(1).max(100),
+}).strict()
+
 function httpError(message: string, statusCode: number) {
   return Object.assign(new Error(message), { statusCode })
 }
@@ -167,6 +171,67 @@ export const reconciliationRoutes: FastifyPluginAsync = async (app) => {
       },
       orderBy: { createdAt: 'desc' },
     })
+  })
+
+  // 单笔只读详情（DEC-023 / DJ-002）：期间、状态、总金额与全部组成来源单。
+  // 返回完整 items（按到货日+单号稳定排序，不分页不截断）；金额为入库当时的对账值，不重算。
+  app.get('/:id', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role, supplierId } = req.user
+    if (!FINANCE_ROLES.has(role)
+        && !isSupplierRole(role)
+        && !hasInternalSupplyChainCapability(role, 'finance.read')) {
+      return reply.status(403).send({ error: '无权查看对账单' })
+    }
+    if (isSupplierRole(role) && !supplierId) {
+      return reply.status(403).send({ error: '供应商账号未绑定供应商' })
+    }
+    const parsed = detailParamsSchema.safeParse(req.params || {})
+    if (!parsed.success) return reply.status(400).send({ error: '对账单ID无效' })
+    try {
+      const recon = await prisma.reconciliation.findFirst({
+        where: {
+          id: parsed.data.id, tenantId,
+          ...(isSupplierRole(role) ? { supplierId } : {}),
+        },
+        select: {
+          id: true, no: true, periodStart: true, periodEnd: true, status: true, totalAmount: true,
+          supplier: { select: { id: true, name: true, no: true } },
+          items: {
+            // 子关联租户一致：只呈现本租户入库单组成的行
+            where: { receipt: { tenantId } },
+            select: {
+              receiptId: true, amount: true,
+              receipt: {
+                select: { id: true, no: true, deliveryDate: true, totalAmount: true, tenantId: true },
+              },
+            },
+          },
+        },
+      })
+      if (!recon) return reply.status(404).send({ error: '对账单不存在' })
+      const items = recon.items
+        .filter(item => item.receipt && item.receipt.tenantId === tenantId)
+        .map(item => ({
+          receiptId: item.receiptId,
+          amount: item.amount,
+          receipt: {
+            id: item.receipt!.id,
+            no: item.receipt!.no,
+            deliveryDate: item.receipt!.deliveryDate,
+            totalAmount: item.receipt!.totalAmount,
+          },
+        }))
+        .sort((a, b) => {
+          const dateA = new Date(a.receipt.deliveryDate).getTime()
+          const dateB = new Date(b.receipt.deliveryDate).getTime()
+          if (dateA !== dateB) return dateA - dateB
+          return a.receipt.no.localeCompare(b.receipt.no)
+        })
+      return { ...recon, items }
+    } catch (error: any) {
+      req.log.error({ err: error }, 'reconciliation detail read failed')
+      return reply.status(500).send({ error: '对账单详情加载失败' })
+    }
   })
 
   app.post('/', auth(app), async (req: any, reply: any) => {

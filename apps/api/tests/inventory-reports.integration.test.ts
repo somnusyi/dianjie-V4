@@ -17,6 +17,18 @@ const query = 'start=2026-09-01&end=2026-09-21'
 const report = (id: string, extra = '', t = token) => app.inject({ url: `/api/inventory-reports/${id}?${query}${extra}`, headers: headers(t) })
 const savePolicy = (payload: Record<string, unknown>, id = productId, t = token) => app.inject({ method: 'PATCH', url: `/api/inventory-reports/policies/${id}`, headers: headers(t), payload })
 const listPolicies = (extra = '', t = token) => app.inject({ url: `/api/inventory-reports/policies${extra}`, headers: headers(t) })
+const policyAction = async (action:string,id=productId,wh=warehouseId) => {
+ const revision=await prisma.warehouseInventoryPolicyRevision.findFirstOrThrow({where:{tenantId,warehouseId:wh,productId:id,isCurrent:true}})
+ const response=await app.inject({method:'POST',url:`/api/inventory-reports/policies/${id}/${action}`,headers:headers(),payload:{warehouseId:wh,rowVersion:revision.rowVersion,revisionId:revision.id,requestId:randomUUID()}})
+ expect(response.statusCode,response.body).toBe(200);return response
+}
+const finishPolicy = async(id=productId,wh=warehouseId)=>{for(const action of ['submit','audit','review'])await policyAction(action,id,wh)}
+const reopenPolicy = async(id=productId,wh=warehouseId)=>{
+ await policyAction('revise',id,wh)
+ const policy=await prisma.warehouseInventoryPolicy.findUniqueOrThrow({where:{tenantId_warehouseId_productId:{tenantId,warehouseId:wh,productId:id}}})
+ const revision=await prisma.warehouseInventoryPolicyRevision.findFirstOrThrow({where:{tenantId,warehouseId:wh,productId:id,isCurrent:true}})
+ return {rowVersion:policy.rowVersion,draftVersion:revision.rowVersion,revisionId:revision.id}
+}
 const create = (overrides: any = {}) => app.inject({ method: 'POST', url: '/api/store-transfers', headers: headers(adminToken), payload: { fromStoreId, toStoreId, transferDate: '2026-09-21', requestKey: randomUUID(), items: [{ productId, quantity: 3, cost: 2, settlement: 2.5 }], ...overrides } })
 const transition = (id: string, status: string) => app.inject({ method: 'PATCH', url: `/api/store-transfers/${id}/status`, headers: headers(adminToken), payload: { status } })
 
@@ -25,7 +37,8 @@ describe('inventory reports and persistent store transfers', () => {
     const suffix = randomUUID()
     const tenant = await prisma.tenant.create({ data: { name: '报表测试', slug: `reports-${suffix}` } }); tenantId = tenant.id
     const other = await prisma.tenant.create({ data: { name: '隔离租户', slug: `other-${suffix}` } }); otherTenantId = other.id
-    warehouseId = (await prisma.warehouse.findFirstOrThrow({ where: { tenantId, isDefault: true } })).id
+    await prisma.warehouse.create({ data: { tenantId: otherTenantId, code: 'QA-DEFAULT', name: '隔离测试默认仓', isDefault: true } })
+    warehouseId = (await prisma.warehouse.create({ data: { tenantId, code: 'QA-DEFAULT', name: '测试默认仓', isDefault: true } })).id
     secondWarehouseId = (await prisma.warehouse.create({ data: { tenantId, code: `SECOND-${suffix}`, name: '二号仓', isDefault: false, isActive: true } })).id
     const supplier = await prisma.supplier.create({ data: { tenantId, no: 'SUP', name: '测试供应商' } }); supplierId = supplier.id
     const product = await prisma.product.create({ data: { tenantId, supplierId: supplier.id, code: 'REPORT-01', name: '测试土豆', price: 3, unit: 'kg', inventoryUnit: 'kg', purchaseUnit: '箱', inventoryUnitsPerPurchaseUnit: 10, orderUnit: 'kg', costUnit: 'kg', inventoryUnitsPerOrderUnit: 1, inventoryUnitsPerCostUnit: 1, unitConversionStatus: 'VERIFIED', status: 'ENABLED' } }); productId = product.id
@@ -101,6 +114,8 @@ describe('inventory reports and persistent store transfers', () => {
   afterAll(async () => {
     await app.close()
     if (!tenantId) return
+    await prisma.warehouseInventoryPolicyRevisionEvent.deleteMany({where:{tenantId}})
+    await prisma.warehouseInventoryPolicyRevision.deleteMany({where:{tenantId}})
     await prisma.storeTransferItem.deleteMany({ where: { transfer: { tenantId } } }); await prisma.storeTransfer.deleteMany({ where: { tenantId } })
     await prisma.warehouseInventoryPolicyEvent.deleteMany({ where: { tenantId } }); await prisma.warehouseInventoryPolicy.deleteMany({ where: { tenantId } })
     await prisma.warehouseLedgerMovement.deleteMany({ where: { tenantId } }); await prisma.warehouseLedgerBalance.deleteMany({ where: { tenantId } })
@@ -245,12 +260,12 @@ describe('inventory reports and persistent store transfers', () => {
     expect(deliveryRows.reduce((sum: number, row: any) => sum + row.outAmount - (row.inAmount || 0), 0)).toBe(10.5)
     expect(deliveryRows.reduce((sum: number, row: any) => sum + row.outSettlementAmount, 0)).toBe(17.5)
     expect(deliveryRows.reduce((sum: number, row: any) => sum + row.outProfit, 0)).toBe(7)
-    expect((await report('realtime')).json().rows[0]).toMatchObject({ conversion: 1, qty: 112, netAmount: null, netPrice: null })
+    expect((await report('realtime')).json().rows[0]).toMatchObject({ conversion: 1, qty: 112, amount: 229, price: 2.044643 })
     expect((await report('summary')).json().rows[0]).toMatchObject({ openingPrice: 2, inPrice: 3, outPrice: 2 })
   })
   it('serves other movements, stagnation and alerts with tenant and role isolation', async () => {
     expect((await report('other-summary')).json().rows[0]).toMatchObject({ baseUnit: 'kg', quantity: 5, amount: 15, type: '手工入库' })
-    expect((await report('stagnant', '&stagnantDays=36500')).json().rows[0]).toMatchObject({ qty: 112, stagnantDays: 36500, isStagnant: '否', lastInQty: 99, lastOutQty: 2 })
+    expect((await report('stagnant', '&stagnantDays=36500')).json().rows[0]).toMatchObject({ qty: 112, stagnantDays: 30, lastInQty: 0.25, lastOutQty: 2 })
     expect((await report('alerts')).json().rows[0]).toMatchObject({ qty: 112, minQty: null, maxQty: null, alertStatus: '阈值未配置' })
     expect((await report('stagnant', '&stagnantDays=0')).statusCode).toBe(400)
     for (const id of ['other-summary', 'stagnant', 'alerts']) {
@@ -263,42 +278,51 @@ describe('inventory reports and persistent store transfers', () => {
     const requestId = randomUUID()
     const created = await savePolicy({ minQty: 100, maxQty: 120, stagnantDays: 36500, active: true, rowVersion: 0, requestId })
     expect(created.statusCode, created.body).toBe(200)
-    expect(created.json()).toMatchObject({ replayed: false, policy: { inventoryUnitSnapshot: 'kg', minQty: 100, maxQty: 120, stagnantDays: 36500, active: true, rowVersion: 0 } })
+    expect(created.json()).toMatchObject({ replayed: false, policy:null, revision:{status:'DRAFT',payload:{inventoryUnitSnapshot:'kg',minQty:100,maxQty:120,stagnantDays:30,active:true}} })
     const replay = await savePolicy({ minQty: 100, maxQty: 120, stagnantDays: 36500, active: true, rowVersion: 0, requestId })
     expect(replay.statusCode, replay.body).toBe(200); expect(replay.json().replayed).toBe(true)
     expect((await savePolicy({ minQty: 100, maxQty: 121, stagnantDays: 36500, active: true, rowVersion: 0, requestId })).statusCode).toBe(409)
 
     const second = await savePolicy({ warehouseId: secondWarehouseId, minQty: 5, maxQty: 10, stagnantDays: 20, active: true, rowVersion: 0, requestId: randomUUID() })
     expect(second.statusCode, second.body).toBe(200)
+    expect((await listPolicies()).json().items.find((item:any)=>item.productId===productId).maxQty).toBeNull()
+    await finishPolicy();await finishPolicy(productId,secondWarehouseId)
     const policies = (await listPolicies()).json()
-    expect(policies.items.find((item: any) => item.productId === productId)).toMatchObject({ minQty: 100, maxQty: 120, stagnantDays: 36500, source: 'configured' })
-    expect((await listPolicies(`?warehouseId=${secondWarehouseId}`)).json().items.find((item: any) => item.productId === productId)).toMatchObject({ minQty: 5, maxQty: 10, stagnantDays: 20 })
+    expect(policies.items.find((item: any) => item.productId === productId)).toMatchObject({ minQty: 100, maxQty: 120, stagnantDays: 30, source: 'configured' })
+    expect((await listPolicies(`?warehouseId=${secondWarehouseId}`)).json().items.find((item: any) => item.productId === productId)).toMatchObject({ minQty: 5, maxQty: 10, stagnantDays: 30 })
     expect((await listPolicies('', foreignToken)).json().total).toBe(0)
     expect((await savePolicy({ minQty: 1, maxQty: 2, stagnantDays: 30, active: true, rowVersion: 0, requestId: randomUUID() }, productId, foreignToken)).statusCode).toBe(403)
 
-    const event = await prisma.warehouseInventoryPolicyEvent.findFirstOrThrow({ where: { tenantId, requestId } })
-    expect(event.beforeValue).toBeNull()
-    expect(event.afterValue).toMatchObject({ inventoryUnitSnapshot: 'kg', minQty: 100, maxQty: 120, stagnantDays: 36500, active: true, rowVersion: 0 })
+    const event = await prisma.warehouseInventoryPolicyRevisionEvent.findFirstOrThrow({ where: { tenantId, requestId } })
+    expect(event.beforeValue).toMatchObject({policy:null,revision:null})
+    expect(event.afterValue).toMatchObject({policy:null,revision:{status:'DRAFT',payload:{inventoryUnitSnapshot:'kg',minQty:100,maxQty:120,stagnantDays:30,active:true}}})
     expect(event.actorId).toBe(userId); expect(event.actorRole).toBe('SUPPLY_CHAIN')
   })
-  it('uses configured limits and per-product stagnation without mutating stock or configuration', async () => {
+  it('uses configured limits and fixed30 reminders without mutating stock or historical configuration', async () => {
     expect((await report('alerts')).json().rows[0]).toMatchObject({ qty: 112, minQty: 100, maxQty: 120, alertStatus: '正常' })
     const existing = await prisma.warehouseInventoryPolicy.findFirstOrThrow({ where: { tenantId, warehouseId, productId } })
-    const high = await savePolicy({ minQty: 90, maxQty: 110, stagnantDays: 36500, active: true, rowVersion: existing.rowVersion, requestId: randomUUID() })
+    const versions=await reopenPolicy()
+    const high = await savePolicy({ minQty: 90, maxQty: 110, stagnantDays: 36500, active: true, ...versions, requestId: randomUUID() })
     expect(high.statusCode, high.body).toBe(200)
+    await finishPolicy()
     expect((await report('alerts')).json().rows[0].alertStatus).toBe('高于上限')
     const movementCount = await prisma.warehouseLedgerMovement.count({ where: { tenantId } })
-    expect((await report('stagnant')).json().rows[0]).toMatchObject({ stagnantDays: 36500, isStagnant: '否' })
-    expect((await report('stagnant', '&stagnantDays=1')).json().rows[0]).toMatchObject({ stagnantDays: 1, isStagnant: '是' })
-    expect((await prisma.warehouseInventoryPolicy.findFirstOrThrow({ where: { tenantId, warehouseId, productId } })).stagnantDays).toBe(36500)
+    // Keep a historical45 rule: GET must neither use nor rewrite it.
+    await prisma.warehouseInventoryPolicy.update({ where: { id: existing.id }, data: { stagnantDays: 45 } })
+    const defaultRow = (await report('stagnant')).json().rows[0]
+    expect(defaultRow).toMatchObject({ stagnantDays: 30, isStagnant: defaultRow.retainedDays >= 30 ? '是' : '否' })
+    expect((await report('stagnant', '&stagnantDays=1')).json().rows[0]).toMatchObject({ stagnantDays: 30, isStagnant: defaultRow.isStagnant })
+    expect((await prisma.warehouseInventoryPolicy.findFirstOrThrow({ where: { tenantId, warehouseId, productId } })).stagnantDays).toBe(45)
     expect(await prisma.warehouseLedgerMovement.count({ where: { tenantId } })).toBe(movementCount)
   })
   it('does not revive legacy minStock after a warehouse policy is explicitly disabled', async () => {
     await prisma.warehouseLedgerBalance.create({ data: { tenantId, warehouseId: secondWarehouseId, productId, inventoryUnit: 'kg', physicalQty: 5, reservedQty: 0, inventoryValue: 10, averageUnitCost: 2 } })
     await prisma.product.update({ where: { id: productId }, data: { minStock: 99 } })
     const policy = await prisma.warehouseInventoryPolicy.findFirstOrThrow({ where: { tenantId, warehouseId: secondWarehouseId, productId } })
-    const disabled = await savePolicy({ warehouseId: secondWarehouseId, minQty: 5, maxQty: 10, stagnantDays: 20, active: false, rowVersion: policy.rowVersion, requestId: randomUUID() })
+    const versions=await reopenPolicy(productId,secondWarehouseId)
+    const disabled = await savePolicy({ warehouseId: secondWarehouseId, minQty: 5, maxQty: 10, stagnantDays: 20, active: false, ...versions, requestId: randomUUID() })
     expect(disabled.statusCode, disabled.body).toBe(200)
+    await finishPolicy(productId,secondWarehouseId)
     expect((await report('alerts', `&warehouseId=${secondWarehouseId}`)).json().rows[0]).toMatchObject({ qty: 5, minQty: null, maxQty: null, alertStatus: '阈值未配置' })
     await prisma.warehouseLedgerBalance.delete({ where: { tenantId_warehouseId_productId: { tenantId, warehouseId: secondWarehouseId, productId } } })
     await prisma.product.update({ where: { id: productId }, data: { minStock: 0 } })
@@ -312,7 +336,7 @@ describe('inventory reports and persistent store transfers', () => {
     ])
     expect([first.statusCode, duplicate.statusCode]).toEqual([200, 200])
     expect([first.json().replayed, duplicate.json().replayed].sort()).toEqual([false, true])
-    expect(await prisma.warehouseInventoryPolicyEvent.count({ where: { tenantId, requestId: sameRequestId } })).toBe(1)
+    expect(await prisma.warehouseInventoryPolicyRevisionEvent.count({ where: { tenantId, requestId: sameRequestId } })).toBe(1)
 
     const conflictRequestId = randomUUID()
     const [one, two] = await Promise.all([
@@ -320,13 +344,14 @@ describe('inventory reports and persistent store transfers', () => {
       savePolicy({ warehouseId: secondWarehouseId, minQty: 1, maxQty: 11, stagnantDays: 30, active: true, rowVersion: 0, requestId: conflictRequestId }, secondProductId),
     ])
     expect([one.statusCode, two.statusCode].sort()).toEqual([200, 409])
-    expect(await prisma.warehouseInventoryPolicyEvent.count({ where: { tenantId, requestId: conflictRequestId } })).toBe(1)
+    expect(await prisma.warehouseInventoryPolicyRevisionEvent.count({ where: { tenantId, requestId: conflictRequestId } })).toBe(1)
   })
   it('rejects stale concurrent policy writes with 409', async () => {
     const existing = await prisma.warehouseInventoryPolicy.findFirstOrThrow({ where: { tenantId, warehouseId, productId } })
+    const versions=await reopenPolicy()
     const [left, right] = await Promise.all([
-      savePolicy({ minQty: 80, maxQty: 115, stagnantDays: 40, active: true, rowVersion: existing.rowVersion, requestId: randomUUID() }),
-      savePolicy({ minQty: 85, maxQty: 116, stagnantDays: 41, active: true, rowVersion: existing.rowVersion, requestId: randomUUID() }),
+      savePolicy({ minQty: 80, maxQty: 115, stagnantDays: 40, active: true, ...versions, requestId: randomUUID() }),
+      savePolicy({ minQty: 85, maxQty: 116, stagnantDays: 41, active: true, ...versions, requestId: randomUUID() }),
     ])
     expect([left.statusCode, right.statusCode].sort()).toEqual([200, 409])
   })

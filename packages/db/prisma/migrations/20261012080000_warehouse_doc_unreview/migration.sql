@@ -1,0 +1,1 @@
+ALTER TYPE "WarehouseDocLogAction" ADD VALUE IF NOT EXISTS 'UNREVIEW';

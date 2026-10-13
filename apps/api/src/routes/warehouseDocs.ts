@@ -4,11 +4,14 @@ import { z } from 'zod'
 import { hasInternalSupplyChainCapability, isInternalSupplyChainRole } from '../lib/internal-supply-chain-access'
 import {
   confirmWarehouseDoc,
+  reviewWarehouseDoc,
+  unreviewWarehouseDoc,
   editWarehouseDoc,
   normalizeWarehouseDocAttachments,
   unconfirmWarehouseDoc,
 } from '../services/warehouseDocs'
 import { signOssKey } from './upload'
+import {registerDocumentQualityImageRoutes} from './documentQualityImage'
 
 // 仓库单据（审核流）：台账之上的控制层。
 // 读：仓库/财务可见；改单：仓库写角色；审核/反审核：会计（FINANCE）与管理员。
@@ -46,19 +49,20 @@ const editSchema = z.object({
   reason: z.string().trim().max(120).optional().nullable(),
   lines: z.array(z.object({
     lineId: z.string().trim().min(1),
-    amount: z.number().positive().max(999_999_999.99).optional().nullable(),
+    amount: z.number().min(0).max(999_999_999.99).optional().nullable(),
     quantity: z.number().positive().max(99_999_999).optional().nullable(),
     note: z.string().trim().max(240).optional().nullable(),
     batchNo: z.string().trim().max(80).optional().nullable(),
     manufactureDate: z.string().date().optional().nullable(),
     expiryDate: z.string().date().optional().nullable(),
-  })).max(200).default([]),
+  })).max(200).default([]).refine(lines => new Set(lines.map(line => line.lineId)).size === lines.length, '同一单据行不能重复提交'),
 })
 
 export const warehouseDocsRoutes: FastifyPluginAsync = async app => {
   const authRead = { preHandler: [(app as any).authenticate, requireDocAccess('read', '无权查看仓库单据')] }
+  registerDocumentQualityImageRoutes(app,'','WAREHOUSE',authRead)
   const authWrite = { preHandler: [(app as any).authenticate, requireDocAccess('write', '无权修改仓库单据')] }
-  const authAudit = { preHandler: [(app as any).authenticate, requireDocAccess('audit', '只有会计/管理员可以审核单据')] }
+  const authAudit = { preHandler: [(app as any).authenticate, async(req:any,reply:any)=>{if(!hasInternalSupplyChainCapability(req.user?.role,'inventory.write'))return reply.code(403).send({error:'库存单据审核由供应链操作'})}] }
 
   // 单据列表
   app.get('/', authRead, async (req: any) => {
@@ -129,9 +133,20 @@ export const warehouseDocsRoutes: FastifyPluginAsync = async app => {
       // whole accounting document unreadable. It remains visible as zero files.
       attachments = []
     }
+    // Header/line descriptions come from the same tenant. They supplement the
+    // immutable product name/unit/quantity stored on the original document.
+    const [warehouse, tenant, products] = await Promise.all([
+      prisma.warehouse.findFirst({ where: { id: doc.warehouseId, tenantId: req.user.tenantId }, select: { id: true, code: true, name: true } }),
+      prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { name: true } }),
+      prisma.product.findMany({ where: { tenantId: req.user.tenantId, id: { in: doc.lines.map(line => line.productId) } }, select: { id: true, code: true, spec: true, category: true } }),
+    ])
+    const descriptions = new Map(products.map(product => [product.id, product]))
     const safeDoc = withoutWarehouseDocAttachmentKeys(doc)
     return {
       ...safeDoc,
+      warehouse,
+      organizationName: tenant?.name || null,
+      lines: doc.lines.map(line => ({ ...line, productCode: descriptions.get(line.productId)?.code || null, productSpec: descriptions.get(line.productId)?.spec || null, productCategory: descriptions.get(line.productId)?.category || null })),
       attachmentCount: attachments.length,
       attachments: attachments.map(item => ({
         name: item.name,
@@ -142,9 +157,11 @@ export const warehouseDocsRoutes: FastifyPluginAsync = async app => {
     }
   })
 
-  // 会计审核
+  // 入库审核归供应链；出库保留原有授权边界。
   app.post('/:id/confirm', authAudit, async (req: any, reply: any) => {
     try {
+      const candidate=await prisma.warehouseDoc.findFirst({where:{id:String(req.params.id),tenantId:req.user.tenantId},select:{type:true}})
+      if(candidate?.type==='MANUAL_INBOUND' && !hasInternalSupplyChainCapability(req.user.role,'inventory.write')) return reply.code(403).send({error:'入库审核由供应链操作'})
       const result = await confirmWarehouseDoc({
         tenantId: req.user.tenantId,
         userId: req.user.userId,
@@ -157,11 +174,28 @@ export const warehouseDocsRoutes: FastifyPluginAsync = async app => {
     }
   })
 
-  // 会计反审核（必填退回原因）
+  // DEC-034：入库复审仅供应链操作，不调用财务审批或修改角色配置。
+  app.post('/:id/review', { preHandler: [(app as any).authenticate, async (req:any, reply:any) => {
+    if (!hasInternalSupplyChainCapability(req.user?.role,'inventory.write')) return reply.code(403).send({error:'入库复审由供应链操作'})
+  }] }, async (req:any, reply:any) => {
+    try {
+      const result = await reviewWarehouseDoc({tenantId:req.user.tenantId,userId:req.user.userId,docId:String(req.params.id)})
+      return {ok:true,changed:result.changed,reviewStatus:result.doc.reviewStatus}
+    } catch(error:any) {if(error.statusCode)return reply.code(error.statusCode).send({error:error.message});throw error}
+  })
+
+  app.post('/:id/unreview',authAudit,async(req:any,reply:any)=>{
+    try{const result=await unreviewWarehouseDoc({tenantId:req.user.tenantId,userId:req.user.userId,docId:String(req.params.id)});return {ok:true,changed:result.changed,reviewStatus:result.doc.reviewStatus}}
+    catch(error:any){if(error.statusCode)return reply.code(error.statusCode).send({error:error.message});throw error}
+  })
+
+  // 入库反审核归供应链，必填退回原因.
   app.post('/:id/unconfirm', authAudit, async (req: any, reply: any) => {
     const parsed = z.object({ reason: z.string().trim().min(2, '请填写退回原因').max(240) }).safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     try {
+      const candidate=await prisma.warehouseDoc.findFirst({where:{id:String(req.params.id),tenantId:req.user.tenantId},select:{type:true}})
+      if(candidate?.type==='MANUAL_INBOUND' && !hasInternalSupplyChainCapability(req.user.role,'inventory.write')) return reply.code(403).send({error:'入库反审核由供应链操作'})
       const result = await unconfirmWarehouseDoc({
         tenantId: req.user.tenantId,
         userId: req.user.userId,

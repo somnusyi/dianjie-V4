@@ -22,6 +22,9 @@ import {
   type WarehouseDocLineInput,
 } from '../services/warehouseDocs'
 import { findLatestPurchaseInboundPrices } from '../services/purchaseInboundPriceHistory'
+import { submitInboundDraft, draftPayloadSchema } from '../services/warehouseInboundDrafts'
+import { registerWarehouseInboundDraftRoutes } from './warehouseInboundDrafts'
+import { currentInboundValues } from '../services/warehouseMovementDisplay'
 import { assertWarehouseDocumentObjects } from './upload'
 
 /** 过账后登记单据（find-or-create，幂等键与台账批次对齐）。登记失败抛错，前端可用同一幂等键安全重试。 */
@@ -113,6 +116,8 @@ const manualInboundSchema = z.object({
   productId: z.string().trim().min(1),
   purchaseQuantity: z.number().positive().max(99_999_999),
   totalAmount: z.number().positive().max(999_999_999.99),
+  draftId: z.string().min(8).max(80).optional(),
+  draftVersion: z.number().int().positive().optional(),
   effectiveAt: z.string().datetime({ offset: true }),
   idempotencyKey: z.string().trim().min(8).max(80),
   supplierId: z.string({ required_error: '请选择供货供应商' }).trim().min(1, '请选择供货供应商'),
@@ -140,6 +145,8 @@ const batchManualInboundSchema = z.object({
     manufactureDate: z.string().date().optional().nullable(),
     expiryDate: z.string().date().optional().nullable(),
   })).min(1).max(200),
+  draftId: z.string().min(8).max(80).optional(),
+  draftVersion: z.number().int().positive().optional(),
   effectiveAt: z.string().datetime({ offset: true }),
   idempotencyKey: z.string().trim().min(8).max(80),
   supplierId: z.string({ required_error: '请选择供货供应商' }).trim().min(1, '请选择供货供应商'),
@@ -366,6 +373,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
   const authRead = { preHandler: [(app as any).authenticate, requireCapability('inventory.read')] }
   const authWrite = { preHandler: [(app as any).authenticate, requireCapability('inventory.write')] }
   const authOrderEntryPolicyWrite = { preHandler: [(app as any).authenticate, requireOrderEntryPolicyWrite()] }
+  registerWarehouseInboundDraftRoutes(app, authWrite)
 
   app.get('/', authRead, async (req: any, reply: any) => {
     const parsed = z.object({
@@ -511,13 +519,16 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
       include: {
         product: { select: { id: true, code: true, name: true } },
         reversal: { select: { id: true } },
+        docLines: { select: { doc: { select: { status: true, reviewStatus: true } } } },
       },
     })
+    const inboundValues = await currentInboundValues(prisma, tenantId, warehouseId, rows)
     return rows.map(row => ({
       ...row,
       physicalDelta: number(row.physicalDelta),
       reservedDelta: number(row.reservedDelta),
       valueDelta: number(row.valueDelta),
+      currentInboundValue: inboundValues.has(row.id) ? number(inboundValues.get(row.id)) : undefined,
       physicalAfter: number(row.physicalAfter),
       reservedAfter: number(row.reservedAfter),
       valueAfter: number(row.valueAfter),
@@ -527,6 +538,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
       inventoryQuantity: number(row.inventoryQuantity),
       inventoryUnitCost: number(row.inventoryUnitCost),
       reversed: Boolean(row.reversal),
+      canReverse: !row.docLines.some(line => line.doc.status === 'CONFIRMED' || line.doc.reviewStatus === 'REVIEWED'),
     }))
   })
 
@@ -770,6 +782,8 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
   app.get('/inbound-candidates', authRead, async (req: any, reply: any) => {
     const parsed = z.object({
       q: z.string().trim().max(100).optional(),
+      paged:z.enum(['1']).optional(),cursor:z.string().min(1).max(100).optional(),
+      productIds:z.string().max(20000).transform(value=>[...new Set(value.split(',').map(id=>id.trim()).filter(Boolean))]).pipe(z.array(z.string().min(1).max(100)).min(1).max(200)).optional(),
       limit: z.coerce.number().int().min(1).max(500).default(500),
     }).safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
@@ -777,9 +791,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
     const products = await prisma.product.findMany({
       where: {
         tenantId: req.user.tenantId,
-        status: 'ENABLED',
-        unitConversionStatus: 'VERIFIED',
-        NOT: { category: 'BOM待采购映射' },
+        ...(parsed.data.productIds?{id:{in:parsed.data.productIds}}:{status:'ENABLED',unitConversionStatus:'VERIFIED',NOT:{category:'BOM待采购映射'}}),
         ...(terms.length ? {
           AND: terms.map(term => ({ OR: [
             { code: { contains: term, mode: 'insensitive' } },
@@ -788,19 +800,22 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
           ] })),
         } : {}),
       },
-      orderBy: [{ category: 'asc' }, { code: 'asc' }],
-      take: parsed.data.limit,
+      orderBy: parsed.data.paged||parsed.data.productIds?{id:'asc'}:[{category:'asc'},{code:'asc'}],
+      ...(parsed.data.cursor?{cursor:{id:parsed.data.cursor},skip:1}:{}),
+      take: parsed.data.productIds?200:parsed.data.limit,
       select: {
-        id: true, code: true, name: true, spec: true, category: true, unit: true,
+        id: true, code: true, name: true, spec: true, category: true, unit: true,status:true,
         purchaseUnit: true, inventoryUnit: true, orderUnit: true, costUnit: true,
         inventoryUnitsPerPurchaseUnit: true, inventoryUnitsPerOrderUnit: true,
         inventoryUnitsPerCostUnit: true, unitConversionStatus: true,
       },
     })
     return {
+      nextCursor:parsed.data.paged&&products.length===parsed.data.limit?products[products.length-1].id:null,
       items: products.flatMap(product => {
         const contract = resolveProductFourUnits(product)
-        if (!contract.structured.purchase || contract.status !== 'VERIFIED') return []
+        const eligible=product.status==='ENABLED'&&product.category!=='BOM待采购映射'&&contract.structured.purchase&&contract.status==='VERIFIED'
+        if(!eligible&&!parsed.data.productIds)return []
         return [{
           id: product.id,
           code: product.code,
@@ -809,7 +824,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
           category: product.category,
           purchaseUnit: contract.purchaseUnit,
           inventoryUnit: contract.inventoryUnit,
-          purchaseToInventoryFactor: contract.inventoryUnitsPerPurchaseUnit,
+          purchaseToInventoryFactor: eligible?contract.inventoryUnitsPerPurchaseUnit:0,eligible,unitConversionStatus:contract.status,
         }]
       }),
     }
@@ -830,9 +845,19 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
     }
     const parsed = manualInboundSchema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-    const manufactureDate = parsed.data.manufactureDate ? new Date(`${parsed.data.manufactureDate}T00:00:00+08:00`) : null
-    const expiryDate = parsed.data.expiryDate ? new Date(`${parsed.data.expiryDate}T00:00:00+08:00`) : null
+    const manufactureDate = parsed.data.manufactureDate ? new Date(`${parsed.data.manufactureDate}T00:00:00.000Z`) : null
+    const expiryDate = parsed.data.expiryDate ? new Date(`${parsed.data.expiryDate}T00:00:00.000Z`) : null
     try {
+      if (parsed.data.draftId) {
+        if (!parsed.data.draftVersion) return reply.code(400).send({error:'缺少草稿版本'})
+        const draft = await prisma.warehouseInboundDraft.findFirst({where:{id:parsed.data.draftId,tenantId:req.user.tenantId,createdById:req.user.userId}})
+        if (!draft) return reply.code(404).send({error:'草稿不存在'})
+        if (draft.mode!=='SINGLE') return reply.code(400).send({error:'草稿类型与入库入口不一致'})
+        if (draft.status==='EDITING') await assertWarehouseDocumentObjects(req.user.tenantId,normalizeWarehouseDocAttachments(req.user.tenantId,draftPayloadSchema.parse(draft.payload).attachments))
+        const result=await submitInboundDraft({tenantId:req.user.tenantId,userId:req.user.userId,id:draft.id,version:parsed.data.draftVersion,auditOnSubmit:false})
+        return {ok:true,replayed:result.replayed,gateWarnings:result.gateWarnings,count:result.doc.lineCount,totalAmount:Number(result.doc.totalAmount),doc:{id:result.doc.id,docNo:result.doc.docNo,status:result.doc.status,reviewStatus:result.doc.reviewStatus}}
+      }
+
       const attachments = normalizeWarehouseDocAttachments(req.user.tenantId, parsed.data.attachments)
       await assertWarehouseDocumentObjects(req.user.tenantId, attachments)
       const supplier = await requireUpstreamSupplier(req.user.tenantId, parsed.data.supplierId)
@@ -926,6 +951,16 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
     const parsed = batchManualInboundSchema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     try {
+      if (parsed.data.draftId) {
+        if (!parsed.data.draftVersion) return reply.code(400).send({error:'缺少草稿版本'})
+        const draft = await prisma.warehouseInboundDraft.findFirst({where:{id:parsed.data.draftId,tenantId:req.user.tenantId,createdById:req.user.userId}})
+        if (!draft) return reply.code(404).send({error:'草稿不存在'})
+        if (draft.mode!=='BATCH') return reply.code(400).send({error:'草稿类型与入库入口不一致'})
+        if (draft.status==='EDITING') await assertWarehouseDocumentObjects(req.user.tenantId,normalizeWarehouseDocAttachments(req.user.tenantId,draftPayloadSchema.parse(draft.payload).attachments))
+        const result=await submitInboundDraft({tenantId:req.user.tenantId,userId:req.user.userId,id:draft.id,version:parsed.data.draftVersion,auditOnSubmit:false})
+        return {ok:true,replayed:result.replayed,gateWarnings:result.gateWarnings,count:result.doc.lineCount,totalAmount:Number(result.doc.totalAmount),doc:{id:result.doc.id,docNo:result.doc.docNo,status:result.doc.status,reviewStatus:result.doc.reviewStatus}}
+      }
+
       const attachments = normalizeWarehouseDocAttachments(req.user.tenantId, parsed.data.attachments)
       await assertWarehouseDocumentObjects(req.user.tenantId, attachments)
       const supplier = await requireUpstreamSupplier(req.user.tenantId, parsed.data.supplierId)
@@ -939,8 +974,8 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
           unitPrice: item.unitPrice,
           totalAmount: item.totalAmount ?? null,
           batchNo: item.batchNo,
-          manufactureDate: item.manufactureDate ? new Date(`${item.manufactureDate}T00:00:00+08:00`) : null,
-          expiryDate: item.expiryDate ? new Date(`${item.expiryDate}T00:00:00+08:00`) : null,
+          manufactureDate: item.manufactureDate ? new Date(`${item.manufactureDate}T00:00:00.000Z`) : null,
+          expiryDate: item.expiryDate ? new Date(`${item.expiryDate}T00:00:00.000Z`) : null,
         })),
         effectiveAt: new Date(parsed.data.effectiveAt),
         idempotencyKey: parsed.data.idempotencyKey,
@@ -995,8 +1030,8 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
             inventoryQuantity: movement ? Math.abs(number(movement.physicalDelta)) : 0,
             inventoryUnit: String(movement?.inventoryUnit || product?.inventoryUnit || ''),
             batchNo: item.batchNo,
-            manufactureDate: item.manufactureDate ? new Date(`${item.manufactureDate}T00:00:00+08:00`) : null,
-            expiryDate: item.expiryDate ? new Date(`${item.expiryDate}T00:00:00+08:00`) : null,
+            manufactureDate: item.manufactureDate ? new Date(`${item.manufactureDate}T00:00:00.000Z`) : null,
+            expiryDate: item.expiryDate ? new Date(`${item.expiryDate}T00:00:00.000Z`) : null,
             movementId: movement?.id || null,
           }
         }),

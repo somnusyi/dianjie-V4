@@ -4,9 +4,11 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
+import { warehouseMovementLabel } from '@/lib/warehouse-movement-label'
 import { ResponsiveDataTable } from '@/components/v2/responsive-data-table'
 import { WarehouseToolTabs } from '@/components/v2/warehouse-tool-tabs'
-import { apiFetch } from '@/lib/v2-auth'
+import { apiFetch, getUser } from '@/lib/v2-auth'
+import { useWarehouseInboundDraft } from '@/lib/use-warehouse-inbound-draft'
 import { buildInventoryExportRows } from '@/lib/inventory-export'
 import { readWarehouseViewState, useWarehouseScrollRestoration, writeWarehouseViewState } from '@/lib/warehouse-view-state'
 
@@ -30,7 +32,7 @@ type InventoryItem = {
   statusFlag: 'OK' | 'LOW' | 'OUT' | 'SHADOW_GAP'
 }
 
-type InboundCandidate = Pick<InventoryItem,
+type InboundCandidate = {eligible?:boolean}&Pick<InventoryItem,
   'id' | 'code' | 'name' | 'spec' | 'category' | 'purchaseUnit' | 'inventoryUnit' | 'purchaseToInventoryFactor'
 >
 
@@ -93,9 +95,11 @@ type InventoryScope = 'stock' | 'bom-mapping' | 'unit-review'
 type Movement = {
   id: string
   type: string
+  sourceType?: string | null
   physicalDelta: number
   reservedDelta: number
   valueDelta: number
+  currentInboundValue?: number
   physicalAfter: number
   reservedAfter: number
   inventoryUnit: string
@@ -104,6 +108,7 @@ type Movement = {
   sourceName?: string | null
   product: { id: string; code: string; name: string }
   reversed?: boolean
+  canReverse?: boolean
 }
 
 type LedgerAudit = {
@@ -118,17 +123,6 @@ type ShadowReconcilePage = {
   scanned: number
   failures: unknown[]
   nextCursor?: string | null
-}
-
-const MOVEMENT_LABEL: Record<string, string> = {
-  OPENING_BALANCE: '期初建账',
-  MANUAL_INBOUND: '手工入库',
-  ORDER_RESERVED: '门店订单预占',
-  ORDER_RELEASED: '订单预占释放',
-  ORDER_OUTBOUND: '门店订单出库',
-  ADJUSTMENT: '盘点调整',
-  LOSS: '仓库报损',
-  REVERSAL: '冲销',
 }
 
 function defaultEffectiveAt() {
@@ -149,7 +143,17 @@ function qty(value: number, digits = 3) {
   return Number(value || 0).toLocaleString('zh-CN', { maximumFractionDigits: digits })
 }
 
-function conversionText(item: InventoryItem) {
+function draftProductView(product:InboundCandidate|undefined,snapshot:any,displayed:any[],productId=product?.id): (InboundCandidate & {unitConversionStatus?:string})|undefined{
+ const frozen=snapshot?.products?.find((row:any)=>row.id===productId),units=frozen?.units,shown=displayed.find((row:any)=>row.productId===productId)
+ const source=product||(frozen?{id:frozen.id,code:frozen.code||'',name:frozen.name||'原草稿商品待核对',spec:frozen.spec,category:frozen.category,purchaseUnit:'',inventoryUnit:'',purchaseToInventoryFactor:0}:undefined)
+ if(!source)return undefined
+ if(units)return {...source,purchaseUnit:units.purchaseUnit,inventoryUnit:units.inventoryUnit,purchaseToInventoryFactor:units.structured?.purchase?units.inventoryUnitsPerPurchaseUnit:0,unitConversionStatus:units.status}
+ if(frozen)return {...source,purchaseUnit:'',inventoryUnit:'',purchaseToInventoryFactor:0,unitConversionStatus:'PENDING'}
+ if(shown)return {...source,purchaseUnit:shown.unit,inventoryUnit:shown.inventoryUnit,purchaseToInventoryFactor:shown.conversionFactor||0}
+ return source
+}
+
+function conversionText(item:Pick<InventoryItem,'purchaseUnit'|'inventoryUnit'|'purchaseToInventoryFactor'>&{unitConversionStatus?:string}) {
   if (item.unitConversionStatus === 'PENDING') return '尚未配置'
   if (item.purchaseUnit === item.inventoryUnit && item.purchaseToInventoryFactor === 1) return '同单位计存'
   return `1 ${item.purchaseUnit} = ${qty(item.purchaseToInventoryFactor, 6)} ${item.inventoryUnit}`
@@ -262,7 +266,12 @@ export default function InternalSupplyChainInventoryPage() {
   const [inboundOpen, setInboundOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
   const [batchCandidates, setBatchCandidates] = useState<InboundCandidate[]>([])
+  const batchCandidateCache=useRef(new Map<string,InboundCandidate>())
   const [batchSearch, setBatchSearch] = useState('')
+  const [batchCandidateCursor,setBatchCandidateCursor]=useState<string|null>(null),[batchAppliedSearch,setBatchAppliedSearch]=useState('')
+  const batchCandidateGeneration=useRef(0)
+  useEffect(()=>{if(!batchOpen)batchCandidateGeneration.current++},[batchOpen])
+  useEffect(()=>()=>{batchCandidateGeneration.current++},[])
   const [checkedCandidateIds, setCheckedCandidateIds] = useState<string[]>([])
   const [batchRows, setBatchRows] = useState<BatchInboundRow[]>([])
   const [batchEffectiveAt, setBatchEffectiveAt] = useState(defaultEffectiveAt)
@@ -314,6 +323,7 @@ export default function InternalSupplyChainInventoryPage() {
   const [savingPolicy, setSavingPolicy] = useState(false)
   const savingPolicyRef = useRef(false)
   const [confirmState, openConfirm] = useConfirmSheet()
+  const [reversingInbound, setReversingInbound] = useState(false)
 
   // 单位待核验：人工确认换算关系后放行入库（只提交状态，后端原样保留四单位口径）
   function verifyUnitConversion(item: InventoryItem) {
@@ -344,6 +354,44 @@ export default function InternalSupplyChainInventoryPage() {
       setVerifyingId('')
     }
   }
+
+  function restoredTime(value:any){const date=new Date(value.effectiveAtIso);if(!Number.isFinite(date.getTime()))return value.effectiveAt||defaultEffectiveAt();return new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,16)}
+  function isoOrEmpty(value: string) { const date = new Date(value); return Number.isFinite(date.getTime()) ? date.toISOString() : '' }
+  const [singleSnapshot,setSingleSnapshot]=useState<any>(null),[batchSnapshot,setBatchSnapshot]=useState<any>(null)
+  const [singleDisplayedUnits,setSingleDisplayedUnits]=useState<any[]>([]),[batchDisplayedUnits,setBatchDisplayedUnits]=useState<any[]>([])
+  const [singleWarehouseId,setSingleWarehouseId]=useState(''),[batchWarehouseId,setBatchWarehouseId]=useState('')
+  const [singleRestoredTime,setSingleRestoredTime]=useState<{display:string;raw:string;iso:string}|null>(null),[batchRestoredTime,setBatchRestoredTime]=useState<{display:string;raw:string;iso:string}|null>(null)
+  function draftTime(value:string,original:{display:string;raw:string;iso:string}|null){return original&&value===original.display?{effectiveAt:original.raw,effectiveAtIso:original.iso}:{effectiveAt:value,effectiveAtIso:isoOrEmpty(value)}}
+  const displayedSingle=draftProductView(data?.items.find(item=>item.id===productId),singleSnapshot,singleDisplayedUnits,productId)
+  const singlePayload = {warehouseId:singleSnapshot?.warehouse?.id||singleWarehouseId||data?.warehouse.id||'',displayUnits:productId?[{productId,unit:displayedSingle?.purchaseUnit||'',inventoryUnit:displayedSingle?.inventoryUnit||'',conversionFactor:displayedSingle?.purchaseToInventoryFactor??null}]:[],mode:'SINGLE',productId,purchaseQuantity,totalAmount,singleUnitPrice,...draftTime(effectiveAt,singleRestoredTime),supplierId,note,batchNo,manufactureDate,expiryDate,attachments:attachments.map(({key,name,mime,size})=>({key,name,mime,size})),priceSource:singlePriceSource.current,amountSource:singleAmountSource.current}
+  const batchPayload = {warehouseId:batchSnapshot?.warehouse?.id||batchWarehouseId||data?.warehouse.id||'',displayUnits:batchRows.map(row=>{const source=draftProductView(batchCandidateCache.current.get(row.productId)||batchCandidates.find(item=>item.id===row.productId)||data?.items.find(item=>item.id===row.productId),batchSnapshot,batchDisplayedUnits,row.productId);return{productId:row.productId,unit:source?.purchaseUnit||'',inventoryUnit:source?.inventoryUnit||'',conversionFactor:source?.purchaseToInventoryFactor??null}}),mode:'BATCH',rows:batchRows,...draftTime(batchEffectiveAt,batchRestoredTime),supplierId:batchSupplierId,note:batchNote,attachments:batchAttachments.map(({key,name,mime,size})=>({key,name,mime,size}))}
+  const singleDraft = useWarehouseInboundDraft('SINGLE',inboundOpen,singlePayload,value=>{
+    setSingleSnapshot(value.executionSnapshot||null);setSingleWarehouseId(value.warehouseId||'');setSingleDisplayedUnits(value.displayUnits||[])
+    singleProductKey.current=value.productId || ''
+    singleHistoryKey.current=value.supplierId && value.productId ? `${value.supplierId}\u0000${value.productId}` : ''
+    singlePriceSource.current=value.priceSource ?? (value.singleUnitPrice ? 'manual':'none')
+    singleAmountSource.current=value.amountSource ?? (value.totalAmount ? 'manual':'none')
+    setProductId(value.productId||'');setPurchaseQuantity(value.purchaseQuantity||'');setTotalAmount(value.totalAmount||'');setSingleUnitPrice(value.singleUnitPrice||'')
+    setSingleRestoredTime({display:restoredTime(value),raw:value.effectiveAt||'',iso:value.effectiveAtIso||''});setEffectiveAt(restoredTime(value));setSupplierId(value.supplierId||'');setNote(value.note||'');setBatchNo(value.batchNo||'');setManufactureDate(value.manufactureDate||'');setExpiryDate(value.expiryDate||'');setAttachments(value.attachments||[])
+  })
+  const batchDraft = useWarehouseInboundDraft('BATCH',batchOpen,batchPayload,value=>{
+    setBatchSnapshot(value.executionSnapshot||null);setBatchWarehouseId(value.warehouseId||'');setBatchDisplayedUnits(value.displayUnits||[])
+    const missing=(value.rows||[]).map((row:any)=>row.productId).filter((id:string)=>!batchCandidates.some(product=>product.id===id))
+    const missingGeneration=batchCandidateGeneration.current,missingActor=getUser()?.id
+    if(missing.length)void apiFetch<{items:InboundCandidate[]}>(`/api/warehouse-inventory/inbound-candidates?productIds=${encodeURIComponent(missing.join(','))}`).then(result=>{if(missingGeneration===batchCandidateGeneration.current&&missingActor===getUser()?.id){result.items.forEach(item=>batchCandidateCache.current.set(item.id,item));setBatchCandidates(current=>[...new Map([...current,...result.items].map(row=>[row.id,row])).values()])}}).catch(reason=>{if(missingGeneration===batchCandidateGeneration.current&&missingActor===getUser()?.id)setError(reason.message||'原草稿商品补读失败，原行保留')})
+
+    batchHistorySupplierId.current=value.supplierId||''
+    setBatchRows((value.rows||[]).map((row:BatchInboundRow)=>({...row,priceSource:row.priceSource ?? (row.unitPrice?'manual':'none'),amountSource:row.amountSource ?? (row.amount?'manual':'none')})))
+    setBatchRestoredTime({display:restoredTime(value),raw:value.effectiveAt||'',iso:value.effectiveAtIso||''});setBatchEffectiveAt(restoredTime(value));setBatchSupplierId(value.supplierId||'');setBatchNote(value.note||'');setBatchAttachments(value.attachments||[])
+  })
+  useEffect(()=>{if(inboundOpen&&singleDraft.snapshot)setSingleSnapshot(singleDraft.snapshot)},[inboundOpen,singleDraft.snapshot])
+  useEffect(()=>{if(batchOpen&&batchDraft.snapshot)setBatchSnapshot(batchDraft.snapshot)},[batchOpen,batchDraft.snapshot])
+  function draftTools(draft:typeof singleDraft,close:()=>void){const view=draft===singleDraft?singleSnapshot:batchSnapshot;const recordedId=draft===singleDraft?singleWarehouseId:batchWarehouseId;const warehouse=view?.warehouse||draft.snapshot?.warehouse||(recordedId&&recordedId!==data?.warehouse.id?{id:recordedId,name:'原录入仓（名称待核对）',code:recordedId}:data?.warehouse);return <fieldset disabled={submitting} className="mt-3 rounded-cta border border-border p-3 text-caption">
+    <span role="status">{draft.status || '草稿自动保存'}</span>{warehouse&&<p>草稿仓库：{warehouse.name}（{warehouse.code}）</p>}{draft.submittedDocId && <a className="ml-3 text-accent underline" href={`/v2/supply-chain/docs?doc=${encodeURIComponent(draft.submittedDocId)}`}>查看已入库单</a>}{draft.failure && <p role="alert" className="text-red-fg">{draft.failure}</p>}
+    {draft.failure && !draft.terminalStatus && !draft.reconfirmPending && <div className="mt-2 flex gap-3"><button type="button" onClick={()=>openConfirm({title:'恢复服务器草稿',body:'本页未同步输入会被服务器草稿替换，请确认已记录需保留的内容。',confirmLabel:'加载服务器版本',onConfirm:()=>draft.reload(false)})} className="text-accent underline">加载服务器版本</button><button type="button" onClick={()=>openConfirm({title:'保留本页输入',body:'将以本页输入替换本人服务器上的草稿；若服务器再次变化仍会拒绝覆盖。',confirmLabel:'保留本页并保存',onConfirm:()=>draft.reload(true)})} className="text-accent underline">保留本页并保存</button></div>}
+    {!draft.terminalStatus && <div className="mt-2 flex flex-wrap gap-3"><button type="button" onClick={()=>openConfirm({title:draft.reconfirmPending?'核对原请求':'重新核对仓库与单位',body:draft.reconfirmPending?'按保留的原请求核对结果，不重新接受其他配置。':'按当前配置核对仓库与单位，本操作不入库。请检查数量和金额后再提交。',confirmLabel:draft.reconfirmPending?'核对原请求':'重新核对',onConfirm:async()=>{await draft.flush(true)}})} className="text-accent underline">{draft.reconfirmPending?'核对原请求':'重新核对仓库与单位'}</button><button type="button" disabled={draft.reconfirmPending} onClick={()=>void draft.flush().catch(()=>{})} className="text-accent underline">保存草稿（不入库）</button>
+    <button type="button" onClick={()=>openConfirm({title:'丢弃未提交草稿',body:'仅丢弃本人的当前未提交草稿，库存和已入库单据不变。',tone:'danger',confirmLabel:'确认丢弃',onConfirm:async()=>{await draft.discard();close()}})} disabled={draft.reconfirmPending} className="text-gray2 underline">丢弃草稿</button></div>}
+  </fieldset>}
 
   async function load(requestedScope: InventoryScope = scope) {
     setLoading(true)
@@ -397,7 +445,7 @@ export default function InternalSupplyChainInventoryPage() {
   }, [])
 
   const items = data?.items || []
-  const selectedProduct = items.find(item => item.id === productId)
+  const selectedProduct = draftProductView(items.find(item => item.id === productId),singleSnapshot,singleDisplayedUnits,productId)
   purchaseQuantityRef.current = purchaseQuantity
   useEffect(() => {
     const request = ++singlePriceRequest.current
@@ -501,12 +549,10 @@ export default function InternalSupplyChainInventoryPage() {
     })
   }, [items, q, stockStatus])
   const filteredBatchCandidates = useMemo(() => {
-    const term = batchSearch.trim().toLowerCase()
-    const rows = term
-      ? batchCandidates.filter(item => [item.code, item.name, item.spec, item.category]
-        .some(value => String(value || '').toLowerCase().includes(term)))
-      : batchCandidates
-    return rows.filter(item => !batchRows.some(row => row.productId === item.id))
+    const terms = batchSearch.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    const rows = batchCandidates.filter(item => terms.every(term => [item.code,item.name,item.spec,item.category]
+      .some(value => String(value || '').toLowerCase().includes(term))))
+    return rows.filter(item => item.eligible!==false&&!batchRows.some(row => row.productId === item.id))
   }, [batchCandidates, batchRows, batchSearch])
   const batchTotal = batchRows.reduce((sum, row) => {
     const lineAmount = Number(row.amount)
@@ -549,6 +595,7 @@ export default function InternalSupplyChainInventoryPage() {
   }
 
   function openInbound() {
+    setSingleRestoredTime(null);setSingleSnapshot(null);setSingleWarehouseId('');setSingleDisplayedUnits([])
     setInboundOpen(true)
     setProductId('')
     setPurchaseQuantity('')
@@ -571,8 +618,10 @@ export default function InternalSupplyChainInventoryPage() {
   }
 
   async function openBatchInbound() {
+    setBatchRestoredTime(null);setBatchSnapshot(null);setBatchWarehouseId('');setBatchDisplayedUnits([])
     setBatchOpen(true)
     setBatchCandidates([])
+    batchCandidateCache.current.clear()
     setBatchSearch('')
     setCheckedCandidateIds([])
     setBatchRows([])
@@ -582,17 +631,22 @@ export default function InternalSupplyChainInventoryPage() {
     setBatchAttachments([])
     setBatchAttachmentsUploading(false)
     setBatchKey(newIdempotencyKey())
-    setBatchLoading(true)
-    setError('')
-    try {
-      const result = await apiFetch<{ items: InboundCandidate[] }>('/api/warehouse-inventory/inbound-candidates?limit=500')
-      setBatchCandidates(result.items || [])
-    } catch (reason: any) {
-      setError(String(reason?.message || reason))
-      setBatchOpen(false)
-    } finally {
-      setBatchLoading(false)
-    }
+    setBatchCandidateCursor(null);setBatchAppliedSearch('')
+    await loadBatchCandidates(false,'')
+  }
+  async function loadBatchCandidates(more=false,query=batchSearch){
+    const generation=++batchCandidateGeneration.current,actor=getUser()?.id
+    setBatchLoading(true);setError('')
+    try{
+      const params=new URLSearchParams({paged:'1',limit:'100',q:more?batchAppliedSearch:query})
+      if(more&&batchCandidateCursor)params.set('cursor',batchCandidateCursor)
+      const result=await apiFetch<{items:InboundCandidate[];nextCursor?:string|null}>(`/api/warehouse-inventory/inbound-candidates?${params}`)
+      if(generation!==batchCandidateGeneration.current||actor!==getUser()?.id)return
+      result.items.forEach(item=>{if(!batchCandidateCache.current.has(item.id))batchCandidateCache.current.set(item.id,item)})
+      setBatchCandidates(current=>more?[...new Map([...current,...result.items].map(row=>[row.id,row])).values()]:result.items)
+      setBatchCandidateCursor(result.nextCursor||null);if(!more)setBatchAppliedSearch(query)
+    }catch(reason:any){if(generation===batchCandidateGeneration.current&&actor===getUser()?.id)setError(reason.message||'候选商品查询失败')}
+    finally{if(generation===batchCandidateGeneration.current&&actor===getUser()?.id)setBatchLoading(false)}
   }
 
   async function uploadInboundAttachments(
@@ -635,7 +689,7 @@ export default function InternalSupplyChainInventoryPage() {
 
   function addCheckedBatchRows() {
     const checked = new Set(checkedCandidateIds)
-    const additions = batchCandidates.filter(item => checked.has(item.id) && !batchRows.some(row => row.productId === item.id))
+    const additions = [...batchCandidateCache.current.values()].filter(item => item.eligible!==false&&checked.has(item.id) && !batchRows.some(row => row.productId === item.id))
     if (additions.length === 0) return
     const available = Math.max(0, MAX_BATCH_INBOUND_ITEMS - batchRows.length)
     const accepted = additions.slice(0, available)
@@ -709,9 +763,11 @@ export default function InternalSupplyChainInventoryPage() {
     setError('')
     setGateWarnings([])
     try {
+      const savedDraft = await batchDraft.flush()
       const result = await apiFetch<{ replayed: boolean; count: number; totalAmount: number; gateWarnings?: string[]; doc: { id: string } }>('/api/warehouse-inventory/batch-manual-inbound', {
         method: 'POST',
         body: JSON.stringify({
+          draftId:savedDraft.id,draftVersion:savedDraft.version,
           items: batchRows.map(row => ({
             productId: row.productId,
             purchaseQuantity: Number(row.purchaseQuantity),
@@ -725,12 +781,13 @@ export default function InternalSupplyChainInventoryPage() {
           attachments: batchAttachments.map(({ key, name, mime, size }) => ({ key, name, mime, size })),
         }),
       })
+      batchDraft.completed()
       setBatchOpen(false)
       setNoticeDocId(result.doc.id)
       setGateWarnings(result.gateWarnings || [])
       setNotice(result.replayed
         ? '该批量入库单已经处理，本次未重复入账'
-        : `批量入库成功：${result.count} 种商品，合计 ${money(result.totalAmount)}，已整单原子记账`)
+        : `批量入库成功：${result.count} 种商品，合计 ${money(result.totalAmount)}，已提交审核并整单入库`)
       await load('stock')
     } catch (reason: any) {
       setError(String(reason?.message || reason))
@@ -760,9 +817,11 @@ export default function InternalSupplyChainInventoryPage() {
     setError('')
     setGateWarnings([])
     try {
+      const savedDraft = await singleDraft.flush()
       const result = await apiFetch<{ replayed: boolean; gateWarnings?: string[]; doc: { id: string } }>('/api/warehouse-inventory/manual-inbound', {
         method: 'POST',
         body: JSON.stringify({
+          draftId:savedDraft.id,draftVersion:savedDraft.version,
           productId,
           purchaseQuantity: Number(purchaseQuantity),
           totalAmount: Number(totalAmount),
@@ -776,10 +835,11 @@ export default function InternalSupplyChainInventoryPage() {
           attachments: attachments.map(({ key, name, mime, size }) => ({ key, name, mime, size })),
         }),
       })
+      singleDraft.completed()
       setInboundOpen(false)
       setNoticeDocId(result.doc.id)
       setGateWarnings(result.gateWarnings || [])
-      setNotice(result.replayed ? '该入库请求已处理，本次返回原结果，没有重复入账' : '手工入库成功：数量、成本、批次和流水已原子记入总仓影子账')
+      setNotice(result.replayed ? '该入库请求已处理，本次返回原结果，没有重复入账' : '已提交审核并入库，等待供应链复审')
       await load()
     } catch (reason: any) {
       setError(String(reason?.message || reason))
@@ -788,20 +848,31 @@ export default function InternalSupplyChainInventoryPage() {
     }
   }
 
-  async function reverseInbound(movement: Movement) {
-    const reason = globalThis.prompt?.('请输入冲销原因（原流水会永久保留）：')?.trim()
-    if (!reason) return
-    setError('')
-    try {
-      const result = await apiFetch<{ replayed: boolean }>(`/api/warehouse-inventory/movements/${movement.id}/reverse`, {
-        method: 'POST',
-        body: JSON.stringify({ reason, idempotencyKey: newIdempotencyKey() }),
-      })
-      setNoticeDocId(null); setNotice(result.replayed ? '该冲销请求已处理，本次未重复记账' : '手工入库已追加反向流水；原流水仍完整保留')
-      await load()
-    } catch (reasonValue: any) {
-      setError(String(reasonValue?.message || reasonValue))
-    }
+  function reverseInbound(movement: Movement) {
+    if (reversingInbound) return
+    const idempotencyKey = newIdempotencyKey()
+    openConfirm({
+      title: '确认冲销手工入库',
+      body: `将冲销「${movement.product.name}」${qty(movement.physicalDelta)} ${movement.inventoryUnit}、${Number.isFinite(movement.currentInboundValue) ? `库存成本 ${money(movement.currentInboundValue!)}` : '库存成本按当前已入账金额计算'}。原流水会完整保留，追加反向流水。`,
+      tone: 'danger', confirmLabel: '确认冲销', withInput: true, inputRequired: true,
+      inputPlaceholder: '请输入冲销原因（2—240个字）',
+      onConfirm: async inputReason => {
+        const reason = inputReason?.trim() || ''
+        if (reason.length < 2 || reason.length > 240) throw new Error('冲销原因需填写2—240个字')
+        setReversingInbound(true)
+        setError('')
+        try {
+          const result = await apiFetch<{ replayed: boolean }>(`/api/warehouse-inventory/movements/${movement.id}/reverse`, {
+            method: 'POST', body: JSON.stringify({ reason, idempotencyKey }),
+          })
+          setNoticeDocId(null); setNotice(result.replayed ? '该冲销请求已处理，本次未重复记账' : '手工入库已追加反向流水；原流水仍完整保留')
+          await load()
+        } catch (reasonValue: any) {
+          setError(String(reasonValue?.message || reasonValue))
+          throw reasonValue
+        } finally { setReversingInbound(false) }
+      },
+    })
   }
 
   function openCount() {
@@ -1081,7 +1152,7 @@ export default function InternalSupplyChainInventoryPage() {
           <ul className="max-h-[680px] divide-y divide-border overflow-auto">
             {movements.map(movement => <li key={movement.id} className="px-4 py-3">
               <div className="flex items-center gap-2"><b className="min-w-0 flex-1 truncate text-body">{movement.product.name}</b><span className={`font-num text-button ${movement.physicalDelta > 0 ? 'text-green-fg' : movement.physicalDelta < 0 ? 'text-red-fg' : 'text-gray2'}`}>{movement.physicalDelta > 0 ? '+' : ''}{qty(movement.physicalDelta)} {movement.inventoryUnit}</span></div>
-              <div className="mt-1 flex flex-wrap items-center gap-x-2 text-micro text-gray3"><span>{MOVEMENT_LABEL[movement.type] || movement.type}</span>{movement.reservedDelta !== 0 && <span>预占 {movement.reservedDelta > 0 ? '+' : ''}{qty(movement.reservedDelta)}</span>}<span>余 {qty(movement.physicalAfter)}</span><span>{new Date(movement.effectiveAt).toLocaleString('zh-CN')}</span>{movement.type === 'MANUAL_INBOUND' && (movement.reversed ? <span className="text-red-fg">已冲销</span> : <button onClick={() => reverseInbound(movement)} className="text-accent underline">冲销</button>)}</div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 text-micro text-gray3"><span>{warehouseMovementLabel(movement.type, movement.sourceType)}</span>{movement.reservedDelta !== 0 && <span>预占 {movement.reservedDelta > 0 ? '+' : ''}{qty(movement.reservedDelta)}</span>}<span>余 {qty(movement.physicalAfter)}</span><span>{new Date(movement.effectiveAt).toLocaleString('zh-CN')}</span>{movement.type === 'MANUAL_INBOUND' && (movement.reversed ? <span className="text-red-fg">已冲销</span> : <button disabled={reversingInbound || movement.canReverse === false} title={movement.canReverse === false ? '入库单已审核或复审，请到入库单查看' : undefined} onClick={() => reverseInbound(movement)} className="text-accent underline disabled:opacity-40">冲销</button>)}</div>
               {(movement.note || movement.sourceName) && <p className="mt-1 text-micro text-gray2">{movement.sourceName ? `来源：${movement.sourceName}` : ''}{movement.sourceName && movement.note ? ' · ' : ''}{movement.note}</p>}
             </li>)}
             {!loading && movements.length === 0 && <li className="py-12 text-center text-caption text-gray3">影子账暂无流水</li>}
@@ -1129,12 +1200,15 @@ export default function InternalSupplyChainInventoryPage() {
         </div>
       </div>}
 
-      {batchOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setBatchOpen(false)}>
+      {batchOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => {if(!submitting && !batchAttachmentsUploading)setBatchOpen(false)}}>
         <div className="max-h-[94vh] w-full max-w-6xl overflow-auto rounded-card bg-white p-5 shadow-xl" onClick={event => event.stopPropagation()}>
-          <div className="flex items-start justify-between gap-4"><div><h2 className="text-h2">总仓批量入库</h2><p className="mt-1 text-micro text-gray3">一张入库单可添加多种商品；整单原子提交，任意一行失败都不会部分入账。</p></div><button onClick={() => setBatchOpen(false)} className="px-2 text-h2 text-gray3">×</button></div>
+          <div className="flex items-start justify-between gap-4"><div><h2 className="text-h2">总仓批量入库</h2><p className="mt-1 text-micro text-gray3">一张入库单可添加多种商品；整单原子提交，任意一行失败都不会部分入账。</p></div><button onClick={() => {if(!submitting && !batchAttachmentsUploading)setBatchOpen(false)}} className="px-2 text-h2 text-gray3">×</button></div>
+          {draftTools(batchDraft,()=>setBatchOpen(false))}
+          <fieldset className="contents" disabled={submitting || !batchDraft.ready || batchDraft.reconfirmPending}>
           <div className="mt-4 rounded-card border border-border bg-bg p-4">
             <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_auto] lg:items-end">
-              <label><span className="mb-1 block text-micro text-gray3">搜索商品（勾选后批量添加）</span><input value={batchSearch} onChange={event => setBatchSearch(event.target.value)} placeholder="名称 / 编码 / 规格" className="h-11 w-full rounded-cta border border-border bg-white px-3" /></label>
+              <label><span className="mb-1 block text-micro text-gray3">搜索商品（勾选后批量添加）</span><input maxLength={100} value={batchSearch} onChange={event => setBatchSearch(event.target.value)} placeholder="名称 / 编码 / 规格" className="h-11 w-full rounded-cta border border-border bg-white px-3" /></label>
+              <div className="flex gap-2"><button type="button" disabled={batchLoading} onClick={()=>void loadBatchCandidates()}>查询商品</button>{batchCandidateCursor&&<button type="button" disabled={batchLoading} onClick={()=>void loadBatchCandidates(true)}>加载更多商品</button>}</div>
               <button onClick={addCheckedBatchRows} disabled={checkedCandidateIds.length === 0} className="h-11 rounded-cta bg-ink px-5 text-button text-white disabled:opacity-40">{checkedCandidateIds.length ? `添加选中商品 · ${checkedCandidateIds.length} 种` : '添加选中商品'}</button>
             </div>
             <div className="mt-3 max-h-60 overflow-auto rounded-cta border border-border bg-white">
@@ -1169,16 +1243,16 @@ export default function InternalSupplyChainInventoryPage() {
               <thead className="bg-bg text-gray3"><tr><th className="px-3 py-3">序号</th><th className="px-3 py-3">商品</th><th className="px-3 py-3">采购单位</th><th className="px-3 py-3 text-right">数量</th><th className="px-3 py-3 text-right">采购单价</th><th className="px-3 py-3 text-right">金额</th><th className="px-3 py-3">换算预览</th><th className="px-3 py-3"></th></tr></thead>
               <tbody className="divide-y divide-border">
                 {batchRows.map((row, index) => {
-                  const product = batchCandidates.find(item => item.id === row.productId)!
+                  const product = draftProductView(batchCandidateCache.current.get(row.productId)||batchCandidates.find(item => item.id === row.productId),batchSnapshot,batchDisplayedUnits,row.productId)
                   const purchaseQuantity = Number(row.purchaseQuantity) || 0
                   return <tr key={row.productId}>
                     <td className="px-3 py-3 font-num text-gray3">{index + 1}</td>
-                    <td className="px-3 py-3"><b>{product.name}</b><div className="text-micro text-gray3">{product.code} · {product.spec || '无规格'}</div></td>
-                    <td className="px-3 py-3"><b>{product.purchaseUnit}</b></td>
-                    <td className="px-3 py-3"><input aria-label={`${product.name}采购数量`} type="number" min="0.000001" step="0.001" value={row.purchaseQuantity} onChange={event => updateBatchRow(row.productId, 'purchaseQuantity', event.target.value)} data-grid-r={index} data-grid-c={0} onKeyDown={gridCellKeyDown} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></td>
-                    <td className="px-3 py-3"><div className="flex items-center justify-end gap-1"><span>¥</span><input aria-label={`${product.name}采购单价`} type="number" min="0.0001" step="0.01" value={row.unitPrice} onChange={event => updateBatchRow(row.productId, 'unitPrice', event.target.value)} data-grid-r={index} data-grid-c={1} onKeyDown={gridCellKeyDown} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></div>{batchHistory[row.productId] ? <div className="mt-1 text-micro text-gray3">上次 {money(batchHistory[row.productId].unitPrice)}/{product.purchaseUnit} · {row.unitPrice ? <>本次 {Number(row.unitPrice) - batchHistory[row.productId].unitPrice >= 0 ? '+' : ''}{money(Number(row.unitPrice) - batchHistory[row.productId].unitPrice)}</> : '本次待填写'}</div> : batchSupplierId && batchHistoryLoaded ? <div className="mt-1 text-micro text-gray3">无历史采购价</div> : null}</td>
-                    <td className="px-3 py-3"><div className="flex items-center justify-end gap-1"><span>¥</span><input aria-label={`${product.name}行金额`} type="number" min="0.01" step="0.01" value={row.amount} onChange={event => updateBatchRow(row.productId, 'amount', event.target.value)} data-grid-r={index} data-grid-c={2} onKeyDown={gridCellKeyDown} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></div></td>
-                    <td className="px-3 py-3"><b>{qty(purchaseQuantity)} {product.purchaseUnit} = {qty(purchaseQuantity * product.purchaseToInventoryFactor, 6)} {product.inventoryUnit}</b><div className="text-micro text-green-fg">已核验换算</div></td>
+                    <td className="px-3 py-3"><b>{product?.name||'原草稿商品待核对'}</b><div className="text-micro text-gray3">{product?.code||row.productId} · {product?.spec || '无规格'}</div></td>
+                    <td className="px-3 py-3"><b>{product?.purchaseUnit||'待核对'}</b></td>
+                    <td className="px-3 py-3"><input aria-label={`${product?.name||row.productId}采购数量`} type="number" min="0.000001" step="0.001" value={row.purchaseQuantity} onChange={event => updateBatchRow(row.productId, 'purchaseQuantity', event.target.value)} data-grid-r={index} data-grid-c={0} onKeyDown={gridCellKeyDown} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></td>
+                    <td className="px-3 py-3"><div className="flex items-center justify-end gap-1"><span>¥</span><input aria-label={`${product?.name||row.productId}采购单价`} type="number" min="0.0001" step="0.01" value={row.unitPrice} onChange={event => updateBatchRow(row.productId, 'unitPrice', event.target.value)} data-grid-r={index} data-grid-c={1} onKeyDown={gridCellKeyDown} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></div>{batchHistory[row.productId] ? <div className="mt-1 text-micro text-gray3">上次 {money(batchHistory[row.productId].unitPrice)}/{product?.purchaseUnit||'待核对'} · {row.unitPrice ? <>本次 {Number(row.unitPrice) - batchHistory[row.productId].unitPrice >= 0 ? '+' : ''}{money(Number(row.unitPrice) - batchHistory[row.productId].unitPrice)}</> : '本次待填写'}</div> : batchSupplierId && batchHistoryLoaded ? <div className="mt-1 text-micro text-gray3">无历史采购价</div> : null}</td>
+                    <td className="px-3 py-3"><div className="flex items-center justify-end gap-1"><span>¥</span><input aria-label={`${product?.name||row.productId}行金额`} type="number" min="0.01" step="0.01" value={row.amount} onChange={event => updateBatchRow(row.productId, 'amount', event.target.value)} data-grid-r={index} data-grid-c={2} onKeyDown={gridCellKeyDown} className="h-10 w-28 rounded-cta border border-border px-2 text-right font-num" /></div></td>
+                    <td className="px-3 py-3">{product&&product.purchaseToInventoryFactor>0?<><b>{qty(purchaseQuantity)} {product.purchaseUnit} = {qty(purchaseQuantity*product.purchaseToInventoryFactor,6)} {product.inventoryUnit}</b><div className="text-micro text-green-fg">已核验换算</div></>:<span className="text-red-fg">原商品单位待核对；原行保留</span>}</td>
                     <td className="px-3 py-3"><button onClick={() => setBatchRows(rows => rows.filter(item => item.productId !== row.productId))} className="text-button text-red-fg">移除</button></td>
                   </tr>
                 })}
@@ -1199,15 +1273,18 @@ export default function InternalSupplyChainInventoryPage() {
               onRemove={key => setBatchAttachments(items => items.filter(item => item.key !== key))}
             />
           </div>
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-4"><p className="text-micro text-gray3">只显示四单位已经核验的商品，避免箱、件、kg 等错误换算进入正式库存。</p><button onClick={submitBatchInbound} disabled={submitting || batchAttachmentsUploading || batchRows.length === 0} className="h-11 min-w-52 rounded-cta bg-accent px-6 text-button text-white disabled:opacity-40">{batchAttachmentsUploading ? '等待附件上传…' : submitting ? '正在整单记账…' : `确认批量入库 · ${money(batchTotal)}`}</button></div>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-4"><p className="text-micro text-gray3">只显示四单位已经核验的商品，避免箱、件、kg 等错误换算进入正式库存。</p><button onClick={submitBatchInbound} disabled={submitting || batchAttachmentsUploading || batchRows.length === 0} className="h-11 min-w-52 rounded-cta bg-accent px-6 text-button text-white disabled:opacity-40">{batchAttachmentsUploading ? '等待附件上传…' : submitting ? '正在整单记账…' : `提交审核并批量入库 · ${money(batchTotal)}`}</button></div>
+          </fieldset>
         </div>
       </div>}
 
-      {inboundOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setInboundOpen(false)}>
+      {inboundOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => {if(!submitting && !attachmentsUploading)setInboundOpen(false)}}>
         <div className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-card bg-white p-5 shadow-xl" onClick={event => event.stopPropagation()}>
-          <div className="flex items-center justify-between"><div><h2 className="text-h2">总仓单条手工入库</h2><p className="mt-1 text-micro text-gray3">必须选择上游供应商；未绑定供货关系的商品会给出警告但允许放行。</p></div><button onClick={() => setInboundOpen(false)} className="px-2 text-h2 text-gray3">×</button></div>
+          <div className="flex items-center justify-between"><div><h2 className="text-h2">总仓单条手工入库</h2><p className="mt-1 text-micro text-gray3">必须选择上游供应商；未绑定供货关系的商品会给出警告但允许放行。</p></div><button onClick={() => {if(!submitting && !attachmentsUploading)setInboundOpen(false)}} className="px-2 text-h2 text-gray3">×</button></div>
+          {draftTools(singleDraft,()=>setInboundOpen(false))}
+          <fieldset className="contents" disabled={submitting || !singleDraft.ready || singleDraft.reconfirmPending}>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <label className="sm:col-span-2"><span className="mb-1 block text-micro text-gray3">商品 *</span><select aria-label="入库商品" value={productId} onChange={event => setProductId(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3"><option value="">请选择</option>{items.map(item => <option key={item.id} value={item.id}>{item.code} · {item.name} · 采购单位 {item.purchaseUnit}</option>)}</select></label>
+            <label className="sm:col-span-2"><span className="mb-1 block text-micro text-gray3">商品 *</span><select aria-label="入库商品" value={productId} onChange={event => setProductId(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3"><option value="">请选择</option>{productId&&!items.some(item=>item.id===productId)&&<option value={productId}>{selectedProduct?.code||productId} · {selectedProduct?.name||"原草稿商品待核对"} · 原录入商品</option>}{items.map(item => <option key={item.id} value={item.id}>{item.code} · {item.name} · 采购单位 {item.purchaseUnit}</option>)}</select></label>
             <label><span className="mb-1 block text-micro text-gray3">采购入库数量（{selectedProduct?.purchaseUnit || '采购单位'}）*</span><input type="number" min="0.000001" step="0.001" value={purchaseQuantity} onChange={event => setPurchaseQuantity(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
             <label><span className="mb-1 block text-micro text-gray3">采购单价（元/{selectedProduct?.purchaseUnit || '采购单位'}）</span><input aria-label="采购单价" type="number" min="0.0001" step="0.01" value={singleUnitPrice} onChange={event => { const value = event.target.value; singlePriceSource.current = 'manual'; singleAmountSource.current = 'auto'; setSingleUnitPrice(value); setTotalAmount(Number(purchaseQuantity) > 0 && Number(value) > 0 ? (Number(purchaseQuantity) * Number(value)).toFixed(2) : '') }} className="h-11 w-full rounded-cta border border-border px-3" /></label>
             <label><span className="mb-1 block text-micro text-gray3">入库总金额（元）*</span><input aria-label="入库总金额" type="number" min="0.01" step="0.01" value={totalAmount} onChange={event => { const value = event.target.value; singleAmountSource.current = 'manual'; singlePriceSource.current = 'manual'; setTotalAmount(value); setSingleUnitPrice(Number(purchaseQuantity) > 0 && Number(value) > 0 ? (Number(value) / Number(purchaseQuantity)).toFixed(6) : '') }} className="h-11 w-full rounded-cta border border-border px-3" />{singleHistory ? <span className="mt-1 block text-micro text-gray3">上次 {money(singleHistory.unitPrice)}/{selectedProduct?.purchaseUnit}；{singleUnitPrice ? <>本次 {Number(singleUnitPrice) - singleHistory.unitPrice >= 0 ? '+' : ''}{money(Number(singleUnitPrice) - singleHistory.unitPrice)}</> : '本次待填写'}</span> : supplierId && selectedProduct && singleHistoryLoaded ? <span className="mt-1 block text-micro text-gray3">无历史采购价</span> : null}</label>
@@ -1225,7 +1302,8 @@ export default function InternalSupplyChainInventoryPage() {
               onRemove={key => setAttachments(items => items.filter(item => item.key !== key))}
             />
           </div>
-          <button onClick={inbound} disabled={submitting || attachmentsUploading} className="mt-4 h-11 w-full rounded-cta bg-accent text-button text-white disabled:opacity-40">{attachmentsUploading ? '等待附件上传…' : submitting ? '正在原子记账…' : '确认手工入库'}</button>
+          <button onClick={inbound} disabled={submitting || attachmentsUploading || !singleDraft.ready || singleDraft.reconfirmPending} className="mt-4 h-11 w-full rounded-cta bg-accent text-button text-white disabled:opacity-40">{attachmentsUploading ? '等待附件上传…' : submitting ? '正在原子记账…' : '提交审核并入库'}</button>
+          </fieldset>
         </div>
       </div>}
       {countOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setCountOpen(false)}>

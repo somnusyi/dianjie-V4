@@ -99,7 +99,7 @@ describe('product export helpers', () => {
     const csv = buildProductExportCsv(rows)
     const lines = csv.split('\r\n')
     expect(lines[0]).toBe('商品编码,名称,分类,规格,采购单位,库存单位,订货单位,成本单位,每采购单位=多少库存单位,每订货单位=多少库存单位,每成本单位=多少库存单位,成本单位单价,订货单位折算价,换算状态,状态')
-    expect(lines[1]).toBe('P-001,白菜,蔬菜,500g,件,kg,件,件,1,1,1,12.50,12.50,已核验,供应中')
+    expect(lines[1]).toBe('P-001,白菜,蔬菜,500g,件,kg,件,件,1,1,1,12.500000,12.50,已核验,供应中')
     expect(lines[2]).toContain('"带逗号, 引号""商品"')
   })
 
@@ -141,7 +141,7 @@ describe('product export helpers', () => {
     }]
     const csv = buildProductExportCsv(rows)
     const lines = csv.split('\r\n')
-    expect(lines[1]).toBe('P-GJ,五花肉,肉类,500g,g,g,斤,g,1,500,1,5.00,2500.00,已核验,供应中')
+    expect(lines[1]).toBe('P-GJ,五花肉,肉类,500g,g,g,斤,g,1,500,1,5.000000,2500.00,已核验,供应中')
   })
 
   it('buildProductExportCsv leaves order-unit price blank for PENDING non-legacy product', () => {
@@ -175,7 +175,7 @@ describe('product export helpers', () => {
     }]
     const csv = buildProductExportCsv(rows)
     const lines = csv.split('\r\n')
-    expect(lines[1]).toBe('P-LEG,老商品,其他,,件,件,件,件,1,1,1,15.00,15.00,兼容 1:1,供应中')
+    expect(lines[1]).toBe('P-LEG,老商品,其他,,件,件,件,件,1,1,1,15.000000,15.00,兼容 1:1,供应中')
   })
 
   it('buildProductExportCsv handles commas, quotes and newlines in new columns', () => {
@@ -616,4 +616,9 @@ describe('GET /api/products/export.csv', () => {
     expect(response.json().error).toContain('缩小筛选范围')
     expect(mockFindMany.mock.calls[0][0].take).toBe(PRODUCT_EXPORT_MAX_ROWS + 1)
   })
+})
+
+it('商品成本单价导出保留最小单位六位精度',()=>{
+ const csv=buildProductExportCsv([{code:'P1',name:'精度物料',unit:'kg',price:0.095,status:'ENABLED',purchaseUnit:'kg',inventoryUnit:'g',orderUnit:'kg',costUnit:'g',inventoryUnitsPerPurchaseUnit:1000,inventoryUnitsPerOrderUnit:1000,inventoryUnitsPerCostUnit:1,unitConversionStatus:'VERIFIED'} as ExportableProduct])
+ expect(csv).toContain('0.095000');expect(csv).not.toContain('0.100000')
 })

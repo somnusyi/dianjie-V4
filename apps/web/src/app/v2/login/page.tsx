@@ -4,6 +4,7 @@
  * - 登录成功按 role 跳到对应 home
  */
 'use client'
+import {loginTenant,dedicatedTestLogin} from '@/lib/login-environment'
 import { useState, useEffect } from 'react'
 import { setSession, routeForRole, pcRouteForRole, getToken, getUser, clearSession } from '@/lib/v2-auth'
 
@@ -13,7 +14,7 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // tenant 隔离: 本地预览配置优先，未配置时默认 dianjie；URL tenant 参数可覆盖。
-  const [tenantSlug, setTenantSlug] = useState(process.env.NEXT_PUBLIC_PREVIEW_TENANT_SLUG?.trim() || 'dianjie')
+  const [tenantSlug, setTenantSlug] = useState(loginTenant())
   // 已登录用户信息: 给"继续 / 换号"选择, 不再自动跳走 (同事的 UX 升级)
   const [existingUser, setExistingUser] = useState<{ name?: string; role: string } | null>(null)
   // 有效会话自动进入中的过渡态
@@ -24,7 +25,9 @@ export default function LoginPage() {
     const t = (url.searchParams.get('tenant') || '').trim()
     // 本地/验收环境可能使用 yaohai-test 等独立租户；允许 URL 明确指定，
     // 实际可登录范围仍由 API 的 PREVIEW_TENANT_SLUG 白名单强制约束。
-    if (t) setTenantSlug(t)
+    const testEntry=dedicatedTestLogin(t)
+    if(testEntry){location.replace(testEntry);return}
+    setTenantSlug(loginTenant(t))
 
     // 企微 App 内打开 → 自动走 snsapi_base 静默授权, 零操作直接登录对应账号
     // 守卫: ① 仅企微环境(wxwork) ② 带 error 说明刚静默失败回来, 不再自动(显示登录页)
@@ -32,7 +35,7 @@ export default function LoginPage() {
     const inWeCom = /wxwork/i.test(navigator.userAgent)
     if (inWeCom && !url.searchParams.has('error') && !sessionStorage.getItem('wecomSilentTried')) {
       sessionStorage.setItem('wecomSilentTried', '1')
-      const tn = t || 'dianjie'
+      const tn = loginTenant(t)
       fetch(`/api/wecom/oauth/url?tenant=${tn}&mode=silent&redirect=/`)
         .then((r) => r.json())
         .then((d) => { if (d.url) location.href = d.url })
@@ -71,14 +74,15 @@ export default function LoginPage() {
   }
 
   // 8 个测试账号短名 — 输到这些 auto 切到 test tenant, 免去手动加 ?tenant=test
-  const TEST_SHORTNAMES = new Set(['boss', 'fin', 'mgr', 'cd', 'chef', 'eng', 'sup1', 'sup2'])
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setError(null); setSubmitting(true)
     const idTrim = identifier.trim()
     // 短账号自动落 test tenant, 不依赖 URL 参数 (手机 app webview 加载远程 URL 没 query)
-    const effectiveTenant = TEST_SHORTNAMES.has(idTrim.toLowerCase()) ? 'test' : tenantSlug
+    const testEntry=dedicatedTestLogin(tenantSlug,idTrim)
+    if(testEntry){setSubmitting(false);location.assign(testEntry);return}
+    const effectiveTenant = loginTenant(tenantSlug,idTrim)
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -198,17 +202,17 @@ export default function LoginPage() {
 
         {/* tenant 当前状态指示 — 让你一眼看到登的是真实公司还是测试环境 */}
         <div className="mt-3 text-center text-micro">
-          {tenantSlug !== 'dianjie' && tenantSlug !== 'test' ? (
+          {loginTenant(tenantSlug,identifier) !== 'dianjie' && loginTenant(tenantSlug,identifier) !== 'test' ? (
             <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-bg text-amber-fg">
               {tenantSlug === process.env.NEXT_PUBLIC_PREVIEW_TENANT_SLUG?.trim() ? '测试环境' : '当前租户'} · {tenantSlug}
             </span>
-          ) : tenantSlug === 'test' ? (
+          ) : loginTenant(tenantSlug,identifier) === 'test' ? (
             <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-bg text-amber-fg">
               测试环境 (滇界测试 · 演示账号专用) · <a href="/v2/login" className="underline">切回真实</a>
             </span>
           ) : (
             <span className="text-gray4">
-              正式环境 · <a href="/v2/login?tenant=test" className="underline text-gray3">用测试账号</a>
+              正式环境 · <a href={process.env.NEXT_PUBLIC_TEST_LOGIN_URL || '/v2/login?tenant=test'} className="underline text-gray3">用测试账号</a>
             </span>
           )}
         </div>

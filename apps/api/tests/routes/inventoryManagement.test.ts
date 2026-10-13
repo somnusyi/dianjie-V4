@@ -18,6 +18,7 @@ beforeAll(async () => {
 })
 beforeEach(() => {
   fixture.tx = {
+    store:{findMany:vi.fn(async()=>[{id:'store-empty',name:'没有盘点的门店'}])},
     tenant: { findUnique: vi.fn(async ({ where }: any) => ({ name: where.id, slug: where.id })) },
     warehouseDoc: { findMany: vi.fn(async ({ where }: any) => [doc('a'), doc('b'), doc('foreign', 'two')].filter(d => (!where.tenantId || d.tenantId === where.tenantId) && (!where.type || d.type === where.type))) },
     warehouse: { findMany: vi.fn(async () => [{ id: 'wh', name: '总仓' }]) },
@@ -97,4 +98,55 @@ describe('管理表格读取接口', () => {
       expect(fixture.tx.warehouseLedgerMovement.findMany.mock.calls[0][0].where).toMatchObject({ tenantId: 'one', reversal: { is: null }, effectiveAt: { lt: new Date('2026-09-22T16:00:00Z') } })
     } finally { vi.useRealTimers() }
   })
+  it('盘点列表使用实际范围、差异项数与机构仓库映射，过滤和合计一致', async () => {
+    fixture.tx.warehouseStocktake.findMany.mockResolvedValue([
+      { id: 'all', no: 'PD-ALL', warehouse: { name: '甲仓' }, countScope: 'ALL', countDate: new Date('2026-10-12'), createdAt: new Date('2026-10-12'), createdById: 'u', reviewedAt: new Date('2026-10-12'), itemCount: 4, countedCount: 4, differenceCount: 2, totalBookValue: 10, totalCountedValue: 12, totalDifferenceValue: 2, status: 'CONFIRMED' },
+      { id: 'selected', no: 'PD-SELECTED', warehouse: { name: '乙仓' }, countScope: 'SELECTED', countDate: new Date('2026-10-12'), createdAt: new Date('2026-10-12'), createdById: 'u', itemCount: 1, countedCount: 1, differenceCount: 0, totalBookValue: 20, totalCountedValue: 20, totalDifferenceValue: 0, status: 'CONFIRMED' },
+    ])
+    const response = (await get('count')).json()
+    expect(response.rows[0]).toMatchObject({ countType: '全部盘', countMethod: '汇总盘点', differenceCount: 2, difference: '有差异', printed: null })
+    expect(response.rows[1]).toMatchObject({ countType: '指定物品', differenceCount: 0, difference: '无差异' })
+    expect(response.warehousesByOrg.one).toEqual(['乙仓', '总仓', '甲仓'].sort())
+    const filtered = (await get('count', { filters: JSON.stringify({ countType: '全部盘', difference: '有差异' }) })).json()
+    expect(filtered.total).toBe(1); expect(filtered.rows[0].no).toBe('PD-ALL'); expect(filtered.totals.actualAmount).toBe(12)
+  })
+
+})
+
+it('stocktake organization and warehouse choices survive an empty date result',async()=>{
+ fixture.tx.warehouse.findMany.mockResolvedValue([{id:'wh-new',name:'尚无盘点的仓库'}])
+ for(const id of ['count','multi-count']){
+  const response=await get(id,{start:'2026-01-01',end:'2026-01-02'});expect(response.statusCode,response.body).toBe(200)
+  const data=response.json();expect(data.rows).toHaveLength(0);expect(data.options.org).toContain('one');expect(data.options.warehouse).toContain('尚无盘点的仓库')
+  expect(data.warehousesByOrg.one).toEqual(['尚无盘点的仓库']);expect(data.warehouseOptions).toEqual([{id:'wh-new',name:'尚无盘点的仓库'}])
+  if(id==='count')expect(data.options.org).toContain('没有盘点的门店')
+ }
+ expect(fixture.tx.store.findMany.mock.calls[0][0].where).toEqual({tenantId:'one'})
+})
+
+it('uses exact IDs for same-name stocktake warehouses without changing legacy name requests',async()=>{
+ fixture.tx.warehouse.findMany.mockResolvedValue([{id:'wh-a',name:'同名仓'},{id:'wh-b',name:'同名仓'}])
+ const base={countDate:new Date('2026-10-12T00:00:00Z'),warehouse:{name:'同名仓'},itemCount:0,totalBookValue:0,totalCountedValue:0,totalDifferenceValue:0,countScope:'ALL',differenceCount:0,countedCount:0,status:'DRAFT',createdAt:new Date(),createdById:'u'}
+ fixture.tx.warehouseStocktake.findMany.mockResolvedValue([{...base,id:'a',no:'PD-a',warehouseId:'wh-a'},{...base,id:'b',no:'PD-b',warehouseId:'wh-b'}])
+ const selected=(await get('count',{filters:JSON.stringify({org:'tenant:one',warehouse:'warehouse:wh-b'})})).json()
+ expect(selected.rows.map((row:any)=>row.no)).toEqual(['PD-b'])
+ expect(selected.choiceOptions.warehouse.map((choice:any)=>choice.value)).toEqual(['warehouse:wh-a','warehouse:wh-b'])
+ expect((await get('count',{filters:JSON.stringify({warehouse:'同名仓'})})).json().rows).toHaveLength(2)
+ expect((await get('count',{filters:JSON.stringify({org:'tenant:two'})})).json().rows).toHaveLength(0)
+})
+
+it('does not infer an independent result stocktake from reviewed or draft multi-count status',async()=>{
+ const base={countDate:new Date('2026-10-12T00:00:00Z'),warehouse:{name:'总仓'},warehouseId:'wh',itemCount:1,createdAt:new Date(),createdBy:{name:'合成供应链'},sections:[],note:null,reviewedAt:null}
+ fixture.tx.warehouseStocktake.findMany.mockResolvedValue([{...base,id:'reviewed',no:'MULTI-REVIEWED',status:'CONFIRMED'},{...base,id:'draft',no:'MULTI-DRAFT',status:'DRAFT'}])
+ const data=(await get('multi-count')).json()
+ expect(data.rows.map((row:any)=>row.generated)).toEqual([null,null])
+ expect(data.supportedFilters).not.toContain('generated')
+ expect(data.note).toContain('生成状态待核对')
+ for(const generated of ['是','否']){
+  const oldRequest=(await get('multi-count',{filters:JSON.stringify({generated})})).json()
+  expect(oldRequest.rows).toHaveLength(2);expect(oldRequest.note).toContain('本次未应用该条件')
+ }
+ const exportResult=(await get('multi-count',{export:'1'})).json();const book=new ExcelJS.Workbook();await book.xlsx.load(Buffer.from(exportResult.fileBase64,'base64') as any)
+ const index=(book.worksheets[0].getRow(1).values as any[]).indexOf('是否生成盘点单')
+ expect(index).toBeGreaterThan(0);expect(book.worksheets[0].getRow(2).getCell(index).value).toBeNull()
 })

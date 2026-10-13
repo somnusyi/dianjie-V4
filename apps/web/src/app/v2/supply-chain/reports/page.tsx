@@ -3,10 +3,11 @@ import { Suspense, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { FilterDateRange } from '@/components/v2/filter-date-range'
 import filterStyles from '@/components/v2/scm-filter-bar.module.css'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
 import { apiFetch } from '@/lib/v2-auth'
 import { inventoryReports } from '@/components/v2/inventory-report-menu'
 import styles from './reports.module.css'
+import {ManagementTabs} from '@/components/v2/management-tabs'
 
 type Column = { key: string; label: string; kind: 'text' | 'number'; group?: string }
 type Result = { id: string; title: string; note: string; columns: Column[]; rows: Record<string, string | number | null>[]; total: number; page: number; pageSize: number; warehouses: { id: string; name: string; isDefault: boolean }[] }
@@ -14,9 +15,8 @@ const today = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai'
 const initialFilters = () => ({ start: `${today().slice(0, 7)}-01`, end: today(), keyword: '', warehouseId: '', category: '', unit: '', org: '', type: '', doc: '', upstream: '', upstreamType: '', reason: '', adjustment: '', counterparty: '', target: '', conversion: '', stagnantDays: '' })
 type Filters = ReturnType<typeof initialFilters>
 function Reports() {
-  const router = useRouter(); const params = useSearchParams(); const requested = params.get('report') || 'realtime'
+  const params = useSearchParams(); const requested = params.get('report') || 'realtime'
   const id = inventoryReports.some(r => r.id === requested) ? requested : ''
-  const [opened, setOpened] = useState<string[]>([])
   const [filters, setFilters] = useState(initialFilters); const [applied, setApplied] = useState(initialFilters)
   const [ranges, setRanges] = useState<Record<string, { min?: number; max?: number }>>({}); const [appliedRanges, setAppliedRanges] = useState<typeof ranges>({})
   const [result, setResult] = useState<Result | null>(null); const [error, setError] = useState(''); const [loading, setLoading] = useState(false)
@@ -25,7 +25,6 @@ function Reports() {
   const [focused, setFocused] = useState(false); const [exporting, setExporting] = useState(false)
   const requestSerial = useRef(0)
   useEffect(() => {
-    if (id) setOpened(old => old.includes(id) ? old : [...old, id])
     setFilters(initialFilters()); setApplied(initialFilters()); setRanges({}); setAppliedRanges({}); setPage(1); setSort(''); setHidden([]); setResult(null)
   }, [id])
   const queryParams = new URLSearchParams({ ...applied, ranges: JSON.stringify(appliedRanges), page: String(page), pageSize: String(pageSize), sort, direction })
@@ -39,7 +38,6 @@ function Reports() {
     return () => { requestSerial.current++ }
   }, [id, query, refresh])
   useEffect(() => { const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') { setFocused(false); setColumnDialog(false) } }; document.addEventListener('keydown', escape); return () => document.removeEventListener('keydown', escape) }, [])
-  function closeTab(closed: string) { const index = opened.indexOf(closed); const rest = opened.filter(r => r !== closed); setOpened(rest); if (closed === id) router.push(`/v2/supply-chain/reports?report=${rest[index] || rest[index - 1] || 'none'}`) }
   function apply() { setApplied({ ...filters }); setAppliedRanges({ ...ranges }); setPage(1); setRefresh(n => n + 1) }
   async function download() {
     setExporting(true); setError('')
@@ -54,7 +52,7 @@ function Reports() {
   return <div className={`${styles.reports} ${focused ? styles.focused : ''}`}>
     <header className={styles.top}><span>货品与仓库 / <strong>库存报表</strong></span><span>业务数据</span></header>
     <div className={filterStyles.mobileMenu}><details><summary>库存报表菜单</summary><nav aria-label="库存报表功能菜单">{inventoryReports.map(r => <Link key={r.id} href={`/v2/supply-chain/reports?report=${r.id}`}>{r.title}</Link>)}</nav></details></div>
-    <nav className={styles.tabs} aria-label="已打开报表">{opened.map(key => <div key={key} className={key === id ? styles.active : ''}><Link href={`/v2/supply-chain/reports?report=${key}`}>{inventoryReports.find(r => r.id === key)?.title}</Link><button aria-label={`关闭${inventoryReports.find(r => r.id === key)?.title}`} onClick={() => closeTab(key)}>×</button></div>)}</nav>
+    <ManagementTabs activeId={`report:${id}`} />
     <section className={styles.content}>
       <div className={styles.heading}><div><small>库存报表</small><h1>{inventoryReports.find(r => r.id === id)?.title || '暂无打开的报表'}</h1></div><div className={styles.actions}><button onClick={() => setFocused(v => !v)}>{focused ? '退出专注' : '专注表格'}</button><button disabled={!id || loading || !result} onClick={() => setColumnDialog(true)}>表格设置</button></div></div>
       {!id ? <p>从“库存报表”菜单选择一张报表，继续查看。</p> : <>
@@ -62,7 +60,7 @@ function Reports() {
           <div className={filterStyles.fields}>
             {!currentStock && <div className={filterStyles.date}><span className={filterStyles.dateLabel}>日期范围：</span><FilterDateRange value={{ start: filters.start, end: filters.end }} onChange={range => setFilters(f => ({ ...f, ...range }))} /></div>}
             {transfer ? <>{input('org', '调出门店')}{input('target', '调入门店')}</> : <><label><span>仓库：</span><select value={filters.warehouseId} onChange={e => setFilters(f => ({ ...f, warehouseId: e.target.value }))}><option value="">全部仓库</option>{result?.warehouses.map(w => <option key={w.id} value={w.id}>{w.name}{w.isDefault ? '（默认）' : ''}</option>)}</select></label></>}
-            {input('keyword', '物品名称 / 编码')}{currentStock && input('category', '物品类别')}{id === 'stagnant' && input('stagnantDays', '本次查询阈值（留空按商品规则）', 'number')}
+            {input('keyword', '物品名称 / 编码')}{currentStock && input('category', '物品类别')}{id === 'stagnant' && <span>呆滞提醒：统一30天</span>}
 
 
           </div>

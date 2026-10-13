@@ -13,7 +13,9 @@ vi.mock('@dianjie/db', async importOriginal => {
   return {
     ...actual,
     prisma: {
-      product: { findMany: vi.fn() },
+      product: { findMany: vi.fn().mockResolvedValue([]) },
+      warehouse: { findFirst: vi.fn().mockResolvedValue(null) },
+      tenant: { findUnique: vi.fn().mockResolvedValue({name:'测试机构'}) },
       warehouseDoc: {
         findMany: (...args: any[]) => mocks.findMany(...args),
         count: (...args: any[]) => mocks.count(...args),

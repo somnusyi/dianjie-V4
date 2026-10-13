@@ -1,0 +1,3 @@
+/* Keep the original desktop geometry even when the window becomes narrower.
+   The user can always reach the fixed mode switch. Only navigation changes. */
+.supply-desktop-mode { min-width:1024px; }

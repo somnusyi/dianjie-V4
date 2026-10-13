@@ -8,5 +8,5 @@ export const managementHref = (page: ManagementPage) => `/v2/supply-chain/${page
 export type ManagementRow = Record<string, string | number | null>
 export type ManagementResult = {
   id: string; rows: ManagementRow[]; total: number; totals?: Record<string, number>; page: number; pageSize: number
-  note: string; generatedAt?: string; sourceAvailable: boolean; supportedFilters: string[]; options: Record<string, string[]>
+  note: string; generatedAt?: string; sourceAvailable: boolean; supportedFilters: string[]; options: Record<string, string[]>; warehousesByOrg?: Record<string, string[]>; warehouseOptions?:Array<{id:string;name:string}>;choiceOptions?:Record<string,Array<{value:string;label:string}>>;warehouseChoicesByOrg?:Record<string,Array<{value:string;label:string}>>
 }

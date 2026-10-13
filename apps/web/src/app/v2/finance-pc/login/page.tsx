@@ -12,6 +12,7 @@
  *   - 角色不匹配 显式红色错误条
  */
 'use client'
+import {loginTenant,dedicatedTestLogin} from '@/lib/login-environment'
 import { useEffect, useState } from 'react'
 import { setSession, getToken, getUser, clearSession } from '@/lib/v2-auth'
 
@@ -22,7 +23,7 @@ export default function FinancePCLoginPage() {
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [tenantSlug, setTenantSlug] = useState('dianjie')
+  const [tenantSlug, setTenantSlug] = useState(loginTenant())
   const [existingUser, setExistingUser] = useState<{ name?: string; role: string; email?: string } | null>(null)
 
   useEffect(() => {
@@ -30,7 +31,9 @@ export default function FinancePCLoginPage() {
     const t = (url.searchParams.get('tenant') || '').trim()
     // 与主登录页保持一致：验收/独立部署可显式指定租户，最终仍由后端
     // PREVIEW_TENANT_SLUG 白名单校验，不能借此跨租户登录。
-    if (t) setTenantSlug(t)
+    const testEntry=dedicatedTestLogin(t)
+    if(testEntry){location.replace(testEntry);return}
+    setTenantSlug(loginTenant(t))
     // 跳进来时带的 error 参数 (AuthGate 角色拒绝时会带 ?error=role)
     if (url.searchParams.get('error') === 'role') {
       setError('您的角色无权使用财务工作台 (仅 财务 / 老板 可登录)')
@@ -54,13 +57,14 @@ export default function FinancePCLoginPage() {
     setIdentifier(''); setPassword(''); setError(null)
   }
 
-  const TEST_SHORTNAMES = new Set(['boss', 'fin', 'mgr', 'cd', 'chef', 'eng', 'sup1', 'sup2'])
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setError(null); setSubmitting(true)
     const idTrim = identifier.trim()
-    const effectiveTenant = TEST_SHORTNAMES.has(idTrim.toLowerCase()) ? 'test' : tenantSlug
+    const testEntry=dedicatedTestLogin(tenantSlug,idTrim)
+    if(testEntry){setSubmitting(false);location.assign(testEntry);return}
+    const effectiveTenant = loginTenant(tenantSlug,idTrim)
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',

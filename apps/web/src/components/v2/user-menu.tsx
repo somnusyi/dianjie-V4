@@ -40,7 +40,7 @@ export function UserMenu() {
               <div className="text-micro text-gray3 font-num truncate mt-0.5">{u.email}</div>
             </div>
             <a href="/v2/notifications" className="block px-3 py-2 text-caption hover:bg-bg">消息与待办</a>
-            {u.role === 'FINANCE' && <a href="/v2/supply-chain/stocktake/work" className="block px-3 py-2 text-caption hover:bg-bg">总仓盘点审核</a>}
+            {u.role === 'FINANCE' && <a href="/v2/supply-chain/stocktake/work" className="block px-3 py-2 text-caption hover:bg-bg">总仓盘点查看</a>}
             {['MANAGER', 'KITCHEN_LEAD', 'CHEF', 'CHEF_DIRECTOR', 'ADMIN', 'SUPER_ADMIN', 'BOSS'].includes(u.role) && <>
               <a href="/v2/inventory-counts" className="block px-3 py-2 text-caption hover:bg-bg">门店盘点管理</a>
               <a href="/v2/operations-control" className="block px-3 py-2 text-caption hover:bg-bg">每日运营控制</a>

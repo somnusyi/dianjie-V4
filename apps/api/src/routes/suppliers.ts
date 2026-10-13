@@ -3,6 +3,9 @@ import { z } from 'zod'
 import { prisma } from '@dianjie/db'
 import { cached, invalidatePattern } from '../lib/cache'
 import { isStoreScoped } from '../lib/auth-scope'
+import { supplierUpstreamBindBodySchema } from './supplierUpstreamProducts'
+import { createUpstreamSupplier } from '../services/createUpstreamSupplier'
+import { suggestSupplierNumber } from '../services/supplierNumbering'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const entityIdSchema = z.string().trim().min(1).max(64)
@@ -168,6 +171,35 @@ export const supplierRoutes: FastifyPluginAsync = async (app) => {
       prisma.supplier.count({ where }),
     ])
     return { items, total, page, pageSize }
+  })
+
+  app.get('/next-number', auth(app), async (req: any, reply: any) => {
+    if (!['ADMIN', 'SUPER_ADMIN', 'SUPPLY_CHAIN'].includes(req.user.role)) return reply.status(403).send({ error: '无权读取新建编号' })
+    return { no: await suggestSupplierNumber(req.user.tenantId) }
+  })
+
+  // DJ-005: intersection of existing create/bind roles; no permission expansion.
+  app.post('/create-with-products', auth(app), async (req: any, reply: any) => {
+    const { tenantId, userId, role } = req.user
+    if (!['ADMIN', 'SUPER_ADMIN', 'SUPPLY_CHAIN'].includes(role)) return reply.status(403).send({ error: '无权创建上游供货关系' })
+    const schema = z.object({
+      requestKey: z.string().trim().min(1).max(160),
+      numberMode: z.enum(['AUTO', 'MANUAL']).default('MANUAL'),
+      supplier: supplierOperationalCreateSchema,
+      items: supplierUpstreamBindBodySchema.shape.items,
+    }).strict()
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    try {
+      const result = await createUpstreamSupplier({ ...parsed.data, tenantId, userId, role })
+      await invalidatePattern(`suppliers:v2:full:${tenantId}:*`)
+      await invalidatePattern(`products:full:${tenantId}:*`)
+      return reply.status(result.replayed ? 200 : 201).send(result.supplier)
+    } catch (error: any) {
+      if (error.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      req.log.error({ err: error }, 'atomic supplier create failed')
+      return reply.status(500).send({ error: '创建结果待确认，请使用原请求重试' })
+    }
   })
 
   app.post('/', auth(app), async (req: any, reply: any) => {

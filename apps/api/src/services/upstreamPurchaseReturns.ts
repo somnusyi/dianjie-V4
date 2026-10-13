@@ -65,7 +65,7 @@ function returnInclude() {
     lines: {
       orderBy: { createdAt: 'asc' as const },
       include: {
-        product: { select: { id: true, code: true, name: true, spec: true } },
+        product: { select: { id: true, code: true, name: true, spec: true, category:true } },
         receiptLine: { select: { id: true, receiptId: true, acceptedQty: true, unitPrice: true, receipt: { select: { no: true } } } },
         ledgerMovement: { select: { id: true, physicalDelta: true, valueDelta: true, effectiveAt: true } },
       },
@@ -176,10 +176,11 @@ export async function createUpstreamPurchaseReturn(input: CreateUpstreamPurchase
     const no = await nextUpstreamDocumentNo(tx, input.tenantId, 'purchaseReturn')
     const settlementAmount = normalizedLines.reduce((sum, requested) => {
       const source = receiptLineById.get(requested.receiptLineId)!
-      return sum.plus(requested.purchaseQuantity.mul(source.unitPrice))
+      return sum.plus(requested.purchaseQuantity.mul(source.unitPrice).toDecimalPlaces(VALUE_DP))
     }, new Prisma.Decimal(0)).toDecimalPlaces(VALUE_DP)
     const created = await tx.upstreamPurchaseReturn.create({
       data: {
+        approvalStatus:'DRAFT',
         tenantId: input.tenantId,
         no,
         supplierId: input.supplierId,
@@ -297,7 +298,20 @@ async function assertReturnableQuantities(
 }
 
 export async function submitUpstreamPurchaseReturn(tenantId: string, returnId: string, userId: string) {
-  return serializableWithRetry(async tx => {
+  return serializableWithRetry(tx => submitUpstreamPurchaseReturnInTransaction(tx,tenantId,returnId,userId))
+}
+
+/** Caller already holds the return row lock. Validate edited quantities with the
+ * same sorted original receipt-line locks and reservation rules as submission. */
+export async function validatePurchaseReturnEditInTransaction(tx:Prisma.TransactionClient,tenantId:string,returnId:string){
+ const current=await tx.upstreamPurchaseReturn.findFirst({where:{tenantId,id:returnId},include:{lines:{include:{receiptLine:{select:{acceptedQty:true,receipt:{select:{status:true,reversedAt:true}}}},product:{select:{name:true}}}}}})
+ if(!current)throw businessError('采购退货单不存在',404)
+ await lockReceiptLines(tx,tenantId,current.lines.map(line=>line.receiptLineId))
+ await assertReturnableQuantities(tx,tenantId,returnId,current.lines)
+}
+
+export async function submitUpstreamPurchaseReturnInTransaction(tx:Prisma.TransactionClient,tenantId:string,returnId:string,userId:string) {
+    await tx.$queryRaw`SELECT id FROM upstream_purchase_returns WHERE id=${returnId} AND "tenantId"=${tenantId} FOR UPDATE`
     const current = await tx.upstreamPurchaseReturn.findFirst({
       where: { id: returnId, tenantId },
       include: {
@@ -312,12 +326,12 @@ export async function submitUpstreamPurchaseReturn(tenantId: string, returnId: s
       },
     })
     if (!current) throw businessError('采购退货单不存在', 404)
+    if (!['DRAFT','PENDING_APPROVAL'].includes(current.status)) throw businessError('只有未过账退货单可以提交审核', 409)
+    await lockReceiptLines(tx, tenantId, current.lines.map(line => line.receiptLineId))
+    await assertReturnableQuantities(tx, tenantId, current.id, current.lines)
     if (current.status === 'PENDING_APPROVAL') {
       return { replayed: true, purchaseReturn: await tx.upstreamPurchaseReturn.findUniqueOrThrow({ where: { id: current.id }, include: returnInclude() }) }
     }
-    if (current.status !== 'DRAFT') throw businessError('只有草稿退货单可以提交审核', 409)
-    await lockReceiptLines(tx, tenantId, current.lines.map(line => line.receiptLineId))
-    await assertReturnableQuantities(tx, tenantId, current.id, current.lines)
     const changed = await tx.upstreamPurchaseReturn.updateMany({
       where: { id: current.id, tenantId, status: 'DRAFT', rowVersion: current.rowVersion },
       data: { status: 'PENDING_APPROVAL', submittedById: userId, submittedAt: new Date(), rowVersion: { increment: 1 } },
@@ -330,11 +344,13 @@ export async function submitUpstreamPurchaseReturn(tenantId: string, returnId: s
       replayed: false,
       purchaseReturn: await tx.upstreamPurchaseReturn.findUniqueOrThrow({ where: { id: current.id }, include: returnInclude() }),
     }
-  })
 }
 
 export async function approveUpstreamPurchaseReturn(tenantId: string, returnId: string, userId: string) {
-  return serializableWithRetry(async tx => {
+  return serializableWithRetry(tx => postUpstreamPurchaseReturnBusinessInTransaction(tx,tenantId,returnId,userId))
+}
+
+export async function postUpstreamPurchaseReturnBusinessInTransaction(tx:Prisma.TransactionClient,tenantId:string,returnId:string,userId:string) {
     await tx.$queryRaw(Prisma.sql`
       SELECT "id" FROM "upstream_purchase_returns"
       WHERE "tenantId" = ${tenantId} AND "id" = ${returnId}
@@ -402,7 +418,6 @@ export async function approveUpstreamPurchaseReturn(tenantId: string, returnId: 
       replayed: posting.replayed,
       purchaseReturn: await tx.upstreamPurchaseReturn.findUniqueOrThrow({ where: { id: current.id }, include: returnInclude() }),
     }
-  })
 }
 
 export async function rejectUpstreamPurchaseReturn(
@@ -414,8 +429,10 @@ export async function rejectUpstreamPurchaseReturn(
   const rejectionReason = String(reason || '').trim()
   if (rejectionReason.length < 2 || rejectionReason.length > 240) throw businessError('驳回原因需为2至240个字符', 400)
   return serializableWithRetry(async tx => {
+    await tx.$queryRaw`SELECT id FROM upstream_purchase_returns WHERE id = ${returnId} AND "tenantId" = ${tenantId} FOR UPDATE`
     const current = await tx.upstreamPurchaseReturn.findFirst({ where: { id: returnId, tenantId } })
     if (!current) throw businessError('采购退货单不存在', 404)
+    if (current.approvalStatus === 'AUDITED' || current.approvalStatus === 'REVIEWED') throw businessError('已审核或已复审退货单不能直接驳回', 409)
     if (current.status === 'REJECTED') {
       return { replayed: true, purchaseReturn: await tx.upstreamPurchaseReturn.findUniqueOrThrow({ where: { id: current.id }, include: returnInclude() }) }
     }
@@ -455,8 +472,10 @@ export async function cancelUpstreamPurchaseReturn(
   const cancellationReason = String(reason || '').trim()
   if (cancellationReason.length < 2 || cancellationReason.length > 240) throw businessError('取消原因需为2至240个字符', 400)
   return serializableWithRetry(async tx => {
+    await tx.$queryRaw`SELECT id FROM upstream_purchase_returns WHERE id = ${returnId} AND "tenantId" = ${tenantId} FOR UPDATE`
     const current = await tx.upstreamPurchaseReturn.findFirst({ where: { id: returnId, tenantId } })
     if (!current) throw businessError('采购退货单不存在', 404)
+    if (current.approvalStatus === 'AUDITED' || current.approvalStatus === 'REVIEWED') throw businessError('已审核或已复审退货单不能直接取消', 409)
     if (current.status === 'CANCELLED') {
       return { replayed: true, purchaseReturn: await tx.upstreamPurchaseReturn.findUniqueOrThrow({ where: { id: current.id }, include: returnInclude() }) }
     }
@@ -527,7 +546,7 @@ export async function receiveUpstreamPurchaseReturn(
 export async function getUpstreamPurchaseReturn(tenantId: string, returnId: string) {
   const row = await prisma.upstreamPurchaseReturn.findFirst({ where: { id: returnId, tenantId }, include: returnInclude() })
   if (!row) throw businessError('采购退货单不存在', 404)
-  return row
+  return {...row,organizationName:(await prisma.tenant.findUnique({where:{id:tenantId},select:{name:true}}))?.name||null}
 }
 
 export async function listUpstreamPurchaseReturns(input: {
@@ -555,27 +574,31 @@ export async function listReturnableUpstreamReceiptLines(input: {
   supplierId?: string
   warehouseId?: string
   take?: number
+  cursor?: string
+  includeUnavailable?: boolean
+  sourceIds?: string[]
 }) {
   const lines = await prisma.upstreamReceiptLine.findMany({
     where: {
       tenantId: input.tenantId,
-      acceptedQty: { gt: 0 },
+      ...(input.sourceIds?{}:{acceptedQty:{gt:0}}),
+      ...(input.sourceIds?{id:{in:input.sourceIds}}:{}),
       receipt: {
-        status: 'POSTED',
-        reversedAt: null,
+        ...(input.sourceIds?{}:{status:'POSTED' as const,reversedAt:null}),
         supplierId: input.supplierId,
         warehouseId: input.warehouseId,
       },
     },
     include: {
-      receipt: { select: { id: true, no: true, supplierId: true, warehouseId: true, postedAt: true, supplier: { select: { no: true, name: true } }, warehouse: { select: { code: true, name: true } } } },
-      product: { select: { id: true, code: true, name: true, spec: true } },
+      receipt: { select: { id: true, no: true, supplierId: true, warehouseId: true, postedAt: true, status:true, reversedAt:true, supplier: { select: { no: true, name: true } }, warehouse: { select: { code: true, name: true } } } },
+      product: { select: { id: true, code: true, name: true, spec: true, category:true } },
       purchaseReturnLines: {
         where: { purchaseReturn: { status: { in: [...RESERVING_STATUSES] } } },
         select: { purchaseQuantity: true },
       },
     },
-    orderBy: [{ receipt: { postedAt: 'desc' } }, { createdAt: 'desc' }],
+    orderBy: input.includeUnavailable?{id:'asc' as const}:[{ receipt: { postedAt: 'desc' } }, { createdAt: 'desc' }],
+    ...(input.cursor?{cursor:{id:input.cursor},skip:1}:{}),
     take: Math.min(Math.max(input.take || 500, 1), 1000),
   })
   return lines.map(line => {
@@ -583,7 +606,8 @@ export async function listReturnableUpstreamReceiptLines(input: {
     return {
       ...line,
       reservedReturnQuantity: returned,
-      returnableQuantity: Prisma.Decimal.max(new Prisma.Decimal(0), line.acceptedQty.minus(returned)),
+      returnableQuantity:line.receipt.status==='POSTED'&&!line.receipt.reversedAt?Prisma.Decimal.max(new Prisma.Decimal(0), line.acceptedQty.minus(returned)):new Prisma.Decimal(0),
+      unavailableReason:line.receipt.status!=='POSTED'||line.receipt.reversedAt?'原收货单尚未入账或已冲销':line.acceptedQty.minus(returned).lte(0)?'当前可退额度已用完':null,
     }
-  }).filter(line => line.returnableQuantity.gt(0))
+  }).filter(line => input.includeUnavailable||line.returnableQuantity.gt(0))
 }

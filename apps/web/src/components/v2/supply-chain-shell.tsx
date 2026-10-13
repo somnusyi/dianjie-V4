@@ -5,7 +5,8 @@ import { usePathname, useRouter } from 'next/navigation'
 import { FinanceReportMenu } from './finance-report-menu'
 import { InventoryReportMenu } from './inventory-report-menu'
 import { ManagementNav } from './management-nav'
-import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react'
+import { useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import './supply-chain-shell.css'
 import { BottomNav } from '@/components/v2'
 
 type NavItem = {
@@ -16,7 +17,7 @@ type NavItem = {
   match?: string[]
 }
 
-const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
+export const SUPPLY_CHAIN_NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
   {
     title: '日常作业',
     items: [
@@ -68,8 +69,8 @@ const NAV_GROUPS: Array<{ title: string; items: NavItem[] }> = [
       },
       {
         href: '/v2/supply-chain/inventory',
-        label: '库存与单据',
-        description: '库存查询、入库记录与单据审核',
+        label: '库存报表',
+        description: '库存管理与验收、库存查询与报表',
         icon: '仓',
         match: ['/v2/supply-chain/inventory', '/v2/supply-chain/inbound', '/v2/supply-chain/docs'],
       },
@@ -93,7 +94,7 @@ const MOBILE_TABS = [
   { key: 'home', label: '工作台', icon: '⌂', href: '/v2/supply-chain/home' },
   { key: 'orders', label: '订单', icon: '☷', href: '/v2/supply-chain/fulfillment' },
   { key: 'inventory', label: '库存', icon: '▦', href: '/v2/supply-chain/inventory-management/purchase-in' },
-  { key: 'more', label: '更多', icon: '◐', href: '/v2/supply-chain/analytics' },
+  { key: 'more', label: '更多', icon: '◐', href: '/v2/supply-chain/navigation' },
 ]
 
 export const SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT = 'dianjie:supply-chain-before-navigate'
@@ -143,6 +144,7 @@ function mobileActiveKey(pathname: string): string {
   }
   // 分析/账务/差异/收货等归到 more
   if (
+    pathname === '/v2/supply-chain/navigation' ||
     pathname.startsWith('/v2/supply-chain/analytics') ||
     pathname.startsWith('/v2/supply-chain/billing') ||
     pathname.startsWith('/v2/supply-chain/differences') ||
@@ -157,22 +159,28 @@ function mobileActiveKey(pathname: string): string {
 export function SupplyChainShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() || ''
   const router = useRouter()
+  const [mobileMode, setMobileMode] = useState(false)
+
 
   function guardInternalLink(event: ReactMouseEvent<HTMLDivElement>) {
     const anchor = (event.target as HTMLElement | null)?.closest('a[href]') as HTMLAnchorElement | null
     if (!anchor) return
     const href = anchor.getAttribute('href') || ''
-    if (!href.startsWith('/') || href === pathname || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    if (!href.startsWith('/') || href === pathname || anchor.hasAttribute('download') || anchor.target === '_blank' || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
     if (!requestSupplyChainNavigation(() => router.push(href))) {
       event.preventDefault()
       event.stopPropagation()
+    } else {
+      // Plain internal anchors also use Next routing: keep mode and page-leave guards.
+      event.preventDefault()
+      router.push(href)
     }
   }
 
   return (
-    <div className="min-h-screen bg-bg" onClickCapture={guardInternalLink}>
-      {/* PC 侧边栏 — lg 以上显示 */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-border bg-white lg:flex">
+    <div data-navigation-mode={mobileMode ? 'mobile' : 'desktop'} className={`min-h-screen bg-bg ${mobileMode ? 'supply-mobile-mode' : 'supply-desktop-mode'}`} onClickCapture={guardInternalLink}>
+      {/* 原电脑版侧栏：仅手动切换，窗口宽度不决定显示 */}
+      {!mobileMode && <aside className="fixed inset-y-0 left-0 z-30 flex w-64 flex-col border-r border-border bg-white">
         <div className="border-b border-border px-5 py-5">
           <Link href="/v2/supply-chain/home" className="flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber text-lg font-bold text-white">滇</span>
@@ -183,7 +191,7 @@ export function SupplyChainShell({ children }: { children: ReactNode }) {
           </Link>
         </div>
         <nav aria-label="内部供应链主导航" className="flex-1 overflow-y-auto px-3 py-4">
-          {NAV_GROUPS.map(group => (
+          {SUPPLY_CHAIN_NAV_GROUPS.map(group => (
             <section key={group.title} className="mb-5">
               <h2 className="mb-2 px-3 text-micro font-medium tracking-wider text-gray3">{group.title}</h2>
               <div className="space-y-1">
@@ -223,15 +231,26 @@ export function SupplyChainShell({ children }: { children: ReactNode }) {
             <Link href="/v2/me" className="mt-2 block text-micro text-amber-fg">账户与密码设置 ›</Link>
           </div>
         </div>
-      </aside>
+      </aside>}
 
-      {/* 主内容区 — 移动端无左侧内边距，PC 有 lg:pl-64 */}
-      <main className="min-h-screen lg:pl-64">
+      {/* 原业务内容保持挂载，切导航模式不会清空填写 */}
+      <main className={`min-h-screen ${mobileMode ? 'pb-24' : 'pl-64'}`}>
+        <nav aria-label="页面快捷入口" className="flex flex-wrap items-center gap-3 border-b border-border bg-white px-4 py-3 pr-32 text-caption">
+          <Link href="/v2/supply-chain/navigation" className="ml-auto rounded-lg border border-border px-3 py-1.5 text-ink">全部功能</Link>
+        </nav>
         <div className={`mx-auto min-h-screen w-full ${(pathname.startsWith('/v2/supply-chain/reports') || pathname.startsWith('/v2/supply-chain/finance-reports') || pathname.startsWith('/v2/supply-chain/inventory-management') || pathname.startsWith('/v2/supply-chain/stocktake')) ? '' : 'max-w-[1600px]'}`}>{children}</div>
       </main>
 
-      {/* 移动端底部导航 — lg 以下显示 */}
-      <div className="lg:hidden">
+      <button
+        type="button"
+        aria-label={mobileMode ? '切换到电脑版' : '切换到手机版'}
+        aria-pressed={mobileMode}
+        onClick={() => setMobileMode(value => !value)}
+        className="fixed right-4 top-3 z-30 rounded-lg border border-border bg-white px-3 py-1.5 text-caption text-amber-fg shadow-sm"
+      >{mobileMode ? '切换电脑版' : '切换手机版'}</button>
+
+      {/* 原四Tab底栏：仅在用户选择手机版时显示 */}
+      <div className={mobileMode ? 'block' : 'hidden'}>
         <BottomNav
           tabs={MOBILE_TABS.map(t => ({ key: t.key, label: t.label, icon: t.icon }))}
           activeKey={mobileActiveKey(pathname)}

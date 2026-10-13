@@ -105,7 +105,7 @@ export function ReplenishmentOrderEditor({ orderId }: { orderId?: string }) {
   useEffect(() => {
     Promise.all([
       apiFetch<Store[] | { items: Store[] }>('/api/stores'),
-      apiFetch<Supplier[]>('/api/suppliers?status=ENABLED'),
+      apiFetch<Supplier[]>('/api/suppliers?status=ENABLED&businessScope=STORE_FULFILLER'),
     ]).then(([storeRows, supplierRows]) => {
       setStores(asList(storeRows)); setSuppliers(asList(supplierRows))
     }).catch(reason => setError(String(reason?.message || reason)))

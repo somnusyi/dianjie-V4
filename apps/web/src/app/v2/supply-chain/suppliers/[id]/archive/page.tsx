@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useParams } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
@@ -92,6 +92,9 @@ export default function SupplierArchivePage() {
   const [validUntil, setValidUntil] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [saving, setSaving] = useState(false)
+  const submitting = useRef(false)
+  const pendingRequest = useRef<Record<string, unknown> | null>(null)
+  const [resultUnknown, setResultUnknown] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [confirmState, openConfirm] = useConfirmSheet()
   const editorDirty = Boolean(title.trim() || note.trim() || validFrom || validUntil || file)
@@ -109,13 +112,37 @@ export default function SupplierArchivePage() {
     }
   }, [includeArchived, supplierId])
 
+  function pendingStorageKey() {
+    const user = JSON.parse(localStorage.getItem('user') || localStorage.getItem('dj_user') || 'null')
+    const tenant = JSON.parse(localStorage.getItem('tenant') || 'null')
+    if (!user?.id || !tenant?.id) throw new Error('缺少当前账号或租户信息，请重新登录')
+    return `dj:supplier-archive:${tenant.id}:${user.id}:${supplierId}`
+  }
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(pendingStorageKey())
+      if (!raw) return
+      const saved = JSON.parse(raw)
+      if (!['QUALIFICATION', 'FINANCE', 'INVOICE'].includes(saved.section) || typeof saved.title !== 'string' || typeof saved.requestKey !== 'string') throw new Error('待确认档案请求损坏，请核实结果后处理')
+      pendingRequest.current = saved
+      setEditorSection(saved.section)
+      setTitle(saved.title)
+      setNote(saved.note || '')
+      setValidFrom(saved.validFrom || '')
+      setValidUntil(saved.validUntil || '')
+      setResultUnknown(true)
+      setEditorError('已恢复上次待确认请求；重试将沿用原附件，不会重复建档。')
+    } catch (reason: any) { setError(reason.message || '无法恢复待确认请求') }
+  }, [supplierId])
+
   useEffect(() => { if (supplierId) void load() }, [load, supplierId])
   useEffect(() => {
-    if (!editorSection || !editorDirty) return
+    if (!editorSection || !editorDirty || resultUnknown) return
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
-  }, [editorDirty, editorSection])
+  }, [editorDirty, editorSection, resultUnknown])
 
   const visibleSections = useMemo(() => {
     if (!data) return []
@@ -127,6 +154,8 @@ export default function SupplierArchivePage() {
   }, [data])
 
   function openEditor(section: SectionCode) {
+    pendingRequest.current = null
+    setResultUnknown(false)
     setEditorSection(section)
     setTitle('')
     setNote('')
@@ -138,6 +167,10 @@ export default function SupplierArchivePage() {
 
   function requestCloseEditor() {
     if (saving) return
+    if (pendingRequest.current) {
+      setEditorError('上次保存结果待确认，请重试原请求后再关闭')
+      return
+    }
     if (!editorDirty) {
       setEditorSection(null)
       setEditorError(null)
@@ -153,6 +186,7 @@ export default function SupplierArchivePage() {
   }
 
   async function saveRecord() {
+    if (submitting.current) return
     if (!editorSection || !title.trim()) {
       setEditorError('请填写档案标题')
       return
@@ -161,34 +195,49 @@ export default function SupplierArchivePage() {
       setEditorError('有效期截止日不能早于开始日')
       return
     }
+    submitting.current = true
     setSaving(true)
     setEditorError(null)
     try {
-      let attachment: { key: string; name: string; mime: string; size: number } | null = null
-      if (file) {
-        const form = new FormData()
-        form.append('file', file, file.name)
-        const category = editorSection === 'QUALIFICATION' ? 'supplier-archive-general' : 'supplier-archive-sensitive'
-        attachment = await apiFetch(`/api/upload?category=${category}`, { method: 'POST', body: form })
+      if (!pendingRequest.current) {
+        let attachment: { key: string; name: string; mime: string; size: number } | null = null
+        if (file) {
+          const form = new FormData()
+          form.append('file', file, file.name)
+          const category = editorSection === 'QUALIFICATION' ? 'supplier-archive-general' : 'supplier-archive-sensitive'
+          attachment = await apiFetch(`/api/upload?category=${category}`, { method: 'POST', body: form })
+        }
+        pendingRequest.current = {
+            section: editorSection,
+            title: title.trim(),
+            note: note.trim(),
+            validFrom: validFrom || null,
+            validUntil: validUntil || null,
+            attachment: attachment ? { key: attachment.key, name: attachment.name, mime: attachment.mime, size: attachment.size } : null,
+            requestKey: requestKey(),
+        }
       }
+      sessionStorage.setItem(pendingStorageKey(), JSON.stringify(pendingRequest.current))
       await apiFetch(`/api/suppliers/${encodeURIComponent(supplierId)}/archive`, {
-        method: 'POST',
-        body: JSON.stringify({
-          section: editorSection,
-          title: title.trim(),
-          note: note.trim(),
-          validFrom: validFrom || null,
-          validUntil: validUntil || null,
-          attachment: attachment ? { key: attachment.key, name: attachment.name, mime: attachment.mime, size: attachment.size } : null,
-          requestKey: requestKey(),
-        }),
+        method: 'POST', body: JSON.stringify(pendingRequest.current),
       })
+      sessionStorage.removeItem(pendingStorageKey())
+      pendingRequest.current = null
+      setResultUnknown(false)
       setEditorSection(null)
       setNotice('档案条目已新增；原记录未被覆盖')
       await load()
     } catch (reason: any) {
-      setEditorError(reason?.message || '保存失败')
+      if (!resultUnknown && reason?.status >= 400 && reason.status < 500) {
+        sessionStorage.removeItem(pendingStorageKey())
+        pendingRequest.current = null
+      }
+      setResultUnknown(Boolean(pendingRequest.current))
+      setEditorError(pendingRequest.current
+        ? '保存结果待确认，请重试原请求；刷新后可恢复原请求，请勿重新建档。'
+        : reason?.message || '保存失败')
     } finally {
+      submitting.current = false
       setSaving(false)
     }
   }
@@ -305,14 +354,14 @@ export default function SupplierArchivePage() {
             <div className="flex items-center justify-between"><h2 className="text-h2">新增{SECTION_META[editorSection].title}</h2><button onClick={requestCloseEditor} disabled={saving} aria-label="关闭" className="text-2xl text-gray3 disabled:opacity-40">×</button></div>
             <p className="mt-1 text-caption text-gray2">只新增版本，不覆盖旧档案。</p>
             {editorError && <div className="mt-3 rounded-card border border-red-fg/20 bg-red-bg px-4 py-3 text-caption text-red-fg">{editorError}</div>}
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <fieldset disabled={saving || resultUnknown} className="mt-4 grid gap-4 md:grid-cols-2">
               <Field label="标题" required><input value={title} onChange={event => setTitle(event.target.value)} maxLength={160} className="h-10 w-full rounded-cta border border-border px-3" /></Field>
               <Field label="附件（图片或 PDF，最大 10MB）"><input type="file" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf" onChange={event => setFile(event.target.files?.[0] || null)} className="block w-full text-caption" /></Field>
               <Field label="有效期开始"><input type="date" value={validFrom} onChange={event => setValidFrom(event.target.value)} className="h-10 w-full rounded-cta border border-border px-3" /></Field>
               <Field label="有效期截止"><input type="date" value={validUntil} onChange={event => setValidUntil(event.target.value)} className="h-10 w-full rounded-cta border border-border px-3" /></Field>
               <div className="md:col-span-2"><Field label="说明"><textarea value={note} onChange={event => setNote(event.target.value)} maxLength={1000} rows={4} className="w-full rounded-cta border border-border p-3" /></Field></div>
-            </div>
-            <div className="mt-5 flex justify-end gap-3"><button onClick={requestCloseEditor} disabled={saving} className="rounded-cta border border-border px-4 py-2 text-button disabled:opacity-40">取消</button><button onClick={() => void saveRecord()} disabled={saving} className="rounded-cta bg-accent px-4 py-2 text-button text-white disabled:opacity-40">{saving ? '保存中…' : '保存'}</button></div>
+            </fieldset>
+            <div className="mt-5 flex justify-end gap-3"><button onClick={requestCloseEditor} disabled={saving} className="rounded-cta border border-border px-4 py-2 text-button disabled:opacity-40">取消</button><button onClick={() => void saveRecord()} disabled={saving} className="rounded-cta bg-accent px-4 py-2 text-button text-white disabled:opacity-40">{saving ? '保存中…' : resultUnknown ? '重试原请求' : '保存'}</button></div>
           </div>
         </div>
       )}

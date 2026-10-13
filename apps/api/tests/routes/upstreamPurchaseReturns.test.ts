@@ -11,7 +11,10 @@ const mocks = vi.hoisted(() => ({
   cancel: vi.fn(),
   receive: vi.fn(),
   returnable: vi.fn(),
+  progress: vi.fn(),
 }))
+
+vi.mock('../../src/services/procurementApproval',()=>({changeProcurementApproval:(...args:unknown[])=>mocks.progress(...args)}))
 
 vi.mock('../../src/services/upstreamPurchaseReturns', () => ({
   listUpstreamPurchaseReturns: (...args: unknown[]) => mocks.list(...args),
@@ -49,6 +52,7 @@ describe('upstream purchase return route authorization', () => {
     mocks.list.mockResolvedValue([])
     mocks.get.mockResolvedValue({ id: 'return-a' })
     mocks.approve.mockResolvedValue({ replayed: false, purchaseReturn: { id: 'return-a' } })
+    mocks.progress.mockResolvedValue({approvalStatus:'AUDITED'})
   })
 
   it('blocks supplier portal roles from internal return data and actions', async () => {
@@ -111,6 +115,7 @@ describe('upstream purchase return route authorization', () => {
     })
     const approve = await app.inject({
       method: 'POST', url: '/api/upstream/purchase-returns/return-a/approve', headers,
+      payload:{approvalVersion:1,sourceVersion:0,requestId:'audit-request-tenant-b'},
     })
     expect(list.statusCode).toBe(200)
     expect(detail.statusCode).toBe(200)
@@ -119,6 +124,7 @@ describe('upstream purchase return route authorization', () => {
       tenantId: 'tenant-b', supplierId: 'supplier-filter', warehouseId: 'warehouse-filter',
     }))
     expect(mocks.get).toHaveBeenCalledWith('tenant-b', 'return-a')
-    expect(mocks.approve).toHaveBeenCalledWith('tenant-b', 'return-a', 'reviewer-b')
+    expect(mocks.progress).toHaveBeenCalledWith(expect.objectContaining({tenantId:'tenant-b',userId:'reviewer-b',sourceId:'return-a',kind:'RETURN',action:'audit',approvalVersion:1,sourceVersion:0,requestId:'audit-request-tenant-b'}),expect.any(Object))
+    expect(mocks.approve).not.toHaveBeenCalled()
   })
 })

@@ -179,7 +179,7 @@ function nextAverageCost(value: Prisma.Decimal, physical: Prisma.Decimal, fallba
   return value.div(physical).toDecimalPlaces(COST_DP)
 }
 
-async function serializableWithRetry<T>(
+export async function serializableWithRetry<T>(
   work: (tx: Prisma.TransactionClient) => Promise<T>,
   timeout = 15_000,
 ): Promise<T> {
@@ -267,9 +267,10 @@ async function warehouseMode(
   return warehouse.inventoryMode
 }
 
-export async function getWarehouseLedgerMode(tenantId: string) {
-  const warehouseId = await resolveTenantWarehouseId(prisma, tenantId, undefined)
-  const warehouse = await prisma.warehouse.findFirst({
+export async function getWarehouseLedgerMode(tenantId: string, requestedWarehouseId?:string, transaction?:Prisma.TransactionClient) {
+  const db=transaction||prisma
+  const warehouseId = await resolveTenantWarehouseId(db, tenantId, requestedWarehouseId)
+  const warehouse = await db.warehouse.findFirst({
     where: { id: warehouseId, tenantId, isActive: true },
     select: { inventoryMode: true, blockZeroStockAtOrderEntry: true },
   })
@@ -413,11 +414,13 @@ async function allocateLotsFefo(
 }
 
 export type ManualWarehouseInboundInput = {
+  warehouseId?: string
   tenantId: string
   userId: string
   productId: string
   purchaseQuantity: Decimalish
   totalAmount: Decimalish
+  isGift?: boolean
   effectiveAt: Date
   idempotencyKey: string
   sourceName?: string | null
@@ -429,6 +432,7 @@ export type ManualWarehouseInboundInput = {
 }
 
 export type BatchManualWarehouseInboundInput = {
+  warehouseId?: string
   tenantId: string
   userId: string
   items: Array<{
@@ -437,6 +441,7 @@ export type BatchManualWarehouseInboundInput = {
     unitPrice: Decimalish
     /** 行金额（价税合计）。提供时作为权威金额入账（凑整场景），单价按 金额/数量 反算 */
     totalAmount?: Decimalish | null
+    isGift?: boolean
     batchNo?: string | null
     manufactureDate?: Date | null
     expiryDate?: Date | null
@@ -449,9 +454,10 @@ export type BatchManualWarehouseInboundInput = {
 }
 
 /** Single-line manual inbound. It never writes Product.stock. */
-export async function recordManualWarehouseInbound(input: ManualWarehouseInboundInput) {
-  const warehouseId = await resolveTenantWarehouseId(prisma, input.tenantId, undefined)
-  const product = await prisma.product.findFirst({
+export async function recordManualWarehouseInbound(input: ManualWarehouseInboundInput, transaction?: Prisma.TransactionClient) {
+  const db = transaction ?? prisma
+  const warehouseId = await resolveTenantWarehouseId(db, input.tenantId, input.warehouseId)
+  const product = await db.product.findFirst({
     where: { id: input.productId, tenantId: input.tenantId, status: 'ENABLED' },
     select: {
       id: true,
@@ -473,7 +479,7 @@ export async function recordManualWarehouseInbound(input: ManualWarehouseInbound
   if (!contract.structured.purchase) throw businessError(`${product.name} 缺少采购单位到库存单位换算`, 409)
   const purchaseQuantity = quantity(input.purchaseQuantity, '入库数量')
   const totalAmount = decimal(input.totalAmount, '入库金额').toDecimalPlaces(VALUE_DP)
-  if (totalAmount.lte(0)) throw businessError('入库金额必须大于0', 400)
+  if (input.isGift ? !totalAmount.isZero() : totalAmount.lte(0)) throw businessError(input.isGift ? '赠品入库金额必须为0' : '入库金额必须大于0', 400)
   if (!input.effectiveAt || Number.isNaN(input.effectiveAt.getTime())) throw businessError('入库时间无效', 400)
   if (input.expiryDate && input.manufactureDate && input.expiryDate < input.manufactureDate) {
     throw businessError('到期日期不能早于生产日期', 400)
@@ -487,6 +493,7 @@ export async function recordManualWarehouseInbound(input: ManualWarehouseInbound
     throw businessError('入库幂等键无效', 400)
   }
   const requestFingerprint = fingerprint({
+    ...(input.isGift ? { isGift: true } : {}),
     productId: product.id,
     purchaseQuantity: purchaseQuantity.toFixed(QTY_DP),
     totalAmount: totalAmount.toFixed(VALUE_DP),
@@ -499,7 +506,7 @@ export async function recordManualWarehouseInbound(input: ManualWarehouseInbound
     expiryDate: input.expiryDate?.toISOString().slice(0, 10) || null,
   })
 
-  return serializableWithRetry(async tx => {
+  const work = async (tx: Prisma.TransactionClient) => {
     const replay = await tx.warehouseLedgerMovement.findUnique({
       where: {
         tenantId_warehouseId_idempotencyKey: {
@@ -633,7 +640,8 @@ export async function recordManualWarehouseInbound(input: ManualWarehouseInbound
       },
     })
     return { replayed: false, movement: { ...movement, createdLot: lot }, warehouseId }
-  })
+  }
+  return transaction ? work(transaction) : serializableWithRetry(work)
 }
 
 export type UpstreamReceiptPostingLine = {
@@ -1354,8 +1362,10 @@ export async function postUpstreamClaimLossInTransaction(
  * starts and the whole document commits atomically. One invalid line therefore
  * cannot leave a partially posted warehouse receipt.
  */
-export async function recordBatchManualWarehouseInbound(input: BatchManualWarehouseInboundInput) {
-  const warehouseId = await resolveTenantWarehouseId(prisma, input.tenantId, undefined)
+export async function recordBatchManualWarehouseInbound(input: BatchManualWarehouseInboundInput, transaction?: Prisma.TransactionClient, revision?: { movementId: string }) {
+  if(revision && (!transaction || input.items.length!==1))throw businessError("批次修订只能在原改单事务内逐行执行",409)
+  const db = transaction ?? prisma
+  const warehouseId = await resolveTenantWarehouseId(db, input.tenantId, input.warehouseId)
   if (!input.effectiveAt || Number.isNaN(input.effectiveAt.getTime())) throw businessError('入库时间无效', 400)
   if (!Array.isArray(input.items) || input.items.length === 0 || input.items.length > 200) {
     throw businessError('批量入库必须包含 1–200 行商品', 400)
@@ -1364,7 +1374,7 @@ export async function recordBatchManualWarehouseInbound(input: BatchManualWareho
   if (productIds.some(id => !id)) throw businessError('批量入库存在无效商品', 400)
   if (new Set(productIds).size !== productIds.length) throw businessError('同一商品不能在一张批量入库单中重复', 400)
 
-  const products = await prisma.product.findMany({
+  const products = await db.product.findMany({
     where: { id: { in: productIds }, tenantId: input.tenantId, status: 'ENABLED' },
     select: {
       id: true,
@@ -1396,19 +1406,21 @@ export async function recordBatchManualWarehouseInbound(input: BatchManualWareho
     if (item.totalAmount !== null && item.totalAmount !== undefined) {
       // 凑整口径：录入行金额为权威值，单价反算（保留6位），保证与供应商账单分毫不差
       totalAmount = decimal(item.totalAmount, `${product.name}入库金额`).toDecimalPlaces(VALUE_DP)
-      if (totalAmount.lte(0)) throw businessError(`${product.name}入库金额必须大于0`, 400)
+      if (item.isGift ? !totalAmount.isZero() : totalAmount.lte(0)) throw businessError(item.isGift ? `${product.name}赠品金额必须为0` : `${product.name}入库金额必须大于0`, 400)
       unitPrice = totalAmount.div(purchaseQuantity).toDecimalPlaces(COST_DP)
     } else {
       unitPrice = decimal(item.unitPrice, `${product.name}采购单价`).toDecimalPlaces(VALUE_DP)
-      if (unitPrice.lte(0)) throw businessError(`${product.name}采购单价必须大于0`, 400)
+      if (item.isGift ? !unitPrice.isZero() : unitPrice.lte(0)) throw businessError(item.isGift ? `${product.name}赠品单价必须为0` : `${product.name}采购单价必须大于0`, 400)
       totalAmount = purchaseQuantity.mul(unitPrice).toDecimalPlaces(VALUE_DP)
     }
+    if (item.isGift && item.unitPrice != null && !decimal(item.unitPrice, '赠品单价').isZero()) throw businessError(`${product.name}赠品单价必须为0`, 400)
     if (totalAmount.gt('999999999.99')) throw businessError(`${product.name}入库金额超过系统上限`, 400)
     const conversionFactor = new Prisma.Decimal(contract.inventoryUnitsPerPurchaseUnit).toDecimalPlaces(QTY_DP)
     const inventoryQuantity = purchaseQuantity.mul(conversionFactor).toDecimalPlaces(QTY_DP)
     const inventoryUnitCost = totalAmount.div(inventoryQuantity).toDecimalPlaces(COST_DP)
     return {
       index,
+      isGift: item.isGift === true,
       product,
       contract,
       purchaseQuantity,
@@ -1426,10 +1438,13 @@ export async function recordBatchManualWarehouseInbound(input: BatchManualWareho
   const sourceRequestId = String(input.idempotencyKey || '').trim()
   if (!sourceRequestId || sourceRequestId.length > 80) throw businessError('批量入库幂等键无效', 400)
   const requestFingerprint = fingerprint({
+    ...(revision ? { revisionOfMovementId: revision.movementId } : {}),
     items: lines.map(line => ({
+      ...(line.isGift ? { isGift: true } : {}),
       productId: line.product.id,
       purchaseQuantity: line.purchaseQuantity.toFixed(QTY_DP),
-      unitPrice: line.unitPrice.toFixed(VALUE_DP),
+      unitPrice: line.unitPrice.toFixed(revision ? COST_DP : VALUE_DP),
+      ...(revision ? {totalAmount:line.totalAmount.toFixed(VALUE_DP)} : {}),
       batchNo: line.batchNo,
       manufactureDate: line.manufactureDate?.toISOString().slice(0, 10) || null,
       expiryDate: line.expiryDate?.toISOString().slice(0, 10) || null,
@@ -1442,7 +1457,7 @@ export async function recordBatchManualWarehouseInbound(input: BatchManualWareho
   const movementKey = (index: number) => `manual-inbound-batch:${sourceRequestId}:${index + 1}`
   if (movementKey(lines.length - 1).length > 160) throw businessError('批量入库幂等键过长', 400)
 
-  return serializableWithRetry(async tx => {
+  const work = async (tx: Prisma.TransactionClient) => {
     const findReplay = () => tx.warehouseLedgerMovement.findMany({
       where: {
         tenantId: input.tenantId,
@@ -1471,17 +1486,18 @@ export async function recordBatchManualWarehouseInbound(input: BatchManualWareho
     const concurrentReplay = validateReplay(await findReplay())
     if (concurrentReplay) return concurrentReplay
 
+    let previousLot: Awaited<ReturnType<typeof tx.warehouseLedgerLot.findFirst>> = null
+    if(revision){
+      const original=await tx.warehouseLedgerMovement.findFirst({where:{id:revision.movementId,tenantId:input.tenantId,warehouseId},include:{createdLot:{include:{allocations:true}},reversal:true}})
+      const line=lines[0]
+      if(!original || original.type!=='MANUAL_INBOUND'||!original.reversal||!original.createdLot||original.productId!==line.product.id||original.originalUnit!==line.contract.purchaseUnit||original.inventoryUnit!==line.contract.inventoryUnit||!original.conversionFactor.equals(line.conversionFactor)||original.createdLot.warehouseId!==warehouseId||original.createdLot.tenantId!==input.tenantId||original.createdLot.batchNo!==line.batchNo||!original.createdLot.remainingQty.isZero()||original.createdLot.allocations.some(row=>row.movementId!==original.reversal!.id))throw businessError('原批次已使用或与改单来源不一致，不能修订',409)
+      previousLot=original.createdLot
+      if(await tx.warehouseLedgerLot.findFirst({where:{tenantId:input.tenantId,replacesLotId:previousLot.id}}))throw businessError('原批次已有后续修订，请刷新单据',409)
+    }
     const customBatches = lines.filter(line => line.batchNo)
-    if (customBatches.length) {
-      const duplicate = await tx.warehouseLedgerLot.findFirst({
-        where: {
-          tenantId: input.tenantId,
-          warehouseId,
-          OR: customBatches.map(line => ({ productId: line.product.id, batchNo: line.batchNo! })),
-        },
-        select: { batchNo: true },
-      })
-      if (duplicate) throw businessError(`批次号已存在：${duplicate.batchNo}`, 409)
+    if (customBatches.length && !previousLot) {
+      const duplicate = await tx.warehouseLedgerLot.findFirst({where:{tenantId:input.tenantId,warehouseId,OR:customBatches.map(line=>({productId:line.product.id,batchNo:line.batchNo!}))},select:{batchNo:true}})
+      if(duplicate)throw businessError(`批次号已存在：${duplicate.batchNo}`,409)
     }
 
     const movements = []
@@ -1542,6 +1558,7 @@ export async function recordBatchManualWarehouseInbound(input: BatchManualWareho
           productId: line.product.id,
           kind: 'MANUAL_INBOUND',
           batchNo,
+          ...(previousLot?{batchRevision:previousLot.batchRevision+1,replacesLotId:previousLot.id}:{}),
           initialQty: line.inventoryQuantity,
           remainingQty: line.inventoryQuantity,
           inventoryUnit: line.contract.inventoryUnit,
@@ -1568,17 +1585,21 @@ export async function recordBatchManualWarehouseInbound(input: BatchManualWareho
             unitPrice: line.unitPrice.toFixed(4),
             totalAmount: line.totalAmount.toFixed(2),
             batchNo,
+            ...(previousLot?{batchRevision:previousLot.batchRevision+1,replacesLotId:previousLot.id}:{}),
             documentLine: line.index + 1,
+            ...(line.isGift ? { isGift: true } : {}),
           },
         },
       })
       movements.push({ ...movement, createdLot: lot })
     }
     return { replayed: false, movements, warehouseId }
-  })
+  }
+  return transaction ? work(transaction) : serializableWithRetry(work)
 }
 
 export type BatchManualWarehouseOutboundInput = {
+  warehouseId?: string
   tenantId: string
   userId: string
   items: Array<{
@@ -1618,8 +1639,8 @@ export type BatchManualWarehouseOutboundInput = {
  * 成本默认按移动均价带出，调用方可指定权威成本（如美团口径金额）；
  * 清零行尾差全部带出；STRICT 模式库存不足即整批拒绝。不回写 Product.stock。
  */
-export async function recordBatchManualWarehouseOutbound(input: BatchManualWarehouseOutboundInput) {
-  const { warehouseId, inventoryMode } = await getWarehouseLedgerMode(input.tenantId)
+export async function recordBatchManualWarehouseOutbound(input: BatchManualWarehouseOutboundInput, transaction?: Prisma.TransactionClient) {
+  const { warehouseId, inventoryMode } = await getWarehouseLedgerMode(input.tenantId,input.warehouseId,transaction)
   if (!input.items.length) throw businessError('出库明细不能为空', 400)
   if (!input.effectiveAt || Number.isNaN(input.effectiveAt.getTime())) throw businessError('出库时间无效', 400)
   const reason = String(input.reason || '').trim()
@@ -1636,7 +1657,7 @@ export async function recordBatchManualWarehouseOutbound(input: BatchManualWareh
     seen.add(item.productId)
   }
 
-  const products = await prisma.product.findMany({
+  const products = await (transaction || prisma).product.findMany({
     where: { tenantId: input.tenantId, id: { in: [...seen] }, status: 'ENABLED' },
     select: {
       id: true,
@@ -1668,7 +1689,7 @@ export async function recordBatchManualWarehouseOutbound(input: BatchManualWareh
     return { index, product, contract, inventoryQuantity, specifiedAmount, note: item.note || null }
   })
 
-  return serializableWithRetry(async tx => {
+  const work = async (tx: Prisma.TransactionClient) => {
     const lineKeys = lines.map(line => `${normalizedIdempotencyKey}:${line.product.id}`)
     const existing = await tx.warehouseLedgerMovement.findMany({
       where: { tenantId: input.tenantId, warehouseId, idempotencyKey: { in: lineKeys } },
@@ -1800,7 +1821,8 @@ export async function recordBatchManualWarehouseOutbound(input: BatchManualWareh
     const result = { replayed: false, movements, warehouseId }
     const finalized = input.finalizeInTransaction ? await input.finalizeInTransaction(tx, result) : undefined
     return { ...result, finalized }
-  })
+  }
+  return transaction ? work(transaction) : serializableWithRetry(work)
 }
 
 export type WarehousePhysicalCountInput = {
@@ -2150,20 +2172,22 @@ export async function recordWarehousePhysicalCount(input: WarehousePhysicalCount
 }
 
 export async function reverseManualWarehouseInbound(input: {
+  warehouseId?: string
   tenantId: string
   userId: string
   movementId: string
   reason: string
   idempotencyKey: string
-}) {
-  const warehouseId = await resolveTenantWarehouseId(prisma, input.tenantId, undefined)
+}, transaction?: Prisma.TransactionClient) {
+  const db = transaction ?? prisma
+  const warehouseId = await resolveTenantWarehouseId(db, input.tenantId, input.warehouseId)
   const rawKey = String(input.idempotencyKey).trim()
   const idempotencyKey = `manual-inbound-reversal:${rawKey}`
   if (!rawKey || rawKey.length > 80 || idempotencyKey.length > 160) throw businessError('冲销幂等键无效', 400)
   const reason = String(input.reason || '').trim()
   if (reason.length < 2 || reason.length > 240) throw businessError('冲销原因需为2至240个字符', 400)
 
-  return serializableWithRetry(async tx => {
+  const work = async (tx: Prisma.TransactionClient) => {
     const replay = await tx.warehouseLedgerMovement.findUnique({
       where: { tenantId_warehouseId_idempotencyKey: { tenantId: input.tenantId, warehouseId, idempotencyKey } },
     })
@@ -2178,6 +2202,16 @@ export async function reverseManualWarehouseInbound(input: {
     if (!original.createdLot) throw businessError('原入库批次缺失，请先执行库存审计', 409)
     if (!original.createdLot.remainingQty.equals(original.createdLot.initialQty)) {
       throw businessError('该入库批次已有出库消耗，不能整笔冲销；请通过实盘调整处理差错', 409)
+    }
+    // Lock the document before the balance, matching document edit/review lock order.
+    const linkedLine = await tx.warehouseDocLine.findFirst({
+      where: { tenantId: input.tenantId, movementId: original.id }, select: { docId: true },
+    })
+    if (linkedLine) {
+      await tx.$queryRaw`SELECT id FROM warehouse_docs WHERE id=${linkedLine.docId} AND "tenantId"=${input.tenantId} FOR UPDATE`
+      const doc = await tx.warehouseDoc.findFirst({ where: { id: linkedLine.docId, tenantId: input.tenantId } })
+      if (doc?.reviewStatus === 'REVIEWED') throw businessError('已复审的入库不能冲销', 409)
+      if (doc?.status === 'CONFIRMED') throw businessError('请先对入库单反审核，再冲销', 409)
     }
     const balances = await lockBalances(tx, {
       tenantId: input.tenantId,
@@ -2204,7 +2238,7 @@ export async function reverseManualWarehouseInbound(input: {
     }
     const balance = balances.get(original.productId)!
     const nextPhysical = balance.physicalQty.minus(original.physicalDelta).toDecimalPlaces(QTY_DP)
-    const nextValue = balance.inventoryValue.minus(original.valueDelta).toDecimalPlaces(VALUE_DP)
+    const nextValue = balance.inventoryValue.minus(await currentDocumentMovementValue(tx, original)).toDecimalPlaces(VALUE_DP)
     const mode = await warehouseMode(tx, input.tenantId, warehouseId)
     if (mode === 'STRICT' && (nextPhysical.lt(0) || nextValue.lt(0))) {
       throw businessError('冲销后库存数量或金额将为负，请改走实盘调整', 409)
@@ -2286,7 +2320,8 @@ export async function reverseManualWarehouseInbound(input: {
       },
     })
     return { replayed: false, movement, warehouseId }
-  })
+  }
+  return transaction ? work(transaction) : serializableWithRetry(work)
 }
 
 export async function reserveWarehouseLedgerForOrder(
@@ -3517,7 +3552,16 @@ export async function reverseDeliveryOutboundInTransaction(
 // 反审核后改单价/金额时调用：数量不动，只按差额写一条 ADJUSTMENT 流水。
 // 入库行（MANUAL_INBOUND）批次未被消耗时同步批次单位成本；
 // 出库行（WarehouseManualOutbound）仅调整账面金额（批次已按 FEFO 分摊，不回溯）。
+async function currentDocumentMovementValue(tx: Prisma.TransactionClient, original: { id: string; tenantId: string; warehouseId: string; valueDelta: Prisma.Decimal }) {
+  const adjustments = await tx.warehouseLedgerMovement.aggregate({
+    where: { tenantId: original.tenantId, warehouseId: original.warehouseId, sourceType: 'WarehouseDocValueAdjust', sourceLineId: original.id },
+    _sum: { valueDelta: true },
+  })
+  return original.valueDelta.plus(adjustments._sum.valueDelta ?? 0).toDecimalPlaces(VALUE_DP)
+}
+
 export async function adjustWarehouseMovementValue(input: {
+  warehouseId?: string
   tenantId: string
   userId: string
   movementId: string
@@ -3529,8 +3573,9 @@ export async function adjustWarehouseMovementValue(input: {
   /** 单据上下文，写入调整流水的 sourceType/sourceId */
   docId: string
   docNo: string
-}) {
-  const warehouseId = await resolveTenantWarehouseId(prisma, input.tenantId, undefined)
+}, transaction?: Prisma.TransactionClient) {
+  const db = transaction ?? prisma
+  const warehouseId = await resolveTenantWarehouseId(db, input.tenantId, input.warehouseId)
   const rawKey = String(input.idempotencyKey || '').trim()
   const idempotencyKey = `doc-value-adjust:${rawKey}`
   if (!rawKey || idempotencyKey.length > 160) throw businessError('调整幂等键无效', 400)
@@ -3539,7 +3584,7 @@ export async function adjustWarehouseMovementValue(input: {
   const reason = String(input.reason || '').trim()
   if (reason.length < 2 || reason.length > 240) throw businessError('调整原因需为2至240个字符', 400)
 
-  return serializableWithRetry(async tx => {
+  const work = async (tx: Prisma.TransactionClient) => {
     const replay = await tx.warehouseLedgerMovement.findUnique({
       where: { tenantId_warehouseId_idempotencyKey: { tenantId: input.tenantId, warehouseId, idempotencyKey } },
     })
@@ -3554,7 +3599,7 @@ export async function adjustWarehouseMovementValue(input: {
     if (!isInbound && !isManualOutbound) throw businessError('只能调整手工入库/手工出库流水', 409)
     if (original.reversal) throw businessError('该流水已被冲销，不能再调整金额', 409)
 
-    const oldAmount = original.valueDelta.abs().toDecimalPlaces(VALUE_DP)
+    const oldAmount = (await currentDocumentMovementValue(tx, original)).abs()
     const valueDiff = newAmount.minus(oldAmount).toDecimalPlaces(VALUE_DP)
     if (valueDiff.isZero()) return { replayed: false, movement: null, warehouseId, valueDiff }
 
@@ -3646,5 +3691,6 @@ export async function adjustWarehouseMovementValue(input: {
       },
     })
     return { replayed: false, movement, warehouseId, valueDiff }
-  })
+  }
+  return transaction ? work(transaction) : serializableWithRetry(work)
 }

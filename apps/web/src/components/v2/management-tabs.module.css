@@ -1,0 +1,6 @@
+.tabs{display:flex;flex-shrink:0;min-height:35px;padding:0 12px;overflow-x:auto;white-space:nowrap;border-bottom:1px solid #e8e2d5;background:#fffdf8}
+.tabs>div{display:flex;position:relative;align-items:center;flex-shrink:0;border-right:1px solid #e8e2d5;border-bottom:2px solid transparent}
+.tabs>div>a{display:block;padding:9px 32px 8px 14px;color:#736858;font-size:12px}
+.tabs>div.activeTab{background:#faf6ef;border-bottom-color:#b8853d}
+.tabs>div>a[aria-current=page]{color:#b8853d;font-weight:600}
+.tabs>div>button{position:absolute;top:3px;right:3px;border:0;background:transparent;padding:0;width:24px;min-height:24px;color:#8a8072;font-size:16px}

@@ -24,10 +24,10 @@ afterEach(() => {
   container.remove()
 })
 
-it('只给财务角色显示总仓盘点审核入口', async () => {
+it('只给财务角色显示总仓盘点查看入口', async () => {
   await act(async () => root.render(<UserMenu />))
   act(() => (container.querySelector('button') as HTMLButtonElement).click())
-  expect(container.querySelector('a[href="/v2/supply-chain/stocktake/work"]')?.textContent).toBe('总仓盘点审核')
+  expect(container.querySelector('a[href="/v2/supply-chain/stocktake/work"]')?.textContent).toBe('总仓盘点查看')
 
   auth.role = 'SUPPLIER_OWNER'
   await act(async () => root.render(<UserMenu key="supplier" />))

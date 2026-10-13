@@ -2,6 +2,8 @@ import crypto from 'crypto'
 import { Prisma } from '@dianjie/db'
 import { z } from 'zod'
 
+export const STAGNANT_REMINDER_DAYS = 30
+
 const optionalQuantity = z.union([
   z.number().finite().min(0).max(999_999_999_999),
   z.null(),
@@ -16,6 +18,9 @@ export const warehouseInventoryPolicyWriteSchema = z.object({
   rowVersion: z.number().int().min(0),
   requestId: z.string().trim().min(8).max(100),
   confirmUnitChange: z.boolean().default(false),
+  inventoryUnitSnapshot: z.string().trim().min(1).max(40).optional(),
+  draftVersion: z.number().int().min(0).default(0),
+  revisionId: z.string().min(1).max(64).optional(),
 }).strict().superRefine((value, context) => {
   if (value.minQty != null && value.maxQty != null && value.minQty > value.maxQty) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['maxQty'], message: '库存上限不能低于库存下限' })
@@ -62,6 +67,7 @@ export function inventoryPolicyFingerprint(productId: string, warehouseId: strin
     active: value.active,
     rowVersion: value.rowVersion,
     confirmUnitChange: value.confirmUnitChange,
+    inventoryUnitSnapshot:value.inventoryUnitSnapshot,
   })).digest('hex')
 }
 
@@ -72,6 +78,7 @@ export type InventoryRuleProduct = {
 }
 
 export type InventoryRulePolicy = {
+  restoredLegacy?: boolean
   inventoryUnitSnapshot: string
   minQty: Prisma.Decimal | number | string | null
   maxQty: Prisma.Decimal | number | string | null
@@ -96,7 +103,11 @@ export function resolveInventoryRule(
   policy: InventoryRulePolicy,
   inventoryUnit: string,
 ): ResolvedInventoryRule {
-  if (policy) {
+  if (policy?.restoredLegacy) {
+    const unitMatches=policy.inventoryUnitSnapshot===inventoryUnit
+    return {minQty:unitMatches && policy.active && policy.minQty!=null ? Number(policy.minQty):null,maxQty:unitMatches && policy.active && policy.maxQty!=null?Number(policy.maxQty):null,stagnantDays:STAGNANT_REMINDER_DAYS,source:!unitMatches?'unit-pending':policy.active && policy.minQty!=null?'legacy-fallback':'unconfigured',unitMatches}
+  }
+  if (policy && !policy.restoredLegacy) {
     if (!policy.active) {
       return { minQty: null, maxQty: null, stagnantDays: 30, source: 'unconfigured', unitMatches: true }
     }
@@ -104,7 +115,7 @@ export function resolveInventoryRule(
     return {
       minQty: unitMatches && policy.minQty != null ? Number(policy.minQty) : null,
       maxQty: unitMatches && policy.maxQty != null ? Number(policy.maxQty) : null,
-      stagnantDays: policy.stagnantDays,
+      stagnantDays: STAGNANT_REMINDER_DAYS,
       source: unitMatches ? 'configured' : 'unit-pending',
       unitMatches,
     }

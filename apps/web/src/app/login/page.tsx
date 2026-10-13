@@ -1,4 +1,5 @@
 'use client'
+import {loginTenant,dedicatedTestLogin} from '@/lib/login-environment'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
@@ -16,9 +17,12 @@ export default function LoginPage() {
 
   const handleLogin = async () => {
     if (!email || !password) return setError('请填写账号和密码')
+    const requested=new URL(window.location.href).searchParams.get('tenant')||''
+    const testEntry=dedicatedTestLogin(requested,email)
+    if(testEntry){window.location.assign(testEntry);return}
     setLoading(true); setError('')
     try {
-      const res = await api.post('/api/auth/login', { email, password })
+      const res = await api.post('/api/auth/login', { email, password, tenantSlug:loginTenant(requested,email) })
       setToken(res.data.token)
       setUser(res.data.user)
       clearActiveStoreId()
@@ -45,7 +49,7 @@ export default function LoginPage() {
       <div className={styles.formShell} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div className={styles.formCard} style={{ width: 380 }}>
           <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>欢迎回来</div>
-          <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 28 }}>登录滇界云管管理平台</div>
+          <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 28 }}>登录滇界云管管理平台 · {process.env.NEXT_PUBLIC_PREVIEW_TENANT_SLUG?'测试环境':'正式环境'}</div>
 
           <div style={{ marginBottom: 14 }}>
             <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 5 }}>邮箱</label>

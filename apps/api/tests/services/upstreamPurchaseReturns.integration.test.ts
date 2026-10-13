@@ -8,6 +8,7 @@ import {
   getUpstreamPurchaseReturn,
   receiveUpstreamPurchaseReturn,
   submitUpstreamPurchaseReturn,
+  listReturnableUpstreamReceiptLines,
 } from '../../src/services/upstreamPurchaseReturns'
 import { postUpstreamReceiptInTransaction } from '../../src/services/warehouseLedger'
 import { loadInventoryManagement, managementQuerySchema } from '../../src/services/inventoryManagement'
@@ -55,7 +56,7 @@ describe('upstream purchase returns (integration)', () => {
     const other = await prisma.tenant.create({ data: { name: `隔离租户 ${suffix}`, slug: `other-${suffix}` } })
     tenantId = tenant.id
     otherTenantId = other.id
-    warehouseId = (await prisma.warehouse.findFirstOrThrow({ where: { tenantId, isDefault: true } })).id
+    warehouseId = (await prisma.warehouse.findFirst({ where: { tenantId, isDefault: true } }) ?? await prisma.warehouse.create({data:{tenantId,code:'RETURN-TEST',name:'退货隔离仓',isDefault:true,inventoryMode:'SHADOW'}})).id
     supplierId = (await prisma.supplier.create({
       data: {
         tenantId,
@@ -177,6 +178,33 @@ describe('upstream purchase returns (integration)', () => {
     await cleanup(otherTenantId)
     await cleanup(tenantId)
     await prisma.$disconnect()
+  })
+
+  it('new return header equals the sum of individually rounded source line amounts', async () => {
+    const original = await prisma.upstreamReceipt.findUniqueOrThrow({where:{id:receiptId}})
+    const line = await prisma.upstreamReceiptLine.findUniqueOrThrow({where:{id:receiptLineId}})
+    const ids:string[]=[]
+    for(let i=0;i<2;i++){
+      const row=await prisma.upstreamReceipt.create({data:{tenantId,no:`RC-ROUND-${i}-${suffix}`,purchaseOrderId:original.purchaseOrderId,supplierId,warehouseId,status:'POSTED',postedAt:new Date(),createdById:userId,payableAmount:'0.0001',lines:{create:{purchaseOrderLineId:line.purchaseOrderLineId,productId,orderedQty:1,arrivedQty:1,acceptedQty:1,purchaseUnit:line.purchaseUnit,inventoryUnit:line.inventoryUnit,inventoryUnitsPerPurchaseUnit:line.inventoryUnitsPerPurchaseUnit,inventoryAcceptedQty:5,unitPrice:'0.00005',payableAmount:'0.0001'}}},include:{lines:true}})
+      ids.push(row.lines[0].id)
+    }
+    const result=await createUpstreamPurchaseReturn({tenantId,userId,supplierId,warehouseId,reason:'测试逐行金额舍入',idempotencyKey:`return-round-${suffix}`,lines:ids.map(id=>({receiptLineId:id,purchaseQuantity:1}))})
+    expect(result.purchaseReturn.lines.map(row=>row.settlementAmount.toString())).toEqual(['0.0001','0.0001'])
+    expect(result.purchaseReturn.settlementAmount.toString()).toBe('0.0002')
+    const first=await listReturnableUpstreamReceiptLines({tenantId,supplierId,warehouseId,take:1,includeUnavailable:true,sourceIds:ids})
+    const second=await listReturnableUpstreamReceiptLines({tenantId,supplierId,warehouseId,take:1,includeUnavailable:true,sourceIds:ids,cursor:first[0].id})
+    expect(first).toHaveLength(1);expect(second).toHaveLength(1)
+    expect(second[0].id).not.toBe(first[0].id)
+    await prisma.upstreamReceipt.update({where:{id:first[0].receipt.id},data:{status:'REVERSED',reversedAt:new Date()}})
+    const recovered=await listReturnableUpstreamReceiptLines({tenantId,supplierId,warehouseId,includeUnavailable:true,sourceIds:[first[0].id]})
+    expect(recovered[0].returnableQuantity.toString()).toBe('0')
+    expect(recovered[0].unavailableReason).toContain('已冲销')
+    expect(await listReturnableUpstreamReceiptLines({tenantId:otherTenantId,supplierId,warehouseId,includeUnavailable:true,sourceIds:ids})).toEqual([])
+    await prisma.upstreamPurchaseReturnEvent.deleteMany({where:{returnId:result.purchaseReturn.id}})
+    await prisma.upstreamPurchaseReturnLine.deleteMany({where:{returnId:result.purchaseReturn.id}})
+    await prisma.upstreamPurchaseReturn.delete({where:{id:result.purchaseReturn.id}})
+    await prisma.upstreamReceiptLine.deleteMany({where:{id:{in:ids}}})
+    await prisma.upstreamReceipt.deleteMany({where:{tenantId,no:{startsWith:'RC-ROUND-'}}})
   })
 
   it('creates an internal return for a supplier with no portal user and does not move stock before approval', async () => {
@@ -301,7 +329,7 @@ describe('upstream purchase returns (integration)', () => {
         review: '已审核',
         invoice: '待开票',
       }),
-      expect.objectContaining({ id: draft.id, status: '草稿', review: null }),
+      expect.objectContaining({ id: draft.id, status: '待提交', review: '未复审', approvalStatus: 'DRAFT' }),
     ]))
     expect(byBusinessDate.rows).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: approved.id })]))
 
@@ -314,7 +342,7 @@ describe('upstream purchase returns (integration)', () => {
     expect(byCreatedAt.total).toBe(2)
     expect(byCreatedAt.rows).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: approved.id, status: '已出库', review: '已审核' }),
-      expect.objectContaining({ id: draft.id, status: '草稿', review: null }),
+      expect.objectContaining({ id: draft.id, status: '待提交', review: '未复审', approvalStatus: 'DRAFT' }),
     ]))
     expect(byCreatedAt.rows).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: received.id })]))
   })

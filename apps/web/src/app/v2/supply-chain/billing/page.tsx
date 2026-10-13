@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import { downloadBillingCsv } from './csv-export'
+import { BillingDetailDialog } from './billing-detail'
+import type { BillingDetailTarget } from './detail-types'
 
 type Schedule = {
   id: string
@@ -47,6 +49,8 @@ export default function InternalSupplyChainBillingPage() {
   const [storeFilter, setStoreFilter] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  // 详情目标只存 type/id；列表行仅提供加载中的标题标识，完整内容一律以单笔详情接口返回为准
+  const [detail, setDetail] = useState<BillingDetailTarget | null>(null)
 
   useEffect(() => {
     Promise.all([
@@ -116,9 +120,9 @@ export default function InternalSupplyChainBillingPage() {
       </section>
 
       <div className="mb-4 flex flex-wrap gap-2">
-        <Tab active={tab === 'schedule'} onClick={() => setTab('schedule')}>账期 {schedules.length}</Tab>
-        <Tab active={tab === 'reconciliation'} onClick={() => setTab('reconciliation')}>对账单 {reconciliations.length}</Tab>
-        <Tab active={tab === 'invoice'} onClick={() => setTab('invoice')}>发票 {invoices.length}</Tab>
+        <Tab active={tab === 'schedule'} onClick={() => { setTab('schedule'); setDetail(null) }}>账期 {schedules.length}</Tab>
+        <Tab active={tab === 'reconciliation'} onClick={() => { setTab('reconciliation'); setDetail(null) }}>对账单 {reconciliations.length}</Tab>
+        <Tab active={tab === 'invoice'} onClick={() => { setTab('invoice'); setDetail(null) }}>发票 {invoices.length}</Tab>
         <button
           type="button"
           disabled={loading || exportRows.length === 0}
@@ -145,7 +149,7 @@ export default function InternalSupplyChainBillingPage() {
         {loading && <div className="py-16 text-center text-caption text-gray3">加载中…</div>}
         {!loading && tab === 'schedule' && (
           <table className="w-full text-left text-caption">
-            <thead className="bg-bg text-gray3"><tr><th className="px-4 py-3">供应商 / 入库单</th><th className="px-4 py-3">门店</th><th className="px-4 py-3">到期日</th><th className="px-4 py-3">状态</th><th className="px-4 py-3 text-right">金额</th></tr></thead>
+            <thead className="bg-bg text-gray3"><tr><th className="px-4 py-3">供应商 / 入库单</th><th className="px-4 py-3">门店</th><th className="px-4 py-3">到期日</th><th className="px-4 py-3">状态</th><th className="px-4 py-3 text-right">金额</th><th className="px-4 py-3 text-right">操作</th></tr></thead>
             <tbody className="divide-y divide-border">
               {filteredSchedules.map(item => (
                 <tr key={item.id}>
@@ -154,6 +158,7 @@ export default function InternalSupplyChainBillingPage() {
                   <td className="px-4 py-3 font-num">{item.dueAt?.slice(0, 10)}</td>
                   <td className="px-4 py-3"><Chip tone={item.status === 'PAID' ? 'green' : new Date(item.dueAt).getTime() < Date.now() ? 'red' : 'orange'}>{item.status}</Chip></td>
                   <td className="px-4 py-3 text-right font-num">{money(item.amount)}</td>
+                  <td className="px-4 py-3 text-right"><button type="button" onClick={() => setDetail({ type: 'schedule', id: item.id, titleHint: `${item.supplier?.name || ''}${item.receipt?.no ? ` · ${item.receipt.no}` : ''}` })} className="text-button text-accent">查看</button></td>
                 </tr>
               ))}
             </tbody>
@@ -161,7 +166,7 @@ export default function InternalSupplyChainBillingPage() {
         )}
         {!loading && tab === 'reconciliation' && (
           <table className="w-full text-left text-caption">
-            <thead className="bg-bg text-gray3"><tr><th className="px-4 py-3">对账单</th><th className="px-4 py-3">供应商</th><th className="px-4 py-3">期间</th><th className="px-4 py-3">状态</th><th className="px-4 py-3 text-right">金额</th></tr></thead>
+            <thead className="bg-bg text-gray3"><tr><th className="px-4 py-3">对账单</th><th className="px-4 py-3">供应商</th><th className="px-4 py-3">期间</th><th className="px-4 py-3">状态</th><th className="px-4 py-3 text-right">金额</th><th className="px-4 py-3 text-right">操作</th></tr></thead>
             <tbody className="divide-y divide-border">
               {reconciliations.map(item => (
                 <tr key={item.id}>
@@ -170,6 +175,7 @@ export default function InternalSupplyChainBillingPage() {
                   <td className="px-4 py-3 font-num text-gray2">{item.periodStart?.slice(0, 10)} 至 {item.periodEnd?.slice(0, 10)}</td>
                   <td className="px-4 py-3"><Chip tone="gray">{item.status}</Chip></td>
                   <td className="px-4 py-3 text-right font-num">{money(item.totalAmount)}</td>
+                  <td className="px-4 py-3 text-right"><button type="button" onClick={() => setDetail({ type: 'reconciliation', id: item.id, titleHint: item.no })} className="text-button text-accent">查看</button></td>
                 </tr>
               ))}
             </tbody>
@@ -177,7 +183,7 @@ export default function InternalSupplyChainBillingPage() {
         )}
         {!loading && tab === 'invoice' && (
           <table className="w-full text-left text-caption">
-            <thead className="bg-bg text-gray3"><tr><th className="px-4 py-3">发票号码</th><th className="px-4 py-3">供应商</th><th className="px-4 py-3">开票日</th><th className="px-4 py-3">关联入库</th><th className="px-4 py-3">状态</th><th className="px-4 py-3 text-right">金额</th></tr></thead>
+            <thead className="bg-bg text-gray3"><tr><th className="px-4 py-3">发票号码</th><th className="px-4 py-3">供应商</th><th className="px-4 py-3">开票日</th><th className="px-4 py-3">关联入库</th><th className="px-4 py-3">状态</th><th className="px-4 py-3 text-right">金额</th><th className="px-4 py-3 text-right">操作</th></tr></thead>
             <tbody className="divide-y divide-border">
               {invoices.map(item => (
                 <tr key={item.id}>
@@ -187,6 +193,7 @@ export default function InternalSupplyChainBillingPage() {
                   <td className="px-4 py-3 font-num">{item.receipts?.length || 0} 单</td>
                   <td className="px-4 py-3"><Chip tone={item.status === 'VERIFIED' ? 'green' : item.status === 'REJECTED' ? 'red' : 'orange'}>{item.status}</Chip></td>
                   <td className="px-4 py-3 text-right font-num">{money(item.amount)}</td>
+                  <td className="px-4 py-3 text-right"><button type="button" onClick={() => setDetail({ type: 'invoice', id: item.id, titleHint: item.invoiceNo })} className="text-button text-accent">查看</button></td>
                 </tr>
               ))}
             </tbody>
@@ -198,6 +205,15 @@ export default function InternalSupplyChainBillingPage() {
           <div className="py-16 text-center text-caption text-gray3">暂无记录</div>
         )}
       </div>
+      {detail && (
+        <BillingDetailDialog
+          key={`${detail.type}:${detail.id}`}
+          type={detail.type}
+          id={detail.id}
+          titleHint={detail.titleHint}
+          onClose={() => setDetail(null)}
+        />
+      )}
     </div>
   )
 }

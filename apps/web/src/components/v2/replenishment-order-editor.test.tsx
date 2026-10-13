@@ -46,6 +46,7 @@ describe('门店补货单编辑与履约页面', () => {
     const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container)
     act(() => root.render(<ReplenishmentOrderEditor orderId="ro-1" />))
     await waitFor(() => Boolean(container.querySelector('input[type="number"]')))
+    expect(mockFetch.mock.calls.some(([path]) => String(path) === '/api/suppliers?status=ENABLED&businessScope=STORE_FULFILLER')).toBe(true)
     expect((container.querySelector('input[type="number"]') as HTMLInputElement).value).toBe('2.5')
     expect(container.textContent).toContain('kg')
     expect(container.textContent).toContain('¥10.00')

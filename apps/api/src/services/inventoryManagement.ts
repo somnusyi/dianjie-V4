@@ -2,9 +2,14 @@ import { Prisma } from '@dianjie/db'
 import { z } from 'zod'
 import contract from './inventory-management-contract.json'
 import { businessDateKey, businessDateRangeInclusive } from '../lib/businessTime'
+import { procurementApprovalView } from './procurementApproval'
 
 export const managementPages = contract
 export type ManagementRow = Record<string, string | number | null>
+function procurementRowProgress(kind: 'RECEIPT' | 'RETURN', source: any): ManagementRow {
+  const view = procurementApprovalView(kind, source)
+  return { approvalStatus: view.approvalStatus, approvalVersion: view.approvalVersion, sourceVersion: view.sourceVersion, sourceStatus: view.sourceStatus, businessFieldsLocked: view.businessFieldsLocked ? 1 : 0 }
+}
 const validDate = z.string().refine(s => !s || (/^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().slice(0, 10) === s), '日期格式不正确')
 export const managementQuerySchema = z.object({
   start: validDate.default(''), end: validDate.default(''), dateField: z.enum(['date', 'createdAt']).default('date'),
@@ -63,7 +68,7 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
     ])
     const names = new Map(users.map(u => [u.id, u.name])); const warehouseNames = new Map(warehouses.map(w => [w.id, w.name]))
     rows = docs.map(d => ({ recordType: 'WAREHOUSE_DOC', detailId: d.id, id: d.id, no: d.docNo, date: day(d.effectiveAt), org, warehouse: warehouseNames.get(d.warehouseId) ?? null,
-      reason: d.reason, amount: Number(d.totalAmount), status: d.status === 'CONFIRMED' ? '已审核' : '未审核',
+      reason: d.reason, amount: Number(d.totalAmount), status: d.status === 'CONFIRMED' ? '已审核' : '待审核', docStatus: d.status, docReviewStatus: d.reviewStatus,
       review: d.reviewStatus === 'REVIEWED' ? '已复审' : '未复审', createdAt: timestamp(d.createdAt), creator: d.createdById ? names.get(d.createdById) ?? null : null, note: d.note,
       source: id === 'other-in' ? '其他入库' : '其他出库',
       attachments: Array.isArray(d.attachments) ? `${d.attachments.length} 项` : '0 项',
@@ -99,14 +104,15 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
     const purchaseRows = [
       ...receipts.map(r => ({ recordType: 'UPSTREAM_RECEIPT', detailId: r.id, id: `receipt:${r.id}`, rawId: r.id, sourceRank: 0, sortAt: r.postedAt,
         no: r.no, date: day(r.postedAt), upstream: r.purchaseOrder.no, org, warehouse: warehouseNames.get(r.warehouseId) ?? null,
-        supplier: r.supplier.name, amount: Number(r.payableAmount), status: statuses[r.status], review: null,
+        supplier: r.supplier.name, amount: Number(r.payableAmount), status: ['POSTED','REVERSED'].includes(r.status) ? statuses[r.status] : r.approvalStatus ? ({DRAFT:'待提交',PENDING:'待审核',AUDITED:'已审核',REVIEWED:'已复审'}[r.approvalStatus]) : statuses[r.status], review: r.approvalStatus === 'REVIEWED' ? '已复审' : r.approvalStatus ? '未复审' : null,
+        ...procurementRowProgress('RECEIPT', r),
         createdAt: timestamp(r.createdAt), creator: names.get(r.createdById) ?? null, note: r.note,
         source: '采购收货',
         attachments: Array.isArray(r.evidence) ? `${r.evidence.length} 项` : null,
       })),
       ...manualDocs.map(d => ({ recordType: 'WAREHOUSE_DOC', detailId: d.id, id: `warehouse-doc:${d.id}`, rawId: d.id, sourceRank: 1, sortAt: d.effectiveAt,
         no: d.docNo, date: day(d.effectiveAt), upstream: null, org, warehouse: warehouseNames.get(d.warehouseId) ?? null,
-        supplier: d.supplierName, amount: Number(d.totalAmount), status: '已入库', review: d.reviewStatus === 'REVIEWED' ? '已复审' : '未复审',
+        supplier: d.supplierName, amount: Number(d.totalAmount), status: d.status === 'CONFIRMED' ? '已审核' : '待审核', docStatus: d.status, docReviewStatus: d.reviewStatus, review: d.reviewStatus === 'REVIEWED' ? '已复审' : '未复审',
         createdAt: timestamp(d.createdAt), creator: d.createdById ? names.get(d.createdById) ?? null : null, note: d.note,
         source: '手工入库',
         attachments: Array.isArray(d.attachments) && d.attachments.length > 0 ? `${d.attachments.length} 项` : null,
@@ -165,6 +171,8 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
       const upstreamNos = [...new Set(row.lines.map(line => line.receiptLine.receipt.no))]
       return {
         id: row.id,
+        recordType: 'UPSTREAM_RETURN', detailId: row.id,
+        ...procurementRowProgress('RETURN', row),
         no: row.no,
         date: day(row.approvedAt ?? row.createdAt),
         upstream: upstreamNos.join('、') || null,
@@ -172,8 +180,8 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
         warehouse: row.warehouse.name,
         supplier: row.supplier.name,
         amount: Number(row.settlementAmount),
-        status: statuses[row.status],
-        review: row.status === 'PENDING_APPROVAL' ? '待审核' : ['APPROVED', 'RECEIVED'].includes(row.status) ? '已审核' : null,
+        status: ['APPROVED','RECEIVED','CANCELLED','REJECTED'].includes(row.status) ? statuses[row.status] : row.approvalStatus ? ({DRAFT:'待提交',PENDING:'待审核',AUDITED:'已审核',REVIEWED:'已复审'}[row.approvalStatus]) : statuses[row.status],
+        review: row.approvalStatus === 'REVIEWED' ? '已复审' : ['APPROVED','RECEIVED'].includes(row.status) ? '已审核' : row.approvalStatus ? '未复审' : row.status === 'PENDING_APPROVAL' ? '待审核' : null,
         reconciliation: null,
         invoice: ['APPROVED', 'RECEIVED'].includes(row.status) ? '待开票' : null,
         printed: null,
@@ -182,16 +190,16 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
         note: row.note || row.reason,
       }
     })
-    note = '数据来自独立采购退货单：创建和提交不动库存，已审核单据日期取实际出库日期，未审核单据日期取创建日期；供应商实收仅更新退货状态，不重复增加任何仓库库存。上游单据号取原采购收货单。'
+    note = '数据来自独立采购退货单：创建、提交和审核不动库存，复审后实际出库。已过账单据日期取实际出库日期，未过账单据日期取创建日期；供应商实收仅更新退货状态，不重复增加任何仓库库存。上游单据号取原采购收货单。'
   } else if (id === 'count') {
-    supportedFilters.add('warehouse'); supportedFilters.add('difference')
+    supportedFilters.add('warehouse'); supportedFilters.add('difference'); supportedFilters.add('countType')
     const [counts, warehouseCounts] = await Promise.all([tx.inventoryCount.findMany({
       where: { tenantId, store: { tenantId }, ...dateRange('countDate'),
         ...(q.filters.item ? { items: { some: { productNameSnapshot: { contains: q.filters.item, mode: 'insensitive' } } } } : {}),
       }, include: { store: { select: { name: true } } }, orderBy: [{ countDate: 'desc' }, { id: 'desc' }], take: 10001,
     }), tx.warehouseStocktake.findMany({
       where: { tenantId, ...dateRange('countDate'),
-        ...(q.filters.warehouse ? { warehouse: { name: { contains: q.filters.warehouse, mode: 'insensitive' } } } : {}),
+        ...(q.filters.warehouse && !q.filters.warehouse.startsWith('warehouse:') ? { warehouse: { name: { contains: q.filters.warehouse, mode: 'insensitive' } } } : {}),
         ...(q.filters.item ? { items: { some: { productNameSnapshot: { contains: q.filters.item, mode: 'insensitive' } } } } : {}),
       }, include: { warehouse: { select: { name: true } } }, orderBy: [{ countDate: 'desc' }, { id: 'desc' }], take: 10001,
     })])
@@ -199,36 +207,35 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
     const users = await tx.user.findMany({ where: { tenantId, id: { in: [...counts.map(c => c.createdById), ...warehouseCounts.map(c => c.createdById)] } }, select: { id: true, name: true } })
     const names = new Map(users.map(u => [u.id, u.name]))
     const statuses = { DRAFT: '草稿', COUNTING: '盘点中', REVIEWING: '待审核', CONFIRMED: '已审核', CANCELLED: '已取消', REVERSED: '已冲销' }
-    rows = [...counts.map(c => ({ id: c.id, no: c.no, date: c.countDate.toISOString().slice(0, 10), org: c.store.name, warehouse: null, itemCount: c.itemCount,
+    rows = [...counts.map(c => ({ id: c.id, orgKey:`store:${c.storeId}`, no: c.no, date: c.countDate.toISOString().slice(0, 10), org: c.store.name, warehouse: null, itemCount: c.itemCount,
       bookAmount: Number(c.totalBookValue), actualAmount: Number(c.totalCountedValue), differenceAmount: Number(c.totalDifferenceValue),
-      countType: '门店盘点', countMethod: '单人/门店', status: statuses[c.status], difference: c.countedCount < c.itemCount ? '未盘完' : c.differenceCount ? '有差异' : '无差异',
+      countType: '门店盘点', countMethod: '单人/门店', differenceCount: c.differenceCount, status: statuses[c.status], difference: c.countedCount < c.itemCount ? '未盘完' : c.differenceCount ? '有差异' : '无差异',
       auditedAt: day(c.confirmedAt), createdAt: timestamp(c.createdAt), creator: names.get(c.createdById) ?? null, note: c.note,
-    })), ...warehouseCounts.map(c => ({ recordType: 'WAREHOUSE_STOCKTAKE', detailId: c.id, id: `warehouse:${c.id}`, no: c.no, date: c.countDate.toISOString().slice(0, 10), org, warehouse: c.warehouse.name, itemCount: c.itemCount,
+    })), ...warehouseCounts.map(c => ({ recordType: 'WAREHOUSE_STOCKTAKE', detailId: c.id, orgKey:`tenant:${tenantId}`, warehouseKey:`warehouse:${c.warehouseId}`, id: `warehouse:${c.id}`, no: c.no, date: c.countDate.toISOString().slice(0, 10), org, warehouse: c.warehouse.name, itemCount: c.itemCount,
       bookAmount: Number(c.totalBookValue), actualAmount: Number(c.totalCountedValue), differenceAmount: Number(c.totalDifferenceValue),
-      countType: '总仓盘点', countMethod: '多人分区', status: statuses[c.status], difference: c.countedCount < c.itemCount ? '未盘完' : c.differenceCount ? '有差异' : '无差异',
+      countType: c.countScope === 'ALL' ? '全部盘' : '指定物品', countMethod: '汇总盘点', differenceCount: c.differenceCount, status: statuses[c.status], difference: c.countedCount < c.itemCount ? '未盘完' : c.differenceCount ? '有差异' : '无差异',
       auditedAt: day(c.reviewedAt), createdAt: timestamp(c.createdAt), creator: names.get(c.createdById) ?? null, note: c.note,
     }))]
     note = '门店盘点与总仓供应链多人分区盘点同表展示，并以盘点类型区分数据来源。'
   } else if (id === 'multi-count') {
-    supportedFilters.add('generated')
     const counts = bounded(await tx.warehouseStocktake.findMany({
       where: { tenantId, ...dateRange('countDate'),
-        ...(q.filters.warehouse ? { warehouse: { name: { contains: q.filters.warehouse, mode: 'insensitive' } } } : {}),
+        ...(q.filters.warehouse && !q.filters.warehouse.startsWith('warehouse:') ? { warehouse: { name: { contains: q.filters.warehouse, mode: 'insensitive' } } } : {}),
         ...(q.filters.item ? { items: { some: { productNameSnapshot: { contains: q.filters.item, mode: 'insensitive' } } } } : {}),
       }, include: { warehouse: { select: { name: true } }, createdBy: { select: { name: true } }, sections: { select: { id: true } } },
       orderBy: [{ countDate: 'desc' }, { id: 'desc' }], take: 10001,
     }))
     const statuses = { DRAFT: '草稿', COUNTING: '盘点中', REVIEWING: '待审核', CONFIRMED: '已审核', CANCELLED: '已取消' }
-    rows = counts.map(c => ({ recordType: 'WAREHOUSE_STOCKTAKE', detailId: c.id, id: c.id, no: c.no, date: c.countDate.toISOString().slice(0, 10), org, warehouse: c.warehouse.name,
-      itemCount: c.itemCount, status: statuses[c.status], auditedAt: day(c.reviewedAt), generated: c.status === 'CONFIRMED' ? '是' : '否',
+    rows = counts.map(c => ({ recordType: 'WAREHOUSE_STOCKTAKE', detailId: c.id, orgKey:`tenant:${tenantId}`, warehouseKey:`warehouse:${c.warehouseId}`, id: c.id, no: c.no, date: c.countDate.toISOString().slice(0, 10), org, warehouse: c.warehouse.name,
+      itemCount: c.itemCount, status: statuses[c.status], auditedAt: day(c.reviewedAt), generated: null,
       createdAt: timestamp(c.createdAt), creator: c.createdBy.name, note: c.note,
     }))
-    note = '总仓多人盘点单；各分区由指定负责人录入并提交，汇总审核后生成盘盈/盘亏单。'
+    note = '总仓多人盘点作业；各分区由指定负责人填写并提交。结果盘点单生成状态待核对。' + (q.filters.generated ? ' 原生成状态筛选暂不可用，本次未应用该条件。' : '')
   } else if (id === 'profit' || id === 'loss') {
     const type = id === 'profit' ? 'PROFIT' : 'LOSS'
     const adjustments = bounded(await tx.warehouseStocktakeAdjustment.findMany({
       where: { tenantId, type,
-        stocktake: { ...dateRange('countDate'), ...(q.filters.warehouse ? { warehouse: { name: { contains: q.filters.warehouse, mode: 'insensitive' } } } : {}) },
+        stocktake: { ...dateRange('countDate'), ...(q.filters.warehouse && !q.filters.warehouse.startsWith('warehouse:') ? { warehouse: { name: { contains: q.filters.warehouse, mode: 'insensitive' } } } : {}) },
         ...(q.filters.item ? { lines: { some: { product: { name: { contains: q.filters.item, mode: 'insensitive' } } } } } : {}),
       }, include: { stocktake: { include: { warehouse: { select: { name: true } }, reviewedBy: { select: { name: true } } } } },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 10001,
@@ -276,8 +283,22 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
       ? [...new Set(rows.flatMap(r => r[f.key] == null ? [] : [String(r[f.key])]))].sort()
       : []
   }
+  let warehousesByOrg:Record<string,string[]>|undefined
+  let warehouseOptions:Array<{id:string;name:string}>|undefined
+  let choiceOptions:Record<string,Array<{value:string;label:string}>>|undefined
+  let warehouseChoicesByOrg:Record<string,Array<{value:string;label:string}>>|undefined
+  if(id==='count'||id==='multi-count'){
+    const warehouses=await tx.warehouse.findMany({where:{tenantId},select:{id:true,name:true,code:true},orderBy:{name:'asc'}})
+    const stores=id==='count'?await tx.store.findMany({where:{tenantId},select:{id:true,name:true},orderBy:{name:'asc'}}):[]
+    warehouseOptions=warehouses
+    choiceOptions={org:[...(org?[{value:`tenant:${tenantId}`,label:org}]:[]),...stores.map(store=>({value:`store:${store.id}`,label:store.name}))],warehouse:warehouses.map(warehouse=>({value:`warehouse:${warehouse.id}`,label:warehouse.code?`${warehouse.name} · ${warehouse.code}`:warehouse.name}))}
+    warehouseChoicesByOrg=Object.fromEntries(choiceOptions.org.map(choice=>[choice.value,choice.value===`tenant:${tenantId}`?choiceOptions!.warehouse:[]]))
+    options.org=[...new Set([...(org?[org]:[]),...stores.map(store=>store.name),...(options.org||[])])].sort()
+    options.warehouse=[...new Set([...warehouses.map(warehouse=>warehouse.name),...(options.warehouse||[])])].sort()
+    warehousesByOrg=Object.fromEntries(options.org.map(name=>[name,[...new Set([...(name===org?warehouses.map(warehouse=>warehouse.name):[]),...rows.filter(row=>row.org===name&&row.warehouse).map(row=>String(row.warehouse))])].sort()]))
+  }
   const exact = new Set(['status', 'review', 'printed', 'difference', 'generated', 'stockStatus', 'invoice', 'reconciliation'])
-  rows = rows.filter(row => Object.entries(q.filters).every(([key, value]) => !value || (key === 'item' ? true : exact.has(key) ? row[key] === value : textMatch(row[key], value))))
+  rows = rows.filter(row => Object.entries(q.filters).every(([key, value]) => !value || (id==='multi-count'&&key==='generated' ? true : key === 'item' ? true : ((id==='count'||id==='multi-count')&&key==='org'&&/^(tenant|store):/.test(value))?row.orgKey===value:((id==='count'||id==='multi-count')&&key==='warehouse'&&value.startsWith('warehouse:'))?row.warehouseKey===value:exact.has(key) ? row[key] === value : textMatch(row[key], value))))
   const total = rows.length
   const totals = Object.fromEntries(config.columns.filter(c => ['amount', 'bookAmount', 'actualAmount', 'differenceAmount'].includes(c.key)).map(c => [c.key,
     Number(rows.reduce((sum, r) => sum.plus(r[c.key] == null ? 0 : Number(r[c.key])), new Prisma.Decimal(0)).toDecimalPlaces(6)),
@@ -285,8 +306,8 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
   const page = Math.min(q.page, Math.max(1, Math.ceil(total / q.pageSize)))
   const allRows = Boolean(q.export || q.print)
   const resultRows = (allRows ? rows : rows.slice((page - 1) * q.pageSize, page * q.pageSize)).map((r, i) => ({
-    id: r.id, source: r.source ?? null, ...(r.recordType ? { recordType: r.recordType, detailId: r.detailId } : {}), ...Object.fromEntries(config.columns.map(c => [c.key, c.key === 'seq' ? (allRows ? i : (page - 1) * q.pageSize + i) + 1 : r[c.key] ?? null])),
+    id: r.id, source: r.source ?? null, ...(r.recordType ? { recordType: r.recordType, detailId: r.detailId } : {}), ...(r.recordType === 'WAREHOUSE_DOC' ? { docStatus: r.docStatus, docReviewStatus: r.docReviewStatus } : {}), ...(['UPSTREAM_RECEIPT','UPSTREAM_RETURN'].includes(String(r.recordType)) ? Object.fromEntries(['approvalStatus','approvalVersion','sourceVersion','sourceStatus','businessFieldsLocked'].map(key => [key,r[key]])) : {}), ...(id === 'count' ? { differenceCount: r.differenceCount ?? null } : {}), ...Object.fromEntries(config.columns.map(c => [c.key, c.key === 'seq' ? (allRows ? i : (page - 1) * q.pageSize + i) + 1 : r[c.key] ?? null])),
   }))
-  return { id, title: config.title, columns: config.columns, rows: resultRows, total, totals, page, pageSize: q.pageSize, options,
+  return { id, title: config.title, columns: config.columns, rows: resultRows, total, totals, page, pageSize: q.pageSize, options, ...(warehousesByOrg ? { warehousesByOrg,warehouseOptions,choiceOptions,warehouseChoicesByOrg } : {}),
     supportedFilters: sourceAvailable ? [...supportedFilters] : [], sourceAvailable, note, generatedAt: timestamp(new Date()) }
 }

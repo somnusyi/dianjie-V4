@@ -3,6 +3,7 @@ import {
   adjustWarehouseMovementValue,
   recordBatchManualWarehouseInbound,
   reverseManualWarehouseInbound,
+  serializableWithRetry,
 } from './warehouseLedger'
 
 function docError(message: string, statusCode = 409) {
@@ -108,6 +109,7 @@ export type WarehouseDocLineInput = {
   unit: string
   unitPrice?: Prisma.Decimal | number | string | null
   amount: Prisma.Decimal | number | string
+  isGift?: boolean
   inventoryQuantity: Prisma.Decimal | number | string
   inventoryUnit: string
   note?: string | null
@@ -183,6 +185,7 @@ export async function ensureWarehouseDocInTransaction(tx: Prisma.TransactionClie
               unit: line.unit,
               unitPrice: line.unitPrice === null || line.unitPrice === undefined ? null : new Prisma.Decimal(line.unitPrice),
               amount: new Prisma.Decimal(line.amount),
+              isGift: line.isGift === true,
               inventoryQuantity: new Prisma.Decimal(line.inventoryQuantity),
               inventoryUnit: line.inventoryUnit,
               note: line.note || null,
@@ -226,55 +229,85 @@ export async function ensureWarehouseDoc(input: EnsureWarehouseDocInput) {
   throw docError('仓库单据登记失败，请使用同一请求标识重试', 409)
 }
 
-/** 会计审核：POSTED → CONFIRMED，锁定单据。 */
-export async function confirmWarehouseDoc(input: { tenantId: string; userId: string; docId: string }) {
-  const doc = await prisma.warehouseDoc.findFirst({ where: { id: input.docId, tenantId: input.tenantId } })
-  if (!doc) throw docError('单据不存在', 404)
-  if (doc.status === 'CONFIRMED') return { doc, changed: false }
-  const updated = await prisma.warehouseDoc.update({
-    where: { id: doc.id },
-    data: { status: 'CONFIRMED', confirmedById: input.userId, confirmedAt: new Date() },
-  })
-  await prisma.warehouseDocLog.create({
-    data: {
-      tenantId: input.tenantId,
-      docId: doc.id,
-      action: 'CONFIRM',
-      actorId: input.userId,
-      actorName: await resolveActorName(prisma, input.tenantId, input.userId),
-    },
-  })
-  return { doc: updated, changed: true }
+/** 入库审核：POSTED → CONFIRMED；新草稿提交将过账与本步骤放在同一事务。 */
+export async function confirmWarehouseDocInTransaction(tx: Prisma.TransactionClient, input: { tenantId: string; userId: string; docId: string }) {
+    await tx.$queryRaw`SELECT id FROM warehouse_docs WHERE id = ${input.docId} AND "tenantId" = ${input.tenantId} FOR UPDATE`
+    const doc = await tx.warehouseDoc.findFirst({ where: { id: input.docId, tenantId: input.tenantId } })
+    if (!doc) throw docError('单据不存在', 404)
+    if (doc.status === 'CONFIRMED') return { doc, changed: false }
+    const updated = await tx.warehouseDoc.update({
+      where: { id: doc.id },
+      data: { status: 'CONFIRMED', confirmedById: input.userId, confirmedAt: new Date() },
+    })
+    await tx.warehouseDocLog.create({
+      data: {
+        tenantId: input.tenantId,
+        docId: doc.id,
+        action: 'CONFIRM',
+        actorId: input.userId,
+        actorName: await resolveActorName(tx, input.tenantId, input.userId),
+      },
+    })
+    return { doc: updated, changed: true }
 }
 
-/** 会计反审核：CONFIRMED → POSTED，必填退回原因；已复审的单据不能反审核。 */
+export async function confirmWarehouseDoc(input: { tenantId: string; userId: string; docId: string }) {
+  return serializableWithRetry(tx => confirmWarehouseDocInTransaction(tx, input))
+}
+
+export async function reviewWarehouseDoc(input: {tenantId:string;userId:string;docId:string}) {
+ return serializableWithRetry(async tx=>{
+  await tx.$queryRaw`SELECT id FROM warehouse_docs WHERE id=${input.docId} AND "tenantId"=${input.tenantId} FOR UPDATE`
+  const doc=await tx.warehouseDoc.findFirst({where:{id:input.docId,tenantId:input.tenantId}})
+  if(!doc) throw docError('单据不存在',404)
+  if(doc.status!=='CONFIRMED') throw docError('请先完成单据审核，再由供应链复审')
+  if(doc.reviewStatus==='REVIEWED') return {doc,changed:false}
+  const updated=await tx.warehouseDoc.update({where:{id:doc.id},data:{reviewStatus:'REVIEWED'}})
+  await tx.warehouseDocLog.create({data:{tenantId:input.tenantId,docId:doc.id,action:'REVIEW',actorId:input.userId,actorName:await resolveActorName(tx,input.tenantId,input.userId)}})
+  return {doc:updated,changed:true}
+ })
+}
+
+/** DEC043: review is final; legacy cancellation URLs are explicitly rejected. */
+export async function unreviewWarehouseDoc(input:{tenantId:string;userId:string;docId:string}):Promise<{doc:Prisma.WarehouseDocGetPayload<{}>;changed:boolean}> {
+  return serializableWithRetry(async tx=>{
+    const doc=await tx.warehouseDoc.findFirst({where:{id:input.docId,tenantId:input.tenantId}})
+    if(!doc)throw docError('单据不存在',404)
+    throw docError('复审后流程已结束，不支持取消复审',409)
+  })
+}
+
+/** 供应链反审核：CONFIRMED → POSTED，必填退回原因；已复审的单据不能反审核。 */
 export async function unconfirmWarehouseDoc(input: { tenantId: string; userId: string; docId: string; reason: string }) {
   const reason = String(input.reason || '').trim()
   if (reason.length < 2 || reason.length > 240) throw docError('请填写退回原因（2至240个字符）', 400)
-  const doc = await prisma.warehouseDoc.findFirst({ where: { id: input.docId, tenantId: input.tenantId } })
-  if (!doc) throw docError('单据不存在', 404)
-  if (doc.status !== 'CONFIRMED') throw docError('只有已审核的单据才能反审核', 409)
-  if (doc.reviewStatus === 'REVIEWED') throw docError('该单据已复审，需先由财务反复审', 409)
-  const updated = await prisma.warehouseDoc.update({
-    where: { id: doc.id },
-    data: {
-      status: 'POSTED',
-      unauditedById: input.userId,
-      unauditedAt: new Date(),
-      unauditReason: reason,
-    },
+  return serializableWithRetry(async tx => {
+    await tx.$queryRaw`SELECT id FROM warehouse_docs WHERE id = ${input.docId} AND "tenantId" = ${input.tenantId} FOR UPDATE`
+    const doc = await tx.warehouseDoc.findFirst({ where: { id: input.docId, tenantId: input.tenantId } })
+    if (!doc) throw docError('单据不存在', 404)
+    if (doc.status !== 'CONFIRMED') throw docError('只有已审核的单据才能反审核', 409)
+    if (doc.reviewStatus === 'REVIEWED') throw docError('该单据已复审，流程已结束，不能反审核', 409)
+    const updated = await tx.warehouseDoc.update({
+      where: { id: doc.id },
+      data: {
+        status: 'POSTED',
+        unauditedById: input.userId,
+        unauditedAt: new Date(),
+        unauditReason: reason,
+      },
+    })
+    await tx.warehouseDocLog.create({
+      data: {
+        tenantId: input.tenantId,
+        docId: doc.id,
+        action: 'UNCONFIRM',
+        actorId: input.userId,
+        actorName: await resolveActorName(tx, input.tenantId, input.userId),
+        reason,
+      },
+    })
+    return { doc: updated }
   })
-  await prisma.warehouseDocLog.create({
-    data: {
-      tenantId: input.tenantId,
-      docId: doc.id,
-      action: 'UNCONFIRM',
-      actorId: input.userId,
-      actorName: await resolveActorName(prisma, input.tenantId, input.userId),
-      reason,
-    },
-  })
-  return { doc: updated }
 }
 
 export type WarehouseDocEditLine = {
@@ -308,23 +341,29 @@ export async function editWarehouseDoc(input: {
 }) {
   const editReason = String(input.editReason || '').trim()
   if (editReason.length < 2 || editReason.length > 240) throw docError('请填写修改原因（2至240个字符）', 400)
-  const doc = await prisma.warehouseDoc.findFirst({
+  const editedLineIds = (input.lines || []).map(line => String(line.lineId).trim())
+  if (new Set(editedLineIds).size !== editedLineIds.length) throw docError('同一单据行不能重复提交', 400)
+  return serializableWithRetry(async tx => {
+  await tx.$queryRaw`SELECT id FROM warehouse_docs WHERE id = ${input.docId} AND "tenantId" = ${input.tenantId} FOR UPDATE`
+  const doc = await tx.warehouseDoc.findFirst({
     where: { id: input.docId, tenantId: input.tenantId },
     include: { lines: { orderBy: { lineNo: 'asc' }, include: { movement: true } } },
   })
   if (!doc) throw docError('单据不存在', 404)
-  if (doc.status !== 'POSTED') throw docError('只有未审核的单据才能修改，请先联系会计反审核', 409)
+  if (doc.reviewStatus === 'REVIEWED') throw docError('已复审单据不能修改业务字段',409)
+  if (doc.status !== 'POSTED') throw docError('只有未审核的单据才能修改，请先反审核', 409)
 
   const lineById = new Map(doc.lines.map(line => [line.id, line]))
   const diffDetail: any = { header: {}, lines: [] }
-  const editSeq = await prisma.warehouseLedgerMovement.count({
-    where: { tenantId: input.tenantId, sourceType: 'WarehouseDocValueAdjust', sourceId: doc.id },
+  // A committed edit revision advances for quantity edits as well as repricing.
+  const editSeq = 1 + await tx.warehouseDocLog.count({
+    where: { docId: doc.id, action: 'EDIT' },
   })
 
   // ── 表头修改 ──
   const headerData: any = {}
   if (input.supplierId !== undefined && doc.type === 'MANUAL_INBOUND') {
-    const supplier = await prisma.supplier.findFirst({
+    const supplier = await tx.supplier.findFirst({
       where: { id: input.supplierId, tenantId: input.tenantId, businessScopes: { has: 'WAREHOUSE_UPSTREAM' }, status: 'ENABLED' },
       select: { id: true, name: true },
     })
@@ -344,44 +383,52 @@ export async function editWarehouseDoc(input: {
     diffDetail.header.reason = { from: doc.reason, to: input.reason }
   }
 
-  let totalAmount = doc.totalAmount
-  let lineAdjustSeq = 0
-
   for (const change of input.lines || []) {
     const line = lineById.get(change.lineId)
     if (!line) throw docError('单据行不存在', 404)
     const movement = line.movement
+    if(doc.type==='MANUAL_INBOUND'&&line.batchNo&&change.batchNo!==undefined&&String(change.batchNo||'').trim()!==line.batchNo)throw docError('已有指定批次号必须保留，不能通过改号或清空绕过批次修订',409)
     const lineDiff: any = { lineNo: line.lineNo, productName: line.productName }
     let changed = false
 
-    const newAmount = change.amount === null || change.amount === undefined ? null : Number(change.amount)
+    const rawQuantity = change.quantity === null || change.quantity === undefined ? Number(line.quantity) : Number(change.quantity)
+    if (!Number.isFinite(rawQuantity) || rawQuantity <= 0 || rawQuantity > 99_999_999) throw docError(`第${line.lineNo}行数量无效`, 400)
+    const quantityDecimal = new Prisma.Decimal(rawQuantity).toDecimalPlaces(6)
+    if (quantityDecimal.lte(0)) throw docError(`第${line.lineNo}行数量无效`, 400)
+    const newQuantity = quantityDecimal.toNumber()
+    const quantityChanged = !quantityDecimal.equals(line.quantity)
+
+    const rawAmount = change.amount === null || change.amount === undefined ? null : Number(change.amount)
+    if (rawAmount !== null && (!Number.isFinite(rawAmount) || (line.isGift ? rawAmount !== 0 : rawAmount <= 0) || rawAmount > 999_999_999.99)) throw docError(`第${line.lineNo}行金额无效`, 400)
+    const amountDecimal = rawAmount === null ? null : new Prisma.Decimal(rawAmount).toDecimalPlaces(4)
+    const newAmount = amountDecimal === null ? null : amountDecimal.toNumber()
+    const amountChanged = amountDecimal !== null && !amountDecimal.equals(line.amount)
+    const retainedBatch=doc.type==='MANUAL_INBOUND'&&Boolean(line.batchNo)
+    const repostRequired=quantityChanged||(retainedBatch&&amountChanged)
     if (newAmount !== null) {
-      if (!Number.isFinite(newAmount) || newAmount <= 0 || newAmount > 999_999_999.99) throw docError(`第${line.lineNo}行金额无效`, 400)
+      if (!Number.isFinite(newAmount) || (line.isGift ? newAmount !== 0 : newAmount <= 0) || newAmount > 999_999_999.99) throw docError(`第${line.lineNo}行金额无效`, 400)
       const oldAmount = Number(line.amount)
-      if (Math.abs(newAmount - oldAmount) > 0.0001) {
+      if (!repostRequired && amountChanged) {
         if (!movement) throw docError(`第${line.lineNo}行缺少台账流水，不能改金额`, 409)
-        lineAdjustSeq += 1
         await adjustWarehouseMovementValue({
+          warehouseId:doc.warehouseId,
           tenantId: input.tenantId,
           userId: input.userId,
           movementId: movement.id,
           newAmount,
           reason: editReason,
-          idempotencyKey: `${doc.id}:${line.id}:${editSeq + lineAdjustSeq}`,
+          idempotencyKey: `${doc.id}:${line.id}:edit-${editSeq}`,
           docId: doc.id,
           docNo: doc.docNo,
-        })
+        }, tx)
         lineDiff.amount = { from: oldAmount, to: newAmount }
         changed = true
-        totalAmount = totalAmount.minus(oldAmount).plus(newAmount)
       }
     }
 
-    const newQuantity = change.quantity === null || change.quantity === undefined ? null : Number(change.quantity)
     if (newQuantity !== null) {
-      if (!Number.isFinite(newQuantity) || newQuantity <= 0 || newQuantity > 99_999_999) throw docError(`第${line.lineNo}行数量无效`, 400)
       const oldQuantity = Number(line.quantity)
-      if (Math.abs(newQuantity - oldQuantity) > 0.000001) {
+      if (repostRequired) {
         if (doc.type !== 'MANUAL_INBOUND') {
           throw docError('出库单数量不能直接修改；数量差错请用实盘或报损处理', 409)
         }
@@ -389,51 +436,55 @@ export async function editWarehouseDoc(input: {
         // 冲销重记：数量 × 当前行单价（若本行同时改了金额，单价按新金额/新数量推算）
         const basisAmount = newAmount !== null ? newAmount : Number(line.amount)
         const newUnitPrice = basisAmount / newQuantity
-        const reversalKey = `docedit-${doc.id.slice(-12)}-${line.lineNo}-r${editSeq + lineAdjustSeq}`
+        const reversalKey = `docedit-${doc.id.slice(-12)}-${line.lineNo}-r-edit${editSeq}`
         await reverseManualWarehouseInbound({
+          warehouseId:doc.warehouseId,
           tenantId: input.tenantId,
           userId: input.userId,
           movementId: movement.id,
           reason: `单据 ${doc.docNo} 改数量：${editReason}`,
           idempotencyKey: reversalKey,
-        })
+        }, tx)
         const repost = await recordBatchManualWarehouseInbound({
+          warehouseId:doc.warehouseId,
           tenantId: input.tenantId,
           userId: input.userId,
           items: [{
             productId: line.productId,
             purchaseQuantity: newQuantity,
             unitPrice: newUnitPrice,
+            totalAmount: basisAmount,
+            isGift: line.isGift,
             batchNo: change.batchNo !== undefined ? change.batchNo : line.batchNo,
             manufactureDate: change.manufactureDate !== undefined
-              ? (change.manufactureDate ? new Date(`${change.manufactureDate}T00:00:00+08:00`) : null)
+              ? (change.manufactureDate ? new Date(`${change.manufactureDate}T00:00:00.000Z`) : null)
               : line.manufactureDate,
             expiryDate: change.expiryDate !== undefined
-              ? (change.expiryDate ? new Date(`${change.expiryDate}T00:00:00+08:00`) : null)
+              ? (change.expiryDate ? new Date(`${change.expiryDate}T00:00:00.000Z`) : null)
               : line.expiryDate,
           }],
           effectiveAt: doc.effectiveAt,
-          idempotencyKey: `docedit-${doc.id.slice(-12)}-${line.lineNo}-p${editSeq + lineAdjustSeq}`,
+          idempotencyKey: `docedit-${doc.id.slice(-12)}-${line.lineNo}-p-edit${editSeq}`,
           supplierId: (headerData.supplierId as string | undefined) || doc.supplierId || '',
           sourceName: (headerData.supplierName as string | undefined) || doc.supplierName,
           note: `单据 ${doc.docNo} 改数量重记：${editReason}`.slice(0, 240),
-        })
+        }, tx, retainedBatch ? {movementId:movement.id} : undefined)
         const newMovement = repost.movements[0]
         if (!newMovement) throw docError(`第${line.lineNo}行重记失败，请联系管理员`, 500)
-        await prisma.warehouseDocLine.update({
+        await tx.warehouseDocLine.update({
           where: { id: line.id },
           data: {
             quantity: new Prisma.Decimal(newQuantity),
-            amount: new Prisma.Decimal(basisAmount.toFixed(4)),
-            unitPrice: new Prisma.Decimal(newUnitPrice.toFixed(6)),
+            amount: new Prisma.Decimal(basisAmount).toDecimalPlaces(4),
+            unitPrice: new Prisma.Decimal(basisAmount).div(quantityDecimal).toDecimalPlaces(6),
             inventoryQuantity: new Prisma.Decimal(Math.abs(Number(newMovement.physicalDelta))),
             movementId: newMovement.id,
           },
         })
-        lineDiff.quantity = { from: oldQuantity, to: newQuantity }
+        if(quantityChanged)lineDiff.quantity = { from: oldQuantity, to: newQuantity }
+        if(amountChanged)lineDiff.amount={from:Number(line.amount),to:newAmount}
         lineDiff.reposted = { fromMovement: movement.id, toMovement: newMovement.id }
         changed = true
-        totalAmount = totalAmount.minus(line.amount).plus(basisAmount.toFixed(4))
         // 数量修改已含金额口径，跳过上面的差额调整标记
         if (lineDiff.amount) delete lineDiff.amount
       }
@@ -452,23 +503,21 @@ export async function editWarehouseDoc(input: {
         changed = true
       }
       if (change.manufactureDate !== undefined) {
-        const value = change.manufactureDate ? new Date(`${change.manufactureDate}T00:00:00+08:00`) : null
-        lineData.manufactureDate = value
-        changed = true
+        const value = change.manufactureDate ? new Date(`${change.manufactureDate}T00:00:00.000Z`) : null
+        if((value?.getTime()??null)!==(line.manufactureDate?.getTime()??null)){lineData.manufactureDate=value;lineDiff.manufactureDate={from:line.manufactureDate,to:value};changed=true}
       }
       if (change.expiryDate !== undefined) {
-        const value = change.expiryDate ? new Date(`${change.expiryDate}T00:00:00+08:00`) : null
-        lineData.expiryDate = value
-        changed = true
+        const value = change.expiryDate ? new Date(`${change.expiryDate}T00:00:00.000Z`) : null
+        if((value?.getTime()??null)!==(line.expiryDate?.getTime()??null)){lineData.expiryDate=value;lineDiff.expiryDate={from:line.expiryDate,to:value};changed=true}
       }
     }
     // 纯金额修改（未走冲销重记）时同步单据行金额与单价
-    if (lineDiff.amount && !lineDiff.quantity) {
-      lineData.amount = new Prisma.Decimal(newAmount!.toFixed(4))
-      lineData.unitPrice = new Prisma.Decimal((newAmount! / Number(line.quantity)).toFixed(6))
+    if (lineDiff.amount && !lineDiff.reposted) {
+      lineData.amount = amountDecimal!
+      lineData.unitPrice = amountDecimal!.div(line.quantity).toDecimalPlaces(6)
     }
     if (Object.keys(lineData).length > 0) {
-      await prisma.warehouseDocLine.update({ where: { id: line.id }, data: lineData })
+      await tx.warehouseDocLine.update({ where: { id: line.id }, data: lineData })
     }
     if (changed) diffDetail.lines.push(lineDiff)
   }
@@ -476,30 +525,34 @@ export async function editWarehouseDoc(input: {
   // 供应商变更同步到该单所有入库流水的归属（台账数量/金额不变，仅供应商归属）
   if (headerData.supplierId) {
     const movementIds = doc.lines.map(line => line.movementId).filter(Boolean) as string[]
-    await prisma.warehouseLedgerMovement.updateMany({
+    await tx.warehouseLedgerMovement.updateMany({
       where: { tenantId: input.tenantId, id: { in: movementIds }, type: 'MANUAL_INBOUND' },
       data: { supplierId: headerData.supplierId, sourceName: headerData.supplierName },
     })
   }
 
   const hasChanges = diffDetail.lines.length > 0 || Object.keys(diffDetail.header).length > 0
-  const updated = await prisma.warehouseDoc.update({
+  if (!hasChanges) return { doc: await tx.warehouseDoc.findUniqueOrThrow({ where: { id: doc.id }, include: { lines: { orderBy: { lineNo: 'asc' } } } }), changed: false }
+  const finalLines = await tx.warehouseDocLine.findMany({ where: { docId: doc.id, tenantId: input.tenantId }, select: { amount: true } })
+  const totalAmount = finalLines.reduce((sum, line) => sum.plus(line.amount), new Prisma.Decimal(0))
+  const updated = await tx.warehouseDoc.update({
     where: { id: doc.id },
     data: { ...headerData, totalAmount: totalAmount.toDecimalPlaces(4) },
     include: { lines: { orderBy: { lineNo: 'asc' } } },
   })
   if (hasChanges) {
-    await prisma.warehouseDocLog.create({
+    await tx.warehouseDocLog.create({
       data: {
         tenantId: input.tenantId,
         docId: doc.id,
         action: 'EDIT',
         actorId: input.userId,
-        actorName: await resolveActorName(prisma, input.tenantId, input.userId),
+        actorName: await resolveActorName(tx, input.tenantId, input.userId),
         reason: editReason,
         detail: diffDetail,
       },
     })
   }
   return { doc: updated, changed: hasChanges }
+  }, 30_000)
 }

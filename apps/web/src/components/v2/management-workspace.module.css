@@ -115,3 +115,37 @@
   .printOnly table { width: 100%; border-collapse: collapse; font-size: 9px; }
   .printOnly th, .printOnly td { border: 1px solid #bbb; padding: 4px 5px; text-align: left; vertical-align: top; }
 }
+
+/* Stocktake list keeps the identifier and row actions visible while scrolling. */
+.scroll .fixedCheck { position: sticky; left: 0; width: 42px; min-width: 42px; max-width: 42px; z-index: 1; }
+.scroll .fixedSequence { position: sticky; left: 42px; width: 64px; min-width: 64px; max-width: 64px; z-index: 1; }
+.scroll .fixedDocument { position: sticky; left: 106px; width: 210px; min-width: 210px; max-width: 210px; z-index: 1; box-shadow: 4px 0 8px -6px #8b7956; }
+.scroll th.fixedCheck, .scroll th.fixedSequence, .scroll th.fixedDocument { z-index: 4; }
+.rowActions { display: flex; align-items: center; gap: 3px; white-space: nowrap; }
+.rowActions > span { color: #d0c5b5; }
+.differenceCount { color: #c6382c; }
+
+.workspace .stocktakeFilters { display: grid !important; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 10px 18px; }
+.workspace .stocktakeFilters .stocktakeFields { display: contents !important; }
+.workspace .stocktakeFilters .filter { grid-column: span 3; }
+.workspace .stocktakeFilters .wideFilter { grid-column: span 4; }
+.workspace .stocktakeFilters .stocktakeDate { grid-column: span 6 !important; max-width: none !important; }
+.workspace .stocktakeFilters .countButtons { grid-column: span 4; margin: 0; }
+@media (max-width: 1023px) {
+  .workspace .stocktakeFilters { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .workspace .stocktakeFilters .wideFilter { grid-column: span 3; }
+  .workspace .stocktakeFilters .stocktakeDate, .workspace .stocktakeFilters .countButtons { grid-column: 1 / -1 !important; }
+}
+
+/* Printing may be unavailable in an embedded browser. Keep a visible exit. */
+.printOnly.printPreview { display: block; position: fixed; inset: 12px; z-index: 95; overflow: auto; padding: 24px; background: white; color: #222; border: 1px solid #d8d0c2; border-radius: 10px; box-shadow: 0 12px 80px #0004; }
+.printPreviewControls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 24px; padding-bottom: 14px; border-bottom: 1px solid #ddd; }
+.printPreviewControls span { flex: 1; font-size: 12px; color: #666; }
+.printPreviewControls button { padding: 8px 14px; border: 1px solid #ccc; border-radius: 6px; }
+.printPreview article { margin-bottom: 30px; }
+.printPreview table { width: 100%; border-collapse: collapse; }
+.printPreview th, .printPreview td { border: 1px solid #ccc; padding: 8px; font-size: 12px; text-align: left; }
+@media print {
+  .printOnly.printPreview { position: static; padding: 0; border: 0; border-radius: 0; box-shadow: none; overflow: visible; }
+  .printPreviewControls { display: none !important; }
+}

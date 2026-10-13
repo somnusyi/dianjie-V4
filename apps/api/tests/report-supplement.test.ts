@@ -49,4 +49,27 @@ describe('new report metrics', () => {
     expect(capturedWhere.OR[0].sourceType.in).toContain('WarehouseSelfLoss')
     expect(rows).toEqual([expect.objectContaining({ type: '出库', reason: '总仓自损：过期变质', quantity: -2, amount: -6 })])
   })
+  it('旧45天配置及查询覆盖均不能改变29/30/31天、首次入库和未知历史的提醒', async () => {
+    const now = new Date()
+    const ago = (days: number) => new Date(now.getTime() - days * 86400000)
+    const ids = ['day29', 'day30', 'day31', 'first30', 'unknown']
+    const balances = ids.map(id => ({ productId: id, warehouseId: 'w1', inventoryUnit: 'kg', physicalQty: d(10), product: { id, code: id, name: id }, warehouse: { id: 'w1', name: '验收仓' } }))
+    const history = [29, 30, 31].map(days => ({ id: `out${days}`, productId: `day${days}`, warehouseId: 'w1', inventoryUnit: 'kg', effectiveAt: ago(days), physicalDelta: d(-1) }))
+    history.push({ id: 'first', productId: 'first30', warehouseId: 'w1', inventoryUnit: 'kg', effectiveAt: ago(30), physicalDelta: d(10) })
+    const queries: any[] = []
+    const tx = {
+      warehouseLedgerBalance: { findMany: async (query: any) => { queries.push(query); return balances } },
+      warehouseInventoryPolicy: { findMany: async () => ids.map(productId => ({ productId, warehouseId: 'w1', active: true, stagnantDays: 45 })) },
+      warehouseLedgerMovement: { findMany: async (query: any) => { queries.push(query); return history } },
+    } as any
+    const rows = await loadInventorySupplement(tx, 't1', 'stagnant', { stagnantDays: 90 } as any, { tenantId: 't1', product: { tenantId: 't1' } })
+    expect(rows.map(row => [row.name, row.stagnantDays, row.isStagnant])).toEqual([
+      ['day29', 30, '否'], ['day30', 30, '是'], ['day31', 30, '是'], ['first30', 30, '是'], ['unknown', 30, null],
+    ])
+    expect(queries[0].where.physicalQty).toEqual({ gt: 0 })
+    expect(queries[1].where.type.notIn).toEqual(['ORDER_RESERVED', 'ORDER_RELEASED'])
+    expect(queries[1].where.effectiveAt.lte).toBeInstanceOf(Date)
+    expect(queries[1].where.tenantId).toBe('t1')
+  })
+
 })

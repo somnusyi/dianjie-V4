@@ -1,12 +1,17 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { apiFetch } from '@/lib/v2-auth'
+import { apiFetch, getUser } from '@/lib/v2-auth'
+import { ProcurementProgressActions } from '@/components/v2/procurement-progress-actions'
+import {DocumentQualityImageButton} from '@/components/v2/document-quality-image'
+import { procurementApprovalRequest, type ProcurementApprovalSource, type ProcurementApprovalAction } from '@/lib/procurement-approval'
 import { claimResolutionCopy, settlementLineTypeLabel } from '@/lib/upstream-settlement-copy'
 import { clientRequestId } from '@/lib/client-id'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT } from '@/components/v2/supply-chain-shell'
 import { printSheet } from './print-sheet'
+import {showTableReport} from '@/lib/table-report'
+import {procurementDocumentReport} from '@/lib/procurement-document-report'
 import {
   currentMonthRange,
   loadCreatedRecord,
@@ -141,14 +146,14 @@ type Shipment = {
   purchaseOrder: { id: string; no: string; status: string; expectedArrivalAt?: string | null; currency?: string }
   lines: ShipmentLine[]
 }
-type Receipt = {
+type Receipt = ProcurementApprovalSource & {
   id: string
   no: string
   status: string
   payableAmount: string | number
   supplier: Supplier
   purchaseOrder: { id: string; no: string; status: string; currency?: string; totalAmount?: string | number; amountWithoutTax?: string | number }
-  shipment: { id: string; no: string; status: string }
+  shipment: { id: string; no: string; status: string } | null
   reviewReasons?: string[]
   postedAt?: string | null
   createdAt: string
@@ -214,7 +219,7 @@ type ReturnableReceiptLine = {
   product: { id: string; code: string; name: string; spec?: string | null }
   receipt: { id: string; no: string; supplierId: string; warehouseId: string; postedAt?: string | null; supplier: Supplier; warehouse: Warehouse }
 }
-type PurchaseReturn = {
+type PurchaseReturn = ProcurementApprovalSource & {
   id: string
   no: string
   status: 'DRAFT' | 'PENDING_APPROVAL' | 'APPROVED' | 'RECEIVED' | 'REJECTED' | 'CANCELLED'
@@ -372,11 +377,11 @@ function ActionButton({ children, onClick, disabled, tone = 'dark' }: { children
 }
 
 export default function UpstreamProcurementPage() {
-  const [tab, setTab] = useState<Tab>(() => {
-    if (typeof window === 'undefined') return 'orders'
+  const [tab, setTab] = useState<Tab>('orders')
+  useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get('tab') as Tab | null
-    return TABS.some((item) => item.key === requested) ? requested! : 'orders'
-  })
+    if (TABS.some(item => item.key === requested)) setTab(requested!)
+  }, [])
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -391,7 +396,6 @@ export default function UpstreamProcurementPage() {
   const [shipments, setShipments] = useState<Shipment[]>([])
   const [receipts, setReceipts] = useState<Receipt[]>([])
   const [purchaseReturns, setPurchaseReturns] = useState<PurchaseReturn[]>([])
-  const [returnableLines, setReturnableLines] = useState<ReturnableReceiptLine[]>([])
   const [claims, setClaims] = useState<Claim[]>([])
   const [statements, setStatements] = useState<Statement[]>([])
   const [contracts, setContracts] = useState<Contract[]>([])
@@ -403,12 +407,6 @@ export default function UpstreamProcurementPage() {
   const [contractSupplierId, setContractSupplierId] = useState('')
   const [showContractForm, setShowContractForm] = useState(false)
   const [showOrderForm, setShowOrderForm] = useState(false)
-  const [showReturnForm, setShowReturnForm] = useState(false)
-  const [returnSupplierId, setReturnSupplierId] = useState('')
-  const [returnWarehouseId, setReturnWarehouseId] = useState('')
-  const [returnReason, setReturnReason] = useState('')
-  const [returnNote, setReturnNote] = useState('')
-  const [returnQuantities, setReturnQuantities] = useState<Record<string, string>>({})
   const [contractForm, setContractForm] = useState({
     contractNo: '',
     title: '',
@@ -420,17 +418,6 @@ export default function UpstreamProcurementPage() {
   const [orderWarehouseId, setOrderWarehouseId] = useState('')
   const [orderArrival, setOrderArrival] = useState('')
   const [orderQuantities, setOrderQuantities] = useState<Record<string, string>>({})
-  const [receiving, setReceiving] = useState<Shipment | null>(null)
-  const [receiptLines, setReceiptLines] = useState<Record<string, {
-    arrived: string
-    accepted: string
-    damaged: string
-    rejected: string
-    qualityResult: '' | 'PASS' | 'FAIL'
-    qualityDisposition: string
-    qualityEvidence: Array<{ key: string; name: string; mime: string; size: number }>
-  }>>({})
-  const [uploadingQualityLineId, setUploadingQualityLineId] = useState<string | null>(null)
   const [claimingReceipt, setClaimingReceipt] = useState<ReceiptDetail | null>(null)
   const [postClaimType, setPostClaimType] = useState<'SHORTAGE' | 'POST_RECEIPT_DAMAGE'>('POST_RECEIPT_DAMAGE')
   const [postClaimDescription, setPostClaimDescription] = useState('')
@@ -441,16 +428,15 @@ export default function UpstreamProcurementPage() {
   const [reviewingRevisionOrder, setReviewingRevisionOrder] = useState<Order | null>(null)
   const [viewingReceipt, setViewingReceipt] = useState<ReceiptDetail | null>(null)
   const [receiptReviewAction, setReceiptReviewAction] = useState<'confirm' | 'review' | null>(null)
-  const [priceExceptionReason, setPriceExceptionReason] = useState('')
   const [viewingStatement, setViewingStatement] = useState<StatementDetail | null>(null)
   const [viewingContract, setViewingContract] = useState<Contract | null>(null)
   const [viewingPurchaseReturn, setViewingPurchaseReturn] = useState<PurchaseReturn | null>(null)
   const [quickContractFromOrder, setQuickContractFromOrder] = useState(false)
   const deepLinkOpened = useRef(false)
   const orderRequestKeyRef = useRef(clientRequestId())
-  const receiptRequestKeysRef = useRef<Record<string, string>>({})
+  const approvalRequestsRef = useRef<Record<string, string>>({})
+  const approvalBusyRef = useRef(false)
   const postClaimRequestKeysRef = useRef<Record<string, string>>({})
-  const purchaseReturnRequestKeyRef = useRef(clientRequestId())
   const contractRequestKeyRef = useRef(clientRequestId())
   const qualityStandardRequestKeyRef = useRef(clientRequestId())
   const priceStandardRequestKeyRef = useRef(clientRequestId())
@@ -529,8 +515,6 @@ export default function UpstreamProcurementPage() {
       setWarehouses(setup.warehouses)
       setOrderWarehouseId((value) => value || setup.warehouses[0]?.id || '')
       setOrderSupplierId((value) => value || setup.suppliers[0]?.id || '')
-      setReturnSupplierId((value) => value || setup.suppliers[0]?.id || '')
-      setReturnWarehouseId((value) => value || setup.warehouses[0]?.id || '')
       setSettlementForm((value) => ({
         ...value,
         supplierId: value.supplierId || setup.suppliers[0]?.id || '',
@@ -571,9 +555,7 @@ export default function UpstreamProcurementPage() {
     }
     if (returnId) {
       setTab('returns')
-      const row = purchaseReturns.find((item) => item.id === returnId)
-      if (row) setViewingPurchaseReturn(row)
-      else setError('未找到链接对应的采购退货单')
+      void apiFetch<PurchaseReturn>(`/api/upstream/purchase-returns/${returnId}`).then(setViewingPurchaseReturn).catch((reason: any) => setError(reason?.message || '采购退货单加载失败'))
       return
     }
     if (claimId) {
@@ -594,7 +576,7 @@ export default function UpstreamProcurementPage() {
   }, [loading])
 
   useEffect(() => {
-    const dirty = Boolean(receiving)
+    const dirty = showOrderForm || showContractForm
       || Boolean(qualityStandardForm.productId || qualityStandardForm.title || qualityStandardForm.criteria)
       || Boolean(priceScopeKey || priceStandardForm.unitPrice)
     if (!dirty) return
@@ -619,7 +601,7 @@ export default function UpstreamProcurementPage() {
       window.removeEventListener('beforeunload', warn)
       window.removeEventListener(SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT, warnInternalNavigation)
     }
-  }, [receiving, qualityStandardForm, priceScopeKey, priceStandardForm.unitPrice, openActionConfirm])
+  }, [showOrderForm, showContractForm, qualityStandardForm, priceScopeKey, priceStandardForm.unitPrice, openActionConfirm])
 
   // 单据状态会被他人推进: 回到本页(切Tab/解锁/切回浏览器)自动刷新, 避免看到旧状态误判
   useEffect(() => {
@@ -858,80 +840,6 @@ export default function UpstreamProcurementPage() {
     }
   }
 
-  async function loadReturnableLines(supplierId = returnSupplierId, warehouseId = returnWarehouseId) {
-    setError(null)
-    setReturnableLines([])
-    setReturnQuantities({})
-    if (!supplierId || !warehouseId) return
-    try {
-      const query = new URLSearchParams({ supplierId, warehouseId })
-      setReturnableLines(await apiFetch<ReturnableReceiptLine[]>(`/api/upstream/purchase-returns/returnable-lines?${query}`))
-    } catch (reason: any) {
-      setError(reason?.message || '可退采购收货明细加载失败')
-    }
-  }
-
-  async function openReturnForm() {
-    setShowReturnForm(true)
-    await loadReturnableLines()
-  }
-
-  async function createPurchaseReturn() {
-    const lines = returnableLines
-      .filter((line) => Number(returnQuantities[line.id]) > 0)
-      .map((line) => ({
-        receiptLineId: line.id,
-        purchaseQuantity: Number(returnQuantities[line.id]),
-      }))
-    if (!returnSupplierId || !returnWarehouseId) return setError('请选择供应商和退货总仓')
-    if (returnReason.trim().length < 2) return setError('请填写至少2个字符的退货原因')
-    if (!lines.length) return setError('至少填写一个商品的退货数量')
-    const invalid = lines.find((line) => {
-      const source = returnableLines.find((item) => item.id === line.receiptLineId)!
-      return line.purchaseQuantity > Number(source.returnableQuantity) + 0.000001
-    })
-    if (invalid) return setError('退货数量不能超过页面显示的可退数量')
-    const succeeded = await run(
-      'create-purchase-return',
-      () =>
-        apiFetch<PurchaseReturnCreateResult>('/api/upstream/purchase-returns', {
-          method: 'POST',
-          body: JSON.stringify({
-            supplierId: returnSupplierId,
-            warehouseId: returnWarehouseId,
-            reason: returnReason.trim(),
-            note: returnNote.trim() || undefined,
-            idempotencyKey: purchaseReturnRequestKeyRef.current,
-            lines,
-          }),
-        }),
-      '采购退货草稿已创建；提交审核前不会扣减库存',
-      (result) => {
-        const row = result.purchaseReturn
-        setTab('returns')
-        setViewingOrder(null)
-        setViewingReceipt(null)
-        setViewingPurchaseReturn(row)
-        setNoticeAction({
-          label: `查看退货单 ${row.no}`,
-          run: () => {
-            setTab('returns')
-            setViewingOrder(null)
-            setViewingReceipt(null)
-            setViewingPurchaseReturn(row)
-          },
-        })
-      }
-    )
-    if (succeeded) {
-      purchaseReturnRequestKeyRef.current = clientRequestId()
-      setShowReturnForm(false)
-      setReturnReason('')
-      setReturnNote('')
-      setReturnQuantities({})
-    }
-  }
-
   function rejectPurchaseReturn(row: PurchaseReturn) {
     openActionConfirm({
       title: `驳回退货单 ${row.no}`,
@@ -966,92 +874,6 @@ export default function UpstreamProcurementPage() {
     })
   }
 
-  function openReceipt(shipment: Shipment) {
-    setReceiving(shipment)
-    setTab('receipts')
-    setReceiptLines(
-      Object.fromEntries(
-        shipment.lines.map((line) => [
-          line.id,
-          {
-            arrived: String(line.shippedQty),
-            accepted: String(line.shippedQty),
-            damaged: '0',
-            rejected: '0',
-            qualityResult: '',
-            qualityDisposition: '',
-            qualityEvidence: [],
-          },
-        ])
-      )
-    )
-    receiptRequestKeysRef.current[shipment.id] ||= clientRequestId()
-  }
-
-  function closeReceiving() {
-    if (!receiving) return
-    openActionConfirm({
-      title: '放弃本次到货登记',
-      body: '已填写的数量、质量结果和尚未提交的证据将不保留。',
-      confirmLabel: '确认放弃',
-      tone: 'danger',
-      onConfirm: async () => {
-        setReceiving(null)
-      },
-    })
-  }
-
-  async function createReceipt() {
-    if (!receiving) return
-    for (const line of receiving.lines) {
-      const input = receiptLines[line.id]
-      if (line.purchaseOrderLine.qualityStandardId && !input?.qualityResult) return setError(`${line.purchaseOrderLine.productNameSnapshot}必须选择质量验收结果`)
-      if (input?.qualityResult === 'FAIL') {
-        if (Number(input.accepted || 0) > 0 || Number(input.rejected || 0) <= 0) return setError(`${line.purchaseOrderLine.productNameSnapshot}不合格时合格数量必须为0且拒收数量必须大于0`)
-        if (!input.qualityDisposition.trim()) return setError(`${line.purchaseOrderLine.productNameSnapshot}不合格时必须填写处置结果`)
-        if (!input.qualityEvidence.length) return setError(`${line.purchaseOrderLine.productNameSnapshot}不合格时必须上传证据`)
-      }
-    }
-    const shipmentId = receiving.id
-    setWorking(`receive-${shipmentId}`)
-    setError(null)
-    setNotice(null)
-    setNoticeAction(null)
-    try {
-      let receipt = await apiFetch<Receipt>(`/api/upstream/shipments/${shipmentId}/receipts`, {
-        method: 'POST',
-        body: JSON.stringify({
-          finalForShipment: true,
-          idempotencyKey: receiptRequestKeysRef.current[shipmentId] || (receiptRequestKeysRef.current[shipmentId] = clientRequestId()),
-          lines: receiving.lines.map((line) => ({
-            shipmentLineId: line.id,
-            arrivedQty: Number(receiptLines[line.id]?.arrived || 0),
-            acceptedQty: Number(receiptLines[line.id]?.accepted || 0),
-            damagedQty: Number(receiptLines[line.id]?.damaged || 0),
-            rejectedQty: Number(receiptLines[line.id]?.rejected || 0),
-            qualityResult: receiptLines[line.id]?.qualityResult || undefined,
-            qualityDisposition: receiptLines[line.id]?.qualityDisposition || undefined,
-            qualityEvidence: receiptLines[line.id]?.qualityEvidence || undefined,
-          })),
-        }),
-      })
-      if (receipt.status === 'DRAFT') {
-        receipt = await apiFetch<Receipt>(`/api/upstream/receipts/${receipt.id}/start-inspection`, { method: 'POST' })
-      }
-      delete receiptRequestKeysRef.current[shipmentId]
-      setReceiving(null)
-      setTab('receipts')
-      const nextAction = receiptReviewActionForStatus(receipt.status)
-      setNotice(nextAction === 'confirm' ? '收货单已生成，已直接进入验收' : nextAction === 'review' ? '收货单已验收，请复核入库' : '收货单已处理，已打开当前状态详情')
-      await loadAll()
-      await openReceiptDetail(receipt, nextAction)
-    } catch (reason: any) {
-      setError(reason?.message || '收货单生成失败')
-    } finally {
-      setWorking(null)
-    }
-  }
-
   async function openOrderDetail(order: Pick<Order, 'id'>, mode: 'view' | 'revision' = 'view', preserveTab = false) {
     setError(null)
     try {
@@ -1081,41 +903,34 @@ export default function UpstreamProcurementPage() {
       setViewingPurchaseReturn(null)
       setViewingReceipt(detail)
       setReceiptReviewAction(action)
-      setPriceExceptionReason('')
       if (!preserveTab && tab !== 'claims') setTab('receipts')
     } catch (reason: any) {
       setError(reason?.message || '收货单明细加载失败')
     }
   }
 
-  async function submitReceiptReview() {
-    if (!viewingReceipt || !receiptReviewAction) return
-    if (receiptReviewAction === 'review' && viewingReceipt.reviewReasons?.includes('ABOVE_STANDARD_PRICE') && !viewingReceipt.canApprovePriceException) {
-      setError('实际采购价高于标准价，需等待管理员核价')
-      return
-    }
-    if (receiptReviewAction === 'review' && viewingReceipt.reviewReasons?.includes('ABOVE_STANDARD_PRICE') && !priceExceptionReason.trim()) {
-      setError('实际采购价高于标准价，请填写价格例外复核原因')
-      return
-    }
-    const receipt = viewingReceipt
-    const endpoint = receiptReviewAction === 'confirm' ? 'confirm' : 'review-and-post'
-    const success = receiptReviewAction === 'confirm' ? '验收已确认' : '复核通过，库存已入账'
-    const succeeded = await run(
-      receipt.id,
-      () =>
-        apiFetch(`/api/upstream/receipts/${receipt.id}/${endpoint}`, {
-          method: 'POST',
-          body: JSON.stringify(receiptReviewAction === 'review' && receipt.reviewReasons?.includes('ABOVE_STANDARD_PRICE')
-            ? { priceExceptionReason: priceExceptionReason.trim() }
-            : {}),
-        }),
-      success
-    )
-    if (succeeded) {
-      setViewingReceipt(null)
-      setReceiptReviewAction(null)
-    }
+  function confirmProcurementProgress(kind: 'RECEIPT' | 'RETURN', row: ProcurementApprovalSource & { no: string }, action: ProcurementApprovalAction) {
+    if (working || approvalBusyRef.current) return
+    const label = { save: '保存', submit: '提交', audit: '审核', unconfirm: '反审核', review: '复审' }[action]
+    openActionConfirm({
+      title: `${label}单据 ${row.no}`,
+      body: action === 'review' ? '由另一名供应链人员完成复审后，实际增减库存并锁定业务字段。复审结束后不能取消复审。' : '本次只改变审批进度，不增减库存；实际库存变更在复审完成时生效。',
+      confirmLabel: label, tone: action === 'review' ? 'danger' : 'primary',
+      onConfirm: async () => {
+        if (approvalBusyRef.current) return
+        approvalBusyRef.current = true
+        const key = `${kind}:${row.id}:${action}:${row.approvalVersion}:${row.sourceVersion ?? row.rowVersion}`
+        try {
+          const requestId = approvalRequestsRef.current[key] ||= clientRequestId()
+          const body = procurementApprovalRequest(row, requestId)
+          await run(key, () => apiFetch(`/api/upstream/${kind === 'RECEIPT' ? 'receipts' : 'purchase-returns'}/${row.id}/approval/${action}`, { method: 'POST', body: JSON.stringify(body) }), `${label}成功${action === 'review' ? '，库存已生效' : '，库存未改变'}`, async () => {
+            delete approvalRequestsRef.current[key]
+            if (kind === 'RECEIPT' && viewingReceipt?.id === row.id) await openReceiptDetail(row, null, true)
+            if (kind === 'RETURN' && viewingPurchaseReturn?.id === row.id) setViewingPurchaseReturn(await apiFetch<PurchaseReturn>(`/api/upstream/purchase-returns/${row.id}`))
+          }, true)
+        } finally { approvalBusyRef.current = false }
+      },
+    })
   }
 
   async function createQualityStandard() {
@@ -1192,27 +1007,6 @@ export default function UpstreamProcurementPage() {
         )
       },
     })
-  }
-
-  async function uploadQualityEvidence(lineId: string, file: File) {
-    setUploadingQualityLineId(lineId)
-    setError(null)
-    try {
-      const form = new FormData()
-      form.append('file', file)
-      const uploaded = await apiFetch<{ key: string; name: string; mime: string; size: number }>('/api/upload?category=warehouse-docs', { method: 'POST', body: form })
-      setReceiptLines((current) => ({
-        ...current,
-        [lineId]: {
-          ...current[lineId],
-          qualityEvidence: [...(current[lineId]?.qualityEvidence || []), uploaded].slice(0, 20),
-        },
-      }))
-    } catch (reason: any) {
-      setError(reason?.message || '质量证据上传失败')
-    } finally {
-      setUploadingQualityLineId(null)
-    }
   }
 
   async function openStatementDetail(statement: Statement) {
@@ -1426,7 +1220,7 @@ export default function UpstreamProcurementPage() {
 
         {viewingPurchaseReturn && (
           <div className="mb-4">
-            <Panel title={`采购退货单明细 · ${viewingPurchaseReturn.no}`} onClose={() => setViewingPurchaseReturn(null)} printId={`purchase-return-${viewingPurchaseReturn.id}`}>
+            <Panel title={`采购退货单明细 · ${viewingPurchaseReturn.no}`} onClose={() => setViewingPurchaseReturn(null)} onPrint={()=>showTableReport(procurementDocumentReport('RETURN',viewingPurchaseReturn))}>
               <div className="grid gap-2 rounded-xl bg-bg p-3 text-caption sm:grid-cols-2 lg:grid-cols-4">
                 <div>
                   <span className="text-gray3">供应商</span>
@@ -1474,6 +1268,11 @@ export default function UpstreamProcurementPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+              <div className="mt-4 rounded-xl border border-border p-3">
+                <p className="mb-3 text-caption text-gray2">审核只改变进度；另一名供应链人员复审后才出库。</p>
+                <ProcurementProgressActions kind="RETURN" row={viewingPurchaseReturn} role={getUser()?.role || ''} busy={Boolean(working)} onAction={action => confirmProcurementProgress('RETURN', viewingPurchaseReturn, action)} />
+              <DocumentQualityImageButton kind="RETURN" sourceId={viewingPurchaseReturn.id} />
               </div>
             </Panel>
           </div>
@@ -1543,7 +1342,7 @@ export default function UpstreamProcurementPage() {
           <div className="mb-4">
             <Panel
               title={`收货单明细 · ${viewingReceipt.no}`}
-              printId={`receipt-${viewingReceipt.id}`}
+              onPrint={()=>showTableReport(procurementDocumentReport('RECEIPT',viewingReceipt))}
               onClose={() => {
                 setViewingReceipt(null)
                 setReceiptReviewAction(null)
@@ -1571,7 +1370,7 @@ export default function UpstreamProcurementPage() {
                 </div>
                 <div>
                   <span className="text-gray3">发货单</span>
-                  <div>{viewingReceipt.shipment.no}</div>
+                  <div>{viewingReceipt.shipment?.no || '—'}</div>
                 </div>
                 <div>
                   <span className="text-gray3">本次应付</span>
@@ -1649,25 +1448,11 @@ export default function UpstreamProcurementPage() {
                   {viewingReceipt.status === 'POSTED' && viewingReceipt.evidenceCompletenessSnapshot && <div className="mt-1 text-micro text-gray3">过账时快照：缺 {viewingReceipt.evidenceCompletenessSnapshot.missingCount || 0} 项，待配置 {viewingReceipt.evidenceCompletenessSnapshot.pendingConfigurationCount || 0} 项；后续补录不改写快照。</div>}
                 </div>
               )}
-              {receiptReviewAction === 'review' && viewingReceipt.reviewReasons?.includes('ABOVE_STANDARD_PRICE') && !viewingReceipt.canApprovePriceException ? (
-                <div className="mt-4 rounded-xl border border-amber/30 bg-amber/10 p-3 text-caption">
-                  实际采购价高于标准价，需等待管理员核价；当前账号不能批准价格例外。
-                </div>
-              ) : receiptReviewAction ? (
-                <div className="mt-4 space-y-3 rounded-xl border border-border p-3">
-                  <p className="text-caption text-gray2">请确认采购单、发货单、金额及全部商品明细均已核对。</p>
-                  {receiptReviewAction === 'review' && viewingReceipt.reviewReasons?.includes('ABOVE_STANDARD_PRICE') && (
-                    <Field label="价格例外复核原因（必填）">
-                      <textarea className="input min-h-20" value={priceExceptionReason} onChange={(event) => setPriceExceptionReason(event.target.value)} placeholder="说明涨价原因、核价依据和批准结论" />
-                    </Field>
-                  )}
-                  <div className="flex justify-end">
-                    <ActionButton onClick={() => void submitReceiptReview()} disabled={working === viewingReceipt.id}>
-                      {receiptReviewAction === 'confirm' ? '确认验收并提交' : '确认复核并入库'}
-                    </ActionButton>
-                  </div>
-                </div>
-              ) : null}
+              <div className="mt-4 rounded-xl border border-border p-3">
+                <p className="mb-3 text-caption text-gray2">提交、审核不改变库存，复审后才生效；超标准价不能验收入库。</p>
+                <ProcurementProgressActions kind="RECEIPT" row={viewingReceipt} role={getUser()?.role || ''} busy={Boolean(working)} onAction={action => confirmProcurementProgress('RECEIPT', viewingReceipt, action)} />
+              <DocumentQualityImageButton kind="RECEIPT" sourceId={viewingReceipt.id} />
+              </div>
             </Panel>
           </div>
         )}
@@ -2025,7 +1810,7 @@ export default function UpstreamProcurementPage() {
                           采购单 {shipment.purchaseOrder.no} · {shipment.lines.length} 项 · {shipment.status}
                         </p>
                       </div>
-                      {['SHIPPED', 'PARTIALLY_RECEIVED'].includes(shipment.status) && !shipmentFullyInspected(shipment) && <ActionButton onClick={() => openReceipt(shipment)}>登记到货</ActionButton>}
+                      {['SHIPPED', 'PARTIALLY_RECEIVED'].includes(shipment.status) && !shipmentFullyInspected(shipment) && <a className="rounded-lg border border-accent px-3 py-2 text-accent" href={`/v2/supply-chain/procurement/receipts/new?shipment=${encodeURIComponent(shipment.id)}`}>登记到货</a>}
                     </div>
                   ))
                 )}
@@ -2036,129 +1821,6 @@ export default function UpstreamProcurementPage() {
 
         {!loading && tab === 'receipts' && (
           <section className="space-y-3">
-            {receiving && (
-              <Panel title={`登记到货 · ${receiving.no}`} onClose={closeReceiving}>
-                <p className="mb-3 text-caption text-gray2">请按现场实际填写。合格数量会形成总仓库存，破损/拒收/短缺会自动生成差异单。</p>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-caption">
-                    <thead>
-                      <tr className="border-b text-left">
-                        <th className="p-2">商品</th>
-                        <th className="p-2">标准价 / 实际价</th>
-                        <th className="p-2">质量标准</th>
-                        <th className="p-2">发货</th>
-                        <th className="p-2">实到</th>
-                        <th className="p-2">合格</th>
-                        <th className="p-2">破损</th>
-                        <th className="p-2">拒收</th>
-                        <th className="p-2">质量验收</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {receiving.lines.map((line) => (
-                        <tr key={line.id} className="border-b border-border">
-                          <td className="p-2">
-                            <b>{line.purchaseOrderLine.productNameSnapshot}</b>
-                            <div className="text-gray3">{line.purchaseOrderLine.productSpecSnapshot || '—'}</div>
-                          </td>
-                          <td className="p-2 whitespace-nowrap">
-                            <div>标准 {line.purchaseOrderLine.standardUnitPriceSnapshot == null ? '未配置' : currencyAmount(line.purchaseOrderLine.standardUnitPriceSnapshot, line.purchaseOrderLine.priceStandardCurrencySnapshot || 'CNY')}</div>
-                            <div className={line.purchaseOrderLine.standardUnitPriceSnapshot != null && Number(line.purchaseOrderLine.unitPrice) > Number(line.purchaseOrderLine.standardUnitPriceSnapshot) ? 'font-medium text-red-600' : 'text-gray2'}>
-                              实际 {currencyAmount(line.purchaseOrderLine.unitPrice, line.purchaseOrderLine.priceStandardCurrencySnapshot || receiving.purchaseOrder.currency || 'CNY')}
-                              {line.purchaseOrderLine.standardUnitPriceSnapshot != null ? ` · 差额 ${currencyAmount(Number(line.purchaseOrderLine.unitPrice) - Number(line.purchaseOrderLine.standardUnitPriceSnapshot), line.purchaseOrderLine.priceStandardCurrencySnapshot || receiving.purchaseOrder.currency || 'CNY')}` : ''}
-                            </div>
-                            {line.purchaseOrderLine.standardUnitPriceSnapshot != null && <div className="text-micro text-gray3">{line.purchaseOrderLine.priceStandardTaxInclusiveSnapshot ? '含税' : '不含税'}口径</div>}
-                          </td>
-                          <td className="p-2 min-w-48">
-                            {line.purchaseOrderLine.qualityStandardId ? (
-                              <>
-                                <b>v{line.purchaseOrderLine.qualityStandardVersionSnapshot}</b>
-                                <div className="mt-1 text-micro text-gray2">{qualityCriteriaText(line.purchaseOrderLine.qualityCriteriaSnapshot)}</div>
-                              </>
-                            ) : <span className="text-gray3">未配置</span>}
-                          </td>
-                          <td className="p-2">
-                            {String(line.shippedQty)} {line.purchaseUnit}
-                          </td>
-                          {(['arrived', 'accepted', 'damaged', 'rejected'] as const).map((field) => (
-                            <td key={field} className="p-2">
-                              <input
-                                type="number"
-                                min="0"
-                                step="any"
-                                className="input w-24"
-                                value={receiptLines[line.id]?.[field] || ''}
-                                onChange={(event) =>
-                                  setReceiptLines((value) => ({
-                                    ...value,
-                                    [line.id]: {
-                                      ...value[line.id],
-                                      [field]: event.target.value,
-                                    },
-                                  }))
-                                }
-                              />
-                            </td>
-                          ))}
-                          <td className="p-2 min-w-56">
-                            {line.purchaseOrderLine.qualityStandardId ? (
-                              <div className="space-y-2">
-                                <select
-                                  className="input"
-                                  value={receiptLines[line.id]?.qualityResult || ''}
-                                  onChange={(event) => setReceiptLines((current) => ({
-                                    ...current,
-                                    [line.id]: { ...current[line.id], qualityResult: event.target.value as '' | 'PASS' | 'FAIL' },
-                                  }))}
-                                >
-                                  <option value="">请选择</option>
-                                  <option value="PASS">合格</option>
-                                  <option value="FAIL">不合格</option>
-                                </select>
-                                {receiptLines[line.id]?.qualityResult === 'FAIL' && (
-                                  <>
-                                    <textarea
-                                      className="input min-h-16"
-                                      placeholder="填写退货、换货或拒收等处置结果"
-                                      value={receiptLines[line.id]?.qualityDisposition || ''}
-                                      onChange={(event) => setReceiptLines((current) => ({ ...current, [line.id]: { ...current[line.id], qualityDisposition: event.target.value } }))}
-                                    />
-                                    <label className="block cursor-pointer rounded-lg border border-dashed border-border p-2 text-center text-micro">
-                                      {uploadingQualityLineId === line.id ? '正在上传…' : '上传不合格证据'}
-                                      <input type="file" accept="image/*,application/pdf" className="hidden" disabled={uploadingQualityLineId === line.id} onChange={(event) => {
-                                        const file = event.target.files?.[0]
-                                        if (file) void uploadQualityEvidence(line.id, file)
-                                        event.currentTarget.value = ''
-                                      }} />
-                                    </label>
-                                    <div className="space-y-1 text-micro">
-                                      {(receiptLines[line.id]?.qualityEvidence || []).map((file, index) => (
-                                        <div key={`${file.key}-${index}`} className="flex items-center justify-between gap-2 rounded bg-bg px-2 py-1">
-                                          <span className="truncate">{file.name} · {(file.size / 1024).toFixed(1)}KB</span>
-                                          <button type="button" className="text-red-600 underline" onClick={() => setReceiptLines((current) => ({
-                                            ...current,
-                                            [line.id]: { ...current[line.id], qualityEvidence: current[line.id].qualityEvidence.filter((_, itemIndex) => itemIndex !== index) },
-                                          }))}>移除</button>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </>
-                                )}
-                              </div>
-                            ) : <span className="text-gray3">无强制标准</span>}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="mt-4 flex justify-end">
-                  <ActionButton onClick={() => void createReceipt()} disabled={working === `receive-${receiving.id}`}>
-                    生成收货单
-                  </ActionButton>
-                </div>
-              </Panel>
-            )}
             {claimingReceipt && (
               <Panel title={`收货后补报异常 · ${claimingReceipt.no}`} onClose={() => setClaimingReceipt(null)}>
                 <p className="mb-3 text-caption text-gray2">
@@ -2299,7 +1961,7 @@ export default function UpstreamProcurementPage() {
                         <Badge status={receipt.status} labels={UPSTREAM_RECEIPT_STATUS_LABEL} />
                       </div>
                       <p className="mt-1 text-caption text-gray2">
-                        {receipt.supplier.name} · 采购单 <b>{receipt.purchaseOrder.no}</b> · 发货单 {receipt.shipment.no}
+                        {receipt.supplier.name} · 采购单 <b>{receipt.purchaseOrder.no}</b> · 发货单 {receipt.shipment?.no || '—'}
                       </p>
                       <p className="mt-1 text-caption text-gray3">
                         {receipt._count.lines} 项 · 采购单金额 <b>{receipt.purchaseOrder.totalAmount == null ? '—' : money(receipt.purchaseOrder.totalAmount)}</b> · 本次应付{' '}
@@ -2315,24 +1977,8 @@ export default function UpstreamProcurementPage() {
                       >
                         {receipt.status === 'POSTED' ? '查看来货证明' : '维护来货证明'}
                       </a>
-                      {receipt.status === 'DRAFT' && (
-                        <ActionButton
-                          onClick={() => void run(receipt.id, () => apiFetch(`/api/upstream/receipts/${receipt.id}/start-inspection`, { method: 'POST' }), '已开始验收')}
-                          disabled={working === receipt.id}
-                        >
-                          开始验收
-                        </ActionButton>
-                      )}
-                      {receipt.status === 'INSPECTING' && (
-                        <ActionButton onClick={() => void openReceiptDetail(receipt, 'confirm')} disabled={working === receipt.id}>
-                          查看明细并验收
-                        </ActionButton>
-                      )}
-                      {receipt.status === 'PENDING_REVIEW' && (
-                        <ActionButton onClick={() => void openReceiptDetail(receipt, 'review')} disabled={working === receipt.id}>
-                          查看明细并复核
-                        </ActionButton>
-                      )}
+                      <ProcurementProgressActions kind="RECEIPT" row={receipt} role={getUser()?.role || ''} busy={Boolean(working)} onAction={action => confirmProcurementProgress('RECEIPT', receipt, action)} />
+              <DocumentQualityImageButton kind="RECEIPT" sourceId={receipt.id} />
                       {receipt.status === 'POSTED' && (
                         <ActionButton tone="light" onClick={() => void openPostReceiptClaim(receipt)}>
                           收货后补报异常
@@ -2354,123 +2000,8 @@ export default function UpstreamProcurementPage() {
         {!loading && tab === 'returns' && (
           <section className="space-y-4">
             <div className="flex justify-end">
-              <ActionButton onClick={() => void (showReturnForm ? Promise.resolve(setShowReturnForm(false)) : openReturnForm())}>{showReturnForm ? '收起' : '新建采购退货'}</ActionButton>
+              <a className="rounded-lg border border-border bg-white px-4 py-2" href="/v2/supply-chain/procurement/returns/new">新建采购退货</a>
             </div>
-            {showReturnForm && (
-              <Panel title="新建采购退货">
-                <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-                  <Field label="上游供应商">
-                    <select
-                      className="input"
-                      value={returnSupplierId}
-                      onChange={(event) => {
-                        const value = event.target.value
-                        setReturnSupplierId(value)
-                        void loadReturnableLines(value, returnWarehouseId)
-                      }}
-                    >
-                      <option value="">请选择</option>
-                      {suppliers.map((supplier) => (
-                        <option key={supplier.id} value={supplier.id}>
-                          {supplier.no} · {supplier.name}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                  <Field label="退货总仓">
-                    <select
-                      className="input"
-                      value={returnWarehouseId}
-                      onChange={(event) => {
-                        const value = event.target.value
-                        setReturnWarehouseId(value)
-                        void loadReturnableLines(returnSupplierId, value)
-                      }}
-                    >
-                      <option value="">请选择</option>
-                      {warehouses.map((warehouse) => (
-                        <option key={warehouse.id} value={warehouse.id}>
-                          {warehouse.code} · {warehouse.name}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                  <Field label="退货原因">
-                    <input className="input" value={returnReason} maxLength={240} onChange={(event) => setReturnReason(event.target.value)} placeholder="例如质量不合格" />
-                  </Field>
-                  <Field label="备注（选填）">
-                    <input className="input" value={returnNote} maxLength={500} onChange={(event) => setReturnNote(event.target.value)} />
-                  </Field>
-                </div>
-                <p className="mt-3 rounded-xl bg-amber/10 p-3 text-caption text-amber-fg">
-                  保存草稿和提交审核都不扣库存；只有审核通过才从采购方总仓出库。供应商实际签收后再单独登记，不会重复增加库存。
-                </p>
-                <div className="mt-4 overflow-x-auto">
-                  <table className="w-full text-left text-caption">
-                    <thead>
-                      <tr className="border-b">
-                        <th className="p-2">原收货单</th>
-                        <th className="p-2">商品</th>
-                        <th className="p-2">原合格数量</th>
-                        <th className="p-2">可退数量</th>
-                        <th className="p-2">原采购单价</th>
-                        <th className="p-2">本次退货数量</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {returnableLines.map((line) => (
-                        <tr key={line.id} className="border-b border-border">
-                          <td className="p-2">
-                            <b>{line.receipt.no}</b>
-                            <div className="text-gray3">{shortDate(line.receipt.postedAt)}</div>
-                          </td>
-                          <td className="p-2">
-                            <b>{line.product.name}</b>
-                            <div className="text-gray3">
-                              {line.product.code} · {line.product.spec || '—'}
-                            </div>
-                          </td>
-                          <td className="p-2">
-                            {String(line.acceptedQty)} {line.purchaseUnit}
-                          </td>
-                          <td className="p-2">
-                            <b>
-                              {String(line.returnableQuantity)} {line.purchaseUnit}
-                            </b>
-                          </td>
-                          <td className="p-2">
-                            {money(line.unitPrice)}/{line.purchaseUnit}
-                          </td>
-                          <td className="p-2">
-                            <input
-                              className="input w-32"
-                              aria-label={`${line.product.name}退货数量`}
-                              type="number"
-                              min="0"
-                              max={Number(line.returnableQuantity)}
-                              step="any"
-                              value={returnQuantities[line.id] || ''}
-                              onChange={(event) =>
-                                setReturnQuantities((current) => ({
-                                  ...current,
-                                  [line.id]: event.target.value,
-                                }))
-                              }
-                            />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {returnableLines.length === 0 && <p className="p-6 text-center text-caption text-gray3">所选供应商和仓库暂无可退的已入库商品。</p>}
-                </div>
-                <div className="mt-4 flex justify-end">
-                  <ActionButton onClick={() => void createPurchaseReturn()} disabled={working === 'create-purchase-return'}>
-                    保存退货草稿
-                  </ActionButton>
-                </div>
-              </Panel>
-            )}
             {purchaseReturns.length === 0 ? (
               <Empty text="暂无采购退货单" />
             ) : (
@@ -2511,41 +2042,8 @@ export default function UpstreamProcurementPage() {
                       )}
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      {row.status === 'DRAFT' && (
-                        <>
-                          <ActionButton
-                            onClick={() =>
-                              void run(`submit-return-${row.id}`, () => apiFetch(`/api/upstream/purchase-returns/${row.id}/submit`, { method: 'POST' }), '采购退货已提交审核；当前仍未扣库存')
-                            }
-                            disabled={working === `submit-return-${row.id}`}
-                          >
-                            提交审核
-                          </ActionButton>
-                          <ActionButton tone="danger" onClick={() => void cancelPurchaseReturn(row)}>
-                            取消
-                          </ActionButton>
-                        </>
-                      )}
-                      {row.status === 'PENDING_APPROVAL' && (
-                        <>
-                          <ActionButton
-                            onClick={() => openActionConfirm({
-                              title: `审核退货单 ${row.no} 并出库`,
-                              body: '确认后会从采购方总仓扣减库存并保留退货出库记录。',
-                              confirmLabel: '审核并出库', tone: 'danger',
-                              onConfirm: async () => {
-                                await run(`approve-return-${row.id}`, () => apiFetch(`/api/upstream/purchase-returns/${row.id}/approve`, { method: 'POST' }), '采购退货已审核并从总仓出库', undefined, true)
-                              },
-                            })}
-                            disabled={working === `approve-return-${row.id}`}
-                          >
-                            审核并出库
-                          </ActionButton>
-                          <ActionButton tone="danger" onClick={() => void rejectPurchaseReturn(row)}>
-                            驳回
-                          </ActionButton>
-                        </>
-                      )}
+                      <ProcurementProgressActions kind="RETURN" row={row} role={getUser()?.role || ''} busy={Boolean(working)} onAction={action => confirmProcurementProgress('RETURN', row, action)} />
+              <DocumentQualityImageButton kind="RETURN" sourceId={row.id} />
                       {row.status === 'APPROVED' && (
                         <ActionButton
                           onClick={() => openActionConfirm({
@@ -3297,13 +2795,13 @@ function PrintButton({ printId }: { printId: string }) {
   )
 }
 
-function Panel({ title, children, onClose, printId }: { title: string; children: ReactNode; onClose?: () => void; printId?: string }) {
+function Panel({ title, children, onClose, printId,onPrint }: { title: string; children: ReactNode; onClose?: () => void; printId?: string;onPrint?:()=>void }) {
   return (
     <div id={printId} data-print-sheet={printId ? true : undefined} className="rounded-2xl border border-amber/30 bg-white p-4 shadow-sm">
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-h3">{title}</h2>
         <div className="flex items-center gap-2" data-print-hidden>
-          {printId && <PrintButton printId={printId} />}
+          {onPrint?<button type="button" onClick={onPrint} className="rounded-lg border border-border bg-white px-3 py-1.5 text-button text-gray2">打印 / 保存 PDF</button>:printId&&<PrintButton printId={printId}/> }
           {onClose && (
             <button onClick={onClose} className="text-caption text-gray3">
               关闭

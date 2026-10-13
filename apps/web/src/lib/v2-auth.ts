@@ -73,6 +73,9 @@ export function setSession(token: string, user: StoredUser, tenant?: any, refres
   }
 }
 export function clearSession() {
+  Object.keys(sessionStorage).filter(key => key.startsWith('dj:stocktake-create:')).forEach(key => sessionStorage.removeItem(key))
+  Object.keys(sessionStorage).filter(key => key.startsWith('dj:supplier-archive:')).forEach(key => sessionStorage.removeItem(key))
+  Object.keys(localStorage).filter(key => key.startsWith('dj:supplier-create:')).forEach(key => localStorage.removeItem(key))
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(REFRESH_KEY)
   localStorage.removeItem(USER_KEY)

@@ -180,13 +180,15 @@ export default function FinancePCLoginPage() {
           </div>
 
           <div className="mt-3 text-center text-micro">
-            {tenantSlug === 'test' ? (
+            {process.env.NEXT_PUBLIC_PREVIEW_TENANT_SLUG?.trim() ? (
+              <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-bg text-amber-fg">测试环境 · {tenantSlug}</span>
+            ) : loginTenant(tenantSlug,identifier) === 'test' ? (
               <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-bg text-amber-fg">
                 测试环境 · <a href="/v2/finance-pc/login" className="underline">切回真实</a>
               </span>
             ) : (
               <span className="text-gray4">
-                正式环境 · <a href="/v2/finance-pc/login?tenant=test" className="underline text-gray3">用测试账号</a>
+                正式环境 · <a href={process.env.NEXT_PUBLIC_TEST_LOGIN_URL || '/v2/finance-pc/login?tenant=test'} className="underline text-gray3">用测试账号</a>
               </span>
             )}
           </div>

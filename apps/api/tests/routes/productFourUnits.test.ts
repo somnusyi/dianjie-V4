@@ -108,6 +108,14 @@ function product(overrides: Record<string, any> = {}) {
 }
 
 describe('product four-unit master-data contract (document snapshots are next phase)', () => {
+  it('generates an automatic product code without creating a product', async () => {
+    const first = await app.inject({ method: 'GET', url: '/api/products/next-code' })
+    const second = await app.inject({ method: 'GET', url: '/api/products/next-code' })
+    expect(first.statusCode).toBe(200)
+    expect(first.json().code).toMatch(/^[A-Z0-9]+-[A-Z0-9]{10}$/)
+    expect(second.json().code).not.toBe(first.json().code)
+    expect(mocks.productCreate).not.toHaveBeenCalled()
+  })
   let app: ReturnType<typeof Fastify>
 
   beforeAll(async () => {

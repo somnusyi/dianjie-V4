@@ -380,7 +380,10 @@ export default function InternalSupplyChainProductsPage() {
     setFilters({ ...DEFAULT_SUPPLY_PRODUCT_FILTERS, status: 'ENABLED' })
   }
 
+  const codeRequestSequence = useRef(0)
+
   function openCreate() {
+    const sequence = ++codeRequestSequence.current
     setEditing(null)
     setForm({ ...EMPTY_FORM, supplierId: filters.supplierId || (suppliers.length === 1 ? suppliers[0].id : '') })
     setFormError(null)
@@ -390,6 +393,11 @@ export default function InternalSupplyChainProductsPage() {
     setFormSources([])
     setFormSourcesDirty(false)
     setFormOpen(true)
+    apiFetch<{ code: string }>('/api/products/next-code').then(result => {
+      if (sequence !== codeRequestSequence.current) return
+      if (!result.code) throw new Error('商品编码生成失败')
+      setForm(current => ({ ...current, code: result.code }))
+    }).catch(reason => { if (sequence === codeRequestSequence.current) setFormError(reason?.message || '编码生成失败，请关闭后重新新增') })
   }
 
   function sourceFormFromRecord(source: ProductUpstreamSource): SourceFormRow {
@@ -575,6 +583,7 @@ export default function InternalSupplyChainProductsPage() {
   }
 
   function openEdit(product: ProductRow) {
+    ++codeRequestSequence.current
     setEditing(product)
     setForm({
       name: product.name,
@@ -632,6 +641,7 @@ export default function InternalSupplyChainProductsPage() {
   }
 
   async function submitForm() {
+    if (!editing && !form.code) { setFormError('编码尚未生成，请稍后重试；生成失败请关闭后重新新增'); return }
     // 编辑且四单位区块完全未动：允许 costUnit≠库存单位的历史口径原样保留。
     // 一旦用户改动单位区任一字段，回到严格规则（成本单位=库存单位），
     // 由后端 unitContractGuard 继续兜底成本不变式。
@@ -731,16 +741,6 @@ export default function InternalSupplyChainProductsPage() {
         next.costUnit = value
         next.inventoryUnitsPerCostUnit = '1'
       }
-      // 简化口径联动：订货单位原本跟随采购单位（简化界面只暴露采购侧），
-      // 采购侧改动时保持跟随；历史档案两者本就不同时不动（高级模式自管）。
-      if (key === 'purchaseUnit' && current.orderUnit === current.purchaseUnit) {
-        next.orderUnit = value
-      }
-      if (key === 'inventoryUnitsPerPurchaseUnit'
-        && current.orderUnit === current.purchaseUnit
-        && current.inventoryUnitsPerOrderUnit === current.inventoryUnitsPerPurchaseUnit) {
-        next.inventoryUnitsPerOrderUnit = value
-      }
       if (key === 'inventoryUnitsPerPurchaseUnit' && current.costUnit === current.inventoryUnit && !current.inventoryUnitsPerCostUnit) next.inventoryUnitsPerCostUnit = '1'
       return next
     })
@@ -758,14 +758,6 @@ export default function InternalSupplyChainProductsPage() {
         if (typedKey === 'inventoryUnit') {
           next.costUnit = typedValue
           next.inventoryUnitsPerCostUnit = '1'
-        }
-        if (typedKey === 'purchaseUnit' && current.orderUnit === current.purchaseUnit) {
-          next.orderUnit = typedValue
-        }
-        if (typedKey === 'inventoryUnitsPerPurchaseUnit'
-          && current.orderUnit === current.purchaseUnit
-        && current.inventoryUnitsPerOrderUnit === current.inventoryUnitsPerPurchaseUnit) {
-          next.inventoryUnitsPerOrderUnit = typedValue
         }
         if (typedKey === 'inventoryUnitsPerPurchaseUnit' && next.costUnit === next.inventoryUnit && !next.inventoryUnitsPerCostUnit) next.inventoryUnitsPerCostUnit = '1'
       }
@@ -1297,7 +1289,7 @@ export default function InternalSupplyChainProductsPage() {
           onImageSelect={handleImageSelect}
           onImageClear={() => { setPendingImageFile(null); setPendingImagePreview(null) }}
           onSubmit={submitForm}
-          onClose={() => setFormOpen(false)}
+          onClose={() => { ++codeRequestSequence.current; setFormOpen(false) }}
           imageInputRef={imageInputRef}
           onRepriced={message => { setNotice(message); load() }}
           upstreamSuppliers={upstreamSuppliers}
@@ -1805,9 +1797,10 @@ function FormDialog({
                 <input
                   type="text"
                   value={form.code}
-                  onChange={e => onFieldChange('code', e.target.value)}
+                  readOnly
+                  aria-label="自动生成商品编码"
                   maxLength={40}
-                  placeholder="留空自动生成"
+                  placeholder="自动生成中…"
                   className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
                 />
               </FormField>
@@ -1880,44 +1873,21 @@ function FormDialog({
                 className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
               />
             </FormField>
-            <div className="col-span-2 rounded-cta border border-border bg-bg px-3 py-2">
+            <div aria-label="单位换算设置" className="col-span-2 rounded-cta border border-border bg-bg px-3 py-2">
               <div className="text-caption text-gray2">
                 单位换算
                 <span className="ml-2 text-micro text-gray3">{unitSummary}</span>
               </div>
               {!unitAdvancedOpen ? (
                 <div className="mt-3 rounded-lg bg-white p-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <FormField label="采购单位（向供应商下单、门店要货）">
-                      <input
-                        type="text"
-                        value={form.purchaseUnit}
-                        onChange={e => onFieldChange('purchaseUnit', e.target.value)}
-                        maxLength={16}
-                        placeholder="箱 / 件 / 瓶"
-                        className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
-                      />
-                    </FormField>
-                    <FormField label="库存最小单位（仓库和成本按它记）">
-                      <input
-                        type="text"
-                        value={form.inventoryUnit}
-                        onChange={e => onFieldChange('inventoryUnit', e.target.value)}
-                        maxLength={16}
-                        placeholder="g / ml / 个"
-                        className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
-                      />
-                    </FormField>
-                    <FormField label={`1 ${form.purchaseUnit.trim() || '采购单位'} = ？${form.inventoryUnit.trim() || '库存单位'}`} full>
-                      <input
-                        type="number"
-                        min="0.000001"
-                        step="0.000001"
-                        value={form.inventoryUnitsPerPurchaseUnit}
-                        onChange={e => onFieldChange('inventoryUnitsPerPurchaseUnit', e.target.value)}
-                        className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
-                      />
-                    </FormField>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="space-y-3 rounded-lg border border-border p-3">
+<FormField label={'采购单位（向供应商采购）'}><input type="text" value={form.purchaseUnit} onChange={e => onFieldChange('purchaseUnit', e.target.value)} maxLength={16} className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></FormField><FormField label={`1 ${form.purchaseUnit.trim() || '采购单位'} = ？${form.inventoryUnit.trim() || '库存单位'}`}><input type="number" value={form.inventoryUnitsPerPurchaseUnit} onChange={e => onFieldChange('inventoryUnitsPerPurchaseUnit', e.target.value)} min="0.000001" step="0.000001" className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></FormField>
+                    </div><div className="space-y-3 rounded-lg border border-border p-3">
+<FormField label={'库存最小单位（仓库和成本按它记）'}><input type="text" value={form.inventoryUnit} onChange={e => onFieldChange('inventoryUnit', e.target.value)} maxLength={16} className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></FormField><p className="text-micro text-gray3">作为换算基准，成本按此单位计算。</p>
+                    </div><div className="space-y-3 rounded-lg border border-border p-3">
+<FormField label={'最小下单量单位（订货单位）'}><input type="text" value={form.orderUnit} onChange={e => onFieldChange('orderUnit', e.target.value)} maxLength={16} className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></FormField><FormField label={`1 ${form.orderUnit.trim() || '起订量单位'} = ？${form.inventoryUnit.trim() || '库存单位'}（起订量换算）`}><input type="number" value={form.inventoryUnitsPerOrderUnit} onChange={e => onFieldChange('inventoryUnitsPerOrderUnit', e.target.value)} min="0.000001" step="0.000001" className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></FormField>
+                    </div>
                   </div>
                   {specConversion && specApplies && (
                     <button
@@ -1932,13 +1902,13 @@ function FormDialog({
                     </button>
                   )}
                   <p className="mt-2 text-micro leading-5 text-gray3">
-                    订货单位自动跟随采购单位，成本按库存最小单位计算，都不用填。
+                    采购单位与最小下单量单位分别换算，库存最小单位作为基准，成本按最小单位计算。
                     <button
                       type="button"
                       onClick={() => setUnitAdvancedOpen(true)}
                       className="ml-2 text-accent underline"
                     >
-                      订货或成本单位不同？展开高级设置
+                      查看完整单位设置
                     </button>
                   </p>
                 </div>
@@ -2033,6 +2003,19 @@ function FormDialog({
                 </div>
                 </div>
               )}
+              <div className="mt-3 border-t border-border pt-3">
+            <FormField label={`最小下单量（${form.orderUnit.trim() || '待选订货单位'}）`}>
+              <input
+                type="number"
+                aria-label="商品最小下单量"
+                min="0.001"
+                step="0.001"
+                value={form.minOrderQty}
+                onChange={e => onFieldChange('minOrderQty', e.target.value)}
+                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
+              />
+            </FormField>
+              </div>
             </div>
             {!editing && (
               <>
@@ -2307,17 +2290,6 @@ function FormDialog({
                 <p className="mt-2 text-micro leading-5 text-gray3">可绑多家供应商，需指定一家主供；留空不影响建档。</p>
               </div>
             )}
-            <FormField label={`最小下单量（${form.orderUnit.trim() || '待选订货单位'}）`}>
-              <input
-                type="number"
-                aria-label="商品最小下单量"
-                min="0.001"
-                step="0.001"
-                value={form.minOrderQty}
-                onChange={e => onFieldChange('minOrderQty', e.target.value)}
-                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent"
-              />
-            </FormField>
             {!editing&&<section aria-label="单价与起订量换算" className="col-span-2 rounded-lg border border-border bg-bg p-3 text-caption">
               <table className="w-full text-left"><thead><tr><th className="pb-2">计价口径</th><th>单价及单位</th><th>数量及单位</th><th>对应金额</th></tr></thead><tbody>
                 <tr><td className="py-1">输入单价</td><td>{form.price!==''?`${form.price} 元 / ${inputPriceUnit}`:'—'}</td><td>1 {inputPriceUnit}</td><td>{form.price!==''?`${form.price} 元`:'—'}</td></tr>

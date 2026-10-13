@@ -115,6 +115,7 @@ function getCategoryLabel(container: HTMLElement): HTMLLabelElement {
 function mockRoutes() {
   mockFetch.mockImplementation(path => {
     const url = String(path)
+    if (url === '/api/products/next-code') return Promise.resolve({ code: 'TEN0-AUTOCODE01' })
     if (url.startsWith('/api/products/categories')) return Promise.resolve(CATEGORIES)
     if (url.startsWith('/api/suppliers')) return Promise.resolve(SUPPLIERS)
     if (url.startsWith('/api/product-upstream-sources')) return Promise.resolve({ productId: 'p1', sources: [] })
@@ -530,6 +531,7 @@ describe('旧商品编辑不把缺失因子补成1', () => {
     await waitFor(() => container.textContent?.includes('土豆') ?? false)
     await act(async () => findButton(container, '编辑')!.click())
     act(() => Simulate.change(inputFor(container, '1 kg = ？kg'), { target: { value: '1' } as any }))
+    act(() => Simulate.change(inputFor(container, '1 kg = ？kg（起订量换算）'), { target: { value: '1' } as any }))
     await act(async () => findButton(container, '保存修改')!.click())
     const patch = mockFetch.mock.calls.find(([, init]) => init?.method === 'PATCH')!
     expect(JSON.parse(String(patch[1]!.body))).toMatchObject({ purchaseUnit: 'kg', inventoryUnit: 'kg', orderUnit: 'kg', costUnit: 'kg', inventoryUnitsPerPurchaseUnit: 1, inventoryUnitsPerOrderUnit: 1, inventoryUnitsPerCostUnit: 1, unit: 'kg' })
@@ -558,15 +560,36 @@ it('新建商品输入采购单价，显示最小单位和起订金额，并按�
  mockRoutes();const original=mockFetch.getMockImplementation()!;mockFetch.mockImplementation((path,init)=>init?.method==='POST'&&path==='/api/products'?Promise.resolve({id:'new'}):original(path,init))
  const {container,root}=render(<InternalSupplyChainProductsPage />)
  try{
-  await waitFor(()=>!!findButton(container,'＋ 新增商品'));act(()=>findButton(container,'＋ 新增商品')!.click())
+  await waitFor(()=>!!findButton(container,'＋ 新增商品'));await act(async()=>findButton(container,'＋ 新增商品')!.click())
   const field=(label:string)=>Array.from(container.querySelectorAll('label')).find(item=>item.textContent?.includes(label))!.querySelector('input')!
   const change=(input:HTMLInputElement,value:string)=>act(()=>Simulate.change(input,{target:{value} as any}))
-  change(field('名称'),'单位换算测试');change(field('采购单位（'),'kg');change(field('库存最小单位'),'g');change(field('1 kg ='),'1000')
+  change(field('名称'),'单位换算测试');change(field('采购单位（'),'kg');change(field('库存最小单位'),'g');change(field('1 kg ='),'1000');change(field('最小下单量单位'),'kg');change(field('起订量换算'),'1000')
   change(container.querySelector('[aria-label="商品输入单价"]')!,'95');change(container.querySelector('[aria-label="商品最小下单量"]')!,'2')
   const preview=container.querySelector('[aria-label="单价与起订量换算"]')!
   expect(preview.textContent).toContain('0.095 元 / g');expect(preview.textContent).toContain('95 元 / kg');expect(preview.textContent).toContain('2000 g');expect(preview.textContent).toContain('190 元')
   await act(async()=>findButton(container,'新增')!.click())
   const write=mockFetch.mock.calls.find(([path,init])=>path==='/api/products'&&init?.method==='POST')!
   expect(JSON.parse(String(write[1]?.body))).toMatchObject({price:0.095,costUnit:'g',inventoryUnit:'g',orderUnit:'kg',minOrderQty:2,inventoryUnitsPerPurchaseUnit:1000,inventoryUnitsPerOrderUnit:1000,inventoryUnitsPerCostUnit:1})
+ }finally{cleanup(container,root)}
+})
+
+it('三种单位独立换算，起订量位于单位区且编码自动填写不可手改',async()=>{
+ mockRoutes();const original=mockFetch.getMockImplementation()!;mockFetch.mockImplementation((path,init)=>init?.method==='POST'&&path==='/api/products'?Promise.resolve({id:'new'}):original(path,init))
+ const {container,root}=render(<InternalSupplyChainProductsPage />)
+ try{
+  await waitFor(()=>!!findButton(container,'＋ 新增商品'));await act(async()=>findButton(container,'＋ 新增商品')!.click())
+  const section=container.querySelector('[aria-label="单位换算设置"]')!
+  expect(section.querySelector('[aria-label="商品最小下单量"]')).not.toBeNull()
+  const code=container.querySelector('[aria-label="自动生成商品编码"]') as HTMLInputElement
+  expect(code.value).toBe('TEN0-AUTOCODE01');expect(code.readOnly).toBe(true)
+  const field=(label:string)=>Array.from(container.querySelectorAll('label')).find(item=>item.textContent?.includes(label))!.querySelector('input')!
+  const change=(input:HTMLInputElement,value:string)=>act(()=>Simulate.change(input,{target:{value} as any}))
+  change(field('名称'),'独立单位');change(field('采购单位（'),'箱');change(field('库存最小单位'),'g');change(field('1 箱 ='),'2000');change(field('最小下单量单位'),'kg');change(field('起订量换算'),'1000')
+  change(container.querySelector('[aria-label="商品输入单价"]')!,'10');change(section.querySelector('[aria-label="商品最小下单量"]')!,'2')
+  const preview=container.querySelector('[aria-label="单价与起订量换算"]')!
+  expect(preview.textContent).toContain('0.005 元 / g');expect(preview.textContent).toContain('5 元 / kg');expect(preview.textContent).toContain('10 元')
+  await act(async()=>findButton(container,'新增')!.click())
+  const write=mockFetch.mock.calls.find(([path,init])=>path==='/api/products'&&init?.method==='POST')!
+  expect(JSON.parse(String(write[1]?.body))).toMatchObject({code:'TEN0-AUTOCODE01',purchaseUnit:'箱',orderUnit:'kg',inventoryUnit:'g',inventoryUnitsPerPurchaseUnit:2000,inventoryUnitsPerOrderUnit:1000,minOrderQty:2,price:0.005})
  }finally{cleanup(container,root)}
 })

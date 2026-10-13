@@ -678,6 +678,12 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   ])
   const UNIT_GOVERNANCE_ROLES = new Set(['ADMIN', 'SUPER_ADMIN', 'SUPPLY_CHAIN'])
 
+  app.get('/next-code', auth(app), async (req: any, reply: any) => {
+    if (!PRODUCT_WRITE_ROLES.has(req.user.role)) return reply.status(403).send({ error: '无权生成商品编码' })
+    if (isSupplierRole(req.user.role) && !supplierScopeOrReply(req, reply, 'catalog.manage')) return
+    return { code: autoCode(req.user.supplierId) }
+  })
+
   /** 当前租户/供应商实际使用的分类主数据，供筛选和下拉选择。 */
   app.get('/categories', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, supplierId } = req.user

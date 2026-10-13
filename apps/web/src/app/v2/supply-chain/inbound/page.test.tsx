@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import InboundRecordsPage from './page'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
@@ -35,7 +35,7 @@ function renderPage() {
 async function waitFor(predicate: () => boolean, timeout = 1000) {
   const started = Date.now()
   while (!predicate()) {
-    if (Date.now() - started > timeout) throw new Error('waitFor timeout')
+    if (performance.now() - started > timeout) throw new Error('waitFor timeout')
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)) })
   }
 }
@@ -133,6 +133,7 @@ describe('入库记录中心', () => {
   })
 
   it('applies filters to the inbound-records query', async () => {
+    vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(new Date('2026-09-15T12:00:00'))
     const { container, root } = renderPage()
     await waitFor(() => container.textContent?.includes('水牛毛肚') ?? false)
 
@@ -152,3 +153,5 @@ describe('入库记录中心', () => {
     container.remove()
   })
 })
+
+afterEach(()=>{vi.useRealTimers()})

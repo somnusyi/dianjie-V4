@@ -9,8 +9,8 @@ describe('操作体验批次七打印与导出契约', () => {
   it('上游采购的收货、差异、对账、合同和退货都有打印或保存 PDF 入口', () => {
     const source = read('app/v2/supply-chain/procurement/page.tsx')
     const printHelper = read('app/v2/supply-chain/procurement/print-sheet.ts')
-    expect(source).toContain('printId={`receipt-${viewingReceipt.id}`}')
-    expect(source).toContain('printId={`purchase-return-${viewingPurchaseReturn.id}`}')
+    expect(source).toContain("onPrint={()=>showTableReport(procurementDocumentReport('RECEIPT',viewingReceipt))}")
+    expect(source).toContain("onPrint={()=>showTableReport(procurementDocumentReport('RETURN',viewingPurchaseReturn))}")
     expect(source).toContain('printId={`statement-${viewingStatement.id}`}')
     expect(source).toContain('printId={`contract-${viewingContract.id}`}')
     expect(source).toContain('<PrintButton printId={`arrival-claim-${claim.id}`} />')

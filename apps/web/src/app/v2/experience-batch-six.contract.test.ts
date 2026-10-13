@@ -33,8 +33,10 @@ describe('操作体验批次六契约', () => {
     const docs = read('supply-chain/docs/page.tsx')
     const receipts = read('supply-chain/receipts/page.tsx')
     const supplierOrders = read('supplier/orders/page.tsx')
-    expect(docs).toContain("doc.status === 'POSTED' && canEdit ? '改单' : '查看'")
-    expect(docs).toContain('被会计退回')
+    expect(docs).toContain("{canEdit && <a href={`/v2/supply-chain/docs/${encodeURIComponent(doc.id)}/edit`}")
+    expect(docs).toContain("doc.status === 'POSTED' && canEdit")
+    expect(read('supply-chain/docs/warehouse-document-editor.tsx')).toContain("const editable = (creating || doc.status === 'POSTED') && doc.reviewStatus !== 'REVIEWED' && canEdit")
+    expect(docs).toContain('doc.unauditedAt &&');expect(docs).toContain('已退回');expect(docs).not.toContain('被会计退回')
     expect(receipts).toContain('aria-expanded={expandedId === receipt.id}')
     expect(receipts).toContain('收货商品明细')
     const orderList = supplierOrders.slice(

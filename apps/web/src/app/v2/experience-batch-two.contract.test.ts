@@ -13,11 +13,14 @@ const invoices = source('./supplier/invoices/page.tsx')
 
 describe('2026-09-28 成功后引导与空态入口', () => {
   it('opens the newly generated receipt directly in inspection', () => {
-    expect(procurementNormalized).toContain("receipt.status === 'DRAFT'")
-    expect(procurementNormalized).toContain('/start-inspection`')
-    expect(procurementNormalized).toContain("method: 'POST'")
-    expect(procurementNormalized).toContain('receiptReviewActionForStatus(receipt.status)')
-    expect(procurementNormalized).toContain('await openReceiptDetail(receipt, nextAction)')
+    expect(procurementNormalized).toContain('/v2/supply-chain/procurement/receipts/new?shipment=${encodeURIComponent(shipment.id)}')
+    const wrapper=source('./supply-chain/procurement/receipts/new/page.tsx')
+    const editor=source('../../components/v2/procurement-document-editor.tsx')
+    expect(wrapper).toContain('shipmentId={shipment}')
+    expect(wrapper).toContain('router.replace(`/v2/supply-chain/procurement/receipts/${encodeURIComponent(id)}/edit`)')
+    expect(editor).toContain('/receipt-context`')
+    expect(editor).toContain('onCreated?.(result.id)')
+    expect(procurementNormalized).not.toContain('/start-inspection`')
   })
 
   it('keeps difference source documents in overlay detail instead of forced tab switches', () => {
@@ -32,10 +35,10 @@ describe('2026-09-28 成功后引导与空态入口', () => {
     expect(procurementNormalized).toContain("apiFetch<Contract[]>('/api/upstream/contracts')")
     expect(procurementNormalized).toContain('await openOrderDetail(created)')
     expect(procurementNormalized).toContain('PurchaseReturnCreateResult = { replayed: boolean; purchaseReturn: PurchaseReturn }')
-    expect(procurementNormalized).toContain('const row = result.purchaseReturn')
-    expect(procurementNormalized).toContain('setViewingPurchaseReturn(row)')
+    expect(source('../../components/v2/procurement-document-editor.tsx')).toContain("const result=kind==='RECEIPT'?response:response.purchaseReturn")
+    expect(source('./supply-chain/procurement/returns/new/page.tsx')).toContain('router.replace(`/v2/supply-chain/procurement/returns/${encodeURIComponent(id)}/edit`)')
     expect(procurementNormalized).toContain('loadCreatedRecord(created.id')
-    for (const label of ['启用合同', '查看采购单', '查看退货单', '查看对账单']) expect(procurementNormalized).toContain(label)
+    for (const label of ['启用合同', '查看采购单', '查看对账单']) expect(procurementNormalized).toContain(label)
   })
 
   it('links manual and batch inbound success to the exact warehouse document', () => {

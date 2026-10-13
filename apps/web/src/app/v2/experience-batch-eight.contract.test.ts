@@ -65,7 +65,8 @@ describe('操作体验批次八旧入口收口', () => {
   })
 
   it('移动单据卡片中的可编辑字段保留程序化名称', () => {
-    const docs = read('v2/supply-chain/docs/page.tsx')
+    const docs = read('v2/supply-chain/docs/warehouse-document-editor.tsx')
+    expect(read('v2/supply-chain/docs/page.tsx')).toContain('<WarehouseDocumentEditor')
     expect(docs).toContain('aria-label={`${line.productName}数量`}')
     expect(docs).toContain('aria-label={`${line.productName}金额`}')
     expect(docs).toContain('aria-label={`${line.productName}备注`}')

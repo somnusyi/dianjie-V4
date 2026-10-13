@@ -41,7 +41,6 @@ describe('order and delivery table horizontal controls', () => {
 
   it.each([
     ['orders', ordersPage, 'orderItemSummary'],
-    ['deliveries', deliveriesPage, 'deliveryItemSummary'],
   ])('starts the %s product summary at 400px and lets it wrap after resizing', (_name, source, summaryHelper) => {
     expect(source).toContain(`const summary = ${summaryHelper}(`)
     expect(source).toMatch(/id: 'summary',[\s\S]*?header: '商品摘要',[\s\S]*?defaultWidth: 400,/)
@@ -88,11 +87,11 @@ describe('order and delivery table horizontal controls', () => {
       deliveryNo: 170,
       orderNo: 237,
       store: 136,
-      supplier: 214,
+
       createdAt: 110,
       shippedAt: 110,
       status: 77,
-      summary: 400,
+
       amount: 102,
       costAmount: 112,
       profit: 102,
@@ -123,3 +122,5 @@ describe('order and delivery table horizontal controls', () => {
     expect(resizableTable).toContain('orderCenterHeaderMinimumWidth(column.header)')
   })
 })
+
+it('配送按用户决定不再显示供应商和商品摘要列',()=>{expect(defaultColumnWidths(deliveriesPage)).not.toHaveProperty('supplier');expect(defaultColumnWidths(deliveriesPage)).not.toHaveProperty('summary');expect(deliveriesPage).not.toContain("header: '商品摘要'");expect(deliveriesPage).not.toContain("header: '供应商'")})

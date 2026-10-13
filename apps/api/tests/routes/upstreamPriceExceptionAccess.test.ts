@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   receiptFindFirst: vi.fn(),
   queryRaw: vi.fn(),
   transaction: vi.fn(),
+  receiptUpdate:vi.fn(),
 }))
 
 vi.mock('@dianjie/db', async importOriginal => {
@@ -16,7 +17,7 @@ vi.mock('@dianjie/db', async importOriginal => {
 })
 
 import { Prisma } from '@dianjie/db'
-import { upstreamProcurementRoutes } from '../../src/routes/upstreamProcurement'
+import { postReceiptBusinessInTransaction, upstreamProcurementRoutes } from '../../src/routes/upstreamProcurement'
 
 describe('upstream above-standard price exception access', () => {
   let app: ReturnType<typeof Fastify>
@@ -50,6 +51,7 @@ describe('upstream above-standard price exception access', () => {
         purchaseOrderLine: { isTemporaryPrice: false }, shipmentLine: null,
       }],
     }
+    mocks.receiptFindFirst.mockReset()
     mocks.receiptFindFirst
       .mockResolvedValueOnce({ purchaseOrderId: 'order-1' })
       .mockResolvedValueOnce(receipt)
@@ -60,14 +62,20 @@ describe('upstream above-standard price exception access', () => {
     }))
   })
 
-  it('rejects an ordinary supply-chain reviewer before any posting write', async () => {
+  it('拒绝缺版本和请求编号的旧过账请求且不进入事务', async () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/upstream/receipts/receipt-1/review-and-post',
       payload: { priceExceptionReason: '已核对临时涨价' },
     })
 
-    expect(response.statusCode).toBe(403)
-    expect(response.json().error).toContain('仅管理员可批准价格例外')
+    expect(response.statusCode).toBe(400)
+    expect(mocks.transaction).not.toHaveBeenCalled()
   })
+  it.each(['SUPPLY_CHAIN','ADMIN','SUPER_ADMIN'])('超标准价即使%s也禁止入库，无例外过账',async role=>{
+    const tx={upstreamReceipt:{findFirst:(...args:any[])=>mocks.receiptFindFirst(...args),update:mocks.receiptUpdate},$queryRaw:(...args:any[])=>mocks.queryRaw(...args)}
+    await expect(postReceiptBusinessInTransaction(tx as any,'tenant-1',role,'reviewer-2','receipt-1',true,{priceExceptionReason:'不是准许例外的依据'} as any,true)).rejects.toMatchObject({statusCode:409,message:'实际采购价高于标准价，禁止验收入库'})
+    expect(mocks.receiptUpdate).not.toHaveBeenCalled()
+  })
+
 })

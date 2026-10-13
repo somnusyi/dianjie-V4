@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   claimCount: vi.fn(),
   claimFindFirst: vi.fn(),
   claimLineFindMany: vi.fn(),
+  tenantFindUnique: vi.fn(),
   transaction: vi.fn(),
   queryRaw: vi.fn(),
   statementCount: vi.fn(),
@@ -21,6 +22,7 @@ vi.mock('@dianjie/db', async () => {
   return {
     ...actual,
     prisma: {
+    tenant: {findUnique: (...args:any[])=>mocks.tenantFindUnique(...args)},
     upstreamPurchaseOrder: { count: (...args: any[]) => mocks.orderCount(...args) },
     upstreamShipment: { count: (...args: any[]) => mocks.shipmentCount(...args) },
     upstreamReceipt: {
@@ -64,6 +66,7 @@ describe('upstream role workbench', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.tenantFindUnique.mockResolvedValue({name:'合成机构'})
     mocks.orderCount.mockResolvedValue(2)
     mocks.shipmentCount.mockResolvedValue(3)
     mocks.receiptCount.mockResolvedValue(4)

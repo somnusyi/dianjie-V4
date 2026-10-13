@@ -19,6 +19,15 @@ const V2_ROOT = path.join(__dirname)
 
 /** 确实不需要取数的页面，每条都要写清楚理由。 */
 const STATIC_PAGE_ALLOWLIST: Record<string, string> = {
+  'supply-chain/docs/[id]/edit/page.tsx': '只挂载WarehouseDocumentEditor，真实数据由组件读取',
+  'supply-chain/docs/new/page.tsx': '委托NewWarehouseDocumentPage和服务器草稿钩子',
+  'supply-chain/docs/new-outbound/page.tsx': '委托NewWarehouseDocumentPage和服务器草稿钩子',
+  'supply-chain/inventory-management/limits/[productId]/edit/page.tsx': '只挂载InventoryRules，真实数据由组件读取',
+  'supply-chain/inventory-management/limits/new/page.tsx': 'InventoryRuleSelector读取真实商品后打开规则编辑',
+  'supply-chain/navigation/page.tsx': '仅功能路由目录，无经营数字',
+  'supply-chain/procurement/receipts/[id]/edit/page.tsx': '委托ProcurementDocumentEditor读取真实收货',
+  'supply-chain/procurement/receipts/new/page.tsx': '委托ProcurementDocumentEditor读取发货上下文',
+  'supply-chain/procurement/returns/[id]/edit/page.tsx': '委托ProcurementDocumentEditor读取真实退货',
   'wecom-bridge/page.tsx': '企微 OAuth 跳转桥页，只做重定向',
   'boss/payment-onboarding/page.tsx': '收款接入 checklist，状态存 localStorage，不展示经营数据',
   'supply-chain/inventory-management/page.tsx': '服务端仅重定向到采购入库页，不渲染业务数据',

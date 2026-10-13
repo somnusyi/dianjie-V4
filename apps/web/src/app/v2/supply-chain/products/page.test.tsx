@@ -574,7 +574,7 @@ it('新建商品输入采购单价，显示最小单位和起订金额，并按�
 })
 
 it('三种单位独立换算，起订量位于单位区且编码自动填写不可手改',async()=>{
- mockRoutes();const original=mockFetch.getMockImplementation()!;mockFetch.mockImplementation((path,init)=>init?.method==='POST'&&path==='/api/products'?Promise.resolve({id:'new'}):original(path,init))
+ mockFetch.mockClear();mockRoutes();const original=mockFetch.getMockImplementation()!;mockFetch.mockImplementation((path,init)=>init?.method==='POST'&&path==='/api/products'?Promise.resolve({id:'new'}):original(path,init))
  const {container,root}=render(<InternalSupplyChainProductsPage />)
  try{
   await waitFor(()=>!!findButton(container,'＋ 新增商品'));await act(async()=>findButton(container,'＋ 新增商品')!.click())

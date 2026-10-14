@@ -18,6 +18,7 @@ type Supplier = {
 
 export default function SuppliersPage() {
   const internalSupplyChain = getUser()?.role === 'SUPPLY_CHAIN'
+  const canManageUpstream = ['SUPPLY_CHAIN', 'ADMIN', 'SUPER_ADMIN'].includes(getUser()?.role || '')
   const [list, setList] = useState<Supplier[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -119,6 +120,10 @@ export default function SuppliersPage() {
           + 新增
         </button>
       </header>
+      {canManageUpstream && <div className="flex flex-wrap gap-2 px-4 pb-3">
+        <a href="/v2/supply-chain/suppliers" className="rounded-cta border border-border bg-white px-3 py-2 text-button text-amber-fg">上游供应商管理</a>
+        <a href="/v2/supply-chain/suppliers/accounts" className="rounded-cta bg-amber px-3 py-2 text-button text-white">添加供应商账号</a>
+      </div>}
 
       <div className="px-4 mt-2">
         {error && !showForm && !inviteFor && (

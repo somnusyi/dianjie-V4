@@ -7,7 +7,7 @@
  * 内容: 抬头(供应商) + 收货方(门店地址) + 订单元数据 + 商品明细表 + 合计大写 + 签字栏
  */
 'use client'
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 import dayjs from 'dayjs'
@@ -22,6 +22,7 @@ import {
 import { parseOperationGroupDeliveryNoteProjection } from '@/lib/operation-group-delivery-note-preview'
 import { num2cn } from '@/lib/num2cn'
 import { notifyUser } from '@/lib/ui-dialogs'
+import { prepareDeliveryNotePrint } from '@/lib/delivery-note-print'
 
 
 type Order = {
@@ -883,6 +884,19 @@ export default function DeliveryNotePrintPage() {
     }
   }
 
+  useEffect(() => {
+    let cleanup: (() => void) | undefined
+    const prepare = () => {
+      cleanup?.()
+      const source = document.getElementById('print-area')
+      if (source) cleanup = prepareDeliveryNotePrint(source)
+    }
+    const finish = () => { cleanup?.(); cleanup = undefined }
+    window.addEventListener('beforeprint', prepare)
+    window.addEventListener('afterprint', finish)
+    return () => { finish(); window.removeEventListener('beforeprint', prepare); window.removeEventListener('afterprint', finish) }
+  }, [])
+
   if (error) return <div className="p-8 text-center text-red-fg">{error}</div>
   if (!order) return <div className="p-8 text-center text-gray2">加载中…</div>
 
@@ -896,29 +910,36 @@ export default function DeliveryNotePrintPage() {
   const itemsCount = order.items.length
   const totalQty = order.items.reduce((s, i) => s + itemQty(i), 0)
 
-  // 打印手工分页：首页要给抬头/元数据留空间所以行数少，续页多。
-  // 用多个 tbody + break-before 强制分页——不让浏览器自己在表格中间找断点（会截断/丢行导致漏货）
-  const PRINT_FIRST_PAGE_ROWS = 14
-  const PRINT_PAGE_ROWS = 20
-  const printChunks: Order['items'][] = []
-  order.items.forEach((item, idx) => {
-    const chunkIdx = idx < PRINT_FIRST_PAGE_ROWS ? 0 : 1 + Math.floor((idx - PRINT_FIRST_PAGE_ROWS) / PRINT_PAGE_ROWS)
-    ;(printChunks[chunkIdx] = printChunks[chunkIdx] || []).push(item)
-  })
-
   return (
     <>
       {/* 打印样式 — 纸张 + 隐藏顶栏 */}
       <style jsx global>{`
+        [data-delivery-note-print-root] { display: none; }
         @page { size: A4; margin: ${isOperationGroup ? '12mm 12mm 6mm 12mm' : '12mm'}; }
         @media print {
           body { background: white !important; }
+          body:has([data-delivery-note-print-root]) > :not([data-delivery-note-print-root]) { display: none !important; }
+          [data-delivery-note-print-root] { display: block !important; }
+          .delivery-note-print-page { break-after: page; page-break-after: always; }
+          .delivery-note-print-page:last-child { break-after: auto; page-break-after: auto; }
+          /* Only this delivery note owns the paper; keep normal screen navigation unchanged. */
+          body:has([data-delivery-note-print]) :is(.supplier-portal, [data-navigation-mode]) > :not(main),
+          body:has([data-delivery-note-print]) :is(.supplier-portal, [data-navigation-mode]) > main > nav {
+            display: none !important;
+          }
+          body:has([data-delivery-note-print]) :is(.supplier-portal, [data-navigation-mode]),
+          body:has([data-delivery-note-print]) :is(.supplier-portal, [data-navigation-mode]) > main,
+          body:has([data-delivery-note-print]) :is(.supplier-portal, [data-navigation-mode]) > main > div {
+            padding: 0 !important; margin: 0 !important; width: auto !important;
+            max-width: none !important; min-height: 0 !important; height: auto !important;
+            overflow: visible !important;
+          }
           .no-print { display: none !important; }
           /* 宽度自适应打印区 — 210mm固定宽+24mm页边距会超出纸面，Chromium 溢出截断会在分页处丢行 */
           .print-page { box-shadow: none !important; margin: 0 !important; width: auto !important; min-height: 0 !important; padding: 0 !important; }
           /* 行不可跨页截断 — 防止拣货单在分页处把一行切两半导致漏货 */
-          tr { page-break-inside: avoid !important; break-inside: avoid !important; }
-          thead { display: table-header-group !important; }
+          [data-delivery-note-print] tbody, [data-delivery-note-print] tr { page-break-inside: avoid !important; break-inside: avoid !important; }
+          [data-delivery-note-print] thead { display: table-header-group !important; }
         }
       `}</style>
 
@@ -993,6 +1014,7 @@ export default function DeliveryNotePrintPage() {
       {/* A4 纸面 */}
       <div
         id="print-area"
+        data-delivery-note-print
         className={`print-page mx-auto my-6 bg-white shadow-md text-ink ${isOperationGroup ? 'px-10 pb-5 pt-10' : 'p-10'}`}
         style={{ width: '210mm', minHeight: isOperationGroup ? 'auto' : '297mm', fontFamily: 'system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif' }}
       >
@@ -1068,8 +1090,8 @@ export default function DeliveryNotePrintPage() {
           </tbody>
         </table>
 
-        {/* 商品明细 */}
-        <table className="w-full text-sm mt-4 border-collapse">
+        {/* 商品明细：每个商品独立行组，WebKit 打印时也保持整行。 */}
+        <table className="w-full table-fixed text-sm mt-4 border-collapse">
           <thead>
             <tr className="bg-bg">
               <th className="border border-gray3 px-2 py-1.5 w-10">#</th>
@@ -1081,54 +1103,40 @@ export default function DeliveryNotePrintPage() {
               <th className="border border-gray3 px-2 py-1.5 w-24">金额(¥)</th>
             </tr>
           </thead>
-          <tbody>
-            {printChunks.map((chunk, chunkIdx) => {
-              const startIdx = chunkIdx === 0 ? 0 : PRINT_FIRST_PAGE_ROWS + (chunkIdx - 1) * PRINT_PAGE_ROWS
-              const isLastChunk = chunkIdx === printChunks.length - 1
+            {order.items.map((it, globalIdx) => {
+              const adj = it.shippedQty != null && Math.abs(Number(it.shippedQty) - Number(it.quantity)) > 0.0001
               return (
-                <Fragment
-                  key={chunkIdx}
-                >
-                  {chunk.map((it, i) => {
-                    const globalIdx = startIdx + i
-                    const adj = it.shippedQty != null && Math.abs(Number(it.shippedQty) - Number(it.quantity)) > 0.0001
-                    return (
-                      <tr key={it.id} style={globalIdx === startIdx && chunkIdx > 0 ? { pageBreakBefore: 'always', breakBefore: 'page' } : undefined}>
-                        <td className="border border-gray3 px-2 py-1.5 text-center">{globalIdx + 1}</td>
-                        <td className="border border-gray3 px-2 py-1.5">{it.product?.name || '-'}</td>
-                        <td className="border border-gray3 px-2 py-1.5 text-xs">{it.product?.spec || '—'}</td>
-                        <td className="border border-gray3 px-2 py-1.5 text-center">{it.product?.unit || '—'}</td>
-                        <td className="border border-gray3 px-2 py-1.5 text-right font-mono">
-                          {itemQty(it)}
-                          {adj && <span className="text-xs text-gray3 ml-1">(下单 {it.quantity})</span>}
-                        </td>
-                        <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{Number(it.unitPrice).toFixed(2)}</td>
-                        <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{itemAmt(it).toFixed(2)}</td>
-                      </tr>
-                    )
-                  })}
-                  {isLastChunk && (
-                    <>
-                      {/* 实发金额 */}
-                      <tr className="bg-bg font-semibold">
-                        <td colSpan={4} className="border border-gray3 px-2 py-1.5 text-right">实发金额</td>
-                        <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{totalQty}</td>
-                        <td className="border border-gray3 px-2 py-1.5"></td>
-                        <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{total.toFixed(2)}</td>
-                      </tr>
-                      {/* 大写 */}
-                      <tr>
-                        <td className="border border-gray3 px-2 py-1.5 bg-bg">大写</td>
-                        <td colSpan={6} className="border border-gray3 px-2 py-1.5">人民币 {num2cn(total)}</td>
-                      </tr>
-                    </>
-                  )}
-                </Fragment>
+                <tbody key={it.id} data-delivery-note-row><tr>
+                  <td className="border border-gray3 px-2 py-1.5 text-center">{globalIdx + 1}</td>
+                  <td className="border border-gray3 px-2 py-1.5">{it.product?.name || '-'}</td>
+                  <td className="border border-gray3 px-2 py-1.5 text-xs">{it.product?.spec || '—'}</td>
+                  <td className="border border-gray3 px-2 py-1.5 text-center">{it.product?.unit || '—'}</td>
+                  <td className="border border-gray3 px-2 py-1.5 text-right font-mono">
+                    {itemQty(it)}
+                    {adj && <span className="text-xs text-gray3 ml-1">(下单 {it.quantity})</span>}
+                  </td>
+                  <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{Number(it.unitPrice).toFixed(2)}</td>
+                  <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{itemAmt(it).toFixed(2)}</td>
+                </tr></tbody>
               )
             })}
+          <tbody data-delivery-note-totals>
+            {/* 实发金额 */}
+            <tr className="bg-bg font-semibold">
+              <td colSpan={4} className="border border-gray3 px-2 py-1.5 text-right">实发金额</td>
+              <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{totalQty}</td>
+              <td className="border border-gray3 px-2 py-1.5"></td>
+              <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{total.toFixed(2)}</td>
+            </tr>
+            {/* 大写 */}
+            <tr>
+              <td className="border border-gray3 px-2 py-1.5 bg-bg">大写</td>
+              <td colSpan={6} className="border border-gray3 px-2 py-1.5">人民币 {num2cn(total)}</td>
+            </tr>
           </tbody>
         </table>
 
+        <div data-delivery-note-footer>
         {/* 备注 */}
         {(order.note || order.shippedNote) && (
           <div className="mt-4 text-sm">
@@ -1154,6 +1162,7 @@ export default function DeliveryNotePrintPage() {
           <span>共 {itemsCount} 项商品</span>
           <span>打印时间 {dayjs(printedAt).format('YYYY-MM-DD HH:mm')}</span>
           <span>本单一式两联 · 收货方留存一联</span>
+        </div>
         </div>
       </div>
     </>

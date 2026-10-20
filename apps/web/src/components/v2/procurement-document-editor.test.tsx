@@ -3,6 +3,7 @@ import React,{act} from 'react'
 import {createRoot} from 'react-dom/client'
 import {beforeEach,it,expect,vi} from 'vitest'
 import {ProcurementDocumentEditor} from './procurement-document-editor'
+import {getTableReport,showTableReport} from '@/lib/table-report'
 vi.mock('@/lib/v2-auth',()=>({apiFetch:vi.fn(),getUser:()=>({role:'SUPPLY_CHAIN'})}))
 import {apiFetch} from '@/lib/v2-auth'
 const mock=vi.mocked(apiFetch)
@@ -126,7 +127,7 @@ it('audited and posted documents lock business inputs and retain fixed printing 
  const call=mock.mock.calls.find(([,init])=>init?.method==='PATCH')!
  expect(call[0]).toBe('/api/upstream/receipts/rc-1/note')
  const body=JSON.parse(String(call[1]?.body));expect(body).toMatchObject({note:'补充备注',sourceVersion:0});expect(body).not.toHaveProperty('lines')
- expect(element.textContent).toContain('打印');expect(element.textContent).toContain('质检');expect(element.textContent).not.toContain('取消复审')
+ expect(element.querySelector('thead tr')?.lastElementChild?.textContent).toBe('质检');expect(element.querySelector('tbody tr')?.lastElementChild?.textContent).toBe('质检');expect(element.textContent).toContain('打印');expect(element.textContent).toContain('质检');expect(element.textContent).not.toContain('取消复审')
  expect(Array.from(element.querySelectorAll<HTMLButtonElement>('button')).some(button=>button.textContent==='反审核')).toBe(false)
  act(()=>root.unmount());element.remove()
 })
@@ -355,5 +356,157 @@ it('detail totals follow decimal row edits and invalid input never turns into a 
   expect(total()).toContain('6.000000');expect(total()).toContain('0.7000')
   change(element.querySelector('input[aria-label="1行quantity"]')!,'')
   expect(total()).toContain('—');expect(mock.mock.calls.every(([,init])=>!init?.method)).toBe(true)
+ }finally{act(()=>root.unmount());element.remove()}
+})
+
+it('entered row total stays exact when quantities change and return to the original quantity',async()=>{
+ mock.mockReset()
+ let source={...original,lines:[{...original.lines[0],acceptedQty:3000,arrivedQty:3000,unitPrice:0.033333,payableAmount:99.999}]}
+ let written:any
+ mock.mockImplementation(async(_path,init)=>{
+  if(init?.method==='PUT'){
+   written=JSON.parse(String(init.body))
+   source={...source,lines:[{...source.lines[0],acceptedQty:written.lines[0].quantity,unitPrice:written.lines[0].unitPrice,payableAmount:Number(written.lines[0].payableAmount)}]}
+   return source
+  }
+  return source
+ })
+ const {element,root}=mount();await wait(()=>Boolean(element.querySelector('input[aria-label="1行amount"]')))
+ try{
+  const amount=()=>element.querySelector<HTMLInputElement>('input[aria-label="1行amount"]')!
+  const qty=()=>element.querySelector<HTMLInputElement>('input[aria-label="1行quantity"]')!
+  const price=()=>element.querySelector<HTMLInputElement>('input[aria-label="1行unitPrice"]')!
+  change(amount(),'100')
+  expect(price().value).toBe('0.033333')
+  expect(amount().value).toBe('100')
+  change(qty(),'4000')
+  expect(amount().value).toBe('133.3333')
+  expect(price().value).toBe('0.033333')
+  change(qty(),'3000')
+  expect(amount().value).toBe('100.0000')
+  await act(async()=>button(element,'保存').click())
+  expect(written.lines[0]).toMatchObject({quantity:3000,unitPrice:0.033333,payableAmount:'100.0000'})
+  expect(amount().value).toBe('100')
+  expect(written.lines[0]).not.toHaveProperty('basisAmount')
+  expect(written.lines[0]).not.toHaveProperty('basisQty')
+ }finally{act(()=>root.unmount());element.remove()}
+})
+
+it('restores an old creation request without amount from its saved quantity and unit price',async()=>{
+ mock.mockReset();sessionStorage.clear()
+ const user=(await import('@/lib/v2-auth')).getUser()
+ sessionStorage.setItem(`dj:receipt-create:${user?.id}:shipment-old`,JSON.stringify({key:'old-request-key',body:{idempotencyKey:'old-request-key',lines:[{shipmentLineId:'line-1',acceptedQty:3,arrivedQty:3,damagedQty:0,rejectedQty:0,unitPrice:7}]}}))
+ mock.mockResolvedValue({...original,lines:[{...original.lines[0],acceptedQty:2,arrivedQty:2,unitPrice:10,payableAmount:20}]})
+ const element=document.createElement('div');document.body.append(element);const root=createRoot(element)
+ act(()=>root.render(<ProcurementDocumentEditor kind="RECEIPT" sourceId="new" shipmentId="shipment-old" onClose={()=>{}}/>))
+ await wait(()=>Boolean(element.querySelector('input[aria-label="1行amount"]')))
+ try{
+  expect(element.querySelector<HTMLInputElement>('input[aria-label="1行quantity"]')!.value).toBe('3')
+  expect(element.querySelector<HTMLInputElement>('input[aria-label="1行unitPrice"]')!.value).toBe('7')
+  expect(element.querySelector<HTMLInputElement>('input[aria-label="1行amount"]')!.value).toBe('21.0000')
+ }finally{act(()=>root.unmount());element.remove();sessionStorage.clear()}
+})
+
+it('does not silently convert a missing server amount to zero',async()=>{
+ mock.mockReset();mock.mockResolvedValue({...original,lines:[{...original.lines[0],payableAmount:null}]})
+ const {element,root}=mount();await wait(()=>Boolean(element.querySelector('input[aria-label="1行amount"]')))
+ try{
+  expect(element.querySelector<HTMLInputElement>('input[aria-label="1行amount"]')!.value).toBe('')
+  await act(async()=>button(element,'保存').click())
+  expect(mock.mock.calls.filter(([,init])=>['PUT','POST','PATCH'].includes(init?.method||''))).toHaveLength(0)
+ }finally{act(()=>root.unmount());element.remove()}
+})
+
+it('loaded authoritative amount supplies the exact basis until the user explicitly changes unit price',async()=>{
+ mock.mockReset();mock.mockResolvedValue({...original,lines:[{...original.lines[0],acceptedQty:3000,arrivedQty:3000,unitPrice:0.033333,payableAmount:100}]})
+ const {element,root}=mount();await wait(()=>Boolean(element.querySelector('input[aria-label="1行amount"]')))
+ try{
+  const amount=()=>element.querySelector<HTMLInputElement>('input[aria-label="1行amount"]')!
+  const qty=()=>element.querySelector<HTMLInputElement>('input[aria-label="1行quantity"]')!
+  const price=()=>element.querySelector<HTMLInputElement>('input[aria-label="1行unitPrice"]')!
+  change(qty(),'4000');expect(amount().value).toBe('133.3333')
+  change(qty(),'3000');expect(amount().value).toBe('100.0000')
+  change(price(),'0.04');expect(amount().value).toBe('120.0000')
+  change(qty(),'4000');expect(amount().value).toBe('160.0000')
+  expect(price().value).toBe('0.04')
+ }finally{act(()=>root.unmount());element.remove()}
+})
+
+it('zero quantity cannot save a nonzero entered amount, and clearing quantity does not invent a zero amount',async()=>{
+ mock.mockReset();mock.mockResolvedValue(original)
+ const {element,root}=mount();await wait(()=>Boolean(element.querySelector('input[aria-label="1行amount"]')))
+ try{
+  const qty=element.querySelector<HTMLInputElement>('input[aria-label="1行quantity"]')!,amount=element.querySelector<HTMLInputElement>('input[aria-label="1行amount"]')!
+  change(qty,'');expect(amount.value).toBe('—')
+  change(qty,'0');change(amount,'1')
+  await act(async()=>button(element,'保存').click())
+  expect(element.querySelector('[role="alert"]')?.textContent).toContain('数量为0时金额必须为0')
+  expect(mock.mock.calls.filter(([,init])=>['PUT','POST','PATCH'].includes(init?.method||''))).toHaveLength(0)
+ }finally{act(()=>root.unmount());element.remove()}
+})
+
+it('partial return preview caps rounded proportion at remaining source amount without changing source quantity',async()=>{
+ const context={...original,lines:[{...original.lines[0],purchaseQuantity:0,settlementUnitPrice:'0.166667',settlementAmount:0,returnableQuantity:'2',sourceQuantity:'6',sourceAmount:'1',remainingSettlementAmount:'0.3332',receiptLine:{receipt:{no:'ORIGINAL-RC'}}}]}
+ mock.mockResolvedValue(context)
+ const element=document.createElement('div');document.body.append(element);const root=createRoot(element)
+ act(()=>root.render(<ProcurementDocumentEditor kind="RETURN" sourceId="new" supplierId="sup-1" warehouseId="wh-1" onClose={()=>{}}/>))
+ await wait(()=>Boolean(element.querySelector('footer')))
+ change(element.querySelector('input[aria-label="1行quantity"]')!,'1.9999')
+ expect(element.querySelector('tbody tr')?.textContent).toContain('0.3332')
+ expect(element.querySelector<HTMLInputElement>('input[aria-label="1行quantity"]')?.value).toBe('1.9999')
+ expect(mock.mock.calls.every(([,init])=>!init?.method)).toBe(true)
+ act(()=>root.unmount());element.remove()
+})
+it('printing current receipt edits includes unsaved note and exact entered amount without saving the document',async()=>{
+ mock.mockResolvedValue(original)
+ const {element,root}=mount();await wait(()=>Boolean(element.querySelector('footer')))
+ change(element.querySelector('input[aria-label="单据备注"]')!,'本页新备注')
+ change(element.querySelector('input[aria-label="1行amount"]')!,'100')
+ act(()=>Array.from(element.querySelectorAll<HTMLButtonElement>('button')).find(button=>button.textContent==='打印')!.click())
+ const report=getTableReport()!
+ expect(report.printTemplate?.fields?.note).toBe('本页新备注')
+ expect(report.subtitle).toContain('未保存预览')
+ expect(report.rows[0][report.headers.indexOf('金额')]).toBe('100')
+ expect(mock.mock.calls.every(([,init])=>!init?.method)).toBe(true)
+ act(()=>{root.unmount();showTableReport(null)});element.remove()
+})
+
+it('blank new-return quantity does not print or total as a valid zero amount',async()=>{
+ mock.mockReset();mock.mockResolvedValue({...original,lines:[{...original.lines[0],purchaseQuantity:0,settlementUnitPrice:33.333333,settlementAmount:0,returnableQuantity:3,sourceQuantity:3,sourceAmount:100,remainingSettlementAmount:100,receiptLine:{receipt:{no:'RC-TAIL'}}}]})
+ const element=document.createElement('div');document.body.append(element);const root=createRoot(element)
+ act(()=>root.render(<ProcurementDocumentEditor kind="RETURN" sourceId="new" supplierId="supplier-tail" warehouseId="warehouse-tail" onClose={()=>{}}/>))
+ await wait(()=>Boolean(element.querySelector('input[aria-label="1行quantity"]')))
+ try{
+  change(element.querySelector('input[aria-label="1行quantity"]')!,'')
+  expect(element.querySelector('tfoot')?.textContent).toContain('—')
+  expect(element.querySelector('tbody tr')?.textContent).toContain('—')
+  expect(mock.mock.calls.filter(([,init])=>['PUT','POST','PATCH'].includes(init?.method||''))).toHaveLength(0)
+ }finally{act(()=>root.unmount());element.remove()}
+})
+
+it('a successfully saved return ends recovery so the same supplier and warehouse can create the next return', async () => {
+ const context={...original,lines:[{...original.lines[0],purchaseQuantity:0,settlementUnitPrice:10,settlementAmount:0,returnableQuantity:2,receiptLine:{receipt:{no:'RC'}}}]}
+ let savedKey=''
+ mock.mockImplementation((path,init)=>{
+  if(init?.method==='POST'){savedKey=JSON.parse(String(init.body)).idempotencyKey;return Promise.resolve({purchaseReturn:{id:'return-first',approvalStatus:'DRAFT',approvalVersion:1,rowVersion:0}})}
+  const key=new URL(String(path),'http://localhost').searchParams.get('requestKey')
+  return Promise.resolve(key===savedKey&&savedKey?{...context,existingSourceId:'return-first'}:context)
+ })
+ const element=document.createElement('div');document.body.append(element)
+ let root=createRoot(element);const created=vi.fn()
+ try{
+  await act(async()=>root.render(<ProcurementDocumentEditor kind="RETURN" sourceId="new" supplierId="sup-1" warehouseId="wh-1" onCreated={created} onClose={()=>{}}/>))
+  await wait(()=>Boolean(element.querySelector('footer')))
+  change(element.querySelector('input[aria-label="退货原因"]')!,'本批退货')
+  change(element.querySelector('input[aria-label="1行quantity"]')!,'1')
+  await act(async()=>button(element,'保存').click())
+  expect(created).toHaveBeenCalledWith('return-first')
+  act(()=>root.unmount());element.replaceChildren();root=createRoot(element);created.mockClear()
+  await act(async()=>root.render(<ProcurementDocumentEditor kind="RETURN" sourceId="new" supplierId="sup-1" warehouseId="wh-1" onCreated={created} onClose={()=>{}}/>))
+  await wait(()=>Boolean(element.querySelector('footer')))
+  expect(created).not.toHaveBeenCalled()
+  expect(element.querySelector<HTMLInputElement>('input[aria-label="1行quantity"]')?.value).toBe('0')
+  const contextCalls=mock.mock.calls.filter(([path])=>String(path).includes('create-context'))
+  expect(new URL(String(contextCalls.at(-1)![0]),'http://localhost').searchParams.get('requestKey')).not.toBe(savedKey)
  }finally{act(()=>root.unmount());element.remove()}
 })

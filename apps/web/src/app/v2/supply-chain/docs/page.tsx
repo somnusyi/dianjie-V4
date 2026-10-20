@@ -1,7 +1,7 @@
 'use client'
 import { WarehouseDocumentEditor, type WarehouseDocumentAction } from './warehouse-document-editor'
+import {DocumentQualityImageButton} from '@/components/v2/document-quality-image'
 import { ResponsiveDataTable } from '@/components/v2/responsive-data-table'
-import { DocumentQualityImageButton } from '@/components/v2/document-quality-image'
 
 import { useCallback, useEffect, useState } from 'react'
 import { DateRangeCalendar } from '@/components/v2/date-range-calendar'
@@ -333,7 +333,7 @@ export default function WarehouseDocsPage() {
                     {doc.status === 'POSTED' && canEdit
                       ? <a href={`/v2/supply-chain/docs/${encodeURIComponent(doc.id)}/edit`} title="进入编辑页保存单据修改">保存</a>
                       : <button disabled title="当前单据锁定，不能保存修改" className="text-gray3">保存</button>}
-                    <DocumentQualityImageButton kind="WAREHOUSE" sourceId={doc.id} />
+                    {doc.type === 'MANUAL_OUTBOUND' && <DocumentQualityImageButton kind="WAREHOUSE" sourceId={doc.id} />}
                     <button onClick={() => openDoc(doc.id)} className="text-gray2">查看</button>
                   </div>
                 </td>

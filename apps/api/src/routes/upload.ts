@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import OSS from 'ali-oss'
 import { z } from 'zod'
+import {upstreamFeatureEnabled} from '../lib/upstream-feature-flags'
 
 const uuidv4 = () => Math.random().toString(36).slice(2) + Date.now().toString(36)
 
@@ -31,7 +32,7 @@ const ALLOWED_CATEGORY_VALUES = [
   'loss-claims', 'invoices', 'capital', 'documents',
   'reimbursements', 'misc', 'chef-ack', 'products', 'inventory-counts', 'feedback', 'warehouse-docs',
   'supplier-archive-general', 'supplier-archive-sensitive',
-  'supplier-evidence-documents',
+  'supplier-evidence-documents', 'upstream-goods-quality',
 ] as const
 const ALLOWED_CATEGORIES = new Set<string>(ALLOWED_CATEGORY_VALUES)
 const WAREHOUSE_DOC_UPLOAD_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'PURCHASER', 'SUPPLY_CHAIN'])
@@ -247,9 +248,10 @@ export function objectExtensionForMime(mime: string): string {
   return OBJECT_EXTENSION_BY_MIME[mime] || '.bin'
 }
 
-async function uploadOne(req: any, reply: any, opts: { allowedMimes: string[]; category: string }) {
+async function uploadOne(req: any, reply: any, opts: { allowedMimes: string[]; category: string; objectPrefix?:string }) {
   const user = req.user
   if (!user) return reply.status(401).send({ error: '未登录' })
+  if(opts.category==='upstream-goods-quality'&&!opts.objectPrefix)return reply.status(403).send({error:'请通过本次进货商品质检入口上传'})
   if (opts.category === 'warehouse-docs' && !canUploadWarehouseDocument(user.role)) {
     return reply.status(403).send({ error: '无权上传采购入库随货单据' })
   }
@@ -293,7 +295,7 @@ async function uploadOne(req: any, reply: any, opts: { allowedMimes: string[]; c
     const buffer = Buffer.concat(chunks)
     // 只使用已经通过白名单的 MIME 决定对象后缀；不信任用户文件名中的扩展名。
     const ext = objectExtensionForMime(data.mimetype)
-    const key = `${opts.category}/${user.tenantId}/${uuidv4()}${ext}`
+    const key = `${opts.objectPrefix||`${opts.category}/${user.tenantId}/`}${uuidv4()}${ext}`
     const client = ossClient()
     await client.put(key, buffer, {
       mime: data.mimetype,
@@ -310,6 +312,17 @@ async function uploadOne(req: any, reply: any, opts: { allowedMimes: string[]; c
 }
 
 export async function uploadRoutes(app: FastifyInstance) {
+  // Keep multipart uploads in the existing upload plugin scope. Upstream business
+  // routes are registered before the root multipart parser becomes available.
+  app.post('/upstream/quality-batches/:id/images',{preHandler:[(app as any).authenticate]},async(req:any,reply:any)=>{
+    try{
+      if(!upstreamFeatureEnabled('UPSTREAM_PROCUREMENT_ENABLED'))return reply.status(503).send({error:'上游采购模块尚未启用'})
+      const {qualityBatchUploadScope}=await import('../services/goodsBatchQuality')
+      const scope=await qualityBatchUploadScope({tenantId:req.user.tenantId,userId:req.user.userId},String(req.params.id))
+      return uploadGoodsBatchImage(req,reply,scope.prefix)
+    }catch(error:any){if(error.statusCode)return reply.code(error.statusCode).send({error:error.message});throw error}
+  })
+
   // 老路径：仅图片，固定为 loss-claims 目录（保留兼容）
   app.post('/upload/image', { preHandler: [(app as any).authenticate] }, (req, reply) =>
     uploadOne(req, reply, { allowedMimes: IMAGE_MIMES, category: 'loss-claims' })
@@ -350,10 +363,24 @@ export async function uploadRoutes(app: FastifyInstance) {
     // 供应商档案必须先按 record -> supplier -> role/scope 授权。
     // 通用 key 签名端点无法确认档案已绑定哪个供应商，因此一律拒绝；
     // 持久读取只由 /api/suppliers/:supplierId/archive 返回短签。
+    if (category === 'upstream-goods-quality')return reply.status(403).send({error:'请通过本次进货商品质检入口查看图片'})
     if (category === 'supplier-archive-general' || category === 'supplier-archive-sensitive' || category === 'supplier-evidence-documents') {
       return reply.status(403).send({ error: category === 'supplier-evidence-documents' ? '请通过来货证明记录查看附件' : '请通过供应商档案记录查看附件' })
     }
     const url = toHttps(ossClient().signatureUrl(key, { expires }))
     return reply.send({ url })
   })
+}
+
+export function uploadGoodsBatchImage(req:any,reply:any,prefix:string){
+ return uploadOne(req,reply,{allowedMimes:IMAGE_MIMES,category:'upstream-goods-quality',objectPrefix:prefix})
+}
+export async function assertQualityBatchObjects(prefix:string,images:WarehouseDocumentObjectMetadata[]){
+ await Promise.all(images.map(async image=>{
+  if(!image.key.startsWith(prefix)||image.key.includes('..'))throw Object.assign(new Error('图片不属于本次进货'),{statusCode:403})
+  let result:any
+  try{result=await ossClient().head(image.key)}catch(cause:any){throw Object.assign(new Error('质检图片不存在或暂时无法核验，请稍后重试'),{statusCode:cause?.status===404?400:503})}
+  const headers=result?.res?.headers||result?.headers||{}
+  if(Number(headers['content-length']??headers['Content-Length'])!==image.size||String(headers['content-type']??headers['Content-Type']??'').split(';')[0].trim().toLowerCase()!==image.mime.toLowerCase())throw Object.assign(new Error('质检图片大小或类型不一致，请重新上传'),{statusCode:400})
+ }))
 }

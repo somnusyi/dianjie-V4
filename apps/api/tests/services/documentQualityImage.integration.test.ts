@@ -1,5 +1,5 @@
 import {prisma} from '@dianjie/db'
-import {randomUUID} from 'node:crypto'
+import {randomUUID,createHash} from 'node:crypto'
 import {beforeAll,afterAll,it,expect,vi} from 'vitest'
 vi.mock('../../src/routes/upload',async()=>({...await vi.importActual<any>('../../src/routes/upload'),signOssKey:(key:string)=>`http://local.invalid/${key}`}))
 import {getDocumentQualityImage,saveDocumentQualityImage,type QualityImageSource} from '../../src/services/documentQualityImage'
@@ -78,4 +78,48 @@ it('database constraints refuse zero or multiple sources, invalid versions and c
  await expect(prisma.documentQualityImage.create({data:{...base,requestId:randomUUID(),warehouseDocId:ids.WAREHOUSE,version:0}})).rejects.toThrow()
  const other=await prisma.tenant.create({data:{slug:`quality-other-${randomUUID()}`,name:'其他合成租户'}})
  await expect(prisma.documentQualityImage.create({data:{...base,tenantId:other.id,requestId:randomUUID(),warehouseDocId:ids.WAREHOUSE}})).rejects.toThrow()
+})
+it('gallery supports more than nine pictures, retained references, removals and replay after removal',async()=>{
+ const before=await getDocumentQualityImage(input('RETURN')),business=await raw('RETURN')
+ const newImages=Array.from({length:12},(_,i)=>body(0,`凭证${i}.png`).image)
+ const request={...input('RETURN'),body:{version:before.version,requestId:randomUUID(),images:[...before.images.map(image=>({id:image.id})),...newImages]}}
+ const saved=await saveDocumentQualityImage(request,check)
+ expect(saved.images).toHaveLength(13)
+ expect(JSON.stringify(saved)).not.toContain('"key"')
+ const removed=await saveDocumentQualityImage({...input('RETURN'),body:{version:saved.version,requestId:randomUUID(),images:[{id:saved.images[12].id}]}},check)
+ expect(removed.images).toHaveLength(1)
+ expect((await saveDocumentQualityImage(request,check)).replayed).toBe(true)
+ const view=await getDocumentQualityImage(input('RETURN'))
+ expect(view.images).toHaveLength(1);expect(view.history[1].images).toHaveLength(13)
+ expect(await raw('RETURN')).toEqual(business)
+ await expect(saveDocumentQualityImage({...input('RETURN'),body:{version:view.version,requestId:randomUUID(),images:[{id:saved.images[0].id}]}},check)).rejects.toMatchObject({statusCode:400})
+ await expect(saveDocumentQualityImage({...input('RETURN'),body:{version:view.version,requestId:randomUUID(),images:[{id:view.images[0].id},{id:view.images[0].id}]}},check)).rejects.toMatchObject({statusCode:400})
+ const empty=await saveDocumentQualityImage({...input('RETURN'),body:{version:view.version,requestId:randomUUID(),images:[]}},check)
+ expect(empty.images).toEqual([]);expect(empty.image).toBeNull()
+})
+it('legacy additions preserve gallery and original legacy retry fingerprints',async()=>{
+ const before=await getDocumentQualityImage(input('WAREHOUSE'))
+ const request={...input('WAREHOUSE'),body:body(before.version,'追加.png')}
+ const saved=await saveDocumentQualityImage(request,check)
+ expect(saved.images.length).toBe(before.images.length+1)
+ expect((await saveDocumentQualityImage(request,check)).replayed).toBe(true)
+ const overLimit={version:saved.version,requestId:randomUUID(),images:Array.from({length:51},()=>body().image)}
+ await expect(saveDocumentQualityImage({...input('WAREHOUSE'),body:overLimit},check)).rejects.toMatchObject({statusCode:400})
+})
+
+it('reads real legacy single-image rows and replays their original fingerprint unchanged',async()=>{
+ const previous=await getDocumentQualityImage(input('RETURN')),b=body(previous.version,'旧版凭证.png')
+ const fingerprint=createHash('sha256').update(JSON.stringify({userId,kind:'RETURN',sourceId:ids.RETURN,version:b.version,image:b.image})).digest('hex')
+ await prisma.documentQualityImage.create({data:{tenantId,returnId:ids.RETURN,version:b.version+1,requestId:b.requestId,fingerprint,image:b.image,actorId:userId,actorName:'供应链',actorRole:'SUPPLY_CHAIN'}})
+ const result=await saveDocumentQualityImage({...input('RETURN'),body:b},check)
+ expect(result.replayed).toBe(true);expect(result.images.map(image=>image.name)).toEqual(['旧版凭证.png'])
+ const view=await getDocumentQualityImage(input('RETURN'));expect(view.images).toHaveLength(1);expect(JSON.stringify(view)).not.toContain('"key"')
+})
+it('concurrent gallery changes cannot overwrite another addition',async()=>{
+ const view=await getDocumentQualityImage(input('RECEIPT'))
+ const request=(name:string)=>({...input('RECEIPT'),body:{version:view.version,requestId:randomUUID(),images:[...view.images.map(image=>({id:image.id})),body(0,name).image]}})
+ const outcomes=await Promise.allSettled([saveDocumentQualityImage(request('甲.png'),check),saveDocumentQualityImage(request('乙.png'),check)])
+ expect(outcomes.filter(outcome=>outcome.status==='fulfilled')).toHaveLength(1)
+ expect((outcomes.find(outcome=>outcome.status==='rejected') as PromiseRejectedResult).reason.statusCode).toBe(409)
+ const latest=await getDocumentQualityImage(input('RECEIPT'));expect(latest.version).toBe(view.version+1);expect(latest.images).toHaveLength(view.images.length+1)
 })

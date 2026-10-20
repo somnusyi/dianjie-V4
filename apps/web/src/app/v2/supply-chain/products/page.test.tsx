@@ -13,9 +13,7 @@ vi.mock('@/components/v2', () => ({
   Chip: ({ children }: { children: React.ReactNode }) => <span data-chip="true">{children}</span>,
 }))
 
-vi.mock('@/components/v2/product-tool-tabs', () => ({
-  ProductToolTabs: () => <div data-tool-tabs="true" />,
-}))
+vi.mock('next/navigation', () => ({ usePathname: () => '/v2/supply-chain/products' }))
 
 vi.mock('@/components/v2/confirm-sheet', () => ({
   useConfirmSheet: () => [
@@ -144,15 +142,14 @@ describe('商品管理 PC 页面 · 编辑弹窗分类组合框', () => {
     mockFetch.mockReset()
   })
 
-  it('商品列表直接展示单位换算列，不需要进入编辑弹窗查找', async () => {
+  it('商品列表按确认隐藏四个业务列，保留主要商品信息和编辑入口', async () => {
     mockRoutes()
     const { container, root } = render(<InternalSupplyChainProductsPage />)
     await waitFor(() => container.textContent?.includes('土豆') ?? false)
-
-    expect(Array.from(container.querySelectorAll('th')).some(th => th.textContent === '单位换算')).toBe(true)
-    expect(container.textContent).toContain('历史换算未核验')
-    expect(container.textContent).not.toContain('1 kg = 1 kg')
-
+    const headers = Array.from(container.querySelectorAll('th')).map(th => th.textContent?.trim())
+    for (const title of ['采购来源', '单位换算', '库存 / 安全线', '最小下单量']) expect(headers).not.toContain(title)
+    for (const title of ['商品', '分类', '采购价', '状态', '操作']) expect(headers).toContain(title)
+    expect(findButton(container, '编辑')).toBeTruthy()
     cleanup(container, root)
   })
 
@@ -255,87 +252,49 @@ describe('商品管理 PC 页面 · 供应商业务口径', () => {
     mockFetch.mockReset()
   })
 
-  it('区分后台履约主体和页面采购来源，不再把履约主体当商品供应商展示', async () => {
+  it('履约和上游供应商范围独立，列表不展示采购来源，专用供货关系入口仍可找到', async () => {
     mockRoutes()
-
     const { container, root } = render(<InternalSupplyChainProductsPage />)
     await waitFor(() => container.textContent?.includes('土豆') ?? false)
-
-    const supplierCalls = mockFetch.mock.calls
-      .map(call => String(call[0]))
-      .filter(url => url.startsWith('/api/suppliers'))
+    const supplierCalls = mockFetch.mock.calls.map(call => String(call[0])).filter(url => url.startsWith('/api/suppliers'))
     expect(supplierCalls).toContain('/api/suppliers?status=ENABLED&businessScope=STORE_FULFILLER')
     expect(supplierCalls).toContain('/api/suppliers?status=ENABLED&businessScope=WAREHOUSE_UPSTREAM')
     expect(container.textContent).not.toContain('门店供货主体')
-    expect(container.textContent).not.toContain('全部供货主体')
-    expect(container.textContent).toContain('采购来源')
-    expect(container.textContent).toContain('尚未维护')
-
+    expect(container.querySelector('a[href="/v2/supply-chain/relations"]')?.textContent).toBe('供货关系')
+    expect(findButton(container, '添加来源')).toBeUndefined()
     cleanup(container, root)
   })
 
-  it('可为商品添加上游采购来源并提交独立关联', async () => {
+  it('编辑普通字段没有供货区，保存不发送解绑或改绑请求', async () => {
     mockRoutes()
-
     const { container, root } = render(<InternalSupplyChainProductsPage />)
-    await waitFor(() => container.textContent?.includes('添加来源') ?? false)
-
-    act(() => findButton(container, '添加来源')!.click())
-    await waitFor(() => container.textContent?.includes('采购来源 · 土豆') ?? false)
-    await waitFor(() => Boolean(findButton(container, '＋ 添加采购来源')))
-    act(() => findButton(container, '＋ 添加采购来源')!.click())
-    await waitFor(() => container.textContent?.includes('主供应商') ?? false)
-    act(() => findButton(container, '保存采购来源')!.click())
-
-    await waitFor(() => mockFetch.mock.calls.some(call => (
-      String(call[0]) === '/api/product-upstream-sources/p1'
-      && (call[1] as RequestInit | undefined)?.method === 'PUT'
-    )))
-    const putCall = mockFetch.mock.calls.find(call => (
-      String(call[0]) === '/api/product-upstream-sources/p1'
-      && (call[1] as RequestInit | undefined)?.method === 'PUT'
-    ))
-    expect(JSON.parse(String((putCall?.[1] as RequestInit).body))).toMatchObject({
-      sources: [{ supplierId: 'sup-1', isPrimary: true, purchaseUnit: 'kg' }],
-    })
-
+    await waitFor(() => container.textContent?.includes('土豆') ?? false)
+    await act(async () => findButton(container, '编辑')!.click())
+    await waitFor(() => container.textContent?.includes('编辑「土豆」') ?? false)
+    expect(container.textContent).not.toContain('供货关系（总仓向谁采购）')
+    expect(findButton(container, '＋ 添加供应商')).toBeUndefined()
+    const label = Array.from(container.querySelectorAll('label')).find(l => l.textContent?.trim() === '名称 *')!
+    act(() => Simulate.change(label.querySelector('input')!, { target: { value: '土豆改名' } as any }))
+    await act(async () => findButton(container, '保存修改')!.click())
+    await waitFor(() => mockFetch.mock.calls.some(([path, init]) => String(path) === '/api/products/p1' && init?.method === 'PATCH'))
+    const patch = mockFetch.mock.calls.find(([path, init]) => String(path) === '/api/products/p1' && init?.method === 'PATCH')!
+    expect(JSON.parse(String(patch[1]!.body))).toEqual({ name: '土豆改名' })
+    expect(mockFetch.mock.calls.some(([path, init]) => String(path).startsWith('/api/product-upstream-sources') && init?.method === 'PUT')).toBe(false)
     cleanup(container, root)
   })
 
-  it('新增商品时可在加大的供应商选择框内模糊搜索并添加供应商', async () => {
+  it('新增表单不内嵌供应商绑定，仍保留独立三单位设置与供货关系总表入口', async () => {
     mockRoutes()
-
     const { container, root } = render(<InternalSupplyChainProductsPage />)
     await waitFor(() => Boolean(findButton(container, '＋ 新增商品')))
-
-    act(() => findButton(container, '＋ 新增商品')!.click())
-    await waitFor(() => container.textContent?.includes('新增商品') ?? false)
-    await waitFor(() => Boolean(findButton(container, '＋ 添加供应商') && !findButton(container, '＋ 添加供应商')!.disabled))
-
-    act(() => findButton(container, '＋ 添加供应商')!.click())
-    await waitFor(() => Boolean(container.querySelector(
-      'input[placeholder="搜索供应商名称、编码、联系人或电话"]',
-    )))
-    const search = container.querySelector(
-      'input[placeholder="搜索供应商名称、编码、联系人或电话"]',
-    ) as HTMLInputElement | null
-    expect(search).not.toBeNull()
-
-    act(() => { Simulate.change(search!, { target: { value: '蔬菜批' } as any }) })
-    await waitFor(() => Boolean(Array.from(container.querySelectorAll('[role="option"]')).find(option => (
-      option.textContent?.includes('昆明蔬菜批发')
-    ))))
-
-    const option = Array.from(container.querySelectorAll('[role="option"]')).find(item => (
-      item.textContent?.includes('昆明蔬菜批发')
-    )) as HTMLButtonElement | undefined
-    expect(option).toBeTruthy()
-    act(() => option!.click())
-
-    await waitFor(() => container.textContent?.includes('上游供应商 *') ?? false)
-    expect(container.textContent).toContain('昆明蔬菜批发')
-    expect(container.querySelector('[role="listbox"]')).toBeNull()
-
+    await act(async () => findButton(container, '＋ 新增商品')!.click())
+    await waitFor(() => Boolean(container.querySelector('[aria-label="单位换算设置"]')))
+    expect(container.textContent).not.toContain('供货关系（总仓向谁采购）')
+    expect(findButton(container, '＋ 添加供应商')).toBeUndefined()
+    for (const label of ['采购单位（向供应商采购）', '库存最小单位（仓库和成本按它记）', '最小下单量单位（订货单位）']) {
+      expect(Array.from(container.querySelectorAll('label')).some(item => item.textContent?.includes(label))).toBe(true)
+    }
+    expect(container.querySelector('a[href="/v2/supply-chain/relations"]')).not.toBeNull()
     cleanup(container, root)
   })
 })
@@ -478,20 +437,24 @@ describe('商品管理 PC 页面 · 门店端分类隔离', () => {
 })
 
 
-describe('单位换算列表不伪造1:1', () => {
-  it.each(['PENDING', 'VERIFIED'])('原始状态%s分别显示待核或真实比例', async status => {
+describe('单位列表简化后编辑仍保留真实换算', () => {
+  it.each(['PENDING', 'VERIFIED'])('状态%s打开编辑后保留缺失或已确认比例', async status => {
+    mockFetch.mockReset()
     mockRoutes()
     const original = mockFetch.getMockImplementation()!
     const product = { ...PRODUCT, unitConversionStatus: status, purchaseUnit: '箱', inventoryUnit: '瓶', orderUnit: '箱', costUnit: '瓶', inventoryUnitsPerPurchaseUnit: status === 'PENDING' ? null : 10, inventoryUnitsPerOrderUnit: status === 'PENDING' ? null : 10, inventoryUnitsPerCostUnit: 1 }
-    mockFetch.mockImplementation((path, init) => String(path).startsWith('/api/products') && !String(path).startsWith('/api/products/categories')
+    mockFetch.mockImplementation((path, init) => String(path).startsWith('/api/products') && !String(path).startsWith('/api/products/categories') && !init?.method
       ? Promise.resolve(String(path).includes('page=') ? { items: [product], total: 1, page: 1, pageSize: 20 } : [product])
       : original(path, init))
     const { container, root } = render(<InternalSupplyChainProductsPage />)
     await waitFor(() => container.textContent?.includes('土豆') ?? false)
-    if (status === 'PENDING') {
-      expect(container.textContent).toContain('换算待核验')
-      expect(container.textContent).not.toContain('1 箱 = 1 瓶')
-    } else expect(container.textContent).toContain('1 箱 = 10 瓶')
+    expect(Array.from(container.querySelectorAll('th')).some(th => th.textContent === '单位换算')).toBe(false)
+    await act(async () => findButton(container, '编辑')!.click())
+    const section = container.querySelector('[aria-label="单位换算设置"]')!
+    const factorLabel = Array.from(section.querySelectorAll('label')).find(label => label.textContent?.trim() === '1 箱 = ？瓶')!
+    expect(factorLabel.querySelector('input')!.value).toBe(status === 'PENDING' ? '' : '10')
+    expect(section.querySelector('[aria-label="商品最小下单量"]')).not.toBeNull()
+    if (status === 'PENDING') expect(section.textContent).toContain('换算待补齐或核验')
     cleanup(container, root)
   })
 })
@@ -592,4 +555,29 @@ it('三种单位独立换算，起订量位于单位区且编码自动填写不�
   const write=mockFetch.mock.calls.find(([path,init])=>path==='/api/products'&&init?.method==='POST')!
   expect(JSON.parse(String(write[1]?.body))).toMatchObject({code:'TEN0-AUTOCODE01',purchaseUnit:'箱',orderUnit:'kg',inventoryUnit:'g',inventoryUnitsPerPurchaseUnit:2000,inventoryUnitsPerOrderUnit:1000,minOrderQty:2,price:0.005})
  }finally{cleanup(container,root)}
+})
+
+it('先打开新增再收到唯一履约方时，保留已填内容并带入正确履约方保存', async () => {
+  mockFetch.mockReset(); mockRoutes()
+  const original = mockFetch.getMockImplementation()!
+  let resolveSupplier!: (rows: typeof SUPPLIERS) => void
+  const pending = new Promise<typeof SUPPLIERS>(resolve => { resolveSupplier = resolve })
+  mockFetch.mockImplementation((path, init) => {
+    if (String(path).includes('businessScope=STORE_FULFILLER')) return pending
+    if (path === '/api/products' && init?.method === 'POST') return Promise.resolve({ id: 'new-product' })
+    return original(path, init)
+  })
+  const { container, root } = render(<InternalSupplyChainProductsPage />)
+  try {
+    await act(async () => findButton(container, '＋ 新增商品')!.click())
+    const label = Array.from(container.querySelectorAll('label')).find(row => row.textContent?.includes('名称'))!
+    act(() => Simulate.change(label.querySelector('input')!, { target: { value: '袋装米线' } as any }))
+    act(() => Simulate.change(container.querySelector('[aria-label="商品输入单价"]')!, { target: { value: '72' } as any }))
+    await act(async () => { resolveSupplier(SUPPLIERS); await pending })
+    expect((label.querySelector('input') as HTMLInputElement).value).toBe('袋装米线')
+    await act(async () => findButton(container, '新增')!.click())
+    const write = mockFetch.mock.calls.find(([path, init]) => path === '/api/products' && init?.method === 'POST')
+    expect(write).toBeTruthy()
+    expect(JSON.parse(String(write![1]!.body))).toMatchObject({ supplierId: 'sup-1', name: '袋装米线' })
+  } finally { cleanup(container, root) }
 })

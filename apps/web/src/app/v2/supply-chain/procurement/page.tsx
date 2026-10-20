@@ -1,21 +1,26 @@
 'use client'
+import { procurementDecimalProduct } from '@/lib/procurement-decimal-preview'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 import { ProcurementProgressActions } from '@/components/v2/procurement-progress-actions'
-import {DocumentQualityImageButton} from '@/components/v2/document-quality-image'
+import {DocumentQualityImageButton,OrderLineQuality,LegacyQualityImagesButton} from '@/components/v2/document-quality-image'
 import { procurementApprovalRequest, type ProcurementApprovalSource, type ProcurementApprovalAction } from '@/lib/procurement-approval'
 import { claimResolutionCopy, settlementLineTypeLabel } from '@/lib/upstream-settlement-copy'
 import { clientRequestId } from '@/lib/client-id'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT } from '@/components/v2/supply-chain-shell'
 import { printSheet } from './print-sheet'
+import { contractCopyPayload, validContractPrice } from '@/lib/upstream-contract-copy'
+import {contractCopyScope,readContractCopyAttempt,persistContractCopyAttempt,clearContractCopyAttempt,copyRecoverySources,type StoredCopyOriginal} from '@/lib/contract-copy-recovery'
+import {purchaseOrderOverdueText} from '@/lib/purchase-order-overdue'
 import {showTableReport} from '@/lib/table-report'
 import {procurementDocumentReport} from '@/lib/procurement-document-report'
 import {
   currentMonthRange,
   loadCreatedRecord,
   money,
+  unitPriceMoney,
   receiptReviewActionForStatus,
   shortDate,
   statusTone,
@@ -25,6 +30,9 @@ import {
   UPSTREAM_SETTLEMENT_STATUS_LABEL,
 } from '@/lib/upstream-procurement'
 
+type OrderFilters = {dateField: 'createdAt' | 'expectedArrivalAt'; dateFrom: string; dateTo: string; supplierId: string; productQuery: string}
+const EMPTY_ORDER_FILTERS: OrderFilters = {dateField:'createdAt',dateFrom:'',dateTo:'',supplierId:'',productQuery:''}
+
 type Tab = 'orders' | 'receipts' | 'returns' | 'claims' | 'settlements' | 'contracts' | 'standards'
 type Supplier = { id: string; no: string; name: string }
 type Warehouse = { id: string; code: string; name: string }
@@ -33,11 +41,14 @@ type Source = {
   supplierId: string
   purchaseUnit: string
   quotedUnitPrice: string | number | null
+  leadTimeDays?: number
   minOrderQty: string | number
   inventoryUnitsPerPurchaseUnit: string | number
   product: { id: string; code: string; name: string; spec?: string | null; inventoryUnit?: string | null; unit: string }
 }
 type ContractLine = Source & {
+  upstreamSourceId?: string | null
+  isActive?: boolean
   productId: string
   productNameSnapshot: string
   productCodeSnapshot: string
@@ -93,6 +104,7 @@ type OrderLine = {
   qualityCriteriaSnapshot?: Record<string, unknown> | null
 }
 type Order = {
+  rowVersion?: number
   id: string
   no: string
   status: string
@@ -248,7 +260,7 @@ type PurchaseReturn = ProcurementApprovalSource & {
 type PurchaseReturnCreateResult = { replayed: boolean; purchaseReturn: PurchaseReturn }
 type RevisionSnapshot = {
   expectedArrivalAt?: string | null
-  lines?: Array<{ id: string; quantity: string | number }>
+  lines?: Array<{ id: string; quantity: string | number; unitPrice?: string | number }>
 }
 type Claim = {
   id: string
@@ -351,7 +363,7 @@ function qualityCriteriaText(criteria: Record<string, unknown> | null | undefine
 }
 
 function currencyAmount(value: string | number, currency = 'CNY') {
-  return `${currency} ${Number(value).toFixed(2)}`
+  return `${currency} ${Number(value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 6, useGrouping: false })}`
 }
 
 function shanghaiBusinessDate(date = new Date()) {
@@ -393,6 +405,12 @@ export default function UpstreamProcurementPage() {
   const [revisionRejectConfirm, openRevisionRejectConfirm] = useConfirmSheet()
   const [actionConfirm, openActionConfirm] = useConfirmSheet()
   const [orders, setOrders] = useState<Order[]>([])
+  const [orderFilterDraft, setOrderFilterDraft] = useState<OrderFilters>(EMPTY_ORDER_FILTERS)
+  const [orderFilters, setOrderFilters] = useState<OrderFilters>(EMPTY_ORDER_FILTERS)
+  const [orderPage, setOrderPage] = useState(1)
+  const [orderTotal, setOrderTotal] = useState(0)
+  const orderListRequestRef = useRef(0)
+  const loadAllRequestRef = useRef(0)
   const [shipments, setShipments] = useState<Shipment[]>([])
   const [receipts, setReceipts] = useState<Receipt[]>([])
   const [purchaseReturns, setPurchaseReturns] = useState<PurchaseReturn[]>([])
@@ -405,6 +423,16 @@ export default function UpstreamProcurementPage() {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [sources, setSources] = useState<Source[]>([])
   const [contractSupplierId, setContractSupplierId] = useState('')
+  const [contractSupplierQuery, setContractSupplierQuery] = useState('')
+  const [contractCopy, setContractCopy] = useState<Contract | null>(null)
+  const [contractCopyLoading, setContractCopyLoading] = useState(false)
+  const [contractCopyPending, setContractCopyPending] = useState(false)
+  const contractCopyEpoch = useRef(0)
+  const contractCopyBusy = useRef(false)
+  const contractCopyAttempt = useRef<{ body: string; key: string } | null>(null)
+  const contractCopyKey = useRef(clientRequestId())
+  const [contractCopyRecoveryBlocked,setContractCopyRecoveryBlocked]=useState(false)
+  const contractCopyCacheScope=useRef<string|null>(null)
   const [showContractForm, setShowContractForm] = useState(false)
   const [showOrderForm, setShowOrderForm] = useState(false)
   const [contractForm, setContractForm] = useState({
@@ -418,6 +446,7 @@ export default function UpstreamProcurementPage() {
   const [orderWarehouseId, setOrderWarehouseId] = useState('')
   const [orderArrival, setOrderArrival] = useState('')
   const [orderQuantities, setOrderQuantities] = useState<Record<string, string>>({})
+  const [orderProductQuery, setOrderProductQuery] = useState('')
   const [claimingReceipt, setClaimingReceipt] = useState<ReceiptDetail | null>(null)
   const [postClaimType, setPostClaimType] = useState<'SHORTAGE' | 'POST_RECEIPT_DAMAGE'>('POST_RECEIPT_DAMAGE')
   const [postClaimDescription, setPostClaimDescription] = useState('')
@@ -486,12 +515,24 @@ export default function UpstreamProcurementPage() {
     })
   }, [standardScopes])
 
+  const loadOrders = useCallback(async () => {
+    const request = ++orderListRequestRef.current
+    const query = new URLSearchParams({paginated:'true', page:String(orderPage), pageSize:'20', dateField:orderFilters.dateField})
+    for (const key of ['dateFrom','dateTo','supplierId','productQuery'] as const) if (orderFilters[key].trim()) query.set(key, orderFilters[key].trim())
+    const result = await apiFetch<{items:Order[];total:number}>(`/api/upstream/purchase-orders?${query}`)
+    if (request !== orderListRequestRef.current) return
+    setOrders(result.items)
+    setOrderTotal(result.total)
+    if (orderPage > 1 && orderPage > Math.max(1, Math.ceil(result.total / 20))) setOrderPage(Math.max(1, Math.ceil(result.total / 20)))
+  }, [orderPage, orderFilters])
+
   const loadAll = useCallback(async () => {
+    const request = ++loadAllRequestRef.current
     setLoading(true)
     setError(null)
     try {
-      const [orderRows, shipmentRows, receiptRows, returnRows, claimRows, statementRows, contractRows, qualityRows, priceRows, setup] = await Promise.all([
-        apiFetch<Order[]>('/api/upstream/purchase-orders'),
+      const [, shipmentRows, receiptRows, returnRows, claimRows, statementRows, contractRows, qualityRows, priceRows, setup] = await Promise.all([
+        loadOrders(),
         apiFetch<Shipment[]>('/api/upstream/shipments'),
         apiFetch<Receipt[]>('/api/upstream/receipts'),
         apiFetch<PurchaseReturn[]>('/api/upstream/purchase-returns'),
@@ -502,7 +543,7 @@ export default function UpstreamProcurementPage() {
         apiFetch<PriceStandard[]>('/api/upstream/price-standards?includeArchived=1'),
         apiFetch<{ suppliers: Supplier[]; warehouses: Warehouse[] }>('/api/upstream/setup-options'),
       ])
-      setOrders(orderRows)
+      if (request !== loadAllRequestRef.current) return
       setShipments(shipmentRows)
       setReceipts(receiptRows)
       setPurchaseReturns(returnRows)
@@ -520,11 +561,14 @@ export default function UpstreamProcurementPage() {
         supplierId: value.supplierId || setup.suppliers[0]?.id || '',
       }))
     } catch (reason: any) {
+      if (request !== loadAllRequestRef.current) return
+      setOrders([])
+      setOrderTotal(0)
       setError(reason?.message || '上游采购数据加载失败')
     } finally {
-      setLoading(false)
+      if (request === loadAllRequestRef.current) setLoading(false)
     }
-  }, [])
+  }, [loadOrders])
 
   useEffect(() => {
     void loadAll()
@@ -645,6 +689,140 @@ export default function UpstreamProcurementPage() {
     }
   }
 
+  useEffect(() => () => { contractCopyEpoch.current += 1 }, [])
+
+  function currentContractCopyScope(){
+    try{return contractCopyScope(JSON.parse(localStorage.getItem('tenant')||'null')?.id,getUser()?.id)}catch{return null}
+  }
+  useEffect(()=>{
+    const scope=currentContractCopyScope()
+    if(!scope)return
+    let recovered:ReturnType<typeof readContractCopyAttempt>
+    try{recovered=readContractCopyAttempt(sessionStorage,scope)}catch{setContractCopyRecoveryBlocked(true);setError('浏览器存储不可用，请允许本页存储后核对原合同');return}
+    if(recovered.status==='empty')return
+    if(recovered.status==='blocked'){setContractCopyRecoveryBlocked(true);setError(recovered.message);return}
+    const attempt=recovered.attempt,original=attempt.original as unknown as Contract,payload=JSON.parse(attempt.body)
+    contractCopyEpoch.current+=1
+    contractCopyCacheScope.current=scope
+    contractCopyAttempt.current={key:attempt.key,body:attempt.body}
+    contractCopyKey.current=attempt.key
+    setContractCopy(original)
+    setContractCopyPending(true)
+    setContractCopyLoading(false)
+    setContractSupplierId(original.supplierId)
+    setContractSupplierQuery('')
+    setContractForm({contractNo:original.contractNo,title:original.title,startsAt:shanghaiBusinessDate(new Date(original.startsAt))})
+    setSources(copyRecoverySources(attempt.original).map((source,index)=>({...source,quotedUnitPrice:null,product:{...source.product,code:original.lines[index].productCodeSnapshot,name:original.lines[index].productNameSnapshot,spec:original.lines[index].productSpecSnapshot}})))
+    setSourcePrices(Object.fromEntries(payload.lines.map((line:{upstreamSourceId:string;unitPrice:number})=>[line.upstreamSourceId,String(line.unitPrice)])))
+    setShowContractForm(true)
+    setTab('contracts')
+    setNotice('已恢复原合同创建请求，请核对并重试；价格已锁定，不会重复创建版本')
+  },[])
+
+
+  function toggleContractForm() {
+    if (working === 'create-contract' || contractCopyBusy.current || contractCopyRecoveryBlocked) return
+    if (contractCopyAttempt.current) {
+      setError('新版合同创建结果待核对，请先重试原创建请求，不能关闭后重复创建')
+      return
+    }
+    const close = () => { if (contractCopyBusy.current || contractCopyAttempt.current) { setError('请先核对原创建请求，再关闭表单'); return }
+      contractCopyEpoch.current += 1
+      sourceRequestRef.current += 1
+      if (contractCopy) {
+        setContractCopy(null)
+        setSources([])
+        setSourcePrices({})
+        setContractSupplierId('')
+        setContractForm({ contractNo: '', title: '', startsAt: shanghaiBusinessDate() })
+      }
+      setContractCopyLoading(false)
+      setError(null)
+      setShowContractForm(value => !value)
+    }
+    if (showContractForm && contractCopy) {
+      openActionConfirm({ title: '放弃本次合同改价？', body: '原合同和旧订单不会改变。', confirmLabel: '放弃修改', tone: 'danger', onConfirm: close })
+    } else close()
+  }
+
+  async function openContractCopy(original: Contract) {
+    if (working || showContractForm || showOrderForm || contractCopyBusy.current || contractCopyAttempt.current || contractCopyRecoveryBlocked) return
+    const epoch = ++contractCopyEpoch.current
+    const request = ++sourceRequestRef.current
+    contractCopyKey.current = clientRequestId()
+    contractCopyAttempt.current = null
+    setContractCopyPending(false)
+    setContractCopy(original)
+    setContractCopyLoading(true)
+    setContractSupplierId(original.supplierId)
+    setContractSupplierQuery('')
+    setContractForm({ contractNo: original.contractNo, title: original.title, startsAt: shanghaiBusinessDate(new Date(original.startsAt)) })
+    setSources([])
+    setSourcePrices({})
+    setShowContractForm(true)
+    setError(null)
+    try {
+      const setup = await apiFetch<{ sources: Source[] }>(`/api/upstream/setup-options?supplierId=${encodeURIComponent(original.supplierId)}`)
+      if (epoch !== contractCopyEpoch.current || request !== sourceRequestRef.current) return
+      const prices = Object.fromEntries(original.lines.map(line => [line.upstreamSourceId || '', String(line.unitPrice)]))
+      contractCopyPayload(original, setup.sources, prices, contractCopyKey.current)
+      const selected = original.lines.map(line => setup.sources.find(source => source.id === line.upstreamSourceId)!)
+      setSources(selected)
+      setSourcePrices(prices)
+    } catch (reason: any) {
+      if (epoch === contractCopyEpoch.current) setError(reason?.message || '原合同条款核对失败，未生成新版本')
+    } finally {
+      if (epoch === contractCopyEpoch.current) setContractCopyLoading(false)
+    }
+  }
+
+  async function createContractCopy() {
+    if (!contractCopy || contractCopyLoading || contractCopyBusy.current || contractCopyRecoveryBlocked) return
+    const epoch = contractCopyEpoch.current
+    let body: string
+    try {
+      body = contractCopyAttempt.current?.body || JSON.stringify(contractCopyPayload(contractCopy, sources, sourcePrices, contractCopyKey.current))
+    } catch (reason: any) { setError(reason.message); return }
+    const cacheScope=currentContractCopyScope()
+    if(!cacheScope||contractCopyCacheScope.current&&contractCopyCacheScope.current!==cacheScope){setError('账号范围已变化，请重新登录原账号核对合同创建请求');return}
+    const persisted={body,key:contractCopyKey.current,original:contractCopy as unknown as StoredCopyOriginal}
+    try{persistContractCopyAttempt(sessionStorage,cacheScope,persisted)}catch(reason:any){setError(reason.message);return}
+    contractCopyCacheScope.current=cacheScope
+    contractCopyBusy.current = true
+    contractCopyAttempt.current = { body, key: contractCopyKey.current }
+    setContractCopyPending(true)
+    const succeeded = await run('create-contract', async () => {
+      try {
+        return await apiFetch<Pick<Contract, 'id' | 'contractNo' | 'title'>>('/api/upstream/contracts', { method: 'POST', body })
+      } catch (reason: any) {
+        // A definite 4xx rejection did not create a contract; network/5xx results retain the original request.
+        if (reason?.status >= 400 && reason?.status < 500 && reason.status !== 408 && reason.status !== 429) {
+          clearContractCopyAttempt(sessionStorage,cacheScope,persisted)
+          if(epoch===contractCopyEpoch.current&&currentContractCopyScope()===cacheScope){contractCopyAttempt.current = null;setContractCopyPending(false)}
+        }
+        throw reason
+      }
+    }, '新版合同草稿已创建；启用后只影响新订单，旧订单保持原价', async created => {
+      clearContractCopyAttempt(sessionStorage,cacheScope,persisted)
+      if (epoch !== contractCopyEpoch.current || currentContractCopyScope()!==cacheScope) return
+      contractCopyAttempt.current = null
+      setContractCopyPending(false)
+      const loaded = await loadCreatedRecord(created.id, () => apiFetch<Contract[]>('/api/upstream/contracts'))
+      if (epoch !== contractCopyEpoch.current) return
+      if (loaded) { setContracts(loaded.rows); setViewingContract(loaded.record); focusRecord('contracts', `contract-${created.id}`) }
+      setNoticeAction({ label: '启用新版合同', run: () => confirmContractActivation(created) })
+    })
+    contractCopyBusy.current = false
+    if (succeeded && epoch === contractCopyEpoch.current && currentContractCopyScope()===cacheScope) {
+      setShowContractForm(false)
+      setContractCopy(null)
+      setSources([])
+      setSourcePrices({})
+      setContractSupplierId('')
+      setContractForm({ contractNo: '', title: '', startsAt: shanghaiBusinessDate() })
+    }
+  }
+
   async function loadSources(supplierId: string) {
     const requestId = ++sourceRequestRef.current
     setContractSupplierId(supplierId)
@@ -688,13 +866,15 @@ export default function UpstreamProcurementPage() {
   }
 
   async function createContract() {
+    if(contractCopyRecoveryBlocked){setError('请先核对浏览器保留的合同创建记录，不能另建合同');return}
+    if (contractCopy) return createContractCopy()
     // 填了但无效 (负数/非数字) 的单价不能静默丢弃, 必须点名提示
     const invalidPriced = sources.filter((source) => {
       const raw = (sourcePrices[source.id] || '').trim()
-      return raw !== '' && !(Number(raw) > 0)
+      return raw !== '' && !validContractPrice(raw)
     })
     if (invalidPriced.length > 0) {
-      setError(`以下商品的单价无效，未纳入合同：${invalidPriced.map((source) => source.product.name).join('、')}。请改为大于 0 的价格，或清空后重试。`)
+      setError(`以下商品的单价无效，未纳入合同：${invalidPriced.map((source) => source.product.name).join('、')}。请填写大于 0、最多六位小数的价格，或清空后重试。`)
       return
     }
     const lines = sources
@@ -772,16 +952,17 @@ export default function UpstreamProcurementPage() {
 
   function selectOrderContract(id: string) {
     setOrderContractId(id)
-    const contract = activeContracts.find((item) => item.id === id)
-    setOrderQuantities(
-      Object.fromEntries(
-        (contract?.lines || []).map((line) => {
-          const minimum = Math.max(Number(line.minOrderQty || 1), Number(line.packageMultiple || 1))
-          const multiple = Math.max(Number(line.packageMultiple || 1), 0.000001)
-          return [line.id, String(Math.ceil(minimum / multiple) * multiple)]
-        })
-      )
-    )
+    setOrderQuantities({})
+    setOrderProductQuery('')
+  }
+
+  function addOrderProduct(line: ContractLine) {
+    const minimum = Math.max(Number(line.minOrderQty || 1), Number(line.packageMultiple || 1))
+    const multiple = Math.max(Number(line.packageMultiple || 1), 0.000001)
+    setOrderQuantities(current => Object.hasOwn(current, line.id) ? current : {
+      ...current, [line.id]: String(Math.ceil(minimum / multiple) * multiple),
+    })
+    setOrderProductQuery('')
   }
 
   async function openQuickContract() {
@@ -798,6 +979,13 @@ export default function UpstreamProcurementPage() {
     })
     setQuickContractFromOrder(true)
     await loadSources(orderSupplierId)
+  }
+
+  function openNewOrderForm() {
+    setOrderQuantities({})
+    setOrderProductQuery('')
+    setShowOrderForm(true)
+    setTab('orders')
   }
 
   async function createOrder() {
@@ -1095,7 +1283,7 @@ export default function UpstreamProcurementPage() {
     if (!revision) throw new Error('未找到待审核改单')
     return apiFetch(`/api/upstream/purchase-orders/${order.id}/revisions/${revision.id}/review`, {
       method: 'POST',
-      body: JSON.stringify({ decision, ...(note ? { note } : {}) }),
+      body: JSON.stringify({ decision, rowVersion: detail.rowVersion, ...(note ? { note } : {}) }),
     })
   }
 
@@ -1178,10 +1366,7 @@ export default function UpstreamProcurementPage() {
               刷新
             </ActionButton>
             <ActionButton
-              onClick={() => {
-                setShowOrderForm(true)
-                setTab('orders')
-              }}
+              onClick={openNewOrderForm}
             >
               新建采购单
             </ActionButton>
@@ -1250,7 +1435,7 @@ export default function UpstreamProcurementPage() {
                       <th className="p-2">单位</th>
                       <th className="p-2">单价</th>
                       <th className="p-2">金额</th>
-                    </tr>
+                    <th className="p-2">质检</th></tr>
                   </thead>
                   <tbody>
                     {viewingPurchaseReturn.lines.map((line) => (
@@ -1262,8 +1447,8 @@ export default function UpstreamProcurementPage() {
                         <td className="p-2">{line.product.spec || '—'}</td>
                         <td className="p-2">{String(line.purchaseQuantity)}</td>
                         <td className="p-2">{line.purchaseUnit}</td>
-                        <td className="p-2">{money(line.settlementUnitPrice)}</td>
-                        <td className="p-2">{money(line.settlementAmount)}</td>
+                        <td className="p-2">{unitPriceMoney(line.settlementUnitPrice)}</td>
+                        <td className="p-2">{money(line.settlementAmount)}</td><td className="p-2"><DocumentQualityImageButton kind="BATCH" sourceId={`R:${line.receiptLineId}`}/></td>
                       </tr>
                     ))}
                   </tbody>
@@ -1272,7 +1457,7 @@ export default function UpstreamProcurementPage() {
               <div className="mt-4 rounded-xl border border-border p-3">
                 <p className="mb-3 text-caption text-gray2">审核只改变进度；另一名供应链人员复审后才出库。</p>
                 <ProcurementProgressActions kind="RETURN" row={viewingPurchaseReturn} role={getUser()?.role || ''} busy={Boolean(working)} onAction={action => confirmProcurementProgress('RETURN', viewingPurchaseReturn, action)} />
-              <DocumentQualityImageButton kind="RETURN" sourceId={viewingPurchaseReturn.id} />
+              <LegacyQualityImagesButton kind="RETURN" sourceId={viewingPurchaseReturn.id} />
               </div>
             </Panel>
           </div>
@@ -1299,6 +1484,7 @@ export default function UpstreamProcurementPage() {
                   <div>{money(viewingOrder.totalAmount)}</div>
                 </div>
               </div>
+
               <div className="mt-4 overflow-x-auto">
                 <table className="w-full text-left text-caption">
                   <thead>
@@ -1311,7 +1497,7 @@ export default function UpstreamProcurementPage() {
                       <th className="p-2">已收数量</th>
                       <th className="p-2">单价</th>
                       <th className="p-2">小计</th>
-                    </tr>
+                    <th className="p-2">质检</th></tr>
                   </thead>
                   <tbody>
                     {(viewingOrder.lines || []).map((line) => {
@@ -1326,8 +1512,8 @@ export default function UpstreamProcurementPage() {
                           <td className="p-2">{quantity}</td>
                           <td className="p-2">{String(line.shippedQty)}</td>
                           <td className="p-2">{String(line.receivedQty)}</td>
-                          <td className="p-2">{money(line.unitPrice)}</td>
-                          <td className="p-2">{money(quantity * Number(line.unitPrice))}</td>
+                          <td className="p-2">{unitPriceMoney(line.unitPrice)}</td>
+                          <td className="p-2">{money(quantity * Number(line.unitPrice))}</td><td className="p-2"><OrderLineQuality orderId={viewingOrder.id} lineId={line.id}/></td>
                         </tr>
                       )
                     })}
@@ -1394,7 +1580,7 @@ export default function UpstreamProcurementPage() {
                       <th className="p-2">拒收</th>
                       <th className="p-2">单位</th>
                       <th className="p-2">应付</th>
-                    </tr>
+                    <th className="p-2">质检</th></tr>
                   </thead>
                   <tbody>
                     {viewingReceipt.lines.map((line) => (
@@ -1429,7 +1615,7 @@ export default function UpstreamProcurementPage() {
                         <td className="p-2">{String(line.damagedQty ?? 0)}</td>
                         <td className="p-2">{String(line.rejectedQty ?? 0)}</td>
                         <td className="p-2">{line.purchaseUnit}</td>
-                        <td className="p-2">{line.payableAmount == null ? '—' : money(line.payableAmount)}</td>
+                        <td className="p-2">{line.payableAmount == null ? '—' : money(line.payableAmount)}</td><td className="p-2"><DocumentQualityImageButton kind="BATCH" sourceId={`R:${line.id}`}/></td>
                       </tr>
                     ))}
                   </tbody>
@@ -1451,7 +1637,7 @@ export default function UpstreamProcurementPage() {
               <div className="mt-4 rounded-xl border border-border p-3">
                 <p className="mb-3 text-caption text-gray2">提交、审核不改变库存，复审后才生效；超标准价不能验收入库。</p>
                 <ProcurementProgressActions kind="RECEIPT" row={viewingReceipt} role={getUser()?.role || ''} busy={Boolean(working)} onAction={action => confirmProcurementProgress('RECEIPT', viewingReceipt, action)} />
-              <DocumentQualityImageButton kind="RECEIPT" sourceId={viewingReceipt.id} />
+              <LegacyQualityImagesButton kind="RECEIPT" sourceId={viewingReceipt.id} />
               </div>
             </Panel>
           </div>
@@ -1472,7 +1658,7 @@ export default function UpstreamProcurementPage() {
                         <div className="rounded-xl border border-amber/30 bg-amber/10 p-3 text-caption">
                           <b>第 {revision.revisionNo} 次改单</b>
                           <span className="ml-2 text-gray2">{revision.reason}</span>
-                          <div className="mt-1 text-gray3">请先核对以下修改内容，再接受或驳回。</div>
+                          <div className="mt-1 text-gray3">请先核对以下修改内容，再接受或驳回。金额为数量×单价；批准仅影响本单，不回写合同或其他订单。</div>
                         </div>
                         <div className="mt-4 overflow-x-auto">
                           <table className="w-full text-left text-caption">
@@ -1483,6 +1669,7 @@ export default function UpstreamProcurementPage() {
                                 <th className="p-2">新数量</th>
                                 <th className="p-2">变化</th>
                                 <th className="p-2">单位</th>
+                                <th className="p-2">原单价</th><th className="p-2">申请单价</th><th className="p-2">原金额</th><th className="p-2">申请金额</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -1499,6 +1686,7 @@ export default function UpstreamProcurementPage() {
                                     {row.delta}
                                   </td>
                                   <td className="p-2">{row.unit}</td>
+                                  <td className="p-2">{row.beforePrice} 元/{row.unit}</td><td className="p-2">{row.afterPrice} 元/{row.unit}</td><td className="p-2">{row.beforeAmount}</td><td className="p-2">{row.afterAmount}</td>
                                 </tr>
                               ))}
                             </tbody>
@@ -1544,6 +1732,9 @@ export default function UpstreamProcurementPage() {
                       value={orderSupplierId}
                       onChange={(event) => {
                         setOrderSupplierId(event.target.value)
+                        setOrderContractId('')
+                        setOrderQuantities({})
+                        setOrderProductQuery('')
                         setQuickContractFromOrder(false)
                       }}
                       className="input"
@@ -1596,45 +1787,29 @@ export default function UpstreamProcurementPage() {
                   </Field>
                 </div>
                 {selectedOrderContract && (
-                  <div className="mt-4 overflow-x-auto">
-                    <table className="w-full text-left text-caption">
-                      <thead>
-                        <tr className="border-b">
-                          <th className="p-2">商品</th>
-                          <th className="p-2">合同价</th>
-                          <th className="p-2">采购数量</th>
-                        </tr>
-                      </thead>
+                  <section className="mt-4 space-y-3" aria-label="采购商品选择">
+                    <input type="search" aria-label="搜索采购商品" placeholder="搜索商品名称、编码或规格，点击添加" className="input" value={orderProductQuery} onChange={event => setOrderProductQuery(event.target.value)} />
+                    {orderProductQuery.trim() && <div className="max-h-64 overflow-auto rounded-xl border border-border" aria-label="采购商品搜索结果">
+                      {selectedOrderContract.lines.filter(line => `${line.productNameSnapshot} ${line.productCodeSnapshot} ${line.productSpecSnapshot || ''}`.toLowerCase().includes(orderProductQuery.trim().toLowerCase())).slice(0, 30).map(line => <div key={line.id} className="flex items-center justify-between gap-3 border-b border-border p-3">
+                        <div><b>{line.productNameSnapshot}</b><div className="text-gray3">{line.productCodeSnapshot} · {line.productSpecSnapshot || '—'} · {unitPriceMoney(line.unitPrice)} / {line.purchaseUnit}</div></div>
+                        <button type="button" aria-label={`添加采购商品 ${line.productNameSnapshot}`} disabled={Object.hasOwn(orderQuantities, line.id)} onClick={() => addOrderProduct(line)} className="shrink-0 rounded-lg border border-border px-3 py-2 disabled:opacity-40">{Object.hasOwn(orderQuantities, line.id) ? '已添加' : '添加'}</button>
+                      </div>)}
+                      {!selectedOrderContract.lines.some(line => `${line.productNameSnapshot} ${line.productCodeSnapshot} ${line.productSpecSnapshot || ''}`.toLowerCase().includes(orderProductQuery.trim().toLowerCase())) && <p className="p-3 text-gray3">该合同没有符合条件的商品</p>}
+                      <p className="p-2 text-micro text-gray3">每次显示前30项，可继续输入名称或编码缩小范围。</p>
+                    </div>}
+                    <div className="overflow-x-auto"><table className="w-full text-left text-caption">
+                      <thead><tr className="border-b"><th className="p-2">序号</th><th className="p-2">商品</th><th className="p-2">合同价</th><th className="p-2">采购数量</th><th className="p-2">操作</th></tr></thead>
                       <tbody>
-                        {selectedOrderContract.lines.map((line) => (
-                          <tr key={line.id} className="border-b border-border">
-                            <td className="p-2">
-                              <b>{line.productNameSnapshot}</b>
-                              <div className="text-gray3">
-                                {line.productSpecSnapshot || '—'} · {line.purchaseUnit}
-                              </div>
-                            </td>
-                            <td className="p-2">{money(line.unitPrice)}</td>
-                            <td className="p-2">
-                              <input
-                                type="number"
-                                min="0"
-                                step="any"
-                                value={orderQuantities[line.id] || ''}
-                                onChange={(event) =>
-                                  setOrderQuantities((value) => ({
-                                    ...value,
-                                    [line.id]: event.target.value,
-                                  }))
-                                }
-                                className="input max-w-36"
-                              />
-                            </td>
-                          </tr>
-                        ))}
+                        {selectedOrderContract.lines.filter(line => Object.hasOwn(orderQuantities, line.id)).map((line, index) => <tr key={line.id} className="border-b border-border">
+                          <td className="p-2">{index + 1}</td><td className="p-2"><b>{line.productNameSnapshot}</b><div className="text-gray3">{line.productCodeSnapshot} · {line.productSpecSnapshot || '—'} · {line.purchaseUnit}</div></td>
+                          <td className="p-2">{unitPriceMoney(line.unitPrice)} / {line.purchaseUnit}</td>
+                          <td className="p-2"><input type="number" onWheel={event => event.currentTarget.blur()} aria-label={`${line.productNameSnapshot}采购数量`} min="0" step="any" value={orderQuantities[line.id] || ''} onChange={event => setOrderQuantities(current => ({...current, [line.id]: event.target.value}))} className="input max-w-36" /></td>
+                          <td className="p-2"><button type="button" aria-label={`移除采购商品 ${line.productNameSnapshot}`} onClick={() => setOrderQuantities(current => { const next = {...current}; delete next[line.id]; return next })} className="text-red-fg">移除</button></td>
+                        </tr>)}
+                        {Object.keys(orderQuantities).length === 0 && <tr><td colSpan={5} className="p-5 text-center text-gray3">尚未添加商品，请先搜索要采购的商品。</td></tr>}
                       </tbody>
-                    </table>
-                  </div>
+                    </table></div>
+                  </section>
                 )}
                 <div className="mt-4 flex justify-end">
                   <ActionButton onClick={() => void createOrder()} disabled={working === 'create-order' || !selectedOrderContract}>
@@ -1708,6 +1883,7 @@ export default function UpstreamProcurementPage() {
                               className="input w-40"
                               aria-label={`${source.product.name}合同单价`}
                               type="number"
+                              onWheel={event => event.currentTarget.blur()}
                               min="0"
                               step="0.01"
                               value={sourcePrices[source.id] || ''}
@@ -1740,14 +1916,26 @@ export default function UpstreamProcurementPage() {
                 </div>
               </Panel>
             )}
+            <section aria-label="采购单筛选" className="rounded-xl border border-border bg-white p-3">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+                <Field label="日期口径"><select aria-label="采购日期口径" className="input" value={orderFilterDraft.dateField} onChange={event => setOrderFilterDraft(current => ({...current,dateField:event.target.value as OrderFilters['dateField']}))}><option value="createdAt">下单日</option><option value="expectedArrivalAt">到货日</option></select></Field>
+                <Field label="开始日期"><input aria-label="采购开始日期" type="date" className="input" value={orderFilterDraft.dateFrom} onChange={event => setOrderFilterDraft(current => ({...current,dateFrom:event.target.value}))} /></Field>
+                <Field label="结束日期"><input aria-label="采购结束日期" type="date" className="input" value={orderFilterDraft.dateTo} onChange={event => setOrderFilterDraft(current => ({...current,dateTo:event.target.value}))} /></Field>
+                <Field label="供应商"><select aria-label="筛选采购供应商" className="input" value={orderFilterDraft.supplierId} onChange={event => setOrderFilterDraft(current => ({...current,supplierId:event.target.value}))}><option value="">全部供应商</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}</select></Field>
+                <Field label="商品"><input aria-label="筛选采购商品" type="search" className="input" placeholder="商品名称 / 编码" value={orderFilterDraft.productQuery} onChange={event => setOrderFilterDraft(current => ({...current,productQuery:event.target.value}))} onKeyDown={event => {if(event.key==='Enter'){setOrderPage(1);setOrderFilters({...orderFilterDraft})}}} /></Field>
+                <div className="flex items-end gap-2"><button type="button" className="rounded-lg bg-ink px-4 py-2 text-white" onClick={() => {setOrderPage(1);setOrderFilters({...orderFilterDraft})}}>查询</button><button type="button" className="rounded-lg border border-border px-4 py-2" onClick={() => {setOrderFilterDraft(EMPTY_ORDER_FILTERS);setOrderFilters(EMPTY_ORDER_FILTERS);setOrderPage(1)}}>重置</button></div>
+              </div>
+              <p className="mt-2 text-micro text-gray3">按上海日期查询 · 共 {orderTotal} 张采购单</p>
+            </section>
             {orders.length === 0 ? (
-              <Empty text="还没有上游采购单" actionLabel="新建采购单" onAction={() => setShowOrderForm(true)} />
+              <Empty text={Object.entries(orderFilters).some(([key,value])=>key!=='dateField'&&value.trim())?'没有符合筛选条件的采购单':'还没有上游采购单'} actionLabel="新建采购单" onAction={openNewOrderForm} />
             ) : (
-              orders.map((order) => (
+              orders.map((order, index) => (
                 <article id={`order-${order.id}`} key={order.id} className="rounded-2xl border border-border bg-white p-4 shadow-sm">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
+                        <span aria-label="采购单序号" className="mr-2 font-num text-gray3">{(orderPage - 1) * 20 + index + 1}</span>
                         <button type="button" onClick={() => void openOrderDetail(order)} className="text-h3 underline decoration-dotted underline-offset-4" aria-label={`查看采购单 ${order.no} 明细`}>
                           {order.no}
                         </button>
@@ -1796,6 +1984,7 @@ export default function UpstreamProcurementPage() {
                 </article>
               ))
             )}
+            <div className="flex items-center justify-end gap-3 text-caption" aria-label="采购单分页"><button type="button" disabled={orderPage<=1} onClick={() => setOrderPage(page => page-1)} className="rounded-lg border border-border px-3 py-2 disabled:opacity-40">上一页</button><span>第 {orderPage} / {Math.max(1,Math.ceil(orderTotal/20))} 页 · 每页20条</span><button type="button" disabled={orderPage*20>=orderTotal} onClick={() => setOrderPage(page => page+1)} className="rounded-lg border border-border px-3 py-2 disabled:opacity-40">下一页</button></div>
             <div className="rounded-2xl border border-border bg-white p-4">
               <h2 className="text-h3">供应商发货动态</h2>
               <div className="mt-3 space-y-2">
@@ -1810,6 +1999,7 @@ export default function UpstreamProcurementPage() {
                           采购单 {shipment.purchaseOrder.no} · {shipment.lines.length} 项 · {shipment.status}
                         </p>
                       </div>
+                      <div className="overflow-x-auto"><table className="text-caption"><thead><tr><th className="p-2">商品</th><th className="p-2">数量 / 单位</th><th className="p-2">质检</th></tr></thead><tbody>{shipment.lines.map(line=><tr key={line.id}><td className="p-2">{line.purchaseOrderLine.productNameSnapshot}</td><td className="p-2">{line.shippedQty} {line.purchaseUnit}</td><td className="p-2"><DocumentQualityImageButton kind="BATCH" sourceId={`S:${line.id}`}/></td></tr>)}</tbody></table></div>
                       {['SHIPPED', 'PARTIALLY_RECEIVED'].includes(shipment.status) && !shipmentFullyInspected(shipment) && <a className="rounded-lg border border-accent px-3 py-2 text-accent" href={`/v2/supply-chain/procurement/receipts/new?shipment=${encodeURIComponent(shipment.id)}`}>登记到货</a>}
                     </div>
                   ))
@@ -1888,6 +2078,7 @@ export default function UpstreamProcurementPage() {
                             <td className="p-2">
                               <input
                                 type="number"
+                              onWheel={event => event.currentTarget.blur()}
                                 min="0"
                                 max={maximum}
                                 step="any"
@@ -1978,7 +2169,7 @@ export default function UpstreamProcurementPage() {
                         {receipt.status === 'POSTED' ? '查看来货证明' : '维护来货证明'}
                       </a>
                       <ProcurementProgressActions kind="RECEIPT" row={receipt} role={getUser()?.role || ''} busy={Boolean(working)} onAction={action => confirmProcurementProgress('RECEIPT', receipt, action)} />
-              <DocumentQualityImageButton kind="RECEIPT" sourceId={receipt.id} />
+
                       {receipt.status === 'POSTED' && (
                         <ActionButton tone="light" onClick={() => void openPostReceiptClaim(receipt)}>
                           收货后补报异常
@@ -2043,7 +2234,7 @@ export default function UpstreamProcurementPage() {
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <ProcurementProgressActions kind="RETURN" row={row} role={getUser()?.role || ''} busy={Boolean(working)} onAction={action => confirmProcurementProgress('RETURN', row, action)} />
-              <DocumentQualityImageButton kind="RETURN" sourceId={row.id} />
+
                       {row.status === 'APPROVED' && (
                         <ActionButton
                           onClick={() => openActionConfirm({
@@ -2491,7 +2682,7 @@ export default function UpstreamProcurementPage() {
                             1 {line.purchaseUnit} = {String(line.inventoryUnitsPerPurchaseUnit)} {line.inventoryUnit}
                           </td>
                           <td className="p-2">
-                            <b>{money(line.unitPrice)}</b>
+                            <b>{unitPriceMoney(line.unitPrice)}</b>
                           </td>
                           <td className="p-2">{formatPercent(line.taxRate)}</td>
                           <td className="p-2">{String(line.minOrderQty)}</td>
@@ -2508,17 +2699,26 @@ export default function UpstreamProcurementPage() {
               </Panel>
             )}
             <div className="flex justify-end">
-              <ActionButton onClick={() => setShowContractForm((value) => !value)}>{showContractForm ? '收起' : '新建合同'}</ActionButton>
+              {contractCopyRecoveryBlocked&&<p role="alert" className="text-red-700">合同创建恢复记录无法读取，请先核对已有合同，不要重新创建。</p>}
+              <ActionButton onClick={toggleContractForm} disabled={working === 'create-contract' || contractCopyRecoveryBlocked}>{showContractForm ? '收起' : '新建合同'}</ActionButton>
             </div>
             {showContractForm && (
-              <Panel title="新建月结合同">
+              <Panel title={contractCopy ? `复制合同 V${contractCopy.version} 为新版草稿` : '新建月结合同'}>
+                {contractCopy && <div className="mb-3 rounded-xl border border-amber/30 bg-amber/10 p-3 text-caption">
+                  仅修改下列商品价格；供应商、编号、结算、币种、税率、起止日期、容差及附件等原条款全部保留。
+                  原有效期：{shortDate(contractCopy.startsAt)} 至 {shortDate(contractCopy.endsAt)}；不自动延长已过期合同。
+                  保存仅建草稿，供应链启用新版后只影响新订单，旧订单不改。
+                  {contractCopyLoading && <p>正在核对原供货关系与单位换算…</p>}
+                  {contractCopyPending && <p>创建结果待核对：价格已锁定，请重试原创建请求，不要另建合同。</p>}
+                </div>}
                 <div className="grid gap-3 md:grid-cols-4">
                   <Field label="供应商">
-                    <select className="input" value={contractSupplierId} onChange={(event) => void loadSources(event.target.value)}>
+                    <input type="search" aria-label="搜索合同供应商" disabled={Boolean(contractCopy)} placeholder="输入供应商名称或编号" value={contractSupplierQuery} onChange={event => setContractSupplierQuery(event.target.value)} className="input mb-2" />
+                    <select aria-label="合同供应商" disabled={Boolean(contractCopy)} className="input" value={contractSupplierId} onChange={(event) => void loadSources(event.target.value)}>
                       <option value="">请选择</option>
-                      {suppliers.map((supplier) => (
+                      {suppliers.filter(supplier => supplier.id === contractSupplierId || `${supplier.no} ${supplier.name}`.toLowerCase().includes(contractSupplierQuery.trim().toLowerCase())).map((supplier) => (
                         <option key={supplier.id} value={supplier.id}>
-                          {supplier.name}
+                          {supplier.no} · {supplier.name}
                         </option>
                       ))}
                     </select>
@@ -2526,6 +2726,7 @@ export default function UpstreamProcurementPage() {
                   <Field label="合同编号">
                     <input
                       className="input"
+                      disabled={Boolean(contractCopy)}
                       value={contractForm.contractNo}
                       onChange={(event) =>
                         setContractForm((value) => ({
@@ -2539,6 +2740,7 @@ export default function UpstreamProcurementPage() {
                   <Field label="合同名称">
                     <input
                       className="input"
+                      disabled={Boolean(contractCopy)}
                       value={contractForm.title}
                       onChange={(event) =>
                         setContractForm((value) => ({
@@ -2553,6 +2755,7 @@ export default function UpstreamProcurementPage() {
                     <input
                       className="input"
                       type="date"
+                      disabled={Boolean(contractCopy)}
                       value={contractForm.startsAt}
                       onChange={(event) =>
                         setContractForm((value) => ({
@@ -2570,7 +2773,7 @@ export default function UpstreamProcurementPage() {
                         <th className="p-2">商品</th>
                         <th className="p-2">采购单位</th>
                         <th className="p-2">库存换算</th>
-                        <th className="p-2">含税单价（留空不纳入）</th>
+                        <th className="p-2">{contractCopy ? `${contractCopy.taxInclusive ? '含税' : '不含税'}单价（全部保留）` : '含税单价（留空不纳入）'}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2589,7 +2792,10 @@ export default function UpstreamProcurementPage() {
                           <td className="p-2">
                             <input
                               className="input w-36"
+                              aria-label={`${source.product.name}合同单价`}
+                              disabled={contractCopyPending}
                               type="number"
+                              onWheel={event => event.currentTarget.blur()}
                               min="0"
                               step="0.01"
                               value={sourcePrices[source.id] || ''}
@@ -2608,16 +2814,16 @@ export default function UpstreamProcurementPage() {
                   {contractSupplierId && sources.length === 0 && (
                     <p className="p-4 text-caption text-gray3">
                       该供应商尚未绑定可采购商品，
-                      <a href="/v2/supply-chain/products" className="text-accent underline">
-                        去商品管理维护供货关系与价格
+                      <a href="/v2/supply-chain/suppliers" className="text-accent underline">
+                        去供应商管理维护供货商品与价格
                       </a>
                       。
                     </p>
                   )}
                 </div>
                 <div className="mt-4 flex justify-end">
-                  <ActionButton onClick={() => void createContract()} disabled={working === 'create-contract'}>
-                    保存合同草稿
+                  <ActionButton onClick={() => void createContract()} disabled={working === 'create-contract' || contractCopyLoading || Boolean(contractCopy && sources.length === 0)}>
+                    {contractCopyPending ? '核对并重试原创建' : contractCopy ? '保存新版合同草稿' : '保存合同草稿'}
                   </ActionButton>
                 </div>
               </Panel>
@@ -2652,6 +2858,7 @@ export default function UpstreamProcurementPage() {
                       </p>
                     </div>
                     <div className="flex gap-2">
+                      {contract.status === 'ACTIVE' && <ActionButton onClick={() => void openContractCopy(contract)} disabled={Boolean(working) || showContractForm || showOrderForm || contractCopyRecoveryBlocked}>复制新版改价</ActionButton>}
                       {contract.status === 'DRAFT' && (
                         <ActionButton onClick={() => confirmContractActivation(contract)} disabled={working === contract.id}>
                           启用合同
@@ -2682,14 +2889,6 @@ function shipmentFullyInspected(shipment: Shipment): boolean {
   )
 }
 
-function purchaseOrderOverdueText(order: Order): string | null {
-  if (!order.expectedArrivalAt || ['DRAFT', 'RECEIVED', 'SETTLEMENT_PENDING', 'CLOSED', 'SETTLED', 'COMPLETED', 'CANCELLED', 'REJECTED'].includes(order.status)) return null
-  const due = order.expectedArrivalAt.slice(0, 10)
-  const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
-  if (due >= today) return null
-  const days = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${due}T00:00:00Z`)) / 86400000)
-  return `逾期 ${days} 天`
-}
 
 function revisionComparison(order: Order, revision: NonNullable<Order['revisions']>[number]) {
   const before = new Map((revision.beforeSnapshot?.lines || []).map((line) => [line.id, Number(line.quantity)]))
@@ -2697,6 +2896,8 @@ function revisionComparison(order: Order, revision: NonNullable<Order['revisions
   return (order.lines || []).map((line) => {
     const beforeQuantity = before.get(line.id) ?? Number(line.orderedQty)
     const afterQuantity = after.get(line.id) ?? beforeQuantity
+    const beforePrice = String(revision.beforeSnapshot?.lines?.find(row => row.id === line.id)?.unitPrice ?? line.unitPrice)
+    const afterPrice = String(revision.afterSnapshot?.lines?.find(row => row.id === line.id)?.unitPrice ?? beforePrice)
     return {
       id: line.id,
       name: line.productNameSnapshot,
@@ -2705,7 +2906,10 @@ function revisionComparison(order: Order, revision: NonNullable<Order['revisions
       before: beforeQuantity,
       after: afterQuantity,
       delta: Number((afterQuantity - beforeQuantity).toFixed(6)),
-      changed: Math.abs(afterQuantity - beforeQuantity) > 0.000001,
+      beforePrice, afterPrice,
+      beforeAmount: procurementDecimalProduct(String(beforeQuantity), beforePrice),
+      afterAmount: procurementDecimalProduct(String(afterQuantity), afterPrice),
+      changed: Math.abs(afterQuantity - beforeQuantity) > 0.000001 || Number(beforePrice) !== Number(afterPrice),
     }
   })
 }

@@ -1,5 +1,6 @@
 'use client'
 import Link from 'next/link'
+import { prepareTablePrint } from '@/lib/table-print'
 import {inventoryDocumentHref} from '@/lib/inventory-document-navigation'
 import { WarehouseDocumentActions } from './warehouse-document-actions'
 import { ProcurementManagementActions } from './procurement-management-actions'
@@ -49,18 +50,25 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
   const [failedStocktakeHref,setFailedStocktakeHref]=useState('')
   const [printDocuments, setPrintDocuments] = useState<Array<{ no: string; countDate: string; items: Array<Record<string, string | number | null>> }> | null>(null)
   const printPreviewRef = useRef<HTMLElement>(null)
-  const clearPrintPreview = () => { setPrintDocuments(null); setPrintResult(null); setPrinting(false) }
+  const printCleanupRef = useRef<(() => void) | null>(null)
+  const clearPrintPreview = () => { printCleanupRef.current?.(); printCleanupRef.current = null; setPrintDocuments(null); setPrintResult(null); setPrinting(false) }
   useEffect(() => {
-    const afterPrint = () => { setPrintDocuments(null); setPrintResult(null); setPrinting(false) }
+    const beforePrint = () => {
+      printCleanupRef.current?.()
+      const preview = printPreviewRef.current
+      if (preview) printCleanupRef.current = prepareTablePrint(preview, preview.querySelector('article') ? 'article' : undefined)
+    }
+    const afterPrint = () => { printCleanupRef.current?.(); printCleanupRef.current = null; setPrintDocuments(null); setPrintResult(null); setPrinting(false) }
+    window.addEventListener('beforeprint', beforePrint)
     window.addEventListener('afterprint', afterPrint)
-    return () => window.removeEventListener('afterprint', afterPrint)
+    return () => { printCleanupRef.current?.(); window.removeEventListener('beforeprint', beforePrint); window.removeEventListener('afterprint', afterPrint) }
   }, [])
   useEffect(() => {
     if (!printDocuments && !printResult) return
     const previousFocus = document.activeElement as HTMLElement | null
     printPreviewRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
     const keydown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); setPrintDocuments(null); setPrintResult(null); setPrinting(false) }
+      if (event.key === 'Escape') { event.preventDefault(); clearPrintPreview() }
       if (event.key !== 'Tab') return
       const buttons = Array.from(printPreviewRef.current?.querySelectorAll<HTMLButtonElement>('button') || [])
       const first = buttons[0], last = buttons[buttons.length - 1]
@@ -278,9 +286,9 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
       </div>
     </section>
     <ConfirmSheet {...confirmation} />
-    {printDocuments && <section ref={printPreviewRef} className={`${styles.printOnly} ${styles.printPreview}`} role="dialog" aria-modal="true" aria-label="所选盘点单打印明细"><header className={styles.printPreviewControls}><strong>{config.title}打印预览</strong><span>若打印窗口没有弹出，可查看内容后再次打印或关闭。</span><button onClick={() => window.print()}>打印 / 保存 PDF</button><button onClick={clearPrintPreview}>关闭打印预览</button></header>{printDocuments.map(doc => <article key={doc.no} style={{ breakAfter: 'page' }}><h1>{config.title} {doc.no}</h1><p>盘点日期 {doc.countDate}</p><table><thead><tr>{stocktakeDetailLabels.map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{doc.items.map((item, index) => <tr key={String(item.id || index)}>{stocktakeDetailKeys.map(key => <td key={key}>{display(item[key], 'text')}</td>)}</tr>)}</tbody></table></article>)}</section>}
+    {printDocuments && <section ref={printPreviewRef} className={`${styles.printOnly} ${styles.printPreview}`} role="dialog" aria-modal="true" aria-label="所选盘点单打印明细"><header data-management-print-controls className={styles.printPreviewControls}><strong>{config.title}打印预览</strong><span>建议选择 A4 横向、100% 缩放；若窗口没有弹出，可再次打印或关闭。</span><button onClick={() => window.print()}>打印 / 保存 PDF</button><button onClick={clearPrintPreview}>关闭打印预览</button></header>{printDocuments.map(doc => <article key={doc.no} style={{ breakAfter: 'page' }}><h1>{config.title} {doc.no}</h1><p>盘点日期 {doc.countDate}</p><table><thead><tr>{stocktakeDetailLabels.map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{doc.items.map((item, index) => <tr key={String(item.id || index)}>{stocktakeDetailKeys.map(key => <td key={key}>{display(item[key], 'text')}</td>)}</tr>)}</tbody></table></article>)}</section>}
     {printResult && <section ref={printPreviewRef} className={`${styles.printOnly} ${styles.printPreview}`} role="dialog" aria-modal="true" aria-label={`${config.title}当前筛选打印结果`}>
-      <header className={styles.printPreviewControls}><strong>单据列表打印预览</strong><span>若打印窗口没有弹出，可查看内容后再次打印或关闭。</span><button onClick={() => window.print()}>打印 / 保存 PDF</button><button onClick={clearPrintPreview}>关闭打印预览</button></header>
+      <header data-management-print-controls className={styles.printPreviewControls}><strong>单据列表打印预览</strong><span>建议选择 A4 横向、100% 缩放；若窗口没有弹出，可再次打印或关闭。</span><button onClick={() => window.print()}>打印 / 保存 PDF</button><button onClick={clearPrintPreview}>关闭打印预览</button></header>
       <h1>{config.title}</h1>
       <p>共 {printResult.total} 条 · 生成时间 {printResult.generatedAt || '—'}</p>
       <table><thead><tr>{config.columns.map(column => <th key={column.key}>{column.label}</th>)}</tr></thead><tbody>{printResult.rows.map(row => <tr key={row.id}>{config.columns.map(column => <td key={column.key}>{display(row[column.key], column.kind)}</td>)}</tr>)}</tbody></table>

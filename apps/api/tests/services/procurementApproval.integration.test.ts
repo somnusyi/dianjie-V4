@@ -224,3 +224,47 @@ it('receipt review runs the entire source transaction once and updates cumulativ
  expect(await prisma.upstreamArrivalClaim.count({where:{tenantId,receiptId:row.id}})).toBe(0)
  expect(await prisma.procurementApprovalEvent.count({where:{tenantId,receiptId:row.id,action:'REVIEW'}})).toBe(1)
 })
+
+it('100/3 three pre-created drafts conserve the last return remainder and freeze its submitted amount before audit',async()=>{
+ // A new synthetic source isolates this test from other return quota fixtures.
+ const opening=await receipt(true)
+ const sourceLineId=opening.lines[0].id
+ await prisma.$transaction(async tx=>{
+  await tx.upstreamPurchaseOrderLine.update({where:{id:opening.lines[0].purchaseOrderLineId},data:{orderedQty:3,confirmedQty:3,receivedQty:3,unitPrice:33.333333,amountWithoutTax:100,totalAmount:100}})
+  await tx.upstreamReceipt.update({where:{id:opening.id},data:{payableAmount:100}})
+  await tx.upstreamReceiptLine.update({where:{id:sourceLineId},data:{orderedQty:3,arrivedQty:3,acceptedQty:3,inventoryAcceptedQty:15,unitPrice:33.333333,payableAmount:100}})
+  await postUpstreamReceiptInTransaction(tx,{tenantId,warehouseId,supplierId,supplierName:'审批合成供应商',receiptId:opening.id,receiptNo:opening.no,userId:actorA,effectiveAt:new Date(),lines:[{receiptLineId:sourceLineId,productId,productName:'采购审批合成物料',purchaseQuantity:3,purchaseUnit:'袋',conversionFactor:5,inventoryQuantity:15,inventoryUnit:'kg',totalAmount:100}]})
+ })
+ const baseline=await stock()
+ const beforeBalance=await prisma.warehouseLedgerBalance.findFirstOrThrow({where:{tenantId,warehouseId,productId}})
+ const drafts=[]
+ for(let i=0;i<3;i++)drafts.push((await createUpstreamPurchaseReturn({tenantId,userId:actorA,supplierId,warehouseId,reason:'三次部分退货尾差',idempotencyKey:`tail-${randomUUID()}`,lines:[{receiptLineId:sourceLineId,purchaseQuantity:1}]})).purchaseReturn)
+ expect(drafts.map(row=>row.settlementAmount.toString())).toEqual(['33.3333','33.3333','33.3333'])
+ expect(await stock()).toBe(baseline)
+ for(const row of drafts){await change('RETURN',row.id,'submit',actorA,hooks);expect(await stock()).toBe(baseline)}
+ const submitted=await prisma.upstreamPurchaseReturn.findMany({where:{tenantId,id:{in:drafts.map(row=>row.id)}},include:{lines:true}})
+ const byId=new Map(submitted.map(row=>[row.id,row]))
+ expect(drafts.map(row=>byId.get(row.id)!.settlementAmount.toString())).toEqual(['33.3333','33.3333','33.3334'])
+ expect(drafts.map(row=>byId.get(row.id)!.lines[0].settlementAmount.toString())).toEqual(['33.3333','33.3333','33.3334'])
+ for(const row of drafts){
+  await change('RETURN',row.id,'audit',actorA,hooks)
+  expect((await source('RETURN',row.id)).approvalStatus).toBe('AUDITED')
+  expect(await stock()).toBe(baseline)
+ }
+ await expect(change('RETURN',drafts[0].id,'review',actorA,hooks)).rejects.toMatchObject({statusCode:403})
+ expect(await stock()).toBe(baseline)
+ for(const row of drafts){
+  const current=await source('RETURN',row.id)
+  const request={tenantId,userId:actorB,kind:'RETURN' as const,sourceId:row.id,action:'review' as const,approvalVersion:current.approvalVersion,sourceVersion:current.rowVersion,requestId:randomUUID()}
+  await changeProcurementApproval(request,hooks)
+  const after=await stock()
+  expect((await changeProcurementApproval(request,hooks)).replayed).toBe(true)
+  expect(await stock()).toBe(after)
+  expect((await source('RETURN',row.id))).toMatchObject({status:'APPROVED',approvalStatus:'REVIEWED'})
+  expect(await prisma.warehouseLedgerMovement.count({where:{tenantId,sourceType:'UpstreamPurchaseReturn',sourceId:row.id}})).toBe(1)
+ }
+ const final=await prisma.upstreamPurchaseReturn.findMany({where:{tenantId,id:{in:drafts.map(row=>row.id)}}})
+ expect(final[0].settlementAmount.plus(final[1].settlementAmount).plus(final[2].settlementAmount).eq(100)).toBe(true)
+ const afterBalance=await prisma.warehouseLedgerBalance.findFirstOrThrow({where:{tenantId,warehouseId,productId}})
+ expect(afterBalance.physicalQty.eq(beforeBalance.physicalQty.minus(15))).toBe(true)
+})

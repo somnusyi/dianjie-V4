@@ -17,8 +17,10 @@ input[type="number"]::-webkit-outer-spin-button,
 input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 
-/* 供应商以电脑端为主：宽屏使用统一侧边栏，手机端继续保留页面底部快捷导航。 */
-@media (min-width: 1024px) {
-  .supplier-portal [data-bottom-nav='true'] { display: none; }
-  .supplier-portal > main > div > .min-h-screen { border-radius: 16px; overflow: hidden; }
-}
+/* 导航模式只由按钮决定，不能按窗口宽度自动显示另一套底栏。 */
+.supply-desktop-mode [data-bottom-nav='true'],
+.supply-mobile-mode main [data-bottom-nav='true'],
+.supplier-mobile-mode main [data-bottom-nav='true'],
+.supplier-desktop-mode [data-bottom-nav='true'] { display: none; }
+.supplier-desktop-mode { min-width: 1024px; }
+.supplier-desktop-mode > main > div > .min-h-screen { border-radius: 16px; }

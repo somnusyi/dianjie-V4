@@ -12,6 +12,7 @@ import {
 } from '../services/warehouseDocs'
 import { signOssKey } from './upload'
 import {registerDocumentQualityImageRoutes} from './documentQualityImage'
+import {listGoodsQualityBatches} from '../services/goodsBatchQuality'
 
 // 仓库单据（审核流）：台账之上的控制层。
 // 读：仓库/财务可见；改单：仓库写角色；审核/反审核：会计（FINANCE）与管理员。
@@ -61,6 +62,7 @@ const editSchema = z.object({
 export const warehouseDocsRoutes: FastifyPluginAsync = async app => {
   const authRead = { preHandler: [(app as any).authenticate, requireDocAccess('read', '无权查看仓库单据')] }
   registerDocumentQualityImageRoutes(app,'','WAREHOUSE',authRead)
+  app.get('/:id/quality-batches',authRead,async(req:any,reply:any)=>{try{return await listGoodsQualityBatches({tenantId:req.user.tenantId,userId:req.user.userId},'WAREHOUSE',String(req.params.id))}catch(error:any){if(error.statusCode)return reply.code(error.statusCode).send({error:error.message});throw error}})
   const authWrite = { preHandler: [(app as any).authenticate, requireDocAccess('write', '无权修改仓库单据')] }
   const authAudit = { preHandler: [(app as any).authenticate, async(req:any,reply:any)=>{if(!hasInternalSupplyChainCapability(req.user?.role,'inventory.write'))return reply.code(403).send({error:'库存单据审核由供应链操作'})}] }
 

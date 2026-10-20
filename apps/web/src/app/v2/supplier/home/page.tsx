@@ -6,6 +6,7 @@
  */
 'use client'
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { BottomNav, Chip } from '@/components/v2'
 import { GlanceStrip } from '@/components/v2/glance-strip'
 import { UserMenu } from '@/components/v2/user-menu'
@@ -41,6 +42,7 @@ function timeAgo(iso: string) {
 }
 
 export default function SupplierHomePage() {
+  const router = useRouter()
   const [tab, setTab] = useState('home')
   const { data, error } = useDashboard()
   const [orders, setOrders] = useState<Order[] | null>(null)
@@ -286,10 +288,10 @@ export default function SupplierHomePage() {
         ]}
         activeKey={tab}
         onChange={(k) => {
-          if (k === 'orders')  location.href = '/v2/supplier/orders'
-          if (k === 'inventory') location.href = '/v2/supplier/inventory'
-          if (k === 'billing') location.href = '/v2/supplier/billing'
-          if (k === 'me')      location.href = '/v2/supplier/history'
+          if (k === 'orders')  router.push('/v2/supplier/orders')
+          if (k === 'inventory') router.push('/v2/supplier/inventory')
+          if (k === 'billing') router.push('/v2/supplier/billing')
+          if (k === 'me')      router.push('/v2/supplier/history')
         }}
       />
     </div>
@@ -302,6 +304,7 @@ function UpstreamOnlySupplierHome({ supplierName, greeting, today, workbench }: 
   today: string
   workbench: UpstreamWorkbench | null
 }) {
+  const router = useRouter()
   const counts = workbench?.counts
   const orderAndShipmentCount = (counts?.orders || 0) + (counts?.shipments || 0)
 
@@ -364,10 +367,10 @@ function UpstreamOnlySupplierHome({ supplierName, greeting, today, workbench }: 
         ]}
         activeKey="home"
         onChange={(key) => {
-          if (key === 'orders') location.href = '/v2/supplier/upstream#orders'
-          if (key === 'claims') location.href = '/v2/supplier/upstream#claims'
-          if (key === 'settlements') location.href = '/v2/supplier/upstream#settlements'
-          if (key === 'me') location.href = '/v2/me'
+          if (key === 'orders') router.push('/v2/supplier/upstream#orders')
+          if (key === 'claims') router.push('/v2/supplier/upstream#claims')
+          if (key === 'settlements') router.push('/v2/supplier/upstream#settlements')
+          if (key === 'me') router.push('/v2/me')
         }}
       />
     </div>

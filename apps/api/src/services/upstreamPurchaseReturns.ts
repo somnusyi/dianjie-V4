@@ -1,3 +1,4 @@
+import { returnSettlementAmount } from '../domain/procurementAmounts'
 import { createHash } from 'node:crypto'
 import { Prisma, prisma } from '@dianjie/db'
 import { nextUpstreamDocumentNo } from './upstreamDocumentNo'
@@ -66,7 +67,7 @@ function returnInclude() {
       orderBy: { createdAt: 'asc' as const },
       include: {
         product: { select: { id: true, code: true, name: true, spec: true, category:true } },
-        receiptLine: { select: { id: true, receiptId: true, acceptedQty: true, unitPrice: true, receipt: { select: { no: true } } } },
+        receiptLine: { select: { id: true, receiptId: true, acceptedQty: true, payableAmount: true, unitPrice: true, receipt: { select: { no: true } } } },
         ledgerMovement: { select: { id: true, physicalDelta: true, valueDelta: true, effectiveAt: true } },
       },
     },
@@ -174,9 +175,9 @@ export async function createUpstreamPurchaseReturn(input: CreateUpstreamPurchase
     }
 
     const no = await nextUpstreamDocumentNo(tx, input.tenantId, 'purchaseReturn')
-    const settlementAmount = normalizedLines.reduce((sum, requested) => {
+    let settlementAmount = normalizedLines.reduce((sum, requested) => {
       const source = receiptLineById.get(requested.receiptLineId)!
-      return sum.plus(requested.purchaseQuantity.mul(source.unitPrice).toDecimalPlaces(VALUE_DP))
+      return sum.plus(returnSettlementAmount(source.acceptedQty,source.payableAmount,requested.purchaseQuantity))
     }, new Prisma.Decimal(0)).toDecimalPlaces(VALUE_DP)
     const created = await tx.upstreamPurchaseReturn.create({
       data: {
@@ -211,11 +212,13 @@ export async function createUpstreamPurchaseReturn(input: CreateUpstreamPurchase
           inventoryQuantity,
           inventoryUnit: source.inventoryUnit,
           settlementUnitPrice: source.unitPrice,
-          settlementAmount: requested.purchaseQuantity.mul(source.unitPrice).toDecimalPlaces(VALUE_DP),
+          settlementAmount: returnSettlementAmount(source.acceptedQty,source.payableAmount,requested.purchaseQuantity),
           note: requested.note,
         }
       }),
     })
+    // Draft creation does not reserve stock or other drafts' return allowance.
+    // Submission revalidates and allocates the remaining settlement under receipt-line locks.
     await tx.upstreamPurchaseReturnEvent.create({
       data: {
         tenantId: input.tenantId,
@@ -304,10 +307,26 @@ export async function submitUpstreamPurchaseReturn(tenantId: string, returnId: s
 /** Caller already holds the return row lock. Validate edited quantities with the
  * same sorted original receipt-line locks and reservation rules as submission. */
 export async function validatePurchaseReturnEditInTransaction(tx:Prisma.TransactionClient,tenantId:string,returnId:string){
- const current=await tx.upstreamPurchaseReturn.findFirst({where:{tenantId,id:returnId},include:{lines:{include:{receiptLine:{select:{acceptedQty:true,receipt:{select:{status:true,reversedAt:true}}}},product:{select:{name:true}}}}}})
+ const current=await tx.upstreamPurchaseReturn.findFirst({where:{tenantId,id:returnId},include:{lines:{include:{receiptLine:{select:{acceptedQty:true,payableAmount:true,receipt:{select:{status:true,reversedAt:true}}}},product:{select:{name:true}}}}}})
  if(!current)throw businessError('采购退货单不存在',404)
  await lockReceiptLines(tx,tenantId,current.lines.map(line=>line.receiptLineId))
  await assertReturnableQuantities(tx,tenantId,returnId,current.lines)
+ return reconcileReturnSettlement(tx,tenantId,current)
+}
+
+/** Receipt-line lock must be held. Pending returns reserve both quantity and amount. */
+async function reconcileReturnSettlement(tx:Prisma.TransactionClient,tenantId:string,current:{id:string;lines:Array<{id:string;receiptLineId:string;purchaseQuantity:Prisma.Decimal;receiptLine:{acceptedQty:Prisma.Decimal;payableAmount:Prisma.Decimal}}>}){
+ const existing=await tx.upstreamPurchaseReturnLine.findMany({where:{tenantId,returnId:{not:current.id},receiptLineId:{in:current.lines.map(row=>row.receiptLineId)},purchaseReturn:{status:{in:[...RESERVING_STATUSES]}}},select:{receiptLineId:true,purchaseQuantity:true,settlementAmount:true}})
+ let total=new Prisma.Decimal(0)
+ for(const line of current.lines){
+   const rows=existing.filter(row=>row.receiptLineId===line.receiptLineId)
+   const usedQty=rows.reduce((sum,row)=>sum.plus(row.purchaseQuantity),new Prisma.Decimal(0)),usedAmount=rows.reduce((sum,row)=>sum.plus(row.settlementAmount),new Prisma.Decimal(0))
+   const amount=returnSettlementAmount(line.receiptLine.acceptedQty,line.receiptLine.payableAmount,line.purchaseQuantity,usedQty,usedAmount)
+   await tx.upstreamPurchaseReturnLine.update({where:{id:line.id},data:{settlementAmount:amount}})
+   total=total.plus(amount)
+ }
+ await tx.upstreamPurchaseReturn.update({where:{id:current.id},data:{settlementAmount:total}})
+ return total
 }
 
 export async function submitUpstreamPurchaseReturnInTransaction(tx:Prisma.TransactionClient,tenantId:string,returnId:string,userId:string) {
@@ -318,7 +337,7 @@ export async function submitUpstreamPurchaseReturnInTransaction(tx:Prisma.Transa
         lines: {
           include: {
             receiptLine: {
-              select: { acceptedQty: true, receipt: { select: { status: true, reversedAt: true } } },
+              select: { acceptedQty: true, payableAmount: true, receipt: { select: { status: true, reversedAt: true } } },
             },
             product: { select: { name: true } },
           },
@@ -332,6 +351,7 @@ export async function submitUpstreamPurchaseReturnInTransaction(tx:Prisma.Transa
     if (current.status === 'PENDING_APPROVAL') {
       return { replayed: true, purchaseReturn: await tx.upstreamPurchaseReturn.findUniqueOrThrow({ where: { id: current.id }, include: returnInclude() }) }
     }
+    await reconcileReturnSettlement(tx,tenantId,current)
     const changed = await tx.upstreamPurchaseReturn.updateMany({
       where: { id: current.id, tenantId, status: 'DRAFT', rowVersion: current.rowVersion },
       data: { status: 'PENDING_APPROVAL', submittedById: userId, submittedAt: new Date(), rowVersion: { increment: 1 } },
@@ -363,7 +383,7 @@ export async function postUpstreamPurchaseReturnBusinessInTransaction(tx:Prisma.
         lines: {
           include: {
             receiptLine: {
-              select: { acceptedQty: true, receipt: { select: { status: true, reversedAt: true } } },
+              select: { acceptedQty: true, payableAmount: true, receipt: { select: { status: true, reversedAt: true } } },
             },
             product: { select: { name: true } },
           },
@@ -546,7 +566,13 @@ export async function receiveUpstreamPurchaseReturn(
 export async function getUpstreamPurchaseReturn(tenantId: string, returnId: string) {
   const row = await prisma.upstreamPurchaseReturn.findFirst({ where: { id: returnId, tenantId }, include: returnInclude() })
   if (!row) throw businessError('采购退货单不存在', 404)
-  return {...row,organizationName:(await prisma.tenant.findUnique({where:{id:tenantId},select:{name:true}}))?.name||null}
+  const otherLines=await prisma.upstreamPurchaseReturnLine.findMany({where:{tenantId,returnId:{not:returnId},receiptLineId:{in:row.lines.map(line=>line.receiptLineId)},purchaseReturn:{status:{in:[...RESERVING_STATUSES]}}},select:{receiptLineId:true,purchaseQuantity:true,settlementAmount:true}})
+  return {...row,lines:row.lines.map(line=>{
+    const reserved=otherLines.filter(other=>other.receiptLineId===line.receiptLineId)
+    return {...line,sourceQuantity:line.receiptLine.acceptedQty,sourceAmount:line.receiptLine.payableAmount,
+      returnableQuantity:Prisma.Decimal.max(0,line.receiptLine.acceptedQty.minus(reserved.reduce((sum,item)=>sum.plus(item.purchaseQuantity),new Prisma.Decimal(0)))),
+      remainingSettlementAmount:Prisma.Decimal.max(0,line.receiptLine.payableAmount.minus(reserved.reduce((sum,item)=>sum.plus(item.settlementAmount),new Prisma.Decimal(0))))}
+  }),organizationName:(await prisma.tenant.findUnique({where:{id:tenantId},select:{name:true}}))?.name||null}
 }
 
 export async function listUpstreamPurchaseReturns(input: {
@@ -594,7 +620,7 @@ export async function listReturnableUpstreamReceiptLines(input: {
       product: { select: { id: true, code: true, name: true, spec: true, category:true } },
       purchaseReturnLines: {
         where: { purchaseReturn: { status: { in: [...RESERVING_STATUSES] } } },
-        select: { purchaseQuantity: true },
+        select: { purchaseQuantity: true, settlementAmount: true },
       },
     },
     orderBy: input.includeUnavailable?{id:'asc' as const}:[{ receipt: { postedAt: 'desc' } }, { createdAt: 'desc' }],
@@ -606,6 +632,7 @@ export async function listReturnableUpstreamReceiptLines(input: {
     return {
       ...line,
       reservedReturnQuantity: returned,
+      remainingSettlementAmount:Prisma.Decimal.max(new Prisma.Decimal(0),line.payableAmount.minus(line.purchaseReturnLines.reduce((sum,item)=>sum.plus(item.settlementAmount),new Prisma.Decimal(0)))),
       returnableQuantity:line.receipt.status==='POSTED'&&!line.receipt.reversedAt?Prisma.Decimal.max(new Prisma.Decimal(0), line.acceptedQty.minus(returned)):new Prisma.Decimal(0),
       unavailableReason:line.receipt.status!=='POSTED'||line.receipt.reversedAt?'原收货单尚未入账或已冲销':line.acceptedQty.minus(returned).lte(0)?'当前可退额度已用完':null,
     }

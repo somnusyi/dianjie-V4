@@ -1,5 +1,9 @@
+import {supplierVisiblePurchaseOrder} from '../lib/upstream-order-visibility'
+import { receiptPricing } from '../domain/procurementAmounts'
+import { proposeOrderRevision, approvedOrderRevision } from '../domain/upstreamOrderRevision'
 import {changeProcurementApproval,procurementApprovalView} from '../services/procurementApproval'
 import {registerDocumentQualityImageRoutes} from './documentQualityImage'
+import {registerGoodsBatchQualityRoutes} from './goodsBatchQuality'
 import {saveProcurementDocument} from '../services/procurementDocumentEdit'
 import {saveProcurementDocumentNote} from '../services/procurementDocumentNote'
 import {submitUpstreamPurchaseReturnInTransaction,postUpstreamPurchaseReturnBusinessInTransaction} from '../services/upstreamPurchaseReturns'
@@ -14,6 +18,7 @@ import {
   upstreamReceiptReviewReasons,
   upstreamReceiptPriceReviewFlags,
   UpstreamPurchaseOrderStatus,
+  UPSTREAM_PO_STATUSES,
 } from '../domain/upstreamProcurement'
 import { requireSupplierCapability } from '../lib/supplier-access'
 import { upstreamFeatureEnabled, upstreamFeatureSnapshot } from '../lib/upstream-feature-flags'
@@ -47,6 +52,27 @@ const idSchema = z.string().trim().min(1).max(64)
 const decimalInput = z.coerce.number().finite().positive()
 const nonNegativeDecimalInput = z.coerce.number().finite().min(0)
 const isoDateInput = z.coerce.date()
+
+// Accept calendar dates only: Date.parse alone silently normalizes 2026-02-30.
+const purchaseOrderDateKey = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式应为 YYYY-MM-DD').refine((key) => {
+  const date = new Date(`${key}T00:00:00.000Z`)
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === key
+}, '日期不存在')
+const purchaseOrderListQuerySchema = z.object({
+  supplierId: idSchema.optional(),
+  status: z.enum(UPSTREAM_PO_STATUSES).optional(),
+  paginated: z.enum(['true', 'false']).optional(),
+  page: z.coerce.number().int().min(1).max(100000).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  dateField: z.enum(['createdAt', 'expectedArrivalAt']).default('createdAt'),
+  dateFrom: purchaseOrderDateKey.optional(),
+  dateTo: purchaseOrderDateKey.optional(),
+  productQuery: z.string().trim().min(1).max(160).optional(),
+}).superRefine((query, ctx) => {
+  if (query.dateFrom && query.dateTo && query.dateFrom > query.dateTo) {
+    ctx.addIssue({ code: 'custom', path: ['dateTo'], message: '结束日期不能早于开始日期' })
+  }
+})
 const qualityEvidenceItemSchema = z.object({
   key: z.string().trim().min(1).max(1024),
   name: z.string().trim().min(1).max(160),
@@ -101,6 +127,7 @@ const receiptReviewSchema = z.object({
 const contractCreateSchema = z
   .object({
     supplierId: idSchema,
+    copyFromContractId: idSchema.optional(),
     // 合同编号会打印/导出到正式单据: 限制长度与字符集, 挡住脚本注入和超长文本
     contractNo: z
       .string()
@@ -124,7 +151,7 @@ const contractCreateSchema = z
       .array(
         z.object({
           upstreamSourceId: idSchema,
-          unitPrice: decimalInput,
+          unitPrice: decimalInput.refine(value => new Prisma.Decimal(value).decimalPlaces() <= 6, '合同单价最多六位小数，请核对后保存'),
           taxRate: z.coerce.number().finite().min(0).max(1).optional(),
           packageMultiple: decimalInput.default(1),
           shortTolerancePct: z.coerce.number().finite().min(0).max(1).default(0),
@@ -193,6 +220,7 @@ const purchaseOrderCreateSchema = z
 
 const revisionCreateSchema = z
   .object({
+    rowVersion: z.number().int().nonnegative().optional(),
     reason: z.string().trim().min(1).max(500),
     expectedArrivalAt: isoDateInput.optional(),
     lines: z
@@ -200,6 +228,7 @@ const revisionCreateSchema = z
         z.object({
           lineId: idSchema,
           quantity: decimalInput,
+          unitPrice: decimalInput.optional(),
         })
       )
       .min(1)
@@ -209,6 +238,7 @@ const revisionCreateSchema = z
 
 const revisionReviewSchema = z
   .object({
+    rowVersion: z.number().int().nonnegative().optional(),
     decision: z.enum(['ACCEPT', 'REJECT']),
     note: z.string().trim().max(500).optional(),
   })
@@ -277,6 +307,7 @@ const receiptCreateSchema = z
             arrivedQty: nonNegativeDecimalInput,
             acceptedQty: nonNegativeDecimalInput,
             unitPrice: nonNegativeDecimalInput.optional(),
+            payableAmount: z.union([z.number().finite().nonnegative(), z.string().regex(/^\d+(?:\.\d{1,4})?$/)]).optional(),
             damagedQty: nonNegativeDecimalInput.default(0),
             rejectedQty: nonNegativeDecimalInput.default(0),
             batchNo: z.string().trim().max(80).optional(),
@@ -608,6 +639,7 @@ export function upstreamReceiptRequestFingerprint(shipmentId: string, input: z.i
         damagedQty: decimal(line.damagedQty).toString(),
         rejectedQty: decimal(line.rejectedQty).toString(),
         ...(line.unitPrice===undefined?{}:{unitPrice:decimal(line.unitPrice).toString()}),
+        ...(line.payableAmount===undefined?{}:{payableAmount:decimal(line.payableAmount).toString()}),
         batchNo: line.batchNo || null,
         manufactureDate: line.manufactureDate?.toISOString() || null,
         expiryDate: line.expiryDate?.toISOString() || null,
@@ -654,7 +686,7 @@ async function scopedPurchaseOrder(req: any, id: string) {
   const { tenantId, role } = req.user
   const supplierId = INTERNAL_ROLES.has(role) ? undefined : supplierScope(req, 'upstream.order.read')
   return prisma.upstreamPurchaseOrder.findFirst({
-    where: { id, tenantId, ...(supplierId ? { supplierId } : {}) },
+    where: { id, tenantId, ...(supplierId ? { supplierId,AND:[supplierVisiblePurchaseOrder] } : {}) },
     include: {
       supplier: { select: { id: true, name: true, no: true } },
       warehouse: { select: { id: true, name: true, code: true } },
@@ -1043,6 +1075,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
       catch(error:any){if(error.statusCode)return reply.code(error.statusCode).send({error:error.message});throw error}
     })
   }
+  registerGoodsBatchQualityRoutes(app,auth(app))
   registerDocumentQualityImageRoutes(app,'/receipts','RECEIPT',auth(app))
   registerDocumentQualityImageRoutes(app,'/purchase-returns','RETURN',auth(app))
   const progressBody=z.object({approvalVersion:z.number().int().min(1),sourceVersion:z.number().int().min(0),requestId:z.string().min(8).max(100),priceExceptionReason:z.string().trim().min(2).max(500).optional()}).strict()
@@ -1580,12 +1613,35 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     if (sources.length !== sourceIds.length) {
       return reply.status(400).send({ error: '合同商品来源不存在、已停用或不属于该供应商' })
     }
-    const sourceById = new Map(sources.map((source) => [source.id, source]))
-
     let contract
     try {
       contract = await prisma.$transaction(
         async (tx) => {
+          const original = d.copyFromContractId ? await tx.upstreamSupplierContract.findFirst({
+            where: { id: d.copyFromContractId, tenantId, supplierId: d.supplierId, contractNo: d.contractNo, status: 'ACTIVE' },
+            include: { lines: true },
+          }) : null
+          if (d.copyFromContractId && !original) throw Object.assign(new Error('原生效合同不存在或状态已变更，请刷新核对'), { statusCode: 409 })
+          const currentSources = original ? await tx.productUpstreamSource.findMany({
+            where: { id: { in: sourceIds }, tenantId, supplierId: d.supplierId, isActive: true }, include: { product: true },
+          }) : sources
+          const currentSourceById = new Map(currentSources.map(source => [source.id, source]))
+          if (original) {
+            const originalSourceIds = original.lines.map(line => line.upstreamSourceId)
+            if (!original.lines.length || original.lines.length !== d.lines.length || new Set(originalSourceIds).size !== originalSourceIds.length
+              || original.lines.some(line => !line.isActive || !line.upstreamSourceId || !sourceIds.includes(line.upstreamSourceId))) {
+              throw Object.assign(new Error('原合同供货关系已缺失、停用或重复，不能遗漏原商品'), { statusCode: 409 })
+            }
+            for (const line of original.lines) {
+              const source = currentSourceById.get(line.upstreamSourceId!)
+              if (!source || source.productId !== line.productId || source.purchaseUnit !== line.purchaseUnit
+                || (source.product.inventoryUnit || source.product.unit) !== line.inventoryUnit
+                || !source.inventoryUnitsPerPurchaseUnit.equals(line.inventoryUnitsPerPurchaseUnit)
+                || !source.minOrderQty.equals(line.minOrderQty) || source.leadTimeDays !== line.leadTimeDays) {
+                throw Object.assign(new Error(`${line.productNameSnapshot}的供货关系、单位换算、起订量或交期已变化，请核对后再复制`), { statusCode: 409 })
+              }
+            }
+          }
           const previous = await tx.upstreamSupplierContract.findFirst({
             where: {
               tenantId,
@@ -1614,10 +1670,30 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
               attachments: d.attachments as Prisma.InputJsonValue | undefined,
               idempotencyKey: d.idempotencyKey,
               requestFingerprint,
+              ...(original ? {
+                title: original.title, startsAt: original.startsAt, endsAt: original.endsAt,
+                settlementCycle: original.settlementCycle, settlementDays: original.settlementDays,
+                taxInclusive: original.taxInclusive, defaultTaxRate: original.defaultTaxRate,
+                currency: original.currency, paymentMethod: original.paymentMethod,
+                discrepancyRule: original.discrepancyRule == null ? Prisma.DbNull : original.discrepancyRule as Prisma.InputJsonValue,
+                attachments: original.attachments == null ? Prisma.DbNull : original.attachments as Prisma.InputJsonValue,
+              } : {}),
               createdById: userId,
               lines: {
                 create: d.lines.map((line) => {
-                  const source = sourceById.get(line.upstreamSourceId)!
+                  const source = currentSourceById.get(line.upstreamSourceId)!
+                  const previousLine = original?.lines.find(item => item.upstreamSourceId === line.upstreamSourceId)
+                  if (previousLine) return {
+                    productId: previousLine.productId, upstreamSourceId: previousLine.upstreamSourceId,
+                    productCodeSnapshot: previousLine.productCodeSnapshot, productNameSnapshot: previousLine.productNameSnapshot,
+                    productSpecSnapshot: previousLine.productSpecSnapshot, supplierSkuSnapshot: previousLine.supplierSkuSnapshot,
+                    purchaseUnit: previousLine.purchaseUnit, inventoryUnit: previousLine.inventoryUnit,
+                    inventoryUnitsPerPurchaseUnit: previousLine.inventoryUnitsPerPurchaseUnit,
+                    unitPrice: line.unitPrice, taxRate: previousLine.taxRate,
+                    minOrderQty: previousLine.minOrderQty, packageMultiple: previousLine.packageMultiple,
+                    leadTimeDays: previousLine.leadTimeDays, shortTolerancePct: previousLine.shortTolerancePct, overTolerancePct: previousLine.overTolerancePct,
+                    startsAt: previousLine.startsAt, endsAt: previousLine.endsAt, isActive: previousLine.isActive,
+                  }
                   return {
                     productId: source.productId,
                     upstreamSourceId: source.id,
@@ -1749,24 +1825,56 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     return result.active
   })
 
-  app.get('/purchase-orders', auth(app), async (req: any) => {
+  app.get('/purchase-orders', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
-    const supplierId = INTERNAL_ROLES.has(role) ? (typeof req.query?.supplierId === 'string' ? req.query.supplierId : undefined) : supplierScope(req, 'upstream.order.read')
-    const status = typeof req.query?.status === 'string' ? req.query.status : undefined
-    return prisma.upstreamPurchaseOrder.findMany({
-      where: {
+    // Resolve binding independently of query parameters. Supplier A can never query B.
+    const boundSupplierId = INTERNAL_ROLES.has(role) ? undefined : supplierScope(req, 'upstream.order.read')
+    const parsed = purchaseOrderListQuerySchema.safeParse(req.query)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const query = parsed.data
+    const supplierId = boundSupplierId || query.supplierId
+    const where: Prisma.UpstreamPurchaseOrderWhereInput = {
+      tenantId,
+      ...(supplierId ? { supplierId } : {}),
+      ...(query.status ? { status: query.status } : {}),
+      ...(boundSupplierId ? {AND:[supplierVisiblePurchaseOrder]} : {}),
+    }
+    if (query.dateFrom || query.dateTo) {
+      // A Shanghai business day is [previous UTC day 16:00, current UTC day 16:00).
+      const range = businessDateRangeInclusive(new Date(`${query.dateFrom || query.dateTo!}T00:00:00+08:00`), new Date(`${query.dateTo || query.dateFrom!}T00:00:00+08:00`))
+      where[query.dateField] = {
+        ...(query.dateFrom ? { gte: range.start } : {}),
+        ...(query.dateTo ? { lt: range.endExclusive } : {}),
+      }
+    }
+    if (query.productQuery) {
+      where.lines = { some: {
         tenantId,
-        ...(supplierId ? { supplierId } : {}),
-        ...(status ? { status: status as any } : {}),
-      },
-      include: {
-        supplier: { select: { id: true, no: true, name: true } },
-        warehouse: { select: { id: true, code: true, name: true } },
-        _count: { select: { lines: true, shipments: true, receipts: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 200,
-    })
+        OR: [
+          { productNameSnapshot: { contains: query.productQuery, mode: 'insensitive' } },
+          { productCodeSnapshot: { contains: query.productQuery, mode: 'insensitive' } },
+        ],
+      } }
+    }
+    const include = {
+      supplier: { select: { id: true, no: true, name: true } },
+      warehouse: { select: { id: true, code: true, name: true } },
+      _count: { select: { lines: true, shipments: true, receipts: true } },
+    }
+    const orderBy: Prisma.UpstreamPurchaseOrderOrderByWithRelationInput[] = [{ createdAt: 'desc' }, { id: 'desc' }]
+    if (query.paginated !== 'true') {
+      // Preserve the existing array response for supplier and legacy clients.
+      return prisma.upstreamPurchaseOrder.findMany({ where, include, orderBy, take: 200 })
+    }
+    return prisma.$transaction(async (tx) => {
+      const total = await tx.upstreamPurchaseOrder.count({ where })
+      const items = await tx.upstreamPurchaseOrder.findMany({
+        where, include, orderBy,
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+      })
+      return { items, total, page: query.page, pageSize: query.pageSize }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead })
   })
 
   app.get('/purchase-orders/:id', auth(app), async (req: any, reply: any) => {
@@ -2068,6 +2176,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
 
     const result = await prisma.$transaction(
       async (tx) => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`upstream-po:${idParsed.data}`}))::text AS locked`
         const order = await tx.upstreamPurchaseOrder.findFirst({
           where: {
             id: idParsed.data,
@@ -2078,16 +2187,9 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
           include: { lines: { orderBy: { lineNo: 'asc' } } },
         })
         if (!order) return null
-        const lineById = new Map(order.lines.map((line) => [line.id, line]))
-        if (d.lines.some((line) => !lineById.has(line.lineId))) {
-          throw Object.assign(new Error('改单包含不属于该采购单的商品'), {
-            statusCode: 400,
-          })
-        }
-        const afterLines = order.lines.map((line) => ({
-          id: line.id,
-          quantity: d.lines.find((input) => input.lineId === line.id)?.quantity ?? Number(line.orderedQty),
-        }))
+        if (d.lines.some(line => line.unitPrice !== undefined) && d.rowVersion === undefined) throw Object.assign(new Error('调价申请必须携带当前采购单版本，请刷新后重试'), { statusCode: 400 })
+        if (d.rowVersion !== undefined && d.rowVersion !== order.rowVersion) throw Object.assign(new Error('采购单已变化，请刷新后重新申请'), { statusCode: 409 })
+        const normalized = proposeOrderRevision(order.lines, d.lines)
         const revisionNo = order.currentRevisionNo + 1
         const revision = await tx.upstreamPurchaseOrderRevision.create({
           data: {
@@ -2097,14 +2199,13 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
             reason: d.reason,
             beforeSnapshot: {
               expectedArrivalAt: order.expectedArrivalAt?.toISOString() || null,
-              lines: order.lines.map((line) => ({
-                id: line.id,
-                quantity: line.orderedQty.toString(),
-              })),
+              lines: normalized.before,
+              rowVersion: order.rowVersion,
+              status: order.status,
             },
             afterSnapshot: {
               expectedArrivalAt: d.expectedArrivalAt?.toISOString() || order.expectedArrivalAt?.toISOString() || null,
-              lines: afterLines,
+              lines: normalized.after,
             },
             requestedById: userId,
             requestedByRole: role,
@@ -2133,7 +2234,12 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
         return revision
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
-    )
+    ).catch((error: any) => {
+      if (error?.code === 'P2034' || (error?.code === 'P2010' && String(error?.meta?.code || '') === '40001')) {
+        throw Object.assign(new Error('采购单已变化，请刷新后重试'), {statusCode:409})
+      }
+      throw error
+    })
     if (!result) return reply.status(409).send({ error: '采购单不存在、无权访问或当前不可改单' })
     return reply.status(201).send(result)
   })
@@ -2152,6 +2258,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
 
     const result = await prisma.$transaction(
       async (tx) => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`upstream-po:${orderId.data}`}))::text AS locked`
         const revision = await tx.upstreamPurchaseOrderRevision.findFirst({
           where: {
             id: revisionId.data,
@@ -2171,6 +2278,9 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
           include: { lines: true },
         })
         if (!order) return null
+        if (d.rowVersion !== undefined && d.rowVersion !== order.rowVersion) throw Object.assign(new Error('采购单已变化，请刷新后审核'), { statusCode: 409 })
+        const before = revision.beforeSnapshot as any
+        if (before.rowVersion !== undefined && (d.rowVersion === undefined || before.rowVersion + 1 !== order.rowVersion)) throw Object.assign(new Error('改单版本已变化，请刷新后审核'), { statusCode: 409 })
         const now = new Date()
         if (d.decision === 'REJECT') {
           await tx.upstreamPurchaseOrderRevision.update({
@@ -2185,7 +2295,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
           await tx.upstreamPurchaseOrder.update({
             where: { id: order.id },
             data: {
-              status: 'SUBMITTED_TO_SUPPLIER',
+              status: before.status === 'SUPPLIER_ACCEPTED' ? 'SUPPLIER_ACCEPTED' : 'SUBMITTED_TO_SUPPLIER',
               rowVersion: { increment: 1 },
             },
           })
@@ -2193,18 +2303,13 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
         }
 
         const after = revision.afterSnapshot as any
-        const quantities = new Map<string, number>((after.lines || []).map((line: any) => [line.id, Number(line.quantity)]))
-        if (order.lines.some((line) => !quantities.has(line.id) || !(quantities.get(line.id)! > 0))) {
-          throw Object.assign(new Error('改单数量快照不完整或无效'), {
-            statusCode: 400,
-          })
-        }
+        const approved = approvedOrderRevision(order.lines, before.lines || [], after.lines || [])
         let amountWithoutTax = decimal(0)
         let taxAmount = decimal(0)
         let totalAmount = decimal(0)
         for (const line of order.lines) {
-          const quantity = decimal(quantities.get(line.id)!)
-          const baseAmount = money(quantity.times(line.unitPrice))
+          const { quantity, unitPrice } = approved.find(row => row.id === line.id)!
+          const baseAmount = money(quantity.times(unitPrice))
           const lineWithoutTax = order.taxInclusive && line.taxRate.greaterThan(0) ? money(baseAmount.dividedBy(decimal(1).plus(line.taxRate))) : baseAmount
           const lineTax = order.taxInclusive ? money(baseAmount.minus(lineWithoutTax)) : money(lineWithoutTax.times(line.taxRate))
           const lineTotal = order.taxInclusive ? baseAmount : money(lineWithoutTax.plus(lineTax))
@@ -2212,6 +2317,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
             where: { id: line.id },
             data: {
               orderedQty: quantity,
+              unitPrice,
               amountWithoutTax: lineWithoutTax,
               taxAmount: lineTax,
               totalAmount: lineTotal,
@@ -2234,6 +2340,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
           where: { id: order.id },
           data: {
             status: 'SUPPLIER_ACCEPTED',
+            hasTemporaryPrice: order.hasTemporaryPrice || approved.some(row => !row.unitPrice.eq(order.lines.find(line => line.id === row.id)!.unitPrice)),
             expectedArrivalAt: after.expectedArrivalAt ? new Date(after.expectedArrivalAt) : order.expectedArrivalAt,
             amountWithoutTax: money(amountWithoutTax),
             taxAmount: money(taxAmount),
@@ -2257,7 +2364,12 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
         return { decision: 'ACCEPT', orderId: order.id }
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
-    )
+    ).catch((error: any) => {
+      if (error?.code === 'P2034' || (error?.code === 'P2010' && String(error?.meta?.code || '') === '40001')) {
+        throw Object.assign(new Error('采购单已变化，请刷新后重试'), {statusCode:409})
+      }
+      throw error
+    })
     if (!result) return reply.status(409).send({ error: '改单不存在或已处理' })
     return result
   })
@@ -2809,7 +2921,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
               throw Object.assign(new Error(`${orderLine.productNameSnapshot} 合格验收数量超过合同允许上限 ${maximum.toString()} ${orderLine.purchaseUnit}`), { statusCode: 400 })
             }
             const actualUnitPrice=(input.unitPrice===undefined?orderLine.unitPrice:decimal(input.unitPrice)).toDecimalPlaces(6)
-            const linePayable = money(accepted.times(actualUnitPrice))
+            const linePayable = receiptPricing(accepted, actualUnitPrice, input.payableAmount).payableAmount
             payableAmount = payableAmount.plus(linePayable)
             const manufactureDate = input.manufactureDate || shipmentLine.manufactureDate
             const expiryDate = input.expiryDate || shipmentLine.expiryDate
@@ -3134,7 +3246,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     const rows=new Map(page.filter(line=>line.returnableQuantity.gt(0)).map(line=>[line.id,line]))
     for(const line of recovered)rows.set(line.id,line)
     const lines=[...rows.values()]
-    return {nextCursor:page.length===200?page[page.length-1].id:null,supplier,warehouse,organizationName:tenant?.name||null,createdAt:new Date().toISOString(),lines:lines.map(line=>({id:line.id,purchaseUnit:line.purchaseUnit,inventoryUnit:line.inventoryUnit,inventoryUnitsPerPurchaseUnit:line.inventoryUnitsPerPurchaseUnit,returnableQuantity:line.returnableQuantity,unavailableReason:line.unavailableReason,purchaseQuantity:0,settlementUnitPrice:line.unitPrice,settlementAmount:0,product:line.product,receiptLine:{receipt:{no:line.receipt.no}}}))}
+    return {nextCursor:page.length===200?page[page.length-1].id:null,supplier,warehouse,organizationName:tenant?.name||null,createdAt:new Date().toISOString(),lines:lines.map(line=>({id:line.id,purchaseUnit:line.purchaseUnit,inventoryUnit:line.inventoryUnit,inventoryUnitsPerPurchaseUnit:line.inventoryUnitsPerPurchaseUnit,sourceQuantity:line.acceptedQty,sourceAmount:line.payableAmount,remainingSettlementAmount:line.remainingSettlementAmount,returnableQuantity:line.returnableQuantity,unavailableReason:line.unavailableReason,purchaseQuantity:0,settlementUnitPrice:line.unitPrice,settlementAmount:0,product:line.product,receiptLine:{receipt:{no:line.receipt.no}}}))}
   })
 
   app.get('/purchase-returns/returnable-lines', auth(app), async (req: any, reply: any) => {

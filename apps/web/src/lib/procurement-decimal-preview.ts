@@ -17,3 +17,23 @@ export function procurementDecimalProduct(left:string,right:string,places=4):str
  const text=result.toString().padStart(places+1,'0')
  return places?`${text.slice(0,-places)}.${text.slice(-places)}`:text
 }
+
+/** Decimal long division rounded half-up; strings avoid binary floating point. */
+export function procurementDecimalProportion(amount:string,part:string,whole:string,places=4):string{
+ const a=fixed(amount,6),b=fixed(part,6),c=fixed(whole,6)
+ if(a===null||b===null||c===null||c===BigInt(0)||places<0||places>6)return '—'
+ const numerator=a*b*BigInt(10)**BigInt(places),denominator=c*BigInt(1000000)
+ const result=(numerator+denominator/BigInt(2))/denominator
+ const text=result.toString().padStart(places+1,'0')
+ return places?`${text.slice(0,-places)}.${text.slice(-places)}`:text
+}
+export const procurementDecimalQuotient=(amount:string,quantity:string)=>procurementDecimalProportion(amount,'1',quantity,6)
+
+export function procurementDecimalSum(values:string[],places=4):string{
+ let total=BigInt(0)
+ for(const value of values){const amount=fixed(value,places);if(amount===null)return '—';total+=amount}
+ const text=total.toString().padStart(places+1,'0')
+ return places?`${text.slice(0,-places)}.${text.slice(-places)}`:text
+}
+
+export function procurementDecimalMin(left:string,right:string):string{const a=fixed(left,4),b=fixed(right,4);if(a===null||b===null)return '—';const text=(a<b?a:b).toString().padStart(5,'0');return `${text.slice(0,-4)}.${text.slice(-4)}`}

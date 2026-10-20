@@ -1,3 +1,6 @@
+'use client'
+
+import {changeProductUnit, productSpecUnitSuggestion} from '@/lib/product-unit-change'
 /**
  * 内部供应链 · 商品管理（桌面端）
  *
@@ -5,7 +8,6 @@
  * 支持：当前页行选择、导出当前筛选、批量分类/停售/恢复。
  * 不显示审批按钮或"待总厨审批"语义；不复用外部供应商身份。
  */
-'use client'
 import {productPriceConversion,convertProductInputPrice,type PriceBasis} from '@/lib/product-price-conversion'
 
 import { useEffect, useRef, useState } from 'react'
@@ -226,6 +228,13 @@ export default function InternalSupplyChainProductsPage() {
 
   const [preview, setPreview] = useState<{ url: string; name: string } | null>(null)
   const [confirmState, openConfirm] = useConfirmSheet()
+  // Opening before supplier loading completes must still select the sole fulfiller.
+  useEffect(() => {
+    if (formOpen && !editing && suppliers.length === 1 && !form.supplierId) {
+      setForm(current => current.supplierId ? current : { ...current, supplierId: suppliers[0].id })
+    }
+  }, [formOpen, editing, suppliers, form.supplierId])
+
   const imageInputRef = useRef<HTMLInputElement>(null)
   const requestSequence = useRef(0)
   const countSequence = useRef(0)
@@ -651,7 +660,7 @@ export default function InternalSupplyChainProductsPage() {
       || (fourUnitsUnchanged ? null : validateFourUnitForm(form))
       || validateProductQuantities(form, { editableOnly: Boolean(editing) })
       || (form.pricingMode === 'MARKUP' ? validateMarkupPercentInput(form.markupPercent) : null)
-      || validateSourceRows(formSources)
+      || (formSourcesDirty ? validateSourceRows(formSources) : null)
     if (validationError) { setFormError(validationError); return }
     setFormError(null)
     setSubmitting(true)
@@ -734,33 +743,15 @@ export default function InternalSupplyChainProductsPage() {
 
   function handleFieldChange(key: string, value: string) {
     if(key==='priceBasis'){const price=convertProductInputPrice(form,value as PriceBasis);if(price===null){setFormError('切换后的计价单位无法准确表达当前单价，请保留原计价单位');return}setFormError(null);setForm(current=>({...current,priceBasis:value as PriceBasis,price}));return}
-    setForm(current => {
-      const next = { ...current, [key]: value }
-      // 成本单位锁定为最小单位：库存单位变化时同步成本单位并固定换算因子为 1。
-      if (key === 'inventoryUnit') {
-        next.costUnit = value
-        next.inventoryUnitsPerCostUnit = '1'
-      }
-      if (key === 'inventoryUnitsPerPurchaseUnit' && current.costUnit === current.inventoryUnit && !current.inventoryUnitsPerCostUnit) next.inventoryUnitsPerCostUnit = '1'
-      return next
-    })
+    setForm(current => changeProductUnit(current, key, value))
     if (key === 'category') setCategoryNotice(null)
   }
 
   // 规格解析一键填充等多字段批量修改入口（简化界面的「按规格自动填」）。
   function handleBatchFieldChange(changes: Partial<FormState>) {
     setForm(current => {
-      let next = { ...current }
-      for (const [key, value] of Object.entries(changes)) {
-        const typedKey = key as keyof FormState
-        const typedValue = value as string
-        next = { ...next, [typedKey]: typedValue }
-        if (typedKey === 'inventoryUnit') {
-          next.costUnit = typedValue
-          next.inventoryUnitsPerCostUnit = '1'
-        }
-        if (typedKey === 'inventoryUnitsPerPurchaseUnit' && next.costUnit === next.inventoryUnit && !next.inventoryUnitsPerCostUnit) next.inventoryUnitsPerCostUnit = '1'
-      }
+      let next = {...current}
+      for (const [key,value] of Object.entries(changes)) next = changeProductUnit(next,key,value as string)
       return next
     })
   }
@@ -1100,7 +1091,7 @@ export default function InternalSupplyChainProductsPage() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="min-w-[1460px] w-full table-fixed text-left text-caption">
+              <table className="min-w-[820px] w-full table-fixed text-left text-caption">
                 <thead className="bg-bg text-gray3">
                   <tr>
                     <th className="w-9 px-3 py-3">
@@ -1113,10 +1104,6 @@ export default function InternalSupplyChainProductsPage() {
                     </th>
                     <th className="w-[245px] px-3 py-3">商品</th>
                     <th className="w-[76px] px-3 py-3">分类</th>
-                    <th className="w-[190px] px-3 py-3">采购来源</th>
-                    <th className="w-[180px] px-3 py-3">单位换算</th>
-                    <th className="w-[110px] px-3 py-3 text-right">库存 / 安全线</th>
-                    <th className="w-[96px] px-3 py-3 text-right">最小下单量</th>
                     <th className="w-[120px] px-3 py-3 text-right">采购价</th>
                     <th className="w-[94px] px-3 py-3">状态</th>
                     <th className="w-[132px] px-3 py-3 text-right">操作</th>
@@ -1158,37 +1145,6 @@ export default function InternalSupplyChainProductsPage() {
                         </td>
                         <td className="px-3 py-3 text-gray2">
                           <span className="block truncate" title={product.category || '未分类'}>{product.category || '未分类'}</span>
-                        </td>
-                        <td className="px-3 py-3">
-                          {product.upstreamSources?.length ? (
-                            <>
-                              <span className="block truncate text-gray2" title={product.upstreamSources.find(source => source.isPrimary)?.supplier.name || product.upstreamSources[0].supplier.name}>
-                                {product.upstreamSources.find(source => source.isPrimary)?.supplier.name || product.upstreamSources[0].supplier.name}
-                                {product.upstreamSources.some(source => source.isPrimary) ? '（主供）' : ''}
-                              </span>
-                              <span className="mt-0.5 block text-micro text-gray3">
-                                {product.upstreamSources.length > 1 ? `共 ${product.upstreamSources.length} 家 · ` : ''}
-                                <button onClick={() => openSources(product)} className="text-accent">维护</button>
-                              </span>
-                            </>
-                          ) : (
-                            <>
-                              <span className="block text-micro text-amber-fg">尚未维护</span>
-                              <button onClick={() => openSources(product)} className="mt-0.5 text-button text-accent">添加来源</button>
-                            </>
-                          )}
-                        </td>
-                        <td className="px-3 py-3 text-gray2">
-                          <b className="block text-ink">{unitStatus === 'VERIFIED' ? <>1 {unitValues.purchaseUnit} = {unitValues.inventoryUnitsPerPurchaseUnit} {unitValues.inventoryUnit}</> : unitStatus === 'INFERRED' ? '历史换算未核验' : '换算待核验'}</b>
-                          <span className="mt-0.5 block text-micro text-gray3">订货 {unitValues.orderUnit} · 成本 {unitValues.costUnit}</span>
-                        </td>
-                        <td className="px-3 py-3 text-right font-num">
-                          <b>{formatProductQuantity(product.stock)}</b>
-                          <span className="mt-0.5 block text-micro text-gray3">安全 {formatProductQuantity(product.minStock)}</span>
-                        </td>
-                        <td className="px-3 py-3 text-right font-num">
-                          <b>{formatProductQuantity(product.minOrderQty)}</b>
-                          <span className="mt-0.5 block text-micro text-gray3">{unitValues.orderUnit}</span>
                         </td>
                         <td className="px-3 py-3 text-right font-num">
                           <>
@@ -1655,10 +1611,8 @@ function FormDialog({
   const simpleUnitContract = isSimpleFourUnitContract(fourUnitValues)
   const [unitAdvancedOpen, setUnitAdvancedOpen] = useState(!simpleUnitContract)
   // 规格自动解析：规格写了净含量（如 箱/150g*50包）就能推出换算，免手填。
-  const specConversion = parseSpecConversion(form.spec)
-  const specApplies = Boolean(specConversion)
-    && (specConversion!.inventoryUnit !== form.inventoryUnit.trim()
-      || specConversion!.factor !== Number(form.inventoryUnitsPerPurchaseUnit))
+  const specFactor = productSpecUnitSuggestion(form)
+  const specApplies = specFactor !== null && specFactor !== Number(form.inventoryUnitsPerPurchaseUnit)
   // datalist 的原生下拉箭头在部分浏览器点击无响应，这里提供一个可点击的候选列表作为可靠入口
   const [categoryListOpen, setCategoryListOpen] = useState(false)
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false)
@@ -1889,16 +1843,15 @@ function FormDialog({
 <FormField label={'最小下单量单位（订货单位）'}><input type="text" value={form.orderUnit} onChange={e => onFieldChange('orderUnit', e.target.value)} maxLength={16} className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></FormField><FormField label={`1 ${form.orderUnit.trim() || '起订量单位'} = ？${form.inventoryUnit.trim() || '库存单位'}（起订量换算）`}><input type="number" value={form.inventoryUnitsPerOrderUnit} onChange={e => onFieldChange('inventoryUnitsPerOrderUnit', e.target.value)} min="0.000001" step="0.000001" className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></FormField>
                     </div>
                   </div>
-                  {specConversion && specApplies && (
+                  {specFactor !== null && specApplies && (
                     <button
                       type="button"
                       onClick={() => onBatchFieldChange?.({
-                        inventoryUnit: specConversion.inventoryUnit,
-                        inventoryUnitsPerPurchaseUnit: String(specConversion.factor),
+                        inventoryUnitsPerPurchaseUnit: String(specFactor),
                       })}
                       className="mt-1 rounded-cta border border-accent/30 bg-accent/5 px-3 py-1.5 text-button text-accent"
                     >
-                      按规格「{form.spec}」自动填：1 {form.purchaseUnit.trim() || '采购单位'} = {specConversion.factor} {specConversion.inventoryUnit}
+                      按规格「{form.spec}」建议填入：1 {form.purchaseUnit.trim() || '采购单位'} = {specFactor} {form.inventoryUnit}
                     </button>
                   )}
                   <p className="mt-2 text-micro leading-5 text-gray3">
@@ -2111,185 +2064,6 @@ function FormDialog({
               )}
               {pricingError && <p className="mt-1 text-micro text-red-fg">{pricingError}</p>}
             </div>
-            {!priceOnly && upstreamSuppliers && formSources && onSourceAdd && onSourceChange && onSourceRemove && (
-              <div className="col-span-2 rounded-cta border border-border bg-bg px-3 py-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-caption text-gray2">供货关系（总仓向谁采购）</div>
-                  <div className="relative">
-                    <button
-                      type="button"
-                      aria-haspopup="listbox"
-                      aria-expanded={sourcePickerOpen}
-                      onClick={() => {
-                        setSourceSupplierSearch('')
-                        setSourcePickerOpen(open => !open)
-                      }}
-                      disabled={availableSourceSuppliers.length === 0}
-                      className="rounded-cta border border-accent/30 bg-accent/5 px-3 py-1 text-micro text-accent disabled:opacity-40"
-                    >＋ 添加供应商</button>
-                    {sourcePickerOpen && (
-                      <>
-                        <div className="fixed inset-0 z-10" onClick={() => setSourcePickerOpen(false)} />
-                        <div className="absolute bottom-full right-0 z-20 mb-1 w-[420px] max-w-[calc(100vw-3rem)] rounded-cta border border-border bg-white p-3 shadow-lg">
-                          <input
-                            autoFocus
-                            type="search"
-                            value={sourceSupplierSearch}
-                            onChange={event => setSourceSupplierSearch(event.target.value)}
-                            placeholder="搜索供应商名称、编码、联系人或电话"
-                            className="h-10 w-full rounded-cta border border-border bg-bg px-3 text-body outline-none focus:border-accent"
-                          />
-                          <div role="listbox" className="mt-2 max-h-72 overflow-y-scroll [scrollbar-gutter:stable]">
-                            {visibleSourceSuppliers.length === 0 ? (
-                              <p className="px-3 py-6 text-center text-caption text-gray3">没有匹配的供应商</p>
-                            ) : visibleSourceSuppliers.map(supplier => (
-                              <button
-                                key={supplier.id}
-                                type="button"
-                                role="option"
-                                aria-selected="false"
-                                onClick={() => {
-                                  onSourceAdd(supplier.id)
-                                  setSourcePickerOpen(false)
-                                  setSourceSupplierSearch('')
-                                }}
-                                className="flex min-h-12 w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-gray2 hover:bg-bg"
-                              >
-                                <span className="min-w-0 flex-1">
-                                  <span className="block truncate text-body">{supplier.name}</span>
-                                  {(supplier.no || supplier.contactName || supplier.contactPhone) && (
-                                    <span className="block truncate text-micro text-gray3">
-                                      {[supplier.no, supplier.contactName, supplier.contactPhone].filter(Boolean).join(' · ')}
-                                    </span>
-                                  )}
-                                </span>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-                {formSources.length === 0 ? (
-                  <p className="mt-2 text-micro leading-5 text-gray3">
-                    未绑定供应商。绑定后入库只能选到已绑定的供应商；也可以建档后在「采购来源」里补绑。
-                  </p>
-                ) : (
-                  <div className="mt-2 space-y-2">
-                    {formSources.map((row, index) => (
-                      <div key={`${row.supplierId}-${index}`} className="rounded-cta border border-border bg-white p-2">
-                        <div className="grid grid-cols-12 items-end gap-2">
-                          <label className="col-span-5 flex flex-col gap-1">
-                            <span className="text-micro text-gray3">上游供应商 *</span>
-                            <select
-                              value={row.supplierId}
-                              onChange={event => onSourceChange(index, { supplierId: event.target.value })}
-                              className="h-9 rounded-cta border border-border bg-white px-2 text-caption"
-                            >
-                              {upstreamSuppliers.map(supplier => (
-                                <option
-                                  key={supplier.id}
-                                  value={supplier.id}
-                                  disabled={formSources.some((item, rowIndex) => rowIndex !== index && item.supplierId === supplier.id)}
-                                >
-                                  {supplier.no ? `${supplier.no} · ` : ''}{supplier.name}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label className="col-span-2 flex items-center gap-1 self-end pb-2 text-micro text-gray2">
-                            <input
-                              type="radio"
-                              name="form-primary-upstream-source"
-                              checked={row.isPrimary}
-                              onChange={() => onSourceChange(index, { isPrimary: true })}
-                            />
-                            主供
-                          </label>
-                          <label className="col-span-2 flex flex-col gap-1">
-                            <span className="text-micro text-gray3">采购单位 *</span>
-                            <input
-                              value={row.purchaseUnit}
-                              onChange={event => onSourceChange(index, { purchaseUnit: event.target.value })}
-                              className="h-9 rounded-cta border border-border bg-white px-2 text-caption"
-                              placeholder="箱/件/kg"
-                            />
-                          </label>
-                          <label className="col-span-2 flex flex-col gap-1">
-                            <span className="text-micro text-gray3">1单位={form.inventoryUnit || form.unit || '库存单位'} *</span>
-                            <input
-                              type="number"
-                              min="0.000001"
-                              step="0.000001"
-                              value={row.inventoryUnitsPerPurchaseUnit}
-                              onChange={event => onSourceChange(index, { inventoryUnitsPerPurchaseUnit: event.target.value })}
-                              className="h-9 rounded-cta border border-border bg-white px-2 font-num text-caption"
-                            />
-                          </label>
-                          <div className="col-span-1 flex items-end justify-end">
-                            <button type="button" onClick={() => onSourceRemove(index)} className="h-9 px-1 text-micro text-red-fg">移除</button>
-                          </div>
-                          <label className="col-span-2 flex flex-col gap-1">
-                            <span className="text-micro text-gray3">最新含税报价</span>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={row.quotedUnitPrice}
-                              onChange={event => onSourceChange(index, { quotedUnitPrice: event.target.value })}
-                              className="h-9 rounded-cta border border-border bg-white px-2 font-num text-caption"
-                              placeholder="可选"
-                            />
-                          </label>
-                          <label className="col-span-2 flex flex-col gap-1">
-                            <span className="text-micro text-gray3">起订量 *</span>
-                            <input
-                              type="number"
-                              min="0.000001"
-                              step="0.001"
-                              value={row.minOrderQty}
-                              onChange={event => onSourceChange(index, { minOrderQty: event.target.value })}
-                              className="h-9 rounded-cta border border-border bg-white px-2 font-num text-caption"
-                            />
-                          </label>
-                          <label className="col-span-2 flex flex-col gap-1">
-                            <span className="text-micro text-gray3">交期（天）*</span>
-                            <input
-                              type="number"
-                              min="0"
-                              step="1"
-                              value={row.leadTimeDays}
-                              onChange={event => onSourceChange(index, { leadTimeDays: event.target.value })}
-                              className="h-9 rounded-cta border border-border bg-white px-2 font-num text-caption"
-                            />
-                          </label>
-                          <label className="col-span-3 flex flex-col gap-1">
-                            <span className="text-micro text-gray3">供应商商品编码</span>
-                            <input
-                              value={row.supplierSku}
-                              onChange={event => onSourceChange(index, { supplierSku: event.target.value })}
-                              className="h-9 rounded-cta border border-border bg-white px-2 text-caption"
-                              placeholder="可选"
-                            />
-                          </label>
-                          <label className="col-span-3 flex flex-col gap-1">
-                            <span className="text-micro text-gray3">备注</span>
-                            <input
-                              value={row.note}
-                              onChange={event => onSourceChange(index, { note: event.target.value })}
-                              className="h-9 rounded-cta border border-border bg-white px-2 text-caption"
-                              placeholder="账期、约定等，可选"
-                            />
-                          </label>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <p className="mt-2 text-micro leading-5 text-gray3">可绑多家供应商，需指定一家主供；留空不影响建档。</p>
-              </div>
-            )}
             {!editing&&<section aria-label="单价与起订量换算" className="col-span-2 rounded-lg border border-border bg-bg p-3 text-caption">
               <table className="w-full text-left"><thead><tr><th className="pb-2">计价口径</th><th>单价及单位</th><th>数量及单位</th><th>对应金额</th></tr></thead><tbody>
                 <tr><td className="py-1">输入单价</td><td>{form.price!==''?`${form.price} 元 / ${inputPriceUnit}`:'—'}</td><td>1 {inputPriceUnit}</td><td>{form.price!==''?`${form.price} 元`:'—'}</td></tr>

@@ -7,7 +7,7 @@ import { apiFetch } from '@/lib/v2-auth'
 import { useWarehouseInboundDraft } from '@/lib/use-warehouse-inbound-draft'
 import { warehouseDocumentDecimalChanged } from '@/lib/warehouse-document-decimal'
 import { showTableReport } from '@/lib/table-report'
-import {DocumentQualityImageButton} from '@/components/v2/document-quality-image'
+import {DocumentQualityImageButton,LegacyQualityImagesButton} from '@/components/v2/document-quality-image'
 
 // ── 类型 ──────────────────────────────────────────────
 type DocRow = {
@@ -617,7 +617,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
               <h2 className="text-title font-semibold font-num">{creating ? creatingOutbound ? '新建出库单' : '新建入库单' : fullPage ? '编辑' : doc.docNo}</h2>
               {creating ? <span className="text-caption text-gray2">草稿</span> : <StatusBadge status={doc.status} />}
               <span className="text-caption text-gray2">{inbound ? '入库单' : '出库单'}</span>
-              {!creating && <DocumentQualityImageButton kind="WAREHOUSE" sourceId={doc.id} initialOpen={initialAction === 'quality'} />}
+              {!creating && (inbound ? <LegacyQualityImagesButton kind="WAREHOUSE" sourceId={doc.id} /> : <DocumentQualityImageButton kind="WAREHOUSE" sourceId={doc.id} />)}
             </div>
             <p className="mt-1 text-caption text-gray2">
               单据日期 {fmtDay(doc.effectiveAt)} · 制单 {fmtTime(doc.createdAt)}
@@ -704,7 +704,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
               <th className="py-2 pr-2">批次号</th>
               <th className="py-2 pr-2">生产日期</th>
               <th className="py-2 pr-2">到期日期</th>
-              <th className="py-2">备注</th>
+              <th className="py-2">备注</th>{inbound&&<th data-column="quality" className="py-2">质检</th>}
             </tr>
           </thead>
           <tbody>
@@ -770,6 +770,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
                       />
                     ) : (line.note || '—')}
                   </td>
+                  {inbound&&<td data-column="quality" className="py-2">{creating?<button disabled title="保存入库单后可添加图片">质检</button>:<DocumentQualityImageButton kind="BATCH" sourceId={`W:${line.id}`}/>}</td>}
                 </tr>
               )
             })}
@@ -778,7 +779,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
             <tr className="text-body font-semibold">
               <td colSpan={creating ? 10 : 9} className="py-2 text-right text-gray2">合计</td>
               <td className="py-2 text-right font-num">{creatingOutbound && doc.lines.some(line=>!(lineEdit(line.id).amount || '').trim()) ? '提交时计算' : money(doc.lines.reduce((sum, line) => sum + Number(lineEdit(line.id).amount ?? line.amount), 0))}</td>
-              <td colSpan={7}></td>
+              <td colSpan={inbound?8:7}></td>
             </tr>
           </tfoot>
         </table></div>

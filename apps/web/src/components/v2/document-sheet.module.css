@@ -52,3 +52,6 @@
 .workSection .toolbar { margin-top: 8px; }
 .workSection .tableWrap { min-height: 0; }
 .workSection .tableWrap table { min-width: 1280px; }
+
+.tableWrap [data-column=quality] { position: sticky; right: 0; min-width: 72px; background: #fff; z-index: 2; }
+.tableWrap th[data-column=quality] { background: #f6f6f5; z-index: 4; }

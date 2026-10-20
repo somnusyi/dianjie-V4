@@ -63,10 +63,18 @@ export function money(value: unknown) {
     : '—'
 }
 
+/** Unit prices retain the same six-decimal precision accepted by procurement forms. */
+export function unitPriceMoney(value: unknown) {
+  const amount = Number(value || 0)
+  return Number.isFinite(amount)
+    ? new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY', minimumFractionDigits: 2, maximumFractionDigits: 6 }).format(amount)
+    : '—'
+}
+
 export function shortDate(value: unknown) {
   if (!value) return '—'
   const date = new Date(String(value))
-  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleDateString('zh-CN')
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' })
 }
 
 export function statusTone(status: string) {

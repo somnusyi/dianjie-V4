@@ -1,8 +1,9 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
-import type { ReactNode } from 'react'
+import { usePathname, useRouter } from 'next/navigation'
+import { useEffect, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { BottomNav } from '@/components/v2'
 import { getUser } from '@/lib/v2-auth'
 import { supplierPortalMode, type SupplierPortalMode } from '@/lib/supplier-experience'
 
@@ -62,12 +63,47 @@ function isActive(pathname: string, item: NavItem) {
 }
 
 export function SupplierShell({ children }: { children: ReactNode }) {
+  const [mobileMode, setMobileMode] = useState(false)
+  const [section, setSection] = useState('orders')
   const pathname = usePathname()
+  const router = useRouter()
   const mode = supplierPortalMode(getUser()?.supplier?.businessScopes)
 
+  useEffect(() => {
+    const sync = () => setSection(location.hash.slice(1) || 'orders')
+    sync(); window.addEventListener('hashchange', sync)
+    return () => window.removeEventListener('hashchange', sync)
+  }, [pathname])
+  const upstreamOnly = mode === 'UPSTREAM_ONLY'
+  const mobileTabs = upstreamOnly ? [
+    { key: 'home', label: '工作台', icon: '⌂', href: '/v2/supplier/home' },
+    { key: 'orders', label: '采购单', icon: '☷', href: '/v2/supplier/upstream#orders' },
+    { key: 'claims', label: '差异', icon: '△', href: '/v2/supplier/upstream#claims' },
+    { key: 'settlements', label: '对账', icon: '⛁', href: '/v2/supplier/upstream#settlements' },
+    { key: 'me', label: '我的', icon: '◐', href: '/v2/me' },
+  ] : [
+    { key: 'home', label: '首页', icon: '⌂', href: '/v2/supplier/home' },
+    { key: 'orders', label: '订单', icon: '☷', href: '/v2/supplier/orders' },
+    { key: 'inventory', label: '库存', icon: '▦', href: '/v2/supplier/inventory' },
+    { key: 'billing', label: '账单', icon: '⛁', href: '/v2/supplier/billing' },
+    { key: 'me', label: '我的', icon: '◐', href: '/v2/supplier/history' },
+  ]
+  const mobileActive = pathname.startsWith('/v2/supplier/upstream') && upstreamOnly
+    ? (section === 'shipments' ? 'orders' : section)
+    : mobileTabs.find(item => pathname === item.href || pathname.startsWith(`${item.href}/`))?.key || 'home'
+
+  function navigate(event: ReactMouseEvent<HTMLDivElement>) {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    const link = (event.target as Element)?.closest?.('a[href]') as HTMLAnchorElement | null
+    const href = link?.getAttribute('href') || ''
+    if (!href.startsWith('/v2/') || link?.target === '_blank' || link?.hasAttribute('download')) return
+    event.preventDefault()
+    router.push(href)
+  }
+
   return (
-    <div className="supplier-portal min-h-screen bg-bg">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-border bg-white lg:flex">
+    <div onClickCapture={navigate} data-navigation-mode={mobileMode ? 'mobile' : 'desktop'} className={`supplier-portal min-h-screen bg-bg ${mobileMode ? 'supplier-mobile-mode' : 'supplier-desktop-mode'}`}>
+      {!mobileMode && <aside className="fixed inset-y-0 left-0 z-30 flex w-64 flex-col border-r border-border bg-white">
         <div className="border-b border-border px-5 py-5">
           <Link href="/v2/supplier/home" className="flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber text-lg font-bold text-white">滇</span>
@@ -116,13 +152,20 @@ export function SupplierShell({ children }: { children: ReactNode }) {
             </p>
           </div>
         </div>
-      </aside>
+      </aside>}
 
-      <main className="min-h-screen lg:pl-64">
-        <div className="mx-auto min-h-screen w-full max-w-[1440px] lg:px-6 lg:py-5">
+      <main className={`min-h-screen ${mobileMode ? 'pb-16 pt-12' : 'pl-64 pt-10'}`}>
+        <div className={`mx-auto min-h-screen w-full max-w-[1440px] ${mobileMode ? '' : 'px-6 py-5'}`}>
           {children}
         </div>
       </main>
+      {mobileMode && <BottomNav tabs={mobileTabs} activeKey={mobileActive} onChange={key => {
+        const target = mobileTabs.find(item => item.key === key)
+        if (!target) return
+        if (target.href.startsWith(`${pathname}#`)) location.hash = target.href.split('#')[1]
+        else router.push(target.href)
+      }} />}
+      <button type="button" aria-label={mobileMode ? '切换到电脑版' : '切换到手机版'} aria-pressed={mobileMode} onClick={() => setMobileMode(value => !value)} className="fixed right-4 top-3 z-30 rounded-lg border border-border bg-white px-3 py-1.5 text-caption text-amber-fg shadow-sm">{mobileMode ? '切换电脑版' : '切换手机版'}</button>
     </div>
   )
 }

@@ -1,9 +1,9 @@
 'use client'
 import Link from 'next/link'
+import {DocumentQualityImageButton} from './document-quality-image'
 import {inventoryDocumentHref} from '@/lib/inventory-document-navigation'
 import { getUser } from '@/lib/v2-auth'
 import type { ManagementRow } from '@/lib/inventory-management'
-import {DocumentQualityImageButton} from './document-quality-image'
 
 /** Only warehouse documents share this lifecycle. Receipt/return states stay independent. */
 export function WarehouseDocumentActions({ row, from }: { row: ManagementRow; from?:unknown }) {
@@ -20,6 +20,6 @@ export function WarehouseDocumentActions({ row, from }: { row: ManagementRow; fr
     <span aria-hidden="true" className="text-gray3">｜</span>
     <Link href={inventoryDocumentHref(base,from,'print')}>打印</Link>
     {pending && edit ? <Link href={inventoryDocumentHref(base,from)} title="进入编辑页保存单据修改">保存</Link> : <button disabled title="单据尚未处于可编辑状态">保存</button>}
-    <DocumentQualityImageButton kind="WAREHOUSE" sourceId={String(row.detailId)} />
+    {from === 'other-out' && <DocumentQualityImageButton kind="WAREHOUSE" sourceId={String(row.detailId)} />}
   </div>
 }

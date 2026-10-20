@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next'
 import './globals.css'
 import { TableReportHost } from '@/components/v2/report-actions'
 import { UiDialogHost } from '@/components/v2/ui-dialog-host'
+import { TableInputInteractions } from '@/components/v2/table-input-interactions'
 
 export const metadata: Metadata = {
   title: '滇界云管 · 连锁餐饮管理平台',
@@ -29,7 +30,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="zh-CN">
-      <body>{children}<UiDialogHost /><TableReportHost /></body>
+      <body><TableInputInteractions />{children}<UiDialogHost /><TableReportHost /></body>
     </html>
   )
 }

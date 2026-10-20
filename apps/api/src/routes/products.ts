@@ -900,45 +900,86 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     }
   })
 
-  /** 保存分类顺序；必须一次提交当前供应商全部分类，防止越权/遗漏。 */
+  /** Explicit ordering save may materialize legacy names; reads never mutate categories. */
   app.patch('/categories-order', auth(app), async (req: any, reply: any) => {
-    const { tenantId, role, userId, supplierId } = req.user
+    const { tenantId, role, userId } = req.user
     const scopedSupplierId = supplierScopeOrReply(req, reply, 'catalog.manage')
     if (!scopedSupplierId) return
-    const parsed = z.object({ ids: z.array(z.string()).min(1).max(200) }).safeParse(req.body)
+    // Keep the former ID-only request compatible. New clients send their full read snapshot,
+    // including null IDs for legacy names, so a stale request cannot overwrite a changed set.
+    const parsed = z.union([
+      z.object({ categories: z.array(z.object({
+        id: z.string().min(1).nullable(), name: categoryNameSchema,
+      }).strict()).min(1).max(200) }).strict(),
+      z.object({ ids: z.array(z.string().min(1)).min(1).max(200) }).strict(),
+    ]).safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-    const ids = [...new Set(parsed.data.ids)]
+    let savedCount = 0
     try {
       await prisma.$transaction(async tx => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`supplier-categories:${tenantId}:${scopedSupplierId}`}))`
-        const existing = await tx.supplierProductCategory.findMany({
-          where: { tenantId, supplierId: scopedSupplierId }, select: { id: true },
+        const supplier = await tx.supplier.findFirst({
+          where: { id: scopedSupplierId, tenantId }, select: { id: true },
         })
-        if (ids.length !== existing.length || existing.some(row => !ids.includes(row.id))) {
-          throw Object.assign(new Error('分类顺序必须包含当前全部分类'), { statusCode: 400 })
+        if (!supplier) throw Object.assign(new Error('供应商不存在'), { statusCode: 404 })
+        const existing = await tx.supplierProductCategory.findMany({
+          where: { tenantId, supplierId: scopedSupplierId }, select: { id: true, name: true, sortOrder: true },
+        })
+        const productNames = await tx.product.groupBy({
+          by: ['category'], where: { tenantId, supplierId: scopedSupplierId }, _count: { _all: true },
+        })
+        const visible = new Map<string, string | null>(existing.map(row => [row.name, row.id]))
+        for (const row of productNames) {
+          const name = row.category || '其他'
+          if (!visible.has(name)) visible.set(name, null)
         }
-        for (let i = 0; i < ids.length; i++) {
-          const updated = await tx.supplierProductCategory.updateMany({
-            where: { id: ids[i], tenantId, supplierId: scopedSupplierId }, data: { sortOrder: i },
-          })
-          if (updated.count !== 1) {
-            throw Object.assign(new Error('分类状态已变化，请刷新后重试'), { statusCode: 409 })
+        const requested = 'categories' in parsed.data ? parsed.data.categories : parsed.data.ids.map(id => {
+          const master = existing.find(row => row.id === id)
+          return { id, name: master?.name || '' }
+        })
+        if (new Set(requested.map(row => row.name)).size !== requested.length
+          || new Set(requested.filter(row => row.id !== null).map(row => row.id)).size !== requested.filter(row => row.id !== null).length) {
+          throw Object.assign(new Error('分类顺序不能包含重复分类'), { statusCode: 400 })
+        }
+        if (requested.length !== visible.size || requested.some(row => !visible.has(row.name) || visible.get(row.name) !== row.id)) {
+          throw Object.assign(new Error('分类列表已变化，请刷新后重新排序；当前排序尚未保存'), { statusCode: 409 })
+        }
+        const ids: string[] = []
+        const materializedNames: string[] = []
+        for (let i = 0; i < requested.length; i++) {
+          const row = requested[i]
+          if (row.id === null) {
+            const created = await tx.supplierProductCategory.create({ data: {
+              tenantId, supplierId: scopedSupplierId, name: row.name,
+              sortOrder: i, isActive: true, isSystem: row.name === '其他',
+            } })
+            ids.push(created.id)
+            materializedNames.push(row.name)
+          } else {
+            const updated = await tx.supplierProductCategory.updateMany({
+              where: { id: row.id, tenantId, supplierId: scopedSupplierId, name: row.name }, data: { sortOrder: i },
+            })
+            if (updated.count !== 1) throw Object.assign(new Error('分类状态已变化，请刷新后重试'), { statusCode: 409 })
+            ids.push(row.id)
           }
         }
-        await tx.opLog.create({
-          data: {
-            tenantId, userId, role,
-            action: `调整商品分类顺序：${ids.length} 类`,
-            entityType: 'ProductCategory', targetId: scopedSupplierId,
-            metadata: { supplierId: scopedSupplierId, categoryIds: ids },
+        savedCount = ids.length
+        await tx.opLog.create({ data: {
+          tenantId, userId, role,
+          action: `调整商品分类顺序：${ids.length} 类`,
+          entityType: 'ProductCategory', targetId: scopedSupplierId,
+          metadata: {
+            supplierId: scopedSupplierId, categoryIds: ids, materializedNames,
+            before: existing.map(row => ({ id: row.id, name: row.name, sortOrder: row.sortOrder })),
           },
-        })
-      })
+        } })
+      }, { isolationLevel: 'Serializable' })
     } catch (error: any) {
       if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      if (error?.code === 'P2002' || error?.code === 'P2034') return reply.status(409).send({ error: '分类列表已变化，请刷新后重新排序；当前排序尚未保存' })
       throw error
     }
-    return { ok: true, count: ids.length }
+    return { ok: true, count: savedCount }
   })
 
   /** 商品关键操作记录；供应商只能查看自家商品相关日志。 */

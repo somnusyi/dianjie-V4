@@ -45,7 +45,7 @@ export async function changeProcurementApproval(input:{tenantId:string;userId:st
   if(['CANCELLED','REJECTED'].includes(source.status))throw fail('已取消或已驳回的单据不可直接审批')
   if(source.approvalVersion!==input.approvalVersion||source.rowVersion!==input.sourceVersion)throw fail('采购单据版本已变化，请刷新核对；输入保留')
   const state=source.approvalStatus??'DRAFT'
-  const contentFingerprint=procurementContentFingerprint(input.kind,source)
+  let contentFingerprint=procurementContentFingerprint(input.kind,source)
   let next:'DRAFT'|'PENDING'|'AUDITED'|'REVIEWED'
   let editSnapshot:{before:unknown;after:unknown}|undefined
   if(input.action==='save'){
@@ -58,7 +58,13 @@ export async function changeProcurementApproval(input:{tenantId:string;userId:st
    const [from,to]=transitions[input.action];if(state!==from)throw fail('当前审批状态不允许此操作')
    if(['audit','review'].includes(input.action)&&source.approvalContentFingerprint!==contentFingerprint)throw fail('提交后的业务内容已变化，请重新保存提交')
    next=to
-   if(input.action==='submit'&&hooks.submit)await hooks.submit(tx,source)
+   if(input.action==='submit'&&hooks.submit){
+    await hooks.submit(tx,source)
+    // Submission may allocate a final return's rounding remainder. Freeze the
+    // actual submitted amount, not the pre-allocation draft fingerprint.
+    const submitted=await read();if(!submitted)throw fail('采购单据不存在',404)
+    contentFingerprint=procurementContentFingerprint(input.kind,submitted)
+   }
    if(input.action==='review'){
     if(!hooks.review)throw fail('采购复审完整业务尚未接入，不允许仅改状态',503)
     const audit=await tx.procurementApprovalEvent.findFirst({where:{tenantId:input.tenantId,...(input.kind==='RECEIPT'?{receiptId:source.id}:{returnId:source.id}),action:'AUDIT',afterValue:{path:['approvalVersion'],equals:source.approvalVersion}},orderBy:{createdAt:'desc'}})

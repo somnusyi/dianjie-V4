@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { BottomNav, Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
+import { SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT } from '@/components/v2/supply-chain-shell'
 import { ProductToolTabs } from '@/components/v2/product-tool-tabs'
 import { clientRequestId } from '@/lib/client-id'
 import { filterSupplierCategories } from '@/lib/supplier-category-filter'
@@ -26,7 +27,12 @@ export default function SupplierCategoriesPage() {
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([])
   const [selectedSupplierId, setSelectedSupplierId] = useState('')
   const [categories, setCategories] = useState<Category[] | null>(null)
+  const [categorySnapshot, setCategorySnapshot] = useState<Category[]>([])
+  const loadGeneration = useRef(0)
+  const currentSupplierId = useRef(selectedSupplierId)
+  currentSupplierId.current = selectedSupplierId
   const [newName, setNewName] = useState('')
+  const [creating, setCreating] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
   const [mergeSourceId, setMergeSourceId] = useState<string | null>(null)
@@ -38,6 +44,36 @@ export default function SupplierCategoriesPage() {
   const [error, setError] = useState<string | null>(null)
   const [confirmState, openConfirm] = useConfirmSheet()
 
+  function confirmDiscard(proceed: () => void) {
+    if (!orderDirty) { proceed(); return }
+    openConfirm({ title: '排序尚未保存', body: '离开将放弃本次排序。可以取消返回，先保存排序。', confirmLabel: '放弃排序并离开', onConfirm: proceed })
+  }
+
+  useEffect(() => {
+    if (!orderDirty) return
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
+    const navigate = (event: Event) => {
+      event.preventDefault()
+      const proceed = (event as CustomEvent<{ proceed?: () => void }>).detail?.proceed
+      if (proceed) confirmDiscard(proceed)
+    }
+    const anchor = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+      const link = (event.target as Element)?.closest?.('a[href]') as HTMLAnchorElement | null
+      if (!link || link.target === '_blank' || link.hasAttribute('download') || link.href === location.href) return
+      event.preventDefault(); event.stopPropagation()
+      confirmDiscard(() => { location.href = link.href })
+    }
+    window.addEventListener('beforeunload', warn)
+    window.addEventListener(SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT, navigate)
+    window.addEventListener('click', anchor, true)
+    return () => {
+      window.removeEventListener('beforeunload', warn)
+      window.removeEventListener(SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT, navigate)
+      window.removeEventListener('click', anchor, true)
+    }
+  }, [orderDirty, openConfirm])
+
   function scopedPath(path: string) {
     if (!internalSupplyChain || !selectedSupplierId) return path
     return `${path}${path.includes('?') ? '&' : '?'}supplierId=${encodeURIComponent(selectedSupplierId)}`
@@ -45,12 +81,18 @@ export default function SupplierCategoriesPage() {
 
   async function load() {
     if (internalSupplyChain && !selectedSupplierId) return
+    const generation = ++loadGeneration.current
+    const supplierAtRequest = selectedSupplierId
     try {
       const rows = await apiFetch<Category[]>(scopedPath('/api/products/categories'))
-      setCategories(filterSupplierCategories(Array.isArray(rows) ? rows : []))
+      if (generation !== loadGeneration.current || supplierAtRequest !== currentSupplierId.current) return
+      const all = Array.isArray(rows) ? rows : []
+      setCategorySnapshot(all)
+      setCategories(filterSupplierCategories(all))
       setOrderDirty(false)
       setError(null)
     } catch (e: any) {
+      if (generation !== loadGeneration.current || supplierAtRequest !== currentSupplierId.current) return
       setError(e.message || '分类加载失败')
     }
   }
@@ -65,12 +107,20 @@ export default function SupplierCategoriesPage() {
       })
       .catch(e => setError(e.message || '供应商加载失败'))
   }, [internalSupplyChain])
-  useEffect(() => { void load() }, [internalSupplyChain, selectedSupplierId])
+  useEffect(() => {
+    setCategories(null)
+    setCategorySnapshot([])
+    setOrderDirty(false)
+    setEditingId(null)
+    setCreating(false)
+    setNewName('')
+    setMergeSourceId(null)
+    setError(null)
+    void load()
+    return () => { loadGeneration.current += 1 }
+  }, [internalSupplyChain, selectedSupplierId])
 
-  const activeCount = categories?.filter(category => category.isActive).length || 0
-  const inactiveCount = categories?.filter(category => !category.isActive).length || 0
-  const skuCount = categories?.reduce((sum, category) => sum + category.count, 0) || 0
-  const sourceCategory = categories?.find(category => category.id === mergeSourceId) || null
+  const sourceCategory = mergeSourceId ? categories?.find(category => category.id === mergeSourceId) || null : null
   const mergeTargets = categories?.filter(category =>
     category.id && category.id !== mergeSourceId && category.isActive
   ) || []
@@ -82,7 +132,7 @@ export default function SupplierCategoriesPage() {
       return !keyword || category.name.toLowerCase().includes(keyword)
     })
   }, [categories, query, view])
-  const canReorder = view === 'all' && !query.trim()
+  const canReorder = view === 'all' && !query.trim() && !creating && !editingId && !mergeSourceId
 
   async function createCategory() {
     const name = newName.trim()
@@ -94,6 +144,7 @@ export default function SupplierCategoriesPage() {
         headers: { 'Idempotency-Key': clientRequestId() },
       })
       setNewName('')
+      setCreating(false)
       await load()
     } catch (e: any) {
       setError(e.message || '新增分类失败')
@@ -166,33 +217,38 @@ export default function SupplierCategoriesPage() {
     })
   }
 
-  function move(index: number, direction: -1 | 1) {
-    if (!categories || busy || !canReorder) return
-    const target = index + direction
-    if (target < 0 || target >= categories.length) return
+  function moveTo(index: number, target: number) {
+    if (!categories || busy || !canReorder || !Number.isInteger(target)) return
+    if (index < 0 || target < 0 || target >= categories.length || index === target) return
     const next = [...categories]
-    ;[next[index], next[target]] = [next[target], next[index]]
+    const [row] = next.splice(index, 1)
+    next.splice(target, 0, row)
     setCategories(next)
     setOrderDirty(true)
   }
 
+  function move(index: number, direction: -1 | 1) {
+    moveTo(index, index + direction)
+  }
+
   async function saveOrder() {
     if (!categories || !orderDirty || busy) return
-    const ids = categories.map(category => category.id).filter((id): id is string => !!id)
-    if (ids.length !== categories.length) {
-      setError('存在尚未纳入主数据的历史分类，请先刷新或执行分类迁移')
-      return
-    }
+    // Keep hidden store-only categories at their read positions in the full snapshot.
+    let nextVisible = 0
+    const orderedCategories = categorySnapshot.map(original => {
+      const category = filterSupplierCategories([original]).length ? categories[nextVisible++] : original
+      return { id: category.id, name: category.name }
+    })
     setBusy(true); setError(null)
     try {
       await apiFetch(scopedPath('/api/products/categories-order'), {
-        method: 'PATCH', body: JSON.stringify({ ids }),
+        method: 'PATCH', body: JSON.stringify({ categories: orderedCategories }),
         headers: { 'Idempotency-Key': clientRequestId() },
       })
       await load()
     } catch (e: any) {
+      // Keep the local order and error visible so transient failures can be retried.
       setError(e.message || '分类排序保存失败')
-      await load()
     } finally {
       setBusy(false)
     }
@@ -245,7 +301,8 @@ export default function SupplierCategoriesPage() {
         {internalSupplyChain && (
           <select
             value={selectedSupplierId}
-            onChange={event => setSelectedSupplierId(event.target.value)}
+            disabled={busy}
+            onChange={event => { const id = event.target.value; confirmDiscard(() => setSelectedSupplierId(id)) }}
             className="h-10 min-w-64 rounded-cta border border-border bg-white px-3 text-body"
           >
             {suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}
@@ -258,35 +315,48 @@ export default function SupplierCategoriesPage() {
 
       {error && <div className="mx-4 mt-3 rounded-cta bg-red-bg p-3 text-caption text-red-fg lg:mx-6">{error}</div>}
 
-      <div className="mt-2 grid gap-4 px-4 lg:grid-cols-[320px_minmax(0,1fr)] lg:px-6">
-        <aside className="space-y-3">
-          <section className="rounded-card border border-border bg-white p-4">
-            <h2 className="text-h2">分类概况</h2>
-            <div className="mt-3 grid grid-cols-3 gap-2">
-              <Metric label="启用" value={activeCount} />
-              <Metric label="停用" value={inactiveCount} />
-              <Metric label="SKU" value={skuCount} />
+      <div className="mt-2 px-4 lg:px-6">
+
+        <section className="min-w-0">
+          <div className="rounded-card border border-border bg-white p-3">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center">
+              <input
+                type="search"
+                value={query}
+                onChange={event => setQuery(event.target.value)}
+                placeholder="搜索分类"
+                className="min-w-0 flex-1 rounded-cta border border-border bg-bg px-3 py-2 text-body outline-none focus:border-accent"
+              />
+              <div className="flex gap-1 rounded-cta bg-bg p-1">
+                {([['all', '全部'], ['active', '启用'], ['inactive', '停用']] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setView(key)}
+                    className={`flex-1 whitespace-nowrap rounded-lg px-3 py-1.5 text-caption ${view === key ? 'bg-white text-ink shadow-sm' : 'text-gray3'}`}
+                  >{label}</button>
+                ))}
+              </div>
+              <button onClick={() => setCreating(true)} disabled={busy || categories === null || creating || orderDirty} className="whitespace-nowrap rounded-cta bg-accent px-3 py-2 text-button text-white disabled:opacity-40">＋ 新增分类</button>
+              {orderDirty && (<>
+                <button onClick={() => void saveOrder()} disabled={busy} className="rounded-cta bg-ink px-4 py-2 text-button text-white disabled:opacity-50">
+                  保存排序
+                </button>
+                <button disabled={busy} onClick={() => { setCategories(filterSupplierCategories(categorySnapshot)); setOrderDirty(false) }} className="whitespace-nowrap rounded-cta border border-border px-3 py-2 text-button text-gray2">取消排序</button>
+              </>)}
             </div>
-          </section>
+            <p className="mt-2 text-micro text-gray3">
+              {orderDirty ? '排序尚未保存，请先保存或取消排序，再新增或修改分类。' : canReorder ? '输入序号后离开输入框即可移动，也可置顶、置底；完成后统一保存。' : '搜索或筛选状态下不调整排序。'}
+            </p>
+          </div>
 
-          <section className="rounded-card border border-border bg-bg-card p-4">
-            <h2 className="text-h2">新增分类</h2>
-            <input
-              value={newName}
-              onChange={event => setNewName(event.target.value)}
-              onKeyDown={event => { if (event.key === 'Enter') void createCategory() }}
-              maxLength={40}
-              placeholder="如：蔬菜、冻品、调味料"
-              className="mt-3 w-full rounded-cta border border-border bg-white px-3 py-2 text-body outline-none focus:border-accent"
-            />
-            <button
-              onClick={() => void createCategory()}
-              disabled={!newName.trim() || busy}
-              className="mt-2 w-full rounded-cta bg-accent py-2 text-button text-white disabled:opacity-40"
-            >新增分类</button>
-            <p className="mt-2 text-micro text-gray3">分类会同步用于商品报价、库存筛选和导入校验。</p>
-          </section>
-
+          {creating && (
+            <form onSubmit={event => { event.preventDefault(); void createCategory() }} className="mt-3 flex flex-wrap items-center gap-2 rounded-card border border-border bg-white p-4">
+              <label htmlFor="new-category-name" className="text-button">分类名称</label>
+              <input id="new-category-name" autoFocus value={newName} onChange={event => setNewName(event.target.value)} maxLength={40} placeholder="如：蔬菜、冻品、调味料" disabled={busy} className="min-w-0 flex-1 rounded-cta border border-border bg-white px-3 py-2 text-body outline-none focus:border-accent" />
+              <button type="submit" disabled={!newName.trim() || busy} className="rounded-cta bg-accent px-4 py-2 text-button text-white disabled:opacity-40">确认新增</button>
+              <button type="button" disabled={busy} onClick={() => { setCreating(false); setNewName('') }} className="rounded-cta border border-border px-4 py-2 text-button text-gray2">取消</button>
+            </form>
+          )}
           {sourceCategory && (
             <section className="rounded-card border border-orange/40 bg-orange/5 p-4">
               <div className="flex items-center justify-between gap-2">
@@ -310,38 +380,6 @@ export default function SupplierCategoriesPage() {
               >预览并确认合并</button>
             </section>
           )}
-        </aside>
-
-        <section className="min-w-0">
-          <div className="rounded-card border border-border bg-white p-3">
-            <div className="flex flex-col gap-2 md:flex-row md:items-center">
-              <input
-                type="search"
-                value={query}
-                onChange={event => setQuery(event.target.value)}
-                placeholder="搜索分类"
-                className="min-w-0 flex-1 rounded-cta border border-border bg-bg px-3 py-2 text-body outline-none focus:border-accent"
-              />
-              <div className="flex gap-1 rounded-cta bg-bg p-1">
-                {([['all', '全部'], ['active', '启用'], ['inactive', '停用']] as const).map(([key, label]) => (
-                  <button
-                    key={key}
-                    onClick={() => setView(key)}
-                    className={`flex-1 whitespace-nowrap rounded-lg px-3 py-1.5 text-caption ${view === key ? 'bg-white text-ink shadow-sm' : 'text-gray3'}`}
-                  >{label}</button>
-                ))}
-              </div>
-              {orderDirty && (
-                <button onClick={() => void saveOrder()} disabled={busy} className="rounded-cta bg-ink px-4 py-2 text-button text-white disabled:opacity-50">
-                  保存排序
-                </button>
-              )}
-            </div>
-            <p className="mt-2 text-micro text-gray3">
-              {canReorder ? '使用上下箭头调整顺序，完成后统一保存。' : '搜索或筛选状态下不调整排序。'}
-            </p>
-          </div>
-
           {categories === null && <div className="py-10 text-center text-caption text-gray3">加载中…</div>}
           {categories !== null && filtered.length === 0 && (
             <div className="mt-3 rounded-card border border-border bg-white p-10 text-center text-caption text-gray3">没有符合条件的分类</div>
@@ -349,17 +387,37 @@ export default function SupplierCategoriesPage() {
 
           <ul className="mt-3 space-y-2">
             {filtered.map(category => {
-              const index = categories?.findIndex(item => item.id === category.id) ?? -1
+              const index = categories?.findIndex(item => category.id ? item.id === category.id : !item.id && item.name === category.name) ?? -1
               return (
-                <li key={category.id || category.name} className={`rounded-card border border-border bg-white p-3 ${category.isActive ? '' : 'opacity-65'}`}>
+                <li key={category.id ? `id:${category.id}` : `legacy:${category.name}`} className={`rounded-card border border-border bg-white px-4 py-5 ${category.isActive ? '' : 'opacity-65'}`}>
                   <div className="flex items-center gap-3">
                     <div className={`flex flex-col gap-1 ${canReorder ? '' : 'invisible'}`}>
                       <button onClick={() => move(index, -1)} disabled={index <= 0 || busy} className="h-6 w-7 rounded bg-bg text-gray2 disabled:opacity-20" aria-label={`上移 ${category.name}`}>↑</button>
                       <button onClick={() => move(index, 1)} disabled={index < 0 || index === (categories?.length || 0) - 1 || busy} className="h-6 w-7 rounded bg-bg text-gray2 disabled:opacity-20" aria-label={`下移 ${category.name}`}>↓</button>
                     </div>
 
+                    <div className="flex w-20 shrink-0 flex-col gap-1">
+                      <input
+                        key={`${category.id || category.name}:${index}`}
+                        type="number" min={1} max={categories?.length || 1}
+                        defaultValue={index + 1}
+                        disabled={busy || !canReorder}
+                        aria-label={`${category.name}的排序序号`}
+                        onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }}
+                        onBlur={event => {
+                          const position = Number(event.currentTarget.value)
+                          if (Number.isInteger(position) && position >= 1 && position <= (categories?.length || 0)) moveTo(index, position - 1)
+                          else event.currentTarget.value = String(index + 1)
+                        }}
+                        className="w-full rounded border border-border bg-white px-2 py-1 text-center text-caption disabled:opacity-40"
+                      />
+                      <div className="flex justify-between gap-1 text-micro text-accent">
+                        <button onClick={() => moveTo(index, 0)} disabled={busy || !canReorder || index <= 0} className="disabled:opacity-30" aria-label={`置顶 ${category.name}`}>置顶</button>
+                        <button onClick={() => moveTo(index, (categories?.length || 1) - 1)} disabled={busy || !canReorder || index === (categories?.length || 0) - 1} className="disabled:opacity-30" aria-label={`置底 ${category.name}`}>置底</button>
+                      </div>
+                    </div>
                     <div className="min-w-0 flex-1">
-                      {editingId === category.id ? (
+                      {category.id && editingId === category.id ? (
                         <div className="flex flex-col gap-2 sm:flex-row">
                           <input
                             autoFocus value={editingName} maxLength={40}
@@ -385,9 +443,9 @@ export default function SupplierCategoriesPage() {
 
                     {!category.isSystem && category.id && editingId !== category.id && (
                       <div className="flex flex-wrap justify-end gap-x-3 gap-y-1">
-                        <button onClick={() => { setEditingId(category.id); setEditingName(category.name) }} className="text-caption text-accent">改名</button>
-                        {category.isActive && <button onClick={() => startMerge(category)} className="text-caption text-orange-fg">合并</button>}
-                        <button onClick={() => requestToggle(category)} className={`text-caption ${category.isActive ? 'text-red-fg' : 'text-green-fg'}`}>
+                        <button disabled={orderDirty} onClick={() => { setEditingId(category.id); setEditingName(category.name) }} className="text-caption text-accent disabled:opacity-40">改名</button>
+                        {category.isActive && <button disabled={orderDirty} onClick={() => startMerge(category)} className="text-caption text-orange-fg disabled:opacity-40">合并</button>}
+                        <button disabled={orderDirty} onClick={() => requestToggle(category)} className={`text-caption disabled:opacity-40 ${category.isActive ? 'text-red-fg' : 'text-green-fg'}`}>
                           {category.isActive ? '停用' : '恢复'}
                         </button>
                       </div>
@@ -418,15 +476,6 @@ export default function SupplierCategoriesPage() {
         }}
       />
       <ConfirmSheet {...confirmState} />
-    </div>
-  )
-}
-
-function Metric({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-xl bg-bg p-2 text-center">
-      <div className="font-num text-h2">{value}</div>
-      <div className="text-micro text-gray3">{label}</div>
     </div>
   )
 }

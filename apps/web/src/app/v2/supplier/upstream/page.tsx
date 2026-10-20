@@ -2,11 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import { procurementDecimalProduct } from '@/lib/procurement-decimal-preview'
 import { settlementLineTypeLabel } from '@/lib/upstream-settlement-copy'
 import { clientRequestId } from '@/lib/client-id'
+import {DocumentQualityImageButton,OrderLineQuality} from '@/components/v2/document-quality-image'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import {
   money,
+  unitPriceMoney,
   shortDate,
   statusTone,
   UPSTREAM_CLAIM_STATUS_LABEL,
@@ -28,11 +31,13 @@ type OrderLine = {
 type Order = {
   id: string
   no: string
+  rowVersion?: number
   status: string
   totalAmount: string | number
   expectedArrivalAt?: string | null
   warehouse: { id: string; name: string }
   lines?: OrderLine[]
+  revisions?: Array<{ id: string; revisionNo: number; status: string; reason: string; reviewNote?: string | null; beforeSnapshot?: { lines?: Array<{ id: string; quantity: string | number; unitPrice?: string | number }> }; afterSnapshot?: { lines?: Array<{ id: string; quantity: string | number; unitPrice?: string | number }> } }>
   _count?: { lines: number; shipments: number; receipts: number }
 }
 type Shipment = {
@@ -136,6 +141,8 @@ export default function SupplierUpstreamPage() {
   const [viewingStatement, setViewingStatement] = useState<StatementDetail | null>(null)
   const [editMode, setEditMode] = useState<'change' | 'ship' | null>(null)
   const [lineValues, setLineValues] = useState<Record<string, string>>({})
+  const [linePrices, setLinePrices] = useState<Record<string, string>>({})
+  const changeInFlight = useRef(false)
   const [changeReason, setChangeReason] = useState('')
   const [shipping, setShipping] = useState({ carrierName: '', trackingNo: '', expectedArrivalAt: '' })
   const [respondingClaim, setRespondingClaim] = useState<Claim | null>(null)
@@ -145,8 +152,12 @@ export default function SupplierUpstreamPage() {
   const shipmentRequestKeysRef = useRef<Record<string, string>>({})
 
   useEffect(() => {
-    const requested = window.location.hash.replace('#', '') as Tab
-    if (TABS.some(item => item.key === requested)) setTab(requested)
+    const sync = () => {
+      const requested = window.location.hash.replace('#', '') as Tab
+      if (TABS.some(item => item.key === requested)) setTab(requested)
+    }
+    sync(); window.addEventListener('hashchange', sync)
+    return () => window.removeEventListener('hashchange', sync)
   }, [])
 
   const loadAll = useCallback(async () => {
@@ -211,6 +222,7 @@ export default function SupplierUpstreamPage() {
       setEditingOrder(detail)
       setEditMode(mode)
       setChangeReason('')
+      setLinePrices(Object.fromEntries((detail.lines || []).map(line => [line.id, String(line.unitPrice)])))
       setShipping({ carrierName: '', trackingNo: '', expectedArrivalAt: detail.expectedArrivalAt?.slice(0, 10) || '' })
       setLineValues(Object.fromEntries((detail.lines || []).map(line => {
         const target = Number(line.confirmedQty ?? line.orderedQty)
@@ -256,13 +268,18 @@ export default function SupplierUpstreamPage() {
   }
 
   async function submitChange() {
+    if (changeInFlight.current) return
     if (!editingOrder || !changeReason.trim()) return setError('请填写改单原因')
-    const lines = (editingOrder.lines || []).map(line => ({ lineId: line.id, quantity: Number(lineValues[line.id]) }))
-    await run(editingOrder.id, () => apiFetch(`/api/upstream/purchase-orders/${editingOrder.id}/propose-change`, {
-      method: 'POST', body: JSON.stringify({ reason: changeReason.trim(), lines }),
-    }), '改单申请已提交，等待采购方审核')
-    setEditingOrder(null)
-    setEditMode(null)
+    if (!Number.isInteger(editingOrder.rowVersion)) return setError('缺少当前采购单版本，请关闭并刷新后重试')
+    const lines = (editingOrder.lines || []).map(line => ({ lineId: line.id, quantity: Number(lineValues[line.id]), unitPrice: Number(linePrices[line.id]) }))
+    if (lines.some(line => !Number.isFinite(line.quantity) || line.quantity <= 0 || !Number.isFinite(line.unitPrice) || line.unitPrice <= 0 || !/^\d+(?:\.\d{1,6})?$/.test(linePrices[line.lineId] || '') || !/^\d+(?:\.\d{1,6})?$/.test(lineValues[line.lineId] || ''))) return setError('数量和申请单价必须大于0，最多六位小数')
+    changeInFlight.current = true
+    try {
+      const succeeded = await run(editingOrder.id, () => apiFetch(`/api/upstream/purchase-orders/${editingOrder.id}/propose-change`, {
+        method: 'POST', body: JSON.stringify({ rowVersion: editingOrder.rowVersion, reason: changeReason.trim(), lines }),
+      }), '改单申请已提交，等待供应链审核；批准前原价不变')
+      if (succeeded) { setEditingOrder(null); setEditMode(null) }
+    } finally { changeInFlight.current = false }
   }
 
   async function createShipment() {
@@ -377,10 +394,10 @@ export default function SupplierUpstreamPage() {
     <main className="py-5">
       {error && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-caption text-red-700">{error}</div>}
       {notice && <div className="mb-4 rounded-xl border border-green/20 bg-green/10 px-4 py-3 text-caption text-green">{notice}</div>}
-      <div className="mb-5 flex gap-2 overflow-x-auto">{TABS.map(item => <button key={item.key} onClick={() => setTab(item.key)} className={`whitespace-nowrap rounded-full px-4 py-2 text-button ${tab === item.key ? 'bg-gray1 text-white' : 'border border-border bg-white text-gray2'}`}>{item.label}</button>)}</div>
+      <div className="mb-5 flex gap-2 overflow-x-auto">{TABS.map(item => <button key={item.key} onClick={() => { setTab(item.key); location.hash = item.key }} className={`whitespace-nowrap rounded-full px-4 py-2 text-button ${tab === item.key ? 'bg-gray1 text-white' : 'border border-border bg-white text-gray2'}`}>{item.label}</button>)}</div>
       {loading && <Empty text="正在加载总仓采购业务…" />}
 
-      {viewingOrder && <Panel title={`采购单明细 · ${viewingOrder.no}`} onClose={() => setViewingOrder(null)}><div className="grid gap-2 rounded-xl bg-bg p-3 text-caption sm:grid-cols-3"><div><span className="text-gray3">收货总仓</span><div>{viewingOrder.warehouse.name}</div></div><div><span className="text-gray3">期望到货</span><div>{shortDate(viewingOrder.expectedArrivalAt)}</div></div><div><span className="text-gray3">订单金额</span><div><b>{money(viewingOrder.totalAmount)}</b></div></div></div><div className="mt-4 overflow-x-auto"><table className="w-full text-left text-caption"><thead><tr className="border-b"><th className="p-2">商品</th><th className="p-2">规格</th><th className="p-2">采购单位</th><th className="p-2">订单数量</th><th className="p-2">已发数量</th><th className="p-2">单价</th><th className="p-2">小计</th></tr></thead><tbody>{(viewingOrder.lines || []).map(line => { const quantity = Number(line.confirmedQty ?? line.orderedQty); return <tr key={line.id} className="border-b border-border"><td className="p-2"><b>{line.productNameSnapshot}</b></td><td className="p-2">{line.productSpecSnapshot || '—'}</td><td className="p-2">{line.purchaseUnit}</td><td className="p-2">{quantity}</td><td className="p-2">{String(line.shippedQty)}</td><td className="p-2">{money(line.unitPrice)}</td><td className="p-2">{money(quantity * Number(line.unitPrice))}</td></tr> })}</tbody></table></div></Panel>}
+      {viewingOrder && <Panel title={`采购单明细 · ${viewingOrder.no}`} onClose={() => setViewingOrder(null)}><div className="grid gap-2 rounded-xl bg-bg p-3 text-caption sm:grid-cols-3"><div><span className="text-gray3">收货总仓</span><div>{viewingOrder.warehouse.name}</div></div><div><span className="text-gray3">期望到货</span><div>{shortDate(viewingOrder.expectedArrivalAt)}</div></div><div><span className="text-gray3">订单金额</span><div><b>{money(viewingOrder.totalAmount)}</b></div></div></div><div className="mt-4 overflow-x-auto"><table className="w-full min-w-[640px] text-left text-caption"><thead><tr className="border-b"><th className="p-2">商品</th><th className="p-2">规格</th><th className="p-2">采购单位</th><th className="p-2">订单数量</th><th className="p-2">已发数量</th><th className="p-2">单价</th><th className="p-2">小计</th><th className="p-2">质检</th></tr></thead><tbody>{(viewingOrder.lines || []).map(line => { const quantity = Number(line.confirmedQty ?? line.orderedQty); return <tr key={line.id} className="border-b border-border"><td className="p-2"><b>{line.productNameSnapshot}</b></td><td className="p-2">{line.productSpecSnapshot || '—'}</td><td className="p-2">{line.purchaseUnit}</td><td className="p-2">{quantity}</td><td className="p-2">{String(line.shippedQty)}</td><td className="p-2">{unitPriceMoney(line.unitPrice)}</td><td className="p-2">{money(quantity * Number(line.unitPrice))}</td><td className="p-2"><OrderLineQuality orderId={viewingOrder.id} lineId={line.id}/></td></tr> })}</tbody></table></div>{viewingOrder.revisions?.map(revision => <section key={revision.id} className="mt-4 rounded-xl border border-border p-3"><h3 className="font-medium">第{revision.revisionNo}次改单 · {revision.status === 'PENDING' ? '待供应链审核' : revision.status === 'ACCEPTED' ? '已接受' : '已驳回'}</h3><p className="text-caption">{revision.reason}</p>{revision.reviewNote && <p className="text-caption">审核说明：{revision.reviewNote}</p>}<div className="overflow-x-auto"><table className="w-full min-w-[640px] text-caption"><thead><tr><th>商品</th><th>原数量</th><th>申请数量</th><th>原单价</th><th>申请单价</th><th>原金额</th><th>申请金额</th></tr></thead><tbody>{(revision.afterSnapshot?.lines || []).map(after => { const before = revision.beforeSnapshot?.lines?.find(row => row.id === after.id); const line = viewingOrder.lines?.find(row => row.id === after.id); const oldPrice = String(before?.unitPrice ?? line?.unitPrice ?? ''); const newPrice = String(after.unitPrice ?? oldPrice); return <tr key={after.id}><td>{line?.productNameSnapshot || after.id}</td><td>{String(before?.quantity ?? '—')} {line?.purchaseUnit}</td><td>{String(after.quantity)} {line?.purchaseUnit}</td><td>{oldPrice} 元/{line?.purchaseUnit}</td><td>{newPrice} 元/{line?.purchaseUnit}</td><td>{procurementDecimalProduct(String(before?.quantity ?? ''), oldPrice)}</td><td>{procurementDecimalProduct(String(after.quantity), newPrice)}</td></tr> })}</tbody></table></div></section>)}</Panel>}
 
       {viewingReceipt && <Panel title={`收货单明细 · ${viewingReceipt.no}`} onClose={() => setViewingReceipt(null)}>
         <div className="grid gap-2 rounded-xl bg-bg p-3 text-caption sm:grid-cols-3">
@@ -388,7 +405,7 @@ export default function SupplierUpstreamPage() {
           <div><span className="text-gray3">采购单金额</span><div>{viewingReceipt.purchaseOrder.totalAmount == null ? '—' : money(viewingReceipt.purchaseOrder.totalAmount)}</div></div>
           <div><span className="text-gray3">本次应付</span><div><b>{money(viewingReceipt.payableAmount)}</b></div></div>
         </div>
-        <div className="mt-4 overflow-x-auto"><table className="w-full text-left text-caption"><thead><tr className="border-b"><th className="p-2">商品</th><th className="p-2">规格</th><th className="p-2">实到</th><th className="p-2">合格</th><th className="p-2">短缺</th><th className="p-2">破损</th><th className="p-2">拒收</th><th className="p-2">单位</th></tr></thead><tbody>{viewingReceipt.lines.map(line => <tr key={line.id} className="border-b border-border"><td className="p-2"><b>{line.purchaseOrderLine.productNameSnapshot}</b></td><td className="p-2">{line.purchaseOrderLine.productSpecSnapshot || line.purchaseOrderLine.productCodeSnapshot}</td><td className="p-2">{String(line.arrivedQty ?? '—')}</td><td className="p-2">{String(line.acceptedQty)}</td><td className="p-2">{String(line.shortageQty ?? 0)}</td><td className="p-2">{String(line.damagedQty ?? 0)}</td><td className="p-2">{String(line.rejectedQty ?? 0)}</td><td className="p-2">{line.purchaseUnit}</td></tr>)}</tbody></table></div>
+        <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[640px] text-left text-caption"><thead><tr className="border-b"><th className="p-2">商品</th><th className="p-2">规格</th><th className="p-2">实到</th><th className="p-2">合格</th><th className="p-2">短缺</th><th className="p-2">破损</th><th className="p-2">拒收</th><th className="p-2">单位</th><th className="p-2">质检</th></tr></thead><tbody>{viewingReceipt.lines.map(line => <tr key={line.id} className="border-b border-border"><td className="p-2"><b>{line.purchaseOrderLine.productNameSnapshot}</b></td><td className="p-2">{line.purchaseOrderLine.productSpecSnapshot || line.purchaseOrderLine.productCodeSnapshot}</td><td className="p-2">{String(line.arrivedQty ?? '—')}</td><td className="p-2">{String(line.acceptedQty)}</td><td className="p-2">{String(line.shortageQty ?? 0)}</td><td className="p-2">{String(line.damagedQty ?? 0)}</td><td className="p-2">{String(line.rejectedQty ?? 0)}</td><td className="p-2">{line.purchaseUnit}</td><td className="p-2"><DocumentQualityImageButton kind="BATCH" sourceId={`R:${line.id}`}/></td></tr>)}</tbody></table></div>
         {viewingReceipt.reviewReasons?.length ? <p className="mt-3 rounded-lg bg-amber/10 p-3 text-caption">复核：{viewingReceipt.reviewReasons.join('、')}</p> : null}
       </Panel>}
 
@@ -402,9 +419,10 @@ export default function SupplierUpstreamPage() {
       </Panel>}
 
       {editingOrder && <Panel title={`${editMode === 'change' ? '申请改单' : '新建发货单'} · ${editingOrder.no}`} onClose={() => { setEditingOrder(null); setEditMode(null) }}>
-        {editMode === 'change' && <label className="mb-4 block"><span className="mb-1 block text-micro text-gray3">改单原因</span><textarea className="supplier-input min-h-20" value={changeReason} onChange={event => setChangeReason(event.target.value)} placeholder="说明缺货、规格或到货期变化" /></label>}
+        {editMode === 'change' && <p className="mb-3 text-caption text-gray2">申请仅影响本张采购单；供应链批准后生效，不修改合同或其他订单。下列金额按数量×单价展示。</p>}
+        {editMode === 'change' && <label className="mb-4 block"><span className="mb-1 block text-micro text-gray3">改单原因</span><textarea className="supplier-input min-h-20" value={changeReason} onChange={event => setChangeReason(event.target.value)} placeholder="说明数量变化或调价原因" /></label>}
         {editMode === 'ship' && <div className="mb-4 grid gap-3 sm:grid-cols-3"><Field label="承运/配送方"><input className="supplier-input" value={shipping.carrierName} onChange={event => setShipping(value => ({ ...value, carrierName: event.target.value }))} /></Field><Field label="运单号"><input className="supplier-input" value={shipping.trackingNo} onChange={event => setShipping(value => ({ ...value, trackingNo: event.target.value }))} /></Field><Field label="预计到仓"><input type="date" className="supplier-input" value={shipping.expectedArrivalAt} onChange={event => setShipping(value => ({ ...value, expectedArrivalAt: event.target.value }))} /></Field></div>}
-        <div className="overflow-x-auto"><table className="w-full text-caption"><thead><tr className="border-b text-left"><th className="p-2">商品</th><th className="p-2">订单数量</th><th className="p-2">已发</th><th className="p-2">{editMode === 'change' ? '申请数量' : '本次发货'}</th></tr></thead><tbody>{editingOrder.lines?.map(line => <tr key={line.id} className="border-b border-border"><td className="p-2"><b>{line.productNameSnapshot}</b><div className="text-gray3">{line.productSpecSnapshot || '—'}</div></td><td className="p-2">{String(line.confirmedQty ?? line.orderedQty)} {line.purchaseUnit}</td><td className="p-2">{String(line.shippedQty)} {line.purchaseUnit}</td><td className="p-2"><input type="number" min="0" step="any" className="supplier-input w-32" value={lineValues[line.id] || ''} onChange={event => setLineValues(value => ({ ...value, [line.id]: event.target.value }))} /></td></tr>)}</tbody></table></div>
+        <div className="overflow-x-auto"><table className="w-full min-w-[640px] text-caption"><thead><tr className="border-b text-left"><th className="p-2">商品</th><th className="p-2">订单数量</th><th className="p-2">已发</th><th className="p-2">{editMode === 'change' ? '申请数量' : '本次发货'}</th>{editMode === 'change' && <><th className="p-2">原单价 / 单位</th><th className="p-2">申请单价 / 单位</th><th className="p-2">原金额</th><th className="p-2">申请金额</th></>}</tr></thead><tbody>{editingOrder.lines?.map(line => <tr key={line.id} className="border-b border-border"><td className="p-2"><b>{line.productNameSnapshot}</b><div className="text-gray3">{line.productSpecSnapshot || '—'}</div></td><td className="p-2">{String(line.confirmedQty ?? line.orderedQty)} {line.purchaseUnit}</td><td className="p-2">{String(line.shippedQty)} {line.purchaseUnit}</td><td className="p-2"><input type="number" min="0" step="any" className="supplier-input w-32" value={lineValues[line.id] || ''} onChange={event => setLineValues(value => ({ ...value, [line.id]: event.target.value }))} /></td>{editMode === 'change' && <><td className="p-2">{line.unitPrice} 元/{line.purchaseUnit}</td><td className="p-2"><input aria-label={`申请单价 ${line.productNameSnapshot}`} inputMode="decimal" className="supplier-input w-32" value={linePrices[line.id] || ''} onChange={event => setLinePrices(value => ({ ...value, [line.id]: event.target.value }))} /><span> 元/{line.purchaseUnit}</span></td><td className="p-2">{procurementDecimalProduct(String(line.orderedQty), String(line.unitPrice))}</td><td className="p-2">{procurementDecimalProduct(lineValues[line.id] || '', linePrices[line.id] || '')}</td></>}</tr>)}</tbody></table></div>
         <div className="mt-4 flex justify-end">{editMode === 'change' ? <Button onClick={() => void submitChange()} disabled={working === editingOrder.id}>提交改单申请</Button> : <Button onClick={() => void createShipment()} disabled={working === editingOrder.id}>保存发货单草稿</Button>}</div>
       </Panel>}
 
@@ -412,7 +430,7 @@ export default function SupplierUpstreamPage() {
 
       {!loading && tab === 'orders' && <section className="space-y-3">{orders.length === 0 ? <Empty text="暂无总仓采购单" /> : orders.map(order => <article key={order.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><button type="button" onClick={() => void openOrderDetail(order)} className="text-h3 underline decoration-dotted underline-offset-4" aria-label={`查看采购单 ${order.no} 明细`}>{order.no}</button><Badge status={order.status} labels={UPSTREAM_ORDER_STATUS_LABEL} /></div><p className="mt-1 text-caption text-gray2">送达 {order.warehouse.name} · {order._count?.lines || 0} 项 · 期望 {shortDate(order.expectedArrivalAt)}</p><p className="mt-1 text-h3">{money(order.totalAmount)}</p></div><div className="flex flex-wrap gap-2"><Button secondary onClick={() => void openOrderDetail(order)}>查看明细</Button>{order.status === 'SUBMITTED_TO_SUPPLIER' && <><Button secondary onClick={() => void openOrderForm(order, 'change')}>申请改单</Button><Button onClick={() => requestAcceptOrder(order)} disabled={working === order.id}>确认接单</Button></>}{['SUPPLIER_ACCEPTED', 'PARTIALLY_SHIPPED', 'PARTIALLY_RECEIVED'].includes(order.status) && <Button onClick={() => void openOrderForm(order, 'ship')}>新建发货单</Button>}{order.status === 'SUPPLIER_ACCEPTED' && <Button secondary onClick={() => void openOrderForm(order, 'change')}>申请改单</Button>}</div></div></article>)}</section>}
 
-      {!loading && tab === 'shipments' && <section className="space-y-3">{shipments.length === 0 ? <Empty text="暂无发货单" /> : shipments.map(shipment => <article key={shipment.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex items-center gap-2"><b className="text-h3">{shipment.no}</b><Badge status={shipment.status} labels={{ DRAFT: '待发车', SHIPPED: '运输中', PARTIALLY_RECEIVED: '部分收货', RECEIVED: '已收货' }} /></div><p className="mt-1 text-caption text-gray2">采购单 {shipment.purchaseOrder.no} · {shipment.lines.length} 项 · 到仓 {shortDate(shipment.expectedArrivalAt)}</p>{shipment.carrierName && <p className="mt-1 text-caption text-gray3">{shipment.carrierName} {shipment.trackingNo || ''}</p>}</div>{shipment.status === 'DRAFT' && <Button onClick={() => requestDispatchShipment(shipment)} disabled={working === shipment.id}>确认发车</Button>}</div></article>)}</section>}
+      {!loading && tab === 'shipments' && <section className="space-y-3">{shipments.length === 0 ? <Empty text="暂无发货单" /> : shipments.map(shipment => <article key={shipment.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex items-center gap-2"><b className="text-h3">{shipment.no}</b><Badge status={shipment.status} labels={{ DRAFT: '待发车', SHIPPED: '运输中', PARTIALLY_RECEIVED: '部分收货', RECEIVED: '已收货' }} /></div><p className="mt-1 text-caption text-gray2">采购单 {shipment.purchaseOrder.no} · {shipment.lines.length} 项 · 到仓 {shortDate(shipment.expectedArrivalAt)}</p>{shipment.carrierName && <p className="mt-1 text-caption text-gray3">{shipment.carrierName} {shipment.trackingNo || ''}</p>}</div>{shipment.status === 'DRAFT' && <Button onClick={() => requestDispatchShipment(shipment)} disabled={working === shipment.id}>确认发车</Button>}</div><div className="mt-3 overflow-x-auto"><table className="w-full text-left text-caption"><thead><tr><th className="p-2">商品</th><th className="p-2">数量 / 单位</th><th className="p-2">质检</th></tr></thead><tbody>{shipment.lines.map(line=><tr key={line.id} className="border-t"><td className="p-2">{line.purchaseOrderLine.productNameSnapshot}</td><td className="p-2">{line.shippedQty} {line.purchaseUnit}</td><td className="p-2"><DocumentQualityImageButton kind="BATCH" sourceId={`S:${line.id}`}/></td></tr>)}</tbody></table></div></article>)}</section>}
 
       {!loading && tab === 'claims' && <section className="space-y-3">{claims.length === 0 ? <Empty text="暂无到货差异" /> : claims.map(claim => <article key={claim.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><b className="text-h3">{claim.no}</b><Badge status={claim.status} labels={UPSTREAM_CLAIM_STATUS_LABEL} /><span className="text-caption text-red-700">{money(claim.claimedAmount)}</span></div><p className="mt-2 text-caption text-gray1">{claim.description}</p><div className="mt-2 flex flex-wrap gap-2 text-caption"><button type="button" onClick={() => void openOrderDetail(claim.purchaseOrder)} className="rounded-lg border border-border bg-bg px-2 py-1 underline decoration-dotted">采购单 {claim.purchaseOrder.no}</button><button type="button" onClick={() => void openReceiptDetail(claim.receipt)} className="rounded-lg border border-border bg-bg px-2 py-1 underline decoration-dotted">查看收货单 {claim.receipt.no}</button></div><ul className="mt-2 text-caption text-gray2">{claim.lines.map(line => <li key={line.id}>· {line.product.name} {String(line.affectedQty)} {line.purchaseUnit}</li>)}</ul></div><div className="flex gap-2"><Button secondary onClick={() => void openReceiptDetail(claim.receipt)}>查看对应收货</Button>{claim.status === 'PENDING_SUPPLIER' && <Button onClick={() => { setRespondingClaim(claim); setClaimResponse('') }}>立即核对</Button>}</div></div></article>)}</section>}
 
@@ -435,5 +453,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 }
 
 function Panel({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
-  return <section className="mb-4 rounded-2xl border border-amber/30 bg-white p-4 shadow-sm"><div className="mb-4 flex items-center justify-between"><h2 className="text-h3">{title}</h2><button onClick={onClose} className="text-caption text-gray3">关闭</button></div>{children}</section>
+  const panel = useRef<HTMLElement>(null)
+  useEffect(() => { panel.current?.scrollIntoView({ block: 'start' }) }, [title])
+  return <section ref={panel} className="mb-4 scroll-mt-16 rounded-2xl border border-amber/30 bg-white p-4 shadow-sm"><div className="mb-4 flex items-start justify-between gap-3"><h2 className="text-h3">{title}</h2><button onClick={onClose} className="shrink-0 text-caption text-gray3">关闭</button></div>{children}</section>
 }

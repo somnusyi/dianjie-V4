@@ -53,11 +53,13 @@ function setTextarea(textarea: HTMLTextAreaElement, value: string) {
   textarea.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-describe('供应商上游确认层', () => {
   beforeEach(() => {
     mockFetch.mockReset()
+    Element.prototype.scrollIntoView = vi.fn()
     window.location.hash = ''
   })
+
+describe('供应商上游确认层', () => {
 
   it('取消不接单，确认双击也只提交一次', async () => {
     installApi()
@@ -110,4 +112,30 @@ describe('供应商上游确认层', () => {
     act(() => root.unmount())
     container.remove()
   })
+})
+
+it('在长列表中打开明细会滚动到展开面板，不再留在列表底部', async () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  installApi()
+  const base = mockFetch.getMockImplementation()!
+  mockFetch.mockImplementation((path, init) => String(path) === '/api/upstream/purchase-orders/order-1' ? Promise.resolve({ ...order, lines: [] }) : base(path, init))
+  const { container, root } = renderPage()
+  try {
+    await waitFor(() => Boolean(container.querySelector('[aria-label="查看采购单 CG-001 明细"]')))
+    await act(async () => (container.querySelector('[aria-label="查看采购单 CG-001 明细"]') as HTMLButtonElement).click())
+    await waitFor(() => Boolean(container.textContent?.includes('采购单明细 · CG-001')))
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
+  } finally { act(() => root.unmount()); container.remove() }
+})
+
+it('手机底栏同页切换及浏览器返回时同步显示对应业务页签', async () => {
+  installApi()
+  const { container, root } = renderPage()
+  try {
+    await waitFor(() => Boolean(container.textContent?.includes('CG-001')))
+    await act(async () => { window.location.hash = '#settlements'; window.dispatchEvent(new Event('hashchange')) })
+    await waitFor(() => Boolean(container.textContent?.includes('DZ-001')))
+    await act(async () => { window.location.hash = '#orders'; window.dispatchEvent(new Event('hashchange')) })
+    await waitFor(() => Boolean(container.textContent?.includes('CG-001')))
+  } finally { act(() => root.unmount()); container.remove() }
 })

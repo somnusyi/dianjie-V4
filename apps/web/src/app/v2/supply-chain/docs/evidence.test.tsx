@@ -368,3 +368,15 @@ it('audit entry opens the full editor without a blocking confirmation or automat
  expect(fetch.mock.calls.filter(([url])=>url==='/api/warehouse-docs/doc/confirm')).toHaveLength(1)
  await act(async()=>{doc.status='CONFIRMED';finish({ok:true})})
 })
+
+describe('outbound quality compatibility',()=>{
+ it('keeps the original editable outbound quality entry',async()=>{
+  const host=await open('MANUAL_OUTBOUND',[])
+  expect(Array.from(host.querySelectorAll('button')).some(b=>b.textContent==='质检')).toBe(true)
+  expect(Array.from(host.querySelectorAll('button')).some(b=>b.textContent==='历史整单图片（未分配）')).toBe(false)
+ })
+ it('keeps inbound whole-document history separate and read only',async()=>{
+  const host=await open('MANUAL_INBOUND',[])
+  expect(Array.from(host.querySelectorAll('button')).some(b=>b.textContent==='历史整单图片（未分配）')).toBe(true)
+ })
+})

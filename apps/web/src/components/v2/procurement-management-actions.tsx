@@ -4,7 +4,6 @@ import {inventoryDocumentHref} from '@/lib/inventory-document-navigation'
 import {getUser} from '@/lib/v2-auth'
 import type {ManagementRow} from '@/lib/inventory-management'
 import {procurementApprovalActions,type ProcurementApprovalSource} from '@/lib/procurement-approval'
-import {DocumentQualityImageButton} from './document-quality-image'
 
 export function ProcurementManagementActions({row,from}:{row:ManagementRow;from?:unknown}){
  const kind=row.recordType==='UPSTREAM_RECEIPT'?'RECEIPT':'RETURN'
@@ -21,6 +20,5 @@ export function ProcurementManagementActions({row,from}:{row:ManagementRow;from?
   <span aria-hidden="true">｜</span>
   <Link href={inventoryDocumentHref(base,from,'print')}>打印</Link>
   {canEdit?<Link href={inventoryDocumentHref(base,from)} title={editable?'保存单据修改':'只补充备注，业务字段保持锁定'}>保存</Link>:<button disabled>保存</button>}
-  <DocumentQualityImageButton kind={kind} sourceId={id}/>
  </div>
 }

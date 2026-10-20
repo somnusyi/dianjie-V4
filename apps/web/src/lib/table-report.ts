@@ -1,7 +1,7 @@
 'use client'
 
 export type ReportCell = string | number | null | undefined
-export type TableReport = { title: string; subtitle?: string; headers: string[]; rows: ReportCell[][] }
+export type TableReport = { printTemplate?: {key:'purchase-receipt'; documentNo:string; fields?:Partial<Record<'documentNo'|'supplier'|'organization'|'warehouse'|'date'|'note',string>>}; title: string; subtitle?: string; footerRows?:ReportCell[][]; footerNote?:string; headers: string[]; rows: ReportCell[][] }
 
 let report: TableReport | null = null
 const listeners = new Set<() => void>()

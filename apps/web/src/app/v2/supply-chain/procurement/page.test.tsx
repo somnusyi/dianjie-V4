@@ -7,7 +7,7 @@ import { printSheet } from './print-sheet'
 import { SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT } from '@/components/v2/supply-chain-shell'
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
-vi.mock('@/lib/v2-auth', () => ({ apiFetch: vi.fn(), getUser: () => ({ role: 'SUPPLY_CHAIN' }) }))
+vi.mock('@/lib/v2-auth', () => ({ apiFetch: vi.fn(), getUser: () => ({ id:'user-fixture',role: 'SUPPLY_CHAIN' }) }))
 import { apiFetch } from '@/lib/v2-auth'
 
 const mockFetch = vi.mocked(apiFetch)
@@ -252,7 +252,7 @@ function installPageMock(
   const warehouses = options.warehouses ?? []
   mockFetch.mockImplementation((path, init) => {
     const url = String(path)
-    if (url === '/api/upstream/purchase-orders' && !init) return Promise.resolve(orders)
+    if (url.startsWith('/api/upstream/purchase-orders?') && !init) return Promise.resolve({items:orders,total:orders.length,page:1,pageSize:20})
     if (url === '/api/upstream/shipments') return Promise.resolve(shipments)
     if (url === '/api/upstream/receipts') return Promise.resolve(receipts)
     if (url === '/api/upstream/purchase-returns') return Promise.resolve(purchaseReturns)
@@ -372,11 +372,13 @@ describe('上游采购收货后补报', () => {
   })
 
   beforeEach(() => {
+    sessionStorage.clear()
+    localStorage.setItem('tenant',JSON.stringify({id:'tenant-fixture'}))
     window.history.replaceState({}, '', '/v2/supply-chain/procurement')
     mockFetch.mockReset()
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
-      if (url === '/api/upstream/purchase-orders') return Promise.resolve([])
+      if (url.startsWith('/api/upstream/purchase-orders?')) return Promise.resolve({items:[],total:0,page:1,pageSize:20})
       if (url === '/api/upstream/shipments') return Promise.resolve([])
       if (url === '/api/upstream/receipts') return Promise.resolve([postedReceipt])
       if (url === '/api/upstream/purchase-returns') return Promise.resolve([])
@@ -523,7 +525,7 @@ describe('上游采购收货后补报', () => {
     }
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
-      if (url === '/api/upstream/purchase-orders') return Promise.resolve([])
+      if (url.startsWith('/api/upstream/purchase-orders?')) return Promise.resolve({items:[],total:0,page:1,pageSize:20})
       if (url === '/api/upstream/shipments') return Promise.resolve([])
       if (url === '/api/upstream/receipts') return Promise.resolve([postedReceipt])
       if (url === '/api/upstream/purchase-returns') return Promise.resolve([])
@@ -742,8 +744,23 @@ describe('上游采购收货后补报', () => {
     await waitFor(() => container.textContent?.includes('已自动带出合同') ?? false)
 
     expect(container.textContent).toContain(contract.contractNo)
-    expect(container.textContent).toContain('赤松茸A')
+    expect(container.textContent).toContain('尚未添加商品')
+    expect(container.querySelector('input[aria-label="赤松茸A采购数量"]')).toBeNull()
+    const search = container.querySelector('input[aria-label="搜索采购商品"]') as HTMLInputElement
+    change(search, '赤松茸')
+    const add = container.querySelector('button[aria-label="添加采购商品 赤松茸A"]') as HTMLButtonElement
+    expect(add).toBeTruthy()
+    act(() => add.click())
+    expect(container.querySelector('input[aria-label="赤松茸A采购数量"]')).toBeTruthy()
+    act(() => (container.querySelector('button[aria-label="移除采购商品 赤松茸A"]') as HTMLButtonElement).click())
+    expect(container.querySelector('input[aria-label="赤松茸A采购数量"]')).toBeNull()
     expect(container.textContent).not.toContain('多份请选')
+    change(search, '赤松茸')
+    act(() => (container.querySelector('button[aria-label="添加采购商品 赤松茸A"]') as HTMLButtonElement).click())
+    act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '关闭')!.click())
+    act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '新建采购单')!.click())
+    expect(container.querySelector('input[aria-label="赤松茸A采购数量"]')).toBeNull()
+    expect(container.textContent).toContain('尚未添加商品')
 
     act(() => root.unmount())
     container.remove()
@@ -816,6 +833,13 @@ describe('上游采购收货后补报', () => {
     expect(price.value).toBe('88')
     expect(Array.from(container.querySelectorAll('input')).some((input) => input.value === '测试供应商长期供货框架')).toBe(true)
 
+    change(price, '41.2345678')
+    await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '保存合同草稿')!.click())
+    expect(container.textContent).toContain('最多六位小数')
+    expect(mockFetch.mock.calls.some(([path, init]) => String(path) === '/api/upstream/contracts' && init?.method === 'POST')).toBe(false)
+    expect(price.value).toBe('41.2345678')
+    change(price, '88')
+
     await act(async () => {
       Array.from(container.querySelectorAll('button'))
         .find((button) => button.textContent === '保存合同草稿')
@@ -843,7 +867,7 @@ describe('上游采购收货后补报', () => {
     const supplierTwo = { id: 'supplier-2', no: 'SUP002', name: '第二供应商' }
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
-      if (url === '/api/upstream/purchase-orders' && !init) return Promise.resolve([])
+      if (url.startsWith('/api/upstream/purchase-orders?') && !init) return Promise.resolve({items:[],total:0,page:1,pageSize:20})
       if (url === '/api/upstream/shipments') return Promise.resolve([])
       if (url === '/api/upstream/receipts') return Promise.resolve([])
       if (url === '/api/upstream/purchase-returns') return Promise.resolve([])
@@ -1182,6 +1206,54 @@ describe('上游采购收货后补报', () => {
     await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '放弃并离开')!.click())
     expect(proceed).toHaveBeenCalledTimes(1)
     act(() => root.unmount()); container.remove()
+  })
+
+  it('复制创建成功但响应丢失后，刷新恢复并仅重放原body和key，不重复创建版本',async()=>{
+    const copyLine={...contract.lines[0],productId:'product-4',upstreamSourceId:'copy-source',isActive:true}
+    const copyContract={...contract,lines:[copyLine]}
+    const copySource={id:'copy-source',supplierId:contract.supplierId,purchaseUnit:copyLine.purchaseUnit,quotedUnitPrice:150,minOrderQty:copyLine.minOrderQty,leadTimeDays:copyLine.leadTimeDays,inventoryUnitsPerPurchaseUnit:copyLine.inventoryUnitsPerPurchaseUnit,product:copyLine.product}
+    const created={...copyContract,id:'contract-created',version:2,status:'DRAFT'}
+    installPageMock({contracts:[copyContract],sources:[copySource]})
+    const normal=mockFetch.getMockImplementation()!,bodies:string[]=[],createdKeys=new Set<string>()
+    let committed=false
+    mockFetch.mockImplementation((path,init)=>{
+      if(String(path)==='/api/upstream/contracts'&&init?.method==='POST'){
+        const body=String(init.body);bodies.push(body);createdKeys.add(JSON.parse(body).idempotencyKey);committed=true
+        return bodies.length===1?Promise.reject(new Error('响应丢失')):Promise.resolve({id:created.id,contractNo:created.contractNo,title:created.title})
+      }
+      if(String(path)==='/api/upstream/contracts'&&!init)return Promise.resolve(committed?[created,copyContract]:[copyContract])
+      return normal(path,init)
+    })
+    const first=renderPage()
+    await waitFor(()=>Array.from(first.container.querySelectorAll('button')).some(button=>button.textContent==='合同与价格'))
+    act(()=>Array.from(first.container.querySelectorAll('button')).find(button=>button.textContent==='合同与价格')!.click())
+    await waitFor(()=>Array.from(first.container.querySelectorAll('button')).some(button=>button.textContent==='复制新版改价'))
+    act(()=>Array.from(first.container.querySelectorAll('button')).find(button=>button.textContent==='复制新版改价')!.click())
+    await waitFor(()=>Boolean(first.container.querySelector('input[aria-label="赤松茸A合同单价"]')))
+    change(first.container.querySelector<HTMLInputElement>('input[aria-label="赤松茸A合同单价"]')!,'160.1234567')
+    await act(async()=>Array.from(first.container.querySelectorAll('button')).find(button=>button.textContent==='保存新版合同草稿')!.click())
+    expect(first.container.textContent).toContain('最多六位小数')
+    expect(bodies).toHaveLength(0)
+    act(()=>Array.from(first.container.querySelectorAll('button')).find(button=>button.textContent==='收起')!.click())
+    act(()=>Array.from(first.container.querySelectorAll('button')).find(button=>button.textContent==='放弃修改')!.click())
+    expect(first.container.textContent).not.toContain('最多六位小数')
+    act(()=>Array.from(first.container.querySelectorAll('button')).find(button=>button.textContent==='复制新版改价')!.click())
+    await waitFor(()=>Boolean(first.container.querySelector('input[aria-label="赤松茸A合同单价"]')))
+    change(first.container.querySelector<HTMLInputElement>('input[aria-label="赤松茸A合同单价"]')!,'160.25')
+    act(()=>Array.from(first.container.querySelectorAll('button')).find(button=>button.textContent==='保存新版合同草稿')!.click())
+    await waitFor(()=>first.container.textContent?.includes('响应丢失')??false)
+    const scope='dj:contract-copy:tenant-fixture:user-fixture'
+    expect(sessionStorage.getItem(scope)).not.toBeNull()
+    act(()=>first.root.unmount());first.container.remove()
+    const second=renderPage()
+    await waitFor(()=>Array.from(second.container.querySelectorAll('button')).some(button=>button.textContent==='核对并重试原创建'))
+    expect(second.container.querySelector<HTMLInputElement>('input[aria-label="赤松茸A合同单价"]')!.disabled).toBe(true)
+    expect(second.container.querySelector<HTMLInputElement>('input[aria-label="赤松茸A合同单价"]')!.value).toBe('160.25')
+    act(()=>Array.from(second.container.querySelectorAll('button')).find(button=>button.textContent==='核对并重试原创建')!.click())
+    await waitFor(()=>bodies.length===2&&sessionStorage.getItem(scope)===null)
+    expect(bodies[1]).toBe(bodies[0]);expect(createdKeys.size).toBe(1)
+    expect(JSON.parse(bodies[1])).toMatchObject({copyFromContractId:contract.id,lines:[{upstreamSourceId:'copy-source',unitPrice:160.25}]})
+    act(()=>second.root.unmount());second.container.remove()
   })
 
 })

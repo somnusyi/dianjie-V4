@@ -42,13 +42,14 @@
     {
       "version": "1.3.3",
       "tag": "v1.3.3",
-      "commit": null,
+      "commit": "1f07ccff288b95825c6d28058b08c6b3e1894251",
       "document": "docs/releases/1.3.3.md",
       "status": "released_production_and_uat",
-      "documentUrl": "https://github.com/somnusyi/dianjie-V4/blob/v1.3.3/docs/releases/1.3.3.md",
-      "remoteStatus": "pending_push",
-      "codeUrl": "https://github.com/somnusyi/dianjie-V4/tree/v1.3.3"
+      "documentUrl": "https://github.com/somnusyi/dianjie-V4/blob/main/docs/releases/1.3.3.md",
+      "remoteStatus": "github_and_nas_verified",
+      "codeUrl": "https://github.com/somnusyi/dianjie-V4/tree/v1.3.3",
+      "commitUrl": "https://github.com/somnusyi/dianjie-V4/commit/1f07ccff288b95825c6d28058b08c6b3e1894251"
     }
   ],
-  "documentationRemoteStatus": "removed_at_user_request_local_only"
+  "documentationRemoteStatus": "1.3.3_published_other_historical_tags_remain_local"
 }

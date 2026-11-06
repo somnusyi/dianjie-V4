@@ -1,0 +1,27 @@
+{
+  "version": "1.3.3",
+  "status": "published_verified",
+  "releaseCommit": "1f07ccff288b95825c6d28058b08c6b3e1894251",
+  "tag": "v1.3.3",
+  "tagObject": "57277659ac58f90d5ba1d2da77fc334c847cf51d",
+  "at": "2026-11-06T08:24:26.141509+00:00",
+  "remotes": {
+    "github": {
+      "status": "verified",
+      "remote": "git@github.com:somnusyi/dianjie-V4.git",
+      "mainAtPublish": "1f07ccff288b95825c6d28058b08c6b3e1894251",
+      "tag": "v1.3.3",
+      "tagObject": "57277659ac58f90d5ba1d2da77fc334c847cf51d",
+      "releaseCommit": "1f07ccff288b95825c6d28058b08c6b3e1894251"
+    },
+    "nas": {
+      "status": "verified",
+      "remote": "ssh://git@192.168.1.128:1600/weilun/dianjie-V4.git",
+      "mainAtPublish": "1f07ccff288b95825c6d28058b08c6b3e1894251",
+      "tag": "v1.3.3",
+      "tagObject": "57277659ac58f90d5ba1d2da77fc334c847cf51d",
+      "releaseCommit": "1f07ccff288b95825c6d28058b08c6b3e1894251"
+    }
+  },
+  "businessDataIncluded": false
+}

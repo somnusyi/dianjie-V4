@@ -11,5 +11,7 @@
   "frontendChanged": false,
   "evidence": "/app/releases/v1.3.3-20261105/production-login-hotfix-result.json",
   "uatEvidence": "/app/releases/v1.3.3-20261105/uat-login-hotfix-result.json",
-  "sourceTag": "v1.3.3-hotfix.1"
+  "sourceTag": "v1.3.3-hotfix.1",
+  "sourceCommit": "fcde54a5a07bef1017b001df02710baf2cfaea30",
+  "codeUrl": "https://github.com/somnusyi/dianjie-V4/tree/v1.3.3-hotfix.1"
 }

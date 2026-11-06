@@ -42,12 +42,24 @@
     {
       "version": "1.3.3",
       "tag": "v1.3.3",
-      "commit": null,
+      "commit": "1f07ccff288b95825c6d28058b08c6b3e1894251",
       "document": "docs/releases/1.3.3.md",
       "status": "released_production_and_uat",
       "documentUrl": "https://github.com/somnusyi/dianjie-V4/blob/v1.3.3/docs/releases/1.3.3.md",
-      "remoteStatus": "pending_push",
+      "remoteStatus": "pushed_github_and_nas",
       "codeUrl": "https://github.com/somnusyi/dianjie-V4/tree/v1.3.3"
+    },
+    {
+      "version": "1.3.3-hotfix.1",
+      "businessVersion": "1.3.3",
+      "tag": "v1.3.3-hotfix.1",
+      "commit": "fcde54a5a07bef1017b001df02710baf2cfaea30",
+      "document": "docs/releases/1.3.3-hotfix.1.md",
+      "status": "released_production_and_uat",
+      "remoteStatus": "pushed_github_and_nas",
+      "codeUrl": "https://github.com/somnusyi/dianjie-V4/tree/v1.3.3-hotfix.1",
+      "commitUrl": "https://github.com/somnusyi/dianjie-V4/commit/fcde54a5a07bef1017b001df02710baf2cfaea30",
+      "documentUrl": "https://github.com/somnusyi/dianjie-V4/blob/v1.3.3-hotfix.1/docs/releases/1.3.3-hotfix.1.md"
     }
   ],
   "documentationRemoteStatus": "removed_at_user_request_local_only"

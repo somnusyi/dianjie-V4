@@ -4,6 +4,8 @@
  * - 登录成功按 role 跳到对应 home
  */
 'use client'
+import { browserLogin, logoutSession, browserOAuthStart } from '@/lib/v2-auth'
+import { RELEASE_VERSION } from '@/lib/release-version'
 import {loginTenant,dedicatedTestLogin} from '@/lib/login-environment'
 import { useState, useEffect } from 'react'
 import { setSession, routeForRole, pcRouteForRole, getToken, getUser, clearSession } from '@/lib/v2-auth'
@@ -36,7 +38,7 @@ export default function LoginPage() {
     if (inWeCom && !url.searchParams.has('error') && !sessionStorage.getItem('wecomSilentTried')) {
       sessionStorage.setItem('wecomSilentTried', '1')
       const tn = loginTenant(t)
-      fetch(`/api/wecom/oauth/url?tenant=${tn}&mode=silent&redirect=/`)
+      browserOAuthStart(`/api/wecom/oauth/url?tenant=${tn}&mode=silent&redirect=/`)
         .then((r) => r.json())
         .then((d) => { if (d.url) location.href = d.url })
         .catch(() => {})
@@ -68,8 +70,8 @@ export default function LoginPage() {
     const pc = isWide ? pcRouteForRole(existingUser.role) : null
     location.replace(pc || routeForRole(existingUser.role))
   }
-  function switchAccount() {
-    clearSession()
+  async function switchAccount() {
+    await logoutSession()
     setExistingUser(null)
   }
 
@@ -84,11 +86,7 @@ export default function LoginPage() {
     if(testEntry){setSubmitting(false);location.assign(testEntry);return}
     const effectiveTenant = loginTenant(tenantSlug,idTrim)
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier: idTrim, password, tenantSlug: effectiveTenant }),
-      })
+      const res = await browserLogin('/api/auth/login', { identifier: idTrim, password, tenantSlug: effectiveTenant })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || data.message || '登录失败')
       setSession(data.token, data.user, data.tenant, data.refreshToken)
@@ -108,7 +106,7 @@ export default function LoginPage() {
         <span className="w-12 h-12 rounded-2xl bg-amber text-white flex items-center justify-center text-h1 font-medium shadow-sm">滇</span>
         <div>
           <div className="text-h1">滇界</div>
-          <p className="text-caption text-gray3 mt-0.5">连锁餐饮管理系统 · v1.1</p>
+          <p className="text-caption text-gray3 mt-0.5">连锁餐饮管理系统 · v{RELEASE_VERSION}</p>
         </div>
       </header>
 
@@ -180,7 +178,7 @@ export default function LoginPage() {
           type="button"
           onClick={async () => {
             try {
-              const r = await fetch(`/api/wecom/oauth/url?tenant=${tenantSlug}&redirect=/`)
+              const r = await browserOAuthStart(`/api/wecom/oauth/url?tenant=${tenantSlug}&redirect=/`)
               const d = await r.json()
               if (d.url) location.href = d.url
               else setError(d.error || '企微集成未启用')

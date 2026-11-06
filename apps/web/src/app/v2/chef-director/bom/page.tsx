@@ -1,5 +1,6 @@
 /** 总厨 · 日报缺失 BOM 待办与历史消耗回补。 */
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
@@ -153,14 +154,14 @@ export default function ChefDirectorBomPage() {
                 <div className="mt-3">
                   <div className="text-caption text-red-fg mb-2">收银菜品尚未关联系统菜品</div>
                   <div className="flex gap-2">
-                    <select
+                    <SearchableSelect searchWhenLong searchLabel="搜索已有菜品"
                       value={selected[task.id] || ''}
                       onChange={event => setSelected(current => ({ ...current, [task.id]: event.target.value }))}
                       className="min-w-0 flex-1 bg-bg rounded-cta px-3 py-2 text-caption"
                     >
                       <option value="">选择已有菜品…</option>
                       {dishes.map(dish => <option key={dish.id} value={dish.id}>{dish.name}{dish.category ? ` · ${dish.category}` : ''}</option>)}
-                    </select>
+                    </SearchableSelect>
                     <button onClick={() => linkDish(task)} disabled={!selected[task.id] || busyId === task.id} className="px-3 py-2 bg-ink text-white rounded-cta text-button disabled:opacity-35">关联</button>
                   </div>
                   <a href={`/v2/chef-director/dishes/new?${new URLSearchParams({

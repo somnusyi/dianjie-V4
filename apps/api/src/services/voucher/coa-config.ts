@@ -9,7 +9,7 @@
  *
  * 本年利润目标科目 (carryover 落账目标) 用 resolveProfitAccount() 运行时查 tenant CoA, 选 3103 优先 / 4103 兜底.
  */
-import { prisma } from '@dianjie/db'
+import { Prisma, prisma } from '@dianjie/db'
 
 /** 损益类前缀 (4 位主科目) */
 export const PNL_PREFIXES = {
@@ -103,9 +103,9 @@ export const BS_PREFIXES = {
  * 查询本年利润目标科目 (carryover 落账目标)
  * 优先 3103 (企业会计准则 2006), 兜底 4103 (好会计旧准则)
  */
-export async function resolveProfitAccount(tenantId: string): Promise<{ code: string; name: string }> {
+export async function resolveProfitAccount(tenantId: string, db: Prisma.TransactionClient = prisma): Promise<{ code: string; name: string }> {
   // 直接查 chart_of_accounts; 不存在则用 3103 默认
-  const found = await prisma.chartOfAccount.findFirst({
+  const found = await db.chartOfAccount.findFirst({
     where: { tenantId, code: { in: ['3103', '4103'] } },
     select: { code: true, name: true },
     orderBy: { code: 'asc' },   // 3103 优先

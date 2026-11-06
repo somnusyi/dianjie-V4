@@ -9,13 +9,14 @@
  *     显示 3 tab: 匹配 / 仅 CMB (银行有本地无) / 仅本地 (本地有银行无)
  */
 'use client'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { BlackHero, Chip, MonthPicker } from '@/components/v2'
 import { BankTransactionsDrawer } from '@/components/v2/bank-transactions-drawer'
 import { apiFetch } from '@/lib/v2-auth'
 import { exportXlsx } from '@/lib/exportXlsx'
-import dayjs from 'dayjs'
+import { loadCashTransactions } from '@/lib/cashbook-list'
+import dayjs from '@/lib/business-dayjs'
 import FinanceTopNav from '../_topnav'
 import { notifyUser } from '@/lib/ui-dialogs'
 
@@ -74,6 +75,8 @@ export default function FinancePCFundsPage() {
   const [reconcileAccount, setReconcileAccount] = useState<Account | null>(null)
   // CMB 自动同步
   const [syncing, setSyncing] = useState(false)
+  const exportingRef = useRef(false)
+  const [exporting, setExporting] = useState(false)
   const [syncResult, setSyncResult] = useState<Array<{ accountName: string; pulled: number; newlyWritten: number; matched: number; alreadySynced: number; errors: number; errorMsg?: string }> | null>(null)
 
   useEffect(() => {
@@ -179,13 +182,15 @@ export default function FinancePCFundsPage() {
             </button>
             <button
               onClick={async () => {
-                if (!summary || accounts.length === 0) return
+                if (!summary || accounts.length === 0 || exportingRef.current) return
+                exportingRef.current = true
+                setExporting(true)
                 const ym = dayjs().format('YYYY-MM')
                 try {
                   // 拉每个账户本月的本地流水
                   const txByAcc = await Promise.all(accounts.map(async a => {
-                    const r = await apiFetch<{ items: any[] }>(`/api/cashbook/transactions?accountId=${a.id}&month=${ym}&pageSize=200`).catch(() => ({ items: [] }))
-                    return { account: a, items: r.items || [] }
+                    const items = await loadCashTransactions<any>(a.id, ym)
+                    return { account: a, items }
                   }))
                   const sheets: any[] = []
                   // Sheet 1: 账户余额汇总
@@ -241,11 +246,14 @@ export default function FinancePCFundsPage() {
                   await exportXlsx(`资金对账单-${ym}.xlsx`, sheets)
                 } catch (e: any) {
                   notifyUser('导出失败: ' + (e?.message || e))
+                } finally {
+                  exportingRef.current = false
+                  setExporting(false)
                 }
               }}
-              disabled={!summary || accounts.length === 0}
+              disabled={!summary || accounts.length === 0 || exporting}
               className="px-4 py-2 bg-[#1F7A4B] text-white rounded-cta text-button disabled:opacity-40">
-              📊 导出对账单
+              {exporting ? '导出中…' : '📊 导出对账单'}
             </button>
           </div>
         </div>

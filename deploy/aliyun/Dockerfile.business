@@ -1,0 +1,22 @@
+# Package reviewed, already published runtime artifacts. Never copy workspace env or data.
+ARG API_BASE
+ARG WEB_BASE
+FROM ${API_BASE} AS api
+USER root
+RUN rm -rf /app/dist /app/src /app/container-entry.cjs
+COPY --chown=node:node api-dist/ /app/dist/
+USER node
+WORKDIR /app
+ENV NODE_ENV=production
+HEALTHCHECK --interval=20s --timeout=5s --start-period=45s --retries=3 CMD node -e "fetch('http://127.0.0.1:'+process.env.API_PORT+'/health').then(r=>r.json()).then(j=>process.exit(j.status==='ok'&&j.db==='ok'?0:1)).catch(()=>process.exit(1))"
+CMD ["node", "/app/dist/index.js"]
+
+FROM ${WEB_BASE} AS web
+USER root
+RUN rm -rf /app
+COPY --chown=node:node web/ /app/
+USER node
+WORKDIR /app
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=127.0.0.1
+HEALTHCHECK --interval=20s --timeout=5s --start-period=45s --retries=3 CMD node -e "fetch('http://127.0.0.1:'+process.env.PORT+'/v2/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["node", "/app/apps/web/server.js"]

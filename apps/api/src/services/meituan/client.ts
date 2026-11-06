@@ -1,3 +1,4 @@
+import { redactProviderPayload } from '../../lib/provider-log-safety'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import axios, { AxiosError } from 'axios'
@@ -9,7 +10,7 @@ import type {
   ReverseQueryReq,
 } from './types'
 import { signMeituan } from './signature'
-import { classifyMeituanError, classifyUniauthSubCode, reportMeituanError } from './errors'
+import { classifyMeituanError, classifyUniauthSubCode, reportMeituanError, MEITUAN_ERROR_CODES } from './errors'
 import { CallLogger } from './callLogger'
 import { DbTokenStore } from './tokenStore'
 
@@ -38,7 +39,8 @@ export interface MeituanClient {
 // ════════════════════════════════════════════════════════════════
 export class MeituanRateLimitError extends Error {
   constructor(public responseCode: string) {
-    super(`美团限流: ${responseCode}`)
+    super('美团请求受到限流，请稍后重试')
+    this.responseCode = Object.hasOwn(MEITUAN_ERROR_CODES,responseCode) ? responseCode : 'UNKNOWN'
     this.name = 'MeituanRateLimitError'
   }
 }
@@ -50,7 +52,9 @@ export class MeituanApiError extends Error {
     public traceId?: string | null,
     public responseData?: unknown,
   ) {
-    super(`${responseCode}: ${msg}`)
+    super('美团业务请求失败，请核对安全错误码')
+    this.responseCode = Object.hasOwn(MEITUAN_ERROR_CODES,responseCode) ? responseCode : 'UNKNOWN'
+    this.responseData = redactProviderPayload(responseData)
     this.name = 'MeituanApiError'
   }
 }
@@ -227,7 +231,7 @@ export class MeituanHttpClient implements MeituanClient {
         responseRaw: ax.response?.data ? JSON.stringify(ax.response.data) : undefined,
       })
       reportMeituanError(ax, { apiPath, apiTitle, callLogId: callLog.id, correlationId })
-      throw e
+      throw new Error('美团网络请求失败，请稍后重试')
     }
   }
 }

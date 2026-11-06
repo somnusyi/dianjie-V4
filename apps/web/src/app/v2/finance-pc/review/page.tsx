@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch } from '@/lib/v2-auth'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import FinanceTopNav from '../_topnav'
 
 type Doc = {

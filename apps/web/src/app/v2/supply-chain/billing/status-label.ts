@@ -1,0 +1,2 @@
+const labels: Record<string,string>={NOTIFIED:'已提醒',ON_HOLD:'争议暂停付款',PAYMENT_GENERATED:'已生成付款',DONE:'已完成',PAID:'已付款',PENDING:'待处理',PENDING_APPROVAL:'待审批',APPROVED:'已审批',REJECTED:'已驳回',CANCELLED:'已取消',DRAFT:'草稿',SUBMITTED:'已提交',CONFIRMED:'已确认',RECONCILED:'已对账',VERIFIED:'已核验',UNVERIFIED:'待核验',PROCESSING:'处理中',FAILED:'失败',OVERDUE:'已逾期',PARTIALLY_PAID:'部分付款',COMPLETED:'已完成'}
+export const billingStatusLabel=(status:string,kind?:'schedule'|'reconciliation'|'invoice')=>status==='PENDING'?(kind==='invoice'?'待核验':'待付款'):labels[status] || '状态待核对'

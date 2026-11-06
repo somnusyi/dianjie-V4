@@ -90,9 +90,10 @@ export function buildShipmentConfirmBody(params: {
   newTotal: number
   oldTotal: number
   inventoryMode?: 'NOT_TRACKED' | 'STRICT'
+  sourceType?: string
   fulfillment?: FulfillmentResult | null
 }): string {
-  const { itemCount, lines, newTotal, oldTotal, inventoryMode, fulfillment } = params
+  const { itemCount, lines, newTotal, oldTotal, inventoryMode, sourceType, fulfillment } = params
   const changed = lines.filter(l => l.changed)
   const closedLines = getClosedRemainderLines(lines)
 
@@ -110,7 +111,9 @@ export function buildShipmentConfirmBody(params: {
     body += `\n如仍需上述关闭数量，必须由门店重新下单。`
   }
 
-  body += inventoryMode === 'STRICT'
+  body += sourceType === 'HEADQ_WAREHOUSE'
+    ? `\n发货后会按实发数量扣减总仓库存并释放对应预占，门店收货后再更新门店库存。`
+    : inventoryMode === 'STRICT'
     ? `\n发货后会自动扣减供应商库存，门店收货后再更新门店库存。`
     : `\n当前未核算供应商仓库库存，本次发货不会扣供应商库存；门店收货后仍会正常更新门店库存。`
 

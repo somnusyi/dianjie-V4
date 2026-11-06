@@ -39,7 +39,7 @@ function timeAgo(iso: string) {
   if (min < 1) return '刚刚'
   if (min < 60) return `${min} 分钟前`
   if (min < 1440) return `${Math.round(min/60)} 小时前`
-  return new Date(iso).toLocaleDateString('zh-CN')
+  return new Date(iso).toLocaleDateString('zh-CN', {timeZone:'Asia/Shanghai'})
 }
 
 export default function ChefDirectorHomePage() {

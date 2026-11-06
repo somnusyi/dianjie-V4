@@ -2,6 +2,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { businessMonthKey } from '../lib/businessTime'
 import { Prisma, prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
+import { businessDateKey } from '../lib/businessTime'
 import { z } from 'zod'
 import { notifyLossClaimResult } from '../services/notification'
 import { isSupplierRole, isStoreScoped, resolveActiveStore, storeScopeOf } from '../lib/auth-scope'
@@ -91,10 +92,11 @@ const lossClaimListQuerySchema = z.object({
 }).strict()
 
 function buildLossClaimWhere(
-  user: { tenantId: string; storeId?: string | null; role: string; supplierId?: string | null },
+  user: { tenantId: string; storeId?: string | null; storeIds?: string[] | null; role: string; supplierId?: string | null },
   query: z.infer<typeof lossClaimListQuerySchema>,
+  activeStoreId?: string,
 ) {
-  const where: any = lossClaimScope(user)
+  const where: any = lossClaimScope(user, activeStoreId)
   if (query.status) where.status = query.status
   if (query.kind) where.kind = query.kind
   if (query.isManual === 'true') where.isManual = true
@@ -369,7 +371,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     const { page, pageSize } = parsed.data
     let where: any
     try {
-      where = buildLossClaimWhere({ tenantId, storeId, role, supplierId: userSupplierId }, parsed.data)
+      where = buildLossClaimWhere(req.user, parsed.data, typeof req.headers['x-active-store'] === 'string' ? req.headers['x-active-store'] : undefined)
     } catch (error: any) {
       return reply.status(error?.statusCode || 400).send({ error: error.message })
     }
@@ -382,7 +384,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     const total = paginated ? await prisma.lossClaim.count({ where }) : 0
 
     const claims = await prisma.lossClaim.findMany({
-      where, orderBy: { createdAt: 'desc' },
+      where, orderBy: [{createdAt:'desc'},{id:'desc'}],
       ...(paginated ? { skip: (p - 1) * ps, take: ps } : {}),
       include: {
         store: { select: { name: true } },
@@ -401,7 +403,10 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       items: c.items.map(withDocumentProductSnapshot),
       evidenceImages: resignOssUrls(c.evidenceImages),
     }))
-    return paginated ? { items, total, page: p, pageSize: ps } : items
+    if(!paginated)return items
+    const groups=await prisma.lossClaim.groupBy({by:['status'],where,_count:{_all:true},_sum:{totalLossAmount:true}})
+    const summary=groups.reduce((sum,row)=>({pending:sum.pending+(row.status==='PENDING'?row._count._all:0),arbitration:sum.arbitration+(['REJECTED','NEGOTIATING'].includes(row.status)?row._count._all:0),closed:sum.closed+(['APPROVED','AUTO_APPROVED','RESOLVED'].includes(row.status)?row._count._all:0),amount:sum.amount+Number(row._sum.totalLossAmount||0)}),{pending:0,arbitration:0,closed:0,amount:0})
+    return {items,total,page:p,pageSize:ps,summary}
   })
 
   app.get('/export', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
@@ -410,7 +415,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.errors[0].message })
     let where: any
     try {
-      where = buildLossClaimWhere({ tenantId, storeId, role, supplierId }, parsed.data)
+      where = buildLossClaimWhere(req.user, parsed.data, typeof req.headers['x-active-store'] === 'string' ? req.headers['x-active-store'] : undefined)
     } catch (error: any) {
       return reply.status(error?.statusCode || 400).send({ error: error.message })
     }
@@ -443,7 +448,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
         },
       },
     })
-    const suffix = parsed.data.createdAfter?.slice(0, 7) || dayjs().format('YYYY-MM')
+    const suffix = (parsed.data.createdAfter ? businessDateKey(parsed.data.createdAfter).slice(0, 7) : businessDateKey().slice(0, 7))
     return reply
       .header('Content-Type', 'text/csv; charset=utf-8')
       .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(`到货差异_${suffix}.csv`)}`)

@@ -12,6 +12,7 @@
  *   = 净利润
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 import { useEffect, useState } from 'react'
 import { BottomNav, Chip } from '@/components/v2'
 import { apiFetch, getUser } from '@/lib/v2-auth'
@@ -61,8 +62,7 @@ type OperatingMetrics = {
 }
 
 function thisMonth() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+  return businessDayjs().format('YYYY-MM')
 }
 
 type ClosedMonth = {

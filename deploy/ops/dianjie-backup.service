@@ -1,0 +1,22 @@
+[Unit]
+Description=Dianjie verified database and attachment backup
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=dianjie-backup
+Group=dianjie-backup
+EnvironmentFile=/etc/dianjie/backup.env
+WorkingDirectory=/app/dianjie-v4
+ExecStart=/usr/bin/python3 /app/dianjie-v4/scripts/ops/backup.py backup --config /etc/dianjie/backup.json
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dianjie-backups
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=multi-user.target

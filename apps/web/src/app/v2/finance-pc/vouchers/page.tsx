@@ -2,7 +2,7 @@
  * 财务 PC Web · 会计凭证列表
  *
  * Phase 3 P0 — 月结时财务最高频使用页面.
- * 接 /api/vouchers?from&to&status&pageSize=500
+ * 接 /api/vouchers?from&to&status&合法分页完整读取
  *
  * PC 端 UX vs 手机:
  *   - 表格 (一屏 50+ 行) vs 手机卡片
@@ -12,10 +12,11 @@
  *   - 批量过账 (POSTED), 一键审本月草稿, 单条快捷操作
  */
 'use client'
-import { useEffect, useMemo, useState } from 'react'
-import dayjs from 'dayjs'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import dayjs from '@/lib/business-dayjs'
 import { Chip, MonthPicker } from '@/components/v2'
 import { apiFetch, getToken } from '@/lib/v2-auth'
+import { loadVouchers } from '@/lib/voucher-list'
 import FinanceTopNav from '../_topnav'
 import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
 
@@ -42,7 +43,6 @@ const SOURCE_LABEL: Record<string, string> = {
   PaymentSchedule: '账期付款', Manual: '手工',
 }
 
-const fmtMoney = (n: number) => `¥${Math.round(n).toLocaleString()}`
 const fmtMoney2 = (n: number) => `¥${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 export default function FinancePCVouchersPage() {
@@ -54,20 +54,29 @@ export default function FinancePCVouchersPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
 
+  const loadSequence = useRef(0)
+  const activeFilter = useRef({ month, status })
+  activeFilter.current = { month, status }
+  const mounted = useRef(true)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; loadSequence.current++ } }, [])
+
   async function reload() {
+    if (!mounted.current) return
+    const { month: activeMonth, status: activeStatus } = activeFilter.current
+    const sequence = ++loadSequence.current
     setError(null)
     setData(null)
     setSelected(new Set())
-    const from = dayjs(month + '-01').startOf('month').format('YYYY-MM-DD')
-    const to = dayjs(month + '-01').endOf('month').format('YYYY-MM-DD')
+    const from = dayjs(activeMonth + '-01').startOf('month').format('YYYY-MM-DD')
+    const to = dayjs(activeMonth + '-01').endOf('month').format('YYYY-MM-DD')
     try {
-      const r = await apiFetch<{ items: Voucher[] }>(`/api/vouchers?from=${from}&to=${to}&status=${status}&pageSize=500`)
-      setData(r.items || [])
+      const rows = await loadVouchers<Voucher>(from, to, activeStatus)
+      if (sequence === loadSequence.current) setData(rows)
     } catch (e: any) {
-      setError(e.message || String(e))
+      if (sequence === loadSequence.current) setError(e.message || String(e))
     }
   }
-  useEffect(() => { reload() }, [month, status])
+  useEffect(() => { reload(); return () => { loadSequence.current++ } }, [month, status])
 
   const list = data || []
 
@@ -208,10 +217,10 @@ export default function FinancePCVouchersPage() {
 
         {/* Hero 4 卡 */}
         <div className="grid grid-cols-4 gap-3 mb-4">
-          <Stat label="本月凭证" value={String(stats.total)} unit="笔" />
-          <Stat label="借方合计" value={fmtMoney2(stats.sumDebit)} />
-          <Stat label="草稿待审" value={String(stats.draft)} unit="笔" tone={stats.draft > 0 ? 'red' : 'gray'} />
-          <Stat label="已导出" value={String(stats.exported)} unit="笔" tone="green" />
+          <Stat label="本月凭证" value={data === null ? '—' : String(stats.total)} unit="笔" />
+          <Stat label="借方合计" value={data === null ? '—' : fmtMoney2(stats.sumDebit)} />
+          <Stat label="草稿待审" value={data === null ? '—' : String(stats.draft)} unit="笔" tone={stats.draft > 0 ? 'red' : 'gray'} />
+          <Stat label="已导出" value={data === null ? '—' : String(stats.exported)} unit="笔" tone="green" />
         </div>
 
         {/* 状态 tabs */}
@@ -219,7 +228,7 @@ export default function FinancePCVouchersPage() {
           {(['ALL', 'DRAFT', 'POSTED', 'VOIDED'] as const).map(s => (
             <button key={s} onClick={() => setStatus(s)}
               className={`px-3 py-1.5 rounded-cta text-button ${status === s ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
-              {s === 'ALL' ? `全部 ${stats.total}` : `${STATUS_LABEL[s]} ${s === 'DRAFT' ? stats.draft : s === 'POSTED' ? stats.posted : stats.voided}`}
+              {s === 'ALL' ? `全部 ${data === null ? '—' : stats.total}` : `${STATUS_LABEL[s]} ${data === null ? '—' : s === 'DRAFT' ? stats.draft : s === 'POSTED' ? stats.posted : stats.voided}`}
             </button>
           ))}
           {stats.draft > 0 && (
@@ -251,7 +260,7 @@ export default function FinancePCVouchersPage() {
               </tr>
             </thead>
             <tbody>
-              {data === null && (
+              {data === null && !error && (
                 <tr><td colSpan={6} className="px-4 py-8 text-center text-caption text-gray3">加载中…</td></tr>
               )}
               {data !== null && filtered.length === 0 && (
@@ -285,7 +294,7 @@ export default function FinancePCVouchersPage() {
                       </div>
                     </td>
                     <td className="px-3 py-2.5 font-num text-right">
-                      <div>{fmtMoney(Number(v.totalDebit))}</div>
+                      <div>{fmtMoney2(Number(v.totalDebit))}</div>
                       {!balanced && <div className="text-micro text-red-fg">不平!</div>}
                     </td>
                     <td className="px-3 py-2.5">

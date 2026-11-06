@@ -6,6 +6,7 @@
  */
 'use client'
 import React from 'react'
+import { SearchableList } from './searchable-select'
 
 export type FilterProduct = { status: string }
 export type FilterCategory = { name: string; count: number }
@@ -53,8 +54,8 @@ export function ProductFilterSidebar({
       <div className="sticky top-4 space-y-4 pl-4">
         <div className="bg-bg-card border border-border rounded-card p-3">
           <h2 className="text-h2 text-ink mb-2">分类</h2>
-          <ul className="space-y-1">
-            <li>
+          <SearchableList listAs="ul" searchLabel="搜索商品分类" className="space-y-1">
+            <li data-search-pinned>
               <FilterButton
                 label="全部"
                 count={total}
@@ -72,7 +73,7 @@ export function ProductFilterSidebar({
                 />
               </li>
             ))}
-          </ul>
+          </SearchableList>
         </div>
 
         <div className="bg-bg-card border border-border rounded-card p-3">

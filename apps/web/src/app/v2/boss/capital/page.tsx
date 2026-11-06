@@ -5,6 +5,7 @@
  * 入口: /v2/me 或 /v2/finance/home 入口
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import { Chip } from '@/components/v2'
@@ -37,8 +38,7 @@ const STATUS_TONE: Record<string, 'orange'|'green'|'gray'> = {
 }
 
 function fmt(iso: string) {
-  const d = new Date(iso)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return businessDayjs(iso).format('YYYY-MM-DD')
 }
 
 export default function CapitalListPage() {

@@ -140,7 +140,7 @@ export async function createWarehouseStocktake(input: CreateInput) {
     const warehouse = await tx.warehouse.findFirst({ where: { tenantId: input.tenantId, id: input.warehouseId, isActive: true } })
     if (!warehouse) throw fail('总仓不存在或不属于当前租户', 404)
     const active = await tx.warehouseStocktake.findFirst({
-      where: { tenantId: input.tenantId, warehouseId: input.warehouseId, status: { in: ['DRAFT', 'COUNTING', 'REVIEWING'] } },
+      where: { tenantId: input.tenantId, warehouseId: input.warehouseId, OR: [{status: { in: ['DRAFT', 'COUNTING', 'REVIEWING'] }},{status:'CONFIRMED',postingPolicy:'REVIEW',reviewStatus:'UNREVIEWED'}] },
       select: { id: true },
     })
     if (active) throw fail('当前仓库已有活动盘点单，请先完成或取消', 409)
@@ -190,6 +190,7 @@ export async function createWarehouseStocktake(input: CreateInput) {
         no: `WST-${input.countDate.replaceAll('-', '')}-${randomUUID().slice(0, 8).toUpperCase()}`,
         countDate: new Date(`${input.countDate}T00:00:00.000Z`),
         requestKey: input.requestKey,
+        postingPolicy: 'REVIEW',
         countScope: input.countScope || 'SELECTED',
         note: input.note?.trim() || null,
         createdById: input.userId,
@@ -359,7 +360,7 @@ export async function submitWarehouseStocktake(input: { tenantId: string; userId
 export async function rejectWarehouseStocktake(input: { tenantId: string; userId: string; id: string; reason: string }) {
   return serializable(async tx => {
     const stocktake = await lockStocktake(tx, input.tenantId, input.id)
-    if (stocktake.status !== 'REVIEWING') throw fail('只有待审核盘点单可以退回', 409)
+    if (stocktake.status !== 'REVIEWING' && !(stocktake.postingPolicy === 'REVIEW' && stocktake.status === 'CONFIRMED' && stocktake.reviewStatus !== 'REVIEWED')) throw fail('只有待审核或未复审盘点单可以退回', 409)
     await tx.warehouseStocktakeSection.updateMany({
       where: { tenantId: input.tenantId, stocktakeId: stocktake.id },
       data: { status: 'OPEN', submittedAt: null, rowVersion: { increment: 1 } },
@@ -367,7 +368,7 @@ export async function rejectWarehouseStocktake(input: { tenantId: string; userId
     await tx.opLog.create({ data: { tenantId: input.tenantId, userId: input.userId, action: '退回总仓盘点', entityType: 'WarehouseStocktake', targetId: stocktake.id, target: stocktake.no, metadata: { reason: input.reason } } })
     return tx.warehouseStocktake.update({
       where: { id: stocktake.id },
-      data: { status: 'COUNTING', submittedAt: null, submittedById: null, reviewNote: input.reason, rowVersion: { increment: 1 } },
+      data: { status: 'COUNTING', submittedAt: null, submittedById: null, auditedAt: null, auditedById: null, reviewNote: input.reason, rowVersion: { increment: 1 } },
     })
   })
 }
@@ -388,10 +389,26 @@ export async function cancelWarehouseStocktake(input: { tenantId: string; userId
 }
 
 export async function approveWarehouseStocktake(input: { tenantId: string; userId: string; id: string }) {
+  return finishWarehouseStocktake(input, false)
+}
+export async function reviewWarehouseStocktake(input: { tenantId: string; userId: string; id: string }) {
+  return finishWarehouseStocktake(input, true)
+}
+async function finishWarehouseStocktake(input: { tenantId: string; userId: string; id: string }, finalReview: boolean) {
   return serializable(async tx => {
     const stocktake = await lockStocktake(tx, input.tenantId, input.id)
-    if (stocktake.status === 'CONFIRMED') return { replayed: true, stocktake }
-    if (stocktake.status !== 'REVIEWING') throw fail('只有待审核盘点单可以审核', 409)
+    if (finalReview) {
+      if (stocktake.status !== 'CONFIRMED') throw fail('请先审核盘点单，再复审', 409)
+      if (stocktake.reviewStatus === 'REVIEWED') return { replayed: true, stocktake }
+      if (stocktake.postingPolicy !== 'REVIEW') {
+        const updated = await tx.warehouseStocktake.update({where:{id:stocktake.id},data:{reviewStatus:'REVIEWED',rowVersion:{increment:1}}})
+        await tx.opLog.create({data:{tenantId:input.tenantId,userId:input.userId,action:'复审历史盘点（不重复过账）',entityType:'WarehouseStocktake',targetId:stocktake.id,target:stocktake.no}})
+        return {replayed:false,stocktake:updated}
+      }
+    } else {
+      if (stocktake.status === 'CONFIRMED') return { replayed: true, stocktake }
+      if (stocktake.status !== 'REVIEWING') throw fail('只有待审核盘点单可以审核', 409)
+    }
     const items = stocktake.sections.flatMap(section => section.items).sort((a, b) => a.productId.localeCompare(b.productId))
     if (items.some(item => item.unitPending)) throw fail('存在待核验换算，不能审核盘点', 400)
     const productIds = items.map(item => item.productId)
@@ -412,6 +429,11 @@ export async function approveWarehouseStocktake(input: { tenantId: string; userI
       }
       if (item.countedQuantity == null || item.countedUnitCost == null || item.differenceQuantity == null) throw fail('实盘数据不完整', 400)
       if (item.countedQuantity.lt(balance.reservedQty)) throw fail(`「${item.productNameSnapshot}」实盘数量低于活动预占`, 409)
+    }
+    if (!finalReview) {
+      const updated=await tx.warehouseStocktake.update({where:{id:stocktake.id},data:{status:'CONFIRMED',postingPolicy:'REVIEW',auditedAt:new Date(),auditedById:input.userId,reviewNote:null,rowVersion:{increment:1}}})
+      await tx.opLog.create({data:{tenantId:input.tenantId,userId:input.userId,action:'审核总仓盘点（待复审生效）',entityType:'WarehouseStocktake',targetId:stocktake.id,target:stocktake.no}})
+      return {replayed:false,stocktake:updated}
     }
     const effectiveAt = new Date()
     const grouped = {
@@ -458,10 +480,10 @@ export async function approveWarehouseStocktake(input: { tenantId: string; userI
         })
       }
     }
-    await tx.opLog.create({ data: { tenantId: input.tenantId, userId: input.userId, action: '审核总仓盘点并生成盘盈盘亏', entityType: 'WarehouseStocktake', targetId: stocktake.id, target: stocktake.no } })
+    await tx.opLog.create({ data: { tenantId: input.tenantId, userId: input.userId, action: finalReview ? '复审总仓盘点并生成盘盈盘亏' : '审核历史总仓盘点并生成盘盈盘亏', entityType: 'WarehouseStocktake', targetId: stocktake.id, target: stocktake.no } })
     const updated = await tx.warehouseStocktake.update({
       where: { id: stocktake.id },
-      data: { status: 'CONFIRMED', reviewedAt: effectiveAt, reviewedById: input.userId, reviewNote: null, rowVersion: { increment: 1 } },
+      data: { status: 'CONFIRMED', ...(finalReview ? {reviewStatus:'REVIEWED' as const} : {}), reviewedAt: effectiveAt, reviewedById: input.userId, reviewNote: null, rowVersion: { increment: 1 } },
     })
     return { replayed: false, stocktake: updated }
   })

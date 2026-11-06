@@ -5,7 +5,7 @@
  */
 'use client'
 import { useEffect, useState } from 'react'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { Chip, MonthPicker } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import { exportXlsx } from '@/lib/exportXlsx'
@@ -33,13 +33,17 @@ const fmt = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 
 
 export default function ReconCheckPCPage() {
   const [month, setMonth] = useState(() => dayjs().format('YYYY-MM'))
-  const [data, setData] = useState<ReconCheck | null>(null)
+  const [result, setData] = useState<ReconCheck | null>(null)
+  const data = result?.month === month ? result : null
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    let active = true
     setData(null); setError(null)
     apiFetch<ReconCheck>(`/api/finance/reports/recon-check?month=${month}`)
-      .then(setData).catch(e => setError(String(e?.message || e)))
+      .then(d => { if (active) setData(d) })
+      .catch(e => { if (active) setError(String(e?.message || e)) })
+    return () => { active = false }
   }, [month])
 
   async function doExport() {

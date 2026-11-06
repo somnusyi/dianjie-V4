@@ -1,0 +1,25 @@
+[Unit]
+Description=Verified scheduled Dianjie %i database and attachments backup
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=7200
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+Restart=on-failure
+RestartSec=900
+User=dianjie-backup
+Group=dianjie-backup
+EnvironmentFile=/etc/dianjie/backup-%i.env
+WorkingDirectory=/app/dianjie-v4
+ExecStart=/usr/bin/flock --wait 3600 /var/lib/dianjie-backups/.daily.lock /usr/bin/python3 /app/dianjie-v4/scripts/ops/backup.py backup --config /etc/dianjie/backup-%i.json
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dianjie-backups
+TimeoutStartSec=7200

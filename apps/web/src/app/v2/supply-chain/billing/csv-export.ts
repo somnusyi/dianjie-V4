@@ -1,3 +1,5 @@
+import businessDayjs from '@/lib/business-dayjs'
+import {billingStatusLabel} from './status-label'
 export type BillingCsvTab = 'schedule' | 'reconciliation' | 'invoice'
 
 type ScheduleCsvRow = {
@@ -55,7 +57,7 @@ export function buildBillingCsv<T extends BillingCsvTab>(tab: T, rows: BillingCs
       ['供应商', '入库单', '门店', '到期日', '状态', '金额'],
       ...(rows as ScheduleCsvRow[]).map(item => [
         item.supplier?.name || '', item.receipt?.no || '', item.receipt?.store?.name || '',
-        day(item.dueAt), item.status, Number(item.amount || 0),
+        item.dueAt ? businessDayjs(item.dueAt).format('YYYY-MM-DD') : '', billingStatusLabel(item.status,tab), Number(item.amount || 0).toFixed(2),
       ]),
     ]
   } else if (tab === 'reconciliation') {
@@ -63,15 +65,15 @@ export function buildBillingCsv<T extends BillingCsvTab>(tab: T, rows: BillingCs
       ['对账单号', '供应商', '供应商编号', '期间开始', '期间结束', '状态', '金额'],
       ...(rows as ReconciliationCsvRow[]).map(item => [
         item.no, item.supplier?.name || '', item.supplier?.no || '', day(item.periodStart),
-        day(item.periodEnd), item.status, Number(item.totalAmount || 0),
+        day(item.periodEnd), billingStatusLabel(item.status,tab), Number(item.totalAmount || 0).toFixed(2),
       ]),
     ]
   } else {
     matrix = [
       ['发票号码', '供应商', '开票日', '关联入库数', '状态', '金额'],
       ...(rows as InvoiceCsvRow[]).map(item => [
-        item.invoiceNo, item.supplier?.name || '', day(item.issueDate), item.receipts?.length || 0,
-        item.status, Number(item.amount || 0),
+        item.invoiceNo, item.supplier?.name || '', item.issueDate ? businessDayjs(item.issueDate).format('YYYY-MM-DD') : '', item.receipts?.length || 0,
+        billingStatusLabel(item.status,tab), Number(item.amount || 0).toFixed(2),
       ]),
     ]
   }
@@ -79,15 +81,7 @@ export function buildBillingCsv<T extends BillingCsvTab>(tab: T, rows: BillingCs
 }
 
 export function billingCsvFilename(tab: BillingCsvTab, now = new Date()) {
-  const stamp = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, '0'),
-    String(now.getDate()).padStart(2, '0'),
-    '-',
-    String(now.getHours()).padStart(2, '0'),
-    String(now.getMinutes()).padStart(2, '0'),
-    String(now.getSeconds()).padStart(2, '0'),
-  ].join('')
+  const stamp = businessDayjs(now).format('YYYYMMDD-HHmmss')
   return `供应链账务-${TAB_LABEL[tab]}-${stamp}.csv`
 }
 

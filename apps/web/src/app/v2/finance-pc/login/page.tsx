@@ -12,6 +12,7 @@
  *   - 角色不匹配 显式红色错误条
  */
 'use client'
+import { browserLogin, logoutSession } from '@/lib/v2-auth'
 import {loginTenant,dedicatedTestLogin} from '@/lib/login-environment'
 import { useEffect, useState } from 'react'
 import { setSession, getToken, getUser, clearSession } from '@/lib/v2-auth'
@@ -51,8 +52,8 @@ export default function FinancePCLoginPage() {
     }
     location.replace('/v2/finance-pc/home')
   }
-  function switchAccount() {
-    clearSession()
+  async function switchAccount() {
+    await logoutSession()
     setExistingUser(null)
     setIdentifier(''); setPassword(''); setError(null)
   }
@@ -66,11 +67,7 @@ export default function FinancePCLoginPage() {
     if(testEntry){setSubmitting(false);location.assign(testEntry);return}
     const effectiveTenant = loginTenant(tenantSlug,idTrim)
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier: idTrim, password, tenantSlug: effectiveTenant }),
-      })
+      const res = await browserLogin('/api/auth/login', { identifier: idTrim, password, tenantSlug: effectiveTenant })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || data.message || '登录失败')
       // 角色检查

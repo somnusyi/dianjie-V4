@@ -1,4 +1,5 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import sheet from '@/components/v2/document-sheet.module.css'
@@ -20,6 +21,7 @@ type DocRow = {
   note: string | null
   effectiveAt: string
   status: 'POSTED' | 'CONFIRMED'
+  postingPolicy?: 'LEGACY' | 'REVIEW'
   reviewStatus: 'UNREVIEWED' | 'REVIEWED'
   lineCount: number
   totalAmount: number
@@ -88,7 +90,7 @@ function fmtQty(value: number | null | undefined) {
 
 function fmtTime(value: string | null | undefined) {
   if (!value) return '—'
-  return new Date(value).toLocaleString('zh-CN', { hour12: false })
+  return new Date(value).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })
 }
 
 function fmtDay(value: string | null | undefined) {
@@ -356,7 +358,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
     } finally { busyRef.current = false; setBusy(false) }
   }
   function requestNewSubmit(audit: boolean) {
-    openConfirmation({ title: audit ? '审核新单据' : '提交单据', body: audit ? `保存当前草稿并生成${creatingOutbound ? '出库' : '入库'}单，审核标记为已审核。不会在审核阶段重复过账。` : `保存当前草稿并生成待审核${creatingOutbound ? '出库' : '入库'}单。`, confirmLabel: audit ? '确认审核' : '确认提交', layerClassName: 'z-[100]', onConfirm: () => submitNew(audit) })
+    openConfirmation({ title: audit ? '审核新单据' : '提交单据', body: audit ? `保存当前草稿并生成${creatingOutbound ? '出库' : '入库'}单，审核标记为已审核。审核不改变库存和金额，复审后才生效。` : `保存当前草稿并生成待审核${creatingOutbound ? '出库' : '入库'}单。`, confirmLabel: audit ? '确认审核' : '确认提交', layerClassName: 'z-[100]', onConfirm: () => submitNew(audit) })
   }
   async function uploadNewAttachments(files: File[]) {
     if (busyRef.current || submissionUnknown) return
@@ -532,7 +534,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
     const scope = { ...documentScope.current }
     openConfirmation({
       title: '复审',
-      body: '确认复审该单据？复审后流程结束，不能取消复审或反审核。库存数量和金额保持不变。',
+      body: doc.postingPolicy==='REVIEW'?'复审后才改变库存和金额，流程结束，不能取消复审或反审核。':'确认复审该历史单据？原有库存和金额不重复记账，复审后流程结束，不能取消复审或反审核。',
       confirmLabel: '确认复审',
       layerClassName: 'z-[100]',
       onConfirm: async () => {
@@ -645,7 +647,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
             <label className="space-y-1 text-caption text-gray2">
               供应商
               {editable ? (
-                <select
+                <SearchableSelect searchLabel="搜索供应商"
                   aria-label="供应商"
                   disabled={busy || loading || submissionUnknown ||(creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))}
                   value={supplierId}
@@ -656,7 +658,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
                   {suppliers.map(supplier => (
                     <option key={supplier.id} value={supplier.id}>{supplier.no ? `${supplier.no} ` : ''}{supplier.name}</option>
                   ))}
-                </select>
+                </SearchableSelect>
               ) : (
                 <div className="text-body text-ink">{doc.supplierName || '—'}</div>
               )}
@@ -667,7 +669,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
               {creating ? <input aria-label="出库原因/去向" maxLength={120} value={outboundReason} disabled={busy || submissionUnknown ||(creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onChange={e=>setOutboundReason(e.target.value)} className="h-9 w-full rounded-cta border border-border px-2 text-body text-ink" /> : <div className="text-body text-ink">{doc.reason || '—'}</div>}
             </div>
           )}
-          {creatingOutbound && <><label className="space-y-1 text-caption text-gray2">出库用途<select aria-label="出库用途" value={outboundPurpose} disabled={busy || submissionUnknown ||(creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onChange={e=>setOutboundPurpose(e.target.value)} className="h-9 w-full rounded-cta border border-border text-body text-ink"><option value="">请选择用途</option><option value="STORE_REALLOCATION">门店拨补</option><option value="SAMPLE_ISSUE">样品领用</option><option value="HISTORICAL_CORRECTION">历史补录</option></select></label><label className="space-y-1 text-caption text-gray2">责任归属<input aria-label="责任归属" value={outboundResponsibility} maxLength={114} disabled={busy || submissionUnknown ||(creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onChange={e=>setOutboundResponsibility(e.target.value)} className="h-9 w-full rounded-cta border border-border px-2 text-body text-ink" /></label><label className="space-y-1 text-caption text-gray2">去向名称<input aria-label="去向名称" value={outboundSource} maxLength={120} disabled={busy || submissionUnknown ||(creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onChange={e=>setOutboundSource(e.target.value)} className="h-9 w-full rounded-cta border border-border px-2 text-body text-ink" /></label><p className="text-caption text-gray2 sm:col-span-2">数量使用库存基准单位，成本留空时按提交时台账成本计算；总仓自损仍使用独立自损入口，不能从此处绕过责任和证据要求。</p></>}
+          {creatingOutbound && <><label className="space-y-1 text-caption text-gray2">出库用途<select aria-label="出库用途" value={outboundPurpose} disabled={busy || submissionUnknown ||(creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onChange={e=>setOutboundPurpose(e.target.value)} className="h-9 w-full rounded-cta border border-border text-body text-ink"><option value="">请选择用途</option><option value="STORE_REALLOCATION">门店拨补</option><option value="SAMPLE_ISSUE">样品领用</option><option value="HISTORICAL_CORRECTION">历史补录</option></select></label><label className="space-y-1 text-caption text-gray2">责任归属<input aria-label="责任归属" value={outboundResponsibility} maxLength={114} disabled={busy || submissionUnknown ||(creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onChange={e=>setOutboundResponsibility(e.target.value)} className="h-9 w-full rounded-cta border border-border px-2 text-body text-ink" /></label><label className="space-y-1 text-caption text-gray2">去向名称<input aria-label="去向名称" value={outboundSource} maxLength={120} disabled={busy || submissionUnknown ||(creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onChange={e=>setOutboundSource(e.target.value)} className="h-9 w-full rounded-cta border border-border px-2 text-body text-ink" /></label><p className="text-caption text-gray2 sm:col-span-2">数量使用库存基准单位，成本留空时按复审时台账成本计算；总仓自损仍使用独立自损入口，不能从此处绕过责任和证据要求。</p></>}
           <div className={fullPage ? sheet.wide : "space-y-1 text-caption text-gray2"}>
             备注
             {editable ? <input disabled={busy || loading || submissionUnknown ||(creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} aria-label="单据备注" value={headerNote} maxLength={240} onChange={event => setHeaderNote(event.target.value)} className="h-9 w-full rounded-cta border border-border px-2 text-body text-ink" /> : <div className="text-body text-ink">{doc.note || '—'}</div>}
@@ -685,7 +687,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
 
         {creating && <div className={sheet.toolbar}><input aria-label="查询可用物品" placeholder="名称 / 编码 / 规格" maxLength={100} value={candidateQuery} disabled={busy||submissionUnknown||candidateBusy || (creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onChange={event=>setCandidateQuery(event.target.value)}/><button disabled={busy||submissionUnknown||candidateBusy || (creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onClick={()=>void loadCandidates()}>查询物品</button>{candidateCursor&&<button disabled={busy||submissionUnknown||candidateBusy || (creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onClick={()=>void loadCandidates(true)}>加载更多物品</button>}<button disabled={busy||submissionUnknown||Boolean(newDraft.terminalStatus)} onClick={reconfirmDraft} className="rounded-cta border border-border px-3">{newDraft.reconfirmPending?'核对原请求':'重新核对仓库与单位'}</button><select aria-label={inbound ? "添加入库物品" : "添加出库物品"} value={selectedProduct} disabled={busy || submissionUnknown ||(creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onChange={event => setSelectedProduct(event.target.value)} className="h-9 min-w-64 border border-border px-2"><option value="">选择物品</option>{candidates.filter(product => product.eligible!==false&&!doc.lines.some(line => line.productId === product.id)).map(product => <option key={product.id} value={product.id}>{product.code} {product.name}</option>)}</select><button disabled={busy || submissionUnknown || !selectedProduct || (creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onClick={addProduct} className="rounded-cta border border-border px-3">添加物品</button></div>}
         {/* 行明细 */}
-        <div className={sheet.tableWrap}><table data-row-actions={creating} className="mb-4 w-full min-w-[1400px] text-body">
+        <div className={`${sheet.tableWrap} ${sheet.frozenIdentity}`}><table data-row-actions={creating} className="mb-4 w-full min-w-[1400px] text-body">
           <thead>
             <tr className="border-b border-border text-left text-caption text-gray2">
               <th className="py-2 pr-2">#</th>{creating && <th className="py-2 pr-2">操作</th>}
@@ -695,7 +697,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
               <th className="py-2 pr-2">物品类别</th>
               <th className="py-2 pr-2">仓库</th>
               <th className="py-2 pr-2 text-right">数量</th>
-              <th className="py-2 pr-2">{inbound ? '采购单位' : '库存单位'}</th>
+              <th data-column="purchase-unit" className="py-2 pr-2">{inbound ? '采购单位' : '库存单位'}</th>
               <th className="py-2 pr-2 text-right">单价</th>
               <th className="py-2 pr-2 text-right">金额{inbound ? '（价税合计）' : '（成本）'}</th>
               <th className="py-2 pr-2">是否赠品</th>
@@ -729,7 +731,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
                       />
                     ) : fmtQty(line.quantity)}
                   </td>
-                  <td className="py-2 pr-2">{line.unit}</td>
+                  <td data-column="purchase-unit" className="py-2 pr-2">{line.unit}</td>
                   <td className="py-2 pr-2 text-right font-num">{editable && inbound ? <input
                     aria-label={`${line.productName}入库单价`} disabled={busy || loading || submissionUnknown ||(creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus))) || line.isGift === true}
                     value={Number(edit.quantity ?? line.quantity) > 0 && (edit.amount ?? String(line.amount)) !== '' ? String(Number((Number(edit.amount ?? line.amount) / Number(edit.quantity ?? line.quantity)).toFixed(6))) : ''}
@@ -737,7 +739,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
                       const price = event.target.value
                       setLineEdit(line.id, 'amount', price.trim() && Number.isFinite(Number(price)) ? String(Number((Number(price) * Number(edit.quantity ?? line.quantity)).toFixed(4))) : '')
                     }} className="h-8 w-24 rounded-cta border border-border px-2 text-right font-num" />
-                    : creatingOutbound ? (edit.amount?.trim() && Number(edit.quantity)>0 ? money(Number(edit.amount)/Number(edit.quantity)) : '提交时计算') : Number(line.quantity) > 0 ? money(Number(line.amount) / Number(line.quantity)) : '—'}</td>
+                    : creatingOutbound ? (edit.amount?.trim() && Number(edit.quantity)>0 ? money(Number(edit.amount)/Number(edit.quantity)) : '复审时计算') : Number(line.quantity) > 0 ? money(Number(line.amount) / Number(line.quantity)) : '—'}</td>
                   <td className="py-2 pr-2 text-right font-num">
                     {editable ? (
                       <input
@@ -747,7 +749,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
                         onChange={event => setLineEdit(line.id, 'amount', event.target.value)}
                         className="h-8 w-28 rounded-cta border border-border px-2 text-right font-num"
                       />
-                    ) : money(line.amount)}
+                    ) : Number(line.amount||0).toFixed(2)}
                   </td>
                   <td className="py-2 pr-2"><input type="checkbox" aria-label={`${line.productName}是否赠品`} checked={line.isGift === true} disabled={!creating || creatingOutbound || busy || submissionUnknown || (creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onChange={event => {
                     const isGift = event.target.checked
@@ -778,7 +780,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
           <tfoot>
             <tr className="text-body font-semibold">
               <td colSpan={creating ? 10 : 9} className="py-2 text-right text-gray2">合计</td>
-              <td className="py-2 text-right font-num">{creatingOutbound && doc.lines.some(line=>!(lineEdit(line.id).amount || '').trim()) ? '提交时计算' : money(doc.lines.reduce((sum, line) => sum + Number(lineEdit(line.id).amount ?? line.amount), 0))}</td>
+              <td className="py-2 text-right font-num">{creatingOutbound && doc.lines.some(line=>!(lineEdit(line.id).amount || '').trim()) ? '复审时计算' : doc.lines.reduce((sum, line) => sum + Number(lineEdit(line.id).amount ?? line.amount), 0).toFixed(2)}</td>
               <td colSpan={inbound?8:7}></td>
             </tr>
           </tfoot>
@@ -788,7 +790,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
         {editable && !creating && (
           <div className="mb-4 space-y-2 rounded-card border border-border p-4">
             <p className="text-caption text-gray2">
-              可改：金额/单价、{inbound ? '数量（批次未被消耗时）、供应商、' : ''}备注。保存后同步库存数量和金额，并保留原流水及批次历史。出库单数量不能改（数量差错请走实盘/报损）。
+              {doc.postingPolicy==='REVIEW'?'当前单据尚未生效；保存仅更新单据，审核只改状态，复审后才改变库存和金额。':<>可改：金额/单价、{inbound ? '数量（批次未被消耗时）、供应商、' : ''}备注。保存后同步原有库存数量和金额，并保留历史。出库单数量不能改（数量差错请走实盘/报损）。</>}
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <input

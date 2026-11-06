@@ -6,6 +6,7 @@
  * 操作: + 入库 / 单 SKU 进详情看流水 + 盘点 / 报损
  */
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 import { useEffect, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import { filterSupplierCategories } from '@/lib/supplier-category-filter'
@@ -205,7 +206,7 @@ export default function InventoryPage() {
 
       {/* 商品与库存共用分类主数据 */}
       <div className="px-4 mt-2 flex items-center gap-2">
-        <select
+        <SearchableSelect searchWhenLong searchLabel="搜索库存分类"
           value={categoryFilter}
           onChange={event => {
             inventoryRequestId.current += 1
@@ -220,7 +221,7 @@ export default function InventoryPage() {
               {category.name} ({category.count}){category.isActive === false ? ' · 已停用' : ''}
             </option>
           ))}
-        </select>
+        </SearchableSelect>
         {categoryFilter && (
           <button onClick={() => {
             inventoryRequestId.current += 1

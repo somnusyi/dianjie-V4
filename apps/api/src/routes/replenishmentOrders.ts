@@ -1,3 +1,4 @@
+import { REPLENISHMENT_SUBMISSION_POLICY, reserveReplenishmentStock, releaseReplenishmentStock } from '../services/replenishmentStockReservation'
 import { FastifyPluginAsync } from 'fastify'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
@@ -9,6 +10,7 @@ import { hasInternalSupplyChainCapability, isInternalSupplyChainRole } from '../
 import { businessNoFloor, nextBusinessNo } from '../services/purchaseOrderIntegrity'
 import { loadOrderDraftProducts, validateOrderDraftLines } from '../services/orderDraftValidation'
 import { acceptReplenishmentInTransaction } from '../services/replenishmentOrderService'
+import { isWarehouseTransactionConflict, serializableWithRetry } from '../services/warehouseLedger'
 import { deriveReplenishmentFulfillmentStatus, replenishmentNextAction } from '../services/replenishmentOrderPolicy'
 
 const quantity = z.number().finite().positive().max(99_999_999.99)
@@ -267,14 +269,14 @@ export const replenishmentOrderRoutes: FastifyPluginAsync = async app => {
           id: input.supplierId,
           tenantId,
           status: 'ENABLED',
-          OR: [{ businessScopes: { has: 'STORE_FULFILLER' } }, { sourceType: 'HEADQ_WAREHOUSE' }],
+          sourceType: 'HEADQ_WAREHOUSE',
         },
         select: { id: true },
       }),
       loadOrderDraftProducts({ tenantId, supplierId: input.supplierId, productIds: input.items.map(item => item.productId) }),
     ])
     if (!store) return reply.status(400).send({ error: '门店不存在或已停用' })
-    if (!supplier) return reply.status(400).send({ error: '供应商不在门店履约范围内' })
+    if (!supplier) return reply.status(400).send({ error: '补货来源必须是启用的内部总仓' })
     const validation = validateOrderDraftLines(products, input.items)
     if (!validation.ok) return reply.status(400).send({ error: validation.issues[0]?.message || '补货明细校验失败' })
     const rows = itemRows(products, validation)
@@ -369,14 +371,14 @@ export const replenishmentOrderRoutes: FastifyPluginAsync = async app => {
           id: input.supplierId,
           tenantId,
           status: 'ENABLED',
-          OR: [{ businessScopes: { has: 'STORE_FULFILLER' } }, { sourceType: 'HEADQ_WAREHOUSE' }],
+          sourceType: 'HEADQ_WAREHOUSE',
         },
         select: { id: true },
       }),
       loadOrderDraftProducts({ tenantId, supplierId: input.supplierId, productIds: input.items.map(item => item.productId) }),
     ])
     if (!store) return reply.status(400).send({ error: '门店不存在或已停用' })
-    if (!supplier) return reply.status(400).send({ error: '供应商不在门店履约范围内' })
+    if (!supplier) return reply.status(400).send({ error: '补货来源必须是启用的内部总仓' })
     const validation = validateOrderDraftLines(products, input.items)
     if (!validation.ok) return reply.status(400).send({ error: validation.issues[0]?.message || '补货明细校验失败' })
     const rows = itemRows(products, validation)
@@ -450,6 +452,7 @@ export const replenishmentOrderRoutes: FastifyPluginAsync = async app => {
       include: { items: true },
     })
     if (!current) return reply.status(409).send({ error: '补货单不存在或状态已变化' })
+    if(!await prisma.supplier.findFirst({where:{id:current.supplierId,tenantId,status:'ENABLED',sourceType:'HEADQ_WAREHOUSE'}}))return reply.status(409).send({error:'补货来源必须是启用的内部总仓，请编辑草稿核对；原记录保留'})
     const inputLines = current.items.map(item => ({ productId: item.productId, quantity: Number(item.quantity) }))
     const products = await loadOrderDraftProducts({ tenantId, supplierId: current.supplierId, productIds: inputLines.map(item => item.productId) })
     const validation = validateOrderDraftLines(products, inputLines)
@@ -478,37 +481,52 @@ export const replenishmentOrderRoutes: FastifyPluginAsync = async app => {
         changedItems: priceChanges,
       })
     }
-    await prisma.$transaction(async tx => {
-      const updated = await tx.replenishmentOrder.updateMany({
-        where: { id: current.id, tenantId, status: 'DRAFT', rowVersion: current.rowVersion },
-        data: {
-          status: 'SUBMITTED',
-          submittedAt: new Date(),
-          submittedById: userId,
-          totalAmount: validation.totalAmount!,
-          rowVersion: { increment: 1 },
-        },
+    try {
+      await serializableWithRetry(async tx => {
+        const updated = await tx.replenishmentOrder.updateMany({
+          where: { id: current.id, tenantId, status: 'DRAFT', rowVersion: current.rowVersion },
+          data: {
+            status: 'SUBMITTED',
+            stockReservationPolicy: REPLENISHMENT_SUBMISSION_POLICY,
+            submittedAt: new Date(),
+            submittedById: userId,
+            totalAmount: validation.totalAmount!,
+            rowVersion: { increment: 1 },
+          },
+        })
+        if (updated.count !== 1) throw Object.assign(new Error('补货单状态已变化，请刷新后重试'), { statusCode: 409 })
+        await tx.replenishmentOrderItem.deleteMany({ where: { replenishmentOrderId: current.id } })
+        await tx.replenishmentOrderItem.createMany({
+          data: rows.map(row => ({ tenantId, replenishmentOrderId: current.id, ...row })),
+        })
+        const submittedItems = await tx.replenishmentOrderItem.findMany({ where: { tenantId, replenishmentOrderId: current.id } })
+        await reserveReplenishmentStock(tx, {
+          tenantId, replenishmentOrderId: current.id, userId,
+          lines: submittedItems.map(item => ({ ...item, purchaseOrderItemId: item.id })),
+        })
+        await tx.replenishmentOrderEvent.create({
+          data: {
+            tenantId,
+            replenishmentOrderId: current.id,
+            eventType: 'SUBMITTED',
+            actorId: userId,
+            actorRole: role,
+            fromStatus: 'DRAFT',
+            toStatus: 'SUBMITTED',
+            requestId: req.id,
+            requestKey: parsed.data.requestKey,
+            ip: req.ip,
+          },
+        })
       })
-      if (updated.count !== 1) throw Object.assign(new Error('补货单状态已变化，请刷新后重试'), { statusCode: 409 })
-      await tx.replenishmentOrderItem.deleteMany({ where: { replenishmentOrderId: current.id } })
-      await tx.replenishmentOrderItem.createMany({
-        data: rows.map(row => ({ tenantId, replenishmentOrderId: current.id, ...row })),
-      })
-      await tx.replenishmentOrderEvent.create({
-        data: {
-          tenantId,
-          replenishmentOrderId: current.id,
-          eventType: 'SUBMITTED',
-          actorId: userId,
-          actorRole: role,
-          fromStatus: 'DRAFT',
-          toStatus: 'SUBMITTED',
-          requestId: req.id,
-          requestKey: parsed.data.requestKey,
-          ip: req.ip,
-        },
-      })
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+    } catch (error: any) {
+      if (!isWarehouseTransactionConflict(error) && error?.statusCode !== 409) throw error
+      const committed = await prisma.replenishmentOrderEvent.findFirst({ where: { tenantId, requestKey: parsed.data.requestKey, replenishmentOrderId: current.id, eventType: 'SUBMITTED' }, select: { id: true } })
+      if (!committed) {
+        if (error?.statusCode === 409) throw error
+        return reply.status(409).send({ error: '补货单正在提交，请刷新后重试' })
+      }
+    }
     const result = await prisma.replenishmentOrder.findFirst({ where: { id: current.id, tenantId }, select: detailSelect })
     return project(result)
   })
@@ -535,12 +553,12 @@ export const replenishmentOrderRoutes: FastifyPluginAsync = async app => {
         purchaseOrderNo: result.purchaseOrder.no,
       }
     } catch (error: any) {
-      if (error?.code === 'P2002' || error?.code === 'P2034') {
+      if (isWarehouseTransactionConflict(error)) {
         const replay = await prisma.replenishmentOrderEvent.findFirst({
           where: { tenantId, requestKey: parsed.data.requestKey },
-          select: { replenishmentOrderId: true },
+          select: { replenishmentOrderId: true, eventType: true },
         })
-        if (replay?.replenishmentOrderId === req.params.id) {
+        if (replay && replay.replenishmentOrderId === req.params.id && replay.eventType === 'ACCEPTED') {
           const link = await prisma.replenishmentFulfillmentLink.findUnique({
             where: { replenishmentOrderId: req.params.id },
             include: { purchaseOrder: { select: { id: true, no: true } } },
@@ -585,7 +603,7 @@ export const replenishmentOrderRoutes: FastifyPluginAsync = async app => {
       return reply.status(409).send({ error: '补货单已开始履约，不能直接取消' })
     }
     try {
-      await prisma.$transaction(async tx => {
+      await serializableWithRetry(async tx => {
         const updated = await tx.replenishmentOrder.updateMany({
           where: { id: current.id, tenantId, status: current.status, rowVersion: current.rowVersion },
           data: {
@@ -597,6 +615,7 @@ export const replenishmentOrderRoutes: FastifyPluginAsync = async app => {
           },
         })
         if (updated.count !== 1) throw Object.assign(new Error('补货单状态已变化，请刷新后重试'), { statusCode: 409 })
+        await releaseReplenishmentStock(tx, { tenantId, replenishmentOrderId: current.id, userId })
         await tx.replenishmentOrderEvent.create({
           data: {
             tenantId,
@@ -612,14 +631,17 @@ export const replenishmentOrderRoutes: FastifyPluginAsync = async app => {
             metadata: { reason: parsed.data.reason, fingerprint: cancelFingerprint },
           },
         })
-      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+      })
     } catch (error: any) {
-      if (error?.code !== 'P2002' && error?.code !== 'P2034') throw error
+      if (!isWarehouseTransactionConflict(error) && error?.statusCode !== 409) throw error
       const committed = await prisma.replenishmentOrderEvent.findFirst({
         where: { tenantId, requestKey: parsed.data.requestKey, replenishmentOrderId: current.id, eventType: 'CANCELLED' },
         select: { metadata: true },
       })
-      if (!committed) return reply.status(409).send({ error: '补货单正在被取消，请刷新后重试' })
+      if (!committed) {
+        if (error?.statusCode === 409) throw error
+        return reply.status(409).send({ error: '补货单正在被取消，请刷新后重试' })
+      }
       if ((committed.metadata as any)?.fingerprint !== cancelFingerprint) {
         return reply.status(409).send({ error: '同一幂等键不能用于不同的取消原因' })
       }

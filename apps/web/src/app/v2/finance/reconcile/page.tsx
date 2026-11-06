@@ -15,7 +15,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
+import { businessMonthKey } from '@/lib/business-date'
 
 type StoreRow = {
   storeId: string; name: string; no: string
@@ -28,8 +29,7 @@ type SupplierRow = {
 
 function fmt(n: number) {
   if (!Number.isFinite(n)) return '¥0'
-  if (Math.abs(n) >= 10000) return `¥${(n / 10000).toFixed(2)}万`
-  return `¥${Math.round(n).toLocaleString()}`
+  return `¥${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 function downloadCsv(filename: string, rows: any[][]) {
   const csv = '﻿' + rows.map(r => r.map(c => {
@@ -47,22 +47,26 @@ function downloadCsv(filename: string, rows: any[][]) {
 export default function ReconcilePage() {
   const router = useRouter()
   const [view, setView] = useState<'store' | 'supplier'>('store')
-  const [month, setMonth] = useState(dayjs().format('YYYY-MM'))
-  const [storeData, setStoreData] = useState<StoreRow[] | null>(null)
-  const [supplierData, setSupplierData] = useState<SupplierRow[] | null>(null)
+  const [month, setMonth] = useState(businessMonthKey())
+  const [storeResult, setStoreResult] = useState<{ month: string; rows: StoreRow[] } | null>(null)
+  const [supplierResult, setSupplierResult] = useState<{ month: string; rows: SupplierRow[] } | null>(null)
+  const storeData = storeResult?.month === month ? storeResult.rows : null
+  const supplierData = supplierResult?.month === month ? supplierResult.rows : null
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
-  function load() {
+  useEffect(() => {
+    let active = true
     setLoading(true); setError(null)
     const url = `/api/finance/reconcile?month=${month}&view=${view}`
     apiFetch<any>(url).then(d => {
-      if (view === 'store') setStoreData(d || [])
-      else setSupplierData(d || [])
-    }).catch(e => setError(e.message || '加载失败'))
-      .finally(() => setLoading(false))
-  }
-  useEffect(() => { load() }, [view, month])
+      if (!active) return
+      if (view === 'store') setStoreResult({ month, rows: d || [] })
+      else setSupplierResult({ month, rows: d || [] })
+    }).catch(e => { if (active) setError(e.message || '加载失败') })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [view, month])
 
   const currentRows = view === 'store' ? storeData : supplierData
 
@@ -87,6 +91,7 @@ export default function ReconcilePage() {
   }, [view, storeData, supplierData])
 
   function exportCsv() {
+    if (loading || error) return
     if (view === 'store' && storeData) {
       downloadCsv(`门店对账-${month}.csv`, [
         ['门店编号', '门店名', '本月营收', '食材成本', '报损', '净利'],
@@ -110,7 +115,7 @@ export default function ReconcilePage() {
       <header className="px-4 pt-4 pb-2 flex items-center gap-2">
         <button onClick={() => router.back()} className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</button>
         <h1 className="text-h1 flex-1">月度对账</h1>
-        <button onClick={exportCsv} disabled={!currentRows || currentRows.length === 0}
+        <button onClick={exportCsv} disabled={loading || !!error || !currentRows || currentRows.length === 0}
                 className="px-3 py-1.5 bg-ink text-white rounded-cta text-button disabled:opacity-40">⬇ 导出 CSV</button>
       </header>
 

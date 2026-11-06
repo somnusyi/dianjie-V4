@@ -10,6 +10,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
 import { monthRangeForDateCol, monthRangeForTimestampCol } from '../lib/dateRange'
+import { businessDateKey } from '../lib/businessTime'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const ALLOW = new Set(['FINANCE', 'ADMIN', 'SUPER_ADMIN', 'BOSS'])
@@ -19,7 +20,8 @@ export const financeReconcileRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role } = req.user
     if (!ALLOW.has(role)) return reply.status(403).send({ error: '仅财务/老板可对账' })
 
-    const monthStr = String((req.query as any).month || dayjs().format('YYYY-MM'))
+    const monthStr = String((req.query as any).month || businessDateKey().slice(0, 7))
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(monthStr)) return reply.status(400).send({ error: '月份格式应为 YYYY-MM' })
     const view = String((req.query as any).view || 'store')
     // DATE 列 (RevenueRecord.date) → UTC 边界; timestamp 列 (createdAt/paidAt/dueAt) → ts 边界
     const { start, end } = monthRangeForDateCol(monthStr)
@@ -35,16 +37,16 @@ export const financeReconcileRoutes: FastifyPluginAsync = async (app) => {
           prisma.revenueRecord.aggregate({
             _sum: { amount: true },
             where: { storeId: s.id, date: { gte: start, lte: end } },
-          }).catch(() => ({ _sum: { amount: 0 } as any })),
+          }),
           prisma.receipt.aggregate({
             _sum: { totalAmount: true },
-            where: { storeId: s.id, createdAt: { gte: startTs, lte: endTs } },
-          }).catch(() => ({ _sum: { totalAmount: 0 } as any })),
+            where: { storeId: s.id, status: { in: ['CONFIRMED', 'ACCOUNTED'] }, createdAt: { gte: startTs, lte: endTs } },
+          }),
           prisma.lossClaim.aggregate({
             _sum: { totalLossAmount: true },
             where: { storeId: s.id, createdAt: { gte: startTs, lte: endTs },
                      status: { in: ['APPROVED', 'AUTO_APPROVED', 'RESOLVED'] } },
-          }).catch(() => ({ _sum: { totalLossAmount: 0 } as any })),
+          }),
         ])
         const revenue = Number(revAgg._sum.amount || 0)
         const foodCost = Number(costAgg._sum.totalAmount || 0)
@@ -68,22 +70,22 @@ export const financeReconcileRoutes: FastifyPluginAsync = async (app) => {
           // 这些全是 timestamp 列 (createdAt/paidAt/dueAt), 用 ts 边界
           prisma.receipt.aggregate({
             _sum: { totalAmount: true },
-            where: { supplierId: s.id, createdAt: { gte: startTs, lte: endTs } },
-          }).catch(() => ({ _sum: { totalAmount: 0 } as any })),
+            where: { supplierId: s.id, status: { in: ['CONFIRMED', 'ACCOUNTED'] }, createdAt: { gte: startTs, lte: endTs } },
+          }),
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
             where: { supplierId: s.id, status: 'PAID' as any, paidAt: { gte: startTs, lte: endTs } },
-          }).catch(() => ({ _sum: { amount: 0 } as any })),
+          }),
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
             where: { supplierId: s.id, status: { in: ['PENDING', 'NOTIFIED', 'APPROVED', 'OVERDUE', 'ON_HOLD'] as any },
                      dueAt: { gte: startTs, lte: endTs } },
-          }).catch(() => ({ _sum: { amount: 0 } as any })),
+          }),
           prisma.lossClaim.aggregate({
             _sum: { totalLossAmount: true },
             where: { supplierId: s.id, createdAt: { gte: startTs, lte: endTs },
                      status: { in: ['APPROVED', 'AUTO_APPROVED', 'RESOLVED'] } },
-          }).catch(() => ({ _sum: { totalLossAmount: 0 } as any })),
+          }),
         ])
         return {
           supplierId: s.id, name: s.name,

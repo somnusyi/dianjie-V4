@@ -6,6 +6,8 @@
  *   - 完成后跳回 /v2/chef-director/home (而非厨师长 po-success)
  */
 'use client'
+import { businessDateKey } from '@/lib/business-date'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
@@ -19,7 +21,7 @@ import { isOrderEntryStockBlocked, isOrderEntryZeroStock } from '@/lib/order-ent
 import { apiFetch } from '@/lib/v2-auth'
 
 type Store    = { id: string; name: string; no?: string | null }
-type Supplier = { id: string; name: string; category: string | null; bankAccount: string | null; inventoryMode?: 'STRICT' | 'NOT_TRACKED' }
+type Supplier = { id: string; no?: string | null; name: string; category: string | null; bankAccount: string | null; inventoryMode?: 'STRICT' | 'NOT_TRACKED' }
 type Product  = { id: string; name: string; unit: string; price: string; supplierId: string | null
                   spec?: string | null; category?: string | null; code?: string
                   imageUrl?: string | null
@@ -64,7 +66,7 @@ export default function ChefDirectorPONewPage() {
   const [products, setProducts]   = useState<Product[]>([])
   const [storeId, setStoreId] = useState<string>(sp?.get('storeId') || '')
   const [supplierId, setSupplierId] = useState<string>('')
-  const [expectedDate, setExpectedDate] = useState<string>(() => new Date(Date.now() + 86400_000).toISOString().slice(0, 10))
+  const [expectedDate, setExpectedDate] = useState<string>(() => businessDateKey(Date.now() + 86400_000))
   const [note, setNote] = useState('')
   const [items, setItems] = useState<LineItem[]>([])
   const [submitting, setSubmitting] = useState(false)
@@ -332,7 +334,7 @@ export default function ChefDirectorPONewPage() {
         {/* 门店选择 (总厨独有) */}
         <div className={`bg-white rounded-card border p-3 ${!storeId ? 'border-amber/50' : 'border-border'}`}>
           <label className="text-micro text-gray3 block mb-1">为哪家店下单 <span className="text-red-fg">*</span></label>
-          <select
+          <SearchableSelect searchWhenLong searchLabel="搜索门店"
             value={storeId}
             onChange={(e) => { setStoreId(e.target.value); setItems([]); setSupplierId('') }}
             required
@@ -342,13 +344,13 @@ export default function ChefDirectorPONewPage() {
             {stores.map(s => (
               <option key={s.id} value={s.id}>{s.name}{s.no ? ` · ${s.no}` : ''}</option>
             ))}
-          </select>
+          </SearchableSelect>
         </div>
 
         {/* 供应商选择 */}
         <div className={`bg-white rounded-card border border-border p-3 ${!storeId ? 'opacity-50 pointer-events-none' : ''}`}>
           <label className="text-micro text-gray3 block mb-1">供应商</label>
-          <select
+          <SearchableSelect searchLabel="搜索供应商"
             value={supplierId}
             onChange={(e) => { setSupplierId(e.target.value); setItems([]) }}
             required
@@ -357,9 +359,9 @@ export default function ChefDirectorPONewPage() {
           >
             <option value="">— 选择供应商 —</option>
             {suppliers.map(s => (
-              <option key={s.id} value={s.id}>{s.name}{s.category ? ` · ${s.category}` : ''}</option>
+              <option key={s.id} value={s.id} data-search={s.no || undefined}>{s.name}{s.category ? ` · ${s.category}` : ''}</option>
             ))}
-          </select>
+          </SearchableSelect>
         </div>
 
         {/* 期望到货日期 */}
@@ -370,7 +372,7 @@ export default function ChefDirectorPONewPage() {
             value={expectedDate}
             onChange={(e) => setExpectedDate(e.target.value)}
             required
-            min={new Date().toISOString().slice(0, 10)}
+            min={businessDateKey()}
             className="w-full text-body bg-transparent outline-none"
           />
         </div>

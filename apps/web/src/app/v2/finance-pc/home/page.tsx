@@ -14,10 +14,11 @@
  *   资金概览 → 缩略卡 (详情在 /v2/finance-pc/funds)
  */
 'use client'
+import { loadVouchers } from '@/lib/voucher-list'
 import { useEffect, useMemo, useState } from 'react'
 import { BlackHero, Chip } from '@/components/v2'
 import { apiFetch, getUser } from '@/lib/v2-auth'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import FinanceTopNav from '../_topnav'
 
 type Doc = {
@@ -40,6 +41,7 @@ type Period = { month: string; status: string }
 
 const fmtKMoney = (n: number) => Math.abs(n) >= 1000 ? `¥${(n / 1000).toFixed(1)}K` : `¥${Math.round(n)}`
 const fmtMoney = (n: number) => `¥${Math.round(n).toLocaleString()}`
+const fmtInvoiceMoney = (n: number) => `¥${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 const daysUntil = (iso: string) => {
   const d = dayjs(iso).startOf('day')
@@ -53,6 +55,8 @@ export default function FinancePCHomePage() {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [cmbBalances, setCmbBalances] = useState<Map<string, CmbBal>>(new Map())
   const [pendingInv, setPendingInv] = useState<PendingInvoice | null>(null)
+  const [pendingInvError, setPendingInvError] = useState<string | null>(null)
+  const [voucherReadError, setVoucherReadError] = useState<string | null>(null)
   const [monthVouchers, setMonthVouchers] = useState<{ items: any[] } | null>(null)
   const [period, setPeriod] = useState<Period | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -68,8 +72,8 @@ export default function FinancePCHomePage() {
       apiFetch<{ items: Doc[]; total: number }>('/api/payment-requests?status=PENDING&pageSize=10').catch(() => ({ items: [], total: 0 })),
       apiFetch<Schedule[]>('/api/schedules?days=7').catch(() => []),
       apiFetch<Summary>('/api/cashbook/summary').catch(() => null),
-      apiFetch<PendingInvoice>('/api/invoices/pending-from-finance').catch(() => ({ summary: { paidCount: 0, paidAmount: 0, pendingCount: 0, oldestPaidDays: 0 } } as any)),
-      apiFetch<{ items: any[]; total: number }>(`/api/vouchers?from=${monthFrom}&to=${monthTo}&pageSize=200`).catch(() => ({ items: [], total: 0 })),
+      apiFetch<PendingInvoice>('/api/invoices/pending-from-finance').catch(e => { setPendingInvError(e?.message || '待开票信息读取失败'); return null }),
+      loadVouchers<{ id: string; status: string }>(monthFrom, monthTo, 'ALL').then(items => ({ items })).catch(e => { setVoucherReadError(e?.message || '凭证读取失败'); return null }),
       apiFetch<Period[]>('/api/vouchers/periods').catch(() => []),
     ])
       .then(([pr, sch, sm, pInv, vou, pers]) => {
@@ -114,7 +118,7 @@ export default function FinancePCHomePage() {
         href: `/v2/finance-pc/payment-requests/${d.id}`,
       })
     }
-    for (const s of (schedules || []).filter(s => ['PENDING', 'APPROVED', 'NOTIFIED'].includes(s.status))) {
+    for (const s of (schedules || []).filter(s => ['PENDING', 'APPROVED', 'NOTIFIED', 'OVERDUE'].includes(s.status))) {
       const dDays = daysUntil(s.dueAt)
       if (dDays > 3) continue
       list.push({
@@ -133,7 +137,7 @@ export default function FinancePCHomePage() {
   // 月结进度 6 节点
   const checklist = useMemo(() => {
     const reviewCount = pending?.total || 0
-    const pendingInvoiceCount = pendingInv?.summary?.paidCount || 0
+    const pendingInvoiceCount = pendingInv?.summary?.paidCount
     const monthVoucherCount = monthVouchers?.items?.length || 0
     const monthPostedCount = (monthVouchers?.items || []).filter((v: any) => v.status === 'POSTED').length
     const monthVoidedCount = (monthVouchers?.items || []).filter((v: any) => v.status === 'VOIDED').length
@@ -153,20 +157,24 @@ export default function FinancePCHomePage() {
       {
         key: 'pendingInvoice',
         title: '待开票跟踪',
-        value: pendingInvoiceCount, unit: '张未开',
+        value: pendingInvoiceCount ?? '—', unit: '张未开',
         done: pendingInvoiceCount === 0,
-        sub: pendingInvoiceCount === 0
+        sub: pendingInvoiceCount === undefined
+          ? pendingInvError ? '待开票信息读取失败，请进入详情重试' : '读取中…'
+          : pendingInvoiceCount === 0
           ? '所有付款都收到发票了'
-          : `最久 ${pendingInv?.summary?.oldestPaidDays || 0} 天, 累计 ${fmtKMoney(pendingInv?.summary?.paidAmount || 0)}`,
+          : `最久 ${pendingInv?.summary?.oldestPaidDays || 0} 天, 累计 ${fmtInvoiceMoney(pendingInv?.summary?.paidAmount || 0)}`,
         href: '/v2/finance-pc/invoices-pending',
-        tone: pendingInvoiceCount === 0 ? 'green' : (pendingInv?.summary?.oldestPaidDays || 0) > 30 ? 'red' : 'orange',
+        tone: pendingInvoiceCount === undefined ? 'gray' : pendingInvoiceCount === 0 ? 'green' : (pendingInv?.summary?.oldestPaidDays || 0) > 30 ? 'red' : 'orange',
       },
       {
         key: 'voucher',
         title: '本月凭证',
-        value: monthDraftCount, unit: '张草稿',
-        done: monthDraftCount === 0 && monthPostedCount > 0,
-        sub: monthVoucherCount === 0
+        value: monthVouchers === null ? '—' : monthDraftCount, unit: '张草稿',
+        done: monthVouchers !== null && monthDraftCount === 0 && monthPostedCount > 0,
+        sub: monthVouchers === null
+          ? voucherReadError ? '凭证读取失败，请进入详情重试' : '读取中…'
+          : monthVoucherCount === 0
           ? '尚未生成 (是否在等业务发生?)'
           : `${monthPostedCount} 已审 / ${monthDraftCount} 草稿${monthVoidedCount > 0 ? ' / ' + monthVoidedCount + ' 作废' : ''}`,
         href: '/v2/finance-pc/vouchers',
@@ -199,7 +207,7 @@ export default function FinancePCHomePage() {
         tone: closed ? 'green' : 'gray' as const,
       },
     ]
-  }, [pending, pendingInv, monthVouchers, period, currentMonth])
+  }, [pending, pendingInv, pendingInvError, monthVouchers, voucherReadError, period, currentMonth])
 
   const cmbTotal = useMemo(() => {
     if (!summary?.accounts) return 0
@@ -209,7 +217,7 @@ export default function FinancePCHomePage() {
     }, 0)
   }, [summary, cmbBalances])
   const cmbReady = summary && summary.accounts.length > 0 && cmbBalances.size === summary.accounts.filter(a => a.cmbBindAccount).length && cmbBalances.size > 0
-  const todoCount = (pending?.total || 0) + ((schedules || []).filter(s => ['PENDING', 'APPROVED', 'NOTIFIED'].includes(s.status) && daysUntil(s.dueAt) <= 3).length)
+  const todoCount = (pending?.total || 0) + ((schedules || []).filter(s => ['PENDING', 'APPROVED', 'NOTIFIED', 'OVERDUE'].includes(s.status) && daysUntil(s.dueAt) <= 3).length)
 
   return (
     <div className="min-h-screen bg-bg">
@@ -220,7 +228,7 @@ export default function FinancePCHomePage() {
             <p className="text-caption text-gray2">
               {dayjs().hour() < 12 ? '早上好' : dayjs().hour() < 18 ? '下午好' : '晚上好'}, {user?.name || ''}
             </p>
-            <h1 className="text-h1">合肥瑶海店 · {dayjs().format('dddd MM/DD · HH:mm')}</h1>
+            <h1 className="text-h1">财务工作台 · {dayjs().format('dddd MM/DD · HH:mm')}</h1>
           </div>
           <div className="flex items-center gap-2">
             <a href="/v2/finance-pc/payment-requests" className="px-4 py-2 bg-white border border-border rounded-cta text-button text-gray2">付款申请</a>

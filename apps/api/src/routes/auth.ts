@@ -1,3 +1,7 @@
+import { nextBrowserSessionOrder, browserSessionClock } from '../services/browserSessionOrder'
+import { revokeSession } from '../lib/revoke-session'
+import { isSupplierRole } from '../lib/auth-scope'
+import { isBrowserSession, checkBrowserSession, readBrowserRefresh, writeBrowserRefresh } from '../lib/browser-session'
 import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import bcrypt from 'bcryptjs'
@@ -42,15 +46,19 @@ async function loadScopeStores(user: { storeId: string | null; storeIds: string[
 }
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
+  app.addHook('onSend', async (_request, reply, payload) => {reply.header('cache-control','no-store');return payload})
 
   // POST /api/auth/login — 单独限流防密码爆破 (10 次/分钟/IP, 同事 c2a4470 引入, 保留)
   app.post('/login', {
     config: { rateLimit: { max: process.env.NODE_ENV === 'test' ? 2_000 : 10, timeWindow: '1 minute' } },
   } as any, async (request, reply) => {
+    const browser = isBrowserSession(request)
+    if (browser) checkBrowserSession(request)
     const body = loginSchema.safeParse(request.body)
     if (!body.success) {
       return reply.status(400).send({ error: body.error.issues[0].message })
     }
+    const browserOrder = browser ? await nextBrowserSessionOrder() : undefined
     const { identifier, email: emailField, password, tenantSlug } = body.data
     const id = (identifier || emailField || '').trim()
 
@@ -71,14 +79,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           where: { tenantId_phone: { tenantId: tenant.id, phone: id } },
           include: {
             store: { select: { id: true, name: true, no: true } },
-            supplier: { select: { id: true, name: true, businessScopes: true } },
+            supplier: { select: { id: true, name: true, businessScopes: true, status:true, tenantId:true } },
           },
         })
       : await prisma.user.findUnique({
           where: { tenantId_email: { tenantId: tenant.id, email: id } },
           include: {
             store: { select: { id: true, name: true, no: true } },
-            supplier: { select: { id: true, name: true, businessScopes: true } },
+            supplier: { select: { id: true, name: true, businessScopes: true, status:true, tenantId:true } },
           },
         })
 
@@ -92,7 +100,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // access + refresh 各分配独立 jti, 撤销表按 jti 索引
-    const { token, refreshToken, expiresInMs } = issueSessionTokens(app.jwt, user)
+    const { token, refreshToken, expiresInMs } = issueSessionTokens(app.jwt, user, browserOrder?.order, browserOrder?.issuedAtMs)
 
     await prisma.$transaction([
       prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } }),
@@ -104,12 +112,17 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       }),
     ])
 
+    if (browser) {
+      const now = await browserSessionClock()
+      writeBrowserRefresh(request, reply, String(request.headers.origin), refreshToken, app.jwt, Math.max(0, Math.floor((browserOrder!.issuedAtMs + REFRESH_TTL_MS - now.issuedAtMs) / 1000)))
+    }
     return reply.send({
       token,
-      refreshToken,
+      ...(!browser ? { refreshToken } : {}),
       expiresInMs,            // 客户端可用于排程主动 refresh
       user: {
         id: user.id,
+        tenantId: user.tenantId,
         name: user.name,
         email: user.email,
         role: user.role,
@@ -128,7 +141,9 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   app.post('/refresh', {
     config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
   }, async (request, reply) => {
-    const parsed = refreshSchema.safeParse(request.body)
+    const browser = isBrowserSession(request)
+    const cookieRefresh = browser ? readBrowserRefresh(request, app.jwt) : null
+    const parsed = refreshSchema.safeParse(cookieRefresh ? { token: cookieRefresh } : request.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const rt = parsed.data.token
 
@@ -152,29 +167,52 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       where: { id: decoded.userId, tenantId: decoded.tenantId },
       include: {
         store:    { select: { id: true, name: true, no: true } },
-        supplier: { select: { id: true, name: true, businessScopes: true } },
+        supplier: { select: { id: true, name: true, businessScopes: true, status:true, tenantId:true } },
         tenant: { select: { status: true } },
       },
     })
     const tokenVersion = typeof decoded.ver === 'number' ? decoded.ver : 0
+    if(decoded.sid&&decoded.sid!==decoded.jti&&await prisma.revokedToken.findUnique({where:{jti:decoded.sid}}))return reply.status(401).send({error:'会话已退出，请重新登录'})
+    if(user&&isSupplierRole(user.role)&&(!user.supplierId||user.supplier?.status!=='ENABLED'||user.supplier?.tenantId!==user.tenantId||(decoded.supplierId!==undefined&&decoded.supplierId!==user.supplierId)))return reply.status(401).send({error:'供应商账号绑定已变更，请重新登录'})
     if (!user || user.status !== 'ACTIVE' || user.tenant.status !== 'ACTIVE' || user.authVersion !== tokenVersion) {
       return reply.status(401).send({ error: '用户不存在或已停用' })
     }
 
-    const token = issueAccessToken(app.jwt, user)
+    const browserClock = browser ? await browserSessionClock() : null
+    if (browserClock && (decoded.exp * 1000 <= browserClock.issuedAtMs || (!decoded.bso && decoded.exp * 1000 > browserClock.legacyExpiresAtMs && browserClock.legacyExpiresAtMs <= browserClock.issuedAtMs)))
+      return reply.status(401).send({ error: '浏览器会话已过期，请重新登录' })
+    const token = issueAccessToken(app.jwt, user, decoded.sid || decoded.jti)
+    if (browser && browserClock) {
+      const legacy = !decoded.bso || decoded.bso === '0'
+      const exp = Math.min(decoded.exp, legacy ? Math.floor(browserClock.legacyExpiresAtMs / 1000) : decoded.exp)
+      if (exp * 1000 <= browserClock.issuedAtMs) return reply.status(401).send({ error: '浏览器会话已过期，请重新登录' })
+      // A legacy upgrade retains its sid and original expiry, capped at the deployment transition window.
+      const migrated = legacy ? app.jwt.sign({ ...decoded, sid: decoded.sid || decoded.jti, bso: '0', exp }, {}) : rt
+      writeBrowserRefresh(request, reply, String(request.headers.origin), migrated, app.jwt, Math.max(0, exp - Math.floor(browserClock.issuedAtMs / 1000)))
+    }
 
     // refresh 不轮换 (保持原 30d window), 简化客户端实现; 如要轮换在此颁新 refresh
     return reply.send({
       token,
       expiresInMs: ACCESS_TTL_MS,
       user: {
-        id: user.id, name: user.name, email: user.email, role: user.role,
+        id: user.id, tenantId: user.tenantId, name: user.name, email: user.email, role: user.role,
         storeId: user.storeId, storeIds: user.storeIds,
         stores: await loadScopeStores(user),
         supplierId: user.supplierId,
         store: user.store, supplier: user.supplier,
       },
     })
+  })
+
+  // Cookie-only logout remains usable after page reload or access expiry.
+  app.post('/browser-logout', async (request, reply) => {
+    if (!isBrowserSession(request)) return reply.status(403).send({error:'浏览器会话校验失败'})
+    const rt = readBrowserRefresh(request, app.jwt)
+    await revokeSession(prisma, app.jwt, {refreshToken:rt,ip:request.ip})
+    // Do not clear a shared cookie name: a delayed response must not erase a newer login.
+    // The selected sid is revoked above; its remaining HttpOnly cookie cannot refresh.
+    return {message:'已退出登录'}
   })
 
   // GET /api/auth/me
@@ -184,7 +222,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       where: { id: userId },
       include: {
         store: { select: { id: true, name: true, no: true } },
-        supplier: { select: { id: true, name: true, businessScopes: true } },
+        supplier: { select: { id: true, name: true, businessScopes: true, status:true, tenantId:true } },
       },
     })
     if (!user) return { error: '用户不存在' }
@@ -205,49 +243,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   // POST /api/auth/logout — 撤销 refresh token (核心), 顺便记一笔 access
   app.post('/logout', { preHandler: [(app as any).authenticate] }, async (request: any, reply) => {
     const { userId, tenantId, jti: accessJti } = request.user
-    const parsed = logoutSchema.safeParse(request.body || {})
+    const browser = isBrowserSession(request)
+    const cookieRefresh = browser ? readBrowserRefresh(request, app.jwt) : null
+    const parsed = logoutSchema.safeParse(cookieRefresh ? { refreshToken: cookieRefresh } : request.body || {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const rt = parsed.data.refreshToken
 
-    // 撤销 access (虽 2h 自然失效, 记录便于审计 + 异常追溯).
-    // access 撤销是 audit-only, 不影响业务流程 → 这里吞错保住 logout 主路径成功
-    if (accessJti) {
-      await prisma.revokedToken.upsert({
-        where: { jti: accessJti },
-        create: {
-          jti: accessJti, userId, tokenType: 'access',
-          expiresAt: new Date(Date.now() + ACCESS_TTL_MS),
-          reason: 'logout',
-        },
-        update: {},
-      }).catch(() => {})
-    }
-
-    // 撤销 refresh (这是关键: 让换 access 链断掉)
-    if (rt) {
-      try {
-        const dec: any = app.jwt.verify(rt)
-        if (dec?.typ === 'refresh' && dec?.jti && dec?.userId === userId) {
-          await prisma.revokedToken.upsert({
-            where: { jti: dec.jti },
-            create: {
-              jti: dec.jti, userId, tokenType: 'refresh',
-              expiresAt: new Date(Date.now() + REFRESH_TTL_MS),
-              reason: 'logout',
-            },
-            update: {},
-          })
-        }
-      } catch { /* 客户端给的 refresh 已坏不影响 logout 主流程 */ }
-    }
-
-    await prisma.opLog.create({
-      data: {
-        tenantId, userId,
-        action: '用户登出',
-        ip: request.ip,
-      },
-    })
+    await revokeSession(prisma,app.jwt,{refreshToken:rt,accessClaims:request.user,ip:request.ip})
+    // Session revocation is sufficient; never let delayed logout clear a newer sid cookie.
     return { message: '已退出登录' }
   })
 

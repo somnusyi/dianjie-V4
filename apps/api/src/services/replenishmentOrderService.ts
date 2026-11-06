@@ -1,3 +1,5 @@
+import { REPLENISHMENT_SUBMISSION_POLICY, transferReplenishmentStock } from './replenishmentStockReservation'
+import { withSubmissionStockPolicy, syncSubmissionOrderReservation } from './orderSubmissionReservation'
 import { Prisma } from '@dianjie/db'
 import { businessMonthKey } from '../lib/businessTime'
 import { buildOrderSnapshot, businessNoFloor, nextBusinessNo, snapshotHash } from './purchaseOrderIntegrity'
@@ -32,10 +34,10 @@ export async function acceptReplenishmentInTransaction(
 ) {
   const replay = await tx.replenishmentOrderEvent.findFirst({
     where: { tenantId: input.tenantId, requestKey: input.requestKey },
-    select: { replenishmentOrderId: true },
+    select: { replenishmentOrderId: true, eventType: true },
   })
   if (replay) {
-    if (replay.replenishmentOrderId !== input.replenishmentOrderId) {
+    if (replay.replenishmentOrderId !== input.replenishmentOrderId || replay.eventType !== 'ACCEPTED') {
       throw conflict('同一幂等键不能用于不同的补货单接单请求')
     }
     const existing = await tx.replenishmentFulfillmentLink.findUnique({
@@ -57,6 +59,7 @@ export async function acceptReplenishmentInTransaction(
     },
   })
   if (!replenishment) throw Object.assign(new Error('补货单不存在'), { statusCode: 404 })
+  if(replenishment.supplier.sourceType!=='HEADQ_WAREHOUSE')throw conflict('补货单只支持总仓向门店补货，原记录保留，请核对来源')
   if (replenishment.fulfillment) {
     throw conflict('补货单已存在正式履约链接，请刷新后重试')
   }
@@ -65,11 +68,14 @@ export async function acceptReplenishmentInTransaction(
   }
   if (replenishment.items.length === 0) throw conflict('补货单没有商品明细')
 
-  await enforceWarehouseOrderEntryPolicyInTransaction(tx, {
-    tenantId: input.tenantId,
-    supplierId: replenishment.supplierId,
-    items: replenishment.items.map(item => ({ productId: item.productId, productName: item.productNameSnapshot })),
-  })
+  // New requests already own frozen stock; rechecking available stock would count their own hold.
+  if (replenishment.stockReservationPolicy !== REPLENISHMENT_SUBMISSION_POLICY) {
+    await enforceWarehouseOrderEntryPolicyInTransaction(tx, {
+      tenantId: input.tenantId,
+      supplierId: replenishment.supplierId,
+      items: replenishment.items.map(item => ({ productId: item.productId, productName: item.productNameSnapshot })),
+    })
+  }
 
   const accepted = await tx.replenishmentOrder.updateMany({
     where: {
@@ -144,7 +150,8 @@ export async function acceptReplenishmentInTransaction(
       items: { include: { product: true } },
     },
   })
-  const snapshot = buildOrderSnapshot(purchaseOrder as any, 'original')
+  const originalSnapshot = buildOrderSnapshot(purchaseOrder as any, 'original')
+  const snapshot = replenishment.supplier.sourceType === 'HEADQ_WAREHOUSE' || replenishment.supplier.inventoryMode === 'STRICT' ? withSubmissionStockPolicy(originalSnapshot) : originalSnapshot
   const submittedSnapshotHash = snapshotHash(snapshot)
   await tx.purchaseOrder.update({
     where: { id: purchaseOrder.id },
@@ -227,27 +234,8 @@ export async function acceptReplenishmentInTransaction(
     inventoryUnitSnapshot: item.inventoryUnitSnapshot,
     inventoryUnitsPerOrderUnitSnapshot: item.inventoryUnitsPerOrderUnitSnapshot,
   }))
-  if (replenishment.supplier.sourceType === 'HEADQ_WAREHOUSE') {
-    const warehouse = await tx.warehouse.findFirst({
-      where: { tenantId: input.tenantId, isDefault: true, isActive: true },
-      select: { inventoryMode: true },
-    })
-    if (warehouse && warehouse.inventoryMode !== 'OFF') {
-      await reserveWarehouseLedgerForOrder(tx, {
-        tenantId: input.tenantId,
-        purchaseOrderId: purchaseOrder.id,
-        userId: input.actorId,
-        lines: reservationLines,
-      })
-    }
-  } else if (replenishment.supplier.inventoryMode === 'STRICT') {
-    await reserveSupplierStockForOrder(tx, {
-      tenantId: input.tenantId,
-      supplierId: replenishment.supplierId,
-      purchaseOrderId: purchaseOrder.id,
-      lines: reservationLines,
-    })
-  }
+  if (replenishment.stockReservationPolicy === REPLENISHMENT_SUBMISSION_POLICY) await transferReplenishmentStock(tx, { tenantId: input.tenantId, replenishmentOrderId: replenishment.id, purchaseOrderId: purchaseOrder.id, userId: input.actorId })
+  await syncSubmissionOrderReservation(tx, { tenantId: input.tenantId, purchaseOrderId: purchaseOrder.id, userId: input.actorId })
 
   await tx.opLog.create({
     data: {

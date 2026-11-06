@@ -25,7 +25,7 @@ export const supplyChainFinanceReportRoutes: FastifyPluginAsync = async app => {
     sheet.views = [{ state: 'frozen', ySplit: 1 }]
     sheet.getRow(1).font = { bold: true }
     sheet.autoFilter = { from: 'A1', to: { row: 1, column: result.columns.length } }
-    workbook.addWorksheet('口径说明').addRows([[result.note], ...result.warnings.map(w => [w]), [`导出时间：${result.generatedAt}`], [`筛选条件：${JSON.stringify(query.data)}`]])
+    workbook.addWorksheet('口径说明').addRows([[result.note], ...result.warnings.map(w => [w]), [`导出时间：${new Date(result.generatedAt).toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai', hour12: false })}`], [`筛选条件：${JSON.stringify(query.data)}`]])
     const buffer = await workbook.xlsx.writeBuffer()
     return { filename: `${result.title}-${query.data.end}.xlsx`, fileBase64: Buffer.from(buffer).toString('base64'), total: result.total }
   })

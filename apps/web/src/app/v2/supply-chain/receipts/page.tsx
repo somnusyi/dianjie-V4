@@ -5,6 +5,7 @@
  * 不提供任何写操作按钮；不展示财务/应付/银行字段。
  */
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
@@ -49,6 +50,7 @@ export default function InternalSupplyChainReceiptsPage() {
   const [filters, setFilters] = useState<ReceiptFilters>(initialReceiptFilters)
   const [draftFilters, setDraftFilters] = useState<ReceiptFilters>(initialReceiptFilters)
   const [stores, setStores] = useState<Store[]>([])
+  const [storesError,setStoresError]=useState(''),[storesRetry,setStoresRetry]=useState(0)
   const [dateError, setDateError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -56,15 +58,16 @@ export default function InternalSupplyChainReceiptsPage() {
 
   useEffect(() => {
     let alive = true
+    setStoresError('')
     apiFetch<{ items: Store[] } | Store[]>('/api/stores')
       .then(data => {
         if (!alive) return
         const list = Array.isArray(data) ? data : data.items || []
         setStores(list.map((s: any) => ({ id: s.id, no: s.no, name: s.name })))
       })
-      .catch(() => {})
+      .catch(()=>{if(alive)setStoresError('门店加载失败')})
     return () => { alive = false }
-  }, [])
+  }, [storesRetry])
 
   useEffect(() => {
     const sequence = ++requestSequence.current
@@ -185,6 +188,7 @@ export default function InternalSupplyChainReceiptsPage() {
               <option key={store.id} value={store.id}>{store.no} · {store.name}</option>
             ))}
           </FilterSelect>
+          {storesError&&<span role="alert" className="text-caption text-red-600">{storesError}，<button type="button" onClick={()=>setStoresRetry(value=>value+1)}>重试</button></span>}
           <FilterInput
             label="开始日期"
             type="date"
@@ -321,13 +325,13 @@ function FilterSelect({ label, value, onChange, children }: {
   return (
     <label className="flex flex-col gap-1">
       <span className="text-micro text-gray3">{label}</span>
-      <select
+      <SearchableSelect searchWhenLong searchLabel={`搜索${label}`}
         value={value}
         onChange={e => onChange(e.target.value)}
         className="h-10 min-w-36 rounded-cta border border-border bg-white px-3 text-body"
       >
         {children}
-      </select>
+      </SearchableSelect>
     </label>
   )
 }

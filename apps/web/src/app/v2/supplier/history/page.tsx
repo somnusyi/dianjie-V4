@@ -5,6 +5,7 @@
  * 到货差异统计来自每单 lossClaims[].totalLossAmount；应付金额来自确认入库单。
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 import { useEffect, useState } from 'react'
 import { BottomNav, Chip } from '@/components/v2'
 import { EmptyState, SkeletonCard, FriendlyError } from '@/components/v2/skeleton'
@@ -147,8 +148,7 @@ export default function SupplierHistoryPage() {
             const amountLabel = payable > 0
               ? SUPPLIER_MONEY_TERMS.payableAmount
               : shipped > 0 ? SUPPLIER_MONEY_TERMS.shipmentAmount : SUPPLIER_MONEY_TERMS.orderedAmount
-            const date = new Date(o.receivedAt || o.createdAt)
-            const dateLabel = `${date.getMonth() + 1}/${String(date.getDate()).padStart(2, '0')}`
+            const dateLabel = businessDayjs(o.receivedAt || o.createdAt).format('M/DD')
             return (
               <li key={o.id} className={`bg-white rounded-card border ${difference > 0 ? 'border-red/30' : 'border-border'} p-3`}>
                 <div className="flex items-center gap-2 mb-1 flex-wrap">

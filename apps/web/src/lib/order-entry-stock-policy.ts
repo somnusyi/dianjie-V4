@@ -23,7 +23,7 @@ export function isOrderEntryStockBlocked(
   product: OrderEntryStockProduct,
   supplier?: OrderEntryStockSupplier | null,
 ) {
-  // 只认后端按商品行返回的显式策略。供应商 STRICT 属于接单预占规则，
-  // 不能被前端推断为“门店提交阶段禁止下单”。
+  // 只认后端按商品行返回的提交预占策略；不根据供应商标签或旧仓库开关猜测，
+  // 未跟踪库存的外部供货仍可提交。
   return product.inventoryEnforced === true && isOrderEntryZeroStock(product, supplier)
 }

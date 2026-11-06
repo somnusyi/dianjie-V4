@@ -13,8 +13,8 @@ import dayjs from 'dayjs'
 import { createVoucher } from '../services/voucher'
 import { exportVouchersExcel, markVouchersExported, ExportFilter } from '../services/voucher/export'
 import { seedRestaurantCoA } from '../services/voucher/chart-of-accounts-restaurant'
-import { assertPeriodOpen, closePeriod, reopenPeriod, getOrCreatePeriod, isPeriodLocked } from '../services/accountingPeriod'
-import { generateCarryoverVoucher, previewCarryover } from '../services/voucher/carryover'
+import { assertPeriodOpen, reopenPeriod, isPeriodLocked } from '../services/accountingPeriod'
+import { generateCarryoverVoucher, previewCarryover, confirmCarryover, closeConfirmedPeriod } from '../services/voucher/carryover'
 import { parsePagination } from '../lib/pagination'
 
 const FINANCE_ROLES = ['FINANCE', 'ADMIN', 'SUPER_ADMIN']
@@ -205,6 +205,10 @@ export const voucherRoutes: FastifyPluginAsync = async (app) => {
     const v = await prisma.voucher.findFirst({ where: { id: req.params.id, tenantId } })
     if (!v) return reply.status(404).send({ error: '凭证不存在' })
     if (v.status !== 'DRAFT') return reply.status(400).send({ error: `当前状态 ${v.status},不可审核` })
+    if (v.sourceType === 'Carryover') {
+      try { return await confirmCarryover(tenantId, v.id, userId) }
+      catch (e: any) { return reply.status(400).send({ error: e.message }) }
+    }
     // 月结锁账: 该凭证所属月份已关账, 不可审核
     if (await isPeriodLocked(tenantId, v.date)) {
       return reply.status(423).send({ error: `${dayjs(v.date).format('YYYY-MM')} 已关账, 不可审核` })
@@ -278,33 +282,27 @@ export const voucherRoutes: FastifyPluginAsync = async (app) => {
     return periods
   })
 
-  // ── 月结锁账: 关账 (含期末结转) ─────────────────────
-  // body: { month: 'YYYY-MM', closeNote?: string, withCarryover?: boolean (默认 true) }
+  // Finance prepares the draft before reviewing it in the existing voucher page.
+  app.post('/periods/carryover', auth(app), async (req: any, reply: any) => {
+    const { tenantId, userId, role } = req.user
+    if (!ensureFinance(role)) return reply.status(403).send({ error: '无权' })
+    const { month } = (req.body || {}) as any
+    if (!month || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return reply.status(400).send({ error: 'month 必须 YYYY-MM' })
+    try {
+      const id = await generateCarryoverVoucher({ tenantId, month, createdById: userId })
+      return { ok: true, carryoverVoucherId: id }
+    } catch (e: any) { return reply.status(400).send({ error: e.message }) }
+  })
+
   app.post('/periods/close', auth(app), async (req: any, reply: any) => {
     const { tenantId, userId, role } = req.user
     if (!ensureFinance(role)) return reply.status(403).send({ error: '无权' })
-    const { month, closeNote, withCarryover = true } = req.body as any
-    if (!month || !/^\d{4}-\d{2}$/.test(month)) {
-      return reply.status(400).send({ error: 'month 必须 YYYY-MM' })
-    }
+    const { month, closeNote } = (req.body || {}) as any
+    if (!month || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return reply.status(400).send({ error: 'month 必须 YYYY-MM' })
     try {
-      // 1. 期末结转: 生成 carryover 凭证 (本期主营收入 / 各类成本费用 → 本年利润)
-      let carryoverId: string | undefined
-      if (withCarryover) {
-        carryoverId = await generateCarryoverVoucher({ tenantId, month, createdById: userId }) || undefined
-      }
-      // 2. 关账
-      const p = await closePeriod({ tenantId, month, closedById: userId, closeNote, carryoverVoucherId: carryoverId })
-      await prisma.opLog.create({
-        data: { tenantId, userId,
-          action: `关账 ${month}` + (carryoverId ? ` · 生成期末结转凭证` : ''),
-          entityType: 'AccountingPeriod', targetId: p.id,
-        },
-      })
-      return { ok: true, period: p, carryoverVoucherId: carryoverId || null }
-    } catch (e: any) {
-      return reply.status(400).send({ error: e.message })
-    }
+      const period = await closeConfirmedPeriod({ tenantId, month, closedById: userId, closeNote })
+      return { ok: true, period, carryoverVoucherId: period.carryoverVoucherId }
+    } catch (e: any) { return reply.status(400).send({ error: e.message }) }
   })
 
   // ── 月结锁账: 重开 ──────────────────────────────────

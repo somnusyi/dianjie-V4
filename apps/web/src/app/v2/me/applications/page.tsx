@@ -2,6 +2,7 @@
  * v2 账号申请审批 · 老板/管理员
  */
 'use client'
+import { SearchableList } from '@/components/v2/searchable-select'
 import { useEffect, useState } from 'react'
 import { getToken } from '@/lib/v2-auth'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
@@ -191,15 +192,14 @@ export default function ApplicationsPage() {
                 {stores.length === 0 ? (
                   <div className="bg-bg rounded p-2 text-caption text-gray3">请先创建门店</div>
                 ) : (
-                  <div className="space-y-1 max-h-48 overflow-y-auto">
+                  <SearchableList searchLabel="搜索可选门店" className="space-y-1 max-h-48 overflow-y-auto">
                     {stores.map(s => (
                       <label key={s.id} className="flex items-center gap-2 bg-bg rounded p-2 text-body">
                         <input type="checkbox" checked={storeIds.includes(s.id)}
                           onChange={e => setStoreIds(e.target.checked ? [...storeIds, s.id] : storeIds.filter(id => id !== s.id))} />
                         {s.no} · {s.name}
                       </label>
-                    ))}
-                  </div>
+                    ))}</SearchableList>
                 )}
               </div>
             )}

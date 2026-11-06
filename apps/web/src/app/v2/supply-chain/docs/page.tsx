@@ -86,7 +86,7 @@ function fmtQty(value: number | null | undefined) {
 
 function fmtTime(value: string | null | undefined) {
   if (!value) return '—'
-  return new Date(value).toLocaleString('zh-CN', { hour12: false })
+  return new Date(value).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })
 }
 
 function fmtDay(value: string | null | undefined) {
@@ -242,7 +242,7 @@ export default function WarehouseDocsPage() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-title font-semibold">单据审核</h1>
-          <p className="text-caption text-gray2">入库/出库单据：新入库草稿不记库存，入库人员提交审核后入库，供应链再复审；历史单据保留原记录</p>
+          <p className="text-caption text-gray2">入库/出库单据：新单提交和审核不记库存，供应链复审后才改变库存和金额；历史单据保留原记录</p>
         </div>
         <div className="flex flex-wrap gap-2">
           {canEdit && <a href="/v2/supply-chain/docs/new" className="rounded-cta border border-border bg-white px-4 py-2 text-button">新增入库单</a>}

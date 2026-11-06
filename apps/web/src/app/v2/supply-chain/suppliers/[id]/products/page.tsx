@@ -6,6 +6,7 @@
  * 「添加商品」tab 勾选商品后自动预填档案单位/换算比/价，一次批量提交。
  */
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
@@ -26,7 +27,7 @@ type CatalogProduct = RelationProduct & {
   upstreamSources?: Array<{ supplierId: string; isActive?: boolean }>
 }
 
-type DraftRow = BindItemDraft & { name: string; code: string; category: string | null }
+type DraftRow = Omit<Partial<BindItemDraft>, 'inventoryUnitsPerPurchaseUnit' | 'quotedUnitPrice'> & {inventoryUnitsPerPurchaseUnit?: string | number; quotedUnitPrice?: string | number | null}
 
 function toNumber(value: unknown): number | null {
   const n = Number(value)
@@ -42,7 +43,7 @@ export default function SupplierUpstreamProductsPage({ params }: { params: { id:
   const [q, setQ] = useState('')
   const [category, setCategory] = useState('')
   const [checked, setChecked] = useState<Record<string, boolean>>({})
-  const [drafts, setDrafts] = useState<Record<string, Partial<BindItemDraft>>>({})
+  const [drafts, setDrafts] = useState<Record<string, DraftRow>>({})
   const [batchUnit, setBatchUnit] = useState('')
   const [batchPrice, setBatchPrice] = useState('')
   const [saving, setSaving] = useState(false)
@@ -143,13 +144,13 @@ export default function SupplierUpstreamProductsPage({ params }: { params: { id:
       productId: product.id,
       purchaseUnit: drafts[product.id]?.purchaseUnit || product.purchaseUnit || product.unit,
       inventoryUnitsPerPurchaseUnit: Number(drafts[product.id]?.inventoryUnitsPerPurchaseUnit),
-      quotedUnitPrice: drafts[product.id]?.quotedUnitPrice ?? null,
+      quotedUnitPrice: drafts[product.id]?.quotedUnitPrice == null || String(drafts[product.id]?.quotedUnitPrice).trim() === '' ? null : Number(drafts[product.id]?.quotedUnitPrice),
       isPrimary: false,
     }))
-    const bad = items.find(item => !Number.isFinite(item.inventoryUnitsPerPurchaseUnit) || item.inventoryUnitsPerPurchaseUnit <= 0)
+    const bad = items.find(item => !Number.isFinite(item.inventoryUnitsPerPurchaseUnit) || item.inventoryUnitsPerPurchaseUnit <= 0 || item.quotedUnitPrice !== null && (!Number.isFinite(item.quotedUnitPrice) || item.quotedUnitPrice < 0))
     if (bad) {
       setSaving(false)
-      setError('有商品缺有效换算比（每采购单位库存量），请先在商品档案补齐单位换算')
+      setError('请检查换算比为正数、协议价为非负数；未谈价可留空')
       return
     }
     try {
@@ -271,11 +272,11 @@ export default function SupplierUpstreamProductsPage({ params }: { params: { id:
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-micro text-gray3">分类</span>
-            <select value={category} onChange={e => setCategory(e.target.value)}
+            <SearchableSelect searchWhenLong searchLabel="搜索分类" value={category} onChange={e => setCategory(e.target.value)}
               className="rounded-cta border border-border bg-white px-3 py-2 text-body outline-none">
               <option value="">全部分类</option>
               {categoryOptions.map(name => <option key={name} value={name}>{name}</option>)}
-            </select>
+            </SearchableSelect>
           </label>
         </div>
 
@@ -307,7 +308,7 @@ export default function SupplierUpstreamProductsPage({ params }: { params: { id:
                       <td className="px-4 py-2.5"><b>{row.product?.name}</b></td>
                       <td className="px-4 py-2.5 text-gray2">{row.product?.category || '其他'}</td>
                       <td className="px-4 py-2.5 text-gray2">{row.purchaseUnit}</td>
-                      <td className="px-4 py-2.5 font-num text-gray2">×{row.inventoryUnitsPerPurchaseUnit}</td>
+                      <td className="px-4 py-2.5 font-num text-gray2">1{row.purchaseUnit}＝{row.inventoryUnitsPerPurchaseUnit}{row.product?.inventoryUnit || '（库存单位待补齐）'}</td>
                       <td className="px-4 py-2.5 text-right">
                         <input
                           key={`${row.id}-${row.quotedUnitPrice}`}
@@ -320,7 +321,7 @@ export default function SupplierUpstreamProductsPage({ params }: { params: { id:
                           }}
                           className="w-24 rounded border border-border bg-bg px-2 py-1 text-right font-num outline-none"
                           placeholder="未谈价"
-                        />
+                        /><span className="ml-1">元/{row.purchaseUnit}</span>
                       </td>
                       <td className="px-4 py-2.5">
                         {row.isPrimary
@@ -370,7 +371,7 @@ export default function SupplierUpstreamProductsPage({ params }: { params: { id:
                       <td className="px-4 py-2.5">
                         <b>{product.name}</b>
                         {bound && <span className="ml-2 text-micro text-gray3">已绑</span>}
-                        <div className="font-num text-micro text-gray3">{product.code}{product.spec ? ` · ${product.spec}` : ''}</div>
+                        <div className="font-num text-micro text-gray3">{product.code}{product.spec ? ` · ${product.spec}` : ''}</div>{product.price!=null&&<div className="text-micro text-gray3">商品参考价：{Number(product.price).toFixed(2)}元/{product.costUnit || '计价单位待补齐'}（非供应商报价）</div>}
                       </td>
                       <td className="px-4 py-2.5 text-gray2">{product.category || '其他'}</td>
                       {selected ? (
@@ -382,20 +383,20 @@ export default function SupplierUpstreamProductsPage({ params }: { params: { id:
                           </td>
                           <td className="px-4 py-2.5">
                             <input value={draft.inventoryUnitsPerPurchaseUnit ?? ''} inputMode="decimal" aria-label="换算比"
-                              onChange={e => setDrafts(c => ({ ...c, [product.id]: { ...c[product.id], inventoryUnitsPerPurchaseUnit: toNumber(e.target.value) ?? undefined } }))}
-                              className="w-20 rounded border border-border bg-white px-2 py-1 font-num outline-none" />
+                              onChange={e => setDrafts(c => ({ ...c, [product.id]: { ...c[product.id], inventoryUnitsPerPurchaseUnit: e.target.value } }))}
+                              className="w-20 rounded border border-border bg-white px-2 py-1 font-num outline-none" /><span className="ml-1">{product.inventoryUnit || '库存单位待补齐'}/{draft.purchaseUnit || product.purchaseUnit || product.unit}</span>
                           </td>
                           <td className="px-4 py-2.5 text-right">
                             <input value={draft.quotedUnitPrice ?? ''} inputMode="decimal" aria-label="协议价"
-                              onChange={e => setDrafts(c => ({ ...c, [product.id]: { ...c[product.id], quotedUnitPrice: toNumber(e.target.value) } }))}
-                              className="w-24 rounded border border-border bg-white px-2 py-1 text-right font-num outline-none" placeholder="未谈价" />
+                              onChange={e => setDrafts(c => ({ ...c, [product.id]: { ...c[product.id], quotedUnitPrice: e.target.value } }))}
+                              className="w-24 rounded border border-border bg-white px-2 py-1 text-right font-num outline-none" placeholder="未谈价" /><span className="ml-1">元/{draft.purchaseUnit || product.purchaseUnit || product.unit}</span>
                           </td>
                         </>
                       ) : (
                         <>
                           <td className="px-4 py-2.5 text-gray3">{product.purchaseUnit || product.unit}</td>
-                          <td className="px-4 py-2.5 font-num text-gray3">×{product.inventoryUnitsPerPurchaseUnit ?? '?'}</td>
-                          <td className="px-4 py-2.5 text-right font-num text-gray3">{product.price === null ? '—' : `¥${Number(product.price).toFixed(2)}`}</td>
+                          <td className="px-4 py-2.5 font-num text-gray3">1{product.purchaseUnit || product.unit}＝{product.inventoryUnitsPerPurchaseUnit ?? '?'}{product.inventoryUnit || '（库存单位待补齐）'}</td>
+                          <td className="px-4 py-2.5 text-right font-num text-gray3">—</td>
                         </>
                       )}
                     </tr>

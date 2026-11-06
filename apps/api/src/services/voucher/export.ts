@@ -9,7 +9,6 @@
  */
 import { prisma } from '@dianjie/db'
 import ExcelJS from 'exceljs'
-import dayjs from 'dayjs'
 
 export interface ExportFilter {
   tenantId: string
@@ -57,7 +56,7 @@ export async function exportVouchersExcel(filter: ExportFilter): Promise<{ buf: 
   for (const v of vouchers) {
     for (const e of v.entries) {
       ws.addRow({
-        date: dayjs(v.date).format('YYYY-MM-DD'),
+        date: v.date.toISOString().slice(0, 10),
         word: v.word,
         no: v.no,
         summary: e.summary || v.summary,

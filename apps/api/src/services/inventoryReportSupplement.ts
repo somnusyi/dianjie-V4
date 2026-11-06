@@ -1,3 +1,4 @@
+import { readInventoryNetCostHistory } from './inventoryNetCostRead'
 import { Prisma } from '@dianjie/db'
 import { businessDateKey, businessDateRangeInclusive } from '../lib/businessTime'
 import type { ReportQuery, ReportRow } from './inventoryReports'
@@ -28,14 +29,21 @@ export async function loadInventorySupplement(tx: Prisma.TransactionClient, tena
   if (id === 'other-summary') {
     const period = businessDateRangeInclusive(q.start, q.end)
     const movements = bounds(await tx.warehouseLedgerMovement.findMany({ where: { ...scope, effectiveAt: { gte: period.start, lt: period.endExclusive }, type: { notIn: ['ORDER_RESERVED', 'ORDER_RELEASED'] }, OR: [{ sourceType: { in: otherSources } }, { type: 'LOSS' }] }, include: { product: true, warehouse: true, docLines: { where: { tenantId }, include: { doc: true } } }, orderBy: { id: 'asc' }, take: LIMIT + 1 }))
+    const keys = [...new Map(movements.map(m => [`${m.warehouseId}/${m.productId}/${m.inventoryUnit}`, {warehouseId:m.warehouseId,productId:m.productId,inventoryUnit:m.inventoryUnit}])).values()]
+    const history = await readInventoryNetCostHistory(tx, tenantId, keys)
+    const netByMovement = new Map([...history.values()].flatMap(h => h.movements.map(m => [m.id,m.netValueDelta] as const)))
     const grouped = new Map<string, ReportRow>()
     for (const m of movements) {
       const type = labels[m.type] || m.type
       if (q.type && type !== q.type) continue
       const reason = m.docLines[0]?.doc.reason || labels[m.type] || m.type
       const key = JSON.stringify([m.productId, m.warehouseId, m.inventoryUnit, type, reason])
-      const g = grouped.get(key) || { ...base(m.product, m.warehouse, m.inventoryUnit), id: key, type, reason, quantity: 0, amount: 0 }
-      g.quantity = Number(decimal(g.quantity).plus(m.physicalDelta)); g.amount = Number(decimal(g.amount).plus(m.valueDelta)); grouped.set(key, g)
+      const g = grouped.get(key) || { ...base(m.product, m.warehouse, m.inventoryUnit), id: key, type, reason, quantity: 0, amount: 0, costStatus: 'KNOWN' }
+      g.quantity = Number(decimal(g.quantity).plus(m.physicalDelta))
+      const net = netByMovement.get(m.id)
+      if (g.amount == null || net == null) { g.amount=null;g.costStatus='PENDING_COST' }
+      else g.amount=Number(decimal(g.amount).plus(net))
+      grouped.set(key, g)
     }
     return [...grouped.values()]
   }

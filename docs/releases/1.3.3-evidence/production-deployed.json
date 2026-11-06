@@ -1,0 +1,43 @@
+{
+  "status": "deployed",
+  "version": "1.3.3",
+  "environment": "production",
+  "at": "2026-11-06T08:12:18.477870+00:00",
+  "apiImageId": "sha256:4ec8f3be22738c52b06e24aad53abf7e5939a0812c6da30367606dae7419a516",
+  "webImageId": "sha256:07946a1642b1d59452bd7424b76e4af474cfba52a0ffab3d97572356ba6ff9b2",
+  "webBuildId": "Ra3hx1LDisB24n_kPUy-p",
+  "sourceScopeSha256": "6fc05f8eff90a0630336e7ca4367706be1295e3b053a48bfd5f1ce2aafb37ba9",
+  "publicBase": "https://dianjie.cc",
+  "health": {
+    "status": "ok",
+    "timestamp": "2026-11-06T08:12:18.210Z",
+    "version": "1.3.3",
+    "db": "ok"
+  },
+  "loginHttp": 200,
+  "applyHttp": 200,
+  "storeListHttp": 200,
+  "fontSha256": "6ed1553edccddc48eb27ff25d134a4a715cf54211238d4840b3038576cba1944",
+  "otherContainersUnchanged": true,
+  "databaseImports": 0,
+  "schema": {
+    "environment": "production",
+    "status": "schema_updated",
+    "applied": [
+      "20261029000000_store_transfer_posting",
+      "20261029001000_supplier_reservation_stock_basis",
+      "20261029003000_browser_session_intent_sequence",
+      "20261029010000_net_cost_basis",
+      "20261103000000_warehouse_review_posting",
+      "20261104000000_replenishment_submission_holds",
+      "20261106000000_product_location"
+    ],
+    "businessDataImported": false,
+    "businessDataRewritten": false
+  },
+  "priorContainers": [
+    "dianjie-production-api-before-133",
+    "dianjie-production-web-before-133"
+  ],
+  "rollbackPolicy": "Before any new facts old containers retained; after new facts use compatible 1.3.3 images, never restore business DB"
+}

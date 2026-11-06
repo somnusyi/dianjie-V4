@@ -4,7 +4,7 @@
  */
 'use client'
 import { useEffect, useState } from 'react'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { Chip } from '@/components/v2'
 import { ErrorScreen } from '@/components/v2/use-dashboard'
 import { apiFetch } from '@/lib/v2-auth'
@@ -17,19 +17,27 @@ type FoodCost = {
   turnoverDays: number
 }
 
-function fmt(n: number, d = 0) {
-  return n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
+function fmt(n: number, d = 2) {
+  return n.toLocaleString('zh-CN', { minimumFractionDigits: d, maximumFractionDigits: d })
 }
 
 export default function FoodCostPage() {
   const [month, setMonth] = useState(() => dayjs().format('YYYY-MM'))
-  const [data, setData] = useState<FoodCost | null>(null)
+  const [result, setResult] = useState<{ month: string; value: FoodCost } | null>(null)
+  const data = result?.month === month ? result.value : null
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    setData(null); setError(null)
+    let active = true
+    setError(null); setResult(null)
     apiFetch<FoodCost>(`/api/finance/reports/food-cost?month=${month}`)
-      .then(setData).catch(e => setError(String(e?.message || e)))
+      .then(value => {
+        if (!active) return
+        if (!value || value.month !== month) throw new Error('报表月份不一致，请刷新重试')
+        setResult({ month, value })
+      })
+      .catch(e => { if (active) setError(String(e?.message || e)) })
+    return () => { active = false }
   }, [month])
 
   if (error) return <ErrorScreen message={error} />
@@ -58,7 +66,7 @@ export default function FoodCostPage() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <div className="text-caption text-gray3">本月食材采购</div>
-                <div className="text-h1 font-num">¥{fmt(data.total.foodCost, 0)}</div>
+                <div className="text-h1 font-num">¥{fmt(data.total.foodCost)}</div>
               </div>
               <div className="text-right">
                 <div className="text-caption text-gray3">食材占比</div>
@@ -70,7 +78,7 @@ export default function FoodCostPage() {
             <div className="mt-3 pt-3 border-t border-border grid grid-cols-2 gap-3">
               <div>
                 <div className="text-caption text-gray3">本月损耗</div>
-                <div className="text-h2 font-num text-red-fg">¥{fmt(data.total.loss, 0)}</div>
+                <div className="text-h2 font-num text-red-fg">¥{fmt(data.total.loss)}</div>
               </div>
               <div className="text-right">
                 <div className="text-caption text-gray3">损耗率(占采购)</div>
@@ -89,7 +97,7 @@ export default function FoodCostPage() {
                 <div key={t.month}>
                   <div className="flex justify-between text-caption">
                     <span className="text-gray2">{t.month.slice(-2)} 月</span>
-                    <span className="font-num">¥{fmt(t.foodCost, 0)} <span className="text-gray3">({(t.ratio * 100).toFixed(0)}%)</span></span>
+                    <span className="font-num">¥{fmt(t.foodCost)} <span className="text-gray3">({(t.ratio * 100).toFixed(0)}%)</span></span>
                   </div>
                   <div className="h-1.5 bg-gray5 rounded-full mt-1 overflow-hidden">
                     <div className="h-full bg-amber rounded-full" style={{ width: `${t.foodCost / maxFood * 100}%` }} />
@@ -111,8 +119,8 @@ export default function FoodCostPage() {
                     {s.lossRatio > 0.05 && <Chip tone="orange">损耗高</Chip>}
                   </div>
                   <div className="grid grid-cols-3 gap-2 text-micro text-gray3">
-                    <div>采购 <b className="font-num text-gray2">¥{fmt(s.foodCost, 0)}</b></div>
-                    <div>损耗 <b className="font-num text-red-fg">¥{fmt(s.loss, 0)}</b></div>
+                    <div>采购 <b className="font-num text-gray2">¥{fmt(s.foodCost)}</b></div>
+                    <div>损耗 <b className="font-num text-red-fg">¥{fmt(s.loss)}</b></div>
                     <div>占比 <b className="font-num text-gray2">{(s.foodCostRatio * 100).toFixed(1)}%</b></div>
                   </div>
                 </div>
@@ -125,9 +133,9 @@ export default function FoodCostPage() {
             <div className="mx-4 mt-3 bg-white rounded-card border border-border p-3">
               <div className="text-h2 mb-2">{data.stores[0].storeName}</div>
               <div className="grid grid-cols-2 gap-3 text-caption">
-                <div><span className="text-gray3">营业额</span> <span className="font-num">¥{fmt(data.stores[0].revenue, 0)}</span></div>
-                <div><span className="text-gray3">采购额</span> <span className="font-num">¥{fmt(data.stores[0].foodCost, 0)}</span></div>
-                <div><span className="text-gray3">损耗</span> <span className="font-num text-red-fg">¥{fmt(data.stores[0].loss, 0)}</span></div>
+                <div><span className="text-gray3">营业额</span> <span className="font-num">¥{fmt(data.stores[0].revenue)}</span></div>
+                <div><span className="text-gray3">采购额</span> <span className="font-num">¥{fmt(data.stores[0].foodCost)}</span></div>
+                <div><span className="text-gray3">损耗</span> <span className="font-num text-red-fg">¥{fmt(data.stores[0].loss)}</span></div>
                 <div><span className="text-gray3">食材占比</span> <span className="font-num">{(data.stores[0].foodCostRatio * 100).toFixed(1)}%</span></div>
               </div>
             </div>

@@ -226,9 +226,7 @@ export function SupplyChainShell({ children }: { children: ReactNode }) {
         </nav>
         <div className="border-t border-border p-4">
           <div className="rounded-xl bg-bg px-3 py-2">
-            <div className="text-button">当前：默认仓</div>
-            <p className="mt-0.5 text-micro text-gray3">保留多仓接口 · 当前单仓执行</p>
-            <Link href="/v2/me" className="mt-2 block text-micro text-amber-fg">账户与密码设置 ›</Link>
+            <Link href="/v2/me" className="block text-caption text-amber-fg">账户与密码设置 ›</Link>
           </div>
         </div>
       </aside>}

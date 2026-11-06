@@ -1,6 +1,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { businessMonthKey } from '../lib/businessTime'
 import dayjs from 'dayjs'
+import { monthRangeForDateCol } from '../lib/dateRange'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { isSupplierRole } from '../lib/auth-scope'
@@ -67,7 +68,8 @@ async function loadSupplierStatement(params: {
   if (!supplier) throw httpError('供应商不存在或无权查看', 404)
 
   const periodStart = new Date(`${params.query.month}-01T00:00:00.000Z`)
-  const periodEnd = dayjs(periodStart).add(1, 'month').toDate()
+  const range = monthRangeForDateCol(params.query.month)
+  const periodEnd = new Date(Date.UTC(periodStart.getUTCFullYear(), periodStart.getUTCMonth() + 1, 1))
   const rows = await prisma.receipt.findMany({
     where: {
       tenantId: params.tenantId, supplierId: scopedSupplierId,
@@ -97,7 +99,7 @@ async function loadSupplierStatement(params: {
     supplier,
     month: params.query.month,
     periodStart,
-    periodEnd: dayjs(periodEnd).subtract(1, 'day').toDate(),
+    periodEnd: new Date(`${range.end.toISOString().slice(0, 10)}T00:00:00.000Z`),
     ...buildSupplierStatement(rows),
   }
 }

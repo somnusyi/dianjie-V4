@@ -5,11 +5,12 @@
  * - 一键导出当月 Excel (好会计兼容)
  */
 'use client'
-import { useEffect, useMemo, useState } from 'react'
-import dayjs from 'dayjs'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import dayjs from '@/lib/business-dayjs'
 import { Chip } from '@/components/v2'
 import { ErrorScreen } from '@/components/v2/use-dashboard'
 import { apiFetch, getToken } from '@/lib/v2-auth'
+import { loadVouchers } from '@/lib/voucher-list'
 import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
 
 
@@ -43,19 +44,29 @@ export default function FinanceVouchersPage() {
   const [busy, setBusy] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
+  const loadSequence = useRef(0)
+  const activeFilter = useRef({ month, status })
+  activeFilter.current = { month, status }
+  const mounted = useRef(true)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; loadSequence.current++ } }, [])
+
   async function reload() {
+    if (!mounted.current) return
+    const { month: activeMonth, status: activeStatus } = activeFilter.current
+    const sequence = ++loadSequence.current
     setError(null)
     setData(null)
-    const from = dayjs(month + '-01').startOf('month').format('YYYY-MM-DD')
-    const to = dayjs(month + '-01').endOf('month').format('YYYY-MM-DD')
+    setSelected(new Set())
+    const from = dayjs(activeMonth + '-01').startOf('month').format('YYYY-MM-DD')
+    const to = dayjs(activeMonth + '-01').endOf('month').format('YYYY-MM-DD')
     try {
-      const r = await apiFetch<{ items: Voucher[] }>(`/api/vouchers?from=${from}&to=${to}&status=${status}&pageSize=200`)
-      setData(r.items || [])
+      const rows = await loadVouchers<Voucher>(from, to, activeStatus)
+      if (sequence === loadSequence.current) setData(rows)
     } catch (e: any) {
-      setError(e.message || String(e))
+      if (sequence === loadSequence.current) setError(e.message || String(e))
     }
   }
-  useEffect(() => { reload() }, [month, status])
+  useEffect(() => { reload(); return () => { loadSequence.current++ } }, [month, status])
 
   const list = data || []
   const stats = useMemo(() => {
@@ -249,7 +260,7 @@ export default function FinanceVouchersPage() {
                 </div>
                 <div className="flex items-baseline justify-between">
                   <span className="text-h2 font-num">{v.no}</span>
-                  <span className="font-num text-h2">¥{Number(v.totalDebit).toLocaleString()}</span>
+                  <span className="font-num text-h2">¥{Number(v.totalDebit).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
                 <p className="text-caption text-gray2 truncate mt-0.5">{v.summary}</p>
                 <p className="text-micro text-gray3 mt-1 truncate">

@@ -12,7 +12,7 @@ export type RelationProduct = {
   spec: string | null; unit: string
   purchaseUnit: string | null; inventoryUnit: string | null
   inventoryUnitsPerPurchaseUnit: number | null
-  price: number | null; status: string
+  price: number | null; costUnit?: string | null; status: string
 }
 
 export type RelationSupplier = { id: string; no: string; name: string; status: string }
@@ -127,7 +127,7 @@ export type BindItemDraft = {
 
 /**
  * 勾选商品 → 批量绑定请求体。
- * 默认值预填商品档案（采购单位/换算比/档案价），换算比缺失的商品跳过并回报，
+ * 默认值预填商品档案单位/换算比；协议价不能用商品价代替，换算比缺失的商品跳过并回报，
  * 因为换算比是入库成本折算的命门，不能瞎猜成 1。
  */
 export function buildBindItems(
@@ -146,7 +146,7 @@ export function buildBindItems(
       productId: product.id,
       purchaseUnit: product.purchaseUnit || product.unit,
       inventoryUnitsPerPurchaseUnit: factor,
-      quotedUnitPrice: product.price === null ? null : Number(product.price),
+      quotedUnitPrice: null,
       isPrimary: options.isPrimary ?? false,
     })
   }

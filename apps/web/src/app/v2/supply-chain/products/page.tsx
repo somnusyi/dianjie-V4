@@ -1,4 +1,6 @@
 'use client'
+import { SearchableSelect, SearchableList } from '@/components/v2/searchable-select'
+import { useSupplyProductFilters } from '@/lib/use-supply-product-filters'
 
 import {changeProductUnit, productSpecUnitSuggestion} from '@/lib/product-unit-change'
 /**
@@ -26,6 +28,7 @@ import {
   buildSupplyProductExportPath,
   bulkCategoryBlockedReason,
   canBulkCategory,
+  selectedSupplierForBulkCategory,
   clearRowSelection,
   formatBatchStatusPreviewSummary,
   productExportFilename,
@@ -155,6 +158,7 @@ type FormState = {
   name: string
   code: string
   category: string
+  location: string
   unit: string
   price: string
   spec: string
@@ -169,6 +173,7 @@ const EMPTY_FORM: FormState = {
   name: '',
   code: '',
   category: '',
+  location: '',
   unit: '件',
   price: '',
   spec: '',
@@ -189,7 +194,7 @@ export default function InternalSupplyChainProductsPage() {
   const [catalogTotal, setCatalogTotal] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [filters, setFilters] = useState<SupplyProductFilters>({ ...DEFAULT_SUPPLY_PRODUCT_FILTERS, status: 'ENABLED' })
+  const [filters, setFilters, filtersReady] = useSupplyProductFilters()
   const [categories, setCategories] = useState<CategoryOption[]>([])
   // 按当前筛选（状态/供应商/关键字）聚合出的分类计数，用于让左侧计数与列表口径一致；
   // null 表示尚未算出，先回退到服务端分类主数据自带的全状态计数。
@@ -241,6 +246,7 @@ export default function InternalSupplyChainProductsPage() {
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkCategory, setBulkCategory] = useState('')
+  const bulkSupplierId = selectedSupplierForBulkCategory(filters, products ?? [], selectedIds)
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
 
@@ -263,10 +269,11 @@ export default function InternalSupplyChainProductsPage() {
         if (sequence === requestSequence.current) setLoading(false)
       })
   }
-  useEffect(() => { load() }, [filters])
+  useEffect(() => { if (filtersReady) load() }, [filters, filtersReady])
   // 分类计数与列表共用同一批筛选（状态/供应商/关键字），但不带分类与分页：
   // 请求全量匹配列表后在前端按分类聚合，使左侧计数与顶部分类(N)随右侧筛选联动。
   useEffect(() => {
+    if (!filtersReady) return
     const sequence = ++countSequence.current
     apiFetch<Array<{ category: string | null }>>(`/api/products${buildProductCountQuery(filters)}`)
       .then(data => {
@@ -276,7 +283,7 @@ export default function InternalSupplyChainProductsPage() {
       .catch(() => {
         // 统计失败不阻断主列表；保留服务端全状态计数作为兜底。
       })
-  }, [filters.q, filters.status, filters.supplierId])
+  }, [filters.q, filters.status, filters.supplierId, filtersReady])
   useEffect(() => {
     setSelectedIds(clearRowSelection())
     setBulkCategory('')
@@ -332,13 +339,14 @@ export default function InternalSupplyChainProductsPage() {
 
   useEffect(() => {
     setBulkCategory('')
-    if (!filters.supplierId) {
+    setBulkCategories([])
+    if (!bulkSupplierId) {
       setBulkCategories([])
       return
     }
     let active = true
     apiFetch<Array<CategoryOption & { isActive?: boolean }>>(
-      `/api/products/categories?supplierId=${encodeURIComponent(filters.supplierId)}`,
+      `/api/products/categories?supplierId=${encodeURIComponent(bulkSupplierId)}`,
     )
       .then(data => {
         if (!active) return
@@ -352,7 +360,7 @@ export default function InternalSupplyChainProductsPage() {
         if (active) setBulkCategories([])
       })
     return () => { active = false }
-  }, [filters.supplierId])
+  }, [bulkSupplierId])
 
   // 弹窗打开且选定供应商时，按该供应商取分类（与分类管理页同接口、同 sortOrder 顺序），
   // 仅保留启用项，供编辑/新增时下拉选择；未选供应商则回退到全局列表。
@@ -598,6 +606,7 @@ export default function InternalSupplyChainProductsPage() {
       name: product.name,
       code: product.code || '',
       category: product.category || '',
+      location: product.location || '',
       unit: product.unit || '件',
       price: String(product.price),
       spec: product.spec || '',
@@ -680,6 +689,7 @@ export default function InternalSupplyChainProductsPage() {
             name: editing.name,
             code: editing.code || '',
             category: editing.category || '',
+            location: editing.location || '',
             unit: editing.unit || '',
             spec: editing.spec || '',
             shelfDays: Number(editing.shelfDays ?? 7),
@@ -892,7 +902,7 @@ export default function InternalSupplyChainProductsPage() {
 
   function submitBulkCategory() {
     if (selectedCount === 0 || !bulkCategory.trim()) return
-    const blocked = bulkCategoryBlockedReason(filters)
+    const blocked = bulkCategoryBlockedReason({ supplierId: bulkSupplierId })
     if (blocked) {
       notifyUser(blocked)
       return
@@ -976,7 +986,6 @@ export default function InternalSupplyChainProductsPage() {
         <div>
           <div className="mb-2 flex items-center gap-2">
             <Chip tone="green">内部管理</Chip>
-            <span className="text-caption text-gray3">商品 · 直接生效并通知总厨</span>
           </div>
           <h1 className="text-h1">商品管理</h1>
           <p className="mt-1 text-caption text-gray2">
@@ -999,9 +1008,9 @@ export default function InternalSupplyChainProductsPage() {
               <b className="text-button">分类管理</b>
               <span className="font-num text-micro text-gray3">{categories.length} 个</span>
             </div>
-            <nav className="flex flex-col gap-1 p-2" aria-label="按分类筛选商品">
+            <SearchableList listAs="nav" searchLabel="搜索商品分类" className="flex flex-col gap-1 p-2" listLabel="按分类筛选商品">
               <button
-                onClick={() => updateFilters({ category: '' })}
+                data-search-pinned onClick={() => updateFilters({ category: '' })}
                 aria-pressed={!filters.category}
                 className={`flex items-center justify-between gap-2 rounded-cta px-3 py-2 text-left text-caption transition-colors ${filters.category ? 'text-gray2 hover:bg-bg' : 'bg-accent/10 font-bold text-accent'}`}
               >
@@ -1028,16 +1037,18 @@ export default function InternalSupplyChainProductsPage() {
               {categories.length === 0 && (
                 <p className="px-3 py-4 text-center text-micro text-gray3">暂无分类，可在新增商品时创建</p>
               )}
-            </nav>
-            <p className="border-t border-border px-4 py-2.5 text-micro text-gray3">内联新建分类入口在「新增商品」弹窗中</p>
+            </SearchableList>
+
           </aside>
           <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-end gap-3 py-4">
           <FilterInput label="关键字" value={filters.q} onChange={value => updateFilters({ q: value })} placeholder="名称 / 编码 / 规格" />
+          <div className="lg:hidden">
           <FilterSelect label="分类" value={filters.category} onChange={value => updateFilters({ category: value })}>
             <option value="">全部分类</option>
             {displayCategories.map(cat => <option key={cat.name} value={cat.name}>{cat.name} ({cat.count})</option>)}
           </FilterSelect>
+          </div>
           <FilterSelect label="状态" value={filters.status} onChange={value => updateFilters({ status: value })}>
             <option value="">全部状态</option>
             {SUPPLY_PRODUCT_STATUS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
@@ -1104,6 +1115,7 @@ export default function InternalSupplyChainProductsPage() {
                     </th>
                     <th className="w-[245px] px-3 py-3">商品</th>
                     <th className="w-[76px] px-3 py-3">分类</th>
+                    <th className="w-[100px] px-3 py-3">库位</th>
                     <th className="w-[120px] px-3 py-3 text-right">采购价</th>
                     <th className="w-[94px] px-3 py-3">状态</th>
                     <th className="w-[132px] px-3 py-3 text-right">操作</th>
@@ -1146,6 +1158,7 @@ export default function InternalSupplyChainProductsPage() {
                         <td className="px-3 py-3 text-gray2">
                           <span className="block truncate" title={product.category || '未分类'}>{product.category || '未分类'}</span>
                         </td>
+                        <td className="px-3 py-3" title={product.location || undefined}>{product.location || '—'}</td>
                         <td className="px-3 py-3 text-right font-num">
                           <>
                             {`¥${Number(product.price).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:6})}`}
@@ -1193,7 +1206,7 @@ export default function InternalSupplyChainProductsPage() {
                 </FilterSelect>
                 <button
                   onClick={submitBulkCategory}
-                  disabled={!bulkCategory || !canBulkCategory(filters)}
+                  disabled={!bulkCategory || !canBulkCategory({ supplierId: bulkSupplierId })}
                   className="rounded-cta border border-border bg-white px-3 py-2 text-button text-gray2 disabled:opacity-40"
                 >批量分类</button>
                 <button
@@ -1204,8 +1217,8 @@ export default function InternalSupplyChainProductsPage() {
                   onClick={() => submitBulkStatus('ENABLED')}
                   className="rounded-cta bg-green-bg px-3 py-2 text-button text-green-fg"
                 >批量恢复</button>
-                {!canBulkCategory(filters) && (
-                  <span className="text-caption text-amber-fg">{bulkCategoryBlockedReason(filters)}</span>
+                {!canBulkCategory({ supplierId: bulkSupplierId }) && (
+                  <span className="text-caption text-amber-fg">{bulkCategoryBlockedReason({ supplierId: bulkSupplierId })}</span>
                 )}
               </div>
             )}
@@ -1332,13 +1345,13 @@ function FilterSelect({ label, value, onChange, children }: {
   return (
     <label className={`flex flex-col gap-1 ${label ? '' : 'justify-end'}`}>
       {label && <span className="text-micro text-gray3">{label}</span>}
-      <select
+      <SearchableSelect searchWhenLong searchLabel={`搜索${label}`}
         value={value}
         onChange={e => onChange(e.target.value)}
         className="h-10 min-w-36 rounded-cta border border-border bg-white px-3 text-body"
       >
         {children}
-      </select>
+      </SearchableSelect>
     </label>
   )
 }
@@ -1423,7 +1436,7 @@ function SourceDialog({
                 <div className="grid gap-3 md:grid-cols-12">
                   <label className="flex flex-col gap-1 md:col-span-4">
                     <span className="text-micro text-gray3">上游供应商 *</span>
-                    <select
+                    <SearchableSelect searchLabel="搜索上游供应商"
                       value={row.supplierId}
                       onChange={event => onChange(index, { supplierId: event.target.value })}
                       className="h-10 rounded-cta border border-border bg-white px-3 text-body"
@@ -1437,7 +1450,7 @@ function SourceDialog({
                           {supplier.no ? `${supplier.no} · ` : ''}{supplier.name}
                         </option>
                       ))}
-                    </select>
+                    </SearchableSelect>
                   </label>
                   <label className="flex flex-col gap-1 md:col-span-3">
                     <span className="text-micro text-gray3">供应商商品编码</span>
@@ -1600,8 +1613,8 @@ function FormDialog({
     : editing ? `编辑「${editing.name}」` : '新增商品'
   const confirmLabel = priceOnly ? '确认调价' : editing ? '保存修改' : '新增'
   const bodyNote = editing && !priceOnly
-    ? '只修改商品档案；价格使用列表「调价」，库存使用「仓库库存」。保存后直接生效并通知总厨。'
-    : '直接生效并通知总厨'
+    ? '调价请用列表中的「调价」，库存请到「仓库库存」修改。保存后生效并通知总厨。'
+    : '保存后生效并通知总厨'
   const fourUnitValues = buildFourUnitValues(form)
   const pricePreview = productPriceConversion(form)
   const inputPriceUnit = (form.priceBasis || 'purchase') === 'inventory' ? form.inventoryUnit : form.priceBasis === 'order' ? form.orderUnit : form.purchaseUnit
@@ -1688,7 +1701,7 @@ function FormDialog({
           <div className="grid grid-cols-2 gap-3">
             {(!editing && suppliers.length > 1 || Boolean(editing && !editing.supplier?.id)) && (
               <FormField label="门店履约方">
-                <select
+                <SearchableSelect searchLabel="搜索门店履约方"
                   value={form.supplierId}
                   onChange={e => onFieldChange('supplierId', e.target.value)}
                   className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body"
@@ -1697,7 +1710,7 @@ function FormDialog({
                   {suppliers.map(supplier => (
                     <option key={supplier.id} value={supplier.id}>{supplier.name}</option>
                   ))}
-                </select>
+                </SearchableSelect>
               </FormField>
             )}
             <div className="col-span-2">
@@ -1759,7 +1772,7 @@ function FormDialog({
                 />
               </FormField>
             )}
-            <FormField label="分类" full={Boolean(editing)}>
+            <FormField label="分类">
               <div className="relative">
                 <input
                   type="text"
@@ -1817,6 +1830,10 @@ function FormDialog({
                 <span className="mt-1 text-micro text-green-fg">{categoryNotice}</span>
               )}
             </FormField>
+            <FormField label="库位">
+              <input type="text" aria-label="库位" value={form.location} onChange={e => onFieldChange('location', e.target.value)} maxLength={32}
+                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" />
+            </FormField>
             <FormField label="规格" full>
               <input
                 type="text"
@@ -1838,7 +1855,7 @@ function FormDialog({
                     <div className="space-y-3 rounded-lg border border-border p-3">
 <FormField label={'采购单位（向供应商采购）'}><input type="text" value={form.purchaseUnit} onChange={e => onFieldChange('purchaseUnit', e.target.value)} maxLength={16} className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></FormField><FormField label={`1 ${form.purchaseUnit.trim() || '采购单位'} = ？${form.inventoryUnit.trim() || '库存单位'}`}><input type="number" value={form.inventoryUnitsPerPurchaseUnit} onChange={e => onFieldChange('inventoryUnitsPerPurchaseUnit', e.target.value)} min="0.000001" step="0.000001" className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></FormField>
                     </div><div className="space-y-3 rounded-lg border border-border p-3">
-<FormField label={'库存最小单位（仓库和成本按它记）'}><input type="text" value={form.inventoryUnit} onChange={e => onFieldChange('inventoryUnit', e.target.value)} maxLength={16} className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></FormField><p className="text-micro text-gray3">作为换算基准，成本按此单位计算。</p>
+<FormField label={'库存最小单位（仓库和成本按它记）'}><input type="text" value={form.inventoryUnit} onChange={e => onFieldChange('inventoryUnit', e.target.value)} maxLength={16} className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></FormField>
                     </div><div className="space-y-3 rounded-lg border border-border p-3">
 <FormField label={'最小下单量单位（订货单位）'}><input type="text" value={form.orderUnit} onChange={e => onFieldChange('orderUnit', e.target.value)} maxLength={16} className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></FormField><FormField label={`1 ${form.orderUnit.trim() || '起订量单位'} = ？${form.inventoryUnit.trim() || '库存单位'}（起订量换算）`}><input type="number" value={form.inventoryUnitsPerOrderUnit} onChange={e => onFieldChange('inventoryUnitsPerOrderUnit', e.target.value)} min="0.000001" step="0.000001" className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></FormField>
                     </div>
@@ -1855,7 +1872,6 @@ function FormDialog({
                     </button>
                   )}
                   <p className="mt-2 text-micro leading-5 text-gray3">
-                    采购单位与最小下单量单位分别换算，库存最小单位作为基准，成本按最小单位计算。
                     <button
                       type="button"
                       onClick={() => setUnitAdvancedOpen(true)}
@@ -1936,8 +1952,8 @@ function FormDialog({
                   </FormField>
                   <p className="col-span-2 text-micro leading-5 text-gray3">
                     {editing
-                      ? '编辑保留建档时的单位口径与成本价；调价请用列表「调价」入口。如需调整成本单位本身，请联系管理员按折算价一并处理。'
-                      : '成本单位固定为库存单位（最小单位），换算因子为 1，与美团口径一致；如需调整请改库存单位。'}
+                      ? '成本单位沿用建档值；需调整时请联系管理员。'
+                      : '成本单位与库存单位相同。'}
                   </p>
                 </div>
                 <div className="mt-2 flex items-center justify-between">
@@ -2069,7 +2085,7 @@ function FormDialog({
                 <tr><td className="py-1">输入单价</td><td>{form.price!==''?`${form.price} 元 / ${inputPriceUnit}`:'—'}</td><td>1 {inputPriceUnit}</td><td>{form.price!==''?`${form.price} 元`:'—'}</td></tr>
                 <tr><td className="py-1">最小单位</td><td>{pricePreview.inventoryUnitPrice!==null?`${pricePreview.inventoryUnitPrice} 元 / ${form.inventoryUnit}`:'—'}</td><td>1 {form.inventoryUnit}</td><td>{pricePreview.inventoryUnitPrice!==null?`${pricePreview.inventoryUnitPrice} 元`:'—'}</td></tr>
                 <tr><td className="py-1">起订量</td><td>{pricePreview.orderUnitPrice!==null?`${pricePreview.orderUnitPrice} 元 / ${form.orderUnit}`:'—'}</td><td>{form.minOrderQty} {form.orderUnit}{pricePreview.minimumInventoryQuantity!==null?`（${pricePreview.minimumInventoryQuantity} ${form.inventoryUnit}）`:''}</td><td>{pricePreview.minimumOrderAmount!==null?`${pricePreview.minimumOrderAmount} 元`:'—'}</td></tr>
-              </tbody></table><p className="mt-2 text-micro text-gray3">起订量按订货单位计算；起订金额按订货结算单价联动。最小单位单价保留最多六位小数。</p>
+              </tbody></table>
               {form.price!==''&&pricePreview.error&&<p role="status" className="mt-1 text-red-fg">{pricePreview.error}；换算完成后才能新增。</p>}
             </section>}
             <details className="col-span-2 rounded-cta border border-border bg-bg px-3 py-2">
@@ -2098,7 +2114,7 @@ function FormDialog({
                   />
                 </FormField>
                 <p className="col-span-2 text-micro leading-5 text-gray3">
-                  超过最小下单量后，每次可以增加的数量。例如最小 2、增量 0.5，可下单 2、2.5、3。
+                  超过起订量后，每次增加的数量。
                 </p>
               </div>
             </details>

@@ -24,6 +24,7 @@ export type SingleDeliveryNoteDraftRow = {
   itemId?: string
   productId: string
   name: string
+  category?: string | null; location?: string | null
   spec: string | null
   unit: string
   quantity: number
@@ -35,6 +36,7 @@ export type SingleDeliveryNotePreviewItem = {
   id: string
   productId: string
   name: string
+  category?: string | null; location?: string | null
   spec: string | null
   unit: string
   quantity: number
@@ -64,7 +66,7 @@ export type SingleDeliveryNoteDocument = {
     unitPrice: string
     amount: string
     costAmount?: string | null
-    product?: { name: string; spec: string | null; unit: string; code: string }
+    product?: { name: string; spec: string | null; unit: string; code: string; id?: string; category?: string | null; location?: string | null }
   }>
 }
 
@@ -128,6 +130,8 @@ export function buildSingleDeliveryNoteSnapshot(rows: SingleDeliveryNoteDraftRow
       id: String(row.itemId || row.key),
       productId: String(row.productId || ''),
       name: String(row.name || '').trim(),
+      ...(row.category != null ? { category: row.category } : {}),
+      ...(row.location != null ? { location: row.location } : {}),
       spec: row.spec == null ? null : String(row.spec),
       unit: String(row.unit || '').trim(),
       quantity,
@@ -214,6 +218,8 @@ export function parseSingleOrderPreviewPayload(args: {
         id,
         productId,
         name,
+        ...(typeof item.category === 'string' ? { category: item.category } : {}),
+        ...(typeof item.location === 'string' ? { location: item.location } : {}),
         spec: item?.spec == null ? null : String(item.spec),
         unit,
         quantity,
@@ -265,6 +271,8 @@ export function applySingleOrderPreview<T extends SingleDeliveryNoteDocument>(
         spec: item.spec,
         unit: item.unit,
         code: item.productId,
+        category: item.category ?? normalized.items.find(source => source.product?.id === item.productId)?.product?.category,
+        location: item.location ?? normalized.items.find(source => source.product?.id === item.productId)?.product?.location,
       },
     })),
   }

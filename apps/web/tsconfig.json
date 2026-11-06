@@ -32,7 +32,13 @@
     "next-env.d.ts",
     "**/*.ts",
     "**/*.tsx",
-    ".next/types/**/*.ts"
+    ".next/types/**/*.ts",
+    "tmp/qa-next-mouse-20261009/types/**/*.ts",
+    "tmp/qa-next-feedback-20261018/types/**/*.ts",
+    "tmp/qa-ux-report-20261020/types/**/*.ts",
+    "tmp/qa-next-p0-20261026/types/**/*.ts",
+    "tmp/qa-security-recovery-next/types/**/*.ts",
+    ".next-uat-docker/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

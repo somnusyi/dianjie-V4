@@ -1,4 +1,5 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import { useEffect, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
@@ -65,10 +66,10 @@ export default function SupplierAccountsPage() {
     <p className="mt-2 text-caption text-gray2">供应链填写后确认添加，账号立即开通，无需进入企业微信。手机号用于登录。</p>
     <form onSubmit={event => { event.preventDefault(); void add() }} className="mt-5 rounded-card border border-border bg-white p-5">
       <label htmlFor="supplier-company" className="text-button">供应商公司</label>
-      <select required id="supplier-company" value={supplierId} disabled={loading || busy} onChange={event => { setSupplierId(event.target.value); setNotice(''); setError('') }} className="mt-2 w-full rounded-xl border border-border bg-white px-3 py-3">
+      <SearchableSelect searchLabel="搜索供应商公司" required id="supplier-company" value={supplierId} disabled={loading || busy} onChange={event => { setSupplierId(event.target.value); setNotice(''); setError('') }} className="mt-2 w-full rounded-xl border border-border bg-white px-3 py-3">
         <option value="">{loading ? '读取中…' : '从已有供应商中选择公司'}</option>
         {companies.map(company => <option key={company.id} value={company.id}>{company.no} · {company.name}</option>)}
-      </select>
+      </SearchableSelect>
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <label className="text-button">姓名<input required maxLength={20} value={name} disabled={busy} onChange={e => setName(e.target.value)} autoComplete="off" className="mt-2 w-full rounded-xl border border-border p-3" /></label>
         <label className="text-button">手机号<input required type="tel" pattern="1[3-9][0-9]{9}" value={phone} disabled={busy} onChange={e => setPhone(e.target.value)} autoComplete="off" className="mt-2 w-full rounded-xl border border-border p-3" /></label>

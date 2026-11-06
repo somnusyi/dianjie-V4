@@ -1,4 +1,5 @@
 'use client'
+import { browserLogin } from '@/lib/v2-auth'
 import {loginTenant,dedicatedTestLogin} from '@/lib/login-environment'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -22,7 +23,9 @@ export default function LoginPage() {
     if(testEntry){window.location.assign(testEntry);return}
     setLoading(true); setError('')
     try {
-      const res = await api.post('/api/auth/login', { email, password, tenantSlug:loginTenant(requested,email) })
+      const response = await browserLogin('/api/auth/login', { email, password, tenantSlug:loginTenant(requested,email) })
+      const res = { data: await response.json() }
+      if (!response.ok) throw { response: res }
       setToken(res.data.token)
       setUser(res.data.user)
       clearActiveStoreId()

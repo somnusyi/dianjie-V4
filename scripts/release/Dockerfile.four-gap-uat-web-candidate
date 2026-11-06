@@ -1,0 +1,12 @@
+ARG WEB_BASE
+FROM ${WEB_BASE}
+ARG DIST_NAME=.next-uat-docker
+USER root
+RUN rm -rf /app/apps/web/tmp /app/apps/web/public
+COPY --chown=node:node server.js /app/apps/web/server.js
+COPY --chown=node:node next-output/ /app/apps/web/${DIST_NAME}/
+COPY --chown=node:node public/ /app/apps/web/public/
+USER node
+WORKDIR /app
+ENV NODE_ENV=production HOSTNAME=0.0.0.0 PORT=3000 NEXT_PUBLIC_API_BASE=http://api:4000
+CMD ["node", "/app/apps/web/server.js"]

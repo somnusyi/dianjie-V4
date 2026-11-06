@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { businessDateKey } from '@/lib/business-date'
 
 export type DateRangeValue = { from: string; to: string }
 
@@ -19,6 +20,7 @@ function parse(value: string) {
   const [y, m, d] = value.split('-').map(Number)
   return y && m && d ? new Date(y, m - 1, d) : null
 }
+function calendarToday() { return parse(businessDateKey())! }
 
 function monthDays(month: Date) {
   const first = startMonth(month)
@@ -47,7 +49,7 @@ export function DateRangeCalendar({ value, onChange, label = '日期范围' }: {
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
-  const [cursor, setCursor] = useState(() => startMonth(parse(value.from) || new Date()))
+  const [cursor, setCursor] = useState(() => startMonth(parse(value.from) || calendarToday()))
   const selectingEnd = Boolean(value.from && !value.to)
 
   useEffect(() => {
@@ -70,7 +72,7 @@ export function DateRangeCalendar({ value, onChange, label = '日期范围' }: {
   }
 
   function preset(key: string) {
-    const today = new Date()
+    const today = calendarToday()
     let from = today
     let to = today
     if (key === 'yesterday') from = to = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1)

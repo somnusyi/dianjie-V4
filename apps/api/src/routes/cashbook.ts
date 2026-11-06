@@ -433,7 +433,7 @@ export const cashbookRoutes: FastifyPluginAsync = async (app) => {
           account: { select: { id: true, name: true, type: true } },
           createdBy: { select: { name: true } },
         },
-        orderBy: { txDate: 'desc' },
+        orderBy: [{ txDate: 'desc' }, { id: 'desc' }],
         skip: (p - 1) * ps,
         take: ps,
       }),

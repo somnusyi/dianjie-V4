@@ -1,0 +1,3 @@
+# Install into the backup service's Python environment before enabling encryption.
+# cryptography 46.0.5 was used in the isolated restore verification.
+cryptography==46.0.5

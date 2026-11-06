@@ -4,7 +4,7 @@
  */
 'use client'
 import { useEffect, useState } from 'react'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { Chip, MonthPicker } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import { exportXlsx } from '@/lib/exportXlsx'
@@ -18,21 +18,29 @@ type FoodCost = {
   turnoverDays: number
 }
 
-const fmt = (n: number, d = 0) => n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
+const fmt = (n: number, d = 2) => n.toLocaleString('zh-CN', { minimumFractionDigits: d, maximumFractionDigits: d })
 
 export default function FoodCostPCPage() {
   const [month, setMonth] = useState(() => dayjs().format('YYYY-MM'))
-  const [data, setData] = useState<FoodCost | null>(null)
+  const [result, setResult] = useState<{ month: string; value: FoodCost } | null>(null)
+  const data = result?.month === month ? result.value : null
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    setData(null); setError(null)
+    let active = true
+    setError(null); setResult(null)
     apiFetch<FoodCost>(`/api/finance/reports/food-cost?month=${month}`)
-      .then(setData).catch(e => setError(String(e?.message || e)))
+      .then(value => {
+        if (!active) return
+        if (!value || value.month !== month) throw new Error('报表月份不一致，请刷新重试')
+        setResult({ month, value })
+      })
+      .catch(e => { if (active) setError(String(e?.message || e)) })
+    return () => { active = false }
   }, [month])
 
   async function doExport() {
-    if (!data) return
+    if (!data || error) return
     await exportXlsx(`食材成本-${month}.xlsx`, [{
       name: `食材成本 ${month}`,
       rows: [
@@ -68,7 +76,7 @@ export default function FoodCostPCPage() {
           </div>
           <div className="flex items-center gap-2">
             <MonthPicker value={month} onChange={setMonth} />
-            <button onClick={doExport} disabled={!data}
+            <button onClick={doExport} disabled={!data || !!error}
                     className="px-3 py-2 bg-[#1F7A4B] text-white rounded-cta text-button disabled:opacity-40">📊 导出 Excel</button>
           </div>
         </div>

@@ -13,7 +13,7 @@
  */
 'use client'
 import { useEffect, useState } from 'react'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { Chip, MonthPicker, DatePicker } from '@/components/v2'
 import { exportXlsx } from '@/lib/exportXlsx'
 import { apiFetch } from '@/lib/v2-auth'

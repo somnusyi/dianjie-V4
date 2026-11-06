@@ -11,8 +11,9 @@
  *   - 在右侧点 通过 / 驳回
  */
 'use client'
-import { useEffect, useMemo, useState } from 'react'
-import dayjs from 'dayjs'
+import { loadInvoices } from '@/lib/invoice-list'
+import { useEffect, useRef, useMemo, useState } from 'react'
+import dayjs from '@/lib/business-dayjs'
 import { apiFetch } from '@/lib/v2-auth'
 import { Chip } from '@/components/v2'
 import FinanceTopNav from '../_topnav'
@@ -39,7 +40,7 @@ type Invoice = {
 const STATUS_LABEL: Record<string, string> = { PENDING: '待审', VERIFIED: '已通过', REJECTED: '已驳回' }
 const STATUS_TONE: Record<string, 'orange'|'green'|'red'> = { PENDING: 'orange', VERIFIED: 'green', REJECTED: 'red' }
 
-const fmtMoney = (n: number) => `¥${Math.round(n).toLocaleString()}`
+const fmtMoney = (n: number) => `¥${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 const fmtMoney2 = (n: number) => `¥${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 const fmtMd = (iso: string) => dayjs(iso).format('MM/DD')
 
@@ -53,29 +54,36 @@ export default function FinancePCInvoicesPage() {
   const [rejectNote, setRejectNote] = useState('')
   const [showReject, setShowReject] = useState(false)
 
+  const loadSequence = useRef(0)
   function load() {
-    const url = filter === 'ALL' ? '/api/invoices' : `/api/invoices?status=${filter}`
+    const sequence = ++loadSequence.current
     setItems(null); setError(null)
-    apiFetch<Invoice[]>(url).then(d => {
+    loadInvoices<Invoice>().then(d => {
+      if (sequence !== loadSequence.current) return
       setItems(d)
-      if (d.length > 0 && !d.find(x => x.id === pickedId)) setPickedId(d[0].id)
-      if (d.length === 0) setPickedId(null)
-    }).catch(e => setError(e.message))
+      const visible = d.filter(item => filter === 'ALL' || item.status === filter)
+      if (visible.length > 0 && !visible.find(x => x.id === pickedId)) setPickedId(visible[0].id)
+      if (visible.length === 0) setPickedId(null)
+    }).catch(e => { if (sequence === loadSequence.current) setError(e.message) })
   }
-  useEffect(() => { load() }, [filter])
-
-  const picked = items?.find(i => i.id === pickedId) || null
+  useEffect(() => { load(); return () => { loadSequence.current++ } }, [filter])
 
   const filtered = useMemo(() => {
     if (!items) return []
+    const visible = items.filter(item => filter === 'ALL' || item.status === filter)
     const q = search.trim().toLowerCase()
-    if (!q) return items
-    return items.filter(i =>
+    if (!q) return visible
+    return visible.filter(i =>
       i.invoiceNo?.toLowerCase().includes(q) ||
       i.supplier?.name?.toLowerCase().includes(q) ||
       i.uploadedBy?.name?.toLowerCase().includes(q)
     )
-  }, [items, search])
+  }, [items, search, filter])
+
+  const picked = filtered.find(item => item.id === pickedId) || filtered[0] || null
+  useEffect(() => {
+    if (items && !filtered.some(item => item.id === pickedId)) setPickedId(filtered[0]?.id ?? null)
+  }, [items, filtered, pickedId])
 
   const stats = useMemo(() => {
     if (!items) return { pending: 0, verified: 0, rejected: 0, pendingAmt: 0 }
@@ -94,7 +102,7 @@ export default function FinancePCInvoicesPage() {
     setSubmitting(true)
     try {
       await apiFetch(`/api/invoices/${picked.id}/verify`, {
-        method: 'PATCH', body: JSON.stringify({ action, note: note || null }),
+        method: 'PATCH', body: JSON.stringify({ action, note: note || null, expectedUploadedAt: picked.uploadedAt }),
       })
       setShowReject(false); setRejectNote('')
       load()
@@ -103,9 +111,9 @@ export default function FinancePCInvoicesPage() {
   }
 
   const tabs = [
-    { key: 'PENDING' as const,  label: `待审 ${stats.pending}` },
-    { key: 'VERIFIED' as const, label: `已通过 ${stats.verified}` },
-    { key: 'REJECTED' as const, label: `已驳回 ${stats.rejected}` },
+    { key: 'PENDING' as const,  label: `待审 ${items ? stats.pending : '—'}` },
+    { key: 'VERIFIED' as const, label: `已通过 ${items ? stats.verified : '—'}` },
+    { key: 'REJECTED' as const, label: `已驳回 ${items ? stats.rejected : '—'}` },
     { key: 'ALL' as const,      label: '全部' },
   ]
 
@@ -121,7 +129,7 @@ export default function FinancePCInvoicesPage() {
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="搜索 (发票号 / 供应商 / 上传人)"
+            disabled={submitting} placeholder="搜索 (发票号 / 供应商 / 上传人)"
             className="px-3 py-2 rounded-cta border border-border bg-white text-button w-72"
           />
         </div>
@@ -130,16 +138,16 @@ export default function FinancePCInvoicesPage() {
 
         {/* Hero 4 卡 */}
         <div className="grid grid-cols-4 gap-3 mb-4">
-          <Stat label="待审" value={String(stats.pending)} unit="张" tone={stats.pending > 0 ? 'amber' : 'gray'} />
-          <Stat label="已通过" value={String(stats.verified)} unit="张" tone="green" />
-          <Stat label="已驳回" value={String(stats.rejected)} unit="张" tone={stats.rejected > 0 ? 'red' : 'gray'} />
-          <Stat label="待审金额" value={fmtMoney(stats.pendingAmt)} tone="amber" />
+          <Stat label="待审" value={items ? String(stats.pending) : '—'} unit="张" tone={stats.pending > 0 ? 'amber' : 'gray'} />
+          <Stat label="已通过" value={items ? String(stats.verified) : '—'} unit="张" tone="green" />
+          <Stat label="已驳回" value={items ? String(stats.rejected) : '—'} unit="张" tone={stats.rejected > 0 ? 'red' : 'gray'} />
+          <Stat label="待审金额" value={items ? fmtMoney(stats.pendingAmt) : '—'} tone="amber" />
         </div>
 
         {/* tabs */}
         <div className="flex gap-2 mb-3 flex-wrap">
           {tabs.map(t => (
-            <button key={t.key} onClick={() => setFilter(t.key)}
+            <button key={t.key} disabled={!!submitting} onClick={() => setFilter(t.key)}
               className={`px-3 py-1.5 rounded-cta text-button ${filter === t.key ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
               {t.label}
             </button>
@@ -150,7 +158,7 @@ export default function FinancePCInvoicesPage() {
         <div className="grid grid-cols-[400px_1fr] gap-4">
           {/* 列表 */}
           <div className="bg-white rounded-card border border-border max-h-[calc(100vh-280px)] overflow-auto">
-            {items === null && <div className="p-8 text-center text-caption text-gray3">加载中…</div>}
+            {items === null && !error && <div className="p-8 text-center text-caption text-gray3">加载中…</div>}
             {items !== null && filtered.length === 0 && (
               <div className="p-8 text-center text-caption text-gray3">{search ? '无匹配' : '暂无发票'}</div>
             )}

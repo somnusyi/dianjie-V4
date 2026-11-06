@@ -1,3 +1,4 @@
+import { inventoryNetCostBasisRoutes } from './inventoryNetCostBasis'
 import { FastifyPluginAsync } from 'fastify'
 import { Prisma, prisma } from '@dianjie/db'
 import ExcelJS from 'exceljs'
@@ -39,6 +40,7 @@ async function policyWarehouse(tenantId: string, warehouseId?: string) {
 }
 
 export const inventoryReportRoutes: FastifyPluginAsync = async app => {
+  await app.register(inventoryNetCostBasisRoutes)
   app.get('/policies', { preHandler: [(app as any).authenticate] }, async (req: any, reply) => {
     if (!req.user?.tenantId || !inventoryReportAccess(req.user.role)) return reply.status(403).send({ error: '无权查看库存规则' })
     const query = policyListQuerySchema.safeParse(req.query || {})
@@ -169,11 +171,11 @@ export const inventoryReportRoutes: FastifyPluginAsync = async app => {
     const workbook = new ExcelJS.Workbook()
     const sheet = workbook.addWorksheet(result.title)
     sheet.columns = result.columns.map(c => ({ header: c.group ? `${c.group} · ${c.label}` : c.label, key: c.key, width: c.kind === 'number' ? 20 : 26 }))
-    for (const row of result.rows) sheet.addRow(Object.fromEntries(result.columns.map(c => [c.key, row[c.key] ?? null])))
+    for (const row of result.rows) sheet.addRow(Object.fromEntries(result.columns.map(c => [c.key, row[c.key] == null && c.key === 'outProfit' && row.profitStatus === 'PENDING_TAX_BASIS' ? '待核算' : row[c.key] == null && ['realtime', 'summary', 'movements', 'other-summary'].includes(result.id) && row.costStatus === 'PENDING_COST' && ['amount', 'price', 'openingAmount', 'openingPrice', 'inAmount', 'inPrice', 'outAmount', 'outPrice', 'closingAmount', 'closingPrice'].includes(c.key) ? '待核算' : row[c.key] ?? null])))
     sheet.views = [{ state: 'frozen', ySplit: 1 }]
     sheet.getRow(1).font = { bold: true }
     sheet.autoFilter = { from: 'A1', to: { row: 1, column: result.columns.length } }
-    workbook.addWorksheet('口径说明').addRows([[result.note], [`导出时间：${result.generatedAt}`], [`筛选条件：${JSON.stringify(query.data)}`]])
+    workbook.addWorksheet('口径说明').addRows([[result.note], [`导出时间：${new Date(result.generatedAt).toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai', hour12: false })}`], [`筛选条件：${JSON.stringify(query.data)}`]])
     const buffer = await workbook.xlsx.writeBuffer()
     return { filename: `${result.title}-${query.data.end}.xlsx`, fileBase64: Buffer.from(buffer).toString('base64'), total: result.total }
   })

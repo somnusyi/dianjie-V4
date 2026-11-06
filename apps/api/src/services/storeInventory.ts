@@ -1,7 +1,8 @@
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
-import { applyReceiptToCostSlot } from './inventoryCosting'
+import { applyReceiptToCostSlot, closingConsumptionTime } from './inventoryCosting'
 import { productInventoryUnitCost } from './unitContractGuard'
+import { businessDateOnlyRange } from '../lib/businessTime'
 
 export type StoreInventorySummary = {
   status: 'AVAILABLE' | 'NO_BASELINE'
@@ -149,10 +150,12 @@ type EstimatedSlot = {
 
 type EstimatedEvent = {
   occurredAt: Date
+  closingConsumption?: boolean
   productId: string
   direction: 'IN' | 'OUT'
   quantity: number
   unitCost?: number
+  amount?: number
   monthBucket: boolean
 }
 
@@ -165,7 +168,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
   if (asOfDay && (Number.isNaN(asOfDay.getTime()) || asOfDay.toISOString().slice(0, 10) !== asOfDate)) {
     throw Object.assign(new Error('库存截止日期无效'), { statusCode: 400 })
   }
-  const asOfEnd = asOfDate ? new Date(`${asOfDate}T23:59:59.999Z`) : null
+  const asOfEnd = asOfDate ? new Date(businessDateOnlyRange(asOfDate).endExclusive.getTime() - 1) : null
   const snapshot = await prisma.inventorySnapshot.findFirst({
     where: { tenantId, storeId, ...(asOfDay ? { snapshotDate: { lte: asOfDay } } : {}) },
     orderBy: [{ snapshotDate: 'desc' }, { createdAt: 'desc' }],
@@ -176,9 +179,10 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
   const snapshotDateText = dateOnly(snapshot.snapshotDate)
   const openingDateText = dayjs(snapshotDateText).add(1, 'day').format('YYYY-MM-DD')
   const openingDate = new Date(`${openingDateText}T00:00:00.000Z`)
+  const openingTimestamp = businessDateOnlyRange(openingDate).start
   const monthStart = dayjs(asOfDate || undefined).startOf('month').toDate()
   const validReceiptStatuses = ['CONFIRMED', 'ACCOUNTED'] as const
-  const [receiptItems, consumptions, manualLossItems, postReceiptLossItems] = await Promise.all([
+  const [receiptItems, consumptions, manualLossItems, postReceiptLossItems, transferMovements] = await Promise.all([
     prisma.receiptItem.findMany({
       where: {
         receipt: {
@@ -202,7 +206,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
         lossClaim: {
           tenantId, storeId, isManual: true,
           status: { in: ['APPROVED', 'AUTO_APPROVED', 'RESOLVED'] },
-          createdAt: { gte: openingDate, ...(asOfEnd ? { lte: asOfEnd } : {}) },
+          createdAt: { gte: openingTimestamp, ...(asOfEnd ? { lte: asOfEnd } : {}) },
         },
       },
       select: { productId: true, lossQty: true, inventoryQuantity: true, lossClaim: { select: { createdAt: true } } },
@@ -212,11 +216,12 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
         lossClaim: {
           tenantId, storeId, isManual: false, payableBasis: 'GROSS_PENDING_CLAIM',
           status: { in: ['PENDING', 'APPROVED', 'AUTO_APPROVED', 'REJECTED', 'NEGOTIATING', 'RESOLVED'] },
-          createdAt: { gte: openingDate, ...(asOfEnd ? { lte: asOfEnd } : {}) },
+          createdAt: { gte: openingTimestamp, ...(asOfEnd ? { lte: asOfEnd } : {}) },
         },
       },
       select: { productId: true, lossQty: true, inventoryQuantity: true, lossClaim: { select: { createdAt: true } } },
     }),
+    (prisma as any).storeTransferMovement.findMany({ where: { tenantId, storeId, effectiveAt: { gte: openingTimestamp, ...(asOfEnd ? { lte: asOfEnd } : {}) }, quantityDelta: { not: 0 } } }),
   ])
 
   const slots = new Map<string, EstimatedSlot>()
@@ -249,6 +254,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
   normalizationPendingCount += receiptItems.filter(item => item.inventoryQuantity == null).length
 
   const events: EstimatedEvent[] = [
+    ...transferMovements.map((m: any) => ({ occurredAt: m.effectiveAt, productId: m.productId, direction: Number(m.quantityDelta) > 0 ? 'IN' as const : 'OUT' as const, quantity: Math.abs(Number(m.quantityDelta)), unitCost: Math.abs(Number(m.quantityDelta)) > 0 ? Math.abs(Number(m.valueDelta)) / Math.abs(Number(m.quantityDelta)) : Number(m.unitCost), amount: Math.abs(Number(m.valueDelta)), monthBucket: m.effectiveAt >= monthStart })),
     ...receiptItems.filter(item => item.inventoryQuantity != null).map(item => ({
       // Receipt.deliveryDate 与 BOM 消耗都是 DATE；同日先入库、后按闭店销量扣理论消耗。
       occurredAt: item.receipt.deliveryDate,
@@ -260,6 +266,7 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
     })),
     ...consumptions.map(item => ({
       occurredAt: item.date,
+      closingConsumption: true,
       productId: item.productId,
       direction: 'OUT' as const,
       quantity: Number(item.inventoryQuantity ?? item.quantity),
@@ -280,7 +287,8 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
       monthBucket: item.lossClaim.createdAt >= monthStart,
     })),
   ].sort((a, b) => {
-    const byTime = a.occurredAt.getTime() - b.occurredAt.getTime()
+    const byTime = (a.closingConsumption ? closingConsumptionTime(a.occurredAt) : a.occurredAt.getTime())
+      - (b.closingConsumption ? closingConsumptionTime(b.occurredAt) : b.occurredAt.getTime())
     if (byTime !== 0) return byTime
     if (a.direction === b.direction) return 0
     return a.direction === 'IN' ? -1 : 1
@@ -295,7 +303,9 @@ export async function estimatedStoreInventory(tenantId: string, storeId: string,
       current.avgUnitCost = next.averageCost
       if (event.monthBucket) current.monthIn += event.quantity
     } else {
+      const valueAfter = current.quantity * current.avgUnitCost - (event.amount ?? event.quantity * current.avgUnitCost)
       current.quantity -= event.quantity
+      if (event.amount != null) current.avgUnitCost = current.quantity > 0 ? valueAfter / current.quantity : 0
       if (event.monthBucket) current.monthOut += event.quantity
     }
     slots.set(event.productId, current)

@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly Dianjie %i backup at Shanghai Monday 02:30
+
+[Timer]
+OnCalendar=Mon *-*-* 02:30:00 Asia/Shanghai
+Persistent=true
+AccuracySec=1min
+Unit=dianjie-backup@%i.service
+
+[Install]
+WantedBy=timers.target

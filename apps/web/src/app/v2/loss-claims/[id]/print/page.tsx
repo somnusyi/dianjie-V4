@@ -1,6 +1,6 @@
 'use client'
 
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { useParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'

@@ -5,6 +5,7 @@
  * 数据来自 ProductUpstreamSource（与商品页「采购来源」、供应商页「供货商品」同一张表）。
  */
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
@@ -123,14 +124,14 @@ export default function SupplyRelationsPage() {
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-micro text-gray3">分类</span>
-            <select
+            <SearchableSelect searchWhenLong searchLabel="搜索分类"
               value={filter.category}
               onChange={e => setFilter(current => ({ ...current, category: e.target.value }))}
               className="rounded-cta border border-border bg-white px-3 py-2 text-body outline-none"
             >
               <option value="">全部分类</option>
               {categoryOptions.map(category => <option key={category} value={category}>{category}</option>)}
-            </select>
+            </SearchableSelect>
           </label>
         </div>
 
@@ -139,7 +140,7 @@ export default function SupplyRelationsPage() {
 
         {!loading && relations && view === 'supplier' && (
           supplierGroups.length === 0 ? (
-            <EmptyState icon="🔗" title="暂无供货关系" hint="到「供应商管理 → 供货商品」批量绑定，或在商品页维护采购来源" />
+            <EmptyState icon="🔗" title="暂无供货关系" hint="到「上游供应商 → 供货商品」绑定商品" />
           ) : (
             <div className="space-y-4">
               {supplierGroups.map(group => (

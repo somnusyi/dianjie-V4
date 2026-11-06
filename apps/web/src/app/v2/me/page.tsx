@@ -3,8 +3,9 @@
  * BOSS / FINANCE / SUPPLIER 等共用
  */
 'use client'
+import { RELEASE_VERSION } from '@/lib/release-version'
 import { useEffect, useState } from 'react'
-import { getUser, getToken, clearSession, routeForRole } from '@/lib/v2-auth'
+import { getUser, getToken, logoutSession, routeForRole } from '@/lib/v2-auth'
 import { ROLE_LABELS } from '@/components/v2/role-labels'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { notifyUser } from '@/lib/ui-dialogs'
@@ -40,8 +41,8 @@ export default function MePage() {
       body: '退出后需重新输入账号密码。',
       confirmLabel: '退出',
       tone: 'danger',
-      onConfirm: () => {
-        clearSession()
+      onConfirm: async () => {
+        await logoutSession()
         location.href = '/v2/login'
       },
     })
@@ -211,7 +212,7 @@ export default function MePage() {
             <div className="flex items-center px-3 py-3 opacity-60">
               <span className="w-8 h-8 rounded-md bg-bg flex items-center justify-center mr-3">⊞</span>
               <span className="flex-1 text-body">关于滇界</span>
-              <span className="text-micro text-gray3">v1.1</span>
+              <span className="text-micro text-gray3">v{RELEASE_VERSION}</span>
             </div>
           </li>
         </ul>

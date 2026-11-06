@@ -55,7 +55,7 @@ export function OrderTable() {
         <tbody>
           {rows.map(o => (
             <tr key={o.mtOrderId} className="border-t hover:bg-gray-50 cursor-pointer" onClick={() => setSelectedId(o.mtOrderId)}>
-              <td className="px-4 py-2">{o.checkoutTime ? new Date(o.checkoutTime).toLocaleString('zh-CN') : '-'}</td>
+              <td className="px-4 py-2">{o.checkoutTime ? new Date(o.checkoutTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '-'}</td>
               <td className="px-4 py-2 font-mono text-xs">{o.orderNo}</td>
               <td className="px-4 py-2">{o.channel}</td>
               <td className="px-4 py-2">{o.tableComment || '-'}</td>

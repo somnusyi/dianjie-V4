@@ -8,6 +8,7 @@
  * + 每张卡 80% 决策上下文
  */
 'use client'
+import { getToken } from '@/lib/v2-auth'
 import { useEffect, useState } from 'react'
 import { Chip, StoreAvatar, BottomNav } from '@/components/v2'
 
@@ -52,7 +53,7 @@ export default function BossApprovalsPage() {
   const [tab, setTab] = useState('approval')
 
   useEffect(() => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null
+    const token = typeof window !== 'undefined' ? getToken() : null
     if (!token) { setError('未登录'); setLoading(false); return }
     // 账号申请待审批数量 (跟单据审批分开, 但都在审批 tab 里)
     fetch('/api/applications/pending-count', { headers: { Authorization: `Bearer ${token}` } })
@@ -206,5 +207,5 @@ function timeAgo(iso: string): string {
   if (min < 60) return `${min} 分钟前`
   const h = Math.round(min / 60)
   if (h < 24) return `${h} 小时前`
-  return new Date(iso).toLocaleDateString('zh-CN')
+  return new Date(iso).toLocaleDateString('zh-CN', {timeZone:'Asia/Shanghai'})
 }

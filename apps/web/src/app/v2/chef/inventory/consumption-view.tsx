@@ -4,6 +4,7 @@
  * 口径: 消耗仅含已发布 BOM 的菜品扣减与门店报损; 日报未确认的日期无数据。
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 import { useEffect, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { EmptyState, SkeletonCard, FriendlyError } from '@/components/v2/skeleton'
@@ -41,8 +42,7 @@ type DetailResponse = {
 }
 
 function todayText() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return businessDayjs().format('YYYY-MM-DD')
 }
 
 function shiftDay(date: string, delta: number) {

@@ -27,6 +27,7 @@ type UploadBatch = {
 }
 
 export default function InternalProductHistoryPage() {
+  const [page,setPage]=useState(1),[total,setTotal]=useState(0)
   const [logs, setLogs] = useState<ProductLog[]>([])
   const [batches, setBatches] = useState<UploadBatch[]>([])
   const [tab, setTab] = useState<'operations' | 'uploads'>('operations')
@@ -34,17 +35,20 @@ export default function InternalProductHistoryPage() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    let active=true;setLoading(true);setError('')
     Promise.all([
-      apiFetch<ProductLog[]>('/api/products/history?limit=100'),
+      apiFetch<{items:ProductLog[];total:number}>(`/api/products/history?limit=50&page=${page}`),
       apiFetch<UploadBatch[]>('/api/products/batches'),
     ])
       .then(([operationRows, batchRows]) => {
-        setLogs(operationRows || [])
+        if(!active)return
+        setLogs(operationRows.items || []);setTotal(operationRows.total||0)
         setBatches(batchRows || [])
       })
-      .catch(reason => setError(String(reason?.message || reason)))
-      .finally(() => setLoading(false))
-  }, [])
+      .catch(reason => {if(active)setError(String(reason?.message || reason))})
+      .finally(() => {if(active)setLoading(false)})
+    return ()=>{active=false}
+  }, [page])
 
   return (
     <div className="min-h-screen bg-bg px-4 py-5 lg:px-8 lg:py-7">
@@ -60,7 +64,7 @@ export default function InternalProductHistoryPage() {
       <ProductToolTabs />
 
       <div className="my-4 flex gap-2">
-        <button onClick={() => setTab('operations')} className={`rounded-cta px-4 py-2 text-button ${tab === 'operations' ? 'bg-amber text-white' : 'border border-border bg-white'}`}>操作记录 {logs.length}</button>
+        <button onClick={() => setTab('operations')} className={`rounded-cta px-4 py-2 text-button ${tab === 'operations' ? 'bg-amber text-white' : 'border border-border bg-white'}`}>操作记录 {total}</button>
         <button onClick={() => setTab('uploads')} className={`rounded-cta px-4 py-2 text-button ${tab === 'uploads' ? 'bg-amber text-white' : 'border border-border bg-white'}`}>导入历史 {batches.length}</button>
       </div>
 
@@ -74,7 +78,7 @@ export default function InternalProductHistoryPage() {
             <tbody className="divide-y divide-border">
               {logs.map(log => (
                 <tr key={log.id}>
-                  <td className="px-4 py-3 font-num text-gray2">{new Date(log.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
+                  <td className="px-4 py-3 font-num text-gray2">{new Date(log.createdAt).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}</td>
                   <td className="px-4 py-3"><b>{log.operator}</b></td>
                   <td className="px-4 py-3">{log.action}</td>
                   <td className="px-4 py-3 text-gray2">{log.target || log.entityType}</td>
@@ -82,6 +86,7 @@ export default function InternalProductHistoryPage() {
               ))}
             </tbody>
           </table>
+          <div className="flex items-center justify-between border-t p-4"><span>共{total}条，当前{total ? (page-1)*50+1 : 0}—{Math.min(page*50,total)}条</span><div className="flex gap-3"><button disabled={loading||page===1} onClick={()=>setPage(value=>value-1)}>上一页</button><span>第{page}页</span><button disabled={loading||page*50>=total} onClick={()=>setPage(value=>value+1)}>下一页</button></div></div>
           {logs.length === 0 && <div className="py-16 text-center text-caption text-gray3">暂无商品操作记录</div>}
         </div>
       )}
@@ -93,7 +98,7 @@ export default function InternalProductHistoryPage() {
             <tbody className="divide-y divide-border">
               {batches.map(batch => (
                 <tr key={batch.id}>
-                  <td className="px-4 py-3 font-num text-gray2">{new Date(batch.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
+                  <td className="px-4 py-3 font-num text-gray2">{new Date(batch.createdAt).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}</td>
                   <td className="px-4 py-3"><b>{batch.filename || '未命名导入'}</b></td>
                   <td className="px-4 py-3 font-num">{batch.totalRows}</td>
                   <td className="px-4 py-3 font-num text-green-fg">{batch.createdCount}</td>

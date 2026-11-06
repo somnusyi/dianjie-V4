@@ -1,9 +1,12 @@
-import dayjs from 'dayjs'
 import { Prisma, prisma } from '@dianjie/db'
 import { convertQuantityToInventoryUnit, purchasePriceToInventoryUnitCost } from './inventoryUnits'
 import { productInventoryUnitCost } from './unitContractGuard'
+import { businessDateOnlyRange } from '../lib/businessTime'
 
 type CostSlot = { quantity: number; averageCost: number }
+
+// StockConsumption.date is a DATE: its theoretical BOM usage closes that day.
+export const closingConsumptionTime = (date: Date) => businessDateOnlyRange(date).endExclusive.getTime() - 1
 
 export function applyReceiptToCostSlot(current: CostSlot, quantity: number, unitCost: number): CostSlot {
   if (!(quantity > 0)) return current
@@ -35,7 +38,13 @@ export async function revalueStoreConsumptionCosts(tenantId: string, storeId: st
     include: { items: { include: { product: true } } },
   })
   if (!snapshot) return { status: 'NO_BASELINE' as const, updated: 0, totalCost: 0 }
-  const openingDate = dayjs(snapshot.snapshotDate).add(1, 'day').startOf('day').toDate()
+  // Prisma DATE values encode a calendar date at UTC midnight. Advancing via
+  // the host's local timezone can replay movements already included in the
+  // count. Match the date-only boundary used by the inventory/transfer readers.
+  const openingDate = new Date(snapshot.snapshotDate)
+  openingDate.setUTCDate(openingDate.getUTCDate() + 1)
+  openingDate.setUTCHours(0, 0, 0, 0)
+  const openingTimestamp = businessDateOnlyRange(openingDate).start
   const slots = new Map<string, CostSlot>()
   for (const item of snapshot.items) {
     if (!item.productId || !item.product) continue
@@ -60,7 +69,7 @@ export async function revalueStoreConsumptionCosts(tenantId: string, storeId: st
     slots.set(item.productId, current)
   }
 
-  const [receipts, consumptions, manualLosses] = await Promise.all([
+  const [receipts, consumptions, manualLosses, transferMovements] = await Promise.all([
     prisma.receiptItem.findMany({
       where: {
         receipt: {
@@ -79,18 +88,22 @@ export async function revalueStoreConsumptionCosts(tenantId: string, storeId: st
         lossClaim: {
           tenantId, storeId, isManual: true,
           status: { in: ['APPROVED', 'AUTO_APPROVED', 'RESOLVED'] },
-          createdAt: { gte: openingDate },
+          createdAt: { gte: openingTimestamp },
         },
       },
       include: { product: true, lossClaim: { select: { createdAt: true } } },
     }),
+    (prisma as any).storeTransferMovement.findMany({ where: { tenantId, storeId, effectiveAt: { gte: openingTimestamp }, quantityDelta: { not: 0 } }, include: { product: true } }),
   ])
   const events = [
+    ...transferMovements.map((item: any) => ({ kind: 'TRANSFER' as const, at: item.effectiveAt, item })),
     ...receipts.map(item => ({ kind: 'IN' as const, at: item.receipt.deliveryDate, item })),
     ...consumptions.map(item => ({ kind: 'OUT' as const, at: item.date, item })),
     ...manualLosses.map(item => ({ kind: 'LOSS' as const, at: item.lossClaim.createdAt, item })),
   ].sort((left, right) => {
-    const byTime = left.at.getTime() - right.at.getTime()
+    const leftTime = left.kind === 'OUT' ? closingConsumptionTime(left.at) : left.at.getTime()
+    const rightTime = right.kind === 'OUT' ? closingConsumptionTime(right.at) : right.at.getTime()
+    const byTime = leftTime - rightTime
     if (byTime !== 0) return byTime
     if (left.kind === right.kind) return 0
     return left.kind === 'IN' ? -1 : 1
@@ -100,7 +113,13 @@ export async function revalueStoreConsumptionCosts(tenantId: string, storeId: st
   for (const event of events) {
     const product = event.item.product
     const current = slots.get(product.id) || { quantity: 0, averageCost: 0 }
-    if (event.kind === 'IN') {
+    if (event.kind === 'TRANSFER') {
+      const q = Number(event.item.quantityDelta), v = Number(event.item.valueDelta)
+      const nextQuantity = current.quantity + q
+      const nextValue = current.quantity * current.averageCost + v
+      current.quantity = nextQuantity
+      current.averageCost = nextQuantity > 0 ? nextValue / nextQuantity : 0
+    } else if (event.kind === 'IN') {
       const quantity = Number(event.item.inventoryQuantity ?? 0)
       const unitCost = Number(event.item.inventoryUnitCostSnapshot
         ?? purchasePriceToInventoryUnitCost({ purchaseUnitPrice: Number(event.item.unitPrice), product })

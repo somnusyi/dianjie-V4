@@ -89,7 +89,7 @@ async function resolveVoucherFailures(opts: CreateVoucherOpts): Promise<void> {
  * 编号和凭证必须在同一个数据库事务中创建。BusinessSequence 的唯一键与
  * upsert increment 负责串行分配号码；历史最大号仅用于首次建立/修复序列下限。
  */
-async function nextVoucherNo(
+export async function nextVoucherNo(
   tx: Prisma.TransactionClient,
   tenantId: string,
   date: Date,

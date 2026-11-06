@@ -181,7 +181,7 @@ export default function ManagerHomePage() {
 function InventoryOverviewCard({ inventory }: { inventory: NonNullable<ReturnType<typeof useDashboard>['data']>['inventorySummary'] }) {
   const available = inventory?.status === 'AVAILABLE'
   const asOf = inventory?.asOf
-    ? new Date(inventory.asOf).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    ? new Date(inventory.asOf).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
     : null
 
   return (

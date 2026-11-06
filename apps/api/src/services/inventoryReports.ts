@@ -1,21 +1,22 @@
+import { summarizeNetReportCosts, netMovementReportCells } from './inventoryNetReportProjection'
+import { readInventoryNetCosts, readInventoryNetCostHistory } from './inventoryNetCostRead'
 import { Prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { inventoryColumns, numberReportRows } from './reportFieldContract'
 import { loadInventorySupplement, reportTimestamp } from './inventoryReportSupplement'
 import { businessDateKey, businessDateRangeInclusive } from '../lib/businessTime'
-import { projectDeliveryMovementEconomics } from './deliveryProfitProjection'
 
 export const reportIds = ['realtime', 'movements', 'summary', 'other-summary', 'transfer-detail', 'transfer-summary', 'stagnant', 'alerts'] as const
 export type ReportId = typeof reportIds[number]
 export type ReportRow = Record<string, string | number | null>
 export type ReportColumn = { key: string; label: string; kind: 'text' | 'number'; group?: string }
 export const reportDefinitions: Record<ReportId, { title: string; note: string; columns: ReportColumn[] }> = {
-  realtime: { title: '实时库存查询表', note: '数量为库存基准单位，换算率为 1；库存金额与库存均价按仓库移动平均成本展示。预计入库按未验收采购量，预计出库为预占量；机构编码尚未维护。', columns: inventoryColumns('realtime') },
-  movements: { title: '出入库明细表', note: '基准数量为库存单位，业务数量为单据原单位。金额沿用不含税口径，仅有冻结税率依据时展示；未记录的折扣、结算、审核与退返货差异不推算。预占与释放不计实物出入库。', columns: inventoryColumns('movements') },
+  realtime: { title: '实时库存查询表', note: '数量为库存基准单位，换算率为 1；库存金额与库存均价按可追溯净成本展示；历史成本依据不全时待核算。预计入库按未验收采购量，预计出库为预占量；机构编码尚未维护。', columns: inventoryColumns('realtime') },
+  movements: { title: '出入库明细表', note: '基准数量为库存单位，业务数量为单据原单位。库存金额和均价按可靠净成本展示；出库结算金额和单价为订单冻结的原合同结算金额（可含税），因未冻结收入税基，利润待核算。未记录的折扣、审核与退返货差异不推算。预占与释放不计实物出入库。', columns: inventoryColumns('movements') },
   summary: { title: '出入库汇总表', note: '成本按库存台账口径，期末=期初+入库−出库；均价=对应成本金额/数量，数量为零时显示“—”。类型筛选选取发生该类型的物品，余额包含全部类型。', columns: inventoryColumns('summary') },
-  'other-summary': { title: '其他出入库汇总表', note: '汇总手工出入库、盘点、报损及其冲销，按物品、仓库、基准单位、出入库类型和原因分组。入库为正、出库为负；金额按库存台账成本口径。', columns: inventoryColumns('other-summary') },
-  'transfer-detail': { title: '机构间调拨明细表', note: '已发货/已收货的门店调拨登记，数量为登记时冻结的库存单位，金额为登记价格快照。未记录批次、门店仓库、公司归属和独立审核时间时显示“—”；登记不改写门店盘点库存。', columns: inventoryColumns('transfer-detail') },
-  'transfer-summary': { title: '机构间调拨汇总表', note: '按物品、单位和调出/调入门店汇总已发货/已收货登记；均价按数量加权，调入与调出结算金额均采用登记结算金额。', columns: inventoryColumns('transfer-summary') },
+  'other-summary': { title: '其他出入库汇总表', note: '汇总手工出入库、盘点、报损及其冲销，按物品、仓库、基准单位、出入库类型和原因分组。入库为正、出库为负；金额按同一库存净成本来源汇总，缺少可靠依据时待核算。', columns: inventoryColumns('other-summary') },
+  'transfer-detail': { title: '机构间调拨明细表', note: '已发货及后续收货的门店调拨，数量为冻结的库存单位，金额按发货时冻结的门店成本和实际收货数量计算。发货扣减调出门店库存，实收计入调入门店，完好退回加回调出门店；流水保留，原盘点快照不改写。未记录批次、门店仓库、公司归属和独立审核时间时显示“—”。', columns: inventoryColumns('transfer-detail') },
+  'transfer-summary': { title: '机构间调拨汇总表', note: '按物品、单位和调出/调入门店汇总实际发货；调出金额采用发货时冻结成本，调入金额只累计实收，待处理差异不计入调入金额；调入均价按实收金额除以实收数量，尚未实收时显示“—”。', columns: inventoryColumns('transfer-summary') },
   stagnant: { title: '库存呆滞品查询表', note: '展示当前正库存。已滞留天数按最近出库日计算，无出库记录时按最早入库日计算。所有商品统一满30天提醒；旧配置和查询参数不能覆盖，只提醒，不自动移库或出库。', columns: inventoryColumns('stagnant') },
   alerts: { title: '库存预警表', note: '当前库存、上下限均使用仓库库存基准单位。优先读取按仓库和商品配置的规则；未建规则时仅将已核验的旧安全库存作兼容回退。', columns: inventoryColumns('alerts') },
 }
@@ -33,7 +34,7 @@ export const reportQuerySchema = z.object({
   page: z.coerce.number().int().min(1).max(100000).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(20), sort: text, direction: z.enum(['asc', 'desc']).default('asc'), export: z.enum(['0', '1']).default('0'),
 }).refine(q => q.start <= q.end, '开始日期不能晚于结束日期')
 export type ReportQuery = z.infer<typeof reportQuerySchema>
-export const movementLabels: Record<string, string> = { OPENING_BALANCE: '期初建账', MANUAL_INBOUND: '手工入库', UPSTREAM_RECEIPT: '采购入库', ORDER_OUTBOUND: '出库', ADJUSTMENT: '库存调整', LOSS: '报损', REVERSAL: '冲销' }
+export const movementLabels: Record<string, string> = { OPENING_BALANCE: '期初建账', MANUAL_INBOUND: '手工入库', UPSTREAM_RECEIPT: '采购入库', PURCHASE_RETURN: '采购退货', ORDER_OUTBOUND: '出库', ADJUSTMENT: '库存调整', LOSS: '报损', REVERSAL: '冲销' }
 const sourceLabels: Record<string, string> = { WarehouseManualInbound: '手工入库单', WarehouseBatchManualInbound: '批量入库单', WarehouseManualOutbound: '手工出库单', WarehouseSelfLoss: '总仓自损单', WarehousePhysicalCount: '库存盘点单', WarehouseStocktake: '总仓盘点单', WarehouseManualInboundReversal: '入库冲销单', WarehouseDocValueAdjust: '单据金额调整', MeituanDailyPackage: '每日采购数据包', UpstreamReceiptReversal: '采购收货冲销', UpstreamArrivalClaim: '采购到货差异', LossClaimReversal: '报损冲销', DeliveryOrderShipCancel: '配送撤销', ReceiptRejectionReversal: '拒收冲销' }
 const dec = (n: any) => new Prisma.Decimal(n ?? 0)
 const num = (n: any) => Number(n ?? 0)
@@ -60,13 +61,14 @@ export function aggregateTransfers(rows: ReportRow[]) {
   const groups = new Map<string, ReportRow>()
   for (const r of rows) {
     const key = JSON.stringify([r.productId, r.fromStoreId, r.targetId, r.unit])
-    const g = groups.get(key) || { ...r, transferQty: 0, outAmount: 0, inAmount: 0 }
+    const g = groups.get(key) || { ...r, transferQty: 0, receivedQty: 0, outAmount: 0, inAmount: 0 }
     g.transferQty = num(dec(g.transferQty).plus(r.transferQty!))
+    g.receivedQty = num(dec(g.receivedQty).plus(r.receivedQty ?? 0))
     g.outAmount = num(dec(g.outAmount).plus(r.outAmount!))
     g.inAmount = g.inAmount == null || r.inAmount == null ? null : num(dec(g.inAmount).plus(r.inAmount))
     groups.set(key, g)
   }
-  return [...groups.values()].map(g => ({ ...g, cost: num(dec(g.outAmount).div(g.transferQty!)), settlement: g.inAmount == null ? null : num(dec(g.inAmount).div(g.transferQty!)) }))
+  return [...groups.values()].map(g => ({ ...g, cost: num(dec(g.outAmount).div(g.transferQty!)), settlement: g.inAmount == null || !dec(g.receivedQty).gt(0) ? null : num(dec(g.inAmount).div(g.receivedQty!)) }))
 }
 
 /** All source reads share a repeatable-read transaction; list and export use this same projection. */
@@ -86,7 +88,15 @@ export async function loadInventoryReport(tx: Prisma.TransactionClient, tenantId
     const incoming = bounded(await tx.upstreamPurchaseOrderLine.findMany({ where: { tenantId, product, purchaseOrder: { tenantId, ...(q.warehouseId ? { warehouseId: q.warehouseId } : {}), status: { in: ['SUBMITTED_TO_SUPPLIER', 'CHANGE_PROPOSED', 'SUPPLIER_ACCEPTED', 'PARTIALLY_SHIPPED', 'SHIPPED', 'PARTIALLY_RECEIVED'] } } }, include: { product: true, purchaseOrder: { select: { warehouseId: true, warehouse: true } } }, take: LIMIT + 1 }))
     const expected = new Map<string, Prisma.Decimal>()
     for (const l of incoming) { const key = `${l.purchaseOrder.warehouseId}/${l.productId}/${l.inventoryUnit}`; expected.set(key, (expected.get(key) || dec(0)).plus(Prisma.Decimal.max(0, (l.confirmedQty ?? l.orderedQty).minus(l.receivedQty)).mul(l.inventoryUnitsPerPurchaseUnit))) }
-    rows = balances.map(b => ({ ...base(b.product, b.warehouse, b.inventoryUnit), conversion: 1, netAmount: null, netPrice: null, qty: num(b.physicalQty), amount: num(b.inventoryValue), price: num(b.averageUnitCost), expectedIn: num(expected.get(`${b.warehouseId}/${b.productId}/${b.inventoryUnit}`)), expectedOut: num(b.reservedQty) }))
+    const netCosts = await readInventoryNetCosts(tx, tenantId, balances)
+    rows = balances.map(b => {
+      const cost = netCosts.get(`${b.warehouseId}/${b.productId}/${b.inventoryUnit}`)
+      return { ...base(b.product, b.warehouse, b.inventoryUnit), conversion: 1,
+        netAmount: cost?.netAmount == null ? null : num(cost.netAmount), netPrice: cost?.netPrice == null ? null : num(cost.netPrice),
+        qty: num(b.physicalQty), amount: cost?.netAmount == null ? null : num(cost.netAmount), price: cost?.netPrice == null ? null : num(cost.netPrice),
+        costStatus: cost?.status || 'PENDING_COST',
+        expectedIn: num(expected.get(`${b.warehouseId}/${b.productId}/${b.inventoryUnit}`)), expectedOut: num(b.reservedQty) }
+    })
     const present = new Set(balances.map(b => `${b.warehouseId}/${b.productId}/${b.inventoryUnit}`))
     for (const l of incoming) {
       const key = `${l.purchaseOrder.warehouseId}/${l.productId}/${l.inventoryUnit}`
@@ -114,16 +124,24 @@ export async function loadInventoryReport(tx: Prisma.TransactionClient, tenantId
       g[`${prefix}Amount`] = num(dec(g[`${prefix}Amount`]).plus(inbound ? m.valueDelta : m.valueDelta.negated()))
       groups.set(k, g)
     }
-    rows = [...groups].filter(([k]) => !q.type || matching.has(k)).map(([, g]) => ({ ...g, closingQty: num(dec(g.openingQty).plus(g.inQty!).minus(g.outQty!)), closingAmount: num(dec(g.openingAmount).plus(g.inAmount!).minus(g.outAmount!)) }))
+    const costHistory = await readInventoryNetCostHistory(tx, tenantId, [...groups.values()].map(g => ({ warehouseId: String(g.warehouseId), productId: String(g.productId), inventoryUnit: String(g.unit) })))
+    rows = [...groups].filter(([k]) => !q.type || matching.has(k)).map(([k, g]) => {
+      const history = costHistory.get(k)
+      const costs = history ? summarizeNetReportCosts(history.movements, range.start, range.endExclusive)
+        : { openingAmount: null, inAmount: null, outAmount: null, closingAmount: null, costStatus: 'PENDING_COST' }
+      return { ...g, ...costs, closingQty: num(dec(g.openingQty).plus(g.inQty!).minus(g.outQty!)) }
+    })
   } else if (id.startsWith('transfer')) {
     const transfers = bounded(await tx.storeTransferItem.findMany({ where: { product: { tenantId }, ...(q.keyword ? { OR: [{ name: { contains: q.keyword, mode: 'insensitive' } }, { code: { contains: q.keyword, mode: 'insensitive' } }] } : {}), ...(q.category ? { category: q.category } : {}),
-      transfer: { tenantId, status: { in: ['SHIPPED', 'RECEIVED'] }, transferDate: { gte: new Date(`${q.start}T00:00:00Z`), lte: new Date(`${q.end}T00:00:00Z`) }, ...(q.org ? { fromStore: { name: q.org } } : {}), ...(q.target ? { toStore: { name: q.target } } : {}) },
+      transfer: { tenantId, status: { in: ['SHIPPED', 'PARTIALLY_RECEIVED', 'RECEIVED'] }, transferDate: { gte: new Date(`${q.start}T00:00:00Z`), lte: new Date(`${q.end}T00:00:00Z`) }, ...(q.org ? { fromStore: { name: q.org } } : {}), ...(q.target ? { toStore: { name: q.target } } : {}) },
     }, include: { transfer: { include: { fromStore: true, toStore: true } } }, take: LIMIT + 1 }))
-    rows = transfers.map(l => ({ productId: l.productId, name: l.name, code: l.code, spec: l.spec, category: l.category, unit: l.unit, org: l.transfer.fromStore.name, fromStoreId: l.transfer.fromStoreId, warehouse: null, warehouseId: null, target: l.transfer.toStore.name, targetId: l.transfer.toStoreId, targetWarehouse: null, status: l.transfer.status === 'RECEIVED' ? '已收货' : '已发货', receivedDate: l.transfer.receivedAt ? businessDateKey(l.transfer.receivedAt) : null, note: l.transfer.note, doc: l.transfer.no, date: businessDateKey(l.transfer.transferDate), transferQty: num(l.quantity), cost: num(l.cost), settlement: num(l.settlement), outAmount: num(l.outAmount), inAmount: num(l.inAmount) }))
+    rows = transfers.map(l => ({ productId: l.productId, name: l.name, code: l.code, spec: l.spec, category: l.category, unit: l.unit, org: l.transfer.fromStore.name, fromStoreId: l.transfer.fromStoreId, warehouse: null, warehouseId: null, target: l.transfer.toStore.name, targetId: l.transfer.toStoreId, targetWarehouse: null, status: l.transfer.status === 'RECEIVED' ? '已闭环' : l.transfer.status === 'PARTIALLY_RECEIVED' ? '差异待处理' : '已发货', receivedDate: l.transfer.receivedAt ? businessDateKey(l.transfer.receivedAt) : null, note: l.transfer.note, doc: l.transfer.no, date: businessDateKey(l.transfer.transferDate), transferQty: num(l.quantity), receivedQty: num(l.receivedQuantity), cost: num(l.cost), settlement: num(l.settlement), outAmount: num(l.outAmount), inAmount: num(l.inAmount) }))
     if (id === 'transfer-summary') rows = aggregateTransfers(rows)
     rows = rows.map(r => ({ ...r, baseUnit: r.unit, baseQuantity: r.transferQty, outSettlementAmount: r.inAmount, inPrice: r.settlement }))
   } else {
-    const movements = bounded(await tx.warehouseLedgerMovement.findMany({ where: { ...scope, effectiveAt: { gte: range.start, lt: range.endExclusive }, type: { notIn: ['ORDER_RESERVED', 'ORDER_RELEASED'] } }, include: { product: true, warehouse: true, supplier: true, docLines: { where: { tenantId }, include: { doc: true } }, upstreamReceiptLine: { include: { receipt: { include: { purchaseOrder: true } }, purchaseOrderLine: true } } }, orderBy: [{ effectiveAt: 'desc' }, { id: 'asc' }], take: LIMIT + 1 }))
+    const movements = bounded(await tx.warehouseLedgerMovement.findMany({ where: { ...scope, effectiveAt: { gte: range.start, lt: range.endExclusive }, type: { notIn: ['ORDER_RESERVED', 'ORDER_RELEASED'] } }, include: { product: true, warehouse: true, supplier: true, upstreamPurchaseReturnLine: { include: { purchaseReturn: true, receiptLine: { include: { receipt: true } } } }, docLines: { where: { tenantId }, include: { doc: true } }, upstreamReceiptLine: { include: { receipt: { include: { purchaseOrder: true } }, purchaseOrderLine: true } } }, orderBy: [{ effectiveAt: 'desc' }, { id: 'asc' }], take: LIMIT + 1 }))
+    const netHistory = await readInventoryNetCostHistory(tx, tenantId, [...new Map(movements.map(m => [`${m.warehouseId}/${m.productId}/${m.inventoryUnit}`, { warehouseId: m.warehouseId, productId: m.productId, inventoryUnit: m.inventoryUnit }])).values()])
+    const netByMovement = new Map([...netHistory.values()].flatMap(h => h.movements.map(m => [m.id, m.netValueDelta] as const)))
     const deliveryReversalSources = new Set(['DeliveryOrderShipCancel', 'ReceiptRejectionReversal', 'LossClaimReversal'])
     const reversalOriginIds = movements
       .filter(m => m.type === 'REVERSAL' && deliveryReversalSources.has(m.sourceType) && Boolean(m.sourceLineId))
@@ -164,13 +182,15 @@ export async function loadInventoryReport(tx: Prisma.TransactionClient, tenantId
       const deliverySettlementAmount = deliveryDirection && deliveryUnitPrice && !deliveryQuantity.isNegative() && !deliveryUnitPrice.isNegative()
         ? deliveryQuantity.mul(deliveryUnitPrice)
         : null
-      const deliveryEconomics = deliveryDirection && deliveryItem
-        ? projectDeliveryMovementEconomics({ direction: deliveryDirection, quantity: m.originalQuantity, valueDelta: m.valueDelta, unitPrice: deliveryItem.unitPriceSnapshot })
-        : null
       const receiptLine = m.upstreamReceiptLine?.tenantId === tenantId ? m.upstreamReceiptLine : null
+      const returned = m.upstreamPurchaseReturnLine
+      const returnLine = m.sourceType === 'UpstreamPurchaseReturn' && returned?.tenantId === tenantId
+        && returned.purchaseReturn.tenantId === tenantId && returned.purchaseReturn.warehouseId === m.warehouseId
+        && returned.returnId === m.sourceId && returned.productId === m.productId
+        && returned.receiptLine.tenantId === tenantId && returned.receiptLine.receipt.tenantId === tenantId ? returned : null
       const doc = m.docLines[0]?.doc
       const inbound = m.physicalDelta.gt(0) || m.physicalDelta.eq(0) && m.valueDelta.gte(0)
-      // Preserve tax-exclusive semantics. No frozen tax basis => unavailable, never cost-as-net.
+      // Settlement and net cost have distinct meanings when the source contract includes tax.
       const divisor = receiptLine ? receiptLine.receipt.purchaseOrder.taxInclusive ? dec(1).plus(receiptLine.purchaseOrderLine.taxRate) : dec(1) : null
       const net = divisor ? m.valueDelta.abs().div(divisor) : null
       const settlement = divisor && receiptLine ? receiptLine.payableAmount.div(divisor) : null
@@ -178,9 +198,9 @@ export async function loadInventoryReport(tx: Prisma.TransactionClient, tenantId
       const quantity = absQty.eq(0) ? dec(0) : businessQty
       const createdById = doc?.createdById || receiptLine?.receipt.createdById || m.createdById || deliveryContext?.createdById
       rows.push({ ...base(m.product, m.warehouse, m.originalUnit), id: m.id, baseUnit: m.inventoryUnit,
-        doc: doc?.docNo || receiptLine?.receipt.no || d?.no || (reversalOrigin ? m.sourceId : null), type: movementLabels[m.type] || m.type,
-        upstream: receiptLine?.receipt.purchaseOrder.no || deliveryContext?.purchaseOrder.no || null,
-        upstreamType: receiptLine ? '上游采购单' : reversalOrigin ? sourceLabels[m.sourceType] : d ? '门店订货单' : sourceLabels[m.sourceType] || '其他库存单据',
+        doc: doc?.docNo || returnLine?.purchaseReturn.no || receiptLine?.receipt.no || d?.no || (reversalOrigin ? m.sourceId : null), type: movementLabels[m.type] || m.type,
+        upstream: returnLine?.receiptLine.receipt.no || receiptLine?.receipt.purchaseOrder.no || deliveryContext?.purchaseOrder.no || null,
+        upstreamType: returnLine ? '上游收货单' : receiptLine ? '上游采购单' : reversalOrigin ? sourceLabels[m.sourceType] : d ? '门店订货单' : sourceLabels[m.sourceType] || '其他库存单据',
         reason: doc?.reason || (reversalOrigin ? sourceLabels[m.sourceType] : null) || movementLabels[m.type] || m.type, adjustment: ['ADJUSTMENT', 'REVERSAL'].includes(m.type) ? '是' : '否',
         counterparty: deliveryContext?.store.name || m.supplier?.name || m.sourceName || null, counterpartyCode: deliveryContext?.store.no || m.supplier?.no || null,
         upstreamDate: receiptLine ? businessDateKey(receiptLine.receipt.purchaseOrder.createdAt) : deliveryContext ? businessDateKey(deliveryContext.purchaseOrder.createdAt) : null,
@@ -189,21 +209,19 @@ export async function loadInventoryReport(tx: Prisma.TransactionClient, tenantId
         reviewedAt: reportTimestamp(doc?.reviewStatus === 'REVIEWED' ? doc.confirmedAt : receiptLine?.receipt.reviewedAt),
         inBaseQty: inbound ? num(absQty) : 0, outBaseQty: inbound ? 0 : num(absQty),
         inQty: inbound ? num(quantity) : 0, outQty: inbound ? 0 : num(quantity),
-        inAmount: inbound ? deliveryDirection === 'REVERSAL' ? deliveryEconomics ? num(deliveryEconomics.costAmount) : null : net == null ? null : num(net) : 0,
-        outAmount: inbound ? 0 : deliveryDirection === 'OUTBOUND' ? deliveryEconomics ? num(deliveryEconomics.costAmount) : null : net == null ? null : num(net),
-        inPrice: inbound ? deliveryDirection === 'REVERSAL' ? deliveryEconomics && !quantity.eq(0) ? num(deliveryEconomics.costAmount.div(quantity)) : null : net != null && !quantity.eq(0) ? num(net.div(quantity)) : null : null,
-        outPrice: !inbound ? deliveryDirection === 'OUTBOUND' ? deliveryEconomics && !quantity.eq(0) ? num(deliveryEconomics.costAmount.div(quantity)) : null : net != null && !quantity.eq(0) ? num(net.div(quantity)) : null : null,
+        ...netMovementReportCells(netByMovement.get(m.id) ?? null, inbound, quantity),
         inSettlementAmount: inbound && settlement != null ? num(settlement) : null,
         inSettlementPrice: inbound && settlement != null && !quantity.eq(0) ? num(settlement.div(quantity)) : null,
         outSettlementAmount: deliveryDirection === 'OUTBOUND' && deliverySettlementAmount ? num(deliverySettlementAmount) : deliveryDirection === 'REVERSAL' && deliverySettlementAmount ? num(deliverySettlementAmount.negated()) : null,
         outSettlementPrice: deliveryDirection && deliverySettlementAmount ? num(deliveryUnitPrice!) : null,
-        outProfit: deliveryDirection === 'OUTBOUND' && deliveryEconomics ? num(deliveryEconomics.profit) : deliveryDirection === 'REVERSAL' && deliveryEconomics ? num(deliveryEconomics.profit.negated()) : null,
+        outProfit: null,
+        profitStatus: deliveryDirection && deliveryItem ? 'PENDING_TAX_BASIS' : null,
         note: m.docLines[0]?.note || doc?.note || receiptLine?.receipt.note || m.note || null,
       })
     }
     if (id === 'movements' && q.type) rows = rows.filter(r => r.type === q.type)
   }
-  if (id === 'summary') rows = rows.map(r => ({ ...r, ...Object.fromEntries(['opening', 'in', 'out', 'closing'].map(p => [p + 'Price', !r[p + 'Qty'] ? null : num(dec(r[p + 'Amount']).div(r[p + 'Qty']!))])) }))
+  if (id === 'summary') rows = rows.map(r => ({ ...r, ...Object.fromEntries(['opening', 'in', 'out', 'closing'].map(p => [p + 'Price', !r[p + 'Qty'] || r[p + 'Amount'] == null ? null : num(dec(r[p + 'Amount']).div(r[p + 'Qty']!))])) }))
   rows = filterReportRows(rows, q)
   const definition = reportDefinitions[id]
   const sort = q.sort !== 'seq' && definition.columns.some(c => c.key === q.sort) ? q.sort : id === 'movements' || id === 'transfer-detail' ? 'date' : 'code'

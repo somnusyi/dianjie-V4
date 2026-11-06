@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { ErrorScreen } from '@/components/v2/use-dashboard'
 import { apiFetch } from '@/lib/v2-auth'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 
 type Bucket = { count: number; total: number; label: string }
 type AgingItem = {
@@ -36,8 +36,8 @@ const BUCKET_TONE: Record<string, 'gray' | 'amber' | 'orange' | 'red'> = {
 }
 const BUCKET_ORDER = ['d90plus', 'd60_90', 'd30_60', 'd0_30', 'notDue']
 
-function fmt(n: number, d = 0) {
-  return n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
+function fmt(n: number, d = 2) {
+  return n.toLocaleString('zh-CN', { minimumFractionDigits: d, maximumFractionDigits: d })
 }
 
 export default function FinanceAgingPage() {

@@ -11,7 +11,7 @@ import { useEffect, useState } from 'react'
 import { BottomNav, Chip } from '@/components/v2'
 import { GlanceStrip } from '@/components/v2/glance-strip'
 import { apiFetch, getUser } from '@/lib/v2-auth'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 
 type LossClaim = {
   id: string; no: string; status: string

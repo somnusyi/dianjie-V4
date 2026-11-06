@@ -1,3 +1,4 @@
+import { safeProviderCallLog } from '../lib/provider-log-safety'
 import type { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import { z } from 'zod'
@@ -120,7 +121,7 @@ export const meituanAdminRoutes: FastifyPluginAsync = async (app) => {
 
     return {
       items: items.map(c => ({
-        ...c,
+        ...safeProviderCallLog(c),
         hasNote: !!c.note,
         note: undefined,
         severityZh: c.errorSeverity ? ({ P0: '严重', P1: '一般', P2: '可恢复' } as Record<string,string>)[c.errorSeverity] || c.errorSeverity : null,
@@ -163,7 +164,8 @@ export const meituanAdminRoutes: FastifyPluginAsync = async (app) => {
     }
     const header = ['id','createdAt','apiPath','apiTitle','mode','httpStatus','httpDurationMs','responseCode','responseMsg','traceId','errorSeverity','correlationId']
     const lines = [header.join(',')]
-    for (const c of calls) {
+    for (const original of calls) {
+      const c = safeProviderCallLog(original)
       lines.push(header.map(k => escape((c as any)[k])).join(','))
     }
     const csv = '\uFEFF' + lines.join('\n')
@@ -184,7 +186,7 @@ export const meituanAdminRoutes: FastifyPluginAsync = async (app) => {
     if (!call) return reply.status(404).send({ error: 'callLog not found' })
 
     const meta = classifyMeituanError(call.responseCode)
-    return { ...call, severityMeta: meta }
+    return { ...safeProviderCallLog(call), severityMeta: meta }
   })
 
   // ── GET /api/admin/meituan/calls/:id/ticket-template ──
@@ -197,7 +199,7 @@ export const meituanAdminRoutes: FastifyPluginAsync = async (app) => {
     })
     if (!call) return reply.status(404).send({ error: 'callLog not found' })
 
-    const md = generateTicketTemplate(call)
+    const md = generateTicketTemplate(safeProviderCallLog(call))
     reply.header('Content-Type', 'text/markdown; charset=utf-8')
     return md
   })

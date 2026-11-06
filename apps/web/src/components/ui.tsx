@@ -240,8 +240,8 @@ export function useToast() {
 
 // ── 格式化金额 ────────────────────────────────────────
 export const fmt = (n: number | string) => `¥${Number(n).toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`
-export const fmtDate = (d: string | Date) => new Date(d).toLocaleDateString('zh-CN')
-export const fmtDatetime = (d: string | Date) => new Date(d).toLocaleString('zh-CN', { hour12: false })
+export const fmtDate = (d: string | Date) => new Date(d).toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' })
+export const fmtDatetime = (d: string | Date) => new Date(d).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
 
 // ── 分页 ─────────────────────────────────────────────
 export function Pagination({ page, pageSize, total, onChange }: {

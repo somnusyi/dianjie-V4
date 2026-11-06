@@ -11,7 +11,9 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
+import { BUSINESS_TZ } from '../lib/businessTime'
 import { isInternalSupplyChainRole } from '../lib/internal-supply-chain-access'
+import { isStoreScoped, resolveActiveStore } from '../lib/auth-scope'
 import { estimatedStoreInventory, type StoreInventorySummary } from '../services/storeInventory'
 
 const fmtMoney = (n: number) => '¥' + Math.round(n).toLocaleString()
@@ -53,7 +55,8 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
   const auth = { preHandler: [(app as any).authenticate] }
 
   app.get('/me', auth, async (req: any, reply) => {
-    const { userId, tenantId, role, storeId, supplierId } = req.user
+    const { userId, tenantId, role, supplierId } = req.user
+    let storeId = req.user.storeId
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -108,13 +111,27 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
       })
     }
 
-    const todayLocal = dayjs()
+    // The switcher sends a header rather than a query parameter. Resolve it
+    // against the authenticated scope before any store data is aggregated.
+    const isStore = isStoreScoped(role)
+    let activeStore = user.store
+    if (isStore) {
+      const requested = req.headers['x-active-store']
+      storeId = resolveActiveStore(req.user, typeof requested === 'string' ? requested : undefined)
+      if (!storeId) return reply.status(403).send({ error: '账号未绑定门店' })
+      activeStore = await prisma.store.findFirst({
+        where: { id: storeId, tenantId, status: 'ENABLED' },
+        select: { id: true, name: true, no: true },
+      })
+      if (!activeStore) return reply.status(403).send({ error: '无权限访问该门店' })
+    }
+
+    const todayLocal = dayjs().tz(BUSINESS_TZ)
     const today = utcDateForLocal(todayLocal)
     const monthStart = utcDateForLocal(todayLocal.startOf('month'))
     const monthEnd = utcDateForLocal(todayLocal.endOf('month'))
 
     // ── 共享数据：根据角色范围算今日 / 本月 / 7 日营收 ──
-    const isStore = role === 'MANAGER' || role === 'KITCHEN_LEAD'
     const scopeStoreId = isStore ? storeId : undefined
 
     const [todayAgg, monthAgg, revenue7d] = await Promise.all([
@@ -299,7 +316,7 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    if (role === 'MANAGER') {
+    if (role === 'MANAGER' || role === 'REGIONAL_MANAGER' || role === 'SUPERVISOR') {
       hero.label = '今日本店营业额'
       const [recvDays, inventory] = await Promise.all([
         prisma.revenueRecord.count({
@@ -422,33 +439,33 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
           prisma.purchaseOrder.aggregate({
             _sum: { totalAmount: true },
             where: { supplierId, status: { in: ['RECEIVED', 'COMPLETED'] }, updatedAt: { gte: monthStart, lte: monthEnd } },
-          }).catch(() => ({ _sum: { totalAmount: 0 } as any })),
+          }),
           // 应收 (PaymentSchedule)
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
             where: { supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED', 'OVERDUE', 'ON_HOLD'] as any } },
-          }).catch(() => ({ _sum: { amount: 0 } as any })),
+          }),
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
-            where: { supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED'] as any }, dueAt: { lt: now } },
-          }).catch(() => ({ _sum: { amount: 0 } as any })),
+            where: { supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED', 'OVERDUE'] as any }, dueAt: { lt: now } },
+          }),
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
             where: { supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED'] as any }, dueAt: { gte: now, lte: in7d } },
-          }).catch(() => ({ _sum: { amount: 0 } as any })),
+          }),
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
             where: { supplierId, status: { in: ['PENDING', 'APPROVED', 'NOTIFIED'] as any }, dueAt: { gt: in7d, lte: new Date(Date.now() + 30 * 86400_000) } },
-          }).catch(() => ({ _sum: { amount: 0 } as any })),
+          }),
           // 本月回款率
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
             where: { supplierId, status: 'PAID' as any, paidAt: { gte: monthStart, lte: monthEnd } },
-          }).catch(() => ({ _sum: { amount: 0 } as any })),
+          }),
           prisma.paymentSchedule.aggregate({
             _sum: { amount: true },
             where: { supplierId, dueAt: { gte: monthStart, lte: monthEnd } },
-          }).catch(() => ({ _sum: { amount: 0 } as any })),
+          }),
           // 库存预警
           (async () => {
             // 用原生 SQL 算 stock < minStock (Prisma 不支持字段比字段)
@@ -473,16 +490,17 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
         const dueM    = Number(monthDue._sum.amount || 0)
         const recoveryRate = dueM > 0 ? (paidM / dueM) * 100 : 0
 
+        const money = (value: number) => '¥' + value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         const totalActive = submittedCnt + confirmedCnt + shippedCnt
         hero = {
           label: '应收总额',
-          value: fmtMoney(arTotal),
+          value: money(arTotal),
           meta: arOver > 0
-            ? `⚠ 逾期 ¥${arOver.toLocaleString()} · 7天内到 ¥${ar7.toLocaleString()}`
-            : ar7 > 0 ? `7天内到账 ¥${ar7.toLocaleString()}` : '✓ 暂无应收',
+            ? `⚠ 逾期 ${money(arOver)} · 7天内到 ${money(ar7)}`
+            : ar7 > 0 ? `7天内到账 ${money(ar7)}` : arTotal > 0 ? '暂无近期到期账款' : '✓ 暂无应收',
           stats: [
             { label: '在途订单', value: String(totalActive), tone: submittedCnt > 0 ? 'orange' as const : 'default' as const, delta: submittedCnt > 0 ? `${submittedCnt} 待接` : undefined },
-            { label: '本月已交付', value: fmtMoney(Number(monthDelivered._sum.totalAmount || 0)), tone: 'default' as const },
+            { label: '本月已交付', value: money(Number(monthDelivered._sum.totalAmount || 0)), tone: 'default' as const },
             { label: '回款率', value: `${recoveryRate.toFixed(0)}%`, tone: recoveryRate > 80 ? 'green' as const : recoveryRate > 50 ? 'default' as const : 'red' as const, delta: '本月' },
           ],
           // 供应商专属扩展 (前端读): 账期分桶 + 库存预警
@@ -501,8 +519,8 @@ export const v2DashboardRoutes: FastifyPluginAsync = async (app) => {
 
     return reply.send({
       role,
-      user: { id: user.id, name: user.name, role: user.role, store: user.store, supplier: user.supplier },
-      store: user.store ?? null,
+      user: { id: user.id, name: user.name, role: user.role, store: activeStore, supplier: user.supplier },
+      store: activeStore ?? null,
       supplier: user.supplier ?? null,
       hero,
       approvals,

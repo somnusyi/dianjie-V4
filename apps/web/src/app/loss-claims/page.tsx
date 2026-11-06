@@ -173,7 +173,7 @@ export default function LossClaimsPage() {
         <section className="dj-hero loss-hero">
           <div className="dj-hero-meta">
             <span>报损争议 <i /> 账期扣减</span>
-            <span>{new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+            <span>{new Date().toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit' })}</span>
           </div>
           <div className="dj-hero-main">
             <strong>{summary.pending} 笔</strong>

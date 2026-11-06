@@ -1,4 +1,5 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
@@ -366,7 +367,7 @@ export default function SupplierEvidencePage() {
             <h2 className="text-h2">新增证明版本</h2><p className="mt-1 text-caption text-gray2">只新增，不覆盖旧版本；检测报告、屠宰证、生产检验、农残报告等产品随货资料都必须选择覆盖商品。</p>
             {formError && <div className="mt-3 rounded-card border border-red-fg/20 bg-red-bg px-4 py-3 text-caption text-red-fg">{formError}</div>}
             <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <label><span className="mb-1 block text-micro text-gray3">类型 *</span><select value={type} onChange={event => setType(event.target.value as EvidenceType)} className="h-10 w-full rounded-cta border border-border px-3">{Object.entries(TYPE_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+              <label><span className="mb-1 block text-micro text-gray3">类型 *</span><SearchableSelect searchWhenLong searchLabel="搜索类型" value={type} onChange={event => setType(event.target.value as EvidenceType)} className="h-10 w-full rounded-cta border border-border px-3">{Object.entries(TYPE_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</SearchableSelect></label>
               <label><span className="mb-1 block text-micro text-gray3">标题 *</span><input value={title} onChange={event => setTitle(event.target.value)} className="h-10 w-full rounded-cta border border-border px-3" /></label>
               <label><span className="mb-1 block text-micro text-gray3">有效期开始</span><input type="date" value={validFrom} onChange={event => setValidFrom(event.target.value)} className="h-10 w-full rounded-cta border border-border px-3" /></label>
               <label><span className="mb-1 block text-micro text-gray3">有效期截止</span><input type="date" value={validUntil} onChange={event => setValidUntil(event.target.value)} className="h-10 w-full rounded-cta border border-border px-3" /></label>

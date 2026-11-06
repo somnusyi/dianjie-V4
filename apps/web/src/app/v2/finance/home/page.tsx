@@ -3,6 +3,8 @@
  * Hero "待我初审 12" 对称结构 · 财务铁三角 月现金流净/预收待结/应付待结 · "凭证待补" 红字 · 各店财务健康度
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
+import { loadInvoices } from '@/lib/invoice-list'
 import { useEffect, useState } from 'react'
 import { BottomNav, StoreAvatar, Chip } from '@/components/v2'
 import { GlanceStrip } from '@/components/v2/glance-strip'
@@ -43,13 +45,14 @@ function timeAgo(iso: string) {
   if (min < 1) return '刚刚'
   if (min < 60) return `${min} 分钟前`
   if (min < 1440) return `${Math.round(min/60)} 小时前`
-  return new Date(iso).toLocaleDateString('zh-CN')
+  return new Date(iso).toLocaleDateString('zh-CN', {timeZone:'Asia/Shanghai'})
 }
 
 export default function FinanceHomePage() {
   const [tab, setTab] = useState('home')
   const { data, error } = useDashboard()
   const [inbox, setInbox] = useState<InboxItem[] | null>(null)
+  const [invoiceError, setInvoiceError] = useState('')
   const [pendingInv, setPendingInv] = useState<Invoice[] | null>(null)
   const [dueToday, setDueToday] = useState<DueSchedule[] | null>(null)
   const [profit, setProfit] = useState<any>(null)
@@ -59,14 +62,14 @@ export default function FinanceHomePage() {
     apiFetch<InboxItem[]>('/api/documents/inbox')
       .then(d => setInbox(Array.isArray(d) ? d : []))
       .catch(() => setInbox([]))
-    apiFetch<Invoice[]>('/api/invoices?status=PENDING')
+    loadInvoices<Invoice>('PENDING')
       .then(d => setPendingInv(Array.isArray(d) ? d : []))
-      .catch(() => setPendingInv([]))
+      .catch(() => { setPendingInv(null); setInvoiceError('待审发票未完整加载，请刷新重试') })
     apiFetch<DueSchedule[]>('/api/schedules?days=1')
-      .then(d => setDueToday(Array.isArray(d) ? d : []))
+      .then(d => setDueToday(Array.isArray(d) ? d.filter(item => ['PENDING', 'APPROVED', 'NOTIFIED', 'OVERDUE'].includes(item.status)) : []))
       .catch(() => setDueToday([]))
     // 本月运营快照
-    const ym = new Date().toISOString().slice(0, 7)
+    const ym = businessDayjs().format('YYYY-MM')
     apiFetch<any>(`/api/finance/reports/profit?month=${ym}`).then(setProfit).catch(() => {})
     apiFetch<any>('/api/finance/reports/aging').then(setAging).catch(() => {})
     apiFetch<any>(`/api/vouchers?status=DRAFT&pageSize=1`).then(d => setVoucherDraft(d?.total || 0)).catch(() => {})
@@ -100,7 +103,7 @@ export default function FinanceHomePage() {
         <div className="mx-4 mt-3 bg-bg-warm rounded-card border border-border p-3">
           <div className="flex items-center justify-between mb-2">
             <span className="text-h2">本月运营快照</span>
-            <span className="text-micro text-gray3">{new Date().toISOString().slice(0,7)}</span>
+            <span className="text-micro text-gray3">{businessDayjs().format('YYYY-MM')}</span>
           </div>
           <div className="grid grid-cols-2 gap-3 text-caption">
             {profit?.summary && (
@@ -159,7 +162,7 @@ export default function FinanceHomePage() {
                 <li key={d.id} className={`relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full ${isOverdue ? 'before:bg-red' : 'before:bg-amber'}`}>
                   <div className="flex items-center gap-2 mb-1">
                     <Chip tone={isOverdue ? 'red' : 'orange'}>{isOverdue ? '逾期' : '今日到期'}</Chip>
-                    <span className="text-micro text-gray3">{new Date(d.dueAt).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })}</span>
+                    <span className="text-micro text-gray3">{new Date(d.dueAt).toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit' })}</span>
                     <span className="ml-auto font-num text-h2">¥{Math.round(Number(d.amount)).toLocaleString()}</span>
                   </div>
                   <div className="text-h2 truncate">{d.supplier?.name}</div>
@@ -260,6 +263,7 @@ export default function FinanceHomePage() {
       </div>
 
       <Section title="财务待办" right={todoCount > 0 ? `${todoCount} 项` : undefined} rightTone={todoCount > 0 ? 'red' : undefined}>
+        {invoiceError && <p role="alert" className="text-red-fg text-caption">{invoiceError}</p>}
         {(inbox === null && pendingInv === null) && <p className="text-caption text-gray3 text-center py-4">加载中…</p>}
         {todoCount === 0 && inbox !== null && pendingInv !== null && (
           <p className="text-caption text-gray3 text-center py-4">✓ 无待办 · 全部已处理</p>

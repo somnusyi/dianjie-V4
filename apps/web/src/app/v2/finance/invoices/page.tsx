@@ -4,7 +4,9 @@
  * PATCH /api/invoices/:id/verify { action: APPROVE | REJECT, note? }
  */
 'use client'
-import { useEffect, useState } from 'react'
+import businessDayjs from '@/lib/business-dayjs'
+import { loadInvoices } from '@/lib/invoice-list'
+import { useEffect, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
@@ -32,8 +34,7 @@ const STATUS_LABEL: Record<string, string> = { PENDING: '待审', VERIFIED: '已
 const STATUS_TONE: Record<string, 'orange'|'green'|'red'> = { PENDING: 'orange', VERIFIED: 'green', REJECTED: 'red' }
 
 function fmt(iso: string) {
-  const d = new Date(iso)
-  return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
+  return businessDayjs(iso).format('MM/DD')
 }
 
 export default function FinanceInvoicesPage() {
@@ -43,12 +44,14 @@ export default function FinanceInvoicesPage() {
   const [error, setError] = useState<string | null>(null)
   const [confirmState, openConfirm] = useConfirmSheet()
 
+  const loadSequence = useRef(0)
   function load() {
+    const sequence = ++loadSequence.current
+    setItems(null)
     setError(null)
-    const url = filter === '全部' ? '/api/invoices' : `/api/invoices?status=${filter}`
-    apiFetch<Invoice[]>(url).then(setItems).catch(e => setError(e.message))
+    loadInvoices<Invoice>(filter === '全部' ? undefined : filter).then(d => { if (sequence === loadSequence.current) setItems(d) }).catch(e => { if (sequence === loadSequence.current) setError(e.message) })
   }
-  useEffect(() => { load() }, [filter])
+  useEffect(() => { load(); return () => { loadSequence.current++ } }, [filter])
 
   function decide(inv: Invoice, action: 'APPROVE' | 'REJECT') {
     if (submitting) return
@@ -56,7 +59,7 @@ export default function FinanceInvoicesPage() {
       setSubmitting(inv.id)
       try {
         await apiFetch(`/api/invoices/${inv.id}/verify`, {
-          method: 'PATCH', body: JSON.stringify({ action, note }),
+          method: 'PATCH', body: JSON.stringify({ action, note, expectedUploadedAt: inv.uploadedAt }),
         })
         load()
       } catch (e: any) { notifyUser(e.message || '操作失败'); throw e }
@@ -104,7 +107,7 @@ export default function FinanceInvoicesPage() {
 
       <div className="px-4 mt-2 flex gap-2 overflow-x-auto">
         {tabs.map(t => (
-          <button key={t.key} onClick={() => setFilter(t.key)}
+          <button key={t.key} disabled={!!submitting} onClick={() => setFilter(t.key)}
             className={`shrink-0 px-3 py-1.5 rounded-cta text-button ${filter === t.key ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
             {t.label}
             {t.key !== '全部' && counts[t.key] > 0 && <span className="ml-1 font-num">{counts[t.key]}</span>}
@@ -115,7 +118,7 @@ export default function FinanceInvoicesPage() {
       {error && <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}
 
       <ul className="px-4 mt-3 space-y-2">
-        {items === null && <li className="text-caption text-gray3 text-center py-12">加载中…</li>}
+        {items === null && !error && <li className="text-caption text-gray3 text-center py-12">加载中…</li>}
         {items?.length === 0 && (
           <li className="text-caption text-gray3 text-center py-12">{filter === 'PENDING' ? '暂无待审发票' : '无记录'}</li>
         )}

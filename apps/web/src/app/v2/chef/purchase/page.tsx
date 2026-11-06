@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react'
 import { BottomNav, ProgressDots, Chip } from '@/components/v2'
 import { GlanceStrip } from '@/components/v2/glance-strip'
 import { apiFetch } from '@/lib/v2-auth'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 
 const STATUS_TO_STEP: Record<string, number> = {
   DRAFT: 0, SUBMITTED: 1, CONFIRMED: 2, DELIVERING: 3,
@@ -120,7 +120,7 @@ export default function ChefPurchasePage() {
                 </div>
                 <p className="text-caption text-gray3 mb-2">
                   {o.items?.length ?? 0} 项
-                  {o.shippedAt && ` · 送达 ${new Date(o.shippedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`}
+                  {o.shippedAt && ` · 送达 ${new Date(o.shippedAt).toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit' })}`}
                 </p>
                 <a href={`/v2/chef/purchase/${o.id}/receive`} className="block w-full py-2 bg-ink text-white rounded-cta text-button text-center">去验收</a>
               </li>
@@ -182,7 +182,7 @@ export default function ChefPurchasePage() {
                   <div className="mt-2 pt-2 border-t border-border">
                     {o.chefAckAt ? (
                       <div className="text-caption text-gray2">
-                        ✓ 验收单已发 <span className="text-gray3">({o.chefAckImages?.length || 0} 张, {new Date(o.chefAckAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}) · 等供应商确认</span>
+                        ✓ 验收单已发 <span className="text-gray3">({o.chefAckImages?.length || 0} 张, {new Date(o.chefAckAt).toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit' })}) · 等供应商确认</span>
                         <a href={`/v2/chef/purchase/${o.id}/ack`} className="ml-2 text-amber-fg">重发 ›</a>
                       </div>
                     ) : (

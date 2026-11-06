@@ -77,7 +77,7 @@ export default function DocumentSuccessPage({ params }: { params: { id: string }
               name: s.approver?.name || roleLabel(s.approverRole),
               role: roleLabel(s.approverRole),
               status: s.status === 'DECIDED' ? 'done' : s.status === 'PENDING' ? 'current' : s.status === 'SKIPPED' ? 'skipped' : 'waiting',
-              meta: s.decidedAt ? new Date(s.decidedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '',
+              meta: s.decidedAt ? new Date(s.decidedAt).toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit' }) : '',
             }))}
           />
         </section>

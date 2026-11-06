@@ -6,7 +6,7 @@ export const ACCESS_TTL_MS = 2 * 60 * 60 * 1000
 export const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 type JwtSigner = {
-  sign(payload: Record<string, unknown>, options: { expiresIn: string }): string
+  sign(payload: Record<string, unknown>, options: { expiresIn?: string }): string
 }
 
 type SessionUser = {
@@ -19,7 +19,7 @@ type SessionUser = {
   authVersion?: number
 }
 
-export function issueAccessToken(jwt: JwtSigner, user: SessionUser) {
+export function issueAccessToken(jwt: JwtSigner, user: SessionUser, sessionId?: string) {
   return jwt.sign({
     userId: user.id,
     tenantId: user.tenantId,
@@ -31,19 +31,24 @@ export function issueAccessToken(jwt: JwtSigner, user: SessionUser) {
       : (user.storeId ? [user.storeId] : []),
     supplierId: user.supplierId || null,
     jti: crypto.randomUUID(),
+    ...(sessionId ? {sid:sessionId} : {}),
     typ: 'access',
     ver: user.authVersion ?? 0,
   }, { expiresIn: ACCESS_TTL })
 }
 
-export function issueSessionTokens(jwt: JwtSigner, user: SessionUser) {
-  const token = issueAccessToken(jwt, user)
+export function issueSessionTokens(jwt: JwtSigner, user: SessionUser, browserSessionOrder?: string, browserIntentAtMs?: number) {
+  const sid=crypto.randomUUID()
+  const token = issueAccessToken(jwt, user, sid)
   const refreshToken = jwt.sign({
     userId: user.id,
     tenantId: user.tenantId,
-    jti: crypto.randomUUID(),
+    jti: sid,
+    sid,
+    ...(browserSessionOrder ? { bso: browserSessionOrder } : {}),
+    ...(browserIntentAtMs === undefined ? {} : { bia: String(browserIntentAtMs), iat: Math.floor(browserIntentAtMs / 1000), exp: Math.floor((browserIntentAtMs + REFRESH_TTL_MS) / 1000) }),
     typ: 'refresh',
     ver: user.authVersion ?? 0,
-  }, { expiresIn: REFRESH_TTL })
+  }, browserIntentAtMs === undefined ? { expiresIn: REFRESH_TTL } : {})
   return { token, refreshToken, expiresInMs: ACCESS_TTL_MS }
 }

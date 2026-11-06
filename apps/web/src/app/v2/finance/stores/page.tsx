@@ -52,7 +52,7 @@ export default function FinanceStoresPage() {
   const planning  = (list || []).filter(r => r.lifecyclePhase !== 'OPERATING' && r.lifecyclePhase !== 'CLOSED')
   const anomalies = operating.filter(r => r.monthRevenue > 0 && r.monthNet < 0)
   const margin = totalRev > 0 ? (totalNet / totalRev * 100) : 0
-  const monthLabel = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit' })
+  const monthLabel = new Date().toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit' })
 
   return (
     <div className="min-h-screen bg-bg pb-20">

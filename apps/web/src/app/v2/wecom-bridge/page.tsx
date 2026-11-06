@@ -4,31 +4,21 @@
  */
 'use client'
 import { useEffect, useState } from 'react'
-import { setSession, routeForRole } from '@/lib/v2-auth'
+import { refreshAccessOnce, getUser, routeForRole } from '@/lib/v2-auth'
 
 export default function WeComBridgePage() {
   const [err, setErr] = useState<string | null>(null)
   useEffect(() => {
-    try {
-      const hash = window.location.hash.replace(/^#/, '')
-      const params = new URLSearchParams(hash)
-      const token = params.get('token')
-      const refreshToken = params.get('refreshToken')
-      const userRaw = params.get('user')
-      const tenant = params.get('tenant')
-      const redirect = params.get('redirect') || ''
-      if (!token || !refreshToken || !userRaw) {
-        setErr('企微登录回调缺少 token/refreshToken/user 信息')
-        return
-      }
-      const user = JSON.parse(decodeURIComponent(userRaw))
-      setSession(token, user, tenant ? { slug: tenant } : undefined, refreshToken)
-      // 跳转到目标页 或 角色 home
-      const target = redirect && redirect !== '/' ? decodeURIComponent(redirect) : routeForRole(user.role)
-      window.location.replace(target)
-    } catch (e: any) {
-      setErr(e.message || '处理企微登录失败')
-    }
+    void (async()=>{
+      // Discard obsolete credential-bearing fragments without reading or persisting them.
+      if(location.hash) history.replaceState(null,'',location.pathname+location.search)
+      const token=await refreshAccessOnce()
+      const user=getUser()
+      if(!token||!user){setErr('企微登录校验失败，请重新登录');return}
+      const value=new URLSearchParams(location.search).get('redirect')||''
+      const safe=value.startsWith('/')&&!value.startsWith('//')&&!value.includes('\\')&&new URL(value,location.origin).origin===location.origin
+      location.replace(safe&&value!=='/'?value:routeForRole(user.role))
+    })().catch(()=>setErr('企微登录失败，请重新登录'))
   }, [])
 
   return (

@@ -1,4 +1,5 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -68,9 +69,9 @@ export default function ReplenishmentOrdersPage() {
         <OrderCenterTabs />
         <div className="flex flex-wrap items-end justify-between gap-3 py-4">
           <label className="text-caption text-gray2">状态
-            <select aria-label="补货单状态" value={status} onChange={event => { setStatus(event.target.value as ReplenishmentStatus | ''); setPage(1) }} className="mt-1 block min-w-44 rounded-xl border border-border bg-white px-3 py-2.5 text-body text-ink">
+            <SearchableSelect searchWhenLong searchLabel="搜索补货单状态" aria-label="补货单状态" value={status} onChange={event => { setStatus(event.target.value as ReplenishmentStatus | ''); setPage(1) }} className="mt-1 block min-w-44 rounded-xl border border-border bg-white px-3 py-2.5 text-body text-ink">
               {REPLENISHMENT_STATUS_OPTIONS.map(option => <option key={option.value || 'ALL'} value={option.value}>{option.label}</option>)}
-            </select>
+            </SearchableSelect>
           </label>
           <span className="text-caption text-gray3">{range}</span>
         </div>
@@ -95,7 +96,7 @@ export default function ReplenishmentOrdersPage() {
                     <td className="px-3 py-3">{order.store.name}</td><td className="px-3 py-3">{order.supplier.name}</td>
                     <td className="px-3 py-3 font-num">{dateText(order.expectedDate)}</td><td className="max-w-56 px-3 py-3">{replenishmentItemSummary(order.items)}</td>
                     <td className="px-3 py-3"><Chip tone={replenishmentStatusTone(order.displayStatus)}>{replenishmentStatusLabel(order.displayStatus)}</Chip></td>
-                    <td className="px-3 py-3">供应链代门店</td><td className="px-3 py-3 font-num">{new Date(order.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
+                    <td className="px-3 py-3">供应链代门店</td><td className="px-3 py-3 font-num">{new Date(order.createdAt).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}</td>
                     <td className="px-3 py-3">{order.createdBy.name}</td><td className="max-w-44 truncate px-3 py-3" title={order.note || ''}>{order.note || '—'}</td>
                     <td className="px-3 py-3"><Link href={next.href} className="whitespace-nowrap font-semibold text-amber-fg">{next.label} ›</Link></td>
                   </tr>
@@ -111,7 +112,7 @@ export default function ReplenishmentOrdersPage() {
                 <div className="flex items-start justify-between gap-3"><div><Link className="font-num font-semibold text-amber-fg" href={`/v2/supply-chain/replenishment-orders/${order.id}`}>{order.no}</Link><h2 className="mt-1 text-h2">{order.store.name}</h2></div><Chip tone={replenishmentStatusTone(order.displayStatus)}>{replenishmentStatusLabel(order.displayStatus)}</Chip></div>
                 <p className="mt-2 text-caption text-gray2">{order.supplier.name} · 到货 {dateText(order.expectedDate)}</p>
                 <p className="mt-2 text-caption">{replenishmentItemSummary(order.items)}</p>
-                <div className="mt-3 grid grid-cols-2 gap-2 text-micro text-gray3"><span>来源：供应链代门店</span><span>创建人：{order.createdBy.name}</span><span className="col-span-2">创建：{new Date(order.createdAt).toLocaleString('zh-CN', { hour12: false })}</span><span className="col-span-2">备注：{order.note || '—'}</span></div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-micro text-gray3"><span>来源：供应链代门店</span><span>创建人：{order.createdBy.name}</span><span className="col-span-2">创建：{new Date(order.createdAt).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}</span><span className="col-span-2">备注：{order.note || '—'}</span></div>
                 <Link href={next.href} className="mt-4 block rounded-cta bg-ink px-4 py-2.5 text-center text-button text-white">{next.label}</Link>
               </li>
             })}

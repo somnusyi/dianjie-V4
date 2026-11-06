@@ -17,6 +17,7 @@
  *   - 警示文案: 真实银行转账, 不可逆
  */
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 import { useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
@@ -114,7 +115,7 @@ export function InternalTransferModal({ open, from, candidates, onClose, onSucce
           {/* 收款账户 (下拉) */}
           <div>
             <label className="text-micro text-gray3 block mb-1">到 *</label>
-            <select value={toId} onChange={e => setToId(e.target.value)}
+            <SearchableSelect searchWhenLong searchLabel="搜索收款账户" value={toId} onChange={e => setToId(e.target.value)}
                     className="w-full bg-bg rounded-cta px-3 py-2 text-body outline-none">
               <option value="">— 选择收款账户 —</option>
               {candidates.map(c => (
@@ -122,7 +123,7 @@ export function InternalTransferModal({ open, from, candidates, onClose, onSucce
                   {c.name}{c.cmbBindAccount ? ` · 尾号 ${c.cmbBindAccount.slice(-4)}` : ''}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
             {candidates.length === 0 && (
               <p className="text-micro text-gray3 mt-1">暂无其他招行实时账户。先在「+ 新建账户」加一个</p>
             )}

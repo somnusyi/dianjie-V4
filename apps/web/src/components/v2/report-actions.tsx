@@ -101,7 +101,7 @@ export function TableReportHost() {
     </header> : <h1 className="text-h1">{displayed.title}</h1>}
     {report.subtitle && (!report.printTemplate || report.subtitle.includes('未保存预览')) && <p className="my-3 whitespace-pre-wrap text-caption">{report.printTemplate?'未保存预览':report.subtitle}</p>}
     {report.printTemplate&&<ReceiptTemplateGrid template={template} fields={{...report.printTemplate.fields,documentNo:report.printTemplate.documentNo}}/>}
-    {!report.printTemplate&&<p className="my-2 text-micro text-gray3">共 {report.rows.length} 行 · 生成于 {new Date().toLocaleString('zh-CN')}</p>}
+    {!report.printTemplate&&<p className="my-2 text-micro text-gray3">共 {report.rows.length} 行 · 生成于 {new Date().toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})}</p>}
     {report.printTemplate&&template.note&&<p className="my-2 whitespace-pre-wrap text-caption">{template.note}</p>}
     <div className="overflow-x-auto"><table style={report.printTemplate?{fontSize:`${template.fontSize}pt`}:undefined} className="w-full border-collapse text-left text-caption">
       {report.printTemplate&&<colgroup>{displayed.headers.map((header,index)=><col key={index} style={header==='序号'?{width:'8%'}:header==='物品名称'?{width:'24%'}:header==='规格'?{width:'20%'}:header==='单位'?{width:'8%'}:{}}/>)}</colgroup>}

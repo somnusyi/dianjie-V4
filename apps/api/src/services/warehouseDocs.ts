@@ -1,7 +1,11 @@
 import { Prisma, prisma } from '@dianjie/db'
+import { reviewPostingKey } from './warehouseReviewPosting'
 import {
   adjustWarehouseMovementValue,
   recordBatchManualWarehouseInbound,
+  recordBatchManualWarehouseOutbound,
+  prepareBatchManualWarehouseInbound,
+  prepareBatchManualWarehouseOutbound,
   reverseManualWarehouseInbound,
   serializableWithRetry,
 } from './warehouseLedger'
@@ -136,6 +140,10 @@ export type EnsureWarehouseDocInput = {
   reason?: string | null
   note?: string | null
   lines: WarehouseDocLineInput[]
+  postingPolicy?: 'REVIEW'
+
+  sourceName?: string | null
+
 }
 
 export async function ensureWarehouseDocInTransaction(tx: Prisma.TransactionClient, input: EnsureWarehouseDocInput) {
@@ -155,7 +163,17 @@ export async function ensureWarehouseDocInTransaction(tx: Prisma.TransactionClie
     where: idempotencyWhere,
     include: { lines: true },
   })
-  if (existing) return { doc: existing, created: false }
+  if (existing) {
+    if(input.postingPolicy==='REVIEW' && existing.postingPolicy==='REVIEW') {
+      const sameHeader=existing.warehouseId===input.warehouseId && existing.effectiveAt.getTime()===input.effectiveAt.getTime() && (existing.supplierId||null)===(input.supplierId||null) && (existing.reason||null)===(input.reason||null) && (existing.note||null)===(input.note||null)
+      const sameLines=existing.lines.length===input.lines.length && input.lines.every((line,index)=>{
+        const saved=existing.lines.find(row=>row.lineNo===index+1)
+        return saved && saved.productId===line.productId && saved.quantity.eq(line.quantity) && saved.inventoryQuantity.eq(line.inventoryQuantity) && saved.unit===line.unit && saved.inventoryUnit===line.inventoryUnit && (input.type==='MANUAL_OUTBOUND' && line.unitPrice==null || saved.amount.eq(line.amount)) && saved.isGift===(line.isGift===true) && (saved.batchNo||null)===(line.batchNo||null) && (saved.note||null)===(line.note||null) && (saved.manufactureDate?.getTime()??null)===(line.manufactureDate?.getTime()??null) && (saved.expiryDate?.getTime()??null)===(line.expiryDate?.getTime()??null)
+      })
+      if(!sameHeader||!sameLines)throw docError('同一请求编号不能用于不同单据内容，请重新加载核对',409)
+    }
+    return { doc: existing, created: false }
+  }
   const totalAmount = input.lines.reduce((sum, line) => sum.plus(line.amount), new Prisma.Decimal(0)).toDecimalPlaces(4)
   const docNo = await generateDocNo(tx, input.tenantId, input.type, input.effectiveAt)
   const doc = await tx.warehouseDoc.create({
@@ -171,6 +189,7 @@ export async function ensureWarehouseDocInTransaction(tx: Prisma.TransactionClie
           note: input.note || null,
           effectiveAt: input.effectiveAt,
           status: 'POSTED',
+          postingPolicy: input.postingPolicy || 'LEGACY',
           lineCount: input.lines.length,
           totalAmount,
           idempotencyKey: input.idempotencyKey,
@@ -205,7 +224,7 @@ export async function ensureWarehouseDocInTransaction(tx: Prisma.TransactionClie
       action: 'CREATE',
       actorId: input.userId,
       actorName: await resolveActorName(tx, input.tenantId, input.userId),
-      detail: { lineCount: input.lines.length, totalAmount: totalAmount.toFixed(2) },
+      detail: { lineCount: input.lines.length, totalAmount: totalAmount.toFixed(2), postingPolicy: input.postingPolicy || 'LEGACY', sourceName: input.sourceName || null },
     },
   })
   return { doc, created: true }
@@ -258,10 +277,31 @@ export async function confirmWarehouseDoc(input: { tenantId: string; userId: str
 export async function reviewWarehouseDoc(input: {tenantId:string;userId:string;docId:string}) {
  return serializableWithRetry(async tx=>{
   await tx.$queryRaw`SELECT id FROM warehouse_docs WHERE id=${input.docId} AND "tenantId"=${input.tenantId} FOR UPDATE`
-  const doc=await tx.warehouseDoc.findFirst({where:{id:input.docId,tenantId:input.tenantId}})
+  const doc=await tx.warehouseDoc.findFirst({where:{id:input.docId,tenantId:input.tenantId},include:{lines:{orderBy:{lineNo:'asc'}}}})
   if(!doc) throw docError('单据不存在',404)
   if(doc.status!=='CONFIRMED') throw docError('请先完成单据审核，再由供应链复审')
   if(doc.reviewStatus==='REVIEWED') return {doc,changed:false}
+  if(doc.postingPolicy === 'REVIEW') {
+    if(doc.postedAt || doc.lines.some(line => line.movementId)) throw docError('单据过账记录不一致，请核对后重试')
+    const common = {tenantId:input.tenantId,userId:input.userId,warehouseId:doc.warehouseId,effectiveAt:doc.effectiveAt,idempotencyKey:reviewPostingKey(doc.id)}
+    const inbound = {...common,supplierId:doc.supplierId,sourceName:doc.supplierName,note:doc.note,items:doc.lines.map(line=>({productId:line.productId,purchaseQuantity:line.quantity,totalAmount:line.amount,isGift:line.isGift,batchNo:line.batchNo,manufactureDate:line.manufactureDate,expiryDate:line.expiryDate,note:line.note}))}
+    const creation=await tx.warehouseDocLog.findFirst({where:{tenantId:input.tenantId,docId:doc.id,action:'CREATE'},orderBy:{createdAt:'asc'},select:{detail:true}})
+    const sourceName=typeof (creation?.detail as any)?.sourceName==='string'?(creation!.detail as any).sourceName:null
+    const outbound = {...common,sourceName,reason:doc.reason || '手工出库',businessType:doc.idempotencyKey.startsWith('self-loss:')?'SELF_LOSS' as const:'GENERIC' as const,items:doc.lines.map(line=>({productId:line.productId,inventoryQuantity:line.inventoryQuantity,totalAmount:line.unitPrice==null?null:line.amount,note:line.note}))}
+    const prepared = doc.type === 'MANUAL_INBOUND' ? await prepareBatchManualWarehouseInbound(inbound,tx) : await prepareBatchManualWarehouseOutbound(outbound,tx)
+    for(const line of doc.lines) {
+      const current=prepared.lines.find(row=>row.product.id===line.productId)
+      if(!current || current.contract.inventoryUnit!==line.inventoryUnit || (doc.type==='MANUAL_INBOUND' && (!('purchaseQuantity' in current) || current.contract.purchaseUnit!==line.unit || !current.inventoryQuantity.eq(line.inventoryQuantity)))) throw docError(`${line.productName}的单位换算已变化，请反审核核对`)
+    }
+    const result = doc.type === 'MANUAL_INBOUND' ? await recordBatchManualWarehouseInbound(inbound,tx) : await recordBatchManualWarehouseOutbound(outbound,tx)
+    for(const line of doc.lines) {
+      const movement=result.movements.find(row=>row.productId===line.productId)!
+      const amount=movement.valueDelta.abs()
+      await tx.warehouseDocLine.update({where:{id:line.id},data:{movementId:movement.id,amount,unitPrice:amount.div(line.quantity).toDecimalPlaces(6)}})
+    }
+    const total=await tx.warehouseDocLine.aggregate({where:{docId:doc.id,tenantId:input.tenantId},_sum:{amount:true}})
+    await tx.warehouseDoc.update({where:{id:doc.id},data:{postedAt:new Date(),totalAmount:total._sum.amount || 0}})
+  }
   const updated=await tx.warehouseDoc.update({where:{id:doc.id},data:{reviewStatus:'REVIEWED'}})
   await tx.warehouseDocLog.create({data:{tenantId:input.tenantId,docId:doc.id,action:'REVIEW',actorId:input.userId,actorName:await resolveActorName(tx,input.tenantId,input.userId)}})
   return {doc:updated,changed:true}
@@ -353,6 +393,39 @@ export async function editWarehouseDoc(input: {
   if (doc.reviewStatus === 'REVIEWED') throw docError('已复审单据不能修改业务字段',409)
   if (doc.status !== 'POSTED') throw docError('只有未审核的单据才能修改，请先反审核', 409)
 
+  if(doc.postingPolicy === 'REVIEW' && !doc.postedAt) {
+    const changes: unknown[]=[]
+    const header: {supplierId?:string;supplierName?:string;note?:string|null;reason?:string|null}={}
+    if(input.supplierId!==undefined && doc.type==='MANUAL_INBOUND') {
+      const supplier=await tx.supplier.findFirst({where:{id:input.supplierId,tenantId:input.tenantId,status:'ENABLED',businessScopes:{has:'WAREHOUSE_UPSTREAM'}}})
+      if(!supplier)throw docError('供应商不存在或未启用',404)
+      header.supplierId=supplier.id;header.supplierName=supplier.name
+    }
+    if(input.note!==undefined)header.note=input.note
+    if(input.reason!==undefined)header.reason=input.reason
+    for(const change of input.lines) {
+      const line=doc.lines.find(row=>row.id===change.lineId)
+      if(!line)throw docError('单据行不存在',404)
+      if(line.movementId)throw docError('单据过账记录不一致，请先核对')
+      if(line.batchNo && change.batchNo!==undefined && String(change.batchNo||'').trim()!==line.batchNo)throw docError('已有指定批次号必须保留',409)
+      const quantity=new Prisma.Decimal(change.quantity??line.quantity).toDecimalPlaces(6)
+      const amount=new Prisma.Decimal(change.amount??line.amount).toDecimalPlaces(4)
+      if(!quantity.isFinite()||quantity.lte(0)||quantity.gt(99999999)||!amount.isFinite()||amount.lt(0)||amount.gt('999999999.99')||line.isGift&&!amount.isZero()||!line.isGift&&doc.type==='MANUAL_INBOUND'&&amount.lte(0))throw docError(`第${line.lineNo}行数量或金额无效`,400)
+      const manufactureDate=change.manufactureDate===undefined?line.manufactureDate:change.manufactureDate?new Date(`${change.manufactureDate}T00:00:00.000Z`):null
+      const expiryDate=change.expiryDate===undefined?line.expiryDate:change.expiryDate?new Date(`${change.expiryDate}T00:00:00.000Z`):null
+      if(manufactureDate&&expiryDate&&expiryDate<manufactureDate)throw docError('到期日期不能早于生产日期',400)
+      const data={quantity,amount,unitPrice:change.amount==null && line.unitPrice==null?null:amount.div(quantity).toDecimalPlaces(6),inventoryQuantity:line.inventoryQuantity.mul(quantity).div(line.quantity).toDecimalPlaces(6),note:change.note===undefined?line.note:change.note,batchNo:change.batchNo===undefined?line.batchNo:change.batchNo,manufactureDate,expiryDate}
+      if(JSON.stringify(data)!==JSON.stringify({quantity:line.quantity,amount:line.amount,unitPrice:line.unitPrice,inventoryQuantity:line.inventoryQuantity,note:line.note,batchNo:line.batchNo,manufactureDate:line.manufactureDate,expiryDate:line.expiryDate})) {
+        await tx.warehouseDocLine.update({where:{id:line.id},data});changes.push({lineId:line.id,before:{quantity:line.quantity,amount:line.amount},after:data})
+      }
+    }
+    const headerChanged=Object.entries(header).some(([key,value])=>value!==(doc as any)[key])
+    if(!headerChanged&&!changes.length)return {doc,changed:false}
+    const sum=await tx.warehouseDocLine.aggregate({where:{docId:doc.id,tenantId:input.tenantId},_sum:{amount:true}})
+    const updated=await tx.warehouseDoc.update({where:{id:doc.id},data:{...header,totalAmount:sum._sum.amount||0},include:{lines:{orderBy:{lineNo:'asc'}}}})
+    await tx.warehouseDocLog.create({data:{tenantId:input.tenantId,docId:doc.id,action:'EDIT',actorId:input.userId,actorName:await resolveActorName(tx,input.tenantId,input.userId),reason:editReason,detail:{header,lines:changes} as Prisma.InputJsonValue}})
+    return {doc:updated,changed:true}
+  }
   const lineById = new Map(doc.lines.map(line => [line.id, line]))
   const diffDetail: any = { header: {}, lines: [] }
   // A committed edit revision advances for quantity edits as well as repricing.

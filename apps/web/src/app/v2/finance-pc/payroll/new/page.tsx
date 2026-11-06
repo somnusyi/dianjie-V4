@@ -8,7 +8,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { MonthPicker } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../../_topnav'

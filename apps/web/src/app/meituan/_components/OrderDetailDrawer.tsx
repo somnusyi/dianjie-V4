@@ -47,7 +47,7 @@ export function OrderDetailDrawer({ mtOrderId, onClose }: { mtOrderId: string; o
               <Info label="桌号" value={data.tableComment || '-'} />
               <Info label="人数" value={data.customerCount.toString()} />
               <Info label="收银员" value={data.cashierName || '-'} />
-              <Info label="营业日" value={data.businessTime ? new Date(data.businessTime).toLocaleDateString('zh-CN') : '-'} />
+              <Info label="营业日" value={data.businessTime ? new Date(data.businessTime).toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '-'} />
             </div>
 
             <div>

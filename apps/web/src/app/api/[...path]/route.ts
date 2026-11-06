@@ -18,11 +18,13 @@ async function proxy(req: NextRequest, ctx: { params: { path: string[] } }) {
   const search = req.nextUrl.search
   const target = `${API_BASE}/api/${path}${search}`
 
-  // 转发原始 headers, 但 strip 掉浏览器侧 Origin/Referer/Host 避免 ECS CORS 检查触发
+  // Cookie会话必须保留浏览器来源供后端CSRF校验，不能伪造或删除来源。
+  const browserSession = req.headers.get('x-dianjie-session') === 'cookie-v1'
+  // 旧Authorization客户端保持原代理行为。
   const headers = new Headers()
   req.headers.forEach((v, k) => {
     const lk = k.toLowerCase()
-    if (lk === 'origin' || lk === 'referer' || lk === 'host' || lk === 'connection') return
+    if (lk === 'host' || lk === 'connection' || !browserSession && (lk === 'origin' || lk === 'referer')) return
     headers.set(k, v)
   })
 
@@ -35,8 +37,8 @@ async function proxy(req: NextRequest, ctx: { params: { path: string[] } }) {
     headers,
     body,
     redirect: 'manual',
-  }).catch((e) => {
-    return new Response(JSON.stringify({ error: 'proxy fetch failed', detail: e?.message }), {
+  }).catch(() => {
+    return new Response(JSON.stringify({ error: '服务暂时不可用，请稍后重试' }), {
       status: 502, headers: { 'Content-Type': 'application/json' }
     })
   })
@@ -45,9 +47,11 @@ async function proxy(req: NextRequest, ctx: { params: { path: string[] } }) {
   const respHeaders = new Headers()
   upstream.headers.forEach((v, k) => {
     const lk = k.toLowerCase()
-    if (lk.startsWith('access-control-') || lk === 'transfer-encoding') return  // 由 next 自己处理
+    if (lk.startsWith('access-control-') || lk === 'transfer-encoding' || lk === 'set-cookie') return  // 由 next 自己处理
     respHeaders.set(k, v)
   })
+  // OAuth可能同时清nonce并设置refresh；不可合并为一个Set-Cookie值。
+  for (const cookie of upstream.headers.getSetCookie()) respHeaders.append('set-cookie', cookie)
   const buf = await upstream.arrayBuffer()
   return new NextResponse(buf, { status: upstream.status, headers: respHeaders })
 }

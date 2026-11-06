@@ -1,3 +1,5 @@
+import { supplierStockQuantity, supplierStockUnitsPerOrderUnit } from './supplierStockReservation'
+import { hasSubmissionStockPolicy } from './orderSubmissionReservation'
 import { Prisma } from '@dianjie/db'
 import { createId } from '@paralleldrive/cuid2'
 import { costUnitPricedOrderLine, costUnitPriceToOrderUnitPrice, PURCHASE_ORDER_AMOUNT_MAX } from './costUnitPricing'
@@ -276,11 +278,33 @@ async function consumeAdditionalSupplierOutbound(
   return movement
 }
 
+
+async function submissionSupplierInventoryQty(tx: Prisma.TransactionClient, delivery: any, item: any, qty: Prisma.Decimal) {
+  if (!hasSubmissionStockPolicy(delivery.purchaseOrder.submittedSnapshot)) return qty
+  const stockUnit = String(item.product?.unit || '').trim()
+  const line = { ...item, purchaseOrderItemId: item.purchaseOrderItemId || item.id, productUnit: stockUnit, quantity: qty.abs() }
+  const prior = await tx.supplierStockReservation.findUnique({ where: { purchaseOrderItemId: line.purchaseOrderItemId } }) as any
+  const factor = supplierStockUnitsPerOrderUnit(line, stockUnit)
+  if (prior?.stockUnitSnapshot && (prior.stockUnitSnapshot !== stockUnit || !new Prisma.Decimal(prior.stockUnitsPerOrderUnitSnapshot).equals(factor))) throw businessError('供应商库存账单位或冻结换算已改变，请先核对单位迁移', 409)
+  if (prior && !prior.stockUnitSnapshot && String(line.orderUnitSnapshot || stockUnit) !== stockUnit) throw businessError('历史预占缺少可靠库存账单位快照', 409)
+  return supplierStockQuantity(line, stockUnit, qty)
+}
+
 async function resolveWarehouseMode(
   tx: Prisma.TransactionClient,
   tenantId: string,
   warehouseId: string | null,
+  purchaseOrderId?: string,
 ) {
+  if (purchaseOrderId) {
+    const order = await tx.purchaseOrder.findFirst({ where: { tenantId, id: purchaseOrderId }, select: { submittedSnapshot: true } })
+    if (hasSubmissionStockPolicy(order?.submittedSnapshot)) {
+      const rows = await tx.warehouseLedgerReservation.findMany({ where: { tenantId, purchaseOrderId }, select: { warehouseId: true } })
+      const warehouses = [...new Set(rows.map(row => row.warehouseId))]
+      if (warehouses.length > 1 || (warehouses[0] && warehouseId !== warehouses[0])) throw businessError('配送单出库仓库与本单冻结预占仓库不一致，请先核对原单', 409)
+      return 'STRICT'
+    }
+  }
   const warehouse = await tx.warehouse.findFirst({
     where: { tenantId, isActive: true, ...(warehouseId ? { id: warehouseId } : {}) },
     select: { inventoryMode: true },
@@ -378,7 +402,7 @@ export async function removeDeliveryItemInTransaction(
   const reason = String(input.reason || `${actorLabel}在门店收货前移除商品`).trim().slice(0, 200)
   const sourceType = delivery.purchaseOrder.supplier.sourceType
   if (sourceType === 'HEADQ_WAREHOUSE') {
-    const mode = await resolveWarehouseMode(tx, input.tenantId, delivery.warehouseId)
+    const mode = await resolveWarehouseMode(tx, input.tenantId, delivery.warehouseId, delivery.purchaseOrderId)
     if (mode !== 'OFF') {
       const warehouseId = delivery.warehouseId || await resolveTenantWarehouseId(tx, input.tenantId, undefined)
       await settleActiveWarehouseReservationBeforeMutation(tx, {
@@ -412,7 +436,7 @@ export async function removeDeliveryItemInTransaction(
         })
       }
     }
-  } else if (delivery.purchaseOrder.supplier.inventoryMode === 'STRICT') {
+  } else if ((delivery.purchaseOrder.supplier.inventoryMode === 'STRICT' || hasSubmissionStockPolicy(delivery.purchaseOrder.submittedSnapshot))) {
     if (removedQty.gt(0)) {
       await reverseSupplierOutbound(tx, {
         tenantId: input.tenantId,
@@ -420,7 +444,7 @@ export async function removeDeliveryItemInTransaction(
         deliveryOrderId: delivery.id,
         deliveryOrderItemId: item.id,
         productId: item.productId,
-        quantity: removedQty,
+        quantity: await submissionSupplierInventoryQty(tx, delivery, item, removedQty),
         userId: input.userId,
         orderNo: delivery.purchaseOrder.no,
         reason,
@@ -429,7 +453,7 @@ export async function removeDeliveryItemInTransaction(
     }
     const reservation = await tx.supplierStockReservation.findUnique({ where: { purchaseOrderItemId: poItemId } })
     if (reservation) {
-      const nextFulfilled = Prisma.Decimal.max(new Prisma.Decimal(0), new Prisma.Decimal(reservation.fulfilledQty as any).minus(removedQty))
+      const nextFulfilled = Prisma.Decimal.max(new Prisma.Decimal(0), new Prisma.Decimal(reservation.fulfilledQty as any).minus(await submissionSupplierInventoryQty(tx, delivery, item, removedQty)))
       if (nextFulfilled.gt(0)) {
         throw businessError('供应商库存预占与配送数量不一致，无法安全移除', 409)
       }
@@ -732,8 +756,12 @@ async function syncSupplierReservation(
     productId: string
     targetQuantity: Prisma.Decimal
     allowCreate: boolean
+    stockLine?: any
   },
 ) {
+  const stockUnit = input.stockLine ? String(input.stockLine.product?.unit || '') : null
+  const stockFactor = input.stockLine ? supplierStockUnitsPerOrderUnit({ ...input.stockLine, productUnit: stockUnit }, stockUnit!) : null
+  const basis = input.stockLine ? { stockUnitSnapshot: stockUnit, stockUnitsPerOrderUnitSnapshot: stockFactor } : {}
   const reservation = await tx.supplierStockReservation.findUnique({
     where: { purchaseOrderItemId: input.purchaseOrderItemId },
   })
@@ -746,6 +774,7 @@ async function syncSupplierReservation(
         productId: input.productId,
         purchaseOrderId: input.purchaseOrderId,
         purchaseOrderItemId: input.purchaseOrderItemId,
+        ...basis,
         quantity: input.targetQuantity,
         fulfilledQty: input.targetQuantity,
         status: 'CONSUMED',
@@ -761,6 +790,8 @@ async function syncSupplierReservation(
     || reservation.productId !== input.productId
   ) throw businessError('供应商库存预占范围不一致，无法安全调整', 409)
   if (reservation.status === 'ACTIVE') throw businessError('供应商库存预占尚未结算，暂不能调整', 409)
+  const recordedBasis = reservation as any
+  if (input.stockLine && recordedBasis.stockUnitSnapshot && (recordedBasis.stockUnitSnapshot !== stockUnit || !new Prisma.Decimal(recordedBasis.stockUnitsPerOrderUnitSnapshot).equals(stockFactor!))) throw businessError('供应商库存账单位或冻结换算已改变，不能调整', 409)
   const fulfilledQty = new Prisma.Decimal(input.targetQuantity).toDecimalPlaces(3)
   const status = fulfilledQty.gt(0) ? 'CONSUMED' as const : 'RELEASED' as const
   await tx.supplierStockReservation.update({
@@ -907,7 +938,7 @@ export async function changeDeliveryItemQuantityInTransaction(
   const supplier = delivery.purchaseOrder.supplier
 
   if (supplier.sourceType === 'HEADQ_WAREHOUSE') {
-    const mode = await resolveWarehouseMode(tx, input.tenantId, delivery.warehouseId)
+    const mode = await resolveWarehouseMode(tx, input.tenantId, delivery.warehouseId, delivery.purchaseOrderId)
     if (mode !== 'OFF') {
       const warehouseId = delivery.warehouseId || await resolveTenantWarehouseId(tx, input.tenantId, undefined)
       await settleActiveWarehouseReservationBeforeMutation(tx, {
@@ -972,7 +1003,7 @@ export async function changeDeliveryItemQuantityInTransaction(
         allowCreate: canCreateReservation,
       })
     }
-  } else if (supplier.inventoryMode === 'STRICT') {
+  } else if ((supplier.inventoryMode === 'STRICT' || hasSubmissionStockPolicy(delivery.purchaseOrder.submittedSnapshot))) {
     const reservation = await tx.supplierStockReservation.findUnique({ where: { purchaseOrderItemId: poItem.id } })
     const canCreateReservation = !reservation && current.isZero() && delta.gt(0)
     if (!reservation && !canCreateReservation) throw businessError('供应商库存预占记录缺失，无法安全调整', 409)
@@ -984,7 +1015,7 @@ export async function changeDeliveryItemQuantityInTransaction(
         deliveryOrderId: delivery.id,
         deliveryOrderItemId: item.id,
         productId: item.productId,
-        quantity: delta.abs(),
+        quantity: await submissionSupplierInventoryQty(tx, delivery, item, delta.abs()),
         userId: input.userId,
         orderNo: delivery.purchaseOrder.no,
         reason,
@@ -998,7 +1029,7 @@ export async function changeDeliveryItemQuantityInTransaction(
         purchaseOrderId: delivery.purchaseOrderId,
         deliveryOrderId: delivery.id,
         productId: item.productId,
-        quantity: delta,
+        quantity: await submissionSupplierInventoryQty(tx, delivery, item, delta),
         userId: input.userId,
         orderNo: delivery.purchaseOrder.no,
         reason,
@@ -1010,7 +1041,8 @@ export async function changeDeliveryItemQuantityInTransaction(
       purchaseOrderId: delivery.purchaseOrderId,
       purchaseOrderItemId: poItem.id,
       productId: item.productId,
-      targetQuantity: target,
+      stockLine: hasSubmissionStockPolicy(delivery.purchaseOrder.submittedSnapshot) ? item : undefined,
+      targetQuantity: await submissionSupplierInventoryQty(tx, delivery, item, target),
       allowCreate: canCreateReservation,
     })
   }
@@ -1098,7 +1130,7 @@ async function restoreRemovedDeliveryItemInTransaction(
   const supplier = delivery.purchaseOrder.supplier
 
   if (targetQuantity.gt(0) && supplier.sourceType === 'HEADQ_WAREHOUSE') {
-    const mode = await resolveWarehouseMode(tx, input.tenantId, delivery.warehouseId)
+    const mode = await resolveWarehouseMode(tx, input.tenantId, delivery.warehouseId, delivery.purchaseOrderId)
     if (mode !== 'OFF') {
       const warehouseId = delivery.warehouseId || await resolveTenantWarehouseId(tx, input.tenantId, undefined)
       await settleActiveWarehouseReservationBeforeMutation(tx, {
@@ -1143,14 +1175,14 @@ async function restoreRemovedDeliveryItemInTransaction(
         allowCreate: true,
       })
     }
-  } else if (targetQuantity.gt(0) && supplier.inventoryMode === 'STRICT') {
+  } else if (targetQuantity.gt(0) && (supplier.inventoryMode === 'STRICT' || hasSubmissionStockPolicy(delivery.purchaseOrder.submittedSnapshot))) {
     await consumeAdditionalSupplierOutbound(tx, {
       tenantId: input.tenantId,
       supplierId: input.supplierId,
       purchaseOrderId: delivery.purchaseOrderId,
       deliveryOrderId: delivery.id,
       productId: item.productId,
-      quantity: targetQuantity,
+      quantity: await submissionSupplierInventoryQty(tx, delivery, item, targetQuantity),
       userId: input.userId,
       orderNo: delivery.purchaseOrder.no,
       reason,
@@ -1161,7 +1193,8 @@ async function restoreRemovedDeliveryItemInTransaction(
       purchaseOrderId: delivery.purchaseOrderId,
       purchaseOrderItemId: poItem.id,
       productId: item.productId,
-      targetQuantity,
+      stockLine: hasSubmissionStockPolicy(delivery.purchaseOrder.submittedSnapshot) ? item : undefined,
+      targetQuantity: await submissionSupplierInventoryQty(tx, delivery, item, targetQuantity),
       allowCreate: true,
     })
   }
@@ -1351,7 +1384,7 @@ export async function addDeliveryItemInTransaction(
   })
   const supplier = delivery.purchaseOrder.supplier
   if (quantity.gt(0) && supplier.sourceType === 'HEADQ_WAREHOUSE') {
-    const mode = await resolveWarehouseMode(tx, input.tenantId, delivery.warehouseId)
+    const mode = await resolveWarehouseMode(tx, input.tenantId, delivery.warehouseId, delivery.purchaseOrderId)
     if (mode !== 'OFF') {
       const warehouseId = delivery.warehouseId || await resolveTenantWarehouseId(tx, input.tenantId, undefined)
       await consumeWarehouseLedgerForShipment(tx, {
@@ -1386,14 +1419,14 @@ export async function addDeliveryItemInTransaction(
         allowCreate: true,
       })
     }
-  } else if (quantity.gt(0) && supplier.inventoryMode === 'STRICT') {
+  } else if (quantity.gt(0) && (supplier.inventoryMode === 'STRICT' || hasSubmissionStockPolicy(delivery.purchaseOrder.submittedSnapshot))) {
     await consumeAdditionalSupplierOutbound(tx, {
       tenantId: input.tenantId,
       supplierId: input.supplierId,
       purchaseOrderId: delivery.purchaseOrderId,
       deliveryOrderId: delivery.id,
       productId: product.id,
-      quantity,
+      quantity: await submissionSupplierInventoryQty(tx, delivery, { ...poItem, product }, quantity),
       userId: input.userId,
       orderNo: delivery.purchaseOrder.no,
       reason,
@@ -1404,7 +1437,8 @@ export async function addDeliveryItemInTransaction(
       purchaseOrderId: delivery.purchaseOrderId,
       purchaseOrderItemId: poItem.id,
       productId: product.id,
-      targetQuantity: quantity,
+      stockLine: hasSubmissionStockPolicy(delivery.purchaseOrder.submittedSnapshot) ? { ...poItem, product } : undefined,
+      targetQuantity: await submissionSupplierInventoryQty(tx, delivery, { ...poItem, product }, quantity),
       allowCreate: true,
     })
   }

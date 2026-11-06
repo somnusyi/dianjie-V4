@@ -5,6 +5,7 @@
  * 卡片: 应收账期分桶 / 库存预警 / 待办订单 / 客户分析入口 / SKU 销售榜入口 / 商品报价表入口
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { BottomNav, Chip } from '@/components/v2'
@@ -31,14 +32,17 @@ type UpstreamWorkbench = {
   counts: { orders: number; shipments: number; receipts: number; claims: number; statements: number }
 }
 
+function fmtAmount(value: number) {
+  return '¥' + value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
 function timeAgo(iso: string) {
   const d = new Date(iso).getTime()
   const min = Math.round((Date.now() - d) / 60000)
   if (min < 1) return '刚刚'
   if (min < 60) return `${min} 分钟前`
   if (min < 1440) return `${Math.round(min/60)} 小时前`
-  const dd = new Date(iso)
-  return `${String(dd.getMonth()+1).padStart(2,'0')}/${String(dd.getDate()).padStart(2,'0')}`
+  return businessDayjs(iso).format('MM/DD')
 }
 
 export default function SupplierHomePage() {
@@ -150,7 +154,7 @@ export default function SupplierHomePage() {
       )}
 
       {/* 应收账期分桶 — 顶尖供应商最关心 */}
-      <Section title="应收账期" right={ext.arOverdue > 0 ? `⚠ 逾期 ¥${Math.round(ext.arOverdue).toLocaleString()}` : undefined} rightTone={ext.arOverdue > 0 ? 'red' : undefined}>
+      <Section title="应收账期" right={ext.arOverdue > 0 ? `⚠ 逾期 ${fmtAmount(ext.arOverdue)}` : undefined} rightTone={ext.arOverdue > 0 ? 'red' : undefined}>
         <div className="bg-white rounded-card border border-border p-3 grid grid-cols-3 gap-2">
           <Bucket label="逾期" amount={ext.arOverdue || 0} tone={ext.arOverdue > 0 ? 'red' : 'gray'} />
           <Bucket label="7 天内到" amount={ext.ar7d || 0} tone={ext.ar7d > 0 ? 'orange' : 'gray'} />
@@ -390,7 +394,7 @@ function Bucket({ label, amount, tone }: { label: string; amount: number; tone: 
   const colorMap = { red: 'text-red-fg', orange: 'text-orange-fg', default: 'text-ink', gray: 'text-gray3' }
   return (
     <div className="text-center">
-      <div className={`font-num text-h2 ${colorMap[tone]}`}>¥{Math.round(amount).toLocaleString()}</div>
+      <div className={`font-num text-h2 ${colorMap[tone]}`}>{fmtAmount(amount)}</div>
       <div className="text-micro text-gray3 mt-0.5">{label}</div>
     </div>
   )

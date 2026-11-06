@@ -6,6 +6,7 @@ import {
 export type OperationGroupDeliveryNoteRow = {
   productId: string
   name: string
+  category?: string | null; location?: string | null
   spec: string | null
   unit: string
   quantity: number
@@ -17,6 +18,7 @@ export type OperationGroupDeliveryNoteItem = {
   id: string
   productId: string
   name: string
+  category?: string | null; location?: string | null
   spec: string | null
   unit: string
   quantity: number
@@ -48,6 +50,7 @@ export function buildOperationGroupDeliveryNoteProjection(
   const merged = new Map<string, {
     productId: string
     name: string
+    category?: string | null; location?: string | null
     spec: string | null
     unit: string
     quantity: number
@@ -61,6 +64,8 @@ export function buildOperationGroupDeliveryNoteProjection(
     const current = merged.get(key) || {
       productId: row.productId,
       name: row.name,
+      ...(row.category != null ? { category: row.category } : {}),
+      ...(row.location != null ? { location: row.location } : {}),
       spec: row.spec || null,
       unit: row.unit,
       quantity: 0,
@@ -79,6 +84,8 @@ export function buildOperationGroupDeliveryNoteProjection(
     id: `live:${index}:${item.productId}`,
     productId: item.productId,
     name: item.name,
+    ...(item.category != null ? { category: item.category } : {}),
+    ...(item.location != null ? { location: item.location } : {}),
     spec: item.spec,
     unit: item.unit,
     quantity: Number(item.quantity.toFixed(2)),
@@ -118,6 +125,8 @@ function previewRow(value: unknown): OperationGroupDeliveryNoteRow | null {
   return {
     productId,
     name,
+    ...(typeof row.category === 'string' ? { category: row.category } : {}),
+    ...(typeof row.location === 'string' ? { location: row.location } : {}),
     spec: row.spec,
     unit,
     quantity,
@@ -144,6 +153,8 @@ function previewItem(value: unknown): OperationGroupDeliveryNoteItem | null {
     id,
     productId,
     name,
+    ...(typeof item.category === 'string' ? { category: item.category } : {}),
+    ...(typeof item.location === 'string' ? { location: item.location } : {}),
     spec: item.spec,
     unit,
     quantity,
@@ -160,6 +171,8 @@ function samePreviewItem(
   return actual.id === expected.id
     && actual.productId === expected.productId
     && actual.name === expected.name
+    && actual.category === expected.category
+    && actual.location === expected.location
     && actual.spec === expected.spec
     && actual.unit === expected.unit
     && actual.quantity === expected.quantity

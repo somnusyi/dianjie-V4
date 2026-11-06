@@ -1,7 +1,9 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
-import { useEffect, useMemo, useState } from 'react'
-import dayjs from 'dayjs'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import dayjs from '@/lib/business-dayjs'
+import { businessMonthKey, businessMonthBounds } from '@/lib/business-date'
 import { BottomNav, Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiDownload, apiFetch, getUser } from '@/lib/v2-auth'
@@ -47,48 +49,46 @@ function tone(status: string): 'red' | 'orange' | 'green' | 'blue' | 'gray' {
 
 export default function SupplierDifferencesPage() {
   const internalSupplyChain = getUser()?.role === 'SUPPLY_CHAIN'
-  const [month, setMonth] = useState(dayjs().format('YYYY-MM'))
+  const [month, setMonth] = useState(businessMonthKey())
   const [status, setStatus] = useState('')
   const [kind, setKind] = useState('')
   const [keyword, setKeyword] = useState('')
   const [claims, setClaims] = useState<Claim[] | null>(null)
   const [total, setTotal] = useState(0)
+  const [page,setPage]=useState(1),[loading,setLoading]=useState(false)
+  const serial=useRef(0)
+  const [summary,setSummary]=useState({pending:0,arbitration:0,closed:0,amount:0})
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
   const [confirmState, openConfirm] = useConfirmSheet()
 
-  async function load() {
-    const params = new URLSearchParams({ page: '1', pageSize: '100', isManual: 'false' })
-    const start = dayjs(`${month}-01`).startOf('month')
-    params.set('createdAfter', start.toISOString())
-    params.set('createdBefore', start.add(1, 'month').toISOString())
+  async function load(pageNo=1) {
+    const current=++serial.current;setLoading(true)
+    const params = new URLSearchParams({ page: String(pageNo), pageSize: '50', isManual: 'false' })
+    const { start, endExclusive } = businessMonthBounds(month)
+    params.set('createdAfter', start)
+    params.set('createdBefore', endExclusive)
     if (status) params.set('status', status)
     if (kind) params.set('kind', kind)
     if (keyword.trim()) params.set('keyword', keyword.trim())
     setError(null)
     try {
-      const response = await apiFetch<{ items: Claim[]; total: number }>(`/api/loss-claims?${params}`)
+      const response = await apiFetch<{ items: Claim[]; total: number;summary:typeof summary }>(`/api/loss-claims?${params}`)
+      if(current!==serial.current)return
+      setPage(pageNo);setSummary(response.summary||{pending:0,arbitration:0,closed:0,amount:0})
       setClaims(response.items || [])
       setTotal(response.total || 0)
     } catch (reason: any) {
-      setClaims([])
+      if(current!==serial.current)return
+      setSummary({pending:0,arbitration:0,closed:0,amount:0});setClaims([])
       setTotal(0)
       setError(reason.message || '到货差异加载失败')
-    }
+    }finally{if(current===serial.current)setLoading(false)}
   }
 
   useEffect(() => { void load() }, [month, status, kind])
 
-  const summary = useMemo(() => {
-    const rows = claims || []
-    return {
-      pending: rows.filter(row => row.status === 'PENDING').length,
-      arbitration: rows.filter(row => ['REJECTED', 'NEGOTIATING'].includes(row.status)).length,
-      closed: rows.filter(row => ['APPROVED', 'AUTO_APPROVED', 'RESOLVED'].includes(row.status)).length,
-      amount: rows.reduce((sum, row) => sum + Number(row.totalLossAmount || 0), 0),
-    }
-  }, [claims])
 
   function handle(claim: Claim, action: 'approve' | 'reject') {
     const meta = supplierLossClaimKindMeta(claim.kind)
@@ -126,9 +126,9 @@ export default function SupplierDifferencesPage() {
   async function exportCsv() {
     if (exporting) return
     const params = new URLSearchParams({ isManual: 'false' })
-    const start = dayjs(`${month}-01`).startOf('month')
-    params.set('createdAfter', start.toISOString())
-    params.set('createdBefore', start.add(1, 'month').toISOString())
+    const { start, endExclusive } = businessMonthBounds(month)
+    params.set('createdAfter', start)
+    params.set('createdBefore', endExclusive)
     if (status) params.set('status', status)
     if (kind) params.set('kind', kind)
     if (keyword.trim()) params.set('keyword', keyword.trim())
@@ -169,9 +169,9 @@ export default function SupplierDifferencesPage() {
       </header>
 
       <form onSubmit={event => { event.preventDefault(); void load() }} className="mx-4 mt-4 grid gap-2 rounded-card border border-border bg-white p-3 lg:mx-0 lg:grid-cols-[160px_190px_190px_1fr_100px]">
-        <input type="month" value={month} max={dayjs().format('YYYY-MM')} onChange={event => setMonth(event.target.value)} className="rounded-cta border border-border bg-bg px-3 py-2 text-caption" />
-        <select value={status} onChange={event => setStatus(event.target.value)} className="rounded-cta border border-border bg-bg px-3 py-2 text-caption">{STATUS_OPTIONS.map(option => <option key={option[0]} value={option[0]}>{option[1]}</option>)}</select>
-        <select value={kind} onChange={event => setKind(event.target.value)} className="rounded-cta border border-border bg-bg px-3 py-2 text-caption">{KIND_OPTIONS.map(option => <option key={option[0]} value={option[0]}>{option[1]}</option>)}</select>
+        <input type="month" value={month} max={businessMonthKey()} onChange={event => setMonth(event.target.value)} className="rounded-cta border border-border bg-bg px-3 py-2 text-caption" />
+        <SearchableSelect searchWhenLong searchLabel="搜索状态" value={status} onChange={event => setStatus(event.target.value)} className="rounded-cta border border-border bg-bg px-3 py-2 text-caption">{STATUS_OPTIONS.map(option => <option key={option[0]} value={option[0]}>{option[1]}</option>)}</SearchableSelect>
+        <SearchableSelect searchWhenLong searchLabel="搜索选项" value={kind} onChange={event => setKind(event.target.value)} className="rounded-cta border border-border bg-bg px-3 py-2 text-caption">{KIND_OPTIONS.map(option => <option key={option[0]} value={option[0]}>{option[1]}</option>)}</SearchableSelect>
         <input value={keyword} onChange={event => setKeyword(event.target.value)} placeholder="差异单 / 订货单 / 配送单 / 入库单 / 门店" className="rounded-cta border border-border bg-bg px-3 py-2 text-caption" />
         <button type="submit" className="rounded-cta bg-ink px-3 py-2 text-button text-white">查询</button>
       </form>
@@ -183,7 +183,7 @@ export default function SupplierDifferencesPage() {
         ].map(([label, value, color]) => <div key={String(label)} className="rounded-card border border-border bg-white p-3"><div className="text-micro text-gray3">{label}</div><div className={`mt-1 font-num text-h2 ${color}`}>{value}</div></div>)}
       </section>
 
-      {total > 100 && <div className="mx-4 mt-3 rounded-card bg-amber/10 p-3 text-caption text-amber-fg lg:mx-0">共有 {total} 条，页面先展示前 100 条；“导出全部结果”由服务端生成完整文件。</div>}
+      <div className="mx-4 mt-3 flex flex-wrap items-center justify-between gap-3 text-caption lg:mx-0"><span>共{total}条，顶部汇总为全部筛选结果；当前第{page}页</span><div className="flex gap-3"><button disabled={loading||page<=1} onClick={()=>void load(page-1)}>上一页</button><button disabled={loading||page*50>=total} onClick={()=>void load(page+1)}>下一页</button></div></div>
       {error && <div className="mx-4 mt-3 rounded-card bg-red-bg p-3 text-caption text-red-fg lg:mx-0">{error}</div>}
       {claims === null && <div className="mx-4 mt-4 rounded-card border border-border bg-white p-10 text-center text-caption text-gray3 lg:mx-0">加载中…</div>}
       {claims?.length === 0 && <div className="mx-4 mt-4 rounded-card border border-border bg-white p-10 text-center text-caption text-gray3 lg:mx-0">当前条件没有到货差异</div>}

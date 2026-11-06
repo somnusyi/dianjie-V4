@@ -1,80 +1,31 @@
 import axios from 'axios'
-
-const api = axios.create({
-  // 默认同源: /api/* 开发走 Next 代理, 生产走 Nginx 转发. localhost:4000 兜底会让
-  // 生产浏览器把请求打到用户自己电脑上, 等于 refresh 永远失败 → 每 2h 被踢回登录.
-  baseURL: process.env.NEXT_PUBLIC_API_URL || '',
-  timeout: 10000,
+import { bootstrapSession, getToken, refreshAccessOnce, clearSession, getSessionGeneration, assertSessionGeneration } from './v2-auth'
+const api=axios.create({baseURL:process.env.NEXT_PUBLIC_API_URL||'',timeout:10000})
+api.interceptors.request.use(async config=>{
+ if(typeof window!=='undefined') {
+  const generation = (config as any).__djSessionGeneration ?? getSessionGeneration()
+  ;(config as any).__djSessionGeneration = generation
+  assertSessionGeneration(generation)
+  if(config.url?.startsWith('/api/auth/'))config.headers['X-Dianjie-Session']='cookie-v1'
+  const token=getToken()||await bootstrapSession()
+  assertSessionGeneration(generation)
+  if(token)config.headers.Authorization=`Bearer ${token}`
+ }
+ return config
 })
-
-// 自动带上 token
-api.interceptors.request.use((config) => {
-  if (typeof window !== 'undefined') {
-    const token = localStorage.getItem('token') || localStorage.getItem('dj_token')
-    if (token) config.headers.Authorization = `Bearer ${token}`
-  }
-  return config
+api.interceptors.response.use(res=>{
+ if(typeof window!=='undefined'&&(res.config as any).__djSessionGeneration!==undefined)assertSessionGeneration((res.config as any).__djSessionGeneration)
+ return res
+},async err=>{
+ const original=err.config
+ if(typeof window!=='undefined'&&original?.__djSessionGeneration!==undefined)assertSessionGeneration(original.__djSessionGeneration)
+ if(err.response?.status===401&&typeof window!=='undefined'&&original&&!original._retry&&!original.url?.startsWith('/api/auth/')) {
+  original._retry=true
+  const token=await refreshAccessOnce()
+  assertSessionGeneration(original.__djSessionGeneration)
+  if(token){original.headers.Authorization=`Bearer ${token}`;return api(original)}
+  clearSession();window.location.href='/v2/login'
+ }
+ return Promise.reject(err)
 })
-
-// 401 先尝试用 refresh token 续期，再跳登录
-let isRefreshing = false
-let refreshQueue: Array<(token: string) => void> = []
-
-api.interceptors.response.use(
-  (res) => res,
-  async (err) => {
-    const original = err.config
-    if (err.response?.status === 401 && typeof window !== 'undefined' && !original._retry) {
-      const refresh = localStorage.getItem('refreshToken') || localStorage.getItem('dj_refresh')
-      if (refresh) {
-        original._retry = true
-        if (isRefreshing) {
-          // 等待正在进行的刷新完成
-          return new Promise((resolve) => {
-            refreshQueue.push((token) => {
-              original.headers.Authorization = `Bearer ${token}`
-              resolve(api(original))
-            })
-          })
-        }
-        isRefreshing = true
-        try {
-          const r = await axios.post(
-            `${process.env.NEXT_PUBLIC_API_URL || ''}/api/auth/refresh`,
-            { token: refresh }
-          )
-          const newToken = r.data.token
-          localStorage.setItem('dj_token', newToken)
-          localStorage.setItem('token', newToken)
-          if (r.data.refreshToken) {
-            localStorage.setItem('dj_refresh', r.data.refreshToken)
-            localStorage.setItem('refreshToken', r.data.refreshToken)
-          }
-          refreshQueue.forEach(cb => cb(newToken))
-          refreshQueue = []
-          original.headers.Authorization = `Bearer ${newToken}`
-          return api(original)
-        } catch {
-          refreshQueue = []
-          // 只清自己的 key, 不能 clear() 把 v2 的 token / user 也带走
-          localStorage.removeItem('dj_token')
-          localStorage.removeItem('dj_refresh')
-          localStorage.removeItem('token')
-          localStorage.removeItem('refreshToken')
-          window.location.href = '/v2/login'
-        } finally {
-          isRefreshing = false
-        }
-      } else {
-        localStorage.removeItem('dj_token')
-        localStorage.removeItem('dj_refresh')
-        localStorage.removeItem('token')
-        localStorage.removeItem('refreshToken')
-        window.location.href = '/v2/login'
-      }
-    }
-    return Promise.reject(err)
-  }
-)
-
 export default api

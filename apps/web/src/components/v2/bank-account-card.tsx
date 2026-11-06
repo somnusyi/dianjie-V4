@@ -175,7 +175,7 @@ export function BankAccountCard({ config, onTransfer }: {
           </button>
           {refreshAt && (
             <span className="text-micro text-gray4">
-              更新于 {refreshAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              更新于 {refreshAt.toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
             </span>
           )}
         </div>

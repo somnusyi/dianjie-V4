@@ -77,7 +77,9 @@ const listQuerySchema = z.object({
 /** 公开申请端点: POST /api/auth/apply (挂在 auth 路由 prefix 下) */
 export const publicApplyRoute: FastifyPluginAsync = async (app) => {
   app.post('/apply', {
-    config: { rateLimit: { max: 5, timeWindow: '1 hour' } },
+    // Account applications must not share a proxy-wide submission quota.
+    // Explicitly opt out so the global limiter does not replace the old hourly limit.
+    config: { rateLimit: false },
   }, async (req: any, reply: any) => {
     const parsed = applySchema.safeParse(req.body)
     if (!parsed.success) {

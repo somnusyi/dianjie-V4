@@ -214,6 +214,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
         // 门店集合实际变化时递增 authVersion，让旧 token 立即失效（避免被移除门店仍有最长 2h 残余访问）
         const oldStoreIds = target.storeIds?.length ? target.storeIds : (target.storeId ? [target.storeId] : [])
         const storesChanged = storesTouched && JSON.stringify(oldStoreIds) !== JSON.stringify(storeIds)
+        const securityScopeChanged = storesChanged || newRole !== target.role || supplierId !== target.supplierId
         await tx.user.update({
           where: { id: target.id },
           data: {
@@ -224,7 +225,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
             ...(storesTouched ? { storeId: storeIds[0] ?? null, storeIds } : {}),
             ...(parsed.data.supplierId !== undefined ? { supplierId } : {}),
             ...(hashed ? { password: hashed, authVersion: { increment: 1 } } : {}),
-            ...(storesChanged && !hashed ? { authVersion: { increment: 1 } } : {}),
+            ...(securityScopeChanged && !hashed ? { authVersion: { increment: 1 } } : {}),
           },
         })
         await tx.opLog.create({

@@ -1,3 +1,4 @@
+import { credentialContext, sealCredential } from '../lib/credential-vault'
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
@@ -12,6 +13,11 @@ const SAFE_STORE_SELECT = {
   consigneeId: true, status: true, lifecyclePhase: true, engineerId: true,
   expectedOpenAt: true, createdAt: true, updatedAt: true,
 } as const
+function withoutStoreCredentials(store: any) {
+  const { aggregatorApiKeyEnc, aggregatorSecretEnc, wechatApiV3KeyEnc, alipayPrivateKeyEnc, ...visible } = store
+  return visible
+}
+
 const paymentConfigSchema = z.object({
   paymentChannelType: z.enum(['AGGREGATOR', 'WECHAT_DIRECT', 'ALIPAY_DIRECT']).nullable().optional(),
   aggregatorVendor: z.enum(['qianqian', 'qfpay', 'lakala', 'hesh']).nullable().optional(),
@@ -49,7 +55,7 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
       }
       return prisma.store.findMany({ where: safeWhere, select: SAFE_STORE_SELECT, orderBy: { no: 'asc' } })
     }
-    const cacheKey = `stores:list:${tenantId}:${role}:${scope ? scope.join(',') : 'all'}:${role === 'ENGINEERING' ? userId : 'x'}`
+    const cacheKey = `stores:list:${tenantId}:v3-secretless:${role}:${scope ? scope.join(',') : 'all'}:${role === 'ENGINEERING' ? userId : 'x'}`
     return cached(cacheKey, 300, async () => {
     const monthStart = dayjs().startOf('month').toDate()
 
@@ -130,7 +136,7 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
       else if (Number(lossRate) > 10 || (pending?._count?.id || 0) > 2) health = 'warning'
 
       return {
-        ...store,
+        ...withoutStoreCredentials(store),
         consigneeId: cgMap[store.id] ?? null,
         stats: {
           monthPurchase: purchaseAmt,
@@ -219,7 +225,7 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
     })
 
     return {
-      store,
+      store: withoutStoreCredentials(store),
       stats: { monthPurchase, overdueCount, pendingCount, monthLoss },
       receipts,
       schedules,
@@ -285,7 +291,7 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
     }
     await prisma.opLog.create({ data: { tenantId, userId, action: `创建门店 ${name}`, entityType: 'Store', targetId: store.id } })
     void invalidatePattern(`stores:list:${tenantId}:*`)
-    return store
+    return withoutStoreCredentials(store)
   })
 
   // 给前端用: 建议下一个可用 no (扫所有店, 不暴露 store 详情)
@@ -369,7 +375,7 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
     }
     await prisma.opLog.create({ data: { tenantId, userId, action: `更新门店 ${store.name}`, entityType: 'Store', targetId: store.id } })
     void invalidatePattern(`stores:list:${tenantId}:*`)
-    return store
+    return withoutStoreCredentials(store)
   })
 
   // ── Sprint A · 门店收款配置 ────────────────────────────
@@ -439,7 +445,7 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
       autoSyncRevenue,
     } = parsed.data
 
-    // TODO Sprint B: 用 KMS / aes-256-gcm 加密后再写
+    // Bind encrypted credentials to this tenant, store and field.
     const data: any = {}
     if (paymentChannelType    !== undefined) data.paymentChannelType    = paymentChannelType || null
     if (aggregatorVendor      !== undefined) data.aggregatorVendor      = aggregatorVendor || null
@@ -453,10 +459,10 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
     if (bankName              !== undefined) data.bankName              = bankName || null
     if (autoSyncRevenue       !== undefined) data.autoSyncRevenue       = !!autoSyncRevenue
     // 敏感字段:有值才更新, 空字符串视为不修改(避免误清)
-    if (aggregatorApiKey)  data.aggregatorApiKeyEnc = aggregatorApiKey
-    if (aggregatorSecret)  data.aggregatorSecretEnc = aggregatorSecret
-    if (wechatApiV3Key)    data.wechatApiV3KeyEnc   = wechatApiV3Key
-    if (alipayPrivateKey)  data.alipayPrivateKeyEnc = alipayPrivateKey
+    if (aggregatorApiKey)  data.aggregatorApiKeyEnc = sealCredential(aggregatorApiKey, credentialContext(`${tenantId}:${req.params.id}`, 'store-payment', 'aggregatorApiKey'))
+    if (aggregatorSecret)  data.aggregatorSecretEnc = sealCredential(aggregatorSecret, credentialContext(`${tenantId}:${req.params.id}`, 'store-payment', 'aggregatorSecret'))
+    if (wechatApiV3Key)    data.wechatApiV3KeyEnc   = sealCredential(wechatApiV3Key, credentialContext(`${tenantId}:${req.params.id}`, 'store-payment', 'wechatApiV3Key'))
+    if (alipayPrivateKey)  data.alipayPrivateKeyEnc = sealCredential(alipayPrivateKey, credentialContext(`${tenantId}:${req.params.id}`, 'store-payment', 'alipayPrivateKey'))
 
     try {
       await prisma.$transaction(async tx => {

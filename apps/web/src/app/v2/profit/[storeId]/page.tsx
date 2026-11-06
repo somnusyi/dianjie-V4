@@ -138,7 +138,7 @@ export default function ProfitPage({ params }: { params: { storeId: string } }) 
                   </div>
                   {sinceStartDate && (
                     <div className="text-micro text-gray3 mt-2">
-                      自 {sinceStartDate.toLocaleDateString('zh-CN')} 开业 · 共 {Math.ceil((Date.now() - sinceStartDate.getTime()) / 86400000)} 天
+                      自 {sinceStartDate.toLocaleDateString('zh-CN', {timeZone:'Asia/Shanghai'})} 开业 · 共 {Math.ceil((Date.now() - sinceStartDate.getTime()) / 86400000)} 天
                     </div>
                   )}
                 </>

@@ -3,6 +3,8 @@
  * 列表 + 新建 + 重置密码 + 启停
  */
 'use client'
+import { SearchableList } from '@/components/v2/searchable-select'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 import { useEffect, useState } from 'react'
 import { getToken, getUser, routeForRole } from '@/lib/v2-auth'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
@@ -288,33 +290,32 @@ export default function TeamPage() {
               </div>
               <div>
                 <label className="text-micro text-gray3 block mb-1">角色</label>
-                <select value={form.role} onChange={e => { setForm({...form, role: e.target.value, storeId: ''}); setFormStoreIds([]) }}
+                <SearchableSelect searchWhenLong searchLabel="搜索角色" value={form.role} onChange={e => { setForm({...form, role: e.target.value, storeId: ''}); setFormStoreIds([]) }}
                   className="w-full bg-bg rounded p-2 outline-none text-body">
                   {ROLE_OPTIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
-                </select>
+                </SearchableSelect>
               </div>
               {(form.role === 'MANAGER' || form.role === 'KITCHEN_LEAD') && (
                 <div>
                   <label className="text-micro text-gray3 block mb-1">绑定门店 {form.role === 'MANAGER' && '(必填)'}</label>
-                  <select value={form.storeId} onChange={e => setForm({...form, storeId: e.target.value})}
+                  <SearchableSelect searchWhenLong searchLabel="搜索门店" value={form.storeId} onChange={e => setForm({...form, storeId: e.target.value})}
                     className="w-full bg-bg rounded p-2 outline-none text-body">
                     <option value="">{stores.length === 0 ? '请先去创建门店' : '请选择门店'}</option>
                     {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
+                  </SearchableSelect>
                 </div>
               )}
               {form.role === 'REGIONAL_MANAGER' && (
                 <div>
                   <label className="text-micro text-gray3 block mb-1">绑定门店 (可多选, 至少一家)</label>
-                  <div className="space-y-1 max-h-48 overflow-y-auto">
+                  <SearchableList searchLabel="搜索可选门店" className="space-y-1 max-h-48 overflow-y-auto">
                     {stores.map(s => (
                       <label key={s.id} className="flex items-center gap-2 bg-bg rounded p-2 text-body">
                         <input type="checkbox" checked={formStoreIds.includes(s.id)}
                           onChange={e => setFormStoreIds(e.target.checked ? [...formStoreIds, s.id] : formStoreIds.filter(id => id !== s.id))} />
                         {s.name}
                       </label>
-                    ))}
-                  </div>
+                    ))}</SearchableList>
                 </div>
               )}
               {error && <div className="bg-red-bg text-red-fg rounded p-2 text-caption">{error}</div>}
@@ -338,33 +339,32 @@ export default function TeamPage() {
               <div className="space-y-3">
                 <div>
                   <label className="text-micro text-gray3 block mb-1">角色</label>
-                  <select value={inviteRole} onChange={e => { setInviteRole(e.target.value); setInviteStoreId(''); setInviteStoreIds([]) }}
+                  <SearchableSelect searchWhenLong searchLabel="搜索角色" value={inviteRole} onChange={e => { setInviteRole(e.target.value); setInviteStoreId(''); setInviteStoreIds([]) }}
                     className="w-full bg-bg rounded p-2 outline-none text-body">
                     {ROLE_OPTIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
-                  </select>
+                  </SearchableSelect>
                 </div>
                 {(inviteRole === 'MANAGER' || inviteRole === 'KITCHEN_LEAD') && (
                   <div>
                     <label className="text-micro text-gray3 block mb-1">绑定门店 (店长必填)</label>
-                    <select value={inviteStoreId} onChange={e => setInviteStoreId(e.target.value)}
+                    <SearchableSelect searchWhenLong searchLabel="搜索门店" value={inviteStoreId} onChange={e => setInviteStoreId(e.target.value)}
                       className="w-full bg-bg rounded p-2 outline-none text-body">
                       <option value="">{stores.length === 0 ? '请先创建门店' : '请选择门店'}</option>
                       {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                    </select>
+                    </SearchableSelect>
                   </div>
                 )}
                 {inviteRole === 'REGIONAL_MANAGER' && (
                   <div>
                     <label className="text-micro text-gray3 block mb-1">绑定门店 (可多选, 至少一家)</label>
-                    <div className="space-y-1 max-h-48 overflow-y-auto">
+                    <SearchableList searchLabel="搜索可选门店" className="space-y-1 max-h-48 overflow-y-auto">
                       {stores.map(s => (
                         <label key={s.id} className="flex items-center gap-2 bg-bg rounded p-2 text-body">
                           <input type="checkbox" checked={inviteStoreIds.includes(s.id)}
                             onChange={e => setInviteStoreIds(e.target.checked ? [...inviteStoreIds, s.id] : inviteStoreIds.filter(id => id !== s.id))} />
                           {s.name}
                         </label>
-                      ))}
-                    </div>
+                      ))}</SearchableList>
                   </div>
                 )}
                 <div>

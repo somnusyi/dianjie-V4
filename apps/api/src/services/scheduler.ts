@@ -1,5 +1,6 @@
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
+import { businessDateKey } from '../lib/businessTime'
 import { executeBankPayment } from './paymentSchedule'
 import { sendNotification as notify } from './notification'
 import { runMeituanHourlySync, runMeituanDailyReconcile } from './meituan/cron'
@@ -108,7 +109,7 @@ export async function ensurePaymentDueReminder(scheduleId: string, kind: Payment
     type,
     title: kind === '3DAY' ? '账期提醒：3天后到期' : '紧急：明日到期',
     body: kind === '3DAY'
-      ? `${schedule.receipt.store.name} → ${schedule.supplier.name} ¥${Number(schedule.amount).toLocaleString()}，到期日 ${dayjs(schedule.dueAt).format('MM/DD')}`
+      ? `${schedule.receipt.store.name} → ${schedule.supplier.name} ¥${Number(schedule.amount).toLocaleString()}，到期日 ${businessDateKey(schedule.dueAt).slice(5).replace('-', '/')}`
       : `${schedule.receipt.store.name} → ${schedule.supplier.name} ¥${Number(schedule.amount).toLocaleString()}`,
     refType: 'PaymentSchedule',
     refId: schedule.id,

@@ -1,0 +1,10 @@
+{
+  "status": "actual_uat_encrypted_archive_offline_decryption_verified",
+  "archiveSha256": "2dcb624f7a88b5e65c5700d5fb2c8238a0857b8c20fe2118c4b27c9becc38b82",
+  "databaseDumpChecksumVerified": true,
+  "attachmentManifestCount": 595,
+  "recoveryPrivateKeyStayedOffServer": true,
+  "databaseRestored": false,
+  "archiveUploadedToGitOrNas": false,
+  "limits": "Archive and DB dump checksums verified; no restore of live business data. Attachment encryption roundtrips verified by server writer."
+}

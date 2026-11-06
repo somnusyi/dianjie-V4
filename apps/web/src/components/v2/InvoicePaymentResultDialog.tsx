@@ -1,4 +1,6 @@
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
@@ -29,8 +31,7 @@ type Payment = {
 }
 
 function localToday() {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  return businessDayjs().format('YYYY-MM-DD')
 }
 
 export default function InvoicePaymentResultDialog({
@@ -144,7 +145,7 @@ export default function InvoicePaymentResultDialog({
           {error && <div className="bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}
           <div>
             <label className="text-micro text-gray3 block mb-1">实际出款账户 *</label>
-            <select value={accountId} onChange={e => setAccountId(e.target.value)}
+            <SearchableSelect searchWhenLong searchLabel="搜索账户" value={accountId} onChange={e => setAccountId(e.target.value)}
                     className="w-full bg-bg rounded-chip px-3 py-2 text-body">
               <option value="">{accounts === null ? '加载账户中…' : `请选择 ${method.label} 账户`}</option>
               {availableAccounts.map(account => (
@@ -152,7 +153,7 @@ export default function InvoicePaymentResultDialog({
                   {account.name} · 余额 ¥{Number(account.balance).toFixed(2)}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
             {accounts && availableAccounts.length === 0 && (
               <p className="text-micro text-red-fg mt-1">未配置可用的 {method.accountType} 资金账户，不能确认付款。</p>
             )}

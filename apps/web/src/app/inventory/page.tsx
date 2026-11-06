@@ -5,7 +5,7 @@ import AppLayout from '@/components/AppLayout'
 import { Btn, Field, Input, Select, fmt, useToast } from '@/components/ui'
 import api from '@/lib/api'
 import { clientRequestId } from '@/lib/client-id'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 
 type FilterAlert = '' | 'low' | 'expiring'
 

@@ -3,6 +3,7 @@
  * 接 GET /api/profit/store/:storeId?month=YYYY-MM 真 P&L 拆解
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 import { useEffect, useState } from 'react'
 import { Chip, BottomNav } from '@/components/v2'
 import { GlanceStrip } from '@/components/v2/glance-strip'
@@ -30,7 +31,7 @@ type Profit = {
   netProfit: number;   netMargin: number
 }
 
-const MONTH = new Date().toISOString().slice(0, 7)
+const MONTH = businessDayjs().format('YYYY-MM')
 
 export default function BossStoreDetailPage({ params }: { params: { id: string } }) {
   const [tab, setTab] = useState('stores')

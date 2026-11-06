@@ -1,6 +1,7 @@
 import { Prisma, prisma } from '@dianjie/db'
 import { consumeSupplierStockBatches } from './supplierStockBatch'
 import { reservationCloseState } from './partialShipmentClose'
+import { type FrozenOrderInventoryLine } from './warehouseLedger'
 
 type ReservationLine = {
   purchaseOrderItemId: string
@@ -15,7 +16,7 @@ type ReservationScope = {
   purchaseOrderId: string
 }
 
-type ShipmentReservationLine = ReservationLine & {
+type ShipmentReservationLine = ReservationLine & Partial<SupplierFrozenStockLine> & {
   shippedQty: number | Prisma.Decimal
 }
 
@@ -74,6 +75,80 @@ async function activeReservedByProduct(
     _sum: { quantity: true },
   })
   return new Map(rows.map(row => [row.productId, row._sum.quantity || new Prisma.Decimal(0)]))
+}
+
+
+export type SupplierFrozenStockLine = FrozenOrderInventoryLine & {
+  purchaseUnitSnapshot?: string | null; costUnitSnapshot?: string | null
+  inventoryUnitsPerPurchaseUnitSnapshot?: number | string | Prisma.Decimal | null
+  inventoryUnitsPerCostUnitSnapshot?: number | string | Prisma.Decimal | null
+}
+export function supplierStockUnitsPerOrderUnit(line: SupplierFrozenStockLine, stockUnit: string) {
+  const orderUnit = String(line.orderUnitSnapshot || line.productUnit || '').trim()
+  if (!stockUnit || !orderUnit) throw businessError('缺少供应商库存账单位或冻结订货单位', 409)
+  if (orderUnit === stockUnit) return new Prisma.Decimal(1)
+  const orderToInventory = new Prisma.Decimal(line.inventoryUnitsPerOrderUnitSnapshot || 0)
+  let stockToInventory: Prisma.Decimal | undefined
+  if (stockUnit === line.inventoryUnitSnapshot) stockToInventory = new Prisma.Decimal(1)
+  else if (stockUnit === line.purchaseUnitSnapshot) stockToInventory = new Prisma.Decimal(line.inventoryUnitsPerPurchaseUnitSnapshot || 0)
+  else if (stockUnit === line.costUnitSnapshot) stockToInventory = new Prisma.Decimal(line.inventoryUnitsPerCostUnitSnapshot || 0)
+  if (!orderToInventory.isFinite() || orderToInventory.lte(0) || !stockToInventory?.isFinite() || stockToInventory.lte(0)) throw businessError('订货单位无法可靠换算到供应商库存账单位，请先核对商品单位', 409)
+  const result = orderToInventory.div(stockToInventory)
+  if (!result.equals(result.toDecimalPlaces(6))) throw businessError('供应商库存单位换算精度不足，请先核对商品单位', 409)
+  return result
+}
+export function supplierStockQuantity(line: SupplierFrozenStockLine, stockUnit: string, quantity: number | string | Prisma.Decimal) {
+  const result = new Prisma.Decimal(quantity).mul(supplierStockUnitsPerOrderUnit(line, stockUnit))
+  if (!result.isFinite() || !result.equals(result.toDecimalPlaces(3))) throw businessError('换算后超出供应商库存账精度，请调整数量或库存单位', 400)
+  return result
+}
+async function assertSupplierLedgerBasisForProducts(tx: Prisma.TransactionClient, scope: ReservationScope, lines: SupplierFrozenStockLine[]) {
+  const expected = new Map(lines.map(line => [line.productId, String(line.productUnit || '').trim()]))
+  const products = await tx.product.findMany({ where: { tenantId: scope.tenantId, supplierId: scope.supplierId, id: { in: [...expected.keys()] } }, select: { id: true, unit: true } })
+  if (products.length !== expected.size || products.some(product => expected.get(product.id) !== product.unit)) throw businessError('供应商库存账单位与商品单位不一致，请先核对单位迁移', 409)
+  const active = await tx.supplierStockReservation.findMany({ where: { tenantId: scope.tenantId, supplierId: scope.supplierId, productId: { in: [...expected.keys()] }, status: 'ACTIVE' }, include: { purchaseOrderItem: { select: { orderUnitSnapshot: true } } } })
+  for (const row of active) {
+    const stockUnit = expected.get(row.productId)!
+    const recorded = row as typeof row & { stockUnitSnapshot?: string | null }
+    if (recorded.stockUnitSnapshot ? recorded.stockUnitSnapshot !== stockUnit : Boolean(row.purchaseOrderItem.orderUnitSnapshot && row.purchaseOrderItem.orderUnitSnapshot !== stockUnit)) throw businessError('其他订单预占使用不同或无法核实的库存账单位，请先核对历史单位', 409)
+  }
+}
+
+export async function syncSubmissionSupplierReservation(
+  tx: Prisma.TransactionClient,
+  input: ReservationScope & { lines: SupplierFrozenStockLine[] },
+) {
+  const current = await tx.supplierStockReservation.findMany({ where: { tenantId: input.tenantId, supplierId: input.supplierId, purchaseOrderId: input.purchaseOrderId }, include: { purchaseOrderItem: { select: { productId: true, orderUnitSnapshot: true, inventoryUnitSnapshot: true, inventoryUnitsPerOrderUnitSnapshot: true } } } })
+  if (current.some(row => row.status === 'CONSUMED')) throw businessError('已发货订单不能重新预占库存')
+  const byItem = new Map(current.map(row => [row.purchaseOrderItemId, row]))
+  const lines = input.lines.map(line => {
+    const prior = byItem.get(line.purchaseOrderItemId) as (typeof current[number] & { stockUnitSnapshot?: string | null; stockUnitsPerOrderUnitSnapshot?: Prisma.Decimal | null }) | undefined
+    const stockUnit = String(line.productUnit || '').trim()
+    if (prior) {
+      const frozen = prior.purchaseOrderItem
+      if (prior.productId !== line.productId || frozen.productId !== line.productId || frozen.inventoryUnitSnapshot !== line.inventoryUnitSnapshot || frozen.orderUnitSnapshot !== line.orderUnitSnapshot || !new Prisma.Decimal(frozen.inventoryUnitsPerOrderUnitSnapshot || 1).equals(line.inventoryUnitsPerOrderUnitSnapshot || 1)) throw businessError('同一订货行不能更换商品或冻结库存单位，请移除原行后新增商品', 409)
+      if (prior.stockUnitSnapshot && prior.stockUnitSnapshot !== stockUnit) throw businessError('商品库存账单位已改变，不能混用旧预占；请先核对单位迁移', 409)
+      if (!prior.stockUnitSnapshot && String(line.orderUnitSnapshot || stockUnit) !== stockUnit) throw businessError('历史预占缺少可靠库存账单位快照，请先核对历史单位', 409)
+    }
+    const factor = supplierStockUnitsPerOrderUnit(line, stockUnit)
+    if (prior?.stockUnitsPerOrderUnitSnapshot && !prior.stockUnitsPerOrderUnitSnapshot.equals(factor)) throw businessError('同一订货行的供应商库存账换算已改变，请先核对单位迁移', 409)
+    return { ...line, stockUnit, factor, quantity: supplierStockQuantity(line, stockUnit, line.quantity) }
+  })
+  const ids = [...new Set([...lines.map(line => line.productId), ...current.filter(row => row.status === 'ACTIVE').map(row => row.productId)])]
+  const physical = await lockPhysicalStock(tx, input.tenantId, input.supplierId, ids)
+  await assertSupplierLedgerBasisForProducts(tx, input, input.lines)
+  const others = await activeReservedByProduct(tx, { ...input, productIds: ids, excludeOrderId: input.purchaseOrderId })
+  const requested = aggregateByProduct(lines, line => line.quantity)
+  for (const [id, qty] of requested) if (physical.get(id)!.minus(others.get(id) || 0).lt(qty)) throw businessError(`${lines.find(line => line.productId === id)?.productName || '商品'} 可用库存不足，无法提交或修改订单`)
+  const desired = new Map(lines.map(line => [line.purchaseOrderItemId, line]))
+  for (const row of current) {
+    const line = desired.get(row.purchaseOrderItemId)
+    if (line) {
+      await tx.supplierStockReservation.update({ where: { id: row.id }, data: { quantity: line.quantity, status: 'ACTIVE', fulfilledQty: 0, releasedAt: null, consumedAt: null, stockUnitSnapshot: line.stockUnit, stockUnitsPerOrderUnitSnapshot: line.factor } as Prisma.SupplierStockReservationUncheckedUpdateInput })
+      desired.delete(row.purchaseOrderItemId)
+    } else if (row.status === 'ACTIVE') await tx.supplierStockReservation.update({ where: { id: row.id }, data: { status: 'RELEASED', releasedAt: new Date() } })
+  }
+  for (const line of desired.values()) await tx.supplierStockReservation.create({ data: { tenantId: input.tenantId, supplierId: input.supplierId, purchaseOrderId: input.purchaseOrderId, purchaseOrderItemId: line.purchaseOrderItemId, productId: line.productId, quantity: line.quantity, stockUnitSnapshot: line.stockUnit, stockUnitsPerOrderUnitSnapshot: line.factor } as Prisma.SupplierStockReservationUncheckedCreateInput })
 }
 
 /** 接单时原子预占。调用方必须与订单 SUBMITTED -> CONFIRMED CAS 放在同一事务。 */
@@ -136,11 +211,25 @@ export async function consumeSupplierStockForShipment(
     orderNo: string
     userId: string
     closedAt?: Date
+    useFrozenInventoryUnits?: boolean
     lines: ShipmentReservationLine[]
   },
 ) {
+  if (input.useFrozenInventoryUnits) {
+    const existing = await tx.supplierStockReservation.findMany({ where: { tenantId: input.tenantId, supplierId: input.supplierId, purchaseOrderId: input.purchaseOrderId } })
+    input = { ...input, lines: input.lines.map(line => {
+      const prior = existing.find(row => row.purchaseOrderItemId === line.purchaseOrderItemId) as (typeof existing[number] & { stockUnitSnapshot?: string | null; stockUnitsPerOrderUnitSnapshot?: Prisma.Decimal | null }) | undefined
+      const stockUnit = String(line.productUnit || '').trim()
+      const factor = supplierStockUnitsPerOrderUnit(line, stockUnit)
+      if (prior?.stockUnitSnapshot && prior.stockUnitSnapshot !== stockUnit) throw businessError('商品库存账单位已改变，不能混用旧预占', 409)
+      if (prior?.stockUnitsPerOrderUnitSnapshot && !prior.stockUnitsPerOrderUnitSnapshot.equals(factor)) throw businessError('供应商库存账冻结换算不一致', 409)
+      if (prior && !prior.stockUnitSnapshot && String(line.orderUnitSnapshot || stockUnit) !== stockUnit) throw businessError('历史预占缺少可靠库存账单位快照', 409)
+      return { ...line, quantity: supplierStockQuantity(line, stockUnit, line.quantity), shippedQty: supplierStockQuantity(line, stockUnit, line.shippedQty) }
+    }) }
+  }
   const productIds = [...new Set(input.lines.map(line => line.productId))]
   const physical = await lockPhysicalStock(tx, input.tenantId, input.supplierId, productIds)
+  if (input.useFrozenInventoryUnits) await assertSupplierLedgerBasisForProducts(tx, input, input.lines)
   const reservedByOthers = await activeReservedByProduct(tx, {
     tenantId: input.tenantId,
     supplierId: input.supplierId,
@@ -222,6 +311,7 @@ export async function consumeSupplierStockForShipment(
             productId: line.productId,
             purchaseOrderId: input.purchaseOrderId,
             purchaseOrderItemId: line.purchaseOrderItemId,
+            ...(input.useFrozenInventoryUnits ? { stockUnitSnapshot: String(line.productUnit), stockUnitsPerOrderUnitSnapshot: supplierStockUnitsPerOrderUnit(line, String(line.productUnit)) } : {}),
             quantity: shipped,
             fulfilledQty: shipped,
             status: 'CONSUMED',

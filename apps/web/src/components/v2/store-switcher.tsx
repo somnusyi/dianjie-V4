@@ -6,6 +6,7 @@
  * 单店用户不渲染（无感）。
  */
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 import { useEffect, useState } from 'react'
 import { getUser, getActiveStoreId, setActiveStoreId } from '@/lib/v2-auth'
 
@@ -27,7 +28,7 @@ export function StoreSwitcher({ className = '' }: { className?: string }) {
   if (stores.length <= 1) return null
 
   return (
-    <select
+    <SearchableSelect searchWhenLong searchLabel="搜索切换门店"
       className={`bg-white border border-border rounded-full px-3 py-1 text-caption text-gray1 ${className}`}
       value={active}
       onChange={e => {
@@ -40,6 +41,6 @@ export function StoreSwitcher({ className = '' }: { className?: string }) {
       {stores.map(s => (
         <option key={s.id} value={s.id}>{s.name}</option>
       ))}
-    </select>
+    </SearchableSelect>
   )
 }

@@ -214,7 +214,7 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
     })), ...warehouseCounts.map(c => ({ recordType: 'WAREHOUSE_STOCKTAKE', detailId: c.id, orgKey:`tenant:${tenantId}`, warehouseKey:`warehouse:${c.warehouseId}`, id: `warehouse:${c.id}`, no: c.no, date: c.countDate.toISOString().slice(0, 10), org, warehouse: c.warehouse.name, itemCount: c.itemCount,
       bookAmount: Number(c.totalBookValue), actualAmount: Number(c.totalCountedValue), differenceAmount: Number(c.totalDifferenceValue),
       countType: c.countScope === 'ALL' ? '全部盘' : '指定物品', countMethod: '汇总盘点', differenceCount: c.differenceCount, status: statuses[c.status], difference: c.countedCount < c.itemCount ? '未盘完' : c.differenceCount ? '有差异' : '无差异',
-      auditedAt: day(c.reviewedAt), createdAt: timestamp(c.createdAt), creator: names.get(c.createdById) ?? null, note: c.note,
+      docReviewStatus: c.reviewStatus, review: c.reviewStatus === 'REVIEWED' ? '已复审' : '未复审', auditedAt: day(c.auditedAt || c.reviewedAt), createdAt: timestamp(c.createdAt), creator: names.get(c.createdById) ?? null, note: c.note,
     }))]
     note = '门店盘点与总仓供应链多人分区盘点同表展示，并以盘点类型区分数据来源。'
   } else if (id === 'multi-count') {
@@ -227,7 +227,7 @@ export async function loadInventoryManagement(tx: Prisma.TransactionClient, tena
     }))
     const statuses = { DRAFT: '草稿', COUNTING: '盘点中', REVIEWING: '待审核', CONFIRMED: '已审核', CANCELLED: '已取消' }
     rows = counts.map(c => ({ recordType: 'WAREHOUSE_STOCKTAKE', detailId: c.id, orgKey:`tenant:${tenantId}`, warehouseKey:`warehouse:${c.warehouseId}`, id: c.id, no: c.no, date: c.countDate.toISOString().slice(0, 10), org, warehouse: c.warehouse.name,
-      itemCount: c.itemCount, status: statuses[c.status], auditedAt: day(c.reviewedAt), generated: null,
+      itemCount: c.itemCount, status: statuses[c.status], docReviewStatus: c.reviewStatus, review: c.reviewStatus === 'REVIEWED' ? '已复审' : '未复审', auditedAt: day(c.auditedAt || c.reviewedAt), generated: null,
       createdAt: timestamp(c.createdAt), creator: c.createdBy.name, note: c.note,
     }))
     note = '总仓多人盘点作业；各分区由指定负责人填写并提交。结果盘点单生成状态待核对。' + (q.filters.generated ? ' 原生成状态筛选暂不可用，本次未应用该条件。' : '')

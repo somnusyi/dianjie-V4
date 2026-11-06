@@ -7,7 +7,7 @@
  */
 'use client'
 import { useEffect, useMemo, useState } from 'react'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { apiFetch } from '@/lib/v2-auth'
 import { Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
@@ -55,8 +55,7 @@ const STATUS_TONE: Record<string, 'orange'|'green'|'red'|'gray'> = {
 }
 
 function fmt(iso: string) {
-  const d = new Date(iso)
-  return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
+  return dayjs(iso).format('MM/DD')
 }
 
 export default function CapitalReviewPage() {

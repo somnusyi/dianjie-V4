@@ -1,3 +1,4 @@
+import {createReviewInbound,createReviewOutbound} from '../services/warehouseReviewPosting'
 import { FastifyPluginAsync } from 'fastify'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
@@ -5,6 +6,7 @@ import { upstreamFeatureEnabled } from '../lib/upstream-feature-flags'
 import { hasInternalSupplyChainCapability, isInternalSupplyChainRole } from '../lib/internal-supply-chain-access'
 import { resolveTenantWarehouseId } from '../services/defaultWarehouse'
 import {
+  serializableWithRetry,
   recordBatchManualWarehouseInbound,
   recordBatchManualWarehouseOutbound,
   recordManualWarehouseInbound,
@@ -298,75 +300,15 @@ async function executeBatchManualOutbound(
     ? `总仓自损：${data.reason}`
     : `【${purposeLabels[data.purpose!]}】${data.reason}`
   const sourceName = data.responsibility ? `责任归属：${data.responsibility}` : data.sourceName
-  const outProductRows = await prisma.product.findMany({
-    where: { tenantId: req.user.tenantId, id: { in: data.items.map(item => item.productId) } },
-    select: { id: true, name: true, inventoryUnit: true },
-  })
-  const outProductById = new Map(outProductRows.map(product => [product.id, product]))
-  const result = await recordBatchManualWarehouseOutbound({
-    tenantId: req.user.tenantId,
-    userId: req.user.userId,
-    items: data.items.map(item => ({
-      productId: item.productId,
-      inventoryQuantity: item.inventoryQuantity,
-      totalAmount: businessType === 'SELF_LOSS' ? null : item.totalAmount ?? null,
-      note: item.note,
-    })),
-    effectiveAt: new Date(data.effectiveAt),
-    idempotencyKey: data.idempotencyKey,
-    reason,
-    sourceName,
-    businessType,
-    finalizeInTransaction: async (tx, ledgerResult) => {
-      const created = await ensureWarehouseDocInTransaction(tx, {
-        tenantId: req.user.tenantId,
-        userId: req.user.userId,
-        type: 'MANUAL_OUTBOUND',
-        warehouseId: ledgerResult.warehouseId,
-        effectiveAt: new Date(data.effectiveAt),
-        idempotencyKey: `${businessType === 'SELF_LOSS' ? 'self-loss' : 'manual-outbound'}:${data.idempotencyKey}`,
-        reason,
-        attachments,
-        note: data.responsibility ? `责任归属：${data.responsibility}` : null,
-        lines: data.items.map(item => {
-          const movement = ledgerResult.movements.find(row => row.productId === item.productId)
-          const product = outProductById.get(item.productId)
-          const quantity = movement ? Math.abs(number(movement.physicalDelta)) : item.inventoryQuantity
-          const amount = movement ? Math.abs(number(movement.valueDelta)) : 0
-          return {
-            productId: item.productId,
-            productName: product?.name || item.productId,
-            quantity,
-            unit: String(movement?.inventoryUnit || product?.inventoryUnit || ''),
-            unitPrice: quantity > 0 ? Math.round((amount / quantity) * 1_000_000) / 1_000_000 : null,
-            amount: Math.round(amount * 100) / 100,
-            inventoryQuantity: quantity,
-            inventoryUnit: String(movement?.inventoryUnit || product?.inventoryUnit || ''),
-            note: item.note,
-            movementId: movement?.id || null,
-          }
-        }),
-      })
-      return { id: created.doc.id, docNo: created.doc.docNo, status: created.doc.status, created: created.created }
-    },
-  })
-  const totalAmount = result.movements.reduce((sum, movement) => sum + Math.abs(number(movement.valueDelta)), 0)
-  const outDoc = result.finalized as { id: string; docNo: string; status: string; created: boolean }
-  return {
-    ok: true,
-    replayed: result.replayed,
-    warehouseId: result.warehouseId,
-    count: result.movements.length,
-    totalAmount,
-    doc: outDoc,
-    movements: result.movements.map(movement => ({
-      id: movement.id,
-      productId: movement.productId,
-      physicalDelta: number(movement.physicalDelta),
-      inventoryUnit: movement.inventoryUnit,
-      valueDelta: number(movement.valueDelta),
-    })),
-  }
+  const result=await serializableWithRetry(tx=>createReviewOutbound(tx,{
+    tenantId:req.user.tenantId,userId:req.user.userId,
+    items:data.items.map(item=>({...item,totalAmount:businessType==='SELF_LOSS'?null:item.totalAmount})),
+    effectiveAt:new Date(data.effectiveAt),idempotencyKey:data.idempotencyKey,
+    documentKey:`${businessType==='SELF_LOSS'?'self-loss':'manual-outbound'}:${data.idempotencyKey}`,
+    reason,sourceName,businessType,attachments,note:data.responsibility?`责任归属：${data.responsibility}`:null,
+  }))
+  return {ok:true,replayed:!result.created,warehouseId:result.doc.warehouseId,count:result.doc.lineCount,totalAmount:Number(result.doc.totalAmount),doc:{id:result.doc.id,docNo:result.doc.docNo,status:result.doc.status},movements:[]}
+
 }
 
 export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
@@ -438,7 +380,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
       prisma.product.count({ where: bomMappingWhere }),
       prisma.product.count({ where: unitReviewWhere }),
       prisma.warehouseLedgerBalance.findMany({ where: { tenantId, warehouseId } }),
-      prisma.warehouseLedgerReservation.count({ where: { tenantId, warehouseId, status: 'ACTIVE' } }),
+      Promise.all([prisma.warehouseLedgerReservation.count({ where: { tenantId, warehouseId, status: 'ACTIVE' } }), prisma.replenishmentStockHold.count({ where: { tenantId, warehouseId, status: 'ACTIVE' } })]).then(([orders, replenishments]) => orders + replenishments),
       prisma.warehouseLedgerMovement.count({ where: { tenantId, warehouseId } }),
     ])
     const balanceByProduct = new Map(allBalances.map(item => [item.productId, item]))
@@ -549,7 +491,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
       to: z.string().date().optional(),
       supplierId: z.string().trim().min(1).optional(),
       q: z.string().trim().max(100).optional(),
-      source: z.enum(['all', 'manual', 'batch', 'package', 'opening']).default('all'),
+      source: z.enum(['all', 'manual', 'batch', 'package', 'opening', 'purchase']).default('all'),
       page: z.coerce.number().int().min(1).default(1),
       pageSize: z.coerce.number().int().min(1).max(100).default(50),
     }).safeParse(req.query || {})
@@ -568,11 +510,10 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
       ...(parsed.data.source === 'opening'
         ? { type: 'OPENING_BALANCE' }
         : parsed.data.source === 'all'
-          ? { type: { in: ['MANUAL_INBOUND', 'OPENING_BALANCE'] } }
-          : { type: 'MANUAL_INBOUND', sourceType: sourceTypeMap[parsed.data.source] }),
+          ? { type: { in: ['MANUAL_INBOUND', 'OPENING_BALANCE', 'UPSTREAM_RECEIPT'] } }
+          : parsed.data.source === 'purchase' ? {type:'UPSTREAM_RECEIPT'} : { type: 'MANUAL_INBOUND', sourceType: sourceTypeMap[parsed.data.source] }),
       ...(parsed.data.supplierId ? { supplierId: parsed.data.supplierId } : {}),
-      ...(parsed.data.from ? { effectiveAt: { gte: new Date(`${parsed.data.from}T00:00:00+08:00`) } } : {}),
-      ...(parsed.data.to ? { effectiveAt: { lte: new Date(`${parsed.data.to}T23:59:59.999+08:00`) } } : {}),
+      ...((parsed.data.from||parsed.data.to)?{effectiveAt:{...(parsed.data.from?{gte:new Date(`${parsed.data.from}T00:00:00+08:00`)}:{}),...(parsed.data.to?{lte:new Date(`${parsed.data.to}T23:59:59.999+08:00`)}:{})}}:{}),
       ...(terms.length ? {
         AND: terms.map(term => ({ OR: [
           { product: { code: { contains: term, mode: 'insensitive' as const } } },
@@ -604,6 +545,8 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         })
       : []
     const docByMovement = new Map(docLines.map(line => [line.movementId, line.doc]))
+    const purchaseReceipts=await prisma.upstreamReceipt.findMany({where:{tenantId,id:{in:rows.filter(row=>row.type==='UPSTREAM_RECEIPT'&&row.sourceType==='UpstreamReceipt').map(row=>row.sourceId)}},select:{id:true,no:true}})
+    const receiptById=new Map(purchaseReceipts.map(row=>[row.id,row]))
     return {
       total,
       totalAmount: Math.round((sumAgg._sum.valueDelta ? number(sumAgg._sum.valueDelta) : 0) * 100) / 100,
@@ -630,6 +573,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
         expiryDate: row.createdLot?.expiryDate || null,
         reversed: Boolean(row.reversal),
         doc: docByMovement.get(row.id) || null,
+        purchaseReceipt:row.type==='UPSTREAM_RECEIPT'?receiptById.get(row.sourceId)||null:null,
       })),
     }
   })
@@ -862,82 +806,13 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
       await assertWarehouseDocumentObjects(req.user.tenantId, attachments)
       const supplier = await requireUpstreamSupplier(req.user.tenantId, parsed.data.supplierId)
       const gateWarnings = await inboundGateWarnings(req.user.tenantId, supplier.id, [parsed.data.productId])
-      const result = await recordManualWarehouseInbound({
-        tenantId: req.user.tenantId,
-        userId: req.user.userId,
-        productId: parsed.data.productId,
-        purchaseQuantity: parsed.data.purchaseQuantity,
-        totalAmount: parsed.data.totalAmount,
-        effectiveAt: new Date(parsed.data.effectiveAt),
-        idempotencyKey: parsed.data.idempotencyKey,
-        supplierId: supplier.id,
-        sourceName: supplier.name,
-        note: parsed.data.note,
-        batchNo: parsed.data.batchNo,
-        manufactureDate,
-        expiryDate,
-      })
-      if (gateWarnings.length > 0 && !result.replayed) {
-        await prisma.opLog.create({
-          data: {
-            tenantId: req.user.tenantId,
-            userId: req.user.userId,
-            action: `入库闸口警告：${gateWarnings.length} 个商品未绑定供应商「${supplier.name}」的供货关系`,
-            target: parsed.data.idempotencyKey,
-            entityType: 'WarehouseLedgerMovement',
-            targetId: result.movement.id,
-            metadata: { supplierId: supplier.id, supplierName: supplier.name, warnings: gateWarnings },
-          },
-        })
-      }
-      const inboundProduct = await prisma.product.findFirst({
-        where: { tenantId: req.user.tenantId, id: parsed.data.productId },
-        select: { id: true, name: true, purchaseUnit: true, inventoryUnit: true },
-      })
-      const doc = await registerWarehouseDoc({
-        tenantId: req.user.tenantId,
-        userId: req.user.userId,
-        type: 'MANUAL_INBOUND',
-        warehouseId: result.warehouseId,
-        effectiveAt: new Date(parsed.data.effectiveAt),
-        idempotencyKey: `manual-inbound:${parsed.data.idempotencyKey}`,
-        supplierId: supplier.id,
-        supplierName: supplier.name,
-        attachments,
-        note: parsed.data.note,
-        lines: [{
-          productId: parsed.data.productId,
-          productName: inboundProduct?.name || parsed.data.productId,
-          quantity: parsed.data.purchaseQuantity,
-          unit: inboundProduct?.purchaseUnit || String(result.movement.inventoryUnit || ''),
-          unitPrice: Math.round((parsed.data.totalAmount / parsed.data.purchaseQuantity) * 1_000_000) / 1_000_000,
-          amount: parsed.data.totalAmount,
-          inventoryQuantity: Math.abs(number(result.movement.physicalDelta)),
-          inventoryUnit: String(result.movement.inventoryUnit || inboundProduct?.inventoryUnit || ''),
-          batchNo: parsed.data.batchNo,
-          manufactureDate,
-          expiryDate,
-          movementId: result.movement.id,
-        }],
-      })
-      return {
-        ok: true,
-        replayed: result.replayed,
-        warehouseId: result.warehouseId,
-        gateWarnings,
-        doc,
-        movement: {
-          id: result.movement.id,
-          productId: result.movement.productId,
-          physicalDelta: number(result.movement.physicalDelta),
-          physicalAfter: number(result.movement.physicalAfter),
-          inventoryUnit: result.movement.inventoryUnit,
-          valueDelta: number(result.movement.valueDelta),
-          valueAfter: number(result.movement.valueAfter),
-          averageUnitCostAfter: number(result.movement.averageUnitCostAfter),
-          effectiveAt: result.movement.effectiveAt,
-        },
-      }
+      const result=await serializableWithRetry(tx=>createReviewInbound(tx,{
+        tenantId:req.user.tenantId,userId:req.user.userId,
+        items:[{productId:parsed.data.productId,purchaseQuantity:parsed.data.purchaseQuantity,totalAmount:parsed.data.totalAmount,batchNo:parsed.data.batchNo,manufactureDate,expiryDate}],
+        effectiveAt:new Date(parsed.data.effectiveAt),idempotencyKey:parsed.data.idempotencyKey,documentKey:`manual-inbound:${parsed.data.idempotencyKey}`,
+        supplierId:supplier.id,sourceName:supplier.name,note:parsed.data.note,attachments,
+      }))
+      return {ok:true,replayed:!result.created,warehouseId:result.doc.warehouseId,count:result.doc.lineCount,totalAmount:Number(result.doc.totalAmount),gateWarnings,doc:{id:result.doc.id,docNo:result.doc.docNo,status:result.doc.status},movements:[]}
     } catch (error: any) {
       if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
       throw error
@@ -965,93 +840,13 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
       await assertWarehouseDocumentObjects(req.user.tenantId, attachments)
       const supplier = await requireUpstreamSupplier(req.user.tenantId, parsed.data.supplierId)
       const gateWarnings = await inboundGateWarnings(req.user.tenantId, supplier.id, parsed.data.items.map(item => item.productId))
-      const result = await recordBatchManualWarehouseInbound({
-        tenantId: req.user.tenantId,
-        userId: req.user.userId,
-        items: parsed.data.items.map(item => ({
-          productId: item.productId,
-          purchaseQuantity: item.purchaseQuantity,
-          unitPrice: item.unitPrice,
-          totalAmount: item.totalAmount ?? null,
-          batchNo: item.batchNo,
-          manufactureDate: item.manufactureDate ? new Date(`${item.manufactureDate}T00:00:00.000Z`) : null,
-          expiryDate: item.expiryDate ? new Date(`${item.expiryDate}T00:00:00.000Z`) : null,
-        })),
-        effectiveAt: new Date(parsed.data.effectiveAt),
-        idempotencyKey: parsed.data.idempotencyKey,
-        supplierId: supplier.id,
-        sourceName: supplier.name,
-        note: parsed.data.note,
-      })
-      if (gateWarnings.length > 0 && !result.replayed) {
-        await prisma.opLog.create({
-          data: {
-            tenantId: req.user.tenantId,
-            userId: req.user.userId,
-            action: `入库闸口警告：${gateWarnings.length} 个商品未绑定供应商「${supplier.name}」的供货关系`,
-            target: parsed.data.idempotencyKey,
-            entityType: 'WarehouseLedgerMovement',
-            targetId: result.movements[0]?.id || '',
-            metadata: { supplierId: supplier.id, supplierName: supplier.name, warnings: gateWarnings },
-          },
-        })
-      }
-      const totalAmount = result.movements.reduce((sum, movement) => sum + number(movement.valueDelta), 0)
-      const movementByProduct = new Map(result.movements.map(movement => [movement.productId, movement]))
-      const productRows = await prisma.product.findMany({
-        where: { tenantId: req.user.tenantId, id: { in: parsed.data.items.map(item => item.productId) } },
-        select: { id: true, name: true, purchaseUnit: true, inventoryUnit: true },
-      })
-      const productById = new Map(productRows.map(product => [product.id, product]))
-      const doc = await registerWarehouseDoc({
-        tenantId: req.user.tenantId,
-        userId: req.user.userId,
-        type: 'MANUAL_INBOUND',
-        warehouseId: result.warehouseId,
-        effectiveAt: new Date(parsed.data.effectiveAt),
-        idempotencyKey: `manual-inbound-batch:${parsed.data.idempotencyKey}`,
-        supplierId: supplier.id,
-        supplierName: supplier.name,
-        attachments,
-        note: parsed.data.note,
-        lines: parsed.data.items.map(item => {
-          const movement = movementByProduct.get(item.productId)
-          const product = productById.get(item.productId)
-          // 金额以台账流水为准（凑整口径 totalAmount 可能 ≠ 数量×单价）
-          const movementAmount = movement ? Math.abs(number(movement.valueDelta)) : null
-          const lineAmount = movementAmount ?? Math.round(item.purchaseQuantity * item.unitPrice * 100) / 100
-          return {
-            productId: item.productId,
-            productName: product?.name || item.productId,
-            quantity: item.purchaseQuantity,
-            unit: product?.purchaseUnit || String(movement?.inventoryUnit || ''),
-            unitPrice: Math.round((lineAmount / item.purchaseQuantity) * 1_000_000) / 1_000_000,
-            amount: lineAmount,
-            inventoryQuantity: movement ? Math.abs(number(movement.physicalDelta)) : 0,
-            inventoryUnit: String(movement?.inventoryUnit || product?.inventoryUnit || ''),
-            batchNo: item.batchNo,
-            manufactureDate: item.manufactureDate ? new Date(`${item.manufactureDate}T00:00:00.000Z`) : null,
-            expiryDate: item.expiryDate ? new Date(`${item.expiryDate}T00:00:00.000Z`) : null,
-            movementId: movement?.id || null,
-          }
-        }),
-      })
-      return {
-        ok: true,
-        replayed: result.replayed,
-        warehouseId: result.warehouseId,
-        count: result.movements.length,
-        totalAmount,
-        gateWarnings,
-        doc,
-        movements: result.movements.map(movement => ({
-          id: movement.id,
-          productId: movement.productId,
-          physicalDelta: number(movement.physicalDelta),
-          inventoryUnit: movement.inventoryUnit,
-          valueDelta: number(movement.valueDelta),
-        })),
-      }
+      const result=await serializableWithRetry(tx=>createReviewInbound(tx,{
+        tenantId:req.user.tenantId,userId:req.user.userId,
+        items:parsed.data.items.map(item=>({...item,manufactureDate:item.manufactureDate?new Date(`${item.manufactureDate}T00:00:00.000Z`):null,expiryDate:item.expiryDate?new Date(`${item.expiryDate}T00:00:00.000Z`):null})),
+        effectiveAt:new Date(parsed.data.effectiveAt),idempotencyKey:parsed.data.idempotencyKey,documentKey:`manual-inbound-batch:${parsed.data.idempotencyKey}`,
+        supplierId:supplier.id,sourceName:supplier.name,note:parsed.data.note,attachments,
+      }))
+      return {ok:true,replayed:!result.created,warehouseId:result.doc.warehouseId,count:result.doc.lineCount,totalAmount:Number(result.doc.totalAmount),gateWarnings,doc:{id:result.doc.id,docNo:result.doc.docNo,status:result.doc.status},movements:[]}
     } catch (error: any) {
       if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
       throw error

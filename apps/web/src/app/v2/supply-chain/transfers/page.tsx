@@ -1,4 +1,5 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 import { ResponsiveDataTable } from '@/components/v2/responsive-data-table'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 
@@ -6,11 +7,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { DateRangeCalendar, type DateRangeValue } from '@/components/v2/date-range-calendar'
 import { apiFetch } from '@/lib/v2-auth'
+import { businessDateKey } from '@/lib/business-date'
 
 type Store = { id: string; no: string; name: string }
 type Product = { id: string; code: string; name: string; inventoryUnit?: string | null }
-type TransferStatus = 'PENDING' | 'SHIPPED' | 'RECEIVED' | 'REVOKED'
-type TransferItem = { id: string; name: string; quantity: number; unit: string; cost: number; settlement: number }
+type TransferStatus = 'PENDING' | 'SHIPPED' | 'PARTIALLY_RECEIVED' | 'RECEIVED' | 'REVOKED'
+type TransferItem = { id: string; name: string; quantity: number; unit: string; cost: number; settlement: number; pendingQuantity: number; receivedQuantity: number; returnedQuantity: number; damagedQuantity: number }
 type Transfer = {
   id: string
   no: string
@@ -30,12 +32,30 @@ const FILTER_STORAGE_KEY = 'dianjie-supply-chain-store-transfer-filters-v1'
 const STATUS_META: Record<TransferStatus, { label: string; tone: 'orange' | 'blue' | 'green' | 'gray' }> = {
   PENDING: { label: '待发货', tone: 'orange' },
   SHIPPED: { label: '已发货', tone: 'blue' },
-  RECEIVED: { label: '已收货', tone: 'green' },
+  PARTIALLY_RECEIVED: { label: '差异待处理', tone: 'orange' },
+  RECEIVED: { label: '已闭环', tone: 'green' },
   REVOKED: { label: '已撤回', tone: 'gray' },
 }
 
 export default function StoreTransfersPage() {
   const [confirmState, openConfirm] = useConfirmSheet()
+  const [processing, setProcessing] = useState<{ row: Transfer; action: 'RECEIVE' | 'RETURN' | 'DAMAGE'; quantities: Record<string, string>; note: string; requestKey: string } | null>(null)
+  const [processingError, setProcessingError] = useState('')
+  function openProcessing(row: Transfer, action: 'RECEIVE' | 'RETURN' | 'DAMAGE') {
+    setProcessingError('')
+    setProcessing({row, action, quantities:Object.fromEntries(row.items.map(i=>[i.id, action === 'RECEIVE' ? String(i.pendingQuantity) : '0'])),note:'',requestKey:crypto.randomUUID()})
+  }
+  async function saveProcessing() {
+    if (!processing || busy) return
+    const all = processing.row.items.map(i=>({itemId:i.id,quantity:Number(processing.quantities[i.id])}))
+    const items = all.filter(i=>i.quantity>0)
+    if (!items.length || all.some(i=>!Number.isFinite(i.quantity) || i.quantity < 0)) {setProcessingError('请填写有效处理数量');return}
+    setBusy('processing');setProcessingError('')
+    try {
+      await apiFetch(`/api/store-transfers/${processing.row.id}/${processing.action === 'RECEIVE' ? 'receive' : 'resolve-difference'}`, {method:'POST',body:JSON.stringify({requestKey:processing.requestKey,items,note:processing.note,...(processing.action === 'RECEIVE' ? {} : {action:processing.action})})})
+      await loadTransfers();setProcessing(null)
+    } catch (e:any) {setProcessingError(e.message || '处理失败，请重试')} finally {setBusy('')}
+  }
   const [stores, setStores] = useState<Store[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [transfers, setTransfers] = useState<Transfer[]>([])
@@ -48,7 +68,7 @@ export default function StoreTransfersPage() {
   const [toStoreId, setToStoreId] = useState('')
   const [status, setStatus] = useState<TransferStatus | ''>('')
   const [keyword, setKeyword] = useState('')
-  const [form, setForm] = useState({ transferDate: new Date().toISOString().slice(0, 10), fromStoreId: '', toStoreId: '', productId: '', quantity: '1', cost: '0', settlement: '0', note: '' })
+  const [form, setForm] = useState({ transferDate: businessDateKey(), fromStoreId: '', toStoreId: '', productId: '', quantity: '1', cost: '0', settlement: '0', note: '' })
 
   useEffect(() => {
     loadTransfers().finally(() => setReady(true))
@@ -192,7 +212,7 @@ export default function StoreTransfersPage() {
             <span className="text-caption text-gray3">调拨登记 · 已连接后台</span>
           </div>
           <h1 className="text-h1">门店调拨单</h1>
-          <p className="mt-1 text-caption text-gray2">调拨单保存到后台；已发货和已收货单据进入库存报表。本登记不改写门店盘点库存。</p>
+          <p className="mt-1 text-caption text-gray2">调拨按调出门店可靠账面成本平价发货，实收才计入调入店；差异须完成退回或损坏处置。</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="rounded-cta border border-green-200 bg-green-bg px-4 py-2.5 text-caption text-green-fg">供应链审核 · 可新建、发货、收货、撤回</div>
@@ -213,21 +233,20 @@ export default function StoreTransfersPage() {
           </div>
           <div className="grid gap-3 md:grid-cols-4">
             <label className="flex flex-col gap-1"><span className="text-micro text-gray3">调拨日期</span><input type="date" value={form.transferDate} onChange={event => setForm({ ...form, transferDate: event.target.value })} className="h-11 rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></label>
-            <FilterSelect label="调出门店" value={form.fromStoreId} onChange={value => setForm({ ...form, fromStoreId: value })}>
+            <FilterSelect label="调出门店" value={form.fromStoreId} onChange={value => {setForm(current=>({...current,fromStoreId:value,toStoreId:current.toStoreId===value?'':current.toStoreId}));if(form.toStoreId===value)setStoreError('调入与调出门店不能相同，请重新选择调入门店')}}>
               <option value="">请选择</option>
               {stores.map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}
             </FilterSelect>
             <FilterSelect label="调入门店" value={form.toStoreId} onChange={value => setForm({ ...form, toStoreId: value })}>
               <option value="">请选择</option>
-              {stores.map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}
+              {stores.filter(store=>store.id!==form.fromStoreId).map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}
             </FilterSelect>
             <FilterSelect label="调拨商品" value={form.productId} onChange={value => setForm({ ...form, productId: value })}>
               <option value="">请选择</option>
               {products.map(product => <option key={product.id} value={product.id}>{product.code} · {product.name}{product.inventoryUnit ? ` / ${product.inventoryUnit}` : ''}</option>)}
             </FilterSelect>
             <NumberInput label="数量" value={form.quantity} onChange={value => setForm({ ...form, quantity: value })} />
-            <NumberInput label="调出成本价" value={form.cost} onChange={value => setForm({ ...form, cost: value })} />
-            <NumberInput label="调入结算价" value={form.settlement} onChange={value => setForm({ ...form, settlement: value })} />
+            <p className="text-caption text-gray2">调拨价格在审核发货时按调出门店可靠成本自动冻结，两店同价。</p>
             <label className="flex flex-col gap-1"><span className="text-micro text-gray3">备注</span><input value={form.note} onChange={event => setForm({ ...form, note: event.target.value })} placeholder="可选" className="h-11 rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></label>
           </div>
           <div className="mt-4 flex justify-end gap-2">
@@ -273,15 +292,15 @@ export default function StoreTransfersPage() {
                   <td className="whitespace-nowrap px-4 py-4 font-num text-gray2">{row.transferDate}</td>
                   <td className="whitespace-nowrap px-4 py-4">{row.fromStore.name}<div className="text-micro text-gray3">{row.fromStore.no}</div></td>
                   <td className="whitespace-nowrap px-4 py-4">{row.toStore.name}<div className="text-micro text-gray3">{row.toStore.no}</div></td>
-                  <td className="min-w-64 px-4 py-4 text-gray2">{row.items.map(item => `${item.name} ${item.quantity}${item.unit}`).join('、')}</td>
+                  <td className="min-w-64 px-4 py-4 text-gray2">{row.items.map(item => `${item.name} 发出${item.quantity}${item.unit}／实收${item.receivedQuantity ?? 0}／退回${item.returnedQuantity ?? 0}／损坏${item.damagedQuantity ?? 0}／待处理${item.pendingQuantity ?? item.quantity}`).join('、')}</td>
                   <td className="whitespace-nowrap px-4 py-4"><Chip tone={STATUS_META[row.status]?.tone || 'gray'}>{STATUS_META[row.status]?.label || row.status}</Chip></td>
-                  <td className="whitespace-nowrap px-4 py-4 font-num text-gray2">{new Date(row.createdAt).toLocaleString('zh-CN', { hour12: false })}</td>
+                  <td className="whitespace-nowrap px-4 py-4 font-num text-gray2">{new Date(row.createdAt).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}</td>
                   <td className="whitespace-nowrap px-4 py-4 text-right">
                     {row.status === 'PENDING' && <div className="flex justify-end gap-2">
                       <ActionButton disabled={busy === `${row.id}:SHIPPED`} onClick={() => requestStatusChange(row, 'SHIPPED')}>审核发货</ActionButton>
                       <ActionButton disabled={busy === `${row.id}:REVOKED`} tone="gray" onClick={() => requestStatusChange(row, 'REVOKED')}>撤回</ActionButton>
                     </div>}
-                    {row.status === 'SHIPPED' && <ActionButton disabled={busy === `${row.id}:RECEIVED`} onClick={() => requestStatusChange(row, 'RECEIVED')}>确认收货</ActionButton>}
+                    {['SHIPPED','PARTIALLY_RECEIVED'].includes(row.status) && <div className="flex justify-end gap-2"><ActionButton disabled={Boolean(busy)} onClick={() => openProcessing(row,'RECEIVE')}>登记实收</ActionButton><ActionButton disabled={Boolean(busy)} onClick={() => openProcessing(row,'RETURN')}>完好退回</ActionButton><ActionButton disabled={Boolean(busy)} onClick={() => openProcessing(row,'DAMAGE')}>损坏处置</ActionButton></div>}
                     {['RECEIVED', 'REVOKED'].includes(row.status) && <span className="text-micro text-gray3">已完成</span>}
                   </td>
                 </tr>)}
@@ -294,13 +313,14 @@ export default function StoreTransfersPage() {
           <div className="border-t border-border bg-bg px-4 py-3 text-right text-caption text-gray3">共 {visible.length} 条记录</div>
         </div>
       </main>
+      {processing && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"><section role="dialog" aria-modal="true" aria-label="调拨数量处理" className="max-h-[85vh] w-full max-w-2xl overflow-auto rounded-card bg-white p-5 shadow-xl"><h2 className="text-h2">{processing.action === 'RECEIVE' ? '登记实收' : processing.action === 'RETURN' ? '完好退回' : '损坏处置'} · {processing.row.no}</h2><p className="my-3 text-caption text-gray2">只填写本次实际处理数量；未处理部分继续保留差异。</p><div className="space-y-3">{processing.row.items.map(i=><label key={i.id} className="flex items-center justify-between gap-4"><span>{i.name} · 待处理 {i.pendingQuantity} {i.unit}</span><input type="text" inputMode="decimal" aria-label={`${i.name}处理数量`} value={processing.quantities[i.id]} onChange={e=>setProcessing({...processing,quantities:{...processing.quantities,[i.id]:e.target.value},requestKey:crypto.randomUUID()})} className="w-32 rounded border border-border p-2" /></label>)}</div><label className="mt-4 block">说明<textarea aria-label="处置说明" className="mt-1 w-full rounded border border-border p-2" value={processing.note} onChange={e=>setProcessing({...processing,note:e.target.value,requestKey:crypto.randomUUID()})}/></label>{processingError && <p role="alert" className="my-2 text-red-600">{processingError}</p>}<div className="mt-4 flex justify-end gap-3"><button disabled={Boolean(busy)} onClick={()=>setProcessing(null)} className="rounded border border-border px-4 py-2">取消</button><button disabled={Boolean(busy)} onClick={saveProcessing} className="rounded bg-accent px-4 py-2 text-white">确认</button></div></section></div>}
       <ConfirmSheet {...confirmState} />
     </div>
   )
 }
 
 function FilterSelect({ label, value, onChange, children }: { label: string; value: string; onChange: (value: string) => void; children: React.ReactNode }) {
-  return <label className="flex min-w-48 flex-col gap-1"><span className="text-micro text-gray3">{label}</span><select value={value} onChange={event => onChange(event.target.value)} className="h-11 rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent">{children}</select></label>
+  return <label className="flex min-w-48 flex-col gap-1"><span className="text-micro text-gray3">{label}</span><SearchableSelect searchWhenLong searchLabel={`搜索${label}`} value={value} onChange={event => onChange(event.target.value)} className="h-11 rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent">{children}</SearchableSelect></label>
 }
 
 function NumberInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {

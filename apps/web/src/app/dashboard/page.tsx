@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import AppLayout from '@/components/AppLayout'
 import { fmt } from '@/components/ui'
 import api from '@/lib/api'

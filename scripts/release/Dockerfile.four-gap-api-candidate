@@ -1,0 +1,11 @@
+ARG API_BASE
+FROM ${API_BASE}
+USER root
+RUN rm -rf /app/dist
+COPY --chown=node:node api-dist/ /app/dist/
+COPY --chown=node:node prisma-client/ /app/node_modules/.prisma/client/
+COPY --chown=node:node db-index.js /app/node_modules/.pnpm/@dianjie+db@file+packages+db_prisma@5.22.0/node_modules/@dianjie/db/index.js
+USER node
+WORKDIR /app
+ENV NODE_ENV=production
+CMD ["node", "/app/dist/index.js"]

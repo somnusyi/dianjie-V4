@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { Chip } from '@/components/v2'
 import { UserMenu } from '@/components/v2/user-menu'
 import { apiFetch } from '@/lib/v2-auth'

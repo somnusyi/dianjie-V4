@@ -169,7 +169,7 @@ export default function SkuDetailPage() {
                 <a href={`/v2/supplier/orders/${reservation.order.id}`} className="flex items-center gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="text-body truncate">{reservation.order.store.name} · #{reservation.order.no}</div>
-                    <div className="text-micro text-gray3 mt-0.5">期望到货 {new Date(reservation.order.expectedDate).toLocaleDateString('zh-CN')}</div>
+                    <div className="text-micro text-gray3 mt-0.5">期望到货 {new Date(reservation.order.expectedDate).toLocaleDateString('zh-CN', {timeZone:'Asia/Shanghai'})}</div>
                   </div>
                   <div className="font-num text-h2 text-amber-fg">{reservation.quantity} {item.unit}</div>
                   <span className="text-gray3">›</span>
@@ -199,7 +199,7 @@ export default function SkuDetailPage() {
                   <span>初始 {batch.initialQty}</span>
                   {batch.manufactureDate && <span>生产 {batch.manufactureDate}</span>}
                   {batch.expiryDate && <span className="text-amber-fg">到期 {batch.expiryDate}</span>}
-                  <span>入账 {new Date(batch.createdAt).toLocaleDateString('zh-CN')}</span>
+                  <span>入账 {new Date(batch.createdAt).toLocaleDateString('zh-CN', {timeZone:'Asia/Shanghai'})}</span>
                 </div>
                 {batch.source?.reason && <div className="text-caption text-gray2 mt-1">{batch.source.reason}</div>}
               </li>
@@ -222,7 +222,7 @@ export default function SkuDetailPage() {
                 <span className="ml-auto text-micro text-gray3 font-num">余 {m.balanceAfter}</span>
               </div>
               <div className="text-micro text-gray3 mt-1 flex items-center gap-2 flex-wrap">
-                <span>{new Date(m.createdAt).toLocaleString('zh-CN', { hour12: false })}</span>
+                <span>{new Date(m.createdAt).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}</span>
                 {m.operator && <span>· {m.operator}</span>}
                 {m.expiryDate && <span className="text-amber-fg">· 到期 {m.expiryDate}</span>}
               </div>

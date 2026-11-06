@@ -4,10 +4,11 @@
  * + 适用门店 + 生效区间 + 强制开关，附月历视图看每天发哪条线。
  */
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import { deliveryScheduleText, isDeliveryScheduleDate, nextDeliveryScheduleDates } from '@/lib/delivery-rule-cycle'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { confirmDialog } from '@/lib/ui-dialogs'
 
 
@@ -284,10 +285,10 @@ export default function DeliveryRulesPage() {
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <label><span className="mb-1 block text-micro text-gray3">班表名称 *</span><input value={form.name} maxLength={80} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="如：南京线 / 合肥线" className="h-11 w-full rounded-cta border border-border px-3" /></label>
             <label><span className="mb-1 block text-micro text-gray3">供货机构</span>
-              <select value={form.supplierId} onChange={event => setForm({ ...form, supplierId: event.target.value })} className="h-11 w-full rounded-cta border border-border bg-white px-3">
+              <SearchableSelect searchLabel="搜索供货机构" value={form.supplierId} onChange={event => setForm({ ...form, supplierId: event.target.value })} className="h-11 w-full rounded-cta border border-border bg-white px-3">
                 <option value="">内部供应链总仓</option>
                 {suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}
-              </select>
+              </SearchableSelect>
             </label>
           </div>
 
@@ -298,7 +299,7 @@ export default function DeliveryRulesPage() {
             </div>
             {form.deliveryScheduleMode === 'INTERVAL' ? <>
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <label><span className="mb-1 block text-micro text-gray3">每隔几天</span><select value={form.deliveryIntervalDays} onChange={event => setForm({ ...form, deliveryIntervalDays: event.target.value })} className="h-11 w-full rounded-cta border border-border bg-white px-3">{Array.from({ length: 6 }, (_, index) => index + 1).map(days => <option key={days} value={days}>每隔 {days} 天</option>)}</select></label>
+                <label><span className="mb-1 block text-micro text-gray3">每隔几天</span><SearchableSelect searchWhenLong searchLabel="搜索间隔天数" value={form.deliveryIntervalDays} onChange={event => setForm({ ...form, deliveryIntervalDays: event.target.value })} className="h-11 w-full rounded-cta border border-border bg-white px-3">{Array.from({ length: 6 }, (_, index) => index + 1).map(days => <option key={days} value={days}>每隔 {days} 天</option>)}</SearchableSelect></label>
                 <label><span className="mb-1 block text-micro text-gray3">开始计算日期</span><input type="date" value={form.deliveryIntervalStart} onChange={event => setForm({ ...form, deliveryIntervalStart: event.target.value })} className="h-11 w-full rounded-cta border border-border px-3" /></label>
               </div>
               {form.deliveryIntervalDays && form.deliveryIntervalStart && <p className="mt-2 text-micro text-gray3">预计送货日：{nextDeliveryScheduleDates({ deliveryScheduleMode: 'INTERVAL', deliveryIntervalDays: Number(form.deliveryIntervalDays), deliveryIntervalStart: form.deliveryIntervalStart }, form.deliveryIntervalStart, 6).map(date => dayjs(date).format('M/D')).join('、')}</p>}
@@ -310,9 +311,9 @@ export default function DeliveryRulesPage() {
 
           <div className="mt-3 grid gap-3 sm:grid-cols-3">
             <label><span className="mb-1 block text-micro text-gray3">到货日期 *</span>
-              <select value={form.leadDays} onChange={event => setForm({ ...form, leadDays: event.target.value })} className="h-11 w-full rounded-cta border border-border bg-white px-3">
+              <SearchableSelect searchWhenLong searchLabel="搜索到货天数" value={form.leadDays} onChange={event => setForm({ ...form, leadDays: event.target.value })} className="h-11 w-full rounded-cta border border-border bg-white px-3">
                 {[1, 2, 3, 4, 5, 6, 7].map(day => <option key={day} value={day}>{arrivalDateText(day)}</option>)}
-              </select>
+              </SearchableSelect>
             </label>
             <label><span className="mb-1 block text-micro text-gray3">订货开始（可空）</span><input type="time" value={form.orderWindowStart} onChange={event => setForm({ ...form, orderWindowStart: event.target.value })} className="h-11 w-full rounded-cta border border-border px-3" /></label>
             <label><span className="mb-1 block text-micro text-gray3">订货结束（可空）</span><input type="time" value={form.orderWindowEnd} onChange={event => setForm({ ...form, orderWindowEnd: event.target.value })} className="h-11 w-full rounded-cta border border-border px-3" /></label>

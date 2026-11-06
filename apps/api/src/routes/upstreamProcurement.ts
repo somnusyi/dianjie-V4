@@ -1,4 +1,5 @@
 import {supplierVisiblePurchaseOrder} from '../lib/upstream-order-visibility'
+import {supplierVisibleSettlement} from '../lib/upstream-settlement-visibility'
 import { receiptPricing } from '../domain/procurementAmounts'
 import { proposeOrderRevision, approvedOrderRevision } from '../domain/upstreamOrderRevision'
 import {changeProcurementApproval,procurementApprovalView} from '../services/procurementApproval'
@@ -508,14 +509,14 @@ const settlementGenerateSchema = z
 
 const settlementDisputeSchema = z
   .object({
-    reason: z.string().trim().min(2).max(1000),
+    reason: z.string().trim().min(2, '异议原因至少填写2个字').max(1000, '异议原因不能超过1000字'),
   })
   .strict()
 
 const settlementInvoiceAllocationSchema = z
   .object({
     invoiceId: idSchema,
-    amount: decimalInput,
+    amount: decimalInput.refine(value => decimal(value).decimalPlaces() <= 4, '发票分配金额最多四位小数，请核对后提交'),
   })
   .strict()
 
@@ -1873,7 +1874,20 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
       })
-      return { items, total, page: query.page, pageSize: query.pageSize }
+      // Count the full matching set in the same snapshot, never the current page.
+      // Receipt/claim cards retain their existing workspace-wide scope.
+      const summary = INTERNAL_ROLES.has(role) ? {
+        pendingOrders: await tx.upstreamPurchaseOrder.count({
+          where: { AND: [where, { status: { notIn: ['RECEIVED', 'SETTLEMENT_PENDING', 'CLOSED', 'CANCELLED'] } }] },
+        }),
+        pendingReceipts: await tx.upstreamReceipt.count({
+          where: { tenantId, status: { in: ['DRAFT', 'INSPECTING', 'PENDING_REVIEW'] } },
+        }),
+        pendingClaims: await tx.upstreamArrivalClaim.count({
+          where: { tenantId, status: { notIn: ['RESOLVED', 'CANCELLED'] } },
+        }),
+      } : undefined
+      return { items, total, page: query.page, pageSize: query.pageSize, ...(summary ? { summary } : {}) }
     }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead })
   })
 
@@ -3687,20 +3701,37 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     return result
   })
 
-  app.get('/settlement-statements', auth(app), async (req: any) => {
+  app.get('/settlement-statements', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
     const supplierId = SETTLEMENT_READ_ROLES.has(role)
       ? typeof req.query?.supplierId === 'string'
         ? req.query.supplierId
         : undefined
       : requireSupplierCapability(role, req.user.supplierId, 'settlement.read')
+    const where: Prisma.UpstreamSettlementStatementWhereInput = {
+      tenantId,
+      ...(supplierId ? { supplierId } : {}),
+      ...(!SETTLEMENT_READ_ROLES.has(role) ? { AND: [supplierVisibleSettlement] } : {}),
+    }
+    let cursor: string | undefined
+    if (req.query?.cursor !== undefined) {
+      const parsed = idSchema.safeParse(req.query.cursor)
+      if (!parsed.success) return reply.status(400).send({ error: '对账列表游标格式不正确' })
+      const allowedCursor = await prisma.upstreamSettlementStatement.findFirst({
+        where: { ...where, id: parsed.data },
+        select: { id: true },
+      })
+      if (!allowedCursor) return reply.status(409).send({ error: '对账列表已变化，请刷新重试' })
+      cursor = allowedCursor.id
+    }
     return prisma.upstreamSettlementStatement.findMany({
-      where: { tenantId, ...(supplierId ? { supplierId } : {}) },
+      where,
       include: {
         supplier: { select: { id: true, no: true, name: true } },
         _count: { select: { lines: true, invoiceAllocations: true } },
       },
-      orderBy: [{ periodEnd: 'desc' }, { version: 'desc' }],
+      orderBy: [{ periodEnd: 'desc' }, { version: 'desc' }, { id: 'desc' }],
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       take: 200,
     })
   })
@@ -3715,6 +3746,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
         id: statementId.data,
         tenantId,
         ...(supplierId ? { supplierId } : {}),
+        ...(!SETTLEMENT_READ_ROLES.has(role) ? {AND:[supplierVisibleSettlement]} : {}),
       },
       include: {
         supplier: { select: { id: true, no: true, name: true } },
@@ -3756,7 +3788,10 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     const parsed = settlementGenerateSchema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const d = parsed.data
-    const { start, end: endDate, endExclusive } = businessDateRangeInclusive(d.periodStart, d.periodEnd)
+    const { start, endExclusive } = businessDateRangeInclusive(d.periodStart, d.periodEnd)
+    // DATE fields preserve the selected business day; timestamp filters retain Shanghai boundaries.
+    const periodStart = new Date(`${businessDateKey(d.periodStart)}T00:00:00.000Z`)
+    const periodEnd = new Date(`${businessDateKey(d.periodEnd)}T00:00:00.000Z`)
 
     const supplier = await prisma.supplier.findFirst({
       where: {
@@ -3822,8 +3857,8 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
               where: {
                 tenantId,
                 supplierId: d.supplierId,
-                periodStart: start,
-                periodEnd: endDate,
+                periodStart,
+                periodEnd,
               },
               orderBy: { version: 'desc' },
               select: { version: true },
@@ -3842,8 +3877,8 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
               tenantId,
               no,
               supplierId: d.supplierId,
-              periodStart: start,
-              periodEnd: endDate,
+              periodStart,
+              periodEnd,
               receiptAmount: money(receiptAmount),
               deductionAmount: money(deductionAmount),
               payableAmount,
@@ -3860,7 +3895,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
                 sourceType: 'RECEIPT',
                 sourceId: line.id,
                 sourceNo: line.receipt.no,
-                businessDate: line.receipt.postedAt || line.receipt.createdAt,
+                businessDate: new Date(`${businessDateKey(line.receipt.postedAt || line.receipt.createdAt)}T00:00:00.000Z`),
                 receiptLineId: line.id,
                 description: `${line.purchaseOrderLine.productNameSnapshot} 合格收货 ${line.acceptedQty.toString()} ${line.purchaseUnit}`,
                 originalAmount: line.payableAmount,
@@ -3879,7 +3914,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
                 sourceType: 'CLAIM',
                 sourceId: claim.id,
                 sourceNo: claim.no,
-                businessDate: claim.resolvedAt || claim.createdAt,
+                businessDate: new Date(`${businessDateKey(claim.resolvedAt || claim.createdAt)}T00:00:00.000Z`),
                 claimId: claim.id,
                 description: deductsPayable ? `到货差异扣款：${claim.description}` : `到货差异（已在收货净额中体现，不重复扣款）：${claim.description}`,
                 originalAmount: amount,
@@ -4053,64 +4088,79 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     const parsed = settlementInvoiceAllocationSchema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     const d = parsed.data
-    const result = await prisma.$transaction(
-      async (tx) => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`upstream-statement:${statementId.data}`}))::text AS locked`
-        const statement = await tx.upstreamSettlementStatement.findFirst({
-          where: {
-            id: statementId.data,
-            tenantId,
-            status: { in: ['LOCKED', 'INVOICED'] },
-          },
-          include: { invoiceAllocations: true },
-        })
-        if (!statement) return null
-        const invoice = await tx.invoice.findFirst({
-          where: {
-            id: d.invoiceId,
-            tenantId,
-            supplierId: statement.supplierId,
-            status: 'VERIFIED',
-          },
-          include: { upstreamSettlementAllocations: true },
-        })
-        if (!invoice)
-          throw Object.assign(new Error('已审核发票不存在或不属于该供应商'), {
-            statusCode: 400,
+    let result: { statementId: string } | null
+    try {
+      result = await prisma.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`upstream-statement:${statementId.data}`}))::text AS locked`
+          const statement = await tx.upstreamSettlementStatement.findFirst({
+            where: {
+              id: statementId.data,
+              tenantId,
+              status: { in: ['LOCKED', 'INVOICED'] },
+            },
+            include: { invoiceAllocations: true },
           })
-        const allocatedToStatement = statement.invoiceAllocations.reduce((sum, item) => sum.plus(item.amount), decimal(0))
-        const allocatedToInvoice = invoice.upstreamSettlementAllocations.reduce((sum, item) => sum.plus(item.amount), decimal(0))
-        const amount = decimal(d.amount)
-        if (allocatedToStatement.plus(amount).greaterThan(statement.payableAmount)) {
-          throw Object.assign(new Error('发票分配金额超过对账单应付余额'), {
-            statusCode: 400,
+          if (!statement) return null
+          const invoice = await tx.invoice.findFirst({
+            where: {
+              id: d.invoiceId,
+              tenantId,
+              supplierId: statement.supplierId,
+              status: 'VERIFIED',
+            },
+            include: { upstreamSettlementAllocations: true },
           })
-        }
-        if (allocatedToInvoice.plus(amount).greaterThan(invoice.amount)) {
-          throw Object.assign(new Error('分配金额超过发票可用余额'), {
-            statusCode: 400,
+          if (!invoice)
+            throw Object.assign(new Error('已审核发票不存在或不属于该供应商'), {
+              statusCode: 400,
+            })
+          const amount = decimal(d.amount)
+          const existing = statement.invoiceAllocations.find(item => item.invoiceId === invoice.id)
+          if (existing) {
+            if (!existing.amount.equals(amount)) {
+              throw Object.assign(new Error('该发票已分配到此对账单，金额不同，请刷新核对'), { statusCode: 409 })
+            }
+            return { statementId: statement.id }
+          }
+          const allocatedToStatement = statement.invoiceAllocations.reduce((sum, item) => sum.plus(item.amount), decimal(0))
+          const allocatedToInvoice = invoice.upstreamSettlementAllocations.reduce((sum, item) => sum.plus(item.amount), decimal(0))
+          if (allocatedToStatement.plus(amount).greaterThan(statement.payableAmount)) {
+            throw Object.assign(new Error('发票分配金额超过对账单应付余额'), {
+              statusCode: 400,
+            })
+          }
+          if (allocatedToInvoice.plus(amount).greaterThan(invoice.amount)) {
+            throw Object.assign(new Error('分配金额超过发票可用余额'), {
+              statusCode: 400,
+            })
+          }
+          await tx.upstreamSettlementInvoiceAllocation.create({
+            data: {
+              tenantId,
+              statementId: statement.id,
+              invoiceId: invoice.id,
+              amount,
+              createdById: userId,
+            },
           })
-        }
-        await tx.upstreamSettlementInvoiceAllocation.create({
-          data: {
-            tenantId,
-            statementId: statement.id,
-            invoiceId: invoice.id,
-            amount,
-            createdById: userId,
-          },
-        })
-        const fullyInvoiced = allocatedToStatement.plus(amount).greaterThanOrEqualTo(statement.payableAmount)
-        if (fullyInvoiced && statement.status === 'LOCKED') {
-          await tx.upstreamSettlementStatement.update({
-            where: { id: statement.id },
-            data: { status: 'INVOICED' },
-          })
-        }
-        return { statementId: statement.id }
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
-    )
+          const fullyInvoiced = allocatedToStatement.plus(amount).greaterThanOrEqualTo(statement.payableAmount)
+          if (fullyInvoiced && statement.status === 'LOCKED') {
+            await tx.upstreamSettlementStatement.update({
+              where: { id: statement.id },
+              data: { status: 'INVOICED' },
+            })
+          }
+          return { statementId: statement.id }
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }
+      )
+    } catch (error: any) {
+      if (error?.code === 'P2034' || error?.code === 'P2002' || (error?.code === 'P2010' && String(error?.meta?.code || '') === '40001')) {
+        return reply.status(409).send({ error: '发票分配刚被他人处理，请刷新核对后重试' })
+      }
+      throw error
+    }
     if (!result) return reply.status(409).send({ error: '对账单不存在或尚未锁定' })
     return prisma.upstreamSettlementStatement.findUnique({
       where: { id: result.statementId },

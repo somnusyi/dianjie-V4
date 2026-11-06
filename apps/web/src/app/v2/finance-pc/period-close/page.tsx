@@ -13,8 +13,9 @@
  *   - 显示关账人 / 关账时间 / carryover 凭证号
  */
 'use client'
+import { loadVoucherCount } from '@/lib/voucher-list'
 import { useEffect, useMemo, useState } from 'react'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../_topnav'
@@ -42,12 +43,12 @@ const STATUS_TONE: Record<string, 'green' | 'red' | 'amber'> = {
 }
 
 type WizardData = {
-  pendingApproval: number       // 待审付款申请
-  costCheckRemaining: number    // 待 4 方核对完毕
-  pendingInvoice: number        // 已付未开票 (信息备查, 不阻塞关账)
-  pettyCashReconciling: number  // 备用金待财务关账
-  payrollDraftCount: number     // 工资单 DRAFT/APPROVED 未发
-  voucherDraftCount: number     // 凭证草稿数
+  pendingApproval?: number       // 待审付款申请
+  costCheckRemaining?: number    // 待 4 方核对完毕
+  pendingInvoice?: number       // 已付未开票 (信息备查, 不阻塞关账)
+  pettyCashReconciling?: number  // 备用金待财务关账
+  payrollDraftCount?: number     // 工资单 DRAFT/APPROVED 未发
+  voucherDraftCount?: number     // 凭证草稿数
 }
 
 export default function FinancePCPeriodClosePage() {
@@ -61,9 +62,13 @@ export default function FinancePCPeriodClosePage() {
   const [preview, setPreview] = useState<any | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [wizard, setWizard] = useState<WizardData | null>(null)
+  const [invoiceReadError, setInvoiceReadError] = useState<string | undefined>()
+  const [checkReadErrors, setCheckReadErrors] = useState<Partial<Record<keyof WizardData, string>>>({})
   const currentMonth = dayjs().subtract(1, 'month').format('YYYY-MM')   // 默认聚焦上个月 (实际要关账的月)
 
   function load() {
+    setPeriods(null)
+    setError(null)
     apiFetch<Period[]>('/api/vouchers/periods')
       .then(setPeriods).catch(e => setError(e.message))
   }
@@ -73,21 +78,25 @@ export default function FinancePCPeriodClosePage() {
   useEffect(() => {
     const monthFrom = `${currentMonth}-01`
     const monthTo = dayjs(currentMonth + '-01').endOf('month').format('YYYY-MM-DD')
+    const readError = (key: keyof WizardData) => {
+      setCheckReadErrors(previous => ({ ...previous, [key]: '读取失败，请进入详情重试' }))
+      return null
+    }
     Promise.all([
-      apiFetch<{ total: number }>('/api/payment-requests?status=PENDING&pageSize=1').catch(() => ({ total: 0 })),
-      apiFetch<any>(`/api/finance/cost-check?month=${currentMonth}`).catch(() => ({ total: { count: 0, allVerifiedCount: 0 } })),
-      apiFetch<any>('/api/invoices/pending-from-finance').catch(() => ({ summary: { paidCount: 0 } })),
-      apiFetch<any[]>(`/api/petty-cash?status=RECONCILING`).catch(() => []),
-      apiFetch<any[]>(`/api/payroll?month=${currentMonth}`).catch(() => []),
-      apiFetch<{ items: any[] }>(`/api/vouchers?from=${monthFrom}&to=${monthTo}&status=DRAFT&pageSize=200`).catch(() => ({ items: [] })),
+      apiFetch<{ total: number }>('/api/payment-requests?status=PENDING&pageSize=1').catch(() => readError('pendingApproval')),
+      apiFetch<any>(`/api/finance/cost-check?month=${currentMonth}`).catch(() => readError('costCheckRemaining')),
+      apiFetch<any>('/api/invoices/pending-from-finance').catch(() => { setInvoiceReadError('待开票信息读取失败，请进入详情重试'); return null }),
+      apiFetch<any[]>(`/api/petty-cash?status=RECONCILING`).catch(() => readError('pettyCashReconciling')),
+      apiFetch<any[]>(`/api/payroll?month=${currentMonth}`).catch(() => readError('payrollDraftCount')),
+      loadVoucherCount(monthFrom, monthTo, 'DRAFT').catch(() => readError('voucherDraftCount')),
     ]).then(([pr, cc, pInv, pcRec, pr2, vou]) => {
       setWizard({
-        pendingApproval: pr.total || 0,
-        costCheckRemaining: cc.total ? (cc.total.count - cc.total.allVerifiedCount) : 0,
-        pendingInvoice: pInv.summary?.paidCount || 0,
-        pettyCashReconciling: Array.isArray(pcRec) ? pcRec.length : 0,
-        payrollDraftCount: Array.isArray(pr2) ? pr2.filter((p: any) => ['DRAFT', 'APPROVED'].includes(p.status)).length : 0,
-        voucherDraftCount: vou.items?.length || 0,
+        pendingApproval: pr ? pr.total || 0 : undefined,
+        costCheckRemaining: cc ? (cc.total ? (cc.total.count - cc.total.allVerifiedCount) : 0) : undefined,
+        pendingInvoice: pInv?.summary?.paidCount,
+        pettyCashReconciling: pcRec ? pcRec.length : undefined,
+        payrollDraftCount: pr2 ? pr2.filter((p: any) => ['DRAFT', 'APPROVED'].includes(p.status)).length : undefined,
+        voucherDraftCount: vou ?? undefined,
       })
     }).catch(() => {})
   }, [currentMonth])
@@ -106,16 +115,29 @@ export default function FinancePCPeriodClosePage() {
 
   async function doClose(month: string) {
     if (busy) return
-    if (!(await confirmDialog(`关账 ${month}?\n\n会自动:\n• 生成期末结转凭证 (主营业务收入 → 本年利润)\n• 锁定当月凭证 (不可改/反审/作废)\n\n确认?`))) return
+    if (!(await confirmDialog(`关账 ${month}?\n\n请先在凭证详情审核确认结转。\n关账后锁定当月凭证 (不可改/反审/作废)\n\n确认?`))) return
     setBusy(true)
     try {
       const r: any = await apiFetch('/api/vouchers/periods/close', {
         method: 'POST', body: JSON.stringify({ month, closeNote: closeNote || null, withCarryover: true }),
       })
-      notifyUser(`✓ ${month} 已关账${r.carryoverVoucherId ? ', 期末结转凭证已生成' : ' (本月无损益, 未生成结转凭证)'}`)
+      notifyUser(`✓ ${month} 已关账${r.carryoverVoucherId ? ', 结转凭证已确认' : ' (本月无损益, 未生成结转凭证)'}`)
       setCloseFor(null); setCloseNote('')
       load()
     } catch (e: any) { notifyUser(e.message || '关账失败') }
+    finally { setBusy(false) }
+  }
+
+  async function prepareCarryover(month: string) {
+    if (busy) return
+    setBusy(true)
+    try {
+      const r = await apiFetch<{ carryoverVoucherId: string | null }>('/api/vouchers/periods/carryover', {
+        method: 'POST', body: JSON.stringify({ month }),
+      })
+      if (r.carryoverVoucherId) window.location.assign(`/v2/finance-pc/vouchers/${r.carryoverVoucherId}`)
+      else notifyUser('本月无可结转损益，请确认其他凭证已审核后关账')
+    } catch (e: any) { notifyUser(e.message || '生成结转失败') }
     finally { setBusy(false) }
   }
 
@@ -151,7 +173,7 @@ export default function FinancePCPeriodClosePage() {
         <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-h1">月结锁账中心</h1>
-            <p className="text-caption text-gray3">关账后凭证不可改/反审/作废 · 自动跑期末结转 (损益 → 本年利润)</p>
+            <p className="text-caption text-gray3">关账后凭证不可改/反审/作废 · 财务确认结转后再关账</p>
           </div>
           <a href="/v2/finance-pc/reports/tax"
              className="px-3 py-2 bg-white border border-border rounded-cta text-button text-gray2">报税报表 →</a>
@@ -167,33 +189,35 @@ export default function FinancePCPeriodClosePage() {
               <p className="text-caption text-gray3">完成下方 6 项再关账, 避免数据缺失或对账错位</p>
             </div>
             {wizard && (() => {
-              const blockers = [
+              const requiredCounts = [
                 wizard.pendingApproval,
                 wizard.costCheckRemaining,
                 wizard.pettyCashReconciling,
                 wizard.payrollDraftCount,
                 wizard.voucherDraftCount,
-              ].filter(n => n > 0).length
+              ]
+              const unknown = requiredCounts.some(n => n === undefined)
+              const blockers = requiredCounts.filter(n => n !== undefined && n > 0).length
               return (
                 <div className="text-right">
-                  <div className="text-h2 font-num">{5 - blockers} / 5</div>
-                  <div className="text-micro text-gray3">已完成 (待开票不阻塞)</div>
+                  <div className="text-h2 font-num">{unknown ? '待核实' : `${5 - blockers} / 5`}</div>
+                  <div className="text-micro text-gray3">{unknown ? '必查项读取不完整' : '已完成 (待开票不阻塞)'}</div>
                 </div>
               )
             })()}
           </header>
           <div className="grid grid-cols-3 gap-2">
-            <WizardCheck title="① 报销/付款审批" count={wizard?.pendingApproval}
+            <WizardCheck title="① 报销/付款审批" count={wizard?.pendingApproval} error={checkReadErrors.pendingApproval}
                          href="/v2/finance-pc/payment-requests" hint="待审单数" required />
-            <WizardCheck title="② 入库 4 方核对" count={wizard?.costCheckRemaining}
+            <WizardCheck title="② 入库 4 方核对" count={wizard?.costCheckRemaining} error={checkReadErrors.costCheckRemaining}
                          href="/v2/finance-pc/cost-check" hint="未对账完笔数" required />
             <WizardCheck title="③ 待开票跟踪" count={wizard?.pendingInvoice}
-                         href="/v2/finance-pc/invoices-pending" hint="已付未开张数" optional />
-            <WizardCheck title="④ 备用金归档" count={wizard?.pettyCashReconciling}
+                         href="/v2/finance-pc/invoices-pending" hint="已付未开张数" error={invoiceReadError} optional />
+            <WizardCheck title="④ 备用金归档" count={wizard?.pettyCashReconciling} error={checkReadErrors.pettyCashReconciling}
                          href="/v2/finance-pc/petty-cash" hint="待财务关账笔数" required />
-            <WizardCheck title="⑤ 工资发放" count={wizard?.payrollDraftCount}
+            <WizardCheck title="⑤ 工资发放" count={wizard?.payrollDraftCount} error={checkReadErrors.payrollDraftCount}
                          href="/v2/finance-pc/payroll" hint="未发放工资单数" required />
-            <WizardCheck title="⑥ 本月凭证" count={wizard?.voucherDraftCount}
+            <WizardCheck title="⑥ 本月凭证" count={wizard?.voucherDraftCount} error={checkReadErrors.voucherDraftCount}
                          href="/v2/finance-pc/vouchers" hint="草稿数 (需 POSTED)" required />
           </div>
           <div className="mt-3 text-caption text-gray3">
@@ -202,7 +226,7 @@ export default function FinancePCPeriodClosePage() {
         </section>
 
         <div className="bg-amber/10 border border-amber/30 rounded-card p-3 mb-4 text-caption text-gray2">
-          📌 关账流程: ① 先确认本月所有凭证已 POSTED (导出过最稳); ② 关账 → 自动期末结转 → 锁; ③ 异常情况只有财务长可重开 (留痕).
+          📌 关账流程: ① 生成／更新结转草稿；② 在凭证详情审核确认；③ 返回本页关账。已审核或已导出的结转不会自动修改。
         </div>
 
         <div className="bg-white rounded-card border border-border overflow-hidden">
@@ -217,10 +241,10 @@ export default function FinancePCPeriodClosePage() {
               </tr>
             </thead>
             <tbody>
-              {periods === null && (
+              {periods === null && !error && (
                 <tr><td colSpan={5} className="px-4 py-8 text-center text-caption text-gray3">加载中…</td></tr>
               )}
-              {sortedMonths.map(m => {
+              {periods !== null && !error && sortedMonths.map(m => {
                 const p = byMonth.get(m)
                 const status: Period['status'] = p?.status || 'OPEN'
                 const isClosed = status === 'CLOSED'
@@ -252,6 +276,8 @@ export default function FinancePCPeriodClosePage() {
                     <td className="px-3 py-2.5 text-right whitespace-nowrap">
                       <button onClick={() => loadPreview(m)} disabled={busy}
                               className="px-3 py-1.5 bg-white border border-border text-gray2 rounded-cta text-button disabled:opacity-40">预览结转</button>
+                      {isOpenable && <button onClick={() => prepareCarryover(m)} disabled={busy}
+                        className="ml-2 px-3 py-1.5 bg-white border border-border rounded-cta text-button disabled:opacity-40">生成／更新结转</button>}
                       {isOpenable && (
                         <button onClick={() => setCloseFor(m)}
                                 disabled={busy}
@@ -343,7 +369,7 @@ export default function FinancePCPeriodClosePage() {
                     </div>
                   )}
                   <div className="bg-amber/10 rounded-card p-3 text-caption text-gray2">
-                    💡 这是 dry-run 预览, 没落库. 真关账请点列表里的 "关账" 按钮.
+                    💡 这是 dry-run 预览, 没落库. 先点列表里的“生成／更新结转”，在凭证详情审核确认后再关账。
                   </div>
                 </>
               )}
@@ -372,7 +398,7 @@ export default function FinancePCPeriodClosePage() {
                           className="w-full bg-bg rounded-chip px-3 py-2 outline-none text-body resize-none" />
               </div>
               <div className="bg-amber/10 rounded-card p-3 text-caption text-gray2">
-                ✓ 关账时自动生成期末结转凭证 (5xxx 损益 → 4103 本年利润)
+                ✓ 请先生成／更新结转草稿，并在凭证详情审核确认；关账不会自动审核。
               </div>
             </div>
             <div className="border-t border-border px-6 py-3 flex gap-3">
@@ -398,7 +424,7 @@ export default function FinancePCPeriodClosePage() {
             </div>
             <div className="px-6 py-4 space-y-3">
               <div className="bg-amber/10 border border-amber/30 rounded-card p-3 text-caption text-gray2">
-                ⚠ 审计留痕: 重开操作会记录到 OpLog; 完成调整后请重新关账 (会重生成 carryover).
+                ⚠ 审计留痕: 重开操作会记录到 OpLog; 完成调整后请核对结转；已审核或导出的结转不会自动重算。
               </div>
               <div>
                 <label className="text-micro text-gray3 block mb-1">重开原因 *</label>
@@ -422,16 +448,17 @@ export default function FinancePCPeriodClosePage() {
   )
 }
 
-function WizardCheck({ title, count, href, hint, required, optional }: {
+function WizardCheck({ title, count, href, hint, required, optional, error }: {
   title: string
   count?: number
   href: string
   hint: string
   required?: boolean
   optional?: boolean
+  error?: string
 }) {
   const loading = count === undefined
-  const done = !loading && count === 0
+  const done = !error && !loading && count === 0
   const cls = loading ? 'bg-bg border-border'
     : done ? 'bg-green-bg/40 border-green/30'
     : optional ? 'bg-bg border-border'
@@ -444,11 +471,11 @@ function WizardCheck({ title, count, href, hint, required, optional }: {
         : done ? 'bg-green-bg text-green-fg'
         : optional ? 'bg-bg text-gray2'
         : 'bg-red-bg text-red-fg'
-      }`}>{loading ? '·' : done ? '✓' : count}</span>
+      }`}>{error ? '!' : loading ? '·' : done ? '✓' : count}</span>
       <div className="flex-1 min-w-0">
         <div className="text-button text-ink">{title}</div>
         <p className="text-micro text-gray3 mt-0.5">
-          {loading ? '加载中…' : done ? '已完成' : `${hint}: ${count}`}
+          {error || (loading ? '加载中…' : done ? '已完成' : `${hint}: ${count}`)}
         </p>
       </div>
     </a>

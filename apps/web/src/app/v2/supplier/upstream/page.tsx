@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import { businessDateKey } from '@/lib/business-date'
+import { loadUpstreamSettlementStatements } from '@/lib/upstream-settlement-list'
 import { procurementDecimalProduct } from '@/lib/procurement-decimal-preview'
 import { settlementLineTypeLabel } from '@/lib/upstream-settlement-copy'
 import { clientRequestId } from '@/lib/client-id'
@@ -9,6 +11,7 @@ import {DocumentQualityImageButton,OrderLineQuality} from '@/components/v2/docum
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import {
   money,
+  settlementMoney,
   unitPriceMoney,
   shortDate,
   statusTone,
@@ -91,6 +94,7 @@ type Statement = {
   deductionAmount: string | number
   payableAmount: string | number
   version: number
+  note?: string | null
   _count: { lines: number; invoiceAllocations: number }
 }
 type StatementDetail = Statement & {
@@ -150,6 +154,8 @@ export default function SupplierUpstreamPage() {
   const [claimEvidence, setClaimEvidence] = useState<Array<{ url: string; name: string }>>([])
   const [uploadingClaimEvidence, setUploadingClaimEvidence] = useState(false)
   const shipmentRequestKeysRef = useRef<Record<string, string>>({})
+  const loadRequestRef = useRef(0)
+  const [settlementListReady, setSettlementListReady] = useState(false)
 
   useEffect(() => {
     const sync = () => {
@@ -161,27 +167,32 @@ export default function SupplierUpstreamPage() {
   }, [])
 
   const loadAll = useCallback(async () => {
+    const request = ++loadRequestRef.current
     setLoading(true)
+    setSettlementListReady(false)
     setError(null)
     try {
       const [orderRows, shipmentRows, claimRows, statementRows] = await Promise.all([
         apiFetch<Order[]>('/api/upstream/purchase-orders'),
         apiFetch<Shipment[]>('/api/upstream/shipments'),
         apiFetch<Claim[]>('/api/upstream/arrival-claims'),
-        apiFetch<Statement[]>('/api/upstream/settlement-statements'),
+        loadUpstreamSettlementStatements<Statement>(),
       ])
+      if (request !== loadRequestRef.current) return
       setOrders(orderRows)
       setShipments(shipmentRows)
       setClaims(claimRows)
       setStatements(statementRows)
+      setSettlementListReady(true)
     } catch (reason: any) {
+      if (request !== loadRequestRef.current) return
       setError(reason?.message || '供应商协同数据加载失败')
     } finally {
-      setLoading(false)
+      if (request === loadRequestRef.current) setLoading(false)
     }
   }, [])
 
-  useEffect(() => { void loadAll() }, [loadAll])
+  useEffect(() => { void loadAll(); return () => { loadRequestRef.current++ } }, [loadAll])
 
   // 采购方会推进单据状态: 回到本页自动刷新, 避免按旧状态操作
   useEffect(() => {
@@ -223,7 +234,7 @@ export default function SupplierUpstreamPage() {
       setEditMode(mode)
       setChangeReason('')
       setLinePrices(Object.fromEntries((detail.lines || []).map(line => [line.id, String(line.unitPrice)])))
-      setShipping({ carrierName: '', trackingNo: '', expectedArrivalAt: detail.expectedArrivalAt?.slice(0, 10) || '' })
+      setShipping({ carrierName: '', trackingNo: '', expectedArrivalAt: detail.expectedArrivalAt ? businessDateKey(detail.expectedArrivalAt) : '' })
       setLineValues(Object.fromEntries((detail.lines || []).map(line => {
         const target = Number(line.confirmedQty ?? line.orderedQty)
         const value = mode === 'ship' ? Math.max(0, target - Number(line.shippedQty)) : target
@@ -388,7 +399,7 @@ export default function SupplierUpstreamPage() {
     <style jsx global>{`.supplier-input{width:100%;border:1px solid #ddd6c9;border-radius:12px;background:#fff;padding:10px 12px;color:#29231d;outline:none}.supplier-input:focus{border-color:#c96f32;box-shadow:0 0 0 3px rgba(201,111,50,.12)}`}</style>
     <header className="border-b border-border pb-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-caption text-gray3">供应商协同 · 仅显示本公司的总仓采购业务</p><h1 className="mt-1 text-h1">总仓采购</h1><p className="mt-1 text-caption text-gray2">接单、申请改单、按实际发货、处理差异并确认月度账单</p></div><Button secondary onClick={() => void loadAll()} disabled={loading}>刷新</Button></div>
-      <div className="mt-5 grid gap-3 sm:grid-cols-3"><Summary label="待接单/发货" value={pendingOrders} /><Summary label="待确认差异" value={pendingClaims} urgent={pendingClaims > 0} /><Summary label="待确认对账" value={pendingStatements} urgent={pendingStatements > 0} /></div>
+      <div className="mt-5 grid gap-3 sm:grid-cols-3"><Summary label="待接单/发货" value={pendingOrders} /><Summary label="待确认差异" value={pendingClaims} urgent={pendingClaims > 0} /><Summary label="待确认对账" value={settlementListReady ? pendingStatements : '—'} urgent={settlementListReady && pendingStatements > 0} /></div>
     </header>
 
     <main className="py-5">
@@ -410,11 +421,12 @@ export default function SupplierUpstreamPage() {
       </Panel>}
 
       {viewingStatement && <Panel title={`对账单来源明细 · ${viewingStatement.no}`} onClose={() => setViewingStatement(null)}>
-        <div className="rounded-xl bg-bg p-3 text-caption">{shortDate(viewingStatement.periodStart)}—{shortDate(viewingStatement.periodEnd)} · 收货 {money(viewingStatement.receiptAmount)} · 扣款 {money(viewingStatement.deductionAmount)} · 应收 <b>{money(viewingStatement.payableAmount)}</b></div>
+        <div className="rounded-xl bg-bg p-3 text-caption">{shortDate(viewingStatement.periodStart)}—{shortDate(viewingStatement.periodEnd)} · 收货 {settlementMoney(viewingStatement.receiptAmount)} · 扣款 {settlementMoney(viewingStatement.deductionAmount)} · 应收 <b>{settlementMoney(viewingStatement.payableAmount)}</b></div>
+        {viewingStatement.status === 'DISPUTED' && viewingStatement.note && <p className="mt-3 whitespace-pre-wrap break-words rounded-xl bg-amber/10 p-3 text-caption text-amber-fg">异议说明：{viewingStatement.note}</p>}
         <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[880px] text-left text-caption"><thead><tr className="border-b"><th className="p-2">日期</th><th className="p-2">类型</th><th className="p-2">采购单</th><th className="p-2">收货单</th><th className="p-2">差异单</th><th className="p-2">说明</th><th className="p-2">原金额</th><th className="p-2">调整</th><th className="p-2">应收</th></tr></thead><tbody>{viewingStatement.lines.map(line => {
           const purchaseOrder = line.receiptLine?.receipt?.purchaseOrder || line.claim?.purchaseOrder
           const receipt = line.receiptLine?.receipt || line.claim?.receipt
-          return <tr key={line.id} className="border-b border-border"><td className="p-2">{shortDate(line.businessDate)}</td><td className="p-2">{settlementLineTypeLabel(line.sourceType, line.adjustmentAmount)}</td><td className="p-2">{purchaseOrder ? <button type="button" className="underline decoration-dotted" onClick={() => void openOrderDetail(purchaseOrder)}>{purchaseOrder.no}</button> : '—'}</td><td className="p-2">{receipt ? <button type="button" className="underline decoration-dotted" onClick={() => void openReceiptDetail(receipt)}>{receipt.no}</button> : '—'}</td><td className="p-2">{line.claim?.no || '—'}</td><td className="p-2">{line.description}</td><td className="p-2">{money(line.originalAmount)}</td><td className="p-2">{money(line.adjustmentAmount)}</td><td className="p-2"><b>{money(line.payableAmount)}</b></td></tr>
+          return <tr key={line.id} className="border-b border-border"><td className="p-2">{shortDate(line.businessDate)}</td><td className="p-2">{settlementLineTypeLabel(line.sourceType, line.adjustmentAmount)}</td><td className="p-2">{purchaseOrder ? <button type="button" className="underline decoration-dotted" onClick={() => void openOrderDetail(purchaseOrder)}>{purchaseOrder.no}</button> : '—'}</td><td className="p-2">{receipt ? <button type="button" className="underline decoration-dotted" onClick={() => void openReceiptDetail(receipt)}>{receipt.no}</button> : '—'}</td><td className="p-2">{line.claim?.no || '—'}</td><td className="p-2">{line.description}</td><td className="p-2">{settlementMoney(line.originalAmount)}</td><td className="p-2">{settlementMoney(line.adjustmentAmount)}</td><td className="p-2"><b>{settlementMoney(line.payableAmount)}</b></td></tr>
         })}</tbody></table></div>
       </Panel>}
 
@@ -434,13 +446,13 @@ export default function SupplierUpstreamPage() {
 
       {!loading && tab === 'claims' && <section className="space-y-3">{claims.length === 0 ? <Empty text="暂无到货差异" /> : claims.map(claim => <article key={claim.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2"><b className="text-h3">{claim.no}</b><Badge status={claim.status} labels={UPSTREAM_CLAIM_STATUS_LABEL} /><span className="text-caption text-red-700">{money(claim.claimedAmount)}</span></div><p className="mt-2 text-caption text-gray1">{claim.description}</p><div className="mt-2 flex flex-wrap gap-2 text-caption"><button type="button" onClick={() => void openOrderDetail(claim.purchaseOrder)} className="rounded-lg border border-border bg-bg px-2 py-1 underline decoration-dotted">采购单 {claim.purchaseOrder.no}</button><button type="button" onClick={() => void openReceiptDetail(claim.receipt)} className="rounded-lg border border-border bg-bg px-2 py-1 underline decoration-dotted">查看收货单 {claim.receipt.no}</button></div><ul className="mt-2 text-caption text-gray2">{claim.lines.map(line => <li key={line.id}>· {line.product.name} {String(line.affectedQty)} {line.purchaseUnit}</li>)}</ul></div><div className="flex gap-2"><Button secondary onClick={() => void openReceiptDetail(claim.receipt)}>查看对应收货</Button>{claim.status === 'PENDING_SUPPLIER' && <Button onClick={() => { setRespondingClaim(claim); setClaimResponse('') }}>立即核对</Button>}</div></div></article>)}</section>}
 
-      {!loading && tab === 'settlements' && <section className="space-y-3">{statements.length === 0 ? <Empty text="暂无月度对账单" /> : statements.map(statement => <article key={statement.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex items-center gap-2"><button type="button" onClick={() => void openStatementDetail(statement)} className="text-h3 underline decoration-dotted underline-offset-4">{statement.no}</button><Badge status={statement.status} labels={UPSTREAM_SETTLEMENT_STATUS_LABEL} /></div><p className="mt-1 text-caption text-gray2">{shortDate(statement.periodStart)}—{shortDate(statement.periodEnd)} · V{statement.version} · {statement._count.lines} 项</p><p className="mt-1 text-caption text-gray3">收货 {money(statement.receiptAmount)} · 扣款 {money(statement.deductionAmount)}</p><p className="mt-1 text-h3">应收 {money(statement.payableAmount)}</p></div><div className="flex flex-wrap gap-2"><Button secondary onClick={() => void openStatementDetail(statement)}>查看采购 / 收货 / 差异来源</Button>{statement.status === 'SENT_TO_SUPPLIER' && <><Button danger onClick={() => requestStatementDispute(statement)}>提出异议</Button><Button onClick={() => requestStatementConfirm(statement)} disabled={working === statement.id}>确认对账</Button></>}</div></div></article>)}</section>}
+      {!loading && settlementListReady && tab === 'settlements' && <section className="space-y-3">{statements.length === 0 ? <Empty text="暂无月度对账单" /> : statements.map(statement => <article key={statement.id} className="rounded-2xl border border-border bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex items-center gap-2"><button type="button" onClick={() => void openStatementDetail(statement)} className="text-h3 underline decoration-dotted underline-offset-4">{statement.no}</button><Badge status={statement.status} labels={UPSTREAM_SETTLEMENT_STATUS_LABEL} /></div><p className="mt-1 text-caption text-gray2">{shortDate(statement.periodStart)}—{shortDate(statement.periodEnd)} · V{statement.version} · {statement._count.lines} 项</p><p className="mt-1 text-caption text-gray3">收货 {settlementMoney(statement.receiptAmount)} · 扣款 {settlementMoney(statement.deductionAmount)}</p><p className="mt-1 text-h3">应收 {settlementMoney(statement.payableAmount)}</p>{statement.status === 'DISPUTED' && statement.note && <p className="mt-2 whitespace-pre-wrap break-words text-caption text-amber-fg">异议说明：{statement.note}</p>}</div><div className="flex flex-wrap gap-2"><Button secondary onClick={() => void openStatementDetail(statement)}>查看采购 / 收货 / 差异来源</Button>{statement.status === 'SENT_TO_SUPPLIER' && <><Button danger onClick={() => requestStatementDispute(statement)}>提出异议</Button><Button onClick={() => requestStatementConfirm(statement)} disabled={working === statement.id}>确认对账</Button></>}</div></div></article>)}</section>}
     </main>
     <ConfirmSheet {...confirm} />
   </div>
 }
 
-function Summary({ label, value, urgent }: { label: string; value: number; urgent?: boolean }) {
+function Summary({ label, value, urgent }: { label: string; value: number | string; urgent?: boolean }) {
   return <div className="rounded-2xl border border-border bg-white p-4"><p className="text-caption text-gray3">{label}</p><strong className={`mt-1 block text-[28px] ${urgent ? 'text-red-700' : 'text-gray1'}`}>{value}</strong></div>
 }
 

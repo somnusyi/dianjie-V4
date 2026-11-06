@@ -84,7 +84,7 @@ function InternalOperationGroupCard({
                   <div className="flex flex-wrap items-center gap-2">
                     <Chip tone={orderStatusTone(order.status)}>{formatOrderStatusLabel(order.status)}</Chip>
                     <b className="font-num text-body">#{order.no}</b>
-                    <span className="text-micro text-gray3">{new Date(order.createdAt).toLocaleString('zh-CN', { hour12: false })}</span>
+                    <span className="text-micro text-gray3">{new Date(order.createdAt).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}</span>
                   </div>
                   <h2 className="mt-2 text-h2">{order.store?.name || '未知门店'}</h2>
                   <p className="mt-1 text-caption text-gray2">{itemSummary(order)}</p>
@@ -92,7 +92,7 @@ function InternalOperationGroupCard({
                 <div className="text-caption text-gray2">
                   <div>供应商：{order.supplier?.name || '未分配'}</div>
                   <div className="mt-1">期望到货：{order.expectedDate?.slice(0, 10) || '—'}</div>
-                  <div className="mt-1 font-num text-h2 text-ink">¥{Number(order.totalAmount || 0).toLocaleString('zh-CN')}</div>
+                  <div className="mt-1 font-num text-h2 text-ink">¥{Number(order.totalAmount || 0).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
                 </div>
               </div>
             )
@@ -172,10 +172,10 @@ export default function InternalSupplyChainFulfillmentPage() {
       <header className="border-b border-border pb-5">
         <div className="mb-2 flex items-center gap-2">
           <Chip tone="green">内部可操作</Chip>
-          <span className="text-caption text-gray3">单据独立 · 一个订单中心完成履约</span>
+          
         </div>
         <h1 className="text-h1">订单中心</h1>
-        <p className="mt-1 text-caption text-gray2">先处理需要动作的订单，再按订货单或配送单查询完整历史。</p>
+        
       </header>
 
       <OrderCenterTabs />
@@ -233,7 +233,7 @@ export default function InternalSupplyChainFulfillmentPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <Chip tone={orderStatusTone(order.status)}>{formatOrderStatusLabel(order.status)}</Chip>
                   <b className="font-num text-body">#{order.no}</b>
-                  <span className="text-micro text-gray3">{new Date(order.createdAt).toLocaleString('zh-CN', { hour12: false })}</span>
+                  <span className="text-micro text-gray3">{new Date(order.createdAt).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}</span>
                 </div>
                 <h2 className="mt-2 text-h2">{order.store?.name || '未知门店'}</h2>
                 <p className="mt-1 text-caption text-gray2">{itemSummary(order)}</p>
@@ -241,7 +241,7 @@ export default function InternalSupplyChainFulfillmentPage() {
               <div className="text-caption text-gray2">
                 <div>供应商：{order.supplier?.name || '未分配'}</div>
                 <div className="mt-1">期望到货：{order.expectedDate?.slice(0, 10) || '—'}</div>
-                <div className="mt-1 font-num text-h2 text-ink">¥{Number(order.totalAmount || 0).toLocaleString('zh-CN')}</div>
+                <div className="mt-1 font-num text-h2 text-ink">¥{Number(order.totalAmount || 0).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
               </div>
               <Link
                 href={`/v2/supply-chain/fulfillment/${order.id}`}

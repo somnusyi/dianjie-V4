@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Dianjie backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=300
+Unit=dianjie-backup.service
+
+[Install]
+WantedBy=timers.target

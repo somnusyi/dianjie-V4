@@ -280,7 +280,7 @@ export default function ReceiptsPage() {
         <section className="dj-hero receipt-hero">
           <div className="dj-hero-meta">
             <span>收货状态 <i /> 实时入库</span>
-            <span>{new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+            <span>{new Date().toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit' })}</span>
           </div>
           <div className="dj-hero-main">
             <strong>{summary.pendingCount} 笔</strong>

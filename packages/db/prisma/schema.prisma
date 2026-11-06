@@ -14,6 +14,7 @@ datasource db {
 
 // ── 租户（SaaS 多租户）────────────────────────────────
 model Tenant {
+  replenishmentStockHolds ReplenishmentStockHold[]
   documentQualityImages DocumentQualityImage[]
   procurementApprovalEvents ProcurementApprovalEvent[]
   supplierCreateRequests SupplierCreateRequest[]
@@ -129,12 +130,17 @@ model Tenant {
   bossChatMessages                     BossChatMessage[]
 
   @@map("tenants")
+  transferMovements StoreTransferMovement[]
+
+  netCostBasisConfirmations WarehouseNetCostBasisConfirmation[]
+
 }
 
 // ── 供应链仓库（tenant 内部团队）─────────────────────
 // 当前每个 tenant 只启用一个 code=default 的默认仓；数据库 partial unique
 // index 保证单默认仓，模型保留未来同 tenant 多仓能力。
 model Warehouse {
+  replenishmentStockHolds ReplenishmentStockHold[]
   id                         String                 @id @default(cuid()) @db.VarChar(64)
   tenantId                   String
   code                       String                 @db.VarChar(64)
@@ -176,6 +182,8 @@ model Warehouse {
   @@unique([tenantId, id])
   @@index([tenantId, isActive])
   @@map("warehouses")
+  netCostBasisConfirmations WarehouseNetCostBasisConfirmation[]
+
 }
 
 enum WarehouseInventoryMode {
@@ -220,6 +228,7 @@ model WarehouseLedgerBalance {
   reservedQty     Decimal  @default(0) @db.Decimal(18, 6)
   inventoryValue  Decimal  @default(0) @db.Decimal(20, 4)
   averageUnitCost Decimal  @default(0) @db.Decimal(18, 6)
+  postingSequence Int @default(0)
   rowVersion      Int      @default(0)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -278,6 +287,7 @@ model WarehouseLedgerMovement {
   supplierId           String?
   createdById          String?
   reversalOfId         String?                     @unique @db.VarChar(64)
+  postingSequence Int?
   recordedAt           DateTime                    @default(now())
 
   tenant                     Tenant                            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -299,6 +309,11 @@ model WarehouseLedgerMovement {
   @@index([tenantId, sourceType, sourceId])
   @@index([tenantId, supplierId, effectiveAt])
   @@map("warehouse_ledger_movements")
+  netCostBasisConfirmations WarehouseNetCostBasisConfirmation[]
+
+  @@unique([tenantId, warehouseId, productId, id], map: "warehouse_movement_scope_id_key")
+  @@unique([tenantId, warehouseId, productId, postingSequence], map: "warehouse_movement_posting_sequence_key")
+
 }
 
 // 供应商名称别名（P2）：美团数据包/历史台账里的供应商文本 → 供应商主数据。
@@ -509,6 +524,8 @@ model WarehouseDoc {
   effectiveAt    DateTime
   status         WarehouseDocStatus       @default(POSTED)
   reviewStatus   WarehouseDocReviewStatus @default(UNREVIEWED)
+  postingPolicy  String                   @default("LEGACY") @db.VarChar(16)
+  postedAt       DateTime?
   lineCount      Int                      @default(0)
   totalAmount    Decimal                  @default(0) @db.Decimal(20, 4)
   idempotencyKey String                   @db.VarChar(160) // 对应台账批次幂等键（manual-inbound:xxx）
@@ -790,6 +807,8 @@ model User {
   @@unique([tenantId, wecomUserId])
   @@unique([tenantId, id])
   @@map("users")
+  netCostBasisConfirmations WarehouseNetCostBasisConfirmation[]
+
 }
 
 // ══════════════════════════════════════════════════════
@@ -1368,6 +1387,8 @@ model Store {
   @@unique([tenantId, no])
   @@unique([tenantId, id])
   @@map("stores")
+  transferMovements StoreTransferMovement[]
+
 }
 
 // ── 营业额记录（美团收银机同步）──────────────────────
@@ -1635,6 +1656,7 @@ model UpstreamReceiptLineEvidenceDocument {
 
 // ── 商品 ──────────────────────────────────────────────
 model Product {
+  replenishmentStockHolds ReplenishmentStockHold[]
   storeTransferItems StoreTransferItem[]
 
   id                            String                         @id @default(cuid())
@@ -1643,6 +1665,7 @@ model Product {
   name                          String
   spec                          String? // 规格型号 (如 "24瓶*330ml/件" / "5kg/袋")
   category                      String                         @default("其他") // 类目可选, 默认"其他"
+  location                      String?                        @db.VarChar(32) // 商品拣货库位，由供应链维护
   imageKey                      String? // OSS 对象 key；读取时动态签名，避免长期保存过期 URL
   // legacy unit 继续服务旧客户端；V5 新调用方应使用下面四单位合同。
   unit                          String                         @default("kg")
@@ -1732,6 +1755,10 @@ model Product {
   @@index([batchId])
   @@index([tenantId, supplierId, category, status])
   @@map("products")
+  transferMovements StoreTransferMovement[]
+
+  netCostBasisConfirmations WarehouseNetCostBasisConfirmation[]
+
 }
 
 model ProductEvidenceRequirementChange {
@@ -3283,6 +3310,7 @@ model Payment {
 
 // ── 采购订单（店长下单）────────────────────────────────
 model PurchaseOrder {
+  replenishmentStockHolds ReplenishmentStockHold[]
   id                    String              @id @default(cuid())
   tenantId              String
   no                    String // PO202403001
@@ -3355,6 +3383,7 @@ model PurchaseOrder {
 }
 
 model PurchaseOrderItem {
+  replenishmentStockHolds ReplenishmentStockHold[]
   id                                    String                       @id @default(cuid())
   purchaseOrderId                       String
   productId                             String
@@ -3386,6 +3415,7 @@ model PurchaseOrderItem {
   stockReservation           SupplierStockReservation?
   warehouseLedgerReservation WarehouseLedgerReservation?
 
+  @@unique([purchaseOrderId, id])
   @@index([purchaseOrderId, isActive])
   @@map("purchase_order_items")
 }
@@ -3450,6 +3480,7 @@ model PurchaseOrderEvent {
 
 // ── 独立门店补货需求：接单后桥接正式订货单履约 ─────────────────────
 model ReplenishmentOrder {
+  replenishmentStockHolds ReplenishmentStockHold[]
   id                 String                   @id @default(cuid()) @db.VarChar(64)
   tenantId           String
   no                 String                   @db.VarChar(80)
@@ -3458,6 +3489,7 @@ model ReplenishmentOrder {
   expectedDate       DateTime                 @db.Date
   totalAmount        Decimal                  @default(0) @db.Decimal(12, 2)
   status             ReplenishmentOrderStatus @default(DRAFT)
+  stockReservationPolicy String @default("LEGACY") @db.VarChar(40)
   source             String                   @default("SUPPLY_CHAIN_PROXY") @db.VarChar(40)
   note               String?                  @db.VarChar(500)
   idempotencyKey     String?                  @db.VarChar(80)
@@ -3494,6 +3526,7 @@ model ReplenishmentOrder {
 }
 
 model ReplenishmentOrderItem {
+  replenishmentStockHolds ReplenishmentStockHold[]
   id                                    String                       @id @default(cuid()) @db.VarChar(64)
   tenantId                              String
   replenishmentOrderId                  String                       @db.VarChar(64)
@@ -3520,6 +3553,7 @@ model ReplenishmentOrderItem {
   product            Product            @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
 
   @@unique([replenishmentOrderId, productId])
+  @@unique([tenantId, replenishmentOrderId, id])
   @@index([tenantId, productId])
   @@map("replenishment_order_items")
 }
@@ -4431,6 +4465,9 @@ model SupplierStockReservation {
   productId           String
   purchaseOrderId     String
   purchaseOrderItemId String                         @unique
+  // P01: supplier stock remains on legacy Product.unit; NULL denotes historical rows.
+  stockUnitSnapshot String? @db.VarChar(16)
+  stockUnitsPerOrderUnitSnapshot Decimal? @db.Decimal(18, 6)
   quantity            Decimal                        @db.Decimal(12, 3)
   fulfilledQty        Decimal                        @default(0) @db.Decimal(12, 3)
   status              SupplierStockReservationStatus @default(ACTIVE)
@@ -4672,6 +4709,10 @@ model WarehouseStocktake {
   no                   String                   @db.VarChar(40)
   countDate            DateTime                 @db.Date
   status               WarehouseStocktakeStatus @default(DRAFT)
+  postingPolicy        String                   @default("LEGACY") @db.VarChar(16)
+  reviewStatus         WarehouseDocReviewStatus @default(UNREVIEWED)
+  auditedAt            DateTime?
+  auditedById          String?
   rowVersion           Int                      @default(0)
   itemCount            Int                      @default(0)
   countedCount         Int                      @default(0)
@@ -5717,6 +5758,7 @@ model PageAnnotation {
 // 单价为创建时人工确认的库存单位价格快照，不回填或改写门店盘点快照。
 enum StoreTransferStatus {
   PENDING
+  PARTIALLY_RECEIVED
   SHIPPED
   RECEIVED
   REVOKED
@@ -5735,6 +5777,7 @@ model StoreTransfer {
   shippedById  String?
   receivedById String?
   revokedById  String?
+  requestFingerprint String? @db.Char(64)
   requestKey   String
   createdAt    DateTime            @default(now())
   shippedAt    DateTime?
@@ -5749,6 +5792,8 @@ model StoreTransfer {
   @@unique([tenantId, requestKey])
   @@index([tenantId, transferDate, status])
   @@map("store_transfers")
+  transferMovements StoreTransferMovement[]
+
 }
 
 model StoreTransferItem {
@@ -5761,6 +5806,9 @@ model StoreTransferItem {
   category   String?
   unit       String
   quantity   Decimal       @db.Decimal(18, 6)
+  receivedQuantity Decimal @default(0) @db.Decimal(18, 6)
+  returnedQuantity Decimal @default(0) @db.Decimal(18, 6)
+  damagedQuantity Decimal @default(0) @db.Decimal(18, 6)
   cost       Decimal       @db.Decimal(18, 6)
   settlement Decimal       @db.Decimal(18, 6)
   outAmount  Decimal       @db.Decimal(20, 4)
@@ -5770,6 +5818,8 @@ model StoreTransferItem {
 
   @@unique([transferId, productId])
   @@map("store_transfer_items")
+  transferMovements StoreTransferMovement[]
+
 }
 
 // DJ-005: successful atomic creation requests only; tenant-scoped durable replay.
@@ -5823,4 +5873,124 @@ model ProcurementApprovalEvent {
   @@index([tenantId,receiptId,createdAt])
   @@index([tenantId,returnId,createdAt])
   @@map("procurement_approval_events")
+}
+
+// Immutable per-line store transfer facts; physical count snapshots remain unchanged.
+model StoreTransferMovement {
+  id String @id @default(cuid())
+  tenantId String
+  transferId String
+  transferItemId String
+  storeId String
+  productId String
+  kind String @db.VarChar(16)
+  quantity Decimal @db.Decimal(18, 6)
+  amount Decimal @db.Decimal(20, 4)
+  quantityDelta Decimal @db.Decimal(18, 6)
+  valueDelta Decimal @db.Decimal(20, 4)
+  inventoryUnit String @db.VarChar(16)
+  unitCost Decimal @db.Decimal(18, 6)
+  requestKey String @db.VarChar(100)
+  requestFingerprint String @db.Char(64)
+  idempotencyKey String @db.VarChar(200)
+  effectiveAt DateTime
+  createdById String
+  note String @default("")
+  createdAt DateTime @default(now())
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  transfer StoreTransfer @relation(fields: [transferId], references: [id], onDelete: Restrict)
+  transferItem StoreTransferItem @relation(fields: [transferItemId], references: [id], onDelete: Restrict)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, storeId, productId, effectiveAt])
+  @@index([tenantId, transferId, requestKey])
+  @@map("store_transfer_movements")
+}
+
+// Append-only evidence of a tax-exclusive historical movement value. Revisions retain every earlier confirmation.
+model WarehouseNetCostBasisConfirmation {
+  id String @id @default(cuid())
+  tenantId String
+  warehouseId String @db.VarChar(64)
+  productId String
+  movementId String @db.VarChar(64)
+  netValueDelta Decimal? @db.Decimal(20, 4)
+  poolNetValueAfter Decimal? @db.Decimal(20, 4)
+  physicalAfterSnapshot Decimal @db.Decimal(18, 6)
+  grossValueAfterSnapshot Decimal @db.Decimal(20, 4)
+  postingSequenceSnapshot Int?
+  grossValueDeltaSnapshot Decimal @db.Decimal(20, 4)
+  physicalDeltaSnapshot Decimal @db.Decimal(18, 6)
+  inventoryUnitSnapshot String @db.VarChar(16)
+  basisType String @db.VarChar(20)
+  taxRate Decimal? @db.Decimal(7, 6)
+  evidenceRefs Json
+  note String @default("") @db.VarChar(500)
+  confirmedById String
+  confirmedAt DateTime @default(now())
+  requestKey String @db.VarChar(120)
+  requestFingerprint String @db.Char(64)
+  version Int
+  supersedesId String? @unique
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  warehouse Warehouse @relation(map: "net_basis_warehouse_fkey", fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  movement WarehouseLedgerMovement @relation(map: "net_basis_movement_fkey", fields: [tenantId, warehouseId, productId, movementId], references: [tenantId, warehouseId, productId, id], onDelete: Restrict)
+  confirmedBy User @relation(fields: [tenantId, confirmedById], references: [tenantId, id], onDelete: Restrict)
+  supersedes WarehouseNetCostBasisConfirmation? @relation("NetCostBasisRevision", fields: [supersedesId], references: [id], onDelete: Restrict)
+  supersededBy WarehouseNetCostBasisConfirmation? @relation("NetCostBasisRevision")
+  @@unique([tenantId, requestKey])
+  @@unique([tenantId, movementId, version])
+  @@index([tenantId, warehouseId, productId])
+  @@map("warehouse_net_cost_basis_confirmations")
+}
+
+// Internal singleton high-water clock for ordered browser cookie responses.
+model BrowserSessionClock {
+  id                Boolean @id @default(true)
+  lastOrder         BigInt  @default(0)
+  logicalTimeMs     BigInt
+  legacyExpiresAtMs BigInt
+
+  @@ignore
+}
+
+
+enum ReplenishmentStockHoldStatus {
+  ACTIVE
+  RELEASED
+  TRANSFERRED
+}
+
+// A submitted independent replenishment owns a hold before any formal PO exists.
+model ReplenishmentStockHold {
+  id String @id @default(cuid()) @db.VarChar(64)
+  tenantId String
+  warehouseId String @db.VarChar(64)
+  productId String
+  replenishmentOrderId String @db.VarChar(64)
+  replenishmentOrderItemId String @unique @db.VarChar(64)
+  originalQuantity Decimal @db.Decimal(18, 6)
+  originalUnit String @db.VarChar(16)
+  conversionFactor Decimal @db.Decimal(18, 6)
+  inventoryQuantity Decimal @db.Decimal(18, 6)
+  inventoryUnit String @db.VarChar(16)
+  status ReplenishmentStockHoldStatus @default(ACTIVE)
+  releasedAt DateTime?
+  transferredAt DateTime?
+  purchaseOrderId String?
+  purchaseOrderItemId String? @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouse Warehouse @relation(fields: [tenantId, warehouseId], references: [tenantId, id], onDelete: Restrict)
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+  replenishmentOrder ReplenishmentOrder @relation(fields: [tenantId, replenishmentOrderId], references: [tenantId, id], onDelete: Restrict)
+  replenishmentOrderItem ReplenishmentOrderItem @relation(fields: [tenantId, replenishmentOrderId, replenishmentOrderItemId], references: [tenantId, replenishmentOrderId, id], onDelete: Restrict)
+  purchaseOrder PurchaseOrder? @relation(fields: [tenantId, purchaseOrderId], references: [tenantId, id], onDelete: Restrict)
+  purchaseOrderItem PurchaseOrderItem? @relation(fields: [purchaseOrderId, purchaseOrderItemId], references: [purchaseOrderId, id], onDelete: Restrict)
+  @@index([tenantId, warehouseId, productId, status])
+  @@index([tenantId, replenishmentOrderId, status])
+  @@map("replenishment_stock_holds")
 }

@@ -8,6 +8,7 @@
  *   - 还款:门店向总部偿还历史
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { apiFetch } from '@/lib/v2-auth'
@@ -66,8 +67,7 @@ const STATUS_TONE: Record<string, 'orange'|'green'|'gray'> = {
 }
 
 function fmt(iso: string) {
-  const d = new Date(iso)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return businessDayjs(iso).format('YYYY-MM-DD')
 }
 
 export default function CapitalDetailPage() {
@@ -376,7 +376,7 @@ function Drawer({ type, project, onClose, onSuccess }: {
             category: form.category || 'OTHER',
             vendor: form.vendor,
             amount: Number(form.amount),
-            paidAt: form.paidAt || new Date().toISOString().slice(0, 10),
+            paidAt: form.paidAt || businessDayjs().format('YYYY-MM-DD'),
             paymentMethod: form.paymentMethod || 'cmb',
             bankTxNo: form.bankTxNo,
             note: form.note,
@@ -393,7 +393,7 @@ function Drawer({ type, project, onClose, onSuccess }: {
             projectId: project.id,
             storeId: project.store.id,
             amount: Number(form.amount),
-            paidAt: form.paidAt || new Date().toISOString().slice(0, 10),
+            paidAt: form.paidAt || businessDayjs().format('YYYY-MM-DD'),
             source: form.source || 'MANUAL',
             accountId: form.accountId,
             bankTxNo: form.bankTxNo,
@@ -475,7 +475,7 @@ function Drawer({ type, project, onClose, onSuccess }: {
                        className={IN + ' font-num'} placeholder="例: 80000" />
               </Field>
               <Field label="付款日">
-                <input type="date" value={form.paidAt || new Date().toISOString().slice(0, 10)}
+                <input type="date" value={form.paidAt || businessDayjs().format('YYYY-MM-DD')}
                        onChange={e => setForm((s: any) => ({...s, paidAt: e.target.value}))} className={IN} />
               </Field>
               <Field label="付款方式">
@@ -498,7 +498,7 @@ function Drawer({ type, project, onClose, onSuccess }: {
                        max={project.remainingDebt} className={IN + ' font-num'} />
               </Field>
               <Field label="还款日">
-                <input type="date" value={form.paidAt || new Date().toISOString().slice(0, 10)}
+                <input type="date" value={form.paidAt || businessDayjs().format('YYYY-MM-DD')}
                        onChange={e => setForm((s: any) => ({...s, paidAt: e.target.value}))} className={IN} />
               </Field>
               <Field label="来源">

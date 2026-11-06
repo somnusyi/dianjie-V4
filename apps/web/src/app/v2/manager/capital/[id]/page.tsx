@@ -13,6 +13,8 @@
  *   - 录还款(财务)
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { apiFetch } from '@/lib/v2-auth'
@@ -70,8 +72,7 @@ const EXP_STATUS_TONE: Record<string, 'orange'|'green'|'red'|'gray'> = {
 }
 
 function fmt(iso: string) {
-  const d = new Date(iso)
-  return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
+  return businessDayjs(iso).format('MM/DD')
 }
 
 export default function ManagerCapitalDetailPage() {
@@ -334,7 +335,7 @@ function Drawer({ type, project, onClose, onSuccess }: {
 
         <div className="px-4 pb-3 space-y-3">
           <Field label="类别 *">
-            <select value={form.category || ''} onChange={e => setForm((s: any) => ({...s, category: e.target.value}))} className={IN}>
+            <SearchableSelect searchWhenLong searchLabel="搜索分类" value={form.category || ''} onChange={e => setForm((s: any) => ({...s, category: e.target.value}))} className={IN}>
               <option value="">请选择</option>
               <option value="RENT">租金</option>
               <option value="DECORATION">装修</option>
@@ -343,12 +344,12 @@ function Drawer({ type, project, onClose, onSuccess }: {
               <option value="LEGAL">证照</option>
               <option value="MARKETING">营销</option>
               <option value="OTHER">其他</option>
-            </select>
+            </SearchableSelect>
           </Field>
 
           {type === 'EXPENSE' && project.contracts.length > 0 && (
             <Field label="关联合同 (推荐)" hint="不关联也可, 但合同对账更清楚">
-              <select value={form.contractId || ''} onChange={e => {
+              <SearchableSelect searchWhenLong searchLabel="搜索合同" value={form.contractId || ''} onChange={e => {
                 const c = project.contracts.find(x => x.id === e.target.value)
                 setForm((s: any) => ({...s, contractId: e.target.value, vendor: c?.vendor || s.vendor, category: c?.category || s.category}))
               }} className={IN}>
@@ -358,7 +359,7 @@ function Drawer({ type, project, onClose, onSuccess }: {
                     {CATEGORY_LABEL[c.category]} · {c.vendor} (剩 ¥{(Number(c.totalAmount) - Number(c.paidAmount)).toLocaleString()})
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             </Field>
           )}
 

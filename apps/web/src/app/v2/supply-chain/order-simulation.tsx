@@ -1,4 +1,5 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { OrderProductImage } from '@/components/v2/order-product-image'
@@ -158,7 +159,7 @@ export function StoreOrderSimulation({ storeId, storeName }: { storeId: string; 
       <div className="grid gap-3 rounded-card border border-border bg-white p-4 lg:grid-cols-[minmax(220px,0.35fr)_minmax(280px,0.65fr)]">
         <label className="text-caption text-gray2">
           模拟选择供应商
-          <select
+          <SearchableSelect searchWhenLong searchLabel="搜索模拟选择供应商"
             aria-label="模拟选择供应商"
             value={supplierId}
             onChange={event => {
@@ -170,7 +171,7 @@ export function StoreOrderSimulation({ storeId, storeName }: { storeId: string; 
             className="mt-1 h-11 w-full rounded-cta border border-border bg-white px-3 text-body"
           >
             {catalog.suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}
-          </select>
+          </SearchableSelect>
         </label>
         <label className="text-caption text-gray2">
           搜索商品

@@ -1,4 +1,5 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 import { ResponsiveDataTable } from '@/components/v2/responsive-data-table'
 
 import { useCallback, useEffect, useState } from 'react'
@@ -36,6 +37,7 @@ type InboundRecord = {
   batchNo: string | null
   expiryDate: string | null
   reversed: boolean
+  purchaseReceipt?: {id:string;no:string}|null
   doc: { id: string; docNo: string; status: 'POSTED' | 'CONFIRMED' } | null
 }
 
@@ -63,6 +65,7 @@ const SOURCE_LABEL: Record<string, string> = {
 const SOURCE_OPTIONS = [
   { value: 'all', label: '全部来源' },
   { value: 'manual', label: '手工入库' },
+  { value: 'purchase', label: '采购入库' },
   { value: 'batch', label: '批量入库' },
   { value: 'package', label: '美团数据包' },
   { value: 'opening', label: '期初建账' },
@@ -77,12 +80,12 @@ function qty(value: number, digits = 3) {
 }
 
 function day(value: string | null | undefined) {
-  return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—'
+  return value ? new Date(value).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }) : '—'
 }
 
 function recordSourceLabel(row: InboundRecord) {
   if (row.type === 'OPENING_BALANCE') return '期初建账'
-  return SOURCE_LABEL[row.sourceType] || row.sourceType
+  return row.type === 'UPSTREAM_RECEIPT' ? '采购入库' : SOURCE_LABEL[row.sourceType] || row.sourceType
 }
 
 function downloadCsv(filename: string, rows: Array<Array<string | number | null | undefined>>) {
@@ -223,7 +226,7 @@ export default function InboundRecordsPage() {
         ['日期', '商品编码', '商品名称', '分类', '入库数量', '原单位', '库存数量', '库存单位', '库存单价', '金额', '供应商', '来源', '批次', '效期', '单据编号', '状态'],
         ...all.map(row => {
           const supplier = supplierCell(row)
-          return [day(row.effectiveAt), row.product.code, row.product.name, row.product.category, row.originalQuantity, row.originalUnit, row.inventoryQuantity, row.inventoryUnit, row.inventoryUnitCost, row.amount, supplier.text, recordSourceLabel(row), row.batchNo, row.expiryDate ? String(row.expiryDate).slice(0, 10) : '', row.doc?.docNo, row.reversed ? '已冲销' : '有效']
+          return [day(row.effectiveAt), row.product.code, row.product.name, row.product.category, row.originalQuantity, row.originalUnit, row.inventoryQuantity, row.inventoryUnit, row.inventoryUnitCost, row.amount, supplier.text, recordSourceLabel(row), row.batchNo, row.expiryDate ? String(row.expiryDate).slice(0, 10) : '', row.doc?.docNo || row.purchaseReceipt?.no, row.reversed ? '已冲销' : '有效']
         }),
       ])
     } catch (reason: any) {
@@ -241,7 +244,7 @@ export default function InboundRecordsPage() {
       headers: ['日期', '商品编码', '商品名称', '分类', '入库数量', '原单位', '库存数量', '库存单位', '库存单价', '金额', '供应商', '来源', '批次', '效期', '单据编号', '状态'],
       rows: rows.map(row => {
         const supplier = supplierCell(row)
-        return [day(row.effectiveAt), row.product.code, row.product.name, row.product.category, row.originalQuantity, row.originalUnit, row.inventoryQuantity, row.inventoryUnit, row.inventoryUnitCost, row.amount, supplier.text, recordSourceLabel(row), row.batchNo, row.expiryDate ? String(row.expiryDate).slice(0, 10) : '', row.doc?.docNo, row.reversed ? '已冲销' : '有效']
+        return [day(row.effectiveAt), row.product.code, row.product.name, row.product.category, row.originalQuantity, row.originalUnit, row.inventoryQuantity, row.inventoryUnit, row.inventoryUnitCost, row.amount, supplier.text, recordSourceLabel(row), row.batchNo, row.expiryDate ? String(row.expiryDate).slice(0, 10) : '', row.doc?.docNo || row.purchaseReceipt?.no, row.reversed ? '已冲销' : '有效']
       }),
     }
   }
@@ -261,7 +264,7 @@ export default function InboundRecordsPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-h1">入库记录</h1>
-          <p className="mt-1 text-caption text-gray3">总仓全部入库流水：手工、批量、美团数据包与期初建账 · 按供应商归集</p>
+          <p className="mt-1 text-caption text-gray3">总仓全部入库流水：采购、手工、批量、美团数据包与期初建账 · 按供应商归集</p>
         </div>
         <div className="flex gap-2">
           <button type="button" onClick={() => void exportRecords()} disabled={loading || exporting || !data?.total} className="rounded-cta bg-ink px-4 py-2 text-button text-white disabled:opacity-40">{exporting ? '导出中…' : '导出当前筛选'}</button>
@@ -286,7 +289,7 @@ export default function InboundRecordsPage() {
               <div className="mt-0.5 text-micro text-gray3">{item.rowCount} 行流水 · 最近 {day(item.lastUsedAt)}</div>
             </div>
             {!item.multi && <>
-              <select
+              <SearchableSelect searchLabel="搜索归并供应商"
                 aria-label={`${item.sourceName}认领到供应商`}
                 value={claimTarget[item.sourceName] || ''}
                 onChange={event => setClaimTarget(current => ({ ...current, [item.sourceName]: event.target.value }))}
@@ -294,7 +297,7 @@ export default function InboundRecordsPage() {
               >
                 <option value="">归并到供应商…</option>
                 {suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}
-              </select>
+              </SearchableSelect>
               <button
                 onClick={() => claim(item)}
                 disabled={claiming === item.sourceName || !claimTarget[item.sourceName]}
@@ -308,8 +311,8 @@ export default function InboundRecordsPage() {
       <section className="mt-4 rounded-card border border-border bg-white p-4">
         <div className="grid items-end gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(260px,1.4fr)_minmax(180px,1fr)_minmax(160px,0.8fr)_minmax(260px,1.4fr)_auto]">
           <DateRangeCalendar value={{ from, to }} onChange={range => { setFrom(range.from); setTo(range.to); setPage(1) }} />
-          <label><span className="mb-1 block text-micro text-gray3">供应商</span><select value={supplierId} onChange={event => { setSupplierId(event.target.value); setPage(1) }} className="h-11 w-full rounded-cta border border-border bg-white px-3"><option value="">全部供应商</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}</select></label>
-          <label><span className="mb-1 block text-micro text-gray3">来源类型</span><select value={source} onChange={event => { setSource(event.target.value); setPage(1) }} className="h-11 w-full rounded-cta border border-border bg-white px-3">{SOURCE_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+          <label><span className="mb-1 block text-micro text-gray3">供应商</span><SearchableSelect searchWhenLong searchLabel="搜索供应商" value={supplierId} onChange={event => { setSupplierId(event.target.value); setPage(1) }} className="h-11 w-full rounded-cta border border-border bg-white px-3"><option value="">全部供应商</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}</SearchableSelect></label>
+          <label><span className="mb-1 block text-micro text-gray3">来源类型</span><SearchableSelect searchWhenLong searchLabel="搜索来源类型" value={source} onChange={event => { setSource(event.target.value); setPage(1) }} className="h-11 w-full rounded-cta border border-border bg-white px-3">{SOURCE_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</SearchableSelect></label>
           <label><span className="mb-1 block text-micro text-gray3">商品</span><input value={q} onChange={event => { setQ(event.target.value); setPage(1) }} placeholder="编码 / 名称" className="h-11 w-full rounded-cta border border-border px-3" /></label>
           <button type="button" onClick={resetFilters} className="h-11 rounded-cta border border-border bg-white px-4 text-button text-gray2">重置</button>
         </div>
@@ -354,7 +357,7 @@ export default function InboundRecordsPage() {
                       >
                         {row.doc.status === 'POSTED' ? `✏️ 改单 ${row.doc.docNo}` : `✓ ${row.doc.docNo}`}
                       </a>
-                    ) : <span className="text-gray3">—</span>}
+                    ) : row.purchaseReceipt ? <Link className="text-accent underline" href={`/v2/supply-chain/procurement/receipts/${encodeURIComponent(row.purchaseReceipt.id)}/edit`}>{row.purchaseReceipt.no}</Link> : <span className="text-gray3">—</span>}
                   </td>
                 </tr>
               })}

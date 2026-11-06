@@ -11,10 +11,11 @@
  *   - 自己下的单 (createdById === me.id) + 状态 SUBMITTED → 可撤单 (详情页才显示按钮)
  */
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 import { useEffect, useMemo, useState } from 'react'
 import { Chip, ProgressDots } from '@/components/v2'
 import { apiFetch, getUser } from '@/lib/v2-auth'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 
 type Store    = { id: string; name: string; no?: string | null }
 type Supplier = { id: string; name: string }
@@ -151,22 +152,22 @@ export default function ChefDirectorOrdersPage() {
       {/* 筛选区 */}
       <section className="px-4 mt-3 space-y-2">
         <div className="flex gap-2">
-          <select
+          <SearchableSelect searchWhenLong searchLabel="搜索门店"
             value={storeId}
             onChange={e => setStoreId(e.target.value)}
             className="flex-1 bg-white rounded-card border border-border px-3 py-2 text-caption outline-none"
           >
             <option value="">全部门店</option>
             {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          <select
+          </SearchableSelect>
+          <SearchableSelect searchWhenLong searchLabel="搜索供应商"
             value={supplierId}
             onChange={e => setSupplierId(e.target.value)}
             className="flex-1 bg-white rounded-card border border-border px-3 py-2 text-caption outline-none"
           >
             <option value="">全部供应商</option>
             {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+          </SearchableSelect>
         </div>
 
         <div className="overflow-x-auto">

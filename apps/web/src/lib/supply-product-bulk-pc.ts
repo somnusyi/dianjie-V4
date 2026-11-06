@@ -78,9 +78,23 @@ export function productExportFilename(date = new Date()): string {
   return `商品报价表_${china.replace(/\//g, '-')}.csv`
 }
 
+/** Infer a category scope only when every selected row has a verified common fulfiller. */
+export function selectedSupplierForBulkCategory(
+  filters: Pick<SupplyProductFilters, 'supplierId'>,
+  rows: ReadonlyArray<{ id: string; supplier?: { id?: string } | null }>,
+  selectedIds: ReadonlySet<string>,
+): string {
+  if (filters.supplierId) return filters.supplierId
+  if (!selectedIds.size) return ''
+  const selected = rows.filter(row => selectedIds.has(row.id))
+  if (selected.length !== selectedIds.size || selected.some(row => !row.supplier?.id)) return ''
+  const suppliers = new Set(selected.map(row => row.supplier!.id!))
+  return suppliers.size === 1 ? [...suppliers][0] : ''
+}
+
 /**
  * 批量分类是否允许。
- * 内部供应链跨供应商时无法证明分类对每家供应商都有效，必须先限定供应商。
+ * 内部供应链跨供应商时无法证明分类对每家供应商都有效，必须有已核实的单一供应商范围。
  */
 export function canBulkCategory(filters: Pick<SupplyProductFilters, 'supplierId'>): boolean {
   return Boolean(filters.supplierId)
@@ -88,7 +102,7 @@ export function canBulkCategory(filters: Pick<SupplyProductFilters, 'supplierId'
 
 export function bulkCategoryBlockedReason(filters: Pick<SupplyProductFilters, 'supplierId'>): string | null {
   if (canBulkCategory(filters)) return null
-  return '批量分类前请先在“供应商”筛选中限定一个供应商，避免跨供应商分类不一致。'
+  return '请先选择全部属于同一供应商（门店履约方）的商品；跨供应商或归属未核实时不能批量分类。'
 }
 
 export function buildBatchCategoryBody(ids: string[], category: string): { ids: string[]; category: string } {

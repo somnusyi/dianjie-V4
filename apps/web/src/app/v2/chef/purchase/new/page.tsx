@@ -5,7 +5,9 @@
  * 食材采购单不走审批 (任何金额都直接发供应商)
  */
 'use client'
-import { useEffect, useState } from 'react'
+import { businessDateKey } from '@/lib/business-date'
+import { SearchableSelect } from '@/components/v2/searchable-select'
+import { useEffect, useRef, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { OrderProductImage } from '@/components/v2/order-product-image'
@@ -16,9 +18,10 @@ import {
 } from '@/lib/order-entry-cost-pricing'
 import { deliveryScheduleText } from '@/lib/delivery-rule-cycle'
 import { isOrderEntryStockBlocked, isOrderEntryZeroStock } from '@/lib/order-entry-stock-policy'
-import { apiFetch, getUser } from '@/lib/v2-auth'
+import { createPurchaseDraftSession, purchaseDraftOwner, samePurchaseDraftOwner } from '@/lib/purchase-order-draft'
+import { apiFetch, getUser, getActiveStoreId } from '@/lib/v2-auth'
 
-type Supplier = { id: string; name: string; category: string | null; bankAccount: string | null; inventoryMode?: 'STRICT' | 'NOT_TRACKED' }
+type Supplier = { id: string; no?: string | null; name: string; category: string | null; bankAccount: string | null; inventoryMode?: 'STRICT' | 'NOT_TRACKED' }
 type Product  = { id: string; name: string; unit: string; price: string; supplierId: string | null
                   spec?: string | null; category?: string | null; code?: string
                   imageUrl?: string | null
@@ -30,7 +33,7 @@ type Product  = { id: string; name: string; unit: string; price: string; supplie
                   unitConversionStatus?: string | null
                   minOrderQty?: string | number; stepQty?: string | number
                   stock?: string | number | null
-                  physicalStock?: number; reservedStock?: number; availableStock?: number
+                  physicalStock?: number; reservedStock?: number; availableStock?: number; availabilityUnit?: string
                   inventoryTracked?: boolean
                   inventoryEnforced?: boolean
                   status?: string  /* ENABLED / DISABLED / PENDING_APPROVAL / PENDING_DISABLE */ }
@@ -46,8 +49,7 @@ function matchesQuery(p: Product, q: string) {
 
 // ── 草稿暂存 (客户反馈: 选品后未提交退出, 返回时已选商品丢失) ──
 // localStorage 单端持久化, 未跨设备同步; 7 天过期防陈旧
-const DRAFT_KEY = 'dj:po-new:draft:v1'
-const DRAFT_TTL_MS = 7 * 86400_000
+// v1 had no owner information and is deliberately neither restored nor deleted.
 
 function timeAgoCn(ts: number): string {
   const sec = Math.max(0, Math.floor((Date.now() - ts) / 1000))
@@ -64,13 +66,17 @@ export default function ChefPONewPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [products, setProducts]   = useState<Product[]>([])
   const [supplierId, setSupplierId] = useState<string>('')
-  const [expectedDate, setExpectedDate] = useState<string>(() => new Date(Date.now() + 86400_000).toISOString().slice(0, 10))
+  const [expectedDate, setExpectedDate] = useState<string>(() => businessDateKey(Date.now() + 86400_000))
   const [note, setNote] = useState('')
   const [items, setItems] = useState<LineItem[]>([])
   const [submitting, setSubmitting] = useState(false)
-  // 防重 idempotencyKey: 进页面时生成, 提交一次 / 失败可重试 (重置 key)
-  const [idempotencyKey, setIdempotencyKey] = useState(() => `po-${Date.now()}-${Math.random().toString(36).slice(2,10)}`)
+  const draftSession = useRef<ReturnType<typeof createPurchaseDraftSession> | null>(null)
+  const [draftReady, setDraftReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const errorRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (error) errorRef.current?.scrollIntoView({ block: 'center' })
+  }, [error])
   const [pickerOpen, setPickerOpen] = useState(false)
   const [searchQ, setSearchQ] = useState('')
   const [catFilter, setCatFilter] = useState<string>('全部')
@@ -107,43 +113,27 @@ export default function ChefPONewPage() {
       .catch(() => setRuleHint(null))
   }, [supplierId])
 
-  // mount 时检查 localStorage 是否有上次未提交的草稿, 有就自动恢复
-  // 客户原需求是"返回页面自动保留", 不再弹确认; 通过顶部 banner 提示并提供"清空"出口
+  // Restore only this authenticated account and active store; keep unknown-owner legacy data untouched.
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(DRAFT_KEY)
-      if (!raw) return
-      const d = JSON.parse(raw)
-      if (!d || typeof d !== 'object') return
-      if (!d.savedAt || Date.now() - d.savedAt > DRAFT_TTL_MS) {
-        localStorage.removeItem(DRAFT_KEY)
-        return
-      }
-      if (!Array.isArray(d.items) || d.items.length === 0) return
-      if (d.supplierId)   setSupplierId(d.supplierId)
-      if (d.expectedDate) setExpectedDate(d.expectedDate)
-      if (d.note)         setNote(d.note)
-      setItems(d.items)
-      setRestoredFromDraft(true)
-      setDraftSavedAt(d.savedAt)
-    } catch { /* 草稿坏了直接当没有, 不阻塞页面 */ }
+    const owner = purchaseDraftOwner(getUser(), getActiveStoreId())
+    if (!owner) { setError('账号或门店信息尚未就绪，请重新进入订货页面'); return }
+    const session = createPurchaseDraftSession(localStorage, owner)
+    draftSession.current = session
+    if (session.restored) {
+      const { draft, savedAt } = session.restored
+      setSupplierId(draft.supplierId); setExpectedDate(draft.expectedDate); setNote(draft.note); setItems(draft.items)
+      setRestoredFromDraft(true); setDraftSavedAt(savedAt)
+    }
+    setDraftReady(true)
+    const saveBeforeLeaving = () => session.flush()
+    window.addEventListener('pagehide', saveBeforeLeaving)
+    return () => { window.removeEventListener('pagehide', saveBeforeLeaving); session.dispose() }
   }, [])
 
-  // state 变化时 debounced 400ms 写 localStorage. 空状态时主动清, 避免下次空 banner
   useEffect(() => {
-    if (items.length === 0 && !supplierId && !note) {
-      localStorage.removeItem(DRAFT_KEY)
-      return
-    }
-    const t = setTimeout(() => {
-      try {
-        localStorage.setItem(DRAFT_KEY, JSON.stringify({
-          supplierId, expectedDate, note, items, savedAt: Date.now(),
-        }))
-      } catch { /* quota / 序列化失败忽略 */ }
-    }, 400)
-    return () => clearTimeout(t)
-  }, [supplierId, expectedDate, note, items])
+    if (!draftReady) return
+    draftSession.current?.update({ supplierId, expectedDate, note, items })
+  }, [draftReady, supplierId, expectedDate, note, items])
 
   // 商品数据到达后，把旧草稿里的兼容价格字段同步为当前订货单位价。
   // 待核验商品保留在草稿中供用户识别和移除，但绝不改写或用于预览/提交。
@@ -293,19 +283,24 @@ export default function ChefPONewPage() {
       setError(`以下草稿商品无法计算订货价，请先移除或联系采购核验单位换算：${pricingProblems.join('、')}`)
       return
     }
+    const session = draftSession.current
+    if (!session || !samePurchaseDraftOwner(session.owner, purchaseDraftOwner(getUser(), getActiveStoreId()))) {
+      setError('账号或门店已变化，请重新进入订货页面'); return
+    }
+    const idempotencyKey = session.beginSubmission({ supplierId, expectedDate, note, items })
+    if (!idempotencyKey) return
     setError(null); setSubmitting(true)
     try {
-      // 兜底: 显式传 storeId (后端旧版只对 MANAGER 用 token storeId, KITCHEN_LEAD 漏接)
-      const u = getUser()
-      const myStoreId = u?.storeId || u?.store?.id
+      const myStoreId = session.owner.storeId
       const order = await apiFetch<{ id: string; no: string }>('/api/orders', {
         method: 'POST',
         body: JSON.stringify({ supplierId, expectedDate, note, items: submitItems, storeId: myStoreId, idempotencyKey }),
       })
       // 提交成功 → 草稿清掉, 下次进页面是空白态
-      localStorage.removeItem(DRAFT_KEY)
+      session.completeSubmission()
       router.push(`${purchaseBase}/po-success/${order.id}`)
     } catch (e: any) {
+      session.failSubmission()
       setError(e.message || '提交失败')
       setSubmitting(false)
     }
@@ -346,7 +341,7 @@ export default function ChefPONewPage() {
               setNote('')
               setRestoredFromDraft(false)
               setDraftSavedAt(null)
-              localStorage.removeItem(DRAFT_KEY)
+              draftSession.current?.clear()
             }}
             className="text-caption px-3 py-1.5 bg-white border border-amber/40 text-amber-fg rounded-chip whitespace-nowrap"
           >清空</button>
@@ -357,7 +352,7 @@ export default function ChefPONewPage() {
         {/* 供应商选择 */}
         <div className="bg-white rounded-card border border-border p-3">
           <label className="text-micro text-gray3 block mb-1">供应商</label>
-          <select
+          <SearchableSelect searchLabel="搜索供应商"
             value={supplierId}
             onChange={(e) => { setSupplierId(e.target.value); setItems([]) }}
             required
@@ -365,9 +360,9 @@ export default function ChefPONewPage() {
           >
             <option value="">— 选择供应商 —</option>
             {suppliers.map(s => (
-              <option key={s.id} value={s.id}>{s.name}{s.category ? ` · ${s.category}` : ''}</option>
+              <option key={s.id} value={s.id} data-search={s.no || undefined}>{s.name}{s.category ? ` · ${s.category}` : ''}</option>
             ))}
-          </select>
+          </SearchableSelect>
         </div>
 
         {/* 期望到货日期 */}
@@ -378,7 +373,7 @@ export default function ChefPONewPage() {
             value={expectedDate}
             onChange={(e) => setExpectedDate(e.target.value)}
             required
-            min={new Date().toISOString().slice(0, 10)}
+            min={businessDateKey()}
             className="w-full text-body bg-transparent outline-none"
           />
           {ruleHint && (
@@ -481,7 +476,7 @@ export default function ChefPONewPage() {
         </div>
 
         {error && (
-          <div className="bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>
+          <div ref={errorRef} role="alert" className="bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>
         )}
       </form>
 
@@ -575,7 +570,7 @@ export default function ChefPONewPage() {
                       {pricing.status === 'READY' ? (
                         <>
                           <div className="text-micro text-gray3 font-num">
-                            ¥{pricing.orderUnitPrice} · {pricing.unitLabel} · 可用 {stockNum}
+                            ¥{pricing.orderUnitPrice} · {pricing.unitLabel} · 可用 {stockNum} {p.availabilityUnit || p.unit}
                             {(p.reservedStock || 0) > 0 && <span className="text-amber-fg">（已占 {p.reservedStock}）</span>}
                             {qty > 0 && <span className="text-amber-fg ml-2">小计 ¥{calculateOrderEntryLineAmount(qty, pricing.orderUnitPrice) || '0.00'}</span>}
                           </div>

@@ -1,0 +1,195 @@
+{
+  "version": "1.3.2",
+  "releaseId": "v1.3.2-20261028",
+  "namedOn": "2026-10-28",
+  "timezone": "America/Los_Angeles",
+  "previousVersion": "1.3.1",
+  "businessReleaseId": "p0-20261027-0fabedb984b2",
+  "businessSourceFingerprint": "0fabedb984b20059ac72608241dcd7a07d73f80b3bd14c97c0a8ba63557923f1",
+  "changes": [
+    "正式命名本批P0业务修复为1.3.2，统一API与页面版本标识",
+    "对账、发票、结转及分页日期等原批次修复，范围见P0完成证据",
+    "测试版和正式版均采用Docker运行；银行桥保持原PM2进程，本机备份按日／月执行",
+    "建立项目启动记忆、版本skill、逐版本记录与版本常量校验"
+  ],
+  "dataImports": 0,
+  "schemaMigrations": 0,
+  "environments": {
+    "uat": {
+      "status": "deployed",
+      "version": "1.3.2",
+      "target": "uat",
+      "releaseId": "v1.3.2-20261028",
+      "businessReleaseId": "p0-20261027-0fabedb984b2",
+      "sourceFingerprint": "642882bba97842b8da4d8c74b08ab516293f8dd777b0b47a9ac25e81faea3e97",
+      "baseCommit": "3e3c5f0c871b4263465b7f13b061e79feeebb572",
+      "at": "2026-10-28T08:31:02.415461+00:00",
+      "buildId": "dhbdqNtkebyCCzw2rwVuP",
+      "apiArchiveSha256": "d2a3abcc48f62a60ddc04e31e646863d16234cb0e14591ff8dd66a4a3f193204",
+      "webArchiveSha256": "53ecdb064bb6850b75ec5948c9ea9702a38654deb5323979f0bfd1a0f0d4063b",
+      "applicationBackup": "/app/backups/v1.3.2-20261028-uat/application-before.tar.gz",
+      "databaseBackup": "dianjie-20261028T083042Z-b03ec339.tar.gz",
+      "environmentUnchanged": true,
+      "schemaUnchanged": true,
+      "dataImports": 0,
+      "unrelatedProcessesUnchanged": true,
+      "runtime": {
+        "kind": "docker",
+        "operation": "v1.3.2-20261028",
+        "images": {
+          "api": {
+            "image": "crpi-4gf1a89r83t2ebct.cn-hangzhou.personal.cr.aliyuncs.com/dianjie-mxq-uat/dianjie-api:uat-v1.3.2-20261028",
+            "imageId": "sha256:600d29fc231117f6ab76c013059fe92d20f1ecf6a8be69820a701234cc93afb4",
+            "pushed": false
+          },
+          "web": {
+            "image": "crpi-4gf1a89r83t2ebct.cn-hangzhou.personal.cr.aliyuncs.com/dianjie-mxq-uat/dianjie-web:uat-v1.3.2-20261028",
+            "imageId": "sha256:f0184a57f1478b886e92848ec305c299492044719fec3e8cc34e19964d17ddb7",
+            "pushed": false
+          }
+        },
+        "containers": [
+          "dianjie-uat-api",
+          "dianjie-uat-web"
+        ]
+      }
+    },
+    "production": {
+      "status": "deployed",
+      "version": "1.3.2",
+      "target": "production",
+      "releaseId": "v1.3.2-20261028",
+      "businessReleaseId": "p0-20261027-0fabedb984b2",
+      "sourceFingerprint": "642882bba97842b8da4d8c74b08ab516293f8dd777b0b47a9ac25e81faea3e97",
+      "baseCommit": "3e3c5f0c871b4263465b7f13b061e79feeebb572",
+      "at": "2026-10-28T08:32:10.730210+00:00",
+      "buildId": "dxUcp0pCxA-OFjs7xd7-I",
+      "apiArchiveSha256": "d2a3abcc48f62a60ddc04e31e646863d16234cb0e14591ff8dd66a4a3f193204",
+      "webArchiveSha256": "5618e2505b49e75cc593b57e6c3be847cf9a28577ecab56106e240d2fb9b06fd",
+      "applicationBackup": "/app/backups/v1.3.2-20261028-production/application-before.tar.gz",
+      "databaseBackup": "dianjie-20261028T083148Z-70722ab3.tar.gz",
+      "environmentUnchanged": true,
+      "schemaUnchanged": true,
+      "dataImports": 0,
+      "unrelatedProcessesUnchanged": true,
+      "runtime": {
+        "kind": "docker",
+        "operation": "prod-docker-20261101",
+        "images": {
+          "api": "sha256:600d29fc231117f6ab76c013059fe92d20f1ecf6a8be69820a701234cc93afb4",
+          "web": "sha256:9208947f3a9aefba241414e034727603f24dfc199c3327981ddff5aa5dbe8ef5"
+        },
+        "containers": [
+          "dianjie-production-api",
+          "dianjie-production-web"
+        ],
+        "bankBridge": "existing PM2 unchanged"
+      }
+    }
+  },
+  "evidence": "docs/qa/evidence/P0-COMPLETION-20261027/RESULT.md",
+  "attempts": [
+    {
+      "target": "uat",
+      "status": "failed",
+      "reason": "Image packaging reference failed; no runtime switch; original version remained healthy"
+    },
+    {
+      "target": "uat",
+      "status": "deployed",
+      "at": "2026-10-28T08:31:02.415461+00:00"
+    },
+    {
+      "target": "production",
+      "status": "deployed",
+      "at": "2026-10-28T08:32:10.730210+00:00"
+    }
+  ],
+  "verification": {
+    "versionConstantTests": {
+      "passed": 3
+    },
+    "apiCompile": "passed",
+    "approvedSourceScope": "tmp/release-1.3.2-20261028/scope-verification.json",
+    "skillValidation": "passed",
+    "publicEntries": "passed",
+    "uatBrowserVersion": "1.3.2 visible on /v2/me",
+    "rollbackPreflight": "passed; not executed"
+  },
+  "relay": {
+    "localEndpoint": "127.0.0.1:15721",
+    "localListener": false,
+    "configuredCodexMode": "OpenAI Official direct; RayinAPI configured but not active",
+    "reviewSucceeded": false
+  },
+  "packageVersions": "package.json versions describe internal packages and are not the product release authority",
+  "currentEvidence": "docs/qa/evidence/RELEASE-1.3.2-20261028",
+  "limitations": [
+    "New UAT images are installed on ECS locally; these new tags have not been uploaded to ACR. Previous published ACR images remain available.",
+    "Relay review did not succeed; global Codex route was not changed."
+  ],
+  "runtimeMigrations": [
+    {
+      "operation": "prod-docker-20261101",
+      "at": "2026-11-02T01:25:49.303728+00:00",
+      "target": "production",
+      "from": "pm2",
+      "to": "docker",
+      "versionUnchanged": "1.3.2",
+      "webBuildIdUnchanged": "dxUcp0pCxA-OFjs7xd7-I",
+      "apiImageId": "sha256:600d29fc231117f6ab76c013059fe92d20f1ecf6a8be69820a701234cc93afb4",
+      "webImageId": "sha256:9208947f3a9aefba241414e034727603f24dfc199c3327981ddff5aa5dbe8ef5",
+      "status": "deployed",
+      "evidence": "docs/qa/evidence/PRODUCTION-DOCKER-20261101/deployment.json",
+      "rollback": "/app/releases/prod-docker-20261101/rollback.py --execute",
+      "rollbackPreflight": "passed; not executed"
+    }
+  ],
+  "hotfixes": [
+    {
+      "status": "deployed",
+      "environment": "production",
+      "version": "1.3.2",
+      "hotfix": "account-apply-limit-hotfix-20261104",
+      "at": "2026-11-04T09:11:36.945283+00:00",
+      "imageId": "sha256:a824f4f6c10d0d094c591cb0aff529cab621ecd51e6097c57f5542be8823ec03",
+      "containerId": "4e235a5fc81a26799ad8f030dc5aaf3d544588234d4abaabc9c3f9ee78d545e2",
+      "previousImageId": "sha256:600d29fc231117f6ab76c013059fe92d20f1ecf6a8be69820a701234cc93afb4",
+      "previousContainer": "dianjie-production-api-before-apply-limit-20261104",
+      "applicationsSha256": "6e2b84b1645054fd94cb580f4c3c3db9e2ec573c396ab8f08b15d10faed1f037",
+      "candidateOfflineTest": {
+        "requests": 210,
+        "allValidation400": true,
+        "otherLimiterPreserved": true
+      },
+      "healthDb": "ok",
+      "publicLoginAndApply": 200,
+      "publicStoreList": 200,
+      "otherContainersUnchanged": true,
+      "environmentUnchanged": true,
+      "databaseWrites": 0,
+      "schemaMigrations": 0,
+      "testDataImports": 0,
+      "gitArchive": {
+        "version": "1.3.2-hotfix.1",
+        "tag": "v1.3.2-hotfix.1",
+        "commit": "0c0dba6f1390c972932e439b983070ca0b845afd",
+        "codeUrl": "https://github.com/somnusyi/dianjie-V4/tree/v1.3.2-hotfix.1",
+        "commitUrl": "https://github.com/somnusyi/dianjie-V4/commit/0c0dba6f1390c972932e439b983070ca0b845afd",
+        "tagUrl": "https://github.com/somnusyi/dianjie-V4/releases/tag/v1.3.2-hotfix.1",
+        "document": "docs/releases/1.3.2-hotfix.1.md",
+        "remoteStatus": "removed_at_user_request_local_only",
+        "status": "production_only",
+        "documentUrl": "https://github.com/somnusyi/dianjie-V4/blob/codex/version-records-20261104/docs/releases/1.3.2-hotfix.1.md"
+      }
+    }
+  ],
+  "gitArchive": {
+    "tag": "v1.3.2",
+    "commit": "2e7ccaecd76c3cc864b7e196b3cdb6494abc587f",
+    "codeUrl": "https://github.com/somnusyi/dianjie-V4/tree/v1.3.2",
+    "documentUrl": "https://github.com/somnusyi/dianjie-V4/blob/codex/version-records-20261104/docs/releases/1.3.2.md",
+    "remoteStatus": "removed_at_user_request_local_only",
+    "snapshotKind": "reconstructed_verified_release_snapshot"
+  }
+}

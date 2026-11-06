@@ -179,6 +179,12 @@ function nextAverageCost(value: Prisma.Decimal, physical: Prisma.Decimal, fallba
   return value.div(physical).toDecimalPlaces(COST_DP)
 }
 
+export function isWarehouseTransactionConflict(error: any): boolean {
+  return ['P2034', 'P2002'].includes(error?.code) || (error?.code === 'P2010'
+    && (String(error?.meta?.code || '') === '40001'
+      || /could not serialize|serialization failure|SQLSTATE\s*40001/i.test(String(error?.meta?.message || error?.message || ''))))
+}
+
 export async function serializableWithRetry<T>(
   work: (tx: Prisma.TransactionClient) => Promise<T>,
   timeout = 15_000,
@@ -196,10 +202,7 @@ export async function serializableWithRetry<T>(
       // committed balance or idempotent movement is visible and the request
       // deterministically continues or replays. Business duplicates such as
       // a reused batch number are detected explicitly after the retry.
-      const rawSerializationConflict = error?.code === 'P2010'
-        && (String(error?.meta?.code || '') === '40001'
-          || /could not serialize|serialization failure|SQLSTATE\s*40001/i.test(String(error?.meta?.message || error?.message || '')))
-      if ((!['P2034', 'P2002'].includes(error?.code) && !rawSerializationConflict) || attempt === 4) throw error
+      if (!isWarehouseTransactionConflict(error) || attempt === 4) throw error
     }
   }
   throw new Error('总仓库存事务重试失败')
@@ -438,9 +441,10 @@ export type BatchManualWarehouseInboundInput = {
   items: Array<{
     productId: string
     purchaseQuantity: Decimalish
-    unitPrice: Decimalish
+    unitPrice?: Decimalish
     /** 行金额（价税合计）。提供时作为权威金额入账（凑整场景），单价按 金额/数量 反算 */
     totalAmount?: Decimalish | null
+    note?: string | null
     isGift?: boolean
     batchNo?: string | null
     manufactureDate?: Date | null
@@ -1362,8 +1366,8 @@ export async function postUpstreamClaimLossInTransaction(
  * starts and the whole document commits atomically. One invalid line therefore
  * cannot leave a partially posted warehouse receipt.
  */
-export async function recordBatchManualWarehouseInbound(input: BatchManualWarehouseInboundInput, transaction?: Prisma.TransactionClient, revision?: { movementId: string }) {
-  if(revision && (!transaction || input.items.length!==1))throw businessError("批次修订只能在原改单事务内逐行执行",409)
+/** Validate and freeze units/amounts without writing stock, lots or movements. */
+export async function prepareBatchManualWarehouseInbound(input: BatchManualWarehouseInboundInput, transaction?: Prisma.TransactionClient) {
   const db = transaction ?? prisma
   const warehouseId = await resolveTenantWarehouseId(db, input.tenantId, input.warehouseId)
   if (!input.effectiveAt || Number.isNaN(input.effectiveAt.getTime())) throw businessError('入库时间无效', 400)
@@ -1409,6 +1413,7 @@ export async function recordBatchManualWarehouseInbound(input: BatchManualWareho
       if (item.isGift ? !totalAmount.isZero() : totalAmount.lte(0)) throw businessError(item.isGift ? `${product.name}赠品金额必须为0` : `${product.name}入库金额必须大于0`, 400)
       unitPrice = totalAmount.div(purchaseQuantity).toDecimalPlaces(COST_DP)
     } else {
+      if(item.unitPrice == null) throw businessError(`${product.name}请填写采购单价或金额`,400)
       unitPrice = decimal(item.unitPrice, `${product.name}采购单价`).toDecimalPlaces(VALUE_DP)
       if (item.isGift ? !unitPrice.isZero() : unitPrice.lte(0)) throw businessError(item.isGift ? `${product.name}赠品单价必须为0` : `${product.name}采购单价必须大于0`, 400)
       totalAmount = purchaseQuantity.mul(unitPrice).toDecimalPlaces(VALUE_DP)
@@ -1434,6 +1439,13 @@ export async function recordBatchManualWarehouseInbound(input: BatchManualWareho
       expiryDate: item.expiryDate || null,
     }
   })
+
+  return { warehouseId, lines }
+}
+
+export async function recordBatchManualWarehouseInbound(input: BatchManualWarehouseInboundInput, transaction?: Prisma.TransactionClient, revision?: { movementId: string }) {
+  if(revision && (!transaction || input.items.length!==1))throw businessError("批次修订只能在原改单事务内逐行执行",409)
+  const { warehouseId, lines } = await prepareBatchManualWarehouseInbound(input, transaction)
 
   const sourceRequestId = String(input.idempotencyKey || '').trim()
   if (!sourceRequestId || sourceRequestId.length > 80) throw businessError('批量入库幂等键无效', 400)
@@ -1639,7 +1651,8 @@ export type BatchManualWarehouseOutboundInput = {
  * 成本默认按移动均价带出，调用方可指定权威成本（如美团口径金额）；
  * 清零行尾差全部带出；STRICT 模式库存不足即整批拒绝。不回写 Product.stock。
  */
-export async function recordBatchManualWarehouseOutbound(input: BatchManualWarehouseOutboundInput, transaction?: Prisma.TransactionClient) {
+/** Validate an outbound request without deducting stock. Stock is rechecked at final review. */
+export async function prepareBatchManualWarehouseOutbound(input: BatchManualWarehouseOutboundInput, transaction?: Prisma.TransactionClient) {
   const { warehouseId, inventoryMode } = await getWarehouseLedgerMode(input.tenantId,input.warehouseId,transaction)
   if (!input.items.length) throw businessError('出库明细不能为空', 400)
   if (!input.effectiveAt || Number.isNaN(input.effectiveAt.getTime())) throw businessError('出库时间无效', 400)
@@ -1688,6 +1701,12 @@ export async function recordBatchManualWarehouseOutbound(input: BatchManualWareh
     if (specifiedAmount !== null && specifiedAmount.lte(0)) throw businessError(`${product.name}出库成本必须大于0`, 400)
     return { index, product, contract, inventoryQuantity, specifiedAmount, note: item.note || null }
   })
+
+  return { warehouseId, inventoryMode, reason, businessType, sourceRequestId, normalizedIdempotencyKey, lines }
+}
+
+export async function recordBatchManualWarehouseOutbound(input: BatchManualWarehouseOutboundInput, transaction?: Prisma.TransactionClient) {
+  const { warehouseId, inventoryMode, reason, businessType, sourceRequestId, normalizedIdempotencyKey, lines } = await prepareBatchManualWarehouseOutbound(input, transaction)
 
   const work = async (tx: Prisma.TransactionClient) => {
     const lineKeys = lines.map(line => `${normalizedIdempotencyKey}:${line.product.id}`)
@@ -2324,6 +2343,73 @@ export async function reverseManualWarehouseInbound(input: {
   return transaction ? work(transaction) : serializableWithRetry(work)
 }
 
+
+/** Reconcile submitted-order reservations by delta. Caller owns the order CAS transaction. */
+export async function syncSubmissionWarehouseReservation(
+  tx: Prisma.TransactionClient,
+  input: { tenantId: string; purchaseOrderId: string; userId: string; revision: number; lines: FrozenOrderInventoryLine[] },
+) {
+  const current = await tx.warehouseLedgerReservation.findMany({ where: { tenantId: input.tenantId, purchaseOrderId: input.purchaseOrderId } })
+  const warehouses = [...new Set(current.map(row => row.warehouseId))]
+  if (warehouses.length > 1) throw businessError('本单预占存在多个仓库，请先核对库存流水', 409)
+  const warehouseId = await resolveTenantWarehouseId(tx, input.tenantId, warehouses[0])
+  const lines = input.lines.map(resolveFrozenOrderInventoryLine).filter(line => line.inventoryQuantity.gt(0))
+  const desired = new Map(lines.map(line => [line.purchaseOrderItemId, line]))
+  if (current.some(row => row.status === 'CONSUMED')) throw businessError('已发货订单不能重新预占库存', 409)
+  for (const row of current) {
+    const line = desired.get(row.purchaseOrderItemId)
+    if (line && (row.productId !== line.productId || row.inventoryUnit !== line.inventoryUnit || row.originalUnit !== line.originalUnit || !row.conversionFactor.equals(line.conversionFactor))) throw businessError('同一订货行不能更换商品或冻结库存单位，请移除原行后新增商品', 409)
+  }
+  const balances = await lockBalances(tx, { tenantId: input.tenantId, warehouseId,
+    products: [...lines.map(line => ({ productId: line.productId, inventoryUnit: line.inventoryUnit })),
+      ...current.filter(row => row.status === 'ACTIVE').map(row => ({ productId: row.productId, inventoryUnit: row.inventoryUnit }))] })
+  const requested = new Map<string, Prisma.Decimal>()
+  const own = new Map<string, Prisma.Decimal>()
+  for (const line of lines) requested.set(line.productId, (requested.get(line.productId) || ZERO).plus(line.inventoryQuantity))
+  for (const row of current.filter(row => row.status === 'ACTIVE')) own.set(row.productId, (own.get(row.productId) || ZERO).plus(row.inventoryQuantity))
+  for (const [productId, qty] of requested) {
+    const b = balances.get(productId)!
+    const available = b.physicalQty.minus(b.reservedQty.minus(own.get(productId) || ZERO))
+    if (available.lt(qty)) throw businessError(`${lines.find(line => line.productId === productId)?.productName || '商品'} 总仓可用库存不足：可用 ${available.toFixed(3)} ${b.inventoryUnit}，本单需要 ${qty.toFixed(3)}；请核对总仓入库或库存基线`, 409)
+  }
+  const byItem = new Map(current.map(row => [row.purchaseOrderItemId, row]))
+  const ids = [...new Set([...desired.keys(), ...current.filter(row => row.status === 'ACTIVE').map(row => row.purchaseOrderItemId)])]
+  const changes = ids.map(id => {
+    const before = byItem.get(id); const line = desired.get(id)
+    const oldQty = before?.status === 'ACTIVE' ? before.inventoryQuantity : ZERO
+    const nextQty = line?.inventoryQuantity || ZERO
+    return { id, before, line, delta: nextQty.minus(oldQty) }
+  }).sort((a, b) => a.delta.comparedTo(b.delta) || a.id.localeCompare(b.id))
+  for (const change of changes) {
+    const { id, before, line, delta } = change
+    if (delta.isZero()) continue
+    const productId = line?.productId || before!.productId
+    const b = balances.get(productId)!
+    const reservedAfter = b.reservedQty.plus(delta)
+    if (reservedAfter.lt(0)) throw businessError('总仓预占余额异常，请先核对库存流水', 409)
+    const unit = line?.inventoryUnit || before!.inventoryUnit
+    const originalQuantity = line?.originalQuantity || before!.originalQuantity
+    const originalUnit = line?.originalUnit || before!.originalUnit
+    const conversionFactor = line?.conversionFactor || before!.conversionFactor
+    await tx.warehouseLedgerMovement.create({ data: {
+      tenantId: input.tenantId, warehouseId, productId,
+      type: delta.gt(0) ? 'ORDER_RESERVED' : 'ORDER_RELEASED',
+      physicalDelta: ZERO, reservedDelta: delta, valueDelta: ZERO,
+      physicalAfter: b.physicalQty, reservedAfter, valueAfter: b.inventoryValue, averageUnitCostAfter: b.averageUnitCost,
+      originalQuantity, originalUnit, conversionFactor, inventoryQuantity: delta.abs(), inventoryUnit: unit,
+      inventoryUnitCost: b.averageUnitCost, sourceType: 'PurchaseOrder', sourceId: input.purchaseOrderId, sourceLineId: id,
+      idempotencyKey: `submission-sync:${input.purchaseOrderId}:${input.revision}:${id}`, createdById: input.userId, effectiveAt: new Date(),
+    } })
+    await persistBalance(tx, b, { physicalQty: b.physicalQty, reservedQty: reservedAfter, inventoryValue: b.inventoryValue, averageUnitCost: b.averageUnitCost })
+    if (line) {
+      const data = { originalQuantity, originalUnit, conversionFactor, inventoryQuantity: line.inventoryQuantity,
+        inventoryUnit: line.inventoryUnit, status: 'ACTIVE' as const, fulfilledInventoryQty: ZERO, releasedAt: null, consumedAt: null }
+      if (before) await tx.warehouseLedgerReservation.update({ where: { id: before.id }, data })
+      else await tx.warehouseLedgerReservation.create({ data: { ...data, tenantId: input.tenantId, warehouseId, productId, purchaseOrderId: input.purchaseOrderId, purchaseOrderItemId: id } })
+    } else await tx.warehouseLedgerReservation.update({ where: { id: before!.id }, data: { status: 'RELEASED', releasedAt: new Date() } })
+  }
+}
+
 export async function reserveWarehouseLedgerForOrder(
   tx: Prisma.TransactionClient,
   input: {
@@ -2337,8 +2423,8 @@ export async function reserveWarehouseLedgerForOrder(
   // Serialize the async reservation projector with shipment/cancellation. A
   // stale ACCEPTED event must not recreate an ACTIVE reservation after the
   // order has already advanced.
-  const lockedOrders = await tx.$queryRaw<Array<{ status: string; supplierId: string }>>(Prisma.sql`
-    SELECT "status", "supplierId"
+  const lockedOrders = await tx.$queryRaw<Array<{ status: string; supplierId: string; submittedSnapshot: unknown }>>(Prisma.sql`
+    SELECT "status", "supplierId", "submittedSnapshot"
     FROM "purchase_orders"
     WHERE "id" = ${input.purchaseOrderId} AND "tenantId" = ${input.tenantId}
     FOR UPDATE
@@ -2349,6 +2435,9 @@ export async function reserveWarehouseLedgerForOrder(
     select: { sourceType: true },
   })
   if (supplier?.sourceType !== 'HEADQ_WAREHOUSE') return
+  // New policy reservations are already authoritative in the submit transaction;
+  // a legacy SHADOW repair must not project them again in a newly selected default warehouse.
+  if ((lockedOrders[0].submittedSnapshot as any)?.stockReservationPolicy === 'SUBMISSION_V1') return
   // A SHADOW task may start after a fast cancel or shipment. Current business
   // state wins over the stale ACCEPTED event so a late projector can never
   // recreate an ACTIVE reservation on a closed order.
@@ -2591,13 +2680,17 @@ export async function consumeWarehouseLedgerForShipment(
 ) {
   const orderScope = await tx.purchaseOrder.findFirst({
     where: { id: input.purchaseOrderId, tenantId: input.tenantId },
-    select: { supplier: { select: { sourceType: true } } },
+    select: { submittedSnapshot: true, supplier: { select: { sourceType: true } } },
   })
   if (!orderScope || orderScope.supplier.sourceType !== 'HEADQ_WAREHOUSE') {
     throw businessError('该订单不是总仓履约订单，不能记总仓出库', 409)
   }
-  const warehouseId = await resolveTenantWarehouseId(tx, input.tenantId, input.warehouseId)
-  const mode = await warehouseMode(tx, input.tenantId, warehouseId)
+  const submissionPolicy = (orderScope.submittedSnapshot as any)?.stockReservationPolicy === 'SUBMISSION_V1'
+  const orderReservations = submissionPolicy ? await tx.warehouseLedgerReservation.findMany({ where: { tenantId: input.tenantId, purchaseOrderId: input.purchaseOrderId }, select: { warehouseId: true } }) : []
+  const warehouses = [...new Set(orderReservations.map(row => row.warehouseId))]
+  if (warehouses.length > 1 || (warehouses[0] && input.warehouseId && warehouses[0] !== input.warehouseId)) throw businessError('本单出库仓库与冻结预占仓库不一致，请核对原单', 409)
+  const warehouseId = await resolveTenantWarehouseId(tx, input.tenantId, warehouses[0] || input.warehouseId)
+  const mode = submissionPolicy ? 'STRICT' : await warehouseMode(tx, input.tenantId, warehouseId)
   const lines = input.lines.map(line => {
     const resolved = resolveFrozenOrderInventoryLine(line)
     const shipped = decimal(line.shippedQty ?? line.quantity, `${line.productName || '商品'}实发数量`).toDecimalPlaces(QTY_DP)
@@ -3436,24 +3529,7 @@ export async function reverseDeliveryOutboundInTransaction(
       409,
     )
   }
-  const priorReversals = await tx.warehouseLedgerMovement.aggregate({
-    where: {
-      tenantId: input.tenantId,
-      warehouseId: original.warehouseId,
-      productId: original.productId,
-      type: 'REVERSAL',
-      sourceLineId: original.id,
-    },
-    _sum: { inventoryQuantity: true },
-  })
-  const priorReversedQty = new Prisma.Decimal(priorReversals._sum.inventoryQuantity || 0)
   const reverseInventoryQty = reverseOriginal.mul(original.conversionFactor).toDecimalPlaces(QTY_DP)
-  if (priorReversedQty.plus(reverseInventoryQty).gt(original.inventoryQuantity)) {
-    throw businessError(
-      `累计冲回将超过原出库量（已冲 ${priorReversedQty}，本次 ${reverseInventoryQty}，原出库 ${original.inventoryQuantity}）`,
-      409,
-    )
-  }
 
   const balances = await lockBalances(tx, {
     tenantId: input.tenantId,
@@ -3466,8 +3542,26 @@ export async function reverseDeliveryOutboundInTransaction(
   })
   if (concurrentReplay) return { reversed: false, movementId: concurrentReplay.id, replayed: true }
 
+  // Read cumulative returns only after locking the same balance as every other return.
+  const priorReversals = await tx.warehouseLedgerMovement.aggregate({
+    where: { tenantId: input.tenantId, warehouseId: original.warehouseId, productId: original.productId, type: 'REVERSAL', sourceLineId: original.id },
+    _sum: { inventoryQuantity: true, valueDelta: true },
+  })
+  const priorReversedQty = new Prisma.Decimal(priorReversals._sum.inventoryQuantity || 0)
+  const totalReversedQty = priorReversedQty.plus(reverseInventoryQty)
+  if (totalReversedQty.gt(original.inventoryQuantity)) throw businessError(
+    `累计冲回将超过原出库量（已冲 ${priorReversedQty}，本次 ${reverseInventoryQty}，原出库 ${original.inventoryQuantity}）`, 409,
+  )
+  const originalValue = original.valueDelta.negated().toDecimalPlaces(VALUE_DP)
+  const priorReversedValue = new Prisma.Decimal(priorReversals._sum.valueDelta || 0)
+  const remainingValue = originalValue.minus(priorReversedValue).toDecimalPlaces(VALUE_DP)
+  if (originalValue.isNegative() || priorReversedValue.isNegative() || remainingValue.isNegative() || original.inventoryQuantity.lte(0)) throw businessError('原出库或累计冲回金额异常，请核对原流水', 409)
+  // The frozen original amount is authoritative; its six-place unit cost can have rounding residue.
+  const valueIn = totalReversedQty.equals(original.inventoryQuantity)
+    ? remainingValue
+    : originalValue.mul(reverseInventoryQty).div(original.inventoryQuantity).toDecimalPlaces(VALUE_DP)
+  if (valueIn.gt(remainingValue)) throw businessError('本次冲回金额超过原出库剩余金额，请核对原流水', 409)
   const balance = balances.get(original.productId)!
-  const valueIn = reverseInventoryQty.mul(original.inventoryUnitCost).toDecimalPlaces(VALUE_DP)
   const nextPhysical = balance.physicalQty.plus(reverseInventoryQty).toDecimalPlaces(QTY_DP)
   const nextValue = balance.inventoryValue.plus(valueIn).toDecimalPlaces(VALUE_DP)
   const nextAverage = nextAverageCost(nextValue, nextPhysical, balance.averageUnitCost)
@@ -3694,3 +3788,6 @@ export async function adjustWarehouseMovementValue(input: {
   }
   return transaction ? work(transaction) : serializableWithRetry(work)
 }
+
+// Shared locking and balance persistence for independent replenishment holds.
+export { lockBalances as lockWarehouseReservationBalances, persistBalance as persistWarehouseReservationBalance }

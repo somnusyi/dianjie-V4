@@ -1,3 +1,4 @@
+import { postStoreTransfer, transferRemaining } from '../services/storeTransferPosting'
 import { randomUUID } from 'crypto'
 import { FastifyPluginAsync } from 'fastify'
 import { Prisma, prisma } from '@dianjie/db'
@@ -5,6 +6,7 @@ import { z } from 'zod'
 import { inventoryReportAccess } from './inventoryReports'
 import { businessDateKey } from '../lib/businessTime'
 import { hashRequestBody } from '../lib/idempotency'
+import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
 
 // 门店调拨由供应链审核推进，管理员保留兼容写入：创建 -> PENDING；
 // PENDING -> SHIPPED 或 REVOKED；SHIPPED -> RECEIVED。
@@ -16,7 +18,7 @@ const createSchema = z.object({
   items: z.array(z.object({ productId: z.string().min(1), quantity: z.number().positive().max(99999999).multipleOf(0.000001), cost: z.number().min(0).max(99999999).multipleOf(0.000001), settlement: z.number().min(0).max(99999999).multipleOf(0.000001) })).min(1).max(100),
 }).refine(v => v.fromStoreId !== v.toStoreId, '调出、调入门店不能相同').refine(v => new Set(v.items.map(i => i.productId)).size === v.items.length, '商品不能重复')
 const include = { fromStore: { select: { id: true, no: true, name: true } }, toStore: { select: { id: true, no: true, name: true } }, items: true }
-const serialize = (row: any) => ({ ...row, transferDate: businessDateKey(row.transferDate), items: row.items.map((i: any) => ({ ...i, quantity: Number(i.quantity), cost: Number(i.cost), settlement: Number(i.settlement), outAmount: Number(i.outAmount), inAmount: Number(i.inAmount) })) })
+const serialize = (row: any) => ({ ...row, transferDate: businessDateKey(row.transferDate), items: row.items.map((i: any) => ({ ...i, quantity: Number(i.quantity), cost: Number(i.cost), settlement: Number(i.settlement), outAmount: Number(i.outAmount), inAmount: Number(i.inAmount), receivedQuantity: Number(i.receivedQuantity ?? 0), returnedQuantity: Number(i.returnedQuantity ?? 0), damagedQuantity: Number(i.damagedQuantity ?? 0), pendingQuantity: Number(transferRemaining(i)) })) })
 
 type TransferFingerprintSource = {
   fromStoreId: string
@@ -82,7 +84,7 @@ export const storeTransferRoutes: FastifyPluginAsync = async app => {
     const data = parsed.data; const tenantId = req.user.tenantId
     const requestedFingerprint = transferRequestFingerprint(data)
     const replayMatches = (row: any) => row.createdById === req.user.userId
-      && transferRequestFingerprint(row) === requestedFingerprint
+      && (row.requestFingerprint || transferRequestFingerprint(row)) === requestedFingerprint
     const replay = () => prisma.storeTransfer.findUnique({
       where: { tenantId_requestKey: { tenantId, requestKey: data.requestKey } },
       include,
@@ -102,7 +104,7 @@ export const storeTransferRoutes: FastifyPluginAsync = async app => {
           if (stores !== 2) throw Object.assign(new Error('门店不存在、已停用或不属于当前租户'), { statusCode: 400 })
           const products = await tx.product.findMany({ where: { tenantId, id: { in: data.items.map(i => i.productId) }, status: 'ENABLED', unitConversionStatus: 'VERIFIED' } })
           if (products.length !== data.items.length || products.some(p => !p.inventoryUnit)) throw Object.assign(new Error('商品不可用或库存单位未确认'), { statusCode: 400 })
-          const row = await tx.storeTransfer.create({ data: { tenantId, no: `DB${businessDateKey().replace(/-/g, '')}-${randomUUID().slice(0, 8).toUpperCase()}`, fromStoreId: data.fromStoreId, toStoreId: data.toStoreId, transferDate: new Date(`${data.transferDate}T00:00:00Z`), note: data.note, requestKey: data.requestKey, createdById: req.user.userId, items: { create: data.items.map(i => { const p = products.find(p => p.id === i.productId)!; return { productId: p.id, name: p.name, code: p.code, spec: p.spec, category: p.category, unit: p.inventoryUnit!, quantity: i.quantity, cost: i.cost, settlement: i.settlement, outAmount: new Prisma.Decimal(i.quantity).mul(i.cost).toDecimalPlaces(4), inAmount: new Prisma.Decimal(i.quantity).mul(i.settlement).toDecimalPlaces(4) } }) } }, include })
+          const row = await tx.storeTransfer.create({ data: { tenantId, no: `DB${businessDateKey().replace(/-/g, '')}-${randomUUID().slice(0, 8).toUpperCase()}`, fromStoreId: data.fromStoreId, toStoreId: data.toStoreId, transferDate: new Date(`${data.transferDate}T00:00:00Z`), note: data.note, requestKey: data.requestKey, requestFingerprint: requestedFingerprint, createdById: req.user.userId, items: { create: data.items.map(i => { const p = products.find(p => p.id === i.productId)!; return { productId: p.id, name: p.name, code: p.code, spec: p.spec, category: p.category, unit: p.inventoryUnit!, quantity: i.quantity, cost: i.cost, settlement: i.settlement, outAmount: new Prisma.Decimal(i.quantity).mul(i.cost).toDecimalPlaces(4), inAmount: new Prisma.Decimal(i.quantity).mul(i.settlement).toDecimalPlaces(4) } }) } }, include })
           return { row, replayed: false }
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
         return reply.status(result.replayed ? 200 : 201).send(serialize(result.row))
@@ -123,18 +125,56 @@ export const storeTransferRoutes: FastifyPluginAsync = async app => {
     }
     return reply.status(409).send({ error: '调拨请求正在处理，请刷新后重试' })
   })
+  const execute = async (req: any, reply: any, action: 'SHIP' | 'RECEIVE' | 'RETURN' | 'DAMAGE', requestKey: string, items?: Array<{ itemId: string; quantity: number }>, note?: string) => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const row = await prisma.$transaction(async tx => {
+          let input = items
+          if (action === 'RECEIVE' && !input) {
+            const prior = await tx.storeTransfer.findFirst({ where: { id: req.params.id, tenantId: req.user.tenantId }, include: { items: true } })
+            if (!prior) throw Object.assign(new Error('调拨单不存在'), { statusCode: 404 })
+            input = prior.items.map((i: any) => ({ itemId: i.id, quantity: Number(i.quantity) }))
+          }
+          return postStoreTransfer(tx, { tenantId: req.user.tenantId, transferId: req.params.id, actorId: req.user.userId, action, requestKey, items: input, note })
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+        if (action !== 'DAMAGE') {
+          const storeId = action === 'RECEIVE' ? row.toStoreId : row.fromStoreId
+          await revalueStoreConsumptionCosts(req.user.tenantId, storeId).catch(error => {
+            req.log.error({ error, transferId: row.id, storeId }, 'transfer cost snapshot refresh failed')
+          })
+        }
+        return serialize(row)
+      } catch (error: any) {
+        if (isSerializableConflict(error) && attempt < 2) continue
+        if (error.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+        if (isSerializableConflict(error)) return reply.status(409).send({ error: '调拨库存正在更新，请重试' })
+        throw error
+      }
+    }
+  }
   app.patch('/:id/status', async (req: any, reply) => {
     const parsed = z.object({ status: z.enum(['SHIPPED', 'RECEIVED', 'REVOKED']) }).safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: '调拨状态无效' })
-    const status = parsed.data.status; const expected = status === 'RECEIVED' ? 'SHIPPED' : 'PENDING'
-    const actor = status === 'SHIPPED' ? { shippedAt: new Date(), shippedById: req.user.userId } : status === 'RECEIVED' ? { receivedAt: new Date(), receivedById: req.user.userId } : { revokedAt: new Date(), revokedById: req.user.userId }
-    const result = await prisma.$transaction(async tx => {
-      const updated = await tx.storeTransfer.updateMany({ where: { id: req.params.id, tenantId: req.user.tenantId, status: expected }, data: { status, ...actor } })
+    if (parsed.data.status !== 'REVOKED') return execute(req, reply, parsed.data.status === 'SHIPPED' ? 'SHIP' : 'RECEIVE', 'legacy:' + parsed.data.status)
+    const row = await prisma.$transaction(async tx => {
+      await tx.storeTransfer.updateMany({ where: { id: req.params.id, tenantId: req.user.tenantId, status: 'PENDING' }, data: { status: 'REVOKED', revokedAt: new Date(), revokedById: req.user.userId } })
       const row = await tx.storeTransfer.findFirst({ where: { id: req.params.id, tenantId: req.user.tenantId }, include })
       if (!row) throw Object.assign(new Error('调拨单不存在'), { statusCode: 404 })
-      if (!updated.count && row.status !== status) throw Object.assign(new Error('状态已变化，请刷新后重试'), { statusCode: 409 })
+      if (row.status !== 'REVOKED') throw Object.assign(new Error('已发货调拨须通过差异处理退回'), { statusCode: 409 })
       return row
     })
-    return serialize(result)
+    return serialize(row)
+  })
+  const processing = z.object({ requestKey: z.string().uuid(), items: z.array(z.object({ itemId: z.string().min(1), quantity: z.number().positive().max(99999999).multipleOf(0.000001) })).min(1).max(100), note: z.string().trim().max(500).optional() })
+  app.post('/:id/receive', async (req: any, reply) => {
+    const parsed = processing.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: '实收商品数量无效' })
+    return execute(req, reply, 'RECEIVE', parsed.data.requestKey, parsed.data.items, parsed.data.note)
+  })
+  app.post('/:id/resolve-difference', async (req: any, reply) => {
+    const parsed = processing.extend({ action: z.enum(['RETURN', 'DAMAGE']) }).safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: '差异处理数据无效' })
+    if (parsed.data.action === 'DAMAGE' && !parsed.data.note) return reply.status(400).send({ error: '请填写损坏处置说明' })
+    return execute(req, reply, parsed.data.action, parsed.data.requestKey, parsed.data.items, parsed.data.note)
   })
 }

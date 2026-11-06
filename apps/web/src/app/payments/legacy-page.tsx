@@ -1,4 +1,5 @@
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 import { useEffect, useState } from 'react'
 import AppLayout from '@/components/AppLayout'
 import { PageHeader, Card, Table, Badge, Btn, Modal, Field, Input, Select, fmt, fmtDate, useToast, TableSkeleton, Pagination } from '@/components/ui'
@@ -10,8 +11,7 @@ const ACCOUNT_TYPE_BY_METHOD: Record<string, string> = {
 }
 
 function localToday() {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  return businessDayjs().format('YYYY-MM-DD')
 }
 
 export default function PaymentsPage() {

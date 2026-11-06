@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "monthly_only_tables": [
+    "notifications",
+    "notification_logs",
+    "wecom_sync_logs",
+    "meituan_api_call_logs",
+    "feedbacks",
+    "feedback_messages",
+    "auto_fix_runs",
+    "boss_chat_messages",
+    "page_annotations"
+  ],
+  "unknown_tables": "critical",
+  "dependency_rule": "Any table referenced by an included critical table is promoted to critical backup, recursively."
+}

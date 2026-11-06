@@ -1,6 +1,7 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import {
@@ -37,6 +38,8 @@ type Item = {
   purchaseOrderItemId?: string | null
   productId: string
   name: string
+  category?: string | null
+  location?: string | null
   spec: string | null
   unit: string
   quantity: string
@@ -76,6 +79,8 @@ type ServerShipmentDraft = {
   }>
 }
 type DraftRow = OrderDetailTableRow & {
+  category?: string | null
+  location?: string | null
   productId: string
   orderId: string
   itemId: string
@@ -236,6 +241,8 @@ function draftRowsFromPreview(
         orderId,
         productId,
         name,
+        category: row.category,
+        location: row.location,
         spec: row.spec == null ? null : String(row.spec),
         unit,
         quantity,
@@ -290,6 +297,8 @@ function rowsFromDetail(detail: Detail, shipmentDrafts: Record<string, ServerShi
         orderId: order.id,
         productId: item.productId,
         name: item.productNameSnapshot ?? item.product?.name ?? '—',
+        category: order.shipmentItems.find(line => line.id === item.id || line.productId === item.productId)?.category,
+        location: order.shipmentItems.find(line => line.id === item.id || line.productId === item.productId)?.location,
         spec: item.productSpecSnapshot ?? item.product?.spec ?? null,
         unit: item.productUnitSnapshot ?? item.product?.unit ?? '—',
         quantity: Number(item.shippedQty),
@@ -304,7 +313,7 @@ function rowsFromDetail(detail: Detail, shipmentDrafts: Record<string, ServerShi
       return order.deliverySummaries.flatMap(delivery => delivery.items.map(item => ({
         key: `${order.id}:${item.id}`, itemId: item.id, purchaseOrderItemId: item.purchaseOrderItemId || null,
         orderId: order.id, deliveryId: delivery.id, productId: item.productId,
-        name: item.name, spec: item.spec, unit: item.unit, quantity: Number(item.quantity),
+        name: item.name, category: item.category, location: item.location, spec: item.spec, unit: item.unit, quantity: Number(item.quantity),
         originalQuantity: Number(item.quantity), unitPrice: Number(item.unitPrice), sourceLabel: `原订单 #${order.no}`,
         pendingRemoval: false,
       })))
@@ -312,7 +321,7 @@ function rowsFromDetail(detail: Detail, shipmentDrafts: Record<string, ServerShi
     return order.orderedItems.map(item => ({
       key: `${order.id}:${item.id}`, itemId: item.id, purchaseOrderItemId: item.id,
       orderId: order.id, productId: item.productId,
-      name: item.name, spec: item.spec, unit: item.unit, quantity: Number(item.quantity),
+      name: item.name, category: item.category, location: item.location, spec: item.spec, unit: item.unit, quantity: Number(item.quantity),
       originalQuantity: Number(item.quantity), unitPrice: Number(item.unitPrice), sourceLabel: `原订单 #${order.no}`,
       pendingRemoval: false,
     }))
@@ -523,6 +532,8 @@ export default function OperationGroupDetailPage() {
           orderId: order.id,
           productId: orderedItem.productId,
           name: orderedItem.name,
+          category: orderedItem.category,
+          location: orderedItem.location,
           spec: orderedItem.spec,
           unit: orderedItem.unit,
           quantity: Number(orderedItem.quantity),
@@ -537,6 +548,8 @@ export default function OperationGroupDetailPage() {
           orderId: order.id,
           productId: product.id,
           name: product.name,
+          category: product.category,
+          location: product.location,
           spec: product.spec || null,
           unit: pricing.status === 'READY' ? pricing.orderUnit : product.unit || '—',
           quantity: 1,
@@ -578,6 +591,8 @@ export default function OperationGroupDetailPage() {
           key, itemId: key, orderId: delivery.orderId, deliveryId: delivery.id, isDeliveryAddition: true,
           productId: product.id,
           name: recoverableOriginal?.name || product.name,
+          category: recoverableOriginal?.category ?? product.category,
+          location: recoverableOriginal?.location ?? product.location,
           spec: recoverableOriginal?.spec || product.spec || null,
           unit: recoverableOriginal?.unit || (pricing.status === 'READY' ? pricing.orderUnit : product.unit || '—'),
           quantity: recoverableOriginal ? Number(recoverableOriginal.quantity) : 1,
@@ -607,12 +622,12 @@ export default function OperationGroupDetailPage() {
     clearDeliveryNotePreview()
     setRows(current => [...current, orderedItem ? {
       key: `${latestOrder.id}:${orderedItem.id}`, itemId: orderedItem.id, purchaseOrderItemId: orderedItem.id,
-      orderId: latestOrder.id, productId: orderedItem.productId, name: orderedItem.name, spec: orderedItem.spec,
+      orderId: latestOrder.id, productId: orderedItem.productId, name: orderedItem.name, category: orderedItem.category, location: orderedItem.location, spec: orderedItem.spec,
       unit: orderedItem.unit, quantity: Number(orderedItem.quantity), originalQuantity: Number(orderedItem.quantity),
       unitPrice: Number(orderedItem.unitPrice), sourceLabel: `原订单 #${latestOrder.no}`, pendingRemoval: false,
     } : {
       key: `${latestOrder.id}:added:${product.id}`, itemId: `added:${product.id}`, orderId: latestOrder.id, productId: product.id,
-      name: product.name, spec: product.spec || null, unit: pricing.status === 'READY' ? pricing.orderUnit : product.unit || '—', quantity: 1, originalQuantity: 0,
+      name: product.name, category: product.category, location: product.location, spec: product.spec || null, unit: pricing.status === 'READY' ? pricing.orderUnit : product.unit || '—', quantity: 1, originalQuantity: 0,
       unitPrice: pricing.status === 'READY' ? Number(pricing.orderUnitPrice) : 0, sourceLabel: `原订单 #${latestOrder.no}`,
       isUnsavedAddition: true,
       pendingRemoval: false,
@@ -997,7 +1012,7 @@ export default function OperationGroupDetailPage() {
         </div>
         {actionError && <div className="mt-3 rounded-cta border border-red/30 bg-red-bg px-3 py-2 text-caption text-red-fg">{actionError}</div>}
         {!editable && <label className="mt-4 block text-micro text-gray3">加入哪张原订单
-          <select value={addDeliveryId} onChange={event => {
+          <SearchableSelect searchWhenLong searchLabel="搜索原订单" value={addDeliveryId} onChange={event => {
             setAddDeliveryId(event.target.value)
             setAddProductId('')
             setActionError(null)
@@ -1005,7 +1020,7 @@ export default function OperationGroupDetailPage() {
             <option value="">请选择原订单</option>
             {confirmedOrders.map(order => <option key={`order:${order.id}`} value={`order:${order.id}`}>原订单 #{order.no} · 待发货</option>)}
             {editableDeliveries.map(delivery => <option key={`delivery:${delivery.id}`} value={`delivery:${delivery.id}`}>原订单 #{delivery.orderNo} · 配送单 #{delivery.no}</option>)}
-          </select>
+          </SearchableSelect>
         </label>}
         <div className="mt-4 space-y-3">
           <label className="block text-micro text-gray3" htmlFor="group-warehouse-product-search">选择仓库商品</label>

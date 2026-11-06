@@ -81,7 +81,7 @@ export default function ReceivePage({ params }: { params: { id: string } }) {
             <p>订单: <b>{po.no}</b></p>
             <p>当前状态: <b>{STATUS_LABEL[po.status] || po.status}</b></p>
             {po.receivedAt && (
-              <p>验收时间: <b>{new Date(po.receivedAt).toLocaleString('zh-CN')}</b>
+              <p>验收时间: <b>{new Date(po.receivedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}</b>
                 {po.autoConfirmed ? ' (24h 超时系统自动验收)' : ''}
               </p>
             )}

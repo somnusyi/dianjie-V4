@@ -1,6 +1,6 @@
 import { FastifyPluginAsync } from 'fastify'
 import ExcelJS from 'exceljs'
-import { businessMonthKey } from '../lib/businessTime'
+import { businessMonthKey, businessDateKey } from '../lib/businessTime'
 import { z } from 'zod'
 import { Prisma, prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
@@ -352,7 +352,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     sheet.getRow(1).font = { bold: true }
     sheet.views = [{ state: 'frozen', ySplit: 1 }]
     sheet.autoFilter = { from: 'A1', to: 'G1' }
-    const filename = `收货查询-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}.xlsx`
+    const filename = `收货查询-${businessDateKey().replaceAll('-', '')}.xlsx`
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer())
     return reply
       .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')

@@ -1,0 +1,26 @@
+{
+  "version": "1.3.1",
+  "namedOn": "2026-10-13",
+  "scope": "release-name",
+  "commit": "c40b04e10c268b29f95683f549f514648a87ace8",
+  "production": {
+    "label": "正式版",
+    "url": "https://dianjie.cc/v2/login",
+    "buildId": "Tv-bFHE8svLjZ0XcJEw9E"
+  },
+  "test": {
+    "label": "测试版",
+    "url": "http://116.62.32.162:8085/v2/login",
+    "buildId": "lKhM5GXanGOaLbxZWfTJC"
+  },
+  "evidence": "docs/qa/evidence/RELEASE-DJ045-DJ046-20261013/RESULT.md",
+  "note": "Names the existing published builds. Naming does not replace their build IDs, change deployed files, or update legacy package/health version fields.",
+  "gitArchive": {
+    "tag": "v1.3.1",
+    "commit": "c40b04e10c268b29f95683f549f514648a87ace8",
+    "codeUrl": "https://github.com/somnusyi/dianjie-V4/tree/v1.3.1",
+    "documentUrl": "https://github.com/somnusyi/dianjie-V4/blob/codex/version-records-20261104/docs/releases/1.3.1.md",
+    "remoteStatus": "removed_at_user_request_local_only",
+    "snapshotKind": "original_commit"
+  }
+}

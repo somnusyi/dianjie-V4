@@ -5,7 +5,7 @@
  */
 'use client'
 import { useEffect, useMemo, useState } from 'react'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { Chip } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import { exportXlsx } from '@/lib/exportXlsx'
@@ -37,7 +37,7 @@ const BUCKET_TONE: Record<string, 'gray' | 'amber' | 'orange' | 'red'> = {
 }
 const BUCKET_ORDER = ['d90plus', 'd60_90', 'd30_60', 'd0_30', 'notDue']
 
-const fmt = (n: number, d = 0) => n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
+const fmt = (n: number, d = 2) => n.toLocaleString('zh-CN', { minimumFractionDigits: d, maximumFractionDigits: d })
 
 export default function FinanceAgingPCPage() {
   const [data, setData] = useState<Aging | null>(null)

@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import AppLayout from '@/components/AppLayout'
 import { useToast } from '@/components/ui'
 import api from '@/lib/api'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 
 const ROLES = [
   { value: 'MANAGER',          label: '店长' },

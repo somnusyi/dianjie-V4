@@ -75,5 +75,5 @@ function timeAgo(iso: string): string {
   if (min < 60) return `${min} 分钟前`
   const h = Math.round(min / 60)
   if (h < 24) return `${h} 小时前`
-  return new Date(iso).toLocaleDateString('zh-CN')
+  return new Date(iso).toLocaleDateString('zh-CN', {timeZone:'Asia/Shanghai'})
 }

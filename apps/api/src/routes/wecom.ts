@@ -1,3 +1,7 @@
+import { randomBytes } from 'node:crypto'
+import { nextBrowserSessionOrder, browserSessionClock } from '../services/browserSessionOrder'
+import { checkBrowserSession, sessionPolicy, readCookie, writeBrowserCookie, writeBrowserRefresh, writeBrowserOAuthIntent, readBrowserOAuthIntent, clearBrowserOAuthIntent, constantEqual, safeRedirectTarget } from '../lib/browser-session'
+import { credentialContext, sealCredential } from '../lib/credential-vault'
 /**
  * 企微集成 HTTP 路由
  *
@@ -60,6 +64,10 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
     const parsed = oauthUrlSchema.safeParse(req.query || {})
     if (!parsed.success) return reply.status(400).send({ error: firstIssue(parsed) })
     const { tenant, redirect, mode } = parsed.data
+    const browserOrder = await nextBrowserSessionOrder()
+    const browserPolicy = checkBrowserSession(req)
+    const canonical = new URL(process.env.WECOM_REDIRECT_BASE || 'https://www.njdianjie.com').origin
+    if (browserPolicy.origin !== canonical) return reply.status(403).send({error:'请从企业微信配置的正式登录地址进入'})
     const t = await prisma.tenant.findUnique({ where: { slug: tenant } })
     if (!t || t.status !== 'ACTIVE') return reply.status(404).send({ error: 'tenant 不存在或已停用' })
     const cfg = await prisma.weComConfig.findUnique({ where: { tenantId: t.id } })
@@ -69,7 +77,10 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
     const redirectUri = encodeURIComponent(`${base}/api/wecom/oauth/callback`)
     // P2: 防 open redirect; 只允许相对路径
     const safeRedirect = redirect || '/'
-    const state = encodeURIComponent(`${tenant}|${safeRedirect}`)
+    const nonce = randomBytes(24).toString('base64url')
+    const intent = app.jwt.sign({ typ: 'browser-oauth', nonce, bso: browserOrder.order, bia: String(browserOrder.issuedAtMs), tenant, redirect: safeRedirect }, { expiresIn: '10m' })
+    writeBrowserOAuthIntent(req, reply, canonical, intent, nonce, app.jwt)
+    const state = encodeURIComponent(`${tenant}|${safeRedirect}|${nonce}`)
     // 企微登录:
     //   默认 wwlogin — 扫码/拉起一键登录, 在普通浏览器 / 独立 App(套壳) 里点也能拉起企微授权后跳回
     //   ?mode=silent — snsapi_base 静默授权, 仅在企微 App WebView 内有效 (老的企微内登录入口)
@@ -93,12 +104,25 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
     } catch {
       return reply.status(400).send({ error: 'state 格式不正确' })
     }
-    const [tenantSlug, rawRedirect] = decodedState.split('|')
+    const [tenantSlug, rawRedirect, nonce] = decodedState.split('|')
+    const canonical = new URL(process.env.WECOM_REDIRECT_BASE || 'https://www.njdianjie.com').origin
+    const cookiePolicy = sessionPolicy(canonical)
+    const intent = nonce ? readBrowserOAuthIntent(req, canonical, nonce, app.jwt) : null
+    const legacyNonce = !intent && constantEqual(nonce || null, readCookie(req, cookiePolicy.oauthName))
+    if ((!intent && !legacyNonce) || (intent && (intent.tenant !== tenantSlug || intent.redirect !== rawRedirect))) return reply.status(403).send({error:'登录校验已过期，请重新登录'})
+    const clock = await browserSessionClock()
+    if (!intent && clock.issuedAtMs > clock.legacyExpiresAtMs - 30 * 24 * 60 * 60 * 1000 + 600000) return reply.status(403).send({ error: '登录校验已过期，请重新登录' })
+    const browserOrder = intent?.bso || '0'
+    const browserIntentAtMs = intent ? Number(intent.bia) : clock.legacyExpiresAtMs - 30 * 24 * 60 * 60 * 1000
+    if (!Number.isSafeInteger(browserIntentAtMs) || browserIntentAtMs > clock.issuedAtMs || (intent && clock.issuedAtMs - browserIntentAtMs >= 600000)) return reply.status(403).send({ error: '登录校验已过期，请重新登录' })
+    if (intent) clearBrowserOAuthIntent(reply, canonical, nonce)
+    // Old fixed nonce is only read during migration; never clear any newer named intent cookie.
+
     if (!tenantSlugSchema.safeParse(tenantSlug).success) {
       return reply.status(400).send({ error: 'state 中的 tenant 格式不正确' })
     }
     // P2: 防 open redirect
-    const redirect = (rawRedirect && rawRedirect.startsWith('/') && !rawRedirect.startsWith('//')) ? rawRedirect : '/'
+    const redirect = safeRedirectTarget(rawRedirect, canonical)
     const t = await prisma.tenant.findUnique({ where: { slug: tenantSlug } })
     if (!t || t.status !== 'ACTIVE') return reply.status(404).send({ error: 'tenant 不存在或已停用' })
 
@@ -158,7 +182,10 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
       }
 
       // 4. 与密码登录共用 2h access + 30d refresh，禁止企微产生旧式 365d 旁路令牌。
-      const { token, refreshToken } = issueSessionTokens((app as any).jwt, user)
+      const completed = await browserSessionClock()
+      const remaining = Math.floor((browserIntentAtMs + 30 * 24 * 60 * 60 * 1000 - completed.issuedAtMs) / 1000)
+      if (remaining <= 0 || (intent && completed.issuedAtMs - browserIntentAtMs >= 600000)) return reply.status(403).send({ error: '登录校验已过期，请重新登录' })
+      const { token, refreshToken } = issueSessionTokens((app as any).jwt, user, browserOrder, browserIntentAtMs)
 
       await prisma.weComSyncLog.create({
         data: {
@@ -167,21 +194,17 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
         },
       })
 
-      // 5. 把 token 通过 hash 传给前端, 前端 setSession 后跳目标页
-      const base = process.env.WECOM_REDIRECT_BASE || 'https://www.njdianjie.com'
-      const userJson = encodeURIComponent(JSON.stringify({
-        id: user.id, name: user.name, role: user.role, storeId: user.storeId,
-        storeIds: user.storeIds, supplierId: user.supplierId,
-      }))
-      return reply.redirect(`${base}/v2/wecom-bridge#token=${token}&refreshToken=${refreshToken}&user=${userJson}&tenant=${tenantSlug}&redirect=${encodeURIComponent(redirect || '/')}`)
+      // Refresh stays HttpOnly. No bearer token, user JSON or credential in any URL.
+      writeBrowserRefresh(req, reply, canonical, refreshToken, app.jwt, remaining)
+      return reply.redirect(`${canonical}/v2/wecom-bridge?redirect=${encodeURIComponent(redirect)}`)
     } catch (e: any) {
       await prisma.weComSyncLog.create({
         data: {
           tenantId: t.id, kind: 'oauth_login', status: 'error',
-          errorMsg: e.message || String(e),
+          errorMsg: 'OAuth login failed',
         },
       })
-      return reply.redirect(`/v2/login?error=${encodeURIComponent('企微登录失败: ' + (e.message || ''))}`)
+      return reply.redirect(`/v2/login?error=${encodeURIComponent('企微登录失败，请重新登录或联系管理员')}`)
     }
   })
 
@@ -207,6 +230,7 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
     const { corpId, agentId, appSecret, contactSecret, callbackToken, encodingAESKey, enabled } = parsed.data
     // 审计只记录字段名，不记录任何 Secret / Token 值。
     const changedFields = Object.keys(parsed.data)
+    const encrypted = (field: string, value: string | null | undefined) => sealCredential(value, credentialContext(req.user.tenantId, 'wecom', field))
     const cfg = await prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`wecom-config:${req.user.tenantId}`}))::text AS locked`
       const existing = await tx.weComConfig.findUnique({ where: { tenantId: req.user.tenantId } })
@@ -219,16 +243,18 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
         where: { tenantId: req.user.tenantId },
         create: {
           tenantId: req.user.tenantId, corpId, agentId,
-          appSecret: appSecret || '',
-          contactSecret, callbackToken, encodingAESKey,
+          appSecret: encrypted('appSecret', appSecret || '') || '',
+          contactSecret: encrypted('contactSecret', contactSecret),
+          callbackToken: encrypted('callbackToken', callbackToken),
+          encodingAESKey: encrypted('encodingAESKey', encodingAESKey),
           enabled: effectiveEnabled,
         },
         update: {
           corpId, agentId,
-          ...(appSecret !== undefined && { appSecret, accessToken: null, accessTokenExp: null }),
-          ...(contactSecret !== undefined && { contactSecret, contactToken: null, contactTokenExp: null }),
-          ...(callbackToken !== undefined && { callbackToken }),
-          ...(encodingAESKey !== undefined && { encodingAESKey }),
+          ...(appSecret !== undefined && { appSecret: encrypted('appSecret', appSecret) || '', accessToken: null, accessTokenExp: null }),
+          ...(contactSecret !== undefined && { contactSecret: encrypted('contactSecret', contactSecret), contactToken: null, contactTokenExp: null }),
+          ...(callbackToken !== undefined && { callbackToken: encrypted('callbackToken', callbackToken) }),
+          ...(encodingAESKey !== undefined && { encodingAESKey: encrypted('encodingAESKey', encodingAESKey) }),
           ...(enabled !== undefined && { enabled }),
         },
       })
@@ -297,7 +323,7 @@ export const wecomRoutes: FastifyPluginAsync = async (app) => {
     const { content } = parsed.data
     const me = await prisma.user.findUnique({ where: { id: req.user.userId } })
     if (!me?.wecomUserId) return reply.status(400).send({ error: '你的账号未绑定企微' })
-    await sendAppMsg(req.user.tenantId, me.wecomUserId, content || '滇界云管 · 集成测试消息 ' + new Date().toLocaleString('zh-CN'))
+    await sendAppMsg(req.user.tenantId, me.wecomUserId, content || '滇界云管 · 集成测试消息 ' + new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }))
     return reply.send({ ok: true })
   })
 }

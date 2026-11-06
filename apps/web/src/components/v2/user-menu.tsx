@@ -5,7 +5,7 @@
  */
 'use client'
 import { useState, useEffect } from 'react'
-import { getUser, clearSession } from '@/lib/v2-auth'
+import { getUser, logoutSession } from '@/lib/v2-auth'
 import { ROLE_LABELS } from './role-labels'
 import { NotificationBell } from './notification-bell'
 
@@ -50,8 +50,8 @@ export function UserMenu() {
               <a href="/v2/boss/autofix" className="block px-3 py-2 text-caption hover:bg-bg">自动修复记录</a>
             </>}
             <button
-              onClick={() => {
-                clearSession()
+              onClick={async () => {
+                await logoutSession()
                 location.href = '/v2/login'
               }}
               className="w-full text-left px-3 py-3 text-button text-red-fg hover:bg-red-bg"

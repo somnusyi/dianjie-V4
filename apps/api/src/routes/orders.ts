@@ -1,7 +1,8 @@
+import { hasSubmissionStockPolicy, withSubmissionStockPolicy, syncSubmissionOrderReservation, submissionOrderWarehouseMode } from '../services/orderSubmissionReservation'
 import { FastifyPluginAsync } from 'fastify'
 import { createId } from '@paralleldrive/cuid2'
 import ExcelJS from 'exceljs'
-import { businessMonthKey } from '../lib/businessTime'
+import { businessMonthKey, businessTimestampKey } from '../lib/businessTime'
 import { checkDeliveryRuleBlock } from '../services/deliveryRuleEnforcement'
 import { z } from 'zod'
 import { Prisma, prisma } from '@dianjie/db'
@@ -169,9 +170,9 @@ async function postShadowWarehouseLedger(input: {
   if (shadowPostingQueues.get(input.orderingKey) === current) shadowPostingQueues.delete(input.orderingKey)
 }
 
-async function safeWarehouseLedgerMode(tenantId: string, log: { error: (value: unknown, message?: string) => void }) {
+async function safeWarehouseLedgerMode(tenantId: string, log: { error: (value: unknown, message?: string) => void }, purchaseOrderId?: string) {
   try {
-    return await getWarehouseLedgerMode(tenantId)
+    return purchaseOrderId ? await submissionOrderWarehouseMode(tenantId, purchaseOrderId) : await getWarehouseLedgerMode(tenantId)
   } catch (error) {
     // Never silently treat an unknown warehouse mode as OFF. Doing so could
     // advance a strict-stock order without reservation/outbound facts and
@@ -839,7 +840,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     sheet.views = [{ state: 'frozen', ySplit: 1 }]
     sheet.autoFilter = { from: 'A1', to: 'R1' }
     sheet.getColumn('amount').numFmt = '#,##0.00'
-    const filename = `门店订货单-${dayjs().format('YYYYMMDD-HHmmss')}.xlsx`
+    const filename = `门店订货单-${businessTimestampKey().replace('_', '-')}.xlsx`
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer())
     return reply
       .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
@@ -1078,6 +1079,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
               isActive: true, lastRevisionId: revision.id, ...copyFrozenSupplyDocumentFourUnits(next),
             },
           })
+          await syncSubmissionOrderReservation(tx, { tenantId, purchaseOrderId: currentOrder.id, userId })
           for (const eventType of ['REVISION_REQUESTED', 'REVISION_APPROVED'] as const) await tx.purchaseOrderEvent.create({
             data: {
               tenantId, purchaseOrderId: currentOrder.id, eventType, actorId: userId, actorRole: role,
@@ -1281,7 +1283,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           data: { status: 'CONFIRMED', rowVersion: { increment: 1 } },
         })
         if (updated.count === 0) throw { statusCode: 409, message: '操作组中订单状态已变化，请刷新后重试' }
-        if (!isWarehouseOrder && supplier.inventoryMode === 'STRICT') {
+        if (!isWarehouseOrder && supplier.inventoryMode === 'STRICT' && !hasSubmissionStockPolicy(order.submittedSnapshot)) {
           await reserveSupplierStockForOrder(tx, {
             tenantId, supplierId: order.supplierId, purchaseOrderId: order.id,
             lines: order.items.map(item => ({
@@ -1290,7 +1292,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             })),
           })
         }
-        if (isWarehouseOrder && ledgerMode?.inventoryMode === 'STRICT') {
+        if (isWarehouseOrder && ledgerMode?.inventoryMode === 'STRICT' && !hasSubmissionStockPolicy(order.submittedSnapshot)) {
           await reserveWarehouseLedgerForOrder(tx, {
             tenantId, purchaseOrderId: order.id, userId,
             lines: warehouseLinesByOrder.get(order.id) || [],
@@ -1318,7 +1320,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
 
     if (isWarehouseOrder && ledgerMode?.inventoryMode === 'SHADOW') {
-      for (const order of sortedOrders) {
+      for (const order of sortedOrders.filter(order => !hasSubmissionStockPolicy(order.submittedSnapshot))) {
         void postShadowWarehouseLedger({
           tenantId, userId, sourceId: order.id, orderingKey: order.id,
           eventType: 'ORDER_RESERVED', payload: { purchaseOrderId: order.id, operationGroupId: groupIdParam },
@@ -1329,7 +1331,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         })
       }
     }
-    for (const order of sortedOrders) {
+    for (const order of sortedOrders.filter(order => !hasSubmissionStockPolicy(order.submittedSnapshot))) {
       void notifyOrderConfirmed(tenantId, order.no, supplier.name || '', order.storeId)
       notify({
         tenantId, event: 'PO_ACCEPTED', eventKey: `PO:${order.id}:ACCEPTED`,
@@ -1707,12 +1709,15 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
             items: { include: { product: true } },
           },
         })
-        const original = buildOrderSnapshot(created as any, 'original')
+        const draftSnapshot = buildOrderSnapshot(created as any, 'original')
+        const original = created.supplier.sourceType === 'HEADQ_WAREHOUSE' || created.supplier.inventoryMode === 'STRICT'
+          ? withSubmissionStockPolicy(draftSnapshot) : draftSnapshot
         const hash = snapshotHash(original)
         await tx.purchaseOrder.update({
           where: { id: created.id },
           data: { submittedSnapshot: original as any, submittedSnapshotHash: hash },
         })
+        await syncSubmissionOrderReservation(tx, { tenantId, purchaseOrderId: created.id, userId })
         await tx.purchaseOrderEvent.createMany({
           data: [
             {
@@ -1798,7 +1803,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
 
     const wasConfirmed = order.status === 'CONFIRMED'
     const isWarehouseOrder = order.supplier.sourceType === 'HEADQ_WAREHOUSE'
-    const ledgerMode = wasConfirmed && isWarehouseOrder ? await safeWarehouseLedgerMode(tenantId, req.log) : null
+    const ledgerMode = isWarehouseOrder ? await safeWarehouseLedgerMode(tenantId, req.log, id) : null
     await prisma.$transaction(async (tx) => {
       const updated = await tx.purchaseOrder.updateMany({
         where: { id, status: order.status, rowVersion: order.rowVersion },
@@ -1808,7 +1813,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         },
       })
       if (updated.count === 0) throw { statusCode: 409, message: '订单状态已变化，请刷新后重试' }
-      if (wasConfirmed) {
+      {
         if (!isWarehouseOrder) await releaseSupplierStockForOrder(tx, id)
         if (isWarehouseOrder && ledgerMode?.inventoryMode === 'STRICT') {
           await releaseWarehouseLedgerForOrder(tx, { tenantId, purchaseOrderId: id, userId })
@@ -2244,6 +2249,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
               },
             })
           }
+          await syncSubmissionOrderReservation(tx, { tenantId, purchaseOrderId: id, userId })
           await tx.purchaseOrderEvent.create({
             data: {
               tenantId, purchaseOrderId: id, eventType: 'REVISION_REQUESTED', actorId: userId, actorRole: role,
@@ -2545,6 +2551,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           },
         })
       }
+      await syncSubmissionOrderReservation(tx, { tenantId, purchaseOrderId: id, userId })
       await tx.purchaseOrderRevision.update({
         where: { id: revision.id },
         data: { status: 'APPROVED', reviewedById: userId, reviewedAt: new Date(), reviewNote: parsed.data.note || null },
@@ -2659,7 +2666,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (!order) throw { statusCode: 400, message: '订单不存在或当前状态不可接单' }
     if (order.revisions.length > 0) throw { statusCode: 409, message: '订单有待门店确认的修改，确认完成后才能接单' }
     const isWarehouseOrder = order.supplier.sourceType === 'HEADQ_WAREHOUSE'
-    const ledgerMode = isWarehouseOrder ? await safeWarehouseLedgerMode(tenantId, req.log) : null
+    const ledgerMode = isWarehouseOrder ? await safeWarehouseLedgerMode(tenantId, req.log, id) : null
     const warehouseLines = order.items.map(item => ({
       purchaseOrderItemId: item.id,
       productId: item.productId,
@@ -2676,7 +2683,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         data: { status: 'CONFIRMED', rowVersion: { increment: 1 } },
       })
       if (updated.count === 0) throw { statusCode: 409, message: '订单状态已变化，请刷新后重试' }
-      if (!isWarehouseOrder && order.supplier.inventoryMode === 'STRICT') {
+      if (!isWarehouseOrder && order.supplier.inventoryMode === 'STRICT' && !hasSubmissionStockPolicy(order.submittedSnapshot)) {
         await reserveSupplierStockForOrder(tx, {
           tenantId,
           supplierId: order.supplierId,
@@ -2689,7 +2696,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           })),
         })
       }
-      if (isWarehouseOrder && ledgerMode?.inventoryMode === 'STRICT') {
+      if (isWarehouseOrder && ledgerMode?.inventoryMode === 'STRICT' && !hasSubmissionStockPolicy(order.submittedSnapshot)) {
         await reserveWarehouseLedgerForOrder(tx, {
           tenantId,
           purchaseOrderId: order.id,
@@ -2707,7 +2714,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         data: { tenantId, userId, action: '供应商接单', target: order.no, entityType: 'PurchaseOrder', targetId: id },
       })
     })
-    if (isWarehouseOrder && ledgerMode?.inventoryMode === 'SHADOW') {
+    if (isWarehouseOrder && ledgerMode?.inventoryMode === 'SHADOW' && !hasSubmissionStockPolicy(order.submittedSnapshot)) {
       void postShadowWarehouseLedger({
         tenantId,
         userId,
@@ -2768,7 +2775,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (order.revisions.length > 0) throw { statusCode: 409, message: '订单有待门店确认的修改，请等待门店处理后再拒单' }
     const rejectReason = String(reason).trim().slice(0, 100)
     const isWarehouseOrder = order.supplier.sourceType === 'HEADQ_WAREHOUSE'
-    const ledgerMode = order.status === 'CONFIRMED' && isWarehouseOrder ? await safeWarehouseLedgerMode(tenantId, req.log) : null
+    const ledgerMode = isWarehouseOrder ? await safeWarehouseLedgerMode(tenantId, req.log, id) : null
     await prisma.$transaction(async (tx) => {
       const updated = await tx.purchaseOrder.updateMany({
         where: { id, status: order.status, rowVersion: order.rowVersion },
@@ -2778,7 +2785,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         },
       })
       if (updated.count === 0) throw { statusCode: 409, message: '订单状态已变化，请刷新后重试' }
-      if (order.status === 'CONFIRMED') {
+      {
         if (!isWarehouseOrder) await releaseSupplierStockForOrder(tx, id)
         if (isWarehouseOrder && ledgerMode?.inventoryMode === 'STRICT') {
           await releaseWarehouseLedgerForOrder(tx, { tenantId, purchaseOrderId: id, userId })
@@ -3007,7 +3014,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     if (!order) throw { statusCode: 400, message: '订单不存在或状态不可发货' }
     const isWarehouseOrder = order.supplier.sourceType === 'HEADQ_WAREHOUSE'
     if (isWarehouseOrder && !pickerName) return reply.status(400).send({ error: '总仓发货必须填写实际分拣负责人' })
-    const ledgerMode = isWarehouseOrder ? await safeWarehouseLedgerMode(tenantId, req.log) : null
+    const ledgerMode = isWarehouseOrder ? await safeWarehouseLedgerMode(tenantId, req.log, id) : null
 
     // 有服务端 DRAFT 时，它是唯一的发货明细权威来源；无 DRAFT 时
     // 保留旧客户端 items + removedItemIds 的兼容路径。
@@ -3259,6 +3266,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           },
           data: {
             no: deliveryNo,
+            warehouseId: isWarehouseOrder && hasSubmissionStockPolicy(order.submittedSnapshot) ? ledgerMode?.warehouseId : undefined,
             status: 'SHIPPED',
             actualTotalAmount: newTotalAmount,
             note: note || null,
@@ -3292,6 +3300,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         const deliveryNo = await nextBusinessNo(tx, tenantId, 'DO', ym, 'DO')
         const created = await tx.deliveryOrder.create({
           data: {
+            warehouseId: isWarehouseOrder && hasSubmissionStockPolicy(order.submittedSnapshot) ? ledgerMode?.warehouseId : undefined,
             tenantId, no: deliveryNo, purchaseOrderId: order.id, storeId: order.storeId, supplierId: order.supplierId,
             status: 'SHIPPED', actualTotalAmount: newTotalAmount, note: note || null,
             idempotencyKey, createdById: userId, shippedById: userId, pickerNameSnapshot: pickerName || null, shippedAt,
@@ -3338,7 +3347,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           },
         })
       }
-      if (!isWarehouseOrder && order.supplier.inventoryMode === 'STRICT') {
+      if (!isWarehouseOrder && (order.supplier.inventoryMode === 'STRICT' || hasSubmissionStockPolicy(order.submittedSnapshot))) {
         await consumeSupplierStockForShipment(tx, {
           tenantId,
           supplierId: order.supplierId,
@@ -3347,12 +3356,14 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
           orderNo: order.no,
           userId,
           closedAt: shippedAt,
+          useFrozenInventoryUnits: hasSubmissionStockPolicy(order.submittedSnapshot),
           lines: lineShipped.map(line => ({
             purchaseOrderItemId: line.it.id,
             productId: line.it.productId,
             quantity: line.it.quantity,
             shippedQty: line.shipped,
             productName: line.it.product?.name,
+            productUnit: line.it.product?.unit, orderUnitSnapshot: line.it.orderUnitSnapshot, inventoryUnitSnapshot: line.it.inventoryUnitSnapshot, inventoryUnitsPerOrderUnitSnapshot: line.it.inventoryUnitsPerOrderUnitSnapshot, purchaseUnitSnapshot: line.it.purchaseUnitSnapshot, costUnitSnapshot: line.it.costUnitSnapshot, inventoryUnitsPerPurchaseUnitSnapshot: line.it.inventoryUnitsPerPurchaseUnitSnapshot, inventoryUnitsPerCostUnitSnapshot: line.it.inventoryUnitsPerCostUnitSnapshot,
           })),
         })
       } else if (!isWarehouseOrder) {

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { prisma } from '@dianjie/db'
 import {
   approveWarehouseStocktake,
+  reviewWarehouseStocktake,
   cancelWarehouseStocktake,
   createWarehouseStocktake,
   getWarehouseStocktake,
@@ -124,6 +125,7 @@ export const warehouseStocktakeRoutes: FastifyPluginAsync = async app => {
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     return submitWarehouseStocktake({ tenantId: req.user.tenantId, userId: req.user.userId, id: req.params.id, ...parsed.data })
   })
+  app.post('/:id/final-review', auth(WAREHOUSE_STOCKTAKE_AUDIT_ROLES), async (req: any) => reviewWarehouseStocktake({ tenantId: req.user.tenantId, userId: req.user.userId, id: req.params.id }))
   app.post('/:id/approve', auth(WAREHOUSE_STOCKTAKE_AUDIT_ROLES), async (req: any) => approveWarehouseStocktake({ tenantId: req.user.tenantId, userId: req.user.userId, id: req.params.id }))
   app.post('/:id/reject', auth(WAREHOUSE_STOCKTAKE_AUDIT_ROLES), async (req: any, reply) => {
     const parsed = reasonSchema.safeParse(req.body)

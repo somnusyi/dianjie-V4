@@ -1,6 +1,6 @@
 import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
-import { prisma } from '@dianjie/db'
+import { Prisma, prisma } from '@dianjie/db'
 import { cached, invalidatePattern } from '../lib/cache'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 import { requireSupplierCapability, SupplierCapability } from '../lib/supplier-access'
@@ -88,6 +88,7 @@ const productCreateSchema = z.object({
   name:      z.string().trim().min(1, '品项名称必填').max(80),
   spec:      z.string().trim().max(80).optional().nullable(),
   category:  z.string().trim().max(40).optional(),
+  location: z.string().trim().max(32, '库位不能超过32个字符').nullable().optional(),
   imageKey:  z.string().trim().max(500).optional().nullable(),
   // unit 必须是干净计量单位 (kg/件/瓶...), 不能含数字 ("5kg" / "2包起订" 是数据脏的常见来源)
   unit:      z.string().trim().max(PRODUCT_UNIT_NAME_MAX_LENGTH)
@@ -145,6 +146,7 @@ const productPatchSchema = z.object({
   name: z.string().trim().min(1).max(80).optional(),
   spec: z.string().trim().max(80).nullable().optional(),
   category: z.string().trim().min(1).max(40).optional(),
+  location: z.string().trim().max(32, '库位不能超过32个字符').nullable().optional(),
   imageKey: z.string().trim().max(500).nullable().optional(),
   unit: z.string().trim().min(1).max(PRODUCT_UNIT_NAME_MAX_LENGTH)
     .refine(value => !/^\d/.test(value), '单位不能以数字开头').optional(),
@@ -544,18 +546,16 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
           product,
           supplierReserved: supplierReserved.get(product.id) || 0,
           warehouseBalance: warehouseProjection.balances.get(product.id) || null,
-          warehouseLedgerActive: Boolean(warehouseProjection.inventoryMode && warehouseProjection.inventoryMode !== 'OFF'),
+          warehouseLedgerActive: warehouseProduct,
         }),
-        // 门店下单页不能只看供应商 inventoryMode：内部总仓商品
-        // 的权威开关在仓库账。把最终判定随商品行返回，避免前端猜测。
-        inventoryEnforced: warehouseProduct
-          ? Boolean(warehouseProjection.blockZeroStockAtOrderEntry)
-          : false,
-        // tracked 只表示有可以展示的库存投影；enforced 才表示零库存会阻断提交。
-        // 内部总仓的两个状态必须分开，才能在“仅提醒”时仍告知零库存。
-        inventoryTracked: warehouseProduct
-          ? Boolean(warehouseProjection.inventoryMode && warehouseProjection.inventoryMode !== 'OFF')
-          : supplierById.get(supplierId)?.inventoryMode === 'STRICT',
+        availabilityUnit: warehouseProduct
+          ? String((product as any).inventoryUnit || (product as any).unit || '')
+          : String((product as any).unit || ''),
+        // Submission reservations use the authoritative ledger for every HEADQ order,
+        // including warehouses whose legacy mode is OFF/SHADOW. External untracked
+        // suppliers remain orderable; STRICT supplier stock is reserved at submission.
+        inventoryEnforced: warehouseProduct || supplierById.get(supplierId)?.inventoryMode === 'STRICT',
+        inventoryTracked: warehouseProduct || supplierById.get(supplierId)?.inventoryMode === 'STRICT',
         imageUrl: signOssKey((product as any).imageKey),
       }
     })
@@ -987,6 +987,9 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role, supplierId } = req.user
     const limit = parseBoundedInteger((req.query as any)?.limit, { defaultValue: 50, max: 200 })
     if (limit === null) return reply.status(400).send({ error: 'limit 必须是 1 至 200 的整数' })
+    const page=parseBoundedInteger((req.query as any)?.page,{defaultValue:1,max:1_000_000})
+    if(page===null)return reply.status(400).send({error:'page必须为正整数'})
+    const paginated=(req.query as any)?.page!==undefined
     let productIds: string[] | undefined
     if (isSupplierRole(role)) {
       if (!supplierScopeOrReply(req, reply, 'catalog.read')) return
@@ -995,8 +998,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         where: { tenantId, supplierId }, select: { id: true },
       })).map(product => product.id)
     }
-    const rows = await prisma.opLog.findMany({
-      where: {
+    const where: Prisma.OpLogWhereInput = {
         tenantId,
         entityType: { in: ['Product', 'ProductBatch', 'ProductCategory'] },
         ...(productIds ? {
@@ -1005,12 +1007,15 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
             { metadata: { path: ['supplierId'], equals: supplierId } },
           ],
         } : {}),
-      },
+      }
+    const total=paginated?await prisma.opLog.count({where}):0
+    const rows=await prisma.opLog.findMany({where,
+      ...(paginated?{skip:(page-1)*limit}:{}),
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit,
       include: { user: { select: { name: true } } },
     })
-    return rows.map(row => ({
+    const items=rows.map(row => ({
       id: row.id,
       action: row.action,
       target: row.target,
@@ -1020,6 +1025,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       operator: row.user?.name || '系统',
       createdAt: row.createdAt,
     }))
+    return paginated?{items,total,page,pageSize:limit}:items
   })
 
   const bulkIdsSchema = z.object({
@@ -1391,6 +1397,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     }
     // 供应商角色：忽略 body.supplierId，强制用当前账号绑定的 supplierId
     let data: any = { ...parsed.data }
+    if (data.location === '') data.location = null
     let supplierName: string | null = null
     if (isSupplierRole(role)) {
       if (!userSupplierId) return reply.status(403).send({ error: '账号未绑定供应商' })
@@ -1403,6 +1410,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       // 供应商新建 SKU 默认进入"待总厨审批"状态, 通过后才上架
       data.status = 'PENDING_APPROVAL'
       // 商品报价与供应商库存解耦；库存只能通过库存入库/调整接口形成流水。
+      delete data.location
       delete data.stock
       delete data.minStock
       delete data.inventoryUnit
@@ -2133,7 +2141,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as any : {}
     // P1: 非供应商角色也必须白名单字段, 防 mass assignment (改 tenantId / supplierId / id)
     const SUPPLIER_ALLOW = ['price', 'spec', 'category', 'imageKey', 'minOrderQty', 'stepQty', 'shelfDays', 'status', 'shipUpperPct', 'shipUpperBuffer']
-    const STAFF_ALLOW = [...SUPPLIER_ALLOW, 'name', 'unit', 'category', 'code']  // 内部员工额外可改名/类
+    const STAFF_ALLOW = [...SUPPLIER_ALLOW, 'name', 'unit', 'category', 'code', 'location']  // 内部员工额外可改名/类
     const UNIT_ALLOW = [
       'purchaseUnit', 'inventoryUnit', 'orderUnit', 'costUnit',
       'inventoryUnitsPerPurchaseUnit', 'inventoryUnitsPerOrderUnit', 'inventoryUnitsPerCostUnit',
@@ -2151,6 +2159,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     )
     if (!parsedPatch.success) return reply.status(400).send({ error: parsedPatch.error.issues[0].message })
     const data: any = parsedPatch.data
+    if (data.location === '') data.location = null
     if (data.imageKey && !String(data.imageKey).startsWith(`products/${tenantId}/`)) {
       return reply.status(400).send({ error: '商品图片不属于当前租户' })
     }
@@ -2319,7 +2328,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
       where,
       select: {
         id: true, code: true, name: true, supplierId: true, price: true, spec: true,
-        category: true, imageKey: true, minOrderQty: true, stepQty: true,
+        category: true, location: true, imageKey: true, minOrderQty: true, stepQty: true,
         shelfDays: true, status: true, shipUpperPct: true, shipUpperBuffer: true,
         unit: true, purchaseUnit: true, inventoryUnit: true, orderUnit: true, costUnit: true,
         inventoryUnitsPerPurchaseUnit: true,
@@ -2507,7 +2516,7 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
         })
       }
     }
-    if (role === 'SUPPLY_CHAIN') {
+    if (role === 'SUPPLY_CHAIN' && Object.keys(data).some(field => field !== 'location')) {
       const action = resolveProductChangeAction(data)
       const changedFields = Object.keys(data)
       const beforeSummary = buildProductChangeSummary(before, changedFields)

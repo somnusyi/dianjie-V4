@@ -6,6 +6,7 @@
  * 混入供应链采购档案。不展示银行账号、密钥等敏感字段。
  */
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
@@ -690,7 +691,7 @@ function SupplierEditorDrawer({
           </DrawerField>
 
           <DrawerField label="账期类型" error={errors.creditType} required>
-            <select
+            <SearchableSelect searchWhenLong searchLabel="搜索账期类型"
               value={values.creditType}
               onChange={e => onChange('creditType', e.target.value)}
               className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body"
@@ -698,7 +699,7 @@ function SupplierEditorDrawer({
               {SUPPLIER_CREDIT_TYPE_OPTIONS.map(opt => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
-            </select>
+            </SearchableSelect>
           </DrawerField>
 
           {values.creditType === 'FIXED_DAYS' && (
@@ -789,13 +790,13 @@ function FilterSelect({ label, value, onChange, children }: {
   return (
     <label className="flex flex-col gap-1">
       <span className="text-micro text-gray3">{label}</span>
-      <select
+      <SearchableSelect searchWhenLong searchLabel={`搜索${label}`}
         value={value}
         onChange={e => onChange(e.target.value)}
         className="h-10 min-w-36 rounded-cta border border-border bg-white px-3 text-body"
       >
         {children}
-      </select>
+      </SearchableSelect>
     </label>
   )
 }

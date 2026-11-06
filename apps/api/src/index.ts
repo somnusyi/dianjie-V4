@@ -1,8 +1,10 @@
+import { RELEASE_VERSION } from './lib/release-version'
 // dotenv 必须在 Sentry / Prisma / 其他任何读 process.env 的 import 之前加载。
 // 见 docs 事故记录：pm2 restart --update-env 会从 ecosystem.config.js 重刷
 // env，如果 DATABASE_URL 不在那里就会被抹掉，API 启动即 PrismaClientInit
 // 失败。让 tsx 启动时从 apps/api/.env 直接读，脱离对 pm2 传入 env 的依赖。
 import 'dotenv/config'
+import { safeRequestLog, sensitiveLogPaths, safeUrl, safeErrorLog, safeTelemetryEvent } from './lib/safe-request-log'
 
 import * as Sentry from '@sentry/node'
 
@@ -11,11 +13,14 @@ if (process.env.SENTRY_DSN) {
   Sentry.init({
     dsn: process.env.SENTRY_DSN,
     environment: process.env.NODE_ENV || 'development',
-    tracesSampleRate: 0.2,         // 采样 20% 的请求做性能追踪
+    tracesSampleRate: 0,         // 采样 20% 的请求做性能追踪
+    beforeSendTransaction() { return null },
+    beforeBreadcrumb() { return null },
+    sendDefaultPii: false,
     beforeSend(event) {
       // 过滤掉 4xx 业务错误，只上报 5xx 和未捕获异常
       if (event.exception?.values?.[0]?.value?.includes('statusCode')) return null
-      return event
+      return safeTelemetryEvent(event)
     },
   })
   console.log('📡 Sentry 监控已启用')
@@ -102,7 +107,7 @@ import { feedbackRoutes } from './routes/feedback'
 import { bossChatRoutes } from './routes/bossChat'
 import { autoFixRoutes } from './routes/autofix'
 import { startAutoFixWorker } from './services/autofix/engine'
-import { isSupplierRole } from './lib/auth-scope'
+import { createAuthenticate } from './lib/authenticate-principal'
 import { activeStoreInjectHook } from './lib/active-store-inject'
 
 function resolveJwtSecret() {
@@ -115,6 +120,8 @@ function resolveJwtSecret() {
 
 const app = Fastify({
   logger: {
+    redact: { paths: sensitiveLogPaths, censor: '[REDACTED]' },
+    serializers: { req: safeRequestLog, err: safeErrorLog },
     transport: process.env.NODE_ENV === 'development'
       ? { target: 'pino-pretty', options: { colorize: true } }
       : undefined,
@@ -171,7 +178,7 @@ async function bootstrap() {
       if (/^https?:\/\/(192\.168|10\.|172\.(1[6-9]|2\d|3[01]))\./.test(origin)) {
         return cb(null, true)
       }
-      cb(new Error(`CORS 拒绝: ${origin}`), false)
+      cb(Object.assign(new Error('跨域来源不允许'), { statusCode: 403 }), false)
     },
     credentials: true,
   })
@@ -187,28 +194,11 @@ async function bootstrap() {
   app.addHook('onRequest', activeStoreInjectHook)
 
   // ── 认证装饰器 ────────────────────────
+  const authenticatePrincipal=createAuthenticate(prisma)
   app.decorate('authenticate', async (request: any, reply: any) => {
     try {
-      await request.jwtVerify()
-      if (request.user?.typ !== 'access') {
-        throw new Error('JWT token type is not access')
-      }
-      // 供应商停用/账号停用/解除绑定后，旧 access token 也必须在下一次请求立即失效。
-      // 当前只有供应商域做逐请求状态核验；其岗位权限仍由 capability 层统一控制。
-      if (isSupplierRole(request.user?.role)) {
-        const principal = await prisma.user.findFirst({
-          where: {
-            id: request.user.userId,
-            tenantId: request.user.tenantId,
-            supplierId: request.user.supplierId,
-            status: 'ACTIVE',
-            authVersion: Number(request.user.ver ?? 0),
-            supplier: { status: 'ENABLED', tenantId: request.user.tenantId },
-          },
-          select: { id: true },
-        })
-        if (!principal) throw new Error('supplier principal is inactive')
-      }
+      await authenticatePrincipal(request,reply)
+      if(reply.sent)return
       // 给 Sentry 当前请求作用域打上 tenant/role/route 标签, 后续 captureException
       // (含 cmbPayment / paymentSchedule 等深层调用) 都能按维度聚合
       try {
@@ -218,7 +208,7 @@ async function bootstrap() {
           scope.setTags({
             'tenant.id': u.tenantId,
             'user.role': u.role || 'unknown',
-            'http.route': request.routeOptions?.url || request.url,
+            'http.route': safeUrl(request.routeOptions?.url || request.url),
           })
           scope.setUser({ id: u.userId, segment: u.role })
         }
@@ -324,7 +314,7 @@ async function bootstrap() {
     return {
       status: db === 'ok' ? 'ok' : 'degraded',
       timestamp: new Date().toISOString(),
-      version: '1.1.0',
+      version: RELEASE_VERSION,
       db,
     }
   }
@@ -333,12 +323,12 @@ async function bootstrap() {
 
   // ── 404 处理 ──────────────────────────
   app.setNotFoundHandler((request, reply) => {
-    reply.status(404).send({ error: `路由不存在: ${request.url}` })
+    reply.status(404).send({ error: `路由不存在: ${safeUrl(request.url)}` })
   })
 
   // ── 错误处理（含 Sentry 上报）────────
   app.setErrorHandler((error, request, reply) => {
-    app.log.error(error)
+    app.log.error({ err: safeErrorLog(error) }, 'Request failed')
     if (error.validation) {
       return reply.status(400).send({ error: '请求参数错误', details: error.validation })
     }
@@ -348,14 +338,14 @@ async function bootstrap() {
       const u = (request as any).user
       Sentry.captureException(error, {
         tags: {
-          'http.route': request.routeOptions?.url || request.url,
+          'http.route': safeUrl(request.routeOptions?.url || request.url),
           'http.method': request.method,
           ...(u?.tenantId ? { 'tenant.id': u.tenantId, 'user.role': u.role || 'unknown' } : {}),
         },
-        extra: { url: request.url, method: request.method, statusCode, userId: u?.userId },
+        extra: { url: safeUrl(request.url), method: request.method, statusCode, userId: u?.userId },
       })
     }
-    const publicMessage = statusCode >= 500 && process.env.NODE_ENV === 'production'
+    const publicMessage = statusCode >= 500
       ? '服务器内部错误'
       : (error.message || '服务器内部错误')
     reply.status(statusCode).send({ error: publicMessage })

@@ -1,4 +1,5 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
@@ -30,7 +31,7 @@ type SkuRank = {
 type MonthlyTrend = { month: string; receivedAmount: number; orders: number }
 
 function money(value: number) {
-  return `¥${Math.round(value || 0).toLocaleString('zh-CN')}`
+  return `¥${Number(value || 0).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}`
 }
 
 export default function InternalSupplyChainAnalyticsPage() {
@@ -99,26 +100,18 @@ export default function InternalSupplyChainAnalyticsPage() {
             <span className="text-caption text-gray3">确认收货与应付事实口径</span>
           </div>
           <h1 className="text-h1">经营分析</h1>
-          <p className="mt-1 text-caption text-gray2">集团采购概览与单一供应商的履约、商品和台账健康统一查看。</p>
+          
         </div>
         <label className="flex flex-col gap-1">
           <span className="text-micro text-gray3">门店供货主体范围</span>
-          <select value={supplierId} onChange={event => setSupplierId(event.target.value)} className="h-10 min-w-72 rounded-cta border border-border bg-white px-3 text-body">
+          <SearchableSelect searchWhenLong searchLabel="搜索供应商" value={supplierId} onChange={event => setSupplierId(event.target.value)} className="h-10 min-w-72 rounded-cta border border-border bg-white px-3 text-body">
             {suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}
-          </select>
+          </SearchableSelect>
         </label>
       </header>
       {error && <div className="mt-4 rounded-card border border-red/30 bg-red-bg p-3 text-caption text-red-fg">{error}</div>}
 
-      <section className="grid gap-3 py-5 sm:grid-cols-2 xl:grid-cols-5">
-        <Metric label="本月采购" value={stats ? money(stats.purchase.thisMonth) : '—'} />
-        <Metric label="上月采购" value={stats ? money(stats.purchase.lastMonth) : '—'} />
-        <Metric label="采购环比" value={stats?.purchase.growth ? `${stats.purchase.growth}%` : '—'} />
-        <Metric label="待收货" value={String(stats?.pendingReceiptCount ?? '—')} />
-        <Metric label="待处理差异" value={String(stats?.pendingLossCount ?? '—')} />
-      </section>
-
-      <section className="grid gap-4 xl:grid-cols-2">
+      <section className="mt-5 grid gap-4 xl:grid-cols-2">
         <TrendCard title="集团近 30 天采购趋势" subtitle="按周汇总确认收货金额" rows={weeklyTrend.map(row => ({ label: row.week, amount: row.amount }))} max={maxWeekly} />
         <TrendCard title="供应商近 6 个月实收趋势" subtitle="按确认入库的应付金额汇总" rows={monthlyTrend.map(row => ({ label: row.month, amount: row.receivedAmount }))} max={maxMonthly} />
       </section>
@@ -184,10 +177,6 @@ export default function InternalSupplyChainAnalyticsPage() {
       </section>
     </div>
   )
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-card border border-border bg-white p-4"><div className="text-caption text-gray3">{label}</div><div className="mt-1 font-num text-h1">{value}</div></div>
 }
 
 function SmallMetric({ label, value, tone = 'ink' }: { label: string; value: number; tone?: 'ink' | 'red' | 'orange' }) {

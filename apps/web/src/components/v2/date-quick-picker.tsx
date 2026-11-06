@@ -15,7 +15,7 @@
  *   - 默认 max=当月 (不允许选未来)
  */
 'use client'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 
 // ────── 月份快捷 ──────
 export type MonthShortcutKey =
@@ -89,9 +89,8 @@ const DATE_SHORTCUTS: Record<DateShortcutKey, { label: string; resolve: () => st
   monthEnd:     { label: '本月末', resolve: () => dayjs().endOf('month').format('YYYY-MM-DD') },
   lastMonthEnd: { label: '上月末', resolve: () => dayjs().subtract(1, 'month').endOf('month').format('YYYY-MM-DD') },
   weekStart:    { label: '本周一', resolve: () => {
-    // dayjs.startOf('week') 默认周日为首, +1 拿周一
-    const start = dayjs().startOf('week')
-    return (start.day() === 0 ? start.add(1, 'day') : start).format('YYYY-MM-DD')
+    const today = dayjs()
+    return today.subtract((today.day() + 6) % 7, 'day').format('YYYY-MM-DD')
   }},
   yearEnd:      { label: '上年末', resolve: () => dayjs().subtract(1, 'year').endOf('year').format('YYYY-MM-DD') },
 }

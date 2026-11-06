@@ -1,4 +1,5 @@
 'use client'
+import { getToken } from '@/lib/v2-auth'
 import { useState, useRef } from 'react'
 
 interface ImageUploaderProps {
@@ -25,7 +26,7 @@ export default function ImageUploader({ images, onChange, maxCount = 6, disabled
       for (const file of toUpload) {
         const formData = new FormData()
         formData.append('file', file)
-        const token = localStorage.getItem('token') || localStorage.getItem('dj_token')
+        const token = getToken()
         const res = await fetch('/api/upload/image', {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },

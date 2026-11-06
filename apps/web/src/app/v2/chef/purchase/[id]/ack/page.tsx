@@ -148,14 +148,14 @@ export default function ChefAckPage({ params }: { params: { id: string } }) {
         <div className="text-h2 mb-1">{po.supplier?.name || '供应商'} <span className="text-micro text-gray3 font-num ml-1">#{po.no}</span></div>
         <div className="text-caption text-gray3">
           {po.items?.length ?? 0} 项 · 总额 ¥{Number(po.totalAmount).toLocaleString()}
-          {po.shippedAt && ` · 发货 ${new Date(po.shippedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`}
+          {po.shippedAt && ` · 发货 ${new Date(po.shippedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`}
         </div>
       </div>
 
       {alreadySent && (
         <div className="mx-4 mt-3 bg-amber/10 border border-amber/40 rounded-card p-3">
           <div className="text-caption text-amber-fg">
-            ⓘ 之前已发过验收单 ({new Date(po.chefAckAt).toLocaleString('zh-CN')}, {po.chefAckImages?.length || 0} 张)
+            ⓘ 之前已发过验收单 ({new Date(po.chefAckAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}, {po.chefAckImages?.length || 0} 张)
             <br />
             供应商可能还在看, 重新发会覆盖上一份。
           </div>

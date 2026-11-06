@@ -15,7 +15,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import { clientRequestId } from '@/lib/client-id'
 import { Chip } from '@/components/v2'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import FinanceTopNav from '../_topnav'
 import InvoicePaymentResultDialog, { invoicePaymentMethods } from '@/components/v2/InvoicePaymentResultDialog'
 import { notifyUser } from '@/lib/ui-dialogs'
@@ -45,8 +45,8 @@ type Invoice = {
   payments: Payment[]
 }
 
-const fmt = (n: number) => `¥${Math.round(n).toLocaleString()}`
-const fmt2 = (n: number) => `¥${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+const fmt = (n: number) => `¥${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+const fmt2 = fmt
 const daysTill = (iso: string | null) => iso ? Math.round((new Date(iso).getTime() - Date.now()) / 86400000) : null
 
 export default function FinancePCPayablePage() {
@@ -63,6 +63,7 @@ export default function FinancePCPayablePage() {
   const [search, setSearch] = useState('')
 
   function load() {
+    setItems(null)
     setError(null)
     apiFetch<Invoice[]>('/api/invoice-payments/payable')
       .then(setItems)
@@ -138,7 +139,8 @@ export default function FinancePCPayablePage() {
     setSubmitting(false)
   }
 
-  const gap = bankAvailable != null ? bankAvailable - totals.remaining : null
+  const totalsReady = items !== null && !error
+  const gap = totalsReady && bankAvailable != null ? bankAvailable - totals.remaining : null
   const shortfall = gap != null && gap < 0
 
   return (
@@ -162,10 +164,10 @@ export default function FinancePCPayablePage() {
 
         {/* Hero 4 卡 */}
         <div className="grid grid-cols-4 gap-3 mb-4">
-          <Stat label="应付合计" value={fmt(totals.remaining)} unit={`${totals.count} 张`} tone={totals.overdue > 0 ? 'red' : 'default'} />
-          <Stat label="逾期" value={String(totals.overdue)} unit="张" tone={totals.overdue > 0 ? 'red' : 'gray'} />
+          <Stat label="应付合计" value={totalsReady ? fmt(totals.remaining) : '—'} unit={totalsReady ? `${totals.count} 张` : '— 张'} tone={totals.overdue > 0 ? 'red' : 'default'} />
+          <Stat label="逾期" value={totalsReady ? String(totals.overdue) : '—'} unit="张" tone={totals.overdue > 0 ? 'red' : 'gray'} />
           <Stat label="银行账户余额 · 资金台账" value={bankAvailable != null ? fmt(bankAvailable) : '—'} tone="green" />
-          <Stat label={shortfall ? '现金缺口' : '可付盈余'}
+          <Stat label={gap === null ? '可付差额' : shortfall ? '现金缺口' : '可付盈余'}
                 value={gap != null ? `${gap < 0 ? '−' : '+'}${fmt(Math.abs(gap))}` : '—'}
                 tone={shortfall ? 'red' : gap != null ? 'green' : 'gray'} />
         </div>
@@ -186,8 +188,9 @@ export default function FinancePCPayablePage() {
               </tr>
             </thead>
             <tbody>
-              {items === null && <tr><td colSpan={8} className="px-4 py-8 text-center text-caption text-gray3">加载中…</td></tr>}
+              {items === null && !error && <tr><td colSpan={8} className="px-4 py-8 text-center text-caption text-gray3">加载中…</td></tr>}
               {items?.length === 0 && <tr><td colSpan={8} className="px-4 py-8 text-center text-caption text-gray3">✓ 暂无待付发票</td></tr>}
+              {items !== null && !error && items.length > 0 && sorted.length === 0 && <tr><td colSpan={8} className="px-4 py-8 text-center text-caption text-gray3">未找到匹配的发票，请调整搜索条件</td></tr>}
               {sorted.map(inv => {
                 const dueDays = daysTill(inv.earliestDueAt)
                 const overdue = dueDays != null && dueDays < 0

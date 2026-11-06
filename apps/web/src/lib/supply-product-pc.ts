@@ -40,6 +40,7 @@ export type SupplyProduct = {
   name: string
   spec: string | null
   category: string | null
+  location?: string | null
   unit: string
   price: number | string
   status: string
@@ -298,6 +299,7 @@ export function buildCreateBody(
     name: string
     code: string
     category: string
+    location?: string | null
     unit: string
     price: string
     spec: string
@@ -318,6 +320,7 @@ export function buildCreateBody(
   if (form.code.trim()) body.code = form.code.trim()
   if (form.category.trim()) body.category = form.category.trim()
   if (form.spec.trim()) body.spec = form.spec.trim()
+  if (form.location?.trim()) body.location = form.location.trim()
   if (form.supplierId?.trim()) body.supplierId = form.supplierId.trim()
   if (form.imageKey) body.imageKey = form.imageKey
 
@@ -356,6 +359,7 @@ export function buildEditBody(
     name: string
     code: string
     category: string
+    location?: string | null
     unit: string
     spec: string
     shelfDays: string
@@ -367,6 +371,7 @@ export function buildEditBody(
     name: string
     code: string
     category: string
+    location?: string | null
     unit: string
     spec: string
     shelfDays: number
@@ -383,6 +388,7 @@ export function buildEditBody(
   if (form.name.trim() !== original.name) body.name = form.name.trim()
   if (form.code.trim() !== original.code) body.code = form.code.trim()
   if (form.category.trim() !== (original.category || '')) body.category = form.category.trim()
+  if (form.location != null && form.location.trim() !== (original.location || '')) body.location = form.location.trim() || null
   if (form.unit.trim() !== original.unit) body.unit = form.unit.trim()
   if (form.spec.trim() !== (original.spec || '')) body.spec = form.spec.trim() || null
   const shelfDays = form.shelfDays.trim() === '' ? 7 : Number(form.shelfDays)

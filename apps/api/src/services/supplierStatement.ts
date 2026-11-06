@@ -1,3 +1,5 @@
+import { businessDateKey } from '../lib/businessTime'
+
 export type SupplierStatementSourceRow = {
   id: string
   no: string
@@ -42,7 +44,7 @@ function money(value: number) {
 function csvCell(value: unknown) {
   let text = String(value ?? '')
   // Prevent spreadsheet formula execution when supplier/store/document text is opened in Excel.
-  if (/^[=+\-@]/.test(text)) text = `'${text}`
+  if (typeof value === 'string' && /^[=+\-@]/.test(text)) text = `'${text}`
   return `"${text.replace(/"/g, '""')}"`
 }
 
@@ -125,7 +127,7 @@ export function supplierStatementToCsv(statement: ReturnType<typeof buildSupplie
     line.purchaseOrder?.no || '', line.deliveryOrder?.no || '', line.receiptNo,
     line.orderedAmount ?? '', line.shipmentAmount ?? '', line.receivedAmount,
     line.payableAmount ?? '', line.payableAdjustment ?? '',
-    line.schedule?.status || 'MISSING', line.schedule?.dueAt.toISOString().slice(0, 10) || '',
+    line.schedule?.status || 'MISSING', line.schedule ? businessDateKey(line.schedule.dueAt) : '',
     line.differences.length, line.differenceAmount, line.differences.map(item => item.no).join('、'),
   ])
   return `\uFEFF${[header, ...rows].map(row => row.map(csvCell).join(',')).join('\r\n')}`

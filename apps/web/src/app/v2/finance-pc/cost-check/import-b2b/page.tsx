@@ -17,7 +17,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../../_topnav'
 import { notifyUser } from '@/lib/ui-dialogs'

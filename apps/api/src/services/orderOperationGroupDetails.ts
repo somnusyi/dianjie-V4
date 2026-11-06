@@ -35,6 +35,8 @@ export type OperationGroupDetailLine = {
   id: string
   productId: string
   name: string
+  category?: string
+  location?: string | null
   spec: string | null
   unit: string
   quantity: string
@@ -151,6 +153,8 @@ function sourceLines(order: any, costs?: Map<string, DeliveryOutboundCostBreakdo
         id: item.id,
         productId: item.productId,
         name: String(product.name || '—'),
+        category: String(product.category || '其他'),
+        location: product.location == null ? null : String(product.location),
         spec: product.spec == null ? null : String(product.spec),
         unit: String(product.unit || '—'),
         quantity: decimalString(quantity),
@@ -180,6 +184,8 @@ function sourceLines(order: any, costs?: Map<string, DeliveryOutboundCostBreakdo
         id: item.id,
         productId: item.productId,
         name: String(product.name || '—'),
+        category: String(product.category || '其他'),
+        location: product.location == null ? null : String(product.location),
         spec: product.spec == null ? null : String(product.spec),
         unit: String(product.unit || '—'),
         quantity: decimalString(quantity),
@@ -200,6 +206,8 @@ function orderedLines(order: any): Array<any> {
         id: item.id,
         productId: item.productId,
         name: String(product.name || '—'),
+        category: String(product.category || '其他'),
+        location: product.location == null ? null : String(product.location),
         spec: product.spec == null ? null : String(product.spec),
         unit: String(product.unit || '—'),
         quantity: decimalString(item.quantity),
@@ -220,6 +228,8 @@ function deliverySnapshotLines(delivery: any, costs?: Map<string, DeliveryOutbou
         id: item.id,
         productId: item.productId,
         name: String(product.name || '—'),
+        category: String(product.category || '其他'),
+        location: product.location == null ? null : String(product.location),
         spec: product.spec == null ? null : String(product.spec),
         unit: String(product.unit || '—'),
         quantity: decimalString(item.shippedQty),
@@ -304,6 +314,8 @@ export function mergeOperationGroupItems(orders: Array<{ no: string; items: Arra
   const merged = new Map<string, {
     productId: string
     name: string
+    category: string
+    location: string | null
     spec: string | null
     unit: string
     quantity: Prisma.Decimal
@@ -329,7 +341,7 @@ export function mergeOperationGroupItems(orders: Array<{ no: string; items: Arra
       // from being silently merged just because the current SKU was renamed.
       const key = `${productId}|${name}|${spec || ''}|${unit}`
       const current = merged.get(key) || {
-        productId, name, spec, unit, quantity: new Prisma.Decimal(0), amount: new Prisma.Decimal(0),
+        productId, name, category: String(item.category || '其他'), location: item.location == null ? null : String(item.location), spec, unit, quantity: new Prisma.Decimal(0), amount: new Prisma.Decimal(0),
         fallbackUnitPrice: decimalValue(item.unitPrice), costAmount: new Prisma.Decimal(0),
         hasCompleteCost: true, sourceOrderNos: [],
       }
@@ -349,6 +361,8 @@ export function mergeOperationGroupItems(orders: Array<{ no: string; items: Arra
     id: `merged:${index}:${item.productId}`,
     productId: item.productId,
     name: item.name,
+    category: item.category,
+    location: item.location,
     spec: item.spec,
     unit: item.unit,
     quantity: item.quantity.toFixed(2),

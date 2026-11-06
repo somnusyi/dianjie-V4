@@ -148,7 +148,7 @@ export default function EngineerHomePage() {
                       <div className="text-micro text-gray3 mt-2">未初始化任务清单 →</div>
                     )}
                     {exp && (
-                      <div className="text-micro text-gray3 mt-1">预计开业 {exp.toLocaleDateString('zh-CN')}</div>
+                      <div className="text-micro text-gray3 mt-1">预计开业 {exp.toLocaleDateString('zh-CN', {timeZone:'Asia/Shanghai'})}</div>
                     )}
                   </a>
                 </li>

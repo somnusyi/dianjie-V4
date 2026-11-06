@@ -27,7 +27,7 @@ function FeedbackNewForm() {
         role: u?.role || '',
         storeName: u?.store?.name || '',
         userAgent: navigator.userAgent,
-        clientTime: new Date().toLocaleString('zh-CN', { hour12: false }),
+        clientTime: new Date().toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }),
       }
       const res = await apiFetch<{ id: string }>('/api/feedback', {
         method: 'POST',

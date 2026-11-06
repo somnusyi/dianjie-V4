@@ -12,8 +12,9 @@
  *   - CSV 导出 (浏览器下载)
  */
 'use client'
-import { useEffect, useMemo, useState } from 'react'
-import dayjs from 'dayjs'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import dayjs from '@/lib/business-dayjs'
+import { businessMonthKey } from '@/lib/business-date'
 import { Chip, MonthPicker } from '@/components/v2'
 import { exportXlsx } from '@/lib/exportXlsx'
 import { apiFetch } from '@/lib/v2-auth'
@@ -30,11 +31,7 @@ type SupplierRow = {
 
 const fmtMoney = (n: number) => {
   if (!Number.isFinite(n)) return '¥0'
-  return `¥${Math.round(n).toLocaleString()}`
-}
-const fmtWan = (n: number) => {
-  if (!Number.isFinite(n) || Math.abs(n) < 10000) return fmtMoney(n)
-  return `¥${(n / 10000).toFixed(2)}万`
+  return `¥${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 function downloadCsv(filename: string, rows: any[][]) {
@@ -53,29 +50,37 @@ function downloadCsv(filename: string, rows: any[][]) {
 export default function FinancePCReconcilePage() {
   const [view, setView] = useState<'store' | 'supplier'>('store')
   const [month, setMonth] = useState(() => {
-    if (typeof window === 'undefined') return dayjs().format('YYYY-MM')
+    if (typeof window === 'undefined') return businessMonthKey()
     const sp = new URLSearchParams(window.location.search)
-    return sp.get('month') || dayjs().format('YYYY-MM')
+    return sp.get('month') || businessMonthKey()
   })
-  const [storeData, setStoreData] = useState<StoreRow[] | null>(null)
-  const [supplierData, setSupplierData] = useState<SupplierRow[] | null>(null)
+  const [storeResult, setStoreResult] = useState<{ month: string; rows: StoreRow[] } | null>(null)
+  const [supplierResult, setSupplierResult] = useState<{ month: string; rows: SupplierRow[] } | null>(null)
+  const storeData = storeResult?.month === month ? storeResult.rows : null
+  const supplierData = supplierResult?.month === month ? supplierResult.rows : null
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const [exportError, setExportError] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const exportBusy = useRef(false)
 
-  function load() {
+  useEffect(() => {
+    let active = true
     setLoading(true); setError(null)
+    setExportError(null)
     const url = `/api/finance/reconcile?month=${month}&view=${view}`
     apiFetch<any>(url).then(d => {
-      if (view === 'store') setStoreData(d || [])
-      else setSupplierData(d || [])
-    }).catch(e => setError(e.message || '加载失败'))
-      .finally(() => setLoading(false))
-  }
-  useEffect(() => { load() }, [view, month])
+      if (!active) return
+      if (view === 'store') setStoreResult({ month, rows: d || [] })
+      else setSupplierResult({ month, rows: d || [] })
+    }).catch(e => { if (active) setError(e.message || '加载失败') })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [view, month])
 
   const shift = (delta: number) => setMonth(dayjs(month + '-01').add(delta, 'month').format('YYYY-MM'))
-  const isThisMonth = month === dayjs().format('YYYY-MM')
+  const isThisMonth = month === businessMonthKey()
 
   const storeTotals = useMemo(() => {
     if (!storeData) return { revenue: 0, foodCost: 0, loss: 0, net: 0 }
@@ -112,6 +117,7 @@ export default function FinancePCReconcilePage() {
   }, [supplierData, search])
 
   function exportCsv() {
+    if (loading || error || exporting) return
     if (view === 'store' && storeData) {
       downloadCsv(`门店对账-${month}.csv`, [
         ['门店编号', '门店名', '本月营收', '食材成本', '报损', '净利'],
@@ -127,44 +133,64 @@ export default function FinancePCReconcilePage() {
     }
   }
   async function exportXlsxBoth() {
-    const sheets: any[] = []
-    if (storeData && storeData.length > 0) {
-      sheets.push({
-        name: `门店对账 ${month}`,
-        rows: [
-          [`门店月度对账 · ${month}`, '', '', '', '', ''],
-          [],
-          ['门店编号', '门店名', '本月营收', '食材成本', '报损', '净利'],
-          ...storeData.map(r => [r.no, r.name, Number(r.revenue.toFixed(2)), Number(r.foodCost.toFixed(2)), Number(r.loss.toFixed(2)), Number(r.net.toFixed(2))]),
-          ['合计', '', Number(storeTotals.revenue.toFixed(2)), Number(storeTotals.foodCost.toFixed(2)), Number(storeTotals.loss.toFixed(2)), Number(storeTotals.net.toFixed(2))],
-        ],
-        cols: [{ wch: 14 }, { wch: 24 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 14 }],
-        merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }],
-        moneyCols: ['C', 'D', 'E', 'F'],
-        headerRowIdx: 2,
-      })
+    if (exportBusy.current || loading || error || !currentRows?.length) return
+    exportBusy.current = true
+    setExporting(true)
+    setExportError(null)
+    const exportMonth = month
+    try {
+      const [storeData, supplierData] = await Promise.all([
+        apiFetch<StoreRow[]>(`/api/finance/reconcile?month=${exportMonth}&view=store`),
+        apiFetch<SupplierRow[]>(`/api/finance/reconcile?month=${exportMonth}&view=supplier`),
+      ])
+      const storeTotals = (storeData || []).reduce((a, r) => ({ revenue: a.revenue + r.revenue, foodCost: a.foodCost + r.foodCost, loss: a.loss + r.loss, net: a.net + r.net }), { revenue: 0, foodCost: 0, loss: 0, net: 0 })
+      const supplierTotals = (supplierData || []).reduce((a, r) => ({ delivered: a.delivered + r.delivered, paid: a.paid + r.paid, unpaid: a.unpaid + r.unpaid, loss: a.loss + r.loss }), { delivered: 0, paid: 0, unpaid: 0, loss: 0 })
+      const month = exportMonth
+      const sheets: any[] = []
+      if (storeData && storeData.length > 0) {
+        sheets.push({
+          name: `门店对账 ${month}`,
+          rows: [
+            [`门店月度对账 · ${month}`, '', '', '', '', ''],
+            [],
+            ['门店编号', '门店名', '本月营收', '食材成本', '报损', '净利'],
+            ...storeData.map(r => [r.no, r.name, Number(r.revenue.toFixed(2)), Number(r.foodCost.toFixed(2)), Number(r.loss.toFixed(2)), Number(r.net.toFixed(2))]),
+            ['合计', '', Number(storeTotals.revenue.toFixed(2)), Number(storeTotals.foodCost.toFixed(2)), Number(storeTotals.loss.toFixed(2)), Number(storeTotals.net.toFixed(2))],
+          ],
+          cols: [{ wch: 14 }, { wch: 24 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 14 }],
+          merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }],
+          moneyCols: ['C', 'D', 'E', 'F'],
+          headerRowIdx: 2,
+        })
+      }
+      if (supplierData && supplierData.length > 0) {
+        sheets.push({
+          name: `供应商对账 ${month}`,
+          rows: [
+            [`供应商月度对账 · ${month}`, '', '', '', ''],
+            [],
+            ['供应商', '本月交付', '已付', '未付', '报损'],
+            ...supplierData.map(r => [r.name, Number(r.delivered.toFixed(2)), Number(r.paid.toFixed(2)), Number(r.unpaid.toFixed(2)), Number(r.loss.toFixed(2))]),
+            ['合计', Number(supplierTotals.delivered.toFixed(2)), Number(supplierTotals.paid.toFixed(2)), Number(supplierTotals.unpaid.toFixed(2)), Number(supplierTotals.loss.toFixed(2))],
+          ],
+          cols: [{ wch: 24 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 }],
+          merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 4 } }],
+          moneyCols: ['B', 'C', 'D', 'E'],
+          headerRowIdx: 2,
+        })
+      }
+      if (sheets.length === 0) return
+      await exportXlsx(`月度对账-${month}.xlsx`, sheets)
+    } catch (reason: any) {
+      setExportError(reason.message || '月度对账导出失败，请重试')
+    } finally {
+      exportBusy.current = false
+      setExporting(false)
     }
-    if (supplierData && supplierData.length > 0) {
-      sheets.push({
-        name: `供应商对账 ${month}`,
-        rows: [
-          [`供应商月度对账 · ${month}`, '', '', '', ''],
-          [],
-          ['供应商', '本月交付', '已付', '未付', '报损'],
-          ...supplierData.map(r => [r.name, Number(r.delivered.toFixed(2)), Number(r.paid.toFixed(2)), Number(r.unpaid.toFixed(2)), Number(r.loss.toFixed(2))]),
-          ['合计', Number(supplierTotals.delivered.toFixed(2)), Number(supplierTotals.paid.toFixed(2)), Number(supplierTotals.unpaid.toFixed(2)), Number(supplierTotals.loss.toFixed(2))],
-        ],
-        cols: [{ wch: 24 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 12 }],
-        merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 4 } }],
-        moneyCols: ['B', 'C', 'D', 'E'],
-        headerRowIdx: 2,
-      })
-    }
-    if (sheets.length === 0) return
-    await exportXlsx(`月度对账-${month}.xlsx`, sheets)
   }
 
   const currentRows = view === 'store' ? storeData : supplierData
+  const dataReady = !loading && !error && currentRows !== null
 
   return (
     <div className="min-h-screen bg-bg">
@@ -176,17 +202,19 @@ export default function FinancePCReconcilePage() {
             <p className="text-caption text-gray3">门店净利 / 供应商收付 / 月底关账依据</p>
           </div>
           <div className="flex items-center gap-2">
+            <fieldset disabled={exporting} className="contents">
             <button onClick={() => shift(-1)} className="px-3 py-2 bg-white border border-border rounded-cta text-button text-gray2">← 上月</button>
             <MonthPicker value={month} onChange={setMonth} />
             <button onClick={() => shift(1)} disabled={isThisMonth}
                     className="px-3 py-2 bg-white border border-border rounded-cta text-button text-gray2 disabled:opacity-40">下月 →</button>
             {!isThisMonth && (
-              <button onClick={() => setMonth(dayjs().format('YYYY-MM'))}
+              <button onClick={() => setMonth(businessMonthKey())}
                       className="px-3 py-2 bg-ink text-white rounded-cta text-button">本月</button>
             )}
-            <button onClick={exportXlsxBoth} disabled={!currentRows || currentRows.length === 0}
+            </fieldset>
+            <button onClick={exportXlsxBoth} disabled={loading || !!error || exporting || !currentRows || currentRows.length === 0}
                     className="px-3 py-2 bg-[#1F7A4B] text-white rounded-cta text-button disabled:opacity-40">📊 Excel</button>
-            <button onClick={exportCsv} disabled={!currentRows || currentRows.length === 0}
+            <button onClick={exportCsv} disabled={loading || !!error || exporting || !currentRows || currentRows.length === 0}
                     className="px-3 py-2 bg-white border border-border text-gray2 rounded-cta text-button disabled:opacity-40">⬇ CSV</button>
           </div>
         </div>
@@ -194,9 +222,9 @@ export default function FinancePCReconcilePage() {
         {/* 视角切换 + 搜索 */}
         <div className="flex items-center gap-3 mb-3">
           <div className="flex bg-bg rounded-cta p-0.5">
-            <button onClick={() => setView('store')}
+            <button onClick={() => setView('store')} disabled={exporting}
                     className={`px-4 py-1.5 rounded-cta text-button ${view === 'store' ? 'bg-ink text-white' : 'text-gray2'}`}>按门店</button>
-            <button onClick={() => setView('supplier')}
+            <button onClick={() => setView('supplier')} disabled={exporting}
                     className={`px-4 py-1.5 rounded-cta text-button ${view === 'supplier' ? 'bg-ink text-white' : 'text-gray2'}`}>按供应商</button>
           </div>
           <input
@@ -208,22 +236,23 @@ export default function FinancePCReconcilePage() {
         </div>
 
         {error && <div className="bg-red-bg text-red-fg rounded-card p-3 text-caption mb-4">{error}</div>}
+        {exportError && <div className="bg-red-bg text-red-fg rounded-card p-3 text-caption mb-4">{exportError}</div>}
 
         {/* Hero 4 卡 */}
         {view === 'store' && (
           <div className="grid grid-cols-4 gap-3 mb-4">
-            <Stat label="本月营收" value={fmtWan(storeTotals.revenue)} tone="default" />
-            <Stat label="食材成本" value={fmtWan(storeTotals.foodCost)} tone="amber" />
-            <Stat label="报损" value={fmtWan(storeTotals.loss)} tone={storeTotals.loss > 0 ? 'red' : 'gray'} />
-            <Stat label="净利" value={fmtWan(storeTotals.net)} tone={storeTotals.net < 0 ? 'red' : 'green'} />
+            <Stat label="本月营收" value={dataReady ? fmtMoney(storeTotals.revenue) : '—'} tone="default" />
+            <Stat label="食材成本" value={dataReady ? fmtMoney(storeTotals.foodCost) : '—'} tone="amber" />
+            <Stat label="报损" value={dataReady ? fmtMoney(storeTotals.loss) : '—'} tone={storeTotals.loss > 0 ? 'red' : 'gray'} />
+            <Stat label="净利" value={dataReady ? fmtMoney(storeTotals.net) : '—'} tone={storeTotals.net < 0 ? 'red' : 'green'} />
           </div>
         )}
         {view === 'supplier' && (
           <div className="grid grid-cols-4 gap-3 mb-4">
-            <Stat label="本月交付" value={fmtWan(supplierTotals.delivered)} tone="default" />
-            <Stat label="已付" value={fmtWan(supplierTotals.paid)} tone="green" />
-            <Stat label="未付" value={fmtWan(supplierTotals.unpaid)} tone={supplierTotals.unpaid > 0 ? 'amber' : 'gray'} />
-            <Stat label="报损" value={fmtWan(supplierTotals.loss)} tone={supplierTotals.loss > 0 ? 'red' : 'gray'} />
+            <Stat label="本月交付" value={dataReady ? fmtMoney(supplierTotals.delivered) : '—'} tone="default" />
+            <Stat label="已付" value={dataReady ? fmtMoney(supplierTotals.paid) : '—'} tone="green" />
+            <Stat label="未付" value={dataReady ? fmtMoney(supplierTotals.unpaid) : '—'} tone={supplierTotals.unpaid > 0 ? 'amber' : 'gray'} />
+            <Stat label="报损" value={dataReady ? fmtMoney(supplierTotals.loss) : '—'} tone={supplierTotals.loss > 0 ? 'red' : 'gray'} />
           </div>
         )}
 
@@ -231,7 +260,7 @@ export default function FinancePCReconcilePage() {
         <div className="bg-white rounded-card border border-border overflow-hidden">
           {loading && <div className="px-4 py-8 text-center text-caption text-gray3">加载中…</div>}
 
-          {view === 'store' && storeData && !loading && (
+          {view === 'store' && storeData && dataReady && (
             <table className="w-full">
               <thead className="bg-bg/40">
                 <tr className="text-micro text-gray3 text-left">
@@ -273,7 +302,7 @@ export default function FinancePCReconcilePage() {
             </table>
           )}
 
-          {view === 'supplier' && supplierData && !loading && (
+          {view === 'supplier' && supplierData && dataReady && (
             <table className="w-full">
               <thead className="bg-bg/40">
                 <tr className="text-micro text-gray3 text-left">

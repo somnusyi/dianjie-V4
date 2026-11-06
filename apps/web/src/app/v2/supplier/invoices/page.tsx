@@ -10,6 +10,8 @@
  * 财务审核通过 → 关联账期解锁付款 → 财务可发起转账
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
+import { loadInvoices } from '@/lib/invoice-list'
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch, getToken } from '@/lib/v2-auth'
 import { Chip } from '@/components/v2'
@@ -36,19 +38,17 @@ const STATUS_TONE: Record<string, 'orange'|'green'|'red'> = {
 }
 
 function fmt(iso: string) {
-  const d = new Date(iso)
-  return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
+  return businessDayjs(iso).format('MM/DD')
 }
 
 function localToday() {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  return businessDayjs().format('YYYY-MM-DD')
 }
 
 function isPaymentOverdue(schedule?: Receipt['paymentSchedule']) {
   if (!schedule) return false
   const activeStatuses = ['PENDING', 'PENDING_APPROVAL', 'APPROVED', 'NOTIFIED', 'PROCESSING', 'FAILED']
-  return schedule.status === 'OVERDUE' || (activeStatuses.includes(schedule.status) && schedule.dueAt.slice(0, 10) < localToday())
+  return schedule.status === 'OVERDUE' || (activeStatuses.includes(schedule.status) && businessDayjs(schedule.dueAt).format('YYYY-MM-DD') < localToday())
 }
 
 export default function SupplierInvoicesPage() {
@@ -66,14 +66,15 @@ export default function SupplierInvoicesPage() {
 
   function load() {
     setError(null)
+    setHistory(null)
     Promise.all([
       apiFetch<Receipt[]>('/api/invoices/pending-payable'),
-      apiFetch<Invoice[]>('/api/invoices'),
+      loadInvoices<Invoice>(),
     ]).then(([p, h]) => {
       setPending(p || []); setHistory(h || [])
     }).catch(e => {
       setError(e?.message || '发票数据加载失败')
-      setPending([]); setHistory([])
+      setPending(null); setHistory(null)
     })
   }
   useEffect(() => { load() }, [])
@@ -102,6 +103,8 @@ export default function SupplierInvoicesPage() {
       const fd = new FormData()
       fd.append('file', file)
       fd.append('invoiceNo', form.invoiceNo)
+      const rejected = history?.find(item => item.invoiceNo === form.invoiceNo.trim() && item.status === 'REJECTED')
+      if (rejected) fd.append('expectedUploadedAt', rejected.uploadedAt)
       if (form.invoiceCode) fd.append('invoiceCode', form.invoiceCode)
       fd.append('amount', form.amount)
       fd.append('issueDate', form.issueDate)
@@ -143,16 +146,16 @@ export default function SupplierInvoicesPage() {
       {/* 统计 */}
       <div className="mx-4 mt-3 grid grid-cols-3 gap-2">
         <Stat label="待开票订单" value={pending?.length ?? '—'} amount={pending ? `¥${pending.reduce((s, x) => s + Number(x.totalAmount), 0).toLocaleString()}` : ''} tone="orange" />
-        <Stat label="待审核" value={statusCount.PENDING ?? '—'} tone="orange" />
-        <Stat label="已通过" value={statusCount.VERIFIED ?? '—'} tone="green" />
+        <Stat label="待审核" value={history ? (statusCount.PENDING ?? 0) : '—'} tone="orange" />
+        <Stat label="已通过" value={history ? (statusCount.VERIFIED ?? 0) : '—'} tone="green" />
       </div>
 
-      {error && <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}
+      {error && !showForm && <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}
 
       {/* 待开票订单 */}
       <Section title="待开票订单" right={pending ? `${pending.length} 单` : ''}>
-        {pending === null && <p className="text-caption text-gray3 text-center py-6">加载中…</p>}
-        {pending?.length === 0 && (
+        {pending === null && !error && <p className="text-caption text-gray3 text-center py-6">加载中…</p>}
+        {!error && pending?.length === 0 && (
           <div className="bg-white rounded-card border border-border p-6 text-center">
             <p className="text-caption text-gray3">暂无待开票订单</p>
             <p className="text-micro text-gray4 mt-1">订单确认入库后会出现在这里, 可批量勾选合并开票</p>
@@ -190,7 +193,7 @@ export default function SupplierInvoicesPage() {
 
       {/* 历史发票 */}
       <Section title="发票历史" right={history ? `${history.length} 张` : ''}>
-        {history?.length === 0 && (
+        {!error && history?.length === 0 && (
           <div className="bg-white rounded-card border border-border p-6 text-center">
             <p className="text-caption text-gray3">暂无上传的发票</p>
             <a href="/v2/supplier/billing" className="mt-3 inline-block text-button text-amber-fg">先确认待开票账期</a>
@@ -243,6 +246,7 @@ export default function SupplierInvoicesPage() {
             </div>
 
             <div className="px-4 pb-3 space-y-3">
+              {error && <p role="alert" className="bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</p>}
               <Field label="发票号码 *">
                 <input value={form.invoiceNo} onChange={e => setForm(s => ({...s, invoiceNo: e.target.value}))}
                        placeholder="12 位" className={IN + ' font-num'} />
@@ -265,7 +269,7 @@ export default function SupplierInvoicesPage() {
                 </select>
               </Field>
               <Field label="开票日期 *">
-                <input type="date" value={form.issueDate} max={new Date().toISOString().slice(0, 10)}
+                <input type="date" value={form.issueDate} max={businessDayjs().format('YYYY-MM-DD')}
                        onChange={e => setForm(s => ({...s, issueDate: e.target.value}))} className={IN} />
               </Field>
               <Field label="发票图片 / PDF *">

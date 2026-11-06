@@ -9,6 +9,7 @@ import { isSupplierRole } from '../lib/auth-scope'
 import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
 import { resignOssUrl } from './upload'
 import { createSupplierInvoice, reviewInvoice } from '../services/invoiceIntegrity'
+import { readCompleteReceiptList } from '../lib/complete-receipt-list'
 
 const FINANCE_ROLES = new Set(['FINANCE', 'ADMIN', 'SUPER_ADMIN'])
 const INVOICE_READ_ROLES = FINANCE_ROLES
@@ -48,6 +49,7 @@ const businessDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式应为
 }, '日期无效').refine(value => !dayjs(value).isAfter(dayjs(), 'day'), '开票日期不得晚于今天')
 
 export const invoiceUploadSchema = z.object({
+  expectedUploadedAt: z.string().datetime().optional(),
   invoiceNo: z.string().trim().min(1, '请填写发票号码').max(50),
   invoiceCode: z.string().trim().max(50).optional(),
   amount: moneyValue,
@@ -73,8 +75,9 @@ export const invoiceUploadSchema = z.object({
   }
 })
 
-const listSchema = z.object({ status: z.enum(INVOICE_STATUSES).optional() }).strict()
+const listSchema = z.object({ status: z.enum(INVOICE_STATUSES).optional(), cursor: z.string().min(1).max(160).optional() }).strict()
 const reviewSchema = z.object({
+  expectedUploadedAt: z.string().datetime().optional(),
   action: z.enum(['APPROVE', 'REJECT']),
   note: z.string().trim().max(1000).optional().nullable(),
 }).strict()
@@ -124,6 +127,12 @@ export const invoiceRoutes: FastifyPluginAsync = async app => {
     const where: Prisma.InvoiceWhereInput = { tenantId }
     if (parsed.data.status) where.status = parsed.data.status
     if (isSupplierRole(role)) where.supplierId = supplierId
+    const cursor = parsed.data.cursor
+    if (cursor && !await prisma.invoice.findFirst({ where: { ...where, id: cursor }, select: { id: true } })) {
+      return reply.status(409).send({ error: '发票列表已变化，请刷新重试' })
+    }
+    const paging = { orderBy: [{ uploadedAt: 'desc' as const }, { id: 'desc' as const }], take: 50,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) }
     if (hasInternalSupplyChainCapability(role, 'finance.read')) {
       const invoices = await prisma.invoice.findMany({
         where,
@@ -132,7 +141,7 @@ export const invoiceRoutes: FastifyPluginAsync = async app => {
           supplier: { select: { id: true, name: true } },
           receipts: { where: { tenantId }, select: { id: true, tenantId: true } },
         },
-        orderBy: { uploadedAt: 'desc' }, take: 50,
+        ...paging,
       })
       return invoices.map(invoice => ({
         id: invoice.id, invoiceNo: invoice.invoiceNo, amount: invoice.amount,
@@ -158,7 +167,7 @@ export const invoiceRoutes: FastifyPluginAsync = async app => {
           orderBy: { createdAt: 'desc' },
         },
       },
-      orderBy: { uploadedAt: 'desc' }, take: 50,
+      ...paging,
     })
     return invoices.map(withSignedFile)
   })
@@ -166,47 +175,52 @@ export const invoiceRoutes: FastifyPluginAsync = async app => {
   app.get('/pending-from-finance', auth, async (req: any, reply: any) => {
     const { tenantId, role } = req.user
     if (!FINANCE_ROLES.has(role)) return reply.status(403).send({ error: '仅财务/老板可访问' })
-    const paid = await prisma.receipt.findMany({
-      where: {
-        tenantId, invoiceId: null, status: { in: ['CONFIRMED', 'ACCOUNTED'] },
-        paymentSchedule: { status: 'PAID' }, supplier: { NOT: { sourceType: 'HEADQ_WAREHOUSE' } },
-      },
-      include: {
-        supplier: { select: { id: true, name: true, contactName: true, contactPhone: true } },
-        store: { select: { id: true, name: true, managerName: true, phone: true } },
-        paymentSchedule: { select: { paidAt: true, amount: true, status: true } },
-      },
-      orderBy: { paymentSchedule: { paidAt: 'asc' } }, take: 200,
-    })
+    const [paid, pending] = await prisma.$transaction(async tx => {
+      const paid = await readCompleteReceiptList(cursor => tx.receipt.findMany({
+        where: {
+          tenantId, invoiceId: null, status: { in: ['CONFIRMED', 'ACCOUNTED'] },
+          paymentSchedule: { status: 'PAID' }, supplier: { OR: [{ sourceType: null }, { sourceType: { not: 'HEADQ_WAREHOUSE' } }] },
+        },
+        include: {
+          supplier: { select: { id: true, name: true, contactName: true, contactPhone: true } },
+          store: { select: { id: true, name: true, managerName: true, phone: true } },
+          paymentSchedule: { select: { paidAt: true, amount: true, status: true } },
+        },
+        orderBy: [{ paymentSchedule: { paidAt: 'asc' } }, { id: 'asc' }], take: 200,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      }), 200)
+      const pending = await readCompleteReceiptList(cursor => tx.receipt.findMany({
+        where: {
+          tenantId, invoiceId: null, status: { in: ['CONFIRMED', 'ACCOUNTED'] },
+          supplier: { OR: [{ sourceType: null }, { sourceType: { not: 'HEADQ_WAREHOUSE' } }] },
+          OR: [
+            { paymentSchedule: { status: { in: ['PENDING', 'APPROVED', 'PENDING_APPROVAL', 'OVERDUE'] } } },
+            { paymentSchedule: null },
+          ],
+        },
+        include: {
+          supplier: { select: { id: true, name: true, contactName: true, contactPhone: true } },
+          store: { select: { id: true, name: true } },
+          paymentSchedule: { select: { dueAt: true, amount: true, status: true } },
+        },
+        orderBy: [{ deliveryDate: 'asc' }, { id: 'asc' }], take: 200,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      }), 200)
+      return [paid, pending] as const
+    }, { isolationLevel: 'RepeatableRead', timeout: 30000 })
     const now = Date.now()
     const enriched = paid.map(receipt => ({
       ...receipt,
       daysSincePaid: receipt.paymentSchedule?.paidAt
         ? Math.floor((now - receipt.paymentSchedule.paidAt.getTime()) / 86_400_000) : null,
     }))
-    const pending = await prisma.receipt.findMany({
-      where: {
-        tenantId, invoiceId: null, status: { in: ['CONFIRMED', 'ACCOUNTED'] },
-        supplier: { NOT: { sourceType: 'HEADQ_WAREHOUSE' } },
-        OR: [
-          { paymentSchedule: { status: { in: ['PENDING', 'APPROVED', 'PENDING_APPROVAL', 'OVERDUE'] } } },
-          { paymentSchedule: null },
-        ],
-      },
-      include: {
-        supplier: { select: { id: true, name: true, contactName: true, contactPhone: true } },
-        store: { select: { id: true, name: true } },
-        paymentSchedule: { select: { dueAt: true, amount: true, status: true } },
-      },
-      orderBy: { deliveryDate: 'asc' }, take: 200,
-    })
     return {
       paid: enriched, pending,
       summary: {
         paidCount: enriched.length,
-        paidAmount: enriched.reduce((sum, receipt) => sum + Number(receipt.totalAmount), 0),
+        paidAmount: enriched.reduce((sum, receipt) => sum.add(receipt.totalAmount), new Prisma.Decimal(0)).toNumber(),
         pendingCount: pending.length,
-        pendingAmount: pending.reduce((sum, receipt) => sum + Number(receipt.totalAmount), 0),
+        pendingAmount: pending.reduce((sum, receipt) => sum.add(receipt.totalAmount), new Prisma.Decimal(0)).toNumber(),
         oldestPaidDays: enriched[0]?.daysSincePaid || 0,
       },
     }
@@ -216,7 +230,7 @@ export const invoiceRoutes: FastifyPluginAsync = async app => {
     const { tenantId, role, supplierId } = req.user
     if (!isSupplierRole(role)) return reply.status(403).send({ error: '仅供应商可见' })
     if (!supplierId) return reply.status(403).send({ error: '供应商账号未绑定供应商' })
-    return prisma.receipt.findMany({
+    return prisma.$transaction(tx => readCompleteReceiptList(cursor => tx.receipt.findMany({
       where: {
         tenantId, supplierId, invoiceId: null, status: { in: ['CONFIRMED', 'ACCOUNTED'] },
       },
@@ -224,8 +238,9 @@ export const invoiceRoutes: FastifyPluginAsync = async app => {
         store: { select: { name: true } },
         paymentSchedule: { select: { id: true, amount: true, dueAt: true, status: true } },
       },
-      orderBy: { deliveryDate: 'desc' }, take: 100,
-    })
+      orderBy: [{ deliveryDate: 'desc' }, { id: 'desc' }], take: 100,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    }), 100), { isolationLevel: 'RepeatableRead', timeout: 30000 })
   })
 
   app.get('/:id', auth, async (req: any, reply: any) => {
@@ -354,7 +369,7 @@ export const invoiceRoutes: FastifyPluginAsync = async app => {
     try {
       const result = await createSupplierInvoice({
         tenantId, supplierId, uploadedById: userId, role,
-        invoiceNo: values.invoiceNo,
+        invoiceNo: values.invoiceNo, expectedUploadedAt: values.expectedUploadedAt,
         invoiceCode: normalizeText(values.invoiceCode),
         amount: new Prisma.Decimal(values.amount),
         amountWithoutTax: values.amountWithoutTax === undefined ? null : new Prisma.Decimal(values.amountWithoutTax),
@@ -390,7 +405,7 @@ export const invoiceRoutes: FastifyPluginAsync = async app => {
     try {
       return await reviewInvoice({
         tenantId, invoiceId: req.params.id, userId, role,
-        action: parsed.data.action, note,
+        action: parsed.data.action, note, expectedUploadedAt: parsed.data.expectedUploadedAt,
       })
     } catch (error: any) {
       if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })

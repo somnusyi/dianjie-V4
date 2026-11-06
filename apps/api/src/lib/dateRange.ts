@@ -13,6 +13,7 @@
  */
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
+import { BUSINESS_TZ, businessDateKey } from './businessTime'
 dayjs.extend(utc)
 
 /**
@@ -33,7 +34,7 @@ export function monthRangeForDateCol(month: string): { start: Date; end: Date } 
  * @param month YYYY-MM 字串, 不传则当月
  */
 export function monthRangeForTimestampCol(month?: string): { start: Date; end: Date } {
-  const m = month ? dayjs(month + '-01') : dayjs()
+  const m = dayjs.tz((month || businessDateKey().slice(0, 7)) + '-01', BUSINESS_TZ)
   return {
     start: m.startOf('month').toDate(),
     end: m.endOf('month').toDate(),

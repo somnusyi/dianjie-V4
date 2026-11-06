@@ -10,6 +10,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import dayjs from 'dayjs'
+import { businessDateKey } from '../lib/businessTime'
 import { PNL_PREFIXES, BS_PREFIXES } from '../services/voucher/coa-config'
 import { monthRangeForDateCol, monthRangeForTimestampCol, endOfDayUtcForDateCol } from '../lib/dateRange'
 
@@ -39,16 +40,16 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(403).send({ error: '无权查看' })
     }
     const { month, storeId } = req.query as any
-    const ym = month || dayjs().format('YYYY-MM')
+    const ym = month || businessDateKey().slice(0, 7)
     // DATE 列 (RevenueRecord.date / Receipt.deliveryDate / Voucher.date): 用 UTC 边界防 timezone 跨日
     const { start: monthStart, end: monthEnd } = monthRangeForDateCol(ym)
     // timestamp 列 (LossClaim.createdAt 等): 用 Asia/Shanghai 边界保留本地语义
     const { start: monthStartTs, end: monthEndTs } = monthRangeForTimestampCol(ym)
     // 同比/环比 衍生 (用 DATE 边界 + 偏移, 因主要给 DATE 列查询用)
-    const lyStart = dayjs(monthStart).subtract(1, 'year').toDate()
-    const lyEnd   = dayjs(monthEnd).subtract(1, 'year').toDate()
-    const lmStart = dayjs(monthStart).subtract(1, 'month').toDate()
-    const lmEnd   = dayjs(monthStart).subtract(1, 'day').endOf('day').toDate()
+    const priorYear = dayjs.utc(ym + '-01').subtract(1, 'year').format('YYYY-MM')
+    const priorMonth = dayjs.utc(ym + '-01').subtract(1, 'month').format('YYYY-MM')
+    const { start: lyStart, end: lyEnd } = monthRangeForDateCol(priorYear)
+    const { start: lmStart, end: lmEnd } = monthRangeForDateCol(priorMonth)
 
     const storeWhere: any = { tenant: { id: tenantId } }
     if (storeId) storeWhere.id = storeId
@@ -58,7 +59,7 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
       orderBy: { no: 'asc' },
     })
     const storeIds = stores.map((s) => s.id)
-    if (storeIds.length === 0) return reply.send({ stores: [], summary: null })
+    if (storeIds.length === 0) return reply.send({ month: ym, stores: [], summary: null })
 
     // 营业额 (本月 / 同比 / 环比)
     async function sumRevenue(start: Date, end: Date) {
@@ -94,7 +95,7 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
     // 成本 (从 Receipt + LossClaim 反推, 后期可加凭证维度)
     async function sumReceipts(start: Date, end: Date) {
       const r = await prisma.receipt.aggregate({
-        where: { tenantId, storeId: { in: storeIds }, deliveryDate: { gte: start, lte: end } },
+        where: { tenantId, storeId: { in: storeIds }, status: { in: ['CONFIRMED', 'ACCOUNTED'] }, deliveryDate: { gte: start, lte: end } },
         _sum: { totalAmount: true },
       })
       return Number(r._sum.totalAmount || 0)
@@ -144,7 +145,7 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
         _sum: { amount: true },
       })
       const food = await prisma.receipt.aggregate({
-        where: { tenantId, storeId: s.id, deliveryDate: { gte: monthStart, lte: monthEnd } },
+        where: { tenantId, storeId: s.id, status: { in: ['CONFIRMED', 'ACCOUNTED'] }, deliveryDate: { gte: monthStart, lte: monthEnd } },
         _sum: { totalAmount: true },
       })
       const revVal = Number(rev._sum.amount || 0)
@@ -195,7 +196,7 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(403).send({ error: '无权查看' })
     }
     const { month } = req.query as any
-    const ym = month || dayjs().format('YYYY-MM')
+    const ym = month || businessDateKey().slice(0, 7)
     // DATE 列 (deliveryDate, date): UTC 边界. timestamp 列 (createdAt): Asia/Shanghai 边界.
     const { start: monthStart, end: monthEnd } = monthRangeForDateCol(ym)
     const { start: monthStartTs, end: monthEndTs } = monthRangeForTimestampCol(ym)
@@ -205,7 +206,7 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
 
     // 本月: 收货金额 / 报损金额 / 营业额 / 食材占比
     async function sumByStore(storeId: string | null) {
-      const where: any = { tenantId, deliveryDate: { gte: monthStart, lte: monthEnd } }
+      const where: any = { tenantId, status: { in: ['CONFIRMED', 'ACCOUNTED'] }, deliveryDate: { gte: monthStart, lte: monthEnd } }
       if (storeId) where.storeId = storeId
       const receipt = await prisma.receipt.aggregate({ where, _sum: { totalAmount: true } })
       const lossWhere: any = {
@@ -247,7 +248,7 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
       const { start: ms, end: me } = monthRangeForDateCol(m)
       const { start: msTs, end: meTs } = monthRangeForTimestampCol(m)
       const [rec, los, rev] = await Promise.all([
-        prisma.receipt.aggregate({ where: { tenantId, deliveryDate: { gte: ms, lte: me } }, _sum: { totalAmount: true } }),
+        prisma.receipt.aggregate({ where: { tenantId, status: { in: ['CONFIRMED', 'ACCOUNTED'] }, deliveryDate: { gte: ms, lte: me } }, _sum: { totalAmount: true } }),
         prisma.lossClaim.aggregate({ where: { tenantId, status: { in: ['APPROVED', 'RESOLVED'] }, createdAt: { gte: msTs, lte: meTs } }, _sum: { totalLossAmount: true } }),
         prisma.revenueRecord.aggregate({ where: { storeId: { in: storeIds }, date: { gte: ms, lte: me } }, _sum: { amount: true } }),
       ])
@@ -289,7 +290,7 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(403).send({ error: '无权查看' })
     }
     const { month } = req.query as any
-    const ym = month || dayjs().format('YYYY-MM')
+    const ym = month || businessDateKey().slice(0, 7)
     // DATE 列 (RevenueRecord.date, Voucher.date) 用 UTC; timestamp 列 (paidAt, createdAt) 用 ts
     const { start, end } = monthRangeForDateCol(ym)
     const { start: tsStart, end: tsEnd } = monthRangeForTimestampCol(ym)
@@ -373,7 +374,7 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(403).send({ error: '无权查看' })
     }
     const { month } = req.query as any
-    const ym = month || dayjs().format('YYYY-MM')
+    const ym = month || businessDateKey().slice(0, 7)
     // voucher.date 是 DATE 列 → UTC 边界
     const { start, end } = monthRangeForDateCol(ym)
 
@@ -465,7 +466,7 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
     const { storeId } = req.query as any
     const where: any = {
       tenantId,
-      status: { in: ['PENDING', 'PENDING_APPROVAL', 'APPROVED', 'ON_HOLD'] },
+      status: { in: ['PENDING', 'PENDING_APPROVAL', 'APPROVED', 'ON_HOLD', 'NOTIFIED', 'OVERDUE'] },
     }
     if (storeId) where.storeId = storeId
     const schedules = await prisma.paymentSchedule.findMany({
@@ -581,7 +582,7 @@ export const financeReportRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role } = req.user
     if (!FINANCE_ROLES.includes(role)) return reply.status(403).send({ error: '无权' })
     const { month } = req.query as any
-    const ym = month || dayjs().format('YYYY-MM')
+    const ym = month || businessDateKey().slice(0, 7)
     // 用 UTC 边界 (避免 PG DATE 列时区跨日问题)
     const { start, end } = monthRangeForDateCol(ym)
 

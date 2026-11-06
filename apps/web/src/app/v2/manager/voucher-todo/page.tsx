@@ -10,6 +10,7 @@
  *   - 历史核销日均(从 RevenueRecord 取 meituanGmv / douyinGmv)
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 import { useEffect, useState } from 'react'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 
@@ -28,10 +29,7 @@ type DailyTrack = {
 }
 
 const LS_KEY = (storeId: string, date: string) => `voucher-track:${storeId}:${date}`
-const todayStr = () => {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
+const todayStr = () => businessDayjs().format('YYYY-MM-DD')
 
 export default function VoucherTodoPage() {
   const [storeId, setStoreId] = useState<string | null>(null)

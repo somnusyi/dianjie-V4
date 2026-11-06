@@ -29,6 +29,13 @@ export function businessDateKey(at: Date | string | number = new Date()): string
   return dayjs(at).tz(BUSINESS_TZ).format('YYYY-MM-DD')
 }
 
+/** A PostgreSQL DATE encodes a business day at UTC midnight, not an instant. */
+export function businessDateOnlyRange(date: Date | string) {
+  const key = date instanceof Date ? date.toISOString().slice(0, 10) : date
+  const start = dayjs.tz(key, BUSINESS_TZ).startOf('day')
+  return { start: start.toDate(), endExclusive: start.add(1, 'day').toDate() }
+}
+
 /** 业务时间戳 YYYYMMDD_HHmmss（业务时区），用于导出文件名。 */
 export function businessTimestampKey(at: Date | string | number = new Date()): string {
   return dayjs(at).tz(BUSINESS_TZ).format('YYYYMMDD_HHmmss')

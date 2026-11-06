@@ -1,15 +1,16 @@
 /**
  * 滇界 v2 · 客户端 token / user 存储 + API 封装
  *
- * - 沿用现有 /api/auth/login 返回 { token, refreshToken, user, tenant }
+ * - 浏览器刷新凭据仅 HttpOnly Cookie，访问凭据仅模块内存
  * - access token (token) 2h 短寿; refresh token (refreshToken) 30d
  * - apiFetch 拿到 401 且 token 看似过期 时, 静默调 /api/auth/refresh 续期, 再重试原请求
  *   refresh 失败 → 清 session + 跳 /v2/login
- * - localStorage key 与旧 UI 兼容: 'token' / 'user' / 'tenant' / 'refreshToken'
+ * - localStorage 只保留业务用户信息；旧 bearer key 在升级时清除
  */
 
 export type StoredUser = {
   id: string
+  tenantId?: string
   name: string
   email: string
   role: string
@@ -46,45 +47,108 @@ export function clearActiveStoreId() {
   localStorage.removeItem(ACTIVE_STORE_KEY)
 }
 
-export function getToken(): string | null {
-  if (typeof window === 'undefined') return null
-  return localStorage.getItem(TOKEN_KEY) || localStorage.getItem('dj_token')
+let accessToken: string | null = null
+let sessionGeneration = 0
+let bootstrapped = false
+const BROWSER_HEADERS = { 'X-Dianjie-Session': 'cookie-v1' }
+const SECRET_KEYS = ['token', 'dj_token', 'refreshToken', 'dj_refresh']
+function erasePersistentCredentials() { if (typeof window !== 'undefined') for (const key of SECRET_KEYS) { localStorage.removeItem(key); sessionStorage.removeItem(key) } }
+export function getToken(): string | null { return accessToken }
+/** Requests belong to the account generation in which they started. Never replay across login/logout. */
+export function getSessionGeneration(): number { return sessionGeneration }
+export function assertSessionGeneration(expected: number): void {
+  if (expected !== sessionGeneration) throw Object.assign(new Error('账号会话已变化，请重新操作'), { code: 'SESSION_CHANGED', status: 409 })
 }
-export function getRefreshToken(): string | null {
-  if (typeof window === 'undefined') return null
-  return localStorage.getItem(REFRESH_KEY) || localStorage.getItem('dj_refresh')
-}
+
+/** Refresh credentials are HttpOnly and never exposed to application JavaScript. */
+export function getRefreshToken(): null { return null }
+export function setMemoryToken(value: string | null) { sessionGeneration++; accessToken = value; erasePersistentCredentials() }
 export function getUser(): StoredUser | null {
   if (typeof window === 'undefined') return null
   const raw = localStorage.getItem(USER_KEY) || localStorage.getItem('dj_user')
   if (!raw) return null
   try { return JSON.parse(raw) } catch { return null }
 }
-export function setSession(token: string, user: StoredUser, tenant?: any, refreshToken?: string) {
-  localStorage.setItem(TOKEN_KEY, token)
-  localStorage.setItem(USER_KEY, JSON.stringify(user))
-  // 兼容仍在使用旧 AppLayout/axios 的桌面页面。
-  localStorage.setItem('dj_token', token)
-  localStorage.setItem('dj_user', JSON.stringify(user))
-  if (tenant) localStorage.setItem(TENANT_KEY, JSON.stringify(tenant))
-  if (refreshToken) {
-    localStorage.setItem(REFRESH_KEY, refreshToken)
-    localStorage.setItem('dj_refresh', refreshToken)
+function persistSessionUser(user: StoredUser, tenant?: { id?: string; slug?: string }) {
+  const previous = getUser()
+  let previousTenant: { id?: string; slug?: string } | null = null
+  try { previousTenant = JSON.parse(localStorage.getItem(TENANT_KEY) || 'null') } catch {}
+  const oldTenantId = previous?.tenantId || previousTenant?.id
+  const newTenantId = user.tenantId || tenant?.id
+  const tenantChanged = Boolean(oldTenantId && newTenantId && oldTenantId !== newTenantId)
+    || Boolean(previousTenant?.slug && tenant?.slug && previousTenant.slug !== tenant.slug)
+  const identityChanged = !previous || previous.id !== user.id || tenantChanged
+  const active = localStorage.getItem(ACTIVE_STORE_KEY)
+  if (active) {
+    const allowed = user.storeIds?.length ? user.storeIds
+      : user.storeId ? [user.storeId] : []
+    const storeScoped = ['MANAGER','CHEF','PURCHASER','KITCHEN_LEAD','SUPERVISOR','REGIONAL_MANAGER'].includes(user.role)
+    if (identityChanged || (allowed.length ? !allowed.includes(active) : storeScoped || previous?.role !== user.role)) clearActiveStoreId()
+    // Same-account tenant-wide roles may keep an explicit all-store filter;
+    // an absent storeIds list does not mean their global scope was revoked.
   }
+  if (tenant) localStorage.setItem(TENANT_KEY, JSON.stringify(tenant))
+  else if (identityChanged) {
+    if (newTenantId) localStorage.setItem(TENANT_KEY, JSON.stringify({ id: newTenantId }))
+    else localStorage.removeItem(TENANT_KEY)
+  }
+  localStorage.setItem(USER_KEY, JSON.stringify(user))
+  localStorage.setItem('dj_user', JSON.stringify(user))
 }
-export function clearSession() {
-  Object.keys(sessionStorage).filter(key => key.startsWith('dj:stocktake-create:')).forEach(key => sessionStorage.removeItem(key))
-  Object.keys(sessionStorage).filter(key => key.startsWith('dj:supplier-archive:')).forEach(key => sessionStorage.removeItem(key))
-  Object.keys(localStorage).filter(key => key.startsWith('dj:supplier-create:')).forEach(key => localStorage.removeItem(key))
-  localStorage.removeItem(TOKEN_KEY)
-  localStorage.removeItem(REFRESH_KEY)
-  localStorage.removeItem(USER_KEY)
-  localStorage.removeItem(TENANT_KEY)
-  localStorage.removeItem(ACTIVE_STORE_KEY)
-  localStorage.removeItem('dj_token')
-  localStorage.removeItem('dj_refresh')
-  localStorage.removeItem('dj_user')
+export function setSession(token: string, user: StoredUser, tenant?: any, _refreshToken?: string) {
+  sessionGeneration++
+  accessToken = token
+  erasePersistentCredentials()
+  localStorage.setItem('dj:session-event', 'login:' + Date.now() + ':' + Math.random())
+  persistSessionUser(user, tenant)
 }
+export function clearSession(options: { preserveDrafts?: boolean } = {}) {
+  sessionGeneration++
+  accessToken = null
+  erasePersistentCredentials()
+  if (!options.preserveDrafts) Object.keys(sessionStorage).filter(key => key.startsWith('dj:stocktake-create:') || key.startsWith('dj:supplier-archive:')).forEach(key => sessionStorage.removeItem(key))
+  if (!options.preserveDrafts) Object.keys(localStorage).filter(key => key.startsWith('dj:supplier-create:')).forEach(key => localStorage.removeItem(key))
+  for (const key of [USER_KEY,TENANT_KEY,ACTIVE_STORE_KEY,'dj_user']) localStorage.removeItem(key)
+}
+let logoutInFlight: Promise<void> | null = null
+export function logoutSession(): Promise<void> {
+  if (logoutInFlight) return logoutInFlight
+  const recoveringPendingLogout = Boolean(localStorage.getItem('dj:logout-pending'))
+  localStorage.setItem('dj:logout-pending','1')
+  // Recovery runs in every reloaded tab; rebroadcasting here would create a reload feedback loop.
+  if (!recoveringPendingLogout) localStorage.setItem('dj:session-event','logout:'+Date.now()+':'+Math.random())
+  clearSession()
+  logoutInFlight = (async () => {
+    const res=await fetch('/api/auth/browser-logout',{method:'POST',credentials:'same-origin',headers:{...BROWSER_HEADERS,'Content-Type':'application/json'},body:'{}',keepalive:true})
+    if(!res.ok) throw new Error('退出登录尚未完成，请重试')
+    localStorage.removeItem('dj:logout-pending')
+  })().finally(()=>{logoutInFlight=null})
+  return logoutInFlight
+}
+export async function browserLogin(path: string, body: unknown) {
+  if (logoutInFlight) await logoutInFlight
+  if(localStorage.getItem('dj:logout-pending'))await logoutSession()
+  return fetch(path,{method:'POST',credentials:'same-origin',headers:{...BROWSER_HEADERS,'Content-Type':'application/json'},body:JSON.stringify(body)})
+}
+/** OAuth must not issue a new refresh cookie while a previous logout is still pending. */
+export async function browserOAuthStart(path: string) {
+  if (logoutInFlight) await logoutInFlight
+  if (localStorage.getItem('dj:logout-pending')) await logoutSession()
+  return fetch(path, { credentials: 'same-origin', headers: BROWSER_HEADERS })
+}
+export async function bootstrapSession(): Promise<string | null> {
+  if (typeof window === 'undefined') return null
+  if(localStorage.getItem('dj:logout-pending')){try{await logoutSession()}catch{};bootstrapped=true;return null}
+  if (accessToken) return accessToken
+  if (bootstrapped) return null
+  const legacy = localStorage.getItem(REFRESH_KEY) || localStorage.getItem('dj_refresh')
+  erasePersistentCredentials()
+  const result = await refreshAccessOnce(legacy)
+  bootstrapped = true
+  if (!result) clearSession({ preserveDrafts: true })
+  return result
+}
+
 
 /** 角色 → 默认 home 路由（手机端） */
 export function routeForRole(role: string): string {
@@ -125,30 +189,20 @@ export function pcRouteForRole(role: string): string | null {
 // 多个请求同时 401 时, 只发一次 /api/auth/refresh, 其余等结果复用
 let _refreshInFlight: Promise<string | null> | null = null
 
-async function refreshAccessOnce(): Promise<string | null> {
+export async function refreshAccessOnce(legacyRefresh?: string | null): Promise<string | null> {
   if (_refreshInFlight) return _refreshInFlight
-  const rt = getRefreshToken()
-  if (!rt) return null
+  const generation = sessionGeneration
   _refreshInFlight = (async () => {
     try {
-      const res = await fetch('/api/auth/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: rt }),
-      })
+      const res = await fetch('/api/auth/refresh',{method:'POST',credentials:'same-origin',headers:{...BROWSER_HEADERS,'Content-Type':'application/json'},body:JSON.stringify(legacyRefresh ? {token:legacyRefresh} : {})})
       if (!res.ok) return null
       const j = await res.json()
-      if (!j?.token) return null
-      localStorage.setItem(TOKEN_KEY, j.token)
-      localStorage.setItem('dj_token', j.token)
-      // user 也可能因角色变更被刷掉, 同步存
-      if (j.user) localStorage.setItem(USER_KEY, JSON.stringify(j.user))
-      return j.token as string
-    } catch {
-      return null
-    } finally {
-      _refreshInFlight = null
-    }
+      if (!j?.token || generation !== sessionGeneration) return null
+      accessToken = j.token
+      erasePersistentCredentials()
+      if(j.user) persistSessionUser(j.user,j.tenant)
+      return accessToken
+    } catch {return null} finally {_refreshInFlight=null}
   })()
   return _refreshInFlight
 }
@@ -158,8 +212,10 @@ async function refreshAccessOnce(): Promise<string | null> {
  * refresh 失败 → 清 session + 跳 /v2/login.
  */
 export async function apiFetch<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+  const generation = sessionGeneration
   const doFetch = async (token: string | null) => {
     const headers = new Headers(init.headers)
+    if (path.startsWith('/api/auth/')) headers.set('X-Dianjie-Session','cookie-v1')
     // 只在有 body 时设 Content-Type. 否则 Fastify 看到 "application/json" 但 body 为空会 400.
     // FormData / Blob 不要设 — 浏览器会自动加 multipart boundary
     if (init.body != null && !headers.has('Content-Type')
@@ -174,8 +230,10 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
     return fetch(path, { ...init, headers })
   }
 
-  let token = getToken()
+  let token = getToken() || await bootstrapSession()
+  assertSessionGeneration(generation)
   let res = await doFetch(token)
+  assertSessionGeneration(generation)
 
   if (res.status === 401) {
     // 解析后端原因: 真过期 vs 权限不足 (后者不应触发 refresh, 也不应踢人)
@@ -192,15 +250,18 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
       isAuthExpired = !token
     }
 
+    assertSessionGeneration(generation)
     if (isAuthExpired) {
       // 尝试 refresh 续期
       const newToken = await refreshAccessOnce()
+      assertSessionGeneration(generation)
       if (newToken) {
         res = await doFetch(newToken)
-        if (res.ok) return res.json()
+        assertSessionGeneration(generation)
+        if (res.ok) { const data = await res.json(); assertSessionGeneration(generation); return data }
         // refresh 后仍 401: 真过期 / refresh 被撤销
         if (res.status === 401) {
-          clearSession()
+          clearSession({ preserveDrafts: true })
           if (typeof window !== 'undefined' && !location.pathname.startsWith('/v2/login')) {
             location.href = '/v2/login'
           }
@@ -208,7 +269,7 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
         }
       } else {
         // 没 refresh / refresh 失败 → 踢回登录
-        clearSession()
+        clearSession({ preserveDrafts: true })
         if (typeof window !== 'undefined' && !location.pathname.startsWith('/v2/login')) {
           location.href = '/v2/login'
         }
@@ -226,16 +287,20 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
     // Fastify's default error envelope contains both error="Conflict" and a
     // domain-specific message. Always surface the actionable domain message.
     try { data = await res.json(); msg = data.message || data.error || msg } catch {}
+    assertSessionGeneration(generation)
     const error = new Error(msg) as Error & { status?: number; data?: any }
     error.status = res.status
     error.data = data
     throw error
   }
-  return res.json()
+  const data = await res.json()
+  assertSessionGeneration(generation)
+  return data
 }
 
 /** Download an authenticated non-JSON API response using the same refresh policy. */
 export async function apiDownload(path: string, fallbackFilename: string) {
+  const generation = sessionGeneration
   const request = (token: string | null) => {
     const headers: Record<string, string> = {}
     if (token) headers.Authorization = `Bearer ${token}`
@@ -243,12 +308,16 @@ export async function apiDownload(path: string, fallbackFilename: string) {
     if (activeStore) headers['X-Active-Store'] = activeStore
     return fetch(path, { headers })
   }
-  let res = await request(getToken())
+  const token = getToken() || await bootstrapSession()
+  assertSessionGeneration(generation)
+  let res = await request(token)
+  assertSessionGeneration(generation)
   if (res.status === 401) {
     const refreshed = await refreshAccessOnce()
-    if (refreshed) res = await request(refreshed)
+    assertSessionGeneration(generation)
+    if (refreshed) { res = await request(refreshed); assertSessionGeneration(generation) }
     if (!refreshed || res.status === 401) {
-      clearSession()
+      clearSession({ preserveDrafts: true })
       if (typeof window !== 'undefined' && !location.pathname.startsWith('/v2/login')) location.href = '/v2/login'
       throw new Error('会话已过期')
     }
@@ -259,6 +328,7 @@ export async function apiDownload(path: string, fallbackFilename: string) {
       const data = await res.clone().json()
       message = data.message || data.error || message
     } catch {}
+    assertSessionGeneration(generation)
     throw new Error(message)
   }
   const disposition = res.headers.get('Content-Disposition') || ''
@@ -266,5 +336,7 @@ export async function apiDownload(path: string, fallbackFilename: string) {
   const plain = disposition.match(/filename="?([^";]+)"?/i)?.[1]
   let filename = fallbackFilename
   try { filename = encoded ? decodeURIComponent(encoded) : plain || fallbackFilename } catch {}
-  return { blob: await res.blob(), filename }
+  const blob = await res.blob()
+  assertSessionGeneration(generation)
+  return { blob, filename }
 }

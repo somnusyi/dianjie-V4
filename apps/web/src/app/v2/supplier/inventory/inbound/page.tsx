@@ -10,6 +10,8 @@
  *  - 每行可填生产日期 + 保质期(天) → 自动算到期日 → 流水里留痕
  */
 'use client'
+import { businessDateKey } from '@/lib/business-date'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 import { useEffect, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import {
@@ -29,11 +31,11 @@ type Row = {
 }
 
 function todayStr() {
-  return new Date().toISOString().slice(0, 10)
+  return businessDateKey()
 }
 function addDays(date: string, days: number) {
-  const d = new Date(date)
-  d.setDate(d.getDate() + days)
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + days)
   return d.toISOString().slice(0, 10)
 }
 
@@ -221,11 +223,11 @@ export default function InboundPage() {
             {mode === 'manual' ? (
               <div className="space-y-2">
                 <div className="flex gap-2">
-                  <select value={r.productId} onChange={e => selectSku(idx, e.target.value)}
+                  <SearchableSelect searchLabel="搜索入库商品" value={r.productId} onChange={e => selectSku(idx, e.target.value)}
                     className="flex-1 bg-bg border border-border rounded p-2 text-body">
                     <option value="">— 选 SKU —</option>
                     {skus.map(s => <option key={s.id} value={s.id}>{s.name} ({s.code}, 现 {s.stock} {s.unit})</option>)}
-                  </select>
+                  </SearchableSelect>
                   <button onClick={() => { setNewSkuOpen({ rowIdx: idx }); setNewSku({ name: '', spec: '', unit: '件', price: '', shelfDays: '7' }) }}
                     className="px-3 py-2 bg-amber/10 text-amber-fg border border-amber/30 rounded text-caption">+ 新 SKU</button>
                 </div>

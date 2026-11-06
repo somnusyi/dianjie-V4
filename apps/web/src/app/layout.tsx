@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next'
+import { SessionBootstrap } from '@/components/session-bootstrap'
 import './globals.css'
 import { TableReportHost } from '@/components/v2/report-actions'
 import { UiDialogHost } from '@/components/v2/ui-dialog-host'
@@ -30,7 +31,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="zh-CN">
-      <body><TableInputInteractions />{children}<UiDialogHost /><TableReportHost /></body>
+      <body><TableInputInteractions /><SessionBootstrap>{children}</SessionBootstrap><UiDialogHost /><TableReportHost /></body>
     </html>
   )
 }

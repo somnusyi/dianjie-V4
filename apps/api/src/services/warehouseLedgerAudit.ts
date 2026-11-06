@@ -1,5 +1,6 @@
 import { Prisma, prisma } from '@dianjie/db'
 import { resolveTenantWarehouseId } from './defaultWarehouse'
+import { hasSubmissionStockPolicy } from './orderSubmissionReservation'
 
 type WarehouseLedgerAuditDb = Pick<
   typeof prisma,
@@ -7,6 +8,7 @@ type WarehouseLedgerAuditDb = Pick<
   | 'warehouseLedgerBalance'
   | 'warehouseLedgerMovement'
   | 'warehouseLedgerReservation'
+  | 'replenishmentStockHold'
   | 'warehouseLedgerLot'
   | 'product'
 >
@@ -41,6 +43,8 @@ type ReservationRow = {
   inventoryUnit: string
   inventoryQuantity: Decimalish
   orderStatus?: string
+  submittedSnapshot?: unknown
+  reservationSource?: 'PURCHASE_ORDER' | 'REPLENISHMENT'
 }
 
 type LotRow = {
@@ -201,13 +205,16 @@ export function buildWarehouseLedgerAudit(input: {
     if (differs(activeReserved, balance.reservedQty, 6)) {
       issue('BLOCKER', 'ACTIVE_RESERVATION_MISMATCH', productId, '活动预占单据与预占余额不一致', activeReserved, balance.reservedQty)
     }
-    const invalidReservation = input.activeReservations.find(row => row.productId === productId && row.orderStatus && row.orderStatus !== 'CONFIRMED')
+    const invalidReservation = input.activeReservations.find(row => row.productId === productId && row.orderStatus
+      && (row.reservationSource === 'REPLENISHMENT'
+        ? !(row.orderStatus === 'SUBMITTED' && hasSubmissionStockPolicy(row.submittedSnapshot))
+        : row.orderStatus !== 'CONFIRMED' && !(row.orderStatus === 'SUBMITTED' && hasSubmissionStockPolicy(row.submittedSnapshot))))
     if (invalidReservation) {
       issues.push({
         severity: 'BLOCKER',
         code: 'ACTIVE_RESERVATION_ORDER_STATUS_INVALID',
         productId,
-        message: `活动预占对应订单状态为 ${invalidReservation.orderStatus}，应为 CONFIRMED`,
+        message: `活动预占对应订单状态为 ${invalidReservation.orderStatus}，应为已接单或采用提交预占策略的已提交订单`,
       })
     }
     if (differs(remainingLots, balance.physicalQty, 6)) {
@@ -259,7 +266,7 @@ export async function auditWarehouseLedger(
 ) {
   const warehouseId = lockedWarehouseId
     || await resolveTenantWarehouseId(db, tenantId, undefined)
-  const [warehouse, balances, movements, activeReservations, lots, requiredProducts] = await Promise.all([
+  const [warehouse, balances, movements, activeReservations, lots, requiredProducts, replenishmentHolds] = await Promise.all([
     db.warehouse.findFirstOrThrow({
       where: { id: warehouseId, tenantId },
       select: { id: true, code: true, name: true, inventoryMode: true, inventoryActivatedAt: true },
@@ -278,7 +285,7 @@ export async function auditWarehouseLedger(
         productId: true,
         inventoryUnit: true,
         inventoryQuantity: true,
-        purchaseOrder: { select: { status: true } },
+        purchaseOrder: { select: { status: true, submittedSnapshot: true } },
       },
     }),
     db.warehouseLedgerLot.findMany({
@@ -296,18 +303,27 @@ export async function auditWarehouseLedger(
       },
       select: { id: true, unitConversionStatus: true },
     }),
+    db.replenishmentStockHold.findMany({
+      where: { tenantId, warehouseId, status: 'ACTIVE' },
+      select: { productId: true, inventoryUnit: true, inventoryQuantity: true, replenishmentOrder: { select: { status: true, stockReservationPolicy: true } } },
+    }),
   ])
   return {
     warehouse,
     ...buildWarehouseLedgerAudit({
       balances,
       movements,
-      activeReservations: activeReservations.map(row => ({
+      activeReservations: [...activeReservations.map(row => ({
         productId: row.productId,
         inventoryUnit: row.inventoryUnit,
         inventoryQuantity: row.inventoryQuantity,
         orderStatus: row.purchaseOrder.status,
-      })),
+        submittedSnapshot: row.purchaseOrder.submittedSnapshot,
+      })), ...replenishmentHolds.map(row => ({
+        productId: row.productId, inventoryUnit: row.inventoryUnit, inventoryQuantity: row.inventoryQuantity,
+        orderStatus: row.replenishmentOrder.status, submittedSnapshot: { stockReservationPolicy: row.replenishmentOrder.stockReservationPolicy },
+        reservationSource: 'REPLENISHMENT' as const,
+      }))],
       lots,
       requiredProducts,
     }),

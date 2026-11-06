@@ -14,7 +14,7 @@ import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch } from '@/lib/v2-auth'
 
 type Product = {
-  id: string; code: string; name: string; unit: string; price: number | string; avgUnitCost?: number | string; stock?: number | string
+  id: string; code: string; name: string; unit: string; price: number | string; avgUnitCost?: number | string; stock?: number | string; spec?: string | null; category?: string | null
 }
 type Reason = '临期' | '变质' | '客退' | '掉落' | '破损' | '其他'
 const REASONS: { key: Reason; tone: 'orange' | 'red' | 'blue' | 'gray' }[] = [
@@ -39,6 +39,9 @@ export default function ChefLossNewPage() {
   const effectiveReason = reason === '其他' && customReason.trim() ? customReason.trim() : reason
   const [items, setItems] = useState<Item[]>([])
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [productQuery, setProductQuery] = useState('')
+  const productTerms = productQuery.normalize('NFKC').trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const matchingProducts = (products || []).filter(product => productTerms.every(term => `${product.name} ${product.code} ${product.spec || ''} ${product.category || ''}`.normalize('NFKC').toLowerCase().includes(term)))
   const [submitting, setSubmitting] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [evidence, setEvidence] = useState<string[]>([])
@@ -275,8 +278,14 @@ export default function ChefLossNewPage() {
               <h2 className="text-h2">选择商品</h2>
               <button onClick={() => setPickerOpen(false)} className="text-gray3">完成</button>
             </header>
+            <div className="px-4 py-2">
+              <input type="search" aria-label="搜索报损商品" value={productQuery} onChange={event => setProductQuery(event.target.value)}
+                placeholder="搜索商品名称 / 编码 / 规格" maxLength={100}
+                className="h-10 w-full rounded-cta border border-border bg-white px-3 text-body" />
+              {productQuery && <div role="status" className="mt-1 flex justify-between text-micro text-gray3"><span>找到 {matchingProducts.length} 项</span><button type="button" onClick={() => setProductQuery('')}>清除搜索</button></div>}
+            </div>
             <ul className="overflow-y-auto flex-1">
-              {(products || []).map(p => {
+              {matchingProducts.map(p => {
                 const added = items.some(i => i.productId === p.id)
                 return (
                   <li key={p.id} className="px-4 py-2.5 flex items-center justify-between border-b border-border">
@@ -295,6 +304,7 @@ export default function ChefLossNewPage() {
                   </li>
                 )
               })}
+              {products && products.length > 0 && matchingProducts.length === 0 && <li className="px-4 py-8 text-center text-caption text-gray3">没有匹配商品，请调整或清除搜索</li>}
               {products && products.length === 0 && (
                 <li className="text-caption text-gray3 text-center py-8">还没有商品 · 先到商品管理录入</li>
               )}

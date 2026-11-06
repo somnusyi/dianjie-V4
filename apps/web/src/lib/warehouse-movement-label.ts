@@ -1,4 +1,5 @@
 const labels: Record<string, string> = {
+  UPSTREAM_RECEIPT: '采购入库', PURCHASE_RETURN: '采购退货',
   OPENING_BALANCE: '期初建账', MANUAL_INBOUND: '手工入库',
   ORDER_RESERVED: '门店订单预占', ORDER_RELEASED: '订单预占释放',
   ADJUSTMENT: '盘点调整', LOSS: '仓库报损', REVERSAL: '冲销',

@@ -28,7 +28,7 @@ export default function StoreReplenishmentOrdersPage() {
         <button type="button" onClick={() => setExpanded(value => value === order.id ? '' : order.id)} className="w-full text-left">
           <div className="flex items-start justify-between gap-3"><div><b className="font-num text-body">{order.no}</b><p className="mt-1 text-h2">{order.supplier.name}</p></div><Chip tone={replenishmentStatusTone(order.displayStatus)}>{replenishmentStatusLabel(order.displayStatus)}</Chip></div>
           <p className="mt-2 text-caption text-gray2">期望到货：{order.expectedDate.slice(0, 10)} · {replenishmentItemSummary(order.items)}</p>
-          <p className="mt-2 text-micro text-gray3">创建：{new Date(order.createdAt).toLocaleString('zh-CN', { hour12: false })} · {expanded === order.id ? '收起详情' : '查看详情'}</p>
+          <p className="mt-2 text-micro text-gray3">创建：{new Date(order.createdAt).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })} · {expanded === order.id ? '收起详情' : '查看详情'}</p>
         </button>
         {expanded === order.id && <div className="mt-4 border-t border-border pt-4">
           <div className="space-y-2">{order.items.map(item => <div key={item.productId} className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-xl bg-bg px-3 py-2"><div><b className="text-body">{item.productNameSnapshot}</b><p className="text-micro text-gray3">{item.productCodeSnapshot || '无编码'} · {item.productSpecSnapshot || '无规格'}</p></div><div className="text-right font-num text-caption"><div>{item.quantity} {item.orderUnitSnapshot}</div><div className="text-gray3">¥{Number(item.unitPrice).toFixed(2)} / {item.orderUnitSnapshot}</div></div></div>)}</div>

@@ -200,7 +200,7 @@ export function groupTimeLabel(group: FulfillmentGroup): string | null {
   if (!values.length) return null
   const first = new Date(Math.min(...values))
   const last = new Date(Math.max(...values))
-  const format = (date: Date) => date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
+  const format = (date: Date) => date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
   return first.getTime() === last.getTime() ? format(first) : `${format(first)}—${format(last)}`
 }
 

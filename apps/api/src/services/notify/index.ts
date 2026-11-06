@@ -1,3 +1,4 @@
+import { safeErrorLog } from '../../lib/safe-request-log'
 /**
  * 触达层入口 (Layer 2)
  *
@@ -150,8 +151,8 @@ export async function notify(opts: NotifyOptions): Promise<{ sent: number; suppr
           try {
             await sendViaWeCom(tenantId, user.wecomUserId, rendered)
           } catch (e: any) {
-            await completeNotificationDelivery(reservationId, 'failed', e.message || String(e)).catch(logError => {
-              console.error(`[notify] 更新失败投递日志 ${reservationId}:`, logError)
+            await completeNotificationDelivery(reservationId, 'failed', 'Message delivery failed; provider details withheld').catch(logError => {
+              console.error(`[notify] 更新失败投递日志 ${reservationId}:`, safeErrorLog(logError))
             })
             // 继续尝试下一个通道 (未来加 SMS / inapp)
             continue
@@ -161,14 +162,14 @@ export async function notify(opts: NotifyOptions): Promise<{ sent: number; suppr
           } catch (logError) {
             // 外部发送已经成功时绝不能把占位改成 failed，否则下一次会重复触达。
             // 保留 processing 让当前频控窗口继续抑制，并记录基础设施告警。
-            console.error(`[notify] 投递已成功但日志完成失败 ${reservationId}:`, logError)
+            console.error(`[notify] 投递已成功但日志完成失败 ${reservationId}:`, safeErrorLog(logError))
           }
           return 'sent' as const
         }
       }
       return 'failed' as const
     } catch (e: any) {
-      console.error(`[notify] ${event} → ${userId} 异常:`, e.message)
+      console.error(`[notify] ${event} → ${userId} 异常:`, safeErrorLog(e))
       return 'failed' as const
     }
   }))
@@ -192,5 +193,5 @@ async function logSuppressed(tenantId: string, userId: string, event: string, ev
  * Best-effort 调用, 业务路由用 fireAndForget 不阻塞响应
  */
 export function fireAndForget(opts: NotifyOptions): void {
-  notify(opts).catch((e) => console.error('[notify async]', e))
+  notify(opts).catch((e) => console.error('[notify async]', safeErrorLog(e)))
 }

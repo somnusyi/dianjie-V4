@@ -55,3 +55,11 @@
 
 .tableWrap [data-column=quality] { position: sticky; right: 0; min-width: 72px; background: #fff; z-index: 2; }
 .tableWrap th[data-column=quality] { background: #f6f6f5; z-index: 4; }
+
+/* Keep the requested product identity beside editable quantities during horizontal scrolling. */
+.frozenIdentity [data-column=name] {position:sticky;left:48px;width:200px;min-width:200px;max-width:200px;white-space:normal;background:#fff;z-index:2;box-sizing:border-box;}
+.frozenIdentity [data-column=purchase-unit] {position:sticky;left:248px;min-width:96px;background:#fff;z-index:2;box-shadow:3px 0 4px #0000000a;}
+.frozenIdentity th[data-column=name],.frozenIdentity th[data-column=purchase-unit] {background:#f6f6f5;z-index:4;}
+@media print {.frozenIdentity [data-column=name],.frozenIdentity [data-column=purchase-unit] {position:static;}}
+
+.frozenIdentity th:first-child,.frozenIdentity tbody td:first-child {width:48px;min-width:48px;max-width:48px;box-sizing:border-box;}

@@ -1,5 +1,6 @@
 import { FastifyPluginAsync } from 'fastify'
 import ExcelJS from 'exceljs'
+import { businessDateKey } from '../lib/businessTime'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { isStoreScoped, isSupplierRole, resolveActiveStore } from '../lib/auth-scope'
@@ -330,7 +331,7 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
       sheet.getColumn('costAmount').numFmt = '#,##0.00'
       sheet.getColumn('profit').numFmt = '#,##0.00'
     }
-    const filename = `配送单查询-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}.xlsx`
+    const filename = `配送单查询-${businessDateKey().replaceAll('-', '')}.xlsx`
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer())
     return reply
       .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')

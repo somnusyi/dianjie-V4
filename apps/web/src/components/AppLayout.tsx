@@ -1,4 +1,5 @@
 'use client'
+import { getToken } from '@/lib/v2-auth'
 
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
@@ -84,9 +85,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const currentUser = user || localUser
 
   const loadBadges = async (u: any) => {
-    const token = localStorage.getItem('token') || localStorage.getItem('dj_token')
+    const token = getToken()
     const headers = { Authorization: `Bearer ${token}` }
-    const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'
+    const base = process.env.NEXT_PUBLIC_API_URL || ''
     const b: Record<string, number> = {}
     try {
       if (u.role === 'SUPPLIER_STAFF') {

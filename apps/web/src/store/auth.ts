@@ -1,3 +1,4 @@
+import { getToken, setMemoryToken, logoutSession } from '@/lib/v2-auth'
 import { create } from 'zustand'
 
 export interface AuthUser {
@@ -36,25 +37,19 @@ export const useAuthStore = create<AuthState>((set) => ({
   setToken: (token) => {
     set({ token })
     if (typeof window !== 'undefined') {
-      if (token) localStorage.setItem('dj_token', token)
-      else localStorage.removeItem('dj_token')
+      setMemoryToken(token)
     }
   },
 
   logout: () => {
     set({ user: null, token: null })
-    if (typeof window !== 'undefined') {
-      for (const key of ['dj_token', 'dj_refresh', 'dj_user', 'token', 'refreshToken', 'user', 'tenant']) {
-        localStorage.removeItem(key)
-      }
-      window.location.href = '/v2/login'
-    }
+    if (typeof window !== 'undefined') void logoutSession().finally(()=>{window.location.href='/v2/login'})
   },
 
   hydrate: () => {
     if (typeof window === 'undefined') return
     const rawUser = localStorage.getItem('user') || localStorage.getItem('dj_user')
-    const token = localStorage.getItem('token') || localStorage.getItem('dj_token')
+    const token = getToken()
     if (rawUser && token) {
       try {
         set({ user: JSON.parse(rawUser), token })

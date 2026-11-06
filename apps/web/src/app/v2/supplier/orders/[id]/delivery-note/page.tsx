@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { apiFetch, getUser } from '@/lib/v2-auth'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import {
   applySingleOrderPreview,
   parseSingleOrderPreviewPayload,
@@ -23,6 +23,9 @@ import { parseOperationGroupDeliveryNoteProjection } from '@/lib/operation-group
 import { num2cn } from '@/lib/num2cn'
 import { notifyUser } from '@/lib/ui-dialogs'
 import { prepareDeliveryNotePrint } from '@/lib/delivery-note-print'
+import { deliveryNoteStyles, waitForDeliveryNoteFonts, type DeliveryProduct } from '@/lib/delivery-note-layout'
+import { renderDeliveryNotePdf } from '@/lib/delivery-note-pdf'
+import { DeliveryNotePaper } from '@/components/v2/delivery-note-paper'
 
 
 type Order = {
@@ -43,10 +46,10 @@ type Order = {
   createdBy: { id: string; name: string }
   shippedBy: { id: string; name: string } | null
   items: { id: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string; costAmount?: string | null
-           product?: { name: string; spec: string | null; unit: string; code: string } }[]
+           product?: DeliveryProduct }[]
   deliveries?: { id: string; no: string; status: string; rowVersion?: number; actualTotalAmount: string; costAmount?: string | null; note?: string | null; createdAt?: string | null; shippedAt?: string | null; deliveredAt?: string | null
     items: { id: string; orderedQtySnapshot: string; shippedQty: string; unitPriceSnapshot: string; amount: string; costAmount?: string | null
-      product?: { name: string; spec: string | null; unit: string; code: string } }[]
+      product?: DeliveryProduct }[]
     receipt?: { id: string } | null
   }[]
 }
@@ -91,6 +94,8 @@ type OperationGroupItem = {
   id?: string
   productId?: string | null
   name?: string | null
+  category?: string | null
+  location?: string | null
   spec?: string | null
   unit?: string | null
   quantity?: number | string | null
@@ -333,7 +338,7 @@ async function verifyOperationGroupPreview(data: OperationGroupResponse, groupId
 function applyOperationGroupPreview(data: OperationGroupResponse, preview: OperationGroupPreview): OperationGroupResponse {
   return {
     ...data,
-    mergedItems: preview.items,
+    mergedItems: preview.items.map(item => ({ ...item, category: item.category ?? data.mergedItems.find(source => source.productId === item.productId)?.category, location: item.location ?? data.mergedItems.find(source => source.productId === item.productId)?.location })),
     totals: {
       ...(data.totals || {}),
       quantity: preview.totals.quantity,
@@ -447,6 +452,8 @@ function normalizeOperationGroup(data: OperationGroupResponse): NormalizedOperat
         spec: item.spec ?? product.spec ?? null,
         unit: item.unit ?? product.unit ?? '—',
         code: product.code ?? item.productId ?? '',
+        category: item.category ?? (product as any).category ?? null,
+        location: item.location ?? (product as any).location ?? null,
       },
     }
   })
@@ -520,6 +527,7 @@ export default function DeliveryNotePrintPage() {
   const [order, setOrder] = useState<Order | null>(null)
   const [groupMembers, setGroupMembers] = useState<NormalizedOperationGroup['members'] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [categoryOrder, setCategoryOrder] = useState<string[]>([])
   const [printedAt] = useState(() => new Date())
 
   const [exporting, setExporting] = useState(false)
@@ -594,9 +602,21 @@ export default function DeliveryNotePrintPage() {
     }
   }, [refreshLatestDocument])
 
+  useEffect(() => {
+    if (!order?.supplier.id) return
+    let active = true
+    apiFetch<Array<{ name: string }>>(`/api/products/categories?supplierId=${encodeURIComponent(order.supplier.id)}`)
+      .then(rows => { if (active) setCategoryOrder(rows.map(row => row.name)) })
+      .catch(() => { if (active) setCategoryOrder([]) })
+    return () => { active = false }
+  }, [order?.supplier.id])
+
   async function refreshBeforeDocumentAction() {
     const latest = await refreshLatestDocument()
     if (!latest) throw new Error('送货单正在刷新，请重试')
+    const categories = await apiFetch<Array<{ name: string }>>(`/api/products/categories?supplierId=${encodeURIComponent(latest.order.supplier.id)}`).catch(() => [])
+    setCategoryOrder(categories.map(row => row.name))
+    await waitForDeliveryNoteFonts()
     await waitForDocumentPaint()
     return latest
   }
@@ -620,64 +640,9 @@ export default function DeliveryNotePrintPage() {
     try {
       const latestDocument = await refreshBeforeDocumentAction()
       const artifactEpoch = artifactEpochRef.current
-      const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
-        import('html2canvas'), import('jspdf')
-      ])
       const el = document.getElementById('print-area')
       if (!el) throw new Error('未找到打印区域')
-      // 3x 采样 + PNG，避免文字在导出的 PDF 中发糊或出现 JPEG 压缩块。
-      const canvas = await html2canvas(el, { scale: 3, backgroundColor: '#fff', useCORS: true })
-      const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
-      const pageW = 210, pageH = 297, margin = 8
-      const imgW = pageW - margin * 2
-      const imgH = canvas.height * imgW / canvas.width
-      const pageHContent = pageH - margin * 2
-
-      if (imgH <= pageHContent) {
-        // 单页 — 直接整张塞 (最常见)
-        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, margin, imgW, imgH)
-      } else {
-        // 多页分割 — 切点必须落在行边界上, 避免把一行切两半 (拣货漏行重灾区)
-        // 行位置用屏幕坐标量 (CSS px), 再按比例换算到 PDF mm
-        const elRect = el.getBoundingClientRect()
-        const cssToMm = imgH / elRect.height
-        const rowBoundsMm = Array.from(el.querySelectorAll('tbody tr')).map(tr => {
-          const r = tr.getBoundingClientRect()
-          return { top: (r.top - elRect.top) * cssToMm, bottom: (r.bottom - elRect.top) * cssToMm }
-        }).sort((a, b) => a.top - b.top)
-        let y = 0
-        while (y < imgH) {
-          if (y > 0) pdf.addPage()
-          let cut = Math.min(y + pageHContent, imgH)
-          if (cut < imgH) {
-            // 若有行被 cut 拦腰截断, 把 cut 收到该行的上沿
-            const cutRow = rowBoundsMm.find(r => r.top > y && r.top < cut && r.bottom > cut)
-            if (cutRow && cutRow.top > y + 10) cut = cutRow.top  // 至少留 10mm 内容, 防单行超高死循环
-          }
-          const remainImgH = cut - y
-          const srcY = y / imgH * canvas.height
-          const srcH = remainImgH / imgH * canvas.height
-          const pageCanvas = document.createElement('canvas')
-          pageCanvas.width = canvas.width
-          pageCanvas.height = Math.ceil(srcH)
-          const ctx = pageCanvas.getContext('2d')!
-          ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height)
-          ctx.drawImage(canvas, 0, srcY, canvas.width, srcH, 0, 0, canvas.width, srcH)
-          pdf.addImage(pageCanvas.toDataURL('image/png'), 'PNG', margin, margin, imgW, remainImgH)
-          y = cut
-        }
-        // 页脚: 第 X 页 / 共 Y 页 — 拣货时先对页数, 少一页立刻能发现
-        const pageCount = pdf.getNumberOfPages()
-        for (let p = 1; p <= pageCount; p++) {
-          pdf.setPage(p)
-          pdf.setFontSize(9)
-          pdf.setTextColor(120)
-          pdf.text(`${p} / ${pageCount}`, pageW - margin, pageH - 3, { align: 'right' })
-        }
-      }
-      // 生成 blob → 同时存 blob 和 data URL
-      const blob = pdf.output('blob') as Blob
-      const dataUrl = pdf.output('datauristring') as string
+      const { blob, dataUrl } = await renderDeliveryNotePdf(el)
       if (artifactEpoch !== artifactEpochRef.current) throw new Error('送货单数据已刷新，请重新生成')
       setPdfBlob(blob)
       setPdfUrl(dataUrl)
@@ -875,8 +840,14 @@ export default function DeliveryNotePrintPage() {
     try {
       const latestDocument = await refreshBeforeDocumentAction()
       if (typeof window.print === 'function') {
-        window.print()
-        await recordPrintEvents(latestDocument)
+        const source = document.getElementById('print-area')
+        if (!source) throw new Error('送货单尚未加载')
+        // Validate the exact pagination before opening a native print dialog.
+        const clearPreparedPages = prepareDeliveryNotePrint(source)
+        try {
+          window.print()
+          await recordPrintEvents(latestDocument)
+        } finally { clearPreparedPages() }
       }
       else notifyUser('当前环境不支持系统打印, 请用「下载 PDF」按钮')
     } catch (e: any) {
@@ -914,8 +885,9 @@ export default function DeliveryNotePrintPage() {
     <>
       {/* 打印样式 — 纸张 + 隐藏顶栏 */}
       <style jsx global>{`
+        ${deliveryNoteStyles}
         [data-delivery-note-print-root] { display: none; }
-        @page { size: A4; margin: ${isOperationGroup ? '12mm 12mm 6mm 12mm' : '12mm'}; }
+        @page { size: A4 portrait; margin: 12mm; }
         @media print {
           body { background: white !important; }
           body:has([data-delivery-note-print-root]) > :not([data-delivery-note-print-root]) { display: none !important; }
@@ -947,6 +919,7 @@ export default function DeliveryNotePrintPage() {
       <div className="no-print sticky top-0 bg-bg-warm border-b border-border px-4 py-3 flex items-center gap-2 z-10">
         <button onClick={() => router.back()} className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center">‹</button>
         <span className="flex-1 text-h2 truncate">送货单 · {documentLabel}</span>
+        <a href="/fonts/harmonyos/LICENSE.txt" target="_blank" rel="noopener" className="text-caption text-gray2">HarmonyOS Sans 字体</a>
         <button onClick={exportPDF} disabled={exporting}
                 className="px-4 py-2 bg-ink text-white rounded-cta text-button disabled:opacity-40">
           {exporting ? '生成中…' : '📄 生成 PDF'}
@@ -1011,160 +984,7 @@ export default function DeliveryNotePrintPage() {
         </div>
       )}
 
-      {/* A4 纸面 */}
-      <div
-        id="print-area"
-        data-delivery-note-print
-        className={`print-page mx-auto my-6 bg-white shadow-md text-ink ${isOperationGroup ? 'px-10 pb-5 pt-10' : 'p-10'}`}
-        style={{ width: '210mm', minHeight: isOperationGroup ? 'auto' : '297mm', fontFamily: 'system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif' }}
-      >
-        {/* 抬头 */}
-        <div className="text-center border-b-2 border-ink pb-3">
-          <div className="text-2xl font-bold tracking-widest">{order.supplier.name}</div>
-          <div className="text-3xl font-bold mt-2">送 货 单</div>
-          <div className="text-xs text-gray2 mt-1">DELIVERY NOTE</div>
-        </div>
-
-        {/* 顶部元数据 */}
-        <table className="w-full text-sm mt-4 border-collapse">
-          <tbody>
-            {isOperationGroup && groupMembers && groupMembers.length > 0
-              ? groupMembers.map(member => (
-                <tr key={member.id}>
-                  <td className="border border-gray3 px-2 py-1.5 bg-bg w-24">送货单号</td>
-                  <td className="border border-gray3 px-2 py-1.5 font-mono">{member.deliveryNos?.length ? member.deliveryNos.join('、') : member.deliveryNo || member.no}</td>
-                  <td className="border border-gray3 px-2 py-1.5 bg-bg w-24">下单日期</td>
-                  <td className="border border-gray3 px-2 py-1.5">{dayjs(member.createdAt).format('YYYY-MM-DD HH:mm')}</td>
-                </tr>
-              ))
-              : (
-                <tr>
-                  <td className="border border-gray3 px-2 py-1.5 bg-bg w-24">送货单号</td>
-                  <td className="border border-gray3 px-2 py-1.5 font-mono">{order.no}</td>
-                  <td className="border border-gray3 px-2 py-1.5 bg-bg w-24">下单日期</td>
-                  <td className="border border-gray3 px-2 py-1.5">{dayjs(order.createdAt).format('YYYY-MM-DD HH:mm')}</td>
-                </tr>
-              )}
-            {order.purchaseOrderNo && (
-              <tr>
-                <td className="border border-gray3 px-2 py-1.5 bg-bg">来源订货单</td>
-                <td className="border border-gray3 px-2 py-1.5 font-mono" colSpan={3}>{order.purchaseOrderNo}</td>
-              </tr>
-            )}
-            <tr>
-              <td className="border border-gray3 px-2 py-1.5 bg-bg">收货方</td>
-              <td className="border border-gray3 px-2 py-1.5" colSpan={3}>{order.store.name}</td>
-            </tr>
-            {order.store.address && (
-              <tr>
-                <td className="border border-gray3 px-2 py-1.5 bg-bg">收货地址</td>
-                <td className="border border-gray3 px-2 py-1.5" colSpan={3}>{order.store.address}</td>
-              </tr>
-            )}
-            {((order.consignee?.name ?? order.store.managerName) || (order.consignee?.phone ?? order.store.phone)) && (
-              <tr>
-                <td className="border border-gray3 px-2 py-1.5 bg-bg">收货人</td>
-                <td className="border border-gray3 px-2 py-1.5" colSpan={3}>
-                  {(order.consignee?.name ?? order.store.managerName) || '—'}{(order.consignee?.phone ?? order.store.phone) ? ` · ${order.consignee?.phone ?? order.store.phone}` : ''}
-                </td>
-              </tr>
-            )}
-            <tr>
-              <td className="border border-gray3 px-2 py-1.5 bg-bg">下单人</td>
-              <td className="border border-gray3 px-2 py-1.5" colSpan={3}>{order.createdBy?.name || '—'}</td>
-            </tr>
-            <tr>
-              <td className="border border-gray3 px-2 py-1.5 bg-bg">期望到货</td>
-              <td className="border border-gray3 px-2 py-1.5">{dayjs(order.expectedDate).format('YYYY-MM-DD')}</td>
-              <td className="border border-gray3 px-2 py-1.5 bg-bg">发货时间</td>
-              <td className="border border-gray3 px-2 py-1.5">{order.shippedAt ? dayjs(order.shippedAt).format('YYYY-MM-DD HH:mm') : '—'}</td>
-            </tr>
-            {(order.supplier.contactName || order.supplier.contactPhone) && (
-              <tr>
-                <td className="border border-gray3 px-2 py-1.5 bg-bg">供应方联系人</td>
-                <td className="border border-gray3 px-2 py-1.5" colSpan={3}>
-                  {order.supplier.contactName || '—'}{order.supplier.contactPhone ? ` · ${order.supplier.contactPhone}` : ''}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-
-        {/* 商品明细：每个商品独立行组，WebKit 打印时也保持整行。 */}
-        <table className="w-full table-fixed text-sm mt-4 border-collapse">
-          <thead>
-            <tr className="bg-bg">
-              <th className="border border-gray3 px-2 py-1.5 w-10">#</th>
-              <th className="border border-gray3 px-2 py-1.5 text-left">品名</th>
-              <th className="border border-gray3 px-2 py-1.5 text-left w-32">规格</th>
-              <th className="border border-gray3 px-2 py-1.5 w-12">单位</th>
-              <th className="border border-gray3 px-2 py-1.5 w-16">数量</th>
-              <th className="border border-gray3 px-2 py-1.5 w-20">单价(¥)</th>
-              <th className="border border-gray3 px-2 py-1.5 w-24">金额(¥)</th>
-            </tr>
-          </thead>
-            {order.items.map((it, globalIdx) => {
-              const adj = it.shippedQty != null && Math.abs(Number(it.shippedQty) - Number(it.quantity)) > 0.0001
-              return (
-                <tbody key={it.id} data-delivery-note-row><tr>
-                  <td className="border border-gray3 px-2 py-1.5 text-center">{globalIdx + 1}</td>
-                  <td className="border border-gray3 px-2 py-1.5">{it.product?.name || '-'}</td>
-                  <td className="border border-gray3 px-2 py-1.5 text-xs">{it.product?.spec || '—'}</td>
-                  <td className="border border-gray3 px-2 py-1.5 text-center">{it.product?.unit || '—'}</td>
-                  <td className="border border-gray3 px-2 py-1.5 text-right font-mono">
-                    {itemQty(it)}
-                    {adj && <span className="text-xs text-gray3 ml-1">(下单 {it.quantity})</span>}
-                  </td>
-                  <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{Number(it.unitPrice).toFixed(2)}</td>
-                  <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{itemAmt(it).toFixed(2)}</td>
-                </tr></tbody>
-              )
-            })}
-          <tbody data-delivery-note-totals>
-            {/* 实发金额 */}
-            <tr className="bg-bg font-semibold">
-              <td colSpan={4} className="border border-gray3 px-2 py-1.5 text-right">实发金额</td>
-              <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{totalQty}</td>
-              <td className="border border-gray3 px-2 py-1.5"></td>
-              <td className="border border-gray3 px-2 py-1.5 text-right font-mono">{total.toFixed(2)}</td>
-            </tr>
-            {/* 大写 */}
-            <tr>
-              <td className="border border-gray3 px-2 py-1.5 bg-bg">大写</td>
-              <td colSpan={6} className="border border-gray3 px-2 py-1.5">人民币 {num2cn(total)}</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <div data-delivery-note-footer>
-        {/* 备注 */}
-        {(order.note || order.shippedNote) && (
-          <div className="mt-4 text-sm">
-            {order.note && <div>📝 订单备注: {order.note}</div>}
-            {order.shippedNote && <div className="mt-1">📦 发货备注: {order.shippedNote}</div>}
-          </div>
-        )}
-
-        {/* 签字栏 */}
-        <div className="mt-12 grid grid-cols-2 gap-12 text-sm">
-          <div>
-            <div className="border-b border-ink pb-1 mb-2 h-8" />
-            <div className="text-center text-gray2">送货人签字 / 日期</div>
-          </div>
-          <div>
-            <div className="border-b border-ink pb-1 mb-2 h-8" />
-            <div className="text-center text-gray2">收货人签字 / 日期</div>
-          </div>
-        </div>
-
-        {/* 页脚 */}
-        <div className="mt-6 pt-2 border-t border-border text-xs text-gray3 flex justify-between">
-          <span>共 {itemsCount} 项商品</span>
-          <span>打印时间 {dayjs(printedAt).format('YYYY-MM-DD HH:mm')}</span>
-          <span>本单一式两联 · 收货方留存一联</span>
-        </div>
-        </div>
-      </div>
+      <DeliveryNotePaper order={order} members={groupMembers} categories={categoryOrder} printedAt={printedAt} />
     </>
   )
 }

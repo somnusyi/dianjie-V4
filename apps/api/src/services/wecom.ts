@@ -15,13 +15,29 @@
  *   - decryptWebhook(tenantId, msgEncrypt, signature, timestamp, nonce): 解密回调消息
  */
 import { prisma } from '@dianjie/db'
+import { credentialContext, openCredential, sealCredential } from '../lib/credential-vault'
 
+const providerResponse = (r: any) => ({ errcode: Number.isInteger(r?.errcode) ? r.errcode : -1 })
+async function providerJson(url: string, init?: RequestInit): Promise<any> {
+  try {
+    const response = await fetch(url, init)
+    if (response.ok === false) throw Error('Provider HTTP failure')
+    const result = await response.json()
+    if (!result || typeof result !== 'object') throw Error('Invalid provider response')
+    return result
+  } catch { throw { statusCode: 502, code: 'WECOM_TRANSPORT_FAILED', message: '企微服务暂时不可用，请稍后重试' } }
+}
 const WECOM_BASE = 'https://qyapi.weixin.qq.com/cgi-bin'
 
 async function getConfig(tenantId: string) {
   const c = await prisma.weComConfig.findUnique({ where: { tenantId } })
   if (!c || !c.enabled) throw { statusCode: 400, message: '企微集成未启用' }
-  return c
+  return { ...c,
+    appSecret: openCredential(c.appSecret, credentialContext(tenantId, 'wecom', 'appSecret')) || '',
+    contactSecret: openCredential(c.contactSecret, credentialContext(tenantId, 'wecom', 'contactSecret')),
+    accessToken: openCredential(c.accessToken, credentialContext(tenantId, 'wecom', 'accessToken')),
+    contactToken: openCredential(c.contactToken, credentialContext(tenantId, 'wecom', 'contactToken')),
+  }
 }
 
 /**
@@ -35,12 +51,12 @@ export async function getAccessToken(tenantId: string): Promise<string> {
     return cfg.accessToken
   }
   const url = `${WECOM_BASE}/gettoken?corpid=${cfg.corpId}&corpsecret=${cfg.appSecret}`
-  const r = await fetch(url).then((r) => r.json() as any)
-  if (r.errcode !== 0) throw { statusCode: 500, message: `企微 token 获取失败: ${r.errmsg}` }
+  const r = await providerJson(url)
+  if (r.errcode !== 0) throw { statusCode: 500, message: '企微 token 获取失败，请核对配置' }
   const expiresAt = new Date(Date.now() + (r.expires_in || 7200) * 1000)
   await prisma.weComConfig.update({
     where: { tenantId },
-    data: { accessToken: r.access_token, accessTokenExp: expiresAt },
+    data: { accessToken: sealCredential(r.access_token, credentialContext(tenantId, 'wecom', 'accessToken')), accessTokenExp: expiresAt },
   })
   return r.access_token
 }
@@ -53,12 +69,12 @@ export async function getContactToken(tenantId: string): Promise<string> {
     return cfg.contactToken
   }
   const url = `${WECOM_BASE}/gettoken?corpid=${cfg.corpId}&corpsecret=${cfg.contactSecret}`
-  const r = await fetch(url).then((r) => r.json() as any)
-  if (r.errcode !== 0) throw { statusCode: 500, message: `通讯录 token 失败: ${r.errmsg}` }
+  const r = await providerJson(url)
+  if (r.errcode !== 0) throw { statusCode: 500, message: '通讯录 token 获取失败，请核对配置' }
   const expiresAt = new Date(Date.now() + (r.expires_in || 7200) * 1000)
   await prisma.weComConfig.update({
     where: { tenantId },
-    data: { contactToken: r.access_token, contactTokenExp: expiresAt },
+    data: { contactToken: sealCredential(r.access_token, credentialContext(tenantId, 'wecom', 'contactToken')), contactTokenExp: expiresAt },
   })
   return r.access_token
 }
@@ -69,9 +85,9 @@ export async function getContactToken(tenantId: string): Promise<string> {
  */
 export async function exchangeOAuthCode(tenantId: string, code: string): Promise<{ wecomUserId: string; deptIds?: number[] }> {
   const token = await getAccessToken(tenantId)
-  const r = await fetch(`${WECOM_BASE}/auth/getuserinfo?access_token=${token}&code=${code}`)
-    .then((r) => r.json() as any)
-  if (r.errcode !== 0) throw { statusCode: 401, message: `OAuth 失败: ${r.errmsg}` }
+  const r = await providerJson(`${WECOM_BASE}/auth/getuserinfo?access_token=${token}&code=${code}`)
+
+  if (r.errcode !== 0) throw { statusCode: 401, message: '企微授权失败，请重新登录' }
   if (!r.userid) throw { statusCode: 401, message: 'OAuth 仅支持企业内成员登录' }
   return { wecomUserId: r.userid }
 }
@@ -79,9 +95,9 @@ export async function exchangeOAuthCode(tenantId: string, code: string): Promise
 /** 取用户详情 (姓名/手机/邮箱/部门) */
 export async function getUserInfo(tenantId: string, wecomUserId: string) {
   const token = await getAccessToken(tenantId)
-  const r = await fetch(`${WECOM_BASE}/user/get?access_token=${token}&userid=${encodeURIComponent(wecomUserId)}`)
-    .then((r) => r.json() as any)
-  if (r.errcode !== 0) throw { statusCode: 500, message: `获取用户信息失败: ${r.errmsg}` }
+  const r = await providerJson(`${WECOM_BASE}/user/get?access_token=${token}&userid=${encodeURIComponent(wecomUserId)}`)
+
+  if (r.errcode !== 0) throw { statusCode: 500, message: '获取企微用户信息失败' }
   return {
     wecomUserId: r.userid,
     name: r.name as string,
@@ -106,22 +122,22 @@ export async function sendAppMsg(tenantId: string, toUser: string | string[], co
     text: { content },
     safe: 0,
   }
-  const r = await fetch(`${WECOM_BASE}/message/send?access_token=${token}`, {
+  const r = await providerJson(`${WECOM_BASE}/message/send?access_token=${token}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  }).then((r) => r.json() as any)
+  })
   // 审计日志
   await prisma.weComSyncLog.create({
     data: {
       tenantId, kind: 'send_msg',
       status: r.errcode === 0 ? 'ok' : 'error',
-      payload: { toUser, content: content.slice(0, 100), resp: r } as any,
-      errorMsg: r.errcode !== 0 ? r.errmsg : null,
+      payload: { recipientCount: Array.isArray(toUser) ? toUser.length : 1, response: providerResponse(r) } as any,
+      errorMsg: r.errcode !== 0 ? 'Provider message withheld' : null,
     },
   })
-  if (r.errcode !== 0) throw { statusCode: 500, message: `消息发送失败: ${r.errmsg}` }
-  return r
+  if (r.errcode !== 0) throw { statusCode: 500, message: '企微消息发送失败' }
+  return providerResponse(r)
 }
 
 /** 发卡片消息 (跳转滇界 URL); 接受 btnTxt 或 btntxt 两种字段名 */
@@ -145,19 +161,19 @@ export async function sendCardMsg(tenantId: string, toUser: string | string[], o
       btntxt: opts.btntxt || opts.btnTxt || '查看详情',
     },
   }
-  const r = await fetch(`${WECOM_BASE}/message/send?access_token=${token}`, {
+  const r = await providerJson(`${WECOM_BASE}/message/send?access_token=${token}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  }).then((r) => r.json() as any)
+  })
   await prisma.weComSyncLog.create({
     data: {
       tenantId, kind: 'send_msg',
       status: r.errcode === 0 ? 'ok' : 'error',
-      payload: { toUser, title: opts.title, resp: r } as any,
-      errorMsg: r.errcode !== 0 ? r.errmsg : null,
+      payload: { recipientCount: Array.isArray(toUser) ? toUser.length : 1, response: providerResponse(r) } as any,
+      errorMsg: r.errcode !== 0 ? 'Provider message withheld' : null,
     },
   })
-  if (r.errcode !== 0) throw { statusCode: 500, message: `卡片消息失败: ${r.errmsg}` }
-  return r
+  if (r.errcode !== 0) throw { statusCode: 500, message: '企微卡片消息发送失败' }
+  return providerResponse(r)
 }

@@ -1,4 +1,5 @@
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 
 import { useEffect, useState } from 'react'
 import { apiFetch, getUser, routeForRole } from '@/lib/v2-auth'
@@ -80,7 +81,7 @@ export default function InventoryCountsPage() {
           <div className="text-button">新建盘点单</div>
           <p className="text-caption text-gray2 mt-1">创建时冻结当前启用食材和账面预计数量；零库存也必须填 0。</p>
           <div className="flex gap-2 mt-3">
-            <input type="date" value={countDate} max={new Date().toISOString().slice(0, 10)} onChange={event => setCountDate(event.target.value)}
+            <input type="date" value={countDate} max={businessDayjs().format('YYYY-MM-DD')} onChange={event => setCountDate(event.target.value)}
               className="flex-1 rounded-cta border border-border bg-bg px-3 py-3 text-body" />
             <button onClick={create} disabled={busy || !countDate} className="px-5 rounded-cta bg-ink text-white text-button disabled:opacity-35">
               {busy ? '创建中…' : '开始盘点'}

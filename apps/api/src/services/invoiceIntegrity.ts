@@ -16,6 +16,7 @@ export interface SupplierInvoiceData {
   fileType: 'image' | 'pdf'
   note: string | null
   receiptIds: string[]
+  expectedUploadedAt?: string
 }
 
 function httpError(message: string, statusCode: number) {
@@ -62,7 +63,7 @@ export async function createSupplierInvoice(input: SupplierInvoiceData) {
     })
     if (!supplier) throw httpError('供应商不存在或已停用', 409)
 
-    const existing = await tx.invoice.findFirst({
+    let existing = await tx.invoice.findFirst({
       where: {
         tenantId: input.tenantId, supplierId: input.supplierId, invoiceNo: input.invoiceNo,
       },
@@ -71,8 +72,22 @@ export async function createSupplierInvoice(input: SupplierInvoiceData) {
       },
     })
     if (existing) {
-      if (sameInvoice(existing, input, receiptIds)) return { invoice: existing, duplicated: true }
-      throw httpError('该发票号码已存在，且上传参数不同', 409)
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`invoice-review:${existing.id}`}))`
+      existing = await tx.invoice.findFirst({ where: { id: existing.id, tenantId: input.tenantId, supplierId: input.supplierId },
+        include: { receipts: { select: { id: true, totalAmount: true, status: true, supplierId: true } } } })
+      if (!existing) throw httpError('发票状态已变化，请刷新重试', 409)
+      if (existing.status !== 'REJECTED') {
+        if (sameInvoice(existing, input, receiptIds)) return { invoice: existing, duplicated: true }
+        throw httpError('该发票号码已存在，且上传参数不同', 409)
+      }
+      if (!input.expectedUploadedAt || existing.uploadedAt.toISOString() !== input.expectedUploadedAt) {
+        throw httpError('退回发票已更新，请刷新后重新提交', 409)
+      }
+      if (!existing.paidAmount.isZero()
+        || await tx.invoicePayment.count({ where: { invoiceId: existing.id } })
+        || await tx.upstreamSettlementInvoiceAllocation.count({ where: { invoiceId: existing.id } })) {
+        throw httpError('该发票已有付款或对账分配，不能重新提交', 409)
+      }
     }
 
     const receipts = await tx.receipt.findMany({
@@ -94,16 +109,18 @@ export async function createSupplierInvoice(input: SupplierInvoiceData) {
       )
     }
 
-    const invoice = await tx.invoice.create({
-      data: {
-        tenantId: input.tenantId, supplierId: input.supplierId,
-        invoiceNo: input.invoiceNo, invoiceCode: input.invoiceCode,
-        amount: input.amount, amountWithoutTax: input.amountWithoutTax,
-        taxRate: input.taxRate, taxAmount: input.taxAmount,
-        issueDate: input.issueDate, fileUrl: input.fileUrl, fileType: input.fileType,
-        note: input.note, uploadedById: input.uploadedById, status: 'PENDING',
-      },
-    })
+    const data = {
+      tenantId: input.tenantId, supplierId: input.supplierId,
+      invoiceNo: input.invoiceNo, invoiceCode: input.invoiceCode,
+      amount: input.amount, amountWithoutTax: input.amountWithoutTax,
+      taxRate: input.taxRate, taxAmount: input.taxAmount,
+      issueDate: input.issueDate, fileUrl: input.fileUrl, fileType: input.fileType,
+      note: input.note, uploadedById: input.uploadedById, status: 'PENDING' as const,
+      uploadedAt: new Date(Math.max(Date.now(), existing ? existing.uploadedAt.getTime() + 1 : 0)),
+    }
+    const invoice = existing
+      ? await tx.invoice.update({ where: { id: existing.id, status: 'REJECTED' }, data: { ...data, reviewedAt: null, reviewedById: null, reviewNote: null } })
+      : await tx.invoice.create({ data })
     const linked = await tx.receipt.updateMany({
       where: {
         id: { in: receiptIds }, tenantId: input.tenantId, supplierId: input.supplierId,
@@ -119,7 +136,8 @@ export async function createSupplierInvoice(input: SupplierInvoiceData) {
         tenantId: input.tenantId, userId: input.uploadedById, role: input.role,
         action: `上传发票 ${input.invoiceNo} ¥${input.amount.toFixed(2)} 关联 ${receiptIds.length} 单`,
         target: input.invoiceNo, entityType: 'Invoice', targetId: invoice.id,
-        metadata: { supplierId: input.supplierId, receiptIds, amount: input.amount.toFixed(2) },
+        metadata: { supplierId: input.supplierId, receiptIds, amount: input.amount.toFixed(2),
+          ...(existing ? { action: 'RESUBMIT', previous: JSON.parse(JSON.stringify(existing)), uploadedAt: invoice.uploadedAt.toISOString() } : {}) },
       },
     })
     return { invoice: { ...invoice, receipts: receipts.map(receipt => ({ id: receipt.id })) }, duplicated: false }
@@ -133,6 +151,7 @@ export async function reviewInvoice(input: {
   role: string
   action: 'APPROVE' | 'REJECT'
   note: string | null
+  expectedUploadedAt?: string
 }) {
   return prisma.$transaction(async tx => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`invoice-review:${input.invoiceId}`}))`
@@ -143,6 +162,14 @@ export async function reviewInvoice(input: {
       },
     })
     if (!invoice) throw httpError('发票不存在', 404)
+    const resubmission = await tx.opLog.findFirst({ where: {
+      tenantId: input.tenantId, entityType: 'Invoice', targetId: invoice.id,
+      metadata: { path: ['action'], equals: 'RESUBMIT' },
+    }, select: { id: true } })
+    if ((input.expectedUploadedAt && input.expectedUploadedAt !== invoice.uploadedAt.toISOString())
+      || (resubmission && !input.expectedUploadedAt)) {
+      throw httpError('发票已重新提交，请刷新后审核当前版本', 409)
+    }
     const targetStatus = input.action === 'APPROVE' ? 'VERIFIED' : 'REJECTED'
     if (invoice.status !== 'PENDING') {
       const priorLog = await tx.opLog.findFirst({

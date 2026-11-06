@@ -1,8 +1,11 @@
 'use client'
+import { businessMonthKey, monthDateKeys } from '@/lib/business-date'
+import { loadVoucherCount } from '@/lib/voucher-list'
+import { loadInvoices } from '@/lib/invoice-list'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
-import { apiFetch, getUser, clearSession } from '@/lib/v2-auth'
+import { apiFetch, getUser, logoutSession } from '@/lib/v2-auth'
 
 type Tab =
   | { key: string; label: string; href: string; badgeKey?: keyof Badges }
@@ -78,8 +81,8 @@ export default function FinanceTopNav() {
   const userMenuRef = useRef<HTMLDivElement>(null)
   const [installPrompt, setInstallPrompt] = useState<any>(null)
 
-  function logout() {
-    clearSession()
+  async function logout() {
+    await logoutSession()
     // PWA scope 内的 login, 不会跳出桌面 PWA 窗口
     location.href = '/v2/finance-pc/login'
   }
@@ -114,20 +117,19 @@ export default function FinanceTopNav() {
     let alive = true
     const load = async () => {
       try {
-        const monthFrom = `${new Date().toISOString().slice(0, 7)}-01`
-        const monthTo   = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().slice(0, 10)
+        const { from: monthFrom, to: monthTo } = monthDateKeys(businessMonthKey())
         const [pr, sch, vou, inv, pInv] = await Promise.all([
           apiFetch<{ total: number }>('/api/payment-requests?status=PENDING&pageSize=1').catch(() => ({ total: 0 })),
           apiFetch<any[]>('/api/schedules?days=7').catch(() => []),
-          apiFetch<{ items: any[] }>(`/api/vouchers?from=${monthFrom}&to=${monthTo}&status=DRAFT&pageSize=200`).catch(() => ({ items: [] })),
-          apiFetch<any[]>('/api/invoices?status=PENDING').catch(() => []),
-          apiFetch<{ summary?: { paidCount?: number } }>('/api/invoices/pending-from-finance').catch(() => ({ summary: { paidCount: 0 } })),
+          loadVoucherCount(monthFrom, monthTo, 'DRAFT').catch(() => undefined),
+          loadInvoices<{ id: string }>('PENDING').catch(() => null),
+          apiFetch<{ summary?: { paidCount?: number } }>('/api/invoices/pending-from-finance').catch(() => null),
         ])
         if (!alive) return
         const dueCount = Array.isArray(sch) ? sch.filter((s: any) => ['PENDING', 'APPROVED', 'NOTIFIED'].includes(s.status)).length : 0
-        const draftCount = vou.items?.length || 0
-        const invoicePending = Array.isArray(inv) ? inv.length : 0
-        const pendingInvoice = pInv?.summary?.paidCount || 0
+        const draftCount = vou
+        const invoicePending = Array.isArray(inv) ? inv.length : undefined
+        const pendingInvoice = pInv?.summary?.paidCount
         setBadges({ pendingReview: pr.total || 0, dueThisWeek: dueCount, draftVouchers: draftCount, invoicePending, pendingInvoice })
       } catch { /* 静默 */ }
     }
@@ -167,7 +169,9 @@ export default function FinanceTopNav() {
             const badge: number | undefined = badgeKey ? (badges as any)[badgeKey] : undefined
             // group: 显示总数 = 所有 sub badge 之和
             const groupBadge = isGroup
-              ? (t as any).group.reduce((acc: number, s: SubItem) => acc + (s.badgeKey ? (badges as any)[s.badgeKey] || 0 : 0), 0)
+              ? (t as any).group.some((s: SubItem) => s.badgeKey && badges[s.badgeKey] === undefined)
+                ? undefined
+                : (t as any).group.reduce((acc: number, s: SubItem) => acc + (s.badgeKey ? badges[s.badgeKey] || 0 : 0), 0)
               : 0
 
             if (!isGroup) {
@@ -189,7 +193,7 @@ export default function FinanceTopNav() {
                   className={`px-2 py-1.5 text-button transition relative flex items-center gap-1 ${groupActive ? 'text-ink font-medium' : 'text-gray2 hover:text-ink'}`}>
                   {t.label}
                   <span className={`text-micro transition-transform ${isOpen ? 'rotate-180' : ''}`}>▾</span>
-                  {groupBadge > 0 && <BadgePill n={groupBadge} />}
+                  {groupBadge !== undefined && groupBadge > 0 && <BadgePill n={groupBadge} />}
                   {groupActive && <span className="absolute -bottom-[15px] left-0 right-0 h-[2px] bg-ink"></span>}
                 </button>
                 {isOpen && (

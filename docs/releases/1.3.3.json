@@ -1,0 +1,1376 @@
+{
+  "version": "1.3.3",
+  "namedOn": "2026-10-28",
+  "previousVersion": "1.3.2",
+  "releaseId": "v1.3.3-20261028",
+  "businessReleaseId": "four-gap-20261028",
+  "record": "docs/releases/1.3.3.json",
+  "status": "deployed",
+  "timezone": "America/Los_Angeles",
+  "changes": [
+    "P01 提交订单立即校验并预占，改单及撤回释放保持一致；草稿按账号门店隔离",
+    "P02 门店调拨按实际发货、实收、退回与损坏记账，双方冻结同一成本",
+    "P05 成本材料核定、历史补齐、报表及导出统一、部分退货尾差；保留原版本合同税率功能，不擅自新增税率核定入口",
+    "G02 凭据及日志加固、安全浏览器会话、加密备份与兼容恢复门槛"
+  ],
+  "dataImports": 0,
+  "plannedMigrations": [
+    "20261029000000_store_transfer_posting",
+    "20261029001000_supplier_reservation_stock_basis",
+    "20261029003000_browser_session_intent_sequence",
+    "20261029010000_net_cost_basis",
+    "20261103000000_warehouse_review_posting",
+    "20261104000000_replenishment_submission_holds",
+    "20261106000000_product_location"
+  ],
+  "localBuildCandidate": {
+    "status": "stale_requires_scope_review_after_user_correction",
+    "version": "1.3.3",
+    "scope": "API compiled from v11 using matching root dependencies; unchanged Web reused with source comparison",
+    "sourceScopeSha256": "62c3076903944075ca7af29f1b3aa09643c5954492ef3495b9c6a1eea9470ce0",
+    "apiDist": {
+      "files": 238,
+      "sha256": "31465795bc31fc06da99a9791010d9c3435d90227089ccf90cca03057b9f3762"
+    },
+    "schemaSha256": "f58478dea52a3880005065cac359ab7cf7899dea10c4d8eb3bcaea10689f8263",
+    "migrationTree": {
+      "files": 133,
+      "sha256": "e5c60f28af00cecba80351bacfbea714c0d27e5592701bf98a14bf2db4c85bd3"
+    },
+    "prismaClientProvenance": "Reused v7 Linux client after exact schema and DB adapter comparison; not regenerated",
+    "limits": [
+      "No deployment or independent compatible recovery acceptance",
+      "Web reused, not rebuilt",
+      "2026-10-30用户最终确认保留原有合同税率功能；v11源码需按当前P05核定入口与测试重新审查后才可交付"
+    ],
+    "manifest": "tmp/four-gap-20261028/staged-1.3.3-src-v11/build-candidate.json",
+    "webBuildId": "2QcippJaRt0fxZRm1-vzG",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/UAT-DELIVERY-V11.json"
+  },
+  "localOperationsSource": {
+    "status": "staged_and_tested_unapproved",
+    "manifest": "tmp/four-gap-20261028/staged-1.3.3-ops-v8/operations-source.json",
+    "manifestSha256": "bd0ddd9c031410ec13e1f8f79cce8f548ff8759a06ab11d361f0b9e30e749a30",
+    "files": 13
+  },
+  "localRuntimeBundle": {
+    "status": "inventory_verified_runtime_incomplete",
+    "manifest": "tmp/four-gap-20261028/staged-1.3.3-runtime-v2/runtime-bundle.json",
+    "manifestSha256": "867ae6d3d56c1fac296098bae1379949c06639575ddcd69a87e90000ec306e26",
+    "artifacts": 244,
+    "apiImageId": "sha256:89e39760a0b3eb9072e10594701cf2df80c06ba698bf23f2035835a5569bd17d",
+    "localWebArchiveSmoke": "worked_only_with_repository_ancestor_dependencies",
+    "limits": "Web archive lacks Next runtime when extracted outside the repository; independent audit now refuses it. No compatible rollback driver, recovery rehearsal, offline production key escrow or release approval"
+  },
+  "localUatWebCandidate": {
+    "status": "detached_macos_smoke_passed_unapproved",
+    "buildManifest": "tmp/four-gap-20261028/staged-1.3.3-src-v2/uat-web-build-candidate.json",
+    "buildManifestSha256": "cd099c09e79b60b39401fa0dd6b18bcdb5eb3a82f49f1169ca1ad47496dee72c",
+    "bundleManifest": "tmp/four-gap-20261028/uat-web-bundle-v2/bundle.json",
+    "bundleManifestSha256": "5b197b1887878c417b2231edaa703cd5fc28b2261777bd9daadc47fa967c6ef2",
+    "buildId": "KHkFxVAugCmfgpo0ow579",
+    "tenant": "supply-chain-uat",
+    "archiveSha256": "76973cde31824b629985ad727877f837fe6fc201a9a24d21e6199e9391697bb2",
+    "limits": "Mac local build; Linux native runtime, UAT HTTPS and same-origin secure cookie behavior still unverified"
+  },
+  "localUatLinuxWebImage": {
+    "status": "isolated_smoke_passed_unapproved",
+    "imageId": "sha256:123f1579d00499734729828e03600dcd2668b01ee3e1cc544ab6d5bb0d40012d",
+    "platform": "linux/amd64",
+    "buildId": "JG0SA8udOOcfopL3MzznN",
+    "buildAuditManifest": "tmp/four-gap-20261028/staged-1.3.3-src-v6/uat-web-docker-build-candidate.json",
+    "buildAuditSha256": "bec8df15ad41873f6a351df8c101b0f4e2ea0a7e9b894a67357ab77635ddf4cd",
+    "imageContextManifest": "tmp/four-gap-20261028/staged-1.3.3-src-v6/uat-web-image-context-v6/context-manifest.json",
+    "imageContextSha256": "37afcfd08f463769b5a584ffc0f1d8b5ba1115e614fa785e46fbd6d8cccc9758",
+    "serverApiProxy": "http://api:4000",
+    "localChecks": "login_css_build_id_paired_business_reads_https_session_passed",
+    "limits": "Local synthetic only; no public UAT HTTPS or deployment"
+  },
+  "localUatDeliveryCandidate": {
+    "status": "local_uat_delivery_integrity_passed_unapproved",
+    "manifest": "tmp/four-gap-20261028/uat-delivery-v11/delivery-candidate.json",
+    "manifestSha256": "e8486cce3b257d275651d7f92daf16521b29d7d2df6a927173d37ade5e5ce866",
+    "artifacts": 396,
+    "apiImageId": "sha256:ce1e122f16ee0ba3ee368695a9311de7c15993e632d73faa76d2f0efa00ba390",
+    "webImageId": "sha256:ed7d3cf4964a86e09a811e6bde0351564ded058f889c867e2ef89ff96b219c16",
+    "verifiedAt": "2026-10-30T06:22:14.636282+00:00",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/UAT-DELIVERY-V11.json"
+  },
+  "environments": {
+    "uat": {
+      "status": "deployed",
+      "version": "1.3.3",
+      "environment": "uat",
+      "at": "2026-11-06T08:11:16.775286+00:00",
+      "apiImageId": "sha256:4ec8f3be22738c52b06e24aad53abf7e5939a0812c6da30367606dae7419a516",
+      "webImageId": "sha256:2ce1285c2bec1b08ea53f6106359bd28e9f1304fad5771ebb8169374341b2b72",
+      "webBuildId": "OgfsAUFwFgKAIZ1_ozVDp",
+      "sourceScopeSha256": "6fc05f8eff90a0630336e7ca4367706be1295e3b053a48bfd5f1ce2aafb37ba9",
+      "publicBase": "https://www.dianjie.cc:8085",
+      "health": {
+        "status": "ok",
+        "timestamp": "2026-11-06T08:11:16.415Z",
+        "version": "1.3.3",
+        "db": "ok"
+      },
+      "loginHttp": 200,
+      "applyHttp": 200,
+      "storeListHttp": 200,
+      "fontSha256": "6ed1553edccddc48eb27ff25d134a4a715cf54211238d4840b3038576cba1944",
+      "otherContainersUnchanged": true,
+      "databaseImports": 0,
+      "schema": {
+        "environment": "uat",
+        "status": "schema_updated",
+        "applied": [
+          "20261029000000_store_transfer_posting",
+          "20261029001000_supplier_reservation_stock_basis",
+          "20261029003000_browser_session_intent_sequence",
+          "20261029010000_net_cost_basis",
+          "20261103000000_warehouse_review_posting",
+          "20261104000000_replenishment_submission_holds",
+          "20261106000000_product_location"
+        ],
+        "businessDataImported": false,
+        "businessDataRewritten": false
+      },
+      "priorContainers": [
+        "dianjie-uat-api-before-133",
+        "dianjie-uat-web-before-133"
+      ],
+      "rollbackPolicy": "Before any new facts old containers retained; after new facts use compatible 1.3.3 images, never restore business DB"
+    },
+    "production": {
+      "status": "deployed",
+      "version": "1.3.3",
+      "environment": "production",
+      "at": "2026-11-06T08:12:18.477870+00:00",
+      "apiImageId": "sha256:4ec8f3be22738c52b06e24aad53abf7e5939a0812c6da30367606dae7419a516",
+      "webImageId": "sha256:07946a1642b1d59452bd7424b76e4af474cfba52a0ffab3d97572356ba6ff9b2",
+      "webBuildId": "Ra3hx1LDisB24n_kPUy-p",
+      "sourceScopeSha256": "6fc05f8eff90a0630336e7ca4367706be1295e3b053a48bfd5f1ce2aafb37ba9",
+      "publicBase": "https://dianjie.cc",
+      "health": {
+        "status": "ok",
+        "timestamp": "2026-11-06T08:12:18.210Z",
+        "version": "1.3.3",
+        "db": "ok"
+      },
+      "loginHttp": 200,
+      "applyHttp": 200,
+      "storeListHttp": 200,
+      "fontSha256": "6ed1553edccddc48eb27ff25d134a4a715cf54211238d4840b3038576cba1944",
+      "otherContainersUnchanged": true,
+      "databaseImports": 0,
+      "schema": {
+        "environment": "production",
+        "status": "schema_updated",
+        "applied": [
+          "20261029000000_store_transfer_posting",
+          "20261029001000_supplier_reservation_stock_basis",
+          "20261029003000_browser_session_intent_sequence",
+          "20261029010000_net_cost_basis",
+          "20261103000000_warehouse_review_posting",
+          "20261104000000_replenishment_submission_holds",
+          "20261106000000_product_location"
+        ],
+        "businessDataImported": false,
+        "businessDataRewritten": false
+      },
+      "priorContainers": [
+        "dianjie-production-api-before-133",
+        "dianjie-production-web-before-133"
+      ],
+      "rollbackPolicy": "Before any new facts old containers retained; after new facts use compatible 1.3.3 images, never restore business DB"
+    }
+  },
+  "gatesPending": [
+    "explicit approval for this 1.3.3 release and target configuration scope",
+    "UAT www:8085 trusted HTTPS listener, exact origin and distinct host-only environment cookies",
+    "target credential AES keyrings, one shared offline backup RSA recipient, per-environment escrow receipts and actual encrypted backup/recovery verification",
+    "target-only credential/log dry-run, controlled conversion, six reviewed structural migrations and compatible runtime recovery evidence with actual target custody",
+    "UAT then production execution and separate post-release verification"
+  ],
+  "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/RESULT.md",
+  "limitations": [
+    "This is a local candidate; neither environment has been updated.",
+    "No local synthetic account or data may enter release artifacts.",
+    "The old 1.3.2 application cannot safely handle new-format facts after conversion."
+  ],
+  "localUatDeliveryHistory": [
+    {
+      "status": "superseded_by_api_cors_rebuild_unapproved",
+      "manifest": "tmp/four-gap-20261028/uat-delivery-v3/delivery-candidate.json",
+      "manifestSha256": "0d04533aa3f3a344bbc325e9e6b3947b11d39ab98afe9ef63d4c841aa119039f",
+      "artifacts": 394,
+      "apiImageId": "sha256:89e39760a0b3eb9072e10594701cf2df80c06ba698bf23f2035835a5569bd17d",
+      "webImageId": "sha256:df58cec972149c105676a4dcb29c98a70a7420d5718eba3ecf0b1164821f8aab",
+      "scope": "Forward 1.3.3 UAT images, generated Prisma client, schema, 133 migration files, 238 API modules, and 13 reviewed G02 operations sources",
+      "limits": "Historical integrity-audited forward package with prior API image; superseded by local API CORS correction. No current matching forward package, compatible rollback package, release approval, public UAT HTTPS, offline production key custody or business recovery rehearsal"
+    },
+    {
+      "status": "superseded_by_pending_web_mouse_fixes_unapproved",
+      "manifest": "tmp/four-gap-20261028/uat-delivery-v4/delivery-candidate.json",
+      "manifestSha256": "0bd57a5dc25bf883b1ffad02d41cfac9b66c6d4688be1667befa964f576da03f",
+      "artifacts": 395,
+      "apiImageId": "sha256:514731d800ee47254856009e0a3cac36c017d9854717e8ecdec782c1a8119784",
+      "webImageId": "sha256:df58cec972149c105676a4dcb29c98a70a7420d5718eba3ecf0b1164821f8aab",
+      "scope": "Forward 1.3.3 UAT images, matching API image context and Prisma client, schema, 133 migration files, 238 API modules and 13 reviewed G02 operations sources",
+      "limits": "Historical integrity-audited API-current package; Web lacks single-order picker input and warehouse stock messages found during mouse acceptance. Rebuild required. Not a compatible recovery package; no deployment approval.",
+      "verifiedAt": "2026-10-29T18:55:47-07:00",
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/UAT-DELIVERY-V4.json"
+    },
+    {
+      "status": "integrity_passed_api_web_rebuild_pending",
+      "manifest": "tmp/four-gap-20261028/uat-delivery-v5/delivery-candidate.json",
+      "manifestSha256": "45f1867ed56d84accef801201a847e1720a894a5ade4cdad1fad029fc137963b",
+      "artifacts": 395,
+      "apiImageId": "sha256:514731d800ee47254856009e0a3cac36c017d9854717e8ecdec782c1a8119784",
+      "webImageId": "sha256:99b24138d4a357e277c60404506d948b34389cdc67c7ee7af0a8f47500f03632",
+      "scope": "Forward 1.3.3 UAT images, matching API image context and Prisma client, schema, 133 migration files, 238 API modules and 13 reviewed G02 operations sources",
+      "limits": "Forward v5 package predates P02 quantity display and partial receipt summary average fixes. Source v6 requires API/Web rebuild. Independent compatible recovery, public HTTPS, production key custody and deployment authorization pending.",
+      "verifiedAt": "2026-10-29T21:21:43-07:00",
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/UAT-DELIVERY-V5.json"
+    },
+    {
+      "status": "superseded_by_count_date_boundary_fix",
+      "manifest": "tmp/four-gap-20261028/uat-delivery-v6/delivery-candidate.json",
+      "manifestSha256": "e2dd0b597454cab73fd60abb21139156f41d3136a0611a93b09d89bca8e503c5",
+      "artifacts": 395,
+      "apiImageId": "sha256:94c56b8fbacc4f4b81cb92db3f7c6a7b98f5c84b262c899b24c1f348079fa391",
+      "webImageId": "sha256:123f1579d00499734729828e03600dcd2668b01ee3e1cc544ab6d5bb0d40012d",
+      "verifiedAt": "2026-10-30T04:55:23.219201+00:00",
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/UAT-DELIVERY-V6.json",
+      "limits": "Current forward package with P02 fixes; independent compatible recovery, public HTTPS, production key custody and deployment approval pending."
+    },
+    {
+      "status": "integrity_passed_web_visibility_rebuild_pending",
+      "manifest": "tmp/four-gap-20261028/uat-delivery-v7/delivery-candidate.json",
+      "manifestSha256": "2e93fe35705c0267e2eb2ea8068b8260e7b84e911c97780ad81acc0a7826522e",
+      "artifacts": 396,
+      "apiImageId": "sha256:156475cb0675ece23d506f425b91843ff00d1442ef4390399c2f8ae1f60e3823",
+      "webImageId": "sha256:123f1579d00499734729828e03600dcd2668b01ee3e1cc544ab6d5bb0d40012d",
+      "verifiedAt": "2026-10-30T05:19:11.768197+00:00",
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/UAT-DELIVERY-V7.json",
+      "limits": "v7 API is current; Web lacks new purchase error visibility fix. Independent recovery and release gates remain pending."
+    },
+    {
+      "status": "historical_integrity_passed_new_api_and_label_pending",
+      "manifest": "tmp/four-gap-20261028/uat-delivery-v8/delivery-candidate.json",
+      "manifestSha256": "ecce2a86f0d79a527a51a2ff0c6017fb5a631925718dfdf62c0d7455541777dc",
+      "artifacts": 395,
+      "apiImageId": "sha256:156475cb0675ece23d506f425b91843ff00d1442ef4390399c2f8ae1f60e3823",
+      "webImageId": "sha256:ed7d3cf4964a86e09a811e6bde0351564ded058f889c867e2ef89ff96b219c16",
+      "verifiedAt": "2026-10-30T05:45:23.151376+00:00",
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/UAT-DELIVERY-V8.json",
+      "limits": "Forward candidate only; independent recovery and release gates remain pending.",
+      "pendingFixEvidence": "docs/qa/evidence/FOUR-GAPS-20261028/P05-PROCUREMENT-COST-CHAIN.json"
+    },
+    {
+      "status": "integrity_passed_adjusted_inbound_reversal_api_rebuild_pending",
+      "manifest": "tmp/four-gap-20261028/uat-delivery-v10/delivery-candidate.json",
+      "manifestSha256": "2e90ba34d0d5d8dd4615f4491636636ca26bc073ffd3bea9e604b1dc4e1b942a",
+      "artifacts": 396,
+      "apiImageId": "sha256:07a80c1d0e5bbcc6bc696646852f1f464bb9340b6f967e060d8827696813dafd",
+      "webImageId": "sha256:ed7d3cf4964a86e09a811e6bde0351564ded058f889c867e2ef89ff96b219c16",
+      "verifiedAt": "2026-10-30T06:05:00.372569+00:00",
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/UAT-DELIVERY-V10.json",
+      "limits": "Forward candidate; independent compatible recovery and release gates pending.",
+      "pendingFixEvidence": "docs/qa/evidence/FOUR-GAPS-20261028/P05-ADJUSTED-INBOUND-REVERSAL.json"
+    }
+  ],
+  "localRecoveryController": {
+    "status": "six_capability_full_manifest_cli_verified",
+    "script": "scripts/release/rehearse_compatible_switch.py",
+    "scriptSha256": "55f420432a2ab429f2da3a242779877cf0fbfe0c7539a40508d0ff497cc3336c",
+    "evidence": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/RECOVERY/FULL-CLI-FINAL.json",
+    "pending": [
+      "actual target key custody and explicitly authorized publish integration"
+    ],
+    "deployed": false
+  },
+  "localRecoveryControllerHistory": [
+    {
+      "status": "local_controller_fault_injection_passed_unapproved",
+      "script": "scripts/release/rehearse_compatible_switch.py",
+      "scriptSha256": "d4af80971877c035b7069ffdd37de49100dda0a41154edee1109701af72df91b",
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/COMPATIBLE-SWITCH-CONTROLLER.json",
+      "evidenceSha256": "cf7b4cfe938a7e233759d05404c97cad792d166a85ead911f01f70818c0e7eda",
+      "scope": "Local switch fault handling only; not a compatible recovery package or business acceptance",
+      "tests": {
+        "unit": 13,
+        "realDockerFaultCases": 3,
+        "unchangedPublicTables": 157
+      },
+      "pending": [
+        "independent recovery source and artifact build",
+        "five-capability business recovery rehearsal",
+        "persistent crash journal and resume",
+        "publish controller integration",
+        "actual offline production key custody"
+      ]
+    },
+    {
+      "status": "durable_local_checkpoint_and_refusal_verified",
+      "script": "scripts/release/rehearse_compatible_switch.py",
+      "scriptSha256": "eba72587f17271b43c256366303c7bb02e1aab247536dd351ad2d9d3d40c4d81",
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/SWITCH-JOURNAL.json",
+      "evidenceSha256": "b79a3cdb82d79e7081e0a1842f720c67876916d61781069b58afcfc28cc104eb",
+      "scope": "Local switch fault handling only; not a compatible recovery package or business acceptance",
+      "tests": {
+        "unit": 19,
+        "sigkillCheckpoints": 6,
+        "realDockerFaultCases": 3,
+        "unchangedPublicTables": 157
+      },
+      "pending": [
+        "controlled resume after live identity reconciliation",
+        "independent recovery source and artifact build",
+        "five-capability business recovery rehearsal",
+        "publish controller integration",
+        "actual offline production key custody"
+      ]
+    },
+    {
+      "status": "local_journal_identity_validation_and_cleanup_verified",
+      "script": "scripts/release/rehearse_compatible_switch.py",
+      "scriptSha256": "43f270135bd70d99c370b140e42d702926933b7bc6d2a39efb6877b6d6e429c8",
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/SWITCH-IDENTITY-VALIDATION.json",
+      "evidenceSha256": "a360efbce74134f8d912db47611f8fc9d8a0cad204843e0852ad9a7a2d276dad",
+      "scope": "Local switch fault handling only; not a compatible recovery package or business acceptance",
+      "tests": {
+        "unit": 22,
+        "compatibilityGate": 14,
+        "realDockerFaultCases": 3,
+        "unchangedPublicTables": 157
+      },
+      "pending": [
+        "controlled resume after live identity reconciliation",
+        "independent recovery source and artifact build",
+        "five-capability business recovery rehearsal",
+        "publish controller integration",
+        "actual offline production key custody"
+      ]
+    },
+    {
+      "status": "local_controlled_resume_implemented_transport_verified",
+      "script": "scripts/release/rehearse_compatible_switch.py",
+      "scriptSha256": "d54474d5b0037d9ae96ab36bb7ff0514bcfa36c8e590f600409b55bb15a705f1",
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/SWITCH-CONTROLLED-RESUME.json",
+      "evidenceSha256": "ef33b9d0b3101c5397b4a2fc2ee03278577f8d2879406a71eeff768d88e8d372",
+      "scope": "Local switch fault handling only; not a compatible recovery package or business acceptance",
+      "tests": {
+        "unit": 26,
+        "compatibilityGate": 14,
+        "realDockerResumeCases": 1,
+        "unchangedPublicTables": 157
+      },
+      "pending": [
+        "independent recovery source and artifact build",
+        "five-capability business recovery rehearsal",
+        "resume CLI acceptance with independent approved recovery package",
+        "publish controller integration",
+        "actual offline production key custody"
+      ]
+    }
+  ],
+  "localPendingSource": {
+    "status": "api_rebuilt_web_reused_packaged_unapproved",
+    "manifest": "tmp/four-gap-20261028/staged-1.3.3-src-v11/source-scope.json",
+    "manifestSha256": "62c3076903944075ca7af29f1b3aa09643c5954492ef3495b9c6a1eea9470ce0",
+    "overlays": 210,
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/UAT-DELIVERY-V11.json"
+  },
+  "localP01MouseReceipt": {
+    "status": "local_mouse_delivery_and_store_receipt_passed",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P01-MOUSE-RECEIPT.json",
+    "evidenceSha256": "b8f25056c084b4d9a4e57379b2ab194f4087e15eb43f9d92c2c1bc8c87497b9d",
+    "orderState": "COMPLETED",
+    "receiptCount": 1,
+    "limits": "Synthetic local UI path only; Web artifact rebuild and remaining acceptance pending"
+  },
+  "localUatLinuxWebImageHistory": [
+    {
+      "status": "isolated_smoke_passed_unapproved",
+      "imageId": "sha256:df58cec972149c105676a4dcb29c98a70a7420d5718eba3ecf0b1164821f8aab",
+      "platform": "linux/amd64",
+      "baseImageId": "sha256:2f758c5284c1edfe5d4c8eb5e8d7ccfe2ccf30d6e1ca75daa41595c4a5c7ce01",
+      "buildId": "mmxhbOwJM4bJirCMmTsW3",
+      "buildAuditManifest": "tmp/four-gap-20261028/staged-1.3.3-src-v2/uat-web-docker-build-candidate.json",
+      "buildAuditSha256": "37c12bb4ab7e085c1e46e4ec13b78091710a54fb96c8aac12389ad718e16644b",
+      "imageContextManifest": "tmp/four-gap-20261028/staged-1.3.3-src-v2/uat-web-image-context-v2/context-manifest.json",
+      "imageContextSha256": "0fa08155d595627e3d59cdc8e641e4a788b719a3057b300321c7cc65a9826710",
+      "dockerfileSha256": "03bb6627c9784623926c6ce51af4579f44b19d00ce0dff4fdb25d95f455aa5bf",
+      "serverApiProxy": "http://api:4000",
+      "localChecks": "v2_login_200_static_200_synthetic_api_proxy_200",
+      "localImagePairProxyCheck": "pinned_web_to_pinned_api_to_dedicated_synthetic_db_health_ok_20261029",
+      "localImagePairBusinessRead": "synthetic_supply_chain_login_submission_v1_order_transfer_movements_confirmed_net_cost_basis_read_and_logout_20261029",
+      "limits": "Local pinned API/Web HTTPS cookie and new-fact read checks passed with synthetic data. Public UAT HTTPS, compatible business recovery rehearsal, release approval and deployment remain pending."
+    },
+    {
+      "status": "isolated_smoke_passed_unapproved",
+      "imageId": "sha256:99b24138d4a357e277c60404506d948b34389cdc67c7ee7af0a8f47500f03632",
+      "platform": "linux/amd64",
+      "baseImageId": "sha256:2f758c5284c1edfe5d4c8eb5e8d7ccfe2ccf30d6e1ca75daa41595c4a5c7ce01",
+      "buildId": "zslE3gSYtiU67NwZl0dve",
+      "buildAuditManifest": "tmp/four-gap-20261028/staged-1.3.3-src-v4/uat-web-docker-build-candidate.json",
+      "buildAuditSha256": "20f107fbc3c4591c9794c8987561826cfafb20ad892053386bd74f5a00aceb01",
+      "imageContextManifest": "tmp/four-gap-20261028/staged-1.3.3-src-v4/uat-web-image-context-v4/context-manifest.json",
+      "imageContextSha256": "89299307ec7d434267f0f60cbc5f3cc7f198c7a2779d8bb94d56002a366d335f",
+      "serverApiProxy": "http://api:4000",
+      "localChecks": "login_static_build_id_https_cookie_origin_refusal_logout_business_reads_passed",
+      "limits": "No public UAT HTTPS or deployment; local synthetic tests only."
+    }
+  ],
+  "localP05MouseAfterShipment": {
+    "status": "local_realtime_movements_summary_exports_passed",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P05-MOUSE-AFTER-SHIPMENT.json",
+    "evidenceSha256": "8bc218e72ee87a4b01d3f66b8a3804d0c196545209067cb008a68fa148d291e6",
+    "quantity": 27,
+    "netAmount": 270,
+    "netUnitCost": 10,
+    "outboundQuantity": 3,
+    "outboundNetCost": 30,
+    "limits": "Local single-chain acceptance only; remaining P02/P05 and recovery gates pending"
+  },
+  "localP02MouseDamage": {
+    "status": "local_mouse_receive_return_damage_passed",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P02-MOUSE-DAMAGE.json",
+    "evidenceSha256": "3f9a713067a247eddc92cc3386ff815418049ed61a695bfd3ac6abd299d4841d",
+    "sourceChanged": "apps/web/src/app/v2/supply-chain/transfers/page.tsx now includes returned/damaged quantities in item summary",
+    "tests": 11
+  },
+  "localPendingSourceHistory": [
+    {
+      "status": "web_rebuilt_unchanged_api_verified_unapproved",
+      "manifest": "tmp/four-gap-20261028/staged-1.3.3-src-v4/source-scope.json",
+      "manifestSha256": "ff246428f7de881d05d83ded65d65afd0097a1d8dede69d8886735192e2d616f",
+      "overlays": 210,
+      "newWebFixes": [
+        "apps/web/src/app/v2/supplier/orders/[id]/page.tsx",
+        "apps/web/src/lib/partial-shipment-ui.ts"
+      ],
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P01-MOUSE-SHIPMENT.json",
+      "deliveryManifest": "tmp/four-gap-20261028/uat-delivery-v5/delivery-candidate.json"
+    },
+    {
+      "status": "source_staged_web_rebuild_pending",
+      "manifest": "tmp/four-gap-20261028/staged-1.3.3-src-v5/source-scope.json",
+      "manifestSha256": "1662f57d8f5393485abf11f48dd3836f4d6c17286d0abe5ede808c34b6715d4e",
+      "overlays": 210,
+      "newWebFixes": [
+        "apps/web/src/app/v2/supply-chain/transfers/page.tsx"
+      ],
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P02-MOUSE-DAMAGE.json"
+    },
+    {
+      "status": "superseded_by_count_date_boundary_fix",
+      "manifest": "tmp/four-gap-20261028/staged-1.3.3-src-v6/source-scope.json",
+      "manifestSha256": "bba13bc881c303c0be546a0d21a22ebb7fe89ecbb644dbbf00e2c70866b281e9",
+      "overlays": 210,
+      "changedSinceV5": [
+        "api-source/apps/api/src/services/inventoryReports.ts"
+      ],
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P02-REPORT-AVERAGE.json",
+      "deliveryManifest": "tmp/four-gap-20261028/uat-delivery-v6/delivery-candidate.json"
+    },
+    {
+      "status": "api_rebuilt_unchanged_web_reused_packaged_unapproved",
+      "manifest": "tmp/four-gap-20261028/staged-1.3.3-src-v7/source-scope.json",
+      "manifestSha256": "74077e95e99f84b036c51ff323f2c0582be25e51df63525e6831bcd45327baf2",
+      "overlays": 210,
+      "changedSinceV6": [
+        "api-source/apps/api/src/services/inventoryCosting.ts"
+      ],
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P02-COUNT-DATE-BOUNDARY.json",
+      "deliveryManifest": "tmp/four-gap-20261028/uat-delivery-v7/delivery-candidate.json"
+    },
+    {
+      "status": "source_staged_web_visibility_fix_not_built",
+      "manifest": "tmp/four-gap-20261028/staged-1.3.3-src-v8/source-scope.json",
+      "manifestSha256": "6c54aba3511cae78cc9c8eefda5ff490dcac14909dbba9b944c776fe4f8b8ad0",
+      "overlays": 210,
+      "changedSinceV7": [
+        "web-source/apps/web/src/app/v2/chef/purchase/new/page.tsx"
+      ],
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P01-MOUSE-STOCK-BOUNDARIES.json",
+      "limits": "Current forward v7 delivery predates error visibility fix; rebuild Web after remaining acceptance."
+    },
+    {
+      "status": "built_packaged_unapproved",
+      "manifest": "tmp/four-gap-20261028/staged-1.3.3-src-v8/source-scope.json",
+      "manifestSha256": "6c54aba3511cae78cc9c8eefda5ff490dcac14909dbba9b944c776fe4f8b8ad0",
+      "overlays": 210,
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/UAT-DELIVERY-V8.json"
+    },
+    {
+      "status": "source_staged_chinese_return_label_not_yet_staged",
+      "manifest": "tmp/four-gap-20261028/staged-1.3.3-src-v9/source-scope.json",
+      "manifestSha256": "300896328ddd94b2dc851c9abd8dfc98421e1294d4d87a5aa1441ed67ea53f27",
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P05-PROCUREMENT-COST-CHAIN.json",
+      "changedSinceV8": [
+        "apps/api/src/services/inventoryReports.ts"
+      ]
+    },
+    {
+      "status": "packaged_source_superseded_by_unstaged_cost_reversal_fix",
+      "manifest": "tmp/four-gap-20261028/staged-1.3.3-src-v10/source-scope.json",
+      "manifestSha256": "fd445ba28e05163f69ad3b6fc6e52b14486a6faae93ed3f37a9e8a3ae0a3468c",
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/UAT-DELIVERY-V10.json",
+      "overlays": 210
+    },
+    {
+      "status": "source_staged_api_rebuild_pending",
+      "manifest": "tmp/four-gap-20261028/staged-1.3.3-src-v11/source-scope.json",
+      "manifestSha256": "62c3076903944075ca7af29f1b3aa09643c5954492ef3495b9c6a1eea9470ce0",
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P05-MOUSE-ADJUSTED-INBOUND-REVERSAL.json",
+      "changedSinceV10": [
+        "apps/api/src/services/inventoryNetCost.ts",
+        "apps/api/src/services/inventoryNetCostRead.ts"
+      ]
+    }
+  ],
+  "localP02ReportAverage": {
+    "status": "local_partial_receipt_summary_average_fixed",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P02-REPORT-AVERAGE.json",
+    "evidenceSha256": "836444a6549cbebbf9aded4ef985376377322c3bf1bc0b859031c86301db45b2",
+    "regressionTests": 28
+  },
+  "localBuildCandidateHistory": [
+    {
+      "status": "compiled_unapproved",
+      "manifest": "tmp/four-gap-20261028/staged-1.3.3-src-v3/build-candidate.json",
+      "sourceScopeSha256": "2395c90aeb0f0356268cf32693ae0e9e521dfe600c928052281cb5e4c3a4b13d",
+      "apiDistTreeSha256": "449a23953195c9806903e2d47cb23873e4fc5acac19c5e39ad4650a746252efa",
+      "webBuildId": "vERt3L1fPkw1yQnno7xmK",
+      "webStandaloneTreeSha256": "126b1ddfc13fe34e49f49dd6981b2c13fc2d3765cde2c2895d1e8a48b6dd76b4",
+      "webStaticTreeSha256": "db66d877080692c541df4ad8c67c5092c9279079fd777feddc72b35e58b5d835",
+      "migrationTreeSha256": "e5c60f28af00cecba80351bacfbea714c0d27e5592701bf98a14bf2db4c85bd3",
+      "localApiImage": {
+        "status": "isolated_smoke_only_unapproved",
+        "platform": "linux/amd64",
+        "imageId": "sha256:514731d800ee47254856009e0a3cac36c017d9854717e8ecdec782c1a8119784",
+        "baseImageId": "sha256:33430aa2bc9effcba7839b316a11e50124e3fcb072c0f996361bd40761dcfa5f",
+        "generatedPrismaClientSchemaSha256": "514623b774722a53183765eebd153fba988fd53f6fd004679188b08fe6616083",
+        "isolatedDatabaseReadOnlyQuery": "passed",
+        "isolatedApiHealth": "ok_db_ok_version_1.3.3",
+        "localImagePairChecks": "new_fact_reads_and_explicitly_trusted_local_https_cookie_login_origin_refusal_logout_passed",
+        "apiImageContextSha256": "3e342025a796d44147d21cbe73d5baf731ebeaf2aea8d704ffc9a30b0d5d8185"
+      }
+    },
+    {
+      "status": "superseded_by_count_date_boundary_fix",
+      "version": "1.3.3",
+      "scope": "API compiled from v6 source using matching root package dependencies; Web audited separately",
+      "sourceScopeSha256": "bba13bc881c303c0be546a0d21a22ebb7fe89ecbb644dbbf00e2c70866b281e9",
+      "apiDist": {
+        "files": 238,
+        "sha256": "2a1bf018983fee1ca842d965ae59ba8fa676af12c9c83e97a3f0cb5b315e5efc"
+      },
+      "schemaSha256": "f58478dea52a3880005065cac359ab7cf7899dea10c4d8eb3bcaea10689f8263",
+      "migrationTree": {
+        "files": 133,
+        "sha256": "e5c60f28af00cecba80351bacfbea714c0d27e5592701bf98a14bf2db4c85bd3"
+      },
+      "prismaClientProvenance": "Reused v3 Linux generated client after byte-identical schema verification; not regenerated",
+      "limits": [
+        "No deployment or compatibility recovery acceptance",
+        "Web build tracked separately"
+      ],
+      "manifest": "tmp/four-gap-20261028/staged-1.3.3-src-v6/build-candidate.json",
+      "localApiImage": {
+        "status": "isolated_smoke_and_business_reads_passed_unapproved",
+        "imageId": "sha256:94c56b8fbacc4f4b81cb92db3f7c6a7b98f5c84b262c899b24c1f348079fa391",
+        "platform": "linux/amd64",
+        "contextManifest": "tmp/four-gap-20261028/staged-1.3.3-src-v6/api-image-context-v3/context-manifest.json",
+        "contextManifestSha256": "dfbd9223617a2cf7178c81820a5224a243148233ba7f8c1085bd06c457eb9c7d"
+      },
+      "webBuildId": "JG0SA8udOOcfopL3MzznN",
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/UAT-DELIVERY-V6.json"
+    },
+    {
+      "status": "local_build_unapproved",
+      "version": "1.3.3",
+      "scope": "API compiled from v7 using matching root dependencies; unchanged Web reused with source comparison",
+      "sourceScopeSha256": "74077e95e99f84b036c51ff323f2c0582be25e51df63525e6831bcd45327baf2",
+      "apiDist": {
+        "files": 238,
+        "sha256": "60a92e849ce3ae115996cc4ad96cb1d9c84f46e60c11c742d20b93fba1b7b565"
+      },
+      "schemaSha256": "f58478dea52a3880005065cac359ab7cf7899dea10c4d8eb3bcaea10689f8263",
+      "migrationTree": {
+        "files": 133,
+        "sha256": "e5c60f28af00cecba80351bacfbea714c0d27e5592701bf98a14bf2db4c85bd3"
+      },
+      "prismaClientProvenance": "Reused v6 Linux client after exact schema and DB adapter comparison; not regenerated",
+      "limits": [
+        "No deployment or independent compatible recovery acceptance",
+        "Web reused, not rebuilt"
+      ],
+      "manifest": "tmp/four-gap-20261028/staged-1.3.3-src-v7/build-candidate.json",
+      "localApiImage": {
+        "status": "isolated_smoke_and_business_reads_passed_unapproved",
+        "imageId": "sha256:156475cb0675ece23d506f425b91843ff00d1442ef4390399c2f8ae1f60e3823",
+        "platform": "linux/amd64",
+        "contextManifest": "tmp/four-gap-20261028/staged-1.3.3-src-v7/api-image-context-v3/context-manifest.json",
+        "contextManifestSha256": "4238889501df3145cb79c0c2220e81a106df42b4193ad8e157fe88fe6716e9a7"
+      },
+      "webBuildId": "JG0SA8udOOcfopL3MzznN",
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/UAT-DELIVERY-V7.json"
+    },
+    {
+      "status": "local_build_unapproved",
+      "version": "1.3.3",
+      "scope": "API freshly compiled from v8 and byte-identical to v7; reuse verified API image. Web independently rebuilt and typechecked.",
+      "sourceScopeSha256": "6c54aba3511cae78cc9c8eefda5ff490dcac14909dbba9b944c776fe4f8b8ad0",
+      "apiDist": {
+        "files": 238,
+        "sha256": "60a92e849ce3ae115996cc4ad96cb1d9c84f46e60c11c742d20b93fba1b7b565"
+      },
+      "schemaSha256": "f58478dea52a3880005065cac359ab7cf7899dea10c4d8eb3bcaea10689f8263",
+      "migrationTree": {
+        "files": 133,
+        "sha256": "e5c60f28af00cecba80351bacfbea714c0d27e5592701bf98a14bf2db4c85bd3"
+      },
+      "prismaClientProvenance": "Reused v6 Linux client after exact schema and DB adapter comparison; not regenerated",
+      "limits": [
+        "No deployment or independent compatible recovery acceptance"
+      ],
+      "manifest": "tmp/four-gap-20261028/staged-1.3.3-src-v8/build-candidate.json",
+      "webBuildId": "2QcippJaRt0fxZRm1-vzG",
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/UAT-DELIVERY-V8.json"
+    },
+    {
+      "status": "local_build_unapproved",
+      "version": "1.3.3",
+      "scope": "API compiled from v10 using matching root dependencies; unchanged Web reused with source comparison",
+      "sourceScopeSha256": "fd445ba28e05163f69ad3b6fc6e52b14486a6faae93ed3f37a9e8a3ae0a3468c",
+      "apiDist": {
+        "files": 238,
+        "sha256": "697a8814141ed4108dc8d3d1d8af2974a0409c4b69a4333e92a360f9e0c08049"
+      },
+      "schemaSha256": "f58478dea52a3880005065cac359ab7cf7899dea10c4d8eb3bcaea10689f8263",
+      "migrationTree": {
+        "files": 133,
+        "sha256": "e5c60f28af00cecba80351bacfbea714c0d27e5592701bf98a14bf2db4c85bd3"
+      },
+      "prismaClientProvenance": "Reused v7 Linux client after exact schema and DB adapter comparison; not regenerated",
+      "limits": [
+        "No deployment or independent compatible recovery acceptance",
+        "Web reused, not rebuilt"
+      ],
+      "manifest": "tmp/four-gap-20261028/staged-1.3.3-src-v10/build-candidate.json",
+      "webBuildId": "2QcippJaRt0fxZRm1-vzG",
+      "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/UAT-DELIVERY-V10.json"
+    }
+  ],
+  "localP02ConsumptionRevaluation": {
+    "status": "local_synthetic_consumption_revaluation_passed",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P02-CONSUMPTION-REVALUATION.json",
+    "evidenceSha256": "cded53fc03406b309b69061903b24bf259289b6d9659751f1c3ad6447129e9f7",
+    "regressionTests": 14,
+    "newScenarios": 2,
+    "limits": "Direct service tests only; automatic trigger/same-day ordering and independent recovery remain pending."
+  },
+  "localP02CountDateBoundary": {
+    "status": "local_count_date_timezone_boundary_fixed",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P02-COUNT-DATE-BOUNDARY.json",
+    "evidenceSha256": "67b4be848ae1b5a798accb095b537545e1593b2a41b653de912028f4437ccb59",
+    "distinctRegressionTests": 15,
+    "timezones": [
+      "America/Los_Angeles",
+      "Asia/Shanghai",
+      "UTC"
+    ]
+  },
+  "localP02MouseAutomaticCostRevaluation": {
+    "status": "local_mouse_same_day_receipt_revaluation_passed",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P02-MOUSE-AUTOMATIC-COST-REVALUATION.json",
+    "limits": "One synthetic same-day flow on matching development source; packaged Linux images and full P02 scope not mouse-operated"
+  },
+  "localP01MouseStockBoundaries": {
+    "status": "local_mouse_zero_and_overstock_boundaries_passed",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P01-MOUSE-STOCK-BOUNDARIES.json",
+    "evidenceSha256": "408f6198a29640287405d7bdffcbef283bc29e2885b69d51a8afb69336eeb2cf",
+    "regressionTests": 27
+  },
+  "localP05ZeroBalance": {
+    "status": "isolated_api_xlsx_regression_passed",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P05-ZERO-BALANCE.json",
+    "testsPassed": 10,
+    "newCases": 2
+  },
+  "localP05ProcurementCostChain": {
+    "status": "isolated_procurement_cost_chain_and_return_source_passed",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P05-PROCUREMENT-COST-CHAIN.json",
+    "regressionTests": 37,
+    "newCases": 2
+  },
+  "localP05MousePurchaseReturn": {
+    "status": "local_mouse_report_verified",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P05-MOUSE-PURCHASE-RETURN.json"
+  },
+  "localV9DeliveryAttempt": {
+    "manifest": "tmp/four-gap-20261028/uat-delivery-v9/delivery-candidate.json",
+    "integrityAudit": "tmp/four-gap-20261028/uat-delivery-v9-audit.json",
+    "status": "historical_integrity_and_extended_readiness_passed_superseded_by_v10",
+    "apiImageId": "sha256:e8ff0d4433f90a7a8ef1a949c47dcaf7ec69f9252ae0dd5db025a866ff807e8b",
+    "webImageId": "sha256:ed7d3cf4964a86e09a811e6bde0351564ded058f889c867e2ef89ff96b219c16",
+    "extendedReadinessEvidence": "tmp/four-gap-20261028/uat-v9-extended.jsonl"
+  },
+  "localP05AdjustedInboundReversal": {
+    "status": "local_adjusted_inbound_reversal_fixed_regressions_passed",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P05-ADJUSTED-INBOUND-REVERSAL.json",
+    "integrationTests": 31,
+    "unitTests": 19
+  },
+  "localP05MouseAdjustedInboundReversal": {
+    "status": "native_browser_report_and_download_verified",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P05-MOUSE-ADJUSTED-INBOUND-REVERSAL.json"
+  },
+  "localP05MouseHistoricalPool": {
+    "status": "local_mouse_pool_confirmation_and_download_verified",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/P05-MOUSE-HISTORICAL-POOL.json"
+  },
+  "localRecoveryCliDispatch": {
+    "status": "fixed_30_local_regressions_passed",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/SWITCH-CLI-DISPATCH.json",
+    "realFullCliQualification": false
+  },
+  "localFaultTargetedRepair": {
+    "status": "local_fault_targeted_repair_switch_verified",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/FAULT-TARGETED-REPAIR-V10-V11.json",
+    "independentV11RecoveryQualified": false
+  },
+  "contractTaxRemoval": {
+    "status": "superseded_by_user_restore_original_tax_functionality",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/CONTRACT-TAX-REMOVAL-20261030.json",
+    "testsPassed": 108,
+    "browserAcceptance": "pending",
+    "requiresRebuild": true
+  },
+  "latestUserCorrection": {
+    "decision": "项目代码里第一次提交就按那个来：保留首次上游采购提交中的合同税率行为，不增加新税务入口",
+    "verifiedOriginalVersion": "1.3.2 and 1.3.1",
+    "restoredRuntimeFiles": 6,
+    "v12": "superseded_do_not_deliver",
+    "originalCommit": "84433e35566ab3ad248c712f7e87c9516dacd21b",
+    "currentSourceStage": "tmp/four-gap-20261028/staged-1.3.3-src-v13/source-scope.json",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/ORIGINAL-TAX-SCOPE-20261030.json"
+  },
+  "currentLocalBuildCandidate": {
+    "status": "runtime_frozen_fixed_images_verified",
+    "sourceFreeze": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/SOURCE-FREEZE.json",
+    "sourceStage": "tmp/four-gap-20261028/staged-closed-label-final-20261105",
+    "apiImageId": "sha256:c80e48bd5ce9dfcc5fd5946510afebdd5f6ffc03c2da97853c63b2ce47102e3b",
+    "apiReuseEvidence": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/API-REUSE-AFTER-CLOSED-LABEL.json",
+    "deployed": false
+  },
+  "currentLocalUatDeliveryCandidate": {
+    "status": "local_integrity_mouse_http_and_recovery_verified_unapproved",
+    "version": "1.3.3",
+    "target": "uat",
+    "package": "tmp/four-gap-20261028/uat-delivery-closed-label-final-20261105",
+    "manifestSha256": "7cfee8d5d061c6df405229e100eff24b2150e78095be730dc83b5520fcac6c45",
+    "artifactCount": 409,
+    "apiImageId": "sha256:c80e48bd5ce9dfcc5fd5946510afebdd5f6ffc03c2da97853c63b2ce47102e3b",
+    "webImageId": "sha256:ff191526ed9c26999a6860f2b606ef40c3ef17f16aeea323f8bf1d8cb9493345",
+    "webBuildId": "S4LDsOYetWsPTpTNKbACN",
+    "sourceScopeSha256": "7a9652c223bf67cbde59236570b568962d0b521c5865b4ad5f850d4c1fbc3d4c",
+    "evidence": [
+      "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/FORWARD-PACKAGE-INTEGRITY.json",
+      "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/PACKAGED-UAT-MOUSE.json",
+      "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/PACKAGED-UAT-HTTP.json",
+      "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/PACKAGED-UAT-ROLE-HTTP.json"
+    ],
+    "deployed": false,
+    "publicListenerVerified": false,
+    "finalEvidence": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/FINAL-LOCAL-RESULT.json"
+  },
+  "currentLocalDeliveryCandidate": {
+    "status": "local_integrity_mouse_http_and_recovery_verified_unapproved",
+    "version": "1.3.3",
+    "target": "uat",
+    "package": "tmp/four-gap-20261028/uat-delivery-closed-label-final-20261105",
+    "manifestSha256": "7cfee8d5d061c6df405229e100eff24b2150e78095be730dc83b5520fcac6c45",
+    "artifactCount": 409,
+    "apiImageId": "sha256:c80e48bd5ce9dfcc5fd5946510afebdd5f6ffc03c2da97853c63b2ce47102e3b",
+    "webImageId": "sha256:ff191526ed9c26999a6860f2b606ef40c3ef17f16aeea323f8bf1d8cb9493345",
+    "webBuildId": "S4LDsOYetWsPTpTNKbACN",
+    "sourceScopeSha256": "7a9652c223bf67cbde59236570b568962d0b521c5865b4ad5f850d4c1fbc3d4c",
+    "evidence": [
+      "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/FORWARD-PACKAGE-INTEGRITY.json",
+      "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/PACKAGED-UAT-MOUSE.json",
+      "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/PACKAGED-UAT-HTTP.json",
+      "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/PACKAGED-UAT-ROLE-HTTP.json"
+    ],
+    "deployed": false,
+    "publicListenerVerified": false,
+    "finalEvidence": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/FINAL-LOCAL-RESULT.json"
+  },
+  "localRecoveryQualification": {
+    "status": "six_capabilities_same_version_full_manifest_cli_verified",
+    "manifestSha256": "3dbba7c438ad4935c430435697142233835551b9492f798933633065fdd1d720",
+    "publicTablesCompared": 158,
+    "allTableRowsAndHashesUnchanged": true,
+    "evidence": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/RECOVERY/INDEX.json",
+    "softwareVersionDowngradeProven": false,
+    "targetKeyCustodyVerified": false,
+    "criticalBackupEvidence": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/RECOVERY/current-schema-backup-qualification.json",
+    "criticalTablesRestored": 149,
+    "totalTableStructures": 158,
+    "monthlyTablesEmptyByPolicy": 9,
+    "syntheticAttachments": 2,
+    "backupCodeAndSchemaUnchanged": true,
+    "deployed": false,
+    "temporaryResourcesClean": true
+  },
+  "currentLocalProductionDeliveryCandidate": {
+    "status": "local_integrity_mouse_http_and_recovery_verified_unapproved",
+    "version": "1.3.3",
+    "target": "production",
+    "package": "tmp/four-gap-20261028/production-delivery-closed-label-final-20261105",
+    "manifestSha256": "50063a9f0e617dc9084a21487216a01d89d48d8e41b722217807159e90c2d0d0",
+    "artifactCount": 409,
+    "apiImageId": "sha256:c80e48bd5ce9dfcc5fd5946510afebdd5f6ffc03c2da97853c63b2ce47102e3b",
+    "webImageId": "sha256:97ab734b7c486e28071468a2e82fef54ccaa1fa751bcd8a2afc265ebf0581915",
+    "webBuildId": "SiOZxRKxxOS2gCNU0Yirw",
+    "sourceScopeSha256": "7a9652c223bf67cbde59236570b568962d0b521c5865b4ad5f850d4c1fbc3d4c",
+    "evidence": [
+      "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/FORWARD-PACKAGE-INTEGRITY.json",
+      "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/PACKAGED-PRODUCTION-MOUSE.json",
+      "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/PACKAGED-PRODUCTION-HTTP.json",
+      "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/PACKAGED-PRODUCTION-ROLE-HTTP.json"
+    ],
+    "deployed": false,
+    "publicListenerVerified": false,
+    "finalEvidence": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/FINAL-LOCAL-RESULT.json"
+  },
+  "targetReadOnlyPreflight": {
+    "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/TARGET-READONLY-PREFLIGHT-20261102.json",
+    "currentlyDeployedVersions": {
+      "production": "1.3.2",
+      "uat": "1.3.2"
+    },
+    "criticalBackupDailyVerified": true,
+    "publicWwwCertificateAndDnsVerifiedFromOrigin": true,
+    "newHttpsListenerEnabled": false,
+    "fourMigrationsPending": true,
+    "knownUatHistoryRetained": true,
+    "knownUatHistoryChecksum": "2dd3a731f14a64246efc655558f3d1b2eb31648fcc91953b4b8886515386877e",
+    "rsaBackupRecipientPlan": "One organization-level offline RSA keypair for the shared blobs layout; independent credential AES keyrings per environment."
+  },
+  "releaseReview": "docs/releases/1.3.3-REVIEW.md",
+  "localUxImplementation": {
+    "status": "local_implemented_pending_user_review",
+    "adopted": 22,
+    "kept": 7,
+    "deployed": false,
+    "apiTypes": "passed",
+    "webTypes": "passed",
+    "webTargeted": {
+      "passed": 133,
+      "files": 12
+    },
+    "apiUnit": {
+      "passed": 19,
+      "files": 4
+    },
+    "isolatedIntegration": {
+      "passed": 5
+    },
+    "managementRegression": {
+      "passed": 39,
+      "failed": 6,
+      "sameFailuresInBeforeSnapshot": true
+    },
+    "mouseUpload": "blocked_by_browser_extension_file_url_permission",
+    "evidenceRoot": "tmp/ux-implementation-20261102",
+    "sourceDeltaSha256": "e1ede231a5c8134605ab75aa4869395d3bb96a677b9080b7d882abab2dc6b8ec",
+    "newFiles": [
+      {
+        "path": "apps/api/src/services/warehouseReviewPosting.ts",
+        "sha256": "009887dfd23e214e255bc1a2fd45ad18081afae0e732b5626a36683b79600b0e"
+      },
+      {
+        "path": "apps/web/src/app/v2/supply-chain/billing/status-label.ts",
+        "sha256": "db14da2d1ad5a3ab7ccc25c0714870fbf2399771de630bab711809b7a6ef8df7"
+      },
+      {
+        "path": "apps/web/src/lib/business-dayjs.test.ts",
+        "sha256": "1a600331b58d186bc08ce38662cd14a3dcdf6069f61b5a117d65069390c506cf"
+      },
+      {
+        "path": "apps/web/src/lib/use-report-columns.ts",
+        "sha256": "6f24ec5dd2e5dde94a0b3fdfbee0467677ec11a528e436e92ae2cebc7747b690"
+      },
+      {
+        "path": "apps/web/src/lib/v2-auth-draft-preservation.test.ts",
+        "sha256": "324f4c3f5a898a3a9634eced1fd3e036b6fef566a1879fcb377730b7dcff585b"
+      },
+      {
+        "path": "apps/web/src/lib/use-report-columns.test.tsx",
+        "sha256": "c982dd8a8d771dd2c772ce6e08d661ef8e081b57c6c6903f1ffe085134aa3641"
+      },
+      {
+        "path": "apps/web/src/lib/business-dayjs.ts",
+        "sha256": "a52ba4a1c6961f8f46d1e7382b16ea76bb377aff849c2c9c4170dc458c3b5c26"
+      },
+      {
+        "path": "apps/api/tests/services/warehouseReviewPosting.integration.test.ts",
+        "sha256": "148e3a7fa0acdf3a5ae43ddbb9f92d1be9207ea457fc0fa31561db9bcefda2e2"
+      },
+      {
+        "path": "packages/db/prisma/migrations/20261103000000_warehouse_review_posting/migration.sql",
+        "sha256": "3070b80e095423048bb4e3f38eb0a832f9c4c29d84c7722b6e78b075e09eeddd"
+      }
+    ],
+    "evidence": "docs/qa/evidence/DJ-123-UX-20261102/RESULT.md",
+    "previousBuildsContainTheseChanges": false
+  },
+  "latestPlanAudit": {
+    "date": "2026-11-03",
+    "status": "incomplete",
+    "evidence": "docs/qa/evidence/PLAN-AUDIT-20261103/RESULT.md",
+    "newOpenIssue": "DJ-124",
+    "u06RouteTests": 22,
+    "oldBuildsContainLatestScope": false,
+    "currentScopeReleaseReviewPrepared": false,
+    "deployedThisAudit": false,
+    "dingtalkOriginalChecked": true,
+    "desktopAndDingtalkScopeMatch": true,
+    "titleMismatch": "Desktop A1 incorrectly says 第三轮计划; DingTalk says 第二轮计划"
+  },
+  "fourGapResume20261104": {
+    "status": "local_changes_verified_build_scope_review_in_progress",
+    "evidence": "docs/qa/evidence/FOUR-GAPS-RESUME-20261104/checkpoint.json",
+    "replenishmentSubmissionReservation": "implemented_and_guarded_database_verified",
+    "newMigration": "20261104000000_replenishment_submission_holds",
+    "databaseMigrationTarget": "isolated_15449_only",
+    "lifecycleAndReviewNetCostIntegrationPassed": 38,
+    "transferAndNetCostIntegrationPassed": 33,
+    "packagedMouseAcceptance": "in_progress_isolated_test_mode_only",
+    "targetG02Configuration": "pending",
+    "deployed": false,
+    "oldOpsV8Candidates": "stale_for_current_approved_scope",
+    "sourceStage": "tmp/four-gap-20261028/staged-review-20261104",
+    "sourceStageStatus": "api_and_uat_web_built_and_audited_not_deployed",
+    "sourceOverlays": 330,
+    "exactNewMigrations": 6,
+    "uatWebBuildId": "U3z8IEvaXR4zvS3XksoCj",
+    "productionWebBuild": "built_and_typechecked",
+    "apiImageBuild": "built_and_local_boot_verified",
+    "productionWebBuildId": "v9DfnFA8hgQWLSs8NHgbk",
+    "images": {
+      "api": "sha256:3c4cc7ee4dcc956c310fe931a57b9ec688fc93b16574a230000b9977667a3ad3",
+      "uatWeb": "sha256:e180f5ec5b4d3b60432bd6971265529f09afcc3d58f7e6ce7050901c7926baca",
+      "productionWeb": "sha256:a4532a911fcb8aa5311587c3cba003a1f33406e2fe06dcf5e71cba24607271a6"
+    },
+    "uatImagePair": "passed_local_health_login_page_and_business_reads"
+  },
+  "workState": "local_ux_necessary_fixes_complete_requires_review_and_new_build",
+  "resumeRecord": "docs/qa/handoffs/20261104-暂停与恢复记录.md",
+  "candidateRequiresAccountApplyHotfixReconciliation": false,
+  "localSearchFollowup": {
+    "issue": "DJ-125",
+    "status": "local_implemented_not_deployed",
+    "evidence": "docs/qa/evidence/DJ-125-SEARCH-20261104/RESULT.md",
+    "sourceStage": "tmp/four-gap-20261028/staged-search-final-20261104",
+    "productionQuotaHotfixIncluded": true,
+    "imagesRequireRebuild": true
+  },
+  "functionalCheckpoint20261104": {
+    "status": "local_verified_not_released",
+    "evidence": "docs/qa/evidence/FUNCTION-CLOSURE-20261104/RESULT.md",
+    "sourceStage": "tmp/four-gap-20261028/staged-functional-20261104",
+    "buildStatus": "not_built_for_this_source",
+    "includesProductionApplyHotfix": true
+  },
+  "localFunctionalPackage20261105": {
+    "status": "package_api_integration_passed_mouse_blocked",
+    "record": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/PACKAGE.json",
+    "evidence": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/RESULT.md",
+    "uatBuildId": "iiNYy9mIPJqfFeL0SZ5RA",
+    "productionBuildId": "8SXYfxAAki7qGq1Qa7Xue",
+    "images": {
+      "dianjie-four-gap-api:functional-20261105": {
+        "id": "sha256:691027362ba39e5e04237ba5cac572d138adf1db4739e19a70592eb11b302833",
+        "os": "linux",
+        "architecture": "amd64",
+        "runtimeCredentialEnvironmentBaked": false
+      },
+      "dianjie-four-gap-uat-web:functional-20261105": {
+        "id": "sha256:8ac6b8317a0b74989216346219212ae5671eafa216a5e80ae18a0b0c938cabda",
+        "os": "linux",
+        "architecture": "amd64",
+        "runtimeCredentialEnvironmentBaked": false
+      },
+      "dianjie-four-gap-production-web:functional-20261105": {
+        "id": "sha256:031f76c833437a2c8c9485a63e78dad0d5bb13d7f86d14a066e2a3e8dd15ca9a",
+        "os": "linux",
+        "architecture": "amd64",
+        "runtimeCredentialEnvironmentBaked": false
+      }
+    },
+    "deployed": false,
+    "mouseComplete": false,
+    "supersededBy": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/FINAL-LOCAL-RESULT.json",
+    "historicalRecord": true,
+    "statusInterpretation": "Original observation-time status retained; superseded by final local preparation evidence. Do not interpret mouse_blocked as current."
+  },
+  "localMouseResume20261105": {
+    "status": "reachable_mouse_and_final_packaged_critical_cases_verified",
+    "evidence": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/FINAL-LOCAL-RESULT.json",
+    "passedSourceEntries": 88,
+    "sourceStage": "tmp/four-gap-20261028/staged-closed-label-final-20261105",
+    "freshCandidate": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/FINAL-LOCAL-RESULT.json",
+    "runtimeFixes": [
+      "pinned_category_match_count",
+      "procurement_discard_beforeunload",
+      "apply_tenant_consistency",
+      "same_known_fulfiller_bulk_category",
+      "active_store_dashboard_and_loss_list_export",
+      "closed_status_chinese_label"
+    ],
+    "webImagesFresh": true,
+    "packagedMousePending": false,
+    "fullSixCapabilityRecoveryPending": false,
+    "deployed": false,
+    "pushed": false,
+    "inactiveSourceEntries": {
+      "SEARCH-047": "no UI caller",
+      "SEARCH-062": "explicitly hidden"
+    },
+    "sourceFreeze": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/SOURCE-FREEZE.json",
+    "apiImageId": "sha256:c80e48bd5ce9dfcc5fd5946510afebdd5f6ffc03c2da97853c63b2ce47102e3b",
+    "runtimeFixCount": 6,
+    "activeStoreApiRegressionPassed": 35,
+    "uatImageFileVerification": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/UAT-IMAGE-FILE-VERIFICATION.json",
+    "workState": "local_preparation_complete_unapproved_not_published",
+    "finalStage": "tmp/four-gap-20261028/staged-closed-label-final-20261105",
+    "finalEvidence": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/",
+    "devTestSourceStage": "tmp/four-gap-20261028/staged-active-store-final-20261105",
+    "mouseComplete": true,
+    "packagedMouseComplete": true,
+    "historicalPointersBeforeFinalReconciliation": {
+      "sourceFreeze": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/SOURCE-FREEZE.json",
+      "uatImageFileVerification": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/UAT-IMAGE-FILE-VERIFICATION.json",
+      "freshCandidate": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/FRESH-PACKAGE-CANDIDATE.json",
+      "evidence": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CHECKPOINT-MOUSE-CURRENT.json",
+      "quietHandoff": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/QUIET-HANDOFF.json"
+    },
+    "devEvidence": [
+      "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/search-entry-matrix.json",
+      "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/MOUSE-RESUME-20261105.md"
+    ],
+    "runtimeHandoff": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/RUNTIME-HANDOFF.json",
+    "behaviorFixCount": 5,
+    "displayFixCount": 1
+  },
+  "localCandidateHistory": [
+    {
+      "supersededAt": "2026-11-05",
+      "field": "currentLocalBuildCandidate",
+      "value": {
+        "status": "local_linux_pair_smoke_verified_unapproved",
+        "manifest": "tmp/four-gap-20261028/staged-1.3.3-src-v16/build-candidate.json",
+        "manifestSha256": "ae40cc5b9ec5a98b81764cb237deba7a91476f1a4bbc81cf3199ab5a4e001da3",
+        "webBuildId": "QlCZRGNgOgXxtkKtg_XXG",
+        "apiModules": 238,
+        "webRuntimeOverlayFiles": 1373,
+        "apiImageId": "sha256:c5685b91a63466e60b33b7f75e2d8324e83539d91b5787d3a84aa4fd37a79960",
+        "webImageId": "sha256:39f68226f52569ddc8bce8119ae5e510310b4873339d504479d8bb0a8c1a37ae",
+        "webImageEvidence": "docs/qa/evidence/FOUR-GAPS-20261028/V16-WEB-BUILD-IMAGE-20261101.json",
+        "isolatedPairEvidence": "docs/qa/evidence/FOUR-GAPS-20261028/V16-UAT-DELIVERY-20261101.json",
+        "packagedReportMouseEvidence": "docs/qa/evidence/FOUR-GAPS-20261028/V16-PACKAGED-REPORT-MOUSE-20261101.json",
+        "packagedP02P05ReadMouseEvidence": "docs/qa/evidence/FOUR-GAPS-20261028/V16-P02-P05-READ-MOUSE-20261101.json",
+        "forwardRollbackRefusalEvidence": "docs/qa/evidence/FOUR-GAPS-20261028/V16-FORWARD-ROLLBACK-REFUSAL-20261101.json",
+        "packagedP01SubmitCancelEvidence": "docs/qa/evidence/FOUR-GAPS-20261028/V16-P01-PACKAGED-SUBMIT-CANCEL-20261101.json",
+        "packagedP02WriteMouseEvidence": "docs/qa/evidence/FOUR-GAPS-20261028/V16-P02-PACKAGED-WRITE-20261101.json",
+        "packagedP05WriteMouseEvidence": "docs/qa/evidence/FOUR-GAPS-20261028/V16-P05-PACKAGED-WRITE-20261101.json",
+        "g02FactsAndKeyCustodyEvidence": "docs/qa/evidence/FOUR-GAPS-20261028/V16-G02-FACTS-KEY-CUSTODY-20261101.json",
+        "limits": "Local Linux pair, business API reads, report clear-date, P01 submit-withdraw, P02 create-ship-receive and P05 cost-pool confirmation single mouse cases passed; remaining business mutation acceptance, public HTTPS UAT, independent compatible recovery qualification and deployment remain pending"
+      }
+    },
+    {
+      "supersededAt": "2026-11-05",
+      "field": "currentLocalUatDeliveryCandidate",
+      "value": {
+        "status": "local_uat_delivery_integrity_passed_unapproved",
+        "manifest": "tmp/four-gap-20261028/uat-delivery-v16-ops-v4/delivery-candidate.json",
+        "manifestSha256": "3b71fce1ae9812b68f0d29f2cab0a08b9ea36e09677c4802de04dc48a5520771",
+        "artifactCount": 395,
+        "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/V16-UAT-DELIVERY-20261101.json",
+        "limits": "Forward UAT package only; one report mouse case passed, while complete business mouse acceptance, independent compatible recovery, public HTTPS UAT and release approval remain pending"
+      }
+    },
+    {
+      "supersededAt": "2026-11-05",
+      "field": "currentLocalDeliveryCandidate",
+      "value": {
+        "status": "integrity_and_local_acceptance_verified_unapproved",
+        "version": "1.3.3",
+        "package": "tmp/four-gap-20261028/uat-delivery-v16-ops-v8",
+        "manifestSha256": "01c819efa7f31713d0297330c97da4b62a9340a84af18be0be0430f3495f9bca",
+        "apiImageId": "sha256:c5685b91a63466e60b33b7f75e2d8324e83539d91b5787d3a84aa4fd37a79960",
+        "webImageId": "sha256:39f68226f52569ddc8bce8119ae5e510310b4873339d504479d8bb0a8c1a37ae",
+        "webBuildId": "QlCZRGNgOgXxtkKtg_XXG",
+        "integrityRechecked": "2026-11-02",
+        "deployed": false,
+        "acceptanceEvidence": [
+          "V16-P01-PACKAGED-SUBMIT-CANCEL-20261101.json",
+          "V16-P02-PACKAGED-WRITE-20261101.json",
+          "V16-P05-PACKAGED-WRITE-20261101.json",
+          "V16-G02-FACTS-KEY-CUSTODY-20261101.json",
+          "V16-P01-PACKAGED-OVERSTOCK-20261101.json",
+          "V16-P02-PACKAGED-DAMAGE-20261102.json",
+          "V16-P02-PACKAGED-RETURN-20261102.json",
+          "V16-P01-CROSS-ROLE-REVISION-20261102.json",
+          "V16-G02-FULL-CLI-RECONSTRUCTION-20261102.json",
+          "V16-P05-FRESH-PROCUREMENT-LIFECYCLE-20261102.json",
+          "V16-P01-PARTIAL-SHIPMENT-CORRECTION-20261102.json",
+          "V16-P01-DRAFT-ISOLATION-20261102.json",
+          "V16-UAT-OPS-V7-20261102.json",
+          "G02-DAILY-INSTALLER-REGRESSION-20261102.json",
+          "TARGET-READONLY-PREFLIGHT-20261102.json",
+          "V16-UAT-OPS-V8-AUDIT-20261102.json"
+        ],
+        "acceptanceBoundary": "Local packaged P01 critical interactions, P02 difference branches, P05 procurement chain/exports and same-version recovery verified. Independent production Web build and local smoke passed. Target HTTPS/key custody, release approval and environment verification pending."
+      }
+    },
+    {
+      "supersededAt": "2026-11-05",
+      "field": "currentLocalProductionDeliveryCandidate",
+      "value": {
+        "target": "production",
+        "package": "tmp/four-gap-20261028/production-delivery-v17-ops-v8",
+        "manifestSha256": "b5eb2f50a720c8df48e8aa0f50c5dd94fb532834ce0f5fd21e46bce0374a9d6b",
+        "artifacts": 402,
+        "apiImageId": "sha256:c5685b91a63466e60b33b7f75e2d8324e83539d91b5787d3a84aa4fd37a79960",
+        "webImageId": "sha256:f5159be7438bcd6ee802f108f66e5e6439dac4ef8c8fc5183957eba6d0590dc0",
+        "webBuildId": "vRTkx_jRm827WaNd5uFPL",
+        "previousManifestSha256": "cf9e2299e9124beaab5a0bdafed5ae06f10a8a7868fe8c6114c425f74705d38e",
+        "operationsSourceSha256": "bd0ddd9c031410ec13e1f8f79cce8f548ff8759a06ab11d361f0b9e30e749a30",
+        "status": "integrity_and_local_smoke_verified_unapproved",
+        "version": "1.3.3",
+        "clientDefaultTenant": "dianjie",
+        "clientPreviewTenant": "",
+        "clientTestLoginUrl": "https://www.dianjie.cc:8085/v2/login",
+        "publicListenerVerified": false,
+        "deployed": false,
+        "evidence": [
+          "V17-PRODUCTION-WEB-BUILD-IMAGE-SMOKE-20261102.json",
+          "V17-PRODUCTION-OPS-V8-AUDIT-20261102.json"
+        ]
+      }
+    },
+    {
+      "supersededAt": "2026-11-05",
+      "field": "localRecoveryQualification",
+      "value": {
+        "status": "local_same_version_full_cli_verified",
+        "evidence": "docs/qa/evidence/FOUR-GAPS-20261028/V16-G02-FULL-CLI-RECONSTRUCTION-20261102.json",
+        "manifestSha256": "428732a15090ce299e703327973b6efa9549c1d49207158c2bb175b4bde018f8",
+        "deployed": false,
+        "recoveryKind": "same-version-redeploy",
+        "softwareVersionRollbackProven": false,
+        "targetKeyCustodyVerified": false
+      }
+    },
+    {
+      "supersededAt": "2026-11-05 closed-label followup",
+      "field": "currentLocalBuildCandidate",
+      "value": {
+        "status": "source_and_images_frozen_packaged_mouse_in_progress",
+        "sourceFreeze": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/SOURCE-FREEZE.json",
+        "sourceStage": "tmp/four-gap-20261028/staged-active-store-final-20261105",
+        "apiImageId": "sha256:c80e48bd5ce9dfcc5fd5946510afebdd5f6ffc03c2da97853c63b2ce47102e3b",
+        "deployed": false
+      }
+    },
+    {
+      "supersededAt": "2026-11-05 closed-label followup",
+      "field": "currentLocalUatDeliveryCandidate",
+      "value": {
+        "status": "integrity_verified_packaged_mouse_in_progress_unapproved",
+        "version": "1.3.3",
+        "target": "uat",
+        "package": "tmp/four-gap-20261028/uat-delivery-final-20261105",
+        "manifestSha256": "3a08b9edea1c072c293c3f232c52b5608e1af8b4ddba1176d6324d978d4eee64",
+        "artifactCount": 409,
+        "apiImageId": "sha256:c80e48bd5ce9dfcc5fd5946510afebdd5f6ffc03c2da97853c63b2ce47102e3b",
+        "webImageId": "sha256:63ee7e904e992c4a0d4b90bb6921ff121a7fdff70a48a9edd6dc0487a6dd3c3e",
+        "webBuildId": "KHyoJbtCbvuYw_RUGtawT",
+        "evidence": [
+          "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/FORWARD-PACKAGE-INTEGRITY.json",
+          "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/RECOVERY/FINAL-FORWARD-FILE-AUDIT.json"
+        ],
+        "deployed": false,
+        "publicListenerVerified": false
+      }
+    },
+    {
+      "supersededAt": "2026-11-05 closed-label followup",
+      "field": "currentLocalDeliveryCandidate",
+      "value": {
+        "status": "integrity_verified_packaged_mouse_in_progress_unapproved",
+        "version": "1.3.3",
+        "target": "uat",
+        "package": "tmp/four-gap-20261028/uat-delivery-final-20261105",
+        "manifestSha256": "3a08b9edea1c072c293c3f232c52b5608e1af8b4ddba1176d6324d978d4eee64",
+        "artifactCount": 409,
+        "apiImageId": "sha256:c80e48bd5ce9dfcc5fd5946510afebdd5f6ffc03c2da97853c63b2ce47102e3b",
+        "webImageId": "sha256:63ee7e904e992c4a0d4b90bb6921ff121a7fdff70a48a9edd6dc0487a6dd3c3e",
+        "webBuildId": "KHyoJbtCbvuYw_RUGtawT",
+        "evidence": [
+          "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/FORWARD-PACKAGE-INTEGRITY.json",
+          "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/RECOVERY/FINAL-FORWARD-FILE-AUDIT.json"
+        ],
+        "deployed": false,
+        "publicListenerVerified": false
+      }
+    },
+    {
+      "supersededAt": "2026-11-05 closed-label followup",
+      "field": "currentLocalProductionDeliveryCandidate",
+      "value": {
+        "status": "integrity_verified_packaged_mouse_in_progress_unapproved",
+        "version": "1.3.3",
+        "target": "production",
+        "package": "tmp/four-gap-20261028/production-delivery-final-20261105",
+        "manifestSha256": "10f41f165172bdf565ed2517fc02ea86e973043c0d0b8cddcae9f996342b9413",
+        "artifactCount": 409,
+        "apiImageId": "sha256:c80e48bd5ce9dfcc5fd5946510afebdd5f6ffc03c2da97853c63b2ce47102e3b",
+        "webImageId": "sha256:56386701a0a1ca738b74c17f2a93fef95513a87587c1f4ac2acdca9321364f4a",
+        "webBuildId": "pa5CUKn9JhR9rrI4qDQOP",
+        "evidence": [
+          "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/FORWARD-PACKAGE-INTEGRITY.json",
+          "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/RECOVERY/FINAL-FORWARD-FILE-AUDIT.json"
+        ],
+        "deployed": false,
+        "publicListenerVerified": false
+      }
+    },
+    {
+      "supersededAt": "2026-11-05T12:36:55.820454+00:00",
+      "field": "localRecoveryQualification",
+      "value": {
+        "status": "six_capability_full_cli_and_current_critical_restore_verified",
+        "manifestSha256": "c5b854b1438ee33c50bc9e747c38e05702e5c000730a717d8440d873752126b1",
+        "evidence": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/RECOVERY/INDEX.json",
+        "publicTablesUnchanged": 158,
+        "criticalTablesRestored": 149,
+        "monthlyTablesStructureOnly": 9,
+        "attachmentsVerified": 2,
+        "recoveryKind": "same-version-redeploy",
+        "softwareVersionRollbackProven": false,
+        "targetKeyCustodyVerified": false,
+        "temporaryResourcesClean": true,
+        "deployed": false
+      }
+    }
+  ],
+  "currentStatusPrecedence": "Current candidates and localPreparationFinal20261105 supersede observation-time pending flags in historical evidence. Frozen prior source scope knownUnfinished is historical; actual closure is recorded in final QA.",
+  "localPreparationFinal20261105": {
+    "status": "local_preparation_complete_unapproved_not_published",
+    "passedReachableSourceEntries": 88,
+    "inactiveSourceEntries": [
+      "SEARCH-047 no UI caller",
+      "SEARCH-062 explicitly hidden"
+    ],
+    "behaviorFixes": 5,
+    "displayFixes": 1,
+    "runtimeOverlays": 366,
+    "reviewPins": 183,
+    "newMigrations": 6,
+    "evidenceDirectory": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/",
+    "allDevMouseComplete": true,
+    "finalPackagedCriticalMouseComplete": true,
+    "crossEnvironmentAccessAndRefreshRejectedBothDirections": true,
+    "originalSyntheticDbPort": 15449,
+    "cloneCleanup": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/PACKAGED-MOUSE-CLEANUP.json",
+    "targetG02ConfigurationExecuted": false,
+    "publicTargetHttpsVerified": false,
+    "pushed": false,
+    "deployed": false,
+    "localWorkRemaining": [],
+    "finalEvidence": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/FINAL-LOCAL-RESULT.json",
+    "newImageSixCapabilityFullCliVerified": true
+  },
+  "candidateAccountApplyHotfixReconciliation": {
+    "status": "reconciled_in_final_api_and_both_program_packages",
+    "apiImageId": "sha256:c80e48bd5ce9dfcc5fd5946510afebdd5f6ffc03c2da97853c63b2ce47102e3b",
+    "evidence": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/FINAL-IMAGE-APPLY-LIMIT.json",
+    "evidenceSha256": "56e10e39487be09c05678a474ee9c2aa1c12cdad8f749078bce6d52e323d75df",
+    "packageEvidence": "docs/qa/evidence/SEARCH-MOUSE-PACKAGE-20261105/CLOSED-LABEL-FINAL/FORWARD-PACKAGE-INTEGRITY.json",
+    "scope": "Compiled apply opt-out verified with210 invalid requests; global rate limit verified by synthetic control route; no real applications submitted."
+  },
+  "uxMinimalRevision": {
+    "issue": "DJ-126",
+    "startedAt": "2026-11-06T01:23:19.235593+00:00",
+    "status": "necessary_scope_complete_local_only_waiting_review",
+    "previousCandidate": "staged-closed-label-final-20261105",
+    "previousCandidateMatchesCurrentWeb": false,
+    "evidence": "docs/qa/evidence/UX-MINIMAL-20261105",
+    "note": "本轮搜索呈现/文字及已确认北京时间显示、输入、筛选、导出修复已完成本地定向检查，160项回归和前后端类型通过。9个API文件仅显示/导出日期格式；未改过账、金额、权限、数据库结构。旧API/Web镜像不含这些新增源码，需审核后重新构建；未发布。",
+    "apiDisplayTimestampChanged": true,
+    "previousApiImageMatchesCurrentSource": false,
+    "completedAt": "2026-11-06T02:07:32.629722+00:00",
+    "sourceManifest": "docs/qa/evidence/UX-MINIMAL-20261105/current-delta.json",
+    "result": "docs/qa/evidence/UX-MINIMAL-20261105/RESULT.json"
+  },
+  "releaseSource": {
+    "status": "frozen_built_deployed",
+    "sourceScopeSha256": "6fc05f8eff90a0630336e7ca4367706be1295e3b053a48bfd5f1ce2aafb37ba9",
+    "overlayFiles": 432,
+    "sourceSnapshot": "tmp/release-1.3.3-20261105/stage",
+    "apiImageId": "sha256:4ec8f3be22738c52b06e24aad53abf7e5939a0812c6da30367606dae7419a516",
+    "webImageIds": {
+      "uat": "sha256:2ce1285c2bec1b08ea53f6106359bd28e9f1304fad5771ebb8169374341b2b72",
+      "production": "sha256:07946a1642b1d59452bd7424b76e4af474cfba52a0ffab3d97572356ba6ff9b2"
+    },
+    "evidence": "docs/qa/evidence/RELEASE-1.3.3-20261105",
+    "githubAndNasSync": "pending"
+  },
+  "releaseConstraints": {
+    "testDataImported": false,
+    "businessRowsRewritten": false,
+    "legacyCredentials": "Explicit read-only compatibility enabled; no bulk rewrite of historical credentials or provider logs. New credentials encrypted.",
+    "oldArchives": "Retained; new backups use reviewed encryption.",
+    "rollback": "Retained prior containers; after new posting facts use compatible 1.3.3 runtime recovery. No automatic old-software downgrade or DB restore."
+  },
+  "targetBackupVerification": {
+    "status": "succeeded_both_environments",
+    "evidence": "docs/qa/evidence/RELEASE-1.3.3-20261105/encrypted-backups.json",
+    "criticalDailyBeijing": "02:30",
+    "fullMonthlyBeijing": "1st 02:30",
+    "offsiteBusinessDatabase": "not_requested",
+    "restorePrivateKey": "retained privately off server, not published"
+  },
+  "entryCompatibility": {
+    "wechatCnOriginBefore": 403,
+    "wechatCnOriginAfter": 200,
+    "imageUnchanged": true,
+    "legacyBrowserHttpRedirectsToEstablishedHttps": true,
+    "legacyNativeApiUnchanged": true,
+    "businessDataModified": false
+  },
+  "runtimeProfiles": {
+    "uat": {
+      "origin": "https://www.dianjie.cc:8085",
+      "tenantSlug": "supply-chain-uat",
+      "legacyHttp": "301 to HTTPS UAT"
+    },
+    "production": {
+      "origins": [
+        "https://dianjie.cc",
+        "https://www.dianjie.cc",
+        "https://app.dianjie.cc",
+        "https://wecom.njdianjie.cn",
+        "https://wecom.njdianjie.com"
+      ],
+      "frontendUrlForOriginCompatibility": "https://wecom.njdianjie.cn",
+      "legacyBrowser8080": "302 to https://dianjie.cc; native API retained"
+    }
+  }
+}

@@ -1,6 +1,7 @@
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import {createHash} from 'node:crypto'
+import {createReviewInbound,createReviewOutbound} from './warehouseReviewPosting'
 import {warehouseDraftSnapshotSchema,captureWarehouseDraftSnapshot,assertWarehouseDraftSnapshot} from './warehouseDraftSnapshot'
 import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
 import { recordBatchManualWarehouseOutbound, recordBatchManualWarehouseInbound, recordManualWarehouseInbound, serializableWithRetry } from './warehouseLedger'
@@ -116,16 +117,11 @@ export async function submitInboundDraft(input:{tenantId:string;userId:string;id
    return {productId:r.productId,purchaseQuantity,totalAmount,isGift:r.isGift,unitPrice:totalAmount/purchaseQuantity,note:'note' in r ? r.note || null : null,batchNo:'batchNo' in r ? r.batchNo || null : null,manufactureDate:'manufactureDate' in r && r.manufactureDate ? new Date(`${r.manufactureDate}T00:00:00.000Z`):null,expiryDate:'expiryDate' in r && r.expiryDate ? new Date(`${r.expiryDate}T00:00:00.000Z`):null}
   })
   const common={warehouseId:payload.executionSnapshot!.warehouse.id,tenantId:input.tenantId,userId:input.userId,supplierId:supplier.id,sourceName:supplier.name,note:payload.note,effectiveAt,idempotencyKey:draft.id}
-  const single=payload.mode==='SINGLE' ? await recordManualWarehouseInbound({...common,...items[0]},tx):null
-  const batch=single ? {movements:[single.movement],warehouseId:single.warehouseId} : await recordBatchManualWarehouseInbound({...common,items},tx)
   const products=await tx.product.findMany({where:{tenantId:input.tenantId,id:{in:items.map(i=>i.productId)}}})
   const relations=await tx.productUpstreamSource.findMany({where:{tenantId:input.tenantId,supplierId:supplier.id,isActive:true,productId:{in:items.map(i=>i.productId)}},select:{productId:true}})
   const bound=new Set(relations.map(r=>r.productId))
   const gateWarnings=products.filter(p=>!bound.has(p.id)).map(p=>`${p.name}（${p.code}）未绑定该供应商的供货关系`)
-  const {doc}=await ensureWarehouseDocInTransaction(tx,{...common,type:'MANUAL_INBOUND',warehouseId:batch.warehouseId,supplierName:supplier.name,attachments:normalizeWarehouseDocAttachments(input.tenantId,payload.attachments),idempotencyKey:`inbound-draft:${draft.id}`,lines:items.map((item,index)=>{
-   const movement=batch.movements[index], product=products.find(p=>p.id===item.productId)!
-   return {...item,productName:product.name,quantity:item.purchaseQuantity,unit:product.purchaseUnit||movement.inventoryUnit,amount:item.totalAmount,inventoryQuantity:Number(movement.physicalDelta),inventoryUnit:movement.inventoryUnit,movementId:movement.id}
-  })})
+  const {doc}=await createReviewInbound(tx,{...common,items,documentKey:`inbound-draft:${draft.id}`,attachments:normalizeWarehouseDocAttachments(input.tenantId,payload.attachments)})
   // Legacy callers submitted-and-audited in one action. The shared editor uses
   // auditOnSubmit=false for its separate Submit button, then confirm for Audit.
   // A submitted draft replay above never escalates the document's audit state.
@@ -151,12 +147,7 @@ async function submitOutboundInTransaction(tx:Prisma.TransactionClient,input:{te
  const reason=`【${labels[payload.purpose]}】${payload.reason.trim()}`
  if(reason.length>120)throw error('出库用途与原因合计最多120字，请减少原因后再提交',400)
  const products=await tx.product.findMany({where:{tenantId:input.tenantId,id:{in:items.map(i=>i.productId)}}})
- const result=await recordBatchManualWarehouseOutbound({warehouseId:payload.executionSnapshot!.warehouse.id,tenantId:input.tenantId,userId:input.userId,items,effectiveAt,idempotencyKey:draft.id,reason,sourceName:payload.responsibility?`责任归属：${payload.responsibility}`:payload.sourceName||null,businessType:'GENERIC'},tx)
- const {doc}=await ensureWarehouseDocInTransaction(tx,{tenantId:input.tenantId,userId:input.userId,type:'MANUAL_OUTBOUND',warehouseId:result.warehouseId,effectiveAt,idempotencyKey:`outbound-draft:${draft.id}`,reason,note:documentNote||null,attachments:normalizeWarehouseDocAttachments(input.tenantId,payload.attachments),lines:items.map(item=>{
-  const m=result.movements.find(row=>row.productId===item.productId)!,p=products.find(p=>p.id===item.productId)!
-  const quantity=Math.abs(Number(m.physicalDelta)),amount=Math.abs(Number(m.valueDelta))
-  return {productId:item.productId,productName:p.name,quantity,unit:m.inventoryUnit,unitPrice:quantity>0?amount/quantity:null,amount,inventoryQuantity:quantity,inventoryUnit:m.inventoryUnit,movementId:m.id,note:item.note}
- })})
+ const {doc}=await createReviewOutbound(tx,{tenantId:input.tenantId,userId:input.userId,warehouseId:payload.executionSnapshot!.warehouse.id,items,effectiveAt,idempotencyKey:draft.id,documentKey:`outbound-draft:${draft.id}`,reason,note:documentNote||null,attachments:normalizeWarehouseDocAttachments(input.tenantId,payload.attachments),businessType:'GENERIC'})
  const submittedDoc=input.auditOnSubmit===true?(await confirmWarehouseDocInTransaction(tx,{tenantId:input.tenantId,userId:input.userId,docId:doc.id})).doc:doc
  await tx.warehouseInboundDraft.update({where:{id:draft.id},data:{status:'SUBMITTED',docId:doc.id,version:{increment:1}}})
  return {replayed:false,doc:submittedDoc,gateWarnings:[] as string[]}

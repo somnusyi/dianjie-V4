@@ -1,3 +1,4 @@
+import { businessMonthKey, monthDateKeys } from './business-date'
 export type UpstreamOrderStatus =
   | 'DRAFT'
   | 'PENDING_APPROVAL'
@@ -24,6 +25,7 @@ export const UPSTREAM_ORDER_STATUS_LABEL: Record<string, string> = {
   RECEIVED: '已完成收货',
   SETTLEMENT_PENDING: '待对账',
   SETTLED: '已结算',
+  CLOSED: '已关闭',
   CANCELLED: '已取消',
 }
 
@@ -63,6 +65,36 @@ export function money(value: unknown) {
     : '—'
 }
 
+function settlementAmountUnits(value: unknown): bigint | null {
+  const text = String(value ?? '').trim()
+  const match = text.length <= 64 && text.match(/^([+-]?)(\d+)(?:\.(\d{1,4}))?$/)
+  if (!match) return null
+  const units = BigInt(match[2]) * BigInt(10000) + BigInt((match[3] || '').padEnd(4, '0'))
+  return match[1] === '-' ? -units : units
+}
+
+/** Statement amounts are recorded at four places; never hide their stored tail. */
+export function settlementMoney(value: unknown) {
+  const units = settlementAmountUnits(value)
+  if (units === null) return '—'
+  const text = (units < BigInt(0) ? -units : units).toString().padStart(5, '0')
+  const integer = text.slice(0, -4).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  const fraction = text.slice(-4).replace(/0+$/, '').padEnd(2, '0')
+  return `${units < BigInt(0) ? '-' : ''}¥${integer}.${fraction}`
+}
+
+/** Avoid binary-floating-point or unsafe-integer loss in statement summaries. */
+export function sumSettlementAmounts(values: unknown[]) {
+  let total = BigInt(0)
+  for (const value of values) {
+    const units = settlementAmountUnits(value)
+    if (units === null) return '—'
+    total += units
+  }
+  const text = (total < BigInt(0) ? -total : total).toString().padStart(5, '0')
+  return `${total < BigInt(0) ? '-' : ''}${text.slice(0, -4)}.${text.slice(-4)}`
+}
+
 /** Unit prices retain the same six-decimal precision accepted by procurement forms. */
 export function unitPriceMoney(value: unknown) {
   const amount = Number(value || 0)
@@ -85,10 +117,8 @@ export function statusTone(status: string) {
 }
 
 export function currentMonthRange(now = new Date()) {
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const lastDay = String(new Date(year, now.getMonth() + 1, 0).getDate()).padStart(2, '0')
-  return { start: `${year}-${month}-01`, end: `${year}-${month}-${lastDay}` }
+  const { from: start, to: end } = monthDateKeys(businessMonthKey(now))
+  return { start, end }
 }
 
 export type ReceiptReviewAction = 'confirm' | 'review' | null

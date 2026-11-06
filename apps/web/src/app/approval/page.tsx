@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import AppLayout from '@/components/AppLayout'
 import { Table, Btn, Modal, Field, Input, fmt, fmtDate, useToast } from '@/components/ui'
 import api from '@/lib/api'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 
 export default function ApprovalPage() {
   const [pending, setPending] = useState<any[]>([])

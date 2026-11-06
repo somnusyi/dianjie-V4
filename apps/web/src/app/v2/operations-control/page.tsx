@@ -170,7 +170,7 @@ export default function OperationsControlPage() {
                 </div>
               </section>
             ))}
-            <p className="text-micro text-gray3 text-center mt-5">生成于 {new Date(data.generatedAt).toLocaleString('zh-CN')}</p>
+            <p className="text-micro text-gray3 text-center mt-5">生成于 {new Date(data.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}</p>
           </>
         )}
       </main>

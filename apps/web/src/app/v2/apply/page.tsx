@@ -3,7 +3,9 @@
  * 提交后等老板在 /v2/me/applications 审批
  */
 'use client'
+import { SearchableList, SearchableSelect } from '@/components/v2/searchable-select'
 import { useState, useEffect } from 'react'
+import { loginTenant } from '@/lib/login-environment'
 
 // PURCHASER 是 v2 legacy 别名 (路由到 /v2/manager/home, 实际拿店长权限),
 // 已从申请表单移除以防止"供应商误申请→拿店长权限"的安全漏洞。
@@ -22,6 +24,7 @@ type SupplierLite = { id: string; name: string; no: string }
 type StoreLite = { id: string; name: string; no: string }
 
 export default function ApplyPage() {
+  const tenantSlug = loginTenant()
   const [form, setForm] = useState({
     name: '', phone: '', password: '', confirmPwd: '',
     requestedRole: 'MANAGER', reason: '',
@@ -44,23 +47,23 @@ export default function ApplyPage() {
   useEffect(() => {
     if (form.requestedRole !== 'SUPPLIER_STAFF' || suppliers.length > 0) return
     setLoadingSuppliers(true)
-    fetch('/api/auth/supplier-list')
+    fetch(`/api/auth/supplier-list?tenantSlug=${encodeURIComponent(tenantSlug)}`)
       .then(r => r.json())
       .then((d) => { if (Array.isArray(d)) setSuppliers(d) })
       .catch(() => {})
       .finally(() => setLoadingSuppliers(false))
-  }, [form.requestedRole, suppliers.length])
+  }, [form.requestedRole, suppliers.length, tenantSlug])
 
   // 选择"店长/厨师长/区域经理"时, 拉取门店列表
   useEffect(() => {
     if ((!needsStore && !needsMultiStore) || stores.length > 0) return
     setLoadingStores(true)
-    fetch('/api/auth/store-list')
+    fetch(`/api/auth/store-list?tenantSlug=${encodeURIComponent(tenantSlug)}`)
       .then(r => r.json())
       .then((d) => { if (Array.isArray(d)) setStores(d) })
       .catch(() => {})
       .finally(() => setLoadingStores(false))
-  }, [needsStore, needsMultiStore, stores.length])
+  }, [needsStore, needsMultiStore, stores.length, tenantSlug])
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -85,6 +88,7 @@ export default function ApplyPage() {
     setSubmitting(true)
     try {
       const body: any = {
+        tenantSlug,
         name: form.name.trim(),
         phone: form.phone.trim(),
         password: form.password,
@@ -163,10 +167,10 @@ export default function ApplyPage() {
           </div>
           <div className="bg-white rounded-card border border-border p-3">
             <label className="text-micro text-gray3 block mb-1">申请角色</label>
-            <select value={form.requestedRole} onChange={e => setForm({...form, requestedRole: e.target.value})}
+            <SearchableSelect searchWhenLong searchLabel="搜索角色" value={form.requestedRole} onChange={e => setForm({...form, requestedRole: e.target.value})}
               className="w-full text-body bg-transparent outline-none">
               {ROLE_OPTIONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
-            </select>
+            </SearchableSelect>
           </div>
 
           {/* 店长 / 厨师长 → 必须选门店 */}
@@ -178,13 +182,13 @@ export default function ApplyPage() {
               ) : stores.length === 0 ? (
                 <div className="text-caption text-gray3">暂无可选门店, 请联系老板创建</div>
               ) : (
-                <select value={form.requestedStoreId} onChange={e => setForm({...form, requestedStoreId: e.target.value})}
+                <SearchableSelect searchWhenLong searchLabel="搜索门店" value={form.requestedStoreId} onChange={e => setForm({...form, requestedStoreId: e.target.value})}
                   className="w-full text-body bg-transparent outline-none">
                   <option value="">— 请选择 —</option>
                   {stores.map(s => (
                     <option key={s.id} value={s.id}>{s.no ? `${s.no} · ${s.name}` : s.name}</option>
                   ))}
-                </select>
+                </SearchableSelect>
               )}
               <p className="text-micro text-gray3 mt-1">{form.requestedRole === 'MANAGER' ? '店长' : '厨师长'} 角色严格按本店数据隔离, 不能查看其它门店。</p>
             </div>
@@ -199,7 +203,7 @@ export default function ApplyPage() {
               ) : stores.length === 0 ? (
                 <div className="text-caption text-gray3">暂无可选门店, 请联系老板创建</div>
               ) : (
-                <div className="space-y-1 max-h-48 overflow-y-auto">
+                <SearchableList searchLabel="搜索可选门店" className="space-y-1 max-h-48 overflow-y-auto">
                   {stores.map(s => (
                     <label key={s.id} className="flex items-center gap-2 bg-bg rounded p-2 text-body">
                       <input type="checkbox" checked={requestedStoreIds.includes(s.id)}
@@ -208,8 +212,7 @@ export default function ApplyPage() {
                           : requestedStoreIds.filter(id => id !== s.id))} />
                       {s.no ? `${s.no} · ${s.name}` : s.name}
                     </label>
-                  ))}
-                </div>
+                  ))}</SearchableList>
               )}
               <p className="text-micro text-gray3 mt-1">区域经理可查看所选门店的数据, 审批时老板可再调整。</p>
             </div>
@@ -236,13 +239,13 @@ export default function ApplyPage() {
               ) : suppliers.length === 0 ? (
                 <div className="text-caption text-gray3">暂无可加入的供应商, 请联系公司负责人先注册</div>
               ) : (
-                <select value={form.supplierId} onChange={e => setForm({...form, supplierId: e.target.value})}
+                <SearchableSelect searchWhenLong searchLabel="搜索公司" value={form.supplierId} onChange={e => setForm({...form, supplierId: e.target.value})}
                   className="w-full text-body bg-transparent outline-none">
                   <option value="">— 请选择 —</option>
                   {suppliers.map(s => (
                     <option key={s.id} value={s.id}>{s.no} · {s.name}</option>
                   ))}
-                </select>
+                </SearchableSelect>
               )}
               <p className="text-micro text-gray3 mt-1">老板审批通过后, 你将以员工 (Staff) 身份加入这家供应商。</p>
             </div>

@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import AppLayout from '@/components/AppLayout'
 import { fmt, useToast } from '@/components/ui'
 import api from '@/lib/api'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 
 const MONTHS = Array.from({ length: 12 }, (_, i) => {
   const d = dayjs().subtract(i, 'month')

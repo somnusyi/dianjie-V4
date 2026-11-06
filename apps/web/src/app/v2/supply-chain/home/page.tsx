@@ -187,7 +187,7 @@ export default function InternalSupplyChainHomePage() {
                 { label: `#${o.no}`, tone: 'gray' },
               ]}
               title={`${o.supplier?.name || '供应商'} → ${o.store?.name || '门店'} · ${o.items?.length ?? 0} 项`}
-              sub={`¥${Math.round(Number(o.totalAmount || 0)).toLocaleString()} · 期望 ${o.expectedDate?.slice(5, 10).replace('-', '/') || '—'}`}
+              sub={`¥${Number(o.totalAmount || 0).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})} · 期望 ${o.expectedDate?.slice(5, 10).replace('-', '/') || '—'}`}
               primary={{ label: '去处理', onClick: () => { location.href = `/v2/supply-chain/fulfillment/${o.id}` } }}
             />
           ))}

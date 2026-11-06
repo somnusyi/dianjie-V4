@@ -3,6 +3,7 @@
  * Hero 单笔金额 + 4 信任徽章 · 审批链 · 预算上下文 · 历史对比 · 凭证 · 双按钮带金额
  */
 'use client'
+import { getToken } from '@/lib/v2-auth'
 import { useEffect, useState } from 'react'
 import { ApprovalRouting, ActionButtonPair, Chip, ProgressDots } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
@@ -57,7 +58,7 @@ export default function BossApprovalDetailPage({ params }: { params: { id: strin
   const [confirmState, openConfirm] = useConfirmSheet()
 
   useEffect(() => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null
+    const token = typeof window !== 'undefined' ? getToken() : null
     if (!token) { setError('未登录'); return }
     fetch(`/api/documents/${params.id}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json())
@@ -76,7 +77,7 @@ export default function BossApprovalDetailPage({ params }: { params: { id: strin
     if (!doc || submitting) return
     const doDecision = async () => {
       setSubmitting(true)
-      const token = localStorage.getItem('token')
+      const token = getToken()
       const res = await fetch(`/api/documents/${doc.id}/decisions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -139,7 +140,7 @@ export default function BossApprovalDetailPage({ params }: { params: { id: strin
               name: s.approver?.name ?? roleLabel(s.approverRole),
               role: roleLabel(s.approverRole),
               status: s.status === 'DECIDED' ? 'done' : s.status === 'PENDING' ? 'current' : s.status === 'SKIPPED' ? 'skipped' : 'waiting',
-              meta: s.decidedAt ? new Date(s.decidedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : (s.status === 'PENDING' ? '待我审' : ''),
+              meta: s.decidedAt ? new Date(s.decidedAt).toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit' }) : (s.status === 'PENDING' ? '待我审' : ''),
             }))}
           />
         </div>
@@ -209,7 +210,7 @@ export default function BossApprovalDetailPage({ params }: { params: { id: strin
                     <Chip tone={ok ? 'green' : skipped ? 'gray' : 'red'}>
                       {ok ? '已转账' : skipped ? '已跳过' : '失败'}
                     </Chip>
-                    <span className="text-micro text-gray3 ml-auto">{new Date(log.createdAt).toLocaleString('zh-CN')}</span>
+                    <span className="text-micro text-gray3 ml-auto">{new Date(log.createdAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}</span>
                   </div>
                   {log.metadata?.toName && (
                     <div className="text-body">收款方: {log.metadata.toName} <span className="text-micro text-gray3 font-num">{log.metadata.toAccount}</span></div>

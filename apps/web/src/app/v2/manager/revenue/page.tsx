@@ -10,6 +10,7 @@
  * rawData.channels = { wechatMini, alipay, cash, meituanGmv, meituanNet, douyinGmv, douyinNet }
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 import { useEffect, useState } from 'react'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 
@@ -27,8 +28,7 @@ const PLATFORM_CHANNELS = [
 ]
 
 function todayStr() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return businessDayjs().format('YYYY-MM-DD')
 }
 
 export default function ManagerRevenuePage() {

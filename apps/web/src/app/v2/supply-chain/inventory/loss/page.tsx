@@ -1,4 +1,5 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import Link from 'next/link'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -6,6 +7,7 @@ import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT } from '@/components/v2/supply-chain-shell'
 import { WarehouseToolTabs } from '@/components/v2/warehouse-tool-tabs'
 import { apiFetch } from '@/lib/v2-auth'
+import { businessDateTimeInput, businessDateTimeToIso } from '@/lib/business-date'
 
 type Product = {
   id: string
@@ -23,8 +25,7 @@ const REASONS = ['盘亏损毁', '过期变质', '搬运损坏', '保管不当',
 const MAX_EVIDENCE = 9
 
 function localDateTime() {
-  const now = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000)
-  return now.toISOString().slice(0, 16)
+  return businessDateTimeInput()
 }
 
 function requestKey() {
@@ -65,7 +66,7 @@ export default function WarehouseSelfLossPage() {
       if (!dirtyRef.current && !busyRef.current) return
       event.preventDefault()
       if (busyRef.current) {
-        setError(uploading ? '现场证据正在上传，请等待完成后再离开' : '自损单正在提交入账，请等待结果后再离开')
+        setError(uploading ? '现场证据正在上传，请等待完成后再离开' : '自损单正在提交，请等待结果后再离开')
         return
       }
       const proceed = (event as CustomEvent<{ proceed?: () => void }>).detail?.proceed
@@ -148,6 +149,7 @@ export default function WarehouseSelfLossPage() {
   }
 
   function validate() {
+    if (!businessDateTimeToIso(effectiveAt)) return '请填写有效的实际发生时间'
     if (!reason) return '请选择自损原因'
     if (!responsibility.trim()) return '请填写责任归属'
     if (!lines.length) return '请至少添加一项自损商品'
@@ -168,14 +170,14 @@ export default function WarehouseSelfLossPage() {
         method: 'POST',
         body: JSON.stringify({
           items: lines.map(line => ({ productId: line.productId, inventoryQuantity: Number(line.quantity), note: line.note.trim() || null })),
-          effectiveAt: new Date(effectiveAt).toISOString(),
+          effectiveAt: businessDateTimeToIso(effectiveAt),
           idempotencyKey,
           reason,
           responsibility: responsibility.trim(),
           attachments: evidence.map(({ key, name, mime, size }) => ({ key, name, mime, size })),
         }),
       })
-      setMessage(result.replayed ? `自损单 ${result.doc.docNo} 已处理，本次未重复扣库` : `自损单 ${result.doc.docNo} 已入账：${result.count}项，库存成本 ¥${result.totalAmount.toFixed(2)}`)
+      setMessage(result.replayed ? `自损单 ${result.doc.docNo} 已提交，请在单据审核中查看进度` : `自损单 ${result.doc.docNo} 已提交待审核：${result.count}项，库存成本 ¥${result.totalAmount.toFixed(2)}`)
       setCompletedDoc(result.doc)
       initialEffectiveAtRef.current = effectiveAt
       dirtyRef.current = false
@@ -190,8 +192,8 @@ export default function WarehouseSelfLossPage() {
     if (invalid) { setError(invalid); return }
     openConfirm({
       title: '确认提交总仓自损？',
-      body: `将按库存单位扣减 ${lines.length} 项实物库存，并冻结当前移动平均成本。\n原因：${reason}\n责任归属：${responsibility.trim()}\n提交后如需更正，必须通过冲销/盘点流程，不能直接改写历史。`,
-      confirmLabel: '确认扣库并生成自损单',
+      body: `将生成 ${lines.length} 项商品的待审核自损单；审核只改变状态，复审后才扣减库存并记录损耗金额。\n原因：${reason}\n责任归属：${responsibility.trim()}\n复审完成后不能取消复审或反审核。`,
+      confirmLabel: '确认提交自损单',
       tone: 'danger',
       onConfirm: submit,
     })
@@ -209,7 +211,7 @@ export default function WarehouseSelfLossPage() {
       {message && <div role="status" className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-card border border-green/20 bg-green/5 px-4 py-3 text-caption text-green-fg"><span>{message}</span>{completedDoc && <Link href={`/v2/supply-chain/docs?doc=${encodeURIComponent(completedDoc.id)}`} className="font-semibold underline">查看单据明细与现场证据</Link>}</div>}
 
       <section className="mt-4 grid gap-4 rounded-card border border-border bg-white p-5 md:grid-cols-3">
-        <label><span className="mb-1 block text-micro text-gray3">自损原因 *</span><select value={reason} onChange={event => setReason(event.target.value as typeof reason)} className="h-11 w-full rounded-cta border border-border px-3"><option value="">请选择</option>{REASONS.map(item => <option key={item}>{item}</option>)}</select></label>
+        <label><span className="mb-1 block text-micro text-gray3">自损原因 *</span><SearchableSelect searchWhenLong searchLabel="搜索原因" value={reason} onChange={event => setReason(event.target.value as typeof reason)} className="h-11 w-full rounded-cta border border-border px-3"><option value="">请选择</option>{REASONS.map(item => <option key={item}>{item}</option>)}</SearchableSelect></label>
         <label><span className="mb-1 block text-micro text-gray3">责任归属 *</span><input value={responsibility} maxLength={120} onChange={event => setResponsibility(event.target.value)} placeholder="例：仓储环节 / 搬运环节 / 待调查" className="h-11 w-full rounded-cta border border-border px-3" /></label>
         <label><span className="mb-1 block text-micro text-gray3">实际发生时间 *</span><input type="datetime-local" value={effectiveAt} onChange={event => setEffectiveAt(event.target.value)} className="h-11 w-full rounded-cta border border-border px-3" /></label>
       </section>
@@ -233,7 +235,7 @@ export default function WarehouseSelfLossPage() {
         <div className="mt-3 flex flex-wrap gap-2">{evidence.map(item => <span key={item.key} className="inline-flex items-center gap-2 rounded-cta border border-border bg-bg px-3 py-2 text-caption"><a href={item.url} target="_blank" rel="noreferrer" className="max-w-64 truncate text-accent">{item.name}</a><button type="button" aria-label={`移除${item.name}`} onClick={() => setEvidence(current => current.filter(row => row.key !== item.key))} className="text-red-fg">×</button></span>)}</div>
       </section>
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-card border border-amber/20 bg-amber/5 p-4"><p className="max-w-3xl text-caption text-gray2">提交后会立即扣减总仓实物库存，按冻结移动平均成本记录损耗金额，并生成可查询、导出的其他出库单。</p><button type="button" onClick={requestSubmit} disabled={submitting || uploading} className="h-11 rounded-cta bg-red-fg px-6 text-button text-white disabled:opacity-40">{submitting ? '正在扣库…' : '审核后提交自损'}</button></div>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-card border border-amber/20 bg-amber/5 p-4"><p className="max-w-3xl text-caption text-gray2">提交后生成待审核自损单；审核只改变状态，复审后才扣减总仓库存并记录损耗金额。</p><button type="button" onClick={requestSubmit} disabled={submitting || uploading} className="h-11 rounded-cta bg-red-fg px-6 text-button text-white disabled:opacity-40">{submitting ? '正在提交…' : '提交自损'}</button></div>
     </div>
     <ConfirmSheet {...confirmState} />
   </div>

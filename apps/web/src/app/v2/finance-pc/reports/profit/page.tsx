@@ -13,7 +13,7 @@
  */
 'use client'
 import { useEffect, useState } from 'react'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { apiFetch } from '@/lib/v2-auth'
 import { MonthPicker } from '@/components/v2'
 import { exportXlsx } from '@/lib/exportXlsx'
@@ -46,7 +46,7 @@ const CHANNEL_COLOR: Record<string, string> = {
   meituan: 'bg-[#FFB200]', douyin: 'bg-ink', bank: 'bg-gray2', unknown: 'bg-gray3',
 }
 
-const fmtMoney = (n: number, d = 0) => `¥${n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })}`
+const fmtMoney = (n: number, d = 2) => `¥${n.toLocaleString('zh-CN', { minimumFractionDigits: d, maximumFractionDigits: d })}`
 const fmtPct = (n: number | null) => n == null ? '—' : (n * 100).toFixed(1) + '%'
 
 export default function FinancePCProfitPage() {
@@ -55,25 +55,28 @@ export default function FinancePCProfitPage() {
     const sp = new URLSearchParams(window.location.search)
     return sp.get('month') || dayjs().format('YYYY-MM')
   })
-  const [data, setData] = useState<Profit | null>(null)
+  const [result, setResult] = useState<{ month: string; value: Profit } | null>(null)
+  const data = result?.month === month ? result.value : null
   const [error, setError] = useState<string | null>(null)
 
-  async function reload() {
-    setError(null); setData(null)
-    try {
-      const d = await apiFetch<Profit>(`/api/finance/reports/profit?month=${month}`)
-      setData(d)
-    } catch (e: any) {
-      setError(e.message || String(e))
-    }
-  }
-  useEffect(() => { reload() }, [month])
+  useEffect(() => {
+    let active = true
+    setError(null); setResult(null)
+    apiFetch<Profit>(`/api/finance/reports/profit?month=${month}`)
+      .then(value => {
+        if (!active) return
+        if (!value || value.month !== month) throw new Error('报表月份不一致，请刷新重试')
+        setResult({ month, value })
+      })
+      .catch(e => { if (active) setError(String(e?.message || e)) })
+    return () => { active = false }
+  }, [month])
 
   const shift = (delta: number) => setMonth(dayjs(month + '-01').add(delta, 'month').format('YYYY-MM'))
   const isThisMonth = month === dayjs().format('YYYY-MM')
 
   async function exportProfitXlsx() {
-    if (!data?.summary) return
+    if (!data?.summary || error) return
     const s = data.summary
     const c = s.cost
     const summaryRows = [
@@ -141,13 +144,14 @@ export default function FinancePCProfitPage() {
               <button onClick={() => setMonth(dayjs().format('YYYY-MM'))}
                       className="px-3 py-2 bg-ink text-white rounded-cta text-button">本月</button>
             )}
-            <button onClick={exportProfitXlsx} disabled={!data?.summary}
+            <button onClick={exportProfitXlsx} disabled={!data?.summary || !!error}
                     className="px-3 py-2 bg-[#1F7A4B] text-white rounded-cta text-button disabled:opacity-40">📊 导出 Excel</button>
           </div>
         </div>
 
         {error && <div className="bg-red-bg text-red-fg rounded-card p-3 text-caption mb-4">{error}</div>}
         {data === null && !error && <div className="text-caption text-gray3 text-center py-12">加载中…</div>}
+      {data && !s && <p className="text-caption text-gray3 text-center mt-12">该月份暂无门店数据</p>}
 
         {data && s && (
           <>

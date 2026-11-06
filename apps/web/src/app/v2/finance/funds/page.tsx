@@ -14,6 +14,7 @@
  *   - 7 天日历点击 → 弹出当日应付明细
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { GlanceStrip } from '@/components/v2/glance-strip'
 import { BottomNav, Chip } from '@/components/v2'
@@ -21,7 +22,7 @@ import { BankAccountCard } from '@/components/v2/bank-account-card'
 import { SwipeableRow } from '@/components/v2/swipeable-row'
 import { InternalTransferModal, type TransferAccount } from '@/components/v2/internal-transfer-modal'
 import { apiFetch } from '@/lib/v2-auth'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { confirmDialog, notifyUser } from '@/lib/ui-dialogs'
 
 
@@ -57,8 +58,7 @@ function fmtMoney(n: number) {
   return `¥${v.toLocaleString()}`
 }
 function fmtDate(iso: string) {
-  const d = new Date(iso)
-  return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
+  return businessDayjs(iso).format('MM/DD')
 }
 
 export default function FinanceFundsPage() {
@@ -142,19 +142,19 @@ export default function FinanceFundsPage() {
   // 7 天日历
   const week = useMemo(() => {
     const days: Array<{ iso: string; dayLabel: string; mmdd: string; isToday: boolean; amount: number; count: number }> = []
-    const today = new Date(); today.setHours(0, 0, 0, 0)
+    const today = businessDayjs().startOf('day')
     for (let i = 0; i < 7; i++) {
-      const d = new Date(today.getTime() + i * 86400000)
-      const iso = d.toISOString().slice(0, 10)
+      const d = today.add(i, 'day')
+      const iso = d.format('YYYY-MM-DD')
       days.push({
-        iso, dayLabel: ['日','一','二','三','四','五','六'][d.getDay()],
+        iso, dayLabel: ['日','一','二','三','四','五','六'][d.day()],
         mmdd: fmtDate(iso), isToday: i === 0, amount: 0, count: 0,
       })
     }
     if (schedules) {
       schedules.forEach(s => {
         if (s.status === 'PAID' || s.status === 'REJECTED') return
-        const iso = new Date(s.dueAt).toISOString().slice(0, 10)
+        const iso = businessDayjs(s.dueAt).format('YYYY-MM-DD')
         const day = days.find(d => d.iso === iso)
         if (day) { day.amount += Number(s.amount); day.count++ }
       })
@@ -166,7 +166,7 @@ export default function FinanceFundsPage() {
     .filter(s => s.status !== 'PAID' && s.status !== 'REJECTED')
     .sort((a, b) => new Date(a.dueAt).getTime() - new Date(b.dueAt).getTime())
   const upcomingTotal = upcoming.reduce((s, x) => s + Number(x.amount), 0)
-  const dayDetail = pickDay ? upcoming.filter(s => new Date(s.dueAt).toISOString().slice(0, 10) === pickDay) : []
+  const dayDetail = pickDay ? upcoming.filter(s => businessDayjs(s.dueAt).format('YYYY-MM-DD') === pickDay) : []
 
   return (
     <div className="min-h-screen bg-bg pb-20">

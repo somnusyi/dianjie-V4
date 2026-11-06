@@ -75,7 +75,7 @@ export default function AutoFixRunsPage() {
                 <div className="flex items-center gap-2">
                   <span className={`text-micro px-2 py-1 rounded-full ${status.cls}`}>{status.label}</span>
                   <span className="text-micro text-gray3 ml-auto">
-                    {new Date(run.createdAt).toLocaleString('zh-CN')}
+                    {new Date(run.createdAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}
                   </span>
                 </div>
                 <div className="text-h2 mt-2">{run.feedback?.title || 'AI 助手任务'}</div>

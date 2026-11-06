@@ -5,6 +5,7 @@
  * 不提供任何写操作按钮；不展示财务/应付/银行/营业额/成本率字段。
  */
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
@@ -474,13 +475,13 @@ function FilterSelect({ label, value, onChange, children }: {
   return (
     <label className="flex flex-col gap-1">
       <span className="text-micro text-gray3">{label}</span>
-      <select
+      <SearchableSelect searchWhenLong searchLabel={`搜索${label}`}
         value={value}
         onChange={e => onChange(e.target.value)}
         className="h-10 min-w-36 rounded-cta border border-border bg-white px-3 text-body"
       >
         {children}
-      </select>
+      </SearchableSelect>
     </label>
   )
 }

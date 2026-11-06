@@ -1,8 +1,10 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 import { procurementDecimalProduct } from '@/lib/procurement-decimal-preview'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { apiFetch, getUser } from '@/lib/v2-auth'
+import { loadUpstreamSettlementStatements } from '@/lib/upstream-settlement-list'
 import { ProcurementProgressActions } from '@/components/v2/procurement-progress-actions'
 import {DocumentQualityImageButton,OrderLineQuality,LegacyQualityImagesButton} from '@/components/v2/document-quality-image'
 import { procurementApprovalRequest, type ProcurementApprovalSource, type ProcurementApprovalAction } from '@/lib/procurement-approval'
@@ -20,6 +22,7 @@ import {
   currentMonthRange,
   loadCreatedRecord,
   money,
+  settlementMoney,
   unitPriceMoney,
   receiptReviewActionForStatus,
   shortDate,
@@ -291,6 +294,7 @@ type Statement = {
   deductionAmount: string | number
   payableAmount: string | number
   version: number
+  note?: string | null
   _count: { lines: number; invoiceAllocations: number }
 }
 type StatementDetail = Statement & {
@@ -409,6 +413,7 @@ export default function UpstreamProcurementPage() {
   const [orderFilters, setOrderFilters] = useState<OrderFilters>(EMPTY_ORDER_FILTERS)
   const [orderPage, setOrderPage] = useState(1)
   const [orderTotal, setOrderTotal] = useState(0)
+  const [pendingCounts, setPendingCounts] = useState({ pendingOrders: 0, pendingReceipts: 0, pendingClaims: 0 })
   const orderListRequestRef = useRef(0)
   const loadAllRequestRef = useRef(0)
   const [shipments, setShipments] = useState<Shipment[]>([])
@@ -416,6 +421,7 @@ export default function UpstreamProcurementPage() {
   const [purchaseReturns, setPurchaseReturns] = useState<PurchaseReturn[]>([])
   const [claims, setClaims] = useState<Claim[]>([])
   const [statements, setStatements] = useState<Statement[]>([])
+  const [settlementListReady, setSettlementListReady] = useState(false)
   const [contracts, setContracts] = useState<Contract[]>([])
   const [qualityStandards, setQualityStandards] = useState<QualityStandard[]>([])
   const [priceStandards, setPriceStandards] = useState<PriceStandard[]>([])
@@ -519,16 +525,18 @@ export default function UpstreamProcurementPage() {
     const request = ++orderListRequestRef.current
     const query = new URLSearchParams({paginated:'true', page:String(orderPage), pageSize:'20', dateField:orderFilters.dateField})
     for (const key of ['dateFrom','dateTo','supplierId','productQuery'] as const) if (orderFilters[key].trim()) query.set(key, orderFilters[key].trim())
-    const result = await apiFetch<{items:Order[];total:number}>(`/api/upstream/purchase-orders?${query}`)
+    const result = await apiFetch<{items:Order[];total:number;summary:{pendingOrders:number;pendingReceipts:number;pendingClaims:number}}>(`/api/upstream/purchase-orders?${query}`)
     if (request !== orderListRequestRef.current) return
     setOrders(result.items)
     setOrderTotal(result.total)
+    setPendingCounts(result.summary)
     if (orderPage > 1 && orderPage > Math.max(1, Math.ceil(result.total / 20))) setOrderPage(Math.max(1, Math.ceil(result.total / 20)))
   }, [orderPage, orderFilters])
 
   const loadAll = useCallback(async () => {
     const request = ++loadAllRequestRef.current
     setLoading(true)
+    setSettlementListReady(false)
     setError(null)
     try {
       const [, shipmentRows, receiptRows, returnRows, claimRows, statementRows, contractRows, qualityRows, priceRows, setup] = await Promise.all([
@@ -537,7 +545,7 @@ export default function UpstreamProcurementPage() {
         apiFetch<Receipt[]>('/api/upstream/receipts'),
         apiFetch<PurchaseReturn[]>('/api/upstream/purchase-returns'),
         apiFetch<Claim[]>('/api/upstream/arrival-claims'),
-        apiFetch<Statement[]>('/api/upstream/settlement-statements'),
+        loadUpstreamSettlementStatements<Statement>(),
         apiFetch<Contract[]>('/api/upstream/contracts'),
         apiFetch<QualityStandard[]>('/api/upstream/quality-standards?includeArchived=1'),
         apiFetch<PriceStandard[]>('/api/upstream/price-standards?includeArchived=1'),
@@ -549,6 +557,7 @@ export default function UpstreamProcurementPage() {
       setPurchaseReturns(returnRows)
       setClaims(claimRows)
       setStatements(statementRows)
+      setSettlementListReady(true)
       setContracts(contractRows)
       setQualityStandards(qualityRows)
       setPriceStandards(priceRows)
@@ -564,6 +573,7 @@ export default function UpstreamProcurementPage() {
       if (request !== loadAllRequestRef.current) return
       setOrders([])
       setOrderTotal(0)
+      setPendingCounts({ pendingOrders: 0, pendingReceipts: 0, pendingClaims: 0 })
       setError(reason?.message || '上游采购数据加载失败')
     } finally {
       if (request === loadAllRequestRef.current) setLoading(false)
@@ -636,7 +646,10 @@ export default function UpstreamProcurementPage() {
         body: '当前页面有尚未提交的采购、价格或质量验收内容。离开后将不会保留。',
         confirmLabel: '放弃并离开',
         tone: 'danger',
-        onConfirm: () => proceed?.(),
+        onConfirm: () => {
+          window.removeEventListener('beforeunload', warn)
+          proceed?.()
+        },
       })
     }
     window.addEventListener('beforeunload', warn)
@@ -1323,9 +1336,7 @@ export default function UpstreamProcurementPage() {
     })
   }
 
-  const pendingReceiptCount = receipts.filter((item) => ['DRAFT', 'INSPECTING', 'PENDING_REVIEW'].includes(item.status)).length
-  const pendingClaimCount = claims.filter((item) => item.status !== 'RESOLVED' && item.status !== 'CANCELLED').length
-  const pendingOrderCount = orders.filter((item) => !['RECEIVED', 'SETTLED', 'CANCELLED'].includes(item.status)).length
+  const { pendingOrders: pendingOrderCount, pendingReceipts: pendingReceiptCount, pendingClaims: pendingClaimCount } = pendingCounts
 
   return (
     <div className="min-h-screen bg-bg px-4 py-5 lg:px-8 lg:py-7">
@@ -1357,9 +1368,7 @@ export default function UpstreamProcurementPage() {
       <header className="mx-auto max-w-[1440px] border-b border-border pb-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <div className="mb-2 text-caption text-gray3">内部管理 · 全部送达总仓 · 独立上游采购链路</div>
             <h1 className="text-h1">上游采购与供应商协同</h1>
-            <p className="mt-1 text-caption text-gray2">合同价下单 → 供应商接单/改单 → 发货 → 总仓验收 → 差异 → 月结</p>
           </div>
           <div className="flex gap-2">
             <ActionButton tone="light" onClick={() => void loadAll()} disabled={loading}>
@@ -1728,7 +1737,7 @@ export default function UpstreamProcurementPage() {
               >
                 <div className="grid gap-3 md:grid-cols-4">
                   <Field label="供应商">
-                    <select
+                    <SearchableSelect searchLabel="搜索采购供应商"
                       value={orderSupplierId}
                       onChange={(event) => {
                         setOrderSupplierId(event.target.value)
@@ -1745,18 +1754,18 @@ export default function UpstreamProcurementPage() {
                           {supplier.no} · {supplier.name}
                         </option>
                       ))}
-                    </select>
+                    </SearchableSelect>
                   </Field>
                   {supplierActiveContracts.length > 1 ? (
                     <Field label="已生效合同（多份请选）">
-                      <select value={orderContractId} onChange={(event) => selectOrderContract(event.target.value)} className="input">
+                      <SearchableSelect searchWhenLong searchLabel="搜索合同" value={orderContractId} onChange={(event) => selectOrderContract(event.target.value)} className="input">
                         <option value="">请选择</option>
                         {supplierActiveContracts.map((contract) => (
                           <option key={contract.id} value={contract.id}>
                             {contract.contractNo} · {contract.title}
                           </option>
                         ))}
-                      </select>
+                      </SearchableSelect>
                     </Field>
                   ) : supplierActiveContracts.length === 1 ? (
                     <Field label="已自动带出合同">
@@ -1773,14 +1782,14 @@ export default function UpstreamProcurementPage() {
                     </div>
                   )}
                   <Field label="收货总仓">
-                    <select value={orderWarehouseId} onChange={(event) => setOrderWarehouseId(event.target.value)} className="input">
+                    <SearchableSelect searchWhenLong searchLabel="搜索收货总仓" value={orderWarehouseId} onChange={(event) => setOrderWarehouseId(event.target.value)} className="input">
                       <option value="">请选择</option>
                       {warehouses.map((warehouse) => (
                         <option key={warehouse.id} value={warehouse.id}>
                           {warehouse.name}
                         </option>
                       ))}
-                    </select>
+                    </SearchableSelect>
                   </Field>
                   <Field label="期望到货日">
                     <input type="date" value={orderArrival} onChange={(event) => setOrderArrival(event.target.value)} className="input" />
@@ -1921,11 +1930,11 @@ export default function UpstreamProcurementPage() {
                 <Field label="日期口径"><select aria-label="采购日期口径" className="input" value={orderFilterDraft.dateField} onChange={event => setOrderFilterDraft(current => ({...current,dateField:event.target.value as OrderFilters['dateField']}))}><option value="createdAt">下单日</option><option value="expectedArrivalAt">到货日</option></select></Field>
                 <Field label="开始日期"><input aria-label="采购开始日期" type="date" className="input" value={orderFilterDraft.dateFrom} onChange={event => setOrderFilterDraft(current => ({...current,dateFrom:event.target.value}))} /></Field>
                 <Field label="结束日期"><input aria-label="采购结束日期" type="date" className="input" value={orderFilterDraft.dateTo} onChange={event => setOrderFilterDraft(current => ({...current,dateTo:event.target.value}))} /></Field>
-                <Field label="供应商"><select aria-label="筛选采购供应商" className="input" value={orderFilterDraft.supplierId} onChange={event => setOrderFilterDraft(current => ({...current,supplierId:event.target.value}))}><option value="">全部供应商</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}</select></Field>
+                <Field label="供应商"><SearchableSelect searchWhenLong searchLabel="搜索筛选采购供应商" aria-label="筛选采购供应商" className="input" value={orderFilterDraft.supplierId} onChange={event => setOrderFilterDraft(current => ({...current,supplierId:event.target.value}))}><option value="">全部供应商</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}</SearchableSelect></Field>
                 <Field label="商品"><input aria-label="筛选采购商品" type="search" className="input" placeholder="商品名称 / 编码" value={orderFilterDraft.productQuery} onChange={event => setOrderFilterDraft(current => ({...current,productQuery:event.target.value}))} onKeyDown={event => {if(event.key==='Enter'){setOrderPage(1);setOrderFilters({...orderFilterDraft})}}} /></Field>
                 <div className="flex items-end gap-2"><button type="button" className="rounded-lg bg-ink px-4 py-2 text-white" onClick={() => {setOrderPage(1);setOrderFilters({...orderFilterDraft})}}>查询</button><button type="button" className="rounded-lg border border-border px-4 py-2" onClick={() => {setOrderFilterDraft(EMPTY_ORDER_FILTERS);setOrderFilters(EMPTY_ORDER_FILTERS);setOrderPage(1)}}>重置</button></div>
               </div>
-              <p className="mt-2 text-micro text-gray3">按上海日期查询 · 共 {orderTotal} 张采购单</p>
+              <p className="mt-2 text-caption text-gray3">共 {orderTotal} 张采购单</p>
             </section>
             {orders.length === 0 ? (
               <Empty text={Object.entries(orderFilters).some(([key,value])=>key!=='dateField'&&value.trim())?'没有符合筛选条件的采购单':'还没有上游采购单'} actionLabel="新建采购单" onAction={openNewOrderForm} />
@@ -1996,7 +2005,7 @@ export default function UpstreamProcurementPage() {
                       <div>
                         <b>{shipment.no}</b>
                         <p className="text-caption text-gray2">
-                          采购单 {shipment.purchaseOrder.no} · {shipment.lines.length} 项 · {shipment.status}
+                          采购单 {shipment.purchaseOrder.no} · {shipment.lines.length} 项 · {UPSTREAM_ORDER_STATUS_LABEL[shipment.status] || shipment.status}
                         </p>
                       </div>
                       <div className="overflow-x-auto"><table className="text-caption"><thead><tr><th className="p-2">商品</th><th className="p-2">数量 / 单位</th><th className="p-2">质检</th></tr></thead><tbody>{shipment.lines.map(line=><tr key={line.id}><td className="p-2">{line.purchaseOrderLine.productNameSnapshot}</td><td className="p-2">{line.shippedQty} {line.purchaseUnit}</td><td className="p-2"><DocumentQualityImageButton kind="BATCH" sourceId={`S:${line.id}`}/></td></tr>)}</tbody></table></div>
@@ -2019,7 +2028,7 @@ export default function UpstreamProcurementPage() {
                 </p>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Field label="异常类型">
-                    <select
+                    <SearchableSelect searchWhenLong searchLabel="搜索异常类型"
                       className="input"
                       value={postClaimType}
                       onChange={(event) => {
@@ -2029,7 +2038,7 @@ export default function UpstreamProcurementPage() {
                     >
                       <option value="SHORTAGE">少发 / 未收到</option>
                       <option value="POST_RECEIPT_DAMAGE">收货后破损 / 品质异常</option>
-                    </select>
+                    </SearchableSelect>
                   </Field>
                   <Field label="异常说明">
                     <textarea
@@ -2365,13 +2374,14 @@ export default function UpstreamProcurementPage() {
           </section>
         )}
 
-        {!loading && tab === 'settlements' && (
+        {!loading && settlementListReady && tab === 'settlements' && (
           <section className="space-y-4">
             {viewingStatement && (
               <Panel title={`对账单明细 · ${viewingStatement.no}`} onClose={() => setViewingStatement(null)} printId={`statement-${viewingStatement.id}`}>
                 <div className="rounded-xl bg-bg p-3 text-caption">
-                  {viewingStatement.supplier.name} · {shortDate(viewingStatement.periodStart)}—{shortDate(viewingStatement.periodEnd)} · 应付 <b>{money(viewingStatement.payableAmount)}</b>
+                  {viewingStatement.supplier.name} · {shortDate(viewingStatement.periodStart)}—{shortDate(viewingStatement.periodEnd)} · 应付 <b>{settlementMoney(viewingStatement.payableAmount)}</b>
                 </div>
+                {viewingStatement.status === 'DISPUTED' && viewingStatement.note && <p className="mt-3 whitespace-pre-wrap break-words rounded-xl bg-amber/10 p-3 text-caption text-amber-fg">异议说明：{viewingStatement.note}</p>}
                 <div className="mt-4 overflow-x-auto">
                   <table className="w-full text-left text-caption">
                     <thead>
@@ -2427,10 +2437,10 @@ export default function UpstreamProcurementPage() {
                               </div>
                             </td>
                             <td className="p-2">{line.description}</td>
-                            <td className="p-2">{money(line.originalAmount)}</td>
-                            <td className="p-2">{money(line.adjustmentAmount)}</td>
+                            <td className="p-2">{settlementMoney(line.originalAmount)}</td>
+                            <td className="p-2">{settlementMoney(line.adjustmentAmount)}</td>
                             <td className="p-2">
-                              <b>{money(line.payableAmount)}</b>
+                              <b>{settlementMoney(line.payableAmount)}</b>
                             </td>
                           </tr>
                         )
@@ -2443,7 +2453,7 @@ export default function UpstreamProcurementPage() {
             <Panel title="生成月度对账单">
               <div className="grid gap-3 sm:grid-cols-4">
                 <Field label="供应商">
-                  <select
+                  <SearchableSelect searchLabel="搜索结算供应商"
                     className="input"
                     value={settlementForm.supplierId}
                     onChange={(event) =>
@@ -2458,7 +2468,7 @@ export default function UpstreamProcurementPage() {
                         {supplier.name}
                       </option>
                     ))}
-                  </select>
+                  </SearchableSelect>
                 </Field>
                 <Field label="开始日期">
                   <input
@@ -2523,8 +2533,9 @@ export default function UpstreamProcurementPage() {
                         {statement.supplier.name} · {shortDate(statement.periodStart)}—{shortDate(statement.periodEnd)} · V{statement.version}
                       </p>
                       <p className="mt-1 text-caption text-gray3">
-                        收货 {money(statement.receiptAmount)} · 扣款 {money(statement.deductionAmount)} · 应付 <b>{money(statement.payableAmount)}</b>
+                        收货 {settlementMoney(statement.receiptAmount)} · 扣款 {settlementMoney(statement.deductionAmount)} · 应付 <b>{settlementMoney(statement.payableAmount)}</b>
                       </p>
+                      {statement.status === 'DISPUTED' && statement.note && <p className="mt-2 whitespace-pre-wrap break-words text-caption text-amber-fg">异议说明：{statement.note}</p>}
                       {statement.status === 'CONFIRMED' && <p className="mt-1 text-micro text-amber-fg">供应商已确认，已通知财务，等待锁定。</p>}
                     </div>
                     <div className="flex gap-2">
@@ -2547,16 +2558,16 @@ export default function UpstreamProcurementPage() {
         {!loading && tab === 'standards' && (
           <section className="space-y-4">
             <div className="rounded-2xl border border-amber/30 bg-amber/10 p-4 text-caption text-gray1">
-              <b>使用顺序：</b>先维护商品与供应商的供货关系，再按采购单位、币种和含税口径配标准价；质量标准按商品维护。新采购单会冻结当时版本，之后修改不会篡改历史。
+              标准价需与采购单位、币种和税率一致。修改后仅用于新采购单。
             </div>
             <div className="grid gap-4 xl:grid-cols-2">
               <Panel title="新版本·商品质量验收标准">
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Field label="商品">
-                    <select className="input" value={qualityStandardForm.productId} onChange={(event) => setQualityStandardForm((current) => ({ ...current, productId: event.target.value }))}>
+                    <SearchableSelect searchLabel="搜索商品" className="input" value={qualityStandardForm.productId} onChange={(event) => setQualityStandardForm((current) => ({ ...current, productId: event.target.value }))}>
                       <option value="">请选择商品</option>
                       {standardProducts.map((item) => <option key={item.productId} value={item.productId}>{item.productName} · {item.productSpec || item.productCode}</option>)}
-                    </select>
+                    </SearchableSelect>
                   </Field>
                   <Field label="标准名称">
                     <input className="input" value={qualityStandardForm.title} onChange={(event) => setQualityStandardForm((current) => ({ ...current, title: event.target.value }))} placeholder="例如：黑牛肝菌到货验收标准" />
@@ -2573,10 +2584,10 @@ export default function UpstreamProcurementPage() {
               <Panel title="新版本·标准采购价">
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Field label="供应商 / 商品 / 采购单位">
-                    <select className="input" value={priceScopeKey} onChange={(event) => setPriceScopeKey(event.target.value)}>
+                    <SearchableSelect searchLabel="搜索供货商品" className="input" value={priceScopeKey} onChange={(event) => setPriceScopeKey(event.target.value)}>
                       <option value="">请选择已有供货关系</option>
                       {standardScopes.map((scope) => <option key={scope.key} value={scope.key}>{scope.supplierName} · {scope.productName} · {scope.purchaseUnit} · {scope.currency} · {scope.taxInclusive ? '含税' : '不含税'}</option>)}
-                    </select>
+                    </SearchableSelect>
                   </Field>
                   <Field label="标准单价">
                     <input className="input" type="number" min="0.000001" step="0.000001" value={priceStandardForm.unitPrice} onChange={(event) => setPriceStandardForm((current) => ({ ...current, unitPrice: event.target.value }))} />

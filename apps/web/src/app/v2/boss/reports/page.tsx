@@ -5,6 +5,7 @@
  * 类目分布暂保 mock, 标记「演示数据」
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { BottomNav, StackedBar, PeriodPills } from '@/components/v2'
 import { GlanceStrip } from '@/components/v2/glance-strip'
@@ -26,11 +27,11 @@ const BUSINESS_START = '2026-04'
 
 function recentMonths(n: number): { ym: string; label: string; preBiz: boolean }[] {
   const out: { ym: string; label: string; preBiz: boolean }[] = []
-  const now = new Date()
+  const now = businessDayjs().startOf('month')
   for (let i = n - 1; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    out.push({ ym, label: `${String(d.getMonth() + 1).padStart(2, '0')}月`, preBiz: ym < BUSINESS_START })
+    const d = now.subtract(i, 'month')
+    const ym = d.format('YYYY-MM')
+    out.push({ ym, label: `${d.format('MM')}月`, preBiz: ym < BUSINESS_START })
   }
   return out
 }

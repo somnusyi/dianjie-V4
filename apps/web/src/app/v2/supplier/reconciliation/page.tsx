@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { BottomNav, Chip } from '@/components/v2'
 import { ReportActions } from '@/components/v2/report-actions'
 import { apiDownload, apiFetch } from '@/lib/v2-auth'

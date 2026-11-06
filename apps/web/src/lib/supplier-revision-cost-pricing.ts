@@ -19,6 +19,7 @@ export type RevisionCatalogProduct = OrderEntryProductSnapshot & {
   name: string
   spec?: string | null
   category?: string | null
+  location?: string | null
   status: string
 }
 

@@ -1,4 +1,6 @@
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
+import {billingStatusLabel} from './status-label'
 
 /**
  * DJ-002 / REQ-FIN-001 / DEC-023：账务三类只读详情弹窗。
@@ -35,7 +37,7 @@ const TYPE_LABEL: Record<BillingDetailType, string> = {
 }
 
 function money(value: number | string | null | undefined) {
-  return `¥${Number(value || 0).toLocaleString('zh-CN', { maximumFractionDigits: 2 })}`
+  return `¥${Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 function moneyOrDash(value: number | string | null | undefined) {
@@ -198,10 +200,10 @@ function ScheduleDetailBody({ detail, onOpenSource }: {
     <div>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
         <Field label="供应商" value={detail.supplier?.name || '—'} />
-        <Field label="状态" value={detail.status} />
+        <Field label="状态" value={billingStatusLabel(detail.status,'schedule')} />
         <Field label="金额" value={moneyOrDash(detail.amount)} />
-        <Field label="到期日" value={dateOnly(detail.dueAt)} />
-        <Field label="付款日期" value={detail.paidAt ? dateOnly(detail.paidAt) : '未付款'} />
+        <Field label="到期日" value={detail.dueAt ? businessDayjs(detail.dueAt).format('YYYY-MM-DD') : '—'} />
+        <Field label="付款日期" value={detail.paidAt ? businessDayjs(detail.paidAt).format('YYYY-MM-DD') : '未付款'} />
       </dl>
       {detail.receipt ? (
         <SourceListEntry label="来源入库单">
@@ -239,7 +241,7 @@ function ReconciliationDetailBody({ detail, onOpenSource }: {
         <Field label="供应商" value={detail.supplier?.name || '—'} />
         <Field label="供应商编号" value={detail.supplier?.no || '—'} />
         <Field label="对账期间" value={`${dateOnly(detail.periodStart)} 至 ${dateOnly(detail.periodEnd)}`} />
-        <Field label="状态" value={detail.status} />
+        <Field label="状态" value={billingStatusLabel(detail.status,'reconciliation')} />
         <Field label="对账总金额" value={moneyOrDash(detail.totalAmount)} />
       </dl>
       <SourceListEntry label={`组成单据（${detail.items.length} 张）`}>
@@ -286,12 +288,12 @@ function InvoiceDetailBody({ detail, onOpenSource, onRefreshSignature }: {
       <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
         <Field label="发票号码" value={detail.invoiceNo} />
         <Field label="发票代码" value={detail.invoiceCode || '—'} />
-        <Field label="状态" value={detail.status} />
+        <Field label="状态" value={billingStatusLabel(detail.status,'invoice')} />
         <Field label="价税合计" value={moneyOrDash(detail.amount)} />
         <Field label="不含税金额" value={moneyOrDash(detail.amountWithoutTax)} />
         <Field label="税率" value={taxRateText(detail.taxRate)} />
         <Field label="税额" value={moneyOrDash(detail.taxAmount)} />
-        <Field label="开票日期" value={dateOnly(detail.issueDate)} />
+        <Field label="开票日期" value={detail.issueDate ? businessDayjs(detail.issueDate).format('YYYY-MM-DD') : '—'} />
         <Field label="备注" value={detail.note || '—'} />
       </dl>
       <div className="mt-4 flex flex-wrap items-center gap-3 rounded-card border border-border p-3">

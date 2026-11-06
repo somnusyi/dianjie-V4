@@ -4,7 +4,7 @@
  */
 'use client'
 import { useEffect, useState } from 'react'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { Chip } from '@/components/v2'
 import { ErrorScreen } from '@/components/v2/use-dashboard'
 import { apiFetch } from '@/lib/v2-auth'
@@ -33,7 +33,7 @@ const CHANNEL_LABEL: Record<string, string> = {
 }
 
 function fmt(n: number, decimals = 2): string {
-  return n.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+  return n.toLocaleString('zh-CN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
 }
 function pct(n: number | null): string {
   if (n == null) return '—'
@@ -42,19 +42,22 @@ function pct(n: number | null): string {
 
 export default function FinanceProfitPage() {
   const [month, setMonth] = useState(() => dayjs().format('YYYY-MM'))
-  const [data, setData] = useState<Profit | null>(null)
+  const [result, setResult] = useState<{ month: string; value: Profit } | null>(null)
+  const data = result?.month === month ? result.value : null
   const [error, setError] = useState<string | null>(null)
 
-  async function reload() {
-    setError(null); setData(null)
-    try {
-      const d = await apiFetch<Profit>(`/api/finance/reports/profit?month=${month}`)
-      setData(d)
-    } catch (e: any) {
-      setError(e.message || String(e))
-    }
-  }
-  useEffect(() => { reload() }, [month])
+  useEffect(() => {
+    let active = true
+    setError(null); setResult(null)
+    apiFetch<Profit>(`/api/finance/reports/profit?month=${month}`)
+      .then(value => {
+        if (!active) return
+        if (!value || value.month !== month) throw new Error('报表月份不一致，请刷新重试')
+        setResult({ month, value })
+      })
+      .catch(e => { if (active) setError(String(e?.message || e)) })
+    return () => { active = false }
+  }, [month])
 
   if (error) return <ErrorScreen message={error} />
 
@@ -78,13 +81,14 @@ export default function FinanceProfitPage() {
       </div>
 
       {data === null && <p className="text-caption text-gray3 text-center mt-12">加载中…</p>}
+      {data && !s && <p className="text-caption text-gray3 text-center mt-12">该月份暂无门店数据</p>}
 
       {data && s && (
         <>
           {/* Hero · 营收 + 净利 */}
           <div className="mx-4 mt-3 bg-bg-warm rounded-card border border-border p-4">
             <div className="text-caption text-gray3">本月营业额 (GMV)</div>
-            <div className="text-[28px] font-num leading-tight">¥{fmt(s.revenue, 0)}</div>
+            <div className="text-[28px] font-num leading-tight">¥{fmt(s.revenue)}</div>
             <div className="flex items-center gap-3 mt-1 text-micro">
               <span className="text-gray3">同比 <b className={s.revenueYoy && s.revenueYoy > 0 ? 'text-green-fg' : 'text-red-fg'}>{pct(s.revenueYoy)}</b></span>
               <span className="text-gray3">环比 <b className={s.revenueMom && s.revenueMom > 0 ? 'text-green-fg' : 'text-red-fg'}>{pct(s.revenueMom)}</b></span>
@@ -92,7 +96,7 @@ export default function FinanceProfitPage() {
             <div className="mt-3 pt-3 border-t border-border grid grid-cols-2">
               <div>
                 <div className="text-caption text-gray3">净利</div>
-                <div className={`text-h1 font-num ${s.netProfit >= 0 ? 'text-green-fg' : 'text-red-fg'}`}>¥{fmt(s.netProfit, 0)}</div>
+                <div className={`text-h1 font-num ${s.netProfit >= 0 ? 'text-green-fg' : 'text-red-fg'}`}>¥{fmt(s.netProfit)}</div>
               </div>
               <div className="text-right">
                 <div className="text-caption text-gray3">净利率</div>
@@ -134,7 +138,7 @@ export default function FinanceProfitPage() {
                 <div key={ch} className="mb-2">
                   <div className="flex justify-between text-caption">
                     <span>{CHANNEL_LABEL[ch] || ch}</span>
-                    <span className="font-num">¥{fmt(v, 0)} <span className="text-gray3">({(v / channelTotal * 100).toFixed(1)}%)</span></span>
+                    <span className="font-num">¥{fmt(v)} <span className="text-gray3">({(v / channelTotal * 100).toFixed(1)}%)</span></span>
                   </div>
                   <div className="h-1.5 bg-gray5 rounded-full mt-1 overflow-hidden">
                     <div className="h-full bg-amber rounded-full" style={{ width: `${v / channelTotal * 100}%` }} />
@@ -151,11 +155,11 @@ export default function FinanceProfitPage() {
                 <div key={s.storeId} className="py-2 border-b border-border last:border-b-0">
                   <div className="flex justify-between text-body">
                     <span>{s.storeName}</span>
-                    <span className="font-num">¥{fmt(s.revenue, 0)}</span>
+                    <span className="font-num">¥{fmt(s.revenue)}</span>
                   </div>
                   <div className="flex justify-between text-micro text-gray3 mt-1">
-                    <span>食材 ¥{fmt(s.foodCost, 0)} ({s.revenue > 0 ? (s.foodCost / s.revenue * 100).toFixed(1) : '—'}%)</span>
-                    <span>毛利 ¥{fmt(s.grossProfit, 0)} ({(s.grossMargin * 100).toFixed(1)}%)</span>
+                    <span>食材 ¥{fmt(s.foodCost)} ({s.revenue > 0 ? (s.foodCost / s.revenue * 100).toFixed(1) : '—'}%)</span>
+                    <span>毛利 ¥{fmt(s.grossProfit)} ({(s.grossMargin * 100).toFixed(1)}%)</span>
                   </div>
                 </div>
               ))}

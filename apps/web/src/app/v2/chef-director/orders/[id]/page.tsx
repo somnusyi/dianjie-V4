@@ -11,7 +11,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { Chip, ProgressDots } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
 import { apiFetch, getUser } from '@/lib/v2-auth'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 
 type Product = { id: string; name: string; unit: string; spec?: string | null }
 type Item    = { id: string; productId: string; quantity: string | number; unitPrice: string | number; product?: Product }

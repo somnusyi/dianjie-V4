@@ -1,4 +1,6 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
+import {useReportColumns} from '@/lib/use-report-columns'
 import Link from 'next/link'
 import { FilterDateRange } from '@/components/v2/filter-date-range'
 import filterStyles from '@/components/v2/scm-filter-bar.module.css'
@@ -23,11 +25,11 @@ function FinanceReports() {
   const [appliedRanges, setAppliedRanges] = useState<typeof ranges>({})
   const [page, setPage] = useState(1); const [size, setSize] = useState(20)
   const [sort, setSort] = useState(''); const [descending, setDescending] = useState(false)
-  const [hidden, setHidden] = useState<string[]>([]); const [columnDialog, setColumnDialog] = useState(false)
+  const [hidden, setHidden] = useReportColumns('finance', id); const [columnDialog, setColumnDialog] = useState(false)
   const [focused, setFocused] = useState(false)
   const [notice, setNotice] = useState(''); const [exporting, setExporting] = useState(false)
   useEffect(() => {
-    setFilters(defaultFinanceFilters()); setApplied(defaultFinanceFilters()); setRanges({}); setAppliedRanges({}); setPage(1); setSort(''); setHidden([]); setAdvanced(false); setNotice(''); setColumnDialog(false)
+    setFilters(defaultFinanceFilters()); setApplied(defaultFinanceFilters()); setRanges({}); setAppliedRanges({}); setPage(1); setSort(''); setAdvanced(false); setNotice(''); setColumnDialog(false)
   }, [id])
   useEffect(() => {
     const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setFocused(false); setColumnDialog(false) } }
@@ -61,7 +63,7 @@ function FinanceReports() {
   }
   function reset() { setFilters(defaultFinanceFilters()); setApplied(defaultFinanceFilters()); setRanges({}); setAppliedRanges({}); setPage(1); setNotice(''); setRefresh(n => n + 1) }
   const input = (key: keyof FinanceFilters, label: string, type = 'text') => <label key={key}><span>{label}：</span><input type={type} value={filters[key]} onChange={e => setFilters(f => ({ ...f, [key]: e.target.value }))} placeholder={type === 'text' ? '输入查询' : undefined} /></label>
-  const select = (key: keyof FinanceFilters, label: string) => <label key={key}><span>{label}：</span><select value={filters[key]} onChange={e => setFilters(f => ({ ...f, [key]: e.target.value }))}><option value="">全部</option>{(result?.options[key] || (filters[key] ? [filters[key]] : [])).map(v => <option key={v}>{v}</option>)}</select></label>
+  const select = (key: keyof FinanceFilters, label: string) => <label key={key}><span>{label}：</span><SearchableSelect searchWhenLong searchLabel={`搜索${label}`} value={filters[key]} onChange={e => setFilters(f => ({ ...f, [key]: e.target.value }))}><option value="">全部</option>{(result?.options[key] || (filters[key] ? [filters[key]] : [])).map(v => <option key={v}>{v}</option>)}</SearchableSelect></label>
   const format = (value: string | number | null, column: FinanceColumn) => value == null ? '—' : column.kind === 'percent' ? `${(Number(value) * 100).toFixed(2)}%` : column.kind ? Number(value).toLocaleString('zh-CN', { minimumFractionDigits: column.kind === 'money' ? 2 : 0, maximumFractionDigits: column.kind === 'money' ? 2 : 3 }) : value
   async function download() {
     if (!report) return
@@ -76,7 +78,7 @@ function FinanceReports() {
     } catch (e: any) { setNotice(e.message || '导出失败，请重试') } finally { setExporting(false) }
   }
   return <div className={`${styles.reports} ${local.preview} ${focused ? styles.focused : ''}`}>
-    <header className={styles.top}><span>核算与分析 / <strong>财务报表</strong></span><span className={local.badge}>业务数据 · 总部配送毛利</span></header>
+    <header className={styles.top}><span>核算与分析 / <strong>财务报表</strong></span></header>
     <div className={filterStyles.mobileMenu}><details><summary>财务报表菜单</summary><nav aria-label="财务报表功能菜单">{financeReports.map(r => <Link key={r.id} href={`/v2/supply-chain/finance-reports?report=${r.id}`}>{r.title}</Link>)}</nav></details></div>
     <ManagementTabs activeId={`finance:${id}`} />
     <section className={styles.content}>

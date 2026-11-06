@@ -14,8 +14,8 @@
  *   - 右上 '+ 导入 B2B 账单' 跳 P1-2 页
  */
 'use client'
-import { useEffect, useMemo, useState } from 'react'
-import dayjs from 'dayjs'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import dayjs from '@/lib/business-dayjs'
 import { Chip, MonthPicker } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import FinanceTopNav from '../_topnav'
@@ -53,8 +53,8 @@ type Data = {
   total: Group['summary']
 }
 
-const fmtMoney = (n: number) => `¥${Math.round(n).toLocaleString()}`
-const fmtKMoney = (n: number) => n >= 1000 ? `¥${(n / 1000).toFixed(1)}K` : `¥${Math.round(n)}`
+const fmtMoney = (n: number) => `¥${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+const fmtKMoney = fmtMoney
 
 const GROUP_ORDER: GroupKey[] = ['HEADQ_WAREHOUSE', 'B2B_PLATFORM', 'MAIN_SUPPLIER', 'SCATTERED', 'UNCATEGORIZED']
 const GROUP_COLORS: Record<GroupKey, string> = {
@@ -67,7 +67,16 @@ const GROUP_COLORS: Record<GroupKey, string> = {
 
 export default function FinancePCCostCheckPage() {
   const [month, setMonth] = useState(dayjs().format('YYYY-MM'))
-  const [data, setData] = useState<Data | null>(null)
+  const [result, setData] = useState<Data | null>(null)
+  const data = result?.month === month ? result : null
+  const monthRef = useRef(month)
+  monthRef.current = month
+  const loadSequence = useRef(0)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false; loadSequence.current++ }
+  }, [])
   const [error, setError] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -75,62 +84,76 @@ export default function FinancePCCostCheckPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
   async function load() {
+    if (!mounted.current) return
+    // A verify/revoke started before a month change must refresh the current month.
+    const requestedMonth = monthRef.current
+    const sequence = ++loadSequence.current
     setData(null); setError(null)
     try {
-      const d = await apiFetch<Data>(`/api/finance/cost-check?month=${month}`)
-      setData(d)
-    } catch (e: any) { setError(e?.message || String(e)) }
+      const d = await apiFetch<Data>(`/api/finance/cost-check?month=${requestedMonth}`)
+      if (mounted.current && sequence === loadSequence.current && requestedMonth === monthRef.current) setData(d)
+    } catch (e: any) {
+      if (mounted.current && sequence === loadSequence.current && requestedMonth === monthRef.current) setError(e?.message || String(e))
+    }
   }
-  useEffect(() => { void load() }, [month])
+  useEffect(() => {
+    void load()
+    return () => { loadSequence.current++ }
+  }, [month])
 
   async function verify(r: Receipt, actor: 'supplier' | 'finance') {
-    if (busy) return
+    if (busy || !mounted.current) return
+    if (!mounted.current) return
     setBusy(true)
     try {
       await apiFetch(`/api/receipts/${r.id}/verify`, { method: 'PATCH', body: JSON.stringify({ actor }) })
       await load()
-    } catch (e: any) { notifyUser(e?.message || '核对失败') }
-    finally { setBusy(false) }
+    } catch (e: any) { if (mounted.current) notifyUser(e?.message || '核对失败') }
+    finally { if (mounted.current) setBusy(false) }
   }
 
   async function revoke(r: Receipt, actor: 'supplier' | 'finance') {
-    if (busy) return
+    if (busy || !mounted.current) return
     if (!(await confirmDialog(`确定撤销${actor === 'supplier' ? '供应商' : '财务'}核对? 撤销供应商会级联撤销财务.`))) return
+    if (!mounted.current) return
     setBusy(true)
     try {
       await apiFetch(`/api/receipts/${r.id}/verify/revoke`, { method: 'PATCH', body: JSON.stringify({ actor }) })
       await load()
-    } catch (e: any) { notifyUser(e?.message || '撤销失败') }
-    finally { setBusy(false) }
+    } catch (e: any) { if (mounted.current) notifyUser(e?.message || '撤销失败') }
+    finally { if (mounted.current) setBusy(false) }
   }
 
   async function setSourceType(supplierId: string, sourceType: GroupKey | null) {
-    if (busy) return
+    if (busy || !mounted.current) return
+    if (!mounted.current) return
     setBusy(true)
     try {
       await apiFetch(`/api/finance/cost-check/suppliers/${supplierId}/source-type`, {
         method: 'PATCH', body: JSON.stringify({ sourceType: sourceType === 'UNCATEGORIZED' ? null : sourceType }),
       })
       await load()
-    } catch (e: any) { notifyUser(e?.message || '失败') }
-    finally { setBusy(false) }
+    } catch (e: any) { if (mounted.current) notifyUser(e?.message || '失败') }
+    finally { if (mounted.current) setBusy(false) }
   }
 
   // 批量打标 (BUG#11 fix)
   async function batchSetSourceType(sourceType: GroupKey) {
-    if (busy || selected.size === 0) return
+    if (busy || !mounted.current || selected.size === 0) return
     if (!(await confirmDialog(`批量打标 ${selected.size} 个供应商 → ${sourceType}?`))) return
+    if (!mounted.current) return
     setBusy(true)
     try {
       const r = await apiFetch<{ updated: number }>('/api/finance/cost-check/suppliers/batch-source-type', {
         method: 'POST',
         body: JSON.stringify({ ids: Array.from(selected), sourceType }),
       })
+      if (!mounted.current) return
       notifyUser(`✓ 已打标 ${r.updated} 个供应商`)
       setSelected(new Set())
       await load()
-    } catch (e: any) { notifyUser(e?.message || '失败') }
-    finally { setBusy(false) }
+    } catch (e: any) { if (mounted.current) notifyUser(e?.message || '失败') }
+    finally { if (mounted.current) setBusy(false) }
   }
   function toggleSelect(supplierId: string) {
     setSelected(s => {

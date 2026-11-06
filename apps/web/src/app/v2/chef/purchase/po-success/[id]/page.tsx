@@ -96,7 +96,7 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
         <p className="text-micro text-gray4">{po.no}</p>
         <div className="font-num text-hero mt-1">¥{total.toLocaleString()}</div>
         <p className="text-caption text-gray4 mt-1">
-          {po.supplier?.name || '—'} · 期望 {new Date(po.expectedDate).toLocaleDateString('zh-CN')}
+          {po.supplier?.name || '—'} · 期望 {new Date(po.expectedDate).toLocaleDateString('zh-CN', {timeZone:'Asia/Shanghai'})}
         </p>
         {(po.currentRevisionNo || 0) > 0 && (
           <p className="text-micro text-gray4 mt-1">原始 ¥{originalTotal.toLocaleString()} · 当前第 {po.currentRevisionNo} 版</p>
@@ -183,13 +183,13 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
           />
           {po.shippedAt && (
             <p className="text-caption text-gray3 mt-3">
-              发货时间：{new Date(po.shippedAt).toLocaleString('zh-CN')}
+              发货时间：{new Date(po.shippedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}
               {po.shippedNote && ` · ${po.shippedNote}`}
             </p>
           )}
           {po.receivedAt && (
             <p className="text-caption text-gray3 mt-1">
-              验收时间：{new Date(po.receivedAt).toLocaleString('zh-CN')}
+              验收时间：{new Date(po.receivedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}
             </p>
           )}
         </div>
@@ -222,7 +222,7 @@ export default function PoSuccessPage({ params }: { params: { id: string } }) {
         <Section title="我已发的验收单">
           <div className="bg-white rounded-card border border-border p-3">
             <div className="text-micro text-gray3 mb-2">
-              发送时间: {new Date(po.chefAckAt).toLocaleString('zh-CN')}
+              发送时间: {new Date(po.chefAckAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}
               {' · '}
               {po.chefAckImages?.length || 0} 张照片
             </div>

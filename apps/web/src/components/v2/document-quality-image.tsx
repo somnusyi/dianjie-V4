@@ -16,6 +16,7 @@ export function DocumentQualityImageButton({kind,sourceId,initialOpen=false,labe
 export function DocumentQualityImageDialog({kind,sourceId,onClose,readOnly=false,title='质检图片'}:{kind:Kind;sourceId:string;onClose:()=>void;readOnly?:boolean;title?:string}){
   const [view,setView]=useState<View|null>(null),[pending,setPending]=useState<Uploaded[]>([]),[removed,setRemoved]=useState<string[]>([]),[busy,setBusy]=useState(false),[error,setError]=useState(''),[conflict,setConflict]=useState(false)
   const [refreshRequired,setRefreshRequired]=useState(false),[retryRequired,setRetryRequired]=useState(false)
+  const [closePrompt,setClosePrompt]=useState(false)
   const [mounted,setMounted]=useState(false)
   const fileInput=useRef<HTMLInputElement>(null)
   useEffect(()=>{setMounted(true)},[])
@@ -23,7 +24,7 @@ export function DocumentQualityImageDialog({kind,sourceId,onClose,readOnly=false
   const endpoint=qualityImageEndpoint(kind,sourceId)
   useEffect(()=>{
     const current=++owner.current
-    setView(null);setPending([]);setRemoved([]);setError('');setConflict(false);setRefreshRequired(false);setRetryRequired(false);setBusy(false);busyRef.current=false;requestId.current=clientRequestId()
+    setClosePrompt(false);setView(null);setPending([]);setRemoved([]);setError('');setConflict(false);setRefreshRequired(false);setRetryRequired(false);setBusy(false);busyRef.current=false;requestId.current=clientRequestId()
     void apiFetch<View>(endpoint).then(result=>{if(owner.current===current)setView(result)}).catch(reason=>{if(owner.current===current)setError(reason.message||'图片加载失败')})
     return ()=>{owner.current++}
   },[endpoint])
@@ -70,7 +71,9 @@ export function DocumentQualityImageDialog({kind,sourceId,onClose,readOnly=false
       if(owner.current===current){setView(latest);setRefreshRequired(false)}
     }catch(reason:any){if(owner.current===current){setError(saved?`图片已保存，最新图片加载失败：${reason.message||'请重新加载'}`:reason.message||'保存失败，已上传图片保留，可重试');if(!saved){setRetryRequired(!reason.status||reason.status>=500);if(reason.status===409)setConflict(true)}}}
     finally{if(owner.current===current){busyRef.current=false;setBusy(false)}}
+    return saved && owner.current===current
   }
+  function requestClose(){if(busyRef.current)return;if(changed&&!refreshRequired)setClosePrompt(true);else onClose()}
   async function reload(){
     if(busyRef.current)return
     busyRef.current=true;setBusy(true);setError('');const current=owner.current
@@ -78,9 +81,10 @@ export function DocumentQualityImageDialog({kind,sourceId,onClose,readOnly=false
     catch(reason:any){if(owner.current===current)setError(reason.message||'最新图片加载失败')}
     finally{if(owner.current===current){busyRef.current=false;setBusy(false)}}
   }
-  return mounted ? createPortal(<div role="dialog" aria-modal="true" aria-label="单据质检图片" className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 p-4" onClick={event=>{event.stopPropagation();if(!busyRef.current)onClose()}}>
+  return mounted ? createPortal(<div role="dialog" aria-modal="true" aria-label="单据质检图片" className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 p-4" onClick={event=>{event.stopPropagation();requestClose()}}>
     <section className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white" onClick={event=>event.stopPropagation()}>
-      <div className="flex items-center justify-between border-b p-5"><h2 className="text-xl font-bold">{title}</h2><button type="button" disabled={busy} onClick={onClose}>关闭</button></div>
+      <div className="flex items-center justify-between border-b p-5"><h2 className="text-xl font-bold">{title}</h2><button type="button" disabled={busy} onClick={requestClose}>关闭</button></div>
+      {closePrompt&&<div role="alertdialog" aria-label="未保存质检图片" className="border-b bg-amber-50 p-4"><p>质检图片尚未保存，如何处理？</p><div className="mt-3 flex flex-wrap gap-3"><button type="button" disabled={busy||conflict||refreshRequired} onClick={async()=>{if(await save())onClose()}}>保存并关闭</button><button type="button" disabled={busy||retryRequired} onClick={onClose}>放弃并关闭</button><button type="button" disabled={busy} onClick={()=>setClosePrompt(false)}>继续查看</button></div>{retryRequired&&<p>保存结果尚未确认，请先重试保存。</p>}</div>}
       <div className="min-h-0 overflow-y-auto p-5">
       {error&&<p role="alert" className="mb-3 text-red-600">{error}</p>}
       {!view&&!error&&<p>正在加载图片…</p>}

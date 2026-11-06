@@ -8,6 +8,7 @@
  *   4. 银行回调或手工确认 → 累加 paidAmount → 全付清后 fullyPaidAt
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import { clientRequestId } from '@/lib/client-id'
@@ -42,9 +43,10 @@ type Invoice = {
   payments: Payment[]
 }
 
+const money = (n: number) => `¥${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
 function fmt(iso: string) {
-  const d = new Date(iso)
-  return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
+  return businessDayjs(iso).format('MM/DD')
 }
 function daysTill(iso: string | null) {
   if (!iso) return null
@@ -64,6 +66,7 @@ export default function FinancePayablePage() {
   const [bankAvailable, setBankAvailable] = useState<number | null>(null)
 
   function load() {
+    setItems(null)
     setError(null)
     apiFetch<Invoice[]>('/api/invoice-payments/payable')
       .then(setItems)
@@ -114,7 +117,7 @@ export default function FinancePayablePage() {
     const amt = Number(payAmount)
     if (!amt || amt <= 0) { notifyUser('付款金额必须 > 0'); return }
     if (amt > target.remainingAmount + 0.01) {
-      notifyUser(`金额超过剩余可付 ¥${target.remainingAmount.toLocaleString()}`); return
+      notifyUser(`金额超过剩余可付 ${money(target.remainingAmount)}`); return
     }
     setSubmitting(true)
     try {
@@ -131,6 +134,8 @@ export default function FinancePayablePage() {
     setSubmitting(false)
   }
 
+  const totalsReady = items !== null && !error
+
   return (
     <div className="min-h-screen bg-bg pb-12">
       <header className="px-4 pt-4 pb-2 flex items-center gap-3">
@@ -145,32 +150,32 @@ export default function FinancePayablePage() {
       <div className="mx-4 mt-3 bg-ink text-white rounded-card p-4">
         <div className="flex items-baseline justify-between mb-1">
           <span className="text-caption text-white/70">应付合计</span>
-          <span className="font-num text-h1">¥{totals.remaining.toLocaleString()}</span>
+          <span className="font-num text-h1">{totalsReady ? money(totals.remaining) : '—'}</span>
         </div>
         <div className="flex items-center gap-3 mt-2 text-caption">
           <div className="flex-1">
-            <div className="text-micro text-white/60">{totals.count} 张未付清</div>
-            <div className="font-num text-button">总开票 ¥{totals.total.toLocaleString()}</div>
+            <div className="text-micro text-white/60">{totalsReady ? totals.count : '—'} 张未付清</div>
+            <div className="font-num text-button">总开票 {totalsReady ? money(totals.total) : '—'}</div>
           </div>
           <div className="flex-1">
             <div className="text-micro text-white/60">已付</div>
-            <div className="font-num text-button text-green-fg">¥{totals.paid.toLocaleString()}</div>
+            <div className="font-num text-button text-green-fg">{totalsReady ? money(totals.paid) : '—'}</div>
           </div>
         </div>
         {/* 银行可用 vs 应付 — 现金流一眼可见 */}
         {bankAvailable !== null && (() => {
-          const gap = bankAvailable - totals.remaining
-          const shortfall = gap < 0
+          const gap = totalsReady ? bankAvailable - totals.remaining : null
+          const shortfall = gap !== null && gap < 0
           return (
             <div className="mt-3 pt-3 border-t border-white/15 flex items-center gap-3 text-caption">
               <div className="flex-1">
                 <div className="text-micro text-white/60">银行账户余额 · 资金台账</div>
-                <div className="font-num text-button">¥{bankAvailable.toLocaleString()}</div>
+                <div className="font-num text-button">{money(bankAvailable)}</div>
               </div>
               <div className="flex-1 text-right">
-                <div className="text-micro text-white/60">{shortfall ? '缺口' : '盈余'}</div>
-                <div className={`font-num text-button ${shortfall ? 'text-red-fg' : 'text-green-fg'}`}>
-                  {shortfall ? '−' : '+'}¥{Math.abs(gap).toLocaleString()}
+                <div className="text-micro text-white/60">{gap === null ? '可付差额' : shortfall ? '缺口' : '盈余'}</div>
+                <div className={`font-num text-button ${gap === null ? 'text-white/60' : shortfall ? 'text-red-fg' : 'text-green-fg'}`}>
+                  {gap === null ? '—' : `${shortfall ? '−' : '+'}${money(Math.abs(gap))}`}
                 </div>
               </div>
             </div>
@@ -181,7 +186,7 @@ export default function FinancePayablePage() {
       {error && <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}
 
       <ul className="px-4 mt-4 space-y-2">
-        {items === null && <li className="text-caption text-gray3 text-center py-12">加载中…</li>}
+        {items === null && !error && <li className="text-caption text-gray3 text-center py-12">加载中…</li>}
         {items?.length === 0 && (
           <li className="text-caption text-gray3 text-center py-12">暂无待付发票</li>
         )}
@@ -201,11 +206,11 @@ export default function FinancePayablePage() {
               </div>
               <div className="flex items-center justify-between mb-1">
                 <span className="text-h2">{inv.supplier.name}</span>
-                <span className="font-num text-h2">¥{Number(inv.remainingAmount).toLocaleString()}</span>
+                <span className="font-num text-h2">{money(Number(inv.remainingAmount))}</span>
               </div>
               <p className="text-caption text-gray2 mb-2">
-                关联 {inv.receipts.length} 单 · 开票 ¥{Number(inv.amount).toLocaleString()}
-                {Number(inv.paidAmount) > 0 && <span> · 已付 ¥{Number(inv.paidAmount).toLocaleString()}</span>}
+                关联 {inv.receipts.length} 单 · 开票 {money(Number(inv.amount))}
+                {Number(inv.paidAmount) > 0 && <span> · 已付 {money(Number(inv.paidAmount))}</span>}
               </p>
               {/* 进度条 */}
               <div className="h-1.5 bg-bg rounded-full overflow-hidden mb-2">
@@ -217,7 +222,7 @@ export default function FinancePayablePage() {
                   {inv.payments.map(p => (
                     <li key={p.id} className="flex items-center gap-2 flex-wrap">
                       <span>{p.status === 'SUCCESS' ? '✓' : p.status === 'PENDING' ? '⏳' : '✗'}</span>
-                      <span className="font-num">¥{Number(p.amount).toLocaleString()}</span>
+                      <span className="font-num">{money(Number(p.amount))}</span>
                       <span>{p.status === 'SUCCESS' ? '已到账' : p.status === 'PENDING' ? '处理中' : '失败'}</span>
                       <span className="ml-auto">{fmt(p.paidAt || p.createdAt)}</span>
                       {p.status === 'PENDING' && (
@@ -257,16 +262,16 @@ export default function FinancePayablePage() {
               <div className="bg-bg-warm rounded-card border border-border p-3">
                 <div className="flex justify-between text-caption">
                   <span className="text-gray2">开票总额</span>
-                  <span className="font-num">¥{Number(target.amount).toLocaleString()}</span>
+                  <span className="font-num">{money(Number(target.amount))}</span>
                 </div>
                 <div className="flex justify-between text-caption mt-1">
                   <span className="text-gray2">已付</span>
-                  <span className="font-num text-green-fg">¥{Number(target.paidAmount).toLocaleString()}</span>
+                  <span className="font-num text-green-fg">{money(Number(target.paidAmount))}</span>
                 </div>
                 <div className="border-t border-border my-2"></div>
                 <div className="flex justify-between text-button">
                   <span className="text-amber-fg">本次可付</span>
-                  <span className="font-num text-amber-fg">¥{target.remainingAmount.toLocaleString()}</span>
+                  <span className="font-num text-amber-fg">{money(target.remainingAmount)}</span>
                 </div>
               </div>
 
@@ -316,7 +321,7 @@ export default function FinancePayablePage() {
                       className="px-4 py-3 bg-white border border-border rounded-cta text-button text-gray2">取消</button>
               <button onClick={submitPay} disabled={submitting}
                       className="flex-1 py-3 bg-ink text-white rounded-cta text-button disabled:opacity-40">
-                {submitting ? '提交中…' : `付款 · ¥${Number(payAmount || 0).toLocaleString()}`}
+                {submitting ? '提交中…' : `付款 · ${money(Number(payAmount || 0))}`}
               </button>
             </div>
           </div>

@@ -1,3 +1,4 @@
+import { permissionStamp } from './authenticate-principal'
 /**
  * 幂等中间件 —— 防止店员快速双击"提交订单"产生重复记录。
  *
@@ -32,6 +33,7 @@ interface CachedResponse {
   body: string
   bodyHash: string
   requestHash: string
+  permissionStamp: string
 }
 
 export function registerIdempotency(app: FastifyInstance) {
@@ -46,7 +48,8 @@ export function registerIdempotency(app: FastifyInstance) {
 
     // Global preHandler runs before route-level authenticate. Verify here so a
     // cached response can never bypass token expiry/revocation checks.
-    await (req as any).jwtVerify()
+    await (app as any).authenticate(req,reply)
+    if(reply.sent)return reply
     const user = (req as any).user || {}
     if (user.typ !== 'access') {
       return reply.status(401).send({ error: '未授权，请先登录' })
@@ -66,6 +69,7 @@ export function registerIdempotency(app: FastifyInstance) {
       const hit = await redis.get(fullKey)
       if (hit) {
         const cached: CachedResponse = JSON.parse(hit)
+        if(cached.permissionStamp!==permissionStamp(user))return reply.status(409).send({error:'请求权限范围已变更，请核对原单据后再操作'})
         if (cached.requestHash !== requestHash) {
           return reply.status(409).send({ error: '同一 Idempotency-Key 不能用于不同请求内容' })
         }
@@ -99,6 +103,7 @@ export function registerIdempotency(app: FastifyInstance) {
         body,
         bodyHash: crypto.createHash('sha256').update(body).digest('hex').slice(0, 12),
         requestHash,
+        permissionStamp: permissionStamp((req as any).user),
       }
       await redis.setex(fullKey, TTL_SECONDS, JSON.stringify(entry))
     } catch { /* 缓存失败不阻断响应 */ }

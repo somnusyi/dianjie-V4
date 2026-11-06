@@ -1,4 +1,5 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 import {useState,type CSSProperties} from 'react'
 import {RECEIPT_TEMPLATE_FIELDS,RECEIPT_FIELD_LABELS,RECEIPT_OPTIONAL_HEADERS,readReceiptTemplate,resizeReceiptGrid,removeReceiptGridAxis,receiptGridCellText,receiptDetailColumns,moveReceiptDetailColumn,addReceiptExtraColumn,type ReceiptPrintTemplate,type ReceiptTemplateFields,type ReceiptTemplateField} from '@/lib/receipt-print-template'
 
@@ -34,7 +35,7 @@ export function ReceiptTemplateDesigner({value,onChange,headers,onSave,onReset,n
       </div>
       {cell&&<><div role="group" aria-label="抬头单元格选择" className="grid gap-1" style={{gridTemplateColumns:grid.widths.map(width=>`${width}fr`).join(' ')}}>{grid.cells.flatMap((cells,r)=>cells.map((item,c)=><button type="button" key={`${r}:${c}`} aria-label={`编辑第${r+1}行第${c+1}列`} aria-pressed={r===row&&c===column} className={`min-w-0 whitespace-pre-wrap break-words rounded border p-2 text-left text-caption ${r===row&&c===column?'border-accent bg-accent/10':'border-border bg-bg'}`} onClick={()=>setSelected({row:r,column:c})}>{item.text||item.field?item.text+(item.field?`【${RECEIPT_FIELD_LABELS[item.field]}】`:''):'空白格'}</button>))}</div>
         <div className="grid gap-3 sm:grid-cols-3"><label className="grid gap-1 text-caption">第{row+1}行第{column+1}列文字<textarea aria-label="单元格文字" maxLength={120} rows={2} className={inputClass} value={cell.text} onChange={event=>patchCell({text:event.target.value})}/></label>
-          <label className="grid gap-1 text-caption">后接单据字段<select aria-label="单元格绑定字段" className={inputClass} value={cell.field} onChange={event=>patchCell({field:event.target.value as ReceiptTemplateField|''})}><option value="">仅文字</option>{RECEIPT_TEMPLATE_FIELDS.map(field=><option key={field} value={field}>{RECEIPT_FIELD_LABELS[field]}</option>)}</select></label>
+          <label className="grid gap-1 text-caption">后接单据字段<SearchableSelect searchWhenLong searchLabel="搜索单元格绑定字段" aria-label="单元格绑定字段" className={inputClass} value={cell.field} onChange={event=>patchCell({field:event.target.value as ReceiptTemplateField|''})}><option value="">仅文字</option>{RECEIPT_TEMPLATE_FIELDS.map(field=><option key={field} value={field}>{RECEIPT_FIELD_LABELS[field]}</option>)}</SearchableSelect></label>
           <label className="grid gap-1 text-caption">第{column+1}列相对宽度<input aria-label="选中列宽" type="number" min={1} max={20} step={1} className={inputClass} value={grid.widths[column]} onWheel={event=>event.currentTarget.blur()} onChange={event=>change({...template,grid:{...grid,widths:grid.widths.map((width,index)=>index===column?Math.max(1,Math.min(20,Number(event.target.value)||1)):width)}})}/><span className="text-micro text-gray3">如 1、2、1，则中列为两侧的两倍宽。</span></label></div>
       </>}
     </fieldset>

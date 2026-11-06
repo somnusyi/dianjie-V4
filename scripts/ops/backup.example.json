@@ -1,0 +1,12 @@
+{
+  "database_url_env": "DATABASE_URL",
+  "directory": "/var/lib/dianjie-backups/production",
+  "attachment_source": "oss",
+  "oss_prefix": "",
+  "node_binary": "/usr/bin/node",
+  "local_attachment_directory": "/app/dianjie-v4/receipts",
+  "content_addressed": true,
+  "offsite_deferred": true,
+  "retention_days": 30,
+  "minimum_free_bytes": 1073741824
+}

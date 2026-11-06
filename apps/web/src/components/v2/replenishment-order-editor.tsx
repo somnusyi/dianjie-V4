@@ -1,4 +1,5 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -17,7 +18,7 @@ import {
 } from '@/lib/replenishment-orders'
 
 type Store = { id: string; no: string; name: string }
-type Supplier = { id: string; no?: string; name: string }
+type Supplier = { id: string; no?: string; name: string; sourceType?: string }
 type Product = {
   id: string; code: string; name: string; spec?: string | null; status: string
   supplierId?: string | null; orderUnit?: string | null; unit?: string | null; price: number | string
@@ -105,9 +106,9 @@ export function ReplenishmentOrderEditor({ orderId }: { orderId?: string }) {
   useEffect(() => {
     Promise.all([
       apiFetch<Store[] | { items: Store[] }>('/api/stores'),
-      apiFetch<Supplier[]>('/api/suppliers?status=ENABLED&businessScope=STORE_FULFILLER'),
+      apiFetch<Supplier[]>('/api/suppliers?status=ENABLED'),
     ]).then(([storeRows, supplierRows]) => {
-      setStores(asList(storeRows)); setSuppliers(asList(supplierRows))
+      const headquarters=asList(supplierRows).filter(row=>row.sourceType==='HEADQ_WAREHOUSE');setStores(asList(storeRows));setSuppliers(headquarters);if(!orderId){if(headquarters.length===1){setForm(current=>({...current,supplierId:headquarters[0].id}));setBaseline(JSON.stringify({...initialForm(),supplierId:headquarters[0].id}))}else setError(headquarters.length?'存在多个总仓来源，请先核对配置':'未找到启用的总仓来源，请先核对配置')}
     }).catch(reason => setError(String(reason?.message || reason)))
     loadOrder()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -239,16 +240,16 @@ export function ReplenishmentOrderEditor({ orderId }: { orderId?: string }) {
 
       {status === 'EXCEPTION' && <section id="exception" className="mb-5 rounded-card border border-red/30 bg-red-bg p-4"><h2 className="text-h2 text-red">履约异常待处理</h2><p className="mt-1 text-caption text-gray2">正式订单已取消或履约关联不完整，不能继续生成配送。请先核对正式订单，再由供应链负责人处理。</p><div className="mt-3 flex flex-wrap gap-2">{order?.fulfillment?.purchaseOrderId && <Link href={`/v2/supply-chain/fulfillment/${order.fulfillment.purchaseOrderId}`} className="rounded-cta bg-ink px-4 py-2 text-button text-white">查看异常订单</Link>}<button type="button" onClick={loadOrder} className="rounded-cta border border-border bg-white px-4 py-2 text-button">重新核对状态</button></div></section>}
 
-      <section className="rounded-card border border-border bg-white p-4 lg:p-6"><h2 className="text-h2">补货信息</h2><p className="mt-1 text-micro text-gray3">填写顺序：门店 → 供应商 → 期望到货 → 商品数量与冻结单价 → 备注</p>
+      <section className="rounded-card border border-border bg-white p-4 lg:p-6"><h2 className="text-h2">补货信息</h2><p className="mt-1 text-micro text-gray3">填写顺序：总仓 → 收货门店 → 期望到货 → 商品数量与冻结单价 → 备注</p>
         <div className="mt-5 grid gap-4 md:grid-cols-3">
-          <label className="text-caption text-gray2">门店 *<select disabled={!editable || !canWrite} value={form.storeId} onChange={event => update({ storeId: event.target.value })} className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-3 text-body text-ink disabled:bg-bg"><option value="">请选择门店</option>{stores.map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}</select></label>
-          <label className="text-caption text-gray2">供应商 *<select disabled={!editable || !canWrite} value={form.supplierId} onChange={event => update({ supplierId: event.target.value, lines: [] })} className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-3 text-body text-ink disabled:bg-bg"><option value="">请选择门店履约供应商</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no ? `${supplier.no} · ` : ''}{supplier.name}</option>)}</select></label>
+          <label className="text-caption text-gray2">门店 *<SearchableSelect searchWhenLong searchLabel="搜索门店" disabled={!editable || !canWrite} value={form.storeId} onChange={event => update({ storeId: event.target.value })} className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-3 text-body text-ink disabled:bg-bg"><option value="">请选择门店</option>{stores.map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}</SearchableSelect></label>
+          <div className="text-caption text-gray2">补货来源<div className="mt-1 rounded-xl border border-border bg-bg px-3 py-3 text-body text-ink">{order?.supplier?.name || suppliers.find(supplier=>supplier.id===form.supplierId)?.name || '总仓来源待配置'}</div></div>
           <label className="text-caption text-gray2">期望到货日 *<input disabled={!editable || !canWrite} type="date" value={form.expectedDate} onChange={event => update({ expectedDate: event.target.value })} className="mt-1 w-full rounded-xl border border-border bg-white px-3 py-3 text-body text-ink disabled:bg-bg" /></label>
         </div>
       </section>
 
       <section className="mt-4 rounded-card border border-border bg-white p-4 lg:p-6"><div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between"><div><h2 className="text-h2">补货商品</h2><p className="mt-1 text-micro text-gray3">保存草稿时冻结单价；若提交前价格变化，系统会要求重新保存确认。</p></div>{editable && canWrite && <input aria-label="搜索商品" value={productSearch} onChange={event => setProductSearch(event.target.value)} placeholder="搜索名称 / 编码 / 规格" className="rounded-xl border border-border px-3 py-2.5 text-body" />}</div>
-        {!form.supplierId && <p className="mt-5 rounded-xl bg-bg p-4 text-caption text-gray3">请先选择供应商，再添加该供应商可履约的商品。</p>}
+        {!form.supplierId && <p className="mt-5 rounded-xl bg-bg p-4 text-caption text-gray3">请先配置启用的内部总仓，再添加该总仓可补货的商品。</p>}
         {form.supplierId && <div className="mt-4 space-y-2">
           {displayedProducts.map(product => {
             const line = lineByProduct.get(product.id); const frozen = frozenItemByProduct.get(product.id)

@@ -1,4 +1,5 @@
 import { prisma } from '@dianjie/db'
+import { credentialContext, sealCredential, openCredential } from '../../lib/credential-vault'
 
 export interface ActiveToken {
   appAuthToken: string
@@ -23,12 +24,12 @@ export class DbTokenStore {
       row = await prisma.meituanAuthToken.create({
         data: {
           orgId: this.orgId,
-          appAuthToken: bootstrap,
-          refreshToken: process.env.MEITUAN_BOOTSTRAP_REFRESH_TOKEN || null,
+          appAuthToken: sealCredential(bootstrap, credentialContext(this.orgId, 'meituan', 'appAuthToken'))!,
+          refreshToken: sealCredential(process.env.MEITUAN_BOOTSTRAP_REFRESH_TOKEN || null, credentialContext(this.orgId, 'meituan', 'refreshToken')),
         },
       })
     }
-    return row.appAuthToken
+    return openCredential(row.appAuthToken, credentialContext(this.orgId, 'meituan', 'appAuthToken'))!
   }
 
   /** refresh 成功后回写新 token (refresh 接口路径等美团回复后再实现, 这里只暴露 setter) */
@@ -37,14 +38,18 @@ export class DbTokenStore {
     refreshToken?: string
     expiresAt?: Date
   }): Promise<void> {
+    const protectedToken = { ...newToken,
+      appAuthToken: sealCredential(newToken.appAuthToken, credentialContext(this.orgId, 'meituan', 'appAuthToken'))!,
+      ...(newToken.refreshToken !== undefined ? { refreshToken: sealCredential(newToken.refreshToken, credentialContext(this.orgId, 'meituan', 'refreshToken')) } : {}),
+    }
     await prisma.meituanAuthToken.upsert({
       where: { orgId: this.orgId },
       create: {
         orgId: this.orgId,
-        ...newToken,
+        ...protectedToken,
       },
       update: {
-        ...newToken,
+        ...protectedToken,
         lastRefreshedAt: new Date(),
         refreshAttempts: 0,
       },

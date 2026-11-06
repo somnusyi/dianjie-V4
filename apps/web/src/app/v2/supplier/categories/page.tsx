@@ -1,4 +1,5 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { BottomNav, Chip } from '@/components/v2'
@@ -296,17 +297,16 @@ export default function SupplierCategoriesPage() {
         <a href={internalSupplyChain ? '/v2/supply-chain/products' : '/v2/supplier/products'} className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-white">‹</a>
         <div className="min-w-0 flex-1">
           <h1 className="text-h1">分类管理</h1>
-          <p className="text-caption text-gray3">商品报价与默认仓库存共用同一分类口径</p>
         </div>
         {internalSupplyChain && (
-          <select
+          <SearchableSelect searchWhenLong searchLabel="搜索供应商"
             value={selectedSupplierId}
             disabled={busy}
             onChange={event => { const id = event.target.value; confirmDiscard(() => setSelectedSupplierId(id)) }}
             className="h-10 min-w-64 rounded-cta border border-border bg-white px-3 text-body"
           >
             {suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}
-          </select>
+          </SearchableSelect>
         )}
         <a href={internalSupplyChain ? '/v2/supply-chain/inventory' : '/v2/supplier/inventory'} className="rounded-cta border border-border bg-white px-3 py-2 text-button text-gray2">查看库存</a>
       </header>
@@ -365,14 +365,14 @@ export default function SupplierCategoriesPage() {
               </div>
               <p className="mt-2 text-caption text-gray2">来源：<b>{sourceCategory.name}</b>（{sourceCategory.count} 个 SKU）</p>
               <label className="mt-3 block text-micro text-gray3">目标分类</label>
-              <select
+              <SearchableSelect searchWhenLong searchLabel="搜索目标分类"
                 value={mergeTargetId}
                 onChange={event => setMergeTargetId(event.target.value)}
                 className="mt-1 w-full rounded-cta border border-border bg-white px-3 py-2 text-body"
               >
                 <option value="">请选择目标分类</option>
                 {mergeTargets.map(category => <option key={category.id!} value={category.id!}>{category.name}</option>)}
-              </select>
+              </SearchableSelect>
               <button
                 onClick={requestMerge}
                 disabled={!mergeTargetId || busy}
@@ -438,7 +438,7 @@ export default function SupplierCategoriesPage() {
                           {!category.isActive && <Chip tone="gray">已停用</Chip>}
                         </div>
                       )}
-                      <div className="mt-1 text-caption text-gray3">{category.count} 个 SKU · 商品和库存同步归类</div>
+                      <div className="mt-1 text-caption text-gray3">{category.count} 个商品</div>
                     </div>
 
                     {!category.isSystem && category.id && editingId !== category.id && (

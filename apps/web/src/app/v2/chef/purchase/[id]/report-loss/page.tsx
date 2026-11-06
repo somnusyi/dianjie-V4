@@ -1,4 +1,5 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
@@ -143,9 +144,9 @@ export default function PostReceiptLossPage({ params }: { params: { id: string }
       ) : (
         <>
           <Section title="1. 选择收货单">
-            <select value={receiptId} onChange={e => { setReceiptId(e.target.value); setQuantity({}) }} className="w-full bg-white border border-border rounded-cta p-3 text-body">
-              {receipts.map((item: any) => <option key={item.id} value={item.id}>{item.no} · {new Date(item.confirmedAt).toLocaleString('zh-CN')} · 截止 {deadlineText(item)}</option>)}
-            </select>
+            <SearchableSelect searchWhenLong searchLabel="搜索收货单" value={receiptId} onChange={e => { setReceiptId(e.target.value); setQuantity({}) }} className="w-full bg-white border border-border rounded-cta p-3 text-body">
+              {receipts.map((item: any) => <option key={item.id} value={item.id}>{item.no} · {new Date(item.confirmedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })} · 截止 {deadlineText(item)}</option>)}
+            </SearchableSelect>
           </Section>
 
           <Section title="2. 异常类型">

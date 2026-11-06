@@ -1,4 +1,6 @@
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chip } from '@/components/v2'
@@ -141,13 +143,13 @@ const RECEIPT_STATUS: Record<string, string> = {
 }
 
 function dateText(value?: string) {
-  return value ? value.slice(0, 10) : '—'
+  return value ? businessDayjs(value).format('YYYY-MM-DD') : '—'
 }
 
 function money(value: unknown) {
   const amount = Number(value || 0)
   return Number.isFinite(amount)
-    ? `¥${amount.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}`
+    ? `¥${amount.toLocaleString('zh-CN', { minimumFractionDigits:2, maximumFractionDigits: 2 })}`
     : '—'
 }
 
@@ -155,7 +157,7 @@ function dateTimeText(value?: string) {
   if (!value) return '—'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '—'
-  return date.toLocaleString('zh-CN', {
+  return date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -294,14 +296,14 @@ export default function InternalSupplyChainStoresPage() {
         </div>
         <label className="text-caption text-gray2">
           当前门店
-          <select
+          <SearchableSelect searchWhenLong searchLabel="搜索选择门店"
             aria-label="选择门店"
             value={storeId}
             onChange={event => setStoreId(event.target.value)}
             className="ml-2 h-10 min-w-60 rounded-cta border border-border bg-white px-3 text-body"
           >
             {stores.map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}
-          </select>
+          </SearchableSelect>
         </label>
       </header>
 

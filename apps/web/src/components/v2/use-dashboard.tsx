@@ -1,6 +1,9 @@
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
+import { clearSession } from '@/lib/v2-auth'
 import { useEffect, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
+import { businessDateKey } from '@/lib/business-date'
 
 export type DashboardData = {
   role: string
@@ -69,7 +72,7 @@ export function fmtRefreshed(d: Date | null): string {
   if (sec < 60) return `${sec} 秒前`
   const m = Math.round(sec / 60)
   if (m < 60) return `${m} 分钟前`
-  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
+  return businessDayjs(d).format('HH:mm')
 }
 
 export function LoadingScreen() {
@@ -134,7 +137,7 @@ export function ErrorScreen({ message }: { message: string }) {
         <p className="text-body text-gray2">{friendly}</p>
         {!isAuth && <p className="text-micro text-gray4 mt-1 break-all">{message}</p>}
         {isAuth ? (
-          <button onClick={() => { try { localStorage.clear() } catch {}; location.replace('/v2/login') }}
+          <button onClick={() => { try { clearSession({preserveDrafts:true}) } catch {}; location.replace('/v2/login') }}
                   className="mt-4 px-4 py-2 bg-ink text-white rounded-cta text-button">
             去登录
           </button>
@@ -152,10 +155,8 @@ export function ErrorScreen({ message }: { message: string }) {
 /** 当前问候语 + 中文星期 + 月日 */
 export function greetingFor(name: string | undefined): { greeting: string; today: string } {
   const today = new Date()
-  const w = ['日', '一', '二', '三', '四', '五', '六'][today.getDay()]
-  const md = `${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getDate()).padStart(2, '0')}`
   return {
-    greeting: `早上好，${name || '用户'}`,
-    today: `周${w} · ${md}`,
+    greeting: `你好，${name || '用户'}`,
+    today: `${today.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', weekday: 'short' })} · ${businessDateKey(today).slice(5).replace('-', '/')}`,
   }
 }

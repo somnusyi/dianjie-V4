@@ -25,7 +25,7 @@ import {
   type OrderDetailTableRow,
 } from '@/components/v2/order-detail-shared'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import { clientRequestId } from '@/lib/client-id'
 import {
   buildPartialShipmentLines,
@@ -71,10 +71,10 @@ type Order = {
   chefAckImages?: string[] | null
   chefAckNote?: string | null
   store: { id: string; name: string; no: string; address?: string | null }
-  supplier: { id: string; name: string; contactName?: string | null; contactPhone?: string | null; inventoryMode?: 'NOT_TRACKED' | 'STRICT' }
+  supplier: { id: string; name: string; contactName?: string | null; contactPhone?: string | null; inventoryMode?: 'NOT_TRACKED' | 'STRICT'; sourceType?: string }
   createdBy: { id: string; name: string }
   shippedBy: { id: string; name: string } | null
-  items: { id: string; productId: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string; receivedQty: string | null; orderUnitSnapshot?: string | null; productUnitSnapshot?: string | null; product?: { name: string; spec: string | null; unit: string; code: string; shipUpperPct?: string | number; shipUpperBuffer?: string | number } }[]
+  items: { id: string; productId: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string; receivedQty: string | null; orderUnitSnapshot?: string | null; productUnitSnapshot?: string | null; product?: { name: string; spec: string | null; unit: string; code: string; category?: string | null; location?: string | null; shipUpperPct?: string | number; shipUpperBuffer?: string | number } }[]
   revisions?: {
     id: string; revisionNo: number; status: string; reason: string; requestedAt?: string; createdAt?: string
     changeSet: { kind: string; productId?: string; before?: any; after?: any }[]
@@ -217,6 +217,7 @@ export default function SupplierOrderDetailPage() {
   const [deliveryAddSearch, setDeliveryAddSearch] = useState('')
   const [deliveryAdjustError, setDeliveryAdjustError] = useState<string | null>(null)
   const [shipNote, setShipNote] = useState('')
+  const [pickerName, setPickerName] = useState('')
   // 发货时可调整每行的实际发货量 (称重 / 缺货). key=itemId, value=shippedQty
   const [shipQty, setShipQty] = useState<Record<string, number>>({})
   const [removedShipmentItemIds, setRemovedShipmentItemIds] = useState<string[]>([])
@@ -353,6 +354,9 @@ export default function SupplierOrderDetailPage() {
 
   function ship() {
     if (!order || isOperationGroupContext) return
+    if (order.supplier.sourceType === 'HEADQ_WAREHOUSE' && !pickerName.trim()) {
+      setDeliveryAdjustError('请填写实际分拣负责人'); return
+    }
     setShipmentNotice(null)
     setDeliveryAdjustError(null)
     const serverDraft = (order.deliveries || []).find(delivery => delivery.status === 'DRAFT') || null
@@ -389,6 +393,7 @@ export default function SupplierOrderDetailPage() {
       newTotal,
       oldTotal: Number(order.totalAmount),
       inventoryMode: order.supplier.inventoryMode,
+      sourceType: order.supplier.sourceType,
     })
     const shipRequestKey = shipRequestKeyRef.current || clientRequestId()
     shipRequestKeyRef.current = shipRequestKey
@@ -405,6 +410,7 @@ export default function SupplierOrderDetailPage() {
             method: 'PATCH',
             body: JSON.stringify({
               note: shipNote.trim() || undefined,
+              ...(order.supplier.sourceType === 'HEADQ_WAREHOUSE' ? { pickerName: pickerName.trim() } : {}),
               ...(!serverDraft ? { items: itemsBody, removedItemIds: removedShipmentItemIds } : {}),
               ...(serverDraft ? { draftRowVersion: serverDraft.rowVersion } : {}),
               idempotencyKey: shipRequestKey,
@@ -435,7 +441,7 @@ export default function SupplierOrderDetailPage() {
     if (!order || isOperationGroupContext) return
     openConfirm({
       title: `接单 ${order.no}?`,
-      body: `${order.items.length} 件商品 · 共 ¥${Number(order.currentOrderAmount ?? order.originalTotalAmount ?? order.totalAmount).toLocaleString()}\n接单后店长能看到"已接单"状态, 你需要按期望日期 ${dayjs(order.expectedDate).format('MM/DD')} 前发货.${order.supplier.inventoryMode === 'STRICT' ? '\n系统会预占本单所需的供应商库存。' : '\n当前未核算供应商仓库库存，不会因库存数字不完整阻断接单。'}`,
+      body: `${order.items.length} 件商品 · 共 ¥${Number(order.currentOrderAmount ?? order.originalTotalAmount ?? order.totalAmount).toLocaleString()}\n接单后店长能看到"已接单"状态, 你需要按期望日期 ${order.expectedDate.slice(5,10).replace('-','/')} 前发货.${order.supplier.sourceType === 'HEADQ_WAREHOUSE' ? '\n本单由总仓履约。已预占的库存不会重复预占；尚未预占的数量按总仓库存校验。' : order.supplier.inventoryMode === 'STRICT' ? '\n已预占的供应商库存不会重复预占；尚未预占的数量按供应商库存校验。' : '\n当前供应商未启用库存核算。'}`,
       confirmLabel: '接单',
       tone: 'primary',
       onConfirm: async () => {
@@ -1084,6 +1090,8 @@ export default function SupplierOrderDetailPage() {
         tenantKey,
         rows: detailRows.map(row => ({
           ...row,
+          category: order.items.find(item => item.productId === row.productId)?.product?.category ?? catalog.find(product => product.id === row.productId)?.category,
+          location: order.items.find(item => item.productId === row.productId)?.product?.location ?? catalog.find(product => product.id === row.productId)?.location,
           spec: row.spec || null,
           unit: row.unit || '',
         })),
@@ -1241,7 +1249,7 @@ export default function SupplierOrderDetailPage() {
         originalOrderAmount={Number(order.originalTotalAmount ?? order.totalAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}>
         {order.store.address && <div className="text-micro text-gray3 mt-1">📍 {order.store.address}</div>}
         <div className="text-caption text-gray2 mt-2">
-          下单 {dayjs(order.createdAt).format('MM/DD HH:mm')} · 期望到货 {dayjs(order.expectedDate).format('MM/DD')}
+          下单 {dayjs(order.createdAt).format('MM/DD HH:mm')} · 期望到货 {order.expectedDate.slice(5,10).replace('-','/')}
           <br />创建人 {order.createdBy.name}
           {order.shippedAt && <><br />发货 {dayjs(order.shippedAt).format('MM/DD HH:mm')} · {order.shippedBy?.name || '-'}</>}
           {order.receivedAt && <><br />收货 {dayjs(order.receivedAt).format('MM/DD HH:mm')}</>}
@@ -1350,6 +1358,11 @@ export default function SupplierOrderDetailPage() {
         }}
       />
       {canEditConfirmedDetails && <div className="mx-4 border-x border-b border-border bg-white p-3">
+        {order.supplier.sourceType === 'HEADQ_WAREHOUSE' && <label className="mb-3 block text-micro text-gray3">
+          实际分拣负责人（必填）
+          <input value={pickerName} onChange={event => { setPickerName(event.target.value); shipRequestKeyRef.current = null }} maxLength={80}
+            className="mt-1 w-full rounded border border-border bg-bg p-2 text-body" placeholder="填写本单实际分拣人姓名" />
+        </label>}
         <label className="mb-1 block text-micro text-gray3">发货备注 (选填)</label>
         <input value={shipNote} onChange={event => setShipNote(event.target.value)} maxLength={120}
           className="w-full rounded border border-border bg-bg p-2 text-body" placeholder="如：司机张三 18800001234 / 预计 2h 到" />
@@ -1484,7 +1497,7 @@ export default function SupplierOrderDetailPage() {
           {detailsDirty && <p className="col-span-2 text-center text-micro text-amber-fg">请先保存商品明细后再确认发货</p>}
           <button onClick={rejectOrder} disabled={submitting}
             className="py-3 bg-white border border-red text-red-fg rounded-cta text-button disabled:opacity-40">拒单</button>
-          <button onClick={ship} disabled={submitting || detailsDirty}
+          <button onClick={ship} disabled={submitting || detailsDirty || (order.supplier.sourceType === 'HEADQ_WAREHOUSE' && !pickerName.trim())}
             className="py-3 bg-ink text-white rounded-cta text-button disabled:opacity-40">
             {submitting ? '提交中…' : '确认发货 (出发)'}
           </button>
@@ -1498,7 +1511,7 @@ export default function SupplierOrderDetailPage() {
             <div className="mx-4 mt-3 bg-green-50 border border-green-300 rounded-card p-3">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-h2 text-green-700">📷 客户已发验收单</span>
-                <span className="text-micro text-gray3">{order.chefAckAt && new Date(order.chefAckAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                <span className="text-micro text-gray3">{order.chefAckAt && new Date(order.chefAckAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
               </div>
               {(order.chefAckImages?.length ?? 0) > 0 && (
                 <>

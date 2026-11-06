@@ -6,6 +6,8 @@
  * PATCH /api/products/:id { price, stock, minStock, status }
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 import { Fragment, useEffect, useState } from 'react'
 import { BottomNav, Chip } from '@/components/v2'
 import { ConfirmSheet, useConfirmSheet } from '@/components/v2/confirm-sheet'
@@ -63,8 +65,7 @@ function timeAgo(iso: string) {
   if (min < 1) return '刚刚'
   if (min < 60) return `${min} 分钟前`
   if (min < 1440) return `${Math.round(min/60)} 小时前`
-  const d = new Date(iso)
-  return `${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`
+  return businessDayjs(iso).format('MM/DD')
 }
 
 function ProductStatusChip({ status }: { status: string }) {
@@ -469,10 +470,10 @@ export default function SupplierProductsPage() {
             <p className="text-micro text-gray3 mt-1">{filtered.length} / {products.length} 命中</p>
           )}
           <div className="grid grid-cols-2 gap-2 mt-2 lg:hidden">
-            <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} className={INPUT_CLS}>
+            <SearchableSelect searchWhenLong searchLabel="搜索分类" value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} className={INPUT_CLS}>
               <option value="">全部分类</option>
               {categories.map(category => <option key={category.name} value={category.name}>{category.name} ({category.count})</option>)}
-            </select>
+            </SearchableSelect>
             <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className={INPUT_CLS}>
               <option value="">全部状态</option>
               <option value="ENABLED">供应中</option>
@@ -493,7 +494,7 @@ export default function SupplierProductsPage() {
               {operations.map(row => (
                 <li key={row.id} className="border-b border-border/60 pb-2 last:border-0">
                   <div className="text-caption text-ink">{row.action}</div>
-                  <div className="text-micro text-gray3 mt-0.5">{row.operator} · {new Date(row.createdAt).toLocaleString('zh-CN')}</div>
+                  <div className="text-micro text-gray3 mt-0.5">{row.operator} · {new Date(row.createdAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}</div>
                 </li>
               ))}
             </ul>
@@ -517,10 +518,10 @@ export default function SupplierProductsPage() {
             </div>
             {selected.size > 0 && (
               <div className="mt-3 grid grid-cols-2 gap-2">
-                <select value={bulkCategory} onChange={e => setBulkCategory(e.target.value)} className={INPUT_CLS}>
+                <SearchableSelect searchWhenLong searchLabel="搜索分类" value={bulkCategory} onChange={e => setBulkCategory(e.target.value)} className={INPUT_CLS}>
                   <option value="">选择新分类</option>
                   {activeCategories.map(category => <option key={category.name} value={category.name}>{category.name}</option>)}
-                </select>
+                </SearchableSelect>
                 <button onClick={batchChangeCategory} disabled={!bulkCategory} className="rounded-cta bg-white border border-border text-button disabled:opacity-40">批量改类</button>
                 <button onClick={() => batchChangeStatus('DISABLED')} className="py-2 rounded-cta bg-red-bg text-red-fg text-button">批量停售</button>
                 <button onClick={() => batchChangeStatus('ENABLED')} className="py-2 rounded-cta bg-green-bg text-green-fg text-button">批量恢复</button>
@@ -878,7 +879,7 @@ export default function SupplierProductsPage() {
               </Field>
               <Field label="采购单位 *">
                 {/* 计量单位下拉 — 防止 "5kg" "2包起订" 等脏数据 */}
-                <select value={['件','箱','袋','包','瓶','罐','盒','支','个','片','双','只','份','串','台','块','kg','g','斤','升','ml','L'].includes(newSku.unit) ? newSku.unit : '__other__'}
+                <SearchableSelect searchWhenLong searchLabel="搜索采购单位" value={['件','箱','袋','包','瓶','罐','盒','支','个','片','双','只','份','串','台','块','kg','g','斤','升','ml','L'].includes(newSku.unit) ? newSku.unit : '__other__'}
                         onChange={e => {
                           if (e.target.value === '__other__') setNewSku({...newSku, unit: ''})
                           else setNewSku({...newSku, unit: e.target.value})
@@ -911,7 +912,7 @@ export default function SupplierProductsPage() {
                     <option value="升">升</option>
                   </optgroup>
                   <option value="__other__">自定义…</option>
-                </select>
+                </SearchableSelect>
                 {/* 自定义入口 — 仅当当前不在白名单时显示输入框 */}
                 {!['件','箱','袋','包','瓶','罐','盒','支','个','片','双','只','份','串','台','块','kg','g','斤','升','ml','L'].includes(newSku.unit) && (
                   <input value={newSku.unit} onChange={e => setNewSku({...newSku, unit: e.target.value.replace(/^\d+/, '')})}
@@ -931,10 +932,10 @@ export default function SupplierProductsPage() {
                        placeholder="例: SH001" className={INPUT_CLS} />
               </Field>
               <Field label="类目 (默认其他)">
-                <select value={newSku.category} onChange={e => setNewSku({...newSku, category: e.target.value})} className={INPUT_CLS}>
+                <SearchableSelect searchWhenLong searchLabel="搜索分类" value={newSku.category} onChange={e => setNewSku({...newSku, category: e.target.value})} className={INPUT_CLS}>
                   <option value="">其他（默认）</option>
                   {activeCategories.filter(category => category.name !== '其他').map(category => <option key={category.name} value={category.name}>{category.name}</option>)}
-                </select>
+                </SearchableSelect>
               </Field>
               <Field label="保质期 (天)">
                 <input type="number" min="0" value={newSku.shelfDays}

@@ -5,6 +5,7 @@
  * POST /api/profit/store/:storeId/expenses { month, expenses: { item: amount } }
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 
@@ -21,8 +22,7 @@ const GROUPS = [
 ] as const
 
 function thisMonth() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+  return businessDayjs().format('YYYY-MM')
 }
 
 export default function ManagerExpensesPage() {

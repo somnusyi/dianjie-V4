@@ -31,7 +31,6 @@ export default function SupplyChainNavigationPage() {
   ]
   return <div className="p-4 pb-24 lg:p-8">
     <h1 className="text-h1">全部功能</h1>
-    <p className="mt-2 text-caption text-gray2">选择需要办理的业务，进入后可随时从页面顶部返回这里。</p>
     <div className="mt-6 grid gap-6 lg:grid-cols-2">
       {groups.map(group => <section key={group.title} className="rounded-card border border-border bg-white p-4">
         <h2 className="mb-3 text-h2">{group.title}</h2>

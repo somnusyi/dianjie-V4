@@ -11,6 +11,7 @@
  *   - 库存已经等于目标数: 跳过, 无变化
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 import { useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
 import {
@@ -133,7 +134,7 @@ export default function ImportSnapshotPage() {
       <div className="px-4 mt-3">
         <label className="text-micro text-gray3 block mb-1">本次导入备注</label>
         <input value={reason} onChange={e => setReason(e.target.value)} maxLength={120}
-          placeholder={`如: ${new Date().toISOString().slice(0,10)} 月末盘点 / 系统首次导入`}
+          placeholder={`如: ${businessDayjs().format('YYYY-MM-DD')} 月末盘点 / 系统首次导入`}
           className="w-full bg-white rounded-card border border-border p-2 text-body" />
       </div>
 

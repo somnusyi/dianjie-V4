@@ -11,7 +11,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { BottomNav, Chip } from '@/components/v2'
 import { GlanceStrip } from '@/components/v2/glance-strip'
 import { apiFetch, getUser } from '@/lib/v2-auth'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
+import { businessMonthKey } from '@/lib/business-date'
 
 type Schedule = {
   id: string
@@ -48,7 +49,9 @@ const STATUS_TONE: Record<string, 'orange' | 'green' | 'red' | 'gray' | 'blue'> 
   OVERDUE: 'red', ON_HOLD: 'red', PENDING_APPROVAL: 'orange', FAILED: 'red',
 }
 
-function fmtMoney(n: number) { return `¥${Math.round(n).toLocaleString()}` }
+function fmtMoney(n: number) {
+  return `¥${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
 function diffDays(iso: string) {
   return Math.floor((new Date(iso).getTime() - Date.now()) / 86400_000)
 }
@@ -85,8 +88,8 @@ export default function SupplierBillingPage() {
   // 本月到货差异集计（含所有状态，跟 supplier/history 口径一致）
   const lossThisMonth = useMemo(() => {
     if (!lossClaims) return { count: 0, total: 0 }
-    const monthStart = dayjs().startOf('month').valueOf()
-    const cur = lossClaims.filter(c => new Date(c.createdAt).getTime() >= monthStart)
+    const month = businessMonthKey()
+    const cur = lossClaims.filter(c => businessMonthKey(c.createdAt) === month)
     return {
       count: cur.length,
       total: cur.reduce((s, c) => s + Number(c.totalLossAmount || 0), 0),
@@ -106,12 +109,12 @@ export default function SupplierBillingPage() {
     if (!items) return init
     const now = Date.now()
     const in7d = now + 7 * 86400_000
-    const monthStart = dayjs().startOf('month').valueOf()
+    const month = businessMonthKey()
     for (const s of items) {
       const amt = Number(s.amount)
       const due = new Date(s.dueAt).getTime()
       if (s.status === 'PAID') {
-        if (s.paidAt && new Date(s.paidAt).getTime() >= monthStart) init.paidM += amt
+        if (s.paidAt && businessMonthKey(s.paidAt) === month) init.paidM += amt
         init.counts.paid++
       } else if (s.status === 'ON_HOLD') {
         // 冻结只是暂缓付款，债权仍存在；应收总额必须包含，另行拆出冻结金额。
@@ -144,6 +147,8 @@ export default function SupplierBillingPage() {
     })
   }, [items, filter])
 
+  const dataReady = items !== null && !error
+
   return (
     <div className="min-h-screen bg-bg pb-20">
       <header className="px-4 pt-4 pb-2">
@@ -155,22 +160,23 @@ export default function SupplierBillingPage() {
       <div className="mt-3">
         <GlanceStrip
           label="应收总额"
-          value={items === null ? '加载中…' : fmtMoney(stats.arTotal)}
+          value={dataReady ? fmtMoney(stats.arTotal) : error ? '读取失败' : '加载中…'}
           meta={
-            stats.overdueAmt > 0
+            !dataReady ? (error ? '账单读取失败，请刷新重试' : '账单加载中…') : stats.overdueAmt > 0
               ? `⚠ 逾期 ${fmtMoney(stats.overdueAmt)} · 7天内到 ${fmtMoney(stats.due7d)}`
-              : stats.due7d > 0 ? `7 天内到 ${fmtMoney(stats.due7d)}` : '✓ 暂无应收'
+              : stats.due7d > 0 ? `7 天内到 ${fmtMoney(stats.due7d)}`
+              : stats.arTotal > 0 ? '暂无近期到期账款' : '✓ 暂无应收'
           }
           stats={[
-            { label: '本月已收', value: fmtMoney(stats.paidM), tone: 'default' as const },
-            { label: '逾期金额', value: fmtMoney(stats.overdueAmt), tone: stats.overdueAmt > 0 ? 'red' as const : 'default' as const },
-            { label: '冻结', value: fmtMoney(stats.onHoldAmt), tone: stats.onHoldAmt > 0 ? 'red' as const : 'default' as const },
+            { label: '本月已收', value: dataReady ? fmtMoney(stats.paidM) : '—', tone: 'default' as const },
+            { label: '逾期金额', value: dataReady ? fmtMoney(stats.overdueAmt) : '—', tone: stats.overdueAmt > 0 ? 'red' as const : 'default' as const },
+            { label: '冻结', value: dataReady ? fmtMoney(stats.onHoldAmt) : '—', tone: stats.onHoldAmt > 0 ? 'red' as const : 'default' as const },
           ]}
         />
       </div>
 
       {/* 月度开票次要入口 */}
-      <a href={`/v2/supplier/reconciliation?month=${dayjs().format('YYYY-MM')}`} className="block mx-4 mt-3 bg-white border border-border rounded-card p-2.5 flex items-center gap-2 text-caption">
+      <a href={`/v2/supplier/reconciliation?month=${businessMonthKey()}`} className="block mx-4 mt-3 bg-white border border-border rounded-card p-2.5 flex items-center gap-2 text-caption">
         <span className="text-amber-fg">核</span>
         <span className="flex-1 text-gray2">月度对账 · 逐笔核对订货、实发、实收与应付</span>
         <span className="text-amber-fg">查看 ›</span>
@@ -196,10 +202,10 @@ export default function SupplierBillingPage() {
       {/* 筛选 */}
       <div className="px-4 mt-4 flex gap-2 overflow-x-auto">
         {([
-          { k: 'pending', label: `待收 ${stats.counts.pending}` },
-          { k: 'overdue', label: `逾期 ${stats.counts.overdue}`, tone: 'red' as const },
-          { k: 'paid',    label: `已收 ${stats.counts.paid}` },
-          { k: 'hold',    label: `争议冻结 ${stats.counts.hold}`, tone: 'red' as const },
+          { k: 'pending', label: `待收 ${dataReady ? stats.counts.pending : '—'}` },
+          { k: 'overdue', label: `逾期 ${dataReady ? stats.counts.overdue : '—'}`, tone: 'red' as const },
+          { k: 'paid',    label: `已收 ${dataReady ? stats.counts.paid : '—'}` },
+          { k: 'hold',    label: `争议冻结 ${dataReady ? stats.counts.hold : '—'}`, tone: 'red' as const },
           { k: 'all',     label: '全部' },
         ] as Array<{k: Filter; label: string; tone?: 'red'}>).map(f => (
           <button key={f.k} onClick={() => setFilter(f.k)}
@@ -212,7 +218,7 @@ export default function SupplierBillingPage() {
       {error && <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}
 
       <ul className="px-4 mt-3 space-y-2">
-        {items === null && <li className="text-caption text-gray3 text-center py-12">加载中…</li>}
+        {items === null && !error && <li className="text-caption text-gray3 text-center py-12">加载中…</li>}
         {items !== null && visible.length === 0 && (
           <li className="text-caption text-gray3 text-center py-12">
             {filter === 'pending' && '✓ 无待收款'}

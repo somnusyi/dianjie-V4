@@ -17,6 +17,7 @@
  * 限流: 招行同账号 10s 一次, 抽屉内自带 loading lock 防连点
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { apiFetch } from '@/lib/v2-auth'
@@ -58,8 +59,7 @@ type ReceiptResp = {
 }
 
 function todayYmd() {
-  const d = new Date()
-  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
+  return businessDayjs().format('YYYYMMDD')
 }
 function ymdToDash(ymd: string) {
   // 20260514 → 2026-05-14 (DCSIGREC 要求带横杠)

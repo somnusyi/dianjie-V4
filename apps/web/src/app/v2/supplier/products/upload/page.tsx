@@ -13,6 +13,8 @@
  *   单位 → 缺省"件"
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
+import { SearchableSelect } from '@/components/v2/searchable-select'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Chip } from '@/components/v2'
@@ -55,7 +57,7 @@ async function downloadTemplate(supplierNameOverride?: string) {
   const XLSX = await import('xlsx')
   const u = getUser()
   const supplierName = supplierNameOverride || u?.supplier?.name || ''
-  const today = new Date().toISOString().slice(0, 10)
+  const today = businessDayjs().format('YYYY-MM-DD')
   const aoa: any[][] = [
     [`供应商：${supplierName}`, '', '', '', '', '', ''],
     [`报价日期：${today}`,      '', '', '', '', '', ''],
@@ -304,14 +306,14 @@ export default function BatchUploadPage() {
         {internalSupplyChain && (
           <label className="mb-4 block">
             <span className="mb-1 block text-micro text-gray3">归属供应商</span>
-            <select
+            <SearchableSelect searchLabel="搜索归属供应商"
               value={selectedSupplierId}
               onChange={event => setSelectedSupplierId(event.target.value)}
               className="h-11 w-full max-w-xl rounded-cta border border-border bg-white px-3 text-body"
             >
               <option value="">请选择供应商</option>
               {suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}
-            </select>
+            </SearchableSelect>
           </label>
         )}
         <ol className="text-caption text-gray2 space-y-1.5 pl-4 list-decimal">

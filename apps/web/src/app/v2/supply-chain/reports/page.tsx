@@ -1,10 +1,13 @@
 'use client'
+import { SearchableSelect } from '@/components/v2/searchable-select'
+import {useReportColumns} from '@/lib/use-report-columns'
+import { InventoryCostBasisSheet } from '@/components/v2/inventory-cost-basis-sheet'
 import { Suspense, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { FilterDateRange } from '@/components/v2/filter-date-range'
 import filterStyles from '@/components/v2/scm-filter-bar.module.css'
 import { useSearchParams } from 'next/navigation'
-import { apiFetch } from '@/lib/v2-auth'
+import { apiFetch, getUser } from '@/lib/v2-auth'
 import { inventoryReports } from '@/components/v2/inventory-report-menu'
 import styles from './reports.module.css'
 import {ManagementTabs} from '@/components/v2/management-tabs'
@@ -21,13 +24,16 @@ function Reports() {
   const [ranges, setRanges] = useState<Record<string, { min?: number; max?: number }>>({}); const [appliedRanges, setAppliedRanges] = useState<typeof ranges>({})
   const [result, setResult] = useState<Result | null>(null); const [error, setError] = useState(''); const [loading, setLoading] = useState(false)
   const [page, setPage] = useState(1); const [pageSize, setPageSize] = useState(20); const [sort, setSort] = useState(''); const [direction, setDirection] = useState('asc'); const [refresh, setRefresh] = useState(0)
-  const [advanced, setAdvanced] = useState(false); const [columnDialog, setColumnDialog] = useState(false); const [hidden, setHidden] = useState<string[]>([])
+  const [advanced, setAdvanced] = useState(false); const [columnDialog, setColumnDialog] = useState(false); const [hidden, setHidden] = useReportColumns('inventory', id)
+  const [costBasisOpen, setCostBasisOpen] = useState(false)
   const [focused, setFocused] = useState(false); const [exporting, setExporting] = useState(false)
   const requestSerial = useRef(0)
   useEffect(() => {
-    setFilters(initialFilters()); setApplied(initialFilters()); setRanges({}); setAppliedRanges({}); setPage(1); setSort(''); setHidden([]); setResult(null)
+    setFilters(initialFilters()); setApplied(initialFilters()); setRanges({}); setAppliedRanges({}); setPage(1); setSort(''); setResult(null)
   }, [id])
   const queryParams = new URLSearchParams({ ...applied, ranges: JSON.stringify(appliedRanges), page: String(page), pageSize: String(pageSize), sort, direction })
+  if (!applied.start) queryParams.delete('start')
+  if (!applied.end) queryParams.delete('end')
   if (!applied.stagnantDays) queryParams.delete('stagnantDays')
   const query = queryParams.toString()
   useEffect(() => {
@@ -50,32 +56,33 @@ function Reports() {
   const transfer = id.startsWith('transfer')
   const currentStock = ['realtime', 'stagnant', 'alerts'].includes(id)
   return <div className={`${styles.reports} ${focused ? styles.focused : ''}`}>
-    <header className={styles.top}><span>货品与仓库 / <strong>库存报表</strong></span><span>业务数据</span></header>
+    <header className={styles.top}><span>货品与仓库 / <strong>库存报表</strong></span></header>
     <div className={filterStyles.mobileMenu}><details><summary>库存报表菜单</summary><nav aria-label="库存报表功能菜单">{inventoryReports.map(r => <Link key={r.id} href={`/v2/supply-chain/reports?report=${r.id}`}>{r.title}</Link>)}</nav></details></div>
     <ManagementTabs activeId={`report:${id}`} />
     <section className={styles.content}>
-      <div className={styles.heading}><div><small>库存报表</small><h1>{inventoryReports.find(r => r.id === id)?.title || '暂无打开的报表'}</h1></div><div className={styles.actions}><button onClick={() => setFocused(v => !v)}>{focused ? '退出专注' : '专注表格'}</button><button disabled={!id || loading || !result} onClick={() => setColumnDialog(true)}>表格设置</button></div></div>
+      <div className={styles.heading}><div><h1>{inventoryReports.find(r => r.id === id)?.title || '暂无打开的报表'}</h1></div><div className={styles.actions}><button onClick={() => setFocused(v => !v)}>{focused ? '退出专注' : '专注表格'}</button><button disabled={!id || loading || !result} onClick={() => setColumnDialog(true)}>表格设置</button></div></div>
       {!id ? <p>从“库存报表”菜单选择一张报表，继续查看。</p> : <>
         <form className={filterStyles.bar} onSubmit={e => { e.preventDefault(); apply() }}>
           <div className={filterStyles.fields}>
             {!currentStock && <div className={filterStyles.date}><span className={filterStyles.dateLabel}>日期范围：</span><FilterDateRange value={{ start: filters.start, end: filters.end }} onChange={range => setFilters(f => ({ ...f, ...range }))} /></div>}
-            {transfer ? <>{input('org', '调出门店')}{input('target', '调入门店')}</> : <><label><span>仓库：</span><select value={filters.warehouseId} onChange={e => setFilters(f => ({ ...f, warehouseId: e.target.value }))}><option value="">全部仓库</option>{result?.warehouses.map(w => <option key={w.id} value={w.id}>{w.name}{w.isDefault ? '（默认）' : ''}</option>)}</select></label></>}
+            {transfer ? <>{input('org', '调出门店')}{input('target', '调入门店')}</> : <><label><span>仓库：</span><SearchableSelect searchWhenLong searchLabel="搜索仓库" value={filters.warehouseId} onChange={e => setFilters(f => ({ ...f, warehouseId: e.target.value }))}><option value="">全部仓库</option>{result?.warehouses.map(w => <option key={w.id} value={w.id}>{w.name}{w.isDefault ? '（默认）' : ''}</option>)}</SearchableSelect></label></>}
             {input('keyword', '物品名称 / 编码')}{currentStock && input('category', '物品类别')}{id === 'stagnant' && <span>呆滞提醒：统一30天</span>}
 
 
           </div>
-          {advanced && <div className={`${filterStyles.fields} ${filterStyles.advanced}`}>{!transfer && <label><span>机构：</span><input value="总部" readOnly /></label>}{!currentStock && input('category', '物品类别')}            {['movements', 'summary', 'other-summary'].includes(id) && <label><span>出入库类型：</span><select value={filters.type} onChange={e => setFilters(f => ({ ...f, type: e.target.value }))}>{['', '期初建账', '手工入库', '采购入库', '出库', '库存调整', '报损', '冲销'].map(v => <option key={v} value={v}>{v || '全部'}</option>)}</select></label>}
+          {advanced && <div className={`${filterStyles.fields} ${filterStyles.advanced}`}>{!transfer && <label><span>机构：</span><input value="总部" readOnly /></label>}{!currentStock && input('category', '物品类别')}            {['movements', 'summary', 'other-summary'].includes(id) && <label><span>出入库类型：</span><SearchableSelect searchWhenLong searchLabel="搜索出入库类型" value={filters.type} onChange={e => setFilters(f => ({ ...f, type: e.target.value }))}>{['', '期初建账', '手工入库', '采购入库', '出库', '库存调整', '报损', '冲销'].map(v => <option key={v} value={v}>{v || '全部'}</option>)}</SearchableSelect></label>}
             {['movements', 'transfer-detail'].includes(id) && input('doc', '单据号')}{input('unit', '单位')}{id === 'realtime' && input('conversion', '与基准单位的换算率')}{id === 'other-summary' && input('reason', '原因类型')}{id === 'movements' && <>{input('upstream', '上游单据号')}{input('upstreamType', '上游单据类型')}{input('reason', '原因类型')}{input('counterparty', '对方机构')}<label><span>调整单标识：</span><select value={filters.adjustment} onChange={e => setFilters(f => ({ ...f, adjustment: e.target.value }))}><option value="">全部</option><option>是</option><option>否</option></select></label></>}{result?.columns.filter(c => c.kind === 'number' && c.key !== 'seq').map(c => <label key={c.key}>{c.group} {c.label}<span className={filterStyles.range}><input aria-label={`${c.group || ''}${c.label}最小值`} type="number" step="any" placeholder="最小值" value={ranges[c.key]?.min ?? ''} onChange={e => setRanges(r => ({ ...r, [c.key]: { ...r[c.key], min: e.target.value === '' ? undefined : Number(e.target.value) } }))} /><input aria-label={`${c.group || ''}${c.label}最大值`} type="number" step="any" placeholder="最大值" value={ranges[c.key]?.max ?? ''} onChange={e => setRanges(r => ({ ...r, [c.key]: { ...r[c.key], max: e.target.value === '' ? undefined : Number(e.target.value) } }))} /></span></label>)}</div>}
           <div className={filterStyles.buttons}><button type="button" className={filterStyles.expand} onClick={() => setAdvanced(v => !v)} aria-expanded={advanced}>{advanced ? '收起筛选 ∧' : '展开筛选 ∨'}</button><button className={filterStyles.primary}>查询</button><button type="button" onClick={() => { setFilters(initialFilters()); setApplied(initialFilters()); setRanges({}); setAppliedRanges({}); setPage(1); setRefresh(n => n + 1) }}>重置</button></div>
         </form>
         {error && <div role="alert" className={styles.error}>{error}<button onClick={() => setRefresh(n => n + 1)}>重试</button></div>}
         <p className={styles.note} title={result?.note}>{result?.note}</p>
-        <div className={styles.results}><div><button disabled={!id || loading || exporting || !result} onClick={download}>{exporting ? '正在导出…' : '导出列表'}</button></div><span className={styles.resultCount}>共 {result?.total ?? 0} 条</span></div>
-        <div className={styles.tableCard} aria-busy={loading}><div className={styles.scroll}><table><thead>{groups.some(g => g.name) && <tr>{groups.map((g, i) => <th key={i} colSpan={g.span}>{g.name}</th>)}</tr>}<tr>{columns.map(c => <th key={c.key}><button disabled={c.key === 'seq'} onClick={() => { setSort(c.key); setDirection(sort === c.key && direction === 'asc' ? 'desc' : 'asc'); setPage(1) }}>{c.label} {sort === c.key ? direction === 'asc' ? '↑' : '↓' : ''}</button></th>)}</tr></thead><tbody>{loading ? <tr><td colSpan={columns.length || 1}>正在查询…</td></tr> : result?.rows.length ? result.rows.map((r, i) => <tr key={i}>{columns.map(c => <td key={c.key} className={c.kind === 'number' ? styles.numeric : ''}>{r[c.key] == null ? '—' : c.kind === 'number' ? Number(r[c.key]).toLocaleString('zh-CN', { maximumFractionDigits: 6 }) : r[c.key]}</td>)}</tr>) : <tr><td colSpan={columns.length || 1}>{error ? '查询失败，请重试' : '没有符合条件的记录'}</td></tr>}</tbody></table></div>
+        <div className={styles.results}><div><button disabled={!id || loading || exporting || !result} onClick={download}>{exporting ? '正在导出…' : '导出列表'}</button>{id === 'realtime' && ['SUPPLY_CHAIN','ADMIN','SUPER_ADMIN'].includes(getUser()?.role || '') && <button disabled={loading || !result?.rows.length} onClick={() => setCostBasisOpen(true)}>成本材料核定</button>}</div><span className={styles.resultCount}>共 {result?.total ?? 0} 条</span></div>
+        <div className={styles.tableCard} aria-busy={loading}><div className={styles.scroll}><table><thead>{groups.some(g => g.name) && <tr>{groups.map((g, i) => <th key={i} colSpan={g.span}>{g.name}</th>)}</tr>}<tr>{columns.map(c => <th key={c.key}><button disabled={c.key === 'seq'} onClick={() => { setSort(c.key); setDirection(sort === c.key && direction === 'asc' ? 'desc' : 'asc'); setPage(1) }}>{c.label} {sort === c.key ? direction === 'asc' ? '↑' : '↓' : ''}</button></th>)}</tr></thead><tbody>{loading ? <tr><td colSpan={columns.length || 1}>正在查询…</td></tr> : result?.rows.length ? result.rows.map((r, i) => <tr key={i}>{columns.map(c => <td key={c.key} className={c.kind === 'number' ? styles.numeric : ''}>{r[c.key] == null ? c.key === 'outProfit' && r.profitStatus === 'PENDING_TAX_BASIS' ? '待核算' : ['realtime', 'summary', 'movements', 'other-summary'].includes(id) && r.costStatus === 'PENDING_COST' && ['amount', 'price', 'openingAmount', 'openingPrice', 'inAmount', 'inPrice', 'outAmount', 'outPrice', 'closingAmount', 'closingPrice'].includes(c.key) ? '待核算' : '—' : c.kind === 'number' ? Number(r[c.key]).toLocaleString('zh-CN', /(amount|value|profit)$/i.test(c.key) ? {minimumFractionDigits:2,maximumFractionDigits:2} : { minimumFractionDigits: /(price|unitcost|averagecost)$/i.test(c.key) ? 2 : 0, maximumFractionDigits: 6 }) : r[c.key]}</td>)}</tr>) : <tr><td colSpan={columns.length || 1}>{error ? '查询失败，请重试' : '没有符合条件的记录'}</td></tr>}</tbody></table></div>
           <div className={styles.pagination}><span>共 {result?.total ?? 0} 条</span><div><select aria-label="每页条数" value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1) }}>{[10, 20, 50, 100].map(n => <option key={n} value={n}>{n} 条 / 页</option>)}</select><button disabled={loading || (result?.page || 1) <= 1} onClick={() => setPage((result?.page || 1) - 1)}>上一页</button><span>{result?.page || 1} / {Math.max(1, Math.ceil((result?.total || 0) / pageSize))}</span><button disabled={loading || (result?.page || 1) * pageSize >= (result?.total || 0)} onClick={() => setPage((result?.page || 1) + 1)}>下一页</button></div></div>
         </div>
       </>}
     </section>
+    {costBasisOpen && !!result?.rows.length && <InventoryCostBasisSheet choices={result.rows.map(r => ({productId:String(r.productId),warehouseId:String(r.warehouseId),name:String(r.name),code:String(r.code)}))} onClose={() => setCostBasisOpen(false)} onSaved={() => setRefresh(n => n + 1)} />}
     {columnDialog && <div className={styles.overlay} onClick={() => setColumnDialog(false)}><section role="dialog" aria-modal="true" aria-label="库存报表表格设置" className={styles.dialog} onClick={e => e.stopPropagation()}><h2>表格设置</h2><div>{result?.columns.map(c => <label key={c.key}><input type="checkbox" checked={!hidden.includes(c.key)} disabled={['seq', 'name', 'code'].includes(c.key)} onChange={e => setHidden(old => e.target.checked ? old.filter(k => k !== c.key) : [...old, c.key])} />{c.group} {c.label}</label>)}</div><button onClick={() => setHidden([])}>恢复全部列</button><button className={styles.primary} onClick={() => setColumnDialog(false)}>完成</button></section></div>}
   </div>
 }

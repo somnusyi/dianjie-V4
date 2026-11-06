@@ -170,7 +170,7 @@ export default function ManagerInventoryPage() {
                 ¥{estimatedValue.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
               <div className="text-micro text-gray3 mt-1">
-                {estimateAsOf ? `数据更新至 ${new Date(estimateAsOf).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}` : '等待生成预计库存'}
+                {estimateAsOf ? `数据更新至 ${new Date(estimateAsOf).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}` : '等待生成预计库存'}
                 {' '}· 每次打开按最新业务流水重新计算
               </div>
               {summary.matchedCount < summary.itemCount && (

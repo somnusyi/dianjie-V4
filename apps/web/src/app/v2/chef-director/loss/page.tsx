@@ -4,6 +4,7 @@
  * Hero 集团损耗率 + 各店排行 + 异常报损待督导
  */
 'use client'
+import businessDayjs from '@/lib/business-dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { BottomNav, StoreAvatar, Chip } from '@/components/v2'
 import { GlanceStrip } from '@/components/v2/glance-strip'
@@ -40,8 +41,7 @@ const STATUS_TONE: Record<string, 'gray' | 'orange' | 'green' | 'red'> = {
   NEGOTIATING: 'orange', REJECTED: 'red', RESOLVED: 'gray',
 }
 function fmtDate(iso: string) {
-  const d = new Date(iso)
-  return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
+  return businessDayjs(iso).format('MM/DD')
 }
 
 export default function ChefDirectorLossPage() {

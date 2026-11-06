@@ -17,7 +17,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Chip, BlackHero, MonthPicker } from '@/components/v2'
 import { apiFetch } from '@/lib/v2-auth'
 import { exportXlsx } from '@/lib/exportXlsx'
-import dayjs from 'dayjs'
+import dayjs from '@/lib/business-dayjs'
 import FinanceTopNav from '../_topnav'
 
 type Profit = {

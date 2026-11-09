@@ -5,6 +5,7 @@ import { isBrowserSession, checkBrowserSession, readBrowserRefresh, writeBrowser
 import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import bcrypt from 'bcryptjs'
+import { loginRateLimitConfig } from '../lib/login-rate-key'
 import { prisma } from '@dianjie/db'
 import { resolveLoginTenantSlug } from '../lib/preview-tenant'
 import { ACCESS_TTL_MS, REFRESH_TTL_MS, issueAccessToken, issueSessionTokens } from '../services/authTokens'
@@ -48,9 +49,9 @@ async function loadScopeStores(user: { storeId: string | null; storeIds: string[
 export const authRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('onSend', async (_request, reply, payload) => {reply.header('cache-control','no-store');return payload})
 
-  // POST /api/auth/login — 单独限流防密码爆破 (10 次/分钟/IP, 同事 c2a4470 引入, 保留)
+  // POST /api/auth/login — 门店共用代理，按账号限流，避免一家重试挡住其他门店。
   app.post('/login', {
-    config: { rateLimit: { max: process.env.NODE_ENV === 'test' ? 2_000 : 10, timeWindow: '1 minute' } },
+    config: { rateLimit: loginRateLimitConfig() },
   } as any, async (request, reply) => {
     const browser = isBrowserSession(request)
     if (browser) checkBrowserSession(request)

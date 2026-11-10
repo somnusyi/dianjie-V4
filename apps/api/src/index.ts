@@ -32,6 +32,7 @@ import cors from '@fastify/cors'
 import helmet from '@fastify/helmet'
 import jwt from '@fastify/jwt'
 import rateLimit from '@fastify/rate-limit'
+import { accountRateKey } from './lib/account-rate-key'
 import { authRoutes } from './routes/auth'
 import { publicApplyRoute, applicationRoutes } from './routes/applications'
 import { inviteRoutes, inviteAcceptRoutes } from './routes/invites'
@@ -119,6 +120,9 @@ function resolveJwtSecret() {
 }
 
 const app = Fastify({
+  // API ports bind to 127.0.0.1; only the local Nginx hop may supply the
+  // client's X-Forwarded-For address for public, not-yet-logged-in routes.
+  trustProxy: '127.0.0.1',
   logger: {
     redact: { paths: sensitiveLogPaths, censor: '[REDACTED]' },
     serializers: { req: safeRequestLog, err: safeErrorLog },
@@ -185,6 +189,8 @@ async function bootstrap() {
   await app.register(rateLimit, {
     max: process.env.NODE_ENV === 'test' ? 2000 : 200,
     timeWindow: '1 minute',
+    hook: 'preHandler',
+    keyGenerator: accountRateKey,
   })
   await app.register(jwt, {
     secret: resolveJwtSecret(),
@@ -318,8 +324,8 @@ async function bootstrap() {
       db,
     }
   }
-  app.get('/health', healthHandler)
-  app.get('/api/health', healthHandler)
+  app.get('/health', { config: { rateLimit: false } }, healthHandler)
+  app.get('/api/health', { config: { rateLimit: false } }, healthHandler)
 
   // ── 404 处理 ──────────────────────────
   app.setNotFoundHandler((request, reply) => {
